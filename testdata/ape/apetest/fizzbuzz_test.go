@@ -48,6 +48,9 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if stderr.Len() > 0 || err != nil {
+		t.Logf("runFizzbuzz %v: err=%v stderr=%q", args, err, strings.TrimSpace(stderr.String()))
+	}
 	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()), err
 }
 
