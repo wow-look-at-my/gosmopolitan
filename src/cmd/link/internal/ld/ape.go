@@ -258,7 +258,12 @@ func makeAPEHeader(elfData []byte, elfEntry, elfPhoff uint64, elfPhnum uint16, a
 			bs := 8
 			skip := machoOffset / bs
 			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "  [ -d /Applications ] && dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null\n", bs, skip, count)
+			fmt.Fprintf(&script, "  if [ -d /Applications ]; then\n")
+			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
+			// Apple Silicon kills unsigned executables on exec with SIGKILL,
+			// even x86-64 ones running under Rosetta; ad-hoc signing suffices.
+			fmt.Fprintf(&script, "    codesign -f -s - \"$o\" 2>/dev/null\n")
+			fmt.Fprintf(&script, "  fi\n")
 		}
 		script.WriteString(`  exec "$0" "$@"
 fi
@@ -288,7 +293,9 @@ if [ "$m" = aarch64 ] || [ "$m" = arm64 ]; then
 			bs := 8
 			skip := machoOffset / bs
 			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null\n", bs, skip, count)
+			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
+			// This branch only runs on macOS (Apple Silicon); see above.
+			fmt.Fprintf(&script, "    codesign -f -s - \"$o\" 2>/dev/null\n")
 		}
 		script.WriteString(`    exec "$0" "$@"
   fi
@@ -373,6 +380,15 @@ exit 1
 	scriptOffset := 0x400
 	if len(scriptBytes) > apeHeaderSize-scriptOffset {
 		Exitf("APE shell script too large: %d bytes", len(scriptBytes))
+	}
+	// The Mach-O header and APE loader are copied over the header after the
+	// script; if the script has grown into their regions they would silently
+	// clobber its tail, leaving a binary that parses as a broken shell script.
+	if machoSize > 0 && scriptOffset+len(scriptBytes) > machoOffset {
+		Exitf("APE shell script (%d bytes at %#x) overlaps Mach-O header at %#x", len(scriptBytes), scriptOffset, machoOffset)
+	}
+	if apeLoaderSize > 0 && scriptOffset+len(scriptBytes) > apeLoaderOffset {
+		Exitf("APE shell script (%d bytes at %#x) overlaps APE loader at %#x", len(scriptBytes), scriptOffset, apeLoaderOffset)
 	}
 	copy(header[scriptOffset:], scriptBytes)
 
