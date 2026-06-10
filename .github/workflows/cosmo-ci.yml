@@ -57,8 +57,9 @@ jobs:
           export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
 
           # Create a Go script with shebang
+          # env -S is required for multi-word shebang interpreters on Linux
           cat > /tmp/shebang-test.go << 'EOF'
-          #!/usr/bin/env go run
+          #!/usr/bin/env -S go run
 
           package main
 
