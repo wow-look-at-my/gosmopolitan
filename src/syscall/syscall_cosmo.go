@@ -64,6 +64,7 @@ func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) 
 }
 
 func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
+func rawVforkSyscall(trap, a1, a2, a3 uintptr) (r1 uintptr, err Errno)
 
 /*
  * Wrapped
@@ -509,4 +510,13 @@ func ReadDirent(fd int, buf []byte) (n int, err error) {
 func Shutdown(s int, how int) (err error) {
 	return shutdown(s, how)
 }
+
+func Listen(s int, backlog int) (err error) {
+	return listen(s, backlog)
+}
+
+const (
+	RUSAGE_SELF     = 0
+	RUSAGE_CHILDREN = -1
+)
 

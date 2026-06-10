@@ -953,3 +953,19 @@ func socketpair(domain int, typ int, proto int, fd *[2]int32) (err error) {
 	}
 	return
 }
+
+func Getrusage(who int, rusage *Rusage) (err error) {
+	_, _, e1 := RawSyscall(SYS_GETRUSAGE, uintptr(who), uintptr(unsafe.Pointer(rusage)), 0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func Flock(fd int, how int) (err error) {
+	_, _, e1 := Syscall(SYS_FLOCK, uintptr(fd), uintptr(how), 0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}

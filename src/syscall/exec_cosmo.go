@@ -87,7 +87,10 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	// About to call fork.
 	// No more allocation or calls of non-assembly functions.
 	runtime_BeforeFork()
-	r1, _, err1 = RawSyscall(SYS_FORK, 0, 0, 0)
+	// Use clone with SIGCHLD to emulate fork. This works on both amd64 (which
+	// has SYS_FORK) and arm64 (which only has SYS_CLONE). Using clone ensures
+	// portability across architectures.
+	r1, err1 = rawVforkSyscall(SYS_CLONE, uintptr(SIGCHLD), 0, 0)
 	if err1 != 0 {
 		runtime_AfterFork()
 		return 0, err1

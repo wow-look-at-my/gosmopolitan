@@ -9,7 +9,6 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
-	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -17,23 +16,6 @@ import (
 // sigPerThreadSyscall is the same signal (SIGSETXID) used by glibc for
 // per-thread syscalls. We use it for the same purpose.
 const sigPerThreadSyscall = _SIGRTMIN + 1
-
-type mOS struct {
-	// profileTimer holds the ID of the POSIX interval timer for profiling CPU
-	// usage on this thread.
-	//
-	// It is valid when the profileTimerValid field is true. A thread
-	// creates and manages its own timer, and these fields are read and written
-	// only by this thread.
-	profileTimer      int32
-	profileTimerValid atomic.Bool
-
-	// needPerThreadSyscall indicates that a per-thread syscall is required
-	// for doAllThreadsSyscall.
-	needPerThreadSyscall atomic.Uint8
-
-	waitsema uint32 // semaphore for parking on locks
-}
 
 // Cosmopolitan uses Linux futex.
 //
@@ -288,7 +270,6 @@ func gettid() uint32
 // Called on the new thread, cannot allocate memory.
 func minit() {
 	minitSignals()
-
 	getg().m.procid = uint64(gettid())
 }
 
@@ -342,11 +323,7 @@ func osyield_no_g() {
 
 func pipe2(flags int32) (r, w int32, errno int32)
 
-//go:nosplit
-func fcntl(fd, cmd, arg int32) (ret int32, errno int32) {
-	r, _, err := cosmo.Syscall6(cosmo.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg), 0, 0, 0)
-	return int32(r), int32(err)
-}
+// fcntl is defined in fcntl_cosmo_amd64.go and fcntl_cosmo_arm64.go
 
 //go:nosplit
 //go:nowritebarrierrec
@@ -526,3 +503,11 @@ func runPerThreadSyscall() {
 //
 //go:noescape
 func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 uint32) int32
+
+// cosmoStacksAreSystemAllocated reports whether new OS threads get
+// system-allocated stacks on this host. Only the macOS path (ARM64 via the
+// APE loader's pthread_create) provides them; the Linux clone() path needs
+// Go-allocated stacks.
+func cosmoStacksAreSystemAllocated() bool {
+	return GOARCH == "arm64" && isdarwin()
+}

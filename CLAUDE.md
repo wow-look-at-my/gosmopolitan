@@ -2,9 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Don't Ask Stupid Questions
+
+When there's a specification, **follow the specification**. Never ask "should I follow the spec or do something different?" - the answer is always follow the spec. That's what specs are for. If the implementation doesn't match the spec, fix the implementation.
+
 ## Project Overview
 
 This is a fork of the Go programming language toolchain that adds support for **Cosmopolitan Libc** (`GOOS=cosmo`). Cosmopolitan enables building "Actually Portable Executables" (APE) - single binaries that run natively on Linux, macOS, and Windows without modification.
+
+## No Rosetta Dependency
+
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta.
+
+- APE binaries contain native code for multiple architectures (AMD64 + ARM64)
+- On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
+- The cosmocc toolchain doesn't need Rosetta, neither do we
+- If something "works via Rosetta", that's not actually working - it's a bug
+
+When building/testing:
+- `GOARCH=amd64` produces x86_64 code only - will NOT work natively on ARM64 macOS
+- Full APE support requires both AMD64 and ARM64 code paths
+- Runtime must detect host OS/arch and use appropriate syscall method
+
+**macOS syscall restriction**: macOS (both x86_64 and ARM64) does not allow raw syscalls. All syscalls must go through Apple's frameworks via the `syslib` function pointer table. Code that uses raw `SYSCALL`/`SVC` instructions will crash with SIGSYS on macOS.
 
 ## Build Commands
 
@@ -43,11 +63,21 @@ go test std
 ## Building Cosmopolitan Binaries
 
 ```bash
-# Build an APE binary
-GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+# Build a fat (amd64+arm64) APE binary - GOARCH is ignored for the output;
+# go build always builds both architectures and merges them
+GOOS=cosmo go build -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH)
+GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+
+# Merge two single-arch cosmo binaries into one fat APE by hand
+go tool link -apefat amd64.com,arm64.com -o program.com
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows.
+The resulting `.com` file runs on Linux, macOS, and Windows. The amd64 image
+boots on x86-64 hosts (self-assimilation on Linux, Mach-O dd on macOS Intel,
+PE on Windows); the arm64 image boots on ARM64 Linux (self-assimilation) and
+ARM64 macOS (compiled APE loader, no Rosetta).
 
 ## Architecture
 
@@ -96,6 +126,100 @@ go build -gcflags=-S
 go tool compile -bench=out.txt file.go
 ```
 
+## Fork Gotchas
+
+- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test`
+  run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host
+  tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses
+  (like `testdata/ape/apetest`) should be run with an upstream Go so the test binary
+  itself is executable on the host.
+- **APE binaries self-assimilate.** Executing an APE rewrites its own header in
+  place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
+  upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
+  this automatically).
+
+## Local Verify Loop
+
+```bash
+cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
+export PATH="$PWD/../bin:$PATH"
+# after linker or go-command changes:
+GOOS=linux GOARCH=amd64 go install cmd/link cmd/go   # refresh HOST tools (see gotcha above)
+GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emits fat APE
+cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
+```
+
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
+
+CI builds one fat (amd64+arm64) APE per platform; no GOARCH pin. Execution
+tests skip only on Windows (the PE stub does not load the payload yet; PR #12)
+while structural format tests - including the fat boot-header checks in
+`fat_test.go` - run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
+(`skipIfExecUnsupported`) is the single place encoding the skips.
+
+## Adding Cosmo Support to Standard Library Packages
+
+When a stdlib package fails to build for `GOOS=cosmo`, follow these steps:
+
+### 1. Identify Build Constraint Types
+
+Go uses two types of build constraints:
+- **`//go:build` directives** - Add `cosmo` to the constraint (e.g., `//go:build cosmo || linux || ...`)
+- **Filename suffixes** - Files like `foo_linux.go` only build for Linux. Create `foo_cosmo.go` with equivalent functionality.
+
+### 2. Check What Cosmo Already Has
+
+Before creating new files, check existing cosmo implementations:
+```bash
+ls src/**/\*cosmo\*.go
+grep -r "//go:build.*cosmo" src/
+```
+
+### 3. Runtime Platform Handling
+
+Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime. When creating `_cosmo.go` files:
+- Don't assume Linux-only features like `/proc` are available
+- Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
+- Test assumptions about what works on each platform
+
+### 4. Syscall Wrappers
+
+The `syscall` package uses `//sys` comments to generate wrappers. Check:
+- `src/syscall/syscall_cosmo.go` - main syscall implementations
+- `src/syscall/zsyscall_cosmo_amd64.go` - generated syscall stubs
+
+If a function like `Listen` is defined as lowercase `listen` but callers expect uppercase `Listen`, add a wrapper:
+```go
+func Listen(s int, backlog int) (err error) {
+    return listen(s, backlog)
+}
+```
+
+### 5. Common Patterns
+
+When adding cosmo to an existing `//go:build` constraint, use alphabetical order:
+```go
+//go:build cosmo || dragonfly || freebsd || linux  // cosmo first alphabetically
+```
+
+For filename-based constraints, create new files rather than modifying the build system.
+
+## Debugging ARM64 Cosmo
+
+**Keep `DEBUGGING.md` updated** when working on ARM64 cosmo support. Log:
+- What you've tried (with debug exit codes used)
+- What worked vs what failed
+- Current hypothesis and next steps
+
+This prevents going in circles and losing context across sessions.
+
+## APE Binary Reference
+
+**GOAL: Make our APE binaries work exactly like `~/Downloads/vim.com`**
+
+The vim.com binary is a working APE that runs on macOS ARM64. When fixing APE generation:
+1. Compare our output to vim.com's shell header structure
+2. Match vim.com's macOS ARM64 handling (embedded APE loader, cc compilation)
+3. Don't invent new approaches - copy what works in vim.com

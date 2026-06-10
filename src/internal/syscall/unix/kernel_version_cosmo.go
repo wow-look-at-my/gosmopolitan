@@ -10,6 +10,7 @@ package unix
 // For Cosmopolitan, we report a reasonable Linux kernel version
 // since Cosmopolitan provides Linux syscall compatibility.
 func KernelVersion() (major int, minor int) {
-	// Report Linux 5.0 as a baseline for modern syscall support
-	return 5, 0
+	// Report Linux 5.10 as a baseline for modern syscall support
+	// This enables copy_file_range (5.3+) and other modern features
+	return 5, 10
 }

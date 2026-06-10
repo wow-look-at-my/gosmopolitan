@@ -137,7 +137,57 @@ const (
 	SO_SNDTIMEO   = 0x15
 	SO_TYPE       = 0x3
 
+	SOMAXCONN = 0x80
+
 	SCM_RIGHTS = 0x1
+
+	// Multicast constants
+	IP_ADD_MEMBERSHIP  = 0x23
+	IP_DROP_MEMBERSHIP = 0x24
+	IP_MULTICAST_IF    = 0x20
+	IP_MULTICAST_LOOP  = 0x22
+	IP_MULTICAST_TTL   = 0x21
+
+	IPV6_JOIN_GROUP     = 0x14
+	IPV6_LEAVE_GROUP    = 0x15
+	IPV6_MULTICAST_HOPS = 0x12
+	IPV6_MULTICAST_IF   = 0x11
+	IPV6_MULTICAST_LOOP = 0x13
+
+	// TCP keepalive
+	TCP_KEEPCNT   = 0x6
+	TCP_KEEPIDLE  = 0x4
+	TCP_KEEPINTVL = 0x5
+
+	// Memory mapping flags
+	PROT_EXEC  = 0x4
+	PROT_NONE  = 0x0
+	PROT_READ  = 0x1
+	PROT_WRITE = 0x2
+
+	MAP_ANON      = 0x20
+	MAP_ANONYMOUS = 0x20
+	MAP_FILE      = 0x0
+	MAP_FIXED     = 0x10
+	MAP_PRIVATE   = 0x2
+	MAP_SHARED    = 0x1
+
+	LOCK_EX = 0x2
+	LOCK_NB = 0x4
+	LOCK_SH = 0x1
+	LOCK_UN = 0x8
+
+	// Message flags
+	MSG_CMSG_CLOEXEC = 0x40000000
+	MSG_CTRUNC       = 0x8
+	MSG_DONTROUTE    = 0x4
+	MSG_DONTWAIT     = 0x40
+	MSG_EOR          = 0x80
+	MSG_NOSIGNAL     = 0x4000
+	MSG_OOB          = 0x1
+	MSG_PEEK         = 0x2
+	MSG_TRUNC        = 0x20
+	MSG_WAITALL      = 0x100
 
 	S_IEXEC  = 0x40
 	S_IFBLK  = 0x6000

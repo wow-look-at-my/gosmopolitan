@@ -195,6 +195,13 @@ func Elfinit(ctxt *Link) {
 		if ctxt.Arch.Family == sys.RISCV64 {
 			ehdr.Flags = 0x4 // RISCV Float ABI Double
 		}
+		// Cosmopolitan: Set EF_APE_MODERN flag for modern APE binary support
+		// This tells the APE loader that this binary uses the modern format
+		// and should not have argv[0] modified.
+		// DISABLED: Testing if non-modern path fixes argv[0] issue
+		// if ctxt.HeadType == objabi.Hcosmo && ctxt.Arch.Family == sys.ARM64 {
+		// 	ehdr.Flags = 0x0101ca75 // EF_APE_MODERN
+		// }
 		elf64 = true
 
 		ehdr.Phoff = ELF64HDRSIZE      // Must be ELF64HDRSIZE: first PHdr must follow ELF header
@@ -2230,6 +2237,10 @@ elfobj:
 		osabi = elf.ELFOSABI_OPENBSD
 	case objabi.Hdragonfly:
 		osabi = elf.ELFOSABI_NONE
+	case objabi.Hcosmo:
+		// APE spec: OS ABI SHOULD be ELFOSABI_FREEBSD since FreeBSD
+		// is the only supported OS that actually checks this field
+		osabi = elf.ELFOSABI_FREEBSD
 	}
 	eh.Ident[elf.EI_OSABI] = byte(osabi)
 

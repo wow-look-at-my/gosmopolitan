@@ -28,20 +28,11 @@ jobs:
           go-version: '1.24'
           cache: false
 
-      - name: Build Go toolchain (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cd src
-          ./make.bash
-        env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-
-      - name: Build Go toolchain (Windows)
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          cd src
-          make.bat
+      - name: Build Go toolchain
+        uses: wow-look-at-my-code/actions/multicmd@master
+        with:
+          unix: cd src && ./make.bash -v
+          windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
@@ -49,7 +40,9 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+          # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
+          # APE regardless of the host architecture.
+          GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
@@ -64,7 +57,7 @@ jobs:
           path: fizzbuzz.com
           retention-days: 1
 
-  # Test all APE binaries on each platform using bats
+  # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 binaries sequentially (native + 2 cross-compiled)
   test:
     needs: build
@@ -76,10 +69,14 @@ jobs:
     runs-on: ${{ matrix.test-os }}
 
     steps:
-      - name: Checkout code (for bats tests)
+      - name: Checkout code (for Go tests)
         uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          submodules: true
+          go-version: '1.24'
+          cache: false
 
       - name: Download all APE binaries
         uses: actions/download-artifact@v4
@@ -87,54 +84,33 @@ jobs:
           path: binaries
 
       - name: Make binaries executable
-        if: runner.os != 'Windows'
-        run: chmod +x binaries/ape-binary-*/fizzbuzz.com
-
-      - name: Install bats (Ubuntu)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
-
-      - name: Install bats (macOS)
-        if: runner.os == 'macOS'
-        run: brew install bats-core
-
-      - name: Install bats (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          npm install -g bats
+        uses: wow-look-at-my-code/actions/multicmd@master
+        with:
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com
 
       - name: Test binary built on Ubuntu
         id: test-ubuntu
-        continue-on-error: true
+        timeout-minutes: 5
+        if: always()
         shell: bash
         run: |
-          export FIZZBUZZ_BIN="$PWD/binaries/ape-binary-ubuntu-latest/fizzbuzz.com"
-          bats --print-output-on-failure --show-output-of-passing-tests testdata/fizzbuzz/fizzbuzz.bats
+          cd testdata/ape/apetest
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" go test -v ./...
 
       - name: Test binary built on macOS
         id: test-macos
-        continue-on-error: true
+        timeout-minutes: 5
+        if: always()
         shell: bash
         run: |
-          export FIZZBUZZ_BIN="$PWD/binaries/ape-binary-macos-latest/fizzbuzz.com"
-          bats --print-output-on-failure --show-output-of-passing-tests testdata/fizzbuzz/fizzbuzz.bats
+          cd testdata/ape/apetest
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" go test -v ./...
 
       - name: Test binary built on Windows
         id: test-windows
-        continue-on-error: true
+        timeout-minutes: 5
+        if: always()
         shell: bash
         run: |
-          export FIZZBUZZ_BIN="$PWD/binaries/ape-binary-windows-latest/fizzbuzz.com"
-          bats --print-output-on-failure --show-output-of-passing-tests testdata/fizzbuzz/fizzbuzz.bats
-
-      - name: Check test results
-        if: steps.test-ubuntu.outcome == 'failure' || steps.test-macos.outcome == 'failure' || steps.test-windows.outcome == 'failure'
-        run: |
-          echo "One or more tests failed:"
-          echo "  Ubuntu binary: ${{ steps.test-ubuntu.outcome }}"
-          echo "  macOS binary: ${{ steps.test-macos.outcome }}"
-          echo "  Windows binary: ${{ steps.test-windows.outcome }}"
-          exit 1
+          cd testdata/ape/apetest
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" go test -v ./...

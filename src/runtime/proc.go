@@ -1842,6 +1842,11 @@ func mStackIsSystemAllocated() bool {
 	switch GOOS {
 	case "aix", "darwin", "plan9", "illumos", "ios", "openbsd", "solaris", "windows":
 		return true
+	case "cosmo":
+		// A cosmo binary only learns its host OS at run time: on macOS
+		// threads are created with pthread_create, which provides system
+		// stacks, while on Linux clone() needs Go-allocated stacks.
+		return cosmoStacksAreSystemAllocated()
 	}
 	return false
 }
