@@ -90,33 +90,6 @@ jobs:
         with:
           unix: chmod +x binaries/ape-binary-*/fizzbuzz.com
 
-      # Temporary diagnostics for the SIGKILL-on-exec failures: traces the
-      # APE bootstrap, shows signature state after assimilation, retries
-      # codesign with errors visible, and attempts a direct exec.
-      - name: Debug APE bootstrap (macOS)
-        if: matrix.test-os == 'macos-latest'
-        timeout-minutes: 2
-        shell: bash
-        run: |
-          set +e
-          sw_vers
-          uname -m
-          arch -x86_64 /usr/bin/true; echo "rosetta probe exit=$?"
-          cp binaries/ape-binary-ubuntu-latest/fizzbuzz.com /tmp/fb.com
-          chmod +x /tmp/fb.com
-          echo "=== bootstrap trace (sh -x) ==="
-          sh -x /tmp/fb.com 3 5
-          echo "traced run exit=$?"
-          echo "=== file state after assimilation ==="
-          file /tmp/fb.com
-          codesign -dv /tmp/fb.com; echo "codesign -dv exit=$?"
-          echo "=== manual ad-hoc sign (errors visible) ==="
-          codesign -f -s - /tmp/fb.com; echo "manual codesign exit=$?"
-          codesign -dv /tmp/fb.com; echo "codesign -dv after manual sign exit=$?"
-          echo "=== direct exec after assimilation+signing ==="
-          /tmp/fb.com 3 5; echo "direct exec exit=$?"
-          true
-
       - name: Test binary built on Ubuntu
         id: test-ubuntu
         timeout-minutes: 1

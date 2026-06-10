@@ -34,31 +34,31 @@ const (
 	pageSize16K = 16384
 
 	// ELF constants
-	elfMagic      = "\x7fELF"
-	elfClass64    = 2
-	elfDataLSB    = 1
+	elfMagic        = "\x7fELF"
+	elfClass64      = 2
+	elfDataLSB      = 1
 	elfOSABIFreeBSD = 9 // Use FreeBSD ABI per spec
-	elfTypeExec   = 2
+	elfTypeExec     = 2
 	elfMachineAMD64 = 0x3E
 	elfMachineARM64 = 0xB7
 
 	// Mach-O constants
-	machoMagic64     = 0xFEEDFACF
-	machoCPUTypeX64  = 0x01000007
+	machoMagic64       = 0xFEEDFACF
+	machoCPUTypeX64    = 0x01000007
 	machoCPUSubtypeX64 = 0x80000003
-	machoFileTypeExec = 0x2
-	machoFlagNoUndefs = 0x1
-	machoFlagPIE      = 0x200000
+	machoFileTypeExec  = 0x2
+	machoFlagNoUndefs  = 0x1
+	machoFlagPIE       = 0x200000
 
 	// Load commands
-	machoLCSegment64   = 0x19
-	machoLCUnixThread  = 0x5
-	machoLCMain        = 0x80000028
+	machoLCSegment64  = 0x19
+	machoLCUnixThread = 0x5
+	machoLCMain       = 0x80000028
 
 	// Segment protection
-	machoProtRead    = 0x1
-	machoProtWrite   = 0x2
-	machoProtExec    = 0x4
+	machoProtRead  = 0x1
+	machoProtWrite = 0x2
+	machoProtExec  = 0x4
 )
 
 // convertToAPE converts an ELF binary to Actually Portable Executable format.
@@ -238,7 +238,16 @@ func makeAPEHeader(elfData []byte, elfEntry, elfPhoff uint64, elfPhnum uint16, a
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
 
 	if arch == sys.AMD64 {
-		// AMD64 binary: runs on x86_64 systems
+		// AMD64 binary: runs on x86_64 systems.
+		//
+		// Note for the ARM64-macOS (Rosetta) branch below: it cannot work on
+		// current macOS. The assimilated Mach-O fails codesign's strict
+		// validation (verified on macOS 15.7: "main executable failed strict
+		// validation"), and Apple Silicon SIGKILLs unsigned executables even
+		// under Rosetta. Native ARM64 macOS execution requires ARM64 code via
+		// the compiled APE loader path (see the sys.ARM64 branch and the
+		// No-Rosetta policy in CLAUDE.md); the branch is kept only to print
+		// an actionable error.
 		script.WriteString(`if [ "$m" = x86_64 ] || [ "$m" = amd64 ]; then
   o="$(command -v "$0")"
   exec 7<> "$o" || exit 121
@@ -260,44 +269,15 @@ func makeAPEHeader(elfData []byte, elfEntry, elfPhoff uint64, elfPhnum uint16, a
 			count := (machoSize + bs - 1) / bs
 			fmt.Fprintf(&script, "  if [ -d /Applications ]; then\n")
 			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
-			// Apple Silicon kills unsigned executables on exec with SIGKILL,
-			// even x86-64 ones running under Rosetta; ad-hoc signing suffices.
-			fmt.Fprintf(&script, "    codesign -f -s - \"$o\" 2>/dev/null\n")
 			fmt.Fprintf(&script, "  fi\n")
 		}
 		script.WriteString(`  exec "$0" "$@"
 fi
 if [ "$m" = aarch64 ] || [ "$m" = arm64 ]; then
   if [ -d /Applications ]; then
-    # macOS ARM64 running x86_64 binary: check for Rosetta
-    if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-      echo 'APE: This x86_64 binary requires Rosetta 2 on Apple Silicon.' >&2
-      echo 'Install Rosetta with: softwareupdate --install-rosetta' >&2
-      exit 1
-    fi
-    o="$(command -v "$0")"
-    exec 7<> "$o" || exit 121
-    printf '`)
-		for _, b := range embeddedElf {
-			if b == '\'' {
-				script.WriteString("'\\''")
-			} else if b >= 0x20 && b < 0x7f && b != '\\' {
-				script.WriteByte(b)
-			} else {
-				fmt.Fprintf(&script, "\\%03o", b)
-			}
-		}
-		script.WriteString("' >&7\n")
-		script.WriteString("    exec 7<&-\n")
-		if machoSize > 0 {
-			bs := 8
-			skip := machoOffset / bs
-			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
-			// This branch only runs on macOS (Apple Silicon); see above.
-			fmt.Fprintf(&script, "    codesign -f -s - \"$o\" 2>/dev/null\n")
-		}
-		script.WriteString(`    exec "$0" "$@"
+    echo 'APE: this amd64-only binary cannot run natively on ARM64 macOS.' >&2
+    echo 'APE: rebuild with ARM64 (fat APE) support to run on Apple Silicon.' >&2
+    exit 1
   fi
   echo 'APE: ARM64 Linux cannot run x86_64 binary' >&2
   exit 1
@@ -443,10 +423,10 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, pageSize uint64, ar
 
 	// ELF magic
 	copy(hdr[0:4], elfMagic)
-	hdr[4] = elfClass64                    // 64-bit
-	hdr[5] = elfDataLSB                    // Little endian
-	hdr[6] = 1                             // ELF version
-	hdr[7] = elfOSABIFreeBSD               // FreeBSD ABI per spec
+	hdr[4] = elfClass64      // 64-bit
+	hdr[5] = elfDataLSB      // Little endian
+	hdr[6] = 1               // ELF version
+	hdr[7] = elfOSABIFreeBSD // FreeBSD ABI per spec
 
 	// Object file type
 	binary.LittleEndian.PutUint16(hdr[16:], elfTypeExec)
@@ -518,33 +498,33 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	var buf bytes.Buffer
 
 	// Mach-O header (32 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))      // magic
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))   // cputype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))       // magic
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
 	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec)) // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(2))                 // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
-	binary.Write(&buf, binary.LittleEndian, uint32(72+184))            // sizeofcmds
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs)) // flags
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                 // reserved
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
+	binary.Write(&buf, binary.LittleEndian, uint32(2))                  // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
+	binary.Write(&buf, binary.LittleEndian, uint32(72+184))             // sizeofcmds
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
 
 	// LC_SEGMENT_64 for __TEXT (72 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(72))               // cmdsize
-	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")  // segname (16 bytes)
-	binary.Write(&buf, binary.LittleEndian, machoVMAddr)              // vmaddr
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))     // vmsize
-	binary.Write(&buf, binary.LittleEndian, elfOffset)                // fileoff
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))     // filesize
+	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64))            // cmd
+	binary.Write(&buf, binary.LittleEndian, uint32(72))                          // cmdsize
+	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")            // segname (16 bytes)
+	binary.Write(&buf, binary.LittleEndian, machoVMAddr)                         // vmaddr
+	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // vmsize
+	binary.Write(&buf, binary.LittleEndian, elfOffset)                           // fileoff
+	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // filesize
 	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // maxprot
 	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // initprot
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                // nsects
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // nsects
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // flags
 
 	// LC_UNIXTHREAD (184 bytes for x86_64)
 	binary.Write(&buf, binary.LittleEndian, uint32(machoLCUnixThread)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(184))              // cmdsize
-	binary.Write(&buf, binary.LittleEndian, uint32(4))                // flavor (x86_THREAD_STATE64)
-	binary.Write(&buf, binary.LittleEndian, uint32(42))               // count
+	binary.Write(&buf, binary.LittleEndian, uint32(184))               // cmdsize
+	binary.Write(&buf, binary.LittleEndian, uint32(4))                 // flavor (x86_THREAD_STATE64)
+	binary.Write(&buf, binary.LittleEndian, uint32(42))                // count
 
 	// Thread state (42 uint64 values = 336 bytes, but we only write key ones)
 	// Registers: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp, r8-r15, rip, rflags, cs, fs, gs
@@ -586,35 +566,35 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 
 	// Optional Header (PE32+)
 	optStart := coffStart + 20
-	binary.LittleEndian.PutUint16(header[optStart+0:], 0x20B)       // Magic: PE32+
-	header[optStart+2] = 1                                          // MajorLinkerVersion
-	header[optStart+3] = 0                                          // MinorLinkerVersion
-	binary.LittleEndian.PutUint32(header[optStart+4:], 0x200)       // SizeOfCode
-	binary.LittleEndian.PutUint32(header[optStart+8:], 0)           // SizeOfInitializedData
-	binary.LittleEndian.PutUint32(header[optStart+12:], 0)          // SizeOfUninitializedData
-	binary.LittleEndian.PutUint32(header[optStart+16:], 0x1000)     // AddressOfEntryPoint
-	binary.LittleEndian.PutUint32(header[optStart+20:], 0x1000)     // BaseOfCode
+	binary.LittleEndian.PutUint16(header[optStart+0:], 0x20B)        // Magic: PE32+
+	header[optStart+2] = 1                                           // MajorLinkerVersion
+	header[optStart+3] = 0                                           // MinorLinkerVersion
+	binary.LittleEndian.PutUint32(header[optStart+4:], 0x200)        // SizeOfCode
+	binary.LittleEndian.PutUint32(header[optStart+8:], 0)            // SizeOfInitializedData
+	binary.LittleEndian.PutUint32(header[optStart+12:], 0)           // SizeOfUninitializedData
+	binary.LittleEndian.PutUint32(header[optStart+16:], 0x1000)      // AddressOfEntryPoint
+	binary.LittleEndian.PutUint32(header[optStart+20:], 0x1000)      // BaseOfCode
 	binary.LittleEndian.PutUint64(header[optStart+24:], 0x140000000) // ImageBase
-	binary.LittleEndian.PutUint32(header[optStart+32:], 0x1000)     // SectionAlignment
-	binary.LittleEndian.PutUint32(header[optStart+36:], 0x200)      // FileAlignment
-	binary.LittleEndian.PutUint16(header[optStart+40:], 6)          // MajorOSVersion
-	binary.LittleEndian.PutUint16(header[optStart+42:], 0)          // MinorOSVersion
-	binary.LittleEndian.PutUint16(header[optStart+44:], 0)          // MajorImageVersion
-	binary.LittleEndian.PutUint16(header[optStart+46:], 0)          // MinorImageVersion
-	binary.LittleEndian.PutUint16(header[optStart+48:], 6)          // MajorSubsystemVersion
-	binary.LittleEndian.PutUint16(header[optStart+50:], 0)          // MinorSubsystemVersion
-	binary.LittleEndian.PutUint32(header[optStart+52:], 0)          // Win32VersionValue
-	binary.LittleEndian.PutUint32(header[optStart+56:], 0x2000)     // SizeOfImage
-	binary.LittleEndian.PutUint32(header[optStart+60:], 0x200)      // SizeOfHeaders
-	binary.LittleEndian.PutUint32(header[optStart+64:], 0)          // CheckSum
-	binary.LittleEndian.PutUint16(header[optStart+68:], 3)          // Subsystem: CONSOLE
-	binary.LittleEndian.PutUint16(header[optStart+70:], 0x8160)     // DllCharacteristics
-	binary.LittleEndian.PutUint64(header[optStart+72:], 0x100000)   // SizeOfStackReserve
-	binary.LittleEndian.PutUint64(header[optStart+80:], 0x1000)     // SizeOfStackCommit
-	binary.LittleEndian.PutUint64(header[optStart+88:], 0x100000)   // SizeOfHeapReserve
-	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)     // SizeOfHeapCommit
-	binary.LittleEndian.PutUint32(header[optStart+104:], 0)         // LoaderFlags
-	binary.LittleEndian.PutUint32(header[optStart+108:], 16)        // NumberOfRvaAndSizes
+	binary.LittleEndian.PutUint32(header[optStart+32:], 0x1000)      // SectionAlignment
+	binary.LittleEndian.PutUint32(header[optStart+36:], 0x200)       // FileAlignment
+	binary.LittleEndian.PutUint16(header[optStart+40:], 6)           // MajorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+42:], 0)           // MinorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+44:], 0)           // MajorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+46:], 0)           // MinorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+48:], 6)           // MajorSubsystemVersion
+	binary.LittleEndian.PutUint16(header[optStart+50:], 0)           // MinorSubsystemVersion
+	binary.LittleEndian.PutUint32(header[optStart+52:], 0)           // Win32VersionValue
+	binary.LittleEndian.PutUint32(header[optStart+56:], 0x2000)      // SizeOfImage
+	binary.LittleEndian.PutUint32(header[optStart+60:], 0x200)       // SizeOfHeaders
+	binary.LittleEndian.PutUint32(header[optStart+64:], 0)           // CheckSum
+	binary.LittleEndian.PutUint16(header[optStart+68:], 3)           // Subsystem: CONSOLE
+	binary.LittleEndian.PutUint16(header[optStart+70:], 0x8160)      // DllCharacteristics
+	binary.LittleEndian.PutUint64(header[optStart+72:], 0x100000)    // SizeOfStackReserve
+	binary.LittleEndian.PutUint64(header[optStart+80:], 0x1000)      // SizeOfStackCommit
+	binary.LittleEndian.PutUint64(header[optStart+88:], 0x100000)    // SizeOfHeapReserve
+	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)      // SizeOfHeapCommit
+	binary.LittleEndian.PutUint32(header[optStart+104:], 0)          // LoaderFlags
+	binary.LittleEndian.PutUint32(header[optStart+108:], 16)         // NumberOfRvaAndSizes
 
 	// Section Header
 	sectStart := optStart + 240
