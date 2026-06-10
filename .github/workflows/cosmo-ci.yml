@@ -36,6 +36,46 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
+      # Shebang support tests (Unix only - shebang is a Unix feature)
+      - name: Test shebang support - unit tests
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          # Pin host GOOS/GOARCH: this toolchain defaults to GOOS=cosmo and
+          # would otherwise emit (fat) APE test binaries the host can't exec.
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+          echo "=== Running shebang unit tests ==="
+          go test ./src/go/scanner/... -run TestShebang -v
+          go test ./src/go/build/... -run TestReadGoInfo -v
+          go test ./src/cmd/compile/internal/syntax/... -run TestShebang -v
+
+      - name: Test shebang support - script execution
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+
+          # Create a Go script with shebang
+          cat > /tmp/shebang-test.go << 'EOF'
+          #!/usr/bin/env go run
+
+          package main
+
+          import "fmt"
+
+          func main() {
+              fmt.Println("Hello from shebang Go script!")
+          }
+          EOF
+
+          echo "=== Testing go run with shebang file ==="
+          go run /tmp/shebang-test.go
+
+          echo "=== Testing direct script execution ==="
+          chmod +x /tmp/shebang-test.go
+          /tmp/shebang-test.go
+
       - name: Build APE binary
         shell: bash
         run: |
