@@ -116,9 +116,39 @@ go build -gcflags=-S
 go tool compile -bench=out.txt file.go
 ```
 
+## Fork Gotchas
+
+- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test`
+  run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host
+  tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses
+  (like `testdata/ape/apetest`) should be run with an upstream Go so the test binary
+  itself is executable on the host.
+- **APE binaries self-assimilate.** Executing an APE rewrites its own header in
+  place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
+  upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
+  this automatically).
+
+## Local Verify Loop
+
+```bash
+cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
+export PATH="$PWD/../bin:$PATH"
+# after linker changes:
+GOOS=linux GOARCH=amd64 go install cmd/link    # refresh the HOST linker (see gotcha above)
+GOOS=cosmo GOARCH=amd64 go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go
+cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
+```
+
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
+
+CI currently pins `GOARCH=amd64` (the linker emits single-arch APE; unpin once fat
+amd64+arm64 output exists). Execution tests skip on host/binary combinations that
+are non-goals today — Windows (PE stub does not load the payload yet; PR #12) and
+ARM64 macOS with an amd64-only binary (No Rosetta policy) — while structural
+format tests run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
+(`skipIfExecUnsupported`) is the single place encoding these skips.
 
 ## Adding Cosmo Support to Standard Library Packages
 

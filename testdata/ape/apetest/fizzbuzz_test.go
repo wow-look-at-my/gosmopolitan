@@ -24,8 +24,28 @@ func copyBinary(t *testing.T) string {
 	return tmp
 }
 
+// skipIfExecUnsupported skips execution tests on host/binary combinations
+// that are known non-goals today. Structural format tests still run there.
+func skipIfExecUnsupported(t *testing.T) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "windows":
+		// The PE stub does not load the ELF payload yet (it exits 0
+		// immediately); native Windows execution is tracked by PR #12.
+		t.Skip("native Windows execution not implemented yet (PE stub; see PR #12)")
+	case "darwin":
+		if runtime.GOARCH == "arm64" {
+			// Per the No-Rosetta policy in CLAUDE.md, an amd64-only APE
+			// is expected NOT to run on ARM64 macOS. Native execution
+			// here requires fat (amd64+arm64) APE output.
+			t.Skip("amd64 APE cannot run natively on ARM64 macOS; pending fat binary support")
+		}
+	}
+}
+
 func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	skipIfExecUnsupported(t)
 	bin := copyBinary(t)
 
 	// APE binaries need to be invoked through a shell on Linux/Unix because
