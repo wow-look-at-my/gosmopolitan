@@ -6,8 +6,13 @@
 
 package runtime
 
-// Semaphore implementation for cosmo arm64 using dispatch_semaphore.
-// This is used by lock_sema.go for synchronization primitives.
+// Semaphore implementation for cosmo arm64. The host OS is only known at
+// run time: on macOS the M's semaphore is a dispatch_semaphore obtained via
+// the APE loader's Syslib; on Linux it is a counting semaphore built on the
+// futex syscall. This is used by lock_sema.go for synchronization
+// primitives.
+
+import "internal/runtime/atomic"
 
 // DISPATCH_TIME_FOREVER for infinite wait
 const _DISPATCH_TIME_FOREVER = ^uint64(0)
@@ -29,6 +34,10 @@ func dispatch_semaphore_wait_trampoline(sema uintptr, timeout uint64) int64
 //
 //go:nosplit
 func semacreate(mp *m) {
+	if !isdarwin() {
+		// Linux: the futex word in mOS needs no initialization.
+		return
+	}
 	if mp.waitsema != 0 {
 		return
 	}
@@ -49,6 +58,9 @@ func semacreate(mp *m) {
 //go:nosplit
 func semasleep(ns int64) int32 {
 	mp := getg().m
+	if !isdarwin() {
+		return futexsemasleep(mp, ns)
+	}
 	if mp.waitsema == 0 {
 		// No semaphore - this shouldn't happen after semacreate
 		// Fall back to spinning
@@ -85,8 +97,48 @@ func semasleep(ns int64) int32 {
 //
 //go:nosplit
 func semawakeup(mp *m) {
+	if !isdarwin() {
+		futexsemawakeup(mp)
+		return
+	}
 	if mp.waitsema == 0 {
 		return
 	}
 	dispatch_semaphore_signal_trampoline(mp.waitsema)
+}
+
+// futexsemasleep implements semasleep on Linux hosts: a counting semaphore
+// over the futex syscall, with mOS.waitsemacount as the futex word.
+//
+//go:nosplit
+func futexsemasleep(mp *m, ns int64) int32 {
+	var deadline int64
+	if ns >= 0 {
+		deadline = nanotime() + ns
+	}
+	for {
+		v := atomic.Load(&mp.waitsemacount)
+		if v > 0 {
+			if atomic.Cas(&mp.waitsemacount, v, v-1) {
+				return 0
+			}
+			continue
+		}
+		wait := int64(-1)
+		if ns >= 0 {
+			wait = deadline - nanotime()
+			if wait <= 0 {
+				return -1
+			}
+		}
+		futexsleep(&mp.waitsemacount, 0, wait)
+	}
+}
+
+// futexsemawakeup implements semawakeup on Linux hosts.
+//
+//go:nosplit
+func futexsemawakeup(mp *m) {
+	atomic.Xadd(&mp.waitsemacount, 1)
+	futexwakeup(&mp.waitsemacount, 1)
 }

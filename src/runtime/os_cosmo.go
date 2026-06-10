@@ -503,3 +503,11 @@ func runPerThreadSyscall() {
 //
 //go:noescape
 func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 uint32) int32
+
+// cosmoStacksAreSystemAllocated reports whether new OS threads get
+// system-allocated stacks on this host. Only the macOS path (ARM64 via the
+// APE loader's pthread_create) provides them; the Linux clone() path needs
+// Go-allocated stacks.
+func cosmoStacksAreSystemAllocated() bool {
+	return GOARCH == "arm64" && isdarwin()
+}

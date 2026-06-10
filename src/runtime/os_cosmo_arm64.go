@@ -50,17 +50,17 @@ type syslib struct {
 	dispatch_semaphore_wait                uintptr
 	dispatch_walltime                      uintptr
 	// v2
-	pthread_self     uintptr
-	dispatch_release uintptr
-	raise            uintptr
-	pthread_join     uintptr
-	pthread_yield_np uintptr
-	pthread_stack_min int32
-	sizeof_pthread_attr_t int32
-	pthread_attr_init            uintptr
-	pthread_attr_destroy         uintptr
-	pthread_attr_setstacksize    uintptr
-	pthread_attr_setguardsize    uintptr
+	pthread_self              uintptr
+	dispatch_release          uintptr
+	raise                     uintptr
+	pthread_join              uintptr
+	pthread_yield_np          uintptr
+	pthread_stack_min         int32
+	sizeof_pthread_attr_t     int32
+	pthread_attr_init         uintptr
+	pthread_attr_destroy      uintptr
+	pthread_attr_setstacksize uintptr
+	pthread_attr_setguardsize uintptr
 	// v4
 	exit      uintptr
 	close     uintptr
