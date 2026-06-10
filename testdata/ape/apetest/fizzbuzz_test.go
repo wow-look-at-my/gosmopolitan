@@ -33,14 +33,9 @@ func skipIfExecUnsupported(t *testing.T) {
 		// The PE stub does not load the ELF payload yet (it exits 0
 		// immediately); native Windows execution is tracked by PR #12.
 		t.Skip("native Windows execution not implemented yet (PE stub; see PR #12)")
-	case "darwin":
-		if runtime.GOARCH == "arm64" {
-			// Per the No-Rosetta policy in CLAUDE.md, an amd64-only APE
-			// is expected NOT to run on ARM64 macOS. Native execution
-			// here requires fat (amd64+arm64) APE output.
-			t.Skip("amd64 APE cannot run natively on ARM64 macOS; pending fat binary support")
-		}
 	}
+	// ARM64 macOS executes the fat APE's native arm64 image through the
+	// embedded APE loader; no skip needed since fat output landed.
 }
 
 func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {

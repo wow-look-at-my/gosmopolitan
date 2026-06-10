@@ -63,11 +63,21 @@ go test std
 ## Building Cosmopolitan Binaries
 
 ```bash
-# Build an APE binary
-GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+# Build a fat (amd64+arm64) APE binary - GOARCH is ignored for the output;
+# go build always builds both architectures and merges them
+GOOS=cosmo go build -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH)
+GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+
+# Merge two single-arch cosmo binaries into one fat APE by hand
+go tool link -apefat amd64.com,arm64.com -o program.com
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows.
+The resulting `.com` file runs on Linux, macOS, and Windows. The amd64 image
+boots on x86-64 hosts (self-assimilation on Linux, Mach-O dd on macOS Intel,
+PE on Windows); the arm64 image boots on ARM64 Linux (self-assimilation) and
+ARM64 macOS (compiled APE loader, no Rosetta).
 
 ## Architecture
 
@@ -133,9 +143,9 @@ go tool compile -bench=out.txt file.go
 ```bash
 cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
 export PATH="$PWD/../bin:$PATH"
-# after linker changes:
-GOOS=linux GOARCH=amd64 go install cmd/link    # refresh the HOST linker (see gotcha above)
-GOOS=cosmo GOARCH=amd64 go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go
+# after linker or go-command changes:
+GOOS=linux GOARCH=amd64 go install cmd/link cmd/go   # refresh HOST tools (see gotcha above)
+GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emits fat APE
 cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
 ```
 
@@ -143,12 +153,11 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
 
-CI currently pins `GOARCH=amd64` (the linker emits single-arch APE; unpin once fat
-amd64+arm64 output exists). Execution tests skip on host/binary combinations that
-are non-goals today — Windows (PE stub does not load the payload yet; PR #12) and
-ARM64 macOS with an amd64-only binary (No Rosetta policy) — while structural
-format tests run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
-(`skipIfExecUnsupported`) is the single place encoding these skips.
+CI builds one fat (amd64+arm64) APE per platform; no GOARCH pin. Execution
+tests skip only on Windows (the PE stub does not load the payload yet; PR #12)
+while structural format tests - including the fat boot-header checks in
+`fat_test.go` - run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
+(`skipIfExecUnsupported`) is the single place encoding the skips.
 
 ## Adding Cosmo Support to Standard Library Packages
 

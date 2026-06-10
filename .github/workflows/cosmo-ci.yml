@@ -40,11 +40,9 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          # GOARCH must be pinned: the linker emits a single-arch APE (no
-          # automatic fat binary), and on arm64 runners (macos-latest) the
-          # host default produces an arm64-only binary that the amd64 test
-          # matrix can neither parse nor run.
-          GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+          # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
+          # APE regardless of the host architecture.
+          GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""

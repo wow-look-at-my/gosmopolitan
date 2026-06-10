@@ -141,3 +141,34 @@ Need to modify `internal/runtime/syscall/cosmo/asm_cosmo_arm64.s` to:
 3. **mStackIsSystemAllocated**: Returns true for cosmo ARM64 (pthread provides stack)
 4. **getpid**: Added CHECK_DARWIN path using syslib offset 112
 5. **rlimit.go**: Skip rlimit adjustment on cosmo (workaround for syscall issue)
+
+
+## 2026-06-10: Fat APE + ARM64 Linux boot path
+
+`GOOS=cosmo go build` now emits a fat amd64+arm64 APE (cmd/go builds the
+sibling GOARCH and merges via `go tool link -apefat`). Three runtime fixes
+made the arm64 image boot as a plain ELF on Linux (verified under
+qemu-aarch64; previously SIGTRAP/SIGSEGV/sema fatal in sequence):
+
+1. `rt0_cosmo_arm64.s` treated any boot without the XNU handoff (X3=8 +
+   Syslib magic in X15) as fatal (debug BRK). Now: invalid handoff =>
+   hostos=0 (Linux), syslib=nil, raw SVC syscalls.
+2. `mStackIsSystemAllocated()` claimed system stacks for all of
+   cosmo/arm64; on Linux clone() then crashed storing child setup at
+   stack -8. Now runtime-dispatched: pthread stacks on macOS only.
+3. `semasleep`/`semawakeup` knew only dispatch_semaphore ("semasleep
+   without semaphore" on Linux). Now runtime-dispatched: futex-backed
+   counting semaphore on Linux (mOS.waitsemacount).
+
+Loader-side findings (also fixed): the boot-header printf encoder used the
+shell `'\''` idiom for quote bytes, which ape-m1.c's decoder cannot parse
+(it stops at the first raw quote - the arm64 header had 0x27 in e_phoff);
+and `getApeLoaderSource()` searched the local filesystem instead of using
+the in-repo `ape-m1.c.gz`, so CI binaries shipped with no loader at all.
+Both boot headers must decode from the first 8192 bytes (the loader's scan
+window); the linker asserts this.
+
+Next: macOS ARM64 native execution via the compiled loader is exercised by
+CI (macos-latest, exec tests unskipped). If it fails, the syslib-routed
+syscall paths in sys_cosmo_arm64.s are the place to look - the Linux SVC
+side is now known-good under qemu.
