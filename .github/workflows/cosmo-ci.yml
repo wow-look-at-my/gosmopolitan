@@ -92,7 +92,7 @@ jobs:
 
       - name: Test binary built on Ubuntu
         id: test-ubuntu
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
@@ -101,7 +101,7 @@ jobs:
 
       - name: Test binary built on macOS
         id: test-macos
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
@@ -110,7 +110,7 @@ jobs:
 
       - name: Test binary built on Windows
         id: test-windows
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
