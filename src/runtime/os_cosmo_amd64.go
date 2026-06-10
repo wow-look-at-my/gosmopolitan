@@ -32,4 +32,3 @@ var __hostos int32
 func isdarwin() bool {
 	return __hostos == _HOSTXNU
 }
-

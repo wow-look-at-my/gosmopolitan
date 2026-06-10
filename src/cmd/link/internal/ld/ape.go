@@ -9,10 +9,10 @@ import (
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"compress/gzip"
+	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // APE (Actually Portable Executable) format implementation
@@ -34,34 +34,60 @@ const (
 	pageSize16K = 16384
 
 	// ELF constants
-	elfMagic      = "\x7fELF"
-	elfClass64    = 2
-	elfDataLSB    = 1
+	elfMagic        = "\x7fELF"
+	elfClass64      = 2
+	elfDataLSB      = 1
 	elfOSABIFreeBSD = 9 // Use FreeBSD ABI per spec
-	elfTypeExec   = 2
+	elfTypeExec     = 2
 	elfMachineAMD64 = 0x3E
 	elfMachineARM64 = 0xB7
 
 	// Mach-O constants
-	machoMagic64     = 0xFEEDFACF
-	machoCPUTypeX64  = 0x01000007
+	machoMagic64       = 0xFEEDFACF
+	machoCPUTypeX64    = 0x01000007
 	machoCPUSubtypeX64 = 0x80000003
-	machoFileTypeExec = 0x2
-	machoFlagNoUndefs = 0x1
-	machoFlagPIE      = 0x200000
+	machoFileTypeExec  = 0x2
+	machoFlagNoUndefs  = 0x1
+	machoFlagPIE       = 0x200000
 
 	// Load commands
-	machoLCSegment64   = 0x19
-	machoLCUnixThread  = 0x5
-	machoLCMain        = 0x80000028
+	machoLCSegment64  = 0x19
+	machoLCUnixThread = 0x5
+	machoLCMain       = 0x80000028
 
 	// Segment protection
-	machoProtRead    = 0x1
-	machoProtWrite   = 0x2
-	machoProtExec    = 0x4
+	machoProtRead  = 0x1
+	machoProtWrite = 0x2
+	machoProtExec  = 0x4
 )
 
 // convertToAPE converts an ELF binary to Actually Portable Executable format.
+// apePayload describes one architecture's ELF image embedded in an APE file.
+type apePayload struct {
+	elf    []byte // complete ELF image; p_offset values are payload-relative
+	arch   sys.ArchFamily
+	offset uint64 // file offset of this image inside the APE; set by layoutAPE
+}
+
+// payloadFromELF validates elf and wraps it as an APE payload.
+func payloadFromELF(elf []byte) (*apePayload, error) {
+	if len(elf) < 64 || string(elf[0:4]) != elfMagic {
+		return nil, fmt.Errorf("not a valid ELF binary")
+	}
+	var arch sys.ArchFamily
+	switch m := binary.LittleEndian.Uint16(elf[18:20]); m {
+	case elfMachineAMD64:
+		arch = sys.AMD64
+	case elfMachineARM64:
+		arch = sys.ARM64
+	default:
+		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
+	}
+	return &apePayload{elf: elf, arch: arch}, nil
+}
+
+func (p *apePayload) entry() uint64 { return binary.LittleEndian.Uint64(p.elf[24:32]) }
+
 func (ctxt *Link) convertToAPE() {
 	if ctxt.HeadType != objabi.Hcosmo {
 		return
@@ -77,98 +103,159 @@ func (ctxt *Link) convertToAPE() {
 	if err != nil {
 		Exitf("cannot read output file for APE conversion: %v", err)
 	}
-
-	// Verify it's a valid ELF
-	if len(elfData) < 64 || string(elfData[0:4]) != elfMagic {
-		Exitf("output file is not a valid ELF binary")
+	p, err := payloadFromELF(elfData)
+	if err != nil {
+		Exitf("APE conversion: %v", err)
 	}
+	if p.arch != ctxt.Arch.Family {
+		Exitf("APE conversion: ELF machine type does not match link architecture")
+	}
+	writeAPEFile(outfile, []*apePayload{p})
+}
 
-	// Get ELF entry point and program headers for the embedded header
-	elfEntry := binary.LittleEndian.Uint64(elfData[24:32])
-	elfPhoff := binary.LittleEndian.Uint64(elfData[32:40])
-	elfPhnum := binary.LittleEndian.Uint16(elfData[56:58])
+// apePayloadAlign is the alignment of payload images within the APE file.
+// The APE loader requires p_vaddr to be congruent to p_offset modulo 16384
+// for every program header; placing payloads on 64K boundaries (the largest
+// page size in play) preserves whatever congruence each image already has.
+const apePayloadAlign = 0x10000
 
-	// Create the APE file
+// layoutAPE assigns file offsets to the payloads: the first begins right
+// after the APE header, each subsequent payload at the next aligned boundary.
+func layoutAPE(payloads []*apePayload) {
+	off := uint64(apeHeaderSize)
+	for _, p := range payloads {
+		p.offset = off
+		off += uint64(len(p.elf))
+		off = (off + apePayloadAlign - 1) &^ uint64(apePayloadAlign-1)
+	}
+}
+
+// writeAPEFile writes an APE polyglot containing the given payloads.
+// Payload p_offset values are rewritten to absolute file offsets.
+func writeAPEFile(outfile string, payloads []*apePayload) {
+	layoutAPE(payloads)
+	header := makeAPEHeaderForPayloads(payloads)
+
 	apeFile, err := os.Create(outfile)
 	if err != nil {
 		Exitf("cannot create APE output: %v", err)
 	}
 	defer apeFile.Close()
 
-	// Build the APE header with embedded formats
-	header := makeAPEHeader(elfData, elfEntry, elfPhoff, elfPhnum, ctxt.Arch.Family)
-
 	if _, err := apeFile.Write(header); err != nil {
 		Exitf("cannot write APE header: %v", err)
 	}
-
-	// Adjust program header p_offset values to account for APE header
-	// The ELF data will be at file offset apeHeaderSize, so all p_offset
-	// values need to be increased by apeHeaderSize
-	elfPhentsize := binary.LittleEndian.Uint16(elfData[54:56])
-	for i := uint16(0); i < elfPhnum; i++ {
-		phdrOffset := elfPhoff + uint64(i)*uint64(elfPhentsize)
-		// p_offset is at byte 8 of each program header (64-bit ELF)
-		pOffset := binary.LittleEndian.Uint64(elfData[phdrOffset+8:])
-		binary.LittleEndian.PutUint64(elfData[phdrOffset+8:], pOffset+uint64(apeHeaderSize))
+	cur := uint64(apeHeaderSize)
+	for _, p := range payloads {
+		if p.offset > cur {
+			if _, err := apeFile.Write(make([]byte, p.offset-cur)); err != nil {
+				Exitf("cannot write APE padding: %v", err)
+			}
+			cur = p.offset
+		}
+		if _, err := apeFile.Write(shiftPOffsets(p.elf, p.offset)); err != nil {
+			Exitf("cannot write APE payload: %v", err)
+		}
+		cur += uint64(len(p.elf))
 	}
 
-	// Write the ELF payload at the expected offset
-	if _, err := apeFile.Write(elfData); err != nil {
-		Exitf("cannot write ELF payload: %v", err)
-	}
-
-	// Make executable
 	if err := os.Chmod(outfile, 0755); err != nil {
 		Exitf("cannot chmod APE output: %v", err)
 	}
 }
 
-// makeAPEHeader creates an APE header following the specification.
-// The header is a polyglot containing:
-// - MZ/PE header for Windows
-// - Shell script with printf-encoded ELF header for Linux/BSD
-// - Mach-O header and dd command for macOS x86-64
-func makeAPEHeader(elfData []byte, elfEntry, elfPhoff uint64, elfPhnum uint16, arch sys.ArchFamily) []byte {
-	header := make([]byte, apeHeaderSize)
+// shiftPOffsets returns a copy of elf whose program header p_offset values
+// are increased by delta, making them absolute within the APE file.
+func shiftPOffsets(elf []byte, delta uint64) []byte {
+	out := make([]byte, len(elf))
+	copy(out, elf)
+	phoff := binary.LittleEndian.Uint64(out[32:40])
+	phentsize := binary.LittleEndian.Uint16(out[54:56])
+	phnum := binary.LittleEndian.Uint16(out[56:58])
+	for i := uint16(0); i < phnum; i++ {
+		ph := phoff + uint64(i)*uint64(phentsize)
+		pOffset := binary.LittleEndian.Uint64(out[ph+8:])
+		binary.LittleEndian.PutUint64(out[ph+8:], pOffset+delta)
+	}
+	return out
+}
 
-	// Determine page size based on architecture
-	pageSize := uint64(pageSize4K)
-	if arch == sys.ARM64 {
-		pageSize = pageSize16K
+// writePrintfBlob escapes blob into script as the body of a shell
+// printf '...' statement: printable ASCII stays literal, everything else
+// becomes an octal escape. Single quotes must be octal too -- not the shell
+// backslash-quote idiom -- because the APE loader's printf decoder stops at the first
+// raw quote byte when it scans the header for embedded boot ELF headers.
+func writePrintfBlob(script *bytes.Buffer, blob []byte) {
+	for _, b := range blob {
+		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' {
+			script.WriteByte(b)
+		} else {
+			fmt.Fprintf(script, "\\%03o", b)
+		}
+	}
+}
+
+// makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
+// the given payloads (at most one per architecture family). With both an
+// amd64 and an arm64 payload the result is a fat APE: the bootstrap script
+// and the embedded boot headers dispatch on the host architecture, and the
+// macOS ARM64 APE loader finds the aarch64 image by decoding every printf
+// statement in the first 8192 bytes.
+func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
+	var amd, arm *apePayload
+	for _, p := range payloads {
+		switch p.arch {
+		case sys.AMD64:
+			if amd != nil {
+				Exitf("APE: more than one amd64 payload")
+			}
+			amd = p
+		case sys.ARM64:
+			if arm != nil {
+				Exitf("APE: more than one arm64 payload")
+			}
+			arm = p
+		default:
+			Exitf("APE: unsupported payload architecture")
+		}
+	}
+	if amd == nil && arm == nil {
+		Exitf("APE: no payloads")
 	}
 
-	// ELF payload starts after the APE header
-	elfOffset := uint64(apeHeaderSize)
+	header := make([]byte, apeHeaderSize)
 
-	// Calculate the actual entry point in the APE file
-	// The ELF entry point is relative to the ELF load address
-	// We need to adjust for the APE header offset
-	apeEntry := elfEntry
-
-	// Create the modified ELF header that points into the APE file
-	// This header will be encoded as octal in a printf statement
-	embeddedElf := makeEmbeddedElfHeader(elfData, elfOffset, pageSize, arch)
+	// Embedded (printf-encoded) boot ELF headers. They serve two purposes:
+	// self-assimilation on Linux, and discovery by the macOS ARM64 APE
+	// loader, which octal-decodes every printf in the first 8192 bytes and
+	// uses the first one with an aarch64 machine type.
+	var amdBoot, armBoot []byte
+	if amd != nil {
+		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, pageSize4K, sys.AMD64)
+	}
+	if arm != nil {
+		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, pageSize16K, sys.ARM64)
+	}
 
 	// Create Mach-O header for macOS x86-64
 	var machoHeader []byte
 	var machoOffset, machoSize int
-	if arch == sys.AMD64 {
-		machoHeader = makeMachoHeader(elfData, elfOffset, apeEntry)
-		// Place Mach-O header at a specific location in the APE header
-		// It will be copied backward by the dd command
+	if amd != nil {
+		machoHeader = makeMachoHeader(amd.elf, amd.offset, amd.entry())
+		// Place Mach-O header at a specific location in the APE header.
+		// It will be copied backward by the dd command.
 		machoOffset = 0x1000 // 4KB into the header
 		machoSize = len(machoHeader)
 	}
 
-	// Load and compress APE loader source for macOS ARM64
+	// Load gzipped APE loader source for macOS ARM64
 	var apeLoaderGz []byte
 	var apeLoaderOffset, apeLoaderSize int
-	if arch == sys.ARM64 {
+	if arm != nil {
 		apeLoaderGz = getApeLoaderSource()
 		if len(apeLoaderGz) > 0 {
-			// Place gzipped loader at offset 0x8000 (32KB into header)
-			// This leaves room for script (0x400-0x8000) and avoids conflicts
+			// Place gzipped loader at offset 0x8000 (32KB into header).
+			// This leaves room for the script (0x400-0x8000).
 			apeLoaderOffset = 0x8000
 			apeLoaderSize = len(apeLoaderGz)
 		}
@@ -222,91 +309,44 @@ func makeAPEHeader(elfData []byte, elfEntry, elfPhoff uint64, elfPhnum uint16, a
 		header[i] = '#'
 	}
 
-	// The PE header at 0x80 will be absorbed by the here-doc
-	// We need to place the here-doc terminator and script after the PE header area
-
 	// The script starts at offset 0x400 (after PE code section)
-	// Build the script content
 	var script bytes.Buffer
 
 	// Here-doc terminator
 	script.WriteString("__APE__\n")
 
-	// APE execution logic - architecture-specific
-	// For AMD64 builds: run on x86_64, require Rosetta on ARM64 macOS
-	// For ARM64 builds: run on ARM64, use APE loader on macOS
+	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
 
-	if arch == sys.AMD64 {
-		// AMD64 binary: runs on x86_64 systems
-		script.WriteString(`if [ "$m" = x86_64 ] || [ "$m" = amd64 ]; then
-  o="$(command -v "$0")"
+	// --- x86-64 hosts ---
+	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
+	if amd != nil {
+		script.WriteString(`  o="$(command -v "$0")"
   exec 7<> "$o" || exit 121
   printf '`)
-		for _, b := range embeddedElf {
-			if b == '\'' {
-				script.WriteString("'\\''")
-			} else if b >= 0x20 && b < 0x7f && b != '\\' {
-				script.WriteByte(b)
-			} else {
-				fmt.Fprintf(&script, "\\%03o", b)
-			}
-		}
+		writePrintfBlob(&script, amdBoot)
 		script.WriteString("' >&7\n")
 		script.WriteString("  exec 7<&-\n")
 		if machoSize > 0 {
 			bs := 8
 			skip := machoOffset / bs
 			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "  [ -d /Applications ] && dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null\n", bs, skip, count)
+			fmt.Fprintf(&script, "  if [ -d /Applications ]; then\n")
+			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
+			fmt.Fprintf(&script, "  fi\n")
 		}
-		script.WriteString(`  exec "$0" "$@"
-fi
-if [ "$m" = aarch64 ] || [ "$m" = arm64 ]; then
-  if [ -d /Applications ]; then
-    # macOS ARM64 running x86_64 binary: check for Rosetta
-    if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-      echo 'APE: This x86_64 binary requires Rosetta 2 on Apple Silicon.' >&2
-      echo 'Install Rosetta with: softwareupdate --install-rosetta' >&2
-      exit 1
-    fi
-    o="$(command -v "$0")"
-    exec 7<> "$o" || exit 121
-    printf '`)
-		for _, b := range embeddedElf {
-			if b == '\'' {
-				script.WriteString("'\\''")
-			} else if b >= 0x20 && b < 0x7f && b != '\\' {
-				script.WriteByte(b)
-			} else {
-				fmt.Fprintf(&script, "\\%03o", b)
-			}
-		}
-		script.WriteString("' >&7\n")
-		script.WriteString("    exec 7<&-\n")
-		if machoSize > 0 {
-			bs := 8
-			skip := machoOffset / bs
-			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null\n", bs, skip, count)
-		}
-		script.WriteString(`    exec "$0" "$@"
-  fi
-  echo 'APE: ARM64 Linux cannot run x86_64 binary' >&2
-  exit 1
-fi
-`)
-	} else if arch == sys.ARM64 {
-		// ARM64 binary: runs on ARM64 systems
-		// Must handle both Linux ARM64 and macOS ARM64 (Apple Silicon)
-		// macOS cannot execute ELF directly - needs compiled APE loader
-		script.WriteString(`if [ "$m" = x86_64 ] || [ "$m" = amd64 ]; then
-  echo 'APE: x86_64 cannot run ARM64 binary' >&2
-  exit 1
-fi
-o="$(command -v "$0")"
-t="${TMPDIR:-${HOME:-.}}/.ape-1.10"
-if [ "$m" = aarch64 ] || [ "$m" = arm64 ]; then
+		script.WriteString("  exec \"$0\" \"$@\"\n")
+	} else {
+		script.WriteString("  echo 'APE: x86_64 cannot run ARM64 binary' >&2\n")
+		script.WriteString("  exit 1\n")
+	}
+	script.WriteString("fi\n")
+
+	// --- ARM64 hosts ---
+	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
+	if arm != nil {
+		script.WriteString(`  o="$(command -v "$0")"
+  t="${TMPDIR:-${HOME:-.}}/.ape-1.10"
   if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
     # Don't use existing loader if it might be ELF (from Linux)
@@ -324,28 +364,33 @@ if [ "$m" = aarch64 ] || [ "$m" = arm64 ]; then
     cc -w -O -o "$t.$$" "$t.c" || exit
     mv -f "$t.$$" "$t" || exit
     exec "$t" "$o" "$@"
-  else
-    # Linux ARM64: check for loader, or transform ELF header
-    type ape >/dev/null 2>&1 && exec ape "$o" "$@"
-    [ -x "$t" ] && exec "$t" "$o" "$@"
-    exec 7<> "$o" || exit 121
-    printf '`)
-		for _, b := range embeddedElf {
-			if b == '\'' {
-				script.WriteString("'\\''")
-			} else if b >= 0x20 && b < 0x7f && b != '\\' {
-				script.WriteByte(b)
-			} else {
-				fmt.Fprintf(&script, "\\%03o", b)
-			}
-		}
-		script.WriteString("' >&7\n")
-		script.WriteString(`    exec 7<&-
-    exec "$0" "$@"
   fi
-fi
+  # Linux ARM64: prefer an installed loader, else self-assimilate
+  type ape >/dev/null 2>&1 && exec ape "$o" "$@"
+  [ -x "$t" ] && exec "$t" "$o" "$@"
+  exec 7<> "$o" || exit 121
+  printf '`)
+		writePrintfBlob(&script, armBoot)
+		script.WriteString("' >&7\n")
+		script.WriteString("  exec 7<&-\n")
+		script.WriteString("  exec \"$0\" \"$@\"\n")
+	} else {
+		// Note for this branch: it cannot work on current macOS even via
+		// Rosetta. The assimilated Mach-O fails codesign's strict
+		// validation (verified on macOS 15.7: "main executable failed
+		// strict validation"), and Apple Silicon SIGKILLs unsigned
+		// executables. Native ARM64 macOS execution requires an arm64
+		// payload (fat APE) via the compiled APE loader path.
+		script.WriteString(`  if [ -d /Applications ]; then
+    echo 'APE: this amd64-only binary cannot run natively on ARM64 macOS.' >&2
+    echo 'APE: rebuild with ARM64 (fat APE) support to run on Apple Silicon.' >&2
+    exit 1
+  fi
+  echo 'APE: ARM64 Linux cannot run x86_64 binary' >&2
+  exit 1
 `)
 	}
+	script.WriteString("fi\n")
 
 	script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
 case "$(uname -s 2>/dev/null)" in
@@ -357,16 +402,12 @@ exit 1
 
 	scriptBytes := script.Bytes()
 
-	// Replace APE loader offset/size placeholders for ARM64
-	if arch == sys.ARM64 && apeLoaderSize > 0 {
-		// Calculate actual file offset (APE header offset + offset within header)
-		actualOffset := apeLoaderOffset
-		scriptStr := string(scriptBytes)
-		scriptStr = bytes.NewBuffer(nil).String() // Reset
-		scriptStr = string(scriptBytes)
-		scriptStr = replaceAll(scriptStr, "APE_LOADER_OFFSET", fmt.Sprintf("%d", actualOffset))
-		scriptStr = replaceAll(scriptStr, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
-		scriptBytes = []byte(scriptStr)
+	// Replace APE loader offset/size placeholders for the macOS ARM64 path
+	if arm != nil && apeLoaderSize > 0 {
+		s := string(scriptBytes)
+		s = replaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
+		s = replaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
+		scriptBytes = []byte(s)
 	}
 
 	// Place script at offset 0x400
@@ -374,10 +415,24 @@ exit 1
 	if len(scriptBytes) > apeHeaderSize-scriptOffset {
 		Exitf("APE shell script too large: %d bytes", len(scriptBytes))
 	}
+	// The Mach-O header and APE loader are copied over the header after the
+	// script; if the script has grown into their regions they would silently
+	// clobber its tail, leaving a binary that parses as a broken shell script.
+	if machoSize > 0 && scriptOffset+len(scriptBytes) > machoOffset {
+		Exitf("APE shell script (%d bytes at %#x) overlaps Mach-O header at %#x", len(scriptBytes), scriptOffset, machoOffset)
+	}
+	if apeLoaderSize > 0 && scriptOffset+len(scriptBytes) > apeLoaderOffset {
+		Exitf("APE shell script (%d bytes at %#x) overlaps APE loader at %#x", len(scriptBytes), scriptOffset, apeLoaderOffset)
+	}
+	// The APE loader scans only the first 8192 bytes for printf statements;
+	// every boot header must decode from within that window.
+	if scriptOffset+len(scriptBytes) > 8192 {
+		Exitf("APE shell script ends at %#x, beyond the loader's 8192-byte scan window", scriptOffset+len(scriptBytes))
+	}
 	copy(header[scriptOffset:], scriptBytes)
 
-	// Embed gzipped APE loader source for ARM64
-	if arch == sys.ARM64 && apeLoaderSize > 0 {
+	// Embed gzipped APE loader source for macOS ARM64
+	if apeLoaderSize > 0 {
 		if apeLoaderOffset+apeLoaderSize > apeHeaderSize {
 			Exitf("APE loader too large to embed: %d bytes at offset %d", apeLoaderSize, apeLoaderOffset)
 		}
@@ -386,7 +441,11 @@ exit 1
 
 	// === PE Header at offset 0x80 ===
 	// Required for Windows support
-	writePEHeader(header, arch)
+	peArch := sys.AMD64
+	if amd == nil {
+		peArch = sys.ARM64
+	}
+	writePEHeader(header, peArch)
 
 	// === Mach-O header for macOS x86-64 ===
 	if machoSize > 0 && machoOffset+machoSize <= apeHeaderSize {
@@ -427,10 +486,10 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, pageSize uint64, ar
 
 	// ELF magic
 	copy(hdr[0:4], elfMagic)
-	hdr[4] = elfClass64                    // 64-bit
-	hdr[5] = elfDataLSB                    // Little endian
-	hdr[6] = 1                             // ELF version
-	hdr[7] = elfOSABIFreeBSD               // FreeBSD ABI per spec
+	hdr[4] = elfClass64      // 64-bit
+	hdr[5] = elfDataLSB      // Little endian
+	hdr[6] = 1               // ELF version
+	hdr[7] = elfOSABIFreeBSD // FreeBSD ABI per spec
 
 	// Object file type
 	binary.LittleEndian.PutUint16(hdr[16:], elfTypeExec)
@@ -502,33 +561,33 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	var buf bytes.Buffer
 
 	// Mach-O header (32 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))      // magic
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))   // cputype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))       // magic
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
 	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec)) // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(2))                 // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
-	binary.Write(&buf, binary.LittleEndian, uint32(72+184))            // sizeofcmds
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs)) // flags
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                 // reserved
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
+	binary.Write(&buf, binary.LittleEndian, uint32(2))                  // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
+	binary.Write(&buf, binary.LittleEndian, uint32(72+184))             // sizeofcmds
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
 
 	// LC_SEGMENT_64 for __TEXT (72 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(72))               // cmdsize
-	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")  // segname (16 bytes)
-	binary.Write(&buf, binary.LittleEndian, machoVMAddr)              // vmaddr
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))     // vmsize
-	binary.Write(&buf, binary.LittleEndian, elfOffset)                // fileoff
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))     // filesize
+	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64))            // cmd
+	binary.Write(&buf, binary.LittleEndian, uint32(72))                          // cmdsize
+	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")            // segname (16 bytes)
+	binary.Write(&buf, binary.LittleEndian, machoVMAddr)                         // vmaddr
+	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // vmsize
+	binary.Write(&buf, binary.LittleEndian, elfOffset)                           // fileoff
+	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // filesize
 	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // maxprot
 	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // initprot
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                // nsects
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // nsects
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // flags
 
 	// LC_UNIXTHREAD (184 bytes for x86_64)
 	binary.Write(&buf, binary.LittleEndian, uint32(machoLCUnixThread)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(184))              // cmdsize
-	binary.Write(&buf, binary.LittleEndian, uint32(4))                // flavor (x86_THREAD_STATE64)
-	binary.Write(&buf, binary.LittleEndian, uint32(42))               // count
+	binary.Write(&buf, binary.LittleEndian, uint32(184))               // cmdsize
+	binary.Write(&buf, binary.LittleEndian, uint32(4))                 // flavor (x86_THREAD_STATE64)
+	binary.Write(&buf, binary.LittleEndian, uint32(42))                // count
 
 	// Thread state (42 uint64 values = 336 bytes, but we only write key ones)
 	// Registers: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp, r8-r15, rip, rflags, cs, fs, gs
@@ -570,35 +629,35 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 
 	// Optional Header (PE32+)
 	optStart := coffStart + 20
-	binary.LittleEndian.PutUint16(header[optStart+0:], 0x20B)       // Magic: PE32+
-	header[optStart+2] = 1                                          // MajorLinkerVersion
-	header[optStart+3] = 0                                          // MinorLinkerVersion
-	binary.LittleEndian.PutUint32(header[optStart+4:], 0x200)       // SizeOfCode
-	binary.LittleEndian.PutUint32(header[optStart+8:], 0)           // SizeOfInitializedData
-	binary.LittleEndian.PutUint32(header[optStart+12:], 0)          // SizeOfUninitializedData
-	binary.LittleEndian.PutUint32(header[optStart+16:], 0x1000)     // AddressOfEntryPoint
-	binary.LittleEndian.PutUint32(header[optStart+20:], 0x1000)     // BaseOfCode
+	binary.LittleEndian.PutUint16(header[optStart+0:], 0x20B)        // Magic: PE32+
+	header[optStart+2] = 1                                           // MajorLinkerVersion
+	header[optStart+3] = 0                                           // MinorLinkerVersion
+	binary.LittleEndian.PutUint32(header[optStart+4:], 0x200)        // SizeOfCode
+	binary.LittleEndian.PutUint32(header[optStart+8:], 0)            // SizeOfInitializedData
+	binary.LittleEndian.PutUint32(header[optStart+12:], 0)           // SizeOfUninitializedData
+	binary.LittleEndian.PutUint32(header[optStart+16:], 0x1000)      // AddressOfEntryPoint
+	binary.LittleEndian.PutUint32(header[optStart+20:], 0x1000)      // BaseOfCode
 	binary.LittleEndian.PutUint64(header[optStart+24:], 0x140000000) // ImageBase
-	binary.LittleEndian.PutUint32(header[optStart+32:], 0x1000)     // SectionAlignment
-	binary.LittleEndian.PutUint32(header[optStart+36:], 0x200)      // FileAlignment
-	binary.LittleEndian.PutUint16(header[optStart+40:], 6)          // MajorOSVersion
-	binary.LittleEndian.PutUint16(header[optStart+42:], 0)          // MinorOSVersion
-	binary.LittleEndian.PutUint16(header[optStart+44:], 0)          // MajorImageVersion
-	binary.LittleEndian.PutUint16(header[optStart+46:], 0)          // MinorImageVersion
-	binary.LittleEndian.PutUint16(header[optStart+48:], 6)          // MajorSubsystemVersion
-	binary.LittleEndian.PutUint16(header[optStart+50:], 0)          // MinorSubsystemVersion
-	binary.LittleEndian.PutUint32(header[optStart+52:], 0)          // Win32VersionValue
-	binary.LittleEndian.PutUint32(header[optStart+56:], 0x2000)     // SizeOfImage
-	binary.LittleEndian.PutUint32(header[optStart+60:], 0x200)      // SizeOfHeaders
-	binary.LittleEndian.PutUint32(header[optStart+64:], 0)          // CheckSum
-	binary.LittleEndian.PutUint16(header[optStart+68:], 3)          // Subsystem: CONSOLE
-	binary.LittleEndian.PutUint16(header[optStart+70:], 0x8160)     // DllCharacteristics
-	binary.LittleEndian.PutUint64(header[optStart+72:], 0x100000)   // SizeOfStackReserve
-	binary.LittleEndian.PutUint64(header[optStart+80:], 0x1000)     // SizeOfStackCommit
-	binary.LittleEndian.PutUint64(header[optStart+88:], 0x100000)   // SizeOfHeapReserve
-	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)     // SizeOfHeapCommit
-	binary.LittleEndian.PutUint32(header[optStart+104:], 0)         // LoaderFlags
-	binary.LittleEndian.PutUint32(header[optStart+108:], 16)        // NumberOfRvaAndSizes
+	binary.LittleEndian.PutUint32(header[optStart+32:], 0x1000)      // SectionAlignment
+	binary.LittleEndian.PutUint32(header[optStart+36:], 0x200)       // FileAlignment
+	binary.LittleEndian.PutUint16(header[optStart+40:], 6)           // MajorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+42:], 0)           // MinorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+44:], 0)           // MajorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+46:], 0)           // MinorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+48:], 6)           // MajorSubsystemVersion
+	binary.LittleEndian.PutUint16(header[optStart+50:], 0)           // MinorSubsystemVersion
+	binary.LittleEndian.PutUint32(header[optStart+52:], 0)           // Win32VersionValue
+	binary.LittleEndian.PutUint32(header[optStart+56:], 0x2000)      // SizeOfImage
+	binary.LittleEndian.PutUint32(header[optStart+60:], 0x200)       // SizeOfHeaders
+	binary.LittleEndian.PutUint32(header[optStart+64:], 0)           // CheckSum
+	binary.LittleEndian.PutUint16(header[optStart+68:], 3)           // Subsystem: CONSOLE
+	binary.LittleEndian.PutUint16(header[optStart+70:], 0x8160)      // DllCharacteristics
+	binary.LittleEndian.PutUint64(header[optStart+72:], 0x100000)    // SizeOfStackReserve
+	binary.LittleEndian.PutUint64(header[optStart+80:], 0x1000)      // SizeOfStackCommit
+	binary.LittleEndian.PutUint64(header[optStart+88:], 0x100000)    // SizeOfHeapReserve
+	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)      // SizeOfHeapCommit
+	binary.LittleEndian.PutUint32(header[optStart+104:], 0)          // LoaderFlags
+	binary.LittleEndian.PutUint32(header[optStart+108:], 16)         // NumberOfRvaAndSizes
 
 	// Section Header
 	sectStart := optStart + 240
@@ -641,45 +700,27 @@ func indexOf(s, substr string) int {
 	return -1
 }
 
+//go:embed ape-m1.c.gz
+var apeM1SourceGz []byte
+
 // getApeLoaderSource returns the gzipped APE loader C source for macOS ARM64.
-// The source is loaded from the cosmopolitan source tree if available.
+// The copy embedded in the toolchain (ape-m1.c.gz) is used unless the
+// APE_LOADER_SOURCE environment variable points at an alternative ape-m1.c.
 func getApeLoaderSource() []byte {
-	// Try to find ape-m1.c in common locations
-	paths := []string{
-		// Relative to GOROOT (this repo)
-		filepath.Join(os.Getenv("GOROOT"), "..", "cosmopolitan", "ape", "ape-m1.c"),
-		// User's repos directory
-		filepath.Join(os.Getenv("HOME"), "repos", "cosmopolitan", "ape", "ape-m1.c"),
-		// Environment variable override
-		os.Getenv("APE_LOADER_SOURCE"),
-	}
-
-	var sourceData []byte
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
+	if path := os.Getenv("APE_LOADER_SOURCE"); path != "" {
 		data, err := os.ReadFile(path)
-		if err == nil {
-			sourceData = data
-			break
+		if err != nil {
+			Exitf("APE_LOADER_SOURCE: %v", err)
 		}
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		if _, err := gz.Write(data); err != nil {
+			Exitf("compressing APE loader source: %v", err)
+		}
+		if err := gz.Close(); err != nil {
+			Exitf("compressing APE loader source: %v", err)
+		}
+		return buf.Bytes()
 	}
-
-	if len(sourceData) == 0 {
-		// No source found - ARM64 macOS support will be limited
-		return nil
-	}
-
-	// Gzip compress the source
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	if _, err := gz.Write(sourceData); err != nil {
-		return nil
-	}
-	if err := gz.Close(); err != nil {
-		return nil
-	}
-
-	return buf.Bytes()
+	return apeM1SourceGz
 }

@@ -1843,9 +1843,10 @@ func mStackIsSystemAllocated() bool {
 	case "aix", "darwin", "plan9", "illumos", "ios", "openbsd", "solaris", "windows":
 		return true
 	case "cosmo":
-		// Cosmo on ARM64 uses pthread_create on macOS which provides system stacks.
-		// On AMD64, cosmo uses clone() on linux with Go-allocated stacks.
-		return GOARCH == "arm64"
+		// A cosmo binary only learns its host OS at run time: on macOS
+		// threads are created with pthread_create, which provides system
+		// stacks, while on Linux clone() needs Go-allocated stacks.
+		return cosmoStacksAreSystemAllocated()
 	}
 	return false
 }

@@ -21,5 +21,10 @@ type mOS struct {
 	needPerThreadSyscall atomic.Uint8
 
 	// waitsema stores a dispatch_semaphore_t for lock_sema.go
+	// (macOS hosts only).
 	waitsema uintptr
+
+	// waitsemacount is the futex word backing the semaphore on Linux
+	// hosts, where dispatch_semaphore does not exist.
+	waitsemacount uint32
 }

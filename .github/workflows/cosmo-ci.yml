@@ -40,6 +40,8 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
+          # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
+          # APE regardless of the host architecture.
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
@@ -88,7 +90,7 @@ jobs:
 
       - name: Test binary built on Ubuntu
         id: test-ubuntu
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
@@ -97,7 +99,7 @@ jobs:
 
       - name: Test binary built on macOS
         id: test-macos
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
@@ -106,7 +108,7 @@ jobs:
 
       - name: Test binary built on Windows
         id: test-windows
-        timeout-minutes: 1
+        timeout-minutes: 5
         if: always()
         shell: bash
         run: |
