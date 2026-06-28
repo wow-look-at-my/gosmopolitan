@@ -70,14 +70,15 @@ GOOS=cosmo go build -o program.com main.go
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
-# Merge two single-arch cosmo binaries into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com -o program.com
+# Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
+go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The amd64 image
-boots on x86-64 hosts (self-assimilation on Linux, Mach-O dd on macOS Intel,
-PE on Windows); the arm64 image boots on ARM64 Linux (self-assimilation) and
-ARM64 macOS (compiled APE loader, no Rosetta).
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
+image boots on x86-64 Linux and macOS (self-assimilation on Linux, Mach-O dd on
+macOS Intel); the cosmo arm64 image boots on ARM64 Linux (self-assimilation)
+and ARM64 macOS (compiled APE loader, no Rosetta). Windows uses an embedded
+native windows/amd64 PE payload.
 
 ## Architecture
 
@@ -153,11 +154,9 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
 
-CI builds one fat (amd64+arm64) APE per platform; no GOARCH pin. Execution
-tests skip only on Windows (the PE stub does not load the payload yet; PR #12)
-while structural format tests - including the fat boot-header checks in
-`fat_test.go` - run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
-(`skipIfExecUnsupported`) is the single place encoding the skips.
+CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
+amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
+format tests run everywhere.
 
 ## Adding Cosmo Support to Standard Library Packages
 

@@ -127,6 +127,43 @@ func TestPETextSection(t *testing.T) {
 	assert.Equal(t, ".text", name, "first section should be .text")
 }
 
+func TestPETextSectionPointsToEmbeddedPayload(t *testing.T) {
+	bin := loadBinary(t)
+
+	f, err := pe.NewFile(bytes.NewReader(bin))
+	require.NoError(t, err)
+	defer f.Close()
+	require.NotEmpty(t, f.Sections)
+
+	assert.GreaterOrEqual(t, f.Sections[0].Offset, uint32(elfOffset), ".text raw data should live in the embedded Windows payload")
+}
+
+func TestPEEntrypointIsNotPlaceholderStub(t *testing.T) {
+	bin := loadBinary(t)
+
+	f, err := pe.NewFile(bytes.NewReader(bin))
+	require.NoError(t, err)
+	defer f.Close()
+
+	oh, ok := f.OptionalHeader.(*pe.OptionalHeader64)
+	require.True(t, ok, "must use PE32+ optional header")
+
+	for _, s := range f.Sections {
+		size := s.VirtualSize
+		if s.Size > size {
+			size = s.Size
+		}
+		if oh.AddressOfEntryPoint < s.VirtualAddress || oh.AddressOfEntryPoint >= s.VirtualAddress+size {
+			continue
+		}
+		off := s.Offset + (oh.AddressOfEntryPoint - s.VirtualAddress)
+		require.LessOrEqual(t, int(off)+3, len(bin), "entry point must be inside file")
+		assert.NotEqual(t, []byte{0x31, 0xC0, 0xC3}, bin[off:off+3], "entry point must not be the old xor/ret placeholder")
+		return
+	}
+	t.Fatalf("entry point RVA %#x is not covered by a PE section", oh.AddressOfEntryPoint)
+}
+
 func TestPETextSectionExecutable(t *testing.T) {
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), 0x1B0)

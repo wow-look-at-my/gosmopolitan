@@ -24,16 +24,9 @@ func copyBinary(t *testing.T) string {
 	return tmp
 }
 
-// skipIfExecUnsupported skips execution tests on host/binary combinations
-// that are known non-goals today. Structural format tests still run there.
+// skipIfExecUnsupported centralizes any future platform execution skips.
 func skipIfExecUnsupported(t *testing.T) {
 	t.Helper()
-	switch runtime.GOOS {
-	case "windows":
-		// The PE stub does not load the ELF payload yet (it exits 0
-		// immediately); native Windows execution is tracked by PR #12.
-		t.Skip("native Windows execution not implemented yet (PE stub; see PR #12)")
-	}
 	// ARM64 macOS executes the fat APE's native arm64 image through the
 	// embedded APE loader; no skip needed since fat output landed.
 }

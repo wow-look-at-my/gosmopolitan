@@ -27,7 +27,8 @@ import (
 const (
 	// APE header must be page-aligned for ELF loading
 	// Using 64KB for Windows allocation granularity compatibility
-	apeHeaderSize = 65536
+	apeHeaderSize   = 65536
+	apeScriptOffset = 0x800
 
 	// Page sizes
 	pageSize4K  = 4096
@@ -69,6 +70,15 @@ type apePayload struct {
 	offset uint64 // file offset of this image inside the APE; set by layoutAPE
 }
 
+// pePayload describes a native Windows PE image embedded in an APE file.
+// The final APE's PE header points its sections at this payload's section
+// bodies, shifted by offset.
+type pePayload struct {
+	pe     []byte
+	arch   sys.ArchFamily
+	offset uint64
+}
+
 // payloadFromELF validates elf and wraps it as an APE payload.
 func payloadFromELF(elf []byte) (*apePayload, error) {
 	if len(elf) < 64 || string(elf[0:4]) != elfMagic {
@@ -84,6 +94,28 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
 	}
 	return &apePayload{elf: elf, arch: arch}, nil
+}
+
+// payloadFromPE validates pe and wraps it as a Windows payload.
+func payloadFromPE(pe []byte) (*pePayload, error) {
+	peoff, err := peHeaderOffset(pe)
+	if err != nil {
+		return nil, err
+	}
+	if len(pe) < peoff+24 {
+		return nil, fmt.Errorf("truncated PE COFF header")
+	}
+	machine := binary.LittleEndian.Uint16(pe[peoff+4:])
+	var arch sys.ArchFamily
+	switch machine {
+	case 0x8664:
+		arch = sys.AMD64
+	case 0xAA64:
+		arch = sys.ARM64
+	default:
+		return nil, fmt.Errorf("unsupported PE machine type %#x", machine)
+	}
+	return &pePayload{pe: pe, arch: arch}, nil
 }
 
 func (p *apePayload) entry() uint64 { return binary.LittleEndian.Uint64(p.elf[24:32]) }
@@ -110,7 +142,7 @@ func (ctxt *Link) convertToAPE() {
 	if p.arch != ctxt.Arch.Family {
 		Exitf("APE conversion: ELF machine type does not match link architecture")
 	}
-	writeAPEFile(outfile, []*apePayload{p})
+	writeAPEFile(outfile, []*apePayload{p}, nil)
 }
 
 // apePayloadAlign is the alignment of payload images within the APE file.
@@ -121,20 +153,23 @@ const apePayloadAlign = 0x10000
 
 // layoutAPE assigns file offsets to the payloads: the first begins right
 // after the APE header, each subsequent payload at the next aligned boundary.
-func layoutAPE(payloads []*apePayload) {
+func layoutAPE(payloads []*apePayload, win *pePayload) {
 	off := uint64(apeHeaderSize)
 	for _, p := range payloads {
 		p.offset = off
 		off += uint64(len(p.elf))
 		off = (off + apePayloadAlign - 1) &^ uint64(apePayloadAlign-1)
 	}
+	if win != nil {
+		win.offset = off
+	}
 }
 
 // writeAPEFile writes an APE polyglot containing the given payloads.
 // Payload p_offset values are rewritten to absolute file offsets.
-func writeAPEFile(outfile string, payloads []*apePayload) {
-	layoutAPE(payloads)
-	header := makeAPEHeaderForPayloads(payloads)
+func writeAPEFile(outfile string, payloads []*apePayload, win *pePayload) {
+	layoutAPE(payloads, win)
+	header := makeAPEHeaderForPayloads(payloads, win)
 
 	apeFile, err := os.Create(outfile)
 	if err != nil {
@@ -157,6 +192,17 @@ func writeAPEFile(outfile string, payloads []*apePayload) {
 			Exitf("cannot write APE payload: %v", err)
 		}
 		cur += uint64(len(p.elf))
+	}
+	if win != nil {
+		if win.offset > cur {
+			if _, err := apeFile.Write(make([]byte, win.offset-cur)); err != nil {
+				Exitf("cannot write APE padding: %v", err)
+			}
+			cur = win.offset
+		}
+		if _, err := apeFile.Write(win.pe); err != nil {
+			Exitf("cannot write Windows PE payload: %v", err)
+		}
 	}
 
 	if err := os.Chmod(outfile, 0755); err != nil {
@@ -201,7 +247,7 @@ func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 // and the embedded boot headers dispatch on the host architecture, and the
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first 8192 bytes.
-func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
+func makeAPEHeaderForPayloads(payloads []*apePayload, win *pePayload) []byte {
 	var amd, arm *apePayload
 	for _, p := range payloads {
 		switch p.arch {
@@ -255,7 +301,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		apeLoaderGz = getApeLoaderSource()
 		if len(apeLoaderGz) > 0 {
 			// Place gzipped loader at offset 0x8000 (32KB into header).
-			// This leaves room for the script (0x400-0x8000).
+			// This leaves room for the script.
 			apeLoaderOffset = 0x8000
 			apeLoaderSize = len(apeLoaderGz)
 		}
@@ -279,7 +325,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// - Bytes 0x2D-0x3B: "\n: <<'__APE__'\n" - heredoc opener (15 bytes)
 	// - Bytes 0x3C+: heredoc body (contains e_lfanew with null bytes - SAFE!)
 	// - PE header at 0x80 (inside heredoc body)
-	// - Script at 0x400 starts with "__APE__\n" to terminate heredoc
+	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
 
 	// Write the APE magic at offset 0
 	copy(header[0:8], []byte("MZqFpD='"))
@@ -309,7 +355,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		header[i] = '#'
 	}
 
-	// The script starts at offset 0x400 (after PE code section)
+	// The script starts after the transplanted PE headers.
 	var script bytes.Buffer
 
 	// Here-doc terminator
@@ -410,8 +456,8 @@ exit 1
 		scriptBytes = []byte(s)
 	}
 
-	// Place script at offset 0x400
-	scriptOffset := 0x400
+	// Place script after the PE headers.
+	scriptOffset := apeScriptOffset
 	if len(scriptBytes) > apeHeaderSize-scriptOffset {
 		Exitf("APE shell script too large: %d bytes", len(scriptBytes))
 	}
@@ -440,12 +486,18 @@ exit 1
 	}
 
 	// === PE Header at offset 0x80 ===
-	// Required for Windows support
-	peArch := sys.AMD64
-	if amd == nil {
-		peArch = sys.ARM64
+	// Required for Windows support. Prefer a real Windows payload when one
+	// was supplied; otherwise keep the legacy parseable stub for single-arch
+	// cosmo-only builds.
+	if win != nil {
+		writePEHeaderFromPayload(header, win)
+	} else {
+		peArch := sys.AMD64
+		if amd == nil {
+			peArch = sys.ARM64
+		}
+		writePEHeader(header, peArch)
 	}
-	writePEHeader(header, peArch)
 
 	// === Mach-O header for macOS x86-64 ===
 	if machoSize > 0 && machoOffset+machoSize <= apeHeaderSize {
@@ -601,6 +653,74 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+func peHeaderOffset(pe []byte) (int, error) {
+	if len(pe) < 0x40 || string(pe[0:2]) != "MZ" {
+		return 0, fmt.Errorf("not a valid PE binary")
+	}
+	peoff := int(binary.LittleEndian.Uint32(pe[0x3C:]))
+	if peoff < 0 || len(pe) < peoff+4 || string(pe[peoff:peoff+4]) != "PE\x00\x00" {
+		return 0, fmt.Errorf("not a valid PE binary")
+	}
+	return peoff, nil
+}
+
+// writePEHeaderFromPayload transplants a native Windows PE header into the
+// APE header. Section RVAs and data-directory RVAs remain unchanged; section
+// raw file offsets are shifted to point into the embedded PE payload.
+func writePEHeaderFromPayload(header []byte, win *pePayload) {
+	const peStart = 0x80
+	peoff, err := peHeaderOffset(win.pe)
+	if err != nil {
+		Exitf("Windows PE payload: %v", err)
+	}
+	coffStart := peoff + 4
+	if len(win.pe) < coffStart+20 {
+		Exitf("Windows PE payload: truncated COFF header")
+	}
+	numSections := int(binary.LittleEndian.Uint16(win.pe[coffStart+2:]))
+	sizeOpt := int(binary.LittleEndian.Uint16(win.pe[coffStart+16:]))
+	optStart := coffStart + 20
+	sectStart := optStart + sizeOpt
+	headersEnd := sectStart + numSections*40
+	if len(win.pe) < headersEnd {
+		Exitf("Windows PE payload: truncated section table")
+	}
+	if peStart+(headersEnd-peoff) > apeScriptOffset {
+		Exitf("Windows PE payload: PE headers too large for APE script gap")
+	}
+	if win.offset > uint64(^uint32(0)) {
+		Exitf("Windows PE payload: file offset %#x exceeds PE32 raw pointer range", win.offset)
+	}
+
+	copy(header[peStart:], win.pe[peoff:headersEnd])
+
+	newCoffStart := peStart + 4
+	newSizeOpt := int(binary.LittleEndian.Uint16(header[newCoffStart+16:]))
+	newOptStart := newCoffStart + 20
+	newSectStart := newOptStart + newSizeOpt
+	symptr := binary.LittleEndian.Uint32(header[newCoffStart+8:])
+	if symptr != 0 {
+		shifted := uint64(symptr) + win.offset
+		if shifted > uint64(^uint32(0)) {
+			Exitf("Windows PE payload: shifted symbol table pointer %#x exceeds PE32 range", shifted)
+		}
+		binary.LittleEndian.PutUint32(header[newCoffStart+8:], uint32(shifted))
+	}
+	binary.LittleEndian.PutUint32(header[newOptStart+64:], 0) // CheckSum
+	for i := 0; i < numSections; i++ {
+		sect := newSectStart + i*40
+		raw := binary.LittleEndian.Uint32(header[sect+20:])
+		if raw == 0 {
+			continue
+		}
+		shifted := uint64(raw) + win.offset
+		if shifted > uint64(^uint32(0)) {
+			Exitf("Windows PE payload: shifted section raw pointer %#x exceeds PE32 range", shifted)
+		}
+		binary.LittleEndian.PutUint32(header[sect+20:], uint32(shifted))
+	}
 }
 
 // writePEHeader writes the PE header for Windows support.

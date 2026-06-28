@@ -38,10 +38,11 @@ func cosmoFatEnabled() bool {
 }
 
 // cosmoFatten replaces each freshly built GOOS=cosmo executable in targets
-// with a fat (amd64+arm64) APE. It reruns the original go build command for
-// the sibling architecture into a temporary location, then merges each pair
-// of binaries with the linker's -apefat mode. Pass dir=true when targets
-// were written to a -o directory, so the sibling build also uses one.
+// with a fat (amd64+arm64) APE carrying a native Windows amd64 PE payload.
+// It reruns the original go build command for the sibling cosmo architecture
+// and for windows/amd64 into temporary locations, then merges each group of
+// binaries with the linker's -apefat mode. Pass dir=true when targets were
+// written to a -o directory, so the sibling builds also use one.
 func cosmoFatten(targets []string, dir bool) {
 	if !cosmoFatEnabled() || len(targets) == 0 {
 		return
@@ -78,13 +79,31 @@ func cosmoFatten(targets []string, dir bool) {
 		base.Fatalf("go: cosmo fat build: GOARCH=%s build failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", otherArch, err)
 	}
 
+	winO := filepath.Join(tmp, "windows.exe")
+	if dir {
+		winO = filepath.Join(tmp, "windows") + string(os.PathSeparator)
+		if err := os.Mkdir(filepath.Join(tmp, "windows"), 0777); err != nil {
+			base.Fatalf("go: cosmo fat build: %v", err)
+		}
+	}
+	winArgs := rewriteOutputFlag(os.Args[1:], winO)
+	winCmd := exec.Command(goCmd, winArgs...)
+	winCmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64")
+	winCmd.Stdout = os.Stdout
+	winCmd.Stderr = os.Stderr
+	if err := winCmd.Run(); err != nil {
+		base.Fatalf("go: cosmo fat build: GOOS=windows GOARCH=amd64 build failed: %v\n(set GOCOSMOFAT=0 for a cosmo-only binary)", err)
+	}
+
 	link := base.Tool("link")
 	for _, target := range targets {
 		sibling := childO
+		win := winO
 		if dir {
 			sibling = filepath.Join(tmp, "out", filepath.Base(target))
+			win = windowsDirTarget(tmp, target)
 		}
-		merge := exec.Command(link, "-apefat", target+","+sibling, "-o", target)
+		merge := exec.Command(link, "-apefat", target+","+sibling+","+win, "-o", target)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
@@ -123,4 +142,19 @@ func rewriteOutputFlag(args []string, out string) []string {
 		}
 	}
 	return res
+}
+
+func windowsDirTarget(tmp, target string) string {
+	baseName := filepath.Base(target)
+	win := filepath.Join(tmp, "windows", baseName)
+	if _, err := os.Stat(win); err == nil {
+		return win
+	}
+	if filepath.Ext(baseName) != ".exe" {
+		winExe := win + ".exe"
+		if _, err := os.Stat(winExe); err == nil {
+			return winExe
+		}
+	}
+	return win
 }
