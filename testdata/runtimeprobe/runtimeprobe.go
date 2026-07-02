@@ -1,9 +1,10 @@
 // Runtimeprobe exercises the runtime and os-package surface that must
 // work on every APE host today: file I/O, process identity, CPU count,
-// the monotonic clock, os.Executable, argv/env, and working-directory
-// syscalls. It deliberately uses NO network, NO timers (time.Sleep), NO
-// os/exec and NO signals - those are known-unimplemented on macOS hosts
-// until the darwin netpoll and signal waves land.
+// the monotonic clock, timers (time.Sleep/Ticker/After and context
+// timeouts, which need a working netpoller), os.Executable, argv/env,
+// and working-directory syscalls. It deliberately uses NO signals -
+// those are known-unimplemented on macOS hosts until the signal wave
+// lands.
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -13,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
@@ -45,16 +47,80 @@ func spin(x uint64) uint64 {
 }
 
 func main() {
+	startWatchdog()
 	checkArgsEnv()
 	checkIdentity()
 	checkNumCPU()
 	checkMonotonic()
+	checkTimers()
 	checkExecutable()
 	checkFiles()
 	if failed {
 		os.Exit(1)
 	}
 	fmt.Println("ok all")
+}
+
+// startWatchdog aborts the probe if it wedges, so a hang fails CI in
+// seconds instead of eating the job timeout. It must not depend on
+// anything under test - in particular not on timers - so it burns a spin
+// loop against the wall clock instead of sleeping.
+func startWatchdog() {
+	go func() {
+		deadline := time.Now().Add(60 * time.Second)
+		x := uint64(1)
+		for time.Now().Before(deadline) {
+			for i := 0; i < 1_000_000; i++ {
+				x = spin(x)
+			}
+		}
+		sink = x
+		fmt.Println("FAIL watchdog: probe did not finish within 60s")
+		os.Exit(2)
+	}()
+}
+
+func checkTimers() {
+	t0 := time.Now()
+	time.Sleep(50 * time.Millisecond)
+	d := time.Since(t0)
+	switch {
+	case d < 45*time.Millisecond:
+		fail("sleep", "time.Sleep(50ms) returned after only %v", d)
+	case d > 5*time.Second:
+		fail("sleep", "time.Sleep(50ms) took %v", d)
+	default:
+		ok("sleep", d)
+	}
+
+	tk := time.NewTicker(10 * time.Millisecond)
+	select {
+	case <-tk.C:
+		ok("ticker")
+	case <-time.After(5 * time.Second):
+		fail("ticker", "no tick within 5s")
+	}
+	tk.Stop()
+
+	// A bare time.After select: distinct from the sleep check because it
+	// goes through a channel wait rather than timeSleep.
+	select {
+	case <-time.After(20 * time.Millisecond):
+		ok("after")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	select {
+	case <-ctx.Done():
+		if err := ctx.Err(); err != context.DeadlineExceeded {
+			fail("ctxtimeout", "ctx.Err() = %v, want DeadlineExceeded", err)
+		} else {
+			ok("ctxtimeout")
+		}
+	case <-time.After(5 * time.Second):
+		fail("ctxtimeout", "context not done within 5s")
+	}
+	cancel()
 }
 
 func checkArgsEnv() {

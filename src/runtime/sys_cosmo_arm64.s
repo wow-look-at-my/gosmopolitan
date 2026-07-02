@@ -1311,6 +1311,16 @@ TEXT runtime·cosmo_xlat_oflags_r2(SB),NOSPLIT|NOFRAME,$0
 	MOVD	R9, R2
 	RET
 
+// func cosmoXlatErrno(errno uintptr) uintptr
+// Go-callable FP wrapper around cosmo_xlat_errno_r0 (register-based)
+// so runtime Go code (netpoller, errno fetches) can use the shared
+// Apple->Linux errno table.
+TEXT runtime·cosmoXlatErrno(SB),NOSPLIT,$0-16
+	MOVD	errno+0(FP), R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+8(FP)
+	RET
+
 // runtime·cosmo_xlat_errno_r0 translates a positive Apple errno in R0 into
 // the corresponding positive Linux errno in R0. Values outside 1..106 pass
 // through unchanged. Leaf; clobbers only R9 and R11, so it is BL-safe from

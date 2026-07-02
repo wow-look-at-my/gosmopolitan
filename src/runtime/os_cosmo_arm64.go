@@ -199,7 +199,18 @@ var (
 	dlsymNameFaccessat  = []byte("faccessat\x00")
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
 	dlsymNameError      = []byte("__error\x00")
+	dlsymNamePoll       = []byte("poll\x00")
 )
+
+// cosmoDarwinPollFn is Apple libc poll(2), resolved at startup; the
+// darwin netpoller (netpoll_cosmo_xnu.go) is built on it. Zero when
+// unresolved (netpollinit then fails visibly).
+var cosmoDarwinPollFn uintptr
+
+// cosmoDarwinErrorFn is Apple's __error(), the address-of-errno function,
+// resolved at startup for runtime-internal errno fetches. (The syscall
+// package's darwin emulation receives its own copy via SetDarwinFns.)
+var cosmoDarwinErrorFn uintptr
 
 // cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by
 // the runtime's own fcntl on darwin. Zero when unresolved.
@@ -216,6 +227,8 @@ func osArchInit() {
 	cosmoCheckSyslib()
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
 	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
+	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])
+	cosmoDarwinPollFn = cosmoDlsym(&dlsymNamePoll[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:      cosmoDarwinGetpidFn,
 		Getppid:     cosmoDlsym(&dlsymNameGetppid[0]),
@@ -234,7 +247,7 @@ func osArchInit() {
 		Chdir:       cosmoDlsym(&dlsymNameChdir[0]),
 		Faccessat:   cosmoDlsym(&dlsymNameFaccessat[0]),
 		Readlinkat:  cosmoDlsym(&dlsymNameReadlinkat[0]),
-		Error:       cosmoDlsym(&dlsymNameError[0]),
+		Error:       cosmoDarwinErrorFn,
 		PthreadSelf: __syslib.pthread_self,
 		Getentropy:  cosmoSyslibGetentropy(),
 	})
@@ -326,6 +339,58 @@ func pipe2Linux(flags int32) (r, w int32, errno int32)
 
 //go:noescape
 func cosmo_pipe_trampoline(fds *int32) int32
+
+// cosmoDarwinPollSupported reports whether the darwin netpoller can reach
+// Apple libc's poll(2) on this host.
+func cosmoDarwinPollSupported() bool {
+	return cosmoDarwinPollFn != 0
+}
+
+// cosmoDarwinPoll calls Apple libc poll(2). timeout is in milliseconds,
+// -1 blocks indefinitely. Returns the number of ready descriptors, or
+// (-1, errno) with a LINUX errno number on failure.
+//
+// Only converted 32-bit values leave this function: C int returns arrive
+// in w0 with the upper half of x0 undefined.
+func cosmoDarwinPoll(pfds *pollfd, npfds int32, timeout int32) (int32, int32) {
+	if cosmoDarwinPollFn == 0 {
+		return -1, 38 // ENOSYS
+	}
+	r := int32(cosmoLibcCall6(cosmoDarwinPollFn,
+		uintptr(unsafe.Pointer(pfds)),
+		uintptr(uint32(npfds)),
+		uintptr(uint32(timeout)), // -1 stays -1 in the callee's w2
+		0, 0, 0))
+	if r < 0 {
+		return -1, cosmoDarwinErrno()
+	}
+	return r, 0
+}
+
+// cosmoDarwinErrno fetches the calling thread's errno via Apple's
+// __error() and translates it to Linux numbering. Returns EIO (5) if
+// __error is unavailable (cause unknowable). Call it immediately after a
+// failed libc call, before anything else can clobber errno.
+//
+//go:nosplit
+func cosmoDarwinErrno() int32 {
+	if cosmoDarwinErrorFn == 0 {
+		return 5 // EIO
+	}
+	p := cosmoLibcCall6(cosmoDarwinErrorFn, 0, 0, 0, 0, 0, 0)
+	if p == 0 {
+		return 5 // EIO
+	}
+	apple := *(*int32)(unsafe.Pointer(p))
+	return int32(cosmoXlatErrno(uintptr(uint32(apple))))
+}
+
+// cosmoXlatErrno translates a positive Apple errno to the Linux value.
+// Assembly FP wrapper over cosmo_xlat_errno_r0 (sys_cosmo_arm64.s) so
+// the byte table has a single definition.
+//
+//go:nosplit
+func cosmoXlatErrno(errno uintptr) uintptr
 
 var sysctlHwNcpu = []byte("hw.ncpu\x00")
 

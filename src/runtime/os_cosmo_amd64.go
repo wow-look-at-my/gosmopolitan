@@ -42,5 +42,18 @@ func osArchInit() {}
 // "unknown" and let getCPUCount fall back to 1.
 func cosmoDarwinNumCPU() int32 { return 0 }
 
+// cosmoDarwinPollSupported: the darwin netpoller needs Apple libc's
+// poll(2), reached through the arm64 Syslib's dlsym. amd64 has no Syslib
+// (and macOS-Intel execution is not implemented: clone/futex are ENOSYS
+// there), so the poller is unsupported and netpollinit fails with a
+// clear message instead of issuing Linux syscalls XNU would kill.
+func cosmoDarwinPollSupported() bool { return false }
+
+// cosmoDarwinPoll is unreachable on amd64 (netpollinit throws first);
+// keep the failure honest anyway.
+func cosmoDarwinPoll(pfds *pollfd, npfds int32, timeout int32) (int32, int32) {
+	return -1, 38 // ENOSYS
+}
+
 // pipe2 is implemented in sys_cosmo_amd64.s.
 func pipe2(flags int32) (r, w int32, errno int32)

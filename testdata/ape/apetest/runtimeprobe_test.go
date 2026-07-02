@@ -14,9 +14,9 @@ import (
 
 // The runtime probe (testdata/runtimeprobe) exercises the runtime/os
 // surface that must work on every host: file I/O, pid/ppid, NumCPU, the
-// monotonic clock, os.Executable, argv/env and working-directory calls.
-// It prints one "ok <name>" line per check and exits non-zero if any
-// check printed "FAIL".
+// monotonic clock, timers, os.Executable, argv/env and working-directory
+// calls. It prints one "ok <name>" line per check and exits non-zero if
+// any check printed "FAIL".
 
 // probeOkChecks are the check names runtimeprobe.go emits; keep in sync.
 var probeOkChecks = []string{
@@ -24,6 +24,7 @@ var probeOkChecks = []string{
 	"getpid", "getppid",
 	"numcpu",
 	"monotonic",
+	"sleep", "ticker", "after", "ctxtimeout",
 	"executable",
 	"mkdirtemp", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
