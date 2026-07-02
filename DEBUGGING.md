@@ -543,3 +543,103 @@ corpses and routes output through a file so a corpse cannot hold the
 runner's log pipe), and every job/step carries an explicit
 timeout-minutes sized from observed green durations. Two consecutive
 fully-hardened runs then passed all 6 jobs.
+
+## 2026-07-02: Wave 7 - darwin getdents64; unnamed unix sockaddr; writev test
+
+**getdents64 on darwin** (the last big file-syscall gap): os.ReadDir,
+filepath.WalkDir and os.RemoveAll now work on macOS hosts. Design
+decision - two candidate emulations:
+
+(a) libc opendir/readdir/closedir needs a fd->DIR* table (the Linux
+    syscall is plain fd-based) that goes stale across dup/lseek/close;
+    Go's own darwin port simulates Getdirentries this way per call
+    (openat(fd,".") + fdopendir + skip counting, storing the entry
+    COUNT in the fd offset) - O(n^2), and its huge Apple dirent locals
+    are unusable inside our nosplit budget anyway.
+(b) Apple's raw __getdirentries64 syscall wrapper: fd-offset-based
+    exactly like Linux getdents64, so lseek rewind and dup'd-fd
+    semantics carry over with zero userspace state. CHOSEN.
+
+__getdirentries64 is "private API" in App-Store terms (Go dropped its
+static import in 2019 for that reason), but it is still exported from
+libSystem - current xnu's own userspace tests (tests/vfs/o_search.c,
+tests/extended_getdirentries64.c) declare and link it - and we resolve
+it via the Syslib's dlsym at startup like every other emulation
+symbol, so a hypothetical future removal degrades to a visible ENOSYS,
+not a crash.
+
+Record rewrite: Apple {ino u64, seekoff u64, reclen u16, namlen u16,
+type u8, name...} -> Linux {ino u64, off i64, reclen u16 @16, type u8
+@18, name @19, NUL-terminated}, reclen recomputed with 8-byte
+alignment, IN PLACE in the caller's buffer: the Linux record is never
+longer than the Apple record for the same name (19- vs 21-byte header,
+both 8-aligned), so a forward rewrite can't overrun unread input and
+partial-record truncation is impossible - the buffer-space edge cases
+of a two-buffer scheme never arise. Header fields go through locals
+before the destination header is written (dst can equal src);
+malformed records are EIO, not guesses. d_type passes through:
+DT_UNKNOWN/FIFO/CHR/DIR/BLK/REG/LNK/SOCK/WHT = 0/1/2/4/6/8/10/12/14 on
+BOTH systems (checked value by value; shared BSD lineage). xnu quirk
+(bsd/sys/dirent_private.h): bufsize >= 1024 makes the kernel reserve
+the buffer's last 4 bytes for a GETDIRENTRIES64_EOF flags word - only
+shrinks per-call capacity; the flags land beyond the returned length.
+Whole path nosplit (callers are inside the _Gsyscall window), no big
+locals needed, linker check green. Probe: readdir (names+IsDir bits,
+sorted), walkdir (typed visit counts), removeall (lists directories
+itself).
+
+**Unnamed unix sockets parsed as "@"** (pre-existing; failed net's
+TestUnix{Conn,gramConn}LocalAndRemoteNames on Linux): cosmo's
+anyToSockaddr, copied from the Linux port, rewrote a leading sun_path
+NUL to '@' unconditionally - an UNBOUND socket (dialers, socketpair
+ends; the kernel returns just the 2-byte family) became the abstract
+name "@", which does not exist and cannot be dialed. net's tests
+expect that display quirk only for android/linux/windows; every other
+GOOS must report "". Root cause is that the Linux-shape sockaddr has
+no in-band length and anyToSockaddr's shared signature (syscall_unix.go
+callers) doesn't provide the socklen - but every caller passes a
+pre-zeroed buffer, so unnamed (path all zero) and abstract (>=1
+nonzero byte) are separable by content. All-zero now parses as ""; the
+abstract branch is untouched (verified: "@name" bind/dial/getsockname
+round-trips on Linux). This is also automatically right on macOS,
+where Apple zero-fills the sockaddr for unnamed sockets and the
+abstract namespace doesn't exist. Probe: unixsock (pathname listener
+addr round-trip + unnamed-dialer canary; Windows expects "@" there,
+per net's own unixsock tests) and unixecho - which also gives the
+wave-6 AF_UNIX socket emulation its first macOS CI coverage.
+
+**arm64 O_DIRECTORY/O_NOFOLLOW were the amd64 kernel's numbers**
+(pre-existing, found by the new readdir probe the first time it ran
+under qemu-aarch64): zerrors_cosmo_arm64.go said O_DIRECTORY=0x10000,
+O_NOFOLLOW=0x20000 - the x86-64 kernel's values. arm64 uses the
+asm-generic numbers (0x4000/0x8000) and reads the amd64 bits as
+O_DIRECT/O_LARGEFILE, so on arm64 Linux hosts every O_DIRECTORY open
+(os.ReadDir's openDirNolog, os.RemoveAll's openDirAt, os.Root) was
+really an O_DIRECT open and failed EINVAL on tmpfs. Fixed the two
+constants and flipped the darwin openat translation table
+(cosmo_xlat_oflags_r2 bits 14/15 -> Apple O_DIRECTORY/O_NOFOLLOW, bits
+16/17 = generic O_DIRECT/O_LARGEFILE stripped). The wave-4 table's own
+comment had recorded "kernel-arm64 O_DIRECTORY/O_NOFOLLOW - unused by
+this port's userspace" - the assumption half of that sentence was the
+bug. Full probe green under qemu-aarch64 and on linux/amd64 after.
+
+**TestBuffers_WriteTo "writev call sum = N; want 0"** (pre-existing):
+NOT a writev bug - the byte log summed to exactly the payload, i.e.
+internal/poll.FD.Writev worked perfectly on cosmo all along. The
+test's GOOS switch simply had no cosmo entry, so it expected writev to
+be unused. Added cosmo to the unix branch (sum == payload,
+ceil(chunks/1024) minimum calls - the same iovec batching as Linux).
+
+Still broken on macOS (wave 8+ candidates):
+- Signals (unchanged from wave 6): rt_sigaction success-stub, no
+  darwin sigtramp, Linux-vs-Apple signal numbers untranslated.
+- sendmsg/recvmsg: still deliberately ENOSYS. The full fix needs
+  msghdr translation (Linux iovlen/controllen are 64-bit where Apple's
+  are 32-bit, field order shifts) AND cmsghdr rewriting (Linux cmsg_len
+  is u64, Apple's u32; alignment 8 vs 4), both directions, fd-array
+  payloads preserved - deferred whole rather than half-landed.
+- writev/readv on darwin: not routed in the emulation (honest ENOSYS).
+  struct iovec is identical on both systems, so this is a candidate
+  trivial dlsym passthrough next wave; today net.Buffers fails on
+  macOS hosts only.
+- Intel mac execution (runtime bring-up: clone/futex ENOSYS etc).

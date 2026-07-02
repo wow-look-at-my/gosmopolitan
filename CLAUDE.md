@@ -92,17 +92,21 @@ image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
 on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
 Rosetta). Windows uses an embedded native windows/amd64 PE payload.
 
-macOS ARM64 status (2026-07-02, wave 6): file I/O (create/read/write/stat/
-rename/remove), getpid/getppid, NumCPU, the monotonic clock, timers
-(time.Sleep/Ticker/After, context timeouts - poll(2)-based darwin
-netpoller), TCP/UDP loopback sockets with deadlines, os/exec (fork, pipes,
-execve, wait4), os.Executable, argv/env and Getwd/Chdir all work
-(CI-verified by the runtime probe on macos-latest). Still missing on macOS
-hosts: signals (rt_sigaction is stubbed; signal-translation wave - this
-also means wait statuses carry Apple signal numbers and SIGPIPE is
-suppressed per-socket via SO_NOSIGPIPE), sendmsg/recvmsg (msghdr layouts
-differ; blocks fd-passing and ReadMsg*), and directory listing (getdents64
-has no Apple equivalent). See DEBUGGING.md for the full list.
+macOS ARM64 status (2026-07-02, wave 7): file I/O (create/read/write/stat/
+rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
+via a getdents64 emulation over Apple's __getdirentries64),
+getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
+After, context timeouts - poll(2)-based darwin netpoller), TCP/UDP
+loopback sockets with deadlines, unix-domain stream sockets (pathname
+addresses; the abstract namespace is Linux-only and refused EINVAL),
+os/exec (fork, pipes, execve, wait4), os.Executable, argv/env and
+Getwd/Chdir all work (CI-verified by the runtime probe on macos-latest).
+Still missing on macOS hosts: signals (rt_sigaction is stubbed;
+signal-translation wave - this also means wait statuses carry Apple
+signal numbers and SIGPIPE is suppressed per-socket via SO_NOSIGPIPE),
+sendmsg/recvmsg (msghdr/cmsghdr layouts differ; blocks fd-passing and
+ReadMsg*), and writev (net.Buffers to a conn). See DEBUGGING.md for the
+full list.
 
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
