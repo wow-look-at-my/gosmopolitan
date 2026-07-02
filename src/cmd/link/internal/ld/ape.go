@@ -231,9 +231,12 @@ func shiftPOffsets(elf []byte, delta uint64) []byte {
 // becomes an octal escape. Single quotes must be octal too -- not the shell
 // backslash-quote idiom -- because the APE loader's printf decoder stops at the first
 // raw quote byte when it scans the header for embedded boot ELF headers.
+// Percent signs must be octal as well: printf would treat a bare '%' in its
+// format string as a conversion directive, corrupting the self-assimilation
+// write whenever a variable header byte (e_entry, e_phoff, ...) is 0x25.
 func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 	for _, b := range blob {
-		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' {
+		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' && b != '%' {
 			script.WriteByte(b)
 		} else {
 			fmt.Fprintf(script, "\\%03o", b)
