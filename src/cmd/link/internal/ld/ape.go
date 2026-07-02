@@ -74,6 +74,15 @@ const (
 	machoProtRead  = 0x1
 	machoProtWrite = 0x2
 	machoProtExec  = 0x4
+
+	// machoSegmentCmdSize is the size of an LC_SEGMENT_64 with no sections.
+	machoSegmentCmdSize = 72
+
+	// machoPageSize is the page size of x86-64 XNU. The kernel's
+	// load_segment rejects (LOAD_BADMACHO) any segment whose file offset
+	// or vm address is not page-aligned, and maps vm ranges in whole
+	// pages, so segment vm sizes are rounded up to this.
+	machoPageSize = 0x1000
 )
 
 // convertToAPE converts an ELF binary to Actually Portable Executable format.
@@ -532,7 +541,16 @@ exit 1
 	}
 
 	// === Mach-O header for macOS x86-64 ===
-	if machoSize > 0 && machoOffset+machoSize <= apeHeaderSize {
+	// The header region runs from machoOffset up to the APE loader source
+	// (or the end of the APE header); growing past it would silently
+	// clobber the loader, so fail loudly instead.
+	if machoSize > 0 {
+		if machoOffset+machoSize > apeHeaderSize {
+			Exitf("APE Mach-O header (%d bytes at %#x) exceeds the %d-byte APE header", machoSize, machoOffset, apeHeaderSize)
+		}
+		if apeLoaderSize > 0 && machoOffset+machoSize > apeLoaderOffset {
+			Exitf("APE Mach-O header (%d bytes at %#x) overlaps the APE loader at %#x", machoSize, machoOffset, apeLoaderOffset)
+		}
 		copy(header[machoOffset:], machoHeader)
 	}
 
@@ -617,59 +635,207 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 	return hdr
 }
 
-// makeMachoHeader creates a Mach-O header for macOS x86-64.
-func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
-	// Find ELF base virtual address from the first PT_LOAD segment
-	// ELF program header offset is at byte 32, entry size at 54, count at 56
+// machoSegment describes one LC_SEGMENT_64 load command.
+type machoSegment struct {
+	name     string
+	vmaddr   uint64
+	vmsize   uint64
+	fileoff  uint64 // absolute offset in the APE file
+	filesize uint64
+	prot     uint32 // used for both initprot and maxprot
+}
+
+// machoSegmentsFromELF derives the Mach-O segment table from the payload's
+// PT_LOAD program headers. elfData's p_offset values are still
+// payload-relative when this runs (shiftPOffsets rewrites them to absolute
+// file offsets at write-out), so file offsets are computed as
+// elfOffset + p_offset, matching the bytes of the final APE file.
+//
+// The first (executable) load is extended downward to file offset 0 so that
+// it also maps the APE polyglot header - and, after the dd transform, the
+// Mach-O header itself. XNU's parse_machfile rejects (LOAD_BADMACHO) any
+// executable in which no R+X segment maps the start of the file
+// (found_header_segment); extending the text segment mirrors what
+// Cosmopolitan's ape.S Mach-O header does.
+func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 	elfPhoff := binary.LittleEndian.Uint64(elfData[32:40])
 	elfPhentsize := binary.LittleEndian.Uint16(elfData[54:56])
 	elfPhnum := binary.LittleEndian.Uint16(elfData[56:58])
 
-	var elfBaseVAddr uint64
+	var segs []machoSegment
 	for i := uint16(0); i < elfPhnum; i++ {
 		phdr := elfData[elfPhoff+uint64(i)*uint64(elfPhentsize):]
-		pType := binary.LittleEndian.Uint32(phdr[0:4])
-		if pType == 1 { // PT_LOAD
-			elfBaseVAddr = binary.LittleEndian.Uint64(phdr[16:24]) // p_vaddr
-			break
+		if binary.LittleEndian.Uint32(phdr[0:4]) != 1 { // PT_LOAD
+			continue
 		}
+		flags := binary.LittleEndian.Uint32(phdr[4:8])
+		off := binary.LittleEndian.Uint64(phdr[8:16])
+		vaddr := binary.LittleEndian.Uint64(phdr[16:24])
+		filesz := binary.LittleEndian.Uint64(phdr[32:40])
+		memsz := binary.LittleEndian.Uint64(phdr[40:48])
+		if memsz < filesz {
+			Exitf("APE Mach-O: PT_LOAD %d has p_memsz %#x < p_filesz %#x", i, memsz, filesz)
+		}
+		var prot uint32
+		if flags&0x4 != 0 { // PF_R
+			prot |= machoProtRead
+		}
+		if flags&0x2 != 0 { // PF_W
+			prot |= machoProtWrite
+		}
+		if flags&0x1 != 0 { // PF_X
+			prot |= machoProtExec
+		}
+		// Segment names are advisory; pick conventional ones per class.
+		name := "__RODATA"
+		switch {
+		case prot&machoProtExec != 0:
+			name = "__TEXT"
+		case prot&machoProtWrite != 0:
+			name = "__DATA"
+		}
+		segs = append(segs, machoSegment{
+			name:   name,
+			vmaddr: vaddr,
+			// Rounding p_memsz up to whole pages preserves the BSS:
+			// XNU zero-fills [filesize, vmsize) of a segment, so a
+			// data segment with p_memsz > p_filesz gets its zero
+			// pages from the kernel, like ELF.
+			vmsize:   (memsz + machoPageSize - 1) &^ (machoPageSize - 1),
+			fileoff:  elfOffset + off,
+			filesize: filesz,
+			prot:     prot,
+		})
+	}
+	if len(segs) == 0 {
+		Exitf("APE Mach-O: ELF payload has no PT_LOAD segments")
 	}
 
-	// Mach-O loads at this virtual address
-	const machoVMAddr = uint64(0x100000000)
+	// Extend the first load down to file offset 0 (see function comment).
+	first := &segs[0]
+	if first.prot&(machoProtRead|machoProtExec) != machoProtRead|machoProtExec {
+		Exitf("APE Mach-O: first PT_LOAD is not readable+executable (prot %#x); cannot map the file header", first.prot)
+	}
+	ext := first.fileoff
+	if first.vmaddr <= ext {
+		Exitf("APE Mach-O: first PT_LOAD vmaddr %#x is too low to extend the segment to file offset 0", first.vmaddr)
+	}
+	first.fileoff = 0
+	first.filesize += ext
+	first.vmaddr -= ext
+	first.vmsize += ext
 
-	// Calculate the Mach-O entry point
-	// The ELF entry is relative to elfBaseVAddr, so adjust for machoVMAddr
-	machoEntry := machoVMAddr + (elfEntry - elfBaseVAddr)
+	// XNU's load_segment refuses to map anything whose file offset or vm
+	// address is not page-aligned, and overlapping vm ranges would fail
+	// vm_map_enter at load time. Go's ELF layout guarantees both (loads
+	// are page-rounded and laid out consecutively), so a violation means
+	// the layout changed and this code needs revisiting.
+	for i := range segs {
+		s := &segs[i]
+		if s.fileoff%machoPageSize != 0 || s.vmaddr%machoPageSize != 0 {
+			Exitf("APE Mach-O: segment %s (fileoff %#x, vmaddr %#x) is not page-aligned", s.name, s.fileoff, s.vmaddr)
+		}
+		if s.filesize > s.vmsize {
+			Exitf("APE Mach-O: segment %s filesize %#x exceeds vmsize %#x", s.name, s.filesize, s.vmsize)
+		}
+		if i > 0 {
+			prev := &segs[i-1]
+			if s.vmaddr < prev.vmaddr+prev.vmsize {
+				Exitf("APE Mach-O: segment %s (vmaddr %#x) overlaps %s (ends %#x) after page rounding", s.name, s.vmaddr, prev.name, prev.vmaddr+prev.vmsize)
+			}
+		}
+	}
+	return segs
+}
+
+// makeMachoHeader creates the Mach-O executable header for macOS x86-64.
+//
+// On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
+// offset 0x1000 in the APE header) over the start of the file, turning the
+// whole APE into a Mach-O executable whose load commands point straight at
+// the embedded amd64 ELF image. The XNU kernel loads it directly - there is
+// no dyld involved (LC_UNIXTHREAD, not LC_MAIN) - so the load commands must
+// satisfy the kernel's parse_machfile/load_segment checks on their own:
+//
+//   - __PAGEZERO covers [0, lowest mapped address) with no access.
+//   - One LC_SEGMENT_64 per PT_LOAD, with initprot/maxprot translated from
+//     p_flags and vmsize covering p_memsz (BSS zero-fill), at the ELF's own
+//     virtual addresses.
+//   - The text segment is extended down to file offset 0 so an R+X segment
+//     maps the Mach-O header (a hard kernel requirement).
+//   - LC_UNIXTHREAD holds rip = the ELF entry point (unmodified) and the
+//     XNU host-OS indicator in rcx for rt0_cosmo_amd64.s.
+func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
+	segs := machoSegmentsFromELF(elfData, elfOffset)
+
+	// XNU only accepts an entry point that falls inside a segment mapped
+	// readable+executable (parse_machfile's validentry check).
+	validEntry := false
+	for _, s := range segs {
+		if elfEntry >= s.vmaddr && elfEntry < s.vmaddr+s.vmsize &&
+			s.prot&(machoProtRead|machoProtExec) == machoProtRead|machoProtExec {
+			validEntry = true
+		}
+	}
+	if !validEntry {
+		Exitf("APE Mach-O: entry point %#x is not inside a readable+executable segment", elfEntry)
+	}
+
+	ncmds := 1 + len(segs) + 1 // __PAGEZERO + loads + LC_UNIXTHREAD
+	sizeofcmds := machoSegmentCmdSize*(1+len(segs)) + machoUnixThreadCmdSize
 
 	var buf bytes.Buffer
 
 	// Mach-O header (32 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))              // magic
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))           // cputype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64))        // cpusubtype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))         // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(2))                         // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
-	binary.Write(&buf, binary.LittleEndian, uint32(72+machoUnixThreadCmdSize)) // sizeofcmds
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))         // flags
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                         // reserved
+	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))       // magic
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
+	binary.Write(&buf, binary.LittleEndian, uint32(ncmds))              // ncmds
+	binary.Write(&buf, binary.LittleEndian, uint32(sizeofcmds))         // sizeofcmds
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
 
-	// LC_SEGMENT_64 for __TEXT (72 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64))            // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(72))                          // cmdsize
-	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")            // segname (16 bytes)
-	binary.Write(&buf, binary.LittleEndian, machoVMAddr)                         // vmaddr
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // vmsize
-	binary.Write(&buf, binary.LittleEndian, elfOffset)                           // fileoff
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // filesize
-	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // maxprot
-	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // initprot
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // nsects
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // flags
+	// __PAGEZERO: MH_EXECUTE images must not map anything below the page
+	// zero region; XNU raises the vm map's minimum offset to its end.
+	// vmaddr 0, filesize 0, prot 0/0 is the shape load_segment treats as
+	// page zero.
+	writeMachoSegment(&buf, machoSegment{name: "__PAGEZERO", vmsize: segs[0].vmaddr})
 
-	writeMachoUnixThread(&buf, machoEntry)
+	for _, s := range segs {
+		writeMachoSegment(&buf, s)
+	}
+
+	writeMachoUnixThread(&buf, elfEntry)
+
+	if buf.Len() != 32+sizeofcmds {
+		Exitf("APE Mach-O: internal error: wrote %d header bytes, want %d", buf.Len(), 32+sizeofcmds)
+	}
+	// The bootstrap script dd-copies the header in 8-byte blocks and
+	// derives the block count from this buffer's length; pad to a block
+	// boundary so the copy covers exactly the emitted header.
+	for buf.Len()%8 != 0 {
+		buf.WriteByte(0)
+	}
 
 	return buf.Bytes()
+}
+
+// writeMachoSegment emits one LC_SEGMENT_64 load command (no sections).
+func writeMachoSegment(buf *bytes.Buffer, s machoSegment) {
+	binary.Write(buf, binary.LittleEndian, uint32(machoLCSegment64))    // cmd
+	binary.Write(buf, binary.LittleEndian, uint32(machoSegmentCmdSize)) // cmdsize
+	var name [16]byte
+	copy(name[:], s.name)
+	buf.Write(name[:]) // segname
+	binary.Write(buf, binary.LittleEndian, s.vmaddr)
+	binary.Write(buf, binary.LittleEndian, s.vmsize)
+	binary.Write(buf, binary.LittleEndian, s.fileoff)
+	binary.Write(buf, binary.LittleEndian, s.filesize)
+	binary.Write(buf, binary.LittleEndian, s.prot)    // maxprot
+	binary.Write(buf, binary.LittleEndian, s.prot)    // initprot
+	binary.Write(buf, binary.LittleEndian, uint32(0)) // nsects
+	binary.Write(buf, binary.LittleEndian, uint32(0)) // flags
 }
 
 // writeMachoUnixThread emits the LC_UNIXTHREAD load command that starts the

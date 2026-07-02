@@ -6,12 +6,16 @@ package ld
 
 import (
 	"bytes"
+	"debug/macho"
 	"encoding/binary"
+	"fmt"
 	"internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"testing"
 )
 
@@ -291,5 +295,317 @@ func TestMachoUnixThreadState(t *testing.T) {
 		if got != want {
 			t.Errorf("thread state register %d = %#x, want %#x", i, got, want)
 		}
+	}
+}
+
+// checkMachoKernelInvariants asserts the properties XNU's parse_machfile
+// and load_segment demand of a kernel-loaded (dyld-less) executable:
+//
+//   - __PAGEZERO is the first segment and covers [0, lowest mapped vmaddr)
+//     with no access.
+//   - Exactly one segment maps file offset 0, and it is readable+executable
+//     (parse_machfile's found_header_segment check).
+//   - Segment file offsets and vm addresses are page-aligned, vm ranges do
+//     not overlap, and filesize never exceeds vmsize.
+//   - No segment is both writable and executable.
+//   - The entry point (LC_UNIXTHREAD rip) falls inside an R+X segment
+//     (parse_machfile's validentry check), and equals wantEntry.
+func checkMachoKernelInvariants(t *testing.T, f *macho.File, wantEntry uint64) {
+	t.Helper()
+
+	if f.Cpu != macho.CpuAmd64 {
+		t.Errorf("cpu = %v, want CpuAmd64", f.Cpu)
+	}
+	if f.Type != macho.TypeExec {
+		t.Errorf("type = %v, want TypeExec", f.Type)
+	}
+
+	var segs []*macho.Segment
+	for _, l := range f.Loads {
+		if s, ok := l.(*macho.Segment); ok {
+			segs = append(segs, s)
+		}
+	}
+	if len(segs) < 2 {
+		t.Fatalf("only %d segments, want __PAGEZERO plus at least one load", len(segs))
+	}
+
+	pz := segs[0]
+	if pz.Name != "__PAGEZERO" {
+		t.Errorf("first segment is %q, want __PAGEZERO", pz.Name)
+	}
+	if pz.Addr != 0 || pz.Offset != 0 || pz.Filesz != 0 || pz.Prot != 0 || pz.Maxprot != 0 {
+		t.Errorf("__PAGEZERO addr=%#x off=%#x filesz=%#x prot=%#x/%#x, want all zero",
+			pz.Addr, pz.Offset, pz.Filesz, pz.Maxprot, pz.Prot)
+	}
+	loads := segs[1:]
+	if pz.Memsz != loads[0].Addr {
+		t.Errorf("__PAGEZERO vmsize = %#x, want %#x (lowest mapped address)", pz.Memsz, loads[0].Addr)
+	}
+
+	const rx = machoProtRead | machoProtExec
+	nHeaderSegs := 0
+	for _, s := range loads {
+		if s.Offset == 0 && s.Filesz > 0 {
+			nHeaderSegs++
+			if s.Prot&rx != rx {
+				t.Errorf("segment %s maps file offset 0 but is not R+X (prot %#x)", s.Name, s.Prot)
+			}
+		}
+		if s.Prot&(machoProtWrite|machoProtExec) == machoProtWrite|machoProtExec {
+			t.Errorf("segment %s is both writable and executable (prot %#x)", s.Name, s.Prot)
+		}
+		if s.Prot != s.Maxprot {
+			t.Errorf("segment %s initprot %#x != maxprot %#x", s.Name, s.Prot, s.Maxprot)
+		}
+		if s.Offset%machoPageSize != 0 || s.Addr%machoPageSize != 0 {
+			t.Errorf("segment %s fileoff %#x / vmaddr %#x not page-aligned", s.Name, s.Offset, s.Addr)
+		}
+		if s.Filesz > s.Memsz {
+			t.Errorf("segment %s filesize %#x > vmsize %#x", s.Name, s.Filesz, s.Memsz)
+		}
+	}
+	if nHeaderSegs != 1 {
+		t.Errorf("%d segments map file offset 0, XNU requires exactly 1", nHeaderSegs)
+	}
+	for i := 1; i < len(loads); i++ {
+		if loads[i].Addr < loads[i-1].Addr+loads[i-1].Memsz {
+			t.Errorf("segment %s (vmaddr %#x) overlaps %s (ends %#x)",
+				loads[i].Name, loads[i].Addr, loads[i-1].Name, loads[i-1].Addr+loads[i-1].Memsz)
+		}
+	}
+
+	entry, err := machoUnixThreadRip(f)
+	if err != nil {
+		t.Fatalf("LC_UNIXTHREAD: %v", err)
+	}
+	if entry != wantEntry {
+		t.Errorf("LC_UNIXTHREAD rip = %#x, want %#x", entry, wantEntry)
+	}
+	entryOK := false
+	for _, s := range loads {
+		if entry >= s.Addr && entry < s.Addr+s.Memsz && s.Prot&rx == rx {
+			entryOK = true
+		}
+	}
+	if !entryOK {
+		t.Errorf("entry point %#x is not inside an R+X segment", entry)
+	}
+}
+
+// machoUnixThreadRip extracts rip from the (single) LC_UNIXTHREAD command.
+func machoUnixThreadRip(f *macho.File) (uint64, error) {
+	var rip uint64
+	n := 0
+	for _, l := range f.Loads {
+		raw := l.Raw()
+		if binary.LittleEndian.Uint32(raw[0:4]) != machoLCUnixThread {
+			continue
+		}
+		n++
+		if len(raw) != machoUnixThreadCmdSize {
+			return 0, fmt.Errorf("LC_UNIXTHREAD is %d bytes, want %d", len(raw), machoUnixThreadCmdSize)
+		}
+		rip = binary.LittleEndian.Uint64(raw[16+16*8:])
+	}
+	if n != 1 {
+		return 0, fmt.Errorf("found %d LC_UNIXTHREAD commands, want 1", n)
+	}
+	return rip, nil
+}
+
+// TestMachoHeaderStructure feeds makeMachoHeader a synthetic payload shaped
+// like the cosmo linker's output, simulates the dd transform (header copied
+// over offset 0), and checks the exact segment table against the program
+// headers as well as the XNU kernel invariants.
+func TestMachoHeaderStructure(t *testing.T) {
+	const elfOff = 0x10000
+	elf := buildTestELF(t, testELFEntry, testELFPhdrs())
+	hdr := makeMachoHeader(elf, elfOff, testELFEntry)
+
+	if len(hdr)%8 != 0 {
+		t.Errorf("header length %d is not a multiple of the dd block size 8", len(hdr))
+	}
+	// The header is copied to 0x1000 in the APE header; the next embedded
+	// artifact (the gzipped APE loader source) lives at 0x8000.
+	if len(hdr) > 0x8000-0x1000 {
+		t.Errorf("header is %d bytes, exceeding the 0x1000-0x8000 region", len(hdr))
+	}
+
+	// Simulate the dd transform on a synthetic APE image: the ELF payload
+	// at its file offset, the Mach-O header copied over offset 0.
+	img := make([]byte, elfOff+len(elf))
+	copy(img[elfOff:], elf)
+	copy(img, hdr)
+
+	f, err := macho.NewFile(bytes.NewReader(img))
+	if err != nil {
+		t.Fatalf("transformed image does not parse as Mach-O: %v", err)
+	}
+	defer f.Close()
+
+	checkMachoKernelInvariants(t, f, testELFEntry)
+
+	var segs []*macho.Segment
+	for _, l := range f.Loads {
+		if s, ok := l.(*macho.Segment); ok {
+			segs = append(segs, s)
+		}
+	}
+	// __PAGEZERO + one segment per PT_LOAD in testELFPhdrs (the PT_NOTE
+	// must not produce a segment).
+	want := []struct {
+		name                     string
+		addr, memsz, off, filesz uint64
+		prot                     uint32
+	}{
+		{"__PAGEZERO", 0, 0x100000000 - elfOff, 0, 0, 0},
+		// Text, extended down to file offset 0 to map the header.
+		{"__TEXT", 0x100000000 - elfOff, 0x3000 + elfOff, 0, 0x2345 + elfOff, machoProtRead | machoProtExec},
+		{"__RODATA", 0x100003000, 0x1000, elfOff + 0x3000, 0x1000, machoProtRead},
+		// BSS: vmsize is p_memsz 0x2800 rounded up, exceeding filesize.
+		{"__DATA", 0x100004000, 0x3000, elfOff + 0x4000, 0x800, machoProtRead | machoProtWrite},
+	}
+	if len(segs) != len(want) {
+		t.Fatalf("got %d segments, want %d", len(segs), len(want))
+	}
+	for i, w := range want {
+		s := segs[i]
+		if s.Name != w.name || s.Addr != w.addr || s.Memsz != w.memsz ||
+			s.Offset != w.off || s.Filesz != w.filesz || s.Prot != w.prot || s.Maxprot != w.prot {
+			t.Errorf("segment %d = %s addr=%#x memsz=%#x off=%#x filesz=%#x prot=%#x/%#x,\nwant %s addr=%#x memsz=%#x off=%#x filesz=%#x prot=%#x",
+				i, s.Name, s.Addr, s.Memsz, s.Offset, s.Filesz, s.Maxprot, s.Prot,
+				w.name, w.addr, w.memsz, w.off, w.filesz, w.prot)
+		}
+	}
+}
+
+// apeDDParams extracts the bs/skip/count parameters of the Mach-O
+// assimilation dd command from an APE header.
+func apeDDParams(t *testing.T, header []byte) (bs, skip, count int) {
+	t.Helper()
+	m := regexp.MustCompile(`dd if="\$o" of="\$o" bs=(\d+) skip=(\d+) count=(\d+)`).FindSubmatch(header)
+	if m == nil {
+		t.Fatalf("no Mach-O dd command in APE header")
+	}
+	bs, _ = strconv.Atoi(string(m[1]))
+	skip, _ = strconv.Atoi(string(m[2]))
+	count, _ = strconv.Atoi(string(m[3]))
+	return bs, skip, count
+}
+
+// TestAPEFileMachoTransform runs the real pipeline - payloadFromELF,
+// writeAPEFile, the dd parameters from the generated bootstrap script - on a
+// synthetic payload and verifies that the assimilated file is a Mach-O
+// satisfying the kernel invariants, with segments that agree with the
+// written (absolute) ELF program headers.
+func TestAPEFileMachoTransform(t *testing.T) {
+	elf := buildTestELF(t, testELFEntry, testELFPhdrs())
+	p, err := payloadFromELF(elf)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), "ape.com")
+	writeAPEFile(out, []*apePayload{p}, nil)
+	bin, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bs, skip, count := apeDDParams(t, bin[:8192])
+	if bs*skip != 0x1000 {
+		t.Errorf("dd reads the Mach-O header from %#x, want 0x1000", bs*skip)
+	}
+	if bs != 8 {
+		t.Errorf("dd block size = %d, want 8", bs)
+	}
+
+	// The copied region must cover the whole emitted header (mach header
+	// + sizeofcmds) with less than one block of padding.
+	sizeofcmds := binary.LittleEndian.Uint32(bin[0x1000+20 : 0x1000+24])
+	hdrLen := 32 + int(sizeofcmds)
+	if bs*count < hdrLen || bs*count >= hdrLen+8 {
+		t.Errorf("dd copies %d bytes, want %d rounded up to a block", bs*count, hdrLen)
+	}
+
+	// Simulate the dd transform and parse.
+	img := make([]byte, len(bin))
+	copy(img, bin)
+	copy(img[:bs*count], bin[bs*skip:bs*skip+bs*count])
+	f, err := macho.NewFile(bytes.NewReader(img))
+	if err != nil {
+		t.Fatalf("assimilated APE does not parse as Mach-O: %v", err)
+	}
+	defer f.Close()
+
+	checkMachoKernelInvariants(t, f, testELFEntry)
+
+	// Cross-check the segment table against the written ELF's program
+	// headers, whose p_offset values are now absolute file offsets.
+	var segs []*macho.Segment
+	for _, l := range f.Loads {
+		if s, ok := l.(*macho.Segment); ok && s.Name != "__PAGEZERO" {
+			segs = append(segs, s)
+		}
+	}
+	phoff := binary.LittleEndian.Uint64(img[apeHeaderSize+32:])
+	phnum := int(binary.LittleEndian.Uint16(img[apeHeaderSize+56:]))
+	var loads []testProgHeader
+	for i := 0; i < phnum; i++ {
+		ph := img[apeHeaderSize:][phoff+uint64(i)*56:]
+		if binary.LittleEndian.Uint32(ph[0:4]) != elfPTLoad {
+			continue
+		}
+		loads = append(loads, testProgHeader{
+			flags:  binary.LittleEndian.Uint32(ph[4:8]),
+			off:    binary.LittleEndian.Uint64(ph[8:16]), // absolute
+			vaddr:  binary.LittleEndian.Uint64(ph[16:24]),
+			filesz: binary.LittleEndian.Uint64(ph[32:40]),
+			memsz:  binary.LittleEndian.Uint64(ph[40:48]),
+		})
+	}
+	if len(segs) != len(loads) {
+		t.Fatalf("got %d load segments for %d PT_LOADs", len(segs), len(loads))
+	}
+	for i, ph := range loads {
+		s := segs[i]
+		wantProt := uint32(0)
+		if ph.flags&elfPFR != 0 {
+			wantProt |= machoProtRead
+		}
+		if ph.flags&elfPFW != 0 {
+			wantProt |= machoProtWrite
+		}
+		if ph.flags&elfPFX != 0 {
+			wantProt |= machoProtExec
+		}
+		wantOff, wantAddr := ph.off, ph.vaddr
+		wantFilesz := ph.filesz
+		wantMemsz := (ph.memsz + machoPageSize - 1) &^ uint64(machoPageSize-1)
+		if i == 0 {
+			// The first load is extended down to file offset 0.
+			wantAddr -= wantOff
+			wantFilesz += wantOff
+			wantMemsz += wantOff
+			wantOff = 0
+		}
+		if s.Offset != wantOff || s.Addr != wantAddr || s.Filesz != wantFilesz ||
+			s.Memsz != wantMemsz || s.Prot != wantProt {
+			t.Errorf("segment %s: off=%#x addr=%#x filesz=%#x memsz=%#x prot=%#x, want off=%#x addr=%#x filesz=%#x memsz=%#x prot=%#x (PT_LOAD %d)",
+				s.Name, s.Offset, s.Addr, s.Filesz, s.Memsz, s.Prot,
+				wantOff, wantAddr, wantFilesz, wantMemsz, wantProt, i)
+		}
+	}
+
+	// BSS: the writable segment's vmsize must exceed its filesize.
+	bss := false
+	for _, s := range segs {
+		if s.Prot&machoProtWrite != 0 && s.Memsz > s.Filesz {
+			bss = true
+		}
+	}
+	if !bss {
+		t.Errorf("no writable segment with vmsize > filesize; BSS would not be zero-filled")
 	}
 }
