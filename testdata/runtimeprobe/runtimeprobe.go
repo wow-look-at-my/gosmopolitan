@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -98,15 +99,19 @@ func main() {
 // anything under test - in particular not on timers - so it burns a spin
 // loop against the wall clock instead of sleeping.
 //
-// On firing it also dumps every goroutine stack: the rare macOS wedge
-// seen twice in wave-7 CI (probe alive, watchdog fired, socket waiters
-// never woke) left no evidence of WHERE the blocked goroutines sat.
-// The FAIL line prints first - stdout is unbuffered - so even if the
-// dump itself cannot complete (runtime.Stack stops the world), the
-// verdict still reaches the log. The dump buffer is pre-allocated so a
-// wedged allocator cannot block it.
+// On firing it panics with traceback "all" instead of calling os.Exit:
+// the wedge this exists to diagnose leaves an M stuck inside a runtime
+// mutex, which blocks any stop-the-world forever - so runtime.Stack
+// (STW) would hang, and once async preemption works, NO user code can
+// keep running under a pending STW to time it out (a CI run proved
+// both: the dump hung for the step's remaining budget). The panic path
+// uses freezetheworld, which is best-effort and dumps every goroutine
+// - including ones wedged in locks - without their cooperation. The
+// FAIL verdict prints to stdout first; the traceback goes to stderr,
+// which the apetest harness logs. A panic exits with status 2, same as
+// the old os.Exit.
 func startWatchdog() {
-	dumpBuf := make([]byte, 1<<20)
+	debug.SetTraceback("all")
 	go func() {
 		deadline := time.Now().Add(90 * time.Second)
 		x := uint64(1)
@@ -117,9 +122,7 @@ func startWatchdog() {
 		}
 		sink = x
 		fmt.Println("FAIL watchdog: probe did not finish within 90s")
-		n := runtime.Stack(dumpBuf, true)
-		fmt.Printf("watchdog goroutine dump:\n%s\n", dumpBuf[:n])
-		os.Exit(2)
+		panic("watchdog: probe wedged; all-goroutine traceback follows")
 	}()
 }
 
