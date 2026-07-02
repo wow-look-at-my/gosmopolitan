@@ -3,9 +3,10 @@
 // (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
-// sockets with deadlines, os.Executable, argv/env, and
-// working-directory syscalls. It deliberately uses NO signals - those
-// are known-unimplemented on macOS hosts until the signal wave lands.
+// sockets with deadlines, os.Executable, argv/env, working-directory
+// syscalls, and - since the wave-8 signal work - SIGSEGV recovery
+// (sigpanic), os/signal delivery, async preemption, and wait-status
+// signal decoding.
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -26,6 +27,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,9 +58,14 @@ func spin(x uint64) uint64 {
 }
 
 func main() {
-	if os.Getenv("RUNTIMEPROBE_CHILD") == "1" {
+	switch os.Getenv("RUNTIMEPROBE_CHILD") {
+	case "1":
 		// Child mode for checkExec: print the marker and exit clean.
 		fmt.Println("child-ok", os.Getpid())
+		return
+	case "raise":
+		// Child mode for checkWaitSig: die by SIGUSR1.
+		raiseFatalChild()
 		return
 	}
 	startWatchdog()
@@ -70,11 +78,15 @@ func main() {
 	checkExecutable()
 	checkFiles()
 	checkReadDir()
-	// Exec runs LAST on purpose: if the forked child ever wedges (a
+	checkSegvRecover()
+	checkSignalNotify()
+	checkPreempt()
+	// Exec checks run LAST on purpose: if a forked child ever wedges (a
 	// nondeterministic macOS CI incident produced kernel-stuck
 	// processes), every other check has already printed its verdict, so
 	// the partial output localizes the failure precisely.
 	checkExec()
+	checkWaitSig()
 	if failed {
 		os.Exit(1)
 	}
@@ -85,7 +97,16 @@ func main() {
 // seconds instead of eating the job timeout. It must not depend on
 // anything under test - in particular not on timers - so it burns a spin
 // loop against the wall clock instead of sleeping.
+//
+// On firing it also dumps every goroutine stack: the rare macOS wedge
+// seen twice in wave-7 CI (probe alive, watchdog fired, socket waiters
+// never woke) left no evidence of WHERE the blocked goroutines sat.
+// The FAIL line prints first - stdout is unbuffered - so even if the
+// dump itself cannot complete (runtime.Stack stops the world), the
+// verdict still reaches the log. The dump buffer is pre-allocated so a
+// wedged allocator cannot block it.
 func startWatchdog() {
+	dumpBuf := make([]byte, 1<<20)
 	go func() {
 		deadline := time.Now().Add(90 * time.Second)
 		x := uint64(1)
@@ -96,6 +117,8 @@ func startWatchdog() {
 		}
 		sink = x
 		fmt.Println("FAIL watchdog: probe did not finish within 90s")
+		n := runtime.Stack(dumpBuf, true)
+		fmt.Printf("watchdog goroutine dump:\n%s\n", dumpBuf[:n])
 		os.Exit(2)
 	}()
 }
@@ -433,37 +456,35 @@ func checkSockets() {
 	}
 }
 
-// checkExec re-executes this binary in child mode (fork/exec, the
-// status pipe, stdout pipe and wait4 - the whole os/exec stack). How the
-// child must be launched depends on what is on disk at os.Executable():
-// an assimilated ELF (Linux after first run) or Mach-O executes
-// directly, a pristine APE (still starting with "MZ...") needs the shell
-// bootstrap on unix hosts, and on Windows the PE always executes
-// directly.
-func checkExec() {
+// selfCommand builds an exec.Cmd that re-executes this binary in the
+// given RUNTIMEPROBE_CHILD mode. How the child must be launched
+// depends on what is on disk at os.Executable(): an assimilated ELF
+// (Linux after first run) or Mach-O executes directly, a pristine APE
+// (still starting with "MZ...") needs the shell bootstrap on unix
+// hosts, and on Windows the PE always executes directly.
+func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	exe, err := os.Executable()
 	if err != nil {
-		fail("execchild", "os.Executable: %v", err)
-		return
+		fail(name, "os.Executable: %v", err)
+		return nil, false, true
 	}
 	f, err := os.Open(exe)
 	if err != nil {
-		fail("execchild", "open %q: %v", exe, err)
-		return
+		fail(name, "open %q: %v", exe, err)
+		return nil, false, true
 	}
 	var magic [4]byte
 	_, err = io.ReadFull(f, magic[:])
 	f.Close()
 	if err != nil {
-		fail("execchild", "read magic: %v", err)
-		return
+		fail(name, "read magic: %v", err)
+		return nil, false, true
 	}
 
-	direct := runtime.GOOS == "windows" ||
+	direct = runtime.GOOS == "windows" ||
 		(magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
 		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
 		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
-	var cmd *exec.Cmd
 	if direct {
 		cmd = exec.Command(exe)
 	} else {
@@ -471,14 +492,36 @@ func checkExec() {
 		// exactly how the probe itself was started.
 		cmd = exec.Command("/bin/sh", exe)
 	}
-	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD=1")
+	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD="+childMode)
+	return cmd, direct, false
+}
 
-	// Bound the child ourselves instead of using cmd.Output() alone: if
-	// the child ever wedges, an unbounded wait would leave an orphan
-	// holding this process's pipes after the watchdog fires, which can
-	// wedge the CALLING test harness in turn. Process.Kill works on
-	// macOS hosts (kill(2) is emulated; SIGKILL delivery is entirely
-	// kernel-side, needing no signal handling in the target).
+// waitBounded waits for a started child with a 30s bound. Bounding
+// ourselves instead of using cmd.Output() alone matters: if the child
+// ever wedges, an unbounded wait would leave an orphan holding this
+// process's pipes after the watchdog fires, which can wedge the
+// CALLING test harness in turn. Process.Kill works on macOS hosts
+// (kill(2) is emulated; SIGKILL delivery is entirely kernel-side).
+func waitBounded(name string, cmd *exec.Cmd) (error, bool) {
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+	select {
+	case err := <-waitErr:
+		return err, true
+	case <-time.After(30 * time.Second):
+		cmd.Process.Kill()
+		fail(name, "child did not finish within 30s (kill result: %v)", <-waitErr)
+		return nil, false
+	}
+}
+
+// checkExec re-executes this binary in child mode (fork/exec, the
+// status pipe, stdout pipe and wait4 - the whole os/exec stack).
+func checkExec() {
+	cmd, direct, bad := selfCommand("execchild", "1")
+	if bad {
+		return
+	}
 	var stdout, stderrBuf strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderrBuf
@@ -486,14 +529,8 @@ func checkExec() {
 		fail("execchild", "start self (direct=%v): %v", direct, err)
 		return
 	}
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- cmd.Wait() }()
-	var err2 error
-	select {
-	case err2 = <-waitErr:
-	case <-time.After(30 * time.Second):
-		cmd.Process.Kill()
-		fail("execchild", "child did not finish within 30s (kill result: %v)", <-waitErr)
+	err2, completed := waitBounded("execchild", cmd)
+	if !completed {
 		return
 	}
 	out := stdout.String()
@@ -509,6 +546,105 @@ func checkExec() {
 	default:
 		ok("execchild")
 	}
+}
+
+// checkWaitSig spawns a child that kills itself with SIGUSR1 and
+// asserts the parent-visible wait status: Signaled(), and Signal() ==
+// syscall.SIGUSR1 with LINUX numbering (10; Apple's kernel reports 30,
+// so this proves the wait4 boundary translates). On the child side it
+// exercises delivery of a fatal un-notified signal: runtime handler ->
+// dieFromSignal -> SIG_DFL reinstall -> re-raise. Skipped on Windows
+// (no kill(2), no SIGUSR1).
+func checkWaitSig() {
+	if runtime.GOOS == "windows" {
+		ok("waitsig", "skipped-windows")
+		return
+	}
+	cmd, direct, bad := selfCommand("waitsig", "raise")
+	if bad {
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		fail("waitsig", "start self (direct=%v): %v", direct, err)
+		return
+	}
+	err, completed := waitBounded("waitsig", cmd)
+	if !completed {
+		return
+	}
+	if err == nil {
+		fail("waitsig", "child exited cleanly, want death by SIGUSR1")
+		return
+	}
+	checkWaitSigStatus(err)
+}
+
+// nilp is read through a global so the compiler cannot prove the
+// dereference in checkSegvRecover faults and rewrite it statically:
+// the point is a REAL hardware fault -> SIGSEGV -> sigpanic.
+var nilp *int
+
+//go:noinline
+func derefNil() int { return *nilp }
+
+// checkSegvRecover asserts that a hardware nil-pointer dereference
+// becomes a recoverable runtime error: SIGSEGV -> sigtramp -> sigpanic
+// injection via set_pc/set_sp in the signal context. On macOS this is
+// the canary for the host-aware sigctxt writing Apple's mcontext.
+func checkSegvRecover() {
+	defer func() {
+		r := recover()
+		if r == nil {
+			fail("segvrecover", "nil dereference did not panic")
+			return
+		}
+		err, isErr := r.(error)
+		if !isErr || !strings.Contains(err.Error(), "invalid memory address") {
+			fail("segvrecover", "recovered %v (%T), want runtime nil-deref error", r, r)
+			return
+		}
+		ok("segvrecover")
+	}()
+	sink = uint64(derefNil())
+}
+
+// checkPreempt proves asynchronous preemption: saturate every P with
+// call-free spin loops (their only loop-body operation is an inlined
+// atomic load, which is not a preemption point), then require a full
+// GC cycle - stop-the-world included - to complete promptly. Without
+// working preemption signals the GC hangs until the loops' iteration
+// bound drains (tens of seconds), turning this into a duration
+// failure rather than a probe hang.
+func checkPreempt() {
+	var stop atomic.Uint32
+	var spun atomic.Uint64
+	var wg sync.WaitGroup
+	n := runtime.GOMAXPROCS(0)
+	t0 := time.Now()
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(seed uint64) {
+			defer wg.Done()
+			x := seed
+			for i := uint64(0); i < 20e9 && stop.Load() == 0; i++ {
+				x = x*2862933555777941757 + 3037000493
+			}
+			spun.Add(x)
+		}(uint64(i + 1))
+	}
+	// Let the spinners occupy every P; the sleep also forces main off
+	// its P so wake-up itself needs a preemption.
+	time.Sleep(100 * time.Millisecond)
+	runtime.GC()
+	d := time.Since(t0)
+	stop.Store(1)
+	wg.Wait()
+	sink = spun.Load()
+	if d > 10*time.Second {
+		fail("preempt", "GC took %v with %d spinning goroutines", d, n)
+		return
+	}
+	ok("preempt", d)
 }
 
 func checkExecutable() {

@@ -35,6 +35,7 @@ var probeOkChecks = []string{
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
 	"readdir", "walkdir", "removeall",
+	"segvrecover", "sigterm", "sigusr2", "preempt", "waitsig",
 	"all",
 }
 
