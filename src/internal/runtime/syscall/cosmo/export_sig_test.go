@@ -10,3 +10,5 @@ package cosmo
 
 var DarwinXlatSignal = darwinXlatSignal
 var DarwinXlatSignalA2L = darwinXlatSignalA2L
+
+var DarwinXlatWaitStatus = darwinXlatWaitStatus

@@ -34,9 +34,9 @@ import "unsafe"
 //
 // Wait status encoding: Apple and Linux agree on the layout (exit code
 // in bits 8..15, termination signal in bits 0..6, core-dump flag 0x80),
-// so statuses pass through untranslated. The embedded SIGNAL NUMBERS
-// are the host's (Apple SIGUSR1 is 30, Linux's is 10); translating them
-// belongs to the signal wave.
+// but the embedded SIGNAL NUMBERS are the host's (Apple SIGUSR1 is 30,
+// Linux's is 10); darwinWait4 rewrites them to Linux numbering at the
+// emulation boundary so syscall.WaitStatus decodes correctly.
 
 // Linux arm64 process syscall numbers handled by the slow path.
 const (
@@ -165,8 +165,14 @@ func darwinKill(pid, sig uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(darwinFns.Kill, pid, asig, 0, 0, 0, 0)
 }
 
-// darwinWait4 emulates wait4(2): option flags are translated and the
-// wait status passes through (see the file comment).
+// darwinWait4 emulates wait4(2): option flags are translated, and the
+// signal numbers embedded in the wait status are rewritten from Apple
+// to Linux numbering (the status ENCODING - exit code in bits 8..15,
+// termination signal in bits 0..6, core flag 0x80, stop marker 0x7f,
+// stop signal in bits 8..15 - is identical on both systems, so only
+// the signal fields change). syscall.WaitStatus then decodes with the
+// Linux numbers the rest of the process uses (a child killed by Apple
+// SIGUSR1=30 reports syscall.SIGUSR1=10).
 //
 // The rusage buffer is passed straight to Apple wait4 and fixed up IN
 // PLACE afterwards: struct rusage is 144 bytes on both systems with
@@ -195,6 +201,10 @@ func darwinWait4(pid, wstatus, options, rusage uintptr) (r1, r2, errno uintptr) 
 		*(*int64)(unsafe.Pointer(rusage + 8)) = u
 		s := int64(*(*int32)(unsafe.Pointer(rusage + 24)))
 		*(*int64)(unsafe.Pointer(rusage + 24)) = s
+	}
+	if errno == 0 && wstatus != 0 && int64(r1) > 0 {
+		sp := (*uint32)(unsafe.Pointer(wstatus))
+		*sp = darwinXlatWaitStatus(*sp)
 	}
 	return r1, r2, errno
 }

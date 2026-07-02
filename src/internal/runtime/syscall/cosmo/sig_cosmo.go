@@ -54,6 +54,34 @@ func darwinXlatSignal(sig uintptr) (uintptr, bool) {
 	return 0, false
 }
 
+// darwinXlatWaitStatus rewrites the signal numbers embedded in a wait
+// status from Apple to Linux numbering; the status ENCODING (exit code
+// in bits 8..15, termination signal in bits 0..6, core flag 0x80, stop
+// marker 0x7f with the stop signal in bits 8..15, continued 0xffff) is
+// identical on both systems, so only the signal fields change.
+// Statuses carrying a signal with no Linux equivalent (SIGEMT,
+// SIGINFO - neither plausibly terminates or stops a child) pass
+// through with the Apple number.
+//
+//go:nosplit
+func darwinXlatWaitStatus(s uint32) uint32 {
+	if s == 0xffff { // continued
+		return s
+	}
+	if s&0xff == 0x7f { // stopped: stop signal in bits 8..15
+		if l, ok := darwinXlatSignalA2L(uintptr(s >> 8 & 0xff)); ok {
+			return 0x7f | uint32(l)<<8
+		}
+		return s
+	}
+	if t := s & 0x7f; t != 0 { // signaled: termination signal in bits 0..6
+		if l, ok := darwinXlatSignalA2L(uintptr(t)); ok {
+			return s&^uint32(0x7f) | uint32(l)
+		}
+	}
+	return s // exited
+}
+
 // darwinXlatSignalA2L translates an Apple signal number to Linux's
 // (the inverse of darwinXlatSignal). Apple SIGEMT (7) and SIGINFO (29)
 // have no Linux equivalent and report false.

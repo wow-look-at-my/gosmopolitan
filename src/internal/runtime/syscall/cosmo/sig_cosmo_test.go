@@ -69,3 +69,28 @@ func TestDarwinSignalXlat(t *testing.T) {
 		}
 	}
 }
+
+func TestDarwinXlatWaitStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		in   uint32 // Apple-numbered status from wait4
+		want uint32 // Linux-numbered status
+	}{
+		{"exit 0", 0x0000, 0x0000},
+		{"exit 3", 0x0300, 0x0300},
+		{"exit 255", 0xff00, 0xff00},
+		{"killed SIGKILL", 9, 9},                        // same number
+		{"killed SIGUSR1", 30, 10},                      // Apple 30 -> Linux 10
+		{"killed SIGUSR2", 31, 12},                      // Apple 31 -> Linux 12
+		{"killed SIGBUS+core", 10 | 0x80, 7 | 0x80},     // core flag preserved
+		{"killed SIGEMT", 7, 7},                         // no Linux number: passthrough
+		{"stopped SIGSTOP", 0x7f | 17<<8, 0x7f | 19<<8}, // Apple 17 -> Linux 19
+		{"stopped SIGTSTP", 0x7f | 18<<8, 0x7f | 20<<8}, // Apple 18 -> Linux 20
+		{"continued", 0xffff, 0xffff},
+	}
+	for _, tc := range cases {
+		if got := cosmo.DarwinXlatWaitStatus(tc.in); got != tc.want {
+			t.Errorf("%s: darwinXlatWaitStatus(%#x) = %#x, want %#x", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
