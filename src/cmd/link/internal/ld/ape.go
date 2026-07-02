@@ -704,11 +704,37 @@ func writePEHeaderFromPayload(header []byte, win *pePayload) {
 	if len(win.pe) < headersEnd {
 		Exitf("Windows PE payload: truncated section table")
 	}
-	if peStart+(headersEnd-peoff) > apeScriptOffset {
+	// The byte at apeScriptOffset-1 is unconditionally overwritten with a
+	// newline so the shell heredoc terminator starts on a fresh line, so
+	// the transplanted headers must end strictly before apeScriptOffset.
+	if peStart+(headersEnd-peoff) >= apeScriptOffset {
 		Exitf("Windows PE payload: PE headers too large for APE script gap")
 	}
 	if win.offset > uint64(^uint32(0)) {
 		Exitf("Windows PE payload: file offset %#x exceeds PE32 raw pointer range", win.offset)
+	}
+	// Data directories that hold raw file offsets rather than RVAs would
+	// need shifting too, but the transplant leaves directories untouched
+	// and Go's internal linker never emits the offset-based ones. Reject a
+	// Certificate Table (directory 4, whose entry is a file offset to the
+	// Authenticode signature) so a signed input fails loudly instead of
+	// shipping a dangling pointer. The Debug directory (6) has the same
+	// caveat - its entries carry unshifted PointerToRawData fields - but
+	// Go's linker does not populate it either.
+	if sizeOpt >= 2 {
+		dirBase := 0
+		switch binary.LittleEndian.Uint16(win.pe[optStart:]) {
+		case 0x20B: // PE32+
+			dirBase = optStart + 112
+		case 0x10B: // PE32
+			dirBase = optStart + 96
+		}
+		certDir := dirBase + 4*8
+		if dirBase != 0 && certDir+8 <= optStart+sizeOpt {
+			if binary.LittleEndian.Uint32(win.pe[certDir+4:]) != 0 {
+				Exitf("Windows PE payload: input has a Certificate Table (Authenticode signature); signed PEs are unsupported as APE payloads")
+			}
+		}
 	}
 
 	copy(header[peStart:], win.pe[peoff:headersEnd])
