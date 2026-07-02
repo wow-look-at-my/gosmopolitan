@@ -103,9 +103,12 @@ jobs:
       # Each test step runs go test under an in-step process-group killer
       # (see with-deadline.sh): runner-side step timeouts have been
       # observed not to fire when a step wedges on the macOS runners
-      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs).
-      # The killer guarantees the step terminates on its own and the log
-      # of everything up to the wedge is preserved.
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
+      # one wedged process even survived a process-group SIGKILL, i.e. it
+      # was stuck in an uninterruptible kernel state). The killer abandons
+      # such a corpse so the step still ends, and go test's output goes
+      # through a FILE (cat'ed afterwards) so no abandoned descendant can
+      # keep the runner's log pipe open.
       - name: Test binary built on Ubuntu
         id: test-ubuntu
         timeout-minutes: 5
@@ -113,7 +116,10 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
 
       - name: Test binary built on macOS
         id: test-macos
@@ -122,7 +128,10 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
 
       - name: Test binary built on Windows
         id: test-windows
@@ -131,4 +140,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
