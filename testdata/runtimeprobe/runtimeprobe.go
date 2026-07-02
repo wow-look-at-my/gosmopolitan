@@ -345,6 +345,92 @@ func checkSockets() {
 	}
 	uc.Close()
 	pc.Close()
+
+	// Unix-domain stream socket bound to a filesystem path: sockaddr
+	// round trip in both directions plus one echo. The dialed end stays
+	// unbound on purpose - an unnamed unix socket must surface an EMPTY
+	// local name; this is the regression canary for unnamed-vs-abstract
+	// confusion in the sockaddr parse. (Windows's stack reports unnamed
+	// as "@"; net's own unixsock tests encode that.)
+	udir, err := os.MkdirTemp("", "runtimeprobe-unix")
+	if err != nil {
+		fail("unixsock", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(udir)
+	spath := filepath.Join(udir, "probe.sock")
+	uln, err := net.Listen("unix", spath)
+	if err != nil {
+		fail("unixsock", "listen: %v", err)
+		return
+	}
+	defer uln.Close()
+
+	uDone := make(chan string, 1)
+	go func() {
+		c, err := uln.Accept()
+		if err != nil {
+			uDone <- fmt.Sprintf("accept: %v", err)
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 64)
+		n, err := c.Read(buf)
+		if err != nil {
+			uDone <- fmt.Sprintf("server read: %v", err)
+			return
+		}
+		if _, err := c.Write(buf[:n]); err != nil {
+			uDone <- fmt.Sprintf("server write: %v", err)
+			return
+		}
+		uDone <- ""
+	}()
+
+	usock, err := net.Dial("unix", spath)
+	if err != nil {
+		fail("unixsock", "dial: %v", err)
+		return
+	}
+	defer usock.Close()
+
+	wantLocal := ""
+	if runtime.GOOS == "windows" {
+		wantLocal = "@"
+	}
+	la, laOK := usock.LocalAddr().(*net.UnixAddr)
+	ra, raOK := usock.RemoteAddr().(*net.UnixAddr)
+	switch {
+	case uln.Addr().String() != spath:
+		fail("unixsock", "listener addr %q, want %q", uln.Addr(), spath)
+	case !laOK || la.Name != wantLocal:
+		fail("unixsock", "dialed local addr %#v, want name %q", usock.LocalAddr(), wantLocal)
+	case !raOK || ra.Name != spath:
+		fail("unixsock", "dialed remote addr %#v, want name %q", usock.RemoteAddr(), spath)
+	default:
+		ok("unixsock")
+	}
+
+	const uMsg = "unix-ping"
+	usock.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := usock.Write([]byte(uMsg)); err != nil {
+		fail("unixecho", "write: %v", err)
+		return
+	}
+	ubuf := make([]byte, 64)
+	un, err := io.ReadAtLeast(usock, ubuf, len(uMsg))
+	switch {
+	case err != nil:
+		fail("unixecho", "read: %v", err)
+	case string(ubuf[:un]) != uMsg:
+		fail("unixecho", "got %q, want %q", ubuf[:un], uMsg)
+	default:
+		if msg := <-uDone; msg != "" {
+			fail("unixecho", "%s", msg)
+		} else {
+			ok("unixecho")
+		}
+	}
 }
 
 // checkExec re-executes this binary in child mode (fork/exec, the
