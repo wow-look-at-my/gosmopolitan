@@ -458,9 +458,17 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	SVC
 	RET
 raise_darwin:
+	// The Syslib raise is Apple libc raise: translate the runtime's
+	// Linux signal number. Unmapped numbers become 0 (raise(0) is a
+	// no-op existence probe - better than delivering a random signal).
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	160(R9), R12
 	MOVW	sig+0(FP), R0
+	CMPW	$65, R0
+	BHS	raise_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+raise_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
@@ -477,10 +485,16 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	SVC
 	RET
 raiseproc_darwin:
-	// Use raise() which sends signal to current process
+	// Use raise() which sends signal to current process; translate the
+	// Linux signal number to Apple's (see raise_darwin).
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	160(R9), R12
 	MOVW	sig+0(FP), R0
+	CMPW	$65, R0
+	BHS	raiseproc_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+raiseproc_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
@@ -525,11 +539,19 @@ TEXT ·tgkill(SB),NOSPLIT,$0-24
 	SVC
 	RET
 tgkill_darwin:
-	// macOS: use pthread_kill
+	// macOS: use pthread_kill. (signalM dispatches to darwinSignalM in
+	// Go before reaching this asm; the branch stays correct for any
+	// other caller.) Translate the Linux signal number to Apple's;
+	// unmapped numbers become 0 = existence probe.
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	88(R9), R12
 	MOVD	tid+8(FP), R0	// pthread_t
 	MOVD	sig+16(FP), R1	// signal
+	CMPW	$65, R1
+	BHS	tgkill_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R1), R1
+tgkill_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP

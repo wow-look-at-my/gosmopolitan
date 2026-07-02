@@ -280,7 +280,10 @@ func gettid() uint32
 // Called on the new thread, cannot allocate memory.
 func minit() {
 	minitSignals()
-	getg().m.procid = uint64(gettid())
+	// minitProcid is per-arch: on macOS hosts (arm64) procid must hold
+	// the FULL pthread_t for pthread_kill - gettid's uint32 return
+	// would truncate the pointer; on Linux hosts it is the tid.
+	getg().m.procid = minitProcid()
 }
 
 // Called from dropm to undo the effect of an minit.
@@ -415,8 +418,14 @@ func fixSigactionForCgo(new *sigactiont) {
 func getpid() int
 func tgkill(tgid, tid, sig int)
 
-// signalM sends a signal to mp.
+// signalM sends a signal to mp. sig is a LINUX signal number; the
+// darwin path (per-arch darwinSignalM) translates it and signals the
+// thread via pthread_kill with the full pthread_t from m.procid.
 func signalM(mp *m, sig int) {
+	if isdarwin() {
+		darwinSignalM(mp, sig)
+		return
+	}
 	tgkill(getpid(), int(mp.procid), sig)
 }
 

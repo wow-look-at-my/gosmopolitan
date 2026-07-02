@@ -389,6 +389,35 @@ func pipe2Linux(flags int32) (r, w int32, errno int32)
 //go:noescape
 func cosmo_pipe_trampoline(fds *int32) int32
 
+// minitProcid returns the value minit stores in m.procid: on macOS the
+// FULL pthread_t from pthread_self (gettid's uint32 return would
+// truncate the pointer, and pthread_kill - signalM, async preemption -
+// needs the real value), on Linux the tid.
+//
+//go:nosplit
+func minitProcid() uint64 {
+	if isdarwin() {
+		return uint64(cosmoLibcCall6(__syslib.pthread_self, 0, 0, 0, 0, 0, 0))
+	}
+	return uint64(gettid())
+}
+
+// darwinSignalM sends sig (a LINUX signal number) to mp's thread with
+// pthread_kill. Signals without an Apple equivalent (the realtime
+// range, e.g. sigPerThreadSyscall) are dropped: they cannot be
+// delivered on an XNU host.
+func darwinSignalM(mp *m, sig int) {
+	asig := cosmoSigL2A(uint32(sig))
+	if asig == 0 {
+		return
+	}
+	lib := __syslib
+	if lib == nil || lib.pthread_kill == 0 {
+		return
+	}
+	cosmoLibcCall6(lib.pthread_kill, uintptr(mp.procid), uintptr(asig), 0, 0, 0, 0)
+}
+
 // cosmoDarwinPollSupported reports whether the darwin netpoller can reach
 // Apple libc's poll(2) on this host.
 func cosmoDarwinPollSupported() bool {

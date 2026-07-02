@@ -57,3 +57,15 @@ func cosmoDarwinPoll(pfds *pollfd, npfds int32, timeout int32) (int32, int32) {
 
 // pipe2 is implemented in sys_cosmo_amd64.s.
 func pipe2(flags int32) (r, w int32, errno int32)
+
+// minitProcid: Linux hosts use the tid. (The macOS-Intel runtime
+// bring-up is pending; gettid's darwin branch is a raw-XNU stub.)
+//
+//go:nosplit
+func minitProcid() uint64 { return uint64(gettid()) }
+
+// darwinSignalM: macOS-Intel execution is not implemented; keep the
+// pre-dispatch behavior (tgkill's asm has its own darwin branch).
+func darwinSignalM(mp *m, sig int) {
+	tgkill(getpid(), int(mp.procid), sig)
+}
