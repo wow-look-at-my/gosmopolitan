@@ -35,6 +35,7 @@ package runtime
 // spin the poller.
 
 import (
+	"internal/runtime/atomic"
 	"unsafe"
 )
 
@@ -67,6 +68,39 @@ var (
 	xnuWrwake         int32 = -1
 	xnuPendingUpdates int32
 )
+
+// Wedge forensics: the macOS CI wedge (goroutines asleep in
+// lock(xnuMtxset) while the poller holds it) has survived the 100ms
+// poll cap, sliced semaphore waits AND a complete change of parking
+// primitive (dispatch semaphores -> pthread mutex+cond, wave 9), so
+// the watchdog needs eyes on the poller M itself - it runs on g0 and
+// is invisible in goroutine tracebacks. The poller updates these
+// counters every cycle; the runtimeprobe watchdog samples them twice
+// through cosmoNetpollDiag when it fires. A frozen cycle counter with
+// enter > exit means the poller is stuck INSIDE poll(2) past its
+// timeout (kernel side); a frozen counter with exit > enter means it
+// wedged between poll and the next cycle; an advancing counter means
+// poll cycles fine and the wakeup chain is losing the wake (parking
+// side).
+var (
+	xnuPollCycles  atomic.Uint64 // cycles started (incremented before poll)
+	xnuPollEnterNs atomic.Int64  // nanotime just before the last poll(2) call
+	xnuPollExitNs  atomic.Int64  // nanotime just after the last poll(2) return
+	xnuPollLastN   atomic.Int32  // last poll(2) result
+	xnuPollLastE   atomic.Int32  // last poll(2) errno (Linux numbering)
+)
+
+// cosmoNetpollDiag reports the darwin poller's forensic counters plus
+// the current nanotime, for the runtimeprobe watchdog (linknamed from
+// testdata/runtimeprobe). xnuPendingUpdates is read unsynchronized -
+// diagnostic output only.
+//
+//go:linkname cosmoNetpollDiag
+func cosmoNetpollDiag() (cycles uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32) {
+	return xnuPollCycles.Load(), xnuPollEnterNs.Load(), xnuPollExitNs.Load(),
+		nanotime(), xnuPollLastN.Load(), xnuPollLastE.Load(),
+		atomic.Loadint32(&xnuPendingUpdates)
+}
 
 // xnuMaxPollMs bounds every blocking poll(2): XNU can LOSE the wakeup
 // byte written to the self-pipe while poll is entering its wait (the
@@ -280,7 +314,12 @@ retry:
 	xnuPendingUpdates = 0
 	unlock(&xnuMtxpoll)
 
+	xnuPollCycles.Add(1)
+	xnuPollEnterNs.Store(nanotime())
 	n, e := cosmoDarwinPoll(&xnuPfds[0], int32(len(xnuPfds)), timeout)
+	xnuPollExitNs.Store(nanotime())
+	xnuPollLastN.Store(n)
+	xnuPollLastE.Store(e)
 	if n < 0 {
 		if e != _EINTR {
 			println("runtime: poll failed with", e, "len(xnuPfds)=", len(xnuPfds))

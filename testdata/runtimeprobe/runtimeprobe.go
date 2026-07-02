@@ -122,6 +122,18 @@ func startWatchdog() {
 		}
 		sink = x
 		fmt.Println("FAIL watchdog: probe did not finish within 90s")
+		// Two poller-counter samples a spin apart (no timers - they may
+		// be wedged) tell the wedge forensics WHERE the loss is; see
+		// printNetpollDiag.
+		printNetpollDiag("t0")
+		spinUntil := time.Now().Add(300 * time.Millisecond)
+		for time.Now().Before(spinUntil) {
+			for i := 0; i < 100_000; i++ {
+				x = spin(x)
+			}
+		}
+		sink = x
+		printNetpollDiag("t0+300ms")
 		panic("watchdog: probe wedged; all-goroutine traceback follows")
 	}()
 }
