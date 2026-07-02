@@ -172,3 +172,16 @@ Next: macOS ARM64 native execution via the compiled loader is exercised by
 CI (macos-latest, exec tests unskipped). If it fails, the syslib-routed
 syscall paths in sys_cosmo_arm64.s are the place to look - the Linux SVC
 side is now known-good under qemu.
+
+
+## 2026-07-02: Boot-header printf encoder: '%' must be octal-escaped
+
+The printf blob encoder let 0x25 ('%') through as a literal. POSIX printf
+treats a bare '%' in its format string as a conversion directive, so
+whenever a variable boot-header byte (e_entry bytes 24-31, e_phoff bytes
+32-39 - payload offsets like 0x25xxxx) happened to be 0x25, Linux
+self-assimilation truncated/shifted the header write and permanently
+corrupted the binary. '%' is now emitted as \045 (matching apelink.c),
+alongside the existing quote/backslash octal escaping. Regression tests in
+cmd/link/internal/ld/ape_test.go round-trip every byte value through both
+a decoder mirroring printf/ape-m1.c semantics and a real sh printf.

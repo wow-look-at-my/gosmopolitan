@@ -9,10 +9,15 @@ APE binaries are single executables that run natively on multiple operating syst
 ## Building APE Binaries
 
 ```bash
-GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+# Fat APE (default): cosmo amd64 + cosmo arm64 + native windows/amd64
+# payloads in one binary. GOARCH is ignored for the output.
+GOOS=cosmo go build -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH)
+GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows.
+The resulting `.com` file runs natively on Linux, macOS, and Windows.
 
 ## Building the Toolchain
 
