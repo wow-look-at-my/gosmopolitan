@@ -756,6 +756,30 @@ lock blocks forever (a CI run proved it - the dump hung for the
 step's remaining budget), while fatalpanic's freezetheworld is
 best-effort and dumps mutex-wedged Ms without their cooperation.
 
+**Wedge postscript (end of wave)**: after the poll cap, the wedge
+recurred with an UNCHANGED traceback - mutator asleep in
+lock(xnuMtxset) although the capped poller now provably releases that
+mutex every cycle and unlock2Wake's decision logic must wake the sole
+queued waiter (no spinner flag, no stack lock, sleeping bit set). A
+further mitigation - semasleep(-1) waiting in 50ms slices, each a
+FRESH dispatch_semaphore_wait that atomically re-examines the count
+(semantics identical: still returns only on genuine wakeup, which
+lock2's wait-list invariant requires) - did not cure it either. That
+eliminates, in order: poll-level loss (bounded), wake-decision logic
+(read, sound), wait-side-stuck loss (sliced). What remains is the
+signal side of the dispatch-semaphore pair failing to increment the
+target M's semaphore (or an M-identity issue below mutexWaitListHead
+that code reading says cannot happen). Upstream darwin pointedly
+parks Ms on pthread_mutex+pthread_cond rather than dispatch
+semaphores; REPLACING the parking primitive with dlsym'd pthread
+mutex/cond, exactly upstream's design, is the concrete wave-9
+recommendation - too invasive to land safely from a Linux box at the
+end of this wave. Status: pre-existing wave-6 defect, nondeterministic
+(load-dependent; several all-6-green runs today on this exact code,
+including head run 28584207120), bounded in blast radius by the
+watchdog + CI step killers, and fully instrumented - every future
+occurrence prints the all-goroutine traceback.
+
 **Also landed**: readv/writev dlsym passthrough on darwin (iovec
 identical; unblocks net.Buffers on macOS - the wave-7 note was right
 that it is trivial). Probe grew segvrecover, sigterm+sigusr2 (USR2's
