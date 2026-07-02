@@ -148,45 +148,11 @@ func darwinDup3(oldfd, newfd, flags uintptr) (r1, r2, errno uintptr) {
 	return fd, 0, 0
 }
 
-// darwinXlatSignal translates a Linux signal number to Apple's for
-// SENDING (kill). Signals 1-6, 8, 9, 11, 13-15 and 21/22/24-28 share
-// values; the BSD-heritage rest diverge. Only classic signals are
-// mapped; Linux realtime signals (>=32) and SIGPWR/SIGSTKFLT have no
-// Apple equivalent and report false.
+// darwinXlatSignal (sig_cosmo.go) translates the Linux signal number
+// for delivery. SIGKILL/SIGSTOP act entirely in the kernel, so
+// os.Process.Kill genuinely terminates the target regardless of the
+// target's own signal handling.
 //
-// This is only the delivery side: HANDLING signals on macOS is still
-// stubbed (signal wave). SIGKILL/SIGSTOP act entirely in the kernel, so
-// os.Process.Kill genuinely terminates the target regardless.
-//
-//go:nosplit
-func darwinXlatSignal(sig uintptr) (uintptr, bool) {
-	switch sig {
-	case 0, 1, 2, 3, 4, 5, 6, 8, 9, 11, 13, 14, 15, 21, 22, 24, 25, 26, 27, 28:
-		return sig, true // identical values (0 = existence probe)
-	case 7: // SIGBUS
-		return 10, true
-	case 10: // SIGUSR1
-		return 30, true
-	case 12: // SIGUSR2
-		return 31, true
-	case 17: // SIGCHLD
-		return 20, true
-	case 18: // SIGCONT
-		return 19, true
-	case 19: // SIGSTOP
-		return 17, true
-	case 20: // SIGTSTP
-		return 18, true
-	case 23: // SIGURG
-		return 16, true
-	case 29: // SIGIO
-		return 23, true
-	case 31: // SIGSYS
-		return 12, true
-	}
-	return 0, false
-}
-
 //go:nosplit
 func darwinKill(pid, sig uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Kill == 0 {
