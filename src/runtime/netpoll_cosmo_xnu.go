@@ -35,6 +35,7 @@ package runtime
 // spin the poller.
 
 import (
+	"internal/runtime/atomic"
 	"unsafe"
 )
 
@@ -66,6 +67,21 @@ var (
 	xnuRdwake         int32 = -1
 	xnuWrwake         int32 = -1
 	xnuPendingUpdates int32
+
+	// xnuArmers counts mutators (netpollopen/netpollclose/netpollarm)
+	// between announcing themselves and releasing xnuMtxset. The
+	// poller must NOT enter a blocking poll while this is nonzero:
+	// runtime mutexes are unfair, so after a wakeup the hot poller M
+	// can barge back through lock(xnuMtxset) ahead of the woken
+	// mutator (whose semawakeup must first get scheduled - on a
+	// loaded 3-core runner that loses the race routinely). The
+	// mutator's wakeup byte was already drained by the previous
+	// cycle and xnuPendingUpdates re-zeroed, so nothing would ever
+	// boot the poller out of poll(2) again and the mutator would
+	// wait on the mutex for as long as the poll sleeps - with no
+	// active timers (hence no netpollBreak), forever. See
+	// netpollDarwin.
+	xnuArmers atomic.Int32
 )
 
 func netpollinitDarwin() {
@@ -136,6 +152,7 @@ func netpollwakeupDarwin() {
 }
 
 func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
+	xnuArmers.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
@@ -148,11 +165,13 @@ func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
 	pd.user = uint32(len(xnuPfds))
 	xnuPfds = append(xnuPfds, pollfd{fd: int32(fd)})
 	xnuPds = append(xnuPds, pd)
+	xnuArmers.Add(-1)
 	unlock(&xnuMtxset)
 	return 0
 }
 
 func netpollcloseDarwin(fd uintptr) uintptr {
+	xnuArmers.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
@@ -170,11 +189,13 @@ func netpollcloseDarwin(fd uintptr) uintptr {
 			break
 		}
 	}
+	xnuArmers.Add(-1)
 	unlock(&xnuMtxset)
 	return 0
 }
 
 func netpollarmDarwin(pd *pollDesc, mode int) {
+	xnuArmers.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
@@ -187,6 +208,7 @@ func netpollarmDarwin(pd *pollDesc, mode int) {
 	case 'w':
 		xnuPfds[pd.user].events |= _POLLOUT
 	}
+	xnuArmers.Add(-1)
 	unlock(&xnuMtxset)
 }
 
@@ -255,6 +277,25 @@ retry:
 	lock(&xnuMtxset)
 	xnuPendingUpdates = 0
 	unlock(&xnuMtxpoll)
+
+	if xnuArmers.Load() != 0 {
+		// A mutator announced itself but has not applied its update:
+		// it is (or is about to be) queued on xnuMtxset, and its
+		// wakeup byte may already have been drained by the PREVIOUS
+		// cycle (runtime mutexes are unfair - a hot poller barges
+		// back in ahead of a semawakeup'd waiter, routinely so on a
+		// loaded few-core runner). Blocking now would poll a stale
+		// fd array with an empty pipe and nothing left to boot us
+		// out: the mutator - a netpollopen inside net.Listen/Dial or
+		// a pollWait's netpollarm - would wait on the mutex for as
+		// long as the poll sleeps; with no timer running (no
+		// netpollBreak), forever. This was the nondeterministic
+		// macOS CI wedge first seen in wave 6. Step aside until the
+		// mutator has gone through.
+		unlock(&xnuMtxset)
+		osyield()
+		goto retry
+	}
 
 	n, e := cosmoDarwinPoll(&xnuPfds[0], int32(len(xnuPfds)), timeout)
 	if n < 0 {
