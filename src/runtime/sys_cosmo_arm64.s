@@ -1262,7 +1262,8 @@ sbrk0_darwin:
 // registers, so it is BL-safe from any framed darwin openat path.
 //
 // Bit-by-bit mapping (Linux value as this port's syscall package defines
-// it in zerrors_cosmo_arm64.go -> Apple value):
+// it in zerrors_cosmo_arm64.go, which follows the arm64 kernel's
+// asm-generic numbers -> Apple value):
 //   0x3      access mode          -> unchanged (same encoding)
 //   0x40     O_CREAT              -> 0x200
 //   0x80     O_EXCL               -> 0x800
@@ -1272,16 +1273,18 @@ sbrk0_darwin:
 //   0x800    O_NONBLOCK           -> 0x4
 //   0x1000   O_DSYNC              -> 0x400000
 //   0x2000   O_ASYNC              -> 0x40
-//   0x10000  O_DIRECTORY          -> 0x100000
-//   0x20000  O_NOFOLLOW           -> 0x100
+//   0x4000   O_DIRECTORY          -> 0x100000
+//   0x8000   O_NOFOLLOW           -> 0x100
 //   0x80000  O_CLOEXEC            -> 0x1000000
 //   0x100000 __O_SYNC (O_SYNC hi) -> 0x80
 // Stripped (no Apple equivalent; dropping beats passing garbage bits
 // that Apple would interpret as unrelated flags):
-//   0x4000/0x8000 (kernel-arm64 O_DIRECTORY/O_NOFOLLOW - unused by this
-//   port's userspace, which carries the amd64-style values above),
-//   0x40000 O_NOATIME, 0x200000 O_PATH (degrades to a plain read-only
-//   open), 0x400000 __O_TMPFILE.
+//   0x10000 O_DIRECT, 0x20000 O_LARGEFILE (asm-generic numbers; before
+//   wave 7 this port's arm64 userspace wrongly carried the amd64-style
+//   O_DIRECTORY/O_NOFOLLOW in exactly these bits, which the arm64
+//   Linux kernel reads as O_DIRECT/O_LARGEFILE - os.ReadDir failed
+//   EINVAL on tmpfs), 0x40000 O_NOATIME, 0x200000 O_PATH (degrades to
+//   a plain read-only open), 0x400000 __O_TMPFILE.
 TEXT runtime·cosmo_xlat_oflags_r2(SB),NOSPLIT|NOFRAME,$0
 	AND	$0x3, R2, R9
 	TBZ	$6, R2, 2(PC)
@@ -1300,9 +1303,9 @@ TEXT runtime·cosmo_xlat_oflags_r2(SB),NOSPLIT|NOFRAME,$0
 	ORR	$0x400000, R9, R9	// O_DSYNC
 	TBZ	$13, R2, 2(PC)
 	ORR	$0x40, R9, R9		// O_ASYNC
-	TBZ	$16, R2, 2(PC)
+	TBZ	$14, R2, 2(PC)
 	ORR	$0x100000, R9, R9	// O_DIRECTORY
-	TBZ	$17, R2, 2(PC)
+	TBZ	$15, R2, 2(PC)
 	ORR	$0x100, R9, R9		// O_NOFOLLOW
 	TBZ	$19, R2, 2(PC)
 	ORR	$0x1000000, R9, R9	// O_CLOEXEC
