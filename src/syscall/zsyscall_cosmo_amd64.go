@@ -312,6 +312,23 @@ func setgroups(n int, list *_Gid_t) (err error) {
 	return
 }
 
+func Getpriority(which int, who int) (prio int, err error) {
+	r0, _, e1 := Syscall(SYS_GETPRIORITY, uintptr(which), uintptr(who), 0)
+	prio = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func Setpriority(which int, who int, prio int) (err error) {
+	_, _, e1 := Syscall(SYS_SETPRIORITY, uintptr(which), uintptr(who), uintptr(prio))
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
 func utimes(path string, times *[2]Timeval) (err error) {
 	var _p0 *byte
 	_p0, err = BytePtrFromString(path)

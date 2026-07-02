@@ -289,6 +289,23 @@ func setgroups(n int, list *_Gid_t) (err error) {
 	return
 }
 
+func Getpriority(which int, who int) (prio int, err error) {
+	r0, _, e1 := Syscall(SYS_GETPRIORITY, uintptr(which), uintptr(who), 0)
+	prio = int(r0)
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
+func Setpriority(which int, who int, prio int) (err error) {
+	_, _, e1 := Syscall(SYS_SETPRIORITY, uintptr(which), uintptr(who), uintptr(prio))
+	if e1 != 0 {
+		err = errnoErr(e1)
+	}
+	return
+}
+
 // utimes and futimesat are implemented in syscall_cosmo_arm64.go using utimensat
 // since ARM64 Linux doesn't have SYS_UTIMES/SYS_FUTIMESAT syscalls.
 
