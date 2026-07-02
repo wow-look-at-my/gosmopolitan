@@ -297,3 +297,109 @@ bring-up - clone/futex/sigaction are ENOSYS stubs, usleep has a DIVQ
 self-division bug, gettimeofday clobbers DX - and real-hardware
 verification. Until then macOS Intel is "structurally correct,
 execution untested".
+
+## 2026-07-02: Wave 4+5 - macOS ARM64 runtime correctness + runtime probe in CI
+
+Fixes on the darwin (Syslib) paths, each verified by the macos-latest CI
+runner actually executing the binaries:
+
+- nanotime clockid: nanotime1_darwin passed Linux CLOCK_MONOTONIC (1) to
+  Apple clock_gettime, which has no clockid 1 (Apple MONOTONIC is 6); the
+  EINVAL was ignored and uninitialized stack came back as "time". Now
+  remaps 1->6, checks the result, falls back to CLOCK_REALTIME, and
+  zeroes the result slots first. The generic dispatcher's clock_gettime
+  translates 1->6 too.
+- Apple->Linux errno translation: Syslib functions return -errno with
+  APPLE numbering (EAGAIN 35, ENOSYS 78, ETIMEDOUT 60...); Go compares
+  Linux values. One shared byte table + leaf helper
+  (runtime.cosmo_xlat_errno_r0) used at every darwin errno boundary:
+  dispatcher, mmap, pipe, fork, and the Go emulation (via __error()).
+- runtime getpid: the darwin path called Syslib offset 112 - which is
+  dispatch_semaphore_create - leaking a semaphore per call and returning
+  the object pointer as the pid. GETPID DECISION TRAIL: the Syslib has no
+  getpid; evolving the embedded ape-m1.c (append field + bump
+  SYSLIB_VERSION to 11) was REJECTED because the compiled loader cache
+  key is only the loader version string (${TMPDIR:-$HOME}/.ape-1.10) and
+  any existing Mach-O there is reused blindly, so a stale v10 loader
+  (possibly compiled from an upstream cosmo binary's embedded source)
+  would satisfy the cache forever and the new field could never be
+  trusted. Instead the runtime resolves getpid (and friends) through the
+  Syslib's dlsym(RTLD_DEFAULT, ...) at osinit - works with every v6+
+  loader, cached or fresh. The function pointer is cached, not the value,
+  so fork children see their own pid.
+- rawSyscallNoError/rawVforkSyscall (syscall package) issued raw SVC ->
+  SIGSYS killed os.Getpid/Umask/forkExec on macOS. Now: fork routes to
+  Syslib fork in pure assembly (fork-child safe); the id family/umask
+  route through the dispatcher's Go slow path (dlsym-backed).
+- Darwin file syscall emulation (dispatcher Go slow path): mkdirat,
+  unlinkat, renameat(2), faccessat, chdir, readlinkat, fstatat, fstat,
+  getcwd, fcntl, getrandom - with AT_FDCWD (-100 -> -2), AT_* flag,
+  fcntl O_* flag and Apple-struct-stat translation. os.newFile treats
+  cosmo like the BSDs (stat fd, keep regular files out of the netpoller)
+  because netpollinit still throws on macOS. os.Create/Stat/Rename/
+  Remove/Getwd/Chdir work on macOS for the first time.
+- openat argument translation: Linux O_CREAT (0x40) arrived as Apple
+  O_SHLOCK (os.Create never created anything) and Linux AT_FDCWD (-100)
+  as an invalid fd (EBADF); both darwin openat sites now translate flags
+  (shared helper with full table) and dirfd.
+- semasleep passed relative ns as an absolute dispatch_time_t (positive
+  values are mach ticks since boot!), so every timed wait fired
+  immediately (busy spin). Now uses dispatch_walltime(NULL, ns).
+- GOMAXPROCS was pinned to 1 on macOS (sched_getaffinity ENOSYS). Now
+  sysctlbyname("hw.ncpu") via Syslib v10.
+- amd64-darwin honesty: usleep's DIVQ self-division (raw ns as tv_usec),
+  gettimeofday's garbage third argument (post-Sierra XNU writes
+  mach_absolute_time through it -> memory corruption), sigprocmask how
+  values (Linux 0/1/2 vs Apple 1/2/3). Intel-mac remains non-working
+  (clone/futex ENOSYS) - these just stop active lies.
+- P2 batch: SYS_OPEN=56 alias deleted; Syslib version gate (>= v8, clear
+  write(2) message + exit 127 instead of reading past a shorter struct);
+  access/connect/socket/sbrk0 no longer execute roulette SVCs on darwin
+  (XNU dispatches on x16, which Linux-convention stubs never set);
+  runtime pipe2 emulates O_CLOEXEC/O_NONBLOCK with fcntl on macOS or
+  fails ENOSYS rather than silently dropping flags; go vet runtime is
+  clean on both arches (mstart_stub_cosmo decl added, dead settls
+  deleted).
+
+Two hard-won assembly lessons (both caught by CI executing on
+macos-latest, invisible on Linux since the darwin branches never run
+there):
+
+1. JMP-to-symbol from a FRAMED asm function does not pop the frame.
+   Syscall6 contains BLs, so the assembler gives it an auto LR/FP frame;
+   a tail JMP into the Go slow path left RSP 16 bytes low - every FP
+   offset in the target shifted, caller stack corrupted, SIGBUS in os
+   init. Fix: real CALL with outgoing args in an 88-byte frame. JMP
+   remains correct only in genuine leaves (rawSyscallNoError, thunks).
+2. Everything downstream of syscall.Syscall is inside the _Gsyscall
+   window (entersyscall has run) - growing the stack there is a fatal
+   "stack split at bad time". The whole darwin emulation must be
+   nosplit; the 792-byte nosplit budget is reclaimed by doing the errno
+   fetch (__error + translate) in a 16-byte-frame asm trampoline. The
+   linker's nosplit check now statically proves the path can't split.
+
+Wave 5: testdata/runtimeprobe (file I/O, pid/ppid, NumCPU, monotonic
+clock, os.Executable, argv/env, wd round-trip; no network/timers/exec/
+signals) + apetest runtimeprobe_test.go (RUNTIMEPROBE_BIN, skips when
+unset) + CI wiring (built next to fizzbuzz.com, same artifact,
+RUNTIMEPROBE_BIN in all three per-origin test steps). apetest: 118
+tests.
+
+Still broken on macOS (known, out of wave scope):
+- Timers/time.Sleep, sockets, os/exec pipes: netpoll is epoll-only and
+  netpollinit throws -> darwin poller (pselect+pipe) is the next wave.
+- Signals: rt_sigaction is a success-stub; sigprocmask via
+  pthread_sigmask still passes Linux `how` values (silent no-op) and
+  Linux 8-byte sigsets; no darwin sigtramp. Signal wave.
+- os/exec: fork works, but pipe2/dup3/execve are not emulated; forkExec
+  fails with a clean ENOSYS instead of SIGSYS.
+- getdents64 (directory listing) intentionally ENOSYS - Apple has no
+  Linux-layout getdirentries.
+
+New follow-up discovered (pre-existing, linux/arm64 host): syscall
+Stat_t in ztypes_cosmo_arm64.go uses the amd64 layout, but the arm64
+kernel writes the arm64 layout (mode at 16, not 24). Empirically: Mode
+comes back 0 and Nlink 0x1000081ED for a 0755 file under qemu-aarch64.
+Size/Ino/Timespec offsets happen to coincide, so size-based code works;
+file-TYPE checks are wrong on arm64 Linux hosts. Fix = per-arch Stat_t
+(and matching update to the darwin emulation's mirror struct).

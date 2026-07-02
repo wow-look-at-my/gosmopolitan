@@ -81,6 +81,14 @@ image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
 on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
 Rosetta). Windows uses an embedded native windows/amd64 PE payload.
 
+macOS ARM64 status (2026-07-02): file I/O (create/read/write/stat/rename/
+remove), getpid/getppid, NumCPU, the monotonic clock, os.Executable,
+argv/env and Getwd/Chdir all work (CI-verified by the runtime probe). Still
+missing on macOS hosts: timers/time.Sleep, sockets and os/exec (netpoll is
+epoll-only; a darwin pselect-based poller is the next wave), signals
+(rt_sigaction is stubbed; signal-translation wave), and directory listing
+(getdents64 has no Apple equivalent). See DEBUGGING.md for the full list.
+
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
 host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
@@ -166,6 +174,13 @@ The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolch
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
 amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
 format tests run everywhere.
+
+Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
+execution) and `runtimeprobe.com` (testdata/runtimeprobe: file I/O, pid,
+NumCPU, monotonic clock, os.Executable, argv/env, wd round-trip). The
+apetest suite runs both against all three origin binaries via the
+FIZZBUZZ_BIN and RUNTIMEPROBE_BIN env vars; the macos-latest runner is
+what actually executes the darwin (Syslib) code paths.
 
 ## Adding Cosmo Support to Standard Library Packages
 
