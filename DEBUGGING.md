@@ -520,3 +520,26 @@ at the wave-5 baseline on linux/amd64): net tests
 TestUnixConnLocalAndRemoteNames/TestUnixgramConnLocalAndRemoteNames
 (autobind abstract-name expectations) and TestBuffers_WriteTo/Copy
 (writev accounting vs /dev/null) fail under GOOS=cosmo on Linux.
+
+**Wave 6 postscript - kill(2) + the macOS CI wedge**: after the feature
+commits were green, three macOS test jobs nondeterministically wedged
+in their first go-test step (the SAME code passed in the runs between
+them). Facts established: the wedge survives runner-side step timeouts
+(timeout-minutes never fired; jobs sat 30+ min), survives run
+cancellation, module prefetch is NOT the cause (a dedicated bounded
+step completes instantly), and it even survived an in-step
+process-group SIGKILL - i.e. a process stuck in an uninterruptible XNU
+kernel state, most plausibly runner-infra weather around first-exec of
+downloaded binaries (loader cc compile / Gatekeeper). Since it is
+unkillable and produced zero logs, the countermeasures make any
+recurrence self-terminating and self-documenting rather than silent:
+kill(2) is now emulated on darwin (dlsym kill + Linux->Apple signal
+table, delivery side only - so os.Process.Kill genuinely works there;
+SIGKILL is kernel-enforced), the probe bounds its exec child itself
+(30s then Kill), apetest wraps every binary in a 3-minute
+exec.CommandContext with WaitDelay, CI wraps go test in
+with-deadline.sh (process-group killer that ABANDONS SIGKILL-immune
+corpses and routes output through a file so a corpse cannot hold the
+runner's log pipe), and every job/step carries an explicit
+timeout-minutes sized from observed green durations. Two consecutive
+fully-hardened runs then passed all 6 jobs.
