@@ -185,3 +185,54 @@ corrupted the binary. '%' is now emitted as \045 (matching apelink.c),
 alongside the existing quote/backslash octal escaping. Regression tests in
 cmd/link/internal/ld/ape_test.go round-trip every byte value through both
 a decoder mirroring printf/ape-m1.c semantics and a real sh printf.
+
+
+## 2026-07-02: Wave 3 - linux/shared runtime + stdlib test enablement
+
+Four bug fixes plus test infrastructure:
+
+1. **EpollEvent ABI (linux/arm64, P0)**: the cosmo port had ONE packed
+   12-byte EpollEvent for both arches, but the kernel packs epoll_event
+   only on x86-64; on arm64 it is 16 bytes with data at offset 8. The
+   kernel wrote 16-byte strides into netpoll's [128]EpollEvent (sized
+   12) - 512-byte stack overrun, and netpoll never saw its eventfd
+   wakeup data. Symptom: timers/sockets hang on arm64 Linux. Fixed
+   per-arch like upstream (internal/runtime/syscall/cosmo defs +
+   syscall ztypes_cosmo_arm64.go). Verified A/B under qemu-aarch64: old
+   layout hangs a timers+TCP-echo program, fixed layout passes. Layout
+   regression test: defs_cosmo_test.go.
+2. **os.Executable**: was "not implemented for cosmo". Now
+   executable_cosmo.go: /proc/self/exe first, Args[0] resolution
+   (aix/openbsd-style) as the no-procfs fallback for macOS hosts.
+   Unblocked the entire os/exec suite (54 fails -> 0), whose helpers
+   spawn via os.Executable.
+3. **StartProcess nil Files entry -> EBADF**: exec_cosmo.go shuffled
+   attr.Files in place, treating a nil *os.File (fd ^uintptr(0)) as a
+   real descriptor, and never initialized nextfd. Adopted upstream
+   exec_linux.go's local []int copy; -1 now means "closed in child".
+4. **Test scaffolding**: cosmo added to nbpipe_pipe2.go +
+   export_pipe2_test.go tags; syscall gained Getpriority/Setpriority,
+   PRIO_*, TCIFLUSH/TCIOFLUSH/TCOFLUSH, TIOCGPGRP/TIOCSPGRP (+
+   export_cosmo_test.go Tcgetpgrp/Tcsetpgrp), IPV6_UNICAST_HOPS,
+   AF_LOCAL. syscall and net test packages now compile and pass.
+
+**Exec wrappers**: misc/cosmo/go_cosmo_{amd64,arm64}_exec - cmd/go picks
+them up from $PATH (FindExecCmd), so plain `GOOS=cosmo go test` works on
+a unix host: assimilated ELF/Mach-O exec directly, pristine APE via
+/bin/sh.
+
+Suite results (cosmo/amd64): os/exec 54->0, os 11->1 (only
+TestExecutableDeleted, which passes once an APE binfmt_misc handler
+`:APE:M::MZqFpD::/bin/sh:` exists - purely a host limitation),
+os/signal 4->0, sync 1->0, syscall/net build-fail->pass, runtime
+build-fail->8 (3 gdb interop, TestUnsafePoint "no symbol section" in
+objdump, TestFakeTime windows-payload faketime compile, 2
+TestGoroutineLeakProfile assimilation races - concurrent FIRST execs of
+one pristine APE corrupt the boot-script parse mid-rewrite; retries
+pass). Zero runtime crashes.
+
+Known follow-ups: sys_cosmo_arm64.s asmdecl (mstart_stub_cosmo, settls
+missing Go declarations - fails explicit `go vet runtime` on arm64);
+APE symtab section for objdump; faketime skip for cosmo; boot-script
+assimilation could flock/copy+rename to close the concurrent-first-exec
+race.
