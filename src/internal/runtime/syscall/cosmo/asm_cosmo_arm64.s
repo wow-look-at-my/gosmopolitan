@@ -182,8 +182,11 @@ darwin_call:
 	CMN	$4095, R0
 	BCC	darwin_success
 
-	// Error case: R0 contains -errno
+	// Error case: R0 contains -errno with an APPLE errno number
+	// (Syslib functions run real Apple libc calls). Translate to the
+	// Linux errno Go expects. Shared helper in runtime/sys_cosmo_arm64.s.
 	NEG	R0, R0			// Make errno positive
+	BL	runtime·cosmo_xlat_errno_r0(SB)
 	MOVD	$-1, R1
 	MOVD	R1, r1+56(FP)
 	MOVD	ZR, r2+64(FP)
