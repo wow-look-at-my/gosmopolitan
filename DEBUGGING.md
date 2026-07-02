@@ -1,5 +1,10 @@
 # ARM64 Cosmo Debugging Log
 
+> Chronological log, oldest first. Early sections (through "Current Status
+> (2025-01-18)") are historical: the crashes and missing syscalls they
+> describe have since been fixed. For the current state, read the newest
+> dated wave entry at the bottom and the status section in CLAUDE.md.
+
 ## Problem
 Building Go programs for `GOOS=cosmo GOARCH=arm64` and running them on macOS ARM64 crashes with SIGSEGV (exit 139).
 
