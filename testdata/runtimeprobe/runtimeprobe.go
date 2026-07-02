@@ -1,10 +1,11 @@
 // Runtimeprobe exercises the runtime and os-package surface that must
-// work on every APE host today: file I/O, process identity, CPU count,
-// the monotonic clock, timers (time.Sleep/Ticker/After and context
-// timeouts, which need a working netpoller), TCP/UDP loopback sockets
-// with deadlines, os.Executable, argv/env, and working-directory
-// syscalls. It deliberately uses NO signals - those are
-// known-unimplemented on macOS hosts until the signal wave lands.
+// work on every APE host today: file I/O, directory listing
+// (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
+// CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
+// context timeouts, which need a working netpoller), TCP/UDP loopback
+// sockets with deadlines, os.Executable, argv/env, and
+// working-directory syscalls. It deliberately uses NO signals - those
+// are known-unimplemented on macOS hosts until the signal wave lands.
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -18,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -66,6 +69,7 @@ func main() {
 	checkSockets()
 	checkExecutable()
 	checkFiles()
+	checkReadDir()
 	// Exec runs LAST on purpose: if the forked child ever wedges (a
 	// nondeterministic macOS CI incident produced kernel-stuck
 	// processes), every other check has already printed its verdict, so
@@ -511,6 +515,84 @@ func checkFiles() {
 		fail("rmdir", "%v", err)
 	} else {
 		ok("rmdir")
+	}
+}
+
+// checkReadDir exercises directory listing - the getdents64 syscall on
+// Linux hosts, emulated via __getdirentries64 on macOS: os.ReadDir
+// names, order and IsDir bits, a filepath.WalkDir traversal, and
+// os.RemoveAll (which itself lists directories to find what to delete).
+func checkReadDir() {
+	dir, err := os.MkdirTemp("", "runtimeprobe-readdir")
+	if err != nil {
+		fail("readdir", "MkdirTemp: %v", err)
+		return
+	}
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			fail("readdir", "WriteFile %s: %v", name, err)
+			return
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		fail("readdir", "Mkdir sub: %v", err)
+		return
+	}
+
+	// os.ReadDir sorts by name, so the result is fully deterministic.
+	want := []struct {
+		name string
+		dir  bool
+	}{{"a.txt", false}, {"b.txt", false}, {"c.txt", false}, {"sub", true}}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		fail("readdir", "%v", err)
+	} else {
+		bad := len(ents) != len(want)
+		for i := 0; !bad && i < len(want); i++ {
+			bad = ents[i].Name() != want[i].name || ents[i].IsDir() != want[i].dir
+		}
+		if bad {
+			var got []string
+			for _, e := range ents {
+				got = append(got, fmt.Sprintf("%s(dir=%v)", e.Name(), e.IsDir()))
+			}
+			fail("readdir", "entries %v, want a.txt b.txt c.txt sub(dir)", got)
+		} else {
+			ok("readdir")
+		}
+	}
+
+	var files, dirs int
+	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			dirs++ // the root and sub
+		} else {
+			files++
+		}
+		return nil
+	})
+	switch {
+	case err != nil:
+		fail("walkdir", "%v", err)
+	case dirs != 2 || files != 3:
+		fail("walkdir", "walked %d dirs and %d files, want 2 and 3", dirs, files)
+	default:
+		ok("walkdir")
+	}
+
+	switch err := os.RemoveAll(dir); {
+	case err != nil:
+		fail("removeall", "%v", err)
+	default:
+		if _, err := os.Stat(dir); err == nil {
+			fail("removeall", "%q still exists", dir)
+		} else {
+			ok("removeall")
+		}
 	}
 }
 

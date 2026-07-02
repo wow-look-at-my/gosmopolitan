@@ -33,6 +33,7 @@ var probeOkChecks = []string{
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
+	"readdir", "walkdir", "removeall",
 	"all",
 }
 
