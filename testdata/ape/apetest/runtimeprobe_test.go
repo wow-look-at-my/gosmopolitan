@@ -28,7 +28,7 @@ var probeOkChecks = []string{
 	"tcplisten", "tcpecho", "deadline", "tcpserver", "udp",
 	"execchild",
 	"executable",
-	"mkdirtemp", "create", "readback", "rename", "statsize",
+	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
 	"all",

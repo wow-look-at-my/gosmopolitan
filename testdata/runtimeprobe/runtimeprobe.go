@@ -417,6 +417,19 @@ func checkFiles() {
 	}
 	ok("mkdirtemp")
 
+	// A directory must stat as a directory. This is the regression
+	// canary for the per-arch Stat_t layout: with the wrong layout the
+	// kernel's mode bits land in other fields and IsDir turns false
+	// (it cannot be caught with a regular file, whose S_IFREG type can
+	// disappear into a zero Mode unnoticed).
+	if fi, err := os.Stat(dir); err != nil {
+		fail("statdir", "%v", err)
+	} else if !fi.IsDir() {
+		fail("statdir", "Mode() = %v, want directory", fi.Mode())
+	} else {
+		ok("statdir")
+	}
+
 	const content = "hello from runtimeprobe\n"
 	name := dir + string(os.PathSeparator) + "probe.txt"
 	f, err := os.Create(name)

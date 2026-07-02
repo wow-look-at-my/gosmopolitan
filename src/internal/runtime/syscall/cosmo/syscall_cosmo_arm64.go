@@ -170,24 +170,27 @@ type linuxTimespec struct {
 	Nsec int64
 }
 
-// linuxStat must match syscall.Stat_t in syscall/ztypes_cosmo_arm64.go
-// (which follows the Linux amd64 layout; see that file).
+// linuxStat must match syscall.Stat_t in syscall/ztypes_cosmo_arm64.go,
+// which follows the arm64 Linux kernel layout (the same buffer is
+// filled by the raw syscall on Linux hosts, so the emulation must write
+// exactly what the kernel would).
 type linuxStat struct {
 	Dev     uint64
 	Ino     uint64
-	Nlink   uint64
 	Mode    uint32
+	Nlink   uint32
 	Uid     uint32
 	Gid     uint32
-	_       int32
 	Rdev    uint64
+	_       uint64
 	Size    int64
-	Blksize int64
+	Blksize int32
+	_       int32
 	Blocks  int64
 	Atim    linuxTimespec
 	Mtim    linuxTimespec
 	Ctim    linuxTimespec
-	_       [3]int64
+	_       [2]int32
 }
 
 // darwinLibcCall6 calls a C function pointer with up to six integer
@@ -420,13 +423,13 @@ func darwinStatConvert(dst *linuxStat, src *appleStat) {
 	*dst = linuxStat{}
 	dst.Dev = uint64(uint32(src.Dev))
 	dst.Ino = src.Ino
-	dst.Nlink = uint64(src.Nlink)
+	dst.Nlink = uint32(src.Nlink)
 	dst.Mode = uint32(src.Mode)
 	dst.Uid = src.Uid
 	dst.Gid = src.Gid
 	dst.Rdev = uint64(uint32(src.Rdev))
 	dst.Size = src.Size
-	dst.Blksize = int64(src.Blksize)
+	dst.Blksize = src.Blksize
 	dst.Blocks = src.Blocks
 	dst.Atim = linuxTimespec(src.Atim)
 	dst.Mtim = linuxTimespec(src.Mtim)
