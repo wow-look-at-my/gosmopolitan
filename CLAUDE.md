@@ -77,10 +77,17 @@ go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
 ```
 
 The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
-image boots on x86-64 Linux and macOS (self-assimilation on Linux, Mach-O dd on
-macOS Intel); the cosmo arm64 image boots on ARM64 Linux (self-assimilation)
-and ARM64 macOS (compiled APE loader, no Rosetta). Windows uses an embedded
-native windows/amd64 PE payload.
+image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
+on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
+Rosetta). Windows uses an embedded native windows/amd64 PE payload.
+
+macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
+2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
+host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
+unit tests and apetest), but the darwin-amd64 runtime side (clone/futex/
+sigaction and friends) is still incomplete, and there is no Intel-mac CI
+runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel
+"works" until the runtime bring-up lands and is verified on real hardware.
 
 ## Architecture
 

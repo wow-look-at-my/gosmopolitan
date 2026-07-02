@@ -36,6 +36,12 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
+Windows (plus ARM64 Linux via qemu during development). macOS Intel support
+is structural so far: the Mach-O assimilation header is verified against the
+XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
+incomplete and untested end to end (no Intel CI runner).
+
 ## Related Projects
 
 - [Go](https://github.com/golang/go) - The official Go programming language repository

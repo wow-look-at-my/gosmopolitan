@@ -236,3 +236,64 @@ missing Go declarations - fails explicit `go vet runtime` on arm64);
 APE symtab section for objdump; faketime skip for cosmo; boot-script
 assimilation could flock/copy+rename to close the concurrent-first-exec
 race.
+
+## 2026-07-02: Wave 2 - macOS Intel Mach-O correctness (structural)
+
+The dd-assimilation Mach-O header (cmd/link/internal/ld/ape.go,
+makeMachoHeader) was provably dead on arrival:
+
+1. **Single R+X segment**: the whole ELF image was mapped with one
+   LC_SEGMENT_64, initprot=maxprot=R+X. The data segment was therefore
+   unwritable, so rt0's first instruction (store to runtime.__hostos)
+   would fault.
+2. **No BSS**: vmsize == filesize, so p_memsz > p_filesz zero-fill
+   (.bss/.noptrbss) was never allocated.
+3. **hostos never set**: LC_UNIXTHREAD zeroed all GPRs, so rt0 read
+   CL=0 = Linux and would issue raw Linux syscalls on XNU (SIGSYS).
+4. **Thread state too long**: 22 quadwords written where
+   x86_THREAD_STATE64 is exactly 21 (16 GPRs + rip + rflags + cs/fs/gs);
+   real bytes (192) exceeded declared cmdsize (184).
+5. **No __PAGEZERO**, and - found while verifying against the actual
+   XNU source (bsd/kern/mach_loader.c) - **nothing mapped file offset
+   0**: parse_machfile unconditionally rejects (LOAD_BADMACHO) any
+   executable in which no R+X segment maps the start of the file
+   (found_header_segment, pass 3).
+
+Fixes (verified structurally; there is no Intel-mac runner):
+
+- makeMachoHeader now derives one LC_SEGMENT_64 per PT_LOAD:
+  fileoff = payload offset + p_offset, vmaddr = p_vaddr, initprot =
+  maxprot = translated p_flags, vmsize = p_memsz page-rounded (BSS).
+  The text segment is extended down to file offset 0 (covering the APE
+  header, like Cosmopolitan's ape.S does) to satisfy
+  found_header_segment; __PAGEZERO covers [0, text vmaddr), i.e. up to
+  0xffff0000 rather than the 4GB default, which XNU accepts (its own
+  requirement is only that the region exist; cosmo's ape.S uses 2MB).
+- LC_UNIXTHREAD: exactly 21 register quadwords, cmdsize == bytes
+  written == 184, rip = ELF e_entry, rcx = 8 so rt0 sees CL = XNU
+  (XNU applies the full LC_UNIXTHREAD register file via
+  thread_setstatus). rsp stays 0 = kernel-allocated stack.
+- Guards (Exitf): page alignment of fileoff/vmaddr (XNU load_segment
+  rejects unaligned), vm-range overlap after rounding (real Go layout
+  abuts exactly: text 0xffff0000+0xc9000 -> rodata 0x1000b9000 ->
+  data 0x1001a3000), entry inside an R+X segment (validentry), header
+  overrunning the APE loader region at 0x8000, memsz < filesz.
+- The header is padded to the dd block size (8); the script's dd count
+  stays derived from the real length (now 504 bytes -> count=63).
+- rt0_cosmo_amd64.s: MOVBLZX CL before storing __hostos - only the low
+  byte is defined by the boot protocol, and the dispatchers CMPL the
+  full 32-bit value against 8.
+
+Verification: cmd/link unit tests build a synthetic 3-load ELF (RX/R/RW
+with memsz>filesz), run the real writeAPEFile pipeline, simulate the dd
+transform, parse with debug/macho, and assert every kernel invariant
+above. apetest (117 tests, was 107) does the same against the real
+fizzbuzz APE, cross-checking the segment table 1:1 against the embedded
+ELF phdrs. Old apetest assumptions (LC_UNIXTHREAD at fixed offset
+0x1068, single segment) were deleted as wrong under the new shape.
+
+Remaining for macOS Intel (out of wave-2 scope): darwin-amd64 runtime
+bring-up - clone/futex/sigaction are ENOSYS stubs, usleep has a DIVQ
+self-division bug, gettimeofday clobbers DX - and real-hardware
+verification. Until then macOS Intel is "structurally correct,
+execution untested".
