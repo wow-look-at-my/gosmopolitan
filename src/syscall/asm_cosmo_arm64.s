@@ -100,4 +100,9 @@ rawnoerr_darwin:
 	// friends). Tail-jump to the Go shim (identical signature), which
 	// routes through the generic cosmo dispatcher and its dlsym-backed
 	// darwin emulation.
+	//
+	// NOTE: this tail JMP is only correct because rawSyscallNoError is
+	// a LEAF (no BL anywhere), so the assembler gives it no stack
+	// frame. If a BL is ever added to this function, convert the JMP
+	// into a framed CALL like Syscall6's darwin slow path.
 	JMP	·rawSyscallNoErrorDarwin(SB)

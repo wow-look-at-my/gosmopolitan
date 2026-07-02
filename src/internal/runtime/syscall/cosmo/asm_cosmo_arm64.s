@@ -37,7 +37,7 @@
 // For arm64, the syscall number goes in R8, arguments in R0-R5.
 // On Darwin ARM64, raw syscalls crash with SIGSYS - we must route
 // through syslib functions instead.
-TEXT ·Syscall6(SB),NOSPLIT,$0-80
+TEXT ·Syscall6(SB),NOSPLIT,$96-80
 	CHECK_DARWIN(syscall6_darwin)
 
 	// Linux path: direct syscall (unchanged)
@@ -105,11 +105,31 @@ syscall6_darwin:
 	CMPW	$SYS_pselect6, R8
 	BEQ	darwin_pselect
 
-	// Not one of the assembly fast paths: tail-jump to the Go slow path
-	// (identical signature), which emulates more syscalls with libc
-	// functions resolved via the Syslib's dlsym. See
-	// syscall_cosmo_arm64.go.
-	JMP	·syscall6SlowDarwin(SB)
+	// Not one of the assembly fast paths: call the Go slow path, which
+	// emulates more syscalls with libc functions resolved via the
+	// Syslib's dlsym. See syscall_cosmo_arm64.go.
+	//
+	// This must be a real CALL with outgoing arguments in this frame.
+	// A tail JMP is NOT safe here: this function contains BL sites, so
+	// the assembler gave it a stack frame, and JMP does not pop that
+	// frame - the target would see every FP offset shifted by 16 and
+	// the caller's stack would be corrupted on return (SIGBUS on
+	// macOS). R0-R5 already hold a1..a6, R8 holds num.
+	MOVD	R8, 8(RSP)
+	MOVD	R0, 16(RSP)
+	MOVD	R1, 24(RSP)
+	MOVD	R2, 32(RSP)
+	MOVD	R3, 40(RSP)
+	MOVD	R4, 48(RSP)
+	MOVD	R5, 56(RSP)
+	CALL	·syscall6SlowDarwin(SB)
+	MOVD	64(RSP), R0
+	MOVD	72(RSP), R1
+	MOVD	80(RSP), R2
+	MOVD	R0, r1+56(FP)
+	MOVD	R1, r2+64(FP)
+	MOVD	R2, errno+72(FP)
+	RET
 
 	// No Syslib, or the required Syslib entry is missing - return ENOSYS
 darwin_enosys:
