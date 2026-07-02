@@ -6,18 +6,20 @@
 
 package cosmo
 
+import "unsafe"
+
 // Darwin (macOS ARM64) syscall emulation.
 //
 // On macOS the APE loader hands the runtime a Syslib table of Apple libc
 // functions; raw SVC syscalls are forbidden by XNU. The assembly fast path
 // in asm_cosmo_arm64.s dispatches the hot syscalls straight to Syslib
-// entries. Everything else lands here (via a tail jump with an identical
-// signature) and is emulated with libc functions the runtime resolved
+// entries. Everything else lands here (via a framed CALL from the
+// dispatcher) and is emulated with libc functions the runtime resolved
 // through the Syslib's dlsym at startup (see runtime.osArchInit).
 //
 // Results follow the Linux syscall convention the callers expect:
-// (r1, r2, errno) with a positive LINUX errno number. Apple errnos from
-// libc are translated with the shared table in runtime/sys_cosmo_arm64.s.
+// (r1, r2, errno) with a positive LINUX errno number. Apple errnos are
+// translated with the shared table in runtime/sys_cosmo_arm64.s.
 
 // DarwinFns holds host libc function pointers resolved by the runtime at
 // startup on macOS. A zero field means the symbol was unavailable; the
@@ -25,16 +27,28 @@ package cosmo
 // silently misbehaving.
 type DarwinFns struct {
 	// Resolved via Syslib dlsym(RTLD_DEFAULT, ...).
-	Getpid  uintptr
-	Getppid uintptr
-	Getuid  uintptr
-	Geteuid uintptr
-	Getgid  uintptr
-	Getegid uintptr
-	Umask   uintptr
+	Getpid     uintptr
+	Getppid    uintptr
+	Getuid     uintptr
+	Geteuid    uintptr
+	Getgid     uintptr
+	Getegid    uintptr
+	Umask      uintptr
+	Fcntl      uintptr
+	Mkdirat    uintptr
+	Unlinkat   uintptr
+	Renameat   uintptr
+	Fstatat    uintptr
+	Fstat      uintptr
+	Getcwd     uintptr
+	Chdir      uintptr
+	Faccessat  uintptr
+	Readlinkat uintptr
+	Error      uintptr // int *__error(void): Apple's errno location
 
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
+	Getentropy  uintptr // Syslib v5+; sysret-wrapped (-errno on failure)
 }
 
 var darwinFns DarwinFns
@@ -48,17 +62,102 @@ func SetDarwinFns(f *DarwinFns) {
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
 // fast-path numbers live in defs_cosmo_arm64.go.
 const (
-	sysUMASK   = 166
-	sysGETPPID = 173
-	sysGETUID  = 174
-	sysGETEUID = 175
-	sysGETGID  = 176
-	sysGETEGID = 177
+	sysGETCWD     = 17
+	sysMKDIRAT    = 34
+	sysUNLINKAT   = 35
+	sysRENAMEAT   = 38
+	sysFACCESSAT  = 48
+	sysCHDIR      = 49
+	sysREADLINKAT = 78
+	sysNEWFSTATAT = 79
+	sysFSTAT      = 80
+	sysUMASK      = 166
+	sysGETPPID    = 173
+	sysGETUID     = 174
+	sysGETEUID    = 175
+	sysGETGID     = 176
+	sysGETEGID    = 177
+	sysRENAMEAT2  = 276
+	sysGETRANDOM  = 278
 )
 
+// Errno values (Linux numbering) produced by the emulation itself.
 const (
-	darwinENOSYS = 38 // Linux ENOSYS
+	darwinEIO    = 5
+	darwinEINVAL = 22
+	darwinENOSYS = 38
 )
+
+// Linux AT_* values as passed by the syscall package.
+const (
+	linuxAT_FDCWD            = -100
+	linuxAT_SYMLINK_NOFOLLOW = 0x100
+	linuxAT_REMOVEDIR        = 0x200
+	linuxAT_EMPTY_PATH       = 0x1000
+)
+
+// Apple equivalents.
+const (
+	appleAT_FDCWD            = -2
+	appleAT_SYMLINK_NOFOLLOW = 0x20
+	appleAT_REMOVEDIR        = 0x80
+)
+
+// appleTimespec matches Apple's struct timespec on arm64.
+type appleTimespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+// appleStat matches Apple's struct stat (__DARWIN_STRUCT_STAT64) on
+// arm64: 144 bytes.
+type appleStat struct {
+	Dev      int32
+	Mode     uint16
+	Nlink    uint16
+	Ino      uint64
+	Uid      uint32
+	Gid      uint32
+	Rdev     int32
+	_        int32
+	Atim     appleTimespec
+	Mtim     appleTimespec
+	Ctim     appleTimespec
+	Birthtim appleTimespec
+	Size     int64
+	Blocks   int64
+	Blksize  int32
+	Flags    uint32
+	Gen      uint32
+	Lspare   int32
+	Qspare   [2]int64
+}
+
+// linuxTimespec matches syscall.Timespec for GOOS=cosmo.
+type linuxTimespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+// linuxStat must match syscall.Stat_t in syscall/ztypes_cosmo_arm64.go
+// (which follows the Linux amd64 layout; see that file).
+type linuxStat struct {
+	Dev     uint64
+	Ino     uint64
+	Nlink   uint64
+	Mode    uint32
+	Uid     uint32
+	Gid     uint32
+	_       int32
+	Rdev    uint64
+	Size    int64
+	Blksize int64
+	Blocks  int64
+	Atim    linuxTimespec
+	Mtim    linuxTimespec
+	Ctim    linuxTimespec
+	_       [3]int64
+}
 
 // darwinLibcCall6 calls a C function pointer with up to six integer
 // arguments following the Apple ARM64 ABI. Thin tail jump to
@@ -67,13 +166,80 @@ const (
 //go:noescape
 func darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
 
-// syscall6SlowDarwin emulates Linux syscalls that the assembly fast path
-// does not handle, using dlsym-resolved Apple libc functions. It is the
-// tail-jump target of Syscall6's darwin path, so it must keep exactly
-// Syscall6's signature.
+// xlatErrnoDarwin translates a positive Apple errno to the Linux value.
+// Thin wrapper over runtime.cosmo_xlat_errno_r0 (asm) so the byte table
+// has a single definition.
 //
-// nosplit so the whole Syscall6 path stays safe in a forked child (no
-// stack growth); the linker verifies the nosplit stack bound.
+//go:noescape
+func xlatErrnoDarwin(errno uintptr) uintptr
+
+// darwinErrno fetches the calling thread's errno via Apple's __error()
+// and translates it to Linux numbering. Must be called immediately after
+// a failed libc call, before anything else can clobber errno.
+//
+//go:nosplit
+func darwinErrno() uintptr {
+	if darwinFns.Error == 0 {
+		// No way to read errno; report a generic I/O error rather
+		// than inventing a specific cause.
+		return darwinEIO
+	}
+	p := darwinLibcCall6(darwinFns.Error, 0, 0, 0, 0, 0, 0)
+	if p == 0 {
+		return darwinEIO
+	}
+	e := uintptr(*(*int32)(unsafe.Pointer(p)))
+	return xlatErrnoDarwin(e)
+}
+
+// darwinXlatDirfd converts the Linux AT_FDCWD sentinel (-100) to Apple's
+// (-2). Other descriptors pass through unchanged.
+//
+//go:nosplit
+func darwinXlatDirfd(fd uintptr) uintptr {
+	if int32(fd) == linuxAT_FDCWD {
+		return ^uintptr(1) // appleAT_FDCWD (-2) as a 64-bit bit pattern
+	}
+	return fd
+}
+
+// darwinCall runs a dlsym-resolved libc function that reports failure by
+// returning -1 with errno set, shaping the result for Syscall6.
+//
+//go:nosplit
+func darwinCall(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
+	if fn == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	r := darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6)
+	if int64(r) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	return r, 0, 0
+}
+
+// darwinCallNoError invokes a libc function that cannot fail (getpid and
+// friends) and shapes the result for Syscall6.
+//
+//go:nosplit
+func darwinCallNoError(fn uintptr) (r1, r2, errno uintptr) {
+	if fn == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	return darwinLibcCall6(fn, 0, 0, 0, 0, 0, 0), 0, 0
+}
+
+// syscall6SlowDarwin emulates Linux syscalls that the assembly fast path
+// does not handle, using dlsym-resolved Apple libc functions. It is
+// called from Syscall6's darwin path, so it must keep exactly Syscall6's
+// signature.
+//
+// The dispatch spine and every syscall a forked child can reach (the
+// id family, umask, fcntl, chdir) are nosplit so that path never grows
+// the stack; the linker verifies the bound. The stat family, getcwd
+// and getrandom are deliberately NOT nosplit - they are never invoked
+// between fork and exec, and their Apple stat buffers would blow the
+// nosplit budget.
 //
 //go:nosplit
 func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -101,19 +267,233 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		// umask cannot fail; mode bits have identical values on
 		// Linux and Apple.
 		return darwinLibcCall6(darwinFns.Umask, a1, 0, 0, 0, 0, 0), 0, 0
+
+	case sysGETCWD:
+		return darwinGetcwd(a1, a2)
+	case sysMKDIRAT:
+		// Argument layouts agree; mode bits are identical.
+		return darwinCall(darwinFns.Mkdirat, darwinXlatDirfd(a1), a2, a3, 0, 0, 0)
+	case sysUNLINKAT:
+		flags := a3
+		if flags&^uintptr(linuxAT_REMOVEDIR) != 0 {
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		if flags&linuxAT_REMOVEDIR != 0 {
+			flags = appleAT_REMOVEDIR
+		}
+		return darwinCall(darwinFns.Unlinkat, darwinXlatDirfd(a1), a2, flags, 0, 0, 0)
+	case sysRENAMEAT:
+		return darwinCall(darwinFns.Renameat, darwinXlatDirfd(a1), a2, darwinXlatDirfd(a3), a4, 0, 0)
+	case sysRENAMEAT2:
+		// Plain renames map to renameat; RENAME_NOREPLACE and friends
+		// have no Apple equivalent (Linux likewise reports EINVAL on
+		// filesystems without renameat2 support).
+		if a5 != 0 {
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		return darwinCall(darwinFns.Renameat, darwinXlatDirfd(a1), a2, darwinXlatDirfd(a3), a4, 0, 0)
+	case sysFACCESSAT:
+		// The Linux faccessat syscall has no flags argument; Apple's
+		// libc faccessat takes one - pass 0. F_OK/X_OK/W_OK/R_OK
+		// values are identical.
+		return darwinCall(darwinFns.Faccessat, darwinXlatDirfd(a1), a2, a3, 0, 0, 0)
+	case sysCHDIR:
+		return darwinCall(darwinFns.Chdir, a1, 0, 0, 0, 0, 0)
+	case sysREADLINKAT:
+		return darwinCall(darwinFns.Readlinkat, darwinXlatDirfd(a1), a2, a3, a4, 0, 0)
+	case sysNEWFSTATAT:
+		return darwinFstatat(a1, a2, a3, a4)
+	case sysFSTAT:
+		return darwinFstat(a1, a2)
+	case SYS_FCNTL:
+		return darwinFcntl(a1, a2, a3)
+	case sysGETRANDOM:
+		return darwinGetrandom(a1, a2)
 	}
 	// Not emulated. Return ENOSYS so the failure is visible rather than
 	// pretending the call succeeded.
 	return ^uintptr(0), 0, darwinENOSYS
 }
 
-// darwinCallNoError invokes a libc function that cannot fail (getpid and
-// friends) and shapes the result for Syscall6.
+// darwinGetcwd emulates the Linux getcwd syscall, which returns the
+// number of bytes written including the trailing NUL, on top of Apple's
+// libc getcwd, which returns the buffer pointer or NULL.
 //
-//go:nosplit
-func darwinCallNoError(fn uintptr) (r1, r2, errno uintptr) {
-	if fn == 0 {
+func darwinGetcwd(buf, size uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Getcwd == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
 	}
-	return darwinLibcCall6(fn, 0, 0, 0, 0, 0, 0), 0, 0
+	if buf == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	r := darwinLibcCall6(darwinFns.Getcwd, buf, size, 0, 0, 0, 0)
+	if r == 0 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	n := uintptr(0)
+	for n < size && *(*byte)(unsafe.Pointer(buf + n)) != 0 {
+		n++
+	}
+	if n >= size {
+		return ^uintptr(0), 0, darwinEINVAL // no NUL: shouldn't happen
+	}
+	return n + 1, 0, 0
+}
+
+// darwinStatConvert fills a Go (Linux-layout) Stat_t from an Apple stat.
+// File type and permission bits share the same encoding on both systems,
+// so Mode passes through. Dev/Rdev keep Apple's device encoding; nothing
+// in the standard library depends on the major/minor split.
+//
+//go:nosplit
+func darwinStatConvert(dst *linuxStat, src *appleStat) {
+	*dst = linuxStat{}
+	dst.Dev = uint64(uint32(src.Dev))
+	dst.Ino = src.Ino
+	dst.Nlink = uint64(src.Nlink)
+	dst.Mode = uint32(src.Mode)
+	dst.Uid = src.Uid
+	dst.Gid = src.Gid
+	dst.Rdev = uint64(uint32(src.Rdev))
+	dst.Size = src.Size
+	dst.Blksize = int64(src.Blksize)
+	dst.Blocks = src.Blocks
+	dst.Atim = linuxTimespec(src.Atim)
+	dst.Mtim = linuxTimespec(src.Mtim)
+	dst.Ctim = linuxTimespec(src.Ctim)
+}
+
+func darwinFstatat(dirfd, path, statbuf, flags uintptr) (r1, r2, errno uintptr) {
+	if statbuf == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	var ast appleStat
+	if flags&linuxAT_EMPTY_PATH != 0 && (path == 0 || *(*byte)(unsafe.Pointer(path)) == 0) {
+		// fstatat(fd, "", AT_EMPTY_PATH) means fstat(fd) on Linux;
+		// Apple has no AT_EMPTY_PATH, so call fstat directly.
+		if darwinFns.Fstat == 0 {
+			return ^uintptr(0), 0, darwinENOSYS
+		}
+		r := darwinLibcCall6(darwinFns.Fstat, dirfd, uintptr(unsafe.Pointer(&ast)), 0, 0, 0, 0)
+		if int64(r) == -1 {
+			return ^uintptr(0), 0, darwinErrno()
+		}
+		darwinStatConvert((*linuxStat)(unsafe.Pointer(statbuf)), &ast)
+		return 0, 0, 0
+	}
+	if flags&^uintptr(linuxAT_SYMLINK_NOFOLLOW|linuxAT_EMPTY_PATH) != 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	aflags := uintptr(0)
+	if flags&linuxAT_SYMLINK_NOFOLLOW != 0 {
+		aflags |= appleAT_SYMLINK_NOFOLLOW
+	}
+	if darwinFns.Fstatat == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	r := darwinLibcCall6(darwinFns.Fstatat, darwinXlatDirfd(dirfd), path, uintptr(unsafe.Pointer(&ast)), aflags, 0, 0)
+	if int64(r) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	darwinStatConvert((*linuxStat)(unsafe.Pointer(statbuf)), &ast)
+	return 0, 0, 0
+}
+
+func darwinFstat(fd, statbuf uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Fstat == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if statbuf == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	var ast appleStat
+	r := darwinLibcCall6(darwinFns.Fstat, fd, uintptr(unsafe.Pointer(&ast)), 0, 0, 0, 0)
+	if int64(r) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	darwinStatConvert((*linuxStat)(unsafe.Pointer(statbuf)), &ast)
+	return 0, 0, 0
+}
+
+// fcntl commands F_DUPFD..F_SETFL share values 0..4 on Linux and Apple;
+// F_DUPFD_CLOEXEC and the O_ status flags differ.
+const (
+	fcntlF_DUPFD = 0
+	fcntlF_GETFD = 1
+	fcntlF_SETFD = 2
+	fcntlF_GETFL = 3
+	fcntlF_SETFL = 4
+
+	linuxF_DUPFD_CLOEXEC = 1030
+	appleF_DUPFD_CLOEXEC = 67
+
+	linuxO_NONBLOCK = 0x800
+	appleO_NONBLOCK = 0x4
+	linuxO_APPEND   = 0x400
+	appleO_APPEND   = 0x8
+)
+
+//go:nosplit
+func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Fcntl == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	switch cmd {
+	case fcntlF_DUPFD, fcntlF_GETFD, fcntlF_SETFD:
+		// Identical commands; FD_CLOEXEC is 1 on both systems.
+	case fcntlF_GETFL:
+		r1, r2, errno = darwinCall(darwinFns.Fcntl, fd, cmd, 0, 0, 0, 0)
+		if errno == 0 {
+			// Translate returned status flags Apple -> Linux.
+			out := r1 & 3 // access mode bits agree
+			if r1&appleO_NONBLOCK != 0 {
+				out |= linuxO_NONBLOCK
+			}
+			if r1&appleO_APPEND != 0 {
+				out |= linuxO_APPEND
+			}
+			r1 = out
+		}
+		return r1, r2, errno
+	case fcntlF_SETFL:
+		aarg := arg & 3
+		if arg&linuxO_NONBLOCK != 0 {
+			aarg |= appleO_NONBLOCK
+		}
+		if arg&linuxO_APPEND != 0 {
+			aarg |= appleO_APPEND
+		}
+		arg = aarg
+	case linuxF_DUPFD_CLOEXEC:
+		cmd = appleF_DUPFD_CLOEXEC
+	default:
+		// Locking, owner and lease commands have incompatible
+		// argument structures; refuse rather than corrupt.
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	return darwinCall(darwinFns.Fcntl, fd, cmd, arg, 0, 0, 0)
+}
+
+// darwinGetrandom emulates getrandom(2) with the Syslib's getentropy,
+// which is limited to 256 bytes per call and never blocks (the flags
+// argument is therefore ignored). getentropy is sysret-wrapped by the
+// loader: it returns -errno (Apple numbering) on failure.
+//
+func darwinGetrandom(buf, n uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Getentropy == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	var off uintptr
+	for off < n {
+		chunk := n - off
+		if chunk > 256 {
+			chunk = 256
+		}
+		r := int64(darwinLibcCall6(darwinFns.Getentropy, buf+off, chunk, 0, 0, 0, 0))
+		if r < 0 {
+			return ^uintptr(0), 0, xlatErrnoDarwin(uintptr(-r))
+		}
+		off += chunk
+	}
+	return n, 0, 0
 }

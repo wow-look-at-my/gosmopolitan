@@ -230,3 +230,12 @@ darwin_success:
 // signature and frame layout).
 TEXT ·darwinLibcCall6(SB),NOSPLIT,$0-64
 	JMP	runtime·cosmoLibcCall6(SB)
+
+// func xlatErrnoDarwin(errno uintptr) uintptr
+// FP-args wrapper around the register-based shared translation helper so
+// the Apple->Linux errno table has a single definition (in the runtime).
+TEXT ·xlatErrnoDarwin(SB),NOSPLIT,$0-16
+	MOVD	errno+0(FP), R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+8(FP)
+	RET

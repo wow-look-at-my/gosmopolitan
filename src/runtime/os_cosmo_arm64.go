@@ -171,14 +171,29 @@ func cosmoDlsym(name *byte) uintptr {
 var cosmoDarwinGetpidFn uintptr
 
 var (
-	dlsymNameGetpid  = []byte("getpid\x00")
-	dlsymNameGetppid = []byte("getppid\x00")
-	dlsymNameGetuid  = []byte("getuid\x00")
-	dlsymNameGeteuid = []byte("geteuid\x00")
-	dlsymNameGetgid  = []byte("getgid\x00")
-	dlsymNameGetegid = []byte("getegid\x00")
-	dlsymNameUmask   = []byte("umask\x00")
+	dlsymNameGetpid     = []byte("getpid\x00")
+	dlsymNameGetppid    = []byte("getppid\x00")
+	dlsymNameGetuid     = []byte("getuid\x00")
+	dlsymNameGeteuid    = []byte("geteuid\x00")
+	dlsymNameGetgid     = []byte("getgid\x00")
+	dlsymNameGetegid    = []byte("getegid\x00")
+	dlsymNameUmask      = []byte("umask\x00")
+	dlsymNameFcntl      = []byte("fcntl\x00")
+	dlsymNameMkdirat    = []byte("mkdirat\x00")
+	dlsymNameUnlinkat   = []byte("unlinkat\x00")
+	dlsymNameRenameat   = []byte("renameat\x00")
+	dlsymNameFstatat    = []byte("fstatat\x00")
+	dlsymNameFstat      = []byte("fstat\x00")
+	dlsymNameGetcwd     = []byte("getcwd\x00")
+	dlsymNameChdir      = []byte("chdir\x00")
+	dlsymNameFaccessat  = []byte("faccessat\x00")
+	dlsymNameReadlinkat = []byte("readlinkat\x00")
+	dlsymNameError      = []byte("__error\x00")
 )
+
+// cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by
+// the runtime's own fcntl on darwin. Zero when unresolved.
+var cosmoDarwinFcntlFn uintptr
 
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
@@ -189,6 +204,7 @@ func osArchInit() {
 		return
 	}
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
+	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:      cosmoDarwinGetpidFn,
 		Getppid:     cosmoDlsym(&dlsymNameGetppid[0]),
@@ -197,6 +213,28 @@ func osArchInit() {
 		Getgid:      cosmoDlsym(&dlsymNameGetgid[0]),
 		Getegid:     cosmoDlsym(&dlsymNameGetegid[0]),
 		Umask:       cosmoDlsym(&dlsymNameUmask[0]),
+		Fcntl:       cosmoDarwinFcntlFn,
+		Mkdirat:     cosmoDlsym(&dlsymNameMkdirat[0]),
+		Unlinkat:    cosmoDlsym(&dlsymNameUnlinkat[0]),
+		Renameat:    cosmoDlsym(&dlsymNameRenameat[0]),
+		Fstatat:     cosmoDlsym(&dlsymNameFstatat[0]),
+		Fstat:       cosmoDlsym(&dlsymNameFstat[0]),
+		Getcwd:      cosmoDlsym(&dlsymNameGetcwd[0]),
+		Chdir:       cosmoDlsym(&dlsymNameChdir[0]),
+		Faccessat:   cosmoDlsym(&dlsymNameFaccessat[0]),
+		Readlinkat:  cosmoDlsym(&dlsymNameReadlinkat[0]),
+		Error:       cosmoDlsym(&dlsymNameError[0]),
 		PthreadSelf: __syslib.pthread_self,
+		Getentropy:  cosmoSyslibGetentropy(),
 	})
+}
+
+// cosmoSyslibGetentropy returns the Syslib getentropy pointer, present
+// since Syslib v5 (2023-10-09).
+func cosmoSyslibGetentropy() uintptr {
+	lib := __syslib
+	if lib == nil || lib.version < 5 {
+		return 0
+	}
+	return lib.getentropy
 }
