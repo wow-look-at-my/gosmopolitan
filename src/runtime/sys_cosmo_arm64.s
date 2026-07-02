@@ -338,6 +338,15 @@ write1_darwin:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	// The Syslib write is sysret-wrapped: failure comes back as -errno
+	// with APPLE numbering, but callers (the darwin netpoller's pipe
+	// wakeups) compare against LINUX errnos (-EINTR, -EAGAIN).
+	CMN	$4095, R0
+	BCC	write1_darwin_done
+	NEG	R0, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	NEG	R0, R0
+write1_darwin_done:
 	MOVW	R0, ret+24(FP)
 	RET
 
@@ -360,6 +369,14 @@ read_darwin:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	// Translate a -errno failure from Apple to Linux numbering (see
+	// write1_darwin).
+	CMN	$4095, R0
+	BCC	read_darwin_done
+	NEG	R0, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	NEG	R0, R0
+read_darwin_done:
 	MOVW	R0, ret+24(FP)
 	RET
 

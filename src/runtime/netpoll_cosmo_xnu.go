@@ -105,11 +105,33 @@ func netpollIsPollDescriptorDarwin(fd uintptr) bool {
 // netpollwakeupDarwin writes on xnuWrwake to wake up a poll blocked in
 // netpollDarwin before any changes to the pollfd array. Callers hold
 // xnuMtxpoll; the byte is coalesced until the poller observes it.
+//
+// The write must not be fire-and-forget: xnuPendingUpdates suppresses
+// every later wakeup attempt until the poller resets it, so a silently
+// lost byte here would leave the poller asleep (for its full timeout,
+// or forever with delay < 0) while the mutator queues on xnuMtxset.
+// EINTR is real once signal delivery is live on macOS - async
+// preemption's SIGURG interrupts libc calls - so retry it; EAGAIN
+// means 64KiB of wakeup bytes are already queued and the poller
+// cannot miss them.
 func netpollwakeupDarwin() {
 	if xnuPendingUpdates == 0 {
 		xnuPendingUpdates = 1
 		b := [1]byte{0}
-		write(uintptr(xnuWrwake), unsafe.Pointer(&b[0]), 1)
+		for {
+			n := write(uintptr(xnuWrwake), unsafe.Pointer(&b[0]), 1)
+			if n == 1 {
+				break
+			}
+			if n == -_EINTR {
+				continue
+			}
+			if n == -_EAGAIN {
+				break
+			}
+			println("runtime: netpollwakeup write failed with", -n)
+			throw("runtime: netpollwakeup write failed")
+		}
 	}
 }
 
@@ -170,9 +192,29 @@ func netpollarmDarwin(pd *pollDesc, mode int) {
 
 // netpollBreakDarwin interrupts a poll. The netpollWakeSig deduplication
 // happens in the shared netpollBreak (netpoll_cosmo.go) before dispatch.
+//
+// Like the epoll path's eventfd write, this write must retry on EINTR:
+// the caller already won the netpollWakeSig CAS, so a lost byte would
+// suppress every subsequent netpollBreak (they all CAS-fail) while the
+// poller sleeps through its timeout - timer wakeups would stall until
+// the poll's own deadline. EAGAIN (pipe full) is success: bytes are
+// already pending.
 func netpollBreakDarwin() {
 	b := [1]byte{0}
-	write(uintptr(xnuWrwake), unsafe.Pointer(&b[0]), 1)
+	for {
+		n := write(uintptr(xnuWrwake), unsafe.Pointer(&b[0]), 1)
+		if n == 1 {
+			break
+		}
+		if n == -_EINTR {
+			continue
+		}
+		if n == -_EAGAIN {
+			return
+		}
+		println("runtime: netpollBreak write failed with", -n)
+		throw("runtime: netpollBreak write failed")
+	}
 }
 
 // netpollDarwin checks for ready network connections.
@@ -235,6 +277,11 @@ retry:
 			// A netpollwakeup could be picked up by a
 			// non-blocking poll. Only clear the wakeup
 			// if blocking.
+			//
+			// An EINTR mid-drain (!= 1) exits the loop with bytes
+			// possibly left in the pipe; that is self-healing - the
+			// next poll wakes immediately and drains again - so no
+			// retry is needed here, unlike the write side.
 			var b [1]byte
 			for read(xnuRdwake, noescape(unsafe.Pointer(&b[0])), 1) == 1 {
 			}
