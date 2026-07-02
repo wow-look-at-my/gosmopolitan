@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // APE (Actually Portable Executable) format implementation
@@ -21,7 +22,9 @@ import (
 // APE creates polyglot executables that work on multiple OSes:
 // - Windows: Uses PE header starting with MZ magic
 // - Linux: Uses embedded ELF header (encoded as octal in printf)
-// - macOS: Uses dd command to copy Mach-O header backward (ARM64 uses Rosetta2)
+// - macOS x86-64: Uses dd command to copy Mach-O header backward
+// - macOS ARM64: Runs the arm64 payload natively via the embedded APE
+//   loader source (compiled with cc on first run); no Rosetta involved
 // - Windows shell (MSYS/Cygwin): Delegates to cmd.exe for PE execution
 
 const (
@@ -29,10 +32,6 @@ const (
 	// Using 64KB for Windows allocation granularity compatibility
 	apeHeaderSize   = 65536
 	apeScriptOffset = 0x800
-
-	// Page sizes
-	pageSize4K  = 4096
-	pageSize16K = 16384
 
 	// ELF constants
 	elfMagic        = "\x7fELF"
@@ -295,10 +294,10 @@ func makeAPEHeaderForPayloads(payloads []*apePayload, win *pePayload) []byte {
 	// uses the first one with an aarch64 machine type.
 	var amdBoot, armBoot []byte
 	if amd != nil {
-		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, pageSize4K, sys.AMD64)
+		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, sys.AMD64)
 	}
 	if arm != nil {
-		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, pageSize16K, sys.ARM64)
+		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, sys.ARM64)
 	}
 
 	// Create Mach-O header for macOS x86-64
@@ -469,8 +468,8 @@ exit 1
 	// Replace APE loader offset/size placeholders for the macOS ARM64 path
 	if arm != nil && apeLoaderSize > 0 {
 		s := string(scriptBytes)
-		s = replaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
-		s = replaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
+		s = strings.ReplaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
+		s = strings.ReplaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
 		scriptBytes = []byte(s)
 	}
 
@@ -550,7 +549,7 @@ exit 1
 
 // makeEmbeddedElfHeader creates an ELF header for embedding in the APE printf statement.
 // This header points to the actual ELF segments in the APE file.
-func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, pageSize uint64, arch sys.ArchFamily) []byte {
+func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily) []byte {
 	// Create a minimal ELF header (64 bytes for ELF64)
 	hdr := make([]byte, 64)
 
@@ -822,28 +821,6 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 		header[0x201] = 0xC0
 		header[0x202] = 0xC3 // ret
 	}
-}
-
-// replaceAll is a simple string replacement helper
-func replaceAll(s, old, new string) string {
-	result := s
-	for {
-		i := indexOf(result, old)
-		if i < 0 {
-			break
-		}
-		result = result[:i] + new + result[i+len(old):]
-	}
-	return result
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 //go:embed ape-m1.c.gz
