@@ -151,6 +151,15 @@ darwin_nanosleep:
 	MOVD	32(R10), R12		// syslib.nanosleep
 	B	darwin_call
 darwin_clock_gettime:
+	// Translate the Linux clockid in a1 to Apple's numbering:
+	// CLOCK_REALTIME is 0 on both; Linux CLOCK_MONOTONIC (1) is Apple
+	// CLOCK_MONOTONIC (6); Linux and Apple CLOCK_MONOTONIC_RAW agree (4).
+	// Other clockids pass through and may fail with EINVAL, which is
+	// more honest than silently reading the wrong clock.
+	CMP	$1, R0
+	BNE	darwin_clock_gettime_xlated
+	MOVD	$6, R0			// Apple CLOCK_MONOTONIC
+darwin_clock_gettime_xlated:
 	MOVD	24(R10), R12		// syslib.clock_gettime
 	B	darwin_call
 darwin_sigaction:

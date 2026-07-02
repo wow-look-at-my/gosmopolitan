@@ -18,6 +18,11 @@
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+// Apple clockids differ from Linux. On Apple: CLOCK_REALTIME is 0 (same as
+// Linux), CLOCK_MONOTONIC is 6, CLOCK_MONOTONIC_RAW is 4, CLOCK_UPTIME_RAW
+// is 8. Passing the Linux value 1 to Apple clock_gettime asks for an
+// undefined clockid and fails with EINVAL.
+#define CLOCK_MONOTONIC_APPLE 6
 
 // Host OS indicators (must match os_cosmo_arm64.go)
 #define HOSTXNU 8
@@ -589,11 +594,29 @@ nanotime_noswitch:
 	B	nanotime_finish
 
 nanotime_darwin:
-	// macOS path: call Syslib clock_gettime
+	// macOS path: call Syslib clock_gettime with the APPLE monotonic
+	// clockid. Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC
+	// semantics most closely: monotonic since boot and NTP-slewed (it
+	// pauses during deep sleep on macOS, which Linux's also may).
+	// Upstream darwin Go uses clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+	// via libc, but Syslib only exports clock_gettime.
+	// Zero the result slots first so that even a double failure below
+	// yields 0 rather than uninitialized stack memory.
+	MOVD	ZR, 0(RSP)
+	MOVD	ZR, 8(RSP)
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	24(R9), R12
-	MOVW	$CLOCK_MONOTONIC, R0
+	MOVW	$CLOCK_MONOTONIC_APPLE, R0
 	MOVD	RSP, R1		// timespec pointer
+	BL	(R12)
+	CBZ	R0, nanotime_finish
+	// clock_gettime(CLOCK_MONOTONIC) failed (should not happen on any
+	// supported macOS). Fall back to CLOCK_REALTIME (0 on both Linux
+	// and Apple) rather than returning uninitialized stack values.
+	MOVD	runtime·__syslib(SB), R9
+	MOVD	24(R9), R12
+	MOVW	$CLOCK_REALTIME, R0
+	MOVD	RSP, R1
 	BL	(R12)
 
 nanotime_finish:
