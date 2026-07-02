@@ -198,8 +198,13 @@ var (
 	dlsymNameChdir      = []byte("chdir\x00")
 	dlsymNameFaccessat  = []byte("faccessat\x00")
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
-	dlsymNameError      = []byte("__error\x00")
-	dlsymNamePoll       = []byte("poll\x00")
+	// Apple's raw directory-read syscall wrapper (what readdir uses
+	// internally). Exported from libSystem; the C symbol is
+	// __getdirentries64 (dlsym takes the name without the Mach-O
+	// leading underscore, exactly like __error below).
+	dlsymNameGetdirentries = []byte("__getdirentries64\x00")
+	dlsymNameError         = []byte("__error\x00")
+	dlsymNamePoll          = []byte("poll\x00")
 
 	dlsymNameSocket      = []byte("socket\x00")
 	dlsymNameSocketpair  = []byte("socketpair\x00")
@@ -252,47 +257,48 @@ func osArchInit() {
 	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])
 	cosmoDarwinPollFn = cosmoDlsym(&dlsymNamePoll[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
-		Getpid:      cosmoDarwinGetpidFn,
-		Getppid:     cosmoDlsym(&dlsymNameGetppid[0]),
-		Getuid:      cosmoDlsym(&dlsymNameGetuid[0]),
-		Geteuid:     cosmoDlsym(&dlsymNameGeteuid[0]),
-		Getgid:      cosmoDlsym(&dlsymNameGetgid[0]),
-		Getegid:     cosmoDlsym(&dlsymNameGetegid[0]),
-		Umask:       cosmoDlsym(&dlsymNameUmask[0]),
-		Fcntl:       cosmoDarwinFcntlFn,
-		Mkdirat:     cosmoDlsym(&dlsymNameMkdirat[0]),
-		Unlinkat:    cosmoDlsym(&dlsymNameUnlinkat[0]),
-		Renameat:    cosmoDlsym(&dlsymNameRenameat[0]),
-		Fstatat:     cosmoDlsym(&dlsymNameFstatat[0]),
-		Fstat:       cosmoDlsym(&dlsymNameFstat[0]),
-		Getcwd:      cosmoDlsym(&dlsymNameGetcwd[0]),
-		Chdir:       cosmoDlsym(&dlsymNameChdir[0]),
-		Faccessat:   cosmoDlsym(&dlsymNameFaccessat[0]),
-		Readlinkat:  cosmoDlsym(&dlsymNameReadlinkat[0]),
-		Error:       cosmoDarwinErrorFn,
-		Socket:      cosmoDlsym(&dlsymNameSocket[0]),
-		Socketpair:  cosmoDlsym(&dlsymNameSocketpair[0]),
-		Bind:        cosmoDlsym(&dlsymNameBind[0]),
-		Listen:      cosmoDlsym(&dlsymNameListen[0]),
-		Accept:      cosmoDlsym(&dlsymNameAccept[0]),
-		Connect:     cosmoDlsym(&dlsymNameConnect[0]),
-		Getsockname: cosmoDlsym(&dlsymNameGetsockname[0]),
-		Getpeername: cosmoDlsym(&dlsymNameGetpeername[0]),
-		Sendto:      cosmoDlsym(&dlsymNameSendto[0]),
-		Recvfrom:    cosmoDlsym(&dlsymNameRecvfrom[0]),
-		Setsockopt:  cosmoDlsym(&dlsymNameSetsockopt[0]),
-		Getsockopt:  cosmoDlsym(&dlsymNameGetsockopt[0]),
-		Shutdown:    cosmoDlsym(&dlsymNameShutdown[0]),
-		Pipe:        cosmoDlsym(&dlsymNamePipe[0]),
-		Dup2:        cosmoDlsym(&dlsymNameDup2[0]),
-		Setsid:      cosmoDlsym(&dlsymNameSetsid[0]),
-		Setpgid:     cosmoDlsym(&dlsymNameSetpgid[0]),
-		Execve:      cosmoDlsym(&dlsymNameExecve[0]),
-		Wait4:       cosmoDlsym(&dlsymNameWait4[0]),
-		Kill:        cosmoDlsym(&dlsymNameKill[0]),
-		PthreadSelf: __syslib.pthread_self,
-		Getentropy:  cosmoSyslibGetentropy(),
-		Close:       __syslib.close,
+		Getpid:        cosmoDarwinGetpidFn,
+		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
+		Getuid:        cosmoDlsym(&dlsymNameGetuid[0]),
+		Geteuid:       cosmoDlsym(&dlsymNameGeteuid[0]),
+		Getgid:        cosmoDlsym(&dlsymNameGetgid[0]),
+		Getegid:       cosmoDlsym(&dlsymNameGetegid[0]),
+		Umask:         cosmoDlsym(&dlsymNameUmask[0]),
+		Fcntl:         cosmoDarwinFcntlFn,
+		Mkdirat:       cosmoDlsym(&dlsymNameMkdirat[0]),
+		Unlinkat:      cosmoDlsym(&dlsymNameUnlinkat[0]),
+		Renameat:      cosmoDlsym(&dlsymNameRenameat[0]),
+		Fstatat:       cosmoDlsym(&dlsymNameFstatat[0]),
+		Fstat:         cosmoDlsym(&dlsymNameFstat[0]),
+		Getcwd:        cosmoDlsym(&dlsymNameGetcwd[0]),
+		Chdir:         cosmoDlsym(&dlsymNameChdir[0]),
+		Faccessat:     cosmoDlsym(&dlsymNameFaccessat[0]),
+		Readlinkat:    cosmoDlsym(&dlsymNameReadlinkat[0]),
+		Getdirentries: cosmoDlsym(&dlsymNameGetdirentries[0]),
+		Error:         cosmoDarwinErrorFn,
+		Socket:        cosmoDlsym(&dlsymNameSocket[0]),
+		Socketpair:    cosmoDlsym(&dlsymNameSocketpair[0]),
+		Bind:          cosmoDlsym(&dlsymNameBind[0]),
+		Listen:        cosmoDlsym(&dlsymNameListen[0]),
+		Accept:        cosmoDlsym(&dlsymNameAccept[0]),
+		Connect:       cosmoDlsym(&dlsymNameConnect[0]),
+		Getsockname:   cosmoDlsym(&dlsymNameGetsockname[0]),
+		Getpeername:   cosmoDlsym(&dlsymNameGetpeername[0]),
+		Sendto:        cosmoDlsym(&dlsymNameSendto[0]),
+		Recvfrom:      cosmoDlsym(&dlsymNameRecvfrom[0]),
+		Setsockopt:    cosmoDlsym(&dlsymNameSetsockopt[0]),
+		Getsockopt:    cosmoDlsym(&dlsymNameGetsockopt[0]),
+		Shutdown:      cosmoDlsym(&dlsymNameShutdown[0]),
+		Pipe:          cosmoDlsym(&dlsymNamePipe[0]),
+		Dup2:          cosmoDlsym(&dlsymNameDup2[0]),
+		Setsid:        cosmoDlsym(&dlsymNameSetsid[0]),
+		Setpgid:       cosmoDlsym(&dlsymNameSetpgid[0]),
+		Execve:        cosmoDlsym(&dlsymNameExecve[0]),
+		Wait4:         cosmoDlsym(&dlsymNameWait4[0]),
+		Kill:          cosmoDlsym(&dlsymNameKill[0]),
+		PthreadSelf:   __syslib.pthread_self,
+		Getentropy:    cosmoSyslibGetentropy(),
+		Close:         __syslib.close,
 	})
 }
 

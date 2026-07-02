@@ -44,7 +44,12 @@ type DarwinFns struct {
 	Chdir      uintptr
 	Faccessat  uintptr
 	Readlinkat uintptr
-	Error      uintptr // int *__error(void): Apple's errno location
+	// Getdirentries is Apple's __getdirentries64: the raw directory
+	// read behind libc's readdir. It reads at the descriptor's file
+	// offset like Linux getdents64 (so lseek/dup semantics carry over),
+	// which is what makes a stateless emulation possible.
+	Getdirentries uintptr
+	Error         uintptr // int *__error(void): Apple's errno location
 
 	// Socket layer (socket_cosmo_arm64.go).
 	Socket      uintptr
@@ -100,6 +105,7 @@ const (
 	sysRENAMEAT   = 38
 	sysFACCESSAT  = 48
 	sysCHDIR      = 49
+	sysGETDENTS64 = 61
 	sysREADLINKAT = 78
 	sysNEWFSTATAT = 79
 	sysFSTAT      = 80
@@ -333,6 +339,8 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFstatat(a1, a2, a3, a4)
 	case sysFSTAT:
 		return darwinFstat(a1, a2)
+	case sysGETDENTS64:
+		return darwinGetdents64(a1, a2, a3)
 	case SYS_FCNTL:
 		return darwinFcntl(a1, a2, a3)
 	case sysGETRANDOM:
@@ -491,6 +499,106 @@ func darwinFstat(fd, statbuf uintptr) (r1, r2, errno uintptr) {
 	}
 	darwinStatConvert((*linuxStat)(unsafe.Pointer(statbuf)), &ast)
 	return 0, 0, 0
+}
+
+// Dirent record header sizes for the getdents64 emulation. The fixed
+// fields before d_name:
+//
+//	Apple __getdirentries64 record     Linux dirent64 record
+//	 0  d_ino     uint64                0  d_ino    uint64
+//	 8  d_seekoff uint64                8  d_off    int64
+//	16  d_reclen  uint16               16  d_reclen uint16
+//	18  d_namlen  uint16               18  d_type   uint8
+//	20  d_type    uint8                19  d_name   [] (NUL-terminated)
+//	21  d_name    [] (NUL-terminated)
+//
+// d_ino/d_reclen line up; d_seekoff is the next-entry seek cookie, the
+// same role Linux gives d_off. The d_type VALUES are identical on both
+// systems (shared BSD lineage, DT_* = S_IFMT>>12): DT_UNKNOWN 0,
+// DT_FIFO 1, DT_CHR 2, DT_DIR 4, DT_BLK 6, DT_REG 8, DT_LNK 10,
+// DT_SOCK 12, DT_WHT 14 - verified against Linux include/dirent.h and
+// Apple bsd/sys/dirent.h, so d_type passes through untranslated.
+const (
+	appleDirentHdrLen = 21
+	linuxDirentHdrLen = 19
+)
+
+// darwinGetdents64 emulates the Linux getdents64 syscall with Apple's
+// __getdirentries64 (the raw fd-offset-based directory read behind
+// libc readdir; resolved via dlsym - xnu's own userspace tests link it,
+// it is exported from libSystem). Apple fills the caller's buffer with
+// Apple-layout records, which are then rewritten IN PLACE into Linux
+// dirent64 records.
+//
+// The in-place rewrite is safe front to back: for any name length the
+// Linux record is never longer than the Apple record (19- vs 21-byte
+// header, both padded to 8), so the write cursor can never pass the
+// read cursor; the header fields are copied into locals before the
+// destination header is stored, and the name copy runs low-to-high
+// with dst+19 <= src+21. This also means every rewritten record fits
+// where its source stood - no partial-record truncation is possible.
+//
+// Quirk (xnu bsd/sys/dirent_private.h): when bufsize >= 1024, the
+// kernel reserves the FINAL 4 bytes of the buffer for a flags word
+// (GETDIRENTRIES64_EOF) and fills at most bufsize-4 bytes of records.
+// Returning slightly fewer bytes per call than Linux would is fine;
+// the flags word lands beyond the returned length, where callers
+// (syscall.ParseDirent, os) never look.
+//
+//go:nosplit
+func darwinGetdents64(fd, buf, count uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Getdirentries == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if buf == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	// The kernel writes the resulting directory offset here; the fd's
+	// file offset advances identically (Linux getdents64 semantics), so
+	// the value is not needed - but the pointer must be valid.
+	var basep int64
+	r := darwinLibcCall6(darwinFns.Getdirentries, fd, buf, count,
+		uintptr(unsafe.Pointer(&basep)), 0, 0)
+	if int64(r) < 0 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	n := r // bytes of Apple records; 0 means end of directory
+	if n > count {
+		return ^uintptr(0), 0, darwinEIO
+	}
+	var src, dst uintptr
+	for src+appleDirentHdrLen <= n {
+		ino := *(*uint64)(unsafe.Pointer(buf + src))
+		seekoff := *(*uint64)(unsafe.Pointer(buf + src + 8))
+		areclen := uintptr(*(*uint16)(unsafe.Pointer(buf + src + 16)))
+		namlen := uintptr(*(*uint16)(unsafe.Pointer(buf + src + 18)))
+		typ := *(*byte)(unsafe.Pointer(buf + src + 20))
+		if areclen < appleDirentHdrLen || src+areclen > n ||
+			namlen > areclen-appleDirentHdrLen {
+			// Malformed record: refuse to guess at the rest.
+			return ^uintptr(0), 0, darwinEIO
+		}
+		lreclen := (linuxDirentHdrLen + namlen + 1 + 7) &^ 7
+		if dst+lreclen > src+areclen {
+			// Unreachable with kernel-packed (8-aligned) records; kept
+			// so a pathological record cannot overrun unread input.
+			return ^uintptr(0), 0, darwinEIO
+		}
+		*(*uint64)(unsafe.Pointer(buf + dst)) = ino
+		*(*uint64)(unsafe.Pointer(buf + dst + 8)) = seekoff
+		*(*uint16)(unsafe.Pointer(buf + dst + 16)) = uint16(lreclen)
+		*(*byte)(unsafe.Pointer(buf + dst + 18)) = typ
+		for i := uintptr(0); i < namlen; i++ {
+			*(*byte)(unsafe.Pointer(buf + dst + linuxDirentHdrLen + i)) =
+				*(*byte)(unsafe.Pointer(buf + src + appleDirentHdrLen + i))
+		}
+		// Callers find the name end by NUL scan (Linux d_namlen does not
+		// exist); the +1 in lreclen guarantees room.
+		*(*byte)(unsafe.Pointer(buf + dst + linuxDirentHdrLen + namlen)) = 0
+		src += areclen
+		dst += lreclen
+	}
+	return dst, 0, 0
 }
 
 // fcntl commands F_DUPFD..F_SETFL share values 0..4 on Linux and Apple;
