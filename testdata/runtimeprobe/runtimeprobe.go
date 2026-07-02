@@ -20,7 +20,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -50,6 +52,11 @@ func spin(x uint64) uint64 {
 }
 
 func main() {
+	if os.Getenv("RUNTIMEPROBE_CHILD") == "1" {
+		// Child mode for checkExec: print the marker and exit clean.
+		fmt.Println("child-ok", os.Getpid())
+		return
+	}
 	startWatchdog()
 	checkArgsEnv()
 	checkIdentity()
@@ -57,6 +64,7 @@ func main() {
 	checkMonotonic()
 	checkTimers()
 	checkSockets()
+	checkExec()
 	checkExecutable()
 	checkFiles()
 	if failed {
@@ -329,6 +337,61 @@ func checkSockets() {
 	}
 	uc.Close()
 	pc.Close()
+}
+
+// checkExec re-executes this binary in child mode (fork/exec, the
+// status pipe, stdout pipe and wait4 - the whole os/exec stack). How the
+// child must be launched depends on what is on disk at os.Executable():
+// an assimilated ELF (Linux after first run) or Mach-O executes
+// directly, a pristine APE (still starting with "MZ...") needs the shell
+// bootstrap on unix hosts, and on Windows the PE always executes
+// directly.
+func checkExec() {
+	exe, err := os.Executable()
+	if err != nil {
+		fail("execchild", "os.Executable: %v", err)
+		return
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		fail("execchild", "open %q: %v", exe, err)
+		return
+	}
+	var magic [4]byte
+	_, err = io.ReadFull(f, magic[:])
+	f.Close()
+	if err != nil {
+		fail("execchild", "read magic: %v", err)
+		return
+	}
+
+	direct := runtime.GOOS == "windows" ||
+		(magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
+		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
+		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
+	var cmd *exec.Cmd
+	if direct {
+		cmd = exec.Command(exe)
+	} else {
+		// Pristine APE on a unix host: bootstrap through the shell,
+		// exactly how the probe itself was started.
+		cmd = exec.Command("/bin/sh", exe)
+	}
+	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD=1")
+	out, err := cmd.Output()
+	switch {
+	case err != nil:
+		detail := ""
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			detail = fmt.Sprintf(" (stderr: %q)", ee.Stderr)
+		}
+		fail("execchild", "run self (direct=%v): %v%s", direct, err, detail)
+	case !strings.HasPrefix(string(out), "child-ok"):
+		fail("execchild", "child output %q, want child-ok prefix", out)
+	default:
+		ok("execchild")
+	}
 }
 
 func checkExecutable() {

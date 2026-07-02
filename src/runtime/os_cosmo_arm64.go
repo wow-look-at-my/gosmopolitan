@@ -214,6 +214,13 @@ var (
 	dlsymNameSetsockopt  = []byte("setsockopt\x00")
 	dlsymNameGetsockopt  = []byte("getsockopt\x00")
 	dlsymNameShutdown    = []byte("shutdown\x00")
+
+	dlsymNamePipe    = []byte("pipe\x00")
+	dlsymNameDup2    = []byte("dup2\x00")
+	dlsymNameSetsid  = []byte("setsid\x00")
+	dlsymNameSetpgid = []byte("setpgid\x00")
+	dlsymNameExecve  = []byte("execve\x00")
+	dlsymNameWait4   = []byte("wait4\x00")
 )
 
 // cosmoDarwinPollFn is Apple libc poll(2), resolved at startup; the
@@ -275,6 +282,12 @@ func osArchInit() {
 		Setsockopt:  cosmoDlsym(&dlsymNameSetsockopt[0]),
 		Getsockopt:  cosmoDlsym(&dlsymNameGetsockopt[0]),
 		Shutdown:    cosmoDlsym(&dlsymNameShutdown[0]),
+		Pipe:        cosmoDlsym(&dlsymNamePipe[0]),
+		Dup2:        cosmoDlsym(&dlsymNameDup2[0]),
+		Setsid:      cosmoDlsym(&dlsymNameSetsid[0]),
+		Setpgid:     cosmoDlsym(&dlsymNameSetpgid[0]),
+		Execve:      cosmoDlsym(&dlsymNameExecve[0]),
+		Wait4:       cosmoDlsym(&dlsymNameWait4[0]),
 		PthreadSelf: __syslib.pthread_self,
 		Getentropy:  cosmoSyslibGetentropy(),
 		Close:       __syslib.close,

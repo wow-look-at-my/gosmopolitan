@@ -147,33 +147,24 @@ func darwinSockaddrIn(addr uintptr, alenp uintptr) {
 	*(*uint16)(unsafe.Pointer(addr)) = fam
 }
 
-// darwinApplySockFlags applies Linux SOCK_CLOEXEC/SOCK_NONBLOCK to a
-// descriptor with fcntl, plus SO_NOSIGPIPE (see appleSO_NOSIGPIPE).
+// darwinSetNoSigpipe sets SO_NOSIGPIPE on a new socket, best effort (a
+// failure is not worth refusing the socket over). Kept flat - it calls
+// the libc trampoline directly - because it sits on the deepest nosplit
+// chains (socket/socketpair/accept4 with flags), where the darwinCall
+// helper's frame would not fit.
+//
+// SOCK_CLOEXEC/SOCK_NONBLOCK application shares darwinApplyFdFlags with
+// pipe2 (the SOCK_ and O_ flag bits have the same values on Linux);
+// call sites apply both helpers sequentially rather than nested, again
+// for nosplit depth.
 //
 //go:nosplit
-func darwinApplySockFlags(fd, flags uintptr) uintptr {
-	if flags&linuxSOCK_CLOEXEC != 0 {
-		if _, _, e := darwinCall(darwinFns.Fcntl, fd, fcntlF_SETFD, fdCLOEXEC, 0, 0, 0); e != 0 {
-			return e
-		}
-	}
-	if flags&linuxSOCK_NONBLOCK != 0 {
-		fl, _, e := darwinCall(darwinFns.Fcntl, fd, fcntlF_GETFL, 0, 0, 0, 0)
-		if e != 0 {
-			return e
-		}
-		if _, _, e := darwinCall(darwinFns.Fcntl, fd, fcntlF_SETFL, fl|appleO_NONBLOCK, 0, 0, 0); e != 0 {
-			return e
-		}
-	}
+func darwinSetNoSigpipe(fd uintptr) {
 	if darwinFns.Setsockopt != 0 {
 		one := uint32(1)
-		// Best effort; not every descriptor reaching this path via
-		// socketpair/accept4 flags is guaranteed to support it.
 		darwinLibcCall6(darwinFns.Setsockopt, fd, 0xffff /* Apple SOL_SOCKET */, appleSO_NOSIGPIPE,
 			uintptr(unsafe.Pointer(&one)), 4, 0)
 	}
-	return 0
 }
 
 // darwinCloseFd closes a descriptor during error cleanup.
@@ -200,10 +191,11 @@ func darwinSocket(domain, typ, proto uintptr) (r1, r2, errno uintptr) {
 	if e != 0 {
 		return ^uintptr(0), 0, e
 	}
-	if e := darwinApplySockFlags(fd, flags); e != 0 {
+	if e := darwinApplyFdFlags(fd, flags); e != 0 {
 		darwinCloseFd(fd)
 		return ^uintptr(0), 0, e
 	}
+	darwinSetNoSigpipe(fd)
 	return fd, 0, 0
 }
 
@@ -223,11 +215,12 @@ func darwinSocketpair(domain, typ, proto, sv uintptr) (r1, r2, errno uintptr) {
 	}
 	fds := (*[2]int32)(unsafe.Pointer(sv))
 	for _, fd := range fds {
-		if e := darwinApplySockFlags(uintptr(fd), flags); e != 0 {
+		if e := darwinApplyFdFlags(uintptr(fd), flags); e != 0 {
 			darwinCloseFd(uintptr(fds[0]))
 			darwinCloseFd(uintptr(fds[1]))
 			return ^uintptr(0), 0, e
 		}
+		darwinSetNoSigpipe(uintptr(fd))
 	}
 	return 0, 0, 0
 }
@@ -258,10 +251,11 @@ func darwinAccept4(s, rsa, alenp, flags uintptr) (r1, r2, errno uintptr) {
 		return ^uintptr(0), 0, e
 	}
 	darwinSockaddrIn(rsa, alenp)
-	if e := darwinApplySockFlags(fd, flags); e != 0 {
+	if e := darwinApplyFdFlags(fd, flags); e != 0 {
 		darwinCloseFd(fd)
 		return ^uintptr(0), 0, e
 	}
+	darwinSetNoSigpipe(fd)
 	return fd, 0, 0
 }
 

@@ -61,6 +61,15 @@ type DarwinFns struct {
 	Getsockopt  uintptr
 	Shutdown    uintptr
 
+	// Process layer (exec_cosmo_arm64.go). Dup2/Setsid/Setpgid/Execve
+	// are called between fork and exec (see that file's safety notes).
+	Pipe    uintptr
+	Dup2    uintptr
+	Setsid  uintptr
+	Setpgid uintptr
+	Execve  uintptr
+	Wait4   uintptr
+
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
 	Getentropy  uintptr // Syslib v5+; sysret-wrapped (-errno on failure)
@@ -354,6 +363,21 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 	case sysSHUTDOWN:
 		// SHUT_RD/SHUT_WR/SHUT_RDWR are 0/1/2 on both systems.
 		return darwinCall(darwinFns.Shutdown, a1, a2, 0, 0, 0, 0)
+
+	case sysPIPE2:
+		return darwinPipe2(a1, a2)
+	case sysDUP3:
+		return darwinDup3(a1, a2, a3)
+	case sysSETSID:
+		return darwinCall(darwinFns.Setsid, 0, 0, 0, 0, 0, 0)
+	case sysSETPGID:
+		return darwinCall(darwinFns.Setpgid, a1, a2, 0, 0, 0, 0)
+	case sysEXECVE:
+		// argv/envp are NULL-terminated pointer arrays on both systems.
+		// Success does not return.
+		return darwinCall(darwinFns.Execve, a1, a2, a3, 0, 0, 0)
+	case sysWAIT4:
+		return darwinWait4(a1, a2, a3, a4)
 	}
 	// Not emulated. Return ENOSYS so the failure is visible rather than
 	// pretending the call succeeded.
