@@ -383,9 +383,8 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 	*(*uintptr)(unsafe.Pointer(&s.ss_sp)) = sp
 }
 
-//go:nosplit
-func (c *sigctxt) fixsigcode(sig uint32) {
-}
+// fixsigcode is defined per-arch: signal_cosmo_amd64.go (no-op) and
+// signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
 // sysSigaction calls the rt_sigaction system call.
 //

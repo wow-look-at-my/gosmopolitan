@@ -758,17 +758,44 @@ rt_sigaction_darwin:
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	MOVW	sig+8(FP), R0
+	CHECK_DARWIN(sigfwd_darwin)
+sigfwd_call:
 	MOVD	info+16(FP), R1
 	MOVD	ctx+24(FP), R2
 	MOVD	fn+0(FP), R11
 	BL	(R11)
 	RET
+sigfwd_darwin:
+	// A forwarded handler is foreign code expecting the host's ABI:
+	// info and ctx are already Apple-native (never translated), so
+	// hand it the APPLE signal number too. sig is the runtime's Linux
+	// number; unmapped numbers cannot get here (no handler could have
+	// been installed for them).
+	CMPW	$65, R0
+	BHS	sigfwd_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+	B	sigfwd_call
 
 // Called from c-abi, R0: sig, R1: info, R2: cxt
 TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME,$176
 	// Save callee-save registers in the case of signal forwarding.
 	SAVE_R19_TO_R28(8*4)
 	SAVE_F8_TO_F15(8*14)
+
+	// On XNU hosts the kernel delivered an APPLE signal number; the
+	// runtime thinks in Linux numbers everywhere (sigtable, sigsend,
+	// masks), so translate before any Go code sees it. info and ctx
+	// stay Apple-native: sigctxt's accessors are host-aware.
+	MOVW	runtime·__hostos(SB), R9
+	CMPW	$HOSTXNU, R9
+	BNE	sigtramp_signum_ok
+	CMPW	$32, R0
+	BHS	sigtramp_ignore		// out of table: no Linux meaning
+	MOVD	$runtime·cosmoSigA2LTab(SB), R9
+	MOVBU	(R9)(R0), R0
+	CBZW	R0, sigtramp_ignore	// SIGEMT/SIGINFO: no Linux number
+sigtramp_signum_ok:
 
 	// this might be called in external code context,
 	// where g is not set.
@@ -784,6 +811,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME,$176
 	MOVD	$runtime·sigtrampgo<ABIInternal>(SB), R3
 	BL	(R3)
 
+sigtramp_ignore:
 	// Restore callee-save registers.
 	RESTORE_R19_TO_R28(8*4)
 	RESTORE_F8_TO_F15(8*14)
