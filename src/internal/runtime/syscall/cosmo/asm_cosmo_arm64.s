@@ -105,7 +105,13 @@ syscall6_darwin:
 	CMPW	$SYS_pselect6, R8
 	BEQ	darwin_pselect
 
-	// Unknown syscall - return ENOSYS
+	// Not one of the assembly fast paths: tail-jump to the Go slow path
+	// (identical signature), which emulates more syscalls with libc
+	// functions resolved via the Syslib's dlsym. See
+	// syscall_cosmo_arm64.go.
+	JMP	·syscall6SlowDarwin(SB)
+
+	// No Syslib, or the required Syslib entry is missing - return ENOSYS
 darwin_enosys:
 	MOVD	$-1, R0
 	MOVD	R0, r1+56(FP)
@@ -198,3 +204,9 @@ darwin_success:
 	MOVD	R1, r2+64(FP)
 	MOVD	ZR, errno+72(FP)
 	RET
+
+// func darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+// Tail jump to the runtime's generic C-ABI call trampoline (identical
+// signature and frame layout).
+TEXT ·darwinLibcCall6(SB),NOSPLIT,$0-64
+	JMP	runtime·cosmoLibcCall6(SB)

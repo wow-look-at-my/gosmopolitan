@@ -6,7 +6,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
 
 // Host OS constants (passed in X3 by APE loader)
 const (
@@ -167,14 +170,33 @@ func cosmoDlsym(name *byte) uintptr {
 // unresolved. Read by ·getpid in sys_cosmo_arm64.s.
 var cosmoDarwinGetpidFn uintptr
 
-var dlsymNameGetpid = []byte("getpid\x00")
+var (
+	dlsymNameGetpid  = []byte("getpid\x00")
+	dlsymNameGetppid = []byte("getppid\x00")
+	dlsymNameGetuid  = []byte("getuid\x00")
+	dlsymNameGeteuid = []byte("geteuid\x00")
+	dlsymNameGetgid  = []byte("getgid\x00")
+	dlsymNameGetegid = []byte("getegid\x00")
+	dlsymNameUmask   = []byte("umask\x00")
+)
 
-// osArchInit resolves darwin host functions at startup. It runs from
-// osinit, on the system stack, before any user code and before the first
-// fork, so dlsym (which may take dyld locks) is safe here.
+// osArchInit resolves darwin host functions at startup and hands them to
+// the cosmo syscall package's darwin emulation. It runs from osinit, on
+// the system stack, before any user code and before the first fork, so
+// dlsym (which may take dyld locks) is safe here.
 func osArchInit() {
 	if !isdarwin() {
 		return
 	}
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
+	cosmo.SetDarwinFns(&cosmo.DarwinFns{
+		Getpid:      cosmoDarwinGetpidFn,
+		Getppid:     cosmoDlsym(&dlsymNameGetppid[0]),
+		Getuid:      cosmoDlsym(&dlsymNameGetuid[0]),
+		Geteuid:     cosmoDlsym(&dlsymNameGeteuid[0]),
+		Getgid:      cosmoDlsym(&dlsymNameGetgid[0]),
+		Getegid:     cosmoDlsym(&dlsymNameGetegid[0]),
+		Umask:       cosmoDlsym(&dlsymNameUmask[0]),
+		PthreadSelf: __syslib.pthread_self,
+	})
 }

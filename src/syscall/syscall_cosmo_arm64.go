@@ -6,7 +6,31 @@
 
 package syscall
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
+
+// rawSyscallNoErrorDarwin is the darwin branch of rawSyscallNoError
+// (asm_cosmo_arm64.s tail-jumps here on macOS, where raw SVC would
+// SIGSYS). It routes through the generic cosmo dispatcher, whose darwin
+// slow path emulates the id-family syscalls with dlsym-resolved libc
+// functions.
+//
+// rawSyscallNoError has no error result by contract ("cannot fail"). If
+// the emulation does fail (syscall not emulated, symbol unresolved),
+// return the negated Linux errno in r1 - the raw kernel convention - so
+// the failure is at least visible to a debugger rather than silently
+// fabricating a plausible value.
+//
+//go:nosplit
+func rawSyscallNoErrorDarwin(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
+	r1, r2, errno := cosmo.Syscall6(trap, a1, a2, a3, 0, 0, 0)
+	if errno != 0 {
+		return -errno, 0
+	}
+	return r1, r2
+}
 
 func (iov *Iovec) SetLen(length int) {
 	iov.Len = uint64(length)
