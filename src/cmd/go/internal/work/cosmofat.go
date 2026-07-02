@@ -33,6 +33,16 @@ func cosmoFatEnabled() bool {
 	case "0", "off":
 		return false
 	}
+	// The faketime build tag forces a thin build: the fat APE's
+	// GOOS=windows sibling cannot compile with it (runtime/time_fake.go
+	// is constrained to !windows, and the tag excludes time_nofake.go,
+	// leaving the windows runtime with neither). faketime is a
+	// runtime-test facility, so a thin binary beats failing the build.
+	for _, tag := range cfg.BuildContext.BuildTags {
+		if tag == "faketime" {
+			return false
+		}
+	}
 	// Guard against the sibling-architecture build recursing.
 	return os.Getenv("GOCOSMOFAT_INNER") == ""
 }
@@ -123,6 +133,72 @@ func cosmoFatten(targets []string, dir bool) {
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
 			base.Fatalf("go: cosmo fat build: merging %s: %v", target, err)
+		}
+	}
+}
+
+// cosmoFattenInstall replaces each freshly installed GOOS=cosmo
+// executable in targets with a fat (amd64+arm64) APE carrying a Windows
+// amd64 PE payload, the go-install counterpart of cosmoFatten.
+//
+// go install has no -o flag to redirect, and its pkg@version argument
+// form cannot be rewritten into a go build, so the sibling builds rerun
+// the ORIGINAL install command line against a scratch GOPATH: package
+// resolution stays identical while the cross-compiled results land in
+// $GOPATH/bin/$GOOS_$GOARCH/ (always a subdirectory - neither cosmo nor
+// windows can be the platform the go tool itself runs on). GOMODCACHE
+// keeps pointing at the real module cache so nothing is re-downloaded,
+// and GOBIN is cleared because go install refuses cross-compilation
+// with GOBIN set.
+func cosmoFattenInstall(targets []string) {
+	if !cosmoFatEnabled() || len(targets) == 0 {
+		return
+	}
+	otherArch := cosmoFatArches[cfg.Goarch]
+
+	goCmd, err := os.Executable()
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: cannot find go command: %v", err)
+	}
+	tmp, err := os.MkdirTemp("", "gocosmofat")
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: %v", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	rerun := func(goos, goarch string) {
+		cmd := exec.Command(goCmd, os.Args[1:]...)
+		cmd.Env = append(os.Environ(),
+			"GOOS="+goos,
+			"GOARCH="+goarch,
+			"GOCOSMOFAT_INNER=1",
+			"GOPATH="+tmp,
+			"GOMODCACHE="+cfg.GOMODCACHE,
+			"GOBIN=",
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: GOOS=%s GOARCH=%s install failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", goos, goarch, err)
+		}
+	}
+	rerun("cosmo", otherArch)
+	rerun("windows", "amd64")
+
+	link := base.Tool("link")
+	for _, target := range targets {
+		name := filepath.Base(target)
+		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
+		winName := name
+		if filepath.Ext(winName) != ".exe" {
+			winName += ".exe"
+		}
+		win := filepath.Join(tmp, "bin", "windows_amd64", winName)
+		merge := exec.Command(link, "-apefat", target+","+sibling+","+win, "-o", target)
+		merge.Stdout = os.Stdout
+		merge.Stderr = os.Stderr
+		if err := merge.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: merging %s: %v", target, err)
 		}
 	}
 }

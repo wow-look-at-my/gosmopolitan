@@ -69,12 +69,23 @@ To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/
 # go build always builds both architectures and merges them
 GOOS=cosmo go build -o program.com main.go
 
+# go install produces the same fat APE in the install directory
+GOOS=cosmo go install ./cmd/program
+
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 # Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
 go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
 ```
+
+Fat-build coverage: `go build` (with or without `-o`; a plain
+single-main-package build defaults its output name and fattens too) and
+`go install` both produce fat APEs. `go test` / `go test -c` binaries stay
+thin on purpose: they are host-run throwaway artifacts executed right here
+(via the `misc/cosmo` wrappers), and fattening would triple every test
+compile. The `faketime` build tag also forces a thin build, because its
+windows payload cannot compile (`runtime/time_fake.go` is `!windows`).
 
 The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
 image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
