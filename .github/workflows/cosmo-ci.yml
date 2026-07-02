@@ -10,7 +10,13 @@ on:
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform
+  #
+  # Job and step timeout-minutes are deliberate everywhere: a hung cosmo
+  # binary (or a wedged runner) must never burn GitHub's 6-hour default.
+  # Limits are sized ~2x (or a round number above) the slowest duration
+  # observed across recent green runs; see the values at each step.
   build:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +35,8 @@ jobs:
           cache: false
 
       - name: Build Go toolchain
+        # Observed max 3m14s (windows make.bat); unix ~2m30s.
+        timeout-minutes: 8
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -37,6 +45,8 @@ jobs:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
       - name: Build APE binary
+        # Observed max 38s (windows; two fat builds = six link passes).
+        timeout-minutes: 10
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
@@ -62,7 +72,12 @@ jobs:
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 binaries sequentially (native + 2 cross-compiled)
+  #
+  # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
+  # green total is under 2 minutes. Individual steps carry their own
+  # timeout-minutes (and an in-step killer, see with-deadline.sh).
   test:
+    timeout-minutes: 25
     needs: build
     strategy:
       fail-fast: false
