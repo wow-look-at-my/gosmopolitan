@@ -1,0 +1,81 @@
+package apetest
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// The runtime probe (testdata/runtimeprobe) exercises the runtime/os
+// surface that must work on every host: file I/O, pid/ppid, NumCPU, the
+// monotonic clock, os.Executable, argv/env and working-directory calls.
+// It prints one "ok <name>" line per check and exits non-zero if any
+// check printed "FAIL".
+
+// probeOkChecks are the check names runtimeprobe.go emits; keep in sync.
+var probeOkChecks = []string{
+	"args", "environ", "mark",
+	"getpid", "getppid",
+	"numcpu",
+	"monotonic",
+	"executable",
+	"mkdirtemp", "create", "readback", "rename", "statsize",
+	"getwd", "chdir", "wdrestore",
+	"remove", "rmdir",
+	"all",
+}
+
+func copyProbeBinary(t *testing.T) string {
+	t.Helper()
+	src := os.Getenv("RUNTIMEPROBE_BIN")
+	if src == "" {
+		t.Skip("RUNTIMEPROBE_BIN not set; skipping runtime probe execution test")
+	}
+
+	// Run a pristine copy: executing an APE self-assimilates it in
+	// place, and we must not modify the original artifact.
+	tmp := filepath.Join(t.TempDir(), "runtimeprobe.com")
+	data, err := os.ReadFile(src)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tmp, data, 0755))
+	return tmp
+}
+
+func TestRuntimeProbe(t *testing.T) {
+	skipIfExecUnsupported(t)
+	bin := copyProbeBinary(t)
+
+	const mark = "probe-mark-42"
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		// Windows recognizes APE as PE directly.
+		cmd = exec.Command(bin, mark)
+	default:
+		// Unix: invoke through a shell for the APE bootstrap.
+		cmd = exec.Command("/bin/sh", bin, mark)
+	}
+	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_MARK="+mark)
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := stdout.String()
+	t.Logf("runtimeprobe output:\n%s", out)
+	if stderr.Len() > 0 {
+		t.Logf("runtimeprobe stderr:\n%s", stderr.String())
+	}
+	require.NoError(t, err, "runtimeprobe must exit 0")
+
+	assert.NotContains(t, out, "FAIL", "no check may fail")
+	for _, name := range probeOkChecks {
+		assert.Contains(t, out, "ok "+name, "check %q must pass", name)
+	}
+}

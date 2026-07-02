@@ -43,18 +43,21 @@ jobs:
           # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
           # APE regardless of the host architecture.
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+          GOOS=cosmo go build -o runtimeprobe.com testdata/runtimeprobe/runtimeprobe.go
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
           echo "=== File info ==="
-          file fizzbuzz.com 2>/dev/null || true
-          ls -la fizzbuzz.com
+          file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
+          ls -la fizzbuzz.com runtimeprobe.com
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
           name: ape-binary-${{ matrix.build-os }}
-          path: fizzbuzz.com
+          path: |
+            fizzbuzz.com
+            runtimeprobe.com
           retention-days: 1
 
   # Test all APE binaries on each platform using Go tests
@@ -86,7 +89,7 @@ jobs:
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
-          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
 
       - name: Test binary built on Ubuntu
         id: test-ubuntu
@@ -95,7 +98,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" go test -v ./...
 
       - name: Test binary built on macOS
         id: test-macos
@@ -104,7 +107,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" go test -v ./...
 
       - name: Test binary built on Windows
         id: test-windows
@@ -113,4 +116,4 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" go test -v ./...
