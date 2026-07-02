@@ -79,7 +79,7 @@ func main() {
 // loop against the wall clock instead of sleeping.
 func startWatchdog() {
 	go func() {
-		deadline := time.Now().Add(60 * time.Second)
+		deadline := time.Now().Add(90 * time.Second)
 		x := uint64(1)
 		for time.Now().Before(deadline) {
 			for i := 0; i < 1_000_000; i++ {
@@ -87,7 +87,7 @@ func startWatchdog() {
 			}
 		}
 		sink = x
-		fmt.Println("FAIL watchdog: probe did not finish within 60s")
+		fmt.Println("FAIL watchdog: probe did not finish within 90s")
 		os.Exit(2)
 	}()
 }
@@ -378,16 +378,39 @@ func checkExec() {
 		cmd = exec.Command("/bin/sh", exe)
 	}
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD=1")
-	out, err := cmd.Output()
+
+	// Bound the child ourselves instead of using cmd.Output() alone: if
+	// the child ever wedges, an unbounded wait would leave an orphan
+	// holding this process's pipes after the watchdog fires, which can
+	// wedge the CALLING test harness in turn. Process.Kill works on
+	// macOS hosts (kill(2) is emulated; SIGKILL delivery is entirely
+	// kernel-side, needing no signal handling in the target).
+	var stdout, stderrBuf strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Start(); err != nil {
+		fail("execchild", "start self (direct=%v): %v", direct, err)
+		return
+	}
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+	var err2 error
+	select {
+	case err2 = <-waitErr:
+	case <-time.After(30 * time.Second):
+		cmd.Process.Kill()
+		fail("execchild", "child did not finish within 30s (kill result: %v)", <-waitErr)
+		return
+	}
+	out := stdout.String()
 	switch {
-	case err != nil:
+	case err2 != nil:
 		detail := ""
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			detail = fmt.Sprintf(" (stderr: %q)", ee.Stderr)
+		if stderrBuf.Len() > 0 {
+			detail = fmt.Sprintf(" (stderr: %q)", stderrBuf.String())
 		}
-		fail("execchild", "run self (direct=%v): %v%s", direct, err, detail)
-	case !strings.HasPrefix(string(out), "child-ok"):
+		fail("execchild", "run self (direct=%v): %v%s", direct, err2, detail)
+	case !strings.HasPrefix(out, "child-ok"):
 		fail("execchild", "child output %q, want child-ok prefix", out)
 	default:
 		ok("execchild")

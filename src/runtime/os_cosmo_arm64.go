@@ -221,6 +221,7 @@ var (
 	dlsymNameSetpgid = []byte("setpgid\x00")
 	dlsymNameExecve  = []byte("execve\x00")
 	dlsymNameWait4   = []byte("wait4\x00")
+	dlsymNameKill    = []byte("kill\x00")
 )
 
 // cosmoDarwinPollFn is Apple libc poll(2), resolved at startup; the
@@ -288,6 +289,7 @@ func osArchInit() {
 		Setpgid:     cosmoDlsym(&dlsymNameSetpgid[0]),
 		Execve:      cosmoDlsym(&dlsymNameExecve[0]),
 		Wait4:       cosmoDlsym(&dlsymNameWait4[0]),
+		Kill:        cosmoDlsym(&dlsymNameKill[0]),
 		PthreadSelf: __syslib.pthread_self,
 		Getentropy:  cosmoSyslibGetentropy(),
 		Close:       __syslib.close,

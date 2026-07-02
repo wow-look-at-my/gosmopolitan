@@ -69,6 +69,7 @@ type DarwinFns struct {
 	Setpgid uintptr
 	Execve  uintptr
 	Wait4   uintptr
+	Kill    uintptr
 
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
@@ -381,6 +382,8 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinCall(darwinFns.Execve, a1, a2, a3, 0, 0, 0)
 	case sysWAIT4:
 		return darwinWait4(a1, a2, a3, a4)
+	case sysKILL:
+		return darwinKill(a1, a2)
 	}
 	// Not emulated. Return ENOSYS so the failure is visible rather than
 	// pretending the call succeeded.

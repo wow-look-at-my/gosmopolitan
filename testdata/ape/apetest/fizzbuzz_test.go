@@ -1,12 +1,14 @@
 package apetest
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,6 +38,14 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	skipIfExecUnsupported(t)
 	bin := copyBinary(t)
 
+	// A hard deadline on every binary execution: a wedged binary must
+	// become a failing test with partial output, never a hung job. The
+	// context kills the process after 3 minutes, and WaitDelay closes the
+	// I/O pipes shortly after so Wait cannot block forever on a leaked
+	// grandchild holding them open.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
 	// APE binaries need to be invoked through a shell on Linux/Unix because
 	// the kernel doesn't recognize the APE format directly. The shell will
 	// parse the APE header as a script and execute the bootstrap code.
@@ -45,12 +55,13 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	switch runtime.GOOS {
 	case "windows":
 		// Windows recognizes APE as PE directly
-		cmd = exec.Command(bin, args...)
+		cmd = exec.CommandContext(ctx, bin, args...)
 	default:
 		// Unix: invoke through shell for APE bootstrap
 		shellArgs := append([]string{bin}, args...)
-		cmd = exec.Command("/bin/sh", shellArgs...)
+		cmd = exec.CommandContext(ctx, "/bin/sh", shellArgs...)
 	}
+	cmd.WaitDelay = 30 * time.Second
 
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout

@@ -1,12 +1,14 @@
 package apetest
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,15 +57,21 @@ func TestRuntimeProbe(t *testing.T) {
 	bin := copyProbeBinary(t)
 
 	const mark = "probe-mark-42"
+	// Deadline + WaitDelay: a wedged probe (or a leaked grandchild from
+	// its exec check holding the output pipes) must become a failing
+	// test that still logs the partial output, never a hung CI job.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
 		// Windows recognizes APE as PE directly.
-		cmd = exec.Command(bin, mark)
+		cmd = exec.CommandContext(ctx, bin, mark)
 	default:
 		// Unix: invoke through a shell for the APE bootstrap.
-		cmd = exec.Command("/bin/sh", bin, mark)
+		cmd = exec.CommandContext(ctx, "/bin/sh", bin, mark)
 	}
+	cmd.WaitDelay = 30 * time.Second
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_MARK="+mark)
 
 	var stdout, stderr strings.Builder
