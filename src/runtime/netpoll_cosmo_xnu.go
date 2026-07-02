@@ -84,10 +84,36 @@ var (
 // side).
 var (
 	xnuPollCycles  atomic.Uint64 // cycles started (incremented before poll)
+	xnuPollDone    atomic.Uint64 // cycles completed (xnuMtxset released)
 	xnuPollEnterNs atomic.Int64  // nanotime just before the last poll(2) call
 	xnuPollExitNs  atomic.Int64  // nanotime just after the last poll(2) return
 	xnuPollLastN   atomic.Int32  // last poll(2) result
 	xnuPollLastE   atomic.Int32  // last poll(2) errno (Linux numbering)
+
+	// Mutator-side progress (netpollopen/close/arm): entered the
+	// protocol, acquired xnuMtxset, finished. The first wedge capture
+	// (run 28591228556) showed cycles frozen with the LAST poll exited
+	// ~90s earlier, n=1 (the wakeup byte seen!), pending=1 - i.e. NOT
+	// stuck inside poll(2); the kernel returned promptly. That leaves
+	// two statement ranges these counters split: the poller's cycle
+	// tail (drain/netpollready/unlock2(xnuMtxset)/semawakeup) - then
+	// done < cycles - or, if done == cycles, the completed unlock's
+	// wakeup was LOST and the mutator sleeps on a free mutex while the
+	// next poller cycle queues behind it on xnuMtxpoll.
+	xnuMutEnter atomic.Uint64 // mutators that entered (before lock(xnuMtxpoll))
+	xnuMutSet   atomic.Uint64 // mutators that acquired xnuMtxset
+	xnuMutDone  atomic.Uint64 // mutators that released xnuMtxset
+
+	// M-parking progress on XNU hosts, incremented by the arm64 sema
+	// code (os_cosmo_arm64_sema.go); declared here so the diag function
+	// builds on both arches. Splits the done==cycles case further: if
+	// the wake counters sit still while a mutator sleeps queued on a
+	// free mutex, unlock2Wake DECIDED not to wake it (lock_spinbit
+	// layer); if wakes advance but acquisitions lag, the parked M is
+	// sleeping through pthread_cond_signal (primitive layer).
+	xnuSemaWakeEnter atomic.Uint64 // semawakeup entered (darwin path)
+	xnuSemaWakeDone  atomic.Uint64 // semawakeup completed
+	xnuSemaAcquired  atomic.Uint64 // semasleep consumed a wakeup (count--)
 )
 
 // cosmoNetpollDiag reports the darwin poller's forensic counters plus
@@ -96,10 +122,13 @@ var (
 // diagnostic output only.
 //
 //go:linkname cosmoNetpollDiag
-func cosmoNetpollDiag() (cycles uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32) {
-	return xnuPollCycles.Load(), xnuPollEnterNs.Load(), xnuPollExitNs.Load(),
-		nanotime(), xnuPollLastN.Load(), xnuPollLastE.Load(),
-		atomic.Loadint32(&xnuPendingUpdates)
+func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64) {
+	return xnuPollCycles.Load(), xnuPollDone.Load(),
+		xnuPollEnterNs.Load(), xnuPollExitNs.Load(), nanotime(),
+		xnuPollLastN.Load(), xnuPollLastE.Load(),
+		atomic.Loadint32(&xnuPendingUpdates),
+		xnuMutEnter.Load(), xnuMutSet.Load(), xnuMutDone.Load(),
+		xnuSemaWakeEnter.Load(), xnuSemaWakeDone.Load(), xnuSemaAcquired.Load()
 }
 
 // xnuMaxPollMs bounds every blocking poll(2): XNU can LOSE the wakeup
@@ -190,10 +219,12 @@ func netpollwakeupDarwin() {
 }
 
 func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
+	xnuMutEnter.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
 	lock(&xnuMtxset)
+	xnuMutSet.Add(1)
 	unlock(&xnuMtxpoll)
 
 	// We don't worry about pd.fdseq here,
@@ -203,14 +234,17 @@ func netpollopenDarwin(fd uintptr, pd *pollDesc) uintptr {
 	xnuPfds = append(xnuPfds, pollfd{fd: int32(fd)})
 	xnuPds = append(xnuPds, pd)
 	unlock(&xnuMtxset)
+	xnuMutDone.Add(1)
 	return 0
 }
 
 func netpollcloseDarwin(fd uintptr) uintptr {
+	xnuMutEnter.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
 	lock(&xnuMtxset)
+	xnuMutSet.Add(1)
 	unlock(&xnuMtxpoll)
 
 	for i := 0; i < len(xnuPfds); i++ {
@@ -225,14 +259,17 @@ func netpollcloseDarwin(fd uintptr) uintptr {
 		}
 	}
 	unlock(&xnuMtxset)
+	xnuMutDone.Add(1)
 	return 0
 }
 
 func netpollarmDarwin(pd *pollDesc, mode int) {
+	xnuMutEnter.Add(1)
 	lock(&xnuMtxpoll)
 	netpollwakeupDarwin()
 
 	lock(&xnuMtxset)
+	xnuMutSet.Add(1)
 	unlock(&xnuMtxpoll)
 
 	switch mode {
@@ -242,6 +279,7 @@ func netpollarmDarwin(pd *pollDesc, mode int) {
 		xnuPfds[pd.user].events |= _POLLOUT
 	}
 	unlock(&xnuMtxset)
+	xnuMutDone.Add(1)
 }
 
 // netpollBreakDarwin interrupts a poll. The netpollWakeSig deduplication
@@ -327,6 +365,7 @@ retry:
 			throw("runtime: netpoll failed")
 		}
 		unlock(&xnuMtxset)
+		xnuPollDone.Add(1)
 		// If a timed sleep was interrupted, just return to
 		// recalculate how long we should sleep now.
 		if timeout > 0 {
@@ -375,5 +414,6 @@ retry:
 		}
 	}
 	unlock(&xnuMtxset)
+	xnuPollDone.Add(1)
 	return toRun, delta
 }

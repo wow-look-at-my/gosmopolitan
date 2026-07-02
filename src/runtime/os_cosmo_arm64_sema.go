@@ -217,6 +217,7 @@ func semasleep(ns int64) int32 {
 	for {
 		if mp.count > 0 {
 			mp.count--
+			xnuSemaAcquired.Add(1) // wedge forensics, netpoll_cosmo_xnu.go
 			pthread_mutex_unlock(&mp.mutex)
 			return 0
 		}
@@ -266,12 +267,14 @@ func semawakeup(mp *m) {
 		// pipe instead (sigqueue_note_cosmo_arm64.go).
 		throw("semawakeup on Darwin signal stack")
 	}
+	xnuSemaWakeEnter.Add(1) // wedge forensics, netpoll_cosmo_xnu.go
 	pthread_mutex_lock(&mp.mutex)
 	mp.count++
 	if mp.count > 0 {
 		pthread_cond_signal(&mp.cond)
 	}
 	pthread_mutex_unlock(&mp.mutex)
+	xnuSemaWakeDone.Add(1)
 }
 
 // futexsemasleep implements semasleep on Linux hosts: a counting semaphore

@@ -16,16 +16,19 @@ import (
 // the epoll poller is used instead.
 //
 //go:linkname cosmoNetpollDiag runtime.cosmoNetpollDiag
-func cosmoNetpollDiag() (cycles uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32)
+func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64)
 
 // printNetpollDiag prints one sample of the darwin poller counters. The
 // watchdog prints two samples a spin apart so a wedged run's log shows
-// whether the poller is frozen inside poll(2) (cycles static, now-enter
-// large, exit < enter), wedged elsewhere in its cycle (cycles static,
-// exit > enter), or cycling fine while a mutator sleeps through wakeups
-// (cycles advancing).
+// where the wedge sits: cycles static with exit older than enter means
+// stuck inside poll(2); done < cycles means stuck in the poller's cycle
+// tail (drain/netpollready/unlock/semawakeup); done == cycles with
+// mutSet < mutEnter means a mutator is asleep on a free xnuMtxset -
+// then flat wake counters convict unlock2Wake's decision and advancing
+// wakes with lagging acquired convict the parking primitive.
 func printNetpollDiag(tag string) {
-	cycles, enterNs, exitNs, nowNs, lastN, lastE, pending := cosmoNetpollDiag()
-	fmt.Printf("diag %s: pollcycles=%d sinceenter=%dms sinceexit=%dms lastn=%d laste=%d pending=%d\n",
-		tag, cycles, (nowNs-enterNs)/1e6, (nowNs-exitNs)/1e6, lastN, lastE, pending)
+	cycles, done, enterNs, exitNs, nowNs, lastN, lastE, pending, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired := cosmoNetpollDiag()
+	fmt.Printf("diag %s: pollcycles=%d/%d sinceenter=%dms sinceexit=%dms lastn=%d laste=%d pending=%d mut=%d/%d/%d semawake=%d/%d acq=%d\n",
+		tag, cycles, done, (nowNs-enterNs)/1e6, (nowNs-exitNs)/1e6, lastN, lastE, pending,
+		mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired)
 }
