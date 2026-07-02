@@ -64,9 +64,13 @@ func main() {
 	checkMonotonic()
 	checkTimers()
 	checkSockets()
-	checkExec()
 	checkExecutable()
 	checkFiles()
+	// Exec runs LAST on purpose: if the forked child ever wedges (a
+	// nondeterministic macOS CI incident produced kernel-stuck
+	// processes), every other check has already printed its verdict, so
+	// the partial output localizes the failure precisely.
+	checkExec()
 	if failed {
 		os.Exit(1)
 	}

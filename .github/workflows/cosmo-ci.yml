@@ -136,6 +136,17 @@ jobs:
           cat test-output.log
           exit $rc
 
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload ubuntu-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-ubuntu-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
       - name: Test binary built on macOS
         id: test-macos
         timeout-minutes: 5
@@ -148,6 +159,17 @@ jobs:
           cat test-output.log
           exit $rc
 
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload macos-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-macos-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
       - name: Test binary built on Windows
         id: test-windows
         timeout-minutes: 5
@@ -159,3 +181,14 @@ jobs:
           FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload windows-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
