@@ -259,6 +259,7 @@ func osArchInit() {
 	// (sigqueue_note_cosmo_arm64.go). Set before initsig installs any
 	// signal handler.
 	sigNoteUsed = true
+	cosmoSemaInit()
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
 	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
 	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])

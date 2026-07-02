@@ -138,77 +138,90 @@ TEXT runtime·cosmoLibcCall6(SB),NOSPLIT,$0-64
 	MOVD	R0, ret+56(FP)
 	RET
 
-// dispatch_semaphore_create(value int64) dispatch_semaphore_t
-// Syslib offset 112
-TEXT runtime·dispatch_semaphore_create_trampoline(SB),NOSPLIT,$0-16
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_create_fail
-	MOVD	112(R9), R12
-	CBZ	R12, dsema_create_fail
-	MOVD	value+0(FP), R0
-	SUB	$16, RSP
+// Trampolines for the dlsym'd Apple pthread functions that back M
+// parking on XNU hosts (os_cosmo_arm64_sema.go). They follow upstream
+// sys_darwin_arm64.s exactly: asmcgocall has already switched to the
+// g0 stack and passes a pointer to the Go wrapper's argument block in
+// R0; the trampoline unpacks it into C argument registers and calls
+// the resolved function pointer. The callee address comes from a
+// runtime·cosmoPthread*Fn variable instead of upstream's dyld-bound
+// symbol; if resolution failed the trampoline returns Apple's ENOSYS
+// (78) - semacreate throws long before that can happen, this is
+// belt and braces against jumping to address zero.
+
+TEXT runtime·cosmo_pthread_mutex_init_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexInitFn(SB), R12
+	CBZ	R12, mutex_init_enosys
+	MOVD	8(R0), R1	// arg 2 attr
+	MOVD	0(R0), R0	// arg 1 mutex
 	BL	(R12)
-	ADD	$16, RSP
-	MOVD	R0, ret+8(FP)
 	RET
-dsema_create_fail:
-	MOVD	$0, ret+8(FP)
+mutex_init_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
-// dispatch_semaphore_signal(sema uintptr) int64
-// Syslib offset 120
-TEXT runtime·dispatch_semaphore_signal_trampoline(SB),NOSPLIT,$0-16
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_signal_fail
-	MOVD	120(R9), R12
-	CBZ	R12, dsema_signal_fail
-	MOVD	sema+0(FP), R0
-	SUB	$16, RSP
+TEXT runtime·cosmo_pthread_mutex_lock_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexLockFn(SB), R12
+	CBZ	R12, mutex_lock_enosys
+	MOVD	0(R0), R0	// arg 1 mutex
 	BL	(R12)
-	ADD	$16, RSP
-	MOVD	R0, ret+8(FP)
 	RET
-dsema_signal_fail:
-	MOVD	$0, ret+8(FP)
+mutex_lock_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
-// dispatch_semaphore_wait(sema uintptr, timeout uint64) int64
-// Syslib offset 128
-TEXT runtime·dispatch_semaphore_wait_trampoline(SB),NOSPLIT,$0-24
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_wait_fail
-	MOVD	128(R9), R12
-	CBZ	R12, dsema_wait_fail
-	MOVD	sema+0(FP), R0
-	MOVD	timeout+8(FP), R1
-	SUB	$16, RSP
+TEXT runtime·cosmo_pthread_mutex_unlock_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexUnlockFn(SB), R12
+	CBZ	R12, mutex_unlock_enosys
+	MOVD	0(R0), R0	// arg 1 mutex
 	BL	(R12)
-	ADD	$16, RSP
-	MOVD	R0, ret+16(FP)
 	RET
-dsema_wait_fail:
-	MOVD	$-1, R0
-	MOVD	R0, ret+16(FP)
+mutex_unlock_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
-// dispatch_walltime(NULL, delta) -> absolute wall-clock dispatch_time_t
-// for "now + delta nanoseconds". Syslib offset 136 (v1+).
-// Returns 0 if the Syslib or the function is unavailable.
-TEXT runtime·dispatch_walltime_trampoline(SB),NOSPLIT,$0-16
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dwalltime_fail
-	MOVD	136(R9), R12
-	CBZ	R12, dwalltime_fail
-	MOVD	$0, R0			// when = NULL: current wall time
-	MOVD	delta+0(FP), R1
-	SUB	$16, RSP
+TEXT runtime·cosmo_pthread_cond_init_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondInitFn(SB), R12
+	CBZ	R12, cond_init_enosys
+	MOVD	8(R0), R1	// arg 2 attr
+	MOVD	0(R0), R0	// arg 1 cond
 	BL	(R12)
-	ADD	$16, RSP
-	MOVD	R0, ret+8(FP)
 	RET
-dwalltime_fail:
-	MOVD	$0, R0
-	MOVD	R0, ret+8(FP)
+cond_init_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_wait_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondWaitFn(SB), R12
+	CBZ	R12, cond_wait_enosys
+	MOVD	8(R0), R1	// arg 2 mutex
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_wait_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_timedwait_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondTimedwaitFn(SB), R12
+	CBZ	R12, cond_timedwait_enosys
+	MOVD	8(R0), R1	// arg 2 mutex
+	MOVD	16(R0), R2	// arg 3 timeout
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_timedwait_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_signal_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondSignalFn(SB), R12
+	CBZ	R12, cond_signal_enosys
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_signal_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
 // Helper macro: check if we're on macOS and jump to label if so
