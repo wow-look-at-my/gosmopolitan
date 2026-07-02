@@ -55,6 +55,21 @@ const (
 	machoLCUnixThread = 0x5
 	machoLCMain       = 0x80000028
 
+	// x86_THREAD_STATE64 register file: rax rbx rcx rdx rdi rsi rbp rsp
+	// r8-r15 rip rflags cs fs gs. XNU's load_threadstack validates that
+	// (count+2)*4 bytes exactly consume cmdsize-8, so the emitted state
+	// must be exactly this many quadwords - no more, no less.
+	machoThreadStateRegs   = 21
+	machoThreadStateFlavor = 4                           // x86_THREAD_STATE64
+	machoUnixThreadCmdSize = 16 + machoThreadStateRegs*8 // cmd+cmdsize+flavor+count + registers = 184
+
+	// machoHostXNU is the host-OS indicator handed to the entry point in
+	// CL when the kernel loads the dd-assimilated Mach-O directly. It
+	// must match _HOSTXNU in runtime/os_cosmo_amd64.go; rt0_cosmo_amd64.s
+	// reads it to route syscalls through Apple's ABI instead of issuing
+	// raw Linux syscalls (which die with SIGSYS on macOS).
+	machoHostXNU = 8
+
 	// Segment protection
 	machoProtRead  = 0x1
 	machoProtWrite = 0x2
@@ -630,14 +645,14 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	var buf bytes.Buffer
 
 	// Mach-O header (32 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))       // magic
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(2))                  // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
-	binary.Write(&buf, binary.LittleEndian, uint32(72+184))             // sizeofcmds
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
+	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))              // magic
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))           // cputype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64))        // cpusubtype
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))         // filetype
+	binary.Write(&buf, binary.LittleEndian, uint32(2))                         // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
+	binary.Write(&buf, binary.LittleEndian, uint32(72+machoUnixThreadCmdSize)) // sizeofcmds
+	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))         // flags
+	binary.Write(&buf, binary.LittleEndian, uint32(0))                         // reserved
 
 	// LC_SEGMENT_64 for __TEXT (72 bytes)
 	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64))            // cmd
@@ -652,24 +667,29 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // nsects
 	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // flags
 
-	// LC_UNIXTHREAD (184 bytes for x86_64)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCUnixThread)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(184))               // cmdsize
-	binary.Write(&buf, binary.LittleEndian, uint32(4))                 // flavor (x86_THREAD_STATE64)
-	binary.Write(&buf, binary.LittleEndian, uint32(42))                // count
-
-	// Thread state (42 uint64 values = 336 bytes, but we only write key ones)
-	// Registers: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp, r8-r15, rip, rflags, cs, fs, gs
-	for i := 0; i < 16; i++ {
-		binary.Write(&buf, binary.LittleEndian, uint64(0)) // rax through r15
-	}
-	binary.Write(&buf, binary.LittleEndian, machoEntry) // rip (entry point)
-	binary.Write(&buf, binary.LittleEndian, uint64(0))  // rflags
-	for i := 0; i < 4; i++ {
-		binary.Write(&buf, binary.LittleEndian, uint64(0)) // cs, fs, gs, etc.
-	}
+	writeMachoUnixThread(&buf, machoEntry)
 
 	return buf.Bytes()
+}
+
+// writeMachoUnixThread emits the LC_UNIXTHREAD load command that starts the
+// kernel-loaded Mach-O at entry. The register file is exactly the 21
+// quadwords of x86_THREAD_STATE64 (count is expressed in 32-bit words, so
+// 42), matching the declared cmdsize byte for byte. rsp is left zero, which
+// makes XNU allocate a default stack; rcx carries the host-OS indicator so
+// rt0_cosmo_amd64.s (which reads CL) knows it is running on XNU.
+func writeMachoUnixThread(buf *bytes.Buffer, entry uint64) {
+	binary.Write(buf, binary.LittleEndian, uint32(machoLCUnixThread))      // cmd
+	binary.Write(buf, binary.LittleEndian, uint32(machoUnixThreadCmdSize)) // cmdsize
+	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateFlavor)) // flavor (x86_THREAD_STATE64)
+	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateRegs*2)) // count (32-bit words)
+
+	var regs [machoThreadStateRegs]uint64
+	regs[2] = machoHostXNU // rcx: host OS for rt0 (CL = 8 means XNU)
+	regs[16] = entry       // rip
+	for _, r := range regs {
+		binary.Write(buf, binary.LittleEndian, r)
+	}
 }
 
 func peHeaderOffset(pe []byte) (int, error) {
