@@ -820,3 +820,123 @@ Still missing on macOS hosts (deferred, in dependency order):
   generate by default; upstream darwin/arm64 leaves it too.
 - Intel-mac runtime bring-up (clone/futex/sigaction; amd64 stubs
   unchanged and honestly gated).
+
+## 2026-07-02: Wave 9 - wedge ROOT-CAUSED and killed: XNU pipe read; kqueue netpoller; pthread M-parking
+
+The macOS CI wedge (waves 6-9: goroutines stuck in netpollopen/
+netpollarm on xnuMtx locks, ~50-65% of macOS test jobs on bad days) is
+dead, and not by mitigation: the root cause was isolated to a single
+kernel-side syscall misbehavior by in-CI instrumentation, and the
+subsystem that depended on it was replaced with upstream darwin's
+design. Three pieces landed, in order:
+
+**1. pthread M-parking** (f922bbfc, prepared by 104ed6af): XNU-host M
+parking moved from Syslib dispatch semaphores to upstream
+os_darwin.go's design, ported field for field - per-M pthread_mutex +
+pthread_cond guarding a count (mOS.initialized/mutex/cond/count;
+pthread_mutex_t = int64 sig + 56 opaque bytes = 64, pthread_cond_t =
+int64 sig + 40 = 48, 8-aligned via the leading int64, from upstream
+defs_darwin_arm64.go), dlsym'd entry points, semasleep looping on
+count<=0 with pthread_cond_timedwait_relative_np for timed waits
+(Apple ETIMEDOUT=60 - raw libc returns are Apple-numbered; fallback
+to absolute pthread_cond_timedwait via walltime if the _np symbol
+ever vanishes - it resolved fine on every CI run). The calls run
+through asmcgocall + ABI0 trampolines (cgo_unsafe_args block,
+upstream sys_darwin.go's exact libcCall pattern minus the
+libcallpc/sp profiler bookkeeping - SIGPROF timers are not wired on
+XNU yet): pthread functions have real C frames, and contended lock2
+parks from user g stacks, so the g0 switch is mandatory. Because
+pthread_mutex_lock is not async-signal-safe (dispatch_semaphore_signal
+accidentally was), sigqueue's sigsend can no longer notewakeup on
+XNU: 104ed6af first ported upstream's pipe-based sigNote
+(usesSigNote() in sigqueue.go - constant on darwin/ios, host-checked
+on cosmo, false elsewhere; EINTR-retried wakeup write; runtime.read
+gained a truthful go:noescape). semasleep/semawakeup throw on the
+gsignal stack exactly like upstream. Fork-child needs no reinit (the
+fork->execve path is nosplit and lock-free by construction). Linux
+futex parking is byte-for-byte untouched. The wave-8 50ms-slice
+mitigation died with the primitive.
+
+**2. The forensic loop that found the real bug** (fb3dea5d, 77f8679c,
+5d4ebbc1): the wedge promptly recurred ON the pthread commit (run
+28589956528) with the same traceback shape, proving the parking
+primitive was never the cause and wave 8's remaining suspect wrong.
+Since the poller M runs on g0 and is invisible in goroutine dumps,
+the poller got progress counters exported through
+runtime.cosmoNetpollDiag, and the probe's watchdog prints two samples
+300ms apart when it fires - each wedge capture then narrowed the
+search without a reroll:
+- Round 1 (fb3dea5d, run 28591228556, 3 wedged steps): poll cycles
+  FROZEN with the last poll(2) returned n=1/errno 0 ~90s earlier and
+  a mutator wakeup pending. The kernel's poll TIMEOUT path and the
+  wave-8 100ms cap were working; "stuck inside poll(2)" eliminated.
+- Round 2 (77f8679c, runs 28592344544/28592353386/28592365698, 4
+  wedged steps): done==cycles-1 (poller stuck MID-cycle holding
+  xnuMtxset), mutators correctly queued (mut=E/E-1/E-1), and
+  semawake/acq EQUAL and ADVANCING throughout - M parking (pthread
+  and, retroactively, dispatch) delivers wakeups fine during the
+  wedge; lock_spinbit's wake decisions sound. Only the poller's
+  post-poll bracket remained.
+- Round 3 (5d4ebbc1, runs 28593361662/28593341482/28593350164, 5
+  wedged steps): phase markers name the statement - phase=2,
+  drainReads one past the last completed read, drainLastRet=1: the
+  poller is inside the wakeup-pipe drain's final read(2) - a
+  nonblocking read of an empty pipe - and that syscall NEVER RETURNS
+  (89.8s and counting at watchdog time), despite the same fd draining
+  nonblockingly moments earlier in the same process. runtime.read's
+  darwin path is a straight trampoline into Apple libc read, so the
+  hang is inside XNU. Same haunted pipe machinery as the documented
+  poll-on-pipe race (rdar 37537852) that wave 8's cap defended
+  against; the read side is broken too, and no userspace cap can
+  bound a syscall that does not return.
+
+**3. The kill: kqueue netpoller** (5fce773d): the aix-shaped
+poll+pipe poller was replaced with a port of upstream
+netpoll_kqueue.go + netpoll_kqueue_event.go - what GOOS=darwin itself
+runs, on the kernel mechanism Apple actually maintains. kqueue/kevent
+via the established dlsym machinery (honest ENOSYS stubs on amd64);
+EV_ADD|EV_CLEAR edge-triggered registration at netpollopen with the
+tagged pd pointer in udata; EVFILT_USER + NOTE_TRIGGER for
+netpollBreak; kevent ETIMEDOUT tolerated (go.dev/issue/59679); >1e6s
+timespec clamped (darwin EINVAL). Gone wholesale: the self-pipe, the
+drain loop, xnuMtxpoll/xnuMtxset, level-triggered arming
+(netpollLevelTriggered now stays false; netpollarm unreachable), the
+netpoll(0)-returns-nothing limitation, the 100ms poll cap - and the
+runtime's only instance of holding a runtime mutex across a blocking
+syscall. The forensic counters stay (three atomic stores per kevent
+cycle + the parking counters): any future poller stall names itself
+in the watchdog's CI log the way this one did.
+
+**Wedge verdict**: CONFIRMED root cause - XNU sporadically never
+returns from a nonblocking read(2) on a pipe under load (observed on
+macos-latest arm64 runners). Not the dispatch semaphores (wave-8's
+remaining suspect: parking counters stayed healthy through wedges on
+both primitives), not the poll timeout (the cap fired correctly), not
+lock_spinbit, not the userspace protocol (re-derived sound and its
+counters agreed). The pthread parking port stays on its own merits:
+upstream parity, and it removed the accidental dependence of sigsend
+on a signal-safe semaphore.
+
+**CI evidence**: with the kqueue poller at 5fce773d, SIX consecutive
+fully-green full-matrix runs - 28594244120 (push), 28594284723,
+28594294538, 28594760519, 28594769929, 28594779821 - i.e. 18/18
+consecutive macOS probe executions green, on the same afternoon and
+runner pool where the three capture rounds immediately prior wedged
+3, 4 and 5 steps out of every 9 (per-step wedge probability ~33-55%).
+P(18 straight greens | unchanged wedge) < 0.001 even at the lowest
+observed rate - and unlike a statistical argument alone, the fix
+removed a directly observed failing syscall.
+
+**Verified locally** (Linux paths - epoll and futex - untouched by
+the darwin work): make.bash; go vet runtime clean for cosmo
+amd64+arm64; fat fizzbuzz + probe 40/40 + "ok all" on linux/amd64 AND
+under qemu-aarch64 (per-binary arm64 ELF header stamp); apetest green
+against the kqueue-build binaries; stdlib under cosmo on Linux:
+os/signal, net, time, os, os/exec all ok.
+
+Still missing on macOS hosts (unchanged from wave 8):
+- sendmsg/recvmsg (msghdr/cmsghdr translation; fd passing, ReadMsg*).
+- setitimer/SIGPROF profiling (also why the pthread wrappers skip
+  upstream's libcall pc/sp bookkeeping; add both together).
+- AllThreadsSyscall (rt-range unmapped; unused by stdlib on cosmo).
+- Intel-mac runtime bring-up.

@@ -92,22 +92,28 @@ image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
 on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
 Rosetta). Windows uses an embedded native windows/amd64 PE payload.
 
-macOS ARM64 status (2026-07-02, wave 8): file I/O (create/read/write/stat/
+macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
 via a getdents64 emulation over Apple's __getdirentries64),
 getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
-After, context timeouts - poll(2)-based darwin netpoller), TCP/UDP
-loopback sockets with deadlines, unix-domain stream sockets (pathname
-addresses; the abstract namespace is Linux-only and refused EINVAL),
-readv/writev (net.Buffers), os/exec (fork, pipes, execve, wait4 with
-Linux-numbered wait statuses), os.Executable, argv/env, Getwd/Chdir,
-and SIGNALS all work (CI-verified by the runtime probe on macos-latest):
-SIGSEGV -> sigpanic/recover, os/signal Notify delivery, async
-preemption (SIGURG - tight loops no longer hang GC/STW), and
-kill/raise, with full Linux<->Apple signal-number and sigset
-translation at every darwin boundary (tables in
-src/runtime/sigxlat_cosmo.go). SIGPIPE additionally stays suppressed
-per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics.
+After, context timeouts), TCP/UDP loopback sockets with deadlines,
+unix-domain stream sockets (pathname addresses; the abstract namespace
+is Linux-only and refused EINVAL), readv/writev (net.Buffers), os/exec
+(fork, pipes, execve, wait4 with Linux-numbered wait statuses),
+os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
+by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
+os/signal Notify delivery, async preemption (SIGURG - tight loops no
+longer hang GC/STW), and kill/raise, with full Linux<->Apple
+signal-number and sigset translation at every darwin boundary (tables
+in src/runtime/sigxlat_cosmo.go). SIGPIPE additionally stays suppressed
+per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics. As of
+wave 9 the darwin netpoller is a kqueue port of upstream
+netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream
+os_darwin.go's pthread_mutex+pthread_cond design - this pair replaced
+the poll(2)+self-pipe poller and dispatch-semaphore parking after the
+waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
+counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
+returning from a nonblocking read(2) on the poller's wakeup pipe.
 Still missing on macOS hosts: sendmsg/recvmsg (msghdr/cmsghdr layouts
 differ; blocks fd-passing and ReadMsg*) and setitimer-based SIGPROF
 profiling. See DEBUGGING.md for the full list.
