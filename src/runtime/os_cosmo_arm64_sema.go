@@ -80,6 +80,31 @@ func semasleep(ns int64) int32 {
 
 	var timeout uint64
 	if ns < 0 {
+		// Wait forever - but in bounded slices rather than one
+		// DISPATCH_TIME_FOREVER wait. A timed-out wait returns to this
+		// loop and issues a FRESH dispatch_semaphore_wait, which
+		// re-examines the semaphore count atomically; a signal that
+		// arrived meanwhile is consumed and we return 0 exactly as if
+		// the single infinite wait had seen it. Semantics are
+		// identical - we still return ONLY on a genuine wakeup, which
+		// lock2 depends on (its M sits in the mutex wait list until a
+		// wake pops it; a spurious return would let it re-queue while
+		// still linked). But if a wakeup is ever lost INSIDE a parked
+		// wait - the failure shape of the rare macOS wedge, where an M
+		// slept through its semawakeup on a lock that was provably
+		// released - the next slice picks the count up and the stall
+		// is bounded at ~50ms instead of forever.
+		for {
+			deadline := dispatch_walltime_trampoline(50e6) // now + 50ms
+			if deadline == 0 {
+				// Syslib entry missing (cannot happen with v1+
+				// loaders): fall back to the unbounded wait.
+				break
+			}
+			if dispatch_semaphore_wait_trampoline(mp.waitsema, deadline) == 0 {
+				return 0 // woken
+			}
+		}
 		timeout = _DISPATCH_TIME_FOREVER
 	} else {
 		// dispatch_semaphore_wait takes an ABSOLUTE dispatch_time_t.
