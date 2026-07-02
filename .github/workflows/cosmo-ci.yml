@@ -91,6 +91,21 @@ jobs:
         with:
           unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
 
+      # Prefetch test-module dependencies separately so a stalled module
+      # download cannot masquerade as a hung test step.
+      - name: Download apetest modules
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          sh ./with-deadline.sh 150 go mod download
+
+      # Each test step runs go test under an in-step process-group killer
+      # (see with-deadline.sh): runner-side step timeouts have been
+      # observed not to fire when a step wedges on the macOS runners
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs).
+      # The killer guarantees the step terminates on its own and the log
+      # of everything up to the wedge is preserved.
       - name: Test binary built on Ubuntu
         id: test-ubuntu
         timeout-minutes: 5
@@ -98,7 +113,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
 
       - name: Test binary built on macOS
         id: test-macos
@@ -107,7 +122,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
 
       - name: Test binary built on Windows
         id: test-windows
@@ -116,4 +131,4 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" go test -v ./...
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./...
