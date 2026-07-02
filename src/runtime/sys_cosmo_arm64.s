@@ -363,33 +363,40 @@ read_darwin:
 	MOVW	R0, ret+24(FP)
 	RET
 
-// func pipe2(flags int32) (r, w int32, errno int32)
-TEXT runtime·pipe2(SB),NOSPLIT,$16-20
-	CHECK_DARWIN(pipe2_darwin)
-	// Linux path
+// func pipe2Linux(flags int32) (r, w int32, errno int32)
+// Linux hosts only; the darwin path lives in Go (runtime.pipe2 in
+// os_cosmo_arm64.go), which emulates the flags with fcntl.
+TEXT runtime·pipe2Linux(SB),NOSPLIT,$16-20
 	MOVD	$r+8(FP), R0
 	MOVW	flags+0(FP), R1
 	MOVW	$SYS_pipe2, R8
 	SVC
 	MOVW	R0, errno+16(FP)
 	RET
-pipe2_darwin:
-	// macOS pipe() doesn't support flags, but Syslib provides pipe()
-	// For now, ignore flags and use basic pipe
+
+// func cosmo_pipe_trampoline(fds *int32) int32
+// Calls the Syslib's pipe (offset 16, v1+). Returns 0 on success or a
+// NEGATIVE Linux errno (the Apple errno from the loader's sysret
+// wrapper is translated).
+TEXT runtime·cosmo_pipe_trampoline(SB),NOSPLIT,$0-12
 	MOVD	runtime·__syslib(SB), R9
+	CBZ	R9, pipe_tramp_enosys
 	MOVD	16(R9), R12
-	MOVD	$r+8(FP), R0	// pointer to int[2] for r,w
+	CBZ	R12, pipe_tramp_enosys
+	MOVD	fds+0(FP), R0
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
-	// On failure syslib pipe returns -errno with an APPLE errno;
-	// translate to Linux, preserving the negative-errno convention.
-	CBZ	R0, pipe2_darwin_done
+	CBZ	R0, pipe_tramp_done
 	NEG	R0, R0
 	BL	runtime·cosmo_xlat_errno_r0(SB)
 	NEG	R0, R0
-pipe2_darwin_done:
-	MOVW	R0, errno+16(FP)
+pipe_tramp_done:
+	MOVW	R0, ret+8(FP)
+	RET
+pipe_tramp_enosys:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+8(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$24-4
@@ -1183,8 +1190,13 @@ sched_getaffinity_darwin:
 	RET
 
 // int access(const char *name, int mode)
+// Only reached from Android-specific runtime code today; on macOS raw
+// SVC is not an option and no Syslib equivalent is wired up, so fail
+// with ENOSYS explicitly rather than executing a roulette syscall
+// (XNU dispatches on whatever happens to be in x16).
 TEXT runtime·access(SB),NOSPLIT,$0-20
-	// Use faccessat on both platforms
+	CHECK_DARWIN(access_darwin)
+	// Use faccessat on Linux
 	MOVD	$AT_FDCWD, R0
 	MOVD	name+0(FP), R1
 	MOVW	mode+8(FP), R2
@@ -1192,9 +1204,15 @@ TEXT runtime·access(SB),NOSPLIT,$0-20
 	SVC
 	MOVW	R0, ret+16(FP)
 	RET
+access_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+16(FP)
+	RET
 
 // int connect(int fd, const struct sockaddr *addr, socklen_t len)
+// Android-only callers; explicit ENOSYS on macOS (see access above).
 TEXT runtime·connect(SB),NOSPLIT,$0-28
+	CHECK_DARWIN(connect_darwin)
 	MOVW	fd+0(FP), R0
 	MOVD	addr+8(FP), R1
 	MOVW	len+16(FP), R2
@@ -1202,9 +1220,15 @@ TEXT runtime·connect(SB),NOSPLIT,$0-28
 	SVC
 	MOVW	R0, ret+24(FP)
 	RET
+connect_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+24(FP)
+	RET
 
 // int socket(int domain, int typ, int prot)
+// Android-only callers; explicit ENOSYS on macOS (see access above).
 TEXT runtime·socket(SB),NOSPLIT,$0-20
+	CHECK_DARWIN(socket_darwin)
 	MOVW	domain+0(FP), R0
 	MOVW	typ+4(FP), R1
 	MOVW	prot+8(FP), R2
@@ -1212,18 +1236,25 @@ TEXT runtime·socket(SB),NOSPLIT,$0-20
 	SVC
 	MOVW	R0, ret+16(FP)
 	RET
+socket_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+16(FP)
+	RET
 
 // func sbrk0() uintptr
 TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
+	// mallocinit calls this unconditionally. XNU has no brk; return 0
+	// ("not implemented", matching stubs_nonlinux.go's contract)
+	// instead of issuing a raw SVC whose result register is garbage.
+	CHECK_DARWIN(sbrk0_darwin)
 	// Implemented as brk(NULL).
 	MOVD	$0, R0
 	MOVD	$SYS_brk, R8
 	SVC
 	MOVD	R0, ret+0(FP)
 	RET
-
-// ARM64 doesn't use settls - TLS is set differently
-TEXT runtime·settls(SB),NOSPLIT,$0
+sbrk0_darwin:
+	MOVD	ZR, ret+0(FP)
 	RET
 
 // runtime·cosmo_xlat_oflags_r2 translates Linux open(2) flags in R2 into

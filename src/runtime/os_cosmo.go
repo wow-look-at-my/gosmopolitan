@@ -331,7 +331,8 @@ func osyield_no_g() {
 	osyield()
 }
 
-func pipe2(flags int32) (r, w int32, errno int32)
+// pipe2 is per-arch: assembly on amd64 (os_cosmo_amd64.go), a Go
+// host-dispatching implementation on arm64 (os_cosmo_arm64.go).
 
 // fcntl is defined in fcntl_cosmo_amd64.go and fcntl_cosmo_arm64.go
 

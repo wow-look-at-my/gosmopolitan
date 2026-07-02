@@ -12,7 +12,6 @@ package cosmo
 const (
 	SYS_READ          = 63
 	SYS_WRITE         = 64
-	SYS_OPEN          = 56 // openat on arm64
 	SYS_CLOSE         = 57
 	SYS_MMAP          = 222
 	SYS_MPROTECT      = 226

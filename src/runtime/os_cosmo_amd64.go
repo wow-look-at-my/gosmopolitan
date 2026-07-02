@@ -41,3 +41,6 @@ func osArchInit() {}
 // cosmoDarwinNumCPU: no Syslib on amd64, so no sysctl access; report
 // "unknown" and let getCPUCount fall back to 1.
 func cosmoDarwinNumCPU() int32 { return 0 }
+
+// pipe2 is implemented in sys_cosmo_amd64.s.
+func pipe2(flags int32) (r, w int32, errno int32)

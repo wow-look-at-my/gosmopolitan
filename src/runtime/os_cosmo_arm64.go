@@ -26,6 +26,16 @@ const (
 const (
 	_SYSLIB_MAGIC   = 's' | 'l'<<8 | 'i'<<16 | 'b'<<24
 	_SYSLIB_VERSION = 10
+
+	// _SYSLIB_MIN_VERSION is the oldest Syslib this runtime accepts.
+	// The runtime reads fields up to sigaltstack (v5) unconditionally
+	// and the darwin syscall emulation needs dlsym (v6); cosmopolitan
+	// libc itself refuses to load below v8 ("MANDATORY" marker in
+	// ape-m1.c), so every loader in the wild that can run cosmo
+	// binaries is v8+. Requiring 8 makes everything through dlerror
+	// unconditionally addressable; v9/v10 entries (pthread_cpu_
+	// number_np, sysctl*) stay version-gated at their use sites.
+	_SYSLIB_MIN_VERSION = 8
 )
 
 // syslib holds pointers to Apple APIs provided by the APE loader.
@@ -203,6 +213,7 @@ func osArchInit() {
 	if !isdarwin() {
 		return
 	}
+	cosmoCheckSyslib()
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
 	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
@@ -238,6 +249,83 @@ func cosmoSyslibGetentropy() uintptr {
 	}
 	return lib.getentropy
 }
+
+// cosmoCheckSyslib dies with a clear message if the APE loader's Syslib
+// is older than what this runtime needs, instead of reading past the end
+// of a shorter struct (undefined behavior with confusing crashes). Runs
+// from osinit, before anything else touches version-dependent fields.
+// (rt0 already verified the magic before setting __hostos to XNU.)
+//
+// The failure write itself needs Syslib write (v4, offset 232); for a
+// hypothetical pre-v4 loader the message may be lost, but the process
+// still dies here rather than corrupting itself later.
+func cosmoCheckSyslib() {
+	lib := __syslib
+	if lib != nil && lib.magic == _SYSLIB_MAGIC && lib.version >= _SYSLIB_MIN_VERSION {
+		return
+	}
+	writeErrStr("runtime: APE loader Syslib is missing or too old (need v8+); delete the cached loader (${TMPDIR:-$HOME}/.ape-*) so it is recompiled\n")
+	exit(127)
+}
+
+// mstart_stub_cosmo is the pthread_create entry point for macOS threads;
+// implemented in sys_cosmo_arm64.s (Go declaration for vet/asmdecl).
+func mstart_stub_cosmo()
+
+// pipe2 creates a pipe with the given Linux O_NONBLOCK/O_CLOEXEC flags.
+// On Linux hosts it is the pipe2 syscall. macOS has no pipe2 and the
+// Syslib's pipe takes no flags, so the flags are applied with fcntl
+// afterwards (the darwin dispatcher translates cmd/arg encodings). If
+// fcntl is unavailable and flags were requested, fail with ENOSYS
+// instead of silently returning descriptors without the requested
+// semantics - runtime users (nonblockingPipe for the netpoller) depend
+// on the flags actually being set.
+//
+// Errno convention matches the Linux asm path: 0 or NEGATIVE errno.
+func pipe2(flags int32) (r, w int32, errno int32) {
+	if !isdarwin() {
+		return pipe2Linux(flags)
+	}
+	var fds [2]int32
+	if e := cosmo_pipe_trampoline(&fds[0]); e != 0 {
+		return -1, -1, e
+	}
+	if flags != 0 {
+		const (
+			_F_GETFL    = 3
+			_F_SETFL    = 4
+			_F_SETFD    = 2
+			_FD_CLOEXEC = 1
+		)
+		for _, fd := range fds {
+			if flags&_O_CLOEXEC != 0 {
+				if _, e := fcntl(fd, _F_SETFD, _FD_CLOEXEC); e != 0 {
+					goto fail
+				}
+			}
+			if flags&_O_NONBLOCK != 0 {
+				fl, e := fcntl(fd, _F_GETFL, 0)
+				if e != 0 {
+					goto fail
+				}
+				if _, e := fcntl(fd, _F_SETFL, fl|_O_NONBLOCK); e != 0 {
+					goto fail
+				}
+			}
+		}
+	}
+	return fds[0], fds[1], 0
+fail:
+	closefd(fds[0])
+	closefd(fds[1])
+	return -1, -1, -38 // -ENOSYS
+}
+
+//go:noescape
+func pipe2Linux(flags int32) (r, w int32, errno int32)
+
+//go:noescape
+func cosmo_pipe_trampoline(fds *int32) int32
 
 var sysctlHwNcpu = []byte("hw.ncpu\x00")
 
