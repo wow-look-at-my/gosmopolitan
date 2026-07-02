@@ -65,6 +65,24 @@ const (
 	sigSending
 )
 
+// sigNoteUsed is set by cosmo's osArchInit when the host OS is XNU. It
+// is written once at startup, before initsig installs any signal
+// handler, and only read afterwards (including from the signal
+// handler). It stays false on every other GOOS.
+var sigNoteUsed bool
+
+// usesSigNote reports whether sigqueue must use the pipe-based,
+// async-signal-safe sigNote implementation instead of regular notes.
+// That is required wherever M parking is pthread-based - pthread mutex
+// operations are not async-signal-safe, so sigsend, which runs in the
+// signal handler, cannot use notewakeup there. Constant true on
+// darwin/ios; on cosmo the same M-parking design is used exactly when
+// the host is XNU, so osArchInit decides at startup; constant false
+// everywhere else.
+func usesSigNote() bool {
+	return GOOS == "darwin" || GOOS == "ios" || sigNoteUsed
+}
+
 // sigsend delivers a signal from sighandler to the internal signal delivery queue.
 // It reports whether the signal was sent. If not, the caller typically crashes the program.
 // It runs from the signal handler, so it's limited in what it can do.
@@ -109,7 +127,7 @@ Send:
 			break Send
 		case sigReceiving:
 			if sig.state.CompareAndSwap(sigReceiving, sigIdle) {
-				if GOOS == "darwin" || GOOS == "ios" {
+				if usesSigNote() {
 					sigNoteWakeup(&sig.note)
 					break Send
 				}
@@ -145,7 +163,7 @@ func signal_recv() uint32 {
 				throw("signal_recv: inconsistent state")
 			case sigIdle:
 				if sig.state.CompareAndSwap(sigIdle, sigReceiving) {
-					if GOOS == "darwin" || GOOS == "ios" {
+					if usesSigNote() {
 						sigNoteSleep(&sig.note)
 						break Receive
 					}
@@ -201,7 +219,7 @@ func signal_enable(s uint32) {
 	if !sig.inuse {
 		// This is the first call to signal_enable. Initialize.
 		sig.inuse = true // enable reception of signals; cannot disable
-		if GOOS == "darwin" || GOOS == "ios" {
+		if usesSigNote() {
 			sigNoteSetup(&sig.note)
 		} else {
 			noteclear(&sig.note)

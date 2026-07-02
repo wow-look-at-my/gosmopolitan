@@ -254,6 +254,11 @@ func osArchInit() {
 		return
 	}
 	cosmoCheckSyslib()
+	// On XNU, Ms park on pthread primitives exactly like GOOS=darwin, so
+	// sigsend must use the pipe-based sigNote instead of notewakeup
+	// (sigqueue_note_cosmo_arm64.go). Set before initsig installs any
+	// signal handler.
+	sigNoteUsed = true
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
 	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
 	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])
