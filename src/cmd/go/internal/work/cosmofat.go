@@ -47,6 +47,21 @@ func cosmoFatten(targets []string, dir bool) {
 	if !cosmoFatEnabled() || len(targets) == 0 {
 		return
 	}
+	// Fattening re-reads the freshly written target and re-creates it with
+	// the merged APE. That only makes sense for regular files: with
+	// -o /dev/null (or any other special file) the target reads back empty
+	// and cannot be replaced, so leave the primary build's output as-is.
+	regular := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if fi, err := os.Stat(target); err == nil && !fi.Mode().IsRegular() {
+			continue
+		}
+		regular = append(regular, target)
+	}
+	targets = regular
+	if len(targets) == 0 {
+		return
+	}
 	otherArch := cosmoFatArches[cfg.Goarch]
 
 	goCmd, err := os.Executable()
