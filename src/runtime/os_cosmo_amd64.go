@@ -69,3 +69,24 @@ func minitProcid() uint64 { return uint64(gettid()) }
 func darwinSignalM(mp *m, sig int) {
 	tgkill(getpid(), int(mp.procid), sig)
 }
+
+// sigaltstack is implemented in sys_cosmo_amd64.s (its darwin branch
+// is a raw-XNU stub; the Intel-mac runtime bring-up is pending).
+//
+//go:noescape
+func sigaltstack(new, old *stackt)
+
+// darwinSigprocmask and darwinSigaction are unreachable on amd64: the
+// GOARCH == "arm64" guards in sigprocmask/sysSigaction compile their
+// call sites away, and the asm paths keep the amd64 behavior. The
+// stubs exist so the shared code links.
+//
+//go:nosplit
+func darwinSigprocmask(how int32, new, old *sigset) {
+	throw("darwinSigprocmask: not implemented on amd64")
+}
+
+//go:nosplit
+func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
+	return -1
+}

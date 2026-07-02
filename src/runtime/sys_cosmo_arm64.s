@@ -765,15 +765,13 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 rtsigprocmask_done:
 	RET
 rtsigprocmask_darwin:
-	// macOS: use pthread_sigmask
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	96(R9), R12
-	MOVW	how+0(FP), R0
-	MOVD	new+8(FP), R1
-	MOVD	old+16(FP), R2
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
+	// Unreachable: runtime.sigprocmask dispatches XNU hosts to
+	// darwinSigprocmask (signal_cosmo_xnu.go), which translates the
+	// `how` values, the sigset width AND the signal numbering that a
+	// raw pthread_sigmask call here would get wrong. Crash loudly if
+	// a new caller ever bypasses the dispatch.
+	MOVD	$0, R0
+	MOVD	R0, (R0)
 	RET
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
@@ -788,11 +786,12 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	MOVW	R0, ret+32(FP)
 	RET
 rt_sigaction_darwin:
-	// macOS: sigaction structure is different from Linux
-	// For now, return success without calling sigaction
-	// This means signal handling won't work properly, but allows basic execution
-	// TODO: Implement proper sigaction translation layer
-	MOVW	$0, ret+32(FP)
+	// Unreachable: sysSigaction dispatches XNU hosts to darwinSigaction
+	// (signal_cosmo_xnu.go), the Apple sigaction translation layer.
+	// Report ENOSYS (a caller would throw) instead of the old silent
+	// fake-success if a new path ever bypasses the dispatch.
+	MOVW	$-38, R0
+	MOVW	R0, ret+32(FP)
 	RET
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
@@ -1196,9 +1195,11 @@ TEXT runtime·mstart_stub_cosmo(SB),NOSPLIT,$160
 
 	RET
 
-TEXT runtime·sigaltstack(SB),NOSPLIT,$0
-	CHECK_DARWIN(sigaltstack_darwin)
-	// Linux path
+// sigaltstackLinux is the Linux-host half of runtime.sigaltstack; the
+// darwin half is darwinSigaltstack in signal_cosmo_xnu.go (Apple's
+// stack_t layout and SS_DISABLE value differ, so the struct cannot be
+// passed through raw).
+TEXT runtime·sigaltstackLinux(SB),NOSPLIT,$0
 	MOVD	new+0(FP), R0
 	MOVD	old+8(FP), R1
 	MOVD	$SYS_sigaltstack, R8
@@ -1208,21 +1209,6 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$0
 	MOVD	$0, R0
 	MOVD	R0, (R0)	// crash
 sigaltstack_ok:
-	RET
-sigaltstack_darwin:
-	// macOS: use Syslib sigaltstack
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, sigaltstack_darwin_ok  // No syslib, skip
-	MOVD	296(R9), R12
-	CBZ	R12, sigaltstack_darwin_ok  // Function not available, skip
-	MOVD	new+0(FP), R0
-	MOVD	old+8(FP), R1
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
-	// Note: darwin sigaltstack returns 0 on success, -1 on error
-	// We treat non-zero as non-fatal here
-sigaltstack_darwin_ok:
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0

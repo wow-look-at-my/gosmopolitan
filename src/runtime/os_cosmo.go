@@ -307,8 +307,9 @@ func sigreturn__sigaction()
 func sigtramp()
 func cgoSigtramp()
 
-//go:noescape
-func sigaltstack(new, old *stackt)
+// sigaltstack is per-arch: on arm64 a Go host dispatcher
+// (signal_cosmo_xnu.go) that translates Apple's stack_t on XNU hosts,
+// on amd64 assembly (macOS-Intel runtime bring-up pending).
 
 //go:noescape
 func setitimer(mode int32, new, old *itimerval)
@@ -319,6 +320,14 @@ func rtsigprocmask(how int32, new, old *sigset, size int32)
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
+	if isdarwin() && GOARCH == "arm64" {
+		// Apple `how` values, sigset width and signal numbering all
+		// differ; darwinSigprocmask (signal_cosmo_xnu.go) translates.
+		// amd64 stays on its raw-XNU asm branch until the Intel-mac
+		// runtime bring-up.
+		darwinSigprocmask(how, new, old)
+		return
+	}
 	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
 }
 
@@ -389,11 +398,18 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 // fixsigcode is defined per-arch: signal_cosmo_amd64.go (no-op) and
 // signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
-// sysSigaction calls the rt_sigaction system call.
+// sysSigaction calls the rt_sigaction system call (Linux hosts) or the
+// Apple sigaction translation layer (XNU hosts, arm64).
 //
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
-	if rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask)) != 0 {
+	var ret int32
+	if isdarwin() && GOARCH == "arm64" {
+		ret = darwinSigaction(sig, new, old)
+	} else {
+		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
+	}
+	if ret != 0 {
 		if sig != 32 && sig != 33 && sig != 64 {
 			systemstack(func() {
 				throw("sigaction failed")
