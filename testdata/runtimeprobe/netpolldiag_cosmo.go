@@ -16,7 +16,7 @@ import (
 // the epoll poller is used instead.
 //
 //go:linkname cosmoNetpollDiag runtime.cosmoNetpollDiag
-func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64)
+func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64, phase int32, drainReads uint64, drainLastRet int32)
 
 // printNetpollDiag prints one sample of the darwin poller counters. The
 // watchdog prints two samples a spin apart so a wedged run's log shows
@@ -27,8 +27,8 @@ func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, last
 // then flat wake counters convict unlock2Wake's decision and advancing
 // wakes with lagging acquired convict the parking primitive.
 func printNetpollDiag(tag string) {
-	cycles, done, enterNs, exitNs, nowNs, lastN, lastE, pending, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired := cosmoNetpollDiag()
-	fmt.Printf("diag %s: pollcycles=%d/%d sinceenter=%dms sinceexit=%dms lastn=%d laste=%d pending=%d mut=%d/%d/%d semawake=%d/%d acq=%d\n",
+	cycles, done, enterNs, exitNs, nowNs, lastN, lastE, pending, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired, phase, drainReads, drainLastRet := cosmoNetpollDiag()
+	fmt.Printf("diag %s: pollcycles=%d/%d sinceenter=%dms sinceexit=%dms lastn=%d laste=%d pending=%d mut=%d/%d/%d semawake=%d/%d acq=%d phase=%d drain=%d/%d\n",
 		tag, cycles, done, (nowNs-enterNs)/1e6, (nowNs-exitNs)/1e6, lastN, lastE, pending,
-		mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired)
+		mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired, phase, drainReads, drainLastRet)
 }

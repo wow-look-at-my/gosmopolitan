@@ -114,6 +114,21 @@ var (
 	xnuSemaWakeEnter atomic.Uint64 // semawakeup entered (darwin path)
 	xnuSemaWakeDone  atomic.Uint64 // semawakeup completed
 	xnuSemaAcquired  atomic.Uint64 // semasleep consumed a wakeup (count--)
+
+	// Third capture round: four wedges (runs 28592344544/28592353386/
+	// 28592365698) all showed done == cycles-1 with poll(2) itself
+	// returning n=1 instantly ~90s earlier and semawake/acq healthy AND
+	// advancing - the poller M is stuck BETWEEN the poll return and
+	// releasing xnuMtxset, and parking works fine throughout. Mark the
+	// phases of that bracket so the next capture names the statement:
+	// 1 = poll returned, 2 = entered the pipe-drain loop, 3 = drain
+	// done, 4 = ready-scan done, 5 = xnuMtxset released. The drain's
+	// read(2) on the wakeup pipe is the only call in the bracket that
+	// CAN block; phase 2 with drainReads frozen convicts it, phase 3
+	// would point into netpollready (code shared with the epoll path).
+	xnuPollPhase    atomic.Int32
+	xnuDrainReads   atomic.Uint64 // total drain-loop read(2) calls
+	xnuDrainLastRet atomic.Int32  // last drain read return value
 )
 
 // cosmoNetpollDiag reports the darwin poller's forensic counters plus
@@ -122,13 +137,14 @@ var (
 // diagnostic output only.
 //
 //go:linkname cosmoNetpollDiag
-func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64) {
+func cosmoNetpollDiag() (cycles, done uint64, enterNs, exitNs, nowNs int64, lastN, lastE, pending int32, mutEnter, mutSet, mutDone, wakeEnter, wakeDone, acquired uint64, phase int32, drainReads uint64, drainLastRet int32) {
 	return xnuPollCycles.Load(), xnuPollDone.Load(),
 		xnuPollEnterNs.Load(), xnuPollExitNs.Load(), nanotime(),
 		xnuPollLastN.Load(), xnuPollLastE.Load(),
 		atomic.Loadint32(&xnuPendingUpdates),
 		xnuMutEnter.Load(), xnuMutSet.Load(), xnuMutDone.Load(),
-		xnuSemaWakeEnter.Load(), xnuSemaWakeDone.Load(), xnuSemaAcquired.Load()
+		xnuSemaWakeEnter.Load(), xnuSemaWakeDone.Load(), xnuSemaAcquired.Load(),
+		xnuPollPhase.Load(), xnuDrainReads.Load(), xnuDrainLastRet.Load()
 }
 
 // xnuMaxPollMs bounds every blocking poll(2): XNU can LOSE the wakeup
@@ -358,6 +374,7 @@ retry:
 	xnuPollExitNs.Store(nanotime())
 	xnuPollLastN.Store(n)
 	xnuPollLastE.Store(e)
+	xnuPollPhase.Store(1)
 	if n < 0 {
 		if e != _EINTR {
 			println("runtime: poll failed with", e, "len(xnuPfds)=", len(xnuPfds))
@@ -384,9 +401,17 @@ retry:
 			// possibly left in the pipe; that is self-healing - the
 			// next poll wakes immediately and drains again - so no
 			// retry is needed here, unlike the write side.
+			xnuPollPhase.Store(2)
 			var b [1]byte
-			for read(xnuRdwake, noescape(unsafe.Pointer(&b[0])), 1) == 1 {
+			for {
+				xnuDrainReads.Add(1)
+				r := read(xnuRdwake, noescape(unsafe.Pointer(&b[0])), 1)
+				xnuDrainLastRet.Store(r)
+				if r != 1 {
+					break
+				}
 			}
+			xnuPollPhase.Store(3)
 			netpollWakeSig.Store(0)
 		}
 		// Still look at the other fds even if the mode may have
@@ -413,7 +438,9 @@ retry:
 			n--
 		}
 	}
+	xnuPollPhase.Store(4)
 	unlock(&xnuMtxset)
+	xnuPollPhase.Store(5)
 	xnuPollDone.Add(1)
 	return toRun, delta
 }
