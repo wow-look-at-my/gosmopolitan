@@ -43,8 +43,8 @@ var sigPairs = map[uint32]uint32{ // linux -> apple
 }
 
 // Linux signals with no Apple equivalent, and vice versa.
-var linuxOnly = []uint32{16, 30}  // STKFLT, PWR
-var appleOnly = []uint32{7, 29}   // EMT, INFO
+var linuxOnly = []uint32{16, 30} // STKFLT, PWR
+var appleOnly = []uint32{7, 29}  // EMT, INFO
 
 func TestCosmoSigXlatTables(t *testing.T) {
 	for l, a := range sigPairs {

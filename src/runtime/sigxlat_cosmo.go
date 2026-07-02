@@ -80,7 +80,7 @@ var cosmoSigA2LTab = [32]byte{
 	7:  0, // SIGEMT: no Linux equivalent
 	8:  8,
 	9:  9,
-	10: 7,  // SIGBUS
+	10: 7, // SIGBUS
 	11: 11,
 	12: 31, // SIGSYS
 	13: 13, 14: 14, 15: 15,
