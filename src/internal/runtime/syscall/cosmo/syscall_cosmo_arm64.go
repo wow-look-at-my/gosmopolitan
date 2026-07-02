@@ -53,10 +53,16 @@ type DarwinFns struct {
 
 var darwinFns DarwinFns
 
+// darwinErrorFn mirrors darwinFns.Error for the assembly errno
+// trampoline (asm reads a plain variable rather than a struct field so
+// the offset cannot rot).
+var darwinErrorFn uintptr
+
 // SetDarwinFns installs the resolved function table. Called once from
 // runtime.osArchInit before any user code runs.
 func SetDarwinFns(f *DarwinFns) {
 	darwinFns = *f
+	darwinErrorFn = f.Error
 }
 
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
@@ -174,23 +180,16 @@ func darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
 func xlatErrnoDarwin(errno uintptr) uintptr
 
 // darwinErrno fetches the calling thread's errno via Apple's __error()
-// and translates it to Linux numbering. Must be called immediately after
-// a failed libc call, before anything else can clobber errno.
+// and translates it to Linux numbering (EIO if __error is unavailable).
+// Must be called immediately after a failed libc call, before anything
+// else can clobber errno. Implemented in assembly with a minimal frame:
+// every function on this path must be nosplit (syscall.Syscall has
+// already run entersyscall, and growing the stack in _Gsyscall is a
+// fatal "stack split at bad time"), and the assembly version keeps the
+// deepest chains inside the 792-byte nosplit budget.
 //
-//go:nosplit
-func darwinErrno() uintptr {
-	if darwinFns.Error == 0 {
-		// No way to read errno; report a generic I/O error rather
-		// than inventing a specific cause.
-		return darwinEIO
-	}
-	p := darwinLibcCall6(darwinFns.Error, 0, 0, 0, 0, 0, 0)
-	if p == 0 {
-		return darwinEIO
-	}
-	e := uintptr(*(*int32)(unsafe.Pointer(p)))
-	return xlatErrnoDarwin(e)
-}
+//go:noescape
+func darwinErrno() uintptr
 
 // darwinXlatDirfd converts the Linux AT_FDCWD sentinel (-100) to Apple's
 // (-2). Other descriptors pass through unchanged.
@@ -319,6 +318,7 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 // number of bytes written including the trailing NUL, on top of Apple's
 // libc getcwd, which returns the buffer pointer or NULL.
 //
+//go:nosplit
 func darwinGetcwd(buf, size uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Getcwd == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
@@ -363,6 +363,7 @@ func darwinStatConvert(dst *linuxStat, src *appleStat) {
 	dst.Ctim = linuxTimespec(src.Ctim)
 }
 
+//go:nosplit
 func darwinFstatat(dirfd, path, statbuf, flags uintptr) (r1, r2, errno uintptr) {
 	if statbuf == 0 {
 		return ^uintptr(0), 0, darwinEINVAL
@@ -399,6 +400,7 @@ func darwinFstatat(dirfd, path, statbuf, flags uintptr) (r1, r2, errno uintptr) 
 	return 0, 0, 0
 }
 
+//go:nosplit
 func darwinFstat(fd, statbuf uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Fstat == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
@@ -479,6 +481,7 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 // argument is therefore ignored). getentropy is sysret-wrapped by the
 // loader: it returns -errno (Apple numbering) on failure.
 //
+//go:nosplit
 func darwinGetrandom(buf, n uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Getentropy == 0 {
 		return ^uintptr(0), 0, darwinENOSYS

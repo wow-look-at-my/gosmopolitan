@@ -37,7 +37,7 @@
 // For arm64, the syscall number goes in R8, arguments in R0-R5.
 // On Darwin ARM64, raw syscalls crash with SIGSYS - we must route
 // through syslib functions instead.
-TEXT ·Syscall6(SB),NOSPLIT,$96-80
+TEXT ·Syscall6(SB),NOSPLIT,$88-80
 	CHECK_DARWIN(syscall6_darwin)
 
 	// Linux path: direct syscall (unchanged)
@@ -250,4 +250,26 @@ TEXT ·xlatErrnoDarwin(SB),NOSPLIT,$0-16
 	MOVD	errno+0(FP), R0
 	BL	runtime·cosmo_xlat_errno_r0(SB)
 	MOVD	R0, ret+8(FP)
+	RET
+
+// func darwinErrno() uintptr
+// Fetches the calling thread's errno via Apple's __error() and
+// translates it to Linux numbering. Returns EIO (5) if __error is
+// unavailable (cause unknowable). Kept in assembly with a 16-byte frame
+// because it sits on the deepest nosplit chains of the darwin syscall
+// emulation.
+TEXT ·darwinErrno(SB),NOSPLIT,$0-8
+	MOVD	·darwinErrorFn(SB), R12
+	CBZ	R12, errno_tramp_unknown
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	CBZ	R0, errno_tramp_unknown
+	MOVW	(R0), R0		// *(int *)__error()
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+0(FP)
+	RET
+errno_tramp_unknown:
+	MOVD	$5, R0			// Linux EIO
+	MOVD	R0, ret+0(FP)
 	RET
