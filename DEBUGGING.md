@@ -643,3 +643,156 @@ Still broken on macOS (wave 8+ candidates):
   trivial dlsym passthrough next wave; today net.Buffers fails on
   macOS hosts only.
 - Intel mac execution (runtime bring-up: clone/futex ENOSYS etc).
+
+## 2026-07-02: Wave 8 - signal delivery on macOS ARM64; darwin netpoller wedge fixed
+
+Signals went from fully stubbed (rt_sigaction fake-success: SIGSEGV =
+dead process, no os/signal, no async preemption - tight loops hung
+GC/STW forever, wait statuses carried Apple numbers) to CI-verified
+working on macos-latest: sigpanic + recover, os/signal delivery,
+SIGURG async preemption, and Linux-numbered wait statuses. Linux paths
+are byte-for-byte untouched (runtime dispatch on __hostos throughout).
+
+**Number/mask translation** (sigxlat_cosmo.go + cosmo pkg sig_cosmo.go):
+the runtime thinks in LINUX signal numbers everywhere (sigtable, _SIG*,
+syscall, os/signal); Apple diverges over the BSD range (SIGBUS 7 vs 10,
+SIGUSR1 10 vs 30, SIGCHLD 17 vs 20, SIGURG 23 vs 16, SIGSYS 31 vs 12,
+...; SIGSTKFLT/SIGPWR/rt-range have no Apple number, SIGEMT/SIGINFO no
+Linux one). Full 1..31 tables both directions, derived from upstream
+defs_linux_arm64.go vs defs_darwin_arm64.go, as plain-data byte arrays
+indexable from asm; sigsets are bit-REMAPPED through them (Linux 8-byte
+mask bit N-1 <-> Apple 4-byte mask bit M-1), not width-truncated.
+Unit tests pin both packages' tables to one literal pair list and
+verify inverse/round-trip/unmapped/out-of-range and mask remaps.
+Translate Linux->Apple when installing/masking/sending (sigaction,
+pthread_sigmask, kill, pthread_kill, raise, tgkill, sigfwd),
+Apple->Linux when receiving (sigtramp) and when decoding wait statuses
+(darwinWait4; encodings agree, only embedded signal numbers rewritten).
+
+**Install machinery** (signal_cosmo_xnu.go): the Syslib's sigaction is
+a sysret-wrapped passthrough to Apple LIBC sigaction (verified in
+ape-m1.c), so it takes the libc struct {handler, mask u32, flags i32}
+(= upstream usigactiont; libc adds its own kernel trampoline and calls
+sigreturn when our handler returns - our sigtramp just RETs, exactly
+like upstream darwin). Flag VALUES translate (SA_SIGINFO 0x4->0x40,
+SA_ONSTACK 0x8000000->0x1, SA_RESTART 0x10000000->0x2); unmapped
+signals no-op cleanly so initsig/setsigstack/clearSignalHandlers stay
+oblivious. sigprocmask -> pthread_sigmask with how+1 (Linux 0/1/2 ->
+Apple 1/2/3; arm64 counterpart of the wave-4 amd64 fix) and remapped
+4-byte sets. sigaltstack translates Linux arm64 stackt {sp,flags,pad,
+size} <-> Apple {sp,size,flags} and SS_DISABLE 2<->4; the 32KiB
+gsignal stack meets Apple arm64's MINSIGSTKSZ exactly. All of it
+nosplit/lock-free (setsig runs inside dieFromSignal on the signal
+stack; clearSignalHandlers + msigrestore run between fork and exec).
+amd64 keeps its raw-XNU stubs behind GOARCH guards (Intel-mac runtime
+bring-up still pending).
+
+**Receive side**: sigctxt is HOST-AWARE rather than translated - the
+kernel hands the handler its native context (Linux ucontext embeds the
+mcontext; Apple's uc_mcontext is a POINTER at offset 48 into the
+signal frame, per upstream defs_darwin_arm64.go), so every accessor
+dispatches on __hostos and reads/writes the real structure. Writes
+(set_pc/set_sp for sigpanic injection, pushCall for preemption) land
+in the kernel's own mcontext, so Apple's sigreturn restores them for
+free - no copying, nothing to write back. Apple siginfo si_addr sits
+at 24 (Linux union at 16); si_code at 8 on both, so sigcode needs no
+dispatch. _SI_USER=0 matches Apple's empirical kill() si_code (same
+note as upstream os_darwin.go). sigtramp translates the incoming
+Apple number through the byte table before any Go runs and ignores
+unmapped ones; sigfwd hands foreign handlers the APPLE number next to
+the untranslated Apple info/ctx. fixsigcode ports upstream's darwin
+SIGTRAP breakpoint correction.
+
+**Preemption/sending**: m.procid was gettid()'s uint32 truncation of
+pthread_self - every pthread_kill aimed at a garbage handle. minit now
+stores the full pthread_t on XNU; signalM translates and pthread_kills
+it. raise/raiseproc/tgkill translate in asm (unmapped -> signal 0,
+a no-op probe). dieFromSignal therefore kills with the CORRECT Apple
+signal and the wait status decodes truthfully on the other side.
+
+**Netpoller wedge: bounded, with the honest diagnosis** (the wave-6/7
+mystery; 8 watchdog kills across this wave's CI pushes, every one a
+goroutine inside a mutator path - net.Listen/Dial -> netpollopen,
+pollWait -> netpollarm - stuck on xnuMtxset while the poller slept in
+poll(2)). Two theories were worked through ON CI EVIDENCE:
+
+(1) Poller barging (commit 0c8dfef8, RETRACTED in abf7db49): the idea
+    that the unfair runtime mutex lets the hot poller re-take
+    xnuMtxset ahead of the semawakeup'd mutator after its byte was
+    drained. Wrong: the AIX protocol already prevents it - a mutator
+    HOLDS xnuMtxpoll while queued on xnuMtxset, so the poller's next
+    cycle blocks at lock(xnuMtxpoll) until the mutator is through.
+    The counter/yield "fix" is removed.
+(2) What the watchdog traceback actually shows (the panic watchdog
+    earned its keep on its first firing): main _Grunning inside
+    netpollopen's lock(xnuMtxset) - the mutator side executed the
+    wakeup protocol correctly (flag was clear after the cycle-top
+    reset, so its byte WAS written) - and a second goroutine parked
+    normally; the poller never came out of poll(2). With the
+    userspace protocol re-derived sound twice, what remains is the
+    KERNEL losing the pipe wakeup - Apple's poll() has a
+    long-documented race of exactly this shape (rdar 37537852,
+    "poll() sometimes doesn't return when a polled pipe becomes
+    readable"; the reason darwin software generally uses kqueue).
+    Load/timing dependence matches the nondeterminism across
+    identical-code runs.
+
+Mitigation, since the kernel cannot be fixed from here: never trust
+an unbounded wait - every blocking poll is capped at 100ms
+(xnuMaxPollMs). A lost wakeup now costs <=100ms (poller times out,
+returns empty, RELEASES xnuMtxset - freeing any stranded mutator -
+and the scheduler re-enters with a recomputed delay) instead of
+wedging until an external kill. Real readiness is unaffected
+(level-triggered); an idle process wakes 10x/s on one thread.
+Additional hardening for the signal era: the wakeup-pipe writers now
+retry EINTR (SIGURG preemption interrupts libc calls; an unretried
+EINTR behind the once-only guards would lose the byte on the USER
+side) and treat EAGAIN as delivered, mirroring the epoll eventfd
+loop; write1/read's darwin paths translate their -errno results
+Apple->Linux so those comparisons work at all. The probe watchdog
+panics with traceback "all" instead of calling runtime.Stack:
+Stack(all) needs a stop-the-world, which an M wedged inside a runtime
+lock blocks forever (a CI run proved it - the dump hung for the
+step's remaining budget), while fatalpanic's freezetheworld is
+best-effort and dumps mutex-wedged Ms without their cooperation.
+
+**Also landed**: readv/writev dlsym passthrough on darwin (iovec
+identical; unblocks net.Buffers on macOS - the wave-7 note was right
+that it is trivial). Probe grew segvrecover, sigterm+sigusr2 (USR2's
+diverging number proves install- and receive-side translation agree),
+preempt (GOMAXPROCS call-free spin loops + full GC within 10s;
+bounded iterations so broken preemption fails by duration instead of
+hanging), waitsig (child kills itself with SIGKILL - uncatchable,
+hence deterministic; Go discards un-notified catchable signals and
+converges fatal paths to SIGABRT, which is why the plan's original
+USR1 idea cannot work - parent asserts Signaled()+SIGKILL through the
+wait4 translation; skip-lines on windows). The probe is now a
+multi-file package (per-OS signal helpers; syscall.Kill/SIGUSR2 don't
+exist for the windows payload), so CI builds its module directory.
+
+**Verified**: make.bash; vet clean both arches; full probe green on
+linux/amd64 AND qemu-aarch64 (40 lines incl. the new five; per-binary
+ELF-header assimilation - a binary must be stamped with its OWN
+embedded printf header, not another build's); apetest suite green;
+stdlib under cosmo on Linux: os/signal ok (full suite), net ok, time
+ok, os ok, os/exec ok - no regressions vs the wave-7 baseline. Head
+CI run 28584207120 (abf7db49): ALL 6 JOBS GREEN; on macos-latest the
+full probe passed for all three origin binaries, including the new
+`ok segvrecover`, `ok sigterm`, `ok sigusr2`, `ok preempt` (~140ms-
+600ms) and `ok waitsig killed`. (The first attempt of that run lost
+the macOS BUILD job to runner DNS - "Could not resolve host:
+github.com" at checkout - unrelated to the code; the rerun was clean.
+The macos runner pool was visibly unhealthy all day, which also
+inflated the wedge recurrence rate that finally made it fixable.)
+
+Still missing on macOS hosts (deferred, in dependency order):
+- sendmsg/recvmsg (msghdr/cmsghdr translation; fd passing, ReadMsg*).
+- setitimer/SIGPROF profiling (itimerval layouts differ; SIGPROF
+  delivery would work now, the timer plumbing is what's absent).
+- AllThreadsSyscall (sigPerThreadSyscall is Linux-rt-range; unused by
+  the stdlib on cosmo today; darwinSignalM drops it).
+- FPE si_code values differ (Apple FPE_INTDIV=7 vs Linux 1): only
+  affects the panic message for float traps, which arm64 does not
+  generate by default; upstream darwin/arm64 leaves it too.
+- Intel-mac runtime bring-up (clone/futex/sigaction; amd64 stubs
+  unchanged and honestly gated).
