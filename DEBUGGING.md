@@ -403,3 +403,120 @@ comes back 0 and Nlink 0x1000081ED for a 0755 file under qemu-aarch64.
 Size/Ino/Timespec offsets happen to coincide, so size-based code works;
 file-TYPE checks are wrong on arm64 Linux hosts. Fix = per-arch Stat_t
 (and matching update to the darwin emulation's mirror struct).
+[FIXED in wave 6 - see below.]
+
+## 2026-07-02: Wave 6 - darwin netpoller, sockets, os/exec; arm64 Stat_t; go install fat
+
+macOS hosts went from "any timer, socket or exec pipe kills the
+process" (netpollinit threw: epoll-only) to timers, TCP/UDP and os/exec
+all CI-verified on macos-latest. Each piece landed with the probe checks
+that prove it, and every commit's CI was green on all six jobs.
+
+**Netpoll design** (netpoll_cosmo_xnu.go): both pollers ship in one
+binary - GOOS=cosmo cannot build-tag-split Linux and macOS - so every
+netpoll entry point in netpoll_cosmo.go dispatches at run time on
+__hostos; the Linux epoll path is byte-for-byte untouched. The darwin
+side is a port of netpoll_aix.go: level-triggered poll(2) over a
+mutex-protected pollfd array, nonblocking self-pipe for wakeups, one M
+polling at a time (it holds xnuMtxset across the blocking poll; fd-set
+mutators boot it out through the pipe first). poll itself is Apple
+libc's poll via Syslib dlsym + the cosmoLibcCall6 trampoline. struct
+pollfd and POLLIN/OUT/ERR/HUP values are identical on Linux and Apple
+(AIX is the odd one), so no event translation. Level-triggered means
+pollWait must arm each wait: netpoll.go grew a netpollLevelTriggered
+bool (set only by the darwin poller's init) alongside the constant GOOS
+list, and netpoll() disarms a direction when it delivers readiness.
+netpoll(0) returns empty like AIX: a nonblocking check would still need
+xnuMtxset, which the blocked poller holds - sysmon must not wait on it.
+amd64 has no Syslib, so its poller stub reports unsupported and
+netpollinit fails with a clear message (Intel-mac execution is dead
+anyway until its runtime bring-up).
+
+**Sockets** (socket_cosmo_arm64.go, dispatcher slow path): socket,
+socketpair, bind, listen, accept(4), connect, getsockname/getpeername,
+sendto/recvfrom, set/getsockopt, shutdown via dlsym'd libc. All
+translation in one file: sockaddr Linux u16-family <-> Apple
+{sa_len,sa_family} (payloads coincide for AF_UNIX/INET/INET6; AF_INET6
+10<->30; abstract unix names refused EINVAL), SOCK_CLOEXEC/NONBLOCK
+stripped and fcntl'd (accept4 = accept + fcntl; Apple has no accept4),
+and a curated sockopt table (SOL_SOCKET 1->0xffff, SO_REUSEADDR 2->0x4,
+SO_ERROR 4->0x1007 with the VALUE errno-translated too, SO_LINGER ->
+SO_LINGER_SEC because Apple's plain SO_LINGER counts ticks, TCP
+keepalive 4/5/6->0x10/0x101/0x102, IPV6_V6ONLY 26->27; unknown options
+ENOPROTOOPT rather than programming whatever Apple option shares the
+number). Every socket gets SO_NOSIGPIPE - no runtime SIGPIPE handler
+exists on macOS until the signal wave, so a peer-closed write would
+kill the process. sendmsg/recvmsg stay ENOSYS (msghdr field widths
+differ; nothing in basic TCP/UDP needs them).
+
+**os/exec** (exec_cosmo_arm64.go): pipe2 (pipe+fcntl), dup3
+(dup2+F_SETFD, oldfd==newfd EINVAL), setsid, setpgid, execve (direct;
+argv/envp shapes agree), wait4 (WCONTINUED 8->0x10; status passthrough
+- encodings agree, embedded signal numbers stay Apple's until the
+signal wave; rusage fixed up IN PLACE: both systems' struct rusage is
+144 bytes and only the two int32-vs-int64 tv_usec fields differ, which
+avoids a nosplit-busting local). Fork-child path (dup3, fcntl, chdir,
+setsid, setpgid, execve, close, write) uses only pre-resolved pointers
+to async-signal-safe libSystem functions, nosplit end to end. waitid
+deliberately NOT emulated: blockUntilWaitable falls back cleanly on
+ENOSYS to blocking wait4 = upstream darwin behavior (wait_unimp.go).
+Chroot/credential/ctty options remain ENOSYS via the status pipe.
+execve of a PRISTINE APE is ENOEXEC on XNU (OS limitation - cosmo libc
+solves it inside its own execve wrapper, we don't); assimilated
+Mach-O/ELF children exec directly, and the probe demonstrates the
+sniff-the-magic-and-use-/bin/sh pattern.
+
+**Nosplit lesson #3** (extends wave 4+5's two): the emulation budget is
+tight enough that HELPER NESTING is a real cost - each Go call level is
+~80-96 bytes (frame + outgoing args). The linker's nosplit check failed
+the first socketpair/wait4 versions; fixes were flattening (apply fd
+flags and SO_NOSIGPIPE sequentially at call sites, not nested), calling
+darwinLibcCall6 directly where darwinCall's convenience frame didn't
+fit, and the in-place rusage conversion. Read the check's output
+top-down; it prints the exact chain and byte counts.
+
+**arm64 Stat_t layout** (P0, pre-existing): ztypes_cosmo_arm64.go
+carried amd64's struct stat; the arm64 kernel writes Mode at 16 (not
+24), 32-bit Nlink/Blksize, Rdev at 32. Everything between Ino and Rdev
+was scrambled on arm64-Linux hosts, masked by Size/Ino/timestamps
+sharing offsets - and a zero Mode has no type bits, so IsRegular()
+accidentally PASSED. Now matches upstream ztypes_linux_arm64.go; the
+darwin emulation's mirror struct writes the same layout. Probe canary:
+statdir (a directory must IsDir - a regular file can't catch this).
+Verified under qemu-aarch64.
+
+**cmd/go fat coverage**: go install now fattens (rerun of the ORIGINAL
+install args against a scratch GOPATH - keeps pkg@version working,
+which can't be rewritten to go build - with GOMODCACHE untouched and
+GOBIN cleared; cross-compiled installs land in bin/GOOS_GOARCH/).
+Plain `go build` without -o already fattened (single-main-package
+builds default cfg.BuildO at build.go:475 - the earlier "never fattens"
+diagnosis was wrong; multi-package -o-less builds discard binaries by
+design). go test (-c) stays thin deliberately: host-run throwaway
+artifacts, and fattening triples test compiles. -tags=faketime forces
+thin: the windows sibling can't compile (time_fake.go is !windows and
+the tag drops time_nofake.go), and thin beats failing the build.
+
+**Probe** (now 30 checks): + sleep (wall-clock bounded), ticker, after,
+ctxtimeout, tcplisten/tcpecho/tcpserver, deadline (read deadline in the
+past against a held-open conn -> i/o timeout), udp (loopback datagram),
+execchild (self-exec through the full os/exec stack, launch mode chosen
+by binary magic: ELF/Mach-O/windows direct, pristine APE via /bin/sh),
+statdir. Plus a spin-loop watchdog (60s) that depends on nothing under
+test - a wedged probe fails CI in a minute, not at the job timeout.
+
+Still broken on macOS (wave 7+):
+- Signals: rt_sigaction success-stub, no darwin sigtramp, Linux vs
+  Apple signal numbers untranslated (also: wait statuses carry Apple
+  termsig numbers; SIGPIPE handled per-socket via SO_NOSIGPIPE until
+  real signal handling exists).
+- sendmsg/recvmsg (fd passing, ReadMsg*) - needs msghdr translation.
+- getdents64 (directory listing) - Apple has no Linux-layout
+  getdirentries; needs a real emulation with dirent rewriting.
+- Intel mac execution (runtime bring-up: clone/futex ENOSYS etc).
+
+Pre-existing, noticed while verifying (NOT wave-6 regressions; present
+at the wave-5 baseline on linux/amd64): net tests
+TestUnixConnLocalAndRemoteNames/TestUnixgramConnLocalAndRemoteNames
+(autobind abstract-name expectations) and TestBuffers_WriteTo/Copy
+(writev accounting vs /dev/null) fail under GOOS=cosmo on Linux.

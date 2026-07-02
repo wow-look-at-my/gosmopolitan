@@ -13,6 +13,9 @@ APE binaries are single executables that run natively on multiple operating syst
 # payloads in one binary. GOARCH is ignored for the output.
 GOOS=cosmo go build -o program.com main.go
 
+# go install produces the same fat APE in the install directory
+GOOS=cosmo go install ./cmd/program
+
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
