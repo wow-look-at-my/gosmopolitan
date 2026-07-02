@@ -127,3 +127,54 @@ func cputicks() int64 {
 //go:nosplit
 //go:noescape
 func libcCall(fn, arg unsafe.Pointer) int64
+
+// cosmoLibcCall6 calls a C function pointer (from the Syslib or resolved
+// via dlsym) with up to six integer arguments, following the Apple ARM64
+// calling convention. Implemented in sys_cosmo_arm64.s.
+//
+//go:nosplit
+//go:noescape
+func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+
+// _RTLD_DEFAULT is Apple's RTLD_DEFAULT dlsym pseudo-handle ((void *)-2):
+// search every image loaded in the process, i.e. the loader's libSystem.
+const _RTLD_DEFAULT = ^uintptr(1)
+
+// cosmoDlsym resolves a symbol from the host's libSystem via the Syslib's
+// dlsym (available since Syslib v6, 2023-11-03; the loader embedded in our
+// binaries is v10). Returns 0 if dlsym is unavailable or the lookup fails.
+// name must be a NUL-terminated C string.
+//
+// This is how the runtime obtains host functions the Syslib does not
+// export (getpid and friends). The alternative - extending the embedded
+// ape-m1.c Syslib struct and bumping SYSLIB_VERSION - was rejected: the
+// compiled loader is cached at ${TMPDIR:-$HOME}/.ape-1.10 keyed only by
+// the APE loader version string, and any existing Mach-O there (including
+// one compiled from an upstream cosmopolitan binary's embedded source) is
+// reused as-is, so a stale v10 loader would silently satisfy the cache and
+// the new fields would never reliably exist. dlsym works with every v6+
+// loader in the wild, cached or fresh.
+func cosmoDlsym(name *byte) uintptr {
+	lib := __syslib
+	if lib == nil || lib.version < 6 || lib.dlsym == 0 {
+		return 0
+	}
+	return cosmoLibcCall6(lib.dlsym, _RTLD_DEFAULT, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0)
+}
+
+// cosmoDarwinGetpidFn is the address of Apple libc getpid, resolved at
+// startup by osArchInit (the Syslib does not export getpid). Zero when
+// unresolved. Read by ·getpid in sys_cosmo_arm64.s.
+var cosmoDarwinGetpidFn uintptr
+
+var dlsymNameGetpid = []byte("getpid\x00")
+
+// osArchInit resolves darwin host functions at startup. It runs from
+// osinit, on the system stack, before any user code and before the first
+// fork, so dlsym (which may take dyld locks) is safe here.
+func osArchInit() {
+	if !isdarwin() {
+		return
+	}
+	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
+}

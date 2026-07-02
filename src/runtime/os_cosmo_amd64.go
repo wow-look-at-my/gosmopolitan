@@ -32,3 +32,8 @@ var __hostos int32
 func isdarwin() bool {
 	return __hostos == _HOSTXNU
 }
+
+// osArchInit is a no-op on amd64: the darwin path uses raw XNU syscall
+// numbers rather than an APE-loader Syslib, so there is nothing to
+// resolve at startup.
+func osArchInit() {}

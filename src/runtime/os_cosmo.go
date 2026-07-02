@@ -231,6 +231,7 @@ func sysauxv(auxv []uintptr) (pairs int) {
 }
 
 func osinit() {
+	osArchInit()
 	numCPUStartup = getCPUCount()
 }
 

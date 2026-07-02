@@ -120,6 +120,24 @@ TEXT runtime·libcCall(SB),NOSPLIT,$0-24
 	MOVD	R0, ret+16(FP)
 	RET
 
+// func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+// Generic C-ABI call through a Syslib or dlsym-resolved function pointer
+// with up to six integer arguments. C functions taking fewer arguments
+// simply ignore the extra registers, so one trampoline serves them all.
+TEXT runtime·cosmoLibcCall6(SB),NOSPLIT,$0-64
+	MOVD	fn+0(FP), R12
+	MOVD	a1+8(FP), R0
+	MOVD	a2+16(FP), R1
+	MOVD	a3+24(FP), R2
+	MOVD	a4+32(FP), R3
+	MOVD	a5+40(FP), R4
+	MOVD	a6+48(FP), R5
+	SUB	$16, RSP		// keep 16-byte alignment for C ABI
+	BL	(R12)
+	ADD	$16, RSP
+	MOVD	R0, ret+56(FP)
+	RET
+
 // dispatch_semaphore_create(value int64) dispatch_semaphore_t
 // Syslib offset 112
 TEXT runtime·dispatch_semaphore_create_trampoline(SB),NOSPLIT,$0-16
@@ -446,12 +464,25 @@ TEXT ·getpid(SB),NOSPLIT,$0-8
 	MOVD	R0, ret+0(FP)
 	RET
 getpid_darwin:
-	// macOS: use getpid from syslib (offset 112)
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	112(R9), R12
+	// macOS: the Syslib has no getpid entry, so osArchInit resolves the
+	// real Apple libc getpid via Syslib dlsym at startup. (This used to
+	// call Syslib offset 112, which is dispatch_semaphore_create: every
+	// call leaked a semaphore and returned the object pointer as the
+	// "pid".) The function pointer, not the value, is cached so that a
+	// fork()ed child still observes its own pid.
+	MOVD	runtime·cosmoDarwinGetpidFn(SB), R12
+	CBZ	R12, getpid_darwin_none
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	MOVD	R0, ret+0(FP)
+	RET
+getpid_darwin_none:
+	// dlsym unavailable (pre-v6 loader) or resolution failed. Return -1
+	// so the failure is visible instead of fabricating a plausible pid.
+	// The only runtime caller is signalM, whose darwin tgkill path
+	// ignores the pid and signals through pthread_kill.
+	MOVD	$-1, R0
 	MOVD	R0, ret+0(FP)
 	RET
 
