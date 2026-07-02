@@ -795,10 +795,18 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 	binary.LittleEndian.PutUint16(header[sectStart+34:], 0)
 	binary.LittleEndian.PutUint32(header[sectStart+36:], 0x60000020)
 
-	// Minimal code at 0x200
-	header[0x200] = 0x31 // xor eax, eax
-	header[0x201] = 0xC0
-	header[0x202] = 0xC3 // ret
+	// Minimal entry stub at 0x200, matching the COFF machine type.
+	switch machineType {
+	case 0xAA64:
+		copy(header[0x200:], []byte{
+			0x00, 0x00, 0x80, 0x52, // mov w0, #0
+			0xC0, 0x03, 0x5F, 0xD6, // ret
+		})
+	default:
+		header[0x200] = 0x31 // xor eax, eax
+		header[0x201] = 0xC0
+		header[0x202] = 0xC3 // ret
+	}
 }
 
 // replaceAll is a simple string replacement helper
