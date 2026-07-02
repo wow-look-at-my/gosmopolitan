@@ -200,6 +200,20 @@ var (
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
 	dlsymNameError      = []byte("__error\x00")
 	dlsymNamePoll       = []byte("poll\x00")
+
+	dlsymNameSocket      = []byte("socket\x00")
+	dlsymNameSocketpair  = []byte("socketpair\x00")
+	dlsymNameBind        = []byte("bind\x00")
+	dlsymNameListen      = []byte("listen\x00")
+	dlsymNameAccept      = []byte("accept\x00")
+	dlsymNameConnect     = []byte("connect\x00")
+	dlsymNameGetsockname = []byte("getsockname\x00")
+	dlsymNameGetpeername = []byte("getpeername\x00")
+	dlsymNameSendto      = []byte("sendto\x00")
+	dlsymNameRecvfrom    = []byte("recvfrom\x00")
+	dlsymNameSetsockopt  = []byte("setsockopt\x00")
+	dlsymNameGetsockopt  = []byte("getsockopt\x00")
+	dlsymNameShutdown    = []byte("shutdown\x00")
 )
 
 // cosmoDarwinPollFn is Apple libc poll(2), resolved at startup; the
@@ -248,8 +262,22 @@ func osArchInit() {
 		Faccessat:   cosmoDlsym(&dlsymNameFaccessat[0]),
 		Readlinkat:  cosmoDlsym(&dlsymNameReadlinkat[0]),
 		Error:       cosmoDarwinErrorFn,
+		Socket:      cosmoDlsym(&dlsymNameSocket[0]),
+		Socketpair:  cosmoDlsym(&dlsymNameSocketpair[0]),
+		Bind:        cosmoDlsym(&dlsymNameBind[0]),
+		Listen:      cosmoDlsym(&dlsymNameListen[0]),
+		Accept:      cosmoDlsym(&dlsymNameAccept[0]),
+		Connect:     cosmoDlsym(&dlsymNameConnect[0]),
+		Getsockname: cosmoDlsym(&dlsymNameGetsockname[0]),
+		Getpeername: cosmoDlsym(&dlsymNameGetpeername[0]),
+		Sendto:      cosmoDlsym(&dlsymNameSendto[0]),
+		Recvfrom:    cosmoDlsym(&dlsymNameRecvfrom[0]),
+		Setsockopt:  cosmoDlsym(&dlsymNameSetsockopt[0]),
+		Getsockopt:  cosmoDlsym(&dlsymNameGetsockopt[0]),
+		Shutdown:    cosmoDlsym(&dlsymNameShutdown[0]),
 		PthreadSelf: __syslib.pthread_self,
 		Getentropy:  cosmoSyslibGetentropy(),
+		Close:       __syslib.close,
 	})
 }
 

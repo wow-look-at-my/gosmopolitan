@@ -46,9 +46,25 @@ type DarwinFns struct {
 	Readlinkat uintptr
 	Error      uintptr // int *__error(void): Apple's errno location
 
+	// Socket layer (socket_cosmo_arm64.go).
+	Socket      uintptr
+	Socketpair  uintptr
+	Bind        uintptr
+	Listen      uintptr
+	Accept      uintptr
+	Connect     uintptr
+	Getsockname uintptr
+	Getpeername uintptr
+	Sendto      uintptr
+	Recvfrom    uintptr
+	Setsockopt  uintptr
+	Getsockopt  uintptr
+	Shutdown    uintptr
+
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
 	Getentropy  uintptr // Syslib v5+; sysret-wrapped (-errno on failure)
+	Close       uintptr // Syslib v4+; used for error-path fd cleanup
 }
 
 var darwinFns DarwinFns
@@ -308,6 +324,36 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFcntl(a1, a2, a3)
 	case sysGETRANDOM:
 		return darwinGetrandom(a1, a2)
+
+	case sysSOCKET:
+		return darwinSocket(a1, a2, a3)
+	case sysSOCKETPAIR:
+		return darwinSocketpair(a1, a2, a3, a4)
+	case sysBIND:
+		return darwinBindConnect(darwinFns.Bind, a1, a2, a3)
+	case sysCONNECT:
+		return darwinBindConnect(darwinFns.Connect, a1, a2, a3)
+	case sysLISTEN:
+		return darwinCall(darwinFns.Listen, a1, a2, 0, 0, 0, 0)
+	case sysACCEPT:
+		return darwinAccept4(a1, a2, a3, 0)
+	case sysACCEPT4:
+		return darwinAccept4(a1, a2, a3, a4)
+	case sysGETSOCKNAME:
+		return darwinSockname(darwinFns.Getsockname, a1, a2, a3)
+	case sysGETPEERNAME:
+		return darwinSockname(darwinFns.Getpeername, a1, a2, a3)
+	case sysSENDTO:
+		return darwinSendto(a1, a2, a3, a4, a5, a6)
+	case sysRECVFROM:
+		return darwinRecvfrom(a1, a2, a3, a4, a5, a6)
+	case sysSETSOCKOPT:
+		return darwinSetsockopt(a1, a2, a3, a4, a5)
+	case sysGETSOCKOPT:
+		return darwinGetsockopt(a1, a2, a3, a4, a5)
+	case sysSHUTDOWN:
+		// SHUT_RD/SHUT_WR/SHUT_RDWR are 0/1/2 on both systems.
+		return darwinCall(darwinFns.Shutdown, a1, a2, 0, 0, 0, 0)
 	}
 	// Not emulated. Return ENOSYS so the failure is visible rather than
 	// pretending the call succeeded.

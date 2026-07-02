@@ -25,6 +25,7 @@ var probeOkChecks = []string{
 	"numcpu",
 	"monotonic",
 	"sleep", "ticker", "after", "ctxtimeout",
+	"tcplisten", "tcpecho", "deadline", "tcpserver", "udp",
 	"executable",
 	"mkdirtemp", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",

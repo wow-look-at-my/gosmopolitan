@@ -1,10 +1,10 @@
 // Runtimeprobe exercises the runtime and os-package surface that must
 // work on every APE host today: file I/O, process identity, CPU count,
 // the monotonic clock, timers (time.Sleep/Ticker/After and context
-// timeouts, which need a working netpoller), os.Executable, argv/env,
-// and working-directory syscalls. It deliberately uses NO signals -
-// those are known-unimplemented on macOS hosts until the signal wave
-// lands.
+// timeouts, which need a working netpoller), TCP/UDP loopback sockets
+// with deadlines, os.Executable, argv/env, and working-directory
+// syscalls. It deliberately uses NO signals - those are
+// known-unimplemented on macOS hosts until the signal wave lands.
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -15,7 +15,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"runtime"
 	"time"
@@ -53,6 +56,7 @@ func main() {
 	checkNumCPU()
 	checkMonotonic()
 	checkTimers()
+	checkSockets()
 	checkExecutable()
 	checkFiles()
 	if failed {
@@ -196,6 +200,135 @@ func checkMonotonic() {
 	default:
 		ok("monotonic", d1)
 	}
+}
+
+func checkSockets() {
+	// TCP loopback: listen, dial, one echo round trip, then a read
+	// deadline already in the past on a second connection. The server
+	// goroutine holds the second connection open until the deadline
+	// check finished, so the expected failure is unambiguously the
+	// deadline (not EOF from a closing peer).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fail("tcplisten", "%v", err)
+		return
+	}
+	ok("tcplisten", ln.Addr())
+
+	srvDone := make(chan string, 1)
+	holdOpen := make(chan struct{})
+	go func() {
+		defer close(srvDone)
+		// Connection 1: echo one message back.
+		c, err := ln.Accept()
+		if err != nil {
+			srvDone <- fmt.Sprintf("accept 1: %v", err)
+			return
+		}
+		buf := make([]byte, 256)
+		n, err := c.Read(buf)
+		if err != nil {
+			srvDone <- fmt.Sprintf("server read: %v", err)
+			c.Close()
+			return
+		}
+		if _, err := c.Write(buf[:n]); err != nil {
+			srvDone <- fmt.Sprintf("server write: %v", err)
+			c.Close()
+			return
+		}
+		c.Close()
+		// Connection 2: accept, send nothing, hold open until the
+		// client's deadline check is done.
+		c2, err := ln.Accept()
+		if err != nil {
+			srvDone <- fmt.Sprintf("accept 2: %v", err)
+			return
+		}
+		<-holdOpen
+		c2.Close()
+		srvDone <- ""
+	}()
+
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		fail("tcpecho", "dial: %v", err)
+		ln.Close()
+		close(holdOpen)
+		return
+	}
+	msg := "ping " + os.Getenv("RUNTIMEPROBE_MARK")
+	if _, err := c.Write([]byte(msg)); err != nil {
+		fail("tcpecho", "write: %v", err)
+	} else {
+		buf := make([]byte, 256)
+		n, err := io.ReadAtLeast(c, buf, len(msg))
+		switch {
+		case err != nil:
+			fail("tcpecho", "read: %v", err)
+		case string(buf[:n]) != msg:
+			fail("tcpecho", "got %q, want %q", buf[:n], msg)
+		default:
+			ok("tcpecho")
+		}
+	}
+	c.Close()
+
+	c2, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		fail("deadline", "dial: %v", err)
+	} else {
+		c2.SetReadDeadline(time.Now().Add(-time.Second))
+		_, err := c2.Read(make([]byte, 1))
+		var ne net.Error
+		switch {
+		case err == nil:
+			fail("deadline", "read succeeded despite past deadline")
+		case !errors.As(err, &ne) || !ne.Timeout():
+			fail("deadline", "read error %v, want timeout", err)
+		default:
+			ok("deadline")
+		}
+		c2.Close()
+	}
+	close(holdOpen)
+	if msg := <-srvDone; msg != "" {
+		fail("tcpserver", "%s", msg)
+	} else {
+		ok("tcpserver")
+	}
+	ln.Close()
+
+	// UDP loopback: one packet.
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		fail("udp", "listen: %v", err)
+		return
+	}
+	uc, err := net.Dial("udp", pc.LocalAddr().String())
+	if err != nil {
+		fail("udp", "dial: %v", err)
+		pc.Close()
+		return
+	}
+	const datagram = "probe-datagram"
+	if _, err := uc.Write([]byte(datagram)); err != nil {
+		fail("udp", "write: %v", err)
+	} else {
+		pc.SetReadDeadline(time.Now().Add(5 * time.Second))
+		buf := make([]byte, 64)
+		n, _, err := pc.ReadFrom(buf)
+		switch {
+		case err != nil:
+			fail("udp", "read: %v", err)
+		case string(buf[:n]) != datagram:
+			fail("udp", "got %q, want %q", buf[:n], datagram)
+		default:
+			ok("udp")
+		}
+	}
+	uc.Close()
+	pc.Close()
 }
 
 func checkExecutable() {

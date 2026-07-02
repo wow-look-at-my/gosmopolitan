@@ -164,13 +164,14 @@ func newFile(fd int, name string, kind newFileKind, nonBlocking bool) *File {
 	if kind == kindOpenFile {
 		switch runtime.GOOS {
 		case "darwin", "ios", "dragonfly", "freebsd", "netbsd", "openbsd", "cosmo":
-			// For cosmo the host OS is only known at run time. On a
-			// macOS host, adding a regular file to the netpoller
-			// would tear the process down (epoll is unavailable
-			// there and netpollinit throws), while on a Linux host
-			// epoll_ctl on a regular file merely fails with EPERM
-			// and internal/poll falls back to blocking mode - the
-			// same end state this stat check produces directly.
+			// For cosmo the host OS is only known at run time, and
+			// both hosts want regular files kept out of the
+			// netpoller: on Linux epoll_ctl on a regular file fails
+			// with EPERM (internal/poll then falls back to blocking
+			// mode - the same end state this stat check produces
+			// directly), and on macOS the poll(2)-based netpoller
+			// would report a regular file as always ready, spinning
+			// the poller instead of doing honest blocking I/O.
 			var st syscall.Stat_t
 			err := ignoringEINTR(func() error {
 				return syscall.Fstat(fd, &st)
