@@ -198,6 +198,8 @@ var (
 	dlsymNameChdir      = []byte("chdir\x00")
 	dlsymNameFaccessat  = []byte("faccessat\x00")
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
+	dlsymNameReadv      = []byte("readv\x00")
+	dlsymNameWritev     = []byte("writev\x00")
 	// Apple's raw directory-read syscall wrapper (what readdir uses
 	// internally). Exported from libSystem; the C symbol is
 	// __getdirentries64 (dlsym takes the name without the Mach-O
@@ -274,6 +276,8 @@ func osArchInit() {
 		Chdir:         cosmoDlsym(&dlsymNameChdir[0]),
 		Faccessat:     cosmoDlsym(&dlsymNameFaccessat[0]),
 		Readlinkat:    cosmoDlsym(&dlsymNameReadlinkat[0]),
+		Readv:         cosmoDlsym(&dlsymNameReadv[0]),
+		Writev:        cosmoDlsym(&dlsymNameWritev[0]),
 		Getdirentries: cosmoDlsym(&dlsymNameGetdirentries[0]),
 		Error:         cosmoDarwinErrorFn,
 		Socket:        cosmoDlsym(&dlsymNameSocket[0]),

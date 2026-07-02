@@ -44,6 +44,10 @@ type DarwinFns struct {
 	Chdir      uintptr
 	Faccessat  uintptr
 	Readlinkat uintptr
+	// Readv/Writev pass through directly: struct iovec is
+	// {base *byte, len size_t} on both Linux and Apple.
+	Readv  uintptr
+	Writev uintptr
 	// Getdirentries is Apple's __getdirentries64: the raw directory
 	// read behind libc's readdir. It reads at the descriptor's file
 	// offset like Linux getdents64 (so lseek/dup semantics carry over),
@@ -106,6 +110,8 @@ const (
 	sysFACCESSAT  = 48
 	sysCHDIR      = 49
 	sysGETDENTS64 = 61
+	sysREADV      = 65
+	sysWRITEV     = 66
 	sysREADLINKAT = 78
 	sysNEWFSTATAT = 79
 	sysFSTAT      = 80
@@ -333,6 +339,12 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinCall(darwinFns.Faccessat, darwinXlatDirfd(a1), a2, a3, 0, 0, 0)
 	case sysCHDIR:
 		return darwinCall(darwinFns.Chdir, a1, 0, 0, 0, 0, 0)
+	case sysREADV:
+		// struct iovec layouts are identical (base, len); fd/iov/iovcnt
+		// argument order matches. Straight passthrough.
+		return darwinCall(darwinFns.Readv, a1, a2, a3, 0, 0, 0)
+	case sysWRITEV:
+		return darwinCall(darwinFns.Writev, a1, a2, a3, 0, 0, 0)
 	case sysREADLINKAT:
 		return darwinCall(darwinFns.Readlinkat, darwinXlatDirfd(a1), a2, a3, a4, 0, 0)
 	case sysNEWFSTATAT:
