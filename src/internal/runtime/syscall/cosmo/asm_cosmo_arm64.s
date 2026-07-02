@@ -151,6 +151,18 @@ darwin_close:
 	MOVD	232(R10), R12		// syslib.close
 	B	darwin_call
 darwin_openat:
+	// Syslib openat is Apple's real openat: translate the Linux
+	// AT_FDCWD sentinel in the dirfd (Linux -100 -> Apple -2) and the
+	// Linux O_* flag bits (shared helper; see its table in
+	// runtime/sys_cosmo_arm64.s). Without this, os.Create's
+	// O_CREAT (Linux 0x40) arrived as Apple O_SHLOCK and no file was
+	// ever created.
+	MOVW	R0, R9
+	CMNW	$100, R9
+	BNE	darwin_openat_dirfd_done
+	MOVD	$-2, R0			// Apple AT_FDCWD
+darwin_openat_dirfd_done:
+	BL	runtime·cosmo_xlat_oflags_r2(SB)
 	MOVD	248(R10), R12		// syslib.openat
 	B	darwin_call
 darwin_mmap:

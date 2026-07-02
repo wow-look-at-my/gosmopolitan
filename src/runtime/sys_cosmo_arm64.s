@@ -273,12 +273,15 @@ open_done:
 	MOVW	R0, ret+16(FP)
 	RET
 open_darwin:
-	// macOS path: call Syslib openat
+	// macOS path: call Syslib openat, which is Apple's real openat.
+	// Apple's AT_FDCWD is -2 (Linux uses -100), and the O_* flag bits
+	// differ, so both must be translated before the call.
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	248(R9), R12
-	MOVD	$AT_FDCWD, R0
+	MOVD	$-2, R0			// Apple AT_FDCWD
 	MOVD	name+0(FP), R1
 	MOVW	mode+8(FP), R2
+	BL	runtime·cosmo_xlat_oflags_r2(SB)
 	MOVW	perm+12(FP), R3
 	SUB	$16, RSP
 	BL	(R12)
@@ -1221,6 +1224,60 @@ TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
 
 // ARM64 doesn't use settls - TLS is set differently
 TEXT runtime·settls(SB),NOSPLIT,$0
+	RET
+
+// runtime·cosmo_xlat_oflags_r2 translates Linux open(2) flags in R2 into
+// Apple flags in R2. Leaf; clobbers only R9 and R11, preserves all other
+// registers, so it is BL-safe from any framed darwin openat path.
+//
+// Bit-by-bit mapping (Linux value as this port's syscall package defines
+// it in zerrors_cosmo_arm64.go -> Apple value):
+//   0x3      access mode          -> unchanged (same encoding)
+//   0x40     O_CREAT              -> 0x200
+//   0x80     O_EXCL               -> 0x800
+//   0x100    O_NOCTTY             -> 0x20000
+//   0x200    O_TRUNC              -> 0x400
+//   0x400    O_APPEND             -> 0x8
+//   0x800    O_NONBLOCK           -> 0x4
+//   0x1000   O_DSYNC              -> 0x400000
+//   0x2000   O_ASYNC              -> 0x40
+//   0x10000  O_DIRECTORY          -> 0x100000
+//   0x20000  O_NOFOLLOW           -> 0x100
+//   0x80000  O_CLOEXEC            -> 0x1000000
+//   0x100000 __O_SYNC (O_SYNC hi) -> 0x80
+// Stripped (no Apple equivalent; dropping beats passing garbage bits
+// that Apple would interpret as unrelated flags):
+//   0x4000/0x8000 (kernel-arm64 O_DIRECTORY/O_NOFOLLOW - unused by this
+//   port's userspace, which carries the amd64-style values above),
+//   0x40000 O_NOATIME, 0x200000 O_PATH (degrades to a plain read-only
+//   open), 0x400000 __O_TMPFILE.
+TEXT runtime·cosmo_xlat_oflags_r2(SB),NOSPLIT|NOFRAME,$0
+	AND	$0x3, R2, R9
+	TBZ	$6, R2, 2(PC)
+	ORR	$0x200, R9, R9		// O_CREAT
+	TBZ	$7, R2, 2(PC)
+	ORR	$0x800, R9, R9		// O_EXCL
+	TBZ	$8, R2, 2(PC)
+	ORR	$0x20000, R9, R9	// O_NOCTTY
+	TBZ	$9, R2, 2(PC)
+	ORR	$0x400, R9, R9		// O_TRUNC
+	TBZ	$10, R2, 2(PC)
+	ORR	$0x8, R9, R9		// O_APPEND
+	TBZ	$11, R2, 2(PC)
+	ORR	$0x4, R9, R9		// O_NONBLOCK
+	TBZ	$12, R2, 2(PC)
+	ORR	$0x400000, R9, R9	// O_DSYNC
+	TBZ	$13, R2, 2(PC)
+	ORR	$0x40, R9, R9		// O_ASYNC
+	TBZ	$16, R2, 2(PC)
+	ORR	$0x100000, R9, R9	// O_DIRECTORY
+	TBZ	$17, R2, 2(PC)
+	ORR	$0x100, R9, R9		// O_NOFOLLOW
+	TBZ	$19, R2, 2(PC)
+	ORR	$0x1000000, R9, R9	// O_CLOEXEC
+	TBZ	$20, R2, 2(PC)
+	ORR	$0x80, R9, R9		// O_SYNC
+	MOVD	R9, R2
 	RET
 
 // runtime·cosmo_xlat_errno_r0 translates a positive Apple errno in R0 into
