@@ -238,3 +238,29 @@ func cosmoSyslibGetentropy() uintptr {
 	}
 	return lib.getentropy
 }
+
+var sysctlHwNcpu = []byte("hw.ncpu\x00")
+
+// cosmoDarwinNumCPU returns the host's CPU count on macOS via the
+// Syslib's sysctlbyname("hw.ncpu"), available since Syslib v10
+// (2024-05-02; the loader embedded in our binaries is v10). Returns 0
+// when unavailable so the caller can fall back.
+func cosmoDarwinNumCPU() int32 {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return 0
+	}
+	var n uint32
+	sz := uintptr(unsafe.Sizeof(n))
+	// sysctlbyname is sysret-wrapped by the loader: 0 on success,
+	// -errno (Apple numbering) on failure.
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(&sysctlHwNcpu[0])),
+		uintptr(unsafe.Pointer(&n)),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	if r != 0 {
+		return 0
+	}
+	return int32(n)
+}

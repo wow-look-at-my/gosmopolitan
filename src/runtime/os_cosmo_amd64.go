@@ -37,3 +37,7 @@ func isdarwin() bool {
 // numbers rather than an APE-loader Syslib, so there is nothing to
 // resolve at startup.
 func osArchInit() {}
+
+// cosmoDarwinNumCPU: no Syslib on amd64, so no sysctl access; report
+// "unknown" and let getCPUCount fall back to 1.
+func cosmoDarwinNumCPU() int32 { return 0 }

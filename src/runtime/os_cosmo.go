@@ -62,6 +62,15 @@ func futexwakeup(addr *uint32, cnt uint32) {
 }
 
 func getCPUCount() int32 {
+	if isdarwin() {
+		// sched_getaffinity is Linux-only; on macOS ask the host
+		// via sysctl (arm64 Syslib). Without this every macOS run
+		// was pinned to GOMAXPROCS=1.
+		if n := cosmoDarwinNumCPU(); n > 0 {
+			return n
+		}
+		return 1
+	}
 	// Use a conservative default. On Cosmopolitan, the actual CPU count
 	// is determined at runtime based on the host OS.
 	const maxCPUs = 64 * 1024
