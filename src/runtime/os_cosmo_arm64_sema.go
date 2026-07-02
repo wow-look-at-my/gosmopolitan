@@ -29,6 +29,9 @@ func dispatch_semaphore_signal_trampoline(sema uintptr) int64
 //go:noescape
 func dispatch_semaphore_wait_trampoline(sema uintptr, timeout uint64) int64
 
+//go:noescape
+func dispatch_walltime_trampoline(delta int64) uint64
+
 // semacreate creates a semaphore for the M.
 // Called from lock_sema.go
 //
@@ -79,11 +82,26 @@ func semasleep(ns int64) int32 {
 	if ns < 0 {
 		timeout = _DISPATCH_TIME_FOREVER
 	} else {
-		// dispatch_time(DISPATCH_TIME_NOW, ns) = ns nanoseconds from now
-		// DISPATCH_TIME_NOW is 0, so timeout = ns gives relative timeout
-		// Actually dispatch_semaphore_wait expects an absolute dispatch_time_t
-		// For simplicity, use a large relative offset
-		timeout = uint64(ns)
+		// dispatch_semaphore_wait takes an ABSOLUTE dispatch_time_t.
+		// Passing the relative ns directly (as this used to) made
+		// every timed wait expire immediately: positive
+		// dispatch_time_t values are mach absolute ticks since boot,
+		// so a small value is a deadline in the distant past, and
+		// timed semasleeps degraded into busy spinning.
+		//
+		// The Syslib does not export dispatch_time, but
+		// dispatch_walltime(NULL, delta) (v1+) yields an absolute
+		// wall-clock deadline now+delta, which
+		// dispatch_semaphore_wait accepts. Wall time can jump with
+		// clock adjustments; for semaphore timeouts that is
+		// acceptable (callers retry), unlike firing instantly.
+		timeout = dispatch_walltime_trampoline(ns)
+		if timeout == 0 {
+			// Syslib entry missing (cannot happen with v1+
+			// loaders): keep the old degraded behavior rather
+			// than waiting forever.
+			timeout = uint64(ns)
+		}
 	}
 
 	ret := dispatch_semaphore_wait_trampoline(mp.waitsema, timeout)

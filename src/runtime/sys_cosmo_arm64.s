@@ -191,6 +191,26 @@ dsema_wait_fail:
 	MOVD	R0, ret+16(FP)
 	RET
 
+// dispatch_walltime(NULL, delta) -> absolute wall-clock dispatch_time_t
+// for "now + delta nanoseconds". Syslib offset 136 (v1+).
+// Returns 0 if the Syslib or the function is unavailable.
+TEXT runtime·dispatch_walltime_trampoline(SB),NOSPLIT,$0-16
+	MOVD	runtime·__syslib(SB), R9
+	CBZ	R9, dwalltime_fail
+	MOVD	136(R9), R12
+	CBZ	R12, dwalltime_fail
+	MOVD	$0, R0			// when = NULL: current wall time
+	MOVD	delta+0(FP), R1
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	MOVD	R0, ret+8(FP)
+	RET
+dwalltime_fail:
+	MOVD	$0, R0
+	MOVD	R0, ret+8(FP)
+	RET
+
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers R9
 #define CHECK_DARWIN(label) \
