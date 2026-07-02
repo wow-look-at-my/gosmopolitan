@@ -14,7 +14,7 @@ import (
 
 // This file holds the epoll poller used on Linux hosts. Every entry
 // point dispatches at run time on the host OS: macOS has no epoll, so
-// XNU hosts use the poll(2) poller in netpoll_cosmo_xnu.go instead.
+// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead.
 // Exactly one of the two is ever initialized in a given process.
 
 var (
@@ -77,9 +77,8 @@ func netpollclose(fd uintptr) uintptr {
 	return cosmo.EpollCtl(epfd, cosmo.EPOLL_CTL_DEL, int32(fd), &ev)
 }
 
-// netpollarm is only called when the level-triggered darwin poller is in
-// use (netpollLevelTriggered); the epoll poller is edge-triggered and
-// arms once at netpollopen.
+// netpollarm is never called: both pollers are edge-triggered and arm
+// once at netpollopen (netpollLevelTriggered stays false).
 func netpollarm(pd *pollDesc, mode int) {
 	if isdarwin() {
 		netpollarmDarwin(pd, mode)
@@ -88,7 +87,7 @@ func netpollarm(pd *pollDesc, mode int) {
 	throw("runtime: unused")
 }
 
-// netpollBreak interrupts an epollwait (or, on XNU hosts, a poll).
+// netpollBreak interrupts an epollwait (or, on XNU hosts, a kevent).
 func netpollBreak() {
 	// Failing to cas indicates there is an in-flight wakeup, so we're done here.
 	if !netpollWakeSig.CompareAndSwap(0, 1) {

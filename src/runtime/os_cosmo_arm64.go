@@ -206,7 +206,8 @@ var (
 	// leading underscore, exactly like __error below).
 	dlsymNameGetdirentries = []byte("__getdirentries64\x00")
 	dlsymNameError         = []byte("__error\x00")
-	dlsymNamePoll          = []byte("poll\x00")
+	dlsymNameKqueue        = []byte("kqueue\x00")
+	dlsymNameKevent        = []byte("kevent\x00")
 
 	dlsymNameSocket      = []byte("socket\x00")
 	dlsymNameSocketpair  = []byte("socketpair\x00")
@@ -231,10 +232,14 @@ var (
 	dlsymNameKill    = []byte("kill\x00")
 )
 
-// cosmoDarwinPollFn is Apple libc poll(2), resolved at startup; the
-// darwin netpoller (netpoll_cosmo_xnu.go) is built on it. Zero when
-// unresolved (netpollinit then fails visibly).
-var cosmoDarwinPollFn uintptr
+// cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2)
+// and kevent(2), resolved at startup; the darwin netpoller
+// (netpoll_cosmo_xnu.go) is built on them. Zero when unresolved
+// (netpollinit then fails visibly).
+var (
+	cosmoDarwinKqueueFn uintptr
+	cosmoDarwinKeventFn uintptr
+)
 
 // cosmoDarwinErrorFn is Apple's __error(), the address-of-errno function,
 // resolved at startup for runtime-internal errno fetches. (The syscall
@@ -263,7 +268,8 @@ func osArchInit() {
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
 	cosmoDarwinFcntlFn = cosmoDlsym(&dlsymNameFcntl[0])
 	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])
-	cosmoDarwinPollFn = cosmoDlsym(&dlsymNamePoll[0])
+	cosmoDarwinKqueueFn = cosmoDlsym(&dlsymNameKqueue[0])
+	cosmoDarwinKeventFn = cosmoDlsym(&dlsymNameKevent[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
@@ -428,27 +434,42 @@ func darwinSignalM(mp *m, sig int) {
 	cosmoLibcCall6(lib.pthread_kill, uintptr(mp.procid), uintptr(asig), 0, 0, 0, 0)
 }
 
-// cosmoDarwinPollSupported reports whether the darwin netpoller can reach
-// Apple libc's poll(2) on this host.
-func cosmoDarwinPollSupported() bool {
-	return cosmoDarwinPollFn != 0
+// cosmoDarwinKqueueSupported reports whether the darwin netpoller can
+// reach Apple libc's kqueue/kevent on this host.
+func cosmoDarwinKqueueSupported() bool {
+	return cosmoDarwinKqueueFn != 0 && cosmoDarwinKeventFn != 0
 }
 
-// cosmoDarwinPoll calls Apple libc poll(2). timeout is in milliseconds,
-// -1 blocks indefinitely. Returns the number of ready descriptors, or
-// (-1, errno) with a LINUX errno number on failure.
+// cosmoDarwinKqueue calls Apple libc kqueue(2). Returns the new kqueue
+// descriptor, or (-1, errno) with a LINUX errno number on failure.
 //
 // Only converted 32-bit values leave this function: C int returns arrive
 // in w0 with the upper half of x0 undefined.
-func cosmoDarwinPoll(pfds *pollfd, npfds int32, timeout int32) (int32, int32) {
-	if cosmoDarwinPollFn == 0 {
+func cosmoDarwinKqueue() (int32, int32) {
+	if cosmoDarwinKqueueFn == 0 {
 		return -1, 38 // ENOSYS
 	}
-	r := int32(cosmoLibcCall6(cosmoDarwinPollFn,
-		uintptr(unsafe.Pointer(pfds)),
-		uintptr(uint32(npfds)),
-		uintptr(uint32(timeout)), // -1 stays -1 in the callee's w2
-		0, 0, 0))
+	r := int32(cosmoLibcCall6(cosmoDarwinKqueueFn, 0, 0, 0, 0, 0, 0))
+	if r < 0 {
+		return -1, cosmoDarwinErrno()
+	}
+	return r, 0
+}
+
+// cosmoDarwinKevent calls Apple libc kevent(2). Returns the number of
+// events placed in ev, or (-1, errno) with a LINUX errno number on
+// failure.
+func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
+	if cosmoDarwinKeventFn == 0 {
+		return -1, 38 // ENOSYS
+	}
+	r := int32(cosmoLibcCall6(cosmoDarwinKeventFn,
+		uintptr(uint32(kq)),
+		uintptr(unsafe.Pointer(ch)),
+		uintptr(uint32(nch)),
+		uintptr(unsafe.Pointer(ev)),
+		uintptr(uint32(nev)),
+		uintptr(unsafe.Pointer(ts))))
 	if r < 0 {
 		return -1, cosmoDarwinErrno()
 	}

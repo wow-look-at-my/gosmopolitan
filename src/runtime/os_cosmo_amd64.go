@@ -42,16 +42,20 @@ func osArchInit() {}
 // "unknown" and let getCPUCount fall back to 1.
 func cosmoDarwinNumCPU() int32 { return 0 }
 
-// cosmoDarwinPollSupported: the darwin netpoller needs Apple libc's
-// poll(2), reached through the arm64 Syslib's dlsym. amd64 has no Syslib
-// (and macOS-Intel execution is not implemented: clone/futex are ENOSYS
-// there), so the poller is unsupported and netpollinit fails with a
-// clear message instead of issuing Linux syscalls XNU would kill.
-func cosmoDarwinPollSupported() bool { return false }
+// cosmoDarwinKqueueSupported: the darwin netpoller needs Apple libc's
+// kqueue/kevent, reached through the arm64 Syslib's dlsym. amd64 has no
+// Syslib (and macOS-Intel execution is not implemented: clone/futex are
+// ENOSYS there), so the poller is unsupported and netpollinit fails
+// with a clear message instead of issuing Linux syscalls XNU would kill.
+func cosmoDarwinKqueueSupported() bool { return false }
 
-// cosmoDarwinPoll is unreachable on amd64 (netpollinit throws first);
-// keep the failure honest anyway.
-func cosmoDarwinPoll(pfds *pollfd, npfds int32, timeout int32) (int32, int32) {
+// cosmoDarwinKqueue and cosmoDarwinKevent are unreachable on amd64
+// (netpollinit throws first); keep the failures honest anyway.
+func cosmoDarwinKqueue() (int32, int32) {
+	return -1, 38 // ENOSYS
+}
+
+func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
 	return -1, 38 // ENOSYS
 }
 
