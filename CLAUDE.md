@@ -60,6 +60,8 @@ go test ./cmd/compile/...
 go test std
 ```
 
+To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
+
 ## Building Cosmopolitan Binaries
 
 ```bash

@@ -28,6 +28,10 @@ cd src && ./make.bash    # Unix
 cd src && make.bat       # Windows
 ```
 
+## Testing
+
+With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>` runs cosmo test binaries on a Linux or macOS host via the `misc/cosmo` exec wrappers (see `misc/cosmo/README.md`).
+
 ## Status
 
 This is an experimental project. Use at your own risk.
