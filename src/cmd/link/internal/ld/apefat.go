@@ -68,9 +68,14 @@ func isPlainPEPayload(data []byte) bool {
 // lives at apeHeaderSize with p_offset values shifted by apeHeaderSize).
 func payloadFromAPEOrELF(data []byte) (*apePayload, error) {
 	if len(data) > apeHeaderSize+64 && string(data[0:7]) == "MZqFpD=" {
+		// Validate before shiftPOffsets touches the program headers.
+		p, err := payloadFromELF(data[apeHeaderSize:])
+		if err != nil {
+			return nil, err
+		}
 		delta := uint64(apeHeaderSize)
-		elf := shiftPOffsets(data[apeHeaderSize:], -delta) // unsigned wraparound subtracts
-		return payloadFromELF(elf)
+		p.elf = shiftPOffsets(p.elf, -delta) // unsigned wraparound subtracts
+		return p, nil
 	}
 	return payloadFromELF(data)
 }

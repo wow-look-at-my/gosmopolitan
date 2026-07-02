@@ -93,6 +93,21 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 	default:
 		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
 	}
+	// Validate the program header table up front: shiftPOffsets,
+	// makeEmbeddedElfHeader, and makeMachoHeader all index it without
+	// further checks, so a truncated or corrupt input would panic there.
+	phoff := binary.LittleEndian.Uint64(elf[32:40])
+	phentsize := binary.LittleEndian.Uint16(elf[54:56])
+	phnum := binary.LittleEndian.Uint16(elf[56:58])
+	if phentsize != 56 {
+		return nil, fmt.Errorf("corrupt ELF: e_phentsize is %d, want 56", phentsize)
+	}
+	if phnum == 0 {
+		return nil, fmt.Errorf("corrupt ELF: no program headers")
+	}
+	if phoff > uint64(len(elf)) || uint64(phnum)*56 > uint64(len(elf))-phoff {
+		return nil, fmt.Errorf("corrupt ELF: program header table (e_phoff %#x, e_phnum %d) extends past end of file (%d bytes)", phoff, phnum, len(elf))
+	}
 	return &apePayload{elf: elf, arch: arch}, nil
 }
 
