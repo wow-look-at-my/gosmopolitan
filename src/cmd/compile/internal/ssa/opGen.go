@@ -2841,38 +2841,26 @@ const (
 	OpAMD64VDIVPSMasked128load
 	OpAMD64VDIVPSMasked256load
 	OpAMD64VDIVPSMasked512load
-	OpAMD64VFMADD213PD128load
-	OpAMD64VFMADD213PD256load
 	OpAMD64VFMADD213PD512load
 	OpAMD64VFMADD213PDMasked128load
 	OpAMD64VFMADD213PDMasked256load
 	OpAMD64VFMADD213PDMasked512load
-	OpAMD64VFMADD213PS128load
-	OpAMD64VFMADD213PS256load
 	OpAMD64VFMADD213PS512load
 	OpAMD64VFMADD213PSMasked128load
 	OpAMD64VFMADD213PSMasked256load
 	OpAMD64VFMADD213PSMasked512load
-	OpAMD64VFMADDSUB213PD128load
-	OpAMD64VFMADDSUB213PD256load
 	OpAMD64VFMADDSUB213PD512load
 	OpAMD64VFMADDSUB213PDMasked128load
 	OpAMD64VFMADDSUB213PDMasked256load
 	OpAMD64VFMADDSUB213PDMasked512load
-	OpAMD64VFMADDSUB213PS128load
-	OpAMD64VFMADDSUB213PS256load
 	OpAMD64VFMADDSUB213PS512load
 	OpAMD64VFMADDSUB213PSMasked128load
 	OpAMD64VFMADDSUB213PSMasked256load
 	OpAMD64VFMADDSUB213PSMasked512load
-	OpAMD64VFMSUBADD213PD128load
-	OpAMD64VFMSUBADD213PD256load
 	OpAMD64VFMSUBADD213PD512load
 	OpAMD64VFMSUBADD213PDMasked128load
 	OpAMD64VFMSUBADD213PDMasked256load
 	OpAMD64VFMSUBADD213PDMasked512load
-	OpAMD64VFMSUBADD213PS128load
-	OpAMD64VFMSUBADD213PS256load
 	OpAMD64VFMSUBADD213PS512load
 	OpAMD64VFMSUBADD213PSMasked128load
 	OpAMD64VFMSUBADD213PSMasked256load
@@ -6046,7 +6034,6 @@ const (
 	OpIData
 	OpStructMake
 	OpStructSelect
-	OpArrayMake0
 	OpArrayMake1
 	OpArraySelect
 	OpStoreReg
@@ -6138,6 +6125,7 @@ const (
 	OpPrefetchCache
 	OpPrefetchCacheStreamed
 	OpMemEq
+	OpEmpty
 	OpZeroSIMD
 	OpCvt16toMask8x16
 	OpCvt32toMask8x32
@@ -6309,36 +6297,36 @@ const (
 	OpAverageUint16x8
 	OpAverageUint16x16
 	OpAverageUint16x32
-	OpBroadcast128Float32x4
-	OpBroadcast128Float64x2
-	OpBroadcast128Int8x16
-	OpBroadcast128Int16x8
-	OpBroadcast128Int32x4
-	OpBroadcast128Int64x2
-	OpBroadcast128Uint8x16
-	OpBroadcast128Uint16x8
-	OpBroadcast128Uint32x4
-	OpBroadcast128Uint64x2
-	OpBroadcast256Float32x4
-	OpBroadcast256Float64x2
-	OpBroadcast256Int8x16
-	OpBroadcast256Int16x8
-	OpBroadcast256Int32x4
-	OpBroadcast256Int64x2
-	OpBroadcast256Uint8x16
-	OpBroadcast256Uint16x8
-	OpBroadcast256Uint32x4
-	OpBroadcast256Uint64x2
-	OpBroadcast512Float32x4
-	OpBroadcast512Float64x2
-	OpBroadcast512Int8x16
-	OpBroadcast512Int16x8
-	OpBroadcast512Int32x4
-	OpBroadcast512Int64x2
-	OpBroadcast512Uint8x16
-	OpBroadcast512Uint16x8
-	OpBroadcast512Uint32x4
-	OpBroadcast512Uint64x2
+	OpBroadcast1To2Float64x2
+	OpBroadcast1To2Int64x2
+	OpBroadcast1To2Uint64x2
+	OpBroadcast1To4Float32x4
+	OpBroadcast1To4Float64x2
+	OpBroadcast1To4Int32x4
+	OpBroadcast1To4Int64x2
+	OpBroadcast1To4Uint32x4
+	OpBroadcast1To4Uint64x2
+	OpBroadcast1To8Float32x4
+	OpBroadcast1To8Float64x2
+	OpBroadcast1To8Int16x8
+	OpBroadcast1To8Int32x4
+	OpBroadcast1To8Int64x2
+	OpBroadcast1To8Uint16x8
+	OpBroadcast1To8Uint32x4
+	OpBroadcast1To8Uint64x2
+	OpBroadcast1To16Float32x4
+	OpBroadcast1To16Int8x16
+	OpBroadcast1To16Int16x8
+	OpBroadcast1To16Int32x4
+	OpBroadcast1To16Uint8x16
+	OpBroadcast1To16Uint16x8
+	OpBroadcast1To16Uint32x4
+	OpBroadcast1To32Int8x16
+	OpBroadcast1To32Int16x8
+	OpBroadcast1To32Uint8x16
+	OpBroadcast1To32Uint16x8
+	OpBroadcast1To64Int8x16
+	OpBroadcast1To64Uint8x16
 	OpCeilFloat32x4
 	OpCeilFloat32x8
 	OpCeilFloat64x2
@@ -21211,11 +21199,11 @@ var opcodeTable = [...]opInfo{
 		asm:    x86.AVAESDEC,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -21253,11 +21241,11 @@ var opcodeTable = [...]opInfo{
 		asm:    x86.AVAESDECLAST,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -21295,11 +21283,11 @@ var opcodeTable = [...]opInfo{
 		asm:    x86.AVAESENC,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -21337,11 +21325,11 @@ var opcodeTable = [...]opInfo{
 		asm:    x86.AVAESENCLAST,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23179,12 +23167,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADD213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23195,12 +23183,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADD213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23278,12 +23266,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADD213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23294,12 +23282,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADD213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23377,12 +23365,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADDSUB213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23393,12 +23381,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADDSUB213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23476,12 +23464,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADDSUB213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23492,12 +23480,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMADDSUB213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23575,12 +23563,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMSUBADD213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23591,12 +23579,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMSUBADD213PD,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23674,12 +23662,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMSUBADD213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -23690,12 +23678,12 @@ var opcodeTable = [...]opInfo{
 		asm:          x86.AVFMSUBADD213PS,
 		reg: regInfo{
 			inputs: []inputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{2, 281474976645120}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
+				{1, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
+				{2, 4294901760}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15
 			},
 			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
+				{0, 2147418112}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14
 			},
 		},
 	},
@@ -44194,42 +44182,6 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "VFMADD213PD128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADD213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADD213PD256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADD213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
 		name:         "VFMADD213PD512load",
 		auxType:      auxSymOff,
 		argLen:       4,
@@ -44295,42 +44247,6 @@ var opcodeTable = [...]opInfo{
 		reg: regInfo{
 			inputs: []inputInfo{
 				{3, 71494644084506624}, // K1 K2 K3 K4 K5 K6 K7
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADD213PS128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADD213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADD213PS256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADD213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
 				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
 				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
 				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
@@ -44416,42 +44332,6 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "VFMADDSUB213PD128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADDSUB213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADDSUB213PD256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADDSUB213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
 		name:         "VFMADDSUB213PD512load",
 		auxType:      auxSymOff,
 		argLen:       4,
@@ -44517,42 +44397,6 @@ var opcodeTable = [...]opInfo{
 		reg: regInfo{
 			inputs: []inputInfo{
 				{3, 71494644084506624}, // K1 K2 K3 K4 K5 K6 K7
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADDSUB213PS128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADDSUB213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMADDSUB213PS256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMADDSUB213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
 				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
 				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
 				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
@@ -44638,42 +44482,6 @@ var opcodeTable = [...]opInfo{
 		},
 	},
 	{
-		name:         "VFMSUBADD213PD128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMSUBADD213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMSUBADD213PD256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMSUBADD213PD,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
 		name:         "VFMSUBADD213PD512load",
 		auxType:      auxSymOff,
 		argLen:       4,
@@ -44739,42 +44547,6 @@ var opcodeTable = [...]opInfo{
 		reg: regInfo{
 			inputs: []inputInfo{
 				{3, 71494644084506624}, // K1 K2 K3 K4 K5 K6 K7
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMSUBADD213PS128load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMSUBADD213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
-				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
-				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-			outputs: []outputInfo{
-				{0, 281472829161472}, // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
-			},
-		},
-	},
-	{
-		name:         "VFMSUBADD213PS256load",
-		auxType:      auxSymOff,
-		argLen:       4,
-		resultInArg0: true,
-		symEffect:    SymRead,
-		asm:          x86.AVFMSUBADD213PS,
-		reg: regInfo{
-			inputs: []inputInfo{
 				{2, 72057594037977087}, // AX CX DX BX SP BP SI DI R8 R9 R10 R11 R12 R13 R15 SB
 				{0, 281472829161472},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
 				{1, 281474976645120},   // X0 X1 X2 X3 X4 X5 X6 X7 X8 X9 X10 X11 X12 X13 X14 X15 X16 X17 X18 X19 X20 X21 X22 X23 X24 X25 X26 X27 X28 X29 X30 X31
@@ -88423,11 +88195,6 @@ var opcodeTable = [...]opInfo{
 		generic: true,
 	},
 	{
-		name:    "ArrayMake0",
-		argLen:  0,
-		generic: true,
-	},
-	{
 		name:    "ArrayMake1",
 		argLen:  1,
 		generic: true,
@@ -88946,6 +88713,11 @@ var opcodeTable = [...]opInfo{
 		argLen:      4,
 		commutative: true,
 		generic:     true,
+	},
+	{
+		name:    "Empty",
+		argLen:  0,
+		generic: true,
 	},
 	{
 		name:    "ZeroSIMD",
@@ -89875,152 +89647,152 @@ var opcodeTable = [...]opInfo{
 		generic:     true,
 	},
 	{
-		name:    "Broadcast128Float32x4",
+		name:    "Broadcast1To2Float64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Float64x2",
+		name:    "Broadcast1To2Int64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Int8x16",
+		name:    "Broadcast1To2Uint64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Int16x8",
+		name:    "Broadcast1To4Float32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Int32x4",
+		name:    "Broadcast1To4Float64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Int64x2",
+		name:    "Broadcast1To4Int32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Uint8x16",
+		name:    "Broadcast1To4Int64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Uint16x8",
+		name:    "Broadcast1To4Uint32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Uint32x4",
+		name:    "Broadcast1To4Uint64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast128Uint64x2",
+		name:    "Broadcast1To8Float32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Float32x4",
+		name:    "Broadcast1To8Float64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Float64x2",
+		name:    "Broadcast1To8Int16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Int8x16",
+		name:    "Broadcast1To8Int32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Int16x8",
+		name:    "Broadcast1To8Int64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Int32x4",
+		name:    "Broadcast1To8Uint16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Int64x2",
+		name:    "Broadcast1To8Uint32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Uint8x16",
+		name:    "Broadcast1To8Uint64x2",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Uint16x8",
+		name:    "Broadcast1To16Float32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Uint32x4",
+		name:    "Broadcast1To16Int8x16",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast256Uint64x2",
+		name:    "Broadcast1To16Int16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Float32x4",
+		name:    "Broadcast1To16Int32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Float64x2",
+		name:    "Broadcast1To16Uint8x16",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Int8x16",
+		name:    "Broadcast1To16Uint16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Int16x8",
+		name:    "Broadcast1To16Uint32x4",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Int32x4",
+		name:    "Broadcast1To32Int8x16",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Int64x2",
+		name:    "Broadcast1To32Int16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Uint8x16",
+		name:    "Broadcast1To32Uint8x16",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Uint16x8",
+		name:    "Broadcast1To32Uint16x8",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Uint32x4",
+		name:    "Broadcast1To64Int8x16",
 		argLen:  1,
 		generic: true,
 	},
 	{
-		name:    "Broadcast512Uint64x2",
+		name:    "Broadcast1To64Uint8x16",
 		argLen:  1,
 		generic: true,
 	},
