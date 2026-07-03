@@ -945,3 +945,39 @@ Still missing on macOS hosts (unchanged from wave 8):
   upstream's libcall pc/sp bookkeeping; add both together).
 - AllThreadsSyscall (rt-range unmapped; unused by stdlib on cosmo).
 - Intel-mac runtime bring-up.
+
+
+## 2026-07-03: go1.26.4 uprev - upstream merge + two cosmo build fixes
+
+Merged upstream tag go1.26.4 (previous base was a Jan-6 pre-1.26.0 dev
+snapshot; 161 upstream commits, including the os.Root symlink-escape,
+pkg-config sanitization and cgo trust-boundary security backports).
+Single conflict: VERSION (resolved to go1.26.4cosmo). The four
+overlap files with cosmo edits (cmd/go work/exec.go APE magic,
+internal/syscall/unix/at.go, os/dir_unix.go, os/file_unix.go)
+auto-merged with the cosmo edits intact.
+
+Two GOOS=cosmo build breaks from upstream refactors, both fixed:
+
+1. **unix.Fchmodat undefined**: 1.26.4 moved Fchmodat out of at.go
+   into fchmodat_linux.go / fchmodat_other.go (os.Root hardening);
+   neither tag covered cosmo. New fchmodat_cosmo.go: flags==0 goes
+   straight to the 3-arg Linux-ABI fchmodat; AT_SYMLINK_NOFOLLOW uses
+   the glibc/musl O_PATH + /proc/self/fd re-chmod workaround and
+   refuses symlinks with EOPNOTSUPP, because the Linux fchmodat(2)
+   ABI silently ignores the flag - passing it through would chmod the
+   symlink target, the exact escape the upstream security fix closed.
+   Procfs-less hosts (macOS) get EOPNOTSUPP; the darwin emulation has
+   no chmod family yet anyway.
+2. **f.lstatatNolog undefined**: new statat_unix.go build tag lacked
+   cosmo; added (pfd.Fstatat + AT_SYMLINK_NOFOLLOW already work).
+
+**Verified**: make.bash (go version go1.26.4cosmo linux/amd64); host
+cmd/link+cmd/go reinstall; GOOS=cosmo go build std clean on
+amd64+arm64; vet clean for internal/syscall/unix + os both arches;
+fat fizzbuzz correct + probe 40/40 "ok all" on linux/amd64; thin
+arm64 probe 40/40 under qemu-aarch64 (own-header stamp); apetest 118
+PASS; stdlib under cosmo on Linux: time, os, os/exec, os/signal, net
+all ok (os needs the APE binfmt_misc handler for
+TestExecutableDeleted, the known wave-3 host limitation - registering
+`:APE:M::MZqFpD::/bin/sh:` makes the suite fully green).
