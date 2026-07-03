@@ -33,17 +33,43 @@ func cosmoFatEnabled() bool {
 	case "0", "off":
 		return false
 	}
+	// The faketime build tag forces a thin build: the fat APE's
+	// GOOS=windows sibling cannot compile with it (runtime/time_fake.go
+	// is constrained to !windows, and the tag excludes time_nofake.go,
+	// leaving the windows runtime with neither). faketime is a
+	// runtime-test facility, so a thin binary beats failing the build.
+	for _, tag := range cfg.BuildContext.BuildTags {
+		if tag == "faketime" {
+			return false
+		}
+	}
 	// Guard against the sibling-architecture build recursing.
 	return os.Getenv("GOCOSMOFAT_INNER") == ""
 }
 
 // cosmoFatten replaces each freshly built GOOS=cosmo executable in targets
-// with a fat (amd64+arm64) APE. It reruns the original go build command for
-// the sibling architecture into a temporary location, then merges each pair
-// of binaries with the linker's -apefat mode. Pass dir=true when targets
-// were written to a -o directory, so the sibling build also uses one.
+// with a fat (amd64+arm64) APE carrying a native Windows amd64 PE payload.
+// It reruns the original go build command for the sibling cosmo architecture
+// and for windows/amd64 into temporary locations, then merges each group of
+// binaries with the linker's -apefat mode. Pass dir=true when targets were
+// written to a -o directory, so the sibling builds also use one.
 func cosmoFatten(targets []string, dir bool) {
 	if !cosmoFatEnabled() || len(targets) == 0 {
+		return
+	}
+	// Fattening re-reads the freshly written target and re-creates it with
+	// the merged APE. That only makes sense for regular files: with
+	// -o /dev/null (or any other special file) the target reads back empty
+	// and cannot be replaced, so leave the primary build's output as-is.
+	regular := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if fi, err := os.Stat(target); err == nil && !fi.Mode().IsRegular() {
+			continue
+		}
+		regular = append(regular, target)
+	}
+	targets = regular
+	if len(targets) == 0 {
 		return
 	}
 	otherArch := cosmoFatArches[cfg.Goarch]
@@ -78,17 +104,101 @@ func cosmoFatten(targets []string, dir bool) {
 		base.Fatalf("go: cosmo fat build: GOARCH=%s build failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", otherArch, err)
 	}
 
+	winO := filepath.Join(tmp, "windows.exe")
+	if dir {
+		winO = filepath.Join(tmp, "windows") + string(os.PathSeparator)
+		if err := os.Mkdir(filepath.Join(tmp, "windows"), 0777); err != nil {
+			base.Fatalf("go: cosmo fat build: %v", err)
+		}
+	}
+	winArgs := rewriteOutputFlag(os.Args[1:], winO)
+	winCmd := exec.Command(goCmd, winArgs...)
+	winCmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64")
+	winCmd.Stdout = os.Stdout
+	winCmd.Stderr = os.Stderr
+	if err := winCmd.Run(); err != nil {
+		base.Fatalf("go: cosmo fat build: GOOS=windows GOARCH=amd64 build failed: %v\n(set GOCOSMOFAT=0 for a cosmo-only binary)", err)
+	}
+
 	link := base.Tool("link")
 	for _, target := range targets {
 		sibling := childO
+		win := winO
 		if dir {
 			sibling = filepath.Join(tmp, "out", filepath.Base(target))
+			win = windowsDirTarget(tmp, target)
 		}
-		merge := exec.Command(link, "-apefat", target+","+sibling, "-o", target)
+		merge := exec.Command(link, "-apefat", target+","+sibling+","+win, "-o", target)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
 			base.Fatalf("go: cosmo fat build: merging %s: %v", target, err)
+		}
+	}
+}
+
+// cosmoFattenInstall replaces each freshly installed GOOS=cosmo
+// executable in targets with a fat (amd64+arm64) APE carrying a Windows
+// amd64 PE payload, the go-install counterpart of cosmoFatten.
+//
+// go install has no -o flag to redirect, and its pkg@version argument
+// form cannot be rewritten into a go build, so the sibling builds rerun
+// the ORIGINAL install command line against a scratch GOPATH: package
+// resolution stays identical while the cross-compiled results land in
+// $GOPATH/bin/$GOOS_$GOARCH/ (always a subdirectory - neither cosmo nor
+// windows can be the platform the go tool itself runs on). GOMODCACHE
+// keeps pointing at the real module cache so nothing is re-downloaded,
+// and GOBIN is cleared because go install refuses cross-compilation
+// with GOBIN set.
+func cosmoFattenInstall(targets []string) {
+	if !cosmoFatEnabled() || len(targets) == 0 {
+		return
+	}
+	otherArch := cosmoFatArches[cfg.Goarch]
+
+	goCmd, err := os.Executable()
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: cannot find go command: %v", err)
+	}
+	tmp, err := os.MkdirTemp("", "gocosmofat")
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: %v", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	rerun := func(goos, goarch string) {
+		cmd := exec.Command(goCmd, os.Args[1:]...)
+		cmd.Env = append(os.Environ(),
+			"GOOS="+goos,
+			"GOARCH="+goarch,
+			"GOCOSMOFAT_INNER=1",
+			"GOPATH="+tmp,
+			"GOMODCACHE="+cfg.GOMODCACHE,
+			"GOBIN=",
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: GOOS=%s GOARCH=%s install failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", goos, goarch, err)
+		}
+	}
+	rerun("cosmo", otherArch)
+	rerun("windows", "amd64")
+
+	link := base.Tool("link")
+	for _, target := range targets {
+		name := filepath.Base(target)
+		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
+		winName := name
+		if filepath.Ext(winName) != ".exe" {
+			winName += ".exe"
+		}
+		win := filepath.Join(tmp, "bin", "windows_amd64", winName)
+		merge := exec.Command(link, "-apefat", target+","+sibling+","+win, "-o", target)
+		merge.Stdout = os.Stdout
+		merge.Stderr = os.Stderr
+		if err := merge.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: merging %s: %v", target, err)
 		}
 	}
 }
@@ -123,4 +233,19 @@ func rewriteOutputFlag(args []string, out string) []string {
 		}
 	}
 	return res
+}
+
+func windowsDirTarget(tmp, target string) string {
+	baseName := filepath.Base(target)
+	win := filepath.Join(tmp, "windows", baseName)
+	if _, err := os.Stat(win); err == nil {
+		return win
+	}
+	if filepath.Ext(baseName) != ".exe" {
+		winExe := win + ".exe"
+		if _, err := os.Stat(winExe); err == nil {
+			return winExe
+		}
+	}
+	return win
 }

@@ -835,6 +835,16 @@ func InstallPackages(loaderstate *modload.State, ctx context.Context, patterns [
 	b.Do(ctx, a)
 	base.ExitIfErrors()
 
+	// Installed GOOS=cosmo executables become fat APEs, exactly like the
+	// go build outputs (see cosmoFattenInstall).
+	var cosmoTargets []string
+	for _, p := range pkgs {
+		if p.Name == "main" && p.Target != "" {
+			cosmoTargets = append(cosmoTargets, p.Target)
+		}
+	}
+	cosmoFattenInstall(cosmoTargets)
+
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,
 	// remove any leftover command binary from a previous 'go build'.

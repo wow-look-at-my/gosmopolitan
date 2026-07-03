@@ -60,6 +60,8 @@ go test ./cmd/compile/...
 go test std
 ```
 
+To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
+
 ## Building Cosmopolitan Binaries
 
 ```bash
@@ -67,17 +69,62 @@ go test std
 # go build always builds both architectures and merges them
 GOOS=cosmo go build -o program.com main.go
 
+# go install produces the same fat APE in the install directory
+GOOS=cosmo go install ./cmd/program
+
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
-# Merge two single-arch cosmo binaries into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com -o program.com
+# Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
+go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The amd64 image
-boots on x86-64 hosts (self-assimilation on Linux, Mach-O dd on macOS Intel,
-PE on Windows); the arm64 image boots on ARM64 Linux (self-assimilation) and
-ARM64 macOS (compiled APE loader, no Rosetta).
+Fat-build coverage: `go build` (with or without `-o`; a plain
+single-main-package build defaults its output name and fattens too) and
+`go install` both produce fat APEs. `go test` / `go test -c` binaries stay
+thin on purpose: they are host-run throwaway artifacts executed right here
+(via the `misc/cosmo` wrappers), and fattening would triple every test
+compile. The `faketime` build tag also forces a thin build, because its
+windows payload cannot compile (`runtime/time_fake.go` is `!windows`).
+
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
+image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
+on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
+Rosetta). Windows uses an embedded native windows/amd64 PE payload.
+
+macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
+rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
+via a getdents64 emulation over Apple's __getdirentries64),
+getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
+After, context timeouts), TCP/UDP loopback sockets with deadlines,
+unix-domain stream sockets (pathname addresses; the abstract namespace
+is Linux-only and refused EINVAL), readv/writev (net.Buffers), os/exec
+(fork, pipes, execve, wait4 with Linux-numbered wait statuses),
+os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
+by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
+os/signal Notify delivery, async preemption (SIGURG - tight loops no
+longer hang GC/STW), and kill/raise, with full Linux<->Apple
+signal-number and sigset translation at every darwin boundary (tables
+in src/runtime/sigxlat_cosmo.go). SIGPIPE additionally stays suppressed
+per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics. As of
+wave 9 the darwin netpoller is a kqueue port of upstream
+netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream
+os_darwin.go's pthread_mutex+pthread_cond design - this pair replaced
+the poll(2)+self-pipe poller and dispatch-semaphore parking after the
+waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
+counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
+returning from a nonblocking read(2) on the poller's wakeup pipe.
+Still missing on macOS hosts: sendmsg/recvmsg (msghdr/cmsghdr layouts
+differ; blocks fd-passing and ReadMsg*) and setitimer-based SIGPROF
+profiling. See DEBUGGING.md for the full list.
+
+macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
+2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
+host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
+unit tests and apetest), but the darwin-amd64 runtime side (clone/futex/
+sigaction and friends) is still incomplete, and there is no Intel-mac CI
+runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel
+"works" until the runtime bring-up lands and is verified on real hardware.
 
 ## Architecture
 
@@ -153,11 +200,19 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
 
-CI builds one fat (amd64+arm64) APE per platform; no GOARCH pin. Execution
-tests skip only on Windows (the PE stub does not load the payload yet; PR #12)
-while structural format tests - including the fat boot-header checks in
-`fat_test.go` - run everywhere. `testdata/ape/apetest/fizzbuzz_test.go`
-(`skipIfExecUnsupported`) is the single place encoding the skips.
+CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
+amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
+format tests run everywhere.
+
+Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
+execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
+module, built via its directory: file I/O, directory listing, pid,
+NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
+(sigpanic recovery, os/signal, async preemption, wait-status decode),
+os/exec, os.Executable, argv/env, wd round-trip). The apetest suite
+runs both against all three origin binaries via the FIZZBUZZ_BIN and
+RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
+executes the darwin (Syslib) code paths.
 
 ## Adding Cosmo Support to Standard Library Packages
 

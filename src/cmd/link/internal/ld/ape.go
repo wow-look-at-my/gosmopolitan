@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // APE (Actually Portable Executable) format implementation
@@ -21,17 +22,16 @@ import (
 // APE creates polyglot executables that work on multiple OSes:
 // - Windows: Uses PE header starting with MZ magic
 // - Linux: Uses embedded ELF header (encoded as octal in printf)
-// - macOS: Uses dd command to copy Mach-O header backward (ARM64 uses Rosetta2)
+// - macOS x86-64: Uses dd command to copy Mach-O header backward
+// - macOS ARM64: Runs the arm64 payload natively via the embedded APE
+//   loader source (compiled with cc on first run); no Rosetta involved
 // - Windows shell (MSYS/Cygwin): Delegates to cmd.exe for PE execution
 
 const (
 	// APE header must be page-aligned for ELF loading
 	// Using 64KB for Windows allocation granularity compatibility
-	apeHeaderSize = 65536
-
-	// Page sizes
-	pageSize4K  = 4096
-	pageSize16K = 16384
+	apeHeaderSize   = 65536
+	apeScriptOffset = 0x800
 
 	// ELF constants
 	elfMagic        = "\x7fELF"
@@ -55,10 +55,34 @@ const (
 	machoLCUnixThread = 0x5
 	machoLCMain       = 0x80000028
 
+	// x86_THREAD_STATE64 register file: rax rbx rcx rdx rdi rsi rbp rsp
+	// r8-r15 rip rflags cs fs gs. XNU's load_threadstack validates that
+	// (count+2)*4 bytes exactly consume cmdsize-8, so the emitted state
+	// must be exactly this many quadwords - no more, no less.
+	machoThreadStateRegs   = 21
+	machoThreadStateFlavor = 4                           // x86_THREAD_STATE64
+	machoUnixThreadCmdSize = 16 + machoThreadStateRegs*8 // cmd+cmdsize+flavor+count + registers = 184
+
+	// machoHostXNU is the host-OS indicator handed to the entry point in
+	// CL when the kernel loads the dd-assimilated Mach-O directly. It
+	// must match _HOSTXNU in runtime/os_cosmo_amd64.go; rt0_cosmo_amd64.s
+	// reads it to route syscalls through Apple's ABI instead of issuing
+	// raw Linux syscalls (which die with SIGSYS on macOS).
+	machoHostXNU = 8
+
 	// Segment protection
 	machoProtRead  = 0x1
 	machoProtWrite = 0x2
 	machoProtExec  = 0x4
+
+	// machoSegmentCmdSize is the size of an LC_SEGMENT_64 with no sections.
+	machoSegmentCmdSize = 72
+
+	// machoPageSize is the page size of x86-64 XNU. The kernel's
+	// load_segment rejects (LOAD_BADMACHO) any segment whose file offset
+	// or vm address is not page-aligned, and maps vm ranges in whole
+	// pages, so segment vm sizes are rounded up to this.
+	machoPageSize = 0x1000
 )
 
 // convertToAPE converts an ELF binary to Actually Portable Executable format.
@@ -67,6 +91,15 @@ type apePayload struct {
 	elf    []byte // complete ELF image; p_offset values are payload-relative
 	arch   sys.ArchFamily
 	offset uint64 // file offset of this image inside the APE; set by layoutAPE
+}
+
+// pePayload describes a native Windows PE image embedded in an APE file.
+// The final APE's PE header points its sections at this payload's section
+// bodies, shifted by offset.
+type pePayload struct {
+	pe     []byte
+	arch   sys.ArchFamily
+	offset uint64
 }
 
 // payloadFromELF validates elf and wraps it as an APE payload.
@@ -83,7 +116,44 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 	default:
 		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
 	}
+	// Validate the program header table up front: shiftPOffsets,
+	// makeEmbeddedElfHeader, and makeMachoHeader all index it without
+	// further checks, so a truncated or corrupt input would panic there.
+	phoff := binary.LittleEndian.Uint64(elf[32:40])
+	phentsize := binary.LittleEndian.Uint16(elf[54:56])
+	phnum := binary.LittleEndian.Uint16(elf[56:58])
+	if phentsize != 56 {
+		return nil, fmt.Errorf("corrupt ELF: e_phentsize is %d, want 56", phentsize)
+	}
+	if phnum == 0 {
+		return nil, fmt.Errorf("corrupt ELF: no program headers")
+	}
+	if phoff > uint64(len(elf)) || uint64(phnum)*56 > uint64(len(elf))-phoff {
+		return nil, fmt.Errorf("corrupt ELF: program header table (e_phoff %#x, e_phnum %d) extends past end of file (%d bytes)", phoff, phnum, len(elf))
+	}
 	return &apePayload{elf: elf, arch: arch}, nil
+}
+
+// payloadFromPE validates pe and wraps it as a Windows payload.
+func payloadFromPE(pe []byte) (*pePayload, error) {
+	peoff, err := peHeaderOffset(pe)
+	if err != nil {
+		return nil, err
+	}
+	if len(pe) < peoff+24 {
+		return nil, fmt.Errorf("truncated PE COFF header")
+	}
+	machine := binary.LittleEndian.Uint16(pe[peoff+4:])
+	var arch sys.ArchFamily
+	switch machine {
+	case 0x8664:
+		arch = sys.AMD64
+	case 0xAA64:
+		arch = sys.ARM64
+	default:
+		return nil, fmt.Errorf("unsupported PE machine type %#x", machine)
+	}
+	return &pePayload{pe: pe, arch: arch}, nil
 }
 
 func (p *apePayload) entry() uint64 { return binary.LittleEndian.Uint64(p.elf[24:32]) }
@@ -110,7 +180,7 @@ func (ctxt *Link) convertToAPE() {
 	if p.arch != ctxt.Arch.Family {
 		Exitf("APE conversion: ELF machine type does not match link architecture")
 	}
-	writeAPEFile(outfile, []*apePayload{p})
+	writeAPEFile(outfile, []*apePayload{p}, nil)
 }
 
 // apePayloadAlign is the alignment of payload images within the APE file.
@@ -121,20 +191,23 @@ const apePayloadAlign = 0x10000
 
 // layoutAPE assigns file offsets to the payloads: the first begins right
 // after the APE header, each subsequent payload at the next aligned boundary.
-func layoutAPE(payloads []*apePayload) {
+func layoutAPE(payloads []*apePayload, win *pePayload) {
 	off := uint64(apeHeaderSize)
 	for _, p := range payloads {
 		p.offset = off
 		off += uint64(len(p.elf))
 		off = (off + apePayloadAlign - 1) &^ uint64(apePayloadAlign-1)
 	}
+	if win != nil {
+		win.offset = off
+	}
 }
 
 // writeAPEFile writes an APE polyglot containing the given payloads.
 // Payload p_offset values are rewritten to absolute file offsets.
-func writeAPEFile(outfile string, payloads []*apePayload) {
-	layoutAPE(payloads)
-	header := makeAPEHeaderForPayloads(payloads)
+func writeAPEFile(outfile string, payloads []*apePayload, win *pePayload) {
+	layoutAPE(payloads, win)
+	header := makeAPEHeaderForPayloads(payloads, win)
 
 	apeFile, err := os.Create(outfile)
 	if err != nil {
@@ -157,6 +230,17 @@ func writeAPEFile(outfile string, payloads []*apePayload) {
 			Exitf("cannot write APE payload: %v", err)
 		}
 		cur += uint64(len(p.elf))
+	}
+	if win != nil {
+		if win.offset > cur {
+			if _, err := apeFile.Write(make([]byte, win.offset-cur)); err != nil {
+				Exitf("cannot write APE padding: %v", err)
+			}
+			cur = win.offset
+		}
+		if _, err := apeFile.Write(win.pe); err != nil {
+			Exitf("cannot write Windows PE payload: %v", err)
+		}
 	}
 
 	if err := os.Chmod(outfile, 0755); err != nil {
@@ -185,9 +269,12 @@ func shiftPOffsets(elf []byte, delta uint64) []byte {
 // becomes an octal escape. Single quotes must be octal too -- not the shell
 // backslash-quote idiom -- because the APE loader's printf decoder stops at the first
 // raw quote byte when it scans the header for embedded boot ELF headers.
+// Percent signs must be octal as well: printf would treat a bare '%' in its
+// format string as a conversion directive, corrupting the self-assimilation
+// write whenever a variable header byte (e_entry, e_phoff, ...) is 0x25.
 func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 	for _, b := range blob {
-		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' {
+		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' && b != '%' {
 			script.WriteByte(b)
 		} else {
 			fmt.Fprintf(script, "\\%03o", b)
@@ -201,7 +288,7 @@ func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 // and the embedded boot headers dispatch on the host architecture, and the
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first 8192 bytes.
-func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
+func makeAPEHeaderForPayloads(payloads []*apePayload, win *pePayload) []byte {
 	var amd, arm *apePayload
 	for _, p := range payloads {
 		switch p.arch {
@@ -231,10 +318,10 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// uses the first one with an aarch64 machine type.
 	var amdBoot, armBoot []byte
 	if amd != nil {
-		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, pageSize4K, sys.AMD64)
+		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, sys.AMD64)
 	}
 	if arm != nil {
-		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, pageSize16K, sys.ARM64)
+		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, sys.ARM64)
 	}
 
 	// Create Mach-O header for macOS x86-64
@@ -255,7 +342,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		apeLoaderGz = getApeLoaderSource()
 		if len(apeLoaderGz) > 0 {
 			// Place gzipped loader at offset 0x8000 (32KB into header).
-			// This leaves room for the script (0x400-0x8000).
+			// This leaves room for the script.
 			apeLoaderOffset = 0x8000
 			apeLoaderSize = len(apeLoaderGz)
 		}
@@ -279,7 +366,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// - Bytes 0x2D-0x3B: "\n: <<'__APE__'\n" - heredoc opener (15 bytes)
 	// - Bytes 0x3C+: heredoc body (contains e_lfanew with null bytes - SAFE!)
 	// - PE header at 0x80 (inside heredoc body)
-	// - Script at 0x400 starts with "__APE__\n" to terminate heredoc
+	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
 
 	// Write the APE magic at offset 0
 	copy(header[0:8], []byte("MZqFpD='"))
@@ -309,7 +396,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		header[i] = '#'
 	}
 
-	// The script starts at offset 0x400 (after PE code section)
+	// The script starts after the transplanted PE headers.
 	var script bytes.Buffer
 
 	// Here-doc terminator
@@ -405,13 +492,13 @@ exit 1
 	// Replace APE loader offset/size placeholders for the macOS ARM64 path
 	if arm != nil && apeLoaderSize > 0 {
 		s := string(scriptBytes)
-		s = replaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
-		s = replaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
+		s = strings.ReplaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
+		s = strings.ReplaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
 		scriptBytes = []byte(s)
 	}
 
-	// Place script at offset 0x400
-	scriptOffset := 0x400
+	// Place script after the PE headers.
+	scriptOffset := apeScriptOffset
 	if len(scriptBytes) > apeHeaderSize-scriptOffset {
 		Exitf("APE shell script too large: %d bytes", len(scriptBytes))
 	}
@@ -440,15 +527,30 @@ exit 1
 	}
 
 	// === PE Header at offset 0x80 ===
-	// Required for Windows support
-	peArch := sys.AMD64
-	if amd == nil {
-		peArch = sys.ARM64
+	// Required for Windows support. Prefer a real Windows payload when one
+	// was supplied; otherwise keep the legacy parseable stub for single-arch
+	// cosmo-only builds.
+	if win != nil {
+		writePEHeaderFromPayload(header, win)
+	} else {
+		peArch := sys.AMD64
+		if amd == nil {
+			peArch = sys.ARM64
+		}
+		writePEHeader(header, peArch)
 	}
-	writePEHeader(header, peArch)
 
 	// === Mach-O header for macOS x86-64 ===
-	if machoSize > 0 && machoOffset+machoSize <= apeHeaderSize {
+	// The header region runs from machoOffset up to the APE loader source
+	// (or the end of the APE header); growing past it would silently
+	// clobber the loader, so fail loudly instead.
+	if machoSize > 0 {
+		if machoOffset+machoSize > apeHeaderSize {
+			Exitf("APE Mach-O header (%d bytes at %#x) exceeds the %d-byte APE header", machoSize, machoOffset, apeHeaderSize)
+		}
+		if apeLoaderSize > 0 && machoOffset+machoSize > apeLoaderOffset {
+			Exitf("APE Mach-O header (%d bytes at %#x) overlaps the APE loader at %#x", machoSize, machoOffset, apeLoaderOffset)
+		}
 		copy(header[machoOffset:], machoHeader)
 	}
 
@@ -480,7 +582,7 @@ exit 1
 
 // makeEmbeddedElfHeader creates an ELF header for embedding in the APE printf statement.
 // This header points to the actual ELF segments in the APE file.
-func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, pageSize uint64, arch sys.ArchFamily) []byte {
+func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily) []byte {
 	// Create a minimal ELF header (64 bytes for ELF64)
 	hdr := make([]byte, 64)
 
@@ -533,30 +635,154 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, pageSize uint64, ar
 	return hdr
 }
 
-// makeMachoHeader creates a Mach-O header for macOS x86-64.
-func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
-	// Find ELF base virtual address from the first PT_LOAD segment
-	// ELF program header offset is at byte 32, entry size at 54, count at 56
+// machoSegment describes one LC_SEGMENT_64 load command.
+type machoSegment struct {
+	name     string
+	vmaddr   uint64
+	vmsize   uint64
+	fileoff  uint64 // absolute offset in the APE file
+	filesize uint64
+	prot     uint32 // used for both initprot and maxprot
+}
+
+// machoSegmentsFromELF derives the Mach-O segment table from the payload's
+// PT_LOAD program headers. elfData's p_offset values are still
+// payload-relative when this runs (shiftPOffsets rewrites them to absolute
+// file offsets at write-out), so file offsets are computed as
+// elfOffset + p_offset, matching the bytes of the final APE file.
+//
+// The first (executable) load is extended downward to file offset 0 so that
+// it also maps the APE polyglot header - and, after the dd transform, the
+// Mach-O header itself. XNU's parse_machfile rejects (LOAD_BADMACHO) any
+// executable in which no R+X segment maps the start of the file
+// (found_header_segment); extending the text segment mirrors what
+// Cosmopolitan's ape.S Mach-O header does.
+func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 	elfPhoff := binary.LittleEndian.Uint64(elfData[32:40])
 	elfPhentsize := binary.LittleEndian.Uint16(elfData[54:56])
 	elfPhnum := binary.LittleEndian.Uint16(elfData[56:58])
 
-	var elfBaseVAddr uint64
+	var segs []machoSegment
 	for i := uint16(0); i < elfPhnum; i++ {
 		phdr := elfData[elfPhoff+uint64(i)*uint64(elfPhentsize):]
-		pType := binary.LittleEndian.Uint32(phdr[0:4])
-		if pType == 1 { // PT_LOAD
-			elfBaseVAddr = binary.LittleEndian.Uint64(phdr[16:24]) // p_vaddr
-			break
+		if binary.LittleEndian.Uint32(phdr[0:4]) != 1 { // PT_LOAD
+			continue
 		}
+		flags := binary.LittleEndian.Uint32(phdr[4:8])
+		off := binary.LittleEndian.Uint64(phdr[8:16])
+		vaddr := binary.LittleEndian.Uint64(phdr[16:24])
+		filesz := binary.LittleEndian.Uint64(phdr[32:40])
+		memsz := binary.LittleEndian.Uint64(phdr[40:48])
+		if memsz < filesz {
+			Exitf("APE Mach-O: PT_LOAD %d has p_memsz %#x < p_filesz %#x", i, memsz, filesz)
+		}
+		var prot uint32
+		if flags&0x4 != 0 { // PF_R
+			prot |= machoProtRead
+		}
+		if flags&0x2 != 0 { // PF_W
+			prot |= machoProtWrite
+		}
+		if flags&0x1 != 0 { // PF_X
+			prot |= machoProtExec
+		}
+		// Segment names are advisory; pick conventional ones per class.
+		name := "__RODATA"
+		switch {
+		case prot&machoProtExec != 0:
+			name = "__TEXT"
+		case prot&machoProtWrite != 0:
+			name = "__DATA"
+		}
+		segs = append(segs, machoSegment{
+			name:   name,
+			vmaddr: vaddr,
+			// Rounding p_memsz up to whole pages preserves the BSS:
+			// XNU zero-fills [filesize, vmsize) of a segment, so a
+			// data segment with p_memsz > p_filesz gets its zero
+			// pages from the kernel, like ELF.
+			vmsize:   (memsz + machoPageSize - 1) &^ (machoPageSize - 1),
+			fileoff:  elfOffset + off,
+			filesize: filesz,
+			prot:     prot,
+		})
+	}
+	if len(segs) == 0 {
+		Exitf("APE Mach-O: ELF payload has no PT_LOAD segments")
 	}
 
-	// Mach-O loads at this virtual address
-	const machoVMAddr = uint64(0x100000000)
+	// Extend the first load down to file offset 0 (see function comment).
+	first := &segs[0]
+	if first.prot&(machoProtRead|machoProtExec) != machoProtRead|machoProtExec {
+		Exitf("APE Mach-O: first PT_LOAD is not readable+executable (prot %#x); cannot map the file header", first.prot)
+	}
+	ext := first.fileoff
+	if first.vmaddr <= ext {
+		Exitf("APE Mach-O: first PT_LOAD vmaddr %#x is too low to extend the segment to file offset 0", first.vmaddr)
+	}
+	first.fileoff = 0
+	first.filesize += ext
+	first.vmaddr -= ext
+	first.vmsize += ext
 
-	// Calculate the Mach-O entry point
-	// The ELF entry is relative to elfBaseVAddr, so adjust for machoVMAddr
-	machoEntry := machoVMAddr + (elfEntry - elfBaseVAddr)
+	// XNU's load_segment refuses to map anything whose file offset or vm
+	// address is not page-aligned, and overlapping vm ranges would fail
+	// vm_map_enter at load time. Go's ELF layout guarantees both (loads
+	// are page-rounded and laid out consecutively), so a violation means
+	// the layout changed and this code needs revisiting.
+	for i := range segs {
+		s := &segs[i]
+		if s.fileoff%machoPageSize != 0 || s.vmaddr%machoPageSize != 0 {
+			Exitf("APE Mach-O: segment %s (fileoff %#x, vmaddr %#x) is not page-aligned", s.name, s.fileoff, s.vmaddr)
+		}
+		if s.filesize > s.vmsize {
+			Exitf("APE Mach-O: segment %s filesize %#x exceeds vmsize %#x", s.name, s.filesize, s.vmsize)
+		}
+		if i > 0 {
+			prev := &segs[i-1]
+			if s.vmaddr < prev.vmaddr+prev.vmsize {
+				Exitf("APE Mach-O: segment %s (vmaddr %#x) overlaps %s (ends %#x) after page rounding", s.name, s.vmaddr, prev.name, prev.vmaddr+prev.vmsize)
+			}
+		}
+	}
+	return segs
+}
+
+// makeMachoHeader creates the Mach-O executable header for macOS x86-64.
+//
+// On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
+// offset 0x1000 in the APE header) over the start of the file, turning the
+// whole APE into a Mach-O executable whose load commands point straight at
+// the embedded amd64 ELF image. The XNU kernel loads it directly - there is
+// no dyld involved (LC_UNIXTHREAD, not LC_MAIN) - so the load commands must
+// satisfy the kernel's parse_machfile/load_segment checks on their own:
+//
+//   - __PAGEZERO covers [0, lowest mapped address) with no access.
+//   - One LC_SEGMENT_64 per PT_LOAD, with initprot/maxprot translated from
+//     p_flags and vmsize covering p_memsz (BSS zero-fill), at the ELF's own
+//     virtual addresses.
+//   - The text segment is extended down to file offset 0 so an R+X segment
+//     maps the Mach-O header (a hard kernel requirement).
+//   - LC_UNIXTHREAD holds rip = the ELF entry point (unmodified) and the
+//     XNU host-OS indicator in rcx for rt0_cosmo_amd64.s.
+func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
+	segs := machoSegmentsFromELF(elfData, elfOffset)
+
+	// XNU only accepts an entry point that falls inside a segment mapped
+	// readable+executable (parse_machfile's validentry check).
+	validEntry := false
+	for _, s := range segs {
+		if elfEntry >= s.vmaddr && elfEntry < s.vmaddr+s.vmsize &&
+			s.prot&(machoProtRead|machoProtExec) == machoProtRead|machoProtExec {
+			validEntry = true
+		}
+	}
+	if !validEntry {
+		Exitf("APE Mach-O: entry point %#x is not inside a readable+executable segment", elfEntry)
+	}
+
+	ncmds := 1 + len(segs) + 1 // __PAGEZERO + loads + LC_UNIXTHREAD
+	sizeofcmds := machoSegmentCmdSize*(1+len(segs)) + machoUnixThreadCmdSize
 
 	var buf bytes.Buffer
 
@@ -565,42 +791,165 @@ func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
 	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
 	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(2))                  // ncmds (LC_SEGMENT_64 + LC_UNIXTHREAD)
-	binary.Write(&buf, binary.LittleEndian, uint32(72+184))             // sizeofcmds
+	binary.Write(&buf, binary.LittleEndian, uint32(ncmds))              // ncmds
+	binary.Write(&buf, binary.LittleEndian, uint32(sizeofcmds))         // sizeofcmds
 	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
 	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
 
-	// LC_SEGMENT_64 for __TEXT (72 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCSegment64))            // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(72))                          // cmdsize
-	buf.WriteString("__TEXT\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")            // segname (16 bytes)
-	binary.Write(&buf, binary.LittleEndian, machoVMAddr)                         // vmaddr
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // vmsize
-	binary.Write(&buf, binary.LittleEndian, elfOffset)                           // fileoff
-	binary.Write(&buf, binary.LittleEndian, uint64(len(elfData)))                // filesize
-	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // maxprot
-	binary.Write(&buf, binary.LittleEndian, uint32(machoProtRead|machoProtExec)) // initprot
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // nsects
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                           // flags
+	// __PAGEZERO: MH_EXECUTE images must not map anything below the page
+	// zero region; XNU raises the vm map's minimum offset to its end.
+	// vmaddr 0, filesize 0, prot 0/0 is the shape load_segment treats as
+	// page zero.
+	writeMachoSegment(&buf, machoSegment{name: "__PAGEZERO", vmsize: segs[0].vmaddr})
 
-	// LC_UNIXTHREAD (184 bytes for x86_64)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoLCUnixThread)) // cmd
-	binary.Write(&buf, binary.LittleEndian, uint32(184))               // cmdsize
-	binary.Write(&buf, binary.LittleEndian, uint32(4))                 // flavor (x86_THREAD_STATE64)
-	binary.Write(&buf, binary.LittleEndian, uint32(42))                // count
-
-	// Thread state (42 uint64 values = 336 bytes, but we only write key ones)
-	// Registers: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp, r8-r15, rip, rflags, cs, fs, gs
-	for i := 0; i < 16; i++ {
-		binary.Write(&buf, binary.LittleEndian, uint64(0)) // rax through r15
+	for _, s := range segs {
+		writeMachoSegment(&buf, s)
 	}
-	binary.Write(&buf, binary.LittleEndian, machoEntry) // rip (entry point)
-	binary.Write(&buf, binary.LittleEndian, uint64(0))  // rflags
-	for i := 0; i < 4; i++ {
-		binary.Write(&buf, binary.LittleEndian, uint64(0)) // cs, fs, gs, etc.
+
+	writeMachoUnixThread(&buf, elfEntry)
+
+	if buf.Len() != 32+sizeofcmds {
+		Exitf("APE Mach-O: internal error: wrote %d header bytes, want %d", buf.Len(), 32+sizeofcmds)
+	}
+	// The bootstrap script dd-copies the header in 8-byte blocks and
+	// derives the block count from this buffer's length; pad to a block
+	// boundary so the copy covers exactly the emitted header.
+	for buf.Len()%8 != 0 {
+		buf.WriteByte(0)
 	}
 
 	return buf.Bytes()
+}
+
+// writeMachoSegment emits one LC_SEGMENT_64 load command (no sections).
+func writeMachoSegment(buf *bytes.Buffer, s machoSegment) {
+	binary.Write(buf, binary.LittleEndian, uint32(machoLCSegment64))    // cmd
+	binary.Write(buf, binary.LittleEndian, uint32(machoSegmentCmdSize)) // cmdsize
+	var name [16]byte
+	copy(name[:], s.name)
+	buf.Write(name[:]) // segname
+	binary.Write(buf, binary.LittleEndian, s.vmaddr)
+	binary.Write(buf, binary.LittleEndian, s.vmsize)
+	binary.Write(buf, binary.LittleEndian, s.fileoff)
+	binary.Write(buf, binary.LittleEndian, s.filesize)
+	binary.Write(buf, binary.LittleEndian, s.prot)    // maxprot
+	binary.Write(buf, binary.LittleEndian, s.prot)    // initprot
+	binary.Write(buf, binary.LittleEndian, uint32(0)) // nsects
+	binary.Write(buf, binary.LittleEndian, uint32(0)) // flags
+}
+
+// writeMachoUnixThread emits the LC_UNIXTHREAD load command that starts the
+// kernel-loaded Mach-O at entry. The register file is exactly the 21
+// quadwords of x86_THREAD_STATE64 (count is expressed in 32-bit words, so
+// 42), matching the declared cmdsize byte for byte. rsp is left zero, which
+// makes XNU allocate a default stack; rcx carries the host-OS indicator so
+// rt0_cosmo_amd64.s (which reads CL) knows it is running on XNU.
+func writeMachoUnixThread(buf *bytes.Buffer, entry uint64) {
+	binary.Write(buf, binary.LittleEndian, uint32(machoLCUnixThread))      // cmd
+	binary.Write(buf, binary.LittleEndian, uint32(machoUnixThreadCmdSize)) // cmdsize
+	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateFlavor)) // flavor (x86_THREAD_STATE64)
+	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateRegs*2)) // count (32-bit words)
+
+	var regs [machoThreadStateRegs]uint64
+	regs[2] = machoHostXNU // rcx: host OS for rt0 (CL = 8 means XNU)
+	regs[16] = entry       // rip
+	for _, r := range regs {
+		binary.Write(buf, binary.LittleEndian, r)
+	}
+}
+
+func peHeaderOffset(pe []byte) (int, error) {
+	if len(pe) < 0x40 || string(pe[0:2]) != "MZ" {
+		return 0, fmt.Errorf("not a valid PE binary")
+	}
+	peoff := int(binary.LittleEndian.Uint32(pe[0x3C:]))
+	if peoff < 0 || len(pe) < peoff+4 || string(pe[peoff:peoff+4]) != "PE\x00\x00" {
+		return 0, fmt.Errorf("not a valid PE binary")
+	}
+	return peoff, nil
+}
+
+// writePEHeaderFromPayload transplants a native Windows PE header into the
+// APE header. Section RVAs and data-directory RVAs remain unchanged; section
+// raw file offsets are shifted to point into the embedded PE payload.
+func writePEHeaderFromPayload(header []byte, win *pePayload) {
+	const peStart = 0x80
+	peoff, err := peHeaderOffset(win.pe)
+	if err != nil {
+		Exitf("Windows PE payload: %v", err)
+	}
+	coffStart := peoff + 4
+	if len(win.pe) < coffStart+20 {
+		Exitf("Windows PE payload: truncated COFF header")
+	}
+	numSections := int(binary.LittleEndian.Uint16(win.pe[coffStart+2:]))
+	sizeOpt := int(binary.LittleEndian.Uint16(win.pe[coffStart+16:]))
+	optStart := coffStart + 20
+	sectStart := optStart + sizeOpt
+	headersEnd := sectStart + numSections*40
+	if len(win.pe) < headersEnd {
+		Exitf("Windows PE payload: truncated section table")
+	}
+	// The byte at apeScriptOffset-1 is unconditionally overwritten with a
+	// newline so the shell heredoc terminator starts on a fresh line, so
+	// the transplanted headers must end strictly before apeScriptOffset.
+	if peStart+(headersEnd-peoff) >= apeScriptOffset {
+		Exitf("Windows PE payload: PE headers too large for APE script gap")
+	}
+	if win.offset > uint64(^uint32(0)) {
+		Exitf("Windows PE payload: file offset %#x exceeds PE32 raw pointer range", win.offset)
+	}
+	// Data directories that hold raw file offsets rather than RVAs would
+	// need shifting too, but the transplant leaves directories untouched
+	// and Go's internal linker never emits the offset-based ones. Reject a
+	// Certificate Table (directory 4, whose entry is a file offset to the
+	// Authenticode signature) so a signed input fails loudly instead of
+	// shipping a dangling pointer. The Debug directory (6) has the same
+	// caveat - its entries carry unshifted PointerToRawData fields - but
+	// Go's linker does not populate it either.
+	if sizeOpt >= 2 {
+		dirBase := 0
+		switch binary.LittleEndian.Uint16(win.pe[optStart:]) {
+		case 0x20B: // PE32+
+			dirBase = optStart + 112
+		case 0x10B: // PE32
+			dirBase = optStart + 96
+		}
+		certDir := dirBase + 4*8
+		if dirBase != 0 && certDir+8 <= optStart+sizeOpt {
+			if binary.LittleEndian.Uint32(win.pe[certDir+4:]) != 0 {
+				Exitf("Windows PE payload: input has a Certificate Table (Authenticode signature); signed PEs are unsupported as APE payloads")
+			}
+		}
+	}
+
+	copy(header[peStart:], win.pe[peoff:headersEnd])
+
+	newCoffStart := peStart + 4
+	newSizeOpt := int(binary.LittleEndian.Uint16(header[newCoffStart+16:]))
+	newOptStart := newCoffStart + 20
+	newSectStart := newOptStart + newSizeOpt
+	symptr := binary.LittleEndian.Uint32(header[newCoffStart+8:])
+	if symptr != 0 {
+		shifted := uint64(symptr) + win.offset
+		if shifted > uint64(^uint32(0)) {
+			Exitf("Windows PE payload: shifted symbol table pointer %#x exceeds PE32 range", shifted)
+		}
+		binary.LittleEndian.PutUint32(header[newCoffStart+8:], uint32(shifted))
+	}
+	binary.LittleEndian.PutUint32(header[newOptStart+64:], 0) // CheckSum
+	for i := 0; i < numSections; i++ {
+		sect := newSectStart + i*40
+		raw := binary.LittleEndian.Uint32(header[sect+20:])
+		if raw == 0 {
+			continue
+		}
+		shifted := uint64(raw) + win.offset
+		if shifted > uint64(^uint32(0)) {
+			Exitf("Windows PE payload: shifted section raw pointer %#x exceeds PE32 range", shifted)
+		}
+		binary.LittleEndian.PutUint32(header[sect+20:], uint32(shifted))
+	}
 }
 
 // writePEHeader writes the PE header for Windows support.
@@ -672,32 +1021,18 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 	binary.LittleEndian.PutUint16(header[sectStart+34:], 0)
 	binary.LittleEndian.PutUint32(header[sectStart+36:], 0x60000020)
 
-	// Minimal code at 0x200
-	header[0x200] = 0x31 // xor eax, eax
-	header[0x201] = 0xC0
-	header[0x202] = 0xC3 // ret
-}
-
-// replaceAll is a simple string replacement helper
-func replaceAll(s, old, new string) string {
-	result := s
-	for {
-		i := indexOf(result, old)
-		if i < 0 {
-			break
-		}
-		result = result[:i] + new + result[i+len(old):]
+	// Minimal entry stub at 0x200, matching the COFF machine type.
+	switch machineType {
+	case 0xAA64:
+		copy(header[0x200:], []byte{
+			0x00, 0x00, 0x80, 0x52, // mov w0, #0
+			0xC0, 0x03, 0x5F, 0xD6, // ret
+		})
+	default:
+		header[0x200] = 0x31 // xor eax, eax
+		header[0x201] = 0xC0
+		header[0x202] = 0xC3 // ret
 	}
-	return result
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 //go:embed ape-m1.c.gz
