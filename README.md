@@ -9,10 +9,18 @@ APE binaries are single executables that run natively on multiple operating syst
 ## Building APE Binaries
 
 ```bash
-GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
+# Fat APE (default): cosmo amd64 + cosmo arm64 + native windows/amd64
+# payloads in one binary. GOARCH is ignored for the output.
+GOOS=cosmo go build -o program.com main.go
+
+# go install produces the same fat APE in the install directory
+GOOS=cosmo go install ./cmd/program
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH)
+GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs on Linux, macOS, and Windows.
+The resulting `.com` file runs natively on Linux, macOS, and Windows.
 
 ## Building the Toolchain
 
@@ -23,9 +31,19 @@ cd src && ./make.bash    # Unix
 cd src && make.bat       # Windows
 ```
 
+## Testing
+
+With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>` runs cosmo test binaries on a Linux or macOS host via the `misc/cosmo` exec wrappers (see `misc/cosmo/README.md`).
+
 ## Status
 
 This is an experimental project. Use at your own risk.
+
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
+Windows (plus ARM64 Linux via qemu during development). macOS Intel support
+is structural so far: the Mach-O assimilation header is verified against the
+XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
+incomplete and untested end to end (no Intel CI runner).
 
 ## Related Projects
 

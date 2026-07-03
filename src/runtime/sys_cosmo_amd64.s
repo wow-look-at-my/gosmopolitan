@@ -258,14 +258,16 @@ TEXT runtime·usleep(SB),NOSPLIT,$24
 usleep_darwin:
 	// macOS: use select with timeout
 	// select(0, NULL, NULL, NULL, &tv)
-	// Convert timespec to timeval (sec, usec not nsec)
-	MOVQ	0(SP), DI	// seconds
-	MOVQ	8(SP), SI	// nanoseconds
-	MOVQ	$1000, AX
+	// Convert the timespec at 0(SP)/8(SP) into a timeval in place:
+	// tv_usec = nsec / 1000. (This used to compute DIVQ AX with AX
+	// as BOTH dividend setup and divisor - dividing the constant 1000
+	// by itself - and then stored the raw nanosecond count as tv_usec,
+	// an invalid timeval whenever nsec >= 1e6.)
+	MOVQ	8(SP), AX	// nanoseconds
 	XORQ	DX, DX
-	DIVQ	AX		// SI = nsec / 1000 = usec
-	MOVQ	DI, 0(SP)	// tv_sec
-	MOVQ	SI, 8(SP)	// tv_usec
+	MOVQ	$1000, CX
+	DIVQ	CX		// AX = nsec / 1000 = usec
+	MOVQ	AX, 8(SP)	// tv_usec (tv_sec already at 0(SP))
 	MOVL	$0, DI		// nfds = 0
 	MOVQ	$0, SI		// readfds = NULL
 	MOVQ	$0, DX		// writefds = NULL
@@ -439,6 +441,11 @@ nanotime1_darwin:
 	// macOS: Use gettimeofday (returns sec, usec)
 	LEAQ	16(SP), DI	// struct timeval *
 	MOVQ	$0, SI		// timezone (NULL)
+	// Post-Sierra XNU gettimeofday takes a THIRD argument: a
+	// uint64* the kernel copies mach_absolute_time into when
+	// non-NULL. Leaving caller garbage in DX made the kernel write
+	// 8 bytes through a random pointer. Zero it.
+	XORL	DX, DX
 	MOVL	$XNU_gettimeofday, AX
 	SYSCALL
 	MOVQ	16(SP), AX	// tv_sec
@@ -473,8 +480,16 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 rtsigprocmask_darwin:
-	// macOS sigprocmask doesn't have size parameter
+	// macOS sigprocmask doesn't have size parameter.
+	// The `how` values also differ: Linux SIG_BLOCK/UNBLOCK/SETMASK
+	// are 0/1/2, Apple's are 1/2/3. Passing Linux values raw meant
+	// SIG_BLOCK arrived as the invalid 0 (EINVAL -> deliberate crash
+	// below) and SETMASK arrived as Apple SIG_UNBLOCK. Translate by
+	// adding 1. (The 8-byte Linux sigset vs 4-byte Apple sigset
+	// mismatch remains - macOS signal handling is still stubbed and
+	// tracked for the signal-translation wave.)
 	MOVL	how+0(FP), DI
+	INCL	DI
 	MOVQ	new+8(FP), SI
 	MOVQ	old+16(FP), DX
 	MOVL	$XNU_sigprocmask, AX
@@ -648,6 +663,9 @@ walltime_darwin:
 	// macOS: Use gettimeofday
 	LEAQ	0(SP), DI	// struct timeval *
 	MOVQ	$0, SI		// timezone (NULL)
+	// Zero the third argument (mach_absolute_time out-pointer on
+	// post-Sierra XNU); see nanotime1_darwin.
+	XORL	DX, DX
 	MOVL	$XNU_gettimeofday, AX
 	SYSCALL
 	MOVQ	0(SP), AX	// tv_sec

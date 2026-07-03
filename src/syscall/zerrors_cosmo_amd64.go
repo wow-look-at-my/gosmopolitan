@@ -12,6 +12,7 @@ package syscall
 const (
 	AF_INET      = 0x2
 	AF_INET6     = 0xa
+	AF_LOCAL     = 0x1
 	AF_UNIX      = 0x1
 	AF_UNSPEC    = 0x0
 
@@ -153,6 +154,12 @@ const (
 	IPV6_MULTICAST_HOPS = 0x12
 	IPV6_MULTICAST_IF   = 0x11
 	IPV6_MULTICAST_LOOP = 0x13
+	IPV6_UNICAST_HOPS   = 0x10
+
+	// Process scheduling priority
+	PRIO_PGRP    = 0x1
+	PRIO_PROCESS = 0x0
+	PRIO_USER    = 0x2
 
 	// TCP keepalive
 	TCP_KEEPCNT   = 0x6
@@ -218,8 +225,15 @@ const (
 
 	TCP_NODELAY = 0x1
 
+	// Termios queue selectors for tcflush
+	TCIFLUSH  = 0x0
+	TCIOFLUSH = 0x2
+	TCOFLUSH  = 0x1
+
+	TIOCGPGRP = 0x540f
 	TIOCNOTTY = 0x5422
 	TIOCSCTTY = 0x540e
+	TIOCSPGRP = 0x5410
 
 	WNOHANG    = 0x1
 	WUNTRACED  = 0x2

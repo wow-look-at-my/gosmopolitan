@@ -1,0 +1,29 @@
+#!/bin/sh
+# Copyright 2026 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
+
+# go_cosmo_arm64_exec runs a GOOS=cosmo test binary on a unix host.
+# cmd/go looks for it on $PATH whenever GOOS != host GOOS, so with
+#   export PATH="$GOROOT/misc/cosmo:$PATH"
+# a plain "GOOS=cosmo go test <pkg>" works on a Linux or macOS host.
+#
+# An APE binary that has already self-assimilated into the host's
+# native format (ELF or Mach-O) is executed directly. A pristine APE
+# still carrying its MZqFpD boot script is started via /bin/sh, which
+# runs the script and self-assimilates the file in place.
+
+if [ "$#" -lt 1 ]; then
+	echo "usage: ${0##*/} binary [args...]" >&2
+	exit 2
+fi
+bin=$1
+shift
+magic=$(dd if="$bin" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+case "$magic" in
+7f454c46 | cffaedfe)
+	# ELF or 64-bit Mach-O: already assimilated, run natively.
+	exec "$bin" "$@"
+	;;
+esac
+exec /bin/sh "$bin" "$@"

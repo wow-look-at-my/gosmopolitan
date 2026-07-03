@@ -6,7 +6,31 @@
 
 package syscall
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
+
+// rawSyscallNoErrorDarwin is the darwin branch of rawSyscallNoError
+// (asm_cosmo_arm64.s tail-jumps here on macOS, where raw SVC would
+// SIGSYS). It routes through the generic cosmo dispatcher, whose darwin
+// slow path emulates the id-family syscalls with dlsym-resolved libc
+// functions.
+//
+// rawSyscallNoError has no error result by contract ("cannot fail"). If
+// the emulation does fail (syscall not emulated, symbol unresolved),
+// return the negated Linux errno in r1 - the raw kernel convention - so
+// the failure is at least visible to a debugger rather than silently
+// fabricating a plausible value.
+//
+//go:nosplit
+func rawSyscallNoErrorDarwin(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
+	r1, r2, errno := cosmo.Syscall6(trap, a1, a2, a3, 0, 0, 0)
+	if errno != 0 {
+		return -errno, 0
+	}
+	return r1, r2
+}
 
 func (iov *Iovec) SetLen(length int) {
 	iov.Len = uint64(length)
@@ -82,8 +106,34 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
+			// A leading NUL is either an unnamed socket or a Linux
+			// abstract-namespace name. Every caller passes a pre-zeroed
+			// buffer, so an unnamed socket - the kernel wrote only the
+			// 2-byte family: unbound or socketpair descriptors on Linux
+			// hosts, and every unnamed socket surfaced by the darwin
+			// emulation on macOS hosts - leaves the path all zero,
+			// while a real abstract name has at least one nonzero
+			// byte. Report unnamed as an empty name like the BSD ports
+			// do instead of inventing an abstract "@" name; cosmo is
+			// deliberately absent from the android/linux/windows GOOS
+			// lists in net's tests that expect "@".
+			named := false
+			for _, b := range pp.Path {
+				if b != 0 {
+					named = true
+					break
+				}
+			}
+			if !named {
+				return sa, nil // unnamed: Name stays ""
+			}
+			// Abstract name: rewrite the leading NUL as '@' for
+			// textual display (the standard convention).
 			pp.Path[0] = '@'
 		}
+		// Assume the path ends at the first NUL. Not the full Linux
+		// abstract-name semantics (those are length-delimited binary
+		// blobs), but the convention everything uses.
 		n := 0
 		for n < len(pp.Path) && pp.Path[n] != 0 {
 			n++

@@ -10,7 +10,13 @@ on:
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform
+  #
+  # Job and step timeout-minutes are deliberate everywhere: a hung cosmo
+  # binary (or a wedged runner) must never burn GitHub's 6-hour default.
+  # Limits are sized ~2x (or a round number above) the slowest duration
+  # observed across recent green runs; see the values at each step.
   build:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +35,8 @@ jobs:
           cache: false
 
       - name: Build Go toolchain
+        # Observed max 3m14s (windows make.bat); unix ~2m30s.
+        timeout-minutes: 8
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -78,29 +86,41 @@ jobs:
           /tmp/shebang-test.go
 
       - name: Build APE binary
+        # Observed max 38s (windows; two fat builds = six link passes).
+        timeout-minutes: 10
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
           # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
           # APE regardless of the host architecture.
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+          # The probe is a multi-file package (per-OS signal checks for
+          # the windows payload build), so build its module directory.
+          (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
           echo "=== File info ==="
-          file fizzbuzz.com 2>/dev/null || true
-          ls -la fizzbuzz.com
+          file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
+          ls -la fizzbuzz.com runtimeprobe.com
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
           name: ape-binary-${{ matrix.build-os }}
-          path: fizzbuzz.com
+          path: |
+            fizzbuzz.com
+            runtimeprobe.com
           retention-days: 1
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 binaries sequentially (native + 2 cross-compiled)
+  #
+  # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
+  # green total is under 2 minutes. Individual steps carry their own
+  # timeout-minutes (and an in-step killer, see with-deadline.sh).
   test:
+    timeout-minutes: 25
     needs: build
     strategy:
       fail-fast: false
@@ -127,8 +147,26 @@ jobs:
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
-          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
 
+      # Prefetch test-module dependencies separately so a stalled module
+      # download cannot masquerade as a hung test step.
+      - name: Download apetest modules
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          sh ./with-deadline.sh 150 go mod download
+
+      # Each test step runs go test under an in-step process-group killer
+      # (see with-deadline.sh): runner-side step timeouts have been
+      # observed not to fire when a step wedges on the macOS runners
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
+      # one wedged process even survived a process-group SIGKILL, i.e. it
+      # was stuck in an uninterruptible kernel state). The killer abandons
+      # such a corpse so the step still ends, and go test's output goes
+      # through a FILE (cat'ed afterwards) so no abandoned descendant can
+      # keep the runner's log pipe open.
       - name: Test binary built on Ubuntu
         id: test-ubuntu
         timeout-minutes: 5
@@ -136,7 +174,21 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload ubuntu-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-ubuntu-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
 
       - name: Test binary built on macOS
         id: test-macos
@@ -145,7 +197,21 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload macos-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-macos-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
 
       - name: Test binary built on Windows
         id: test-windows
@@ -154,4 +220,18 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload windows-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3

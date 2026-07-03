@@ -163,7 +163,15 @@ func newFile(fd int, name string, kind newFileKind, nonBlocking bool) *File {
 	// perform this check and allow it to be added to the kqueue.
 	if kind == kindOpenFile {
 		switch runtime.GOOS {
-		case "darwin", "ios", "dragonfly", "freebsd", "netbsd", "openbsd":
+		case "darwin", "ios", "dragonfly", "freebsd", "netbsd", "openbsd", "cosmo":
+			// For cosmo the host OS is only known at run time, and
+			// both hosts want regular files kept out of the
+			// netpoller: on Linux epoll_ctl on a regular file fails
+			// with EPERM (internal/poll then falls back to blocking
+			// mode - the same end state this stat check produces
+			// directly), and on macOS the poll(2)-based netpoller
+			// would report a regular file as always ready, spinning
+			// the poller instead of doing honest blocking I/O.
 			var st syscall.Stat_t
 			err := ignoringEINTR(func() error {
 				return syscall.Fstat(fd, &st)

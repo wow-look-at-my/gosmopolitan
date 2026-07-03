@@ -331,6 +331,8 @@ func Lchown(path string, uid int, gid int) (err error) {
 //sys	setgroups(n int, list *_Gid_t) (err error)
 //sys	utimes(path string, times *[2]Timeval) (err error)
 //sys	futimesat(dirfd int, path string, times *[2]Timeval) (err error)
+//sys	Getpriority(which int, who int) (prio int, err error)
+//sys	Setpriority(which int, who int, prio int) (err error)
 
 func Gettimeofday(tv *Timeval) (err error) {
 	return gettimeofday(tv, nil)
