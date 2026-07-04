@@ -284,6 +284,21 @@ func handleEvent() {
 	}
 	events = append(events, e)
 
+	if eventHandler == nil {
+		// The program does not link in syscall/js, so setEventHandler was
+		// never called and this event cannot be handled. The only source of
+		// such an event is the host probing for a deadlock: wasm_exec_node.js
+		// resumes the program with a synthetic event when Node.js's event
+		// loop runs dry while the program is still running. Park this
+		// goroutine forever with the event unreturned: beforeIdle then cannot
+		// return to JavaScript, so the scheduler falls through to checkdead
+		// and reports the deadlock, instead of crashing on a nil eventHandler
+		// call. See go.dev/issue/70869.
+		clearIdleTimeout()
+		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		throw("unreachable") // gopark above never returns
+	}
+
 	if !eventHandler() {
 		// If we did not handle a window event, the idle timeout was triggered, so we can clear it.
 		clearIdleTimeout()
