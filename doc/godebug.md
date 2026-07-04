@@ -183,6 +183,14 @@ APIs ignore the random `io.Reader` parameter. For Go 1.26, it defaults
 to `cryptocustomrand=0`, ignoring the random parameters. Using `cryptocustomrand=1`
 reverts to the pre-Go 1.26 behavior.
 
+Go 1.26 added a new `jsfetchnode` setting that controls whether net/http uses
+the JavaScript Fetch API on the js/wasm port when the program runs under
+Node.js. By default fetch is not used under Node.js and requests go over the
+in-memory fake network shared with the net package's tests, so requests to
+real hosts fail; setting `jsfetchnode=1` enables the Fetch API under Node.js
+18 or later, the same behavior as in browsers. This setting has no effect in
+browsers or on other ports.
+
 ### Go 1.25
 
 Go 1.25 added a new `decoratemappings` setting that controls whether the Go
