@@ -6476,6 +6476,12 @@ func checkdead() {
 	}
 
 	unlock(&sched.lock) // unlock so that GODEBUG=scheddetail=1 doesn't hang
+	if GOOS == "js" {
+		// The js runtime knows more about why a program can deadlock
+		// (e.g. a goroutine blocked inside a call from JavaScript).
+		// Print that context before the standard message.
+		deadlockOSHint()
+	}
 	fatal("all goroutines are asleep - deadlock!")
 }
 
