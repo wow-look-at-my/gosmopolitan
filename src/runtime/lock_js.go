@@ -294,6 +294,11 @@ func handleEvent() {
 		// return to JavaScript, so the scheduler falls through to checkdead
 		// and reports the deadlock, instead of crashing on a nil eventHandler
 		// call. See go.dev/issue/70869.
+		//
+		// Since this event is the deadlock probe, record that so that
+		// deadlockOSHint does not misattribute the deadlock to a blocked
+		// js.FuncOf callback (no such callback can exist without syscall/js).
+		deadlockProbeActive = true
 		clearIdleTimeout()
 		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
 		throw("unreachable") // gopark above never returns
