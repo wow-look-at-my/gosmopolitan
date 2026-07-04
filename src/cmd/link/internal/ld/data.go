@@ -2830,11 +2830,13 @@ func splitTextSections(ctxt *Link) bool {
 	return (ctxt.IsARM() || ctxt.IsPPC64() || (ctxt.IsARM64() && ctxt.IsDarwin())) && ctxt.IsExternal()
 }
 
-// On Wasm, we reserve 4096 bytes for zero page, then 8192 bytes for wasm_exec.js
-// to store command line args and environment variables.
-// Data sections starts from at least address 12288.
+// On Wasm, we reserve 4096 bytes for zero page, then 61440 bytes for wasm_exec.js
+// to store command line args and environment variables. Real-world environments
+// (e.g. CI systems) easily exceed the 8192 bytes reserved previously; see
+// go.dev/issue/49011.
+// Data sections start from at least address 65536.
 // Keep in sync with wasm_exec.js.
-const wasmMinDataAddr = 4096 + 8192
+const wasmMinDataAddr = 4096 + 61440
 
 // address assigns virtual addresses to all segments and sections and
 // returns all segments in file order.
