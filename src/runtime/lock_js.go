@@ -185,7 +185,7 @@ func (e *timeoutEvent) diff(x int64) int64 {
 		return 0
 	}
 
-	diff := x - idleTimeout.time
+	diff := x - e.time
 	if diff < 0 {
 		diff = -diff
 	}
