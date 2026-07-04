@@ -483,6 +483,17 @@ func isAbs(path string) bool {
 	return stringslite.HasPrefix(path, "/")
 }
 
+// hasPathPrefix reports whether path starts with prefix ending on a path
+// component boundary: a preopen named "/data" contains "/data" and "/data/x",
+// but not "/database/x". A prefix ending in '/' (notably the commonly
+// preopened root directory "/") already ends on a component boundary.
+func hasPathPrefix(path, prefix string) bool {
+	return stringslite.HasPrefix(path, prefix) &&
+		(len(path) == len(prefix) || // "/data" contains "/data"
+			stringslite.HasSuffix(prefix, "/") || // "/" contains "/data"
+			path[len(prefix)] == '/') // "/data" contains "/data/x", but not "/database/x"
+}
+
 func isDir(path string) bool {
 	return stringslite.HasSuffix(path, "/")
 }
@@ -504,7 +515,7 @@ func preparePath(path string) (int32, *byte, size) {
 	path = joinPath(dir, path)
 
 	for _, p := range preopens {
-		if len(p.name) > len(dirName) && stringslite.HasPrefix(path, p.name) {
+		if len(p.name) > len(dirName) && hasPathPrefix(path, p.name) {
 			dirFd, dirName = p.fd, p.name
 		}
 	}
