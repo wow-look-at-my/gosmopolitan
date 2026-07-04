@@ -87,6 +87,12 @@ func ParseGOEXPERIMENT(goos, goarch, goexp string) (*ExperimentFlags, error) {
 		RandomizedHeapBase64:  true,
 		SizeSpecializedMalloc: true,
 		GreenTeaGC:            true,
+		// Wasm has no threads and no asynchronous (signal-based)
+		// preemption, so a CPU-bound goroutine can starve the scheduler
+		// forever. Compile loop backedge rescheduling checks by default
+		// on wasm; the runtime arms them when other work is pending.
+		// GOEXPERIMENT=nopreemptibleloops opts out.
+		PreemptibleLoops: goarch == "wasm",
 	}
 	flags := &ExperimentFlags{
 		Flags:    baseline,

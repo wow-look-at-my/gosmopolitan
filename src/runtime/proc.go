@@ -394,8 +394,17 @@ func Gosched() {
 // goschedguarded yields the processor like gosched, but also checks
 // for forbidden states and opts out of the yield in those cases.
 //
+// It is the target of the rescheduling checks that the compiler inserts on
+// loop backedges (see ssa's insertLoopReschedChecks). On wasm those checks
+// are compiled in by default and armed by the scheduler (see execute), so
+// this can be extremely hot; wasmLoopPreemptGate cheaply rate-limits the
+// yields without disarming the checks.
+//
 //go:nosplit
 func goschedguarded() {
+	if GOARCH == "wasm" && !wasmLoopPreemptGate() {
+		return
+	}
 	mcall(goschedguarded_m)
 }
 
@@ -412,6 +421,114 @@ func goschedIfBusy() {
 		return
 	}
 	mcall(gosched_m)
+}
+
+// Cooperative loop preemption on wasm.
+//
+// Wasm has no threads (so no sysmon) and no signals (so no asynchronous
+// preemption): nothing can interrupt a running goroutine, and a CPU-bound
+// goroutine starves timers, other runnable goroutines, and the garbage
+// collector forever. Instead, the compiler inserts a check on every loop
+// backedge (enabled by default for GOARCH=wasm, see the preemptibleloops
+// experiment and ssa's insertLoopReschedChecks):
+//
+//	if sp < g.stackguard1 { goschedguarded() }
+//
+// On wasm, stackguard1 is not otherwise used: there is no cgo, and the wasm
+// stack-growth prologue only consults stackguard0. The scheduler therefore
+// repurposes it as the arming word for these checks: stackPreempt (checks
+// fire) when there is pending work a running goroutine could starve, and 0
+// (checks never fire, since sp < 0 is always false unsigned) otherwise.
+// Unlike poisoning stackguard0, arming stackguard1 does not divert every
+// function prologue through morestack, so an armed goroutine keeps making
+// progress at nearly full speed between yields.
+//
+// Arming happens in execute (for each dispatched goroutine) and, via
+// wasmArmLoopPreempt, whenever work appears while user code is running
+// (run queue insertion, timer wakeups, preemption requests).
+//
+// wasmLoopPreemptGate rate-limits the actual yields: a goschedguarded yield
+// is taken at most every wasmLoopYieldInterval nanoseconds, except that
+// explicit preemption requests (gp.preempt, e.g. for stop-the-world) are
+// always honored immediately. The nanotime call itself is amortized over
+// wasmLoopYieldBatch gate calls. While armed, a goroutine therefore pays
+// one call to goschedguarded per loop iteration plus one scheduler pass per
+// wasmLoopYieldInterval; timers can fire up to roughly wasmLoopYieldInterval
+// (plus wasmLoopYieldBatch loop iterations) late while a loop is hogging
+// the (only) P.
+
+const (
+	// wasmLoopYieldInterval is the minimum interval, in nanoseconds,
+	// between rate-limited yields from armed loop preemption checks.
+	wasmLoopYieldInterval = 100e3
+
+	// wasmLoopYieldBatch is the number of gate calls between clock reads.
+	wasmLoopYieldBatch = 64
+)
+
+// Wasm is single-threaded, so plain (unsynchronized) globals are exact.
+var (
+	wasmLoopGateCalls int32 // gate calls since the last clock read
+	wasmLoopLastYield int64 // nanotime of the last rate-limited yield
+)
+
+// wasmLoopPreemptGate reports whether a compiler-inserted loop preemption
+// check should actually yield. See the comment above for the scheme.
+//
+//go:nosplit
+func wasmLoopPreemptGate() bool {
+	gp := getg()
+	mp := gp.m
+	// Mirror canPreemptM, and additionally require that this is the M's
+	// current user goroutine: the compiler also instruments loops in
+	// runtime code that runs on g0, and yielding there is not safe.
+	if gp != mp.curg || mp.locks != 0 || mp.mallocing != 0 || mp.preemptoff != "" ||
+		mp.p == 0 || mp.p.ptr().status != _Prunning {
+		return false
+	}
+	if gp.preempt || sched.gcwaiting.Load() {
+		// Explicit preemption request (e.g. stop-the-world):
+		// always honor it immediately.
+		return true
+	}
+	wasmLoopGateCalls++
+	if wasmLoopGateCalls < wasmLoopYieldBatch {
+		return false
+	}
+	wasmLoopGateCalls = 0
+	now := nanotime()
+	if now-wasmLoopLastYield < wasmLoopYieldInterval {
+		return false
+	}
+	wasmLoopLastYield = now
+	return true
+}
+
+// wasmWorkPending reports whether there is scheduler work that a running
+// goroutine could starve: runnable goroutines, pending timers, an active GC
+// mark phase (background mark workers need the P), goroutines blocked in the
+// netpoller, or a stop-the-world request. Wasm is single-threaded, so the
+// unsynchronized reads are exact.
+func wasmWorkPending(pp *p) bool {
+	return !runqempty(pp) || sched.runq.size != 0 || len(pp.timers.heap) > 0 ||
+		atomic.Load(&gcBlackenEnabled) != 0 || netpollAnyWaiters() ||
+		sched.gcwaiting.Load()
+}
+
+// wasmArmLoopPreempt arms the loop preemption checks of the goroutine
+// currently running on this M, if any. It is called when work appears that
+// an already-running goroutine could not otherwise observe: a goroutine is
+// put on a run queue or a timer needs earlier attention while user code is
+// running. On non-wasm platforms it compiles to nothing.
+//
+//go:nosplit
+func wasmArmLoopPreempt() {
+	if GOARCH != "wasm" {
+		return
+	}
+	if gp := getg().m.curg; gp != nil {
+		gp.stackguard1 = stackPreempt
+	}
 }
 
 // Puts the current goroutine into a waiting state and calls unlockf on the
@@ -3357,6 +3474,17 @@ func execute(gp *g, inheritTime bool) {
 	gp.waitsince = 0
 	gp.preempt = false
 	gp.stackguard0 = gp.stack.lo + stackGuard
+	if GOARCH == "wasm" {
+		// Arm the compiler-inserted loop preemption checks if there is
+		// pending work this goroutine could otherwise starve; disarm
+		// them if not. See the wasm loop preemption comment above
+		// wasmLoopPreemptGate.
+		if wasmWorkPending(mp.p.ptr()) {
+			gp.stackguard1 = stackPreempt
+		} else {
+			gp.stackguard1 = 0
+		}
+	}
 	if !inheritTime {
 		mp.p.ptr().schedtick++
 	}
@@ -4011,6 +4139,11 @@ func checkIdleGCNoP() (*p, *g) {
 // going to wake up before the when argument; or it wakes an idle P to service
 // timers and the network poller if there isn't one already.
 func wakeNetPoller(when int64) {
+	// A timer needs earlier attention than the netpoller expected. On wasm
+	// there is no netpoller thread to wake; instead make sure the running
+	// goroutine's loop preemption checks are armed so the scheduler (which
+	// runs the timers) gets control.
+	wasmArmLoopPreempt()
 	if sched.lastpoll.Load() == 0 {
 		// In findRunnable we ensure that when polling the pollUntil
 		// field is either zero or the time to which the current
@@ -5293,6 +5426,13 @@ func malg(stacksize int32) *g {
 		})
 		newg.stackguard0 = newg.stack.lo + stackGuard
 		newg.stackguard1 = ^uintptr(0)
+		if GOARCH == "wasm" {
+			// On wasm, stackguard1 is repurposed as the arming word for
+			// the compiler-inserted loop preemption checks and
+			// ^uintptr(0) would read as armed. Start disarmed; execute
+			// sets the real value before the goroutine runs.
+			newg.stackguard1 = 0
+		}
 		// Clear the bottom word of the stack. We record g
 		// there on gsignal stack during VDSO on ARM and ARM64.
 		*(*uintptr)(unsafe.Pointer(newg.stack.lo)) = 0
@@ -6883,6 +7023,22 @@ func preemptall() bool {
 func preemptone(pp *p) bool {
 	mp := pp.m.ptr()
 	if mp == nil || mp == getg().m {
+		if GOARCH == "wasm" && mp != nil && mp == getg().m {
+			// On wasm there is only one thread, so the M requesting the
+			// preemption is necessarily the M running the target
+			// goroutine and the request would otherwise always be
+			// dropped. The cooperative machinery still works: poison
+			// stackguard0 so the next function prologue enters newstack,
+			// and stackguard1 so the compiler-inserted loop backedge
+			// checks fire (see the wasm loop preemption comment above
+			// wasmLoopPreemptGate).
+			if gp := mp.curg; gp != nil && gp != mp.g0 && readgstatus(gp)&^_Gscan != _Gsyscall {
+				gp.preempt = true
+				gp.stackguard0 = stackPreempt
+				gp.stackguard1 = stackPreempt
+				return true
+			}
+		}
 		return false
 	}
 	gp := mp.curg
@@ -7266,6 +7422,7 @@ func mgetSpecific(mp *m) *m {
 func globrunqput(gp *g) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.pushBack(gp)
 }
 
@@ -7277,6 +7434,7 @@ func globrunqput(gp *g) {
 func globrunqputhead(gp *g) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.push(gp)
 }
 
@@ -7289,6 +7447,7 @@ func globrunqputhead(gp *g) {
 func globrunqputbatch(batch *gQueue) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.pushBackAll(*batch)
 	*batch = gQueue{}
 }
@@ -7493,6 +7652,7 @@ const randomizeScheduler = raceenabled
 // If the run queue is full, runnext puts g on the global queue.
 // Executed only by the owner P.
 func runqput(pp *p, gp *g, next bool) {
+	wasmArmLoopPreempt()
 	if !haveSysmon && next {
 		// A runnext goroutine shares the same time slice as the
 		// current goroutine (inheritTime from runqget). To prevent a
@@ -7583,6 +7743,7 @@ func runqputbatch(pp *p, q *gQueue) {
 	if q.empty() {
 		return
 	}
+	wasmArmLoopPreempt()
 	h := atomic.LoadAcq(&pp.runqhead)
 	t := pp.runqtail
 	n := uint32(0)
