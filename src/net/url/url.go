@@ -2,14 +2,13 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:generate go run gen_encoding_table.go
+
 // Package url parses URLs and implements query escaping.
 //
 // See RFC 3986. This package generally follows RFC 3986, except where
 // it deviates for compatibility reasons.
 // RFC 6874 followed for IPv6 zone literals.
-
-//go:generate go run gen_encoding_table.go
-
 package url
 
 // When sending changes, first  search old issues for history on decisions.
@@ -547,7 +546,9 @@ func parseAuthority(scheme, authority string) (user *Userinfo, host string, err 
 // parseHost parses host as an authority without user
 // information. That is, as host[:port].
 func parseHost(scheme, host string) (string, error) {
-	if openBracketIdx := strings.LastIndex(host, "["); openBracketIdx != -1 {
+	if openBracketIdx := strings.LastIndex(host, "["); openBracketIdx > 0 {
+		return "", errors.New("invalid IP-literal")
+	} else if openBracketIdx == 0 {
 		// Parse an IP-Literal in RFC 3986 and RFC 6874.
 		// E.g., "[fe80::1]", "[fe80::1%25en0]", "[fe80::1]:80".
 		closeBracketIdx := strings.LastIndex(host, "]")
@@ -605,18 +606,22 @@ func parseHost(scheme, host string) (string, error) {
 	} else if i := strings.Index(host, ":"); i != -1 {
 		lastColon := strings.LastIndex(host, ":")
 		if lastColon != i {
-			if scheme == "postgresql" || scheme == "postgres" {
-				// PostgreSQL relies on non-RFC-3986 parsing to accept
-				// a comma-separated list of hosts (with optional ports)
-				// in the host subcomponent:
-				// https://www.postgresql.org/docs/11/libpq-connect.html#LIBPQ-MULTIPLE-HOSTS
-				//
-				// Since we historically permitted colons to appear in the host,
-				// continue to permit it for postgres:// URLs only.
-				// https://go.dev/issue/75223
-				i = lastColon
-			} else if urlstrictcolons.Value() == "0" {
-				urlstrictcolons.IncNonDefault()
+			// RFC 3986 does not allow colons to appear in the host subcomponent.
+			//
+			// However, a number of databases including PostgreSQL and MongoDB
+			// permit a comma-separated list of hosts (with optional ports) in the
+			// host subcomponent.
+			//
+			// Since we historically permitted colons to appear in the host,
+			// enforce strict colons only for http and https URLs.
+			//
+			// See https://go.dev/issue/75223 and https://go.dev/issue/78077.
+			if scheme == "http" || scheme == "https" {
+				if urlstrictcolons.Value() == "0" {
+					urlstrictcolons.IncNonDefault()
+					i = lastColon
+				}
+			} else {
 				i = lastColon
 			}
 		}
@@ -929,7 +934,31 @@ func ParseQuery(query string) (Values, error) {
 	return m, err
 }
 
+var urlmaxqueryparams = godebug.New("urlmaxqueryparams")
+
+// Keep this in sync with net/http/httputil.
+const defaultMaxParams = 10000
+
+func urlParamsWithinMax(params int) bool {
+	withinDefaultMax := params <= defaultMaxParams
+	if urlmaxqueryparams.Value() == "" {
+		return withinDefaultMax
+	}
+	customMax, err := strconv.Atoi(urlmaxqueryparams.Value())
+	if err != nil {
+		return withinDefaultMax
+	}
+	withinCustomMax := customMax == 0 || params < customMax
+	if withinDefaultMax != withinCustomMax {
+		urlmaxqueryparams.IncNonDefault()
+	}
+	return withinCustomMax
+}
+
 func parseQuery(m Values, query string) (err error) {
+	if !urlParamsWithinMax(strings.Count(query, "&") + 1) {
+		return errors.New("number of URL query parameters exceeded limit")
+	}
 	for query != "" {
 		var key string
 		key, query, _ = strings.Cut(query, "&")
