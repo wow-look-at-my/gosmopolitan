@@ -33,7 +33,7 @@ func (noExecError) Is(target error) bool {
 // directories named by the PATH environment variable.
 // If file contains a slash, it is tried directly and the PATH is not consulted.
 // The result may be an absolute path or a path relative to the current directory.
-func LookPath(file string) (string, error) {
+func lookPath(file string) (string, error) {
 	// Wasm can not execute processes, so no executable can be found, ever.
 	return "", &Error{file, noExecError{}}
 }

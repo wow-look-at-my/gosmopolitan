@@ -11,6 +11,7 @@ import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/fips140"
 	"crypto/internal/boring"
 	"crypto/rand"
 	"crypto/tls/internal/fips140tls"
@@ -194,6 +195,13 @@ func runWithFIPSEnabled(t *testing.T, testFunc func(t *testing.T)) {
 }
 
 func runWithFIPSDisabled(t *testing.T, testFunc func(t *testing.T)) {
+	if fips140.Enforced() {
+		t.Run("no-fips140tls", func(t *testing.T) {
+			t.Skip("can't run no-fips140tls tests in fips140=only mode")
+		})
+		return
+	}
+
 	originalFIPS := fips140tls.Required()
 	defer func() {
 		if originalFIPS {
@@ -570,6 +578,41 @@ func TestVerifyHostname(t *testing.T) {
 	if err := c.VerifyHostname("www.google.com"); err == nil {
 		t.Fatalf("verify www.google.com succeeded with InsecureSkipVerify=true")
 	}
+}
+
+func TestRealResumption(t *testing.T) {
+	testenv.MustHaveExternalNetwork(t)
+
+	config := &Config{
+		ServerName:         "yahoo.com",
+		ClientSessionCache: NewLRUClientSessionCache(0),
+	}
+
+	for range 10 {
+		conn, err := Dial("tcp", "yahoo.com:443", config)
+		if err != nil {
+			t.Log("Dial error:", err)
+			continue
+		}
+		// Do a read to consume the NewSessionTicket messages.
+		fmt.Fprintf(conn, "GET / HTTP/1.1\r\nHost: yahoo.com\r\nConnection: close\r\n\r\n")
+		conn.Read(make([]byte, 4096))
+		conn.Close()
+
+		conn, err = Dial("tcp", "yahoo.com:443", config)
+		if err != nil {
+			t.Log("second Dial error:", err)
+			continue
+		}
+		state := conn.ConnectionState()
+		conn.Close()
+
+		if state.DidResume {
+			return
+		}
+	}
+
+	t.Fatal("no connection used session resumption")
 }
 
 func TestConnCloseBreakingWrite(t *testing.T) {
