@@ -921,6 +921,12 @@ func schedinit() {
 	var procs int32
 	if n, err := strconv.ParseInt(gogetenv("GOMAXPROCS"), 10, 32); err == nil && n > 0 {
 		procs = int32(n)
+		if GOARCH == "wasm" && procs > 1 {
+			// WebAssembly has no threads yet, so only one CPU is possible.
+			// Mirror the clamp in GOMAXPROCS; without it, the first wakep
+			// would reach newosproc and throw "not implemented".
+			procs = 1
+		}
 		sched.customGOMAXPROCS = true
 	} else {
 		// Use numCPUStartup for initial GOMAXPROCS for two reasons:
