@@ -504,6 +504,13 @@ func isDir(path string) bool {
 //
 // If the path argument is not absolute, it is first appended to the current
 // working directory before resolution.
+//
+// If the resolved path is not contained in any preopened directory -
+// including when the host preopened no directories at all - the returned
+// file descriptor is -1. Callers must check for it and fail with ENOENT:
+// the path cannot name any reachable file, and passing the invalid file
+// descriptor to the host would surface a confusing EBADF ("Bad file
+// number") instead (see go.dev/issue/63466).
 func preparePath(path string) (int32, *byte, size) {
 	var dirFd = int32(-1)
 	var dirName string
@@ -536,6 +543,9 @@ func Open(path string, openmode int, perm uint32) (int, error) {
 		return -1, EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return -1, ENOENT
+	}
 	return openat(dirFd, pathPtr, pathLen, openmode, perm)
 }
 
@@ -637,6 +647,9 @@ func Mkdir(path string, perm uint32) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_create_directory(dirFd, pathPtr, pathLen)
 	return errnoErr(errno)
 }
@@ -669,6 +682,9 @@ func Stat(path string, st *Stat_t) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_filestat_get(dirFd, LOOKUP_SYMLINK_FOLLOW, pathPtr, pathLen, unsafe.Pointer(st))
 	setDefaultMode(st)
 	return errnoErr(errno)
@@ -679,6 +695,9 @@ func Lstat(path string, st *Stat_t) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_filestat_get(dirFd, 0, pathPtr, pathLen, unsafe.Pointer(st))
 	setDefaultMode(st)
 	return errnoErr(errno)
@@ -706,6 +725,9 @@ func Unlink(path string) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_unlink_file(dirFd, pathPtr, pathLen)
 	return errnoErr(errno)
 }
@@ -715,6 +737,9 @@ func Rmdir(path string) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_remove_directory(dirFd, pathPtr, pathLen)
 	return errnoErr(errno)
 }
@@ -748,6 +773,9 @@ func UtimesNano(path string, ts []Timespec) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	atime := TimespecToNsec(ts[0])
 	mtime := TimespecToNsec(ts[1])
 	if ts[0].Nsec == UTIME_OMIT || ts[1].Nsec == UTIME_OMIT {
@@ -780,6 +808,9 @@ func Rename(from, to string) error {
 	}
 	oldDirFd, oldPathPtr, oldPathLen := preparePath(from)
 	newDirFd, newPathPtr, newPathLen := preparePath(to)
+	if oldDirFd < 0 || newDirFd < 0 {
+		return ENOENT
+	}
 	errno := path_rename(
 		oldDirFd,
 		oldPathPtr,
@@ -827,6 +858,9 @@ func Chdir(path string) error {
 
 	var stat Stat_t
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_filestat_get(dirFd, LOOKUP_SYMLINK_FOLLOW, pathPtr, pathLen, unsafe.Pointer(&stat))
 	if errno != 0 {
 		return errnoErr(errno)
@@ -846,6 +880,9 @@ func Readlink(path string, buf []byte) (n int, err error) {
 		return 0, nil
 	}
 	dirFd, pathPtr, pathLen := preparePath(path)
+	if dirFd < 0 {
+		return 0, ENOENT
+	}
 	var nwritten size
 	errno := path_readlink(
 		dirFd,
@@ -869,6 +906,9 @@ func Link(path, link string) error {
 	}
 	oldDirFd, oldPathPtr, oldPathLen := preparePath(path)
 	newDirFd, newPathPtr, newPathLen := preparePath(link)
+	if oldDirFd < 0 || newDirFd < 0 {
+		return ENOENT
+	}
 	errno := path_link(
 		oldDirFd,
 		0,
@@ -886,6 +926,9 @@ func Symlink(path, link string) error {
 		return EINVAL
 	}
 	dirFd, pathPtr, pathlen := preparePath(link)
+	if dirFd < 0 {
+		return ENOENT
+	}
 	errno := path_symlink(
 		unsafe.StringData(path),
 		size(len(path)),
