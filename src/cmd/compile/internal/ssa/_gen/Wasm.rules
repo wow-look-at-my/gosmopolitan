@@ -340,6 +340,34 @@
 // Write barrier.
 (WB ...) => (LoweredWB ...)
 
+// Atomic memory operations. Wasm is single-threaded: the plain memory
+// instructions are already atomic, the SSA memory edges provide the
+// ordering, and no preemption point can appear between the instructions
+// one of these ops lowers to (goroutine switches happen only at calls
+// and at loop rescheduling checks, which are inserted before lowering).
+(AtomicLoad8 ...) => (LoweredAtomicLoad8 ...)
+(AtomicLoad32 ...) => (LoweredAtomicLoad32 ...)
+(AtomicLoad(64|Ptr) ...) => (LoweredAtomicLoad64 ...)
+
+(AtomicStore8 ptr val mem) => (I64Store8 ptr val mem)
+(AtomicStore32 ptr val mem) => (I64Store32 ptr val mem)
+(AtomicStore(64|PtrNoWB) ptr val mem) => (I64Store ptr val mem)
+
+(AtomicAdd(32|64) ...) => (LoweredAtomicAdd(32|64) ...)
+(AtomicExchange(32|64) ...) => (LoweredAtomicExchange(32|64) ...)
+
+// The 32-bit compare-and-swap compares only the low 32 bits of memory,
+// so the old value must arrive zero-extended.
+(AtomicCompareAndSwap32 ptr old new mem) => (LoweredAtomicCas32 ptr (ZeroExt32to64 old) new mem)
+(AtomicCompareAndSwap64 ...) => (LoweredAtomicCas64 ...)
+
+// The old-style logical operations only return memory, so they expand to
+// an ordinary load/op/store sequence.
+(AtomicAnd8 ptr val mem) => (I64Store8 ptr (I64And (I64Load8U ptr mem) val) mem)
+(AtomicAnd32 ptr val mem) => (I64Store32 ptr (I64And (I64Load32U ptr mem) val) mem)
+(AtomicOr8 ptr val mem) => (I64Store8 ptr (I64Or (I64Load8U ptr mem) val) mem)
+(AtomicOr32 ptr val mem) => (I64Store32 ptr (I64Or (I64Load32U ptr mem) val) mem)
+
 // --- Intrinsics ---
 (Sqrt ...) => (F64Sqrt ...)
 (Trunc ...) => (F64Trunc ...)

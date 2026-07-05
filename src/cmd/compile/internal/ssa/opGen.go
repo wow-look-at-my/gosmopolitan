@@ -5616,6 +5616,15 @@ const (
 	OpWasmLoweredGetCallerSP
 	OpWasmLoweredNilCheck
 	OpWasmLoweredWB
+	OpWasmLoweredAtomicLoad8
+	OpWasmLoweredAtomicLoad32
+	OpWasmLoweredAtomicLoad64
+	OpWasmLoweredAtomicAdd32
+	OpWasmLoweredAtomicAdd64
+	OpWasmLoweredAtomicExchange32
+	OpWasmLoweredAtomicExchange64
+	OpWasmLoweredAtomicCas32
+	OpWasmLoweredAtomicCas64
 	OpWasmLoweredConvert
 	OpWasmSelect
 	OpWasmI64Load8U
@@ -85106,6 +85115,134 @@ var opcodeTable = [...]opInfo{
 		argLen:  1,
 		reg: regInfo{
 			clobbers: 844424930131967, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 F0 F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F17 F18 F19 F20 F21 F22 F23 F24 F25 F26 F27 F28 F29 F30 F31 g
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:   "LoweredAtomicLoad8",
+		argLen: 2,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1407374883618815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:   "LoweredAtomicLoad32",
+		argLen: 2,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1407374883618815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:   "LoweredAtomicLoad64",
+		argLen: 2,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 1407374883618815}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP SB
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicAdd32",
+		argLen:          3,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicAdd64",
+		argLen:          3,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicExchange32",
+		argLen:          3,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicExchange64",
+		argLen:          3,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicCas32",
+		argLen:          4,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{2, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
+			outputs: []outputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:            "LoweredAtomicCas64",
+		argLen:          4,
+		resultNotInArgs: true,
+		hasSideEffects:  true,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{1, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+				{2, 281474976776191}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 SP
+			},
 			outputs: []outputInfo{
 				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
 			},

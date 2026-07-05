@@ -146,6 +146,26 @@ func init() {
 		{name: "LoweredNilCheck", argLength: 2, reg: regInfo{inputs: []regMask{gp}}, nilCheck: true, faultOnNilArg0: true}, // panic if arg0 is nil. arg1=mem
 		{name: "LoweredWB", argLength: 1, reg: regInfo{clobbers: callerSave, outputs: []regMask{gp}}, aux: "Int64"},        // invokes runtime.gcWriteBarrier{auxint}. arg0=mem, auxint=# of buffer entries needed. Returns a pointer to a write barrier buffer.
 
+		// Atomic loads and read-modify-write operations. Wasm is
+		// single-threaded, so these are plain memory operations; the SSA
+		// memory edges provide the ordering, and no preemption point can
+		// appear between the instructions of one op (goroutine switches
+		// happen only at calls and at loop rescheduling checks, which are
+		// inserted before lowering). Atomic stores lower directly to the
+		// ordinary store ops. The read-modify-write ops read their pointer
+		// argument twice during code generation, so their results must not
+		// share a register with an argument and their arguments must not
+		// live on the wasm stack (see the OnWasmStack marking in regalloc).
+		{name: "LoweredAtomicLoad8", argLength: 2, reg: gpload, typ: "(UInt8,Mem)"},                                                                                                               // read unsigned 8-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
+		{name: "LoweredAtomicLoad32", argLength: 2, reg: gpload, typ: "(UInt32,Mem)"},                                                                                                             // read unsigned 32-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
+		{name: "LoweredAtomicLoad64", argLength: 2, reg: gpload, typ: "(UInt64,Mem)"},                                                                                                             // read 64-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
+		{name: "LoweredAtomicAdd32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
+		{name: "LoweredAtomicAdd64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
+		{name: "LoweredAtomicExchange32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
+		{name: "LoweredAtomicExchange64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
+		{name: "LoweredAtomicCas32", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg1 must be zero-extended. arg3=mem. Reports whether the store happened, and returns new memory.
+		{name: "LoweredAtomicCas64", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg3=mem. Reports whether the store happened, and returns new memory.
+
 		// LoweredConvert converts between pointers and integers.
 		// We have a special op for this so as to not confuse GCCallOff
 		// (particularly stack maps). It takes a memory arg so it
