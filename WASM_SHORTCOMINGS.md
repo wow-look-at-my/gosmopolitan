@@ -3,7 +3,7 @@
 This document catalogs the state of the two WebAssembly ports in this tree:
 what this fork has fixed, what remains broken or missing, what each remaining
 item would take to fix, and what it costs to use the fixes. Snapshot date:
-2026-07-05 (round 2), based on the go1.26 tree this fork tracks. Severity: P0
+2026-07-05 (round 3), based on the go1.26 tree this fork tracks. Severity: P0
 (hang/crash/silently wrong) through P3 (polish/docs). Fixability: fork-fixable
 (a bounded patch in this tree), needs-wasm-proposal (blocked on a WebAssembly
 spec proposal or an upstream megaproject), or inherent (a consequence of the
@@ -17,8 +17,10 @@ shortcoming, with upstream issue links given where they were verified to
 exist. Four audits (runtime/scheduler, syscall/js + JS glue, compiler/linker
 backend, wasip1 + stdlib) produced the findings; the fixes were then made and
 verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1). A second
-round (2026-07-05) of codegen, runtime, and interop work built on that base;
-its entries are dated below where the distinction matters.
+round (2026-07-05) of codegen, runtime, and interop work built on that base,
+and a third round (2026-07-05) added CPU profiling, objdump/nm/addr2line
+support, synchronous stdio under node, an idle forced-GC nudge, and a
+GOWASM=tailcall gate; entries are dated below where the distinction matters.
 
 ## Fixed in this fork
 
@@ -54,6 +56,11 @@ its entries are dated below where the distinction matters.
 | cmd/compile | The loop-preemption guard (round 1) was a 64-bit load+compare built from generic ops; the scheduler hoisted the load away from the compare, adding a register round-trip, an extend, and a wrap to every backedge | n/a (round-1 follow-up) | 5f9934ce | 9-instruction guard -> fused single-op 32-bit check (Get SP; Get g; wrap; i32.load; i32.lt_u); worst-case loop ~18% faster under wazero, unchanged under node (V8 already hoisted the disarmed-case load); hello.wasm -4.4KB |
 | cmd/compile | Every sync/atomic and internal/runtime/atomic op was a cross-package call into atomic_wasm.go's plain bodies: a dozen instructions of call protocol around a one-instruction operation, on a single-threaded target | none verified | d9b36bf5 | call per atomic op -> intrinsified to plain loads/stores and inline RMW sequences; atomic add 2.0x (node) / 4.0x (wazero) faster, mixed atomic ops 4.9x / 8.0x, sync.Mutex Lock/Unlock 1.8x / 4.1x; hello.wasm -42KB |
 | cmd/compile | Signed 64-bit division called the runtime.wasmDiv assembly helper on every int64 divide, only to special-case MinInt64/-1 (wasm's i64.div_s traps there) | none verified | 93f1b09b | call + branch per divide -> branchless inline form (divide by 1 when divisor is -1, negate after); 18% (node) / 23% (wazero) faster; MinInt64 and divide-by-zero semantics verified byte-identical to host Go; the now-dead runtime.wasmDiv helper removed end to end (21e24728) |
+| Runtime | pprof CPU profiles were silently empty on both ports: no signals means sigprof never ran and the profiler hooks were empty stubs. On wasip1 it was worse than useless - the profile reader busy-spun in note-based reads for the whole window (5s window: ~5.3s of user CPU collecting zero samples) | none verified | ebf7b6a5 + 51acdc8b | zero samples -> the loop-preemption gate doubles as a 100Hz sampler (callers-style unwind from the backedge that hit the check); a two-function 70/30 workload profiles as 69.5/30.5 under node and 68.3/31.7 under wazero; the reader does paced non-blocking reads (5s profiled idle window on wazero: ~5.3s user CPU -> ~1.4s, about the unprofiled baseline); execution traces get CPU samples too (~200 StackSamples in a 2s trace); upstream pprof tests enabled on wasm |
+| syscall (js) | Writes to stdout/stderr went through the callback-based fs.write, whose completion is delivered on the JS event loop: with any CPU-busy goroutine, fmt.Println never returned (the bytes reached the pipe but the printing goroutine parked forever) and an os.Exit right after it never ran | none verified | 27de1634 | print-under-spinner hangs the program forever -> fds 1 and 2 go through fs.writeSync with a partial-write/EAGAIN retry loop (node makes pipe stdio nonblocking; a 10MB write to a slow pipe takes ~112000 EAGAIN retries); the spinner repro now exits in 0.08s, 10MB survives byte-identical through file redirects and slow pipes, and stdout/stderr keep program order |
+| Runtime (js) | The round-2 forced-GC fix deliberately skipped one case: a fully idle js program with no Go timers pending got no wake source at all (a regular setTimeout would hold node's event loop open and defeat the exit-time deadlock probe), so it still never collected after its last allocation burst | n/a (round-2 follow-up) | 105e98dd | idle heap parked at high-water mark forever -> beforeIdle arms a weak, unref'd timeout for the forced-GC deadline (new scheduleWeakTimeoutEvent glue); "GC forced" fires at ~120s while fully idle, and deadlock reporting - with and without syscall/js linked - is unchanged |
+| cmd/internal/obj/wasm | Compiler-generated tail calls (embedded-method wrappers and the like) always grew the WebAssembly stack with i32.const 0; call; return - the round-2 investigation found the tail-call proposal usable on node but unshippable as a default (wazero rejects it) | n/a (round-2 follow-up) | b36ddb5b | call+return always -> GOWASM=tailcall (default off) emits return_call for the RET-to-symbol path: ~3% on a wrapper-heavy benchmark under node, default output stays byte-identical, wazero rejects tailcall binaries with its known "tail-call is disabled" error; also restores the GOWASM feature-gate mechanism (build tag + build cache key) that had decayed to an empty struct |
+| cmd/objdump, cmd/internal/objfile | go tool objdump, nm, and addr2line all refused linked wasm binaries ("unrecognized object file" / "unsupported architecture") | none verified | 9b2c1f71 + fcac4977 | no binary inspection at all -> all three work on js and wasip1 modules: symbols synthesized from the code section, pclntab found by scanning the reconstructed data segment (so stripped -ldflags=-s binaries work too), the full core opcode space decodes byte-exactly (1686/1655 functions on the reference js/wasip1 binaries), call targets symbolized via pclntab or import names, Go's register globals (SP, CTXT, g, ...) annotated. Source lines are function-granularity only: PC_B counts resume points, not bytes, so per-instruction line mapping is unrecoverable |
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
 
 ## Remaining shortcomings
@@ -82,20 +89,6 @@ its entries are dated below where the distinction matters.
   due, `src/runtime/netpoll_fake.go`). Upstream #26045, #34324. js.Await
   (this fork, 5b975b77) is the usability fix for ordinary goroutines; the
   callback-cannot-block constraint itself remains.
-- P2, fork-fixable (fs_js): println-then-exit teardown can hang while a
-  CPU-spinner goroutine is alive (pre-existing; re-confirmed by both
-  round-2 audits, then bisected against master during round-2 integration:
-  identical there). Mechanism, verified 2026-07-05: fmt.Println under node
-  goes through fs.write, whose COMPLETION callback runs on the JS event
-  loop; a busy spinner never lets wasm return there, so the printing
-  goroutine blocks forever and never reaches its os.Exit - the bytes do
-  reach the pipe, the process just never exits (a special case of the P1
-  host-starvation item above). The builtin println (synchronous wasmWrite
-  import) is immune, and a reached os.Exit is immediate under node
-  (wasm_exec_node.js wires go.exit straight to process.exit). Follow-up
-  idea: route the stdout/stderr fast path in fs_js.go through fs.writeSync
-  under node, so terminal output cannot park a goroutine on the event
-  loop.
 - P2, inherent: Linear memory never shrinks. wasm has no memory.shrink;
   the sbrk allocator can reuse but not return (`src/runtime/mem_sbrk.go`).
   Peak footprint persists until the instance dies (golang/go#59061, #27462).
@@ -104,18 +97,13 @@ its entries are dated below where the distinction matters.
   makes checkdead's timejump unreachable (fake clock never advances, program
   hangs re-arming real timeouts); on wasip1 the timejump path throws
   "notesleep not supported by wasi" (`src/runtime/lock_wasip1.go:77`).
-- P2, needs design: No CPU profiling. setProcessCPUProfiler/
-  setThreadCPUProfiler are empty stubs (`src/runtime/os_wasm.go:149`); there
-  is no SIGPROF and no host timer sampler. pprof CPU profiles are empty
-  (heap/goroutine/block/mutex profiles work).
-- P3, audited non-issue (2026-07-05) with one live case: wasip1 notetsleepg
-  still busy-yields for TIMED waits (`src/runtime/lock_wasip1.go:87-106`),
-  but no timed caller is reachable on wasip1 - sysmon's is gated by
-  haveSysmon, and the stop-the-world notes cannot time out with
-  gomaxprocs==1. The one reachable untimed busy-yield is the profbuf reader
-  during an active pprof CPU profile (measured: 5.1s of user CPU for a 5s
-  profiling window that collects zero samples) - subsumed by the
-  no-CPU-profiling item above; fix both together by parking the reader.
+- P3, audited non-issue (2026-07-05): wasip1 notetsleepg still busy-yields
+  for TIMED waits (`src/runtime/lock_wasip1.go:87-106`), but no timed
+  caller is reachable on wasip1 - sysmon's is gated by haveSysmon, and the
+  stop-the-world notes cannot time out with gomaxprocs==1. Since round 3
+  the pprof profile reader no longer uses notes either (it does paced
+  non-blocking reads), so no reachable busy-yield caller remains, timed or
+  untimed.
   Other landmines: notesleep/notetsleep throw on both ports; osyield is
   UNDEF (`src/runtime/sys_wasm.s:10`); js usleep is a no-op; the g0 stack is
   a fixed 8KB global with no guard (`src/runtime/sys_wasm.go:13`).
@@ -171,28 +159,31 @@ its entries are dated below where the distinction matters.
   structured-control-flow lowering would remove most dispatch round trips,
   but it is a compiler megaproject.
 - P1, needs wasm proposal: No threads (see above), no SIMD (no v128 anywhere
-  in the backend), no tail calls (wrapper chains grow the wasm stack; see
-  the next bullet - the proposal is standardized but the default wasip1
-  runtime cannot run it), no multi-value returns (single-i32 internal ABI),
+  in the backend), tail calls only behind GOWASM=tailcall (see the next
+  bullet - the proposal is standardized but the default wasip1 runtime
+  cannot run it), no multi-value returns (single-i32 internal ABI),
   no externref/WasmGC (golang/go#63904 - blocked by interior pointers), no
   memory64 (upstream momentum is the opposite: GOARCH=wasm32, #63131).
-  GOWASM feature gating is an empty struct today
-  (`src/internal/buildcfg/cfg.go:333`), so there is no mechanism to
-  introduce gated features without adding it back.
-- P2, blocked on engine support: wasm tail calls (return_call) were
-  investigated 2026-07-05 for the RET-to-symbol path in
-  `src/cmd/internal/obj/wasm/wasmobj.go` (currently i32.const 0; call
-  $target; return): node 22 (V8) validates and executes return_call, but
+  GOWASM feature gating had decayed to an empty struct; round 3 (b36ddb5b)
+  restored the mechanism (build tags, build cache key) for tailcall, so
+  future gated features have a working template.
+- P2, blocked on engine support (mechanism landed): wasm tail calls are
+  implemented behind GOWASM=tailcall (b36ddb5b, round 3): the
+  RET-to-symbol path in `src/cmd/internal/obj/wasm/wasmobj.go` emits
+  return_call instead of i32.const 0; call $target; return. It must stay
+  off by default: node 22 (V8) validates and executes return_call, but
   wazero 1.12 rejects such modules at compile time ("feature tail-call is
-  disabled") and its CLI has no flag to enable it. Emitting return_call
-  would break the default wasip1 runtime pairing, so it stays off (or needs
-  a GOWASM gate, see above) until wazero catches up.
+  disabled") and its CLI has no flag to enable it. Revisit the default
+  when wazero catches up.
 - P2, fork-fixable (bounded): No DWARF is ever emitted for wasm
-  (`src/cmd/link/internal/ld/dwarf.go:1720`), `go tool objdump` cannot
-  disassemble wasm, and no debugger supports the port - debugging is
-  name-section stack traces only. The name section is on by default and
-  costs hundreds of KB; `-ldflags=-s` strips it (worth documenting; a
-  wasm-opt -Oz pass typically shaves another 10-20%).
+  (`src/cmd/link/internal/ld/dwarf.go:1720`) and no debugger supports the
+  port. Round 3 made `go tool objdump`/`nm`/`addr2line` work on wasm (see
+  the table), so static inspection exists, but debugging remains
+  name-section stack traces - no source-level stepping. The name section
+  is on by default and costs hundreds of KB; `-ldflags=-s` strips it
+  (worth documenting; a wasm-opt -Oz pass typically shaves another
+  10-20%; the fork's objdump still works on stripped binaries via the
+  pclntab).
 - P2, fork-fixable: Codegen perf leftovers (round 2 fixed the two big ones,
   int64 division and the atomics - see the table): non-provably-bounded
   shifts pay a bounds Select; everything is widened to i64 with wrap/extend
@@ -284,6 +275,32 @@ measured on this tree:
   greater than any real sp" assumption the runtime already makes), so the
   low-word compare gives the same answer as the 64-bit one.
 
+## Performance cost of CPU profiling
+
+CPU profiling (ebf7b6a5, round 3) samples from the same loop-preemption
+gate, so collecting a profile keeps the preemption checks armed for every
+running goroutine for the length of the profiling window:
+
+- Worst case while profiling: a 2-instruction loop body runs ~6.5x slower
+  under node and ~5x under wazero (loops containing a call pay about 2x).
+  It would be ~15x/~12x, but goschedguarded now batches inline: 63 of
+  every 64 armed backedge hits cost one call and a few loads instead of
+  two calls and the full gate. That same batching also cheapens the
+  round-1 armed windows (pending work, active GC), profiling or not.
+  When nothing is being profiled the checks disarm as before and the
+  round-2 numbers above apply.
+- When only profiling (and no scheduler work) keeps the checks armed, the
+  gate declines the 100us cooperative yields, so a profiled program is
+  not forced through pointless scheduler passes.
+- Sampling bias, documented in the code: samples land only at loop
+  backedges of non-nosplit functions. Straight-line stretches, loopless
+  recursion, nosplit runtime code, system-stack code, and host calls are
+  attributed to the next backedge the goroutine reaches, and the sampling
+  deadline is wall time, not CPU time. Hot loops - where CPU-bound wasm
+  programs spend their time - are exactly the instrumented points.
+  Programs built with GOEXPERIMENT=nopreemptibleloops have no
+  instrumented backedges and keep producing empty profiles.
+
 ## Using wasm on this fork
 
 - This fork's `bin/go` DEFAULTS TO GOOS=cosmo. Always pin the target:
@@ -306,7 +323,18 @@ measured on this tree:
 - Tight loops are preemptible by default; opt out with
   GOEXPERIMENT=nopreemptibleloops if you need to compare against upstream
   behavior.
+- CPU profiling works on both ports (round 3): pprof.StartCPUProfile and
+  `go test -cpuprofile` produce real 100Hz profiles; heap/goroutine/
+  block/mutex profiles already worked. See the sampling-bias notes above.
+- `go tool objdump`, `go tool nm`, and `go tool addr2line` understand
+  linked wasm binaries (round 3), including -ldflags=-s stripped ones.
+- stdout/stderr writes are synchronous under node (round 3): printing
+  returns immediately and keeps program order even while another
+  goroutine is CPU-busy, and an os.Exit after a print always runs.
+- GOWASM=tailcall emits return_call for compiler-generated tail calls -
+  js/node only: wazero rejects the output, so leave it unset (the
+  default) for wasip1.
 - Both ports are CI-gated: the `wasm` job in
   `.github/workflows/cosmo-ci.yml` builds std and runs the stdlib and
-  wasmexport-testdir regression subset under node 22 (js) and wazero
-  (wasip1) on every push.
+  wasmexport-testdir regression subset (including runtime/pprof since
+  round 3) under node 22 (js) and wazero (wasip1) on every push.
