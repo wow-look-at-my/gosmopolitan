@@ -129,6 +129,17 @@ func init() {
 		{name: "LoweredMove", argLength: 3, reg: regInfo{inputs: []regMask{gp, gp}}, aux: "Int64"},                // large move. arg0=dst, arg1=src, arg2=mem, auxint=len, returns mem
 		{name: "LoweredZero", argLength: 2, reg: regInfo{inputs: []regMask{gp}}, aux: "Int64"},                    // large zeroing. arg0=start, arg1=mem, auxint=len, returns mem
 
+		// LoweredPreemptCheck is the loop rescheduling check inserted on loop
+		// backedges (see insertLoopReschedChecks): it reports whether the low
+		// 32 bits of the stack pointer are unsigned-less-than the low 32 bits
+		// of the word at arg1+auxint (g.stackguard1). On wasm that word is
+		// only ever 0 (disarmed, compare always false) or stackPreempt
+		// (armed, low word greater than any real stack pointer). Fusing the
+		// load and compare into one op keeps the check a contiguous
+		// wasm-stack-only sequence: Get SP; Get g; I32WrapI64; I32Load;
+		// I32LtU. arg0=SP, arg1=g, arg2=mem, auxint=guard offset.
+		{name: "LoweredPreemptCheck", argLength: 3, reg: regInfo{inputs: []regMask{buildReg("SP"), gp | buildReg("g")}, outputs: []regMask{gp}}, aux: "Int64", typ: "Bool"},
+
 		{name: "LoweredGetClosurePtr", reg: gp01},                                                                          // returns wasm.REG_CTXT, the closure pointer
 		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},                                                   // returns the PC of the caller of the current function
 		{name: "LoweredGetCallerSP", argLength: 1, reg: gp01, rematerializeable: true},                                     // returns the SP of the caller of the current function. arg0=mem.

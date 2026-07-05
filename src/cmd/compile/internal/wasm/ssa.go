@@ -393,6 +393,21 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 		p := s.Prog(v.Op.Asm())
 		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
 
+	case ssa.OpWasmLoweredPreemptCheck:
+		// if sp32 < low32(*(arg1+auxint)), all 32-bit ops:
+		//   Get SP; Get g; I32WrapI64; I32Load auxint; I32LtU
+		// The result is left on the stack as an i32, like the
+		// comparison ops (isCmp reports true for this op), so as the
+		// control of the backedge If it compiles to a bare br_if.
+		getValue32(s, v.Args[0])
+		getValue32(s, v.Args[1])
+		p := s.Prog(wasm.AI32Load)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
+		s.Prog(wasm.AI32LtU)
+		if extend {
+			s.Prog(wasm.AI64ExtendI32U)
+		}
+
 	case ssa.OpWasmI64Eqz:
 		getValue64(s, v.Args[0])
 		s.Prog(v.Op.Asm())
@@ -472,9 +487,12 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 	}
 }
 
+// isCmp reports whether v leaves an i32 (rather than an i64) on the wasm
+// stack when generated inline.
 func isCmp(v *ssa.Value) bool {
 	switch v.Op {
-	case ssa.OpWasmI64Eqz, ssa.OpWasmI64Eq, ssa.OpWasmI64Ne, ssa.OpWasmI64LtS, ssa.OpWasmI64LtU, ssa.OpWasmI64GtS, ssa.OpWasmI64GtU, ssa.OpWasmI64LeS, ssa.OpWasmI64LeU, ssa.OpWasmI64GeS, ssa.OpWasmI64GeU,
+	case ssa.OpWasmLoweredPreemptCheck,
+		ssa.OpWasmI64Eqz, ssa.OpWasmI64Eq, ssa.OpWasmI64Ne, ssa.OpWasmI64LtS, ssa.OpWasmI64LtU, ssa.OpWasmI64GtS, ssa.OpWasmI64GtU, ssa.OpWasmI64LeS, ssa.OpWasmI64LeU, ssa.OpWasmI64GeS, ssa.OpWasmI64GeU,
 		ssa.OpWasmF32Eq, ssa.OpWasmF32Ne, ssa.OpWasmF32Lt, ssa.OpWasmF32Gt, ssa.OpWasmF32Le, ssa.OpWasmF32Ge,
 		ssa.OpWasmF64Eq, ssa.OpWasmF64Ne, ssa.OpWasmF64Lt, ssa.OpWasmF64Gt, ssa.OpWasmF64Le, ssa.OpWasmF64Ge:
 		return true

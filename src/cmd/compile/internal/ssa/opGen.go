@@ -5610,6 +5610,7 @@ const (
 	OpWasmLoweredAddr
 	OpWasmLoweredMove
 	OpWasmLoweredZero
+	OpWasmLoweredPreemptCheck
 	OpWasmLoweredGetClosurePtr
 	OpWasmLoweredGetCallerPC
 	OpWasmLoweredGetCallerSP
@@ -85041,6 +85042,20 @@ var opcodeTable = [...]opInfo{
 		argLen:  2,
 		reg: regInfo{
 			inputs: []inputInfo{
+				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
+			},
+		},
+	},
+	{
+		name:    "LoweredPreemptCheck",
+		auxType: auxInt64,
+		argLen:  3,
+		reg: regInfo{
+			inputs: []inputInfo{
+				{0, 281474976710656}, // SP
+				{1, 562949953486847}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 g
+			},
+			outputs: []outputInfo{
 				{0, 65535}, // R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15
 			},
 		},
