@@ -16,9 +16,11 @@
 package js_test
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
+	"sync"
 	"syscall/js"
 	"testing"
 )
@@ -732,4 +734,130 @@ func TestGlobal(t *testing.T) {
 	if got := ident.Invoke(js.Global()); !got.Equal(js.Global()) {
 		t.Errorf("got %#v, want %#v", got, js.Global())
 	}
+}
+
+// Note: misusing Await from inside a js.FuncOf callback is deliberately not
+// tested here: it is a hard deadlock, so the runtime kills the whole test
+// binary with "fatal error: all goroutines are asleep - deadlock!" (plus the
+// note that a goroutine is blocked in a call from JavaScript). The Await doc
+// comment documents that behavior.
+
+func TestAwaitResolved(t *testing.T) {
+	v, err := js.Await(js.Global().Get("Promise").Call("resolve", 42))
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.Int(); got != 42 {
+		t.Errorf("Await returned %d, want 42", got)
+	}
+}
+
+func TestAwaitResolvedAsync(t *testing.T) {
+	// A promise that settles only after a real trip through the event loop.
+	p := js.Global().Call("eval", `new Promise((resolve) => setTimeout(() => resolve("late"), 20))`)
+	v, err := js.Await(p)
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "late" {
+		t.Errorf("Await returned %q, want %q", got, "late")
+	}
+}
+
+func TestAwaitRejectedErrorObject(t *testing.T) {
+	p := js.Global().Call("eval", `Promise.reject(new Error("boom"))`)
+	v, err := js.Await(p)
+	if err == nil {
+		t.Fatal("Await returned nil error, want rejection")
+	}
+	if !v.IsUndefined() {
+		t.Errorf("Await returned value %v, want undefined", v)
+	}
+	var jsErr js.Error
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("Await error has type %T, want js.Error", err)
+	}
+	if got := jsErr.Value.Get("message").String(); got != "boom" {
+		t.Errorf("rejection reason has message %q, want %q", got, "boom")
+	}
+	if got, want := err.Error(), "JavaScript error: boom"; got != want {
+		t.Errorf("err.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestAwaitRejectedString(t *testing.T) {
+	// A promise can be rejected with a non-object reason: throw "boom-string".
+	p := js.Global().Call("eval", `new Promise(() => { throw "boom-string"; })`)
+	_, err := js.Await(p)
+	if err == nil {
+		t.Fatal("Await returned nil error, want rejection")
+	}
+	var jsErr js.Error
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("Await error has type %T, want js.Error", err)
+	}
+	if got := jsErr.Value.String(); got != "boom-string" {
+		t.Errorf("rejection reason is %q, want %q", got, "boom-string")
+	}
+	if got, want := err.Error(), "JavaScript error: boom-string"; got != want {
+		t.Errorf("err.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestAwaitNonPromise(t *testing.T) {
+	v, err := js.Await(js.ValueOf("plain value"))
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "plain value" {
+		t.Errorf("Await returned %q, want %q", got, "plain value")
+	}
+
+	v, err = js.Await(js.Undefined())
+	if err != nil {
+		t.Fatalf("Await(undefined) returned error %v, want nil", err)
+	}
+	if !v.IsUndefined() {
+		t.Errorf("Await(undefined) returned %v, want undefined", v)
+	}
+}
+
+func TestAwaitThenable(t *testing.T) {
+	// Promise.resolve assimilates non-promise thenables.
+	p := js.Global().Call("eval", `({ then(resolve) { resolve("thenable-ok"); } })`)
+	v, err := js.Await(p)
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "thenable-ok" {
+		t.Errorf("Await returned %q, want %q", got, "thenable-ok")
+	}
+}
+
+func TestAwaitConcurrent(t *testing.T) {
+	makePromise := js.Global().Call("eval", `(i, ms) => new Promise((resolve) => setTimeout(() => resolve("settled-" + i), ms))`)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			want := fmt.Sprintf("settled-%d", i)
+			var p js.Value
+			if i%2 == 0 {
+				// Real event-loop asynchrony, with distinct delays.
+				p = makePromise.Invoke(i, 5+i*3)
+			} else {
+				p = js.Global().Get("Promise").Call("resolve", want)
+			}
+			v, err := js.Await(p)
+			if err != nil {
+				t.Errorf("goroutine %d: Await returned error %v", i, err)
+				return
+			}
+			if got := v.String(); got != want {
+				t.Errorf("goroutine %d: Await returned %q, want %q", i, got, want)
+			}
+		}()
+	}
+	wg.Wait()
 }

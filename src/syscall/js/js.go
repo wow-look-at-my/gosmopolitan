@@ -103,8 +103,9 @@ var (
 	valueGlobal    = predefValue(5, typeFlagObject)
 	jsGo           = predefValue(6, typeFlagObject) // instance of the Go class in JavaScript
 
-	objectConstructor = valueGlobal.Get("Object")
-	arrayConstructor  = valueGlobal.Get("Array")
+	objectConstructor  = valueGlobal.Get("Object")
+	arrayConstructor   = valueGlobal.Get("Array")
+	promiseConstructor = valueGlobal.Get("Promise")
 )
 
 // Equal reports whether v and w are equal according to JavaScript's === operator.
