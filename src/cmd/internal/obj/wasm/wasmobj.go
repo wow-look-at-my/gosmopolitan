@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/abi"
+	"internal/buildcfg"
 	"io"
 	"math"
 )
@@ -101,6 +102,7 @@ var unaryDst = map[obj.As]bool{
 	ATee:          true,
 	ACall:         true,
 	ACallIndirect: true,
+	AReturnCall:   true,
 	ABr:           true,
 	ABrIf:         true,
 	ABrTable:      true,
@@ -518,6 +520,22 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			if ret.To.Type == obj.TYPE_MEM {
 				// Set PC_B parameter to function entry.
 				p = appendp(p, AI32Const, constAddr(0))
+
+				if buildcfg.GOWASM.TailCall && !notUsePC_B[s.Name] && !notUsePC_B[ret.To.Sym.Name] {
+					// GOWASM=tailcall: tail-call the target instead of
+					// growing the WebAssembly stack with call+return.
+					// The target adopts this frame's return address (still
+					// at 0(SP), since RET-to-symbol does not pop it), and
+					// its unwind flag flows to our caller exactly as the
+					// propagating AReturn below would pass it on, so the
+					// unwind/resume machinery is unaffected. Both functions
+					// must follow the Go wasm ABI (i32)->i32: return_call
+					// validates the callee's results against the caller's,
+					// so the special notUsePC_B signatures stay on the
+					// call+return path.
+					p = appendp(p, AReturnCall, ret.To)
+					break
+				}
 
 				// low-level WebAssembly call to function
 				p = appendp(p, ACall, ret.To)
@@ -1281,6 +1299,19 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			default:
 				panic("bad type for Call")
 			}
+
+		case AReturnCall:
+			if p.To.Type != obj.TYPE_MEM || (p.To.Name != obj.NAME_EXTERN && p.To.Name != obj.NAME_STATIC) {
+				panic("bad target for ReturnCall")
+			}
+			s.AddRel(ctxt, obj.Reloc{
+				Type: objabi.R_CALL,
+				Off:  int32(w.Len()),
+				Siz:  1, // actually variable sized
+				Sym:  p.To.Sym,
+			})
+			// Unlike ACall, no updateLocalSP: a tail call never returns
+			// here, so the code after it is unreachable.
 
 		case ACallIndirect:
 			writeUleb128(w, uint64(p.To.Offset))
