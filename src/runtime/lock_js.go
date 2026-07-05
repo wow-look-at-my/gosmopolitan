@@ -204,6 +204,13 @@ func (e *timeoutEvent) clear() {
 // The timeout event started by beforeIdle.
 var idleTimeout *timeoutEvent
 
+// The weak timeout event started by beforeIdle for the next periodic forced
+// GC when the program has no other wake source (see wasmForceGCCheck in
+// proc.go). Weak timeouts do not keep the host's event loop alive, so a
+// pending nudge neither prevents the program from exiting nor masks deadlock
+// detection.
+var idleGCNudge *timeoutEvent
+
 // beforeIdle gets called by the scheduler if no goroutine is awake.
 // If we are not already handling an event, then we pause for an async event.
 // If an event handler returned, we resume it and it will pause the execution.
@@ -234,6 +241,37 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 		}
 	}
 
+	if pollUntil == 0 && eventHandler != nil {
+		// The program has no timer to wake it, so findRunnable's cap on the
+		// idle sleep (see wasmForceGCDeadline in proc.go) does not apply and
+		// nothing would wake it for the next periodic forced GC. Arm a weak
+		// timeout for that deadline: it resumes the runtime like a regular
+		// timeout event, but does not keep the host's event loop alive, so
+		// a program that is deadlocked rather than idle still exits and the
+		// exit-time deadlock probe still fires. Without an eventHandler
+		// (syscall/js not linked) no event can be handled, so no nudge.
+		if deadline := wasmForceGCDeadline(); deadline != 0 && (idleGCNudge == nil || idleGCNudge.diff(deadline) > 1e6) {
+			idleGCNudge.clear()
+
+			if now == 0 {
+				// With no timers, findRunnable's timers.check never
+				// computed the current time.
+				now = nanotime()
+			}
+			nudgeDelay := (deadline-now-1)/1e6 + 1 // round up like the timer delay above
+			if nudgeDelay < 1 {
+				nudgeDelay = 1
+			}
+			if nudgeDelay > 1e9 {
+				nudgeDelay = 1e9
+			}
+			idleGCNudge = &timeoutEvent{
+				id:   scheduleWeakTimeoutEvent(nudgeDelay),
+				time: deadline,
+			}
+		}
+	}
+
 	if len(events) == 0 {
 		// TODO: this is the line that requires the yeswritebarrierrec
 		go handleAsyncEvent()
@@ -260,13 +298,28 @@ func clearIdleTimeout() {
 	idleTimeout = nil
 }
 
+// clearIdleGCNudge clears our record of the forced-GC nudge started by beforeIdle.
+func clearIdleGCNudge() {
+	idleGCNudge.clear()
+	idleGCNudge = nil
+}
+
 // scheduleTimeoutEvent tells the WebAssembly environment to trigger an event after ms milliseconds.
 // It returns a timer id that can be used with clearTimeoutEvent.
 //
 //go:wasmimport gojs runtime.scheduleTimeoutEvent
 func scheduleTimeoutEvent(ms int64) int32
 
-// clearTimeoutEvent clears a timeout event scheduled by scheduleTimeoutEvent.
+// scheduleWeakTimeoutEvent is like scheduleTimeoutEvent, except that the
+// scheduled timeout does not keep the host's event loop alive (on Node.js it
+// is unref'd; browsers have no such notion). The environment can exit while
+// it is pending.
+//
+//go:wasmimport gojs runtime.scheduleWeakTimeoutEvent
+func scheduleWeakTimeoutEvent(ms int64) int32
+
+// clearTimeoutEvent clears a timeout event scheduled by scheduleTimeoutEvent
+// or scheduleWeakTimeoutEvent.
 //
 //go:wasmimport gojs runtime.clearTimeoutEvent
 func clearTimeoutEvent(id int32)
@@ -305,8 +358,12 @@ func handleEvent() {
 	}
 
 	if !eventHandler() {
-		// If we did not handle a window event, the idle timeout was triggered, so we can clear it.
+		// If we did not handle a window event, a timeout (the idle timeout
+		// or the forced-GC nudge) was triggered, so we can clear it. We
+		// cannot tell which one fired; clearing both is safe, since each is
+		// re-armed by beforeIdle on the next idle pass if still needed.
 		clearIdleTimeout()
+		clearIdleGCNudge()
 	}
 
 	// wait until all goroutines are idle
