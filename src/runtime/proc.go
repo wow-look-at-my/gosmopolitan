@@ -373,13 +373,79 @@ func forcegchelper() {
 		}
 		forcegc.idle.Store(true)
 		goparkunlock(&forcegc.lock, waitReasonForceGCIdle, traceBlockSystemGoroutine, 1)
-		// this goroutine is explicitly resumed by sysmon
+		// This goroutine is explicitly resumed by sysmon, or on wasm
+		// (which has no sysmon) by the scheduler; see wasmForceGCCheck.
 		if debug.gctrace > 0 {
 			println("GC forced")
 		}
 		// Time-triggered, fully concurrent.
 		gcStart(gcTrigger{kind: gcTriggerTime, now: nanotime()})
 	}
+}
+
+// wasm has no threads and thus no sysmon, so the periodic ("forced") GC
+// trigger that sysmon tests on other platforms must be driven from the
+// scheduler instead:
+//
+//   - findRunnable calls wasmForceGCCheck on every pass, so any scheduling
+//     activity more than forcegcperiod after the last GC starts a cycle.
+//   - An M about to go idle caps its timer/poller sleep at
+//     wasmForceGCDeadline (see findRunnable), so that a program sleeping on
+//     timers (or, on wasip1, parked in the poller) wakes up in time for the
+//     next periodic GC instead of idling at its heap high-water mark
+//     forever, with finalizers and cleanups never queued.
+//
+// The sleep cap is only applied when the M already has some other eventual
+// wake source: a pending timer, or on wasip1 a netpoll waiter. An M with no
+// wake source at all must keep falling through to checkdead, because a
+// deadlocked program does not need periodic GC, and a self-arming wakeup
+// would make the deadlock undetectable. (On js it would additionally keep
+// the host's event loop alive and defeat the exit-time deadlock probe; see
+// handleEvent. This means a js program that goes fully idle with no Go
+// timers pending is not woken for periodic GC either - the check instead
+// runs on the next JavaScript event that enters Go.)
+
+// wasmForceGCCheck implements sysmon's periodic forced-GC check on wasm: if
+// it has been more than forcegcperiod since the last GC and the forcegc
+// helper is parked, make the helper runnable to start a new cycle.
+//
+// now is the current time if the caller has it, or 0; nanotime is not
+// called until the cheap preconditions pass, since findRunnable calls this
+// on every pass.
+func wasmForceGCCheck(now int64) {
+	if !forcegc.idle.Load() || !memstats.enablegc || atomic.Load64(&memstats.last_gc_nanotime) == 0 {
+		// Common exits: the helper is already running, GC is off, or no
+		// GC has completed yet. gcTrigger.test rechecks all of this;
+		// testing it here first avoids the nanotime call.
+		return
+	}
+	if now == 0 {
+		now = nanotime()
+	}
+	// Mirrors the forcegc wakeup in sysmon.
+	if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && forcegc.idle.Load() {
+		lock(&forcegc.lock)
+		forcegc.idle.Store(false)
+		var list gList
+		list.push(forcegc.g)
+		injectglist(&list)
+		unlock(&forcegc.lock)
+	}
+}
+
+// wasmForceGCDeadline returns the time (in the nanotime clock) at which the
+// next time-based forced GC is due, or 0 if none is scheduled (no GC has
+// completed yet, GC is disabled or in progress, or the forcegc helper is
+// already awake).
+func wasmForceGCDeadline() int64 {
+	if !forcegc.idle.Load() || !memstats.enablegc || panicking.Load() != 0 || gcphase != _GCoff || gcController.gcPercent.Load() < 0 {
+		return 0
+	}
+	lastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))
+	if lastgc == 0 {
+		return 0
+	}
+	return lastgc + forcegcperiod
 }
 
 // Gosched yields the processor, allowing other goroutines to run. It does not
@@ -3553,6 +3619,14 @@ top:
 	// relevant.
 	now, pollUntil, _ := pp.timers.check(0, nil)
 
+	// On wasm there is no sysmon to test the time-based GC trigger and
+	// resume the forcegc helper, so the scheduler does it instead. If the
+	// check fires, it injects forcegc.g, which the run queue checks below
+	// then find. See the comment on wasmForceGCCheck.
+	if !haveSysmon {
+		wasmForceGCCheck(now)
+	}
+
 	// Try to schedule the trace reader.
 	if traceEnabled() || traceShuttingDown() {
 		gp := traceReader()
@@ -3695,6 +3769,19 @@ top:
 			return gp, false, false
 		}
 		gcController.removeIdleMarkWorker()
+	}
+
+	// On wasm, an M about to go idle must arrange its own wakeup for the
+	// next time-based forced GC, since there is no sysmon to do it. Cap the
+	// sleep at the forced-GC deadline, but only if the M already has some
+	// other wake source; see the comment on wasmForceGCCheck for why an M
+	// with no wake source (a deadlock candidate) must not be woken.
+	if !haveSysmon {
+		if next := wasmForceGCDeadline(); next != 0 && (pollUntil == 0 || next < pollUntil) {
+			if pollUntil != 0 || (GOOS != "js" && netpollAnyWaiters()) {
+				pollUntil = next
+			}
+		}
 	}
 
 	// wasm only:
