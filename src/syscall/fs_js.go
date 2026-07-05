@@ -22,6 +22,13 @@ var constants = jsFS.Get("constants")
 
 var uint8Array = js.Global().Get("Uint8Array")
 
+// jsFSWriteSync reports whether the JavaScript fs object provides writeSync,
+// used by the synchronous stdout/stderr fast path in Write. Node.js and the
+// wasm_exec.js fallback shim both provide it; the runtime's wasmWrite import
+// (println, panic output) already depends on it unconditionally. A custom fs
+// missing it falls back to the asynchronous path.
+var jsFSWriteSync = jsFS.Get("writeSync").Type() == js.TypeFunction
+
 var (
 	nodeWRONLY = constants.Get("O_WRONLY").Int()
 	nodeRDWR   = constants.Get("O_RDWR").Int()
@@ -448,6 +455,17 @@ func Write(fd int, b []byte) (int, error) {
 		return n, nil
 	}
 
+	if (fd == 1 || fd == 2) && jsFSWriteSync {
+		// Write to stdout and stderr synchronously. The asynchronous
+		// fs.write delivers its completion callback on the JavaScript
+		// event loop, which only runs when every goroutine is idle: a
+		// CPU-bound goroutine would park the printing goroutine forever
+		// (and with it any os.Exit that follows the print).
+		n, err := writeSync(fd, b)
+		f.pos += int64(n)
+		return n, err
+	}
+
 	buf := uint8Array.New(len(b))
 	js.CopyBytesToJS(buf, b)
 	n, err := fsCall("write", fd, buf, 0, len(b), nil)
@@ -457,6 +475,58 @@ func Write(fd int, b []byte) (int, error) {
 	n2 := n.Int()
 	f.pos += int64(n2)
 	return n2, err
+}
+
+// writeSync writes b to fd with the synchronous JavaScript fs.writeSync API,
+// retrying until all of b is written: stdout and stderr on Node.js are often
+// nonblocking (TTYs and pipes), so a single call may write only part of b or
+// fail with EAGAIN when the kernel buffer is full. There is nothing to wait
+// on synchronously, so EAGAIN retries immediately until the consumer drains.
+func writeSync(fd int, b []byte) (int, error) {
+	buf := uint8Array.New(len(b))
+	js.CopyBytesToJS(buf, b)
+	written := 0
+	for written < len(b) {
+		n, err := writeSyncCall(fd, buf, written, len(b)-written)
+		if err == errEAGAIN {
+			continue
+		}
+		if err != nil {
+			return written, err
+		}
+		if n <= 0 || n > len(b)-written {
+			// Defend against a broken fs shim: a result that would
+			// make no progress (or overshoot) cannot be trusted for
+			// another round trip.
+			return written, errnoErr(EIO)
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// writeSyncCall makes one fs.writeSync call, mapping a thrown exception to an
+// errno error the same way jsFSInvoke does for the asynchronous methods.
+func writeSyncCall(fd int, buf js.Value, offset, length int) (n int, err error) {
+	defer func() {
+		switch r := recover().(type) {
+		case nil:
+		case js.Error:
+			err = mapJSError(r.Value)
+		case js.Value:
+			err = mapJSError(r)
+		default:
+			panic(r)
+		}
+	}()
+	ret := jsFS.Call("writeSync", fd, buf, offset, length, nil)
+	if ret.Type() != js.TypeNumber {
+		// A minimal fs shim may not return the byte count; such shims
+		// (like the wasm_exec.js fallback) write everything they are
+		// given.
+		return length, nil
+	}
+	return ret.Int(), nil
 }
 
 func Pread(fd int, b []byte, offset int64) (int, error) {
