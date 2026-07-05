@@ -981,3 +981,39 @@ PASS; stdlib under cosmo on Linux: time, os, os/exec, os/signal, net
 all ok (os needs the APE binfmt_misc handler for
 TestExecutableDeleted, the known wave-3 host limitation - registering
 `:APE:M::MZqFpD::/bin/sh:` makes the suite fully green).
+
+
+## 2026-07-05: one-off macOS CI wedge datapoint (PR #24 head 93fe6770)
+
+Logging a single nondeterministic wedge so the pattern is trackable if
+it recurs. On 2026-07-04 ~23:24 UTC, the `test (macos-latest)` job on
+PR #24 (head 93fe6770) wedged inside the "Test binary built on Ubuntu"
+step - apetest executing the ubuntu-origin fat APE on the macOS ARM64
+runner. It survived BOTH kill layers: the step-level timeout-minutes: 5
+AND the in-step with-deadline.sh 240s killer. Only the job-level 25m
+timeout ended it, and because the runner was torn down at that level,
+the job log was never flushed and no artifact was uploaded - zero
+on-disk evidence of where it stopped.
+
+**Nondeterminism**: the IDENTICAL SHA with identical binaries passed
+the same step in 37s on a warm-branch run minutes earlier and in 49s
+on a re-run minutes later. One wedge bracketed by two fast greens on
+the same runner pool is the signature of the wave-9 family (XNU
+sporadically parking a call that "cannot" block), not of a
+deterministic regression in the commit.
+
+**Open question**: runner infra flake vs a rare residual darwin-cosmo
+runtime race. The wave-9 kqueue/pthread rework removed the one
+directly observed wedge mechanism (nonblocking read(2) on the poller
+wakeup pipe never returning) and bought 18/18 consecutive green probe
+executions, so if this is ours, it is a second, much rarer mechanism -
+one datapoint is not enough to distinguish.
+
+**Next instrumentation if it recurs**: sentinel-file hardening in
+with-deadline.sh. The current design can be defeated if the step's
+shell itself wedges - the watchdog only helps when the kill fires and
+the shell survives to flush output. Write a sentinel file (step name,
+phase, pid, timestamp) to the workspace BEFORE launching the guarded
+command and update it from the watchdog, so a wedged shell still
+leaves on-disk evidence for the artifact upload of a later step (or a
+job-level always() uploader) to collect.
