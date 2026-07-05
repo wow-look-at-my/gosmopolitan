@@ -3,7 +3,30 @@
 // license that can be found in the LICENSE file.
 
 // Fake networking for js/wasm and wasip1/wasm.
-// It is intended to allow tests of other package to pass.
+//
+// Neither platform has real user-level sockets: browsers and Node.js do
+// not expose raw network access to WebAssembly, and WASI preview 1 has
+// no way to create or connect a socket (only listeners inherited from
+// the host, see [FileListener]). On GOOS=js and GOOS=wasip1 the net
+// package is therefore backed by this in-memory, process-local
+// implementation:
+//
+//   - Listen and Dial for "tcp", "udp", and "unix" networks succeed for
+//     loopback-style addresses, but the sockets exist only inside the
+//     process. A listener started here is invisible to the host and to
+//     other processes, and dialing any address without an in-process
+//     fake listener fails with ECONNREFUSED no matter how real the
+//     destination is.
+//   - DNS lookups use the pure Go resolver over the same fake network,
+//     so they fail against real name servers too.
+//
+// The fake network exists primarily so that tests of other packages
+// (net/http and friends) pass on wasm platforms; it is always in effect
+// on these GOOSes, and code that "successfully" listens or dials on
+// them is talking only to itself. On wasip1, sockets pre-opened by the
+// host can still be served via [FileListener]. Under Node.js, the
+// GODEBUG setting jsfetchnode=1 gives net/http clients real HTTP
+// support through the JavaScript Fetch API.
 
 //go:build js || wasip1
 

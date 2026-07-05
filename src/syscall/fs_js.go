@@ -577,10 +577,20 @@ func recoverErr(errPtr *error) {
 }
 
 // mapJSError maps an error given by Node.js to the appropriate Go error.
+// Errors without a recognized code (e.g. a TypeError thrown by a broken or
+// custom fs implementation) map to EIO instead of crashing the program; the
+// enclosing *PathError still reports the operation and path.
 func mapJSError(jsErr js.Value) error {
-	errno, ok := errnoByCode[jsErr.Get("code").String()]
+	if jsErr.Type() != js.TypeObject {
+		return errnoErr(EIO)
+	}
+	code := jsErr.Get("code")
+	if code.Type() != js.TypeString {
+		return errnoErr(EIO)
+	}
+	errno, ok := errnoByCode[code.String()]
 	if !ok {
-		panic(jsErr)
+		return errnoErr(EIO)
 	}
 	return errnoErr(Errno(errno))
 }
