@@ -548,9 +548,35 @@ func fsCall(name string, args ...any) (js.Value, error) {
 		return nil
 	})
 	defer f.Release()
-	jsFS.Call(name, append(args, f)...)
+	if err := jsFSInvoke(name, append(args, f)); err != nil {
+		return js.Value{}, err
+	}
 	res := <-c
 	return res.val, res.err
+}
+
+// jsFSInvoke calls the method name on the JavaScript fs object. An exception
+// thrown synchronously by the method - instead of being delivered as an
+// error to the callback, as the Node.js fs API does - is mapped to an errno
+// error just like a callback error, so a broken or nonstandard fs
+// implementation cannot crash the program. The recover is scoped to this one
+// JavaScript call and converts only the panic values that syscall/js raises
+// for JavaScript exceptions (js.Error, js.Value); any other panic propagates
+// unchanged.
+func jsFSInvoke(name string, args []any) (err error) {
+	defer func() {
+		switch r := recover().(type) {
+		case nil:
+		case js.Error:
+			err = mapJSError(r.Value)
+		case js.Value:
+			err = mapJSError(r)
+		default:
+			panic(r)
+		}
+	}()
+	jsFS.Call(name, args...)
+	return nil
 }
 
 // checkPath checks that the path is not empty and that it contains no null characters.
