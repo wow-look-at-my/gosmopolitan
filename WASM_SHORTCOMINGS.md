@@ -3,7 +3,7 @@
 This document catalogs the state of the two WebAssembly ports in this tree:
 what this fork has fixed, what remains broken or missing, what each remaining
 item would take to fix, and what it costs to use the fixes. Snapshot date:
-2026-07-04, based on the go1.26 tree this fork tracks. Severity: P0
+2026-07-05 (round 2), based on the go1.26 tree this fork tracks. Severity: P0
 (hang/crash/silently wrong) through P3 (polish/docs). Fixability: fork-fixable
 (a bounded patch in this tree), needs-wasm-proposal (blocked on a WebAssembly
 spec proposal or an upstream megaproject), or inherent (a consequence of the
@@ -16,7 +16,9 @@ backends. Every shortcoming in this document is therefore also upstream Go's
 shortcoming, with upstream issue links given where they were verified to
 exist. Four audits (runtime/scheduler, syscall/js + JS glue, compiler/linker
 backend, wasip1 + stdlib) produced the findings; the fixes were then made and
-verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
+verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1). A second
+round (2026-07-05) of codegen, runtime, and interop work built on that base;
+its entries are dated below where the distinction matters.
 
 ## Fixed in this fork
 
@@ -31,6 +33,7 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
 | Runtime (wasip1) | signal.Notify parked its receiver in a busy-spin notetsleepg: 100% CPU for the process lifetime and checkdead permanently masked | none verified | 04d0fcde | hot spin + silent hangs -> receiver parks; deadlock detection works again |
 | Runtime (wasip1) | Hosts that stub poll_oneoff (ENOTSUP/ENOSYS) crashed the program on first scheduler idle, then again inside the crash report | #78513 | d12e4b59 | double fatal error -> poller marked dead, timers keep working by spinning |
 | Runtime (js) | Fake netpoll comment claimed the poller is never used; it runs on every timer-idle cycle | n/a (comment) | f96c76bd | misleading comment -> describes the real behavior and the busy-wait it causes |
+| Runtime | The periodic (2-minute) forced GC never fired: forcegchelper is resumed only by sysmon and wasm has no sysmon, so an idle program never collected after its last allocation burst; finalizers and cleanups sat forever | none verified | 5230d942 | heap parked at high-water mark forever -> findRunnable tests the time-based trigger and idle Ms cap their timer sleep at the forced-GC deadline; "GC forced" fires at ~120s on both ports, upstream TestPeriodicGC unskipped |
 | syscall (wasip1) | Preopens matched by string prefix: with /data preopened, /database/x silently resolved inside /data | none verified | 0e665b44 | wrong file, silently -> match only on path component boundaries |
 | syscall (wasip1) | Paths outside all preopens (or with no preopens) failed with EBADF "Bad file number", os.IsNotExist false | #63466, #60732 | b2706c78 | fd-bug-looking error -> ENOENT, os.IsNotExist true |
 | time (wasip1) | time.Local was permanently UTC; $TZ ignored; no zone source worked | none verified | db2be627 | UTC forever -> standard $TZ handling via $ZONEINFO, preopened zoneinfo dirs, or time/tzdata |
@@ -39,11 +42,18 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
 | syscall/js | Reflect.get in valueIndex/valueLength can reenter Go (Proxy traps, accessors); results were stored through a stale SP after stack growth: memory corruption | none verified (present upstream) | 9b6483bb | Index/Length return garbage, stack clobbered -> SP refreshed like valueGet/valueCall already did |
 | syscall/js | js.Error.Error() panicked when JS threw a non-object (throw "boom"), masking the original error | none verified | 866f91a9 | panic while printing panic -> falls back to the thrown value's string; also fixes Length's wrong panic text and stale package docs |
 | syscall (js) | mapJSError panicked on any JS error without a known .code, killing the program from one failed fs op | none verified | 1c34c287 | whole-program crash -> unknown errors map to EIO, operation fails normally |
+| syscall/js | No way to await a promise: every async JS API cost a FuncOf/then/catch/channel dance per call site | #69720, #72045, #28911 | 5b975b77 | ~20 lines of boilerplate per await -> js.Await(v): Promise.resolve semantics, blocks the goroutine, (result, nil) on fulfillment, (undefined, Error{reason}) on rejection with a total Error; in-callback misuse documented and reported by the runtime's deadlock note |
+| syscall/js, lib/wasm | CopyBytesToGo/CopyBytesToJS accept only Uint8Array/Uint8ClampedArray; Float32Array & co. copied element-wise through Index/SetIndex | #32402, #25532, #38011 | 68d02283 | one boundary crossing per element -> CopyToGo/CopyToJS bulk-copy []int8/[]uint8/[]int16/[]uint16/[]int32/[]uint32/[]float32/[]float64 with strict TypedArray kind matching, one generic glue pair |
+| syscall (js) | A JS fs method that throws synchronously (broken or monkey-patched fs, nonstandard host) escaped as a js.Error panic and killed the program | none verified | 11f623b2 | whole-program crash from one file op -> thrown exception mapped through mapJSError like a callback error (unknown -> EIO), *PathError wrapping preserved, non-JS panics still propagate |
 | lib/wasm | Node fallbacks were broken: require("performance") is not a builtin; the crypto fallback only worked by accident on node >= 17.4 | nodejs/node#49272 (context) | d2f24bdc | crash or late TypeError on old node -> explicit node >= 18 check with a clear error |
 | lib/wasm | Browser output shim: one line buffer for both fds, everything via console.log, unterminated final output lost at exit | none verified | 3fc95897 | interleaved/lost output -> per-fd buffers, stderr to console.error, flush on exit |
+| lib/wasm | Browser output shim decoded each write chunk independently: a multi-byte rune split across two writes rendered as U+FFFD | none verified | 1ab406a9 | mojibake on split runes -> per-fd streaming TextDecoder (decode {stream:true}), decoder drained at exit before the partial-line flush |
 | cmd/link, lib/wasm | argv+env budget was 8KB; env-heavy hosts (CI) died at startup with "exceeds limit" | #49011 | 332bb923 | startup crash under big env -> 61440-byte budget (data floor 64KB), error message reports needed/available |
 | cmd/compile | go:wasmexport with 17+ small params passed the 128-byte check, then the assembler panicked (ICE "bad Get: invalid register") | none verified | 4ead4b0a | internal compiler error -> proper "too many parameters" diagnostic; 16 params still compile |
 | cmd/compile | zeroRange emitted 3 instructions per 8 bytes for large stack zeroings | none verified | 41389912 | 24-instruction prologue for a 64-byte range -> single memory.fill (>32 bytes) |
+| cmd/compile | The loop-preemption guard (round 1) was a 64-bit load+compare built from generic ops; the scheduler hoisted the load away from the compare, adding a register round-trip, an extend, and a wrap to every backedge | n/a (round-1 follow-up) | 5f9934ce | 9-instruction guard -> fused single-op 32-bit check (Get SP; Get g; wrap; i32.load; i32.lt_u); worst-case loop ~18% faster under wazero, unchanged under node (V8 already hoisted the disarmed-case load); hello.wasm -4.4KB |
+| cmd/compile | Every sync/atomic and internal/runtime/atomic op was a cross-package call into atomic_wasm.go's plain bodies: a dozen instructions of call protocol around a one-instruction operation, on a single-threaded target | none verified | d9b36bf5 | call per atomic op -> intrinsified to plain loads/stores and inline RMW sequences; atomic add 2.0x (node) / 4.0x (wazero) faster, mixed atomic ops 4.9x / 8.0x, sync.Mutex Lock/Unlock 1.8x / 4.1x; hello.wasm -42KB |
+| cmd/compile | Signed 64-bit division called the runtime.wasmDiv assembly helper on every int64 divide, only to special-case MinInt64/-1 (wasm's i64.div_s traps there) | none verified | 93f1b09b | call + branch per divide -> branchless inline form (divide by 1 when divisor is -1, negate after); 18% (node) / 23% (wazero) faster; MinInt64 and divide-by-zero semantics verified byte-identical to host Go; the now-dead runtime.wasmDiv helper removed end to end (21e24728) |
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
 
 ## Remaining shortcomings
@@ -69,13 +79,23 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
   synchronously on the JS thread and nothing can block there. Worse, if any
   unrelated timer exists, the deadlock is undetectable and becomes a hot spin
   (fake netpoll returns immediately; the scheduler polls until the timer is
-  due, `src/runtime/netpoll_fake.go`). Upstream #26045, #34324; an Await/
-  AsyncFuncOf-style API (#69720, #72045) is the usability fix, fork-fixable.
-- P2, fork-fixable: The forced 2-minute GC never fires. forcegchelper is
-  resumed only by sysmon (`src/runtime/proc.go:6607` area) and wasm has no
-  sysmon, so an idle program never collects after its last allocation burst;
-  finalizers and cleanups sit forever. Could be triggered from beforeIdle or
-  a self-rearming runtime timer.
+  due, `src/runtime/netpoll_fake.go`). Upstream #26045, #34324. js.Await
+  (this fork, 5b975b77) is the usability fix for ordinary goroutines; the
+  callback-cannot-block constraint itself remains.
+- P2, fork-fixable (fs_js): println-then-exit teardown can hang while a
+  CPU-spinner goroutine is alive (pre-existing; re-confirmed by both
+  round-2 audits, then bisected against master during round-2 integration:
+  identical there). Mechanism, verified 2026-07-05: fmt.Println under node
+  goes through fs.write, whose COMPLETION callback runs on the JS event
+  loop; a busy spinner never lets wasm return there, so the printing
+  goroutine blocks forever and never reaches its os.Exit - the bytes do
+  reach the pipe, the process just never exits (a special case of the P1
+  host-starvation item above). The builtin println (synchronous wasmWrite
+  import) is immune, and a reached os.Exit is immediate under node
+  (wasm_exec_node.js wires go.exit straight to process.exit). Follow-up
+  idea: route the stdout/stderr fast path in fs_js.go through fs.writeSync
+  under node, so terminal output cannot park a goroutine on the event
+  loop.
 - P2, inherent: Linear memory never shrinks. wasm has no memory.shrink;
   the sbrk allocator can reuse but not return (`src/runtime/mem_sbrk.go`).
   Peak footprint persists until the instance dies (golang/go#59061, #27462).
@@ -88,12 +108,17 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
   setThreadCPUProfiler are empty stubs (`src/runtime/os_wasm.go:149`); there
   is no SIGPROF and no host timer sampler. pprof CPU profiles are empty
   (heap/goroutine/block/mutex profiles work).
-- P3, fork-fixable: wasip1 notetsleepg still busy-yields for TIMED waits
-  (`src/runtime/lock_wasip1.go:87-106`); the infinite-wait case (os/signal)
-  was fixed, but a timed note wait from a user goroutine burns CPU. Other
-  landmines: notesleep/notetsleep throw on both ports; osyield is UNDEF
-  (`src/runtime/sys_wasm.s:28`); js usleep is a no-op; the g0 stack is a
-  fixed 8KB global with no guard (`src/runtime/sys_wasm.go:13`).
+- P3, audited non-issue (2026-07-05) with one live case: wasip1 notetsleepg
+  still busy-yields for TIMED waits (`src/runtime/lock_wasip1.go:87-106`),
+  but no timed caller is reachable on wasip1 - sysmon's is gated by
+  haveSysmon, and the stop-the-world notes cannot time out with
+  gomaxprocs==1. The one reachable untimed busy-yield is the profbuf reader
+  during an active pprof CPU profile (measured: 5.1s of user CPU for a 5s
+  profiling window that collects zero samples) - subsumed by the
+  no-CPU-profiling item above; fix both together by parking the reader.
+  Other landmines: notesleep/notetsleep throw on both ports; osyield is
+  UNDEF (`src/runtime/sys_wasm.s:10`); js usleep is a no-op; the g0 stack is
+  a fixed 8KB global with no guard (`src/runtime/sys_wasm.go:13`).
 - P3, inherent: In a browser, a fully deadlocked program is silent - there is
   no "event loop drained" signal, so only the node wrapper detects deadlock
   at exit (golang/go#32764).
@@ -110,14 +135,13 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
   surrogates with U+FFFD, so Value.String() is lossy and non-round-trippable,
   with no error and no lossless alternative (golang/go#29642 adjacent). Keys
   read from JS maps can fail to match when written back.
-- P1, fork-fixable: No way to await a Promise. Every async JS API costs ~20
-  lines of FuncOf/then/catch/channel boilerplate per call site, and doing it
-  inside an event callback deadlocks. Upstream proposals: #69720 (js.Await),
-  #72045 (AsyncFuncOf), #28911.
-- P1, fork-fixable: CopyBytesToGo/CopyBytesToJS accept only Uint8Array and
-  Uint8ClampedArray. WebGL/WebAudio/canvas pipelines needing Float32Array etc.
-  must copy element-wise through Index/SetIndex (golang/go#32402, #25532,
-  #38011; #31980 explains why the view-based TypedArrayOf was removed).
+- P3, evaluated and deferred (2026-07-05): managing js.Value lifetimes with
+  runtime.AddCleanup instead of SetFinalizer (resurrection-free semantics,
+  no serialized finalizer goroutine) was implemented and measured: it costs
+  two extra allocations on every JS call that returns a non-number value
+  (1 -> 3 allocs/op; AddCleanup boxes its argument and allocates a generic
+  closure, see the TODO in `src/runtime/mcleanup.go:180`). makeValue stays
+  on SetFinalizer until upstream slims AddCleanup down; revisit then.
 - P2, fork-fixable: Interop cost. Every JS->Go string is 3 import round trips
   plus 2 copies; property names are re-decoded on every Get/Set/Call; every
   non-number value crossing allocates a finalizer-tracked handle
@@ -147,23 +171,34 @@ verified in this tree under Node.js 22 (js) and wazero 1.12 (wasip1).
   structured-control-flow lowering would remove most dispatch round trips,
   but it is a compiler megaproject.
 - P1, needs wasm proposal: No threads (see above), no SIMD (no v128 anywhere
-  in the backend), no tail calls (wrapper chains grow the wasm stack), no
-  multi-value returns (single-i32 internal ABI), no externref/WasmGC
-  (golang/go#63904 - blocked by interior pointers), no memory64 (upstream
-  momentum is the opposite: GOARCH=wasm32, #63131). GOWASM feature gating is
-  an empty struct today (`src/internal/buildcfg/cfg.go:333`), so there is no
-  mechanism to introduce gated features without adding it back.
+  in the backend), no tail calls (wrapper chains grow the wasm stack; see
+  the next bullet - the proposal is standardized but the default wasip1
+  runtime cannot run it), no multi-value returns (single-i32 internal ABI),
+  no externref/WasmGC (golang/go#63904 - blocked by interior pointers), no
+  memory64 (upstream momentum is the opposite: GOARCH=wasm32, #63131).
+  GOWASM feature gating is an empty struct today
+  (`src/internal/buildcfg/cfg.go:333`), so there is no mechanism to
+  introduce gated features without adding it back.
+- P2, blocked on engine support: wasm tail calls (return_call) were
+  investigated 2026-07-05 for the RET-to-symbol path in
+  `src/cmd/internal/obj/wasm/wasmobj.go` (currently i32.const 0; call
+  $target; return): node 22 (V8) validates and executes return_call, but
+  wazero 1.12 rejects such modules at compile time ("feature tail-call is
+  disabled") and its CLI has no flag to enable it. Emitting return_call
+  would break the default wasip1 runtime pairing, so it stays off (or needs
+  a GOWASM gate, see above) until wazero catches up.
 - P2, fork-fixable (bounded): No DWARF is ever emitted for wasm
   (`src/cmd/link/internal/ld/dwarf.go:1720`), `go tool objdump` cannot
   disassemble wasm, and no debugger supports the port - debugging is
   name-section stack traces only. The name section is on by default and
   costs hundreds of KB; `-ldflags=-s` strips it (worth documenting; a
   wasm-opt -Oz pass typically shaves another 10-20%).
-- P2, fork-fixable: Codegen perf leftovers: int64 division is a runtime call;
-  non-provably-bounded shifts pay a bounds Select; bits.Add64/Sub64 are not
-  intrinsified; every sync/atomic op is a full cross-package call despite the
-  single-threaded target; everything is widened to i64 with wrap/extend
+- P2, fork-fixable: Codegen perf leftovers (round 2 fixed the two big ones,
+  int64 division and the atomics - see the table): non-provably-bounded
+  shifts pay a bounds Select; everything is widened to i64 with wrap/extend
   traffic on pointer ops; spills go to linear memory (16 pseudo-registers).
+  bits.Add64/Sub64 intrinsics were prototyped 2026-07-05 and benchmarked:
+  no measurable win over the pure-Go lowering, so they were not kept.
 - P3, inherent-ish: Functions are capped at 65536 blocks (16-bit PC_B);
   the funcref table carries 4096 dead slots; buildmodes are exe-only on js
   (c-shared exists on wasip1 only); no cgo, race, msan, asan, or fuzzing on
@@ -215,13 +250,26 @@ The preemption fix (aa31fde9) inserts a guard check on every backedge of
 every reducible loop in every non-nosplit function. The honest numbers,
 measured on this tree:
 
-- Worst case, unarmed: a 3-instruction loop body (x = x*c1 + c2) slows down
-  31.7% under node (js/wasm) and 51.2% under wazero (wasip1/wasm). This is
-  the theoretical worst case - the check is a fixed cost per iteration, so
-  real loop bodies pay proportionally less, and package benchmark suites
-  showed no pathological slowdown.
+- Worst case, unarmed: a 3-instruction loop body (x = x*c1 + c2) originally
+  slowed down 31.7% under node (js/wasm) and 51.2% under wazero
+  (wasip1/wasm). Round 2 (5f9934ce) fused the guard into a single 32-bit
+  machine op; on the round-2 reference container (1e9 iterations, best of
+  3, ns/iteration) the same loop measures:
+
+  |            | no guard | round-1 guard | round-2 guard |
+  |------------|----------|---------------|---------------|
+  | node 22    | 2.90     | 4.25          | 4.24          |
+  | wazero 1.12| 1.83     | 3.92          | 3.20          |
+
+  wazero executes every instruction, so the shorter check pays directly
+  (-18% wall time on the worst case); V8 hoists the disarmed-case guard
+  load out of the loop either way, so node is bounded by the compare+branch
+  itself. This remains the theoretical worst case - the check is a fixed
+  cost per iteration, so real loop bodies pay proportionally less, and
+  package benchmark suites showed no pathological slowdown.
 - Binary size: +4.4% on a representative binary (two extra blocks plus the
-  guard per loop backedge).
+  guard per loop backedge); round 2 claws back ~4.4KB of that on hello.wasm
+  (one byte per guard plus the dropped extend/round-trip).
 - Latency while armed: an armed loop yields at most every 100us (the clock is
   read every 64 gate calls), so a timer can fire up to ~100us late plus the
   time for 64 iterations. Checks are armed only when there is pending work
@@ -229,9 +277,12 @@ measured on this tree:
   stop-the-world request) and disarmed otherwise.
 - Opt-out: build with GOEXPERIMENT=nopreemptibleloops to get upstream's
   original codegen (and upstream's original hangs) back.
-- Follow-up idea: the guard currently loads and compares a 64-bit word
-  (stackguard1); a 32-bit compare would shave a fraction of the per-iteration
-  cost on engines that do not fold the widening.
+- The round-1 follow-up idea (compare only 32 bits of stackguard1) is done,
+  see above. Correctness argument: on wasm stackguard1 is only ever 0
+  (disarmed; sp32 < 0 is always false unsigned) or stackPreempt (armed; low
+  word 0xfffffade exceeds any real stack pointer, the same "stackPreempt is
+  greater than any real sp" assumption the runtime already makes), so the
+  low-word compare gives the same answer as the 64-bit one.
 
 ## Using wasm on this fork
 
@@ -255,3 +306,7 @@ measured on this tree:
 - Tight loops are preemptible by default; opt out with
   GOEXPERIMENT=nopreemptibleloops if you need to compare against upstream
   behavior.
+- Both ports are CI-gated: the `wasm` job in
+  `.github/workflows/cosmo-ci.yml` builds std and runs the stdlib and
+  wasmexport-testdir regression subset under node 22 (js) and wazero
+  (wasip1) on every push.

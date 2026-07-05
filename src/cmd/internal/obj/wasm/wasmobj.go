@@ -1027,7 +1027,6 @@ var notUsePC_B = map[string]bool{
 	"runtime.gcWriteBarrier7": true,
 	"runtime.gcWriteBarrier8": true,
 	"runtime.notInitialized":  true,
-	"runtime.wasmDiv":         true,
 	"runtime.wasmTruncS":      true,
 	"runtime.wasmTruncU":      true,
 	"cmpbody":                 true,
@@ -1070,7 +1069,7 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	switch s.Name {
 	case "_rt0_wasm_js", "_rt0_wasm_wasip1", "_rt0_wasm_wasip1_lib",
 		"wasm_export_run", "wasm_export_resume", "wasm_export_getsp",
-		"wasm_pc_f_loop", "runtime.wasmDiv", "runtime.wasmTruncS", "runtime.wasmTruncU", "memeqbody":
+		"wasm_pc_f_loop", "runtime.wasmTruncS", "runtime.wasmTruncU", "memeqbody":
 		varDecls = []*varDecl{}
 		useAssemblyRegMap()
 	case "wasm_pc_f_loop_export":

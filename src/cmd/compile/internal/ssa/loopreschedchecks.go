@@ -223,10 +223,6 @@ func insertLoopReschedChecks(f *Func) {
 		pt := cfgtypes.Uintptr
 		g := test.NewValue1(bb.Pos, OpGetG, pt, mem0)
 		sp := test.NewValue0(bb.Pos, OpSP, pt)
-		cmpOp := OpLess64U
-		if pt.Size() == 4 {
-			cmpOp = OpLess32U
-		}
 		// The guard tested against the stack pointer. On most platforms it
 		// is g.stackguard0 (offset 2*ptrSize), which sysmon or a signal
 		// poisons with stackPreempt to request a preemption; the same
@@ -238,13 +234,34 @@ func insertLoopReschedChecks(f *Func) {
 		// unused on wasm: there is no cgo and the wasm stack-growth
 		// prologue only consults stackguard0. See wasm preemption support
 		// in runtime/proc.go.
-		guardOffset := 2 * pt.Size()
+		var cmp *Value
 		if f.Config.arch == "wasm" {
-			guardOffset = 3 * pt.Size() // g.stackguard1
+			// On wasm this check is on the hottest possible path (every
+			// backedge of every call-free loop), so shrink it to 32-bit
+			// ops: a 4-byte load of the low word of g.stackguard1
+			// (little-endian, so same byte offset) compared against the
+			// stack pointer, which the wasm backend keeps in an i32
+			// local anyway. On wasm stackguard1 is only ever 0
+			// (disarmed: sp32 < 0 is always false unsigned) or
+			// stackPreempt (armed: low word 0xfffffade, greater than
+			// any real stack pointer, matching the usual "stackPreempt
+			// is greater than any real sp" assumption), so comparing
+			// only the low words gives the same answer as the full
+			// 64-bit compare. The load and compare are fused into one
+			// machine op so they cannot be scheduled apart, keeping the
+			// whole test a contiguous wasm-stack-only sequence.
+			guardOffset := 3 * pt.Size() // g.stackguard1
+			cmp = test.NewValue3I(bb.Pos, OpWasmLoweredPreemptCheck, cfgtypes.Bool, guardOffset, sp, g, mem0)
+		} else {
+			cmpOp := OpLess64U
+			if pt.Size() == 4 {
+				cmpOp = OpLess32U
+			}
+			guardOffset := 2 * pt.Size() // g.stackguard0
+			limaddr := test.NewValue1I(bb.Pos, OpOffPtr, pt, guardOffset, g)
+			lim := test.NewValue2(bb.Pos, OpLoad, pt, limaddr, mem0)
+			cmp = test.NewValue2(bb.Pos, cmpOp, cfgtypes.Bool, sp, lim)
 		}
-		limaddr := test.NewValue1I(bb.Pos, OpOffPtr, pt, guardOffset, g)
-		lim := test.NewValue2(bb.Pos, OpLoad, pt, limaddr, mem0)
-		cmp := test.NewValue2(bb.Pos, cmpOp, cfgtypes.Bool, sp, lim)
 		test.SetControl(cmp)
 
 		// if true, goto sched

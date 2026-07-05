@@ -214,6 +214,13 @@ runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
 
+A third job (`wasm`, ubuntu-only - wasm output is host-independent)
+regression-gates the fork's WebAssembly ports: it builds the toolchain,
+builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
+fixes touch under node 22 (js) and wazero (wasip1), and runs the
+wasmexport compiler regression tests via cmd/internal/testdir for both
+wasm targets.
+
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
 This fork diverges from upstream on the wasm ports (upstream inherited them
@@ -229,6 +236,10 @@ the full catalog of fixes and remaining gaps):
 - `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
   (default stays on the fake in-memory network).
 - wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
+- Round 2 (2026-07-05): atomic ops are intrinsified and int64 division is
+  inlined (no more runtime calls), `syscall/js` adds `js.Await` and
+  `js.CopyToGo`/`js.CopyToJS` (typed-array bulk copies), and the periodic
+  2-minute forced GC now runs on both wasm ports.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

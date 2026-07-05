@@ -35,8 +35,10 @@ func sigpanic() {
 	panicmem()
 }
 
-// func exitThread(wait *uint32)
-// FIXME: wasm doesn't have atomic yet
+// exitThread is never called on wasm: there are no OS threads to exit
+// (see newosproc). The assembly body in sys_wasm.s is a trap (UNDEF).
+//
+// func exitThread(wait *atomic.Uint32)
 func exitThread(wait *atomic.Uint32)
 
 type mOS struct{}
@@ -53,8 +55,11 @@ type sigset struct{}
 // Called to initialize a new m (including the bootstrap m).
 // Called on the parent thread (main thread in case of bootstrap), can allocate memory.
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024)
-	mp.gsignal.m = mp
+	// wasm has no signals (_NSIG == 0), so a signal-handling g can never
+	// run and mp.gsignal stays nil. Everything that reads gsignal either
+	// nil-checks it or only compares it against the current g (including
+	// morestack in asm_wasm.s, which loads the field but never
+	// dereferences it), so don't waste a 32KB stack on it.
 }
 
 //go:nosplit
