@@ -399,11 +399,10 @@ func forcegchelper() {
 // wake source: a pending timer, or on wasip1 a netpoll waiter. An M with no
 // wake source at all must keep falling through to checkdead, because a
 // deadlocked program does not need periodic GC, and a self-arming wakeup
-// would make the deadlock undetectable. (On js it would additionally keep
-// the host's event loop alive and defeat the exit-time deadlock probe; see
-// handleEvent. This means a js program that goes fully idle with no Go
-// timers pending is not woken for periodic GC either - the check instead
-// runs on the next JavaScript event that enters Go.)
+// would make the deadlock undetectable. (On js, beforeIdle instead arms a
+// weak, unref'd timeout for the deadline - see the idle GC nudge in
+// lock_js.go - waking an idle program for the periodic GC without holding
+// node's event loop open, so the exit-time deadlock probe still fires.)
 
 // wasmForceGCCheck implements sysmon's periodic forced-GC check on wasm: if
 // it has been more than forcegcperiod since the last GC and the forcegc
