@@ -229,5 +229,14 @@ give the process an opportunity to clean up before termination.
 On Plan 9, signals have type syscall.Note, which is a string. Calling
 Notify with a syscall.Note will cause that value to be sent on the
 channel when that string is posted as a note.
+
+# WebAssembly
+
+On the js/wasm and wasip1/wasm ports, no signal is ever delivered to
+the program: neither the JavaScript host (browser or Node.js) nor a
+WASI preview 1 host can raise a signal inside the running module.
+Notify compiles and registers channels as usual, but no signal,
+including [os.Interrupt], ever arrives on them. Reset, Stop, and
+Ignore work but have nothing to affect.
 */
 package signal

@@ -227,7 +227,22 @@ func insertLoopReschedChecks(f *Func) {
 		if pt.Size() == 4 {
 			cmpOp = OpLess32U
 		}
-		limaddr := test.NewValue1I(bb.Pos, OpOffPtr, pt, 2*pt.Size(), g)
+		// The guard tested against the stack pointer. On most platforms it
+		// is g.stackguard0 (offset 2*ptrSize), which sysmon or a signal
+		// poisons with stackPreempt to request a preemption; the same
+		// poison also diverts every function prologue through morestack.
+		// Wasm has no sysmon and no signals, and diverting prologues is
+		// expensive there (morestack must be resolved before the function
+		// can run at all), so the wasm runtime instead arms preemption by
+		// poisoning g.stackguard1 (offset 3*ptrSize), which is otherwise
+		// unused on wasm: there is no cgo and the wasm stack-growth
+		// prologue only consults stackguard0. See wasm preemption support
+		// in runtime/proc.go.
+		guardOffset := 2 * pt.Size()
+		if f.Config.arch == "wasm" {
+			guardOffset = 3 * pt.Size() // g.stackguard1
+		}
+		limaddr := test.NewValue1I(bb.Pos, OpOffPtr, pt, guardOffset, g)
 		lim := test.NewValue2(bb.Pos, OpLoad, pt, limaddr, mem0)
 		cmp := test.NewValue2(bb.Pos, cmpOp, cfgtypes.Bool, sp, lim)
 		test.SetControl(cmp)

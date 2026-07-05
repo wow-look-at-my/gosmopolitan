@@ -185,7 +185,7 @@ func (e *timeoutEvent) diff(x int64) int64 {
 		return 0
 	}
 
-	diff := x - idleTimeout.time
+	diff := x - e.time
 	if diff < 0 {
 		diff = -diff
 	}
@@ -284,6 +284,26 @@ func handleEvent() {
 	}
 	events = append(events, e)
 
+	if eventHandler == nil {
+		// The program does not link in syscall/js, so setEventHandler was
+		// never called and this event cannot be handled. The only source of
+		// such an event is the host probing for a deadlock: wasm_exec_node.js
+		// resumes the program with a synthetic event when Node.js's event
+		// loop runs dry while the program is still running. Park this
+		// goroutine forever with the event unreturned: beforeIdle then cannot
+		// return to JavaScript, so the scheduler falls through to checkdead
+		// and reports the deadlock, instead of crashing on a nil eventHandler
+		// call. See go.dev/issue/70869.
+		//
+		// Since this event is the deadlock probe, record that so that
+		// deadlockOSHint does not misattribute the deadlock to a blocked
+		// js.FuncOf callback (no such callback can exist without syscall/js).
+		deadlockProbeActive = true
+		clearIdleTimeout()
+		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		throw("unreachable") // gopark above never returns
+	}
+
 	if !eventHandler() {
 		// If we did not handle a window event, the idle timeout was triggered, so we can clear it.
 		clearIdleTimeout()
@@ -308,4 +328,33 @@ var eventHandler func() bool
 //go:linkname setEventHandler syscall/js.setEventHandler
 func setEventHandler(fn func() bool) {
 	eventHandler = fn
+}
+
+// deadlockProbeActive reports whether the JavaScript environment injected its
+// exit-time deadlock probe (the pending event with id 0, see wasm_exec_node.js).
+// The probe's handler parks itself inside an event, so it must be discounted
+// when deciding whether a user callback is blocked.
+var deadlockProbeActive bool
+
+// deadlockProbe is called by syscall/js.handleEvent when it receives the
+// environment's deadlock probe event (id 0).
+//
+//go:linkname deadlockProbe syscall/js.deadlockProbe
+func deadlockProbe() {
+	deadlockProbeActive = true
+}
+
+// deadlockOSHint prints js-specific context just before checkdead's
+// "all goroutines are asleep" fatal error.
+func deadlockOSHint() {
+	n := len(events)
+	if deadlockProbeActive {
+		// The environment's deadlock probe parks inside an event of its
+		// own; it is not a user callback.
+		n--
+	}
+	if n > 0 {
+		print("runtime: note: a goroutine is blocked in a call from JavaScript (js.FuncOf callback) that has not returned\n")
+		print("runtime: the JavaScript event loop cannot run until the callback returns, so no JavaScript event or callback can unblock it\n")
+	}
 }

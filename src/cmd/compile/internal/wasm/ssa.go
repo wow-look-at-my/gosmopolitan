@@ -150,6 +150,18 @@ func zeroRange(pp *objw.Progs, p *obj.Prog, off, cnt int64, state *uint32) *obj.
 		base.Fatalf("zerorange count not a multiple of widthptr %d", cnt)
 	}
 
+	if cnt > 32 {
+		// Zero large ranges with a single memory.fill, like the SSA
+		// rules do for Zero values above this size (LoweredZero).
+		p = pp.Append(p, wasm.AGet, obj.TYPE_REG, wasm.REG_SP, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, off, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Add, 0, 0, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, cnt, 0, 0, 0)
+		p = pp.Append(p, wasm.AMemoryFill, 0, 0, 0, 0, 0, 0)
+		return p
+	}
+
 	for i := int64(0); i < cnt; i += 8 {
 		p = pp.Append(p, wasm.AGet, obj.TYPE_REG, wasm.REG_SP, 0, 0, 0, 0)
 		p = pp.Append(p, wasm.AI64Const, obj.TYPE_CONST, 0, 0, 0, 0, 0)

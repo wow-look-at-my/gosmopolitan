@@ -7,8 +7,8 @@
 // Package js gives access to the WebAssembly host environment when using the js/wasm architecture.
 // Its API is based on JavaScript semantics.
 //
-// This package is EXPERIMENTAL. Its current scope is only to allow tests to run, but not yet to provide a
-// comprehensive API for users. It is exempt from the Go compatibility promise.
+// This package is EXPERIMENTAL. It is the interoperability layer between Go and the
+// JavaScript host, but its API may still change. It is exempt from the Go compatibility promise.
 package js
 
 import (
@@ -83,6 +83,13 @@ type Error struct {
 
 // Error implements the error interface.
 func (e Error) Error() string {
+	if !e.Type().isObject() {
+		// JavaScript code can throw values that are not objects, e.g.
+		// "throw 'boom'". Value.Get would panic on such values, which
+		// is especially harmful while the error is being printed
+		// during panic unwinding, so use the thrown value itself.
+		return "JavaScript error: " + e.Value.String()
+	}
 	return "JavaScript error: " + e.Get("message").String()
 }
 
@@ -149,6 +156,11 @@ func Global() Value {
 //	| map[string]interface{} | new object             |
 //
 // Panics if x is not one of the expected types.
+//
+// All integers and floats are converted to JavaScript numbers (float64).
+// int64, uint64, int, uint, uintptr and unsafe.Pointer values with a
+// magnitude beyond 2^53, the range of exact float64 integers, silently
+// lose precision.
 func ValueOf(x any) Value {
 	switch x := x.(type) {
 	case Value:
@@ -411,10 +423,11 @@ func storeArgs(args []any, argValsDst []Value, argRefsDst []ref) {
 }
 
 // Length returns the JavaScript property "length" of v.
+// It returns 0 if v has no such property or its value is not a number.
 // It panics if v is not a JavaScript object.
 func (v Value) Length() int {
 	if vType := v.Type(); !vType.isObject() {
-		panic(&ValueError{"Value.SetIndex", vType})
+		panic(&ValueError{"Value.Length", vType})
 	}
 	r := valueLength(v.ref)
 	runtime.KeepAlive(v)
@@ -577,6 +590,11 @@ func (v Value) Truthy() bool {
 // String is a special case because of Go's String method convention. Unlike the other getters,
 // it does not panic if v's Type is not TypeString. Instead, it returns a string of the form "<T>"
 // or "<T: V>" where T is v's type and V is a string representation of v's value.
+//
+// The conversion from the JavaScript string (UTF-16) to the Go string (UTF-8)
+// is lossy for strings that are not well-formed UTF-16: each unpaired
+// surrogate is replaced with U+FFFD, so round-tripping such a string back to
+// JavaScript does not yield the original value.
 func (v Value) String() string {
 	switch v.Type() {
 	case TypeString:

@@ -9,3 +9,7 @@ package syscall
 func JoinPath(dir, file string) string {
 	return joinPath(dir, file)
 }
+
+func HasPathPrefix(path, prefix string) bool {
+	return hasPathPrefix(path, prefix)
+}

@@ -79,6 +79,9 @@ func (c Func) Release() {
 // setEventHandler is defined in the runtime package.
 func setEventHandler(fn func() bool)
 
+// deadlockProbe is defined in the runtime package.
+func deadlockProbe()
+
 func init() {
 	setEventHandler(handleEvent)
 }
@@ -95,6 +98,10 @@ func handleEvent() bool {
 
 	id := uint32(cb.Get("id").Int())
 	if id == 0 { // zero indicates deadlock
+		// Tell the runtime this event is the environment's deadlock
+		// probe rather than a user callback, then park inside the
+		// event so checkdead reports the deadlock.
+		deadlockProbe()
 		select {}
 	}
 

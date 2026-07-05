@@ -214,6 +214,28 @@ runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
 
+## WebAssembly (GOOS=js / GOOS=wasip1)
+
+This fork diverges from upstream on the wasm ports (upstream inherited them
+untouched until 2026-07-04; see `WASM_SHORTCOMINGS.md` at the repo root for
+the full catalog of fixes and remaining gaps):
+
+- **Preemptible loops are default-on for GOARCH=wasm**: CPU-bound goroutines
+  no longer starve timers/GC/other goroutines. Opt out with
+  `GOEXPERIMENT=nopreemptibleloops`.
+- `GOMAXPROCS` from the environment is clamped to 1 (no more `newosproc`
+  throw at startup).
+- The js argv/env budget is 64KB (was 8KB), so big CI environments run.
+- `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
+  (default stays on the fake in-memory network).
+- wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
+
+The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
+`GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
+`GOOS=wasip1 GOARCH=wasm go test <pkg>` finds `go_wasip1_wasm_exec`
+(wasmtime by default; `GOWASIRUNTIME=wazero` also works). Remember the fork
+defaults to GOOS=cosmo: always pin GOOS/GOARCH on wasm commands.
+
 ## Adding Cosmo Support to Standard Library Packages
 
 When a stdlib package fails to build for `GOOS=cosmo`, follow these steps:
