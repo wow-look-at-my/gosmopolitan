@@ -214,6 +214,13 @@ runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
 
+A third job (`wasm`, ubuntu-only - wasm output is host-independent)
+regression-gates the fork's WebAssembly ports: it builds the toolchain,
+builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
+fixes touch under node 22 (js) and wazero (wasip1), and runs the
+wasmexport compiler regression tests via cmd/internal/testdir for both
+wasm targets.
+
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
 This fork diverges from upstream on the wasm ports (upstream inherited them

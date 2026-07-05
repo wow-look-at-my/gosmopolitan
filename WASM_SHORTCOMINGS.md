@@ -306,3 +306,7 @@ measured on this tree:
 - Tight loops are preemptible by default; opt out with
   GOEXPERIMENT=nopreemptibleloops if you need to compare against upstream
   behavior.
+- Both ports are CI-gated: the `wasm` job in
+  `.github/workflows/cosmo-ci.yml` builds std and runs the stdlib and
+  wasmexport-testdir regression subset under node 22 (js) and wazero
+  (wasip1) on every push.
