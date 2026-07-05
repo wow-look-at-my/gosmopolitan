@@ -63,6 +63,7 @@ var openers = []func(io.ReaderAt) (rawFile, error){
 	openMacho,
 	openPE,
 	openPlan9,
+	openWasm,
 	openXcoff,
 }
 
