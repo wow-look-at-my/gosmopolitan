@@ -14,7 +14,18 @@
 (Mul(64|32|16|8) ...) => (I64Mul ...)
 (Mul(64|32)F ...) => (F(64|32)Mul ...)
 
-(Div64 [false] x y) => (I64DivS x y)
+// wasm's i64.div_s traps on MinInt64/-1 where Go wants MinInt64, so divide
+// by 1 instead when the divisor is -1 and negate the quotient afterwards:
+// x/1 = x and 0-MinInt64 wraps back to MinInt64, the correct Go answer.
+// This is branchless and calls no helper. Division by zero still traps in
+// i64.div_s, but the frontend's explicit divisor check panics before that
+// can be reached. The smaller divisions cannot trap: their operands are
+// sign-extended from a narrower type, so dividend can never be MinInt64.
+(Div64 [false] <t> x y) =>
+	(Last <t>
+		flag: (I64Eq y (I64Const [-1]))
+		q:    (I64DivS <t> x (Select <t> (I64Const [1]) y flag))
+		(Select <t> (I64Sub (I64Const [0]) q) q flag))
 (Div32 [false] x y) => (I64DivS (SignExt32to64 x) (SignExt32to64 y))
 (Div16 [false] x y) => (I64DivS (SignExt16to64 x) (SignExt16to64 y))
 (Div8          x y) => (I64DivS (SignExt8to64 x) (SignExt8to64 y))

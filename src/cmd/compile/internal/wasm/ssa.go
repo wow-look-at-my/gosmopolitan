@@ -514,14 +514,12 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 		s.Prog(wasm.AI64ExtendI32U)
 
 	case ssa.OpWasmI64DivS:
+		// The lowering of Div64 guarantees the divisor is never -1 here
+		// (see Wasm.rules), so i64.div_s cannot hit its MinInt64/-1 trap.
+		// The narrower divisions sign-extend their operands, so their
+		// dividend can never be MinInt64 in the first place.
 		getValue64(s, v.Args[0])
 		getValue64(s, v.Args[1])
-		if v.Type.Size() == 8 {
-			// Division of int64 needs helper function wasmDiv to handle the MinInt64 / -1 case.
-			p := s.Prog(wasm.ACall)
-			p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ir.Syms.WasmDiv}
-			break
-		}
 		s.Prog(wasm.AI64DivS)
 
 	case ssa.OpWasmI64TruncSatF32S, ssa.OpWasmI64TruncSatF64S:

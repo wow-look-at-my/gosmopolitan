@@ -1296,16 +1296,36 @@ func rewriteValueWasm_OpDiv32u(v *Value) bool {
 func rewriteValueWasm_OpDiv64(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
-	// match: (Div64 [false] x y)
-	// result: (I64DivS x y)
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Div64 [false] <t> x y)
+	// result: (Last <t> flag: (I64Eq y (I64Const [-1])) q: (I64DivS <t> x (Select <t> (I64Const [1]) y flag)) (Select <t> (I64Sub (I64Const [0]) q) q flag))
 	for {
+		t := v.Type
 		if auxIntToBool(v.AuxInt) != false {
 			break
 		}
 		x := v_0
 		y := v_1
-		v.reset(OpWasmI64DivS)
-		v.AddArg2(x, y)
+		v.reset(OpLast)
+		v.Type = t
+		flag := b.NewValue0(v.Pos, OpWasmI64Eq, typ.Bool)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v1.AuxInt = int64ToAuxInt(-1)
+		flag.AddArg2(y, v1)
+		q := b.NewValue0(v.Pos, OpWasmI64DivS, t)
+		v3 := b.NewValue0(v.Pos, OpWasmSelect, t)
+		v4 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v4.AuxInt = int64ToAuxInt(1)
+		v3.AddArg3(v4, y, flag)
+		q.AddArg2(x, v3)
+		v5 := b.NewValue0(v.Pos, OpWasmSelect, t)
+		v6 := b.NewValue0(v.Pos, OpWasmI64Sub, typ.Int64)
+		v7 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v7.AuxInt = int64ToAuxInt(0)
+		v6.AddArg2(v7, q)
+		v5.AddArg3(v6, q, flag)
+		v.AddArg3(flag, q, v5)
 		return true
 	}
 	return false
