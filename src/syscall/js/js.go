@@ -704,3 +704,127 @@ func CopyBytesToJS(dst Value, src []byte) int {
 //go:wasmimport gojs syscall/js.copyBytesToJS
 //go:noescape
 func copyBytesToJS(dst ref, src []byte) (int, bool)
+
+// A typedArrayKind identifies one of the JavaScript TypedArray types
+// supported by CopyToGo and CopyToJS. The values index the typedArrays table
+// in wasm_exec.js; the two must be kept in sync.
+type typedArrayKind int
+
+const (
+	kindInt8 typedArrayKind = iota
+	kindUint8
+	kindInt16
+	kindUint16
+	kindInt32
+	kindUint32
+	kindFloat32
+	kindFloat64
+)
+
+// typedArrayNames are the JavaScript constructor names (with their article,
+// for panic messages) corresponding to the typedArrayKind values.
+var typedArrayNames = [...]string{
+	kindInt8:    "an Int8Array",
+	kindUint8:   "a Uint8Array",
+	kindInt16:   "an Int16Array",
+	kindUint16:  "a Uint16Array",
+	kindInt32:   "an Int32Array",
+	kindUint32:  "a Uint32Array",
+	kindFloat32: "a Float32Array",
+	kindFloat64: "a Float64Array",
+}
+
+// sliceData returns the data pointer, the length in elements, and the
+// matching TypedArray kind of the slice s. It panics if s is not one of the
+// slice types supported by CopyToGo and CopyToJS.
+func sliceData(op string, s any) (unsafe.Pointer, int, typedArrayKind) {
+	switch s := s.(type) {
+	case []int8:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt8
+	case []uint8:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint8
+	case []int16:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt16
+	case []uint16:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint16
+	case []int32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt32
+	case []uint32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint32
+	case []float32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindFloat32
+	case []float64:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindFloat64
+	default:
+		panic("syscall/js: " + op + ": unsupported slice type; must be []int8, []uint8, []int16, []uint16, []int32, []uint32, []float32 or []float64")
+	}
+}
+
+// CopyToGo copies elements from the JavaScript TypedArray src to the Go slice
+// dst. The types must match exactly:
+//
+//	| dst       | src          |
+//	| --------- | ------------ |
+//	| []int8    | Int8Array    |
+//	| []uint8   | Uint8Array   |
+//	| []int16   | Int16Array   |
+//	| []uint16  | Uint16Array  |
+//	| []int32   | Int32Array   |
+//	| []uint32  | Uint32Array  |
+//	| []float32 | Float32Array |
+//	| []float64 | Float64Array |
+//
+// It panics if dst is not one of the supported slice types or if src is not
+// the matching TypedArray type. In particular, for a []uint8 dst it accepts
+// only a Uint8Array; use CopyBytesToGo to also accept a Uint8ClampedArray.
+// It returns the number of elements copied, which will be the minimum of the
+// lengths of src and dst.
+func CopyToGo(dst any, src Value) int {
+	p, n, kind := sliceData("CopyToGo", dst)
+	c, ok := copyToGo(p, n, int(kind), src.ref)
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+	if !ok {
+		panic("syscall/js: CopyToGo: expected src to be " + typedArrayNames[kind])
+	}
+	return c
+}
+
+// copyToGo copies the JavaScript TypedArray src (which must be of the type
+// identified by kind) to the dstLen elements starting at dst.
+//
+// Using go:noescape is safe because dst is only used as a copy destination
+// and no reference to it is maintained.
+//
+//go:wasmimport gojs syscall/js.copyToGo
+//go:noescape
+func copyToGo(dst unsafe.Pointer, dstLen int, kind int, src ref) (int, bool)
+
+// CopyToJS copies elements from the Go slice src to the JavaScript TypedArray
+// dst. The supported type pairs are the same as for CopyToGo.
+//
+// It panics if src is not one of the supported slice types or if dst is not
+// the matching TypedArray type. In particular, for a []uint8 src it accepts
+// only a Uint8Array; use CopyBytesToJS to also accept a Uint8ClampedArray.
+// It returns the number of elements copied, which will be the minimum of the
+// lengths of src and dst.
+func CopyToJS(dst Value, src any) int {
+	p, n, kind := sliceData("CopyToJS", src)
+	c, ok := copyToJS(dst.ref, p, n, int(kind))
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+	if !ok {
+		panic("syscall/js: CopyToJS: expected dst to be " + typedArrayNames[kind])
+	}
+	return c
+}
+
+// copyToJS copies the srcLen elements starting at src to the JavaScript
+// TypedArray dst (which must be of the type identified by kind).
+//
+// Using go:noescape is safe because src is only used as a copy source and no
+// reference to it is maintained.
+//
+//go:wasmimport gojs syscall/js.copyToJS
+//go:noescape
+func copyToJS(dst ref, src unsafe.Pointer, srcLen int, kind int) (int, bool)
