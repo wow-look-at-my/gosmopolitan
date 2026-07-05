@@ -229,6 +229,10 @@ the full catalog of fixes and remaining gaps):
 - `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
   (default stays on the fake in-memory network).
 - wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
+- Round 2 (2026-07-05): atomic ops are intrinsified and int64 division is
+  inlined (no more runtime calls), `syscall/js` adds `js.Await` and
+  `js.CopyToGo`/`js.CopyToJS` (typed-array bulk copies), and the periodic
+  2-minute forced GC now runs on both wasm ports.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
