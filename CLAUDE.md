@@ -221,6 +221,44 @@ fixes touch under node 22 (js) and wazero (wasip1), and runs the
 wasmexport compiler regression tests via cmd/internal/testdir for both
 wasm targets.
 
+A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
+installable toolchain tarball to buildhost on every push - see Toolchain
+Distribution below.
+
+## Toolchain Distribution
+
+Every push whose build+test jobs are green publishes an installable
+linux-amd64 toolchain tarball to buildhost (pazer.build) as project
+`gosmopolitan`: the `publish` job in cosmo-ci.yml runs `make.bash -distpack`
+(official packaging; output `pkg/distpack/go<VERSION>.linux-amd64.tar.gz`,
+currently `go1.26.4cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
+GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
+server-info's `max_direct_upload_bytes`, chunked upload session above it).
+Consumers install the fork in seconds instead of a ~3 minute `make.bash`:
+
+```bash
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
+export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
+go version   # go version go1.26.4cosmo linux/amd64
+```
+
+The tarball extracts to `go/` (official distribution layout; GOROOT is
+derived from the binary location, no need to set it). Consumer gotchas:
+
+- **Set `GOTOOLCHAIN=local`.** The shipped `go.env` keeps upstream's
+  `GOTOOLCHAIN=auto`, so a consumer go.mod with a `go`/`toolchain` directive
+  newer than this fork's version would silently download an official
+  toolchain and lose cosmo.
+- **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
+  Gotchas); any host-run `go build`/`go install`/`go test` needs
+  `GOOS=linux GOARCH=amd64`.
+- **Pinning**: `?branch=master` is a rolling latest that moves on every push
+  to master (each branch gets its own `?branch=<name>` latest). Pin an
+  immutable release with `?v=N` in place of the `branch` param; buildhost
+  auto-increments N per publish, the publish job logs it, and
+  `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
+  the current one.
+
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
 This fork diverges from upstream on the wasm ports (upstream inherited them
