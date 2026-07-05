@@ -35,8 +35,10 @@ func sigpanic() {
 	panicmem()
 }
 
-// func exitThread(wait *uint32)
-// FIXME: wasm doesn't have atomic yet
+// exitThread is never called on wasm: there are no OS threads to exit
+// (see newosproc). The assembly body in sys_wasm.s is a trap (UNDEF).
+//
+// func exitThread(wait *atomic.Uint32)
 func exitThread(wait *atomic.Uint32)
 
 type mOS struct{}
