@@ -82,13 +82,20 @@ its entries are dated below where the distinction matters.
   due, `src/runtime/netpoll_fake.go`). Upstream #26045, #34324. js.Await
   (this fork, 5b975b77) is the usability fix for ordinary goroutines; the
   callback-cannot-block constraint itself remains.
-- P2, fork-fixable (node glue): Exit teardown can linger while a CPU-spinner
-  goroutine is alive (pre-existing; re-confirmed by both round-2 audits,
-  2026-07-05). os.Exit's wasmExit resolves a JS promise on the node side,
-  but the promise callback cannot run until the wasm call returns to the
-  event loop, so a busy goroutine delays the actual process exit (and the
-  final output flush) until the next yield. Follow-up idea: an unref'd
-  timeout or a direct process exit in wasm_exec_node.js's exit path.
+- P2, fork-fixable (fs_js): println-then-exit teardown can hang while a
+  CPU-spinner goroutine is alive (pre-existing; re-confirmed by both
+  round-2 audits, then bisected against master during round-2 integration:
+  identical there). Mechanism, verified 2026-07-05: fmt.Println under node
+  goes through fs.write, whose COMPLETION callback runs on the JS event
+  loop; a busy spinner never lets wasm return there, so the printing
+  goroutine blocks forever and never reaches its os.Exit - the bytes do
+  reach the pipe, the process just never exits (a special case of the P1
+  host-starvation item above). The builtin println (synchronous wasmWrite
+  import) is immune, and a reached os.Exit is immediate under node
+  (wasm_exec_node.js wires go.exit straight to process.exit). Follow-up
+  idea: route the stdout/stderr fast path in fs_js.go through fs.writeSync
+  under node, so terminal output cannot park a goroutine on the event
+  loop.
 - P2, inherent: Linear memory never shrinks. wasm has no memory.shrink;
   the sbrk allocator can reuse but not return (`src/runtime/mem_sbrk.go`).
   Peak footprint persists until the instance dies (golang/go#59061, #27462).
