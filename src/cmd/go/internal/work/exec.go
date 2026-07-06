@@ -371,7 +371,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		fmt.Fprintf(h, "%s=%s\n", key, val)
 
 		// GOWASI, when the target operating system has such a variable.
-		if key, val, _ := cfg.GetOSEnv(); key != "" {
+		// Only hashed when set to a non-default value, so that default
+		// builds keep the exact action IDs (and therefore build IDs)
+		// they had before the variable existed.
+		if key, val, _ := cfg.GetOSEnv(); key != "" && val != "" {
 			fmt.Fprintf(h, "%s=%s\n", key, val)
 		}
 
@@ -1567,7 +1570,10 @@ func (b *Builder) printLinkerConfig(h io.Writer, p *load.Package) {
 		fmt.Fprintf(h, "%s=%s\n", key, val)
 
 		// GOWASI, when the target operating system has such a variable.
-		if key, val, _ := cfg.GetOSEnv(); key != "" {
+		// Only hashed when set to a non-default value, so that default
+		// builds keep the exact action IDs (and therefore build IDs)
+		// they had before the variable existed.
+		if key, val, _ := cfg.GetOSEnv(); key != "" && val != "" {
 			fmt.Fprintf(h, "%s=%s\n", key, val)
 		}
 
