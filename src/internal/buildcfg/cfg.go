@@ -331,6 +331,11 @@ func goriscv64() int {
 }
 
 type gowasmFeatures struct {
+	// TailCall emits the tail-call proposal's return_call instruction for
+	// tail calls (RET-to-symbol). Off by default: V8/Node.js executes it,
+	// but not every runtime does (wazero 1.12 rejects such modules).
+	TailCall bool
+
 	// Legacy features, now always enabled
 	//SatConv bool
 	//SignExt bool
@@ -338,12 +343,17 @@ type gowasmFeatures struct {
 
 func (f gowasmFeatures) String() string {
 	var flags []string
+	if f.TailCall {
+		flags = append(flags, "tailcall")
+	}
 	return strings.Join(flags, ",")
 }
 
 func gowasm() (f gowasmFeatures) {
 	for opt := range strings.SplitSeq(envOr("GOWASM", ""), ",") {
 		switch opt {
+		case "tailcall":
+			f.TailCall = true
 		case "satconv":
 			// ignore, always enabled
 		case "signext":
@@ -461,6 +471,9 @@ func gogoarchTags() []string {
 		list = append(list, GOARCH+".satconv")
 		// SignExt is always enabled
 		list = append(list, GOARCH+".signext")
+		if GOWASM.TailCall {
+			list = append(list, GOARCH+".tailcall")
+		}
 		return list
 	}
 	return nil

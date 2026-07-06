@@ -431,8 +431,6 @@ func testCPUProfile(t *testing.T, matches profileMatchFunc, f func(dur time.Dura
 		t.Logf("uname -a: %v", vers)
 	case "plan9":
 		t.Skip("skipping on plan9")
-	case "wasip1":
-		t.Skip("skipping on wasip1")
 	}
 
 	broken := testenv.CPUProfilingBroken()
@@ -768,6 +766,9 @@ func stackContainsAll(spec string, count uintptr, stk []*profile.Location, label
 }
 
 func TestMorestack(t *testing.T) {
+	if runtime.GOARCH == "wasm" {
+		t.Skip("wasm CPU profiling samples only at loop backedges of the running goroutine; runtime.newstack runs on the system stack and is never observed")
+	}
 	matches := matchAndAvoidStacks(stackContainsAll, []string{"runtime.newstack,runtime/pprof.growstack"}, avoidFunctions())
 	testCPUProfile(t, matches, func(duration time.Duration) {
 		t := time.After(duration)
@@ -2286,6 +2287,9 @@ func TestGoroutineProfileLabelRace(t *testing.T) {
 // TestLabelSystemstack makes sure CPU profiler samples of goroutines running
 // on systemstack include the correct pprof labels. See issue #48577
 func TestLabelSystemstack(t *testing.T) {
+	if runtime.GOARCH == "wasm" {
+		t.Skip("wasm CPU profiling samples only at loop backedges of the running user goroutine; code on the system stack is never observed")
+	}
 	// Grab and re-set the initial value before continuing to ensure
 	// GOGC doesn't actually change following the test.
 	gogc := debug.SetGCPercent(100)
@@ -2719,6 +2723,9 @@ func TestTimeVDSO(t *testing.T) {
 	if runtime.GOOS == "android" {
 		// Flaky on Android, issue 48655. VDSO may not be enabled.
 		testenv.SkipFlaky(t, 48655)
+	}
+	if runtime.GOARCH == "wasm" {
+		t.Skip("wasm CPU profiling samples only at loop backedges; time.now has none, so it never appears in samples")
 	}
 
 	matches := matchAndAvoidStacks(stackContains, []string{"time.now"}, avoidFunctions())

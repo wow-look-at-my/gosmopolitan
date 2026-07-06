@@ -2159,8 +2159,9 @@
 //   - For GOARCH=riscv64,
 //     GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
 //     riscv64.rva22u64 and riscv64.rva23u64 build tags.
-//   - For GOARCH=wasm, GOWASM=satconv and signext
-//     correspond to the wasm.satconv and wasm.signext feature build tags.
+//   - For GOARCH=wasm, GOWASM=satconv, signext and tailcall
+//     correspond to the wasm.satconv, wasm.signext and wasm.tailcall
+//     feature build tags.
 //
 // For GOARCH=amd64, arm, ppc64, ppc64le, and riscv64, a particular feature level
 // sets the feature build tags for all previous levels as well.
@@ -2545,7 +2546,7 @@
 //		and https://github.com/riscv/riscv-profiles/blob/main/src/rva23-profile.adoc
 //	GOWASM
 //		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
-//		Valid values are satconv, signext.
+//		Valid values are satconv, signext, tailcall.
 //
 // Environment variables for use with code coverage:
 //
