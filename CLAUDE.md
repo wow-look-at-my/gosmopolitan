@@ -287,6 +287,15 @@ the full catalog of fixes and remaining gaps):
   (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
   backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
   binaries. `runtime/pprof` joined both test lists in the CI wasm job.
+- Round 4 (2026-07-06): wasm binaries carry DWARF v5 debug info in
+  `.debug_*` custom sections per the WebAssembly DWARF convention (code
+  addresses are byte offsets from the start of the code section's
+  contents, the lld/Chrome model): full DIE tree plus statement-level
+  line tables, `llvm-dwarfdump --verify` clean on both ports. On by
+  default (~+39% file size), stripped with `-ldflags=-w`. The name
+  section now precedes producers, so llvm tools can read Go wasm
+  binaries. Variable location expressions are still placeholders
+  (faithful locations need DW_OP_WASM_location).
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
