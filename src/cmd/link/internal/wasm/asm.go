@@ -50,6 +50,7 @@ func gentext(ctxt *ld.Link, ldr *loader.Loader) {
 type wasmFunc struct {
 	Module string
 	Name   string
+	Sym    loader.Sym // 0 for host imports
 	Type   uint32
 	Code   []byte
 }
@@ -179,6 +180,17 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		}
 	}
 
+	// dwarf reports whether DWARF debug info is being emitted. In that
+	// case the relocated LEB128 fields inside function bodies keep the
+	// fixed width the assembler reserved for them, so that the byte
+	// offsets baked into the DWARF sections match the code the module
+	// actually carries. Without DWARF they are compacted to minimal
+	// LEB128s instead.
+	dwarf := false
+	if len(ctxt.Textp) > 0 {
+		_, dwarf = ld.WasmCodeOffset(ctxt.Textp[0])
+	}
+
 	// collect functions with WebAssembly body
 	var buildid []byte
 	fns := make([]*wasmFunc, len(ctxt.Textp))
@@ -190,7 +202,9 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 			wfn.WriteByte(0x0b) // end
 			buildid = ldr.Data(fn)
 		} else {
-			// Relocations have variable length, handle them here.
+			// The assembler reserved fixed-width placeholders for the
+			// relocated LEB128 fields (see obj/wasm.RelocLEBSize);
+			// overwrite them with the final values here.
 			relocs := ldr.Relocs(fn)
 			P := ldr.Data(fn)
 			off := int32(0)
@@ -200,18 +214,26 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 					continue // skip marker relocations
 				}
 				wfn.Write(P[off:r.Off()])
-				off = r.Off()
+				off = r.Off() + int32(r.Siz()) // skip the placeholder
 				rs := r.Sym()
+				var v int64
 				switch r.Type() {
 				case objabi.R_ADDR:
-					writeSleb128(wfn, ldr.SymValue(rs)+r.Add())
+					v = ldr.SymValue(rs) + r.Add()
 				case objabi.R_CALL:
-					writeSleb128(wfn, int64(len(hostImports))+ldr.SymValue(rs)>>16-funcValueOffset)
+					v = int64(len(hostImports)) + ldr.SymValue(rs)>>16 - funcValueOffset
 				case objabi.R_WASMIMPORT:
-					writeSleb128(wfn, hostImportMap[rs])
+					v = hostImportMap[rs]
 				default:
 					ldr.Errorf(fn, "bad reloc type %d (%s)", r.Type(), sym.RelocName(ctxt.Arch, r.Type()))
 					continue
+				}
+				if dwarf {
+					if err := writeSleb128FixedLength(wfn, v, int(r.Siz())); err != nil {
+						ldr.Errorf(fn, "cannot encode relocation value for %s: %v (link with -ldflags=-w to disable DWARF)", ldr.SymName(rs), err)
+					}
+				} else {
+					writeSleb128(wfn, v)
 				}
 			}
 			wfn.Write(P[off:])
@@ -232,7 +254,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		}
 
 		name := nameRegexp.ReplaceAllString(ldr.SymName(fn), "_")
-		fns[i] = &wasmFunc{Name: name, Type: typ, Code: wfn.Bytes()}
+		fns[i] = &wasmFunc{Name: name, Sym: fn, Type: typ, Code: wfn.Bytes()}
 	}
 
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
@@ -253,10 +275,16 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
 	writeCodeSec(ctxt, fns)
 	writeDataSec(ctxt)
-	writeProducerSec(ctxt)
+	if dwarf {
+		writeDwarfSections(ctxt)
+	}
+	// The name section goes before the producers section: the tool
+	// conventions place producers after name, and LLVM's wasm reader
+	// rejects modules that order them the other way around.
 	if !*ld.FlagS {
 		writeNameSec(ctxt, len(hostImports), fns)
 	}
+	writeProducerSec(ctxt)
 }
 
 func lookupType(sig *wasmFuncType, types *[]*wasmFuncType) uint32 {
@@ -497,13 +525,40 @@ func writeElementSec(ctxt *ld.Link, numImports, numFns uint64) {
 func writeCodeSec(ctxt *ld.Link, fns []*wasmFunc) {
 	sizeOffset := writeSecHeader(ctxt, sectionCode)
 
+	contentsStart := ctxt.Out.Offset()
 	writeUleb128(ctxt.Out, uint64(len(fns))) // number of code entries
 	for _, fn := range fns {
 		writeUleb128(ctxt.Out, uint64(len(fn.Code)))
+		// If DWARF is enabled, check that the body lands exactly at the
+		// code-section offset recorded as its DWARF address.
+		if fn.Sym != 0 {
+			if want, ok := ld.WasmCodeOffset(fn.Sym); ok && want != ctxt.Out.Offset()-contentsStart {
+				ld.Exitf("internal error: DWARF code offset mismatch for %s: DWARF has %#x, code section has %#x", fn.Name, want, ctxt.Out.Offset()-contentsStart)
+			}
+		}
 		ctxt.Out.Write(fn.Code)
 	}
 
 	writeSecSize(ctxt, sizeOffset)
+}
+
+// writeDwarfSections emits the DWARF debug info as custom sections, one
+// per DWARF section, named after it (".debug_info", ".debug_line", ...).
+// This is the standard way of embedding DWARF in WebAssembly modules,
+// understood by LLVM tooling and browser devtools. Code addresses in
+// the DWARF refer to byte offsets relative to the start of the code
+// section's contents; see the "DWARF for WebAssembly" comment in
+// ../ld/dwarf.go.
+func writeDwarfSections(ctxt *ld.Link) {
+	for _, sec := range ld.WasmDwarfSections(ctxt) {
+		if len(sec.Data) == 0 {
+			continue
+		}
+		sizeOffset := writeSecHeader(ctxt, sectionCustom)
+		writeName(ctxt.Out, sec.Name)
+		ctxt.Out.Write(sec.Data)
+		writeSecSize(ctxt, sizeOffset)
+	}
 }
 
 // writeDataSec writes the section that provides data that will be used to initialize the linear memory.
@@ -683,6 +738,25 @@ func writeSleb128(w io.ByteWriter, v int64) {
 		}
 		w.WriteByte(c)
 	}
+}
+
+// writeSleb128FixedLength writes v as an SLEB128 encoding of exactly
+// length bytes, padding with redundant continuation bytes, or reports
+// an error if v does not fit. For non-negative values the result is
+// bit-identical to a padded ULEB128 of the same length, so it is also
+// valid for the unsigned fields (call target indices) the linker
+// relocates.
+func writeSleb128FixedLength(w io.ByteWriter, v int64, length int) error {
+	max := int64(1) << (7*length - 1)
+	if v < -max || v >= max {
+		return fmt.Errorf("value %d does not fit in %d LEB128 bytes", v, length)
+	}
+	for i := 0; i < length-1; i++ {
+		w.WriteByte(uint8(v&0x7f) | 0x80)
+		v >>= 7
+	}
+	w.WriteByte(uint8(v & 0x7f))
+	return nil
 }
 
 func fieldsToTypes(fields []obj.WasmField) []byte {
