@@ -206,12 +206,17 @@ func createDwarfVars(fnsym *obj.LSym, complexOK bool, fn *ir.Func, apDecls []*ir
 	dcl := apDecls
 	if fnsym.WasInlined() {
 		dcl = preInliningDcls(fnsym)
-	} else {
+	} else if fn.DebugInfo != nil {
 		// The backend's stackframe pass prunes away entries from the
 		// fn's Dcl list, including PARAMOUT nodes that correspond to
 		// output params passed in registers. Add back in these
 		// entries here so that we can process them properly during
 		// DWARF-gen. See issue 48573 for more details.
+		//
+		// fn.DebugInfo is nil for functions that never went through
+		// buildssa, such as //go:wasmimport wrappers, whose bodies are
+		// synthesized later by the assembler; they have no register
+		// output params to recover.
 		debugInfo := fn.DebugInfo.(*ssa.FuncDebug)
 		for _, n := range debugInfo.RegOutputParams {
 			if !ssa.IsVarWantedForDebug(n) {
