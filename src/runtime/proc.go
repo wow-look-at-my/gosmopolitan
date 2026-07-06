@@ -399,11 +399,10 @@ func forcegchelper() {
 // wake source: a pending timer, or on wasip1 a netpoll waiter. An M with no
 // wake source at all must keep falling through to checkdead, because a
 // deadlocked program does not need periodic GC, and a self-arming wakeup
-// would make the deadlock undetectable. (On js it would additionally keep
-// the host's event loop alive and defeat the exit-time deadlock probe; see
-// handleEvent. This means a js program that goes fully idle with no Go
-// timers pending is not woken for periodic GC either - the check instead
-// runs on the next JavaScript event that enters Go.)
+// would make the deadlock undetectable. (On js, beforeIdle instead arms a
+// weak, unref'd timeout for the deadline - see the idle GC nudge in
+// lock_js.go - waking an idle program for the periodic GC without holding
+// node's event loop open, so the exit-time deadlock probe still fires.)
 
 // wasmForceGCCheck implements sysmon's periodic forced-GC check on wasm: if
 // it has been more than forcegcperiod since the last GC and the forcegc
@@ -463,13 +462,28 @@ func Gosched() {
 // It is the target of the rescheduling checks that the compiler inserts on
 // loop backedges (see ssa's insertLoopReschedChecks). On wasm those checks
 // are compiled in by default and armed by the scheduler (see execute), so
-// this can be extremely hot; wasmLoopPreemptGate cheaply rate-limits the
-// yields without disarming the checks.
+// while armed every backedge of the running loop lands here and this
+// function is extremely hot. The wasm fast path therefore batches inline:
+// only every wasmLoopYieldBatch-th call - or any call with an explicit
+// preemption request pending - goes on to wasmLoopPreemptGate, which
+// rate-limits the yields without disarming the checks and takes CPU
+// profile samples when profiling is active. The caller's PC and SP are
+// passed down so the gate can record a sample against the frame that hit
+// the check (see wasmProfSample).
 //
 //go:nosplit
 func goschedguarded() {
-	if GOARCH == "wasm" && !wasmLoopPreemptGate() {
-		return
+	if GOARCH == "wasm" {
+		if !getg().preempt {
+			wasmLoopGateCalls++
+			if wasmLoopGateCalls < wasmLoopYieldBatch {
+				return
+			}
+			wasmLoopGateCalls = 0
+		}
+		if !wasmLoopPreemptGate(sys.GetCallerPC(), sys.GetCallerSP()) {
+			return
+		}
 	}
 	mcall(goschedguarded_m)
 }
@@ -516,12 +530,19 @@ func goschedIfBusy() {
 // wasmLoopPreemptGate rate-limits the actual yields: a goschedguarded yield
 // is taken at most every wasmLoopYieldInterval nanoseconds, except that
 // explicit preemption requests (gp.preempt, e.g. for stop-the-world) are
-// always honored immediately. The nanotime call itself is amortized over
-// wasmLoopYieldBatch gate calls. While armed, a goroutine therefore pays
+// honored within wasmLoopYieldBatch loop iterations. The gate call and the
+// nanotime read are amortized over wasmLoopYieldBatch backedge hits by
+// goschedguarded's inline batching. While armed, a goroutine therefore pays
 // one call to goschedguarded per loop iteration plus one scheduler pass per
 // wasmLoopYieldInterval; timers can fire up to roughly wasmLoopYieldInterval
 // (plus wasmLoopYieldBatch loop iterations) late while a loop is hogging
 // the (only) P.
+//
+// The gate is also the CPU profiler's sampling hook: wasm has no signals,
+// so the loop preemption checks are the only points where a running
+// goroutine can be observed. While profiling is active, execute keeps the
+// checks armed unconditionally, and the gate records a stack sample
+// whenever the sampling deadline has passed. See wasmProfSample.
 
 const (
 	// wasmLoopYieldInterval is the minimum interval, in nanoseconds,
@@ -534,15 +555,19 @@ const (
 
 // Wasm is single-threaded, so plain (unsynchronized) globals are exact.
 var (
-	wasmLoopGateCalls int32 // gate calls since the last clock read
+	wasmLoopGateCalls int32 // backedge hits since the last gate call (see goschedguarded)
 	wasmLoopLastYield int64 // nanotime of the last rate-limited yield
 )
 
 // wasmLoopPreemptGate reports whether a compiler-inserted loop preemption
 // check should actually yield. See the comment above for the scheme.
+// goschedguarded batches the calls: the gate runs on every
+// wasmLoopYieldBatch-th backedge hit, or on every hit while gp.preempt is
+// set. pc and sp locate goschedguarded's caller, the frame that hit the
+// check; they seed the traceback when a CPU profile sample is due.
 //
 //go:nosplit
-func wasmLoopPreemptGate() bool {
+func wasmLoopPreemptGate(pc, sp uintptr) bool {
 	gp := getg()
 	mp := gp.m
 	// Mirror canPreemptM, and additionally require that this is the M's
@@ -554,19 +579,29 @@ func wasmLoopPreemptGate() bool {
 	}
 	if gp.preempt || sched.gcwaiting.Load() {
 		// Explicit preemption request (e.g. stop-the-world):
-		// always honor it immediately.
+		// always honor it.
 		return true
 	}
-	wasmLoopGateCalls++
-	if wasmLoopGateCalls < wasmLoopYieldBatch {
-		return false
-	}
-	wasmLoopGateCalls = 0
 	now := nanotime()
+	if now >= wasmProfNextSample {
+		// CPU profiling is active and a sample is due (when profiling
+		// is off the deadline is wasmProfNever). The checks above
+		// guarantee this is the M's running user goroutine with no
+		// runtime locks held, so it is safe to take a sample here.
+		wasmProfSample(now, pc, sp, gp)
+	}
 	if now-wasmLoopLastYield < wasmLoopYieldInterval {
 		return false
 	}
 	wasmLoopLastYield = now
+	if sched.profilehz != 0 && !wasmWorkPending(mp.p.ptr()) {
+		// The checks are armed only because CPU profiling is active
+		// (see execute): there is no scheduler work to run, so a yield
+		// would be a pointless trip through the scheduler. Keep
+		// running; the next wasmWorkPending probe is rate-limited to
+		// the same wasmLoopYieldInterval cadence by the update above.
+		return false
+	}
 	return true
 }
 
@@ -595,6 +630,99 @@ func wasmArmLoopPreempt() {
 	if gp := getg().m.curg; gp != nil {
 		gp.stackguard1 = stackPreempt
 	}
+}
+
+// CPU profiling on wasm.
+//
+// Wasm has no signals, so there is no SIGPROF and no OS timer that could
+// interrupt a running goroutine to take a CPU profile sample; sigprof can
+// never run, and historically SetCPUProfileRate produced only empty
+// profiles. Instead, samples are taken from the loop preemption gate
+// above: while profiling is active, execute keeps the compiler-inserted
+// loop preemption checks armed for every goroutine it dispatches, and
+// wasmLoopPreemptGate calls wasmProfSample once nanotime passes
+// wasmProfNextSample. setThreadCPUProfiler (os_wasm.go) maintains the
+// deadline and the sampling period.
+//
+// Sampling bias, honestly stated: samples are taken only at loop
+// backedges of non-nosplit functions (the only instrumented points), at
+// most every 1e9/hz nanoseconds of wall time on whatever goroutine is
+// running then. CPU time spent between backedges - straight-line code,
+// call-heavy recursion with no loops, nosplit runtime functions, code on
+// the system stack, and host calls - is attributed to the next backedge
+// the goroutine reaches. Wall-time deadlines also mean a mostly-idle
+// program accrues at most one sample per busy burst rather than a strict
+// CPU-time accounting. This is coarser than a SIGPROF profiler, but hot
+// loops - where the CPU time of a CPU-bound wasm program lives - are
+// exactly the instrumented points. Programs built with
+// GOEXPERIMENT=nopreemptibleloops have no instrumented backedges and get
+// empty profiles again.
+//
+// Wasm is single-threaded, so the plain (unsynchronized) globals are
+// exact.
+var (
+	// wasmProfNextSample is the nanotime deadline for the next CPU
+	// profile sample. wasmProfNever (the initial value, restored when
+	// profiling stops) keeps the armed-but-not-profiling gate path to a
+	// single always-false compare.
+	wasmProfNextSample int64 = wasmProfNever
+
+	// wasmProfPeriod is the sampling period, 1e9/hz nanoseconds.
+	wasmProfPeriod int64
+
+	// wasmProfStk is the sample traceback buffer. It is a global rather
+	// than a stack buffer to keep the nosplit sample path's frames
+	// small; only wasmProfSample uses it, samples cannot nest (the gate
+	// rejects g0, and the traceback below runs on g0), and there is no
+	// other thread.
+	wasmProfStk [maxCPUProfStack]uintptr
+)
+
+const wasmProfNever = 1<<63 - 1 // maximum int64; compares after any real nanotime
+
+// wasmProfSample records a CPU profile sample for gp, the goroutine
+// running on this M. It is called from wasmLoopPreemptGate when profiling
+// is active and the sampling deadline has passed; pc and sp locate the
+// frame that hit the loop preemption check, i.e. the profiled code.
+//
+// This is sigprof's role on platforms with signals. Unlike sigprof it
+// does not run in a signal handler: it runs on gp itself, at a loop
+// backedge (an ordinary call site, hence a safe point), so the traceback
+// is the callers-style "unwind the goroutine we are running on" and must
+// happen on the system stack because pc and sp are raw uintptrs that a
+// stack growth would not adjust. wasmProfSample is nosplit for the same
+// reason: its own prologue must not move the stack between the capture
+// of pc/sp in goschedguarded and the switch to the system stack.
+//
+//go:nosplit
+func wasmProfSample(now int64, pc, sp uintptr, gp *g) {
+	wasmProfNextSample = now + wasmProfPeriod
+	if prof.hz.Load() == 0 {
+		// Profiling was just disabled. The gate cannot observe this
+		// (setcpuprofilerate resets the deadline before prof.hz with
+		// m.locks held), but keep the invariant local and cheap.
+		return
+	}
+
+	// Profiling must not allocate, like sigprof: it runs concurrently
+	// with the garbage collector. Set the reentrancy trap.
+	mp := gp.m
+	mp.mallocing++
+
+	systemstack(func() {
+		var u unwinder
+		u.initAt(pc, sp, 0, gp, unwindSilentErrors)
+		n := tracebackPCs(&u, 0, wasmProfStk[:])
+		if n > 0 {
+			// Note: like sigprof, pass &gp.labels (gp is mp.curg
+			// here, the gate guarantees it): profBuf.write depends
+			// on the tag pointing at a goroutine's labels field.
+			cpuprof.add(&gp.labels, wasmProfStk[:n])
+			traceCPUSample(gp, mp, mp.p.ptr(), wasmProfStk[:n])
+		}
+	})
+
+	mp.mallocing--
 }
 
 // Puts the current goroutine into a waiting state and calls unlockf on the
@@ -3542,10 +3670,12 @@ func execute(gp *g, inheritTime bool) {
 	gp.stackguard0 = gp.stack.lo + stackGuard
 	if GOARCH == "wasm" {
 		// Arm the compiler-inserted loop preemption checks if there is
-		// pending work this goroutine could otherwise starve; disarm
+		// pending work this goroutine could otherwise starve, or if
+		// CPU profiling is active (the loop preemption gate doubles as
+		// the profiler's sampling hook, see wasmProfSample); disarm
 		// them if not. See the wasm loop preemption comment above
 		// wasmLoopPreemptGate.
-		if wasmWorkPending(mp.p.ptr()) {
+		if wasmWorkPending(mp.p.ptr()) || sched.profilehz != 0 {
 			gp.stackguard1 = stackPreempt
 		} else {
 			gp.stackguard1 = 0

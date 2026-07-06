@@ -270,7 +270,8 @@ the full catalog of fixes and remaining gaps):
   `GOEXPERIMENT=nopreemptibleloops`.
 - `GOMAXPROCS` from the environment is clamped to 1 (no more `newosproc`
   throw at startup).
-- The js argv/env budget is 64KB (was 8KB), so big CI environments run.
+- The js argv/env budget is 60KB (61440 bytes, was 8KB), so big CI
+  environments run.
 - `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
   (default stays on the fake in-memory network).
 - wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
@@ -278,6 +279,14 @@ the full catalog of fixes and remaining gaps):
   inlined (no more runtime calls), `syscall/js` adds `js.Await` and
   `js.CopyToGo`/`js.CopyToJS` (typed-array bulk copies), and the periodic
   2-minute forced GC now runs on both wasm ports.
+- Round 3 (2026-07-05): stdout/stderr are synchronous under node (printing
+  no longer hangs while another goroutine is CPU-busy), fully-idle js
+  programs are woken for the periodic GC via a weak unref'd timeout,
+  `GOWASM=tailcall` emits return_call (js-only; wazero rejects it, so it
+  stays off by default), CPU profiling works at 100Hz on both ports
+  (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
+  backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
+  binaries. `runtime/pprof` joined both test lists in the CI wasm job.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

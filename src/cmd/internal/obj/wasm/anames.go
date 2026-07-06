@@ -22,6 +22,7 @@ var Anames = []string{
 	"Return",
 	"Call",
 	"CallIndirect",
+	"ReturnCall",
 	"Drop",
 	"Select",
 	"LocalGet",
