@@ -6,6 +6,7 @@ package walk
 
 import (
 	"go/constant"
+	"internal/buildcfg"
 	"unicode/utf8"
 
 	"cmd/compile/internal/base"
@@ -136,7 +137,24 @@ func walkRange(nrange *ir.RangeStmt) ir.Node {
 		}
 
 		// for v1, v2 := range ha { body }
-		if cheapComputableIndex(elem.Size()) {
+		//
+		// When the preemptibleloops experiment is on (the default for
+		// GOARCH=wasm), the index form is used regardless of the element
+		// size: insertLoopReschedChecks inserts a call to goschedguarded
+		// on every loop backedge, and the pointer-and-uintptr scheme
+		// below is built on the assumption that the uintptr variant hu -
+		// which does not keep the backing store alive and is not
+		// adjusted when the stack moves - is never live across a call.
+		// A goroutine parked at the inserted backedge call sits exactly
+		// in the hu-only window with the ha copy dead, so a precise
+		// stack scan there misses the backing array: if nothing else
+		// references it, the GC frees storage the loop is still reading
+		// (observed as use-after-free crashes on wasm, where the gate
+		// yields CPU-bound loops to the garbage collector). The index
+		// form instead keeps ha - a GC-visible variable - live across
+		// the whole loop, and costs only an extra multiply on backedges
+		// that already carry a preemption check.
+		if cheapComputableIndex(elem.Size()) || buildcfg.Experiment.PreemptibleLoops {
 			// v1, v2 = hv1, ha[hv1]
 			tmp := ir.NewIndexExpr(base.Pos, ha, hv1)
 			tmp.SetBounded(true)

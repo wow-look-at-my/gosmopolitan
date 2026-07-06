@@ -300,7 +300,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
-          GOOS=js GOARCH=wasm go test -short -count=1 runtime sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
+          GOOS=js GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
 
       - name: Test wasip1/wasm under wazero
         # Observed 57s locally. lib/wasm supplies go_wasip1_wasm_exec.
@@ -308,7 +308,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
-          GOWASIRUNTIME=wazero GOOS=wasip1 GOARCH=wasm go test -short -count=1 runtime sync sync/atomic time os syscall math
+          GOWASIRUNTIME=wazero GOOS=wasip1 GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall math
 
       - name: Compiler regression tests (testdir wasmexport, both targets)
         # Observed 9s locally. GOOS=linux pin: the harness test binary runs
