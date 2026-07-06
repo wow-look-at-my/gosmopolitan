@@ -297,10 +297,17 @@ func createDwarfVars(fnsym *obj.LSym, complexOK bool, fn *ir.Func, apDecls []*ir
 			if n.Heapaddr == nil {
 				base.Fatalf("invalid heap allocated var without Heapaddr")
 			}
-			debug := fn.DebugInfo.(*ssa.FuncDebug)
-			list := createHeapDerefLocationList(n, debug.EntryID)
-			dvar.PutLocationList = func(listSym, startPC dwarf.Sym) {
-				debug.PutLocationList(list, base.Ctxt, listSym.(*obj.LSym), startPC.(*obj.LSym))
+			// Only emit a location list if location lists are enabled:
+			// without them there is no loc section for the entry to live
+			// in (and no fn.dwarfLocSym), so the variable is described
+			// with no location instead. Location lists are disabled on
+			// wasm, which has no DWARF register mapping.
+			if base.Ctxt.Flag_locationlists {
+				debug := fn.DebugInfo.(*ssa.FuncDebug)
+				list := createHeapDerefLocationList(n, debug.EntryID)
+				dvar.PutLocationList = func(listSym, startPC dwarf.Sym) {
+					debug.PutLocationList(list, base.Ctxt, listSym.(*obj.LSym), startPC.(*obj.LSym))
+				}
 			}
 		}
 		vars = append(vars, dvar)
