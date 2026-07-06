@@ -22,6 +22,24 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 The resulting `.com` file runs natively on Linux, macOS, and Windows.
 
+## Installing a Prebuilt Toolchain (Linux amd64)
+
+CI publishes an installable toolchain tarball to [buildhost](https://pazer.build)
+on every push. Install it in seconds instead of building from source:
+
+```bash
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
+export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
+go version   # go version go1.26.4cosmo linux/amd64
+```
+
+`GOTOOLCHAIN=local` matters: the shipped `go.env` keeps upstream's
+`GOTOOLCHAIN=auto`, so without it a go.mod requiring a newer Go version would
+silently download an official (non-cosmo) toolchain. And remember the fork
+defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an
+immutable release instead of the rolling branch latest, use `?v=N` in place of
+`branch=master`.
+
 ## Building the Toolchain
 
 Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain.
