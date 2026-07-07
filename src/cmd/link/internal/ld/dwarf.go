@@ -1034,6 +1034,14 @@ func (d *dwctxt) calcCompUnitRanges() {
 		// different units.
 		sval := d.ldr.SymValue(sym)
 		u0val := d.ldr.SymValue(unit.Textp[0])
+		if d.linkctxt.IsWasm() {
+			// On wasm, SymValue is a synthetic runtime PC
+			// (funcindex<<16, see ../wasm/asm.go:assignAddress).
+			// DWARF addresses are byte offsets within the code
+			// section instead.
+			sval = wasmDwarfCodeOffsets[sym]
+			u0val = wasmDwarfCodeOffsets[unit.Textp[0]]
+		}
 		if prevUnit != unit {
 			unit.PCs = append(unit.PCs, dwarf.Range{Start: sval - u0val})
 			prevUnit = unit
@@ -1721,7 +1729,7 @@ func dwarfEnabled(ctxt *Link) bool {
 	if *FlagW { // disable dwarf
 		return false
 	}
-	if ctxt.HeadType == objabi.Hplan9 || ctxt.HeadType == objabi.Hjs || ctxt.HeadType == objabi.Hwasip1 {
+	if ctxt.HeadType == objabi.Hplan9 {
 		return false
 	}
 
@@ -2187,6 +2195,9 @@ func (d *dwctxt) writedebugaddr(unit *sym.CompilationUnit, debugaddr loader.Sym)
 }
 
 func (d *dwctxt) dwarfGenerateDebugSyms() {
+	if d.linkctxt.IsWasm() {
+		computeWasmDwarfCodeOffsets(d.linkctxt)
+	}
 	abbrevSec := d.writeabbrev()
 	dwarfp = append(dwarfp, abbrevSec)
 	d.calcCompUnitRanges()
@@ -2216,7 +2227,12 @@ func (d *dwctxt) dwarfGenerateDebugSyms() {
 	}
 
 	// Create the section symbols.
-	frameSym := mkSecSym(".debug_frame")
+	var frameSym loader.Sym
+	if !d.linkctxt.IsWasm() {
+		// Wasm has no machine registers and no CFA; there is no call
+		// frame information to describe, so don't emit .debug_frame.
+		frameSym = mkSecSym(".debug_frame")
+	}
 	lineSym := mkSecSym(".debug_line")
 	var rangesSym, locSym loader.Sym
 	if buildcfg.Experiment.Dwarf5 {
@@ -2234,7 +2250,10 @@ func (d *dwctxt) dwarfGenerateDebugSyms() {
 
 	// Create the section objects
 	lineSec := dwarfSecInfo{syms: []loader.Sym{lineSym}}
-	frameSec := dwarfSecInfo{syms: []loader.Sym{frameSym}}
+	var frameSec dwarfSecInfo
+	if frameSym != 0 {
+		frameSec = dwarfSecInfo{syms: []loader.Sym{frameSym}}
+	}
 	infoSec := dwarfSecInfo{syms: []loader.Sym{infoSym}}
 	var addrSec, rangesSec, locSec dwarfSecInfo
 	if buildcfg.Experiment.Dwarf5 {
@@ -2266,15 +2285,17 @@ func (d *dwctxt) dwarfGenerateDebugSyms() {
 
 	// Kick off generation of .debug_frame, since it doesn't have
 	// any entanglements and can be started right away.
-	wg.Add(1)
-	go func() {
-		sema <- struct{}{}
-		defer func() {
-			<-sema
-			wg.Done()
+	if frameSym != 0 {
+		wg.Add(1)
+		go func() {
+			sema <- struct{}{}
+			defer func() {
+				<-sema
+				wg.Done()
+			}()
+			frameSec = d.writeframes(frameSym)
 		}()
-		frameSec = d.writeframes(frameSym)
-	}()
+	}
 
 	// Create a goroutine per comp unit to handle the generation that
 	// unit's portion of .debug_line, .debug_loc, .debug_ranges, and
@@ -2346,7 +2367,9 @@ func (d *dwctxt) dwarfGenerateDebugSyms() {
 		}
 	}
 	dwarfp = append(dwarfp, lineSec)
-	dwarfp = append(dwarfp, frameSec)
+	if frameSec.secSym() != 0 {
+		dwarfp = append(dwarfp, frameSec)
+	}
 	gdbScriptSec := d.writegdbscript()
 	if gdbScriptSec.secSym() != 0 {
 		dwarfp = append(dwarfp, gdbScriptSec)
@@ -2572,4 +2595,98 @@ func (d *dwctxt) writeDebugLocListsHdr() loader.Sym {
 
 func (d *dwctxt) writeDebugAddrHdr() loader.Sym {
 	return d.writeDebugMiscSecHdr(sym.SDWARFADDR, false)
+}
+
+// DWARF for WebAssembly
+//
+// Wasm binaries carry DWARF in custom sections named after the
+// corresponding DWARF sections (".debug_info", ".debug_line", ...),
+// following the WebAssembly DWARF convention
+// (https://yurydelendik.github.io/webassembly-dwarf/) consumed by LLVM
+// tooling and browser devtools. Code addresses are byte offsets
+// relative to the beginning of the code section's contents (the first
+// byte of the function-count field, excluding the section ID and size
+// fields), matching the addresses LLD emits. The DWARF address of a
+// function is the offset of the first byte of its body (its locals
+// declaration).
+//
+// The synthetic runtime "PC"s the linker assigns to wasm functions
+// (funcindex<<16 | resumepoint, see ../wasm/asm.go:assignAddress) never
+// appear in DWARF. The compiler records real byte offsets for line
+// tables and PC ranges (see cmd/internal/obj.(*LSym).DwarfPC). Those
+// offsets stay valid in the final binary because the LEB128 fields the
+// linker patches inside function bodies have a fixed width when DWARF
+// is enabled (cmd/internal/obj/wasm.RelocLEBSize), and relocations that
+// target text symbols from inside DWARF sections resolve to
+// code-section offsets rather than symbol values (see relocsym).
+
+// wasmDwarfCodeOffsets maps each text symbol to the byte offset of its
+// function body relative to the start of the code section's contents.
+// It is computed at the start of DWARF symbol generation (all code
+// bytes are final by then) and is non-nil only for GOARCH=wasm links
+// with DWARF enabled.
+var wasmDwarfCodeOffsets map[loader.Sym]int64
+
+func computeWasmDwarfCodeOffsets(ctxt *Link) {
+	ldr := ctxt.loader
+	wasmDwarfCodeOffsets = make(map[loader.Sym]int64, len(ctxt.Textp))
+	off := ulebLen(uint64(len(ctxt.Textp))) // function count field
+	for _, s := range ctxt.Textp {
+		size := int64(len(ldr.Data(s)))
+		if ldr.SymName(s) == "go:buildid" {
+			// asmb2 replaces the buildid symbol's body with a 4-byte
+			// stub function; see ../wasm/asm.go.
+			size = 4
+		}
+		off += ulebLen(uint64(size)) // body size field
+		wasmDwarfCodeOffsets[s] = off
+		off += size
+	}
+}
+
+// ulebLen returns the encoded size of v as a minimal ULEB128, in bytes.
+func ulebLen(v uint64) int64 {
+	n := int64(1)
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
+}
+
+// WasmCodeOffset returns the DWARF address of text symbol s: the byte
+// offset of its function body relative to the start of the code
+// section's contents. It reports false if DWARF is disabled or s is
+// not a function. It is used by cmd/link/internal/wasm to verify that
+// the code section it writes matches the offsets used in DWARF.
+func WasmCodeOffset(s loader.Sym) (int64, bool) {
+	off, ok := wasmDwarfCodeOffsets[s]
+	return off, ok
+}
+
+// A WasmDwarfSection holds the final contents of one DWARF section of
+// a wasm binary, ready to be emitted as a custom section.
+type WasmDwarfSection struct {
+	Name string
+	Data []byte
+}
+
+// WasmDwarfSections returns the relocated contents of the DWARF
+// sections, for cmd/link/internal/wasm to emit as custom sections. It
+// returns nil when DWARF is disabled.
+func WasmDwarfSections(ctxt *Link) []WasmDwarfSection {
+	ldr := ctxt.loader
+	var secs []WasmDwarfSection
+	for _, si := range dwarfp {
+		s := si.secSym()
+		sect := ldr.SymSect(s)
+		if sect == nil || sect.Length == 0 {
+			continue
+		}
+		buf := make([]byte, sect.Length)
+		out := &OutBuf{heap: buf}
+		writeBlocks(ctxt, out, ctxt.outSem, ldr, si.syms, int64(sect.Vaddr), int64(sect.Length), zeros[:])
+		secs = append(secs, WasmDwarfSection{Name: sect.Name, Data: buf})
+	}
+	return secs
 }

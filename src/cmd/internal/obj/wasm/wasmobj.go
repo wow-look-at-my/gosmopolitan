@@ -139,6 +139,21 @@ const (
 	WasmImport = 1 << 0
 )
 
+// RelocLEBSize is the number of bytes reserved in the instruction stream
+// for each LEB128 field that the linker fills in (function indices for
+// call/return_call, addresses for i32.const/i64.const). Reserving a fixed
+// number of bytes keeps every code byte offset independent of the final
+// relocation values, so the byte offsets recorded for DWARF (see
+// FuncInfo.RecordDwarfBytePC) remain valid in the linked binary. When
+// DWARF is enabled the linker writes the values with this same fixed
+// length; with -w it compacts them to minimal LEB128s instead (shifting
+// the code, which is fine because no DWARF refers to it).
+const RelocLEBSize = 5
+
+// relocLEBPlaceholder is what the assembler emits at a relocated LEB128
+// field: a RelocLEBSize-byte LEB128 encoding of zero.
+var relocLEBPlaceholder = []byte{0x80, 0x80, 0x80, 0x80, 0x00}
+
 const (
 	// This is a special wasm module name that when used as the module name
 	// in //go:wasmimport will cause the generated code to pass the stack pointer
@@ -1171,7 +1186,14 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		updateLocalSP(w)
 	}
 
+	// Record the byte offset of every instruction for DWARF generation.
+	// On wasm, Prog.Pc holds a resume-point index (see preprocess), not a
+	// code offset, but DWARF line tables and PC ranges need actual byte
+	// offsets within the function body.
+	dwarfBytePC := make(map[*obj.Prog]int64)
+
 	for p := s.Func().Text; p != nil; p = p.Link {
+		dwarfBytePC[p] = int64(w.Len())
 		switch p.As {
 		case AGet:
 			if p.From.Type != obj.TYPE_REG {
@@ -1213,6 +1235,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			} else {
 				if p.Link.As == AGet && p.Link.From.Reg == reg {
 					writeOpcode(w, ALocalTee)
+					// The Get is merged into this tee instruction;
+					// share the Set's byte offset.
+					dwarfBytePC[p.Link] = dwarfBytePC[p]
 					p = p.Link
 				} else {
 					writeOpcode(w, ALocalSet)
@@ -1288,9 +1313,10 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				s.AddRel(ctxt, obj.Reloc{
 					Type: typ,
 					Off:  int32(w.Len()),
-					Siz:  1, // actually variable sized
+					Siz:  RelocLEBSize,
 					Sym:  p.To.Sym,
 				})
+				w.Write(relocLEBPlaceholder)
 				if hasLocalSP {
 					// The stack may have moved, which changes SP. Update the local SP variable.
 					updateLocalSP(w)
@@ -1307,9 +1333,10 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			s.AddRel(ctxt, obj.Reloc{
 				Type: objabi.R_CALL,
 				Off:  int32(w.Len()),
-				Siz:  1, // actually variable sized
+				Siz:  RelocLEBSize,
 				Sym:  p.To.Sym,
 			})
+			w.Write(relocLEBPlaceholder)
 			// Unlike ACall, no updateLocalSP: a tail call never returns
 			// here, so the code after it is unreachable.
 
@@ -1326,10 +1353,11 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				s.AddRel(ctxt, obj.Reloc{
 					Type: objabi.R_ADDR,
 					Off:  int32(w.Len()),
-					Siz:  1, // actually variable sized
+					Siz:  RelocLEBSize,
 					Sym:  p.From.Sym,
 					Add:  p.From.Offset,
 				})
+				w.Write(relocLEBPlaceholder)
 				break
 			}
 			writeSleb128(w, p.From.Offset)
@@ -1379,7 +1407,12 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 
 	w.WriteByte(0x0b) // end
 
+	// The bytes before the first instruction (the declaration of locals
+	// and the initial local SP load) belong to the function entry.
+	dwarfBytePC[s.Func().Text] = 0
+
 	s.P = w.Bytes()
+	s.Func().RecordDwarfBytePC(dwarfBytePC)
 }
 
 func updateLocalSP(w *bytes.Buffer) {

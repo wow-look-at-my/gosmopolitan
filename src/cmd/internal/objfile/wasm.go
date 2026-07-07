@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -101,8 +102,10 @@ type wasmFile struct {
 	types     []string // rendered function signatures
 	funcTypes []uint32 // type index per code entry
 	code      []wasmBody
+	codeOff   uint64            // file offset of the code section's contents
 	names     map[uint64]string // function index -> name, from the "name" custom section
 	segs      []wasmSeg         // active data segments
+	debug     map[string][]byte // ".debug_*" custom sections
 
 	pclnOnce sync.Once
 	tab      *gosym.Table // may be nil if the pclntab was not found
@@ -302,12 +305,19 @@ func (f *wasmFile) parse() error {
 		case wasmSecFunction:
 			f.parseFunctions(sec)
 		case wasmSecCode:
+			f.codeOff = uint64(start)
 			f.parseCode(sec)
 		case wasmSecData:
 			f.parseData(sec)
 		case wasmSecCustom:
-			if sec.name() == "name" {
+			switch name := sec.name(); {
+			case name == "name":
 				f.parseNames(sec)
+			case strings.HasPrefix(name, ".debug_"):
+				if f.debug == nil {
+					f.debug = make(map[string][]byte)
+				}
+				f.debug[name] = f.data[sec.off : start+int(size)]
 			}
 		}
 		if sec.err != nil {
@@ -594,6 +604,34 @@ func (f *wasmFile) loadAddress() (uint64, error) {
 	return 0, nil
 }
 
+// DWARFCodeOffset returns the file offset of the code section's
+// contents. DWARF code addresses in a wasm module are relative to this
+// position: fileOffset = codeOffset + DWARF address. Sym.Addr values
+// are file offsets, so Sym.Addr == DWARFCodeOffset() + DW_AT_low_pc
+// for a function symbol.
+func (e *Entry) DWARFCodeOffset() (uint64, bool) {
+	f, ok := e.raw.(*wasmFile)
+	if !ok {
+		return 0, false
+	}
+	return f.codeOff, true
+}
+
 func (f *wasmFile) dwarf() (*dwarf.Data, error) {
-	return nil, fmt.Errorf("no DWARF data in wasm file")
+	if f.debug[".debug_info"] == nil {
+		return nil, fmt.Errorf("no DWARF data in wasm file")
+	}
+	get := func(name string) []byte { return f.debug[name] }
+	d, err := dwarf.New(get(".debug_abbrev"), nil, nil, get(".debug_info"), get(".debug_line"), nil, get(".debug_ranges"), get(".debug_str"))
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{".debug_addr", ".debug_line_str", ".debug_str_offsets", ".debug_rnglists"} {
+		if b := get(name); b != nil {
+			if err := d.AddSection(name, b); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return d, nil
 }
