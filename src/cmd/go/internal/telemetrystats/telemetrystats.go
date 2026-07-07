@@ -59,6 +59,10 @@ func incrementConfig() {
 	case "wasm":
 		counter.Inc("go/platform/target/gowasm:" + cfg.GOWASM)
 	}
+	switch cfg.Goos {
+	case "wasip1":
+		counter.Inc("go/platform/target/gowasi:" + cfg.GOWASI)
+	}
 
 	// Use cfg.Experiment.String instead of cfg.Experiment.Enabled
 	// because we only want to count the experiments that differ
