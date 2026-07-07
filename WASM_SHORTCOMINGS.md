@@ -63,6 +63,7 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 | cmd/objdump, cmd/internal/objfile | go tool objdump, nm, and addr2line all refused linked wasm binaries ("unrecognized object file" / "unsupported architecture") | none verified | 9b2c1f71 + fcac4977 | no binary inspection at all -> all three work on js and wasip1 modules: symbols synthesized from the code section, pclntab found by scanning the reconstructed data segment (so stripped -ldflags=-s binaries work too), the full core opcode space decodes byte-exactly (1686/1655 functions on the reference js/wasip1 binaries), call targets symbolized via pclntab or import names, Go's register globals (SP, CTXT, g, ...) annotated. Source lines are function-granularity only: PC_B counts resume points, not bytes, so per-instruction line mapping is unrecoverable |
 | cmd/compile | The two-variable range-over-slice lowering carries the iteration position across the loop backedge only as a uintptr (hu), invisible to the precise stack scan by design; insertLoopReschedChecks (preemptibleloops, this fork's wasm default) inserts a call exactly there, so a goroutine parked at the backedge during mark had nothing rooting the backing array. On wasm cheapComputableIndex reports false, so every two-variable slice range used the scheme. Surfaced as a nondeterministic nil-Function deref in CI's TestProfilerStackDepth (31/380 runs failed with GOGC=1); a distilled reproducer (range over a struct-field slice while a helper goroutine runs runtime.GC, GODEBUG=clobberfree=1) failed deterministically under both wazero and node | none verified (latent upstream for GOEXPERIMENT=preemptibleloops) | c2b233dd | GC use-after-free of the array the loop is still reading -> index-based lowering (v1, v2 = hv1, ha[hv1]) whenever preemptibleloops is enabled: the slice stays live, GC-visible, and stack-copy-adjusted for the whole loop; reproducer clean on both engines, amplified TestProfilerStackDepth soaked 0 failures in 1512 runs (35 min) |
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
+| net, syscall (wasip1) | WASI preview 1 defines no way to create or connect a socket, so net.Dial on wasip1 could never reach a real network: every dial and listen went to the in-process fake net | #65333, #67673 | 194bcf71 + d85a610b + 27fa0219 + 6eb4bf17 + a3a37b18 | fake network only -> GOWASI=wasmedgesock (default off; build tag wasip1.wasmedgesock; hashed into the build cache key) routes TCP through the WasmEdge socket extension (second-state SDK v0.4.3 ABI): real Dial (IP literals), Listen/Accept, deadlines, concurrency, http.Get and http.Serve end to end; verified by the testdata/wasip1sock wazero reference host (1MB echo round-trip, 8 concurrent conns, HTTP both directions, prompt ECONNREFUSED, read-deadline timeout); default builds stay byte-identical and stock runtimes reject opt-in binaries ('"sock_open" is not exported in module "wasi_snapshot_preview1"'); UDP/DNS/unix sockets stay fake |
 
 ## Remaining shortcomings
 
@@ -198,17 +199,22 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 
 ### wasip1 and stdlib gaps
 
-- P0 class, document (real fix needs wasi-sockets): The fake network remains
-  the DEFAULT on both ports. net.Listen/Dial succeed against an in-memory,
-  process-local network (`src/net/net_fake.go`); listeners are unreachable
-  from outside, dials to real hosts fail ECONNREFUSED, DNS resolves over the
-  same fake net and fails misleadingly, and UDP writes to nonexistent peers
-  still return success while dropping every byte (`src/net/net_fake.go:1113`,
-  unfixed). Escape hatches: GODEBUG=jsfetchnode=1 for HTTP under node (this
-  fork), browser fetch for HTTP on js (upstream), and on wasip1 inherited
-  listeners only - net.FileListener over a host-preopened socket fd with
-  sock_accept; no outbound dial, zero-value remote addresses. Real sockets
-  need wasip2/wasi-sockets (golang/go#65333, #67673, #77141).
+- P0 class, document (portable fix needs wasi-sockets): The fake network
+  remains the DEFAULT on both ports. net.Listen/Dial succeed against an
+  in-memory, process-local network (`src/net/net_fake.go`); listeners are
+  unreachable from outside, dials to real hosts fail ECONNREFUSED, DNS
+  resolves over the same fake net and fails misleadingly, and UDP writes to
+  nonexistent peers still return success while dropping every byte
+  (`src/net/net_fake.go:1113`, unfixed). Escape hatches:
+  GOWASI=wasmedgesock for real TCP on wasip1 (this fork, round 4 - see the
+  table; requires a host implementing the WasmEdge socket extension, such
+  as WasmEdge itself or the testdata/wasip1sock reference host; TCP with
+  IP-literal addresses only), GODEBUG=jsfetchnode=1 for HTTP under node
+  (this fork), browser fetch for HTTP on js (upstream), and on wasip1
+  inherited listeners - net.FileListener over a host-preopened socket fd
+  with sock_accept; zero-value remote addresses. UDP, DNS, and unix
+  sockets stay fake even under wasmedgesock; the portable fix is
+  wasip2/wasi-sockets (golang/go#65333, #67673, #77141).
 - P1, part fork-fixable: wasip1 file metadata is fiction: Chmod/Fchmod
   silently succeed doing nothing (`src/syscall/fs_wasip1.go:711`), stat
   synthesizes 0700/0600 modes and uid/gid 0. Honest ENOSYS for Chmod is a

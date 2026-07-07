@@ -287,6 +287,10 @@ the full catalog of fixes and remaining gaps):
   (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
   backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
   binaries. `runtime/pprof` joined both test lists in the CI wasm job.
+- Round 4 (2026-07-06): `GOWASI=wasmedgesock` (default off) gives wasip1
+  real TCP sockets via the WasmEdge socket extension (Dial, Listen/Accept,
+  deadlines, http.Get/http.Serve); `testdata/wasip1sock` holds the wazero
+  reference host plus the end-to-end tests. Default builds are unchanged.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

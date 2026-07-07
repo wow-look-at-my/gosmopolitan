@@ -674,6 +674,10 @@ Architecture-specific environment variables:
 	GOWASM
 		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
 		Valid values are satconv, signext, tailcall.
+	GOWASI
+		For GOOS=wasip1, comma-separated list of WASI host extensions to use.
+		Valid values are wasmedgesock (the WasmEdge socket extension,
+		which enables real TCP networking on hosts implementing it).
 
 Environment variables for use with code coverage:
 
@@ -979,6 +983,8 @@ The defined architecture feature build tags are:
 	- For GOARCH=wasm, GOWASM=satconv, signext and tailcall
 	  correspond to the wasm.satconv, wasm.signext and wasm.tailcall
 	  feature build tags.
+	- For GOOS=wasip1, GOWASI=wasmedgesock corresponds to the
+	  wasip1.wasmedgesock feature build tag.
 
 For GOARCH=amd64, arm, ppc64, ppc64le, and riscv64, a particular feature level
 sets the feature build tags for all previous levels as well.
