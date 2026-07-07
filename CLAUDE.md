@@ -287,7 +287,11 @@ the full catalog of fixes and remaining gaps):
   (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
   backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
   binaries. `runtime/pprof` joined both test lists in the CI wasm job.
-- Round 4 (2026-07-06): wasm binaries carry DWARF v5 debug info in
+- Round 4 (2026-07-06): `GOWASI=wasmedgesock` (default off) gives wasip1
+  real TCP sockets via the WasmEdge socket extension (Dial, Listen/Accept,
+  deadlines, http.Get/http.Serve); `testdata/wasip1sock` holds the wazero
+  reference host plus the end-to-end tests. Default builds are unchanged.
+  In the same round, wasm binaries gained DWARF v5 debug info in
   `.debug_*` custom sections per the WebAssembly DWARF convention (code
   addresses are byte offsets from the start of the code section's
   contents, the lld/Chrome model): full DIE tree plus statement-level

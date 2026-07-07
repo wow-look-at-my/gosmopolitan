@@ -63,9 +63,9 @@ func fakeAddr(sa sockaddr) fakeSockAddr {
 	}
 }
 
-// socket returns a network file descriptor that is ready for
+// fakeSocket returns a network file descriptor that is ready for
 // I/O using the fake network.
-func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only bool, laddr, raddr sockaddr, ctrlCtxFn func(context.Context, string, string, syscall.RawConn) error) (*netFD, error) {
+func fakeSocket(ctx context.Context, net string, family, sotype, proto int, ipv6only bool, laddr, raddr sockaddr, ctrlCtxFn func(context.Context, string, string, syscall.RawConn) error) (*netFD, error) {
 	if raddr != nil && ctrlCtxFn != nil {
 		return nil, os.NewSyscallError("socket", syscall.ENOTSUP)
 	}

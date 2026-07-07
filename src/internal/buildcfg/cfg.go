@@ -32,6 +32,7 @@ var (
 	GOPPC64   = goppc64()
 	GORISCV64 = goriscv64()
 	GOWASM    = gowasm()
+	GOWASI    = gowasi()
 	ToolTags  = toolTags()
 	GO_LDSO   = defaultGO_LDSO
 	GOFIPS140 = gofips140()
@@ -367,6 +368,36 @@ func gowasm() (f gowasmFeatures) {
 	return
 }
 
+type gowasiFeatures struct {
+	// WasmEdgeSock enables the WasmEdge socket extension to WASI preview 1
+	// (sock_open, sock_connect, and friends imported from the
+	// wasi_snapshot_preview1 module). Off by default: binaries built with
+	// it only instantiate on hosts implementing that extension.
+	WasmEdgeSock bool
+}
+
+func (f gowasiFeatures) String() string {
+	var flags []string
+	if f.WasmEdgeSock {
+		flags = append(flags, "wasmedgesock")
+	}
+	return strings.Join(flags, ",")
+}
+
+func gowasi() (f gowasiFeatures) {
+	for opt := range strings.SplitSeq(envOr("GOWASI", ""), ",") {
+		switch opt {
+		case "wasmedgesock":
+			f.WasmEdgeSock = true
+		case "":
+			// ignore
+		default:
+			Error = fmt.Errorf("invalid GOWASI: no such feature %q", opt)
+		}
+	}
+	return
+}
+
 func Getgoextlinkenabled() string {
 	return envOr("GO_EXTLINK_ENABLED", defaultGO_EXTLINK_ENABLED)
 }
@@ -374,7 +405,24 @@ func Getgoextlinkenabled() string {
 func toolTags() []string {
 	tags := experimentTags()
 	tags = append(tags, gogoarchTags()...)
+	tags = append(tags, gogoosTags()...)
 	return tags
+}
+
+// gogoosTags returns the GOOS-specific feature build tags, in the same
+// shape as the GOARCH-specific tags from gogoarchTags: the GOOS name,
+// a dot, and the feature name. For example, GOOS=wasip1 with
+// GOWASI=wasmedgesock defines the wasip1.wasmedgesock build tag.
+func gogoosTags() []string {
+	switch GOOS {
+	case "wasip1":
+		var list []string
+		if GOWASI.WasmEdgeSock {
+			list = append(list, GOOS+".wasmedgesock")
+		}
+		return list
+	}
+	return nil
 }
 
 func experimentTags() []string {

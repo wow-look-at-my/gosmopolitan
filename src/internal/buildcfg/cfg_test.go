@@ -106,6 +106,26 @@ func TestGowasm(t *testing.T) {
 	os.Unsetenv("GOWASM")
 }
 
+func TestGowasi(t *testing.T) {
+	os.Setenv("GOWASI", "")
+	if f := gowasi(); f.WasmEdgeSock {
+		t.Errorf("Wrong parsing of GOWASI=: wasmedgesock enabled")
+	}
+	os.Setenv("GOWASI", "wasmedgesock")
+	if f := gowasi(); !f.WasmEdgeSock {
+		t.Errorf("Wrong parsing of GOWASI=wasmedgesock")
+	} else if s := f.String(); s != "wasmedgesock" {
+		t.Errorf("gowasiFeatures.String() = %q, want %q", s, "wasmedgesock")
+	}
+	Error = nil
+	os.Setenv("GOWASI", "wasmedgesocks")
+	if gowasi(); Error == nil {
+		t.Errorf("Wrong parsing of GOWASI=wasmedgesocks")
+	}
+	Error = nil
+	os.Unsetenv("GOWASI")
+}
+
 func TestGoarm64FeaturesSupports(t *testing.T) {
 	g, _ := ParseGoarm64("v9.3")
 

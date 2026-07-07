@@ -370,6 +370,14 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 		key, val, _ := cfg.GetArchEnv()
 		fmt.Fprintf(h, "%s=%s\n", key, val)
 
+		// GOWASI, when the target operating system has such a variable.
+		// Only hashed when set to a non-default value, so that default
+		// builds keep the exact action IDs (and therefore build IDs)
+		// they had before the variable existed.
+		if key, val, _ := cfg.GetOSEnv(); key != "" && val != "" {
+			fmt.Fprintf(h, "%s=%s\n", key, val)
+		}
+
 		if cfg.CleanGOEXPERIMENT != "" {
 			fmt.Fprintf(h, "GOEXPERIMENT=%q\n", cfg.CleanGOEXPERIMENT)
 		}
@@ -1560,6 +1568,14 @@ func (b *Builder) printLinkerConfig(h io.Writer, p *load.Package) {
 		// GOARM, GOMIPS, etc.
 		key, val, _ := cfg.GetArchEnv()
 		fmt.Fprintf(h, "%s=%s\n", key, val)
+
+		// GOWASI, when the target operating system has such a variable.
+		// Only hashed when set to a non-default value, so that default
+		// builds keep the exact action IDs (and therefore build IDs)
+		// they had before the variable existed.
+		if key, val, _ := cfg.GetOSEnv(); key != "" && val != "" {
+			fmt.Fprintf(h, "%s=%s\n", key, val)
+		}
 
 		if cfg.CleanGOEXPERIMENT != "" {
 			fmt.Fprintf(h, "GOEXPERIMENT=%q\n", cfg.CleanGOEXPERIMENT)
