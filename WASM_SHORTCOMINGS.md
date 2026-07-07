@@ -26,6 +26,7 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 
 | Area | Problem | Upstream ref | Commit | Before -> after |
 |---|---|---|---|---|
+| cmd/compile, cmd/link | No DWARF was ever emitted for wasm: the compiler forced -dwarf=false and the linker skipped generation wholesale, so binaries carried zero source-level debug info; separately, the name section was written after the producers section, which made every Go wasm module unreadable by the whole llvm-* tool family | none verified | 544a8bba..c53f8dad | zero .debug_* sections -> DWARF v5 emitted as .debug_* custom sections per the WebAssembly DWARF convention (code addresses are byte offsets from the start of the code section's contents, the same base lld and Chrome DevTools use): full DIE tree plus statement-level line tables, `llvm-dwarfdump --verify` clean on both ports; on by default (~+39% file size), stripped by -ldflags=-w; bonus fix: the name section now precedes producers per the tool conventions, so llvm-* tools accept Go wasm modules at all |
 | Scheduler | Nothing ever preempted a running goroutine on wasm: no sysmon, no signals, cooperative arming never fired with one M. A CPU-bound loop starved every timer, the GC, and all other goroutines forever | #60857, #71134, #10958, #36365 | aa31fde9 | tight loop hangs program -> loop backedges test a per-g guard; timers fire, GC completes, other goroutines run |
 | Scheduler | GOMAXPROCS=2 in the environment (not the API) crashed at startup with "newosproc: not implemented" | none verified | c7590070 | startup throw -> clamped to 1 like the API path |
 | Scheduler | Deadlock while a js.FuncOf callback is blocked printed only the generic message | #34478, #65773 | d42a1c3b | bare "all goroutines are asleep" -> two-line note explaining the frozen JS event loop |
@@ -177,15 +178,19 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   wazero 1.12 rejects such modules at compile time ("feature tail-call is
   disabled") and its CLI has no flag to enable it. Revisit the default
   when wazero catches up.
-- P2, fork-fixable (bounded): No DWARF is ever emitted for wasm
-  (`src/cmd/link/internal/ld/dwarf.go:1720`) and no debugger supports the
-  port. Round 3 made `go tool objdump`/`nm`/`addr2line` work on wasm (see
-  the table), so static inspection exists, but debugging remains
-  name-section stack traces - no source-level stepping. The name section
-  is on by default and costs hundreds of KB; `-ldflags=-s` strips it
-  (worth documenting; a wasm-opt -Oz pass typically shaves another
-  10-20%; the fork's objdump still works on stripped binaries via the
-  pclntab).
+- P2, fork-fixable (residual; DWARF emission itself landed round 4, see
+  the table): wasm DWARF variable locations are placeholders. Variable
+  DIEs carry names, types, and declaration positions, but their location
+  expressions are CFA-relative stack offsets with no .debug_frame to
+  define a CFA (wasm has no machine registers, so there is no register
+  mapping and location lists stay off); consumers can walk the DIE tree
+  and step by line but cannot print variable values. Faithful locations
+  need DW_OP_WASM_location expressions describing wasm locals and Go's
+  linear-memory pseudo-registers. Also: the emitted address_size is 8
+  (wasm PtrSize; clang emits 4 for wasm32) - every llvm tool accepts 8,
+  but the Chrome DevTools C/C++ debugging extension is unverified end to
+  end against it. go test binaries omit DWARF by design (cmd/go's
+  OmitDebug path - they are throwaway host-run artifacts).
 - P2, fork-fixable: Codegen perf leftovers (round 2 fixed the two big ones,
   int64 division and the atomics - see the table): non-provably-bounded
   shifts pay a bounds Select; everything is widened to i64 with wrap/extend
