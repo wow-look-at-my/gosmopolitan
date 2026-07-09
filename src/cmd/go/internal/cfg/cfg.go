@@ -223,6 +223,7 @@ func ForceHost() {
 	GOPPC64 = buildcfg.DefaultGOPPC64
 	GORISCV64 = buildcfg.DefaultGORISCV64
 	GOWASM = ""
+	GOWASI = ""
 
 	// Recompute the build context using Goos and Goarch to
 	// set the correct value for ctx.CgoEnabled.
@@ -474,6 +475,7 @@ var (
 	GOPPC64, goPPC64Changed     = EnvOrAndChanged("GOPPC64", buildcfg.DefaultGOPPC64)
 	GORISCV64, goRISCV64Changed = EnvOrAndChanged("GORISCV64", buildcfg.DefaultGORISCV64)
 	GOWASM, goWASMChanged       = EnvOrAndChanged("GOWASM", fmt.Sprint(buildcfg.GOWASM))
+	GOWASI, goWASIChanged       = EnvOrAndChanged("GOWASI", fmt.Sprint(buildcfg.GOWASI))
 
 	GOFIPS140, GOFIPS140Changed = EnvOrAndChanged("GOFIPS140", buildcfg.DefaultGOFIPS140)
 	GOPROXY, GOPROXYChanged     = EnvOrAndChanged("GOPROXY", "")
@@ -528,6 +530,18 @@ func GetArchEnv() (key, val string, changed bool) {
 		return "GORISCV64", GORISCV64, goRISCV64Changed
 	case "wasm":
 		return "GOWASM", GOWASM, goWASMChanged
+	}
+	return "", "", false
+}
+
+// GetOSEnv returns the name and setting of the
+// GOOS-specific operating system environment variable.
+// If the current operating system has no GOOS-specific variable,
+// GetOSEnv returns empty key and value.
+func GetOSEnv() (key, val string, changed bool) {
+	switch Goos {
+	case "wasip1":
+		return "GOWASI", GOWASI, goWASIChanged
 	}
 	return "", "", false
 }

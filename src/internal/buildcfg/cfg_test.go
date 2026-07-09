@@ -78,6 +78,54 @@ func TestConfigFlags(t *testing.T) {
 	}
 }
 
+func TestGowasm(t *testing.T) {
+	os.Setenv("GOWASM", "")
+	if f := gowasm(); f.TailCall {
+		t.Errorf("Wrong parsing of GOWASM=: tailcall enabled")
+	}
+	os.Setenv("GOWASM", "tailcall")
+	if f := gowasm(); !f.TailCall {
+		t.Errorf("Wrong parsing of GOWASM=tailcall")
+	} else if s := f.String(); s != "tailcall" {
+		t.Errorf("gowasmFeatures.String() = %q, want %q", s, "tailcall")
+	}
+	os.Setenv("GOWASM", "satconv,signext,tailcall")
+	if f := gowasm(); !f.TailCall {
+		t.Errorf("Wrong parsing of GOWASM=satconv,signext,tailcall")
+	}
+	os.Setenv("GOWASM", "satconv")
+	if f := gowasm(); f.String() != "" {
+		t.Errorf("gowasmFeatures.String() for legacy features = %q, want %q", f.String(), "")
+	}
+	Error = nil
+	os.Setenv("GOWASM", "tailcalls")
+	if gowasm(); Error == nil {
+		t.Errorf("Wrong parsing of GOWASM=tailcalls")
+	}
+	Error = nil
+	os.Unsetenv("GOWASM")
+}
+
+func TestGowasi(t *testing.T) {
+	os.Setenv("GOWASI", "")
+	if f := gowasi(); f.WasmEdgeSock {
+		t.Errorf("Wrong parsing of GOWASI=: wasmedgesock enabled")
+	}
+	os.Setenv("GOWASI", "wasmedgesock")
+	if f := gowasi(); !f.WasmEdgeSock {
+		t.Errorf("Wrong parsing of GOWASI=wasmedgesock")
+	} else if s := f.String(); s != "wasmedgesock" {
+		t.Errorf("gowasiFeatures.String() = %q, want %q", s, "wasmedgesock")
+	}
+	Error = nil
+	os.Setenv("GOWASI", "wasmedgesocks")
+	if gowasi(); Error == nil {
+		t.Errorf("Wrong parsing of GOWASI=wasmedgesocks")
+	}
+	Error = nil
+	os.Unsetenv("GOWASI")
+}
+
 func TestGoarm64FeaturesSupports(t *testing.T) {
 	g, _ := ParseGoarm64("v9.3")
 

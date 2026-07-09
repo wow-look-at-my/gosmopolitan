@@ -185,7 +185,7 @@ func (e *timeoutEvent) diff(x int64) int64 {
 		return 0
 	}
 
-	diff := x - idleTimeout.time
+	diff := x - e.time
 	if diff < 0 {
 		diff = -diff
 	}
@@ -203,6 +203,13 @@ func (e *timeoutEvent) clear() {
 
 // The timeout event started by beforeIdle.
 var idleTimeout *timeoutEvent
+
+// The weak timeout event started by beforeIdle for the next periodic forced
+// GC when the program has no other wake source (see wasmForceGCCheck in
+// proc.go). Weak timeouts do not keep the host's event loop alive, so a
+// pending nudge neither prevents the program from exiting nor masks deadlock
+// detection.
+var idleGCNudge *timeoutEvent
 
 // beforeIdle gets called by the scheduler if no goroutine is awake.
 // If we are not already handling an event, then we pause for an async event.
@@ -234,6 +241,37 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 		}
 	}
 
+	if pollUntil == 0 && eventHandler != nil {
+		// The program has no timer to wake it, so findRunnable's cap on the
+		// idle sleep (see wasmForceGCDeadline in proc.go) does not apply and
+		// nothing would wake it for the next periodic forced GC. Arm a weak
+		// timeout for that deadline: it resumes the runtime like a regular
+		// timeout event, but does not keep the host's event loop alive, so
+		// a program that is deadlocked rather than idle still exits and the
+		// exit-time deadlock probe still fires. Without an eventHandler
+		// (syscall/js not linked) no event can be handled, so no nudge.
+		if deadline := wasmForceGCDeadline(); deadline != 0 && (idleGCNudge == nil || idleGCNudge.diff(deadline) > 1e6) {
+			idleGCNudge.clear()
+
+			if now == 0 {
+				// With no timers, findRunnable's timers.check never
+				// computed the current time.
+				now = nanotime()
+			}
+			nudgeDelay := (deadline-now-1)/1e6 + 1 // round up like the timer delay above
+			if nudgeDelay < 1 {
+				nudgeDelay = 1
+			}
+			if nudgeDelay > 1e9 {
+				nudgeDelay = 1e9
+			}
+			idleGCNudge = &timeoutEvent{
+				id:   scheduleWeakTimeoutEvent(nudgeDelay),
+				time: deadline,
+			}
+		}
+	}
+
 	if len(events) == 0 {
 		// TODO: this is the line that requires the yeswritebarrierrec
 		go handleAsyncEvent()
@@ -260,13 +298,28 @@ func clearIdleTimeout() {
 	idleTimeout = nil
 }
 
+// clearIdleGCNudge clears our record of the forced-GC nudge started by beforeIdle.
+func clearIdleGCNudge() {
+	idleGCNudge.clear()
+	idleGCNudge = nil
+}
+
 // scheduleTimeoutEvent tells the WebAssembly environment to trigger an event after ms milliseconds.
 // It returns a timer id that can be used with clearTimeoutEvent.
 //
 //go:wasmimport gojs runtime.scheduleTimeoutEvent
 func scheduleTimeoutEvent(ms int64) int32
 
-// clearTimeoutEvent clears a timeout event scheduled by scheduleTimeoutEvent.
+// scheduleWeakTimeoutEvent is like scheduleTimeoutEvent, except that the
+// scheduled timeout does not keep the host's event loop alive (on Node.js it
+// is unref'd; browsers have no such notion). The environment can exit while
+// it is pending.
+//
+//go:wasmimport gojs runtime.scheduleWeakTimeoutEvent
+func scheduleWeakTimeoutEvent(ms int64) int32
+
+// clearTimeoutEvent clears a timeout event scheduled by scheduleTimeoutEvent
+// or scheduleWeakTimeoutEvent.
 //
 //go:wasmimport gojs runtime.clearTimeoutEvent
 func clearTimeoutEvent(id int32)
@@ -284,9 +337,33 @@ func handleEvent() {
 	}
 	events = append(events, e)
 
-	if !eventHandler() {
-		// If we did not handle a window event, the idle timeout was triggered, so we can clear it.
+	if eventHandler == nil {
+		// The program does not link in syscall/js, so setEventHandler was
+		// never called and this event cannot be handled. The only source of
+		// such an event is the host probing for a deadlock: wasm_exec_node.js
+		// resumes the program with a synthetic event when Node.js's event
+		// loop runs dry while the program is still running. Park this
+		// goroutine forever with the event unreturned: beforeIdle then cannot
+		// return to JavaScript, so the scheduler falls through to checkdead
+		// and reports the deadlock, instead of crashing on a nil eventHandler
+		// call. See go.dev/issue/70869.
+		//
+		// Since this event is the deadlock probe, record that so that
+		// deadlockOSHint does not misattribute the deadlock to a blocked
+		// js.FuncOf callback (no such callback can exist without syscall/js).
+		deadlockProbeActive = true
 		clearIdleTimeout()
+		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
+		throw("unreachable") // gopark above never returns
+	}
+
+	if !eventHandler() {
+		// If we did not handle a window event, a timeout (the idle timeout
+		// or the forced-GC nudge) was triggered, so we can clear it. We
+		// cannot tell which one fired; clearing both is safe, since each is
+		// re-armed by beforeIdle on the next idle pass if still needed.
+		clearIdleTimeout()
+		clearIdleGCNudge()
 	}
 
 	// wait until all goroutines are idle
@@ -308,4 +385,33 @@ var eventHandler func() bool
 //go:linkname setEventHandler syscall/js.setEventHandler
 func setEventHandler(fn func() bool) {
 	eventHandler = fn
+}
+
+// deadlockProbeActive reports whether the JavaScript environment injected its
+// exit-time deadlock probe (the pending event with id 0, see wasm_exec_node.js).
+// The probe's handler parks itself inside an event, so it must be discounted
+// when deciding whether a user callback is blocked.
+var deadlockProbeActive bool
+
+// deadlockProbe is called by syscall/js.handleEvent when it receives the
+// environment's deadlock probe event (id 0).
+//
+//go:linkname deadlockProbe syscall/js.deadlockProbe
+func deadlockProbe() {
+	deadlockProbeActive = true
+}
+
+// deadlockOSHint prints js-specific context just before checkdead's
+// "all goroutines are asleep" fatal error.
+func deadlockOSHint() {
+	n := len(events)
+	if deadlockProbeActive {
+		// The environment's deadlock probe parks inside an event of its
+		// own; it is not a user callback.
+		n--
+	}
+	if n > 0 {
+		print("runtime: note: a goroutine is blocked in a call from JavaScript (js.FuncOf callback) that has not returned\n")
+		print("runtime: the JavaScript event loop cannot run until the callback returns, so no JavaScript event or callback can unblock it\n")
+	}
 }

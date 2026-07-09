@@ -1,15 +1,18 @@
-# Build the Go toolchain
-build:
-    cd src && ./make.bash
+set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Build APE binary and run bats tests
-test:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    git submodule update --init --recursive
-    export PATH="$PWD/bin:$PATH"
-    rm -f fizzbuzz.com
-    GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
-    chmod +x fizzbuzz.com
-    export FIZZBUZZ_BIN="$PWD/fizzbuzz.com"
-    bats --print-output-on-failure testdata/fizzbuzz/fizzbuzz.bats
+mod env
+
+# Required tools
+export READELF := require("readelf")
+export OTOOL := require("otool")
+HOST_GO := require("go")
+
+# Test binary paths
+export FIZZBUZZ_BIN := justfile_directory() / "fizzbuzz-test.com"
+
+# Build the Go toolchain
+build: env::build
+
+# Build APE binary and run tests (rebuilds toolchain if not on CI)
+test: env::_maybe-build env::build-fizzbuzz
+    cd testdata/ape/apetest && GOOS= GOARCH= GOROOT= {{HOST_GO}} test -v ./...

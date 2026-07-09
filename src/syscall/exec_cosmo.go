@@ -84,10 +84,28 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		i      int
 	)
 
+	// Guard against side effects of shuffling fds below.
+	// Make sure that nextfd is beyond any currently open files so
+	// that we can't run the risk of overwriting any of them.
+	// A nil entry in ProcAttr.Files becomes ^uintptr(0), which is -1
+	// as an int and means "leave that fd closed in the child".
+	fd := make([]int, len(attr.Files))
+	nextfd = len(attr.Files)
+	for i, ufd := range attr.Files {
+		if nextfd < int(ufd) {
+			nextfd = int(ufd)
+		}
+		fd[i] = int(ufd)
+	}
+	nextfd++
+
 	// About to call fork.
 	// No more allocation or calls of non-assembly functions.
 	runtime_BeforeFork()
-	r1, _, err1 = RawSyscall(SYS_FORK, 0, 0, 0)
+	// Use clone with SIGCHLD to emulate fork. This works on both amd64 (which
+	// has SYS_FORK) and arm64 (which only has SYS_CLONE). Using clone ensures
+	// portability across architectures.
+	r1, err1 = rawVforkSyscall(SYS_CLONE, uintptr(SIGCHLD), 0, 0)
 	if err1 != 0 {
 		runtime_AfterFork()
 		return 0, err1
@@ -158,7 +176,7 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		}
 	}
 
-	// Pass 1: look for fd[i] < i and move those up above len(googfd)
+	// Pass 1: look for fd[i] < i and move those up above len(fd)
 	// so that pass 2 won't stomp on an fd it needs later.
 	if pipe < nextfd {
 		_, _, err1 = RawSyscall(SYS_DUP3, uintptr(pipe), uintptr(nextfd), O_CLOEXEC)
@@ -168,42 +186,48 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		pipe = nextfd
 		nextfd++
 	}
-	for i = 0; i < len(attr.Files); i++ {
-		if int(attr.Files[i]) < i {
+	for i = 0; i < len(fd); i++ {
+		if fd[i] >= 0 && fd[i] < i {
 			if nextfd == pipe { // don't stomp on pipe
 				nextfd++
 			}
-			_, _, err1 = RawSyscall(SYS_DUP3, attr.Files[i], uintptr(nextfd), O_CLOEXEC)
+			_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(nextfd), O_CLOEXEC)
 			if err1 != 0 {
 				goto childerror
 			}
-			attr.Files[i] = uintptr(nextfd)
+			fd[i] = nextfd
 			nextfd++
 		}
 	}
 
 	// Pass 2: dup fd[i] down onto i.
-	for i = 0; i < len(attr.Files); i++ {
-		if attr.Files[i] == uintptr(i) {
+	for i = 0; i < len(fd); i++ {
+		if fd[i] == -1 {
+			RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
+			continue
+		}
+		if fd[i] == i {
 			// dup2(i, i) won't clear close-on-exec flag on Linux,
 			// probably not elsewhere either.
-			_, _, err1 = RawSyscall(SYS_FCNTL, attr.Files[i], F_SETFD, 0)
+			_, _, err1 = RawSyscall(SYS_FCNTL, uintptr(fd[i]), F_SETFD, 0)
 			if err1 != 0 {
 				goto childerror
 			}
 			continue
 		}
-		// The new fd is created NOT close-on-exec.
-		_, _, err1 = RawSyscall(SYS_DUP3, attr.Files[i], uintptr(i), 0)
+		// The new fd is created NOT close-on-exec,
+		// which is exactly what we want.
+		_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(i), 0)
 		if err1 != 0 {
 			goto childerror
 		}
 	}
 
 	// By convention, we don't close-on-exec the fds we are
-	// started with, so if the caller sets that up,
-	// we have to clean up afterwards.
-	for i = len(attr.Files); i < 3; i++ {
+	// started with, so if len(fd) < 3, close 0, 1, 2 as needed.
+	// Programs that know they inherit fds >= 3 will need
+	// to set them close-on-exec.
+	for i = len(fd); i < 3; i++ {
 		RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
 	}
 

@@ -150,6 +150,11 @@ func MkEnv() []cfg.EnvVar {
 		env = append(env, cfg.EnvVar{Name: goarch, Value: val, Changed: changed})
 	}
 
+	goos, val, changed := cfg.GetOSEnv()
+	if goos != "" {
+		env = append(env, cfg.EnvVar{Name: goos, Value: val, Changed: changed})
+	}
+
 	cc := cfg.Getenv("CC")
 	ccChanged := true
 	if cc == "" {

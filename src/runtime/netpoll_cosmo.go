@@ -12,6 +12,11 @@ import (
 	"unsafe"
 )
 
+// This file holds the epoll poller used on Linux hosts. Every entry
+// point dispatches at run time on the host OS: macOS has no epoll, so
+// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead.
+// Exactly one of the two is ever initialized in a given process.
+
 var (
 	epfd           int32         = -1 // epoll descriptor
 	netpollEventFd uintptr            // eventfd for netpollBreak
@@ -19,6 +24,10 @@ var (
 )
 
 func netpollinit() {
+	if isdarwin() {
+		netpollinitDarwin()
+		return
+	}
 	var errno uintptr
 	epfd, errno = cosmo.EpollCreate1(cosmo.EPOLL_CLOEXEC)
 	if errno != 0 {
@@ -43,10 +52,16 @@ func netpollinit() {
 }
 
 func netpollIsPollDescriptor(fd uintptr) bool {
+	if isdarwin() {
+		return netpollIsPollDescriptorDarwin(fd)
+	}
 	return fd == uintptr(epfd) || fd == netpollEventFd
 }
 
 func netpollopen(fd uintptr, pd *pollDesc) uintptr {
+	if isdarwin() {
+		return netpollopenDarwin(fd, pd)
+	}
 	var ev cosmo.EpollEvent
 	ev.Events = cosmo.EPOLLIN | cosmo.EPOLLOUT | cosmo.EPOLLRDHUP | cosmo.EPOLLET
 	tp := taggedPointerPack(unsafe.Pointer(pd), pd.fdseq.Load())
@@ -55,18 +70,32 @@ func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 }
 
 func netpollclose(fd uintptr) uintptr {
+	if isdarwin() {
+		return netpollcloseDarwin(fd)
+	}
 	var ev cosmo.EpollEvent
 	return cosmo.EpollCtl(epfd, cosmo.EPOLL_CTL_DEL, int32(fd), &ev)
 }
 
+// netpollarm is never called: both pollers are edge-triggered and arm
+// once at netpollopen (netpollLevelTriggered stays false).
 func netpollarm(pd *pollDesc, mode int) {
+	if isdarwin() {
+		netpollarmDarwin(pd, mode)
+		return
+	}
 	throw("runtime: unused")
 }
 
-// netpollBreak interrupts an epollwait.
+// netpollBreak interrupts an epollwait (or, on XNU hosts, a kevent).
 func netpollBreak() {
 	// Failing to cas indicates there is an in-flight wakeup, so we're done here.
 	if !netpollWakeSig.CompareAndSwap(0, 1) {
+		return
+	}
+
+	if isdarwin() {
+		netpollBreakDarwin()
 		return
 	}
 
@@ -97,6 +126,9 @@ func netpollBreak() {
 // delay == 0: does not block, just polls
 // delay > 0: block for up to that many nanoseconds
 func netpoll(delay int64) (gList, int32) {
+	if isdarwin() {
+		return netpollDarwin(delay)
+	}
 	if epfd == -1 {
 		return gList{}, 0
 	}

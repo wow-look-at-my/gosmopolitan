@@ -43,6 +43,10 @@ const (
 	AReturn
 	ACall
 	ACallIndirect
+	// AReturnCall is the tail-call proposal's return_call instruction.
+	// It is only emitted with GOWASM=tailcall; not every runtime supports
+	// it. (return_call_indirect, opcode 0x13, is currently unused.)
+	AReturnCall // opcode 0x12
 
 	ADrop // opcode 0x1A
 	ASelect

@@ -9,7 +9,6 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
-	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -17,23 +16,6 @@ import (
 // sigPerThreadSyscall is the same signal (SIGSETXID) used by glibc for
 // per-thread syscalls. We use it for the same purpose.
 const sigPerThreadSyscall = _SIGRTMIN + 1
-
-type mOS struct {
-	// profileTimer holds the ID of the POSIX interval timer for profiling CPU
-	// usage on this thread.
-	//
-	// It is valid when the profileTimerValid field is true. A thread
-	// creates and manages its own timer, and these fields are read and written
-	// only by this thread.
-	profileTimer      int32
-	profileTimerValid atomic.Bool
-
-	// needPerThreadSyscall indicates that a per-thread syscall is required
-	// for doAllThreadsSyscall.
-	needPerThreadSyscall atomic.Uint8
-
-	waitsema uint32 // semaphore for parking on locks
-}
 
 // Cosmopolitan uses Linux futex.
 //
@@ -80,6 +62,15 @@ func futexwakeup(addr *uint32, cnt uint32) {
 }
 
 func getCPUCount() int32 {
+	if isdarwin() {
+		// sched_getaffinity is Linux-only; on macOS ask the host
+		// via sysctl (arm64 Syslib). Without this every macOS run
+		// was pinned to GOMAXPROCS=1.
+		if n := cosmoDarwinNumCPU(); n > 0 {
+			return n
+		}
+		return 1
+	}
 	// Use a conservative default. On Cosmopolitan, the actual CPU count
 	// is determined at runtime based on the host OS.
 	const maxCPUs = 64 * 1024
@@ -249,6 +240,7 @@ func sysauxv(auxv []uintptr) (pairs int) {
 }
 
 func osinit() {
+	osArchInit()
 	numCPUStartup = getCPUCount()
 }
 
@@ -288,8 +280,10 @@ func gettid() uint32
 // Called on the new thread, cannot allocate memory.
 func minit() {
 	minitSignals()
-
-	getg().m.procid = uint64(gettid())
+	// minitProcid is per-arch: on macOS hosts (arm64) procid must hold
+	// the FULL pthread_t for pthread_kill - gettid's uint32 return
+	// would truncate the pointer; on Linux hosts it is the tid.
+	getg().m.procid = minitProcid()
 }
 
 // Called from dropm to undo the effect of an minit.
@@ -313,8 +307,9 @@ func sigreturn__sigaction()
 func sigtramp()
 func cgoSigtramp()
 
-//go:noescape
-func sigaltstack(new, old *stackt)
+// sigaltstack is per-arch: on arm64 a Go host dispatcher
+// (signal_cosmo_xnu.go) that translates Apple's stack_t on XNU hosts,
+// on amd64 assembly (macOS-Intel runtime bring-up pending).
 
 //go:noescape
 func setitimer(mode int32, new, old *itimerval)
@@ -325,6 +320,14 @@ func rtsigprocmask(how int32, new, old *sigset, size int32)
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
+	if isdarwin() && GOARCH == "arm64" {
+		// Apple `how` values, sigset width and signal numbering all
+		// differ; darwinSigprocmask (signal_cosmo_xnu.go) translates.
+		// amd64 stays on its raw-XNU asm branch until the Intel-mac
+		// runtime bring-up.
+		darwinSigprocmask(how, new, old)
+		return
+	}
 	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
 }
 
@@ -340,13 +343,10 @@ func osyield_no_g() {
 	osyield()
 }
 
-func pipe2(flags int32) (r, w int32, errno int32)
+// pipe2 is per-arch: assembly on amd64 (os_cosmo_amd64.go), a Go
+// host-dispatching implementation on arm64 (os_cosmo_arm64.go).
 
-//go:nosplit
-func fcntl(fd, cmd, arg int32) (ret int32, errno int32) {
-	r, _, err := cosmo.Syscall6(cosmo.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg), 0, 0, 0)
-	return int32(r), int32(err)
-}
+// fcntl is defined in fcntl_cosmo_amd64.go and fcntl_cosmo_arm64.go
 
 //go:nosplit
 //go:nowritebarrierrec
@@ -395,15 +395,21 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 	*(*uintptr)(unsafe.Pointer(&s.ss_sp)) = sp
 }
 
-//go:nosplit
-func (c *sigctxt) fixsigcode(sig uint32) {
-}
+// fixsigcode is defined per-arch: signal_cosmo_amd64.go (no-op) and
+// signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
-// sysSigaction calls the rt_sigaction system call.
+// sysSigaction calls the rt_sigaction system call (Linux hosts) or the
+// Apple sigaction translation layer (XNU hosts, arm64).
 //
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
-	if rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask)) != 0 {
+	var ret int32
+	if isdarwin() && GOARCH == "arm64" {
+		ret = darwinSigaction(sig, new, old)
+	} else {
+		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
+	}
+	if ret != 0 {
 		if sig != 32 && sig != 33 && sig != 64 {
 			systemstack(func() {
 				throw("sigaction failed")
@@ -428,8 +434,14 @@ func fixSigactionForCgo(new *sigactiont) {
 func getpid() int
 func tgkill(tgid, tid, sig int)
 
-// signalM sends a signal to mp.
+// signalM sends a signal to mp. sig is a LINUX signal number; the
+// darwin path (per-arch darwinSignalM) translates it and signals the
+// thread via pthread_kill with the full pthread_t from m.procid.
 func signalM(mp *m, sig int) {
+	if isdarwin() {
+		darwinSignalM(mp, sig)
+		return
+	}
 	tgkill(getpid(), int(mp.procid), sig)
 }
 
@@ -526,3 +538,11 @@ func runPerThreadSyscall() {
 //
 //go:noescape
 func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 uint32) int32
+
+// cosmoStacksAreSystemAllocated reports whether new OS threads get
+// system-allocated stacks on this host. Only the macOS path (ARM64 via the
+// APE loader's pthread_create) provides them; the Linux clone() path needs
+// Go-allocated stacks.
+func cosmoStacksAreSystemAllocated() bool {
+	return GOARCH == "arm64" && isdarwin()
+}

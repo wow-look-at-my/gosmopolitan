@@ -102,8 +102,20 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagTextAddr = ld.Rnd(0x1000000, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
-	case objabi.Hcosmo, /* cosmopolitan */
-		objabi.Hlinux, /* elf64 executable */
+	case objabi.Hcosmo: /* cosmopolitan */
+		ld.Elfinit(ctxt)
+
+		ld.HEADR = ld.ELFRESERVE
+		if *ld.FlagRound == -1 {
+			*ld.FlagRound = 4096
+		}
+		if *ld.FlagTextAddr == -1 {
+			// Use 0x100000000 (4GB) as base to match macOS Mach-O vmaddr
+			// This allows the same code to work for both ELF and Mach-O
+			*ld.FlagTextAddr = ld.Rnd(0x100000000, *ld.FlagRound) + int64(ld.HEADR)
+		}
+
+	case objabi.Hlinux, /* elf64 executable */
 		objabi.Hfreebsd,   /* freebsd */
 		objabi.Hnetbsd,    /* netbsd */
 		objabi.Hopenbsd,   /* openbsd */

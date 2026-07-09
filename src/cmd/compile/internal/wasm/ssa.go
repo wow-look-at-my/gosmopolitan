@@ -150,6 +150,18 @@ func zeroRange(pp *objw.Progs, p *obj.Prog, off, cnt int64, state *uint32) *obj.
 		base.Fatalf("zerorange count not a multiple of widthptr %d", cnt)
 	}
 
+	if cnt > 32 {
+		// Zero large ranges with a single memory.fill, like the SSA
+		// rules do for Zero values above this size (LoweredZero).
+		p = pp.Append(p, wasm.AGet, obj.TYPE_REG, wasm.REG_SP, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, off, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Add, 0, 0, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, 0, 0, 0, 0)
+		p = pp.Append(p, wasm.AI32Const, obj.TYPE_CONST, 0, cnt, 0, 0, 0)
+		p = pp.Append(p, wasm.AMemoryFill, 0, 0, 0, 0, 0, 0)
+		return p
+	}
+
 	for i := int64(0); i < cnt; i += 8 {
 		p = pp.Append(p, wasm.AGet, obj.TYPE_REG, wasm.REG_SP, 0, 0, 0, 0)
 		p = pp.Append(p, wasm.AI64Const, obj.TYPE_CONST, 0, 0, 0, 0, 0)
@@ -277,6 +289,81 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ir.Syms.GCWriteBarrier[v.AuxInt-1]}
 		setReg(s, v.Reg0()) // move result from wasm stack to register local
 
+	// Atomic memory operations. Wasm is single-threaded, so these are
+	// plain memory operations; nothing can preempt between the
+	// instructions of one op. See the comments in WasmOps.go.
+	case ssa.OpWasmLoweredAtomicLoad8, ssa.OpWasmLoweredAtomicLoad32, ssa.OpWasmLoweredAtomicLoad64:
+		loadOp := wasm.AI64Load
+		switch v.Op {
+		case ssa.OpWasmLoweredAtomicLoad8:
+			loadOp = wasm.AI64Load8U
+		case ssa.OpWasmLoweredAtomicLoad32:
+			loadOp = wasm.AI64Load32U
+		}
+		getValue32(s, v.Args[0])
+		p := s.Prog(loadOp)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		setReg(s, v.Reg0())
+
+	case ssa.OpWasmLoweredAtomicAdd32, ssa.OpWasmLoweredAtomicAdd64:
+		ld, st := wasm.AI64Load32U, wasm.AI64Store32
+		if v.Op == ssa.OpWasmLoweredAtomicAdd64 {
+			ld, st = wasm.AI64Load, wasm.AI64Store
+		}
+		// result = *ptr + val (resultNotInArgs, so the result register
+		// can be written before the arguments are read again)
+		getValue32(s, v.Args[0])
+		p := s.Prog(ld)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		getValue64(s, v.Args[1])
+		s.Prog(wasm.AI64Add)
+		setReg(s, v.Reg0())
+		// *ptr = result
+		getValue32Again(s, v.Args[0])
+		getReg(s, v.Reg0())
+		p = s.Prog(st)
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+
+	case ssa.OpWasmLoweredAtomicExchange32, ssa.OpWasmLoweredAtomicExchange64:
+		ld, st := wasm.AI64Load32U, wasm.AI64Store32
+		if v.Op == ssa.OpWasmLoweredAtomicExchange64 {
+			ld, st = wasm.AI64Load, wasm.AI64Store
+		}
+		// result = *ptr
+		getValue32(s, v.Args[0])
+		p := s.Prog(ld)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		setReg(s, v.Reg0())
+		// *ptr = val
+		getValue32Again(s, v.Args[0])
+		getValue64(s, v.Args[1])
+		p = s.Prog(st)
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+
+	case ssa.OpWasmLoweredAtomicCas32, ssa.OpWasmLoweredAtomicCas64:
+		ld, st := wasm.AI64Load32U, wasm.AI64Store32
+		if v.Op == ssa.OpWasmLoweredAtomicCas64 {
+			ld, st = wasm.AI64Load, wasm.AI64Store
+		}
+		// result = *ptr == old (for Cas32 the lowering rule
+		// zero-extended old, matching the zero-extending load)
+		getValue32(s, v.Args[0])
+		p := s.Prog(ld)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		getValue64(s, v.Args[1])
+		s.Prog(wasm.AI64Eq)
+		s.Prog(wasm.AI64ExtendI32U)
+		setReg(s, v.Reg0())
+		// if result { *ptr = new }
+		getReg(s, v.Reg0())
+		s.Prog(wasm.AI32WrapI64)
+		s.Prog(wasm.AIf)
+		getValue32Again(s, v.Args[0])
+		getValue64(s, v.Args[2])
+		p = s.Prog(st)
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		s.Prog(wasm.AEnd)
+
 	case ssa.OpWasmI64Store8, ssa.OpWasmI64Store16, ssa.OpWasmI64Store32, ssa.OpWasmI64Store, ssa.OpWasmF32Store, ssa.OpWasmF64Store:
 		getValue32(s, v.Args[0])
 		getValue64(s, v.Args[1])
@@ -381,6 +468,21 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 		p := s.Prog(v.Op.Asm())
 		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
 
+	case ssa.OpWasmLoweredPreemptCheck:
+		// if sp32 < low32(*(arg1+auxint)), all 32-bit ops:
+		//   Get SP; Get g; I32WrapI64; I32Load auxint; I32LtU
+		// The result is left on the stack as an i32, like the
+		// comparison ops (isCmp reports true for this op), so as the
+		// control of the backedge If it compiles to a bare br_if.
+		getValue32(s, v.Args[0])
+		getValue32(s, v.Args[1])
+		p := s.Prog(wasm.AI32Load)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: v.AuxInt}
+		s.Prog(wasm.AI32LtU)
+		if extend {
+			s.Prog(wasm.AI64ExtendI32U)
+		}
+
 	case ssa.OpWasmI64Eqz:
 		getValue64(s, v.Args[0])
 		s.Prog(v.Op.Asm())
@@ -412,14 +514,12 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 		s.Prog(wasm.AI64ExtendI32U)
 
 	case ssa.OpWasmI64DivS:
+		// The lowering of Div64 guarantees the divisor is never -1 here
+		// (see Wasm.rules), so i64.div_s cannot hit its MinInt64/-1 trap.
+		// The narrower divisions sign-extend their operands, so their
+		// dividend can never be MinInt64 in the first place.
 		getValue64(s, v.Args[0])
 		getValue64(s, v.Args[1])
-		if v.Type.Size() == 8 {
-			// Division of int64 needs helper function wasmDiv to handle the MinInt64 / -1 case.
-			p := s.Prog(wasm.ACall)
-			p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ir.Syms.WasmDiv}
-			break
-		}
 		s.Prog(wasm.AI64DivS)
 
 	case ssa.OpWasmI64TruncSatF32S, ssa.OpWasmI64TruncSatF64S:
@@ -460,9 +560,12 @@ func ssaGenValueOnStack(s *ssagen.State, v *ssa.Value, extend bool) {
 	}
 }
 
+// isCmp reports whether v leaves an i32 (rather than an i64) on the wasm
+// stack when generated inline.
 func isCmp(v *ssa.Value) bool {
 	switch v.Op {
-	case ssa.OpWasmI64Eqz, ssa.OpWasmI64Eq, ssa.OpWasmI64Ne, ssa.OpWasmI64LtS, ssa.OpWasmI64LtU, ssa.OpWasmI64GtS, ssa.OpWasmI64GtU, ssa.OpWasmI64LeS, ssa.OpWasmI64LeU, ssa.OpWasmI64GeS, ssa.OpWasmI64GeU,
+	case ssa.OpWasmLoweredPreemptCheck,
+		ssa.OpWasmI64Eqz, ssa.OpWasmI64Eq, ssa.OpWasmI64Ne, ssa.OpWasmI64LtS, ssa.OpWasmI64LtU, ssa.OpWasmI64GtS, ssa.OpWasmI64GtU, ssa.OpWasmI64LeS, ssa.OpWasmI64LeU, ssa.OpWasmI64GeS, ssa.OpWasmI64GeU,
 		ssa.OpWasmF32Eq, ssa.OpWasmF32Ne, ssa.OpWasmF32Lt, ssa.OpWasmF32Gt, ssa.OpWasmF32Le, ssa.OpWasmF32Ge,
 		ssa.OpWasmF64Eq, ssa.OpWasmF64Ne, ssa.OpWasmF64Lt, ssa.OpWasmF64Gt, ssa.OpWasmF64Le, ssa.OpWasmF64Ge:
 		return true
@@ -486,6 +589,20 @@ func getValue32(s *ssagen.State, v *ssa.Value) {
 	if reg != wasm.REG_SP {
 		s.Prog(wasm.AI32WrapI64)
 	}
+}
+
+// getValue32Again pushes v a second time. If v is on the wasm stack it has
+// already been generated inline at its first read, so generate it inline
+// once more, balancing the skip counter for the extra materialization.
+// This is only correct for pure values. The atomic ops this is used for can
+// only see rematerializeable values as OnWasmStack arguments (regalloc
+// keeps their other arguments out of the wasm stack marking), and those
+// are pure by definition.
+func getValue32Again(s *ssagen.State, v *ssa.Value) {
+	if v.OnWasmStack {
+		s.OnWasmStackSkipped++
+	}
+	getValue32(s, v)
 }
 
 func getValue64(s *ssagen.State, v *ssa.Value) {

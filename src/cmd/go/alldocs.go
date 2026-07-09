@@ -507,7 +507,8 @@
 // It supports these flags:
 //
 //	  -diff
-//		instead of applying each fix, print the patch as a unified diff
+//		instead of applying each fix, print the patch as a unified diff;
+//		exit with a non-zero status if the diff is not empty
 //
 // The -fixtool=prog flag selects a different analysis tool with
 // alternative or additional fixers; see the documentation for go vet's
@@ -2037,7 +2038,8 @@
 //	  -fix
 //		instead of printing each diagnostic, apply its first fix (if any)
 //	  -diff
-//		instead of applying each fix, print the patch as a unified diff
+//		instead of applying each fix, print the patch as a unified diff;
+//		exit with a non-zero status if the diff is not empty
 //
 // The -vettool=prog flag selects a different analysis tool with
 // alternative or additional checks. For example, the 'shadow' analyzer
@@ -2157,8 +2159,11 @@
 //   - For GOARCH=riscv64,
 //     GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
 //     riscv64.rva22u64 and riscv64.rva23u64 build tags.
-//   - For GOARCH=wasm, GOWASM=satconv and signext
-//     correspond to the wasm.satconv and wasm.signext feature build tags.
+//   - For GOARCH=wasm, GOWASM=satconv, signext and tailcall
+//     correspond to the wasm.satconv, wasm.signext and wasm.tailcall
+//     feature build tags.
+//   - For GOOS=wasip1, GOWASI=wasmedgesock corresponds to the
+//     wasip1.wasmedgesock feature build tag.
 //
 // For GOARCH=amd64, arm, ppc64, ppc64le, and riscv64, a particular feature level
 // sets the feature build tags for all previous levels as well.
@@ -2543,7 +2548,11 @@
 //		and https://github.com/riscv/riscv-profiles/blob/main/src/rva23-profile.adoc
 //	GOWASM
 //		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
-//		Valid values are satconv, signext.
+//		Valid values are satconv, signext, tailcall.
+//	GOWASI
+//		For GOOS=wasip1, comma-separated list of WASI host extensions to use.
+//		Valid values are wasmedgesock (the WasmEdge socket extension,
+//		which enables real TCP networking on hosts implementing it).
 //
 // Environment variables for use with code coverage:
 //
