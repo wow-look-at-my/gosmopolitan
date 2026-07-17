@@ -314,6 +314,24 @@ the full catalog of fixes and remaining gaps):
   for SharedArrayBuffer. wasip1 builds reject the flag at link time
   (wazero/wasmtime lack the proposal). Without the flag, output is
   byte-identical to before.
+- Threads worker pool B1 (2026-07-17): under GOWASM=threads the linker
+  now emits PASSIVE data segments (+ DataCount section) - active ones
+  would be re-applied on every instantiation, so a second instance would
+  clobber live heap/runtime state in the shared memory - plus two
+  synthetic exports: `_initmem` (memory.init + data.drop of all
+  segments; called exactly once, by the main instance, from `Go.run` in
+  wasm_exec.js - worker instances must never call it) and
+  `wasm_probe_atomic_add(addr, delta)` (a runtime-state-free wasm
+  i32.atomic.rmw.add workers can call before the scheduler is
+  thread-aware). `wasm_exec_node.js` compiles threads modules once
+  (kept on `go._module`); `lib/wasm/wasm_exec_pool_node.js`
+  (`GoWorkerPool`) + `wasm_exec_worker_node.js`/`wasm_exec_worker.js`
+  spawn N node worker_threads that instantiate the same module against
+  the same shared memory with all gojs runtime imports stubbed - Go
+  code does not run on worker instances yet (that is scheduler
+  integration, phase B2). Demo: `testdata/wasmthreads/pooldemo` driven
+  by `pool_demo.js` (run in CI). Ordinary modules and non-threads
+  builds are unchanged (byte-identical).
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

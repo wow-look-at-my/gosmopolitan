@@ -100,6 +100,35 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   (COOP/COEP) for SharedArrayBuffer. wazero/wasmtime lack the proposal,
   so wasip1 rejects the flag at link time. Default (no GOWASM=threads)
   output is verified byte-identical.
+  Phase B1 (2026-07-17) makes "one wasm instance per worker over one
+  shared memory" real: under GOWASM=threads the linker emits PASSIVE
+  data segments (active segments would be re-applied on every
+  instantiation, so a worker instance would clobber the live heap and
+  runtime state in the shared memory) plus two synthetic exports -
+  `_initmem`, which applies the segments via memory.init and drops them,
+  called exactly once by the MAIN instance from `Go.run` in wasm_exec.js
+  (the JS-tells-instance gating model emscripten also uses; workers must
+  never call it), and `wasm_probe_atomic_add(addr, delta)`, a
+  runtime-state-free seq-cst i32.atomic.rmw.add that worker instances
+  can call before the runtime is thread-aware. A DataCount section is
+  emitted for single-pass validation. On the JS side,
+  `wasm_exec_node.js` compiles a threads module once
+  (WebAssembly.compile, kept on `go._module`), and
+  `lib/wasm/wasm_exec_pool_node.js` (`GoWorkerPool`) pre-spawns N
+  node worker_threads running `wasm_exec_worker_node.js` (a thin wrapper
+  over the host-agnostic `wasm_exec_worker.js`, which documents the
+  init/ready/call/result postMessage protocol and is Web Worker-ready);
+  each worker instantiates the same module against the same shared
+  memory with every gojs.* runtime import stubbed to throw - Go code
+  cannot run on workers yet. `testdata/wasmthreads/pooldemo` +
+  `pool_demo.js` (CI-run) prove the core: 4 workers hammer a shared
+  counter from wasm 0xFE atomics to an exact expected sum while the main
+  instance's Go heap/data checksums stay identical. Still missing:
+  scheduler integration (newosproc/futex on workers, i.e. actually
+  running Go code on a second instance - that requires per-thread stacks
+  and TLS carved out of the shared memory and a runtime boot path that
+  skips the shared init, phase B2+), fence emission, and a growable
+  worker story for morestack. Non-threads builds remain byte-identical.
 - P1, inherent: Blocking inside a js.FuncOf callback still deadlocks - now
   with a clear error, but the semantics cannot change: the callback runs
   synchronously on the JS thread and nothing can block there. Worse, if any

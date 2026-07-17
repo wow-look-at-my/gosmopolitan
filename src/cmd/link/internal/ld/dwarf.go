@@ -2627,10 +2627,23 @@ func (d *dwctxt) writeDebugAddrHdr() loader.Sym {
 // with DWARF enabled.
 var wasmDwarfCodeOffsets map[loader.Sym]int64
 
+// WasmThreadsNumSyntheticFuncs is the number of synthetic functions the
+// wasm linker appends to a GOWASM=threads module after all Go functions
+// (see cmd/link/internal/wasm.threadsSyntheticFuncs). They carry no
+// DWARF, but they widen the code section's function count field, which
+// shifts every code offset; computeWasmDwarfCodeOffsets must account for
+// them. cmd/link/internal/wasm asserts its synthetic function list has
+// exactly this length.
+const WasmThreadsNumSyntheticFuncs = 2
+
 func computeWasmDwarfCodeOffsets(ctxt *Link) {
 	ldr := ctxt.loader
 	wasmDwarfCodeOffsets = make(map[loader.Sym]int64, len(ctxt.Textp))
-	off := ulebLen(uint64(len(ctxt.Textp))) // function count field
+	numFns := uint64(len(ctxt.Textp))
+	if buildcfg.GOWASM.Threads {
+		numFns += WasmThreadsNumSyntheticFuncs // linker-synthesized _initmem etc.
+	}
+	off := ulebLen(numFns) // function count field
 	for _, s := range ctxt.Textp {
 		size := int64(len(ldr.Data(s)))
 		if ldr.SymName(s) == "go:buildid" {

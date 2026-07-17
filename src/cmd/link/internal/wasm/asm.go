@@ -27,18 +27,19 @@ const (
 )
 
 const (
-	sectionCustom   = 0
-	sectionType     = 1
-	sectionImport   = 2
-	sectionFunction = 3
-	sectionTable    = 4
-	sectionMemory   = 5
-	sectionGlobal   = 6
-	sectionExport   = 7
-	sectionStart    = 8
-	sectionElement  = 9
-	sectionCode     = 10
-	sectionData     = 11
+	sectionCustom    = 0
+	sectionType      = 1
+	sectionImport    = 2
+	sectionFunction  = 3
+	sectionTable     = 4
+	sectionMemory    = 5
+	sectionGlobal    = 6
+	sectionExport    = 7
+	sectionStart     = 8
+	sectionElement   = 9
+	sectionCode      = 10
+	sectionData      = 11
+	sectionDataCount = 12
 )
 
 // funcValueOffset is the offset between the PC_F value of a function and the index of the function in WebAssembly
@@ -264,6 +265,24 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 		fns[i] = &wasmFunc{Name: name, Sym: fn, Type: typ, Code: wfn.Bytes()}
 	}
 
+	segments := dataSegments()
+
+	// Under GOWASM=threads the linker appends synthetic functions after
+	// all Go functions (see threadsSyntheticFuncs). They are exported but
+	// deliberately kept out of the CallIndirect table, so the PC_F mapping
+	// and the element section are unchanged.
+	var syntheticFns []*wasmFunc
+	if buildcfg.GOWASM.Threads {
+		syntheticFns = threadsSyntheticFuncs(&types, segments)
+		if len(syntheticFns) != ld.WasmThreadsNumSyntheticFuncs {
+			ld.Exitf("internal error: threadsSyntheticFuncs emitted %d functions, ld.WasmThreadsNumSyntheticFuncs says %d", len(syntheticFns), ld.WasmThreadsNumSyntheticFuncs)
+		}
+	}
+	allFns := fns
+	if len(syntheticFns) > 0 {
+		allFns = append(fns[:len(fns):len(fns)], syntheticFns...)
+	}
+
 	ctxt.Out.Write([]byte{0x00, 0x61, 0x73, 0x6d}) // magic
 	ctxt.Out.Write([]byte{0x01, 0x00, 0x00, 0x00}) // version
 
@@ -274,14 +293,20 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 
 	writeTypeSec(ctxt, types)
 	writeImportSec(ctxt, ldr, hostImports)
-	writeFunctionSec(ctxt, fns)
+	writeFunctionSec(ctxt, allFns)
 	writeTableSec(ctxt, fns)
 	writeMemorySec(ctxt, ldr)
 	writeGlobalSec(ctxt)
-	writeExportSec(ctxt, ldr, len(hostImports))
+	writeExportSec(ctxt, ldr, len(hostImports), len(fns), syntheticFns)
 	writeElementSec(ctxt, uint64(len(hostImports)), uint64(len(fns)))
-	writeCodeSec(ctxt, fns)
-	writeDataSec(ctxt)
+	if buildcfg.GOWASM.Threads {
+		// memory.init/data.drop in _initmem require the DataCount section
+		// (it lets the code section validate data segment indices without
+		// a forward scan).
+		writeDataCountSec(ctxt, len(segments))
+	}
+	writeCodeSec(ctxt, allFns)
+	writeDataSec(ctxt, segments)
 	if dwarf {
 		writeDwarfSections(ctxt)
 	}
@@ -289,7 +314,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	// conventions place producers after name, and LLVM's wasm reader
 	// rejects modules that order them the other way around.
 	if !*ld.FlagS {
-		writeNameSec(ctxt, len(hostImports), fns)
+		writeNameSec(ctxt, len(hostImports), allFns)
 	}
 	writeProducerSec(ctxt)
 }
@@ -496,8 +521,11 @@ func writeGlobalSec(ctxt *ld.Link) {
 
 // writeExportSec writes the section that declares exports.
 // Exports can be accessed by the WebAssembly host, usually JavaScript.
-// The wasm_export_* functions and the linear memory get exported.
-func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
+// The wasm_export_* functions and the linear memory get exported. Under
+// GOWASM=threads the linker-synthesized functions (function indices
+// lenHostImports+numFns and up, see threadsSyntheticFuncs) are exported
+// as well.
+func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports, numFns int, syntheticFns []*wasmFunc) {
 	sizeOffset := writeSecHeader(ctxt, sectionExport)
 
 	switch buildcfg.GOOS {
@@ -530,7 +558,7 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 		ctxt.Out.WriteByte(0x02)      // mem export
 		writeUleb128(ctxt.Out, 0)     // memidx
 	case "js":
-		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports))) // number of exports
+		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports)+len(syntheticFns))) // number of exports
 		for _, name := range []string{"run", "resume", "getsp"} {
 			s := ldr.Lookup("wasm_export_"+name, 0)
 			if s == 0 {
@@ -546,6 +574,11 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports int) {
 			writeName(ctxt.Out, ldr.SymName(s))
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
+		}
+		for i, fn := range syntheticFns {
+			writeName(ctxt.Out, fn.Name)                            // _initmem, wasm_probe_atomic_add
+			ctxt.Out.WriteByte(0x00)                                // func export
+			writeUleb128(ctxt.Out, uint64(lenHostImports+numFns+i)) // funcidx
 		}
 		writeName(ctxt.Out, "mem") // inst.exports.mem in wasm_exec.js
 		ctxt.Out.WriteByte(0x02)   // mem export
@@ -618,15 +651,16 @@ func writeDwarfSections(ctxt *ld.Link) {
 	}
 }
 
-// writeDataSec writes the section that provides data that will be used to initialize the linear memory.
-func writeDataSec(ctxt *ld.Link) {
-	sizeOffset := writeSecHeader(ctxt, sectionData)
+type dataSegment struct {
+	offset int32
+	data   []byte
+}
 
-	type dataSegment struct {
-		offset int32
-		data   []byte
-	}
-
+// dataSegments computes the data segments of the module from the data
+// sections collected by asmb: zero runs are omitted, so each segment
+// carries only non-zero bytes plus the linear-memory offset they belong
+// at.
+func dataSegments() []*dataSegment {
 	// Omit blocks of zeroes and instead emit data segments with offsets skipping the zeroes.
 	// This reduces the size of the WebAssembly binary. We use 8 bytes as an estimate for the
 	// overhead of adding a new segment (same as wasm-opt's memory-packing optimization uses).
@@ -680,16 +714,103 @@ func writeDataSec(ctxt *ld.Link) {
 		}
 	}
 
+	return segments
+}
+
+// writeDataCountSec writes the section that declares the number of data
+// segments ahead of the code section, so that memory.init/data.drop
+// instructions (used by the synthetic _initmem function of GOWASM=threads
+// modules) can be validated in a single pass. It is only emitted under
+// GOWASM=threads; ordinary modules do not use bulk-memory instructions.
+func writeDataCountSec(ctxt *ld.Link, numSegments int) {
+	sizeOffset := writeSecHeader(ctxt, sectionDataCount)
+	writeUleb128(ctxt.Out, uint64(numSegments))
+	writeSecSize(ctxt, sizeOffset)
+}
+
+// writeDataSec writes the section that provides data that will be used to initialize the linear memory.
+//
+// Ordinarily the segments are active: the wasm runtime applies them to the
+// linear memory on every instantiation. Under GOWASM=threads that would be
+// wrong - the linear memory is shared, and instantiating a worker instance
+// against it would clobber the live heap and runtime state of the main
+// instance - so the segments are emitted as passive instead, and only the
+// first (main) instantiation applies them by calling the synthetic
+// exported _initmem function (wasm_exec.js does this in Go.run; worker
+// instances must never call it). See threadsSyntheticFuncs.
+func writeDataSec(ctxt *ld.Link, segments []*dataSegment) {
+	sizeOffset := writeSecHeader(ctxt, sectionData)
+
 	writeUleb128(ctxt.Out, uint64(len(segments))) // number of data entries
 	for _, seg := range segments {
-		writeUleb128(ctxt.Out, 0) // memidx
-		writeI32Const(ctxt.Out, seg.offset)
-		ctxt.Out.WriteByte(0x0b) // end
+		if buildcfg.GOWASM.Threads {
+			writeUleb128(ctxt.Out, 1) // passive segment
+		} else {
+			writeUleb128(ctxt.Out, 0) // active segment, memidx 0
+			writeI32Const(ctxt.Out, seg.offset)
+			ctxt.Out.WriteByte(0x0b) // end
+		}
 		writeUleb128(ctxt.Out, uint64(len(seg.data)))
 		ctxt.Out.Write(seg.data)
 	}
 
 	writeSecSize(ctxt, sizeOffset)
+}
+
+// threadsSyntheticFuncs builds the synthetic functions the linker appends
+// to a GOWASM=threads module, in function index order following the Go
+// functions. There are exactly ld.WasmThreadsNumSyntheticFuncs of them
+// (the DWARF code offsets account for the widened function count field):
+//
+//   - _initmem applies the module's passive data segments to the shared
+//     linear memory (memory.init) and then drops them (data.drop). The
+//     host must call it exactly once, on the first (main) instance,
+//     before any Go code runs; worker instances sharing the memory must
+//     never call it. This is the "JS tells the instance" init-gating
+//     model (emscripten uses the same approach).
+//
+//   - wasm_probe_atomic_add(addr, delta uint32) uint32 performs a single
+//     seq-cst i32.atomic.rmw.add (a real 0xFE threads-proposal
+//     instruction) on the shared memory and returns the old value. It
+//     runs without any Go runtime state, so a worker instance can call it
+//     before the runtime is thread-aware; the wasm-threads pool demo and
+//     tests use it to prove cross-instance atomic visibility. It will be
+//     superseded by real scheduler integration in a later phase.
+func threadsSyntheticFuncs(types *[]*wasmFuncType, segments []*dataSegment) []*wasmFunc {
+	initmem := new(bytes.Buffer)
+	writeUleb128(initmem, 0) // no locals
+	for i, seg := range segments {
+		writeI32Const(initmem, seg.offset)           // destination address
+		writeI32Const(initmem, 0)                    // source offset within the segment
+		writeI32Const(initmem, int32(len(seg.data))) // length
+		initmem.WriteByte(0xFC)                      // misc-op prefix
+		writeUleb128(initmem, 0x08)                  // memory.init
+		writeUleb128(initmem, uint64(i))             // dataidx
+		initmem.WriteByte(0x00)                      // memidx
+	}
+	for i := range segments {
+		initmem.WriteByte(0xFC)          // misc-op prefix
+		writeUleb128(initmem, 0x09)      // data.drop
+		writeUleb128(initmem, uint64(i)) // dataidx
+	}
+	initmem.WriteByte(0x0b) // end
+
+	probe := new(bytes.Buffer)
+	writeUleb128(probe, 0) // no locals
+	probe.WriteByte(0x20)  // local.get
+	writeUleb128(probe, 0) // 0: addr
+	probe.WriteByte(0x20)  // local.get
+	writeUleb128(probe, 1) // 1: delta
+	probe.WriteByte(0xFE)  // atomic (threads-proposal) prefix
+	probe.WriteByte(0x1E)  // i32.atomic.rmw.add
+	writeUleb128(probe, 2) // memarg alignment 2^2 = 4 bytes (natural, required)
+	writeUleb128(probe, 0) // memarg offset
+	probe.WriteByte(0x0b)  // end
+
+	return []*wasmFunc{
+		{Name: "_initmem", Type: lookupType(&wasmFuncType{}, types), Code: initmem.Bytes()},
+		{Name: "wasm_probe_atomic_add", Type: lookupType(&wasmFuncType{Params: []byte{I32, I32}, Results: []byte{I32}}, types), Code: probe.Bytes()},
+	}
 }
 
 // writeProducerSec writes an optional section that reports the source language and compiler version.
