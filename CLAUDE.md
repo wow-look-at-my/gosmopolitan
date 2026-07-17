@@ -300,6 +300,17 @@ the full catalog of fixes and remaining gaps):
   section now precedes producers, so llvm tools can read Go wasm
   binaries. Variable location expressions are still placeholders
   (faithful locations need DW_OP_WASM_location).
+- Round 5 (2026-07-17): frame-aware GC for js/wasm. The pacer gives wasm
+  real runway (trigger no later than ~halfway to the goal, background
+  credit seeded at cycle start so the triggering frame doesn't
+  assist-burst), idle mark drains are bounded to 2ms and yield to the
+  event loop with a 1ms re-arm instead of starving it until mark
+  completion, and a new `go_gc_mark_step(budgetMs) -> bool` wasm export
+  lets the host donate idle time between frames (bounded mark work,
+  no-op outside a cycle, returns whether work remains; while the host
+  donates, the in-frame fractional mark quota drops 25% -> 5%).
+  `testdata/framebench` (10k allocs/frame under node): p99 frame time
+  21.6ms -> 4.8ms, zero frames over 8ms.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

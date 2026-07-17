@@ -3,7 +3,7 @@
 This document catalogs the state of the two WebAssembly ports in this tree:
 what this fork has fixed, what remains broken or missing, what each remaining
 item would take to fix, and what it costs to use the fixes. Snapshot date:
-2026-07-05 (round 3), based on the go1.26 tree this fork tracks. Severity: P0
+2026-07-17 (round 5), based on the go1.26 tree this fork tracks. Severity: P0
 (hang/crash/silently wrong) through P3 (polish/docs). Fixability: fork-fixable
 (a bounded patch in this tree), needs-wasm-proposal (blocked on a WebAssembly
 spec proposal or an upstream megaproject), or inherent (a consequence of the
@@ -64,6 +64,7 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 | cmd/objdump, cmd/internal/objfile | go tool objdump, nm, and addr2line all refused linked wasm binaries ("unrecognized object file" / "unsupported architecture") | none verified | 9b2c1f71 + fcac4977 | no binary inspection at all -> all three work on js and wasip1 modules: symbols synthesized from the code section, pclntab found by scanning the reconstructed data segment (so stripped -ldflags=-s binaries work too), the full core opcode space decodes byte-exactly (1686/1655 functions on the reference js/wasip1 binaries), call targets symbolized via pclntab or import names, Go's register globals (SP, CTXT, g, ...) annotated. Source lines are function-granularity only: PC_B counts resume points, not bytes, so per-instruction line mapping is unrecoverable |
 | cmd/compile | The two-variable range-over-slice lowering carries the iteration position across the loop backedge only as a uintptr (hu), invisible to the precise stack scan by design; insertLoopReschedChecks (preemptibleloops, this fork's wasm default) inserts a call exactly there, so a goroutine parked at the backedge during mark had nothing rooting the backing array. On wasm cheapComputableIndex reports false, so every two-variable slice range used the scheme. Surfaced as a nondeterministic nil-Function deref in CI's TestProfilerStackDepth (31/380 runs failed with GOGC=1); a distilled reproducer (range over a struct-field slice while a helper goroutine runs runtime.GC, GODEBUG=clobberfree=1) failed deterministically under both wazero and node | none verified (latent upstream for GOEXPERIMENT=preemptibleloops) | c2b233dd | GC use-after-free of the array the loop is still reading -> index-based lowering (v1, v2 = hv1, ha[hv1]) whenever preemptibleloops is enabled: the slice stays live, GC-visible, and stack-copy-adjusted for the whole loop; reproducer clean on both engines, amplified TestProfilerStackDepth soaked 0 failures in 1512 runs (35 min) |
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
+| Runtime (GC, js) | GC mark work bunched into frame-sized bursts (round 5, 2026-07-17): with one P the pacer's cons/mark runway came out at a few hundred KB, so whole cycles ran as in-frame assist bursts; idle mark drains were untimed and blocked the event loop until mark completion; and the fractional mark worker's 25% quota is measured against wall time - which on js includes host-idle time - so frame-driven apps paid ~4ms of every 16.7ms frame while marking | none verified | 2c385994 | framebench (10k mixed-size allocs/frame under node): p99 frame time 21.6ms -> 4.8ms, 535/2000 -> 0/2000 frames over 8ms. Wasm pacer minimum runway (>= half the trigger-to-goal headroom, trigger floor lowered ~0.7 -> ~0.5) plus a cycle-start background-credit seed; idle drains bounded at 2ms, then yield to the event loop with a 1ms re-arm; new `go_gc_mark_step(budgetMs) -> bool` wasm export for host-donated between-frame marking (no-op outside a cycle, returns whether work remains, runs mark termination between frames when it finishes the cycle); fractional quota capped at 5% while the host donates idle time |
 | net, syscall (wasip1) | WASI preview 1 defines no way to create or connect a socket, so net.Dial on wasip1 could never reach a real network: every dial and listen went to the in-process fake net | #65333, #67673 | 194bcf71 + d85a610b + 27fa0219 + 6eb4bf17 + a3a37b18 | fake network only -> GOWASI=wasmedgesock (default off; build tag wasip1.wasmedgesock; hashed into the build cache key) routes TCP through the WasmEdge socket extension (second-state SDK v0.4.3 ABI): real Dial (IP literals), Listen/Accept, deadlines, concurrency, http.Get and http.Serve end to end; verified by the testdata/wasip1sock wazero reference host (1MB echo round-trip, 8 concurrent conns, HTTP both directions, prompt ECONNREFUSED, read-deadline timeout); default builds stay byte-identical and stock runtimes reject opt-in binaries ('"sock_open" is not exported in module "wasi_snapshot_preview1"'); UDP/DNS/unix sockets stay fake |
 
 ## Remaining shortcomings
@@ -79,7 +80,11 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   node's async fs completions wait until Go goes idle. A browser tab still
   freezes for the duration of a long computation. True time-slicing back to
   the host needs a pause/resume of a runnable world (only safe when no JS
-  call is in flight) - a design project, not a patch.
+  call is in flight) - a design project, not a patch. Since round 5 the GC
+  is no longer a source of this: idle marking is deadline-bounded and
+  yields to the event loop, and hosts can donate idle time between frames
+  via the go_gc_mark_step export - a long user computation still freezes
+  the tab.
 - P1, needs wasm proposal: One thread, one P, forever. newosproc throws
   (`src/runtime/os_wasm.go:110`), NumCPU=1, atomics are plain loads/stores
   (`src/internal/runtime/atomic/atomic_wasm.go`). Parallelism needs the wasm
@@ -340,6 +345,13 @@ running goroutine for the length of the profiling window:
   block/mutex profiles already worked. See the sampling-bias notes above.
 - `go tool objdump`, `go tool nm`, and `go tool addr2line` understand
   linked wasm binaries (round 3), including -ldflags=-s stripped ones.
+- Frame-driven js apps (round 5): call the `go_gc_mark_step(budgetMs)`
+  wasm export with the leftover frame budget between frames; the runtime
+  performs up to that much GC mark work off the frame's critical path
+  (no-op when no cycle is active) and returns whether work remains. The
+  pacer detects the donations and keeps background marking out of frames.
+  See `testdata/framebench` for a complete Node.js harness and measured
+  numbers.
 - stdout/stderr writes are synchronous under node (round 3): printing
   returns immediately and keeps program order even while another
   goroutine is CPU-busy, and an os.Exit after a print always runs.
