@@ -84,6 +84,22 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   (`src/runtime/os_wasm.go:110`), NumCPU=1, atomics are plain loads/stores
   (`src/internal/runtime/atomic/atomic_wasm.go`). Parallelism needs the wasm
   threads proposal plus a large runtime port (golang/go#28631, #56305).
+  Toolchain groundwork landed 2026-07-17 (threads phase B0): `GOWASM=threads`
+  (default off, GOOS=js only) makes Go's atomic ops compile to the threads
+  proposal's real 0xFE sequentially-consistent atomic instructions, the
+  assembler/encoder knows the full 0xFE opcode space, the linker emits an
+  imported shared linear memory (module `gojs`, field `mem`, limits flag
+  0x03, max 2048 MiB) instead of a module-local one, and `wasm_exec.js`
+  creates and supplies the matching SharedArrayBuffer-backed
+  `WebAssembly.Memory` (`go.provideMemory(bytes)`; `wasm_exec_node.js`
+  calls it automatically, and it is a no-op for ordinary modules). The
+  runtime is still strictly single-threaded - one M, one P, no worker
+  spawning - so this changes no observable behavior yet; it is the
+  instruction-set and memory-model substrate the runtime port will build
+  on. Node needs no flags; browsers need cross-origin isolation
+  (COOP/COEP) for SharedArrayBuffer. wazero/wasmtime lack the proposal,
+  so wasip1 rejects the flag at link time. Default (no GOWASM=threads)
+  output is verified byte-identical.
 - P1, inherent: Blocking inside a js.FuncOf callback still deadlocks - now
   with a clear error, but the semantics cannot change: the callback runs
   synchronously on the JS thread and nothing can block there. Worse, if any

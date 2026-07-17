@@ -143,6 +143,13 @@ func asmb(ctxt *ld.Link, ldr *loader.Loader) {
 // asmb writes the final WebAssembly module binary.
 // Spec: https://webassembly.github.io/spec/core/binary/modules.html
 func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
+	if buildcfg.GOWASM.Threads && buildcfg.GOOS != "js" {
+		// The shared linear memory a GOWASM=threads module needs must be
+		// supplied by the host (wasm_exec.js does this for GOOS=js);
+		// wasip1 runtimes have no protocol for importing memory.
+		ld.Exitf("GOWASM=threads is only supported on GOOS=js")
+	}
+
 	types := []*wasmFuncType{
 		// For normal Go functions, the single parameter is PC_B,
 		// the return value is
@@ -266,7 +273,7 @@ func asmb2(ctxt *ld.Link, ldr *loader.Loader) {
 	}
 
 	writeTypeSec(ctxt, types)
-	writeImportSec(ctxt, hostImports)
+	writeImportSec(ctxt, ldr, hostImports)
 	writeFunctionSec(ctxt, fns)
 	writeTableSec(ctxt, fns)
 	writeMemorySec(ctxt, ldr)
@@ -341,11 +348,18 @@ func writeTypeSec(ctxt *ld.Link, types []*wasmFuncType) {
 }
 
 // writeImportSec writes the section that lists the functions that get
-// imported from the WebAssembly host, usually JavaScript.
-func writeImportSec(ctxt *ld.Link, hostImports []*wasmFunc) {
+// imported from the WebAssembly host, usually JavaScript. With
+// GOWASM=threads it additionally imports the shared linear memory
+// (which replaces the module-local memory writeMemorySec would declare).
+func writeImportSec(ctxt *ld.Link, ldr *loader.Loader, hostImports []*wasmFunc) {
 	sizeOffset := writeSecHeader(ctxt, sectionImport)
 
-	writeUleb128(ctxt.Out, uint64(len(hostImports))) // number of imports
+	numImports := uint64(len(hostImports))
+	if buildcfg.GOWASM.Threads {
+		numImports++ // the shared linear memory
+	}
+
+	writeUleb128(ctxt.Out, numImports) // number of imports
 	for _, fn := range hostImports {
 		if fn.Module != "" {
 			writeName(ctxt.Out, fn.Module)
@@ -355,6 +369,25 @@ func writeImportSec(ctxt *ld.Link, hostImports []*wasmFunc) {
 		writeName(ctxt.Out, fn.Name)
 		ctxt.Out.WriteByte(0x00) // func import
 		writeUleb128(ctxt.Out, uint64(fn.Type))
+	}
+
+	if buildcfg.GOWASM.Threads {
+		// The threads proposal requires shared memories to declare a
+		// maximum size, and a module cannot declare its own memory as
+		// shared-importable: shared linear memory must be created by the
+		// host (as a SharedArrayBuffer-backed WebAssembly.Memory) and
+		// imported. wasm_exec.js reads these limits from the binary
+		// header and supplies a matching memory in the import object.
+		// The memory import does not disturb the function index space:
+		// memories have their own index space, and this import stays
+		// index 0 there, so the data section and the "mem" export are
+		// unchanged.
+		writeName(ctxt.Out, wasm.GojsModule)
+		writeName(ctxt.Out, "mem")                         // go._importedMemory in wasm_exec.js
+		ctxt.Out.WriteByte(0x02)                           // mem import
+		ctxt.Out.WriteByte(0x03)                           // limits: shared, min and max present
+		writeUleb128(ctxt.Out, initialMemoryPages(ldr))    // minimum (initial) memory size
+		writeUleb128(ctxt.Out, sharedMemoryMaximumPages()) // maximum memory size
 	}
 
 	writeSecSize(ctxt, sizeOffset)
@@ -388,19 +421,43 @@ func writeTableSec(ctxt *ld.Link, fns []*wasmFunc) {
 	writeSecSize(ctxt, sizeOffset)
 }
 
-// writeMemorySec writes the section that declares linear memories. Currently one linear memory is being used.
-// Linear memory always starts at address zero. More memory can be requested with the GrowMemory instruction.
-func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
-	sizeOffset := writeSecHeader(ctxt, sectionMemory)
+const wasmPageSize = 64 << 10 // 64KB
 
+// initialMemoryPages returns the minimum (initial) linear memory size in
+// wasm pages: the end of the data segments plus 1 MB for runtime init
+// allocating a few pages.
+func initialMemoryPages(ldr *loader.Loader) uint64 {
 	dataEnd := uint64(ldr.SymValue(ldr.Lookup("runtime.end", 0)))
 	var initialSize = dataEnd + 1<<20 // 1 MB, for runtime init allocating a few pages
+	return initialSize / wasmPageSize
+}
 
-	const wasmPageSize = 64 << 10 // 64KB
+// sharedMemoryMaximumPages returns the maximum size of the imported shared
+// linear memory of a GOWASM=threads module, in wasm pages. Unlike a
+// module-local memory, a shared memory is required by the threads proposal
+// to declare a maximum, and it can never grow past it. 2 GiB (half the
+// wasm32 address space) is the default; there is currently no flag to
+// override it.
+func sharedMemoryMaximumPages() uint64 {
+	const maxSize = 2048 << 20 // 2 GiB
+	return maxSize / wasmPageSize
+}
 
-	writeUleb128(ctxt.Out, 1)                        // number of memories
-	ctxt.Out.WriteByte(0x00)                         // no maximum memory size
-	writeUleb128(ctxt.Out, initialSize/wasmPageSize) // minimum (initial) memory size
+// writeMemorySec writes the section that declares linear memories. Currently one linear memory is being used.
+// Linear memory always starts at address zero. More memory can be requested with the GrowMemory instruction.
+// With GOWASM=threads no module-local memory is declared: the shared linear
+// memory is imported instead (see writeImportSec), and this section is
+// omitted entirely.
+func writeMemorySec(ctxt *ld.Link, ldr *loader.Loader) {
+	if buildcfg.GOWASM.Threads {
+		return
+	}
+
+	sizeOffset := writeSecHeader(ctxt, sectionMemory)
+
+	writeUleb128(ctxt.Out, 1)                       // number of memories
+	ctxt.Out.WriteByte(0x00)                        // no maximum memory size
+	writeUleb128(ctxt.Out, initialMemoryPages(ldr)) // minimum (initial) memory size
 
 	writeSecSize(ctxt, sizeOffset)
 }

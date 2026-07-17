@@ -337,6 +337,14 @@ type gowasmFeatures struct {
 	// but not every runtime does (wazero 1.12 rejects such modules).
 	TailCall bool
 
+	// Threads emits the threads proposal's 0xFE atomic instructions for
+	// Go's atomic operations and makes the linker import a shared linear
+	// memory instead of declaring a module-local one. Off by default:
+	// this is toolchain-only groundwork (the runtime stays
+	// single-threaded), and shared memory requires host cooperation
+	// (SharedArrayBuffer; COOP/COEP headers in browsers). GOOS=js only.
+	Threads bool
+
 	// Legacy features, now always enabled
 	//SatConv bool
 	//SignExt bool
@@ -347,6 +355,9 @@ func (f gowasmFeatures) String() string {
 	if f.TailCall {
 		flags = append(flags, "tailcall")
 	}
+	if f.Threads {
+		flags = append(flags, "threads")
+	}
 	return strings.Join(flags, ",")
 }
 
@@ -355,6 +366,8 @@ func gowasm() (f gowasmFeatures) {
 		switch opt {
 		case "tailcall":
 			f.TailCall = true
+		case "threads":
+			f.Threads = true
 		case "satconv":
 			// ignore, always enabled
 		case "signext":
@@ -521,6 +534,9 @@ func gogoarchTags() []string {
 		list = append(list, GOARCH+".signext")
 		if GOWASM.TailCall {
 			list = append(list, GOARCH+".tailcall")
+		}
+		if GOWASM.Threads {
+			list = append(list, GOARCH+".threads")
 		}
 		return list
 	}

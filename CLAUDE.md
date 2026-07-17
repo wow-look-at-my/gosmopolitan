@@ -300,6 +300,20 @@ the full catalog of fixes and remaining gaps):
   section now precedes producers, so llvm tools can read Go wasm
   binaries. Variable location expressions are still placeholders
   (faithful locations need DW_OP_WASM_location).
+- Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
+  experimental, GOOS=js only) is toolchain-only groundwork for the wasm
+  threads proposal - real parallelism lands in later phases and the
+  runtime stays single-threaded for now. With it, Go's atomic ops emit
+  the proposal's 0xFE atomic instructions and the linker imports a
+  shared linear memory (`gojs`.`mem`, shared limits flag 0x03, max
+  2048 MiB) instead of declaring a module-local one; `wasm_exec.js`
+  supplies the matching shared `WebAssembly.Memory` via
+  `go.provideMemory(wasmBytes)` (called automatically by
+  `wasm_exec_node.js`, no-op for ordinary modules). Node 18+ needs no
+  flags; browsers will need COOP/COEP headers (cross-origin isolation)
+  for SharedArrayBuffer. wasip1 builds reject the flag at link time
+  (wazero/wasmtime lack the proposal). Without the flag, output is
+  byte-identical to before.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

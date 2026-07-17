@@ -1402,6 +1402,49 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			w.WriteByte(0x00)
 			w.WriteByte(0x00)
 
+		case AAtomicFence:
+			w.WriteByte(0x00) // reserved (fence scope), must be zero
+
+		case AI32AtomicLoad, AI64AtomicLoad, AI32AtomicLoad8U, AI32AtomicLoad16U, AI64AtomicLoad8U, AI64AtomicLoad16U, AI64AtomicLoad32U,
+			AMemoryAtomicNotify, AMemoryAtomicWait32, AMemoryAtomicWait64,
+			AI32AtomicRmwAdd, AI64AtomicRmwAdd, AI32AtomicRmw8AddU, AI32AtomicRmw16AddU, AI64AtomicRmw8AddU, AI64AtomicRmw16AddU, AI64AtomicRmw32AddU,
+			AI32AtomicRmwSub, AI64AtomicRmwSub, AI32AtomicRmw8SubU, AI32AtomicRmw16SubU, AI64AtomicRmw8SubU, AI64AtomicRmw16SubU, AI64AtomicRmw32SubU,
+			AI32AtomicRmwAnd, AI64AtomicRmwAnd, AI32AtomicRmw8AndU, AI32AtomicRmw16AndU, AI64AtomicRmw8AndU, AI64AtomicRmw16AndU, AI64AtomicRmw32AndU,
+			AI32AtomicRmwOr, AI64AtomicRmwOr, AI32AtomicRmw8OrU, AI32AtomicRmw16OrU, AI64AtomicRmw8OrU, AI64AtomicRmw16OrU, AI64AtomicRmw32OrU,
+			AI32AtomicRmwXor, AI64AtomicRmwXor, AI32AtomicRmw8XorU, AI32AtomicRmw16XorU, AI64AtomicRmw8XorU, AI64AtomicRmw16XorU, AI64AtomicRmw32XorU,
+			AI32AtomicRmwXchg, AI64AtomicRmwXchg, AI32AtomicRmw8XchgU, AI32AtomicRmw16XchgU, AI64AtomicRmw8XchgU, AI64AtomicRmw16XchgU, AI64AtomicRmw32XchgU,
+			AI32AtomicRmwCmpxchg, AI64AtomicRmwCmpxchg, AI32AtomicRmw8CmpxchgU, AI32AtomicRmw16CmpxchgU, AI64AtomicRmw8CmpxchgU, AI64AtomicRmw16CmpxchgU, AI64AtomicRmw32CmpxchgU:
+			// Value-producing atomic memory accesses (loads, RMW ops,
+			// notify/wait). The memarg alignment is required to be the
+			// access size (natural alignment); the offset comes from the
+			// instruction's From operand, like plain loads.
+			if p.From.Type != obj.TYPE_CONST {
+				panic("bad type for atomic access")
+			}
+			if p.From.Offset < 0 {
+				panic("negative offset for atomic access")
+			}
+			if p.From.Offset > math.MaxUint32 {
+				ctxt.Diag("bad offset in %v", p)
+			}
+			writeUleb128(w, align(p.As))
+			writeUleb128(w, uint64(p.From.Offset))
+
+		case AI32AtomicStore, AI64AtomicStore, AI32AtomicStore8, AI32AtomicStore16, AI64AtomicStore8, AI64AtomicStore16, AI64AtomicStore32:
+			// Atomic stores take their memarg offset from the To operand,
+			// like plain stores.
+			if p.To.Type != obj.TYPE_CONST {
+				panic("bad type for atomic store")
+			}
+			if p.To.Offset < 0 {
+				panic("negative offset for atomic store")
+			}
+			if p.To.Offset > math.MaxUint32 {
+				ctxt.Diag("bad offset in %v", p)
+			}
+			writeUleb128(w, align(p.As))
+			writeUleb128(w, uint64(p.To.Offset))
+
 		}
 	}
 
@@ -1436,9 +1479,19 @@ func writeOpcode(w *bytes.Buffer, as obj.As) {
 		w.WriteByte(byte(as - ALocalGet + 0x20))
 	case as < AI32TruncSatF32S:
 		w.WriteByte(byte(as - AI32Load + 0x28))
-	case as < ALast:
+	case as < AMemoryAtomicNotify:
 		w.WriteByte(0xFC)
 		w.WriteByte(byte(as - AI32TruncSatF32S + 0x00))
+	case as < AI32AtomicLoad:
+		// Threads proposal: notify/wait/fence (0xFE 0x00 - 0xFE 0x03).
+		w.WriteByte(0xFE)
+		w.WriteByte(byte(as - AMemoryAtomicNotify + 0x00))
+	case as < ALast:
+		// Threads proposal: atomic loads, stores, and read-modify-write
+		// ops (0xFE 0x10 - 0xFE 0x4E; 0x04 - 0x0F is a gap in the
+		// encoding).
+		w.WriteByte(0xFE)
+		w.WriteByte(byte(as - AI32AtomicLoad + 0x10))
 	default:
 		panic(fmt.Sprintf("unexpected assembler op: %s", as))
 	}
@@ -1470,13 +1523,32 @@ func regType(reg int16) valueType {
 
 func align(as obj.As) uint64 {
 	switch as {
-	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8:
+	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8,
+		AI32AtomicLoad8U, AI64AtomicLoad8U, AI32AtomicStore8, AI64AtomicStore8,
+		AI32AtomicRmw8AddU, AI64AtomicRmw8AddU, AI32AtomicRmw8SubU, AI64AtomicRmw8SubU,
+		AI32AtomicRmw8AndU, AI64AtomicRmw8AndU, AI32AtomicRmw8OrU, AI64AtomicRmw8OrU,
+		AI32AtomicRmw8XorU, AI64AtomicRmw8XorU, AI32AtomicRmw8XchgU, AI64AtomicRmw8XchgU,
+		AI32AtomicRmw8CmpxchgU, AI64AtomicRmw8CmpxchgU:
 		return 0
-	case AI32Load16S, AI32Load16U, AI64Load16S, AI64Load16U, AI32Store16, AI64Store16:
+	case AI32Load16S, AI32Load16U, AI64Load16S, AI64Load16U, AI32Store16, AI64Store16,
+		AI32AtomicLoad16U, AI64AtomicLoad16U, AI32AtomicStore16, AI64AtomicStore16,
+		AI32AtomicRmw16AddU, AI64AtomicRmw16AddU, AI32AtomicRmw16SubU, AI64AtomicRmw16SubU,
+		AI32AtomicRmw16AndU, AI64AtomicRmw16AndU, AI32AtomicRmw16OrU, AI64AtomicRmw16OrU,
+		AI32AtomicRmw16XorU, AI64AtomicRmw16XorU, AI32AtomicRmw16XchgU, AI64AtomicRmw16XchgU,
+		AI32AtomicRmw16CmpxchgU, AI64AtomicRmw16CmpxchgU:
 		return 1
-	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32:
+	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32,
+		AI32AtomicLoad, AI64AtomicLoad32U, AI32AtomicStore, AI64AtomicStore32,
+		AMemoryAtomicNotify, AMemoryAtomicWait32,
+		AI32AtomicRmwAdd, AI64AtomicRmw32AddU, AI32AtomicRmwSub, AI64AtomicRmw32SubU,
+		AI32AtomicRmwAnd, AI64AtomicRmw32AndU, AI32AtomicRmwOr, AI64AtomicRmw32OrU,
+		AI32AtomicRmwXor, AI64AtomicRmw32XorU, AI32AtomicRmwXchg, AI64AtomicRmw32XchgU,
+		AI32AtomicRmwCmpxchg, AI64AtomicRmw32CmpxchgU:
 		return 2
-	case AI64Load, AF64Load, AI64Store, AF64Store:
+	case AI64Load, AF64Load, AI64Store, AF64Store,
+		AI64AtomicLoad, AI64AtomicStore, AMemoryAtomicWait64,
+		AI64AtomicRmwAdd, AI64AtomicRmwSub, AI64AtomicRmwAnd, AI64AtomicRmwOr,
+		AI64AtomicRmwXor, AI64AtomicRmwXchg, AI64AtomicRmwCmpxchg:
 		return 3
 	default:
 		panic("align: bad op")
