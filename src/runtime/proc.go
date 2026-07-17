@@ -268,6 +268,12 @@ func main() {
 	close(main_init_done)
 
 	needUnlock = false
+	// Under GOWASM=threads the lock above was real (dolockOSThread), which
+	// matters: package initializers - syscall/js.init in particular - must
+	// run on the main thread, and with GOMAXPROCS > 1 an unlocked main
+	// goroutine that blocks during init would be rescheduled on whichever
+	// M is free. From here on, upstream semantics: main.main starts on
+	// this thread and is only pinned if it calls LockOSThread itself.
 	unlockOSThread()
 
 	if isarchive || islibrary {
@@ -474,12 +480,16 @@ func Gosched() {
 //go:nosplit
 func goschedguarded() {
 	if GOARCH == "wasm" {
-		if !getg().preempt {
-			wasmLoopGateCalls++
-			if wasmLoopGateCalls < wasmLoopYieldBatch {
+		gp := getg()
+		if !gp.preempt {
+			// The batch counter lives on the M (GOWASM=threads runs Ms
+			// on real threads; without threads there is only one M, so
+			// this is the old global in either case).
+			gp.m.wasmLoopGateCalls++
+			if gp.m.wasmLoopGateCalls < wasmLoopYieldBatch {
 				return
 			}
-			wasmLoopGateCalls = 0
+			gp.m.wasmLoopGateCalls = 0
 		}
 		if !wasmLoopPreemptGate(sys.GetCallerPC(), sys.GetCallerSP()) {
 			return
@@ -553,11 +563,10 @@ const (
 	wasmLoopYieldBatch = 64
 )
 
-// Wasm is single-threaded, so plain (unsynchronized) globals are exact.
-var (
-	wasmLoopGateCalls int32 // backedge hits since the last gate call (see goschedguarded)
-	wasmLoopLastYield int64 // nanotime of the last rate-limited yield
-)
+// The gate's rate-limiting state (wasmLoopGateCalls, wasmLoopLastYield)
+// is kept per M (see the m struct): under GOWASM=threads each M runs on
+// its own thread and rate-limits its own yields; without threads there is
+// only one M, making the fields equivalent to the former globals.
 
 // wasmLoopPreemptGate reports whether a compiler-inserted loop preemption
 // check should actually yield. See the comment above for the scheme.
@@ -590,16 +599,27 @@ func wasmLoopPreemptGate(pc, sp uintptr) bool {
 		// runtime locks held, so it is safe to take a sample here.
 		wasmProfSample(now, pc, sp, gp)
 	}
-	if now-wasmLoopLastYield < wasmLoopYieldInterval {
+	if now-mp.wasmLoopLastYield < wasmLoopYieldInterval {
 		return false
 	}
-	wasmLoopLastYield = now
-	if sched.profilehz != 0 && !wasmWorkPending(mp.p.ptr()) {
-		// The checks are armed only because CPU profiling is active
-		// (see execute): there is no scheduler work to run, so a yield
-		// would be a pointless trip through the scheduler. Keep
-		// running; the next wasmWorkPending probe is rate-limited to
-		// the same wasmLoopYieldInterval cadence by the update above.
+	mp.wasmLoopLastYield = now
+	if !wasmWorkPending(mp.p.ptr()) {
+		// Nothing a yield could run: no runnable goroutines, due
+		// timers, GC work or stop-the-world request.
+		if wasmThreadsEnabled && gomaxprocs > 1 && sched.profilehz == 0 {
+			// Disarm: the armed checks cost a call per loop backedge,
+			// and with multiple Ps everything that could need this
+			// goroutine's attention re-arms it cross-thread (preemptone,
+			// suspendG, wasmThreadsKick, wasmArmLoopPreempt). Re-check
+			// the preemption flags AFTER the disarm store: a request
+			// that raced with it set the flags first and its stackguard1
+			// write either landed after ours or is restored here.
+			gp.stackguard1 = 0
+			if gp.preempt || sched.gcwaiting.Load() {
+				gp.stackguard1 = stackPreempt
+				return true
+			}
+		}
 		return false
 	}
 	return true
@@ -608,13 +628,40 @@ func wasmLoopPreemptGate(pc, sp uintptr) bool {
 // wasmWorkPending reports whether there is scheduler work that a running
 // goroutine could starve: runnable goroutines, pending timers, an active GC
 // mark phase (background mark workers need the P), goroutines blocked in the
-// netpoller, or a stop-the-world request. Wasm is single-threaded, so the
-// unsynchronized reads are exact.
+// netpoller, or a stop-the-world request. Without GOWASM=threads wasm is
+// single-threaded and the unsynchronized reads are exact; with threads they
+// are best-effort (a miss is corrected on a later poll, at most one
+// wasmLoopYieldInterval later).
 func wasmWorkPending(pp *p) bool {
-	return !runqempty(pp) || sched.runq.size != 0 || len(pp.timers.heap) > 0 ||
+	if !runqempty(pp) || sched.runq.size != 0 ||
 		atomic.Load(&gcBlackenEnabled) != 0 || netpollAnyWaiters() ||
-		sched.gcwaiting.Load()
+		sched.gcwaiting.Load() ||
+		(wasmThreadsEnabled && wasmMigrateCount.Load() != 0) {
+		return true
+	}
+	if next := pp.timers.wakeTime(); next != 0 {
+		if !wasmThreadsEnabled || gomaxprocs == 1 || wasmParkedWorkers.Load() == 0 {
+			// No other agent is guaranteed to fire this P's timers: any
+			// pending timer counts, however far out, so the armed checks
+			// keep polling for it (the pre-multi-P behavior).
+			return true
+		}
+		// GOWASM=threads, multiple Ps, and at least one parked worker M:
+		// only a timer due (nearly) now counts. Keeping loops armed for
+		// a far-future timer costs a gate call per backedge; instead the
+		// gate disarms, and the parked worker's timed park wakes at the
+		// global earliest timer deadline (wasmWorkerParkNote) and either
+		// fires it or - with every P busy - re-arms the owner's checks
+		// via wasmThreadsKick.
+		return next <= nanotime()+int64(wasmLoopYieldInterval)
+	}
+	return false
 }
+
+// wasmParkedWorkers counts worker Ms currently in wasmWorkerParkNote's
+// timed park (GOWASM=threads): the agents that backstop far-future
+// timers, letting wasmWorkPending treat those as not-pending.
+var wasmParkedWorkers atomic.Int32
 
 // wasmArmLoopPreempt arms the loop preemption checks of the goroutine
 // currently running on this M, if any. It is called when work appears that
@@ -696,11 +743,23 @@ const wasmProfNever = 1<<63 - 1 // maximum int64; compares after any real nanoti
 //
 //go:nosplit
 func wasmProfSample(now int64, pc, sp uintptr, gp *g) {
+	if wasmThreadsEnabled {
+		// Under GOWASM=threads several Ms can hit the sampling deadline
+		// concurrently; wasmProfStk is a single global buffer, so only
+		// one sampler may run at a time. Contenders skip their sample
+		// (the winner advances the shared deadline).
+		if !atomic.Cas(&wasmProfBusy, 0, 1) {
+			return
+		}
+	}
 	wasmProfNextSample = now + wasmProfPeriod
 	if prof.hz.Load() == 0 {
 		// Profiling was just disabled. The gate cannot observe this
 		// (setcpuprofilerate resets the deadline before prof.hz with
 		// m.locks held), but keep the invariant local and cheap.
+		if wasmThreadsEnabled {
+			atomic.Store(&wasmProfBusy, 0)
+		}
 		return
 	}
 
@@ -723,7 +782,14 @@ func wasmProfSample(now int64, pc, sp uintptr, gp *g) {
 	})
 
 	mp.mallocing--
+	if wasmThreadsEnabled {
+		atomic.Store(&wasmProfBusy, 0)
+	}
 }
+
+// wasmProfBusy serializes wasmProfSample under GOWASM=threads (0 free,
+// 1 sampling). Unused without threads.
+var wasmProfBusy uint32
 
 // Puts the current goroutine into a waiting state and calls unlockf on the
 // system stack.
@@ -1233,10 +1299,15 @@ func schedinit() {
 	if n, err := strconv.ParseInt(gogetenv("GOMAXPROCS"), 10, 32); err == nil && n > 0 {
 		procs = int32(n)
 		if GOARCH == "wasm" && procs > 1 {
-			// WebAssembly has no threads yet, so only one CPU is possible.
-			// Mirror the clamp in GOMAXPROCS; without it, the first wakep
-			// would reach newosproc and throw "not implemented".
-			procs = 1
+			// Without GOWASM=threads WebAssembly has no threads, so only
+			// one CPU is possible; mirror the clamp in GOMAXPROCS
+			// (without it, the first wakep would reach newosproc and
+			// throw "not implemented"). Under GOWASM=threads GOMAXPROCS
+			// from the environment is honored, bounded by the worker
+			// pool size + 1 (see wasmClampGOMAXPROCS): more Ps than
+			// threads that can ever run would make startm demand Ms the
+			// pool cannot provide.
+			procs = wasmClampGOMAXPROCS(procs)
 		}
 		sched.customGOMAXPROCS = true
 	} else {
@@ -2112,6 +2183,15 @@ func startTheWorldWithSema(now int64, w worldStop) int64 {
 			mp.nextp.set(p)
 			notewakeup(&mp.park)
 		} else {
+			if GOARCH == "wasm" && wasmThreadsEnabled && mcount() >= wasmMaxMCount() {
+				// GOWASM=threads: the worker pool cannot provide another
+				// M (see wasmThreadsReleasePNoM); release the P instead
+				// of demanding one.
+				lock(&sched.lock)
+				wasmThreadsReleasePNoM(p)
+				unlock(&sched.lock)
+				continue
+			}
 			// Start M to run P.  Do not start another M below.
 			newm(nil, p, -1)
 		}
@@ -3398,6 +3478,27 @@ func startm(pp *p, spinning, lockheld bool) {
 		}
 	}
 	nmp := mget()
+	if nmp == nil && GOARCH == "wasm" && wasmThreadsEnabled && mcount() >= wasmMaxMCount() {
+		// GOWASM=threads: every worker-pool thread already hosts an M and
+		// threads beyond the pool cannot be created, so newm would fail
+		// (newosproc throws once no pool worker claims the M). Degrade
+		// instead: release pp and kick the world (wasmThreadsReleasePNoM).
+		// The work is picked up as soon as any M frees; this trades
+		// momentary work conservation for survival when locked or
+		// note-blocked Ms exhaust the M budget (e.g. a locked main
+		// goroutine plus a GC in flight).
+		wasmThreadsReleasePNoM(pp)
+		if spinning {
+			if sched.nmspinning.Add(-1) < 0 {
+				throw("startm: negative nmspinning")
+			}
+		}
+		if !lockheld {
+			unlock(&sched.lock)
+		}
+		releasem(mp)
+		return
+	}
 	if nmp == nil {
 		// No M is available, we must drop sched.lock and call newm.
 		// However, we already own a P to assign to the M.
@@ -3560,6 +3661,14 @@ func wakep() {
 		}
 		unlock(&sched.lock)
 		releasem(mp)
+		if GOARCH == "wasm" && wasmThreadsEnabled {
+			// Runnable work exists but every P is busy. Wasm has no
+			// sysmon and no async preemption, so make sure the running
+			// goroutines poll for the work: cross-arm their loop
+			// preemption checks and wake any worker M in a timed idle
+			// sleep.
+			wasmThreadsKick()
+		}
 		return
 	}
 	// Since we always have a P, the race in the "No M is available"
@@ -3571,6 +3680,98 @@ func wakep() {
 	startm(pp, true, false)
 
 	releasem(mp)
+}
+
+// GOWASM=threads: goroutines that must continue on the main thread
+// (syscall/js callers on a worker M; see wasmThreadsMigrateToMain in
+// event_js.go). Parked goroutines are pushed under wasmMigrateLock and
+// popped only by the main M's findRunnable (wasmSchedPickMigrated), which
+// executes them directly - they never enter a run queue, so a worker M
+// can never steal them.
+var (
+	wasmMigrateLock  mutex
+	wasmMigrateQ     gList
+	wasmMigrateCount atomic.Int32
+)
+
+// wasmSchedPickMigrated returns a goroutine waiting to be migrated to the
+// main M, if the caller is the main M. Called from findRunnable.
+func wasmSchedPickMigrated() *g {
+	if getg().m != &m0 || wasmMigrateCount.Load() == 0 {
+		return nil
+	}
+	lock(&wasmMigrateLock)
+	gp := wasmMigrateQ.pop()
+	if gp != nil {
+		wasmMigrateCount.Add(-1)
+	}
+	unlock(&wasmMigrateLock)
+	return gp
+}
+
+// wasmThreadsReleasePNoM releases pp when an M is needed to run it but
+// the GOWASM=threads worker pool cannot provide one (mcount() at
+// wasmMaxMCount): it honors a pending stop-the-world or safe-point
+// request, drains pp's run queue to the global queue, puts pp on the
+// idle list, and kicks the running goroutines' preemption checks plus
+// the parked main M so the work is picked up as soon as any M frees.
+//
+// sched.lock must be held.
+//
+//go:nowritebarrierrec
+func wasmThreadsReleasePNoM(pp *p) {
+	assertLockHeld(&sched.lock)
+	if sched.gcwaiting.Load() {
+		pp.status = _Pgcstop
+		pp.gcStopTime = nanotime()
+		sched.stopwait--
+		if sched.stopwait == 0 {
+			notewakeup(&sched.stopnote)
+		}
+	} else {
+		if pp.runSafePointFn != 0 && atomic.Cas(&pp.runSafePointFn, 1, 0) {
+			sched.safePointFn(pp)
+			sched.safePointWait--
+			if sched.safePointWait == 0 {
+				notewakeup(&sched.safePointNote)
+			}
+		}
+		if !runqempty(pp) {
+			q := runqdrain(pp)
+			globrunqputbatch(&q)
+		}
+		pidleput(pp, 0)
+	}
+	wasmThreadsKick()
+	wasmWakeMainThread()
+}
+
+// wasmThreadsKick is the GOWASM=threads substitute for sysmon's
+// retake-based preemption: called when runnable work exists but no idle P
+// could be found to run it. It cross-arms the compiler-inserted loop
+// preemption checks of every running P's user goroutine (the gate yields
+// within one wasmLoopYieldInterval once wasmWorkPending sees the work)
+// and wakes worker Ms out of their timed idle sleeps. Best-effort by
+// design, like preemption requests generally.
+//
+//go:nowritebarrier
+func wasmThreadsKick() {
+	if GOARCH != "wasm" || !wasmThreadsEnabled {
+		return
+	}
+	for _, pp := range allp {
+		if pp == nil || pp.status != _Prunning {
+			continue
+		}
+		mp := pp.m.ptr()
+		if mp == nil || mp == getg().m {
+			continue
+		}
+		if gp := mp.curg; gp != nil {
+			gp.stackguard1 = stackPreempt
+		}
+	}
+	wasmSchedNudgeWake()
 }
 
 // Stops execution of the current m that is locked to a g until the g is runnable again.
@@ -3681,6 +3882,12 @@ func execute(gp *g, inheritTime bool) {
 		// the profiler's sampling hook, see wasmProfSample); disarm
 		// them if not. See the wasm loop preemption comment above
 		// wasmLoopPreemptGate.
+		// Under GOWASM=threads, work that appears while every P is busy
+		// additionally cross-arms the running goroutines' checks on
+		// demand (wasmThreadsKick, the substitute for sysmon's retake);
+		// once a queue is non-empty, wasmWorkPending keeps every
+		// subsequently dispatched goroutine armed, so an oversubscribed
+		// scheduler stays in a fair rotation until the queues drain.
 		if wasmWorkPending(mp.p.ptr()) || sched.profilehz != 0 {
 			gp.stackguard1 = stackPreempt
 		} else {
@@ -3761,6 +3968,21 @@ top:
 	// then find. See the comment on wasmForceGCCheck.
 	if !haveSysmon {
 		wasmForceGCCheck(now)
+	}
+
+	// GOWASM=threads: goroutines waiting to migrate to the main M
+	// (syscall/js callers) take priority on the main M - they never enter
+	// a run queue, so nothing else would schedule them.
+	if GOARCH == "wasm" && wasmThreadsEnabled {
+		if gp := wasmSchedPickMigrated(); gp != nil {
+			trace := traceAcquire()
+			casgstatus(gp, _Gwaiting, _Grunnable)
+			if trace.ok() {
+				trace.GoUnpark(gp, 0)
+				traceRelease(trace)
+			}
+			return gp, false, false
+		}
 	}
 
 	// Try to schedule the trace reader.
@@ -5466,6 +5688,11 @@ func exitsyscallNoP(gp *g) {
 		notewakeup(&sched.sysmonnote)
 	}
 	unlock(&sched.lock)
+	if pp == nil && GOARCH == "wasm" && wasmThreadsEnabled {
+		// gp went on the global queue with every P busy; make the
+		// running goroutines poll for it (no sysmon on wasm).
+		wasmThreadsKick()
+	}
 	if pp != nil {
 		acquirep(pp)
 		execute(gp, false) // Never returns.
@@ -5970,8 +6197,8 @@ func Breakpoint() {
 //
 //go:nosplit
 func dolockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" && !wasmThreadsEnabled {
+		return // no threads on wasm without GOWASM=threads
 	}
 	gp := getg()
 	gp.m.lockedg.set(gp)
@@ -6022,8 +6249,8 @@ func lockOSThread() {
 //
 //go:nosplit
 func dounlockOSThread() {
-	if GOARCH == "wasm" {
-		return // no threads on wasm yet
+	if GOARCH == "wasm" && !wasmThreadsEnabled {
+		return // no threads on wasm without GOWASM=threads
 	}
 	gp := getg()
 	if gp.m.lockedInt != 0 || gp.m.lockedExt != 0 {
@@ -6838,6 +7065,22 @@ func checkdead() {
 		}
 	}
 
+	if GOOS == "js" && wasmThreadsEnabled && eventLoopCanWake() {
+		// Under GOWASM=threads a fully idle program reaches checkdead
+		// because the main M parks in the host's JavaScript event loop
+		// through stopm/mPark. With syscall/js linked, a JavaScript
+		// event (timer callback, network readiness, a js.FuncOf call)
+		// can still wake the program, so it is idle, not deadlocked.
+		// Real deadlocks are still reported: when the host's event loop
+		// runs dry it injects the exit-time deadlock probe, whose
+		// handler sets deadlockProbeActive; eventLoopCanWake then
+		// returns false and the next pass falls through to the fatal
+		// error below. This mirrors the non-threads behavior, where an
+		// idle program parks in the event loop without ever reaching
+		// checkdead.
+		return
+	}
+
 	unlock(&sched.lock) // unlock so that GODEBUG=scheddetail=1 doesn't hang
 	if GOOS == "js" {
 		// The js runtime knows more about why a program can deadlock
@@ -7230,6 +7473,13 @@ func preemptall() bool {
 			res = true
 		}
 	}
+	if GOARCH == "wasm" && wasmThreadsEnabled {
+		// A worker M can be in a timed idle futex sleep in beforeIdle
+		// while still owning its (empty, _Prunning) P; wake it so the
+		// preemption request (e.g. a stop-the-world) is honored within
+		// the wake latency instead of the sleep cap.
+		wasmSchedNudgeWake()
+	}
 	return res
 }
 
@@ -7616,6 +7866,16 @@ func mget() *m {
 	assertLockHeld(&sched.lock)
 
 	mp := (*m)(sched.midle.pop())
+	if GOARCH == "wasm" && wasmThreadsEnabled && mp == &m0 {
+		// Prefer waking a worker M over the main M: the main M's thread
+		// drives the host's JavaScript event loop, so ordinary work
+		// should go to workers whenever one is available. (The main M is
+		// still used when it is the only idle M.)
+		if next := (*m)(sched.midle.pop()); next != nil {
+			sched.midle.push(unsafe.Pointer(&m0))
+			mp = next
+		}
+	}
 	if mp != nil {
 		sched.nmidle--
 	}
@@ -7793,6 +8053,13 @@ func pidleput(pp *p, now int64) int64 {
 	sched.npidle.Add(1)
 	if !pp.limiterEvent.start(limiterEventIdle, now) {
 		throw("must be able to track idle limiter event")
+	}
+	if GOARCH == "wasm" && wasmThreadsEnabled {
+		// Nudge the main thread if this idle P has pending timers (the
+		// parked main M backstops idle-P timers with a JavaScript
+		// timeout and must re-arm it) or if the main M is waiting for a
+		// P to handle a pending JavaScript event.
+		wasmThreadsPidleput(pp)
 	}
 	return now
 }

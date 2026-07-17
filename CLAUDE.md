@@ -360,6 +360,18 @@ the full catalog of fixes and remaining gaps):
   preemption, non-blocking main-thread park, syscall/js forwarding
   from worker Ms, browser workers.
 
+ Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+  unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
+  1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
+  via cross-thread-armed loop backedge checks, a non-blocking main-thread park
+  (main M releases its P and parks in the event loop; woken cross-thread via
+  Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
+  syscall/js calls from worker Ms migrating their goroutine to the main
+  thread (stdout/stderr writes work directly on workers). Known: a rare
+  GOMAXPROCS>1 lost-wakeup stall (watchdog-bounded; fuzz-heavy tests flake),
+  pool should exceed GOMAXPROCS for full parallel throughput. B4: full
+  main-thread affinity/forwarding, memory.grow audit, mark-worker knobs.
+
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
 `GOOS=wasip1 GOARCH=wasm go test <pkg>` finds `go_wasip1_wasm_exec`

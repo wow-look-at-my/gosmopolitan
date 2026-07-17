@@ -445,3 +445,42 @@ running goroutine for the length of the profiling window:
   `.github/workflows/cosmo-ci.yml` builds std and runs the stdlib and
   wasmexport-testdir regression subset (including runtime/pprof since
   round 3) under node 22 (js) and wazero (wasip1) on every push.
+
+### Threads B3 (2026-07-17): multi-P scheduler, cooperative STW, non-blocking main park
+
+- **GOMAXPROCS unclamped under GOWASM=threads**: the env value (and
+  runtime.GOMAXPROCS) is honored, capped at GOWASMTHREADSPOOL+1 (pool default
+  4). Default stays 1 (NumCPU is 1); multi-P is opt-in. startm degrades
+  gracefully (releases the P, drains its runq to the global queue, kicks the
+  running loops) when the pool cannot provide another M.
+- **Real atomics everywhere**: internal/runtime/atomic's plain wasm fallback
+  bodies are replaced under wasm.threads by 0xFE assembly + wrappers
+  (atomic_wasmthreads.go/.s) - sync/atomic's trampolines and the runtime's
+  linknamed pointer ops (SwapPointer & co) were reaching the non-atomic
+  bodies. publicationBarrier is a real atomic fence under threads.
+- **Cooperative STW across threads**: preemptone/preemptall/suspendG arm the
+  compiler-inserted loop backedge checks cross-thread (stackguard1), so
+  allocation-free tight loops on worker Ms reach safepoints; GC (incl.
+  GODEBUG=gcstoptheworld=1) works across >= 3 threads.
+- **Non-blocking main park**: an idle main M releases its P and parks in the
+  host event loop (pause) instead of futex-blocking; worker threads wake it
+  via Atomics.waitAsync on a shared wake word (node >= 16; a pending
+  waitAsync does not hold the event loop open, so the exit-time deadlock
+  probe still works). While Go worker threads are active the host keeps the
+  loop alive (runtime.wasmSetKeepAlive). Idle-P and busy-P timers are
+  backstopped by the main M's JS timeout plus parked-worker timed parks.
+- **syscall/js off-main**: a syscall/js call from a goroutine on a worker M
+  MIGRATES the goroutine to the main thread (runtime migrate queue, popped
+  only by the main M); fd 1/2 writes (fmt/println/testing output) go through
+  the runtime's wasmWrite import directly on workers. Value finalizers fired
+  on worker Ms are queued and released on main.
+- **Known issues (B3)**: (1) a rare lost-wakeup under GOMAXPROCS>1 can strand
+  a runnable goroutine until the 250ms worker watchdog or next event
+  (observed as multi-second stalls / occasional wedges in testing/fuzz-heavy
+  workloads, e.g. runtime's FuzzPIController at GOMAXPROCS=2; not observed at
+  the default GOMAXPROCS=1); (2) parallel speedup depends on pool headroom
+  (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
+  otherwise CPU loops stay gate-armed and pay ~4x call overhead); (3) an
+  event handler blocked forever can head-of-line-block later host events.
+  Remaining for B4: full main-thread affinity/host-call forwarding,
+  memory.grow coordination audit, dedicated mark worker knobs, browser hosts.

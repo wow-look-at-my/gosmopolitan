@@ -45,6 +45,7 @@ package runtime
 
 import (
 	"internal/runtime/atomic"
+	"internal/strconv"
 	"unsafe"
 )
 
@@ -122,6 +123,104 @@ func wasmThreadsNewosproc(mp *m) {
 // sleeps (usleep).
 var wasmSleep uint32
 
+// wasmSchedNudge is the scheduler nudge word (phase B3). Worker Ms doing a
+// timed idle sleep in beforeIdle sleep on it, so that a stop-the-world
+// request or new work can cut the sleep short instead of waiting out the
+// timeout. wasmSchedNudgeWake bumps and notifies it.
+var wasmSchedNudge uint32
+
+// wasmSchedNudgeWake wakes every M sleeping on wasmSchedNudge (worker Ms
+// in beforeIdle's timed idle sleep). The bump makes a concurrent
+// about-to-sleep M's futexsleep return immediately (value mismatch), so a
+// wake cannot be lost.
+//
+//go:nosplit
+//go:nowritebarrier
+func wasmSchedNudgeWake() {
+	atomic.Xadd(&wasmSchedNudge, 1)
+	futexwakeup(&wasmSchedNudge, ^uint32(0))
+}
+
+// wasmMainWake is the main-thread wake word (phase B3). The JavaScript
+// side of the main thread keeps an Atomics.waitAsync armed on it
+// (wasmMainWakeInit below); bumping and notifying the word makes the
+// host's event loop call resume, waking a main M that is parked in the
+// event loop. Node.js >= 16 supports Atomics.waitAsync, and a pending
+// waitAsync does not keep the event loop alive, so the exit-time deadlock
+// probe still fires.
+var wasmMainWake uint32
+
+// wasmWakeMainThread nudges the main thread: if the main M is parked in
+// the JavaScript event loop (wasmMainParkNote in lock_jsthreads.go), the
+// host resumes it. Callable from any thread; spurious nudges are cheap
+// (the resumed main M re-checks its state and parks again).
+//
+//go:nosplit
+//go:nowritebarrier
+func wasmWakeMainThread() {
+	atomic.Xadd(&wasmMainWake, 1)
+	futexwakeup(&wasmMainWake, ^uint32(0))
+}
+
+// wasmMainWantsP is set (atomically) by the parked main M when it was
+// resumed by the host (a JavaScript event or timeout) but could not get a
+// P because every P was busy. pidleput checks it: as soon as a P frees,
+// the main thread is nudged so it can handle the pending event.
+var wasmMainWantsP uint32
+
+// wasmThreadsPidleput is called by pidleput (with sched.lock held) when a
+// P goes idle under GOWASM=threads. Two reasons to nudge the main thread:
+//
+//   - The P still has pending timers. Idle-P timers are backstopped by
+//     the main M, which arms a JavaScript timeout for the earliest timer
+//     across all Ps before it parks (beforeIdle in lock_jsthreads.go);
+//     it must wake to re-arm for this P's timers.
+//   - The parked main M wants a P (wasmMainWantsP) to handle a pending
+//     JavaScript event.
+//
+//go:nowritebarrier
+func wasmThreadsPidleput(pp *p) {
+	if pp.timers.len.Load() > 0 || atomic.Load(&wasmMainWantsP) != 0 {
+		wasmWakeMainThread()
+	}
+}
+
+// wasmPoolSize returns the worker pool size the host was configured with:
+// GOWASMTHREADSPOOL, default 4 (mirroring wasm_exec_node.js). It is the
+// bound on how many Ms can run concurrently.
+func wasmPoolSize() int32 {
+	env := gogetenv("GOWASMTHREADSPOOL")
+	if env == "" {
+		return 4
+	}
+	n, err := strconv.ParseInt(env, 10, 32)
+	if err != nil || n < 0 {
+		return 4
+	}
+	return int32(n)
+}
+
+// wasmMaxMCount returns the maximum number of Ms this process can ever
+// have: the worker pool (one M per pool worker thread, claimed for life)
+// plus the main thread's m0. startm consults it to avoid demanding an M
+// the pool cannot provide.
+func wasmMaxMCount() int32 {
+	return wasmPoolSize() + 1
+}
+
+// wasmClampGOMAXPROCS bounds a requested GOMAXPROCS under GOWASM=threads:
+// values above pool+1 (the worker pool plus the main thread) are clamped,
+// since Ps beyond the number of threads that can ever run would make the
+// scheduler try to start Ms the pool cannot provide (newosproc throws
+// after its 10s grace period). Without GOWASM=threads the clamp is 1, as
+// before.
+func wasmClampGOMAXPROCS(n int32) int32 {
+	if max := wasmPoolSize() + 1; n > max {
+		return max
+	}
+	return n
+}
+
 // wasmThreadsUsleep implements usleep under GOWASM=threads with a timed
 // futex wait (without threads, usleep is a no-op busy return; see
 // os_js.go).
@@ -130,6 +229,26 @@ var wasmSleep uint32
 func wasmThreadsUsleep(usec uint32) {
 	futexsleep(&wasmSleep, 0, int64(usec)*1000)
 }
+
+// wasmMainWakeInit hands the host the address of wasmMainWake. The
+// JavaScript side (wasm_exec.js) keeps an Atomics.waitAsync armed on the
+// word from then on and calls resume whenever it is notified, which is
+// what makes a main M parked in the event loop wakeable from worker
+// threads. Called once, on the main thread, before its first park.
+//
+//go:wasmimport gojs runtime.wasmMainWakeInit
+//go:noescape
+func wasmMainWakeInit(addr *uint32)
+
+// wasmSetKeepAlive tells the host whether the Go program still has active
+// threads while the main M is parked in the event loop. While on (1), the
+// host holds its event loop open (worker threads are unref'd and a parked
+// main M schedules nothing), so the process cannot exit underneath running
+// worker Ms. While off (0), a fully idle program lets the event loop
+// drain, which is what triggers the host's exit-time deadlock probe.
+//
+//go:wasmimport gojs runtime.wasmSetKeepAlive
+func wasmSetKeepAlive(on int32)
 
 // wasmThreadsCurMID returns the id of the M the calling goroutine is
 // running on. Test/demo hook (linknamed by testdata/wasmthreads).

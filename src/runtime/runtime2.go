@@ -644,42 +644,44 @@ type m struct {
 	// from transitioning out of _Gsyscall if it intends to mutate p.
 	p puintptr
 
-	nextp           puintptr // The next P to install before executing. Implies exclusive ownership of this P.
-	oldp            puintptr // The P that was attached before executing a syscall.
-	id              int64
-	mallocing       int32
-	throwing        throwType
-	preemptoff      string // if != "", keep curg running on this m
-	locks           int32
-	dying           int32
-	profilehz       int32
-	spinning        bool // m is out of work and is actively looking for work
-	blocked         bool // m is blocked on a note
-	newSigstack     bool // minit on C thread called sigaltstack
-	printlock       int8
-	incgo           bool          // m is executing a cgo call
-	isextra         bool          // m is an extra m
-	isExtraInC      bool          // m is an extra m that does not have any Go frames
-	isExtraInSig    bool          // m is an extra m in a signal handler
-	freeWait        atomic.Uint32 // Whether it is safe to free g0 and delete m (one of freeMRef, freeMStack, freeMWait)
-	needextram      bool
-	g0StackAccurate bool // whether the g0 stack has accurate bounds
-	traceback       uint8
-	allpSnapshot    []*p          // Snapshot of allp for use after dropping P in findRunnable, nil otherwise.
-	ncgocall        uint64        // number of cgo calls in total
-	ncgo            int32         // number of cgo calls currently in progress
-	cgoCallersUse   atomic.Uint32 // if non-zero, cgoCallers in use temporarily
-	cgoCallers      *cgoCallers   // cgo traceback if crashing in cgo call
-	park            note
-	alllink         *m // on allm
-	schedlink       muintptr
-	idleNode        listNodeManual
-	lockedg         guintptr
-	createstack     [32]uintptr // stack that created this thread, it's used for StackRecord.Stack0, so it must align with it.
-	lockedExt       uint32      // tracking for external LockOSThread
-	lockedInt       uint32      // tracking for internal lockOSThread
-	mWaitList       mWaitList   // list of runtime lock waiters
-	ditEnabled      bool        // set if DIT is currently enabled on this M
+	nextp             puintptr // The next P to install before executing. Implies exclusive ownership of this P.
+	oldp              puintptr // The P that was attached before executing a syscall.
+	id                int64
+	mallocing         int32
+	throwing          throwType
+	preemptoff        string // if != "", keep curg running on this m
+	locks             int32
+	dying             int32
+	profilehz         int32
+	wasmLoopGateCalls int32 // wasm only: backedge hits since the last loop-preemption gate call (see goschedguarded)
+	wasmLoopLastYield int64 // wasm only: nanotime of this M's last rate-limited loop-preemption yield
+	spinning          bool  // m is out of work and is actively looking for work
+	blocked           bool  // m is blocked on a note
+	newSigstack       bool  // minit on C thread called sigaltstack
+	printlock         int8
+	incgo             bool          // m is executing a cgo call
+	isextra           bool          // m is an extra m
+	isExtraInC        bool          // m is an extra m that does not have any Go frames
+	isExtraInSig      bool          // m is an extra m in a signal handler
+	freeWait          atomic.Uint32 // Whether it is safe to free g0 and delete m (one of freeMRef, freeMStack, freeMWait)
+	needextram        bool
+	g0StackAccurate   bool // whether the g0 stack has accurate bounds
+	traceback         uint8
+	allpSnapshot      []*p          // Snapshot of allp for use after dropping P in findRunnable, nil otherwise.
+	ncgocall          uint64        // number of cgo calls in total
+	ncgo              int32         // number of cgo calls currently in progress
+	cgoCallersUse     atomic.Uint32 // if non-zero, cgoCallers in use temporarily
+	cgoCallers        *cgoCallers   // cgo traceback if crashing in cgo call
+	park              note
+	alllink           *m // on allm
+	schedlink         muintptr
+	idleNode          listNodeManual
+	lockedg           guintptr
+	createstack       [32]uintptr // stack that created this thread, it's used for StackRecord.Stack0, so it must align with it.
+	lockedExt         uint32      // tracking for external LockOSThread
+	lockedInt         uint32      // tracking for internal lockOSThread
+	mWaitList         mWaitList   // list of runtime lock waiters
+	ditEnabled        bool        // set if DIT is currently enabled on this M
 
 	mLockProfile mLockProfile // fields relating to runtime.lock contention
 	profStack    []uintptr    // used for memory/block/mutex stack traces
