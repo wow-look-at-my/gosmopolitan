@@ -58,7 +58,7 @@ var (
 	// sink defeats any escape-analysis heroics.
 	sink *node
 
-	graph      []*graphNode
+	graph       []*graphNode
 	graphMutIdx int
 )
 
