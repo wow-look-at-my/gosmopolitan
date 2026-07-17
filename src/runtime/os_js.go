@@ -25,7 +25,11 @@ func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
 
 func usleep(usec uint32) {
-	// TODO(neelance): implement usleep
+	if wasmThreadsEnabled {
+		// Timed futex sleep (see os_wasmthreads.go). Without threads
+		// there is nothing that could run in the meantime anyway.
+		wasmThreadsUsleep(usec)
+	}
 }
 
 //go:wasmimport gojs runtime.getRandomData

@@ -82,6 +82,12 @@ func (d *deadcodePass) init() {
 	// runtime.unreachableMethod is a function that will throw if called.
 	// We redirect unreachable methods to it.
 	names = append(names, "runtime.unreachableMethod")
+	if buildcfg.GOWASM.Threads && buildcfg.GOOS == "js" {
+		// The worker-thread entry point (exported as wasm_thread_run,
+		// see cmd/link/internal/wasm) is only ever called by the host;
+		// nothing in Go references it.
+		names = append(names, "wasm_export_thread_run")
+	}
 	if d.ctxt.BuildMode == BuildModePlugin {
 		names = append(names, objabi.PathToPrefix(*flagPluginPath)+"..inittask", objabi.PathToPrefix(*flagPluginPath)+".main", "go:plugin.tabs")
 

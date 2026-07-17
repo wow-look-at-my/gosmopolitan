@@ -123,12 +123,62 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   cannot run on workers yet. `testdata/wasmthreads/pooldemo` +
   `pool_demo.js` (CI-run) prove the core: 4 workers hammer a shared
   counter from wasm 0xFE atomics to an exact expected sum while the main
-  instance's Go heap/data checksums stay identical. Still missing:
-  scheduler integration (newosproc/futex on workers, i.e. actually
-  running Go code on a second instance - that requires per-thread stacks
-  and TLS carved out of the shared memory and a runtime boot path that
-  skips the shared init, phase B2+), fence emission, and a growable
-  worker story for morestack. Non-threads builds remain byte-identical.
+  instance's Go heap/data checksums stay identical.
+  Phase B2 (2026-07-17) makes REAL Go code run on worker threads. The
+  runtime gains a futex layer over memory.atomic.wait32/notify
+  (`futexsleep`/`futexwakeup` in `src/runtime/sys_wasmthreads.s`):
+  under GOWASM=threads, runtime mutexes are the classic futex lock and
+  notes are futex-based (`lock_jsthreads.go`), so Ms on different
+  threads block and wake each other; `notetsleepg(n, -1)` parks the
+  goroutine instead of blocking the M (os/signal loops, profile readers
+  and the like must not pin the event-loop thread). newosproc is real:
+  it hands the new M through a spawn mailbox (state/mp/seq words +
+  futex) to a pool worker parked inside the new `wasm_thread_run`
+  export - a raw-wasm futex wait that needs no Go state - which then
+  sets its per-instance SP/g globals to the M's heap-allocated g0 stack
+  and enters mstart (per-instance globals are exactly why one instance
+  per worker exists). g0 stacks live in the shared heap, so cross-
+  thread stack access just works. `wasm_exec_node.js` pre-spawns
+  GOWASMTHREADSPOOL (default 4, 0 disables) runtime workers per
+  program; a worker serves one M for the process lifetime (Ms never
+  exit on wasm), parked Ms are reused by the scheduler, and newosproc
+  throws after 10s if no worker claims (pool exhausted/disabled).
+  Worker instances get real pure-runtime imports (wasmWrite via
+  fs.writeSync, nanotime1 on the main instance's clock base, walltime,
+  getRandomData, wasmExit forwarded to the main thread) so println,
+  clocks and crashes work on worker Ms; syscall/js and the event-loop
+  imports still throw there - JS values live on the main thread only.
+  The event loop stays main-M-only: beforeIdle routes only the main M
+  to the pause/resume machinery (now shared in `event_js.go`), worker
+  Ms do capped timed futex sleeps for pending timers or park in stopm.
+  Main-thread caveat: the main M may futex-wait (node allows it;
+  browsers do not, so worker Ms are node-only), and while it waits the
+  host event loop is stalled until a worker futex-wakes it. GOMAXPROCS
+  stays clamped to 1: only one M runs Go at a time, handing the P
+  around; the demo hook `runtime.wasmThreadsRunOnNewM` (linkname,
+  `-ldflags=-checklinkname=0`) pins the calling goroutine to its M so
+  the scheduler must move the P to another M (stoplockedm/handoffp/
+  newosproc/startlockedm - the organic locked-M path; public
+  LockOSThread remains a wasm no-op this phase). newm's template-thread
+  deferral is disabled on wasm: newosproc clones no thread state, so
+  spawning from a locked M is safe and no template thread exists.
+  `testdata/wasmthreads/threaddemo` (CI-run 10x) shows goroutines with
+  channels, sync.Mutex and shared-heap traffic on three Ms across three
+  threads, nested spawns, parked-M reuse and runtime.GC over the shared
+  heap; `go test -short sync sync/atomic internal/runtime/atomic
+  runtime` passes under GOWASM=threads (including a new in-tree spawn
+  test). Still missing (B3+): multi-P parallelism (the GOMAXPROCS
+  clamp), preemptive STW of a running worker beyond cooperative
+  loop/prologue checks, a non-blocking main-thread park (event loop
+  currently stalls while the main M waits), syscall/js host-call
+  forwarding from worker Ms, cross-thread CPU profiling, fence
+  emission, and browser workers. NOTE: unlike B0/B1, default
+  (non-threads) js builds are no longer byte-identical to the previous
+  phase - the runtime port necessarily touches shared runtime sources
+  (lock_js.go event-machinery split, newosproc/usleep hooks), which
+  shifts symbols, pclntab file tables and DWARF even though the
+  non-threads code paths are semantically unchanged (verified by the
+  unchanged non-threads test suite and identical program output).
 - P1, inherent: Blocking inside a js.FuncOf callback still deadlocks - now
   with a clear error, but the semantics cannot change: the callback runs
   synchronously on the JS thread and nothing can block there. Worse, if any

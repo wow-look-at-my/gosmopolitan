@@ -75,6 +75,7 @@ var wasmFuncTypes = map[string]*wasmFuncType{
 	"wasm_export_run":         {Params: []byte{I32, I32}},                                 // argc, argv
 	"wasm_export_resume":      {Params: []byte{}},                                         //
 	"wasm_export_getsp":       {Results: []byte{I32}},                                     // sp
+	"wasm_export_thread_run":  {Params: []byte{I32}},                                      // worker id (GOWASM=threads)
 	"wasm_pc_f_loop":          {Params: []byte{}},                                         //
 	"wasm_pc_f_loop_export":   {Params: []byte{I32}},                                      // pc_f
 	"runtime.wasmTruncS":      {Params: []byte{F64}, Results: []byte{I64}},                // x -> int(x)
@@ -558,14 +559,25 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports, numFns in
 		ctxt.Out.WriteByte(0x02)      // mem export
 		writeUleb128(ctxt.Out, 0)     // memidx
 	case "js":
-		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports)+len(syntheticFns))) // number of exports
-		for _, name := range []string{"run", "resume", "getsp"} {
-			s := ldr.Lookup("wasm_export_"+name, 0)
+		exports := []struct{ sym, name string }{
+			{"wasm_export_run", "run"},
+			{"wasm_export_resume", "resume"},
+			{"wasm_export_getsp", "getsp"},
+		}
+		if buildcfg.GOWASM.Threads {
+			// The worker-thread entry point: a pool worker instance calls
+			// this instead of run/resume (see lib/wasm/wasm_exec_worker.js
+			// and runtime/sys_wasmthreads.s).
+			exports = append(exports, struct{ sym, name string }{"wasm_export_thread_run", "wasm_thread_run"})
+		}
+		writeUleb128(ctxt.Out, uint64(1+len(exports)+len(ldr.WasmExports)+len(syntheticFns))) // number of exports
+		for _, e := range exports {
+			s := ldr.Lookup(e.sym, 0)
 			if s == 0 {
-				ld.Errorf("export symbol %s not defined", "wasm_export_"+name)
+				ld.Errorf("export symbol %s not defined", e.sym)
 			}
 			idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
-			writeName(ctxt.Out, name)           // inst.exports.run/resume/getsp in wasm_exec.js
+			writeName(ctxt.Out, e.name)         // inst.exports.run/resume/getsp/wasm_thread_run in wasm_exec*.js
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
 		}

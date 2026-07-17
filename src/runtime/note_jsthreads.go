@@ -1,8 +1,8 @@
-// Copyright 2024 The Go Authors. All rights reserved.
+// Copyright 2026 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !wasm.threads
+//go:build js && wasm && wasm.threads
 
 package runtime
 
@@ -27,16 +27,17 @@ package runtime
 // notesleep/notetsleep are generally called on g0,
 // notetsleepg is similar to notetsleep but is called on user g.
 type note struct {
-	status int32
+	// key is treated as a uint32 futex word: 0 while the note is
+	// pending, 1 once it has been woken. Ms (g0) block on it with
+	// memory.atomic.wait32; see lock_jsthreads.go.
+	key uintptr
 
-	// The G waiting on this note.
-	gp *g
-
-	// Deadline, if any. 0 indicates no timeout.
-	deadline int64
-
-	// allprev and allnext are used to form the allDeadlineNotes linked
-	// list. These are unused if there is no deadline.
-	allprev *note
-	allnext *note
+	// gp is a goroutine parked on the note by notetsleepg(n, -1),
+	// which parks the g instead of blocking the M so that the
+	// event-loop M stays responsive. Guarded by noteGLock.
+	//
+	// It is a guintptr, not a *g, so that noteclear/notewakeup stay
+	// free of write barriers (they run in nowritebarrierrec contexts
+	// like mPark and templateThread); the g is kept alive by allgs.
+	gp guintptr
 }

@@ -116,7 +116,12 @@ func initsig(preinit bool) {
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
-	throw("newosproc: not implemented")
+	if !wasmThreadsEnabled {
+		throw("newosproc: not implemented")
+	}
+	// GOWASM=threads: hand the new M to a pre-spawned pool worker
+	// through the spawn mailbox. See os_wasmthreads.go.
+	wasmThreadsNewosproc(mp)
 }
 
 // Do nothing on WASM platform, always return EPIPE to caller.
