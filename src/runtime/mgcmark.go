@@ -10,6 +10,7 @@ import (
 	"internal/abi"
 	"internal/goarch"
 	"internal/goexperiment"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
@@ -1162,9 +1163,108 @@ const (
 	gcDrainFractional
 )
 
+// Frame-aware GC support for js/wasm.
+//
+// js/wasm is single-threaded and cooperative toward the host: while the
+// runtime is marking, the JavaScript event loop cannot run, so an untimed
+// idle mark drain delays the next animation frame by however long the drain
+// takes. These variables bound the idle drain by a deadline and let the
+// scheduler yield to the event loop instead of immediately rescheduling
+// another idle worker. They are only ever written on js/wasm (single
+// threaded, so plain globals are fine) and all uses are gated on
+// goos.IsJs, so other platforms are unchanged.
+var (
+	// wasmIdleMarkDeadline, when nonzero, is the nanotime deadline of the
+	// idle mark drain currently in progress.
+	wasmIdleMarkDeadline int64
+
+	// wasmIdleMarkYield is set when an idle mark drain hit its deadline
+	// with mark work still available. While set (and blackening is
+	// enabled), findRunnable does not schedule another idle mark worker,
+	// so the scheduler falls through to beforeIdle and returns control to
+	// the event loop; beforeIdle (lock_js.go) arms a short wakeup so
+	// marking resumes promptly. Cleared on the next entry from JavaScript
+	// (handleEvent) and by the budgeted mark step (gcMarkStepBudgeted).
+	wasmIdleMarkYield bool
+)
+
+// wasmIdleMarkBudget bounds a single idle mark drain on js/wasm: long
+// enough to make real progress, short enough that an idle drain that
+// starts just before a frame event cannot eat the whole frame.
+const wasmIdleMarkBudget = 2e6 // 2ms
+
+// wasmLastMarkStepTime is the nanotime of the most recent budgeted mark
+// step call from the host (see gcMarkStepBudgeted; js/wasm only, 0
+// elsewhere and before the first call). A recent call means the host is
+// frame-aware and donating idle time to the GC, so the pacer can keep
+// background marking out of the host's frames (see startCycle).
+var wasmLastMarkStepTime int64
+
+// wasmMarkStepRecentNs is how recently the host must have called the
+// budgeted mark step for the pacer to treat it as frame-aware.
+const wasmMarkStepRecentNs = 5e9 // 5s
+
+// wasmRecentMarkStep reports whether the host called the budgeted mark
+// step recently. now may be 0, meaning "read the clock if needed".
+// Constant false on everything but js/wasm.
+func wasmRecentMarkStep(now int64) bool {
+	if goos.IsJs == 0 {
+		return false
+	}
+	last := wasmLastMarkStepTime
+	if last == 0 {
+		return false
+	}
+	if now == 0 {
+		now = nanotime()
+	}
+	return now-last < wasmMarkStepRecentNs
+}
+
+// wasmIdleMarkThrottled reports whether the scheduler should skip
+// scheduling an idle mark worker to let the host event loop run.
+// Constant false on everything but js/wasm.
+//
+// The wasmIdleMarkCanYield condition matters for safety: skipping the
+// idle worker makes findRunnable fall through to beforeIdle, and pausing
+// there is only correct when returning to the event loop is the normal
+// next step (the top JavaScript entry has finished its Go work). In any
+// other state - notably while a go:wasmexport call is being processed
+// after a stack switch, where "pause" would return to the export's JS
+// caller mid-call - keep the upstream behavior of scheduling the idle
+// worker again.
+func wasmIdleMarkThrottled() bool {
+	return goos.IsJs != 0 && wasmIdleMarkYield && wasmIdleMarkCanYield()
+}
+
+// pollWorkOrWasmIdleDeadline is the gcDrain self-preemption check for
+// idle drains on js/wasm: stop when there is other work to do (pollWork)
+// or when the idle drain deadline has passed.
+func pollWorkOrWasmIdleDeadline() bool {
+	if wasmIdleMarkDeadline != 0 && nanotime() >= wasmIdleMarkDeadline {
+		return true
+	}
+	return pollWork()
+}
+
 // gcDrainMarkWorkerIdle is a wrapper for gcDrain that exists to better account
 // mark time in profiles.
 func gcDrainMarkWorkerIdle(gcw *gcWork) {
+	if goos.IsJs != 0 {
+		// Bound the idle drain by a deadline: the host event loop cannot
+		// run while the runtime is marking, so an untimed drain here can
+		// eat one or more whole frames. If the deadline expires with work
+		// remaining, throttle idle marking until the event loop has had a
+		// chance to run (see wasmIdleMarkYield above).
+		wasmIdleMarkDeadline = nanotime() + wasmIdleMarkBudget
+		gcDrain(gcw, gcDrainIdle|gcDrainUntilPreempt|gcDrainFlushBgCredit)
+		expired := nanotime() >= wasmIdleMarkDeadline
+		wasmIdleMarkDeadline = 0
+		if expired && (!gcw.empty() || gcMarkWorkAvailable()) {
+			wasmIdleMarkYield = true
+		}
+		return
+	}
 	gcDrain(gcw, gcDrainIdle|gcDrainUntilPreempt|gcDrainFlushBgCredit)
 }
 
@@ -1259,6 +1359,11 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 		checkWork = initScanWork + drainCheckThreshold
 		if idle {
 			check = pollWork
+			if goos.IsJs != 0 && wasmIdleMarkDeadline != 0 {
+				// js/wasm: also self-preempt when the idle drain
+				// deadline passes (see gcDrainMarkWorkerIdle).
+				check = pollWorkOrWasmIdleDeadline
+			}
 		} else if flags&gcDrainFractional != 0 {
 			check = pollFractionalWorkerExit
 		}

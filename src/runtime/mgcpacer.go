@@ -6,7 +6,9 @@ package runtime
 
 import (
 	"internal/cpu"
+	"internal/goarch"
 	"internal/goexperiment"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/math"
 	"internal/strconv"
@@ -388,6 +390,23 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 	c.stackScanWork.Store(0)
 	c.globalsScanWork.Store(0)
 	c.bgScanCredit.Store(0)
+	if goarch.IsWasm != 0 && !c.test {
+		// On wasm, assists at the very start of a cycle land synchronously
+		// inside whatever host callback (e.g. animation frame) crossed the
+		// trigger, before background marking has banked any credit: with a
+		// single P there is no concurrent background worker to race ahead
+		// of the mutator. Seed the background credit with a small fraction
+		// of the runway's worth of scan work so the triggering frame keeps
+		// its budget; between-frame marking (bounded idle drains and
+		// host-donated mark steps) repays it almost immediately. The cost
+		// is bounded: if background marking never runs, the heap overshoots
+		// the goal by at most ~the seed divided by the assist ratio.
+		seed := int64(c.runway.Load() / 8)
+		if seed > wasmMaxBgCreditSeed {
+			seed = wasmMaxBgCreditSeed
+		}
+		c.bgScanCredit.Store(seed)
+	}
 	c.assistTime.Store(0)
 	c.dedicatedMarkTime.Store(0)
 	c.fractionalMarkTime.Store(0)
@@ -416,6 +435,13 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 		c.fractionalUtilizationGoal = (totalUtilizationGoal - float64(dedicatedMarkWorkersNeeded)) / float64(procs)
 	} else {
 		c.fractionalUtilizationGoal = 0
+	}
+	if goos.IsJs != 0 && !c.test && c.fractionalUtilizationGoal > jsFractionalUtilizationGoal && wasmRecentMarkStep(markStartTime) {
+		// js/wasm with a frame-aware host (it recently donated idle time
+		// via the budgeted mark step): cap in-frame background marking;
+		// see the comment on jsFractionalUtilizationGoal. A host that
+		// does not donate idle time keeps the standard fractional quota.
+		c.fractionalUtilizationGoal = jsFractionalUtilizationGoal
 	}
 
 	// In STW mode, we just want dedicated workers.
@@ -1178,6 +1204,47 @@ const (
 	// The maximum trigger constant is chosen somewhat arbitrarily, but the
 	// current constant has served us well over the years.
 	maxTriggerRatioNum = 61 // ~0.95
+
+	// wasm is single-threaded and typically frame-driven (browser/Node
+	// animation loops), and its heaps are small. The pacer's cons/mark-based
+	// runway routinely comes out at a few hundred KB there, which
+	// concentrates all mark work (assists plus whatever background marking
+	// fits) into a burst right before the heap goal - easily blowing a 16.7ms
+	// frame budget. Give wasm a minimum runway so the mark phase starts
+	// earlier and can be spread across frame idle time (see the budgeted
+	// mark step in mgcmark.go), and a lower minimum-trigger ratio so that
+	// runway is actually reachable on small heaps. Both are dead constants
+	// on every other platform (goarch.IsWasm == 0), so behavior elsewhere
+	// is unchanged.
+
+	// wasmMinTriggerRatioNum is the wasm minimum trigger bound: the trigger
+	// may sit as early as halfway between the live heap and the goal,
+	// matching the half-headroom minimum runway below. The upstream ~0.7
+	// floor exists to bound allocate-black RSS growth with 48 fast Ps; with
+	// one slow P the extra runway is worth the small RSS cost.
+	wasmMinTriggerRatioNum = 32 // ~0.5, wasm only
+
+	// wasmMinRunway is the absolute floor on the wasm minimum runway, for
+	// tiny heaps where half the headroom is not a useful amount of runway.
+	// The result is still bounded by the trigger bounds, so on tiny heaps
+	// the trigger simply sits at the wasm minimum-trigger ratio.
+	wasmMinRunway = 1 << 20 // wasm only
+
+	// wasmMaxBgCreditSeed caps the background scan credit seeded at cycle
+	// start on wasm (see startCycle).
+	wasmMaxBgCreditSeed = 4 << 20 // wasm only
+
+	// jsFractionalUtilizationGoal caps the fractional mark worker's CPU
+	// quota on js/wasm. With one P the standard 25% background utilization
+	// can only be stolen from the mutator - and the quota is measured
+	// against wall time, which on js includes time spent paused in the
+	// host's event loop, so a frame-driven app pays the whole period's 25%
+	// inside its frames (~4ms of every 16.7ms frame). Frame-aware marking
+	// is expected to come from host-donated idle time (go_gc_mark_step)
+	// and the bounded idle drains instead; keep a small fractional quota
+	// purely as a liveness backstop so a CPU-bound, allocation-free
+	// goroutine cannot hold a mark phase open forever.
+	jsFractionalUtilizationGoal = 0.05
 )
 
 // trigger returns the current point at which a GC should trigger along with
@@ -1219,6 +1286,11 @@ func (c *gcControllerState) trigger() (uint64, uint64) {
 	// saying that we're OK using more CPU during the GC to prevent
 	// this growth in RSS.
 	triggerLowerBound := ((goal-c.heapMarked)/triggerRatioDen)*minTriggerRatioNum + c.heapMarked
+	if goarch.IsWasm != 0 && !c.test {
+		// Allow an earlier trigger on wasm so the minimum-runway clamp
+		// below is reachable on small heaps. See the wasm constants above.
+		triggerLowerBound = ((goal-c.heapMarked)/triggerRatioDen)*wasmMinTriggerRatioNum + c.heapMarked
+	}
 	if minTrigger < triggerLowerBound {
 		minTrigger = triggerLowerBound
 	}
@@ -1241,6 +1313,25 @@ func (c *gcControllerState) trigger() (uint64, uint64) {
 	// Compute the trigger from our bounds and the runway stored by commit.
 	var trigger uint64
 	runway := c.runway.Load()
+	if goarch.IsWasm != 0 && !c.test {
+		// wasm minimum-runway clamp: don't let the mark phase be squeezed
+		// into a tiny burst right before the goal. One frame-driven wasm
+		// mark cycle typically needs several frames' worth of between-frame
+		// idle time to complete (marking is slow, and only the host's idle
+		// donations and bounded idle drains run it off the critical path),
+		// so the runway must span several frames of allocation: give the
+		// mark phase at least half the distance from the live heap to the
+		// goal, with an absolute floor for tiny heaps. See the wasm
+		// constants above. The result is still subject to the min/max
+		// trigger bounds below.
+		minRunway := (goal - c.heapMarked) / 2
+		if minRunway < wasmMinRunway {
+			minRunway = wasmMinRunway
+		}
+		if runway < minRunway {
+			runway = minRunway
+		}
+	}
 	if runway > goal {
 		trigger = minTrigger
 	} else {

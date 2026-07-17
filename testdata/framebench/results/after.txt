@@ -1,0 +1,9 @@
+# after: frame-aware GC runtime (A1 pacer runway clamp + credit seed, A2 budgeted mark step, A3 bounded idle drain)
+# branch wasm-frame-gc, 2026-07-17T10:11:38Z, same machine as baseline.txt
+# cmd: node bench.js framebench.wasm --markstep
+{"config":"markstep","frames":2000,"warmup":300,"frame_budget_ms":16.7,"p50_ms":1.855,"p90_ms":3.558,"p99_ms":4.835,"max_ms":5.874,"mean_ms":2.184,"frames_over_8ms":0,"frames_over_16_7ms":0,"gc_cycles":82,"markstep_calls":2300,"markstep_total_ms":9688.3,"total_wall_ms":15157.7,"heap_alloc_mb":75.81,"node":"v22.22.2"}
+markstep: frames=2000 p50=1.855ms p90=3.558ms p99=4.835ms max=5.874ms gc_cycles=82 over8ms=0 over16.7ms=0
+
+# same runtime, without --markstep (no host-donated idle time; A1+A3 only):
+{"config":"baseline","frames":2000,"warmup":300,"frame_budget_ms":16.7,"p50_ms":2.105,"p90_ms":9.537,"p99_ms":16.525,"max_ms":21.819,"mean_ms":4.39,"frames_over_8ms":401,"frames_over_16_7ms":20,"gc_cycles":42,"markstep_calls":0,"markstep_total_ms":0,"total_wall_ms":11035.3,"heap_alloc_mb":109.48,"node":"v22.22.2"}
+baseline: frames=2000 p50=2.105ms p90=9.537ms p99=16.525ms max=21.819ms gc_cycles=42 over8ms=401 over16.7ms=20
