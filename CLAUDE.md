@@ -300,15 +300,21 @@ the full catalog of fixes and remaining gaps):
   section now precedes producers, so llvm tools can read Go wasm
   binaries. Variable location expressions are still placeholders
   (faithful locations need DW_OP_WASM_location).
-- Round 5 (2026-07-17): frame-aware GC for js/wasm. The pacer gives wasm
-  real runway (trigger no later than ~halfway to the goal, background
-  credit seeded at cycle start so the triggering frame doesn't
-  assist-burst), idle mark drains are bounded to 2ms and yield to the
-  event loop with a 1ms re-arm instead of starving it until mark
-  completion, and a new `go_gc_mark_step(budgetMs) -> bool` wasm export
-  lets the host donate idle time between frames (bounded mark work,
-  no-op outside a cycle, returns whether work remains; while the host
-  donates, the in-frame fractional mark quota drops 25% -> 5%).
+- Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
+  runway (trigger no later than ~halfway to the goal, background credit
+  seeded at cycle start so the allocation that crosses the trigger
+  doesn't assist-burst), idle mark drains are bounded to 2ms, and a new
+  `go_gc_mark_step(budgetMs) -> bool` wasm export lets the host donate
+  idle time between frames (bounded mark work, no-op outside a cycle,
+  returns whether work remains; while the host donates, the in-frame
+  fractional mark quota drops 25% -> 5%). These behaviors are
+  deliberately platform-independent - ALL platforms trigger earlier
+  (trigger pinned ~halfway to the goal, trading some throughput/GC
+  frequency for bounded mark bursts; TestGcPacer models the new math)
+  and bound idle drains, and the budgeted mark step core is portable
+  with runtime tests that run everywhere; only the event-loop yield
+  glue (throttle idle marking + 1ms re-arm instead of starving the
+  event loop until mark completion) and the wasm export are js-only.
   `testdata/framebench` (10k allocs/frame under node): p99 frame time
   21.6ms -> 4.8ms, zero frames over 8ms.
 
