@@ -101,6 +101,23 @@ var (
 	ntGetExitCodeProcessFn  uintptr
 	ntGetProcessTimesFn     uintptr
 
+	// Chunk D (signals/VEH/preemption; all kernel32, present since
+	// forever except the optional WER pair).
+	ntAddVectoredExceptionHandlerFn uintptr
+	ntAddVectoredContinueHandlerFn  uintptr
+	ntSetErrorModeFn                uintptr
+	ntGetErrorModeFn                uintptr
+	ntSuspendThreadFn               uintptr
+	ntResumeThreadFn                uintptr
+	ntGetThreadContextFn            uintptr
+	ntSetThreadContextFn            uintptr
+	ntSetConsoleCtrlHandlerFn       uintptr
+	ntCreateEventWFn                uintptr
+	ntSetEventFn                    uintptr
+	ntTerminateProcessFn            uintptr
+	ntWerGetFlagsFn                 uintptr // optional (missing on old wine)
+	ntWerSetFlagsFn                 uintptr // optional
+
 	// Optional non-kernel32 imports: 0 when unavailable, and every
 	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
@@ -165,6 +182,20 @@ var (
 	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
 	ntNameGetExitCodeProc   = []byte("GetExitCodeProcess\x00")
 	ntNameGetProcessTimes   = []byte("GetProcessTimes\x00")
+	ntNameAddVEH            = []byte("AddVectoredExceptionHandler\x00")
+	ntNameAddVCH            = []byte("AddVectoredContinueHandler\x00")
+	ntNameSetErrorMode      = []byte("SetErrorMode\x00")
+	ntNameGetErrorMode      = []byte("GetErrorMode\x00")
+	ntNameSuspendThread     = []byte("SuspendThread\x00")
+	ntNameResumeThread      = []byte("ResumeThread\x00")
+	ntNameGetThreadContext  = []byte("GetThreadContext\x00")
+	ntNameSetThreadContext  = []byte("SetThreadContext\x00")
+	ntNameSetConsoleCtrlH   = []byte("SetConsoleCtrlHandler\x00")
+	ntNameCreateEventW      = []byte("CreateEventW\x00")
+	ntNameSetEvent          = []byte("SetEvent\x00")
+	ntNameTerminateProcess  = []byte("TerminateProcess\x00")
+	ntNameWerGetFlags       = []byte("WerGetFlags\x00")
+	ntNameWerSetFlags       = []byte("WerSetFlags\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -384,6 +415,23 @@ func ntResolve() {
 	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
 	ntGetExitCodeProcessFn = k32sym(&ntNameGetExitCodeProc[0])
 	ntGetProcessTimesFn = k32sym(&ntNameGetProcessTimes[0])
+
+	// Chunk D: signals/VEH/preemption (all kernel32; the WER pair is
+	// optional - wine lacks it - and preventErrorDialogs degrades).
+	ntAddVectoredExceptionHandlerFn = k32sym(&ntNameAddVEH[0])
+	ntAddVectoredContinueHandlerFn = k32sym(&ntNameAddVCH[0])
+	ntSetErrorModeFn = k32sym(&ntNameSetErrorMode[0])
+	ntGetErrorModeFn = k32sym(&ntNameGetErrorMode[0])
+	ntSuspendThreadFn = k32sym(&ntNameSuspendThread[0])
+	ntResumeThreadFn = k32sym(&ntNameResumeThread[0])
+	ntGetThreadContextFn = k32sym(&ntNameGetThreadContext[0])
+	ntSetThreadContextFn = k32sym(&ntNameSetThreadContext[0])
+	ntSetConsoleCtrlHandlerFn = k32sym(&ntNameSetConsoleCtrlH[0])
+	ntCreateEventWFn = k32sym(&ntNameCreateEventW[0])
+	ntSetEventFn = k32sym(&ntNameSetEvent[0])
+	ntTerminateProcessFn = k32sym(&ntNameTerminateProcess[0])
+	ntWerGetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerGetFlags[0])), 0, 0, 0, 0)
+	ntWerSetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerSetFlags[0])), 0, 0, 0, 0)
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).

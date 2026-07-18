@@ -66,6 +66,7 @@ const (
 	ntSysGetsockopt = 55
 	ntSysExit       = 60
 	ntSysWait4      = 61
+	ntSysKill       = 62
 	ntSysFcntl      = 72
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
@@ -81,8 +82,10 @@ const (
 	ntSysGetppid    = 110
 	ntSysGetpgrp    = 111
 	ntSysGettid     = 186
+	ntSysTkill      = 200
 	ntSysGetdents64 = 217
 	ntSysExitGroup  = 231
+	ntSysTgkill     = 234
 	ntSysOpenat     = 257
 	ntSysMkdirat    = 258
 	ntSysNewfstatat = 262
@@ -99,6 +102,7 @@ const (
 // Linux errno values produced by the emulation.
 const (
 	ntENOENT       = 2
+	ntESRCH        = 3
 	ntEIO          = 5
 	ntENOEXEC      = 8
 	ntEBADF        = 9
@@ -359,6 +363,13 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		// No umask concept; report the conventional 022 and ignore
 		// the new value.
 		return 0o22, 0, 0
+
+	case ntSysKill:
+		return ntEmuKill(int32(a1), int32(a2))
+	case ntSysTkill:
+		return ntEmuTkill(int32(a1), int32(a2))
+	case ntSysTgkill:
+		return ntEmuTgkill(int32(a1), int32(a2), int32(a3))
 
 	case ntSysExit, ntSysExitGroup:
 		exit(int32(a1))
@@ -1252,6 +1263,12 @@ func ntEmitDirent(buf unsafe.Pointer, out, count uintptr, de ntDirEnt) (uintptr,
 //     real consoles. All console calls are fire-and-forget: under
 //     redirection (pipes, CI) they fail harmlessly.
 func ntBootInit() {
+	// Signals/VEH first (chunk D1): error dialogs off, the vectored
+	// exception machinery registered, and the boot thread's TEB
+	// stack window widened - so every later boot step already runs
+	// with working exception translation.
+	ntInitSignals()
+
 	if ntProcessPrngFn != 0 && len(startupRand) >= 16 {
 		ntcall(ntProcessPrngFn, uintptr(unsafe.Pointer(&startupRand[0])), uintptr(len(startupRand)), 0, 0, 0, 0)
 	}

@@ -449,7 +449,12 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
 	var ret int32
-	if isdarwin() && GOARCH == "arm64" {
+	if iswindows() {
+		// NT: there is no kernel-side sigaction; the runtime records
+		// handler state itself and self-directed delivery consults
+		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
+		ret = ntSigaction(sig, new, old)
+	} else if isdarwin() && GOARCH == "arm64" {
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))

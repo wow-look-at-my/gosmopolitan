@@ -383,8 +383,13 @@ raise_darwin:
 	SYSCALL
 	RET
 raise_nt:
-	// NT wave 1: signal sends are dropped (no signal machinery yet).
-	RET
+	// NT (chunk D1): raise is only called on paths that expect the
+	// process to die of the signal (dieFromSignal, raisebadsignal;
+	// delivery-to-handler decisions happen before raise is reached,
+	// ntKillSelf). Exit with the fork's encoded signal-death status
+	// so wait4 reports "killed by signal". Tail JMP: same signature,
+	// FP slot carries over.
+	JMP	runtime·ntExitEncoded(SB)
 
 TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	CHECK_WINDOWS(raiseproc_nt)
@@ -406,8 +411,10 @@ raiseproc_darwin:
 	SYSCALL
 	RET
 raiseproc_nt:
-	// NT wave 1: signal sends are dropped (no signal machinery yet).
-	RET
+	// NT (chunk D1): same as raise_nt - a process-directed fatal
+	// signal (sighandler's crash relay) kills this process with the
+	// encoded status.
+	JMP	runtime·ntExitEncoded(SB)
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	CHECK_DARWIN(getpid_darwin)

@@ -47,6 +47,12 @@ func cosmoNTGoargs() bool {
 	return false
 }
 
+//go:nosplit
+func ntSigaction(sig uint32, new, old *sigactiont) int32 {
+	throw("ntSigaction: not implemented on arm64")
+	return -1
+}
+
 func ntReadRandom(r []byte) int {
 	return 0
 }
