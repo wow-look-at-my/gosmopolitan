@@ -725,17 +725,12 @@ TEXT runtime·clone(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	$0, R10
 	MOVQ    $0, R8
 	// Copy mp, gp, fn off parent stack for use by child.
+	// The kernel's CLONE_SETTLS can only set FS on x86-64; the cosmo
+	// TLS model is gs:0x28 (see settls), so the child installs its own
+	// GS base below instead.
 	MOVQ	mp+16(FP), R13
 	MOVQ	gp+24(FP), R9
 	MOVQ	fn+32(FP), R12
-	CMPQ	R13, $0    // m
-	JEQ	nog1
-	CMPQ	R9, $0    // g
-	JEQ	nog1
-	LEAQ	m_tls(R13), R8
-	ADDQ	$8, R8	// ELF wants to use -8(FS)
-	ORQ 	$0x00080000, DI //add flag CLONE_SETTLS(0x00080000) to call clone
-nog1:
 	MOVL	$SYS_clone, AX
 	SYSCALL
 
@@ -753,6 +748,18 @@ nog1:
 	JEQ	nog2
 	CMPQ	R9, $0    // g
 	JEQ	nog2
+
+	// Install TLS before any instruction touches g: point the GS base
+	// at &m.tls[0]-0x28 so gs:0x28 (the g slot) addresses m.tls[0].
+	// Mirrors the Linux branch of settls.
+	LEAQ	m_tls(R13), SI
+	SUBQ	$0x28, SI
+	MOVQ	$0x1001, DI	// ARCH_SET_GS
+	MOVQ	$SYS_arch_prctl, AX
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 
 	// Initialize m->procid to Linux tid
 	MOVL	$SYS_gettid, AX
@@ -804,17 +811,30 @@ sigaltstack_darwin:
 	RET
 
 // set tls base to DI
+//
+// Cosmo amd64 TLS model: g lives at gs:0x28 (Tlsoffset 0x28, segment
+// prefix GS - see cmd/link/internal/ld/sym.go and
+// cmd/internal/obj/x86/asm6.go). On Windows hosts gs:0x28 is the TEB
+// ArbitraryUserPointer slot, so there is nothing to set up; on Linux
+// hosts point the GS base at &m.tls[0]-0x28 so that gs:0x28 addresses
+// m.tls[0], the slot g has always lived in.
 TEXT runtime·settls(SB),NOSPLIT,$32
+	// Windows: the TEB already backs gs:0x28; no setup syscall exists
+	// or is needed. (Raw __hostos compare; _HOSTWINDOWS == 2.)
+	CMPL	runtime·__hostos(SB), $2
+	JEQ	settls_nt
 	CHECK_DARWIN(settls_darwin)
 	// Linux path
-	ADDQ	$8, DI	// ELF wants to use -8(FS)
+	SUBQ	$0x28, DI	// gs:0x28 must address m.tls[0]
 	MOVQ	DI, SI
-	MOVQ	$0x1002, DI	// ARCH_SET_FS
+	MOVQ	$0x1001, DI	// ARCH_SET_GS
 	MOVQ	$SYS_arch_prctl, AX
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
+	RET
+settls_nt:
 	RET
 settls_darwin:
 	// macOS x86_64 TLS is handled differently
