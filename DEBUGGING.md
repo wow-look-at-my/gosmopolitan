@@ -231,14 +231,16 @@ TestExecutableDeleted, which passes once an APE binfmt_misc handler
 `:APE:M::MZqFpD::/bin/sh:` exists - purely a host limitation),
 os/signal 4->0, sync 1->0, syscall/net build-fail->pass, runtime
 build-fail->8 (3 gdb interop, TestUnsafePoint "no symbol section" in
-objdump, TestFakeTime windows-payload faketime compile, 2
+objdump, TestFakeTime windows-payload faketime compile [resolved
+2026-07-18: fat APEs no longer embed a windows payload], 2
 TestGoroutineLeakProfile assimilation races - concurrent FIRST execs of
 one pristine APE corrupt the boot-script parse mid-rewrite; retries
 pass). Zero runtime crashes.
 
 Known follow-ups: sys_cosmo_arm64.s asmdecl (mstart_stub_cosmo, settls
 missing Go declarations - fails explicit `go vet runtime` on arm64);
-APE symtab section for objdump; faketime skip for cosmo; boot-script
+APE symtab section for objdump; faketime skip for cosmo [resolved
+2026-07-18: no windows payload, faketime builds fat]; boot-script
 assimilation could flock/copy+rename to close the concurrent-first-exec
 race.
 
@@ -501,12 +503,15 @@ design). go test (-c) stays thin deliberately: host-run throwaway
 artifacts, and fattening triples test compiles. -tags=faketime forces
 thin: the windows sibling can't compile (time_fake.go is !windows and
 the tag drops time_nofake.go), and thin beats failing the build.
+[Obsolete 2026-07-18: the windows sibling build is gone, so the
+faketime special case is removed and -tags=faketime builds fat.]
 
 **Probe** (now 30 checks): + sleep (wall-clock bounded), ticker, after,
 ctxtimeout, tcplisten/tcpecho/tcpserver, deadline (read deadline in the
 past against a held-open conn -> i/o timeout), udp (loopback datagram),
 execchild (self-exec through the full os/exec stack, launch mode chosen
-by binary magic: ELF/Mach-O/windows direct, pristine APE via /bin/sh),
+by binary magic: ELF/Mach-O direct [windows direct mode removed
+2026-07-18 with the PE payload], pristine APE via /bin/sh),
 statdir. Plus a spin-loop watchdog (60s) that depends on nothing under
 test - a wedged probe fails CI in a minute, not at the job timeout.
 
@@ -609,8 +614,9 @@ abstract branch is untouched (verified: "@name" bind/dial/getsockname
 round-trips on Linux). This is also automatically right on macOS,
 where Apple zero-fills the sockaddr for unnamed sockets and the
 abstract namespace doesn't exist. Probe: unixsock (pathname listener
-addr round-trip + unnamed-dialer canary; Windows expects "@" there,
-per net's own unixsock tests) and unixecho - which also gives the
+addr round-trip + unnamed-dialer canary; the windows payload expected
+"@" there per net's own unixsock tests, a branch removed 2026-07-18
+with the payload) and unixecho - which also gives the
 wave-6 AF_UNIX socket emulation its first macOS CI coverage.
 
 **arm64 O_DIRECTORY/O_NOFOLLOW were the amd64 kernel's numbers**
@@ -798,6 +804,8 @@ USR1 idea cannot work - parent asserts Signaled()+SIGKILL through the
 wait4 translation; skip-lines on windows). The probe is now a
 multi-file package (per-OS signal helpers; syscall.Kill/SIGUSR2 don't
 exist for the windows payload), so CI builds its module directory.
+[2026-07-18: the windows signal half and its skip-lines left with the
+payload; the probe remains a multi-file module.]
 
 **Verified**: make.bash; vet clean both arches; full probe green on
 linux/amd64 AND qemu-aarch64 (40 lines incl. the new five; per-binary
@@ -1017,3 +1025,46 @@ phase, pid, timestamp) to the workspace BEFORE launching the guarded
 command and update it from the watchdog, so a wedged shell still
 leaves on-disk evidence for the artifact upload of a later step (or a
 job-level always() uploader) to collect.
+
+## 2026-07-18: embedded windows/amd64 PE payload removed from fat APEs
+
+Fat APEs now contain exactly two images - cosmo amd64 + cosmo arm64 -
+instead of three. The GOOS=windows sibling build in cosmoFatten /
+cosmoFattenInstall is gone, `-apefat` takes exactly two inputs, and
+cmd/link's PE-transplant machinery (pePayload, payloadFromPE,
+peHeaderOffset, writePEHeaderFromPayload, the `win` parameter threaded
+through layoutAPE/writeAPEFile/makeAPEHeaderForPayloads) is deleted.
+
+**Why**: size. The third image was a complete windows/amd64 Go binary,
+about a third of every fat APE: fizzbuzz.com went 7602176 -> 5084226
+bytes (-33.1%), runtimeprobe.com 11344384 -> 7305033 bytes (-35.6%).
+
+**What Windows gets today**: exactly what thin GOCOSMOFAT=0 builds
+have always shipped - the parseable stub PE header at 0x80
+(writePEHeader, itself untouched), whose entry point is the 3-byte
+xor eax,eax; ret at file offset 0x200. The file loads as a valid
+console PE and exits 0 without running any cosmo code. Fat and thin
+builds now emit the 0x80 region through that one writePEHeader path,
+and apetest's pe_test.go is the stub's regression suite (the two
+embedded-payload assertions became TestPETextSectionInsideStubHeader
+and TestPEEntrypointIsPlaceholderStub).
+
+**Replacement path (in progress)**: cosmo-native NT bring-up - boot
+the cosmo amd64 image on Windows through the APE PE header plus an NT
+personality in the cosmo runtime, vim.com-style. The runtime already
+declares _HOSTWINDOWS (os_cosmo_amd64.go / os_cosmo_arm64.go) but
+nothing references it yet; before this change the embedded PE payload
+was the ONLY Windows execution path. Until the NT personality lands,
+Windows execution is temporarily unavailable by design - being
+reimplemented, not dropped.
+
+**Cleaned up with it**: the faketime-forces-thin special case in
+cosmoFatEnabled (the windows sibling was its only reason;
+-tags=faketime now builds fat, verified by the apetest TestFat
+structural suite against a faketime fizzbuzz build). The runtime probe
+lost its dead windows halves (sig_windows.go, the unixsock "@"
+expectation, windows direct-launch, the waitsig skip) and remains a
+multi-file module. CI dropped the windows-latest test leg - its unique
+value was executing the embedded PE - while the windows-latest build
+leg stays for make.bat toolchain health and windows-origin cross-build
+coverage, whose binaries the unix test legs execute.

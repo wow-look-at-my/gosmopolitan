@@ -12,7 +12,7 @@ This is a fork of the Go programming language toolchain that adds support for **
 
 ## No Rosetta Dependency
 
-**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta.
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. (That is the technology's capability and this fork's target; the fork's own output currently executes on Linux and macOS, and its Windows execution is being reimplemented cosmo-natively - in progress, see Building Cosmopolitan Binaries below.)
 
 - APE binaries contain native code for multiple architectures (AMD64 + ARM64)
 - On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
@@ -75,8 +75,8 @@ GOOS=cosmo go install ./cmd/program
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
-# Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
+# Merge two single-arch cosmo binaries into one fat APE by hand
+go tool link -apefat amd64.com,arm64.com -o program.com
 ```
 
 Fat-build coverage: `go build` (with or without `-o`; a plain
@@ -84,13 +84,17 @@ single-main-package build defaults its output name and fattens too) and
 `go install` both produce fat APEs. `go test` / `go test -c` binaries stay
 thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
-compile. The `faketime` build tag also forces a thin build, because its
-windows payload cannot compile (`runtime/time_fake.go` is `!windows`).
+compile.
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
-image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
-on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
-Rosetta). Windows uses an embedded native windows/amd64 PE payload.
+The resulting `.com` file runs on Linux and macOS. The cosmo amd64 image
+boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots on
+ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
+Rosetta). On Windows the file currently loads as the parseable stub PE in
+the APE header and exits 0 without running the program: the embedded native
+windows/amd64 PE payload was removed (2026-07-18), and Windows execution is
+being reimplemented cosmo-natively - the cosmo amd64 image booted through
+the APE PE header plus an NT personality in the runtime, vim.com-style (in
+progress, see DEBUGGING.md).
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -198,11 +202,11 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any of those platforms run correctly on the unix platforms (Linux and macOS). The windows build leg stays - it gates make.bat toolchain health and proves fat cosmo APEs cross-build from a Windows host, and its binaries are executed by the unix test legs - but there is no windows test leg anymore: its unique value was executing the embedded windows PE payload, which fat APEs no longer carry.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
-format tests run everywhere.
+amd64 and cosmo arm64 payloads. Execution and structural format tests run on
+the Linux and macOS test runners.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -327,7 +331,7 @@ grep -r "//go:build.*cosmo" src/
 
 ### 3. Runtime Platform Handling
 
-Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime. When creating `_cosmo.go` files:
+Cosmopolitan binaries run on Linux and macOS at runtime today, and will run on Windows again once the cosmo-native NT bring-up (in progress) lands - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
 - Don't assume Linux-only features like `/proc` are available
 - Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
 - Test assumptions about what works on each platform

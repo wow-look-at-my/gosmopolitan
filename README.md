@@ -4,13 +4,13 @@ This is an **experimental fork** of the [Go programming language](https://github
 
 ## What are APE binaries?
 
-APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere.
+APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere. This fork's output currently executes on Linux and macOS; its Windows execution path is being reimplemented cosmo-natively (in progress).
 
 ## Building APE Binaries
 
 ```bash
-# Fat APE (default): cosmo amd64 + cosmo arm64 + native windows/amd64
-# payloads in one binary. GOARCH is ignored for the output.
+# Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
+# GOARCH is ignored for the output.
 GOOS=cosmo go build -o program.com main.go
 
 # go install produces the same fat APE in the install directory
@@ -20,7 +20,9 @@ GOOS=cosmo go install ./cmd/program
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs natively on Linux, macOS, and Windows.
+The resulting `.com` file runs natively on Linux and macOS. On Windows it
+currently loads as a parseable stub PE that exits 0; Windows execution is
+being reimplemented cosmo-natively (in progress).
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 
@@ -57,8 +59,10 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
-Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
-Windows (plus ARM64 Linux via qemu during development). macOS Intel support
+Execution is exercised in CI on x86-64 Linux and ARM64 macOS (plus ARM64
+Linux via qemu during development). The embedded windows/amd64 PE payload
+that used to provide Windows execution has been removed; Windows support is
+being reimplemented cosmo-natively (in progress). macOS Intel support
 is structural so far: the Mach-O assimilation header is verified against the
 XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
 incomplete and untested end to end (no Intel CI runner).
