@@ -93,6 +93,14 @@ var (
 	ntSetConsoleOutputCPFn           uintptr
 	ntSetConsoleCPFn                 uintptr
 
+	// Chunk B (os/exec; all kernel32, present since forever).
+	ntCreatePipeFn          uintptr
+	ntDuplicateHandleFn     uintptr
+	ntCreateProcessWFn      uintptr
+	ntWaitForSingleObjectFn uintptr
+	ntGetExitCodeProcessFn  uintptr
+	ntGetProcessTimesFn     uintptr
+
 	// Optional non-kernel32 imports: 0 when unavailable, and every
 	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
@@ -151,6 +159,12 @@ var (
 	ntNameSetConsoleMode    = []byte("SetConsoleMode\x00")
 	ntNameSetConsoleOutCP   = []byte("SetConsoleOutputCP\x00")
 	ntNameSetConsoleCP      = []byte("SetConsoleCP\x00")
+	ntNameCreatePipe        = []byte("CreatePipe\x00")
+	ntNameDuplicateHandle   = []byte("DuplicateHandle\x00")
+	ntNameCreateProcessW    = []byte("CreateProcessW\x00")
+	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
+	ntNameGetExitCodeProc   = []byte("GetExitCodeProcess\x00")
+	ntNameGetProcessTimes   = []byte("GetProcessTimes\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -177,9 +191,9 @@ const (
 // Kept at six arguments on purpose: ntcall sits inside the tightest
 // nosplit chain in the port (cgoSigtramp -> ... -> write1 -> ntwrite1
 // -> ntcall -> asmcgocall), which cannot afford a bigger frame. The
-// syscall-emulation layer's seven-argument calls (CreateFileW) use
-// the separate ntcallArgs8/ntcall8 pair, which never appears in that
-// chain.
+// syscall-emulation layer's wider calls (CreateFileW, CreateProcessW)
+// use the separate ntcallArgs10/ntcall10 pair, which never appears in
+// that chain.
 type ntcallArgs struct {
 	fn  uintptr
 	a1  uintptr
@@ -191,8 +205,11 @@ type ntcallArgs struct {
 	ret uintptr
 }
 
-// ntcallArgs8 is the eight-argument block for the ntcall8 trampoline.
-type ntcallArgs8 struct {
+// ntcallArgs10 is the ten-argument block for the ntcall10 trampoline
+// (born as ntcallArgs8 in chunk A for 7-argument CreateFileW; widened
+// - per the chunk-A rule that this parallel block is the one that
+// grows - to ten for CreateProcessW in chunk B).
+type ntcallArgs10 struct {
 	fn  uintptr
 	a1  uintptr
 	a2  uintptr
@@ -202,12 +219,14 @@ type ntcallArgs8 struct {
 	a6  uintptr
 	a7  uintptr
 	a8  uintptr
+	a9  uintptr
+	a10 uintptr
 	ret uintptr
 }
 
 // Implemented in sys_cosmo_nt_amd64.s.
 func ntcall6()
-func ntcall8()
+func ntcall10()
 func tstart_cosmo_nt()
 func ntwrite1tramp(fd uintptr, p unsafe.Pointer, n int32) int32
 
@@ -226,12 +245,22 @@ func ntcall(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr {
 }
 
 // ntcall7 is ntcall for seven-argument functions (CreateFileW), via
-// the wider ntcall8 trampoline.
+// the wider ntcall10 trampoline.
 //
 //go:nosplit
 func ntcall7(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
-	args := ntcallArgs8{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7}
-	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall8)), unsafe.Pointer(&args))
+	args := ntcallArgs10{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7}
+	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall10)), unsafe.Pointer(&args))
+	return args.ret
+}
+
+// ntcall10x is ntcall for ten-argument functions (CreateProcessW).
+//
+//go:nosplit
+func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
+	args := ntcallArgs10{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5,
+		a6: a6, a7: a7, a8: a8, a9: a9, a10: a10}
+	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall10)), unsafe.Pointer(&args))
 	return args.ret
 }
 
@@ -268,6 +297,19 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	entersyscall()
 	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
+	lastErr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
+	exitsyscall()
+	return
+}
+
+// ntcallSE10 is ntcallSE for ten-argument functions (CreateProcessW,
+// which can block on image load). Same contract as ntcallSE:
+// user-goroutine context only.
+//
+//go:nosplit
+func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
+	entersyscall()
+	r = ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
 	lastErr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
 	exitsyscall()
 	return
@@ -334,6 +376,14 @@ func ntResolve() {
 	ntSetConsoleModeFn = k32sym(&ntNameSetConsoleMode[0])
 	ntSetConsoleOutputCPFn = k32sym(&ntNameSetConsoleOutCP[0])
 	ntSetConsoleCPFn = k32sym(&ntNameSetConsoleCP[0])
+
+	// Chunk B: os/exec (all kernel32).
+	ntCreatePipeFn = k32sym(&ntNameCreatePipe[0])
+	ntDuplicateHandleFn = k32sym(&ntNameDuplicateHandle[0])
+	ntCreateProcessWFn = k32sym(&ntNameCreateProcessW[0])
+	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
+	ntGetExitCodeProcessFn = k32sym(&ntNameGetExitCodeProc[0])
+	ntGetProcessTimesFn = k32sym(&ntNameGetProcessTimes[0])
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).
@@ -494,6 +544,7 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 func ntSetSyscallFns() {
 	cosmo.SetWindowsFns(&cosmo.WindowsFns{
 		Emulate: ntSyscallEmulate,
+		Spawn:   ntSpawn,
 	})
 }
 

@@ -54,6 +54,7 @@ const (
 	ntSysPwrite64   = 18
 	ntSysGetpid     = 39
 	ntSysExit       = 60
+	ntSysWait4      = 61
 	ntSysFcntl      = 72
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
@@ -79,6 +80,7 @@ const (
 	ntSysReadlinkat = 267
 	ntSysFchmodat   = 268
 	ntSysFaccessat  = 269
+	ntSysPipe2      = 293
 	ntSysGetrandom  = 318
 )
 
@@ -86,7 +88,10 @@ const (
 const (
 	ntENOENT       = 2
 	ntEIO          = 5
+	ntENOEXEC      = 8
 	ntEBADF        = 9
+	ntECHILD       = 10
+	ntEAGAIN       = 11
 	ntENOMEM       = 12
 	ntEACCES       = 13
 	ntEBUSY        = 16
@@ -220,6 +225,8 @@ func ntErrno(werr uintptr) uintptr {
 		return ntENAMETOOLONG
 	case 1921: // CANT_RESOLVE_FILENAME
 		return ntELOOP
+	case 193: // BAD_EXE_FORMAT (CreateProcessW on a non-executable)
+		return ntENOEXEC
 	}
 	return ntEIO
 }
@@ -291,6 +298,10 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return uintptr(ret), 0, 0
 	case ntSysGetrandom:
 		return ntEmuGetrandom(unsafe.Pointer(a1), a2)
+	case ntSysPipe2:
+		return ntEmuPipe2((*[2]int32)(unsafe.Pointer(a1)), int32(a2))
+	case ntSysWait4:
+		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
 
 	case ntSysGetpid, ntSysGetpgrp:
 		// getpgrp: no process groups on NT; report the pid, which is
@@ -715,7 +726,7 @@ func ntEmuFstat(fd int32, dst *ntLinuxStat) (r1, r2, errno uintptr) {
 	if !ok {
 		return ntFail3(ntEBADF)
 	}
-	if e.kind == ntFDStdio {
+	if e.kind == ntFDStdio || e.kind == ntFDPipe {
 		ntStatSynthDevice(dst, e.ftype)
 		return 0, 0, 0
 	}
@@ -764,7 +775,7 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 	if !ok {
 		return ntFail3(ntEBADF)
 	}
-	if e.kind == ntFDStdio {
+	if e.kind == ntFDStdio || e.kind == ntFDPipe {
 		return ntFail3(ntESPIPE)
 	}
 	if whence > _NT_FILE_END {

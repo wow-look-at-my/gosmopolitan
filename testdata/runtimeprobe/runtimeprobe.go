@@ -499,6 +499,14 @@ func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) 
 	direct = (magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
 		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
 		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
+	if !direct && os.Getenv("OS") == "Windows_NT" {
+		// On an NT host the binary stays a pristine APE (no
+		// self-assimilation there) whose MZ header IS a valid PE, and
+		// there is no /bin/sh: exec it directly. The OS env var is
+		// set by every Windows since NT (and by wine); on unix hosts
+		// it is absent, keeping their behavior untouched.
+		direct = true
+	}
 	if direct {
 		cmd = exec.Command(exe)
 	} else {

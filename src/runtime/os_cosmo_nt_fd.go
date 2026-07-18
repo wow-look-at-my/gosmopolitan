@@ -46,7 +46,8 @@ const (
 	ntFDFree  ntFDKind = iota
 	ntFDFile           // seekable disk file
 	ntFDDir            // directory (backup-semantics handle)
-	ntFDStdio          // console, pipe, or character device (not seekable)
+	ntFDStdio          // console, inherited pipe, or character device (not seekable)
+	ntFDPipe           // anonymous pipe end created by pipe2 (CreatePipe)
 )
 
 // ntDirEnt is one parsed directory entry awaiting delivery to a

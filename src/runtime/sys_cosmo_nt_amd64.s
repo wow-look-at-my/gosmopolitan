@@ -47,36 +47,43 @@ TEXT runtime·ntcall6(SB),NOSPLIT|NOFRAME,$0
 	ADDQ	$56, SP
 	RET
 
-// func ntcall8(args *ntcallArgs8)
+// func ntcall10(args *ntcallArgs10)
 //
-// Eight-argument variant of ntcall6 (same calling discipline) for
-// win64 functions with up to eight parameters (CreateFileW takes 7).
-// SUBQ $72 keeps 16-alignment and adds the four stack argument slots:
+// Ten-argument variant of ntcall6 (same calling discipline) for win64
+// functions with up to ten parameters (CreateFileW takes 7,
+// CreateProcessW takes 10). SUBQ $88 keeps 16-alignment and adds the
+// six stack argument slots:
 //
 //	0(SP)..31(SP)  shadow space
 //	32(SP)         arg 5
 //	40(SP)         arg 6
 //	48(SP)         arg 7
 //	56(SP)         arg 8
-//	64(SP)         (padding for 16-alignment)
-TEXT runtime·ntcall8(SB),NOSPLIT|NOFRAME,$0
-	SUBQ	$72, SP
-	MOVQ	(ntcallArgs8_fn)(DI), AX
-	MOVQ	(ntcallArgs8_a1)(DI), CX
-	MOVQ	(ntcallArgs8_a2)(DI), DX
-	MOVQ	(ntcallArgs8_a3)(DI), R8
-	MOVQ	(ntcallArgs8_a4)(DI), R9
-	MOVQ	(ntcallArgs8_a5)(DI), R10
+//	64(SP)         arg 9
+//	72(SP)         arg 10
+//	80(SP)         (padding for 16-alignment)
+TEXT runtime·ntcall10(SB),NOSPLIT|NOFRAME,$0
+	SUBQ	$88, SP
+	MOVQ	(ntcallArgs10_fn)(DI), AX
+	MOVQ	(ntcallArgs10_a1)(DI), CX
+	MOVQ	(ntcallArgs10_a2)(DI), DX
+	MOVQ	(ntcallArgs10_a3)(DI), R8
+	MOVQ	(ntcallArgs10_a4)(DI), R9
+	MOVQ	(ntcallArgs10_a5)(DI), R10
 	MOVQ	R10, 32(SP)
-	MOVQ	(ntcallArgs8_a6)(DI), R10
+	MOVQ	(ntcallArgs10_a6)(DI), R10
 	MOVQ	R10, 40(SP)
-	MOVQ	(ntcallArgs8_a7)(DI), R10
+	MOVQ	(ntcallArgs10_a7)(DI), R10
 	MOVQ	R10, 48(SP)
-	MOVQ	(ntcallArgs8_a8)(DI), R10
+	MOVQ	(ntcallArgs10_a8)(DI), R10
 	MOVQ	R10, 56(SP)
+	MOVQ	(ntcallArgs10_a9)(DI), R10
+	MOVQ	R10, 64(SP)
+	MOVQ	(ntcallArgs10_a10)(DI), R10
+	MOVQ	R10, 72(SP)
 	CALL	AX
-	MOVQ	AX, (ntcallArgs8_ret)(DI)
-	ADDQ	$72, SP
+	MOVQ	AX, (ntcallArgs10_ret)(DI)
+	ADDQ	$88, SP
 	RET
 
 // func ntwrite1tramp(fd uintptr, p unsafe.Pointer, n int32) int32

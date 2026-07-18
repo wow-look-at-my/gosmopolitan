@@ -44,6 +44,20 @@ type WindowsFns struct {
 	// arguments may point into the calling goroutine's stack and raw
 	// uintptrs are not adjusted when the stack moves.
 	Emulate func(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr)
+
+	// Spawn launches a child process via CreateProcessW
+	// (runtime.ntSpawn) - the posix_spawn-shaped seam the syscall
+	// package's forkAndExecInChild NT branch calls instead of
+	// fork+execve, which cannot be emulated syscall-by-syscall.
+	// argv0 and dir are linux-shaped paths (the runtime translates
+	// them); cmdline and env are ready-made NUL-terminated /
+	// double-NUL-terminated UTF-16 blocks (the syscall layer owns
+	// the Windows quoting and env-sorting algebra, ported from
+	// upstream exec_windows.go); stdio are parent fds for the
+	// child's std handles, -1 = none. Returns the child pid or a
+	// positive Linux errno. Ordinary Go code: may allocate and
+	// block (no nosplit chain - the caller is not in syscall state).
+	Spawn func(argv0, dir string, cmdline, env []uint16, stdio [3]int32) (pid int32, errno uintptr)
 }
 
 // windowsFns has static storage (no allocation at install time:
