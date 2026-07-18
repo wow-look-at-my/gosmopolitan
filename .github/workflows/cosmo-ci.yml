@@ -66,7 +66,11 @@ jobs:
           echo ""
           echo "=== File info ==="
           file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-          ls -la fizzbuzz.com runtimeprobe.com
+          # ls doubles as an existence assertion for the debug sidecars a
+          # default fat build must write next to each output (they are not
+          # uploaded; apetest's TestDebugSidecars covers their contents).
+          ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
+            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
@@ -76,6 +80,19 @@ jobs:
             fizzbuzz.com
             runtimeprobe.com
           retention-days: 1
+
+      - name: APE merge unit tests (linker + go command)
+        # Covers the -apefat/-apestrip/-apedbg merge logic and cmd/go's
+        # GOCOSMOSTRIP / -ldflags strip detection. One leg is enough.
+        # GOOS=linux pin: the fork's go defaults GOOS=cosmo, and these are
+        # host-run unit tests. Observed ~40s (test-package compile).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled' cmd/go/internal/work
 
   # Test all APE binaries on each unix platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one

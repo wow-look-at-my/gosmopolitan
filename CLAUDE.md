@@ -66,17 +66,30 @@ To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/
 
 ```bash
 # Build a fat (amd64+arm64) APE binary - GOARCH is ignored for the output;
-# go build always builds both architectures and merges them
+# go build always builds both architectures and merges them. The shipped
+# APE is stripped (no DWARF/symtab, cosmocc-style); full debug info lands
+# in two sidecar ELFs next to it: program.com.dbg (cosmo amd64) and
+# program.com.aarch64.elf (cosmo arm64).
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE in the install directory
+# go install produces the same fat APE + sidecars in the install directory
 GOOS=cosmo go install ./cmd/program
 
-# Opt out of the fat build (single-architecture APE for the current GOARCH)
+# Keep full debug info embedded in the APE and write no sidecars
+# (pre-2026-07-18 behavior, byte-for-byte)
+GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
+
+# Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
+GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH;
+# thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 # Merge two single-arch cosmo binaries into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com -o program.com
+# (-apestrip -apedbg is what go build passes by default; omit them for a
+# full-payload merge)
+go tool link -apefat amd64.com,arm64.com -o program.com -apestrip -apedbg
 ```
 
 Fat-build coverage: `go build` (with or without `-o`; a plain
@@ -85,6 +98,29 @@ single-main-package build defaults its output name and fattens too) and
 thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
 compile.
+
+Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
+payload's loadable span - the file range its program headers reference,
+exactly what cosmocc's apelink ships - and writes the pristine unstripped
+per-arch linker ELFs next to the output as `<output>.dbg` (amd64) and
+`<output>.aarch64.elf` (arm64), the names cosmo libc's FindDebugBinary
+probes. Naming is exact output name plus suffix: bare `go build` of
+package `web` gives `web`, `web.dbg`, `web.aarch64.elf`, like cosmocc's
+`hello`/`hello.dbg`/`hello.aarch64.elf`. `GOCOSMOSTRIP=0` (or `off`,
+parsed like GOCOSMOFAT) restores full embedded payloads with no sidecars;
+an explicit `-s` or `-w` in `-ldflags` also suppresses sidecars and embeds
+the user-stripped payloads as-is. Stripping does not affect runtime
+tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
+loaded segment); the sidecars are for gdb/delve and offline tools - see
+DEBUGGING.md "debug sidecars" (2026-07-18).
+
+Shipping APEs: distribute release binaries zstd-compressed - the two arch
+payloads make APE images highly redundant, so the wire cost collapses.
+Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png,
+time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and
+3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only,
+by design: there is no runtime self-extraction mechanism. buildhost can
+repackage uploaded artifacts on the fly via its `fmt=` query parameter.
 
 The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
 amd64 image boots on x86-64 Linux (self-assimilation); the cosmo arm64
@@ -212,8 +248,13 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: it runs real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs natively on windows-latest (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0) and then runs the apetest suite there too, with direct CreateProcess execution of every fizzbuzz test. Only runtimeprobe execution stays skipped on windows (RUNTIMEPROBE_BIN deliberately unset) until later NT waves grow the surface it needs.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64 and cosmo arm64 payloads. Structural format tests run everywhere;
-execution tests run on all three test runners (fizzbuzz-only on windows).
+amd64 and cosmo arm64 payloads, stripped by default, with the build step's
+`ls` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build
+platform (sidecars are not uploaded; the artifact ships the bare binaries,
+so apetest's TestDebugSidecars skips on the test runners). Structural
+format tests run everywhere; execution tests run on all three test
+runners (fizzbuzz-only on windows), and the ubuntu build leg also runs
+the cmd/link APE-merge and cmd/go strip-detection unit tests.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
