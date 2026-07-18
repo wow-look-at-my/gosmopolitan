@@ -1690,6 +1690,65 @@ identical code), 4175ebce green, 2f0d0f34 green, dispatch green.
 
 # 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
 
+## Wave 2 — DONE (2026-07-18, chunk E green)
+
+windows-latest CI now runs the FULL runtimeprobe gauntlet against all
+three origin binaries (ubuntu-, windows-, macos-built fat APEs) and
+every check passes — TestRuntimeProbe 0.41-0.44s per origin, "ok all",
+exit 0, three consecutive green runs in the acceptance cycle
+(https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29650537288):
+args/environ/mark, getpid/getppid, numcpu, monotonic, sleep/ticker/
+after/ctxtimeout, tcplisten/tcpecho/deadline/tcpserver/udp,
+unixsock/unixecho (real afunix.sys pathname sockets), executable,
+mkdirtemp/statdir/create/readback/rename/statsize, getwd/chdir/
+wdrestore, remove/rmdir, readdir/walkdir/removeall, execchild,
+segvrecover, sigterm, sigusr2, preempt (180-186ms on real NT; linux
+reference 159ms), waitsig. The apetest suite (fizzbuzz battery + probe
++ format tests) is green on the windows leg for all three origins.
+
+The two real-NT-vs-wine divergences chunk E surfaced and fixed (both
+invisible under wine by construction; details in the chunk E section
+at the end of this file):
+
+1. afunix.sys refuses bind with WSAEOPNOTSUPP on a socket that has
+   SO_REUSEADDR set (msafd accepts the setsockopt, the bind then
+   fails). net's listenStream sets SO_REUSEADDR on every stream
+   listener, so every net.Listen("unix") failed. Linux treats
+   SO_REUSEADDR on unix sockets as an accepted no-op, so the
+   emulation now swallows it. Wine could never show this: its ws2_32
+   lacks AF_UNIX entirely (socket() fails EAFNOSUPPORT — the sole
+   remaining wine probe red, by wine gap, not by port gap).
+2. Loopback UDP may DROP datagrams on real NT; wine's in-process
+   loopback never does. The netpoller's wake channel was a
+   self-connected UDP socket, so a dropped wake byte left the poller
+   asleep for its full WSAPoll timeout (observed as ~5.0s stalls
+   rescued at exactly a leftover 5s time.After deadline: one sigterm
+   FAIL, preempt at 5.07/5.08s, 10-45s probe runs). The wake channel
+   is now a connected loopback TCP pair — lossless, like upstream's
+   PostQueuedCompletionStatus/pipe transports.
+
+Wave-3 backlog (deferred, in rough priority order):
+
+- sendmsg/recvmsg + SCM_RIGHTS-style fd passing (ENOSYS this wave;
+  blocks ReadMsg*/WriteMsg*; darwin leg equally lacks it).
+- SIGPROF profiling parity (setitimer-based CPU profiling; also still
+  missing on the darwin leg).
+- Windows/arm64 (the fat APE's arm64 image currently targets
+  linux/macos hosts only).
+- Real-conhost console-ctrl injection: the D2 asm handler + relay M
+  are live and wine-verified via direct trampoline calls, but the
+  probe does not exercise GenerateConsoleCtrlEvent (headless CI has
+  no console), so the OS-injected foreign-thread path remains
+  CI-unproven.
+- High-resolution timers: usleep is Sleep(ms) with ~15.6ms quanta on
+  real NT. Every probe timer check passes as-is; if finer sleep
+  granularity is ever needed, the recipe is CreateWaitableTimerExW
+  with CREATE_WAITABLE_TIMER_HIGH_RESOLUTION + per-M highResTimer
+  (upstream os_windows.go:398-432).
+- socketpair (ENOSYS; os/exec uses pipes).
+- gofmt drift in netpoll_cosmo_xnu.go + two runtime testdata files
+  (pre-wave-2 debt, deliberately not folded into NT commits).
+
 Goal: testdata/runtimeprobe (runtimeprobe.com) green on windows-latest —
 the same runtime gauntlet macOS passes: file I/O, directory listing,
 pid/ppid, NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
@@ -2798,3 +2857,110 @@ stdcall-vs-cgocall split; they are protected by gFromSP->g0.
   (4) WER dialogs - preventErrorDialogs is live since D1, but real
   WER has more moving parts (WerSetFlags resolves on real NT, was
   missing on wine).
+
+## Wave 2 chunk E (2026-07-18): CI flip — windows-latest runs the probe
+
+End state: acceptance run 29650537288 fully green — all 8 jobs, with
+test-windows running the full apetest suite (fizzbuzz battery + probe
++ format tests) against ubuntu-, windows- AND macos-origin fat APEs.
+TestRuntimeProbe 0.41-0.44s per origin, every check ok including
+unixsock/unixecho on real afunix.sys, preempt 180-186ms. Three
+iterations were needed; both fixes were real-NT-only defects that wine
+could not exhibit, which is exactly why the risk list called
+windows-latest "the judge".
+
+### The flip itself (iteration 1, cd5fb34a)
+
+- runtimeprobe_test.go: the windows t.Skip became the fizzbuzz-shaped
+  direct launch `exec.CommandContext(ctx, bin, mark)` (PE boot needs
+  no shell; unix keeps /bin/sh).
+- cosmo-ci.yml test-windows: RUNTIMEPROBE_BIN added to both apetest
+  steps, plus a THIRD leg (download + apetest + log upload) for the
+  macos-origin artifact so windows tests all three origins like the
+  unix runners; job cap 30->40 (sum of per-step caps); header + job
+  comments refreshed.
+
+First real-NT verdict: 37-38/39 checks green immediately. Red:
+unixsock on all three origins (`bind: operation not supported` =
+EOPNOTSUPP <- WSAEOPNOTSUPP), one sigterm flake ("signal not
+delivered within 5s"), and a ~5.0s stall signature: preempt "ok" at
+5.0723/5.0846s in two runs (vs 190ms when healthy) - both values =
+5s + normal work, i.e. rescued at EXACTLY the leftover 5s time.After
+deadline pending from the preceding signal check.
+
+### Iteration 2 (1611ed68): wrong theory, right instrument
+
+Hypothesis "afunix needs WSA_FLAG_OVERLAPPED" (every known-working
+consumer creates overlapped sockets) + SIO_UDP_CONNRESET guards on
+the UDP wake socket + wake-send failure printlns + a NEVER-FAILING
+diagnostic CI step that natively P/Invokes WSASocketW/bind for
+AF_UNIX on the runner. Result: still red, same errors - but the
+diagnostic returned gold: the runner binds AF_UNIX fine with our
+EXACT creation flags (non-overlapped 0x80) and sockaddr shape, and
+the printlns proved wake sends never fail. Both hypotheses dead; the
+poison had to be a socket-STATE delta on our listener, and the wake
+loss had to be in DELIVERY, not send.
+
+### Iteration 3 (30f65650): both root causes, evidence-pinned
+
+1. SO_REUSEADDR poisons afunix bind. The one state delta between the
+   diagnostic's clean socket and net's listener: listenStream sets
+   SOL_SOCKET/SO_REUSEADDR on every stream listener. On Windows,
+   msafd ACCEPTS the setsockopt (returns 0), then afunix.sys refuses
+   the subsequent bind with WSAEOPNOTSUPP. The extended diagnostic
+   matrix proved it on the runner in the same green run:
+       native plain (flags 0x80): bind OK
+       native +SO_REUSEADDR: setsockopt SO_REUSEADDR OK
+       native +SO_REUSEADDR: bind failed 10045
+       native +FIONBIO: bind OK
+   Fix: ntEmuSetsockopt swallows SOL_SOCKET/SO_REUSEADDR for
+   AF_UNIX sockets (success, no winsock call) - which IS the Linux
+   semantics: the option is accepted and has no effect on pathname
+   binds (a taken path is EADDRINUSE regardless). The iteration-2
+   overlapped-flag change was REVERTED as disproven; creation stays
+   uniformly non-overlapped.
+2. Loopback UDP drops on real NT = lost netpoller wakes. The wake
+   channel was a self-connected loopback UDP socket. UDP - loopback
+   included - may legally drop; wine's in-process loopback never
+   does, so 4x wine probe runs and the whole sockstress battery
+   could not catch it. One dropped wake byte leaves the poller
+   asleep for its full WSAPoll timeout, and because mutators
+   (netpollopen/arm/close) block on ntMtxset until the poll cycle
+   ends, and new-earlier timers only reach the poller via
+   netpollBreak, EVERYTHING queues behind the stale deadline - the
+   observed 0-3 random ~5s stalls per run (sigterm's own 5s timeout
+   was often both the victim and the rescue). Fix: the wake channel
+   is a connected loopback TCP pair built at netpollinit (listener
+   -> blocking connect -> accept -> close listener; TCP_NODELAY on
+   the send end; both ends nonblocking; accepted end at slot 0).
+   TCP retransmits - a wake byte cannot be lost - restoring the
+   losslessness every upstream netpollBreak transport has
+   (windows PostQueuedCompletionStatus, aix a pipe).
+
+Supporting change: runtimeprobe's main wraps each check block in a
+2s stopwatch - a slow block prints `slow: <label> took <d>` plus one
+poller-counter sample (the wave-9 forensic counters) - so any future
+latency stall names its block in CI logs without weakening a single
+verdict. The green run has ZERO slow lines across all three probe
+executions.
+
+### Verification ladder for the green commit (30f65650)
+
+linux native probe 39 ok + "ok all" rc 0 (no slow lines); wine probe
+x4: sole red unixsock (wine ws2_32 AF_UNIX gap - socket() fails
+EAFNOSUPPORT before bind), preempt 171-212ms, no slow lines;
+sockstress 8/8 + ok all under wine AND linux (the netpoller rewrite's
+stress gate); fizzbuzz wine/linux byte-identical; cosmo std builds
+amd64+arm64; apetest harness green on linux; actionlint clean.
+windows-latest: 3x TestRuntimeProbe PASS (0.41-0.44s), 3x "ok all",
+zero slow lines, apetest ~2.1s per origin, all other jobs green.
+
+### Chunk-E commits
+
+- cd5fb34a ci: run runtimeprobe on windows-latest against all three
+  origin binaries
+- 1611ed68 runtime: fix NT afunix bind and harden the netpoller wake
+  socket (theory disproven and reverted next commit; the diagnostic
+  step and printlns it added are what cracked the case)
+- 30f65650 runtime: lossless NT netpoll wake (TCP pair), AF_UNIX
+  SO_REUSEADDR no-op

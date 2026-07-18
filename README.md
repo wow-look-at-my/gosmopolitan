@@ -22,14 +22,18 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 The resulting `.com` file runs natively on Linux, macOS, and Windows. On
 Windows the same cosmo amd64 image boots through the APE's PE header via
-the runtime's NT personality (no embedded second build); the surface
-covers console programs (stdout/stderr, args, environment, exit codes)
-plus - as of wave 2 - process identity, entropy, timers, the file
-I/O family (open/read/write/stat, directory listing, working directory,
-os.Executable, temp files), os/exec (pipes, CreateProcessW spawn,
-Linux-shaped wait statuses), and TCP/UDP/unix-domain sockets with
-deadlines (winsock emulation plus a WSAPoll netpoller) - signals on
-Windows are a later wave. See `DEBUGGING.md` for the detailed ladder.
+the runtime's NT personality (no embedded second build). As of wave 2
+(CI-verified by the runtimeprobe gauntlet on windows-latest) the surface
+covers console programs (stdout/stderr, args, environment, exit codes),
+process identity, entropy, timers, the file I/O family (open/read/write/
+stat, directory listing, working directory, os.Executable, temp files),
+os/exec (pipes, CreateProcessW spawn, Linux-shaped wait statuses),
+TCP/UDP/unix-domain sockets with deadlines (winsock emulation plus a
+WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV
+recover via VEH, os/signal delivery, async preemption, kill/wait-status
+decode, console Ctrl-C -> SIGINT). Still missing on Windows:
+sendmsg/recvmsg (fd passing), SIGPROF profiling, and Windows/arm64. See
+`DEBUGGING.md` for the detailed ladder.
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 
@@ -69,8 +73,10 @@ This is an experimental project. Use at your own risk.
 Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
 Windows (plus ARM64 Linux via qemu during development). Windows execution
 is cosmo-native (NT personality in the runtime; the old embedded
-windows/amd64 PE payload is gone) and currently covers console programs -
-the surface grows wave by wave (see `DEBUGGING.md`). macOS Intel support
+windows/amd64 PE payload is gone); windows-latest CI runs the full
+runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals,
+async preemption, os/exec - against binaries built on all three platforms
+(see `DEBUGGING.md` for what is still missing). macOS Intel support
 is structural so far: the Mach-O assimilation header is verified against the
 XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
 incomplete and untested end to end (no Intel CI runner).

@@ -94,41 +94,46 @@ natively through the APE's PE header (vim.com-style, no embedded second
 build - the windows/amd64 PE payload was removed 2026-07-18): the entry
 stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
-IAT slots. Wave-1 NT surface (2026-07-18, CI-proven on windows-latest:
-real fizzbuzz output, byte-exact, exit codes 0/1): stdout/stderr writes,
-os.Args via GetCommandLineW (full cmd.exe quoting rules), environment
-via GetEnvironmentStringsW (GODEBUG works), os.Exit, VirtualAlloc-backed
-memory, CreateThread (sysmon runs), WaitOnAddress futexes, KUSER clocks,
-GetSystemInfo NumCPU. Wave-2 chunk A (2026-07-18, wine-verified, CI
-proof pending the windows probe flip): every user-level syscall routes
-through an NT emulation dispatcher (Linux numbers/errnos/structs in,
-Win32 out - src/runtime/os_cosmo_nt_sys.go) covering process identity
-(getpid/getppid/gettid), ProcessPrng entropy, the whole file I/O family
-with an fd table and a documented Linux<->Win32 path translation
-(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL),
-getdents64 emulation (os.ReadDir/WalkDir/RemoveAll), working-directory
-round-trip, os.Executable via GetModuleFileNameW, timers via a
-timer-only netpoll stub, and console CP_UTF8+VT setup. Wave-2 chunk B
-adds os/exec: pipe2 over CreatePipe (blocking, non-pollable this wave),
-a posix_spawn-style CreateProcessW path (upstream-ported argument
-quoting and sorted UTF-16 env block, stdio handle inheritance,
-attr.Dir), and wait4 packing the Linux wait-status protocol (normal
-exit = code<<8; NTSTATUS crashes become Linux-numbered fake termination
-signals, 0xC0000005 -> SIGSEGV). Wave-2 chunk C adds sockets and a real
-netpoller: the Linux socket syscalls are emulated over classic
-synchronous winsock (non-overlapped WSASocketW, FIONBIO nonblocking,
-AF_INET6 10<->23 and curated sockopt value translation, WSAE->errno
-map, SIO_UDP_CONNRESET disabled on UDP), the timer stub is replaced by
-a WSAPoll readiness poller (netpoll_aix.go's level-triggered two-lock
-design with a self-connected loopback-UDP wake socket; pipes stay
-non-pollable/blocking on purpose), and AF_UNIX pathname stream sockets
-work over afunix.sys with sun_path translated through the path layer
-(abstract names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely,
-so the unixsock leg is judged by windows-latest CI). TCP/UDP loopback
-with live deadlines is wine-green (probe + a dedicated stress
-battery). Not yet on Windows: signals (a SIGSEGV still kills the
-process - no VEH), async preemption, sendmsg/recvmsg, profiling - see
-DEBUGGING.md's NT wave sections for the ladder and forensics.
+IAT slots.
+
+Windows status (2026-07-18, NT bring-up wave 2 COMPLETE - CI-verified
+by the full runtimeprobe gauntlet on windows-latest, against binaries
+built on all three platforms): stdout/stderr (console CP_UTF8+VT),
+os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
+CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
+user-level syscall routes through an NT emulation dispatcher (Linux
+numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go)
+covering process identity, ProcessPrng entropy, the whole file I/O
+family with an fd table and a documented Linux<->Win32 path translation
+(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL), getdents64
+emulation (os.ReadDir/WalkDir/RemoveAll), working-directory round-trip,
+os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
+non-pollable on purpose - a posix_spawn-style CreateProcessW path with
+upstream-ported quoting and env block, and wait4 packing the Linux
+wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
+signal deaths 0xC0DE0000|sig decode as Linux termination signals);
+sockets over classic synchronous winsock (non-overlapped WSASocketW,
+FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
+is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
+refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with
+a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock
+design; the wake channel is a connected loopback TCP pair because real
+NT may drop loopback UDP datagrams - a lost wake stalls the poller;
+pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
+sockets over afunix.sys (sun_path through the path layer; abstract
+names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
+runs show exactly one red there while windows-latest proves it); and
+signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
+(kill/tkill with full delivery through sigtrampgo), os/signal Notify,
+async preemption via SuspendThread/SetThreadContext injection
+(preempt ~180ms on the CI runner, upstream preemptM semantics), signal
+deaths encoded for the wait4 protocol, and console Ctrl-C/Break/Close
+-> SIGINT/SIGTERM via an asm handler + relay M. Still missing on
+Windows: sendmsg/recvmsg (fd passing), SIGPROF profiling,
+Windows/arm64, real-conhost console-ctrl injection coverage (the
+handler is live but headless CI cannot generate console events) - see
+DEBUGGING.md's NT wave sections (chunks A-E) for the ladder, the
+forensics, and the wave-3 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -236,11 +241,11 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: it runs real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs natively on windows-latest (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0) and then runs the apetest suite there too, with direct CreateProcess execution of every fizzbuzz test. Only runtimeprobe execution stays skipped on windows (RUNTIMEPROBE_BIN deliberately unset) until later NT waves grow the surface it needs.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port), real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0), and then the full apetest suite - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - against all three origin binaries (ubuntu, windows, macos).
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64 and cosmo arm64 payloads. Structural format tests run everywhere;
-execution tests run on all three test runners (fizzbuzz-only on windows).
+amd64 and cosmo arm64 payloads. Structural format tests and the full
+execution suite (fizzbuzz + runtimeprobe) run on all three test runners.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
