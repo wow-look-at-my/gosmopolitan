@@ -507,7 +507,7 @@ func TestAPEFileMachoTransform(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), "ape.com")
-	writeAPEFile(out, []*apePayload{p}, nil)
+	writeAPEFile(out, []*apePayload{p})
 	bin, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)

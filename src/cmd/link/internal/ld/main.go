@@ -67,7 +67,7 @@ var (
 	flagBindNow = flag.Bool("bindnow", false, "mark a dynamically linked ELF object for immediate function binding")
 
 	flagOutfile    = flag.String("o", "", "write output to `file`")
-	flagApeFat     = flag.String("apefat", "", "merge GOOS=cosmo binaries (`amd64,arm64[,windows-pe]`) into one fat APE and exit")
+	flagApeFat     = flag.String("apefat", "", "merge GOOS=cosmo binaries (`amd64,arm64`) into one fat APE and exit")
 	flagPluginPath = flag.String("pluginpath", "", "full path name for plugin")
 	flagFipso      = flag.String("fipso", "", "write fips module to `file`")
 
