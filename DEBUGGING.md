@@ -1525,3 +1525,124 @@ runtime compiles - mem.go and stubs_noncosmo.go are GOOS-generic);
 vet clean for runtime/syscall/cosmo pkg on both cosmo arches; the
 whole Phase-A battery repeated green (runtimeprobe "ok all" exit 0,
 sync tests, ld tests, thin+fat fizzbuzz).
+
+## step 3: boot flip - fizzbuzz runs on Windows (L3 north star)
+
+Landed in two commits on claude/nt-wave1 (runtime boot cfaa3be1, CI
+flip 977759d7). The stub's ExitProcess(42) tail is gone; the fat APE
+boots the real cosmo runtime on NT and fizzbuzz prints.
+
+What flipped:
+
+- _rt0_cosmo_nt (rt0_cosmo_nt_amd64.s): keeps cld + fldcw 0x37f, then
+  stores __hostos = 2 directly (the WinMain trick - reaching the PE
+  entry point proves the host; the unix rt0 gets CL from the APE
+  loader instead), fills runtime.ntbootrand (16-byte file-backed
+  noptrdata) with two RDTSC reads mixed with SP and the loader's CX
+  (PEB) - wave 2 upgrades to ProcessPrng - and builds the SysV boot
+  block on the OS stack: [argc=1]["APE" argv][NULL][NULL envp]
+  [AT_PAGESZ 0x1000][AT_RANDOM &ntbootrand][AT_NULL], 16-aligned,
+  argc at 0(SP), then JMP _rt0_amd64. The IAT needs no capture step
+  (osArchInit reads runtime.ntiat directly). The old
+  LoadLibraryA/GetProcAddress/ExitProcess tail and its string blobs
+  are deleted.
+- goargs NT branch (runtime1.go hook -> cosmoNTGoargs,
+  os_cosmo_nt.go): argslice comes from GetCommandLineW parsed per the
+  Windows quoting rules - a port of os/exec_windows.go
+  commandLineToArgv (provenance in comments; under GOOS=cosmo package
+  os takes runtime_args(), so the parse must live in the runtime).
+  Falls back to the fabricated "APE" argv on an empty command line.
+  Verified ordering: schedinit runs mallocinit before goargs/goenvs
+  (proc.go), so allocation there is safe; no lazy path needed.
+- goenvs NT branch (ntGoenvs): GetEnvironmentStringsW ->
+  double-NUL-terminated UTF-16 walk -> envs (upstream os_windows.go
+  goenvs shape); FreeEnvironmentStringsW deliberately skipped (not in
+  the resolve set; one-shot boot leak). GODEBUG therefore works via
+  parsedebugvars. Shared decoder ntUTF16ToString handles surrogate
+  pairs (runtime's gostringw does not). GetCommandLineW +
+  GetEnvironmentStringsW joined the osArchInit kernel32 resolve set.
+- Stub-flip fallout fixed in the same commit (all three found locally
+  by running the fat APE under WINE before ever pushing - the wine
+  loader approximates NT closely enough to surface real boot bugs):
+  1. rt0_go's TLS store-through test (asm_amd64.s) compares the value
+     written through gs:0x28 with m0.tls[0]; on NT gs:0x28 IS the TEB
+     ArbitraryUserPointer storage, no alias, so the test aborted.
+     GOOS_cosmo-guarded fix: when __hostos==2, read back through the
+     segment reference instead. Other GOOS/hosts untouched.
+  2. checkfds (fds_unix.go) throws on any fcntl errno except EBADF;
+     the step-2 ENOSYS net returned 38 -> "fatal error: cannot open
+     standard fds" (first wine run died here, with a PERFECT panic
+     report - write path, traceback, exit all already working).
+     Runtime fcntl (fcntl_cosmo_amd64.go) now has an NT branch:
+     F_GETFD on fds 0-2 reports open (no fd table in wave 1),
+     everything else stays ENOSYS.
+  3. "stack split at bad time" at (*WindowsFns).Syscall6: the hook
+     chain runs between entersyscall/exitsyscall (second wine run
+     died in os.init -> os.Getwd -> syscall.Syscall(SYS_GETCWD)).
+     The dispatcher and the runtime-side ntSyscallWrite/ntSyscallExit
+     are now //go:nosplit, like the raw SYSCALL they replace.
+
+Wine evidence (wine 9.0, WINEDEBUG=-all, fat APE): "10 5" ->
+"fizzbuzz" rc=0; "7 6" -> "13" rc=0; "12345 6789" -> "fizz" rc=0;
+"-10 -5" -> "fizzbuzz" rc=0; no args -> rc=1 with "Usage:
+Z:\...\wine-fizzbuzz.com <num1> <num2>" on stderr; "abc 5" ->
+"Invalid first argument: abc" rc=1. Full contract green locally -
+wine is NOT conclusive for real Windows (its loader and kernel32 are
+reimplementations), CI is the truth, but it made the fix loop local
+and fast.
+
+CI flip (cosmo-ci.yml test-windows): checkout + setup-go joined the
+job; the exit-42 step became "Run fizzbuzz on Windows (NT boot
+acceptance)" - for ubuntu-origin and windows-origin fat artifacts it
+runs the apetest contract cases 10+5 -> "fizzbuzz\n" and 7+6 ->
+"13\n" (the second proves argv flows through GetCommandLineW parsing
+rather than printing a constant), byte-compares stdout captured via
+-RedirectStandardOutput, prints "origin: exit code N", and keeps the
+Start-Process + explicit-exit hardening. Then the full apetest suite
+runs natively against both origins (fizzbuzz_test.go's windows skip
+replaced by direct CreateProcess invocation; with-deadline.sh already
+degrades to plain exec on git-bash, so the watchdogs there are the
+in-test 3-minute contexts plus step timeout-minutes; RUNTIMEPROBE_BIN
+deliberately unset - the probe needs later-wave NT surface, its
+execution test self-skips). apetest's TestPEEntrypointIsNTStub
+keyhole now asserts the new prologue: fc (cld), d9 2d (fldcw), c7 05
+(movl imm32 to rip-relative m32) with immediate 02 00 00 00
+(_HOSTWINDOWS) - byte positions verified against the built binary.
+
+Local validation (linux, after the final iteration): fresh make.bash
++ go clean -cache; thin+fat fizzbuzz correct on throwaway copies; fat
+runtimeprobe "ok all" exit 0; full apetest suite green vs fat
+(FIZZBUZZ_BIN+RUNTIMEPROBE_BIN, upstream go); cmd/link/internal/ld
+suite green; std builds for cosmo/amd64 + cosmo/arm64 +
+linux/amd64, runtime compiles for windows/amd64 + darwin/arm64, vet
+clean for runtime and internal/runtime/syscall/cosmo.
+
+CI evidence (run 29638954834, first push of the flip - green on the
+FIRST windows round, all 8 jobs success): the windows-latest
+acceptance step printed, verbatim,
+
+	ubuntu-latest: launching D:\a\_temp\fizzbuzz-ubuntu-latest.com 10 5
+	ubuntu-latest: exit code 0 (want 0), stdout "fizzbuzz\n"
+	ubuntu-latest: launching D:\a\_temp\fizzbuzz-ubuntu-latest.com 7 6
+	ubuntu-latest: exit code 0 (want 0), stdout "13\n"
+	windows-latest: launching D:\a\_temp\fizzbuzz-windows-latest.com 10 5
+	windows-latest: exit code 0 (want 0), stdout "fizzbuzz\n"
+	windows-latest: launching D:\a\_temp\fizzbuzz-windows-latest.com 7 6
+	windows-latest: exit code 0 (want 0), stdout "13\n"
+
+and both native apetest runs ended "ok apetest" (246 PASS lines
+across the two origins, every fizzbuzz execution test including the
+TestError_* exit-1/stderr cases passing on real Windows;
+TestRuntimeProbe SKIP as designed). The linux/macos test legs, wasm,
+and publish all stayed green. The wave-1 north star - a normal fat
+APE printing real fizzbuzz output and exiting 0 on windows-latest -
+is CI-proven; no debug-exit-code probes were ever needed on the
+runner (the wine prepass caught all three boot bugs locally).
+
+Deviations from the step brief: none of substance. The brief allowed
+lazy argv parsing if goargs ran pre-malloc - not needed (ordering
+verified). wine was listed as optional/inconclusive - it turned out
+decisive for iteration speed, converting what would have been 3 CI
+round-trips into local minutes. The direct-invocation CI check runs
+two success cases (both origins); the error-path cases are covered by
+the native apetest leg rather than duplicated in pwsh.

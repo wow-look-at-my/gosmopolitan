@@ -12,7 +12,7 @@ This is a fork of the Go programming language toolchain that adds support for **
 
 ## No Rosetta Dependency
 
-**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. (That is the technology's capability and this fork's target; the fork's own output currently executes on Linux and macOS, and its Windows execution is being reimplemented cosmo-natively - in progress, see Building Cosmopolitan Binaries below.)
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. This fork's own output executes on Linux, macOS, and (since the cosmo-native NT bring-up, wave 1) Windows - see Building Cosmopolitan Binaries below for the per-platform status.
 
 - APE binaries contain native code for multiple architectures (AMD64 + ARM64)
 - On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
@@ -86,17 +86,22 @@ thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
 compile.
 
-The resulting `.com` file runs on Linux and macOS. The cosmo amd64 image
-boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots on
-ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
-Rosetta). On Windows, the cosmo-native NT bring-up (vim.com-style: the
-cosmo amd64 image booted through the APE PE header plus an NT personality
-in the runtime; the embedded windows/amd64 PE payload was removed
-2026-07-18) is at wave 1: the PE header really maps the embedded cosmo
-amd64 image, and the Windows loader runs the runtime's _rt0_cosmo_nt boot
-stub, which proves the load/import chain by exiting 42 via loader-resolved
-kernel32 imports - user code does not run on Windows yet (see
-DEBUGGING.md).
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
+amd64 image boots on x86-64 Linux (self-assimilation); the cosmo arm64
+image boots on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled
+APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
+natively through the APE's PE header (vim.com-style, no embedded second
+build - the windows/amd64 PE payload was removed 2026-07-18): the entry
+stub sets the runtime's NT personality live (__hostos=2) and joins the
+common boot, with kernel32 resolved at runtime from two loader-filled
+IAT slots. Wave-1 NT surface (2026-07-18, CI-proven on windows-latest:
+real fizzbuzz output, byte-exact, exit codes 0/1): stdout/stderr writes,
+os.Args via GetCommandLineW (full cmd.exe quoting rules), environment
+via GetEnvironmentStringsW (GODEBUG works), os.Exit, VirtualAlloc-backed
+memory, CreateThread (sysmon runs), WaitOnAddress futexes, KUSER clocks,
+GetSystemInfo NumCPU. Not yet on Windows: file I/O, sockets, signals,
+os/exec, profiling - see DEBUGGING.md's NT wave-1 sections for the
+ladder and forensics.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -204,11 +209,11 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any of those platforms run correctly on the unix platforms (Linux and macOS). The windows build leg gates make.bat toolchain health and proves fat cosmo APEs cross-build from a Windows host. Windows execution coverage is the dedicated `test-windows` job (NT bring-up ladder rung L1): it runs the ubuntu-origin and windows-origin fat APEs on windows-latest and asserts the NT boot stub's exit code 42, proving the loader mapped the cosmo image and resolved its imports. apetest itself still skips binary execution on windows until later waves boot the real NT personality.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: it runs real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs natively on windows-latest (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0) and then runs the apetest suite there too, with direct CreateProcess execution of every fizzbuzz test. Only runtimeprobe execution stays skipped on windows (RUNTIMEPROBE_BIN deliberately unset) until later NT waves grow the surface it needs.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64 and cosmo arm64 payloads. Execution and structural format tests run on
-the Linux and macOS test runners.
+amd64 and cosmo arm64 payloads. Structural format tests run everywhere;
+execution tests run on all three test runners (fizzbuzz-only on windows).
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -333,7 +338,7 @@ grep -r "//go:build.*cosmo" src/
 
 ### 3. Runtime Platform Handling
 
-Cosmopolitan binaries run on Linux and macOS at runtime today, and will run on Windows again once the cosmo-native NT bring-up (in progress) lands - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
+Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime (the NT surface is still growing wave by wave - see DEBUGGING.md) - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
 - Don't assume Linux-only features like `/proc` are available
 - Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
 - Test assumptions about what works on each platform
