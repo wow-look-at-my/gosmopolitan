@@ -237,6 +237,17 @@ jobs:
         run: |
           # A binary the loader refuses to start throws instead of
           # setting an exit code; make that fail the step immediately.
+          #
+          # The binaries run via Start-Process rather than pwsh native
+          # invocation (& $copy): on be6c8c72 both binaries printed the
+          # correct exit code, yet the pwsh host then sat ~18s past the
+          # final success line and died with exit code 1 and zero
+          # diagnostics - a native-command/console teardown artifact,
+          # not an assertion failure. Start-Process + $p.ExitCode
+          # isolates the check from that teardown path, and the script
+          # ends in an explicit exit so the host quits before whatever
+          # teardown threw. Per-binary lines before and after each run
+          # localize any future hang.
           $ErrorActionPreference = 'Stop'
           $failed = $false
           foreach ($origin in @('ubuntu-latest', 'windows-latest')) {
@@ -246,11 +257,12 @@ jobs:
             $src = "binaries/ape-binary-$origin/fizzbuzz.com"
             $copy = Join-Path $env:RUNNER_TEMP "fizzbuzz-$origin.com"
             Copy-Item $src $copy
-            & $copy
-            Write-Host "${origin}: exit code $LASTEXITCODE (want 42)"
-            if ($LASTEXITCODE -ne 42) { $failed = $true }
+            Write-Host "${origin}: launching $copy"
+            $p = Start-Process -FilePath $copy -Wait -PassThru -NoNewWindow
+            Write-Host "${origin}: exit code $($p.ExitCode) (want 42)"
+            if ($p.ExitCode -ne 42) { $failed = $true }
           }
-          if ($failed) { exit 1 }
+          if ($failed) { exit 1 } else { exit 0 }
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) that
   # this fork patches; see WASM_SHORTCOMINGS.md for the catalog of fixes.
