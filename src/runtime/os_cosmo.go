@@ -279,11 +279,12 @@ var urandom_dev = []byte("/dev/urandom\x00")
 
 func readRandom(r []byte) int {
 	if iswindows() {
-		// Wave 1: boot seeds come from the fabricated AT_RANDOM
-		// (startupRand), so randinit never needs this; returning 0
-		// selects the readTimeRandom fallback if it is ever hit.
-		// Wave 2: ProcessPrng.
-		return 0
+		// ProcessPrng (or RtlGenRandom), resolved at osArchInit;
+		// returns 0 when neither is available, selecting the
+		// readTimeRandom fallback. (Boot hash seeds additionally
+		// come from startupRand, which ntBootInit upgrades to
+		// ProcessPrng output before randinit runs.)
+		return ntReadRandom(r)
 	}
 	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
 	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))

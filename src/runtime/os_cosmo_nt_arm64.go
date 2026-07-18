@@ -47,6 +47,10 @@ func cosmoNTGoargs() bool {
 	return false
 }
 
+func ntReadRandom(r []byte) int {
+	return 0
+}
+
 func ntGoenvs() {
 	throw("ntGoenvs: not implemented on arm64")
 }

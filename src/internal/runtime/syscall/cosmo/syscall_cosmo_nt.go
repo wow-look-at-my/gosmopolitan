@@ -6,26 +6,44 @@
 
 package cosmo
 
-import "unsafe"
-
-// Windows NT syscall emulation hooks (wave 1).
+// Windows NT syscall emulation hook (wave 1: write/exit; wave 2: the
+// general Emulate dispatcher).
 //
 // On NT hosts no raw SYSCALL may execute: the assembly Syscall6
 // dispatcher returns ENOSYS for everything when __hostos is Windows
-// (the safety net), and the syscall package routes the handful of
-// emulated calls through this table instead. Mirrors the DarwinFns /
-// SetDarwinFns pattern (syscall_cosmo_arm64.go), except the fields
-// are Go funcs installed by the runtime rather than raw C pointers.
+// (the safety net), and the syscall package routes emulated calls
+// through this table instead. Mirrors the DarwinFns / SetDarwinFns
+// pattern (syscall_cosmo_arm64.go), except the emulation is a Go
+// function installed by the runtime rather than raw C pointers.
 //
-// Wave 1 covers exactly what fizzbuzz needs - Write (fmt output to
-// fds 1/2) and Exit - with everything else failing loudly as ENOSYS.
-// Later waves grow the table.
+// Unlike the darwin path, the NT emulation runs OUTSIDE the
+// entersyscall/exitsyscall window: syscall.Syscall/Syscall6 skip
+// entersyscall when this table is installed (see
+// src/syscall/syscall_cosmo.go), so Emulate is ordinary Go code - it
+// may allocate, grow the stack, and block - and it brackets the
+// individual potentially-blocking Win32 calls with entersyscall
+// itself (the cgocall model). That is what makes path translation
+// (UTF-8 -> UTF-16) and Linux-struct synthesis (stat, dirent)
+// implementable at all. The darwin emulation has no equivalent
+// problem: XNU syscalls consume the caller's C strings and buffers
+// directly, so its fixed-size translations fit the nosplit budget.
 
 // WindowsFns is the NT emulation table. A nil table (any host but NT)
 // means no routing: callers fall through to the assembly dispatcher.
 type WindowsFns struct {
-	Write func(fd int, p unsafe.Pointer, n int32) int32
-	Exit  func(code int32)
+	// Emulate performs the given Linux-NUMBERED syscall using Win32
+	// primitives, returning (r1, r2, errno) with a positive LINUX
+	// errno. Installed by runtime.ntSetSyscallFns; the dispatcher and
+	// the catalog of emulated calls live in
+	// runtime/os_cosmo_nt_sys.go.
+	//
+	// Contract: the dispatcher entry is nosplit and converts every
+	// pointer-carrying uintptr argument to a real pointer type before
+	// any stack growth can occur (the caller chain from
+	// syscall.Syscall down to the dispatcher is nosplit), because
+	// arguments may point into the calling goroutine's stack and raw
+	// uintptrs are not adjusted when the stack moves.
+	Emulate func(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr)
 }
 
 // windowsFns has static storage (no allocation at install time:
@@ -55,27 +73,14 @@ func Windows() *WindowsFns {
 // Results follow the package convention: (r1, r2, errno) with a
 // positive Linux errno.
 //
-// nosplit: runs between entersyscall and exitsyscall (the syscall
-// package's Syscall/Syscall6 funnel through RawSyscall6), where the g
-// is in _Gsyscall and a stack split is fatal ("stack split at bad
-// time"). The whole call chain below - the table funcs are the
-// runtime's ntSyscallWrite/ntSyscallExit - is nosplit for the same
-// reason, exactly like the raw SYSCALL instruction this emulates.
+// nosplit: callers hand over uintptr arguments that may point into
+// their goroutine's stack; the chain must not grow the stack until
+// the dispatcher has re-typed them as pointers (see Emulate).
 //
 //go:nosplit
 func (f *WindowsFns) Syscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
-	switch num {
-	case SYS_WRITE:
-		n := f.Write(int(a1), unsafe.Pointer(a2), int32(a3))
-		if n < 0 {
-			return ^uintptr(0), 0, uintptr(-n)
-		}
-		return uintptr(n), 0, 0
-	case SYS_EXIT, SYS_EXIT_GROUP:
-		f.Exit(int32(a1))
-		// Exit never returns; keep the compiler happy.
-		return 0, 0, 0
-	default:
+	if f.Emulate == nil {
 		return ^uintptr(0), 0, 38 // ENOSYS
 	}
+	return f.Emulate(num, a1, a2, a3, a4, a5, a6)
 }
