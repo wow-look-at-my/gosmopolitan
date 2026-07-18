@@ -2550,3 +2550,251 @@ Signal()==SIGKILL -> "ok waitsig killed".
 - ntSigActs is the handler-state oracle: console-ctrl "unwatched ->
   default death" decisions can consult it exactly like ntKillSelf.
 - CI flip (runtimeprobe on windows-latest) stays chunk E.
+
+## Wave 2 chunk D2 (2026-07-18): async preemption + console control
+
+End state under wine 9.0: the probe's preempt check goes GREEN -
+163/173/181/166ms across four consecutive runs (linux reference
+142ms), whole probe ~1.2s end to end (was ~85s while the spin loops
+drained their iteration bound). unixsock is the SOLE remaining wine
+red (ws2_32 AF_UNIX gap, chunk C's documented wine-fidelity case;
+windows-latest judges), rc reflects only it. Chunk-C sockstress
+battery 8/8 + ok all under wine WITH preemption live; fizzbuzz
+wine+linux byte-identical. Linux native: 39 checks + ok all rc 0,
+four consecutive runs, preempt 142-160ms - byte-untouched behavior.
+cosmo std builds on amd64 AND arm64; changed files gofmt clean.
+
+### Per-M thread handles (minit/unminit/ntNewosproc)
+
+- mOS (os_cosmo_amd64_m.go) grows upstream's preemption trio:
+  `thread uintptr` (a DuplicateHandle of the thread, made BY the
+  thread itself in minit's NT leg - ntMinitThread), `threadLock
+  mutex` guarding it, `preemptExtLock uint32` (the external-code CAS
+  gate). unminit's NT leg closes the handle under threadLock and
+  zeroes it, so ntPreemptM treats a dying M as unpreemptible (mexit
+  and dropm both route through unminit). arm64's mOS gets only
+  preemptExtLock (the shared osPreemptExtEnter/Exit must compile
+  there; iswindows() is constant false so they dead-code away).
+- ntNewosproc now closes the CreateThread handle immediately
+  (wave 1 leaked it; the per-M handle is minit's duplicate, exactly
+  upstream newosproc's split) and ports the CreateThread-vs-
+  ExitProcess race freeze: CreateThread failing while ntExiting is
+  set parks the thread on the double-locked ntDeadlock mutex
+  (upstream issue #18253).
+
+### Trampoline last-error capture (the D1 handoff's hard rule)
+
+ntcall6/ntcall10 now bracket the foreign call themselves: zero the
+TEB LastErrorValue (gs:0x30 -> TEB+0x68) before the CALL (upstream
+asmstdcall's SetLastError(0)), and immediately after the target
+returns, read it back and store it into this M's mOS.ntLastError
+(reached from the trampoline via get_tls/g/g_m - cosmo amd64 keeps g
+at gs:0x28 on both hosts, cmd/internal/obj/x86 Hcosmo). The capture
+is atomic with the call: no window in which SuspendThread preemption,
+a later win64 call, or any scheduling event can lose the value.
+ntcallE/ntcallSE/ntcallSE10 read getg().m.ntLastError (single
+trampoline trip now - the second GetLastError ntcall is gone), and
+netpollNT's WSAPoll error read does the same. The ntcallArgs blocks
+did NOT widen (the chunk-A nosplit rule): the store rides the m,
+not the args frame.
+
+### preemptM port (os_cosmo_nt_preempt.go ntPreemptM)
+
+Upstream os_windows.go:1152-1236 carried over with the fork's
+idioms; every upstream lock and ordering kept:
+
+1. self-preempt throw; CAS mp.preemptExtLock 0->1 or fail the
+   attempt (external code running).
+2. mp.threadLock: mp.thread==0 -> unpreemptible, ack and return;
+   else DuplicateHandle our own reference; unlock BEFORE suspending.
+3. 16-byte-aligned FULL 1232-byte CONTEXT (ntContext grew its
+   fltsave/vector tail; the buffer is over-allocated +15 and rounded,
+   upstream's idiom), ContextFlags = CONTEXT_CONTROL only -
+   asyncPreempt saves everything else itself.
+4. ntSuspendLock serializes ALL SuspendThread callers (SuspendThread
+   is asynchronous: two threads suspending each other deadlock).
+   Held across SuspendThread AND GetThreadContext - the latter is
+   what actually blocks until the suspension completes. SuspendThread
+   returning -1 (thread gone) unwinds and acks.
+5. Safe-point gate: ntGFromSP (upstream gFromSP - which of
+   g0/gsignal/curg owns the interrupted SP) + wantAsyncPreempt +
+   isAsyncSafePoint(pc, sp, 0). Threads inside win64 calls sit on
+   their g0 stack (asmcgocall switched) -> gFromSP says g0 ->
+   wantAsyncPreempt false -> plain suspend/resume, no injection;
+   runtime-Go PCs are refused by isAsyncSafePoint's name check.
+6. Injection = upstream PushCall's fake CALL: SP-=8, [SP]=the
+   isAsyncSafePoint-ADJUSTED resume PC, RIP=asyncPreempt entry,
+   SetThreadContext. (The VEH side's RIP==asyncPreempt interlock has
+   been live since D1 - a fault-vs-preempt collision cannot
+   double-frame.)
+7. Release preemptExtLock; ack: preemptGen.Add(1) THEN
+   signalPending.Store(0) - doSigPreempt's exact order. The clear is
+   the fork-specific delta: the unix preemptM wrapper
+   (signal_unix.go) CASed signalPending before signalM, and on
+   signal hosts the handler's ack clears it; without the clear here
+   the gate would stay shut and preemption would fire exactly once.
+8. ResumeThread; CloseHandle.
+
+Wiring: signalM's NT leg (os_cosmo.go) dispatches sigPreempt ->
+ntPreemptM and drops everything else (preemptM is signalM's only
+cosmo caller - grep-verified; secret.go's noopSignal is linux-only).
+sysmon's retake, preemptone, suspendG, and STW all flow through
+preemptM unchanged. preemptMSupported was already true
+(signal_unix.go).
+
+Lock order: threadLock -> (released) -> ntSuspendLock. Nothing takes
+them nested the other way; a suspended thread can never hold
+ntSuspendLock (suspension only happens under it), which is the
+mutual-suspend deadlock proof.
+
+### exit() discipline (the ExitProcess-vs-SuspendThread wedge)
+
+- runtime.exit's NT asm branch is now a tail JMP to the Go ntExit:
+  lock(&ntSuspendLock) FOREVER, ntExiting=1, ExitProcess. So no
+  suspension can be mid-flight while the process dies - the wedge
+  upstream exit() documents (suspender killed between SuspendThread
+  and ResumeThread -> target frozen forever).
+- ntKillSelf's normal-operation encoded deaths (SIGKILL, SIG_DFL
+  terminate - the waitsig check's exact path) go through
+  ntExitEncodedOrdered = same lock + ntExitEncoded. Crash paths
+  (ntWinthrow from the VEH, raise/raiseproc's dieFromSignal exits)
+  deliberately stay on the bare asm ntExitEncoded: taking runtime
+  locks from an exception handler is worse than upstream's accepted
+  dieFromException equivalent - same residual risk profile as
+  upstream windows.
+- WSAPoll-parked poller Ms and WaitOnAddress-parked Ms need nothing
+  special at exit: they are parked, not suspended; ExitProcess
+  terminates parked threads fine. The invariant that matters is
+  "SuspendThread only ever under ntSuspendLock", which ntExit's
+  forever-hold closes.
+
+### osPreemptExtEnter/Exit (the cgocall bracket)
+
+preempt_nonwindows.go now excludes cosmo; os_cosmo.go defines the
+real pair (iswindows-gated, mirroring upstream: Enter spins on the
+CAS with osyield while a preemption is in flight, Exit is a plain
+store). They wrap the blocking foreign calls in ntcallSE/ntcallSE10
+STRICTLY inside the entersyscall window (enter after entersyscall,
+exit before exitsyscall) - exitsyscall can schedule other goroutines
+on this M, which must never run with preemptExtLock held. Effect on
+a blocked M (ReadFile on a console, CreateProcessW mid-image-load):
+ntPreemptM fails fast (CAS) instead of suspending a thread that may
+hold the loader lock. Runtime-internal g0 ntcalls (netpoll wake
+sends, WSAPoll, futex waits) take NO bracket on purpose - upstream's
+stdcall-vs-cgocall split; they are protected by gFromSP->g0.
+
+### Console control -> os/signal (SetConsoleCtrlHandler)
+
+- The callback runs on a Windows-INJECTED thread: no g, no TLS.
+  ntCtrlTramp (sys_cosmo_nt_amd64.s) is therefore Go-free asm using
+  only volatile registers and direct win64 calls (chunk-B alignment
+  discipline): classify dwCtrlType (0/1 CTRL_C|BREAK -> SIGINT(2);
+  2/5/6 CLOSE|LOGOFF|SHUTDOWN -> SIGTERM(15); else return 0), LOCK
+  OR the signal bit into ntCtrlMask, SetEvent(ntCtrlEvent), then
+  return 1 for the SIGINT class - or, for the SIGTERM class, park
+  forever in a Sleep(INFINITE) loop: Windows kills the process the
+  moment a CLOSE/LOGOFF/SHUTDOWN handler returns, and blocking
+  grants Go handlers the OS grace window (upstream ctrlHandler's
+  block(), ~5-20s system deadline).
+- The relay: ntInitConsoleCtrl (called from mstartm0 via the new
+  cosmoMstartm0 hook in proc.go + stubs_noncosmo.go stub) creates
+  the auto-reset event, parks a dedicated relay M on it
+  (newm(ntCtrlRelay, nil, -1) - no P, blocked in
+  WaitForSingleObject on its g0, the sysmon shape), and registers
+  the handler. FIRST ATTEMPT FAILED and is instructive: goenvs -
+  where upstream registers ITS handler - is too early for newm,
+  because allocm borrows the caller's P and m0 only acquires p0 in
+  procresize at the END of schedinit (the new VEH caught it with a
+  perfect traceback: acquirep(nil) in allocm). mstartm0 runs just
+  after, with p0 held, and its newextram precedent already
+  allocates there.
+- Delivery: the relay drains ntCtrlMask (Xchg) and runs ntKillSelf
+  per signal - the same kernel decision tree kill(2) uses, against
+  ntSigActs: SIG_IGN drops, SIG_DFL dies encoded (0xC0DE0002 for an
+  unwatched Ctrl+C - the Linux default action; deliberate delta
+  from upstream, which returns 0 and lets the OS exit with
+  STATUS_CONTROL_C_EXIT), an installed handler goes through the D1
+  trampoline into sigtrampgo -> sighandler -> sigsend/os signal
+  (Notify) or dieFromSignal. The mask+auto-reset-event pair cannot
+  lose events: bits latch before SetEvent, the relay re-drains
+  after each wait.
+- Cost note: one standing parked thread per process. Upstream avoids
+  it via compileCallback+needm (extra-M machinery the cosmo NT port
+  does not have); revisit if it ever matters.
+
+### Wine verification of console ctrl (limits documented)
+
+- GenerateConsoleCtrlEvent is UNAVAILABLE under this headless wine:
+  redirected-stdio processes have no console (error 12), and
+  AllocConsole is denied (error 5 - no console host in the
+  environment), so the OS-injected path cannot fire locally. CLOSE/
+  LOGOFF/SHUTDOWN cannot be generated programmatically by API design
+  anywhere.
+- What WAS verified under wine (throwaway runtime hook driving the
+  REAL registered asm callback through the win64 trampoline - the
+  same CX=dwCtrlType ABI the OS dispatcher uses; hook deleted, not
+  committed):
+  * notify path: callback(0) -> verdict 1, SIGINT arrives at
+    os/signal.Notify; callback(2) from a parked goroutine -> blocks
+    forever (by design) AND SIGTERM arrives at Notify. rc 0.
+  * ignore path: signal.Ignore(SIGINT) -> event dropped, process
+    survives.
+  * default path: unwatched CTRL_C -> process dies encoded (shell
+    sees rc 2 = low byte of 0xC0DE0002, the ntKillSelf(SIGINT)
+    SIG_DFL action; code-identical to the D1-wine-verified waitsig
+    death path plus the new suspendLock).
+  * every probe/sockstress/fizzbuzz run boots with the handler
+    registered and the relay M parked - the full battery doubles as
+    a regression test that the standing relay disturbs nothing.
+- Untested residue for real NT: the OS's actual foreign-thread
+  injection (the handler touches no TLS by construction - the same
+  discipline ntsigtramp's g==nil path proved for foreign threads)
+  and real conhost CTRL_C dispatch. windows-latest CI judges; the
+  probe does not exercise console ctrl (backlog item for a later
+  probe extension).
+
+### Fork-shared file deltas (kept minimal)
+
+- proc.go mstartm0: one cosmoMstartm0() call (stub for !cosmo in
+  stubs_noncosmo.go - the established hook pattern).
+- preempt_nonwindows.go: build tag grows && !cosmo.
+- defs_cosmo_{amd64,arm64}.go: _SIGTERM = 0xf was simply MISSING
+  from the signal constant block (the list jumped 0xe -> 0x10);
+  nothing referenced it before the console-ctrl work.
+- signal_unix.go, preempt.go, cgocall.go: untouched.
+
+### Chunk-D2 commits
+
+- 6c4e3c11 runtime: NT async preemption, per-M thread handles,
+  console control
+
+### What chunk E must do (CI flip) + real-NT risks
+
+- Flip (recon section (d), restated): (1) TestRuntimeProbe's
+  windows t.Skip at testdata/ape/apetest/runtimeprobe_test.go:69-74
+  ("probe execution is a later wave") becomes a direct
+  `cmd = exec.CommandContext(ctx, bin, mark)` - no shell, mirroring
+  fizzbuzz_test.go:54-59 (unix keeps `/bin/sh bin mark`). (2) In
+  .github/workflows/cosmo-ci.yml's test-windows job, the two apetest
+  steps at :312-322 (windows-origin) and :332-342 (ubuntu-origin)
+  set FIZZBUZZ_BIN only - add
+  RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-<origin>/
+  runtimeprobe.com" to both, mirroring the unix legs at
+  :145/:168/:191. Optional redundancy rung: a direct pwsh probe run
+  after the fizzbuzz acceptance (:247-298 pattern). Also update the
+  stale job comment :216-219 and the workflow header :4-9.
+- Known real-NT risks to expect on windows-latest, in likelihood
+  order: (1) unixsock on Server 2022 - afunix.sys exists but the
+  runner image's support for AF_UNIX pathname sockets must prove
+  itself (the ONLY check wine could not green-light); (2) timer
+  granularity - wave 1's Sleep(ms) usleep gives ~15.6ms quanta on
+  real NT (wine's happens to be finer): if the probe's timer
+  thresholds flake, resolve CreateWaitableTimerExW with
+  CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (0x2) + SetWaitableTimer
+  with negative 100ns due times and give each M a highResTimer in
+  minit (upstream os_windows.go:398-432, notes section 10); (3)
+  console CP/VT on real conhost (SetConsoleOutputCP(CP_UTF8) is
+  boot-applied but wine-with-redirect never proved a real console);
+  (4) WER dialogs - preventErrorDialogs is live since D1, but real
+  WER has more moving parts (WerSetFlags resolves on real NT, was
+  missing on wine).
