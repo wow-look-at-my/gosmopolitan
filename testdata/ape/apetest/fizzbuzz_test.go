@@ -53,11 +53,10 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Cosmo-native NT bring-up, wave 1: the PE header maps the
-		// cosmo image, but the boot stub exits 42 before running user
-		// code, so no fizzbuzz output exists yet. CI asserts the exit
-		// code in a dedicated windows step instead.
-		t.Skip("cosmo NT bring-up wave 1: the NT boot stub exits 42 before running user code")
+		// The cosmo NT personality boots the fat APE natively through
+		// its PE header (cosmo NT bring-up wave 1); CreateProcess
+		// needs no shell.
+		cmd = exec.CommandContext(ctx, bin, args...)
 	default:
 		// Unix: invoke through shell for APE bootstrap
 		shellArgs := append([]string{bin}, args...)
