@@ -1,9 +1,12 @@
 # CI workflow for GOOS=cosmo cross-platform testing
 # Tests that APE binaries built on any platform (Linux/macOS/Windows) run
-# on Linux and macOS. Each of the 2 test runners tests all 3 origin
-# binaries. There is no windows test runner: fat APEs no longer embed a
-# windows PE payload (cosmo-native NT bring-up is in progress), so on
-# Windows the APE is only the parseable stub PE that exits 0.
+# on Linux and macOS. Each of the 2 unix test runners tests all 3 origin
+# binaries. Windows coverage is the cosmo-native NT bring-up ladder
+# (wave 1, rung L1): the APE's PE header maps the embedded cosmo amd64
+# image and the runtime's NT boot stub exits 42 through loader-resolved
+# imports; a dedicated windows job asserts that exit code. The full
+# apetest suite returns to windows when later waves boot the real NT
+# personality (L2+).
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -76,9 +79,10 @@ jobs:
 
   # Test all APE binaries on each unix platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
-  # plus the two cross-compiled elsewhere). No windows test runner: its
-  # unique contribution was executing the embedded windows PE payload,
-  # which fat APEs no longer carry.
+  # plus the two cross-compiled elsewhere). Windows execution is covered
+  # by the dedicated test-windows job below (NT-stub exit-code check);
+  # apetest itself skips binary execution on windows until the NT
+  # personality boots for real.
   #
   # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
   # green total is under 2 minutes. Individual steps carry their own
@@ -199,6 +203,54 @@ jobs:
           name: test-log-${{ matrix.test-os }}-windows-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
+
+  # Windows NT-stub execution check (cosmo NT bring-up wave 1, ladder
+  # rung L1). The APE's PE header maps the embedded cosmo amd64 image;
+  # its entry point, the runtime's _rt0_cosmo_nt stub, proves the NT
+  # loader mapped our sections and resolved our kernel32 imports by
+  # calling ExitProcess(42). This job runs the ubuntu-origin and
+  # windows-origin fat APEs and asserts that exit code (cross-origin
+  # plus native-origin coverage; all origins build identical headers).
+  # It deliberately does NOT run apetest: binary execution on windows
+  # stays skipped until later waves boot the real NT personality (L2+).
+  test-windows:
+    timeout-minutes: 15
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Download ubuntu-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-ubuntu-latest
+          path: binaries/ape-binary-ubuntu-latest
+
+      - name: Download windows-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-windows-latest
+          path: binaries/ape-binary-windows-latest
+
+      - name: NT stub exit-code check (interim wave-1 L1)
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          # A binary the loader refuses to start throws instead of
+          # setting an exit code; make that fail the step immediately.
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          foreach ($origin in @('ubuntu-latest', 'windows-latest')) {
+            # Run a throwaway copy so the downloaded artifact stays
+            # pristine (APE binaries self-assimilate on unix hosts;
+            # keep the same hygiene here).
+            $src = "binaries/ape-binary-$origin/fizzbuzz.com"
+            $copy = Join-Path $env:RUNNER_TEMP "fizzbuzz-$origin.com"
+            Copy-Item $src $copy
+            & $copy
+            Write-Host "${origin}: exit code $LASTEXITCODE (want 42)"
+            if ($LASTEXITCODE -ne 42) { $failed = $true }
+          }
+          if ($failed) { exit 1 }
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) that
   # this fork patches; see WASM_SHORTCOMINGS.md for the catalog of fixes.

@@ -1339,3 +1339,83 @@ preemption (SuspendThread/GetThreadContext), profiling timers,
 os.Executable (GetModuleFileNameW), TIB stack-bounds hygiene,
 ProcessPrng entropy, exit-status protocol alignment with cosmo, and
 Windows/arm64.
+
+## wave 1 implementation log (2026-07-18, step 1: header + NT stub, L1)
+
+Landed on claude/nt-wave1:
+
+- runtime/rt0_cosmo_nt_amd64.s (cosmo && amd64 only): `_rt0_cosmo_nt`
+  entry stub (cld; fldcw 0x37f per spec.md's Windows x87 section; SUBQ
+  $40,SP for win64 alignment+shadow space; LoadLibraryA("kernel32.dll")
+  -> GetProcAddress(h,"ExitProcess") -> ExitProcess(42); INT3 fallback)
+  plus the import machinery as fixed-layout data symbols:
+  `runtime.ntidata` (0x70 bytes: IDT entry + terminator, 2-entry ILT,
+  hint/name entries, "kernel32.dll") and `runtime.ntiat` (3 u64 slots,
+  first two DATA-initialized to 1 so the symbol is file-backed
+  noptrdata the loader can overwrite in place).
+- cmd/link: `apePrepareNTBoot` (thin amd64 path, convertToAPE) resolves
+  the three symbols via ctxt.loader (they are new deadcode roots for
+  Hcosmo/amd64 - nothing references them by relocation), verifies the
+  blob strings, and patches the five RVA fields into the payload bytes
+  before writeAPEFile re-emits them. `writePECosmoAMD64` replaces the
+  amd64 stub header: PE32+ at ImageBase 0x100000000, Characteristics
+  0x0223, DllCharacteristics 0x8100 (no ASLR bits), subsystem CUI 6.0,
+  stack 8MiB/64KiB, heap 1MiB/4KiB, SizeOfHeaders 0x400,
+  NumberOfRvaAndSizes 16 with only DataDirectory[1] = {RVA(ntidata),
+  0x28}; sections .text/.rodata/.data from the payload's three PT_LOADs
+  (asserting vaddr - p_offset == ImageBase per load, so RVA ==
+  payload-relative offset), the payload ELF-header page skipped (.text
+  RVA 0x1000, raw 0x11000), .data VirtualSize=memsz > SizeOfRawData
+  (=filesz rounded to FileAlignment over verified zero padding) for
+  BSS. Fat path: payloadFromAPEOrELF keeps each input's 64K head and
+  `transplantPEHeader` copies the amd64 input's [0x80,0x800) verbatim
+  (asserting the PE sig and payload offset 0x10000); readobj output of
+  thin and fat is byte-identical. arm64-only and loaderless synthetic
+  payloads keep the legacy stub header.
+- Tests: apetest/pe_test.go flipped from stub-shape to real-mapping
+  acceptance (sections raw >= 0x10000, entry inside .text and matching
+  the stub prologue fc d9 2d ?? ?? ?? ?? 48 83 ec 28, exact
+  ImageBase/Characteristics/DllCharacteristics/SizeOfHeaders, kernel32
+  imports = GetProcAddress+LoadLibraryA, .data BSS) while keeping the
+  polyglot/stub-era invariants that still hold. ld/ape_test.go gained
+  TestPECosmoHeaderStructure (synthetic payload with a pre-patched
+  blob through writeAPEFile, parsed with debug/pe incl.
+  ImportedSymbols) and TestAPEFatPETransplant (thin -> re-ingest ->
+  fat merge, header region byte-compared and re-verified).
+- CI: new `test-windows` job (windows-latest, needs build) downloads
+  the ubuntu-origin and windows-origin fat fizzbuzz artifacts and
+  asserts each exits 42 in pwsh on a throwaway copy ("NT stub
+  exit-code check (interim wave-1 L1)"). apetest still skips execution
+  on windows. ubuntu/macos legs unchanged.
+
+L1 expectation: windows-latest runs the fat APE and gets exit code 42
+- that is the deliberate, temporary contract until L2 wires the write
+path (then the stub stops exiting early and the check moves up the
+ladder).
+
+Verified locally (linux): make.bash; thin+fat fizzbuzz builds; both
+run correctly on linux via throwaway copies (self-assimilation
+intact); llvm-readobj on pristine copies shows the designed
+header/sections/imports, thin==fat; apetest green against fat (thin
+fails only the three inherently-fat TestFat* checks, as before);
+cmd/link/internal/ld suite green.
+
+Deviations from the design/step brief, and why:
+
+- The ntidata patch is applied to the payload bytes in memory before
+  writeAPEFile re-creates the output, not by seek+write on the
+  finished file: convertToAPE's existing idiom is read-whole-file ->
+  rebuild, so mutating p.elf is the same mechanism with less code.
+  Byte-level outcome is identical (verified in the output file).
+- .text/.rodata keep exact (unaligned) SizeOfRawData; only .data is
+  rounded up to FileAlignment, per the step brief. Loaders accept
+  unaligned raw sizes (they read whole 512-byte sectors regardless);
+  revisit only if a real Windows loader complains.
+- SizeOfCode/SizeOfInitializedData/SizeOfUninitializedData are 0 like
+  real cosmo APEs (loaders ignore them); the design did not specify.
+- The linker cross-checks the blob's embedded strings before patching
+  (not in the brief) so asm/linker layout drift fails the link loudly.
+- cosmo-ci.yml has no all-builds aggregator job to wire the new job
+  into (the org-side required-builds-manager aggregates externally);
+  publish keeps needs [build, test], consistent with wasm not gating
+  publish either.

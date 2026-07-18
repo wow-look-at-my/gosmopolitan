@@ -53,10 +53,11 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Windows loads the APE as the stub PE, which exits 0 without
-		// running the program: fat APEs no longer embed a windows/amd64
-		// PE payload (cosmo-native NT bring-up is in progress).
-		t.Skip("fat APEs no longer embed a windows PE payload; cosmo-native NT bring-up in progress")
+		// Cosmo-native NT bring-up, wave 1: the PE header maps the
+		// cosmo image, but the boot stub exits 42 before running user
+		// code, so no fizzbuzz output exists yet. CI asserts the exit
+		// code in a dedicated windows step instead.
+		t.Skip("cosmo NT bring-up wave 1: the NT boot stub exits 42 before running user code")
 	default:
 		// Unix: invoke through shell for APE bootstrap
 		shellArgs := append([]string{bin}, args...)

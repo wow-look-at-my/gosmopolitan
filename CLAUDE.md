@@ -89,12 +89,14 @@ compile.
 The resulting `.com` file runs on Linux and macOS. The cosmo amd64 image
 boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots on
 ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
-Rosetta). On Windows the file currently loads as the parseable stub PE in
-the APE header and exits 0 without running the program: the embedded native
-windows/amd64 PE payload was removed (2026-07-18), and Windows execution is
-being reimplemented cosmo-natively - the cosmo amd64 image booted through
-the APE PE header plus an NT personality in the runtime, vim.com-style (in
-progress, see DEBUGGING.md).
+Rosetta). On Windows, the cosmo-native NT bring-up (vim.com-style: the
+cosmo amd64 image booted through the APE PE header plus an NT personality
+in the runtime; the embedded windows/amd64 PE payload was removed
+2026-07-18) is at wave 1: the PE header really maps the embedded cosmo
+amd64 image, and the Windows loader runs the runtime's _rt0_cosmo_nt boot
+stub, which proves the load/import chain by exiting 42 via loader-resolved
+kernel32 imports - user code does not run on Windows yet (see
+DEBUGGING.md).
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -202,7 +204,7 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any of those platforms run correctly on the unix platforms (Linux and macOS). The windows build leg stays - it gates make.bat toolchain health and proves fat cosmo APEs cross-build from a Windows host, and its binaries are executed by the unix test legs - but there is no windows test leg anymore: its unique value was executing the embedded windows PE payload, which fat APEs no longer carry.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any of those platforms run correctly on the unix platforms (Linux and macOS). The windows build leg gates make.bat toolchain health and proves fat cosmo APEs cross-build from a Windows host. Windows execution coverage is the dedicated `test-windows` job (NT bring-up ladder rung L1): it runs the ubuntu-origin and windows-origin fat APEs on windows-latest and asserts the NT boot stub's exit code 42, proving the loader mapped the cosmo image and resolved its imports. apetest itself still skips binary execution on windows until later waves boot the real NT personality.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
 amd64 and cosmo arm64 payloads. Execution and structural format tests run on
