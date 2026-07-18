@@ -132,6 +132,20 @@ func netpollinitNT() {
 		println("runtime: netpollinit: wake FIONBIO failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
+	// Disable latched UDP resets on the wake socket (same guard
+	// ntEmuSocket applies to every user DGRAM socket; best-effort -
+	// wine lacks these ioctls). Real NT latches WSAECONNRESET onto a
+	// connected UDP socket after an ICMP unreachable, and a latched
+	// wake socket would fail EVERY future netpollBreak send: the
+	// poller then sleeps its full WSAPoll timeout and new timers or
+	// ready work wait for an unrelated timer expiry to rescue them.
+	var off, ret uint32
+	ntcall10x(ntWSAIoctlFn, s, _NT_SIO_UDP_CONNRESET,
+		uintptr(unsafe.Pointer(&off)), 4, 0, 0,
+		uintptr(unsafe.Pointer(&ret)), 0, 0, 0)
+	ntcall10x(ntWSAIoctlFn, s, _NT_SIO_UDP_NETRESET,
+		uintptr(unsafe.Pointer(&off)), 4, 0, 0,
+		uintptr(unsafe.Pointer(&ret)), 0, 0, 0)
 	ntWakeSock = s
 	ntPollFds[0] = ntWSAPollFD{fd: s, events: _NT_POLLRDNORM}
 	ntPollPds[0] = nil
@@ -147,7 +161,14 @@ func netpollinitNT() {
 func ntNetpollwakeup() {
 	if ntPollPendingUpdates == 0 {
 		ntPollPendingUpdates = 1
-		ntcall(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0)
+		r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+		if ntSockErr(r) {
+			// Should be impossible (1-byte send on a healthy connected
+			// loopback socket). If it ever fires, the poller may sleep
+			// its full timeout - name the cause instead of wedging
+			// silently.
+			println("runtime: netpoll wakeup send failed with", werr)
+		}
 	}
 }
 
@@ -227,7 +248,14 @@ func netpollBreakNT() {
 	if ntWakeSock == 0 {
 		return
 	}
-	ntcall(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0)
+	r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+	if ntSockErr(r) {
+		// A lost break leaves the poller asleep until its current
+		// WSAPoll timeout: timers added after the failed send fire
+		// late (rescued only by whatever deadline the poller is
+		// already waiting on). See ntNetpollwakeup.
+		println("runtime: netpollBreak send failed with", werr)
+	}
 }
 
 // netpollNT is the NT leg of netpoll: one WSAPoll cycle.

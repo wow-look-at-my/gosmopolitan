@@ -13,7 +13,15 @@
 // (plus WSA_FLAG_NO_HANDLE_INHERIT), ioctlsocket(FIONBIO) for
 // O_NONBLOCK, plain recv/send/recvfrom/sendto/accept/connect, and
 // readiness from the WSAPoll netpoller (netpoll_cosmo_nt.go). None of
-// upstream's IOCP/OVERLAPPED machinery is involved.
+// upstream's IOCP/OVERLAPPED machinery is involved. AF_UNIX is the
+// one exception to the non-overlapped rule: afunix.sys refuses
+// operations on non-overlapped sockets (bind fails WSAEOPNOTSUPP on
+// real NT - observed on windows-latest CI), so AF_UNIX sockets are
+// created WITH WSA_FLAG_OVERLAPPED, matching every known-working
+// afunix consumer (upstream Go's net, .NET, classic socket(), which
+// all create overlapped sockets); the synchronous call surface is
+// unaffected - overlapped-created sockets have been the winsock
+// default since socket() existed.
 //
 // Translation happens at exactly this boundary, in both directions:
 //
@@ -108,6 +116,7 @@ const (
 const (
 	_NT_AF_INET6_NT = 23
 
+	_NT_WSA_FLAG_OVERLAPPED        = 0x01
 	_NT_WSA_FLAG_NO_HANDLE_INHERIT = 0x80
 
 	_NT_INVALID_SOCKET = ^uintptr(0)
@@ -531,9 +540,16 @@ func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 		return ntFail3(ntEAFNOSUPPORT)
 	}
 	// Non-overlapped socket, never inheritable: children only ever
-	// receive the three explicitly duplicated stdio handles.
+	// receive the three explicitly duplicated stdio handles. AF_UNIX
+	// must be overlapped-created - afunix.sys fails bind with
+	// WSAEOPNOTSUPP on a non-overlapped socket (see the file comment);
+	// the flag changes nothing about our synchronous call usage.
+	wsaFlags := uintptr(_NT_WSA_FLAG_NO_HANDLE_INHERIT)
+	if af == _NT_AF_UNIX {
+		wsaFlags |= _NT_WSA_FLAG_OVERLAPPED
+	}
 	s, werr := ntcallE(ntWSASocketWFn, af, uintptr(uint32(st)), uintptr(uint32(proto)),
-		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+		0, 0, wsaFlags, 0)
 	if s == _NT_INVALID_SOCKET {
 		return ntFail3(ntWSAToLinux(werr))
 	}

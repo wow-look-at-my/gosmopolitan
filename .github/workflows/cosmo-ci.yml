@@ -252,6 +252,62 @@ jobs:
           name: ape-binary-macos-latest
           path: binaries/ape-binary-macos-latest
 
+      # Diagnostic only (never fails the job): prove what the runner's
+      # afunix.sys actually supports, so a runtimeprobe unixsock failure
+      # can be attributed - runner capability gap vs cosmo port bug. The
+      # native matrix distinguishes the WSASocketW creation flags: the
+      # cosmo runtime creates AF_UNIX sockets WSA_FLAG_OVERLAPPED
+      # because bind on a non-overlapped afunix socket fails
+      # WSAEOPNOTSUPP (10045) on real NT; the managed .NET case is the
+      # canonical known-good control.
+      - name: AF_UNIX capability probe (runner diagnostic)
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $src = @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class AfUnixProbe {
+              [DllImport("ws2_32.dll")] public static extern int WSAStartup(ushort v, byte[] data);
+              [DllImport("ws2_32.dll")] public static extern IntPtr WSASocketW(int af, int type, int proto, IntPtr pi, uint g, uint flags);
+              [DllImport("ws2_32.dll")] public static extern int bind(IntPtr s, byte[] name, int namelen);
+              [DllImport("ws2_32.dll")] public static extern int WSAGetLastError();
+              [DllImport("ws2_32.dll")] public static extern int closesocket(IntPtr s);
+              public static void TryCase(string label, uint flags, string path) {
+                  IntPtr s = WSASocketW(1, 1, 0, IntPtr.Zero, 0, flags);
+                  if (s == (IntPtr)(-1L)) { Console.WriteLine(label + ": WSASocketW failed " + WSAGetLastError()); return; }
+                  byte[] p = Encoding.UTF8.GetBytes(path);
+                  byte[] sa = new byte[110];
+                  sa[0] = 1; sa[1] = 0;
+                  Array.Copy(p, 0, sa, 2, p.Length);
+                  int r = bind(s, sa, 2 + p.Length + 1);
+                  Console.WriteLine(r == 0 ? label + ": bind OK" : label + ": bind failed " + WSAGetLastError());
+                  closesocket(s);
+                  try { System.IO.File.Delete(path); } catch {}
+              }
+              public static void Run(string dir) {
+                  byte[] d = new byte[512]; WSAStartup(0x0202, d);
+                  TryCase("native non-overlapped (flags 0x80)", 0x80, System.IO.Path.Combine(dir, "afu-nonovl.sock"));
+                  TryCase("native overlapped (flags 0x81)", 0x81, System.IO.Path.Combine(dir, "afu-ovl.sock"));
+              }
+          }
+          '@
+          try {
+            Add-Type -TypeDefinition $src
+            [AfUnixProbe]::Run($env:RUNNER_TEMP)
+          } catch { Write-Host "native probe error: $_" }
+          try {
+            $mp = Join-Path $env:RUNNER_TEMP 'afu-managed.sock'
+            $sock = [System.Net.Sockets.Socket]::new([System.Net.Sockets.AddressFamily]::Unix, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Unspecified)
+            $ep = [System.Net.Sockets.UnixDomainSocketEndPoint]::new($mp)
+            $sock.Bind($ep)
+            Write-Host 'managed .NET UnixDomainSocket: bind OK'
+            $sock.Close()
+            Remove-Item $mp -ErrorAction SilentlyContinue
+          } catch { Write-Host "managed .NET UnixDomainSocket: $_" }
+          exit 0
+
       - name: Run fizzbuzz on Windows (NT boot acceptance)
         timeout-minutes: 5
         shell: pwsh
