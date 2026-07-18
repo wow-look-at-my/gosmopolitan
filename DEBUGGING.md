@@ -1678,3 +1678,12 @@ reservation; sysUsedOS, sysUnusedOS, sysFaultOS, and sysMapOS NT
 branches all route through the chunked helpers now. Locally green
 after the fix: linux fizzbuzz+probe ("ok all"), apetest, wine
 fizzbuzz, cosmo/arm64 std, vet.
+
+Post-fix verification: the straddle-fix push (2f0d0f34, run
+29639718819) and an additional workflow_dispatch sample on the same
+SHA (run 29639992692) were both fully green - two consecutive
+windows-latest rounds, roughly 184 fresh-ASLR process boots, zero
+failures - on top of the boundary-address forensics and the fix's
+upstream mem_windows.go provenance. Branch CI history for step 3:
+977759d7 green (first flip push), a94c1891 FAIL (the straddle flake,
+identical code), 4175ebce green, 2f0d0f34 green, dispatch green.
