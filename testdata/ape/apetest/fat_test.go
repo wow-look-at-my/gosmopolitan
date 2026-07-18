@@ -123,9 +123,8 @@ func TestFatPayloads(t *testing.T) {
 func TestFatPayloadsStripped(t *testing.T) {
 	bin := loadBinary(t)
 	type payload struct {
-		machine elf.Machine
-		base    uint64
-		extent  uint64 // absolute end of the phdr-referenced span
+		base   uint64
+		extent uint64 // absolute end of the phdr-referenced span
 	}
 	var payloads []payload
 	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
@@ -157,7 +156,7 @@ func TestFatPayloadsStripped(t *testing.T) {
 				extent = end
 			}
 		}
-		payloads = append(payloads, payload{machine, base, extent})
+		payloads = append(payloads, payload{base, extent})
 	}
 	require.Len(t, payloads, 2)
 	if payloads[0].base > payloads[1].base {

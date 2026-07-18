@@ -21,8 +21,8 @@ import (
 // intact) is first written to a debug sidecar beside outfile; with
 // -apestrip, each embedded payload is then reduced to the file span its
 // program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. cmd/go passes both by default for GOOS=cosmo
-// fat builds (GOCOSMOSTRIP=0 opts out).
+// each input's PT_LOAD span. The policy for when cmd/go passes these
+// flags lives in cmd/go/internal/work.cosmoMergeArgs.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
@@ -91,13 +91,15 @@ func writeAPEDebugSidecar(outfile string, p *apePayload) {
 // image's program headers: max over all entries of p_offset+p_filesz, but
 // no less than the end of the program header table itself. Everything past
 // it is non-loadable content (.debug_* sections, .symtab, .strtab, and the
-// section header table).
+// section header table). The image must already have passed payloadFromELF
+// validation.
 func payloadExtent(elf []byte) uint64 {
 	phoff := binary.LittleEndian.Uint64(elf[32:40])
+	phentsize := binary.LittleEndian.Uint16(elf[54:56])
 	phnum := binary.LittleEndian.Uint16(elf[56:58])
-	extent := phoff + uint64(phnum)*56
+	extent := phoff + uint64(phnum)*uint64(phentsize)
 	for i := uint16(0); i < phnum; i++ {
-		ph := elf[phoff+uint64(i)*56:]
+		ph := elf[phoff+uint64(i)*uint64(phentsize):]
 		off := binary.LittleEndian.Uint64(ph[8:16])
 		filesz := binary.LittleEndian.Uint64(ph[32:40])
 		if end := off + filesz; end > extent {

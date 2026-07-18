@@ -56,6 +56,11 @@ func cosmoStripEnabled() bool {
 // stripping, the fat merge passes no flags of its own: the payloads are
 // embedded exactly as the user's link produced them and no sidecars are
 // written.
+//
+// Known heuristic false positive: the separate value of a value-taking
+// flag can itself begin with '-' (e.g. -ldflags="-extldflags -s") and is
+// misread as the linker's -s/-w. The effect is the conservative one of
+// deferring to the user: no default strip, no sidecars.
 func ldflagsSpecifyStrip(ldflags []string) bool {
 	for _, f := range ldflags {
 		if !strings.HasPrefix(f, "-") {
@@ -69,12 +74,12 @@ func ldflagsSpecifyStrip(ldflags []string) bool {
 	return false
 }
 
-// cosmoMergeArgs returns the linker arguments that merge target and its
-// sibling-architecture build into a fat APE at target, applying the default
-// strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the user's -ldflags
-// for p already specify -s/-w.
-func cosmoMergeArgs(p *load.Package, target, sibling string) []string {
-	args := []string{"-apefat", target + "," + sibling, "-o", target}
+// cosmoMergeArgs returns the linker arguments that merge p's built target
+// and its sibling-architecture build into a fat APE at p.Target, applying
+// the default strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the
+// user's -ldflags for p already specify -s/-w.
+func cosmoMergeArgs(p *load.Package, sibling string) []string {
+	args := []string{"-apefat", p.Target + "," + sibling, "-o", p.Target}
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
 	}
@@ -148,7 +153,7 @@ func cosmoFatten(mains []*load.Package, dir bool) {
 		if dir {
 			sibling = filepath.Join(tmp, "out", filepath.Base(target))
 		}
-		merge := exec.Command(link, cosmoMergeArgs(p, target, sibling)...)
+		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
@@ -208,7 +213,7 @@ func cosmoFattenInstall(mains []*load.Package) {
 		target := p.Target
 		name := filepath.Base(target)
 		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
-		merge := exec.Command(link, cosmoMergeArgs(p, target, sibling)...)
+		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {

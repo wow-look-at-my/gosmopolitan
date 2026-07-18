@@ -17,8 +17,7 @@ import (
 // embeds. Sidecars are not shipped in CI artifacts, so the test skips
 // cleanly when neither file is present next to FIZZBUZZ_BIN.
 func TestDebugSidecars(t *testing.T) {
-	bin := os.Getenv("FIZZBUZZ_BIN")
-	require.NotEmpty(t, bin, "FIZZBUZZ_BIN environment variable must be set")
+	bin := binPath(t)
 
 	sidecars := []struct {
 		path    string

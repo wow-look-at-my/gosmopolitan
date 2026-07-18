@@ -154,7 +154,7 @@ func TestELFHasTextSegment(t *testing.T) {
 	require.NoError(t, err)
 	defer f.Close()
 
-	entry := le64(data[24:32])
+	entry := f.Entry
 	var hasText bool
 	for _, p := range f.Progs {
 		if p.Type == elf.PT_LOAD && p.Flags&elf.PF_X != 0 && p.Filesz > 0 &&

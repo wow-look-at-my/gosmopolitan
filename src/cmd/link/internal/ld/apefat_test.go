@@ -15,12 +15,6 @@ import (
 	"cmd/internal/sys"
 )
 
-const (
-	elfSHTSymtab = 2
-	elfSHTStrtab = 3
-	elfSHNAbs    = 0xfff1
-)
-
 // addTestDebugTail appends a non-loadable debug tail to elf, the way the
 // linker's real output carries .symtab/.strtab and DWARF past the loadable
 // span: a two-entry symbol table (null + a global "main.main"), a string
@@ -35,13 +29,13 @@ func addTestDebugTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 
 	// Symbol table: null symbol + one global.
 	symtab := make([]byte, 48)
-	binary.LittleEndian.PutUint32(symtab[24:], 1)         // st_name: offset in .strtab
-	symtab[28] = 0x12                                     // st_info: GLOBAL | FUNC
-	binary.LittleEndian.PutUint16(symtab[30:], elfSHNAbs) // st_shndx
+	binary.LittleEndian.PutUint32(symtab[24:], 1)                   // st_name: offset in .strtab
+	symtab[28] = 0x12                                               // st_info: GLOBAL | FUNC
+	binary.LittleEndian.PutUint16(symtab[30:], uint16(elf.SHN_ABS)) // st_shndx
 	binary.LittleEndian.PutUint64(symtab[32:], testELFEntry)
 	binary.LittleEndian.PutUint64(symtab[40:], 8) // st_size
 
-	strtab := append([]byte("\x00main.main\x00"), append([]byte(sentinel), 0)...)
+	strtab := []byte("\x00main.main\x00" + sentinel + "\x00")
 	shstrtab := []byte("\x00.symtab\x00.strtab\x00.shstrtab\x00")
 
 	symtabOff := uint64(len(out))
@@ -58,9 +52,9 @@ func addTestDebugTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 	}
 	shdrs := []shdr{
 		{}, // SHN_UNDEF
-		{name: 1, typ: elfSHTSymtab, off: symtabOff, size: 48, link: 2, info: 1, entsize: 24},
-		{name: 9, typ: elfSHTStrtab, off: strtabOff, size: uint64(len(strtab))},
-		{name: 17, typ: elfSHTStrtab, off: shstrtabOff, size: uint64(len(shstrtab))},
+		{name: 1, typ: uint32(elf.SHT_SYMTAB), off: symtabOff, size: 48, link: 2, info: 1, entsize: 24},
+		{name: 9, typ: uint32(elf.SHT_STRTAB), off: strtabOff, size: uint64(len(strtab))},
+		{name: 17, typ: uint32(elf.SHT_STRTAB), off: shstrtabOff, size: uint64(len(shstrtab))},
 	}
 	for _, sh := range shdrs {
 		b := make([]byte, 64)
@@ -105,6 +99,32 @@ func setAPEFatFlags(t *testing.T, strip, dbg bool) {
 	t.Cleanup(func() { *flagApeStrip, *flagApeDbg = oldStrip, oldDbg })
 }
 
+// mergeTestPair builds the synthetic ELF pair, stages the amd64 input as a
+// thin APE and the arm64 input as a raw ELF (covering both accepted input
+// forms), and runs apeFatMerge with the given -apestrip/-apedbg values. It
+// returns the pristine input images and the merged output path.
+func mergeTestPair(t *testing.T, strip, dbg bool) (amdElf, armElf []byte, out string) {
+	t.Helper()
+	amdElf, armElf = buildTestELFPair(t)
+	dir := t.TempDir()
+
+	amdIn := filepath.Join(dir, "amd.com")
+	p, err := payloadFromELF(append([]byte(nil), amdElf...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeAPEFile(amdIn, []*apePayload{p})
+	armIn := filepath.Join(dir, "arm.elf")
+	if err := os.WriteFile(armIn, armElf, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	setAPEFatFlags(t, strip, dbg)
+	out = filepath.Join(dir, "fat.com")
+	apeFatMerge(amdIn+","+armIn, out)
+	return amdElf, armElf, out
+}
+
 // checkSidecarELF parses a debug sidecar and verifies it is a standalone
 // ELF for the expected machine whose symbol table is intact.
 func checkSidecarELF(t *testing.T, path string, machine elf.Machine) {
@@ -147,7 +167,7 @@ func TestAPEDebugSidecarName(t *testing.T) {
 // the fat APE embeds only each payload's loadable span with the section
 // header fields zeroed - no symtab or debug bytes survive in the output.
 func TestAPEFatMergeStripAndSidecars(t *testing.T) {
-	amdElf, armElf := buildTestELFPair(t)
+	amdElf, armElf, out := mergeTestPair(t, true, true)
 	extent := payloadExtent(amdElf)
 	if want := uint64(0x4800); extent != want {
 		t.Fatalf("payloadExtent = %#x, want %#x (end of last PT_LOAD)", extent, want)
@@ -155,25 +175,6 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	if extent >= uint64(len(amdElf)) {
 		t.Fatalf("debug tail not past the loadable span: extent %#x, image %#x", extent, len(amdElf))
 	}
-
-	dir := t.TempDir()
-
-	// amd64 input as a thin APE (the shape cosmoFatten passes), arm64 as a
-	// raw ELF, covering both accepted input forms.
-	amdIn := filepath.Join(dir, "amd.com")
-	p, err := payloadFromELF(append([]byte(nil), amdElf...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeAPEFile(amdIn, []*apePayload{p})
-	armIn := filepath.Join(dir, "arm.elf")
-	if err := os.WriteFile(armIn, armElf, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	setAPEFatFlags(t, true, true)
-	out := filepath.Join(dir, "fat.com")
-	apeFatMerge(amdIn+","+armIn, out)
 
 	// Sidecars: pristine byte copies of the original linker outputs.
 	amdSidecar, err := os.ReadFile(out + ".dbg")
@@ -241,23 +242,7 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 // and writes no sidecar files - today's behavior, which GOCOSMOSTRIP=0 and
 // user -ldflags -s/-w builds rely on.
 func TestAPEFatMergeDefaultUnchanged(t *testing.T) {
-	amdElf, armElf := buildTestELFPair(t)
-	dir := t.TempDir()
-
-	amdIn := filepath.Join(dir, "amd.com")
-	p, err := payloadFromELF(append([]byte(nil), amdElf...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeAPEFile(amdIn, []*apePayload{p})
-	armIn := filepath.Join(dir, "arm.elf")
-	if err := os.WriteFile(armIn, armElf, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	setAPEFatFlags(t, false, false)
-	out := filepath.Join(dir, "fat.com")
-	apeFatMerge(amdIn+","+armIn, out)
+	amdElf, armElf, out := mergeTestPair(t, false, false)
 
 	fat, err := os.ReadFile(out)
 	if err != nil {
