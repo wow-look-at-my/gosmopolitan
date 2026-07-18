@@ -12,6 +12,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/load"
 )
 
 // cosmoFatArches maps each fat-APE architecture to its sibling.
@@ -37,28 +38,75 @@ func cosmoFatEnabled() bool {
 	return os.Getenv("GOCOSMOFAT_INNER") == ""
 }
 
-// cosmoFatten replaces each freshly built GOOS=cosmo executable in targets
-// with a fat (amd64+arm64) APE. It reruns the original go build command for
-// the sibling cosmo architecture into a temporary location, then merges each
-// pair of binaries with the linker's -apefat mode. Pass dir=true when
-// targets were written to a -o directory, so the sibling build also uses one.
-func cosmoFatten(targets []string, dir bool) {
-	if !cosmoFatEnabled() || len(targets) == 0 {
+// cosmoStripEnabled reports whether fat APE merges should strip debug info
+// (DWARF, symbol table, section headers) from the shipped binary and write
+// per-architecture debug sidecars next to it. On by default; GOCOSMOSTRIP=0
+// opts out, mirroring GOCOSMOFAT.
+func cosmoStripEnabled() bool {
+	switch os.Getenv("GOCOSMOSTRIP") {
+	case "0", "off":
+		return false
+	}
+	return true
+}
+
+// ldflagsSpecifyStrip reports whether the user's -ldflags for a package
+// contain an explicit -s or -w (in any spelling the linker accepts: -s,
+// --s, -s=..., and likewise for -w). When the user has taken a position on
+// stripping, the fat merge passes no flags of its own: the payloads are
+// embedded exactly as the user's link produced them and no sidecars are
+// written.
+func ldflagsSpecifyStrip(ldflags []string) bool {
+	for _, f := range ldflags {
+		if !strings.HasPrefix(f, "-") {
+			continue // a flag's value, not a flag
+		}
+		f = strings.TrimLeft(f, "-")
+		if f == "s" || f == "w" || strings.HasPrefix(f, "s=") || strings.HasPrefix(f, "w=") {
+			return true
+		}
+	}
+	return false
+}
+
+// cosmoMergeArgs returns the linker arguments that merge target and its
+// sibling-architecture build into a fat APE at target, applying the default
+// strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the user's -ldflags
+// for p already specify -s/-w.
+func cosmoMergeArgs(p *load.Package, target, sibling string) []string {
+	args := []string{"-apefat", target + "," + sibling, "-o", target}
+	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
+		args = append(args, "-apestrip", "-apedbg")
+	}
+	return args
+}
+
+// cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
+// of each main package in mains) with a fat (amd64+arm64) APE. It reruns
+// the original go build command for the sibling cosmo architecture into a
+// temporary location, then merges each pair of binaries with the linker's
+// -apefat mode. By default the merge also strips each embedded payload to
+// its loadable span and writes unstripped per-architecture debug sidecars
+// (<target>.dbg, <target>.aarch64.elf) next to the output; see
+// cosmoMergeArgs. Pass dir=true when targets were written to a -o
+// directory, so the sibling build also uses one.
+func cosmoFatten(mains []*load.Package, dir bool) {
+	if !cosmoFatEnabled() || len(mains) == 0 {
 		return
 	}
 	// Fattening re-reads the freshly written target and re-creates it with
 	// the merged APE. That only makes sense for regular files: with
 	// -o /dev/null (or any other special file) the target reads back empty
 	// and cannot be replaced, so leave the primary build's output as-is.
-	regular := make([]string, 0, len(targets))
-	for _, target := range targets {
-		if fi, err := os.Stat(target); err == nil && !fi.Mode().IsRegular() {
+	regular := make([]*load.Package, 0, len(mains))
+	for _, p := range mains {
+		if fi, err := os.Stat(p.Target); err == nil && !fi.Mode().IsRegular() {
 			continue
 		}
-		regular = append(regular, target)
+		regular = append(regular, p)
 	}
-	targets = regular
-	if len(targets) == 0 {
+	mains = regular
+	if len(mains) == 0 {
 		return
 	}
 	otherArch := cosmoFatArches[cfg.Goarch]
@@ -94,12 +142,13 @@ func cosmoFatten(targets []string, dir bool) {
 	}
 
 	link := base.Tool("link")
-	for _, target := range targets {
+	for _, p := range mains {
+		target := p.Target
 		sibling := childO
 		if dir {
 			sibling = filepath.Join(tmp, "out", filepath.Base(target))
 		}
-		merge := exec.Command(link, "-apefat", target+","+sibling, "-o", target)
+		merge := exec.Command(link, cosmoMergeArgs(p, target, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
@@ -109,8 +158,8 @@ func cosmoFatten(targets []string, dir bool) {
 }
 
 // cosmoFattenInstall replaces each freshly installed GOOS=cosmo
-// executable in targets with a fat (amd64+arm64) APE, the go-install
-// counterpart of cosmoFatten.
+// executable (the Target of each main package in mains) with a fat
+// (amd64+arm64) APE, the go-install counterpart of cosmoFatten.
 //
 // go install has no -o flag to redirect, and its pkg@version argument
 // form cannot be rewritten into a go build, so the sibling build reruns
@@ -120,8 +169,8 @@ func cosmoFatten(targets []string, dir bool) {
 // the platform the go tool itself runs on). GOMODCACHE keeps pointing
 // at the real module cache so nothing is re-downloaded, and GOBIN is
 // cleared because go install refuses cross-compilation with GOBIN set.
-func cosmoFattenInstall(targets []string) {
-	if !cosmoFatEnabled() || len(targets) == 0 {
+func cosmoFattenInstall(mains []*load.Package) {
+	if !cosmoFatEnabled() || len(mains) == 0 {
 		return
 	}
 	otherArch := cosmoFatArches[cfg.Goarch]
@@ -155,10 +204,11 @@ func cosmoFattenInstall(targets []string) {
 	rerun("cosmo", otherArch)
 
 	link := base.Tool("link")
-	for _, target := range targets {
+	for _, p := range mains {
+		target := p.Target
 		name := filepath.Base(target)
 		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
-		merge := exec.Command(link, "-apefat", target+","+sibling, "-o", target)
+		merge := exec.Command(link, cosmoMergeArgs(p, target, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
