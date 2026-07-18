@@ -24,10 +24,11 @@ The resulting `.com` file runs natively on Linux, macOS, and Windows. On
 Windows the same cosmo amd64 image boots through the APE's PE header via
 the runtime's NT personality (no embedded second build); the surface
 covers console programs (stdout/stderr, args, environment, exit codes)
-plus - as of wave 2 - process identity, entropy, timers, and the file
+plus - as of wave 2 - process identity, entropy, timers, the file
 I/O family (open/read/write/stat, directory listing, working directory,
-os.Executable, temp files) - sockets, signals, and os/exec on Windows
-are later waves. See `DEBUGGING.md` for the detailed ladder.
+os.Executable, temp files), and os/exec (pipes, CreateProcessW spawn,
+Linux-shaped wait statuses) - sockets and signals on Windows are later
+waves. See `DEBUGGING.md` for the detailed ladder.
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 

@@ -108,10 +108,15 @@ with an fd table and a documented Linux<->Win32 path translation
 (/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL),
 getdents64 emulation (os.ReadDir/WalkDir/RemoveAll), working-directory
 round-trip, os.Executable via GetModuleFileNameW, timers via a
-timer-only netpoll stub, and console CP_UTF8+VT setup. Not yet on
-Windows: sockets, signals (a SIGSEGV still kills the process - no VEH),
-os/exec, profiling - see DEBUGGING.md's NT wave sections for the ladder
-and forensics.
+timer-only netpoll stub, and console CP_UTF8+VT setup. Wave-2 chunk B
+adds os/exec: pipe2 over CreatePipe (blocking, non-pollable this wave),
+a posix_spawn-style CreateProcessW path (upstream-ported argument
+quoting and sorted UTF-16 env block, stdio handle inheritance,
+attr.Dir), and wait4 packing the Linux wait-status protocol (normal
+exit = code<<8; NTSTATUS crashes become Linux-numbered fake termination
+signals, 0xC0000005 -> SIGSEGV). Not yet on Windows: sockets, signals
+(a SIGSEGV still kills the process - no VEH), profiling - see
+DEBUGGING.md's NT wave sections for the ladder and forensics.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll

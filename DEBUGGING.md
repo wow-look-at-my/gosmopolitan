@@ -1889,3 +1889,199 @@ ntcall8 trampoline (sys_cosmo_nt_amd64.s) serves 7-arg CreateFileW.
 - Long relative-join paths skip the \\?\ check (only the absolute
   translation path applies it); fine for CI temp paths, revisit if a
   deep-tree workload appears.
+
+## Wave 2 chunk B (2026-07-18): os/exec - pipe2, CreateProcessW, wait4
+
+End state under wine 9.0: everything chunk A had stays ok AND
+execchild passes (full loop: status+stdout pipes, self re-exec of the
+pristine APE as a PE, child write+exit, parent EOF read, wait4
+decode). tcplisten still FAILs gracefully (sockets are chunk C); the
+run still dies at segvrecover with 0xC0000005 by design (VEH is chunk
+D). Linux battery: probe 39 checks + ok all rc 0, apetest ok,
+fizzbuzz linux+wine ok, cosmo/arm64 std builds, vet clean. A
+dedicated exec stress harness (scratchpad, not committed) passed on
+BOTH hosts: 6 sequential spawns, exit-code 42 decode, AV-child ->
+SIGSEGV wait status (linux leg: GOTRACEBACK=crash -> SIGABRT),
+ENOENT for a missing image, 9-arg quoting round trip through the
+child's GetCommandLineW parse, env-block survival (incl. lower-case
+names), attr.Dir, and 4 concurrent spawns.
+
+### The chunk's one new BUG: direct win64 calls on 8-aligned stacks
+
+os.Exit crashed with 0xC0000005 on NT - deterministically per binary
+layout (one build always crashed, the next never) - while
+return-from-main worked. Wine's +seh trace pinned the fault to
+ntdll's __wine_setjmpex doing `movdqa %xmm6,0x60(%rcx)` with rcx+0x60
+only 8-aligned (alignment GP faults report ExceptionInformation[1] =
+-1, which looks like a wild read at 0xffffffffffffffff - don't chase
+that pointer). RtlExitUserProcess __TRYs its DllMain notifications,
+setjmp-ing a stack-local jmp_buf; the compiler 16-aligns that local
+RELATIVE to an entry SP it may assume is 8 mod 16 (win64 ABI). Go
+stacks are only 8-aligned, and the four direct-call NT branches in
+sys_cosmo_amd64.s (exit, exitThread, usleep, osyield - everything
+else rides asmcgocall, which ANDs SP to 16) passed the Go chain's
+alignment straight through, so half of all layouts handed win64 code
+a misaligned frame. Which call chains hit it depended on the frame
+sizes between runtime.main / syscall_Exit and the asm - hence the
+per-binary determinism (wine maps are static, no ASLR jitter). Fix:
+all four sites now realign (exit paths: ANDQ $~15 + SUBQ $32; the
+returning pair saves SP in SI, which win64 preserves). usleep/osyield
+had the same latent bug and only survived because wine's Sleep happens
+not to spill XMMs at an offending depth - real NT ntdll makes no such
+promise; treat "SUBQ $40 discipline" as retired, realignment is
+mandatory for every direct win64 CALL from Go-stack asm.
+
+### Spawn design (the three seams)
+
+- **pipe2 -> CreatePipe** (emulated syscall, fd table kind ntFDPipe).
+  NULL SECURITY_ATTRIBUTES = handles born non-inheritable, which IS
+  the O_CLOEXEC-shaped default: NT children inherit only the three
+  explicitly duplicated std handles, never arbitrary fds, so cloexec
+  is effectively always-on and the flag is only recorded for fcntl
+  round-trips. O_NONBLOCK is recorded but pipes stay blocking:
+  netpollopen keeps refusing pipe fds (ENOSYS), internal/poll's
+  pd.init fails, FD.Init flips to blocking mode, and os.newFile
+  restores the nonblock bit and ignores the error - the exact
+  documented fallback (verified in-tree: internal/poll/fd_unix.go
+  Init, os/file_unix.go newFile). ReadFile/WriteFile on pipes are
+  ntcallSE-bracketed (a blocked reader parks its M in the kernel; the
+  P is released). ERROR_BROKEN_PIPE on read = 0 bytes = EOF, matching
+  Linux read()==0 on writer close; ERROR_NO_DATA on write maps to
+  EPIPE (Go's no-SIGPIPE semantics come free - NT has no signals).
+- **forkAndExecInChild -> ntForkExec** (exec_cosmo.go branches on
+  cosmo.Windows() != nil before any fork machinery; exec_cosmo_nt.go).
+  The syscall layer owns the string algebra, ported verbatim from
+  upstream exec_windows.go: appendEscapeArg/makeCmdLine (backslash
+  doubling before quotes, quote-if-space/tab/empty) and the
+  case-insensitively sorted double-NUL UTF-16 env block, passed with
+  CREATE_UNICODE_ENVIRONMENT. It reconstructs strings from the
+  already-C-converted argv (BytePtrFromString rejected interior NULs,
+  so the round trip is lossless), absolutizes a relative argv0
+  against attr.Dir (CreateProcessW resolves the image against the
+  PARENT cwd but chdirs the child - upstream joinExeDirAndFName
+  parity), rejects >3 attr.Files and every fork-flavored SysProcAttr
+  knob with ENOSYS (loud, documented - the probe uses none), and
+  holds ntSpawnMu across the spawn: acquireForkLock only COUNTS
+  concurrent forkers, and the spawn window contains temporarily
+  inheritable duplicates that a concurrent bInheritHandles=TRUE
+  CreateProcessW would capture (leaked pipe write end = deferred EOF
+  = wedged sibling). The runtime hook (WindowsFns.Spawn = ntSpawn,
+  os_cosmo_nt_exec.go) translates argv0/dir through the chunk-A path
+  layer, DuplicateHandle(bInheritHandle=TRUE)s the three stdio
+  handles, fills STARTUPINFOW(STARTF_USESTDHANDLES), calls
+  CreateProcessW through the widened ntcall10 trampoline (ten args;
+  ntcallArgs8/ntcall8 renamed and grown per the chunk-A rule - the
+  6-arg ntcall block in the write1 nosplit chain is untouched),
+  closes the dupes and hThread, and commits hProcess into a
+  reserve-then-commit pid->handle table (ntProcMax=64; reservation
+  makes a full table fail EAGAIN BEFORE the child exists instead of
+  leaking an unwaitable process). lpCommandLine is a fresh mutable
+  []uint16 every time - CreateProcessW is documented to scribble on
+  it. PROC_THREAD_ATTRIBUTE_HANDLE_LIST hardening was considered and
+  deliberately skipped (STARTUPINFOEXW size dance + the NULL-handle
+  list-poisoning gotcha); ntSpawnMu gives the same process-local
+  guarantee.
+- **The status pipe protocol degenerates instead of being ported**:
+  the child never inherits forkExec's O_CLOEXEC status pipe, so after
+  the parent closes its write copy the read end has zero writers and
+  ReadFile fails ERROR_BROKEN_PIPE instantly = EOF = "exec
+  succeeded". Spawn failures never travel through the pipe at all -
+  they return synchronously as forkAndExecInChild's errno. No
+  child-side code exists on NT, period.
+
+### wait4 and THE WAIT-STATUS PROTOCOL (design decision, recorded)
+
+blockUntilWaitable costs nothing: package os calls waitid
+(SYS_WAITID) first and its ENOSYS fallback is DOCUMENTED in
+os/wait_waitid.go ("reportedly not available in Ubuntu on Windows" -
+returns (false, nil), pidWait proceeds to plain Wait4). SYS_WAITID
+stays ENOSYS on purpose; only SYS_WAIT4 is emulated.
+
+wait4(pid): pid<=0 -> ECHILD (no wait-any/process groups on NT;
+package os always names the pid). Handle from the pid table (missing
+-> ECHILD), WaitForSingleObject with INFINITE - ntcallSE-bracketed,
+so the waiting M sits in the kernel with its P released - or timeout
+0 for WNOHANG (WAIT_TIMEOUT -> return 0). Only after the wait
+reports signaled: GetExitCodeProcess (STILL_ACTIVE=259 ambiguity
+never arises - a live process is never queried, so a child that
+exit(259)'d decodes honestly), GetProcessTimes -> rusage
+utime/stime (100ns Filetimes / 10 -> usec; all other rusage fields
+zero, unknowable on NT - darwin-leg precedent), then reap: remove
+table entry (losing a concurrent-reap race -> ECHILD, like a Linux
+double wait) and CloseHandle.
+
+Status packing (parent-side ONLY - the exit code crosses the process
+boundary RAW, runtime exit() keeps passing plain codes to
+ExitProcess, so cosmo children interoperate with native Windows
+parents; the <<8 shape exists only inside our wait4):
+
+    code < 0xC0000000              -> (code&0xff)<<8   WIFEXITED (Linux truncates to 8 bits; so do we)
+    0xC0000005 ACCESS_VIOLATION    -> 11 SIGSEGV       (low 7 bits: WIFSIGNALED)
+    0xC0000006 IN_PAGE_ERROR       ->  7 SIGBUS
+    0xC000008D..0xC0000095 FLT_*/INT_DIVIDE/INT_OVERFLOW -> 8 SIGFPE
+    0xC000001D ILLEGAL_INSTRUCTION ->  4 SIGILL
+    0xC000013A CONTROL_C_EXIT      ->  2 SIGINT
+    0xC0DE0000|signo (1..0x7F)     -> signo             fork-private, reserved for chunk D
+    any other >= 0xC0000000        ->  9 SIGKILL
+
+This mirrors the darwin leg's "wait4 with Linux-numbered wait
+statuses" convention, so syscall_cosmo.go's linux WaitStatus algebra
+(WIFEXITED = status&0x7f==0, signal = status&0x7f) decodes unchanged
+and os/exec ExitError formatting just works ("signal: segmentation
+fault" - wine-verified end to end via an AV child). The 0xC0DE base
+is the contract with chunk D: dieFromSignal/kill emulation exits the
+victim with ExitProcess(0xC0DE0000|signo) so waitsig can report
+death by signals that have no NTSTATUS (SIGUSR1). It sits in NTSTATUS
+severity-error space so foreign parents still see "crashed"; a
+foreign child legitimately exiting with such a code aliases - accepted
+(cosmo's own protocol aliases the same way).
+
+### Probe-side change
+
+selfCommand's magic sniff gains one branch: pristine-MZ + NT host ->
+direct exec (the APE IS a valid PE; /bin/sh does not exist). Host
+detection = env OS=Windows_NT (set by every NT since forever, and by
+wine; absent on unix - linux/darwin behavior byte-identical, and the
+recon's suggested mechanism). No new runtime surface.
+
+### Wine quirks (watch on real NT, let CI judge)
+
+- One concurrent-spawn run printed "wine client error:280: sendmsg:
+  Bad file descriptor" while all checks still passed (3/3 clean
+  reruns after) - wineserver-internal fd noise during parallel
+  CreateProcessW+CloseHandle; nothing observable at the API level.
+  If windows-latest shows exec flakes, suspect handle lifetimes
+  first.
+- wine's CreateProcessW quoting round-trips all 9 tricky-arg cases;
+  real NT uses the same MSVCRT parse in the child (our own ported
+  ntCommandLineToArgv), so drift risk is low.
+
+### Chunk-B commits
+
+- 0335e6e2 runtime: 16-align SP around direct win64 calls on NT
+- 08e80bd1 runtime, syscall: NT os/exec - pipe2, CreateProcessW
+  spawn, wait4
+
+### What chunks C and D must know
+
+- Chunk C (sockets/netpoll): netpollopen's pipe refusal is
+  load-bearing for exec stdio - when the real poller lands, keep
+  refusing non-socket fds so pipes stay in blocking mode (upstream
+  windows has the same split). The fd table now has ntFDPipe; add
+  ntFDSocket alongside. WSAStartup lazily; ntcall10 exists if any
+  winsock call needs >7 args (WSAIoctl has 9). Keep
+  runtime.cosmoNetpollDiag compiling.
+- Chunk D (signals/VEH): encode signal deaths as
+  ExitProcess(0xC0DE0000|signo) and TerminateProcess(h,
+  0xC0DE0000|9) for kill(SIGKILL) - wait4 already decodes both.
+  The stale-TEB consequence is now OBSERVED, not theoretical: wine
+  refused to dispatch the setjmp AV ("Exception frame is not in
+  stack limits") because RSP was a Go stack outside the
+  TEB-declared window - fix TEB StackBase/StackLimit alongside VEH
+  or continue-from-exception will misbehave the same way. GetLastError
+  capture must move into the trampoline when SuspendThread preemption
+  lands (chunk-A note stands). ntSpawnMu + the preemptExtLock design
+  interact: bracket CreateProcessW-class calls per upstream's
+  osPreemptExtEnter when preemption arrives.
+- fd-table lifecycle proven: 10+ spawns (6 sequential + 4 concurrent)
+  with 3 pipes each leak nothing (probe + stress rerun stable).
