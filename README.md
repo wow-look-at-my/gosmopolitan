@@ -4,7 +4,7 @@ This is an **experimental fork** of the [Go programming language](https://github
 
 ## What are APE binaries?
 
-APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere. This fork's output currently executes on Linux and macOS; its Windows execution path is being reimplemented cosmo-natively (in progress).
+APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere. This fork's output executes on Linux, macOS, and Windows (the Windows runtime surface is still growing wave by wave; see `DEBUGGING.md`).
 
 ## Building APE Binaries
 
@@ -25,13 +25,15 @@ GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs natively on Linux and macOS. On Windows it
-currently loads as a parseable stub PE that exits 0; Windows execution is
-being reimplemented cosmo-natively (in progress). Debug with the sidecars
-(`gdb program.com.dbg`, or `symbol-file` against the running APE);
-runtime tracebacks and pprof need no sidecar. When distributing APEs,
-ship them zstd-compressed: the two arch payloads are highly redundant, so
-e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
+The resulting `.com` file runs natively on Linux, macOS, and Windows. On
+Windows the same cosmo amd64 image boots through the APE's PE header via
+the runtime's NT personality (no embedded second build); wave 1 covers
+console programs (stdout/stderr, args, environment, exit codes) - file
+I/O, sockets, signals, and os/exec on Windows are later waves. Debug with
+the sidecars (`gdb program.com.dbg`, or `symbol-file` against the running
+APE); runtime tracebacks and pprof need no sidecar. When distributing
+APEs, ship them zstd-compressed: the two arch payloads are highly
+redundant, so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
 `zstd -19 --long=27` (distribution-side only - there is no runtime
 self-extraction).
 
@@ -70,10 +72,11 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
-Execution is exercised in CI on x86-64 Linux and ARM64 macOS (plus ARM64
-Linux via qemu during development). The embedded windows/amd64 PE payload
-that used to provide Windows execution has been removed; Windows support is
-being reimplemented cosmo-natively (in progress). macOS Intel support
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
+Windows (plus ARM64 Linux via qemu during development). Windows execution
+is cosmo-native (NT personality in the runtime; the old embedded
+windows/amd64 PE payload is gone) and currently covers console programs -
+the surface grows wave by wave (see `DEBUGGING.md`). macOS Intel support
 is structural so far: the Mach-O assimilation header is verified against the
 XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
 incomplete and untested end to end (no Intel CI runner).

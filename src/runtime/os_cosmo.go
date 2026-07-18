@@ -35,6 +35,12 @@ const sigPerThreadSyscall = _SIGRTMIN + 1
 //
 //go:nosplit
 func futexsleep(addr *uint32, val uint32, ns int64) {
+	if iswindows() {
+		// NT: WaitOnAddress has the same compare-and-wait,
+		// spurious-wakeup-permitted semantics as futex.
+		ntFutexsleep(addr, val, ns)
+		return
+	}
 	if ns < 0 {
 		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
 		return
@@ -49,6 +55,12 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 //
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
+	if iswindows() {
+		// Every caller passes cnt==1 (see the wave-1 design in
+		// DEBUGGING.md), so WakeByAddressSingle suffices.
+		ntFutexwakeup(addr)
+		return
+	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
 	if ret >= 0 {
 		return
@@ -62,6 +74,11 @@ func futexwakeup(addr *uint32, cnt uint32) {
 }
 
 func getCPUCount() int32 {
+	if iswindows() {
+		// GetSystemInfo through the NT table resolved at osArchInit
+		// (which osinit runs before getCPUCount, deliberately).
+		return ntNumCPU()
+	}
 	if isdarwin() {
 		// sched_getaffinity is Linux-only; on macOS ask the host
 		// via sysctl (arm64 Syslib). Without this every macOS run
@@ -107,6 +124,12 @@ func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
+	if iswindows() {
+		// CreateThread; no sigprocmask bracketing (signals are
+		// inert on NT in wave 1).
+		ntNewosproc(mp)
+		return
+	}
 	stk := unsafe.Pointer(mp.g0.stack.hi)
 	if false {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", abi.FuncPCABI0(clone), " id=", mp.id, " ostk=", &mp, "\n")
@@ -185,6 +208,14 @@ func sysargs(argc int32, argv **byte) {
 		auxv = auxvp[: pairs*2 : pairs*2]
 		return
 	}
+	if iswindows() {
+		// The NT boot stub always fabricates a complete auxv
+		// (AT_PAGESZ at minimum), so this point should be
+		// unreachable; guard anyway because both fallbacks below
+		// are Linux syscall paths (open /proc/self/auxv, and an
+		// mmap+mincore page-size probe).
+		return
+	}
 	// Fall back to /proc/self/auxv.
 	fd := open(&procAuxv[0], 0 /* O_RDONLY */, 0)
 	if fd < 0 {
@@ -247,6 +278,13 @@ func osinit() {
 var urandom_dev = []byte("/dev/urandom\x00")
 
 func readRandom(r []byte) int {
+	if iswindows() {
+		// Wave 1: boot seeds come from the fabricated AT_RANDOM
+		// (startupRand), so randinit never needs this; returning 0
+		// selects the readTimeRandom fallback if it is ever hit.
+		// Wave 2: ProcessPrng.
+		return 0
+	}
 	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
 	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))
 	closefd(fd)
@@ -254,6 +292,12 @@ func readRandom(r []byte) int {
 }
 
 func goenvs() {
+	if iswindows() {
+		// The boot block's envp is empty on NT; the real environment
+		// comes from GetEnvironmentStringsW (os_cosmo_nt.go).
+		ntGoenvs()
+		return
+	}
 	goenvs_unix()
 }
 
@@ -438,6 +482,12 @@ func tgkill(tgid, tid, sig int)
 // darwin path (per-arch darwinSignalM) translates it and signals the
 // thread via pthread_kill with the full pthread_t from m.procid.
 func signalM(mp *m, sig int) {
+	if iswindows() {
+		// NT wave 1: no signal machinery; drop the send (async
+		// preemption and STW fall back to the cooperative
+		// stack-guard mechanism).
+		return
+	}
 	if isdarwin() {
 		darwinSignalM(mp, sig)
 		return
@@ -467,10 +517,17 @@ func validSIGPROF(mp *m, c *sigctxt) bool {
 }
 
 func setProcessCPUProfiler(hz int32) {
+	if iswindows() {
+		// NT wave 1: no setitimer / SIGPROF machinery; profiling
+		// timers are a later wave.
+		return
+	}
 	setProcessCPUProfilerTimer(hz)
 }
 
 func setThreadCPUProfiler(hz int32) {
+	// No syscalls here (per-thread timer_create is not wired on
+	// cosmo), so no NT gate is needed.
 	mp := getg().m
 	mp.profilehz = hz
 }
@@ -542,7 +599,31 @@ func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 
 // cosmoStacksAreSystemAllocated reports whether new OS threads get
 // system-allocated stacks on this host. Only the macOS path (ARM64 via the
 // APE loader's pthread_create) provides them; the Linux clone() path needs
-// Go-allocated stacks.
+// Go-allocated stacks. (The NT CreateThread path also pivots onto the
+// Go-allocated g0 stack, so it keeps the Linux bookkeeping.)
 func cosmoStacksAreSystemAllocated() bool {
 	return GOARCH == "arm64" && isdarwin()
 }
+
+// cosmoHostIsWindows reports whether the cosmo binary is running on a
+// Windows NT host. It exists (with a false stub for non-cosmo GOOSes in
+// stubs_noncosmo.go) so GOOS-generic code - sysReserveAligned's
+// no-partial-unreserve branch in mem.go - can key on the HOST at run
+// time the way GOOS=windows keys at compile time.
+//
+//go:nosplit
+func cosmoHostIsWindows() bool {
+	return iswindows()
+}
+
+// Win32 memory constants for the NT branches in mem_cosmo.go (shared
+// with arm64, where they are unreachable - iswindows is constant false
+// there).
+const (
+	_NT_MEM_COMMIT   = 0x1000
+	_NT_MEM_RESERVE  = 0x2000
+	_NT_MEM_DECOMMIT = 0x4000
+	_NT_MEM_RELEASE  = 0x8000
+
+	_NT_PAGE_READWRITE = 0x04
+)

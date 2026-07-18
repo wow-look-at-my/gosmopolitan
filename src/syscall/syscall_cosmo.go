@@ -38,7 +38,15 @@ func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 //go:linkname RawSyscall6
 func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
 	var errno uintptr
-	r1, r2, errno = cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	if w := cosmo.Windows(); w != nil {
+		// NT host: route through the wave-1 emulation table
+		// (write and exit; everything else ENOSYS). The table is
+		// non-nil only when the runtime resolved it at boot on a
+		// Windows host.
+		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	} else {
+		r1, r2, errno = cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
 	err = Errno(errno)
 	return
 }
@@ -521,4 +529,3 @@ const (
 	RUSAGE_SELF     = 0
 	RUSAGE_CHILDREN = -1
 )
-

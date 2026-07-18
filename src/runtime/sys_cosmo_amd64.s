@@ -17,6 +17,7 @@
 #define AT_FDCWD -100
 
 // Host OS indicators (must match os_cosmo_amd64.go)
+#define HOSTWINDOWS 2
 #define HOSTXNU 8
 
 // Linux AMD64 syscall numbers
@@ -87,7 +88,22 @@
 	CMPL	AX, $HOSTXNU; \
 	JEQ	label
 
+// Helper macro: check if we're on Windows NT and jump to label if so.
+// Checked BEFORE the Linux fallthrough at every insertion point: no raw
+// SYSCALL may execute when __hostos == HOSTWINDOWS.
+// Clobbers AX
+#define CHECK_WINDOWS(label) \
+	MOVL	runtime·__hostos(SB), AX; \
+	CMPL	AX, $HOSTWINDOWS; \
+	JEQ	label
+
+// NT branches below call win64 functions resolved into runtime·nt*Fn
+// variables at osArchInit (os_cosmo_nt.go). Win64 call discipline for a
+// Go asm function body (entry SP == 8 mod 16): SUBQ $40, SP realigns to
+// 16 and provides the 32-byte shadow space; args in CX, DX, R8, R9.
+
 TEXT runtime·exit(SB),NOSPLIT,$0-4
+	CHECK_WINDOWS(exit_nt)
 	CHECK_DARWIN(exit_darwin)
 	// Linux path
 	MOVL	code+0(FP), DI
@@ -99,12 +115,21 @@ exit_darwin:
 	MOVL	$XNU_exit, AX
 	SYSCALL
 	RET
+exit_nt:
+	// ExitProcess(code). Direct win64 call: the process is dying, no
+	// need for the ntcall6/asmcgocall machinery.
+	MOVQ	runtime·ntExitProcessFn(SB), AX
+	MOVL	code+0(FP), CX
+	SUBQ	$40, SP
+	CALL	AX
+	INT	$3	// not reached
 
 // func exitThread(wait *atomic.Uint32)
 TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 	MOVQ	wait+0(FP), AX
 	// We're done using the stack.
 	MOVL	$0, (AX)
+	CHECK_WINDOWS(exitThread_nt)
 	CHECK_DARWIN(exitThread_darwin)
 	// Linux path
 	MOVL	$0, DI	// exit code
@@ -119,6 +144,14 @@ exitThread_darwin:
 	SYSCALL
 	INT	$3
 	JMP	0(PC)
+exitThread_nt:
+	// ExitThread(0). Direct win64 call; *wait was already cleared, so
+	// our stack may be freed underneath us - no Go calls from here.
+	MOVQ	runtime·ntExitThreadFn(SB), AX
+	XORL	CX, CX
+	SUBQ	$40, SP
+	CALL	AX
+	INT	$3	// not reached
 
 TEXT runtime·open(SB),NOSPLIT,$0-20
 	CHECK_DARWIN(open_darwin)
@@ -171,6 +204,7 @@ closefd_darwin_ok:
 	RET
 
 TEXT runtime·write1(SB),NOSPLIT,$0-28
+	CHECK_WINDOWS(write1_nt)
 	CHECK_DARWIN(write1_darwin)
 	// Linux path
 	MOVQ	fd+0(FP), DI
@@ -188,6 +222,11 @@ write1_darwin:
 	SYSCALL
 	MOVL	AX, ret+24(FP)
 	RET
+write1_nt:
+	// Tail call the framed trampoline (sys_cosmo_nt_amd64.s), which
+	// calls the Go-side ntwrite1 (WriteFile via ntcall6/asmcgocall).
+	// Same signature, so the FP argument slots carry over.
+	JMP	runtime·ntwrite1tramp(SB)
 
 TEXT runtime·read(SB),NOSPLIT,$0-28
 	CHECK_DARWIN(read_darwin)
@@ -239,6 +278,7 @@ pipe2_darwin_ok:
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$24
+	CHECK_WINDOWS(usleep_nt)
 	MOVL	$0, DX
 	MOVL	usec+0(FP), AX
 	MOVL	$1000000, CX
@@ -276,6 +316,20 @@ usleep_darwin:
 	MOVL	$XNU_select, AX
 	SYSCALL
 	RET
+usleep_nt:
+	// Sleep(ms), ms = ceil(usec/1000): any nonzero request sleeps at
+	// least 1ms. Direct win64 call (1 arg, nosplit context).
+	MOVL	usec+0(FP), AX
+	ADDL	$999, AX
+	XORL	DX, DX
+	MOVL	$1000, CX
+	DIVL	CX
+	MOVL	AX, CX
+	MOVQ	runtime·ntSleepFn(SB), AX
+	SUBQ	$40, SP
+	CALL	AX
+	ADDQ	$40, SP
+	RET
 
 TEXT runtime·gettid(SB),NOSPLIT,$0-4
 	CHECK_DARWIN(gettid_darwin)
@@ -292,6 +346,7 @@ gettid_darwin:
 	RET
 
 TEXT runtime·raise(SB),NOSPLIT,$0
+	CHECK_WINDOWS(raise_nt)
 	CHECK_DARWIN(raise_darwin)
 	// Linux path
 	MOVL	$SYS_getpid, AX
@@ -314,8 +369,12 @@ raise_darwin:
 	MOVL	$XNU_kill, AX
 	SYSCALL
 	RET
+raise_nt:
+	// NT wave 1: signal sends are dropped (no signal machinery yet).
+	RET
 
 TEXT runtime·raiseproc(SB),NOSPLIT,$0
+	CHECK_WINDOWS(raiseproc_nt)
 	CHECK_DARWIN(raiseproc_darwin)
 	// Linux path
 	MOVL	$SYS_getpid, AX
@@ -333,6 +392,9 @@ raiseproc_darwin:
 	MOVL	$XNU_kill, AX
 	SYSCALL
 	RET
+raiseproc_nt:
+	// NT wave 1: signal sends are dropped (no signal machinery yet).
+	RET
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	CHECK_DARWIN(getpid_darwin)
@@ -348,6 +410,7 @@ getpid_darwin:
 	RET
 
 TEXT ·tgkill(SB),NOSPLIT,$0
+	CHECK_WINDOWS(tgkill_nt)
 	CHECK_DARWIN(tgkill_darwin)
 	// Linux path
 	MOVQ	tgid+0(FP), DI
@@ -362,6 +425,10 @@ tgkill_darwin:
 	MOVQ	sig+16(FP), SI	// sig
 	MOVL	$XNU_kill, AX
 	SYSCALL
+	RET
+tgkill_nt:
+	// NT wave 1: signal sends are dropped (signalM is also gated in
+	// Go; this is the belt-and-braces asm gate).
 	RET
 
 TEXT runtime·setitimer(SB),NOSPLIT,$0-24
@@ -402,6 +469,7 @@ mincore_darwin:
 
 // func nanotime1() int64
 TEXT runtime·nanotime1(SB),NOSPLIT,$32-8
+	CHECK_WINDOWS(nanotime1_nt)
 	MOVQ	SP, R12	// Save old SP; R12 unchanged by C code.
 
 	MOVQ	g_m(R14), BX // BX unchanged by C code.
@@ -466,7 +534,24 @@ nanotime_finish:
 	MOVQ	AX, ret+0(FP)
 	RET
 
+nanotime1_nt:
+	// KUSER_SHARED_DATA InterruptTime, ported from upstream
+	// time_windows_amd64.s / time_windows.h: on amd64 the lo (u32,
+	// +0) and hi1 (u32, +4) halves are read as one atomic 64-bit
+	// load, so the 386-style hi1/lo/hi2 coherence loop is not
+	// needed. Units are 100ns. No vdsoPC/vdsoSP bookkeeping: this
+	// is a plain memory read, not a call.
+	MOVQ	$0x7ffe0008, CX	// _INTERRUPT_TIME
+	MOVQ	0(CX), AX
+	IMULQ	$100, AX
+	MOVQ	AX, ret+0(FP)
+	RET
+
 TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
+	// NT: no signal machinery in wave 1; fake success BEFORE the
+	// crash-on-failure checks below (mirrors rt_sigaction's darwin
+	// return-0 stub idiom).
+	CHECK_WINDOWS(rtsigprocmask_nt)
 	CHECK_DARWIN(rtsigprocmask_darwin)
 	// Linux path
 	MOVL	how+0(FP), DI
@@ -498,8 +583,11 @@ rtsigprocmask_darwin:
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
 	RET
+rtsigprocmask_nt:
+	RET
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
+	CHECK_WINDOWS(rt_sigaction_nt)
 	CHECK_DARWIN(rt_sigaction_darwin)
 	// Linux path
 	MOVQ	sig+0(FP), DI
@@ -514,6 +602,12 @@ rt_sigaction_darwin:
 	// macOS sigaction has different structure
 	// For now, return success without calling sigaction
 	// TODO: Implement proper sigaction translation layer
+	MOVL	$0, ret+32(FP)
+	RET
+rt_sigaction_nt:
+	// NT wave 1: no signal machinery; return success so
+	// sysSigaction's "sigaction failed" throw stays quiet (the same
+	// benign lie the darwin stub above tells).
 	MOVL	$0, ret+32(FP)
 	RET
 
@@ -648,6 +742,7 @@ munmap_darwin:
 
 // func walltime() (sec int64, nsec int32)
 TEXT runtime·walltime(SB),NOSPLIT,$24-12
+	CHECK_WINDOWS(walltime_nt)
 	CHECK_DARWIN(walltime_darwin)
 	// Linux path
 	MOVL	$0, DI // CLOCK_REALTIME
@@ -674,6 +769,22 @@ walltime_darwin:
 	MOVQ	AX, sec+0(FP)
 	MOVL	DX, nsec+8(FP)
 	RET
+walltime_nt:
+	// KUSER_SHARED_DATA SystemTime (see nanotime1_nt for the atomic
+	// 64-bit read). Units are 100ns since 1601-01-01 (FILETIME
+	// epoch); subtract 116444736000000000 to rebase onto the unix
+	// epoch, then split into sec and nsec.
+	MOVQ	$0x7ffe0014, CX	// _SYSTEM_TIME
+	MOVQ	0(CX), AX
+	MOVQ	$116444736000000000, CX
+	SUBQ	CX, AX
+	XORL	DX, DX
+	MOVQ	$10000000, CX	// 100ns units per second
+	DIVQ	CX		// AX = sec, DX = remainder (100ns units)
+	IMULQ	$100, DX	// -> nsec
+	MOVQ	AX, sec+0(FP)
+	MOVL	DX, nsec+8(FP)
+	RET
 
 TEXT runtime·madvise(SB),NOSPLIT,$0
 	CHECK_DARWIN(madvise_darwin)
@@ -697,6 +808,10 @@ madvise_darwin:
 // int64 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
 TEXT runtime·futex(SB),NOSPLIT,$0
+	// NT is unreachable here (futexsleep/futexwakeup dispatch to
+	// WaitOnAddress/WakeByAddressSingle in Go first); ENOSYS is the
+	// belt-and-braces answer if a new caller slips through.
+	CHECK_WINDOWS(futex_darwin)
 	CHECK_DARWIN(futex_darwin)
 	// Linux path
 	MOVQ	addr+0(FP), DI
@@ -725,17 +840,12 @@ TEXT runtime·clone(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	$0, R10
 	MOVQ    $0, R8
 	// Copy mp, gp, fn off parent stack for use by child.
+	// The kernel's CLONE_SETTLS can only set FS on x86-64; the cosmo
+	// TLS model is gs:0x28 (see settls), so the child installs its own
+	// GS base below instead.
 	MOVQ	mp+16(FP), R13
 	MOVQ	gp+24(FP), R9
 	MOVQ	fn+32(FP), R12
-	CMPQ	R13, $0    // m
-	JEQ	nog1
-	CMPQ	R9, $0    // g
-	JEQ	nog1
-	LEAQ	m_tls(R13), R8
-	ADDQ	$8, R8	// ELF wants to use -8(FS)
-	ORQ 	$0x00080000, DI //add flag CLONE_SETTLS(0x00080000) to call clone
-nog1:
 	MOVL	$SYS_clone, AX
 	SYSCALL
 
@@ -753,6 +863,18 @@ nog1:
 	JEQ	nog2
 	CMPQ	R9, $0    // g
 	JEQ	nog2
+
+	// Install TLS before any instruction touches g: point the GS base
+	// at &m.tls[0]-0x28 so gs:0x28 (the g slot) addresses m.tls[0].
+	// Mirrors the Linux branch of settls.
+	LEAQ	m_tls(R13), SI
+	SUBQ	$0x28, SI
+	MOVQ	$0x1001, DI	// ARCH_SET_GS
+	MOVQ	$SYS_arch_prctl, AX
+	SYSCALL
+	CMPQ	AX, $0xfffffffffffff001
+	JLS	2(PC)
+	MOVL	$0xf1, 0xf1  // crash
 
 	// Initialize m->procid to Linux tid
 	MOVL	$SYS_gettid, AX
@@ -785,6 +907,9 @@ clone_darwin:
 	RET
 
 TEXT runtime·sigaltstack(SB),NOSPLIT,$0
+	// NT: no signal machinery in wave 1; fake success BEFORE the
+	// crash-on-failure check below.
+	CHECK_WINDOWS(sigaltstack_nt)
 	CHECK_DARWIN(sigaltstack_darwin)
 	// Linux path
 	MOVQ	new+0(FP), DI
@@ -802,19 +927,33 @@ sigaltstack_darwin:
 	SYSCALL
 	// Don't crash on error, sigaltstack may fail on macOS
 	RET
+sigaltstack_nt:
+	RET
 
 // set tls base to DI
+//
+// Cosmo amd64 TLS model: g lives at gs:0x28 (Tlsoffset 0x28, segment
+// prefix GS - see cmd/link/internal/ld/sym.go and
+// cmd/internal/obj/x86/asm6.go). On Windows hosts gs:0x28 is the TEB
+// ArbitraryUserPointer slot, so there is nothing to set up; on Linux
+// hosts point the GS base at &m.tls[0]-0x28 so that gs:0x28 addresses
+// m.tls[0], the slot g has always lived in.
 TEXT runtime·settls(SB),NOSPLIT,$32
+	// Windows: the TEB already backs gs:0x28; no setup syscall exists
+	// or is needed.
+	CHECK_WINDOWS(settls_nt)
 	CHECK_DARWIN(settls_darwin)
 	// Linux path
-	ADDQ	$8, DI	// ELF wants to use -8(FS)
+	SUBQ	$0x28, DI	// gs:0x28 must address m.tls[0]
 	MOVQ	DI, SI
-	MOVQ	$0x1002, DI	// ARCH_SET_FS
+	MOVQ	$0x1001, DI	// ARCH_SET_GS
 	MOVQ	$SYS_arch_prctl, AX
 	SYSCALL
 	CMPQ	AX, $0xfffffffffffff001
 	JLS	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
+	RET
+settls_nt:
 	RET
 settls_darwin:
 	// macOS x86_64 TLS is handled differently
@@ -823,6 +962,7 @@ settls_darwin:
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
+	CHECK_WINDOWS(osyield_nt)
 	CHECK_DARWIN(osyield_darwin)
 	// Linux path
 	MOVL	$SYS_sched_yield, AX
@@ -831,6 +971,14 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 osyield_darwin:
 	// macOS: sched_yield is BSD syscall 331
 	// Just return, no exact equivalent
+	RET
+osyield_nt:
+	// Sleep(0) yields to any ready thread. Direct win64 call.
+	MOVQ	runtime·ntSleepFn(SB), AX
+	XORL	CX, CX
+	SUBQ	$40, SP
+	CALL	AX
+	ADDQ	$40, SP
 	RET
 
 TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0
@@ -912,6 +1060,10 @@ socket_darwin:
 
 // func sbrk0() uintptr
 TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
+	// NT has no brk; 0 means "not implemented" to mallocinit. This IS
+	// on the NT boot path (mallocinit queries the brk), so the gate is
+	// mandatory.
+	CHECK_WINDOWS(sbrk0_darwin)
 	CHECK_DARWIN(sbrk0_darwin)
 	// Linux path
 	MOVL	$0, DI

@@ -1069,6 +1069,625 @@ value was executing the embedded PE - while the windows-latest build
 leg stays for make.bat toolchain health and windows-origin cross-build
 coverage, whose binaries the unix test legs execute.
 
+# 2026-07-18: Windows (NT) bring-up — wave 1 design
+
+## Goal and reference
+
+North star: a normal fat APE - cosmo amd64 + cosmo arm64, no embedded
+second build - boots and runs natively on Windows through its PE
+header, the way real Cosmopolitan APEs (vim.com) do. Wave-1 target:
+testdata/fizzbuzz prints correctly and exits 0 on a windows-latest
+runner. This builds directly on the payload-removal branch (PR #45):
+thin and fat now both emit the 0x80 region through the single
+writePEHeader call (ape.go:496 -> writePEHeader ape.go:817), and that
+one code path is what this wave upgrades from stub to real.
+
+Reference architecture is jart/cosmopolitan: PE header construction in
+ape/ape.S + ape/ape.lds, boot via the __msabi C function WinMain
+(libc/runtime/winmain.greg.c:312 - the PE entry point IS WinMain,
+ape.lds "ape_pe_entry = WinMain"), and genuine loader-resolved PE
+imports composed in asm (ape/idata.internal.h: "The NT Executive fills
+its value before control is handed off to the program"). Ground truth
+from dissecting a prebuilt cosmo APE (hello.ape): Machine 0x8664,
+PE32+, Characteristics 0x223 (RELOCS_STRIPPED|EXECUTABLE_IMAGE|
+LARGE_ADDRESS_AWARE|DEBUG_STRIPPED), Section=FileAlignment=4096 with
+RVA == file offset for every section, ImageBase 0x41F0000 = the link
+base 0x4200000 minus a 0x10000 apelink skew (the base must stay a
+multiple of 65536, apelink.c:782-783), SizeOfHeaders 0x14000 covering
+the entire pre-.text prologue (shell script and all), 4 sections
+(.text RX, .rdata R, .idata RW - the loader writes the IAT in place -
+.data RW with VirtualSize > SizeOfRawData zero-filling BSS),
+NumberOfRvaAndSizes=2 with only the import directory populated, stack
+reserve/commit a deliberately tiny 65536/4096 (cosmo pivots onto its
+own allocated stack at boot), and imports from exactly 5 DLLs
+(kernel32 ~70 fns, advapi32, BCryptPrimitives ProcessPrng,
+API-MS-Win-Core-Synch-l1-2-0 WaitOnAddress family,
+API-MS-Win-Core-Realtime-l1-1-1 interrupt-time clocks). ntdll is
+deliberately NOT in the import table - cosmo resolves it at runtime
+via GetProcAddress with graceful not-found stubs so binaries never
+fail to LOAD over a private API.
+
+## PE container design (cmd/link)
+
+- Keep e_lfanew=0x80. Header budget is [0x80,0x7FE] = 1919 bytes in
+  BOTH thin and fat: the shell script is fixed at apeScriptOffset
+  0x800 (ape.go:37) and 0x7FF is the forced newline before the heredoc
+  terminator. PE32+, Machine 0x8664.
+- Characteristics 0x0223 (RELOCS_STRIPPED|EXECUTABLE_IMAGE|
+  LARGE_ADDRESS_AWARE|DEBUG_STRIPPED), matching real cosmo (the stub
+  ships 0x22 today). DllCharacteristics: NX_COMPAT|
+  TERMINAL_SERVER_AWARE only - the stub's DYNAMIC_BASE|HIGH_ENTROPY_VA
+  (0x8160) must be dropped: there is no .reloc section and cosmo code
+  is position-dependent, so ASLR must not be invited.
+- ImageBase = 0x100000000 = the cosmo/amd64 link base, already
+  64K-aligned (amd64/obj.go:105-116: HEADR=ELFRESERVE=4096, FlagRound
+  4096, FlagTextAddr = Rnd(0x100000000, 4096) + HEADR). RVA =
+  vaddr - ImageBase; PointerToRawData = ABSOLUTE file offset of the
+  segment bytes. This works because the amd64 image lands at file
+  offset 0x10000 with byte-identical content in thin and fat, and
+  vaddr - fileoff is the constant 0xFFFF0000 for every PT_LOAD (the
+  layout invariant Vaddr == Fileoff mod FlagRound is enforced at
+  data.go:3183-3186; the constant delta was verified against the
+  ground-truth fizzbuzz phdrs). So the PE header the thin link
+  computes is valid VERBATIM in the fat container - the fat path
+  transplants the same bytes at 0x80, no shifting of anything.
+- SectionAlignment 0x1000, FileAlignment 0x200. Sections are built
+  from the image's PT_LOADs, skipping the payload ELF-header page:
+  .text RX (RVA 0x1000), .rodata R, .data RW with VirtualSize >
+  SizeOfRawData covering BSS. Concrete example, the measured thin
+  fizzbuzz phdr triple (absolute .com offsets): R E off 0x10000 vaddr
+  0x100000000 filesz 0xaa2b1 / R off 0xbb000 vaddr 0x1000ab000 filesz
+  0xe1d68 / RW off 0x19d000 vaddr 0x10018d000 filesz 0xa860 memsz
+  0x2f208 (BSS tail). SizeOfImage = end of the last section rounded to
+  0x1000; SizeOfHeaders = 0x400 (>= the real header end 0x80 + ~0x1A8
+  + 3x40 of sections, <= the first section RVA, file-aligned - and
+  note real cosmo's hard-won warning that SizeOfHeaders must be <=
+  AddressOfEntryPoint, apelink.c:765-813, "complex and confusing
+  requirements").
+- Subsystem CONSOLE(3), Major/MinorSubsystemVersion 6.0,
+  MajorOperatingSystemVersion 6.0. SizeOfStackReserve 8 MiB,
+  SizeOfStackCommit 64 KiB: rt0_go assumes <= 64 KiB of g0 stack below
+  the entry SP (asm_amd64.s:192-199, LEAQ (-64*1024)(SP)), and
+  guard-page growth covers the rest of the reserve. Heap 1 MiB/4 KiB.
+- Imports: a real loader-resolved import directory (the cosmo model),
+  but MINIMAL: kernel32.dll -> GetProcAddress + LoadLibraryA only;
+  everything else is resolved at runtime through those two (mirroring
+  the darwin port's dlsym-at-osArchInit idiom, cosmoDlsym
+  os_cosmo_arm64.go:170-176, resolution list :257-319). The
+  IDT/ILT/hint-name/IAT bytes live INSIDE the amd64 image as
+  fixed-layout runtime symbols: a runtime·ntidata blob plus a
+  runtime·ntiat 2-slot array in the data segment - RW so the loader
+  can write the IAT; real cosmo also keeps its .idata RW. The linker
+  computes their RVAs at convertToAPE time via the Entryvalue/
+  ldr.Lookup mechanism (lib.go:2890-2909; convertToAPE runs inside the
+  live link at main.go:498, loader alive), writes the structures into
+  the output file at those offsets, and points DataDirectory[1] at
+  them. NumberOfRvaAndSizes stays 16 - it fits the budget: 4 + 20 +
+  240 + 3*40 = 384 <= 1919.
+- AddressOfEntryPoint = RVA of the new runtime symbol _rt0_cosmo_nt,
+  looked up exactly like Entryvalue resolves the ELF entry
+  (_rt0_amd64_cosmo per the _rt0_%s_%s convention, lib.go:415-420).
+- arm64: no PE support - Windows/arm64 is out of scope; the fat PE
+  targets the amd64 image only, and thin arm64 builds keep the
+  harmless stub (writePEHeader's 0xAA64 leg).
+- Structural tests: extend the ld-package ape_test.go suite (synthetic
+  ELFs via buildTestELF driving the real emission code in-process,
+  same pattern as checkMachoKernelInvariants) with a debug/pe twin:
+  parse the emitted thin+fat outputs, assert section<->phdr agreement,
+  entry inside .text, a sane import directory, and the header fitting
+  the [0x80,0x7FE] budget. testdata/ape/apetest/pe_test.go is today
+  the stub's regression suite: post-removal it asserts the stub shape,
+  including TestPETextSectionInsideStubHeader (Sections[0].Offset <
+  elfOffset 0x10000, i.e. .text raw data inside the APE head) and
+  TestPEEntrypointIsPlaceholderStub (entry bytes 31 C0 C3). Those two
+  flip back to the embedded-payload shape this wave: .text raw data at
+  or after 0x10000 inside the mapped amd64 image, and an entry that is
+  _rt0_cosmo_nt rather than xor/ret. The rest (MZ, e_lfanew 0x80,
+  PE32+, console subsystem, alignments, .text RX-not-W, debug/pe
+  parseability) carries over with tightened expected values
+  (Characteristics 0x223, DllCharacteristics 0x8100, ImageBase
+  0x100000000).
+
+## Runtime NT personality design
+
+- Host detection: the PE entry only ever runs on Windows, so the stub
+  sets runtime.__hostos = _HOSTWINDOWS (=2, already declared:
+  os_cosmo_amd64.go:15, var linkname :27, GLOBL
+  rt0_cosmo_amd64.s:22-23) before joining the common boot - the same
+  trick real cosmo uses ("you KNOW you're on NT because you entered
+  via WinMain", winmain.greg.c:312-316). Dispatch idiom: iswindows()
+  + a CHECK_WINDOWS asm macro, twins of the darwin isdarwin()
+  (os_cosmo_amd64.go:32-34) / CHECK_DARWIN (sys_cosmo_amd64.s:85-88,
+  asm_cosmo_amd64.s:45-48) pattern. The landmine being closed:
+  CHECK_DARWIN falls through to the raw Linux SYSCALL path for any
+  non-XNU host, so __hostos=2 today would execute raw syscalls -
+  undefined behavior on NT at the first one. Rule: no raw SYSCALL may
+  execute when hostos==NT. The Syscall6 dispatcher
+  (asm_cosmo_amd64.s:73) gets a CHECK_WINDOWS -> ENOSYS safety net,
+  and the syscall package grows a WindowsFns hook table mirroring
+  DarwinFns (syscall_cosmo_arm64.go:28-87, SetDarwinFns :98-101),
+  wave-1 populated with Write/Exit only - that covers fmt output and
+  os.Exit, since user-level syscall.Write funnels through
+  cosmo.Syscall6 (syscall_cosmo.go:39-64).
+- Boot stub _rt0_cosmo_nt (new asm): cld; x87 fldcw re-init per the
+  APE spec's Windows section (ape/specification.md:516-546 - NT
+  initializes the FPU to 64-bit precision); capture the two IAT slots
+  into runtime globals; set __hostos=2; fabricate a SysV boot stack ON
+  the OS stack: argc=1, argv={ptr to static "APE\0", NULL},
+  envp={NULL}, auxv={AT_PAGESZ=0x1000, AT_RANDOM -> 16 bytes seeded
+  from RDTSC mixing (the ProcessPrng upgrade is wave 2), AT_NULL} -
+  sysargs walks exactly this layout (os_cosmo.go:170-221, sysauxv
+  :225-240). The /proc/self/auxv and mmap+mincore fallbacks
+  (os_cosmo.go:189-210) are Linux-syscall paths and must not be
+  reached; malloc.go:419 throws if physPageSize==0, so the AT_PAGESZ
+  fabrication is mandatory. Then JMP _rt0_amd64 (asm_amd64.s:15-18).
+  Real GetCommandLineW argv/env parsing is wave 2 (goargs/goenvs NT
+  branches; goenvs os_cosmo.go:256-258).
+- TLS: switch cosmo/amd64 from FS:-8 to a 1-insn GS:0x28 model - g
+  lives at gs:0x28, which on NT is the TEB ArbitraryUserPointer field
+  (upstream Go windows/amd64 precedent) and needs NO setup syscall,
+  and on Linux is reachable by arch_prctl(ARCH_SET_GS=0x1001,
+  &m.tls[0] - 0x28). Changes: the Hcosmo TLS lowering segment prefix
+  0x64 -> 0x65 (asm6.go:2544-2554), ld Tlsoffset -8 -> +0x28
+  (sym.go:73-93: Hcosmo leaves the ELF -1*PtrSize group at :81-93),
+  settls's linux path ARCH_SET_FS(0x1002) -> ARCH_SET_GS with the
+  -0x28 bias (sys_cosmo_amd64.s:807-823; its ADDQ $8 compensation at
+  :810 dies), and clone drops CLONE_SETTLS (:735-737 - the kernel can
+  only set FS) with the child calling settls itself (child block
+  :748-771). All ~25 g-reload sites go through the REG_TLS
+  pseudo-register (go_tls.h) and re-lower automatically: sigtramp
+  sys_cosmo_amd64.s:537, the clone child :763, the asm_amd64.s set
+  (rt0_go, gogo, mcall, systemstack, morestack, asmcgocall,
+  cgocallback, setg, stackcheck), preempt_amd64.s:34; the only
+  hard-coded -8 assumptions in cosmo asm are the two compensations
+  named above. The rt0_go TLS store-through test (asm_amd64.s:286-291)
+  validates the model on the Linux leg immediately. darwin-amd64 is
+  unaffected (its runtime is incomplete and its settls branch is
+  already a no-op RET, :819-823; its future path is pthread-key
+  fishing until a key lands at slot 0x28).
+- NT function table (new os_cosmo_nt.go): resolved at osArchInit when
+  hostos==NT via the captured GetProcAddress/LoadLibraryA -
+  os_cosmo_amd64.go:39 is a no-op today and becomes the resolution
+  hook, mirroring the arm64 darwin resolve at os_cosmo_arm64.go:257.
+  Wave-1 set: kernel32 VirtualAlloc/VirtualFree/WriteFile/
+  GetStdHandle/ExitProcess/ExitThread/CreateThread/Sleep/
+  GetSystemInfo; api-ms-win-core-synch-l1-2-0.dll WaitOnAddress/
+  WakeByAddressSingle for Go-level futexsleep/futexwakeup branches
+  (os_cosmo.go:37-46/:51-62). cosmo/amd64 is pure lock_futex
+  (lock_futex.go:5 build tag) and every futexwakeup caller passes
+  cnt=1 (lock_futex.go notewakeup/semawakeup plus
+  os_cosmo_arm64_sema.go:313 - exhaustive grep), so Single suffices;
+  real cosmo imports the same DLL (cosmo_futex.c). sysmon parks via
+  notetsleep -> futexsleep, so this branch IS exercised by a quiet
+  fizzbuzz run. Calls go through a Win64-ABI thunk in asm mirroring
+  the darwin cosmoLibcCall6 shape (sys_cosmo_arm64.s:127): shadow
+  space + 16-byte stack alignment.
+- Clocks: no imports needed - port the in-tree upstream
+  KUSER_SHARED_DATA readers (src/runtime/time_windows_amd64.s +
+  time_windows.h:13-14): nanotime1/walltime CHECK_WINDOWS branches
+  read _INTERRUPT_TIME 0x7ffe0008 / _SYSTEM_TIME 0x7ffe0014. (Real
+  cosmo uses QueryUnbiasedInterruptTimePrecise,
+  clock_gettime-nt.c:39-115; the KUSER page is upstream Go's approach
+  and needs zero resolution machinery - chosen for wave 1.)
+- Memory: mem_cosmo.go host branches - sysReserve ->
+  VirtualAlloc(MEM_RESERVE), sysMap+sysUsed -> MEM_COMMIT, sysUnused
+  -> MEM_DECOMMIT, sysFree -> VirtualFree(base, 0, MEM_RELEASE). NT
+  allocation granularity is 64 KiB and partial unmap is impossible
+  (spec.md:671-679: Windows "lack[s] the ability to carve or punch
+  holes in mappings"; cosmo's munmap returns ENOTSUP unless the range
+  envelops whole mappings, mmap.c:534-568), so sysReserveAligned's
+  partial-munmap trim (the default branch, mem.go:225-245, keyed
+  compile-time on `case GOOS == "windows"` at mem.go:207 today)
+  becomes runtime-host-keyed and uses the windows-style
+  free-and-retry loop (mem.go:207-224) when hostos==NT. physPageSize
+  = 4096 via the fabricated AT_PAGESZ.
+- Threads: newosproc (os_cosmo.go:109-135) NT branch -> CreateThread
+  with a 64 KiB stack; the child stub pivots SP onto the
+  malg-allocated g0 stack (preserving the Linux bookkeeping: mexit
+  frees it, and the OS stack dies with ExitThread - the same pivot
+  real cosmo does: CloneWindows CreateThread(0, 65536, ...) then
+  WinThreadEntry's __stack_call rsp pivot, clone.c:76-133), writes g0
+  into gs:0x28, and calls mstart. TEB StackBase/StackLimit are left
+  stale for wave 1 (cosmo precedent - it does not edit the TEB
+  either; VEH-only signal handling makes that safe, noted as wave-2+
+  work). This is REQUIRED for the north star: runtime.main starts
+  sysmon via newm before user main runs (proc.go:173-175), so thread
+  creation cannot be deferred out of wave 1.
+- Misc wave-1 branches: write1 (sys_cosmo_amd64.s:173) ->
+  WriteFile(GetStdHandle(-11/-12)) for fds 1/2; exit (:90) ->
+  ExitProcess(code) (NOTE divergence: real cosmo encodes a unix wait
+  status as code<<8 for its own process protocol, exit.c; we use
+  plain codes until an os/exec wave needs otherwise); exitThread
+  (:104) -> ExitThread; usleep/osyield (:241/:825) -> Sleep(ms)/
+  Sleep(0); getCPUCount (os_cosmo.go:64-93) -> GetSystemInfo
+  dwNumberOfProcessors; readRandom (os_cosmo.go:249-254) -> return 0
+  for wave 1 (AT_RANDOM covers the boot seeds via startupRand;
+  ProcessPrng is wave 2); signal no-op set mirroring darwin's
+  return-0 stubs (rt_sigaction's darwin leg returns 0,
+  sys_cosmo_amd64.s:513-518): sysSigaction/sigprocmask/sigaltstack
+  return 0 on NT (sysSigaction os_cosmo.go:405-419 throws on nonzero;
+  rtsigprocmask :469 and sigaltstack :787 crash on failure, so the NT
+  branches must come before the crash checks), tgkill/raise gated
+  (signalM os_cosmo.go:440-446; raise/raiseproc sys_cosmo_amd64.s:
+  294/:318). Netpoll is lazily initialized (netpollGenericInit
+  netpoll.go:226) and untouched by fizzbuzz - explicitly deferred.
+- fd model: fds 1 and 2 map straight to GetStdHandle; no fd table in
+  wave 1 (open() and friends are later waves).
+
+## CI and verification ladder
+
+windows-latest test-job coverage returns via this branch, climbing
+four rungs:
+
+- L0: debug/pe structural asserts on the built thin+fat outputs (runs
+  on every OS, including ubuntu).
+- L1: stub-proof - the windows runner executes the fat APE and gets a
+  deliberate constant exit code from the NT stub before full boot is
+  wired (proves the loader maps our sections and runs our code).
+- L2: println-level output through the runtime write path.
+- L3: full fizzbuzz via fmt prints + exit 0 = the wave north star.
+
+Land the largest honestly-verified rung; never claim past what CI
+proved. The linux/macos legs stay green throughout.
+
+## Deferred to later waves (explicit non-goals for wave 1)
+
+Real argv/env (a GetDosArgv-equivalent with cmd.exe quoting), console
+CP_UTF8/VT setup, VEH -> sigpanic/signal semantics, os/exec,
+sockets/netpoll (likely a wepoll-or-IOCP design decision), async
+preemption (SuspendThread/GetThreadContext), profiling timers,
+os.Executable (GetModuleFileNameW), TIB stack-bounds hygiene,
+ProcessPrng entropy, exit-status protocol alignment with cosmo, and
+Windows/arm64.
+
+## wave 1 implementation log (2026-07-18, step 1: header + NT stub, L1)
+
+Landed on claude/nt-wave1:
+
+- runtime/rt0_cosmo_nt_amd64.s (cosmo && amd64 only): `_rt0_cosmo_nt`
+  entry stub (cld; fldcw 0x37f per spec.md's Windows x87 section; SUBQ
+  $40,SP for win64 alignment+shadow space; LoadLibraryA("kernel32.dll")
+  -> GetProcAddress(h,"ExitProcess") -> ExitProcess(42); INT3 fallback)
+  plus the import machinery as fixed-layout data symbols:
+  `runtime.ntidata` (0x70 bytes: IDT entry + terminator, 2-entry ILT,
+  hint/name entries, "kernel32.dll") and `runtime.ntiat` (3 u64 slots,
+  first two DATA-initialized to 1 so the symbol is file-backed
+  noptrdata the loader can overwrite in place).
+- cmd/link: `apePrepareNTBoot` (thin amd64 path, convertToAPE) resolves
+  the three symbols via ctxt.loader (they are new deadcode roots for
+  Hcosmo/amd64 - nothing references them by relocation), verifies the
+  blob strings, and patches the five RVA fields into the payload bytes
+  before writeAPEFile re-emits them. `writePECosmoAMD64` replaces the
+  amd64 stub header: PE32+ at ImageBase 0x100000000, Characteristics
+  0x0223, DllCharacteristics 0x8100 (no ASLR bits), subsystem CUI 6.0,
+  stack 8MiB/64KiB, heap 1MiB/4KiB, SizeOfHeaders 0x400,
+  NumberOfRvaAndSizes 16 with only DataDirectory[1] = {RVA(ntidata),
+  0x28}; sections .text/.rodata/.data from the payload's three PT_LOADs
+  (asserting vaddr - p_offset == ImageBase per load, so RVA ==
+  payload-relative offset), the payload ELF-header page skipped (.text
+  RVA 0x1000, raw 0x11000), .data VirtualSize=memsz > SizeOfRawData
+  (=filesz rounded to FileAlignment over verified zero padding) for
+  BSS. Fat path: payloadFromAPEOrELF keeps each input's 64K head and
+  `transplantPEHeader` copies the amd64 input's [0x80,0x800) verbatim
+  (asserting the PE sig and payload offset 0x10000); readobj output of
+  thin and fat is byte-identical. arm64-only and loaderless synthetic
+  payloads keep the legacy stub header.
+- Tests: apetest/pe_test.go flipped from stub-shape to real-mapping
+  acceptance (sections raw >= 0x10000, entry inside .text and matching
+  the stub prologue fc d9 2d ?? ?? ?? ?? 48 83 ec 28, exact
+  ImageBase/Characteristics/DllCharacteristics/SizeOfHeaders, kernel32
+  imports = GetProcAddress+LoadLibraryA, .data BSS) while keeping the
+  polyglot/stub-era invariants that still hold. ld/ape_test.go gained
+  TestPECosmoHeaderStructure (synthetic payload with a pre-patched
+  blob through writeAPEFile, parsed with debug/pe incl.
+  ImportedSymbols) and TestAPEFatPETransplant (thin -> re-ingest ->
+  fat merge, header region byte-compared and re-verified).
+- CI: new `test-windows` job (windows-latest, needs build) downloads
+  the ubuntu-origin and windows-origin fat fizzbuzz artifacts and
+  asserts each exits 42 in pwsh on a throwaway copy ("NT stub
+  exit-code check (interim wave-1 L1)"). apetest still skips execution
+  on windows. ubuntu/macos legs unchanged.
+
+L1 expectation: windows-latest runs the fat APE and gets exit code 42
+- that is the deliberate, temporary contract until L2 wires the write
+path (then the stub stops exiting early and the check moves up the
+ladder).
+
+Verified locally (linux): make.bash; thin+fat fizzbuzz builds; both
+run correctly on linux via throwaway copies (self-assimilation
+intact); llvm-readobj on pristine copies shows the designed
+header/sections/imports, thin==fat; apetest green against fat (thin
+fails only the three inherently-fat TestFat* checks, as before);
+cmd/link/internal/ld suite green.
+
+Deviations from the design/step brief, and why:
+
+- The ntidata patch is applied to the payload bytes in memory before
+  writeAPEFile re-creates the output, not by seek+write on the
+  finished file: convertToAPE's existing idiom is read-whole-file ->
+  rebuild, so mutating p.elf is the same mechanism with less code.
+  Byte-level outcome is identical (verified in the output file).
+- .text/.rodata keep exact (unaligned) SizeOfRawData; only .data is
+  rounded up to FileAlignment, per the step brief. Loaders accept
+  unaligned raw sizes (they read whole 512-byte sectors regardless);
+  revisit only if a real Windows loader complains.
+- SizeOfCode/SizeOfInitializedData/SizeOfUninitializedData are 0 like
+  real cosmo APEs (loaders ignore them); the design did not specify.
+- The linker cross-checks the blob's embedded strings before patching
+  (not in the brief) so asm/linker layout drift fails the link loudly.
+- cosmo-ci.yml has no all-builds aggregator job to wire the new job
+  into (the org-side required-builds-manager aggregates externally);
+  publish keeps needs [build, test], consistent with wasm not gating
+  publish either.
+
+## step 2: NT personality (runtime, inert; TLS switch live)
+
+Landed in two commits on claude/nt-wave1. The entry stub still exits
+42 (untouched); everything below is dead code until a later step flips
+the stub to set __hostos=2 and join the common boot.
+
+Phase A - TLS switch fs:-8 -> gs:0x28, LIVE on all hosts (the one
+non-gated change; cosmo/amd64 codegen-global):
+
+- asm6.go Hcosmo REG_TLS prefix 0x64->0x65; ld sym.go Hcosmo Tlsoffset
+  -8 -> +0x28 (arm64 unaffected: R_ARM64_TLS_LE ignores Tlsoffset);
+  settls linux leg ARCH_SET_FS(+8) -> ARCH_SET_GS(base=&m.tls[0]-0x28);
+  clone drops CLONE_SETTLS (kernel can only set FS), child runs the
+  arch_prctl itself before its first g access. All other g reloads
+  lower through REG_TLS and re-lowered automatically; a tree grep found
+  no other hard-coded FS/-8 assumptions.
+- Validation evidence: fat runtimeprobe on linux prints the full
+  gauntlet through "ok segvrecover / ok sigterm / ok sigusr2 /
+  ok preempt / ok execchild / ok waitsig killed / ok all", exit 0 -
+  sigtramp's get_tls reload, async preemption, clone'd threads and
+  os/exec children all agree on the new model. sync + sync/atomic via
+  the misc/cosmo wrappers pass; cmd/link/internal/ld (APE+PE suite)
+  passes; thin/fat fizzbuzz output identical.
+- Debug war story: the first post-switch build segfaulted at absolute
+  0x28 with GS correctly set. Core + raw objdump showed ~11 early-text
+  sites (internal/cpu's post-ABI0-call g reloads) encoded 64 (FS
+  prefix, old object) with displacement 0x28 (new linker) - the fork
+  reports a RELEASE version string, so cmd/go's tool build IDs are
+  version-based and a rebuilt compiler does NOT invalidate cached
+  GOOS=cosmo std objects. Rule for toolchain hackers: go clean -cache
+  (or -a) after every make.bash before trusting a cosmo binary.
+
+Phase B - NT personality, all gated on __hostos==_HOSTWINDOWS (=2,
+still never set):
+
+- Dispatch prims: iswindows() (os_cosmo_amd64.go; constant-false twin
+  in os_cosmo_nt_arm64.go so shared code compiles away) and a
+  CHECK_WINDOWS asm macro beside each file's CHECK_DARWIN, always
+  checked before the Linux fallthrough.
+- Foreign calls: runtime·ntcall6 (sys_cosmo_nt_amd64.s) is the
+  SysV->win64 trampoline; Go packs struct{fn,a1..a6,ret} on the stack
+  and asmcgocall(tramp,&args) provides the g0 switch; the tramp keeps
+  the args pointer in DI (win64 callee-saved), SUBQ $56 for shadow
+  space + args 5/6 + 16-alignment, RAX -> ret. Thin wrapper
+  ntcall(fn,a1..a6); nosplit + noescape => usable pre-mallocinit.
+  GetLastError helper deliberately omitted (nothing consumes errors in
+  wave 1).
+- ntlib: resolved at osArchInit (osinit already runs it before
+  getCPUCount) from the two loader-filled IAT slots; kernel32:
+  VirtualAlloc/VirtualFree/WriteFile/GetStdHandle/ExitProcess/
+  ExitThread/CreateThread/Sleep/GetSystemInfo, synch forwarder DLL:
+  WaitOnAddress/WakeByAddressSingle; ntStdout/ntStderr cached.
+  Resolution failures crash-poke 0xf2..0xf5 (registry in
+  os_cosmo_nt.go). Deviation from the design sketch: plain
+  runtime·nt*Fn vars instead of a struct, so asm references them by
+  name with zero offset-rot risk (cosmoPthread*Fn precedent).
+- Insertion points (sys_cosmo_amd64.s unless noted): exit->
+  ExitProcess, exitThread->ExitThread (direct win64 calls, process/
+  thread dying); write1 -> ntwrite1tramp -> Go ntwrite1 (fds 1/2 ->
+  cached handles, else -EBADF; WriteFile via ntcall); usleep ->
+  Sleep(ceil ms), osyield -> Sleep(0) (direct calls, SUBQ $40
+  discipline); nanotime1/walltime -> KUSER_SHARED_DATA readers ported
+  from upstream time_windows_amd64.s (single atomic 64-bit lo|hi1
+  load; walltime rebases the 1601 epoch by 116444736000000000);
+  futexsleep/futexwakeup (os_cosmo.go) -> WaitOnAddress (ms rounded
+  up, INFINITE for ns<0, val copied to stack) / WakeByAddressSingle
+  (cnt is provably always 1); futex asm keeps an ENOSYS net.
+- Memory (mem_cosmo.go): sysAllocOS -> VirtualAlloc(RESERVE|COMMIT)
+  [addition to the brief's list - it is on the mallocinit path],
+  sysReserveOS -> MEM_RESERVE with hint-retry-at-NULL, sysMapOS +
+  sysUsedOS -> MEM_COMMIT (throw on failure), sysUnusedOS ->
+  MEM_DECOMMIT, sysFreeOS -> VirtualFree(base,0,MEM_RELEASE) (0xf6
+  poke on failure), sysFaultOS -> decommit, sysNoHugePageOS no-op;
+  sysReserveAligned's partial-unmap trim keys at runtime via
+  cosmoHostIsWindows() (false stub in stubs_noncosmo.go) and takes the
+  windows release-and-retry loop on NT.
+- Threads: newosproc -> CreateThread(64KiB reservation stack) ->
+  tstart_cosmo_nt (win64 entry, CX=mp): pivots onto mp.g0's
+  Go-allocated stack, stores g0 to gs:0x28 (plain TEB store, no
+  settls), mirrors the clone-child wiring, mstart. TEB StackBase/
+  Limit left stale per design; thread handle leaked in wave 1;
+  m.procid stays 0 (minitProcid gated - gettid is a raw syscall and
+  signal sends are dropped anyway).
+- Signals inert: rt_sigaction/rtsigprocmask/sigaltstack asm return
+  0/no-op before their crash checks (darwin return-0 stub idiom);
+  raise/raiseproc/tgkill asm no-op; signalM and
+  setProcessCPUProfiler gated in Go; sbrk0 returns 0 (straggler
+  found by the boot-path grep: mallocinit queries the brk).
+- Boot guards: sysargs early-returns before the /proc/self/auxv and
+  mmap+mincore fallbacks; readRandom returns 0 (AT_RANDOM covers boot;
+  wave 2: ProcessPrng); getCPUCount -> GetSystemInfo
+  dwNumberOfProcessors (offset 32).
+- Syscall safety nets: cosmo.Syscall6 asm returns ENOSYS on NT before
+  any SYSCALL; src/syscall's rawSyscallNoError/rawVforkSyscall
+  crash-poke 0xf7/0xf8 (they cannot report errors); RawSyscall6
+  routes through a WindowsFns hook table (Write/Exit only, mirroring
+  SetDarwinFns; installed by the runtime at osArchInit) so fmt output
+  and os.Exit work, everything else ENOSYS.
+
+Validation (linux): make.bash; go clean -cache; std builds for
+cosmo/amd64 AND cosmo/arm64 (plus windows/amd64 + darwin/arm64
+runtime compiles - mem.go and stubs_noncosmo.go are GOOS-generic);
+vet clean for runtime/syscall/cosmo pkg on both cosmo arches; the
+whole Phase-A battery repeated green (runtimeprobe "ok all" exit 0,
+sync tests, ld tests, thin+fat fizzbuzz).
+
+## step 3: boot flip - fizzbuzz runs on Windows (L3 north star)
+
+Landed in two commits on claude/nt-wave1 (runtime boot cfaa3be1, CI
+flip 977759d7). The stub's ExitProcess(42) tail is gone; the fat APE
+boots the real cosmo runtime on NT and fizzbuzz prints.
+
+What flipped:
+
+- _rt0_cosmo_nt (rt0_cosmo_nt_amd64.s): keeps cld + fldcw 0x37f, then
+  stores __hostos = 2 directly (the WinMain trick - reaching the PE
+  entry point proves the host; the unix rt0 gets CL from the APE
+  loader instead), fills runtime.ntbootrand (16-byte file-backed
+  noptrdata) with two RDTSC reads mixed with SP and the loader's CX
+  (PEB) - wave 2 upgrades to ProcessPrng - and builds the SysV boot
+  block on the OS stack: [argc=1]["APE" argv][NULL][NULL envp]
+  [AT_PAGESZ 0x1000][AT_RANDOM &ntbootrand][AT_NULL], 16-aligned,
+  argc at 0(SP), then JMP _rt0_amd64. The IAT needs no capture step
+  (osArchInit reads runtime.ntiat directly). The old
+  LoadLibraryA/GetProcAddress/ExitProcess tail and its string blobs
+  are deleted.
+- goargs NT branch (runtime1.go hook -> cosmoNTGoargs,
+  os_cosmo_nt.go): argslice comes from GetCommandLineW parsed per the
+  Windows quoting rules - a port of os/exec_windows.go
+  commandLineToArgv (provenance in comments; under GOOS=cosmo package
+  os takes runtime_args(), so the parse must live in the runtime).
+  Falls back to the fabricated "APE" argv on an empty command line.
+  Verified ordering: schedinit runs mallocinit before goargs/goenvs
+  (proc.go), so allocation there is safe; no lazy path needed.
+- goenvs NT branch (ntGoenvs): GetEnvironmentStringsW ->
+  double-NUL-terminated UTF-16 walk -> envs (upstream os_windows.go
+  goenvs shape); FreeEnvironmentStringsW deliberately skipped (not in
+  the resolve set; one-shot boot leak). GODEBUG therefore works via
+  parsedebugvars. Shared decoder ntUTF16ToString handles surrogate
+  pairs (runtime's gostringw does not). GetCommandLineW +
+  GetEnvironmentStringsW joined the osArchInit kernel32 resolve set.
+- Stub-flip fallout fixed in the same commit (all three found locally
+  by running the fat APE under WINE before ever pushing - the wine
+  loader approximates NT closely enough to surface real boot bugs):
+  1. rt0_go's TLS store-through test (asm_amd64.s) compares the value
+     written through gs:0x28 with m0.tls[0]; on NT gs:0x28 IS the TEB
+     ArbitraryUserPointer storage, no alias, so the test aborted.
+     GOOS_cosmo-guarded fix: when __hostos==2, read back through the
+     segment reference instead. Other GOOS/hosts untouched.
+  2. checkfds (fds_unix.go) throws on any fcntl errno except EBADF;
+     the step-2 ENOSYS net returned 38 -> "fatal error: cannot open
+     standard fds" (first wine run died here, with a PERFECT panic
+     report - write path, traceback, exit all already working).
+     Runtime fcntl (fcntl_cosmo_amd64.go) now has an NT branch:
+     F_GETFD on fds 0-2 reports open (no fd table in wave 1),
+     everything else stays ENOSYS.
+  3. "stack split at bad time" at (*WindowsFns).Syscall6: the hook
+     chain runs between entersyscall/exitsyscall (second wine run
+     died in os.init -> os.Getwd -> syscall.Syscall(SYS_GETCWD)).
+     The dispatcher and the runtime-side ntSyscallWrite/ntSyscallExit
+     are now //go:nosplit, like the raw SYSCALL they replace.
+
+Wine evidence (wine 9.0, WINEDEBUG=-all, fat APE): "10 5" ->
+"fizzbuzz" rc=0; "7 6" -> "13" rc=0; "12345 6789" -> "fizz" rc=0;
+"-10 -5" -> "fizzbuzz" rc=0; no args -> rc=1 with "Usage:
+Z:\...\wine-fizzbuzz.com <num1> <num2>" on stderr; "abc 5" ->
+"Invalid first argument: abc" rc=1. Full contract green locally -
+wine is NOT conclusive for real Windows (its loader and kernel32 are
+reimplementations), CI is the truth, but it made the fix loop local
+and fast.
+
+CI flip (cosmo-ci.yml test-windows): checkout + setup-go joined the
+job; the exit-42 step became "Run fizzbuzz on Windows (NT boot
+acceptance)" - for ubuntu-origin and windows-origin fat artifacts it
+runs the apetest contract cases 10+5 -> "fizzbuzz\n" and 7+6 ->
+"13\n" (the second proves argv flows through GetCommandLineW parsing
+rather than printing a constant), byte-compares stdout captured via
+-RedirectStandardOutput, prints "origin: exit code N", and keeps the
+Start-Process + explicit-exit hardening. Then the full apetest suite
+runs natively against both origins (fizzbuzz_test.go's windows skip
+replaced by direct CreateProcess invocation; with-deadline.sh already
+degrades to plain exec on git-bash, so the watchdogs there are the
+in-test 3-minute contexts plus step timeout-minutes; RUNTIMEPROBE_BIN
+deliberately unset - the probe needs later-wave NT surface, its
+execution test self-skips). apetest's TestPEEntrypointIsNTStub
+keyhole now asserts the new prologue: fc (cld), d9 2d (fldcw), c7 05
+(movl imm32 to rip-relative m32) with immediate 02 00 00 00
+(_HOSTWINDOWS) - byte positions verified against the built binary.
+
+Local validation (linux, after the final iteration): fresh make.bash
++ go clean -cache; thin+fat fizzbuzz correct on throwaway copies; fat
+runtimeprobe "ok all" exit 0; full apetest suite green vs fat
+(FIZZBUZZ_BIN+RUNTIMEPROBE_BIN, upstream go); cmd/link/internal/ld
+suite green; std builds for cosmo/amd64 + cosmo/arm64 +
+linux/amd64, runtime compiles for windows/amd64 + darwin/arm64, vet
+clean for runtime and internal/runtime/syscall/cosmo.
+
+CI evidence (run 29638954834, first push of the flip - green on the
+FIRST windows round, all 8 jobs success): the windows-latest
+acceptance step printed, verbatim,
+
+	ubuntu-latest: launching D:\a\_temp\fizzbuzz-ubuntu-latest.com 10 5
+	ubuntu-latest: exit code 0 (want 0), stdout "fizzbuzz\n"
+	ubuntu-latest: launching D:\a\_temp\fizzbuzz-ubuntu-latest.com 7 6
+	ubuntu-latest: exit code 0 (want 0), stdout "13\n"
+	windows-latest: launching D:\a\_temp\fizzbuzz-windows-latest.com 10 5
+	windows-latest: exit code 0 (want 0), stdout "fizzbuzz\n"
+	windows-latest: launching D:\a\_temp\fizzbuzz-windows-latest.com 7 6
+	windows-latest: exit code 0 (want 0), stdout "13\n"
+
+and both native apetest runs ended "ok apetest" (246 PASS lines
+across the two origins, every fizzbuzz execution test including the
+TestError_* exit-1/stderr cases passing on real Windows;
+TestRuntimeProbe SKIP as designed). The linux/macos test legs, wasm,
+and publish all stayed green. The wave-1 north star - a normal fat
+APE printing real fizzbuzz output and exiting 0 on windows-latest -
+is CI-proven; no debug-exit-code probes were ever needed on the
+runner (the wine prepass caught all three boot bugs locally).
+
+Deviations from the step brief: none of substance. The brief allowed
+lazy argv parsing if goargs ran pre-malloc - not needed (ordering
+verified). wine was listed as optional/inconclusive - it turned out
+decisive for iteration speed, converting what would have been 3 CI
+round-trips into local minutes. The direct-invocation CI check runs
+two success cases (both origins); the error-path cases are covered by
+the native apetest leg rather than duplicated in pwsh.
+
+### step-3 postscript: the ASLR straddle flake (fixed same day)
+
+The docs-only push a94c1891 (identical code to the green 977759d7 run)
+FAILED test-windows: windows-origin apetest, TestFizzbuzz_Negative15,
+exit status 0xC0000005 with captured stderr
+
+	fatal error: runtime: cannot commit pages
+	runtime.sysUsedOS(0x217d7bffc000, ...)
+	runtime.(*mheap).allocSpan -> stackpoolalloc -> stackalloc(0x4000)
+	runtime.schedinit
+
+while the very next push's run (4175ebce) was green again - a
+nondeterministic 1-in-~92-boots crash. Forensics: the failing range
+ends exactly at 0x217d7c000000, a 64MiB heap-arena boundary. NT only
+lets one VirtualAlloc(MEM_COMMIT)/VirtualFree(MEM_DECOMMIT) call touch
+pages of a SINGLE prior reservation; adjacent 64MiB arena reservations
+merge virtually in the heap's eyes, so the first span allocated
+straddling the boundary (fresh pages are born scavenged, so allocSpan
+sysUsed-commits them) issues one commit across two reservations ->
+ERROR_INVALID_ADDRESS -> throw. Whether arenas land adjacent depends
+on NT address-space randomization, hence the flake; wine's different
+layout never produced it. (The 0xC0000005 exit instead of exit(2) is
+the panic path faulting while unwinding past the wedged heap state -
+secondary, unreachable once the commit works.) Fix (same one upstream
+mem_windows.go has carried for years, ported verbatim as
+ntCommitPages/ntDecommitPages in mem_cosmo.go): on failure retry
+successively smaller page-aligned chunks so each call stays within one
+reservation; sysUsedOS, sysUnusedOS, sysFaultOS, and sysMapOS NT
+branches all route through the chunked helpers now. Locally green
+after the fix: linux fizzbuzz+probe ("ok all"), apetest, wine
+fizzbuzz, cosmo/arm64 std, vet.
+
+Post-fix verification: the straddle-fix push (2f0d0f34, run
+29639718819) and an additional workflow_dispatch sample on the same
+SHA (run 29639992692) were both fully green - two consecutive
+windows-latest rounds, roughly 184 fresh-ASLR process boots, zero
+failures - on top of the boundary-address forensics and the fix's
+upstream mem_windows.go provenance. Branch CI history for step 3:
+977759d7 green (first flip push), a94c1891 FAIL (the straddle flake,
+identical code), 4175ebce green, 2f0d0f34 green, dispatch green.
+
 ## 2026-07-18: fat APEs strip by default; debug sidecars (.dbg / .aarch64.elf)
 
 Default `GOOS=cosmo` fat builds now ship stripped, with full debug info
