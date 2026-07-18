@@ -6,5 +6,6 @@
 
 package main
 
-// The windows payload has no cosmo runtime to interrogate.
+// Non-cosmo builds (e.g. host-GOOS builds of the probe for debugging)
+// have no cosmo runtime to interrogate.
 func printNetpollDiag(tag string) {}

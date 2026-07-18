@@ -68,8 +68,10 @@ func TestRuntimeProbe(t *testing.T) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Windows recognizes APE as PE directly.
-		cmd = exec.CommandContext(ctx, bin, mark)
+		// Windows loads the APE as the stub PE, which exits 0 without
+		// running the probe: fat APEs no longer embed a windows/amd64
+		// PE payload (cosmo-native NT bring-up is in progress).
+		t.Skip("fat APEs no longer embed a windows PE payload; cosmo-native NT bring-up in progress")
 	default:
 		// Unix: invoke through a shell for the APE bootstrap.
 		cmd = exec.CommandContext(ctx, "/bin/sh", bin, mark)

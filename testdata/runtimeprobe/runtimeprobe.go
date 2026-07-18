@@ -432,17 +432,13 @@ func checkSockets() {
 	}
 	defer usock.Close()
 
-	wantLocal := ""
-	if runtime.GOOS == "windows" {
-		wantLocal = "@"
-	}
 	la, laOK := usock.LocalAddr().(*net.UnixAddr)
 	ra, raOK := usock.RemoteAddr().(*net.UnixAddr)
 	switch {
 	case uln.Addr().String() != spath:
 		fail("unixsock", "listener addr %q, want %q", uln.Addr(), spath)
-	case !laOK || la.Name != wantLocal:
-		fail("unixsock", "dialed local addr %#v, want name %q", usock.LocalAddr(), wantLocal)
+	case !laOK || la.Name != "":
+		fail("unixsock", "dialed local addr %#v, want empty name", usock.LocalAddr())
 	case !raOK || ra.Name != spath:
 		fail("unixsock", "dialed remote addr %#v, want name %q", usock.RemoteAddr(), spath)
 	default:
@@ -474,9 +470,9 @@ func checkSockets() {
 // selfCommand builds an exec.Cmd that re-executes this binary in the
 // given RUNTIMEPROBE_CHILD mode. How the child must be launched
 // depends on what is on disk at os.Executable(): an assimilated ELF
-// (Linux after first run) or Mach-O executes directly, a pristine APE
-// (still starting with "MZ...") needs the shell bootstrap on unix
-// hosts, and on Windows the PE always executes directly.
+// (Linux after first run) or Mach-O executes directly, while a
+// pristine APE (still starting with "MZ...") needs the shell
+// bootstrap.
 func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -496,15 +492,14 @@ func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) 
 		return nil, false, true
 	}
 
-	direct = runtime.GOOS == "windows" ||
-		(magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
+	direct = (magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
 		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
 		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
 	if direct {
 		cmd = exec.Command(exe)
 	} else {
-		// Pristine APE on a unix host: bootstrap through the shell,
-		// exactly how the probe itself was started.
+		// Pristine APE: bootstrap through the shell, exactly how the
+		// probe itself was started.
 		cmd = exec.Command("/bin/sh", exe)
 	}
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD="+childMode)
@@ -568,13 +563,8 @@ func checkExec() {
 // syscall.SIGUSR1 with LINUX numbering (10; Apple's kernel reports 30,
 // so this proves the wait4 boundary translates). On the child side it
 // exercises delivery of a fatal un-notified signal: runtime handler ->
-// dieFromSignal -> SIG_DFL reinstall -> re-raise. Skipped on Windows
-// (no kill(2), no SIGUSR1).
+// dieFromSignal -> SIG_DFL reinstall -> re-raise.
 func checkWaitSig() {
-	if runtime.GOOS == "windows" {
-		ok("waitsig", "skipped-windows")
-		return
-	}
 	cmd, direct, bad := selfCommand("waitsig", "raise")
 	if bad {
 		return
