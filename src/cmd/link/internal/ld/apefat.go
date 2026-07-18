@@ -62,6 +62,10 @@ func payloadFromAPEOrELF(data []byte) (*apePayload, error) {
 		}
 		delta := uint64(apeHeaderSize)
 		p.elf = shiftPOffsets(p.elf, -delta) // unsigned wraparound subtracts
+		// Keep the input's APE head: for an amd64 input it carries the
+		// real PE header its thin link computed, which the fat header
+		// transplants verbatim (see transplantPEHeader).
+		p.head = data[:apeHeaderSize:apeHeaderSize]
 		return p, nil
 	}
 	return payloadFromELF(data)
