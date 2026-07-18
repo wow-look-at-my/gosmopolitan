@@ -3,10 +3,9 @@
 # on all platforms. Each of the 2 unix test runners tests all 3 origin
 # binaries with the full apetest suite. Windows runs the same fat APEs
 # natively through their PE header via the cosmo runtime's NT
-# personality (cosmo NT bring-up wave 1): a dedicated windows job
-# byte-checks real fizzbuzz output and runs apetest (runtimeprobe
-# execution stays skipped there until a later wave grows the NT surface
-# it needs).
+# personality (NT bring-up wave 2): a dedicated windows job byte-checks
+# real fizzbuzz output and runs the full apetest suite - runtimeprobe
+# included - against all three origin binaries.
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -203,22 +202,25 @@ jobs:
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
-  # Windows execution acceptance (cosmo NT bring-up wave 1, north
-  # star): a normal fat APE - cosmo amd64 + arm64, no embedded second
-  # build - boots natively on Windows through its PE header and the
-  # cosmo runtime's NT personality. Two rungs, against both the
-  # ubuntu-origin and windows-origin artifacts (all origins build
-  # identical headers):
+  # Windows execution acceptance (cosmo NT bring-up): a normal fat
+  # APE - cosmo amd64 + arm64, no embedded second build - boots
+  # natively on Windows through its PE header and the cosmo runtime's
+  # NT personality. Two rungs:
   #
-  #  1. Direct invocation: the same contract apetest asserts
-  #     (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on stdout,
-  #     exit 0), with a byte-for-byte stdout compare.
-  #  2. The apetest suite, natively. FIZZBUZZ_BIN only:
-  #     RUNTIMEPROBE_BIN stays deliberately unset, so the probe
-  #     execution test self-skips - the probe needs far more NT
-  #     surface (sockets, signals, os/exec) than wave 1 provides.
+  #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
+  #     origins build identical headers): the same contract apetest
+  #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
+  #     stdout, exit 0), with a byte-for-byte stdout compare.
+  #  2. The apetest suite, natively, against all three origin binaries
+  #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
+  #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
+  #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
+  #     preemption), so probe execution is gated here too.
+  #
+  # Job cap covers the worst case of the per-step timeout-minutes
+  # below (5 + 3 + three 10-minute apetest steps, plus setup).
   test-windows:
-    timeout-minutes: 30
+    timeout-minutes: 40
     needs: build
     runs-on: windows-latest
 
@@ -243,6 +245,12 @@ jobs:
         with:
           name: ape-binary-windows-latest
           path: binaries/ape-binary-windows-latest
+
+      - name: Download macos-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-macos-latest
+          path: binaries/ape-binary-macos-latest
 
       - name: Run fizzbuzz on Windows (NT boot acceptance)
         timeout-minutes: 5
@@ -317,7 +325,7 @@ jobs:
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
@@ -337,7 +345,7 @@ jobs:
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
@@ -346,6 +354,26 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-log-windows-latest-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+      - name: apetest vs macos-origin binary
+        id: apetest-macos
+        timeout-minutes: 10
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload macos-origin windows test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-windows-latest-macos-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
