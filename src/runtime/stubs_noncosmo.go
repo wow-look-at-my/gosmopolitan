@@ -11,3 +11,12 @@ package runtime
 func cosmoStacksAreSystemAllocated() bool {
 	return false
 }
+
+// cosmoHostIsWindows is a stub for non-cosmo systems; see
+// sysReserveAligned in mem.go and the GOOS=cosmo implementation in
+// os_cosmo.go.
+//
+//go:nosplit
+func cosmoHostIsWindows() bool {
+	return false
+}

@@ -1419,3 +1419,109 @@ Deviations from the design/step brief, and why:
   into (the org-side required-builds-manager aggregates externally);
   publish keeps needs [build, test], consistent with wasm not gating
   publish either.
+
+## step 2: NT personality (runtime, inert; TLS switch live)
+
+Landed in two commits on claude/nt-wave1. The entry stub still exits
+42 (untouched); everything below is dead code until a later step flips
+the stub to set __hostos=2 and join the common boot.
+
+Phase A - TLS switch fs:-8 -> gs:0x28, LIVE on all hosts (the one
+non-gated change; cosmo/amd64 codegen-global):
+
+- asm6.go Hcosmo REG_TLS prefix 0x64->0x65; ld sym.go Hcosmo Tlsoffset
+  -8 -> +0x28 (arm64 unaffected: R_ARM64_TLS_LE ignores Tlsoffset);
+  settls linux leg ARCH_SET_FS(+8) -> ARCH_SET_GS(base=&m.tls[0]-0x28);
+  clone drops CLONE_SETTLS (kernel can only set FS), child runs the
+  arch_prctl itself before its first g access. All other g reloads
+  lower through REG_TLS and re-lowered automatically; a tree grep found
+  no other hard-coded FS/-8 assumptions.
+- Validation evidence: fat runtimeprobe on linux prints the full
+  gauntlet through "ok segvrecover / ok sigterm / ok sigusr2 /
+  ok preempt / ok execchild / ok waitsig killed / ok all", exit 0 -
+  sigtramp's get_tls reload, async preemption, clone'd threads and
+  os/exec children all agree on the new model. sync + sync/atomic via
+  the misc/cosmo wrappers pass; cmd/link/internal/ld (APE+PE suite)
+  passes; thin/fat fizzbuzz output identical.
+- Debug war story: the first post-switch build segfaulted at absolute
+  0x28 with GS correctly set. Core + raw objdump showed ~11 early-text
+  sites (internal/cpu's post-ABI0-call g reloads) encoded 64 (FS
+  prefix, old object) with displacement 0x28 (new linker) - the fork
+  reports a RELEASE version string, so cmd/go's tool build IDs are
+  version-based and a rebuilt compiler does NOT invalidate cached
+  GOOS=cosmo std objects. Rule for toolchain hackers: go clean -cache
+  (or -a) after every make.bash before trusting a cosmo binary.
+
+Phase B - NT personality, all gated on __hostos==_HOSTWINDOWS (=2,
+still never set):
+
+- Dispatch prims: iswindows() (os_cosmo_amd64.go; constant-false twin
+  in os_cosmo_nt_arm64.go so shared code compiles away) and a
+  CHECK_WINDOWS asm macro beside each file's CHECK_DARWIN, always
+  checked before the Linux fallthrough.
+- Foreign calls: runtime·ntcall6 (sys_cosmo_nt_amd64.s) is the
+  SysV->win64 trampoline; Go packs struct{fn,a1..a6,ret} on the stack
+  and asmcgocall(tramp,&args) provides the g0 switch; the tramp keeps
+  the args pointer in DI (win64 callee-saved), SUBQ $56 for shadow
+  space + args 5/6 + 16-alignment, RAX -> ret. Thin wrapper
+  ntcall(fn,a1..a6); nosplit + noescape => usable pre-mallocinit.
+  GetLastError helper deliberately omitted (nothing consumes errors in
+  wave 1).
+- ntlib: resolved at osArchInit (osinit already runs it before
+  getCPUCount) from the two loader-filled IAT slots; kernel32:
+  VirtualAlloc/VirtualFree/WriteFile/GetStdHandle/ExitProcess/
+  ExitThread/CreateThread/Sleep/GetSystemInfo, synch forwarder DLL:
+  WaitOnAddress/WakeByAddressSingle; ntStdout/ntStderr cached.
+  Resolution failures crash-poke 0xf2..0xf5 (registry in
+  os_cosmo_nt.go). Deviation from the design sketch: plain
+  runtime·nt*Fn vars instead of a struct, so asm references them by
+  name with zero offset-rot risk (cosmoPthread*Fn precedent).
+- Insertion points (sys_cosmo_amd64.s unless noted): exit->
+  ExitProcess, exitThread->ExitThread (direct win64 calls, process/
+  thread dying); write1 -> ntwrite1tramp -> Go ntwrite1 (fds 1/2 ->
+  cached handles, else -EBADF; WriteFile via ntcall); usleep ->
+  Sleep(ceil ms), osyield -> Sleep(0) (direct calls, SUBQ $40
+  discipline); nanotime1/walltime -> KUSER_SHARED_DATA readers ported
+  from upstream time_windows_amd64.s (single atomic 64-bit lo|hi1
+  load; walltime rebases the 1601 epoch by 116444736000000000);
+  futexsleep/futexwakeup (os_cosmo.go) -> WaitOnAddress (ms rounded
+  up, INFINITE for ns<0, val copied to stack) / WakeByAddressSingle
+  (cnt is provably always 1); futex asm keeps an ENOSYS net.
+- Memory (mem_cosmo.go): sysAllocOS -> VirtualAlloc(RESERVE|COMMIT)
+  [addition to the brief's list - it is on the mallocinit path],
+  sysReserveOS -> MEM_RESERVE with hint-retry-at-NULL, sysMapOS +
+  sysUsedOS -> MEM_COMMIT (throw on failure), sysUnusedOS ->
+  MEM_DECOMMIT, sysFreeOS -> VirtualFree(base,0,MEM_RELEASE) (0xf6
+  poke on failure), sysFaultOS -> decommit, sysNoHugePageOS no-op;
+  sysReserveAligned's partial-unmap trim keys at runtime via
+  cosmoHostIsWindows() (false stub in stubs_noncosmo.go) and takes the
+  windows release-and-retry loop on NT.
+- Threads: newosproc -> CreateThread(64KiB reservation stack) ->
+  tstart_cosmo_nt (win64 entry, CX=mp): pivots onto mp.g0's
+  Go-allocated stack, stores g0 to gs:0x28 (plain TEB store, no
+  settls), mirrors the clone-child wiring, mstart. TEB StackBase/
+  Limit left stale per design; thread handle leaked in wave 1;
+  m.procid stays 0 (minitProcid gated - gettid is a raw syscall and
+  signal sends are dropped anyway).
+- Signals inert: rt_sigaction/rtsigprocmask/sigaltstack asm return
+  0/no-op before their crash checks (darwin return-0 stub idiom);
+  raise/raiseproc/tgkill asm no-op; signalM and
+  setProcessCPUProfiler gated in Go; sbrk0 returns 0 (straggler
+  found by the boot-path grep: mallocinit queries the brk).
+- Boot guards: sysargs early-returns before the /proc/self/auxv and
+  mmap+mincore fallbacks; readRandom returns 0 (AT_RANDOM covers boot;
+  wave 2: ProcessPrng); getCPUCount -> GetSystemInfo
+  dwNumberOfProcessors (offset 32).
+- Syscall safety nets: cosmo.Syscall6 asm returns ENOSYS on NT before
+  any SYSCALL; src/syscall's rawSyscallNoError/rawVforkSyscall
+  crash-poke 0xf7/0xf8 (they cannot report errors); RawSyscall6
+  routes through a WindowsFns hook table (Write/Exit only, mirroring
+  SetDarwinFns; installed by the runtime at osArchInit) so fmt output
+  and os.Exit work, everything else ENOSYS.
+
+Validation (linux): make.bash; go clean -cache; std builds for
+cosmo/amd64 AND cosmo/arm64 (plus windows/amd64 + darwin/arm64
+runtime compiles - mem.go and stubs_noncosmo.go are GOOS-generic);
+vet clean for runtime/syscall/cosmo pkg on both cosmo arches; the
+whole Phase-A battery repeated green (runtimeprobe "ok all" exit 0,
+sync tests, ld tests, thin+fat fizzbuzz).

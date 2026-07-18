@@ -21,6 +21,11 @@ const (
 //
 //go:nosplit
 func sysAllocOS(n uintptr, vmaName string) unsafe.Pointer {
+	if iswindows() {
+		// Reserve+commit in one call, like upstream mem_windows.go.
+		// Returns nil on failure; the caller handles out-of-memory.
+		return ntVirtualAlloc(nil, n, _NT_MEM_RESERVE|_NT_MEM_COMMIT, _NT_PAGE_READWRITE)
+	}
 	p, err := mmap(nil, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 	if err != 0 {
 		if err == _EACCES {
@@ -46,6 +51,16 @@ func sysUnusedOS(v unsafe.Pointer, n uintptr) {
 		// *covered* by this range, so an unaligned madvise
 		// will release more memory than intended.
 		throw("unaligned sysUnused")
+	}
+
+	if iswindows() {
+		// NT: decommit (page-granular within a reservation is
+		// allowed; only the allocation base is 64KiB-granular).
+		// sysUsedOS recommits before reuse.
+		if ntVirtualFree(v, n, _NT_MEM_DECOMMIT) == 0 {
+			throw("runtime: failed to decommit pages")
+		}
+		return
 	}
 
 	advise := atomic.Load(&adviseUnused)
@@ -82,6 +97,16 @@ func sysUnusedOS(v unsafe.Pointer, n uintptr) {
 }
 
 func sysUsedOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// NT decommits in sysUnusedOS, so committing here is
+		// mandatory (upstream mem_windows.go semantics), not just
+		// a harddecommit debug mode.
+		p := ntVirtualAlloc(v, n, _NT_MEM_COMMIT, _NT_PAGE_READWRITE)
+		if uintptr(p) != uintptr(v) {
+			throw("runtime: cannot commit pages")
+		}
+		return
+	}
 	if debug.harddecommit > 0 {
 		p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
 		if err == _ENOMEM {
@@ -111,6 +136,10 @@ func sysNoHugePageOS(v unsafe.Pointer, n uintptr) {
 	if uintptr(v)&(physPageSize-1) != 0 {
 		throw("unaligned sysNoHugePageOS")
 	}
+	if iswindows() {
+		// No transparent huge pages on NT; nothing to do.
+		return
+	}
 	madvise(v, n, _MADV_NOHUGEPAGE)
 }
 
@@ -129,15 +158,46 @@ func sysHugePageCollapseOS(v unsafe.Pointer, n uintptr) {
 //
 //go:nosplit
 func sysFreeOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// VirtualFree(MEM_RELEASE) takes only the allocation base
+		// with size 0 and releases the whole allocation. All
+		// sysFreeOS callers free entire prior sysAlloc/sysReserve
+		// regions (sysReserveAligned takes the windows-style
+		// release-and-retry path on NT, so no partial frees reach
+		// here). Failure means the bookkeeping is broken: die
+		// loudly, mirroring munmap's crash idiom.
+		if ntVirtualFree(v, 0, _NT_MEM_RELEASE) == 0 {
+			*(*uintptr)(unsafe.Pointer(uintptr(0xf6))) = 0xf6
+		}
+		return
+	}
 	munmap(v, n)
 }
 
 func sysFaultOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// Decommit so any touch faults, like upstream
+		// mem_windows.go's sysFaultOS.
+		ntVirtualFree(v, n, _NT_MEM_DECOMMIT)
+		return
+	}
 	mprotect(v, n, _PROT_NONE)
 	madvise(v, n, _MADV_DONTNEED)
 }
 
 func sysReserveOS(v unsafe.Pointer, n uintptr, vmaName string) unsafe.Pointer {
+	if iswindows() {
+		// v is a hint (arenaHints) or nil. VirtualAlloc with an
+		// address fails if the range is unavailable; fall back to
+		// letting the kernel pick, matching the non-FIXED mmap
+		// hint semantics.
+		if v != nil {
+			if p := ntVirtualAlloc(v, n, _NT_MEM_RESERVE, _NT_PAGE_READWRITE); p != nil {
+				return p
+			}
+		}
+		return ntVirtualAlloc(nil, n, _NT_MEM_RESERVE, _NT_PAGE_READWRITE)
+	}
 	p, err := mmap(v, n, _PROT_NONE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 	if err != 0 {
 		return nil
@@ -146,6 +206,16 @@ func sysReserveOS(v unsafe.Pointer, n uintptr, vmaName string) unsafe.Pointer {
 }
 
 func sysMapOS(v unsafe.Pointer, n uintptr, vmaName string) {
+	if iswindows() {
+		// Commit the reservation in place. Failure here is fatal,
+		// like upstream mem_windows.go's sysMapOS.
+		p := ntVirtualAlloc(v, n, _NT_MEM_COMMIT, _NT_PAGE_READWRITE)
+		if uintptr(p) != uintptr(v) {
+			print("runtime: VirtualAlloc(", v, ", ", n, ") returned ", p, "\n")
+			throw("runtime: cannot map pages in arena address space")
+		}
+		return
+	}
 	p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
 	if err == _ENOMEM {
 		throw("runtime: out of memory")

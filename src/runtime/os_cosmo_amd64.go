@@ -33,10 +33,26 @@ func isdarwin() bool {
 	return __hostos == _HOSTXNU
 }
 
-// osArchInit is a no-op on amd64: the darwin path uses raw XNU syscall
-// numbers rather than an APE-loader Syslib, so there is nothing to
-// resolve at startup.
-func osArchInit() {}
+// iswindows returns true if running on Windows NT.
+//
+//go:nosplit
+func iswindows() bool {
+	return __hostos == _HOSTWINDOWS
+}
+
+// osArchInit resolves the NT function table on Windows hosts (from
+// the two loader-filled IAT slots; see os_cosmo_nt.go) and installs
+// the syscall package's WindowsFns hook. osinit calls osArchInit
+// BEFORE getCPUCount - required, since getCPUCount's NT leg calls
+// GetSystemInfo through the table resolved here. On Linux hosts this
+// remains a no-op; the darwin path uses raw XNU syscall numbers
+// rather than an APE-loader Syslib, so there is nothing to resolve.
+func osArchInit() {
+	if iswindows() {
+		ntResolve()
+		ntSetSyscallFns()
+	}
+}
 
 // cosmoDarwinNumCPU: no Syslib on amd64, so no sysctl access; report
 // "unknown" and let getCPUCount fall back to 1.
@@ -64,9 +80,17 @@ func pipe2(flags int32) (r, w int32, errno int32)
 
 // minitProcid: Linux hosts use the tid. (The macOS-Intel runtime
 // bring-up is pending; gettid's darwin branch is a raw-XNU stub.)
+// NT wave 1: gettid would issue a raw SYSCALL, and signal sends are
+// dropped on NT anyway, so procid stays 0 (GetCurrentThreadId is a
+// later wave).
 //
 //go:nosplit
-func minitProcid() uint64 { return uint64(gettid()) }
+func minitProcid() uint64 {
+	if iswindows() {
+		return 0
+	}
+	return uint64(gettid())
+}
 
 // darwinSignalM: macOS-Intel execution is not implemented; keep the
 // pre-dispatch behavior (tgkill's asm has its own darwin branch).
