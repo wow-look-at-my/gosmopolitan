@@ -28,11 +28,12 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 The resulting `.com` file runs natively on Linux and macOS. On Windows it
 currently loads as a parseable stub PE that exits 0; Windows execution is
 being reimplemented cosmo-natively (in progress). Debug with the sidecars
-(`gdb program.com.dbg`, or `add-symbol-file` against the running APE);
+(`gdb program.com.dbg`, or `symbol-file` against the running APE);
 runtime tracebacks and pprof need no sidecar. When distributing APEs,
 ship them zstd-compressed: the two arch payloads are highly redundant, so
-e.g. a 26.7 MB webserver APE is ~5.7 MB after `zstd -19 --long=27`
-(distribution-side only - there is no runtime self-extraction).
+e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
+`zstd -19 --long=27` (distribution-side only - there is no runtime
+self-extraction).
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 

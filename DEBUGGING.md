@@ -1101,11 +1101,18 @@ and are untouched.
 - `gdb program.com.dbg` - the amd64 sidecar is a complete, runnable
   (on Linux) ELF with full symtab and DWARF; debugging it IS debugging
   the same code the APE runs. Same for `program.com.aarch64.elf` on
-  ARM64 hosts.
-- Against the running/assimilated APE itself:
-  `gdb program.com -ex 'add-symbol-file program.com.dbg'` (the sidecar
-  is ET_EXEC at the payload's own vaddrs, so no address argument is
-  needed for the common case).
+  ARM64 hosts. First run `set osabi GNU/Linux` inside gdb: the APE
+  spec mandates ELFOSABI_FREEBSD and stock Ubuntu gdb has no FreeBSD
+  handler, so without the override `run` dies in gdb's unwinder
+  ("Architecture rejected target-supplied description" then
+  frame_unwind internal-error; verified gdb 15.1). With it,
+  break/run/bt with source lines all work (verified).
+- Against the shipped binary itself: run a copy once so it
+  self-assimilates to ELF, then
+  `gdb assim.com -ex 'set osabi GNU/Linux' -ex 'symbol-file program.com.dbg'`
+  - the sidecar is ET_EXEC at the payload's own vaddrs, so symbols
+  land without any address argument (verified: breakpoints hit and
+  backtraces resolve inside the running stripped binary).
 - `go tool nm` / `objdump` / `addr2line` / delve / `go version`: point
   them at the sidecar, not the APE. (`go version` has never been able
   to read a fat APE - the MZ magic makes it sniff as a PE with no Go
@@ -1122,11 +1129,14 @@ crash time, so the chosen suffixes keep cosmo-ecosystem tooling
 conventions working against Go-built APEs.
 
 **Size** (measured, this change): fizzbuzz.com 5084226 -> 3420736
-bytes (-32.7%), runtimeprobe.com 7305033 -> 4971712 (-31.9%) versus
-the unstripped fat builds, whose sizes GOCOSMOSTRIP=0 still reproduces
-exactly. The sidecars carry the stripped-off bytes; nothing is lost
-(the .dbg sidecar is byte-identical to the payload a GOCOSMOSTRIP=0
-build embeds - verified).
+bytes (-32.7%), runtimeprobe.com 7305033 -> 4971712 (-31.9%), and a
+stdlib-heavy webserver (net/http, crypto/tls, image/png, time/tzdata)
+17286764 -> 12269216 (-29.0%; 3.6 MB on the wire after
+`zstd -19 --long=27`) versus the unstripped fat builds, whose sizes
+GOCOSMOSTRIP=0 still reproduces exactly. The sidecars carry the
+stripped-off bytes; nothing is lost (the .dbg sidecar is
+byte-identical to the payload a GOCOSMOSTRIP=0 build embeds -
+verified).
 
 **Tests**: cmd/link apefat_test.go (sidecar byte-identity incl. the
 thin-APE extraction round-trip, symtab parseability, stripped-span

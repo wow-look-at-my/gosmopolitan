@@ -115,11 +115,12 @@ loaded segment); the sidecars are for gdb/delve and offline tools - see
 DEBUGGING.md "debug sidecars" (2026-07-18).
 
 Shipping APEs: distribute release binaries zstd-compressed - the two arch
-payloads make APE images highly redundant, so the wire cost collapses (a
-stripped two-image webserver measured 26.7 MB on disk but ~5.7 MB after
-`zstd -19 --long=27`). Distribution-side only, by design: there is no
-runtime self-extraction mechanism. buildhost can repackage uploaded
-artifacts on the fly via its `fmt=` query parameter.
+payloads make APE images highly redundant, so the wire cost collapses.
+Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png,
+time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and
+3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only,
+by design: there is no runtime self-extraction mechanism. buildhost can
+repackage uploaded artifacts on the fly via its `fmt=` query parameter.
 
 The resulting `.com` file runs on Linux and macOS. The cosmo amd64 image
 boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots on
