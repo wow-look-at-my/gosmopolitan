@@ -9,6 +9,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -279,11 +280,12 @@ var urandom_dev = []byte("/dev/urandom\x00")
 
 func readRandom(r []byte) int {
 	if iswindows() {
-		// Wave 1: boot seeds come from the fabricated AT_RANDOM
-		// (startupRand), so randinit never needs this; returning 0
-		// selects the readTimeRandom fallback if it is ever hit.
-		// Wave 2: ProcessPrng.
-		return 0
+		// ProcessPrng (or RtlGenRandom), resolved at osArchInit;
+		// returns 0 when neither is available, selecting the
+		// readTimeRandom fallback. (Boot hash seeds additionally
+		// come from startupRand, which ntBootInit upgrades to
+		// ProcessPrng output before randinit runs.)
+		return ntReadRandom(r)
 	}
 	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
 	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))
@@ -299,6 +301,20 @@ func goenvs() {
 		return
 	}
 	goenvs_unix()
+}
+
+// cosmoMstartm0 is the fork's mstartm0 hook (proc.go): on NT hosts it
+// parks the console-control relay M and registers the ctrl handler
+// (os_cosmo_nt_preempt.go). It must run this late - not in goenvs,
+// where upstream windows registers its handler - because the relay
+// needs newm, and allocm borrows the caller's P for its allocations:
+// m0 only acquires p0 in procresize, at the END of schedinit.
+// mstartm0 is the first m0 code after schedinit (its newextram
+// precedent allocates the same way).
+func cosmoMstartm0() {
+	if iswindows() {
+		ntInitConsoleCtrl()
+	}
 }
 
 // Called to do synchronous initialization of Go code built with
@@ -324,17 +340,29 @@ func gettid() uint32
 // Called on the new thread, cannot allocate memory.
 func minit() {
 	minitSignals()
+	if iswindows() {
+		// Duplicate this thread's handle into m.thread so
+		// ntPreemptM (async preemption) can address it
+		// (os_cosmo_nt_preempt.go; arm64 stub is unreachable).
+		ntMinitThread()
+	}
 	// minitProcid is per-arch: on macOS hosts (arm64) procid must hold
 	// the FULL pthread_t for pthread_kill - gettid's uint32 return
 	// would truncate the pointer; on Linux hosts it is the tid.
 	getg().m.procid = minitProcid()
 }
 
-// Called from dropm to undo the effect of an minit.
+// Called from dropm and mexit to undo the effect of an minit.
 //
 //go:nosplit
 func unminit() {
 	unminitSignals()
+	if iswindows() {
+		// Close m.thread under threadLock: from here on ntPreemptM
+		// treats this M as unpreemptible instead of suspending a
+		// dying thread.
+		ntUnminitThread()
+	}
 	getg().m.procid = 0
 }
 
@@ -448,7 +476,12 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
 	var ret int32
-	if isdarwin() && GOARCH == "arm64" {
+	if iswindows() {
+		// NT: there is no kernel-side sigaction; the runtime records
+		// handler state itself and self-directed delivery consults
+		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
+		ret = ntSigaction(sig, new, old)
+	} else if isdarwin() && GOARCH == "arm64" {
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
@@ -483,9 +516,18 @@ func tgkill(tgid, tid, sig int)
 // thread via pthread_kill with the full pthread_t from m.procid.
 func signalM(mp *m, sig int) {
 	if iswindows() {
-		// NT wave 1: no signal machinery; drop the send (async
-		// preemption and STW fall back to the cooperative
-		// stack-guard mechanism).
+		// NT (wave 2 chunk D2): there is no cross-thread signal
+		// delivery on NT; the only signal the runtime ever sends
+		// another M is the scheduler's preemption request (grep:
+		// preemptM in signal_unix.go is signalM's sole cosmo caller),
+		// which the SuspendThread machinery services directly.
+		// ntPreemptM acks preemptGen AND clears mp.signalPending on
+		// every path - the unix preemptM wrapper's CAS gate stays
+		// open. Anything else would be a new caller: drop it, as
+		// wave 1 did.
+		if sig == sigPreempt {
+			ntPreemptM(mp)
+		}
 		return
 	}
 	if isdarwin() {
@@ -493,6 +535,45 @@ func signalM(mp *m, sig int) {
 		return
 	}
 	tgkill(getpid(), int(mp.procid), sig)
+}
+
+// osPreemptExtEnter is called before entering external code that may
+// call ExitProcess (NT hosts; a no-op elsewhere - preemption is
+// signal-based on Linux/XNU and needs no bracket).
+//
+// This must be nosplit because it may be called from a syscall with
+// untyped stack slots, so the stack must not be grown or scanned
+// (upstream os_windows.go).
+//
+//go:nosplit
+func osPreemptExtEnter(mp *m) {
+	if !iswindows() {
+		return
+	}
+	for !atomic.Cas(&mp.preemptExtLock, 0, 1) {
+		// An asynchronous preemption is in progress. It's not safe
+		// to enter external code because it may call ExitProcess and
+		// deadlock with SuspendThread. Ideally we would do the
+		// preemption ourselves, but can't since there may be untyped
+		// syscall arguments on the stack. Instead, just wait and
+		// encourage the SuspendThread APC to run. The preemption
+		// should be done shortly.
+		osyield()
+	}
+	// Asynchronous preemption is now blocked.
+}
+
+// osPreemptExtExit is called after returning from external code that
+// may call ExitProcess.
+//
+// See osPreemptExtEnter for why this is nosplit.
+//
+//go:nosplit
+func osPreemptExtExit(mp *m) {
+	if !iswindows() {
+		return
+	}
+	atomic.Store(&mp.preemptExtLock, 0)
 }
 
 //go:nosplit

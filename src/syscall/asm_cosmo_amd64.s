@@ -50,8 +50,13 @@ vfork_nt_crash:
 	MOVL	$0xf8, 0xf8	// crash: rawVforkSyscall reached on NT
 	RET
 
-// func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
-TEXT ·rawSyscallNoError(SB),NOSPLIT,$0-48
+// func rawSyscallNoErrorAsm(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
+//
+// The Go wrapper rawSyscallNoError (syscall_cosmo.go) routes NT hosts
+// through the emulation table before reaching this entry, so the
+// CHECK_WINDOWS poke below is belt-and-suspenders: it can only fire if
+// the wrapper is bypassed.
+TEXT ·rawSyscallNoErrorAsm(SB),NOSPLIT,$0-48
 	CHECK_WINDOWS(rawnoerr_nt_crash)
 	MOVQ	a1+8(FP), DI
 	MOVQ	a2+16(FP), SI

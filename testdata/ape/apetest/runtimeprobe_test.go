@@ -68,10 +68,11 @@ func TestRuntimeProbe(t *testing.T) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// The probe needs far more of the NT personality than wave 1
-		// provides (sockets, signals, os/exec, file I/O, ...); its
-		// windows execution returns with a later wave.
-		t.Skip("cosmo NT wave 1 boots print-and-exit programs only; probe execution is a later wave")
+		// The cosmo NT personality boots the fat APE natively through
+		// its PE header; CreateProcess needs no shell. NT bring-up
+		// wave 2 grew the runtime surface the probe needs (file I/O,
+		// sockets, signals, os/exec, async preemption).
+		cmd = exec.CommandContext(ctx, bin, mark)
 	default:
 		// Unix: invoke through a shell for the APE bootstrap.
 		cmd = exec.CommandContext(ctx, "/bin/sh", bin, mark)

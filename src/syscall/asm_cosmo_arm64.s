@@ -83,8 +83,12 @@ vfork_darwin_enosys:
 	MOVD	R0, err+40(FP)
 	RET
 
-// func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
-TEXT ·rawSyscallNoError(SB),NOSPLIT,$0-48
+// func rawSyscallNoErrorAsm(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
+//
+// The Go wrapper rawSyscallNoError (syscall_cosmo.go) handles the NT
+// route (which cannot occur on arm64 - iswindows is constant false)
+// and otherwise lands here.
+TEXT ·rawSyscallNoErrorAsm(SB),NOSPLIT,$0-48
 	CHECK_DARWIN(rawnoerr_darwin)
 	// Linux path: direct syscall
 	MOVD	trap+0(FP), R8	// syscall number

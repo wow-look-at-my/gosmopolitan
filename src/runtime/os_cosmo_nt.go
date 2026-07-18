@@ -33,6 +33,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -55,7 +56,7 @@ var (
 	ntVirtualFreeFn            uintptr
 	ntWriteFileFn              uintptr
 	ntGetStdHandleFn           uintptr
-	ntExitProcessFn            uintptr // asm: runtime·exit
+	ntExitProcessFn            uintptr // ntExit (Go) + ntExitEncoded (asm)
 	ntExitThreadFn             uintptr // asm: runtime·exitThread
 	ntCreateThreadFn           uintptr
 	ntSleepFn                  uintptr // asm: usleep, osyield
@@ -65,7 +66,66 @@ var (
 	ntWaitOnAddressFn          uintptr
 	ntWakeByAddressSingleFn    uintptr
 
-	// Cached std handles (GetStdHandle(-11)/(-12)).
+	// Wave 2 (file I/O, identity, console; all kernel32, all present
+	// since forever - resolved with the same crash-poke discipline).
+	ntGetLastErrorFn                 uintptr
+	ntCloseHandleFn                  uintptr
+	ntCreateFileWFn                  uintptr
+	ntReadFileFn                     uintptr
+	ntSetFilePointerExFn             uintptr
+	ntSetEndOfFileFn                 uintptr
+	ntFlushFileBuffersFn             uintptr
+	ntGetFileInformationByHandleFn   uintptr
+	ntGetFileInformationByHandleExFn uintptr
+	ntDeleteFileWFn                  uintptr
+	ntRemoveDirectoryWFn             uintptr
+	ntMoveFileExWFn                  uintptr
+	ntCreateDirectoryWFn             uintptr
+	ntGetFileAttributesWFn           uintptr
+	ntGetCurrentDirectoryWFn         uintptr
+	ntSetCurrentDirectoryWFn         uintptr
+	ntGetTempPathWFn                 uintptr
+	ntGetModuleFileNameWFn           uintptr
+	ntGetCurrentProcessIdFn          uintptr
+	ntGetCurrentThreadIdFn           uintptr
+	ntGetFileTypeFn                  uintptr
+	ntGetConsoleModeFn               uintptr
+	ntSetConsoleModeFn               uintptr
+	ntSetConsoleOutputCPFn           uintptr
+	ntSetConsoleCPFn                 uintptr
+
+	// Chunk B (os/exec; all kernel32, present since forever).
+	ntCreatePipeFn          uintptr
+	ntDuplicateHandleFn     uintptr
+	ntCreateProcessWFn      uintptr
+	ntWaitForSingleObjectFn uintptr
+	ntGetExitCodeProcessFn  uintptr
+	ntGetProcessTimesFn     uintptr
+
+	// Chunk D (signals/VEH/preemption; all kernel32, present since
+	// forever except the optional WER pair).
+	ntAddVectoredExceptionHandlerFn uintptr
+	ntAddVectoredContinueHandlerFn  uintptr
+	ntSetErrorModeFn                uintptr
+	ntGetErrorModeFn                uintptr
+	ntSuspendThreadFn               uintptr
+	ntResumeThreadFn                uintptr
+	ntGetThreadContextFn            uintptr
+	ntSetThreadContextFn            uintptr
+	ntSetConsoleCtrlHandlerFn       uintptr
+	ntCreateEventWFn                uintptr
+	ntSetEventFn                    uintptr
+	ntTerminateProcessFn            uintptr
+	ntWerGetFlagsFn                 uintptr // optional (missing on old wine)
+	ntWerSetFlagsFn                 uintptr // optional
+
+	// Optional non-kernel32 imports: 0 when unavailable, and every
+	// user degrades gracefully (the cosmo graceful-stub philosophy).
+	ntQueryInformationProcessFn uintptr // ntdll: getppid
+	ntProcessPrngFn             uintptr // bcryptprimitives ProcessPrng, or advapi32 SystemFunction036 (same signature)
+
+	// Cached std handles (GetStdHandle(-10)/(-11)/(-12)).
+	ntStdin  uintptr
 	ntStdout uintptr
 	ntStderr uintptr
 )
@@ -90,6 +150,59 @@ var (
 	ntNameGetEnvStringsW = []byte("GetEnvironmentStringsW\x00")
 	ntNameWaitOnAddress  = []byte("WaitOnAddress\x00")
 	ntNameWakeByAddrSing = []byte("WakeByAddressSingle\x00")
+
+	// Wave 2.
+	ntNameGetLastError      = []byte("GetLastError\x00")
+	ntNameCloseHandle       = []byte("CloseHandle\x00")
+	ntNameCreateFileW       = []byte("CreateFileW\x00")
+	ntNameReadFile          = []byte("ReadFile\x00")
+	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
+	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
+	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameGetFileInfoByH    = []byte("GetFileInformationByHandle\x00")
+	ntNameGetFileInfoByHEx  = []byte("GetFileInformationByHandleEx\x00")
+	ntNameDeleteFileW       = []byte("DeleteFileW\x00")
+	ntNameRemoveDirectoryW  = []byte("RemoveDirectoryW\x00")
+	ntNameMoveFileExW       = []byte("MoveFileExW\x00")
+	ntNameCreateDirectoryW  = []byte("CreateDirectoryW\x00")
+	ntNameGetFileAttrsW     = []byte("GetFileAttributesW\x00")
+	ntNameGetCurrentDirW    = []byte("GetCurrentDirectoryW\x00")
+	ntNameSetCurrentDirW    = []byte("SetCurrentDirectoryW\x00")
+	ntNameGetTempPathW      = []byte("GetTempPathW\x00")
+	ntNameGetModuleFileW    = []byte("GetModuleFileNameW\x00")
+	ntNameGetCurrentProcId  = []byte("GetCurrentProcessId\x00")
+	ntNameGetCurrentThrId   = []byte("GetCurrentThreadId\x00")
+	ntNameGetFileType       = []byte("GetFileType\x00")
+	ntNameGetConsoleMode    = []byte("GetConsoleMode\x00")
+	ntNameSetConsoleMode    = []byte("SetConsoleMode\x00")
+	ntNameSetConsoleOutCP   = []byte("SetConsoleOutputCP\x00")
+	ntNameSetConsoleCP      = []byte("SetConsoleCP\x00")
+	ntNameCreatePipe        = []byte("CreatePipe\x00")
+	ntNameDuplicateHandle   = []byte("DuplicateHandle\x00")
+	ntNameCreateProcessW    = []byte("CreateProcessW\x00")
+	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
+	ntNameGetExitCodeProc   = []byte("GetExitCodeProcess\x00")
+	ntNameGetProcessTimes   = []byte("GetProcessTimes\x00")
+	ntNameAddVEH            = []byte("AddVectoredExceptionHandler\x00")
+	ntNameAddVCH            = []byte("AddVectoredContinueHandler\x00")
+	ntNameSetErrorMode      = []byte("SetErrorMode\x00")
+	ntNameGetErrorMode      = []byte("GetErrorMode\x00")
+	ntNameSuspendThread     = []byte("SuspendThread\x00")
+	ntNameResumeThread      = []byte("ResumeThread\x00")
+	ntNameGetThreadContext  = []byte("GetThreadContext\x00")
+	ntNameSetThreadContext  = []byte("SetThreadContext\x00")
+	ntNameSetConsoleCtrlH   = []byte("SetConsoleCtrlHandler\x00")
+	ntNameCreateEventW      = []byte("CreateEventW\x00")
+	ntNameSetEvent          = []byte("SetEvent\x00")
+	ntNameTerminateProcess  = []byte("TerminateProcess\x00")
+	ntNameWerGetFlags       = []byte("WerGetFlags\x00")
+	ntNameWerSetFlags       = []byte("WerSetFlags\x00")
+	ntNameNtdll             = []byte("ntdll.dll\x00")
+	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
+	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
+	ntNameProcessPrng       = []byte("ProcessPrng\x00")
+	ntNameAdvapi32          = []byte("advapi32.dll\x00")
+	ntNameSystemFunction036 = []byte("SystemFunction036\x00") // RtlGenRandom
 )
 
 // Win32 constants used by wave 1 that only amd64 code references (the
@@ -100,12 +213,19 @@ const (
 
 	_NT_INFINITE = 0xFFFFFFFF
 
+	_NT_STD_INPUT_HANDLE  = 0xFFFFFFF6 // (DWORD)-10, zero-extended
 	_NT_STD_OUTPUT_HANDLE = 0xFFFFFFF5 // (DWORD)-11, zero-extended
 	_NT_STD_ERROR_HANDLE  = 0xFFFFFFF4 // (DWORD)-12, zero-extended
 )
 
 // ntcallArgs is the argument block ntcall packs for the ntcall6
 // trampoline. Field offsets are exported to assembly via go_asm.h.
+// Kept at six arguments on purpose: ntcall sits inside the tightest
+// nosplit chain in the port (cgoSigtramp -> ... -> write1 -> ntwrite1
+// -> ntcall -> asmcgocall), which cannot afford a bigger frame. The
+// syscall-emulation layer's wider calls (CreateFileW, CreateProcessW)
+// use the separate ntcallArgs10/ntcall10 pair, which never appears in
+// that chain.
 type ntcallArgs struct {
 	fn  uintptr
 	a1  uintptr
@@ -117,8 +237,28 @@ type ntcallArgs struct {
 	ret uintptr
 }
 
+// ntcallArgs10 is the ten-argument block for the ntcall10 trampoline
+// (born as ntcallArgs8 in chunk A for 7-argument CreateFileW; widened
+// - per the chunk-A rule that this parallel block is the one that
+// grows - to ten for CreateProcessW in chunk B).
+type ntcallArgs10 struct {
+	fn  uintptr
+	a1  uintptr
+	a2  uintptr
+	a3  uintptr
+	a4  uintptr
+	a5  uintptr
+	a6  uintptr
+	a7  uintptr
+	a8  uintptr
+	a9  uintptr
+	a10 uintptr
+	ret uintptr
+}
+
 // Implemented in sys_cosmo_nt_amd64.s.
 func ntcall6()
+func ntcall10()
 func tstart_cosmo_nt()
 func ntwrite1tramp(fd uintptr, p unsafe.Pointer, n int32) int32
 
@@ -134,6 +274,90 @@ func ntcall(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr {
 	args := ntcallArgs{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6}
 	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall6)), unsafe.Pointer(&args))
 	return args.ret
+}
+
+// ntcall7 is ntcall for seven-argument functions (CreateFileW), via
+// the wider ntcall10 trampoline.
+//
+//go:nosplit
+func ntcall7(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
+	args := ntcallArgs10{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7}
+	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall10)), unsafe.Pointer(&args))
+	return args.ret
+}
+
+// ntcall10x is ntcall for ten-argument functions (CreateProcessW).
+//
+//go:nosplit
+func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
+	args := ntcallArgs10{fn: fn, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5,
+		a6: a6, a7: a7, a8: a8, a9: a9, a10: a10}
+	asmcgocall(unsafe.Pointer(abi.FuncPCABI0(ntcall10)), unsafe.Pointer(&args))
+	return args.ret
+}
+
+// ntcallE ("with error") performs ntcall7 and returns the thread's
+// GetLastError alongside the result. The error value is captured by
+// the ntcall10 trampoline itself, immediately after the call target
+// returns, into this M's mOS.ntLastError (chunk D2) - so it is exact
+// by construction, with no window in which a suspension or another
+// win64 call on this thread could lose it. The g.m read below stays
+// on the calling thread: this is nosplit runtime code with no
+// preemption point between the trampoline's store and the load.
+// Callers pass pointers as uintptr(unsafe.Pointer(x)) directly in the
+// argument list; nosplit (plus liveness at the call site or an
+// explicit KeepAlive) keeps the pointee valid and unmoved for the
+// duration.
+//
+//go:nosplit
+func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
+	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
+	lastErr = uintptr(getg().m.ntLastError)
+	return
+}
+
+// ntcallSE ("syscall-state, with error") is ntcallE bracketed by
+// entersyscall/exitsyscall, for Win32 calls that can block
+// indefinitely (ReadFile/WriteFile on consoles and pipes,
+// FlushFileBuffers): the P can be retaken by sysmon while the thread
+// is parked in the kernel, exactly like a real blocking syscall.
+// Must only be used from user-goroutine context - the
+// syscall-emulation layer - never from boot, g0, or runtime-internal
+// paths. The g stays bound to this M between entersyscall and
+// exitsyscall, so the trampoline-captured error is this thread's.
+//
+// The osPreemptExtEnter/Exit bracket (chunk D2) marks the foreign
+// call for ntPreemptM exactly like upstream's cgocall model: while
+// the thread is inside (or possibly blocked in) win64 code, an async
+// preemption attempt fails fast instead of suspending a thread that
+// may hold the loader lock or be about to ExitProcess. The bracket
+// sits strictly inside the entersyscall window so the M can never
+// run other goroutines while holding preemptExtLock.
+//
+//go:nosplit
+func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
+	entersyscall()
+	osPreemptExtEnter(getg().m)
+	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
+	lastErr = uintptr(getg().m.ntLastError)
+	osPreemptExtExit(getg().m)
+	exitsyscall()
+	return
+}
+
+// ntcallSE10 is ntcallSE for ten-argument functions (CreateProcessW,
+// which can block on image load). Same contract as ntcallSE:
+// user-goroutine context only.
+//
+//go:nosplit
+func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
+	entersyscall()
+	osPreemptExtEnter(getg().m)
+	r = ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
+	lastErr = uintptr(getg().m.ntLastError)
+	osPreemptExtExit(getg().m)
+	exitsyscall()
+	return
 }
 
 //go:nosplit
@@ -171,6 +395,58 @@ func ntResolve() {
 	ntGetCommandLineWFn = k32sym(&ntNameGetCommandLine[0])
 	ntGetEnvironmentStringsWFn = k32sym(&ntNameGetEnvStringsW[0])
 
+	// Wave 2: file I/O, identity, console (all kernel32).
+	ntGetLastErrorFn = k32sym(&ntNameGetLastError[0])
+	ntCloseHandleFn = k32sym(&ntNameCloseHandle[0])
+	ntCreateFileWFn = k32sym(&ntNameCreateFileW[0])
+	ntReadFileFn = k32sym(&ntNameReadFile[0])
+	ntSetFilePointerExFn = k32sym(&ntNameSetFilePointerEx[0])
+	ntSetEndOfFileFn = k32sym(&ntNameSetEndOfFile[0])
+	ntFlushFileBuffersFn = k32sym(&ntNameFlushFileBuffers[0])
+	ntGetFileInformationByHandleFn = k32sym(&ntNameGetFileInfoByH[0])
+	ntGetFileInformationByHandleExFn = k32sym(&ntNameGetFileInfoByHEx[0])
+	ntDeleteFileWFn = k32sym(&ntNameDeleteFileW[0])
+	ntRemoveDirectoryWFn = k32sym(&ntNameRemoveDirectoryW[0])
+	ntMoveFileExWFn = k32sym(&ntNameMoveFileExW[0])
+	ntCreateDirectoryWFn = k32sym(&ntNameCreateDirectoryW[0])
+	ntGetFileAttributesWFn = k32sym(&ntNameGetFileAttrsW[0])
+	ntGetCurrentDirectoryWFn = k32sym(&ntNameGetCurrentDirW[0])
+	ntSetCurrentDirectoryWFn = k32sym(&ntNameSetCurrentDirW[0])
+	ntGetTempPathWFn = k32sym(&ntNameGetTempPathW[0])
+	ntGetModuleFileNameWFn = k32sym(&ntNameGetModuleFileW[0])
+	ntGetCurrentProcessIdFn = k32sym(&ntNameGetCurrentProcId[0])
+	ntGetCurrentThreadIdFn = k32sym(&ntNameGetCurrentThrId[0])
+	ntGetFileTypeFn = k32sym(&ntNameGetFileType[0])
+	ntGetConsoleModeFn = k32sym(&ntNameGetConsoleMode[0])
+	ntSetConsoleModeFn = k32sym(&ntNameSetConsoleMode[0])
+	ntSetConsoleOutputCPFn = k32sym(&ntNameSetConsoleOutCP[0])
+	ntSetConsoleCPFn = k32sym(&ntNameSetConsoleCP[0])
+
+	// Chunk B: os/exec (all kernel32).
+	ntCreatePipeFn = k32sym(&ntNameCreatePipe[0])
+	ntDuplicateHandleFn = k32sym(&ntNameDuplicateHandle[0])
+	ntCreateProcessWFn = k32sym(&ntNameCreateProcessW[0])
+	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
+	ntGetExitCodeProcessFn = k32sym(&ntNameGetExitCodeProc[0])
+	ntGetProcessTimesFn = k32sym(&ntNameGetProcessTimes[0])
+
+	// Chunk D: signals/VEH/preemption (all kernel32; the WER pair is
+	// optional - wine lacks it - and preventErrorDialogs degrades).
+	ntAddVectoredExceptionHandlerFn = k32sym(&ntNameAddVEH[0])
+	ntAddVectoredContinueHandlerFn = k32sym(&ntNameAddVCH[0])
+	ntSetErrorModeFn = k32sym(&ntNameSetErrorMode[0])
+	ntGetErrorModeFn = k32sym(&ntNameGetErrorMode[0])
+	ntSuspendThreadFn = k32sym(&ntNameSuspendThread[0])
+	ntResumeThreadFn = k32sym(&ntNameResumeThread[0])
+	ntGetThreadContextFn = k32sym(&ntNameGetThreadContext[0])
+	ntSetThreadContextFn = k32sym(&ntNameSetThreadContext[0])
+	ntSetConsoleCtrlHandlerFn = k32sym(&ntNameSetConsoleCtrlH[0])
+	ntCreateEventWFn = k32sym(&ntNameCreateEventW[0])
+	ntSetEventFn = k32sym(&ntNameSetEvent[0])
+	ntTerminateProcessFn = k32sym(&ntNameTerminateProcess[0])
+	ntWerGetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerGetFlags[0])), 0, 0, 0, 0)
+	ntWerSetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerSetFlags[0])), 0, 0, 0, 0)
+
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).
 	synch := ntcall(lla, uintptr(unsafe.Pointer(&ntNameSynchDLL[0])), 0, 0, 0, 0, 0)
@@ -183,17 +459,39 @@ func ntResolve() {
 		ntCrash(0xf5)
 	}
 
+	// Optional imports, resolved gracefully (a 0 pointer degrades to
+	// ENOSYS or a fallback at the use site, never a boot crash):
+	// getppid needs ntdll's NtQueryInformationProcess; entropy wants
+	// bcryptprimitives' ProcessPrng (what upstream Go uses on Windows
+	// since 1.22), falling back to advapi32's SystemFunction036
+	// (RtlGenRandom), which has the same (buf, len) signature.
+	if ntdll := ntcall(lla, uintptr(unsafe.Pointer(&ntNameNtdll[0])), 0, 0, 0, 0, 0); ntdll != 0 {
+		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
+	}
+	if bp := ntcall(lla, uintptr(unsafe.Pointer(&ntNameBcryptPrimitives[0])), 0, 0, 0, 0, 0); bp != 0 {
+		ntProcessPrngFn = ntcall(gpa, bp, uintptr(unsafe.Pointer(&ntNameProcessPrng[0])), 0, 0, 0, 0)
+	}
+	if ntProcessPrngFn == 0 {
+		if adv := ntcall(lla, uintptr(unsafe.Pointer(&ntNameAdvapi32[0])), 0, 0, 0, 0, 0); adv != 0 {
+			ntProcessPrngFn = ntcall(gpa, adv, uintptr(unsafe.Pointer(&ntNameSystemFunction036[0])), 0, 0, 0, 0)
+		}
+	}
+
+	ntStdin = ntcall(ntGetStdHandleFn, _NT_STD_INPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
 }
 
 // ntwrite1 is the NT leg of runtime·write1, reached through
-// ntwrite1tramp. fds 1 and 2 map straight to the cached std handles
-// (no fd table in wave 1); anything else is EBADF. Returns the byte
-// count or a negative errno, matching the write1 convention. write1
-// runs during panics, but always with a valid g once boot completes,
-// so routing through ntcall/asmcgocall is safe (pre-boot printing is
-// out of scope for wave 1).
+// ntwrite1tramp. fds 1 and 2 map straight to the cached std handles -
+// deliberately NOT through the wave-2 fd table: write1 is the panic
+// and runtime-print path, and the runtime only ever writes to 1/2, so
+// the fewer moving parts the better. (User-level syscall.Write goes
+// through the table, os_cosmo_nt_sys.go.) Anything else is EBADF.
+// Returns the byte count or a negative errno, matching the write1
+// convention. write1 runs during panics, but always with a valid g
+// once boot completes, so routing through ntcall/asmcgocall is safe
+// (pre-boot printing is out of scope).
 //
 //go:nosplit
 func ntwrite1(fd uintptr, p unsafe.Pointer, n int32) int32 {
@@ -244,9 +542,10 @@ func ntFutexwakeup(addr *uint32) {
 // (64KiB, reservation-only) NT stack; tstart_cosmo_nt pivots onto
 // mp.g0's Go-allocated stack, so the Linux bookkeeping (mexit frees
 // the g0 stack) is preserved and the NT stack dies with the thread.
-// Same design as real cosmo's CloneWindows. The returned thread
-// handle is leaked in wave 1 (cosmo stores it in the TIB; revisit
-// with the thread-teardown wave).
+// Same design as real cosmo's CloneWindows. The CreateThread handle
+// is closed right away (chunk D2 - wave 1 leaked it); the handle
+// ntPreemptM needs is a fresh DuplicateHandle the thread makes for
+// itself in minit (ntMinitThread), upstream newosproc's exact split.
 //
 // May run with m.p==nil, so write barriers are not allowed.
 //
@@ -260,9 +559,19 @@ func ntNewosproc(mp *m) {
 		_NT_STACK_SIZE_PARAM_IS_A_RESERVATION, // dwCreationFlags
 		0)                                     // lpThreadId
 	if ret == 0 {
+		if atomic.Load(&ntExiting) != 0 {
+			// CreateThread may fail if called concurrently with
+			// ExitProcess (ntExit holds ntSuspendLock and is tearing
+			// the process down). Freeze this thread and let the
+			// process exit - upstream newosproc, issue #18253.
+			lock(&ntDeadlock)
+			lock(&ntDeadlock)
+		}
 		print("runtime: failed to create new OS thread (have ", mcount(), " already)\n")
 		throw("newosproc")
 	}
+	// Close the handle to avoid leaking the thread object if it exits.
+	ntcall(ntCloseHandleFn, ret, 0, 0, 0, 0, 0)
 }
 
 // ntSystemInfo is the win64 SYSTEM_INFO layout (48 bytes).
@@ -301,31 +610,14 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	return ntcall(ntVirtualFreeFn, uintptr(v), n, freeType, 0, 0, 0)
 }
 
-// ntSyscallWrite and ntSyscallExit back the wave-1 WindowsFns hook
-// table in internal/runtime/syscall/cosmo, covering user-level
-// syscall.Write (fmt output) and syscall exit paths. Both are called
-// through (*WindowsFns).Syscall6 between entersyscall/exitsyscall,
-// where a stack split is fatal - the entire chain must be nosplit
-// (see the note on Syscall6 in syscall_cosmo_nt.go).
-
-//go:nosplit
-func ntSyscallWrite(fd int, p unsafe.Pointer, n int32) int32 {
-	return ntwrite1(uintptr(fd), p, n)
-}
-
-//go:nosplit
-func ntSyscallExit(code int32) {
-	exit(code)
-}
-
 // ntSetSyscallFns installs the syscall-package hook table. Called from
 // osArchInit on NT hosts, before any user code runs. The composite
 // literal does not escape (SetWindowsFns copies it), so this is safe
-// pre-mallocinit.
+// pre-mallocinit. The dispatcher lives in os_cosmo_nt_sys.go.
 func ntSetSyscallFns() {
 	cosmo.SetWindowsFns(&cosmo.WindowsFns{
-		Write: ntSyscallWrite,
-		Exit:  ntSyscallExit,
+		Emulate: ntSyscallEmulate,
+		Spawn:   ntSpawn,
 	})
 }
 

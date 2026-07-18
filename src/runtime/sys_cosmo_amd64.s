@@ -116,13 +116,14 @@ exit_darwin:
 	SYSCALL
 	RET
 exit_nt:
-	// ExitProcess(code). Direct win64 call: the process is dying, no
-	// need for the ntcall6/asmcgocall machinery.
-	MOVQ	runtime·ntExitProcessFn(SB), AX
-	MOVL	code+0(FP), CX
-	SUBQ	$40, SP
-	CALL	AX
-	INT	$3	// not reached
+	// Chunk D2: exit must take ntSuspendLock before ExitProcess so a
+	// SuspendThread from ntPreemptM can never be mid-flight while the
+	// process dies (the suspender-killed-mid-suspend wedge, upstream
+	// os_windows.go exit()). Tail JMP to the Go-side ntExit
+	// (os_cosmo_nt_preempt.go): same signature, FP slot carries over
+	// (the ntwrite1tramp discipline); ntExit performs the ExitProcess
+	// through ntcall, which realigns per the win64 rules.
+	JMP	runtime·ntExit(SB)
 
 // func exitThread(wait *atomic.Uint32)
 TEXT runtime·exitThread(SB),NOSPLIT,$0-8
@@ -147,9 +148,11 @@ exitThread_darwin:
 exitThread_nt:
 	// ExitThread(0). Direct win64 call; *wait was already cleared, so
 	// our stack may be freed underneath us - no Go calls from here.
+	// Realign like exit_nt: win64 needs entry SP == 8 (mod 16).
 	MOVQ	runtime·ntExitThreadFn(SB), AX
 	XORL	CX, CX
-	SUBQ	$40, SP
+	ANDQ	$~15, SP	// 16-align: CALL leaves entry SP == 8 (mod 16)
+	SUBQ	$32, SP		// shadow space
 	CALL	AX
 	INT	$3	// not reached
 
@@ -318,7 +321,10 @@ usleep_darwin:
 	RET
 usleep_nt:
 	// Sleep(ms), ms = ceil(usec/1000): any nonzero request sleeps at
-	// least 1ms. Direct win64 call (1 arg, nosplit context).
+	// least 1ms. Direct win64 call (1 arg, nosplit context). Go
+	// stacks are only 8-aligned: save SP in SI (win64 callee-saved)
+	// and realign so the callee sees entry SP == 8 (mod 16) - same
+	// fix as exit_nt.
 	MOVL	usec+0(FP), AX
 	ADDL	$999, AX
 	XORL	DX, DX
@@ -326,9 +332,11 @@ usleep_nt:
 	DIVL	CX
 	MOVL	AX, CX
 	MOVQ	runtime·ntSleepFn(SB), AX
-	SUBQ	$40, SP
+	MOVQ	SP, SI
+	ANDQ	$~15, SP	// 16-align: CALL leaves entry SP == 8 (mod 16)
+	SUBQ	$32, SP		// shadow space
 	CALL	AX
-	ADDQ	$40, SP
+	MOVQ	SI, SP
 	RET
 
 TEXT runtime·gettid(SB),NOSPLIT,$0-4
@@ -370,8 +378,13 @@ raise_darwin:
 	SYSCALL
 	RET
 raise_nt:
-	// NT wave 1: signal sends are dropped (no signal machinery yet).
-	RET
+	// NT (chunk D1): raise is only called on paths that expect the
+	// process to die of the signal (dieFromSignal, raisebadsignal;
+	// delivery-to-handler decisions happen before raise is reached,
+	// ntKillSelf). Exit with the fork's encoded signal-death status
+	// so wait4 reports "killed by signal". Tail JMP: same signature,
+	// FP slot carries over.
+	JMP	runtime·ntExitEncoded(SB)
 
 TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	CHECK_WINDOWS(raiseproc_nt)
@@ -393,8 +406,10 @@ raiseproc_darwin:
 	SYSCALL
 	RET
 raiseproc_nt:
-	// NT wave 1: signal sends are dropped (no signal machinery yet).
-	RET
+	// NT (chunk D1): same as raise_nt - a process-directed fatal
+	// signal (sighandler's crash relay) kills this process with the
+	// encoded status.
+	JMP	runtime·ntExitEncoded(SB)
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	CHECK_DARWIN(getpid_darwin)
@@ -973,12 +988,15 @@ osyield_darwin:
 	// Just return, no exact equivalent
 	RET
 osyield_nt:
-	// Sleep(0) yields to any ready thread. Direct win64 call.
+	// Sleep(0) yields to any ready thread. Direct win64 call;
+	// realign like usleep_nt (win64 wants entry SP == 8 mod 16).
 	MOVQ	runtime·ntSleepFn(SB), AX
 	XORL	CX, CX
-	SUBQ	$40, SP
+	MOVQ	SP, SI
+	ANDQ	$~15, SP	// 16-align: CALL leaves entry SP == 8 (mod 16)
+	SUBQ	$32, SP		// shadow space
 	CALL	AX
-	ADDQ	$40, SP
+	MOVQ	SI, SP
 	RET
 
 TEXT runtime·sched_getaffinity(SB),NOSPLIT,$0

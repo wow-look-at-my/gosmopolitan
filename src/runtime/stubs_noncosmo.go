@@ -26,3 +26,8 @@ func cosmoHostIsWindows() bool {
 func cosmoNTGoargs() bool {
 	return false
 }
+
+// cosmoMstartm0 is a stub for non-cosmo systems; see mstartm0 in
+// proc.go and the GOOS=cosmo implementation in os_cosmo.go.
+func cosmoMstartm0() {
+}

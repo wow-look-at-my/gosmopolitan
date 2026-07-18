@@ -1764,3 +1764,1280 @@ layout, flags-off byte-compatibility), cmd/go cosmofat_test.go
 (TestELFPayloadStripped, TestFatPayloadsStripped, TestDebugSidecars -
 the last skips when sidecars aren't next to FIZZBUZZ_BIN, as on CI
 test runners, which download bare artifacts).
+
+# 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
+
+## Wave 2 — DONE (2026-07-18, chunk E green)
+
+windows-latest CI now runs the FULL runtimeprobe gauntlet against all
+three origin binaries (ubuntu-, windows-, macos-built fat APEs) and
+every check passes — TestRuntimeProbe 0.41-0.44s per origin, "ok all",
+exit 0, three consecutive green runs in the acceptance cycle
+(https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29650537288):
+args/environ/mark, getpid/getppid, numcpu, monotonic, sleep/ticker/
+after/ctxtimeout, tcplisten/tcpecho/deadline/tcpserver/udp,
+unixsock/unixecho (real afunix.sys pathname sockets), executable,
+mkdirtemp/statdir/create/readback/rename/statsize, getwd/chdir/
+wdrestore, remove/rmdir, readdir/walkdir/removeall, execchild,
+segvrecover, sigterm, sigusr2, preempt (180-186ms on real NT; linux
+reference 159ms), waitsig. The apetest suite (fizzbuzz battery + probe
++ format tests) is green on the windows leg for all three origins.
+
+The two real-NT-vs-wine divergences chunk E surfaced and fixed (both
+invisible under wine by construction; details in the chunk E section
+at the end of this file):
+
+1. afunix.sys refuses bind with WSAEOPNOTSUPP on a socket that has
+   SO_REUSEADDR set (msafd accepts the setsockopt, the bind then
+   fails). net's listenStream sets SO_REUSEADDR on every stream
+   listener, so every net.Listen("unix") failed. Linux treats
+   SO_REUSEADDR on unix sockets as an accepted no-op, so the
+   emulation now swallows it. Wine could never show this: its ws2_32
+   lacks AF_UNIX entirely (socket() fails EAFNOSUPPORT — the sole
+   remaining wine probe red, by wine gap, not by port gap).
+2. Loopback UDP may DROP datagrams on real NT; wine's in-process
+   loopback never does. The netpoller's wake channel was a
+   self-connected UDP socket, so a dropped wake byte left the poller
+   asleep for its full WSAPoll timeout (observed as ~5.0s stalls
+   rescued at exactly a leftover 5s time.After deadline: one sigterm
+   FAIL, preempt at 5.07/5.08s, 10-45s probe runs). The wake channel
+   is now a connected loopback TCP pair — lossless, like upstream's
+   PostQueuedCompletionStatus/pipe transports.
+
+Wave-3 backlog (deferred, in rough priority order):
+
+- sendmsg/recvmsg + SCM_RIGHTS-style fd passing (ENOSYS this wave;
+  blocks ReadMsg*/WriteMsg*; darwin leg equally lacks it).
+- SIGPROF profiling parity (setitimer-based CPU profiling; also still
+  missing on the darwin leg).
+- Windows/arm64 (the fat APE's arm64 image currently targets
+  linux/macos hosts only).
+- Real-conhost console-ctrl injection: the D2 asm handler + relay M
+  are live and wine-verified via direct trampoline calls, but the
+  probe does not exercise GenerateConsoleCtrlEvent (headless CI has
+  no console), so the OS-injected foreign-thread path remains
+  CI-unproven.
+- High-resolution timers: usleep is Sleep(ms) with ~15.6ms quanta on
+  real NT. Every probe timer check passes as-is; if finer sleep
+  granularity is ever needed, the recipe is CreateWaitableTimerExW
+  with CREATE_WAITABLE_TIMER_HIGH_RESOLUTION + per-M highResTimer
+  (upstream os_windows.go:398-432).
+- socketpair (ENOSYS; os/exec uses pipes).
+- gofmt drift in netpoll_cosmo_xnu.go + two runtime testdata files
+  (pre-wave-2 debt, deliberately not folded into NT commits).
+
+Goal: testdata/runtimeprobe (runtimeprobe.com) green on windows-latest —
+the same runtime gauntlet macOS passes: file I/O, directory listing,
+pid/ppid, NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
+(sigpanic recovery, os/signal delivery, async preemption, wait-status
+decode), os/exec, os.Executable, argv/env, wd round-trip. That flips the
+windows skip in apetest/runtimeprobe_test.go and sets RUNTIMEPROBE_BIN
+on the test-windows apetest steps in cosmo-ci.yml.
+
+Status: chunk A landed (identity, entropy, file I/O, dirents, wd,
+os.Executable, timers, console). Sockets, signals/VEH, os/exec are the
+remaining chunks.
+
+Recon baseline (linux, this branch): make.bash 3m10s; fat fizzbuzz +
+runtimeprobe build; probe passes the full gauntlet ("ok all", exit 0).
+Under wine 9.0 the wave-1 surface carries the probe through args/
+environ/mark, then the first os.Getpid() dies at the designed 0xf7
+crash poke (rawSyscallNoError has no NT route) — exit 0xC0000005.
+That poke is wave 2's starting line.
+
+## Wave 2 chunk A (2026-07-18): the syscall emulation layer
+
+End state under wine 9.0: the probe prints ok for args/environ/mark,
+getpid/getppid, numcpu, monotonic, sleep/ticker/after/ctxtimeout,
+executable, mkdirtemp/statdir/create/readback/rename/statsize,
+getwd/chdir/wdrestore, remove/rmdir, readdir/walkdir/removeall;
+tcplisten FAILs gracefully (socket ENOSYS), execchild FAILs gracefully
+(pipe2 ENOSYS); then the process dies at segvrecover with 0xC0000005
+(no VEH yet — designed, and why the probe now runs the signal block
+dead last). Linux stays 100% green (39 checks + ok all, rc 0);
+apetest, fizzbuzz (linux+wine, redirected output byte-exact), and the
+cosmo/arm64 std build all pass.
+
+### Architecture: where emulation runs (THE load-bearing decision)
+
+The darwin model (nosplit emulation between entersyscall/exitsyscall)
+cannot work for NT: path translation (UTF-8→UTF-16) and Linux-struct
+synthesis (stat, dirent64) must allocate, and entersyscall sets
+throwsplit. So on NT the syscall package SKIPS entersyscall
+(syscall_cosmo.go Syscall/Syscall6 check cosmo.Windows() first) and
+the emulation runs as ordinary Go — the cgocall model: each genuinely
+blocking Win32 call (ReadFile/WriteFile/FlushFileBuffers) brackets
+ITSELF with entersyscall via runtime.ntcallSE, so sysmon can retake
+the P during a blocking console read. Quick metadata calls stay plain
+(ntcallE).
+
+Pointer discipline that makes this sound: syscall arguments may point
+into the calling goroutine's STACK, and raw uintptrs are not adjusted
+when the stack moves. Rule: the chain from syscall.Syscall down to the
+dispatcher entry is nosplit, and runtime.ntSyscallEmulate
+(os_cosmo_nt_sys.go) re-types every pointer-carrying uintptr in the
+dispatch call expressions themselves; from there the backends hold
+real pointers (stack copying adjusts them); converting back to uintptr
+happens only inside nosplit ntcallE/ntcallSE where no growth can
+occur. GetLastError is fetched inside those same helpers — runtime
+functions are never async-preempted and there is no preemptible
+prologue between the call and the fetch, so the thread-local error
+cannot be lost to a goroutine migration (re-audit when SuspendThread
+preemption lands: the trampoline should then capture the error).
+
+rawSyscallNoError became a Go wrapper (NT → table; else the renamed
+rawSyscallNoErrorAsm keeps the SYSCALL fast path and the 0xf7 poke as
+belt-and-suspenders). It is deliberately NOT nosplit: the darwin arm64
+emulation chain under the asm entry sits exactly at the 792-byte
+nosplit budget and an 80-byte wrapper frame broke the build ("nosplit
+stack over 792 byte limit" through syscall6SlowDarwin). Same lesson at
+the trampoline: widening ntcallArgs to 8 slots blew the
+cgoSigtramp→…→write1→ntwrite1→ntcall→asmcgocall chain by 24-32 bytes,
+so ntcall keeps the slim 6-arg block and a parallel ntcallArgs8/
+ntcall8 trampoline (sys_cosmo_nt_amd64.s) serves 7-arg CreateFileW.
+
+### The pieces (all in src/runtime unless noted)
+
+- Dispatcher + backends + Win32-error→Linux-errno table:
+  os_cosmo_nt_sys.go (ntSyscallEmulate; ntErrno holds the one errno
+  mapping, cosmo's __dosemapping equivalent). Emulated: read write
+  openat close stat lstat fstat newfstatat lseek pread64 pwrite64
+  getdents64 mkdirat unlinkat renameat readlinkat(/proc/self/exe only)
+  faccessat fchmod(at) chdir getcwd ftruncate fsync fdatasync fcntl
+  getrandom getpid getppid gettid getuid geteuid getgid getegid(0)
+  getpgrp(=pid) umask(022) exit exit_group. Everything else ENOSYS.
+- fd table: os_cosmo_nt_fd.go. Fixed [512] array (no alloc on nosplit
+  lookup paths, EMFILE when full), lowest-free unix semantics, slots
+  0/1/2 seeded at boot from GetStdHandle and ALWAYS marked open (a
+  dead handle fails per-op EBADF; keeps checkfds from raw-syscall
+  open("/dev/null")). Entry: handle, kind (file/dir/stdio — sockets
+  wave adds its kind here), GetFileType for stdio fstat synthesis,
+  cloexec, Linux O_* flags, absolute Win32 pathW (for *at joins), and
+  getdents state (dirStarted + pending entries). Lookups return
+  copies; close-vs-op races have unix use-after-close semantics.
+  runtime fcntl (fcntl_cosmo_amd64.go) consults the same table
+  (F_GETFD/SETFD/GETFL/SETFL; else ENOSYS).
+- Path policy: os_cosmo_nt_path.go, ONE documented function pair.
+  ntPathW: "/dev/null"→"NUL"; "/tmp[/x]"→GetTempPathW()+x (cached;
+  the magic that makes unix-shaped os.TempDir work); "/c[/x]"→"C:\x"
+  (single-letter rule); "X:..." passthrough; other absolute → current-
+  drive-rooted "\x"; relative passthrough; all with slash flip; \\?\
+  prefixed only when a drive-absolute result exceeds MAX_PATH.
+  ntPathToLinux: strips \\?\, "C:\a"→"/c/a" (drive lowercased, rest
+  untouched), used by getcwd + readlink(/proc/self/exe) so
+  Chdir(Getwd()) round-trips exactly. A /tmp path deliberately comes
+  back as its real /c/ spelling — checkWd compares via os.SameFile,
+  which works because stat fills dev/ino from VolumeSerialNumber +
+  FileIndex.
+- stat synthesis (os_cosmo_nt_sys.go ntStatFromInfo): Linux amd64
+  Stat_t layout byte-exact; modes synthetic (dirs 0755, files 0755 or
+  0555 when READONLY — everything "executable" since NT has no x bit
+  and exec.LookPath gates on 0111); times from FILETIME (ctime :=
+  CreationTime, documented approximation); Blksize 4096. chmod/
+  fchmodat are validated no-ops (mapping mode&0200 onto READONLY would
+  break later unlinks).
+- getdents64: GetFileInformationByHandleEx(FileIdBothDirectoryInfo /
+  RestartInfo on first query) — the dir HANDLE holds the kernel
+  cursor, same shape as darwin's __getdirentries64 emulation. Records
+  parsed into the fd's pending list, drained into the caller's buffer
+  as Linux dirent64 (ino from FileId, |1 when 0 — ParseDirent skips
+  ino==0; d_off 0; DT_DIR/DT_REG from attributes); nothing is lost
+  when a batch outsizes the buffer.
+- open mapping: access from O_ACCMODE (+FILE_READ_ATTRIBUTES always,
+  so fstat works on O_WRONLY fds; O_APPEND → FILE_APPEND_DATA instead
+  of GENERIC_WRITE = atomic appends); share always READ|WRITE|DELETE;
+  disposition CREATE_NEW/CREATE_ALWAYS/OPEN_ALWAYS/TRUNCATE_EXISTING/
+  OPEN_EXISTING per O_CREAT/O_EXCL/O_TRUNC; FILE_FLAG_BACKUP_SEMANTICS
+  unconditionally (lets os.Open open directories); post-open classify
+  via GetFileInformationByHandle (fail → stdio kind, e.g. NUL);
+  O_DIRECTORY on non-dir → ENOTDIR, write-mode dir open → EISDIR.
+- pread/pwrite: save/seek/transfer/restore around the shared file
+  pointer (concurrent same-fd plain reads could observe the seek —
+  internal/poll serializes per-fd, accepted + documented).
+- Entropy: ProcessPrng (bcryptprimitives.dll, upstream Go's choice
+  since 1.22; RtlGenRandom/advapi32 fallback, same signature),
+  resolved gracefully at ntResolve. Backs SYS_GETRANDOM, runtime
+  readRandom, and ntBootInit's upgrade of the RDTSC-mixed rt0
+  AT_RANDOM bytes before randinit consumes them.
+- os.Executable: zero os-package changes — the syscall layer answers
+  readlinkat("/proc/self/exe") with GetModuleFileNameW in /c/ form
+  (executable_cosmo.go tries exactly that readlink first).
+- Identity: GetCurrentProcessId; getppid via ntdll
+  NtQueryInformationProcess(ProcessBasicInformation) word 5, graceful
+  ENOSYS if unresolvable; gettid = GetCurrentThreadId, and
+  minitProcid now records real thread ids (procid becomes load-bearing
+  in the preemption chunk).
+- Console (ntBootInit): SetConsoleOutputCP/SetConsoleCP(CP_UTF8) +
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING on stdout/stderr where
+  GetConsoleMode says they are consoles; fire-and-forget under
+  redirection. Byte-exactness verified under wine with redirected
+  stdout ("fizzbuzz\n", od-clean).
+- **netpoll stub (recon assumption FALSIFIED)**: the recon claimed
+  timers never initialize netpoll; in this Go version
+  (*timers).addHeap unconditionally calls netpollGenericInit, so the
+  first time.Sleep threw "netpollinit failed" (epollcreate ENOSYS).
+  Fix: a third netpoll personality in netpoll_cosmo.go — NT stub:
+  netpollinit succeeds creating nothing; netpoll(delay) parks the
+  polling M on a WaitOnAddress futex word (ntNetpollBreakWord) for the
+  timer delay; netpollBreak stores 1 + wakes it (compare-and-wait
+  closes the lost-wakeup race); netpollopen/close ENOSYS;
+  netpollIsPollDescriptor false. The sockets chunk replaces this with
+  a real poller — keep the netpolldiag linkname compiling when doing
+  so.
+
+### Wine quirks (let CI be the judge later)
+
+- getppid reports 0 under wine (InheritedFromUniqueProcessId comes
+  back 0 for the boot process) — probe accepts >= 0; expect a real
+  parent pid on windows-latest.
+- Console CP/VT calls are unverifiable under wine-with-redirect;
+  harmless there by construction (GetConsoleMode gates the mode set).
+
+### Chunk-A commits
+
+- 6a455e4e runtime, syscall: NT syscall emulation — identity,
+  entropy, file I/O, dirents, timers (+ netpoll stub, fd table, path
+  layer, ntcall8 trampoline, console boot setup)
+- 968423f0 runtimeprobe: run the signal-dependent checks last
+  (pre-VEH NT crashes at segvrecover; exec stays just before the
+  block for wedge localization)
+
+### What the next chunks must know
+
+- The Emulate dispatcher contract (nosplit + re-type pointers at
+  dispatch) applies to every new syscall case — add cases in
+  ntSyscallEmulate, never a second entry path.
+- ntcallE/ntcallSE take (fn, a1..a7); everything Win32 goes through
+  them (or plain ntcall for boot/g0/no-error contexts). If a call
+  needs >7 args (CreateProcessW has 10), widen ntcallArgs8/ntcall8 —
+  NOT ntcallArgs (the write1 nosplit chain is at budget).
+- Sockets: add an ntFDSocket kind + per-kind state to ntFDEntry;
+  replace the netpoll stub wholesale; ntNetpollBreakWord and the
+  break protocol can carry over if WSAPoll waits ride a break socket
+  instead.
+- exec: the wait-status protocol decision (cosmo encodes code<<8) is
+  still open; runtime exit() passes plain codes today.
+- Signals/VEH: TEB StackBase/StackLimit are still stale on pivoted
+  threads (tstart_cosmo_nt) — fix alongside VEH; thread handles are
+  still leaked by ntNewosproc (preemptM needs them retained).
+- fcntl F_DUPFD_CLOEXEC (1030) is ENOSYS; os.dup paths will need
+  DuplicateHandle eventually.
+- Long relative-join paths skip the \\?\ check (only the absolute
+  translation path applies it); fine for CI temp paths, revisit if a
+  deep-tree workload appears.
+
+## Wave 2 chunk B (2026-07-18): os/exec - pipe2, CreateProcessW, wait4
+
+End state under wine 9.0: everything chunk A had stays ok AND
+execchild passes (full loop: status+stdout pipes, self re-exec of the
+pristine APE as a PE, child write+exit, parent EOF read, wait4
+decode). tcplisten still FAILs gracefully (sockets are chunk C); the
+run still dies at segvrecover with 0xC0000005 by design (VEH is chunk
+D). Linux battery: probe 39 checks + ok all rc 0, apetest ok,
+fizzbuzz linux+wine ok, cosmo/arm64 std builds, vet clean. A
+dedicated exec stress harness (scratchpad, not committed) passed on
+BOTH hosts: 6 sequential spawns, exit-code 42 decode, AV-child ->
+SIGSEGV wait status (linux leg: GOTRACEBACK=crash -> SIGABRT),
+ENOENT for a missing image, 9-arg quoting round trip through the
+child's GetCommandLineW parse, env-block survival (incl. lower-case
+names), attr.Dir, and 4 concurrent spawns.
+
+### The chunk's one new BUG: direct win64 calls on 8-aligned stacks
+
+os.Exit crashed with 0xC0000005 on NT - deterministically per binary
+layout (one build always crashed, the next never) - while
+return-from-main worked. Wine's +seh trace pinned the fault to
+ntdll's __wine_setjmpex doing `movdqa %xmm6,0x60(%rcx)` with rcx+0x60
+only 8-aligned (alignment GP faults report ExceptionInformation[1] =
+-1, which looks like a wild read at 0xffffffffffffffff - don't chase
+that pointer). RtlExitUserProcess __TRYs its DllMain notifications,
+setjmp-ing a stack-local jmp_buf; the compiler 16-aligns that local
+RELATIVE to an entry SP it may assume is 8 mod 16 (win64 ABI). Go
+stacks are only 8-aligned, and the four direct-call NT branches in
+sys_cosmo_amd64.s (exit, exitThread, usleep, osyield - everything
+else rides asmcgocall, which ANDs SP to 16) passed the Go chain's
+alignment straight through, so half of all layouts handed win64 code
+a misaligned frame. Which call chains hit it depended on the frame
+sizes between runtime.main / syscall_Exit and the asm - hence the
+per-binary determinism (wine maps are static, no ASLR jitter). Fix:
+all four sites now realign (exit paths: ANDQ $~15 + SUBQ $32; the
+returning pair saves SP in SI, which win64 preserves). usleep/osyield
+had the same latent bug and only survived because wine's Sleep happens
+not to spill XMMs at an offending depth - real NT ntdll makes no such
+promise; treat "SUBQ $40 discipline" as retired, realignment is
+mandatory for every direct win64 CALL from Go-stack asm.
+
+### Spawn design (the three seams)
+
+- **pipe2 -> CreatePipe** (emulated syscall, fd table kind ntFDPipe).
+  NULL SECURITY_ATTRIBUTES = handles born non-inheritable, which IS
+  the O_CLOEXEC-shaped default: NT children inherit only the three
+  explicitly duplicated std handles, never arbitrary fds, so cloexec
+  is effectively always-on and the flag is only recorded for fcntl
+  round-trips. O_NONBLOCK is recorded but pipes stay blocking:
+  netpollopen keeps refusing pipe fds (ENOSYS), internal/poll's
+  pd.init fails, FD.Init flips to blocking mode, and os.newFile
+  restores the nonblock bit and ignores the error - the exact
+  documented fallback (verified in-tree: internal/poll/fd_unix.go
+  Init, os/file_unix.go newFile). ReadFile/WriteFile on pipes are
+  ntcallSE-bracketed (a blocked reader parks its M in the kernel; the
+  P is released). ERROR_BROKEN_PIPE on read = 0 bytes = EOF, matching
+  Linux read()==0 on writer close; ERROR_NO_DATA on write maps to
+  EPIPE (Go's no-SIGPIPE semantics come free - NT has no signals).
+- **forkAndExecInChild -> ntForkExec** (exec_cosmo.go branches on
+  cosmo.Windows() != nil before any fork machinery; exec_cosmo_nt.go).
+  The syscall layer owns the string algebra, ported verbatim from
+  upstream exec_windows.go: appendEscapeArg/makeCmdLine (backslash
+  doubling before quotes, quote-if-space/tab/empty) and the
+  case-insensitively sorted double-NUL UTF-16 env block, passed with
+  CREATE_UNICODE_ENVIRONMENT. It reconstructs strings from the
+  already-C-converted argv (BytePtrFromString rejected interior NULs,
+  so the round trip is lossless), absolutizes a relative argv0
+  against attr.Dir (CreateProcessW resolves the image against the
+  PARENT cwd but chdirs the child - upstream joinExeDirAndFName
+  parity), rejects >3 attr.Files and every fork-flavored SysProcAttr
+  knob with ENOSYS (loud, documented - the probe uses none), and
+  holds ntSpawnMu across the spawn: acquireForkLock only COUNTS
+  concurrent forkers, and the spawn window contains temporarily
+  inheritable duplicates that a concurrent bInheritHandles=TRUE
+  CreateProcessW would capture (leaked pipe write end = deferred EOF
+  = wedged sibling). The runtime hook (WindowsFns.Spawn = ntSpawn,
+  os_cosmo_nt_exec.go) translates argv0/dir through the chunk-A path
+  layer, DuplicateHandle(bInheritHandle=TRUE)s the three stdio
+  handles, fills STARTUPINFOW(STARTF_USESTDHANDLES), calls
+  CreateProcessW through the widened ntcall10 trampoline (ten args;
+  ntcallArgs8/ntcall8 renamed and grown per the chunk-A rule - the
+  6-arg ntcall block in the write1 nosplit chain is untouched),
+  closes the dupes and hThread, and commits hProcess into a
+  reserve-then-commit pid->handle table (ntProcMax=64; reservation
+  makes a full table fail EAGAIN BEFORE the child exists instead of
+  leaking an unwaitable process). lpCommandLine is a fresh mutable
+  []uint16 every time - CreateProcessW is documented to scribble on
+  it. PROC_THREAD_ATTRIBUTE_HANDLE_LIST hardening was considered and
+  deliberately skipped (STARTUPINFOEXW size dance + the NULL-handle
+  list-poisoning gotcha); ntSpawnMu gives the same process-local
+  guarantee.
+- **The status pipe protocol degenerates instead of being ported**:
+  the child never inherits forkExec's O_CLOEXEC status pipe, so after
+  the parent closes its write copy the read end has zero writers and
+  ReadFile fails ERROR_BROKEN_PIPE instantly = EOF = "exec
+  succeeded". Spawn failures never travel through the pipe at all -
+  they return synchronously as forkAndExecInChild's errno. No
+  child-side code exists on NT, period.
+
+### wait4 and THE WAIT-STATUS PROTOCOL (design decision, recorded)
+
+blockUntilWaitable costs nothing: package os calls waitid
+(SYS_WAITID) first and its ENOSYS fallback is DOCUMENTED in
+os/wait_waitid.go ("reportedly not available in Ubuntu on Windows" -
+returns (false, nil), pidWait proceeds to plain Wait4). SYS_WAITID
+stays ENOSYS on purpose; only SYS_WAIT4 is emulated.
+
+wait4(pid): pid<=0 -> ECHILD (no wait-any/process groups on NT;
+package os always names the pid). Handle from the pid table (missing
+-> ECHILD), WaitForSingleObject with INFINITE - ntcallSE-bracketed,
+so the waiting M sits in the kernel with its P released - or timeout
+0 for WNOHANG (WAIT_TIMEOUT -> return 0). Only after the wait
+reports signaled: GetExitCodeProcess (STILL_ACTIVE=259 ambiguity
+never arises - a live process is never queried, so a child that
+exit(259)'d decodes honestly), GetProcessTimes -> rusage
+utime/stime (100ns Filetimes / 10 -> usec; all other rusage fields
+zero, unknowable on NT - darwin-leg precedent), then reap: remove
+table entry (losing a concurrent-reap race -> ECHILD, like a Linux
+double wait) and CloseHandle.
+
+Status packing (parent-side ONLY - the exit code crosses the process
+boundary RAW, runtime exit() keeps passing plain codes to
+ExitProcess, so cosmo children interoperate with native Windows
+parents; the <<8 shape exists only inside our wait4):
+
+    code < 0xC0000000              -> (code&0xff)<<8   WIFEXITED (Linux truncates to 8 bits; so do we)
+    0xC0000005 ACCESS_VIOLATION    -> 11 SIGSEGV       (low 7 bits: WIFSIGNALED)
+    0xC0000006 IN_PAGE_ERROR       ->  7 SIGBUS
+    0xC000008D..0xC0000095 FLT_*/INT_DIVIDE/INT_OVERFLOW -> 8 SIGFPE
+    0xC000001D ILLEGAL_INSTRUCTION ->  4 SIGILL
+    0xC000013A CONTROL_C_EXIT      ->  2 SIGINT
+    0xC0DE0000|signo (1..0x7F)     -> signo             fork-private, reserved for chunk D
+    any other >= 0xC0000000        ->  9 SIGKILL
+
+This mirrors the darwin leg's "wait4 with Linux-numbered wait
+statuses" convention, so syscall_cosmo.go's linux WaitStatus algebra
+(WIFEXITED = status&0x7f==0, signal = status&0x7f) decodes unchanged
+and os/exec ExitError formatting just works ("signal: segmentation
+fault" - wine-verified end to end via an AV child). The 0xC0DE base
+is the contract with chunk D: dieFromSignal/kill emulation exits the
+victim with ExitProcess(0xC0DE0000|signo) so waitsig can report
+death by signals that have no NTSTATUS (SIGUSR1). It sits in NTSTATUS
+severity-error space so foreign parents still see "crashed"; a
+foreign child legitimately exiting with such a code aliases - accepted
+(cosmo's own protocol aliases the same way).
+
+### Probe-side change
+
+selfCommand's magic sniff gains one branch: pristine-MZ + NT host ->
+direct exec (the APE IS a valid PE; /bin/sh does not exist). Host
+detection = env OS=Windows_NT (set by every NT since forever, and by
+wine; absent on unix - linux/darwin behavior byte-identical, and the
+recon's suggested mechanism). No new runtime surface.
+
+### Wine quirks (watch on real NT, let CI judge)
+
+- One concurrent-spawn run printed "wine client error:280: sendmsg:
+  Bad file descriptor" while all checks still passed (3/3 clean
+  reruns after) - wineserver-internal fd noise during parallel
+  CreateProcessW+CloseHandle; nothing observable at the API level.
+  If windows-latest shows exec flakes, suspect handle lifetimes
+  first.
+- wine's CreateProcessW quoting round-trips all 9 tricky-arg cases;
+  real NT uses the same MSVCRT parse in the child (our own ported
+  ntCommandLineToArgv), so drift risk is low.
+
+### Chunk-B commits
+
+- 0335e6e2 runtime: 16-align SP around direct win64 calls on NT
+- 08e80bd1 runtime, syscall: NT os/exec - pipe2, CreateProcessW
+  spawn, wait4
+
+### What chunks C and D must know
+
+- Chunk C (sockets/netpoll): netpollopen's pipe refusal is
+  load-bearing for exec stdio - when the real poller lands, keep
+  refusing non-socket fds so pipes stay in blocking mode (upstream
+  windows has the same split). The fd table now has ntFDPipe; add
+  ntFDSocket alongside. WSAStartup lazily; ntcall10 exists if any
+  winsock call needs >7 args (WSAIoctl has 9). Keep
+  runtime.cosmoNetpollDiag compiling.
+- Chunk D (signals/VEH): encode signal deaths as
+  ExitProcess(0xC0DE0000|signo) and TerminateProcess(h,
+  0xC0DE0000|9) for kill(SIGKILL) - wait4 already decodes both.
+  The stale-TEB consequence is now OBSERVED, not theoretical: wine
+  refused to dispatch the setjmp AV ("Exception frame is not in
+  stack limits") because RSP was a Go stack outside the
+  TEB-declared window - fix TEB StackBase/StackLimit alongside VEH
+  or continue-from-exception will misbehave the same way. GetLastError
+  capture must move into the trampoline when SuspendThread preemption
+  lands (chunk-A note stands). ntSpawnMu + the preemptExtLock design
+  interact: bracket CreateProcessW-class calls per upstream's
+  osPreemptExtEnter when preemption arrives.
+- fd-table lifecycle proven: 10+ spawns (6 sequential + 4 concurrent)
+  with 3 pipes each leak nothing (probe + stress rerun stable).
+
+## Wave 2 chunk C (2026-07-18): sockets + the WSAPoll netpoller
+
+End state under wine 9.0: everything chunks A+B had stays ok AND the
+whole TCP block (tcplisten, tcpecho, deadline, tcpserver) plus udp
+pass; unixsock FAILs gracefully with EAFNOSUPPORT because wine's
+ws2_32 has no AF_UNIX support at all (see wine fidelity below) - the
+afunix leg's judge is windows-latest CI. The run still dies at
+segvrecover with 0xC0000005 by design (VEH is chunk D). Linux
+battery: probe 39 checks + ok all rc 0 (the netpoll rewire leaves the
+epoll path byte-untouched), fizzbuzz linux+wine byte-identical,
+cosmo/arm64 std builds, vet clean, gofmt clean. A dedicated
+readiness-model stress harness (scratchpad sockstress, not committed)
+passed 3/3 under wine and natively on linux: live read-deadline
+expiring DURING a blocked read (300ms observed), late data beating a
+generous deadline, connect-to-closed-port -> prompt ECONNREFUSED (the
+POLLERR/SO_ERROR completion path), 8 concurrent echo connections x 50
+round trips, 4 MiB each way through one connection (send-buffer
+backpressure -> waitWrite/POLLWRNORM), a UDP read deadline, close(2)
+promptly unblocking a parked reader, and an Accept deadline.
+
+### Winsock surface (os_cosmo_nt_sock.go)
+
+Lazy bring-up: ntWinsockEnsure() LoadLibraryA("ws2_32.dll") +
+GetProcAddress x19 + WSAStartup(0x202) exactly once, mutex-guarded
+with a sticky failure state, triggered by whichever runs first of the
+socket(2) emulation and netpollinit (the two can race; a non-network
+program never loads winsock - though any timer-using program now does,
+via netpollinit's wake socket, the cost of replacing the stub
+wholesale). Nothing in the ensure path allocates: netpollGenericInit
+can fire from the first timer's addHeap under runtime locks.
+
+Creation is WSASocketW WITHOUT WSA_FLAG_OVERLAPPED and WITH
+WSA_FLAG_NO_HANDLE_INHERIT: plain BSD-shaped synchronous calls
+(recv/send/recvfrom/sendto/accept/connect), no OVERLAPPED machinery
+anywhere - upstream's IOCP netpoll answers "did my submitted
+operation complete", not "is this fd readable", so it cannot back a
+linux-shaped internal/poll; WSAPoll can. SOCK_NONBLOCK/SOCK_CLOEXEC
+are stripped and emulated (ioctlsocket FIONBIO after create;
+cloexec = the no-inherit creation flag, recorded for fcntl).
+fcntl(F_SETFL) pushes O_NONBLOCK changes into FIONBIO for
+socket-kind fds. Accepted sockets get SetHandleInformation
+(HANDLE_FLAG_INHERIT, 0) - their inheritability is not contractually
+specified and chunk B's spawn uses bInheritHandles=TRUE.
+close(2) on the ntFDSocket fd-table kind routes to closesocket
+(CloseHandle would leak winsock provider state); read/write route to
+recv/send; fstat synthesizes S_IFSOCK|0777; lseek reports ESPIPE.
+
+### Translation tables (the load-bearing deltas)
+
+- AF values: AF_UNIX=1 and AF_INET=2 match Linux; **AF_INET6 is 23 on
+  NT vs 10 on Linux** - rewritten inside every sockaddr in both
+  directions (layouts are otherwise byte-identical; no sa_len on NT,
+  so less work than the darwin leg's 10<->30).
+- Sockopts (curated, unknown pairs -> ENOPROTOOPT): SOL_SOCKET 1 ->
+  0xffff with SO_REUSEADDR 2->4 (NT semantics are looser -
+  REUSEADDR+REUSEPORT-ish - fine for listeners), SO_TYPE 3->0x1008,
+  SO_ERROR 4->0x1007 (the RETURNED VALUE is translated winsock->Linux
+  errno too - the nonblocking-connect completion protocol depends on
+  it), SO_BROADCAST 6->0x20 (net's setDefaultSockopts REQUIRES this
+  to succeed on UDP), SO_SNDBUF 7->0x1001, SO_RCVBUF 8->0x1002,
+  SO_KEEPALIVE 9->8, SO_LINGER 13->0x80 with the struct converted
+  between Linux {i32,i32} and winsock {u16,u16}; IPPROTO_TCP (=6 both
+  sides): TCP_NODELAY 1->1, TCP_KEEPIDLE 4->3, TCP_KEEPINTVL 5->17,
+  TCP_KEEPCNT 6->16; IPPROTO_IPV6 (=41 both): IPV6_V6ONLY 26->27.
+- Errnos: winsock failures land in the SAME TEB last-error slot as
+  every Win32 call (WSAGetLastError is a reader of that slot), so
+  ntcallE/ntcallSE capture them with zero extra machinery; ntWSAToLinux
+  maps the WSAE* range (10035 WSAEWOULDBLOCK->EAGAIN, 10047->
+  EAFNOSUPPORT, 10054->ECONNRESET, 10061->ECONNREFUSED, ...).
+  Special cases: connect's WSAEWOULDBLOCK -> **EINPROGRESS** (winsock's
+  spelling of a pending nonblocking connect; WSAEINPROGRESS is a
+  winsock-1.1 artifact), accept's WSAECONNRESET -> **ECONNABORTED**
+  (linux semantics; internal/poll's accept loop swallows and re-polls
+  it), recv-side WSAESHUTDOWN -> EOF while send-side -> EPIPE, and
+  recvfrom's WSAEMSGSIZE (truncated datagram) is swallowed into a
+  full-buffer read like Linux's silent truncation.
+- UDP: SIO_UDP_CONNRESET + SIO_UDP_NETRESET are disabled (WSAIoctl
+  via the chunk-B ntcall10 trampoline - 9 args) on every INET dgram
+  socket at creation, best-effort (wine lacks the ioctls): otherwise
+  a latched ICMP unreachable from an earlier send fails unrelated
+  recvs with WSAECONNRESET. Upstream net does the same.
+
+### AF_UNIX
+
+Pathname SOCK_STREAM over afunix.sys (Win10 17063+). sun_path crosses
+into winsock as a **UTF-8 Windows path** (afunix's documented
+encoding), produced by the chunk-A path layer (ntPathW -> UTF-8), so
+"/tmp/x.sock" binds the real temp-dir file; >107 translated bytes ->
+EINVAL. The Linux-spelling name is RECORDED in the fd table
+(unixBound at bind, unixPeer at connect - including the EINPROGRESS
+arm) and getsockname/getpeername report the recorded bytes: Linux
+returns exactly what you bound, and back-translating winsock's stored
+Windows path would surface the /c/... alias (the probe compares addr
+STRINGS - os.SameFile does not apply to socket names). Unnamed
+sockets report the 2-byte family-only sockaddr, which the
+linux-shaped anyToSockaddr renders as the empty name (the probe's
+unnamed-dialer canary); the caller's buffer is zeroed first because
+that decoder scans the whole 108-byte sun_path. Abstract-namespace
+names (leading NUL) and autobind (empty path) are refused EINVAL
+exactly like the darwin leg. Socket FILES are reparse points
+(IO_REPARSE_TAG_AF_UNIX) and are NOT auto-deleted on close;
+unlink/RemoveAll delete them like ordinary files via DeleteFileW (the
+probe's own deferred RemoveAll covers its temp dir; verified in the
+existing unlinkat emulation - no special casing needed).
+getsockname failing WSAEINVAL on an unbound socket (winsock refuses
+what Linux answers) is synthesized into the Linux zero-address reply.
+
+### Netpoll: WSAPoll, aix-shaped, level-triggered (netpoll_cosmo_nt.go)
+
+Chunk A's WaitOnAddress timer-only stub is deleted wholesale; NT now
+has a third real poller personality behind the netpoll_cosmo.go
+host dispatch (netpollinitNT/openNT/closeNT/armNT/BreakNT/NT).
+Design = netpoll_aix.go line-for-line where possible:
+
+- **State**: fixed arrays [513]WSAPOLLFD/[513]*pollDesc/[513]int32
+  (fd-table-sized + wake slot; NO slices - netpollinit and
+  netpollopen can run under runtime locks, so nothing allocates).
+  WSAPOLLFD is 16 bytes on win64 (8-byte SOCKET + two SHORTs + pad),
+  NOT Linux's 8-byte pollfd, and the POLL* constants differ
+  (POLLRDNORM=0x100, POLLWRNORM=0x10, POLLERR=1, POLLHUP=2,
+  POLLNVAL=4). Only RDNORM/WRNORM are ever REQUESTED - WSAPoll
+  rejects POLLERR/POLLHUP/POLLPRI in events with WSAEINVAL.
+- **Two-lock protocol**: mutators take ntMtxpoll, send one byte to
+  the wake socket if no update is pending, take ntMtxset (held by the
+  poller across its blocking WSAPoll), release ntMtxpoll, mutate,
+  release. The poller re-takes both at cycle top and clears
+  pendingUpdates. pd.user holds the slot index, maintained on
+  swap-delete; netpollclose is keyed by the emulated fd number
+  (parallel ntPollNums array) since slots store SOCKET handles.
+- **Level-triggered arming**: netpollinitNT sets
+  netpollLevelTriggered (the hook netpoll.go kept from the old darwin
+  poll(2) poller), so pollWait arms the awaited direction each wait
+  and delivery disarms it (events &^= bit). netpoll(0) returns empty
+  (aix rule: a nonblocking check would contend ntMtxset with the
+  blocked poller); sysmon/findrunnable tolerate that by precedent.
+- **Wake socket**: WSAPoll has no pipe/eventfd concept, so slot 0 is
+  a nonblocking loopback UDP socket bound to 127.0.0.1:0 and
+  connect()ed TO ITSELF (sends need no address; connectedness
+  filters foreign datagrams). netpollBreak = the shared netpollWakeSig
+  CAS + one send; the poller drains with nonblocking recvs and resets
+  the sig only when it was blocking (aix rule).
+- **netpollopen refuses non-socket fds** (ENOSYS -> internal/poll
+  blocking fallback): load-bearing for chunk B's exec stdio pipes,
+  and WSAPoll would report non-sockets POLLNVAL anyway. POLLNVAL on a
+  registered slot (close racing registration) disarms both directions
+  and wakes both sides with the error bit, so a dead slot cannot spin
+  the poller.
+- **Forensics**: the wave-9 counters (xnuPollCycles/Done/Enter/Exit/
+  LastN/LastE) are fed from the WSAPoll cycle too - exactly one host
+  poller is live per process - so cosmoNetpollDiag names a stall in
+  the runtimeprobe watchdog output on NT as well.
+- **Timers**: ride the same netpoll(delay) timeout (ms, capped 1e9)
+  plus netpollBreak wakes; the probe's sleep/ticker/after/ctxtimeout
+  stayed green through the stub->WSAPoll swap, and the stress
+  harness pins live deadlines at ~300ms observed.
+
+GetLastError discipline: netpollNT runs on g0; the WSAPoll error
+fetch is a second plain ntcall on the same thread with no preemption
+possible between (runtime code is never async-preempted) - same
+argument as ntcallE, re-audit when chunk D lands SuspendThread.
+
+### Wine fidelity notes (let windows-latest judge)
+
+- **AF_UNIX does not exist in wine's ws2_32**: WINEDEBUG=+winsock on
+  a minimal socket(AF_UNIX=1, SOCK_STREAM) probe shows wine itself
+  refusing it - "WSASocketW family 1, type 1 ... failed to initialize
+  socket, status 0xc001273f" (facility-winsock NTSTATUS carrying
+  0x273f = 10047 = WSAEAFNOSUPPORT) - while family 2 succeeds through
+  the identical path. The probe's unixsock check therefore FAILs
+  gracefully under wine with "address family not supported by
+  protocol" and skips the unixecho leg; real NT (Server 2022 ships
+  afunix.sys) is the judge. No design contortion for wine.
+- SIO_UDP_CONNRESET/NETRESET are unimplemented in wine; the disable
+  is fire-and-forget, and wine's un-Windows-like UDP behavior does
+  not latch ICMP resets anyway (the probe's UDP check passes).
+- Everything else matched real-NT semantics closely enough that the
+  whole stress battery behaves identically on wine and linux,
+  including error strings (ECONNREFUSED on refused connect, "use of
+  closed network connection" on close-during-read).
+
+### Chunk-C commits
+
+- 413f271b runtime: NT sockets - winsock syscall emulation and
+  WSAPoll netpoller
+
+### What chunk D must know from chunk C
+
+- The netpoller parks Ms INSIDE blocking WSAPoll on g0.
+  SuspendThread-based preemption must not care (gFromSP finds g0,
+  wantAsyncPreempt says no), but exit()'s suspendLock discipline now
+  also covers a thread sitting in ws2_32 - same as any foreign call.
+- netpollBreak/netpollarm/netpollopen make foreign calls (send on
+  the wake socket) under ntMtxpoll; when osPreemptExtEnter brackets
+  land, these are runtime-internal paths (g0/lock context) and must
+  NOT take the preempt-ext lock - mirror upstream's stdcall-vs-
+  cgocall split.
+- Signal-driven wakeups do not exist: nothing in the poller depends
+  on EINTR (WSAPoll has no alertable wait), so chunk D's VEH work
+  cannot perturb it. If chunk D adds a console-ctrl relay M, wake it
+  via its own event, not the netpoll wake socket.
+- ntWinsockEnsure is idempotent and callable from any user-goroutine
+  or init context; if chunk D ever needs a socket (it should not),
+  call it rather than assuming winsock is up.
+- waitsig stays red until chunk D: the probe's signal block is
+  unchanged and still crashes at segvrecover (rc=5) by design.
+
+## Wave 2 chunk D1 (2026-07-18): VEH -> sigpanic, self-signals, encoded deaths
+
+End state under wine 9.0: everything chunks A+B+C had stays ok AND
+the signal block comes alive - segvrecover (nil deref -> VEH ->
+sigpanic -> recover), sigterm + sigusr2 (kill(self) -> trampoline ->
+os/signal Notify), and waitsig (child kill(self, SIGKILL) ->
+ExitProcess(0xC0DE0009) -> parent wait4 decodes "killed by signal
+9"). Remaining red: preempt (chunk D2 - fails by duration, ~79s under
+wine while the spin loops drain their iteration bound, then the rest
+of the probe still runs) and unixsock (wine ws2_32 gap, chunk C).
+Linux battery: probe 39 checks + ok all rc 0 (the rt_sigaction leg is
+byte-untouched at runtime - sysSigaction's NT branch is behind
+iswindows()), fizzbuzz wine+linux byte-identical, cosmo std builds on
+amd64 AND arm64, changed files gofmt clean, vet clean for the new asm
+decls, chunk-C sockstress battery 8/8 + ok all under wine with the
+VEH live (exceptions x poller interaction).
+
+### TEB stack-bounds policy: the WIDE window (decision + evidence)
+
+Policy: NT_TIB.StackBase = 0x00007FFFFFFF0000, StackLimit = 0x10000
+("everything user-mode is stack"), written (a) for the boot thread in
+ntInitSignals and (b) in tstart_cosmo_nt right after the stack pivot
+(constants shared via go_asm.h so the policy lives in one place,
+os_cosmo_nt_sig.go).
+
+Why not per-thread g0 bounds: user goroutine stacks are heap-allocated
+and MOVE (copystack), so no fixed per-thread range can cover every RSP
+the exception machinery will see; upstream's sigresume workaround
+(signal_windows.go:174-192) exists precisely because its resume SP
+must lie inside the TEB window - with the wide window the modified
+CONTEXT can resume straight onto the faulting goroutine stack and the
+whole sigresume dance is dropped.
+
+Wine 9.0 evidence (12-cell experiment, scratchpad tebexp, on a
+PIVOTED CreateThread thread): TEB mode {bogus 0x20000..0x10000 window
+modeling the wave-1 stale bounds | per-thread g0 bounds | wide} x
+fault stack {user goroutine | g0 via systemstack} x proof {dispatch:
+first-position VEH exits 0x77 | continue: VEH bumps CONTEXT.Rip past
+a known 2-byte faulting load, returns CONTINUE_EXECUTION, and a
+store-after-fault flag proves NtContinue accepted the modified
+context}. Result: ALL 12 cells pass - rc=0x77 for every dispatch
+cell, "resumed=1" for every continue cell. So wine dispatches and
+continues regardless of the TEB window (its virtual_setup_exception
+only warns on out-of-limits stacks) and CANNOT distinguish the
+policies; the wide choice rests on real-NT behavior, where the
+continue path is documented (by upstream's own workaround) to
+validate the resume SP against the TEB bounds. Wide is the one policy
+whose correctness does not depend on which validations real NT
+enforces - windows-latest CI is the judge. Note the chunk-B observed
+refusal ("Exception frame is not in stack limits") was wine's SEH
+frame walk, not VEH dispatch - consistent with these cells.
+
+Residual caveats, accepted + documented: (1) the boot thread's REAL
+loader stack has guard pages; if m0's g0 ever grew below the
+PE-committed region, the kernel's guard-fault growth would rewrite
+StackLimit back to a real value on that thread (harmless: that is
+upstream's normal situation); the PE header commits the whole window
+rt0 uses, so it does not trigger. (2) Foreign SEH inside kernel32
+calls now validates frames against the wide window while on our
+stacks - strictly more permissive than the stale bounds that wine
+refused in chunk B.
+
+stackSystem: cosmo now reserves the windows-equal 4096 bytes per
+stack (stack.go) because the NT exception dispatcher writes
+EXCEPTION_RECORD + CONTEXT + dispatcher state (up to ~4KiB with
+extended machine state) BELOW the faulting RSP on the goroutine stack
+itself - Go stacks have no guard pages, so a fault near the stack
+bottom would otherwise corrupt adjacent heap. Verified: no mirror of
+stackSystem exists in cmd/ (the linker's nosplit budget is
+StackNosplitBase*multiplier, unaffected), so this is a runtime-only
+constant - no make.bash needed. Cost: initial goroutine stacks go
+2KiB -> 8KiB (fixedStack rounding) on every cosmo host; accepted -
+one build serves all hosts, same provisioning philosophy as the fat
+APE, and the linux probe stayed green.
+
+### VEH -> sigpanic (os_cosmo_nt_sig.go + sys_cosmo_nt_amd64.s)
+
+- Registration at ntBootInit (ntInitSignals, FIRST thing in boot):
+  SetErrorMode(|= FAILCRITICALERRORS|NOGPFAULTERRORBOX|
+  NOOPENFILEERRORBOX) + best-effort WerGetFlags/WerSetFlags
+  (FAULT_REPORTING_NO_UI; the pair is missing on wine and resolved
+  gracefully) so CI can never hang on a crash dialog; then
+  AddVectoredExceptionHandler(1, ntExceptionTramp) +
+  AddVectoredContinueHandler(1, ntFirstVCHTramp) +
+  AddVectoredContinueHandler(0, ntLastVCHTramp) - upstream
+  initExceptionHandler's amd64 shape.
+- Thunks (ntsigtramp<> common body): win64 entry CX=EXCEPTION_POINTERS,
+  DX=kind. The cosmo build's PUSH_REGS_HOST_TO_ABI0 compiles in its
+  SysV flavor, which under-saves for a win64 caller, so the thunk
+  hand-saves the full win64 callee-saved set the Go ABI clobbers
+  (flags/DF, BP BX DI SI R12-R15, X6-X15), loads g from gs:0x28 into
+  R14 (nil on a foreign thread -> CONTINUE_SEARCH), zeroes X15, and
+  calls the nosplit ntSigtrampGo via its ABI0 wrapper; verdict back
+  in EAX.
+- ntSigtrampGo runs the handler on g0 via systemstack (upstream
+  sigtrampgo's shape) - the VEH itself runs on the faulting stack,
+  which is why stackSystem matters. No sigresume postlude (wide TEB).
+- ntExceptionHandler: gate = PC inside Go text AND code in upstream
+  isgoexception's exact set; translation table NT->Linux:
+  0xC0000005->SIGSEGV/_SEGV_MAPERR, 0xC0000006->SIGBUS/_BUS_ADRERR,
+  0xC0000094->SIGFPE/_FPE_INTDIV, 0xC0000095->_FPE_INTOVF, FLT_
+  {DIV,OVF,UND,INEXACT,DENORMAL}->SIGFPE/{_FPE_FLTDIV,FLTOVF,FLTUND,
+  FLTRES,FLTINV}, 0x80000003->SIGTRAP, 0xC000001D->SIGILL. throwsplit
+  || isAbort (NT reports RIP one byte AFTER the INT3: isAbortPC(pc-1))
+  || sigtable[sig].flags&_SigPanic==0 -> ntWinthrow: the last clause
+  keeps LINUX semantics for SIGTRAP/SIGILL (throw-class on the fork's
+  sigtable; upstream windows would push its own sigpanic for them,
+  but the fork's linux sigpanic would PANIC with the signal name,
+  which Linux never does). Otherwise record gp.sig (LINUX number),
+  gp.sigcode0 (linux si_code), gp.sigcode1 (fault addr, AV/in-page
+  only), gp.sigpc; push the fake sigpanic0 call frame (SP-=8, store
+  resume PC) unless RIP==0 or RIP==asyncPreempt entry (issue #35773
+  interlock - live the moment D2 lands), set RIP=sigpanic0; return
+  CONTINUE_EXECUTION. The fork's linux-shaped sigpanic
+  (signal_unix.go) then runs on the faulting goroutine: nil deref ->
+  panicmem -> recoverable, exactly the linux path.
+- ntFirstContinueHandler stops the continue-handler walk for handled
+  exceptions (the re-check passes because the rewritten RIP =
+  sigpanic0 is in Go text and the code is unchanged);
+  ntLastContinueHandler -> ntWinthrow for exceptions nothing handled.
+  (Whether wine invokes last-VCHs on the unhandled path is untested -
+  an unhandled fault under wine dies with the raw NTSTATUS either
+  way, which chunk B's parent-side wait4 map already translates; real
+  NT gets the upstream-shaped crash report.)
+- ntWinthrow = upstream winthrow (panicking gate, g0 stack-bounds
+  blow-away, "Exception c0000005 ..." + sigtable name line,
+  tracebacktrap + tracebackothers + ntDumpregs) EXCEPT the exit:
+  ntExitEncoded(sig) - RaiseFailFastException would surface the raw
+  NTSTATUS; the encoding keeps every signal death uniform for wait4
+  (unmapped codes reaching the last VCH encode SIGKILL, matching
+  wait4's unknown-NTSTATUS catch-all). Deliberate divergence from the
+  linux leg, which exits 2 after a fatal-signal report: NT parents
+  see "killed by signal N" - more informative, and mandated by the
+  chunk-D contract.
+
+### Self-directed signals (kill/tkill/tgkill)
+
+- sysSigaction routes the NT leg to ntSigaction: a runtime-side
+  [65]sigactiont table (there IS no kernel sigaction on NT; the only
+  installers are initsig/sigenable/sigdisable/sigignore, serialized
+  by construction, so plain stores suffice). getsig/setsig round-trip
+  through it, so initsig's fwdSig bookkeeping and signal.Ignore/Reset
+  behave exactly as on Linux. rt_sigprocmask/sigaltstack keep their
+  wave-1 no-op asm stubs (masks are meaningless with synchronous
+  self-delivery; gsignal keeps its malg bounds because !iscgo makes
+  minitSignalStack take the signalstack() path). The dispatcher-level
+  rt_sigaction(13) stays ENOSYS on purpose - os/signal never issues
+  it; only the runtime installs handlers.
+- Dispatcher cases kill(62)/tkill(200)/tgkill(234)
+  (os_cosmo_nt_sys.go) -> ntEmuKill/ntEmuTkill/ntEmuTgkill:
+  * pid == self: ntKillSelf runs the kernel decision tree against
+    ntSigActs: sig 0 -> ok; SIGKILL -> ntExitEncoded now
+    (uncatchable); SIG_IGN -> drop; SIG_DFL -> drop for the kernel
+    default-ignore set (CHLD, URG, WINCH, CONT) AND the stop family
+    (STOP, TSTP, TTIN, TTOU - job control does not exist on NT and
+    nothing could ever deliver the resuming SIGCONT, so stops are
+    dropped, documented divergence), else ntExitEncoded (default
+    action = terminate); an installed handler -> DELIVER (below).
+  * pid == a chunk-B child: sig 0 probes; else TerminateProcess(h,
+    0xC0DE0000|sig), best-effort (already-dead child = success, like
+    Linux kill on a zombie); the handle stays in the table - wait4
+    still owns reaping. Unknown pid / pid<=0 (no process groups) ->
+    ESRCH.
+  * tkill/tgkill: only the CALLING thread is addressable in D1
+    (cross-thread needs D2's SuspendThread machinery; the runtime's
+    signalM stays gated off, and process-level observables are
+    thread-agnostic); other tids -> ESRCH. tgkill checks tgid ==
+    own pid.
+- Delivery (ntDeliverSelfSignal + ntSignalTramp asm): synthesize a
+  linux-format siginfo{si_signo, si_code=_SI_TKILL} (sigFromUser()
+  true, like a real tgkill) and a zeroed ucontext with rip/rsp = the
+  caller's real PC/SP (feeds the fatal-report prints; doSigPreempt's
+  isAsyncSafePoint always refuses a "runtime." PC, so the dead
+  context is never rewritten), switch SP to THIS M's gsignal stack
+  top, and CALL the RECORDED handler - in practice the C-ABI
+  sigtramp - with the linux handler signature (DI,SI,DX). From there
+  everything is the stock fork path: sigtrampgo (SP inside gsignal ->
+  no adjustSignalStack detour) -> sighandler -> sigsend for
+  watched/notify signals, dieFromSignal for unwatched fatal ones,
+  signal_ignored, throw-class fatal reports. dieFromSignal's raise()
+  lands in the rewritten raise_nt -> ntExitEncoded, so unwatched
+  SIGTERM et al die with the encoded status. The gsignal stack is
+  otherwise unused on NT and delivery is synchronous, so borrowing it
+  is sound; it is exactly where the Linux kernel would deliver
+  (minitSignalStack installs gsignal as the alt stack).
+- raise/raiseproc NT branches (sys_cosmo_amd64.s) tail-JMP
+  ntExitEncoded (ANDL $0x7F | ORL $0xC0DE0000 -> ExitProcess, SP
+  realigned per the chunk-B direct-call discipline). raise is only
+  reached on die-paths by construction; crash() (GOTRACEBACK=crash)
+  therefore exits 0xC0DE0006 = "killed by SIGABRT", matching the
+  linux leg's observable.
+
+### waitsig end to end (wine-verified)
+
+probe parent --exec--> child "waitsig raise" --raiseFatalChild:
+syscall.Kill(getpid(), SIGKILL)--> child dispatcher ntEmuKill(self,9)
+-> ntExitEncoded(9) -> ExitProcess(0xC0DE0009) -> parent wait4
+(chunk B) sees 0xC0DE0000|9 -> status 9 -> WaitStatus.Signaled() &&
+Signal()==SIGKILL -> "ok waitsig killed".
+
+### Wine fidelity notes (windows-latest judges)
+
+- Wine's dispatch/continue paths ignore the TEB window (evidence
+  above); real NT is stricter on continue - the wide window is
+  designed for that, but only CI proves it.
+- Wine's last-VCH invocation on the unhandled path is unverified
+  (nothing in the probe exercises it).
+- The preempt check fails by DURATION under wine (~79s: the spin
+  loops drain their 20e9-iteration bound, GC completes late, then
+  the probe continues; total run ~85s sits just under the probe's
+  90s watchdog). D2's async preemption turns this into ~150ms; if
+  windows-latest CPUs drain slower and the watchdog fires before
+  waitsig prints, that is the watchdog working as designed - D2
+  removes the condition.
+
+### Chunk-D1 commits
+
+- fb41da03 runtime: NT signals - VEH sigpanic, self-signal delivery,
+  encoded deaths
+
+### What chunk D2 must know (preemption + console ctrl)
+
+- Real per-M thread handles + procid: ntNewosproc still LEAKS the
+  CreateThread handle and mp.thread does not exist; preemptM needs
+  minit to DuplicateHandle(GetCurrentThread) into an mOS field plus
+  the threadLock/preemptExtLock/suspendLock protocol
+  (upstream-windows-notes.md section 2). minitProcid already records
+  real tids.
+- GetLastError capture must move INTO the call thunk (ntcall6/
+  ntcall10) once SuspendThread preemption exists: today ntcallE's
+  second ntcall on the same thread is safe only because runtime code
+  is never async-preempted between them (chunk A note; re-audit
+  EVERY two-call error fetch: ntcallE, ntcallSE, netpollNT's WSAPoll
+  error read).
+- osPreemptExtEnter/Exit brackets around CreateProcessW-class foreign
+  calls (the ntSpawnMu window) per upstream's cgocall model;
+  runtime-internal paths (netpoll wake sends, ntcall from g0) must
+  NOT take the bracket - the stdcall-vs-cgocall split.
+- The VEH's asyncPreempt interlock is already in place: a fault with
+  RIP == asyncPreempt entry does not push a second sigpanic frame
+  (issue #35773). preemptM's PushCall must keep using CONTEXT_CONTROL
+  and the isAsyncSafePoint-adjusted resume PC.
+- Poller Ms park inside WSAPoll on g0: SuspendThread on them is
+  harmless (gFromSP -> g0 -> wantAsyncPreempt false), but exit()'s
+  suspendLock discipline must cover ws2_32-parked threads.
+- Console ctrl: SetConsoleCtrlHandler is already resolved
+  (ntSetConsoleCtrlHandlerFn), and CreateEventW/SetEvent are in the
+  table for the relay-M design (upstream-windows-notes.md section 8:
+  handler runs on an INJECTED thread with no g - the asm handler must
+  stay Go-free; g==nil in ntsigtramp<> already returns
+  CONTINUE_SEARCH for such threads, proving the TLS-nil path). Feed
+  sigsend(SIGINT/SIGTERM) from a Go relay M, NOT from the injected
+  thread; give the relay its own event, never the netpoll wake
+  socket. ntKillSelf/ntDeliverSelfSignal are reusable for a
+  same-thread synthesized delivery if the relay M design wants it.
+- ntSigActs is the handler-state oracle: console-ctrl "unwatched ->
+  default death" decisions can consult it exactly like ntKillSelf.
+- CI flip (runtimeprobe on windows-latest) stays chunk E.
+
+## Wave 2 chunk D2 (2026-07-18): async preemption + console control
+
+End state under wine 9.0: the probe's preempt check goes GREEN -
+163/173/181/166ms across four consecutive runs (linux reference
+142ms), whole probe ~1.2s end to end (was ~85s while the spin loops
+drained their iteration bound). unixsock is the SOLE remaining wine
+red (ws2_32 AF_UNIX gap, chunk C's documented wine-fidelity case;
+windows-latest judges), rc reflects only it. Chunk-C sockstress
+battery 8/8 + ok all under wine WITH preemption live; fizzbuzz
+wine+linux byte-identical. Linux native: 39 checks + ok all rc 0,
+four consecutive runs, preempt 142-160ms - byte-untouched behavior.
+cosmo std builds on amd64 AND arm64; changed files gofmt clean.
+
+### Per-M thread handles (minit/unminit/ntNewosproc)
+
+- mOS (os_cosmo_amd64_m.go) grows upstream's preemption trio:
+  `thread uintptr` (a DuplicateHandle of the thread, made BY the
+  thread itself in minit's NT leg - ntMinitThread), `threadLock
+  mutex` guarding it, `preemptExtLock uint32` (the external-code CAS
+  gate). unminit's NT leg closes the handle under threadLock and
+  zeroes it, so ntPreemptM treats a dying M as unpreemptible (mexit
+  and dropm both route through unminit). arm64's mOS gets only
+  preemptExtLock (the shared osPreemptExtEnter/Exit must compile
+  there; iswindows() is constant false so they dead-code away).
+- ntNewosproc now closes the CreateThread handle immediately
+  (wave 1 leaked it; the per-M handle is minit's duplicate, exactly
+  upstream newosproc's split) and ports the CreateThread-vs-
+  ExitProcess race freeze: CreateThread failing while ntExiting is
+  set parks the thread on the double-locked ntDeadlock mutex
+  (upstream issue #18253).
+
+### Trampoline last-error capture (the D1 handoff's hard rule)
+
+ntcall6/ntcall10 now bracket the foreign call themselves: zero the
+TEB LastErrorValue (gs:0x30 -> TEB+0x68) before the CALL (upstream
+asmstdcall's SetLastError(0)), and immediately after the target
+returns, read it back and store it into this M's mOS.ntLastError
+(reached from the trampoline via get_tls/g/g_m - cosmo amd64 keeps g
+at gs:0x28 on both hosts, cmd/internal/obj/x86 Hcosmo). The capture
+is atomic with the call: no window in which SuspendThread preemption,
+a later win64 call, or any scheduling event can lose the value.
+ntcallE/ntcallSE/ntcallSE10 read getg().m.ntLastError (single
+trampoline trip now - the second GetLastError ntcall is gone), and
+netpollNT's WSAPoll error read does the same. The ntcallArgs blocks
+did NOT widen (the chunk-A nosplit rule): the store rides the m,
+not the args frame.
+
+### preemptM port (os_cosmo_nt_preempt.go ntPreemptM)
+
+Upstream os_windows.go:1152-1236 carried over with the fork's
+idioms; every upstream lock and ordering kept:
+
+1. self-preempt throw; CAS mp.preemptExtLock 0->1 or fail the
+   attempt (external code running).
+2. mp.threadLock: mp.thread==0 -> unpreemptible, ack and return;
+   else DuplicateHandle our own reference; unlock BEFORE suspending.
+3. 16-byte-aligned FULL 1232-byte CONTEXT (ntContext grew its
+   fltsave/vector tail; the buffer is over-allocated +15 and rounded,
+   upstream's idiom), ContextFlags = CONTEXT_CONTROL only -
+   asyncPreempt saves everything else itself.
+4. ntSuspendLock serializes ALL SuspendThread callers (SuspendThread
+   is asynchronous: two threads suspending each other deadlock).
+   Held across SuspendThread AND GetThreadContext - the latter is
+   what actually blocks until the suspension completes. SuspendThread
+   returning -1 (thread gone) unwinds and acks.
+5. Safe-point gate: ntGFromSP (upstream gFromSP - which of
+   g0/gsignal/curg owns the interrupted SP) + wantAsyncPreempt +
+   isAsyncSafePoint(pc, sp, 0). Threads inside win64 calls sit on
+   their g0 stack (asmcgocall switched) -> gFromSP says g0 ->
+   wantAsyncPreempt false -> plain suspend/resume, no injection;
+   runtime-Go PCs are refused by isAsyncSafePoint's name check.
+6. Injection = upstream PushCall's fake CALL: SP-=8, [SP]=the
+   isAsyncSafePoint-ADJUSTED resume PC, RIP=asyncPreempt entry,
+   SetThreadContext. (The VEH side's RIP==asyncPreempt interlock has
+   been live since D1 - a fault-vs-preempt collision cannot
+   double-frame.)
+7. Release preemptExtLock; ack: preemptGen.Add(1) THEN
+   signalPending.Store(0) - doSigPreempt's exact order. The clear is
+   the fork-specific delta: the unix preemptM wrapper
+   (signal_unix.go) CASed signalPending before signalM, and on
+   signal hosts the handler's ack clears it; without the clear here
+   the gate would stay shut and preemption would fire exactly once.
+8. ResumeThread; CloseHandle.
+
+Wiring: signalM's NT leg (os_cosmo.go) dispatches sigPreempt ->
+ntPreemptM and drops everything else (preemptM is signalM's only
+cosmo caller - grep-verified; secret.go's noopSignal is linux-only).
+sysmon's retake, preemptone, suspendG, and STW all flow through
+preemptM unchanged. preemptMSupported was already true
+(signal_unix.go).
+
+Lock order: threadLock -> (released) -> ntSuspendLock. Nothing takes
+them nested the other way; a suspended thread can never hold
+ntSuspendLock (suspension only happens under it), which is the
+mutual-suspend deadlock proof.
+
+### exit() discipline (the ExitProcess-vs-SuspendThread wedge)
+
+- runtime.exit's NT asm branch is now a tail JMP to the Go ntExit:
+  lock(&ntSuspendLock) FOREVER, ntExiting=1, ExitProcess. So no
+  suspension can be mid-flight while the process dies - the wedge
+  upstream exit() documents (suspender killed between SuspendThread
+  and ResumeThread -> target frozen forever).
+- ntKillSelf's normal-operation encoded deaths (SIGKILL, SIG_DFL
+  terminate - the waitsig check's exact path) go through
+  ntExitEncodedOrdered = same lock + ntExitEncoded. Crash paths
+  (ntWinthrow from the VEH, raise/raiseproc's dieFromSignal exits)
+  deliberately stay on the bare asm ntExitEncoded: taking runtime
+  locks from an exception handler is worse than upstream's accepted
+  dieFromException equivalent - same residual risk profile as
+  upstream windows.
+- WSAPoll-parked poller Ms and WaitOnAddress-parked Ms need nothing
+  special at exit: they are parked, not suspended; ExitProcess
+  terminates parked threads fine. The invariant that matters is
+  "SuspendThread only ever under ntSuspendLock", which ntExit's
+  forever-hold closes.
+
+### osPreemptExtEnter/Exit (the cgocall bracket)
+
+preempt_nonwindows.go now excludes cosmo; os_cosmo.go defines the
+real pair (iswindows-gated, mirroring upstream: Enter spins on the
+CAS with osyield while a preemption is in flight, Exit is a plain
+store). They wrap the blocking foreign calls in ntcallSE/ntcallSE10
+STRICTLY inside the entersyscall window (enter after entersyscall,
+exit before exitsyscall) - exitsyscall can schedule other goroutines
+on this M, which must never run with preemptExtLock held. Effect on
+a blocked M (ReadFile on a console, CreateProcessW mid-image-load):
+ntPreemptM fails fast (CAS) instead of suspending a thread that may
+hold the loader lock. Runtime-internal g0 ntcalls (netpoll wake
+sends, WSAPoll, futex waits) take NO bracket on purpose - upstream's
+stdcall-vs-cgocall split; they are protected by gFromSP->g0.
+
+### Console control -> os/signal (SetConsoleCtrlHandler)
+
+- The callback runs on a Windows-INJECTED thread: no g, no TLS.
+  ntCtrlTramp (sys_cosmo_nt_amd64.s) is therefore Go-free asm using
+  only volatile registers and direct win64 calls (chunk-B alignment
+  discipline): classify dwCtrlType (0/1 CTRL_C|BREAK -> SIGINT(2);
+  2/5/6 CLOSE|LOGOFF|SHUTDOWN -> SIGTERM(15); else return 0), LOCK
+  OR the signal bit into ntCtrlMask, SetEvent(ntCtrlEvent), then
+  return 1 for the SIGINT class - or, for the SIGTERM class, park
+  forever in a Sleep(INFINITE) loop: Windows kills the process the
+  moment a CLOSE/LOGOFF/SHUTDOWN handler returns, and blocking
+  grants Go handlers the OS grace window (upstream ctrlHandler's
+  block(), ~5-20s system deadline).
+- The relay: ntInitConsoleCtrl (called from mstartm0 via the new
+  cosmoMstartm0 hook in proc.go + stubs_noncosmo.go stub) creates
+  the auto-reset event, parks a dedicated relay M on it
+  (newm(ntCtrlRelay, nil, -1) - no P, blocked in
+  WaitForSingleObject on its g0, the sysmon shape), and registers
+  the handler. FIRST ATTEMPT FAILED and is instructive: goenvs -
+  where upstream registers ITS handler - is too early for newm,
+  because allocm borrows the caller's P and m0 only acquires p0 in
+  procresize at the END of schedinit (the new VEH caught it with a
+  perfect traceback: acquirep(nil) in allocm). mstartm0 runs just
+  after, with p0 held, and its newextram precedent already
+  allocates there.
+- Delivery: the relay drains ntCtrlMask (Xchg) and runs ntKillSelf
+  per signal - the same kernel decision tree kill(2) uses, against
+  ntSigActs: SIG_IGN drops, SIG_DFL dies encoded (0xC0DE0002 for an
+  unwatched Ctrl+C - the Linux default action; deliberate delta
+  from upstream, which returns 0 and lets the OS exit with
+  STATUS_CONTROL_C_EXIT), an installed handler goes through the D1
+  trampoline into sigtrampgo -> sighandler -> sigsend/os signal
+  (Notify) or dieFromSignal. The mask+auto-reset-event pair cannot
+  lose events: bits latch before SetEvent, the relay re-drains
+  after each wait.
+- Cost note: one standing parked thread per process. Upstream avoids
+  it via compileCallback+needm (extra-M machinery the cosmo NT port
+  does not have); revisit if it ever matters.
+
+### Wine verification of console ctrl (limits documented)
+
+- GenerateConsoleCtrlEvent is UNAVAILABLE under this headless wine:
+  redirected-stdio processes have no console (error 12), and
+  AllocConsole is denied (error 5 - no console host in the
+  environment), so the OS-injected path cannot fire locally. CLOSE/
+  LOGOFF/SHUTDOWN cannot be generated programmatically by API design
+  anywhere.
+- What WAS verified under wine (throwaway runtime hook driving the
+  REAL registered asm callback through the win64 trampoline - the
+  same CX=dwCtrlType ABI the OS dispatcher uses; hook deleted, not
+  committed):
+  * notify path: callback(0) -> verdict 1, SIGINT arrives at
+    os/signal.Notify; callback(2) from a parked goroutine -> blocks
+    forever (by design) AND SIGTERM arrives at Notify. rc 0.
+  * ignore path: signal.Ignore(SIGINT) -> event dropped, process
+    survives.
+  * default path: unwatched CTRL_C -> process dies encoded (shell
+    sees rc 2 = low byte of 0xC0DE0002, the ntKillSelf(SIGINT)
+    SIG_DFL action; code-identical to the D1-wine-verified waitsig
+    death path plus the new suspendLock).
+  * every probe/sockstress/fizzbuzz run boots with the handler
+    registered and the relay M parked - the full battery doubles as
+    a regression test that the standing relay disturbs nothing.
+- Untested residue for real NT: the OS's actual foreign-thread
+  injection (the handler touches no TLS by construction - the same
+  discipline ntsigtramp's g==nil path proved for foreign threads)
+  and real conhost CTRL_C dispatch. windows-latest CI judges; the
+  probe does not exercise console ctrl (backlog item for a later
+  probe extension).
+
+### Fork-shared file deltas (kept minimal)
+
+- proc.go mstartm0: one cosmoMstartm0() call (stub for !cosmo in
+  stubs_noncosmo.go - the established hook pattern).
+- preempt_nonwindows.go: build tag grows && !cosmo.
+- defs_cosmo_{amd64,arm64}.go: _SIGTERM = 0xf was simply MISSING
+  from the signal constant block (the list jumped 0xe -> 0x10);
+  nothing referenced it before the console-ctrl work.
+- signal_unix.go, preempt.go, cgocall.go: untouched.
+
+### Chunk-D2 commits
+
+- 6c4e3c11 runtime: NT async preemption, per-M thread handles,
+  console control
+
+### What chunk E must do (CI flip) + real-NT risks
+
+- Flip (recon section (d), restated): (1) TestRuntimeProbe's
+  windows t.Skip at testdata/ape/apetest/runtimeprobe_test.go:69-74
+  ("probe execution is a later wave") becomes a direct
+  `cmd = exec.CommandContext(ctx, bin, mark)` - no shell, mirroring
+  fizzbuzz_test.go:54-59 (unix keeps `/bin/sh bin mark`). (2) In
+  .github/workflows/cosmo-ci.yml's test-windows job, the two apetest
+  steps at :312-322 (windows-origin) and :332-342 (ubuntu-origin)
+  set FIZZBUZZ_BIN only - add
+  RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-<origin>/
+  runtimeprobe.com" to both, mirroring the unix legs at
+  :145/:168/:191. Optional redundancy rung: a direct pwsh probe run
+  after the fizzbuzz acceptance (:247-298 pattern). Also update the
+  stale job comment :216-219 and the workflow header :4-9.
+- Known real-NT risks to expect on windows-latest, in likelihood
+  order: (1) unixsock on Server 2022 - afunix.sys exists but the
+  runner image's support for AF_UNIX pathname sockets must prove
+  itself (the ONLY check wine could not green-light); (2) timer
+  granularity - wave 1's Sleep(ms) usleep gives ~15.6ms quanta on
+  real NT (wine's happens to be finer): if the probe's timer
+  thresholds flake, resolve CreateWaitableTimerExW with
+  CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (0x2) + SetWaitableTimer
+  with negative 100ns due times and give each M a highResTimer in
+  minit (upstream os_windows.go:398-432, notes section 10); (3)
+  console CP/VT on real conhost (SetConsoleOutputCP(CP_UTF8) is
+  boot-applied but wine-with-redirect never proved a real console);
+  (4) WER dialogs - preventErrorDialogs is live since D1, but real
+  WER has more moving parts (WerSetFlags resolves on real NT, was
+  missing on wine).
+
+## Wave 2 chunk E (2026-07-18): CI flip — windows-latest runs the probe
+
+End state: acceptance run 29650537288 fully green — all 8 jobs, with
+test-windows running the full apetest suite (fizzbuzz battery + probe
++ format tests) against ubuntu-, windows- AND macos-origin fat APEs.
+TestRuntimeProbe 0.41-0.44s per origin, every check ok including
+unixsock/unixecho on real afunix.sys, preempt 180-186ms. Three
+iterations were needed; both fixes were real-NT-only defects that wine
+could not exhibit, which is exactly why the risk list called
+windows-latest "the judge".
+
+### The flip itself (iteration 1, cd5fb34a)
+
+- runtimeprobe_test.go: the windows t.Skip became the fizzbuzz-shaped
+  direct launch `exec.CommandContext(ctx, bin, mark)` (PE boot needs
+  no shell; unix keeps /bin/sh).
+- cosmo-ci.yml test-windows: RUNTIMEPROBE_BIN added to both apetest
+  steps, plus a THIRD leg (download + apetest + log upload) for the
+  macos-origin artifact so windows tests all three origins like the
+  unix runners; job cap 30->40 (sum of per-step caps); header + job
+  comments refreshed.
+
+First real-NT verdict: 37-38/39 checks green immediately. Red:
+unixsock on all three origins (`bind: operation not supported` =
+EOPNOTSUPP <- WSAEOPNOTSUPP), one sigterm flake ("signal not
+delivered within 5s"), and a ~5.0s stall signature: preempt "ok" at
+5.0723/5.0846s in two runs (vs 190ms when healthy) - both values =
+5s + normal work, i.e. rescued at EXACTLY the leftover 5s time.After
+deadline pending from the preceding signal check.
+
+### Iteration 2 (1611ed68): wrong theory, right instrument
+
+Hypothesis "afunix needs WSA_FLAG_OVERLAPPED" (every known-working
+consumer creates overlapped sockets) + SIO_UDP_CONNRESET guards on
+the UDP wake socket + wake-send failure printlns + a NEVER-FAILING
+diagnostic CI step that natively P/Invokes WSASocketW/bind for
+AF_UNIX on the runner. Result: still red, same errors - but the
+diagnostic returned gold: the runner binds AF_UNIX fine with our
+EXACT creation flags (non-overlapped 0x80) and sockaddr shape, and
+the printlns proved wake sends never fail. Both hypotheses dead; the
+poison had to be a socket-STATE delta on our listener, and the wake
+loss had to be in DELIVERY, not send.
+
+### Iteration 3 (30f65650): both root causes, evidence-pinned
+
+1. SO_REUSEADDR poisons afunix bind. The one state delta between the
+   diagnostic's clean socket and net's listener: listenStream sets
+   SOL_SOCKET/SO_REUSEADDR on every stream listener. On Windows,
+   msafd ACCEPTS the setsockopt (returns 0), then afunix.sys refuses
+   the subsequent bind with WSAEOPNOTSUPP. The extended diagnostic
+   matrix proved it on the runner in the same green run:
+       native plain (flags 0x80): bind OK
+       native +SO_REUSEADDR: setsockopt SO_REUSEADDR OK
+       native +SO_REUSEADDR: bind failed 10045
+       native +FIONBIO: bind OK
+   Fix: ntEmuSetsockopt swallows SOL_SOCKET/SO_REUSEADDR for
+   AF_UNIX sockets (success, no winsock call) - which IS the Linux
+   semantics: the option is accepted and has no effect on pathname
+   binds (a taken path is EADDRINUSE regardless). The iteration-2
+   overlapped-flag change was REVERTED as disproven; creation stays
+   uniformly non-overlapped.
+2. Loopback UDP drops on real NT = lost netpoller wakes. The wake
+   channel was a self-connected loopback UDP socket. UDP - loopback
+   included - may legally drop; wine's in-process loopback never
+   does, so 4x wine probe runs and the whole sockstress battery
+   could not catch it. One dropped wake byte leaves the poller
+   asleep for its full WSAPoll timeout, and because mutators
+   (netpollopen/arm/close) block on ntMtxset until the poll cycle
+   ends, and new-earlier timers only reach the poller via
+   netpollBreak, EVERYTHING queues behind the stale deadline - the
+   observed 0-3 random ~5s stalls per run (sigterm's own 5s timeout
+   was often both the victim and the rescue). Fix: the wake channel
+   is a connected loopback TCP pair built at netpollinit (listener
+   -> blocking connect -> accept -> close listener; TCP_NODELAY on
+   the send end; both ends nonblocking; accepted end at slot 0).
+   TCP retransmits - a wake byte cannot be lost - restoring the
+   losslessness every upstream netpollBreak transport has
+   (windows PostQueuedCompletionStatus, aix a pipe).
+
+Supporting change: runtimeprobe's main wraps each check block in a
+2s stopwatch - a slow block prints `slow: <label> took <d>` plus one
+poller-counter sample (the wave-9 forensic counters) - so any future
+latency stall names its block in CI logs without weakening a single
+verdict. The green run has ZERO slow lines across all three probe
+executions.
+
+### Verification ladder for the green commit (30f65650)
+
+linux native probe 39 ok + "ok all" rc 0 (no slow lines); wine probe
+x4: sole red unixsock (wine ws2_32 AF_UNIX gap - socket() fails
+EAFNOSUPPORT before bind), preempt 171-212ms, no slow lines;
+sockstress 8/8 + ok all under wine AND linux (the netpoller rewrite's
+stress gate); fizzbuzz wine/linux byte-identical; cosmo std builds
+amd64+arm64; apetest harness green on linux; actionlint clean.
+windows-latest: 3x TestRuntimeProbe PASS (0.41-0.44s), 3x "ok all",
+zero slow lines, apetest ~2.1s per origin, all other jobs green.
+
+### Chunk-E commits
+
+- cd5fb34a ci: run runtimeprobe on windows-latest against all three
+  origin binaries
+- 1611ed68 runtime: fix NT afunix bind and harden the netpoller wake
+  socket (theory disproven and reverted next commit; the diagnostic
+  step and printlns it added are what cracked the case)
+- 30f65650 runtime: lossless NT netpoll wake (TCP pair), AF_UNIX
+  SO_REUSEADDR no-op
