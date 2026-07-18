@@ -1687,3 +1687,22 @@ failures - on top of the boundary-address forensics and the fix's
 upstream mem_windows.go provenance. Branch CI history for step 3:
 977759d7 green (first flip push), a94c1891 FAIL (the straddle flake,
 identical code), 4175ebce green, 2f0d0f34 green, dispatch green.
+
+# 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
+
+Goal: testdata/runtimeprobe (runtimeprobe.com) green on windows-latest —
+the same runtime gauntlet macOS passes: file I/O, directory listing,
+pid/ppid, NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
+(sigpanic recovery, os/signal delivery, async preemption, wait-status
+decode), os/exec, os.Executable, argv/env, wd round-trip. That flips the
+windows skip in apetest/runtimeprobe_test.go and sets RUNTIMEPROBE_BIN
+on the test-windows apetest steps in cosmo-ci.yml.
+
+Status: in progress — recon done, implementation starting.
+
+Recon baseline (linux, this branch): make.bash 3m10s; fat fizzbuzz +
+runtimeprobe build; probe passes the full gauntlet ("ok all", exit 0).
+Under wine 9.0 the wave-1 surface carries the probe through args/
+environ/mark, then the first os.Getpid() dies at the designed 0xf7
+crash poke (rawSyscallNoError has no NT route) — exit 0xC0000005.
+That poke is wave 2's starting line.
