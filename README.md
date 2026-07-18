@@ -10,11 +10,16 @@ APE binaries are single executables that run natively on multiple operating syst
 
 ```bash
 # Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
-# GOARCH is ignored for the output.
+# GOARCH is ignored for the output. The APE ships stripped; full debug
+# info lands in two sidecar ELFs next to it (program.com.dbg for amd64,
+# program.com.aarch64.elf for arm64), the cosmocc convention.
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE in the install directory
+# go install produces the same fat APE + sidecars in the install directory
 GOOS=cosmo go install ./cmd/program
+
+# Keep full debug info embedded in the APE instead (no sidecars)
+GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
@@ -22,7 +27,12 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 The resulting `.com` file runs natively on Linux and macOS. On Windows it
 currently loads as a parseable stub PE that exits 0; Windows execution is
-being reimplemented cosmo-natively (in progress).
+being reimplemented cosmo-natively (in progress). Debug with the sidecars
+(`gdb program.com.dbg`, or `add-symbol-file` against the running APE);
+runtime tracebacks and pprof need no sidecar. When distributing APEs,
+ship them zstd-compressed: the two arch payloads are highly redundant, so
+e.g. a 26.7 MB webserver APE is ~5.7 MB after `zstd -19 --long=27`
+(distribution-side only - there is no runtime self-extraction).
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 
