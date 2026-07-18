@@ -26,8 +26,8 @@ import (
 //   loader source (compiled with cc on first run); no Rosetta involved
 // - Windows: A real PE header maps the embedded cosmo amd64 image and
 //   enters the runtime's NT boot stub through loader-resolved kernel32
-//   imports (wave 1: the stub proves the chain by exiting 42; the full
-//   cosmo-native NT personality is in progress). arm64-only APEs keep a
+//   imports; the stub joins the common runtime boot with the host
+//   marked as NT (rt0_cosmo_nt_amd64.s). arm64-only APEs keep a
 //   parseable do-nothing stub PE header instead.
 // - Windows shell (MSYS/Cygwin): Delegates to cmd.exe for PE execution
 
