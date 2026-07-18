@@ -114,8 +114,20 @@ a posix_spawn-style CreateProcessW path (upstream-ported argument
 quoting and sorted UTF-16 env block, stdio handle inheritance,
 attr.Dir), and wait4 packing the Linux wait-status protocol (normal
 exit = code<<8; NTSTATUS crashes become Linux-numbered fake termination
-signals, 0xC0000005 -> SIGSEGV). Not yet on Windows: sockets, signals
-(a SIGSEGV still kills the process - no VEH), profiling - see
+signals, 0xC0000005 -> SIGSEGV). Wave-2 chunk C adds sockets and a real
+netpoller: the Linux socket syscalls are emulated over classic
+synchronous winsock (non-overlapped WSASocketW, FIONBIO nonblocking,
+AF_INET6 10<->23 and curated sockopt value translation, WSAE->errno
+map, SIO_UDP_CONNRESET disabled on UDP), the timer stub is replaced by
+a WSAPoll readiness poller (netpoll_aix.go's level-triggered two-lock
+design with a self-connected loopback-UDP wake socket; pipes stay
+non-pollable/blocking on purpose), and AF_UNIX pathname stream sockets
+work over afunix.sys with sun_path translated through the path layer
+(abstract names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely,
+so the unixsock leg is judged by windows-latest CI). TCP/UDP loopback
+with live deadlines is wine-green (probe + a dedicated stress
+battery). Not yet on Windows: signals (a SIGSEGV still kills the
+process - no VEH), async preemption, sendmsg/recvmsg, profiling - see
 DEBUGGING.md's NT wave sections for the ladder and forensics.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/

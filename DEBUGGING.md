@@ -2085,3 +2085,209 @@ recon's suggested mechanism). No new runtime surface.
   osPreemptExtEnter when preemption arrives.
 - fd-table lifecycle proven: 10+ spawns (6 sequential + 4 concurrent)
   with 3 pipes each leak nothing (probe + stress rerun stable).
+
+## Wave 2 chunk C (2026-07-18): sockets + the WSAPoll netpoller
+
+End state under wine 9.0: everything chunks A+B had stays ok AND the
+whole TCP block (tcplisten, tcpecho, deadline, tcpserver) plus udp
+pass; unixsock FAILs gracefully with EAFNOSUPPORT because wine's
+ws2_32 has no AF_UNIX support at all (see wine fidelity below) - the
+afunix leg's judge is windows-latest CI. The run still dies at
+segvrecover with 0xC0000005 by design (VEH is chunk D). Linux
+battery: probe 39 checks + ok all rc 0 (the netpoll rewire leaves the
+epoll path byte-untouched), fizzbuzz linux+wine byte-identical,
+cosmo/arm64 std builds, vet clean, gofmt clean. A dedicated
+readiness-model stress harness (scratchpad sockstress, not committed)
+passed 3/3 under wine and natively on linux: live read-deadline
+expiring DURING a blocked read (300ms observed), late data beating a
+generous deadline, connect-to-closed-port -> prompt ECONNREFUSED (the
+POLLERR/SO_ERROR completion path), 8 concurrent echo connections x 50
+round trips, 4 MiB each way through one connection (send-buffer
+backpressure -> waitWrite/POLLWRNORM), a UDP read deadline, close(2)
+promptly unblocking a parked reader, and an Accept deadline.
+
+### Winsock surface (os_cosmo_nt_sock.go)
+
+Lazy bring-up: ntWinsockEnsure() LoadLibraryA("ws2_32.dll") +
+GetProcAddress x19 + WSAStartup(0x202) exactly once, mutex-guarded
+with a sticky failure state, triggered by whichever runs first of the
+socket(2) emulation and netpollinit (the two can race; a non-network
+program never loads winsock - though any timer-using program now does,
+via netpollinit's wake socket, the cost of replacing the stub
+wholesale). Nothing in the ensure path allocates: netpollGenericInit
+can fire from the first timer's addHeap under runtime locks.
+
+Creation is WSASocketW WITHOUT WSA_FLAG_OVERLAPPED and WITH
+WSA_FLAG_NO_HANDLE_INHERIT: plain BSD-shaped synchronous calls
+(recv/send/recvfrom/sendto/accept/connect), no OVERLAPPED machinery
+anywhere - upstream's IOCP netpoll answers "did my submitted
+operation complete", not "is this fd readable", so it cannot back a
+linux-shaped internal/poll; WSAPoll can. SOCK_NONBLOCK/SOCK_CLOEXEC
+are stripped and emulated (ioctlsocket FIONBIO after create;
+cloexec = the no-inherit creation flag, recorded for fcntl).
+fcntl(F_SETFL) pushes O_NONBLOCK changes into FIONBIO for
+socket-kind fds. Accepted sockets get SetHandleInformation
+(HANDLE_FLAG_INHERIT, 0) - their inheritability is not contractually
+specified and chunk B's spawn uses bInheritHandles=TRUE.
+close(2) on the ntFDSocket fd-table kind routes to closesocket
+(CloseHandle would leak winsock provider state); read/write route to
+recv/send; fstat synthesizes S_IFSOCK|0777; lseek reports ESPIPE.
+
+### Translation tables (the load-bearing deltas)
+
+- AF values: AF_UNIX=1 and AF_INET=2 match Linux; **AF_INET6 is 23 on
+  NT vs 10 on Linux** - rewritten inside every sockaddr in both
+  directions (layouts are otherwise byte-identical; no sa_len on NT,
+  so less work than the darwin leg's 10<->30).
+- Sockopts (curated, unknown pairs -> ENOPROTOOPT): SOL_SOCKET 1 ->
+  0xffff with SO_REUSEADDR 2->4 (NT semantics are looser -
+  REUSEADDR+REUSEPORT-ish - fine for listeners), SO_TYPE 3->0x1008,
+  SO_ERROR 4->0x1007 (the RETURNED VALUE is translated winsock->Linux
+  errno too - the nonblocking-connect completion protocol depends on
+  it), SO_BROADCAST 6->0x20 (net's setDefaultSockopts REQUIRES this
+  to succeed on UDP), SO_SNDBUF 7->0x1001, SO_RCVBUF 8->0x1002,
+  SO_KEEPALIVE 9->8, SO_LINGER 13->0x80 with the struct converted
+  between Linux {i32,i32} and winsock {u16,u16}; IPPROTO_TCP (=6 both
+  sides): TCP_NODELAY 1->1, TCP_KEEPIDLE 4->3, TCP_KEEPINTVL 5->17,
+  TCP_KEEPCNT 6->16; IPPROTO_IPV6 (=41 both): IPV6_V6ONLY 26->27.
+- Errnos: winsock failures land in the SAME TEB last-error slot as
+  every Win32 call (WSAGetLastError is a reader of that slot), so
+  ntcallE/ntcallSE capture them with zero extra machinery; ntWSAToLinux
+  maps the WSAE* range (10035 WSAEWOULDBLOCK->EAGAIN, 10047->
+  EAFNOSUPPORT, 10054->ECONNRESET, 10061->ECONNREFUSED, ...).
+  Special cases: connect's WSAEWOULDBLOCK -> **EINPROGRESS** (winsock's
+  spelling of a pending nonblocking connect; WSAEINPROGRESS is a
+  winsock-1.1 artifact), accept's WSAECONNRESET -> **ECONNABORTED**
+  (linux semantics; internal/poll's accept loop swallows and re-polls
+  it), recv-side WSAESHUTDOWN -> EOF while send-side -> EPIPE, and
+  recvfrom's WSAEMSGSIZE (truncated datagram) is swallowed into a
+  full-buffer read like Linux's silent truncation.
+- UDP: SIO_UDP_CONNRESET + SIO_UDP_NETRESET are disabled (WSAIoctl
+  via the chunk-B ntcall10 trampoline - 9 args) on every INET dgram
+  socket at creation, best-effort (wine lacks the ioctls): otherwise
+  a latched ICMP unreachable from an earlier send fails unrelated
+  recvs with WSAECONNRESET. Upstream net does the same.
+
+### AF_UNIX
+
+Pathname SOCK_STREAM over afunix.sys (Win10 17063+). sun_path crosses
+into winsock as a **UTF-8 Windows path** (afunix's documented
+encoding), produced by the chunk-A path layer (ntPathW -> UTF-8), so
+"/tmp/x.sock" binds the real temp-dir file; >107 translated bytes ->
+EINVAL. The Linux-spelling name is RECORDED in the fd table
+(unixBound at bind, unixPeer at connect - including the EINPROGRESS
+arm) and getsockname/getpeername report the recorded bytes: Linux
+returns exactly what you bound, and back-translating winsock's stored
+Windows path would surface the /c/... alias (the probe compares addr
+STRINGS - os.SameFile does not apply to socket names). Unnamed
+sockets report the 2-byte family-only sockaddr, which the
+linux-shaped anyToSockaddr renders as the empty name (the probe's
+unnamed-dialer canary); the caller's buffer is zeroed first because
+that decoder scans the whole 108-byte sun_path. Abstract-namespace
+names (leading NUL) and autobind (empty path) are refused EINVAL
+exactly like the darwin leg. Socket FILES are reparse points
+(IO_REPARSE_TAG_AF_UNIX) and are NOT auto-deleted on close;
+unlink/RemoveAll delete them like ordinary files via DeleteFileW (the
+probe's own deferred RemoveAll covers its temp dir; verified in the
+existing unlinkat emulation - no special casing needed).
+getsockname failing WSAEINVAL on an unbound socket (winsock refuses
+what Linux answers) is synthesized into the Linux zero-address reply.
+
+### Netpoll: WSAPoll, aix-shaped, level-triggered (netpoll_cosmo_nt.go)
+
+Chunk A's WaitOnAddress timer-only stub is deleted wholesale; NT now
+has a third real poller personality behind the netpoll_cosmo.go
+host dispatch (netpollinitNT/openNT/closeNT/armNT/BreakNT/NT).
+Design = netpoll_aix.go line-for-line where possible:
+
+- **State**: fixed arrays [513]WSAPOLLFD/[513]*pollDesc/[513]int32
+  (fd-table-sized + wake slot; NO slices - netpollinit and
+  netpollopen can run under runtime locks, so nothing allocates).
+  WSAPOLLFD is 16 bytes on win64 (8-byte SOCKET + two SHORTs + pad),
+  NOT Linux's 8-byte pollfd, and the POLL* constants differ
+  (POLLRDNORM=0x100, POLLWRNORM=0x10, POLLERR=1, POLLHUP=2,
+  POLLNVAL=4). Only RDNORM/WRNORM are ever REQUESTED - WSAPoll
+  rejects POLLERR/POLLHUP/POLLPRI in events with WSAEINVAL.
+- **Two-lock protocol**: mutators take ntMtxpoll, send one byte to
+  the wake socket if no update is pending, take ntMtxset (held by the
+  poller across its blocking WSAPoll), release ntMtxpoll, mutate,
+  release. The poller re-takes both at cycle top and clears
+  pendingUpdates. pd.user holds the slot index, maintained on
+  swap-delete; netpollclose is keyed by the emulated fd number
+  (parallel ntPollNums array) since slots store SOCKET handles.
+- **Level-triggered arming**: netpollinitNT sets
+  netpollLevelTriggered (the hook netpoll.go kept from the old darwin
+  poll(2) poller), so pollWait arms the awaited direction each wait
+  and delivery disarms it (events &^= bit). netpoll(0) returns empty
+  (aix rule: a nonblocking check would contend ntMtxset with the
+  blocked poller); sysmon/findrunnable tolerate that by precedent.
+- **Wake socket**: WSAPoll has no pipe/eventfd concept, so slot 0 is
+  a nonblocking loopback UDP socket bound to 127.0.0.1:0 and
+  connect()ed TO ITSELF (sends need no address; connectedness
+  filters foreign datagrams). netpollBreak = the shared netpollWakeSig
+  CAS + one send; the poller drains with nonblocking recvs and resets
+  the sig only when it was blocking (aix rule).
+- **netpollopen refuses non-socket fds** (ENOSYS -> internal/poll
+  blocking fallback): load-bearing for chunk B's exec stdio pipes,
+  and WSAPoll would report non-sockets POLLNVAL anyway. POLLNVAL on a
+  registered slot (close racing registration) disarms both directions
+  and wakes both sides with the error bit, so a dead slot cannot spin
+  the poller.
+- **Forensics**: the wave-9 counters (xnuPollCycles/Done/Enter/Exit/
+  LastN/LastE) are fed from the WSAPoll cycle too - exactly one host
+  poller is live per process - so cosmoNetpollDiag names a stall in
+  the runtimeprobe watchdog output on NT as well.
+- **Timers**: ride the same netpoll(delay) timeout (ms, capped 1e9)
+  plus netpollBreak wakes; the probe's sleep/ticker/after/ctxtimeout
+  stayed green through the stub->WSAPoll swap, and the stress
+  harness pins live deadlines at ~300ms observed.
+
+GetLastError discipline: netpollNT runs on g0; the WSAPoll error
+fetch is a second plain ntcall on the same thread with no preemption
+possible between (runtime code is never async-preempted) - same
+argument as ntcallE, re-audit when chunk D lands SuspendThread.
+
+### Wine fidelity notes (let windows-latest judge)
+
+- **AF_UNIX does not exist in wine's ws2_32**: WINEDEBUG=+winsock on
+  a minimal socket(AF_UNIX=1, SOCK_STREAM) probe shows wine itself
+  refusing it - "WSASocketW family 1, type 1 ... failed to initialize
+  socket, status 0xc001273f" (facility-winsock NTSTATUS carrying
+  0x273f = 10047 = WSAEAFNOSUPPORT) - while family 2 succeeds through
+  the identical path. The probe's unixsock check therefore FAILs
+  gracefully under wine with "address family not supported by
+  protocol" and skips the unixecho leg; real NT (Server 2022 ships
+  afunix.sys) is the judge. No design contortion for wine.
+- SIO_UDP_CONNRESET/NETRESET are unimplemented in wine; the disable
+  is fire-and-forget, and wine's un-Windows-like UDP behavior does
+  not latch ICMP resets anyway (the probe's UDP check passes).
+- Everything else matched real-NT semantics closely enough that the
+  whole stress battery behaves identically on wine and linux,
+  including error strings (ECONNREFUSED on refused connect, "use of
+  closed network connection" on close-during-read).
+
+### Chunk-C commits
+
+- 413f271b runtime: NT sockets - winsock syscall emulation and
+  WSAPoll netpoller
+
+### What chunk D must know from chunk C
+
+- The netpoller parks Ms INSIDE blocking WSAPoll on g0.
+  SuspendThread-based preemption must not care (gFromSP finds g0,
+  wantAsyncPreempt says no), but exit()'s suspendLock discipline now
+  also covers a thread sitting in ws2_32 - same as any foreign call.
+- netpollBreak/netpollarm/netpollopen make foreign calls (send on
+  the wake socket) under ntMtxpoll; when osPreemptExtEnter brackets
+  land, these are runtime-internal paths (g0/lock context) and must
+  NOT take the preempt-ext lock - mirror upstream's stdcall-vs-
+  cgocall split.
+- Signal-driven wakeups do not exist: nothing in the poller depends
+  on EINTR (WSAPoll has no alertable wait), so chunk D's VEH work
+  cannot perturb it. If chunk D adds a console-ctrl relay M, wake it
+  via its own event, not the netpoll wake socket.
+- ntWinsockEnsure is idempotent and callable from any user-goroutine
+  or init context; if chunk D ever needs a socket (it should not),
+  call it rather than assuming winsock is up.
+- waitsig stays red until chunk D: the probe's signal block is
+  unchanged and still crashes at segvrecover (rc=5) by design.
