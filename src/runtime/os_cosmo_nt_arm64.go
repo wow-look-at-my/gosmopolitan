@@ -43,6 +43,14 @@ func ntVirtualAlloc(v unsafe.Pointer, n uintptr, allocType, prot uintptr) unsafe
 	return nil
 }
 
+func cosmoNTGoargs() bool {
+	return false
+}
+
+func ntGoenvs() {
+	throw("ntGoenvs: not implemented on arm64")
+}
+
 //go:nosplit
 func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	throw("ntVirtualFree: not implemented on arm64")

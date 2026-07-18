@@ -3,8 +3,8 @@
 // real: PE32+ at ImageBase 0x100000000 whose sections map the embedded
 // cosmo amd64 image directly (RVA == payload-relative file offset), whose
 // import directory resolves kernel32!GetProcAddress + LoadLibraryA, and
-// whose entry point is the runtime's _rt0_cosmo_nt boot stub (which for
-// wave 1 proves the chain on Windows by exiting 42).
+// whose entry point is the runtime's _rt0_cosmo_nt boot stub (which
+// marks the host as NT and joins the common cosmo runtime boot).
 package apetest
 
 import (
@@ -233,16 +233,19 @@ func TestPEEntrypointInsideText(t *testing.T) {
 
 // TestPEEntrypointIsNTStub verifies the bytes at the entry point are the
 // _rt0_cosmo_nt prologue: cld; fldcw m16 (rip-relative, so its 4
-// displacement bytes vary); subq $40, %rsp.
+// displacement bytes vary); movl $2, m32 (the __hostos = _HOSTWINDOWS
+// store that hands the host over to the runtime's NT personality -
+// also rip-relative, 4 varying displacement bytes, then the immediate).
 func TestPEEntrypointIsNTStub(t *testing.T) {
 	bin, entry, s := peEntry(t)
 
 	off := s.Offset + (entry - s.VirtualAddress)
-	require.LessOrEqual(t, int(off)+11, len(bin), "entry prologue must be inside the file")
-	prologue := bin[off : off+11]
+	require.LessOrEqual(t, int(off)+17, len(bin), "entry prologue must be inside the file")
+	prologue := bin[off : off+17]
 	assert.Equal(t, byte(0xFC), prologue[0], "entry must start with cld")
 	assert.Equal(t, []byte{0xD9, 0x2D}, prologue[1:3], "cld must be followed by fldcw m16 (x87 re-init)")
-	assert.Equal(t, []byte{0x48, 0x83, 0xEC, 0x28}, prologue[7:11], "fldcw must be followed by subq $40, %rsp")
+	assert.Equal(t, []byte{0xC7, 0x05}, prologue[7:9], "fldcw must be followed by movl $imm32, m32 (the __hostos store)")
+	assert.Equal(t, []byte{0x02, 0x00, 0x00, 0x00}, prologue[13:17], "__hostos immediate must be 2 (_HOSTWINDOWS)")
 }
 
 // TestPEImportsKernel32 verifies the loader-resolved import set: exactly

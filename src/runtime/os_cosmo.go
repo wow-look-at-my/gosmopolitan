@@ -292,6 +292,12 @@ func readRandom(r []byte) int {
 }
 
 func goenvs() {
+	if iswindows() {
+		// The boot block's envp is empty on NT; the real environment
+		// comes from GetEnvironmentStringsW (os_cosmo_nt.go).
+		ntGoenvs()
+		return
+	}
 	goenvs_unix()
 }
 

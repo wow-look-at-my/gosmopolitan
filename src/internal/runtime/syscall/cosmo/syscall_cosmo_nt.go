@@ -54,6 +54,15 @@ func Windows() *WindowsFns {
 // Syscall6 emulates the given Linux-numbered syscall via the table.
 // Results follow the package convention: (r1, r2, errno) with a
 // positive Linux errno.
+//
+// nosplit: runs between entersyscall and exitsyscall (the syscall
+// package's Syscall/Syscall6 funnel through RawSyscall6), where the g
+// is in _Gsyscall and a stack split is fatal ("stack split at bad
+// time"). The whole call chain below - the table funcs are the
+// runtime's ntSyscallWrite/ntSyscallExit - is nosplit for the same
+// reason, exactly like the raw SYSCALL instruction this emulates.
+//
+//go:nosplit
 func (f *WindowsFns) Syscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
 	switch num {
 	case SYS_WRITE:

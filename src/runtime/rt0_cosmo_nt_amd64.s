@@ -10,13 +10,13 @@
 // embedded cosmo amd64 image and points AddressOfEntryPoint at
 // _rt0_cosmo_nt below. The header's import directory points at the
 // runtime·ntidata blob, so by the time the NT loader transfers control
-// here, runtime·ntiat holds real kernel32 function pointers. Wave 1
-// proves that whole chain end to end by exiting with code 42 through
-// loader-resolved imports; later waves replace the ExitProcess tail
-// with the real NT runtime personality boot.
+// here, runtime·ntiat holds real kernel32 function pointers (read at
+// osArchInit by the NT personality's resolver, os_cosmo_nt.go). The
+// stub marks the host as Windows, fabricates the SysV boot block the
+// shared cosmo boot path expects, and joins _rt0_amd64.
 //
-// Everything here is pure asm: no g, no TLS, no Go calls, no stack
-// beyond the small win64 shadow-space frame.
+// Everything here is pure asm: no g, no TLS, no Go calls, no win64
+// calls even - the first foreign call happens later, in osArchInit.
 
 #include "textflag.h"
 
@@ -75,24 +75,44 @@ GLOBL runtime·ntiat(SB), NOPTR, $24
 DATA ntfpucw<>+0(SB)/2, $0x37f
 GLOBL ntfpucw<>(SB), RODATA|NOPTR, $2
 
-DATA ntstrkernel32<>+0(SB)/8, $"kernel32"
-DATA ntstrkernel32<>+8(SB)/4, $".dll"
-GLOBL ntstrkernel32<>(SB), RODATA|NOPTR, $16
+// ntbootrand is the 16-byte buffer the boot stub fills with
+// RDTSC-derived entropy and the fabricated AT_RANDOM points at
+// (sysauxv aims startupRand here). DATA-initialized so the symbol is
+// file-backed noptrdata rather than BSS - bytes that exist in the
+// file, same belt-and-braces as ntiat.
+DATA runtime·ntbootrand+0(SB)/8, $1
+DATA runtime·ntbootrand+8(SB)/8, $1
+GLOBL runtime·ntbootrand(SB), NOPTR, $16
 
-DATA ntstrexitprocess<>+0(SB)/8, $"ExitProc"
-DATA ntstrexitprocess<>+8(SB)/2, $"es"
-DATA ntstrexitprocess<>+10(SB)/1, $0x73 // 's'
-GLOBL ntstrexitprocess<>(SB), RODATA|NOPTR, $16
+// ntargv0 is the static argv[0] of the fabricated boot block: "APE\0".
+// goargs replaces the whole argv with the GetCommandLineW parse on NT
+// (os_cosmo_nt.go cosmoNTGoargs), so this only surfaces if that parse
+// comes back empty.
+DATA ntargv0<>+0(SB)/4, $0x00455041 // 'A' 'P' 'E' '\0', little-endian
+GLOBL ntargv0<>(SB), RODATA|NOPTR, $4
 
 // _rt0_cosmo_nt is the PE AddressOfEntryPoint. The NT loader calls it
 // win64-style: args in CX/DX/R8/R9, 32 bytes of caller-allocated
 // shadow space above the return address, RSP == 8 (mod 16) on entry.
 //
-// Wave 1: prove the import chain works, then exit 42.
+// The stub hands the machine to the ordinary cosmo runtime boot:
 //
-//	hk32 = LoadLibraryA("kernel32.dll")     // via IAT slot 1
-//	fn   = GetProcAddress(hk32, "ExitProcess") // via IAT slot 0
-//	fn(42)                                  // never returns
+//	1. x87 re-init (NT boots the FPU in 53-bit mode).
+//	2. __hostos = _HOSTWINDOWS. Entering via the PE entry point
+//	   means the host IS NT - real cosmo's WinMain trick ("you KNOW
+//	   you're on NT because you entered via WinMain"). The unix rt0
+//	   (rt0_cosmo_amd64.s) receives this in CL from the APE loader;
+//	   here it is a constant.
+//	3. Fill ntbootrand with boot entropy for AT_RANDOM.
+//	4. Fabricate the SysV boot block sysargs walks (os_cosmo.go):
+//	   argc/argv/NULL/envp-NULL/auxv on the OS stack.
+//	5. JMP _rt0_amd64 (asm_amd64.s), which loads argc/argv from
+//	   0(SP)/8(SP) and falls into rt0_go. The NT function table is
+//	   resolved from the loader-filled ntiat slots at osArchInit.
+//
+// The keyhole tests in pe_test.go/ape_test.go assert the first three
+// instructions (cld; fldcw; movl $2, __hostos) - update them if this
+// prologue changes.
 TEXT _rt0_cosmo_nt(SB),NOSPLIT|NOFRAME,$0
 	CLD
 	// Windows initializes the x87 FPU to 53-bit (double) precision;
@@ -100,25 +120,62 @@ TEXT _rt0_cosmo_nt(SB),NOSPLIT|NOFRAME,$0
 	// fldcw a control word restoring 64-bit long-double mode
 	// (ape/specification.md, "The x87 FPU control word").
 	FLDCW	ntfpucw<>(SB)
-	// Entry RSP == 8 (mod 16). Dropping 40 bytes realigns to 16 and
-	// provides the 32-byte shadow space every win64 CALL requires.
-	SUBQ	$40, SP
 
-	// AX = LoadLibraryA("kernel32.dll"). kernel32 is already loaded
-	// (our import table names it), so this just returns its HMODULE.
-	LEAQ	ntstrkernel32<>(SB), CX
-	MOVQ	runtime·ntiat+8(SB), AX
-	CALL	AX
+	// __hostos = _HOSTWINDOWS (os_cosmo_amd64.go). From here on the
+	// runtime's iswindows()/CHECK_WINDOWS branches are live and no
+	// raw Linux SYSCALL may execute.
+	MOVL	$2, runtime·__hostos(SB)
 
-	// AX = GetProcAddress(hk32, "ExitProcess"). Reload every
-	// argument register: all of CX/DX/R8-R11 are caller-saved and
-	// were clobbered by the call above.
-	MOVQ	AX, CX
-	LEAQ	ntstrexitprocess<>(SB), DX
-	MOVQ	runtime·ntiat+0(SB), AX
-	CALL	AX
+	// 16 bytes of RDTSC-derived entropy for AT_RANDOM: two timestamp
+	// reads mixed with address bits (the NT stack and PEB locations
+	// are ASLR'd, contributing a little). Weak, but only seeds boot
+	// hashes; wave 2 upgrades this to ProcessPrng. RDTSC returns
+	// EDX:EAX; CX still holds whatever the loader passed (the PEB on
+	// current NT), worth folding in as extra address bits.
+	RDTSC
+	SHLQ	$32, DX
+	ORQ	DX, AX
+	MOVQ	SP, DX
+	XORQ	DX, AX
+	MOVQ	AX, runtime·ntbootrand+0(SB)
+	RDTSC
+	SHLQ	$32, DX
+	ORQ	DX, AX
+	ROLQ	$31, AX
+	XORQ	CX, AX
+	MOVQ	AX, runtime·ntbootrand+8(SB)
 
-	// ExitProcess(42). Never returns.
-	MOVL	$42, CX
-	CALL	AX
-	INT	$3
+	// Fabricate the SysV boot block, built on the OS stack below the
+	// entry SP (inside the committed 64KiB window our PE header
+	// requests), 16-aligned with argc at the final 0(SP) - exactly
+	// the layout _rt0_amd64 reads and sysargs walks:
+	//
+	//	 0(SP)	argc = 1
+	//	 8(SP)	argv[0] -> "APE" (placeholder; see ntargv0)
+	//	16(SP)	argv terminator NULL
+	//	24(SP)	envp terminator NULL (goenvs's NT branch reads the
+	//		real environment via GetEnvironmentStringsW)
+	//	32(SP)	AT_PAGESZ (6)
+	//	40(SP)	0x1000 (mallocinit throws if physPageSize == 0)
+	//	48(SP)	AT_RANDOM (25)
+	//	56(SP)	-> ntbootrand
+	//	64(SP)	AT_NULL terminator pair
+	//	72(SP)	0
+	SUBQ	$112, SP
+	ANDQ	$~15, SP
+	MOVQ	$1, 0(SP)
+	LEAQ	ntargv0<>(SB), AX
+	MOVQ	AX, 8(SP)
+	MOVQ	$0, 16(SP)
+	MOVQ	$0, 24(SP)
+	MOVQ	$6, 32(SP)
+	MOVQ	$0x1000, 40(SP)
+	MOVQ	$25, 48(SP)
+	LEAQ	runtime·ntbootrand(SB), AX
+	MOVQ	AX, 56(SP)
+	MOVQ	$0, 64(SP)
+	MOVQ	$0, 72(SP)
+
+	// Join the common amd64 boot path. JMP, not CALL: _rt0_amd64
+	// expects argc at 0(SP).
+	JMP	_rt0_amd64(SB)

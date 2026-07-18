@@ -20,3 +20,9 @@ func cosmoStacksAreSystemAllocated() bool {
 func cosmoHostIsWindows() bool {
 	return false
 }
+
+// cosmoNTGoargs is a stub for non-cosmo systems; see goargs in
+// runtime1.go and the GOOS=cosmo implementation in os_cosmo_nt.go.
+func cosmoNTGoargs() bool {
+	return false
+}

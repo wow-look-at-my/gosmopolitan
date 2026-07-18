@@ -51,17 +51,19 @@ var ntiat [3]uintptr
 // directly by symbol name with no offset-rot risk, mirroring the
 // cosmoPthread*Fn precedent on arm64.
 var (
-	ntVirtualAllocFn        uintptr
-	ntVirtualFreeFn         uintptr
-	ntWriteFileFn           uintptr
-	ntGetStdHandleFn        uintptr
-	ntExitProcessFn         uintptr // asm: runtime·exit
-	ntExitThreadFn          uintptr // asm: runtime·exitThread
-	ntCreateThreadFn        uintptr
-	ntSleepFn               uintptr // asm: usleep, osyield
-	ntGetSystemInfoFn       uintptr
-	ntWaitOnAddressFn       uintptr
-	ntWakeByAddressSingleFn uintptr
+	ntVirtualAllocFn           uintptr
+	ntVirtualFreeFn            uintptr
+	ntWriteFileFn              uintptr
+	ntGetStdHandleFn           uintptr
+	ntExitProcessFn            uintptr // asm: runtime·exit
+	ntExitThreadFn             uintptr // asm: runtime·exitThread
+	ntCreateThreadFn           uintptr
+	ntSleepFn                  uintptr // asm: usleep, osyield
+	ntGetSystemInfoFn          uintptr
+	ntGetCommandLineWFn        uintptr
+	ntGetEnvironmentStringsWFn uintptr
+	ntWaitOnAddressFn          uintptr
+	ntWakeByAddressSingleFn    uintptr
 
 	// Cached std handles (GetStdHandle(-11)/(-12)).
 	ntStdout uintptr
@@ -84,6 +86,8 @@ var (
 	ntNameCreateThread   = []byte("CreateThread\x00")
 	ntNameSleep          = []byte("Sleep\x00")
 	ntNameGetSystemInfo  = []byte("GetSystemInfo\x00")
+	ntNameGetCommandLine = []byte("GetCommandLineW\x00")
+	ntNameGetEnvStringsW = []byte("GetEnvironmentStringsW\x00")
 	ntNameWaitOnAddress  = []byte("WaitOnAddress\x00")
 	ntNameWakeByAddrSing = []byte("WakeByAddressSingle\x00")
 )
@@ -164,6 +168,8 @@ func ntResolve() {
 	ntCreateThreadFn = k32sym(&ntNameCreateThread[0])
 	ntSleepFn = k32sym(&ntNameSleep[0])
 	ntGetSystemInfoFn = k32sym(&ntNameGetSystemInfo[0])
+	ntGetCommandLineWFn = k32sym(&ntNameGetCommandLine[0])
+	ntGetEnvironmentStringsWFn = k32sym(&ntNameGetEnvStringsW[0])
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).
@@ -297,12 +303,17 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 
 // ntSyscallWrite and ntSyscallExit back the wave-1 WindowsFns hook
 // table in internal/runtime/syscall/cosmo, covering user-level
-// syscall.Write (fmt output) and syscall exit paths.
+// syscall.Write (fmt output) and syscall exit paths. Both are called
+// through (*WindowsFns).Syscall6 between entersyscall/exitsyscall,
+// where a stack split is fatal - the entire chain must be nosplit
+// (see the note on Syscall6 in syscall_cosmo_nt.go).
 
+//go:nosplit
 func ntSyscallWrite(fd int, p unsafe.Pointer, n int32) int32 {
 	return ntwrite1(uintptr(fd), p, n)
 }
 
+//go:nosplit
 func ntSyscallExit(code int32) {
 	exit(code)
 }
@@ -316,4 +327,164 @@ func ntSetSyscallFns() {
 		Write: ntSyscallWrite,
 		Exit:  ntSyscallExit,
 	})
+}
+
+// Command line and environment. The NT boot stub fabricates a
+// one-entry argv and an empty envp (rt0_cosmo_nt_amd64.s); the real
+// values come from GetCommandLineW/GetEnvironmentStringsW in the
+// goargs/goenvs NT branches below. Both run inside schedinit AFTER
+// mallocinit (proc.go: mallocinit ... goargs; goenvs), so ordinary
+// allocation is fine here.
+
+// ntUTF16ToString converts a UTF-16 sequence to a Go string, combining
+// surrogate pairs into their code points (which runtime.gostringw does
+// not). Unpaired surrogates become U+FFFD, matching unicode/utf16.
+func ntUTF16ToString(s []uint16) string {
+	buf := make([]byte, 0, len(s)) // exact for ASCII; append grows the rest
+	var tmp [4]byte
+	for i := 0; i < len(s); i++ {
+		var r rune
+		switch c := s[i]; {
+		case c < 0xd800 || c >= 0xe000:
+			r = rune(c)
+		case c < 0xdc00 && i+1 < len(s) && s[i+1] >= 0xdc00 && s[i+1] < 0xe000:
+			r = 0x10000 + (rune(c)-0xd800)<<10 + (rune(s[i+1]) - 0xdc00)
+			i++
+		default:
+			r = 0xfffd // unpaired surrogate
+		}
+		n := encoderune(tmp[:], r)
+		buf = append(buf, tmp[:n]...)
+	}
+	return string(buf)
+}
+
+// ntCommandLineToArgv splits a Windows command line into arguments
+// following the conventions documented at
+// http://daviddeley.com/autohotkey/parameters/parameters.htm#WINARGV.
+// It is a port of commandLineToArgv/readNextArg/appendBSBytes from
+// os/exec_windows.go: package os only runs that parse when
+// GOOS == "windows"; under GOOS=cosmo os.Args comes from the
+// runtime's argslice, so the parse has to happen here.
+func ntCommandLineToArgv(cmd string) []string {
+	var args []string
+	for len(cmd) > 0 {
+		if cmd[0] == ' ' || cmd[0] == '\t' {
+			cmd = cmd[1:]
+			continue
+		}
+		var arg []byte
+		arg, cmd = ntReadNextArg(cmd)
+		args = append(args, string(arg))
+	}
+	return args
+}
+
+// ntAppendBS appends n '\\' bytes to b and returns the resulting slice.
+func ntAppendBS(b []byte, n int) []byte {
+	for ; n > 0; n-- {
+		b = append(b, '\\')
+	}
+	return b
+}
+
+// ntReadNextArg splits command line string cmd into next argument and
+// command line remainder. (See ntCommandLineToArgv for provenance.)
+func ntReadNextArg(cmd string) (arg []byte, rest string) {
+	var b []byte
+	var inquote bool
+	var nslash int
+	for ; len(cmd) > 0; cmd = cmd[1:] {
+		c := cmd[0]
+		switch c {
+		case ' ', '\t':
+			if !inquote {
+				return ntAppendBS(b, nslash), cmd[1:]
+			}
+		case '"':
+			b = ntAppendBS(b, nslash/2)
+			if nslash%2 == 0 {
+				// use "Prior to 2008" rule from
+				// http://daviddeley.com/autohotkey/parameters/parameters.htm
+				// section 5.2 to deal with double double quotes
+				if inquote && len(cmd) > 1 && cmd[1] == '"' {
+					b = append(b, c)
+					cmd = cmd[1:]
+				}
+				inquote = !inquote
+			} else {
+				b = append(b, c)
+			}
+			nslash = 0
+			continue
+		case '\\':
+			nslash++
+			continue
+		}
+		b = ntAppendBS(b, nslash)
+		nslash = 0
+		b = append(b, c)
+	}
+	return ntAppendBS(b, nslash), ""
+}
+
+// cosmoNTGoargs is goargs's NT branch (runtime1.go): build argslice by
+// parsing GetCommandLineW instead of reading the boot block, whose
+// fabricated argv is the single static "APE". Returns false on non-NT
+// hosts - and on an empty command line, keeping the fabricated argv as
+// the fallback.
+func cosmoNTGoargs() bool {
+	if !iswindows() {
+		return false
+	}
+	cmd := (*uint16)(unsafe.Pointer(ntcall(ntGetCommandLineWFn, 0, 0, 0, 0, 0, 0)))
+	if cmd == nil {
+		return false
+	}
+	n := findnullw(cmd)
+	if n == 0 {
+		return false
+	}
+	args := ntCommandLineToArgv(ntUTF16ToString(unsafe.Slice(cmd, n)))
+	if len(args) == 0 {
+		return false
+	}
+	argslice = args
+	return true
+}
+
+// ntGoenvs is goenvs's NT branch (os_cosmo.go): decode the
+// double-NUL-terminated UTF-16 block from GetEnvironmentStringsW
+// ("A=B\x00C=D\x00\x00") into envs, the same shape goenvs_unix
+// produces; upstream os_windows.go goenvs is the model. The block is
+// deliberately not released: FreeEnvironmentStringsW is not in the
+// wave-1 resolve set and the one-shot boot leak is harmless.
+func ntGoenvs() {
+	block := unsafe.Pointer(ntcall(ntGetEnvironmentStringsWFn, 0, 0, 0, 0, 0, 0))
+	if block == nil {
+		envs = make([]string, 0)
+		return
+	}
+	p := (*[1 << 24]uint16)(block)
+	n := 0
+	for from, i := 0, 0; ; i++ {
+		if p[i] == 0 {
+			// An empty string marks the end of the block.
+			if i == from {
+				break
+			}
+			from = i + 1
+			n++
+		}
+	}
+	envs = make([]string, n)
+	off := 0
+	for i := range envs {
+		start := off
+		for p[off] != 0 {
+			off++
+		}
+		envs[i] = ntUTF16ToString(p[start:off])
+		off++ // skip the NUL
+	}
 }
