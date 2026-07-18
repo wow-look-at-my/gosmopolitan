@@ -53,6 +53,17 @@ const (
 	ntSysPread64    = 17
 	ntSysPwrite64   = 18
 	ntSysGetpid     = 39
+	ntSysSocket     = 41
+	ntSysConnect    = 42
+	ntSysSendto     = 44
+	ntSysRecvfrom   = 45
+	ntSysShutdown   = 48
+	ntSysBind       = 49
+	ntSysListen     = 50
+	ntSysGetsockNm  = 51
+	ntSysGetpeerNm  = 52
+	ntSysSetsockopt = 54
+	ntSysGetsockopt = 55
 	ntSysExit       = 60
 	ntSysWait4      = 61
 	ntSysFcntl      = 72
@@ -78,6 +89,7 @@ const (
 	ntSysUnlinkat   = 263
 	ntSysRenameat   = 264
 	ntSysReadlinkat = 267
+	ntSysAccept4    = 288
 	ntSysFchmodat   = 268
 	ntSysFaccessat  = 269
 	ntSysPipe2      = 293
@@ -174,10 +186,11 @@ const (
 	_NT_AT_REMOVEDIR  = 0x200
 	_NT_AT_EMPTY_PATH = 0x1000
 
-	_NT_S_IFIFO = 0x1000
-	_NT_S_IFCHR = 0x2000
-	_NT_S_IFDIR = 0x4000
-	_NT_S_IFREG = 0x8000
+	_NT_S_IFIFO  = 0x1000
+	_NT_S_IFCHR  = 0x2000
+	_NT_S_IFDIR  = 0x4000
+	_NT_S_IFREG  = 0x8000
+	_NT_S_IFSOCK = 0xC000
 
 	_NT_DT_DIR = 4
 	_NT_DT_REG = 8
@@ -303,6 +316,31 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysWait4:
 		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
 
+	case ntSysSocket:
+		return ntEmuSocket(int32(a1), int32(a2), int32(a3))
+	case ntSysBind:
+		return ntEmuBind(int32(a1), unsafe.Pointer(a2), uint32(a3))
+	case ntSysConnect:
+		return ntEmuConnect(int32(a1), unsafe.Pointer(a2), uint32(a3))
+	case ntSysListen:
+		return ntEmuListen(int32(a1), int32(a2))
+	case ntSysAccept4:
+		return ntEmuAccept4(int32(a1), unsafe.Pointer(a2), (*uint32)(unsafe.Pointer(a3)), int32(a4))
+	case ntSysGetsockNm:
+		return ntEmuGetsockname(int32(a1), unsafe.Pointer(a2), (*uint32)(unsafe.Pointer(a3)), false)
+	case ntSysGetpeerNm:
+		return ntEmuGetsockname(int32(a1), unsafe.Pointer(a2), (*uint32)(unsafe.Pointer(a3)), true)
+	case ntSysSetsockopt:
+		return ntEmuSetsockopt(int32(a1), int32(a2), int32(a3), unsafe.Pointer(a4), uint32(a5))
+	case ntSysGetsockopt:
+		return ntEmuGetsockopt(int32(a1), int32(a2), int32(a3), unsafe.Pointer(a4), (*uint32)(unsafe.Pointer(a5)))
+	case ntSysShutdown:
+		return ntEmuShutdown(int32(a1), int32(a2))
+	case ntSysSendto:
+		return ntEmuSendto(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), uint32(a6))
+	case ntSysRecvfrom:
+		return ntEmuRecvfrom(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), (*uint32)(unsafe.Pointer(a6)))
+
 	case ntSysGetpid, ntSysGetpgrp:
 		// getpgrp: no process groups on NT; report the pid, which is
 		// its own group leader.
@@ -393,6 +431,10 @@ func ntEmuRead(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 	if n == 0 {
 		return 0, 0, 0
 	}
+	if e.kind == ntFDSocket {
+		// Sockets speak recv, not ReadFile (os_cosmo_nt_sock.go).
+		return ntSockRead(e.handle, p, n)
+	}
 	var got uint32
 	r, werr := ntcallSE(ntReadFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&got)), 0, 0, 0)
@@ -423,6 +465,10 @@ func ntEmuWrite(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 	}
 	if n == 0 {
 		return 0, 0, 0
+	}
+	if e.kind == ntFDSocket {
+		// Sockets speak send, not WriteFile (os_cosmo_nt_sock.go).
+		return ntSockWrite(e.handle, p, n)
 	}
 	var written uint32
 	r, werr := ntcallSE(ntWriteFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
@@ -551,9 +597,15 @@ func ntEmuOpenat(dirfd int32, cpath *byte, flags int32, mode uint32) (r1, r2, er
 }
 
 func ntEmuClose(fd int32) (r1, r2, errno uintptr) {
-	h, ok := ntFDRelease(fd)
+	h, kind, ok := ntFDRelease(fd)
 	if !ok {
 		return ntFail3(ntEBADF)
+	}
+	if kind == ntFDSocket {
+		// closesocket, never CloseHandle: CloseHandle would leak the
+		// winsock provider state behind the SOCKET.
+		ntcall(ntWSACloseSocketFn, h, 0, 0, 0, 0, 0)
+		return 0, 0, 0
 	}
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	return 0, 0, 0
@@ -726,6 +778,13 @@ func ntEmuFstat(fd int32, dst *ntLinuxStat) (r1, r2, errno uintptr) {
 	if !ok {
 		return ntFail3(ntEBADF)
 	}
+	if e.kind == ntFDSocket {
+		*dst = ntLinuxStat{}
+		dst.mode = _NT_S_IFSOCK | 0o777
+		dst.nlink = 1
+		dst.blksize = 4096
+		return 0, 0, 0
+	}
 	if e.kind == ntFDStdio || e.kind == ntFDPipe {
 		ntStatSynthDevice(dst, e.ftype)
 		return 0, 0, 0
@@ -775,7 +834,7 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 	if !ok {
 		return ntFail3(ntEBADF)
 	}
-	if e.kind == ntFDStdio || e.kind == ntFDPipe {
+	if e.kind == ntFDStdio || e.kind == ntFDPipe || e.kind == ntFDSocket {
 		return ntFail3(ntESPIPE)
 	}
 	if whence > _NT_FILE_END {

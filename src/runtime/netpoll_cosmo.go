@@ -14,33 +14,21 @@ import (
 
 // This file holds the epoll poller used on Linux hosts. Every entry
 // point dispatches at run time on the host OS: macOS has no epoll, so
-// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead.
-// Exactly one of the two is ever initialized in a given process.
-//
-// Windows NT hosts (wave 2) get a third, minimal personality: a
-// timer-only stub. The timer heap unconditionally initializes netpoll
-// ((*timers).addHeap -> netpollGenericInit), so netpollinit must
-// succeed on NT even though no socket can exist yet (socket() is
-// ENOSYS until the sockets wave lands a real poller). The stub parks
-// the polling M on a WaitOnAddress futex word for the timer delay and
-// netpollBreak pokes that word - no fds involved. netpollopen reports
-// ENOSYS so nothing can ever register (unreachable today anyway).
+// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead,
+// and Windows NT hosts use the WSAPoll poller in netpoll_cosmo_nt.go
+// (level-triggered, aix-shaped; it also serves the timer heap's
+// unconditional netpollGenericInit). Exactly one of the three is ever
+// initialized in a given process.
 
 var (
 	epfd           int32         = -1 // epoll descriptor
 	netpollEventFd uintptr            // eventfd for netpollBreak
 	netpollWakeSig atomic.Uint32      // used to avoid duplicate calls of netpollBreak
-
-	// ntNetpollBreakWord is the NT stub's futex word: nonzero means a
-	// break is pending. Compiled on every arch (the NT branches below
-	// are dead code off amd64); only ever touched when iswindows().
-	ntNetpollBreakWord uint32
 )
 
 func netpollinit() {
 	if iswindows() {
-		// Nothing to create: the break word is static. Marking
-		// netpoll initialized is the caller's job.
+		netpollinitNT()
 		return
 	}
 	if isdarwin() {
@@ -72,7 +60,9 @@ func netpollinit() {
 
 func netpollIsPollDescriptor(fd uintptr) bool {
 	if iswindows() {
-		return false // the NT stub owns no descriptors
+		// The NT wake socket is a raw SOCKET with no emulated fd
+		// number, so no fd can ever name it.
+		return false
 	}
 	if isdarwin() {
 		return netpollIsPollDescriptorDarwin(fd)
@@ -82,9 +72,9 @@ func netpollIsPollDescriptor(fd uintptr) bool {
 
 func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 	if iswindows() {
-		// No pollable descriptors until the sockets wave; callers
-		// (internal/poll) fall back to blocking mode on this error.
-		return 38 // ENOSYS
+		// Sockets only; pipes and files keep failing so
+		// internal/poll falls back to blocking mode for them.
+		return netpollopenNT(fd, pd)
 	}
 	if isdarwin() {
 		return netpollopenDarwin(fd, pd)
@@ -98,7 +88,7 @@ func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 
 func netpollclose(fd uintptr) uintptr {
 	if iswindows() {
-		return 38 // ENOSYS; nothing can have been registered
+		return netpollcloseNT(fd)
 	}
 	if isdarwin() {
 		return netpollcloseDarwin(fd)
@@ -107,9 +97,15 @@ func netpollclose(fd uintptr) uintptr {
 	return cosmo.EpollCtl(epfd, cosmo.EPOLL_CTL_DEL, int32(fd), &ev)
 }
 
-// netpollarm is never called: both pollers are edge-triggered and arm
-// once at netpollopen (netpollLevelTriggered stays false).
+// netpollarm re-arms one direction before a wait. Only the NT WSAPoll
+// poller is level-triggered (it sets netpollLevelTriggered at init);
+// the epoll and kqueue pollers are edge-triggered, arm once at
+// netpollopen, and must never come here.
 func netpollarm(pd *pollDesc, mode int) {
+	if iswindows() {
+		netpollarmNT(pd, mode)
+		return
+	}
 	if isdarwin() {
 		netpollarmDarwin(pd, mode)
 		return
@@ -125,11 +121,10 @@ func netpollBreak() {
 	}
 
 	if iswindows() {
-		// Set the break word, then wake the M parked on it (a wake
-		// with no waiter is a no-op; a poller racing past its
-		// pre-sleep check is caught by WaitOnAddress's compare).
-		atomic.Store(&ntNetpollBreakWord, 1)
-		ntFutexwakeup(&ntNetpollBreakWord)
+		// One byte to the wake socket boots the poller out of its
+		// blocking WSAPoll; the poller drains and resets
+		// netpollWakeSig when it wakes blocking.
+		netpollBreakNT()
 		return
 	}
 
@@ -166,19 +161,7 @@ func netpollBreak() {
 // delay > 0: block for up to that many nanoseconds
 func netpoll(delay int64) (gList, int32) {
 	if iswindows() {
-		// Timer-only stub: park for the requested delay (or until
-		// netpollBreak) on the break word; there are no fds, so
-		// nothing ever becomes runnable from here.
-		if delay != 0 {
-			if atomic.Load(&ntNetpollBreakWord) == 0 {
-				ntFutexsleep(&ntNetpollBreakWord, 0, delay)
-			}
-			// Consume any pending break so the next blocking poll
-			// actually blocks, then allow new netpollBreak wakeups.
-			atomic.Store(&ntNetpollBreakWord, 0)
-			netpollWakeSig.Store(0)
-		}
-		return gList{}, 0
+		return netpollNT(delay)
 	}
 	if isdarwin() {
 		return netpollDarwin(delay)

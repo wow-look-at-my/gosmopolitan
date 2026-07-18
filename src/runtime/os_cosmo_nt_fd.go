@@ -38,16 +38,19 @@
 
 package runtime
 
+import "unsafe"
+
 const ntFDMax = 512
 
 type ntFDKind uint8
 
 const (
-	ntFDFree  ntFDKind = iota
-	ntFDFile           // seekable disk file
-	ntFDDir            // directory (backup-semantics handle)
-	ntFDStdio          // console, inherited pipe, or character device (not seekable)
-	ntFDPipe           // anonymous pipe end created by pipe2 (CreatePipe)
+	ntFDFree   ntFDKind = iota
+	ntFDFile            // seekable disk file
+	ntFDDir             // directory (backup-semantics handle)
+	ntFDStdio           // console, inherited pipe, or character device (not seekable)
+	ntFDPipe            // anonymous pipe end created by pipe2 (CreatePipe)
+	ntFDSocket          // winsock SOCKET (chunk C); handle holds the SOCKET value
 )
 
 // ntDirEnt is one parsed directory entry awaiting delivery to a
@@ -67,6 +70,18 @@ type ntFDEntry struct {
 	flags      int32 // Linux O_* access mode and status flags
 	pathW      []uint16
 	pending    []ntDirEnt
+
+	// Socket-kind state (chunk C). sockFam holds the LINUX address
+	// family the socket was created with (1/2/10). unixBound/unixPeer
+	// record the Linux-spelling AF_UNIX pathname the caller bound or
+	// connected to: winsock stores the TRANSLATED Windows path, and
+	// translating it back would surface the /c/... alias, so
+	// getsockname/getpeername report these recorded names instead
+	// (Linux returns the exact bytes that were bound, and the probe
+	// compares addr strings).
+	sockFam   uint16
+	unixBound string
+	unixPeer  string
 }
 
 var (
@@ -114,22 +129,53 @@ func ntFDLookup(fd int32) (ntFDEntry, bool) {
 	return e, true
 }
 
-// ntFDRelease frees the slot and returns the handle for the caller to
-// close (outside the lock).
-func ntFDRelease(fd int32) (handle uintptr, ok bool) {
+// ntFDRelease frees the slot and returns the handle and its kind for
+// the caller to close (outside the lock; sockets need closesocket, not
+// CloseHandle).
+func ntFDRelease(fd int32) (handle uintptr, kind ntFDKind, ok bool) {
 	if fd < 0 || fd >= ntFDMax {
-		return 0, false
+		return 0, ntFDFree, false
 	}
 	lock(&ntFDLock)
 	e := &ntFDTable[fd]
 	if e.kind == ntFDFree {
 		unlock(&ntFDLock)
-		return 0, false
+		return 0, ntFDFree, false
 	}
 	handle = e.handle
+	kind = e.kind
 	*e = ntFDEntry{}
 	unlock(&ntFDLock)
-	return handle, true
+	return handle, kind, true
+}
+
+// ntFDSetSockFam records the Linux address family of a socket fd.
+func ntFDSetSockFam(fd int32, fam uint16) {
+	if fd < 0 || fd >= ntFDMax {
+		return
+	}
+	lock(&ntFDLock)
+	if ntFDTable[fd].kind == ntFDSocket {
+		ntFDTable[fd].sockFam = fam
+	}
+	unlock(&ntFDLock)
+}
+
+// ntFDSetUnixName records the Linux-spelling pathname an AF_UNIX
+// socket was bound (bound=true) or connected (bound=false) to.
+func ntFDSetUnixName(fd int32, name string, bound bool) {
+	if fd < 0 || fd >= ntFDMax {
+		return
+	}
+	lock(&ntFDLock)
+	if ntFDTable[fd].kind == ntFDSocket {
+		if bound {
+			ntFDTable[fd].unixBound = name
+		} else {
+			ntFDTable[fd].unixPeer = name
+		}
+	}
+	unlock(&ntFDLock)
 }
 
 // ntFDSetFtype records the Win32 GetFileType classification of a
@@ -181,6 +227,13 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 	if fd < 0 || fd >= ntFDMax {
 		return -1, 9 // EBADF
 	}
+	// Socket F_SETFL must push the O_NONBLOCK change into winsock
+	// (ioctlsocket FIONBIO) after the table update; captured under the
+	// lock, issued outside it (use-after-close races have the usual
+	// unix semantics: the ioctl fails on a dead SOCKET).
+	var nbHandle uintptr
+	var nbWord uint32
+	syncNB := false
 	lock(&ntFDLock)
 	e := &ntFDTable[fd]
 	if e.kind == ntFDFree {
@@ -201,11 +254,23 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 		// O_APPEND cannot be turned on retroactively (the handle
 		// lacks FILE_APPEND_DATA); O_NONBLOCK on files is a no-op on
 		// Linux too. Record the bits so F_GETFL round-trips.
+		const _O_NONBLOCK = 0x800
+		old := e.flags
 		e.flags = e.flags&^int32(_O_STATUS) | arg&int32(_O_STATUS)
+		if e.kind == ntFDSocket && (old^e.flags)&_O_NONBLOCK != 0 {
+			syncNB = true
+			nbHandle = e.handle
+			if e.flags&_O_NONBLOCK != 0 {
+				nbWord = 1
+			}
+		}
 	default:
 		unlock(&ntFDLock)
 		return -1, 38 // ENOSYS
 	}
 	unlock(&ntFDLock)
+	if syncNB && ntWSAIoctlsocketFn != 0 {
+		ntcall(ntWSAIoctlsocketFn, nbHandle, _NT_FIONBIO, uintptr(unsafe.Pointer(&nbWord)), 0, 0, 0)
+	}
 	return ret, 0
 }

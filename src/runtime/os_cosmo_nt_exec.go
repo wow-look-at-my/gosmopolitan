@@ -275,7 +275,7 @@ func ntEmuPipe2(p *[2]int32, flags int32) (r1, r2, errno uintptr) {
 	}
 	wfd := ntFDAlloc(wh, ntFDPipe, _NT_O_WRONLY|status, cloexec, nil)
 	if wfd < 0 {
-		if h, ok := ntFDRelease(rfd); ok {
+		if h, _, ok := ntFDRelease(rfd); ok {
 			ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 		}
 		ntcall(ntCloseHandleFn, wh, 0, 0, 0, 0, 0)

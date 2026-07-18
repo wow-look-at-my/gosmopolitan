@@ -60,3 +60,33 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	throw("ntVirtualFree: not implemented on arm64")
 	return 0
 }
+
+// NT netpoller stubs (netpoll_cosmo.go dispatches here only when
+// iswindows(), which is constant false on arm64).
+
+func netpollinitNT() {
+	throw("netpollinitNT: not implemented on arm64")
+}
+
+func netpollopenNT(fd uintptr, pd *pollDesc) uintptr {
+	throw("netpollopenNT: not implemented on arm64")
+	return 38 // ENOSYS
+}
+
+func netpollcloseNT(fd uintptr) uintptr {
+	throw("netpollcloseNT: not implemented on arm64")
+	return 38 // ENOSYS
+}
+
+func netpollarmNT(pd *pollDesc, mode int) {
+	throw("netpollarmNT: not implemented on arm64")
+}
+
+func netpollBreakNT() {
+	throw("netpollBreakNT: not implemented on arm64")
+}
+
+func netpollNT(delay int64) (gList, int32) {
+	throw("netpollNT: not implemented on arm64")
+	return gList{}, 0
+}
