@@ -2279,6 +2279,10 @@ func mstartm0() {
 		newextram()
 	}
 	initsig(false)
+	// On GOOS=cosmo NT hosts, park the console-control relay M and
+	// register the ctrl handler; a no-op elsewhere (stubs_noncosmo.go).
+	// Must run after procresize gave m0 its P (newm allocates).
+	cosmoMstartm0()
 }
 
 // mPark causes a thread to park itself, returning once woken.

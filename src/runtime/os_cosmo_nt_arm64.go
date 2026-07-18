@@ -61,6 +61,23 @@ func ntGoenvs() {
 	throw("ntGoenvs: not implemented on arm64")
 }
 
+func ntPreemptM(mp *m) {
+	throw("ntPreemptM: not implemented on arm64")
+}
+
+func ntMinitThread() {
+	throw("ntMinitThread: not implemented on arm64")
+}
+
+//go:nosplit
+func ntUnminitThread() {
+	throw("ntUnminitThread: not implemented on arm64")
+}
+
+func ntInitConsoleCtrl() {
+	throw("ntInitConsoleCtrl: not implemented on arm64")
+}
+
 //go:nosplit
 func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	throw("ntVirtualFree: not implemented on arm64")

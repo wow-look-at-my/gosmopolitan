@@ -265,10 +265,10 @@ func netpollNT(delay int64) (gList, int32) {
 	n := int32(uint32(r))
 	var werr uintptr
 	if n < 0 {
-		// Same thread, no preemption between the calls: the
-		// last-error read is exact (runtime code is never
-		// async-preempted; re-audit when chunk D lands SuspendThread).
-		werr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
+		// The ntcall6 trampoline captured this thread's last error
+		// into m.ntLastError atomically with the call (chunk D2) -
+		// exact even with SuspendThread preemption live.
+		werr = uintptr(getg().m.ntLastError)
 	}
 	xnuPollExitNs.Store(nanotime())
 	xnuPollDone.Add(1)

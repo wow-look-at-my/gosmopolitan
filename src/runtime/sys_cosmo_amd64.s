@@ -116,19 +116,14 @@ exit_darwin:
 	SYSCALL
 	RET
 exit_nt:
-	// ExitProcess(code). Direct win64 call: the process is dying, no
-	// need for the ntcall6/asmcgocall machinery. Go stacks are only
-	// 8-aligned, so realign explicitly: win64 callees require entry
-	// SP == 8 (mod 16), and wine's exit path setjmps a stack-local
-	// jmp_buf whose movdqa spills fault on a misaligned frame (the
-	// chunk-B "os.Exit crashes with 0xC0000005" bug - which call
-	// chains hit it depended on their frame sizes).
-	MOVQ	runtime·ntExitProcessFn(SB), AX
-	MOVL	code+0(FP), CX
-	ANDQ	$~15, SP	// 16-align: CALL leaves entry SP == 8 (mod 16)
-	SUBQ	$32, SP		// shadow space
-	CALL	AX
-	INT	$3	// not reached
+	// Chunk D2: exit must take ntSuspendLock before ExitProcess so a
+	// SuspendThread from ntPreemptM can never be mid-flight while the
+	// process dies (the suspender-killed-mid-suspend wedge, upstream
+	// os_windows.go exit()). Tail JMP to the Go-side ntExit
+	// (os_cosmo_nt_preempt.go): same signature, FP slot carries over
+	// (the ntwrite1tramp discipline); ntExit performs the ExitProcess
+	// through ntcall, which realigns per the win64 rules.
+	JMP	runtime·ntExit(SB)
 
 // func exitThread(wait *atomic.Uint32)
 TEXT runtime·exitThread(SB),NOSPLIT,$0-8

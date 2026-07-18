@@ -31,8 +31,22 @@
 //	0(SP)..31(SP)  shadow space
 //	32(SP)         arg 5
 //	40(SP)         arg 6
+//
+// Last-error discipline (chunk D2): the TEB LastErrorValue slot
+// (TEB+0x68, TEB linear address at gs:0x30) is zeroed before the call
+// (upstream asmstdcall's SetLastError(0) bracket) and captured into
+// this M's mOS.ntLastError immediately after the call target returns -
+// atomically with the call, so the value can never be lost to a
+// suspension window or clobbered by a later win64 call on this thread
+// (the pre-D2 two-call GetLastError fetch was only correct while
+// SuspendThread preemption did not exist). The TLS g is valid in every
+// ntcall6/ntcall10 context: boot runs after rt0_go's TLS setup, and
+// the only foreign-thread entry points (VEH thunk, console-ctrl
+// handler) never reach these trampolines.
 TEXT runtime·ntcall6(SB),NOSPLIT|NOFRAME,$0
 	SUBQ	$56, SP
+	MOVQ	0x30(GS), AX		// TEB linear address
+	MOVL	$0, 0x68(AX)		// TEB.LastErrorValue = 0 (SetLastError(0))
 	MOVQ	(ntcallArgs_fn)(DI), AX
 	MOVQ	(ntcallArgs_a1)(DI), CX
 	MOVQ	(ntcallArgs_a2)(DI), DX
@@ -44,6 +58,12 @@ TEXT runtime·ntcall6(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	R10, 40(SP)
 	CALL	AX
 	MOVQ	AX, (ntcallArgs_ret)(DI)
+	MOVQ	0x30(GS), CX		// TEB linear address
+	MOVL	0x68(CX), CX		// TEB.LastErrorValue
+	get_tls(DX)
+	MOVQ	g(DX), DX
+	MOVQ	g_m(DX), DX
+	MOVL	CX, (m_mOS+mOS_ntLastError)(DX)
 	ADDQ	$56, SP
 	RET
 
@@ -62,8 +82,12 @@ TEXT runtime·ntcall6(SB),NOSPLIT|NOFRAME,$0
 //	64(SP)         arg 9
 //	72(SP)         arg 10
 //	80(SP)         (padding for 16-alignment)
+// Last-error bracket: same discipline as ntcall6 (zero TEB slot
+// before, capture into mOS.ntLastError after).
 TEXT runtime·ntcall10(SB),NOSPLIT|NOFRAME,$0
 	SUBQ	$88, SP
+	MOVQ	0x30(GS), AX		// TEB linear address
+	MOVL	$0, 0x68(AX)		// TEB.LastErrorValue = 0 (SetLastError(0))
 	MOVQ	(ntcallArgs10_fn)(DI), AX
 	MOVQ	(ntcallArgs10_a1)(DI), CX
 	MOVQ	(ntcallArgs10_a2)(DI), DX
@@ -83,6 +107,12 @@ TEXT runtime·ntcall10(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	R10, 72(SP)
 	CALL	AX
 	MOVQ	AX, (ntcallArgs10_ret)(DI)
+	MOVQ	0x30(GS), CX		// TEB linear address
+	MOVL	0x68(CX), CX		// TEB.LastErrorValue
+	get_tls(DX)
+	MOVQ	g(DX), DX
+	MOVQ	g_m(DX), DX
+	MOVL	CX, (m_mOS+mOS_ntLastError)(DX)
 	ADDQ	$88, SP
 	RET
 
@@ -271,6 +301,56 @@ TEXT runtime·ntExitEncoded(SB),NOSPLIT,$0-4
 	SUBQ	$32, SP
 	CALL	AX
 	INT	$3	// unreachable
+
+// func ntCtrlTramp()
+//
+// SetConsoleCtrlHandler callback (chunk D2). Win64 entry: CX =
+// dwCtrlType. Windows runs this on an INJECTED foreign thread - no g,
+// no TLS - so it must stay free of Go and of ntcall (asmcgocall needs
+// a g): classify the event, OR the signal bit into ntCtrlMask, wake
+// the relay M through its dedicated event (never the netpoll wake
+// socket), and either report "handled" (SIGINT class - the relay owns
+// the outcome, including default death) or block forever (SIGTERM
+// class - Windows kills the process the moment a CLOSE/LOGOFF/
+// SHUTDOWN handler returns; blocking gives the Go handlers the OS
+// grace window, upstream ctrlHandler's block()). Direct win64 calls
+// with the chunk-B alignment discipline; only volatile registers are
+// used, so the win64 callee-saved set is preserved by construction.
+TEXT runtime·ntCtrlTramp(SB),NOSPLIT|NOFRAME,$0
+	SUBQ	$40, SP		// 32B shadow + realign (entry SP == 8 mod 16)
+	CMPL	CX, $1
+	JBE	ctrl_int	// CTRL_C_EVENT(0), CTRL_BREAK_EVENT(1) -> SIGINT
+	CMPL	CX, $2
+	JE	ctrl_term	// CTRL_CLOSE_EVENT -> SIGTERM
+	CMPL	CX, $5
+	JE	ctrl_term	// CTRL_LOGOFF_EVENT -> SIGTERM
+	CMPL	CX, $6
+	JE	ctrl_term	// CTRL_SHUTDOWN_EVENT -> SIGTERM
+	XORL	AX, AX		// not ours: FALSE -> next handler
+	ADDQ	$40, SP
+	RET
+ctrl_int:
+	MOVQ	$runtime·ntCtrlMask(SB), R8
+	LOCK
+	ORL	$4, (R8)	// 1<<_SIGINT(2)
+	MOVQ	runtime·ntCtrlEvent(SB), CX
+	MOVQ	runtime·ntSetEventFn(SB), AX
+	CALL	AX
+	MOVL	$1, AX		// TRUE: handled
+	ADDQ	$40, SP
+	RET
+ctrl_term:
+	MOVQ	$runtime·ntCtrlMask(SB), R8
+	LOCK
+	ORL	$0x8000, (R8)	// 1<<_SIGTERM(15)
+	MOVQ	runtime·ntCtrlEvent(SB), CX
+	MOVQ	runtime·ntSetEventFn(SB), AX
+	CALL	AX
+ctrl_block:
+	MOVQ	$0xFFFFFFFF, CX	// INFINITE
+	MOVQ	runtime·ntSleepFn(SB), AX
+	CALL	AX
+	JMP	ctrl_block
 
 // func ntSignalTramp(fn, sig uintptr, info, ctx unsafe.Pointer, sp uintptr)
 //

@@ -33,6 +33,7 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -55,7 +56,7 @@ var (
 	ntVirtualFreeFn            uintptr
 	ntWriteFileFn              uintptr
 	ntGetStdHandleFn           uintptr
-	ntExitProcessFn            uintptr // asm: runtime·exit
+	ntExitProcessFn            uintptr // ntExit (Go) + ntExitEncoded (asm)
 	ntExitThreadFn             uintptr // asm: runtime·exitThread
 	ntCreateThreadFn           uintptr
 	ntSleepFn                  uintptr // asm: usleep, osyield
@@ -296,20 +297,22 @@ func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
 }
 
 // ntcallE ("with error") performs ntcall7 and returns the thread's
-// GetLastError alongside the result. The two Win32 calls stay on one
-// thread: this function lives in package runtime, so it is never
-// asynchronously preempted (runtime frames are not async-preemption
-// safe points), and there is no preemptible prologue between the two
-// nosplit ntcall invocations - the thread-local last-error value
-// cannot be lost to a migration. Callers pass pointers as
-// uintptr(unsafe.Pointer(x)) directly in the argument list; nosplit
-// (plus liveness at the call site or an explicit KeepAlive) keeps the
-// pointee valid and unmoved for the duration.
+// GetLastError alongside the result. The error value is captured by
+// the ntcall10 trampoline itself, immediately after the call target
+// returns, into this M's mOS.ntLastError (chunk D2) - so it is exact
+// by construction, with no window in which a suspension or another
+// win64 call on this thread could lose it. The g.m read below stays
+// on the calling thread: this is nosplit runtime code with no
+// preemption point between the trampoline's store and the load.
+// Callers pass pointers as uintptr(unsafe.Pointer(x)) directly in the
+// argument list; nosplit (plus liveness at the call site or an
+// explicit KeepAlive) keeps the pointee valid and unmoved for the
+// duration.
 //
 //go:nosplit
 func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
-	lastErr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
+	lastErr = uintptr(getg().m.ntLastError)
 	return
 }
 
@@ -321,14 +324,23 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 // Must only be used from user-goroutine context - the
 // syscall-emulation layer - never from boot, g0, or runtime-internal
 // paths. The g stays bound to this M between entersyscall and
-// exitsyscall, so the GetLastError fetch still reads the right
-// thread's error.
+// exitsyscall, so the trampoline-captured error is this thread's.
+//
+// The osPreemptExtEnter/Exit bracket (chunk D2) marks the foreign
+// call for ntPreemptM exactly like upstream's cgocall model: while
+// the thread is inside (or possibly blocked in) win64 code, an async
+// preemption attempt fails fast instead of suspending a thread that
+// may hold the loader lock or be about to ExitProcess. The bracket
+// sits strictly inside the entersyscall window so the M can never
+// run other goroutines while holding preemptExtLock.
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	entersyscall()
+	osPreemptExtEnter(getg().m)
 	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
-	lastErr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
+	lastErr = uintptr(getg().m.ntLastError)
+	osPreemptExtExit(getg().m)
 	exitsyscall()
 	return
 }
@@ -340,8 +352,10 @@ func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 //go:nosplit
 func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
 	entersyscall()
+	osPreemptExtEnter(getg().m)
 	r = ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
-	lastErr = ntcall(ntGetLastErrorFn, 0, 0, 0, 0, 0, 0)
+	lastErr = uintptr(getg().m.ntLastError)
+	osPreemptExtExit(getg().m)
 	exitsyscall()
 	return
 }
@@ -528,9 +542,10 @@ func ntFutexwakeup(addr *uint32) {
 // (64KiB, reservation-only) NT stack; tstart_cosmo_nt pivots onto
 // mp.g0's Go-allocated stack, so the Linux bookkeeping (mexit frees
 // the g0 stack) is preserved and the NT stack dies with the thread.
-// Same design as real cosmo's CloneWindows. The returned thread
-// handle is leaked in wave 1 (cosmo stores it in the TIB; revisit
-// with the thread-teardown wave).
+// Same design as real cosmo's CloneWindows. The CreateThread handle
+// is closed right away (chunk D2 - wave 1 leaked it); the handle
+// ntPreemptM needs is a fresh DuplicateHandle the thread makes for
+// itself in minit (ntMinitThread), upstream newosproc's exact split.
 //
 // May run with m.p==nil, so write barriers are not allowed.
 //
@@ -544,9 +559,19 @@ func ntNewosproc(mp *m) {
 		_NT_STACK_SIZE_PARAM_IS_A_RESERVATION, // dwCreationFlags
 		0)                                     // lpThreadId
 	if ret == 0 {
+		if atomic.Load(&ntExiting) != 0 {
+			// CreateThread may fail if called concurrently with
+			// ExitProcess (ntExit holds ntSuspendLock and is tearing
+			// the process down). Freeze this thread and let the
+			// process exit - upstream newosproc, issue #18253.
+			lock(&ntDeadlock)
+			lock(&ntDeadlock)
+		}
 		print("runtime: failed to create new OS thread (have ", mcount(), " already)\n")
 		throw("newosproc")
 	}
+	// Close the handle to avoid leaking the thread object if it exits.
+	ntcall(ntCloseHandleFn, ret, 0, 0, 0, 0, 0)
 }
 
 // ntSystemInfo is the win64 SYSTEM_INFO layout (48 bytes).

@@ -67,11 +67,20 @@ type ntExceptionRecord struct {
 	exceptionInformation [15]uintptr // 8-aligned; implicit 4-byte pad before
 }
 
-// ntContext is CONTEXT (x64) up to and including Rip. The 512-byte
-// FXSAVE area and the vector registers follow in memory; the runtime
-// never touches them and only ever receives OS-allocated CONTEXTs, so
-// the tail is omitted. Offsets match upstream
+// ntM128A is the win64 M128A (16 bytes).
+type ntM128A struct {
+	low  uint64
+	high uint64
+}
+
+// ntContext is the FULL CONTEXT (x64) layout, 1232 (0x4D0) bytes.
+// Offsets match upstream
 // internal/runtime/syscall/windows/defs_windows_amd64.go (Rip = 0xF8).
+// The VEH handlers only touch fields up to rip on OS-allocated
+// records, but ntPreemptM (chunk D2) allocates its own buffer for
+// GetThreadContext, which requires the complete struct - and a
+// 16-byte-aligned base, which Go's 8-byte struct alignment does not
+// give; ntPreemptM over-allocates and rounds, upstream's idiom.
 type ntContext struct {
 	p1home, p2home, p3home, p4home, p5home, p6home uint64
 	contextFlags                                   uint32
@@ -82,6 +91,14 @@ type ntContext struct {
 	rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi         uint64
 	r8, r9, r10, r11, r12, r13, r14, r15           uint64
 	rip                                            uint64
+	fltsave                                        [512]byte // XSAVE_FORMAT (legacy FP area)
+	vectorRegister                                 [26]ntM128A
+	vectorControl                                  uint64
+	debugControl                                   uint64
+	lastBranchToRip                                uint64
+	lastBranchFromRip                              uint64
+	lastExceptionToRip                             uint64
+	lastExceptionFromRip                           uint64
 }
 
 // ntExceptionPointers is EXCEPTION_POINTERS.
@@ -559,8 +576,10 @@ func ntKillSelf(sig uint32) uintptr {
 	}
 	if sig == _SIGKILL {
 		// Uncatchable: die with the encoded status immediately (the
-		// kernel would never consult handlers either).
-		ntExitEncoded(_SIGKILL)
+		// kernel would never consult handlers either). Ordered exit:
+		// this is a normal-operation death (waitsig exercises it every
+		// probe run), so it takes ntSuspendLock like ntExit.
+		ntExitEncodedOrdered(_SIGKILL)
 	}
 	handler := ntSigActs[sig].sa_handler
 	if handler == _SIG_IGN {
@@ -570,7 +589,7 @@ func ntKillSelf(sig uint32) uintptr {
 		if ntSigDefaultIgnored(sig) {
 			return 0
 		}
-		ntExitEncoded(sig) // default action: terminate
+		ntExitEncodedOrdered(sig) // default action: terminate
 	}
 	ntDeliverSelfSignal(sig, handler)
 	return 0
