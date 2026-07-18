@@ -143,26 +143,64 @@ func TestELFNoRWXSegments(t *testing.T) {
 	}
 }
 
-func TestELFHasTextSection(t *testing.T) {
+// Default fat builds embed only each payload's loadable span (cosmocc
+// style): no section header table survives, so text/data presence is
+// asserted via the program headers, which are all any APE boot path reads.
+
+func TestELFHasTextSegment(t *testing.T) {
 	data := extractELF(t)
 
 	f, err := elf.NewFile(bytes.NewReader(data))
 	require.NoError(t, err)
 	defer f.Close()
 
-	text := f.Section(".text")
-	assert.NotNil(t, text, "must have .text section")
+	entry := le64(data[24:32])
+	var hasText bool
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_LOAD && p.Flags&elf.PF_X != 0 && p.Filesz > 0 &&
+			entry >= p.Vaddr && entry < p.Vaddr+p.Memsz {
+			hasText = true
+			break
+		}
+	}
+	assert.True(t, hasText, "must have a non-empty executable segment containing the entry point")
 }
 
-func TestELFHasDataSection(t *testing.T) {
+func TestELFHasDataSegment(t *testing.T) {
 	data := extractELF(t)
 
 	f, err := elf.NewFile(bytes.NewReader(data))
 	require.NoError(t, err)
 	defer f.Close()
 
-	data_ := f.Section(".data")
-	assert.NotNil(t, data_, "must have .data section")
+	var hasData bool
+	for _, p := range f.Progs {
+		if p.Type == elf.PT_LOAD && p.Flags&elf.PF_W != 0 && p.Filesz > 0 {
+			hasData = true
+			break
+		}
+	}
+	assert.True(t, hasData, "must have a non-empty writable data segment")
+}
+
+// TestELFPayloadStripped verifies the default-build contract: the embedded
+// payload is stripped to its loadable span, with the ELF header's section
+// fields zeroed (no section header table, no .symtab, no DWARF - debug
+// info lives in the .dbg/.aarch64.elf sidecars instead).
+func TestELFPayloadStripped(t *testing.T) {
+	data := extractELF(t)
+
+	assert.Zero(t, le64(data[40:48]), "e_shoff must be 0 in a stripped payload")
+	assert.Zero(t, le16(data[60:62]), "e_shnum must be 0 in a stripped payload")
+	assert.Zero(t, le16(data[62:64]), "e_shstrndx must be 0 in a stripped payload")
+
+	f, err := elf.NewFile(bytes.NewReader(data))
+	require.NoError(t, err)
+	defer f.Close()
+
+	assert.Empty(t, f.Sections, "stripped payload must carry no sections")
+	_, err = f.Symbols()
+	assert.ErrorIs(t, err, elf.ErrNoSymbols, "stripped payload must carry no symbol table")
 }
 
 func TestELFSegmentAlignment(t *testing.T) {
