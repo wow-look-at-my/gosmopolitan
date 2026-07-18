@@ -1646,3 +1646,35 @@ decisive for iteration speed, converting what would have been 3 CI
 round-trips into local minutes. The direct-invocation CI check runs
 two success cases (both origins); the error-path cases are covered by
 the native apetest leg rather than duplicated in pwsh.
+
+### step-3 postscript: the ASLR straddle flake (fixed same day)
+
+The docs-only push a94c1891 (identical code to the green 977759d7 run)
+FAILED test-windows: windows-origin apetest, TestFizzbuzz_Negative15,
+exit status 0xC0000005 with captured stderr
+
+	fatal error: runtime: cannot commit pages
+	runtime.sysUsedOS(0x217d7bffc000, ...)
+	runtime.(*mheap).allocSpan -> stackpoolalloc -> stackalloc(0x4000)
+	runtime.schedinit
+
+while the very next push's run (4175ebce) was green again - a
+nondeterministic 1-in-~92-boots crash. Forensics: the failing range
+ends exactly at 0x217d7c000000, a 64MiB heap-arena boundary. NT only
+lets one VirtualAlloc(MEM_COMMIT)/VirtualFree(MEM_DECOMMIT) call touch
+pages of a SINGLE prior reservation; adjacent 64MiB arena reservations
+merge virtually in the heap's eyes, so the first span allocated
+straddling the boundary (fresh pages are born scavenged, so allocSpan
+sysUsed-commits them) issues one commit across two reservations ->
+ERROR_INVALID_ADDRESS -> throw. Whether arenas land adjacent depends
+on NT address-space randomization, hence the flake; wine's different
+layout never produced it. (The 0xC0000005 exit instead of exit(2) is
+the panic path faulting while unwinding past the wedged heap state -
+secondary, unreachable once the commit works.) Fix (same one upstream
+mem_windows.go has carried for years, ported verbatim as
+ntCommitPages/ntDecommitPages in mem_cosmo.go): on failure retry
+successively smaller page-aligned chunks so each call stays within one
+reservation; sysUsedOS, sysUnusedOS, sysFaultOS, and sysMapOS NT
+branches all route through the chunked helpers now. Locally green
+after the fix: linux fizzbuzz+probe ("ok all"), apetest, wine
+fizzbuzz, cosmo/arm64 std, vet.
