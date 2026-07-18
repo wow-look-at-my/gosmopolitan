@@ -79,14 +79,18 @@ func main() {
 	checkExecutable()
 	checkFiles()
 	checkReadDir()
+	// Exec and signal checks run at the END on purpose, in that order.
+	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
+	// incident produced kernel-stuck processes), every other check has
+	// already printed its verdict, so the partial output localizes the
+	// failure precisely. The signal-dependent block (segvrecover,
+	// notify, preempt, waitsig) comes dead last: pre-VEH Windows hosts
+	// crash at the segv check, and this order maximizes the coverage
+	// that still prints before that crash.
+	checkExec()
 	checkSegvRecover()
 	checkSignalNotify()
 	checkPreempt()
-	// Exec checks run LAST on purpose: if a forked child ever wedges (a
-	// nondeterministic macOS CI incident produced kernel-stuck
-	// processes), every other check has already printed its verdict, so
-	// the partial output localizes the failure precisely.
-	checkExec()
 	checkWaitSig()
 	if failed {
 		os.Exit(1)
