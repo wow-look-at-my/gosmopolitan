@@ -33,11 +33,24 @@
 //     empty like AIX - a nonblocking check would contend ntMtxset
 //     with the blocked poller - which sysmon and findrunnable
 //     tolerate.
-//   - The wakeup fd is a self-connected loopback UDP socket at slot
-//     0 (WSAPoll has no pipe/eventfd concept; the connect filters
-//     out datagrams from any other source). netpollBreak sends one
-//     byte, guarded by the shared netpollWakeSig dedup; the poller
-//     drains with nonblocking recvs when it blocks.
+//   - The wakeup channel is a connected loopback TCP pair: sends on
+//     ntWakeSock (the client end) surface as readability on
+//     ntWakeRecv (the accepted end), which sits at slot 0. WSAPoll
+//     has no pipe/eventfd concept, and the transport MUST be
+//     lossless: chunk C shipped a self-connected UDP socket here,
+//     and windows-latest disproved it - UDP, loopback included, may
+//     drop datagrams on real NT (wine's in-process loopback never
+//     does), and one dropped wake byte leaves the poller asleep for
+//     its full WSAPoll timeout while every mutator (netpollopen/arm/
+//     close block on ntMtxset below) and every new-earlier timer
+//     (wakeNetPoller -> netpollBreak) waits it out - the observed
+//     ~5s windows-latest probe stalls, rescued only by whatever
+//     stale deadline the poller already held. TCP retransmits, so a
+//     wake byte cannot be lost; upstream's netpollBreak transports
+//     are lossless for the same reason (windows uses
+//     PostQueuedCompletionStatus, aix a pipe). netpollBreak sends
+//     one byte, guarded by the shared netpollWakeSig dedup; the
+//     poller drains with nonblocking recvs when it blocks.
 //
 // WSAPOLLFD is NOT the Linux pollfd: the fd is a SOCKET (8 bytes on
 // win64), so the struct is 16 bytes, and the POLL* constants have
@@ -86,7 +99,8 @@ var (
 	ntMtxset             mutex
 	ntPollPendingUpdates int32
 
-	ntWakeSock  uintptr // self-connected loopback UDP socket, slot 0
+	ntWakeSock  uintptr // loopback TCP wake pair: send (client) end
+	ntWakeRecv  uintptr // loopback TCP wake pair: polled (accepted) end, slot 0
 	ntWakeByte  = [1]byte{'x'}
 	ntDrainBuf  [16]byte
 	ntPollTmp16 [16]byte // netpollinit sockaddr scratch
@@ -97,57 +111,75 @@ func netpollinitNT() {
 		println("runtime: netpollinit: winsock unavailable, errno", eno)
 		throw("runtime: netpollinit failed")
 	}
-	s, werr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_DGRAM, 0,
+	// Build the lossless TCP wake pair (see the file comment): a
+	// loopback listener, a blocking connect against its backlog, the
+	// accept, then the listener closes. All in-kernel and immediate.
+	l, werr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
 		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
-	if s == _NT_INVALID_SOCKET {
-		println("runtime: netpollinit: wake socket failed with", werr)
+	if l == _NT_INVALID_SOCKET {
+		println("runtime: netpollinit: wake listener failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
-	// Bind to 127.0.0.1:0, learn the port, connect to self: sends
-	// with no address then wake the poller, and no other source can
-	// spoof a wakeup datagram into a connected UDP socket.
 	sin := &ntPollTmp16
 	for i := range sin {
 		sin[i] = 0
 	}
 	sin[0] = _NT_AF_INET
 	sin[4], sin[5], sin[6], sin[7] = 127, 0, 0, 1
-	if r, werr := ntcallE(ntWSABindFn, s, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
+	if r, werr := ntcallE(ntWSABindFn, l, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
 		println("runtime: netpollinit: wake bind failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
 	var slen int32 = 16
-	if r, werr := ntcallE(ntWSAGetsocknameFn, s, uintptr(unsafe.Pointer(&sin[0])),
+	if r, werr := ntcallE(ntWSAGetsocknameFn, l, uintptr(unsafe.Pointer(&sin[0])),
 		uintptr(unsafe.Pointer(&slen)), 0, 0, 0, 0); ntSockErr(r) {
 		println("runtime: netpollinit: wake getsockname failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
-	if r, werr := ntcallE(ntWSAConnectFn, s, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
+	if r, werr := ntcallE(ntWSAListenFn, l, 1, 0, 0, 0, 0, 0); ntSockErr(r) {
+		println("runtime: netpollinit: wake listen failed with", werr)
+		throw("runtime: netpollinit failed")
+	}
+	c, werr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
+		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+	if c == _NT_INVALID_SOCKET {
+		println("runtime: netpollinit: wake client failed with", werr)
+		throw("runtime: netpollinit failed")
+	}
+	if r, werr := ntcallE(ntWSAConnectFn, c, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
 		println("runtime: netpollinit: wake connect failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
+	a, werr := ntcallE(ntWSAAcceptFn, l, 0, 0, 0, 0, 0, 0)
+	if a == _NT_INVALID_SOCKET {
+		println("runtime: netpollinit: wake accept failed with", werr)
+		throw("runtime: netpollinit failed")
+	}
+	ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+	// The accepted end never crosses a CreateProcess boundary
+	// explicitly, but keep it uninheritable like every other socket.
+	ntcall(ntWSASetHandleInfFn, a, _NT_HANDLE_FLAG_INHERIT, 0, 0, 0, 0)
+	// 1-byte wake sends must hit the wire immediately, not sit in a
+	// Nagle buffer behind a delayed ACK. Best-effort.
 	var one uint32 = 1
-	if r, werr := ntcallE(ntWSAIoctlsocketFn, s, _NT_FIONBIO,
+	ntcall(ntWSASetsockoptFn, c, 6 /* IPPROTO_TCP */, 1, /* TCP_NODELAY */
+		uintptr(unsafe.Pointer(&one)), 4, 0)
+	// Both ends nonblocking: the send side must never wedge a
+	// mutator, the recv side is drained opportunistically.
+	if r, werr := ntcallE(ntWSAIoctlsocketFn, c, _NT_FIONBIO,
 		uintptr(unsafe.Pointer(&one)), 0, 0, 0, 0); ntSockErr(r) {
 		println("runtime: netpollinit: wake FIONBIO failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
-	// Disable latched UDP resets on the wake socket (same guard
-	// ntEmuSocket applies to every user DGRAM socket; best-effort -
-	// wine lacks these ioctls). Real NT latches WSAECONNRESET onto a
-	// connected UDP socket after an ICMP unreachable, and a latched
-	// wake socket would fail EVERY future netpollBreak send: the
-	// poller then sleeps its full WSAPoll timeout and new timers or
-	// ready work wait for an unrelated timer expiry to rescue them.
-	var off, ret uint32
-	ntcall10x(ntWSAIoctlFn, s, _NT_SIO_UDP_CONNRESET,
-		uintptr(unsafe.Pointer(&off)), 4, 0, 0,
-		uintptr(unsafe.Pointer(&ret)), 0, 0, 0)
-	ntcall10x(ntWSAIoctlFn, s, _NT_SIO_UDP_NETRESET,
-		uintptr(unsafe.Pointer(&off)), 4, 0, 0,
-		uintptr(unsafe.Pointer(&ret)), 0, 0, 0)
-	ntWakeSock = s
-	ntPollFds[0] = ntWSAPollFD{fd: s, events: _NT_POLLRDNORM}
+	one = 1
+	if r, werr := ntcallE(ntWSAIoctlsocketFn, a, _NT_FIONBIO,
+		uintptr(unsafe.Pointer(&one)), 0, 0, 0, 0); ntSockErr(r) {
+		println("runtime: netpollinit: wake recv FIONBIO failed with", werr)
+		throw("runtime: netpollinit failed")
+	}
+	ntWakeSock = c
+	ntWakeRecv = a
+	ntPollFds[0] = ntWSAPollFD{fd: a, events: _NT_POLLRDNORM}
 	ntPollPds[0] = nil
 	ntPollNums[0] = -1
 	ntPollLen = 1
@@ -314,7 +346,7 @@ func netpollNT(delay int64) (gList, int32) {
 			// poll; only drain and reset when blocking (aix rule -
 			// and netpollNT(0) never reaches here anyway).
 			for {
-				rr := int32(uint32(ntcall(ntWSARecvFn, ntWakeSock,
+				rr := int32(uint32(ntcall(ntWSARecvFn, ntWakeRecv,
 					uintptr(unsafe.Pointer(&ntDrainBuf[0])), uintptr(len(ntDrainBuf)), 0, 0, 0)))
 				if rr <= 0 {
 					break

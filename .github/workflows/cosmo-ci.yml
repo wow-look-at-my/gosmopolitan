@@ -255,10 +255,10 @@ jobs:
       # Diagnostic only (never fails the job): prove what the runner's
       # afunix.sys actually supports, so a runtimeprobe unixsock failure
       # can be attributed - runner capability gap vs cosmo port bug. The
-      # native matrix distinguishes the WSASocketW creation flags: the
-      # cosmo runtime creates AF_UNIX sockets WSA_FLAG_OVERLAPPED
-      # because bind on a non-overlapped afunix socket fails
-      # WSAEOPNOTSUPP (10045) on real NT; the managed .NET case is the
+      # native matrix reproduces the cosmo runtime's exact socket recipe
+      # piecewise (creation flags, SO_REUSEADDR - which net's
+      # listenStream sets and which poisons a subsequent afunix bind
+      # with WSAEOPNOTSUPP - and FIONBIO); the managed .NET case is the
       # canonical known-good control.
       - name: AF_UNIX capability probe (runner diagnostic)
         timeout-minutes: 3
@@ -272,11 +272,22 @@ jobs:
               [DllImport("ws2_32.dll")] public static extern int WSAStartup(ushort v, byte[] data);
               [DllImport("ws2_32.dll")] public static extern IntPtr WSASocketW(int af, int type, int proto, IntPtr pi, uint g, uint flags);
               [DllImport("ws2_32.dll")] public static extern int bind(IntPtr s, byte[] name, int namelen);
+              [DllImport("ws2_32.dll")] public static extern int setsockopt(IntPtr s, int level, int optname, ref int optval, int optlen);
+              [DllImport("ws2_32.dll")] public static extern int ioctlsocket(IntPtr s, int cmd, ref int arg);
               [DllImport("ws2_32.dll")] public static extern int WSAGetLastError();
               [DllImport("ws2_32.dll")] public static extern int closesocket(IntPtr s);
-              public static void TryCase(string label, uint flags, string path) {
+              public static void TryCase(string label, uint flags, string path, bool reuse, bool nonblock) {
                   IntPtr s = WSASocketW(1, 1, 0, IntPtr.Zero, 0, flags);
                   if (s == (IntPtr)(-1L)) { Console.WriteLine(label + ": WSASocketW failed " + WSAGetLastError()); return; }
+                  if (reuse) {
+                      int one = 1;
+                      int rr = setsockopt(s, 0xffff, 0x0004, ref one, 4);
+                      Console.WriteLine(label + ": setsockopt SO_REUSEADDR " + (rr == 0 ? "OK" : "failed " + WSAGetLastError()));
+                  }
+                  if (nonblock) {
+                      int nb = 1;
+                      ioctlsocket(s, unchecked((int)0x8004667E), ref nb);
+                  }
                   byte[] p = Encoding.UTF8.GetBytes(path);
                   byte[] sa = new byte[110];
                   sa[0] = 1; sa[1] = 0;
@@ -288,8 +299,12 @@ jobs:
               }
               public static void Run(string dir) {
                   byte[] d = new byte[512]; WSAStartup(0x0202, d);
-                  TryCase("native non-overlapped (flags 0x80)", 0x80, System.IO.Path.Combine(dir, "afu-nonovl.sock"));
-                  TryCase("native overlapped (flags 0x81)", 0x81, System.IO.Path.Combine(dir, "afu-ovl.sock"));
+                  TryCase("native plain (flags 0x80)", 0x80, System.IO.Path.Combine(dir, "afu-1.sock"), false, false);
+                  TryCase("native +SO_REUSEADDR", 0x80, System.IO.Path.Combine(dir, "afu-2.sock"), true, false);
+                  TryCase("native +FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-3.sock"), false, true);
+                  TryCase("native +SO_REUSEADDR+FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-4.sock"), true, true);
+                  Console.WriteLine("GetTempPath=" + System.IO.Path.GetTempPath());
+                  TryCase("native plain at GetTempPath", 0x80, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "afu-5.sock"), false, false);
               }
           }
           '@

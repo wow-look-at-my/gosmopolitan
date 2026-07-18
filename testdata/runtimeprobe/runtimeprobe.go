@@ -70,15 +70,30 @@ func main() {
 		return
 	}
 	startWatchdog()
-	checkArgsEnv()
-	checkIdentity()
-	checkNumCPU()
-	checkMonotonic()
-	checkTimers()
-	checkSockets()
-	checkExecutable()
-	checkFiles()
-	checkReadDir()
+	// timed localizes latency stalls without weakening any verdict:
+	// every healthy check block completes well under a second on every
+	// host, so a block that takes 2s+ prints a slow: line plus one
+	// poller-counter sample (the wave-9 forensic counters) naming
+	// where the time went. CI logs then show WHICH block stalled and
+	// whether the poller was wedged inside one long WSAPoll/kevent
+	// (sinceenter large) or cycling while work starved.
+	timed := func(label string, fn func()) {
+		t0 := time.Now()
+		fn()
+		if d := time.Since(t0); d > 2*time.Second {
+			fmt.Printf("slow: %s took %v\n", label, d)
+			printNetpollDiag("slow-" + label)
+		}
+	}
+	timed("argsenv", checkArgsEnv)
+	timed("identity", checkIdentity)
+	timed("numcpu", checkNumCPU)
+	timed("monotonic", checkMonotonic)
+	timed("timers", checkTimers)
+	timed("sockets", checkSockets)
+	timed("executable", checkExecutable)
+	timed("files", checkFiles)
+	timed("readdir", checkReadDir)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
 	// incident produced kernel-stuck processes), every other check has
@@ -87,11 +102,11 @@ func main() {
 	// notify, preempt, waitsig) comes dead last: pre-VEH Windows hosts
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
-	checkExec()
-	checkSegvRecover()
-	checkSignalNotify()
-	checkPreempt()
-	checkWaitSig()
+	timed("exec", checkExec)
+	timed("segvrecover", checkSegvRecover)
+	timed("signalnotify", checkSignalNotify)
+	timed("preempt", checkPreempt)
+	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)
 	}
