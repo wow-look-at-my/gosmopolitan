@@ -99,9 +99,19 @@ real fizzbuzz output, byte-exact, exit codes 0/1): stdout/stderr writes,
 os.Args via GetCommandLineW (full cmd.exe quoting rules), environment
 via GetEnvironmentStringsW (GODEBUG works), os.Exit, VirtualAlloc-backed
 memory, CreateThread (sysmon runs), WaitOnAddress futexes, KUSER clocks,
-GetSystemInfo NumCPU. Not yet on Windows: file I/O, sockets, signals,
-os/exec, profiling - see DEBUGGING.md's NT wave-1 sections for the
-ladder and forensics.
+GetSystemInfo NumCPU. Wave-2 chunk A (2026-07-18, wine-verified, CI
+proof pending the windows probe flip): every user-level syscall routes
+through an NT emulation dispatcher (Linux numbers/errnos/structs in,
+Win32 out - src/runtime/os_cosmo_nt_sys.go) covering process identity
+(getpid/getppid/gettid), ProcessPrng entropy, the whole file I/O family
+with an fd table and a documented Linux<->Win32 path translation
+(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL),
+getdents64 emulation (os.ReadDir/WalkDir/RemoveAll), working-directory
+round-trip, os.Executable via GetModuleFileNameW, timers via a
+timer-only netpoll stub, and console CP_UTF8+VT setup. Not yet on
+Windows: sockets, signals (a SIGSEGV still kills the process - no VEH),
+os/exec, profiling - see DEBUGGING.md's NT wave sections for the ladder
+and forensics.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll

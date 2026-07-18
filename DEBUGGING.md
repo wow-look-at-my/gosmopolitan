@@ -1698,7 +1698,9 @@ decode), os/exec, os.Executable, argv/env, wd round-trip. That flips the
 windows skip in apetest/runtimeprobe_test.go and sets RUNTIMEPROBE_BIN
 on the test-windows apetest steps in cosmo-ci.yml.
 
-Status: in progress — recon done, implementation starting.
+Status: chunk A landed (identity, entropy, file I/O, dirents, wd,
+os.Executable, timers, console). Sockets, signals/VEH, os/exec are the
+remaining chunks.
 
 Recon baseline (linux, this branch): make.bash 3m10s; fat fizzbuzz +
 runtimeprobe build; probe passes the full gauntlet ("ok all", exit 0).
@@ -1706,3 +1708,184 @@ Under wine 9.0 the wave-1 surface carries the probe through args/
 environ/mark, then the first os.Getpid() dies at the designed 0xf7
 crash poke (rawSyscallNoError has no NT route) — exit 0xC0000005.
 That poke is wave 2's starting line.
+
+## Wave 2 chunk A (2026-07-18): the syscall emulation layer
+
+End state under wine 9.0: the probe prints ok for args/environ/mark,
+getpid/getppid, numcpu, monotonic, sleep/ticker/after/ctxtimeout,
+executable, mkdirtemp/statdir/create/readback/rename/statsize,
+getwd/chdir/wdrestore, remove/rmdir, readdir/walkdir/removeall;
+tcplisten FAILs gracefully (socket ENOSYS), execchild FAILs gracefully
+(pipe2 ENOSYS); then the process dies at segvrecover with 0xC0000005
+(no VEH yet — designed, and why the probe now runs the signal block
+dead last). Linux stays 100% green (39 checks + ok all, rc 0);
+apetest, fizzbuzz (linux+wine, redirected output byte-exact), and the
+cosmo/arm64 std build all pass.
+
+### Architecture: where emulation runs (THE load-bearing decision)
+
+The darwin model (nosplit emulation between entersyscall/exitsyscall)
+cannot work for NT: path translation (UTF-8→UTF-16) and Linux-struct
+synthesis (stat, dirent64) must allocate, and entersyscall sets
+throwsplit. So on NT the syscall package SKIPS entersyscall
+(syscall_cosmo.go Syscall/Syscall6 check cosmo.Windows() first) and
+the emulation runs as ordinary Go — the cgocall model: each genuinely
+blocking Win32 call (ReadFile/WriteFile/FlushFileBuffers) brackets
+ITSELF with entersyscall via runtime.ntcallSE, so sysmon can retake
+the P during a blocking console read. Quick metadata calls stay plain
+(ntcallE).
+
+Pointer discipline that makes this sound: syscall arguments may point
+into the calling goroutine's STACK, and raw uintptrs are not adjusted
+when the stack moves. Rule: the chain from syscall.Syscall down to the
+dispatcher entry is nosplit, and runtime.ntSyscallEmulate
+(os_cosmo_nt_sys.go) re-types every pointer-carrying uintptr in the
+dispatch call expressions themselves; from there the backends hold
+real pointers (stack copying adjusts them); converting back to uintptr
+happens only inside nosplit ntcallE/ntcallSE where no growth can
+occur. GetLastError is fetched inside those same helpers — runtime
+functions are never async-preempted and there is no preemptible
+prologue between the call and the fetch, so the thread-local error
+cannot be lost to a goroutine migration (re-audit when SuspendThread
+preemption lands: the trampoline should then capture the error).
+
+rawSyscallNoError became a Go wrapper (NT → table; else the renamed
+rawSyscallNoErrorAsm keeps the SYSCALL fast path and the 0xf7 poke as
+belt-and-suspenders). It is deliberately NOT nosplit: the darwin arm64
+emulation chain under the asm entry sits exactly at the 792-byte
+nosplit budget and an 80-byte wrapper frame broke the build ("nosplit
+stack over 792 byte limit" through syscall6SlowDarwin). Same lesson at
+the trampoline: widening ntcallArgs to 8 slots blew the
+cgoSigtramp→…→write1→ntwrite1→ntcall→asmcgocall chain by 24-32 bytes,
+so ntcall keeps the slim 6-arg block and a parallel ntcallArgs8/
+ntcall8 trampoline (sys_cosmo_nt_amd64.s) serves 7-arg CreateFileW.
+
+### The pieces (all in src/runtime unless noted)
+
+- Dispatcher + backends + Win32-error→Linux-errno table:
+  os_cosmo_nt_sys.go (ntSyscallEmulate; ntErrno holds the one errno
+  mapping, cosmo's __dosemapping equivalent). Emulated: read write
+  openat close stat lstat fstat newfstatat lseek pread64 pwrite64
+  getdents64 mkdirat unlinkat renameat readlinkat(/proc/self/exe only)
+  faccessat fchmod(at) chdir getcwd ftruncate fsync fdatasync fcntl
+  getrandom getpid getppid gettid getuid geteuid getgid getegid(0)
+  getpgrp(=pid) umask(022) exit exit_group. Everything else ENOSYS.
+- fd table: os_cosmo_nt_fd.go. Fixed [512] array (no alloc on nosplit
+  lookup paths, EMFILE when full), lowest-free unix semantics, slots
+  0/1/2 seeded at boot from GetStdHandle and ALWAYS marked open (a
+  dead handle fails per-op EBADF; keeps checkfds from raw-syscall
+  open("/dev/null")). Entry: handle, kind (file/dir/stdio — sockets
+  wave adds its kind here), GetFileType for stdio fstat synthesis,
+  cloexec, Linux O_* flags, absolute Win32 pathW (for *at joins), and
+  getdents state (dirStarted + pending entries). Lookups return
+  copies; close-vs-op races have unix use-after-close semantics.
+  runtime fcntl (fcntl_cosmo_amd64.go) consults the same table
+  (F_GETFD/SETFD/GETFL/SETFL; else ENOSYS).
+- Path policy: os_cosmo_nt_path.go, ONE documented function pair.
+  ntPathW: "/dev/null"→"NUL"; "/tmp[/x]"→GetTempPathW()+x (cached;
+  the magic that makes unix-shaped os.TempDir work); "/c[/x]"→"C:\x"
+  (single-letter rule); "X:..." passthrough; other absolute → current-
+  drive-rooted "\x"; relative passthrough; all with slash flip; \\?\
+  prefixed only when a drive-absolute result exceeds MAX_PATH.
+  ntPathToLinux: strips \\?\, "C:\a"→"/c/a" (drive lowercased, rest
+  untouched), used by getcwd + readlink(/proc/self/exe) so
+  Chdir(Getwd()) round-trips exactly. A /tmp path deliberately comes
+  back as its real /c/ spelling — checkWd compares via os.SameFile,
+  which works because stat fills dev/ino from VolumeSerialNumber +
+  FileIndex.
+- stat synthesis (os_cosmo_nt_sys.go ntStatFromInfo): Linux amd64
+  Stat_t layout byte-exact; modes synthetic (dirs 0755, files 0755 or
+  0555 when READONLY — everything "executable" since NT has no x bit
+  and exec.LookPath gates on 0111); times from FILETIME (ctime :=
+  CreationTime, documented approximation); Blksize 4096. chmod/
+  fchmodat are validated no-ops (mapping mode&0200 onto READONLY would
+  break later unlinks).
+- getdents64: GetFileInformationByHandleEx(FileIdBothDirectoryInfo /
+  RestartInfo on first query) — the dir HANDLE holds the kernel
+  cursor, same shape as darwin's __getdirentries64 emulation. Records
+  parsed into the fd's pending list, drained into the caller's buffer
+  as Linux dirent64 (ino from FileId, |1 when 0 — ParseDirent skips
+  ino==0; d_off 0; DT_DIR/DT_REG from attributes); nothing is lost
+  when a batch outsizes the buffer.
+- open mapping: access from O_ACCMODE (+FILE_READ_ATTRIBUTES always,
+  so fstat works on O_WRONLY fds; O_APPEND → FILE_APPEND_DATA instead
+  of GENERIC_WRITE = atomic appends); share always READ|WRITE|DELETE;
+  disposition CREATE_NEW/CREATE_ALWAYS/OPEN_ALWAYS/TRUNCATE_EXISTING/
+  OPEN_EXISTING per O_CREAT/O_EXCL/O_TRUNC; FILE_FLAG_BACKUP_SEMANTICS
+  unconditionally (lets os.Open open directories); post-open classify
+  via GetFileInformationByHandle (fail → stdio kind, e.g. NUL);
+  O_DIRECTORY on non-dir → ENOTDIR, write-mode dir open → EISDIR.
+- pread/pwrite: save/seek/transfer/restore around the shared file
+  pointer (concurrent same-fd plain reads could observe the seek —
+  internal/poll serializes per-fd, accepted + documented).
+- Entropy: ProcessPrng (bcryptprimitives.dll, upstream Go's choice
+  since 1.22; RtlGenRandom/advapi32 fallback, same signature),
+  resolved gracefully at ntResolve. Backs SYS_GETRANDOM, runtime
+  readRandom, and ntBootInit's upgrade of the RDTSC-mixed rt0
+  AT_RANDOM bytes before randinit consumes them.
+- os.Executable: zero os-package changes — the syscall layer answers
+  readlinkat("/proc/self/exe") with GetModuleFileNameW in /c/ form
+  (executable_cosmo.go tries exactly that readlink first).
+- Identity: GetCurrentProcessId; getppid via ntdll
+  NtQueryInformationProcess(ProcessBasicInformation) word 5, graceful
+  ENOSYS if unresolvable; gettid = GetCurrentThreadId, and
+  minitProcid now records real thread ids (procid becomes load-bearing
+  in the preemption chunk).
+- Console (ntBootInit): SetConsoleOutputCP/SetConsoleCP(CP_UTF8) +
+  ENABLE_VIRTUAL_TERMINAL_PROCESSING on stdout/stderr where
+  GetConsoleMode says they are consoles; fire-and-forget under
+  redirection. Byte-exactness verified under wine with redirected
+  stdout ("fizzbuzz\n", od-clean).
+- **netpoll stub (recon assumption FALSIFIED)**: the recon claimed
+  timers never initialize netpoll; in this Go version
+  (*timers).addHeap unconditionally calls netpollGenericInit, so the
+  first time.Sleep threw "netpollinit failed" (epollcreate ENOSYS).
+  Fix: a third netpoll personality in netpoll_cosmo.go — NT stub:
+  netpollinit succeeds creating nothing; netpoll(delay) parks the
+  polling M on a WaitOnAddress futex word (ntNetpollBreakWord) for the
+  timer delay; netpollBreak stores 1 + wakes it (compare-and-wait
+  closes the lost-wakeup race); netpollopen/close ENOSYS;
+  netpollIsPollDescriptor false. The sockets chunk replaces this with
+  a real poller — keep the netpolldiag linkname compiling when doing
+  so.
+
+### Wine quirks (let CI be the judge later)
+
+- getppid reports 0 under wine (InheritedFromUniqueProcessId comes
+  back 0 for the boot process) — probe accepts >= 0; expect a real
+  parent pid on windows-latest.
+- Console CP/VT calls are unverifiable under wine-with-redirect;
+  harmless there by construction (GetConsoleMode gates the mode set).
+
+### Chunk-A commits
+
+- 6a455e4e runtime, syscall: NT syscall emulation — identity,
+  entropy, file I/O, dirents, timers (+ netpoll stub, fd table, path
+  layer, ntcall8 trampoline, console boot setup)
+- 968423f0 runtimeprobe: run the signal-dependent checks last
+  (pre-VEH NT crashes at segvrecover; exec stays just before the
+  block for wedge localization)
+
+### What the next chunks must know
+
+- The Emulate dispatcher contract (nosplit + re-type pointers at
+  dispatch) applies to every new syscall case — add cases in
+  ntSyscallEmulate, never a second entry path.
+- ntcallE/ntcallSE take (fn, a1..a7); everything Win32 goes through
+  them (or plain ntcall for boot/g0/no-error contexts). If a call
+  needs >7 args (CreateProcessW has 10), widen ntcallArgs8/ntcall8 —
+  NOT ntcallArgs (the write1 nosplit chain is at budget).
+- Sockets: add an ntFDSocket kind + per-kind state to ntFDEntry;
+  replace the netpoll stub wholesale; ntNetpollBreakWord and the
+  break protocol can carry over if WSAPoll waits ride a break socket
+  instead.
+- exec: the wait-status protocol decision (cosmo encodes code<<8) is
+  still open; runtime exit() passes plain codes today.
+- Signals/VEH: TEB StackBase/StackLimit are still stale on pivoted
+  threads (tstart_cosmo_nt) — fix alongside VEH; thread handles are
+  still leaked by ntNewosproc (preemptM needs them retained).
+- fcntl F_DUPFD_CLOEXEC (1030) is ENOSYS; os.dup paths will need
+  DuplicateHandle eventually.
+- Long relative-join paths skip the \\?\ check (only the absolute
+  translation path applies it); fine for CI temp paths, revisit if a
+  deep-tree workload appears.
