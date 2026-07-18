@@ -1688,6 +1688,83 @@ upstream mem_windows.go provenance. Branch CI history for step 3:
 977759d7 green (first flip push), a94c1891 FAIL (the straddle flake,
 identical code), 4175ebce green, 2f0d0f34 green, dispatch green.
 
+## 2026-07-18: fat APEs strip by default; debug sidecars (.dbg / .aarch64.elf)
+
+Default `GOOS=cosmo` fat builds now ship stripped, with full debug info
+in per-arch sidecar ELFs next to the output - the cosmocc convention,
+copied exactly (cosmocc's apelink embeds only each input's PT_LOAD file
+span and moves the unstripped per-arch linker outputs to `<out>.dbg` /
+`<out>.aarch64.elf`; no objcopy, no .gnu_debuglink anywhere in
+Cosmopolitan).
+
+**Mechanism**: cmd/go's fat merge (cosmoFatten / cosmoFattenInstall)
+passes two new linker flags to `-apefat`: `-apedbg` first writes each
+payload's pristine ELF image - exactly the bytes the per-arch link
+produced, p_offsets normalized, symtab+DWARF+section table intact - to
+`<output>.dbg` (cosmo amd64) and `<output>.aarch64.elf` (cosmo arm64);
+`-apestrip` then embeds only each payload's loadable span (max over
+program headers of p_offset+p_filesz) with e_shoff/e_shnum/e_shstrndx
+zeroed. Safe because every APE boot path is phdr-only: the embedded
+printf boot headers already zero the section fields, self-assimilation
+rewrites just the 64-byte ehdr, the Mach-O header derives from
+PT_LOADs, and ape-m1.c never reads e_shoff (verified: it only declares
+the field). Opt-outs: GOCOSMOSTRIP=0 (parsed like GOCOSMOFAT) restores
+full embedded payloads with no sidecars, byte-for-byte; an explicit
+`-s`/`-w` in the user's -ldflags means the merge adds no flags at all
+(user intent wins - payloads are their stripped output, no sidecars).
+`go test` / `go run` / thin GOCOSMOFAT=0 builds never reach the merge
+and are untouched.
+
+**How to debug a stripped APE**:
+
+- `gdb program.com.dbg` - the amd64 sidecar is a complete, runnable
+  (on Linux) ELF with full symtab and DWARF; debugging it IS debugging
+  the same code the APE runs. Same for `program.com.aarch64.elf` on
+  ARM64 hosts. First run `set osabi GNU/Linux` inside gdb: the APE
+  spec mandates ELFOSABI_FREEBSD and stock Ubuntu gdb has no FreeBSD
+  handler, so without the override `run` dies in gdb's unwinder
+  ("Architecture rejected target-supplied description" then
+  frame_unwind internal-error; verified gdb 15.1). With it,
+  break/run/bt with source lines all work (verified).
+- Against the shipped binary itself: run a copy once so it
+  self-assimilates to ELF, then
+  `gdb assim.com -ex 'set osabi GNU/Linux' -ex 'symbol-file program.com.dbg'`
+  - the sidecar is ET_EXEC at the payload's own vaddrs, so symbols
+  land without any address argument (verified: breakpoints hit and
+  backtraces resolve inside the running stripped binary).
+- `go tool nm` / `objdump` / `addr2line` / delve / `go version`: point
+  them at the sidecar, not the APE. (`go version` has never been able
+  to read a fat APE - the MZ magic makes it sniff as a PE with no Go
+  build info; verified identical on pre-strip GOCOSMOSTRIP=0 output -
+  but it reports fine against the `.dbg` sidecar.)
+- Runtime tracebacks, panics, and runtime/pprof are UNAFFECTED by
+  stripping: Go symbolizes through gopclntab, which lives in a loaded
+  segment inside every payload. Only ELF-symtab/DWARF consumers need
+  the sidecars.
+
+**Names are load-bearing**: cosmo libc's FindDebugBinary probes
+`<exe>.dbg`, `<exe>.com.dbg`, and (on aarch64) `<exe>.aarch64.elf` at
+crash time, so the chosen suffixes keep cosmo-ecosystem tooling
+conventions working against Go-built APEs.
+
+**Size** (measured, this change): fizzbuzz.com 5084226 -> 3420736
+bytes (-32.7%), runtimeprobe.com 7305033 -> 4971712 (-31.9%), and a
+stdlib-heavy webserver (net/http, crypto/tls, image/png, time/tzdata)
+17286764 -> 12269216 (-29.0%; 3.6 MB on the wire after
+`zstd -19 --long=27`) versus the unstripped fat builds, whose sizes
+GOCOSMOSTRIP=0 still reproduces exactly. The sidecars carry the
+stripped-off bytes; nothing is lost (the .dbg sidecar is
+byte-identical to the payload a GOCOSMOSTRIP=0 build embeds -
+verified).
+
+**Tests**: cmd/link apefat_test.go (sidecar byte-identity incl. the
+thin-APE extraction round-trip, symtab parseability, stripped-span
+layout, flags-off byte-compatibility), cmd/go cosmofat_test.go
+(GOCOSMOSTRIP parsing, -ldflags -s/-w token detection), apetest
+(TestELFPayloadStripped, TestFatPayloadsStripped, TestDebugSidecars -
+the last skips when sidecars aren't next to FIZZBUZZ_BIN, as on CI
+test runners, which download bare artifacts).
+
 # 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
 
 ## Wave 2 — DONE (2026-07-18, chunk E green)

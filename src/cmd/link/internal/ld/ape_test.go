@@ -159,6 +159,12 @@ const (
 // linker emits: e_phoff 64, e_phentsize 56.
 func buildTestELF(t *testing.T, entry uint64, phdrs []testProgHeader) []byte {
 	t.Helper()
+	return buildTestELFForMachine(t, elfMachineAMD64, entry, phdrs)
+}
+
+// buildTestELFForMachine is buildTestELF with an explicit e_machine value.
+func buildTestELFForMachine(t *testing.T, machine uint16, entry uint64, phdrs []testProgHeader) []byte {
+	t.Helper()
 
 	size := uint64(64 + 56*len(phdrs))
 	for _, ph := range phdrs {
@@ -174,7 +180,7 @@ func buildTestELF(t *testing.T, entry uint64, phdrs []testProgHeader) []byte {
 	elf[6] = 1
 	elf[7] = elfOSABIFreeBSD
 	binary.LittleEndian.PutUint16(elf[16:], elfTypeExec)
-	binary.LittleEndian.PutUint16(elf[18:], elfMachineAMD64)
+	binary.LittleEndian.PutUint16(elf[18:], machine)
 	binary.LittleEndian.PutUint32(elf[20:], 1)
 	binary.LittleEndian.PutUint64(elf[24:], entry)
 	binary.LittleEndian.PutUint64(elf[32:], 64) // e_phoff

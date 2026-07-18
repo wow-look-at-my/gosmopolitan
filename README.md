@@ -10,11 +10,16 @@ APE binaries are single executables that run natively on multiple operating syst
 
 ```bash
 # Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
-# GOARCH is ignored for the output.
+# GOARCH is ignored for the output. The APE ships stripped; full debug
+# info lands in two sidecar ELFs next to it (program.com.dbg for amd64,
+# program.com.aarch64.elf for arm64), the cosmocc convention.
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE in the install directory
+# go install produces the same fat APE + sidecars in the install directory
 GOOS=cosmo go install ./cmd/program
+
+# Keep full debug info embedded in the APE instead (no sidecars)
+GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
@@ -33,7 +38,13 @@ WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV
 recover via VEH, os/signal delivery, async preemption, kill/wait-status
 decode, console Ctrl-C -> SIGINT). Still missing on Windows:
 sendmsg/recvmsg (fd passing), SIGPROF profiling, and Windows/arm64. See
-`DEBUGGING.md` for the detailed ladder.
+`DEBUGGING.md` for the detailed ladder. Debug with the sidecars
+(`gdb program.com.dbg`, or `symbol-file` against the running APE);
+runtime tracebacks and pprof need no sidecar. When distributing APEs,
+ship them zstd-compressed: the two arch payloads are highly redundant,
+so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
+`zstd -19 --long=27` (distribution-side only - there is no runtime
+self-extraction).
 
 ## Installing a Prebuilt Toolchain (Linux amd64)
 

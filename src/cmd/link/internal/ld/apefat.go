@@ -16,6 +16,13 @@ import (
 // GOOS=cosmo binaries (one amd64, one arm64; each either an APE produced by
 // this linker or a raw ELF) into a single fat APE at outfile, skipping
 // normal linking entirely.
+//
+// With -apedbg, each input's pristine ELF image (symbol table and DWARF
+// intact) is first written to a debug sidecar beside outfile; with
+// -apestrip, each embedded payload is then reduced to the file span its
+// program headers reference, the way Cosmopolitan's apelink embeds only
+// each input's PT_LOAD span. The policy for when cmd/go passes these
+// flags lives in cmd/go/internal/work.cosmoMergeArgs.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
@@ -44,7 +51,80 @@ func apeFatMerge(spec, outfile string) {
 	if payloads[0].arch != sys.AMD64 {
 		payloads[0], payloads[1] = payloads[1], payloads[0]
 	}
+	if *flagApeDbg {
+		for _, p := range payloads {
+			writeAPEDebugSidecar(outfile, p)
+		}
+	}
+	if *flagApeStrip {
+		for _, p := range payloads {
+			stripPayload(p)
+		}
+	}
 	writeAPEFile(outfile, payloads)
+}
+
+// apeDebugSidecarName returns the debug sidecar path for a payload of the
+// given architecture next to the APE at outfile. The names follow the
+// Cosmopolitan cosmocc convention, which cosmo libc's FindDebugBinary
+// probes at crash time by appending each extension to the executable name:
+// <outfile>.dbg for the amd64 image, <outfile>.aarch64.elf for arm64.
+func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
+	if arch == sys.ARM64 {
+		return outfile + ".aarch64.elf"
+	}
+	return outfile + ".dbg"
+}
+
+// writeAPEDebugSidecar writes payload p's ELF image, exactly as its linker
+// produced it (p_offset values payload-relative, symbol table and DWARF
+// intact), to the debug sidecar path for its architecture. The sidecar is
+// a complete standalone ELF executable, directly loadable by debuggers.
+func writeAPEDebugSidecar(outfile string, p *apePayload) {
+	name := apeDebugSidecarName(outfile, p.arch)
+	if err := os.WriteFile(name, p.elf, 0755); err != nil {
+		Exitf("-apedbg: %v", err)
+	}
+}
+
+// payloadExtent returns the end of the file span referenced by the ELF
+// image's program headers: max over all entries of p_offset+p_filesz, but
+// no less than the end of the program header table itself. Everything past
+// it is non-loadable content (.debug_* sections, .symtab, .strtab, and the
+// section header table). The image must already have passed payloadFromELF
+// validation.
+func payloadExtent(elf []byte) uint64 {
+	phoff := binary.LittleEndian.Uint64(elf[32:40])
+	phentsize := binary.LittleEndian.Uint16(elf[54:56])
+	phnum := binary.LittleEndian.Uint16(elf[56:58])
+	extent := phoff + uint64(phnum)*uint64(phentsize)
+	for i := uint16(0); i < phnum; i++ {
+		ph := elf[phoff+uint64(i)*uint64(phentsize):]
+		off := binary.LittleEndian.Uint64(ph[8:16])
+		filesz := binary.LittleEndian.Uint64(ph[32:40])
+		if end := off + filesz; end > extent {
+			extent = end
+		}
+	}
+	return extent
+}
+
+// stripPayload cuts p's ELF image down to the span its program headers
+// reference and zeroes the ELF header's section fields (e_shoff, e_shnum,
+// e_shstrndx), which no longer point at anything. Every APE boot path -
+// the embedded boot headers, self-assimilation, the Mach-O header, and the
+// macOS ARM64 APE loader - reads only the ELF and program headers, so the
+// stripped image boots exactly like the full one.
+func stripPayload(p *apePayload) {
+	extent := payloadExtent(p.elf)
+	if extent > uint64(len(p.elf)) {
+		Exitf("-apestrip: program headers reference %#x bytes but image has only %#x", extent, len(p.elf))
+	}
+	elf := p.elf[:extent:extent]
+	binary.LittleEndian.PutUint64(elf[40:48], 0) // e_shoff
+	binary.LittleEndian.PutUint16(elf[60:62], 0) // e_shnum
+	binary.LittleEndian.PutUint16(elf[62:64], 0) // e_shstrndx
+	p.elf = elf
 }
 
 // payloadFromAPEOrELF extracts an APE payload from data, which may be a raw
