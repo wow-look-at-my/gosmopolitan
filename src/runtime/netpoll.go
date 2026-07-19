@@ -237,6 +237,18 @@ func netpollGenericInit() {
 }
 
 func netpollinited() bool {
+	if GOOS == "js" && wasmThreadsEnabled {
+		// GOWASM=threads: there is nothing to poll on js (see
+		// netpoll_fake.go), and the fake netpoll's instant return would
+		// make findRunnable's poller path spin: an idle M would loop
+		// netpoll -> pidleget -> retry at full speed until the next
+		// timer fires. Report the poller as uninitialized so idle Ms
+		// park instead; timers are fired by the M owning the P, by
+		// stealWork's timer checks, and (for idle Ps) by the main M's
+		// JavaScript timeout backstop (see beforeIdle in
+		// lock_jsthreads.go).
+		return false
+	}
 	return netpollInited.Load() != 0
 }
 

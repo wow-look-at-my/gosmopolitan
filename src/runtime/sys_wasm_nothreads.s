@@ -10,3 +10,7 @@
 // yield to; this must never be called.
 TEXT runtime·osyield(SB), NOSPLIT, $0-0
 	UNDEF
+
+// Without GOWASM=threads there is only one thread; nothing to order.
+TEXT ·publicationBarrier(SB), NOSPLIT, $0-0
+	RET
