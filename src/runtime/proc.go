@@ -3888,7 +3888,13 @@ top:
 	//
 	// If we're in the GC mark phase, can safely scan and blacken objects,
 	// and have work to do, run idle-time marking rather than give up the P.
-	if gcBlackenEnabled != 0 && gcShouldScheduleWorker(pp) && gcController.addIdleMarkWorker() {
+	//
+	// On js/wasm, skip this while idle marking is throttled
+	// (wasmIdleMarkThrottled, constant false elsewhere): an idle drain just
+	// hit its deadline with work remaining, and scheduling another idle
+	// worker here would starve the host event loop until mark completion.
+	// beforeIdle arms a short wakeup so marking still finishes promptly.
+	if gcBlackenEnabled != 0 && gcShouldScheduleWorker(pp) && !wasmIdleMarkThrottled() && gcController.addIdleMarkWorker() {
 		node := (*gcBgMarkWorkerNode)(gcBgMarkWorkerPool.pop())
 		if node != nil {
 			pp.gcMarkWorkerMode = gcMarkWorkerIdleMode
