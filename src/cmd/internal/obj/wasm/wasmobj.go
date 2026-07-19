@@ -115,7 +115,16 @@ var unaryDst = map[obj.As]bool{
 	AI64Store8:    true,
 	AI64Store16:   true,
 	AI64Store32:   true,
-	ACALLNORESUME: true,
+	// Atomic stores (threads proposal) carry their memarg offset in the
+	// destination operand, exactly like the plain stores above.
+	AI32AtomicStore:   true,
+	AI64AtomicStore:   true,
+	AI32AtomicStore8:  true,
+	AI32AtomicStore16: true,
+	AI64AtomicStore8:  true,
+	AI64AtomicStore16: true,
+	AI64AtomicStore32: true,
+	ACALLNORESUME:     true,
 }
 
 var Linkwasm = obj.LinkArch{
@@ -1048,6 +1057,7 @@ var notUsePC_B = map[string]bool{
 	"wasm_export_run":         true,
 	"wasm_export_resume":      true,
 	"wasm_export_getsp":       true,
+	"wasm_export_thread_run":  true,
 	"wasm_pc_f_loop":          true,
 	"wasm_pc_f_loop_export":   true,
 	"gcWriteBarrier":          true,
@@ -1107,6 +1117,11 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		useAssemblyRegMap()
 	case "wasm_pc_f_loop_export":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
+		useAssemblyRegMap()
+	case "wasm_export_thread_run":
+		// One i32 parameter (worker id, R0), then two i32 scratch
+		// locals (R1, R2) and two i64 scratch locals (R3, R4).
+		varDecls = []*varDecl{{count: 2, typ: i32}, {count: 2, typ: i64}}
 		useAssemblyRegMap()
 	case "memchr", "memcmp":
 		varDecls = []*varDecl{{count: 2, typ: i32}}

@@ -7,8 +7,8 @@
 TEXT runtime·exitThread(SB), NOSPLIT, $0-0
 	UNDEF
 
-TEXT runtime·osyield(SB), NOSPLIT, $0-0
-	UNDEF
+// runtime·osyield is in sys_wasm_nothreads.s (a trap - it must never be
+// called without threads) and sys_wasmthreads.s (a plain return).
 
 TEXT runtime·currentMemory(SB), NOSPLIT, $0
 	Get SP

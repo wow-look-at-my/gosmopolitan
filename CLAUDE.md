@@ -433,6 +433,33 @@ the full catalog of fixes and remaining gaps):
   integration, phase B2). Demo: `testdata/wasmthreads/pooldemo` driven
   by `pool_demo.js` (run in CI). Ordinary modules and non-threads
   builds are unchanged (byte-identical).
+- Threads runtime B2 (2026-07-17): real Go code runs on worker threads
+  under GOWASM=threads. Futex layer over memory.atomic.wait32/notify
+  (`runtime/sys_wasmthreads.s`); futex mutexes/notes for the runtime
+  (`lock_jsthreads.go`; `notetsleepg(n,-1)` parks the g, not the M);
+  `newosproc` hands new Ms through a futex mailbox to pool workers
+  parked in the new `wasm_thread_run` export (raw-wasm wait loop, sets
+  per-instance SP/g to the M's heap-allocated g0 and enters mstart).
+  `wasm_exec_node.js` pre-spawns GOWASMTHREADSPOOL workers (default 4,
+  0 disables; newosproc throws after 10s if none claims); workers get
+  real pure-runtime imports (println/clock/random/exit work on worker
+  Ms) but syscall/js stays main-thread-only. The event loop remains
+  main-M-only (`event_js.go` shared; beforeIdle routes worker Ms to
+  futex parks/timed sleeps). Main M may futex-wait (node-only; event
+  loop stalls while it does - B3 makes that non-blocking). GOMAXPROCS
+  is still clamped to 1 (single P handed between Ms); the demo/test
+  hook `runtime.wasmThreadsRunOnNewM` (pull-linkname with
+  `-ldflags=-checklinkname=0`) pins the caller's goroutine to its M to
+  force the handoff; public LockOSThread is still a wasm no-op. Demo:
+  `testdata/wasmthreads/threaddemo` (CI runs it 10x; three Ms on three
+  threads, channels/mutex/shared heap/GC, exit 0), plus an in-tree
+  runtime spawn test; threads regression set is `go test -short sync
+  sync/atomic internal/runtime/atomic runtime` under GOWASM=threads.
+  Non-threads builds keep identical behavior but are NO LONGER
+  byte-identical across this phase (runtime source split shifts
+  symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
+  preemption, non-blocking main-thread park, syscall/js forwarding
+  from worker Ms, browser workers.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
