@@ -10,10 +10,16 @@ import (
 	"errors"
 	"sync"
 	"syscall/js"
+	"unsafe"
 )
 
 // Provided by package runtime.
 func now() (sec int64, nsec int32)
+
+// Provided by package runtime: the raw stdout/stderr write import and the
+// GOWASM=threads worker-thread predicate (see writeSync).
+func runtime_wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
+func runtime_onWorkerThread() bool
 
 var jsProcess = js.Global().Get("process")
 var jsPath = js.Global().Get("path")
@@ -483,6 +489,19 @@ func Write(fd int, b []byte) (int, error) {
 // fail with EAGAIN when the kernel buffer is full. There is nothing to wait
 // on synchronously, so EAGAIN retries immediately until the consumer drains.
 func writeSync(fd int, b []byte) (int, error) {
+	if fd <= 2 && runtime_onWorkerThread() {
+		// GOWASM=threads: JavaScript values are unavailable on worker
+		// threads, but the runtime's raw write import is implemented
+		// there (it is how println and panic output reach the terminal
+		// from worker Ms). Route stdout/stderr through it so fmt and os
+		// printing work from goroutines on any thread; every other
+		// descriptor still requires the main thread.
+		if len(b) == 0 {
+			return 0, nil
+		}
+		runtime_wasmWrite(uintptr(fd), unsafe.Pointer(&b[0]), int32(len(b)))
+		return len(b), nil
+	}
 	buf := uint8Array.New(len(b))
 	js.CopyBytesToJS(buf, b)
 	written := 0
