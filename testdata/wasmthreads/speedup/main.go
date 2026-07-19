@@ -30,6 +30,9 @@ import (
 //go:linkname curMID runtime.wasmThreadsCurMID
 func curMID() int64
 
+//go:linkname runOnNewM runtime.wasmThreadsRunOnNewM
+func runOnNewM(fn func())
+
 const shards = 4
 
 func shardWork(seed uint64, iters int) uint64 {
@@ -63,17 +66,39 @@ func main() {
 		mids    [shards]int64
 		midsEnd [shards]int64
 	)
-	start := time.Now()
-	for i := 0; i < shards; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			mids[i] = curMID()
-			results[i] = shardWork(uint64(i)+0x9E3779B97F4A7C15, iters)
-			midsEnd[i] = curMID()
-		}(i)
+	run := func() {
+		for i := 0; i < shards; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				mids[i] = curMID()
+				results[i] = shardWork(uint64(i)+0x9E3779B97F4A7C15, iters)
+				midsEnd[i] = curMID()
+			}(i)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
+	if os.Getenv("SPEEDUP_FARTIMER") == "1" {
+		// Arm a far-future timer, mimicking go test's suite alarm: the
+		// pool-headroom collapse needs one (a pending timer with no
+		// agent to cover it keeps the loop backedge gates armed).
+		defer time.AfterFunc(10*time.Minute, func() {}).Stop()
+	}
+	start := time.Now()
+	if os.Getenv("SPEEDUP_OFFMAIN") == "1" {
+		// Pool-headroom gate mode (B4): lock the main goroutine to the
+		// main M and spawn the shards from a worker M, so every shard
+		// runs on a pool worker and the main M parks in the event loop.
+		// With GOWASMTHREADSPOOL == GOMAXPROCS this leaves NO parked
+		// worker: pre-B4, the go-test-style far-future timer kept the
+		// shard loops' backedge gates armed (~4x call overhead, the
+		// documented pool-headroom collapse); with the parked main M
+		// counting as the timer-covering agent the gates disarm and the
+		// elapsed time must match the headroom configuration.
+		runOnNewM(run)
+	} else {
+		run()
+	}
 	elapsed := time.Since(start)
 
 	var combined uint64

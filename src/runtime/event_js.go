@@ -243,7 +243,17 @@ func handleEvent() {
 		return
 	}
 
-	sched.idleTime.Add(nanotime() - idleStart)
+	if !wasmThreadsEnabled {
+		// The M held its (only) P across the event-loop pause, so the
+		// limiter-event machinery never saw that idleness; account it
+		// here. Under GOWASM=threads this path is reached only by a
+		// SYNCHRONOUS nested event (JavaScript calling into Go from a
+		// JavaScript call Go made): the main M was RUNNING, not paused,
+		// and idleStart is stale from the last real pause - adding it
+		// would book running time as idle CPU (P-idle time is accounted
+		// by pidleput/pidleget -> limiterEvent there).
+		sched.idleTime.Add(nanotime() - idleStart)
+	}
 
 	// The event loop just ran; idle marking may resume.
 	wasmIdleMarkYield = false
