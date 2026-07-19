@@ -4643,22 +4643,30 @@ func wakeNetPoller(when int64) {
 	// goroutine's loop preemption checks are armed so the scheduler (which
 	// runs the timers) gets control.
 	wasmArmLoopPreempt()
-	if GOARCH == "wasm" && wasmThreadsEnabled && wasmParkedWorkers.Load() == 0 {
-		// GOWASM=threads with the (possibly parked) main M as the only
-		// timer agent besides the armed loop gates: a parked main M's
-		// JavaScript timeout was armed for the earliest deadline at park
-		// time and does not know about this (earlier) timer. Nudge it so
-		// it re-arms its backstop timeout (wasmMainParkWake ->
-		// wasmMainParkArmBackstop). The nudge is deliberately not gated
-		// on wasmMainParked - a bump while the main M is awake (or
-		// mid-transition to parked) is deferred by the host until its
-		// next pause, because the Atomics.waitAsync watcher stays armed
-		// across resumes; gating would race the park transition and lose
-		// the deadline. Bumps from the main thread itself are dropped by
-		// wasmWakeMainThread (it re-checks timers via beforeIdle before
-		// pausing). With a parked worker around none of this is needed:
-		// its watchdog re-reads the global earliest deadline at most
-		// 250ms out.
+	if GOARCH == "wasm" && wasmThreadsEnabled {
+		// GOWASM=threads: a (possibly parked) main M may be the only
+		// timer agent besides the armed loop gates, and its JavaScript
+		// timeout was armed for the earliest deadline at park time - it
+		// does not know about this (earlier) timer. Nudge it so it
+		// re-arms its backstop timeout (wasmMainParkWake ->
+		// wasmMainParkArmBackstop). The nudge is deliberately
+		// UNCONDITIONAL:
+		//   - not gated on wasmMainParked, because a bump while the main
+		//     M is awake (or mid-transition to parked) is deferred by
+		//     the host until its next pause (the Atomics.waitAsync
+		//     watcher stays armed across resumes); gating would race the
+		//     park transition and lose the deadline;
+		//   - not gated on wasmParkedWorkers either: a worker parked AT
+		//     ADD TIME can be claimed by startm before its watchdog ever
+		//     ticks, leaving no agent that knows this deadline (observed:
+		//     the liveness gate's 200ms timer silently slipping to the
+		//     end of the 2s busy phase in ~1/3 of runs when the nudge
+		//     was gated on parkedWorkers==0).
+		// Bumps from the main thread itself are dropped by
+		// wasmWakeMainThread (the main M re-checks timers via beforeIdle
+		// before pausing), and consecutive bumps coalesce host-side, so
+		// the cost is at most one main-thread resume per batch of
+		// earliest-deadline changes.
 		wasmWakeMainThread()
 	}
 	if sched.lastpoll.Load() == 0 {
