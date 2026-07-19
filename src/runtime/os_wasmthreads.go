@@ -190,7 +190,7 @@ func wasmWakeMainThread() {
 var wasmMainWantsP uint32
 
 // wasmThreadsPidleput is called by pidleput (with sched.lock held) when a
-// P goes idle under GOWASM=threads. Two reasons to nudge the main thread:
+// P goes idle under GOWASM=threads. Three reasons to nudge the main thread:
 //
 //   - The P still has pending timers. Idle-P timers are backstopped by
 //     the main M, which arms a JavaScript timeout for the earliest timer
@@ -198,10 +198,15 @@ var wasmMainWantsP uint32
 //     it must wake to re-arm for this P's timers.
 //   - The parked main M wants a P (wasmMainWantsP) to handle a pending
 //     JavaScript event.
+//   - Goroutines are waiting on the migrate queue, which only the main
+//     M's findRunnable can pop (wasmSchedPickMigrated). The push-time
+//     nudge is single-shot: if the main M's resume could not take a P
+//     (or the main M was mid-transition), the wake is consumed without
+//     serving the queue, so a P going idle must re-deliver it.
 //
 //go:nowritebarrier
 func wasmThreadsPidleput(pp *p) {
-	if pp.timers.len.Load() > 0 || atomic.Load(&wasmMainWantsP) != 0 {
+	if pp.timers.len.Load() > 0 || atomic.Load(&wasmMainWantsP) != 0 || wasmMigrateCount.Load() != 0 {
 		wasmWakeMainThread()
 	}
 }

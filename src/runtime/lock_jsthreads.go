@@ -242,6 +242,17 @@ func wasmWorkerParkNote(n *note) {
 			return // real wakeup: nextp installed by the waker
 		}
 		// Timed out (or spurious): anything to do?
+		if wasmMigrateCount.Load() != 0 {
+			// Goroutines are waiting to migrate to the main M, and only
+			// its findRunnable can pop them. The push-time nudge is
+			// single-shot (a resume that could not take a P, or that
+			// landed while the main M was mid-transition, consumes it
+			// without serving the queue), so parked workers re-deliver
+			// it: at most one nudge per watchdog tick per worker, each
+			// causing one main-thread resume - bounded, no microtask
+			// chain (see wasmWakeMainThread).
+			wasmWakeMainThread()
+		}
 		due := false
 		if next := wasmEarliestTimerWake(); next != 0 && nanotime() >= next {
 			due = true
@@ -749,6 +760,23 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 		return wasmThreadsBeforeIdleMain(now, pollUntil)
 	}
 	if pollUntil != 0 {
+		if wasmMigrateCount.Load() != 0 || atomic.Load(&wasmMainWantsP) != 0 {
+			// The main M needs a P: goroutines are waiting on the
+			// migrate queue (only the main M's findRunnable can pop
+			// them) or a resumed main M could not get a P for a pending
+			// host event (wasmMainWantsP). Holding this P through a
+			// timed idle sleep would starve it - with GOMAXPROCS=1 this
+			// very loop once held the ONLY P for the entire timer wait
+			// while a migrated goroutine sat unrunnable (observed:
+			// sync.test's runExamples stuck in runtimeMigrateToMain
+			// until the test timeout). Fall through to findRunnable's
+			// ordinary give-up path instead: releasep + pidleput, whose
+			// GOWASM=threads hook nudges the main M, which then
+			// self-serves the P. This P's timers stay covered while it
+			// is idle: the main M's JS timeout spans all Ps, and parked
+			// workers' timed parks use the global earliest deadline.
+			return nil, false
+		}
 		if now == 0 {
 			now = nanotime()
 		}

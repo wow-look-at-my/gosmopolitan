@@ -474,8 +474,8 @@ running goroutine for the length of the profiling window:
   only by the main M); fd 1/2 writes (fmt/println/testing output) go through
   the runtime's wasmWrite import directly on workers. Value finalizers fired
   on worker Ms are queued and released on main.
-- **Resolved (B3): the GOMAXPROCS>1 "lost-wakeup" stalls / exit-time hang
-  were a main-thread microtask livelock**, not a lost wake. wasm_exec.js
+- **Resolved (B3): the "lost-wakeup" stalls / exit-time hang were two
+  distinct bugs.** (1) A main-thread microtask livelock: wasm_exec.js
   keeps an Atomics.waitAsync watcher armed on the main wake word across
   every resume (arming before resume is what makes worker wakes race-free),
   so a wake-word bump issued ON the main thread from inside a resume lands
@@ -488,6 +488,20 @@ running goroutine for the length of the profiling window:
   wake; a permanent hang when it was the exit message). Fixed by dropping
   wasmMainWake bumps issued on the main thread itself - the main M is awake
   there and re-checks every wake condition before it next parks.
+  (2) Migrate-queue starvation: a goroutine that calls syscall/js on a
+  worker M migrates to a queue only the main M's findRunnable can pop, and
+  its only wake was the single push-time nudge - consumable without effect
+  when the resumed main M could not take a P. Worse, a worker M idling in
+  beforeIdle's timed sleep holds its P for the whole wait, so with
+  GOMAXPROCS=1 the resumed main M NEVER got the P and the migrated
+  goroutine sat unrunnable until the test timeout (the long-standing
+  "default-config stall": sync.test's runExamples stuck in
+  runtimeMigrateToMain). Fixed three ways: pidleput and the parked-worker
+  watchdog re-nudge the main M while migrations pend; a worker's timed
+  idle-hold bails out (releases the P through the ordinary give-up path)
+  whenever the main M needs one (pending migrations or wasmMainWantsP);
+  and wasmMigrateParkFn wakes the sched nudge word so a sleeping P-holder
+  re-checks immediately.
 - **Known issues (B3)**: (1) parallel speedup depends on pool headroom
   (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
   otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an

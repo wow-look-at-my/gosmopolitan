@@ -402,6 +402,10 @@ func wasmMigrateParkFn(gp *g, _ unsafe.Pointer) bool {
 	if mgp := m0.curg; mgp != nil {
 		mgp.stackguard1 = stackPreempt
 	}
+	// A worker M idling in beforeIdle's timed sleep may be holding the P
+	// the main M needs to run this goroutine; wake it so it re-checks
+	// (and releases the P - see the migrate/wantsP bail in beforeIdle).
+	wasmSchedNudgeWake()
 	return true
 }
 
