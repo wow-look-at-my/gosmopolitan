@@ -3568,3 +3568,132 @@ known-good producer); darwin prints "ok cpuprof skipped (no SIGPROF
 on this host)" keyed on the host triple (setitimer is genuinely not
 dispatched there - the wave-2 backlog gap stands). NT truth is
 windows-latest (wave-2 rule).
+
+## Wave 3 item 4 (2026-07-19): real conhost control events - SIGQUIT/SIGHUP mapping, process groups, kill(-pgid)
+
+Wave 2's console-ctrl chain (asm handler on the conhost-injected
+foreign thread -> ntCtrlMask -> relay M -> ntKillSelf) had two gaps:
+the event mapping was upstream windows Go's (BREAK -> SIGINT, CLOSE ->
+SIGTERM), and NOTHING in CI had ever fired the OS-injected leg - every
+signal check reached the relay via self-kill. Item 4 fixes the mapping,
+adds process groups + kill(-pgid), and lands the probe that finally
+drives the injected-thread path end to end on windows-latest.
+
+### The mapping change (a deliberate upstream divergence)
+
+ntCtrlTramp (sys_cosmo_nt_amd64.s) now classifies:
+
+    CTRL_C_EVENT(0)        -> SIGINT(2)   return TRUE
+    CTRL_BREAK_EVENT(1)    -> SIGQUIT(3)  return TRUE   [was SIGINT]
+    CTRL_CLOSE_EVENT(2)    -> SIGHUP(1)   block forever [was SIGTERM]
+    CTRL_LOGOFF_EVENT(5)   -> SIGTERM(15) block forever
+    CTRL_SHUTDOWN_EVENT(6) -> SIGTERM(15) block forever
+    anything else          -> return FALSE (next handler)
+
+Upstream Go maps BREAK -> SIGINT and CLOSE -> SIGTERM
+(os_windows.go ctrlHandler); the divergence is for unix parity:
+Ctrl-Break is the console's second chord and SIGQUIT is unix's second
+chord - with the fork sigtable's SIGQUIT {_SigNotify+_SigThrow},
+Ctrl-Break against a WEDGED cosmo process now produces the classic
+unix goroutine-dump-and-die, which upstream windows users simply do
+not have; and closing the console window is the moral hangup, so
+CLOSE -> SIGHUP {_SigNotify+_SigKill} (unwatched -> dieFromSignal ->
+encoded 0xC0DE0001 death). Handler mechanics are UNCHANGED: foreign
+thread, Go-free, direct win64 CALLs only (never ntcall6/10 - the
+load-bearing wave-2 prohibition), LOCK ORL a mask bit +
+SetEvent(ntCtrlEvent) wake, return TRUE for the keyboard chords,
+Sleep(INFINITE) block for the lifetime events (Windows kills the
+process the moment a CLOSE/LOGOFF/SHUTDOWN handler returns - blocking
+buys the OS grace window). The mask is now 4 bits (1<<1|1<<2|1<<3|
+1<<15) and ntCtrlRelay drains in order SIGINT, SIGQUIT, SIGHUP,
+SIGTERM (chords before lifetime events); semantics keep falling out
+of ntSigActs - watched -> Notify, unwatched -> the sigtable default.
+
+### Process groups: Setpgid -> CREATE_NEW_PROCESS_GROUP
+
+ntForkExec's SysProcAttr rejection carves out exactly `Setpgid &&
+Pgid == 0` ("make the child its own group leader"): it maps 1:1 onto
+CreateProcessW's CREATE_NEW_PROCESS_GROUP (0x200), threaded through a
+new `flags uint32` on cosmo.WindowsFns.Spawn (bit
+cosmo.SpawnNewProcessGroup) into ntSpawn's dwCreationFlags. `Pgid !=
+0` ("join an EXISTING group") stays ENOSYS - NT cannot place a new
+process into another process's group. The chunk-B spawn table entry
+records `pgleader`; the new group's id is the child's pid.
+
+kill(pid < -1) (ntEmuKillGroup, os_cosmo_nt_sig.go): pgid := -pid
+must be a pgleader entry in OUR spawn table - everything else is
+ESRCH, mirroring the positive arm's own-children-only rule (pid == 0
+and pid == -1 keep their pre-wave-3 ESRCH: this process is not a
+group we created, and NT has no broadcast). Then:
+
+  - SIGQUIT -> GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT=1, pgid):
+    THE reliably deliverable group event (upstream Go's TestCtrlBreak
+    is built on this exact pairing); in a cosmo child the handler
+    maps it back to SIGQUIT - a Linux-shaped round trip.
+  - SIGINT -> GenerateConsoleCtrlEvent(CTRL_C_EVENT=0, pgid), best
+    effort with a documented NT caveat: CREATE_NEW_PROCESS_GROUP
+    children start with Ctrl-C DISABLED until they opt back in via
+    SetConsoleCtrlHandler(NULL, FALSE), so delivery may silently
+    no-op. Upstream windows Go has the identical hole; a reliable
+    group chord is SIGQUIT.
+  - sig 0 -> existence probe.
+  - any other sig -> TerminateProcess(leader, 0xC0DE0000|sig):
+    group-kill degrades to leader-kill (no NT API delivers arbitrary
+    signals group-wide; the leader is the group's one member we know
+    of), same best-effort result discipline as the positive arm.
+  - GenerateConsoleCtrlEvent failure (e.g. no console) -> the mapped
+    errno from the trampoline-captured last error.
+
+The PARENT needs no SetConsoleCtrlHandler(NULL, TRUE) shield (the
+brief's open question, resolved): GenerateConsoleCtrlEvent targeted
+at the CHILD's group id never reaches the parent's group, and the
+emulation never emits group-0 broadcasts (pid == 0/-1 are ESRCH by
+construction), so the classic self-Ctrl-C-while-signaling-the-child
+footgun cannot occur.
+
+New Win32 resolution: kernel32 GenerateConsoleCtrlEvent (hard
+k32sym). TerminateProcess was already resolved (chunk D).
+ntidata/ntiat untouched; everything fits ntcallE; ntcallArgs never
+widens.
+
+### Probe (ctrlbreak) - first CI coverage of the OS-injected handler
+
+testdata/runtimeprobe/ctrlbreak.go, check "ctrlbreak", between
+cpuprof and waitsig (waitsig stays last). Child mode
+RUNTIMEPROBE_CHILD=ctrlwait: Notify(SIGQUIT), print "ctrl-ready"
+(only AFTER Notify returned - the install race is closed by
+ordering), await delivery <= 20s, print "ctrl-got", exit 0 (timeout:
+"ctrl-timeout", exit 1). Parent: selfCommand spawn with
+SysProcAttr{Setpgid: true} + stdout pipe, handshake on "ctrl-ready",
+syscall.Kill(-child.Pid, SIGQUIT), handshake on "ctrl-got", clean
+wait. On NT the delivery chain is CREATE_NEW_PROCESS_GROUP spawn ->
+GenerateConsoleCtrlEvent(CTRL_BREAK) -> conhost injects a foreign
+handler thread in the CHILD -> asm ntCtrlTramp -> mask -> relay M ->
+ntKillSelf -> sigtrampgo -> Notify: every self-kill check bypassed
+the first three links; this is the one that proves them. On Linux
+the SAME child/parent code runs over native setpgid + kernel group
+kill - which validates the probe's own logic against reference
+semantics. Darwin dispatches setpgid/kill and negative-pid
+passthrough is expected to work: attempt-first, and ONLY a darwin
+spawn or group-kill syscall error prints "ok ctrlbreak skipped
+(darwin: <err>)" - NT/Linux failures (and delivery failures on any
+host) stay FAIL.
+
+Risk, recorded before the CI verdict: if windows-latest test
+processes turn out to have no attached console (a pseudo-console/
+detached service arrangement), GenerateConsoleCtrlEvent fails and
+the probe FAILs loudly - the wave-2 CP_UTF8 console boot calls
+succeeding on every run says they DO have one, so this is not
+expected. The fallback, to be taken only on real CI evidence, is
+demoting ctrlbreak to a windows-skip that prints the diagnostic.
+
+### Documented, not asserted (headless CI cannot generate these)
+
+A real keyboard Ctrl-C/Ctrl-Break on an interactive conhost;
+CTRL_CLOSE (no API can synthesize a console close - the SIGHUP leg
+is exercised only by a human closing the window); CTRL_LOGOFF /
+CTRL_SHUTDOWN; and group-targeted CTRL_C delivery (the new-group
+Ctrl-C-disabled default above makes it undeliverable to children
+that never opt back in). The handler legs are live; their CI truth
+remains the mapping's unit structure plus the CTRL_BREAK path the
+probe drives.

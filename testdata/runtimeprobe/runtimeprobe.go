@@ -10,8 +10,9 @@
 // os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, wait-status
-// signal decoding, and CPU profiling (host-skipped on macOS, which
-// lacks SIGPROF delivery).
+// signal decoding, CPU profiling (host-skipped on macOS, which
+// lacks SIGPROF delivery), and process-group signaling (Setpgid
+// spawn + kill(-pgid), the console-ctrl chain on Windows hosts).
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -77,6 +78,10 @@ func main() {
 		// Child mode for checkFdpass: receive fds over SCM_RIGHTS.
 		fdpassChild()
 		return
+	case "ctrlwait":
+		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
+		ctrlwaitChild()
+		return
 	}
 	startWatchdog()
 	// timed localizes latency stalls without weakening any verdict:
@@ -120,6 +125,7 @@ func main() {
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)
 	timed("cpuprof", checkCPUProf)
+	timed("ctrlbreak", checkCtrlBreak)
 	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)

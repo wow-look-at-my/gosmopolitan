@@ -128,6 +128,10 @@ var (
 	ntSetWaitableTimerFn       uintptr
 	ntSetThreadPriorityFn      uintptr // optional (best-effort use)
 
+	// Wave 3 item 4 (process groups / kill(-pgid); kernel32, present
+	// since forever).
+	ntGenerateConsoleCtrlEventFn uintptr
+
 	// Optional non-kernel32 imports: 0 when unavailable, and every
 	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
@@ -211,6 +215,7 @@ var (
 	ntNameCreateWTimerW     = []byte("CreateWaitableTimerW\x00")
 	ntNameSetWaitableTimer  = []byte("SetWaitableTimer\x00")
 	ntNameSetThreadPriority = []byte("SetThreadPriority\x00")
+	ntNameGenConsoleCtrlEvt = []byte("GenerateConsoleCtrlEvent\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -473,6 +478,9 @@ func ntResolve() {
 	ntSetWaitableTimerFn = k32sym(&ntNameSetWaitableTimer[0])
 	ntCreateWaitableTimerExWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateWTimerExW[0])), 0, 0, 0, 0)
 	ntSetThreadPriorityFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetThreadPriority[0])), 0, 0, 0, 0)
+
+	// Wave 3 item 4: process groups / kill(-pgid) (kernel32).
+	ntGenerateConsoleCtrlEventFn = k32sym(&ntNameGenConsoleCtrlEvt[0])
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).
