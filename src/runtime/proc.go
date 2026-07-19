@@ -373,13 +373,78 @@ func forcegchelper() {
 		}
 		forcegc.idle.Store(true)
 		goparkunlock(&forcegc.lock, waitReasonForceGCIdle, traceBlockSystemGoroutine, 1)
-		// this goroutine is explicitly resumed by sysmon
+		// This goroutine is explicitly resumed by sysmon, or on wasm
+		// (which has no sysmon) by the scheduler; see wasmForceGCCheck.
 		if debug.gctrace > 0 {
 			println("GC forced")
 		}
 		// Time-triggered, fully concurrent.
 		gcStart(gcTrigger{kind: gcTriggerTime, now: nanotime()})
 	}
+}
+
+// wasm has no threads and thus no sysmon, so the periodic ("forced") GC
+// trigger that sysmon tests on other platforms must be driven from the
+// scheduler instead:
+//
+//   - findRunnable calls wasmForceGCCheck on every pass, so any scheduling
+//     activity more than forcegcperiod after the last GC starts a cycle.
+//   - An M about to go idle caps its timer/poller sleep at
+//     wasmForceGCDeadline (see findRunnable), so that a program sleeping on
+//     timers (or, on wasip1, parked in the poller) wakes up in time for the
+//     next periodic GC instead of idling at its heap high-water mark
+//     forever, with finalizers and cleanups never queued.
+//
+// The sleep cap is only applied when the M already has some other eventual
+// wake source: a pending timer, or on wasip1 a netpoll waiter. An M with no
+// wake source at all must keep falling through to checkdead, because a
+// deadlocked program does not need periodic GC, and a self-arming wakeup
+// would make the deadlock undetectable. (On js, beforeIdle instead arms a
+// weak, unref'd timeout for the deadline - see the idle GC nudge in
+// lock_js.go - waking an idle program for the periodic GC without holding
+// node's event loop open, so the exit-time deadlock probe still fires.)
+
+// wasmForceGCCheck implements sysmon's periodic forced-GC check on wasm: if
+// it has been more than forcegcperiod since the last GC and the forcegc
+// helper is parked, make the helper runnable to start a new cycle.
+//
+// now is the current time if the caller has it, or 0; nanotime is not
+// called until the cheap preconditions pass, since findRunnable calls this
+// on every pass.
+func wasmForceGCCheck(now int64) {
+	if !forcegc.idle.Load() || !memstats.enablegc || atomic.Load64(&memstats.last_gc_nanotime) == 0 {
+		// Common exits: the helper is already running, GC is off, or no
+		// GC has completed yet. gcTrigger.test rechecks all of this;
+		// testing it here first avoids the nanotime call.
+		return
+	}
+	if now == 0 {
+		now = nanotime()
+	}
+	// Mirrors the forcegc wakeup in sysmon.
+	if t := (gcTrigger{kind: gcTriggerTime, now: now}); t.test() && forcegc.idle.Load() {
+		lock(&forcegc.lock)
+		forcegc.idle.Store(false)
+		var list gList
+		list.push(forcegc.g)
+		injectglist(&list)
+		unlock(&forcegc.lock)
+	}
+}
+
+// wasmForceGCDeadline returns the time (in the nanotime clock) at which the
+// next time-based forced GC is due, or 0 if none is scheduled (no GC has
+// completed yet, GC is disabled or in progress, or the forcegc helper is
+// already awake).
+func wasmForceGCDeadline() int64 {
+	if !forcegc.idle.Load() || !memstats.enablegc || panicking.Load() != 0 || gcphase != _GCoff || gcController.gcPercent.Load() < 0 {
+		return 0
+	}
+	lastgc := int64(atomic.Load64(&memstats.last_gc_nanotime))
+	if lastgc == 0 {
+		return 0
+	}
+	return lastgc + forcegcperiod
 }
 
 // Gosched yields the processor, allowing other goroutines to run. It does not
@@ -394,8 +459,32 @@ func Gosched() {
 // goschedguarded yields the processor like gosched, but also checks
 // for forbidden states and opts out of the yield in those cases.
 //
+// It is the target of the rescheduling checks that the compiler inserts on
+// loop backedges (see ssa's insertLoopReschedChecks). On wasm those checks
+// are compiled in by default and armed by the scheduler (see execute), so
+// while armed every backedge of the running loop lands here and this
+// function is extremely hot. The wasm fast path therefore batches inline:
+// only every wasmLoopYieldBatch-th call - or any call with an explicit
+// preemption request pending - goes on to wasmLoopPreemptGate, which
+// rate-limits the yields without disarming the checks and takes CPU
+// profile samples when profiling is active. The caller's PC and SP are
+// passed down so the gate can record a sample against the frame that hit
+// the check (see wasmProfSample).
+//
 //go:nosplit
 func goschedguarded() {
+	if GOARCH == "wasm" {
+		if !getg().preempt {
+			wasmLoopGateCalls++
+			if wasmLoopGateCalls < wasmLoopYieldBatch {
+				return
+			}
+			wasmLoopGateCalls = 0
+		}
+		if !wasmLoopPreemptGate(sys.GetCallerPC(), sys.GetCallerSP()) {
+			return
+		}
+	}
 	mcall(goschedguarded_m)
 }
 
@@ -412,6 +501,228 @@ func goschedIfBusy() {
 		return
 	}
 	mcall(gosched_m)
+}
+
+// Cooperative loop preemption on wasm.
+//
+// Wasm has no threads (so no sysmon) and no signals (so no asynchronous
+// preemption): nothing can interrupt a running goroutine, and a CPU-bound
+// goroutine starves timers, other runnable goroutines, and the garbage
+// collector forever. Instead, the compiler inserts a check on every loop
+// backedge (enabled by default for GOARCH=wasm, see the preemptibleloops
+// experiment and ssa's insertLoopReschedChecks):
+//
+//	if sp < g.stackguard1 { goschedguarded() }
+//
+// On wasm, stackguard1 is not otherwise used: there is no cgo, and the wasm
+// stack-growth prologue only consults stackguard0. The scheduler therefore
+// repurposes it as the arming word for these checks: stackPreempt (checks
+// fire) when there is pending work a running goroutine could starve, and 0
+// (checks never fire, since sp < 0 is always false unsigned) otherwise.
+// Unlike poisoning stackguard0, arming stackguard1 does not divert every
+// function prologue through morestack, so an armed goroutine keeps making
+// progress at nearly full speed between yields.
+//
+// Arming happens in execute (for each dispatched goroutine) and, via
+// wasmArmLoopPreempt, whenever work appears while user code is running
+// (run queue insertion, timer wakeups, preemption requests).
+//
+// wasmLoopPreemptGate rate-limits the actual yields: a goschedguarded yield
+// is taken at most every wasmLoopYieldInterval nanoseconds, except that
+// explicit preemption requests (gp.preempt, e.g. for stop-the-world) are
+// honored within wasmLoopYieldBatch loop iterations. The gate call and the
+// nanotime read are amortized over wasmLoopYieldBatch backedge hits by
+// goschedguarded's inline batching. While armed, a goroutine therefore pays
+// one call to goschedguarded per loop iteration plus one scheduler pass per
+// wasmLoopYieldInterval; timers can fire up to roughly wasmLoopYieldInterval
+// (plus wasmLoopYieldBatch loop iterations) late while a loop is hogging
+// the (only) P.
+//
+// The gate is also the CPU profiler's sampling hook: wasm has no signals,
+// so the loop preemption checks are the only points where a running
+// goroutine can be observed. While profiling is active, execute keeps the
+// checks armed unconditionally, and the gate records a stack sample
+// whenever the sampling deadline has passed. See wasmProfSample.
+
+const (
+	// wasmLoopYieldInterval is the minimum interval, in nanoseconds,
+	// between rate-limited yields from armed loop preemption checks.
+	wasmLoopYieldInterval = 100e3
+
+	// wasmLoopYieldBatch is the number of gate calls between clock reads.
+	wasmLoopYieldBatch = 64
+)
+
+// Wasm is single-threaded, so plain (unsynchronized) globals are exact.
+var (
+	wasmLoopGateCalls int32 // backedge hits since the last gate call (see goschedguarded)
+	wasmLoopLastYield int64 // nanotime of the last rate-limited yield
+)
+
+// wasmLoopPreemptGate reports whether a compiler-inserted loop preemption
+// check should actually yield. See the comment above for the scheme.
+// goschedguarded batches the calls: the gate runs on every
+// wasmLoopYieldBatch-th backedge hit, or on every hit while gp.preempt is
+// set. pc and sp locate goschedguarded's caller, the frame that hit the
+// check; they seed the traceback when a CPU profile sample is due.
+//
+//go:nosplit
+func wasmLoopPreemptGate(pc, sp uintptr) bool {
+	gp := getg()
+	mp := gp.m
+	// Mirror canPreemptM, and additionally require that this is the M's
+	// current user goroutine: the compiler also instruments loops in
+	// runtime code that runs on g0, and yielding there is not safe.
+	if gp != mp.curg || mp.locks != 0 || mp.mallocing != 0 || mp.preemptoff != "" ||
+		mp.p == 0 || mp.p.ptr().status != _Prunning {
+		return false
+	}
+	if gp.preempt || sched.gcwaiting.Load() {
+		// Explicit preemption request (e.g. stop-the-world):
+		// always honor it.
+		return true
+	}
+	now := nanotime()
+	if now >= wasmProfNextSample {
+		// CPU profiling is active and a sample is due (when profiling
+		// is off the deadline is wasmProfNever). The checks above
+		// guarantee this is the M's running user goroutine with no
+		// runtime locks held, so it is safe to take a sample here.
+		wasmProfSample(now, pc, sp, gp)
+	}
+	if now-wasmLoopLastYield < wasmLoopYieldInterval {
+		return false
+	}
+	wasmLoopLastYield = now
+	if sched.profilehz != 0 && !wasmWorkPending(mp.p.ptr()) {
+		// The checks are armed only because CPU profiling is active
+		// (see execute): there is no scheduler work to run, so a yield
+		// would be a pointless trip through the scheduler. Keep
+		// running; the next wasmWorkPending probe is rate-limited to
+		// the same wasmLoopYieldInterval cadence by the update above.
+		return false
+	}
+	return true
+}
+
+// wasmWorkPending reports whether there is scheduler work that a running
+// goroutine could starve: runnable goroutines, pending timers, an active GC
+// mark phase (background mark workers need the P), goroutines blocked in the
+// netpoller, or a stop-the-world request. Wasm is single-threaded, so the
+// unsynchronized reads are exact.
+func wasmWorkPending(pp *p) bool {
+	return !runqempty(pp) || sched.runq.size != 0 || len(pp.timers.heap) > 0 ||
+		atomic.Load(&gcBlackenEnabled) != 0 || netpollAnyWaiters() ||
+		sched.gcwaiting.Load()
+}
+
+// wasmArmLoopPreempt arms the loop preemption checks of the goroutine
+// currently running on this M, if any. It is called when work appears that
+// an already-running goroutine could not otherwise observe: a goroutine is
+// put on a run queue or a timer needs earlier attention while user code is
+// running. On non-wasm platforms it compiles to nothing.
+//
+//go:nosplit
+func wasmArmLoopPreempt() {
+	if GOARCH != "wasm" {
+		return
+	}
+	if gp := getg().m.curg; gp != nil {
+		gp.stackguard1 = stackPreempt
+	}
+}
+
+// CPU profiling on wasm.
+//
+// Wasm has no signals, so there is no SIGPROF and no OS timer that could
+// interrupt a running goroutine to take a CPU profile sample; sigprof can
+// never run, and historically SetCPUProfileRate produced only empty
+// profiles. Instead, samples are taken from the loop preemption gate
+// above: while profiling is active, execute keeps the compiler-inserted
+// loop preemption checks armed for every goroutine it dispatches, and
+// wasmLoopPreemptGate calls wasmProfSample once nanotime passes
+// wasmProfNextSample. setThreadCPUProfiler (os_wasm.go) maintains the
+// deadline and the sampling period.
+//
+// Sampling bias, honestly stated: samples are taken only at loop
+// backedges of non-nosplit functions (the only instrumented points), at
+// most every 1e9/hz nanoseconds of wall time on whatever goroutine is
+// running then. CPU time spent between backedges - straight-line code,
+// call-heavy recursion with no loops, nosplit runtime functions, code on
+// the system stack, and host calls - is attributed to the next backedge
+// the goroutine reaches. Wall-time deadlines also mean a mostly-idle
+// program accrues at most one sample per busy burst rather than a strict
+// CPU-time accounting. This is coarser than a SIGPROF profiler, but hot
+// loops - where the CPU time of a CPU-bound wasm program lives - are
+// exactly the instrumented points. Programs built with
+// GOEXPERIMENT=nopreemptibleloops have no instrumented backedges and get
+// empty profiles again.
+//
+// Wasm is single-threaded, so the plain (unsynchronized) globals are
+// exact.
+var (
+	// wasmProfNextSample is the nanotime deadline for the next CPU
+	// profile sample. wasmProfNever (the initial value, restored when
+	// profiling stops) keeps the armed-but-not-profiling gate path to a
+	// single always-false compare.
+	wasmProfNextSample int64 = wasmProfNever
+
+	// wasmProfPeriod is the sampling period, 1e9/hz nanoseconds.
+	wasmProfPeriod int64
+
+	// wasmProfStk is the sample traceback buffer. It is a global rather
+	// than a stack buffer to keep the nosplit sample path's frames
+	// small; only wasmProfSample uses it, samples cannot nest (the gate
+	// rejects g0, and the traceback below runs on g0), and there is no
+	// other thread.
+	wasmProfStk [maxCPUProfStack]uintptr
+)
+
+const wasmProfNever = 1<<63 - 1 // maximum int64; compares after any real nanotime
+
+// wasmProfSample records a CPU profile sample for gp, the goroutine
+// running on this M. It is called from wasmLoopPreemptGate when profiling
+// is active and the sampling deadline has passed; pc and sp locate the
+// frame that hit the loop preemption check, i.e. the profiled code.
+//
+// This is sigprof's role on platforms with signals. Unlike sigprof it
+// does not run in a signal handler: it runs on gp itself, at a loop
+// backedge (an ordinary call site, hence a safe point), so the traceback
+// is the callers-style "unwind the goroutine we are running on" and must
+// happen on the system stack because pc and sp are raw uintptrs that a
+// stack growth would not adjust. wasmProfSample is nosplit for the same
+// reason: its own prologue must not move the stack between the capture
+// of pc/sp in goschedguarded and the switch to the system stack.
+//
+//go:nosplit
+func wasmProfSample(now int64, pc, sp uintptr, gp *g) {
+	wasmProfNextSample = now + wasmProfPeriod
+	if prof.hz.Load() == 0 {
+		// Profiling was just disabled. The gate cannot observe this
+		// (setcpuprofilerate resets the deadline before prof.hz with
+		// m.locks held), but keep the invariant local and cheap.
+		return
+	}
+
+	// Profiling must not allocate, like sigprof: it runs concurrently
+	// with the garbage collector. Set the reentrancy trap.
+	mp := gp.m
+	mp.mallocing++
+
+	systemstack(func() {
+		var u unwinder
+		u.initAt(pc, sp, 0, gp, unwindSilentErrors)
+		n := tracebackPCs(&u, 0, wasmProfStk[:])
+		if n > 0 {
+			// Note: like sigprof, pass &gp.labels (gp is mp.curg
+			// here, the gate guarantees it): profBuf.write depends
+			// on the tag pointing at a goroutine's labels field.
+			cpuprof.add(&gp.labels, wasmProfStk[:n])
+			traceCPUSample(gp, mp, mp.p.ptr(), wasmProfStk[:n])
+		}
+	})
+
+	mp.mallocing--
 }
 
 // Puts the current goroutine into a waiting state and calls unlockf on the
@@ -921,6 +1232,12 @@ func schedinit() {
 	var procs int32
 	if n, err := strconv.ParseInt(gogetenv("GOMAXPROCS"), 10, 32); err == nil && n > 0 {
 		procs = int32(n)
+		if GOARCH == "wasm" && procs > 1 {
+			// WebAssembly has no threads yet, so only one CPU is possible.
+			// Mirror the clamp in GOMAXPROCS; without it, the first wakep
+			// would reach newosproc and throw "not implemented".
+			procs = 1
+		}
 		sched.customGOMAXPROCS = true
 	} else {
 		// Use numCPUStartup for initial GOMAXPROCS for two reasons:
@@ -1962,6 +2279,10 @@ func mstartm0() {
 		newextram()
 	}
 	initsig(false)
+	// On GOOS=cosmo NT hosts, park the console-control relay M and
+	// register the ctrl handler; a no-op elsewhere (stubs_noncosmo.go).
+	// Must run after procresize gave m0 its P (newm allocates).
+	cosmoMstartm0()
 }
 
 // mPark causes a thread to park itself, returning once woken.
@@ -2875,7 +3196,7 @@ func newm(fn func(), pp *p, id int64) {
 	mp := allocm(pp, fn, id)
 	mp.nextp.set(pp)
 	mp.sigmask = initSigmask
-	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" {
+	if gp := getg(); gp != nil && gp.m != nil && (gp.m.lockedExt != 0 || gp.m.incgo) && GOOS != "plan9" && GOARCH != "wasm" {
 		// We're on a locked M or a thread that may have been
 		// started by C. The kernel state of this thread may
 		// be strange (the user may have locked it for that
@@ -2884,6 +3205,12 @@ func newm(fn func(), pp *p, id int64) {
 		// the thread for us.
 		//
 		// This is disabled on Plan 9. See golang.org/issue/22227.
+		//
+		// It is also disabled on wasm (GOWASM=threads): newosproc
+		// does not clone anything from the calling thread - it hands
+		// the M to a pre-spawned, identical pool worker - so creating
+		// a thread from a locked M is always safe and no template
+		// thread exists (see startTemplateThread).
 		//
 		// TODO: This may be unnecessary on Windows, which
 		// doesn't model thread creation off fork.
@@ -3351,6 +3678,19 @@ func execute(gp *g, inheritTime bool) {
 	gp.waitsince = 0
 	gp.preempt = false
 	gp.stackguard0 = gp.stack.lo + stackGuard
+	if GOARCH == "wasm" {
+		// Arm the compiler-inserted loop preemption checks if there is
+		// pending work this goroutine could otherwise starve, or if
+		// CPU profiling is active (the loop preemption gate doubles as
+		// the profiler's sampling hook, see wasmProfSample); disarm
+		// them if not. See the wasm loop preemption comment above
+		// wasmLoopPreemptGate.
+		if wasmWorkPending(mp.p.ptr()) || sched.profilehz != 0 {
+			gp.stackguard1 = stackPreempt
+		} else {
+			gp.stackguard1 = 0
+		}
+	}
 	if !inheritTime {
 		mp.p.ptr().schedtick++
 	}
@@ -3418,6 +3758,14 @@ top:
 	// and then, nothing blocks, so these numbers remain mostly
 	// relevant.
 	now, pollUntil, _ := pp.timers.check(0, nil)
+
+	// On wasm there is no sysmon to test the time-based GC trigger and
+	// resume the forcegc helper, so the scheduler does it instead. If the
+	// check fires, it injects forcegc.g, which the run queue checks below
+	// then find. See the comment on wasmForceGCCheck.
+	if !haveSysmon {
+		wasmForceGCCheck(now)
+	}
 
 	// Try to schedule the trace reader.
 	if traceEnabled() || traceShuttingDown() {
@@ -3546,7 +3894,13 @@ top:
 	//
 	// If we're in the GC mark phase, can safely scan and blacken objects,
 	// and have work to do, run idle-time marking rather than give up the P.
-	if gcBlackenEnabled != 0 && gcShouldScheduleWorker(pp) && gcController.addIdleMarkWorker() {
+	//
+	// On js/wasm, skip this while idle marking is throttled
+	// (wasmIdleMarkThrottled, constant false elsewhere): an idle drain just
+	// hit its deadline with work remaining, and scheduling another idle
+	// worker here would starve the host event loop until mark completion.
+	// beforeIdle arms a short wakeup so marking still finishes promptly.
+	if gcBlackenEnabled != 0 && gcShouldScheduleWorker(pp) && !wasmIdleMarkThrottled() && gcController.addIdleMarkWorker() {
 		node := (*gcBgMarkWorkerNode)(gcBgMarkWorkerPool.pop())
 		if node != nil {
 			pp.gcMarkWorkerMode = gcMarkWorkerIdleMode
@@ -3561,6 +3915,19 @@ top:
 			return gp, false, false
 		}
 		gcController.removeIdleMarkWorker()
+	}
+
+	// On wasm, an M about to go idle must arrange its own wakeup for the
+	// next time-based forced GC, since there is no sysmon to do it. Cap the
+	// sleep at the forced-GC deadline, but only if the M already has some
+	// other wake source; see the comment on wasmForceGCCheck for why an M
+	// with no wake source (a deadlock candidate) must not be woken.
+	if !haveSysmon {
+		if next := wasmForceGCDeadline(); next != 0 && (pollUntil == 0 || next < pollUntil) {
+			if pollUntil != 0 || (GOOS != "js" && netpollAnyWaiters()) {
+				pollUntil = next
+			}
+		}
 	}
 
 	// wasm only:
@@ -4005,6 +4372,11 @@ func checkIdleGCNoP() (*p, *g) {
 // going to wake up before the when argument; or it wakes an idle P to service
 // timers and the network poller if there isn't one already.
 func wakeNetPoller(when int64) {
+	// A timer needs earlier attention than the netpoller expected. On wasm
+	// there is no netpoller thread to wake; instead make sure the running
+	// goroutine's loop preemption checks are armed so the scheduler (which
+	// runs the timers) gets control.
+	wasmArmLoopPreempt()
 	if sched.lastpoll.Load() == 0 {
 		// In findRunnable we ensure that when polling the pollUntil
 		// field is either zero or the time to which the current
@@ -5287,6 +5659,13 @@ func malg(stacksize int32) *g {
 		})
 		newg.stackguard0 = newg.stack.lo + stackGuard
 		newg.stackguard1 = ^uintptr(0)
+		if GOARCH == "wasm" {
+			// On wasm, stackguard1 is repurposed as the arming word for
+			// the compiler-inserted loop preemption checks and
+			// ^uintptr(0) would read as armed. Start disarmed; execute
+			// sets the real value before the goroutine runs.
+			newg.stackguard1 = 0
+		}
 		// Clear the bottom word of the stack. We record g
 		// there on gsignal stack during VDSO on ARM and ARM64.
 		*(*uintptr)(unsafe.Pointer(newg.stack.lo)) = 0
@@ -6470,6 +6849,12 @@ func checkdead() {
 	}
 
 	unlock(&sched.lock) // unlock so that GODEBUG=scheddetail=1 doesn't hang
+	if GOOS == "js" {
+		// The js runtime knows more about why a program can deadlock
+		// (e.g. a goroutine blocked inside a call from JavaScript).
+		// Print that context before the standard message.
+		deadlockOSHint()
+	}
 	fatal("all goroutines are asleep - deadlock!")
 }
 
@@ -6871,6 +7256,22 @@ func preemptall() bool {
 func preemptone(pp *p) bool {
 	mp := pp.m.ptr()
 	if mp == nil || mp == getg().m {
+		if GOARCH == "wasm" && mp != nil && mp == getg().m {
+			// On wasm there is only one thread, so the M requesting the
+			// preemption is necessarily the M running the target
+			// goroutine and the request would otherwise always be
+			// dropped. The cooperative machinery still works: poison
+			// stackguard0 so the next function prologue enters newstack,
+			// and stackguard1 so the compiler-inserted loop backedge
+			// checks fire (see the wasm loop preemption comment above
+			// wasmLoopPreemptGate).
+			if gp := mp.curg; gp != nil && gp != mp.g0 && readgstatus(gp)&^_Gscan != _Gsyscall {
+				gp.preempt = true
+				gp.stackguard0 = stackPreempt
+				gp.stackguard1 = stackPreempt
+				return true
+			}
+		}
 		return false
 	}
 	gp := mp.curg
@@ -6889,6 +7290,12 @@ func preemptone(pp *p) bool {
 	// Setting gp->stackguard0 to StackPreempt folds
 	// preemption into the normal stack overflow check.
 	gp.stackguard0 = stackPreempt
+	if GOARCH == "wasm" {
+		// Cross-M preemption (GOWASM=threads): also fire the
+		// compiler-inserted loop backedge checks, since wasm has no
+		// async preemption. Mirrors the same-M wasm case above.
+		gp.stackguard1 = stackPreempt
+	}
 
 	// Request an async preemption of this P.
 	if preemptMSupported && debug.asyncpreemptoff == 0 {
@@ -7254,6 +7661,7 @@ func mgetSpecific(mp *m) *m {
 func globrunqput(gp *g) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.pushBack(gp)
 }
 
@@ -7265,6 +7673,7 @@ func globrunqput(gp *g) {
 func globrunqputhead(gp *g) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.push(gp)
 }
 
@@ -7277,6 +7686,7 @@ func globrunqputhead(gp *g) {
 func globrunqputbatch(batch *gQueue) {
 	assertLockHeld(&sched.lock)
 
+	wasmArmLoopPreempt()
 	sched.runq.pushBackAll(*batch)
 	*batch = gQueue{}
 }
@@ -7481,6 +7891,7 @@ const randomizeScheduler = raceenabled
 // If the run queue is full, runnext puts g on the global queue.
 // Executed only by the owner P.
 func runqput(pp *p, gp *g, next bool) {
+	wasmArmLoopPreempt()
 	if !haveSysmon && next {
 		// A runnext goroutine shares the same time slice as the
 		// current goroutine (inheritTime from runqget). To prevent a
@@ -7571,6 +7982,7 @@ func runqputbatch(pp *p, q *gQueue) {
 	if q.empty() {
 		return
 	}
+	wasmArmLoopPreempt()
 	h := atomic.LoadAcq(&pp.runqhead)
 	t := pp.runqtail
 	n := uint32(0)

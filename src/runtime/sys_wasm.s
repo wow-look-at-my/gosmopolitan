@@ -4,29 +4,11 @@
 
 #include "textflag.h"
 
-TEXT runtime·wasmDiv(SB), NOSPLIT, $0-0
-	Get R0
-	I64Const $-0x8000000000000000
-	I64Eq
-	If
-		Get R1
-		I64Const $-1
-		I64Eq
-		If
-			I64Const $-0x8000000000000000
-			Return
-		End
-	End
-	Get R0
-	Get R1
-	I64DivS
-	Return
-
 TEXT runtime·exitThread(SB), NOSPLIT, $0-0
 	UNDEF
 
-TEXT runtime·osyield(SB), NOSPLIT, $0-0
-	UNDEF
+// runtime·osyield is in sys_wasm_nothreads.s (a trap - it must never be
+// called without threads) and sys_wasmthreads.s (a plain return).
 
 TEXT runtime·currentMemory(SB), NOSPLIT, $0
 	Get SP

@@ -13,6 +13,8 @@ import (
 
 // read calls the read system call.
 // It returns a non-negative number of bytes written or a negative errno value.
+//
+//go:noescape
 func read(fd int32, p unsafe.Pointer, n int32) int32
 
 func closefd(fd int32) int32

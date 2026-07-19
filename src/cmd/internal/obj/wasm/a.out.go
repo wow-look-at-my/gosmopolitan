@@ -43,6 +43,10 @@ const (
 	AReturn
 	ACall
 	ACallIndirect
+	// AReturnCall is the tail-call proposal's return_call instruction.
+	// It is only emitted with GOWASM=tailcall; not every runtime supports
+	// it. (return_call_indirect, opcode 0x13, is currently unused.)
+	AReturnCall // opcode 0x12
 
 	ADrop // opcode 0x1A
 	ASelect
@@ -240,6 +244,88 @@ const (
 	ATableGrow
 	ATableSize
 	ATableFill
+
+	// The following are the threads proposal's atomic instructions
+	// (0xFE prefix). They are only emitted with GOWASM=threads; without
+	// it, Go's atomic operations lower to the plain instructions above
+	// (wasm without threads is single-threaded). As with the blocks
+	// above, the order matches the sub-opcode encoding.
+
+	AMemoryAtomicNotify // opcode 0xFE 0x00
+	AMemoryAtomicWait32
+	AMemoryAtomicWait64
+	AAtomicFence // opcode 0xFE 0x03
+
+	AI32AtomicLoad // opcode 0xFE 0x10
+	AI64AtomicLoad
+	AI32AtomicLoad8U
+	AI32AtomicLoad16U
+	AI64AtomicLoad8U
+	AI64AtomicLoad16U
+	AI64AtomicLoad32U
+	AI32AtomicStore
+	AI64AtomicStore
+	AI32AtomicStore8
+	AI32AtomicStore16
+	AI64AtomicStore8
+	AI64AtomicStore16
+	AI64AtomicStore32
+
+	AI32AtomicRmwAdd // opcode 0xFE 0x1E
+	AI64AtomicRmwAdd
+	AI32AtomicRmw8AddU
+	AI32AtomicRmw16AddU
+	AI64AtomicRmw8AddU
+	AI64AtomicRmw16AddU
+	AI64AtomicRmw32AddU
+
+	AI32AtomicRmwSub // opcode 0xFE 0x25
+	AI64AtomicRmwSub
+	AI32AtomicRmw8SubU
+	AI32AtomicRmw16SubU
+	AI64AtomicRmw8SubU
+	AI64AtomicRmw16SubU
+	AI64AtomicRmw32SubU
+
+	AI32AtomicRmwAnd // opcode 0xFE 0x2C
+	AI64AtomicRmwAnd
+	AI32AtomicRmw8AndU
+	AI32AtomicRmw16AndU
+	AI64AtomicRmw8AndU
+	AI64AtomicRmw16AndU
+	AI64AtomicRmw32AndU
+
+	AI32AtomicRmwOr // opcode 0xFE 0x33
+	AI64AtomicRmwOr
+	AI32AtomicRmw8OrU
+	AI32AtomicRmw16OrU
+	AI64AtomicRmw8OrU
+	AI64AtomicRmw16OrU
+	AI64AtomicRmw32OrU
+
+	AI32AtomicRmwXor // opcode 0xFE 0x3A
+	AI64AtomicRmwXor
+	AI32AtomicRmw8XorU
+	AI32AtomicRmw16XorU
+	AI64AtomicRmw8XorU
+	AI64AtomicRmw16XorU
+	AI64AtomicRmw32XorU
+
+	AI32AtomicRmwXchg // opcode 0xFE 0x41
+	AI64AtomicRmwXchg
+	AI32AtomicRmw8XchgU
+	AI32AtomicRmw16XchgU
+	AI64AtomicRmw8XchgU
+	AI64AtomicRmw16XchgU
+	AI64AtomicRmw32XchgU
+
+	AI32AtomicRmwCmpxchg // opcode 0xFE 0x48
+	AI64AtomicRmwCmpxchg
+	AI32AtomicRmw8CmpxchgU
+	AI32AtomicRmw16CmpxchgU
+	AI64AtomicRmw8CmpxchgU
+	AI64AtomicRmw16CmpxchgU
+	AI64AtomicRmw32CmpxchgU // opcode 0xFE 0x4E
 
 	ALast // Sentinel: End of low-level WebAssembly instructions.
 

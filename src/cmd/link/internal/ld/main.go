@@ -67,7 +67,9 @@ var (
 	flagBindNow = flag.Bool("bindnow", false, "mark a dynamically linked ELF object for immediate function binding")
 
 	flagOutfile    = flag.String("o", "", "write output to `file`")
-	flagApeFat     = flag.String("apefat", "", "merge two GOOS=cosmo binaries (`amd64,arm64`) into one fat APE and exit")
+	flagApeFat     = flag.String("apefat", "", "merge GOOS=cosmo binaries (`amd64,arm64`) into one fat APE and exit")
+	flagApeStrip   = flag.Bool("apestrip", false, "with -apefat, embed only each input's loadable span (drop symbol table, DWARF, section headers)")
+	flagApeDbg     = flag.Bool("apedbg", false, "with -apefat, write each input's unstripped ELF image beside the output (.dbg, .aarch64.elf)")
 	flagPluginPath = flag.String("pluginpath", "", "full path name for plugin")
 	flagFipso      = flag.String("fipso", "", "write fips module to `file`")
 

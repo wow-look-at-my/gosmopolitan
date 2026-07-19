@@ -16,8 +16,6 @@ type m0Stack struct {
 
 var wasmStack m0Stack
 
-func wasmDiv()
-
 func wasmTruncS()
 func wasmTruncU()
 

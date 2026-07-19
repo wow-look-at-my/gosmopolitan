@@ -81,12 +81,17 @@ func ParseGOEXPERIMENT(goos, goarch, goexp string) (*ExperimentFlags, error) {
 	dwarf5Supported := (goos != "darwin" && goos != "ios" && goos != "aix")
 
 	baseline := goexperiment.Flags{
-		RegabiWrappers:        regabiSupported,
-		RegabiArgs:            regabiSupported,
-		Dwarf5:                dwarf5Supported,
-		RandomizedHeapBase64:  true,
-		SizeSpecializedMalloc: true,
-		GreenTeaGC:            true,
+		RegabiWrappers:       regabiSupported,
+		RegabiArgs:           regabiSupported,
+		Dwarf5:               dwarf5Supported,
+		RandomizedHeapBase64: true,
+		GreenTeaGC:           true,
+		// Wasm has no threads and no asynchronous (signal-based)
+		// preemption, so a CPU-bound goroutine can starve the scheduler
+		// forever. Compile loop backedge rescheduling checks by default
+		// on wasm; the runtime arms them when other work is pending.
+		// GOEXPERIMENT=nopreemptibleloops opts out.
+		PreemptibleLoops: goarch == "wasm",
 	}
 	flags := &ExperimentFlags{
 		Flags:    baseline,

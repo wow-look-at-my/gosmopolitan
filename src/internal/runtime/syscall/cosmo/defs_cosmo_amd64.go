@@ -37,3 +37,11 @@ const (
 	SYS_PRCTL         = 157
 	SYS_EPOLL_PWAIT2  = 441
 )
+
+// EpollEvent is the epoll_event structure. The Linux kernel declares it
+// __attribute__((packed)) on x86-64, so there is no padding between
+// Events and Data.
+type EpollEvent struct {
+	Events uint32
+	Data   [8]byte // unaligned uintptr
+}

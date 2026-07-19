@@ -54,6 +54,7 @@ const (
 	_SIGUSR2   = 0xc
 	_SIGPIPE   = 0xd
 	_SIGALRM   = 0xe
+	_SIGTERM   = 0xf
 	_SIGSTKFLT = 0x10
 	_SIGCHLD   = 0x11
 	_SIGCONT   = 0x12
