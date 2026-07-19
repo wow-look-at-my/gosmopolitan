@@ -34,6 +34,12 @@ type mOS struct {
 	// waitsemacount is the futex word backing the semaphore on Linux
 	// hosts, where the pthread pair above is never touched.
 	waitsemacount uint32
+
+	// preemptExtLock exists so the shared osPreemptExtEnter/Exit
+	// (os_cosmo.go) compile on arm64; it is never contended here -
+	// iswindows() is constant false on arm64 (NT is amd64-only), so
+	// both functions reduce to no-ops.
+	preemptExtLock uint32
 }
 
 // pthreadmutex reserves the size and alignment of Apple's

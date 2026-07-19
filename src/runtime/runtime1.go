@@ -74,6 +74,12 @@ func goargs() {
 	if GOOS == "windows" {
 		return
 	}
+	if GOOS == "cosmo" && cosmoNTGoargs() {
+		// NT hosts parse the real argv from GetCommandLineW
+		// (os_cosmo_nt.go); the boot-block argv fabricated by the NT
+		// entry stub is a single placeholder entry.
+		return
+	}
 	argslice = make([]string, argc)
 	for i := int32(0); i < argc; i++ {
 		argslice[i] = gostringnocopy(argv_index(argv, i))

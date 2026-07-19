@@ -10,16 +10,21 @@ import (
 
 var testBinary []byte
 
+// binPath returns the path of the APE binary under test.
+func binPath(t *testing.T) string {
+	t.Helper()
+	path := os.Getenv("FIZZBUZZ_BIN")
+	require.NotEmpty(t, path, "FIZZBUZZ_BIN environment variable must be set")
+	return path
+}
+
 func loadBinary(t *testing.T) []byte {
 	t.Helper()
 	if testBinary != nil {
 		return testBinary
 	}
-	path := os.Getenv("FIZZBUZZ_BIN")
-	require.NotEmpty(t, path, "FIZZBUZZ_BIN environment variable must be set")
-
 	var err error
-	testBinary, err = os.ReadFile(path)
+	testBinary, err = os.ReadFile(binPath(t))
 	require.NoError(t, err)
 	return testBinary
 }

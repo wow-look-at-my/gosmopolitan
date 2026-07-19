@@ -1,6 +1,11 @@
 # CI workflow for GOOS=cosmo cross-platform testing
-# Tests that APE binaries built on any platform run on all platforms
-# Each test runner tests all 3 binaries (native + 2 cross-compiled)
+# Tests that APE binaries built on any platform (Linux/macOS/Windows) run
+# on all platforms. Each of the 2 unix test runners tests all 3 origin
+# binaries with the full apetest suite. Windows runs the same fat APEs
+# natively through their PE header via the cosmo runtime's NT
+# personality (NT bring-up wave 2): a dedicated windows job byte-checks
+# real fizzbuzz output and runs the full apetest suite - runtimeprobe
+# included - against all three origin binaries.
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -86,7 +91,7 @@ jobs:
           /tmp/shebang-test.go
 
       - name: Build APE binary
-        # Observed max 38s (windows; two fat builds = six link passes).
+        # Observed max 38s (windows; two fat builds = four link passes).
         timeout-minutes: 10
         shell: bash
         run: |
@@ -94,15 +99,18 @@ jobs:
           # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
           # APE regardless of the host architecture.
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
-          # The probe is a multi-file package (per-OS signal checks for
-          # the windows payload build), so build its module directory.
+          # The probe is a multi-file package, so build its module directory.
           (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
           echo "=== File info ==="
           file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-          ls -la fizzbuzz.com runtimeprobe.com
+          # ls doubles as an existence assertion for the debug sidecars a
+          # default fat build must write next to each output (they are not
+          # uploaded; apetest's TestDebugSidecars covers their contents).
+          ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
+            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
@@ -113,8 +121,24 @@ jobs:
             runtimeprobe.com
           retention-days: 1
 
-  # Test all APE binaries on each platform using Go tests
-  # Each runner tests all 3 binaries sequentially (native + 2 cross-compiled)
+      - name: APE merge unit tests (linker + go command)
+        # Covers the -apefat/-apestrip/-apedbg merge logic and cmd/go's
+        # GOCOSMOSTRIP / -ldflags strip detection. One leg is enough.
+        # GOOS=linux pin: the fork's go defaults GOOS=cosmo, and these are
+        # host-run unit tests. Observed ~40s (test-package compile).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled' cmd/go/internal/work
+
+  # Test all APE binaries on each unix platform using Go tests
+  # Each runner tests all 3 origin binaries sequentially (its native one
+  # plus the two cross-compiled elsewhere). Windows execution is covered
+  # by the dedicated test-windows job below (native NT boot: direct
+  # fizzbuzz output check plus apetest).
   #
   # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
   # green total is under 2 minutes. Individual steps carry their own
@@ -125,7 +149,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        test-os: [ubuntu-latest, macos-latest]
 
     runs-on: ${{ matrix.test-os }}
 
@@ -233,6 +257,252 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-log-${{ matrix.test-os }}-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+  # Windows execution acceptance (cosmo NT bring-up): a normal fat
+  # APE - cosmo amd64 + arm64, no embedded second build - boots
+  # natively on Windows through its PE header and the cosmo runtime's
+  # NT personality. Two rungs:
+  #
+  #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
+  #     origins build identical headers): the same contract apetest
+  #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
+  #     stdout, exit 0), with a byte-for-byte stdout compare.
+  #  2. The apetest suite, natively, against all three origin binaries
+  #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
+  #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
+  #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
+  #     preemption), so probe execution is gated here too.
+  #
+  # Job cap covers the worst case of the per-step timeout-minutes
+  # below (5 + 3 + three 10-minute apetest steps, plus setup).
+  test-windows:
+    timeout-minutes: 40
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code (for apetest)
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Download ubuntu-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-ubuntu-latest
+          path: binaries/ape-binary-ubuntu-latest
+
+      - name: Download windows-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-windows-latest
+          path: binaries/ape-binary-windows-latest
+
+      - name: Download macos-origin APE binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ape-binary-macos-latest
+          path: binaries/ape-binary-macos-latest
+
+      # Diagnostic only (never fails the job): prove what the runner's
+      # afunix.sys actually supports, so a runtimeprobe unixsock failure
+      # can be attributed - runner capability gap vs cosmo port bug. The
+      # native matrix reproduces the cosmo runtime's exact socket recipe
+      # piecewise (creation flags, SO_REUSEADDR - which net's
+      # listenStream sets and which poisons a subsequent afunix bind
+      # with WSAEOPNOTSUPP - and FIONBIO); the managed .NET case is the
+      # canonical known-good control.
+      - name: AF_UNIX capability probe (runner diagnostic)
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $src = @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class AfUnixProbe {
+              [DllImport("ws2_32.dll")] public static extern int WSAStartup(ushort v, byte[] data);
+              [DllImport("ws2_32.dll")] public static extern IntPtr WSASocketW(int af, int type, int proto, IntPtr pi, uint g, uint flags);
+              [DllImport("ws2_32.dll")] public static extern int bind(IntPtr s, byte[] name, int namelen);
+              [DllImport("ws2_32.dll")] public static extern int setsockopt(IntPtr s, int level, int optname, ref int optval, int optlen);
+              [DllImport("ws2_32.dll")] public static extern int ioctlsocket(IntPtr s, int cmd, ref int arg);
+              [DllImport("ws2_32.dll")] public static extern int WSAGetLastError();
+              [DllImport("ws2_32.dll")] public static extern int closesocket(IntPtr s);
+              public static void TryCase(string label, uint flags, string path, bool reuse, bool nonblock) {
+                  IntPtr s = WSASocketW(1, 1, 0, IntPtr.Zero, 0, flags);
+                  if (s == (IntPtr)(-1L)) { Console.WriteLine(label + ": WSASocketW failed " + WSAGetLastError()); return; }
+                  if (reuse) {
+                      int one = 1;
+                      int rr = setsockopt(s, 0xffff, 0x0004, ref one, 4);
+                      Console.WriteLine(label + ": setsockopt SO_REUSEADDR " + (rr == 0 ? "OK" : "failed " + WSAGetLastError()));
+                  }
+                  if (nonblock) {
+                      int nb = 1;
+                      ioctlsocket(s, unchecked((int)0x8004667E), ref nb);
+                  }
+                  byte[] p = Encoding.UTF8.GetBytes(path);
+                  byte[] sa = new byte[110];
+                  sa[0] = 1; sa[1] = 0;
+                  Array.Copy(p, 0, sa, 2, p.Length);
+                  int r = bind(s, sa, 2 + p.Length + 1);
+                  Console.WriteLine(r == 0 ? label + ": bind OK" : label + ": bind failed " + WSAGetLastError());
+                  closesocket(s);
+                  try { System.IO.File.Delete(path); } catch {}
+              }
+              public static void Run(string dir) {
+                  byte[] d = new byte[512]; WSAStartup(0x0202, d);
+                  TryCase("native plain (flags 0x80)", 0x80, System.IO.Path.Combine(dir, "afu-1.sock"), false, false);
+                  TryCase("native +SO_REUSEADDR", 0x80, System.IO.Path.Combine(dir, "afu-2.sock"), true, false);
+                  TryCase("native +FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-3.sock"), false, true);
+                  TryCase("native +SO_REUSEADDR+FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-4.sock"), true, true);
+                  Console.WriteLine("GetTempPath=" + System.IO.Path.GetTempPath());
+                  TryCase("native plain at GetTempPath", 0x80, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "afu-5.sock"), false, false);
+              }
+          }
+          '@
+          try {
+            Add-Type -TypeDefinition $src
+            [AfUnixProbe]::Run($env:RUNNER_TEMP)
+          } catch { Write-Host "native probe error: $_" }
+          try {
+            $mp = Join-Path $env:RUNNER_TEMP 'afu-managed.sock'
+            $sock = [System.Net.Sockets.Socket]::new([System.Net.Sockets.AddressFamily]::Unix, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Unspecified)
+            $ep = [System.Net.Sockets.UnixDomainSocketEndPoint]::new($mp)
+            $sock.Bind($ep)
+            Write-Host 'managed .NET UnixDomainSocket: bind OK'
+            $sock.Close()
+            Remove-Item $mp -ErrorAction SilentlyContinue
+          } catch { Write-Host "managed .NET UnixDomainSocket: $_" }
+          exit 0
+
+      - name: Run fizzbuzz on Windows (NT boot acceptance)
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          # A binary the loader refuses to start throws instead of
+          # setting an exit code; make that fail the step immediately.
+          #
+          # The binaries run via Start-Process rather than pwsh native
+          # invocation (& $copy): on be6c8c72 both binaries printed the
+          # correct exit code, yet the pwsh host then sat ~18s past the
+          # final success line and died with exit code 1 and zero
+          # diagnostics - a native-command/console teardown artifact,
+          # not an assertion failure. Start-Process + $p.ExitCode
+          # isolates the check from that teardown path, and the script
+          # ends in an explicit exit so the host quits before whatever
+          # teardown threw. Per-binary lines before and after each run
+          # localize any future hang.
+          #
+          # Cases restate apetest/fizzbuzz_test.go's invocation
+          # contract: `fizzbuzz.com <num1> <num2>` prints
+          # fizzbuzz(num1+num2) and a trailing \n (fmt.Println), exit
+          # 0. TestFizzbuzz_15 (10+5) wants "fizzbuzz"; TestNumber_13
+          # (7+6) wants "13" - the second case proves argv values
+          # actually flow through GetCommandLineW parsing rather than
+          # printing a constant.
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          $cases = @(
+            @{ Args = @('10', '5'); Want = "fizzbuzz`n" },
+            @{ Args = @('7', '6');  Want = "13`n" }
+          )
+          foreach ($origin in @('ubuntu-latest', 'windows-latest')) {
+            # Run a throwaway copy so the downloaded artifact stays
+            # pristine (APE binaries self-assimilate on unix hosts;
+            # keep the same hygiene here).
+            $src = "binaries/ape-binary-$origin/fizzbuzz.com"
+            $copy = Join-Path $env:RUNNER_TEMP "fizzbuzz-$origin.com"
+            Copy-Item $src $copy
+            foreach ($case in $cases) {
+              $out = Join-Path $env:RUNNER_TEMP "stdout-$origin-$($case.Args -join '-').txt"
+              Write-Host "${origin}: launching $copy $($case.Args -join ' ')"
+              $p = Start-Process -FilePath $copy -ArgumentList $case.Args -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out
+              $got = [System.IO.File]::ReadAllText($out)
+              Write-Host "${origin}: exit code $($p.ExitCode) (want 0), stdout $($got | ConvertTo-Json)"
+              if ($p.ExitCode -ne 0) { $failed = $true }
+              if ($got -cne $case.Want) {
+                Write-Host "${origin}: stdout mismatch: got $($got | ConvertTo-Json), want $($case.Want | ConvertTo-Json)"
+                $failed = $true
+              }
+            }
+          }
+          if ($failed) { exit 1 } else { exit 0 }
+
+      # Prefetch test-module dependencies separately so a stalled module
+      # download cannot masquerade as a hung test step (same split as
+      # the unix legs). with-deadline.sh self-detects git-bash and
+      # degrades to a plain exec: the in-test 3-minute deadlines plus
+      # the step timeout-minutes are the watchdogs here.
+      - name: Download apetest modules
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          sh ./with-deadline.sh 150 go mod download
+
+      - name: apetest vs ubuntu-origin binary
+        id: apetest-ubuntu
+        timeout-minutes: 10
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload ubuntu-origin windows test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-windows-latest-ubuntu-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+      - name: apetest vs windows-origin binary
+        id: apetest-windows
+        timeout-minutes: 10
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload windows-origin windows test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-windows-latest-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+      - name: apetest vs macos-origin binary
+        id: apetest-macos
+        timeout-minutes: 10
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload macos-origin windows test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-windows-latest-macos-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
