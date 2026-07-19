@@ -6,7 +6,10 @@
 
 package syscall
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
 
 // SysProcIDMap holds Container ID to Host ID mappings used for User Namespaces.
 type SysProcIDMap struct {
@@ -74,6 +77,15 @@ func runtime_AfterForkInChild()
 //
 //go:norace
 func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAttr, sys *SysProcAttr, pipe int) (pid int, err Errno) {
+	// NT host: no fork exists. Launch the child posix_spawn-style via
+	// CreateProcessW instead (exec_cosmo_nt.go) - BEFORE any fork
+	// machinery. The status pipe is not passed down: the child cannot
+	// inherit it, so the parent's status read sees EOF (the success
+	// protocol) and spawn failures return synchronously from here.
+	if cosmo.Windows() != nil {
+		return ntForkExec(argv0, argv, envv, chroot, dir, attr, sys)
+	}
+
 	// Declare all variables at top in case any
 	// temporary variables get allocated during
 	// the actual syscall sequences.
@@ -268,4 +280,3 @@ func forkAndExecFailureCleanup(attr *ProcAttr, sys *SysProcAttr) {
 		*sys.PidFD = -1
 	}
 }
-

@@ -10,6 +10,13 @@ import "internal/runtime/syscall/cosmo"
 
 //go:nosplit
 func fcntl(fd, cmd, arg int32) (ret int32, errno int32) {
+	if iswindows() {
+		// Consult the NT fd table (os_cosmo_nt_fd.go). Slots 0-2
+		// are seeded open at boot, which keeps checkfds
+		// (fds_unix.go) from trying to open /dev/null through the
+		// runtime's raw-syscall open.
+		return ntFcntl(fd, cmd, arg)
+	}
 	r, _, err := cosmo.Syscall6(cosmo.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg), 0, 0, 0)
 	return int32(r), int32(err)
 }

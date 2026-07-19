@@ -49,12 +49,13 @@ func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
 	// APE binaries need to be invoked through a shell on Linux/Unix because
 	// the kernel doesn't recognize the APE format directly. The shell will
 	// parse the APE header as a script and execute the bootstrap code.
-	// On Windows, the binary is recognized as a PE executable directly.
 	// On macOS, the binary may need shell execution for the dd bootstrap.
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Windows recognizes APE as PE directly
+		// The cosmo NT personality boots the fat APE natively through
+		// its PE header (cosmo NT bring-up wave 1); CreateProcess
+		// needs no shell.
 		cmd = exec.CommandContext(ctx, bin, args...)
 	default:
 		// Unix: invoke through shell for APE bootstrap

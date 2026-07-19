@@ -68,7 +68,10 @@ func TestRuntimeProbe(t *testing.T) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		// Windows recognizes APE as PE directly.
+		// The cosmo NT personality boots the fat APE natively through
+		// its PE header; CreateProcess needs no shell. NT bring-up
+		// wave 2 grew the runtime surface the probe needs (file I/O,
+		// sockets, signals, os/exec, async preemption).
 		cmd = exec.CommandContext(ctx, bin, mark)
 	default:
 		// Unix: invoke through a shell for the APE bootstrap.

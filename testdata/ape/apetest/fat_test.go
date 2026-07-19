@@ -115,6 +115,59 @@ func TestFatPayloads(t *testing.T) {
 	}
 }
 
+// TestFatPayloadsStripped verifies the default-build contract at the
+// whole-file level: each embedded payload is cut at the end of the span its
+// program headers reference and carries no section header table, so no
+// symbol table or DWARF bytes remain anywhere in the shipped APE (they
+// live in the .dbg / .aarch64.elf sidecars instead).
+func TestFatPayloadsStripped(t *testing.T) {
+	bin := loadBinary(t)
+	type payload struct {
+		base   uint64
+		extent uint64 // absolute end of the phdr-referenced span
+	}
+	var payloads []payload
+	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
+		hdr := bootHeaderByMachine(t, machine)
+		require.NotNil(t, hdr, "missing boot header for %v", machine)
+
+		// The boot header's e_phoff is absolute; the stored payload's is
+		// payload-relative, and the Go linker always places the program
+		// header table right after the 64-byte ELF header.
+		require.GreaterOrEqual(t, le64(hdr[32:]), uint64(64), "%v: boot header phoff", machine)
+		base := le64(hdr[32:]) - 64
+		require.Less(t, base+64, uint64(len(bin)), "%v: payload base out of range", machine)
+		require.Equal(t, []byte{0x7f, 'E', 'L', 'F'}, bin[base:base+4],
+			"%v: no ELF header at payload base %#x", machine, base)
+
+		ehdr := bin[base:]
+		assert.Zero(t, le64(ehdr[40:48]), "%v: e_shoff must be 0 in a stripped payload", machine)
+		assert.Zero(t, le16(ehdr[60:62]), "%v: e_shnum must be 0 in a stripped payload", machine)
+		assert.Zero(t, le16(ehdr[62:64]), "%v: e_shstrndx must be 0 in a stripped payload", machine)
+
+		phoff := le64(ehdr[32:40])
+		phentsize := uint64(le16(ehdr[54:56]))
+		phnum := uint64(le16(ehdr[56:58]))
+		extent := base + phoff + phnum*phentsize
+		for i := uint64(0); i < phnum; i++ {
+			ph := bin[base+phoff+i*phentsize:]
+			// p_offset values are absolute file offsets in the stored APE.
+			if end := le64(ph[8:16]) + le64(ph[32:40]); end > extent {
+				extent = end
+			}
+		}
+		payloads = append(payloads, payload{base, extent})
+	}
+	require.Len(t, payloads, 2)
+	if payloads[0].base > payloads[1].base {
+		payloads[0], payloads[1] = payloads[1], payloads[0]
+	}
+	assert.LessOrEqual(t, payloads[0].extent, payloads[1].base,
+		"first payload's span must end before the second payload starts")
+	assert.EqualValues(t, len(bin), payloads[1].extent,
+		"file must end exactly at the last payload's loadable span - no debug tail")
+}
+
 // TestFatApeLoaderEmbedded verifies the gzipped APE loader source for macOS
 // ARM64 is embedded at the offset the bootstrap script extracts it from.
 func TestFatApeLoaderEmbedded(t *testing.T) {
