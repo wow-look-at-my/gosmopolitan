@@ -410,8 +410,8 @@ the full catalog of fixes and remaining gaps):
   everywhere and cannot report the source port), so opt-in binaries now
   need WasmEdge 0.12+ (or the reference host) to instantiate at all -
   the generation mix, the 128-byte family-tagged address buffer, and
-  the 0.12-0.13 byte-swapped-port quirk are documented in
-  `syscall/net_wasip1_wasmedge.go`. ReadMsgUDP/WriteMsgUDP are ENOSYS
+  the network-byte-order recv_from port quirk (verified live against
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`. ReadMsgUDP/WriteMsgUDP are ENOSYS
   (no ancillary data in the extension); DNS and unix sockets stay
   fake. `testdata/wasip1sock` grew UDP host support plus
   udpecho/udpconnected guests, and the CI wasm job now runs the whole

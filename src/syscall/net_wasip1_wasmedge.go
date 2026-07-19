@@ -65,11 +65,16 @@ import (
 //     byte 0 holds the address family as a u16 (the Inet4=1/Inet6=2
 //     enum above; WasmEdge writes it as a u8, byte 1 stays zero) and
 //     the raw address bytes start at offset 2 - so the source family
-//     comes from the host rather than from guessing by socket. The
-//     port out-pointer is host-order on WasmEdge 0.14+, which is what
-//     this file and the reference host implement; 0.12-0.13 stored raw
-//     big-endian sin_port there (missing ntohs, fixed in 0.14), so
-//     source ports read under those two versions come back byte-swapped.
+//     comes from the host rather than from guessing by socket. One
+//     quirk: the port out-pointer holds raw sin_port, i.e. NETWORK
+//     byte order, unlike every other port in this ABI (bind, connect
+//     and send_to take host order and the host applies htons;
+//     getlocaladdr/getpeeraddr return host order because the host
+//     applies ntohs). WasmEdge has written the recv_from port
+//     un-swapped from 0.12 through current master - verified in the
+//     0.12/0.13/0.17 sources and live against 0.17.1 - so Recvfrom
+//     byte-swaps it, and the reference host emits network order to
+//     match the real hosts.
 //
 // Consequence of the mix: a GOWASI=wasmedgesock binary now imports
 // sock_recv_from_v2 and therefore needs WasmEdge 0.12+ (or the
@@ -167,10 +172,10 @@ func sock_send_to(fd int32, iovs *iovec, iovsLen size, addr *wasiAddress, port u
 // The next-generation receive (WasmEdge 0.12+). addr points at a
 // wasiAddress whose buffer is 128 bytes and family-tagged: on return
 // byte 0-1 is the address family (Inet4=1/Inet6=2) and the raw source
-// IP starts at offset 2. The source port comes back through port
-// (host-order on WasmEdge 0.14+; see the generation notes above). The
-// plain-named sock_recv_from cannot report the source port at all,
-// which is why this import is the odd one out.
+// IP starts at offset 2. The source port comes back through port in
+// NETWORK byte order (raw sin_port; see the generation notes above).
+// The plain-named sock_recv_from cannot report the source port at
+// all, which is why this import is the odd one out.
 //
 //go:wasmimport wasi_snapshot_preview1 sock_recv_from_v2
 //go:noescape
@@ -356,13 +361,16 @@ func Recvfrom(fd int, p []byte, flags int) (n int, from Sockaddr, err error) {
 	if errno != 0 {
 		return 0, nil, errnoErr(errno)
 	}
+	// The port arrives as raw sin_port: network byte order (see the
+	// header comment). Swap it to host order.
+	hostPort := int(uint16(port)>>8 | uint16(port)<<8)
 	switch family := uint32(addrBuf[0]) | uint32(addrBuf[1])<<8; family {
 	case wasmedgeAFInet4:
-		sa := &SockaddrInet4{Port: int(port & 0xffff)}
+		sa := &SockaddrInet4{Port: hostPort}
 		copy(sa.Addr[:], addrBuf[2:6])
 		from = sa
 	case wasmedgeAFInet6:
-		sa := &SockaddrInet6{Port: int(port & 0xffff)}
+		sa := &SockaddrInet6{Port: hostPort}
 		copy(sa.Addr[:], addrBuf[2:18])
 		from = sa
 	default:

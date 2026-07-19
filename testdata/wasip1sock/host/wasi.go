@@ -1002,8 +1002,11 @@ func (h *wasiHost) sockSendTo(mod api.Module, s []uint64) uint16 {
 // the source address through the {buf, buf_len} struct - the 128-byte
 // buffer is family-tagged (family u16 LE at offset 0, raw IP from
 // offset 2), the bare 4/16 forms take raw IP only - and the source
-// port host-order through the port out-pointer (the WasmEdge 0.14+
-// behavior; 0.12-0.13 stored raw big-endian sin_port there).
+// port through the port out-pointer in NETWORK byte order (raw
+// sin_port: real WasmEdge has never ntohs'd this one, 0.12 through
+// current master, unlike getlocaladdr/getpeeraddr - verified live
+// against 0.17.1; see the generation notes in
+// syscall/net_wasip1_wasmedge.go).
 func (h *wasiHost) sockRecvFromV2(mod api.Module, s []uint64) uint16 {
 	fd, iovs, iovsLen := int32(s[0]), uint32(s[1]), uint32(s[2])
 	addrPtr, portPtr, recvLenPtr, oflagsPtr := uint32(s[3]), uint32(s[5]), uint32(s[6]), uint32(s[7])
@@ -1072,7 +1075,9 @@ func (h *wasiHost) sockRecvFromV2(mod api.Module, s []uint64) uint16 {
 			return wasiEFAULT
 		}
 	}
-	if !mem.WriteUint32Le(portPtr, uint32(p.addr.Port)) {
+	// Network byte order, matching real WasmEdge's raw sin_port.
+	nport := uint16(p.addr.Port)>>8 | uint16(p.addr.Port)<<8
+	if !mem.WriteUint32Le(portPtr, uint32(nport)) {
 		return wasiEFAULT
 	}
 	if !mem.WriteUint32Le(recvLenPtr, n) {
