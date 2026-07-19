@@ -66,6 +66,7 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
 | Runtime (GC, js) | GC mark work bunched into frame-sized bursts (round 5, 2026-07-17): with one P the pacer's cons/mark runway came out at a few hundred KB, so whole cycles ran as in-frame assist bursts; idle mark drains were untimed and blocked the event loop until mark completion; and the fractional mark worker's 25% quota is measured against wall time - which on js includes host-idle time - so frame-driven apps paid ~4ms of every 16.7ms frame while marking | none verified | 2c385994 | framebench (10k mixed-size allocs/frame under node): p99 frame time 21.6ms -> 4.8ms, 535/2000 -> 0/2000 frames over 8ms. Pacer minimum runway (>= half the trigger-to-goal headroom, trigger floor lowered ~0.7 -> ~0.5) plus a cycle-start background-credit seed; idle drains bounded at 2ms (js additionally yields to the event loop with a 1ms re-arm); new `go_gc_mark_step(budgetMs) -> bool` wasm export for host-donated between-frame marking (no-op outside a cycle, returns whether work remains, runs mark termination between frames when it finishes the cycle); fractional quota capped at 5% while the host donates idle time. The pacer changes, the drain deadline, and the budgeted mark step core are platform-independent (all platforms pace and drain the same way, and TestGcPacer plus portable mark-step tests exercise the real behavior); only the event-loop yield glue and the wasm export itself are js-specific |
 | net, syscall (wasip1) | WASI preview 1 defines no way to create or connect a socket, so net.Dial on wasip1 could never reach a real network: every dial and listen went to the in-process fake net | #65333, #67673 | 194bcf71 + d85a610b + 27fa0219 + 6eb4bf17 + a3a37b18 | fake network only -> GOWASI=wasmedgesock (default off; build tag wasip1.wasmedgesock; hashed into the build cache key) routes TCP through the WasmEdge socket extension (second-state SDK v0.4.3 ABI): real Dial (IP literals), Listen/Accept, deadlines, concurrency, http.Get and http.Serve end to end; verified by the testdata/wasip1sock wazero reference host (1MB echo round-trip, 8 concurrent conns, HTTP both directions, prompt ECONNREFUSED, read-deadline timeout); default builds stay byte-identical and stock runtimes reject opt-in binaries ('"sock_open" is not exported in module "wasi_snapshot_preview1"'); UDP/DNS/unix sockets stay fake |
+| cmd/internal/dwarf, cmd/internal/obj | Wasm variable locations were unevaluable (round 5, 2026-07-19): every subprogram's DW_AT_frame_base was DW_OP_call_frame_cfa, but wasm deliberately emits no .debug_frame to define a CFA, so no consumer could resolve a single DW_OP_fbreg variable offset - and the first stack parameter (StackOffset 0) was emitted as a bare DW_OP_call_frame_cfa location, dead for the same reason | none verified | 7386b073 | names-and-types-only variable DIEs -> the frame base computes the CFA directly: DW_OP_WASM_location 0x01 0x00 (the value of wasm global 0, the Go SP) + DW_OP_plus_uconst framesize+8 (wasm is a FixedFrameSize-0 target with an x86-style caller-pushed 8-byte return address, so CFA = SP + framesize + 8; SP only moves in the prologue/epilogue, so the constant is exact throughout the body); StackOffset-0 vars switch to the equivalent DW_OP_fbreg 0; every existing fbreg offset then resolves to exactly the linear-memory address codegen uses (cross-checked against -S output for params and stack locals across two functions); llvm-dwarfdump decodes the expression natively, --verify stays clean, non-wasm DWARF is byte-identical, and a cmd/link/internal/wasm regression test locks the encoding for both ports |
 
 ## Remaining shortcomings
 
@@ -278,19 +279,31 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   wazero 1.12 rejects such modules at compile time ("feature tail-call is
   disabled") and its CLI has no flag to enable it. Revisit the default
   when wazero catches up.
-- P2, fork-fixable (residual; DWARF emission itself landed round 4, see
-  the table): wasm DWARF variable locations are placeholders. Variable
-  DIEs carry names, types, and declaration positions, but their location
-  expressions are CFA-relative stack offsets with no .debug_frame to
-  define a CFA (wasm has no machine registers, so there is no register
-  mapping and location lists stay off); consumers can walk the DIE tree
-  and step by line but cannot print variable values. Faithful locations
-  need DW_OP_WASM_location expressions describing wasm locals and Go's
-  linear-memory pseudo-registers. Also: the emitted address_size is 8
-  (wasm PtrSize; clang emits 4 for wasm32) - every llvm tool accepts 8,
-  but the Chrome DevTools C/C++ debugging extension is unverified end to
-  end against it. go test binaries omit DWARF by design (cmd/go's
-  OmitDebug path - they are throwaway host-run artifacts).
+- P2, fork-fixable (residual; DWARF emission landed round 4 and stack
+  variable locations became real in round 5 - see the table: the frame
+  base is now a DW_OP_WASM_location expression computing SP+framesize+8,
+  and every stack-homed param and local resolves through DW_OP_fbreg):
+  what remains location-less. Heap-escaped variables get no
+  DW_AT_location at all (describing them needs a heap-pointer
+  dereference expression, which today only exists in the location-list
+  path, and location lists stay off on wasm - there is no register
+  mapping for them); with optimization on, variables promoted to Go's
+  wasm pseudo-registers (which are wasm locals at runtime) get
+  conservative name-and-type-only DIEs from the simple-vars path, so
+  debugging optimized code still mostly wants -N -l, same as delve
+  recommends elsewhere. Consumer status: llvm-dwarfdump decodes and
+  verifies everything; stock lldb 18 parses and indexes the DWARF from
+  the wasm container (wasm32 triple) but resolves no function
+  name-to-address lookups - an ObjectFileWasm address-model gap that
+  predates and is unaffected by the round-5 fix - and live guest
+  debugging needs an lldb with a wasm process plugin (Chrome/WAMR
+  builds; wasmtime 46's --gdbstub speaks to exactly that plugin, and
+  its old native-JIT -D debug-info path no longer registers with the
+  stock jit-loader). Also: the emitted address_size is 8 (wasm PtrSize;
+  clang emits 4 for wasm32) - every llvm tool accepts 8, but the Chrome
+  DevTools C/C++ debugging extension is unverified end to end against
+  it. go test binaries omit DWARF by design (cmd/go's OmitDebug path -
+  they are throwaway host-run artifacts).
 - P2, fork-fixable: Codegen perf leftovers (round 2 fixed the two big ones,
   int64 division and the atomics - see the table): non-provably-bounded
   shifts pay a bounds Select; everything is widened to i64 with wrap/extend
