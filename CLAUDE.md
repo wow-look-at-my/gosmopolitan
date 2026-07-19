@@ -343,6 +343,28 @@ derived from the binary location, no need to set it). Consumer gotchas:
   `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
   the current one.
 
+## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
+
+`.github/dependabot.yml` disables Dependabot updates — version AND security —
+for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
+and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
+importable package; see 'go help packages'`, and it can neither run
+`go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
+ALERTS stay enabled for visibility; resolve them manually:
+
+1. Build this tree's toolchain: `cd src && ./make.bash`, then `go clean -cache`
+   (the fork's release-version build cache gotcha); use `../bin/go` below.
+2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
+   && GOOS=linux go mod vendor`.
+3. If `x/net/http2` changed, regenerate `src/net/http/h2_bundle.go` with
+   `x/tools/cmd/bundle` (exact command is in its file header).
+4. Check `git log -- src/vendor/` for fork-local vendored changes that
+   re-vendoring may have wiped; re-apply them.
+5. Rebuild + `go clean -cache` again, then run the affected stdlib tests:
+   `GOOS=linux go test net/http net crypto/tls ...`.
+
+`src/README.vendor` is the upstream authority on vendoring in std/cmd.
+
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
 This fork diverges from upstream on the wasm ports (upstream inherited them
