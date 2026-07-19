@@ -21,11 +21,27 @@ import (
 // intact) is first written to a debug sidecar beside outfile; with
 // -apestrip, each embedded payload is then reduced to the file span its
 // program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. The policy for when cmd/go passes these
-// flags lives in cmd/go/internal/work.cosmoMergeArgs.
+// each input's PT_LOAD span. -apedbgmode selects how much debug info the
+// sidecars (and, for compact, the output itself) carry; see apedebug.go.
+// The policy for when cmd/go passes these flags lives in
+// cmd/go/internal/work.cosmoMergeArgs.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
+	}
+	switch *flagApeDbgMode {
+	case "full":
+	case "slim":
+		if !*flagApeDbg {
+			Exitf("-apedbgmode=slim requires -apedbg")
+		}
+	case "compact":
+		if !*flagApeDbg || !*flagApeStrip {
+			Exitf("-apedbgmode=compact requires -apedbg and -apestrip")
+		}
+		Exitf("-apedbgmode=compact is not implemented yet")
+	default:
+		Exitf("-apedbgmode: invalid mode %q (valid: full, slim, compact)", *flagApeDbgMode)
 	}
 	inputs := strings.Split(spec, ",")
 	if len(inputs) != 2 {
@@ -76,13 +92,24 @@ func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
 	return outfile + ".dbg"
 }
 
-// writeAPEDebugSidecar writes payload p's ELF image, exactly as its linker
-// produced it (p_offset values payload-relative, symbol table and DWARF
-// intact), to the debug sidecar path for its architecture. The sidecar is
-// a complete standalone ELF executable, directly loadable by debuggers.
+// writeAPEDebugSidecar writes payload p's debug sidecar for its
+// architecture. In the default -apedbgmode=full it is p's ELF image exactly
+// as its linker produced it (p_offset values payload-relative, symbol table
+// and DWARF intact): a complete standalone ELF executable, directly
+// loadable by debuggers. In slim and compact modes the image is first
+// reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
+// table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
 	name := apeDebugSidecarName(outfile, p.arch)
-	if err := os.WriteFile(name, p.elf, 0755); err != nil {
+	img := p.elf
+	if *flagApeDbgMode != "full" {
+		slim, err := slimELFDebug(img)
+		if err != nil {
+			Exitf("-apedbgmode=%s: %s: %v", *flagApeDbgMode, name, err)
+		}
+		img = slim
+	}
+	if err := os.WriteFile(name, img, 0755); err != nil {
 		Exitf("-apedbg: %v", err)
 	}
 }
