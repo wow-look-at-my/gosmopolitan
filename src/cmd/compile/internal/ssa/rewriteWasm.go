@@ -2,6 +2,7 @@
 
 package ssa
 
+import "internal/buildcfg"
 import "math"
 import "cmd/compile/internal/types"
 
@@ -748,11 +749,15 @@ func rewriteValueWasm_OpAtomicAnd32(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (AtomicAnd32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store32 ptr (I64And (I64Load32U ptr mem) val) mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store32)
 		v0 := b.NewValue0(v.Pos, OpWasmI64And, typ.Int64)
 		v1 := b.NewValue0(v.Pos, OpWasmI64Load32U, typ.UInt32)
@@ -761,6 +766,21 @@ func rewriteValueWasm_OpAtomicAnd32(v *Value) bool {
 		v.AddArg3(ptr, v0, mem)
 		return true
 	}
+	// match: (AtomicAnd32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicAnd32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicAnd32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicAnd8(v *Value) bool {
 	v_2 := v.Args[2]
@@ -769,11 +789,15 @@ func rewriteValueWasm_OpAtomicAnd8(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (AtomicAnd8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store8 ptr (I64And (I64Load8U ptr mem) val) mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store8)
 		v0 := b.NewValue0(v.Pos, OpWasmI64And, typ.Int64)
 		v1 := b.NewValue0(v.Pos, OpWasmI64Load8U, typ.UInt8)
@@ -782,6 +806,21 @@ func rewriteValueWasm_OpAtomicAnd8(v *Value) bool {
 		v.AddArg3(ptr, v0, mem)
 		return true
 	}
+	// match: (AtomicAnd8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicAnd8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicAnd8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicCompareAndSwap32(v *Value) bool {
 	v_3 := v.Args[3]
@@ -811,11 +850,15 @@ func rewriteValueWasm_OpAtomicOr32(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (AtomicOr32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store32 ptr (I64Or (I64Load32U ptr mem) val) mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store32)
 		v0 := b.NewValue0(v.Pos, OpWasmI64Or, typ.Int64)
 		v1 := b.NewValue0(v.Pos, OpWasmI64Load32U, typ.UInt32)
@@ -824,6 +867,21 @@ func rewriteValueWasm_OpAtomicOr32(v *Value) bool {
 		v.AddArg3(ptr, v0, mem)
 		return true
 	}
+	// match: (AtomicOr32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicOr32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicOr32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicOr8(v *Value) bool {
 	v_2 := v.Args[2]
@@ -832,11 +890,15 @@ func rewriteValueWasm_OpAtomicOr8(v *Value) bool {
 	b := v.Block
 	typ := &b.Func.Config.Types
 	// match: (AtomicOr8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store8 ptr (I64Or (I64Load8U ptr mem) val) mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store8)
 		v0 := b.NewValue0(v.Pos, OpWasmI64Or, typ.Int64)
 		v1 := b.NewValue0(v.Pos, OpWasmI64Load8U, typ.UInt8)
@@ -845,66 +907,157 @@ func rewriteValueWasm_OpAtomicOr8(v *Value) bool {
 		v.AddArg3(ptr, v0, mem)
 		return true
 	}
+	// match: (AtomicOr8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicOr8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicOr8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicStore32(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicStore32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store32 ptr val mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store32)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}
+	// match: (AtomicStore32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicStore64(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicStore64 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store ptr val mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}
+	// match: (AtomicStore64 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore64 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore64)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicStore8(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicStore8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store8 ptr val mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store8)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}
+	// match: (AtomicStore8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAtomicStorePtrNoWB(v *Value) bool {
 	v_2 := v.Args[2]
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
 	// match: (AtomicStorePtrNoWB ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
 	// result: (I64Store ptr val mem)
 	for {
 		ptr := v_0
 		val := v_1
 		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
 		v.reset(OpWasmI64Store)
 		v.AddArg3(ptr, val, mem)
 		return true
 	}
+	// match: (AtomicStorePtrNoWB ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore64 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore64)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
 }
 func rewriteValueWasm_OpAvg64u(v *Value) bool {
 	v_1 := v.Args[1]
