@@ -43,13 +43,20 @@ func TestWasmThreadsRunOnNewM(t *testing.T) {
 		})
 	})
 
-	if got := runtime.WasmThreadsCurMID(); got != mainM {
+	// The M-identity assertions are only deterministic at GOMAXPROCS=1
+	// (the default, and the CI configuration): under a multi-P scheduler
+	// this test goroutine itself can start on - and be preempted and
+	// rescheduled across - any M, so "the M observed before the spawn"
+	// pins nothing. The heap/channel/mutex coherence checks below hold at
+	// any GOMAXPROCS.
+	strict := runtime.GOMAXPROCS(0) == 1
+	if got := runtime.WasmThreadsCurMID(); strict && got != mainM {
 		t.Fatalf("main goroutine moved Ms: %d != %d", got, mainM)
 	}
-	if workerM == mainM {
+	if strict && workerM == mainM {
 		t.Fatalf("fn ran on the main M (%d)", mainM)
 	}
-	if nestedM == mainM || nestedM == workerM {
+	if strict && (nestedM == mainM || nestedM == workerM) {
 		t.Fatalf("nested fn did not run on a third M: main %d, worker %d, nested %d", mainM, workerM, nestedM)
 	}
 	if got := <-ch; got != workerM {
@@ -66,20 +73,18 @@ func TestWasmThreadsRunOnNewM(t *testing.T) {
 	}
 
 	// Spawn again: the parked worker Ms must be reused (mget), not new
-	// pool workers. Only GOMAXPROCS=1 makes this deterministic: under a
-	// multi-P scheduler other Ms park and unpark concurrently (GC
-	// workers, timer self-serves), so the re-spawn may legitimately be
-	// handed some OTHER parked M than the two this test tracked, and a
-	// concurrent startm may have claimed both of them. At GOMAXPROCS>1
-	// just assert the fn ran off the main M.
+	// pool workers. Deterministic only at GOMAXPROCS=1: under a multi-P
+	// scheduler other Ms park and unpark concurrently (GC workers, timer
+	// self-serves), so the re-spawn may legitimately be handed some OTHER
+	// parked M than the two this test tracked.
 	var againM int64
 	runtime.WasmThreadsRunOnNewM(func() {
 		againM = runtime.WasmThreadsCurMID()
 	})
-	if againM == mainM {
+	if strict && againM == mainM {
 		t.Fatalf("re-spawn ran on the main M (%d)", mainM)
 	}
-	if runtime.GOMAXPROCS(0) == 1 && againM != workerM && againM != nestedM {
+	if strict && againM != workerM && againM != nestedM {
 		t.Fatalf("re-spawn did not reuse a parked M: got %d, want %d or %d", againM, workerM, nestedM)
 	}
 }
