@@ -657,8 +657,8 @@ func dumpmemprof_callback(b *bucket, nstk uintptr, pstk *uintptr, size, allocs, 
 			if i > 0 && pc > f.entry() {
 				pc--
 			}
-			file, line := funcline(f, pc)
-			dumpstr(file)
+			fdir, fbase, line := funclinePieces(f, pc)
+			dumpstr2(fdir, fbase)
 			dumpint(uint64(line))
 		}
 	}

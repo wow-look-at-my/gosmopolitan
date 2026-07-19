@@ -34,7 +34,10 @@ const (
 	// arrays with presence-bitmap encoded ones. The function name table
 	// shares package-path prefixes: it starts with a uint32 prefix count
 	// and offsets of the NUL-terminated prefix strings, and each name
-	// entry is uvarint(prefix index) plus the NUL-terminated suffix.
+	// entry is uvarint(prefix index) plus the NUL-terminated suffix. The
+	// file name table shares directory prefixes the same way (uint32 dir
+	// count, dir string offsets, dir strings, then uvarint(dir index)
+	// plus NUL-terminated base name entries).
 	verCosmo
 )
 
@@ -414,6 +417,30 @@ func (t *LineTable) string(off uint32) string {
 	return t.stringFrom(t.funcdata, off)
 }
 
+// fileString returns the file name for a filetab offset.
+func (t *LineTable) fileString(off uint32) string {
+	if t.version < verCosmo {
+		return t.stringFrom(t.filetab, off)
+	}
+	// The compact format splits each file name into a shared directory
+	// and a base name: the table starts with a uint32 directory count and
+	// uint32 offsets of the NUL-terminated directory strings, and a file
+	// entry is uvarint(dir index) followed by the NUL-terminated base
+	// name. See cmd/link/internal/ld/pcln.go:generateFilenameTabs.
+	if s, ok := t.strings[off]; ok {
+		return s
+	}
+	d := t.filetab[off:]
+	idx := t.readvarint(&d)
+	i := bytes.IndexByte(d, 0)
+	base := d[:i]
+	do := t.binary.Uint32(t.filetab[4+4*idx:])
+	j := bytes.IndexByte(t.filetab[do:], 0)
+	s := string(t.filetab[do:do+uint32(j)]) + string(base)
+	t.strings[off] = s
+	return s
+}
+
 // functabFieldSize returns the size in bytes of a single functab field.
 func (t *LineTable) functabFieldSize() int {
 	if t.version >= ver118 {
@@ -647,7 +674,7 @@ func (t *LineTable) go12PCToFile(pc uint64) (file string) {
 	}
 	cuoff := f.cuOffset()
 	if fnoff := t.binary.Uint32(t.cutab[(cuoff+uint32(fno))*4:]); fnoff != ^uint32(0) {
-		return t.stringFrom(t.filetab, fnoff)
+		return t.fileString(fnoff)
 	}
 	return ""
 }
@@ -704,6 +731,24 @@ func (t *LineTable) initFileMap() {
 		for i := uint32(1); i < t.nfiletab; i++ {
 			s := t.string(t.binary.Uint32(t.filetab[4*i:]))
 			m[s] = i
+		}
+	} else if t.version >= verCosmo {
+		// The file entries start directly after the last directory
+		// string (see fileString for the layout).
+		ndir := t.binary.Uint32(t.filetab)
+		pos := 4 + 4*ndir
+		if ndir > 0 {
+			last := t.binary.Uint32(t.filetab[4+4*(ndir-1):])
+			pos = last + uint32(bytes.IndexByte(t.filetab[last:], 0)) + 1
+		}
+		for i := uint32(0); i < t.nfiletab; i++ {
+			d := t.filetab[pos:]
+			rest := len(d)
+			t.readvarint(&d)
+			idxLen := uint32(rest - len(d))
+			baseLen := uint32(bytes.IndexByte(d, 0))
+			m[t.fileString(pos)] = pos
+			pos += idxLen + baseLen + 1
 		}
 	} else {
 		var pos uint32

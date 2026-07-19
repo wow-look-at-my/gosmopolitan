@@ -31,7 +31,10 @@ const (
 	// The function name table shares package-path prefixes between names:
 	// it holds a uint32 prefix count, the prefix string offsets and the
 	// NUL-terminated prefix strings, followed by per-name entries of
-	// uvarint(prefix index) plus the NUL-terminated name suffix.
+	// uvarint(prefix index) plus the NUL-terminated name suffix. The file
+	// name table shares directory prefixes between file names the same
+	// way (uint32 dir count, dir string offsets, dir strings, then
+	// uvarint(dir index) plus NUL-terminated base name entries).
 	// See runtime/runtime2.go:_func and cmd/link/internal/ld/pcln.go.
 	CosmoPCLnTabMagic PCLnTabMagic = 0xffffffc1
 

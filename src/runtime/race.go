@@ -282,7 +282,7 @@ func raceSymbolizeCode(ctx *symbolizeCodeContext) {
 			}
 
 			npfx, name := sf.namePieces()
-			file, line := u.fileLine(uf)
+			fdir, fbase, line := u.fileLinePieces(uf)
 			if line == 0 {
 				// Failure to symbolize
 				continue
@@ -293,7 +293,11 @@ func raceSymbolizeCode(ctx *symbolizeCodeContext) {
 				ctx.fn = raceCString(npfx, name)
 			}
 			ctx.line = uintptr(line)
-			ctx.file = &bytes(file)[0] // assume NUL-terminated
+			if fdir == "" {
+				ctx.file = &bytes(fbase)[0] // aliases pclntab; NUL-terminated
+			} else {
+				ctx.file = raceCString(fdir, fbase)
+			}
 			ctx.off = pc - fi.entry()
 			ctx.res = 1
 			if u.isInlined(uf) {

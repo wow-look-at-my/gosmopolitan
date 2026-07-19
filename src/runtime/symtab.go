@@ -1234,17 +1234,38 @@ func funcpkgpath(f funcInfo) string {
 	return name[:i]
 }
 
-func funcfile(f funcInfo, fileno int32) string {
+// funcfilePieces returns the file name for fileno in two pieces: the
+// shared directory prefix (empty or ending in '/') and the base name. The
+// full name is the concatenation dir+base. Both pieces alias pclntab
+// memory, so this does not allocate and is safe on traceback, panic and GC
+// print paths. It returns ("", "?") if the pcln section is corrupt. See
+// cmd/link/internal/ld/pcln.go:generateFilenameTabs for the table layout.
+func funcfilePieces(f funcInfo, fileno int32) (string, string) {
 	datap := f.datap
 	if !f.valid() {
-		return "?"
+		return "", "?"
 	}
 	// Make sure the cu index and file offset are valid
 	if fileoff := datap.cutab[f.cuOffset+uint32(fileno)]; fileoff != ^uint32(0) {
-		return gostringnocopy(&datap.filetab[fileoff])
+		tab := datap.filetab
+		n, idx := readvarint(tab[fileoff:])
+		base := gostringnocopy(&tab[fileoff+n])
+		dirOff := *(*uint32)(unsafe.Pointer(&tab[4+4*uintptr(idx)]))
+		return gostringnocopy(&tab[dirOff]), base
 	}
 	// pcln section is corrupt.
-	return "?"
+	return "", "?"
+}
+
+// funcfile returns the full file name for fileno, allocating if the name
+// has a split-off directory. Print paths that must not allocate use
+// funcfilePieces instead.
+func funcfile(f funcInfo, fileno int32) string {
+	dir, base := funcfilePieces(f, fileno)
+	if dir == "" {
+		return base
+	}
+	return dir + base
 }
 
 // funcline1 should be an internal detail,
@@ -1257,22 +1278,38 @@ func funcfile(f funcInfo, fileno int32) string {
 //
 //go:linkname funcline1
 func funcline1(f funcInfo, targetpc uintptr, strict bool) (file string, line int32) {
+	dir, file, line := funcline1Pieces(f, targetpc, strict)
+	if dir != "" {
+		file = dir + file
+	}
+	return file, line
+}
+
+// funcline1Pieces is like funcline1, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func funcline1Pieces(f funcInfo, targetpc uintptr, strict bool) (dir, file string, line int32) {
 	datap := f.datap
 	if !f.valid() {
-		return "?", 0
+		return "", "?", 0
 	}
 	fileno, _ := pcvalue(f, f.pcfile, targetpc, strict)
 	line, _ = pcvalue(f, f.pcln, targetpc, strict)
 	if fileno == -1 || line == -1 || int(fileno) >= len(datap.filetab) {
 		// print("looking for ", hex(targetpc), " in ", funcname(f), " got file=", fileno, " line=", lineno, "\n")
-		return "?", 0
+		return "", "?", 0
 	}
-	file = funcfile(f, fileno)
-	return
+	dir, file = funcfilePieces(f, fileno)
+	return dir, file, line
 }
 
 func funcline(f funcInfo, targetpc uintptr) (file string, line int32) {
 	return funcline1(f, targetpc, true)
+}
+
+// funclinePieces is like funcline, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func funclinePieces(f funcInfo, targetpc uintptr) (dir, file string, line int32) {
+	return funcline1Pieces(f, targetpc, true)
 }
 
 func funcspdelta(f funcInfo, targetpc uintptr) int32 {

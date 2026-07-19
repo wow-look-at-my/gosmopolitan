@@ -139,3 +139,10 @@ func (u *inlineUnwinder) fileLine(uf inlineFrame) (file string, line int) {
 	file, line32 := funcline1(u.f, uf.pc, false)
 	return file, int(line32)
 }
+
+// fileLinePieces is like fileLine, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func (u *inlineUnwinder) fileLinePieces(uf inlineFrame) (dir, file string, line int) {
+	dir, file, line32 := funcline1Pieces(u.f, uf.pc, false)
+	return dir, file, int(line32)
+}

@@ -534,6 +534,14 @@ func walkFilenames(ctxt *Link, funcs []loader.Sym, f func(*sym.CompilationUnit, 
 	}
 }
 
+// splitFileName splits an expanded file name into a shared directory
+// prefix and a base name, at the last '/'. The prefix is either empty or
+// ends in '/', and prefix+base is always exactly the expanded name.
+func splitFileName(file string) (dir, base string) {
+	slash := strings.LastIndexByte(file, '/')
+	return file[:slash+1], file[slash+1:]
+}
+
 // generateFilenameTabs creates LUTs needed for filename lookup. Returns a slice
 // of the index at which each CU begins in runtime.cutab.
 //
@@ -548,14 +556,27 @@ func walkFilenames(ctxt *Link, funcs []loader.Sym, f func(*sym.CompilationUnit, 
 //	   ..
 //
 //	runtime.filetab
-//	   filename[0]
-//	   filename[1]
+//	  uint32 ndir
+//	  ndir*uint32   offset of each NUL-terminated directory string,
+//	                relative to the start of the table
+//	  dir strings   NUL-terminated, contiguous, in index order
+//	  file entries  uvarint(dir index) ++ base name ++ NUL
+//
+// The compact pclntab format (abi.CosmoPCLnTabMagic) shares directory
+// prefixes between file names: a cutab value addresses one of the trailing
+// file entries, and the full name is dir+base (see splitFileName).
+// Directory indexes are assigned by descending use count so the hottest
+// directories get 1-byte uvarints. The entries start directly after the
+// last directory string, which is how debug/gosym iterates them.
 //
 // Looking up a filename then becomes:
 //  0. Given a func, and filename index [K]
 //  1. Get Func.CUIndex:       M := func.cuOffset
-//  2. Find filename offset:   fileOffset := runtime.cutab[M+K]
-//  3. Get the filename:       getcstring(runtime.filetab[fileOffset])
+//  2. Find the entry offset:  fileOffset := runtime.cutab[M+K]
+//  3. Decode the entry:       dir, base at runtime.filetab[fileOffset]
+//
+// Keep in sync with runtime/symtab.go:funcfilePieces and
+// debug/gosym/pclntab.go:fileString,initFileMap (verCosmo).
 func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.CompilationUnit, funcs []loader.Sym) []uint32 {
 	// On a per-CU basis, keep track of all the filenames we need.
 	//
@@ -571,18 +592,17 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 	cuEntries := make([]goobj.CUFileIndex, len(compUnits))
 	fileOffsets := make(map[string]uint32)
 
-	// Walk the filenames.
-	// We store the total filename string length we need to load, and the max
-	// file index we've seen per CU so we can calculate how large the
-	// CU->global table needs to be.
-	var fileSize int64
+	// Walk the filenames, collecting the unique raw filenames in first-seen
+	// order and the max file index we've seen per CU so we can calculate
+	// how large the CU->global table needs to be.
+	var fileList []string
 	walkFilenames(ctxt, funcs, func(cu *sym.CompilationUnit, i goobj.CUFileIndex) {
-		// Note we use the raw filename for lookup, but use the expanded filename
-		// when we save the size.
+		// Note we use the raw filename for lookup, but store the
+		// expanded filename.
 		filename := cu.FileTable[i]
 		if _, ok := fileOffsets[filename]; !ok {
-			fileOffsets[filename] = uint32(fileSize)
-			fileSize += int64(len(expandFile(filename)) + 1) // NULL terminate
+			fileOffsets[filename] = 0 // real offset assigned below
+			fileList = append(fileList, filename)
 		}
 
 		// Find the maximum file index we've seen.
@@ -590,6 +610,51 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 			cuEntries[cu.PclnIndex] = i + 1 // Store max + 1
 		}
 	})
+
+	// Collect the unique directories and count how often each is used.
+	type dirInfo struct {
+		idx   int // final directory index
+		count int
+	}
+	dirs := make(map[string]*dirInfo)
+	var dirList []string // first-seen order, then sorted by use count
+	for _, filename := range fileList {
+		expanded := expandFile(filename)
+		dir, base := splitFileName(expanded)
+		if dir+base != expanded || (dir != "" && dir[len(dir)-1] != '/') {
+			panic(fmt.Sprintf("bad file name split: %q -> %q + %q", expanded, dir, base))
+		}
+		d := dirs[dir]
+		if d == nil {
+			d = &dirInfo{}
+			dirs[dir] = d
+			dirList = append(dirList, dir)
+		}
+		d.count++
+	}
+
+	// Assign directory indexes by descending use count (ties broken by
+	// first-seen order, keeping the layout deterministic).
+	slices.SortStableFunc(dirList, func(a, b string) int {
+		return cmp.Compare(dirs[b].count, dirs[a].count)
+	})
+	for i, d := range dirList {
+		dirs[d].idx = i
+	}
+
+	// Lay out the table: header, directory offset table, directory
+	// strings, then one entry per file.
+	fileSize := int64(4 + 4*len(dirList))
+	dirOffs := make([]uint32, len(dirList))
+	for i, d := range dirList {
+		dirOffs[i] = uint32(fileSize)
+		fileSize += int64(len(d) + 1) // NULL terminate
+	}
+	for _, filename := range fileList {
+		dir, base := splitFileName(expandFile(filename))
+		fileOffsets[filename] = uint32(fileSize)
+		fileSize += uvarintLen(uint64(dirs[dir].idx)) + int64(len(base)+1) // NULL terminate
+	}
 
 	// Calculate the size of the runtime.cutab variable.
 	var totalEntries uint32
@@ -628,13 +693,21 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 	writeFiletab := func(ctxt *Link, s loader.Sym) {
 		sb := ctxt.loader.MakeSymbolUpdater(s)
 
-		// Write the strings.
+		off := sb.SetUint32(ctxt.Arch, 0, uint32(len(dirList)))
+		for i := range dirList {
+			off = sb.SetUint32(ctxt.Arch, off, dirOffs[i])
+		}
+		for i, d := range dirList {
+			sb.AddCStringAt(int64(dirOffs[i]), d)
+		}
 		for filename, loc := range fileOffsets {
-			sb.AddStringAt(int64(loc), expandFile(filename))
+			dir, base := splitFileName(expandFile(filename))
+			end := setUvarint(sb, ctxt.Arch, int64(loc), uint64(dirs[dir].idx))
+			sb.AddCStringAt(end, base)
 		}
 	}
 	state.nfiles = uint32(len(fileOffsets))
-	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", fileSize, 1, writeFiletab)
+	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", fileSize, 4, writeFiletab)
 
 	return cuOffsets
 }
@@ -1138,7 +1211,10 @@ func (ctxt *Link) pclntab(container loader.Bitmap) *pclntab {
 	//            uint32 offset into runtime.filetab for the filename[j]
 	//
 	//      runtime.filetab
-	//        []null terminated filename strings
+	//        uint32 count + uint32 offsets of the shared directory
+	//        strings, the NUL terminated directory strings, then per-file
+	//        entries: uvarint dir index + NUL terminated base name
+	//        (see generateFilenameTabs)
 	//
 	//      runtime.pctab
 	//        []byte of deduplicated pc data.

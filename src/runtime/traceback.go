@@ -799,8 +799,8 @@ func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
 	if pc > f.entry() {
 		tracepc -= sys.PCQuantum
 	}
-	file, line := funcline(f, tracepc)
-	print("\t", file, ":", line)
+	fdir, fbase, line := funclinePieces(f, tracepc)
+	print("\t", fdir, fbase, ":", line)
 	if pc > f.entry() {
 		print(" +", hex(pc-f.entry()))
 	}
@@ -990,7 +990,7 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int) (n, lastN int) {
 			}
 
 			npfx, name := sf.namePieces()
-			file, line := iu.fileLine(uf)
+			fdir, fbase, line := iu.fileLinePieces(uf)
 			// Print during crash.
 			//	main(0x1, 0x2, 0x3)
 			//		/home/rsc/go/src/runtime/x.go:23 +0xf
@@ -1004,7 +1004,7 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int) (n, lastN int) {
 				printArgs(f, argp, u.symPC())
 			}
 			print(")\n")
-			print("\t", file, ":", line)
+			print("\t", fdir, fbase, ":", line)
 			if !iu.isInlined(uf) {
 				if u.frame.pc > f.entry() {
 					print(" +", hex(u.frame.pc-f.entry()))
@@ -1077,11 +1077,11 @@ func printAncestorTraceback(ancestor ancestorInfo) {
 // goroutine being created.
 func printAncestorTracebackFuncInfo(f funcInfo, pc uintptr) {
 	u, uf := newInlineUnwinder(f, pc)
-	file, line := u.fileLine(uf)
+	fdir, fbase, line := u.fileLinePieces(uf)
 	npfx, name := u.srcFunc(uf).namePieces()
 	printFuncName(npfx, name)
 	print("(...)\n")
-	print("\t", file, ":", line)
+	print("\t", fdir, fbase, ":", line)
 	if pc > f.entry() {
 		print(" +", hex(pc-f.entry()))
 	}
