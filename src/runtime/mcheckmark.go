@@ -264,7 +264,8 @@ func checkFinalizersAndCleanups() {
 			funcInfo := findfunc(ctx.funcPC)
 			if funcInfo.valid() {
 				file, line := funcline(funcInfo, ctx.funcPC)
-				print("  ", funcname(funcInfo), "()\n")
+				fpfx, fname := funcnamePieces(funcInfo)
+				print("  ", fpfx, fname, "()\n")
 				print("      ", file, ":", line, " +", hex(ctx.funcPC-funcInfo.entry()), "\n")
 			} else {
 				print("  <bad pc ", hex(ctx.funcPC), ">\n")
@@ -274,7 +275,8 @@ func checkFinalizersAndCleanups() {
 			createInfo := findfunc(ctx.createPC)
 			if createInfo.valid() {
 				file, line := funcline(createInfo, ctx.createPC)
-				print("  ", funcname(createInfo), "()\n")
+				fpfx, fname := funcnamePieces(createInfo)
+				print("  ", fpfx, fname, "()\n")
 				print("      ", file, ":", line, " +", hex(ctx.createPC-createInfo.entry()), "\n")
 			} else {
 				print("  <bad pc ", hex(ctx.createPC), ">\n")

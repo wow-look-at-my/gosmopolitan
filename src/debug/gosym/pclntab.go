@@ -31,8 +31,10 @@ const (
 	// records are 4-byte aligned with a 40-byte fixed part that drops the
 	// npcdata field (so cuOffset and startLine move up one slot) and
 	// replaces the count/sentinel encoded pcdata and funcdata offset
-	// arrays with presence-bitmap encoded ones. The fields this package
-	// reads are otherwise unchanged.
+	// arrays with presence-bitmap encoded ones. The function name table
+	// shares package-path prefixes: it starts with a uint32 prefix count
+	// and offsets of the NUL-terminated prefix strings, and each name
+	// entry is uvarint(prefix index) plus the NUL-terminated suffix.
 	verCosmo
 )
 
@@ -373,8 +375,25 @@ func (t *LineTable) funcName(off uint32) string {
 	if s, ok := t.funcNames[off]; ok {
 		return s
 	}
-	i := bytes.IndexByte(t.funcnametab[off:], 0)
-	s := string(t.funcnametab[off : off+uint32(i)])
+	var s string
+	if t.version >= verCosmo {
+		// The compact format splits each name into a shared
+		// package-prefix and a suffix: the table starts with a uint32
+		// prefix count and uint32 offsets of the NUL-terminated prefix
+		// strings, and a name entry is uvarint(prefix index) followed
+		// by the NUL-terminated suffix. See
+		// cmd/link/internal/ld/pcln.go:generateFuncnametab.
+		d := t.funcnametab[off:]
+		idx := t.readvarint(&d)
+		i := bytes.IndexByte(d, 0)
+		suffix := d[:i]
+		po := t.binary.Uint32(t.funcnametab[4+4*idx:])
+		j := bytes.IndexByte(t.funcnametab[po:], 0)
+		s = string(t.funcnametab[po:po+uint32(j)]) + string(suffix)
+	} else {
+		i := bytes.IndexByte(t.funcnametab[off:], 0)
+		s = string(t.funcnametab[off : off+uint32(i)])
+	}
 	t.funcNames[off] = s
 	return s
 }

@@ -685,12 +685,14 @@ func adjustpointers(scanp unsafe.Pointer, bv *bitvector, adjinfo *adjustinfo, f 
 				// Looks like a junk value in a pointer slot.
 				// Live analysis wrong?
 				getg().m.traceback = 2
-				print("runtime: bad pointer in frame ", funcname(f), " at ", pp, ": ", hex(p), "\n")
+				fpfx, fname := funcnamePieces(f)
+				print("runtime: bad pointer in frame ", fpfx, fname, " at ", pp, ": ", hex(p), "\n")
 				throw("invalid pointer found on stack")
 			}
 			if minp <= p && p < maxp {
 				if stackDebug >= 3 {
-					print("adjust ptr ", hex(p), " ", funcname(f), "\n")
+					fpfx, fname := funcnamePieces(f)
+					print("adjust ptr ", hex(p), " ", fpfx, fname, "\n")
 				}
 				if useCAS {
 					ppu := (*unsafe.Pointer)(unsafe.Pointer(pp))
@@ -713,7 +715,8 @@ func adjustframe(frame *stkframe, adjinfo *adjustinfo) {
 	}
 	f := frame.fn
 	if stackDebug >= 2 {
-		print("    adjusting ", funcname(f), " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
+		fpfx, fname := funcnamePieces(f)
+		print("    adjusting ", fpfx, fname, " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
 	}
 
 	// Adjust saved frame pointer if there is one.
@@ -1059,13 +1062,13 @@ func newstack() {
 		morebuf := thisg.m.morebuf
 		gp.syscallsp = morebuf.sp
 		gp.syscallpc = morebuf.pc
-		pcname, pcoff := "(unknown)", uintptr(0)
+		pcpfx, pcname, pcoff := "", "(unknown)", uintptr(0)
 		f := findfunc(gp.sched.pc)
 		if f.valid() {
-			pcname = funcname(f)
+			pcpfx, pcname = funcnamePieces(f)
 			pcoff = gp.sched.pc - f.entry()
 		}
-		print("runtime: newstack at ", pcname, "+", hex(pcoff),
+		print("runtime: newstack at ", pcpfx, pcname, "+", hex(pcoff),
 			" sp=", hex(gp.sched.sp), " stack=[", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n",
 			"\tmorebuf={pc:", hex(morebuf.pc), " sp:", hex(morebuf.sp), " lr:", hex(morebuf.lr), "}\n",
 			"\tsched={pc:", hex(gp.sched.pc), " sp:", hex(gp.sched.sp), " lr:", hex(gp.sched.lr), " ctxt:", gp.sched.ctxt, "}\n")

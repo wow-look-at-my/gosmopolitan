@@ -1083,7 +1083,7 @@ type _func struct {
 	sys.NotInHeap // Only in static data
 
 	entryOff uint32 // start pc, as offset from moduledata.text
-	nameOff  int32  // function name, as index into moduledata.funcnametab.
+	nameOff  int32  // function name, as offset of a prefix-split name entry in moduledata.funcnametab (see funcNamePieces)
 
 	args        int32  // in/out args size
 	deferreturn uint32 // offset of start of a deferreturn call instruction from entry, if any.

@@ -23,11 +23,15 @@ const (
 	// PCLnTabMagic value used in Go 1.20 and later.
 	// A ":" was added to generated symbol names (#37762).
 	Go120PCLnTabMagic PCLnTabMagic = 0xfffffff1
-	// PCLnTabMagic value used by this fork's compact functab format:
+	// PCLnTabMagic value used by this fork's compact pclntab format:
 	// _func records are 4-byte aligned with a 40-byte fixed part, and the
 	// trailing pcdata/funcdata offset arrays store only present entries,
 	// described by the pcdataMask/funcdataMask presence bitmaps (which
 	// replaced the npcdata count and the 0 / ^uint32(0) sentinel slots).
+	// The function name table shares package-path prefixes between names:
+	// it holds a uint32 prefix count, the prefix string offsets and the
+	// NUL-terminated prefix strings, followed by per-name entries of
+	// uvarint(prefix index) plus the NUL-terminated name suffix.
 	// See runtime/runtime2.go:_func and cmd/link/internal/ld/pcln.go.
 	CosmoPCLnTabMagic PCLnTabMagic = 0xffffffc1
 

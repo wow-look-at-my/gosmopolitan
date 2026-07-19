@@ -377,27 +377,136 @@ func walkFuncs(ctxt *Link, funcs []loader.Sym, f func(loader.Sym)) {
 	}
 }
 
+// splitFuncName splits a function name into a shared package-path prefix
+// and a per-name suffix, at the first '.' that follows the last '/' before
+// any '['. The prefix is either empty or ends in '.', and prefix+suffix is
+// always exactly the original name. Keeping the split before any '['
+// guarantees generic shape brackets live entirely in the suffix, which
+// runtime.funcNamePiecesForPrint relies on.
+func splitFuncName(name string) (prefix, suffix string) {
+	end := strings.IndexByte(name, '[')
+	if end < 0 {
+		end = len(name)
+	}
+	slash := strings.LastIndexByte(name[:end], '/')
+	dot := strings.IndexByte(name[slash+1:end], '.')
+	if dot < 0 {
+		return "", name
+	}
+	i := slash + 1 + dot + 1
+	return name[:i], name[i:]
+}
+
+// uvarintLen returns the number of bytes the uvarint encoding of v takes.
+func uvarintLen(v uint64) int64 {
+	n := int64(1)
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
+}
+
+// setUvarint writes v at off as a uvarint, returning the offset past it.
+func setUvarint(sb *loader.SymbolBuilder, arch *sys.Arch, off int64, v uint64) int64 {
+	for v >= 0x80 {
+		off = sb.SetUint8(arch, off, byte(v)|0x80)
+		v >>= 7
+	}
+	return sb.SetUint8(arch, off, byte(v))
+}
+
 // generateFuncnametab creates the function name table. Returns a map of
-// func symbol to the name offset in runtime.funcnamtab.
+// func symbol to the name offset in runtime.funcnametab.
+//
+// The compact pclntab format (abi.CosmoPCLnTabMagic) shares package-path
+// prefixes between names instead of storing every name whole:
+//
+//	uint32 nprefix
+//	nprefix*uint32  offset of each NUL-terminated prefix string,
+//	                relative to the start of the table
+//	prefix strings  NUL-terminated, contiguous, in index order
+//	name entries    uvarint(prefix index) ++ suffix ++ NUL
+//
+// A name offset (_func.nameOff, inlinedCall.nameOff) addresses one of the
+// trailing entries; the full name is prefix+suffix (see splitFuncName).
+// Prefix indexes are assigned by descending use count so the hottest
+// prefixes get 1-byte uvarints. Entries follow the header, offset table
+// and prefix strings, so offset 0 can never address a real entry,
+// preserving the runtime's nameOff==0 "no name" sentinel.
+//
+// Keep in sync with runtime/symtab.go:(*moduledata).funcNamePieces and
+// debug/gosym/pclntab.go:funcName (verCosmo).
 func (state *pclntab) generateFuncnametab(ctxt *Link, funcs []loader.Sym) map[loader.Sym]uint32 {
+	ldr := ctxt.loader
 	nameOffsets := make(map[loader.Sym]uint32, state.nfunc)
 
-	// Write the null terminated strings.
+	// Collect the unique function syms in walk order and count how often
+	// each name prefix is used.
+	type prefixInfo struct {
+		idx   int // final prefix index
+		count int
+	}
+	prefixes := make(map[string]*prefixInfo)
+	var prefixList []string // first-seen order, then sorted by use count
+	var walkSyms []loader.Sym
+	walkFuncs(ctxt, funcs, func(s loader.Sym) {
+		walkSyms = append(walkSyms, s)
+		name := ldr.SymName(s)
+		prefix, suffix := splitFuncName(name)
+		if prefix+suffix != name || (prefix != "" && prefix[len(prefix)-1] != '.') {
+			panic(fmt.Sprintf("bad function name split: %q -> %q + %q", name, prefix, suffix))
+		}
+		p := prefixes[prefix]
+		if p == nil {
+			p = &prefixInfo{}
+			prefixes[prefix] = p
+			prefixList = append(prefixList, prefix)
+		}
+		p.count++
+	})
+
+	// Assign prefix indexes by descending use count (ties broken by
+	// first-seen order, keeping the layout deterministic) so the
+	// most-referenced prefixes get the shortest uvarint encodings.
+	slices.SortStableFunc(prefixList, func(a, b string) int {
+		return cmp.Compare(prefixes[b].count, prefixes[a].count)
+	})
+	for i, p := range prefixList {
+		prefixes[p].idx = i
+	}
+
+	// Lay out the table: header, prefix offset table, prefix strings, then
+	// one entry per name.
+	size := int64(4 + 4*len(prefixList))
+	prefixOffs := make([]uint32, len(prefixList))
+	for i, p := range prefixList {
+		prefixOffs[i] = uint32(size)
+		size += int64(len(p) + 1) // NULL terminate
+	}
+	for _, s := range walkSyms {
+		prefix, suffix := splitFuncName(ldr.SymName(s))
+		nameOffsets[s] = uint32(size)
+		size += uvarintLen(uint64(prefixes[prefix].idx)) + int64(len(suffix)+1) // NULL terminate
+	}
+
 	writeFuncNameTab := func(ctxt *Link, s loader.Sym) {
 		symtab := ctxt.loader.MakeSymbolUpdater(s)
+		off := symtab.SetUint32(ctxt.Arch, 0, uint32(len(prefixList)))
+		for i := range prefixList {
+			off = symtab.SetUint32(ctxt.Arch, off, prefixOffs[i])
+		}
+		for i, p := range prefixList {
+			symtab.AddCStringAt(int64(prefixOffs[i]), p)
+		}
 		for s, off := range nameOffsets {
-			symtab.AddCStringAt(int64(off), ctxt.loader.SymName(s))
+			prefix, suffix := splitFuncName(ctxt.loader.SymName(s))
+			end := setUvarint(symtab, ctxt.Arch, int64(off), uint64(prefixes[prefix].idx))
+			symtab.AddCStringAt(end, suffix)
 		}
 	}
 
-	// Loop through the CUs, and calculate the size needed.
-	var size int64
-	walkFuncs(ctxt, funcs, func(s loader.Sym) {
-		nameOffsets[s] = uint32(size)
-		size += int64(len(ctxt.loader.SymName(s)) + 1) // NULL terminate
-	})
-
-	state.funcnametab = state.addGeneratedSym(ctxt, "runtime.funcnametab", size, 1, writeFuncNameTab)
+	state.funcnametab = state.addGeneratedSym(ctxt, "runtime.funcnametab", size, 4, writeFuncNameTab)
 	return nameOffsets
 }
 
@@ -1018,7 +1127,10 @@ func (ctxt *Link) pclntab(container loader.Bitmap) *pclntab {
 	//        offset to runtime.pclntab_old from beginning of runtime.pcheader
 	//
 	//      runtime.funcnametab
-	//        []list of null terminated function names
+	//        uint32 count + uint32 offsets of the shared package-prefix
+	//        strings, the NUL terminated prefix strings, then per-name
+	//        entries: uvarint prefix index + NUL terminated name suffix
+	//        (see generateFuncnametab)
 	//
 	//      runtime.cutab
 	//        for i=0..#CUs

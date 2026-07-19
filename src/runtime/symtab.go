@@ -9,6 +9,7 @@ import (
 	"internal/goarch"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
+	"internal/stringslite"
 	"unsafe"
 )
 
@@ -638,13 +639,15 @@ func moduledataverify1(datap *moduledata) {
 		if datap.ftab[i].entryoff > datap.ftab[i+1].entryoff {
 			f1 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff])), datap}
 			f2 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i+1].funcoff])), datap}
-			f2name := "end"
+			f2pfx, f2name := "", "end"
 			if i+1 < nftab {
-				f2name = funcname(f2)
+				f2pfx, f2name = funcnamePieces(f2)
 			}
-			println("function symbol table not sorted by PC offset:", hex(datap.ftab[i].entryoff), funcname(f1), ">", hex(datap.ftab[i+1].entryoff), f2name, ", plugin:", datap.pluginpath)
+			f1pfx, f1name := funcnamePieces(f1)
+			print("function symbol table not sorted by PC offset: ", hex(datap.ftab[i].entryoff), " ", f1pfx, f1name, " > ", hex(datap.ftab[i+1].entryoff), " ", f2pfx, f2name, " , plugin: ", datap.pluginpath, "\n")
 			for j := 0; j <= i; j++ {
-				println("\t", hex(datap.ftab[j].entryoff), funcname(funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[j].funcoff])), datap}))
+				fjpfx, fjname := funcnamePieces(funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[j].funcoff])), datap})
+				print("\t ", hex(datap.ftab[j].entryoff), " ", fjpfx, fjname, "\n")
 			}
 			if GOOS == "aix" && isarchive {
 				println("-Wl,-bnoobjreorder is mandatory on aix/ppc64 with c-archive")
@@ -754,12 +757,48 @@ func (md *moduledata) textOff(pc uintptr) (uint32, bool) {
 	return res, true
 }
 
-// funcName returns the string at nameOff in the function name table.
-func (md *moduledata) funcName(nameOff int32) string {
+// funcNamePieces returns the function name at nameOff in two pieces: the
+// shared package-path prefix and the per-name suffix. The full name is the
+// concatenation prefix+suffix; the prefix is either empty or ends in '.',
+// and generic "[...]" brackets always live entirely in the suffix. Both
+// pieces alias pclntab memory, so this does not allocate and is safe on
+// traceback, panic and GC print paths. See
+// cmd/link/internal/ld/pcln.go:generateFuncnametab for the table layout.
+func (md *moduledata) funcNamePieces(nameOff int32) (string, string) {
 	if nameOff == 0 {
-		return ""
+		return "", ""
 	}
-	return gostringnocopy(&md.funcnametab[nameOff])
+	tab := md.funcnametab
+	n, idx := readvarint(tab[nameOff:])
+	suffix := gostringnocopy(&tab[uint32(nameOff)+n])
+	prefixOff := *(*uint32)(unsafe.Pointer(&tab[4+4*uintptr(idx)]))
+	return gostringnocopy(&tab[prefixOff]), suffix
+}
+
+// funcName returns the full name at nameOff in the function name table,
+// allocating if the name has a split-off prefix. Print paths that must not
+// allocate use funcNamePieces instead.
+func (md *moduledata) funcName(nameOff int32) string {
+	prefix, suffix := md.funcNamePieces(nameOff)
+	if prefix == "" {
+		return suffix
+	}
+	return prefix + suffix
+}
+
+// hasPrefixPieces reports whether the logical concatenation a+b starts
+// with prefix, without allocating.
+func hasPrefixPieces(a, b, prefix string) bool {
+	if len(a) >= len(prefix) {
+		return a[:len(prefix)] == prefix
+	}
+	return a == prefix[:len(a)] && stringslite.HasPrefix(b, prefix[len(a):])
+}
+
+// equalPieces reports whether the logical concatenation a+b equals s,
+// without allocating.
+func equalPieces(a, b, s string) bool {
+	return len(a)+len(b) == len(s) && hasPrefixPieces(a, b, s)
 }
 
 // Despite being an exported symbol,
@@ -984,6 +1023,15 @@ func (s srcFunc) name() string {
 	return s.datap.funcName(s.nameOff)
 }
 
+// namePieces returns the name of s in two table-aliasing pieces
+// (see (*moduledata).funcNamePieces). It does not allocate.
+func (s srcFunc) namePieces() (string, string) {
+	if s.datap == nil {
+		return "", ""
+	}
+	return s.datap.funcNamePieces(s.nameOff)
+}
+
 //go:linkname badSrcFuncName runtime.srcFunc.name
 func badSrcFuncName(srcFunc) string
 
@@ -1125,7 +1173,8 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 		return -1, 0
 	}
 
-	print("runtime: invalid pc-encoded table f=", funcname(f), " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
+	fpfx, fname := funcnamePieces(f)
+	print("runtime: invalid pc-encoded table f=", fpfx, fname, " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
 
 	p = datap.pctab[off:]
 	pc = f.entry()
@@ -1143,6 +1192,9 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	return -1, 0
 }
 
+// funcname returns the full name of f, allocating if the name has a
+// split-off package prefix. Print paths that must not allocate use
+// funcnamePieces instead.
 func funcname(f funcInfo) string {
 	if !f.valid() {
 		return ""
@@ -1150,8 +1202,24 @@ func funcname(f funcInfo) string {
 	return f.datap.funcName(f.nameOff)
 }
 
+// funcnamePieces returns the name of f in two table-aliasing pieces
+// (see (*moduledata).funcNamePieces). It does not allocate.
+func funcnamePieces(f funcInfo) (string, string) {
+	if !f.valid() {
+		return "", ""
+	}
+	return f.datap.funcNamePieces(f.nameOff)
+}
+
 func funcpkgpath(f funcInfo) string {
-	name := funcNameForPrint(funcname(f))
+	prefix, suffix := funcnamePieces(f)
+	if prefix != "" {
+		// The prefix is the package qualifier including the trailing
+		// dot (see cmd/link/internal/ld/pcln.go:splitFuncName), which
+		// is exactly where the scan below would split the full name.
+		return prefix[:len(prefix)-1]
+	}
+	name := funcNameForPrint(suffix)
 	i := len(name) - 1
 	for ; i > 0; i-- {
 		if name[i] == '/' {
@@ -1210,7 +1278,8 @@ func funcline(f funcInfo, targetpc uintptr) (file string, line int32) {
 func funcspdelta(f funcInfo, targetpc uintptr) int32 {
 	x, _ := pcvalue(f, f.pcsp, targetpc, true)
 	if debugPcln && x&(goarch.PtrSize-1) != 0 {
-		print("invalid spdelta ", funcname(f), " ", hex(f.entry()), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
+		fpfx, fname := funcnamePieces(f)
+		print("invalid spdelta ", fpfx, fname, " ", hex(f.entry()), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
 		throw("bad spdelta")
 	}
 	return x
