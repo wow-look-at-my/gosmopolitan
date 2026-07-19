@@ -238,3 +238,151 @@ func slimELFDebug(elf []byte) ([]byte, error) {
 	// the preserved headers stay valid.
 	return out, nil
 }
+
+// apeCompactDropDebug lists the .debug_* sections the compact in-binary
+// view leaves out: location lists, which serve variable/argument
+// inspection (about a fifth of the compressed DWARF - inspecting
+// variables is sidecar territory, and gdb degrades them cleanly to
+// <optimized out>). Everything a file:line backtrace needs stays:
+// .debug_info/.debug_abbrev for the DIE tree, .debug_line for line
+// tables, .debug_rnglists/.debug_addr for DWARF v5 PC->CU mapping, and
+// .debug_frame for CFI - measured at only ~50 KB zlib'd per arch, and
+// without it gdb's fallback unwinder emits a bogus frame when stopped in
+// a function prologue (verified: breakpoint at main.fizzbuzz+0 grew a
+// "?? ()" frame between it and main.main). The slim sidecars keep
+// everything, so full-fidelity debugging remains one file away.
+var apeCompactDropDebug = map[string]bool{
+	".debug_loclists": true,
+}
+
+// apeCompactView describes one payload's section-header view inside the
+// compact debug tail: the values its ELF header must carry so that the
+// assimilated binary exposes the view to debuggers.
+type apeCompactView struct {
+	shoff    uint64 // absolute APE file offset of the section header table
+	shnum    uint16
+	shstrndx uint16
+}
+
+// appendCompactDebugView appends one payload's compact debug view to tail
+// (whose first byte will land at absolute APE file offset tailFileOff) and
+// returns the grown tail plus the header fields describing the view.
+//
+// The view is a complete section table for the assimilated binary:
+//
+//   - Allocated sections keep their types and contents by POINTING INTO
+//     THE PAYLOAD (sh_offset rebased by payloadOff): the APE already
+//     ships those bytes in its loadable span, so they cost nothing.
+//   - .symtab, .strtab, .shstrtab, and the kept .debug_* sections have
+//     their contents packed into the tail at absolute offsets.
+//   - Sections in apeCompactDropDebug are removed and the table is
+//     renumbered (sh_link and e_shstrndx remapped, symbol st_shndx
+//     values rewritten - in practice unchanged, since symbols reference
+//     only allocated sections, which precede every dropped section).
+//
+// pristine must be the payload's ELF image as its linker produced it
+// (payload-relative offsets, section table intact), payloadOff the file
+// offset writeAPEFile will place it at.
+func appendCompactDebugView(tail []byte, tailFileOff uint64, pristine []byte, payloadOff uint64) ([]byte, apeCompactView, error) {
+	secs, err := parseELFSections(pristine)
+	if err != nil {
+		return nil, apeCompactView{}, err
+	}
+
+	// Decide what survives and assign new indices.
+	newIdx := make(map[int]int, len(secs))
+	kept := make([]*elfSectionView, 0, len(secs))
+	for i, s := range secs {
+		if s.flags()&elfShfAlloc == 0 && apeCompactDropDebug[s.name] {
+			continue
+		}
+		newIdx[i] = len(kept)
+		kept = append(kept, s)
+	}
+
+	remap := func(old uint32, what string) (uint32, error) {
+		if old == 0 {
+			return 0, nil
+		}
+		if int(old) >= len(secs) {
+			return 0, fmt.Errorf("%s references section %d, beyond the %d-entry table", what, old, len(secs))
+		}
+		n, ok := newIdx[int(old)]
+		if !ok {
+			return 0, fmt.Errorf("%s references dropped section %d (%s)", what, old, secs[old].name)
+		}
+		return uint32(n), nil
+	}
+
+	for i, s := range secs {
+		if _, ok := newIdx[i]; !ok {
+			continue
+		}
+		if l, err := remap(s.link(), s.name+" sh_link"); err != nil {
+			return nil, apeCompactView{}, err
+		} else {
+			s.setLink(l)
+		}
+		switch {
+		case s.typ() == elfShtNull:
+		case s.flags()&elfShfAlloc != 0:
+			// Contents (if any) live inside the embedded payload.
+			s.setOff(payloadOff + s.off())
+		default:
+			content := pristine[s.off() : s.off()+s.size()]
+			if s.typ() == elfShtSymtab {
+				remapped, err := remapSymtabShndx(content, newIdx, secs)
+				if err != nil {
+					return nil, apeCompactView{}, err
+				}
+				content = remapped
+			}
+			tail = alignTo(tail, s.addralign())
+			s.setOff(tailFileOff + uint64(len(tail)))
+			tail = append(tail, content...)
+		}
+	}
+
+	tail = alignTo(tail, 8)
+	view := apeCompactView{
+		shoff: tailFileOff + uint64(len(tail)),
+		shnum: uint16(len(kept)),
+	}
+	for _, s := range kept {
+		tail = append(tail, s.hdr...)
+	}
+	shstrndx := int(binary.LittleEndian.Uint16(pristine[62:64]))
+	n, ok := newIdx[shstrndx]
+	if !ok {
+		return nil, apeCompactView{}, fmt.Errorf(".shstrtab (section %d) was dropped", shstrndx)
+	}
+	view.shstrndx = uint16(n)
+	return tail, view, nil
+}
+
+// remapSymtabShndx returns a copy of an Elf64 .symtab's contents with each
+// symbol's st_shndx rewritten through newIdx. Symbols referencing dropped
+// sections are an error (Go symbols reference only allocated sections,
+// which the compact view always keeps).
+func remapSymtabShndx(symtab []byte, newIdx map[int]int, secs []*elfSectionView) ([]byte, error) {
+	const symSize = 24 // Elf64_Sym
+	if len(symtab)%symSize != 0 {
+		return nil, fmt.Errorf(".symtab size %d is not a multiple of %d", len(symtab), symSize)
+	}
+	out := append([]byte(nil), symtab...)
+	for off := 0; off < len(out); off += symSize {
+		shndx := binary.LittleEndian.Uint16(out[off+6 : off+8])
+		if shndx == 0 || shndx >= 0xff00 { // SHN_UNDEF or reserved (SHN_ABS etc.)
+			continue
+		}
+		if int(shndx) >= len(secs) {
+			return nil, fmt.Errorf("symbol at %#x references section %d, beyond the %d-entry table", off, shndx, len(secs))
+		}
+		n, ok := newIdx[int(shndx)]
+		if !ok {
+			return nil, fmt.Errorf("symbol at %#x references dropped section %d (%s)", off, shndx, secs[shndx].name)
+		}
+		binary.LittleEndian.PutUint16(out[off+6:off+8], uint16(n))
+	}
+	return out, nil
+}
