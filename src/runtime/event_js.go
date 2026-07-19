@@ -60,6 +60,24 @@ func (e *timeoutEvent) clear() {
 	clearTimeoutEvent(e.id)
 }
 
+// wasmIdleMarkYieldWakeNs is how soon to wake the runtime after
+// throttling an idle mark drain to let the event loop run (see
+// wasmIdleMarkYield in mgcmark.go).
+const wasmIdleMarkYieldWakeNs = 1e6 // 1ms
+
+// wasmIdleMarkCanYield reports whether skipping idle mark work would let
+// the scheduler yield to the JavaScript event loop through the normal
+// end-of-entry path: the newest call from JavaScript has finished its Go
+// work (returned) and beforeIdle would resume its goroutine, which hands
+// control back to JavaScript. If there is no event (e.g. a go:wasmexport
+// call is being processed after a stack switch) or the newest event is
+// still running Go code, "idle" here must not return to the host, so
+// idle mark work should proceed as upstream would.
+func wasmIdleMarkCanYield() bool {
+	n := len(events)
+	return n > 0 && events[n-1].returned
+}
+
 // The timeout event started by beforeIdle.
 var idleTimeout *timeoutEvent
 
@@ -82,6 +100,19 @@ var idleGCNudge *timeoutEvent
 //
 //go:yeswritebarrierrec
 func eventBeforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
+	if wasmIdleMarkYield && gcBlackenEnabled != 0 {
+		// Idle marking was throttled so the event loop can run (see
+		// gcDrainMarkWorkerIdle). Make sure the runtime is woken again
+		// shortly, so the mark phase keeps making progress even if no
+		// timer is due.
+		if now == 0 {
+			now = nanotime()
+		}
+		if wake := now + wasmIdleMarkYieldWakeNs; pollUntil == 0 || wake < pollUntil {
+			pollUntil = wake
+		}
+	}
+
 	delay := int64(-1)
 	if pollUntil != 0 {
 		// round up to prevent setTimeout being called early
@@ -205,6 +236,9 @@ func handleEvent() {
 	}
 
 	sched.idleTime.Add(nanotime() - idleStart)
+
+	// The event loop just ran; idle marking may resume.
+	wasmIdleMarkYield = false
 
 	e := &event{
 		gp:       getg(),
