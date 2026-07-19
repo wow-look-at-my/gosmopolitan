@@ -16,6 +16,14 @@
 TEXT runtime·osyield(SB), NOSPLIT, $0-0
 	RET
 
+// publicationBarrier: a store-store barrier so that an object's
+// initialized contents are visible to other threads before the pointer
+// that publishes it. atomic.fence (0xFE 0x03) is a full seq-cst fence,
+// which subsumes it.
+TEXT ·publicationBarrier(SB), NOSPLIT, $0-0
+	AtomicFence
+	RET
+
 // func futexsleep(addr *uint32, val uint32, ns int64)
 // Blocks while *addr == val, for at most ns nanoseconds (ns < 0: forever),
 // via memory.atomic.wait32. The result (0 woken / 1 value mismatch /

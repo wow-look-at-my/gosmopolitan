@@ -197,8 +197,8 @@ TEXT runtime·asminit(SB), NOSPLIT, $0-0
 	// No per-thread init.
 	RET
 
-TEXT ·publicationBarrier(SB), NOSPLIT, $0-0
-	RET
+// publicationBarrier lives in sys_wasm_nothreads.s (no-op: single
+// thread) and sys_wasmthreads.s (a real atomic fence).
 
 TEXT runtime·procyieldAsm(SB), NOSPLIT, $0-0 // FIXME
 	RET

@@ -167,3 +167,10 @@ func checkTimeouts() {
 func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 	return eventBeforeIdle(now, pollUntil)
 }
+
+// wasmThreadsHandleEventEntry is the GOWASM=threads hook at the top of
+// handleEvent (see lock_jsthreads.go). Without threads the main M never
+// parks in the event loop from g0, so there is nothing to intercept.
+func wasmThreadsHandleEventEntry() bool {
+	return false
+}
