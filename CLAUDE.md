@@ -263,6 +263,16 @@ go tool compile -bench=out.txt file.go
   place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
   upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
   this automatically).
+- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
+  Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
+  40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
+  prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B
+  InlTree records. Consequence: upstream debug/gosym-based tools cannot parse
+  fork binaries; the fork's own debug/gosym, objdump, nm, and addr2line are
+  updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and
+  readers must move in lockstep: `cmd/link/internal/ld/pcln.go` +
+  `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <->
+  `debug/gosym`.
 
 ## Local Verify Loop
 
