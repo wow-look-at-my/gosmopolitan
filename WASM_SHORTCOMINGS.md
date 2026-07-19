@@ -528,6 +528,14 @@ running goroutine for the length of the profiling window:
 - **Known issues (B3)**: (1) parallel speedup depends on pool headroom
   (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
   otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an
-  event handler blocked forever can head-of-line-block later host events.
+  event handler blocked forever can head-of-line-block later host events;
+  (3) a rare `fatal error: wirep: invalid p state` (p->m set while _Pidle)
+  in the GOMAXPROCS=4 runtime suite (~1/10 batches; not observed at the
+  default GOMAXPROCS=1 or =2) - a P handoff race in the multi-P bring-up,
+  tracked for the B4 bug sweep; (4) syscall/js's main-thread affinity is
+  per-call best-effort: a goroutine can in principle be preempted and
+  migrated off the main M between mustBeMainThread's migrate and the host
+  call (the Value-finalizer instance of this TOCTOU is fixed by always
+  queueing; full affinity/host-call forwarding is B4).
   Remaining for B4: full main-thread affinity/host-call forwarding,
   memory.grow coordination audit, dedicated mark worker knobs, browser hosts.

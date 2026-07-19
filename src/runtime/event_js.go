@@ -391,6 +391,17 @@ func wasmThreadsOnWorker() bool {
 	return wasmThreadsEnabled && getg().m != &m0
 }
 
+// wasmThreadsBuildEnabled reports whether this program was built with
+// GOWASM=threads (a build-time constant). syscall/js links to it where a
+// per-call runtimeOnWorkerThread check would be a TOCTOU: a preemptible
+// goroutine can migrate between Ms between the check and the host call
+// (see the Value finalizer in syscall/js).
+//
+//go:linkname wasmThreadsBuildEnabled syscall/js.runtimeThreadsEnabled
+func wasmThreadsBuildEnabled() bool {
+	return wasmThreadsEnabled
+}
+
 // wasmThreadsMigrateToMain moves the calling goroutine to the main M
 // under GOWASM=threads: it parks and publishes itself on the migrate
 // queue (see wasmSchedPickMigrated in proc.go), which only the main M's

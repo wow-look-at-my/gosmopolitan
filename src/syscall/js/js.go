@@ -51,11 +51,19 @@ func makeValue(r ref) Value {
 		gcPtr = new(ref)
 		*gcPtr = r
 		runtime.SetFinalizer(gcPtr, func(p *ref) {
-			if runtimeOnWorkerThread() {
+			if runtimeThreadsEnabled() {
 				// GOWASM=threads: the finalizeRef host import is only
 				// available on the main thread, and the GC may run this
-				// finalizer on a worker-thread M. Queue the release; the
-				// next syscall/js operation on the main thread frees it.
+				// finalizer on a worker-thread M. ALWAYS queue the
+				// release (the next syscall/js operation on the main
+				// thread frees it): checking runtimeOnWorkerThread here
+				// and calling finalizeRef directly would be a TOCTOU -
+				// the finalizer goroutine is preemptible, so it can be
+				// migrated to a worker M between the check and the host
+				// call, which then hits the worker instance's throwing
+				// import stub ("finalizeRef called on a worker
+				// instance", observed in the GOMAXPROCS=4 runtime
+				// suite).
 				queueFinalizeRef(*p)
 				return
 			}

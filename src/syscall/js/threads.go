@@ -35,6 +35,11 @@ import (
 // runtime (event_js.go).
 func runtimeOnWorkerThread() bool
 
+// runtimeThreadsEnabled reports whether this program was built with
+// GOWASM=threads at all (a build-time constant, unlike the per-call
+// runtimeOnWorkerThread). Implemented in the runtime (event_js.go).
+func runtimeThreadsEnabled() bool
+
 // runtimeMigrateToMain moves the calling goroutine to the main thread,
 // or reports that it cannot (main thread locked to another goroutine).
 // Implemented in the runtime (event_js.go).
