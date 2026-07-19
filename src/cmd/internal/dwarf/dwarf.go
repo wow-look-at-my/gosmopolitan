@@ -98,6 +98,18 @@ type FnState struct {
 	InlCalls      InlCalls
 	UseBASEntries bool
 
+	// WasmCFAOffset, when nonzero, makes the subprogram's
+	// DW_AT_frame_base a WebAssembly location expression instead of
+	// DW_OP_call_frame_cfa: the value of wasm global 0 (the Go stack
+	// pointer) plus this many bytes. Wasm has no machine registers and
+	// emits no .debug_frame, so DW_OP_call_frame_cfa is unevaluable
+	// there; instead the frame base computes the CFA directly from the
+	// SP global. Variable DW_OP_fbreg offsets then resolve unchanged.
+	// It is set (to framesize+8, see cmd/internal/obj) only when
+	// building for wasm; zero (all other arches) keeps the standard
+	// DW_OP_call_frame_cfa frame base, byte for byte.
+	WasmCFAOffset int64
+
 	dictIndexToOffset []int64
 }
 
@@ -1354,6 +1366,22 @@ func emitHiLoPc(ctxt Context, abbrev int, fns *FnState, st int64, en int64) {
 	}
 }
 
+// frameBaseExpr returns the DW_AT_frame_base location expression for
+// the subprogram described by s. On most architectures that is
+// DW_OP_call_frame_cfa, evaluated by consumers via the .debug_frame
+// call frame information. Wasm emits no .debug_frame (there are no
+// machine registers and no CFA rules to describe), so there the frame
+// base instead computes the CFA directly: the value of wasm global 0
+// (the Go stack pointer; see "DWARF for WebAssembly" in the
+// WebAssembly tool conventions) plus the constant s.WasmCFAOffset.
+func frameBaseExpr(s *FnState) []byte {
+	if s.WasmCFAOffset != 0 {
+		b := []byte{DW_OP_WASM_location, 0x01 /* wasm global */, 0x00 /* SP */, DW_OP_plus_uconst}
+		return AppendUleb128(b, uint64(s.WasmCFAOffset))
+	}
+	return []byte{DW_OP_call_frame_cfa}
+}
+
 // Emit DWARF attributes and child DIEs for a 'concrete' subprogram,
 // meaning the out-of-line copy of a function that was inlined at some
 // point during the compilation of its containing package. The first
@@ -1378,7 +1406,8 @@ func PutConcreteFunc(ctxt Context, s *FnState, isWrapper bool, fncount int) erro
 	emitHiLoPc(ctxt, abbrev, s, 0, s.Size)
 
 	// cfa / frame base
-	putattr(ctxt, s.Info, abbrev, DW_FORM_block1, DW_CLS_BLOCK, 1, []byte{DW_OP_call_frame_cfa})
+	fb := frameBaseExpr(s)
+	putattr(ctxt, s.Info, abbrev, DW_FORM_block1, DW_CLS_BLOCK, int64(len(fb)), fb)
 
 	if isWrapper {
 		putattr(ctxt, s.Info, abbrev, DW_FORM_flag, DW_CLS_FLAG, int64(1), 0)
@@ -1423,7 +1452,8 @@ func PutDefaultFunc(ctxt Context, s *FnState, isWrapper bool) error {
 
 	putattr(ctxt, s.Info, DW_ABRV_FUNCTION, DW_FORM_string, DW_CLS_STRING, int64(len(name)), name)
 	emitHiLoPc(ctxt, abbrev, s, 0, s.Size)
-	putattr(ctxt, s.Info, abbrev, DW_FORM_block1, DW_CLS_BLOCK, 1, []byte{DW_OP_call_frame_cfa})
+	fb := frameBaseExpr(s)
+	putattr(ctxt, s.Info, abbrev, DW_FORM_block1, DW_CLS_BLOCK, int64(len(fb)), fb)
 	if isWrapper {
 		putattr(ctxt, s.Info, abbrev, DW_FORM_flag, DW_CLS_FLAG, int64(1), 0)
 	} else {
@@ -1638,7 +1668,12 @@ func putvar(ctxt Context, s *FnState, v *Var, absfn Sym, fnabbrev, inlIndex int,
 		switch {
 		case v.WithLoclist:
 			break // no location
-		case v.StackOffset == 0:
+		case v.StackOffset == 0 && s.WasmCFAOffset == 0:
+			// The variable is at exactly the CFA. On wasm (where the
+			// frame base is a computed expression rather than
+			// DW_OP_call_frame_cfa, and .debug_frame does not exist)
+			// this shorthand would be unevaluable, so wasm takes the
+			// equivalent DW_OP_fbreg 0 branch below instead.
 			loc = append(loc, DW_OP_call_frame_cfa)
 		default:
 			loc = append(loc, DW_OP_fbreg)
