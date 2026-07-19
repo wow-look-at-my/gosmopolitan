@@ -514,16 +514,20 @@ running goroutine for the length of the profiling window:
   whenever the main M needs one (pending migrations or wasmMainWantsP);
   and wasmMigrateParkFn wakes the sched nudge word so a sleeping P-holder
   re-checks immediately.
+- **Resolved (B3): rare `split stack overflow` at GOMAXPROCS>1** (runtime's
+  TestReadMemStats): the wasm large-frame prologue's stack check computed
+  `stackguard0 + (framesize - StackSmall)` with a 32-bit add - the literal
+  "TODO(neelance): handle wraparound case". When another thread armed
+  preemption (stackguard0 = stackPreempt, ~0) exactly while a big-frame
+  function was entered - impossible before B3's cross-thread
+  preemptone/suspendG, since nothing armed a RUNNING wasm goroutine - the
+  add wrapped and the check was silently skipped, so the frame ran below
+  stack.lo and the next callee's morestack died with "split stack
+  overflow". cmd/internal/obj/wasm now tests the stackPreempt sentinel
+  explicitly (full 64-bit compare, OR'd into the check) for big frames.
 - **Known issues (B3)**: (1) parallel speedup depends on pool headroom
   (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
   otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an
-  event handler blocked forever can head-of-line-block later host events;
-  (3) a rare `fatal error: runtime: split stack overflow` under
-  GOMAXPROCS>1 in runtime's TestReadMemStats (goroutine's recorded stack
-  bounds inconsistent with its executing SP at a large-frame prologue;
-  needs cross-thread preemption arming, so unreachable at the default
-  GOMAXPROCS=1 - suspected interaction between B3's cross-thread
-  stackguard arming / suspendG stack shrinking and the wasm prologue's
-  SP-lowering-before-check; tracked for the B4 bug sweep).
+  event handler blocked forever can head-of-line-block later host events.
   Remaining for B4: full main-thread affinity/host-call forwarding,
   memory.grow coordination audit, dedicated mark worker knobs, browser hosts.
