@@ -549,22 +549,75 @@ running goroutine for the length of the profiling window:
   stack.lo and the next callee's morestack died with "split stack
   overflow". cmd/internal/obj/wasm now tests the stackPreempt sentinel
   explicitly (full 64-bit compare, OR'd into the check) for big frames.
-- **Known issues (B3)**: (1) parallel speedup depends on pool headroom
-  (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
-  otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an
-  event handler blocked forever can head-of-line-block later host events;
-  (3) a rare crash class in the GOMAXPROCS=4 runtime suite only (never at
-  the default GOMAXPROCS=1 or at 2): observed once as `fatal error:
-  wirep: invalid p state` (p->m set while _Pidle - two Ms racing wirep on
-  one P, i.e. a double P handoff; on a build predating the idle-mark
-  gating fix, not reproduced since) and once as `fatal: systemstack
-  called from unexpected goroutine` + worker memory-access-out-of-bounds
-  trap (~1/20 suite runs on the current build, no stack captured - the
-  module traps during the report). Both point at a residual race in the
-  multi-P scheduler bring-up; tracked for the B4 bug sweep; (4) a syscall/js operation from a worker
+- **Resolved (B4): the rare GOMAXPROCS=4 crash class was a FALSE deadlock
+  report.** Reproduced under an oversubscribed 4P runtime-suite hammer as
+  `fatal error: checkdead: runnable g` (2 catches / 260 runs; a
+  scheduler-state dump on the throw path captured mcount=5 nmidle=4
+  nmidlelocked=1 with the main M blocked=false yet onmidle=true and two
+  globrunq gs whose wake nudge was in flight). On other platforms an M on
+  sched.midle is by invariant asleep in mPark; the threads main M parks in
+  the event loop and EXECUTES Go code on a host resume (self-serve, kicks,
+  queue pushes) while still linked on midle, so checkdead's "all Ms idle +
+  runnable g = deadlock" inference can fire on a transient, self-healing
+  state (worker watchdogs re-examine the run queues at most 250ms out; the
+  pending resume does too). checkdead now nudges the wake machinery and
+  returns instead of throwing under GOWASM=threads; real deadlock reporting
+  (all goroutines waiting + the host's exit-time probe) is unchanged.
+  Worker-side traps also report err.stack now (wasm_thread_run never
+  returns, so a trap in worker Go code surfaces in the init catch, which
+  used to discard the wasm frames' Go function names). Burn-in on the fixed
+  build: see the B4 PR; the `wirep: invalid p state` and `systemstack
+  called from unexpected goroutine` + worker-OOB one-offs from the B3 logs
+  never reproduced on B4 builds and are plausibly downstream of states
+  reachable after the false throw started unwinding a live scheduler
+  (checkdead throws while Ms are mid-handoff).
+- **Resolved (B4): pool-headroom perf collapse.** A far-future timer (e.g.
+  go test's suite alarm) kept CPU loops' backedge gates armed (~4x call
+  overhead) unless a PARKED WORKER covered the deadline - and since worker
+  Ms spawn on demand, typical programs never had one regardless of pool
+  size, so the documented "size the pool > GOMAXPROCS" workaround was
+  ineffective. A main M parked in the event loop now counts as the
+  covering agent (its beforeIdle JS timeout spans all Ps; a raw
+  allocation-free backstop timeout re-arms when it cannot take a P, and
+  wakeNetPoller nudges it when a new-earliest timer appears with no parked
+  workers). Measured (speedup demo, shards off-main + far-future timer,
+  node --no-wasm-tier-up, 4P): 490-537ms before in BOTH pool=4 and pool=6;
+  300-453ms after (median ~310ms) in both. Only a program with no agent at
+  all (pool <= busy Ps AND the main M itself running Go) keeps armed
+  gates - polling is the only correct option there.
+- **Resolved (B4): /cpu/classes/user:cpu-seconds could DECREASE** at
+  GOMAXPROCS>1 (TestReadMetricsCumulative flake): the parked main M's
+  event-loop pause was added to sched.idleTime although its released P's
+  _Pidle time is already accounted by the limiter-event machinery -
+  double-counted idle made the derived-by-subtraction user metric
+  non-monotonic. The pause additions are now confined to the
+  single-threaded port, where the M holds its P across the pause.
+- **Scoped (B4): event-handler head-of-line blocking.** An ASYNCHRONOUS
+  host event whose Go handler blocks forever does NOT block later events -
+  each async event gets its own event goroutine (gated by
+  testdata/wasmthreads/holblock at 1/2/4P). Host events arriving while the
+  runtime cannot accept one (main M has no P) are no longer silently
+  DROPPED either: wasm_exec.js queues them instead of overwriting the
+  single _pendingEvent slot. What remains blocking - deliberately - is a
+  SYNCHRONOUS nested callback (js.FuncOf invoked from a JS call Go made)
+  that blocks: the synchronous reentry borrows the caller goroutine and
+  the main M with strict LIFO on the live JS sandwich (Go caller -> import
+  -> JS -> resume -> handler frames interleaved on one physical stack), so
+  the main M must not run other work until it returns (an experiment
+  replacing the lock with the wasmMainOnly mark corrupted the sandwich
+  return), and JavaScript's synchronous call semantics could not deliver a
+  late result to the waiting JS caller anyway. Same rule as the
+  single-threaded port: do not block in synchronously-invoked callbacks.
+- **Verified (B4): cross-worker memory.grow** (the B3 audit item):
+  testdata/wasmthreads/memgrow grows the shared memory from a WORKER M by
+  256MiB while main round-trips strings through syscall/js and other
+  workers hammer shared memory - no stale-view corruption on any instance
+  (B0's per-call worker views + the main instance's buffer-identity
+  -refreshing accessor hold up).
+- **Known issues (B3/B4)**: (1) a syscall/js operation from a worker
   M migrates its goroutine to the main M per call (each blocked-then
   -rescheduled goroutine pays one migration per bounce back to a worker);
-  host-call forwarding, which would avoid the bounce, is B4. The affinity
+  host-call forwarding, which would avoid the bounce, is a later phase. The affinity
   itself is airtight: every entry point runs inside a mainThreadOp region
   (a wasmMainOnly mark on the g), and a worker M's schedule() refuses to
   resume a marked goroutine, rerouting it to the migrate queue - so a
@@ -574,5 +627,8 @@ running goroutine for the length of the profiling window:
   GOMAXPROCS=4 suite). The Value finalizer additionally queues its
   release (the GC may run it on any M outside any region); the next
   main-thread operation drains the queue inside its region.
-  Remaining for B4: full main-thread affinity/host-call forwarding,
-  memory.grow coordination audit, dedicated mark worker knobs, browser hosts.
+  (2) the parallel speedup demo still shows run-to-run variance without a
+  pending timer (equally on pre- and post-B4 runtimes; cause not yet
+  isolated - suspected host-side effects, tracked for a later pass).
+  Remaining for later phases: full main-thread affinity/host-call
+  forwarding, dedicated mark worker knobs, browser hosts.
