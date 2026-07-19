@@ -22,7 +22,6 @@ import (
 	typeindexanalyzer "golang.org/x/tools/internal/analysis/typeindex"
 	"golang.org/x/tools/internal/astutil"
 	"golang.org/x/tools/internal/refactor"
-	"golang.org/x/tools/internal/typesinternal"
 	"golang.org/x/tools/internal/typesinternal/typeindex"
 )
 
@@ -57,7 +56,7 @@ func stringsbuilder(pass *analysis.Pass) (any, error) {
 		assign := curAssign.Node().(*ast.AssignStmt)
 		if assign.Tok == token.ADD_ASSIGN && is[*ast.Ident](assign.Lhs[0]) {
 			if v, ok := pass.TypesInfo.Uses[assign.Lhs[0].(*ast.Ident)].(*types.Var); ok &&
-				!typesinternal.IsPackageLevel(v) && // TODO(adonovan): in go1.25, use v.Kind() == types.LocalVar &&
+				v.Kind() == types.LocalVar &&
 				types.Identical(v.Type(), builtinString.Type()) {
 				candidates[v] = true
 			}
@@ -102,7 +101,7 @@ nextcand:
 			continue
 		}
 
-		ek, _ := def.ParentEdge()
+		ek := def.ParentEdgeKind()
 		if ek == edge.AssignStmt_Lhs &&
 			len(def.Parent().Node().(*ast.AssignStmt).Lhs) == 1 {
 			// Have: s := expr
@@ -274,10 +273,10 @@ nextcand:
 		)
 		for curUse := range index.Uses(v) {
 			// Strip enclosing parens around Ident.
-			ek, _ := curUse.ParentEdge()
+			ek := curUse.ParentEdgeKind()
 			for ek == edge.ParenExpr_X {
 				curUse = curUse.Parent()
-				ek, _ = curUse.ParentEdge()
+				ek = curUse.ParentEdgeKind()
 			}
 
 			// intervening reports whether cur has an ancestor of
@@ -317,9 +316,9 @@ nextcand:
 				//  -------------    -
 				// s.WriteString(expr)
 				edits = append(edits, []analysis.TextEdit{
-					// replace += with .WriteString()
+					// replace " += " with ".WriteString("
 					{
-						Pos:     assign.TokPos,
+						Pos:     assign.Lhs[0].End(),
 						End:     assign.Rhs[0].Pos(),
 						NewText: []byte(".WriteString("),
 					},

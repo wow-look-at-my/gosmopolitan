@@ -22,7 +22,7 @@ import (
 	typeindexanalyzer "golang.org/x/tools/internal/analysis/typeindex"
 	"golang.org/x/tools/internal/astutil"
 	"golang.org/x/tools/internal/goplsexport"
-	"golang.org/x/tools/internal/refactor"
+	"golang.org/x/tools/internal/moreiters"
 	"golang.org/x/tools/internal/typesinternal"
 	"golang.org/x/tools/internal/typesinternal/typeindex"
 	"golang.org/x/tools/internal/versions"
@@ -124,6 +124,8 @@ func stringscut(pass *analysis.Pass) (any, error) {
 		bytesIndexByte   = index.Object("bytes", "IndexByte")
 	)
 
+	scopeFixCount := make(map[*types.Scope]int) // the number of times we have offered a fix within a given scope in the current pass
+
 	for _, obj := range []types.Object{
 		stringsIndex,
 		stringsIndexByte,
@@ -194,14 +196,48 @@ func stringscut(pass *analysis.Pass) (any, error) {
 			// If the only uses are ok and !ok, don't suggest a Cut() fix - these should be using Contains()
 			isContains := (len(negative) > 0 || len(nonnegative) > 0) && len(beforeSlice) == 0 && len(afterSlice) == 0
 
+			enclosingBlock, ok := moreiters.First(curCall.Enclosing((*ast.BlockStmt)(nil)))
+			if !ok {
+				continue
+			}
 			scope := iObj.Parent()
-			var (
-				// TODO(adonovan): avoid FreshName when not needed; see errorsastype.
-				okVarName     = refactor.FreshName(scope, iIdent.Pos(), "ok")
-				beforeVarName = refactor.FreshName(scope, iIdent.Pos(), "before")
-				afterVarName  = refactor.FreshName(scope, iIdent.Pos(), "after")
-				foundVarName  = refactor.FreshName(scope, iIdent.Pos(), "found") // for Contains()
-			)
+			// Generate fresh names for ok, before, after, found, but only if
+			// they are defined by the end of the enclosing block and used
+			// within the enclosing block after the Index call. We need a Cursor
+			// for the end of the enclosing block, but we can't just find the
+			// Cursor at scope.End() because it corresponds to the entire
+			// enclosingBlock. Instead, get the last child of the enclosing
+			// block.
+			lastStmtCur, _ := enclosingBlock.LastChild()
+			lastStmt := lastStmtCur.Node()
+
+			fresh := func(preferred string) string {
+				return freshName(info, index, scope, lastStmt.End(), lastStmtCur, enclosingBlock, iIdent.Pos(), preferred)
+			}
+
+			var okVarName, beforeVarName, afterVarName, foundVarName string
+			if isContains {
+				foundVarName = fresh("found")
+			} else {
+				okVarName = fresh("ok")
+				beforeVarName = fresh("before")
+				afterVarName = fresh("after")
+			}
+
+			// If we are already suggesting a fix within the index's scope, we
+			// must get fresh names for before, after and ok.
+			// This is a specific symptom of the general problem that analyzers
+			// can generate conflicting fixes.
+			if scopeFixCount[scope] > 0 {
+				suffix := scopeFixCount[scope] - 1 // start at 0
+				if isContains {
+					foundVarName = fresh(fmt.Sprintf("%s%d", foundVarName, suffix))
+				} else {
+					okVarName = fresh(fmt.Sprintf("%s%d", okVarName, suffix))
+					beforeVarName = fresh(fmt.Sprintf("%s%d", beforeVarName, suffix))
+					afterVarName = fresh(fmt.Sprintf("%s%d", afterVarName, suffix))
+				}
+			}
 
 			// If there will be no uses of ok, before, or after, use the
 			// blank identifier instead.
@@ -313,6 +349,7 @@ func stringscut(pass *analysis.Pass) (any, error) {
 					}...)
 				}
 			}
+			scopeFixCount[scope]++
 			pass.Report(analysis.Diagnostic{
 				Pos: indexCall.Fun.Pos(),
 				End: indexCall.Fun.End(),
@@ -393,7 +430,7 @@ func checkIdxUses(info *types.Info, uses iter.Seq[inspector.Cursor], s, substr a
 	}
 
 	use := func(cur inspector.Cursor) bool {
-		ek, _ := cur.ParentEdge()
+		ek := cur.ParentEdgeKind()
 		n := cur.Parent().Node()
 		switch ek {
 		case edge.BinaryExpr_X, edge.BinaryExpr_Y:
@@ -452,7 +489,7 @@ func checkIdxUses(info *types.Info, uses iter.Seq[inspector.Cursor], s, substr a
 // considered.
 func hasModifyingUses(info *types.Info, uses iter.Seq[inspector.Cursor], afterPos token.Pos) bool {
 	for curUse := range uses {
-		ek, _ := curUse.ParentEdge()
+		ek := curUse.ParentEdgeKind()
 		if ek == edge.AssignStmt_Lhs {
 			if curUse.Node().Pos() <= afterPos {
 				continue
@@ -623,11 +660,11 @@ func isAfterSlice(info *types.Info, ek edge.Kind, slice *ast.SliceExpr, substr a
 // intervening uses (incl. via aliases) of i that might alter its value.
 func isSliceIndexGuarded(info *types.Info, cur inspector.Cursor, iObj types.Object) bool {
 	for anc := range cur.Enclosing() {
-		switch ek, _ := anc.ParentEdge(); ek {
+		switch anc.ParentEdgeKind() {
 		case edge.IfStmt_Body, edge.IfStmt_Else:
 			ifStmt := anc.Parent().Node().(*ast.IfStmt)
 			check := condChecksIdx(info, ifStmt.Cond, iObj)
-			if ek == edge.IfStmt_Else {
+			if anc.ParentEdgeKind() == edge.IfStmt_Else {
 				check = -check
 			}
 			if check > 0 {
