@@ -79,6 +79,17 @@ GOOS=cosmo go install ./cmd/program
 # (pre-2026-07-18 behavior, byte-for-byte)
 GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
+# Debug-info tier (GOCOSMODEBUG; unset/full = pristine runnable sidecars,
+# today's default, byte-identical). slim: debug-only sidecars, ~-67%,
+# same names, not runnable - gdb/delve consume them unchanged. compact:
+# slim sidecars PLUS line-level debug info appended to the APE past the
+# load span (never mapped; ~+40% APE size) - gdb gets file:line
+# backtraces from the assimilated .com alone, no sidecar present.
+# Invalid values fail the build; GOCOSMOSTRIP=0 or -ldflags -s/-w make
+# GOCOSMODEBUG a no-op (no sidecars to shape). See DEBUGGING.md.
+GOCOSMODEBUG=slim GOOS=cosmo go build -o program.com main.go
+GOCOSMODEBUG=compact GOOS=cosmo go build -o program.com main.go
+
 # Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
 GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
 
@@ -113,6 +124,20 @@ the user-stripped payloads as-is. Stripping does not affect runtime
 tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
 loaded segment); the sidecars are for gdb/delve and offline tools - see
 DEBUGGING.md "debug sidecars" (2026-07-18).
+
+Debug tiers (2026-07-19, GOCOSMODEBUG): `slim` swaps the sidecars for
+debug-only ELFs (in-linker objcopy --only-keep-debug: alloc contents
+dropped to NOBITS, symtab + all DWARF kept, not runnable, ~-67% -
+runtimeprobe sidecar pair 7,492,270 -> 2,441,136 B) with the shipped APE
+byte-identical to default; `compact` additionally appends line-level
+debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame, still
+zlib'd; loclists dropped) past the APE's load span and points the
+payload + boot ELF headers at it, so the assimilated `.com` is
+debugger-readable with no sidecar (runtimeprobe 5,119,168 -> 7,167,264 B,
++40%; args show <optimized out> - variables are sidecar territory). The
+default is unchanged and byte-identical with the knob unset. Full
+numbers, gdb/delve recipes, and gotchas: DEBUGGING.md "GOCOSMODEBUG"
+(2026-07-19).
 
 Shipping APEs: distribute release binaries zstd-compressed - the two arch
 payloads make APE images highly redundant, so the wire cost collapses.
