@@ -152,12 +152,33 @@ var wasmMainWake uint32
 
 // wasmWakeMainThread nudges the main thread: if the main M is parked in
 // the JavaScript event loop (wasmMainParkNote in lock_jsthreads.go), the
-// host resumes it. Callable from any thread; spurious nudges are cheap
-// (the resumed main M re-checks its state and parks again).
+// host resumes it. Callable from any worker thread; spurious nudges from
+// workers are cheap (the resumed main M re-checks its state and parks
+// again).
+//
+// Calls on the main thread itself are dropped, and that is load-bearing,
+// not just an optimization. The main M is awake right here, and it
+// re-checks every wake condition (its park note, the run queues, the
+// timers) before it next pauses, so the nudge carries no information.
+// But it does have an effect: the host keeps an Atomics.waitAsync
+// watcher armed on wasmMainWake ACROSS each resume (wasm_exec.js re-arms
+// before calling resume, which is what makes worker wakes race-free), so
+// a bump from inside a resume lands on an armed watcher and queues
+// another resume as a MICROTASK. JavaScript drains microtasks to
+// exhaustion before returning to the macrotask queue. The self-serve
+// resume path (wasmMainParkWake -> notewakeup(&m0.park) -> here) would
+// therefore re-nudge itself on every iteration: an unbounded microtask
+// chain of resumes that starves every macrotask - all JS timers and the
+// exit message a worker posts when Go code on it calls runtime.exit -
+// observed as multi-second GOMAXPROCS>1 stalls (broken only by a real
+// cross-thread wake) and as a permanent hang on the exit path.
 //
 //go:nosplit
 //go:nowritebarrier
 func wasmWakeMainThread() {
+	if getg().m == &m0 {
+		return
+	}
 	atomic.Xadd(&wasmMainWake, 1)
 	futexwakeup(&wasmMainWake, ^uint32(0))
 }

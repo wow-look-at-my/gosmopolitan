@@ -474,13 +474,30 @@ running goroutine for the length of the profiling window:
   only by the main M); fd 1/2 writes (fmt/println/testing output) go through
   the runtime's wasmWrite import directly on workers. Value finalizers fired
   on worker Ms are queued and released on main.
-- **Known issues (B3)**: (1) a rare lost-wakeup under GOMAXPROCS>1 can strand
-  a runnable goroutine until the 250ms worker watchdog or next event
-  (observed as multi-second stalls / occasional wedges in testing/fuzz-heavy
-  workloads, e.g. runtime's FuzzPIController at GOMAXPROCS=2; not observed at
-  the default GOMAXPROCS=1); (2) parallel speedup depends on pool headroom
+- **Resolved (B3): the GOMAXPROCS>1 "lost-wakeup" stalls / exit-time hang
+  were a main-thread microtask livelock**, not a lost wake. wasm_exec.js
+  keeps an Atomics.waitAsync watcher armed on the main wake word across
+  every resume (arming before resume is what makes worker wakes race-free),
+  so a wake-word bump issued ON the main thread from inside a resume lands
+  on an armed watcher and queues the next resume as a microtask. The
+  self-serve resume path did exactly that (wasmMainParkWake ->
+  notewakeup(&m0.park) -> wasmWakeMainThread), so one orphan nudge seeded an
+  unbounded microtask chain of self-resumes; JavaScript drains microtasks
+  before macrotasks, so all JS timers and the worker-posted runtime.exit
+  message starved (multi-second stalls broken only by a real cross-thread
+  wake; a permanent hang when it was the exit message). Fixed by dropping
+  wasmMainWake bumps issued on the main thread itself - the main M is awake
+  there and re-checks every wake condition before it next parks.
+- **Known issues (B3)**: (1) parallel speedup depends on pool headroom
   (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
-  otherwise CPU loops stay gate-armed and pay ~4x call overhead); (3) an
-  event handler blocked forever can head-of-line-block later host events.
+  otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an
+  event handler blocked forever can head-of-line-block later host events;
+  (3) a rare `fatal error: runtime: split stack overflow` under
+  GOMAXPROCS>1 in runtime's TestReadMemStats (goroutine's recorded stack
+  bounds inconsistent with its executing SP at a large-frame prologue;
+  needs cross-thread preemption arming, so unreachable at the default
+  GOMAXPROCS=1 - suspected interaction between B3's cross-thread
+  stackguard arming / suspendG stack shrinking and the wasm prologue's
+  SP-lowering-before-check; tracked for the B4 bug sweep).
   Remaining for B4: full main-thread affinity/host-call forwarding,
   memory.grow coordination audit, dedicated mark worker knobs, browser hosts.

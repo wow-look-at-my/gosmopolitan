@@ -367,10 +367,14 @@ the full catalog of fixes and remaining gaps):
   (main M releases its P and parks in the event loop; woken cross-thread via
   Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
   syscall/js calls from worker Ms migrating their goroutine to the main
-  thread (stdout/stderr writes work directly on workers). Known: a rare
-  GOMAXPROCS>1 lost-wakeup stall (watchdog-bounded; fuzz-heavy tests flake),
-  pool should exceed GOMAXPROCS for full parallel throughput. B4: full
-  main-thread affinity/forwarding, memory.grow audit, mark-worker knobs.
+  thread (stdout/stderr writes work directly on workers). The GOMAXPROCS>1
+  "lost-wakeup" stalls / exit hang were root-caused to a main-thread
+  microtask livelock (a wasmMainWake bump issued on the main thread inside a
+  resume re-triggers the armed Atomics.waitAsync watcher, and the microtask
+  chain starves every macrotask incl. the worker-posted exit message) and
+  fixed by dropping main-thread-issued bumps; pool should exceed GOMAXPROCS
+  for full parallel throughput. B4: full main-thread affinity/forwarding,
+  memory.grow audit, mark-worker knobs.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
