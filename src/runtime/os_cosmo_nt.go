@@ -122,6 +122,12 @@ var (
 	// Wave 3 (SCM_RIGHTS fd passing; kernel32, present since forever).
 	ntOpenProcessFn uintptr
 
+	// Wave 3 item 3 (CPU profiling; kernel32).
+	ntCreateWaitableTimerExWFn uintptr // optional (the HIGH_RESOLUTION flag needs Win10 1803)
+	ntCreateWaitableTimerWFn   uintptr
+	ntSetWaitableTimerFn       uintptr
+	ntSetThreadPriorityFn      uintptr // optional (best-effort use)
+
 	// Optional non-kernel32 imports: 0 when unavailable, and every
 	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
@@ -201,6 +207,10 @@ var (
 	ntNameWerGetFlags       = []byte("WerGetFlags\x00")
 	ntNameWerSetFlags       = []byte("WerSetFlags\x00")
 	ntNameOpenProcess       = []byte("OpenProcess\x00")
+	ntNameCreateWTimerExW   = []byte("CreateWaitableTimerExW\x00")
+	ntNameCreateWTimerW     = []byte("CreateWaitableTimerW\x00")
+	ntNameSetWaitableTimer  = []byte("SetWaitableTimer\x00")
+	ntNameSetThreadPriority = []byte("SetThreadPriority\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -453,6 +463,16 @@ func ntResolve() {
 
 	// Wave 3: SCM_RIGHTS fd passing (kernel32).
 	ntOpenProcessFn = k32sym(&ntNameOpenProcess[0])
+
+	// Wave 3 item 3: CPU profiling (kernel32). The Ex creator is
+	// optional (its HIGH_RESOLUTION flag needs Win10 1803; old wine
+	// lacks the export) - ntSetProcessCPUProfiler falls back to the
+	// classic creator. SetThreadPriority is optional best-effort
+	// (the profiler M merely prefers a high priority).
+	ntCreateWaitableTimerWFn = k32sym(&ntNameCreateWTimerW[0])
+	ntSetWaitableTimerFn = k32sym(&ntNameSetWaitableTimer[0])
+	ntCreateWaitableTimerExWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateWTimerExW[0])), 0, 0, 0, 0)
+	ntSetThreadPriorityFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetThreadPriority[0])), 0, 0, 0, 0)
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).

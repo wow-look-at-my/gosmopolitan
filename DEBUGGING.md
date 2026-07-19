@@ -3441,3 +3441,130 @@ fdpass skipped (host lacks sendmsg)" keyed on the host triple, never
 on an error. Verified this session on the linux leg: all 44 checks
 ok, "ok all", exit 0. The NT frame path is judged by windows-latest
 only (wave-2 rule; wine lacks afunix entirely).
+
+## Wave 3 item 3 (2026-07-19): CPU profiling - the profileLoop port
+
+Before this item, pprof.StartCPUProfile on NT succeeded, set
+mp.profilehz, armed NOTHING (setProcessCPUProfiler's iswindows()
+early-return), and StopCPUProfile wrote a valid profile with zero
+samples - a silent lie. Now the early-return calls into a port of
+upstream os_windows.go's profiler (new file os_cosmo_nt_prof.go):
+
+- ntSetProcessCPUProfiler: on first use (the profiletimer==0
+  once-guard - sound because setcpuprofilerate holds prof.signalLock
+  around every call) create a waitable timer and `newm(ntProfileLoop,
+  nil, -1)` - a standing no-P M, the ntCtrlRelay precedent and
+  upstream's exact `newm(profileLoop, nil, -1)`. A real M means g0 +
+  TLS + legal ntcall use; the foreign-thread trampoline prohibition
+  never applies. Timer creation degrades: CreateWaitableTimerExW with
+  CREATE_WAITABLE_TIMER_HIGH_RESOLUTION=0x2 + TIMER_ALL_ACCESS ->
+  same without the flag -> CreateWaitableTimerW(0,0,0). If all three
+  fail the timer stays 0, the M is never started, and arming is
+  skipped - profiling degrades to the pre-item-3 sampleless behavior
+  instead of hot-looping WaitForSingleObject on handle 0.
+- ntSetThreadCPUProfiler: upstream's due/period math verbatim - hz>0:
+  ms=1000/hz (min 1), due=-10000*ms (negative = relative, 100ns
+  units), period ms; hz<=0: due=minInt64 (a one-shot ~29k years out),
+  period 0 - upstream's disarm shape. The shared `mp.profilehz = hz`
+  store in setThreadCPUProfiler (os_cosmo.go) stays for all hosts and
+  runs AFTER the NT arm, exactly upstream's order.
+- ntProfileLoop: best-effort SetThreadPriority(GetCurrentThread=-2,
+  THREAD_PRIORITY_HIGHEST=2) so ticks land even when every P spins;
+  forever { plain ntcall WaitForSingleObject(timer, INFINITE) - the
+  relay-M idiom, never ntcallSE (this M has no P and no syscall
+  bracketing); walk allm via atomic.Loadp + alllink }. Per M: skip
+  self; under mp.threadLock skip mp.thread==0 / mp.profilehz==0 /
+  mp.blocked, else DuplicateHandle an own reference; release
+  threadLock; THEN suspend. mp.blocked is real on cosmo: lock_futex.go
+  builds for (cosmo && !arm64) and sets it around futexsleep, so
+  note-parked Ms (idle workers, timer thread, scavenger) are skipped
+  exactly like upstream. Ms parked inside WSAPoll (the netpoller) are
+  NOT note-blocked, so they ARE sampled and attribute to external
+  code - upstream windows' own behavior, harmless.
+- ntProfileM: 16-aligned full-size ntContext (the ntPreemptM
+  alignment idiom), ContextFlags=_NT_CONTEXT_CONTROL (0x100001 =
+  CONTEXT_AMD64|CONTEXT_CONTROL, the same constant preemption uses -
+  and byte-identical to upstream windows.CONTEXT_CONTROL; sigprof
+  consumes only pc+sp, and nothing is written back), GetThreadContext,
+  gp := ntGFromSP(mp, rsp), then the DIRECT `sigprof(rip, rsp, 0, gp,
+  mp)` - upstream profilem's shape, lr=0 on amd64. sigprof is
+  host-independent and takes no signal number, so "SIGPROF parity"
+  involves no signal numbering at all; the setitimer asm and the
+  SYS_SETITIMER=38 ENOSYS dispatch are untouched and stay unreachable
+  on NT.
+
+THE deliberate divergence from upstream: upstream profileLoop
+suspends lock-free; here SuspendThread happens only under
+ntSuspendLock, held across SuspendThread -> GetThreadContext (what
+completes a suspension) -> sigprof -> ResumeThread. The wave-2
+contract is load-bearing: ntExit takes ntSuspendLock FOREVER before
+ExitProcess, so a profile tick can never be mid-suspension while the
+process dies (upstream guards its exit only against preemption's
+suspensions; ours covers the profiler by construction). At a 10ms
+tick the serialization against preemption's suspensions costs
+nothing. Deliberately NOT ported: mp.preemptExtLock (upstream's
+profiler ignores it too - the profiler only READS context, so
+suspending a thread inside win64 code is benign and the sample lands
+in external code) and per-M highResTimer (upstream's usleep
+machinery, unrelated).
+
+Deadlock audit (the pre-commit gate for this item):
+
+- Lock ORDER equals ntPreemptM's exactly: threadLock(target) taken
+  and RELEASED before ntSuspendLock; no threadLock is ever taken
+  under ntSuspendLock, and this M holds no lock a suspended thread
+  could want. A target inside ntMinitThread/ntUnminitThread holding
+  its own threadLock simply delays the profiler BEFORE any
+  suspension. ntPreemptM and ntProfileLoop serialize on
+  ntSuspendLock, so neither ever suspends the other mid-window.
+- The suspended thread may hold ARBITRARY locks, so the window runs
+  only what a unix SIGPROF handler runs interrupting arbitrary code:
+  sigprof's callee set. Audited: cpuprof.add / addNonGo carry the
+  explicit contract "called from signal handlers ... cannot allocate
+  memory or acquire locks that might be held at the time of the
+  signal" (cpuprof.go) and take only prof.signalLock, a CAS spinlock
+  (osyield spin; osyield's NT leg is Sleep(0), lock-free);
+  profBuf.write is the lock-free ring + notewakeup -> futexwakeup ->
+  WakeByAddressSingle, no runtime mutex anywhere; traceCPUSample is
+  signal-context-rated upstream. sigprof's mallocing++ trap enforces
+  the no-alloc part at runtime. No print/throw happens while
+  anything is suspended (the DuplicateHandle print+throw sits before
+  the suspension, upstream's own placement; a GetThreadContext
+  failure silently skips the sample).
+- The one lock sigprof CAN contend on, prof.signalLock, cannot be
+  held by the suspended thread: its only other taker,
+  setcpuprofilerate, stores its caller's mp.profilehz = 0 (via
+  setThreadCPUProfiler) BEFORE acquiring it, and the loop RE-CHECKS
+  `mp.profilehz != 0 && !mp.blocked` AFTER SuspendThread (upstream's
+  re-check, ported). x86-TSO + the kernel suspension barrier order
+  the plain profilehz store before any post-suspend load, so a
+  thread suspended inside the signalLock window is always seen with
+  profilehz==0 and skipped. (Upstream windows makes that store
+  atomic as belt-and-braces; the cosmo store is a plain aligned
+  int32 - same visibility argument, NT is amd64-only.)
+
+New Win32 resolutions, runtime GetProcAddress only (IAT untouched):
+kernel32 CreateWaitableTimerW + SetWaitableTimer (hard, crash-poke),
+CreateWaitableTimerExW + SetThreadPriority (optional-graceful - the
+Ex creator's HIGH_RESOLUTION flag needs Win10 1803, old wine lacks
+the export; priority is best-effort). WaitForSingleObject,
+SuspendThread, ResumeThread, GetThreadContext, DuplicateHandle,
+CloseHandle were already resolved for exec/preemption. Everything
+fits the existing ntcall/ntcall7 shapes; ntcallArgs never widens.
+Timer granularity: without HIGH_RESOLUTION the 10ms period coalesces
+to the 15.6ms scheduler quantum (~64Hz effective) - accepted; the
+probe asserts >=1 sample, never a rate.
+
+Probe (testdata/runtimeprobe/cpuprof.go, check "cpuprof"; in
+probeOkChecks between preempt and waitsig): StartCPUProfile into a
+buffer, 1.2s of per-P spin goroutines (the preempt recipe; under the
+probe's 2s slow-block stopwatch), StopCPUProfile, then assert the
+profile is non-empty, gunzips, and a bounded ~40-line protobuf
+walker counts top-level field-2 (Sample) records >= 1 - exactly the
+zero-samples silent failure this item kills. Mandatory-real on NT
+(the deliverable) AND linux (native setitimer SIGPROF - regression-
+guards the shared pprof surface and validates the walker against a
+known-good producer); darwin prints "ok cpuprof skipped (no SIGPROF
+on this host)" keyed on the host triple (setitimer is genuinely not
+dispatched there - the wave-2 backlog gap stands). NT truth is
+windows-latest (wave-2 rule).

@@ -78,6 +78,14 @@ func ntInitConsoleCtrl() {
 	throw("ntInitConsoleCtrl: not implemented on arm64")
 }
 
+func ntSetProcessCPUProfiler(hz int32) {
+	throw("ntSetProcessCPUProfiler: not implemented on arm64")
+}
+
+func ntSetThreadCPUProfiler(hz int32) {
+	throw("ntSetThreadCPUProfiler: not implemented on arm64")
+}
+
 //go:nosplit
 func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	throw("ntVirtualFree: not implemented on arm64")

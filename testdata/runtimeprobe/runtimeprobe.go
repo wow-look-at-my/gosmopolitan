@@ -9,8 +9,9 @@
 // readv/writev + net.Buffers (all hosts),
 // os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
-// (sigpanic), os/signal delivery, async preemption, and wait-status
-// signal decoding.
+// (sigpanic), os/signal delivery, async preemption, wait-status
+// signal decoding, and CPU profiling (host-skipped on macOS, which
+// lacks SIGPROF delivery).
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -118,6 +119,7 @@ func main() {
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)
+	timed("cpuprof", checkCPUProf)
 	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)
