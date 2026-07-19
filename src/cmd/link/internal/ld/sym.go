@@ -78,8 +78,21 @@ func (ctxt *Link) computeTLSOffset() {
 	case objabi.Hplan9, objabi.Hwindows, objabi.Hjs, objabi.Hwasip1, objabi.Haix:
 		break
 
-	case objabi.Hcosmo,
-		objabi.Hlinux,
+	case objabi.Hcosmo:
+		/*
+		 * Cosmo amd64 keeps g at gs:0x28: 0(TLS) translates to
+		 * 0x28(GS). On Windows hosts gs:0x28 is the TEB
+		 * ArbitraryUserPointer slot (upstream windows/amd64
+		 * precedent, no setup syscall needed); on Linux hosts
+		 * runtime·settls points the GS base at &m.tls[0]-0x28 via
+		 * arch_prctl(ARCH_SET_GS) so the same instruction bytes
+		 * work on both. The segment prefix comes from
+		 * cmd/internal/obj/x86/asm6.go. Known to low-level
+		 * assembly in package runtime (sys_cosmo_amd64.s).
+		 */
+		ctxt.Tlsoffset = 0x28
+
+	case objabi.Hlinux,
 		objabi.Hfreebsd,
 		objabi.Hnetbsd,
 		objabi.Hopenbsd,

@@ -6,8 +6,11 @@
 // so on Darwin the sigqueue code uses different functions to wake up the
 // signal_recv thread. This file holds the non-Darwin implementations of
 // those functions. These functions will never be called.
+//
+// cosmo arm64 binaries can find themselves on a Darwin host at run time
+// and have their own implementations (sigqueue_note_cosmo_arm64.go).
 
-//go:build !darwin && !plan9
+//go:build !darwin && !plan9 && !(cosmo && arm64)
 
 package runtime
 

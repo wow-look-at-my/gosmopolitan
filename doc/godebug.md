@@ -133,9 +133,7 @@ are also treated as invalid.
 The defaults that will be compiled into a main package
 are reported by the command:
 
-{{raw `
 	go list -f '{{.DefaultGODEBUG}}' my/main/package
-`}}
 
 Only differences from the base Go toolchain defaults are reported.
 
@@ -155,6 +153,11 @@ and the [go command documentation](/cmd/go#hdr-Build_and_test_caching).
 
 ### Go 1.26
 
+Go 1.26.1 added a new `htmlmetacontenturlescape` setting that controls whether
+html/template will escape URLs in the `url=` portion of the content attribute of
+HTML meta tags. The default `htmlmetacontentescape=1` will cause URLs to be
+escaped. Setting `htmlmetacontentescape=0` disables this behavior.
+
 Go 1.26 added a new `httpcookiemaxnum` setting that controls the maximum number
 of cookies that net/http will accept when parsing HTTP headers. If the number of
 cookie in a header exceeds the number set in `httpcookiemaxnum`, cookie parsing
@@ -162,6 +165,13 @@ will fail early. The default value is `httpcookiemaxnum=3000`. Setting
 `httpcookiemaxnum=0` will allow the cookie parsing to accept an indefinite
 number of cookies. To avoid denial of service attacks, this setting and default
 was backported to Go 1.25.2 and Go 1.24.8.
+
+Go 1.26 added a new `urlmaxqueryparams` setting that controls the maximum number
+of query parameters that net/url will accept when parsing a URL-encoded query string.
+If the number of parameters exceeds the number set in `urlmaxqueryparams`,
+parsing will fail early. The default value is `urlmaxqueryparams=10000`.
+Setting `urlmaxqueryparams=0` disables the limit. To avoid denial of service
+attacks, this setting and default was backported to Go 1.25.6 and Go 1.24.12.
 
 Go 1.26 added a new `urlstrictcolons` setting that controls whether `net/url.Parse`
 allows malformed hostnames containing colons outside of a bracketed IPv6 address.
@@ -182,6 +192,14 @@ Go 1.26 added a new `cryptocustomrand` setting that controls whether most crypto
 APIs ignore the random `io.Reader` parameter. For Go 1.26, it defaults
 to `cryptocustomrand=0`, ignoring the random parameters. Using `cryptocustomrand=1`
 reverts to the pre-Go 1.26 behavior.
+
+Go 1.26 added a new `jsfetchnode` setting that controls whether net/http uses
+the JavaScript Fetch API on the js/wasm port when the program runs under
+Node.js. By default fetch is not used under Node.js and requests go over the
+in-memory fake network shared with the net package's tests, so requests to
+real hosts fail; setting `jsfetchnode=1` enables the Fetch API under Node.js
+18 or later, the same behavior as in browsers. This setting has no effect in
+browsers or on other ports.
 
 ### Go 1.25
 

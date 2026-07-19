@@ -3,7 +3,18 @@
 // license that can be found in the LICENSE file.
 
 // Fake network poller for js/wasm.
-// Should never be used, because js/wasm network connections do not honor "SetNonblock".
+//
+// There is nothing to poll on js: network connections are serviced by
+// the host and do not honor "SetNonblock", so the poller hooks below
+// are all no-ops. netpoll itself is nonetheless called regularly: as
+// soon as timers exist they force netpollGenericInit, and findRunnable
+// then calls netpoll on every idle cycle. It returns immediately,
+// ignoring the requested delay. The actual sleeping happens in
+// beforeIdle (lock_js.go), which schedules a JavaScript timeout event
+// and yields to the host's event loop. When the runtime cannot yield -
+// e.g. while a synchronous call from JavaScript is still on the stack -
+// the scheduler instead spins through netpoll until the next timer is
+// due.
 
 //go:build js && wasm
 

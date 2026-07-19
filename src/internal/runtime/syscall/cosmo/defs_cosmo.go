@@ -46,8 +46,6 @@ const (
 
 const AT_FDCWD = -0x64
 
-// EpollEvent is the epoll_event structure
-type EpollEvent struct {
-	Events uint32
-	Data   [8]byte // unaligned uintptr
-}
+// EpollEvent is defined in the per-architecture defs_cosmo_GOARCH.go
+// files: the Linux kernel packs struct epoll_event on x86-64 (12 bytes)
+// but aligns it naturally everywhere else (16 bytes on arm64).

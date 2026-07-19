@@ -29,41 +29,27 @@ TEXT _rt0_arm64_cosmo(SB),NOSPLIT|NOFRAME,$0
 	//   X3  = host OS indicator (8 = XNU/macOS, 0 = Linux, etc.)
 	//   X15 = Syslib pointer (Apple APIs for macOS)
 	//
-	// Save host OS and Syslib pointer for runtime use
+	// Detect the APE loader (macOS) handoff: X3 must be 8 (XNU) and X15
+	// must point at a Syslib structure with the right magic. Anything
+	// else is a plain ELF boot (e.g. Linux ARM64 after the bootstrap
+	// script self-assimilates the binary), where these registers are
+	// undefined and raw SVC syscalls are used instead of Syslib.
+	CMP	$8, R3
+	BNE	boot_linux
+	CBZ	R15, boot_linux
+	MOVW	(R15), R9
+	MOVW	$0x62696c73, R10	// Syslib magic "slib"
+	CMP	R9, R10
+	BNE	boot_linux
+
+	// XNU via APE loader: save host OS and Syslib pointer for runtime use
 	MOVW	R3, runtime·__hostos(SB)
 	MOVD	R15, runtime·__syslib(SB)
-
-	// DEBUG: Verify R3 is 8 (XNU) and R15 is valid
-	// Check host OS
-	CMP	$8, R3
-	BNE	debug_not_xnu
-
-	// Check Syslib magic
-	MOVW	(R15), R9
-	MOVW	$0x62696c73, R10
-	CMP	R9, R10
-	BNE	debug_bad_syslib
-
-	// All good - continue
 	B	cosmo_init_ok
 
-debug_not_xnu:
-	// R3 is not 8 - print and exit
-	MOVD	$81, R0   // exit code 81 = not XNU
-	MOVD	runtime·__syslib(SB), R9
-	CMP	$0, R9
-	BEQ	debug_no_exit
-	MOVD	224(R9), R12
-	MOVD	RSP, R11
-	AND	$~15, R11, R11
-	MOVD	R11, RSP
-	BL	(R12)
-debug_no_exit:
-	WORD	$0xd4200000  // BRK
-
-debug_bad_syslib:
-	MOVD	$82, R0   // exit code 82 = bad syslib
-	WORD	$0xd4200000  // BRK
+boot_linux:
+	MOVW	ZR, runtime·__hostos(SB)
+	MOVD	ZR, runtime·__syslib(SB)
 
 cosmo_init_ok:
 	// Ensure stack is 16-byte aligned (required by ARM64 ABI)

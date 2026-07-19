@@ -824,13 +824,26 @@ func (s *regAllocState) init(f *Func) {
 					// Value can not live on stack. Values are not allowed to be reordered, so clear candidate set.
 					canLiveOnStack.clear()
 				}
+				switch v.Op {
+				case OpWasmLoweredAtomicAdd32, OpWasmLoweredAtomicAdd64,
+					OpWasmLoweredAtomicExchange32, OpWasmLoweredAtomicExchange64,
+					OpWasmLoweredAtomicCas32, OpWasmLoweredAtomicCas64:
+					// Code generation for the atomic read-modify-write ops
+					// reads the pointer argument twice (once for the load,
+					// once for the store), so their arguments must stay in
+					// registers.
+					continue
+				}
 				for _, arg := range v.Args {
 					// Value can live on the stack if:
 					// - it is only used once
 					// - it is used in the same basic block
 					// - it is not a "mem" value
 					// - it is a WebAssembly op
-					if arg.Uses == 1 && arg.Block == v.Block && !arg.Type.IsMemory() && !opcodeTable[arg.Op].generic {
+					// - it is not a tuple (the Select0/Select1 consumers of
+					//   a tuple generate no code, so a tuple-producing op
+					//   must materialize its results into registers)
+					if arg.Uses == 1 && arg.Block == v.Block && !arg.Type.IsMemory() && !arg.Type.IsTuple() && !opcodeTable[arg.Op].generic {
 						canLiveOnStack.add(arg.ID)
 					}
 				}
@@ -1810,7 +1823,7 @@ func (s *regAllocState) regalloc(f *Func) {
 			if regspec.clobbersArg0 {
 				s.freeReg(register(s.f.getHome(args[0].ID).(*Register).num))
 			}
-			if regspec.clobbersArg1 {
+			if regspec.clobbersArg1 && !(regspec.clobbersArg0 && s.f.getHome(args[0].ID) == s.f.getHome(args[1].ID)) {
 				s.freeReg(register(s.f.getHome(args[1].ID).(*Register).num))
 			}
 

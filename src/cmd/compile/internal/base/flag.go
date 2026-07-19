@@ -162,10 +162,13 @@ func ParseFlags() {
 	Flag.LowerP = &Ctxt.Pkgpath
 	Flag.LowerV = &Ctxt.Debugvlog
 
-	Flag.Dwarf = buildcfg.GOARCH != "wasm"
+	Flag.Dwarf = true
 	Flag.DwarfBASEntries = &Ctxt.UseBASEntries
 	Flag.DwarfLocationLists = &Ctxt.Flag_locationlists
-	*Flag.DwarfLocationLists = true
+	// Location lists need a DWARF register mapping, which wasm does not
+	// have (there are no machine registers; locals live in the linear
+	// memory frame). Variable DIEs still get names and types there.
+	*Flag.DwarfLocationLists = buildcfg.GOARCH != "wasm"
 	Flag.Dynlink = &Ctxt.Flag_dynlink
 	Flag.EmbedCfg = readEmbedCfg
 	Flag.Env = addEnv
