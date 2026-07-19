@@ -93,6 +93,18 @@ func TestGowasm(t *testing.T) {
 	if f := gowasm(); !f.TailCall {
 		t.Errorf("Wrong parsing of GOWASM=satconv,signext,tailcall")
 	}
+	os.Setenv("GOWASM", "threads")
+	if f := gowasm(); !f.Threads {
+		t.Errorf("Wrong parsing of GOWASM=threads")
+	} else if s := f.String(); s != "threads" {
+		t.Errorf("gowasmFeatures.String() = %q, want %q", s, "threads")
+	}
+	os.Setenv("GOWASM", "tailcall,threads")
+	if f := gowasm(); !f.TailCall || !f.Threads {
+		t.Errorf("Wrong parsing of GOWASM=tailcall,threads")
+	} else if s := f.String(); s != "tailcall,threads" {
+		t.Errorf("gowasmFeatures.String() = %q, want %q", s, "tailcall,threads")
+	}
 	os.Setenv("GOWASM", "satconv")
 	if f := gowasm(); f.String() != "" {
 		t.Errorf("gowasmFeatures.String() for legacy features = %q, want %q", f.String(), "")
