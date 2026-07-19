@@ -26,6 +26,14 @@ const (
 	ver116
 	ver118
 	ver120
+	// verCosmo is this fork's compact functab format
+	// (abi.CosmoPCLnTabMagic): same header as ver118/ver120, but _func
+	// records are 4-byte aligned with a 40-byte fixed part that drops the
+	// npcdata field (so cuOffset and startLine move up one slot) and
+	// replaces the count/sentinel encoded pcdata and funcdata offset
+	// arrays with presence-bitmap encoded ones. The fields this package
+	// reads are otherwise unchanged.
+	verCosmo
 )
 
 // A LineTable is a data structure mapping program counters to line numbers.
@@ -238,6 +246,10 @@ func (t *LineTable) parsePclnTab() {
 		t.binary, possibleVersion = binary.LittleEndian, ver120
 	case beMagic == abi.Go120PCLnTabMagic:
 		t.binary, possibleVersion = binary.BigEndian, ver120
+	case leMagic == abi.CosmoPCLnTabMagic:
+		t.binary, possibleVersion = binary.LittleEndian, verCosmo
+	case beMagic == abi.CosmoPCLnTabMagic:
+		t.binary, possibleVersion = binary.BigEndian, verCosmo
 	default:
 		return
 	}
@@ -255,7 +267,7 @@ func (t *LineTable) parsePclnTab() {
 	}
 
 	switch possibleVersion {
-	case ver118, ver120:
+	case ver118, ver120, verCosmo:
 		t.nfunctab = uint32(offset(0))
 		t.nfiletab = uint32(offset(1))
 		t.textStart = t.PC // use the start PC instead of reading from the table, which may be unrelocated
@@ -463,7 +475,15 @@ func (f funcData) nameOff() uint32     { return f.field(1) }
 func (f funcData) deferreturn() uint32 { return f.field(3) }
 func (f funcData) pcfile() uint32      { return f.field(5) }
 func (f funcData) pcln() uint32        { return f.field(6) }
-func (f funcData) cuOffset() uint32    { return f.field(8) }
+
+func (f funcData) cuOffset() uint32 {
+	if f.t.version >= verCosmo {
+		// The compact _func layout dropped the npcdata field that
+		// preceded cuOffset, moving it up one slot.
+		return f.field(7)
+	}
+	return f.field(8)
+}
 
 // field returns the nth field of the _func struct.
 // It panics if n == 0 or n > 9; for n == 0, call f.entryPC.
@@ -537,7 +557,7 @@ func (t *LineTable) findFileLine(entry uint64, filetab, linetab uint32, filenum,
 	fileStartPC := filePC
 	for t.step(&fp, &filePC, &fileVal, filePC == entry) {
 		fileIndex := fileVal
-		if t.version == ver116 || t.version == ver118 || t.version == ver120 {
+		if t.version >= ver116 {
 			fileIndex = int32(t.binary.Uint32(cutab[fileVal*4:]))
 		}
 		if fileIndex == filenum && fileStartPC < filePC {
@@ -636,7 +656,7 @@ func (t *LineTable) go12LineToPC(file string, line int) (pc uint64) {
 		entry := f.entryPC()
 		filetab := f.pcfile()
 		linetab := f.pcln()
-		if t.version == ver116 || t.version == ver118 || t.version == ver120 {
+		if t.version >= ver116 {
 			if f.cuOffset() == ^uint32(0) {
 				// skip functions without compilation unit (not real function, or linker generated)
 				continue

@@ -14,12 +14,76 @@ import (
 	"fmt"
 	"internal/abi"
 	"internal/buildcfg"
+	"math/bits"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-const funcSize = 11 * 4 // funcSize is the size of the _func object in runtime/runtime2.go
+// funcSize is the size of the fixed part of the _func object in
+// runtime/runtime2.go. The record continues with the presence-bitmap
+// encoded pcdata and funcdata offset arrays (see funcShape).
+const funcSize = 10 * 4
+
+// funcShape describes the encoded shape of a _func record: which pcdata
+// tables and funcdata slots have offset entries following the fixed part
+// of the record. Bit i of pcMask is set iff pcdata table i is present;
+// bit j of fdMask is set iff funcdata slot j is present. Only present
+// entries are written, in increasing index order, pcdata array first.
+//
+// Keep in sync with runtime/runtime2.go:_func and
+// runtime/symtab.go:pcdatastart,funcdata.
+type funcShape struct {
+	pcMask uint8
+	fdMask uint8
+}
+
+// dataBytes returns the total size in bytes of the variable-length
+// pcdata/funcdata offset arrays of a record with this shape.
+func (sh funcShape) dataBytes() int64 {
+	return int64(bits.OnesCount8(sh.pcMask)+bits.OnesCount8(sh.fdMask)) * 4
+}
+
+// funcPcdataOffsets returns the pctab offsets of the pcdata tables of s,
+// indexed by pcdata table index, together with the presence bitmap of the
+// nonzero offsets. An offset of 0 means "no table" (pctab offset 0 is
+// reserved by generatePctab), and is encoded as an absent slot.
+//
+// pcinline and pcdata must come from ldr.PcdataAuxs(s), and generatePctab
+// must already have assigned the pctab offsets as the symbol values.
+func funcPcdataOffsets(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo, pcinline loader.Sym, pcdata []loader.Sym) (offs [8]uint32, mask uint8) {
+	n := numPCData(ldr, s, fi)
+	if n > 8 {
+		panic(fmt.Sprintf("%s: too many pcdata tables for the presence bitmap: %d", ldr.SymName(s), n))
+	}
+	for j, pcSym := range pcdata {
+		offs[j] = uint32(ldr.SymValue(pcSym))
+	}
+	if fi.NumInlTree() > 0 {
+		offs[abi.PCDATA_InlTreeIndex] = uint32(ldr.SymValue(pcinline))
+	}
+	for j := uint32(0); j < n; j++ {
+		if offs[j] != 0 {
+			mask |= 1 << j
+		}
+	}
+	return offs, mask
+}
+
+// funcFuncdataMask returns the presence bitmap of the funcdata slots of s.
+// A slot is present iff it has a real funcdata symbol (see ignoreFuncData);
+// funcdata must come from funcData(ldr, s, fi, inlSym, ...).
+func funcFuncdataMask(ldr *loader.Loader, s loader.Sym, funcdata []loader.Sym) (mask uint8) {
+	if len(funcdata) > 8 {
+		panic(fmt.Sprintf("%s: too many funcdata slots for the presence bitmap: %d", ldr.SymName(s), len(funcdata)))
+	}
+	for j, fdSym := range funcdata {
+		if !ignoreFuncData(ldr, s, j, fdSym) {
+			mask |= 1 << uint(j)
+		}
+	}
+	return mask
+}
 
 // pclntab holds the state needed for pclntab generation.
 type pclntab struct {
@@ -702,13 +766,13 @@ func numPCData(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo) uint32 {
 //   - array of func objects, interleaved with pcdata and funcdata
 func (state *pclntab) generateFunctab(ctxt *Link, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
 	// Calculate the size of the table.
-	size, startLocations := state.calculateFunctabSize(ctxt, funcs)
+	size, startLocations, shapes := state.calculateFunctabSize(ctxt, funcs, inlSyms)
 	writePcln := func(ctxt *Link, s loader.Sym) {
 		ldr := ctxt.loader
 		sb := ldr.MakeSymbolUpdater(s)
 		// Write the data.
 		writePCToFunc(ctxt, sb, funcs, startLocations)
-		writeFuncs(ctxt, sb, funcs, inlSyms, startLocations, cuOffsets, nameOffsets)
+		writeFuncs(ctxt, sb, funcs, inlSyms, startLocations, shapes, cuOffsets, nameOffsets)
 	}
 	state.pclntab = state.addGeneratedSym(ctxt, "runtime.functab", size, 4, writePcln)
 }
@@ -734,11 +798,13 @@ func funcData(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo, inlSym loade
 	return fdSyms
 }
 
-// calculateFunctabSize calculates the size of the pclntab, and the offsets in
-// the output buffer for individual func entries.
-func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym) (int64, []uint32) {
+// calculateFunctabSize calculates the size of the pclntab, the offsets in
+// the output buffer for individual func entries, and the encoded shape
+// (pcdata/funcdata presence bitmaps) of every func entry.
+func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym) (int64, []uint32, []funcShape) {
 	ldr := ctxt.loader
 	startLocations := make([]uint32, len(funcs))
+	shapes := make([]funcShape, len(funcs))
 
 	// Allocate space for the pc->func table. This structure consists of a pc offset
 	// and an offset to the func structure. After that, we have a single pc
@@ -747,25 +813,25 @@ func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym) (int64
 
 	// Now find the space for the func objects. We do this in a running manner,
 	// so that we can find individual starting locations.
+	var pcdata, funcdata []loader.Sym
 	for i, s := range funcs {
-		size = Rnd(size, int64(ctxt.Arch.PtrSize))
+		// _func records are 4-byte aligned (every field is uint32 or uint8).
+		size = Rnd(size, 4)
 		startLocations[i] = uint32(size)
 		fi := ldr.FuncInfo(s)
 		size += funcSize
 		if fi.Valid() {
 			fi.Preload()
-			numFuncData := ldr.NumFuncdata(s)
-			if fi.NumInlTree() > 0 {
-				if numFuncData < abi.FUNCDATA_InlTree+1 {
-					numFuncData = abi.FUNCDATA_InlTree + 1
-				}
-			}
-			size += int64(numPCData(ldr, s, fi) * 4)
-			size += int64(numFuncData * 4)
+			var pcinline loader.Sym
+			_, _, _, pcinline, pcdata = ldr.PcdataAuxs(s, pcdata)
+			_, shapes[i].pcMask = funcPcdataOffsets(ldr, s, fi, pcinline, pcdata)
+			funcdata = funcData(ldr, s, fi, inlSyms[s], funcdata)
+			shapes[i].fdMask = funcFuncdataMask(ldr, s, funcdata)
+			size += shapes[i].dataBytes()
 		}
 	}
 
-	return size, startLocations
+	return size, startLocations, shapes
 }
 
 // textOff computes the offset of a text symbol, relative to textStart,
@@ -814,7 +880,7 @@ func writePCToFunc(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, sta
 }
 
 // writeFuncs writes the func structures and pcdata to runtime.functab.
-func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, startLocations, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
+func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, startLocations []uint32, shapes []funcShape, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
 	ldr := ctxt.loader
 	deferReturnSym := ldr.Lookup("runtime.deferreturn", abiInternalVer)
 	textStart := ldr.SymValue(ldr.Lookup("runtime.text", 0))
@@ -831,6 +897,7 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 			pcsp, pcfile, pcline, pcinline, pcdata = ldr.PcdataAuxs(s, pcdata)
 			startLine = fi.StartLine()
 		}
+		shape := shapes[i]
 
 		off := int64(startLocations[i])
 		// entryOff uint32 (offset of func entry PC from textStart)
@@ -856,7 +923,7 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		deferreturn := computeDeferReturn(ctxt, deferReturnSym, s)
 		off = sb.SetUint32(ctxt.Arch, off, deferreturn)
 
-		// pcdata
+		// pcsp, pcfile, pcln
 		if fi.Valid() {
 			off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(pcsp)))
 			off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(pcfile)))
@@ -864,7 +931,6 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		} else {
 			off += 12
 		}
-		off = sb.SetUint32(ctxt.Arch, off, numPCData(ldr, s, fi))
 
 		// Store the offset to compilation unit's file table.
 		cuIdx := ^uint32(0)
@@ -890,36 +956,43 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		}
 		off = sb.SetUint8(ctxt.Arch, off, uint8(flag))
 
-		off += 1 // pad
+		// pcdataMask, funcdataMask uint8 presence bitmaps.
+		// funcdataMask must be the final entry.
+		off = sb.SetUint8(ctxt.Arch, off, shape.pcMask)
+		off = sb.SetUint8(ctxt.Arch, off, shape.fdMask)
 
-		// nfuncdata must be the final entry.
-		funcdata = funcData(ldr, s, fi, 0, funcdata)
-		off = sb.SetUint8(ctxt.Arch, off, uint8(len(funcdata)))
+		if off != int64(startLocations[i])+funcSize {
+			panic("_func fixed part size mismatch")
+		}
 
-		// Output the pcdata.
+		// Output the offsets of the present pcdata tables, in index order.
 		if fi.Valid() {
-			for j, pcSym := range pcdata {
-				sb.SetUint32(ctxt.Arch, off+int64(j*4), uint32(ldr.SymValue(pcSym)))
+			pcOffs, pcMask := funcPcdataOffsets(ldr, s, fi, pcinline, pcdata)
+			if pcMask != shape.pcMask {
+				panic("pcdata presence mask changed between size calculation and write")
 			}
-			if fi.NumInlTree() > 0 {
-				sb.SetUint32(ctxt.Arch, off+abi.PCDATA_InlTreeIndex*4, uint32(ldr.SymValue(pcinline)))
+			for j := 0; j < 8; j++ {
+				if pcMask&(1<<j) != 0 {
+					off = sb.SetUint32(ctxt.Arch, off, pcOffs[j])
+				}
 			}
 		}
 
-		// Write funcdata refs as offsets from go:func.* and go:funcrel.*.
+		// Write the present funcdata refs as offsets from go:func.*, in
+		// slot order. Absent slots (see ignoreFuncData) have a cleared
+		// bit in funcdataMask and no entry.
 		funcdata = funcData(ldr, s, fi, inlSyms[s], funcdata)
-		// Missing funcdata will be ^0. See runtime/symtab.go:funcdata.
-		off = int64(startLocations[i] + funcSize + numPCData(ldr, s, fi)*4)
+		if funcFuncdataMask(ldr, s, funcdata) != shape.fdMask {
+			panic("funcdata presence mask changed between size calculation and write")
+		}
 		for j := range funcdata {
-			dataoff := off + int64(4*j)
-			fdsym := funcdata[j]
-
-			if ignoreFuncData(ldr, s, j, fdsym) {
-				sb.SetUint32(ctxt.Arch, dataoff, ^uint32(0)) // ^0 is a sentinel for "no value"
-				continue
+			if shape.fdMask&(1<<uint(j)) != 0 {
+				off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(funcdata[j])))
 			}
+		}
 
-			sb.SetUint32(ctxt.Arch, dataoff, uint32(ldr.SymValue(fdsym)))
+		if off != int64(startLocations[i])+funcSize+shape.dataBytes() {
+			panic("_func record size mismatch")
 		}
 	}
 }

@@ -1233,12 +1233,20 @@ func funcMaxSPDelta(f funcInfo) int32 {
 	}
 }
 
+// pcdatastart returns the offset into pctab of pcdata table `table` for f.
+// Table `table` must be present, i.e. bit `table` of f.pcdataMask must be
+// set; the callers below check that.
 func pcdatastart(f funcInfo, table uint32) uint32 {
-	return *(*uint32)(add(unsafe.Pointer(&f.nfuncdata), unsafe.Sizeof(f.nfuncdata)+uintptr(table)*4))
+	// The offset array after the fixed part of the record holds entries
+	// for present tables only, in index order: the entry for `table` is
+	// at the popcount of the presence bits below it. sys.OnesCount64 is a
+	// compiler intrinsic (single popcount instruction on amd64/arm64).
+	idx := uintptr(sys.OnesCount64(uint64(uint32(f.pcdataMask) & (1<<table - 1))))
+	return *(*uint32)(add(unsafe.Pointer(&f.funcdataMask), unsafe.Sizeof(f.funcdataMask)+idx*4))
 }
 
 func pcdatavalue(f funcInfo, table uint32, targetpc uintptr) int32 {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1
 	}
 	r, _ := pcvalue(f, pcdatastart(f, table), targetpc, true)
@@ -1246,7 +1254,7 @@ func pcdatavalue(f funcInfo, table uint32, targetpc uintptr) int32 {
 }
 
 func pcdatavalue1(f funcInfo, table uint32, targetpc uintptr, strict bool) int32 {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1
 	}
 	r, _ := pcvalue(f, pcdatastart(f, table), targetpc, strict)
@@ -1255,7 +1263,7 @@ func pcdatavalue1(f funcInfo, table uint32, targetpc uintptr, strict bool) int32
 
 // Like pcdatavalue, but also return the start PC of this PCData value.
 func pcdatavalue2(f funcInfo, table uint32, targetpc uintptr) (int32, uintptr) {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1, 0
 	}
 	return pcvalue(f, pcdatastart(f, table), targetpc, true)
@@ -1264,21 +1272,20 @@ func pcdatavalue2(f funcInfo, table uint32, targetpc uintptr) (int32, uintptr) {
 // funcdata returns a pointer to the ith funcdata for f.
 // funcdata should be kept in sync with cmd/link:writeFuncs.
 func funcdata(f funcInfo, i uint8) unsafe.Pointer {
-	if i < 0 || i >= f.nfuncdata {
+	if uint32(f.funcdataMask)>>i&1 == 0 {
 		return nil
 	}
 	base := f.datap.gofunc // load gofunc address early so that we calculate during cache misses
-	p := uintptr(unsafe.Pointer(&f.nfuncdata)) + unsafe.Sizeof(f.nfuncdata) + uintptr(f.npcdata)*4 + uintptr(i)*4
+	// The offset array after the fixed part of the record holds the
+	// present pcdata table offsets followed by the present funcdata
+	// offsets, in index order. Count the present entries before funcdata
+	// slot i with a single popcount of both bitmaps (sys.OnesCount64 is a
+	// compiler intrinsic).
+	bitsBelow := uint64(f.pcdataMask) | uint64(f.funcdataMask&(1<<i-1))<<8
+	idx := uintptr(sys.OnesCount64(bitsBelow))
+	p := uintptr(unsafe.Pointer(&f.funcdataMask)) + unsafe.Sizeof(f.funcdataMask) + idx*4
 	off := *(*uint32)(unsafe.Pointer(p))
-	// Return off == ^uint32(0) ? 0 : f.datap.gofunc + uintptr(off), but without branches.
-	// The compiler calculates mask on most architectures using conditional assignment.
-	var mask uintptr
-	if off == ^uint32(0) {
-		mask = 1
-	}
-	mask--
-	raw := base + uintptr(off)
-	return unsafe.Pointer(raw & mask)
+	return unsafe.Pointer(base + uintptr(off))
 }
 
 // step advances to the next pc, value pair in the encoded table.

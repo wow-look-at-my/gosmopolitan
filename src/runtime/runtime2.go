@@ -1073,6 +1073,12 @@ const (
 // See https://golang.org/s/go12symtab.
 // Keep in sync with linker (../cmd/link/internal/ld/pcln.go:/pclntab)
 // and with package debug/gosym and with symtab.go in package runtime.
+//
+// This fork uses a compact layout (abi.CosmoPCLnTabMagic): records are
+// 4-byte aligned, the fixed part is 40 bytes, and the trailing offset
+// arrays store only present entries, described by the pcdataMask and
+// funcdataMask presence bitmaps (which replaced upstream's npcdata count
+// and the 0 / ^uint32(0) sentinel slots).
 type _func struct {
 	sys.NotInHeap // Only in static data
 
@@ -1082,38 +1088,37 @@ type _func struct {
 	args        int32  // in/out args size
 	deferreturn uint32 // offset of start of a deferreturn call instruction from entry, if any.
 
-	pcsp      uint32
-	pcfile    uint32
-	pcln      uint32
-	npcdata   uint32
-	cuOffset  uint32     // runtime.cutab offset of this function's CU
-	startLine int32      // line number of start of function (func keyword/TEXT directive)
-	funcID    abi.FuncID // set for certain special runtime functions
-	flag      abi.FuncFlag
-	_         [1]byte // pad
-	nfuncdata uint8   // must be last, must end on a uint32-aligned boundary
+	pcsp         uint32
+	pcfile       uint32
+	pcln         uint32
+	cuOffset     uint32     // runtime.cutab offset of this function's CU
+	startLine    int32      // line number of start of function (func keyword/TEXT directive)
+	funcID       abi.FuncID // set for certain special runtime functions
+	flag         abi.FuncFlag
+	pcdataMask   uint8 // presence bitmap of pcdata tables; bit i set iff table i is present
+	funcdataMask uint8 // presence bitmap of funcdata slots; must be last, must end on a uint32-aligned boundary
 
 	// The end of the struct is followed immediately by two variable-length
 	// arrays that reference the pcdata and funcdata locations for this
-	// function.
+	// function, holding one uint32 for each set bit of pcdataMask and
+	// funcdataMask respectively, in increasing table/slot index order.
 
 	// pcdata contains the offset into moduledata.pctab for the start of
-	// that index's table. e.g.,
-	// &moduledata.pctab[_func.pcdata[_PCDATA_UnsafePoint]] is the start of
-	// the unsafe point table.
+	// each present table. The entry for table i (present iff bit i of
+	// pcdataMask is set) is pcdata[popcount(pcdataMask & (1<<i - 1))];
+	// see pcdatastart. A cleared bit means there is no table (upstream
+	// encoded that as a 0 offset in a dense [npcdata]uint32 array).
 	//
-	// An offset of 0 indicates that there is no table.
-	//
-	// pcdata [npcdata]uint32
+	// pcdata [popcount(pcdataMask)]uint32
 
 	// funcdata contains the offset past moduledata.gofunc which contains a
-	// pointer to that index's funcdata. e.g.,
-	// *(moduledata.gofunc +  _func.funcdata[_FUNCDATA_ArgsPointerMaps]) is
-	// the argument pointer map.
+	// pointer to each present funcdata. The entry for slot i (present iff
+	// bit i of funcdataMask is set) follows the pcdata array at index
+	// popcount(funcdataMask & (1<<i - 1)); see funcdata. A cleared bit
+	// means there is no entry (upstream encoded that as a ^uint32(0)
+	// sentinel in a dense [nfuncdata]uint32 array).
 	//
-	// An offset of ^uint32(0) indicates that there is no entry.
-	//
-	// funcdata [nfuncdata]uint32
+	// funcdata [popcount(funcdataMask)]uint32
 }
 
 // Pseudo-Func that is returned for PCs that occur in inlined code.
