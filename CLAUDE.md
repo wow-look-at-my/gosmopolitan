@@ -301,9 +301,10 @@ executes the darwin (Syslib) code paths.
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
-fixes touch under node 22 (js) and wazero (wasip1), and runs the
-wasmexport compiler regression tests via cmd/internal/testdir for both
-wasm targets.
+fixes touch under node 22 (js) and wazero (wasip1), runs the full
+testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
+end to end), and runs the wasmexport compiler regression tests via
+cmd/internal/testdir for both wasm targets.
 
 A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
 installable toolchain tarball to buildhost on every push - see Toolchain
@@ -401,6 +402,20 @@ the full catalog of fixes and remaining gaps):
   event loop until mark completion) and the wasm export are js-only.
   `testdata/framebench` (10k allocs/frame under node): p99 frame time
   21.6ms -> 4.8ms, zero frames over 8ms.
+- Round 5 UDP (2026-07-19): `GOWASI=wasmedgesock` now also gives wasip1
+  real UDP: ListenUDP/ListenPacket with ReadFrom/WriteTo, connected
+  `Dial("udp")` with Read/Write preserving datagram boundaries, and the
+  same deadline machinery as TCP. Receives import the newer-generation
+  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
+  everywhere and cannot report the source port), so opt-in binaries now
+  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
+  the generation mix, the 128-byte family-tagged address buffer, and
+  the 0.12-0.13 byte-swapped-port quirk are documented in
+  `syscall/net_wasip1_wasmedge.go`. ReadMsgUDP/WriteMsgUDP are ENOSYS
+  (no ancillary data in the extension); DNS and unix sockets stay
+  fake. `testdata/wasip1sock` grew UDP host support plus
+  udpecho/udpconnected guests, and the CI wasm job now runs the whole
+  wasip1sock suite. Default (no GOWASI) builds are unchanged.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
