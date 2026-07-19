@@ -531,6 +531,22 @@ jobs:
           export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
           GOOS=js GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
 
+      - name: Test streaming fetch uploads under node (jsfetchstream e2e)
+        # End-to-end proof that GODEBUG=jsfetchnode=1 request bodies with
+        # unknown length STREAM: the guest writes chunk A, waits until the
+        # node server reports A arrived while the POST body is still open,
+        # then writes chunk B - impossible with a buffered upload. Also
+        # covers the known-length flip side (buffered, Content-Length
+        # preserved), an 8 MiB bounded-memory upload, and mid-stream
+        # context cancellation (prompt return, body closed, server sees
+        # the abort). Observed ~5s locally.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
+          (cd testdata/jsfetchstream && GOOS=js GOARCH=wasm go build -o /tmp/jsfetchstream.wasm .)
+          node testdata/jsfetchstream/run.js lib/wasm /tmp/jsfetchstream.wasm
+
       - name: Test wasip1/wasm under wazero
         # Observed 57s locally. lib/wasm supplies go_wasip1_wasm_exec.
         timeout-minutes: 10
