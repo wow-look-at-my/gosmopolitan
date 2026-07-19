@@ -551,6 +551,9 @@ func (f funcData) field(n uint32) uint32 {
 
 // step advances to the next pc, value pair in the encoded table.
 func (t *LineTable) step(p *[]byte, pc *uint64, val *int32, first bool) bool {
+	if t.version == verCosmo {
+		return t.stepCosmo(p, pc, val, first)
+	}
 	uvdelta := t.readvarint(p)
 	if uvdelta == 0 && !first {
 		return false
@@ -564,6 +567,43 @@ func (t *LineTable) step(p *[]byte, pc *uint64, val *int32, first bool) bool {
 	pcdelta := t.readvarint(p) * t.quantum
 	*pc += uint64(pcdelta)
 	*val += vdelta
+	return true
+}
+
+// stepCosmo is the verCosmo pair decoding: a first byte >= 0x80 is a
+// whole packed pair (value delta -4..3 in bits 4-6, pc delta 1..16 in
+// bits 0-3), 0x7F escapes a multi-byte zig-zag value delta followed by
+// a uvarint pc delta, and 0x00..0x7E is a one-byte zig-zag value delta
+// followed by a uvarint pc delta. A 0x00 value-delta byte terminates
+// the table except in the first pair. See
+// cmd/internal/obj/pcln.go:appendPCPair.
+func (t *LineTable) stepCosmo(p *[]byte, pc *uint64, val *int32, first bool) bool {
+	b := (*p)[0]
+	if b >= 0x80 {
+		// Packed pair.
+		*p = (*p)[1:]
+		*val += int32(b>>4&7) - 4
+		*pc += uint64((uint32(b&0xF) + 1) * t.quantum)
+		return true
+	}
+	var uvdelta uint32
+	if b == 0x7F {
+		*p = (*p)[1:]
+		uvdelta = t.readvarint(p)
+	} else {
+		if b == 0 && !first {
+			return false
+		}
+		uvdelta = uint32(b)
+		*p = (*p)[1:]
+	}
+	if uvdelta&1 != 0 {
+		uvdelta = ^(uvdelta >> 1)
+	} else {
+		uvdelta >>= 1
+	}
+	*val += int32(uvdelta)
+	*pc += uint64(t.readvarint(p) * t.quantum)
 	return true
 }
 

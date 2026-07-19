@@ -1395,16 +1395,29 @@ func funcdata(f funcInfo, i uint8) unsafe.Pointer {
 }
 
 // step advances to the next pc, value pair in the encoded table.
+// The pair grammar is described at cmd/internal/obj/pcln.go:appendPCPair:
+// a first byte >= 0x80 is a whole packed pair (value delta -4..3 in bits
+// 4-6, pc delta 1..16 in bits 0-3), 0x7F escapes a multi-byte zig-zag
+// value delta followed by a uvarint pc delta, and 0x00..0x7E is a
+// one-byte zig-zag value delta followed by a uvarint pc delta. A 0x00
+// value-delta byte terminates the table except in the first pair.
 func step(p []byte, pc *uintptr, val *int32, first bool) (newp []byte, ok bool) {
-	// For both uvdelta and pcdelta, the common case (~70%)
-	// is that they are a single byte. If so, avoid calling readvarint.
-	uvdelta := uint32(p[0])
+	b := uint32(p[0])
+	if b >= 0x80 {
+		// Packed pair (the common case, ~50-70%).
+		*val += int32(b>>4&7) - 4
+		*pc += uintptr((b&0xF + 1) * sys.PCQuantum)
+		return p[1:], true
+	}
+
+	uvdelta := b
 	if uvdelta == 0 && !first {
 		return nil, false
 	}
 	n := uint32(1)
-	if uvdelta&0x80 != 0 {
-		n, uvdelta = readvarint(p)
+	if uvdelta == 0x7F {
+		n, uvdelta = readvarint(p[1:])
+		n++
 	}
 	*val += int32(-(uvdelta & 1) ^ (uvdelta >> 1))
 	p = p[n:]
