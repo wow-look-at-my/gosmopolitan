@@ -532,10 +532,18 @@ running goroutine for the length of the profiling window:
   (3) a rare `fatal error: wirep: invalid p state` (p->m set while _Pidle)
   in the GOMAXPROCS=4 runtime suite (~1/10 batches; not observed at the
   default GOMAXPROCS=1 or =2) - a P handoff race in the multi-P bring-up,
-  tracked for the B4 bug sweep; (4) syscall/js's main-thread affinity is
-  per-call best-effort: a goroutine can in principle be preempted and
-  migrated off the main M between mustBeMainThread's migrate and the host
-  call (the Value-finalizer instance of this TOCTOU is fixed by always
-  queueing; full affinity/host-call forwarding is B4).
+  tracked for the B4 bug sweep; (4) a syscall/js operation from a worker
+  M migrates its goroutine to the main M per call (each blocked-then
+  -rescheduled goroutine pays one migration per bounce back to a worker);
+  host-call forwarding, which would avoid the bounce, is B4. The affinity
+  itself is airtight: every entry point runs inside a mainThreadOp region
+  (a wasmMainOnly mark on the g), and a worker M's schedule() refuses to
+  resume a marked goroutine, rerouting it to the migrate queue - so a
+  preemption or GC-assist park between "confirmed on main" and the host
+  import can no longer strand the call on a worker instance (the
+  finalizeRef/valueGet "called on a worker instance" crashes in the
+  GOMAXPROCS=4 suite). The Value finalizer additionally queues its
+  release (the GC may run it on any M outside any region); the next
+  main-thread operation drains the queue inside its region.
   Remaining for B4: full main-thread affinity/host-call forwarding,
   memory.grow coordination audit, dedicated mark worker knobs, browser hosts.

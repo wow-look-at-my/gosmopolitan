@@ -3713,6 +3713,30 @@ func wasmSchedPickMigrated() *g {
 	return gp
 }
 
+// wasmSchedPushMainOnly hands an already-runnable goroutine that may only
+// run on the main M (gp.wasmMainOnly > 0: it is inside a syscall/js
+// main-thread operation, see wasmThreadsBeginMainOp in event_js.go) to
+// the migrate queue, and pokes the main M the same way a migrate park
+// does. Called by schedule() on a worker M whose findRunnable picked such
+// a goroutine - the mark keeps the goroutine preemptible and parkable, so
+// after any preemption or park it can surface in an ordinary run queue
+// and be picked up by any M; this is the reroute that guarantees it only
+// ever RESUMES on the main M. The goroutine stays _Grunnable on the queue
+// (no status transition, so the tracer sees nothing new); the consumer in
+// findRunnable only unparks entries that arrived _Gwaiting via a migrate
+// park.
+func wasmSchedPushMainOnly(gp *g) {
+	lock(&wasmMigrateLock)
+	wasmMigrateQ.push(gp)
+	wasmMigrateCount.Add(1)
+	unlock(&wasmMigrateLock)
+	wasmWakeMainThread()
+	if mgp := m0.curg; mgp != nil {
+		mgp.stackguard1 = stackPreempt
+	}
+	wasmSchedNudgeWake()
+}
+
 // wasmThreadsReleasePNoM releases pp when an M is needed to run it but
 // the GOWASM=threads worker pool cannot provide one (mcount() at
 // wasmMaxMCount): it honors a pending stop-the-world or safe-point
@@ -3979,11 +4003,16 @@ top:
 	// a run queue, so nothing else would schedule them.
 	if GOARCH == "wasm" && wasmThreadsEnabled {
 		if gp := wasmSchedPickMigrated(); gp != nil {
-			trace := traceAcquire()
-			casgstatus(gp, _Gwaiting, _Grunnable)
-			if trace.ok() {
-				trace.GoUnpark(gp, 0)
-				traceRelease(trace)
+			// A migrate-parked goroutine arrives _Gwaiting and needs the
+			// unpark; a main-only goroutine rerouted by a worker M's
+			// schedule (wasmSchedPushMainOnly) is already _Grunnable.
+			if readgstatus(gp)&^_Gscan == _Gwaiting {
+				trace := traceAcquire()
+				casgstatus(gp, _Gwaiting, _Grunnable)
+				if trace.ok() {
+					trace.GoUnpark(gp, 0)
+					traceRelease(trace)
+				}
 			}
 			return gp, false, false
 		}
@@ -4796,6 +4825,21 @@ top:
 	// start a new spinning M.
 	if mp.spinning {
 		resetspinning()
+	}
+
+	if GOARCH == "wasm" && wasmThreadsEnabled && mp != &m0 && gp.wasmMainOnly != 0 && gp.lockedm == 0 {
+		// GOWASM=threads: this goroutine is inside a syscall/js
+		// main-thread operation (wasmThreadsBeginMainOp) and may only run
+		// on the main M - the worker instances stub every syscall/js host
+		// import with a throw. It can surface here on a worker M because
+		// the mark keeps it fully preemptible and parkable (a loop-gate
+		// yield, stack-growth preempt or GC-assist park drops it into an
+		// ordinary run queue, where any M can pick it up). Hand it to the
+		// migrate queue - popped only by the main M's findRunnable - and
+		// look for other work. This is what makes syscall/js's
+		// "confirmed on the main thread" durable across reschedules.
+		wasmSchedPushMainOnly(gp)
+		goto top
 	}
 
 	if sched.disable.user && !schedEnabled(gp) {

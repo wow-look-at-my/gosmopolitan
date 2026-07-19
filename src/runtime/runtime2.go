@@ -553,23 +553,33 @@ type g struct {
 	ditWanted       bool // set if g wants to be executed with DIT enabled
 	syncSafePoint   bool // set if g is stopped at a synchronous safe point.
 	runningCleanups atomic.Bool
-	sig             uint32
-	secret          int32 // current nesting of runtime/secret.Do calls.
-	writebuf        []byte
-	sigcode0        uintptr
-	sigcode1        uintptr
-	sigpc           uintptr
-	parentGoid      uint64          // goid of goroutine that created this goroutine
-	gopc            uintptr         // pc of go statement that created this goroutine
-	ancestors       *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc         uintptr         // pc of goroutine function
-	racectx         uintptr
-	waiting         *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	cgoCtxt         []uintptr      // cgo traceback context
-	labels          unsafe.Pointer // profiler labels
-	timer           *timer         // cached timer for time.Sleep
-	sleepWhen       int64          // when to sleep until
-	selectDone      atomic.Uint32  // are we participating in a select and did someone win the race?
+	// wasmMainOnly (GOWASM=threads only) is a nesting counter of open
+	// syscall/js main-thread operations: while nonzero, only the main M
+	// may execute this goroutine (worker instances stub every syscall/js
+	// host import), so schedule() on a worker M hands it to the migrate
+	// queue instead of running it. Only mutated by the goroutine itself
+	// (runtimeBeginMainOp/runtimeEndMainOp via syscall/js); read by other
+	// Ms only while they own the descheduled g, so plain accesses are
+	// sufficient. uint8 in the byte-cluster hole before sig, so g's size
+	// is unchanged on every arch; nesting deeper than 255 throws.
+	wasmMainOnly uint8
+	sig          uint32
+	secret       int32 // current nesting of runtime/secret.Do calls.
+	writebuf     []byte
+	sigcode0     uintptr
+	sigcode1     uintptr
+	sigpc        uintptr
+	parentGoid   uint64          // goid of goroutine that created this goroutine
+	gopc         uintptr         // pc of go statement that created this goroutine
+	ancestors    *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
+	startpc      uintptr         // pc of goroutine function
+	racectx      uintptr
+	waiting      *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	cgoCtxt      []uintptr      // cgo traceback context
+	labels       unsafe.Pointer // profiler labels
+	timer        *timer         // cached timer for time.Sleep
+	sleepWhen    int64          // when to sleep until
+	selectDone   atomic.Uint32  // are we participating in a select and did someone win the race?
 
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile

@@ -14,7 +14,7 @@ import (
 // GOWASM=threads: JavaScript values live on the main thread. Worker-thread
 // Ms (see the runtime's GOWASM=threads support) have every syscall/js host
 // import stubbed out, so a call from a goroutine running on a worker M
-// cannot work directly. mustBeMainThread therefore MIGRATES the calling
+// cannot work directly. mainThreadOp therefore MIGRATES the calling
 // goroutine to the main thread (runtimeMigrateToMain: the runtime parks it
 // and the main M's scheduler picks it up directly), after which the
 // operation proceeds normally; the goroutine simply continues on the main
@@ -45,9 +45,53 @@ func runtimeThreadsEnabled() bool
 // Implemented in the runtime (event_js.go).
 func runtimeMigrateToMain() bool
 
-func mustBeMainThread(op string) {
+// runtimeBeginMainOp marks the calling goroutine main-thread-only (a
+// nesting counter): while marked, the scheduler will only ever RESUME it
+// on the main M (a worker M's schedule hands it to the migrate queue
+// instead of running it). runtimeEndMainOp closes the region. Implemented
+// in the runtime (event_js.go).
+func runtimeBeginMainOp()
+
+// runtimeEndMainOp closes a runtimeBeginMainOp region.
+func runtimeEndMainOp()
+
+// endMainOp is what mainThreadOp returns without GOWASM=threads: a no-op,
+// so the defer costs nothing but the call.
+func endMainOp() {}
+
+// mainThreadOp begins a main-thread operation region and returns the
+// function that ends it; every syscall/js entry point that touches host
+// imports runs as
+//
+//	defer mainThreadOp("Value.Get")()
+//
+// Without GOWASM=threads this is a no-op. With it, the region guarantees
+// every host import call inside executes on the main thread:
+//
+//  1. The goroutine is marked main-thread-only FIRST. The mark does not
+//     teleport - it constrains where the goroutine resumes after any
+//     preemption or park - so step 2 handles the current location.
+//  2. If currently on a worker M, migrate (park onto the migrate queue;
+//     only the main M pops it). After this check the goroutine is on the
+//     main M, and because of the mark every later reschedule returns it
+//     there: the "confirmed on main" fact can no longer be invalidated
+//     by a loop-gate yield, stack-growth preempt, or GC-assist park
+//     between the check and the host call (the TOCTOU that made worker
+//     instances throw "finalizeRef/valueGet called on a worker
+//     instance" under GC-heavy multi-P load).
+//
+// Only when migration cannot ever succeed - the main thread is
+// exclusively bound to a different locked goroutine - does it panic,
+// with a message naming the limitation, instead of dying in an opaque
+// JavaScript exception on the worker.
+func mainThreadOp(op string) func() {
+	if !runtimeThreadsEnabled() {
+		return endMainOp
+	}
+	runtimeBeginMainOp()
 	if runtimeOnWorkerThread() {
 		if !runtimeMigrateToMain() {
+			runtimeEndMainOp()
 			panic("syscall/js: " + op + " called from a goroutine on a worker thread while the " +
 				"main thread is locked to another goroutine: GOWASM=threads keeps JavaScript " +
 				"values and the event loop on the main thread, and this goroutine cannot be " +
@@ -57,6 +101,7 @@ func mustBeMainThread(op string) {
 	if pendingFinalizeCount.Load() != 0 {
 		drainPendingFinalizers()
 	}
+	return runtimeEndMainOp
 }
 
 // Value finalizers (makeValue) release JavaScript refs via the
@@ -77,6 +122,12 @@ func queueFinalizeRef(r ref) {
 	pendingFinalizeCount.Add(1)
 }
 
+// drainPendingFinalizers releases the queued refs via the finalizeRef
+// host import. Only called inside a mainThreadOp region, so every
+// finalizeRef executes on the main thread even if the goroutine is
+// preempted mid-loop (with the queue hot after GC-heavy tests this loop
+// is by far the longest run of host calls in the package - it is where
+// the pre-mark TOCTOU actually fired).
 func drainPendingFinalizers() {
 	pendingFinalizeMu.Lock()
 	refs := pendingFinalizeRefs

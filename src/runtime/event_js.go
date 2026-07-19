@@ -402,6 +402,44 @@ func wasmThreadsBuildEnabled() bool {
 	return wasmThreadsEnabled
 }
 
+// wasmThreadsBeginMainOp marks the calling goroutine as main-thread-only
+// for the duration of a syscall/js operation (a nesting counter, so the
+// package's operations may call each other). While marked, schedule() on
+// a worker M refuses to execute the goroutine and hands it to the
+// migrate queue instead (see wasmSchedPushMainOnly in proc.go) - closing
+// the TOCTOU between "confirmed on the main thread" and the host import
+// call(s): without it, any preemption or park in that window (loop-gate
+// yield, stack-growth preempt, GC assist park) could reschedule the
+// goroutine onto a worker M, whose instance stubs every syscall/js
+// import with a throw. Unlike an m.locks pin, the mark keeps the
+// goroutine fully preemptible and parkable - it only constrains WHERE it
+// resumes.
+//
+// Note the mark does not teleport: if the caller is currently on a
+// worker M it stays there until the next reschedule, so syscall/js sets
+// the mark FIRST and then checks/migrates - after that check, every
+// resume point is the main M.
+//
+//go:linkname wasmThreadsBeginMainOp syscall/js.runtimeBeginMainOp
+func wasmThreadsBeginMainOp() {
+	gp := getg()
+	if gp.wasmMainOnly == ^uint8(0) {
+		throw("wasm: syscall/js main-thread operations nested too deeply")
+	}
+	gp.wasmMainOnly++
+}
+
+// wasmThreadsEndMainOp closes a wasmThreadsBeginMainOp region.
+//
+//go:linkname wasmThreadsEndMainOp syscall/js.runtimeEndMainOp
+func wasmThreadsEndMainOp() {
+	gp := getg()
+	if gp.wasmMainOnly == 0 {
+		throw("wasm: unbalanced syscall/js main-op end")
+	}
+	gp.wasmMainOnly--
+}
+
 // wasmThreadsMigrateToMain moves the calling goroutine to the main M
 // under GOWASM=threads: it parks and publishes itself on the migrate
 // queue (see wasmSchedPickMigrated in proc.go), which only the main M's
