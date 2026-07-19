@@ -51,6 +51,22 @@ func makeValue(r ref) Value {
 		gcPtr = new(ref)
 		*gcPtr = r
 		runtime.SetFinalizer(gcPtr, func(p *ref) {
+			if runtimeThreadsEnabled() {
+				// GOWASM=threads: the finalizeRef host import is only
+				// available on the main thread, and the GC may run this
+				// finalizer on a worker-thread M. ALWAYS queue the
+				// release (the next syscall/js operation on the main
+				// thread frees it): checking runtimeOnWorkerThread here
+				// and calling finalizeRef directly would be a TOCTOU -
+				// the finalizer goroutine is preemptible, so it can be
+				// migrated to a worker M between the check and the host
+				// call, which then hits the worker instance's throwing
+				// import stub ("finalizeRef called on a worker
+				// instance", observed in the GOMAXPROCS=4 runtime
+				// suite).
+				queueFinalizeRef(*p)
+				return
+			}
 			finalizeRef(*p)
 		})
 	}
@@ -205,6 +221,7 @@ func ValueOf(x any) Value {
 	case float64:
 		return floatValue(x)
 	case string:
+		defer mainThreadOp("ValueOf")()
 		return makeValue(stringVal(x))
 	case []any:
 		a := arrayConstructor.New(len(x))
@@ -308,6 +325,7 @@ func (v Value) Get(p string) Value {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Get", vType})
 	}
+	defer mainThreadOp("Value.Get")()
 	r := makeValue(valueGet(v.ref, p))
 	runtime.KeepAlive(v)
 	return r
@@ -328,6 +346,7 @@ func (v Value) Set(p string, x any) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Set", vType})
 	}
+	defer mainThreadOp("Value.Set")()
 	xv := ValueOf(x)
 	valueSet(v.ref, p, xv.ref)
 	runtime.KeepAlive(v)
@@ -349,6 +368,7 @@ func (v Value) Delete(p string) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Delete", vType})
 	}
+	defer mainThreadOp("Value.Delete")()
 	valueDelete(v.ref, p)
 	runtime.KeepAlive(v)
 }
@@ -368,6 +388,7 @@ func (v Value) Index(i int) Value {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Index", vType})
 	}
+	defer mainThreadOp("Value.Index")()
 	r := makeValue(valueIndex(v.ref, i))
 	runtime.KeepAlive(v)
 	return r
@@ -382,6 +403,7 @@ func (v Value) SetIndex(i int, x any) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.SetIndex", vType})
 	}
+	defer mainThreadOp("Value.SetIndex")()
 	xv := ValueOf(x)
 	valueSetIndex(v.ref, i, xv.ref)
 	runtime.KeepAlive(v)
@@ -430,6 +452,7 @@ func (v Value) Length() int {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Length", vType})
 	}
+	defer mainThreadOp("Value.Length")()
 	r := valueLength(v.ref)
 	runtime.KeepAlive(v)
 	return r
@@ -442,6 +465,7 @@ func valueLength(v ref) int
 // It panics if v has no method m.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) Call(m string, args ...any) Value {
+	defer mainThreadOp("Value.Call")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueCall(v.ref, m, argRefs)
@@ -475,6 +499,7 @@ func valueCall(v ref, m string, args []ref) (ref, bool)
 // It panics if v is not a JavaScript function.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) Invoke(args ...any) Value {
+	defer mainThreadOp("Value.Invoke")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueInvoke(v.ref, argRefs)
@@ -503,6 +528,7 @@ func valueInvoke(v ref, args []ref) (ref, bool)
 // It panics if v is not a JavaScript function.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) New(args ...any) Value {
+	defer mainThreadOp("Value.New")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueNew(v.ref, argRefs)
@@ -620,6 +646,7 @@ func (v Value) String() string {
 }
 
 func jsString(v Value) string {
+	defer mainThreadOp("Value.String")()
 	str, length := valuePrepareString(v.ref)
 	runtime.KeepAlive(v)
 	b := make([]byte, length)
@@ -667,6 +694,7 @@ func (e *ValueError) Error() string {
 // It panics if src is not a Uint8Array or Uint8ClampedArray.
 // It returns the number of bytes copied, which will be the minimum of the lengths of src and dst.
 func CopyBytesToGo(dst []byte, src Value) int {
+	defer mainThreadOp("CopyBytesToGo")()
 	n, ok := copyBytesToGo(dst, src.ref)
 	runtime.KeepAlive(src)
 	if !ok {
@@ -688,6 +716,7 @@ func copyBytesToGo(dst []byte, src ref) (int, bool)
 // It panics if dst is not a Uint8Array or Uint8ClampedArray.
 // It returns the number of bytes copied, which will be the minimum of the lengths of src and dst.
 func CopyBytesToJS(dst Value, src []byte) int {
+	defer mainThreadOp("CopyBytesToJS")()
 	n, ok := copyBytesToJS(dst.ref, src)
 	runtime.KeepAlive(dst)
 	if !ok {
@@ -780,6 +809,7 @@ func sliceData(op string, s any) (unsafe.Pointer, int, typedArrayKind) {
 // It returns the number of elements copied, which will be the minimum of the
 // lengths of src and dst.
 func CopyToGo(dst any, src Value) int {
+	defer mainThreadOp("CopyToGo")()
 	p, n, kind := sliceData("CopyToGo", dst)
 	c, ok := copyToGo(p, n, int(kind), src.ref)
 	runtime.KeepAlive(dst)
@@ -809,6 +839,7 @@ func copyToGo(dst unsafe.Pointer, dstLen int, kind int, src ref) (int, bool)
 // It returns the number of elements copied, which will be the minimum of the
 // lengths of src and dst.
 func CopyToJS(dst Value, src any) int {
+	defer mainThreadOp("CopyToJS")()
 	p, n, kind := sliceData("CopyToJS", src)
 	c, ok := copyToJS(dst.ref, p, n, int(kind))
 	runtime.KeepAlive(dst)

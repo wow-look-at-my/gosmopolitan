@@ -205,6 +205,15 @@ func suspendG(gp *g) suspendGState {
 			gp.preemptStop = true
 			gp.preempt = true
 			gp.stackguard0 = stackPreempt
+			if GOARCH == "wasm" {
+				// Wasm has no async preemption; the compiler-inserted
+				// loop backedge checks compare sp against stackguard1,
+				// so they must be armed too or a call-free loop on
+				// another thread (GOWASM=threads) never reaches a
+				// safe point and suspendG spins forever. Mirrors
+				// preemptone.
+				gp.stackguard1 = stackPreempt
+			}
 
 			// Prepare for asynchronous preemption.
 			asyncM2 := gp.m
