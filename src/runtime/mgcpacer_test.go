@@ -13,6 +13,35 @@ import (
 	"time"
 )
 
+// TestGcPacer runs the pacer against an idealized simulation of a GC-heavy
+// program and checks that trigger, goal overshoot, and utilization behave
+// as modeled.
+//
+// This runtime's pacer diverges from upstream: trigger() clamps the runway
+// to at least half the distance from the live heap to the goal, and the
+// minimum-trigger ratio is ~0.5 (see minTriggerRatioNum in mgcpacer.go).
+// Together these pin the trigger at (approximately) the midpoint between
+// the live heap and the goal whenever the cons/mark-based runway estimate
+// comes out smaller than half the headroom - which is every scenario below
+// where background marking keeps up. The expectations therefore follow
+// this model:
+//
+//   - triggerRatio = (trigger-live)/(goal-live) = 0.5 exactly.
+//   - With that much runway the assist ratio stays below the point where
+//     assists activate, so gcUtilization = GCBackgroundUtilization (0.25)
+//     exactly, unless the allocation rate is high enough for assists to
+//     bind (HeavyStepAlloc post-step, HeavyJitterAlloc).
+//   - At u = 0.25, bytes are scanned:allocated at scanRate/(3*allocRate),
+//     so the heap allocated during the mark phase is
+//     A = S * 3*allocRate/scanRate for S bytes of scan work, and the peak
+//     is trigger + A: goalRatio = (trigger + A)/goal, an intentional
+//     undershoot of the goal. Each scenario's expected band below is
+//     derived from that formula with the scenario's rates.
+//
+// The undershoot means GC cycles are more frequent than upstream's
+// finish-at-the-goal pacing for the same GOGC: that is the deliberate
+// throughput cost of guaranteeing mark phases real runway (bounded mark
+// bursts); see the minTriggerRatioNum comment in mgcpacer.go.
 func TestGcPacer(t *testing.T) {
 	t.Parallel()
 
@@ -40,7 +69,11 @@ func TestGcPacer(t *testing.T) {
 
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					// The min-runway clamp pins the trigger at the midpoint.
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					// goalRatio = (1.5 + A/M)/2 with A/M = k/(1+k),
+					// k = 3*33/1024: modeled 0.794.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.77, 0.82)
 				}
 			},
 		},
@@ -58,14 +91,17 @@ func TestGcPacer(t *testing.T) {
 			stackBytes:    constant(2048).sum(ramp(128<<20, 8)),
 			length:        50,
 			checker: func(t *testing.T, c []gcCycleResult) {
-				// Check the same conditions as the steady-state case, except the old pacer can't
-				// really handle this well, so don't check the goal ratio for it.
+				// Check the same conditions as the steady-state case.
 				n := len(c)
 				if n >= 25 {
-					// For the pacer redesign, assert something even stronger: at this alloc/scan rate,
-					// it should be extremely close to the goal utilization.
+					// At this alloc/scan rate, the pacer should be extremely
+					// close to the goal utilization.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					// The big stack scan work inflates both the goal's non-heap
+					// term and A (k = 3*132/1024 = 0.387 of the mostly-stack
+					// scan work): modeled and observed ~0.84.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.81, 0.86)
 
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
@@ -86,14 +122,16 @@ func TestGcPacer(t *testing.T) {
 			stackBytes:    constant(8192),
 			length:        50,
 			checker: func(t *testing.T, c []gcCycleResult) {
-				// Check the same conditions as the steady-state case, except the old pacer can't
-				// really handle this well, so don't check the goal ratio for it.
+				// Check the same conditions as the steady-state case.
 				n := len(c)
 				if n >= 25 {
-					// For the pacer redesign, assert something even stronger: at this alloc/scan rate,
-					// it should be extremely close to the goal utilization.
+					// At this alloc/scan rate, the pacer should be extremely
+					// close to the goal utilization.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					// Same shape as SteadyBigStacks (the globals scan work
+					// takes the place of the stack scan work).
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.81, 0.86)
 
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
@@ -119,7 +157,16 @@ func TestGcPacer(t *testing.T) {
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles
 					// and then is able to settle again after a significant jump in allocation rate.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+				}
+				if n >= 25 && n < 50 {
+					// Pre-step: same as Steady (a=33, modeled 0.794).
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.77, 0.82)
+				}
+				if n >= 75 {
+					// Post-step: a=99, k=3*99/1024, A/M = k/(1+k) = 0.225:
+					// modeled (1.5+0.225)/2 = 0.862.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.84, 0.89)
 				}
 			},
 		},
@@ -142,6 +189,15 @@ func TestGcPacer(t *testing.T) {
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles
 					// and then is able to settle again after a significant jump in allocation rate.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+				}
+				if n >= 25 && n < 50 {
+					// Pre-step: same as Steady (a=33, modeled 0.794).
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.77, 0.82)
+				}
+				if n >= 75 {
+					// Post-step: at a=363 the assist ratio binds (u > 0.25),
+					// so the cycle finishes at the goal like upstream.
 					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
 				}
 			},
@@ -163,9 +219,13 @@ func TestGcPacer(t *testing.T) {
 				n := len(c)
 				if (n >= 25 && n < 50) || n >= 75 {
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles
-					// and then is able to settle again after a significant jump in allocation rate.
+					// and then is able to settle again after a significant jump in the scannable
+					// fraction (note the step is a single-cycle spike: unit() emits one peak).
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					// a=128 at scannableFrac 0.2: A/M = 0.2*k/(1+0.2*k) with
+					// k=3*128/1024: modeled 0.785.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.76, 0.81)
 				}
 			},
 		},
@@ -191,15 +251,13 @@ func TestGcPacer(t *testing.T) {
 						// In the 26th cycle there's a heap growth. Overshoot is expected to maintain
 						// a stable utilization, but we should *never* overshoot more than GOGC of
 						// the next cycle.
-						assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.90, 15)
+						assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.50, 15)
 					} else {
-						// Give a wider goal range here. With such a high GOGC value we're going to be
-						// forced to undershoot.
-						//
-						// TODO(mknyszek): Instead of placing a 0.95 limit on the trigger, make the limit
-						// based on absolute bytes, that's based somewhat in how the minimum heap size
-						// is determined.
-						assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.90, 1.05)
+						// With GOGC=1500 the goal is ~16x the live heap and
+						// the midpoint trigger lands at ~8.5x, so the cycle
+						// finishes just past it: goalRatio ~ (8.5 + A/M)/16
+						// with A/M = k/(1+k), k = 3*165/1024: modeled 0.55.
+						assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.52, 0.60)
 					}
 
 					// Ensure utilization remains stable despite a growth in live heap size
@@ -230,8 +288,12 @@ func TestGcPacer(t *testing.T) {
 				if n > 12 {
 					// After the 12th GC, the heap will stop growing. Now, just make sure that:
 					// 1. Utilization isn't varying _too_ much, and
-					// 2. The pacer is mostly keeping up with the goal.
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					// 2. The trigger stays pinned at the midpoint while the goal
+					//    undershoot tracks the oscillating allocation rate:
+					//    a in [54, 80] gives A/M in [0.137, 0.19], so goalRatio
+					//    in ~[0.82, 0.85].
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.80, 0.87)
 					assertInRange(t, "GC utilization", c[n-1].gcUtilization, 0.25, 0.3)
 				}
 			},
@@ -254,8 +316,12 @@ func TestGcPacer(t *testing.T) {
 				if n > 12 {
 					// After the 12th GC, the heap will stop growing. Now, just make sure that:
 					// 1. Utilization isn't varying _too_ much, and
-					// 2. The pacer is mostly keeping up with the goal.
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.025)
+					// 2. The trigger stays pinned at the midpoint while the goal
+					//    undershoot tracks the jittery allocation rate:
+					//    a = 132+-13 gives A/M around 0.28, so goalRatio ~0.89
+					//    (plus a little floating garbage from the growth jitter).
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.87, 0.93)
 					assertInRange(t, "GC utilization", c[n-1].gcUtilization, 0.25, 0.275)
 				}
 			},
@@ -307,13 +373,17 @@ func TestGcPacer(t *testing.T) {
 				n := len(c)
 				if n > 4 {
 					// After the 4th GC, the heap will stop growing.
-					// First, let's make sure we're finishing near the goal, with some extra
-					// room because we're probably going to be triggering early.
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.925, 1.025)
-					// Next, let's make sure there's some minimum distance between the goal
-					// and the trigger. It should be proportional to the runway (hence the
-					// trigger ratio check, instead of a check against the runway).
-					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.925, 0.975)
+					// The heap sits well below the 4MB minimum heap goal, so the
+					// midpoint trigger leaves a huge relative runway and the tiny
+					// scan work (scannableFrac=0.01) finishes right at the
+					// trigger: goalRatio ~ (live + 0.5*(goal-live))/goal, i.e.
+					// 0.5 + 0.5*live/goal.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.52, 0.62)
+					// The min-runway clamp pins the trigger at the midpoint even
+					// on this tiny heap (no absolute floor is needed: with runway
+					// exactly half the headroom the trigger lands exactly on the
+					// minimum-trigger lower bound).
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
 				}
 				if n > 25 {
 					// Double-check that GC utilization looks OK.
@@ -343,14 +413,14 @@ func TestGcPacer(t *testing.T) {
 			checker: func(t *testing.T, c []gcCycleResult) {
 				n := len(c)
 				if n > 9 {
-					// After the 4th GC, the heap will stop growing.
-					// First, let's make sure we're finishing near the goal, with some extra
-					// room because we're probably going to be triggering early.
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.925, 1.025)
-					// Next, let's make sure there's some minimum distance between the goal
-					// and the trigger. It should be proportional to the runway (hence the
-					// trigger ratio check, instead of a check against the runway).
-					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.925, 0.975)
+					// After the 9th GC, the heap will stop growing.
+					// The heap is ~2x the minimum heap size, GOGC=100 makes the
+					// goal ~2x live, and the tiny scan work finishes right at
+					// the midpoint trigger: goalRatio ~ (1.5*live)/(2*live) =
+					// 0.75.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.73, 0.77)
+					// The min-runway clamp pins the trigger at the midpoint.
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
 				}
 				if n > 25 {
 					// Double-check that GC utilization looks OK.
@@ -380,12 +450,14 @@ func TestGcPacer(t *testing.T) {
 			checker: func(t *testing.T, c []gcCycleResult) {
 				n := len(c)
 				if n > 13 {
-					// After the 4th GC, the heap will stop growing.
-					// First, let's make sure we're finishing near the goal.
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
-					// Next, let's make sure there's some minimum distance between the goal
-					// and the trigger. It should be around the default minimum heap size.
-					assertInRange(t, "runway", c[n-1].runway(), DefaultHeapMinimum-64<<10, DefaultHeapMinimum+64<<10)
+					// After the 13th GC, the heap will stop growing.
+					// The tiny scan work finishes right at the midpoint
+					// trigger: goalRatio ~ 0.75, like MediumHeapSlowAlloc.
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.73, 0.77)
+					// The runway is proportional now (half the headroom, GBs on
+					// this heap) rather than pinned near the minimum heap size,
+					// so check the trigger ratio rather than an absolute runway.
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
 				}
 				if n > 25 {
 					// Double-check that GC utilization looks OK.
@@ -425,14 +497,18 @@ func TestGcPacer(t *testing.T) {
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
 
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
+					// The limit leaves plenty of room, so this behaves like Steady.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.77, 0.82)
 				}
 			},
 		},
 		{
-			// This is the same as the previous test, but gcPercent = -1, so the heap *should* grow
-			// all the way to the peak.
+			// This is the same as the previous test, but gcPercent = -1, so the memory limit is
+			// the only goal. The goal must saturate at the limit; the midpoint trigger means the
+			// heap is collected halfway between the live heap and the limit-derived goal rather
+			// than growing all the way to it.
 			name:          "SteadyMemoryLimitNoGCPercent",
 			gcPercent:     -1,
 			memoryLimit:   512 << 20,
@@ -454,8 +530,11 @@ func TestGcPacer(t *testing.T) {
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
 
 					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
+					// The live heap is small relative to the limit-derived goal, so
+					// goalRatio ~ 0.5 + 0.5*live/goal + A/goal, a little over 0.5.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.50, 0.56)
 				}
 			},
 		},
@@ -559,10 +638,13 @@ func TestGcPacer(t *testing.T) {
 					// even with the additional memory pressure.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
 
-					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles and
-					// that it's meeting its goal.
+					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
+					// The live heap (~390MB) sits close under the limit-derived goal
+					// (~497MB), so the midpoint trigger leaves goalRatio ~
+					// 0.5 + 0.5*live/goal + A/goal ~ 0.94.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.92, 0.97)
 				}
 			},
 		},
@@ -589,10 +671,12 @@ func TestGcPacer(t *testing.T) {
 					// even with the additional memory pressure.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, GCGoalUtilization, 0.005)
 
-					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles and
-					// that it's meeting its goal.
+					// Make sure the pacer settles into a non-degenerate state in at least 25 GC cycles.
+					// Same as MaintainMemoryLimit: the live heap sits close under
+					// the limit-derived goal, so goalRatio ~ 0.94.
 					assertInEpsilon(t, "GC utilization", c[n-1].gcUtilization, c[n-2].gcUtilization, 0.005)
-					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.95, 1.05)
+					assertInRange(t, "trigger ratio", c[n-1].triggerRatio(), 0.495, 0.505)
+					assertInRange(t, "goal ratio", c[n-1].goalRatio(), 0.92, 0.97)
 				}
 			},
 		},
@@ -1029,6 +1113,39 @@ func applyMemoryLimitHeapGoalHeadroom(goal uint64) uint64 {
 		goal -= headroom
 	}
 	return goal
+}
+
+// TestGCControllerDonatedFractionalCap checks the donation-conditioned
+// fractional worker cap: when the embedder has recently donated idle time
+// via the budgeted mark step, startCycle caps the fractional utilization
+// goal at DonatedFractionalUtilizationGoal; otherwise the standard quota
+// applies.
+func TestGCControllerDonatedFractionalCap(t *testing.T) {
+	// gomaxprocs=1 puts the whole 25% background utilization goal on the
+	// fractional worker, so the cap is observable.
+	const procs = 1
+
+	c := NewGCController(100, math.MaxInt64)
+	c.StartCycle(2048, 32<<10, 1.0, procs)
+	if got := c.FractionalUtilizationGoal(); !(got > DonatedFractionalUtilizationGoal) {
+		t.Errorf("without donation, fractional goal = %f, want > %f (the standard quota)", got, DonatedFractionalUtilizationGoal)
+	}
+
+	c = NewGCController(100, math.MaxInt64)
+	c.NoteMarkStepDonation()
+	c.StartCycle(2048, 32<<10, 1.0, procs)
+	if got := c.FractionalUtilizationGoal(); got != DonatedFractionalUtilizationGoal {
+		t.Errorf("with recent donation, fractional goal = %f, want %f", got, DonatedFractionalUtilizationGoal)
+	}
+
+	// With enough procs the fractional worker isn't used at all
+	// (fractional goal 0); the cap must not raise it.
+	c = NewGCController(100, math.MaxInt64)
+	c.NoteMarkStepDonation()
+	c.StartCycle(2048, 32<<10, 1.0, 8)
+	if got := c.FractionalUtilizationGoal(); got != 0 {
+		t.Errorf("with 8 procs, fractional goal = %f, want 0 (dedicated workers only)", got)
+	}
 }
 
 func TestIdleMarkWorkerCount(t *testing.T) {

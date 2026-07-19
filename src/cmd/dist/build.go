@@ -1368,7 +1368,11 @@ func timelog(op, name string) {
 // to switch between the host and target configurations when cross-compiling.
 func toolenv() []string {
 	var env []string
-	if !mustLinkExternal(goos, goarch, false) {
+	// Tools (compiler, linker, etc.) are always built for the HOST platform,
+	// not the target. Ensure GOOS/GOARCH are set to host values so that
+	// staleness checks compare against the correct build configuration.
+	env = append(env, "GOOS="+gohostos, "GOARCH="+gohostarch)
+	if !mustLinkExternal(gohostos, gohostarch, false) {
 		// Unless the platform requires external linking,
 		// we disable cgo to get static binaries for cmd/go and cmd/pprof,
 		// so that they work on systems without the same dynamic libraries

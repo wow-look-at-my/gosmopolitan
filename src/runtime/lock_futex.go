@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo || dragonfly || freebsd || linux
+//go:build (cosmo && !arm64) || dragonfly || freebsd || linux
 
 package runtime
 

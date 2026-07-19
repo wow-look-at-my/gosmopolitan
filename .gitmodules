@@ -1,0 +1,6 @@
+[submodule "testdata/fizzbuzz/test_helper/bats-assert"]
+	path = testdata/fizzbuzz/test_helper/bats-assert
+	url = https://github.com/bats-core/bats-assert.git
+[submodule "testdata/fizzbuzz/test_helper/bats-support"]
+	path = testdata/fizzbuzz/test_helper/bats-support
+	url = https://github.com/bats-core/bats-support.git

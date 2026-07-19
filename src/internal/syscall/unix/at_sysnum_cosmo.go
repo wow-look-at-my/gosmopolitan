@@ -27,4 +27,6 @@ const (
 	AT_SYMLINK_NOFOLLOW = 0x100
 
 	UTIME_OMIT = 0x3ffffffe
+
+	O_PATH = 0x200000
 )

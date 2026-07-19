@@ -2481,6 +2481,9 @@ func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS
 	if key, val, _ := cfg.GetArchEnv(); key != "" && val != "" {
 		appendSetting(key, val)
 	}
+	if key, val, _ := cfg.GetOSEnv(); key != "" && val != "" {
+		appendSetting(key, val)
+	}
 
 	// Add VCS status if all conditions are true:
 	//
