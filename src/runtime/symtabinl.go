@@ -6,17 +6,28 @@ package runtime
 
 import (
 	"internal/abi"
-	_ "unsafe" // for linkname
+	"unsafe" // also for linkname
 )
 
-// inlinedCall is the encoding of entries in the FUNCDATA_InlTree table.
+// inlinedCall is the decoded form of one entry in the FUNCDATA_InlTree
+// table. In the table, entries are packed inlinedCallSize-byte records
+// with no padding: funcID at offset 0, then nameOff, parentPc and
+// startLine as unaligned target-endian 32-bit fields at offsets 1, 5
+// and 9. The unwinder decodes records with unaligned loads (see
+// inlineUnwinder.call), so the packed layout is safe on every GOARCH.
 type inlinedCall struct {
 	funcID    abi.FuncID // type of the called function
-	_         [3]byte
-	nameOff   int32 // offset into pclntab for name of called function
-	parentPc  int32 // position of an instruction whose source position is the call site (offset from entry)
-	startLine int32 // line number of start of function (func keyword/TEXT directive)
+	nameOff   int32      // offset into pclntab for name of called function
+	parentPc  int32      // position of an instruction whose source position is the call site (offset from entry)
+	startLine int32      // line number of start of function (func keyword/TEXT directive)
 }
+
+// inlinedCallSize is the encoded size in bytes of one FUNCDATA_InlTree
+// entry. The unwinder indexes the table randomly by PCDATA_InlTreeIndex
+// value, so entries have a fixed stride.
+//
+// Keep in sync with cmd/link/internal/ld/pcln.go:genInlTreeSym.
+const inlinedCallSize = 13
 
 // An inlineUnwinder iterates over the stack of inlined calls at a PC by
 // decoding the inline table. The last step of iteration is always the frame of
@@ -33,7 +44,7 @@ type inlinedCall struct {
 // code.
 type inlineUnwinder struct {
 	f       funcInfo
-	inlTree *[1 << 20]inlinedCall
+	inlTree unsafe.Pointer // base of this function's FUNCDATA_InlTree table, or nil
 }
 
 // An inlineFrame is a position in an inlineUnwinder.
@@ -69,9 +80,20 @@ func newInlineUnwinder(f funcInfo, pc uintptr) (inlineUnwinder, inlineFrame) {
 	if inldata == nil {
 		return inlineUnwinder{f: f}, inlineFrame{pc: pc, index: -1}
 	}
-	inlTree := (*[1 << 20]inlinedCall)(inldata)
-	u := inlineUnwinder{f: f, inlTree: inlTree}
+	u := inlineUnwinder{f: f, inlTree: inldata}
 	return u, u.resolveInternal(pc)
+}
+
+// call decodes the index'th entry of the inline tree. It does not
+// allocate and is safe on the system stack.
+func (u *inlineUnwinder) call(index int32) inlinedCall {
+	p := add(u.inlTree, uintptr(index)*inlinedCallSize)
+	return inlinedCall{
+		funcID:    abi.FuncID(*(*uint8)(p)),
+		nameOff:   int32(readUnaligned32(add(p, 1))),
+		parentPc:  int32(readUnaligned32(add(p, 5))),
+		startLine: int32(readUnaligned32(add(p, 9))),
+	}
 }
 
 func (u *inlineUnwinder) resolveInternal(pc uintptr) inlineFrame {
@@ -93,7 +115,7 @@ func (u *inlineUnwinder) next(uf inlineFrame) inlineFrame {
 		uf.pc = 0
 		return uf
 	}
-	parentPc := u.inlTree[uf.index].parentPc
+	parentPc := u.call(uf.index).parentPc
 	return u.resolveInternal(u.f.entry() + uintptr(parentPc))
 }
 
@@ -117,12 +139,12 @@ func (u *inlineUnwinder) srcFunc(uf inlineFrame) srcFunc {
 	if uf.index < 0 {
 		return u.f.srcFunc()
 	}
-	t := &u.inlTree[uf.index]
+	c := u.call(uf.index)
 	return srcFunc{
 		u.f.datap,
-		t.nameOff,
-		t.startLine,
-		t.funcID,
+		c.nameOff,
+		c.startLine,
+		c.funcID,
 	}
 }
 

@@ -259,7 +259,10 @@ func genInlTreeSym(ctxt *Link, cu *sym.CompilationUnit, fi loader.FuncInfo, arch
 	// eventually switch the type back to SRODATA.
 	inlTreeSym.SetType(sym.SPCLNTAB)
 	ldr.SetAttrReachable(its, true)
-	ldr.SetSymAlign(its, 4) // it has 32-bit fields
+	// Entries are packed 13-byte records with unaligned 32-bit fields;
+	// the runtime reads them with unaligned loads, so byte alignment
+	// avoids padding between inline trees in go:func.*.
+	ldr.SetSymAlign(its, 1)
 	ninl := fi.NumInlTree()
 	for i := 0; i < int(ninl); i++ {
 		call := fi.InlTree(i)
@@ -286,13 +289,14 @@ func genInlTreeSym(ctxt *Link, cu *sym.CompilationUnit, fi loader.FuncInfo, arch
 			panic(fmt.Sprintf("inlined function %s missing func info", ldr.SymName(call.Func)))
 		}
 
-		// Construct runtime.inlinedCall value.
-		const size = 16
+		// Construct the packed runtime.inlinedCall encoding: funcID,
+		// then three unaligned target-endian 32-bit fields.
+		// Keep in sync with runtime/symtabinl.go:inlinedCallSize.
+		const size = 13
 		inlTreeSym.SetUint8(arch, int64(i*size+0), uint8(funcID))
-		// Bytes 1-3 are unused.
-		inlTreeSym.SetUint32(arch, int64(i*size+4), nameOff)
-		inlTreeSym.SetUint32(arch, int64(i*size+8), uint32(call.ParentPC))
-		inlTreeSym.SetUint32(arch, int64(i*size+12), uint32(startLine))
+		inlTreeSym.SetUint32(arch, int64(i*size+1), nameOff)
+		inlTreeSym.SetUint32(arch, int64(i*size+5), uint32(call.ParentPC))
+		inlTreeSym.SetUint32(arch, int64(i*size+9), uint32(startLine))
 	}
 	return its
 }
