@@ -311,7 +311,8 @@ platform (sidecars are not uploaded; the artifact ships the bare binaries,
 so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
-also runs the cmd/link APE-merge and cmd/go strip-detection unit tests.
+also runs the cmd/link APE-merge/debug-view and cmd/go
+strip/GOCOSMODEBUG unit tests.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
