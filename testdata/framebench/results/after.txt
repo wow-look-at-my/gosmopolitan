@@ -1,0 +1,13 @@
+# after: frame-aware GC runtime (pacer runway clamp + credit seed, budgeted
+# mark step, bounded idle drain), platform-independent (un-gated) version:
+# the pacer/idle-drain behavior is the same on every platform, js keeps only
+# the event-loop yield glue and the go_gc_mark_step export.
+# branch wasm-frame-gc, 2026-07-17T11:57Z, same machine as baseline.txt
+# cmd: node bench.js framebench.wasm --markstep
+{"config":"markstep","frames":2000,"warmup":300,"frame_budget_ms":16.7,"p50_ms":1.946,"p90_ms":3.626,"p99_ms":4.676,"max_ms":6.436,"mean_ms":2.274,"frames_over_8ms":0,"frames_over_16_7ms":0,"gc_cycles":79,"markstep_calls":2300,"markstep_total_ms":10084.3,"total_wall_ms":15718,"heap_alloc_mb":79.58,"node":"v22.22.2"}
+markstep: frames=2000 p50=1.946ms p90=3.626ms p99=4.676ms max=6.436ms gc_cycles=79 over8ms=0 over16.7ms=0
+
+# same runtime, without --markstep (no host-donated idle time; pacer runway
+# + bounded idle drains only):
+{"config":"baseline","frames":2000,"warmup":300,"frame_budget_ms":16.7,"p50_ms":2.287,"p90_ms":10.157,"p99_ms":17.821,"max_ms":26.804,"mean_ms":4.704,"frames_over_8ms":469,"frames_over_16_7ms":26,"gc_cycles":42,"markstep_calls":0,"markstep_total_ms":0,"total_wall_ms":11665.9,"heap_alloc_mb":121.94,"node":"v22.22.2"}
+baseline: frames=2000 p50=2.287ms p90=10.157ms p99=17.821ms max=26.804ms gc_cycles=42 over8ms=469 over16.7ms=26
