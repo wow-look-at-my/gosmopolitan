@@ -368,13 +368,38 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		} else {
 			// large stack: SP-framesize <= stackguard-StackSmall
 			//              SP <= stackguard+(framesize-StackSmall)
+			//
+			// stackguard0 may hold the stackPreempt sentinel (~0). The
+			// 32-bit add below would wrap past it and silently SKIP the
+			// stack check, letting a large frame run below stack.lo
+			// (caught later as a bogus "split stack overflow" when a
+			// callee's morestack fires). Without GOWASM=threads this
+			// cannot happen - nothing arms preemption while a wasm
+			// goroutine is running - but with it another thread's
+			// preemptone/suspendG can set the sentinel exactly while
+			// this prologue runs. Test the sentinel explicitly (full
+			// 64-bit compare; the wrapped-add hazard is exactly the old
+			// "TODO: handle wraparound case").
+			//
+			// Get g
+			// I32WrapI64
+			// I64Load $stackguard0
+			// I64Const $stackPreempt
+			// I64Eq
 			// Get SP
 			// Get g
 			// I32WrapI64
 			// I32Load $stackguard0
 			// I32Const $(framesize-StackSmall)
 			// I32Add
-			// I32GtU
+			// I32LeU
+			// I32Or
+
+			p = appendp(p, AGet, regAddr(REGG))
+			p = appendp(p, AI32WrapI64)
+			p = appendp(p, AI64Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
+			p = appendp(p, AI64Const, constAddr(-1314))                     // runtime.stackPreempt (uintptrMask & -1314)
+			p = appendp(p, AI64Eq)
 
 			p = appendp(p, AGet, regAddr(REG_SP))
 			p = appendp(p, AGet, regAddr(REGG))
@@ -383,8 +408,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AI32Const, constAddr(framesize-abi.StackSmall))
 			p = appendp(p, AI32Add)
 			p = appendp(p, AI32LeU)
+
+			p = appendp(p, AI32Or)
 		}
-		// TODO(neelance): handle wraparound case
 
 		p = appendp(p, AIf)
 		// This CALL does *not* have a resume point after it
