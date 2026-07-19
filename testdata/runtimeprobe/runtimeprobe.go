@@ -70,24 +70,43 @@ func main() {
 		return
 	}
 	startWatchdog()
-	checkArgsEnv()
-	checkIdentity()
-	checkNumCPU()
-	checkMonotonic()
-	checkTimers()
-	checkSockets()
-	checkExecutable()
-	checkFiles()
-	checkReadDir()
-	checkSegvRecover()
-	checkSignalNotify()
-	checkPreempt()
-	// Exec checks run LAST on purpose: if a forked child ever wedges (a
-	// nondeterministic macOS CI incident produced kernel-stuck
-	// processes), every other check has already printed its verdict, so
-	// the partial output localizes the failure precisely.
-	checkExec()
-	checkWaitSig()
+	// timed localizes latency stalls without weakening any verdict:
+	// every healthy check block completes well under a second on every
+	// host, so a block that takes 2s+ prints a slow: line plus one
+	// poller-counter sample (the wave-9 forensic counters) naming
+	// where the time went. CI logs then show WHICH block stalled and
+	// whether the poller was wedged inside one long WSAPoll/kevent
+	// (sinceenter large) or cycling while work starved.
+	timed := func(label string, fn func()) {
+		t0 := time.Now()
+		fn()
+		if d := time.Since(t0); d > 2*time.Second {
+			fmt.Printf("slow: %s took %v\n", label, d)
+			printNetpollDiag("slow-" + label)
+		}
+	}
+	timed("argsenv", checkArgsEnv)
+	timed("identity", checkIdentity)
+	timed("numcpu", checkNumCPU)
+	timed("monotonic", checkMonotonic)
+	timed("timers", checkTimers)
+	timed("sockets", checkSockets)
+	timed("executable", checkExecutable)
+	timed("files", checkFiles)
+	timed("readdir", checkReadDir)
+	// Exec and signal checks run at the END on purpose, in that order.
+	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
+	// incident produced kernel-stuck processes), every other check has
+	// already printed its verdict, so the partial output localizes the
+	// failure precisely. The signal-dependent block (segvrecover,
+	// notify, preempt, waitsig) comes dead last: pre-VEH Windows hosts
+	// crash at the segv check, and this order maximizes the coverage
+	// that still prints before that crash.
+	timed("exec", checkExec)
+	timed("segvrecover", checkSegvRecover)
+	timed("signalnotify", checkSignalNotify)
+	timed("preempt", checkPreempt)
+	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)
 	}
@@ -432,17 +451,13 @@ func checkSockets() {
 	}
 	defer usock.Close()
 
-	wantLocal := ""
-	if runtime.GOOS == "windows" {
-		wantLocal = "@"
-	}
 	la, laOK := usock.LocalAddr().(*net.UnixAddr)
 	ra, raOK := usock.RemoteAddr().(*net.UnixAddr)
 	switch {
 	case uln.Addr().String() != spath:
 		fail("unixsock", "listener addr %q, want %q", uln.Addr(), spath)
-	case !laOK || la.Name != wantLocal:
-		fail("unixsock", "dialed local addr %#v, want name %q", usock.LocalAddr(), wantLocal)
+	case !laOK || la.Name != "":
+		fail("unixsock", "dialed local addr %#v, want empty name", usock.LocalAddr())
 	case !raOK || ra.Name != spath:
 		fail("unixsock", "dialed remote addr %#v, want name %q", usock.RemoteAddr(), spath)
 	default:
@@ -474,9 +489,9 @@ func checkSockets() {
 // selfCommand builds an exec.Cmd that re-executes this binary in the
 // given RUNTIMEPROBE_CHILD mode. How the child must be launched
 // depends on what is on disk at os.Executable(): an assimilated ELF
-// (Linux after first run) or Mach-O executes directly, a pristine APE
-// (still starting with "MZ...") needs the shell bootstrap on unix
-// hosts, and on Windows the PE always executes directly.
+// (Linux after first run) or Mach-O executes directly, while a
+// pristine APE (still starting with "MZ...") needs the shell
+// bootstrap.
 func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -496,15 +511,22 @@ func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) 
 		return nil, false, true
 	}
 
-	direct = runtime.GOOS == "windows" ||
-		(magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
+	direct = (magic == [4]byte{0x7f, 'E', 'L', 'F'}) || // assimilated ELF
 		(magic == [4]byte{0xcf, 0xfa, 0xed, 0xfe}) || // assimilated Mach-O 64
 		(magic == [4]byte{0xca, 0xfe, 0xba, 0xbe}) // fat Mach-O
+	if !direct && os.Getenv("OS") == "Windows_NT" {
+		// On an NT host the binary stays a pristine APE (no
+		// self-assimilation there) whose MZ header IS a valid PE, and
+		// there is no /bin/sh: exec it directly. The OS env var is
+		// set by every Windows since NT (and by wine); on unix hosts
+		// it is absent, keeping their behavior untouched.
+		direct = true
+	}
 	if direct {
 		cmd = exec.Command(exe)
 	} else {
-		// Pristine APE on a unix host: bootstrap through the shell,
-		// exactly how the probe itself was started.
+		// Pristine APE: bootstrap through the shell, exactly how the
+		// probe itself was started.
 		cmd = exec.Command("/bin/sh", exe)
 	}
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_CHILD="+childMode)
@@ -568,13 +590,8 @@ func checkExec() {
 // syscall.SIGUSR1 with LINUX numbering (10; Apple's kernel reports 30,
 // so this proves the wait4 boundary translates). On the child side it
 // exercises delivery of a fatal un-notified signal: runtime handler ->
-// dieFromSignal -> SIG_DFL reinstall -> re-raise. Skipped on Windows
-// (no kill(2), no SIGUSR1).
+// dieFromSignal -> SIG_DFL reinstall -> re-raise.
 func checkWaitSig() {
-	if runtime.GOOS == "windows" {
-		ok("waitsig", "skipped-windows")
-		return
-	}
 	cmd, direct, bad := selfCommand("waitsig", "raise")
 	if bad {
 		return
