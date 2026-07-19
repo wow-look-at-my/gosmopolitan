@@ -626,6 +626,27 @@ var urltests = []URLTest{
 		},
 		"postgresql://host1:1,host2:2,host3:3",
 	},
+	// Mongodb URLs can include a comma-separated list of host:post hosts.
+	{
+		"mongodb://user:password@host1:1,host2:2,host3:3",
+		&URL{
+			Scheme: "mongodb",
+			User:   UserPassword("user", "password"),
+			Host:   "host1:1,host2:2,host3:3",
+			Path:   "",
+		},
+		"",
+	},
+	{
+		"mongodb+srv://user:password@host1:1,host2:2,host3:3",
+		&URL{
+			Scheme: "mongodb+srv",
+			User:   UserPassword("user", "password"),
+			Host:   "host1:1,host2:2,host3:3",
+			Path:   "",
+		},
+		"",
+	},
 }
 
 // more useful string for debugging than fmt's struct printer
@@ -1521,6 +1542,54 @@ func TestParseQuery(t *testing.T) {
 	}
 }
 
+func TestParseQueryLimits(t *testing.T) {
+	for _, test := range []struct {
+		params  int
+		godebug string
+		wantErr bool
+	}{{
+		params:  10,
+		wantErr: false,
+	}, {
+		params:  defaultMaxParams,
+		wantErr: false,
+	}, {
+		params:  defaultMaxParams + 1,
+		wantErr: true,
+	}, {
+		params:  10,
+		godebug: "urlmaxqueryparams=9",
+		wantErr: true,
+	}, {
+		params:  defaultMaxParams + 1,
+		godebug: "urlmaxqueryparams=0",
+		wantErr: false,
+	}} {
+		t.Setenv("GODEBUG", test.godebug)
+		want := Values{}
+		var b strings.Builder
+		for i := range test.params {
+			if i > 0 {
+				b.WriteString("&")
+			}
+			p := fmt.Sprintf("p%v", i)
+			b.WriteString(p)
+			want[p] = []string{""}
+		}
+		query := b.String()
+		got, err := ParseQuery(query)
+		if gotErr, wantErr := err != nil, test.wantErr; gotErr != wantErr {
+			t.Errorf("GODEBUG=%v ParseQuery(%v params) = %v, want error: %v", test.godebug, test.params, err, wantErr)
+		}
+		if err != nil {
+			continue
+		}
+		if got, want := len(got), test.params; got != want {
+			t.Errorf("GODEBUG=%v ParseQuery(%v params): got %v params, want %v", test.godebug, test.params, got, want)
+		}
+	}
+}
+
 type RequestURITest struct {
 	url *URL
 	out string
@@ -1708,6 +1777,12 @@ func TestParseErrors(t *testing.T) {
 		{"http://[fe80::1", true},                    // missing closing bracket
 		{"http://fe80::1]/", true},                   // missing opening bracket
 		{"http://[test.com]/", true},                 // domain name in brackets
+		{"http://example.com[::1]", true},            // IPv6 literal doesn't start with '['
+		{"http://example.com[::1", true},
+		{"http://[::1", true},
+		{"http://.[::1]", true},
+		{"http:// [::1]", true},
+		{"hxxp://mathepqo[.]serveftp(.)com:9059", true},
 	}
 	for _, tt := range tests {
 		u, err := Parse(tt.in)

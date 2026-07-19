@@ -47,6 +47,9 @@ func makeCfgChangedEnv() []string {
 	if archenv, val, changed := cfg.GetArchEnv(); changed {
 		env = append(env, archenv+"="+val)
 	}
+	if osenv, val, changed := cfg.GetOSEnv(); changed {
+		env = append(env, osenv+"="+val)
+	}
 	return slices.Clip(env)
 }
 

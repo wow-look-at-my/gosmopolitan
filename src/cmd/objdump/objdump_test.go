@@ -263,6 +263,81 @@ func TestDisasmGnuAsm(t *testing.T) {
 	testGoAndCgoDisasm(t, false, true)
 }
 
+var wasmNeed = []string{
+	"TEXT main.main(SB)",
+	"fmthello.go:5",
+	"locals [",
+	"br_table {",
+	"global.get 0 // SP",
+	"i64.store",
+	"call main.Println",
+	"call runtime.morestack_noctxt",
+	"end",
+}
+
+// TestDisasmWasm builds a WebAssembly binary and checks both that its
+// disassembly is symbolized and structured, and that every function in
+// the module decodes cleanly (the decoder marks any drift with a "?").
+func TestDisasmWasm(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	for _, goos := range []string{"js", "wasip1"} {
+		t.Run(goos, func(t *testing.T) {
+			if goos == "wasip1" && testing.Short() {
+				t.Skip("skipping second GOOS in short mode")
+			}
+			t.Parallel()
+			tmp := t.TempDir()
+			exe := filepath.Join(tmp, "fmthello.wasm")
+			cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, "fmthello.go")
+			cmd.Dir = "testdata"
+			cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=wasm")
+			t.Logf("Running %v", cmd.Args)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("go build fmthello.go: %v\n%s", err, out)
+			}
+
+			cmd = testenv.Command(t, testenv.Executable(t), "-s", "main.main", exe)
+			cmd.Dir = "testdata"
+			t.Logf("Running %v", cmd.Args)
+			out, err = cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("objdump fmthello.wasm: %v\n%s", err, out)
+			}
+			text := string(out)
+			ok := true
+			for _, s := range wasmNeed {
+				if !strings.Contains(text, s) {
+					t.Errorf("disassembly missing '%s'", s)
+					ok = false
+				}
+			}
+			if !ok || testing.Verbose() {
+				t.Logf("full disassembly:\n%s", text)
+			}
+
+			// The whole binary must disassemble without decode errors.
+			cmd = testenv.Command(t, testenv.Executable(t), exe)
+			cmd.Dir = "testdata"
+			t.Logf("Running %v", cmd.Args)
+			out, err = cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("objdump fmthello.wasm: %v\n%s", err, out)
+			}
+			nfuncs := strings.Count(string(out), "\nTEXT ") + 1
+			if nfuncs < 500 {
+				t.Errorf("disassembled only %d functions, expected the whole module", nfuncs)
+			}
+			for _, bad := range []string{"?0x", "?decode-error", "?(truncated)"} {
+				if i := strings.Index(string(out), bad); i >= 0 {
+					line := string(out[i:min(i+80, len(out))])
+					t.Errorf("disassembly contains decode error %q: %s...", bad, line)
+				}
+			}
+		})
+	}
+}
+
 func TestDisasmExtld(t *testing.T) {
 	testenv.MustHaveCGO(t)
 	switch runtime.GOOS {

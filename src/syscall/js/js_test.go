@@ -16,9 +16,11 @@
 package js_test
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
+	"sync"
 	"syscall/js"
 	"testing"
 )
@@ -732,4 +734,276 @@ func TestGlobal(t *testing.T) {
 	if got := ident.Invoke(js.Global()); !got.Equal(js.Global()) {
 		t.Errorf("got %#v, want %#v", got, js.Global())
 	}
+}
+
+// Note: misusing Await from inside a js.FuncOf callback is deliberately not
+// tested here: it is a hard deadlock, so the runtime kills the whole test
+// binary with "fatal error: all goroutines are asleep - deadlock!" (plus the
+// note that a goroutine is blocked in a call from JavaScript). The Await doc
+// comment documents that behavior.
+
+func TestAwaitResolved(t *testing.T) {
+	v, err := js.Await(js.Global().Get("Promise").Call("resolve", 42))
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.Int(); got != 42 {
+		t.Errorf("Await returned %d, want 42", got)
+	}
+}
+
+func TestAwaitResolvedAsync(t *testing.T) {
+	// A promise that settles only after a real trip through the event loop.
+	p := js.Global().Call("eval", `new Promise((resolve) => setTimeout(() => resolve("late"), 20))`)
+	v, err := js.Await(p)
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "late" {
+		t.Errorf("Await returned %q, want %q", got, "late")
+	}
+}
+
+func TestAwaitRejectedErrorObject(t *testing.T) {
+	p := js.Global().Call("eval", `Promise.reject(new Error("boom"))`)
+	v, err := js.Await(p)
+	if err == nil {
+		t.Fatal("Await returned nil error, want rejection")
+	}
+	if !v.IsUndefined() {
+		t.Errorf("Await returned value %v, want undefined", v)
+	}
+	var jsErr js.Error
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("Await error has type %T, want js.Error", err)
+	}
+	if got := jsErr.Value.Get("message").String(); got != "boom" {
+		t.Errorf("rejection reason has message %q, want %q", got, "boom")
+	}
+	if got, want := err.Error(), "JavaScript error: boom"; got != want {
+		t.Errorf("err.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestAwaitRejectedString(t *testing.T) {
+	// A promise can be rejected with a non-object reason: throw "boom-string".
+	p := js.Global().Call("eval", `new Promise(() => { throw "boom-string"; })`)
+	_, err := js.Await(p)
+	if err == nil {
+		t.Fatal("Await returned nil error, want rejection")
+	}
+	var jsErr js.Error
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("Await error has type %T, want js.Error", err)
+	}
+	if got := jsErr.Value.String(); got != "boom-string" {
+		t.Errorf("rejection reason is %q, want %q", got, "boom-string")
+	}
+	if got, want := err.Error(), "JavaScript error: boom-string"; got != want {
+		t.Errorf("err.Error() = %q, want %q", got, want)
+	}
+}
+
+func TestAwaitNonPromise(t *testing.T) {
+	v, err := js.Await(js.ValueOf("plain value"))
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "plain value" {
+		t.Errorf("Await returned %q, want %q", got, "plain value")
+	}
+
+	v, err = js.Await(js.Undefined())
+	if err != nil {
+		t.Fatalf("Await(undefined) returned error %v, want nil", err)
+	}
+	if !v.IsUndefined() {
+		t.Errorf("Await(undefined) returned %v, want undefined", v)
+	}
+}
+
+func TestAwaitThenable(t *testing.T) {
+	// Promise.resolve assimilates non-promise thenables.
+	p := js.Global().Call("eval", `({ then(resolve) { resolve("thenable-ok"); } })`)
+	v, err := js.Await(p)
+	if err != nil {
+		t.Fatalf("Await returned error %v, want nil", err)
+	}
+	if got := v.String(); got != "thenable-ok" {
+		t.Errorf("Await returned %q, want %q", got, "thenable-ok")
+	}
+}
+
+// testCopyRoundTrip copies elems to a fresh JavaScript TypedArray with
+// CopyToJS, verifies the JS-side contents, copies them back with CopyToGo,
+// and verifies the round trip.
+func testCopyRoundTrip[E comparable](t *testing.T, ctor string, elems []E, get func(js.Value) E) {
+	t.Helper()
+	arr := js.Global().Get(ctor).New(len(elems))
+	if got, want := js.CopyToJS(arr, elems), len(elems); got != want {
+		t.Fatalf("CopyToJS copied %d elements, want %d", got, want)
+	}
+	for i, want := range elems {
+		if got := get(arr.Index(i)); got != want {
+			t.Errorf("%s[%d] = %v, want %v", ctor, i, got, want)
+		}
+	}
+	back := make([]E, len(elems))
+	if got, want := js.CopyToGo(back, arr), len(elems); got != want {
+		t.Fatalf("CopyToGo copied %d elements, want %d", got, want)
+	}
+	for i, want := range elems {
+		if back[i] != want {
+			t.Errorf("back[%d] = %v, want %v", i, back[i], want)
+		}
+	}
+}
+
+func TestCopyToJSAndBack(t *testing.T) {
+	t.Run("Int8", func(t *testing.T) {
+		testCopyRoundTrip(t, "Int8Array", []int8{-128, -1, 0, 1, 127}, func(v js.Value) int8 { return int8(v.Int()) })
+	})
+	t.Run("Uint8", func(t *testing.T) {
+		testCopyRoundTrip(t, "Uint8Array", []uint8{0, 1, 128, 255}, func(v js.Value) uint8 { return uint8(v.Int()) })
+	})
+	t.Run("Int16", func(t *testing.T) {
+		testCopyRoundTrip(t, "Int16Array", []int16{-32768, -1, 0, 1, 32767}, func(v js.Value) int16 { return int16(v.Int()) })
+	})
+	t.Run("Uint16", func(t *testing.T) {
+		testCopyRoundTrip(t, "Uint16Array", []uint16{0, 1, 40000, 65535}, func(v js.Value) uint16 { return uint16(v.Int()) })
+	})
+	t.Run("Int32", func(t *testing.T) {
+		testCopyRoundTrip(t, "Int32Array", []int32{-2147483648, -1, 0, 1, 2147483647}, func(v js.Value) int32 { return int32(v.Int()) })
+	})
+	t.Run("Uint32", func(t *testing.T) {
+		testCopyRoundTrip(t, "Uint32Array", []uint32{0, 1, 3000000000, 4294967295}, func(v js.Value) uint32 { return uint32(v.Int()) })
+	})
+	t.Run("Float32", func(t *testing.T) {
+		testCopyRoundTrip(t, "Float32Array", []float32{-1.5, 0, 0.25, 3.5}, func(v js.Value) float32 { return float32(v.Float()) })
+	})
+	t.Run("Float64", func(t *testing.T) {
+		testCopyRoundTrip(t, "Float64Array", []float64{-1.5, 0, math.Pi, 1e300}, func(v js.Value) float64 { return v.Float() })
+	})
+}
+
+func TestCopyToGoMinLength(t *testing.T) {
+	for _, tt := range copyTests {
+		t.Run(fmt.Sprintf("%d-to-%d", tt.srcLen, tt.dstLen), func(t *testing.T) {
+			src := js.Global().Get("Float32Array").New(tt.srcLen)
+			if tt.srcLen >= 2 {
+				src.SetIndex(1, 42)
+			}
+			dst := make([]float32, tt.dstLen)
+
+			if got, want := js.CopyToGo(dst, src), tt.copyLen; got != want {
+				t.Errorf("copied %d, want %d", got, want)
+			}
+			if tt.dstLen >= 2 && tt.srcLen >= 2 {
+				if got, want := dst[1], float32(42); got != want {
+					t.Errorf("got %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCopyToJSMinLength(t *testing.T) {
+	for _, tt := range copyTests {
+		t.Run(fmt.Sprintf("%d-to-%d", tt.srcLen, tt.dstLen), func(t *testing.T) {
+			src := make([]int16, tt.srcLen)
+			if tt.srcLen >= 2 {
+				src[1] = 42
+			}
+			dst := js.Global().Get("Int16Array").New(tt.dstLen)
+
+			if got, want := js.CopyToJS(dst, src), tt.copyLen; got != want {
+				t.Errorf("copied %d, want %d", got, want)
+			}
+			if tt.dstLen >= 2 && tt.srcLen >= 2 {
+				if got, want := dst.Index(1).Int(), 42; got != want {
+					t.Errorf("got %d, want %d", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestCopyKindMismatchPanics(t *testing.T) {
+	// src is a Float32Array, dst wants an Int16Array.
+	expectPanic(t, func() {
+		js.CopyToGo(make([]int16, 4), js.Global().Get("Float32Array").New(4))
+	})
+	// dst is an Int8Array, src is []float64.
+	expectPanic(t, func() {
+		js.CopyToJS(js.Global().Get("Int8Array").New(4), make([]float64, 4))
+	})
+	// src is not a TypedArray at all.
+	expectPanic(t, func() {
+		js.CopyToGo(make([]int32, 4), js.Global().Get("Array").New(4))
+	})
+	// Unsupported Go slice types.
+	expectPanic(t, func() {
+		js.CopyToGo(make([]string, 4), js.Global().Get("Int32Array").New(4))
+	})
+	expectPanic(t, func() {
+		js.CopyToJS(js.Global().Get("Int32Array").New(4), 42)
+	})
+	// Unlike CopyBytesToGo/CopyBytesToJS, the strictly-typed functions do
+	// not accept a Uint8ClampedArray for []uint8.
+	expectPanic(t, func() {
+		js.CopyToGo(make([]uint8, 4), js.Global().Get("Uint8ClampedArray").New(4))
+	})
+}
+
+func TestCopyToGoAfterMemoryGrowth(t *testing.T) {
+	const n = 1024
+	src := js.Global().Get("Float64Array").New(n)
+	for i := 0; i < n; i++ {
+		src.SetIndex(i, float64(i)/2)
+	}
+	// Force the Go heap to grow so that the WebAssembly memory buffer is
+	// replaced. A copy through a stale view of the old (detached) buffer
+	// would read zeros or throw.
+	ballast := make([][]byte, 64)
+	for i := range ballast {
+		ballast[i] = make([]byte, 1<<20)
+	}
+	dst := make([]float64, n)
+	if got := js.CopyToGo(dst, src); got != n {
+		t.Fatalf("copied %d, want %d", got, n)
+	}
+	runtime.KeepAlive(ballast)
+	for i, got := range dst {
+		if want := float64(i) / 2; got != want {
+			t.Fatalf("dst[%d] = %v, want %v", i, got, want)
+		}
+	}
+}
+
+func TestAwaitConcurrent(t *testing.T) {
+	makePromise := js.Global().Call("eval", `(i, ms) => new Promise((resolve) => setTimeout(() => resolve("settled-" + i), ms))`)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			want := fmt.Sprintf("settled-%d", i)
+			var p js.Value
+			if i%2 == 0 {
+				// Real event-loop asynchrony, with distinct delays.
+				p = makePromise.Invoke(i, 5+i*3)
+			} else {
+				p = js.Global().Get("Promise").Call("resolve", want)
+			}
+			v, err := js.Await(p)
+			if err != nil {
+				t.Errorf("goroutine %d: Await returned error %v", i, err)
+				return
+			}
+			if got := v.String(); got != want {
+				t.Errorf("goroutine %d: Await returned %q, want %q", i, got, want)
+			}
+		}()
+	}
+	wg.Wait()
 }

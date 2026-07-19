@@ -12,7 +12,6 @@ package cosmo
 const (
 	SYS_READ          = 63
 	SYS_WRITE         = 64
-	SYS_OPEN          = 56 // openat on arm64
 	SYS_CLOSE         = 57
 	SYS_MMAP          = 222
 	SYS_MPROTECT      = 226
@@ -38,3 +37,12 @@ const (
 	SYS_PRCTL         = 167
 	SYS_EPOLL_PWAIT2  = 441
 )
+
+// EpollEvent is the epoll_event structure. Unlike x86-64, the Linux
+// kernel does not pack the struct on arm64: it is 16 bytes with Data at
+// offset 8.
+type EpollEvent struct {
+	Events uint32
+	_pad   uint32
+	Data   [8]byte // to match amd64
+}
