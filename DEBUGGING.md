@@ -3291,3 +3291,153 @@ internal/poll.Writev stack) byte-compared on the reader side. On
 darwin this leg also regression-guards the item-1-followup dup(2)
 emulation, since FileConn's dup fallback is exactly what failed
 there.
+
+## Wave 3 item 2b (2026-07-19): SCM_RIGHTS fd passing over afunix
+
+The prize of item 2: sendmsg with a SOL_SOCKET/SCM_RIGHTS control
+payload now transfers fds between cosmo processes on NT, over
+pathname AF_UNIX SOCK_STREAM sockets. NT has no primitive for
+attaching handles to socket messages, so the emulation defines a wire
+frame that rides the ordinary afunix byte stream - emitted ONLY by
+sendmsg calls that actually carry rights; plain sends stay unframed
+and wire-compatible with write/send on the same socket. Both seam
+functions in os_cosmo_nt_msg.go (ntSendmsgControl/ntRecvmsgControl)
+gained their real bodies; the syscall package again needed zero
+changes (Sendmsg/Recvmsg/UnixRights/ParseSocketControlMessage all
+flow through the SYS_SENDMSG/SYS_RECVMSG dispatch).
+
+Frame layout (little-endian, byte-serialized, versioned):
+
+    off  size  field
+    0    8     magic: F5 53 43 4D 52 49 47 30 - 0xF5 (improbable
+               first byte: illegal UTF-8 lead) then "SCMRIG" then
+               the VERSION byte '0'
+    8    4     nfds (u32, capped at 64 - Linux's own SCM_MAX_FD is
+               253; 64 keeps the worst-case frame ~41 KiB, under
+               afunix's default socket buffer)
+    12   4     sender pid (u32, diagnostic only)
+    16   4     dataLen (u32): data bytes following the records
+    20   4     reserved (0)
+    24   ...   nfds records, then dataLen data bytes
+
+    record: u32 kind (1=file, 2=pipe, 3=socket - wire values,
+    decoupled from the internal ntFDKind enum), u32 Linux O_* flags,
+    then: file/pipe -> u64 RECEIVER-relative HANDLE value;
+    socket -> u16 infoLen (=628, sizeof WSAPROTOCOL_INFOW on x64) +
+    the WSAPROTOCOL_INFOW blob.
+
+SENDER-PUSH model, the load-bearing design decision: all duplication
+happens at sendmsg time - WSADuplicateSocketW(s, peerPid, &info) for
+sockets (no process handle needed, just the pid), and
+OpenProcess(PROCESS_DUP_HANDLE=0x40, peerPid) + DuplicateHandle(self,
+h, hPeer, &peerRel, 0, FALSE, DUPLICATE_SAME_ACCESS) for files and
+pipes - so the sender may close its fd (or exit) the moment sendmsg
+returns, which is the Linux invariant. Receiver-pull was considered
+and REJECTED for exactly that reason: between sendmsg and recvmsg the
+sender's handle could be closed or its value recycled, so a frame
+carrying sender-relative handle values would dangle. The whole
+header+records+data goes out as ONE vectored WSASend, looped to
+completion on short sends (a nonblocking carrier that accepts only
+part of a frame MUST be finished - the receiver consumes frames
+whole; EAGAIN with zero progress returns cleanly, EAGAIN after
+partial progress yields and retries).
+
+Peer-pid discovery: the afunix.sys SIO_AF_UNIX_GETPEERPID WSAIoctl
+(0x58000100, _WSAIOR(IOC_VENDOR, 256); in the SDK's afunix.h, stable
+since Win10 17063 - the moral equivalent of the SO_PEERCRED pid that
+afunix lacks). Answer cached on the fd entry (sockPeerPid): a
+connection's peer can never change. Ioctl failure -> EOPNOTSUPP for
+ancillary sends only; plain data on the same socket is unaffected.
+FALLBACK PLAN if windows-latest refuses the ioctl (the one
+undocumented dependency): flip to receiver-pull - frame carries
+senderPid (already does, as a diagnostic); receiver OpenProcess +
+DuplicateHandle-pulls; sender parks a self-duplicate per transfer to
+survive early close, reaped at socket close. The frame version byte
+exists precisely so that flip is a contained, detectable change.
+Decision point: the first windows-latest run of the fdpass probe.
+
+Receive path: recvmsg WITH a control buffer MSG_PEEKs 8 bytes on
+AF_UNIX non-pair sockets. Short peeks that match a magic prefix
+re-peek after a yield (the sender emits frames in one send, so the
+rest is in flight); any non-magic byte falls through to the plain
+data path (handled=false). On a match: consume the self-delimiting
+frame with exact-read loops, reconstruct fds - sockets via
+WSASocketW(FROM_PROTOCOL_INFO=-1,-1,-1, &info, 0,
+WSA_FLAG_NO_HANDLE_INHERIT), mirroring ntEmuSocket's non-overlapped
+creation shape (WSA_FLAG_OVERLAPPED must NOT appear: wave-2 sockets
+are classic synchronous); files/pipes by inserting the
+already-receiver-relative handle straight into the fd table with the
+carried kind/flags - then synthesize the Linux SCM_RIGHTS cmsg into
+the caller's control buffer and deliver the data bytes into the
+iovecs. The imported socket shares the sender's underlying socket
+object (blocking mode, options), exactly like a passed fd's shared
+open file description on Linux; the Linux address family is read out
+of the info blob's iAddressFamily (offset 76, NT numbering, 23->10).
+
+Linux-parity corners, each verified against a live kernel this
+session (test program, 2026-07-19): SCM_RIGHTS on an INET/INET6
+socket is silently DROPPED and the data sent (__sock_cmsg_send:
+"SCM_RIGHTS ... semantically in SOL_UNIX"); non-SOL_SOCKET cmsg
+levels are silently skipped (__scm_send's continue); an unknown
+SOL_SOCKET type is EINVAL; a bad payload fd is EBADF before any data
+moves; receive-side fd budget is scm_max_fds = (controllen-16)/4 -
+which deliberately lets CMSG_SPACE's alignment slack carry an extra
+fd (a 24-byte buffer receives TWO fds, verified) - with overflow fds
+closed and MSG_CTRUNC raised; reported controllen is
+min(CMSG_SPACE(4n), supplied) with cmsg Len = CMSG_LEN(4n).
+SCM_CREDENTIALS is EOPNOTSUPP (Linux validates credentials this
+emulation cannot).
+
+Honest limits, by design (also in the os_cosmo_nt_msg.go header):
+both ends must be cosmo-Go binaries speaking the frame (a foreign
+peer reads frame bytes as data; a foreign sender's raw bytes can
+alias the magic with probability ~2^-64 per message boundary,
+surfaced as EBADMSG/EPROTO - and a receiver that does a PLAIN read
+during a frame arrival gets frame bytes as data, where Linux would
+quietly discard the fds); same-user only (OpenProcess across users
+needs privileges the emulation does not negotiate); SOCK_STREAM
+pathname carriers only; socketpair ends refused EOPNOTSUPP as
+carriers AND payload (in-process peers by construction - ExtraFiles
+is ENOSYS - and their synthesized unnamed-AF_UNIX identity cannot
+cross the frame honestly); dir/stdio payload fds EOPNOTSUPP (files,
+pipes, and non-pair sockets pass - pipes transfer even though
+same-process dup(2) on them stays ENOSYS, since DuplicateHandle
+works on any kernel handle); MSG_PEEK on a frame EOPNOTSUPP; data
+past the caller's iovecs is consumed and discarded with MSG_TRUNC
+(the frame is a unit; Linux leaves stream tails readable). RESIDUAL:
+a duplicated socket whose last sender-side handle closes before the
+receiver imports the WSAPROTOCOL_INFOW is provider-dependent (msafd
+keeps it importable in practice); the fdpass probe deliberately
+sequences import-before-close (the parent holds every passed fd open
+until the child's echo - which implies import - arrives). A frame
+error mid-transfer is all-or-nothing on the receive side: created
+fds are closed, remaining records' resources dropped
+(import-then-closesocket releases a socket duplication reference),
+and the caller sees EBADMSG/EPROTO/the mapped errno.
+
+New Win32 resolutions, runtime GetProcAddress only (the 2-slot
+ntidata/ntiat import contract is untouched): ws2_32
+WSADuplicateSocketW joins ntWinsockEnsure (22 syms now); kernel32
+OpenProcess joins ntResolve. WSAIoctl, WSASocketW, DuplicateHandle
+and CloseHandle were already resolved. No trampoline changes:
+WSAIoctl rides the existing ntcall10x shape, WSADuplicateSocketW and
+OpenProcess are 3-arg, DuplicateHandle 7-arg.
+
+Probe (testdata/runtimeprobe/fdpass.go, check "fdpass"; in
+probeOkChecks): parent/child over a pathname unix socket
+(RUNTIMEPROBE_CHILD=fdpass, path via RUNTIMEPROBE_FDPASS_SOCK). The
+parent passes a FILE fd (known content, reopened O_RDONLY) and a
+SOCKET fd (the accepted end of an in-parent TCP loopback triple,
+dup'd out via File() - the item-1 socket dup) plus inline data in
+ONE sendmsg; the child reads the file through the passed fd, writes
+a payload into the passed socket (verified arriving on the parent's
+dial side - proving the passed fd is the same underlying socket),
+and echoes file-content|inline-data back over the unix conn; the
+parent asserts all three arrivals and a clean wait status.
+Mandatory-real on NT AND linux - the linux leg runs native
+SCM_RIGHTS, which validates the probe's own logic and pins the
+reference semantics the emulation must match; darwin prints "ok
+fdpass skipped (host lacks sendmsg)" keyed on the host triple, never
+on an error. Verified this session on the linux leg: all 44 checks
+ok, "ok all", exit 0. The NT frame path is judged by windows-latest
+only (wave-2 rule; wine lacks afunix entirely).

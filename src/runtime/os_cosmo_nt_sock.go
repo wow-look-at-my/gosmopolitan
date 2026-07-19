@@ -188,6 +188,7 @@ var (
 	ntSockSendtoFn      uintptr // classic sendto (one buffer)
 	ntWSARecvVFn        uintptr // WSARecv: scatter-gather recv; flags arg is in/out (os_cosmo_nt_msg.go)
 	ntWSASendVFn        uintptr // WSASend: scatter-gather send (os_cosmo_nt_msg.go)
+	ntWSADupSocketWFn   uintptr // WSADuplicateSocketW: SCM_RIGHTS socket transfer (os_cosmo_nt_msg.go)
 	ntWSASetHandleInfFn uintptr // kernel32 SetHandleInformation (accepted sockets)
 )
 
@@ -214,6 +215,7 @@ var (
 	ntNameSockSendto   = []byte("sendto\x00")
 	ntNameWSARecvV     = []byte("WSARecv\x00")
 	ntNameWSASendV     = []byte("WSASend\x00")
+	ntNameWSADupSockW  = []byte("WSADuplicateSocketW\x00")
 	ntNameSetHandleInf = []byte("SetHandleInformation\x00")
 	ntWSAData          [408]byte // WSADATA (amd64 layout is 400 bytes; padded)
 )
@@ -279,6 +281,7 @@ func ntWinsockEnsure() uintptr {
 	ntSockSendtoFn = sym(&ntNameSockSendto[0])
 	ntWSARecvVFn = sym(&ntNameWSARecvV[0])
 	ntWSASendVFn = sym(&ntNameWSASendV[0])
+	ntWSADupSocketWFn = sym(&ntNameWSADupSockW[0])
 	if ok {
 		// WSAStartup returns the error code directly (not via the
 		// last-error slot); 0 means winsock 2.2 is up.

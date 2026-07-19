@@ -119,6 +119,9 @@ var (
 	ntWerGetFlagsFn                 uintptr // optional (missing on old wine)
 	ntWerSetFlagsFn                 uintptr // optional
 
+	// Wave 3 (SCM_RIGHTS fd passing; kernel32, present since forever).
+	ntOpenProcessFn uintptr
+
 	// Optional non-kernel32 imports: 0 when unavailable, and every
 	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
@@ -197,6 +200,7 @@ var (
 	ntNameTerminateProcess  = []byte("TerminateProcess\x00")
 	ntNameWerGetFlags       = []byte("WerGetFlags\x00")
 	ntNameWerSetFlags       = []byte("WerSetFlags\x00")
+	ntNameOpenProcess       = []byte("OpenProcess\x00")
 	ntNameNtdll             = []byte("ntdll.dll\x00")
 	ntNameNtQueryInfoProc   = []byte("NtQueryInformationProcess\x00")
 	ntNameBcryptPrimitives  = []byte("bcryptprimitives.dll\x00")
@@ -446,6 +450,9 @@ func ntResolve() {
 	ntTerminateProcessFn = k32sym(&ntNameTerminateProcess[0])
 	ntWerGetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerGetFlags[0])), 0, 0, 0, 0)
 	ntWerSetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerSetFlags[0])), 0, 0, 0, 0)
+
+	// Wave 3: SCM_RIGHTS fd passing (kernel32).
+	ntOpenProcessFn = k32sym(&ntNameOpenProcess[0])
 
 	// WaitOnAddress and friends live in the api-ms-win-core-synch
 	// forwarder DLL (Win8+; real cosmo imports the same one).

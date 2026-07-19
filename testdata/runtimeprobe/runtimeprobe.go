@@ -4,7 +4,8 @@
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
-// sendmsg/recvmsg (host-skipped on macOS, which lacks the dispatch),
+// sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process (both
+// host-skipped on macOS, which lacks the dispatch),
 // readv/writev + net.Buffers (all hosts),
 // os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
@@ -71,6 +72,10 @@ func main() {
 		// Child mode for checkWaitSig: die by SIGUSR1.
 		raiseFatalChild()
 		return
+	case "fdpass":
+		// Child mode for checkFdpass: receive fds over SCM_RIGHTS.
+		fdpassChild()
+		return
 	}
 	startWatchdog()
 	// timed localizes latency stalls without weakening any verdict:
@@ -109,6 +114,7 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("fdpass", checkFdpass)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)

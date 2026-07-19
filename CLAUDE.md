@@ -158,18 +158,25 @@ NT may drop loopback UDP datagrams - a lost wake stalls the poller;
 pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
 sockets over afunix.sys (sun_path through the path layer; abstract
 names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
-runs show exactly one red there while windows-latest proves it); and
+runs show exactly one red there while windows-latest proves it);
+wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
+as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
+writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
+between cosmo processes (sender-push wire frame on the afunix
+stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
+for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
+AF_UNIX carriers only, same user, both ends must be cosmo binaries -
+see DEBUGGING.md wave 3 item 2b for the honest limits); and
 signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
 (kill/tkill with full delivery through sigtrampgo), os/signal Notify,
 async preemption via SuspendThread/SetThreadContext injection
 (preempt ~180ms on the CI runner, upstream preemptM semantics), signal
 deaths encoded for the wait4 protocol, and console Ctrl-C/Break/Close
 -> SIGINT/SIGTERM via an asm handler + relay M. Still missing on
-Windows: sendmsg/recvmsg (fd passing), SIGPROF profiling,
-Windows/arm64, real-conhost console-ctrl injection coverage (the
-handler is live but headless CI cannot generate console events) - see
-DEBUGGING.md's NT wave sections (chunks A-E) for the ladder, the
-forensics, and the wave-3 backlog.
+Windows: SIGPROF profiling, Windows/arm64, real-conhost console-ctrl
+injection coverage (the handler is live but headless CI cannot
+generate console events) - see DEBUGGING.md's NT wave sections
+(chunks A-E) for the ladder, the forensics, and the wave-3 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll

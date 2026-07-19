@@ -81,10 +81,16 @@ type ntFDEntry struct {
 	// compares addr strings). sockPair (wave 3) marks a socketpair
 	// end: winsock knows it as a loopback TCP socket, so name queries
 	// synthesize the Linux truth (unnamed AF_UNIX) instead of asking.
-	sockFam   uint16
-	sockPair  bool
-	unixBound string
-	unixPeer  string
+	// sockPeerPid (wave 3 item 2b) caches the SIO_AF_UNIX_GETPEERPID
+	// answer for a connected AF_UNIX socket: the peer of a connection
+	// can never change, so the first successful ioctl's answer is
+	// final (0 = not queried yet; pid 0 is the NT idle process, which
+	// can never own a socket).
+	sockFam     uint16
+	sockPair    bool
+	sockPeerPid uint32
+	unixBound   string
+	unixPeer    string
 }
 
 var (
@@ -173,6 +179,19 @@ func ntFDSetSockPair(fd int32) {
 	lock(&ntFDLock)
 	if ntFDTable[fd].kind == ntFDSocket {
 		ntFDTable[fd].sockPair = true
+	}
+	unlock(&ntFDLock)
+}
+
+// ntFDSetSockPeerPid caches the connected AF_UNIX peer's pid (see the
+// sockPeerPid field comment).
+func ntFDSetSockPeerPid(fd int32, pid uint32) {
+	if fd < 0 || fd >= ntFDMax {
+		return
+	}
+	lock(&ntFDLock)
+	if ntFDTable[fd].kind == ntFDSocket {
+		ntFDTable[fd].sockPeerPid = pid
 	}
 	unlock(&ntFDLock)
 }
