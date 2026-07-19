@@ -3041,3 +3041,102 @@ zero slow lines, apetest ~2.1s per origin, all other jobs green.
   step and printlns it added are what cracked the case)
 - 30f65650 runtime: lossless NT netpoll wake (TCP pair), AF_UNIX
   SO_REUSEADDR no-op
+
+# 2026-07-19: Windows (NT) bring-up — wave 3
+
+Wave-3 charter (from the wave-2 backlog): socketpair, sendmsg/recvmsg
++ SCM_RIGHTS fd passing, SIGPROF CPU profiling, real conhost control
+events + process groups, and a windows/arm64 scoping report. Ground
+rules carried over unchanged: the 2-slot ntidata/ntiat IAT contract is
+never extended (every new Win32 function resolves at runtime), all new
+syscalls are dispatcher cases in ntSyscallEmulate (never a second
+entry path), netpollopen keeps refusing non-sockets, wine proves
+nothing (windows-latest is the judge), and every item lands with
+probe coverage wired into apetest's probeOkChecks.
+
+## Wave 3 item 1 (2026-07-19): socketpair(2) over a loopback TCP pair
+
+SYS_SOCKETPAIR=53 was ENOSYS; syscall.Socketpair (and everything above
+it) now works on NT. The syscall package needed ZERO changes: its
+generated socketpair wrapper issues RawSyscall6(53, ...), which routes
+through the NT emulation table, so the whole feature is dispatcher +
+backend.
+
+Design (src/runtime/os_cosmo_nt_sock.go):
+
+- ntLoopbackTCPPair(): the netpoller wake-channel recipe of wave 2,
+  factored OUT of netpollinitNT into a shared allocation-free helper
+  (listener -> bind 127.0.0.1:0 -> getsockname -> listen(1) ->
+  client -> blocking connect -> accept -> close listener -> strip
+  HANDLE inheritance on the accepted end). Both callers stay legal at
+  netpoll-init time (plain ntcallE, no entersyscall, stack buffers).
+  Two hardenings the inline original lacked, gained by the poller and
+  socketpair alike: (1) connect-race verification - after the accept,
+  getsockname(client) must equal getpeername(accepted) over
+  family+port+address, or some OTHER local process won the race
+  against the one-slot backlog and the "pair" halves would be talking
+  to a stranger; mismatch reports WSAECONNABORTED (the sin_zero tail
+  is excluded from the compare - providers do not promise it zeroed).
+  (2) TCP_NODELAY on BOTH ends, not just the poller's send end
+  (best-effort, as before).
+- ntEmuSocketpair(): accepts AF_UNIX/AF_LOCAL + SOCK_STREAM + proto 0
+  (SOCK_NONBLOCK/SOCK_CLOEXEC stripped and honored like ntEmuSocket:
+  FIONBIO per end, cloexec in the fd table). Both ends alloc as kind
+  ntFDSocket with sockFam=AF_UNIX and the NEW ntFDEntry bit sockPair;
+  partial failure closes both sockets and releases any claimed fd.
+  Everything else rides existing socket-kind machinery: read/write ->
+  recv/send, close -> closesocket, fstat -> S_IFSOCK, lseek ->
+  ESPIPE, netpollopenNT accepts the fds (WSAPoll readiness +
+  deadlines with zero poller changes).
+- Name-query synthesis: getsockname/getpeername on a sockPair fd
+  never consult winsock (they would leak the backing 127.0.0.1:port
+  truth); they synthesize the Linux answer for socketpair fds - the
+  UNNAMED AF_UNIX sockaddr, 2-byte family only - which the syscall
+  package's pre-zeroed-buffer decode turns into *SockaddrUnix with an
+  empty Name, exactly like a Linux host.
+- Refusals, each deliberate: SOCK_DGRAM -> EOPNOTSUPP because a
+  datagram pair would have to ride loopback UDP, and wave 2 proved
+  real NT legally DROPS loopback UDP datagrams (the lost-wake
+  netpoller wedge; wine cannot reproduce it) - afunix.sys has no
+  DGRAM either, so there is no lossless datagram transport to build
+  on. Other domains -> EOPNOTSUPP (Linux refuses AF_INET socketpair
+  the same way); nonzero protocol -> EPROTONOSUPPORT.
+- os/exec: a pair end CANNOT cross into a child process on NT - both
+  ends are born uninheritable and ntForkExec rejects ExtraFiles
+  (attr.Files longer than stdio's 3 is ENOSYS, wave 2 chunk B). So
+  pathname AF_UNIX sockets remain the only cross-process socket
+  channel on NT; SCM_RIGHTS over those (item 2) is the fd-passing
+  story, not inherited pair ends.
+
+Discovered while wiring the probe (not in the wave-3 plan): the
+net.FileConn path needs dup(2), which was also ENOSYS. FileConn wraps
+an *os.File by fcntl F_DUPFD_CLOEXEC - ntFcntl answers ENOSYS - and
+internal/poll then falls back to plain dup(2) (dupCloseOnExecOld).
+Fix: SYS_DUP=32 dispatches to ntEmuDup, implemented for SOCKET-kind
+fds only via same-process DuplicateHandle - exactly the call upstream
+Go's poll.DupCloseOnExec makes on windows (msafd sockets are real
+kernel file handles; the object lives until the last handle closes,
+which IS dup's contract; MSDN's warning about DuplicateHandle on
+sockets concerns non-IFS layered providers, not the base msafd/afunix
+stacks). The dup copies the recorded socket identity (sockFam,
+sockPair, unix names) into the new fd entry and clears CLOEXEC per
+POSIX; nonblocking mode needs no copy (FIONBIO is socket-object
+state, shared - same as Linux's shared file description). File/pipe
+dup stays ENOSYS on purpose: nothing in std needs it on NT yet, and a
+visible gap beats an untested path. No new Win32 imports anywhere in
+this item: DuplicateHandle and every winsock entry point were already
+resolved.
+
+Probe (testdata/runtimeprobe/sockpair.go, mandatory on ALL hosts - no
+skip legs; linux native, darwin via darwinSocketpair, windows via the
+new emulation; names added to apetest probeOkChecks):
+
+- socketpair: raw-fd byte transfer in both directions plus the
+  unnamed-*SockaddrUnix getsockname contract on both ends (the
+  regression canary for the 127.0.0.1 leak).
+- sockpairpoll: os.NewFile + net.FileConn on both ends (asserts an
+  unnamed *net.UnixAddr LocalAddr), a reader parked BEFORE the write
+  (forcing the EAGAIN -> netpoller wait -> readiness wake round trip,
+  not a buffered fast path), the reverse echo, then a
+  SetReadDeadline-in-the-past read that must time out - netpollopen
+  registration, WSAPoll readiness and pollDesc deadlines on pair fds.

@@ -3,7 +3,8 @@
 // (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
-// sockets with deadlines, os.Executable, argv/env, working-directory
+// sockets with deadlines, socketpair (raw fds and net.FileConn),
+// os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, and wait-status
 // signal decoding.
@@ -91,6 +92,7 @@ func main() {
 	timed("monotonic", checkMonotonic)
 	timed("timers", checkTimers)
 	timed("sockets", checkSockets)
+	timed("sockpair", checkSockpair)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)

@@ -52,6 +52,7 @@ const (
 	ntSysLseek      = 8
 	ntSysPread64    = 17
 	ntSysPwrite64   = 18
+	ntSysDup        = 32
 	ntSysGetpid     = 39
 	ntSysSocket     = 41
 	ntSysConnect    = 42
@@ -62,6 +63,7 @@ const (
 	ntSysListen     = 50
 	ntSysGetsockNm  = 51
 	ntSysGetpeerNm  = 52
+	ntSysSocketpair = 53
 	ntSysSetsockopt = 54
 	ntSysGetsockopt = 55
 	ntSysExit       = 60
@@ -344,6 +346,12 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuSendto(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), uint32(a6))
 	case ntSysRecvfrom:
 		return ntEmuRecvfrom(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), (*uint32)(unsafe.Pointer(a6)))
+	case ntSysSocketpair:
+		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)))
+	case ntSysDup:
+		// Socket-kind fds only this wave (net.FileConn's dup
+		// fallback); files/pipes stay ENOSYS. See ntEmuDup.
+		return ntEmuDup(int32(a1))
 
 	case ntSysGetpid, ntSysGetpgrp:
 		// getpgrp: no process groups on NT; report the pid, which is

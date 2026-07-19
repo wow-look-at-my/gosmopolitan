@@ -52,9 +52,13 @@
 // the recv buffer fails WSAEMSGSIZE on winsock; Linux silently
 // truncates, so the emulation reports a full buffer instead.
 //
-// sendmsg/recvmsg (fd passing, ReadMsg*) stay ENOSYS this wave - the
-// darwin leg lacks them too, and nothing in the probe's net paths
-// needs them. socketpair likewise (os/exec uses pipes).
+// sendmsg/recvmsg (fd passing, ReadMsg*) stay ENOSYS for now - the
+// darwin leg lacks them too - and are wave 3's next item. socketpair
+// is emulated since wave 3 item 1 (ntEmuSocketpair below): a
+// connected loopback TCP pair dressed as unnamed AF_UNIX, built by
+// the same recipe as the netpoller's wake channel (ntLoopbackTCPPair,
+// shared with netpollinitNT). dup(2) is emulated for socket-kind fds
+// only (ntEmuDup) - net.FileConn needs it.
 
 package runtime
 
@@ -573,6 +577,245 @@ func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 	return uintptr(fd), 0, 0
 }
 
+// ntLoopbackTCPPair builds a connected loopback TCP pair - the
+// netpoller wake-channel recipe of wave 2, factored out here in wave
+// 3 so the socketpair emulation shares it: loopback listener, bind
+// 127.0.0.1:0, blocking connect against the one-slot backlog, accept,
+// close the listener. All in-kernel and immediate. Returns the
+// accepted and client SOCKETs - blocking, TCP_NODELAY both ways,
+// uninheritable - or, on failure, the failing step's name (a static
+// string) plus the Win32/WSA error, with every socket it opened
+// already closed. Allocation-free: also called from netpollinitNT,
+// which can run under runtime locks (the first timer's
+// netpollGenericInit) where entersyscall is off-limits too - hence
+// plain ntcallE throughout, like the wave-2 inline original.
+//
+// Hardening both callers gain over the inline original: after the
+// accept, the client's getsockname must equal the accepted end's
+// getpeername (family, port AND address) - otherwise some OTHER
+// local process won the connect race against the one-slot backlog
+// and the two ends would not be connected to each other. The window
+// is tiny and 127.0.0.1-only, but the failure mode (a "pair" whose
+// halves talk to a stranger) is worth the two name queries; a
+// mismatch reports WSAECONNABORTED.
+func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
+	l, lerr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
+		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+	if l == _NT_INVALID_SOCKET {
+		return 0, 0, "listener socket", lerr
+	}
+	var sin [16]byte
+	sin[0] = _NT_AF_INET
+	sin[4], sin[5], sin[6], sin[7] = 127, 0, 0, 1
+	if r, e := ntcallE(ntWSABindFn, l, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "bind", e
+	}
+	var slen int32 = 16
+	if r, e := ntcallE(ntWSAGetsocknameFn, l, uintptr(unsafe.Pointer(&sin[0])),
+		uintptr(unsafe.Pointer(&slen)), 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "getsockname", e
+	}
+	if r, e := ntcallE(ntWSAListenFn, l, 1, 0, 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "listen", e
+	}
+	c, werr = ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
+		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
+	if c == _NT_INVALID_SOCKET {
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "client socket", werr
+	}
+	if r, e := ntcallE(ntWSAConnectFn, c, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "connect", e
+	}
+	a, werr = ntcallE(ntWSAAcceptFn, l, 0, 0, 0, 0, 0, 0)
+	if a == _NT_INVALID_SOCKET {
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+		return 0, 0, "accept", werr
+	}
+	ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
+	// Connect-race verification (see above). Compare only the
+	// family+port+address head (8 bytes): providers do not promise a
+	// zeroed sin_zero tail.
+	var cname, aname [16]byte
+	clen, alen := int32(16), int32(16)
+	if r, e := ntcallE(ntWSAGetsocknameFn, c, uintptr(unsafe.Pointer(&cname[0])),
+		uintptr(unsafe.Pointer(&clen)), 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, a, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		return 0, 0, "verify getsockname", e
+	}
+	if r, e := ntcallE(ntWSAGetpeernameFn, a, uintptr(unsafe.Pointer(&aname[0])),
+		uintptr(unsafe.Pointer(&alen)), 0, 0, 0, 0); ntSockErr(r) {
+		ntcall(ntWSACloseSocketFn, a, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		return 0, 0, "verify getpeername", e
+	}
+	mismatch := clen < 8 || alen < 8
+	for i := 0; i < 8 && !mismatch; i++ {
+		mismatch = cname[i] != aname[i]
+	}
+	if mismatch {
+		ntcall(ntWSACloseSocketFn, a, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		return 0, 0, "peer verify", _NT_WSAECONNABORTED
+	}
+	// The accepted end never crosses a CreateProcess boundary
+	// explicitly, but keep it uninheritable like every created socket
+	// (graceful: it merely stays inheritable if the resolve failed).
+	if ntWSASetHandleInfFn != 0 {
+		ntcall(ntWSASetHandleInfFn, a, _NT_HANDLE_FLAG_INHERIT, 0, 0, 0, 0)
+	}
+	// Pair traffic - wake bytes and socketpair payloads alike - must
+	// hit the wire immediately, not sit in a Nagle buffer behind a
+	// delayed ACK. Best-effort, both directions.
+	var one uint32 = 1
+	ntcall(ntWSASetsockoptFn, c, 6 /* IPPROTO_TCP */, 1, /* TCP_NODELAY */
+		uintptr(unsafe.Pointer(&one)), 4, 0)
+	one = 1
+	ntcall(ntWSASetsockoptFn, a, 6, 1, uintptr(unsafe.Pointer(&one)), 4, 0)
+	return a, c, "", 0
+}
+
+// ntEmuSocketpair emulates socketpair(2) with a connected loopback
+// TCP pair dressed as AF_UNIX (ntLoopbackTCPPair above). Accepted
+// shape: AF_UNIX (=AF_LOCAL) SOCK_STREAM with protocol 0, plus the
+// SOCK_NONBLOCK/SOCK_CLOEXEC creation flags (stripped exactly like
+// ntEmuSocket). Refusals, each deliberate:
+//   - SOCK_DGRAM -> EOPNOTSUPP: a datagram pair would have to ride
+//     loopback UDP, which legally DROPS datagrams on real NT - the
+//     wave-2 netpoller lesson, where one lost wake datagram wedged
+//     the poller for its full timeout - and afunix.sys has no DGRAM
+//     support to fall back on; there is no lossless NT transport
+//     with datagram semantics. (Other non-stream types likewise.)
+//   - other domains -> EOPNOTSUPP (Linux refuses AF_INET socketpair
+//     with the same errno).
+//   - protocols other than 0 -> EPROTONOSUPPORT.
+//
+// The ends are real TCP sockets under the covers, so data flow,
+// shutdown(2), FIONBIO and WSAPoll readiness all work through the
+// existing socket-kind machinery; the fd entries carry sockPair so
+// name queries synthesize the Linux truth (unnamed AF_UNIX, see
+// ntEmuGetsockname) and never leak the 127.0.0.1 backing address.
+// os/exec interaction is nil by construction: both ends are born
+// uninheritable and ntForkExec rejects ExtraFiles (>3 attr.Files,
+// ENOSYS), so a pair end cannot cross into a child process on NT.
+func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uintptr) {
+	if sv == nil {
+		return ntFail3(ntEFAULT)
+	}
+	if eno := ntWinsockEnsure(); eno != 0 {
+		return ntFail3(eno)
+	}
+	flags := typ & (_NT_SOCK_NONBLOCK | _NT_SOCK_CLOEXEC)
+	st := typ &^ (_NT_SOCK_NONBLOCK | _NT_SOCK_CLOEXEC)
+	if domain != _NT_AF_UNIX {
+		return ntFail3(ntEOPNOTSUPP)
+	}
+	if st != _NT_SOCK_STREAM {
+		return ntFail3(ntEOPNOTSUPP)
+	}
+	if proto != 0 {
+		return ntFail3(ntEPROTONOSUPPORT)
+	}
+	a, c, _, werr := ntLoopbackTCPPair()
+	if werr != 0 {
+		return ntFail3(ntWSAToLinux(werr))
+	}
+	fds := [2]int32{-1, -1}
+	bail := func(eno uintptr) (uintptr, uintptr, uintptr) {
+		if fds[0] >= 0 {
+			ntFDRelease(fds[0])
+		}
+		ntcall(ntWSACloseSocketFn, a, 0, 0, 0, 0, 0)
+		ntcall(ntWSACloseSocketFn, c, 0, 0, 0, 0, 0)
+		return ntFail3(eno)
+	}
+	sflags := int32(_NT_O_RDWR)
+	if flags&_NT_SOCK_NONBLOCK != 0 {
+		sflags |= _NT_O_NONBLOCK
+	}
+	for i, s := range [2]uintptr{a, c} {
+		if flags&_NT_SOCK_NONBLOCK != 0 {
+			var one uint32 = 1
+			if r, werr2 := ntcallE(ntWSAIoctlsocketFn, s, _NT_FIONBIO,
+				uintptr(unsafe.Pointer(&one)), 0, 0, 0, 0); ntSockErr(r) {
+				return bail(ntWSAToLinux(werr2))
+			}
+		}
+		fd := ntFDAlloc(s, ntFDSocket, sflags, flags&_NT_SOCK_CLOEXEC != 0, nil)
+		if fd < 0 {
+			return bail(uintptr(-fd))
+		}
+		ntFDSetSockFam(fd, _NT_AF_UNIX)
+		ntFDSetSockPair(fd)
+		fds[i] = fd
+	}
+	sv[0], sv[1] = fds[0], fds[1]
+	return 0, 0, 0
+}
+
+// ntEmuDup implements dup(2) for SOCKET-kind fds via DuplicateHandle
+// - the exact call upstream Go's poll.DupCloseOnExec makes on
+// windows: msafd sockets are real kernel file handles, and a
+// same-process duplicate refers to the same socket object with an
+// independent handle lifetime, which is dup(2)'s contract (shared
+// socket state, separately closeable; the object lives until the
+// last handle closes). Who needs it: net.FileConn/FileListener wrap
+// an *os.File by fcntl F_DUPFD_CLOEXEC - ENOSYS from ntFcntl - then
+// fall back to plain dup(2), landing here (poll.dupCloseOnExecOld).
+// MSDN's warning against DuplicateHandle on sockets concerns non-IFS
+// layered providers, which the base msafd/afunix stacks are not (and
+// upstream Go has shipped exactly this call for years).
+//
+// Non-socket kinds stay ENOSYS on purpose: nothing in std needs a
+// file/pipe dup on NT yet, and a visible gap beats an untested path
+// (the cosmo graceful-stub philosophy).
+func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
+	e, ok := ntFDLookup(fd)
+	if !ok {
+		return ntFail3(ntEBADF)
+	}
+	if e.kind != ntFDSocket {
+		return ntFail3(ntENOSYS)
+	}
+	var nh uintptr
+	r, werr := ntcallE(ntDuplicateHandleFn,
+		_NT_CURRENT_PROCESS, e.handle, _NT_CURRENT_PROCESS,
+		uintptr(unsafe.Pointer(&nh)),
+		0, // dwDesiredAccess (ignored with SAME_ACCESS)
+		0, // bInheritHandle = FALSE
+		_NT_DUPLICATE_SAME_ACCESS)
+	if r == 0 {
+		return ntFail3(ntErrno(werr))
+	}
+	// The duplicate shares every socket property (nonblocking mode
+	// included - FIONBIO is socket-object state) but starts with
+	// CLOEXEC clear, per POSIX. Copy the recorded socket identity so
+	// name queries on the dup answer like the original.
+	nfd := ntFDAlloc(nh, ntFDSocket, e.flags, false, nil)
+	if nfd < 0 {
+		ntcall(ntWSACloseSocketFn, nh, 0, 0, 0, 0, 0)
+		return ntFail3(uintptr(-nfd))
+	}
+	ntFDSetSockFam(nfd, e.sockFam)
+	if e.sockPair {
+		ntFDSetSockPair(nfd)
+	}
+	if e.unixBound != "" {
+		ntFDSetUnixName(nfd, e.unixBound, true)
+	}
+	if e.unixPeer != "" {
+		ntFDSetUnixName(nfd, e.unixPeer, false)
+	}
+	return uintptr(nfd), 0, 0
+}
+
 func ntEmuBind(fd int32, sa unsafe.Pointer, salen uint32) (r1, r2, errno uintptr) {
 	e, eno := ntSockLookup(fd)
 	if eno != 0 {
@@ -699,6 +942,16 @@ func ntEmuGetsockname(fd int32, rsa unsafe.Pointer, alen *uint32, peer bool) (r1
 	}
 	if rsa == nil || alen == nil {
 		return ntFail3(ntEINVAL)
+	}
+	if e.sockPair {
+		// socketpair fds never consult winsock here: it would answer
+		// with the backing 127.0.0.1 TCP names. Linux reports both
+		// ends of a socketpair as UNNAMED AF_UNIX - the 2-byte family
+		// and nothing else - for getsockname and getpeername alike.
+		var buf [ntSockaddrBufMax]byte
+		buf[0] = _NT_AF_UNIX
+		ntSockaddrFromNT(rsa, alen, &buf, 2, "")
+		return 0, 0, 0
 	}
 	fn := ntWSAGetsocknameFn
 	if peer {

@@ -78,8 +78,11 @@ type ntFDEntry struct {
 	// translating it back would surface the /c/... alias, so
 	// getsockname/getpeername report these recorded names instead
 	// (Linux returns the exact bytes that were bound, and the probe
-	// compares addr strings).
+	// compares addr strings). sockPair (wave 3) marks a socketpair
+	// end: winsock knows it as a loopback TCP socket, so name queries
+	// synthesize the Linux truth (unnamed AF_UNIX) instead of asking.
 	sockFam   uint16
+	sockPair  bool
 	unixBound string
 	unixPeer  string
 }
@@ -157,6 +160,19 @@ func ntFDSetSockFam(fd int32, fam uint16) {
 	lock(&ntFDLock)
 	if ntFDTable[fd].kind == ntFDSocket {
 		ntFDTable[fd].sockFam = fam
+	}
+	unlock(&ntFDLock)
+}
+
+// ntFDSetSockPair marks a socket fd as a socketpair end (see the
+// sockPair field comment).
+func ntFDSetSockPair(fd int32) {
+	if fd < 0 || fd >= ntFDMax {
+		return
+	}
+	lock(&ntFDLock)
+	if ntFDTable[fd].kind == ntFDSocket {
+		ntFDTable[fd].sockPair = true
 	}
 	unlock(&ntFDLock)
 }
