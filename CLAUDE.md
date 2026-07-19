@@ -478,9 +478,29 @@ the full catalog of fixes and remaining gaps):
   push-time wake, and a worker M idling in beforeIdle's timed sleep held
   the only P through the whole wait; fixed by re-nudging from pidleput and
   the parked-worker watchdog, and bailing out of the idle P-hold when the
-  main M needs a P). Pool should exceed GOMAXPROCS for full parallel
-  throughput. B4: full main-thread affinity/forwarding, memory.grow audit,
-  mark-worker knobs.
+  main M needs a P).
+
+ Threads B4 (2026-07-19) is the hardening sweep: the rare GOMAXPROCS=4
+  crash class was root-caused to a FALSE deadlock report - checkdead's
+  "all Ms idle + runnable g" inference does not hold under threads
+  because the parked main M executes Go code (self-serve/kicks) while
+  still linked on sched.midle; checkdead now nudges the wake machinery
+  and returns instead of throwing (real deadlock reporting via the
+  host's exit-time probe is unchanged). The pool-headroom perf collapse
+  is fixed: a main M parked in the event loop counts as the far-future
+  -timer covering agent (backstop JS timeout + wakeNetPoller nudge), so
+  loop gates disarm without pool headroom - pool sizing no longer
+  affects parallel throughput for the common shapes. Idle-CPU
+  double-counting that made /cpu/classes/user:cpu-seconds non-monotonic
+  at >1P is fixed. Host events arriving while the main M has no P are
+  queued by wasm_exec.js instead of silently overwriting _pendingEvent.
+  Worker-side traps report their wasm stack (Go function names). New
+  gates: testdata/wasmthreads/holblock (a blocked ASYNC event handler
+  does not head-of-line-block later events; blocking a SYNCHRONOUS
+  nested js.FuncOf callback stays documented-unsupported, as upstream)
+  and testdata/wasmthreads/memgrow (worker-side memory.grow under
+  concurrent main/worker heap+host traffic). Later phases: host-call
+  forwarding, mark-worker knobs, browser hosts.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
