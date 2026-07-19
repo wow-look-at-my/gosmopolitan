@@ -34,6 +34,11 @@ func wasmWakeMainThread() {
 }
 
 //go:nosplit
+func wasmMainMParkedInEventLoop() bool {
+	return false
+}
+
+//go:nosplit
 func wasmSchedNudgeWake() {
 }
 

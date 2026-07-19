@@ -22,6 +22,9 @@ func wasmMaxMCount() int32 { return 0x7fffffff }
 func wasmWakeMainThread() {}
 
 //go:nosplit
+func wasmMainMParkedInEventLoop() bool { return false }
+
+//go:nosplit
 func wasmSchedNudgeWake() {}
 
 func wasmThreadsPidleput(pp *p) {}

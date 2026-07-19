@@ -640,19 +640,34 @@ func wasmWorkPending(pp *p) bool {
 		return true
 	}
 	if next := pp.timers.wakeTime(); next != 0 {
-		if !wasmThreadsEnabled || gomaxprocs == 1 || wasmParkedWorkers.Load() == 0 {
+		if !wasmThreadsEnabled || gomaxprocs == 1 ||
+			(wasmParkedWorkers.Load() == 0 && !wasmMainMParkedInEventLoop()) {
 			// No other agent is guaranteed to fire this P's timers: any
 			// pending timer counts, however far out, so the armed checks
 			// keep polling for it (the pre-multi-P behavior).
 			return true
 		}
-		// GOWASM=threads, multiple Ps, and at least one parked worker M:
-		// only a timer due (nearly) now counts. Keeping loops armed for
-		// a far-future timer costs a gate call per backedge; instead the
-		// gate disarms, and the parked worker's timed park wakes at the
-		// global earliest timer deadline (wasmWorkerParkNote) and either
-		// fires it or - with every P busy - re-arms the owner's checks
-		// via wasmThreadsKick.
+		// GOWASM=threads, multiple Ps, and a covering agent exists: only
+		// a timer due (nearly) now counts. Keeping loops armed for a
+		// far-future timer costs a gate call per backedge; instead the
+		// gate disarms, and the agent covers the deadline:
+		//
+		//   - A parked worker M's timed park wakes at the global earliest
+		//     timer deadline (wasmWorkerParkNote) and either fires it or
+		//     - with every P busy - re-arms the owner's checks via
+		//     wasmThreadsKick.
+		//   - A main M parked in the event loop armed a JavaScript
+		//     timeout for the global earliest deadline before parking
+		//     (wasmThreadsBeforeIdleMain); on resume it either takes a P
+		//     and fires the timers or kicks the owners' checks
+		//     (wasmMainParkWake), re-arming a raw backstop timeout for
+		//     deadlines that appeared after it parked
+		//     (wasmMainParkArmBackstop, fed by wakeNetPoller's nudge).
+		//
+		// Without either agent (the worker pool is at or below the number
+		// of busy Ps AND the main M is itself running Go code), the armed
+		// checks remain the only timer poll and stay armed - the
+		// pool-headroom condition documented in WASM_SHORTCOMINGS.md.
 		return next <= nanotime()+int64(wasmLoopYieldInterval)
 	}
 	return false
@@ -4628,6 +4643,24 @@ func wakeNetPoller(when int64) {
 	// goroutine's loop preemption checks are armed so the scheduler (which
 	// runs the timers) gets control.
 	wasmArmLoopPreempt()
+	if GOARCH == "wasm" && wasmThreadsEnabled && wasmParkedWorkers.Load() == 0 {
+		// GOWASM=threads with the (possibly parked) main M as the only
+		// timer agent besides the armed loop gates: a parked main M's
+		// JavaScript timeout was armed for the earliest deadline at park
+		// time and does not know about this (earlier) timer. Nudge it so
+		// it re-arms its backstop timeout (wasmMainParkWake ->
+		// wasmMainParkArmBackstop). The nudge is deliberately not gated
+		// on wasmMainParked - a bump while the main M is awake (or
+		// mid-transition to parked) is deferred by the host until its
+		// next pause, because the Atomics.waitAsync watcher stays armed
+		// across resumes; gating would race the park transition and lose
+		// the deadline. Bumps from the main thread itself are dropped by
+		// wasmWakeMainThread (it re-checks timers via beforeIdle before
+		// pausing). With a parked worker around none of this is needed:
+		// its watchdog re-reads the global earliest deadline at most
+		// 250ms out.
+		wasmWakeMainThread()
+	}
 	if sched.lastpoll.Load() == 0 {
 		// In findRunnable we ensure that when polling the pollUntil
 		// field is either zero or the time to which the current

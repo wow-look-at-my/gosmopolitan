@@ -430,6 +430,18 @@ var wasmMainParked uint32
 // goroutine that runs the syscall/js event handler. Main thread only.
 var wasmPendingJSEntry uint32
 
+// wasmMainMParkedInEventLoop reports whether the main M is currently
+// parked in the JavaScript event loop (wasmMainParkNote). Readable from
+// any thread; used by wasmWorkPending, where a parked main M counts as
+// the timer-covering agent that lets loop preemption gates disarm for
+// far-future timers even when no worker M is parked (a pool with no
+// headroom over GOMAXPROCS).
+//
+//go:nosplit
+func wasmMainMParkedInEventLoop() bool {
+	return atomic.Load(&wasmMainParked) != 0
+}
+
 // wasmMainWakeInited records that wasmMainWakeInit was called (main
 // thread only).
 var wasmMainWakeInited bool
@@ -456,6 +468,16 @@ func wasmMainParkNote(n *note) {
 		if wasmKeepAliveState != on {
 			wasmKeepAliveState = on
 			wasmSetKeepAlive(on)
+		}
+		if m0.lockedg != 0 {
+			// Parking from stoplockedm (a locked goroutine owns this M):
+			// unlike the stopm path, no beforeIdle pass armed a
+			// JavaScript timeout for pending timers, yet wasmWorkPending
+			// counts this parked main M as the timer-covering agent that
+			// lets busy Ps' loop gates disarm. Arm the backstop so a
+			// pending deadline resumes us (we then kick the owners'
+			// gates; see wasmMainParkWake).
+			wasmMainParkArmBackstop()
 		}
 		atomic.Store(&wasmMainParked, 1)
 		idleStart = nanotime()
@@ -486,7 +508,17 @@ func wasmThreadsHandleEventEntry() bool {
 		return false
 	}
 	atomic.Store(&wasmMainParked, 0)
-	sched.idleTime.Add(nanotime() - idleStart)
+	// Note: the pause duration is deliberately NOT added to
+	// sched.idleTime here. The parked main M released its P before
+	// parking (stopm), and time Ps spend in _Pidle is already accounted
+	// by the limiter-event machinery (pidleput/pidleget ->
+	// limiterEvent.stop -> sched.idleTime). Adding the M's pause time on
+	// top double-counted idle CPU and made the derived
+	// /cpu/classes/user:cpu-seconds metric non-monotonic (observed:
+	// TestReadMetricsCumulative "user:cpu-seconds decreased" at
+	// GOMAXPROCS=4). The classic single-threaded path (event_js.go)
+	// keeps its addition: there the M holds its P across the pause, so
+	// the limiter never sees that idleness.
 	wasmMainParkWake()
 	return true
 }
@@ -516,6 +548,7 @@ func wasmMainParkWake() {
 			wasmThreadsKick()
 		}
 		unlock(&sched.lock)
+		wasmMainParkArmBackstop()
 		return
 	}
 	pp, _ := pidleget(0)
@@ -531,6 +564,7 @@ func wasmMainParkWake() {
 			wasmThreadsKick()
 		}
 		unlock(&sched.lock)
+		wasmMainParkArmBackstop()
 		return
 	}
 	atomic.Store(&wasmMainWantsP, 0)
@@ -540,6 +574,55 @@ func wasmMainParkWake() {
 	// Self-complete the stopm protocol: the park loop exits and stopm
 	// acquires nextp.
 	notewakeup(&m0.park)
+}
+
+// The parked main M's raw backstop timeout (main thread only). While the
+// main M is parked in the event loop but cannot take a P, it is - when no
+// worker M is parked - the only agent covering pending timers, and
+// wasmWorkPending lets the busy Ps' loop preemption gates disarm on that
+// basis. Its precise idleTimeout (armed by wasmThreadsBeforeIdleMain
+// before it parked) covers the deadlines known at park time; the backstop
+// covers deadlines that appear or remain AFTER a resume that could not
+// take a P. It is a raw scheduleTimeoutEvent id rather than a
+// *timeoutEvent because wasmMainParkWake runs on g0 with no P, where
+// allocation is not allowed.
+var (
+	wasmParkBackstopID   int32 = -1
+	wasmParkBackstopTime int64
+)
+
+// wasmMainParkArmBackstop (re-)arms the backstop timeout for the global
+// earliest timer deadline, capped at 250ms (the same watchdog cap as
+// wasmWorkerParkNote, so a deadline that moves earlier is picked up on
+// the next tick even if a re-arm nudge is lost). Runs on the main M's g0
+// with no P; must not allocate. Called from wasmMainParkWake's
+// could-not-take-a-P paths, right before the main M parks again.
+//
+//go:nowritebarrierrec
+func wasmMainParkArmBackstop() {
+	next := wasmEarliestTimerWake()
+	if next == 0 {
+		return
+	}
+	now := nanotime()
+	if wasmParkBackstopID >= 0 && wasmParkBackstopTime > now && wasmParkBackstopTime <= next {
+		return // still pending and early enough
+	}
+	if wasmParkBackstopID >= 0 && wasmParkBackstopTime > now {
+		// Pending but too late for the new deadline: replace it.
+		clearTimeoutEvent(wasmParkBackstopID)
+	}
+	wasmParkBackstopID = -1
+	delayNS := next - now
+	if delayNS > 250e6 {
+		delayNS = 250e6
+	}
+	delay := (delayNS-1)/1e6 + 1 // round up like beforeIdle's timer delay
+	if delay < 1 {
+		delay = 1
+	}
+	wasmParkBackstopID = scheduleTimeoutEvent(delay)
+	wasmParkBackstopTime = now + delay*1e6
 }
 
 // wasmMidleRemove unlinks mp from sched.midle. sched.lock must be held.
