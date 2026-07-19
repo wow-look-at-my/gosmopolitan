@@ -12,7 +12,7 @@ This is a fork of the Go programming language toolchain that adds support for **
 
 ## No Rosetta Dependency
 
-**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta.
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. This fork's own output executes on Linux, macOS, and (since the cosmo-native NT bring-up, wave 1) Windows - see Building Cosmopolitan Binaries below for the per-platform status.
 
 - APE binaries contain native code for multiple architectures (AMD64 + ARM64)
 - On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
@@ -66,17 +66,30 @@ To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/
 
 ```bash
 # Build a fat (amd64+arm64) APE binary - GOARCH is ignored for the output;
-# go build always builds both architectures and merges them
+# go build always builds both architectures and merges them. The shipped
+# APE is stripped (no DWARF/symtab, cosmocc-style); full debug info lands
+# in two sidecar ELFs next to it: program.com.dbg (cosmo amd64) and
+# program.com.aarch64.elf (cosmo arm64).
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE in the install directory
+# go install produces the same fat APE + sidecars in the install directory
 GOOS=cosmo go install ./cmd/program
 
-# Opt out of the fat build (single-architecture APE for the current GOARCH)
+# Keep full debug info embedded in the APE and write no sidecars
+# (pre-2026-07-18 behavior, byte-for-byte)
+GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
+
+# Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
+GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH;
+# thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
-# Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
+# Merge two single-arch cosmo binaries into one fat APE by hand
+# (-apestrip -apedbg is what go build passes by default; omit them for a
+# full-payload merge)
+go tool link -apefat amd64.com,arm64.com -o program.com -apestrip -apedbg
 ```
 
 Fat-build coverage: `go build` (with or without `-o`; a plain
@@ -84,13 +97,79 @@ single-main-package build defaults its output name and fattens too) and
 `go install` both produce fat APEs. `go test` / `go test -c` binaries stay
 thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
-compile. The `faketime` build tag also forces a thin build, because its
-windows payload cannot compile (`runtime/time_fake.go` is `!windows`).
+compile.
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
-image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
-on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
-Rosetta). Windows uses an embedded native windows/amd64 PE payload.
+Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
+payload's loadable span - the file range its program headers reference,
+exactly what cosmocc's apelink ships - and writes the pristine unstripped
+per-arch linker ELFs next to the output as `<output>.dbg` (amd64) and
+`<output>.aarch64.elf` (arm64), the names cosmo libc's FindDebugBinary
+probes. Naming is exact output name plus suffix: bare `go build` of
+package `web` gives `web`, `web.dbg`, `web.aarch64.elf`, like cosmocc's
+`hello`/`hello.dbg`/`hello.aarch64.elf`. `GOCOSMOSTRIP=0` (or `off`,
+parsed like GOCOSMOFAT) restores full embedded payloads with no sidecars;
+an explicit `-s` or `-w` in `-ldflags` also suppresses sidecars and embeds
+the user-stripped payloads as-is. Stripping does not affect runtime
+tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
+loaded segment); the sidecars are for gdb/delve and offline tools - see
+DEBUGGING.md "debug sidecars" (2026-07-18).
+
+Shipping APEs: distribute release binaries zstd-compressed - the two arch
+payloads make APE images highly redundant, so the wire cost collapses.
+Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png,
+time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and
+3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only,
+by design: there is no runtime self-extraction mechanism. buildhost can
+repackage uploaded artifacts on the fly via its `fmt=` query parameter.
+
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
+amd64 image boots on x86-64 Linux (self-assimilation); the cosmo arm64
+image boots on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled
+APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
+natively through the APE's PE header (vim.com-style, no embedded second
+build - the windows/amd64 PE payload was removed 2026-07-18): the entry
+stub sets the runtime's NT personality live (__hostos=2) and joins the
+common boot, with kernel32 resolved at runtime from two loader-filled
+IAT slots.
+
+Windows status (2026-07-18, NT bring-up wave 2 COMPLETE - CI-verified
+by the full runtimeprobe gauntlet on windows-latest, against binaries
+built on all three platforms): stdout/stderr (console CP_UTF8+VT),
+os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
+CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
+user-level syscall routes through an NT emulation dispatcher (Linux
+numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go)
+covering process identity, ProcessPrng entropy, the whole file I/O
+family with an fd table and a documented Linux<->Win32 path translation
+(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL), getdents64
+emulation (os.ReadDir/WalkDir/RemoveAll), working-directory round-trip,
+os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
+non-pollable on purpose - a posix_spawn-style CreateProcessW path with
+upstream-ported quoting and env block, and wait4 packing the Linux
+wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
+signal deaths 0xC0DE0000|sig decode as Linux termination signals);
+sockets over classic synchronous winsock (non-overlapped WSASocketW,
+FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
+is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
+refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with
+a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock
+design; the wake channel is a connected loopback TCP pair because real
+NT may drop loopback UDP datagrams - a lost wake stalls the poller;
+pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
+sockets over afunix.sys (sun_path through the path layer; abstract
+names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
+runs show exactly one red there while windows-latest proves it); and
+signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
+(kill/tkill with full delivery through sigtrampgo), os/signal Notify,
+async preemption via SuspendThread/SetThreadContext injection
+(preempt ~180ms on the CI runner, upstream preemptM semantics), signal
+deaths encoded for the wait4 protocol, and console Ctrl-C/Break/Close
+-> SIGINT/SIGTERM via an asm handler + relay M. Still missing on
+Windows: sendmsg/recvmsg (fd passing), SIGPROF profiling,
+Windows/arm64, real-conhost console-ctrl injection coverage (the
+handler is live but headless CI cannot generate console events) - see
+DEBUGGING.md's NT wave sections (chunks A-E) for the ladder, the
+forensics, and the wave-3 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -198,11 +277,16 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port), real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0), and then the full apetest suite - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - against all three origin binaries (ubuntu, windows, macos).
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
-format tests run everywhere.
+amd64 and cosmo arm64 payloads, stripped by default, with the build step's
+`ls` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build
+platform (sidecars are not uploaded; the artifact ships the bare binaries,
+so apetest's TestDebugSidecars skips on the test runners). Structural
+format tests run everywhere; the full execution suite (fizzbuzz +
+runtimeprobe) runs on all three test runners, and the ubuntu build leg
+also runs the cmd/link APE-merge and cmd/go strip-detection unit tests.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -300,6 +384,23 @@ the full catalog of fixes and remaining gaps):
   section now precedes producers, so llvm tools can read Go wasm
   binaries. Variable location expressions are still placeholders
   (faithful locations need DW_OP_WASM_location).
+- Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
+  runway (trigger no later than ~halfway to the goal, background credit
+  seeded at cycle start so the allocation that crosses the trigger
+  doesn't assist-burst), idle mark drains are bounded to 2ms, and a new
+  `go_gc_mark_step(budgetMs) -> bool` wasm export lets the host donate
+  idle time between frames (bounded mark work, no-op outside a cycle,
+  returns whether work remains; while the host donates, the in-frame
+  fractional mark quota drops 25% -> 5%). These behaviors are
+  deliberately platform-independent - ALL platforms trigger earlier
+  (trigger pinned ~halfway to the goal, trading some throughput/GC
+  frequency for bounded mark bursts; TestGcPacer models the new math)
+  and bound idle drains, and the budgeted mark step core is portable
+  with runtime tests that run everywhere; only the event-loop yield
+  glue (throttle idle marking + 1ms re-arm instead of starving the
+  event loop until mark completion) and the wasm export are js-only.
+  `testdata/framebench` (10k allocs/frame under node): p99 frame time
+  21.6ms -> 4.8ms, zero frames over 8ms.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
@@ -407,7 +508,7 @@ grep -r "//go:build.*cosmo" src/
 
 ### 3. Runtime Platform Handling
 
-Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime. When creating `_cosmo.go` files:
+Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime (the NT surface is still growing wave by wave - see DEBUGGING.md) - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
 - Don't assume Linux-only features like `/proc` are available
 - Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
 - Test assumptions about what works on each platform

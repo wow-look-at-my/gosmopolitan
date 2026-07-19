@@ -204,8 +204,10 @@ retry:
 		return nil, 0
 	case p&(align-1) == 0:
 		return unsafe.Pointer(p), size + align
-	case GOOS == "windows":
-		// On Windows we can't release pieces of a
+	case GOOS == "windows" || cosmoHostIsWindows():
+		// On Windows (including a cosmo binary running on an NT
+		// host, where the same VirtualAlloc reservations back
+		// sysReserve) we can't release pieces of a
 		// reservation, so we release the whole thing and
 		// re-reserve the aligned sub-region. This may race,
 		// so we may have to try again.

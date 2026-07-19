@@ -1,6 +1,7 @@
-// Unix-host halves of the signal checks. The windows payload of a fat
-// APE is a plain GOOS=windows build, where syscall.Kill and SIGUSR1/2
-// do not exist - sig_windows.go supplies skip stubs.
+// Signal checks: os/signal Notify delivery and wait-status decoding.
+// Constrained to !windows because syscall.Kill and SIGUSR1/2 do not
+// exist there; nothing builds the probe for GOOS=windows anymore (fat
+// APEs no longer embed a windows PE payload).
 
 //go:build !windows
 

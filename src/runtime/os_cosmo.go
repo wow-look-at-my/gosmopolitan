@@ -9,6 +9,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -35,6 +36,12 @@ const sigPerThreadSyscall = _SIGRTMIN + 1
 //
 //go:nosplit
 func futexsleep(addr *uint32, val uint32, ns int64) {
+	if iswindows() {
+		// NT: WaitOnAddress has the same compare-and-wait,
+		// spurious-wakeup-permitted semantics as futex.
+		ntFutexsleep(addr, val, ns)
+		return
+	}
 	if ns < 0 {
 		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
 		return
@@ -49,6 +56,12 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 //
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
+	if iswindows() {
+		// Every caller passes cnt==1 (see the wave-1 design in
+		// DEBUGGING.md), so WakeByAddressSingle suffices.
+		ntFutexwakeup(addr)
+		return
+	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
 	if ret >= 0 {
 		return
@@ -62,6 +75,11 @@ func futexwakeup(addr *uint32, cnt uint32) {
 }
 
 func getCPUCount() int32 {
+	if iswindows() {
+		// GetSystemInfo through the NT table resolved at osArchInit
+		// (which osinit runs before getCPUCount, deliberately).
+		return ntNumCPU()
+	}
 	if isdarwin() {
 		// sched_getaffinity is Linux-only; on macOS ask the host
 		// via sysctl (arm64 Syslib). Without this every macOS run
@@ -107,6 +125,12 @@ func clone(flags int32, stk, mp, gp, fn unsafe.Pointer) int32
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
+	if iswindows() {
+		// CreateThread; no sigprocmask bracketing (signals are
+		// inert on NT in wave 1).
+		ntNewosproc(mp)
+		return
+	}
 	stk := unsafe.Pointer(mp.g0.stack.hi)
 	if false {
 		print("newosproc stk=", stk, " m=", mp, " g=", mp.g0, " clone=", abi.FuncPCABI0(clone), " id=", mp.id, " ostk=", &mp, "\n")
@@ -185,6 +209,14 @@ func sysargs(argc int32, argv **byte) {
 		auxv = auxvp[: pairs*2 : pairs*2]
 		return
 	}
+	if iswindows() {
+		// The NT boot stub always fabricates a complete auxv
+		// (AT_PAGESZ at minimum), so this point should be
+		// unreachable; guard anyway because both fallbacks below
+		// are Linux syscall paths (open /proc/self/auxv, and an
+		// mmap+mincore page-size probe).
+		return
+	}
 	// Fall back to /proc/self/auxv.
 	fd := open(&procAuxv[0], 0 /* O_RDONLY */, 0)
 	if fd < 0 {
@@ -247,6 +279,14 @@ func osinit() {
 var urandom_dev = []byte("/dev/urandom\x00")
 
 func readRandom(r []byte) int {
+	if iswindows() {
+		// ProcessPrng (or RtlGenRandom), resolved at osArchInit;
+		// returns 0 when neither is available, selecting the
+		// readTimeRandom fallback. (Boot hash seeds additionally
+		// come from startupRand, which ntBootInit upgrades to
+		// ProcessPrng output before randinit runs.)
+		return ntReadRandom(r)
+	}
 	fd := open(&urandom_dev[0], 0 /* O_RDONLY */, 0)
 	n := read(fd, unsafe.Pointer(&r[0]), int32(len(r)))
 	closefd(fd)
@@ -254,7 +294,27 @@ func readRandom(r []byte) int {
 }
 
 func goenvs() {
+	if iswindows() {
+		// The boot block's envp is empty on NT; the real environment
+		// comes from GetEnvironmentStringsW (os_cosmo_nt.go).
+		ntGoenvs()
+		return
+	}
 	goenvs_unix()
+}
+
+// cosmoMstartm0 is the fork's mstartm0 hook (proc.go): on NT hosts it
+// parks the console-control relay M and registers the ctrl handler
+// (os_cosmo_nt_preempt.go). It must run this late - not in goenvs,
+// where upstream windows registers its handler - because the relay
+// needs newm, and allocm borrows the caller's P for its allocations:
+// m0 only acquires p0 in procresize, at the END of schedinit.
+// mstartm0 is the first m0 code after schedinit (its newextram
+// precedent allocates the same way).
+func cosmoMstartm0() {
+	if iswindows() {
+		ntInitConsoleCtrl()
+	}
 }
 
 // Called to do synchronous initialization of Go code built with
@@ -280,17 +340,29 @@ func gettid() uint32
 // Called on the new thread, cannot allocate memory.
 func minit() {
 	minitSignals()
+	if iswindows() {
+		// Duplicate this thread's handle into m.thread so
+		// ntPreemptM (async preemption) can address it
+		// (os_cosmo_nt_preempt.go; arm64 stub is unreachable).
+		ntMinitThread()
+	}
 	// minitProcid is per-arch: on macOS hosts (arm64) procid must hold
 	// the FULL pthread_t for pthread_kill - gettid's uint32 return
 	// would truncate the pointer; on Linux hosts it is the tid.
 	getg().m.procid = minitProcid()
 }
 
-// Called from dropm to undo the effect of an minit.
+// Called from dropm and mexit to undo the effect of an minit.
 //
 //go:nosplit
 func unminit() {
 	unminitSignals()
+	if iswindows() {
+		// Close m.thread under threadLock: from here on ntPreemptM
+		// treats this M as unpreemptible instead of suspending a
+		// dying thread.
+		ntUnminitThread()
+	}
 	getg().m.procid = 0
 }
 
@@ -404,7 +476,12 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
 	var ret int32
-	if isdarwin() && GOARCH == "arm64" {
+	if iswindows() {
+		// NT: there is no kernel-side sigaction; the runtime records
+		// handler state itself and self-directed delivery consults
+		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
+		ret = ntSigaction(sig, new, old)
+	} else if isdarwin() && GOARCH == "arm64" {
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
@@ -438,11 +515,65 @@ func tgkill(tgid, tid, sig int)
 // darwin path (per-arch darwinSignalM) translates it and signals the
 // thread via pthread_kill with the full pthread_t from m.procid.
 func signalM(mp *m, sig int) {
+	if iswindows() {
+		// NT (wave 2 chunk D2): there is no cross-thread signal
+		// delivery on NT; the only signal the runtime ever sends
+		// another M is the scheduler's preemption request (grep:
+		// preemptM in signal_unix.go is signalM's sole cosmo caller),
+		// which the SuspendThread machinery services directly.
+		// ntPreemptM acks preemptGen AND clears mp.signalPending on
+		// every path - the unix preemptM wrapper's CAS gate stays
+		// open. Anything else would be a new caller: drop it, as
+		// wave 1 did.
+		if sig == sigPreempt {
+			ntPreemptM(mp)
+		}
+		return
+	}
 	if isdarwin() {
 		darwinSignalM(mp, sig)
 		return
 	}
 	tgkill(getpid(), int(mp.procid), sig)
+}
+
+// osPreemptExtEnter is called before entering external code that may
+// call ExitProcess (NT hosts; a no-op elsewhere - preemption is
+// signal-based on Linux/XNU and needs no bracket).
+//
+// This must be nosplit because it may be called from a syscall with
+// untyped stack slots, so the stack must not be grown or scanned
+// (upstream os_windows.go).
+//
+//go:nosplit
+func osPreemptExtEnter(mp *m) {
+	if !iswindows() {
+		return
+	}
+	for !atomic.Cas(&mp.preemptExtLock, 0, 1) {
+		// An asynchronous preemption is in progress. It's not safe
+		// to enter external code because it may call ExitProcess and
+		// deadlock with SuspendThread. Ideally we would do the
+		// preemption ourselves, but can't since there may be untyped
+		// syscall arguments on the stack. Instead, just wait and
+		// encourage the SuspendThread APC to run. The preemption
+		// should be done shortly.
+		osyield()
+	}
+	// Asynchronous preemption is now blocked.
+}
+
+// osPreemptExtExit is called after returning from external code that
+// may call ExitProcess.
+//
+// See osPreemptExtEnter for why this is nosplit.
+//
+//go:nosplit
+func osPreemptExtExit(mp *m) {
+	if !iswindows() {
+		return
+	}
+	atomic.Store(&mp.preemptExtLock, 0)
 }
 
 //go:nosplit
@@ -467,10 +598,17 @@ func validSIGPROF(mp *m, c *sigctxt) bool {
 }
 
 func setProcessCPUProfiler(hz int32) {
+	if iswindows() {
+		// NT wave 1: no setitimer / SIGPROF machinery; profiling
+		// timers are a later wave.
+		return
+	}
 	setProcessCPUProfilerTimer(hz)
 }
 
 func setThreadCPUProfiler(hz int32) {
+	// No syscalls here (per-thread timer_create is not wired on
+	// cosmo), so no NT gate is needed.
 	mp := getg().m
 	mp.profilehz = hz
 }
@@ -542,7 +680,31 @@ func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 
 // cosmoStacksAreSystemAllocated reports whether new OS threads get
 // system-allocated stacks on this host. Only the macOS path (ARM64 via the
 // APE loader's pthread_create) provides them; the Linux clone() path needs
-// Go-allocated stacks.
+// Go-allocated stacks. (The NT CreateThread path also pivots onto the
+// Go-allocated g0 stack, so it keeps the Linux bookkeeping.)
 func cosmoStacksAreSystemAllocated() bool {
 	return GOARCH == "arm64" && isdarwin()
 }
+
+// cosmoHostIsWindows reports whether the cosmo binary is running on a
+// Windows NT host. It exists (with a false stub for non-cosmo GOOSes in
+// stubs_noncosmo.go) so GOOS-generic code - sysReserveAligned's
+// no-partial-unreserve branch in mem.go - can key on the HOST at run
+// time the way GOOS=windows keys at compile time.
+//
+//go:nosplit
+func cosmoHostIsWindows() bool {
+	return iswindows()
+}
+
+// Win32 memory constants for the NT branches in mem_cosmo.go (shared
+// with arm64, where they are unreachable - iswindows is constant false
+// there).
+const (
+	_NT_MEM_COMMIT   = 0x1000
+	_NT_MEM_RESERVE  = 0x2000
+	_NT_MEM_DECOMMIT = 0x4000
+	_NT_MEM_RELEASE  = 0x8000
+
+	_NT_PAGE_READWRITE = 0x04
+)

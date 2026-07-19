@@ -88,6 +88,13 @@ func (d *deadcodePass) init() {
 		// nothing in Go references it.
 		names = append(names, "wasm_export_thread_run")
 	}
+	if d.ctxt.HeadType == objabi.Hcosmo && d.ctxt.Arch.Family == sys.AMD64 {
+		// The Windows NT boot stub and its PE import structures are
+		// referenced only by the APE PE header that convertToAPE writes
+		// after the link, not by any relocation, so they need explicit
+		// roots (ape.go's apePrepareNTBoot looks all three up by name).
+		names = append(names, "_rt0_cosmo_nt", "runtime.ntidata", "runtime.ntiat")
+	}
 	if d.ctxt.BuildMode == BuildModePlugin {
 		names = append(names, objabi.PathToPrefix(*flagPluginPath)+"..inittask", objabi.PathToPrefix(*flagPluginPath)+".main", "go:plugin.tabs")
 
