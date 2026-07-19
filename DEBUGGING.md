@@ -3176,3 +3176,92 @@ errno was swallowed before anything logged it. The sockpairpoll probe
 now prints the fast path's live verdict as an ok-line detail
 (dupcloexec=ok / dupcloexec=<errno>) on every host, so the next CI
 run pins the actual errno without risking a verdict on it.
+
+## Wave 3 item 2 (2026-07-19): sendmsg/recvmsg - the plain data path
+
+SYS_SENDMSG=46 / SYS_RECVMSG=47 were ENOSYS on NT. As with
+socketpair, the syscall package already had the complete msghdr
+superstructure (Msghdr/Iovec/Cmsghdr types, recvmsgRaw/sendmsgN, the
+generated wrappers over 46/47), so the whole feature is again
+dispatcher + backend: two new cases in ntSyscallEmulate (pointer
+re-typing in the dispatch expressions, per the nosplit contract) and
+a new backend file src/runtime/os_cosmo_nt_msg.go. Ancillary data is
+NOT in this item - see the seam note below; this is the table-stakes
+data path that makes ReadMsg*/WriteMsg*-class traffic and raw
+msghdr I/O work.
+
+Design (os_cosmo_nt_msg.go):
+
+- Layout mirrors: ntLinuxMsghdr/ntLinuxIovec are runtime-local copies
+  of syscall.Msghdr/Iovec (Linux amd64: msghdr 0x38 bytes - Name @0,
+  Namelen @8, Iov @16, Iovlen @24, Control @32, Controllen @40,
+  Flags @48; iovec {base,len}), verified against
+  ztypes_cosmo_amd64.go. Winsock's WSABUF is {u32 len, char *buf} -
+  the REVERSE field order of iovec, so every call translates through
+  a WSABUF array: stack-backed to 8 entries, heap above (the
+  emulation layer is ordinary Go; internal/poll batches at most 1024
+  iovecs). Iovec counts above Linux's UIO_MAXIOV=1024 are refused
+  with the kernel's exact errno split (EMSGSIZE from sendmsg/recvmsg,
+  EINVAL from readv/writev); totals clamp at 2^31-1 (winsock counts
+  are 32-bit) by shortening the overflowing buffer - callers loop on
+  the short transfer, POSIX-legal.
+- Streams (msg_name == nil): WSASend/WSARecv - the scatter-gather
+  cousins of the plain send/recv - via ntcallSE (7 args each,
+  blocking-capable, last-error captured in-trampoline). WSARecv's
+  flags argument is a POINTER (in/out); returned flags translate back
+  to Linux (only MSG_OOB shares a value; MSG_TRUNC is raised on
+  datagram truncation; winsock-only MSG_PARTIAL is dropped). WSASend/
+  WSARecv report success as 0 with the count in an out-parameter,
+  unlike send/recv's count-or-minus-one. MSG_* input flags reuse
+  ntMsgFlags (OOB/PEEK/DONTROUTE pass, everything else EINVAL).
+  Error-mapping parity with ntSockRead/ntSockWrite is exact:
+  recv-side WSAESHUTDOWN = EOF (0 bytes), send-side WSAESHUTDOWN =
+  EPIPE via the table, recv-side WSAEMSGSIZE = report a full buffer
+  (Linux truncates datagrams silently), plus MSG_TRUNC in msg_flags,
+  which the plain recvfrom path has nowhere to report.
+- Datagram-style (msg_name != nil): delegate to ntEmuSendto/
+  ntEmuRecvfrom so the sockaddr translation lives in exactly one
+  place; multiple iovecs coalesce through an allocated buffer
+  (winsock's one-buffer sendto/recvfrom). Note std's Recvmsg ALWAYS
+  supplies a name buffer, so connected-stream receives take this
+  delegate too: winsock's recvfrom ignores the address on connected
+  streams and leaves the pre-zeroed buffer as family AF_UNSPEC = "no
+  source address", exactly what syscall.Recvmsg keys on (knowing
+  divergence: Linux rewrites msg_namelen to 0 there, the delegate
+  reports the AF_UNSPEC record's length; no std caller reads it).
+  AF_UNIX needs no datagram story - afunix.sys is SOCK_STREAM only.
+- THE ANCILLARY SEAM (for the SCM_RIGHTS item): ntSendmsgControl and
+  ntRecvmsgControl. Send-side: any call with a non-empty control
+  buffer routes there BEFORE data moves - today it refuses
+  EOPNOTSUPP, and the SCM_RIGHTS item replaces the body with cmsg
+  parsing + its fd-transfer frame. Recv-side: called iff the caller
+  supplied a control buffer, BEFORE the plain receive, so the frame
+  MSG_PEEK can live there and take over the whole receive
+  (handled=true); today it reports handled=false and the plain path
+  zeroes msg_controllen - a supplied oob buffer simply comes back
+  empty (oobn=0), which is exactly Linux's behavior when no ancillary
+  arrives.
+- ws2_32 resolution: WSASend/WSARecv were NOT among ntWinsockEnsure's
+  original 19 GetProcAddress entries - the wave-2 variables named
+  ntWSASendFn/ntWSARecvFn actually held classic send/recv. Those four
+  are renamed to ntSockSendFn/ntSockRecvFn/ntSockSendtoFn/
+  ntSockRecvfromFn (matching their ntNameSock* strings), and the real
+  WSASend/WSARecv resolve as two NEW entries ntWSASendVFn/
+  ntWSARecvVFn (21 syms now). Runtime GetProcAddress only - the
+  2-slot ntidata/ntiat import contract is untouched.
+
+Probe (testdata/runtimeprobe/sendmsg.go, check "sendmsg"; in
+probeOkChecks): an in-process pathname AF_UNIX pair built at the
+raw-fd level (listener + dial; nonblocking accept-poll with a
+deadline so no host's connect semantics can deadlock the probe), then
+(1) the public syscall.Sendmsg -> syscall.Recvmsg round trip where
+the receive supplies an oob buffer that must come back EMPTY (oobn=0,
+recvflags=0 - the no-ancillary contract), and (2) raw two-iovec
+msghdrs both directions via syscall.Syscall - nothing in std issues
+multi-iovec sendmsg, and this is exactly the WSABUF scatter path -
+with the recv split (7) deliberately misaligned against the send
+split (11) and a short-read loop that rebuilds iovecs at the current
+offset. Per-host: linux native mandatory, windows mandatory via the
+new emulation, macOS prints "ok sendmsg skipped (host lacks
+sendmsg)" - keyed on the host triple (OS=Windows_NT -> NT, else
+/proc/version -> linux, else darwin), NEVER on an error.

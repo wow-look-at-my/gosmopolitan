@@ -30,6 +30,7 @@ var probeOkChecks = []string{
 	"tcplisten", "tcpecho", "deadline", "tcpserver", "udp",
 	"unixsock", "unixecho",
 	"socketpair", "sockpairpoll",
+	"sendmsg",
 	"execchild",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",

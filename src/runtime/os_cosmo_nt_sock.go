@@ -52,10 +52,11 @@
 // the recv buffer fails WSAEMSGSIZE on winsock; Linux silently
 // truncates, so the emulation reports a full buffer instead.
 //
-// sendmsg/recvmsg (fd passing, ReadMsg*) stay ENOSYS for now - the
-// darwin leg lacks them too - and are wave 3's next item. socketpair
-// is emulated since wave 3 item 1 (ntEmuSocketpair below): a
-// connected loopback TCP pair dressed as unnamed AF_UNIX, built by
+// sendmsg/recvmsg are emulated since wave 3 item 2 - the plain
+// scatter-gather data path over WSASend/WSARecv lives in
+// os_cosmo_nt_msg.go (ancillary data/SCM_RIGHTS still pending there).
+// socketpair is emulated since wave 3 item 1 (ntEmuSocketpair below):
+// a connected loopback TCP pair dressed as unnamed AF_UNIX, built by
 // the same recipe as the netpoller's wake channel (ntLoopbackTCPPair,
 // shared with netpollinitNT). dup(2) is emulated for socket-kind fds
 // only (ntEmuDup) - net.FileConn needs it.
@@ -181,10 +182,12 @@ var (
 	ntWSAIoctlsocketFn  uintptr
 	ntWSAIoctlFn        uintptr
 	ntWSAPollFn         uintptr
-	ntWSARecvFn         uintptr
-	ntWSASendFn         uintptr
-	ntWSARecvfromFn     uintptr
-	ntWSASendtoFn       uintptr
+	ntSockRecvFn        uintptr // classic recv (one buffer)
+	ntSockSendFn        uintptr // classic send (one buffer)
+	ntSockRecvfromFn    uintptr // classic recvfrom (one buffer)
+	ntSockSendtoFn      uintptr // classic sendto (one buffer)
+	ntWSARecvVFn        uintptr // WSARecv: scatter-gather recv; flags arg is in/out (os_cosmo_nt_msg.go)
+	ntWSASendVFn        uintptr // WSASend: scatter-gather send (os_cosmo_nt_msg.go)
 	ntWSASetHandleInfFn uintptr // kernel32 SetHandleInformation (accepted sockets)
 )
 
@@ -209,6 +212,8 @@ var (
 	ntNameSockSend     = []byte("send\x00")
 	ntNameSockRecvfrom = []byte("recvfrom\x00")
 	ntNameSockSendto   = []byte("sendto\x00")
+	ntNameWSARecvV     = []byte("WSARecv\x00")
+	ntNameWSASendV     = []byte("WSASend\x00")
 	ntNameSetHandleInf = []byte("SetHandleInformation\x00")
 	ntWSAData          [408]byte // WSADATA (amd64 layout is 400 bytes; padded)
 )
@@ -268,10 +273,12 @@ func ntWinsockEnsure() uintptr {
 	ntWSAIoctlsocketFn = sym(&ntNameIoctlsocket[0])
 	ntWSAIoctlFn = sym(&ntNameWSAIoctl[0])
 	ntWSAPollFn = sym(&ntNameWSAPoll[0])
-	ntWSARecvFn = sym(&ntNameSockRecv[0])
-	ntWSASendFn = sym(&ntNameSockSend[0])
-	ntWSARecvfromFn = sym(&ntNameSockRecvfrom[0])
-	ntWSASendtoFn = sym(&ntNameSockSendto[0])
+	ntSockRecvFn = sym(&ntNameSockRecv[0])
+	ntSockSendFn = sym(&ntNameSockSend[0])
+	ntSockRecvfromFn = sym(&ntNameSockRecvfrom[0])
+	ntSockSendtoFn = sym(&ntNameSockSendto[0])
+	ntWSARecvVFn = sym(&ntNameWSARecvV[0])
+	ntWSASendVFn = sym(&ntNameWSASendV[0])
 	if ok {
 		// WSAStartup returns the error code directly (not via the
 		// last-error slot); 0 means winsock 2.2 is up.
@@ -1182,14 +1189,14 @@ func ntEmuSendto(fd int32, p unsafe.Pointer, n int32, flags int32, to unsafe.Poi
 	}
 	var r, werr uintptr
 	if to == nil || tolen == 0 {
-		r, werr = ntcallSE(ntWSASendFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags, 0, 0, 0)
+		r, werr = ntcallSE(ntSockSendFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags, 0, 0, 0)
 	} else {
 		var buf [ntSockaddrBufMax]byte
 		blen, _, _, aeno := ntSockaddrToNT(to, tolen, &buf)
 		if aeno != 0 {
 			return ntFail3(aeno)
 		}
-		r, werr = ntcallSE(ntWSASendtoFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags,
+		r, werr = ntcallSE(ntSockSendtoFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags,
 			uintptr(unsafe.Pointer(&buf[0])), uintptr(uint32(blen)), 0)
 	}
 	if ntSockErr(r) {
@@ -1214,9 +1221,9 @@ func ntEmuRecvfrom(fd int32, p unsafe.Pointer, n int32, flags int32, from unsafe
 	var blen int32 = ntSockaddrBufMax
 	var r, werr uintptr
 	if from == nil {
-		r, werr = ntcallSE(ntWSARecvFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags, 0, 0, 0)
+		r, werr = ntcallSE(ntSockRecvFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags, 0, 0, 0)
 	} else {
-		r, werr = ntcallSE(ntWSARecvfromFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags,
+		r, werr = ntcallSE(ntSockRecvfromFn, e.handle, uintptr(p), uintptr(uint32(n)), wflags,
 			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&blen)), 0)
 	}
 	ri := int32(uint32(r))
@@ -1243,7 +1250,7 @@ func ntEmuRecvfrom(fd int32, p unsafe.Pointer, n int32, flags int32, from unsafe
 // fds (ntEmuRead/ntEmuWrite dispatch by kind): sockets need
 // recv/send, not ReadFile/WriteFile.
 func ntSockRead(h uintptr, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
-	r, werr := ntcallSE(ntWSARecvFn, h, uintptr(p), uintptr(uint32(n)), 0, 0, 0, 0)
+	r, werr := ntcallSE(ntSockRecvFn, h, uintptr(p), uintptr(uint32(n)), 0, 0, 0, 0)
 	ri := int32(uint32(r))
 	if ri == -1 {
 		if werr == _NT_WSAESHUTDOWN {
@@ -1255,7 +1262,7 @@ func ntSockRead(h uintptr, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 }
 
 func ntSockWrite(h uintptr, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
-	r, werr := ntcallSE(ntWSASendFn, h, uintptr(p), uintptr(uint32(n)), 0, 0, 0, 0)
+	r, werr := ntcallSE(ntSockSendFn, h, uintptr(p), uintptr(uint32(n)), 0, 0, 0, 0)
 	if ntSockErr(r) {
 		return ntFail3(ntWSAToLinux(werr))
 	}

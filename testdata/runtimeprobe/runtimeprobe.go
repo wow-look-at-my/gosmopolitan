@@ -4,6 +4,7 @@
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
+// sendmsg/recvmsg (host-skipped on macOS, which lacks the dispatch),
 // os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, and wait-status
@@ -93,6 +94,7 @@ func main() {
 	timed("timers", checkTimers)
 	timed("sockets", checkSockets)
 	timed("sockpair", checkSockpair)
+	timed("sendmsg", checkSendmsg)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)

@@ -149,7 +149,7 @@ func netpollinitNT() {
 func ntNetpollwakeup() {
 	if ntPollPendingUpdates == 0 {
 		ntPollPendingUpdates = 1
-		r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+		r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 		if ntSockErr(r) {
 			// Should be impossible (1-byte send on a healthy connected
 			// loopback socket). If it ever fires, the poller may sleep
@@ -236,7 +236,7 @@ func netpollBreakNT() {
 	if ntWakeSock == 0 {
 		return
 	}
-	r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+	r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 	if ntSockErr(r) {
 		// A lost break leaves the poller asleep until its current
 		// WSAPoll timeout: timers added after the failed send fire
@@ -302,7 +302,7 @@ func netpollNT(delay int64) (gList, int32) {
 			// poll; only drain and reset when blocking (aix rule -
 			// and netpollNT(0) never reaches here anyway).
 			for {
-				rr := int32(uint32(ntcall(ntWSARecvFn, ntWakeRecv,
+				rr := int32(uint32(ntcall(ntSockRecvFn, ntWakeRecv,
 					uintptr(unsafe.Pointer(&ntDrainBuf[0])), uintptr(len(ntDrainBuf)), 0, 0, 0)))
 				if rr <= 0 {
 					break
