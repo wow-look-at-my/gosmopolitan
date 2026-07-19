@@ -66,12 +66,20 @@ func TestWasmThreadsRunOnNewM(t *testing.T) {
 	}
 
 	// Spawn again: the parked worker Ms must be reused (mget), not new
-	// pool workers.
+	// pool workers. Only GOMAXPROCS=1 makes this deterministic: under a
+	// multi-P scheduler other Ms park and unpark concurrently (GC
+	// workers, timer self-serves), so the re-spawn may legitimately be
+	// handed some OTHER parked M than the two this test tracked, and a
+	// concurrent startm may have claimed both of them. At GOMAXPROCS>1
+	// just assert the fn ran off the main M.
 	var againM int64
 	runtime.WasmThreadsRunOnNewM(func() {
 		againM = runtime.WasmThreadsCurMID()
 	})
-	if againM != workerM && againM != nestedM {
+	if againM == mainM {
+		t.Fatalf("re-spawn ran on the main M (%d)", mainM)
+	}
+	if runtime.GOMAXPROCS(0) == 1 && againM != workerM && againM != nestedM {
 		t.Fatalf("re-spawn did not reuse a parked M: got %d, want %d or %d", againM, workerM, nestedM)
 	}
 }
