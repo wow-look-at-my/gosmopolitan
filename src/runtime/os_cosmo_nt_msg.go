@@ -6,7 +6,9 @@
 
 // Windows NT sendmsg/recvmsg emulation (wave 3 item 2): the plain
 // scatter-gather DATA path behind SYS_SENDMSG/SYS_RECVMSG, dispatched
-// by ntSyscallEmulate (os_cosmo_nt_sys.go).
+// by ntSyscallEmulate (os_cosmo_nt_sys.go), plus the socket-only
+// SYS_READV/SYS_WRITEV cases built on the same WSABUF machinery
+// (ntEmuReadv/ntEmuWritev below - what makes net.Buffers work).
 //
 // Layouts: callers hand the runtime LINUX amd64 structures
 // (syscall.Msghdr/syscall.Iovec, mirrored below as ntLinuxMsghdr/
@@ -272,6 +274,79 @@ func ntEmuSendmsg(fd int32, msg *ntLinuxMsghdr, flags int32) (r1, r2, errno uint
 		return ntFail3(eno)
 	}
 	return ntSockSendV(e.handle, bufs, wflags)
+}
+
+// ntIovFD validates the fd for readv/writev: SOCKET-kind fds go
+// through the WSABUF path; everything else stays ENOSYS ON PURPOSE.
+// Nothing in the standard library issues readv/writev on NT files or
+// pipes - internal/poll's only writev consumer is net (net.Buffers
+// consolidated writes, netFD-only) and there is no readv consumer at
+// all - and exec's stdio pipes must stay on the blocking
+// ReadFile/WriteFile path the netpoller refuses to adopt. A visible
+// ENOSYS gap beats an untested vectored file path (the same call the
+// file/pipe dup refusal makes).
+func ntIovFD(fd int32) (ntFDEntry, uintptr) {
+	e, ok := ntFDLookup(fd)
+	if !ok {
+		return ntFDEntry{}, ntEBADF
+	}
+	if e.kind != ntFDSocket {
+		return ntFDEntry{}, ntENOSYS
+	}
+	return e, 0
+}
+
+// ntEmuReadv/ntEmuWritev back SYS_READV/SYS_WRITEV for socket-kind
+// fds over the same WSABUF machinery as sendmsg/recvmsg (readv is
+// recvmsg minus the msghdr, writev is sendmsg minus it). This is what
+// makes net.Buffers work on NT. Per Linux, a bad iovec count is
+// EINVAL here (the sendmsg/recvmsg spelling is EMSGSIZE).
+func ntEmuReadv(fd int32, iov *ntLinuxIovec, iovcnt int32) (r1, r2, errno uintptr) {
+	e, eno := ntIovFD(fd)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	if iovcnt < 0 || iovcnt > ntMaxIov {
+		return ntFail3(ntEINVAL)
+	}
+	if iovcnt == 0 {
+		return 0, 0, 0
+	}
+	if iov == nil {
+		return ntFail3(ntEFAULT)
+	}
+	var stk [ntWSABufStackCap]ntWSABuf
+	bufs, total, eno := ntIovecsToWSA(iov, int(iovcnt), &stk)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	got, _, eno := ntSockRecvV(e.handle, bufs, 0, total)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	return got, 0, 0
+}
+
+func ntEmuWritev(fd int32, iov *ntLinuxIovec, iovcnt int32) (r1, r2, errno uintptr) {
+	e, eno := ntIovFD(fd)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	if iovcnt < 0 || iovcnt > ntMaxIov {
+		return ntFail3(ntEINVAL)
+	}
+	if iovcnt == 0 {
+		return 0, 0, 0
+	}
+	if iov == nil {
+		return ntFail3(ntEFAULT)
+	}
+	var stk [ntWSABufStackCap]ntWSABuf
+	bufs, _, eno := ntIovecsToWSA(iov, int(iovcnt), &stk)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	return ntSockSendV(e.handle, bufs, 0)
 }
 
 func ntEmuRecvmsg(fd int32, msg *ntLinuxMsghdr, flags int32) (r1, r2, errno uintptr) {

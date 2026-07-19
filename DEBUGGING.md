@@ -3265,3 +3265,29 @@ offset. Per-host: linux native mandatory, windows mandatory via the
 new emulation, macOS prints "ok sendmsg skipped (host lacks
 sendmsg)" - keyed on the host triple (OS=Windows_NT -> NT, else
 /proc/version -> linux, else darwin), NEVER on an error.
+
+### readv/writev sub-commit: net.Buffers works on NT
+
+Wave-3 scouting found internal/poll's writev.go is //go:build unix
+(cosmo included), so net.Buffers consolidated writes issued
+SYS_WRITEV=20 -> ENOSYS on NT and errored. Fixed on the same WSABUF
+machinery: SYS_READV(19)/SYS_WRITEV(20) dispatch to ntEmuReadv/
+ntEmuWritev for SOCKET-kind fds - readv is recvmsg minus the msghdr,
+writev is sendmsg minus it (bad iovec counts are EINVAL here, the
+kernel's readv/writev spelling, vs sendmsg's EMSGSIZE). Non-socket
+fds stay ENOSYS ON PURPOSE: nothing in the standard library issues
+readv/writev on NT files or pipes (poll's only writev consumer is
+net's netFD; there is no readv consumer at all), and exec's stdio
+pipes must stay on the blocking ReadFile/WriteFile path the
+netpoller refuses to adopt - a visible gap beats an untested
+vectored file path, same reasoning as the file/pipe dup refusal.
+
+Probe: check "netbuffers", mandatory on ALL THREE hosts (linux
+native, darwin dispatches Apple readv/writev, NT via the new cases;
+no skip legs): raw two-iovec writev/readv over a socketpair with
+misaligned splits and a short-read loop, then a net.Buffers
+consolidated write through net.FileConn ends (the whole
+internal/poll.Writev stack) byte-compared on the reader side. On
+darwin this leg also regression-guards the item-1-followup dup(2)
+emulation, since FileConn's dup fallback is exactly what failed
+there.

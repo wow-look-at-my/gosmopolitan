@@ -52,6 +52,8 @@ const (
 	ntSysLseek      = 8
 	ntSysPread64    = 17
 	ntSysPwrite64   = 18
+	ntSysReadv      = 19
+	ntSysWritev     = 20
 	ntSysDup        = 32
 	ntSysGetpid     = 39
 	ntSysSocket     = 41
@@ -270,6 +272,11 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuRead(int32(a1), unsafe.Pointer(a2), int32(a3))
 	case ntSysWrite:
 		return ntEmuWrite(int32(a1), unsafe.Pointer(a2), int32(a3))
+	case ntSysReadv:
+		// Socket-kind fds only (net.Buffers); see ntEmuReadv.
+		return ntEmuReadv(int32(a1), (*ntLinuxIovec)(unsafe.Pointer(a2)), int32(a3))
+	case ntSysWritev:
+		return ntEmuWritev(int32(a1), (*ntLinuxIovec)(unsafe.Pointer(a2)), int32(a3))
 	case ntSysOpenat:
 		return ntEmuOpenat(int32(a1), (*byte)(unsafe.Pointer(a2)), int32(a3), uint32(a4))
 	case ntSysClose:
