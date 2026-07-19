@@ -19,3 +19,23 @@ func wasmThreadsNewosproc(mp *m) {
 //go:nosplit
 func wasmThreadsUsleep(usec uint32) {
 }
+
+// wasmClampGOMAXPROCS: without threads only one CPU is possible.
+func wasmClampGOMAXPROCS(n int32) int32 {
+	return 1
+}
+
+func wasmMaxMCount() int32 {
+	return 0x7fffffff // unreachable: startm's budget check is threads-only
+}
+
+//go:nosplit
+func wasmWakeMainThread() {
+}
+
+//go:nosplit
+func wasmSchedNudgeWake() {
+}
+
+func wasmThreadsPidleput(pp *p) {
+}
