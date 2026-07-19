@@ -8,7 +8,7 @@ package runtime
 
 import (
 	"internal/runtime/sys"
-	_ "unsafe" // for go:linkname
+	"unsafe"
 )
 
 // This file holds the JavaScript event-loop integration of the js/wasm
@@ -234,6 +234,14 @@ func handleEvent() {
 		// See handleAsyncEvent: only the main M talks to the event loop.
 		throw("wasm: event handler on non-main M")
 	}
+	if wasmThreadsEnabled && wasmThreadsHandleEventEntry() {
+		// GOWASM=threads: the main M was parked in the event loop on its
+		// g0 (wasmMainParkNote in lock_jsthreads.go) and this resume
+		// woke it. Returning continues the park loop; the pending host
+		// event, if any, is handled once the main M has a P again (the
+		// event goroutine spawned by beforeIdle).
+		return
+	}
 
 	sched.idleTime.Add(nanotime() - idleStart)
 
@@ -264,6 +272,54 @@ func handleEvent() {
 		clearIdleTimeout()
 		gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
 		throw("unreachable") // gopark above never returns
+	}
+
+	if wasmThreadsEnabled {
+		// GOWASM=threads: this is a synchronous nested event (JavaScript
+		// called into Go from a JavaScript call Go made; asynchronous
+		// resumes of a parked main M go through wasmEventGoroutine, see
+		// wasmThreadsHandleEventEntry). Run the handler on this
+		// goroutine, locked to the main M so a handler that blocks and
+		// is readied from a worker thread still continues here (the
+		// events bookkeeping and the final pause are main-thread-only);
+		// then pause straight back to the synchronously waiting
+		// JavaScript caller. There is no wait-for-idle: under threads,
+		// returning to JavaScript does not stop the world, and this
+		// goroutine continues - on the main M - when the host's call
+		// into Go returns.
+		gp := getg()
+		mp := gp.m
+		if mp.lockedg != 0 && mp.lockedg.ptr() != gp {
+			throw("wasm: nested event on locked M")
+		}
+		mp.lockedInt++
+		mp.lockedg.set(gp)
+		gp.lockedm.set(mp)
+
+		if !eventHandler() {
+			// A timeout fired rather than a window event; clear both
+			// timeout records (each is re-armed by beforeIdle if still
+			// needed).
+			clearIdleTimeout()
+			clearIdleGCNudge()
+		}
+
+		// Synchronous events are strictly LIFO on this thread, and no
+		// asynchronous event goroutine can be created while this M is
+		// locked, so e is the top of the stack.
+		events[len(events)-1] = nil
+		events = events[:len(events)-1]
+
+		mp.lockedInt--
+		if mp.lockedInt == 0 {
+			mp.lockedg = 0
+			gp.lockedm = 0
+		}
+
+		// return execution to JavaScript
+		idleStart = nanotime()
+		pause(sys.GetCallerSP() - 16)
+		throw("unreachable") // pause above discards this frame
 	}
 
 	if !eventHandler() {
@@ -308,6 +364,132 @@ var deadlockProbeActive bool
 //go:linkname deadlockProbe syscall/js.deadlockProbe
 func deadlockProbe() {
 	deadlockProbeActive = true
+}
+
+// eventLoopCanWake reports whether a JavaScript event could still wake
+// this program: syscall/js is linked (so the host can deliver events into
+// Go) and the host's exit-time deadlock probe has not fired yet. Consulted
+// by checkdead under GOWASM=threads, where an idle main M parks through
+// stopm and would otherwise trip the deadlock detector on a program that
+// is merely waiting for a JavaScript event. Once the host's event loop
+// runs dry it injects the deadlock probe (deadlockProbeActive), after
+// which nothing external can wake the program and checkdead reports the
+// deadlock.
+func eventLoopCanWake() bool {
+	return eventHandler != nil && !deadlockProbeActive
+}
+
+// wasmThreadsOnWorker reports whether the calling goroutine is running on
+// a worker-thread M under GOWASM=threads. syscall/js links to it to give
+// a clear panic when JavaScript values are touched off the main thread
+// (JavaScript values and the event loop live on the main thread only;
+// worker-thread routing is a later phase). Always false without
+// GOWASM=threads.
+//
+//go:linkname wasmThreadsOnWorker syscall/js.runtimeOnWorkerThread
+func wasmThreadsOnWorker() bool {
+	return wasmThreadsEnabled && getg().m != &m0
+}
+
+// wasmThreadsBuildEnabled reports whether this program was built with
+// GOWASM=threads (a build-time constant). syscall/js links to it where a
+// per-call runtimeOnWorkerThread check would be a TOCTOU: a preemptible
+// goroutine can migrate between Ms between the check and the host call
+// (see the Value finalizer in syscall/js).
+//
+//go:linkname wasmThreadsBuildEnabled syscall/js.runtimeThreadsEnabled
+func wasmThreadsBuildEnabled() bool {
+	return wasmThreadsEnabled
+}
+
+// wasmThreadsBeginMainOp marks the calling goroutine as main-thread-only
+// for the duration of a syscall/js operation (a nesting counter, so the
+// package's operations may call each other). While marked, schedule() on
+// a worker M refuses to execute the goroutine and hands it to the
+// migrate queue instead (see wasmSchedPushMainOnly in proc.go) - closing
+// the TOCTOU between "confirmed on the main thread" and the host import
+// call(s): without it, any preemption or park in that window (loop-gate
+// yield, stack-growth preempt, GC assist park) could reschedule the
+// goroutine onto a worker M, whose instance stubs every syscall/js
+// import with a throw. Unlike an m.locks pin, the mark keeps the
+// goroutine fully preemptible and parkable - it only constrains WHERE it
+// resumes.
+//
+// Note the mark does not teleport: if the caller is currently on a
+// worker M it stays there until the next reschedule, so syscall/js sets
+// the mark FIRST and then checks/migrates - after that check, every
+// resume point is the main M.
+//
+//go:linkname wasmThreadsBeginMainOp syscall/js.runtimeBeginMainOp
+func wasmThreadsBeginMainOp() {
+	gp := getg()
+	if gp.wasmMainOnly == ^uint8(0) {
+		throw("wasm: syscall/js main-thread operations nested too deeply")
+	}
+	gp.wasmMainOnly++
+}
+
+// wasmThreadsEndMainOp closes a wasmThreadsBeginMainOp region.
+//
+//go:linkname wasmThreadsEndMainOp syscall/js.runtimeEndMainOp
+func wasmThreadsEndMainOp() {
+	gp := getg()
+	if gp.wasmMainOnly == 0 {
+		throw("wasm: unbalanced syscall/js main-op end")
+	}
+	gp.wasmMainOnly--
+}
+
+// wasmThreadsMigrateToMain moves the calling goroutine to the main M
+// under GOWASM=threads: it parks and publishes itself on the migrate
+// queue (see wasmSchedPickMigrated in proc.go), which only the main M's
+// scheduler pops - the goroutine is executed there directly and never
+// enters a run queue. syscall/js links to it so a JavaScript operation
+// from a goroutine that landed on a worker M continues on the main
+// thread instead of failing.
+//
+// Returns false without parking when migration cannot succeed: the main
+// M is exclusively bound to a different locked goroutine (a blocked
+// event handler, or a RunOnNewM hook call from the main goroutine), so
+// it could never pick us up; the caller should fail loudly rather than
+// deadlock. The lockedg read is racy, but a false negative merely turns
+// a wait into a clear panic.
+//
+//go:linkname wasmThreadsMigrateToMain syscall/js.runtimeMigrateToMain
+func wasmThreadsMigrateToMain() bool {
+	gp := getg()
+	if gp.m == &m0 {
+		return true
+	}
+	if lockedg := m0.lockedg.ptr(); lockedg != nil && lockedg != gp {
+		return false
+	}
+	gopark(wasmMigrateParkFn, nil, waitReasonZero, traceBlockGeneric, 1)
+	if getg().m != &m0 {
+		throw("wasm: migrated goroutine resumed off the main M")
+	}
+	return true
+}
+
+// wasmMigrateParkFn publishes the parked goroutine on the migrate queue
+// and pokes the main M: a host nudge if it is parked in the event loop,
+// and the loop-preemption checks of whatever it is running. Runs on the
+// worker M's g0 after gp is in _Gwaiting, so the main M cannot observe a
+// running goroutine.
+func wasmMigrateParkFn(gp *g, _ unsafe.Pointer) bool {
+	lock(&wasmMigrateLock)
+	wasmMigrateQ.push(gp)
+	wasmMigrateCount.Add(1)
+	unlock(&wasmMigrateLock)
+	wasmWakeMainThread()
+	if mgp := m0.curg; mgp != nil {
+		mgp.stackguard1 = stackPreempt
+	}
+	// A worker M idling in beforeIdle's timed sleep may be holding the P
+	// the main M needs to run this goroutine; wake it so it re-checks
+	// (and releases the P - see the migrate/wantsP bail in beforeIdle).
+	wasmSchedNudgeWake()
+	return true
 }
 
 // deadlockOSHint prints js-specific context just before checkdead's
