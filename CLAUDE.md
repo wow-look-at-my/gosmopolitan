@@ -303,7 +303,8 @@ regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
 fixes touch under node 22 (js) and wazero (wasip1), runs the full
 testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
-end to end), and runs the wasmexport compiler regression tests via
+end to end), runs the testdata/jsfetchstream streaming-upload e2e under
+node, and runs the wasmexport compiler regression tests via
 cmd/internal/testdir for both wasm targets.
 
 A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
@@ -383,8 +384,8 @@ the full catalog of fixes and remaining gaps):
   line tables, `llvm-dwarfdump --verify` clean on both ports. On by
   default (~+39% file size), stripped with `-ldflags=-w`. The name
   section now precedes producers, so llvm tools can read Go wasm
-  binaries. Variable location expressions are still placeholders
-  (faithful locations need DW_OP_WASM_location).
+  binaries. Variable location expressions remained placeholders until
+  round 6 gave them a real DW_OP_WASM_location frame base.
 - Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
   runway (trigger no later than ~halfway to the goal, background credit
   seeded at cycle start so the allocation that crosses the trigger
@@ -402,20 +403,48 @@ the full catalog of fixes and remaining gaps):
   event loop until mark completion) and the wasm export are js-only.
   `testdata/framebench` (10k allocs/frame under node): p99 frame time
   21.6ms -> 4.8ms, zero frames over 8ms.
-- Round 5 UDP (2026-07-19): `GOWASI=wasmedgesock` now also gives wasip1
-  real UDP: ListenUDP/ListenPacket with ReadFrom/WriteTo, connected
-  `Dial("udp")` with Read/Write preserving datagram boundaries, and the
+- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
+  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
+  computing the frame base from the SP global (SP + framesize + 8 - the
+  CFA of this x86-model target with a caller-pushed 8-byte return
+  address; SP only moves in the prologue/epilogue, so the constant is
+  exact throughout the body), and every stack-homed parameter and local
+  resolves through its DW_OP_fbreg offset to exactly the linear-memory
+  address codegen uses. The payoff is `-N -l` builds, where named
+  variables live on the stack; heap-escaped variables still carry no
+  location, and register-promoted variables in optimized builds stay
+  name-and-type-only. llvm-dwarfdump decodes the expression natively
+  and --verify stays clean; non-wasm DWARF is byte-identical; a
+  cmd/link/internal/wasm regression test locks the encoding for both
+  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
+  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
+  with Read/Write preserving datagram boundaries, and the
   same deadline machinery as TCP. Receives import the newer-generation
   `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
   everywhere and cannot report the source port), so opt-in binaries now
   need WasmEdge 0.12+ (or the reference host) to instantiate at all -
   the generation mix, the 128-byte family-tagged address buffer, and
   the network-byte-order recv_from port quirk (verified live against
-  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`. ReadMsgUDP/WriteMsgUDP are ENOSYS
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
+  ReadMsgUDP/WriteMsgUDP are ENOSYS
   (no ancillary data in the extension); DNS and unix sockets stay
   fake. `testdata/wasip1sock` grew UDP host support plus
   udpecho/udpconnected guests, and the CI wasm job now runs the whole
-  wasip1sock suite. Default (no GOWASI) builds are unchanged.
+  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
+  js fetch transport streams request bodies: unknown-length bodies
+  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
+  upload through a ReadableStream with duplex "half" instead of being
+  buffered whole, when a cached one-time probe shows the runtime's
+  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
+  everything else keeps the buffered path byte-for-byte). Pulls read
+  64KiB chunks on a goroutine off the event loop, so backpressure
+  reaches the reader, and the body is closed exactly once on every
+  path (EOF, read error, cancel/abort, every RoundTrip exit).
+  Known-length bodies stay buffered on purpose - fetch drops
+  Content-Length for stream bodies, buffering keeps it on the wire -
+  and streamed bodies cannot be replayed, so a redirect that must
+  re-send the body fails with a network error per spec.
+  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
@@ -475,8 +504,7 @@ the full catalog of fixes and remaining gaps):
   symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
   preemption, non-blocking main-thread park, syscall/js forwarding
   from worker Ms, browser workers.
-
- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
   unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
   1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
   via cross-thread-armed loop backedge checks, a non-blocking main-thread park
