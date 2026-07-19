@@ -3697,3 +3697,102 @@ Ctrl-C-disabled default above makes it undeliverable to children
 that never opt back in). The handler legs are live; their CI truth
 remains the mapping's unit structure plus the CTRL_BREAK path the
 probe drives.
+
+## Wave-4 charter: windows/arm64 (2026-07-19, scoping only - no code)
+
+Wave 3 closes the amd64 NT backlog it chartered; the platform item
+left standing from the wave-2 list is Windows on ARM. This section
+is the wave-4 charter: the container constraint, four options with a
+recommendation, and the bring-up notes a wave-4 session starts from.
+It is a scoping report - no code changed for it, and nothing here
+touches cmd/link; the PE facts cite the wave-1 contracts as they
+stand today.
+
+### The container constraint: one PE, one Machine field
+
+The APE carries exactly ONE PE header, at e_lfanew=0x80 with budget
+[0x80,0x7FE] (wave-1 design, above): PE32+, Machine=0x8664,
+ImageBase 0x100000000, entry _rt0_cosmo_nt, sections mapping the
+cosmo AMD64 image at file offset 0x10000, imports = the 2-slot
+ntidata/ntiat contract shared between rt0_cosmo_nt_amd64.s and
+cmd/link's ape.go (drift = loud link failure by design:
+apePrepareNTBoot cross-checks strings and symbol sizes). A PE has a
+single Machine field and e_lfanew is a single field, so a
+native-arm64 NT boot cannot ride this header. The options:
+
+- (a) Run the EXISTING amd64 image under Windows-on-ARM's x86-64
+  emulation. Zero toolchain work - the fat APE shipped today is the
+  test article. The open question is emulation fidelity, and it is
+  concrete; the unknowns to verify are exactly the fork's
+  load-bearing NT mechanisms: gs:0x28 TLS (the TEB
+  ArbitraryUserPointer read compiled into every stack-bound check),
+  VEH delivery (sigpanic/recover), WSAPoll semantics (the
+  netpoller), SuspendThread + Get/SetThreadContext on emulated
+  threads (async preemption AND the wave-3 profiler), the
+  KUSER_SHARED_DATA clock reads at 0x7ffe0000 (do emulated
+  processes see the same page semantics), and
+  GenerateConsoleCtrlEvent handler injection (the wave-3 ctrlbreak
+  chain). One CI experiment answers all of it.
+- (b) ARM64X / ARM64EC hybrid PE - Microsoft's designed "one
+  binary, both machines" mechanism. Demands ARM64EC codegen
+  (x64-compatible calling convention, dispatch thunks, load-config
+  metadata tables) that the Go toolchain does not possess, plus
+  deep ape.go surgery. Out of realistic reach; not chartered.
+- (c) A second PE header - impossible. e_lfanew is singular; no
+  loader honors a second COFF header.
+- (d) A separate thin windows/arm64 artifact - the thin-build
+  machinery exists, but this abandons the APE premise of one
+  shipped file; a distribution decision, not a runtime one.
+
+RECOMMENDATION: wave 4 opens with (a) as an experiment leg - run
+the existing amd64 fat APE fizzbuzz + runtimeprobe (the full
+46-check gauntlet) on a windows-11-arm runner and record the
+verdict in this file BEFORE any native work is chartered. If
+emulation is clean, WoA support is effectively free and a native
+port becomes a performance question; only if emulation is
+unacceptable does the native ladder below get chartered.
+
+### Native bring-up notes (if ever pursued)
+
+Collected now while the amd64 design is fresh; none of this is
+scheduled work.
+
+- TEB/TLS: win-arm64 keeps the TEB pointer in x18, the reserved
+  platform register - and Go's arm64 port already reserves it
+  (REGPR = REG_R18, "ARM64 platform register, unused in the Go
+  toolchain", cmd/internal/obj/arm64/a.out.go), so the codegen
+  needs no register-diet change. The TEB ArbitraryUserPointer slot
+  sits at x18+0x28: the amd64 gs:0x28 trick ports as an
+  x18-relative load at the SAME offset, and the wide-TEB
+  stack-bounds policy (ntSetTEBStackBounds) carries over.
+- Trampoline: SysV-arm64 and win-arm64 integer argument passing
+  coincide on x0-x7, so the ntcall analog is far thinner than
+  amd64's SysV->win64 register shuffle; stack alignment is 16
+  bytes on both sides. (Variadics differ on win-arm64, but the
+  runtime's fixed-arg Win32 surface never hits that.)
+- Exceptions/preemption/profiling: AddVectoredExceptionHandler,
+  SuspendThread, Get/SetThreadContext are machine-independent
+  APIs. CONTEXT_ARM64 (ContextFlags base 0x400000; X0..X28, Fp,
+  Lr, Sp, Pc, V regs) replaces ntContext, and preemption injection
+  is upstream windows/arm64's shape - Lr := resume PC, Pc :=
+  asyncPreempt - instead of the amd64 fake-CALL stack push. The
+  wave-3 profiler is the same allm walk with the arm64 context
+  flags, still under ntSuspendLock.
+- Syscall dispatcher: os_cosmo_nt_sys.go is ordinary Go and ports
+  nearly verbatim; only the dispatch numbers change, to
+  Linux-ARM64's (openat=56 etc. - src/syscall/
+  zsysnum_cosmo_arm64.go already maintains the arm64 set, and the
+  darwin arm64 dispatcher in internal/runtime/syscall/cosmo/
+  syscall_cosmo_arm64.go is the in-tree precedent for exactly this
+  renumbering). The fd table, path layer, spawn machinery, winsock
+  layer and WSAPoll netpoller are syscall-number-agnostic and
+  carry over unchanged.
+
+### CI reality
+
+GitHub hosts public windows-11-arm runners (GA 2025). Availability
+under this repo's plan/visibility must be checked at wave-4 start
+(a one-line workflow probe); the experiment leg then needs no new
+build machinery - the existing ubuntu-built fat APE artifact is the
+input, and fizzbuzz + apetest's runtimeprobe battery is the
+pass/fail instrument.
