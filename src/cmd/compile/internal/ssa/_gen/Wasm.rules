@@ -14,7 +14,18 @@
 (Mul(64|32|16|8) ...) => (I64Mul ...)
 (Mul(64|32)F ...) => (F(64|32)Mul ...)
 
-(Div64 [false] x y) => (I64DivS x y)
+// wasm's i64.div_s traps on MinInt64/-1 where Go wants MinInt64, so divide
+// by 1 instead when the divisor is -1 and negate the quotient afterwards:
+// x/1 = x and 0-MinInt64 wraps back to MinInt64, the correct Go answer.
+// This is branchless and calls no helper. Division by zero still traps in
+// i64.div_s, but the frontend's explicit divisor check panics before that
+// can be reached. The smaller divisions cannot trap: their operands are
+// sign-extended from a narrower type, so dividend can never be MinInt64.
+(Div64 [false] <t> x y) =>
+	(Last <t>
+		flag: (I64Eq y (I64Const [-1]))
+		q:    (I64DivS <t> x (Select <t> (I64Const [1]) y flag))
+		(Select <t> (I64Sub (I64Const [0]) q) q flag))
 (Div32 [false] x y) => (I64DivS (SignExt32to64 x) (SignExt32to64 y))
 (Div16 [false] x y) => (I64DivS (SignExt16to64 x) (SignExt16to64 y))
 (Div8          x y) => (I64DivS (SignExt8to64 x) (SignExt8to64 y))
@@ -339,6 +350,47 @@
 
 // Write barrier.
 (WB ...) => (LoweredWB ...)
+
+// Atomic memory operations. Without GOWASM=threads, wasm is
+// single-threaded: the plain memory instructions are already atomic, the
+// SSA memory edges provide the ordering, and no preemption point can
+// appear between the instructions one of these ops lowers to (goroutine
+// switches happen only at calls and at loop rescheduling checks, which
+// are inserted before lowering). With GOWASM=threads, code generation
+// for the Lowered ops emits the threads proposal's 0xFE sequentially
+// consistent atomic instructions instead (see ../../wasm/ssa.go), and
+// the ops that would otherwise lower to plain stores or load-op-store
+// sequences get dedicated Lowered ops.
+(AtomicLoad8 ...) => (LoweredAtomicLoad8 ...)
+(AtomicLoad32 ...) => (LoweredAtomicLoad32 ...)
+(AtomicLoad(64|Ptr) ...) => (LoweredAtomicLoad64 ...)
+
+(AtomicStore8 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store8 ptr val mem)
+(AtomicStore32 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store32 ptr val mem)
+(AtomicStore(64|PtrNoWB) ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store ptr val mem)
+(AtomicStore8 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicStore8 ptr val mem)
+(AtomicStore32 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicStore32 ptr val mem)
+(AtomicStore(64|PtrNoWB) ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicStore64 ptr val mem)
+
+(AtomicAdd(32|64) ...) => (LoweredAtomicAdd(32|64) ...)
+(AtomicExchange(32|64) ...) => (LoweredAtomicExchange(32|64) ...)
+
+// The 32-bit compare-and-swap compares only the low 32 bits of memory,
+// so the old value must arrive zero-extended.
+(AtomicCompareAndSwap32 ptr old new mem) => (LoweredAtomicCas32 ptr (ZeroExt32to64 old) new mem)
+(AtomicCompareAndSwap64 ...) => (LoweredAtomicCas64 ...)
+
+// The old-style logical operations only return memory. Without threads
+// they expand to an ordinary load/op/store sequence; with threads they
+// become real atomic read-modify-write ops (whose old value is dropped).
+(AtomicAnd8 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store8 ptr (I64And (I64Load8U ptr mem) val) mem)
+(AtomicAnd32 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store32 ptr (I64And (I64Load32U ptr mem) val) mem)
+(AtomicOr8 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store8 ptr (I64Or (I64Load8U ptr mem) val) mem)
+(AtomicOr32 ptr val mem) && !buildcfg.GOWASM.Threads => (I64Store32 ptr (I64Or (I64Load32U ptr mem) val) mem)
+(AtomicAnd8 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicAnd8 ptr val mem)
+(AtomicAnd32 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicAnd32 ptr val mem)
+(AtomicOr8 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicOr8 ptr val mem)
+(AtomicOr32 ptr val mem) && buildcfg.GOWASM.Threads => (LoweredAtomicOr32 ptr val mem)
 
 // --- Intrinsics ---
 (Sqrt ...) => (F64Sqrt ...)

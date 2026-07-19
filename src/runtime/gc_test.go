@@ -166,9 +166,8 @@ func TestHugeGCInfo(t *testing.T) {
 }
 
 func TestPeriodicGC(t *testing.T) {
-	if runtime.GOARCH == "wasm" {
-		t.Skip("no sysmon on wasm yet")
-	}
+	// On wasm this exercises the scheduler-driven trigger (wasm has no
+	// sysmon); see wasmForceGCCheck in proc.go.
 
 	// Make sure we're not in the middle of a GC.
 	runtime.GC()

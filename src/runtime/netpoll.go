@@ -207,6 +207,14 @@ var (
 	netpollWaiters atomic.Uint32
 )
 
+// netpollLevelTriggered is set during netpollinit by a poller whose
+// readiness notifications are level-triggered, making pollWait arm the
+// awaited direction first (see the GOOS list in poll_runtime_pollWait).
+// It exists for GOOS=cosmo, which picks its poller at run time:
+// edge-triggered epoll on Linux hosts, level-triggered poll(2) on macOS
+// hosts. Other GOOSes never set it.
+var netpollLevelTriggered bool
+
 // netpollWaiters is accessed in tests
 //go:linkname netpollWaiters
 
@@ -344,8 +352,10 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if errcode != pollNoError {
 		return errcode
 	}
-	// As for now only Solaris, illumos, AIX and wasip1 use level-triggered IO.
-	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" || GOOS == "wasip1" {
+	// As for now only Solaris, illumos, AIX and wasip1 use level-triggered
+	// IO unconditionally; cosmo does when running on a macOS host
+	// (netpollLevelTriggered, set by its runtime poller selection).
+	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" || GOOS == "wasip1" || netpollLevelTriggered {
 		netpollarm(pd, mode)
 	}
 	for !netpollblock(pd, int32(mode), false) {

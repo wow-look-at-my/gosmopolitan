@@ -254,21 +254,21 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
 		},
-		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Load8",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue2(ssa.OpAtomicLoad8, types.NewTuple(types.Types[types.TUINT8], types.TypeMem), args[0], s.mem())
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT8], v)
 		},
-		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Load64",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue2(ssa.OpAtomicLoad64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], s.mem())
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
 		},
-		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "LoadAcq",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue2(ssa.OpAtomicLoadAcq32, types.NewTuple(types.Types[types.TUINT32], types.TypeMem), args[0], s.mem())
@@ -289,32 +289,32 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, s.f.Config.Types.BytePtr, v)
 		},
-		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 
 	addF("internal/runtime/atomic", "Store",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicStore32, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.ARM64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Store8",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicStore8, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.ARM64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Store64",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicStore64, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.ARM64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "StorepNoWB",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicStorePtrNoWB, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "StoreRel",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicStoreRel32, types.TypeMem, args[0], args[1], s.mem())
@@ -397,14 +397,14 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Xchg64",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue3(ssa.OpAtomicExchange64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 
 	makeAtomicGuardedIntrinsicARM64common := func(op0, op1 ssa.Op, typ types.Kind, emit atomicOpEmitter, needReturn bool) intrinsicBuilder {
 
@@ -510,14 +510,14 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT32], v)
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Xadd64",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue3(ssa.OpAtomicAdd64, types.NewTuple(types.Types[types.TUINT64], types.TypeMem), args[0], args[1], s.mem())
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TUINT64], v)
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 
 	addF("internal/runtime/atomic", "Xadd",
 		makeAtomicGuardedIntrinsicARM64(ssa.OpAtomicAdd32, ssa.OpAtomicAdd32Variant, types.TUINT32, atomicEmitterARM64),
@@ -532,14 +532,14 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
 		},
-		sys.AMD64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Cas64",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue4(ssa.OpAtomicCompareAndSwap64, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
 			s.vars[memVar] = s.newValue1(ssa.OpSelect1, types.TypeMem, v)
 			return s.newValue1(ssa.OpSelect0, types.Types[types.TBOOL], v)
 		},
-		sys.AMD64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "CasRel",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			v := s.newValue4(ssa.OpAtomicCompareAndSwap32, types.NewTuple(types.Types[types.TBOOL], types.TypeMem), args[0], args[1], args[2], s.mem())
@@ -616,25 +616,25 @@ func initIntrinsics(cfg *intrinsicBuildConfig) {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicAnd8, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "And",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicAnd32, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Or8",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicOr8, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 	addF("internal/runtime/atomic", "Or",
 		func(s *state, n *ir.CallExpr, args []*ssa.Value) *ssa.Value {
 			s.vars[memVar] = s.newValue3(ssa.OpAtomicOr32, types.TypeMem, args[0], args[1], s.mem())
 			return nil
 		},
-		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X)
+		sys.AMD64, sys.Loong64, sys.MIPS, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X, sys.Wasm)
 
 	// arm64 always uses the new-style atomic logical operations, for both the
 	// old and new style API.

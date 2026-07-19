@@ -532,6 +532,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 				base.Fatalf("go: no main packages to build")
 			}
 			b.Do(ctx, a)
+			cosmoFatten(pkgsMain(pkgs), true)
 			return
 		}
 		if len(pkgs) > 1 {
@@ -545,6 +546,9 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		p.StaleReason = "build -o flag in use"
 		a := b.AutoAction(moduleLoaderState, ModeInstall, depMode, p)
 		b.Do(ctx, a)
+		if p.Name == "main" {
+			cosmoFatten([]*load.Package{p}, false)
+		}
 		return
 	}
 
@@ -824,6 +828,16 @@ func InstallPackages(loaderstate *modload.State, ctx context.Context, patterns [
 
 	b.Do(ctx, a)
 	base.ExitIfErrors()
+
+	// Installed GOOS=cosmo executables become fat APEs, exactly like the
+	// go build outputs (see cosmoFattenInstall).
+	var cosmoMains []*load.Package
+	for _, p := range pkgs {
+		if p.Name == "main" && p.Target != "" {
+			cosmoMains = append(cosmoMains, p)
+		}
+	}
+	cosmoFattenInstall(cosmoMains)
 
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,

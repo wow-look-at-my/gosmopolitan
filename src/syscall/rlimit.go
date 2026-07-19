@@ -7,6 +7,7 @@
 package syscall
 
 import (
+	"runtime"
 	"sync/atomic"
 )
 
@@ -28,6 +29,11 @@ var origRlimitNofile atomic.Pointer[Rlimit]
 // Code that really wants Go to leave the limit alone can set the hard limit,
 // which Go of course has no choice but to respect.
 func init() {
+	// Skip rlimit adjustment on cosmo - the syscall layer doesn't fully support
+	// darwin ARM64 yet (uses raw SVC which causes SIGSYS on macOS).
+	if runtime.GOOS == "cosmo" {
+		return
+	}
 	var lim Rlimit
 	if err := Getrlimit(RLIMIT_NOFILE, &lim); err == nil && lim.Max > 0 && lim.Cur < lim.Max-1 {
 		origRlimitNofile.Store(&lim)

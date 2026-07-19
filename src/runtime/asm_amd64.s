@@ -285,7 +285,23 @@ needtls:
 	// store through it, to make sure it works
 	get_tls(BX)
 	MOVQ	$0x123, g(BX)
+#ifdef GOOS_cosmo
+	// On NT hosts the cosmo TLS reference gs:0x28 is the TEB
+	// ArbitraryUserPointer field itself - real storage, not an alias
+	// of m0.tls[0] like the Linux ARCH_SET_GS model (settls is a
+	// no-op on NT: user mode cannot move the GS base). Validate the
+	// store by reading back through the same segment reference.
+	CMPL	runtime·__hostos(SB), $2	// _HOSTWINDOWS
+	JNE	tls_alias_check
+	get_tls(BX)
+	MOVQ	g(BX), AX
+	JMP	tls_check
+tls_alias_check:
+#endif
 	MOVQ	runtime·m0+m_tls(SB), AX
+#ifdef GOOS_cosmo
+tls_check:
+#endif
 	CMPQ	AX, $0x123
 	JEQ 2(PC)
 	CALL	runtime·abort(SB)

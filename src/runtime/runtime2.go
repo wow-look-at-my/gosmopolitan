@@ -478,6 +478,10 @@ type g struct {
 	// stackguard1 is the stack pointer compared in the //go:systemstack stack growth prologue.
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
+	// On wasm, which has no cgo and whose stack growth prologue only consults
+	// stackguard0, it is instead repurposed on user goroutine stacks as the arming
+	// word for the compiler-inserted loop preemption checks: stackPreempt when
+	// armed, 0 when not. See the wasm loop preemption comment in proc.go.
 	stack       stack   // offset known to runtime/cgo
 	stackguard0 uintptr // offset known to liblink
 	stackguard1 uintptr // offset known to liblink
