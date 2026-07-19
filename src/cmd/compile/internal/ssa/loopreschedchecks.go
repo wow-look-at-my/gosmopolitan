@@ -41,6 +41,17 @@ func (r *rewrite) String() string {
 }
 
 // insertLoopReschedChecks inserts rescheduling checks on loop backedges.
+//
+// The inserted check calls runtime.goschedguarded, which makes every loop
+// backedge a potential synchronous safepoint: a goroutine can park there
+// and have its frame scanned precisely, and its stack moved. Code running
+// under this pass therefore must not carry a heap pointer solely as a
+// uintptr across a backedge - the GC would not see it (nor adjust it on
+// stack copies) while parked at the inserted call. Compiler-generated
+// lowerings that hide pointers in uintptrs on the assumption that no
+// safepoint intervenes must be disabled when this pass is enabled; see
+// the preemptibleloops case in walk's range-over-slice lowering, which
+// switched to indexed iteration for exactly this reason.
 func insertLoopReschedChecks(f *Func) {
 	// TODO: when split information is recorded in export data, insert checks only on backedges that can be reached on a split-call-free path.
 

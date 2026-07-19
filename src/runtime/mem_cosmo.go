@@ -21,6 +21,11 @@ const (
 //
 //go:nosplit
 func sysAllocOS(n uintptr, vmaName string) unsafe.Pointer {
+	if iswindows() {
+		// Reserve+commit in one call, like upstream mem_windows.go.
+		// Returns nil on failure; the caller handles out-of-memory.
+		return ntVirtualAlloc(nil, n, _NT_MEM_RESERVE|_NT_MEM_COMMIT, _NT_PAGE_READWRITE)
+	}
 	p, err := mmap(nil, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 	if err != 0 {
 		if err == _EACCES {
@@ -40,12 +45,75 @@ var adviseUnused = uint32(_MADV_FREE)
 
 const madviseUnsupported = 0
 
+// ntCommitPages and ntDecommitPages are the NT commit/decommit
+// primitives, ported from upstream mem_windows.go's halving loops. A
+// single VirtualAlloc(MEM_COMMIT) or VirtualFree(MEM_DECOMMIT) call
+// may only touch pages from ONE prior reservation, but the heap merges
+// virtually-adjacent reservations (e.g. two 64MiB arenas reserved back
+// to back land contiguously), so a span straddling the boundary makes
+// the single-call fast path fail even though every page is validly
+// reserved. Whether reservations end up adjacent depends on NT's
+// address-space randomization - that made the fast-path-only version
+// of this code fail nondeterministically (~1 in 2 windows-latest CI
+// rounds: "fatal error: runtime: cannot commit pages" from
+// schedinit's stackpoolalloc, failing range ending exactly on a 64MiB
+// arena boundary). On failure, retry successively smaller
+// page-aligned chunks so each call lands within one reservation;
+// throw only if a single-page call fails.
+
+func ntCommitPages(v unsafe.Pointer, n uintptr) {
+	if p := ntVirtualAlloc(v, n, _NT_MEM_COMMIT, _NT_PAGE_READWRITE); p != nil {
+		return
+	}
+	for n > 0 {
+		small := n
+		for small >= 4096 && ntVirtualAlloc(v, small, _NT_MEM_COMMIT, _NT_PAGE_READWRITE) == nil {
+			small /= 2
+			small &^= 4096 - 1
+		}
+		if small < 4096 {
+			print("runtime: VirtualAlloc MEM_COMMIT of ", small, " bytes at ", v, " failed\n")
+			throw("runtime: cannot commit pages")
+		}
+		v = add(v, small)
+		n -= small
+	}
+}
+
+func ntDecommitPages(v unsafe.Pointer, n uintptr) {
+	if ntVirtualFree(v, n, _NT_MEM_DECOMMIT) != 0 {
+		return
+	}
+	for n > 0 {
+		small := n
+		for small >= 4096 && ntVirtualFree(v, small, _NT_MEM_DECOMMIT) == 0 {
+			small /= 2
+			small &^= 4096 - 1
+		}
+		if small < 4096 {
+			print("runtime: VirtualFree MEM_DECOMMIT of ", small, " bytes at ", v, " failed\n")
+			throw("runtime: failed to decommit pages")
+		}
+		v = add(v, small)
+		n -= small
+	}
+}
+
 func sysUnusedOS(v unsafe.Pointer, n uintptr) {
 	if uintptr(v)&(physPageSize-1) != 0 || n&(physPageSize-1) != 0 {
 		// madvise will round this to any physical page
 		// *covered* by this range, so an unaligned madvise
 		// will release more memory than intended.
 		throw("unaligned sysUnused")
+	}
+
+	if iswindows() {
+		// NT: decommit (page-granular within a reservation is
+		// allowed; only the allocation base is 64KiB-granular).
+		// sysUsedOS recommits before reuse. Chunked: the range may
+		// straddle adjacent reservations (see ntDecommitPages).
+		ntDecommitPages(v, n)
+		return
 	}
 
 	advise := atomic.Load(&adviseUnused)
@@ -82,6 +150,16 @@ func sysUnusedOS(v unsafe.Pointer, n uintptr) {
 }
 
 func sysUsedOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// NT decommits in sysUnusedOS, so committing here is
+		// mandatory (upstream mem_windows.go semantics), not just
+		// a harddecommit debug mode. Chunked: fresh arena pages are
+		// born scavenged, so the first span allocated near an arena
+		// boundary commits a range that can straddle two adjacent
+		// reservations (see ntCommitPages).
+		ntCommitPages(v, n)
+		return
+	}
 	if debug.harddecommit > 0 {
 		p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
 		if err == _ENOMEM {
@@ -111,6 +189,10 @@ func sysNoHugePageOS(v unsafe.Pointer, n uintptr) {
 	if uintptr(v)&(physPageSize-1) != 0 {
 		throw("unaligned sysNoHugePageOS")
 	}
+	if iswindows() {
+		// No transparent huge pages on NT; nothing to do.
+		return
+	}
 	madvise(v, n, _MADV_NOHUGEPAGE)
 }
 
@@ -129,15 +211,46 @@ func sysHugePageCollapseOS(v unsafe.Pointer, n uintptr) {
 //
 //go:nosplit
 func sysFreeOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// VirtualFree(MEM_RELEASE) takes only the allocation base
+		// with size 0 and releases the whole allocation. All
+		// sysFreeOS callers free entire prior sysAlloc/sysReserve
+		// regions (sysReserveAligned takes the windows-style
+		// release-and-retry path on NT, so no partial frees reach
+		// here). Failure means the bookkeeping is broken: die
+		// loudly, mirroring munmap's crash idiom.
+		if ntVirtualFree(v, 0, _NT_MEM_RELEASE) == 0 {
+			*(*uintptr)(unsafe.Pointer(uintptr(0xf6))) = 0xf6
+		}
+		return
+	}
 	munmap(v, n)
 }
 
 func sysFaultOS(v unsafe.Pointer, n uintptr) {
+	if iswindows() {
+		// Decommit so any touch faults, like upstream
+		// mem_windows.go's sysFaultOS (which is sysUnusedOS there).
+		ntDecommitPages(v, n)
+		return
+	}
 	mprotect(v, n, _PROT_NONE)
 	madvise(v, n, _MADV_DONTNEED)
 }
 
 func sysReserveOS(v unsafe.Pointer, n uintptr, vmaName string) unsafe.Pointer {
+	if iswindows() {
+		// v is a hint (arenaHints) or nil. VirtualAlloc with an
+		// address fails if the range is unavailable; fall back to
+		// letting the kernel pick, matching the non-FIXED mmap
+		// hint semantics.
+		if v != nil {
+			if p := ntVirtualAlloc(v, n, _NT_MEM_RESERVE, _NT_PAGE_READWRITE); p != nil {
+				return p
+			}
+		}
+		return ntVirtualAlloc(nil, n, _NT_MEM_RESERVE, _NT_PAGE_READWRITE)
+	}
 	p, err := mmap(v, n, _PROT_NONE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
 	if err != 0 {
 		return nil
@@ -146,6 +259,16 @@ func sysReserveOS(v unsafe.Pointer, n uintptr, vmaName string) unsafe.Pointer {
 }
 
 func sysMapOS(v unsafe.Pointer, n uintptr, vmaName string) {
+	if iswindows() {
+		// Commit the reservation in place. (Upstream windows makes
+		// sysMapOS a no-op and commits on first use via sysUsedOS -
+		// both work, since fresh pages are born scavenged and every
+		// direct consumer of sysMap'd memory also calls sysUsed;
+		// cosmo keeps the eager unix-shaped commit.) Chunked, in
+		// case a mapping ever crosses adjacent reservations.
+		ntCommitPages(v, n)
+		return
+	}
 	p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
 	if err == _ENOMEM {
 		throw("runtime: out of memory")

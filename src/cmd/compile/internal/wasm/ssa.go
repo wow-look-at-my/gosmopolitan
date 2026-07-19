@@ -14,6 +14,7 @@ import (
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
 	"cmd/internal/obj/wasm"
+	"internal/buildcfg"
 )
 
 /*
@@ -289,16 +290,28 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To = obj.Addr{Type: obj.TYPE_MEM, Name: obj.NAME_EXTERN, Sym: ir.Syms.GCWriteBarrier[v.AuxInt-1]}
 		setReg(s, v.Reg0()) // move result from wasm stack to register local
 
-	// Atomic memory operations. Wasm is single-threaded, so these are
-	// plain memory operations; nothing can preempt between the
-	// instructions of one op. See the comments in WasmOps.go.
+	// Atomic memory operations. Without GOWASM=threads, wasm is
+	// single-threaded, so these are plain memory operations; nothing can
+	// preempt between the instructions of one op. With GOWASM=threads,
+	// they emit the threads proposal's 0xFE instructions, which are
+	// sequentially consistent, so no extra fences are needed. See the
+	// comments in WasmOps.go.
 	case ssa.OpWasmLoweredAtomicLoad8, ssa.OpWasmLoweredAtomicLoad32, ssa.OpWasmLoweredAtomicLoad64:
 		loadOp := wasm.AI64Load
+		if buildcfg.GOWASM.Threads {
+			loadOp = wasm.AI64AtomicLoad
+		}
 		switch v.Op {
 		case ssa.OpWasmLoweredAtomicLoad8:
 			loadOp = wasm.AI64Load8U
+			if buildcfg.GOWASM.Threads {
+				loadOp = wasm.AI64AtomicLoad8U
+			}
 		case ssa.OpWasmLoweredAtomicLoad32:
 			loadOp = wasm.AI64Load32U
+			if buildcfg.GOWASM.Threads {
+				loadOp = wasm.AI64AtomicLoad32U
+			}
 		}
 		getValue32(s, v.Args[0])
 		p := s.Prog(loadOp)
@@ -306,6 +319,27 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		setReg(s, v.Reg0())
 
 	case ssa.OpWasmLoweredAtomicAdd32, ssa.OpWasmLoweredAtomicAdd64:
+		if buildcfg.GOWASM.Threads {
+			// result = old + val, computed from the old value the atomic
+			// read-modify-write add returns. The val argument is read
+			// only once (it is needed twice): it is stashed in the result
+			// register first (resultNotInArgs, so writing it early is
+			// safe).
+			rmw := wasm.AI64AtomicRmw32AddU // 32-bit access, old value zero-extended, like AI64Load32U
+			if v.Op == ssa.OpWasmLoweredAtomicAdd64 {
+				rmw = wasm.AI64AtomicRmwAdd
+			}
+			getValue64(s, v.Args[1])
+			setReg(s, v.Reg0())
+			getValue32(s, v.Args[0])
+			getReg(s, v.Reg0())
+			p := s.Prog(rmw)
+			p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+			getReg(s, v.Reg0())
+			s.Prog(wasm.AI64Add)
+			setReg(s, v.Reg0())
+			break
+		}
 		ld, st := wasm.AI64Load32U, wasm.AI64Store32
 		if v.Op == ssa.OpWasmLoweredAtomicAdd64 {
 			ld, st = wasm.AI64Load, wasm.AI64Store
@@ -325,6 +359,21 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
 
 	case ssa.OpWasmLoweredAtomicExchange32, ssa.OpWasmLoweredAtomicExchange64:
+		if buildcfg.GOWASM.Threads {
+			// The atomic exchange returns exactly the result Go wants:
+			// the old contents (zero-extended for the 32-bit variant,
+			// like AI64Load32U).
+			rmw := wasm.AI64AtomicRmw32XchgU
+			if v.Op == ssa.OpWasmLoweredAtomicExchange64 {
+				rmw = wasm.AI64AtomicRmwXchg
+			}
+			getValue32(s, v.Args[0])
+			getValue64(s, v.Args[1])
+			p := s.Prog(rmw)
+			p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+			setReg(s, v.Reg0())
+			break
+		}
 		ld, st := wasm.AI64Load32U, wasm.AI64Store32
 		if v.Op == ssa.OpWasmLoweredAtomicExchange64 {
 			ld, st = wasm.AI64Load, wasm.AI64Store
@@ -341,6 +390,31 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
 
 	case ssa.OpWasmLoweredAtomicCas32, ssa.OpWasmLoweredAtomicCas64:
+		if buildcfg.GOWASM.Threads {
+			// result = (cmpxchg(ptr, old, new) == old). The compare
+			// exchange returns the loaded value (zero-extended for the
+			// 32-bit variant, matching the zero-extended old the
+			// lowering rule guarantees for Cas32). The old argument is
+			// needed twice (operand and comparison), so it is stashed in
+			// the result register (resultNotInArgs).
+			rmw := wasm.AI64AtomicRmw32CmpxchgU
+			eq := wasm.AI64Eq
+			if v.Op == ssa.OpWasmLoweredAtomicCas64 {
+				rmw = wasm.AI64AtomicRmwCmpxchg
+			}
+			getValue64(s, v.Args[1])
+			setReg(s, v.Reg0())
+			getValue32(s, v.Args[0])
+			getReg(s, v.Reg0())
+			getValue64(s, v.Args[2])
+			p := s.Prog(rmw)
+			p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+			getReg(s, v.Reg0())
+			s.Prog(eq)
+			s.Prog(wasm.AI64ExtendI32U)
+			setReg(s, v.Reg0())
+			break
+		}
 		ld, st := wasm.AI64Load32U, wasm.AI64Store32
 		if v.Op == ssa.OpWasmLoweredAtomicCas64 {
 			ld, st = wasm.AI64Load, wasm.AI64Store
@@ -363,6 +437,41 @@ func ssaGenValue(s *ssagen.State, v *ssa.Value) {
 		p = s.Prog(st)
 		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
 		s.Prog(wasm.AEnd)
+
+	case ssa.OpWasmLoweredAtomicStore8, ssa.OpWasmLoweredAtomicStore32, ssa.OpWasmLoweredAtomicStore64:
+		// Only generated with GOWASM=threads (see Wasm.rules).
+		st := wasm.AI64AtomicStore
+		switch v.Op {
+		case ssa.OpWasmLoweredAtomicStore8:
+			st = wasm.AI64AtomicStore8
+		case ssa.OpWasmLoweredAtomicStore32:
+			st = wasm.AI64AtomicStore32
+		}
+		getValue32(s, v.Args[0])
+		getValue64(s, v.Args[1])
+		p := s.Prog(st)
+		p.To = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+
+	case ssa.OpWasmLoweredAtomicAnd8, ssa.OpWasmLoweredAtomicAnd32, ssa.OpWasmLoweredAtomicOr8, ssa.OpWasmLoweredAtomicOr32:
+		// Only generated with GOWASM=threads (see Wasm.rules). These ops
+		// return no value, so the old value the read-modify-write
+		// instruction leaves on the wasm stack is dropped.
+		var rmw obj.As
+		switch v.Op {
+		case ssa.OpWasmLoweredAtomicAnd8:
+			rmw = wasm.AI64AtomicRmw8AndU
+		case ssa.OpWasmLoweredAtomicAnd32:
+			rmw = wasm.AI64AtomicRmw32AndU
+		case ssa.OpWasmLoweredAtomicOr8:
+			rmw = wasm.AI64AtomicRmw8OrU
+		case ssa.OpWasmLoweredAtomicOr32:
+			rmw = wasm.AI64AtomicRmw32OrU
+		}
+		getValue32(s, v.Args[0])
+		getValue64(s, v.Args[1])
+		p := s.Prog(rmw)
+		p.From = obj.Addr{Type: obj.TYPE_CONST, Offset: 0}
+		s.Prog(wasm.ADrop)
 
 	case ssa.OpWasmI64Store8, ssa.OpWasmI64Store16, ssa.OpWasmI64Store32, ssa.OpWasmI64Store, ssa.OpWasmF32Store, ssa.OpWasmF64Store:
 		getValue32(s, v.Args[0])

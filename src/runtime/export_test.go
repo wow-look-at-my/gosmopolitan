@@ -1498,6 +1498,27 @@ func (c *GCController) SetMaxIdleMarkWorkers(max int32) {
 	c.setMaxIdleMarkWorkers(max)
 }
 
+// NoteMarkStepDonation records a budgeted mark step donation on this
+// test-only pacer copy, as if the embedder had just called gcMarkStep,
+// so tests can exercise the donation-conditioned fractional worker cap.
+func (c *GCController) NoteMarkStepDonation() {
+	c.lastMarkStepTime.Store(nanotime())
+}
+
+func (c *GCController) FractionalUtilizationGoal() float64 {
+	return c.fractionalUtilizationGoal
+}
+
+const DonatedFractionalUtilizationGoal = donatedFractionalUtilizationGoal
+
+// GCMarkStep exposes the portable budgeted mark step (the core of the
+// js/wasm go_gc_mark_step export) for testing on every platform. Like
+// the export, it records the caller as a donating embedder on the live
+// pacer for markStepRecentNs.
+func GCMarkStep(budgetMs float64) bool {
+	return gcMarkStep(budgetMs)
+}
+
 var alwaysFalse bool
 var escapeSink any
 

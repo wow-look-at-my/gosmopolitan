@@ -410,6 +410,14 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 			}
 
 			o = ldr.SymValue(rs) + r.Add()
+			if target.IsWasm() && rst.IsText() && ldr.SymType(s).IsDWARF() {
+				// DWARF for wasm uses byte offsets relative to the
+				// start of the code section's contents as code
+				// addresses. The symbol value is the synthetic
+				// runtime PC (funcindex<<16), which is meaningless
+				// to DWARF consumers. See computeWasmDwarfCodeOffsets.
+				o = wasmDwarfCodeOffsets[rs] + r.Add()
+			}
 			if rt == objabi.R_PEIMAGEOFF {
 				// The R_PEIMAGEOFF offset is a RVA, so subtract
 				// the base address for the executable.
@@ -513,6 +521,10 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 			// debug_range and debug_loc elements use this relocation type to get an
 			// offset from the start of the compile unit.
 			o = ldr.SymValue(rs) + r.Add() - ldr.SymValue(ldr.SymUnit(rs).Textp[0])
+			if target.IsWasm() {
+				// Use code section byte offsets; see the R_ADDR case.
+				o = wasmDwarfCodeOffsets[rs] + r.Add() - wasmDwarfCodeOffsets[ldr.SymUnit(rs).Textp[0]]
+			}
 
 		// r.Sym() can be 0 when CALL $(constant) is transformed from absolute PC to relative PC call.
 		case objabi.R_GOTPCREL:

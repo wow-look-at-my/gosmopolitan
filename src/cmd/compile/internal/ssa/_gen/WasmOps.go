@@ -166,6 +166,18 @@ func init() {
 		{name: "LoweredAtomicCas32", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg1 must be zero-extended. arg3=mem. Reports whether the store happened, and returns new memory.
 		{name: "LoweredAtomicCas64", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg3=mem. Reports whether the store happened, and returns new memory.
 
+		// GOWASM=threads only: atomic stores and old-style logical ops that
+		// return no value. Without threads, these lower to the ordinary
+		// store ops / load-op-store sequences instead (see Wasm.rules); with
+		// threads they emit the threads proposal's 0xFE atomic instructions.
+		{name: "LoweredAtomicStore8", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true},  // store arg1 to *arg0 atomically (i64.atomic.store8). arg2=mem. Returns memory.
+		{name: "LoweredAtomicStore32", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true}, // store arg1 to *arg0 atomically (i64.atomic.store32). arg2=mem. Returns memory.
+		{name: "LoweredAtomicStore64", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true}, // store arg1 to *arg0 atomically (i64.atomic.store). arg2=mem. Returns memory.
+		{name: "LoweredAtomicAnd8", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true},    // *arg0 &= arg1 atomically (i64.atomic.rmw8.and_u). arg2=mem. Returns memory.
+		{name: "LoweredAtomicAnd32", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true},   // *arg0 &= arg1 atomically (i64.atomic.rmw32.and_u). arg2=mem. Returns memory.
+		{name: "LoweredAtomicOr8", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true},     // *arg0 |= arg1 atomically (i64.atomic.rmw8.or_u). arg2=mem. Returns memory.
+		{name: "LoweredAtomicOr32", argLength: 3, reg: gpstore, typ: "Mem", hasSideEffects: true},    // *arg0 |= arg1 atomically (i64.atomic.rmw32.or_u). arg2=mem. Returns memory.
+
 		// LoweredConvert converts between pointers and integers.
 		// We have a special op for this so as to not confuse GCCallOff
 		// (particularly stack maps). It takes a memory arg so it

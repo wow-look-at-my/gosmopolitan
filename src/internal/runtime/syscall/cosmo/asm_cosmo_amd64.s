@@ -7,6 +7,7 @@
 #include "textflag.h"
 
 // Host OS indicators (must match runtime values)
+#define HOSTWINDOWS 2
 #define HOSTXNU 8
 
 // Linux AMD64 syscall numbers
@@ -47,6 +48,14 @@
 	CMPL	R11, $HOSTXNU; \
 	JEQ	label
 
+// Helper macro: check if we're on Windows NT and jump to label if so.
+// No raw SYSCALL may execute when __hostos is Windows.
+// Clobbers R11
+#define CHECK_WINDOWS(label) \
+	MOVL	runtime·__hostos(SB), R11; \
+	CMPL	R11, $HOSTWINDOWS; \
+	JEQ	label
+
 // func Syscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr)
 //
 // Cosmopolitan Libc uses Linux syscall conventions on all platforms.
@@ -71,6 +80,10 @@
 //
 // On Darwin x86_64, we use BSD syscall numbers with XNU prefix (0x2000000).
 TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$0
+	// Safety net: on NT hosts everything not routed through the
+	// WindowsFns table (syscall_cosmo_nt.go) is ENOSYS - never a raw
+	// SYSCALL.
+	CHECK_WINDOWS(syscall6_windows)
 	CHECK_DARWIN(syscall6_darwin)
 
 	// Linux path: direct syscall (unchanged)
@@ -140,6 +153,7 @@ syscall6_darwin:
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
+syscall6_windows:
 	MOVQ	$-1, AX		// r1 = -1
 	MOVQ	$0, BX		// r2 = 0
 	MOVQ	$38, CX		// errno = ENOSYS
