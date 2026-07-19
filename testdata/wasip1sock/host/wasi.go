@@ -152,7 +152,12 @@ func (h *wasiHost) register(ctx context.Context, r wazero.Runtime) error {
 	stub("path_filestat_set_times", []api.ValueType{i32, i32, i32, i32, i64, i64, i32}, wasiENOSYS)
 	stub("proc_raise", []api.ValueType{i32}, wasiENOSYS)
 
-	// The WasmEdge socket extension, v0.4.3 SDK generation.
+	// The WasmEdge socket extension, v0.4.3 SDK generation - plus the
+	// next-generation sock_recv_from_v2 for datagram receives, the one
+	// receive shape that reports the source port (see the generation
+	// notes in syscall/net_wasip1_wasmedge.go). Wasm-level parameter
+	// lists mirror WasmEdge's own host functions: SockSendToV1 and
+	// SockRecvFromV2 in lib/host/wasi/wasifunc.cpp.
 	errnoFn("sock_open", []api.ValueType{i32, i32, i32}, h.sockOpen)
 	errnoFn("sock_bind", []api.ValueType{i32, i32, i32}, h.sockBind)
 	errnoFn("sock_listen", []api.ValueType{i32, i32}, h.sockListen)
@@ -160,6 +165,10 @@ func (h *wasiHost) register(ctx context.Context, r wazero.Runtime) error {
 	errnoFn("sock_connect", []api.ValueType{i32, i32, i32}, h.sockConnect)
 	errnoFn("sock_send", []api.ValueType{i32, i32, i32, i32, i32}, h.sockSend)
 	errnoFn("sock_recv", []api.ValueType{i32, i32, i32, i32, i32, i32}, h.sockRecv)
+	// (fd, iovs, iovsLen, addr, port, flags, sendLenPtr)
+	errnoFn("sock_send_to", []api.ValueType{i32, i32, i32, i32, i32, i32, i32}, h.sockSendTo)
+	// (fd, iovs, iovsLen, addr, flags, portPtr, recvLenPtr, oflagsPtr)
+	errnoFn("sock_recv_from_v2", []api.ValueType{i32, i32, i32, i32, i32, i32, i32, i32}, h.sockRecvFromV2)
 	errnoFn("sock_shutdown", []api.ValueType{i32, i32}, h.sockShutdown)
 	errnoFn("sock_getlocaladdr", []api.ValueType{i32, i32, i32, i32}, h.sockGetlocaladdr)
 	errnoFn("sock_getpeeraddr", []api.ValueType{i32, i32, i32, i32}, h.sockGetpeeraddr)
@@ -298,6 +307,23 @@ func (h *wasiHost) fdRead(mod api.Module, s []uint64) uint16 {
 		return wasiSuccess
 	case fdKindSock:
 		sk := e.sock
+		if sk.sotype == wasmedgeSockDgram {
+			// One datagram per read; anything beyond the iovec
+			// capacity is dropped, as recv on a datagram does.
+			p, errno := h.waitPacketLocked(sk)
+			h.mu.Unlock()
+			if errno != 0 {
+				return errno
+			}
+			n, ok := scatterIOVecs(mem, iovs, iovsLen, p.data)
+			if !ok {
+				return wasiEFAULT
+			}
+			if !mem.WriteUint32Le(nreadPtr, n) {
+				return wasiEFAULT
+			}
+			return wasiSuccess
+		}
 		if sk.ln != nil {
 			h.mu.Unlock()
 			return wasiENOTSUP
@@ -375,6 +401,9 @@ func (h *wasiHost) fdClose(mod api.Module, s []uint64) uint16 {
 		sk := e.sock
 		if sk.conn != nil {
 			sk.conn.Close()
+		}
+		if sk.udp != nil && net.Conn(sk.udp) != sk.conn {
+			sk.udp.Close()
 		}
 		if sk.ln != nil {
 			sk.ln.Close()
@@ -599,9 +628,7 @@ func (h *wasiHost) sockOpen(mod api.Module, s []uint64) uint16 {
 		return wasiEAFNOSUPPORT
 	}
 	switch sotype {
-	case wasmedgeSockStream:
-	case wasmedgeSockDgram:
-		return wasiEPROTONOSUPPORT // datagram sockets not implemented yet
+	case wasmedgeSockStream, wasmedgeSockDgram:
 	default:
 		return wasiEPROTONOSUPPORT
 	}
@@ -622,17 +649,41 @@ func (h *wasiHost) sockBind(mod api.Module, s []uint64) uint16 {
 		return wasiEFAULT
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	sk, errno := h.sock(fd)
 	if errno != 0 {
+		h.mu.Unlock()
 		return errno
 	}
-	if sk.conn != nil || sk.ln != nil || sk.connecting {
+	if sk.conn != nil || sk.ln != nil || sk.connecting || sk.udp != nil {
+		h.mu.Unlock()
 		return wasiEINVAL
 	}
 	sk.boundIP = ipFor(sk.family, ip)
 	sk.boundPort = port
-	h.tracef("sock_bind fd=%d %s", fd, hostAddr(sk.boundIP, sk.boundPort))
+	if sk.sotype != wasmedgeSockDgram {
+		h.tracef("sock_bind fd=%d %s", fd, hostAddr(sk.boundIP, sk.boundPort))
+		h.mu.Unlock()
+		return wasiSuccess
+	}
+
+	// A datagram socket goes live at bind time: there is no listen
+	// step, and sock_getlocaladdr must report the real chosen port.
+	laddr := &net.UDPAddr{IP: sk.boundIP, Port: int(sk.boundPort)}
+	network := udpNet(sk.family)
+	h.mu.Unlock()
+
+	uc, err := net.ListenUDP(network, laddr)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err != nil {
+		h.tracef("sock_bind fd=%d udp %s: %v", fd, laddr, err)
+		return mapNetErrno(err)
+	}
+	sk.udp = uc
+	h.startPacketPump(sk, uc)
+	h.notify()
+	h.tracef("sock_bind fd=%d udp on %s", fd, uc.LocalAddr())
 	return wasiSuccess
 }
 
@@ -735,6 +786,9 @@ func (h *wasiHost) sockConnect(mod api.Module, s []uint64) uint16 {
 		h.mu.Unlock()
 		return wasiEINVAL
 	}
+	if sk.sotype == wasmedgeSockDgram {
+		return h.sockConnectDgramLocked(sk, fd, dst, port)
+	}
 	addr := net.JoinHostPort(dst.String(), fmt.Sprint(port))
 	var laddr *net.TCPAddr
 	if sk.boundIP != nil || sk.boundPort != 0 {
@@ -785,6 +839,50 @@ func (h *wasiHost) sockConnect(mod api.Module, s []uint64) uint16 {
 	return wasiEINPROGRESS
 }
 
+// sockConnectDgramLocked finishes sock_connect for a datagram socket.
+// UDP connect never waits for a peer, so it completes synchronously
+// even on nonblocking sockets. Called with h.mu held; unlocks it.
+func (h *wasiHost) sockConnectDgramLocked(sk *sockFD, fd int32, dst net.IP, port uint32) uint16 {
+	raddr := &net.UDPAddr{IP: dst, Port: int(port)}
+	network := udpNet(sk.family)
+	var laddr *net.UDPAddr
+	if sk.udp != nil {
+		// Bound before connect: keep the local address. The port
+		// belongs to the bind-time socket, so close it and redial
+		// from the same address (host-local, so the rebind race is
+		// theoretical). Datagrams queued before the connect are
+		// dropped with it.
+		laddr = sk.udp.LocalAddr().(*net.UDPAddr)
+		sk.udp.Close()
+		sk.udp = nil
+		sk.rerr = nil
+		sk.packets = nil
+		sk.pumpGen++ // detach the bind-time pump
+	} else if sk.boundIP != nil || sk.boundPort != 0 {
+		laddr = &net.UDPAddr{IP: sk.boundIP, Port: int(sk.boundPort)}
+	}
+	h.mu.Unlock()
+
+	uc, err := net.DialUDP(network, laddr, raddr)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err != nil {
+		h.tracef("sock_connect fd=%d udp %s: %v", fd, raddr, err)
+		errno := mapNetErrno(err)
+		if errno == wasiSuccess {
+			errno = wasiEIO
+		}
+		return errno
+	}
+	sk.udp = uc
+	sk.conn = uc // the plain fd_write path sends datagrams
+	h.startPacketPump(sk, uc)
+	h.notify()
+	h.tracef("sock_connect fd=%d udp %s -> %s", fd, uc.LocalAddr(), uc.RemoteAddr())
+	return wasiSuccess
+}
+
 func (h *wasiHost) sockSend(mod api.Module, s []uint64) uint16 {
 	fd, iovs, iovsLen, sendLenPtr := int32(s[0]), uint32(s[1]), uint32(s[2]), uint32(s[4])
 	mem := mod.Memory()
@@ -816,6 +914,171 @@ func (h *wasiHost) sockRecv(mod api.Module, s []uint64) uint16 {
 		return errno
 	}
 	if !mod.Memory().WriteUint32Le(uint32(s[5]), 0) {
+		return wasiEFAULT
+	}
+	return wasiSuccess
+}
+
+// sockSendTo implements the middle-generation sock_send_to
+// (WasmEdge's SockSendToV1): destination as {buf, buf_len} raw IP
+// bytes - 4 or 16 only, the 128-byte tagged form belongs to _v2 -
+// plus a host-order port.
+func (h *wasiHost) sockSendTo(mod api.Module, s []uint64) uint16 {
+	fd, iovs, iovsLen := int32(s[0]), uint32(s[1]), uint32(s[2])
+	addrPtr, port, sendLenPtr := uint32(s[3]), uint32(s[4]), uint32(s[6])
+	mem := mod.Memory()
+	data, ok := gatherIOVecs(mem, iovs, iovsLen)
+	if !ok {
+		return wasiEFAULT
+	}
+	ip, _, bufLen, ok := readWasiAddressIP(mem, addrPtr)
+	if !ok {
+		return wasiEFAULT
+	}
+	if bufLen != 4 && bufLen != 16 {
+		return wasiEINVAL
+	}
+	h.mu.Lock()
+	sk, errno := h.sock(fd)
+	if errno != 0 {
+		h.mu.Unlock()
+		return errno
+	}
+	if sk.sotype != wasmedgeSockDgram {
+		h.mu.Unlock()
+		return wasiENOTSUP
+	}
+	if sk.conn != nil {
+		h.mu.Unlock()
+		return wasiEISCONN
+	}
+	dst := ipFor(sk.family, ip)
+	if dst == nil {
+		h.mu.Unlock()
+		return wasiEINVAL
+	}
+	if sk.udp == nil {
+		// sendto on a never-bound socket: bind the wildcard first,
+		// like the kernel would.
+		network := udpNet(sk.family)
+		h.mu.Unlock()
+		uc, err := net.ListenUDP(network, nil)
+		h.mu.Lock()
+		if err != nil {
+			h.mu.Unlock()
+			errno := mapNetErrno(err)
+			if errno == wasiSuccess {
+				errno = wasiEIO
+			}
+			return errno
+		}
+		if sk.udp == nil {
+			sk.udp = uc
+			h.startPacketPump(sk, uc)
+		} else {
+			uc.Close() // lost a race with a concurrent sender
+		}
+	}
+	uc := sk.udp
+	h.mu.Unlock()
+
+	n, err := uc.WriteToUDP(data, &net.UDPAddr{IP: dst, Port: int(port)})
+	if err != nil {
+		h.tracef("sock_send_to fd=%d %s:%d: %v", fd, dst, port, err)
+		errno := mapNetErrno(err)
+		if errno == wasiSuccess {
+			errno = wasiEIO
+		}
+		return errno
+	}
+	if !mem.WriteUint32Le(sendLenPtr, uint32(n)) {
+		return wasiEFAULT
+	}
+	return wasiSuccess
+}
+
+// sockRecvFromV2 implements the next-generation sock_recv_from_v2
+// (WasmEdge 0.12+, SockRecvFromV2): dequeues one datagram, reporting
+// the source address through the {buf, buf_len} struct - the 128-byte
+// buffer is family-tagged (family u16 LE at offset 0, raw IP from
+// offset 2), the bare 4/16 forms take raw IP only - and the source
+// port host-order through the port out-pointer (the WasmEdge 0.14+
+// behavior; 0.12-0.13 stored raw big-endian sin_port there).
+func (h *wasiHost) sockRecvFromV2(mod api.Module, s []uint64) uint16 {
+	fd, iovs, iovsLen := int32(s[0]), uint32(s[1]), uint32(s[2])
+	addrPtr, portPtr, recvLenPtr, oflagsPtr := uint32(s[3]), uint32(s[5]), uint32(s[6]), uint32(s[7])
+	mem := mod.Memory()
+	bufPtr, ok1 := mem.ReadUint32Le(addrPtr)
+	bufLen, ok2 := mem.ReadUint32Le(addrPtr + 4)
+	if !ok1 || !ok2 {
+		return wasiEFAULT
+	}
+	if bufLen != 4 && bufLen != 16 && bufLen != 128 {
+		return wasiEINVAL
+	}
+	h.mu.Lock()
+	sk, errno := h.sock(fd)
+	if errno != 0 {
+		h.mu.Unlock()
+		return errno
+	}
+	if sk.sotype != wasmedgeSockDgram {
+		h.mu.Unlock()
+		return wasiENOTSUP
+	}
+	family := sk.family
+	p, errno := h.waitPacketLocked(sk)
+	h.mu.Unlock()
+	if errno != 0 {
+		return errno
+	}
+
+	n, ok := scatterIOVecs(mem, iovs, iovsLen, p.data)
+	if !ok {
+		return wasiEFAULT
+	}
+	var oflags uint32
+	if int(n) < len(p.data) {
+		oflags = 1 // RECV_DATA_TRUNCATED; the datagram's tail is gone
+	}
+
+	// Source address, in the socket's own family (a v4 source on a v6
+	// socket comes back v4-mapped, as the kernel reports it).
+	var fam uint16
+	var raw net.IP
+	if family == wasmedgeAFInet4 {
+		fam, raw = wasmedgeAFInet4, p.addr.IP.To4()
+		if raw == nil {
+			raw = make(net.IP, 4)
+		}
+	} else {
+		fam, raw = wasmedgeAFInet6, p.addr.IP.To16()
+		if raw == nil {
+			raw = make(net.IP, 16)
+		}
+	}
+	if bufLen == 128 {
+		tagged := make([]byte, 2+len(raw))
+		binary.LittleEndian.PutUint16(tagged, fam)
+		copy(tagged[2:], raw)
+		if !mem.Write(bufPtr, tagged) {
+			return wasiEFAULT
+		}
+	} else {
+		if uint32(len(raw)) > bufLen {
+			raw = raw[:bufLen]
+		}
+		if !mem.Write(bufPtr, raw) {
+			return wasiEFAULT
+		}
+	}
+	if !mem.WriteUint32Le(portPtr, uint32(p.addr.Port)) {
+		return wasiEFAULT
+	}
+	if !mem.WriteUint32Le(recvLenPtr, n) {
+		return wasiEFAULT
+	}
+	if !mem.WriteUint32Le(oflagsPtr, oflags) {
 		return wasiEFAULT
 	}
 	return wasiSuccess
@@ -877,6 +1140,8 @@ func (h *wasiHost) sockGetaddr(mod api.Module, s []uint64, peer bool) uint16 {
 		} else {
 			a = sk.conn.LocalAddr()
 		}
+	case sk.udp != nil && !peer:
+		a = sk.udp.LocalAddr()
 	case sk.ln != nil && !peer:
 		a = sk.ln.Addr()
 	default:
