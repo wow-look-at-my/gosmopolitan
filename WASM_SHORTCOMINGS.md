@@ -529,10 +529,15 @@ running goroutine for the length of the profiling window:
   (size the pool > GOMAXPROCS so a parked worker can cover far-future timers;
   otherwise CPU loops stay gate-armed and pay ~4x call overhead); (2) an
   event handler blocked forever can head-of-line-block later host events;
-  (3) a rare `fatal error: wirep: invalid p state` (p->m set while _Pidle)
-  in the GOMAXPROCS=4 runtime suite (~1/10 batches; not observed at the
-  default GOMAXPROCS=1 or =2) - a P handoff race in the multi-P bring-up,
-  tracked for the B4 bug sweep; (4) a syscall/js operation from a worker
+  (3) a rare crash class in the GOMAXPROCS=4 runtime suite only (never at
+  the default GOMAXPROCS=1 or at 2): observed once as `fatal error:
+  wirep: invalid p state` (p->m set while _Pidle - two Ms racing wirep on
+  one P, i.e. a double P handoff; on a build predating the idle-mark
+  gating fix, not reproduced since) and once as `fatal: systemstack
+  called from unexpected goroutine` + worker memory-access-out-of-bounds
+  trap (~1/20 suite runs on the current build, no stack captured - the
+  module traps during the report). Both point at a residual race in the
+  multi-P scheduler bring-up; tracked for the B4 bug sweep; (4) a syscall/js operation from a worker
   M migrates its goroutine to the main M per call (each blocked-then
   -rescheduled goroutine pays one migration per bounce back to a worker);
   host-call forwarding, which would avoid the bounce, is B4. The affinity
