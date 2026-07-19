@@ -39,3 +39,6 @@ func wasmSchedNudgeWake() {
 
 func wasmThreadsPidleput(pp *p) {
 }
+
+func wasmCheckdeadDump() {
+}

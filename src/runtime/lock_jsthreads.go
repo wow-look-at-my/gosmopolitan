@@ -800,3 +800,41 @@ func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
 	}
 	return nil, false
 }
+
+// wasmCheckdeadDump prints the scheduler's M accounting and per-M state
+// on checkdead's fatal paths under GOWASM=threads. sched.lock must be
+// held. Diagnostic only; the caller throws right after.
+//
+//go:nowritebarrierrec
+func wasmCheckdeadDump() {
+	assertLockHeld(&sched.lock)
+	print("runtime: checkdead: mcount=", mcount(),
+		" nmidle=", sched.nmidle,
+		" nmidlelocked=", sched.nmidlelocked,
+		" nmsys=", sched.nmsys,
+		" npidle=", sched.npidle.Load(),
+		" nmspinning=", sched.nmspinning.Load(),
+		" runqsize=", sched.runq.size, "\n")
+	for mp := allm; mp != nil; mp = mp.alllink {
+		lockedgid := uint64(0)
+		if lg := mp.lockedg.ptr(); lg != nil {
+			lockedgid = lg.goid
+		}
+		curgid := uint64(0)
+		if mp.curg != nil {
+			curgid = mp.curg.goid
+		}
+		onMidle := mp.idleNode.prev != 0 || mp.idleNode.next != 0 ||
+			sched.midle.head() == unsafe.Pointer(mp)
+		print("runtime: checkdead: m", mp.id,
+			" blocked=", mp.blocked,
+			" spinning=", mp.spinning,
+			" lockedInt=", mp.lockedInt,
+			" lockedg=", lockedgid,
+			" curg=", curgid,
+			" onmidle=", onMidle,
+			" nextp=", mp.nextp != 0,
+			" p=", mp.p != 0,
+			" parknote=", mp.park.key, "\n")
+	}
+}

@@ -7054,11 +7054,15 @@ func checkdead() {
 	}
 	if run < 0 {
 		print("runtime: checkdead: nmidle=", sched.nmidle, " nmidlelocked=", sched.nmidlelocked, " mcount=", mcount(), " nmsys=", sched.nmsys, "\n")
+		if GOARCH == "wasm" && wasmThreadsEnabled {
+			wasmCheckdeadDump()
+		}
 		unlock(&sched.lock)
 		throw("checkdead: inconsistent counts")
 	}
 
 	grunning := 0
+	sawRunnable := false
 	forEachG(func(gp *g) {
 		if isSystemGoroutine(gp, false) {
 			return
@@ -7071,11 +7075,37 @@ func checkdead() {
 		case _Grunnable,
 			_Grunning,
 			_Gsyscall:
+			if GOARCH == "wasm" && wasmThreadsEnabled {
+				sawRunnable = true
+				return
+			}
 			print("runtime: checkdead: find g ", gp.goid, " in status ", s, "\n")
 			unlock(&sched.lock)
 			throw("checkdead: runnable g")
 		}
 	})
+	if sawRunnable {
+		// GOWASM=threads: a runnable goroutine while every M is accounted
+		// idle is a transient, self-healing state here, not a deadlock -
+		// on other platforms an M on the idle lists is by invariant asleep
+		// in mPark, but the main M parks in the host's JavaScript event
+		// loop and EXECUTES Go code (wasmMainParkWake: self-serve, kicks,
+		// queue pushes) while still linked on sched.midle, so the idle
+		// counts can transiently cover every M although wakes are in
+		// flight (observed: mput's checkdead on the last parking M threw
+		// while the main M was awake mid-wake-path with two globrunq gs
+		// whose wake nudge was pending). Progress is guaranteed without
+		// this checkdead: parked workers' watchdog parks re-examine the
+		// run queues at most 250ms out (wasmWorkerParkNote) and a host
+		// resume re-enters the scheduler (wasmMainParkWake); nudge both
+		// so the pickup is immediate rather than a watchdog tick away.
+		// Real deadlocks (no runnable goroutines anywhere) still fall
+		// through to the checks below, and are reported once the host's
+		// exit-time deadlock probe fires (eventLoopCanWake).
+		wasmSchedNudgeWake()
+		wasmWakeMainThread()
+		return
+	}
 	if grunning == 0 { // possible if main goroutine calls runtime·Goexit()
 		unlock(&sched.lock) // unlock so that GODEBUG=scheddetail=1 doesn't hang
 		fatal("no goroutines (main called runtime.Goexit) - deadlock!")
