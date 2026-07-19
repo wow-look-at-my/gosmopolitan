@@ -97,6 +97,20 @@ func checkSockpairPoll() {
 		fail("sockpairpoll", "socketpair: %v", err)
 		return
 	}
+	// Diagnostic detail, never a verdict: net.FileConn prefers fcntl
+	// F_DUPFD_CLOEXEC and falls back to plain dup(2) when that errors
+	// with EINVAL/ENOSYS. On the macOS CI runner the fast path DID
+	// error (2026-07-19, wave-3 item-1 followup) while dup(2) was
+	// still undispatched there, killing FileConn outright; dup is
+	// emulated now, and this detail names the fast path's errno on
+	// every host so the fallback's cause stays attributable in CI
+	// logs.
+	dupNote := "dupcloexec=ok"
+	if r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fds[0]), syscall.F_DUPFD_CLOEXEC, 0); errno != 0 {
+		dupNote = fmt.Sprintf("dupcloexec=%v", errno)
+	} else {
+		syscall.Close(int(r))
+	}
 	f0 := os.NewFile(uintptr(fds[0]), "sockpair0")
 	f1 := os.NewFile(uintptr(fds[1]), "sockpair1")
 	defer f0.Close()
@@ -178,6 +192,6 @@ func checkSockpairPoll() {
 	case !errors.As(err, &ne) || !ne.Timeout():
 		fail("sockpairpoll", "read error %v, want timeout", err)
 	default:
-		ok("sockpairpoll")
+		ok("sockpairpoll", dupNote)
 	}
 }

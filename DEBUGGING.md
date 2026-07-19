@@ -3140,3 +3140,39 @@ new emulation; names added to apetest probeOkChecks):
   not a buffered fast path), the reverse echo, then a
   SetReadDeadline-in-the-past read that must time out - netpollopen
   registration, WSAPoll readiness and pollDesc deadlines on pair fds.
+
+## Wave 3 item 1 CI followup (2026-07-19): darwin needs dup(2) too
+
+Item 1's push failed CI on test (macos-latest) only - all three origin
+binaries, identically, at exactly one check:
+
+    FAIL sockpairpoll: FileConn(end 0): file file+net sockpair0: dup:
+    function not implemented
+
+(ubuntu and test-windows legs were green.) Root cause: the same
+net.FileConn dependency item 1 fixed on NT was ALSO missing on darwin.
+poll.DupCloseOnExec first tries fcntl F_DUPFD_CLOEXEC; on the macOS
+runner that returned EINVAL-or-ENOSYS (the two errnos DupCloseOnExec
+swallows before falling back - the log cannot distinguish them), and
+the fallback dupCloseOnExecOld then issued plain dup(2) = SYS_DUP(23,
+arm64 numbering), which had no case in the darwin slow-path dispatcher
+-> ENOSYS -> FileConn fails. Linux has the real syscall and NT got
+ntEmuDup in item 1, which is why only the darwin leg went red.
+
+Fix (syscall_cosmo_arm64.go + os_cosmo_arm64.go): dlsym Apple's dup -
+a fixed-arg libc entry with dup(2)'s exact POSIX semantics (lowest
+free fd, same open file description, CLOEXEC clear) - and dispatch
+sysDUP=23 to it, the same shape as every other darwin slow-path call.
+dupCloseOnExecOld's follow-up CloseOnExec (fcntl F_SETFD, proven
+working on darwin - the pipe2 O_CLOEXEC emulation depends on it and
+execchild is green) then sets the flag.
+
+Open question, deliberately instrumented rather than guessed at: WHY
+the F_DUPFD_CLOEXEC fast path errored. darwinFcntl translates the
+Linux cmd 1030 to Apple's 67 and the same fcntl plumbing passes
+F_GETFL/F_SETFL/F_SETFD arguments correctly (nonblocking sockets,
+deadlines and exec pipes all depend on those and are green), so the
+errno was swallowed before anything logged it. The sockpairpoll probe
+now prints the fast path's live verdict as an ok-line detail
+(dupcloexec=ok / dupcloexec=<errno>) on every host, so the next CI
+run pins the actual errno without risking a verdict on it.
