@@ -8,3 +8,20 @@ package runtime
 
 // pause is only used on wasm.
 func pause(newsp uintptr) { panic("unreachable") }
+
+// GOWASM=threads (js/wasm only) hooks referenced from shared scheduler
+// code; see os_wasmthreads.go for the real implementations. With the
+// constant false every use is dead-code eliminated.
+const wasmThreadsEnabled = false
+
+func wasmClampGOMAXPROCS(n int32) int32 { return 1 }
+
+func wasmMaxMCount() int32 { return 0x7fffffff }
+
+//go:nosplit
+func wasmWakeMainThread() {}
+
+//go:nosplit
+func wasmSchedNudgeWake() {}
+
+func wasmThreadsPidleput(pp *p) {}
