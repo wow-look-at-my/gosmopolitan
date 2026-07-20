@@ -56,7 +56,6 @@ import (
 	"internal/abi"
 	"internal/goarch"
 	"internal/goexperiment"
-	"internal/stringslite"
 )
 
 type suspendGState struct {
@@ -468,10 +467,10 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) (bool, uintptr) {
 	}
 	// Check the inner-most name
 	u, uf := newInlineUnwinder(f, pc)
-	name := u.srcFunc(uf).name()
-	if stringslite.HasPrefix(name, "runtime.") ||
-		stringslite.HasPrefix(name, "internal/runtime/") ||
-		stringslite.HasPrefix(name, "reflect.") {
+	npfx, name := u.srcFunc(uf).namePieces()
+	if hasPrefixPieces(npfx, name, "runtime.") ||
+		hasPrefixPieces(npfx, name, "internal/runtime/") ||
+		hasPrefixPieces(npfx, name, "reflect.") {
 		// For now we never async preempt the runtime or
 		// anything closely tied to the runtime. Known issues
 		// include: various points in the scheduler ("don't

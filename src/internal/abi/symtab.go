@@ -23,6 +23,20 @@ const (
 	// PCLnTabMagic value used in Go 1.20 and later.
 	// A ":" was added to generated symbol names (#37762).
 	Go120PCLnTabMagic PCLnTabMagic = 0xfffffff1
+	// PCLnTabMagic value used by this fork's compact pclntab format:
+	// _func records are 4-byte aligned with a 40-byte fixed part, and the
+	// trailing pcdata/funcdata offset arrays store only present entries,
+	// described by the pcdataMask/funcdataMask presence bitmaps (which
+	// replaced the npcdata count and the 0 / ^uint32(0) sentinel slots).
+	// The function name table shares package-path prefixes between names:
+	// it holds a uint32 prefix count, the prefix string offsets and the
+	// NUL-terminated prefix strings, followed by per-name entries of
+	// uvarint(prefix index) plus the NUL-terminated name suffix. The file
+	// name table shares directory prefixes between file names the same
+	// way (uint32 dir count, dir string offsets, dir strings, then
+	// uvarint(dir index) plus NUL-terminated base name entries).
+	// See runtime/runtime2.go:_func and cmd/link/internal/ld/pcln.go.
+	CosmoPCLnTabMagic PCLnTabMagic = 0xffffffc1
 
 	// CurrentPCLnTabMagic is the value emitted by the current toolchain.
 	// This is written by the linker to the pcHeader and read by the
@@ -31,7 +45,7 @@ const (
 	// Change this value when updating the pclntab version.
 	// Changing this exported value is OK because is an
 	// internal package.
-	CurrentPCLnTabMagic = Go120PCLnTabMagic
+	CurrentPCLnTabMagic = CosmoPCLnTabMagic
 )
 
 // A FuncFlag records bits about a function, passed to the runtime.
@@ -104,6 +118,12 @@ const ArgsSizeUnknown = -0x80000000
 // IDs for PCDATA and FUNCDATA tables in Go binaries.
 //
 // These must agree with ../../../runtime/funcdata.h.
+//
+// NOTE: the compact functab format (CosmoPCLnTabMagic) packs pcdata and
+// funcdata presence into one uint8 bitmap each, so every index must stay
+// < 8. Adding an index >= 8 requires widening _func.pcdataMask /
+// _func.funcdataMask in runtime/runtime2.go and the writer in
+// cmd/link/internal/ld/pcln.go (which link-time-checks this bound).
 const (
 	PCDATA_UnsafePoint   = 0
 	PCDATA_StackMapIndex = 1
@@ -119,6 +139,13 @@ const (
 	FUNCDATA_ArgInfo            = 5
 	FUNCDATA_ArgLiveInfo        = 6
 	FUNCDATA_WrapInfo           = 7
+)
+
+// Compile-time checks that the highest PCDATA/FUNCDATA indices fit the
+// uint8 presence bitmaps of the compact functab format (see above).
+const (
+	_ uint = 7 - PCDATA_PanicBounds
+	_ uint = 7 - FUNCDATA_WrapInfo
 )
 
 // Special values for the PCDATA_UnsafePoint table.

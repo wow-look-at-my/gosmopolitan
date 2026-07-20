@@ -5065,7 +5065,8 @@ func preemptPark(gp *g) {
 			throw("preempt at unknown pc")
 		}
 		if f.flag&abi.FuncFlagSPWrite != 0 {
-			println("runtime: unexpected SPWRITE function", funcname(f), "in async preempt")
+			fpfx, fname := funcnamePieces(f)
+			print("runtime: unexpected SPWRITE function ", fpfx, fname, " in async preempt\n")
 			throw("preempt SPWRITE")
 		}
 	}
@@ -6461,7 +6462,8 @@ func sigprof(pc, sp, lr uintptr, gp *g, mp *m) {
 	// received from somewhere else (with _LostSIGPROFDuringAtomic64 as pc).
 	if GOARCH == "mips" || GOARCH == "mipsle" || GOARCH == "arm" {
 		if f := findfunc(pc); f.valid() {
-			if stringslite.HasPrefix(funcname(f), "internal/runtime/atomic") {
+			fpfx, fname := funcnamePieces(f)
+			if hasPrefixPieces(fpfx, fname, "internal/runtime/atomic") {
 				cpuprof.lostAtomic++
 				return
 			}
