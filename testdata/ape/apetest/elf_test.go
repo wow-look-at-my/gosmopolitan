@@ -83,11 +83,32 @@ func TestELFEntryPointAbove4GB(t *testing.T) {
 	assert.GreaterOrEqual(t, entry, uint64(0x100000000), "entry point must be >= 4GB")
 }
 
-func TestELFParseable(t *testing.T) {
+// payloadELF parses the amd64 payload's ELF structure. For default and
+// slim builds the payload slice at elfOffset is self-contained. A compact
+// (GOCOSMODEBUG=compact) build's ELF header instead references the debug
+// view appended to the whole file - the shape debuggers see after
+// self-assimilation - so parse that form: the boot header overlaid on the
+// full binary, exactly what the APE's printf writes.
+func payloadELF(t *testing.T) *elf.File {
+	t.Helper()
 	data := extractELF(t)
+	if le64(data[40:48]) == 0 {
+		f, err := elf.NewFile(bytes.NewReader(data))
+		require.NoError(t, err, "must parse as valid ELF")
+		return f
+	}
+	bin := loadBinary(t)
+	boot := bootHeaderByMachine(t, elf.EM_X86_64)
+	require.NotNil(t, boot, "compact build must embed an x86-64 boot header")
+	assim := append([]byte(nil), bin...)
+	copy(assim[:64], boot[:64])
+	f, err := elf.NewFile(bytes.NewReader(assim))
+	require.NoError(t, err, "assimilated compact binary must parse as valid ELF")
+	return f
+}
 
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err, "must parse as valid ELF")
+func TestELFParseable(t *testing.T) {
+	f := payloadELF(t)
 	defer f.Close()
 
 	assert.Equal(t, elf.ELFCLASS64, f.Class)
@@ -96,10 +117,7 @@ func TestELFParseable(t *testing.T) {
 }
 
 func TestELFHasLoadSegments(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	var loadCount int
@@ -112,10 +130,7 @@ func TestELFHasLoadSegments(t *testing.T) {
 }
 
 func TestELFHasExecutableSegment(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	var hasExec bool
@@ -129,10 +144,7 @@ func TestELFHasExecutableSegment(t *testing.T) {
 }
 
 func TestELFNoRWXSegments(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	for _, p := range f.Progs {
@@ -148,10 +160,7 @@ func TestELFNoRWXSegments(t *testing.T) {
 // asserted via the program headers, which are all any APE boot path reads.
 
 func TestELFHasTextSegment(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	entry := f.Entry
@@ -167,10 +176,7 @@ func TestELFHasTextSegment(t *testing.T) {
 }
 
 func TestELFHasDataSegment(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	var hasData bool
@@ -183,14 +189,43 @@ func TestELFHasDataSegment(t *testing.T) {
 	assert.True(t, hasData, "must have a non-empty writable data segment")
 }
 
-// TestELFPayloadStripped verifies the default-build contract: the embedded
-// payload is stripped to its loadable span, with the ELF header's section
-// fields zeroed (no section header table, no .symtab, no DWARF - debug
-// info lives in the .dbg/.aarch64.elf sidecars instead).
+// TestELFPayloadStripped verifies the stripped-payload contract: the
+// embedded payload is cut at its loadable span and carries no section
+// table of its own. In the default and slim modes the ELF header's
+// section fields are zeroed (debug info lives in the .dbg/.aarch64.elf
+// sidecars); a GOCOSMODEBUG=compact build instead points them at the
+// compact debug view appended past the load span, so that the assimilated
+// binary is debugger-readable on its own - the view's placement is
+// validated here, its contents in TestFatPayloadsStripped.
 func TestELFPayloadStripped(t *testing.T) {
 	data := extractELF(t)
 
-	assert.Zero(t, le64(data[40:48]), "e_shoff must be 0 in a stripped payload")
+	if shoff := le64(data[40:48]); shoff != 0 {
+		// Compact build: the section fields must describe a table past
+		// the payload's loadable span (p_offset values in a stored
+		// payload are absolute file offsets), inside the binary.
+		bin := loadBinary(t)
+		phoff := le64(data[32:40])
+		phentsize := uint64(le16(data[54:56]))
+		phnum := uint64(le16(data[56:58]))
+		extent := uint64(elfOffset) + phoff + phnum*phentsize
+		for i := uint64(0); i < phnum; i++ {
+			ph := data[phoff+i*phentsize:]
+			if end := le64(ph[8:16]) + le64(ph[32:40]); end > extent {
+				extent = end
+			}
+		}
+		assert.GreaterOrEqual(t, shoff, extent,
+			"compact e_shoff must reference a view past the payload's loadable span")
+		shnum := le16(data[60:62])
+		shstrndx := le16(data[62:64])
+		assert.NotZero(t, shnum, "compact e_shnum must be set")
+		assert.Less(t, shstrndx, shnum, "compact e_shstrndx must be in range")
+		assert.LessOrEqual(t, shoff+uint64(shnum)*64, uint64(len(bin)),
+			"compact section header table must lie inside the binary")
+		return
+	}
+
 	assert.Zero(t, le16(data[60:62]), "e_shnum must be 0 in a stripped payload")
 	assert.Zero(t, le16(data[62:64]), "e_shstrndx must be 0 in a stripped payload")
 
@@ -204,10 +239,7 @@ func TestELFPayloadStripped(t *testing.T) {
 }
 
 func TestELFSegmentAlignment(t *testing.T) {
-	data := extractELF(t)
-
-	f, err := elf.NewFile(bytes.NewReader(data))
-	require.NoError(t, err)
+	f := payloadELF(t)
 	defer f.Close()
 
 	for _, p := range f.Progs {

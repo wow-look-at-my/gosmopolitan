@@ -139,11 +139,28 @@ var attrTypeMap = map[string]contentType{
 // type of the lowercase named attribute.
 func attrType(name string) contentType {
 	if strings.HasPrefix(name, "data-") {
-		// Strip data- so that custom attribute heuristics below are
-		// widely applied.
-		// Treat data-action as URL below.
-		name = name[5:]
-	} else if prefix, short, ok := strings.Cut(name, ":"); ok {
+		// Custom data attributes (data-*) store private page/application data.
+		// https://www.w3.org/TR/html5/dom.html#embedding-custom-non-visible-data-with-the-data-*-attributes
+		//
+		// We do NOT strip the data- prefix and look up the remainder in
+		// attrTypeMap, because that would incorrectly classify attributes
+		// like data-data or data-src as URL-typed (matching the <object data>
+		// or <img src> attribute types).
+		//
+		// Instead, only apply event handler and URL-like heuristics to the
+		// suffix, to catch attributes like data-onclick or data-url.
+		short := name[5:]
+		if strings.HasPrefix(short, "on") {
+			return contentTypeJS
+		}
+		if strings.HasSuffix(short, "src") ||
+			strings.HasSuffix(short, "uri") ||
+			strings.HasSuffix(short, "url") {
+			return contentTypeURL
+		}
+		return contentTypePlain
+	}
+	if prefix, short, ok := strings.Cut(name, ":"); ok {
 		if prefix == "xmlns" {
 			return contentTypeURL
 		}
@@ -159,16 +176,12 @@ func attrType(name string) contentType {
 	}
 
 	// Heuristics to prevent "javascript:..." injection in custom
-	// data attributes and custom attributes like g:tweetUrl.
-	// https://www.w3.org/TR/html5/dom.html#embedding-custom-non-visible-data-with-the-data-*-attributes
-	// "Custom data attributes are intended to store custom data
-	//  private to the page or application, for which there are no
-	//  more appropriate attributes or elements."
-	// Developers seem to store URL content in data URLs that start
-	// or end with "URI" or "URL".
-	if strings.Contains(name, "src") ||
-		strings.Contains(name, "uri") ||
-		strings.Contains(name, "url") {
+	// attributes like g:tweetUrl.
+	// Developers seem to store URL content in attributes that end
+	// with "src", "uri", or "url".
+	if strings.HasSuffix(name, "src") ||
+		strings.HasSuffix(name, "uri") ||
+		strings.HasSuffix(name, "url") {
 		return contentTypeURL
 	}
 	return contentTypePlain
