@@ -8,7 +8,10 @@
 // host-skipped on macOS, which lacks the dispatch),
 // readv/writev + net.Buffers (all hosts),
 // os.Executable, argv/env, working-directory
-// syscalls, and - since the wave-8 signal work - SIGSEGV recovery
+// syscalls, exec.LookPath/exec.Command name resolution over the
+// host-format PATH (';'-separated drive-letter entries with PATHEXT
+// suffix probing on NT hosts), and - since the wave-8 signal work -
+// SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, wait-status
 // signal decoding, CPU profiling (host-skipped on macOS, which
 // lacks SIGPROF delivery), and process-group signaling (Setpgid
@@ -18,7 +21,15 @@
 // every check prints exactly one line starting with "ok <name>" or
 // "FAIL <name>: <detail>", and the process exits 0 iff no check failed.
 //
-// Usage: RUNTIMEPROBE_MARK=<value> runtimeprobe <value>
+// Usage: RUNTIMEPROBE_MARK=<value> runtimeprobe <value> --help -x --key=value trailing-arg
+//
+// The fixed flag-shaped tail after <value> is part of the argv
+// contract: probeWantArgs asserts that "--"/"-"-prefixed tokens and a
+// mixed positional+flag vector reach os.Args byte-intact on every
+// host. On NT that pins the GetCommandLineW -> ntCommandLineToArgv
+// path for flag-shaped tokens specifically (a go-toolchain windows
+// smoke failure was initially misdiagnosed as flags being dropped
+// there; the parse was in fact intact - keep it provably so).
 package main
 
 import (
@@ -111,6 +122,7 @@ func main() {
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)
+	timed("lookpath", checkLookPath)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
 	// incident produced kernel-stuck processes), every other check has
@@ -120,6 +132,7 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
@@ -220,11 +233,33 @@ func checkTimers() {
 	cancel()
 }
 
+// probeWantArgs is the fixed argv tail the harness passes after the
+// mark (see the usage comment): flag-shaped tokens must survive the
+// host's argv materialization byte-intact, exactly like positionals.
+var probeWantArgs = []string{"--help", "-x", "--key=value", "trailing-arg"}
+
 func checkArgsEnv() {
-	if len(os.Args) != 2 {
-		fail("args", "want exactly 1 argument, got %d: %q", len(os.Args)-1, os.Args)
-	} else {
-		ok("args", os.Args[1])
+	// argv[1] is the mark (its VALUE is the "mark" check's contract);
+	// argv[2:] must be probeWantArgs byte-for-byte.
+	got := os.Args[1:]
+	switch {
+	case len(got) != 1+len(probeWantArgs):
+		fail("args", "want %d arguments (mark + %q), got %d: %q", 1+len(probeWantArgs), probeWantArgs, len(got), got)
+	case got[0] == "":
+		fail("args", "argv[1] (the mark) is empty: %q", os.Args)
+	default:
+		mismatch := -1
+		for i, want := range probeWantArgs {
+			if got[1+i] != want {
+				mismatch = i
+				break
+			}
+		}
+		if mismatch >= 0 {
+			fail("args", "argv[%d] = %q, want %q (full argv %q)", mismatch+2, got[1+mismatch], probeWantArgs[mismatch], os.Args)
+		} else {
+			ok("args", fmt.Sprintf("%q", got))
+		}
 	}
 	if len(os.Environ()) == 0 {
 		fail("environ", "os.Environ() is empty")
@@ -235,7 +270,7 @@ func checkArgsEnv() {
 	switch {
 	case mark == "":
 		fail("mark", "RUNTIMEPROBE_MARK is unset or empty")
-	case len(os.Args) == 2 && mark != os.Args[1]:
+	case len(os.Args) >= 2 && mark != os.Args[1]:
 		fail("mark", "RUNTIMEPROBE_MARK=%q does not match argv[1]=%q", mark, os.Args[1])
 	default:
 		ok("mark")

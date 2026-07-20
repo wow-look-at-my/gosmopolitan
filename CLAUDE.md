@@ -157,8 +157,9 @@ stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
 IAT slots.
 
-Windows status (2026-07-19, NT bring-up wave 3 COMPLETE - CI-verified
-by the full 46-check runtimeprobe gauntlet on windows-latest, against
+Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the
+LookPath fix - CI-verified by the full 47-check runtimeprobe gauntlet
+on windows-latest, against
 binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
 os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
 CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
@@ -172,7 +173,14 @@ os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
 non-pollable on purpose - a posix_spawn-style CreateProcessW path with
 upstream-ported quoting and env block, and wait4 packing the Linux
 wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
-signal deaths 0xC0DE0000|sig decode as Linux termination signals);
+signal deaths 0xC0DE0000|sig decode as Linux termination signals),
+including exec.LookPath/exec.Command name resolution against the
+HOST-format PATH (2026-07-20, src/os/exec/lp_cosmo.go: runtime host
+switch; on NT a lp_windows.go port - ';' split, PATHEXT/.exe probing,
+ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT
+blocks spell "Path" while cosmo's os.Getenv stays exact-case - plus
+an extensionless-APE last resort; unix hosts keep verbatim lp_unix
+behavior - see DEBUGGING.md 2026-07-20 NT LookPath section);
 sockets over classic synchronous winsock (non-overlapped WSASocketW,
 FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
 is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
@@ -348,7 +356,7 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The unix test legs run the full apetest suite against all 3 origin binaries. Windows execution coverage is the dedicated `test-windows` job: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port), real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0), and then the full apetest suite - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - against all three origin binaries (ubuntu, windows, macos).
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows); every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0); its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
 amd64 and cosmo arm64 payloads, stripped by default, with the build step's
@@ -394,9 +402,11 @@ linux-amd64 toolchain tarball to buildhost (pazer.build) as project
 unique per-release suffix (`go<base>.r<run_number>`), then runs
 `make.bash -distpack` (official packaging; output
 `pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
-`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
-GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
-server-info's `max_direct_upload_bytes`, chunked upload session above it).
+`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
+with buildhost's own publish actions (`buildhost-create-release` /
+`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
+`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
+authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
 The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
 each published release a disjoint cmd/go tool-ID (hence build-cache)
 namespace — identical release version strings previously let the org's
@@ -408,17 +418,24 @@ hand-rebuilt toolchains. Consumers install the fork in seconds instead of a
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
-export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
+export PATH="$PWD/go/bin:$PATH"
 go version   # go version go1.26.4cosmo.r<N> linux/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
 derived from the binary location, no need to set it). Consumer gotchas:
 
-- **Set `GOTOOLCHAIN=local`.** The shipped `go.env` keeps upstream's
-  `GOTOOLCHAIN=auto`, so a consumer go.mod with a `go`/`toolchain` directive
-  newer than this fork's version would silently download an official
-  toolchain and lose cosmo.
+- **`GOTOOLCHAIN=local` is no longer required.** The shipped `go.env` now
+  defaults `GOTOOLCHAIN=local` (upstream ships `auto`, under which a consumer
+  go.mod with a `go`/`toolchain` directive newer than this fork's version
+  would silently download an official toolchain and lose cosmo). An explicit
+  `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
+  go.mod genuinely newer than the fork now fails loudly (`go.mod requires
+  go >= X (running go 1.26)`) instead of silently switching. Note the fork
+  self-identifies as the dev version `1.26` (its `go1.26.4cosmo` string does
+  not parse as a release version), so directives up to `go 1.26` are
+  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
+  still ship `GOTOOLCHAIN=auto` and need the env var.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
   Gotchas); any host-run `go build`/`go install`/`go test` needs
   `GOOS=linux GOARCH=amd64`.
