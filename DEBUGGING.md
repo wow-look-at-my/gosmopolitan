@@ -1765,6 +1765,110 @@ layout, flags-off byte-compatibility), cmd/go cosmofat_test.go
 the last skips when sidecars aren't next to FIZZBUZZ_BIN, as on CI
 test runners, which download bare artifacts).
 
+## 2026-07-19: GOCOSMODEBUG - slim sidecars and compact in-binary debug info
+
+Two opt-in debug tiers on top of the strip-and-sidecar default. The
+default (GOCOSMODEBUG unset or `full`) is byte-identical to before the
+knob existed - verified by rebuilding at the base commit with the
+patched toolchain and byte-comparing all six artifacts. Invalid values
+fail the build. With GOCOSMOSTRIP=0 or user `-s`/`-w` there are no
+sidecars at all, so the knob is a no-op. Plumbing: cmd/go parses the
+env var (cosmofat.go) and passes `-apedbgmode=slim|compact` to the
+`-apefat` merge; the transforms live in cmd/link/internal/ld/apedebug.go.
+
+**slim** rewrites each sidecar into the in-linker equivalent of
+`objcopy --only-keep-debug`: the header page (ehdr, phdrs, notes) is
+preserved verbatim, allocated sections lose their file contents and
+become SHT_NOBITS with name/addr/size/flags intact, `.symtab`,
+`.strtab`, and every `.debug_*` keep their bytes (still zlib'd),
+program headers are clamped to the retained span. Section indices are
+unchanged, so st_shndx and sh_link stay valid. Not runnable (the
+cosmocc-parity "run the .dbg directly" property is the price); every
+debugger flow works unchanged. The shipped APE is byte-identical to
+the default build's.
+
+**compact** writes slim sidecars AND appends per-arch debug views past
+the fat APE's last payload - outside every loadable span, never mapped,
+proven inert (all APE boot paths are phdr-only; full apetest execution
+passes on compact binaries). Each payload's ELF header - and the boot
+header self-assimilation printf-writes over the file's first 64 bytes
+(makeEmbeddedElfHeader propagates section fields exactly when they
+point past the payload image, a shape only compact payloads have) -
+references its view by absolute file offset. The assimilated `.com` is
+then a debugger-readable ELF by itself: allocated sections point at
+the real payload bytes inside the file (no duplication), the tail
+carries `.symtab`/`.strtab`/`.shstrtab` plus
+`.debug_info/abbrev/line/rnglists/addr/frame` (zlib'd as the linker
+emitted them). Only `.debug_loclists` is dropped: variables/args print
+as <optimized out> (that is sidecar territory). `.debug_frame`
+(~50 KB/arch zlib'd) is kept deliberately - without CFI, a breakpoint
+in a function prologue grows a bogus `?? ()` frame between it and its
+caller (measured; with frame the backtrace is clean everywhere).
+
+**Measured** (bytes, exact; fizzbuzz / runtimeprobe):
+
+| artifact | full (default) | slim | compact |
+|---|---:|---:|---:|
+| fizzbuzz.com | 3,551,808 | 3,551,808 (=) | 5,019,976 (+41.3%) |
+| fizzbuzz.com.dbg | 2,700,303 | 912,016 (-66.2%) | 912,016 |
+| fizzbuzz.com.aarch64.elf | 2,464,731 | 815,712 (-66.9%) | 815,712 |
+| fizzbuzz total | 8,716,842 | 5,279,536 (-39.4%) | 6,747,704 (-22.6%) |
+| runtimeprobe.com | 5,119,168 | 5,119,168 (=) | 7,167,264 (+40.0%) |
+| runtimeprobe.com.dbg | 3,893,808 | 1,278,128 (-67.2%) | 1,278,128 |
+| runtimeprobe.com.aarch64.elf | 3,598,462 | 1,163,008 (-67.7%) | 1,163,008 |
+| runtimeprobe total | 12,611,438 | 7,560,304 (-40.1%) | 9,608,400 (-23.8%) |
+
+Wire (zstd -19 --long=27, runtimeprobe): the slim release set tars to
+3,806,748 vs 3,807,272 for the pristine set - the diet is wire-NEUTRAL
+(long-range matching already deduped the sidecars' payload
+duplication); it is a disk win, ~-5 MB next to every binary. The
+compact APE alone wires at 3,422,898 vs 1,763,012 default (appended
+DWARF is already zlib'd; outer zstd can't reduce it much) - still
+-10% vs shipping APE+sidecars. Codec: the sidecar DWARF stays
+zlib-BestSpeed on purpose; recompression was measured at only
+-8..-12% of the DWARF bytes (<= 115 KB/sidecar, zstd-default or
+zlib-default) - noise next to the -67% diet, and zstd would add a
+gdb-13+/binutils-2.40+ floor for it (zstd DOES work in gdb 15.1 and
+delve 1.27, both verified, if it is ever wanted). DWARF is already v5
+on cosmo (upstream Dwarf5 GOEXPERIMENT default); there was no v4->v5
+work to do.
+
+**gdb recipes** (gdb 15.1; `set osabi GNU/Linux` must come BEFORE the
+`file` command - as a positional argv the -ex runs too late and
+addresses print truncated):
+
+    # slim (or full) sidecar against the shipped binary
+    gdb -q -ex 'set osabi GNU/Linux' -ex 'file assim.com' \
+        -ex 'symbol-file program.com.dbg'
+    # compact: the assimilated binary alone, no sidecar anywhere
+    gdb -q -ex 'set osabi GNU/Linux' -ex 'file assim.com'
+
+Both verified live: breakpoints hit, `bt` shows file:line for every
+frame; slim additionally resolves args (loclists present), compact
+prints <optimized out>.
+
+**delve gotchas** (dlv 1.27): always `--check-go-version=false` (it
+parses `go1.26.4cosmo` as go0.0 and refuses). `dlv exec`/`dlv attach`
+work on processes launched from a runnable PRISTINE sidecar
+(GOCOSMODEBUG=full). Attaching to an assimilated APE process does NOT
+work with detached symbols: delve resolves /proc/pid/exe (the
+stripped APE, sectionless) and silently ignores a mismatched
+executable argument -> "no debug info found". Live-debug an
+assimilated APE with gdb + symbol-file instead, or take a core:
+`gcore` under gdb (osabi recipe above), then
+`dlv core program.com.dbg core.NNN --check-go-version=false` - full
+goroutine backtraces with sources from the slim sidecar (verified).
+
+**apetest**: TestELFPayloadStripped/TestFatPayloadsStripped branch on
+the payload's e_shoff - zero means the strict stripped contract
+(default and slim), nonzero means the compact contract (view past the
+load span, boot/stored header agreement, simulated assimilation of
+both arches parses with symtab + line-level DWARF and no loclists).
+A compact payload slice is deliberately NOT a self-contained ELF; the
+generic ELF-shape tests parse the assimilated whole-file form instead
+(payloadELF helper). TestDebugSidecars passes unchanged for all
+modes (slim keeps ET_EXEC, .text entry, symtab, .debug_info).
+
 # 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
 
 ## Wave 2 — DONE (2026-07-18, chunk E green)
