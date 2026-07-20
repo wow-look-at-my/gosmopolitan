@@ -3213,9 +3213,39 @@ wakeNetPoller nudge only targets the main thread.
 
 ## Verification
 
-Initial: 100/100 CI-mirroring iterations clean (node 22.22.2,
-defaults GOMAXPROCS=1/pool=4), and all 100 reused M1 — the pre-fix
-~7% M2-fallback share (the M1-still-parking half of the race) is gone,
-as the model predicts: with both parks awaited, mget's LIFO head is
-deterministically M1 (M2 mputs first; M1, resumed from its
-stoplockedm park during the nested spawn, mputs last).
+1500/1500 CI-mirroring iterations clean at the CI config (node
+22.22.2, defaults GOMAXPROCS=1/pool=4): 1100 as-is + 300 under
+`taskset -c 0,1` + 100 under ~nproc busy-loop load — zero parked-M
+FAILs, zero never-parked timeouts, zero other failures. Third-spawn
+reuse: 1375x M1 + 125x M2, both correct. The pre-fix ~7% M2 share was
+the M1-still-parking race half; post-fix M2 picks are a different,
+benign mechanism — mput order is normally M2-then-M1 (nested fn ends
+first), putting M1 at the LIFO head, but when M2's park loses the
+host-thread-scheduling race to M1's short outer-fn tail the push order
+flips and mget's head is M2 (constrained-CPU sets flip it more often:
+107 of the 125 M2 picks came from the 400 taskset/cpuload iterations).
+
+GOMAXPROCS=4 robustness probe (NOT a CI config): the M-identity
+assertions are B2-era GOMAXPROCS=1 semantics — under multi-P, wakep
+spawns extra pool Ms and worker/nested/third ids scatter (the in-tree
+TestWasmThreadsRunOnNewM documents this and gates its identity asserts
+on GOMAXPROCS(0)==1). Pre-fix demo: 9/20 identity-FAILs at
+GOMAXPROCS=4; post-fix: 4/20 (not a regression, directionally better;
+zero never-parked timeouts — the wait loop is multi-P-safe). CI runs
+threaddemo only at the default config, where the fix is deterministic.
+
+Full wasm CI job mirrored locally step by step (js+wasip1 std builds,
+node js battery, jsfetchstream e2e, wazero wasip1 battery, wasip1sock
+host suite, entire threads step incl. threaddemo 10x, the B3 demo
+gates, the 4-package threads go test and the wasip1 rejection check,
+wasmexport testdir on both targets): all green.
+
+Follow-up (same class, unfixed here): TestWasmThreadsRunOnNewM's
+re-spawn assertion (src/runtime/wasmthreads_test.go) has the same
+goroutine-finished-vs-M-parked window at GOMAXPROCS=1, plus an
+in-suite mode a park-wait cannot fix: earlier runtime tests can leave
+extra pool Ms parked, and a parked M's watchdog tick re-mputs it to
+the LIFO head, so id-membership can be violated by a legal claim. It
+wants a different assertion shape (e.g. mcount() did not grow across
+the re-spawn). Never yet observed in CI; signature would be
+`re-spawn did not reuse a parked M: got N`.
