@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	"cmd/go/internal/cfg"
 	"cmd/go/internal/load"
 )
 
@@ -48,6 +49,7 @@ func TestCosmoDebugMode(t *testing.T) {
 		{"", "full"},
 		{"full", "full"},
 		{"slim", "slim"},
+		{"min", "min"},
 		{"compact", "compact"},
 		{"0", ""},
 		{"off", ""},
@@ -55,6 +57,8 @@ func TestCosmoDebugMode(t *testing.T) {
 		{"on", ""},
 		{"Full", ""},
 		{"SLIM", ""},
+		{"MIN", ""},
+		{"minimal", ""},
 		{"pristine", ""},
 		{"slim,compact", ""},
 	}
@@ -92,9 +96,13 @@ func TestCosmoMergeArgsDebugMode(t *testing.T) {
 		{debug: "full", want: strip},
 		{debug: "slim", want: append(append([]string(nil), strip...), "-apedbgmode=slim")},
 		{debug: "compact", want: append(append([]string(nil), strip...), "-apedbgmode=compact")},
+		// min maps to the linker's slim transform: its extra
+		// reduction happens at compile time, not merge time.
+		{debug: "min", want: append(append([]string(nil), strip...), "-apedbgmode=slim")},
 		// GOCOSMOSTRIP=0 suppresses all strip/sidecar flags; the debug
 		// mode has nothing to apply to.
 		{debug: "slim", strip: "0", want: base},
+		{debug: "min", strip: "0", want: base},
 		// An explicit user -s/-w likewise.
 		{debug: "compact", ldflags: []string{"-s"}, want: base},
 	}
@@ -109,6 +117,57 @@ func TestCosmoMergeArgsDebugMode(t *testing.T) {
 		if got := cosmoMergeArgs(p, "sib.com"); !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("GOCOSMODEBUG=%q GOCOSMOSTRIP=%q ldflags %q: cosmoMergeArgs = %q, want %q",
 				tt.debug, tt.strip, tt.ldflags, got, tt.want)
+		}
+	}
+}
+
+// TestCosmoDebugModeMinGcflags covers the compile-time flag injection of
+// the min mode: which modes inject, what they inject, and the
+// cosmoDebugInit gating on GOOS and toolchain.
+func TestCosmoDebugModeMinGcflags(t *testing.T) {
+	for _, tt := range []struct {
+		mode string
+		want []string
+	}{
+		{"full", nil},
+		{"slim", nil},
+		{"compact", nil},
+		{"min", []string{"-dwarflocationlists=false", "-gendwarfinl=0"}},
+	} {
+		if got := cosmoDebugGcflags(tt.mode); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("cosmoDebugGcflags(%q) = %q, want %q", tt.mode, got, tt.want)
+		}
+	}
+
+	restore := func(goos, toolchain string, forced []string) func() {
+		return func() {
+			cfg.Goos = goos
+			cfg.BuildToolchainName = toolchain
+			forcedGcflags = forced
+		}
+	}
+	t.Cleanup(restore(cfg.Goos, cfg.BuildToolchainName, forcedGcflags))
+
+	for _, tt := range []struct {
+		goos      string
+		toolchain string
+		mode      string
+		want      []string
+	}{
+		{"cosmo", "gc", "min", []string{"-dwarflocationlists=false", "-gendwarfinl=0"}},
+		{"cosmo", "gc", "slim", nil},
+		{"cosmo", "gc", "", nil},
+		{"linux", "gc", "min", nil},    // min is a cosmo knob
+		{"cosmo", "gccgo", "min", nil}, // gc-only flags
+	} {
+		cfg.Goos = tt.goos
+		cfg.BuildToolchainName = tt.toolchain
+		forcedGcflags = nil
+		t.Setenv("GOCOSMODEBUG", tt.mode)
+		cosmoDebugInit()
+		if !reflect.DeepEqual(forcedGcflags, tt.want) {
+			t.Errorf("GOOS=%s toolchain=%s GOCOSMODEBUG=%q: forcedGcflags = %q, want %q",
+				tt.goos, tt.toolchain, tt.mode, forcedGcflags, tt.want)
 		}
 	}
 }
