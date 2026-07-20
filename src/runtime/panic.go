@@ -9,7 +9,6 @@ import (
 	"internal/goarch"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
-	"internal/stringslite"
 	"unsafe"
 )
 
@@ -54,9 +53,12 @@ const (
 // pc should be the program counter of the compiler-generated code that
 // triggered this panic.
 func panicCheck1(pc uintptr, msg string) {
-	if goarch.IsWasm == 0 && stringslite.HasPrefix(funcname(findfunc(pc)), "runtime.") {
+	if goarch.IsWasm == 0 {
 		// Note: wasm can't tail call, so we can't get the original caller's pc.
-		throw(msg)
+		fpfx, fname := funcnamePieces(findfunc(pc))
+		if hasPrefixPieces(fpfx, fname, "runtime.") {
+			throw(msg)
+		}
 	}
 	// TODO: is this redundant? How could we be in malloc
 	// but not in the runtime? internal/runtime/*, maybe?
