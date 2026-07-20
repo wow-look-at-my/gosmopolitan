@@ -282,6 +282,31 @@ func wasmThreadsCurMID() int64 {
 	return getg().m.id
 }
 
+// wasmThreadsIdleWorkerMs returns the number of worker Ms currently
+// linked on sched.midle - parked Ms that a startm can claim via mget
+// instead of asking newosproc for a fresh pool worker. The main M is
+// excluded: it can be linked on sched.midle too (it parks through the
+// ordinary stopm path when idle), but it is not a pool worker.
+//
+// Test/demo hook (linknamed by testdata/wasmthreads). A goroutine
+// having finished (e.g. wasmThreadsRunOnNewM returning) does not imply
+// the M that ran it has parked: the M reaches sched.midle through its
+// scheduler tail (startlockedm -> stopm -> mput) on its own host
+// thread, concurrently with the resumed spawner. A demo that asserts M
+// reuse must poll this until the Ms it expects are actually reusable.
+func wasmThreadsIdleWorkerMs() int32 {
+	lock(&sched.lock)
+	n := sched.nmidle
+	if sched.midle.head() == unsafe.Pointer(&m0) || m0.idleNode.prev != 0 || m0.idleNode.next != 0 {
+		// The membership test is wasmMidleRemove's: on the intrusive
+		// doubly-linked idle list an M is either the head or has a
+		// nonzero neighbor link.
+		n--
+	}
+	unlock(&sched.lock)
+	return n
+}
+
 // wasmThreadsRunOnNewM runs fn in a new goroutine and guarantees that it
 // executes on an M other than the caller's: it privately locks the
 // calling goroutine to its M (the public LockOSThread machinery is still
