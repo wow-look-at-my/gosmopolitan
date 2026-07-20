@@ -3908,6 +3908,92 @@ build machinery - the existing ubuntu-built fat APE artifact is the
 input, and fizzbuzz + apetest's runtimeprobe battery is the
 pass/fail instrument.
 
+# 2026-07-20: exec.LookPath on NT — unix PATH rules against a Windows PATH
+
+## Symptom (consumer regression, initially misdiagnosed as argv loss)
+
+go-toolchain's smoke-windows step broke deterministically once the
+published fat APE's windows slot became the cosmo payload on the NT
+personality (the native GOOS=windows payload was removed 2026-07-18):
+`go-toolchain.exe version` worked, `go-toolchain.exe --help` printed
+no help and exited 1 with "go-bootstrap: go not in PATH" + "go
+bootstrap: go not found in PATH and cannot determine version from
+go.mod" (go-toolchain run 29738066073, both attempts byte-identical).
+The failure was first read as "flag-shaped args are lost before cobra
+parses" - `--help` apparently ignored, positional `version` surviving.
+
+## Root cause: not argv — LookPath
+
+The argv path is intact. A local wine A/B (an os.Args dump built with
+the current toolchain) delivers `--help`, `-x`, `--key=value`, and
+positionals byte-exact through GetCommandLineW -> ntCommandLineToArgv,
+and the last GREEN smoke-windows run (go-toolchain 29666827531, Jul
+19) shows the full help printing on windows-latest - built against
+gosmopolitan release v10, which PREDATES the NT bring-up entirely: its
+windows slot still booted the embedded native GOOS=windows payload,
+i.e. upstream lp_windows.go. What actually differs on the cosmo NT
+personality: go-toolchain's root PersistentPreRunE (which cobra runs
+before help rendering) calls its go-bootstrap, whose
+exec.LookPath("go") under GOOS=cosmo was lp_unix.go on EVERY host -
+and unix rules against a real NT PATH
+("C:\hostedtoolcache\windows\go\1.24.13\x64\bin;...") split entries at
+the drive colon, probe extensionless names, and demand +x: they can
+never succeed. LookPath fails, the go.mod fallback fails (empty smoke
+cwd), the process exits 1 before help. `version` survives only because
+go-toolchain exempts it from that hook (skipCache), not because
+positionals fare differently. Reproduced byte-for-byte on LINUX by
+running the same APE with go removed from PATH in an empty dir - the
+bug is host-semantics, not windows execution.
+
+## Fix: run-time host dispatch in os/exec (lp_cosmo.go)
+
+lp_unix.go is now `unix && !cosmo`; the new lp_cosmo.go picks PATH
+semantics at run time via the NT emulation hook (cosmo.Windows(), the
+same dispatch package syscall uses): unix hosts keep lp_unix.go's
+rules verbatim, NT hosts get lp_windows.go's PATHEXT search ported
+onto the cosmo surface - PATH/PATHEXT read case-insensitively (NT env
+names are case-folded; cosmo's unix-shaped Getenv is not), ";"-list
+splitting/joining/absoluteness as local helpers (filepath here is
+compiled with unix rules), executability = exists && !dir (no mode
+bits on NT), drive-shaped candidates stat fine through the path
+layer's passthrough. The implicit CWD probe (ErrDot +
+NoDefaultCurrentDirectoryInExePath machinery) is deliberately not
+ported - not searching the CWD is the end state that machinery
+exists to reach. Command/Start's lookExtensions call sites stay
+runtime.GOOS == "windows"-gated (unreachable under cosmo): bare names
+go through the fixed LookPath; explicit paths are used as spelled.
+
+## Regression tests (testdata/runtimeprobe + apetest)
+
+New probe check "lookpath": plant a canary executable in a fresh
+directory, point PATH at it, require exec.LookPath to resolve the
+bare name to the planted file (os.SameFile). On NT the planted PATH
+entry is the DRIVE-SHAPED spelling of the temp dir (recovered via the
+checkWd Chdir/Getwd alias idiom) and the canary is "lpcanary.exe" -
+reproducing the consumer failure exactly; on unix hosts it is the
+classic extensionless/+x/":" lookup. The probe's argv contract also
+grew a fixed flag-shaped tail (--help -x --key=value trailing-arg)
+asserted byte-intact, pinning the originally-suspected (and
+exonerated) GetCommandLineW parse for '-'-tokens. apetest passes the
+tail and asserts the new check on all three legs; only the windows
+leg exercises the NT personality.
+
+## Verification
+
+Wine A/B (wine reproduces this argv/path surface faithfully; real-NT
+truth stays CI): probe built with UNFIXED master (buildhost release
+r469) fails exactly one NEW check - `FAIL lookpath: exec.LookPath
+("lpcanary") with PATH="C:\\users\\root\\Temp\\lookpath...": not
+found` - with `ok args [... "--help" ...]` proving argv intact; the
+same probe built with the fixed toolchain prints `ok lookpath
+C:\users\root\Temp\lookpath...\lpcanary.exe`. Linux personality: "ok
+all" both before and after the fix (unix flavor unchanged). Local:
+make.bash, GOOS=linux `go test os/exec` green, `GOOS=cosmo go vet
+os/exec` clean, full apetest suite green against the fixed fat
+fizzbuzz + runtimeprobe. The commit split makes CI prove the pin:
+the test-only commit's cosmo-ci run must go RED on test-windows'
+lookpath check against unfixed code; the fix commit must go green.
+
 # 2026-07-20: GOWASM=threads — threaddemo parked-M flake
 
 ## Symptom, incidence
