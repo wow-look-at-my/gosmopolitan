@@ -4203,6 +4203,123 @@ test export; Ms never exit on wasm, so growth == a fresh pool worker
 was claimed). Post-fix: `-count=1000` standalone clean, full
 `-short -count=3 runtime` clean, 4-package threads battery clean.
 
+# 2026-07-20: GOWASM=threads — nondeterministic worker OOB trap at newMarkBits (stale atomic bounds after cross-thread memory.grow)
+
+## Symptom, incidence
+
+CI run 29737526856 (master f0c46edb, wasm job, first node invocation of
+the threads step — the atomics smoke, GOMAXPROCS unset =1, pool 4):
+
+    worker 4: init: RuntimeError: memory access out of bounds
+        at runtime.newMarkBits (wasm-function[569]:0xa1f2c)
+        at runtime.__mheap_.initSpan / allocSpan / alloc.func1
+        at runtime.systemstack / alloc / __mcentral_.grow / cacheSpan
+        at runtime.__mcache_.refill / nextFree
+
+"init:" is the whole-worker-life catch (wasm_thread_run never returns;
+any trap on that worker lands there — B4 made the stack visible), NOT an
+instantiation failure. Local repro (4 vCPU, node 22): 12/7480 loaded runs
+(~0.22% per run under 3-6 concurrent smoke instances), 0/280 idle. Same
+binary green or red run to run; rate flat vs GC frequency (GOGC=10) and
+allocation volume; 0/450 at pool=1 and in single-tier modes
+(--liftoff-only, --no-liftoff). All 12 failures byte-identical to CI's.
+
+## Root cause: engine-level cross-thread grow observation lag (measured)
+
+The trap instruction (objdump) is `i64.atomic.load align=3` at
+gcBitsArena.free — `atomic.Loaduintptr(&b.free)` in (*gcBitsArena)
+.tryAlloc inlined into newMarkBits (mheap.go ~2905). Fresh gcBits arenas
+are exactly one 64KiB wasm page from sysAlloc (mheap.go ~3020): the most
+grow-adjacent atomic word in the runtime.
+
+Mechanism, directly measured by instrumenting the worker catch
+(viewPages = memory.buffer.byteLength/64Ki, the agent's possibly-stale
+view; truePages = memory.grow(0), seq-cst with grows = ground truth). In
+EVERY instrumented failure truePages=44 while the trapping agent's view
+was 39-43 (one capture still at the INITIAL 39):
+
+    thread A (P-holder): sbrk -> memory.grow completes; publishes the
+        fresh arena pointer with correct seq-cst Go synchronization
+    thread B (later P-holder): loads the pointer, first ATOMIC access
+        to the fresh page -> V8 bounds-checks ATOMIC ops explicitly
+        against a per-instance cached memory size that had not observed
+        A's grow -> trap on a legal, committed address
+
+Plain accesses never trap this way on 64-bit V8: they go through
+trap-handler guard pages backed by truly-committed memory. Atomics are
+explicit-checked in BOTH default and --wasm-enforce-bounds-checks modes
+(measured rate parity). Go-side bookkeeping (bloc/blocMax under memlock,
+seq-cst publication) was correct in every capture — this is
+spec-permitted shared-memory behavior (cross-thread size observation may
+lag), so the runtime must force the observation itself.
+
+P2 micro-proof (hand-assembled two-agent module, scratchpad
+threads-init-race/p2micro): a worker spinning INSIDE wasm on a plain
+flag, released right after a main-agent wasm memory.grow, trapped on the
+frontier i64.atomic.load (1/50 cold-tier) — and with a wasm-instruction
+`memory.grow 0` inserted between flag-observation and the atomic, 0/50.
+Wasm-side grow(0) resynchronizes the lagging instance's atomic bounds.
+
+## Fix: assembler-emitted grow-observation guard before every atomic
+
+One choke point covers everything: every 0xFE instruction — compiler
+intrinsics and hand-written .s alike — is byte-emitted by
+cmd/internal/obj/wasm's assemble(). Under GOWASM=threads it now emits,
+before EVERY atomic memory access (loads/stores/RMWs AND
+memory.atomic.notify/wait32/wait64 — a futex word can live in a fresh
+span; atomic.fence has no memory operand and is exempt):
+
+    i32.const $runtime.wasmGrowEpoch   ;; static addr: always in-bounds
+    i32.load
+    global.get $8                      ;; per-instance observed epoch
+    i32.ne
+    if                                 ;; rare: only after a grow
+      i32.const $runtime.wasmGrowEpoch
+      i32.load                         ;; pre-grow value, kept on stack
+      i32.const 0
+      memory.grow                      ;; resyncs THIS instance's bounds
+      drop
+      global.set $8
+    end
+
+runtime.wasmGrowEpoch (mem_wasmthreads.go) is bumped by sbrk under
+memlock right after each successful grow, before the pointer can be
+published. Correctness: the bump happens-before any publication of a
+pointer into the grown region; a correctly synchronized consumer's
+acquire delivers it, and the guard of its next atomic reads the epoch
+after that acquire — so no atomic can address the new region with stale
+bounds. Adopting the PRE-grow(0) epoch value means the observed epoch
+never runs ahead of the resynced bounds. Guard and atomic are
+straight-line (no calls/backedges): no goroutine migration between
+resync and access. The per-instance global (index 8, i32; linker emits
+it under threads only) is readable without memory access; each worker
+instance gets its own. wasm_probe_atomic_add (linker-synthesized, no
+runtime state) resyncs unconditionally instead. Hot-path cost: 5
+instructions (i32.const + i32.load of an always-cached static word +
+global.get + i32.ne + untaken if) per atomic op; ~31 bytes per site.
+Non-threads builds contain no 0xFE ops and assemble byte-identically.
+
+Deliberate residual: PLAIN shared-memory accesses rely on trap-handler
+(guard-page) engines checking against truly-committed memory — true of
+64-bit V8, the only supported GOWASM=threads host. An engine using
+explicit bounds checks for plain accesses too could still trap a
+stale-view plain access; that class is out of this guard's scope and
+documented rather than covered.
+
+## Gate + verification
+
+testdata/wasmthreads/growatomic (CI threads step): hammer goroutines
+pinned to their own worker Ms (wasmThreadsRunOnNewM), never allocating
+or blocking (nothing refreshes their instances), GC off; the main thread
+allocates 160 page-crossing chunks (each a fresh sbrk grow region) and
+publishes first/last words via atomic pointers; hammers atomic-add
+through every published pointer. Unguarded build: first touch of a
+beyond-bound chunk traps within seconds. Guarded build: passes.
+Verification on the fix branch: gate red on an unguarded master
+toolchain / green on the fixed one; 600x 6-concurrent smoke loop with
+zero traps (master baseline 8/3600); full threads regression set + all
+demos green; speedup perf delta measured (see PR).
+
 # 2026-07-20: NT — exec.LookPath never worked on Windows hosts (PATH shape + PATHEXT + env-name case)
 
 ## Symptom, evidence

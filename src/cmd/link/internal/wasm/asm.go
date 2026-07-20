@@ -502,6 +502,15 @@ func writeGlobalSec(ctxt *ld.Link) {
 		I64, // 6: RET3
 		I32, // 7: PAUSE
 	}
+	if buildcfg.GOWASM.Threads {
+		// 8: the per-instance "observed grow epoch" consumed by the
+		// atomic-access grow-observation guard (growEpochGlobal /
+		// writeGrowEpochGuard in cmd/internal/obj/wasm, which must stay
+		// in sync with this index). Initial 0 = "no grows observed",
+		// matching runtime.wasmGrowEpoch's zero value; being a global,
+		// every instance sharing the memory gets its own copy.
+		globalRegs = append(globalRegs, I32)
+	}
 
 	writeUleb128(ctxt.Out, uint64(len(globalRegs))) // number of globals
 
@@ -809,6 +818,17 @@ func threadsSyntheticFuncs(types *[]*wasmFuncType, segments []*dataSegment) []*w
 
 	probe := new(bytes.Buffer)
 	writeUleb128(probe, 0) // no locals
+	// The caller-supplied address may lie in memory another thread grew,
+	// and this instance's ATOMIC bounds check may not have observed that
+	// grow yet (see writeGrowEpochGuard in cmd/internal/obj/wasm). The
+	// probe runs without Go runtime state, so instead of the epoch guard
+	// it resyncs unconditionally with memory.grow 0 - cheap, and the
+	// probe is a test-only diagnostic.
+	probe.WriteByte(0x41)  // i32.const
+	probe.WriteByte(0x00)  // 0
+	probe.WriteByte(0x40)  // memory.grow
+	probe.WriteByte(0x00)  // memidx
+	probe.WriteByte(0x1a)  // drop
 	probe.WriteByte(0x20)  // local.get
 	writeUleb128(probe, 0) // 0: addr
 	probe.WriteByte(0x20)  // local.get

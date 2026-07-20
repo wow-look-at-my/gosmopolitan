@@ -15,6 +15,10 @@ func sbrk(n uintptr) unsafe.Pointer {
 		if size < 0 {
 			return nil
 		}
+		// Record the grow for the atomic-access grow-observation guard
+		// (GOWASM=threads; no-op otherwise) before the new memory can be
+		// published to any other thread. See mem_wasmthreads.go.
+		wasmGrowEpochBump()
 		resetMemoryDataView()
 		blocMax = bl + n
 	}

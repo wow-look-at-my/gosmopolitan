@@ -141,6 +141,7 @@ var (
 	sigpanic              *obj.LSym
 	wasm_pc_f_loop_export *obj.LSym
 	runtimeNotInitialized *obj.LSym
+	growEpoch             *obj.LSym
 )
 
 const (
@@ -177,6 +178,7 @@ func instinit(ctxt *obj.Link) {
 	sigpanic = ctxt.LookupABI("runtime.sigpanic", obj.ABIInternal)
 	wasm_pc_f_loop_export = ctxt.Lookup("wasm_pc_f_loop_export")
 	runtimeNotInitialized = ctxt.Lookup("runtime.notInitialized")
+	growEpoch = ctxt.Lookup("runtime.wasmGrowEpoch")
 }
 
 func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
@@ -1313,6 +1315,10 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			continue
 		}
 
+		if buildcfg.GOWASM.Threads && isAtomicMemoryAccess(p.As) {
+			writeGrowEpochGuard(ctxt, s, w)
+		}
+
 		writeOpcode(w, p.As)
 
 		switch p.As {
@@ -1504,6 +1510,108 @@ func updateLocalSP(w *bytes.Buffer) {
 	writeUleb128(w, 0) // global SP
 	writeOpcode(w, ALocalSet)
 	writeUleb128(w, 1) // local SP
+}
+
+// growEpochGlobal is the index of the per-instance "observed grow epoch"
+// wasm global. It comes right after the 8 register globals (SP..PAUSE,
+// see regVars above) and is emitted by the linker only under
+// GOWASM=threads (writeGlobalSec in cmd/link/internal/wasm/asm.go must
+// stay in sync).
+const growEpochGlobal = 8
+
+// isAtomicMemoryAccess reports whether as is a threads-proposal (0xFE)
+// instruction that accesses linear memory: the atomic loads, stores, RMW
+// ops, and memory.atomic.notify/wait32/wait64. atomic.fence is the one
+// 0xFE instruction with no memory operand.
+func isAtomicMemoryAccess(as obj.As) bool {
+	return as >= AMemoryAtomicNotify && as < ALast && as != AAtomicFence
+}
+
+// writeGrowEpochGuard emits the shared-memory grow-observation guard that
+// precedes every atomic memory access under GOWASM=threads.
+//
+// Engines bounds-check ATOMIC accesses explicitly against a per-instance
+// cached memory size that can lag cross-thread memory.grow (V8 does this
+// even in trap-handler builds, where plain accesses go through guard
+// pages backed by truly-committed memory and never see the problem). So
+// after thread A grows the shared memory and publishes a pointer into
+// the new region with correct synchronization, thread B's first ATOMIC
+// access to that address can still trap: B's instance has not observed
+// the grow. That is spec-permitted shared-memory behavior, and it was
+// the root cause of the nondeterministic GOWASM=threads worker crash at
+// runtime.newMarkBits (the first atomic touch of a freshly sysAlloc'd
+// gcBits arena chunk grown by another thread). Executing memory.grow 0
+// on the lagging instance resynchronizes its cached size - memory.grow
+// is sequentially consistent with all grows in the cluster.
+//
+// The guard compares runtime.wasmGrowEpoch (a shared-memory counter that
+// sbrk bumps under memlock right after every successful grow; it lives
+// in static data within the initial memory, so loading it can never
+// itself be out of bounds) against this instance's observed-epoch global
+// (growEpochGlobal, per-instance state readable without a memory
+// access). On mismatch - rare: only after some thread grew the memory -
+// it resyncs and adopts the epoch value loaded BEFORE the memory.grow 0,
+// so the observed epoch can never run ahead of the resynced bounds:
+//
+//	i32.const $runtime.wasmGrowEpoch
+//	i32.load
+//	global.get $growEpochGlobal
+//	i32.ne
+//	if
+//	  i32.const $runtime.wasmGrowEpoch
+//	  i32.load                 (pre-grow epoch value, kept on the stack)
+//	  i32.const 0
+//	  memory.grow
+//	  drop
+//	  global.set $growEpochGlobal
+//	end
+//
+// Hot path: i32.const + i32.load + global.get + i32.ne + untaken if
+// (5 instructions, one always-in-cache static load). Why this is
+// complete: the epoch bump happens-before any publication of a pointer
+// into the grown region (sbrk has not returned yet when it bumps), a
+// correctly synchronized consumer observes that publication through an
+// atomic operation, and the guard of its NEXT atomic access reads the
+// epoch after that synchronization point, so happens-before delivers the
+// bumped value before any atomic can address the new region. The guard
+// and its atomic op are straight-line code in one function body (no
+// calls, no loop backedges), so a goroutine cannot migrate to a
+// different instance between the resync and the access.
+//
+// The guard pushes and pops only its own operand-stack values, so it can
+// sit between an atomic instruction and its already-pushed operands, and
+// it is emitted only under GOWASM=threads: non-threads builds contain no
+// 0xFE instructions and assemble byte-identically to before.
+func writeGrowEpochGuard(ctxt *obj.Link, s *obj.LSym, w *bytes.Buffer) {
+	loadEpoch := func() {
+		writeOpcode(w, AI32Const)
+		s.AddRel(ctxt, obj.Reloc{
+			Type: objabi.R_ADDR,
+			Off:  int32(w.Len()),
+			Siz:  RelocLEBSize,
+			Sym:  growEpoch,
+		})
+		w.Write(relocLEBPlaceholder)
+		writeOpcode(w, AI32Load)
+		writeUleb128(w, 2) // alignment 2^2 = 4
+		writeUleb128(w, 0) // offset
+	}
+
+	loadEpoch()
+	writeOpcode(w, AGlobalGet)
+	writeUleb128(w, growEpochGlobal)
+	writeOpcode(w, AI32Ne)
+	writeOpcode(w, AIf)
+	w.WriteByte(0x40) // void block type
+	loadEpoch()
+	writeOpcode(w, AI32Const)
+	writeSleb128(w, 0)
+	writeOpcode(w, AGrowMemory)
+	w.WriteByte(0x00) // memory index
+	writeOpcode(w, ADrop)
+	writeOpcode(w, AGlobalSet)
+	writeUleb128(w, growEpochGlobal)
+	writeOpcode(w, AEnd)
 }
 
 func writeOpcode(w *bytes.Buffer, as obj.As) {
