@@ -3145,3 +3145,77 @@ zero slow lines, apetest ~2.1s per origin, all other jobs green.
   step and printlns it added are what cracked the case)
 - 30f65650 runtime: lossless NT netpoll wake (TCP pair), AF_UNIX
   SO_REUSEADDR no-op
+
+# 2026-07-20: GOWASM=threads — threaddemo parked-M flake
+
+## Symptom, incidence
+
+The wasm job's threads step nondeterministically failed with
+`threaddemo: FAIL: third spawn reused a parked worker M (3)` — every
+functional check green, only the M-identity assertion red (fresh M 3
+instead of reusing M 1/M 2). Two CI hits, both pre-B4:
+https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29704088679
+(iteration 9) and
+https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29704884798
+(iteration 6); measured pre-B4 CI rate ~0.37%/iteration (2 hits /
+~538 iterations), ~3.6% per 10-iteration job. Locally reproduced at
+post-B4 master 46b70337: 1 exact-signature failure in 1700 iterations
+(~0.06-0.08%/iter) — B4 (c39b838d, PR #54) narrowed the window by
+retiming wake/timer coverage but did not close it.
+
+## Root cause: goroutine-finished != M-parked
+
+The demo's third spawn asserted `thirdM == workerM || thirdM ==
+nestedM` after synchronizing ONLY on goroutine completion:
+wasmThreadsRunOnNewM resumes the locked caller the instant fn's
+wrapper sends on done, while the M that ran fn still has to fall
+through its scheduler tail (startlockedm -> stopm -> mput) to
+sched.midle on its own host thread, concurrently. The demo comment
+"both worker Ms are parked now" was an unsynchronized assumption. The
+passing-run distribution proved the window routine: third spawn got M1
+1582/1699, fell back to M2 117/1699 (~7% missed the still-parking M1);
+the red was the tail where BOTH were momentarily absent, so startm's
+mget found empty midle and newosproc took a fresh pool worker (M 3).
+
+A fresh M there is LEGAL scheduler behavior, not a runtime bug — B4's
+own comments codify transient empty-midle as expected (wakeNetPoller:
+"a worker parked at add time can be claimed by startm before its
+watchdog ever ticks"; checkdead: the parked main M "executes Go code
+... while still linked on sched.midle"). So the fix is on the test
+side; the scheduler is untouched.
+
+## Fix: synchronize the demo on actual parked state
+
+New read-only test hook runtime.wasmThreadsIdleWorkerMs
+(os_wasmthreads.go, next to wasmThreadsCurMID): under sched.lock,
+sched.nmidle minus m0-if-linked (the wasmMidleRemove membership
+idiom) — i.e. worker Ms actually on sched.midle, mget-able right now.
+wasmParkedWorkers was rejected (decrement-side skew: an mget-claimed M
+stays counted until its futex wake lands) and raw nmidle was rejected
+(the stopm-parked main M is legitimately ON midle). threaddemo polls
+the hook until it reads >= 2 before the third spawn, with
+runtime.Gosched — NOT time.Sleep: a sleep timer gets self-served by a
+parked worker's watchdog tick, bouncing the main goroutine onto a
+worker M; Gosched keeps m0 holding the only P, so no timers exist in
+the window and the goroutine stays on m0. On a 10s timeout the demo
+prints the distinct `threaddemo: FAIL: worker Ms never parked
+(parked=N after 10s)` and exits 1 — a runtime that never parks worker
+Ms is now a deterministic loud failure instead of a flake (stricter
+than before, not looser).
+
+No spawn retry needed: once >= 2 is observed (necessarily from m0 —
+a worker M running the reader cannot be counted), no legal path can
+claim a parked M before the spawn's lock-serialized handoffp -> startm
+-> mget at GOMAXPROCS=1: m0 holds the only P continuously (wakep needs
+an idle P), the watchdog's self-serve remove/re-mput is a single
+sched.lock critical section, checkdead needs all Ms idle, and the
+wakeNetPoller nudge only targets the main thread.
+
+## Verification
+
+Initial: 100/100 CI-mirroring iterations clean (node 22.22.2,
+defaults GOMAXPROCS=1/pool=4), and all 100 reused M1 — the pre-fix
+~7% M2-fallback share (the M1-still-parking half of the race) is gone,
+as the model predicts: with both parks awaited, mget's LIFO head is
+deterministically M1 (M2 mputs first; M1, resumed from its
+stoplockedm park during the nested spawn, mputs last).
