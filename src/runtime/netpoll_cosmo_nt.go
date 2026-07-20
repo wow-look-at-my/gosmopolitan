@@ -99,11 +99,10 @@ var (
 	ntMtxset             mutex
 	ntPollPendingUpdates int32
 
-	ntWakeSock  uintptr // loopback TCP wake pair: send (client) end
-	ntWakeRecv  uintptr // loopback TCP wake pair: polled (accepted) end, slot 0
-	ntWakeByte  = [1]byte{'x'}
-	ntDrainBuf  [16]byte
-	ntPollTmp16 [16]byte // netpollinit sockaddr scratch
+	ntWakeSock uintptr // loopback TCP wake pair: send (client) end
+	ntWakeRecv uintptr // loopback TCP wake pair: polled (accepted) end, slot 0
+	ntWakeByte = [1]byte{'x'}
+	ntDrainBuf [16]byte
 )
 
 func netpollinitNT() {
@@ -111,61 +110,18 @@ func netpollinitNT() {
 		println("runtime: netpollinit: winsock unavailable, errno", eno)
 		throw("runtime: netpollinit failed")
 	}
-	// Build the lossless TCP wake pair (see the file comment): a
-	// loopback listener, a blocking connect against its backlog, the
-	// accept, then the listener closes. All in-kernel and immediate.
-	l, werr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
-		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
-	if l == _NT_INVALID_SOCKET {
-		println("runtime: netpollinit: wake listener failed with", werr)
+	// Build the lossless TCP wake pair (see the file comment) with
+	// the shared recipe - ntLoopbackTCPPair, os_cosmo_nt_sock.go,
+	// which the wave-3 socketpair emulation reuses. Blocking,
+	// TCP_NODELAY, uninheritable, peer-verified.
+	a, c, step, werr := ntLoopbackTCPPair()
+	if werr != 0 {
+		println("runtime: netpollinit: wake pair", step, "failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
-	sin := &ntPollTmp16
-	for i := range sin {
-		sin[i] = 0
-	}
-	sin[0] = _NT_AF_INET
-	sin[4], sin[5], sin[6], sin[7] = 127, 0, 0, 1
-	if r, werr := ntcallE(ntWSABindFn, l, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
-		println("runtime: netpollinit: wake bind failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	var slen int32 = 16
-	if r, werr := ntcallE(ntWSAGetsocknameFn, l, uintptr(unsafe.Pointer(&sin[0])),
-		uintptr(unsafe.Pointer(&slen)), 0, 0, 0, 0); ntSockErr(r) {
-		println("runtime: netpollinit: wake getsockname failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	if r, werr := ntcallE(ntWSAListenFn, l, 1, 0, 0, 0, 0, 0); ntSockErr(r) {
-		println("runtime: netpollinit: wake listen failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	c, werr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
-		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
-	if c == _NT_INVALID_SOCKET {
-		println("runtime: netpollinit: wake client failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	if r, werr := ntcallE(ntWSAConnectFn, c, uintptr(unsafe.Pointer(&sin[0])), 16, 0, 0, 0, 0); ntSockErr(r) {
-		println("runtime: netpollinit: wake connect failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	a, werr := ntcallE(ntWSAAcceptFn, l, 0, 0, 0, 0, 0, 0)
-	if a == _NT_INVALID_SOCKET {
-		println("runtime: netpollinit: wake accept failed with", werr)
-		throw("runtime: netpollinit failed")
-	}
-	ntcall(ntWSACloseSocketFn, l, 0, 0, 0, 0, 0)
-	// The accepted end never crosses a CreateProcess boundary
-	// explicitly, but keep it uninheritable like every other socket.
-	ntcall(ntWSASetHandleInfFn, a, _NT_HANDLE_FLAG_INHERIT, 0, 0, 0, 0)
-	// 1-byte wake sends must hit the wire immediately, not sit in a
-	// Nagle buffer behind a delayed ACK. Best-effort.
-	var one uint32 = 1
-	ntcall(ntWSASetsockoptFn, c, 6 /* IPPROTO_TCP */, 1, /* TCP_NODELAY */
-		uintptr(unsafe.Pointer(&one)), 4, 0)
 	// Both ends nonblocking: the send side must never wedge a
 	// mutator, the recv side is drained opportunistically.
+	var one uint32 = 1
 	if r, werr := ntcallE(ntWSAIoctlsocketFn, c, _NT_FIONBIO,
 		uintptr(unsafe.Pointer(&one)), 0, 0, 0, 0); ntSockErr(r) {
 		println("runtime: netpollinit: wake FIONBIO failed with", werr)
@@ -193,7 +149,7 @@ func netpollinitNT() {
 func ntNetpollwakeup() {
 	if ntPollPendingUpdates == 0 {
 		ntPollPendingUpdates = 1
-		r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+		r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 		if ntSockErr(r) {
 			// Should be impossible (1-byte send on a healthy connected
 			// loopback socket). If it ever fires, the poller may sleep
@@ -280,7 +236,7 @@ func netpollBreakNT() {
 	if ntWakeSock == 0 {
 		return
 	}
-	r, werr := ntcallE(ntWSASendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
+	r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 	if ntSockErr(r) {
 		// A lost break leaves the poller asleep until its current
 		// WSAPoll timeout: timers added after the failed send fire
@@ -346,7 +302,7 @@ func netpollNT(delay int64) (gList, int32) {
 			// poll; only drain and reset when blocking (aix rule -
 			// and netpollNT(0) never reaches here anyway).
 			for {
-				rr := int32(uint32(ntcall(ntWSARecvFn, ntWakeRecv,
+				rr := int32(uint32(ntcall(ntSockRecvFn, ntWakeRecv,
 					uintptr(unsafe.Pointer(&ntDrainBuf[0])), uintptr(len(ntDrainBuf)), 0, 0, 0)))
 				if rr <= 0 {
 					break
