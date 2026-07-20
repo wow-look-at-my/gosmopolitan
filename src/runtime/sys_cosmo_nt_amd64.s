@@ -304,28 +304,35 @@ TEXT runtime·ntExitEncoded(SB),NOSPLIT,$0-4
 
 // func ntCtrlTramp()
 //
-// SetConsoleCtrlHandler callback (chunk D2). Win64 entry: CX =
-// dwCtrlType. Windows runs this on an INJECTED foreign thread - no g,
-// no TLS - so it must stay free of Go and of ntcall (asmcgocall needs
-// a g): classify the event, OR the signal bit into ntCtrlMask, wake
-// the relay M through its dedicated event (never the netpoll wake
-// socket), and either report "handled" (SIGINT class - the relay owns
-// the outcome, including default death) or block forever (SIGTERM
-// class - Windows kills the process the moment a CLOSE/LOGOFF/
-// SHUTDOWN handler returns; blocking gives the Go handlers the OS
-// grace window, upstream ctrlHandler's block()). Direct win64 calls
-// with the chunk-B alignment discipline; only volatile registers are
-// used, so the win64 callee-saved set is preserved by construction.
+// SetConsoleCtrlHandler callback (chunk D2; mapping widened in wave 3
+// item 4). Win64 entry: CX = dwCtrlType. Windows runs this on an
+// INJECTED foreign thread - no g, no TLS - so it must stay free of Go
+// and of ntcall (asmcgocall needs a g): classify the event, OR the
+// signal bit into ntCtrlMask, wake the relay M through its dedicated
+// event (never the netpoll wake socket), and either report "handled"
+// (the keyboard chords CTRL_C -> SIGINT and CTRL_BREAK -> SIGQUIT -
+// the relay owns the outcome, including default death) or block
+// forever (the process-lifetime events CLOSE -> SIGHUP and LOGOFF/
+// SHUTDOWN -> SIGTERM - Windows kills the process the moment such a
+// handler returns; blocking gives the Go handlers the OS grace
+// window, upstream ctrlHandler's block()). The BREAK -> SIGQUIT and
+// CLOSE -> SIGHUP mappings deliberately diverge from upstream Go's
+// windows ctrlHandler for unix parity - rationale in DEBUGGING.md
+// wave 3 item 4. Direct win64 calls with the chunk-B alignment
+// discipline; only volatile registers are used, so the win64
+// callee-saved set is preserved by construction.
 TEXT runtime·ntCtrlTramp(SB),NOSPLIT|NOFRAME,$0
 	SUBQ	$40, SP		// 32B shadow + realign (entry SP == 8 mod 16)
+	CMPL	CX, $0
+	JE	ctrl_int	// CTRL_C_EVENT(0) -> SIGINT
 	CMPL	CX, $1
-	JBE	ctrl_int	// CTRL_C_EVENT(0), CTRL_BREAK_EVENT(1) -> SIGINT
+	JE	ctrl_quit	// CTRL_BREAK_EVENT(1) -> SIGQUIT
 	CMPL	CX, $2
-	JE	ctrl_term	// CTRL_CLOSE_EVENT -> SIGTERM
+	JE	ctrl_hup	// CTRL_CLOSE_EVENT(2) -> SIGHUP, block
 	CMPL	CX, $5
-	JE	ctrl_term	// CTRL_LOGOFF_EVENT -> SIGTERM
+	JE	ctrl_term	// CTRL_LOGOFF_EVENT(5) -> SIGTERM, block
 	CMPL	CX, $6
-	JE	ctrl_term	// CTRL_SHUTDOWN_EVENT -> SIGTERM
+	JE	ctrl_term	// CTRL_SHUTDOWN_EVENT(6) -> SIGTERM, block
 	XORL	AX, AX		// not ours: FALSE -> next handler
 	ADDQ	$40, SP
 	RET
@@ -333,16 +340,28 @@ ctrl_int:
 	MOVQ	$runtime·ntCtrlMask(SB), R8
 	LOCK
 	ORL	$4, (R8)	// 1<<_SIGINT(2)
+	JMP	ctrl_wake_ret
+ctrl_quit:
+	MOVQ	$runtime·ntCtrlMask(SB), R8
+	LOCK
+	ORL	$8, (R8)	// 1<<_SIGQUIT(3)
+ctrl_wake_ret:
 	MOVQ	runtime·ntCtrlEvent(SB), CX
 	MOVQ	runtime·ntSetEventFn(SB), AX
 	CALL	AX
 	MOVL	$1, AX		// TRUE: handled
 	ADDQ	$40, SP
 	RET
+ctrl_hup:
+	MOVQ	$runtime·ntCtrlMask(SB), R8
+	LOCK
+	ORL	$2, (R8)	// 1<<_SIGHUP(1)
+	JMP	ctrl_wake_block
 ctrl_term:
 	MOVQ	$runtime·ntCtrlMask(SB), R8
 	LOCK
 	ORL	$0x8000, (R8)	// 1<<_SIGTERM(15)
+ctrl_wake_block:
 	MOVQ	runtime·ntCtrlEvent(SB), CX
 	MOVQ	runtime·ntSetEventFn(SB), AX
 	CALL	AX

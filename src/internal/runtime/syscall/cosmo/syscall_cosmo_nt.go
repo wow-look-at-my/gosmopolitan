@@ -54,11 +54,23 @@ type WindowsFns struct {
 	// double-NUL-terminated UTF-16 blocks (the syscall layer owns
 	// the Windows quoting and env-sorting algebra, ported from
 	// upstream exec_windows.go); stdio are parent fds for the
-	// child's std handles, -1 = none. Returns the child pid or a
-	// positive Linux errno. Ordinary Go code: may allocate and
-	// block (no nosplit chain - the caller is not in syscall state).
-	Spawn func(argv0, dir string, cmdline, env []uint16, stdio [3]int32) (pid int32, errno uintptr)
+	// child's std handles, -1 = none; flags is a Spawn* bit set.
+	// Returns the child pid or a positive Linux errno. Ordinary Go
+	// code: may allocate and block (no nosplit chain - the caller
+	// is not in syscall state).
+	Spawn func(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uint32) (pid int32, errno uintptr)
 }
+
+// Spawn flag bits. An abstraction over the CreateProcessW creation
+// flags so the Win32 constants stay inside the runtime.
+const (
+	// SpawnNewProcessGroup makes the child the leader of a NEW NT
+	// process group (CreateProcessW's CREATE_NEW_PROCESS_GROUP) - the
+	// NT projection of SysProcAttr{Setpgid: true, Pgid: 0}. The new
+	// group's id equals the child's pid, so the emulated
+	// kill(-pid, sig) can target it (GenerateConsoleCtrlEvent).
+	SpawnNewProcessGroup uint32 = 1 << 0
+)
 
 // windowsFns has static storage (no allocation at install time:
 // SetWindowsFns runs before mallocinit).
