@@ -289,10 +289,27 @@ func pcValue(tab []byte, target uint64, arch *sys.Arch) int32 {
 }
 
 // step advances to the next pc, value pair in the encoded table.
+// The pair grammar is described at cmd/internal/obj/pcln.go:appendPCPair.
 func step(p *[]byte, pc *uint64, val *int32, first bool, arch *sys.Arch) bool {
-	uvdelta := readvarint(p)
-	if uvdelta == 0 && !first {
-		return false
+	b := (*p)[0]
+	if b >= 0x80 {
+		// Packed pair.
+		*p = (*p)[1:]
+		*val += int32(b>>4&7) - 4
+		*pc += uint64((uint32(b&0xF) + 1) * uint32(arch.MinLC))
+		return true
+	}
+	var uvdelta uint32
+	if b == 0x7F {
+		// Escaped multi-byte value delta.
+		*p = (*p)[1:]
+		uvdelta = readvarint(p)
+	} else {
+		if b == 0 && !first {
+			return false
+		}
+		uvdelta = uint32(b)
+		*p = (*p)[1:]
 	}
 	if uvdelta&1 != 0 {
 		uvdelta = ^(uvdelta >> 1)
