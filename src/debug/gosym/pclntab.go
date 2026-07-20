@@ -26,6 +26,19 @@ const (
 	ver116
 	ver118
 	ver120
+	// verCosmo is this fork's compact functab format
+	// (abi.CosmoPCLnTabMagic): same header as ver118/ver120, but _func
+	// records are 4-byte aligned with a 40-byte fixed part that drops the
+	// npcdata field (so cuOffset and startLine move up one slot) and
+	// replaces the count/sentinel encoded pcdata and funcdata offset
+	// arrays with presence-bitmap encoded ones. The function name table
+	// shares package-path prefixes: it starts with a uint32 prefix count
+	// and offsets of the NUL-terminated prefix strings, and each name
+	// entry is uvarint(prefix index) plus the NUL-terminated suffix. The
+	// file name table shares directory prefixes the same way (uint32 dir
+	// count, dir string offsets, dir strings, then uvarint(dir index)
+	// plus NUL-terminated base name entries).
+	verCosmo
 )
 
 // A LineTable is a data structure mapping program counters to line numbers.
@@ -238,6 +251,10 @@ func (t *LineTable) parsePclnTab() {
 		t.binary, possibleVersion = binary.LittleEndian, ver120
 	case beMagic == abi.Go120PCLnTabMagic:
 		t.binary, possibleVersion = binary.BigEndian, ver120
+	case leMagic == abi.CosmoPCLnTabMagic:
+		t.binary, possibleVersion = binary.LittleEndian, verCosmo
+	case beMagic == abi.CosmoPCLnTabMagic:
+		t.binary, possibleVersion = binary.BigEndian, verCosmo
 	default:
 		return
 	}
@@ -255,7 +272,7 @@ func (t *LineTable) parsePclnTab() {
 	}
 
 	switch possibleVersion {
-	case ver118, ver120:
+	case ver118, ver120, verCosmo:
 		t.nfunctab = uint32(offset(0))
 		t.nfiletab = uint32(offset(1))
 		t.textStart = t.PC // use the start PC instead of reading from the table, which may be unrelocated
@@ -361,8 +378,25 @@ func (t *LineTable) funcName(off uint32) string {
 	if s, ok := t.funcNames[off]; ok {
 		return s
 	}
-	i := bytes.IndexByte(t.funcnametab[off:], 0)
-	s := string(t.funcnametab[off : off+uint32(i)])
+	var s string
+	if t.version >= verCosmo {
+		// The compact format splits each name into a shared
+		// package-prefix and a suffix: the table starts with a uint32
+		// prefix count and uint32 offsets of the NUL-terminated prefix
+		// strings, and a name entry is uvarint(prefix index) followed
+		// by the NUL-terminated suffix. See
+		// cmd/link/internal/ld/pcln.go:generateFuncnametab.
+		d := t.funcnametab[off:]
+		idx := t.readvarint(&d)
+		i := bytes.IndexByte(d, 0)
+		suffix := d[:i]
+		po := t.binary.Uint32(t.funcnametab[4+4*idx:])
+		j := bytes.IndexByte(t.funcnametab[po:], 0)
+		s = string(t.funcnametab[po:po+uint32(j)]) + string(suffix)
+	} else {
+		i := bytes.IndexByte(t.funcnametab[off:], 0)
+		s = string(t.funcnametab[off : off+uint32(i)])
+	}
 	t.funcNames[off] = s
 	return s
 }
@@ -381,6 +415,30 @@ func (t *LineTable) stringFrom(arr []byte, off uint32) string {
 // string returns a Go string found at off.
 func (t *LineTable) string(off uint32) string {
 	return t.stringFrom(t.funcdata, off)
+}
+
+// fileString returns the file name for a filetab offset.
+func (t *LineTable) fileString(off uint32) string {
+	if t.version < verCosmo {
+		return t.stringFrom(t.filetab, off)
+	}
+	// The compact format splits each file name into a shared directory
+	// and a base name: the table starts with a uint32 directory count and
+	// uint32 offsets of the NUL-terminated directory strings, and a file
+	// entry is uvarint(dir index) followed by the NUL-terminated base
+	// name. See cmd/link/internal/ld/pcln.go:generateFilenameTabs.
+	if s, ok := t.strings[off]; ok {
+		return s
+	}
+	d := t.filetab[off:]
+	idx := t.readvarint(&d)
+	i := bytes.IndexByte(d, 0)
+	base := d[:i]
+	do := t.binary.Uint32(t.filetab[4+4*idx:])
+	j := bytes.IndexByte(t.filetab[do:], 0)
+	s := string(t.filetab[do:do+uint32(j)]) + string(base)
+	t.strings[off] = s
+	return s
 }
 
 // functabFieldSize returns the size in bytes of a single functab field.
@@ -463,7 +521,15 @@ func (f funcData) nameOff() uint32     { return f.field(1) }
 func (f funcData) deferreturn() uint32 { return f.field(3) }
 func (f funcData) pcfile() uint32      { return f.field(5) }
 func (f funcData) pcln() uint32        { return f.field(6) }
-func (f funcData) cuOffset() uint32    { return f.field(8) }
+
+func (f funcData) cuOffset() uint32 {
+	if f.t.version >= verCosmo {
+		// The compact _func layout dropped the npcdata field that
+		// preceded cuOffset, moving it up one slot.
+		return f.field(7)
+	}
+	return f.field(8)
+}
 
 // field returns the nth field of the _func struct.
 // It panics if n == 0 or n > 9; for n == 0, call f.entryPC.
@@ -485,6 +551,9 @@ func (f funcData) field(n uint32) uint32 {
 
 // step advances to the next pc, value pair in the encoded table.
 func (t *LineTable) step(p *[]byte, pc *uint64, val *int32, first bool) bool {
+	if t.version == verCosmo {
+		return t.stepCosmo(p, pc, val, first)
+	}
 	uvdelta := t.readvarint(p)
 	if uvdelta == 0 && !first {
 		return false
@@ -498,6 +567,43 @@ func (t *LineTable) step(p *[]byte, pc *uint64, val *int32, first bool) bool {
 	pcdelta := t.readvarint(p) * t.quantum
 	*pc += uint64(pcdelta)
 	*val += vdelta
+	return true
+}
+
+// stepCosmo is the verCosmo pair decoding: a first byte >= 0x80 is a
+// whole packed pair (value delta -4..3 in bits 4-6, pc delta 1..16 in
+// bits 0-3), 0x7F escapes a multi-byte zig-zag value delta followed by
+// a uvarint pc delta, and 0x00..0x7E is a one-byte zig-zag value delta
+// followed by a uvarint pc delta. A 0x00 value-delta byte terminates
+// the table except in the first pair. See
+// cmd/internal/obj/pcln.go:appendPCPair.
+func (t *LineTable) stepCosmo(p *[]byte, pc *uint64, val *int32, first bool) bool {
+	b := (*p)[0]
+	if b >= 0x80 {
+		// Packed pair.
+		*p = (*p)[1:]
+		*val += int32(b>>4&7) - 4
+		*pc += uint64((uint32(b&0xF) + 1) * t.quantum)
+		return true
+	}
+	var uvdelta uint32
+	if b == 0x7F {
+		*p = (*p)[1:]
+		uvdelta = t.readvarint(p)
+	} else {
+		if b == 0 && !first {
+			return false
+		}
+		uvdelta = uint32(b)
+		*p = (*p)[1:]
+	}
+	if uvdelta&1 != 0 {
+		uvdelta = ^(uvdelta >> 1)
+	} else {
+		uvdelta >>= 1
+	}
+	*val += int32(uvdelta)
+	*pc += uint64(t.readvarint(p) * t.quantum)
 	return true
 }
 
@@ -537,7 +643,7 @@ func (t *LineTable) findFileLine(entry uint64, filetab, linetab uint32, filenum,
 	fileStartPC := filePC
 	for t.step(&fp, &filePC, &fileVal, filePC == entry) {
 		fileIndex := fileVal
-		if t.version == ver116 || t.version == ver118 || t.version == ver120 {
+		if t.version >= ver116 {
 			fileIndex = int32(t.binary.Uint32(cutab[fileVal*4:]))
 		}
 		if fileIndex == filenum && fileStartPC < filePC {
@@ -608,7 +714,7 @@ func (t *LineTable) go12PCToFile(pc uint64) (file string) {
 	}
 	cuoff := f.cuOffset()
 	if fnoff := t.binary.Uint32(t.cutab[(cuoff+uint32(fno))*4:]); fnoff != ^uint32(0) {
-		return t.stringFrom(t.filetab, fnoff)
+		return t.fileString(fnoff)
 	}
 	return ""
 }
@@ -636,7 +742,7 @@ func (t *LineTable) go12LineToPC(file string, line int) (pc uint64) {
 		entry := f.entryPC()
 		filetab := f.pcfile()
 		linetab := f.pcln()
-		if t.version == ver116 || t.version == ver118 || t.version == ver120 {
+		if t.version >= ver116 {
 			if f.cuOffset() == ^uint32(0) {
 				// skip functions without compilation unit (not real function, or linker generated)
 				continue
@@ -665,6 +771,24 @@ func (t *LineTable) initFileMap() {
 		for i := uint32(1); i < t.nfiletab; i++ {
 			s := t.string(t.binary.Uint32(t.filetab[4*i:]))
 			m[s] = i
+		}
+	} else if t.version >= verCosmo {
+		// The file entries start directly after the last directory
+		// string (see fileString for the layout).
+		ndir := t.binary.Uint32(t.filetab)
+		pos := 4 + 4*ndir
+		if ndir > 0 {
+			last := t.binary.Uint32(t.filetab[4+4*(ndir-1):])
+			pos = last + uint32(bytes.IndexByte(t.filetab[last:], 0)) + 1
+		}
+		for i := uint32(0); i < t.nfiletab; i++ {
+			d := t.filetab[pos:]
+			rest := len(d)
+			t.readvarint(&d)
+			idxLen := uint32(rest - len(d))
+			baseLen := uint32(bytes.IndexByte(d, 0))
+			m[t.fileString(pos)] = pos
+			pos += idxLen + baseLen + 1
 		}
 	} else {
 		var pos uint32

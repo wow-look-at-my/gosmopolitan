@@ -53,24 +53,28 @@ func debugCallCheck(pc uintptr) string {
 			return
 		}
 
-		name := funcname(f)
+		npfx, name := funcnamePieces(f)
 
-		switch name {
-		case "debugCall32",
-			"debugCall64",
-			"debugCall128",
-			"debugCall256",
-			"debugCall512",
-			"debugCall1024",
-			"debugCall2048",
-			"debugCall4096",
-			"debugCall8192",
-			"debugCall16384",
-			"debugCall32768",
-			"debugCall65536":
-			// These functions are allowed so that the debugger can initiate multiple function calls.
-			// See: https://golang.org/cl/161137/
-			return
+		// These names have no package qualifier, so the split prefix is
+		// empty for all of them.
+		if npfx == "" {
+			switch name {
+			case "debugCall32",
+				"debugCall64",
+				"debugCall128",
+				"debugCall256",
+				"debugCall512",
+				"debugCall1024",
+				"debugCall2048",
+				"debugCall4096",
+				"debugCall8192",
+				"debugCall16384",
+				"debugCall32768",
+				"debugCall65536":
+				// These functions are allowed so that the debugger can initiate multiple function calls.
+				// See: https://golang.org/cl/161137/
+				return
+			}
 		}
 
 		// Disallow calls from the runtime. We could
@@ -78,7 +82,7 @@ func debugCallCheck(pc uintptr) string {
 		// when locks are held), but there are enough tightly
 		// coded sequences (e.g., defer handling) that it's
 		// better to play it safe.
-		if pfx := "runtime."; len(name) > len(pfx) && name[:len(pfx)] == pfx {
+		if pfx := "runtime."; len(npfx)+len(name) > len(pfx) && hasPrefixPieces(npfx, name, pfx) {
 			ret = debugCallRuntime
 			return
 		}

@@ -105,21 +105,21 @@ func pluginftabverify(md *moduledata) {
 		}
 
 		f := funcInfo{(*_func)(unsafe.Pointer(&md.pclntable[md.ftab[i].funcoff])), md}
-		name := funcname(f)
+		npfx, name := funcnamePieces(f)
 
 		// A common bug is f.entry has a relocation to a duplicate
 		// function symbol, meaning if we search for its PC we get
 		// a valid entry with a name that is useful for debugging.
-		name2 := "none"
+		npfx2, name2 := "", "none"
 		entry2 := uintptr(0)
 		f2 := findfunc(entry)
 		if f2.valid() {
-			name2 = funcname(f2)
+			npfx2, name2 = funcnamePieces(f2)
 			entry2 = f2.entry()
 		}
 		badtable = true
-		println("ftab entry", hex(entry), "/", hex(entry2), ": ",
-			name, "/", name2, "outside pc range:[", hex(md.minpc), ",", hex(md.maxpc), "], modulename=", md.modulename, ", pluginpath=", md.pluginpath)
+		print("ftab entry ", hex(entry), " / ", hex(entry2), " :  ",
+			npfx, name, " / ", npfx2, name2, " outside pc range:[ ", hex(md.minpc), " , ", hex(md.maxpc), " ], modulename= ", md.modulename, " , pluginpath= ", md.pluginpath, "\n")
 	}
 	if badtable {
 		throw("runtime: plugin has bad symbol table")
