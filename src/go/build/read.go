@@ -42,11 +42,28 @@ func newImportReader(name string, r io.Reader) *importReader {
 	if leadingBytes, err := b.Peek(3); err == nil && bytes.Equal(leadingBytes, bom) {
 		b.Discard(3)
 	}
+
+	startLine := 1
+
+	// Skip shebang line if present at the very beginning of the file.
+	// A shebang line is: #!<text><newline>
+	// This allows Go source files to be used as scripts on Unix systems.
+	if shebangBytes, err := b.Peek(2); err == nil && shebangBytes[0] == '#' && shebangBytes[1] == '!' {
+		// Read and discard the shebang line
+		for {
+			c, err := b.ReadByte()
+			if err != nil || c == '\n' {
+				break
+			}
+		}
+		startLine = 2 // First Go code is on line 2
+	}
+
 	return &importReader{
 		b: b,
 		pos: token.Position{
 			Filename: name,
-			Line:     1,
+			Line:     startLine,
 			Column:   1,
 		},
 	}

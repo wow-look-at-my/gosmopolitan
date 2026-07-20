@@ -161,6 +161,20 @@ func (s *Scanner) Init(file *token.File, src []byte, err ErrorHandler, mode Mode
 	if s.ch == bom {
 		s.next() // ignore BOM at file beginning
 	}
+
+	// Skip shebang line if present at the very beginning of the file.
+	// A shebang line is: #!<text><newline>
+	// This allows Go source files to be used as scripts on Unix systems.
+	if s.ch == '#' && s.rdOffset < len(s.src) && s.src[s.rdOffset] == '!' {
+		// Skip to end of line
+		for s.ch != '\n' && s.ch >= 0 {
+			s.next()
+		}
+		// Advance past the newline so we're at the start of line 2
+		if s.ch == '\n' {
+			s.next()
+		}
+	}
 }
 
 func (s *Scanner) error(offs int, msg string) {
