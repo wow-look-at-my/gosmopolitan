@@ -3253,7 +3253,7 @@ func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 
 	z, err := newDwarfCompressor(&buf, codec)
 	if err != nil {
-		log.Fatalf("NewWriterLevel failed: %s", err)
+		log.Fatalf("newDwarfCompressor failed: %s", err)
 	}
 	st := ctxt.makeRelocSymState()
 	for _, s := range syms {
