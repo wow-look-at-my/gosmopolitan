@@ -6,17 +6,37 @@ package runtime
 
 import (
 	"internal/abi"
-	_ "unsafe" // for linkname
+	"unsafe" // also for linkname
 )
 
-// inlinedCall is the encoding of entries in the FUNCDATA_InlTree table.
+// inlinedCall is the decoded form of one entry in the FUNCDATA_InlTree
+// table. In the table, entries are packed inlinedCallSize-byte records
+// with no padding: funcID at offset 0, then nameOff, parentPc and
+// startLine as unaligned target-endian 32-bit fields at offsets 1, 5
+// and 9. The unwinder decodes records with unaligned loads (see
+// inlineUnwinder.call), so the packed layout is safe on every GOARCH.
 type inlinedCall struct {
 	funcID    abi.FuncID // type of the called function
-	_         [3]byte
-	nameOff   int32 // offset into pclntab for name of called function
-	parentPc  int32 // position of an instruction whose source position is the call site (offset from entry)
-	startLine int32 // line number of start of function (func keyword/TEXT directive)
+	nameOff   int32      // offset into pclntab for name of called function
+	parentPc  int32      // position of an instruction whose source position is the call site (offset from entry)
+	startLine int32      // line number of start of function (func keyword/TEXT directive)
 }
+
+// inlinedCallSize is the encoded size in bytes of one FUNCDATA_InlTree
+// entry. The unwinder indexes the table randomly by PCDATA_InlTreeIndex
+// value, so entries have a fixed stride.
+//
+// Keep in sync with cmd/link/internal/ld/pcln.go:genInlTreeSym.
+const inlinedCallSize = 13
+
+// Byte offsets of the inlinedCall fields within an encoded record.
+// Keep in sync with inlinedCall, call and genInlTreeSym.
+const (
+	inlinedCallFuncID    = 0 // uint8
+	inlinedCallNameOff   = 1 // unaligned uint32
+	inlinedCallParentPc  = 5 // unaligned uint32
+	inlinedCallStartLine = 9 // unaligned uint32
+)
 
 // An inlineUnwinder iterates over the stack of inlined calls at a PC by
 // decoding the inline table. The last step of iteration is always the frame of
@@ -33,7 +53,8 @@ type inlinedCall struct {
 // code.
 type inlineUnwinder struct {
 	f       funcInfo
-	inlTree *[1 << 20]inlinedCall
+	inlTree unsafe.Pointer // base of this function's FUNCDATA_InlTree table, or nil
+	entry   uintptr        // f.entry(), cached; set iff inlTree != nil
 }
 
 // An inlineFrame is a position in an inlineUnwinder.
@@ -69,18 +90,42 @@ func newInlineUnwinder(f funcInfo, pc uintptr) (inlineUnwinder, inlineFrame) {
 	if inldata == nil {
 		return inlineUnwinder{f: f}, inlineFrame{pc: pc, index: -1}
 	}
-	inlTree := (*[1 << 20]inlinedCall)(inldata)
-	u := inlineUnwinder{f: f, inlTree: inlTree}
+	// Cache f.entry(): next needs it for every inlined frame, and the
+	// textAddr call behind it is too big to inline.
+	u := inlineUnwinder{f: f, inlTree: inldata, entry: f.entry()}
 	return u, u.resolveInternal(pc)
 }
 
-func (u *inlineUnwinder) resolveInternal(pc uintptr) inlineFrame {
-	return inlineFrame{
-		pc: pc,
-		// Conveniently, this returns -1 if there's an error, which is the same
-		// value we use for the outermost frame.
-		index: pcdatavalue1(u.f, abi.PCDATA_InlTreeIndex, pc, false),
+// record returns a pointer to the index'th encoded entry of the inline
+// tree. The hot paths (next, srcFunc) load the fields they need from it
+// directly at the inlinedCall* offsets: decoding all four fields, as call
+// does, costs too much for those methods to stay inlinable.
+func (u *inlineUnwinder) record(index int32) unsafe.Pointer {
+	return add(u.inlTree, uintptr(index)*inlinedCallSize)
+}
+
+// call decodes the index'th entry of the inline tree. It does not
+// allocate and is safe on the system stack. It is the reference decoder
+// for the record layout; hot paths read single fields from record
+// instead.
+func (u *inlineUnwinder) call(index int32) inlinedCall {
+	p := u.record(index)
+	return inlinedCall{
+		funcID:    abi.FuncID(*(*uint8)(p)),
+		nameOff:   int32(readUnaligned32(add(p, inlinedCallNameOff))),
+		parentPc:  int32(readUnaligned32(add(p, inlinedCallParentPc))),
+		startLine: int32(readUnaligned32(add(p, inlinedCallStartLine))),
 	}
+}
+
+func (u *inlineUnwinder) resolveInternal(pc uintptr) inlineFrame {
+	// Equivalent to pcdatavalue1(u.f, abi.PCDATA_InlTreeIndex, pc, false)
+	// - pcvalue returns -1 for pcdataoff's absent-table 0 - but with the
+	// constant-table presence test and offset lookup folded by inlining.
+	// Conveniently, -1 on error is the same value we use for the
+	// outermost frame.
+	index, _ := pcvalue(u.f, pcdataoff(u.f, abi.PCDATA_InlTreeIndex), pc, false)
+	return inlineFrame{pc: pc, index: index}
 }
 
 func (uf inlineFrame) valid() bool {
@@ -93,8 +138,8 @@ func (u *inlineUnwinder) next(uf inlineFrame) inlineFrame {
 		uf.pc = 0
 		return uf
 	}
-	parentPc := u.inlTree[uf.index].parentPc
-	return u.resolveInternal(u.f.entry() + uintptr(parentPc))
+	parentPc := int32(readUnaligned32(add(u.record(uf.index), inlinedCallParentPc)))
+	return u.resolveInternal(u.entry + uintptr(parentPc))
 }
 
 // isInlined returns whether uf is an inlined frame.
@@ -117,17 +162,27 @@ func (u *inlineUnwinder) srcFunc(uf inlineFrame) srcFunc {
 	if uf.index < 0 {
 		return u.f.srcFunc()
 	}
-	t := &u.inlTree[uf.index]
+	p := u.record(uf.index)
 	return srcFunc{
 		u.f.datap,
-		t.nameOff,
-		t.startLine,
-		t.funcID,
+		int32(readUnaligned32(add(p, inlinedCallNameOff))),
+		int32(readUnaligned32(add(p, inlinedCallStartLine))),
+		abi.FuncID(*(*uint8)(p)),
 	}
 }
 
 //go:linkname badSrcFunc runtime.(*inlineUnwinder).srcFunc
 func badSrcFunc(*inlineUnwinder, inlineFrame) srcFunc
+
+// srcFuncID returns just the funcID of the srcFunc representing uf.
+// Unlike srcFunc it is cheap enough to inline, so the traceback loops
+// that only elide wrappers use it instead.
+func (u *inlineUnwinder) srcFuncID(uf inlineFrame) abi.FuncID {
+	if uf.index < 0 {
+		return u.f.funcID
+	}
+	return abi.FuncID(*(*uint8)(u.record(uf.index)))
+}
 
 // fileLine returns the file name and line number of the call within the given
 // frame. As a convenience, for the innermost frame, it returns the file and
@@ -138,4 +193,11 @@ func badSrcFunc(*inlineUnwinder, inlineFrame) srcFunc
 func (u *inlineUnwinder) fileLine(uf inlineFrame) (file string, line int) {
 	file, line32 := funcline1(u.f, uf.pc, false)
 	return file, int(line32)
+}
+
+// fileLinePieces is like fileLine, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func (u *inlineUnwinder) fileLinePieces(uf inlineFrame) (dir, file string, line int) {
+	dir, file, line32 := funcline1Pieces(u.f, uf.pc, false)
+	return dir, file, int(line32)
 }
