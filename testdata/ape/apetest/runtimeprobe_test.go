@@ -29,13 +29,15 @@ var probeOkChecks = []string{
 	"sleep", "ticker", "after", "ctxtimeout",
 	"tcplisten", "tcpecho", "deadline", "tcpserver", "udp",
 	"unixsock", "unixecho",
+	"socketpair", "sockpairpoll",
+	"sendmsg", "netbuffers", "fdpass",
 	"execchild",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
 	"readdir", "walkdir", "removeall",
-	"segvrecover", "sigterm", "sigusr2", "preempt", "waitsig",
+	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "waitsig",
 	"all",
 }
 

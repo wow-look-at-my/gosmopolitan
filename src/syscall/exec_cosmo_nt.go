@@ -244,10 +244,15 @@ func ntIsAbs(path string) bool {
 // (already C-converted) arguments. The status pipe fd is deliberately
 // not among them: the child cannot inherit it (see the file comment).
 func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAttr, sys *SysProcAttr) (pid int, err Errno) {
-	// Every fork-flavored SysProcAttr knob is meaningless on NT;
-	// refuse loudly rather than silently dropping semantics.
+	// Fork-flavored SysProcAttr knobs are meaningless on NT; refuse
+	// loudly rather than silently dropping semantics. The one carved
+	// out: Setpgid with Pgid == 0 ("make the child its own group
+	// leader") maps exactly onto CREATE_NEW_PROCESS_GROUP and is
+	// honored below. Pgid != 0 ("join an EXISTING group") stays
+	// ENOSYS - NT has no way to place a new process into another
+	// process's group.
 	if chroot != nil || sys.Credential != nil || sys.Ptrace || sys.Setsid ||
-		sys.Setpgid || sys.Setctty || sys.Noctty || sys.Foreground || sys.Pgid != 0 ||
+		sys.Setctty || sys.Noctty || sys.Foreground || sys.Pgid != 0 ||
 		sys.Pdeathsig != 0 || sys.Cloneflags != 0 || sys.Unshareflags != 0 ||
 		len(sys.UidMappings) != 0 || len(sys.GidMappings) != 0 ||
 		sys.GidMappingsEnableSetgroups || sys.UseCgroupFD || sys.PidFD != nil {
@@ -304,8 +309,17 @@ func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAt
 		stdio[i] = int32(f)
 	}
 
+	var spawnFlags uint32
+	if sys.Setpgid {
+		// sys.Pgid == 0 here (guarded above): the child becomes its
+		// own process-group leader, NT's CREATE_NEW_PROCESS_GROUP.
+		// The runtime records the leadership so kill(-pid) can
+		// address the group.
+		spawnFlags |= cosmo.SpawnNewProcessGroup
+	}
+
 	ntSpawnMu.Lock()
-	cpid, spErrno := cosmo.Windows().Spawn(argv0s, dirs, cmdline, envBlock, stdio)
+	cpid, spErrno := cosmo.Windows().Spawn(argv0s, dirs, cmdline, envBlock, stdio, spawnFlags)
 	ntSpawnMu.Unlock()
 	if spErrno != 0 {
 		return 0, Errno(spErrno)

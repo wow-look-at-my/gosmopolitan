@@ -598,16 +598,21 @@ func validSIGPROF(mp *m, c *sigctxt) bool {
 
 func setProcessCPUProfiler(hz int32) {
 	if iswindows() {
-		// NT wave 1: no setitimer / SIGPROF machinery; profiling
-		// timers are a later wave.
+		// NT has no setitimer/SIGPROF: a profiler M samples threads
+		// directly (os_cosmo_nt_prof.go, wave 3 item 3).
+		ntSetProcessCPUProfiler(hz)
 		return
 	}
 	setProcessCPUProfilerTimer(hz)
 }
 
 func setThreadCPUProfiler(hz int32) {
-	// No syscalls here (per-thread timer_create is not wired on
-	// cosmo), so no NT gate is needed.
+	if iswindows() {
+		// Arm/disarm the NT profiling timer (per-thread timer_create
+		// is not wired on cosmo; the timer is process-wide, upstream
+		// windows' model).
+		ntSetThreadCPUProfiler(hz)
+	}
 	mp := getg().m
 	mp.profilehz = hz
 }
