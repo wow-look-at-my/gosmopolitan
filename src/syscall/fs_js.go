@@ -10,10 +10,16 @@ import (
 	"errors"
 	"sync"
 	"syscall/js"
+	"unsafe"
 )
 
 // Provided by package runtime.
 func now() (sec int64, nsec int32)
+
+// Provided by package runtime: the raw stdout/stderr write import and the
+// GOWASM=threads worker-thread predicate (see writeSync).
+func runtime_wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
+func runtime_onWorkerThread() bool
 
 var jsProcess = js.Global().Get("process")
 var jsPath = js.Global().Get("path")
@@ -21,6 +27,13 @@ var jsFS = js.Global().Get("fs")
 var constants = jsFS.Get("constants")
 
 var uint8Array = js.Global().Get("Uint8Array")
+
+// jsFSWriteSync reports whether the JavaScript fs object provides writeSync,
+// used by the synchronous stdout/stderr fast path in Write. Node.js and the
+// wasm_exec.js fallback shim both provide it; the runtime's wasmWrite import
+// (println, panic output) already depends on it unconditionally. A custom fs
+// missing it falls back to the asynchronous path.
+var jsFSWriteSync = jsFS.Get("writeSync").Type() == js.TypeFunction
 
 var (
 	nodeWRONLY = constants.Get("O_WRONLY").Int()
@@ -448,6 +461,17 @@ func Write(fd int, b []byte) (int, error) {
 		return n, nil
 	}
 
+	if (fd == 1 || fd == 2) && jsFSWriteSync {
+		// Write to stdout and stderr synchronously. The asynchronous
+		// fs.write delivers its completion callback on the JavaScript
+		// event loop, which only runs when every goroutine is idle: a
+		// CPU-bound goroutine would park the printing goroutine forever
+		// (and with it any os.Exit that follows the print).
+		n, err := writeSync(fd, b)
+		f.pos += int64(n)
+		return n, err
+	}
+
 	buf := uint8Array.New(len(b))
 	js.CopyBytesToJS(buf, b)
 	n, err := fsCall("write", fd, buf, 0, len(b), nil)
@@ -457,6 +481,71 @@ func Write(fd int, b []byte) (int, error) {
 	n2 := n.Int()
 	f.pos += int64(n2)
 	return n2, err
+}
+
+// writeSync writes b to fd with the synchronous JavaScript fs.writeSync API,
+// retrying until all of b is written: stdout and stderr on Node.js are often
+// nonblocking (TTYs and pipes), so a single call may write only part of b or
+// fail with EAGAIN when the kernel buffer is full. There is nothing to wait
+// on synchronously, so EAGAIN retries immediately until the consumer drains.
+func writeSync(fd int, b []byte) (int, error) {
+	if fd <= 2 && runtime_onWorkerThread() {
+		// GOWASM=threads: JavaScript values are unavailable on worker
+		// threads, but the runtime's raw write import is implemented
+		// there (it is how println and panic output reach the terminal
+		// from worker Ms). Route stdout/stderr through it so fmt and os
+		// printing work from goroutines on any thread; every other
+		// descriptor still requires the main thread.
+		if len(b) == 0 {
+			return 0, nil
+		}
+		runtime_wasmWrite(uintptr(fd), unsafe.Pointer(&b[0]), int32(len(b)))
+		return len(b), nil
+	}
+	buf := uint8Array.New(len(b))
+	js.CopyBytesToJS(buf, b)
+	written := 0
+	for written < len(b) {
+		n, err := writeSyncCall(fd, buf, written, len(b)-written)
+		if err == errEAGAIN {
+			continue
+		}
+		if err != nil {
+			return written, err
+		}
+		if n <= 0 || n > len(b)-written {
+			// Defend against a broken fs shim: a result that would
+			// make no progress (or overshoot) cannot be trusted for
+			// another round trip.
+			return written, errnoErr(EIO)
+		}
+		written += n
+	}
+	return written, nil
+}
+
+// writeSyncCall makes one fs.writeSync call, mapping a thrown exception to an
+// errno error the same way jsFSInvoke does for the asynchronous methods.
+func writeSyncCall(fd int, buf js.Value, offset, length int) (n int, err error) {
+	defer func() {
+		switch r := recover().(type) {
+		case nil:
+		case js.Error:
+			err = mapJSError(r.Value)
+		case js.Value:
+			err = mapJSError(r)
+		default:
+			panic(r)
+		}
+	}()
+	ret := jsFS.Call("writeSync", fd, buf, offset, length, nil)
+	if ret.Type() != js.TypeNumber {
+		// A minimal fs shim may not return the byte count; such shims
+		// (like the wasm_exec.js fallback) write everything they are
+		// given.
+		return length, nil
+	}
+	return ret.Int(), nil
 }
 
 func Pread(fd int, b []byte, offset int64) (int, error) {
@@ -548,9 +637,35 @@ func fsCall(name string, args ...any) (js.Value, error) {
 		return nil
 	})
 	defer f.Release()
-	jsFS.Call(name, append(args, f)...)
+	if err := jsFSInvoke(name, append(args, f)); err != nil {
+		return js.Value{}, err
+	}
 	res := <-c
 	return res.val, res.err
+}
+
+// jsFSInvoke calls the method name on the JavaScript fs object. An exception
+// thrown synchronously by the method - instead of being delivered as an
+// error to the callback, as the Node.js fs API does - is mapped to an errno
+// error just like a callback error, so a broken or nonstandard fs
+// implementation cannot crash the program. The recover is scoped to this one
+// JavaScript call and converts only the panic values that syscall/js raises
+// for JavaScript exceptions (js.Error, js.Value); any other panic propagates
+// unchanged.
+func jsFSInvoke(name string, args []any) (err error) {
+	defer func() {
+		switch r := recover().(type) {
+		case nil:
+		case js.Error:
+			err = mapJSError(r.Value)
+		case js.Value:
+			err = mapJSError(r)
+		default:
+			panic(r)
+		}
+	}()
+	jsFS.Call(name, args...)
+	return nil
 }
 
 // checkPath checks that the path is not empty and that it contains no null characters.
@@ -577,10 +692,20 @@ func recoverErr(errPtr *error) {
 }
 
 // mapJSError maps an error given by Node.js to the appropriate Go error.
+// Errors without a recognized code (e.g. a TypeError thrown by a broken or
+// custom fs implementation) map to EIO instead of crashing the program; the
+// enclosing *PathError still reports the operation and path.
 func mapJSError(jsErr js.Value) error {
-	errno, ok := errnoByCode[jsErr.Get("code").String()]
+	if jsErr.Type() != js.TypeObject {
+		return errnoErr(EIO)
+	}
+	code := jsErr.Get("code")
+	if code.Type() != js.TypeString {
+		return errnoErr(EIO)
+	}
+	errno, ok := errnoByCode[code.String()]
 	if !ok {
-		panic(jsErr)
+		return errnoErr(EIO)
 	}
 	return errnoErr(Errno(errno))
 }

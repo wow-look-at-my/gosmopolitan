@@ -102,22 +102,32 @@ type Rlimit struct {
 
 type _Gid_t uint32
 
+// Stat_t follows the arm64 Linux kernel's struct stat (asm-generic,
+// 128 bytes: Mode at offset 16, 32-bit Nlink/Blksize), matching
+// upstream ztypes_linux_arm64.go. This layout previously copied amd64's
+// (Mode at 24, 64-bit Nlink), and since the KERNEL writes the buffer on
+// Linux hosts, every field between Ino and Rdev came back scrambled on
+// arm64 hosts - file-type checks saw Mode==0 while Size/Ino/timestamps
+// happened to coincide between the two layouts and masked the bug. The
+// darwin emulation writes the same layout (see linuxStat in
+// internal/runtime/syscall/cosmo).
 type Stat_t struct {
-	Dev     uint64
-	Ino     uint64
-	Nlink   uint64
-	Mode    uint32
-	Uid     uint32
-	Gid     uint32
-	X__pad0 int32
-	Rdev    uint64
-	Size    int64
-	Blksize int64
-	Blocks  int64
-	Atim    Timespec
-	Mtim    Timespec
-	Ctim    Timespec
-	_       [3]int64
+	Dev               uint64
+	Ino               uint64
+	Mode              uint32
+	Nlink             uint32
+	Uid               uint32
+	Gid               uint32
+	Rdev              uint64
+	X__pad1           uint64
+	Size              int64
+	Blksize           int32
+	X__pad2           int32
+	Blocks            int64
+	Atim              Timespec
+	Mtim              Timespec
+	Ctim              Timespec
+	X__glibc_reserved [2]int32
 }
 
 type Statfs_t struct {
@@ -561,6 +571,7 @@ type Ustat_t struct {
 
 type EpollEvent struct {
 	Events uint32
+	_      int32
 	Fd     int32
 	Pad    int32
 }

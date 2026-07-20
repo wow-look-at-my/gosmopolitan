@@ -206,12 +206,17 @@ func createDwarfVars(fnsym *obj.LSym, complexOK bool, fn *ir.Func, apDecls []*ir
 	dcl := apDecls
 	if fnsym.WasInlined() {
 		dcl = preInliningDcls(fnsym)
-	} else {
+	} else if fn.DebugInfo != nil {
 		// The backend's stackframe pass prunes away entries from the
 		// fn's Dcl list, including PARAMOUT nodes that correspond to
 		// output params passed in registers. Add back in these
 		// entries here so that we can process them properly during
 		// DWARF-gen. See issue 48573 for more details.
+		//
+		// fn.DebugInfo is nil for functions that never went through
+		// buildssa, such as //go:wasmimport wrappers, whose bodies are
+		// synthesized later by the assembler; they have no register
+		// output params to recover.
 		debugInfo := fn.DebugInfo.(*ssa.FuncDebug)
 		for _, n := range debugInfo.RegOutputParams {
 			if !ssa.IsVarWantedForDebug(n) {
@@ -292,10 +297,17 @@ func createDwarfVars(fnsym *obj.LSym, complexOK bool, fn *ir.Func, apDecls []*ir
 			if n.Heapaddr == nil {
 				base.Fatalf("invalid heap allocated var without Heapaddr")
 			}
-			debug := fn.DebugInfo.(*ssa.FuncDebug)
-			list := createHeapDerefLocationList(n, debug.EntryID)
-			dvar.PutLocationList = func(listSym, startPC dwarf.Sym) {
-				debug.PutLocationList(list, base.Ctxt, listSym.(*obj.LSym), startPC.(*obj.LSym))
+			// Only emit a location list if location lists are enabled:
+			// without them there is no loc section for the entry to live
+			// in (and no fn.dwarfLocSym), so the variable is described
+			// with no location instead. Location lists are disabled on
+			// wasm, which has no DWARF register mapping.
+			if base.Ctxt.Flag_locationlists {
+				debug := fn.DebugInfo.(*ssa.FuncDebug)
+				list := createHeapDerefLocationList(n, debug.EntryID)
+				dvar.PutLocationList = func(listSym, startPC dwarf.Sym) {
+					debug.PutLocationList(list, base.Ctxt, listSym.(*obj.LSym), startPC.(*obj.LSym))
+				}
 			}
 		}
 		vars = append(vars, dvar)

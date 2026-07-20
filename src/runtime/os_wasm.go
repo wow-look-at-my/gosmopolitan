@@ -35,8 +35,10 @@ func sigpanic() {
 	panicmem()
 }
 
-// func exitThread(wait *uint32)
-// FIXME: wasm doesn't have atomic yet
+// exitThread is never called on wasm: there are no OS threads to exit
+// (see newosproc). The assembly body in sys_wasm.s is a trap (UNDEF).
+//
+// func exitThread(wait *atomic.Uint32)
 func exitThread(wait *atomic.Uint32)
 
 type mOS struct{}
@@ -53,8 +55,11 @@ type sigset struct{}
 // Called to initialize a new m (including the bootstrap m).
 // Called on the parent thread (main thread in case of bootstrap), can allocate memory.
 func mpreinit(mp *m) {
-	mp.gsignal = malg(32 * 1024)
-	mp.gsignal.m = mp
+	// wasm has no signals (_NSIG == 0), so a signal-handling g can never
+	// run and mp.gsignal stays nil. Everything that reads gsignal either
+	// nil-checks it or only compares it against the current g (including
+	// morestack in asm_wasm.s, which loads the field but never
+	// dereferences it), so don't waste a 32KB stack on it.
 }
 
 //go:nosplit
@@ -111,7 +116,12 @@ func initsig(preinit bool) {
 //
 //go:nowritebarrier
 func newosproc(mp *m) {
-	throw("newosproc: not implemented")
+	if !wasmThreadsEnabled {
+		throw("newosproc: not implemented")
+	}
+	// GOWASM=threads: hand the new M to a pre-spawned pool worker
+	// through the spawn mailbox. See os_wasmthreads.go.
+	wasmThreadsNewosproc(mp)
 }
 
 // Do nothing on WASM platform, always return EPIPE to caller.
@@ -146,11 +156,34 @@ func preemptM(mp *m) {
 //go:nosplit
 func getfp() uintptr { return 0 }
 
+// setProcessCPUProfiler is a no-op on wasm: there is no process-wide
+// profiling timer to start or stop. Sampling is driven from the loop
+// preemption gate; see the CPU profiling comment in proc.go.
 func setProcessCPUProfiler(hz int32) {}
-func setThreadCPUProfiler(hz int32)  {}
-func sigdisable(uint32)              {}
-func sigenable(uint32)               {}
-func sigignore(uint32)               {}
+
+// setThreadCPUProfiler makes the changes required to profile at hz on
+// this (the only) thread: it records the rate and maintains the sampling
+// deadline consumed by wasmLoopPreemptGate/wasmProfSample.
+func setThreadCPUProfiler(hz int32) {
+	getg().m.profilehz = hz
+	if hz > 0 {
+		wasmProfPeriod = int64(1e9) / int64(hz)
+		wasmProfNextSample = nanotime() + wasmProfPeriod
+		// Arm the loop preemption checks of the goroutine that is
+		// enabling profiling (setcpuprofilerate calls here on it): it
+		// is already past its dispatch in execute, so it would
+		// otherwise keep running unarmed - and unsampled - until its
+		// next yield. Goroutines dispatched from now on are armed by
+		// execute.
+		wasmArmLoopPreempt()
+	} else {
+		wasmProfNextSample = wasmProfNever
+	}
+}
+
+func sigdisable(uint32) {}
+func sigenable(uint32)  {}
+func sigignore(uint32)  {}
 
 // Stubs so tests can link correctly. These should never be called.
 func open(name *byte, mode, perm int32) int32        { panic("not implemented") }
