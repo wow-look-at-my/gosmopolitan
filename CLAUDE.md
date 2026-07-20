@@ -378,9 +378,11 @@ Every push whose build+test jobs are green publishes an installable
 linux-amd64 toolchain tarball to buildhost (pazer.build) as project
 `gosmopolitan`: the `publish` job in cosmo-ci.yml runs `make.bash -distpack`
 (official packaging; output `pkg/distpack/go<VERSION>.linux-amd64.tar.gz`,
-currently `go1.26.4cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
-GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
-server-info's `max_direct_upload_bytes`, chunked upload session above it).
+currently `go1.26.4cosmo.linux-amd64.tar.gz`, ~64 MiB) and publishes it
+with buildhost's own publish actions (`buildhost-create-release` /
+`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
+`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
+authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
 Consumers install the fork in seconds instead of a ~3 minute `make.bash`:
 
 ```bash
