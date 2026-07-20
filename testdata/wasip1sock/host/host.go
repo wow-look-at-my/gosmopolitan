@@ -131,10 +131,26 @@ const (
 // deadlocking the guest (the pump resumes as soon as the guest reads).
 const readBufSoftCap = 64 << 20
 
-// sockFD is one socket in the host's fd table. It goes through up to
-// three stages: fresh from sock_open (neither conn nor ln set), then
-// either a listener (ln set, acceptor goroutine feeding pending) or a
-// connection (conn set, pump goroutine feeding rbuf).
+// packetSoftCap pauses a datagram pump when this many undelivered
+// datagrams are queued for one socket; overflow beyond it then falls
+// to the host kernel's receive buffer (which drops, as UDP may).
+const packetSoftCap = 4096
+
+// packet is one received datagram: payload and source address, with
+// message boundaries preserved.
+type packet struct {
+	data []byte
+	addr *net.UDPAddr
+}
+
+// sockFD is one socket in the host's fd table. A stream socket goes
+// through up to three stages: fresh from sock_open (neither conn nor
+// ln set), then either a listener (ln set, acceptor goroutine feeding
+// pending) or a connection (conn set, pump goroutine feeding rbuf).
+// A datagram socket instead gets udp set - at sock_bind for the
+// unconnected shape, at sock_connect for the connected one (which
+// also sets conn, so the plain fd_write path sends datagrams) - with
+// a packet pump feeding packets.
 type sockFD struct {
 	family   int32
 	sotype   int32
@@ -157,6 +173,11 @@ type sockFD struct {
 
 	rbuf bytes.Buffer
 	rerr error // sticky read error; io.EOF means clean shutdown
+
+	// datagram state.
+	udp     *net.UDPConn
+	packets []packet
+	pumpGen int // invalidates a replaced pump (bind-then-connect)
 }
 
 type fdEntry struct {
@@ -274,6 +295,83 @@ func (h *wasiHost) startReadPump(s *sockFD, conn net.Conn) {
 	}()
 }
 
+// startPacketPump drains a datagram socket into s.packets, keeping
+// message boundaries and source addresses. h.mu must be held. The
+// pump belongs to one generation of the socket: when sock_connect
+// replaces a bound socket with a connected one, the superseded pump's
+// close error must not poison the fresh socket's state.
+func (h *wasiHost) startPacketPump(s *sockFD, uc *net.UDPConn) {
+	s.pumpGen++
+	gen := s.pumpGen
+	go func() {
+		buf := make([]byte, 64<<10)
+		for {
+			h.mu.Lock()
+			for gen == s.pumpGen && len(s.packets) > packetSoftCap && s.rerr == nil {
+				ch := h.gen
+				h.mu.Unlock()
+				<-ch
+				h.mu.Lock()
+			}
+			h.mu.Unlock()
+
+			n, addr, err := uc.ReadFromUDP(buf)
+			h.mu.Lock()
+			if gen != s.pumpGen {
+				h.mu.Unlock()
+				return
+			}
+			if err == nil || n > 0 {
+				// n == 0 with a nil error is a legitimate
+				// zero-length datagram.
+				s.packets = append(s.packets, packet{
+					data: append([]byte(nil), buf[:n]...),
+					addr: addr,
+				})
+			}
+			if err != nil {
+				if s.rerr == nil {
+					s.rerr = err
+				}
+				h.notify()
+				h.mu.Unlock()
+				return
+			}
+			h.notify()
+			h.mu.Unlock()
+		}
+	}()
+}
+
+// waitPacketLocked waits (honoring the socket's nonblock flag) for a
+// queued datagram and dequeues it. Called with h.mu held; returns
+// with it held.
+func (h *wasiHost) waitPacketLocked(sk *sockFD) (packet, uint16) {
+	if sk.udp == nil {
+		return packet{}, wasiENOTCONN
+	}
+	for len(sk.packets) == 0 {
+		if sk.rerr != nil {
+			errno := mapNetErrno(sk.rerr)
+			if errno == wasiSuccess {
+				errno = wasiEIO
+			}
+			return packet{}, errno
+		}
+		if sk.nonblock {
+			return packet{}, wasiEAGAIN
+		}
+		ch := h.gen
+		h.mu.Unlock()
+		<-ch
+		h.mu.Lock()
+	}
+	p := sk.packets[0]
+	sk.packets = sk.packets[1:]
+	h.notify() // the pump may be paused on the soft cap
+	return p, wasiSuccess
+}
+
 // startAcceptPump accepts connections into s.pending.
 func (h *wasiHost) startAcceptPump(s *sockFD, ln net.Listener) {
 	go func() {
@@ -334,6 +432,12 @@ func mapNetErrno(err error) uint16 {
 // readiness. h.mu must be held.
 
 func (s *sockFD) readable() bool {
+	if s.sotype == wasmedgeSockDgram {
+		if s.udp == nil {
+			return false
+		}
+		return len(s.packets) > 0 || s.rerr != nil
+	}
 	if s.ln != nil {
 		return len(s.pending) > 0 || s.lnErr != nil
 	}
@@ -347,6 +451,11 @@ func (s *sockFD) readable() bool {
 }
 
 func (s *sockFD) writable() bool {
+	if s.sotype == wasmedgeSockDgram {
+		// Datagram sends never wait for a peer, and an unbound
+		// socket binds itself on the first sock_send_to.
+		return true
+	}
 	if s.ln != nil {
 		return false
 	}
@@ -473,6 +582,14 @@ func ipFor(family int32, ip net.IP) net.IP {
 	return nil
 }
 
+// udpNet names the host network for a guest address family.
+func udpNet(family int32) string {
+	if family == wasmedgeAFInet6 {
+		return "udp6"
+	}
+	return "udp4"
+}
+
 func hostAddr(ip net.IP, port uint32) string {
 	if ip == nil || ip.IsUnspecified() {
 		return fmt.Sprintf(":%d", port)
@@ -483,16 +600,28 @@ func hostAddr(ip net.IP, port uint32) string {
 // splitIPPort turns a net.Addr into raw IP bytes, an address kind
 // (4 or 6, per the SDK contract) and a port.
 func splitIPPort(a net.Addr) (ip net.IP, kind uint32, port uint32) {
-	ta, ok := a.(*net.TCPAddr)
-	if !ok || ta == nil {
+	var aIP net.IP
+	var aPort int
+	switch ta := a.(type) {
+	case *net.TCPAddr:
+		if ta == nil {
+			return nil, 0, 0
+		}
+		aIP, aPort = ta.IP, ta.Port
+	case *net.UDPAddr:
+		if ta == nil {
+			return nil, 0, 0
+		}
+		aIP, aPort = ta.IP, ta.Port
+	default:
 		return nil, 0, 0
 	}
-	if v4 := ta.IP.To4(); v4 != nil {
-		return v4, 4, uint32(ta.Port)
+	if v4 := aIP.To4(); v4 != nil {
+		return v4, 4, uint32(aPort)
 	}
-	ip16 := ta.IP.To16()
+	ip16 := aIP.To16()
 	if ip16 == nil {
 		ip16 = net.IPv6zero
 	}
-	return ip16, 6, uint32(ta.Port)
+	return ip16, 6, uint32(aPort)
 }
