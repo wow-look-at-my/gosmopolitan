@@ -625,6 +625,23 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 	binary.LittleEndian.PutUint16(hdr[60:], 0)
 	binary.LittleEndian.PutUint16(hdr[62:], 0)
 
+	// Section header fields normally stay zero: execution never reads
+	// them, and a pristine payload's own table sits at a payload-relative
+	// offset that would be wrong in the assimilated file. The one producer
+	// of an exception is the -apefat compact debug mode (apedebug.go),
+	// whose payload ehdrs reference a section-header view appended past
+	// the payload image at an ABSOLUTE APE file offset - recognizable
+	// here as an offset at or beyond the payload image's end. That offset
+	// stays correct after self-assimilation rewrites the file's first 64
+	// bytes with this header, so propagating it is exactly what lets
+	// debuggers find the appended debug info in the assimilated binary.
+	// Every other payload shape (thin links, stripped or full fat merges)
+	// keeps today's zeroed fields, bit for bit.
+	if shoff := binary.LittleEndian.Uint64(origElf[40:48]); shoff >= uint64(len(origElf)) {
+		binary.LittleEndian.PutUint64(hdr[40:], shoff)
+		copy(hdr[60:64], origElf[60:64]) // e_shnum, e_shstrndx
+	}
+
 	return hdr
 }
 
