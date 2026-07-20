@@ -281,7 +281,7 @@ func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
 	stk = stk[:len(stk)-1]
 
 	for ; uf.valid(); uf = u.next(uf) {
-		funcID := u.srcFunc(uf).funcID
+		funcID := u.srcFuncID(uf)
 		if funcID == abi.FuncIDWrapper && elideWrapperCalling(calleeID) {
 			// ignore wrappers
 		} else {
@@ -1122,14 +1122,47 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	}
 	datap := f.datap
 	p := datap.pctab[off:]
-	pc := f.entry()
+	entry := f.entry()
+	pc := entry
 	prevpc := pc
 	val := int32(-1)
 	for {
-		var ok bool
-		p, ok = step(p, &pc, &val, pc == f.entry())
-		if !ok {
-			break
+		// Decode the next pair inline. This must stay in sync with step
+		// (the grammar is described at cmd/internal/obj/pcln.go:
+		// appendPCPair). The decode is unrolled here because this loop
+		// dominates every pcvalue cache miss: with no call in the loop
+		// body the pair state (p, pc, val, prevpc, targetpc, entry)
+		// stays in registers, while calling out to step - and to
+		// f.entry() for the first-pair test - would spill it around
+		// every pair. readvarint is small enough that the compiler
+		// inlines it here.
+		b := p[0]
+		if b >= 0x80 {
+			// Packed pair: value delta -4..3, pc delta 1..16.
+			val += int32(b>>4&7) - 4
+			pc += uintptr(b&0xF+1) * sys.PCQuantum
+			p = p[1:]
+		} else {
+			uvdelta := uint32(b)
+			if uvdelta == 0 && pc != entry {
+				break // terminator (in any pair but the first)
+			}
+			n := uint32(1)
+			if uvdelta == 0x7F {
+				// Escape: multi-byte zig-zag value delta.
+				n, uvdelta = readvarint(p[1:])
+				n++
+			}
+			val += int32(-(uvdelta & 1) ^ (uvdelta >> 1))
+			p = p[n:]
+
+			pcdelta := uint32(p[0])
+			n = 1
+			if pcdelta&0x80 != 0 {
+				n, pcdelta = readvarint(p)
+			}
+			p = p[n:]
+			pc += uintptr(pcdelta * sys.PCQuantum)
 		}
 		if targetpc < pc {
 			// Replace a random entry in the cache. Random
@@ -1345,10 +1378,36 @@ func funcMaxSPDelta(f funcInfo) int32 {
 func pcdatastart(f funcInfo, table uint32) uint32 {
 	// The offset array after the fixed part of the record holds entries
 	// for present tables only, in index order: the entry for `table` is
-	// at the popcount of the presence bits below it. sys.OnesCount64 is a
-	// compiler intrinsic (single popcount instruction on amd64/arm64).
-	idx := uintptr(sys.OnesCount64(uint64(uint32(f.pcdataMask) & (1<<table - 1))))
+	// at the popcount of the presence bits below it. There are at most
+	// five pcdata tables (abi.PCDATA_PanicBounds == 4; pinned by the
+	// compile-time check below), so the bits below `table` fit in four
+	// bits and a four-term adder beats the OnesCount intrinsic here: it
+	// needs no CPU-feature guard on amd64 v1 baselines and has a shorter
+	// critical path into the dependent offset load.
+	bits := uint32(f.pcdataMask) & (1<<table - 1)
+	idx := uintptr(bits&1 + bits>>1&1 + bits>>2&1 + bits>>3)
 	return *(*uint32)(add(unsafe.Pointer(&f.funcdataMask), unsafe.Sizeof(f.funcdataMask)+idx*4))
+}
+
+// pcdatastart's four-term adder counts the four bits below the highest
+// possible pcdata table index; a sixth pcdata table would silently make
+// it undercount. (internal/abi separately checks the presence bitmap's
+// 8-bit bound.)
+const _ uint = 4 - abi.PCDATA_PanicBounds
+
+// pcdataoff returns the offset into pctab of pcdata table `table` for f,
+// or 0 if f has no such table. Offset 0 is never a real table (pctab
+// starts with a reserved byte) and makes pcvalue return -1, so
+// pcvalue(f, pcdataoff(f, table), pc, strict) is equivalent to
+// pcdatavalue*(f, table, pc, ...). Unlike those, pcdataoff is cheap
+// enough to inline, so hot callers with a constant `table` use it
+// directly: after inlining, the presence test and the bits-below adder
+// in pcdatastart fold to a couple of masks with no variable shifts.
+func pcdataoff(f funcInfo, table uint32) uint32 {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
+		return 0
+	}
+	return pcdatastart(f, table)
 }
 
 func pcdatavalue(f funcInfo, table uint32, targetpc uintptr) int32 {
@@ -1401,6 +1460,9 @@ func funcdata(f funcInfo, i uint8) unsafe.Pointer {
 // value delta followed by a uvarint pc delta, and 0x00..0x7E is a
 // one-byte zig-zag value delta followed by a uvarint pc delta. A 0x00
 // value-delta byte terminates the table except in the first pair.
+//
+// pcvalue unrolls this decode into its hot loop (see the comment there);
+// any change here must be mirrored there.
 func step(p []byte, pc *uintptr, val *int32, first bool) (newp []byte, ok bool) {
 	b := uint32(p[0])
 	if b >= 0x80 {

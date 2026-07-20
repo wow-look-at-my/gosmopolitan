@@ -629,8 +629,8 @@ func tracebackPCs(u *unwinder, skip int, pcBuf []uintptr) int {
 
 		// TODO: Why does &u.cache cause u to escape? (Same in traceback2)
 		for iu, uf := newInlineUnwinder(f, u.symPC()); n < len(pcBuf) && uf.valid(); uf = iu.next(uf) {
-			sf := iu.srcFunc(uf)
-			if sf.funcID == abi.FuncIDWrapper && elideWrapperCalling(u.calleeFuncID) {
+			funcID := iu.srcFuncID(uf)
+			if funcID == abi.FuncIDWrapper && elideWrapperCalling(u.calleeFuncID) {
 				// ignore wrappers
 			} else if skip > 0 {
 				skip--
@@ -644,7 +644,7 @@ func tracebackPCs(u *unwinder, skip int, pcBuf []uintptr) int {
 				pcBuf[n] = uf.pc + 1
 				n++
 			}
-			u.calleeFuncID = sf.funcID
+			u.calleeFuncID = funcID
 		}
 		// Add cgo frames (if we're done skipping over the requested number of
 		// Go frames).

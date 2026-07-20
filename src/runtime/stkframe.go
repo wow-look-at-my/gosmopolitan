@@ -170,7 +170,10 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 		// the first instruction of the function changes the
 		// stack map.
 		targetpc--
-		pcdata = pcdatavalue(f, abi.PCDATA_StackMapIndex, targetpc)
+		// Equivalent to pcdatavalue(f, abi.PCDATA_StackMapIndex,
+		// targetpc), but pcdataoff inlines here with a constant
+		// table, which pcdatavalue is too big to do.
+		pcdata, _ = pcvalue(f, pcdataoff(f, abi.PCDATA_StackMapIndex), targetpc, true)
 	}
 	if pcdata == -1 {
 		// We do not have a valid pcdata value but there might be a
