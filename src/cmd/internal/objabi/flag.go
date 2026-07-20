@@ -106,8 +106,16 @@ func (versionFlag) Set(s string) error {
 	// for releases, but during development we include the full
 	// build ID of the binary, so that if the compiler is changed and
 	// rebuilt, we notice and rebuild all packages.
+	//
+	// The Cosmopolitan fork stamps the same release-style version
+	// (e.g. go1.26.4cosmo) into every build, so for cosmo versions the
+	// version line alone cannot distinguish two different builds of the
+	// toolchain. Include the build ID for those too, so that cmd/go's
+	// tool IDs (and hence action IDs) change whenever the tools do and
+	// build caches — GOCACHE and any shared GOCACHEPROG tier — can never
+	// serve objects compiled by one fork build into another.
 	if s == "full" {
-		if strings.Contains(buildcfg.Version, "devel") {
+		if strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo") {
 			p += " buildID=" + buildID
 		}
 	}
