@@ -8,7 +8,10 @@
 // host-skipped on macOS, which lacks the dispatch),
 // readv/writev + net.Buffers (all hosts),
 // os.Executable, argv/env, working-directory
-// syscalls, and - since the wave-8 signal work - SIGSEGV recovery
+// syscalls, exec.LookPath/exec.Command name resolution over the
+// host-format PATH (';'-separated drive-letter entries with PATHEXT
+// suffix probing on NT hosts), and - since the wave-8 signal work -
+// SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, wait-status
 // signal decoding, CPU profiling (host-skipped on macOS, which
 // lacks SIGPROF delivery), and process-group signaling (Setpgid
@@ -120,6 +123,7 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
