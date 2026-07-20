@@ -394,9 +394,11 @@ linux-amd64 toolchain tarball to buildhost (pazer.build) as project
 unique per-release suffix (`go<base>.r<run_number>`), then runs
 `make.bash -distpack` (official packaging; output
 `pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
-`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
-GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
-server-info's `max_direct_upload_bytes`, chunked upload session above it).
+`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
+with buildhost's own publish actions (`buildhost-create-release` /
+`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
+`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
+authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
 The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
 each published release a disjoint cmd/go tool-ID (hence build-cache)
 namespace — identical release version strings previously let the org's
