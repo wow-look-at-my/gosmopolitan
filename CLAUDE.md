@@ -408,17 +408,24 @@ hand-rebuilt toolchains. Consumers install the fork in seconds instead of a
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
-export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
+export PATH="$PWD/go/bin:$PATH"
 go version   # go version go1.26.4cosmo.r<N> linux/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
 derived from the binary location, no need to set it). Consumer gotchas:
 
-- **Set `GOTOOLCHAIN=local`.** The shipped `go.env` keeps upstream's
-  `GOTOOLCHAIN=auto`, so a consumer go.mod with a `go`/`toolchain` directive
-  newer than this fork's version would silently download an official
-  toolchain and lose cosmo.
+- **`GOTOOLCHAIN=local` is no longer required.** The shipped `go.env` now
+  defaults `GOTOOLCHAIN=local` (upstream ships `auto`, under which a consumer
+  go.mod with a `go`/`toolchain` directive newer than this fork's version
+  would silently download an official toolchain and lose cosmo). An explicit
+  `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
+  go.mod genuinely newer than the fork now fails loudly (`go.mod requires
+  go >= X (running go 1.26)`) instead of silently switching. Note the fork
+  self-identifies as the dev version `1.26` (its `go1.26.4cosmo` string does
+  not parse as a release version), so directives up to `go 1.26` are
+  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
+  still ship `GOTOOLCHAIN=auto` and need the env var.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
   Gotchas); any host-run `go build`/`go install`/`go test` needs
   `GOOS=linux GOARCH=amd64`.
