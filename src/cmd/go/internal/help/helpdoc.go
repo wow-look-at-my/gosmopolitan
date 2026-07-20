@@ -673,7 +673,11 @@ Architecture-specific environment variables:
 		and https://github.com/riscv/riscv-profiles/blob/main/src/rva23-profile.adoc
 	GOWASM
 		For GOARCH=wasm, comma-separated list of experimental WebAssembly features to use.
-		Valid values are satconv, signext.
+		Valid values are satconv, signext, tailcall, threads.
+	GOWASI
+		For GOOS=wasip1, comma-separated list of WASI host extensions to use.
+		Valid values are wasmedgesock (the WasmEdge socket extension,
+		which enables real TCP networking on hosts implementing it).
 
 Environment variables for use with code coverage:
 
@@ -976,8 +980,11 @@ The defined architecture feature build tags are:
 	- For GOARCH=riscv64,
 	  GORISCV64=rva20u64, rva22u64 and rva23u64 correspond to the riscv64.rva20u64,
 	  riscv64.rva22u64 and riscv64.rva23u64 build tags.
-	- For GOARCH=wasm, GOWASM=satconv and signext
-	  correspond to the wasm.satconv and wasm.signext feature build tags.
+	- For GOARCH=wasm, GOWASM=satconv, signext, tailcall and threads
+	  correspond to the wasm.satconv, wasm.signext, wasm.tailcall and wasm.threads
+	  feature build tags.
+	- For GOOS=wasip1, GOWASI=wasmedgesock corresponds to the
+	  wasip1.wasmedgesock feature build tag.
 
 For GOARCH=amd64, arm, ppc64, ppc64le, and riscv64, a particular feature level
 sets the feature build tags for all previous levels as well.

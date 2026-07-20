@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/abi"
+	"internal/buildcfg"
 	"io"
 	"math"
 )
@@ -101,6 +102,7 @@ var unaryDst = map[obj.As]bool{
 	ATee:          true,
 	ACall:         true,
 	ACallIndirect: true,
+	AReturnCall:   true,
 	ABr:           true,
 	ABrIf:         true,
 	ABrTable:      true,
@@ -113,7 +115,16 @@ var unaryDst = map[obj.As]bool{
 	AI64Store8:    true,
 	AI64Store16:   true,
 	AI64Store32:   true,
-	ACALLNORESUME: true,
+	// Atomic stores (threads proposal) carry their memarg offset in the
+	// destination operand, exactly like the plain stores above.
+	AI32AtomicStore:   true,
+	AI64AtomicStore:   true,
+	AI32AtomicStore8:  true,
+	AI32AtomicStore16: true,
+	AI64AtomicStore8:  true,
+	AI64AtomicStore16: true,
+	AI64AtomicStore32: true,
+	ACALLNORESUME:     true,
 }
 
 var Linkwasm = obj.LinkArch{
@@ -136,6 +147,21 @@ const (
 	/* mark flags */
 	WasmImport = 1 << 0
 )
+
+// RelocLEBSize is the number of bytes reserved in the instruction stream
+// for each LEB128 field that the linker fills in (function indices for
+// call/return_call, addresses for i32.const/i64.const). Reserving a fixed
+// number of bytes keeps every code byte offset independent of the final
+// relocation values, so the byte offsets recorded for DWARF (see
+// FuncInfo.RecordDwarfBytePC) remain valid in the linked binary. When
+// DWARF is enabled the linker writes the values with this same fixed
+// length; with -w it compacts them to minimal LEB128s instead (shifting
+// the code, which is fine because no DWARF refers to it).
+const RelocLEBSize = 5
+
+// relocLEBPlaceholder is what the assembler emits at a relocated LEB128
+// field: a RelocLEBSize-byte LEB128 encoding of zero.
+var relocLEBPlaceholder = []byte{0x80, 0x80, 0x80, 0x80, 0x00}
 
 const (
 	// This is a special wasm module name that when used as the module name
@@ -342,13 +368,38 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		} else {
 			// large stack: SP-framesize <= stackguard-StackSmall
 			//              SP <= stackguard+(framesize-StackSmall)
+			//
+			// stackguard0 may hold the stackPreempt sentinel (~0). The
+			// 32-bit add below would wrap past it and silently SKIP the
+			// stack check, letting a large frame run below stack.lo
+			// (caught later as a bogus "split stack overflow" when a
+			// callee's morestack fires). Without GOWASM=threads this
+			// cannot happen - nothing arms preemption while a wasm
+			// goroutine is running - but with it another thread's
+			// preemptone/suspendG can set the sentinel exactly while
+			// this prologue runs. Test the sentinel explicitly (full
+			// 64-bit compare; the wrapped-add hazard is exactly the old
+			// "TODO: handle wraparound case").
+			//
+			// Get g
+			// I32WrapI64
+			// I64Load $stackguard0
+			// I64Const $stackPreempt
+			// I64Eq
 			// Get SP
 			// Get g
 			// I32WrapI64
 			// I32Load $stackguard0
 			// I32Const $(framesize-StackSmall)
 			// I32Add
-			// I32GtU
+			// I32LeU
+			// I32Or
+
+			p = appendp(p, AGet, regAddr(REGG))
+			p = appendp(p, AI32WrapI64)
+			p = appendp(p, AI64Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
+			p = appendp(p, AI64Const, constAddr(-1314))                     // runtime.stackPreempt (uintptrMask & -1314)
+			p = appendp(p, AI64Eq)
 
 			p = appendp(p, AGet, regAddr(REG_SP))
 			p = appendp(p, AGet, regAddr(REGG))
@@ -357,8 +408,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AI32Const, constAddr(framesize-abi.StackSmall))
 			p = appendp(p, AI32Add)
 			p = appendp(p, AI32LeU)
+
+			p = appendp(p, AI32Or)
 		}
-		// TODO(neelance): handle wraparound case
 
 		p = appendp(p, AIf)
 		// This CALL does *not* have a resume point after it
@@ -518,6 +570,22 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			if ret.To.Type == obj.TYPE_MEM {
 				// Set PC_B parameter to function entry.
 				p = appendp(p, AI32Const, constAddr(0))
+
+				if buildcfg.GOWASM.TailCall && !notUsePC_B[s.Name] && !notUsePC_B[ret.To.Sym.Name] {
+					// GOWASM=tailcall: tail-call the target instead of
+					// growing the WebAssembly stack with call+return.
+					// The target adopts this frame's return address (still
+					// at 0(SP), since RET-to-symbol does not pop it), and
+					// its unwind flag flows to our caller exactly as the
+					// propagating AReturn below would pass it on, so the
+					// unwind/resume machinery is unaffected. Both functions
+					// must follow the Go wasm ABI (i32)->i32: return_call
+					// validates the callee's results against the caller's,
+					// so the special notUsePC_B signatures stay on the
+					// call+return path.
+					p = appendp(p, AReturnCall, ret.To)
+					break
+				}
 
 				// low-level WebAssembly call to function
 				p = appendp(p, ACall, ret.To)
@@ -1015,6 +1083,7 @@ var notUsePC_B = map[string]bool{
 	"wasm_export_run":         true,
 	"wasm_export_resume":      true,
 	"wasm_export_getsp":       true,
+	"wasm_export_thread_run":  true,
 	"wasm_pc_f_loop":          true,
 	"wasm_pc_f_loop_export":   true,
 	"gcWriteBarrier":          true,
@@ -1027,7 +1096,6 @@ var notUsePC_B = map[string]bool{
 	"runtime.gcWriteBarrier7": true,
 	"runtime.gcWriteBarrier8": true,
 	"runtime.notInitialized":  true,
-	"runtime.wasmDiv":         true,
 	"runtime.wasmTruncS":      true,
 	"runtime.wasmTruncU":      true,
 	"cmpbody":                 true,
@@ -1070,11 +1138,16 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	switch s.Name {
 	case "_rt0_wasm_js", "_rt0_wasm_wasip1", "_rt0_wasm_wasip1_lib",
 		"wasm_export_run", "wasm_export_resume", "wasm_export_getsp",
-		"wasm_pc_f_loop", "runtime.wasmDiv", "runtime.wasmTruncS", "runtime.wasmTruncU", "memeqbody":
+		"wasm_pc_f_loop", "runtime.wasmTruncS", "runtime.wasmTruncU", "memeqbody":
 		varDecls = []*varDecl{}
 		useAssemblyRegMap()
 	case "wasm_pc_f_loop_export":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
+		useAssemblyRegMap()
+	case "wasm_export_thread_run":
+		// One i32 parameter (worker id, R0), then two i32 scratch
+		// locals (R1, R2) and two i64 scratch locals (R3, R4).
+		varDecls = []*varDecl{{count: 2, typ: i32}, {count: 2, typ: i64}}
 		useAssemblyRegMap()
 	case "memchr", "memcmp":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
@@ -1154,7 +1227,14 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		updateLocalSP(w)
 	}
 
+	// Record the byte offset of every instruction for DWARF generation.
+	// On wasm, Prog.Pc holds a resume-point index (see preprocess), not a
+	// code offset, but DWARF line tables and PC ranges need actual byte
+	// offsets within the function body.
+	dwarfBytePC := make(map[*obj.Prog]int64)
+
 	for p := s.Func().Text; p != nil; p = p.Link {
+		dwarfBytePC[p] = int64(w.Len())
 		switch p.As {
 		case AGet:
 			if p.From.Type != obj.TYPE_REG {
@@ -1196,6 +1276,9 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			} else {
 				if p.Link.As == AGet && p.Link.From.Reg == reg {
 					writeOpcode(w, ALocalTee)
+					// The Get is merged into this tee instruction;
+					// share the Set's byte offset.
+					dwarfBytePC[p.Link] = dwarfBytePC[p]
 					p = p.Link
 				} else {
 					writeOpcode(w, ALocalSet)
@@ -1271,9 +1354,10 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				s.AddRel(ctxt, obj.Reloc{
 					Type: typ,
 					Off:  int32(w.Len()),
-					Siz:  1, // actually variable sized
+					Siz:  RelocLEBSize,
 					Sym:  p.To.Sym,
 				})
+				w.Write(relocLEBPlaceholder)
 				if hasLocalSP {
 					// The stack may have moved, which changes SP. Update the local SP variable.
 					updateLocalSP(w)
@@ -1282,6 +1366,20 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			default:
 				panic("bad type for Call")
 			}
+
+		case AReturnCall:
+			if p.To.Type != obj.TYPE_MEM || (p.To.Name != obj.NAME_EXTERN && p.To.Name != obj.NAME_STATIC) {
+				panic("bad target for ReturnCall")
+			}
+			s.AddRel(ctxt, obj.Reloc{
+				Type: objabi.R_CALL,
+				Off:  int32(w.Len()),
+				Siz:  RelocLEBSize,
+				Sym:  p.To.Sym,
+			})
+			w.Write(relocLEBPlaceholder)
+			// Unlike ACall, no updateLocalSP: a tail call never returns
+			// here, so the code after it is unreachable.
 
 		case ACallIndirect:
 			writeUleb128(w, uint64(p.To.Offset))
@@ -1296,10 +1394,11 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				s.AddRel(ctxt, obj.Reloc{
 					Type: objabi.R_ADDR,
 					Off:  int32(w.Len()),
-					Siz:  1, // actually variable sized
+					Siz:  RelocLEBSize,
 					Sym:  p.From.Sym,
 					Add:  p.From.Offset,
 				})
+				w.Write(relocLEBPlaceholder)
 				break
 			}
 			writeSleb128(w, p.From.Offset)
@@ -1344,12 +1443,60 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			w.WriteByte(0x00)
 			w.WriteByte(0x00)
 
+		case AAtomicFence:
+			w.WriteByte(0x00) // reserved (fence scope), must be zero
+
+		case AI32AtomicLoad, AI64AtomicLoad, AI32AtomicLoad8U, AI32AtomicLoad16U, AI64AtomicLoad8U, AI64AtomicLoad16U, AI64AtomicLoad32U,
+			AMemoryAtomicNotify, AMemoryAtomicWait32, AMemoryAtomicWait64,
+			AI32AtomicRmwAdd, AI64AtomicRmwAdd, AI32AtomicRmw8AddU, AI32AtomicRmw16AddU, AI64AtomicRmw8AddU, AI64AtomicRmw16AddU, AI64AtomicRmw32AddU,
+			AI32AtomicRmwSub, AI64AtomicRmwSub, AI32AtomicRmw8SubU, AI32AtomicRmw16SubU, AI64AtomicRmw8SubU, AI64AtomicRmw16SubU, AI64AtomicRmw32SubU,
+			AI32AtomicRmwAnd, AI64AtomicRmwAnd, AI32AtomicRmw8AndU, AI32AtomicRmw16AndU, AI64AtomicRmw8AndU, AI64AtomicRmw16AndU, AI64AtomicRmw32AndU,
+			AI32AtomicRmwOr, AI64AtomicRmwOr, AI32AtomicRmw8OrU, AI32AtomicRmw16OrU, AI64AtomicRmw8OrU, AI64AtomicRmw16OrU, AI64AtomicRmw32OrU,
+			AI32AtomicRmwXor, AI64AtomicRmwXor, AI32AtomicRmw8XorU, AI32AtomicRmw16XorU, AI64AtomicRmw8XorU, AI64AtomicRmw16XorU, AI64AtomicRmw32XorU,
+			AI32AtomicRmwXchg, AI64AtomicRmwXchg, AI32AtomicRmw8XchgU, AI32AtomicRmw16XchgU, AI64AtomicRmw8XchgU, AI64AtomicRmw16XchgU, AI64AtomicRmw32XchgU,
+			AI32AtomicRmwCmpxchg, AI64AtomicRmwCmpxchg, AI32AtomicRmw8CmpxchgU, AI32AtomicRmw16CmpxchgU, AI64AtomicRmw8CmpxchgU, AI64AtomicRmw16CmpxchgU, AI64AtomicRmw32CmpxchgU:
+			// Value-producing atomic memory accesses (loads, RMW ops,
+			// notify/wait). The memarg alignment is required to be the
+			// access size (natural alignment); the offset comes from the
+			// instruction's From operand, like plain loads.
+			if p.From.Type != obj.TYPE_CONST {
+				panic("bad type for atomic access")
+			}
+			if p.From.Offset < 0 {
+				panic("negative offset for atomic access")
+			}
+			if p.From.Offset > math.MaxUint32 {
+				ctxt.Diag("bad offset in %v", p)
+			}
+			writeUleb128(w, align(p.As))
+			writeUleb128(w, uint64(p.From.Offset))
+
+		case AI32AtomicStore, AI64AtomicStore, AI32AtomicStore8, AI32AtomicStore16, AI64AtomicStore8, AI64AtomicStore16, AI64AtomicStore32:
+			// Atomic stores take their memarg offset from the To operand,
+			// like plain stores.
+			if p.To.Type != obj.TYPE_CONST {
+				panic("bad type for atomic store")
+			}
+			if p.To.Offset < 0 {
+				panic("negative offset for atomic store")
+			}
+			if p.To.Offset > math.MaxUint32 {
+				ctxt.Diag("bad offset in %v", p)
+			}
+			writeUleb128(w, align(p.As))
+			writeUleb128(w, uint64(p.To.Offset))
+
 		}
 	}
 
 	w.WriteByte(0x0b) // end
 
+	// The bytes before the first instruction (the declaration of locals
+	// and the initial local SP load) belong to the function entry.
+	dwarfBytePC[s.Func().Text] = 0
+
 	s.P = w.Bytes()
+	s.Func().RecordDwarfBytePC(dwarfBytePC)
 }
 
 func updateLocalSP(w *bytes.Buffer) {
@@ -1373,9 +1520,19 @@ func writeOpcode(w *bytes.Buffer, as obj.As) {
 		w.WriteByte(byte(as - ALocalGet + 0x20))
 	case as < AI32TruncSatF32S:
 		w.WriteByte(byte(as - AI32Load + 0x28))
-	case as < ALast:
+	case as < AMemoryAtomicNotify:
 		w.WriteByte(0xFC)
 		w.WriteByte(byte(as - AI32TruncSatF32S + 0x00))
+	case as < AI32AtomicLoad:
+		// Threads proposal: notify/wait/fence (0xFE 0x00 - 0xFE 0x03).
+		w.WriteByte(0xFE)
+		w.WriteByte(byte(as - AMemoryAtomicNotify + 0x00))
+	case as < ALast:
+		// Threads proposal: atomic loads, stores, and read-modify-write
+		// ops (0xFE 0x10 - 0xFE 0x4E; 0x04 - 0x0F is a gap in the
+		// encoding).
+		w.WriteByte(0xFE)
+		w.WriteByte(byte(as - AI32AtomicLoad + 0x10))
 	default:
 		panic(fmt.Sprintf("unexpected assembler op: %s", as))
 	}
@@ -1407,13 +1564,32 @@ func regType(reg int16) valueType {
 
 func align(as obj.As) uint64 {
 	switch as {
-	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8:
+	case AI32Load8S, AI32Load8U, AI64Load8S, AI64Load8U, AI32Store8, AI64Store8,
+		AI32AtomicLoad8U, AI64AtomicLoad8U, AI32AtomicStore8, AI64AtomicStore8,
+		AI32AtomicRmw8AddU, AI64AtomicRmw8AddU, AI32AtomicRmw8SubU, AI64AtomicRmw8SubU,
+		AI32AtomicRmw8AndU, AI64AtomicRmw8AndU, AI32AtomicRmw8OrU, AI64AtomicRmw8OrU,
+		AI32AtomicRmw8XorU, AI64AtomicRmw8XorU, AI32AtomicRmw8XchgU, AI64AtomicRmw8XchgU,
+		AI32AtomicRmw8CmpxchgU, AI64AtomicRmw8CmpxchgU:
 		return 0
-	case AI32Load16S, AI32Load16U, AI64Load16S, AI64Load16U, AI32Store16, AI64Store16:
+	case AI32Load16S, AI32Load16U, AI64Load16S, AI64Load16U, AI32Store16, AI64Store16,
+		AI32AtomicLoad16U, AI64AtomicLoad16U, AI32AtomicStore16, AI64AtomicStore16,
+		AI32AtomicRmw16AddU, AI64AtomicRmw16AddU, AI32AtomicRmw16SubU, AI64AtomicRmw16SubU,
+		AI32AtomicRmw16AndU, AI64AtomicRmw16AndU, AI32AtomicRmw16OrU, AI64AtomicRmw16OrU,
+		AI32AtomicRmw16XorU, AI64AtomicRmw16XorU, AI32AtomicRmw16XchgU, AI64AtomicRmw16XchgU,
+		AI32AtomicRmw16CmpxchgU, AI64AtomicRmw16CmpxchgU:
 		return 1
-	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32:
+	case AI32Load, AF32Load, AI64Load32S, AI64Load32U, AI32Store, AF32Store, AI64Store32,
+		AI32AtomicLoad, AI64AtomicLoad32U, AI32AtomicStore, AI64AtomicStore32,
+		AMemoryAtomicNotify, AMemoryAtomicWait32,
+		AI32AtomicRmwAdd, AI64AtomicRmw32AddU, AI32AtomicRmwSub, AI64AtomicRmw32SubU,
+		AI32AtomicRmwAnd, AI64AtomicRmw32AndU, AI32AtomicRmwOr, AI64AtomicRmw32OrU,
+		AI32AtomicRmwXor, AI64AtomicRmw32XorU, AI32AtomicRmwXchg, AI64AtomicRmw32XchgU,
+		AI32AtomicRmwCmpxchg, AI64AtomicRmw32CmpxchgU:
 		return 2
-	case AI64Load, AF64Load, AI64Store, AF64Store:
+	case AI64Load, AF64Load, AI64Store, AF64Store,
+		AI64AtomicLoad, AI64AtomicStore, AMemoryAtomicWait64,
+		AI64AtomicRmwAdd, AI64AtomicRmwSub, AI64AtomicRmwAnd, AI64AtomicRmwOr,
+		AI64AtomicRmwXor, AI64AtomicRmwXchg, AI64AtomicRmwCmpxchg:
 		return 3
 	default:
 		panic("align: bad op")

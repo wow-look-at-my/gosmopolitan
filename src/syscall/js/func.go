@@ -127,3 +127,58 @@ func handleEvent() bool {
 	cb.Set("result", result)
 	return true
 }
+
+// Await blocks the calling goroutine until the JavaScript promise v settles,
+// then returns how it settled.
+//
+// Await treats v the way JavaScript's Promise.resolve does: a non-promise,
+// non-thenable value settles immediately with itself, so Await(v) then simply
+// returns (v, nil).
+//
+// If the promise is fulfilled, Await returns the fulfilled value and a nil
+// error. If the promise is rejected, Await returns Undefined() and an error
+// of type Error whose Value field holds the rejection reason - a reason that
+// is not an Error object (for example a plain thrown string) is reported by
+// Error.Error as the reason's own string representation.
+//
+// While the goroutine waits, other goroutines and the JavaScript event loop
+// keep running. Await must therefore never be called from within a function
+// wrapped by FuncOf (or from any code that runs during a call from
+// JavaScript into Go): the promise's callbacks can only fire once the
+// JavaScript event loop regains control, and that cannot happen until every
+// active call from JavaScript into Go has returned. Blocking there deadlocks
+// the program; when nothing else is pending, the runtime reports it as
+// "fatal error: all goroutines are asleep - deadlock!" with a note that a
+// goroutine is blocked in a call from JavaScript. To use Await in reaction
+// to a JavaScript callback, start a new goroutine from the callback and call
+// Await on that goroutine instead.
+func Await(v Value) (Value, error) {
+	type settlement struct {
+		value Value
+		ok    bool
+	}
+	// Buffered, so the callback below can deliver the settlement and return
+	// to the event loop without waiting for this goroutine to receive it.
+	done := make(chan settlement, 1)
+	settle := func(ok bool) Func {
+		return FuncOf(func(this Value, args []Value) any {
+			s := settlement{ok: ok} // the zero value is Undefined()
+			if len(args) > 0 {
+				s.value = args[0]
+			}
+			done <- s
+			return nil
+		})
+	}
+	onFulfilled := settle(true)
+	defer onFulfilled.Release()
+	onRejected := settle(false)
+	defer onRejected.Release()
+
+	promiseConstructor.Call("resolve", v).Call("then", onFulfilled, onRejected)
+	s := <-done
+	if !s.ok {
+		return Undefined(), Error{Value: s.value}
+	}
+	return s.value, nil
+}

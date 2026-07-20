@@ -106,7 +106,7 @@ func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg
 	if a.buildID != "" {
 		defaultGcFlags = append(defaultGcFlags, "-buildid", a.buildID)
 	}
-	if p.Internal.OmitDebug || cfg.Goos == "plan9" || cfg.Goarch == "wasm" {
+	if p.Internal.OmitDebug || cfg.Goos == "plan9" {
 		defaultGcFlags = append(defaultGcFlags, "-dwarf=false")
 	}
 	if strings.HasPrefix(ToolchainVersion, "go1") && !strings.Contains(os.Args[0], "go_bootstrap") {

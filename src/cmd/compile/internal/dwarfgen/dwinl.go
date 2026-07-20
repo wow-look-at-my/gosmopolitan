@@ -162,14 +162,14 @@ func assembleInlines(fnsym *obj.LSym, dwVars []*dwarf.Var) dwarf.InlCalls {
 		}
 		// Close out the current range
 		if start != -1 {
-			addRange(inlcalls.Calls, start, p.Pc, curii, imap)
+			addRange(inlcalls.Calls, start, fnsym.DwarfPC(p), curii, imap)
 		}
 		// Begin new range
-		start = p.Pc
+		start = fnsym.DwarfPC(p)
 		curii = ii
 	}
 	if start != -1 {
-		addRange(inlcalls.Calls, start, fnsym.Size, curii, imap)
+		addRange(inlcalls.Calls, start, fnsym.DwarfSize(), curii, imap)
 	}
 
 	// Issue 33188: if II foo is a child of II bar, then ensure that
@@ -194,7 +194,7 @@ func assembleInlines(fnsym *obj.LSym, dwVars []*dwarf.Var) dwarf.InlCalls {
 	// within the ranges for A, or C within B.
 	for k, c := range inlcalls.Calls {
 		if c.Root {
-			checkInlCall(fnsym.Name, inlcalls, fnsym.Size, k, -1)
+			checkInlCall(fnsym.Name, inlcalls, fnsym.DwarfSize(), k, -1)
 		}
 	}
 

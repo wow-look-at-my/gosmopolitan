@@ -491,6 +491,13 @@ type FuncInfo struct {
 	dwarfAbsFnSym      *LSym
 	dwarfDebugLinesSym *LSym
 
+	// dwarfBytePC, if non-nil, maps each Prog of the function to the byte
+	// offset of its first encoded byte within the function body (LSym.P).
+	// It is recorded by architectures whose Prog.Pc is not a byte offset
+	// (currently only wasm, where Pc holds a resume-point index) so that
+	// DWARF generation can use real code offsets. See LSym.DwarfPC.
+	dwarfBytePC map[*Prog]int64
+
 	GCArgs             *LSym
 	GCLocals           *LSym
 	StackObjects       *LSym
@@ -535,6 +542,36 @@ func (s *LSym) Func() *FuncInfo {
 	}
 	f, _ := (*s.Extra).(*FuncInfo)
 	return f
+}
+
+// RecordDwarfBytePC records the byte offset of each Prog within the
+// function body, for use by DWARF generation on architectures where
+// Prog.Pc is not a byte offset. It is called by the architecture's
+// assembler after the function body has been encoded.
+func (fi *FuncInfo) RecordDwarfBytePC(m map[*Prog]int64) {
+	fi.dwarfBytePC = m
+}
+
+// DwarfPC returns the PC value to use for p in the DWARF line table and
+// PC range attributes of function s. On most architectures this is p.Pc.
+// On wasm, Prog.Pc holds a resume-point index rather than a code offset,
+// and the assembler separately records each instruction's byte offset
+// within the function body; DWARF uses those byte offsets.
+func (s *LSym) DwarfPC(p *Prog) int64 {
+	if m := s.Func().dwarfBytePC; m != nil {
+		return m[p]
+	}
+	return p.Pc
+}
+
+// DwarfSize returns the size of function s in the same units as the PC
+// values returned by DwarfPC: the byte length of the encoded body if
+// byte offsets were recorded, or else s.Size.
+func (s *LSym) DwarfSize() int64 {
+	if s.Func().dwarfBytePC != nil {
+		return int64(len(s.P))
+	}
+	return s.Size
 }
 
 type VarInfo struct {

@@ -51,6 +51,22 @@ func makeValue(r ref) Value {
 		gcPtr = new(ref)
 		*gcPtr = r
 		runtime.SetFinalizer(gcPtr, func(p *ref) {
+			if runtimeThreadsEnabled() {
+				// GOWASM=threads: the finalizeRef host import is only
+				// available on the main thread, and the GC may run this
+				// finalizer on a worker-thread M. ALWAYS queue the
+				// release (the next syscall/js operation on the main
+				// thread frees it): checking runtimeOnWorkerThread here
+				// and calling finalizeRef directly would be a TOCTOU -
+				// the finalizer goroutine is preemptible, so it can be
+				// migrated to a worker M between the check and the host
+				// call, which then hits the worker instance's throwing
+				// import stub ("finalizeRef called on a worker
+				// instance", observed in the GOMAXPROCS=4 runtime
+				// suite).
+				queueFinalizeRef(*p)
+				return
+			}
 			finalizeRef(*p)
 		})
 	}
@@ -103,8 +119,9 @@ var (
 	valueGlobal    = predefValue(5, typeFlagObject)
 	jsGo           = predefValue(6, typeFlagObject) // instance of the Go class in JavaScript
 
-	objectConstructor = valueGlobal.Get("Object")
-	arrayConstructor  = valueGlobal.Get("Array")
+	objectConstructor  = valueGlobal.Get("Object")
+	arrayConstructor   = valueGlobal.Get("Array")
+	promiseConstructor = valueGlobal.Get("Promise")
 )
 
 // Equal reports whether v and w are equal according to JavaScript's === operator.
@@ -204,6 +221,7 @@ func ValueOf(x any) Value {
 	case float64:
 		return floatValue(x)
 	case string:
+		defer mainThreadOp("ValueOf")()
 		return makeValue(stringVal(x))
 	case []any:
 		a := arrayConstructor.New(len(x))
@@ -307,6 +325,7 @@ func (v Value) Get(p string) Value {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Get", vType})
 	}
+	defer mainThreadOp("Value.Get")()
 	r := makeValue(valueGet(v.ref, p))
 	runtime.KeepAlive(v)
 	return r
@@ -327,6 +346,7 @@ func (v Value) Set(p string, x any) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Set", vType})
 	}
+	defer mainThreadOp("Value.Set")()
 	xv := ValueOf(x)
 	valueSet(v.ref, p, xv.ref)
 	runtime.KeepAlive(v)
@@ -348,6 +368,7 @@ func (v Value) Delete(p string) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Delete", vType})
 	}
+	defer mainThreadOp("Value.Delete")()
 	valueDelete(v.ref, p)
 	runtime.KeepAlive(v)
 }
@@ -367,6 +388,7 @@ func (v Value) Index(i int) Value {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Index", vType})
 	}
+	defer mainThreadOp("Value.Index")()
 	r := makeValue(valueIndex(v.ref, i))
 	runtime.KeepAlive(v)
 	return r
@@ -381,6 +403,7 @@ func (v Value) SetIndex(i int, x any) {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.SetIndex", vType})
 	}
+	defer mainThreadOp("Value.SetIndex")()
 	xv := ValueOf(x)
 	valueSetIndex(v.ref, i, xv.ref)
 	runtime.KeepAlive(v)
@@ -429,6 +452,7 @@ func (v Value) Length() int {
 	if vType := v.Type(); !vType.isObject() {
 		panic(&ValueError{"Value.Length", vType})
 	}
+	defer mainThreadOp("Value.Length")()
 	r := valueLength(v.ref)
 	runtime.KeepAlive(v)
 	return r
@@ -441,6 +465,7 @@ func valueLength(v ref) int
 // It panics if v has no method m.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) Call(m string, args ...any) Value {
+	defer mainThreadOp("Value.Call")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueCall(v.ref, m, argRefs)
@@ -474,6 +499,7 @@ func valueCall(v ref, m string, args []ref) (ref, bool)
 // It panics if v is not a JavaScript function.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) Invoke(args ...any) Value {
+	defer mainThreadOp("Value.Invoke")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueInvoke(v.ref, argRefs)
@@ -502,6 +528,7 @@ func valueInvoke(v ref, args []ref) (ref, bool)
 // It panics if v is not a JavaScript function.
 // The arguments get mapped to JavaScript values according to the ValueOf function.
 func (v Value) New(args ...any) Value {
+	defer mainThreadOp("Value.New")()
 	argVals, argRefs := makeArgSlices(len(args))
 	storeArgs(args, argVals, argRefs)
 	res, ok := valueNew(v.ref, argRefs)
@@ -619,6 +646,7 @@ func (v Value) String() string {
 }
 
 func jsString(v Value) string {
+	defer mainThreadOp("Value.String")()
 	str, length := valuePrepareString(v.ref)
 	runtime.KeepAlive(v)
 	b := make([]byte, length)
@@ -666,6 +694,7 @@ func (e *ValueError) Error() string {
 // It panics if src is not a Uint8Array or Uint8ClampedArray.
 // It returns the number of bytes copied, which will be the minimum of the lengths of src and dst.
 func CopyBytesToGo(dst []byte, src Value) int {
+	defer mainThreadOp("CopyBytesToGo")()
 	n, ok := copyBytesToGo(dst, src.ref)
 	runtime.KeepAlive(src)
 	if !ok {
@@ -687,6 +716,7 @@ func copyBytesToGo(dst []byte, src ref) (int, bool)
 // It panics if dst is not a Uint8Array or Uint8ClampedArray.
 // It returns the number of bytes copied, which will be the minimum of the lengths of src and dst.
 func CopyBytesToJS(dst Value, src []byte) int {
+	defer mainThreadOp("CopyBytesToJS")()
 	n, ok := copyBytesToJS(dst.ref, src)
 	runtime.KeepAlive(dst)
 	if !ok {
@@ -703,3 +733,129 @@ func CopyBytesToJS(dst Value, src []byte) int {
 //go:wasmimport gojs syscall/js.copyBytesToJS
 //go:noescape
 func copyBytesToJS(dst ref, src []byte) (int, bool)
+
+// A typedArrayKind identifies one of the JavaScript TypedArray types
+// supported by CopyToGo and CopyToJS. The values index the typedArrays table
+// in wasm_exec.js; the two must be kept in sync.
+type typedArrayKind int
+
+const (
+	kindInt8 typedArrayKind = iota
+	kindUint8
+	kindInt16
+	kindUint16
+	kindInt32
+	kindUint32
+	kindFloat32
+	kindFloat64
+)
+
+// typedArrayNames are the JavaScript constructor names (with their article,
+// for panic messages) corresponding to the typedArrayKind values.
+var typedArrayNames = [...]string{
+	kindInt8:    "an Int8Array",
+	kindUint8:   "a Uint8Array",
+	kindInt16:   "an Int16Array",
+	kindUint16:  "a Uint16Array",
+	kindInt32:   "an Int32Array",
+	kindUint32:  "a Uint32Array",
+	kindFloat32: "a Float32Array",
+	kindFloat64: "a Float64Array",
+}
+
+// sliceData returns the data pointer, the length in elements, and the
+// matching TypedArray kind of the slice s. It panics if s is not one of the
+// slice types supported by CopyToGo and CopyToJS.
+func sliceData(op string, s any) (unsafe.Pointer, int, typedArrayKind) {
+	switch s := s.(type) {
+	case []int8:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt8
+	case []uint8:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint8
+	case []int16:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt16
+	case []uint16:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint16
+	case []int32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindInt32
+	case []uint32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindUint32
+	case []float32:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindFloat32
+	case []float64:
+		return unsafe.Pointer(unsafe.SliceData(s)), len(s), kindFloat64
+	default:
+		panic("syscall/js: " + op + ": unsupported slice type; must be []int8, []uint8, []int16, []uint16, []int32, []uint32, []float32 or []float64")
+	}
+}
+
+// CopyToGo copies elements from the JavaScript TypedArray src to the Go slice
+// dst. The types must match exactly:
+//
+//	| dst       | src          |
+//	| --------- | ------------ |
+//	| []int8    | Int8Array    |
+//	| []uint8   | Uint8Array   |
+//	| []int16   | Int16Array   |
+//	| []uint16  | Uint16Array  |
+//	| []int32   | Int32Array   |
+//	| []uint32  | Uint32Array  |
+//	| []float32 | Float32Array |
+//	| []float64 | Float64Array |
+//
+// It panics if dst is not one of the supported slice types or if src is not
+// the matching TypedArray type. In particular, for a []uint8 dst it accepts
+// only a Uint8Array; use CopyBytesToGo to also accept a Uint8ClampedArray.
+// It returns the number of elements copied, which will be the minimum of the
+// lengths of src and dst.
+func CopyToGo(dst any, src Value) int {
+	defer mainThreadOp("CopyToGo")()
+	p, n, kind := sliceData("CopyToGo", dst)
+	c, ok := copyToGo(p, n, int(kind), src.ref)
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+	if !ok {
+		panic("syscall/js: CopyToGo: expected src to be " + typedArrayNames[kind])
+	}
+	return c
+}
+
+// copyToGo copies the JavaScript TypedArray src (which must be of the type
+// identified by kind) to the dstLen elements starting at dst.
+//
+// Using go:noescape is safe because dst is only used as a copy destination
+// and no reference to it is maintained.
+//
+//go:wasmimport gojs syscall/js.copyToGo
+//go:noescape
+func copyToGo(dst unsafe.Pointer, dstLen int, kind int, src ref) (int, bool)
+
+// CopyToJS copies elements from the Go slice src to the JavaScript TypedArray
+// dst. The supported type pairs are the same as for CopyToGo.
+//
+// It panics if src is not one of the supported slice types or if dst is not
+// the matching TypedArray type. In particular, for a []uint8 src it accepts
+// only a Uint8Array; use CopyBytesToJS to also accept a Uint8ClampedArray.
+// It returns the number of elements copied, which will be the minimum of the
+// lengths of src and dst.
+func CopyToJS(dst Value, src any) int {
+	defer mainThreadOp("CopyToJS")()
+	p, n, kind := sliceData("CopyToJS", src)
+	c, ok := copyToJS(dst.ref, p, n, int(kind))
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+	if !ok {
+		panic("syscall/js: CopyToJS: expected dst to be " + typedArrayNames[kind])
+	}
+	return c
+}
+
+// copyToJS copies the srcLen elements starting at src to the JavaScript
+// TypedArray dst (which must be of the type identified by kind).
+//
+// Using go:noescape is safe because src is only used as a copy source and no
+// reference to it is maintained.
+//
+//go:wasmimport gojs syscall/js.copyToJS
+//go:noescape
+func copyToJS(dst ref, src unsafe.Pointer, srcLen int, kind int) (int, bool)

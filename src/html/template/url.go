@@ -42,11 +42,26 @@ func urlFilter(args ...any) string {
 	return s
 }
 
-// isSafeURL is true if s is a relative URL or if URL has a protocol in
-// (http, https, mailto).
+// isSafeURL is true if s is a relative URL or if URL has a protocol that
+// is not known to be dangerous.
+//
+// Schemes that cause unintended side effects that are irreversible without user
+// interaction are considered unsafe. Specifically, the following schemes are
+// blocked because they can execute arbitrary code:
+//   - javascript: Can immediately trigger JavaScript code execution.
+//   - vbscript:   Can immediately trigger VBScript code execution.
+//
+// All other schemes are allowed, including but not limited to:
+//   - http, https: Standard web navigation.
+//   - mailto:      Opens an email program.
+//   - tel:         Initiates a phone call.
+//   - sms:         Opens a messaging app.
+//   - ftp, ftps:   File transfer.
+//   - geo:         Geographic coordinates.
+//   - data:        Inline data (safe for non-script MIME types).
 func isSafeURL(s string) bool {
 	if protocol, _, ok := strings.Cut(s, ":"); ok && !strings.Contains(protocol, "/") {
-		if !strings.EqualFold(protocol, "http") && !strings.EqualFold(protocol, "https") && !strings.EqualFold(protocol, "mailto") {
+		if strings.EqualFold(protocol, "javascript") || strings.EqualFold(protocol, "vbscript") {
 			return false
 		}
 	}
