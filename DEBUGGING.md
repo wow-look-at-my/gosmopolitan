@@ -4105,3 +4105,136 @@ Gosched loop and 10s loud-fail as threaddemo), then assert reuse as
 test export; Ms never exit on wasm, so growth == a fresh pool worker
 was claimed). Post-fix: `-count=1000` standalone clean, full
 `-short -count=3 runtime` clean, 4-package threads battery clean.
+
+# 2026-07-20: NT — exec.LookPath never worked on Windows hosts (PATH shape + PATHEXT + env-name case)
+
+## Symptom, evidence
+
+A cosmo APE on a Windows host cannot resolve ANY executable by bare
+name: `exec.LookPath("go")` (and therefore `exec.Command("go")`)
+fails with `exec: "go": executable file not found in $PATH` even
+while the same shell's `command -v go` resolves and runs go fine.
+Field evidence: three go-toolchain windows-latest runs (e.g. run
+29739028000 job 88342913155) — bash resolves go, the v211-built APE
+in the same step does not; the same APE resolves fine on linux.
+
+WHY IT EVER LOOKED GREEN: it never was. Pre-#60 (tool build IDs not
+content-derived) the shared build cache could assemble APEs partly
+from stale objects, including old embedded-PE-era lp_windows
+behavior — a poison-era APE was seen logging a Windows-style
+`.exe`-suffixed resolution that CURRENT source cannot produce. The
+first honest clean rebuild (v211, post-#60) surfaced the real
+behavior: LookPath on NT has never worked in the cosmo-native boot
+era. gosmopolitan's own test-windows stayed green because neither
+fizzbuzz nor runtimeprobe exercised PATH-resolved lookup on NT — a
+testing gap closed in the same change (see below).
+
+## Root cause: lp_unix compiled for cosmo, triple-fatal on NT
+
+cosmo matches the `unix` build tag, so os/exec compiled lp_unix.go
+with no cosmo override. On an NT host that is wrong three times over:
+
+1. **PATH shape.** ntGoenvs (os_cosmo_nt.go) decodes the
+   GetEnvironmentStringsW block VERBATIM — values are never
+   translated — so os.Getenv("PATH") is the raw Windows string
+   (`C:\hostedtoolcache\...\bin;C:\Windows\system32;...`).
+   lp_unix walks filepath.SplitList (unix ListSeparator ':'), which
+   shreds the value at the drive-letter colons into garbage entries.
+2. **No suffix probing.** lp_unix probes bare `dir/go`; the on-disk
+   file is `go.exe`. GOOS=windows probes PATHEXT suffixes; nothing
+   did that here.
+3. **Env-name case.** NT blocks typically spell the variable `Path`
+   (pwsh/GHA runners do). GOOS=windows reads env through the
+   case-insensitive OS API; cosmo's os.Getenv is the exact-match
+   unix scan over the verbatim block, so even the raw value can come
+   back EMPTY depending on the parent process (bash passes `PATH`,
+   pwsh passes `Path`). Any fix that only fixed the split would
+   still fail under pwsh-spawned processes.
+
+## Fix: lp_cosmo.go — runtime host switch, lp_windows port on NT
+
+New src/os/exec/lp_cosmo.go (lp_unix.go is now `unix && !cosmo`);
+the host switch is `internal/runtime/syscall/cosmo`.Windows() != nil,
+the same predicate package syscall dispatches on. On unix hosts
+lookPath/lookExtensions are the VERBATIM lp_unix bodies (behavior
+identical, control-tested). On NT they are a port of lp_windows.go
+semantics — ';' split with quote handling (windows
+filepath.SplitList's algorithm), PATHEXT probing (default
+.com/.exe/.bat/.cmd), the implicit-cwd probe with
+NoDefaultCurrentDirectoryInExePath and the full ErrDot/SameFile
+machinery — with three cosmo adaptations, each documented in the
+file:
+
+1. PATH/PATHEXT/NoDefaultCurrentDirectoryInExePath are looked up
+   case-insensitively over os.Environ() (last match wins, so a
+   Setenv("PATH") made by the process overrides an inherited
+   "Path"). os.Getenv itself stays exact-case on cosmo — scoped to
+   the lookup, not a global env-semantics change.
+2. Candidate-path syntax helpers (ntJoin/ntIsAbs/ntExt/ntHasExt)
+   tolerate both slash flavors and drive letters. NO path
+   translation happens in os/exec: the runtime's ntPathW already
+   accepts raw drive-shaped paths (passthrough + slash flip), so
+   Windows-form PATH entries flow through stat/open/spawn unchanged.
+   ntJoin picks the separator flavor the directory entry itself
+   uses, so Windows-shaped entries yield Windows-shaped results.
+3. After all PATHEXT probes miss, an existing extensionless file is
+   accepted as a last resort (GOOS=windows refuses). APEs are
+   routinely extensionless, and CreateProcessW runs a pathed
+   extensionless image fine — refusing would have REGRESSED
+   exec.Command("./tool") spawns that already worked on NT.
+
+exec.go's two `runtime.GOOS == "windows"` lookExtensions call sites
+(Command's absolute-path cache, Start's resolution) now gate on a
+per-lp-file `lookExtensionsEnabled()` — true on windows, ntHost() on
+cosmo, false elsewhere — so `exec.Command("./tool")` resolves
+`tool.exe` on NT exactly like upstream windows, while unix hosts
+compile the same constant-false path as before. Bare-name
+`exec.Command("go")` needs no exec.go help (it goes through LookPath),
+and a drive-shaped `exec.Command("C:\...\go.exe")` also resolves via
+LookPath: under cosmo's unix filepath.Base a windows path IS its own
+Base, so Command's Base==name branch fires — previously nonsense
+(PATH search of a windows path), now correct (ContainsAny `:\/` takes
+the direct branch).
+
+## Testing gap closed: runtimeprobe `lookpath` check
+
+testdata/runtimeprobe/lookpath.go (wired into probeOkChecks, so all
+three CI legs assert it forever): copies the probe binary into a
+fresh directory as a uniquely-named dummy (".exe"-suffixed on NT),
+appends that directory to PATH in the HOST's format — on NT a
+genuinely Windows-shaped `C:\...` entry built from TEMP, appended
+with ';' via the exact env key the block uses (usually "Path") — then
+resolves the bare name via exec.LookPath AND exec.Command and RUNS
+the resolved path (child-ok protocol). Where an independent raw
+os.Stat scan of PATH finds a real `go` binary (all three CI legs:
+apetest runs under `go test`), it additionally requires
+exec.LookPath("go") to succeed — the exact field repro — and skips
+that half gracefully elsewhere so no leg can false-fail.
+
+## Verification
+
+make.bash green (go1.24.7 bootstrap); `go build std` green for
+GOOS=linux and GOOS=cosmo, both GOARCHes, plus os/exec compile checks
+for windows/amd64, windows/arm64, plan9, js/wasm, wasip1/wasm;
+fizzbuzz + runtimeprobe fat APEs built; full apetest suite green on
+the linux host (fizzbuzz battery + 47-check runtimeprobe incl. the
+new lookpath check - `ok lookpath ... (hostlookup=<real go>)` -
+exercising the unix branch verbatim-behavior control); `go test
+os/exec` green for GOOS=linux (upstream suite, proves the
+lp_unix/exec.go seam changed nothing). Under GOOS=cosmo via the
+misc/cosmo wrappers: the new lp_cosmo_test.go unit tests (the pure
+nt* syntax helpers + env fold, host-independent) all pass, and the
+full os/exec suite matches the PRE-change tree exactly - one
+pre-existing failure either way, TestExtraFiles's `fork/exec ...
+read3.exe: exec format error`, the documented misc/cosmo limitation
+(a test that fork/execs a freshly built PRISTINE APE directly, no
+binfmt handler on the host; A/B-verified against the unmodified
+os/exec in the same build). Real-NT proof is the cosmo-ci
+test-windows leg (the lookpath check against all three origin
+binaries).
+
+Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
+(only os/exec's lookup folds); Cmd.Env dedup (dedupEnvCase) stays
+case-sensitive on cosmo-NT; no global filepath.ListSeparator change
+(that would be a far bigger ABI shift — the lookup is the scoped
+fix).
