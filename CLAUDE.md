@@ -313,6 +313,17 @@ go tool compile -bench=out.txt file.go
   place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
   upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
   this automatically).
+- **Tool build IDs are content-derived (2026-07-20).** Upstream derives
+  release-toolchain tool IDs from the tools' `-V=full` version line; the fork
+  stamps the same release-style version (`go1.26.4cosmo`) into every build, so
+  any two fork builds used to share tool IDs — and hence action IDs — letting a
+  warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
+  serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
+  Fork tools now print their own build ID under `-V=full` (like devel
+  toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt
+  toolchain automatically invalidates cached objects. The old rule "run
+  `go clean -cache` after every make.bash" is obsolete; CI asserts the
+  discriminator on every build platform.
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
@@ -347,7 +358,10 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG unit tests.
+strip/GOCOSMODEBUG/tool-ID unit tests. Every build leg additionally
+asserts, right after make.bash, that `compile -V=full` reports a
+content-derived `buildID=` (the cross-build cache-poisoning guard —
+see the tool-build-ID bullet in Fork Gotchas).
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -417,8 +431,9 @@ importable package; see 'go help packages'`, and it can neither run
 `go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
 ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
 
-1. Build this tree's toolchain: `cd src && ./make.bash`, then `go clean -cache`
-   (the fork's release-version build cache gotcha); use `../bin/go` below.
+1. Build this tree's toolchain: `cd src && ./make.bash`; use `../bin/go` below.
+   (No `go clean -cache` needed since 2026-07-20: tool IDs are content-derived,
+   so a rebuilt toolchain never reuses stale cache entries — see Fork Gotchas.)
 2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
    && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
    cosmo).
@@ -427,7 +442,7 @@ ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
    `//go:generate bundle` directive, also echoed in h2_bundle.go's header).
 4. Check `git log -- src/vendor/` for fork-local vendored changes that
    re-vendoring may have wiped; re-apply them.
-5. Rebuild + `go clean -cache` again, then run the affected stdlib tests:
+5. Rebuild, then run the affected stdlib tests:
    `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
 
 `src/README.vendor` is the upstream authority on vendoring in std/cmd.
