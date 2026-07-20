@@ -11,7 +11,7 @@ package archsimd
 // y is the chunk of dw array in use.
 // result = AddRoundKey(InvShiftRows(InvSubBytes(x)), y)
 //
-// Asm: VAESDECLAST, CPU Feature: AVX, AES
+// Asm: VAESDECLAST, CPU Feature: AVXAES
 func (x Uint8x16) AESDecryptLastRound(y Uint32x4) Uint8x16
 
 // AESDecryptLastRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -19,7 +19,7 @@ func (x Uint8x16) AESDecryptLastRound(y Uint32x4) Uint8x16
 // y is the chunk of dw array in use.
 // result = AddRoundKey(InvShiftRows(InvSubBytes(x)), y)
 //
-// Asm: VAESDECLAST, CPU Feature: AVX512VAES
+// Asm: VAESDECLAST, CPU Feature: VAES
 func (x Uint8x32) AESDecryptLastRound(y Uint32x8) Uint8x32
 
 // AESDecryptLastRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -37,7 +37,7 @@ func (x Uint8x64) AESDecryptLastRound(y Uint32x16) Uint8x64
 // y is the chunk of dw array in use.
 // result = AddRoundKey(InvMixColumns(InvShiftRows(InvSubBytes(x))), y)
 //
-// Asm: VAESDEC, CPU Feature: AVX, AES
+// Asm: VAESDEC, CPU Feature: AVXAES
 func (x Uint8x16) AESDecryptOneRound(y Uint32x4) Uint8x16
 
 // AESDecryptOneRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -45,7 +45,7 @@ func (x Uint8x16) AESDecryptOneRound(y Uint32x4) Uint8x16
 // y is the chunk of dw array in use.
 // result = AddRoundKey(InvMixColumns(InvShiftRows(InvSubBytes(x))), y)
 //
-// Asm: VAESDEC, CPU Feature: AVX512VAES
+// Asm: VAESDEC, CPU Feature: VAES
 func (x Uint8x32) AESDecryptOneRound(y Uint32x8) Uint8x32
 
 // AESDecryptOneRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -63,7 +63,7 @@ func (x Uint8x64) AESDecryptOneRound(y Uint32x16) Uint8x64
 // y is the chunk of w array in use.
 // result = AddRoundKey((ShiftRows(SubBytes(x))), y)
 //
-// Asm: VAESENCLAST, CPU Feature: AVX, AES
+// Asm: VAESENCLAST, CPU Feature: AVXAES
 func (x Uint8x16) AESEncryptLastRound(y Uint32x4) Uint8x16
 
 // AESEncryptLastRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -71,7 +71,7 @@ func (x Uint8x16) AESEncryptLastRound(y Uint32x4) Uint8x16
 // y is the chunk of w array in use.
 // result = AddRoundKey((ShiftRows(SubBytes(x))), y)
 //
-// Asm: VAESENCLAST, CPU Feature: AVX512VAES
+// Asm: VAESENCLAST, CPU Feature: VAES
 func (x Uint8x32) AESEncryptLastRound(y Uint32x8) Uint8x32
 
 // AESEncryptLastRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -89,7 +89,7 @@ func (x Uint8x64) AESEncryptLastRound(y Uint32x16) Uint8x64
 // y is the chunk of w array in use.
 // result = AddRoundKey(MixColumns(ShiftRows(SubBytes(x))), y)
 //
-// Asm: VAESENC, CPU Feature: AVX, AES
+// Asm: VAESENC, CPU Feature: AVXAES
 func (x Uint8x16) AESEncryptOneRound(y Uint32x4) Uint8x16
 
 // AESEncryptOneRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -97,7 +97,7 @@ func (x Uint8x16) AESEncryptOneRound(y Uint32x4) Uint8x16
 // y is the chunk of w array in use.
 // result = AddRoundKey(MixColumns(ShiftRows(SubBytes(x))), y)
 //
-// Asm: VAESENC, CPU Feature: AVX512VAES
+// Asm: VAESENC, CPU Feature: VAES
 func (x Uint8x32) AESEncryptOneRound(y Uint32x8) Uint8x32
 
 // AESEncryptOneRound performs a series of operations in AES cipher algorithm defined in FIPS 197.
@@ -114,7 +114,7 @@ func (x Uint8x64) AESEncryptOneRound(y Uint32x16) Uint8x64
 // x is the chunk of w array in use.
 // result = InvMixColumns(x)
 //
-// Asm: VAESIMC, CPU Feature: AVX, AES
+// Asm: VAESIMC, CPU Feature: AVXAES
 func (x Uint32x4) AESInvMixColumns() Uint32x4
 
 /* AESRoundKeyGenAssist */
@@ -129,7 +129,7 @@ func (x Uint32x4) AESInvMixColumns() Uint32x4
 //
 // rconVal results in better performance when it's a constant, a non-constant value will be translated into a jump table.
 //
-// Asm: VAESKEYGENASSIST, CPU Feature: AVX, AES
+// Asm: VAESKEYGENASSIST, CPU Feature: AVXAES
 func (x Uint32x4) AESRoundKeyGenAssist(rconVal uint8) Uint32x4
 
 /* Abs */
@@ -805,191 +805,197 @@ func (x Uint16x16) Average(y Uint16x16) Uint16x16
 // Asm: VPAVGW, CPU Feature: AVX512
 func (x Uint16x32) Average(y Uint16x32) Uint16x32
 
-/* Broadcast128 */
+/* Broadcast1To2 */
 
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
+// Broadcast1To2 copies the lowest element of its input to all 2 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTQ, CPU Feature: AVX2
+func (x Float64x2) Broadcast1To2() Float64x2
+
+// Broadcast1To2 copies the lowest element of its input to all 2 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTQ, CPU Feature: AVX2
+func (x Int64x2) Broadcast1To2() Int64x2
+
+// Broadcast1To2 copies the lowest element of its input to all 2 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTQ, CPU Feature: AVX2
+func (x Uint64x2) Broadcast1To2() Uint64x2
+
+/* Broadcast1To4 */
+
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VBROADCASTSS, CPU Feature: AVX2
-func (x Float32x4) Broadcast128() Float32x4
+func (x Float32x4) Broadcast1To4() Float32x4
 
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTQ, CPU Feature: AVX2
-func (x Float64x2) Broadcast128() Float64x2
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTB, CPU Feature: AVX2
-func (x Int8x16) Broadcast128() Int8x16
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTW, CPU Feature: AVX2
-func (x Int16x8) Broadcast128() Int16x8
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTD, CPU Feature: AVX2
-func (x Int32x4) Broadcast128() Int32x4
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTQ, CPU Feature: AVX2
-func (x Int64x2) Broadcast128() Int64x2
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTB, CPU Feature: AVX2
-func (x Uint8x16) Broadcast128() Uint8x16
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTW, CPU Feature: AVX2
-func (x Uint16x8) Broadcast128() Uint16x8
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTD, CPU Feature: AVX2
-func (x Uint32x4) Broadcast128() Uint32x4
-
-// Broadcast128 copies element zero of its (128-bit) input to all elements of
-// the 128-bit output vector.
-//
-// Asm: VPBROADCASTQ, CPU Feature: AVX2
-func (x Uint64x2) Broadcast128() Uint64x2
-
-/* Broadcast256 */
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
-//
-// Asm: VBROADCASTSS, CPU Feature: AVX2
-func (x Float32x4) Broadcast256() Float32x8
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VBROADCASTSD, CPU Feature: AVX2
-func (x Float64x2) Broadcast256() Float64x4
+func (x Float64x2) Broadcast1To4() Float64x4
 
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
-//
-// Asm: VPBROADCASTB, CPU Feature: AVX2
-func (x Int8x16) Broadcast256() Int8x32
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
-//
-// Asm: VPBROADCASTW, CPU Feature: AVX2
-func (x Int16x8) Broadcast256() Int16x16
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTD, CPU Feature: AVX2
-func (x Int32x4) Broadcast256() Int32x8
+func (x Int32x4) Broadcast1To4() Int32x4
 
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTQ, CPU Feature: AVX2
-func (x Int64x2) Broadcast256() Int64x4
+func (x Int64x2) Broadcast1To4() Int64x4
 
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
-//
-// Asm: VPBROADCASTB, CPU Feature: AVX2
-func (x Uint8x16) Broadcast256() Uint8x32
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
-//
-// Asm: VPBROADCASTW, CPU Feature: AVX2
-func (x Uint16x8) Broadcast256() Uint16x16
-
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTD, CPU Feature: AVX2
-func (x Uint32x4) Broadcast256() Uint32x8
+func (x Uint32x4) Broadcast1To4() Uint32x4
 
-// Broadcast256 copies element zero of its (128-bit) input to all elements of
-// the 256-bit output vector.
+// Broadcast1To4 copies the lowest element of its input to all 4 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTQ, CPU Feature: AVX2
-func (x Uint64x2) Broadcast256() Uint64x4
+func (x Uint64x2) Broadcast1To4() Uint64x4
 
-/* Broadcast512 */
+/* Broadcast1To8 */
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
-// Asm: VBROADCASTSS, CPU Feature: AVX512
-func (x Float32x4) Broadcast512() Float32x16
+// Asm: VBROADCASTSS, CPU Feature: AVX2
+func (x Float32x4) Broadcast1To8() Float32x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
 // Asm: VBROADCASTSD, CPU Feature: AVX512
-func (x Float64x2) Broadcast512() Float64x8
+func (x Float64x2) Broadcast1To8() Float64x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
-// Asm: VPBROADCASTB, CPU Feature: AVX512
-func (x Int8x16) Broadcast512() Int8x64
+// Asm: VPBROADCASTW, CPU Feature: AVX2
+func (x Int16x8) Broadcast1To8() Int16x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
-// Asm: VPBROADCASTW, CPU Feature: AVX512
-func (x Int16x8) Broadcast512() Int16x32
+// Asm: VPBROADCASTD, CPU Feature: AVX2
+func (x Int32x4) Broadcast1To8() Int32x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
-//
-// Asm: VPBROADCASTD, CPU Feature: AVX512
-func (x Int32x4) Broadcast512() Int32x16
-
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTQ, CPU Feature: AVX512
-func (x Int64x2) Broadcast512() Int64x8
+func (x Int64x2) Broadcast1To8() Int64x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
-// Asm: VPBROADCASTB, CPU Feature: AVX512
-func (x Uint8x16) Broadcast512() Uint8x64
+// Asm: VPBROADCASTW, CPU Feature: AVX2
+func (x Uint16x8) Broadcast1To8() Uint16x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
-// Asm: VPBROADCASTW, CPU Feature: AVX512
-func (x Uint16x8) Broadcast512() Uint16x32
+// Asm: VPBROADCASTD, CPU Feature: AVX2
+func (x Uint32x4) Broadcast1To8() Uint32x8
 
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
-//
-// Asm: VPBROADCASTD, CPU Feature: AVX512
-func (x Uint32x4) Broadcast512() Uint32x16
-
-// Broadcast512 copies element zero of its (128-bit) input to all elements of
-// the 512-bit output vector.
+// Broadcast1To8 copies the lowest element of its input to all 8 elements of
+// the output vector.
 //
 // Asm: VPBROADCASTQ, CPU Feature: AVX512
-func (x Uint64x2) Broadcast512() Uint64x8
+func (x Uint64x2) Broadcast1To8() Uint64x8
+
+/* Broadcast1To16 */
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VBROADCASTSS, CPU Feature: AVX512
+func (x Float32x4) Broadcast1To16() Float32x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX2
+func (x Int8x16) Broadcast1To16() Int8x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTW, CPU Feature: AVX2
+func (x Int16x8) Broadcast1To16() Int16x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTD, CPU Feature: AVX512
+func (x Int32x4) Broadcast1To16() Int32x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX2
+func (x Uint8x16) Broadcast1To16() Uint8x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTW, CPU Feature: AVX2
+func (x Uint16x8) Broadcast1To16() Uint16x16
+
+// Broadcast1To16 copies the lowest element of its input to all 16 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTD, CPU Feature: AVX512
+func (x Uint32x4) Broadcast1To16() Uint32x16
+
+/* Broadcast1To32 */
+
+// Broadcast1To32 copies the lowest element of its input to all 32 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX2
+func (x Int8x16) Broadcast1To32() Int8x32
+
+// Broadcast1To32 copies the lowest element of its input to all 32 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTW, CPU Feature: AVX512
+func (x Int16x8) Broadcast1To32() Int16x32
+
+// Broadcast1To32 copies the lowest element of its input to all 32 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX2
+func (x Uint8x16) Broadcast1To32() Uint8x32
+
+// Broadcast1To32 copies the lowest element of its input to all 32 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTW, CPU Feature: AVX512
+func (x Uint16x8) Broadcast1To32() Uint16x32
+
+/* Broadcast1To64 */
+
+// Broadcast1To64 copies the lowest element of its input to all 64 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX512
+func (x Int8x16) Broadcast1To64() Int8x64
+
+// Broadcast1To64 copies the lowest element of its input to all 64 elements of
+// the output vector.
+//
+// Asm: VPBROADCASTB, CPU Feature: AVX512
+func (x Uint8x16) Broadcast1To64() Uint8x64
 
 /* Ceil */
 
@@ -4082,12 +4088,12 @@ func (x Uint64x8) Mul(y Uint64x8) Uint64x8
 
 // MulAdd performs a fused (x * y) + z.
 //
-// Asm: VFMADD213PS, CPU Feature: AVX512
+// Asm: VFMADD213PS, CPU Feature: FMA
 func (x Float32x4) MulAdd(y Float32x4, z Float32x4) Float32x4
 
 // MulAdd performs a fused (x * y) + z.
 //
-// Asm: VFMADD213PS, CPU Feature: AVX512
+// Asm: VFMADD213PS, CPU Feature: FMA
 func (x Float32x8) MulAdd(y Float32x8, z Float32x8) Float32x8
 
 // MulAdd performs a fused (x * y) + z.
@@ -4097,12 +4103,12 @@ func (x Float32x16) MulAdd(y Float32x16, z Float32x16) Float32x16
 
 // MulAdd performs a fused (x * y) + z.
 //
-// Asm: VFMADD213PD, CPU Feature: AVX512
+// Asm: VFMADD213PD, CPU Feature: FMA
 func (x Float64x2) MulAdd(y Float64x2, z Float64x2) Float64x2
 
 // MulAdd performs a fused (x * y) + z.
 //
-// Asm: VFMADD213PD, CPU Feature: AVX512
+// Asm: VFMADD213PD, CPU Feature: FMA
 func (x Float64x4) MulAdd(y Float64x4, z Float64x4) Float64x4
 
 // MulAdd performs a fused (x * y) + z.
@@ -4114,12 +4120,12 @@ func (x Float64x8) MulAdd(y Float64x8, z Float64x8) Float64x8
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
 //
-// Asm: VFMADDSUB213PS, CPU Feature: AVX512
+// Asm: VFMADDSUB213PS, CPU Feature: FMA
 func (x Float32x4) MulAddSub(y Float32x4, z Float32x4) Float32x4
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
 //
-// Asm: VFMADDSUB213PS, CPU Feature: AVX512
+// Asm: VFMADDSUB213PS, CPU Feature: FMA
 func (x Float32x8) MulAddSub(y Float32x8, z Float32x8) Float32x8
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
@@ -4129,12 +4135,12 @@ func (x Float32x16) MulAddSub(y Float32x16, z Float32x16) Float32x16
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
 //
-// Asm: VFMADDSUB213PD, CPU Feature: AVX512
+// Asm: VFMADDSUB213PD, CPU Feature: FMA
 func (x Float64x2) MulAddSub(y Float64x2, z Float64x2) Float64x2
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
 //
-// Asm: VFMADDSUB213PD, CPU Feature: AVX512
+// Asm: VFMADDSUB213PD, CPU Feature: FMA
 func (x Float64x4) MulAddSub(y Float64x4, z Float64x4) Float64x4
 
 // MulAddSub performs a fused (x * y) - z for odd-indexed elements, and (x * y) + z for even-indexed elements.
@@ -4204,12 +4210,12 @@ func (x Uint16x32) MulHigh(y Uint16x32) Uint16x32
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
 //
-// Asm: VFMSUBADD213PS, CPU Feature: AVX512
+// Asm: VFMSUBADD213PS, CPU Feature: FMA
 func (x Float32x4) MulSubAdd(y Float32x4, z Float32x4) Float32x4
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
 //
-// Asm: VFMSUBADD213PS, CPU Feature: AVX512
+// Asm: VFMSUBADD213PS, CPU Feature: FMA
 func (x Float32x8) MulSubAdd(y Float32x8, z Float32x8) Float32x8
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
@@ -4219,12 +4225,12 @@ func (x Float32x16) MulSubAdd(y Float32x16, z Float32x16) Float32x16
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
 //
-// Asm: VFMSUBADD213PD, CPU Feature: AVX512
+// Asm: VFMSUBADD213PD, CPU Feature: FMA
 func (x Float64x2) MulSubAdd(y Float64x2, z Float64x2) Float64x2
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
 //
-// Asm: VFMSUBADD213PD, CPU Feature: AVX512
+// Asm: VFMSUBADD213PD, CPU Feature: FMA
 func (x Float64x4) MulSubAdd(y Float64x4, z Float64x4) Float64x4
 
 // MulSubAdd performs a fused (x * y) + z for odd-indexed elements, and (x * y) - z for even-indexed elements.
@@ -5353,7 +5359,7 @@ func (x Uint32x4) SHA1NextE(y Uint32x4) Uint32x4
 
 /* SHA256Message1 */
 
-// SHA256Message1 does the sigma and addtion of 1 in SHA1 algorithm defined in FIPS 180-4.
+// SHA256Message1 does the sigma and addition of 1 in SHA256 algorithm defined in FIPS 180-4.
 // x = {W0, W1, W2, W3}
 // y = {W4, 0, 0, 0}
 // result = {W0+σ(W1), W1+σ(W2), W2+σ(W3), W3+σ(W4)}
@@ -5363,7 +5369,7 @@ func (x Uint32x4) SHA256Message1(y Uint32x4) Uint32x4
 
 /* SHA256Message2 */
 
-// SHA256Message2 does the sigma and addition of 3 in SHA1 algorithm defined in FIPS 180-4.
+// SHA256Message2 does the sigma and addition of 3 in SHA256 algorithm defined in FIPS 180-4.
 // x = result of 2
 // y = {0, 0, W14, W15}
 // result = {W16, W17, W18, W19}
@@ -5373,7 +5379,7 @@ func (x Uint32x4) SHA256Message2(y Uint32x4) Uint32x4
 
 /* SHA256TwoRounds */
 
-// SHA256TwoRounds does 2 rounds of B loop to calculate updated state variables in SHA1 algorithm defined in FIPS 180-4.
+// SHA256TwoRounds does 2 rounds of B loop to calculate updated state variables in SHA256 algorithm defined in FIPS 180-4.
 // x = {h, g, d, c}
 // y = {f, e, b, a}
 // z = {W0+K0, W1+K1}

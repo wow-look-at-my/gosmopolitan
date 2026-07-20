@@ -9,6 +9,7 @@ package http
 import (
 	"errors"
 	"fmt"
+	"internal/godebug"
 	"io"
 	"net/http/internal/ascii"
 	"net/url"
@@ -47,15 +48,28 @@ const jsFetchRedirect = "js.fetch:redirect"
 // the browser globals.
 var jsFetchMissing = js.Global().Get("fetch").IsUndefined()
 
-// jsFetchDisabled controls whether the use of Fetch API is disabled.
-// It's set to true when we detect we're running in Node.js, so that
-// RoundTrip ends up talking over the same fake network the HTTP servers
-// currently use in various tests and examples. See go.dev/issue/57613.
+// jsFetchNode is the jsfetchnode GODEBUG setting: jsfetchnode=1
+// re-enables the Fetch API when running under Node.js. See
+// jsFetchDisabled.
+var jsFetchNode = godebug.New("jsfetchnode")
+
+// jsIsNode reports whether the program appears to be running in Node.js.
+var jsIsNode = js.Global().Get("process").Type() == js.TypeObject &&
+	strings.HasPrefix(js.Global().Get("process").Get("argv0").String(), "node")
+
+// jsFetchDisabled reports whether the use of the Fetch API is disabled.
+// It's true when we detect we're running in Node.js, so that RoundTrip
+// ends up talking over the same fake network the HTTP servers currently
+// use in various tests and examples. See go.dev/issue/57613.
+// The jsfetchnode GODEBUG setting re-enables the Fetch API under
+// Node.js (18 or later, where fetch is a global), giving programs real
+// HTTP support there; browsers are unaffected either way.
 //
 // TODO(go.dev/issue/60810): See if it's viable to test the Fetch API
 // code path.
-var jsFetchDisabled = js.Global().Get("process").Type() == js.TypeObject &&
-	strings.HasPrefix(js.Global().Get("process").Get("argv0").String(), "node")
+func jsFetchDisabled() bool {
+	return jsIsNode && jsFetchNode.Value() != "1"
+}
 
 // RoundTrip implements the [RoundTripper] interface using the WHATWG Fetch API.
 func (t *Transport) RoundTrip(req *Request) (*Response, error) {
@@ -65,7 +79,7 @@ func (t *Transport) RoundTrip(req *Request) (*Response, error) {
 	// though they are deprecated. Therefore, if any of these are set, we should obey
 	// the contract and dial using the regular round-trip instead. Otherwise, we'll try
 	// to fall back on the Fetch API, unless it's not available.
-	if t.Dial != nil || t.DialContext != nil || t.DialTLS != nil || t.DialTLSContext != nil || jsFetchMissing || jsFetchDisabled {
+	if t.Dial != nil || t.DialContext != nil || t.DialTLS != nil || t.DialTLSContext != nil || jsFetchMissing || jsFetchDisabled() {
 		return t.roundTrip(req)
 	}
 

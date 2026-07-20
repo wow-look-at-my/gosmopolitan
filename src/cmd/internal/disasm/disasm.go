@@ -44,6 +44,7 @@ type Disasm struct {
 	goarch    string           // GOARCH string
 	disasm    disasmFunc       // disassembler function for goarch
 	byteOrder binary.ByteOrder // byte order for goarch
+	wasm      *wasmCtx         // module info for wasm; see wasm.go
 }
 
 // DisasmForFile returns a disassembler for the file f.
@@ -70,7 +71,14 @@ func disasmForEntry(e *objfile.Entry) (*Disasm, error) {
 	goarch := e.GOARCH()
 	disasm := disasms[goarch]
 	byteOrder := byteOrders[goarch]
-	if disasm == nil || byteOrder == nil {
+	var wasm *wasmCtx
+	if goarch == "wasm" {
+		// wasm has no stateless disasmFunc; it uses the decoder in
+		// wasm.go, which needs the module's function index space.
+		wasm = newWasmCtx(e, syms)
+		byteOrder = binary.LittleEndian
+	}
+	if (disasm == nil && wasm == nil) || byteOrder == nil {
 		return nil, fmt.Errorf("unsupported architecture %q", goarch)
 	}
 
@@ -94,6 +102,7 @@ func disasmForEntry(e *objfile.Entry) (*Disasm, error) {
 		goarch:    goarch,
 		disasm:    disasm,
 		byteOrder: byteOrder,
+		wasm:      wasm,
 	}
 
 	return d, nil
@@ -257,7 +266,15 @@ func (d *Disasm) Print(w io.Writer, filter *regexp.Regexp, start, end uint64, pr
 				fmt.Fprintf(tw, "  %s:%d\t%#x\t", base(file), line, pc)
 			}
 
-			if size%4 != 0 || d.goarch == "386" || d.goarch == "amd64" {
+			if d.goarch == "wasm" {
+				// Print instruction as bytes, capped: a single wasm
+				// instruction can be very long (br_table immediates).
+				if size > 16 {
+					fmt.Fprintf(tw, "%x...", code[i:i+16])
+				} else {
+					fmt.Fprintf(tw, "%x", code[i:i+size])
+				}
+			} else if size%4 != 0 || d.goarch == "386" || d.goarch == "amd64" {
 				// Print instruction as bytes.
 				fmt.Fprintf(tw, "%x", code[i:i+size])
 			} else {
@@ -283,6 +300,10 @@ func (d *Disasm) Decode(start, end uint64, relocs []objfile.Reloc, gnuAsm bool, 
 	}
 	if end > d.textEnd {
 		end = d.textEnd
+	}
+	if d.wasm != nil {
+		d.decodeWasm(start, end, f)
+		return
 	}
 	code := d.text[:end-d.textStart]
 	lookup := d.lookup

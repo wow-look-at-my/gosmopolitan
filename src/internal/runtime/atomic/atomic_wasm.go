@@ -4,6 +4,11 @@
 
 // TODO(neelance): implement with actual atomic operations as soon as threads are available
 // See https://github.com/WebAssembly/design/issues/1073
+//
+// GOWASM=threads uses real atomic instructions instead; see
+// atomic_wasmthreads.go / atomic_wasmthreads.s.
+
+//go:build !wasm.threads
 
 // Export some functions via linkname to assembly in sync/atomic.
 //

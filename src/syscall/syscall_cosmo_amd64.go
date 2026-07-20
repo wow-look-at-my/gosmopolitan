@@ -82,8 +82,34 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
+			// A leading NUL is either an unnamed socket or a Linux
+			// abstract-namespace name. Every caller passes a pre-zeroed
+			// buffer, so an unnamed socket - the kernel wrote only the
+			// 2-byte family: unbound or socketpair descriptors on Linux
+			// hosts, and every unnamed socket surfaced by the darwin
+			// emulation on macOS hosts - leaves the path all zero,
+			// while a real abstract name has at least one nonzero
+			// byte. Report unnamed as an empty name like the BSD ports
+			// do instead of inventing an abstract "@" name; cosmo is
+			// deliberately absent from the android/linux/windows GOOS
+			// lists in net's tests that expect "@".
+			named := false
+			for _, b := range pp.Path {
+				if b != 0 {
+					named = true
+					break
+				}
+			}
+			if !named {
+				return sa, nil // unnamed: Name stays ""
+			}
+			// Abstract name: rewrite the leading NUL as '@' for
+			// textual display (the standard convention).
 			pp.Path[0] = '@'
 		}
+		// Assume the path ends at the first NUL. Not the full Linux
+		// abstract-name semantics (those are length-delimited binary
+		// blobs), but the convention everything uses.
 		n := 0
 		for n < len(pp.Path) && pp.Path[n] != 0 {
 			n++

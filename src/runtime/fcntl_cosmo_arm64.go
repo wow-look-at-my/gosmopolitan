@@ -8,28 +8,20 @@ package runtime
 
 import "internal/runtime/syscall/cosmo"
 
-// fcntl performs the fcntl syscall.
-// On ARM64 darwin, fcntl is not available through Syslib, and raw Linux
-// syscalls don't work. For the primary use case (checkfds checking if
-// file descriptors are valid), we return success since the APE loader
-// provides valid stdin/stdout/stderr.
+// fcntl performs the fcntl syscall with Linux cmd/arg encodings.
+//
+// On Linux hosts this is a direct syscall. On macOS the generic cosmo
+// dispatcher's darwin slow path emulates fcntl through the dlsym'd Apple
+// libc fcntl, translating F_* commands and O_* status flags, so the same
+// call works there too (F_GETFD, F_SETFD, F_GETFL, F_SETFL, F_DUPFD and
+// F_DUPFD_CLOEXEC; other commands fail with ENOSYS).
+//
+// Before osArchInit has resolved the libc symbols (i.e. before osinit),
+// the darwin path fails with ENOSYS; the runtime's only pre-main caller,
+// checkfds, runs from schedinit which is after osinit.
 //
 //go:nosplit
 func fcntl(fd, cmd, arg int32) (ret int32, errno int32) {
-	if isdarwin() {
-		// On darwin ARM64, we can't make Linux fcntl syscalls.
-		// For F_GETFD (used by checkfds), return 0 indicating fd is valid.
-		// The APE loader ensures stdin/stdout/stderr are valid.
-		const F_GETFD = 0x01
-		if cmd == F_GETFD {
-			// Return 0 (success, no close-on-exec flag set)
-			return 0, 0
-		}
-		// For other fcntl commands, return ENOSYS
-		// This may need to be expanded if other fcntl uses are needed
-		return -1, 38 // ENOSYS
-	}
-	// Linux path: use direct syscall
 	r, _, err := cosmo.Syscall6(cosmo.SYS_FCNTL, uintptr(fd), uintptr(cmd), uintptr(arg), 0, 0, 0)
 	return int32(r), int32(err)
 }

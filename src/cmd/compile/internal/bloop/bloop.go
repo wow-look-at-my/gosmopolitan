@@ -139,12 +139,22 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 	ret = stmt
 	switch n := stmt.(type) {
 	case *ir.AssignStmt:
+		// If the left hand side is blank, we need to assign it to a temp
+		// so that it can be kept alive.
+		if ir.IsBlank(n.X) {
+			tmp := typecheck.TempAt(n.Pos(), curFn, n.Y.Type())
+			n.X = tmp
+			n.Def = true
+			n.PtrInit().Append(typecheck.Stmt(ir.NewDecl(n.Pos(), ir.ODCL, tmp)))
+			stmt = typecheck.AssignExpr(n)
+			n = stmt.(*ir.AssignStmt)
+		}
 		// Peel down struct and slice indexing to get the names
 		name := getAddressableNameFromNode(n.X)
 		if name != nil {
 			debugName(name, n.Pos())
 			ret = keepAliveAt([]ir.Node{name}, n)
-		} else if deref := n.X.(*ir.StarExpr); deref != nil {
+		} else if deref, ok := n.X.(*ir.StarExpr); ok && deref != nil {
 			ret = keepAliveAt([]ir.Node{deref}, n)
 			if base.Flag.LowerM > 1 {
 				base.WarnfAt(n.Pos(), "dereference will be kept alive")
@@ -154,12 +164,35 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 		}
 	case *ir.AssignListStmt:
 		ns := []ir.Node{}
-		for _, lhs := range n.Lhs {
+		hasBlank := false
+		for i, lhs := range n.Lhs {
+			if ir.IsBlank(lhs) {
+				// If the left hand side has blanks, we need to assign them to temps
+				// so that they can be kept alive.
+				var typ *types.Type
+				// AssignListStmt can have tuple or a list of expressions on the right hand side.
+				if len(n.Rhs) == 1 && n.Rhs[0].Type() != nil &&
+					n.Rhs[0].Type().IsTuple() &&
+					len(n.Lhs) == n.Rhs[0].Type().NumFields() {
+					typ = n.Rhs[0].Type().Field(i).Type
+				} else if len(n.Rhs) == len(n.Lhs) {
+					typ = n.Rhs[i].Type()
+				} else {
+					// Unrecognized shapes, skip?
+					base.WarnfAt(n.Pos(), "unrecognized shape for assign list stmt for blank assignment")
+					continue
+				}
+				tmp := typecheck.TempAt(n.Pos(), curFn, typ)
+				n.Lhs[i] = tmp
+				n.PtrInit().Append(typecheck.Stmt(ir.NewDecl(n.Pos(), ir.ODCL, tmp)))
+				hasBlank = true
+				lhs = tmp
+			}
 			name := getAddressableNameFromNode(lhs)
 			if name != nil {
 				debugName(name, n.Pos())
 				ns = append(ns, name)
-			} else if deref := lhs.(*ir.StarExpr); deref != nil {
+			} else if deref, ok := lhs.(*ir.StarExpr); ok && deref != nil {
 				ns = append(ns, deref)
 				if base.Flag.LowerM > 1 {
 					base.WarnfAt(n.Pos(), "dereference will be kept alive")
@@ -168,13 +201,19 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 				base.WarnfAt(n.Pos(), "expr is unknown to bloop pass")
 			}
 		}
+		if hasBlank {
+			// blank nodes are rewritten to temps, we need to typecheck the node again.
+			n.Def = true
+			stmt = typecheck.AssignExpr(n)
+			n = stmt.(*ir.AssignListStmt)
+		}
 		ret = keepAliveAt(ns, n)
 	case *ir.AssignOpStmt:
 		name := getAddressableNameFromNode(n.X)
 		if name != nil {
 			debugName(name, n.Pos())
 			ret = keepAliveAt([]ir.Node{name}, n)
-		} else if deref := n.X.(*ir.StarExpr); deref != nil {
+		} else if deref, ok := n.X.(*ir.StarExpr); ok && deref != nil {
 			ret = keepAliveAt([]ir.Node{deref}, n)
 			if base.Flag.LowerM > 1 {
 				base.WarnfAt(n.Pos(), "dereference will be kept alive")
@@ -203,6 +242,10 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 				ir.NewAssignListStmt(n.Pos(), ir.OAS2, lhs,
 					[]ir.Node{n})).(*ir.AssignListStmt)
 			assign.Def = true
+			for _, tmp := range lhs {
+				// Place temp declarations in the loop body to help escape analysis.
+				assign.PtrInit().Append(typecheck.Stmt(ir.NewDecl(assign.Pos(), ir.ODCL, tmp.(*ir.Name))))
+			}
 			curNode = assign
 			plural := ""
 			if len(results) > 1 {
@@ -232,7 +275,11 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 						} else {
 							// We need a temporary to save this arg.
 							tmp := typecheck.TempAt(elem.Pos(), curFn, elem.Type())
-							argTmps = append(argTmps, typecheck.AssignExpr(ir.NewAssignStmt(elem.Pos(), tmp, elem)))
+							assign := ir.NewAssignStmt(elem.Pos(), tmp, elem)
+							assign.Def = true
+							// Place temp declarations in the loop body to help escape analysis.
+							assign.PtrInit().Append(typecheck.Stmt(ir.NewDecl(assign.Pos(), ir.ODCL, tmp)))
+							argTmps = append(argTmps, typecheck.AssignExpr(assign))
 							names = append(names, tmp)
 							s.List[i] = tmp
 							if base.Flag.LowerM > 1 {
@@ -245,7 +292,11 @@ func preserveStmt(curFn *ir.Func, stmt ir.Node) (ret ir.Node) {
 					// expressions, we need to assign them to temps and change the original arg to reference
 					// them.
 					tmp := typecheck.TempAt(n.Pos(), curFn, a.Type())
-					argTmps = append(argTmps, typecheck.AssignExpr(ir.NewAssignStmt(n.Pos(), tmp, a)))
+					assign := ir.NewAssignStmt(n.Pos(), tmp, a)
+					assign.Def = true
+					// Place temp declarations in the loop body to help escape analysis.
+					assign.PtrInit().Append(typecheck.Stmt(ir.NewDecl(assign.Pos(), ir.ODCL, tmp)))
+					argTmps = append(argTmps, typecheck.AssignExpr(assign))
 					names = append(names, tmp)
 					n.Args[i] = tmp
 					if base.Flag.LowerM > 1 {

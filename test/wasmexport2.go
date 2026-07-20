@@ -90,3 +90,17 @@ func toomanyresults() (int32, int32) { return 0, 0 } // ERROR "go:wasmexport: to
 
 //go:wasmexport bad10
 func bad10() string { return "" } // ERROR "go:wasmexport: unsupported result type" // string cannot be a result
+
+// The wrapper reads arguments from at most 16 wasm registers.
+
+//go:wasmexport good10
+func good10(int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32) {} // 16 parameters are ok
+
+//go:wasmexport toomanyparams
+func toomanyparams(int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32) {} // ERROR "go:wasmexport: too many parameters"
+
+// A string parameter occupies two wasm registers, so 15 int32s plus a
+// string exceed the limit as well.
+
+//go:wasmexport toomanyparams2
+func toomanyparams2(int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, int32, string) {} // ERROR "go:wasmexport: too many parameters"

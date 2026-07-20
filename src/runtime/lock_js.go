@@ -2,16 +2,16 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build js && wasm
+//go:build js && wasm && !wasm.threads
 
 package runtime
 
-import (
-	"internal/runtime/sys"
-	_ "unsafe" // for go:linkname
-)
-
-// js/wasm has no support for threads yet. There is no preemption.
+// js/wasm without GOWASM=threads has no support for threads. There is no
+// preemption.
+//
+// The JavaScript event-loop integration (pause/resume, the exit-time
+// deadlock probe) lives in event_js.go, shared with the GOWASM=threads
+// runtime.
 
 const (
 	mutex_unlocked = 0
@@ -160,152 +160,17 @@ func checkTimeouts() {
 	}
 }
 
-// events is a stack of calls from JavaScript into Go.
-var events []*event
-
-type event struct {
-	// g was the active goroutine when the call from JavaScript occurred.
-	// It needs to be active when returning to JavaScript.
-	gp *g
-	// returned reports whether the event handler has returned.
-	// When all goroutines are idle and the event handler has returned,
-	// then g gets resumed and returns the execution to JavaScript.
-	returned bool
-}
-
-type timeoutEvent struct {
-	id int32
-	// The time when this timeout will be triggered.
-	time int64
-}
-
-// diff calculates the difference of the event's trigger time and x.
-func (e *timeoutEvent) diff(x int64) int64 {
-	if e == nil {
-		return 0
-	}
-
-	diff := x - idleTimeout.time
-	if diff < 0 {
-		diff = -diff
-	}
-	return diff
-}
-
-// clear cancels this timeout event.
-func (e *timeoutEvent) clear() {
-	if e == nil {
-		return
-	}
-
-	clearTimeoutEvent(e.id)
-}
-
-// The timeout event started by beforeIdle.
-var idleTimeout *timeoutEvent
-
 // beforeIdle gets called by the scheduler if no goroutine is awake.
-// If we are not already handling an event, then we pause for an async event.
-// If an event handler returned, we resume it and it will pause the execution.
-// beforeIdle either returns the specific goroutine to schedule next or
-// indicates with otherReady that some goroutine became ready.
-// TODO(drchase): need to understand if write barriers are really okay in this context.
+// It delegates to the shared event-loop integration in event_js.go.
 //
 //go:yeswritebarrierrec
 func beforeIdle(now, pollUntil int64) (gp *g, otherReady bool) {
-	delay := int64(-1)
-	if pollUntil != 0 {
-		// round up to prevent setTimeout being called early
-		delay = (pollUntil-now-1)/1e6 + 1
-		if delay > 1e9 {
-			// An arbitrary cap on how long to wait for a timer.
-			// 1e9 ms == ~11.5 days.
-			delay = 1e9
-		}
-	}
-
-	if delay > 0 && (idleTimeout == nil || idleTimeout.diff(pollUntil) > 1e6) {
-		// If the difference is larger than 1 ms, we should reschedule the timeout.
-		idleTimeout.clear()
-
-		idleTimeout = &timeoutEvent{
-			id:   scheduleTimeoutEvent(delay),
-			time: pollUntil,
-		}
-	}
-
-	if len(events) == 0 {
-		// TODO: this is the line that requires the yeswritebarrierrec
-		go handleAsyncEvent()
-		return nil, true
-	}
-
-	e := events[len(events)-1]
-	if e.returned {
-		return e.gp, false
-	}
-	return nil, false
+	return eventBeforeIdle(now, pollUntil)
 }
 
-var idleStart int64
-
-func handleAsyncEvent() {
-	idleStart = nanotime()
-	pause(sys.GetCallerSP() - 16)
-}
-
-// clearIdleTimeout clears our record of the timeout started by beforeIdle.
-func clearIdleTimeout() {
-	idleTimeout.clear()
-	idleTimeout = nil
-}
-
-// scheduleTimeoutEvent tells the WebAssembly environment to trigger an event after ms milliseconds.
-// It returns a timer id that can be used with clearTimeoutEvent.
-//
-//go:wasmimport gojs runtime.scheduleTimeoutEvent
-func scheduleTimeoutEvent(ms int64) int32
-
-// clearTimeoutEvent clears a timeout event scheduled by scheduleTimeoutEvent.
-//
-//go:wasmimport gojs runtime.clearTimeoutEvent
-func clearTimeoutEvent(id int32)
-
-// handleEvent gets invoked on a call from JavaScript into Go. It calls the event handler of the syscall/js package
-// and then parks the handler goroutine to allow other goroutines to run before giving execution back to JavaScript.
-// When no other goroutine is awake any more, beforeIdle resumes the handler goroutine. Now that the same goroutine
-// is running as was running when the call came in from JavaScript, execution can be safely passed back to JavaScript.
-func handleEvent() {
-	sched.idleTime.Add(nanotime() - idleStart)
-
-	e := &event{
-		gp:       getg(),
-		returned: false,
-	}
-	events = append(events, e)
-
-	if !eventHandler() {
-		// If we did not handle a window event, the idle timeout was triggered, so we can clear it.
-		clearIdleTimeout()
-	}
-
-	// wait until all goroutines are idle
-	e.returned = true
-	gopark(nil, nil, waitReasonZero, traceBlockGeneric, 1)
-
-	events[len(events)-1] = nil
-	events = events[:len(events)-1]
-
-	// return execution to JavaScript
-	idleStart = nanotime()
-	pause(sys.GetCallerSP() - 16)
-}
-
-// eventHandler retrieves and executes handlers for pending JavaScript events.
-// It returns true if an event was handled.
-var eventHandler func() bool
-
-//go:linkname setEventHandler syscall/js.setEventHandler
-func setEventHandler(fn func() bool) {
-	eventHandler = fn
+// wasmThreadsHandleEventEntry is the GOWASM=threads hook at the top of
+// handleEvent (see lock_jsthreads.go). Without threads the main M never
+// parks in the event loop from g0, so there is nothing to intercept.
+func wasmThreadsHandleEventEntry() bool {
+	return false
 }

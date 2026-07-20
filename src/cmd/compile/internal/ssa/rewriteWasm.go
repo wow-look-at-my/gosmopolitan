@@ -2,6 +2,7 @@
 
 package ssa
 
+import "internal/buildcfg"
 import "math"
 import "cmd/compile/internal/types"
 
@@ -48,6 +49,51 @@ func rewriteValueWasm(v *Value) bool {
 	case OpAndB:
 		v.Op = OpWasmI64And
 		return true
+	case OpAtomicAdd32:
+		v.Op = OpWasmLoweredAtomicAdd32
+		return true
+	case OpAtomicAdd64:
+		v.Op = OpWasmLoweredAtomicAdd64
+		return true
+	case OpAtomicAnd32:
+		return rewriteValueWasm_OpAtomicAnd32(v)
+	case OpAtomicAnd8:
+		return rewriteValueWasm_OpAtomicAnd8(v)
+	case OpAtomicCompareAndSwap32:
+		return rewriteValueWasm_OpAtomicCompareAndSwap32(v)
+	case OpAtomicCompareAndSwap64:
+		v.Op = OpWasmLoweredAtomicCas64
+		return true
+	case OpAtomicExchange32:
+		v.Op = OpWasmLoweredAtomicExchange32
+		return true
+	case OpAtomicExchange64:
+		v.Op = OpWasmLoweredAtomicExchange64
+		return true
+	case OpAtomicLoad32:
+		v.Op = OpWasmLoweredAtomicLoad32
+		return true
+	case OpAtomicLoad64:
+		v.Op = OpWasmLoweredAtomicLoad64
+		return true
+	case OpAtomicLoad8:
+		v.Op = OpWasmLoweredAtomicLoad8
+		return true
+	case OpAtomicLoadPtr:
+		v.Op = OpWasmLoweredAtomicLoad64
+		return true
+	case OpAtomicOr32:
+		return rewriteValueWasm_OpAtomicOr32(v)
+	case OpAtomicOr8:
+		return rewriteValueWasm_OpAtomicOr8(v)
+	case OpAtomicStore32:
+		return rewriteValueWasm_OpAtomicStore32(v)
+	case OpAtomicStore64:
+		return rewriteValueWasm_OpAtomicStore64(v)
+	case OpAtomicStore8:
+		return rewriteValueWasm_OpAtomicStore8(v)
+	case OpAtomicStorePtrNoWB:
+		return rewriteValueWasm_OpAtomicStorePtrNoWB(v)
 	case OpAvg64u:
 		return rewriteValueWasm_OpAvg64u(v)
 	case OpBitLen16:
@@ -696,6 +742,323 @@ func rewriteValueWasm_OpAddr(v *Value) bool {
 		return true
 	}
 }
+func rewriteValueWasm_OpAtomicAnd32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (AtomicAnd32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store32 ptr (I64And (I64Load32U ptr mem) val) mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store32)
+		v0 := b.NewValue0(v.Pos, OpWasmI64And, typ.Int64)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Load32U, typ.UInt32)
+		v1.AddArg2(ptr, mem)
+		v0.AddArg2(v1, val)
+		v.AddArg3(ptr, v0, mem)
+		return true
+	}
+	// match: (AtomicAnd32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicAnd32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicAnd32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicAnd8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (AtomicAnd8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store8 ptr (I64And (I64Load8U ptr mem) val) mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store8)
+		v0 := b.NewValue0(v.Pos, OpWasmI64And, typ.Int64)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Load8U, typ.UInt8)
+		v1.AddArg2(ptr, mem)
+		v0.AddArg2(v1, val)
+		v.AddArg3(ptr, v0, mem)
+		return true
+	}
+	// match: (AtomicAnd8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicAnd8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicAnd8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicCompareAndSwap32(v *Value) bool {
+	v_3 := v.Args[3]
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (AtomicCompareAndSwap32 ptr old new mem)
+	// result: (LoweredAtomicCas32 ptr (ZeroExt32to64 old) new mem)
+	for {
+		ptr := v_0
+		old := v_1
+		new := v_2
+		mem := v_3
+		v.reset(OpWasmLoweredAtomicCas32)
+		v0 := b.NewValue0(v.Pos, OpZeroExt32to64, typ.UInt64)
+		v0.AddArg(old)
+		v.AddArg4(ptr, v0, new, mem)
+		return true
+	}
+}
+func rewriteValueWasm_OpAtomicOr32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (AtomicOr32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store32 ptr (I64Or (I64Load32U ptr mem) val) mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store32)
+		v0 := b.NewValue0(v.Pos, OpWasmI64Or, typ.Int64)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Load32U, typ.UInt32)
+		v1.AddArg2(ptr, mem)
+		v0.AddArg2(v1, val)
+		v.AddArg3(ptr, v0, mem)
+		return true
+	}
+	// match: (AtomicOr32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicOr32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicOr32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicOr8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (AtomicOr8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store8 ptr (I64Or (I64Load8U ptr mem) val) mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store8)
+		v0 := b.NewValue0(v.Pos, OpWasmI64Or, typ.Int64)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Load8U, typ.UInt8)
+		v1.AddArg2(ptr, mem)
+		v0.AddArg2(v1, val)
+		v.AddArg3(ptr, v0, mem)
+		return true
+	}
+	// match: (AtomicOr8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicOr8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicOr8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicStore32(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore32 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (AtomicStore32 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore32 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore32)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicStore64(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore64 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (AtomicStore64 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore64 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore64)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicStore8(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStore8 ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (AtomicStore8 ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore8 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore8)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
+func rewriteValueWasm_OpAtomicStorePtrNoWB(v *Value) bool {
+	v_2 := v.Args[2]
+	v_1 := v.Args[1]
+	v_0 := v.Args[0]
+	// match: (AtomicStorePtrNoWB ptr val mem)
+	// cond: !buildcfg.GOWASM.Threads
+	// result: (I64Store ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(!buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmI64Store)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	// match: (AtomicStorePtrNoWB ptr val mem)
+	// cond: buildcfg.GOWASM.Threads
+	// result: (LoweredAtomicStore64 ptr val mem)
+	for {
+		ptr := v_0
+		val := v_1
+		mem := v_2
+		if !(buildcfg.GOWASM.Threads) {
+			break
+		}
+		v.reset(OpWasmLoweredAtomicStore64)
+		v.AddArg3(ptr, val, mem)
+		return true
+	}
+	return false
+}
 func rewriteValueWasm_OpAvg64u(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
@@ -1086,16 +1449,36 @@ func rewriteValueWasm_OpDiv32u(v *Value) bool {
 func rewriteValueWasm_OpDiv64(v *Value) bool {
 	v_1 := v.Args[1]
 	v_0 := v.Args[0]
-	// match: (Div64 [false] x y)
-	// result: (I64DivS x y)
+	b := v.Block
+	typ := &b.Func.Config.Types
+	// match: (Div64 [false] <t> x y)
+	// result: (Last <t> flag: (I64Eq y (I64Const [-1])) q: (I64DivS <t> x (Select <t> (I64Const [1]) y flag)) (Select <t> (I64Sub (I64Const [0]) q) q flag))
 	for {
+		t := v.Type
 		if auxIntToBool(v.AuxInt) != false {
 			break
 		}
 		x := v_0
 		y := v_1
-		v.reset(OpWasmI64DivS)
-		v.AddArg2(x, y)
+		v.reset(OpLast)
+		v.Type = t
+		flag := b.NewValue0(v.Pos, OpWasmI64Eq, typ.Bool)
+		v1 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v1.AuxInt = int64ToAuxInt(-1)
+		flag.AddArg2(y, v1)
+		q := b.NewValue0(v.Pos, OpWasmI64DivS, t)
+		v3 := b.NewValue0(v.Pos, OpWasmSelect, t)
+		v4 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v4.AuxInt = int64ToAuxInt(1)
+		v3.AddArg3(v4, y, flag)
+		q.AddArg2(x, v3)
+		v5 := b.NewValue0(v.Pos, OpWasmSelect, t)
+		v6 := b.NewValue0(v.Pos, OpWasmI64Sub, typ.Int64)
+		v7 := b.NewValue0(v.Pos, OpWasmI64Const, typ.Int64)
+		v7.AuxInt = int64ToAuxInt(0)
+		v6.AddArg2(v7, q)
+		v5.AddArg3(v6, q, flag)
+		v.AddArg3(flag, q, v5)
 		return true
 	}
 	return false

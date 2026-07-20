@@ -5,6 +5,7 @@
 package work
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/load"
 )
 
 // cosmoFatArches maps each fat-APE architecture to its sibling.
@@ -37,16 +39,128 @@ func cosmoFatEnabled() bool {
 	return os.Getenv("GOCOSMOFAT_INNER") == ""
 }
 
-// cosmoFatten replaces each freshly built GOOS=cosmo executable in targets
-// with a fat (amd64+arm64) APE carrying a native Windows amd64 PE payload.
-// It reruns the original go build command for the sibling cosmo architecture
-// and for windows/amd64 into temporary locations, then merges each group of
-// binaries with the linker's -apefat mode. Pass dir=true when targets were
-// written to a -o directory, so the sibling builds also use one.
-func cosmoFatten(targets []string, dir bool) {
-	if !cosmoFatEnabled() || len(targets) == 0 {
+// cosmoStripEnabled reports whether fat APE merges should strip debug info
+// (DWARF, symbol table, section headers) from the shipped binary and write
+// per-architecture debug sidecars next to it. On by default; GOCOSMOSTRIP=0
+// opts out, mirroring GOCOSMOFAT.
+func cosmoStripEnabled() bool {
+	switch os.Getenv("GOCOSMOSTRIP") {
+	case "0", "off":
+		return false
+	}
+	return true
+}
+
+// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the fat
+// APE debug mode it selects:
+//
+//	"full" (or unset): today's behavior - the shipped APE is stripped and
+//	    the per-architecture debug sidecars are pristine copies of the
+//	    linker's ELF outputs (runnable, cosmocc parity).
+//	"slim": debug-only sidecars (the in-linker equivalent of
+//	    objcopy --only-keep-debug) - symbol table and DWARF kept, contents
+//	    of allocated sections dropped since the APE already ships them.
+//	    Same sidecar names; the shipped APE is unchanged.
+//	"compact": slim sidecars, plus a compact debug view appended to the
+//	    APE past its loadable span (never mapped at runtime), so debuggers
+//	    can symbolize the assimilated binary with no sidecar present.
+//
+// The mode only matters when the fat merge strips and writes sidecars at
+// all: GOCOSMOSTRIP=0 and an explicit -s/-w in -ldflags both suppress
+// sidecars entirely, making GOCOSMODEBUG a no-op (see cosmoMergeArgs).
+func parseCosmoDebugMode(v string) (string, error) {
+	switch v {
+	case "", "full":
+		return "full", nil
+	case "slim", "compact":
+		return v, nil
+	}
+	return "", fmt.Errorf("invalid GOCOSMODEBUG value %q: must be full, slim, or compact (or unset)", v)
+}
+
+// cosmoDebugMode returns the GOCOSMODEBUG mode for fat APE merges,
+// stopping the build with an error for invalid values (unlike GOCOSMOFAT
+// and GOCOSMOSTRIP, whose values are binary, a typo here would silently
+// select a wrong debug-info shape).
+func cosmoDebugMode() string {
+	mode, err := parseCosmoDebugMode(os.Getenv("GOCOSMODEBUG"))
+	if err != nil {
+		base.Fatalf("go: %v", err)
+	}
+	return mode
+}
+
+// ldflagsSpecifyStrip reports whether the user's -ldflags for a package
+// contain an explicit -s or -w (in any spelling the linker accepts: -s,
+// --s, -s=..., and likewise for -w). When the user has taken a position on
+// stripping, the fat merge passes no flags of its own: the payloads are
+// embedded exactly as the user's link produced them and no sidecars are
+// written.
+//
+// Known heuristic false positive: the separate value of a value-taking
+// flag can itself begin with '-' (e.g. -ldflags="-extldflags -s") and is
+// misread as the linker's -s/-w. The effect is the conservative one of
+// deferring to the user: no default strip, no sidecars.
+func ldflagsSpecifyStrip(ldflags []string) bool {
+	for _, f := range ldflags {
+		if !strings.HasPrefix(f, "-") {
+			continue // a flag's value, not a flag
+		}
+		f = strings.TrimLeft(f, "-")
+		if f == "s" || f == "w" || strings.HasPrefix(f, "s=") || strings.HasPrefix(f, "w=") {
+			return true
+		}
+	}
+	return false
+}
+
+// cosmoMergeArgs returns the linker arguments that merge p's built target
+// and its sibling-architecture build into a fat APE at p.Target, applying
+// the default strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the
+// user's -ldflags for p already specify -s/-w. GOCOSMODEBUG selects how
+// much debug info the sidecars (and, for compact, the APE itself) carry;
+// when the merge passes no strip flags at all there are no sidecars, so
+// the mode has nothing to apply to and is deliberately not passed on.
+func cosmoMergeArgs(p *load.Package, sibling string) []string {
+	args := []string{"-apefat", p.Target + "," + sibling, "-o", p.Target}
+	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
+		args = append(args, "-apestrip", "-apedbg")
+		if mode := cosmoDebugMode(); mode != "full" {
+			args = append(args, "-apedbgmode="+mode)
+		}
+	}
+	return args
+}
+
+// cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
+// of each main package in mains) with a fat (amd64+arm64) APE. It reruns
+// the original go build command for the sibling cosmo architecture into a
+// temporary location, then merges each pair of binaries with the linker's
+// -apefat mode. By default the merge also strips each embedded payload to
+// its loadable span and writes unstripped per-architecture debug sidecars
+// (<target>.dbg, <target>.aarch64.elf) next to the output; see
+// cosmoMergeArgs. Pass dir=true when targets were written to a -o
+// directory, so the sibling build also uses one.
+func cosmoFatten(mains []*load.Package, dir bool) {
+	if !cosmoFatEnabled() || len(mains) == 0 {
 		return
 	}
+	// Fattening re-reads the freshly written target and re-creates it with
+	// the merged APE. That only makes sense for regular files: with
+	// -o /dev/null (or any other special file) the target reads back empty
+	// and cannot be replaced, so leave the primary build's output as-is.
+	regular := make([]*load.Package, 0, len(mains))
+	for _, p := range mains {
+		if fi, err := os.Stat(p.Target); err == nil && !fi.Mode().IsRegular() {
+			continue
+		}
+		regular = append(regular, p)
+	}
+	mains = regular
+	if len(mains) == 0 {
+		return
+	}
+	cosmoDebugMode() // reject invalid GOCOSMODEBUG before the sibling build
 	otherArch := cosmoFatArches[cfg.Goarch]
 
 	goCmd, err := os.Executable()
@@ -79,35 +193,79 @@ func cosmoFatten(targets []string, dir bool) {
 		base.Fatalf("go: cosmo fat build: GOARCH=%s build failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", otherArch, err)
 	}
 
-	winO := filepath.Join(tmp, "windows.exe")
-	if dir {
-		winO = filepath.Join(tmp, "windows") + string(os.PathSeparator)
-		if err := os.Mkdir(filepath.Join(tmp, "windows"), 0777); err != nil {
-			base.Fatalf("go: cosmo fat build: %v", err)
-		}
-	}
-	winArgs := rewriteOutputFlag(os.Args[1:], winO)
-	winCmd := exec.Command(goCmd, winArgs...)
-	winCmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64")
-	winCmd.Stdout = os.Stdout
-	winCmd.Stderr = os.Stderr
-	if err := winCmd.Run(); err != nil {
-		base.Fatalf("go: cosmo fat build: GOOS=windows GOARCH=amd64 build failed: %v\n(set GOCOSMOFAT=0 for a cosmo-only binary)", err)
-	}
-
 	link := base.Tool("link")
-	for _, target := range targets {
+	for _, p := range mains {
+		target := p.Target
 		sibling := childO
-		win := winO
 		if dir {
 			sibling = filepath.Join(tmp, "out", filepath.Base(target))
-			win = windowsDirTarget(tmp, target)
 		}
-		merge := exec.Command(link, "-apefat", target+","+sibling+","+win, "-o", target)
+		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
 			base.Fatalf("go: cosmo fat build: merging %s: %v", target, err)
+		}
+	}
+}
+
+// cosmoFattenInstall replaces each freshly installed GOOS=cosmo
+// executable (the Target of each main package in mains) with a fat
+// (amd64+arm64) APE, the go-install counterpart of cosmoFatten.
+//
+// go install has no -o flag to redirect, and its pkg@version argument
+// form cannot be rewritten into a go build, so the sibling build reruns
+// the ORIGINAL install command line against a scratch GOPATH: package
+// resolution stays identical while the cross-compiled result lands in
+// $GOPATH/bin/$GOOS_$GOARCH/ (always a subdirectory - cosmo cannot be
+// the platform the go tool itself runs on). GOMODCACHE keeps pointing
+// at the real module cache so nothing is re-downloaded, and GOBIN is
+// cleared because go install refuses cross-compilation with GOBIN set.
+func cosmoFattenInstall(mains []*load.Package) {
+	if !cosmoFatEnabled() || len(mains) == 0 {
+		return
+	}
+	cosmoDebugMode() // reject invalid GOCOSMODEBUG before the sibling build
+	otherArch := cosmoFatArches[cfg.Goarch]
+
+	goCmd, err := os.Executable()
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: cannot find go command: %v", err)
+	}
+	tmp, err := os.MkdirTemp("", "gocosmofat")
+	if err != nil {
+		base.Fatalf("go: cosmo fat install: %v", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	rerun := func(goos, goarch string) {
+		cmd := exec.Command(goCmd, os.Args[1:]...)
+		cmd.Env = append(os.Environ(),
+			"GOOS="+goos,
+			"GOARCH="+goarch,
+			"GOCOSMOFAT_INNER=1",
+			"GOPATH="+tmp,
+			"GOMODCACHE="+cfg.GOMODCACHE,
+			"GOBIN=",
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: GOOS=%s GOARCH=%s install failed: %v\n(set GOCOSMOFAT=0 for a single-architecture binary)", goos, goarch, err)
+		}
+	}
+	rerun("cosmo", otherArch)
+
+	link := base.Tool("link")
+	for _, p := range mains {
+		target := p.Target
+		name := filepath.Base(target)
+		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
+		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
+		merge.Stdout = os.Stdout
+		merge.Stderr = os.Stderr
+		if err := merge.Run(); err != nil {
+			base.Fatalf("go: cosmo fat install: merging %s: %v", target, err)
 		}
 	}
 }
@@ -142,19 +300,4 @@ func rewriteOutputFlag(args []string, out string) []string {
 		}
 	}
 	return res
-}
-
-func windowsDirTarget(tmp, target string) string {
-	baseName := filepath.Base(target)
-	win := filepath.Join(tmp, "windows", baseName)
-	if _, err := os.Stat(win); err == nil {
-		return win
-	}
-	if filepath.Ext(baseName) != ".exe" {
-		winExe := win + ".exe"
-		if _, err := os.Stat(winExe); err == nil {
-			return winExe
-		}
-	}
-	return win
 }
