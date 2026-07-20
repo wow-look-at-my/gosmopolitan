@@ -44,6 +44,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"internal/abi"
+	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -52,6 +53,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // isRuntimeDepPkg reports whether pkg is the runtime package or its dependency.
@@ -3212,6 +3215,42 @@ func (ctxt *Link) AddTramp(s *loader.SymbolBuilder, typ sym.SymKind) {
 	}
 }
 
+// dwarfCompressCodec returns the ELF compression header type used for the
+// target's compressed DWARF sections: ELFCOMPRESS_ZSTD for GOOS=cosmo,
+// ELFCOMPRESS_ZLIB everywhere else.
+//
+// Cosmo uses zstd because its debug sections dominate the on-disk cost of
+// the per-architecture sidecars every fat APE build writes: klauspost zstd
+// at SpeedBestCompression stores the same DWARF in 13-16% fewer bytes than
+// the zlib BestSpeed default, for about +0.2s per link. Consumers need
+// zstd-aware ELF tooling (gdb >= 13, binutils >= 2.40, Go's debug/elf
+// since 1.21; delve reads it too). Non-cosmo targets keep the upstream
+// zlib path byte-for-byte.
+func dwarfCompressCodec(ctxt *Link) elf.CompressionType {
+	if ctxt.HeadType == objabi.Hcosmo && ctxt.IsELF {
+		return elf.COMPRESS_ZSTD
+	}
+	return elf.COMPRESS_ZLIB
+}
+
+// newDwarfCompressor returns a WriteCloser compressing into buf with the
+// given codec (see dwarfCompressCodec).
+func newDwarfCompressor(buf *bytes.Buffer, codec elf.CompressionType) (io.WriteCloser, error) {
+	if codec == elf.COMPRESS_ZSTD {
+		return zstd.NewWriter(buf,
+			zstd.WithEncoderLevel(zstd.SpeedBestCompression),
+			// One goroutine per encoder: output stays deterministic
+			// and dwarfcompress already runs one compressor per
+			// section in parallel.
+			zstd.WithEncoderConcurrency(1))
+	}
+	// Using zlib.BestSpeed achieves very nearly the same
+	// compression levels of zlib.DefaultCompression, but takes
+	// substantially less time. This is important because DWARF
+	// compression can be a significant fraction of link time.
+	return zlib.NewWriterLevel(buf, zlib.BestSpeed)
+}
+
 // compressSyms compresses syms and returns the contents of the
 // compressed section. If the section would get larger, it returns nil.
 func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
@@ -3221,18 +3260,19 @@ func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 		total += ldr.SymSize(sym)
 	}
 
+	codec := dwarfCompressCodec(ctxt)
 	var buf bytes.Buffer
 	if ctxt.IsELF {
 		switch ctxt.Arch.PtrSize {
 		case 8:
 			binary.Write(&buf, ctxt.Arch.ByteOrder, elf.Chdr64{
-				Type:      uint32(elf.COMPRESS_ZLIB),
+				Type:      uint32(codec),
 				Size:      uint64(total),
 				Addralign: uint64(ctxt.Arch.Alignment),
 			})
 		case 4:
 			binary.Write(&buf, ctxt.Arch.ByteOrder, elf.Chdr32{
-				Type:      uint32(elf.COMPRESS_ZLIB),
+				Type:      uint32(codec),
 				Size:      uint32(total),
 				Addralign: uint32(ctxt.Arch.Alignment),
 			})
@@ -3248,11 +3288,7 @@ func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 
 	var relocbuf []byte // temporary buffer for applying relocations
 
-	// Using zlib.BestSpeed achieves very nearly the same
-	// compression levels of zlib.DefaultCompression, but takes
-	// substantially less time. This is important because DWARF
-	// compression can be a significant fraction of link time.
-	z, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
+	z, err := newDwarfCompressor(&buf, codec)
 	if err != nil {
 		log.Fatalf("NewWriterLevel failed: %s", err)
 	}
