@@ -21,11 +21,26 @@ import (
 // intact) is first written to a debug sidecar beside outfile; with
 // -apestrip, each embedded payload is then reduced to the file span its
 // program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. The policy for when cmd/go passes these
-// flags lives in cmd/go/internal/work.cosmoMergeArgs.
+// each input's PT_LOAD span. -apedbgmode selects how much debug info the
+// sidecars (and, for compact, the output itself) carry; see apedebug.go.
+// The policy for when cmd/go passes these flags lives in
+// cmd/go/internal/work.cosmoMergeArgs.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
+	}
+	switch *flagApeDbgMode {
+	case "full":
+	case "slim":
+		if !*flagApeDbg {
+			Exitf("-apedbgmode=slim requires -apedbg")
+		}
+	case "compact":
+		if !*flagApeDbg || !*flagApeStrip {
+			Exitf("-apedbgmode=compact requires -apedbg and -apestrip")
+		}
+	default:
+		Exitf("-apedbgmode: invalid mode %q (valid: full, slim, compact)", *flagApeDbgMode)
 	}
 	inputs := strings.Split(spec, ",")
 	if len(inputs) != 2 {
@@ -51,6 +66,16 @@ func apeFatMerge(spec, outfile string) {
 	if payloads[0].arch != sys.AMD64 {
 		payloads[0], payloads[1] = payloads[1], payloads[0]
 	}
+	// Compact mode reads each payload's pristine image (section table,
+	// symtab, DWARF) after stripping has removed it from p.elf, so copy
+	// first: stripPayload re-slices the same backing array and zeroes
+	// header fields in place.
+	var pristine [][]byte
+	if *flagApeDbgMode == "compact" {
+		for _, p := range payloads {
+			pristine = append(pristine, append([]byte(nil), p.elf...))
+		}
+	}
 	if *flagApeDbg {
 		for _, p := range payloads {
 			writeAPEDebugSidecar(outfile, p)
@@ -61,7 +86,67 @@ func apeFatMerge(spec, outfile string) {
 			stripPayload(p)
 		}
 	}
+	var tail []byte
+	var tailOff uint64
+	if *flagApeDbgMode == "compact" {
+		tail, tailOff = apeCompactDebugTail(payloads, pristine)
+	}
 	writeAPEFile(outfile, payloads)
+	if tail != nil {
+		appendAPEFileTail(outfile, tailOff, tail)
+	}
+}
+
+// apeCompactDebugTail builds the compact debug tail for the payloads (in
+// their final order) and patches each payload's ELF header to reference
+// its section-header view by absolute file offset - both in the stored
+// payload and, via makeEmbeddedElfHeader's propagation, in the boot
+// header that self-assimilation writes over the file's first 64 bytes.
+// The tail lands past the last payload's end (8-aligned), outside every
+// loadable span: it is never mapped at runtime, and every APE boot path
+// reads only ELF and program headers, so execution is unaffected.
+func apeCompactDebugTail(payloads []*apePayload, pristine [][]byte) (tail []byte, tailOff uint64) {
+	layoutAPE(payloads) // same deterministic layout writeAPEFile recomputes
+	last := payloads[len(payloads)-1]
+	tailOff = (last.offset + uint64(len(last.elf)) + 7) &^ uint64(7)
+	for i, p := range payloads {
+		var view apeCompactView
+		var err error
+		tail, view, err = appendCompactDebugView(tail, tailOff, pristine[i], p.offset)
+		if err != nil {
+			Exitf("-apedbgmode=compact: %s payload: %v", p.arch, err)
+		}
+		binary.LittleEndian.PutUint64(p.elf[40:48], view.shoff)    // e_shoff
+		binary.LittleEndian.PutUint16(p.elf[60:62], view.shnum)    // e_shnum
+		binary.LittleEndian.PutUint16(p.elf[62:64], view.shstrndx) // e_shstrndx
+	}
+	return tail, tailOff
+}
+
+// appendAPEFileTail appends tail to the APE at outfile so that its first
+// byte lands at file offset tailOff, zero-padding the gap from the
+// current end of file.
+func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
+	f, err := os.OpenFile(outfile, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		Exitf("-apedbgmode=compact: %v", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		Exitf("-apedbgmode=compact: %v", err)
+	}
+	if uint64(fi.Size()) > tailOff {
+		Exitf("-apedbgmode=compact: APE ends at %#x, past the debug tail offset %#x", fi.Size(), tailOff)
+	}
+	if pad := tailOff - uint64(fi.Size()); pad > 0 {
+		if _, err := f.Write(make([]byte, pad)); err != nil {
+			Exitf("-apedbgmode=compact: %v", err)
+		}
+	}
+	if _, err := f.Write(tail); err != nil {
+		Exitf("-apedbgmode=compact: %v", err)
+	}
 }
 
 // apeDebugSidecarName returns the debug sidecar path for a payload of the
@@ -76,13 +161,24 @@ func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
 	return outfile + ".dbg"
 }
 
-// writeAPEDebugSidecar writes payload p's ELF image, exactly as its linker
-// produced it (p_offset values payload-relative, symbol table and DWARF
-// intact), to the debug sidecar path for its architecture. The sidecar is
-// a complete standalone ELF executable, directly loadable by debuggers.
+// writeAPEDebugSidecar writes payload p's debug sidecar for its
+// architecture. In the default -apedbgmode=full it is p's ELF image exactly
+// as its linker produced it (p_offset values payload-relative, symbol table
+// and DWARF intact): a complete standalone ELF executable, directly
+// loadable by debuggers. In slim and compact modes the image is first
+// reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
+// table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
 	name := apeDebugSidecarName(outfile, p.arch)
-	if err := os.WriteFile(name, p.elf, 0755); err != nil {
+	img := p.elf
+	if *flagApeDbgMode != "full" {
+		slim, err := slimELFDebug(img)
+		if err != nil {
+			Exitf("-apedbgmode=%s: %s: %v", *flagApeDbgMode, name, err)
+		}
+		img = slim
+	}
+	if err := os.WriteFile(name, img, 0755); err != nil {
 		Exitf("-apedbg: %v", err)
 	}
 }
