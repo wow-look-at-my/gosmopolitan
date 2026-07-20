@@ -42,16 +42,24 @@
 // Console control: SetConsoleCtrlHandler's callback runs on a thread
 // INJECTED by Windows - no g, no TLS, no Go. The asm handler
 // (ntCtrlTramp, sys_cosmo_nt_amd64.s) only sets a bit in ntCtrlMask,
-// SetEvents ntCtrlEvent, and returns 1 (CTRL_C/CTRL_BREAK) or blocks
-// forever (CLOSE/LOGOFF/SHUTDOWN - Windows kills the process the
-// moment the handler returns; blocking gives Go handlers the OS's
-// grace window to clean up, upstream ctrlHandler's block()). A
+// SetEvents ntCtrlEvent, and returns 1 (CTRL_C -> SIGINT, CTRL_BREAK
+// -> SIGQUIT) or blocks forever (CLOSE -> SIGHUP, LOGOFF/SHUTDOWN ->
+// SIGTERM - Windows kills the process the moment such a handler
+// returns; blocking gives Go handlers the OS's grace window to clean
+// up, upstream ctrlHandler's block()). The BREAK -> SIGQUIT and
+// CLOSE -> SIGHUP legs deliberately diverge from upstream Go's
+// windows mapping (BREAK -> SIGINT, CLOSE -> SIGTERM) for unix
+// parity: Ctrl-Break is the SIGQUIT chord - on a wedged process an
+// unwatched SIGQUIT produces the goroutine dump - and closing the
+// console window is a hangup (DEBUGGING.md wave 3 item 4). A
 // dedicated relay M - created via newm at boot, parked in
 // WaitForSingleObject on its g0 - picks the event up and feeds
 // ntKillSelf(sig), which consults ntSigActs and either drops
 // (SIG_IGN), dies with the encoded status (SIG_DFL - matching the
-// Linux default action for SIGINT/SIGTERM), or delivers through the
-// D1 trampoline into sigtrampgo -> sighandler -> sigsend/os signal.
+// Linux default action for SIGINT/SIGHUP/SIGTERM), or delivers
+// through the D1 trampoline into sigtrampgo -> sighandler ->
+// sigsend/os signal (unwatched SIGQUIT: goroutine dump + encoded
+// death, the fork sigtable's _SigThrow - Linux parity).
 
 package runtime
 
@@ -273,9 +281,9 @@ func ntExitEncodedOrdered(sig uint32) {
 // handler is registered, never closed.
 var ntCtrlEvent uintptr
 
-// ntCtrlMask holds pending console-ctrl signals as bits (1<<_SIGINT |
-// 1<<_SIGTERM). The asm handler ORs bits in (LOCK ORL, from a foreign
-// thread); the relay drains with Xchg.
+// ntCtrlMask holds pending console-ctrl signals as bits (1<<_SIGHUP |
+// 1<<_SIGINT | 1<<_SIGQUIT | 1<<_SIGTERM). The asm handler ORs bits
+// in (LOCK ORL, from a foreign thread); the relay drains with Xchg.
 var ntCtrlMask uint32
 
 // ntCtrlTramp is the SetConsoleCtrlHandler callback (asm,
@@ -304,9 +312,13 @@ func ntInitConsoleCtrl() {
 // the kernel delivery decision for each signal on THIS thread -
 // ntKillSelf consults ntSigActs exactly like a kill(2): SIG_IGN
 // drops, SIG_DFL dies with the encoded status (the Linux default
-// action for SIGINT/SIGTERM), an installed handler delivers through
-// the D1 trampoline into sighandler (sigsend to os/signal for watched
-// signals, dieFromSignal for unwatched fatal ones).
+// action for SIGHUP/SIGINT/SIGTERM), an installed handler delivers
+// through the D1 trampoline into sighandler (sigsend to os/signal for
+// watched signals, dieFromSignal for unwatched fatal ones - unwatched
+// SIGQUIT additionally dumps goroutines, _SigThrow). Drain order:
+// the keyboard chords first (SIGINT, SIGQUIT), then the lifetime
+// events (SIGHUP, SIGTERM), so a coalesced wakeup dies for the
+// blocked-handler event only after the interactive chords ran.
 func ntCtrlRelay() {
 	for {
 		ntcall(ntWaitForSingleObjectFn, ntCtrlEvent, _NT_INFINITE, 0, 0, 0, 0)
@@ -317,6 +329,12 @@ func ntCtrlRelay() {
 			}
 			if mask&(1<<_SIGINT) != 0 {
 				ntKillSelf(_SIGINT)
+			}
+			if mask&(1<<_SIGQUIT) != 0 {
+				ntKillSelf(_SIGQUIT)
+			}
+			if mask&(1<<_SIGHUP) != 0 {
+				ntKillSelf(_SIGHUP)
 			}
 			if mask&(1<<_SIGTERM) != 0 {
 				ntKillSelf(_SIGTERM)
