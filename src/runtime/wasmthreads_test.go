@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestWasmThreadsRunOnNewM exercises the GOWASM=threads thread-creation
@@ -72,11 +73,38 @@ func TestWasmThreadsRunOnNewM(t *testing.T) {
 		t.Fatalf("mutex counter: got %d, want 2", c)
 	}
 
-	// Spawn again: the parked worker Ms must be reused (mget), not new
-	// pool workers. Deterministic only at GOMAXPROCS=1: under a multi-P
-	// scheduler other Ms park and unpark concurrently (GC workers, timer
-	// self-serves), so the re-spawn may legitimately be handed some OTHER
-	// parked M than the two this test tracked.
+	// Spawn again: with parked worker Ms available, the scheduler must
+	// reuse one (mget) instead of growing the pool with a fresh M.
+	//
+	// Two things make the obvious assertions racy, so neither is used:
+	//
+	//   - WasmThreadsRunOnNewM returning does not mean the M that ran fn
+	//     has parked - the M reaches sched.midle through its scheduler
+	//     tail (startlockedm -> stopm -> mput) on its own host thread,
+	//     concurrently with this resumed goroutine. So the re-spawn must
+	//     first WAIT until worker Ms are actually reusable.
+	//
+	//   - WHICH parked M mget returns is not deterministic even at
+	//     GOMAXPROCS=1: a parked M's watchdog tick re-mputs it to the
+	//     head of the idle-M LIFO, and earlier tests (or earlier -count
+	//     iterations) may have left additional pool Ms parked, any of
+	//     which is a legitimate pick. So reuse is asserted as "the M
+	//     count did not grow", not as id-membership.
+	//
+	// The wait uses Gosched, not Sleep: a sleep timer gets self-served
+	// by a parked worker's watchdog, which would migrate this goroutine
+	// onto a worker M; Gosched keeps the P held here. A runtime that
+	// never parks worker Ms fails loudly and deterministically below.
+	if strict {
+		waitStart := time.Now()
+		for runtime.WasmThreadsIdleWorkerMs() < 2 {
+			if time.Since(waitStart) > 10*time.Second {
+				t.Fatalf("worker Ms never parked: %d parked after 10s", runtime.WasmThreadsIdleWorkerMs())
+			}
+			runtime.Gosched()
+		}
+	}
+	mBefore := runtime.WasmThreadsMCount()
 	var againM int64
 	runtime.WasmThreadsRunOnNewM(func() {
 		againM = runtime.WasmThreadsCurMID()
@@ -84,7 +112,7 @@ func TestWasmThreadsRunOnNewM(t *testing.T) {
 	if strict && againM == mainM {
 		t.Fatalf("re-spawn ran on the main M (%d)", mainM)
 	}
-	if strict && againM != workerM && againM != nestedM {
-		t.Fatalf("re-spawn did not reuse a parked M: got %d, want %d or %d", againM, workerM, nestedM)
+	if mAfter := runtime.WasmThreadsMCount(); strict && mAfter != mBefore {
+		t.Fatalf("re-spawn did not reuse a parked M: M count grew %d -> %d (fn ran on M %d)", mBefore, mAfter, againM)
 	}
 }
