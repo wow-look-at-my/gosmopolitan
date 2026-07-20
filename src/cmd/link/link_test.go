@@ -15,6 +15,7 @@ import (
 	"internal/platform"
 	"internal/testenv"
 	"internal/xcoff"
+	"math/bits"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2099,16 +2100,15 @@ func TestFuncdataPlacement(t *testing.T) {
 		args        int32
 		deferreturn uint32
 
-		pcsp      uint32
-		pcfile    uint32
-		pcln      uint32
-		npcdata   uint32
-		cuOffset  uint32
-		startLine int32
-		funcID    abi.FuncID
-		flag      abi.FuncFlag
-		_         [1]byte
-		nfuncdata uint8
+		pcsp         uint32
+		pcfile       uint32
+		pcln         uint32
+		cuOffset     uint32
+		startLine    int32
+		funcID       abi.FuncID
+		flag         abi.FuncFlag
+		pcdataMask   uint8
+		funcdataMask uint8
 	}
 
 	for i, ftabEntry := range ftab {
@@ -2121,13 +2121,17 @@ func TestFuncdataPlacement(t *testing.T) {
 		var fe funcEntry
 		setValueFromBytes(&fe, pclntab[funcAddr-pclntabAddr:])
 
-		funcdataVals := funcAddr + uint64(unsafe.Sizeof(fe)) + uint64(fe.npcdata*4)
-		for j := range fe.nfuncdata {
-			var funcdataVal uint32
-			setValueFromBytes(&funcdataVal, pclntab[funcdataVals+uint64(j)*4-pclntabAddr:])
-			if funcdataVal == ^uint32(0) {
+		// The pcdata and funcdata offset arrays hold entries for present
+		// (bitmap-set) slots only, in index order, pcdata array first.
+		funcdataVals := funcAddr + uint64(unsafe.Sizeof(fe)) + uint64(bits.OnesCount8(fe.pcdataMask)*4)
+		fdIdx := uint64(0)
+		for j := range uint8(8) {
+			if fe.funcdataMask&(1<<j) == 0 {
 				continue
 			}
+			var funcdataVal uint32
+			setValueFromBytes(&funcdataVal, pclntab[funcdataVals+fdIdx*4-pclntabAddr:])
+			fdIdx++
 			funcdataAddr := gofuncAddr + uint64(funcdataVal)
 			if funcdataAddr < pclntabAddr || funcdataAddr >= pclntabEnd {
 				t.Errorf("ftab entry %d funcdata %d address %#x not between %#x and %#x", i, j, funcdataAddr, pclntabAddr, pclntabEnd)

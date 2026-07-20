@@ -219,6 +219,21 @@ type symbolizeCodeContext struct {
 var qq = [...]byte{'?', '?', 0}
 var dash = [...]byte{'-', 0}
 
+// raceCString returns a pointer to an immortal NUL-terminated copy of the
+// logical string a+b, for handing to the race runtime, which expects C
+// strings that live forever. The race runtime caches symbolization results
+// per PC, so these copies stay bounded. When a is empty, b already aliases
+// immortal NUL-terminated pclntab bytes (see funcNamePieces) and callers
+// should hand over b's bytes directly instead.
+func raceCString(a, b string) *byte {
+	n := len(a) + len(b) + 1
+	p := (*[1 << 30]byte)(persistentalloc(uintptr(n), 1, &memstats.other_sys))
+	copy(p[:len(a)], a)
+	copy(p[len(a):n-1], b)
+	p[n-1] = 0
+	return &p[0]
+}
+
 const (
 	raceGetProcCmd = iota
 	raceSymbolizeCodeCmd
@@ -266,15 +281,23 @@ func raceSymbolizeCode(ctx *symbolizeCodeContext) {
 				continue
 			}
 
-			name := sf.name()
-			file, line := u.fileLine(uf)
+			npfx, name := sf.namePieces()
+			fdir, fbase, line := u.fileLinePieces(uf)
 			if line == 0 {
 				// Failure to symbolize
 				continue
 			}
-			ctx.fn = &bytes(name)[0] // assume NUL-terminated
+			if npfx == "" {
+				ctx.fn = &bytes(name)[0] // aliases pclntab; NUL-terminated
+			} else {
+				ctx.fn = raceCString(npfx, name)
+			}
 			ctx.line = uintptr(line)
-			ctx.file = &bytes(file)[0] // assume NUL-terminated
+			if fdir == "" {
+				ctx.file = &bytes(fbase)[0] // aliases pclntab; NUL-terminated
+			} else {
+				ctx.file = raceCString(fdir, fbase)
+			}
 			ctx.off = pc - fi.entry()
 			ctx.res = 1
 			if u.isInlined(uf) {

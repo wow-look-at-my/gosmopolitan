@@ -14,12 +14,76 @@ import (
 	"fmt"
 	"internal/abi"
 	"internal/buildcfg"
+	"math/bits"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-const funcSize = 11 * 4 // funcSize is the size of the _func object in runtime/runtime2.go
+// funcSize is the size of the fixed part of the _func object in
+// runtime/runtime2.go. The record continues with the presence-bitmap
+// encoded pcdata and funcdata offset arrays (see funcShape).
+const funcSize = 10 * 4
+
+// funcShape describes the encoded shape of a _func record: which pcdata
+// tables and funcdata slots have offset entries following the fixed part
+// of the record. Bit i of pcMask is set iff pcdata table i is present;
+// bit j of fdMask is set iff funcdata slot j is present. Only present
+// entries are written, in increasing index order, pcdata array first.
+//
+// Keep in sync with runtime/runtime2.go:_func and
+// runtime/symtab.go:pcdatastart,funcdata.
+type funcShape struct {
+	pcMask uint8
+	fdMask uint8
+}
+
+// dataBytes returns the total size in bytes of the variable-length
+// pcdata/funcdata offset arrays of a record with this shape.
+func (sh funcShape) dataBytes() int64 {
+	return int64(bits.OnesCount8(sh.pcMask)+bits.OnesCount8(sh.fdMask)) * 4
+}
+
+// funcPcdataOffsets returns the pctab offsets of the pcdata tables of s,
+// indexed by pcdata table index, together with the presence bitmap of the
+// nonzero offsets. An offset of 0 means "no table" (pctab offset 0 is
+// reserved by generatePctab), and is encoded as an absent slot.
+//
+// pcinline and pcdata must come from ldr.PcdataAuxs(s), and generatePctab
+// must already have assigned the pctab offsets as the symbol values.
+func funcPcdataOffsets(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo, pcinline loader.Sym, pcdata []loader.Sym) (offs [8]uint32, mask uint8) {
+	n := numPCData(ldr, s, fi)
+	if n > 8 {
+		panic(fmt.Sprintf("%s: too many pcdata tables for the presence bitmap: %d", ldr.SymName(s), n))
+	}
+	for j, pcSym := range pcdata {
+		offs[j] = uint32(ldr.SymValue(pcSym))
+	}
+	if fi.NumInlTree() > 0 {
+		offs[abi.PCDATA_InlTreeIndex] = uint32(ldr.SymValue(pcinline))
+	}
+	for j := uint32(0); j < n; j++ {
+		if offs[j] != 0 {
+			mask |= 1 << j
+		}
+	}
+	return offs, mask
+}
+
+// funcFuncdataMask returns the presence bitmap of the funcdata slots of s.
+// A slot is present iff it has a real funcdata symbol (see ignoreFuncData);
+// funcdata must come from funcData(ldr, s, fi, inlSym, ...).
+func funcFuncdataMask(ldr *loader.Loader, s loader.Sym, funcdata []loader.Sym) (mask uint8) {
+	if len(funcdata) > 8 {
+		panic(fmt.Sprintf("%s: too many funcdata slots for the presence bitmap: %d", ldr.SymName(s), len(funcdata)))
+	}
+	for j, fdSym := range funcdata {
+		if !ignoreFuncData(ldr, s, j, fdSym) {
+			mask |= 1 << uint(j)
+		}
+	}
+	return mask
+}
 
 // pclntab holds the state needed for pclntab generation.
 type pclntab struct {
@@ -195,7 +259,10 @@ func genInlTreeSym(ctxt *Link, cu *sym.CompilationUnit, fi loader.FuncInfo, arch
 	// eventually switch the type back to SRODATA.
 	inlTreeSym.SetType(sym.SPCLNTAB)
 	ldr.SetAttrReachable(its, true)
-	ldr.SetSymAlign(its, 4) // it has 32-bit fields
+	// Entries are packed 13-byte records with unaligned 32-bit fields;
+	// the runtime reads them with unaligned loads, so byte alignment
+	// avoids padding between inline trees in go:func.*.
+	ldr.SetSymAlign(its, 1)
 	ninl := fi.NumInlTree()
 	for i := 0; i < int(ninl); i++ {
 		call := fi.InlTree(i)
@@ -222,13 +289,14 @@ func genInlTreeSym(ctxt *Link, cu *sym.CompilationUnit, fi loader.FuncInfo, arch
 			panic(fmt.Sprintf("inlined function %s missing func info", ldr.SymName(call.Func)))
 		}
 
-		// Construct runtime.inlinedCall value.
-		const size = 16
+		// Construct the packed runtime.inlinedCall encoding: funcID,
+		// then three unaligned target-endian 32-bit fields.
+		// Keep in sync with runtime/symtabinl.go:inlinedCallSize.
+		const size = 13
 		inlTreeSym.SetUint8(arch, int64(i*size+0), uint8(funcID))
-		// Bytes 1-3 are unused.
-		inlTreeSym.SetUint32(arch, int64(i*size+4), nameOff)
-		inlTreeSym.SetUint32(arch, int64(i*size+8), uint32(call.ParentPC))
-		inlTreeSym.SetUint32(arch, int64(i*size+12), uint32(startLine))
+		inlTreeSym.SetUint32(arch, int64(i*size+1), nameOff)
+		inlTreeSym.SetUint32(arch, int64(i*size+5), uint32(call.ParentPC))
+		inlTreeSym.SetUint32(arch, int64(i*size+9), uint32(startLine))
 	}
 	return its
 }
@@ -313,27 +381,136 @@ func walkFuncs(ctxt *Link, funcs []loader.Sym, f func(loader.Sym)) {
 	}
 }
 
+// splitFuncName splits a function name into a shared package-path prefix
+// and a per-name suffix, at the first '.' that follows the last '/' before
+// any '['. The prefix is either empty or ends in '.', and prefix+suffix is
+// always exactly the original name. Keeping the split before any '['
+// guarantees generic shape brackets live entirely in the suffix, which
+// runtime.funcNamePiecesForPrint relies on.
+func splitFuncName(name string) (prefix, suffix string) {
+	end := strings.IndexByte(name, '[')
+	if end < 0 {
+		end = len(name)
+	}
+	slash := strings.LastIndexByte(name[:end], '/')
+	dot := strings.IndexByte(name[slash+1:end], '.')
+	if dot < 0 {
+		return "", name
+	}
+	i := slash + 1 + dot + 1
+	return name[:i], name[i:]
+}
+
+// uvarintLen returns the number of bytes the uvarint encoding of v takes.
+func uvarintLen(v uint64) int64 {
+	n := int64(1)
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
+}
+
+// setUvarint writes v at off as a uvarint, returning the offset past it.
+func setUvarint(sb *loader.SymbolBuilder, arch *sys.Arch, off int64, v uint64) int64 {
+	for v >= 0x80 {
+		off = sb.SetUint8(arch, off, byte(v)|0x80)
+		v >>= 7
+	}
+	return sb.SetUint8(arch, off, byte(v))
+}
+
 // generateFuncnametab creates the function name table. Returns a map of
-// func symbol to the name offset in runtime.funcnamtab.
+// func symbol to the name offset in runtime.funcnametab.
+//
+// The compact pclntab format (abi.CosmoPCLnTabMagic) shares package-path
+// prefixes between names instead of storing every name whole:
+//
+//	uint32 nprefix
+//	nprefix*uint32  offset of each NUL-terminated prefix string,
+//	                relative to the start of the table
+//	prefix strings  NUL-terminated, contiguous, in index order
+//	name entries    uvarint(prefix index) ++ suffix ++ NUL
+//
+// A name offset (_func.nameOff, inlinedCall.nameOff) addresses one of the
+// trailing entries; the full name is prefix+suffix (see splitFuncName).
+// Prefix indexes are assigned by descending use count so the hottest
+// prefixes get 1-byte uvarints. Entries follow the header, offset table
+// and prefix strings, so offset 0 can never address a real entry,
+// preserving the runtime's nameOff==0 "no name" sentinel.
+//
+// Keep in sync with runtime/symtab.go:(*moduledata).funcNamePieces and
+// debug/gosym/pclntab.go:funcName (verCosmo).
 func (state *pclntab) generateFuncnametab(ctxt *Link, funcs []loader.Sym) map[loader.Sym]uint32 {
+	ldr := ctxt.loader
 	nameOffsets := make(map[loader.Sym]uint32, state.nfunc)
 
-	// Write the null terminated strings.
+	// Collect the unique function syms in walk order and count how often
+	// each name prefix is used.
+	type prefixInfo struct {
+		idx   int // final prefix index
+		count int
+	}
+	prefixes := make(map[string]*prefixInfo)
+	var prefixList []string // first-seen order, then sorted by use count
+	var walkSyms []loader.Sym
+	walkFuncs(ctxt, funcs, func(s loader.Sym) {
+		walkSyms = append(walkSyms, s)
+		name := ldr.SymName(s)
+		prefix, suffix := splitFuncName(name)
+		if prefix+suffix != name || (prefix != "" && prefix[len(prefix)-1] != '.') {
+			panic(fmt.Sprintf("bad function name split: %q -> %q + %q", name, prefix, suffix))
+		}
+		p := prefixes[prefix]
+		if p == nil {
+			p = &prefixInfo{}
+			prefixes[prefix] = p
+			prefixList = append(prefixList, prefix)
+		}
+		p.count++
+	})
+
+	// Assign prefix indexes by descending use count (ties broken by
+	// first-seen order, keeping the layout deterministic) so the
+	// most-referenced prefixes get the shortest uvarint encodings.
+	slices.SortStableFunc(prefixList, func(a, b string) int {
+		return cmp.Compare(prefixes[b].count, prefixes[a].count)
+	})
+	for i, p := range prefixList {
+		prefixes[p].idx = i
+	}
+
+	// Lay out the table: header, prefix offset table, prefix strings, then
+	// one entry per name.
+	size := int64(4 + 4*len(prefixList))
+	prefixOffs := make([]uint32, len(prefixList))
+	for i, p := range prefixList {
+		prefixOffs[i] = uint32(size)
+		size += int64(len(p) + 1) // NULL terminate
+	}
+	for _, s := range walkSyms {
+		prefix, suffix := splitFuncName(ldr.SymName(s))
+		nameOffsets[s] = uint32(size)
+		size += uvarintLen(uint64(prefixes[prefix].idx)) + int64(len(suffix)+1) // NULL terminate
+	}
+
 	writeFuncNameTab := func(ctxt *Link, s loader.Sym) {
 		symtab := ctxt.loader.MakeSymbolUpdater(s)
+		off := symtab.SetUint32(ctxt.Arch, 0, uint32(len(prefixList)))
+		for i := range prefixList {
+			off = symtab.SetUint32(ctxt.Arch, off, prefixOffs[i])
+		}
+		for i, p := range prefixList {
+			symtab.AddCStringAt(int64(prefixOffs[i]), p)
+		}
 		for s, off := range nameOffsets {
-			symtab.AddCStringAt(int64(off), ctxt.loader.SymName(s))
+			prefix, suffix := splitFuncName(ctxt.loader.SymName(s))
+			end := setUvarint(symtab, ctxt.Arch, int64(off), uint64(prefixes[prefix].idx))
+			symtab.AddCStringAt(end, suffix)
 		}
 	}
 
-	// Loop through the CUs, and calculate the size needed.
-	var size int64
-	walkFuncs(ctxt, funcs, func(s loader.Sym) {
-		nameOffsets[s] = uint32(size)
-		size += int64(len(ctxt.loader.SymName(s)) + 1) // NULL terminate
-	})
-
-	state.funcnametab = state.addGeneratedSym(ctxt, "runtime.funcnametab", size, 1, writeFuncNameTab)
+	state.funcnametab = state.addGeneratedSym(ctxt, "runtime.funcnametab", size, 4, writeFuncNameTab)
 	return nameOffsets
 }
 
@@ -361,6 +538,14 @@ func walkFilenames(ctxt *Link, funcs []loader.Sym, f func(*sym.CompilationUnit, 
 	}
 }
 
+// splitFileName splits an expanded file name into a shared directory
+// prefix and a base name, at the last '/'. The prefix is either empty or
+// ends in '/', and prefix+base is always exactly the expanded name.
+func splitFileName(file string) (dir, base string) {
+	slash := strings.LastIndexByte(file, '/')
+	return file[:slash+1], file[slash+1:]
+}
+
 // generateFilenameTabs creates LUTs needed for filename lookup. Returns a slice
 // of the index at which each CU begins in runtime.cutab.
 //
@@ -375,14 +560,27 @@ func walkFilenames(ctxt *Link, funcs []loader.Sym, f func(*sym.CompilationUnit, 
 //	   ..
 //
 //	runtime.filetab
-//	   filename[0]
-//	   filename[1]
+//	  uint32 ndir
+//	  ndir*uint32   offset of each NUL-terminated directory string,
+//	                relative to the start of the table
+//	  dir strings   NUL-terminated, contiguous, in index order
+//	  file entries  uvarint(dir index) ++ base name ++ NUL
+//
+// The compact pclntab format (abi.CosmoPCLnTabMagic) shares directory
+// prefixes between file names: a cutab value addresses one of the trailing
+// file entries, and the full name is dir+base (see splitFileName).
+// Directory indexes are assigned by descending use count so the hottest
+// directories get 1-byte uvarints. The entries start directly after the
+// last directory string, which is how debug/gosym iterates them.
 //
 // Looking up a filename then becomes:
 //  0. Given a func, and filename index [K]
 //  1. Get Func.CUIndex:       M := func.cuOffset
-//  2. Find filename offset:   fileOffset := runtime.cutab[M+K]
-//  3. Get the filename:       getcstring(runtime.filetab[fileOffset])
+//  2. Find the entry offset:  fileOffset := runtime.cutab[M+K]
+//  3. Decode the entry:       dir, base at runtime.filetab[fileOffset]
+//
+// Keep in sync with runtime/symtab.go:funcfilePieces and
+// debug/gosym/pclntab.go:fileString,initFileMap (verCosmo).
 func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.CompilationUnit, funcs []loader.Sym) []uint32 {
 	// On a per-CU basis, keep track of all the filenames we need.
 	//
@@ -398,18 +596,17 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 	cuEntries := make([]goobj.CUFileIndex, len(compUnits))
 	fileOffsets := make(map[string]uint32)
 
-	// Walk the filenames.
-	// We store the total filename string length we need to load, and the max
-	// file index we've seen per CU so we can calculate how large the
-	// CU->global table needs to be.
-	var fileSize int64
+	// Walk the filenames, collecting the unique raw filenames in first-seen
+	// order and the max file index we've seen per CU so we can calculate
+	// how large the CU->global table needs to be.
+	var fileList []string
 	walkFilenames(ctxt, funcs, func(cu *sym.CompilationUnit, i goobj.CUFileIndex) {
-		// Note we use the raw filename for lookup, but use the expanded filename
-		// when we save the size.
+		// Note we use the raw filename for lookup, but store the
+		// expanded filename.
 		filename := cu.FileTable[i]
 		if _, ok := fileOffsets[filename]; !ok {
-			fileOffsets[filename] = uint32(fileSize)
-			fileSize += int64(len(expandFile(filename)) + 1) // NULL terminate
+			fileOffsets[filename] = 0 // real offset assigned below
+			fileList = append(fileList, filename)
 		}
 
 		// Find the maximum file index we've seen.
@@ -417,6 +614,51 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 			cuEntries[cu.PclnIndex] = i + 1 // Store max + 1
 		}
 	})
+
+	// Collect the unique directories and count how often each is used.
+	type dirInfo struct {
+		idx   int // final directory index
+		count int
+	}
+	dirs := make(map[string]*dirInfo)
+	var dirList []string // first-seen order, then sorted by use count
+	for _, filename := range fileList {
+		expanded := expandFile(filename)
+		dir, base := splitFileName(expanded)
+		if dir+base != expanded || (dir != "" && dir[len(dir)-1] != '/') {
+			panic(fmt.Sprintf("bad file name split: %q -> %q + %q", expanded, dir, base))
+		}
+		d := dirs[dir]
+		if d == nil {
+			d = &dirInfo{}
+			dirs[dir] = d
+			dirList = append(dirList, dir)
+		}
+		d.count++
+	}
+
+	// Assign directory indexes by descending use count (ties broken by
+	// first-seen order, keeping the layout deterministic).
+	slices.SortStableFunc(dirList, func(a, b string) int {
+		return cmp.Compare(dirs[b].count, dirs[a].count)
+	})
+	for i, d := range dirList {
+		dirs[d].idx = i
+	}
+
+	// Lay out the table: header, directory offset table, directory
+	// strings, then one entry per file.
+	fileSize := int64(4 + 4*len(dirList))
+	dirOffs := make([]uint32, len(dirList))
+	for i, d := range dirList {
+		dirOffs[i] = uint32(fileSize)
+		fileSize += int64(len(d) + 1) // NULL terminate
+	}
+	for _, filename := range fileList {
+		dir, base := splitFileName(expandFile(filename))
+		fileOffsets[filename] = uint32(fileSize)
+		fileSize += uvarintLen(uint64(dirs[dir].idx)) + int64(len(base)+1) // NULL terminate
+	}
 
 	// Calculate the size of the runtime.cutab variable.
 	var totalEntries uint32
@@ -455,13 +697,21 @@ func (state *pclntab) generateFilenameTabs(ctxt *Link, compUnits []*sym.Compilat
 	writeFiletab := func(ctxt *Link, s loader.Sym) {
 		sb := ctxt.loader.MakeSymbolUpdater(s)
 
-		// Write the strings.
+		off := sb.SetUint32(ctxt.Arch, 0, uint32(len(dirList)))
+		for i := range dirList {
+			off = sb.SetUint32(ctxt.Arch, off, dirOffs[i])
+		}
+		for i, d := range dirList {
+			sb.AddCStringAt(int64(dirOffs[i]), d)
+		}
 		for filename, loc := range fileOffsets {
-			sb.AddStringAt(int64(loc), expandFile(filename))
+			dir, base := splitFileName(expandFile(filename))
+			end := setUvarint(sb, ctxt.Arch, int64(loc), uint64(dirs[dir].idx))
+			sb.AddCStringAt(end, base)
 		}
 	}
 	state.nfiles = uint32(len(fileOffsets))
-	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", fileSize, 1, writeFiletab)
+	state.filetab = state.addGeneratedSym(ctxt, "runtime.filetab", fileSize, 4, writeFiletab)
 
 	return cuOffsets
 }
@@ -702,13 +952,13 @@ func numPCData(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo) uint32 {
 //   - array of func objects, interleaved with pcdata and funcdata
 func (state *pclntab) generateFunctab(ctxt *Link, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
 	// Calculate the size of the table.
-	size, startLocations := state.calculateFunctabSize(ctxt, funcs)
+	size, startLocations, shapes := state.calculateFunctabSize(ctxt, funcs, inlSyms)
 	writePcln := func(ctxt *Link, s loader.Sym) {
 		ldr := ctxt.loader
 		sb := ldr.MakeSymbolUpdater(s)
 		// Write the data.
 		writePCToFunc(ctxt, sb, funcs, startLocations)
-		writeFuncs(ctxt, sb, funcs, inlSyms, startLocations, cuOffsets, nameOffsets)
+		writeFuncs(ctxt, sb, funcs, inlSyms, startLocations, shapes, cuOffsets, nameOffsets)
 	}
 	state.pclntab = state.addGeneratedSym(ctxt, "runtime.functab", size, 4, writePcln)
 }
@@ -734,11 +984,13 @@ func funcData(ldr *loader.Loader, s loader.Sym, fi loader.FuncInfo, inlSym loade
 	return fdSyms
 }
 
-// calculateFunctabSize calculates the size of the pclntab, and the offsets in
-// the output buffer for individual func entries.
-func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym) (int64, []uint32) {
+// calculateFunctabSize calculates the size of the pclntab, the offsets in
+// the output buffer for individual func entries, and the encoded shape
+// (pcdata/funcdata presence bitmaps) of every func entry.
+func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym) (int64, []uint32, []funcShape) {
 	ldr := ctxt.loader
 	startLocations := make([]uint32, len(funcs))
+	shapes := make([]funcShape, len(funcs))
 
 	// Allocate space for the pc->func table. This structure consists of a pc offset
 	// and an offset to the func structure. After that, we have a single pc
@@ -747,25 +999,25 @@ func (state pclntab) calculateFunctabSize(ctxt *Link, funcs []loader.Sym) (int64
 
 	// Now find the space for the func objects. We do this in a running manner,
 	// so that we can find individual starting locations.
+	var pcdata, funcdata []loader.Sym
 	for i, s := range funcs {
-		size = Rnd(size, int64(ctxt.Arch.PtrSize))
+		// _func records are 4-byte aligned (every field is uint32 or uint8).
+		size = Rnd(size, 4)
 		startLocations[i] = uint32(size)
 		fi := ldr.FuncInfo(s)
 		size += funcSize
 		if fi.Valid() {
 			fi.Preload()
-			numFuncData := ldr.NumFuncdata(s)
-			if fi.NumInlTree() > 0 {
-				if numFuncData < abi.FUNCDATA_InlTree+1 {
-					numFuncData = abi.FUNCDATA_InlTree + 1
-				}
-			}
-			size += int64(numPCData(ldr, s, fi) * 4)
-			size += int64(numFuncData * 4)
+			var pcinline loader.Sym
+			_, _, _, pcinline, pcdata = ldr.PcdataAuxs(s, pcdata)
+			_, shapes[i].pcMask = funcPcdataOffsets(ldr, s, fi, pcinline, pcdata)
+			funcdata = funcData(ldr, s, fi, inlSyms[s], funcdata)
+			shapes[i].fdMask = funcFuncdataMask(ldr, s, funcdata)
+			size += shapes[i].dataBytes()
 		}
 	}
 
-	return size, startLocations
+	return size, startLocations, shapes
 }
 
 // textOff computes the offset of a text symbol, relative to textStart,
@@ -814,7 +1066,7 @@ func writePCToFunc(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, sta
 }
 
 // writeFuncs writes the func structures and pcdata to runtime.functab.
-func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, startLocations, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
+func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSyms map[loader.Sym]loader.Sym, startLocations []uint32, shapes []funcShape, cuOffsets []uint32, nameOffsets map[loader.Sym]uint32) {
 	ldr := ctxt.loader
 	deferReturnSym := ldr.Lookup("runtime.deferreturn", abiInternalVer)
 	textStart := ldr.SymValue(ldr.Lookup("runtime.text", 0))
@@ -831,6 +1083,7 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 			pcsp, pcfile, pcline, pcinline, pcdata = ldr.PcdataAuxs(s, pcdata)
 			startLine = fi.StartLine()
 		}
+		shape := shapes[i]
 
 		off := int64(startLocations[i])
 		// entryOff uint32 (offset of func entry PC from textStart)
@@ -856,7 +1109,7 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		deferreturn := computeDeferReturn(ctxt, deferReturnSym, s)
 		off = sb.SetUint32(ctxt.Arch, off, deferreturn)
 
-		// pcdata
+		// pcsp, pcfile, pcln
 		if fi.Valid() {
 			off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(pcsp)))
 			off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(pcfile)))
@@ -864,7 +1117,6 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		} else {
 			off += 12
 		}
-		off = sb.SetUint32(ctxt.Arch, off, numPCData(ldr, s, fi))
 
 		// Store the offset to compilation unit's file table.
 		cuIdx := ^uint32(0)
@@ -890,36 +1142,43 @@ func writeFuncs(ctxt *Link, sb *loader.SymbolBuilder, funcs []loader.Sym, inlSym
 		}
 		off = sb.SetUint8(ctxt.Arch, off, uint8(flag))
 
-		off += 1 // pad
+		// pcdataMask, funcdataMask uint8 presence bitmaps.
+		// funcdataMask must be the final entry.
+		off = sb.SetUint8(ctxt.Arch, off, shape.pcMask)
+		off = sb.SetUint8(ctxt.Arch, off, shape.fdMask)
 
-		// nfuncdata must be the final entry.
-		funcdata = funcData(ldr, s, fi, 0, funcdata)
-		off = sb.SetUint8(ctxt.Arch, off, uint8(len(funcdata)))
+		if off != int64(startLocations[i])+funcSize {
+			panic("_func fixed part size mismatch")
+		}
 
-		// Output the pcdata.
+		// Output the offsets of the present pcdata tables, in index order.
 		if fi.Valid() {
-			for j, pcSym := range pcdata {
-				sb.SetUint32(ctxt.Arch, off+int64(j*4), uint32(ldr.SymValue(pcSym)))
+			pcOffs, pcMask := funcPcdataOffsets(ldr, s, fi, pcinline, pcdata)
+			if pcMask != shape.pcMask {
+				panic("pcdata presence mask changed between size calculation and write")
 			}
-			if fi.NumInlTree() > 0 {
-				sb.SetUint32(ctxt.Arch, off+abi.PCDATA_InlTreeIndex*4, uint32(ldr.SymValue(pcinline)))
+			for j := 0; j < 8; j++ {
+				if pcMask&(1<<j) != 0 {
+					off = sb.SetUint32(ctxt.Arch, off, pcOffs[j])
+				}
 			}
 		}
 
-		// Write funcdata refs as offsets from go:func.* and go:funcrel.*.
+		// Write the present funcdata refs as offsets from go:func.*, in
+		// slot order. Absent slots (see ignoreFuncData) have a cleared
+		// bit in funcdataMask and no entry.
 		funcdata = funcData(ldr, s, fi, inlSyms[s], funcdata)
-		// Missing funcdata will be ^0. See runtime/symtab.go:funcdata.
-		off = int64(startLocations[i] + funcSize + numPCData(ldr, s, fi)*4)
+		if funcFuncdataMask(ldr, s, funcdata) != shape.fdMask {
+			panic("funcdata presence mask changed between size calculation and write")
+		}
 		for j := range funcdata {
-			dataoff := off + int64(4*j)
-			fdsym := funcdata[j]
-
-			if ignoreFuncData(ldr, s, j, fdsym) {
-				sb.SetUint32(ctxt.Arch, dataoff, ^uint32(0)) // ^0 is a sentinel for "no value"
-				continue
+			if shape.fdMask&(1<<uint(j)) != 0 {
+				off = sb.SetUint32(ctxt.Arch, off, uint32(ldr.SymValue(funcdata[j])))
 			}
+		}
 
-			sb.SetUint32(ctxt.Arch, dataoff, uint32(ldr.SymValue(fdsym)))
+		if off != int64(startLocations[i])+funcSize+shape.dataBytes() {
+			panic("_func record size mismatch")
 		}
 	}
 }
@@ -945,7 +1204,10 @@ func (ctxt *Link) pclntab(container loader.Bitmap) *pclntab {
 	//        offset to runtime.pclntab_old from beginning of runtime.pcheader
 	//
 	//      runtime.funcnametab
-	//        []list of null terminated function names
+	//        uint32 count + uint32 offsets of the shared package-prefix
+	//        strings, the NUL terminated prefix strings, then per-name
+	//        entries: uvarint prefix index + NUL terminated name suffix
+	//        (see generateFuncnametab)
 	//
 	//      runtime.cutab
 	//        for i=0..#CUs
@@ -953,7 +1215,10 @@ func (ctxt *Link) pclntab(container loader.Bitmap) *pclntab {
 	//            uint32 offset into runtime.filetab for the filename[j]
 	//
 	//      runtime.filetab
-	//        []null terminated filename strings
+	//        uint32 count + uint32 offsets of the shared directory
+	//        strings, the NUL terminated directory strings, then per-file
+	//        entries: uvarint dir index + NUL terminated base name
+	//        (see generateFilenameTabs)
 	//
 	//      runtime.pctab
 	//        []byte of deduplicated pc data.
