@@ -640,19 +640,34 @@ func wasmWorkPending(pp *p) bool {
 		return true
 	}
 	if next := pp.timers.wakeTime(); next != 0 {
-		if !wasmThreadsEnabled || gomaxprocs == 1 || wasmParkedWorkers.Load() == 0 {
+		if !wasmThreadsEnabled || gomaxprocs == 1 ||
+			(wasmParkedWorkers.Load() == 0 && !wasmMainMParkedInEventLoop()) {
 			// No other agent is guaranteed to fire this P's timers: any
 			// pending timer counts, however far out, so the armed checks
 			// keep polling for it (the pre-multi-P behavior).
 			return true
 		}
-		// GOWASM=threads, multiple Ps, and at least one parked worker M:
-		// only a timer due (nearly) now counts. Keeping loops armed for
-		// a far-future timer costs a gate call per backedge; instead the
-		// gate disarms, and the parked worker's timed park wakes at the
-		// global earliest timer deadline (wasmWorkerParkNote) and either
-		// fires it or - with every P busy - re-arms the owner's checks
-		// via wasmThreadsKick.
+		// GOWASM=threads, multiple Ps, and a covering agent exists: only
+		// a timer due (nearly) now counts. Keeping loops armed for a
+		// far-future timer costs a gate call per backedge; instead the
+		// gate disarms, and the agent covers the deadline:
+		//
+		//   - A parked worker M's timed park wakes at the global earliest
+		//     timer deadline (wasmWorkerParkNote) and either fires it or
+		//     - with every P busy - re-arms the owner's checks via
+		//     wasmThreadsKick.
+		//   - A main M parked in the event loop armed a JavaScript
+		//     timeout for the global earliest deadline before parking
+		//     (wasmThreadsBeforeIdleMain); on resume it either takes a P
+		//     and fires the timers or kicks the owners' checks
+		//     (wasmMainParkWake), re-arming a raw backstop timeout for
+		//     deadlines that appeared after it parked
+		//     (wasmMainParkArmBackstop, fed by wakeNetPoller's nudge).
+		//
+		// Without either agent (the worker pool is at or below the number
+		// of busy Ps AND the main M is itself running Go code), the armed
+		// checks remain the only timer poll and stay armed - the
+		// pool-headroom condition documented in WASM_SHORTCOMINGS.md.
 		return next <= nanotime()+int64(wasmLoopYieldInterval)
 	}
 	return false
@@ -4628,6 +4643,32 @@ func wakeNetPoller(when int64) {
 	// goroutine's loop preemption checks are armed so the scheduler (which
 	// runs the timers) gets control.
 	wasmArmLoopPreempt()
+	if GOARCH == "wasm" && wasmThreadsEnabled {
+		// GOWASM=threads: a (possibly parked) main M may be the only
+		// timer agent besides the armed loop gates, and its JavaScript
+		// timeout was armed for the earliest deadline at park time - it
+		// does not know about this (earlier) timer. Nudge it so it
+		// re-arms its backstop timeout (wasmMainParkWake ->
+		// wasmMainParkArmBackstop). The nudge is deliberately
+		// UNCONDITIONAL:
+		//   - not gated on wasmMainParked, because a bump while the main
+		//     M is awake (or mid-transition to parked) is deferred by
+		//     the host until its next pause (the Atomics.waitAsync
+		//     watcher stays armed across resumes); gating would race the
+		//     park transition and lose the deadline;
+		//   - not gated on wasmParkedWorkers either: a worker parked AT
+		//     ADD TIME can be claimed by startm before its watchdog ever
+		//     ticks, leaving no agent that knows this deadline (observed:
+		//     the liveness gate's 200ms timer silently slipping to the
+		//     end of the 2s busy phase in ~1/3 of runs when the nudge
+		//     was gated on parkedWorkers==0).
+		// Bumps from the main thread itself are dropped by
+		// wasmWakeMainThread (the main M re-checks timers via beforeIdle
+		// before pausing), and consecutive bumps coalesce host-side, so
+		// the cost is at most one main-thread resume per batch of
+		// earliest-deadline changes.
+		wasmWakeMainThread()
+	}
 	if sched.lastpoll.Load() == 0 {
 		// In findRunnable we ensure that when polling the pollUntil
 		// field is either zero or the time to which the current
@@ -7056,11 +7097,15 @@ func checkdead() {
 	}
 	if run < 0 {
 		print("runtime: checkdead: nmidle=", sched.nmidle, " nmidlelocked=", sched.nmidlelocked, " mcount=", mcount(), " nmsys=", sched.nmsys, "\n")
+		if GOARCH == "wasm" && wasmThreadsEnabled {
+			wasmCheckdeadDump()
+		}
 		unlock(&sched.lock)
 		throw("checkdead: inconsistent counts")
 	}
 
 	grunning := 0
+	sawRunnable := false
 	forEachG(func(gp *g) {
 		if isSystemGoroutine(gp, false) {
 			return
@@ -7073,11 +7118,37 @@ func checkdead() {
 		case _Grunnable,
 			_Grunning,
 			_Gsyscall:
+			if GOARCH == "wasm" && wasmThreadsEnabled {
+				sawRunnable = true
+				return
+			}
 			print("runtime: checkdead: find g ", gp.goid, " in status ", s, "\n")
 			unlock(&sched.lock)
 			throw("checkdead: runnable g")
 		}
 	})
+	if sawRunnable {
+		// GOWASM=threads: a runnable goroutine while every M is accounted
+		// idle is a transient, self-healing state here, not a deadlock -
+		// on other platforms an M on the idle lists is by invariant asleep
+		// in mPark, but the main M parks in the host's JavaScript event
+		// loop and EXECUTES Go code (wasmMainParkWake: self-serve, kicks,
+		// queue pushes) while still linked on sched.midle, so the idle
+		// counts can transiently cover every M although wakes are in
+		// flight (observed: mput's checkdead on the last parking M threw
+		// while the main M was awake mid-wake-path with two globrunq gs
+		// whose wake nudge was pending). Progress is guaranteed without
+		// this checkdead: parked workers' watchdog parks re-examine the
+		// run queues at most 250ms out (wasmWorkerParkNote) and a host
+		// resume re-enters the scheduler (wasmMainParkWake); nudge both
+		// so the pickup is immediate rather than a watchdog tick away.
+		// Real deadlocks (no runnable goroutines anywhere) still fall
+		// through to the checks below, and are reported once the host's
+		// exit-time deadlock probe fires (eventLoopCanWake).
+		wasmSchedNudgeWake()
+		wasmWakeMainThread()
+		return
+	}
 	if grunning == 0 { // possible if main goroutine calls runtime·Goexit()
 		unlock(&sched.lock) // unlock so that GODEBUG=scheddetail=1 doesn't hang
 		fatal("no goroutines (main called runtime.Goexit) - deadlock!")
