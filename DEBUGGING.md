@@ -1451,6 +1451,13 @@ non-gated change; cosmo/amd64 codegen-global):
   version-based and a rebuilt compiler does NOT invalidate cached
   GOOS=cosmo std objects. Rule for toolchain hackers: go clean -cache
   (or -a) after every make.bash before trusting a cosmo binary.
+  [FIXED 2026-07-20: this same defect, amplified through go-toolchain
+  CI's persistent shared GOCACHEPROG web cache, shipped consumer APEs
+  that SIGSEGV'd at startup in internal/cpu.doinit (fault addr 0x28 -
+  the identical crash class). Fork tools now print their own build ID
+  under -V=full and cmd/go derives tool IDs from tool content, so a
+  rebuilt toolchain invalidates stale cache entries automatically; the
+  clean-cache rule is obsolete. See CLAUDE.md Fork Gotchas.]
 
 Phase B - NT personality, all gated on __hostos==_HOSTWINDOWS (=2,
 still never set):

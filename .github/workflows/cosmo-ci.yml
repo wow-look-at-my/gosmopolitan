@@ -49,6 +49,26 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
+      - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
+        # The fork stamps the same release-style version (go1.26.4cosmo)
+        # into every build, so tool IDs derived from the -V=full version
+        # line alone are identical for any two fork builds. Colliding tool
+        # IDs collide action IDs, and a warm build cache (a consumer's
+        # local GOCACHE, or a shared GOCACHEPROG tier that survives
+        # toolchain updates) then serves stale, ABI-incompatible objects
+        # across fork builds — binaries SIGSEGV at startup (the 2026-07-20
+        # go-toolchain consumer core dumps). Every fork tool must report
+        # its own build ID under -V=full so cmd/go derives tool IDs from
+        # tool content. This gate fails if -V=full is the bare version line.
+        shell: bash
+        run: |
+          out="$(./bin/go tool compile -V=full)"
+          echo "compile -V=full: $out"
+          case "$out" in
+            *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
+            *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
+          esac
+
       # Shebang support tests (Unix only - shebang is a Unix feature)
       - name: Test shebang support - unit tests
         if: runner.os != 'Windows'
@@ -132,7 +152,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent' cmd/go/internal/work
 
   # Test all APE binaries on each unix platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
