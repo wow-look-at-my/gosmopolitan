@@ -3,10 +3,16 @@
 // (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
-// sockets with deadlines, os.Executable, argv/env, working-directory
+// sockets with deadlines, socketpair (raw fds and net.FileConn),
+// sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process (both
+// host-skipped on macOS, which lacks the dispatch),
+// readv/writev + net.Buffers (all hosts),
+// os.Executable, argv/env, working-directory
 // syscalls, and - since the wave-8 signal work - SIGSEGV recovery
-// (sigpanic), os/signal delivery, async preemption, and wait-status
-// signal decoding.
+// (sigpanic), os/signal delivery, async preemption, wait-status
+// signal decoding, CPU profiling (host-skipped on macOS, which
+// lacks SIGPROF delivery), and process-group signaling (Setpgid
+// spawn + kill(-pgid), the console-ctrl chain on Windows hosts).
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):
 // every check prints exactly one line starting with "ok <name>" or
@@ -68,6 +74,14 @@ func main() {
 		// Child mode for checkWaitSig: die by SIGUSR1.
 		raiseFatalChild()
 		return
+	case "fdpass":
+		// Child mode for checkFdpass: receive fds over SCM_RIGHTS.
+		fdpassChild()
+		return
+	case "ctrlwait":
+		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
+		ctrlwaitChild()
+		return
 	}
 	startWatchdog()
 	// timed localizes latency stalls without weakening any verdict:
@@ -91,6 +105,9 @@ func main() {
 	timed("monotonic", checkMonotonic)
 	timed("timers", checkTimers)
 	timed("sockets", checkSockets)
+	timed("sockpair", checkSockpair)
+	timed("sendmsg", checkSendmsg)
+	timed("netbuffers", checkNetBuffers)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)
@@ -103,9 +120,12 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("fdpass", checkFdpass)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)
+	timed("cpuprof", checkCPUProf)
+	timed("ctrlbreak", checkCtrlBreak)
 	timed("waitsig", checkWaitSig)
 	if failed {
 		os.Exit(1)

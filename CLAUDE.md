@@ -157,9 +157,9 @@ stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
 IAT slots.
 
-Windows status (2026-07-18, NT bring-up wave 2 COMPLETE - CI-verified
-by the full runtimeprobe gauntlet on windows-latest, against binaries
-built on all three platforms): stdout/stderr (console CP_UTF8+VT),
+Windows status (2026-07-19, NT bring-up wave 3 COMPLETE - CI-verified
+by the full 46-check runtimeprobe gauntlet on windows-latest, against
+binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
 os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
 CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
 user-level syscall routes through an NT emulation dispatcher (Linux
@@ -183,18 +183,43 @@ NT may drop loopback UDP datagrams - a lost wake stalls the poller;
 pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
 sockets over afunix.sys (sun_path through the path layer; abstract
 names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
-runs show exactly one red there while windows-latest proves it); and
+runs show exactly one red there while windows-latest proves it);
+wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
+as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
+writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
+between cosmo processes (sender-push wire frame on the afunix
+stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
+for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
+AF_UNIX carriers only, same user, both ends must be cosmo binaries -
+see DEBUGGING.md wave 3 item 2b for the honest limits); and
 signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
 (kill/tkill with full delivery through sigtrampgo), os/signal Notify,
 async preemption via SuspendThread/SetThreadContext injection
 (preempt ~180ms on the CI runner, upstream preemptM semantics), signal
-deaths encoded for the wait4 protocol, and console Ctrl-C/Break/Close
--> SIGINT/SIGTERM via an asm handler + relay M. Still missing on
-Windows: sendmsg/recvmsg (fd passing), SIGPROF profiling,
-Windows/arm64, real-conhost console-ctrl injection coverage (the
-handler is live but headless CI cannot generate console events) - see
-DEBUGGING.md's NT wave sections (chunks A-E) for the ladder, the
-forensics, and the wave-3 backlog.
+deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling
+(runtime/pprof delivers real samples on NT: upstream os_windows.go's
+profileLoop ported as a standing no-P M parked on a waitable timer,
+SuspendThread under ntSuspendLock, direct sigprof calls - no signal
+number anywhere), conhost control events remapped for unix parity -
+CTRL_C -> SIGINT, CTRL_BREAK -> SIGQUIT (the goroutine-dump chord on
+a wedged process), CTRL_CLOSE -> SIGHUP, LOGOFF/SHUTDOWN -> SIGTERM,
+a deliberate divergence from upstream windows Go (which maps BREAK ->
+SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
+groups: SysProcAttr{Setpgid} spawns the child as its own group leader
+(CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
+group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
+probe CI-proves the conhost-injected handler chain end to end. Still
+missing on Windows: Windows/arm64 (now CHARTERED - see DEBUGGING.md's
+wave-4 charter; step one is a windows-11-arm CI experiment running
+the existing amd64 APE under x86-64 emulation), file/pipe dup(2)
+(ENOSYS on purpose - socket dup works, and file/pipe fds still
+transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
+by design - pair ends cannot cross processes), and
+real-keyboard/CTRL_CLOSE console coverage (the probe covers the
+GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
+window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
+documented-not-asserted) - see DEBUGGING.md's NT wave sections for
+the ladder, the forensics, and the wave-4 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll

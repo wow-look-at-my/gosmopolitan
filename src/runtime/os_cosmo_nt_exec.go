@@ -85,13 +85,17 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
 
 // Win32 constants for the exec surface.
 const (
 	_NT_DUPLICATE_SAME_ACCESS      = 0x2
 	_NT_STARTF_USESTDHANDLES       = 0x100
 	_NT_CREATE_UNICODE_ENVIRONMENT = 0x400
+	_NT_CREATE_NEW_PROCESS_GROUP   = 0x200
 
 	_NT_WAIT_OBJECT_0 = 0
 	_NT_WAIT_TIMEOUT  = 0x102
@@ -158,6 +162,11 @@ const ntProcMax = 64
 type ntProcEntry struct {
 	pid    uint32
 	handle uintptr
+	// pgleader records that the child was spawned with
+	// CREATE_NEW_PROCESS_GROUP (SysProcAttr{Setpgid: true}): its pid
+	// doubles as its process-group id, making the group addressable
+	// by the emulated kill(-pgid) (wave 3 item 4).
+	pgleader bool
 }
 
 var (
@@ -194,18 +203,37 @@ func ntProcUnreserve() {
 
 // ntProcCommit turns the reservation into a real entry. Guaranteed a
 // free slot by ntProcReserve.
-func ntProcCommit(pid uint32, handle uintptr) {
+func ntProcCommit(pid uint32, handle uintptr, pgleader bool) {
 	lock(&ntProcLock)
 	ntProcReserved--
 	for i := range ntProcTable {
 		if ntProcTable[i].pid == 0 {
-			ntProcTable[i] = ntProcEntry{pid: pid, handle: handle}
+			ntProcTable[i] = ntProcEntry{pid: pid, handle: handle, pgleader: pgleader}
 			unlock(&ntProcLock)
 			return
 		}
 	}
 	unlock(&ntProcLock)
 	throw("ntProcCommit: no free slot after reservation")
+}
+
+// ntProcFindGroup returns the process handle of the spawned child
+// whose pid IS the given process-group id - i.e. a child launched as
+// its own group leader (CREATE_NEW_PROCESS_GROUP). Children that are
+// not group leaders, and pids we never spawned, are not addressable
+// as groups (the caller reports ESRCH), mirroring the
+// own-children-only rule of ntEmuKill's positive-pid arm.
+func ntProcFindGroup(pgid uint32) (uintptr, bool) {
+	lock(&ntProcLock)
+	for i := range ntProcTable {
+		if ntProcTable[i].pid == pgid && ntProcTable[i].pgleader {
+			h := ntProcTable[i].handle
+			unlock(&ntProcLock)
+			return h, true
+		}
+	}
+	unlock(&ntProcLock)
+	return 0, false
 }
 
 // ntProcFind returns the handle for pid without removing it (wait4
@@ -294,14 +322,17 @@ func ntEmuPipe2(p *[2]int32, flags int32) (r1, r2, errno uintptr) {
 // here with the chunk-A path layer); cmdline and env arrive as
 // ready-made UTF-16 blocks from the syscall layer (which owns the
 // quoting and sorting algebra). stdio holds the parent fds for the
-// child's std handles, -1 meaning "none" (NULL std handle). The
-// caller (syscall.ntForkExec) holds ntSpawnMu, serializing the
+// child's std handles, -1 meaning "none" (NULL std handle). flags is
+// the cosmo.Spawn* bit set: SpawnNewProcessGroup adds
+// CREATE_NEW_PROCESS_GROUP to dwCreationFlags and records the child
+// as its own group leader for kill(-pgid). The caller
+// (syscall.ntForkExec) holds ntSpawnMu, serializing the
 // inheritable-dupe window - see the file comment.
 //
 // The cmdline slice is passed to CreateProcessW as the MUTABLE
 // lpCommandLine (the API is documented to scribble on it), which is
 // why the syscall layer always builds it in a fresh []uint16.
-func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32) (pid int32, errno uintptr) {
+func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uint32) (pid int32, errno uintptr) {
 	wapp := ntPathW(argv0)
 	if wapp == nil {
 		return 0, ntENOENT
@@ -371,13 +402,23 @@ func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32) (pid int3
 	if wdir != nil {
 		dirp = uintptr(unsafe.Pointer(&wdir[0]))
 	}
+	creation := uintptr(_NT_CREATE_UNICODE_ENVIRONMENT)
+	pgleader := flags&cosmo.SpawnNewProcessGroup != 0
+	if pgleader {
+		// The child becomes the leader of a new process group whose
+		// id is its pid; note NT then also DISABLES Ctrl-C in the
+		// child until it opts back in (the documented
+		// CREATE_NEW_PROCESS_GROUP side effect - DEBUGGING.md wave 3
+		// item 4). CTRL_BREAK delivery is unaffected.
+		creation |= _NT_CREATE_NEW_PROCESS_GROUP
+	}
 	r, werr := ntcallSE10(ntCreateProcessWFn,
 		uintptr(unsafe.Pointer(&wapp[0])),    // lpApplicationName
 		uintptr(unsafe.Pointer(&cmdline[0])), // lpCommandLine (mutable)
 		0,                                    // lpProcessAttributes
 		0,                                    // lpThreadAttributes
 		1,                                    // bInheritHandles
-		_NT_CREATE_UNICODE_ENVIRONMENT,       // dwCreationFlags
+		creation,                             // dwCreationFlags
 		envp,                                 // lpEnvironment (UTF-16 block)
 		dirp,                                 // lpCurrentDirectory
 		uintptr(unsafe.Pointer(&si)),
@@ -392,7 +433,7 @@ func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32) (pid int3
 		return 0, ntErrno(werr)
 	}
 	ntcall(ntCloseHandleFn, pi.hThread, 0, 0, 0, 0, 0)
-	ntProcCommit(pi.processId, pi.hProcess)
+	ntProcCommit(pi.processId, pi.hProcess, pgleader)
 	return int32(pi.processId), 0
 }
 
