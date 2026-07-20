@@ -3,7 +3,7 @@
 This document catalogs the state of the two WebAssembly ports in this tree:
 what this fork has fixed, what remains broken or missing, what each remaining
 item would take to fix, and what it costs to use the fixes. Snapshot date:
-2026-07-17 (round 5), based on the go1.26 tree this fork tracks. Severity: P0
+2026-07-19 (round 6), based on the go1.26 tree this fork tracks. Severity: P0
 (hang/crash/silently wrong) through P3 (polish/docs). Fixability: fork-fixable
 (a bounded patch in this tree), needs-wasm-proposal (blocked on a WebAssembly
 spec proposal or an upstream megaproject), or inherent (a consequence of the
@@ -65,7 +65,9 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 | cmd/compile | The two-variable range-over-slice lowering carries the iteration position across the loop backedge only as a uintptr (hu), invisible to the precise stack scan by design; insertLoopReschedChecks (preemptibleloops, this fork's wasm default) inserts a call exactly there, so a goroutine parked at the backedge during mark had nothing rooting the backing array. On wasm cheapComputableIndex reports false, so every two-variable slice range used the scheme. Surfaced as a nondeterministic nil-Function deref in CI's TestProfilerStackDepth (31/380 runs failed with GOGC=1); a distilled reproducer (range over a struct-field slice while a helper goroutine runs runtime.GC, GODEBUG=clobberfree=1) failed deterministically under both wazero and node | none verified (latent upstream for GOEXPERIMENT=preemptibleloops) | c2b233dd | GC use-after-free of the array the loop is still reading -> index-based lowering (v1, v2 = hv1, ha[hv1]) whenever preemptibleloops is enabled: the slice stays live, GC-visible, and stack-copy-adjusted for the whole loop; reproducer clean on both engines, amplified TestProfilerStackDepth soaked 0 failures in 1512 runs (35 min) |
 | docs | os/signal said nothing about wasm; net's fake network was described only as a testing aid in a source comment | n/a | 8ed4b658 | undocumented traps -> package docs state what works, what silently does not, and the escape hatches |
 | Runtime (GC, js) | GC mark work bunched into frame-sized bursts (round 5, 2026-07-17): with one P the pacer's cons/mark runway came out at a few hundred KB, so whole cycles ran as in-frame assist bursts; idle mark drains were untimed and blocked the event loop until mark completion; and the fractional mark worker's 25% quota is measured against wall time - which on js includes host-idle time - so frame-driven apps paid ~4ms of every 16.7ms frame while marking | none verified | 2c385994 | framebench (10k mixed-size allocs/frame under node): p99 frame time 21.6ms -> 4.8ms, 535/2000 -> 0/2000 frames over 8ms. Pacer minimum runway (>= half the trigger-to-goal headroom, trigger floor lowered ~0.7 -> ~0.5) plus a cycle-start background-credit seed; idle drains bounded at 2ms (js additionally yields to the event loop with a 1ms re-arm); new `go_gc_mark_step(budgetMs) -> bool` wasm export for host-donated between-frame marking (no-op outside a cycle, returns whether work remains, runs mark termination between frames when it finishes the cycle); fractional quota capped at 5% while the host donates idle time. The pacer changes, the drain deadline, and the budgeted mark step core are platform-independent (all platforms pace and drain the same way, and TestGcPacer plus portable mark-step tests exercise the real behavior); only the event-loop yield glue and the wasm export itself are js-specific |
-| net, syscall (wasip1) | WASI preview 1 defines no way to create or connect a socket, so net.Dial on wasip1 could never reach a real network: every dial and listen went to the in-process fake net | #65333, #67673 | 194bcf71 + d85a610b + 27fa0219 + 6eb4bf17 + a3a37b18 | fake network only -> GOWASI=wasmedgesock (default off; build tag wasip1.wasmedgesock; hashed into the build cache key) routes TCP through the WasmEdge socket extension (second-state SDK v0.4.3 ABI): real Dial (IP literals), Listen/Accept, deadlines, concurrency, http.Get and http.Serve end to end; verified by the testdata/wasip1sock wazero reference host (1MB echo round-trip, 8 concurrent conns, HTTP both directions, prompt ECONNREFUSED, read-deadline timeout); default builds stay byte-identical and stock runtimes reject opt-in binaries ('"sock_open" is not exported in module "wasi_snapshot_preview1"'); UDP/DNS/unix sockets stay fake |
+| net, syscall (wasip1) | WASI preview 1 defines no way to create or connect a socket, so net.Dial on wasip1 could never reach a real network: every dial and listen went to the in-process fake net | #65333, #67673 | 194bcf71 + d85a610b + 27fa0219 + 6eb4bf17 + a3a37b18, UDP in round 6: febfe00e + 96742a7f | fake network only -> GOWASI=wasmedgesock (default off; build tag wasip1.wasmedgesock; hashed into the build cache key) routes TCP AND (round 6) UDP through the WasmEdge socket extension (second-state SDK v0.4.3 ABI; UDP receives use the newer-generation sock_recv_from_v2 import because the plain-named sock_recv_from cannot report the source port, which raises the instantiation floor to WasmEdge 0.12+): real Dial (IP literals), Listen/Accept, deadlines, concurrency, http.Get and http.Serve, ListenUDP/ListenPacket with ReadFrom/WriteTo, connected-UDP Dial with Read/Write preserving datagram boundaries; verified by the testdata/wasip1sock wazero reference host (1MB echo round-trip, 8 concurrent conns, HTTP both directions, prompt ECONNREFUSED, read-deadline timeouts on TCP and UDP, UDP source-port fidelity via a guest-to-guest echo pair, boundary preservation across queued datagrams); default builds stay byte-identical and stock runtimes reject opt-in binaries ('"sock_open" is not exported in module "wasi_snapshot_preview1"'); ReadMsgUDP/WriteMsgUDP are ENOSYS (no ancillary data in the extension) and DNS/unix sockets stay fake |
+| net/http (js) | The Fetch transport buffered every request body with io.ReadAll before starting the request (round 6, 2026-07-19): an unknown-length upload (pipe, io.Reader chain) put nothing on the wire until the writer closed it - request/response pipelines deadlocked against servers that answer as data arrives - and large uploads held the entire body in memory | none verified (upstream TODO in roundtrip_js.go) | 380d5b15 | whole body in memory, nothing sent until EOF -> unknown-length bodies (outgoingLength < 0: ContentLength < 0, or 0 with a non-nil Body - exactly the requests HTTP/1 sends chunked) upload through a ReadableStream with duplex "half" when a cached one-time probe shows the runtime's fetch supports upload streaming (the Request-constructor probe: the duplex option must be read and a ReadableStream body must not stringify into a text/plain Content-Type; Node.js 18+ and Chromium 105+ pass): pulls read 64 KiB chunks on a goroutine off the event loop and resolve the pull promise afterwards, so pulls serialize and backpressure reaches the reader; the body is closed exactly once on every path (io.EOF, read error, stream cancel/abort, every RoundTrip exit). Known-length bodies keep the buffered path on purpose - fetch drops Content-Length for stream bodies, buffering is what keeps it on the wire - and probe-failed runtimes keep it for everything, byte-for-byte. Proven by the testdata/jsfetchstream e2e: chunk A observed server-side while the request body is still open before chunk B exists, 8 MiB streamed at ~174 KiB guest TotalAlloc delta, and mid-stream cancel returns promptly with the pipe closed and the server seeing the abort |
+| cmd/internal/dwarf, cmd/internal/obj | Wasm variable locations were unevaluable (round 6, 2026-07-19): every subprogram's DW_AT_frame_base was DW_OP_call_frame_cfa, but wasm deliberately emits no .debug_frame to define a CFA, so no consumer could resolve a single DW_OP_fbreg variable offset - and the first stack parameter (StackOffset 0) was emitted as a bare DW_OP_call_frame_cfa location, dead for the same reason | none verified | 7386b073 | names-and-types-only variable DIEs -> the frame base computes the CFA directly: DW_OP_WASM_location 0x01 0x00 (the value of wasm global 0, the Go SP) + DW_OP_plus_uconst framesize+8 (wasm is a FixedFrameSize-0 target with an x86-style caller-pushed 8-byte return address, so CFA = SP + framesize + 8; SP only moves in the prologue/epilogue, so the constant is exact throughout the body); StackOffset-0 vars switch to the equivalent DW_OP_fbreg 0; every existing fbreg offset then resolves to exactly the linear-memory address codegen uses (cross-checked against -S output for params and stack locals across two functions); llvm-dwarfdump decodes the expression natively, --verify stays clean, non-wasm DWARF is byte-identical, and a cmd/link/internal/wasm regression test locks the encoding for both ports |
 
 ## Remaining shortcomings
 
@@ -278,19 +280,31 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   wazero 1.12 rejects such modules at compile time ("feature tail-call is
   disabled") and its CLI has no flag to enable it. Revisit the default
   when wazero catches up.
-- P2, fork-fixable (residual; DWARF emission itself landed round 4, see
-  the table): wasm DWARF variable locations are placeholders. Variable
-  DIEs carry names, types, and declaration positions, but their location
-  expressions are CFA-relative stack offsets with no .debug_frame to
-  define a CFA (wasm has no machine registers, so there is no register
-  mapping and location lists stay off); consumers can walk the DIE tree
-  and step by line but cannot print variable values. Faithful locations
-  need DW_OP_WASM_location expressions describing wasm locals and Go's
-  linear-memory pseudo-registers. Also: the emitted address_size is 8
-  (wasm PtrSize; clang emits 4 for wasm32) - every llvm tool accepts 8,
-  but the Chrome DevTools C/C++ debugging extension is unverified end to
-  end against it. go test binaries omit DWARF by design (cmd/go's
-  OmitDebug path - they are throwaway host-run artifacts).
+- P2, fork-fixable (residual; DWARF emission landed round 4 and stack
+  variable locations became real in round 6 - see the table: the frame
+  base is now a DW_OP_WASM_location expression computing SP+framesize+8,
+  and every stack-homed param and local resolves through DW_OP_fbreg):
+  what remains location-less. Heap-escaped variables get no
+  DW_AT_location at all (describing them needs a heap-pointer
+  dereference expression, which today only exists in the location-list
+  path, and location lists stay off on wasm - there is no register
+  mapping for them); with optimization on, variables promoted to Go's
+  wasm pseudo-registers (which are wasm locals at runtime) get
+  conservative name-and-type-only DIEs from the simple-vars path, so
+  debugging optimized code still mostly wants -N -l, same as delve
+  recommends elsewhere. Consumer status: llvm-dwarfdump decodes and
+  verifies everything; stock lldb 18 parses and indexes the DWARF from
+  the wasm container (wasm32 triple) but resolves no function
+  name-to-address lookups - an ObjectFileWasm address-model gap that
+  predates and is unaffected by the round-6 fix - and live guest
+  debugging needs an lldb with a wasm process plugin (Chrome/WAMR
+  builds; wasmtime 46's --gdbstub speaks to exactly that plugin, and
+  its old native-JIT -D debug-info path no longer registers with the
+  stock jit-loader). Also: the emitted address_size is 8 (wasm PtrSize;
+  clang emits 4 for wasm32) - every llvm tool accepts 8, but the Chrome
+  DevTools C/C++ debugging extension is unverified end to end against
+  it. go test binaries omit DWARF by design (cmd/go's OmitDebug path -
+  they are throwaway host-run artifacts).
 - P2, fork-fixable: Codegen perf leftovers (round 2 fixed the two big ones,
   int64 division and the atomics - see the table): non-provably-bounded
   shifts pay a bounds Select; everything is widened to i64 with wrap/extend
@@ -310,16 +324,19 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   unreachable from outside, dials to real hosts fail ECONNREFUSED, DNS
   resolves over the same fake net and fails misleadingly, and UDP writes to
   nonexistent peers still return success while dropping every byte
-  (`src/net/net_fake.go:1113`, unfixed). Escape hatches:
-  GOWASI=wasmedgesock for real TCP on wasip1 (this fork, round 4 - see the
-  table; requires a host implementing the WasmEdge socket extension, such
-  as WasmEdge itself or the testdata/wasip1sock reference host; TCP with
+  (`src/net/net_fake.go:1113`, unfixed - that is the default-build
+  behavior; under the escape hatch below UDP is real). Escape hatches:
+  GOWASI=wasmedgesock for real TCP and UDP on wasip1 (this fork, rounds 4
+  and 6 - see the table; requires a host implementing the WasmEdge socket
+  extension, such as WasmEdge itself - 0.12+ for the sock_recv_from_v2
+  import UDP receives need - or the testdata/wasip1sock reference host;
   IP-literal addresses only), GODEBUG=jsfetchnode=1 for HTTP under node
   (this fork), browser fetch for HTTP on js (upstream), and on wasip1
   inherited listeners - net.FileListener over a host-preopened socket fd
-  with sock_accept; zero-value remote addresses. UDP, DNS, and unix
-  sockets stay fake even under wasmedgesock; the portable fix is
-  wasip2/wasi-sockets (golang/go#65333, #67673, #77141).
+  with sock_accept; zero-value remote addresses. DNS and unix sockets
+  stay fake even under wasmedgesock, and ReadMsgUDP/WriteMsgUDP fail
+  ENOSYS there; the portable fix is wasip2/wasi-sockets (golang/go#65333,
+  #67673, #77141).
 - P1, part fork-fixable: wasip1 file metadata is fiction: Chmod/Fchmod
   silently succeed doing nothing (`src/syscall/fs_wasip1.go:711`), stat
   synthesizes 0700/0600 modes and uid/gid 0. Honest ENOSYS for Chmod is a
@@ -427,7 +444,12 @@ running goroutine for the length of the profiling window:
 - argv+env budget on js is now 61440 bytes (was 8KB) - normal CI
   environments fit without trimming.
 - HTTP under node: `GODEBUG=jsfetchnode=1` enables the real Fetch transport;
-  default remains the fake network (tests depend on it).
+  default remains the fake network (tests depend on it). Since round 6,
+  unknown-length request bodies (ContentLength < 0, or 0 with a non-nil
+  Body) stream instead of buffering wherever a one-time probe shows the
+  runtime's fetch supports upload streaming (Node.js 18+, Chromium 105+;
+  everything else keeps the buffered path). Known-length bodies always
+  stay buffered so Content-Length stays on the wire.
 - Time zones on wasip1: set TZ and either import `_ "time/tzdata"` or run
   with a preopened zoneinfo directory (or $ZONEINFO).
 - The fake network is still the default on both ports: no external
@@ -456,7 +478,9 @@ running goroutine for the length of the profiling window:
 - Both ports are CI-gated: the `wasm` job in
   `.github/workflows/cosmo-ci.yml` builds std and runs the stdlib and
   wasmexport-testdir regression subset (including runtime/pprof since
-  round 3) under node 22 (js) and wazero (wasip1) on every push.
+  round 3) under node 22 (js) and wazero (wasip1) on every push, plus
+  (round 6) the testdata/wasip1sock reference-host suite (wasmedgesock
+  TCP and UDP) and the testdata/jsfetchstream streaming-upload e2e.
 
 ### Threads B3 (2026-07-17): multi-P scheduler, cooperative STW, non-blocking main park
 
