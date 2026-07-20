@@ -1,11 +1,12 @@
 # CI workflow for GOOS=cosmo cross-platform testing
 # Tests that APE binaries built on any platform (Linux/macOS/Windows) run
-# on all platforms. Each of the 2 unix test runners tests all 3 origin
+# on all platforms. Each of the 3 test-matrix runners tests all 3 origin
 # binaries with the full apetest suite. Windows runs the same fat APEs
 # natively through their PE header via the cosmo runtime's NT
-# personality (NT bring-up wave 2): a dedicated windows job byte-checks
-# real fizzbuzz output and runs the full apetest suite - runtimeprobe
-# included - against all three origin binaries.
+# personality (NT bring-up wave 2): the windows-latest matrix leg
+# additionally byte-checks real fizzbuzz output before running the
+# shared apetest steps - runtimeprobe included - against all three
+# origin binaries.
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -93,22 +94,42 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode' cmd/go/internal/work
 
-  # Test all APE binaries on each unix platform using Go tests
+  # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
-  # plus the two cross-compiled elsewhere). Windows execution is covered
-  # by the dedicated test-windows job below (native NT boot: direct
-  # fizzbuzz output check plus apetest).
+  # plus the two cross-compiled elsewhere). The windows-latest leg is
+  # also the cosmo NT execution acceptance: before the shared apetest
+  # steps it runs two windows-only steps (AF_UNIX runner diagnostic,
+  # direct fizzbuzz NT boot check) - see the comments at those steps.
   #
-  # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
-  # green total is under 2 minutes. Individual steps carry their own
-  # timeout-minutes (and an in-step killer, see with-deadline.sh).
+  # Job-level cap: 3 test steps at their per-OS step timeout plus setup;
+  # observed green totals are well under 2 minutes on every leg.
+  # Individual steps carry their own timeout-minutes (and an in-step
+  # killer, see with-deadline.sh). The per-OS knobs ride the matrix:
+  # windows keeps the timings the old dedicated test-windows job proved
+  # out (40-minute job cap; 10-minute apetest step timeouts; 540 s
+  # in-step deadlines - inert there, since with-deadline.sh self-detects
+  # git-bash and degrades to a plain exec, leaving timeout-minutes as
+  # the watchdog); the unix legs keep 25/5/240.
   test:
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.job-timeout }}
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        test-os: [ubuntu-latest, macos-latest]
+        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - test-os: ubuntu-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: macos-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: windows-latest
+            job-timeout: 40
+            apetest-timeout: 10
+            apetest-deadline: 540
 
     runs-on: ${{ matrix.test-os }}
 
@@ -127,148 +148,30 @@ jobs:
         with:
           path: binaries
 
+      # No-op on the windows leg: multicmd runs nothing there (no
+      # windows/default command given), and the exec bit means nothing
+      # on NTFS.
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
           unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
 
-      # Prefetch test-module dependencies separately so a stalled module
-      # download cannot masquerade as a hung test step.
-      - name: Download apetest modules
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          sh ./with-deadline.sh 150 go mod download
-
-      # Each test step runs go test under an in-step process-group killer
-      # (see with-deadline.sh): runner-side step timeouts have been
-      # observed not to fire when a step wedges on the macOS runners
-      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
-      # one wedged process even survived a process-group SIGKILL, i.e. it
-      # was stuck in an uninterruptible kernel state). The killer abandons
-      # such a corpse so the step still ends, and go test's output goes
-      # through a FILE (cat'ed afterwards) so no abandoned descendant can
-      # keep the runner's log pipe open.
-      - name: Test binary built on Ubuntu
-        id: test-ubuntu
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload ubuntu-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-ubuntu-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on macOS
-        id: test-macos
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload macos-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-macos-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on Windows
-        id: test-windows
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload windows-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-windows-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-  # Windows execution acceptance (cosmo NT bring-up): a normal fat
-  # APE - cosmo amd64 + arm64, no embedded second build - boots
-  # natively on Windows through its PE header and the cosmo runtime's
-  # NT personality. Two rungs:
-  #
-  #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
-  #     origins build identical headers): the same contract apetest
-  #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
-  #     stdout, exit 0), with a byte-for-byte stdout compare.
-  #  2. The apetest suite, natively, against all three origin binaries
-  #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
-  #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
-  #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
-  #     preemption), so probe execution is gated here too.
-  #
-  # Job cap covers the worst case of the per-step timeout-minutes
-  # below (5 + 3 + three 10-minute apetest steps, plus setup).
-  test-windows:
-    timeout-minutes: 40
-    needs: build
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout code (for apetest)
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
-
-      - name: Download ubuntu-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-ubuntu-latest
-          path: binaries/ape-binary-ubuntu-latest
-
-      - name: Download windows-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-windows-latest
-          path: binaries/ape-binary-windows-latest
-
-      - name: Download macos-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-macos-latest
-          path: binaries/ape-binary-macos-latest
-
+      # Windows execution acceptance (cosmo NT bring-up), windows leg
+      # only: a normal fat APE - cosmo amd64 + arm64, no embedded second
+      # build - boots natively on Windows through its PE header and the
+      # cosmo runtime's NT personality. Two windows-only rungs before
+      # the shared apetest steps:
+      #
+      #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
+      #     origins build identical headers): the same contract apetest
+      #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
+      #     stdout, exit 0), with a byte-for-byte stdout compare.
+      #  2. The apetest suite, natively, against all three origin binaries
+      #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
+      #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
+      #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
+      #     preemption), so probe execution is gated here too.
+      #
       # Diagnostic only (never fails the job): prove what the runner's
       # afunix.sys actually supports, so a runtimeprobe unixsock failure
       # can be attributed - runner capability gap vs cosmo port bug. The
@@ -278,6 +181,7 @@ jobs:
       # with WSAEOPNOTSUPP - and FIONBIO); the managed .NET case is the
       # canonical known-good control.
       - name: AF_UNIX capability probe (runner diagnostic)
+        if: matrix.test-os == 'windows-latest'
         timeout-minutes: 3
         shell: pwsh
         run: |
@@ -341,6 +245,7 @@ jobs:
           exit 0
 
       - name: Run fizzbuzz on Windows (NT boot acceptance)
+        if: matrix.test-os == 'windows-latest'
         timeout-minutes: 5
         shell: pwsh
         run: |
@@ -394,10 +299,7 @@ jobs:
           if ($failed) { exit 1 } else { exit 0 }
 
       # Prefetch test-module dependencies separately so a stalled module
-      # download cannot masquerade as a hung test step (same split as
-      # the unix legs). with-deadline.sh self-detects git-bash and
-      # degrades to a plain exec: the in-test 3-minute deadlines plus
-      # the step timeout-minutes are the watchdogs here.
+      # download cannot masquerade as a hung test step.
       - name: Download apetest modules
         timeout-minutes: 3
         shell: bash
@@ -405,63 +307,81 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      - name: apetest vs ubuntu-origin binary
-        id: apetest-ubuntu
-        timeout-minutes: 10
+      # Each test step runs go test under an in-step process-group killer
+      # (see with-deadline.sh): runner-side step timeouts have been
+      # observed not to fire when a step wedges on the macOS runners
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
+      # one wedged process even survived a process-group SIGKILL, i.e. it
+      # was stuck in an uninterruptible kernel state). The killer abandons
+      # such a corpse so the step still ends, and go test's output goes
+      # through a FILE (cat'ed afterwards) so no abandoned descendant can
+      # keep the runner's log pipe open.
+      - name: Test binary built on Ubuntu
+        id: test-ubuntu
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload ubuntu-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload ubuntu-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-ubuntu-origin
+          name: test-log-${{ matrix.test-os }}-ubuntu-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
-      - name: apetest vs windows-origin binary
-        id: apetest-windows
-        timeout-minutes: 10
+      - name: Test binary built on macOS
+        id: test-macos
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload windows-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload macos-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-windows-origin
+          name: test-log-${{ matrix.test-os }}-macos-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
-      - name: apetest vs macos-origin binary
-        id: apetest-macos
-        timeout-minutes: 10
+      - name: Test binary built on Windows
+        id: test-windows
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload macos-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload windows-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-macos-origin
+          name: test-log-${{ matrix.test-os }}-windows-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
