@@ -4127,15 +4127,25 @@ that half gracefully elsewhere so no leg can false-fail.
 
 ## Verification
 
-make.bash green; `go build std` green for GOOS=linux and GOOS=cosmo,
-both GOARCHes; fizzbuzz + runtimeprobe fat APEs built; full apetest
-suite green on the linux host (fizzbuzz battery + 47-check
-runtimeprobe incl. the new lookpath check, exercising the unix branch
-verbatim-behavior control); `go test os/exec` green for GOOS=linux
-(upstream suite, proves the lp_unix/exec.go seam changed nothing) and
-under GOOS=cosmo via the misc/cosmo wrappers (linux host = unix
-branch). Real-NT proof is the cosmo-ci test-windows leg (the
-lookpath check against all three origin binaries).
+make.bash green (go1.24.7 bootstrap); `go build std` green for
+GOOS=linux and GOOS=cosmo, both GOARCHes, plus os/exec compile checks
+for windows/amd64, windows/arm64, plan9, js/wasm, wasip1/wasm;
+fizzbuzz + runtimeprobe fat APEs built; full apetest suite green on
+the linux host (fizzbuzz battery + 47-check runtimeprobe incl. the
+new lookpath check - `ok lookpath ... (hostlookup=<real go>)` -
+exercising the unix branch verbatim-behavior control); `go test
+os/exec` green for GOOS=linux (upstream suite, proves the
+lp_unix/exec.go seam changed nothing). Under GOOS=cosmo via the
+misc/cosmo wrappers: the new lp_cosmo_test.go unit tests (the pure
+nt* syntax helpers + env fold, host-independent) all pass, and the
+full os/exec suite matches the PRE-change tree exactly - one
+pre-existing failure either way, TestExtraFiles's `fork/exec ...
+read3.exe: exec format error`, the documented misc/cosmo limitation
+(a test that fork/execs a freshly built PRISTINE APE directly, no
+binfmt handler on the host; A/B-verified against the unmodified
+os/exec in the same build). Real-NT proof is the cosmo-ci
+test-windows leg (the lookpath check against all three origin
+binaries).
 
 Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
 (only os/exec's lookup folds); Cmd.Env dedup (dedupEnvCase) stays
