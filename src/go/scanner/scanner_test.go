@@ -1153,3 +1153,70 @@ func TestNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestShebang(t *testing.T) {
+	// Test that shebang lines are properly skipped at the beginning of files.
+	tests := []struct {
+		src      string
+		wantTok  token.Token
+		wantLit  string
+		wantLine int
+	}{
+		// Basic shebang
+		{"#!/usr/bin/env go run\npackage main", token.PACKAGE, "package", 2},
+		// Shebang with spaces
+		{"#!/bin/sh\npackage main", token.PACKAGE, "package", 2},
+		// Shebang without newline (just shebang, then EOF)
+		{"#!/usr/bin/env go", token.EOF, "", 1},
+		// No shebang - regular Go file
+		{"package main", token.PACKAGE, "package", 1},
+		// Hash but not shebang (# alone)
+		{"# foo\npackage main", token.ILLEGAL, "#", 1},
+		// Hash followed by something other than !
+		{"#foo\npackage main", token.ILLEGAL, "#", 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.src[:min(20, len(test.src))], func(t *testing.T) {
+			fset := token.NewFileSet()
+			file := fset.AddFile("", fset.Base(), len(test.src))
+			var s Scanner
+			s.Init(file, []byte(test.src), nil, 0)
+
+			pos, tok, lit := s.Scan()
+			if tok != test.wantTok {
+				t.Errorf("got token %s, want %s", tok, test.wantTok)
+			}
+			if tok.IsKeyword() || tok == token.IDENT {
+				if lit != test.wantLit {
+					t.Errorf("got literal %q, want %q", lit, test.wantLit)
+				}
+			}
+			gotLine := fset.Position(pos).Line
+			if gotLine != test.wantLine {
+				t.Errorf("got line %d, want %d", gotLine, test.wantLine)
+			}
+		})
+	}
+}
+
+func TestShebangWithBOM(t *testing.T) {
+	// Test that BOM followed by shebang works correctly.
+	src := "\ufeff#!/usr/bin/env go run\npackage main"
+	fset := token.NewFileSet()
+	file := fset.AddFile("", fset.Base(), len(src))
+	var s Scanner
+	s.Init(file, []byte(src), nil, 0)
+
+	pos, tok, lit := s.Scan()
+	if tok != token.PACKAGE {
+		t.Errorf("got token %s, want PACKAGE", tok)
+	}
+	if lit != "package" {
+		t.Errorf("got literal %q, want %q", lit, "package")
+	}
+	gotLine := fset.Position(pos).Line
+	if gotLine != 2 {
+		t.Errorf("got line %d, want 2", gotLine)
+	}
+}
