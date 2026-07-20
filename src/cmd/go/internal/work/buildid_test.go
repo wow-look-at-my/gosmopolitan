@@ -87,10 +87,15 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Two copies in separate directories so both run as plain "compile"
+	// (tools print their argv[0] basename in the -V=full line).
 	dir := t.TempDir()
-	tool1 := filepath.Join(dir, "compile1")
-	tool2 := filepath.Join(dir, "compile2")
+	tool1 := filepath.Join(dir, "build1", "compile")
+	tool2 := filepath.Join(dir, "build2", "compile")
 	for _, name := range []string{tool1, tool2} {
+		if err := os.MkdirAll(filepath.Dir(name), 0o777); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(name, data, 0o755); err != nil {
 			t.Fatal(err)
 		}
