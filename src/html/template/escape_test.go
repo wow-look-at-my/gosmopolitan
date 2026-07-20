@@ -1759,7 +1759,7 @@ func TestEscapeText(t *testing.T) {
 		},
 		{
 			`<a data-urlItem`,
-			context{state: stateAttrName, attr: attrURL},
+			context{state: stateAttrName},
 		},
 		{
 			`<a g:`,
@@ -1775,7 +1775,7 @@ func TestEscapeText(t *testing.T) {
 		},
 		{
 			`<a g:urlItem`,
-			context{state: stateAttrName, attr: attrURL},
+			context{state: stateAttrName},
 		},
 		{
 			`<a g:value`,
