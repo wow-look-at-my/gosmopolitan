@@ -454,8 +454,9 @@ func Command(name string, arg ...string) *Cmd {
 		if err != nil {
 			cmd.Err = err
 		}
-	} else if runtime.GOOS == "windows" && filepath.IsAbs(name) {
-		// We may need to add a filename extension from PATHEXT
+	} else if lookExtensionsEnabled() && filepath.IsAbs(name) {
+		// Windows semantics (GOOS=windows, or a cosmo binary on an NT
+		// host): we may need to add a filename extension from PATHEXT
 		// or verify an extension that is already present.
 		// Since the path is absolute, its extension should be unambiguous
 		// and independent of cmd.Dir, and we can go ahead and cache the lookup now.
@@ -668,7 +669,7 @@ func (c *Cmd) Start() error {
 		return c.Err
 	}
 	lp := c.Path
-	if runtime.GOOS == "windows" {
+	if lookExtensionsEnabled() {
 		if c.Path == c.cachedLookExtensions.in {
 			// If Command was called with an absolute path, we already resolved
 			// its extension and shouldn't need to do so again (provided c.Path

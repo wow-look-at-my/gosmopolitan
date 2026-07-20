@@ -109,6 +109,12 @@ func lookExtensions(path, dir string) (string, error) {
 	return path + ext, nil
 }
 
+// lookExtensionsEnabled reports whether Command/Start must route
+// paths through lookExtensions (see exec.go).
+func lookExtensionsEnabled() bool {
+	return true
+}
+
 func pathExt() []string {
 	var exts []string
 	x := os.Getenv(`PATHEXT`)

@@ -65,3 +65,9 @@ func lookPath(file string) (string, error) {
 func lookExtensions(path, dir string) (string, error) {
 	return path, nil
 }
+
+// lookExtensionsEnabled reports whether Command/Start must route
+// paths through lookExtensions (see exec.go).
+func lookExtensionsEnabled() bool {
+	return false
+}
