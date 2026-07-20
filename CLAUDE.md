@@ -654,6 +654,25 @@ the full catalog of fixes and remaining gaps):
   concurrent main/worker heap+host traffic). Later phases: host-call
   forwarding, mark-worker knobs, browser hosts.
 
+ Threads grow-observation guard (2026-07-20): the nondeterministic
+  worker trap `memory access out of bounds` at runtime.newMarkBits
+  (~0.22% of loaded smoke runs) was root-caused to the engine
+  bounds-checking ATOMIC accesses against a per-instance cached memory
+  size that lags cross-thread memory.grow — a correctly-synchronized
+  fresh-page pointer from another thread could trap on its first atomic
+  touch. The assembler now emits a guard before EVERY 0xFE atomic memory
+  access under GOWASM=threads (cmd/internal/obj/wasm
+  writeGrowEpochGuard; hot path 5 instructions): compare
+  runtime.wasmGrowEpoch (bumped by sbrk per grow) against a per-instance
+  observed-epoch wasm global, and on mismatch execute memory.grow 0,
+  which resynchronizes that instance's cached size. Covers compiler
+  intrinsics and hand-written .s alike (single emission choke point);
+  wait32/notify included, atomic.fence exempt; non-threads builds are
+  unchanged (no 0xFE ops). CI gate: testdata/wasmthreads/growatomic.
+  Residual: plain accesses rely on trap-handler (guard-page) engines —
+  true of 64-bit V8, the only supported threads host (see
+  WASM_SHORTCOMINGS.md).
+
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
 `GOOS=wasip1 GOARCH=wasm go test <pkg>` finds `go_wasip1_wasm_exec`
