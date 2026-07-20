@@ -79,6 +79,17 @@ GOOS=cosmo go install ./cmd/program
 # (pre-2026-07-18 behavior, byte-for-byte)
 GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
+# Debug-info tier (GOCOSMODEBUG; unset/full = pristine runnable sidecars,
+# today's default, byte-identical). slim: debug-only sidecars, ~-67%,
+# same names, not runnable - gdb/delve consume them unchanged. compact:
+# slim sidecars PLUS line-level debug info appended to the APE past the
+# load span (never mapped; ~+40% APE size) - gdb gets file:line
+# backtraces from the assimilated .com alone, no sidecar present.
+# Invalid values fail the build; GOCOSMOSTRIP=0 or -ldflags -s/-w make
+# GOCOSMODEBUG a no-op (no sidecars to shape). See DEBUGGING.md.
+GOCOSMODEBUG=slim GOOS=cosmo go build -o program.com main.go
+GOCOSMODEBUG=compact GOOS=cosmo go build -o program.com main.go
+
 # Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
 GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
 
@@ -113,6 +124,20 @@ the user-stripped payloads as-is. Stripping does not affect runtime
 tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
 loaded segment); the sidecars are for gdb/delve and offline tools - see
 DEBUGGING.md "debug sidecars" (2026-07-18).
+
+Debug tiers (2026-07-19, GOCOSMODEBUG): `slim` swaps the sidecars for
+debug-only ELFs (in-linker objcopy --only-keep-debug: alloc contents
+dropped to NOBITS, symtab + all DWARF kept, not runnable, ~-67% -
+runtimeprobe sidecar pair 7,492,270 -> 2,441,136 B) with the shipped APE
+byte-identical to default; `compact` additionally appends line-level
+debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame, still
+zlib'd; loclists dropped) past the APE's load span and points the
+payload + boot ELF headers at it, so the assimilated `.com` is
+debugger-readable with no sidecar (runtimeprobe 5,119,168 -> 7,167,264 B,
++40%; args show <optimized out> - variables are sidecar territory). The
+default is unchanged and byte-identical with the knob unset. Full
+numbers, gdb/delve recipes, and gotchas: DEBUGGING.md "GOCOSMODEBUG"
+(2026-07-19).
 
 Shipping APEs: distribute release binaries zstd-compressed - the two arch
 payloads make APE images highly redundant, so the wire cost collapses.
@@ -286,7 +311,8 @@ platform (sidecars are not uploaded; the artifact ships the bare binaries,
 so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
-also runs the cmd/link APE-merge and cmd/go strip-detection unit tests.
+also runs the cmd/link APE-merge/debug-view and cmd/go
+strip/GOCOSMODEBUG unit tests.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -301,9 +327,11 @@ executes the darwin (Syslib) code paths.
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
-fixes touch under node 22 (js) and wazero (wasip1), and runs the
-wasmexport compiler regression tests via cmd/internal/testdir for both
-wasm targets.
+fixes touch under node 22 (js) and wazero (wasip1), runs the full
+testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
+end to end), runs the testdata/jsfetchstream streaming-upload e2e under
+node, and runs the wasmexport compiler regression tests via
+cmd/internal/testdir for both wasm targets.
 
 A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
 installable toolchain tarball to buildhost on every push - see Toolchain
@@ -342,6 +370,30 @@ derived from the binary location, no need to set it). Consumer gotchas:
   auto-increments N per publish, the publish job logs it, and
   `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
   the current one.
+
+## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
+
+`.github/dependabot.yml` disables Dependabot updates — version AND security —
+for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
+and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
+importable package; see 'go help packages'`, and it can neither run
+`go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
+ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
+
+1. Build this tree's toolchain: `cd src && ./make.bash`, then `go clean -cache`
+   (the fork's release-version build cache gotcha); use `../bin/go` below.
+2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
+   && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
+   cosmo).
+3. If `x/net/http2` changed, regenerate `src/net/http/h2_bundle.go` with
+   `x/tools/cmd/bundle` (the exact command is `src/net/http/http.go`'s
+   `//go:generate bundle` directive, also echoed in h2_bundle.go's header).
+4. Check `git log -- src/vendor/` for fork-local vendored changes that
+   re-vendoring may have wiped; re-apply them.
+5. Rebuild + `go clean -cache` again, then run the affected stdlib tests:
+   `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
+
+`src/README.vendor` is the upstream authority on vendoring in std/cmd.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
@@ -382,8 +434,8 @@ the full catalog of fixes and remaining gaps):
   line tables, `llvm-dwarfdump --verify` clean on both ports. On by
   default (~+39% file size), stripped with `-ldflags=-w`. The name
   section now precedes producers, so llvm tools can read Go wasm
-  binaries. Variable location expressions are still placeholders
-  (faithful locations need DW_OP_WASM_location).
+  binaries. Variable location expressions remained placeholders until
+  round 6 gave them a real DW_OP_WASM_location frame base.
 - Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
   runway (trigger no later than ~halfway to the goal, background credit
   seeded at cycle start so the allocation that crosses the trigger
@@ -401,6 +453,48 @@ the full catalog of fixes and remaining gaps):
   event loop until mark completion) and the wasm export are js-only.
   `testdata/framebench` (10k allocs/frame under node): p99 frame time
   21.6ms -> 4.8ms, zero frames over 8ms.
+- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
+  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
+  computing the frame base from the SP global (SP + framesize + 8 - the
+  CFA of this x86-model target with a caller-pushed 8-byte return
+  address; SP only moves in the prologue/epilogue, so the constant is
+  exact throughout the body), and every stack-homed parameter and local
+  resolves through its DW_OP_fbreg offset to exactly the linear-memory
+  address codegen uses. The payoff is `-N -l` builds, where named
+  variables live on the stack; heap-escaped variables still carry no
+  location, and register-promoted variables in optimized builds stay
+  name-and-type-only. llvm-dwarfdump decodes the expression natively
+  and --verify stays clean; non-wasm DWARF is byte-identical; a
+  cmd/link/internal/wasm regression test locks the encoding for both
+  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
+  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
+  with Read/Write preserving datagram boundaries, and the
+  same deadline machinery as TCP. Receives import the newer-generation
+  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
+  everywhere and cannot report the source port), so opt-in binaries now
+  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
+  the generation mix, the 128-byte family-tagged address buffer, and
+  the network-byte-order recv_from port quirk (verified live against
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
+  ReadMsgUDP/WriteMsgUDP are ENOSYS
+  (no ancillary data in the extension); DNS and unix sockets stay
+  fake. `testdata/wasip1sock` grew UDP host support plus
+  udpecho/udpconnected guests, and the CI wasm job now runs the whole
+  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
+  js fetch transport streams request bodies: unknown-length bodies
+  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
+  upload through a ReadableStream with duplex "half" instead of being
+  buffered whole, when a cached one-time probe shows the runtime's
+  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
+  everything else keeps the buffered path byte-for-byte). Pulls read
+  64KiB chunks on a goroutine off the event loop, so backpressure
+  reaches the reader, and the body is closed exactly once on every
+  path (EOF, read error, cancel/abort, every RoundTrip exit).
+  Known-length bodies stay buffered on purpose - fetch drops
+  Content-Length for stream bodies, buffering keeps it on the wire -
+  and streamed bodies cannot be replayed, so a redirect that must
+  re-send the body fails with a network error per spec.
+  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
@@ -460,6 +554,46 @@ the full catalog of fixes and remaining gaps):
   symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
   preemption, non-blocking main-thread park, syscall/js forwarding
   from worker Ms, browser workers.
+- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+  unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
+  1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
+  via cross-thread-armed loop backedge checks, a non-blocking main-thread park
+  (main M releases its P and parks in the event loop; woken cross-thread via
+  Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
+  syscall/js calls from worker Ms migrating their goroutine to the main
+  thread (stdout/stderr writes work directly on workers). The B3
+  "lost-wakeup" stalls / exit hang were root-caused to two bugs and fixed:
+  a main-thread microtask livelock (a wasmMainWake bump issued on the main
+  thread inside a resume re-triggers the armed Atomics.waitAsync watcher,
+  and the microtask chain starves every macrotask incl. the worker-posted
+  exit message; fixed by dropping main-thread-issued bumps) and
+  migrate-queue starvation (the queue only the main M can pop had a single
+  push-time wake, and a worker M idling in beforeIdle's timed sleep held
+  the only P through the whole wait; fixed by re-nudging from pidleput and
+  the parked-worker watchdog, and bailing out of the idle P-hold when the
+  main M needs a P).
+
+ Threads B4 (2026-07-19) is the hardening sweep: the rare GOMAXPROCS=4
+  crash class was root-caused to a FALSE deadlock report - checkdead's
+  "all Ms idle + runnable g" inference does not hold under threads
+  because the parked main M executes Go code (self-serve/kicks) while
+  still linked on sched.midle; checkdead now nudges the wake machinery
+  and returns instead of throwing (real deadlock reporting via the
+  host's exit-time probe is unchanged). The pool-headroom perf collapse
+  is fixed: a main M parked in the event loop counts as the far-future
+  -timer covering agent (backstop JS timeout + wakeNetPoller nudge), so
+  loop gates disarm without pool headroom - pool sizing no longer
+  affects parallel throughput for the common shapes. Idle-CPU
+  double-counting that made /cpu/classes/user:cpu-seconds non-monotonic
+  at >1P is fixed. Host events arriving while the main M has no P are
+  queued by wasm_exec.js instead of silently overwriting _pendingEvent.
+  Worker-side traps report their wasm stack (Go function names). New
+  gates: testdata/wasmthreads/holblock (a blocked ASYNC event handler
+  does not head-of-line-block later events; blocking a SYNCHRONOUS
+  nested js.FuncOf callback stays documented-unsupported, as upstream)
+  and testdata/wasmthreads/memgrow (worker-side memory.grow under
+  concurrent main/worker heap+host traffic). Later phases: host-call
+  forwarding, mark-worker knobs, browser hosts.
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and

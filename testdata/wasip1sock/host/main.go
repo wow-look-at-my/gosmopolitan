@@ -30,7 +30,7 @@ func main() {
 	flag.Var(&env, "env", "environment variable KEY=VALUE for the module (repeatable)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: %s [flags] module.wasm [args...]\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "runs a GOWASI=wasmedgesock wasip1 module with real TCP networking\n")
+		fmt.Fprintf(os.Stderr, "runs a GOWASI=wasmedgesock wasip1 module with real TCP and UDP networking\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
