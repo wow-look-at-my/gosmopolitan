@@ -49,6 +49,9 @@ _testmain.go
 
 # APE binaries (Actually Portable Executables)
 *.com
+# ... but *.com also matches the github.com directory component, which
+# would silently hide new vendored modules. Re-include it.
+!src/cmd/vendor/github.com/
 
 # This file includes artifacts of Go build that should not be checked in.
 # For files created by specific development environment (e.g. editor),

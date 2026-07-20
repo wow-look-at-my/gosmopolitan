@@ -1831,8 +1831,11 @@ Wire (zstd -19 --long=27, runtimeprobe): the slim release set tars to
 duplication); it is a disk win, ~-5 MB next to every binary. The
 compact APE alone wires at 3,422,898 vs 1,763,012 default (appended
 DWARF is already zlib'd; outer zstd can't reduce it much) - still
--10% vs shipping APE+sidecars. Codec: the sidecar DWARF stays
-zlib-BestSpeed on purpose; recompression was measured at only
+-10% vs shipping APE+sidecars. Codec: [Superseded 2026-07-20: cosmo
+DWARF is now zstd - see the round-2 section below. The round-1
+measurement quoted here was zstd-DEFAULT level; SpeedBestCompression
+buys -13..-16%, and the owner directed the switch.] the sidecar DWARF
+stayed zlib-BestSpeed in round 1; recompression was measured at only
 -8..-12% of the DWARF bytes (<= 115 KB/sidecar, zstd-default or
 zlib-default) - noise next to the -67% diet, and zstd would add a
 gdb-13+/binutils-2.40+ floor for it (zstd DOES work in gdb 15.1 and
@@ -1876,7 +1879,101 @@ generic ELF-shape tests parse the assimilated whole-file form instead
 (payloadELF helper). TestDebugSidecars passes unchanged for all
 modes (slim keeps ET_EXEC, .text entry, symtab, .debug_info).
 
-# 2026-07-18: Windows (NT) bring-up — wave 2 (runtimeprobe)
+## 2026-07-20: debug round 2 - zstd DWARF codec + GOCOSMODEBUG=min
+
+Two changes on top of the knob above, per the owner's directive to
+"just directly use zstd for debug data compression instead of zlib"
+plus making the debug info itself smaller.
+
+**zstd codec (cosmo only).** cmd/link now compresses `.debug_*`
+sections for GOOS=cosmo ELF output with vendored klauspost zstd at
+SpeedBestCompression (encoder concurrency pinned to 1 for determinism;
+dwarfcompress already parallelizes per-section), emitting
+ELFCOMPRESS_ZSTD (type 2) Chdrs - `dwarfCompressCodec` /
+`newDwarfCompressor` in ld/data.go. Non-cosmo targets keep the
+upstream zlib(BestSpeed) path. This changes EVERY cosmo mode's debug
+bytes (full sidecars, slim/min/compact, GOCOSMOSTRIP=0 embedded
+payloads): -13..-16% of stored DWARF for ~+0.2s/arch of link time.
+The shipped stripped APE keeps identical loadable spans; only inert
+bytes move (dead post-strip shdr size fields in the retained header
+page, and the content-derived build ID) - execution and apetest are
+unaffected, verified across all four modes.
+
+**Consumer floor for the zstd sections**: gdb >= 13, binutils >= 2.40
+(readelf/objcopy), Go debug/elf >= 1.21 (internal/zstd), delve (its
+DWARF reader handles ELFCOMPRESS_ZSTD). Verified live here: gdb 15.1
+breakpoints + file:line bt from zstd sidecars AND from the compact
+in-binary view (whose tail packs the sections as emitted, so its
+Chdrs are now zstd too - re-verified standalone on the assimilated
+.com); binutils 2.42 readelf --debug-dump decompresses; dlv 1.27
+`core` against a zstd slim sidecar gives full goroutine backtraces
+with sources. Older-than-the-floor tools see "unsupported compression
+type 2" - that is the deliberate cost of the directive; `full`
+sidecars remain runnable pristine ELFs either way.
+
+**GOCOSMODEBUG=min** is a fourth tier below slim: sidecar shape is
+exactly slim's (cmd/go maps it to `-apedbgmode=slim`; the linker knows
+only full/slim/compact), plus cmd/go's BuildInit injects two compiler
+flags into every GOOS=cosmo compile (cosmoDebugInit -> forcedGcflags):
+`-dwarflocationlists=false` and `-gendwarfinl=0`. Effects, measured
+and verified live in gdb:
+
+  - breakpoints and `bt` file:line stay exact (line tables intact);
+  - argument/local VALUES are untrustworthy: `info args` shows
+    <optimized out> or GARBAGE (without location lists the single
+    fallback fbreg location is valid at almost no PC - a leaf
+    function's register arg reads as stack junk that LOOKS real, e.g.
+    n=140737488340574 where slim shows n=15). Treat min as
+    "backtraces yes, variables no";
+  - no inlined-call frame expansion in debuggers (gendwarfinl=0);
+  - runtime tracebacks, runtime/pprof, and their inline unwinding are
+    UNAFFECTED (pclntab, not DWARF; the full runtimeprobe battery -
+    sigpanic recovery, cpuprof, preempt - is green under min).
+
+User `-gcflags` still win (forced flags come first, last flag wins;
+verified: `-gcflags='all=-dwarflocationlists=true -gendwarfinl=2'`
+under min restores full-DWARF sidecar sizes). The injected flags are
+part of the build-cache key, so each tier with distinct gcflags keeps
+its own cached std objects - switching between min and other modes
+recompiles affected packages (correct, just slower on first switch).
+Invalid GOCOSMODEBUG values now stop EVERY cosmo build at init, not
+just fat merges. min's compile-time trims apply wherever cosmo
+compiles happen (go test binaries, GOCOSMOSTRIP=0 builds); sidecar
+shaping still only happens where sidecars are written.
+
+**Measured** (bytes; deltas vs the 848b6387 pre-round-2 baselines in
+the same column; fb = fizzbuzz, rp = runtimeprobe; sidecar pair =
+.dbg + .aarch64.elf):
+
+| artifact | full | slim | min | compact |
+|---|---:|---:|---:|---:|
+| fb .com | 3,388,032 (=) | 3,388,032 | 3,388,032 | 4,707,384 (-168,464) |
+| fb .dbg | 2,569,178 (-98,696) | 838,240 (-98,696) | 519,944 (new) | 838,240 |
+| fb .aarch64.elf | 2,268,282 (-102,336) | 717,568 (-102,336) | 436,560 (new) | 717,568 |
+| rp .com | 5,517,216 (=) | 5,517,216 | 5,517,216 | 7,539,064 (-264,040) |
+| rp .dbg | 4,119,348 (-161,216) | 1,286,584 (-161,216) | 803,256 (new) | 1,286,584 |
+| rp .aarch64.elf | 3,698,825 (-167,384) | 1,132,304 (-167,384) | 699,424 (new) | 1,132,304 |
+
+zstd alone is -10.5..-12.9% of a slim sidecar file (-13..-16% of the
+stored DWARF); min is a further -37.6..-39.2% below the zstd slim
+sidecars, i.e. -44.5..-46.8% below round 1's zlib slim (rp pair:
+2,747,488 zlib-slim -> 2,418,888 zstd-slim -> 1,502,680 min). rp full
+totals: 13,663,989 -> 13,335,389 (zstd) -> 7,019,896 under min
+(-48.6%). fizzbuzz min total 4,344,536 vs 8,426,524 baseline full
+(-48.4%).
+
+**Recipes**: identical to round 1's (gdb `set osabi GNU/Linux` before
+`file`, then `symbol-file <sidecar>`; dlv `--check-go-version=false`,
+core flow for assimilated processes). The only behavioral difference
+per tier is the variable-fidelity ladder: full/slim resolve args, min
+does not (by construction), compact resolves nothing in-binary
+(loclists dropped from the view) but its slim sidecars do.
+
+**Vendoring**: klauspost/compress v1.19.0 in src/cmd/vendor (zstd +
+fse/huff0/internal deps, 69 files, ~826 KB source; Apache-2.0/BSD-3).
+The fork's `*.com` gitignore rule used to swallow the vendor
+`github.com/` directory component; `.gitignore` now re-includes
+`src/cmd/vendor/github.com/` explicitly.
 
 ## Wave 2 — DONE (2026-07-18, chunk E green)
 

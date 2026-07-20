@@ -80,14 +80,20 @@ GOOS=cosmo go install ./cmd/program
 GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
 # Debug-info tier (GOCOSMODEBUG; unset/full = pristine runnable sidecars,
-# today's default, byte-identical). slim: debug-only sidecars, ~-67%,
-# same names, not runnable - gdb/delve consume them unchanged. compact:
-# slim sidecars PLUS line-level debug info appended to the APE past the
-# load span (never mapped; ~+40% APE size) - gdb gets file:line
-# backtraces from the assimilated .com alone, no sidecar present.
-# Invalid values fail the build; GOCOSMOSTRIP=0 or -ldflags -s/-w make
-# GOCOSMODEBUG a no-op (no sidecars to shape). See DEBUGGING.md.
+# today's default). slim: debug-only sidecars, ~-68%, same names, not
+# runnable - gdb/delve consume them unchanged, full fidelity. min: slim's
+# sidecar shape PLUS less DWARF generated in the first place (no location
+# lists, no inline records - injected gcflags, ~-38% below slim):
+# breakpoints and file:line backtraces stay exact, but argument/local
+# VALUES in debuggers are garbage or <optimized out> - "backtraces yes,
+# variables no". compact: slim sidecars PLUS line-level debug info
+# appended to the APE past the load span (never mapped; ~+38% APE size) -
+# gdb gets file:line backtraces from the assimilated .com alone, no
+# sidecar present. Invalid values fail any cosmo build. GOCOSMOSTRIP=0
+# or -ldflags -s/-w suppress sidecars (nothing to shape; min's
+# compile-time DWARF trim still applies). See DEBUGGING.md.
 GOCOSMODEBUG=slim GOOS=cosmo go build -o program.com main.go
+GOCOSMODEBUG=min GOOS=cosmo go build -o program.com main.go
 GOCOSMODEBUG=compact GOOS=cosmo go build -o program.com main.go
 
 # Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
@@ -125,19 +131,30 @@ tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
 loaded segment); the sidecars are for gdb/delve and offline tools - see
 DEBUGGING.md "debug sidecars" (2026-07-18).
 
-Debug tiers (2026-07-19, GOCOSMODEBUG): `slim` swaps the sidecars for
-debug-only ELFs (in-linker objcopy --only-keep-debug: alloc contents
-dropped to NOBITS, symtab + all DWARF kept, not runnable, ~-67% -
-runtimeprobe sidecar pair 7,492,270 -> 2,441,136 B) with the shipped APE
-byte-identical to default; `compact` additionally appends line-level
-debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame, still
-zlib'd; loclists dropped) past the APE's load span and points the
-payload + boot ELF headers at it, so the assimilated `.com` is
-debugger-readable with no sidecar (runtimeprobe 5,119,168 -> 7,167,264 B,
-+40%; args show <optimized out> - variables are sidecar territory). The
-default is unchanged and byte-identical with the knob unset. Full
-numbers, gdb/delve recipes, and gotchas: DEBUGGING.md "GOCOSMODEBUG"
-(2026-07-19).
+Debug tiers (2026-07-19 + round 2 2026-07-20, GOCOSMODEBUG): `slim`
+swaps the sidecars for debug-only ELFs (in-linker objcopy
+--only-keep-debug: alloc contents dropped to NOBITS, symtab + all DWARF
+kept, not runnable, ~-68% - runtimeprobe sidecar pair 7,818,173 ->
+2,418,888 B); `min` is slim's sidecar shape plus generation-time DWARF
+trims cmd/go injects into every cosmo compile (-dwarflocationlists=false
+-gendwarfinl=0; explicit user -gcflags override them): sidecars shrink
+another ~-38% (rp pair 1,502,680 B) at the cost of debugger
+argument/local values (garbage or <optimized out>; file:line
+backtraces, runtime tracebacks, and pprof stay exact - "backtraces yes,
+variables no"; per-tier gcflags also fork the build cache, so the first
+build after switching tiers recompiles); `compact` appends line-level
+debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame;
+loclists dropped) past the APE's load span and points the payload +
+boot ELF headers at it, so the assimilated `.com` is debugger-readable
+with no sidecar (runtimeprobe 5,517,216 -> 7,539,064 B, +38%; args show
+<optimized out> - variables are sidecar territory). Since round 2 all
+cosmo `.debug_*` sections are zstd-compressed (ELFCOMPRESS_ZSTD,
+in-linker klauspost encoder, -13..-16% of stored DWARF vs the old
+zlib): readers need gdb >= 13 / binutils >= 2.40 / Go debug/elf >= 1.21
+(delve reads it; verified live with gdb 15.1 + dlv 1.27). Non-cosmo
+targets keep upstream zlib. Full numbers, gdb/delve recipes, and
+gotchas: DEBUGGING.md "GOCOSMODEBUG" (2026-07-19) and "debug round 2"
+(2026-07-20).
 
 Shipping APEs: distribute release binaries zstd-compressed - the two arch
 payloads make APE images highly redundant, so the wire cost collapses.

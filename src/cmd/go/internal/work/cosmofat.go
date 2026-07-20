@@ -51,8 +51,8 @@ func cosmoStripEnabled() bool {
 	return true
 }
 
-// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the fat
-// APE debug mode it selects:
+// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the
+// debug mode it selects:
 //
 //	"full" (or unset): today's behavior - the shipped APE is stripped and
 //	    the per-architecture debug sidecars are pristine copies of the
@@ -61,21 +61,28 @@ func cosmoStripEnabled() bool {
 //	    objcopy --only-keep-debug) - symbol table and DWARF kept, contents
 //	    of allocated sections dropped since the APE already ships them.
 //	    Same sidecar names; the shipped APE is unchanged.
+//	"min": slim's sidecar shape, and every GOOS=cosmo compile generates
+//	    less DWARF in the first place: location lists and inline records
+//	    are omitted (see cosmoDebugGcflags). Smallest sidecars; debuggers
+//	    show <optimized out> for arguments/locals and no inlined-call
+//	    frames. Runtime tracebacks and pprof are unaffected (pclntab).
 //	"compact": slim sidecars, plus a compact debug view appended to the
 //	    APE past its loadable span (never mapped at runtime), so debuggers
 //	    can symbolize the assimilated binary with no sidecar present.
 //
-// The mode only matters when the fat merge strips and writes sidecars at
-// all: GOCOSMOSTRIP=0 and an explicit -s/-w in -ldflags both suppress
-// sidecars entirely, making GOCOSMODEBUG a no-op (see cosmoMergeArgs).
+// The sidecar side of the mode only matters when the fat merge strips and
+// writes sidecars at all: GOCOSMOSTRIP=0 and an explicit -s/-w in -ldflags
+// both suppress sidecars entirely (see cosmoMergeArgs). min's compile-time
+// trims apply to every GOOS=cosmo compile regardless, so even a
+// GOCOSMOSTRIP=0 build carries the reduced DWARF in its embedded payloads.
 func parseCosmoDebugMode(v string) (string, error) {
 	switch v {
 	case "", "full":
 		return "full", nil
-	case "slim", "compact":
+	case "slim", "min", "compact":
 		return v, nil
 	}
-	return "", fmt.Errorf("invalid GOCOSMODEBUG value %q: must be full, slim, or compact (or unset)", v)
+	return "", fmt.Errorf("invalid GOCOSMODEBUG value %q: must be full, slim, min, or compact (or unset)", v)
 }
 
 // cosmoDebugMode returns the GOCOSMODEBUG mode for fat APE merges,
@@ -88,6 +95,37 @@ func cosmoDebugMode() string {
 		base.Fatalf("go: %v", err)
 	}
 	return mode
+}
+
+// cosmoDebugGcflags returns the extra compiler flags a GOCOSMODEBUG mode
+// injects into every GOOS=cosmo compile. Only "min" injects any: it drops
+// DWARF location lists (arguments/locals become <optimized out> in
+// debuggers, -25% of a slim sidecar) and inline records (no inlined-call
+// frames in debuggers, a further -12%). The pclntab is untouched, so
+// runtime tracebacks, runtime/pprof, and the inline unwinding they do
+// keep working.
+func cosmoDebugGcflags(mode string) []string {
+	if mode != "min" {
+		return nil
+	}
+	return []string{"-dwarflocationlists=false", "-gendwarfinl=0"}
+}
+
+// cosmoDebugInit validates GOCOSMODEBUG for GOOS=cosmo builds (an invalid
+// value stops any cosmo build early, not just fat merges) and applies the
+// min mode's compile-time DWARF trims by appending to forcedGcflags.
+// Called from BuildInit.
+//
+// Forced flags precede the user's -gcflags in the compiler invocation and
+// later flags win, so an explicit user -gcflags setting overrides the
+// injected trims. The injected flags are part of the build-cache key
+// (like all gcflags), so switching modes with different flags recompiles
+// affected packages rather than reusing stale objects.
+func cosmoDebugInit() {
+	if cfg.Goos != "cosmo" || cfg.BuildToolchainName != "gc" {
+		return
+	}
+	forcedGcflags = append(forcedGcflags, cosmoDebugGcflags(cosmoDebugMode())...)
 }
 
 // ldflagsSpecifyStrip reports whether the user's -ldflags for a package
@@ -126,6 +164,13 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
 		if mode := cosmoDebugMode(); mode != "full" {
+			if mode == "min" {
+				// min's extra reduction happens at compile time
+				// (cosmoDebugInit); its merge-time sidecar
+				// transform is exactly slim's, so the linker
+				// only knows the three -apedbgmode values.
+				mode = "slim"
+			}
 			args = append(args, "-apedbgmode="+mode)
 		}
 	}
