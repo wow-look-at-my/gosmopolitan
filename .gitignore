@@ -59,3 +59,6 @@ _testmain.go
 .claude/
 .tldr/
 .tldrignore
+
+# wasip1sock reference-host binary (go build in testdata/wasip1sock/host)
+/testdata/wasip1sock/host/wasip1sockhost
