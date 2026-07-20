@@ -98,8 +98,9 @@ func (frame *stkframe) argMapInternal() (argMap bitvector, hasReflectStackObj bo
 		return
 	}
 	// Extract argument bitmaps for reflect stubs from the calls they made to reflect.
-	switch funcname(f) {
-	case "reflect.makeFuncStub", "reflect.methodValueCall":
+	fpfx, fname := funcnamePieces(f)
+	switch {
+	case equalPieces(fpfx, fname, "reflect.makeFuncStub"), equalPieces(fpfx, fname, "reflect.methodValueCall"):
 		// These take a *reflect.methodValue as their
 		// context register and immediately save it to 0(SP).
 		// Get the methodValue from 0(SP).
@@ -124,7 +125,7 @@ func (frame *stkframe) argMapInternal() (argMap bitvector, hasReflectStackObj bo
 			// also know its argument map is
 			// empty.
 			if frame.pc != f.entry() {
-				print("runtime: confused by ", funcname(f), ": no frame (sp=", hex(frame.sp), " fp=", hex(frame.fp), ") at entry+", hex(frame.pc-f.entry()), "\n")
+				print("runtime: confused by ", fpfx, fname, ": no frame (sp=", hex(frame.sp), " fp=", hex(frame.fp), ") at entry+", hex(frame.pc-f.entry()), "\n")
 				throw("reflect mismatch")
 			}
 			return bitvector{}, false // No locals, so also no stack objects
@@ -136,7 +137,7 @@ func (frame *stkframe) argMapInternal() (argMap bitvector, hasReflectStackObj bo
 		// in the return values.
 		retValid := *(*bool)(unsafe.Pointer(arg0 + 4*goarch.PtrSize))
 		if mv.fn != f.entry() {
-			print("runtime: confused by ", funcname(f), "\n")
+			print("runtime: confused by ", fpfx, fname, "\n")
 			throw("reflect mismatch")
 		}
 		argMap = *mv.stack
@@ -169,7 +170,10 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 		// the first instruction of the function changes the
 		// stack map.
 		targetpc--
-		pcdata = pcdatavalue(f, abi.PCDATA_StackMapIndex, targetpc)
+		// Equivalent to pcdatavalue(f, abi.PCDATA_StackMapIndex,
+		// targetpc), but pcdataoff inlines here with a constant
+		// table, which pcdatavalue is too big to do.
+		pcdata, _ = pcvalue(f, pcdataoff(f, abi.PCDATA_StackMapIndex), targetpc, true)
 	}
 	if pcdata == -1 {
 		// We do not have a valid pcdata value but there might be a
@@ -191,14 +195,16 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 		stackid := pcdata
 		stkmap := (*stackmap)(funcdata(f, abi.FUNCDATA_LocalsPointerMaps))
 		if stkmap == nil || stkmap.n <= 0 {
-			print("runtime: frame ", funcname(f), " untyped locals ", hex(frame.varp-size), "+", hex(size), "\n")
+			fpfx, fname := funcnamePieces(f)
+			print("runtime: frame ", fpfx, fname, " untyped locals ", hex(frame.varp-size), "+", hex(size), "\n")
 			throw("missing stackmap")
 		}
 		// If nbit == 0, there's no work to do.
 		if stkmap.nbit > 0 {
 			if stackid < 0 || stackid >= stkmap.n {
 				// don't know where we are
-				print("runtime: pcdata is ", stackid, " and ", stkmap.n, " locals stack map entries for ", funcname(f), " (targetpc=", hex(targetpc), ")\n")
+				fpfx, fname := funcnamePieces(f)
+				print("runtime: pcdata is ", stackid, " and ", stkmap.n, " locals stack map entries for ", fpfx, fname, " (targetpc=", hex(targetpc), ")\n")
 				throw("bad symbol table")
 			}
 			locals = stackmapdata(stkmap, stackid)
@@ -218,12 +224,14 @@ func (frame *stkframe) getStackMap(debug bool) (locals, args bitvector, objs []s
 		// Fetch the argument map at pcdata.
 		stackmap := (*stackmap)(funcdata(f, abi.FUNCDATA_ArgsPointerMaps))
 		if stackmap == nil || stackmap.n <= 0 {
-			print("runtime: frame ", funcname(f), " untyped args ", hex(frame.argp), "+", hex(args.n*goarch.PtrSize), "\n")
+			fpfx, fname := funcnamePieces(f)
+			print("runtime: frame ", fpfx, fname, " untyped args ", hex(frame.argp), "+", hex(args.n*goarch.PtrSize), "\n")
 			throw("missing stackmap")
 		}
 		if pcdata < 0 || pcdata >= stackmap.n {
 			// don't know where we are
-			print("runtime: pcdata is ", pcdata, " and ", stackmap.n, " args stack map entries for ", funcname(f), " (targetpc=", hex(targetpc), ")\n")
+			fpfx, fname := funcnamePieces(f)
+			print("runtime: pcdata is ", pcdata, " and ", stackmap.n, " args stack map entries for ", fpfx, fname, " (targetpc=", hex(targetpc), ")\n")
 			throw("bad symbol table")
 		}
 		if stackmap.nbit == 0 {

@@ -26,7 +26,8 @@ func hexdumpWords(p, len uintptr, mark func(uintptr, hexdumpMarker)) {
 		fn := findfunc(val)
 		if fn.valid() {
 			hm.start()
-			print("<", funcname(fn), "+", hex(val-fn.entry()), ">\n")
+			fpfx, fname := funcnamePieces(fn)
+			print("<", fpfx, fname, "+", hex(val-fn.entry()), ">\n")
 		}
 	}
 
