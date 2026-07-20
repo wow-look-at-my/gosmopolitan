@@ -567,10 +567,14 @@ running goroutine for the length of the profiling window:
   returns, so a trap in worker Go code surfaces in the init catch, which
   used to discard the wasm frames' Go function names). Burn-in on the fixed
   build: see the B4 PR; the `wirep: invalid p state` and `systemstack
-  called from unexpected goroutine` + worker-OOB one-offs from the B3 logs
-  never reproduced on B4 builds and are plausibly downstream of states
-  reachable after the false throw started unwinding a live scheduler
-  (checkdead throws while Ms are mid-handoff).
+  called from unexpected goroutine` one-offs from the B3 logs never
+  reproduced on B4 builds and are plausibly downstream of states reachable
+  after the false throw started unwinding a live scheduler (checkdead
+  throws while Ms are mid-handoff). The B3-era worker-OOB one-offs were
+  originally blamed here too ("never reproduced on B4 builds") - that
+  attribution is DISPROVEN: the trap reproduced 12x on a B4 build
+  (f0c46edb) and is its own bug - engine-level stale atomic bounds checks
+  after a cross-thread memory.grow; see the dedicated entry below.
 - **Resolved (B4): pool-headroom perf collapse.** A far-future timer (e.g.
   go test's suite alarm) kept CPU loops' backedge gates armed (~4x call
   overhead) unless a PARKED WORKER covered the deadline - and since worker
@@ -613,7 +617,43 @@ running goroutine for the length of the profiling window:
   256MiB while main round-trips strings through syscall/js and other
   workers hammer shared memory - no stale-view corruption on any instance
   (B0's per-call worker views + the main instance's buffer-identity
-  -refreshing accessor hold up).
+  -refreshing accessor hold up). This verified the JS-GLUE view side only;
+  the WASM-side atomic bounds check lag is the separate entry below.
+- **Resolved (2026-07-20): nondeterministic worker trap `RuntimeError:
+  memory access out of bounds` at runtime.newMarkBits** ("worker N: init:",
+  CI run 29737526856; ~0.22% of loaded smoke runs, 12 captured failures,
+  mechanism directly measured). Root cause: engine-level cross-thread grow
+  observation lag. V8 bounds-checks ATOMIC accesses explicitly against a
+  per-instance cached memory size that lags cross-thread memory.grow
+  (plain accesses go through guard pages backed by truly-committed memory
+  and never trap on grow-fresh pages). Thread A's sbrk grew the shared
+  memory and published a fresh 64KiB gcBits arena chunk with correct
+  Go-side synchronization; worker thread B's first atomic op on it - the
+  inlined tryAlloc `atomic.Loaduintptr(&b.free)` - trapped against B's
+  stale bound. At catch time memory.grow(0) reported 44 pages (truth)
+  while the trapping agent's view was 39-43 pages; Go-side bookkeeping was
+  correct in every capture. This is spec-permitted shared-memory behavior,
+  so the fix is the fork's to make: the assembler now emits a
+  grow-observation guard before EVERY 0xFE atomic memory access under
+  GOWASM=threads (writeGrowEpochGuard in cmd/internal/obj/wasm - a single
+  byte-emission choke point, covering compiler-intrinsified and
+  hand-written atomics alike): compare runtime.wasmGrowEpoch (bumped by
+  sbrk under memlock right after each grow) against a per-instance
+  observed-epoch wasm global; on mismatch - rare, only after another
+  thread grew - execute `memory.grow 0`, which resynchronizes the
+  instance's cached size, then adopt the pre-grow epoch value. Hot path: 5
+  instructions. memory.atomic.wait32/notify carry the same guard (a futex
+  word can live in a fresh span); atomic.fence has no memory operand and
+  is exempt; the linker-synthesized wasm_probe_atomic_add resyncs
+  unconditionally. Non-threads builds contain no 0xFE ops and are
+  unchanged. Gate: testdata/wasmthreads/growatomic (hammer goroutines
+  pinned to never-allocating worker Ms + a main-thread grower; traps
+  within seconds on an unguarded build, must pass on a guarded one; wired
+  into the CI threads step). Residual, deliberate: PLAIN accesses are safe
+  only on trap-handler (guard-page) engines - i.e. 64-bit V8, the only
+  supported GOWASM=threads host today; an engine using explicit bounds
+  checks for plain shared-memory accesses too could in principle trap a
+  stale-view plain access, which this guard does not cover.
 - **Known issues (B3/B4)**: (1) a syscall/js operation from a worker
   M migrates its goroutine to the main M per call (each blocked-then
   -rescheduled goroutine pays one migration per bounce back to a worker);

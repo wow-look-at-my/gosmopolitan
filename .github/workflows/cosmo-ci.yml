@@ -681,6 +681,14 @@ jobs:
           grep -q "STWGC: PASS" /tmp/stwgc-stw.out
           GOMAXPROCS=4 LIVENESS_BUSY_MS=1200 node lib/wasm/wasm_exec_node.js /tmp/liveness.wasm 2>&1 | tee /tmp/liveness.out
           grep -q "LIVENESS: PASS" /tmp/liveness.out
+          # Cross-thread grow-observation gate: pinned worker Ms hammer
+          # atomics on chunks another thread just grew the memory for.
+          # Without the assembler's grow-observation guard this traps with
+          # "memory access out of bounds" (the nondeterministic worker
+          # crash at runtime.newMarkBits); with it, it must pass.
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/growatomic.wasm ./growatomic)
+          GOMAXPROCS=4 node lib/wasm/wasm_exec_node.js /tmp/growatomic.wasm 2>&1 | tee /tmp/growatomic.out
+          grep -q "GROWATOMIC: PASS" /tmp/growatomic.out
           GOOS=js GOARCH=wasm GOWASM=threads go test -short -count=1 sync sync/atomic internal/runtime/atomic runtime
           if (cd testdata/wasmthreads && GOOS=wasip1 GOARCH=wasm GOWASM=threads go build -o /dev/null .) 2>/tmp/wasip1-threads.err; then
             echo "expected GOOS=wasip1 GOWASM=threads to be rejected" >&2
