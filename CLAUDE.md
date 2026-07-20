@@ -376,17 +376,26 @@ Distribution below.
 
 Every push whose build+test jobs are green publishes an installable
 linux-amd64 toolchain tarball to buildhost (pazer.build) as project
-`gosmopolitan`: the `publish` job in cosmo-ci.yml runs `make.bash -distpack`
-(official packaging; output `pkg/distpack/go<VERSION>.linux-amd64.tar.gz`,
-currently `go1.26.4cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
+`gosmopolitan`: the `publish` job in cosmo-ci.yml first stamps VERSION with a
+unique per-release suffix (`go<base>.r<run_number>`), then runs
+`make.bash -distpack` (official packaging; output
+`pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
+`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
 GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
 server-info's `max_direct_upload_bytes`, chunked upload session above it).
-Consumers install the fork in seconds instead of a ~3 minute `make.bash`:
+The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
+each published release a disjoint cmd/go tool-ID (hence build-cache)
+namespace — identical release version strings previously let the org's
+shared GOCACHEPROG cache mix objects across releases into one binary. Local
+source builds are unaffected (they keep the static version), so the existing
+local rule — `go clean -cache` after a local `make.bash` — still applies to
+hand-rebuilt toolchains. Consumers install the fork in seconds instead of a
+~3 minute `make.bash`:
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
-go version   # go version go1.26.4cosmo linux/amd64
+go version   # go version go1.26.4cosmo.r<N> linux/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
