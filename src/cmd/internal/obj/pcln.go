@@ -48,7 +48,7 @@ func funcpctab(ctxt *Link, func_ *LSym, desc string, valfunc func(*Link, *LSym, 
 		ctxt.Logf("%6x %6d %v\n", uint64(pc), val, fn.Text)
 	}
 
-	buf := make([]byte, binary.MaxVarintLen32)
+	pendingDelta := int32(0)
 	started := false
 	for p := fn.Text; p != nil; p = p.Link {
 		// Update val. If it's not changing, keep going.
@@ -82,11 +82,11 @@ func funcpctab(ctxt *Link, func_ *LSym, desc string, valfunc func(*Link, *LSym, 
 		// each time we observe a change in value we emit ", pc) (value".
 		// When the scan is over, we emit the closing ", pc)".
 		//
-		// The table is delta-encoded. The value deltas are signed and
-		// transmitted in zig-zag form, where a complement bit is placed in bit 0,
-		// and the pc deltas are unsigned. Both kinds of deltas are sent
-		// as variable-length little-endian base-128 integers,
-		// where the 0x80 bit indicates that the integer continues.
+		// The table is delta-encoded; appendPCPair describes the wire
+		// format of each pair. Because a pair's pc delta only becomes
+		// known at the NEXT value change (or at the end of the
+		// function), the value delta is held in pendingDelta until
+		// then and both halves are emitted together.
 
 		if dbg {
 			ctxt.Logf("%6x %6d %v\n", uint64(p.Pc), val, p)
@@ -94,14 +94,11 @@ func funcpctab(ctxt *Link, func_ *LSym, desc string, valfunc func(*Link, *LSym, 
 
 		if started {
 			pcdelta := (p.Pc - pc) / int64(ctxt.Arch.MinLC)
-			n := binary.PutUvarint(buf, uint64(pcdelta))
-			dst = append(dst, buf[:n]...)
+			dst = appendPCPair(dst, pendingDelta, pcdelta)
 			pc = p.Pc
 		}
 
-		delta := val - oldval
-		n := binary.PutVarint(buf, int64(delta))
-		dst = append(dst, buf[:n]...)
+		pendingDelta = val - oldval
 		oldval = val
 		started = true
 		val = valfunc(ctxt, func_, val, p, 1, arg)
@@ -115,9 +112,8 @@ func funcpctab(ctxt *Link, func_ *LSym, desc string, valfunc func(*Link, *LSym, 
 		if v < 0 {
 			ctxt.Diag("negative pc offset: %v", v)
 		}
-		n := binary.PutUvarint(buf, uint64(v))
-		dst = append(dst, buf[:n]...)
-		// add terminating varint-encoded 0, which is just 0
+		dst = appendPCPair(dst, pendingDelta, v)
+		// add terminating 0 byte in the value-delta position
 		dst = append(dst, 0)
 	}
 
@@ -132,6 +128,43 @@ func funcpctab(ctxt *Link, func_ *LSym, desc string, valfunc func(*Link, *LSym, 
 	sym.Size = int64(len(dst))
 	sym.P = dst
 	return sym
+}
+
+// appendPCPair appends one (value delta, pc delta) pair of a pc-value
+// table to dst. The pc delta is in units of the architecture's minimum
+// instruction size and, except for the final pair of a table, is at
+// least 1.
+//
+// The pair grammar, chosen by the first byte b:
+//
+//   - b >= 0x80: a packed pair. The value delta is bits 4-6 minus 4
+//     (-4..3) and the pc delta is bits 0-3 plus 1 (1..16), so
+//     b = 0x80 | (delta+4)<<4 | (pcdelta-1).
+//   - b == 0x7F: an escape. A zig-zag varint value delta whose first
+//     byte would collide with the packed or escape space (any multi-byte
+//     varint, or the single byte 0x7F) follows, then a uvarint pc delta.
+//   - b <= 0x7E: b itself is a one-byte zig-zag value delta, followed by
+//     a uvarint pc delta. The byte 0x00 in this position terminates the
+//     table - value deltas of 0 only ever occur in a table's first pair
+//     (relative to the implicit initial value of -1), where readers
+//     accept it - so pairs after the first always have b != 0.
+//
+// Keep in sync with the decoders: PCIter.Next below,
+// runtime.step (runtime/symtab.go) and debug/gosym.(*LineTable).step.
+func appendPCPair(dst []byte, delta int32, pcdelta int64) []byte {
+	if -4 <= delta && delta <= 3 && 1 <= pcdelta && pcdelta <= 16 {
+		return append(dst, 0x80|byte(delta+4)<<4|byte(pcdelta-1))
+	}
+	var buf [binary.MaxVarintLen64]byte
+	if u := uint64((int64(delta) << 1) ^ (int64(delta) >> 63)); u >= 0x7F {
+		dst = append(dst, 0x7F)
+		n := binary.PutUvarint(buf[:], u)
+		dst = append(dst, buf[:n]...)
+	} else {
+		dst = append(dst, byte(u))
+	}
+	n := binary.PutUvarint(buf[:], uint64(pcdelta))
+	return append(dst, buf[:n]...)
 }
 
 // pctofileline computes either the file number (arg == 0)
@@ -375,6 +408,7 @@ func NewPCIter(pcScale uint32) *PCIter {
 }
 
 // Next advances it to the Next pc.
+// The pair encoding is described at appendPCPair.
 func (it *PCIter) Next() {
 	it.PC = it.NextPC
 	if it.Done {
@@ -385,20 +419,38 @@ func (it *PCIter) Next() {
 		return
 	}
 
-	// Value delta
-	val, n := binary.Varint(it.p)
-	if n <= 0 {
-		log.Fatalf("bad Value varint in pciterNext: read %v", n)
-	}
-	it.p = it.p[n:]
-
-	if val == 0 && !it.start {
-		it.Done = true
+	if b := it.p[0]; b >= 0x80 {
+		// Packed pair.
+		it.p = it.p[1:]
+		it.start = false
+		it.Value += int32(b>>4&7) - 4
+		it.NextPC = it.PC + (uint32(b&0xF)+1)*it.PCScale
 		return
 	}
 
+	// Value delta
+	var val uint64
+	if b := it.p[0]; b == 0x7F {
+		// Escaped multi-byte value delta.
+		it.p = it.p[1:]
+		var n int
+		val, n = binary.Uvarint(it.p)
+		if n <= 0 {
+			log.Fatalf("bad Value varint in pciterNext: read %v", n)
+		}
+		it.p = it.p[n:]
+	} else {
+		if b == 0 && !it.start {
+			it.Done = true
+			it.p = it.p[1:]
+			return
+		}
+		val = uint64(b)
+		it.p = it.p[1:]
+	}
+
 	it.start = false
-	it.Value += int32(val)
+	it.Value += int32(int64(val>>1) ^ -int64(val&1))
 
 	// pc delta
 	pc, n := binary.Uvarint(it.p)

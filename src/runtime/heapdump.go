@@ -161,6 +161,18 @@ func dumpstr(s string) {
 	dumpmemrange(unsafe.Pointer(unsafe.StringData(s)), uintptr(len(s)))
 }
 
+// dumpstr2 dumps the logical concatenation a+b as a single string record,
+// without allocating.
+func dumpstr2(a, b string) {
+	dumpint(uint64(len(a) + len(b)))
+	if len(a) > 0 {
+		dwrite(unsafe.Pointer(unsafe.StringData(a)), uintptr(len(a)))
+	}
+	if len(b) > 0 {
+		dwrite(unsafe.Pointer(unsafe.StringData(b)), uintptr(len(b)))
+	}
+}
+
 // dump information for a type.
 func dumptype(t *_type) {
 	if t == nil {
@@ -286,11 +298,11 @@ func dumpframe(s *stkframe, child *childInfo) {
 	dumpint(uint64(f.entry()))
 	dumpint(uint64(s.pc))
 	dumpint(uint64(s.continpc))
-	name := funcname(f)
-	if name == "" {
+	npfx, name := funcnamePieces(f)
+	if npfx == "" && name == "" {
 		name = "unknown function"
 	}
-	dumpstr(name)
+	dumpstr2(npfx, name)
 
 	// Dump fields in the outargs section
 	if child.args.n >= 0 {
@@ -640,12 +652,13 @@ func dumpmemprof_callback(b *bucket, nstk uintptr, pstk *uintptr, size, allocs, 
 			dumpstr("?")
 			dumpint(0)
 		} else {
-			dumpstr(funcname(f))
+			npfx, name := funcnamePieces(f)
+			dumpstr2(npfx, name)
 			if i > 0 && pc > f.entry() {
 				pc--
 			}
-			file, line := funcline(f, pc)
-			dumpstr(file)
+			fdir, fbase, line := funclinePieces(f, pc)
+			dumpstr2(fdir, fbase)
 			dumpint(uint64(line))
 		}
 	}

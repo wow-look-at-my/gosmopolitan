@@ -52,16 +52,22 @@ const (
 	ntSysLseek      = 8
 	ntSysPread64    = 17
 	ntSysPwrite64   = 18
+	ntSysReadv      = 19
+	ntSysWritev     = 20
+	ntSysDup        = 32
 	ntSysGetpid     = 39
 	ntSysSocket     = 41
 	ntSysConnect    = 42
 	ntSysSendto     = 44
 	ntSysRecvfrom   = 45
+	ntSysSendmsg    = 46
+	ntSysRecvmsg    = 47
 	ntSysShutdown   = 48
 	ntSysBind       = 49
 	ntSysListen     = 50
 	ntSysGetsockNm  = 51
 	ntSysGetpeerNm  = 52
+	ntSysSocketpair = 53
 	ntSysSetsockopt = 54
 	ntSysGetsockopt = 55
 	ntSysExit       = 60
@@ -266,6 +272,11 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuRead(int32(a1), unsafe.Pointer(a2), int32(a3))
 	case ntSysWrite:
 		return ntEmuWrite(int32(a1), unsafe.Pointer(a2), int32(a3))
+	case ntSysReadv:
+		// Socket-kind fds only (net.Buffers); see ntEmuReadv.
+		return ntEmuReadv(int32(a1), (*ntLinuxIovec)(unsafe.Pointer(a2)), int32(a3))
+	case ntSysWritev:
+		return ntEmuWritev(int32(a1), (*ntLinuxIovec)(unsafe.Pointer(a2)), int32(a3))
 	case ntSysOpenat:
 		return ntEmuOpenat(int32(a1), (*byte)(unsafe.Pointer(a2)), int32(a3), uint32(a4))
 	case ntSysClose:
@@ -344,6 +355,16 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuSendto(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), uint32(a6))
 	case ntSysRecvfrom:
 		return ntEmuRecvfrom(int32(a1), unsafe.Pointer(a2), int32(a3), int32(a4), unsafe.Pointer(a5), (*uint32)(unsafe.Pointer(a6)))
+	case ntSysSendmsg:
+		return ntEmuSendmsg(int32(a1), (*ntLinuxMsghdr)(unsafe.Pointer(a2)), int32(a3))
+	case ntSysRecvmsg:
+		return ntEmuRecvmsg(int32(a1), (*ntLinuxMsghdr)(unsafe.Pointer(a2)), int32(a3))
+	case ntSysSocketpair:
+		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)))
+	case ntSysDup:
+		// Socket-kind fds only this wave (net.FileConn's dup
+		// fallback); files/pipes stay ENOSYS. See ntEmuDup.
+		return ntEmuDup(int32(a1))
 
 	case ntSysGetpid, ntSysGetpgrp:
 		// getpgrp: no process groups on NT; report the pid, which is

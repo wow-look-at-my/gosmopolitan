@@ -157,9 +157,9 @@ stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
 IAT slots.
 
-Windows status (2026-07-18, NT bring-up wave 2 COMPLETE - CI-verified
-by the full runtimeprobe gauntlet on windows-latest, against binaries
-built on all three platforms): stdout/stderr (console CP_UTF8+VT),
+Windows status (2026-07-19, NT bring-up wave 3 COMPLETE - CI-verified
+by the full 46-check runtimeprobe gauntlet on windows-latest, against
+binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
 os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
 CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
 user-level syscall routes through an NT emulation dispatcher (Linux
@@ -183,18 +183,43 @@ NT may drop loopback UDP datagrams - a lost wake stalls the poller;
 pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
 sockets over afunix.sys (sun_path through the path layer; abstract
 names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
-runs show exactly one red there while windows-latest proves it); and
+runs show exactly one red there while windows-latest proves it);
+wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
+as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
+writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
+between cosmo processes (sender-push wire frame on the afunix
+stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
+for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
+AF_UNIX carriers only, same user, both ends must be cosmo binaries -
+see DEBUGGING.md wave 3 item 2b for the honest limits); and
 signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
 (kill/tkill with full delivery through sigtrampgo), os/signal Notify,
 async preemption via SuspendThread/SetThreadContext injection
 (preempt ~180ms on the CI runner, upstream preemptM semantics), signal
-deaths encoded for the wait4 protocol, and console Ctrl-C/Break/Close
--> SIGINT/SIGTERM via an asm handler + relay M. Still missing on
-Windows: sendmsg/recvmsg (fd passing), SIGPROF profiling,
-Windows/arm64, real-conhost console-ctrl injection coverage (the
-handler is live but headless CI cannot generate console events) - see
-DEBUGGING.md's NT wave sections (chunks A-E) for the ladder, the
-forensics, and the wave-3 backlog.
+deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling
+(runtime/pprof delivers real samples on NT: upstream os_windows.go's
+profileLoop ported as a standing no-P M parked on a waitable timer,
+SuspendThread under ntSuspendLock, direct sigprof calls - no signal
+number anywhere), conhost control events remapped for unix parity -
+CTRL_C -> SIGINT, CTRL_BREAK -> SIGQUIT (the goroutine-dump chord on
+a wedged process), CTRL_CLOSE -> SIGHUP, LOGOFF/SHUTDOWN -> SIGTERM,
+a deliberate divergence from upstream windows Go (which maps BREAK ->
+SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
+groups: SysProcAttr{Setpgid} spawns the child as its own group leader
+(CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
+group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
+probe CI-proves the conhost-injected handler chain end to end. Still
+missing on Windows: Windows/arm64 (now CHARTERED - see DEBUGGING.md's
+wave-4 charter; step one is a windows-11-arm CI experiment running
+the existing amd64 APE under x86-64 emulation), file/pipe dup(2)
+(ENOSYS on purpose - socket dup works, and file/pipe fds still
+transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
+by design - pair ends cannot cross processes), and
+real-keyboard/CTRL_CLOSE console coverage (the probe covers the
+GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
+window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
+documented-not-asserted) - see DEBUGGING.md's NT wave sections for
+the ladder, the forensics, and the wave-4 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -288,6 +313,16 @@ go tool compile -bench=out.txt file.go
   place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
   upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
   this automatically).
+- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
+  Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
+  40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
+  prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B
+  InlTree records. Consequence: upstream debug/gosym-based tools cannot parse
+  fork binaries; the fork's own debug/gosym, objdump, nm, and addr2line are
+  updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and
+  readers must move in lockstep: `cmd/link/internal/ld/pcln.go` +
+  `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <->
+  `debug/gosym`.
 
 ## Local Verify Loop
 
@@ -327,9 +362,11 @@ executes the darwin (Syslib) code paths.
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
-fixes touch under node 22 (js) and wazero (wasip1), and runs the
-wasmexport compiler regression tests via cmd/internal/testdir for both
-wasm targets.
+fixes touch under node 22 (js) and wazero (wasip1), runs the full
+testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
+end to end), runs the testdata/jsfetchstream streaming-upload e2e under
+node, and runs the wasmexport compiler regression tests via
+cmd/internal/testdir for both wasm targets.
 
 A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
 installable toolchain tarball to buildhost on every push - see Toolchain
@@ -368,6 +405,30 @@ derived from the binary location, no need to set it). Consumer gotchas:
   auto-increments N per publish, the publish job logs it, and
   `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
   the current one.
+
+## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
+
+`.github/dependabot.yml` disables Dependabot updates — version AND security —
+for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
+and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
+importable package; see 'go help packages'`, and it can neither run
+`go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
+ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
+
+1. Build this tree's toolchain: `cd src && ./make.bash`, then `go clean -cache`
+   (the fork's release-version build cache gotcha); use `../bin/go` below.
+2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
+   && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
+   cosmo).
+3. If `x/net/http2` changed, regenerate `src/net/http/h2_bundle.go` with
+   `x/tools/cmd/bundle` (the exact command is `src/net/http/http.go`'s
+   `//go:generate bundle` directive, also echoed in h2_bundle.go's header).
+4. Check `git log -- src/vendor/` for fork-local vendored changes that
+   re-vendoring may have wiped; re-apply them.
+5. Rebuild + `go clean -cache` again, then run the affected stdlib tests:
+   `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
+
+`src/README.vendor` is the upstream authority on vendoring in std/cmd.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
@@ -408,8 +469,8 @@ the full catalog of fixes and remaining gaps):
   line tables, `llvm-dwarfdump --verify` clean on both ports. On by
   default (~+39% file size), stripped with `-ldflags=-w`. The name
   section now precedes producers, so llvm tools can read Go wasm
-  binaries. Variable location expressions are still placeholders
-  (faithful locations need DW_OP_WASM_location).
+  binaries. Variable location expressions remained placeholders until
+  round 6 gave them a real DW_OP_WASM_location frame base.
 - Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
   runway (trigger no later than ~halfway to the goal, background credit
   seeded at cycle start so the allocation that crosses the trigger
@@ -427,6 +488,48 @@ the full catalog of fixes and remaining gaps):
   event loop until mark completion) and the wasm export are js-only.
   `testdata/framebench` (10k allocs/frame under node): p99 frame time
   21.6ms -> 4.8ms, zero frames over 8ms.
+- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
+  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
+  computing the frame base from the SP global (SP + framesize + 8 - the
+  CFA of this x86-model target with a caller-pushed 8-byte return
+  address; SP only moves in the prologue/epilogue, so the constant is
+  exact throughout the body), and every stack-homed parameter and local
+  resolves through its DW_OP_fbreg offset to exactly the linear-memory
+  address codegen uses. The payoff is `-N -l` builds, where named
+  variables live on the stack; heap-escaped variables still carry no
+  location, and register-promoted variables in optimized builds stay
+  name-and-type-only. llvm-dwarfdump decodes the expression natively
+  and --verify stays clean; non-wasm DWARF is byte-identical; a
+  cmd/link/internal/wasm regression test locks the encoding for both
+  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
+  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
+  with Read/Write preserving datagram boundaries, and the
+  same deadline machinery as TCP. Receives import the newer-generation
+  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
+  everywhere and cannot report the source port), so opt-in binaries now
+  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
+  the generation mix, the 128-byte family-tagged address buffer, and
+  the network-byte-order recv_from port quirk (verified live against
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
+  ReadMsgUDP/WriteMsgUDP are ENOSYS
+  (no ancillary data in the extension); DNS and unix sockets stay
+  fake. `testdata/wasip1sock` grew UDP host support plus
+  udpecho/udpconnected guests, and the CI wasm job now runs the whole
+  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
+  js fetch transport streams request bodies: unknown-length bodies
+  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
+  upload through a ReadableStream with duplex "half" instead of being
+  buffered whole, when a cached one-time probe shows the runtime's
+  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
+  everything else keeps the buffered path byte-for-byte). Pulls read
+  64KiB chunks on a goroutine off the event loop, so backpressure
+  reaches the reader, and the body is closed exactly once on every
+  path (EOF, read error, cancel/abort, every RoundTrip exit).
+  Known-length bodies stay buffered on purpose - fetch drops
+  Content-Length for stream bodies, buffering keeps it on the wire -
+  and streamed bodies cannot be replayed, so a redirect that must
+  re-send the body fails with a network error per spec.
+  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
@@ -486,8 +589,7 @@ the full catalog of fixes and remaining gaps):
   symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
   preemption, non-blocking main-thread park, syscall/js forwarding
   from worker Ms, browser workers.
-
- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
   unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
   1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
   via cross-thread-armed loop backedge checks, a non-blocking main-thread park
