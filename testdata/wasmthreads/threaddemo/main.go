@@ -40,6 +40,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 	_ "unsafe" // for go:linkname
 )
 
@@ -51,6 +52,9 @@ func runOnNewM(fn func())
 
 //go:linkname curMID runtime.wasmThreadsCurMID
 func curMID() int64
+
+//go:linkname idleWorkerMs runtime.wasmThreadsIdleWorkerMs
+func idleWorkerMs() int32
 
 func checksum(b []byte) uint32 {
 	// FNV-1a.
@@ -111,8 +115,24 @@ func main() {
 	})
 	bump(1000)
 
-	// Third spawn: both worker Ms are parked now; the scheduler reuses
-	// one (mget) instead of taking a fresh pool worker.
+	// Third spawn: the runOnNewM calls above returned when their fn
+	// finished, which does NOT mean the worker Ms have parked - each M
+	// still has to fall through its scheduler tail (startlockedm ->
+	// stopm -> mput) to sched.midle on its own host thread,
+	// concurrently with this resumed goroutine. Wait until both are
+	// actually reusable so the spawn's startm deterministically finds
+	// one via mget instead of racing the parks (a miss takes a fresh
+	// pool worker, which is legal scheduler behavior, not a bug). A
+	// runtime that never parks worker Ms fails loudly here instead.
+	parkWait := time.Now()
+	for idleWorkerMs() < 2 {
+		if time.Since(parkWait) > 10*time.Second {
+			fmt.Printf("threaddemo: FAIL: worker Ms never parked (parked=%d after 10s)\n", idleWorkerMs())
+			fmt.Println("THREADDEMO: FAIL")
+			os.Exit(1)
+		}
+		runtime.Gosched()
+	}
 	var thirdM int64
 	runOnNewM(func() {
 		thirdM = curMID()
