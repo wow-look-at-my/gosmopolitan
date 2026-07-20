@@ -1,8 +1,16 @@
+// This file is the regression suite for the PE header every APE carries
+// at offset 0x80. Since the Windows NT bring-up (wave 1) the header is
+// real: PE32+ at ImageBase 0x100000000 whose sections map the embedded
+// cosmo amd64 image directly (RVA == payload-relative file offset), whose
+// import directory resolves kernel32!GetProcAddress + LoadLibraryA, and
+// whose entry point is the runtime's _rt0_cosmo_nt boot stub (which
+// marks the host as NT and joins the common cosmo runtime boot).
 package apetest
 
 import (
 	"bytes"
 	"debug/pe"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -63,7 +71,7 @@ func TestPENumberOfSections(t *testing.T) {
 	require.Greater(t, len(bin), 0x88)
 
 	numSections := le16(bin[0x86:0x88])
-	assert.Greater(t, numSections, uint16(0), "must have sections")
+	assert.Equal(t, uint16(3), numSections, "must have .text, .rodata, .data")
 }
 
 func TestPESizeOfOptionalHeader(t *testing.T) {
@@ -88,6 +96,35 @@ func TestPECharacteristicsLargeAddress(t *testing.T) {
 
 	chars := le16(bin[0x96:0x98])
 	assert.NotEqual(t, uint16(0), chars&pe.IMAGE_FILE_LARGE_ADDRESS_AWARE, "must have LARGE_ADDRESS_AWARE")
+}
+
+// TestPECharacteristicsExact pins the full COFF characteristics to the
+// value real Cosmopolitan APEs use. RELOCS_STRIPPED matters: cosmo code
+// is position-dependent and the image carries no .reloc section, so the
+// header must tell the loader relocation is impossible.
+func TestPECharacteristicsExact(t *testing.T) {
+	bin := loadBinary(t)
+	require.Greater(t, len(bin), 0x98)
+
+	chars := le16(bin[0x96:0x98])
+	want := uint16(pe.IMAGE_FILE_RELOCS_STRIPPED | pe.IMAGE_FILE_EXECUTABLE_IMAGE |
+		pe.IMAGE_FILE_LARGE_ADDRESS_AWARE | pe.IMAGE_FILE_DEBUG_STRIPPED)
+	assert.Equal(t, want, chars, "COFF characteristics must be 0x0223")
+}
+
+// TestPEDllCharacteristicsNoASLR verifies ASLR is not invited: with
+// relocations stripped, DYNAMIC_BASE or HIGH_ENTROPY_VA would let the
+// loader move the position-dependent image off its link base.
+func TestPEDllCharacteristicsNoASLR(t *testing.T) {
+	bin := loadBinary(t)
+	require.Greater(t, len(bin), 0xE0)
+
+	// DllCharacteristics at optional header + 70 = 0x98 + 0x46 = 0xDE
+	dllChars := le16(bin[0xDE:0xE0])
+	assert.Zero(t, dllChars&pe.IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE, "DYNAMIC_BASE must not be set")
+	assert.Zero(t, dllChars&pe.IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA, "HIGH_ENTROPY_VA must not be set")
+	want := uint16(pe.IMAGE_DLLCHARACTERISTICS_NX_COMPAT | pe.IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE)
+	assert.Equal(t, want, dllChars, "DllCharacteristics must be 0x8100")
 }
 
 func TestPESectionAlignment(t *testing.T) {
@@ -115,7 +152,16 @@ func TestPEImageBase(t *testing.T) {
 
 	// ImageBase at optional header + 24 = 0x98 + 0x18 = 0xB0
 	imageBase := le64(bin[0xB0:0xB8])
-	assert.Greater(t, imageBase, uint64(0x10000), "ImageBase must be above 64KB")
+	assert.Equal(t, uint64(0x100000000), imageBase, "ImageBase must be the cosmo amd64 link base")
+}
+
+func TestPESizeOfHeaders(t *testing.T) {
+	bin := loadBinary(t)
+	require.Greater(t, len(bin), 0xD8)
+
+	// SizeOfHeaders at optional header + 60 = 0x98 + 0x3C = 0xD4
+	size := le32(bin[0xD4:0xD8])
+	assert.Equal(t, uint32(0x400), size, "SizeOfHeaders must cover the header chain, file-aligned")
 }
 
 func TestPETextSection(t *testing.T) {
@@ -127,18 +173,86 @@ func TestPETextSection(t *testing.T) {
 	assert.Equal(t, ".text", name, "first section should be .text")
 }
 
-func TestPETextSectionPointsToEmbeddedPayload(t *testing.T) {
+// TestPESectionsMapEmbeddedPayload verifies the sections map the real
+// cosmo amd64 image: every section's raw data lives inside the embedded
+// payload (at or beyond the 64K APE head), not in a stub inside the head.
+func TestPESectionsMapEmbeddedPayload(t *testing.T) {
 	bin := loadBinary(t)
 
 	f, err := pe.NewFile(bytes.NewReader(bin))
 	require.NoError(t, err)
 	defer f.Close()
-	require.NotEmpty(t, f.Sections)
 
-	assert.GreaterOrEqual(t, f.Sections[0].Offset, uint32(elfOffset), ".text raw data should live in the embedded Windows payload")
+	require.Len(t, f.Sections, 3)
+	var names []string
+	for _, s := range f.Sections {
+		names = append(names, s.Name)
+		assert.GreaterOrEqual(t, s.Offset, uint32(elfOffset),
+			"section %s raw data must live inside the embedded amd64 image", s.Name)
+		assert.LessOrEqual(t, int64(s.Offset)+int64(s.Size), int64(len(bin)),
+			"section %s raw data must not run past the file", s.Name)
+	}
+	assert.Equal(t, []string{".text", ".rodata", ".data"}, names)
 }
 
-func TestPEEntrypointIsNotPlaceholderStub(t *testing.T) {
+// peEntry parses the binary and returns the entry point RVA plus the
+// section containing it.
+func peEntry(t *testing.T) (bin []byte, entry uint32, sect *pe.Section) {
+	t.Helper()
+	bin = loadBinary(t)
+
+	f, err := pe.NewFile(bytes.NewReader(bin))
+	require.NoError(t, err)
+	defer f.Close()
+
+	oh, ok := f.OptionalHeader.(*pe.OptionalHeader64)
+	require.True(t, ok, "must use PE32+ optional header")
+	entry = oh.AddressOfEntryPoint
+
+	for _, s := range f.Sections {
+		if entry >= s.VirtualAddress && entry-s.VirtualAddress < s.VirtualSize {
+			return bin, entry, s
+		}
+	}
+	t.Fatalf("entry point RVA %#x is not covered by any PE section", entry)
+	return nil, 0, nil
+}
+
+// TestPEEntrypointInsideText verifies the entry point falls in .text's
+// virtual range and is not the retired do-nothing placeholder stub.
+func TestPEEntrypointInsideText(t *testing.T) {
+	bin, entry, s := peEntry(t)
+
+	assert.Equal(t, ".text", s.Name, "entry point must be inside .text")
+
+	off := s.Offset + (entry - s.VirtualAddress)
+	require.LessOrEqual(t, int(off)+3, len(bin), "entry point must be inside the file")
+	assert.NotEqual(t, []byte{0x31, 0xC0, 0xC3}, bin[off:off+3],
+		"entry point must not be the retired xor eax,eax; ret placeholder")
+}
+
+// TestPEEntrypointIsNTStub verifies the bytes at the entry point are the
+// _rt0_cosmo_nt prologue: cld; fldcw m16 (rip-relative, so its 4
+// displacement bytes vary); movl $2, m32 (the __hostos = _HOSTWINDOWS
+// store that hands the host over to the runtime's NT personality -
+// also rip-relative, 4 varying displacement bytes, then the immediate).
+func TestPEEntrypointIsNTStub(t *testing.T) {
+	bin, entry, s := peEntry(t)
+
+	off := s.Offset + (entry - s.VirtualAddress)
+	require.LessOrEqual(t, int(off)+17, len(bin), "entry prologue must be inside the file")
+	prologue := bin[off : off+17]
+	assert.Equal(t, byte(0xFC), prologue[0], "entry must start with cld")
+	assert.Equal(t, []byte{0xD9, 0x2D}, prologue[1:3], "cld must be followed by fldcw m16 (x87 re-init)")
+	assert.Equal(t, []byte{0xC7, 0x05}, prologue[7:9], "fldcw must be followed by movl $imm32, m32 (the __hostos store)")
+	assert.Equal(t, []byte{0x02, 0x00, 0x00, 0x00}, prologue[13:17], "__hostos immediate must be 2 (_HOSTWINDOWS)")
+}
+
+// TestPEImportsKernel32 verifies the loader-resolved import set: exactly
+// one import descriptor, naming kernel32.dll, importing GetProcAddress
+// and LoadLibraryA (everything else is resolved at runtime through
+// those two).
+func TestPEImportsKernel32(t *testing.T) {
 	bin := loadBinary(t)
 
 	f, err := pe.NewFile(bytes.NewReader(bin))
@@ -147,21 +261,29 @@ func TestPEEntrypointIsNotPlaceholderStub(t *testing.T) {
 
 	oh, ok := f.OptionalHeader.(*pe.OptionalHeader64)
 	require.True(t, ok, "must use PE32+ optional header")
+	idd := oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_IMPORT]
+	assert.NotZero(t, idd.VirtualAddress, "import directory must be present")
+	assert.Equal(t, uint32(0x28), idd.Size, "import directory must hold one descriptor plus the terminator")
 
-	for _, s := range f.Sections {
-		size := s.VirtualSize
-		if s.Size > size {
-			size = s.Size
-		}
-		if oh.AddressOfEntryPoint < s.VirtualAddress || oh.AddressOfEntryPoint >= s.VirtualAddress+size {
-			continue
-		}
-		off := s.Offset + (oh.AddressOfEntryPoint - s.VirtualAddress)
-		require.LessOrEqual(t, int(off)+3, len(bin), "entry point must be inside file")
-		assert.NotEqual(t, []byte{0x31, 0xC0, 0xC3}, bin[off:off+3], "entry point must not be the old xor/ret placeholder")
-		return
-	}
-	t.Fatalf("entry point RVA %#x is not covered by a PE section", oh.AddressOfEntryPoint)
+	syms, err := f.ImportedSymbols()
+	require.NoError(t, err)
+	sort.Strings(syms)
+	assert.Equal(t, []string{"GetProcAddress:kernel32.dll", "LoadLibraryA:kernel32.dll"}, syms)
+}
+
+// TestPEDataSectionHasBSS verifies .data declares more virtual space
+// than raw data, making the loader zero-fill the runtime's BSS.
+func TestPEDataSectionHasBSS(t *testing.T) {
+	bin := loadBinary(t)
+
+	f, err := pe.NewFile(bytes.NewReader(bin))
+	require.NoError(t, err)
+	defer f.Close()
+
+	data := f.Section(".data")
+	require.NotNil(t, data, "must have a .data section")
+	assert.Greater(t, data.VirtualSize, data.Size,
+		".data VirtualSize must exceed SizeOfRawData so the loader zero-fills BSS")
 }
 
 func TestPETextSectionExecutable(t *testing.T) {

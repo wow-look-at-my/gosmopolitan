@@ -38,7 +38,14 @@ func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 //go:linkname RawSyscall6
 func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
 	var errno uintptr
-	r1, r2, errno = cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	if w := cosmo.Windows(); w != nil {
+		// NT host: route through the runtime's emulation table.
+		// The table is non-nil only when the runtime resolved it
+		// at boot on a Windows host.
+		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	} else {
+		r1, r2, errno = cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
 	err = Errno(errno)
 	return
 }
@@ -47,6 +54,18 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 //go:nosplit
 //go:linkname Syscall
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
+	if w := cosmo.Windows(); w != nil {
+		// NT host: run the emulation WITHOUT entering syscall
+		// state. The emulation is ordinary Go code - it allocates
+		// for path translation and Linux-struct synthesis, which
+		// entersyscall's throwsplit would make fatal - and it
+		// brackets the genuinely blocking Win32 calls with
+		// entersyscall internally instead (the cgocall model), so
+		// sysmon can still retake the P during a blocking ReadFile.
+		var errno uintptr
+		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
+		return r1, r2, Errno(errno)
+	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, 0, 0, 0)
 	runtime_exitsyscall()
@@ -57,13 +76,38 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 //go:nosplit
 //go:linkname Syscall6
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
+	if w := cosmo.Windows(); w != nil {
+		// See Syscall for why entersyscall is skipped on NT.
+		var errno uintptr
+		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+		return r1, r2, Errno(errno)
+	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
 	runtime_exitsyscall()
 	return
 }
 
-func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
+// rawSyscallNoError is used by the generated //sysnb wrappers for
+// Linux syscalls that cannot fail (getpid and friends; no pointer
+// arguments among its users, and never called from fork children or
+// between entersyscall/exitsyscall on cosmo, so deliberately NOT
+// nosplit - the darwin arm64 emulation chain below the asm entry sits
+// exactly at the nosplit budget and cannot afford an extra frame). On
+// NT hosts route through the emulation table like every other syscall
+// - the assembly entry would execute a raw SYSCALL, which is
+// forbidden there. The errno is discarded by construction, so an
+// unemulated call surfaces as r1 = ^uintptr(0) (-1), which is what os
+// reports for identity calls on plain Windows.
+func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
+	if w := cosmo.Windows(); w != nil {
+		r1, r2, _ = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
+		return r1, r2
+	}
+	return rawSyscallNoErrorAsm(trap, a1, a2, a3)
+}
+
+func rawSyscallNoErrorAsm(trap, a1, a2, a3 uintptr) (r1, r2 uintptr)
 func rawVforkSyscall(trap, a1, a2, a3 uintptr) (r1 uintptr, err Errno)
 
 /*
@@ -521,4 +565,3 @@ const (
 	RUSAGE_SELF     = 0
 	RUSAGE_CHILDREN = -1
 )
-

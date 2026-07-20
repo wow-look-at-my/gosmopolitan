@@ -72,7 +72,15 @@ const (
 	// to each stack below the usual guard area for OS-specific
 	// purposes like signal handling. Used on Windows, Plan 9,
 	// and iOS because they do not use a separate stack.
-	stackSystem = goos.IsWindows*4096 + goos.IsPlan9*512 + goos.IsIos*goarch.IsArm64*1024
+	// Cosmo matches Windows: on NT hosts the exception dispatcher
+	// writes its frame (EXCEPTION_RECORD + CONTEXT + dispatcher
+	// state, up to ~4KiB with extended machine state) below the
+	// faulting RSP on the goroutine stack itself - without this
+	// reservation a fault near the stack bottom would corrupt
+	// adjacent heap memory (Go stacks have no guard pages). The cost
+	// is paid on every cosmo host (one build serves them all), the
+	// same provisioning philosophy as the fat APE itself.
+	stackSystem = goos.IsWindows*4096 + goos.IsCosmo*4096 + goos.IsPlan9*512 + goos.IsIos*goarch.IsArm64*1024
 
 	// The minimum size of stack used by Go code
 	stackMin = 2048

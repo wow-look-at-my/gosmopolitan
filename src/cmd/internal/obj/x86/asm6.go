@@ -2541,8 +2541,16 @@ func prefixof(ctxt *obj.Link, a *obj.Addr) int {
 			default:
 				log.Fatalf("unknown TLS base register for %v", ctxt.Headtype)
 
-			case objabi.Hcosmo,
-				objabi.Hlinux:
+			case objabi.Hcosmo:
+				// Cosmo amd64 keeps g at gs:0x28: on Windows hosts
+				// that is the TEB ArbitraryUserPointer slot (no setup
+				// needed), and on Linux hosts runtime·settls points the
+				// GS base at &m.tls[0]-0x28 via arch_prctl(ARCH_SET_GS).
+				// See src/runtime/sys_cosmo_amd64.s and
+				// cmd/link/internal/ld/sym.go (Tlsoffset).
+				return 0x65 // GS
+
+			case objabi.Hlinux:
 				if isAndroid {
 					return 0x64 // FS
 				}

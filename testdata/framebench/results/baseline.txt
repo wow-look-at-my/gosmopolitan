@@ -1,0 +1,4 @@
+# baseline: unmodified master runtime (commit 69b1408c), 2026-07-17T09:55:54Z
+# cmd: node bench.js framebench.wasm  (no --markstep)
+{"config":"baseline","frames":2000,"warmup":300,"frame_budget_ms":16.7,"p50_ms":1.757,"p90_ms":14.574,"p99_ms":21.592,"max_ms":32.755,"mean_ms":5.156,"frames_over_8ms":535,"frames_over_16_7ms":87,"gc_cycles":57,"markstep_calls":0,"markstep_total_ms":0,"total_wall_ms":12565.7,"heap_alloc_mb":92.02,"node":"v22.22.2"}
+baseline: frames=2000 p50=1.757ms p90=14.574ms p99=21.592ms max=32.755ms gc_cycles=57 over8ms=535 over16.7ms=87

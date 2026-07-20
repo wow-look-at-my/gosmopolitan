@@ -82,25 +82,6 @@ func (fd *netFD) name() string {
 	return "unknown"
 }
 
-func (fd *netFD) accept() (netfd *netFD, err error) {
-	if fd.fakeNetFD != nil {
-		return fd.fakeNetFD.accept(fd.laddr)
-	}
-	d, _, errcall, err := fd.pfd.Accept()
-	if err != nil {
-		if errcall != "" {
-			err = wrapSyscallError(errcall, err)
-		}
-		return nil, err
-	}
-	netfd = newFD("tcp", d)
-	if err = netfd.init(); err != nil {
-		netfd.Close()
-		return nil, err
-	}
-	return netfd, nil
-}
-
 func (fd *netFD) setAddr(laddr, raddr Addr) {
 	fd.laddr = laddr
 	fd.raddr = raddr
