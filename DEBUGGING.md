@@ -3240,12 +3240,20 @@ host suite, entire threads step incl. threaddemo 10x, the B3 demo
 gates, the 4-package threads go test and the wasip1 rejection check,
 wasmexport testdir on both targets): all green.
 
-Follow-up (same class, unfixed here): TestWasmThreadsRunOnNewM's
-re-spawn assertion (src/runtime/wasmthreads_test.go) has the same
-goroutine-finished-vs-M-parked window at GOMAXPROCS=1, plus an
-in-suite mode a park-wait cannot fix: earlier runtime tests can leave
-extra pool Ms parked, and a parked M's watchdog tick re-mputs it to
-the LIFO head, so id-membership can be violated by a legal claim. It
-wants a different assertion shape (e.g. mcount() did not grow across
-the re-spawn). Never yet observed in CI; signature would be
-`re-spawn did not reuse a parked M: got N`.
+Same-class sibling, fixed in the same change:
+TestWasmThreadsRunOnNewM's re-spawn assertion
+(src/runtime/wasmthreads_test.go) had the same
+goroutine-finished-vs-M-parked window, plus a mode a park-wait alone
+cannot fix: extra pool Ms parked by earlier tests or earlier -count
+iterations are legitimate mget picks (a parked M's watchdog tick also
+re-mputs it to the LIFO head), so id-membership can be violated by a
+LEGAL reuse. Demonstrated: the old assertion died within one
+standalone `-count=1000` run (~1.4s of test time) as `re-spawn did
+not reuse a parked M: got 1, want 2 or 3` - the failing iteration
+REUSED parked M1 and still failed. Fix: under the strict
+(GOMAXPROCS=1) guard, wait for wasmThreadsIdleWorkerMs() >= 2 (same
+Gosched loop and 10s loud-fail as threaddemo), then assert reuse as
+"M count did not grow across the re-spawn" (new WasmThreadsMCount
+test export; Ms never exit on wasm, so growth == a fresh pool worker
+was claimed). Post-fix: `-count=1000` standalone clean, full
+`-short -count=3 runtime` clean, 4-package threads battery clean.
