@@ -295,7 +295,14 @@ const (
 	DW_OP_call_frame_cfa      = 0x9c // 0
 	DW_OP_bit_piece           = 0x9d // 2
 	DW_OP_lo_user             = 0xe0
-	DW_OP_hi_user             = 0xff
+	// DW_OP_WASM_location is a vendor extension defined by the
+	// WebAssembly tool conventions ("DWARF for WebAssembly"). It is
+	// followed by a ULEB128 kind operand (0x00: WebAssembly local,
+	// 0x01: WebAssembly global, 0x02: operand stack value) and a
+	// ULEB128 index, and pushes the value of that entity onto the
+	// DWARF expression stack.
+	DW_OP_WASM_location = 0xed
+	DW_OP_hi_user       = 0xff
 )
 
 // Table 25
