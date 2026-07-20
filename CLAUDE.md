@@ -174,8 +174,9 @@ stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
 IAT slots.
 
-Windows status (2026-07-19, NT bring-up wave 3 COMPLETE - CI-verified
-by the full 46-check runtimeprobe gauntlet on windows-latest, against
+Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the
+LookPath fix - CI-verified by the full 47-check runtimeprobe gauntlet
+on windows-latest, against
 binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
 os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
 CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
@@ -189,7 +190,14 @@ os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
 non-pollable on purpose - a posix_spawn-style CreateProcessW path with
 upstream-ported quoting and env block, and wait4 packing the Linux
 wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
-signal deaths 0xC0DE0000|sig decode as Linux termination signals);
+signal deaths 0xC0DE0000|sig decode as Linux termination signals),
+including exec.LookPath/exec.Command name resolution against the
+HOST-format PATH (2026-07-20, src/os/exec/lp_cosmo.go: runtime host
+switch; on NT a lp_windows.go port - ';' split, PATHEXT/.exe probing,
+ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT
+blocks spell "Path" while cosmo's os.Getenv stays exact-case - plus
+an extensionless-APE last resort; unix hosts keep verbatim lp_unix
+behavior - see DEBUGGING.md 2026-07-20 NT LookPath section);
 sockets over classic synchronous winsock (non-overlapped WSASocketW,
 FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
 is swallowed for AF_UNIX because msafd accepts it and afunix.sys then

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build unix
+//go:build unix && !cosmo
 
 package exec
 
@@ -81,4 +81,10 @@ func lookPath(file string) (string, error) {
 // they do not restrict executables to specific extensions.
 func lookExtensions(path, dir string) (string, error) {
 	return path, nil
+}
+
+// lookExtensionsEnabled reports whether Command/Start must route
+// paths through lookExtensions (see exec.go).
+func lookExtensionsEnabled() bool {
+	return false
 }
