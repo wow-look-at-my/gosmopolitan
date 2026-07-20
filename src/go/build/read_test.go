@@ -37,6 +37,19 @@ var readGoInfoTests = []readTest{
 		`package p; import "x";ℙvar x = 1`,
 		"",
 	},
+	// Shebang tests: shebang line should be skipped (𝔻 marks where expected output starts)
+	{
+		"#!/usr/bin/env go run\n𝔻package p",
+		"",
+	},
+	{
+		"#!/usr/bin/env go run\n𝔻package p; import \"x\"",
+		"",
+	},
+	{
+		"#!/bin/sh\n𝔻package p; import \"x\";ℙvar x = 1",
+		"",
+	},
 	{
 		`package p
 
