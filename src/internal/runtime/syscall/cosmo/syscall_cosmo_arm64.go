@@ -27,14 +27,18 @@ import "unsafe"
 // silently misbehaving.
 type DarwinFns struct {
 	// Resolved via Syslib dlsym(RTLD_DEFAULT, ...).
-	Getpid     uintptr
-	Getppid    uintptr
-	Getuid     uintptr
-	Geteuid    uintptr
-	Getgid     uintptr
-	Getegid    uintptr
-	Umask      uintptr
-	Fcntl      uintptr
+	Getpid  uintptr
+	Getppid uintptr
+	Getuid  uintptr
+	Geteuid uintptr
+	Getgid  uintptr
+	Getegid uintptr
+	Umask   uintptr
+	Fcntl   uintptr
+	// Dup backs SYS_DUP for internal/poll's dupCloseOnExecOld -
+	// net.FileConn's fallback when the F_DUPFD_CLOEXEC fcntl path
+	// errors (see the wave-3 item-1 CI followup in DEBUGGING.md).
+	Dup        uintptr
 	Mkdirat    uintptr
 	Unlinkat   uintptr
 	Renameat   uintptr
@@ -104,6 +108,7 @@ func SetDarwinFns(f *DarwinFns) {
 // fast-path numbers live in defs_cosmo_arm64.go.
 const (
 	sysGETCWD     = 17
+	sysDUP        = 23
 	sysMKDIRAT    = 34
 	sysUNLINKAT   = 35
 	sysRENAMEAT   = 38
@@ -390,6 +395,15 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 
 	case sysPIPE2:
 		return darwinPipe2(a1, a2)
+	case sysDUP:
+		// dup(2) proper: Apple's dup is a plain fixed-arg libc entry
+		// with identical semantics (lowest free fd, CLOEXEC clear).
+		// Who needs it: net.FileConn wraps an *os.File via
+		// poll.DupCloseOnExec, whose fcntl F_DUPFD_CLOEXEC fast path
+		// failed on the macOS CI runner (errno recorded by the
+		// sockpairpoll probe detail), leaving plain dup(2) as the
+		// fallback - which was ENOSYS here until wave 3.
+		return darwinCall(darwinFns.Dup, a1, 0, 0, 0, 0, 0)
 	case sysDUP3:
 		return darwinDup3(a1, a2, a3)
 	case sysSETSID:
