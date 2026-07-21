@@ -4452,3 +4452,11 @@ Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
 case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
+
+# 2026-07-21: stale-PR triage
+
+PRs #35, #36, and #39 were closed 2026-07-21 as invalid/obsolete/moot;
+the rationale for each is in its PR body. Do not reopen or resurrect
+work from their dead head branches (`fix-ape-shell-fallback`,
+`claude/fix-github-actions-logs-YXLsp`,
+`claude/cross-platform-binary-VJeLb`).

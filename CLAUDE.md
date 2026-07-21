@@ -411,6 +411,36 @@ A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
 installable toolchain tarball to buildhost on every push - see Toolchain
 Distribution below.
 
+## Repository automation (pr-minder bot)
+
+This repo, like the rest of the wow-look-at-my org, is watched by the org's
+**pr-minder** GitHub bot. Its observed behavior around branches, PRs, and
+labels — know this before pushing branches or interpreting PR state:
+
+- **Auto-opened PRs.** Any lingering `claude/*` branch gets a **non-draft**
+  PR auto-opened for it within about a minute of the push. Expect the PR to
+  exist before you open one by hand; edit the auto-opened PR (title/body)
+  rather than opening a duplicate.
+- **Label-triggered merges.** The bot merges a PR when the repository owner
+  applies the `auto-pr-merge` label. Draft status is NOT protection: a green
+  draft carrying the label is flipped ready-for-review and squash-merged
+  within seconds. If the PR only goes green later (label already in place),
+  the merge lands on the bot's next hourly reconcile pass instead of
+  immediately. Head branches are deleted after merge.
+- **Body regeneration.** The bot can regenerate/overwrite PR bodies during
+  its update passes. If a PR body matters, keep a copy and re-apply it once
+  after a rewrite — don't loop against the bot.
+- **Base-branch updates.** The bot merges the base branch (master) into PR
+  branches as siblings merge — ordinary forward merge commits, never force
+  pushes. Pull before pushing to a branch the bot may have advanced.
+- **Timeline attribution.** Ready-for-review, auto-merge, and merge events
+  show the bot as the *actor* even when the repository owner initiated them
+  by applying the label. Judge intent by the PR's `labeled` timeline events
+  (who applied `auto-pr-merge`), not by the executor of the follow-on
+  events. Symmetrically, the bot re-enforces state it was told to arm:
+  reverting it (e.g. flipping the PR back to draft) is counter-flipped
+  within seconds — a durable change needs the owner to change the labels.
+
 ## Toolchain Distribution
 
 Every push whose build+test jobs are green publishes an installable
