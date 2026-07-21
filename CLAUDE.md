@@ -444,6 +444,13 @@ labels — know this before pushing branches or interpreting PR state:
   events. Symmetrically, the bot re-enforces state it was told to arm:
   reverting it (e.g. flipping the PR back to draft) is counter-flipped
   within seconds — a durable change needs the owner to change the labels.
+- **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only
+  merges when its head SHA carries a green `all-builds` commit status —
+  posted by an org-side app that aggregates every build on the SHA
+  externally (cosmo-ci.yml needs, and has, no aggregator job; see the
+  DEBUGGING.md note in the PE-header work). Do not name any CI job
+  `all-builds`: an org guard fails workflows that define one, because the
+  status context is reserved for the aggregator.
 
 ## Toolchain Distribution
 
