@@ -234,9 +234,10 @@ groups: SysProcAttr{Setpgid} spawns the child as its own group leader
 (CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
 group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
 probe CI-proves the conhost-injected handler chain end to end. Still
-missing on Windows: Windows/arm64 (now CHARTERED - see DEBUGGING.md's
-wave-4 charter; step one is a windows-11-arm CI experiment running
-the existing amd64 APE under x86-64 emulation), file/pipe dup(2)
+missing on Windows: Windows/arm64 (the charter's step-one experiment
+ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic
+pre-main SIGSEGV at 0x2000c9000; see DEBUGGING.md's wave-4 verdict
+section - so native bring-up gains urgency), file/pipe dup(2)
 (ENOSYS on purpose - socket dup works, and file/pipe fds still
 transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
 by design - pair ends cannot cross processes), and
