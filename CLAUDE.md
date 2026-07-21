@@ -246,13 +246,22 @@ window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
 documented-not-asserted) - see DEBUGGING.md's NT wave sections for
 the ladder, the forensics, and the wave-4 backlog.
 
-macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
+macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
 via a getdents64 emulation over Apple's __getdirentries64),
 getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
 After, context timeouts), TCP/UDP loopback sockets with deadlines,
 unix-domain stream sockets (pathname addresses; the abstract namespace
-is Linux-only and refused EINVAL), readv/writev (net.Buffers), os/exec
+is Linux-only and refused EINVAL), readv/writev (net.Buffers),
+sendmsg/recvmsg with SCM_RIGHTS fd passing (2026-07-21:
+msghdr/cmsghdr layouts differ - Linux 16-byte/8-aligned cmsg headers
+vs Apple 12-byte/4-aligned - so the fixed-size msghdr re-shaping
+lives in the nosplit dispatch layer while package syscall's darwin
+branch repacks control buffers as ordinary Go; ReadMsgUnix/
+WriteMsgUnix work, MSG_CMSG_CLOEXEC is emulated via fcntl,
+truncation-dropped fds are closed never leaked, and the runtimeprobe
+sendmsg/fdpass checks are mandatory on macOS - see DEBUGGING.md
+2026-07-21), os/exec
 (fork, pipes, execve, wait4 with Linux-numbered wait statuses),
 os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
 by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
@@ -268,9 +277,8 @@ the poll(2)+self-pipe poller and dispatch-semaphore parking after the
 waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
 counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
 returning from a nonblocking read(2) on the poller's wakeup pipe.
-Still missing on macOS hosts: sendmsg/recvmsg (msghdr/cmsghdr layouts
-differ; blocks fd-passing and ReadMsg*) and setitimer-based SIGPROF
-profiling. See DEBUGGING.md for the full list.
+Still missing on macOS hosts: setitimer-based SIGPROF profiling. See
+DEBUGGING.md for the full list.
 
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,

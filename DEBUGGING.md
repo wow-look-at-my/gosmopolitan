@@ -4452,3 +4452,184 @@ Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
 case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
+
+# 2026-07-21: darwin sendmsg/recvmsg + SCM_RIGHTS fd passing
+
+The last darwin socket gap from the wave-6 backlog: SYS_SENDMSG(211)/
+SYS_RECVMSG(212) stayed deliberately ENOSYS on macOS hosts because
+Linux and Apple disagree on every struct involved, and a half-landed
+translation would corrupt buffers silently. Landed whole this time.
+net.UnixConn ReadMsgUnix/WriteMsgUnix and SCM_RIGHTS fd passing over
+pathname AF_UNIX stream sockets now work on macOS hosts; the
+runtimeprobe sendmsg and fdpass checks lost their darwin skip legs
+and are mandatory on all three hosts.
+
+## Layout ground truth (verified against the in-tree darwin port)
+
+msghdr (ztypes_cosmo_* vs ztypes_darwin_arm64.go; offsets identical
+through Iovlen, widths diverge after):
+
+	field       Linux/cosmo (56 B)      Apple arm64 (48 B)
+	msg_name        @0  ptr                 @0  ptr
+	msg_namelen     @8  u32 (+4 pad)        @8  u32 (+4 pad)
+	msg_iov         @16 ptr                 @16 ptr
+	msg_iovlen      @24 u64                 @24 i32 (+4 pad)
+	msg_control     @32 ptr                 @32 ptr
+	msg_controllen  @40 u64                 @40 u32
+	msg_flags       @48 i32 (+4 pad)        @44 i32
+
+struct iovec is {base ptr, len u64} on BOTH systems, so iovec arrays
+pass through untouched - multi-iovec scatter needs no translation
+(unlike NT's reversed-field WSABUF). struct cmsghdr differs
+structurally: Linux {Len u64, Level i32, Type i32} = 16-byte header,
+data aligned to CMSG_ALIGN = sizeof(size_t) = 8; Apple {Len u32,
+Level i32, Type i32} = 12-byte header, data aligned to 4
+(__DARWIN_ALIGN32). Control buffers must therefore be repacked
+cmsg-by-cmsg in both directions; a whole-buffer memcpy is never
+correct, and the alignment difference is exactly where a naive port
+corrupts multi-record buffers.
+
+Constants (Linux <-> Apple): SOL_SOCKET 1 <-> 0xffff; SCM_RIGHTS 1 =
+1; MSG_OOB/PEEK/DONTROUTE coincide (0x1/0x2/0x4, the set
+darwinCheckMsgFlags already admits); result flags differ - MSG_CTRUNC
+0x8 <-> 0x20, MSG_TRUNC 0x20 <-> 0x10, MSG_EOR 0x80 <-> 0x8.
+MSG_CMSG_CLOEXEC (0x40000000) has NO Apple equivalent at all.
+UIO_MAXIOV is 1024 on both. Apple libc exports plain `sendmsg`/
+`recvmsg` symbols (same dlsym names upstream GOOS=darwin binds), so
+resolution rides the existing osArchInit dlsym batch next to
+sendto/recvfrom.
+
+## The nosplit budget forbids in-window translation (measured)
+
+First cut did the whole translation inside the dispatch layer
+(socket_cosmo_arm64.go), where sendto/recvfrom translate theirs. The
+linker priced it immediately: the spine syscall.Syscall(112) ->
+RawSyscall6(96) -> cosmo.Syscall6(112) -> syscall6SlowDarwin(80+80)
+already burns 480 of the 792-byte nosplit budget, darwinCall ->
+darwinLibcCall6 -> darwinErrno needs ~160 more on the failure edge,
+and a sendmsg frame with a 112-byte sockaddr scratch plus any usable
+cmsg scratch came out at 432 bytes - "nosplit stack over 792 byte
+limit", 120-232 bytes over on every edge. The existing emulations fit
+because their frames stay small (sendto's [112]byte sockaddr is the
+prior record); an unbounded control repack never will.
+
+So the work is split across the syscall boundary by cost:
+
+- internal/runtime/syscall/cosmo (socket_cosmo_arm64.go,
+  darwinSendmsg/darwinRecvmsg + two dispatcher cases): FIXED-SIZE
+  msghdr shape adapters only. iovlen u64 -> i32 behind the
+  UIO_MAXIOV bound (EMSGSIZE past it, the kernel's sendmsg/recvmsg
+  spelling), controllen u64 -> u32, iovec pointer passthrough,
+  result msg_flags value translation (XlatMsgFlags). msg_name and
+  msg_control POINTERS pass through untouched. Frame ~100 bytes;
+  the fat link's nosplit check passes.
+- package syscall (new syscall_cosmo_msg.go; recvmsgRaw/sendmsgN in
+  both per-arch files branch on cosmo.Darwin(), a flag only
+  SetDarwinFns' XNU boot path sets): everything unbounded, as
+  ordinary Go BEFORE and AFTER the _Gsyscall window - sockaddr
+  translation both directions (the darwinSockaddrOut/In tables
+  mirrored: {u8 len, u8 family} vs u16 family, AF_INET6 10 <-> 30,
+  abstract AF_UNIX names EINVAL), and the cmsg repack via the new
+  arch-independent exported helpers in socket_msg_cosmo.go
+  (internal/runtime/syscall/cosmo): CmsgToApple / CmsgToLinux.
+  recvmsgRaw/sendmsgN are the single funnel every caller uses
+  (Recvmsg/Sendmsg(N), the Inet4/6 variants, net's ReadMsg*/
+  WriteMsg* via internal/poll), so nothing else needs patching.
+
+Resulting raw-syscall contract, documented in both files: a direct
+syscall.Syscall(SYS_SENDMSG/SYS_RECVMSG) on a macOS host crosses the
+boundary with Apple-shaped msg_name/msg_control BYTES (widths and
+flag values still adapted). The only raw shape anything in the tree
+issues - the runtimeprobe sendmsg check's two-iovec msghdrs with nil
+name and nil control - is host-identical, and that check now proves
+it on macos-latest.
+
+## Cmsg repack semantics (the Linux-parity contract)
+
+Send side (CmsgToApple, caller's oob copied into an Apple-shaped
+allocation - never in place, the input must survive for retry
+loops): SOL_SOCKET/SCM_RIGHTS translates with the fd payload copied
+unchanged; non-SOL_SOCKET levels are silently SKIPPED (what Linux's
+af_unix __scm_send does - live-kernel-verified during NT wave 3 item
+2b); SCM_CREDENTIALS is EOPNOTSUPP (Linux validates credentials this
+emulation cannot - NT's exact stance); unknown SOL_SOCKET types and
+malformed records (cmsg_len under a header, overrunning the buffer)
+are EINVAL; a final CMSG_LEN-tight record without alignment padding
+is legal. A buffer that skips down to nothing sends with no control
+at all, matching what Linux transmits.
+
+Receive side (CmsgToLinux, IN PLACE in the caller's oob buffer - the
+Apple shape of any payload is strictly smaller than its Linux shape,
+so a Linux-provisioned buffer always has room for what Apple
+delivers, and the expansion back can only overflow the caller's
+CAPACITY, never the buffer): three stages so no write overruns
+unread input - (1) compact translatable records to the front
+(forward-safe, records only shrink), (2) plan Linux offsets against
+capacity and apply fd side effects, (3) expand back to front (per
+record dst >= src; payload copied high-to-low; header written after
+its payload moves). Truncation mirrors the live-kernel semantics the
+NT emulation pinned: SCM_RIGHTS truncates at fd granularity -
+(avail-16)/4 fds, so CMSG_SPACE alignment slack still carries whole
+fds ("a 24-byte buffer receives TWO fds") - every undelivered fd is
+CLOSED rather than leaked, MSG_CTRUNC is raised, and the final
+record may sit flush against capacity (tight-fit rule). Only
+SOL_SOCKET/SCM_RIGHTS can actually arrive (darwinSockoptXlat refuses
+every option that would enable timestamps and friends); anything
+else is dropped.
+
+MSG_CMSG_CLOEXEC: net's cosmo build takes the
+unixsock_readmsg_cmsg_cloexec.go variant (setReadMsgCloseOnExec is a
+no-op), i.e. every net.ReadMsgUnix passes the flag - so the darwin
+branch strips it before the raw call and emulates it with fcntl
+F_SETFD FD_CLOEXEC on each DELIVERED rights fd during the repack
+walk (same post-receive window upstream GOOS=darwin's net layer
+has). The dispatch layer refuses the flag EINVAL for raw callers,
+exactly the NT emulation's documented stance, so a raw caller's
+request is refused visibly instead of silently un-honored. SIGPIPE
+needs no per-call work: every emulation-created socket already
+carries SO_NOSIGPIPE (wave 2), and passed-in fds inherit their
+description's options.
+
+Known divergences, by design: SCM_RIGHTS sent on an INET socket
+reaches Apple (which refuses it) instead of Linux's silent drop -
+detecting the family would cost a getsockname per send for a shape
+nothing issues; Apple-side record kinds that cannot arrive are
+dropped rather than surfaced.
+
+## Verification
+
+- socket_msg_cosmo.go is deliberately arch-independent
+  (//go:build cosmo, pure byte manipulation), so
+  socket_msg_cosmo_test.go runs the entire repack matrix under
+  GOOS=cosmo on the linux host (misc/cosmo wrappers): msghdr mirror
+  offsets/sizes against ground truth, single/multi-record round
+  trips, foreign-level skips, odd-payload alignment padding, error
+  table (EINVAL/EOPNOTSUPP/ENOBUFS), fd-granularity truncation (the
+  24-byte/two-fd kernel case), whole-record drops with fd closes,
+  tight fits, malformed tails, in-place expansion byte-exactness.
+  All pass; `GOOS=cosmo go test internal/runtime/syscall/cosmo` ok.
+- make.bash green; fat fizzbuzz + runtimeprobe APEs build (the
+  arm64 leg's nosplit check is the real gate here) and run on the
+  linux host; full apetest suite green (`ok apetest`), 49 ok lines
+  from the probe with `ok sendmsg` and `ok fdpass` REAL (no skip
+  suffix) - the linux leg runs native SCM_RIGHTS, which validates
+  the probe logic the darwin emulation must now match.
+- macOS proof is the cosmo-ci macos-latest leg on this push: it
+  executes the darwin dispatch (dlsym wiring, shape adapters, the
+  syscall-package branches) via the same mandatory checks.
+
+## Scouting notes for the next darwin item (SIGPROF profiling)
+
+Recorded while enumerating the Syslib for this work, so the
+setitimer bring-up doesn't re-derive it: the loader's Syslib (v10;
+runtime requires v8+) exports sigaction (v4), sigaltstack (v5),
+pthread_kill + pthread_sigmask (v1), raise (v2) - the signal wave
+already drives them - but has NO setitimer entry, and extending the
+Syslib is a non-starter (the compiled-loader cache would serve stale
+structs; the dlsym decision record in os_cosmo_arm64.go). setitimer
+must come from cosmoDlsym("setitimer") like every other libc entry
+this emulation uses; ITIMER_PROF value and struct itimerval layout
+(two timevals, tv_usec i32-vs-i64 caveat as in wait4's rusage fixup)
+need the same in-tree ground-truth check this item did for msghdr.
+SIGPROF delivery then rides the existing wave-8 signal translation
+tables (sigxlat_cosmo.go) and sigtramp.

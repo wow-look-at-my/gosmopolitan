@@ -36,9 +36,12 @@ os/exec (pipes, CreateProcessW spawn, Linux-shaped wait statuses),
 TCP/UDP/unix-domain sockets with deadlines (winsock emulation plus a
 WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV
 recover via VEH, os/signal delivery, async preemption, kill/wait-status
-decode, console Ctrl-C -> SIGINT). Still missing on Windows:
-sendmsg/recvmsg (fd passing), SIGPROF profiling, and Windows/arm64. See
-`DEBUGGING.md` for the detailed ladder. Debug with the sidecars
+decode, console Ctrl-C -> SIGINT). sendmsg/recvmsg with SCM_RIGHTS fd
+passing works on Windows (wave 3) and macOS (2026-07-21, the darwin
+msghdr translation); SIGPROF CPU profiling works on Windows and is
+the one remaining darwin gap. Still missing on Windows: Windows/arm64
+and a few documented fd edges. See `DEBUGGING.md` for the detailed
+ladder. Debug with the sidecars
 (`gdb program.com.dbg`, or `symbol-file` against the running APE);
 runtime tracebacks and pprof need no sidecar. When distributing APEs,
 ship them zstd-compressed: the two arch payloads are highly redundant,
