@@ -4007,6 +4007,28 @@ pass/fail instrument.
 
 # 2026-07-20: exec.LookPath on NT — unix PATH rules against a Windows PATH
 
+> Reconciliation note (2026-07-21): this entry records the fix as
+> developed on its own branch (#64). A concurrently developed fix for
+> the same bug (#63) merged first, and the reconciled #64 merge kept
+> #63's fuller lp_cosmo.go — so three statements below do not
+> describe the merged tree. In the code as merged: the implicit-CWD
+> probe (NoDefaultCurrentDirectoryInExePath + the full ErrDot/
+> SameFile machinery) IS ported; Command/Start's lookExtensions call
+> sites do NOT stay `runtime.GOOS == "windows"`-gated — they gate on
+> a per-lp-file lookExtensionsEnabled() (true on NT hosts), so
+> explicit paths get PATHEXT resolution there too; and the shipped
+> probe is testdata/runtimeprobe/lookpath.go's self-copy dummy
+> (exec.LookPath AND exec.Command, the resolved child actually run,
+> plus a conditional LookPath("go") repro) — the lpcanary flavor
+> below, which the wine A/B exercised, was superseded in the merge.
+> What survives from this branch: the lp_unix.go constraint comment
+> and the flag-shaped argv contract (probeWantArgs + the apetest
+> tail). The red-then-green commit-split CI pin below was mooted on
+> master (the fix landed minutes earlier via #63). The merged
+> implementation's full record is the "2026-07-20: NT —
+> exec.LookPath never worked on Windows hosts" section at the end of
+> this file.
+
 ## Symptom (consumer regression, initially misdiagnosed as argv loss)
 
 go-toolchain's smoke-windows step broke deterministically once the
