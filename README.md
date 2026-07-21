@@ -38,8 +38,9 @@ WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV
 recover via VEH, os/signal delivery, async preemption, kill/wait-status
 decode, console Ctrl-C -> SIGINT). sendmsg/recvmsg with SCM_RIGHTS fd
 passing works on Windows (wave 3) and macOS (2026-07-21, the darwin
-msghdr translation); SIGPROF CPU profiling works on Windows and is
-the one remaining darwin gap. Still missing on Windows: Windows/arm64
+msghdr translation); SIGPROF CPU profiling works on Windows, Linux,
+and macOS (2026-07-21, dlsym'd Apple setitimer) - the wave-9 darwin
+backlog is closed. Still missing on Windows: Windows/arm64
 and a few documented fd edges. See `DEBUGGING.md` for the detailed
 ladder. Debug with the sidecars
 (`gdb program.com.dbg`, or `symbol-file` against the running APE);
