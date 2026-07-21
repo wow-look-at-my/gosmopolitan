@@ -239,7 +239,11 @@ wave-4 charter; step one is a windows-11-arm CI experiment running
 the existing amd64 APE under x86-64 emulation), file/pipe dup(2)
 (ENOSYS on purpose - socket dup works, and file/pipe fds still
 transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
-by design - pair ends cannot cross processes), and
+by design - pair ends cannot cross processes),
+off-host networking (loopback sockets are CI-proven, but off-host
+connect + DNS from NT have no probe, and a consumer run
+field-observed outbound HTTPS timing out on 2026-07-20 - see
+DEBUGGING.md's off-host HTTPS section), and
 real-keyboard/CTRL_CLOSE console coverage (the probe covers the
 GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
 window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
@@ -458,10 +462,11 @@ The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
 each published release a disjoint cmd/go tool-ID (hence build-cache)
 namespace — identical release version strings previously let the org's
 shared GOCACHEPROG cache mix objects across releases into one binary. Local
-source builds are unaffected (they keep the static version), so the existing
-local rule — `go clean -cache` after a local `make.bash` — still applies to
-hand-rebuilt toolchains. Consumers install the fork in seconds instead of a
-~3 minute `make.bash`:
+source builds keep the static version and need no stamp: since 2026-07-20
+tool IDs are content-derived (see Fork Gotchas), so a hand-rebuilt
+toolchain self-invalidates stale cache entries and the old `go clean
+-cache`-after-`make.bash` rule is obsolete for local builds too. Consumers
+install the fork in seconds instead of a ~3 minute `make.bash`:
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz

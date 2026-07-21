@@ -4185,6 +4185,14 @@ host suite, entire threads step incl. threaddemo 10x, the B3 demo
 gates, the 4-package threads go test and the wasip1 rejection check,
 wasmexport testdir on both targets): all green.
 
+Triage note: with this fix on master, these signatures are REAL
+regressions, never flakes — `threaddemo: FAIL: third spawn reused a
+parked worker M`, `threaddemo: FAIL: worker Ms never parked
+(parked=N after 10s)`, and the test's `re-spawn did not reuse a
+parked M: M count grew A -> B`. Investigate; do not just re-run the
+job (the old "re-kick a parked-M red" practice predates the fix and
+is obsolete).
+
 Same-class sibling, fixed in the same change:
 TestWasmThreadsRunOnNewM's re-spawn assertion
 (src/runtime/wasmthreads_test.go) had the same
@@ -4452,6 +4460,27 @@ Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
 case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
+
+# 2026-07-20: NT — off-host HTTPS from an APE times out (OPEN, no fix landed)
+
+Field observation from consumer CI (windows-latest, fork v213, run
+29741678227 of a downstream repo): the APE's HTTPS GET to
+api.github.com timed out (10s client timeout) in every red run while
+runner-native fetches on the same host succeeded. This is DISTINCT
+from the exec.LookPath defect observed in the same runs (fixed
+2026-07-20, sections above); as of 2026-07-21 no fork-side fix for
+the network half has landed.
+
+Coverage gap: runtimeprobe's TCP/UDP/AF_UNIX checks are
+loopback-only, so off-host connect and name resolution from NT have
+no CI probe — this failure mode is invisible to the current gauntlet.
+Unverified hypothesis (first suspect, not a diagnosis): the pure-Go
+resolver's unix assumptions (/etc/resolv.conf and friends) have no NT
+translation in the path layer, so DNS lookups may never reach a real
+nameserver. Candidate NT-backlog items: root-cause with a minimal
+http.Get repro on windows-latest, an off-host network/DNS probe
+(needs an endpoint reachable from CI), and resolver bring-up on NT if
+the hypothesis holds.
 
 # 2026-07-21: stale-PR triage
 
