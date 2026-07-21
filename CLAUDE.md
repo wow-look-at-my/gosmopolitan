@@ -391,7 +391,10 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID unit tests. Every build leg additionally
+strip/GOCOSMODEBUG/tool-ID unit tests plus the GOOS=cosmo
+internal/runtime/syscall/cosmo package tests via the misc/cosmo
+wrappers (darwin sendmsg/recvmsg cmsg repack, signal translation
+tables, epoll layout). Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
