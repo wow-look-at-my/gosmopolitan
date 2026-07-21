@@ -33,6 +33,11 @@ import "unsafe"
 //   - sigaltstack (offset 296) is sysret-wrapped libc sigaltstack and
 //     takes Apple's stack_t {sp, size, flags} - Linux arm64 orders it
 //     {sp, flags, pad, size} - with SS_DISABLE = 4 (Linux: 2).
+//   - setitimer is not in the Syslib at all; darwinSetitimer calls
+//     raw Apple libc setitimer resolved via dlsym at startup
+//     (cosmoDarwinSetitimerFn, os_cosmo_arm64.go) and translates the
+//     itimerval layout (Apple's tv_usec is a 32-bit suseconds_t;
+//     Linux arm64's is int64).
 //
 // All functions here can run in the narrowest runtime contexts:
 // setsig/setsigstack/getsig during dieFromSignal on the signal stack,
@@ -234,3 +239,37 @@ func sigaltstack(new, old *stackt) {
 //
 //go:noescape
 func sigaltstackLinux(new, old *stackt)
+
+// darwinSetitimer implements setitimer on XNU hosts: translate the
+// Linux itimerval both ways and call Apple libc setitimer, resolved
+// via dlsym at startup (the libc stub is a shallow syscall wrapper,
+// so the direct cosmoLibcCall6 style used for kqueue/kevent applies -
+// no asmcgocall needed). The _ITIMER_* mode values coincide on both
+// systems, so mode passes through. Failures are ignored like the
+// Linux asm path: a dead timer surfaces as a zero-sample profile,
+// which the runtimeprobe cpuprof check turns into a loud FAIL.
+//
+// nosplit so the stack cannot move between taking anewp/aoldp and the
+// call (the darwinSigaction pattern).
+//
+//go:nosplit
+func darwinSetitimer(mode int32, new, old *itimerval) {
+	if cosmoDarwinSetitimerFn == 0 {
+		return
+	}
+	var anew, aold xnuItimerval
+	var anewp, aoldp uintptr
+	if new != nil {
+		anew.it_interval = cosmoTimevalL2X(&new.it_interval)
+		anew.it_value = cosmoTimevalL2X(&new.it_value)
+		anewp = uintptr(unsafe.Pointer(&anew))
+	}
+	if old != nil {
+		aoldp = uintptr(unsafe.Pointer(&aold))
+	}
+	cosmoLibcCall6(cosmoDarwinSetitimerFn, uintptr(mode), anewp, aoldp, 0, 0, 0)
+	if old != nil {
+		old.it_interval = cosmoTimevalX2L(&aold.it_interval)
+		old.it_value = cosmoTimevalX2L(&aold.it_value)
+	}
+}

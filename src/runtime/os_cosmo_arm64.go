@@ -209,6 +209,7 @@ var (
 	dlsymNameError         = []byte("__error\x00")
 	dlsymNameKqueue        = []byte("kqueue\x00")
 	dlsymNameKevent        = []byte("kevent\x00")
+	dlsymNameSetitimer     = []byte("setitimer\x00")
 
 	dlsymNameSocket      = []byte("socket\x00")
 	dlsymNameSocketpair  = []byte("socketpair\x00")
@@ -244,6 +245,14 @@ var (
 	cosmoDarwinKeventFn uintptr
 )
 
+// cosmoDarwinSetitimerFn is Apple libc setitimer(2), resolved at
+// startup; darwinSetitimer (signal_cosmo_xnu.go) arms the SIGPROF
+// profiling timer through it (the Syslib has no setitimer entry).
+// Zero when unresolved: arming silently does nothing, which surfaces
+// as a zero-sample profile - the runtimeprobe cpuprof check turns
+// that into a loud FAIL.
+var cosmoDarwinSetitimerFn uintptr
+
 // cosmoDarwinErrorFn is Apple's __error(), the address-of-errno function,
 // resolved at startup for runtime-internal errno fetches. (The syscall
 // package's darwin emulation receives its own copy via SetDarwinFns.)
@@ -273,6 +282,7 @@ func osArchInit() {
 	cosmoDarwinErrorFn = cosmoDlsym(&dlsymNameError[0])
 	cosmoDarwinKqueueFn = cosmoDlsym(&dlsymNameKqueue[0])
 	cosmoDarwinKeventFn = cosmoDlsym(&dlsymNameKevent[0])
+	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
@@ -410,6 +420,27 @@ func pipe2Linux(flags int32) (r, w int32, errno int32)
 
 //go:noescape
 func cosmo_pipe_trampoline(fds *int32) int32
+
+// setitimer arms the profiling interval timer (the only runtime
+// caller is setProcessCPUProfilerTimer). Linux hosts use the raw
+// syscall; XNU hosts translate the itimerval layout (Apple's tv_usec
+// is 32-bit) and call Apple libc setitimer resolved via dlsym
+// (darwinSetitimer, signal_cosmo_xnu.go) - the Syslib has no
+// setitimer entry, and extending it is rejected per the cosmoDlsym
+// decision record above.
+func setitimer(mode int32, new, old *itimerval) {
+	if isdarwin() {
+		darwinSetitimer(mode, new, old)
+		return
+	}
+	setitimerLinux(mode, new, old)
+}
+
+// setitimerLinux is the raw Linux setitimer syscall
+// (sys_cosmo_arm64.s).
+//
+//go:noescape
+func setitimerLinux(mode int32, new, old *itimerval)
 
 // minitProcid returns the value minit stores in m.procid: on macOS the
 // FULL pthread_t from pthread_self (gettid's uint32 return would

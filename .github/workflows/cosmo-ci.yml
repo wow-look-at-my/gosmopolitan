@@ -161,6 +161,10 @@ jobs:
           # APE that executes natively on linux.
           export PATH="$PWD/misc/cosmo:$PATH"
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
+          # Runtime-package cosmo unit tests: the Apple itimerval ABI
+          # pins + timeval translation behind the darwin SIGPROF
+          # setitimer dispatch, and the signal translation tables.
+          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
