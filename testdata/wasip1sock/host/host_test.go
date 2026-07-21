@@ -5,8 +5,8 @@
 // End-to-end tests for GOWASI=wasmedgesock networking: they build the
 // guest programs from ../guest with this tree's toolchain (bin/go at
 // the repository root, or $WASIP1SOCK_GO) and run them under the
-// custom WASI host in this package, against real TCP servers on the
-// host side.
+// custom WASI host in this package, against real TCP and UDP servers
+// on the host side.
 package main
 
 import (
@@ -95,7 +95,7 @@ func buildGuests() (string, error) {
 			}
 			return nil
 		}
-		for _, pkg := range []string{"echo", "httpget", "httpserve", "refused", "deadline"} {
+		for _, pkg := range []string{"echo", "httpget", "httpserve", "refused", "deadline", "udpecho", "udpconnected"} {
 			if err := build(pkg+".wasm", pkg, "wasmedgesock"); err != nil {
 				buildErr = err
 				return
@@ -336,6 +336,67 @@ func TestReadDeadline(t *testing.T) {
 	}
 	if !strings.Contains(out, "timeout: true") {
 		t.Errorf("read did not fail with a timeout error")
+	}
+}
+
+// startUDPEchoServer runs a host-side UDP echo server that answers
+// each datagram to its source.
+func startUDPEchoServer(t *testing.T) string {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 64<<10)
+		for {
+			n, addr, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteToUDP(buf[:n], addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+func TestUDPEcho(t *testing.T) {
+	addr := startUDPEchoServer(t)
+	code, out := runGuest(t, "udpecho.wasm", []string{"UDPECHO_ADDR=" + addr}, nil)
+	t.Logf("guest output:\n%s", out)
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	for _, want := range []string{
+		"udpecho-host: ok",
+		"udpecho-local: ok msgs=8",
+		"deadline timeout: true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestUDPConnected(t *testing.T) {
+	addr := startUDPEchoServer(t)
+	code, out := runGuest(t, "udpconnected.wasm", []string{"UDPECHO_ADDR=" + addr}, nil)
+	t.Logf("guest output:\n%s", out)
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	for _, want := range []string{
+		"udpconnected: ok msgs=3",
+		"writeto-connected error:",
+		"deadline timeout: true",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if !strings.Contains(out, "pre-connected") {
+		t.Errorf("WriteTo on a connected conn should fail with ErrWriteToConnected")
 	}
 }
 

@@ -53,16 +53,16 @@ on every push. Install it in seconds instead of building from source:
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
-export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
-go version   # go version go1.26.4cosmo linux/amd64
+export PATH="$PWD/go/bin:$PATH"
+go version   # go version go1.26.4cosmo.r<N> linux/amd64
 ```
 
-`GOTOOLCHAIN=local` matters: the shipped `go.env` keeps upstream's
-`GOTOOLCHAIN=auto`, so without it a go.mod requiring a newer Go version would
-silently download an official (non-cosmo) toolchain. And remember the fork
-defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an
-immutable release instead of the rolling branch latest, use `?v=N` in place of
-`branch=master`.
+The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs
+itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides;
+releases published before 2026-07-20 shipped `auto` and still need
+`GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin
+`GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of
+the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 

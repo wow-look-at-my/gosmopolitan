@@ -189,6 +189,7 @@ var (
 	dlsymNameGetegid    = []byte("getegid\x00")
 	dlsymNameUmask      = []byte("umask\x00")
 	dlsymNameFcntl      = []byte("fcntl\x00")
+	dlsymNameDup        = []byte("dup\x00")
 	dlsymNameMkdirat    = []byte("mkdirat\x00")
 	dlsymNameUnlinkat   = []byte("unlinkat\x00")
 	dlsymNameRenameat   = []byte("renameat\x00")
@@ -279,6 +280,7 @@ func osArchInit() {
 		Getegid:       cosmoDlsym(&dlsymNameGetegid[0]),
 		Umask:         cosmoDlsym(&dlsymNameUmask[0]),
 		Fcntl:         cosmoDarwinFcntlFn,
+		Dup:           cosmoDlsym(&dlsymNameDup[0]),
 		Mkdirat:       cosmoDlsym(&dlsymNameMkdirat[0]),
 		Unlinkat:      cosmoDlsym(&dlsymNameUnlinkat[0]),
 		Renameat:      cosmoDlsym(&dlsymNameRenameat[0]),

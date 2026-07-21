@@ -169,18 +169,46 @@ func (b *Builder) toolID(name string) string {
 		}
 
 		line := stdout.String()
-		f := strings.Fields(line)
-		if len(f) < 3 || f[0] != name && path != VetTool || f[1] != "version" || strings.Contains(f[2], "devel") && !strings.HasPrefix(f[len(f)-1], "buildID=") {
+		id, ok := parseToolID(name, path == VetTool, line)
+		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
-		if strings.Contains(f[2], "devel") {
-			// On the development branch, use the content ID part of the build ID.
-			return contentID(f[len(f)-1])
-		}
-		// For a release, the output is like: "compile version go1.9.1 X:framepointer".
-		// Use the whole line.
-		return strings.TrimSpace(line)
+		return id
 	})
+}
+
+// parseToolID computes the tool ID from one line of "-V=full" output printed
+// by the named tool, reporting ok=false if the line is malformed.
+//
+// Tool binaries on the development branch print a trailing "buildID=" field
+// carrying the binary's own build ID, and so does every build of the
+// Cosmopolitan fork, which stamps the same release-style version
+// (go1.26.4cosmo) into every build (see objabi's versionFlag). Whenever that
+// field is present, the tool ID is the content ID part of the tool's build
+// ID, so the ID describes what the tool is, not what version it claims to
+// be: two different toolchain builds must never share tool IDs, or build
+// caches (GOCACHE and any shared GOCACHEPROG tier) will serve stale,
+// ABI-incompatible objects across toolchain builds. Using only the content
+// ID (not the action ID half) is what lets make.bash's bootstrap stages
+// converge; GOEXPERIMENT variation stays visible because experiments are
+// hashed into action IDs separately (see buildActionID and linkActionID)
+// and baked-in experiments change the tool binaries themselves.
+//
+// For plain releases the tool ID is the whole line (version and any
+// X:experiment suffix), which keeps official release builds reproducible
+// across build hosts.
+func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) {
+	f := strings.Fields(line)
+	if len(f) < 3 || f[0] != name && !isVetTool || f[1] != "version" || strings.Contains(f[2], "devel") && !strings.HasPrefix(f[len(f)-1], "buildID=") {
+		return "", false
+	}
+	if strings.HasPrefix(f[len(f)-1], "buildID=") {
+		// Use the content ID part of the tool's own build ID.
+		return contentID(f[len(f)-1]), true
+	}
+	// For a release, the output is like: "compile version go1.9.1 X:framepointer".
+	// Use the whole line.
+	return strings.TrimSpace(line), true
 }
 
 // gccToolID returns the unique ID to use for a tool that is invoked

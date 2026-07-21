@@ -10,6 +10,7 @@ import (
 	"cmd/internal/dwarf"
 	"cmd/internal/objabi"
 	"cmd/internal/src"
+	"cmd/internal/sys"
 	"fmt"
 	"slices"
 	"strings"
@@ -376,6 +377,19 @@ func (ctxt *Link) populateDWARF(curfn Func, s *LSym) {
 		Scopes:        scopes,
 		InlCalls:      inlcalls,
 		UseBASEntries: ctxt.UseBASEntries,
+	}
+	if ctxt.Arch.Family == sys.Wasm {
+		// Wasm emits no .debug_frame, so the subprogram's frame base
+		// must compute the CFA directly instead of referring to call
+		// frame information. The CFA that variable StackOffsets are
+		// relative to sits just above the frame and the 8-byte return
+		// address the caller pushed (wasm has FixedFrameSize 0 and an
+		// x86-style caller push; see the NAME_PARAM handling in
+		// cmd/internal/obj/wasm.preprocess): CFA = SP + framesize + 8.
+		// SP only moves in the prologue/epilogue on wasm, so a single
+		// constant offset from the SP global is exact throughout the
+		// function body.
+		fnstate.WasmCFAOffset = s.Func().Text.To.Offset + 8
 	}
 	if absfunc != nil {
 		err = dwarf.PutAbstractFunc(dwctxt, fnstate)

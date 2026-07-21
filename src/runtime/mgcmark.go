@@ -1069,14 +1069,16 @@ func scanstack(gp *g, gcw *gcWork) int64 {
 //go:nowritebarrier
 func scanframeworker(frame *stkframe, state *stackScanState, gcw *gcWork) {
 	if _DebugGC > 1 && frame.continpc != 0 {
-		print("scanframe ", funcname(frame.fn), "\n")
+		fpfx, fname := funcnamePieces(frame.fn)
+		print("scanframe ", fpfx, fname, "\n")
 	}
 
 	isAsyncPreempt := frame.fn.valid() && frame.fn.funcID == abi.FuncID_asyncPreempt
 	isDebugCall := frame.fn.valid() && frame.fn.funcID == abi.FuncID_debugCallV2
 	if state.conservative || isAsyncPreempt || isDebugCall {
 		if debugScanConservative {
-			println("conservatively scanning function", funcname(frame.fn), "at PC", hex(frame.continpc))
+			fpfx, fname := funcnamePieces(frame.fn)
+			print("conservatively scanning function ", fpfx, fname, " at PC ", hex(frame.continpc), "\n")
 		}
 
 		// Conservatively scan the frame. Unlike the precise
@@ -1208,8 +1210,18 @@ var wasmIdleMarkYield bool
 // after a stack switch, where "pause" would return to the export's JS
 // caller mid-call - keep the upstream behavior of scheduling the idle
 // worker again.
+//
+// Constant false under GOWASM=threads too (see the guard in
+// gcDrainMarkWorkerIdle): the whole yield mechanism exists to keep the
+// single-threaded port's event loop responsive during mark, but with
+// threads the event loop lives on the main M, which parks in it
+// non-blockingly whenever it is idle - and findRunnable runs
+// concurrently on worker Ms, where wasmIdleMarkCanYield's read of the
+// main-thread-only events stack is a data race (observed as a torn
+// slice read crashing with "unexpected signal during runtime
+// execution" in the GOMAXPROCS=4 runtime suite).
 func wasmIdleMarkThrottled() bool {
-	return goos.IsJs != 0 && wasmIdleMarkYield && wasmIdleMarkCanYield()
+	return goos.IsJs != 0 && !wasmThreadsEnabled && wasmIdleMarkYield && wasmIdleMarkCanYield()
 }
 
 // gcDrainMarkWorkerIdle is a wrapper for gcDrain that exists to better account
@@ -1221,12 +1233,18 @@ func gcDrainMarkWorkerIdle(gcw *gcWork) {
 	// nothing else to do.
 	start := nanotime()
 	gcDrain(gcw, gcDrainIdle|gcDrainUntilPreempt|gcDrainFlushBgCredit)
-	if goos.IsJs != 0 && nanotime()-start >= gcIdleMarkDrainBudget && (!gcw.empty() || gcMarkWorkAvailable()) {
+	if goos.IsJs != 0 && !wasmThreadsEnabled && nanotime()-start >= gcIdleMarkDrainBudget && (!gcw.empty() || gcMarkWorkAvailable()) {
 		// js/wasm: the deadline expired with work remaining. Throttle
 		// idle marking until the event loop has had a chance to run
 		// (see wasmIdleMarkYield above); otherwise the scheduler would
 		// immediately start another idle drain and starve the host
 		// until mark completion.
+		//
+		// Not under GOWASM=threads: idle drains there run on worker Ms
+		// (or on a main M whose event loop stays responsive via the
+		// non-blocking park), the flag write would race the main
+		// thread's clear, and wasmIdleMarkThrottled ignores the flag
+		// under threads anyway (see there).
 		wasmIdleMarkYield = true
 	}
 }

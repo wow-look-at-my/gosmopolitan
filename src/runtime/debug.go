@@ -69,7 +69,10 @@ import (
 // [default]: https://go.dev/doc/godebug#default
 func GOMAXPROCS(n int) int {
 	if GOARCH == "wasm" && n > 1 {
-		n = 1 // WebAssembly has no threads yet, so only one CPU is possible.
+		// Without GOWASM=threads WebAssembly has no threads, so only one
+		// CPU is possible. Under GOWASM=threads the value is honored,
+		// bounded by the worker pool size + 1 (wasmClampGOMAXPROCS).
+		n = int(wasmClampGOMAXPROCS(int32(n)))
 	}
 
 	lock(&sched.lock)

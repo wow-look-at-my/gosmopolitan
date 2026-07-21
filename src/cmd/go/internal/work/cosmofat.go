@@ -5,6 +5,7 @@
 package work
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,6 +51,83 @@ func cosmoStripEnabled() bool {
 	return true
 }
 
+// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the
+// debug mode it selects:
+//
+//	"full" (or unset): today's behavior - the shipped APE is stripped and
+//	    the per-architecture debug sidecars are pristine copies of the
+//	    linker's ELF outputs (runnable, cosmocc parity).
+//	"slim": debug-only sidecars (the in-linker equivalent of
+//	    objcopy --only-keep-debug) - symbol table and DWARF kept, contents
+//	    of allocated sections dropped since the APE already ships them.
+//	    Same sidecar names; the shipped APE is unchanged.
+//	"min": slim's sidecar shape, and every GOOS=cosmo compile generates
+//	    less DWARF in the first place: location lists and inline records
+//	    are omitted (see cosmoDebugGcflags). Smallest sidecars; debuggers
+//	    show <optimized out> for arguments/locals and no inlined-call
+//	    frames. Runtime tracebacks and pprof are unaffected (pclntab).
+//	"compact": slim sidecars, plus a compact debug view appended to the
+//	    APE past its loadable span (never mapped at runtime), so debuggers
+//	    can symbolize the assimilated binary with no sidecar present.
+//
+// The sidecar side of the mode only matters when the fat merge strips and
+// writes sidecars at all: GOCOSMOSTRIP=0 and an explicit -s/-w in -ldflags
+// both suppress sidecars entirely (see cosmoMergeArgs). min's compile-time
+// trims apply to every GOOS=cosmo compile regardless, so even a
+// GOCOSMOSTRIP=0 build carries the reduced DWARF in its embedded payloads.
+func parseCosmoDebugMode(v string) (string, error) {
+	switch v {
+	case "", "full":
+		return "full", nil
+	case "slim", "min", "compact":
+		return v, nil
+	}
+	return "", fmt.Errorf("invalid GOCOSMODEBUG value %q: must be full, slim, min, or compact (or unset)", v)
+}
+
+// cosmoDebugMode returns the GOCOSMODEBUG mode for fat APE merges,
+// stopping the build with an error for invalid values (unlike GOCOSMOFAT
+// and GOCOSMOSTRIP, whose values are binary, a typo here would silently
+// select a wrong debug-info shape).
+func cosmoDebugMode() string {
+	mode, err := parseCosmoDebugMode(os.Getenv("GOCOSMODEBUG"))
+	if err != nil {
+		base.Fatalf("go: %v", err)
+	}
+	return mode
+}
+
+// cosmoDebugGcflags returns the extra compiler flags a GOCOSMODEBUG mode
+// injects into every GOOS=cosmo compile. Only "min" injects any: it drops
+// DWARF location lists (arguments/locals become <optimized out> in
+// debuggers, -25% of a slim sidecar) and inline records (no inlined-call
+// frames in debuggers, a further -12%). The pclntab is untouched, so
+// runtime tracebacks, runtime/pprof, and the inline unwinding they do
+// keep working.
+func cosmoDebugGcflags(mode string) []string {
+	if mode != "min" {
+		return nil
+	}
+	return []string{"-dwarflocationlists=false", "-gendwarfinl=0"}
+}
+
+// cosmoDebugInit validates GOCOSMODEBUG for GOOS=cosmo builds (an invalid
+// value stops any cosmo build early, not just fat merges) and applies the
+// min mode's compile-time DWARF trims by appending to forcedGcflags.
+// Called from BuildInit.
+//
+// Forced flags precede the user's -gcflags in the compiler invocation and
+// later flags win, so an explicit user -gcflags setting overrides the
+// injected trims. The injected flags are part of the build-cache key
+// (like all gcflags), so switching modes with different flags recompiles
+// affected packages rather than reusing stale objects.
+func cosmoDebugInit() {
+	if cfg.Goos != "cosmo" || cfg.BuildToolchainName != "gc" {
+		return
+	}
+	forcedGcflags = append(forcedGcflags, cosmoDebugGcflags(cosmoDebugMode())...)
+}
+
 // ldflagsSpecifyStrip reports whether the user's -ldflags for a package
 // contain an explicit -s or -w (in any spelling the linker accepts: -s,
 // --s, -s=..., and likewise for -w). When the user has taken a position on
@@ -77,11 +155,24 @@ func ldflagsSpecifyStrip(ldflags []string) bool {
 // cosmoMergeArgs returns the linker arguments that merge p's built target
 // and its sibling-architecture build into a fat APE at p.Target, applying
 // the default strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the
-// user's -ldflags for p already specify -s/-w.
+// user's -ldflags for p already specify -s/-w. GOCOSMODEBUG selects how
+// much debug info the sidecars (and, for compact, the APE itself) carry;
+// when the merge passes no strip flags at all there are no sidecars, so
+// the mode has nothing to apply to and is deliberately not passed on.
 func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	args := []string{"-apefat", p.Target + "," + sibling, "-o", p.Target}
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
+		if mode := cosmoDebugMode(); mode != "full" {
+			if mode == "min" {
+				// min's extra reduction happens at compile time
+				// (cosmoDebugInit); its merge-time sidecar
+				// transform is exactly slim's, so the linker
+				// only knows the three -apedbgmode values.
+				mode = "slim"
+			}
+			args = append(args, "-apedbgmode="+mode)
+		}
 	}
 	return args
 }
@@ -114,6 +205,7 @@ func cosmoFatten(mains []*load.Package, dir bool) {
 	if len(mains) == 0 {
 		return
 	}
+	cosmoDebugMode() // reject invalid GOCOSMODEBUG before the sibling build
 	otherArch := cosmoFatArches[cfg.Goarch]
 
 	goCmd, err := os.Executable()
@@ -178,6 +270,7 @@ func cosmoFattenInstall(mains []*load.Package) {
 	if !cosmoFatEnabled() || len(mains) == 0 {
 		return
 	}
+	cosmoDebugMode() // reject invalid GOCOSMODEBUG before the sibling build
 	otherArch := cosmoFatArches[cfg.Goarch]
 
 	goCmd, err := os.Executable()

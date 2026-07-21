@@ -29,15 +29,25 @@ var probeOkChecks = []string{
 	"sleep", "ticker", "after", "ctxtimeout",
 	"tcplisten", "tcpecho", "deadline", "tcpserver", "udp",
 	"unixsock", "unixecho",
-	"execchild",
+	"socketpair", "sockpairpoll",
+	"sendmsg", "netbuffers", "fdpass",
+	"execchild", "lookpath",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
 	"remove", "rmdir",
 	"readdir", "walkdir", "removeall",
-	"segvrecover", "sigterm", "sigusr2", "preempt", "waitsig",
+	"lookpath",
+	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "waitsig",
 	"all",
 }
+
+// probeFlagArgs is the fixed flag-shaped argv tail the probe demands
+// after the mark (runtimeprobe.go probeWantArgs; keep in sync). It
+// pins that "-"/"--"-prefixed tokens and a mixed positional+flag
+// vector reach os.Args byte-intact on every host - on Windows that
+// exercises the NT personality's GetCommandLineW parse.
+var probeFlagArgs = []string{"--help", "-x", "--key=value", "trailing-arg"}
 
 func copyProbeBinary(t *testing.T) string {
 	t.Helper()
@@ -65,6 +75,7 @@ func TestRuntimeProbe(t *testing.T) {
 	// test that still logs the partial output, never a hung CI job.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
+	args := append([]string{mark}, probeFlagArgs...)
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
@@ -72,10 +83,10 @@ func TestRuntimeProbe(t *testing.T) {
 		// its PE header; CreateProcess needs no shell. NT bring-up
 		// wave 2 grew the runtime surface the probe needs (file I/O,
 		// sockets, signals, os/exec, async preemption).
-		cmd = exec.CommandContext(ctx, bin, mark)
+		cmd = exec.CommandContext(ctx, bin, args...)
 	default:
 		// Unix: invoke through a shell for the APE bootstrap.
-		cmd = exec.CommandContext(ctx, "/bin/sh", bin, mark)
+		cmd = exec.CommandContext(ctx, "/bin/sh", append([]string{bin}, args...)...)
 	}
 	cmd.WaitDelay = 30 * time.Second
 	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_MARK="+mark)

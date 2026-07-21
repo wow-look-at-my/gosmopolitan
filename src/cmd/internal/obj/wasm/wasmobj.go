@@ -115,7 +115,16 @@ var unaryDst = map[obj.As]bool{
 	AI64Store8:    true,
 	AI64Store16:   true,
 	AI64Store32:   true,
-	ACALLNORESUME: true,
+	// Atomic stores (threads proposal) carry their memarg offset in the
+	// destination operand, exactly like the plain stores above.
+	AI32AtomicStore:   true,
+	AI64AtomicStore:   true,
+	AI32AtomicStore8:  true,
+	AI32AtomicStore16: true,
+	AI64AtomicStore8:  true,
+	AI64AtomicStore16: true,
+	AI64AtomicStore32: true,
+	ACALLNORESUME:     true,
 }
 
 var Linkwasm = obj.LinkArch{
@@ -132,6 +141,7 @@ var (
 	sigpanic              *obj.LSym
 	wasm_pc_f_loop_export *obj.LSym
 	runtimeNotInitialized *obj.LSym
+	growEpoch             *obj.LSym
 )
 
 const (
@@ -168,6 +178,7 @@ func instinit(ctxt *obj.Link) {
 	sigpanic = ctxt.LookupABI("runtime.sigpanic", obj.ABIInternal)
 	wasm_pc_f_loop_export = ctxt.Lookup("wasm_pc_f_loop_export")
 	runtimeNotInitialized = ctxt.Lookup("runtime.notInitialized")
+	growEpoch = ctxt.Lookup("runtime.wasmGrowEpoch")
 }
 
 func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
@@ -359,13 +370,38 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		} else {
 			// large stack: SP-framesize <= stackguard-StackSmall
 			//              SP <= stackguard+(framesize-StackSmall)
+			//
+			// stackguard0 may hold the stackPreempt sentinel (~0). The
+			// 32-bit add below would wrap past it and silently SKIP the
+			// stack check, letting a large frame run below stack.lo
+			// (caught later as a bogus "split stack overflow" when a
+			// callee's morestack fires). Without GOWASM=threads this
+			// cannot happen - nothing arms preemption while a wasm
+			// goroutine is running - but with it another thread's
+			// preemptone/suspendG can set the sentinel exactly while
+			// this prologue runs. Test the sentinel explicitly (full
+			// 64-bit compare; the wrapped-add hazard is exactly the old
+			// "TODO: handle wraparound case").
+			//
+			// Get g
+			// I32WrapI64
+			// I64Load $stackguard0
+			// I64Const $stackPreempt
+			// I64Eq
 			// Get SP
 			// Get g
 			// I32WrapI64
 			// I32Load $stackguard0
 			// I32Const $(framesize-StackSmall)
 			// I32Add
-			// I32GtU
+			// I32LeU
+			// I32Or
+
+			p = appendp(p, AGet, regAddr(REGG))
+			p = appendp(p, AI32WrapI64)
+			p = appendp(p, AI64Load, constAddr(2*int64(ctxt.Arch.PtrSize))) // G.stackguard0
+			p = appendp(p, AI64Const, constAddr(-1314))                     // runtime.stackPreempt (uintptrMask & -1314)
+			p = appendp(p, AI64Eq)
 
 			p = appendp(p, AGet, regAddr(REG_SP))
 			p = appendp(p, AGet, regAddr(REGG))
@@ -374,8 +410,9 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AI32Const, constAddr(framesize-abi.StackSmall))
 			p = appendp(p, AI32Add)
 			p = appendp(p, AI32LeU)
+
+			p = appendp(p, AI32Or)
 		}
-		// TODO(neelance): handle wraparound case
 
 		p = appendp(p, AIf)
 		// This CALL does *not* have a resume point after it
@@ -1048,6 +1085,7 @@ var notUsePC_B = map[string]bool{
 	"wasm_export_run":         true,
 	"wasm_export_resume":      true,
 	"wasm_export_getsp":       true,
+	"wasm_export_thread_run":  true,
 	"wasm_pc_f_loop":          true,
 	"wasm_pc_f_loop_export":   true,
 	"gcWriteBarrier":          true,
@@ -1107,6 +1145,11 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		useAssemblyRegMap()
 	case "wasm_pc_f_loop_export":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
+		useAssemblyRegMap()
+	case "wasm_export_thread_run":
+		// One i32 parameter (worker id, R0), then two i32 scratch
+		// locals (R1, R2) and two i64 scratch locals (R3, R4).
+		varDecls = []*varDecl{{count: 2, typ: i32}, {count: 2, typ: i64}}
 		useAssemblyRegMap()
 	case "memchr", "memcmp":
 		varDecls = []*varDecl{{count: 2, typ: i32}}
@@ -1270,6 +1313,10 @@ func assemble(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		case obj.ANOP, obj.ATEXT, obj.AFUNCDATA, obj.APCDATA:
 			// ignore
 			continue
+		}
+
+		if buildcfg.GOWASM.Threads && isAtomicMemoryAccess(p.As) {
+			writeGrowEpochGuard(ctxt, s, w)
 		}
 
 		writeOpcode(w, p.As)
@@ -1463,6 +1510,108 @@ func updateLocalSP(w *bytes.Buffer) {
 	writeUleb128(w, 0) // global SP
 	writeOpcode(w, ALocalSet)
 	writeUleb128(w, 1) // local SP
+}
+
+// growEpochGlobal is the index of the per-instance "observed grow epoch"
+// wasm global. It comes right after the 8 register globals (SP..PAUSE,
+// see regVars above) and is emitted by the linker only under
+// GOWASM=threads (writeGlobalSec in cmd/link/internal/wasm/asm.go must
+// stay in sync).
+const growEpochGlobal = 8
+
+// isAtomicMemoryAccess reports whether as is a threads-proposal (0xFE)
+// instruction that accesses linear memory: the atomic loads, stores, RMW
+// ops, and memory.atomic.notify/wait32/wait64. atomic.fence is the one
+// 0xFE instruction with no memory operand.
+func isAtomicMemoryAccess(as obj.As) bool {
+	return as >= AMemoryAtomicNotify && as < ALast && as != AAtomicFence
+}
+
+// writeGrowEpochGuard emits the shared-memory grow-observation guard that
+// precedes every atomic memory access under GOWASM=threads.
+//
+// Engines bounds-check ATOMIC accesses explicitly against a per-instance
+// cached memory size that can lag cross-thread memory.grow (V8 does this
+// even in trap-handler builds, where plain accesses go through guard
+// pages backed by truly-committed memory and never see the problem). So
+// after thread A grows the shared memory and publishes a pointer into
+// the new region with correct synchronization, thread B's first ATOMIC
+// access to that address can still trap: B's instance has not observed
+// the grow. That is spec-permitted shared-memory behavior, and it was
+// the root cause of the nondeterministic GOWASM=threads worker crash at
+// runtime.newMarkBits (the first atomic touch of a freshly sysAlloc'd
+// gcBits arena chunk grown by another thread). Executing memory.grow 0
+// on the lagging instance resynchronizes its cached size - memory.grow
+// is sequentially consistent with all grows in the cluster.
+//
+// The guard compares runtime.wasmGrowEpoch (a shared-memory counter that
+// sbrk bumps under memlock right after every successful grow; it lives
+// in static data within the initial memory, so loading it can never
+// itself be out of bounds) against this instance's observed-epoch global
+// (growEpochGlobal, per-instance state readable without a memory
+// access). On mismatch - rare: only after some thread grew the memory -
+// it resyncs and adopts the epoch value loaded BEFORE the memory.grow 0,
+// so the observed epoch can never run ahead of the resynced bounds:
+//
+//	i32.const $runtime.wasmGrowEpoch
+//	i32.load
+//	global.get $growEpochGlobal
+//	i32.ne
+//	if
+//	  i32.const $runtime.wasmGrowEpoch
+//	  i32.load                 (pre-grow epoch value, kept on the stack)
+//	  i32.const 0
+//	  memory.grow
+//	  drop
+//	  global.set $growEpochGlobal
+//	end
+//
+// Hot path: i32.const + i32.load + global.get + i32.ne + untaken if
+// (5 instructions, one always-in-cache static load). Why this is
+// complete: the epoch bump happens-before any publication of a pointer
+// into the grown region (sbrk has not returned yet when it bumps), a
+// correctly synchronized consumer observes that publication through an
+// atomic operation, and the guard of its NEXT atomic access reads the
+// epoch after that synchronization point, so happens-before delivers the
+// bumped value before any atomic can address the new region. The guard
+// and its atomic op are straight-line code in one function body (no
+// calls, no loop backedges), so a goroutine cannot migrate to a
+// different instance between the resync and the access.
+//
+// The guard pushes and pops only its own operand-stack values, so it can
+// sit between an atomic instruction and its already-pushed operands, and
+// it is emitted only under GOWASM=threads: non-threads builds contain no
+// 0xFE instructions and assemble byte-identically to before.
+func writeGrowEpochGuard(ctxt *obj.Link, s *obj.LSym, w *bytes.Buffer) {
+	loadEpoch := func() {
+		writeOpcode(w, AI32Const)
+		s.AddRel(ctxt, obj.Reloc{
+			Type: objabi.R_ADDR,
+			Off:  int32(w.Len()),
+			Siz:  RelocLEBSize,
+			Sym:  growEpoch,
+		})
+		w.Write(relocLEBPlaceholder)
+		writeOpcode(w, AI32Load)
+		writeUleb128(w, 2) // alignment 2^2 = 4
+		writeUleb128(w, 0) // offset
+	}
+
+	loadEpoch()
+	writeOpcode(w, AGlobalGet)
+	writeUleb128(w, growEpochGlobal)
+	writeOpcode(w, AI32Ne)
+	writeOpcode(w, AIf)
+	w.WriteByte(0x40) // void block type
+	loadEpoch()
+	writeOpcode(w, AI32Const)
+	writeSleb128(w, 0)
+	writeOpcode(w, AGrowMemory)
+	w.WriteByte(0x00) // memory index
+	writeOpcode(w, ADrop)
+	writeOpcode(w, AGlobalSet)
+	writeUleb128(w, growEpochGlobal)
+	writeOpcode(w, AEnd)
 }
 
 func writeOpcode(w *bytes.Buffer, as obj.As) {

@@ -75,6 +75,7 @@ var wasmFuncTypes = map[string]*wasmFuncType{
 	"wasm_export_run":         {Params: []byte{I32, I32}},                                 // argc, argv
 	"wasm_export_resume":      {Params: []byte{}},                                         //
 	"wasm_export_getsp":       {Results: []byte{I32}},                                     // sp
+	"wasm_export_thread_run":  {Params: []byte{I32}},                                      // worker id (GOWASM=threads)
 	"wasm_pc_f_loop":          {Params: []byte{}},                                         //
 	"wasm_pc_f_loop_export":   {Params: []byte{I32}},                                      // pc_f
 	"runtime.wasmTruncS":      {Params: []byte{F64}, Results: []byte{I64}},                // x -> int(x)
@@ -501,6 +502,15 @@ func writeGlobalSec(ctxt *ld.Link) {
 		I64, // 6: RET3
 		I32, // 7: PAUSE
 	}
+	if buildcfg.GOWASM.Threads {
+		// 8: the per-instance "observed grow epoch" consumed by the
+		// atomic-access grow-observation guard (growEpochGlobal /
+		// writeGrowEpochGuard in cmd/internal/obj/wasm, which must stay
+		// in sync with this index). Initial 0 = "no grows observed",
+		// matching runtime.wasmGrowEpoch's zero value; being a global,
+		// every instance sharing the memory gets its own copy.
+		globalRegs = append(globalRegs, I32)
+	}
 
 	writeUleb128(ctxt.Out, uint64(len(globalRegs))) // number of globals
 
@@ -558,14 +568,25 @@ func writeExportSec(ctxt *ld.Link, ldr *loader.Loader, lenHostImports, numFns in
 		ctxt.Out.WriteByte(0x02)      // mem export
 		writeUleb128(ctxt.Out, 0)     // memidx
 	case "js":
-		writeUleb128(ctxt.Out, uint64(4+len(ldr.WasmExports)+len(syntheticFns))) // number of exports
-		for _, name := range []string{"run", "resume", "getsp"} {
-			s := ldr.Lookup("wasm_export_"+name, 0)
+		exports := []struct{ sym, name string }{
+			{"wasm_export_run", "run"},
+			{"wasm_export_resume", "resume"},
+			{"wasm_export_getsp", "getsp"},
+		}
+		if buildcfg.GOWASM.Threads {
+			// The worker-thread entry point: a pool worker instance calls
+			// this instead of run/resume (see lib/wasm/wasm_exec_worker.js
+			// and runtime/sys_wasmthreads.s).
+			exports = append(exports, struct{ sym, name string }{"wasm_export_thread_run", "wasm_thread_run"})
+		}
+		writeUleb128(ctxt.Out, uint64(1+len(exports)+len(ldr.WasmExports)+len(syntheticFns))) // number of exports
+		for _, e := range exports {
+			s := ldr.Lookup(e.sym, 0)
 			if s == 0 {
-				ld.Errorf("export symbol %s not defined", "wasm_export_"+name)
+				ld.Errorf("export symbol %s not defined", e.sym)
 			}
 			idx := uint32(lenHostImports) + uint32(ldr.SymValue(s)>>16) - funcValueOffset
-			writeName(ctxt.Out, name)           // inst.exports.run/resume/getsp in wasm_exec.js
+			writeName(ctxt.Out, e.name)         // inst.exports.run/resume/getsp/wasm_thread_run in wasm_exec*.js
 			ctxt.Out.WriteByte(0x00)            // func export
 			writeUleb128(ctxt.Out, uint64(idx)) // funcidx
 		}
@@ -797,6 +818,17 @@ func threadsSyntheticFuncs(types *[]*wasmFuncType, segments []*dataSegment) []*w
 
 	probe := new(bytes.Buffer)
 	writeUleb128(probe, 0) // no locals
+	// The caller-supplied address may lie in memory another thread grew,
+	// and this instance's ATOMIC bounds check may not have observed that
+	// grow yet (see writeGrowEpochGuard in cmd/internal/obj/wasm). The
+	// probe runs without Go runtime state, so instead of the epoch guard
+	// it resyncs unconditionally with memory.grow 0 - cheap, and the
+	// probe is a test-only diagnostic.
+	probe.WriteByte(0x41)  // i32.const
+	probe.WriteByte(0x00)  // 0
+	probe.WriteByte(0x40)  // memory.grow
+	probe.WriteByte(0x00)  // memidx
+	probe.WriteByte(0x1a)  // drop
 	probe.WriteByte(0x20)  // local.get
 	writeUleb128(probe, 0) // 0: addr
 	probe.WriteByte(0x20)  // local.get

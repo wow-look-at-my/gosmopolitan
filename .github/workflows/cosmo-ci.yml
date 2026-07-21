@@ -1,11 +1,12 @@
 # CI workflow for GOOS=cosmo cross-platform testing
 # Tests that APE binaries built on any platform (Linux/macOS/Windows) run
-# on all platforms. Each of the 2 unix test runners tests all 3 origin
+# on all platforms. Each of the 3 test-matrix runners tests all 3 origin
 # binaries with the full apetest suite. Windows runs the same fat APEs
 # natively through their PE header via the cosmo runtime's NT
-# personality (NT bring-up wave 2): a dedicated windows job byte-checks
-# real fizzbuzz output and runs the full apetest suite - runtimeprobe
-# included - against all three origin binaries.
+# personality (NT bring-up wave 2): the windows-latest matrix leg
+# additionally byte-checks real fizzbuzz output before running the
+# shared apetest steps - runtimeprobe included - against all three
+# origin binaries.
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -48,6 +49,26 @@ jobs:
           windows: cd src && .\make.bat -v
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
+        # The fork stamps the same release-style version (go1.26.4cosmo)
+        # into every build, so tool IDs derived from the -V=full version
+        # line alone are identical for any two fork builds. Colliding tool
+        # IDs collide action IDs, and a warm build cache (a consumer's
+        # local GOCACHE, or a shared GOCACHEPROG tier that survives
+        # toolchain updates) then serves stale, ABI-incompatible objects
+        # across fork builds — binaries SIGSEGV at startup (the 2026-07-20
+        # go-toolchain consumer core dumps). Every fork tool must report
+        # its own build ID under -V=full so cmd/go derives tool IDs from
+        # tool content. This gate fails if -V=full is the bare version line.
+        shell: bash
+        run: |
+          out="$(./bin/go tool compile -V=full)"
+          echo "compile -V=full: $out"
+          case "$out" in
+            *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
+            *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
+          esac
 
       # Shebang support tests (Unix only - shebang is a Unix feature)
       - name: Test shebang support - unit tests
@@ -132,24 +153,44 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent' cmd/go/internal/work
 
-  # Test all APE binaries on each unix platform using Go tests
+  # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
-  # plus the two cross-compiled elsewhere). Windows execution is covered
-  # by the dedicated test-windows job below (native NT boot: direct
-  # fizzbuzz output check plus apetest).
+  # plus the two cross-compiled elsewhere). The windows-latest leg is
+  # also the cosmo NT execution acceptance: before the shared apetest
+  # steps it runs two windows-only steps (AF_UNIX runner diagnostic,
+  # direct fizzbuzz NT boot check) - see the comments at those steps.
   #
-  # Job-level cap: 3 test steps at 5 minutes each plus setup; observed
-  # green total is under 2 minutes. Individual steps carry their own
-  # timeout-minutes (and an in-step killer, see with-deadline.sh).
+  # Job-level cap: 3 test steps at their per-OS step timeout plus setup;
+  # observed green totals are well under 2 minutes on every leg.
+  # Individual steps carry their own timeout-minutes (and an in-step
+  # killer, see with-deadline.sh). The per-OS knobs ride the matrix:
+  # windows keeps the timings the old dedicated test-windows job proved
+  # out (40-minute job cap; 10-minute apetest step timeouts; 540 s
+  # in-step deadlines - inert there, since with-deadline.sh self-detects
+  # git-bash and degrades to a plain exec, leaving timeout-minutes as
+  # the watchdog); the unix legs keep 25/5/240.
   test:
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.job-timeout }}
     needs: build
     strategy:
       fail-fast: false
       matrix:
-        test-os: [ubuntu-latest, macos-latest]
+        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - test-os: ubuntu-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: macos-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: windows-latest
+            job-timeout: 40
+            apetest-timeout: 10
+            apetest-deadline: 540
 
     runs-on: ${{ matrix.test-os }}
 
@@ -168,148 +209,30 @@ jobs:
         with:
           path: binaries
 
+      # No-op on the windows leg: multicmd runs nothing there (no
+      # windows/default command given), and the exec bit means nothing
+      # on NTFS.
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
           unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
 
-      # Prefetch test-module dependencies separately so a stalled module
-      # download cannot masquerade as a hung test step.
-      - name: Download apetest modules
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          sh ./with-deadline.sh 150 go mod download
-
-      # Each test step runs go test under an in-step process-group killer
-      # (see with-deadline.sh): runner-side step timeouts have been
-      # observed not to fire when a step wedges on the macOS runners
-      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
-      # one wedged process even survived a process-group SIGKILL, i.e. it
-      # was stuck in an uninterruptible kernel state). The killer abandons
-      # such a corpse so the step still ends, and go test's output goes
-      # through a FILE (cat'ed afterwards) so no abandoned descendant can
-      # keep the runner's log pipe open.
-      - name: Test binary built on Ubuntu
-        id: test-ubuntu
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload ubuntu-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-ubuntu-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on macOS
-        id: test-macos
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload macos-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-macos-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on Windows
-        id: test-windows
-        timeout-minutes: 5
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 240 go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload windows-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-windows-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-  # Windows execution acceptance (cosmo NT bring-up): a normal fat
-  # APE - cosmo amd64 + arm64, no embedded second build - boots
-  # natively on Windows through its PE header and the cosmo runtime's
-  # NT personality. Two rungs:
-  #
-  #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
-  #     origins build identical headers): the same contract apetest
-  #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
-  #     stdout, exit 0), with a byte-for-byte stdout compare.
-  #  2. The apetest suite, natively, against all three origin binaries
-  #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
-  #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
-  #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
-  #     preemption), so probe execution is gated here too.
-  #
-  # Job cap covers the worst case of the per-step timeout-minutes
-  # below (5 + 3 + three 10-minute apetest steps, plus setup).
-  test-windows:
-    timeout-minutes: 40
-    needs: build
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout code (for apetest)
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
-
-      - name: Download ubuntu-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-ubuntu-latest
-          path: binaries/ape-binary-ubuntu-latest
-
-      - name: Download windows-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-windows-latest
-          path: binaries/ape-binary-windows-latest
-
-      - name: Download macos-origin APE binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ape-binary-macos-latest
-          path: binaries/ape-binary-macos-latest
-
+      # Windows execution acceptance (cosmo NT bring-up), windows leg
+      # only: a normal fat APE - cosmo amd64 + arm64, no embedded second
+      # build - boots natively on Windows through its PE header and the
+      # cosmo runtime's NT personality. Two windows-only rungs before
+      # the shared apetest steps:
+      #
+      #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
+      #     origins build identical headers): the same contract apetest
+      #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
+      #     stdout, exit 0), with a byte-for-byte stdout compare.
+      #  2. The apetest suite, natively, against all three origin binaries
+      #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
+      #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
+      #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
+      #     preemption), so probe execution is gated here too.
+      #
       # Diagnostic only (never fails the job): prove what the runner's
       # afunix.sys actually supports, so a runtimeprobe unixsock failure
       # can be attributed - runner capability gap vs cosmo port bug. The
@@ -319,6 +242,7 @@ jobs:
       # with WSAEOPNOTSUPP - and FIONBIO); the managed .NET case is the
       # canonical known-good control.
       - name: AF_UNIX capability probe (runner diagnostic)
+        if: matrix.test-os == 'windows-latest'
         timeout-minutes: 3
         shell: pwsh
         run: |
@@ -382,6 +306,7 @@ jobs:
           exit 0
 
       - name: Run fizzbuzz on Windows (NT boot acceptance)
+        if: matrix.test-os == 'windows-latest'
         timeout-minutes: 5
         shell: pwsh
         run: |
@@ -435,10 +360,7 @@ jobs:
           if ($failed) { exit 1 } else { exit 0 }
 
       # Prefetch test-module dependencies separately so a stalled module
-      # download cannot masquerade as a hung test step (same split as
-      # the unix legs). with-deadline.sh self-detects git-bash and
-      # degrades to a plain exec: the in-test 3-minute deadlines plus
-      # the step timeout-minutes are the watchdogs here.
+      # download cannot masquerade as a hung test step.
       - name: Download apetest modules
         timeout-minutes: 3
         shell: bash
@@ -446,63 +368,81 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      - name: apetest vs ubuntu-origin binary
-        id: apetest-ubuntu
-        timeout-minutes: 10
+      # Each test step runs go test under an in-step process-group killer
+      # (see with-deadline.sh): runner-side step timeouts have been
+      # observed not to fire when a step wedges on the macOS runners
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
+      # one wedged process even survived a process-group SIGKILL, i.e. it
+      # was stuck in an uninterruptible kernel state). The killer abandons
+      # such a corpse so the step still ends, and go test's output goes
+      # through a FILE (cat'ed afterwards) so no abandoned descendant can
+      # keep the runner's log pipe open.
+      - name: Test binary built on Ubuntu
+        id: test-ubuntu
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload ubuntu-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload ubuntu-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-ubuntu-origin
+          name: test-log-${{ matrix.test-os }}-ubuntu-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
-      - name: apetest vs windows-origin binary
-        id: apetest-windows
-        timeout-minutes: 10
+      - name: Test binary built on macOS
+        id: test-macos
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload windows-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload macos-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-windows-origin
+          name: test-log-${{ matrix.test-os }}-macos-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
-      - name: apetest vs macos-origin binary
-        id: apetest-macos
-        timeout-minutes: 10
+      - name: Test binary built on Windows
+        id: test-windows
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
-      - name: Upload macos-origin windows test log
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload windows-origin test log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-windows-latest-macos-origin
+          name: test-log-${{ matrix.test-os }}-windows-origin
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
@@ -572,6 +512,22 @@ jobs:
           export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
           GOOS=js GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
 
+      - name: Test streaming fetch uploads under node (jsfetchstream e2e)
+        # End-to-end proof that GODEBUG=jsfetchnode=1 request bodies with
+        # unknown length STREAM: the guest writes chunk A, waits until the
+        # node server reports A arrived while the POST body is still open,
+        # then writes chunk B - impossible with a buffered upload. Also
+        # covers the known-length flip side (buffered, Content-Length
+        # preserved), an 8 MiB bounded-memory upload, and mid-stream
+        # context cancellation (prompt return, body closed, server sees
+        # the abort). Observed ~5s locally.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
+          (cd testdata/jsfetchstream && GOOS=js GOARCH=wasm go build -o /tmp/jsfetchstream.wasm .)
+          node testdata/jsfetchstream/run.js lib/wasm /tmp/jsfetchstream.wasm
+
       - name: Test wasip1/wasm under wazero
         # Observed 57s locally. lib/wasm supplies go_wasip1_wasm_exec.
         timeout-minutes: 10
@@ -580,16 +536,35 @@ jobs:
           export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
           GOWASIRUNTIME=wazero GOOS=wasip1 GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall math
 
-      - name: Test GOWASM=threads under node (js only)
-        # GOWASM=threads is toolchain groundwork: modules import a shared
-        # linear memory, use the 0xFE atomic instructions, and carry
-        # passive data segments plus a linker-emitted _initmem export (B1)
-        # so worker instances can share the memory without clobbering it;
-        # the runtime stays single-threaded. Node-only: wazero and wasmtime
-        # lack the threads proposal, so wasip1 rejects the flag at link
-        # time (also asserted here). The pool demo boots Go on the main
-        # instance and hammers a shared counter from 4 worker instances.
+      - name: Test GOWASI=wasmedgesock (wasip1sock reference host, TCP+UDP)
+        # End-to-end tests for the WasmEdge socket extension: the host
+        # module embeds wazero and builds every guest program with the
+        # fork toolchain (bin/go), covering the TCP battery (echo, http
+        # both directions, refused, deadlines) and the UDP paths
+        # (udpecho/udpconnected). Observed ~25s locally on a warm cache;
+        # the first guest build populates the GOWASI=wasmedgesock build
+        # cache. GOOS pinned: the fork defaults GOOS=cosmo.
         timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          cd testdata/wasip1sock/host
+          GOOS=linux GOARCH=amd64 go test -count=1 ./...
+
+      - name: Test GOWASM=threads under node (js only)
+        # GOWASM=threads: modules import a shared linear memory, use the
+        # 0xFE atomic instructions, carry passive data segments plus a
+        # linker-emitted _initmem export (B1) so worker instances can
+        # share the memory without clobbering it, and (B2) run REAL Go
+        # code on worker threads: futex locks/notes over
+        # memory.atomic.wait32/notify, newosproc handing new Ms to the
+        # worker pool wasm_exec_node.js pre-spawns. Node-only: wazero and
+        # wasmtime lack the threads proposal, so wasip1 rejects the flag
+        # at link time (also asserted here). The pool demo hammers a
+        # shared counter from 4 worker instances; the thread demo runs Go
+        # goroutines on three Ms across three threads (looped 10x to
+        # shake out races).
+        timeout-minutes: 15
         shell: bash
         run: |
           export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
@@ -597,7 +572,44 @@ jobs:
           node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
           node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm
-          GOOS=js GOARCH=wasm GOWASM=threads go test -short -count=1 sync sync/atomic
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/threaddemo.wasm ./threaddemo)
+          for i in $(seq 1 10); do
+            echo "=== threaddemo run $i ==="
+            node lib/wasm/wasm_exec_node.js /tmp/threaddemo.wasm | tee /tmp/threaddemo.out
+            grep -q "THREADDEMO: PASS" /tmp/threaddemo.out
+          done
+          # B3: multi-P demos (reduced iterations for CI).
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/speedup.wasm ./speedup)
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/stwgc.wasm ./stwgc)
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/liveness.wasm ./liveness)
+          # The demos print via println (stderr - any goroutine can land
+          # on a worker M, where fmt/os.Stdout is unavailable), so the
+          # gates must capture stderr; set -o pipefail so a nonzero node
+          # exit fails the step even though the output is piped to tee.
+          set -o pipefail
+          GOMAXPROCS=1 SPEEDUP_ITERS=20000000 node lib/wasm/wasm_exec_node.js /tmp/speedup.wasm 2>&1 | tee /tmp/speedup1.out
+          grep -q "SPEEDUP: DONE" /tmp/speedup1.out
+          GOMAXPROCS=4 GOWASMTHREADSPOOL=6 SPEEDUP_ITERS=20000000 node lib/wasm/wasm_exec_node.js /tmp/speedup.wasm 2>&1 | tee /tmp/speedup4.out
+          grep -q "SPEEDUP: DONE" /tmp/speedup4.out
+          [ "$(grep 'checksum =' /tmp/speedup1.out)" = "$(grep 'checksum =' /tmp/speedup4.out)" ]
+          for i in $(seq 1 3); do
+            echo "=== stwgc run $i ==="
+            GOMAXPROCS=4 STWGC_CYCLES=15 node lib/wasm/wasm_exec_node.js /tmp/stwgc.wasm 2>&1 | tee /tmp/stwgc.out
+            grep -q "STWGC: PASS" /tmp/stwgc.out
+          done
+          GOMAXPROCS=4 GODEBUG=gcstoptheworld=1 STWGC_CYCLES=8 node lib/wasm/wasm_exec_node.js /tmp/stwgc.wasm 2>&1 | tee /tmp/stwgc-stw.out
+          grep -q "STWGC: PASS" /tmp/stwgc-stw.out
+          GOMAXPROCS=4 LIVENESS_BUSY_MS=1200 node lib/wasm/wasm_exec_node.js /tmp/liveness.wasm 2>&1 | tee /tmp/liveness.out
+          grep -q "LIVENESS: PASS" /tmp/liveness.out
+          # Cross-thread grow-observation gate: pinned worker Ms hammer
+          # atomics on chunks another thread just grew the memory for.
+          # Without the assembler's grow-observation guard this traps with
+          # "memory access out of bounds" (the nondeterministic worker
+          # crash at runtime.newMarkBits); with it, it must pass.
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/growatomic.wasm ./growatomic)
+          GOMAXPROCS=4 node lib/wasm/wasm_exec_node.js /tmp/growatomic.wasm 2>&1 | tee /tmp/growatomic.out
+          grep -q "GROWATOMIC: PASS" /tmp/growatomic.out
+          GOOS=js GOARCH=wasm GOWASM=threads go test -short -count=1 sync sync/atomic internal/runtime/atomic runtime
           if (cd testdata/wasmthreads && GOOS=wasip1 GOARCH=wasm GOWASM=threads go build -o /dev/null .) 2>/tmp/wasip1-threads.err; then
             echo "expected GOOS=wasip1 GOWASM=threads to be rejected" >&2
             exit 1
@@ -642,6 +654,19 @@ jobs:
           go-version: '1.24'
           cache: false
 
+      - name: Stamp unique per-release version
+        # The fork identifies as a RELEASE Go version, so cmd/go derives
+        # tool IDs (hence action IDs) from the version string alone. Two
+        # releases sharing one string share a build-cache namespace, and
+        # the org's shared GOCACHEPROG cache then links objects from
+        # different releases into one binary. A unique monotonic suffix
+        # per publish makes each release's cache namespace disjoint. The
+        # committed VERSION is unchanged; this rewrite is publish-only.
+        shell: bash
+        run: |
+          printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
+          echo "VERSION stamped: $(cat VERSION)"
+
       - name: Build distribution tarball
         # The build job's ubuntu build plus distpack packaging: writes the
         # official-style go<VERSION>.linux-amd64.tar.gz to pkg/distpack.
@@ -652,23 +677,17 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      - name: Publish toolchain tarball to buildhost
-        timeout-minutes: 5
+      # Publish flow: buildhost's own composite actions (create-release ->
+      # upload-artifact -> publish-release) -- the same family the rest of
+      # the org uses -- instead of REST calls hand-rolled in this workflow.
+      # Each action mints its own OIDC token (audience = the server URL).
+      - name: Locate distribution tarball
+        id: tarball
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
-            // Publish pkg/distpack's linux-amd64 tarball to buildhost.
-            //
-            // REST flow (https://pazer.build/llms.txt): create release ->
-            // upload artifact -> publish release. Two upload paths: a single
-            // direct PUT for bodies up to server-info's
-            // max_direct_upload_bytes, else a chunked upload session --
-            // Cloudflare's edge in front of buildhost rejects request bodies
-            // over ~100 MB, so a big tarball must go up in pieces and be
-            // finalized by session id + sha256.
-            const project = 'gosmopolitan';
-            const api = 'https://pazer.build/api/v1';
-
+            // buildhost-upload-artifact takes an exact file path; resolve the
+            // versioned distpack tarball name (go<VERSION>.linux-amd64.tar.gz).
             const distDir = 'pkg/distpack';
             const names = fs.readdirSync(distDir).filter((f) => /^go.*\.linux-amd64\.tar\.gz$/.test(f));
             if (names.length !== 1) {
@@ -676,76 +695,39 @@ jobs:
                 `found [${names.join(', ')}] among [${fs.readdirSync(distDir).join(', ')}]`);
             }
             const tarball = path.join(distDir, names[0]);
-            const data = fs.readFileSync(tarball);
-            core.info(`${tarball}: ${data.length} bytes`);
+            core.info(`${tarball}: ${fs.statSync(tarball).size} bytes`);
+            core.setOutput('path', tarball);
+            core.setOutput('name', names[0]);
 
-            const branch = process.env.GITHUB_REF_NAME;
-            if (!branch) throw new Error('GITHUB_REF_NAME is not set');
+      - name: Create buildhost release
+        # No version input: buildhost auto-increments the project version.
+        # git_branch/git_commit default to the pushed branch and sha inside
+        # the action, so every branch keeps its own rolling latest and branch
+        # pushes never move ?branch=master.
+        id: release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: gosmopolitan
 
-            const token = await core.getIDToken('https://pazer.build');
-            const auth: Record<string, string> = { Authorization: `Bearer ${token}` };
+      - name: Upload toolchain tarball
+        timeout-minutes: 5
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: gosmopolitan
+          version: ${{ steps.release.outputs.version }}
+          os: linux
+          arch: amd64
+          kind: binary
+          path: ${{ steps.tarball.outputs.path }}
+          filename: ${{ steps.tarball.outputs.name }}
 
-            // fetch with up to 3 attempts on transient failures (network
-            // error, 5xx, 429); other non-2xx statuses fail immediately.
-            // Errors carry the response body.
-            async function call(method: string, url: string, headers: Record<string, string>, body?: Buffer | string) {
-              let failure = '';
-              for (let attempt = 1; attempt <= 3; attempt++) {
-                if (attempt > 1) {
-                  core.warning(`${method} ${url}: ${failure} -- retrying (attempt ${attempt}/3)`);
-                  await new Promise((r) => setTimeout(r, 3000 * (attempt - 1)));
-                }
-                let res;
-                try {
-                  res = await fetch(url, { method, headers, body });
-                } catch (e) {
-                  failure = `network error: ${e}`;
-                  continue;
-                }
-                if (res.ok) return res;
-                failure = `HTTP ${res.status}: ${await res.text()}`;
-                if (res.status < 500 && res.status !== 429) break;
-              }
-              throw new Error(`${method} ${url} failed: ${failure}`);
-            }
+      - name: Publish buildhost release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
+        with:
+          project: gosmopolitan
+          version: ${{ steps.release.outputs.version }}
 
-            // The direct-PUT ceiling comes from the server, not a hardcoded guess.
-            const info = (await (await call('GET', `${api}/server-info`, auth)).json()) as { max_direct_upload_bytes?: number };
-            const maxDirect = info.max_direct_upload_bytes ?? 99614720;
-
-            // Create the release. The project auto-provisions on first OIDC push.
-            const createRes = await call('POST', `${api}/projects/${project}/releases`,
-              { ...auth, 'Content-Type': 'application/json' },
-              JSON.stringify({ git_branch: branch, git_commit: context.sha }));
-            const createBody = await createRes.text();
-            let version = '';
-            try {
-              const rel = JSON.parse(createBody) as { version?: number | string };
-              if (rel.version !== undefined && rel.version !== null) version = String(rel.version);
-            } catch {}
-            if (!version) throw new Error(`release create response has no version: ${createBody}`);
-            core.info(`release ${version} created (branch=${branch} commit=${context.sha})`);
-
-            const artifact = `${api}/projects/${project}/releases/${version}/artifacts/linux/amd64`;
-            const octet = { ...auth, 'Content-Type': 'application/octet-stream' };
-            if (data.length <= maxDirect) {
-              core.info(`direct upload (${data.length} <= ${maxDirect} bytes)`);
-              await call('PUT', `${artifact}?kind=binary`, octet, data);
-            } else {
-              core.info(`chunked upload (${data.length} > ${maxDirect} bytes)`);
-              const sha256 = require('crypto').createHash('sha256').update(data).digest('hex');
-              const sess = (await (await call('POST', `${api}/uploads`, auth)).json()) as { id?: number | string };
-              if (sess.id === undefined || sess.id === null) throw new Error(`upload session response has no id`);
-              const chunk = 64 * 1024 * 1024;
-              for (let off = 0; off < data.length; off += chunk) {
-                const end = Math.min(off + chunk, data.length);
-                await call('PATCH', `${api}/uploads/${sess.id}?offset=${off}`, octet, data.subarray(off, end));
-                core.info(`uploaded bytes ${off}..${end} of ${data.length}`);
-              }
-              await call('PUT', `${artifact}?kind=binary&upload_session=${sess.id}&upload_sha256=${sha256}`, auth);
-            }
-
-            await call('POST', `${api}/projects/${project}/releases/${version}/publish`, auth);
-
-            const dl = `https://dl.pazer.build/${project}?branch=${encodeURIComponent(branch)}&os=linux&arch=amd64`;
-            core.notice(`published ${names[0]} (${data.length} bytes) as ${project} v${version}: ${dl}`);
+      - name: Log published release
+        shell: bash
+        run: |
+          echo "::notice::published ${{ steps.tarball.outputs.name }} as gosmopolitan v${{ steps.release.outputs.version }}: https://dl.pazer.build/gosmopolitan?branch=${{ github.ref_name }}&os=linux&arch=amd64"
