@@ -4618,18 +4618,105 @@ dropped rather than surfaced.
   executes the darwin dispatch (dlsym wiring, shape adapters, the
   syscall-package branches) via the same mandatory checks.
 
-## Scouting notes for the next darwin item (SIGPROF profiling)
+# 2026-07-21: darwin SIGPROF CPU profiling - setitimer via dlsym
 
-Recorded while enumerating the Syslib for this work, so the
-setitimer bring-up doesn't re-derive it: the loader's Syslib (v10;
-runtime requires v8+) exports sigaction (v4), sigaltstack (v5),
-pthread_kill + pthread_sigmask (v1), raise (v2) - the signal wave
-already drives them - but has NO setitimer entry, and extending the
-Syslib is a non-starter (the compiled-loader cache would serve stale
-structs; the dlsym decision record in os_cosmo_arm64.go). setitimer
-must come from cosmoDlsym("setitimer") like every other libc entry
-this emulation uses; ITIMER_PROF value and struct itimerval layout
-(two timevals, tv_usec i32-vs-i64 caveat as in wait4's rusage fixup)
-need the same in-tree ground-truth check this item did for msghdr.
-SIGPROF delivery then rides the existing wave-8 signal translation
-tables (sigxlat_cosmo.go) and sigtramp.
+The wave-9 backlog's last entry: pprof.StartCPUProfile /
+-test.cpuprofile on macOS hosts produced valid, ZERO-sample
+profiles. The gap was exactly one silent no-op - runtime.setitimer's
+darwin asm branch ("macOS: setitimer not in Syslib ... this is a
+stub") returned without arming anything, while every hz gate
+(prof.hz, mp.profilehz) was set and the handler installed, so
+nothing failed loudly anywhere. Everything downstream of timer-fire
+already worked and was CI-proven since wave 9: setsig ->
+darwinSigaction install, sigtramp's Apple->Linux signo translation
+(SIGPROF is 27 on both systems), host-aware sigctxt pc/sp/lr reads
+from the Apple mcontext, sighandler consuming SIGPROF before any
+sigFromUser gating, and validSIGPROF (an XNU kernel-timer SIGPROF
+carries Apple si_code 0, which falls into the accept-all branch;
+profileTimerValid is never set on cosmo - no timer_create path).
+
+## Fix shape: per-arch setitimer split (sigaltstack/pipe2 precedent)
+
+- os_cosmo_arm64.go: Go dispatcher `setitimer` - isdarwin() ->
+  darwinSetitimer, else setitimerLinux (the renamed asm, its Linux
+  SVC byte-identical; its darwin branch is now a loud crash in the
+  rtsigprocmask_darwin style, since a raw SVC would SIGSYS anyway).
+  amd64 keeps its asm untouched (the raw-XNU branch is the pending
+  Intel-mac bring-up path), decl relocated to os_cosmo_amd64.go.
+- setitimer comes from cosmoDlsym("setitimer") like kqueue/kevent:
+  the loader's Syslib (v10) exports sigaction/sigaltstack/
+  pthread_kill/pthread_sigmask/raise - the signal wave already
+  drives them - but has NO setitimer entry, and extending the
+  Syslib stays rejected per the cosmoDlsym decision record (the
+  compiled-loader cache would serve stale structs). Resolved once
+  in osArchInit (cosmoDarwinSetitimerFn); zero means arming
+  silently does nothing, which the probe turns into a loud FAIL -
+  no new failure plumbing needed.
+- Layout translation: Linux itimerval is 2x timeval{int64 sec,
+  int64 usec}; Apple's is 2x {int64 sec, int32 usec, 4 pad} - both
+  32 bytes, but the usec words sit at Apple offsets 8/24 (the
+  tv_usec i32-vs-i64 caveat, as in wait4's rusage fixup). Mirror
+  types + pure translators live in signal_cosmo_itimer.go,
+  arch-independent so the unit tests run under cosmo on any host
+  (the socket_msg_cosmo.go precedent); darwinSetitimer
+  (signal_cosmo_xnu.go, nosplit, the darwinSigaction pattern)
+  translates BOTH directions and calls through cosmoLibcCall6 (the
+  libc stub is a shallow syscall wrapper - no asmcgocall needed).
+  _ITIMER_PROF=2 on both systems; mode passes through. The
+  int64->int32 usec narrowing is lossless by construction (set_usec
+  takes int32; the profiler stores at most 1e6-1).
+
+## The "add both together" half: pthread libcall bookkeeping
+
+The wave-9 charter deferred upstream's m.libcallpc/sp recording in
+the pthread parking wrappers until SIGPROF timers were wired ("add
+both together"). Wired now: cosmoPthreadLibcCall
+(os_cosmo_arm64_sema.go) is upstream sys_libc.go's libcCall ported
+verbatim - record libcallg/pc/sp when libcallsp==0 (sp set LAST,
+the profiler's publication order), asmcgocall, clear after;
+reentrancy comment preserved - and all 7 pthread wrappers route
+through it. usesLibcall() (proc.go) now lists cosmo, enabling
+sigprof's libcall unwind branch: samples landing inside
+pthread_cond_wait/mutex attribute to the Go caller (semasleep ->
+lock2 -> ...) instead of _System. Linux hosts never set the fields,
+so the branch self-disables there; the shallow syslib/dlsym
+trampolines stay bookkeeping-free on purpose - those samples land
+in _ExternalCode/_System, the shape the NT netpoller already
+accepts.
+
+## Probe flip + EINTR audit
+
+testdata/runtimeprobe cpuprof: the darwin host-skip leg is deleted -
+real samples (>=1 Sample record in the pprof proto) are mandatory on
+all three hosts. Check names and counts are unchanged (apetest
+matches "ok cpuprof" by name; 49 ok lines before and after).
+
+100Hz SIGPROF adds interrupt frequency, not a new interrupt class:
+the handler installs with SA_RESTART (translated to Apple 0x2 by
+darwinSigaction), and every known non-restartable hot path was
+already EINTR-hardened for SIGURG preemption - the kqueue
+netpoller's registration/break/poll retries (netpoll_cosmo_xnu.go),
+the sigNote pipe loops (sigqueue_note_cosmo_arm64.go), semasleep's
+pthread_cond_timedwait spurious-wake loop (os_cosmo_arm64_sema.go),
+and internal/poll's shared ignoringEINTR at the user level. No new
+retry sites were needed.
+
+## Verification
+
+- Linux host: make.bash green; go vet runtime clean for cosmo
+  amd64+arm64; new unit tests green under the misc/cosmo wrappers
+  (GOOS=cosmo go test -run 'TestCosmoXnuItimervalABI|
+  TestCosmoTimevalTranslation' runtime - Apple ABI pins: 16/32-byte
+  sizes, usec offsets 8/24; translation round-trips incl. the
+  hz=100 arm shape and the hz=0 disarm shape), and
+  internal/runtime/syscall/cosmo stays green; the ubuntu CI leg now
+  runs the runtime-package cosmo tests alongside the syscall ones.
+- Fat fizzbuzz + runtimeprobe APEs build (the arm64 nosplit budget
+  is the real gate); probe on the linux host: 49 ok lines with
+  "ok cpuprof samples=17" - real samples through the renamed
+  setitimerLinux path, proving the dispatcher end the host CI can
+  measure. Full apetest suite green ("ok apetest").
+- macOS proof is the cosmo-ci macos-latest leg on this push: the
+  now-mandatory cpuprof check executes the dlsym resolution, the
+  layout translation, the arm, and 1.2s of real SIGPROF delivery
+  against all three origin binaries.
