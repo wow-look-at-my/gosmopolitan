@@ -4005,6 +4005,60 @@ build machinery - the existing ubuntu-built fat APE artifact is the
 input, and fizzbuzz + apetest's runtimeprobe battery is the
 pass/fail instrument.
 
+# 2026-07-19: size pass 3c — cross-arch dedup + macOS loader-side decompression: measured, both DROPPED
+
+Two candidate fat-APE size levers were taken to full measurement (at
+HEAD ef935b3c) and dropped with no code change, no branch, no PR.
+Recording the numbers and the layout design facts here so the dead
+ends stay dead and future layout work starts from the constraints.
+
+Lever 1 — cross-arch dedup via shared/overlapping PT_LOAD file
+extents: DROPPED. The read-only identical ceiling is ~921 KB on a
+stdlib-heavy webserver (reconciles pass 1's 2.17 MB figure: that was
+unstripped — strip-by-default already removed the symtab/strtab/DWARF
+share). The ONLY contiguous link-time-alignable run is the
+time/tzdata zip (427,523 B, same order both arches, inside
+go:string.*); funcnametab interiors drift (arch-specific insertions,
+nfunc 6676 vs 6527) and pctab/functab/funcdata are arch-different
+(minLC 1 vs 4). Alignment kills most of the rest: 4K congruence
+breaks ARM64 macOS (the embedded loader hard-refuses congruence not
+mod 16384), 16K drops 64K-page arm64 Linux kernels (supported today),
+and fully-safe 64K captures 323-358 KB net in ONE extent (six 64K
+pages of tzdata) — fizzbuzz and runtimeprobe capture zero. Wire
+benefit under `zstd -19 --long=27` is ZERO (simulated dedup came out
+1,334 B WORSE) — dedup is on-disk-only, 2.5-3.0% of the fat file,
+tzdata-importing binaries only. Only proportionate follow-up if ever
+wanted: special-case a single shared 64K-aligned extent for the
+tzdata zipdata symbol — same 323-358 KB, minimal machinery.
+
+Lever 2 — storing the arm64 image compressed and decompressing in the
+macOS loader: DROPPED on the kill criterion. Every consumer of the
+arm64 image reads raw bytes at absolute file offsets: Linux arm64
+self-assimilation demand-pages in place, an installed/cached `ape`
+loader file-mmaps PT_LOADs, and the m1 loader file-mmaps non-exec
+segments and preads only PF_X spans into anon memory. Compressed
+storage therefore necessarily costs a supported boot path — and
+storing both forms would GROW the file ~2.4 MB. Upstream apelink
+behaves the same way (Pwrites raw PT_LOAD spans; gzips only ~12KB
+loader binaries and zip assets, never machine-code payloads).
+Teaching Linux arm64 to boot via a loader would regress
+zero-dependency boot (noexec /tmp, read-only rootfs), and the shell
+header budget is 2047/2048 bytes. Wire size is already solved by
+distribution-side zstd.
+
+Durable ape.go/boot design facts for any future layout work:
+transplantPEHeader requires the amd64 image at 0x10000 with verbatim
+absolute section raw pointers; shiftPOffsets applies a uniform shift
+(per-phdr rewriting would break makeMachoHeader /
+makeEmbeddedElfHeader assumptions); the m1 loader caps e_phnum at 18
+(1024-byte phdr buffer) and enforces 16 KiB congruence; cosmo/arm64
+links with p_align 0x4000; the merged phdr table has ~3.6 KB of
+in-place growth room (dead section-header bytes before the note);
+GOCOSMOSTRIP=0's byte-for-byte reproduction promise means any dedup
+could only apply to the default stripped path; and Linux-arm64
+self-assimilation has NO CI execution coverage (no arm64 Linux
+runner) — treat arm64-image layout changes as under-tested.
+
 # 2026-07-20: exec.LookPath on NT — unix PATH rules against a Windows PATH
 
 ## Symptom (consumer regression, initially misdiagnosed as argv loss)
