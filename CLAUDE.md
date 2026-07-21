@@ -12,7 +12,7 @@ This is a fork of the Go programming language toolchain that adds support for **
 
 ## No Rosetta Dependency
 
-**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta.
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. This fork's own output executes on Linux, macOS, and (since the cosmo-native NT bring-up, wave 1) Windows - see Building Cosmopolitan Binaries below for the per-platform status.
 
 - APE binaries contain native code for multiple architectures (AMD64 + ARM64)
 - On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
@@ -66,17 +66,47 @@ To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/
 
 ```bash
 # Build a fat (amd64+arm64) APE binary - GOARCH is ignored for the output;
-# go build always builds both architectures and merges them
+# go build always builds both architectures and merges them. The shipped
+# APE is stripped (no DWARF/symtab, cosmocc-style); full debug info lands
+# in two sidecar ELFs next to it: program.com.dbg (cosmo amd64) and
+# program.com.aarch64.elf (cosmo arm64).
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE in the install directory
+# go install produces the same fat APE + sidecars in the install directory
 GOOS=cosmo go install ./cmd/program
 
-# Opt out of the fat build (single-architecture APE for the current GOARCH)
+# Keep full debug info embedded in the APE and write no sidecars
+# (pre-2026-07-18 behavior, byte-for-byte)
+GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
+
+# Debug-info tier (GOCOSMODEBUG; unset/full = pristine runnable sidecars,
+# today's default). slim: debug-only sidecars, ~-68%, same names, not
+# runnable - gdb/delve consume them unchanged, full fidelity. min: slim's
+# sidecar shape PLUS less DWARF generated in the first place (no location
+# lists, no inline records - injected gcflags, ~-38% below slim):
+# breakpoints and file:line backtraces stay exact, but argument/local
+# VALUES in debuggers are garbage or <optimized out> - "backtraces yes,
+# variables no". compact: slim sidecars PLUS line-level debug info
+# appended to the APE past the load span (never mapped; ~+38% APE size) -
+# gdb gets file:line backtraces from the assimilated .com alone, no
+# sidecar present. Invalid values fail any cosmo build. GOCOSMOSTRIP=0
+# or -ldflags -s/-w suppress sidecars (nothing to shape; min's
+# compile-time DWARF trim still applies). See DEBUGGING.md.
+GOCOSMODEBUG=slim GOOS=cosmo go build -o program.com main.go
+GOCOSMODEBUG=min GOOS=cosmo go build -o program.com main.go
+GOCOSMODEBUG=compact GOOS=cosmo go build -o program.com main.go
+
+# Explicit -s/-w wins: user-stripped APE, no sidecars (nothing to put in them)
+GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
+
+# Opt out of the fat build (single-architecture APE for the current GOARCH;
+# thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
-# Merge two single-arch cosmo binaries plus a Windows PE into one fat APE by hand
-go tool link -apefat amd64.com,arm64.com,windows.exe -o program.com
+# Merge two single-arch cosmo binaries into one fat APE by hand
+# (-apestrip -apedbg is what go build passes by default; omit them for a
+# full-payload merge)
+go tool link -apefat amd64.com,arm64.com -o program.com -apestrip -apedbg
 ```
 
 Fat-build coverage: `go build` (with or without `-o`; a plain
@@ -84,13 +114,137 @@ single-main-package build defaults its output name and fattens too) and
 `go install` both produce fat APEs. `go test` / `go test -c` binaries stay
 thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
-compile. The `faketime` build tag also forces a thin build, because its
-windows payload cannot compile (`runtime/time_fake.go` is `!windows`).
+compile.
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64
-image boots on x86-64 Linux (self-assimilation); the cosmo arm64 image boots
-on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled APE loader, no
-Rosetta). Windows uses an embedded native windows/amd64 PE payload.
+Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
+payload's loadable span - the file range its program headers reference,
+exactly what cosmocc's apelink ships - and writes the pristine unstripped
+per-arch linker ELFs next to the output as `<output>.dbg` (amd64) and
+`<output>.aarch64.elf` (arm64), the names cosmo libc's FindDebugBinary
+probes. Naming is exact output name plus suffix: bare `go build` of
+package `web` gives `web`, `web.dbg`, `web.aarch64.elf`, like cosmocc's
+`hello`/`hello.dbg`/`hello.aarch64.elf`. `GOCOSMOSTRIP=0` (or `off`,
+parsed like GOCOSMOFAT) restores full embedded payloads with no sidecars;
+an explicit `-s` or `-w` in `-ldflags` also suppresses sidecars and embeds
+the user-stripped payloads as-is. Stripping does not affect runtime
+tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
+loaded segment); the sidecars are for gdb/delve and offline tools - see
+DEBUGGING.md "debug sidecars" (2026-07-18).
+
+Debug tiers (2026-07-19 + round 2 2026-07-20, GOCOSMODEBUG): `slim`
+swaps the sidecars for debug-only ELFs (in-linker objcopy
+--only-keep-debug: alloc contents dropped to NOBITS, symtab + all DWARF
+kept, not runnable, ~-68% - runtimeprobe sidecar pair 7,818,173 ->
+2,418,888 B); `min` is slim's sidecar shape plus generation-time DWARF
+trims cmd/go injects into every cosmo compile (-dwarflocationlists=false
+-gendwarfinl=0; explicit user -gcflags override them): sidecars shrink
+another ~-38% (rp pair 1,502,680 B) at the cost of debugger
+argument/local values (garbage or <optimized out>; file:line
+backtraces, runtime tracebacks, and pprof stay exact - "backtraces yes,
+variables no"; per-tier gcflags also fork the build cache, so the first
+build after switching tiers recompiles); `compact` appends line-level
+debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame;
+loclists dropped) past the APE's load span and points the payload +
+boot ELF headers at it, so the assimilated `.com` is debugger-readable
+with no sidecar (runtimeprobe 5,517,216 -> 7,539,064 B, +38%; args show
+<optimized out> - variables are sidecar territory). Since round 2 all
+cosmo `.debug_*` sections are zstd-compressed (ELFCOMPRESS_ZSTD,
+in-linker klauspost encoder, -13..-16% of stored DWARF vs the old
+zlib): readers need gdb >= 13 / binutils >= 2.40 / Go debug/elf >= 1.21
+(delve reads it; verified live with gdb 15.1 + dlv 1.27). Non-cosmo
+targets keep upstream zlib. Full numbers, gdb/delve recipes, and
+gotchas: DEBUGGING.md "GOCOSMODEBUG" (2026-07-19) and "debug round 2"
+(2026-07-20).
+
+Shipping APEs: distribute release binaries zstd-compressed - the two arch
+payloads make APE images highly redundant, so the wire cost collapses.
+Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png,
+time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and
+3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only,
+by design: there is no runtime self-extraction mechanism. buildhost can
+repackage uploaded artifacts on the fly via its `fmt=` query parameter.
+
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
+amd64 image boots on x86-64 Linux (self-assimilation); the cosmo arm64
+image boots on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled
+APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
+natively through the APE's PE header (vim.com-style, no embedded second
+build - the windows/amd64 PE payload was removed 2026-07-18): the entry
+stub sets the runtime's NT personality live (__hostos=2) and joins the
+common boot, with kernel32 resolved at runtime from two loader-filled
+IAT slots.
+
+Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the
+LookPath fix - CI-verified by the full 47-check runtimeprobe gauntlet
+on windows-latest, against
+binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
+os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
+CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
+user-level syscall routes through an NT emulation dispatcher (Linux
+numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go)
+covering process identity, ProcessPrng entropy, the whole file I/O
+family with an fd table and a documented Linux<->Win32 path translation
+(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL), getdents64
+emulation (os.ReadDir/WalkDir/RemoveAll), working-directory round-trip,
+os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
+non-pollable on purpose - a posix_spawn-style CreateProcessW path with
+upstream-ported quoting and env block, and wait4 packing the Linux
+wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
+signal deaths 0xC0DE0000|sig decode as Linux termination signals),
+including exec.LookPath/exec.Command name resolution against the
+HOST-format PATH (2026-07-20, src/os/exec/lp_cosmo.go: runtime host
+switch; on NT a lp_windows.go port - ';' split, PATHEXT/.exe probing,
+ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT
+blocks spell "Path" while cosmo's os.Getenv stays exact-case - plus
+an extensionless-APE last resort; unix hosts keep verbatim lp_unix
+behavior - see DEBUGGING.md 2026-07-20 NT LookPath section);
+sockets over classic synchronous winsock (non-overlapped WSASocketW,
+FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
+is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
+refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with
+a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock
+design; the wake channel is a connected loopback TCP pair because real
+NT may drop loopback UDP datagrams - a lost wake stalls the poller;
+pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
+sockets over afunix.sys (sun_path through the path layer; abstract
+names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
+runs show exactly one red there while windows-latest proves it);
+wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
+as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
+writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
+between cosmo processes (sender-push wire frame on the afunix
+stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
+for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
+AF_UNIX carriers only, same user, both ends must be cosmo binaries -
+see DEBUGGING.md wave 3 item 2b for the honest limits); and
+signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
+(kill/tkill with full delivery through sigtrampgo), os/signal Notify,
+async preemption via SuspendThread/SetThreadContext injection
+(preempt ~180ms on the CI runner, upstream preemptM semantics), signal
+deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling
+(runtime/pprof delivers real samples on NT: upstream os_windows.go's
+profileLoop ported as a standing no-P M parked on a waitable timer,
+SuspendThread under ntSuspendLock, direct sigprof calls - no signal
+number anywhere), conhost control events remapped for unix parity -
+CTRL_C -> SIGINT, CTRL_BREAK -> SIGQUIT (the goroutine-dump chord on
+a wedged process), CTRL_CLOSE -> SIGHUP, LOGOFF/SHUTDOWN -> SIGTERM,
+a deliberate divergence from upstream windows Go (which maps BREAK ->
+SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
+groups: SysProcAttr{Setpgid} spawns the child as its own group leader
+(CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
+group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
+probe CI-proves the conhost-injected handler chain end to end. Still
+missing on Windows: Windows/arm64 (now CHARTERED - see DEBUGGING.md's
+wave-4 charter; step one is a windows-11-arm CI experiment running
+the existing amd64 APE under x86-64 emulation), file/pipe dup(2)
+(ENOSYS on purpose - socket dup works, and file/pipe fds still
+transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
+by design - pair ends cannot cross processes), and
+real-keyboard/CTRL_CLOSE console coverage (the probe covers the
+GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
+window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
+documented-not-asserted) - see DEBUGGING.md's NT wave sections for
+the ladder, the forensics, and the wave-4 backlog.
 
 macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
@@ -184,6 +338,27 @@ go tool compile -bench=out.txt file.go
   place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
   upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
   this automatically).
+- **Tool build IDs are content-derived (2026-07-20).** Upstream derives
+  release-toolchain tool IDs from the tools' `-V=full` version line; the fork
+  stamps the same release-style version (`go1.26.4cosmo`) into every build, so
+  any two fork builds used to share tool IDs — and hence action IDs — letting a
+  warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
+  serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
+  Fork tools now print their own build ID under `-V=full` (like devel
+  toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt
+  toolchain automatically invalidates cached objects. The old rule "run
+  `go clean -cache` after every make.bash" is obsolete; CI asserts the
+  discriminator on every build platform.
+- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
+  Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
+  40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
+  prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B
+  InlTree records. Consequence: upstream debug/gosym-based tools cannot parse
+  fork binaries; the fork's own debug/gosym, objdump, nm, and addr2line are
+  updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and
+  readers must move in lockstep: `cmd/link/internal/ld/pcln.go` +
+  `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <->
+  `debug/gosym`.
 
 ## Local Verify Loop
 
@@ -198,11 +373,20 @@ cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain and tests that APE binaries built on any platform (Linux/macOS/Windows) run correctly on all other platforms.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows); every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0); its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64, cosmo arm64, and native windows/amd64 payloads. Execution and structural
-format tests run everywhere.
+amd64 and cosmo arm64 payloads, stripped by default, with the build step's
+`ls` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build
+platform (sidecars are not uploaded; the artifact ships the bare binaries,
+so apetest's TestDebugSidecars skips on the test runners). Structural
+format tests run everywhere; the full execution suite (fizzbuzz +
+runtimeprobe) runs on all three test runners, and the ubuntu build leg
+also runs the cmd/link APE-merge/debug-view and cmd/go
+strip/GOCOSMODEBUG/tool-ID unit tests. Every build leg additionally
+asserts, right after make.bash, that `compile -V=full` reports a
+content-derived `buildID=` (the cross-build cache-poisoning guard —
+see the tool-build-ID bullet in Fork Gotchas).
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -217,9 +401,11 @@ executes the darwin (Syslib) code paths.
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
-fixes touch under node 22 (js) and wazero (wasip1), and runs the
-wasmexport compiler regression tests via cmd/internal/testdir for both
-wasm targets.
+fixes touch under node 22 (js) and wazero (wasip1), runs the full
+testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
+end to end), runs the testdata/jsfetchstream streaming-upload e2e under
+node, and runs the wasmexport compiler regression tests via
+cmd/internal/testdir for both wasm targets.
 
 A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
 installable toolchain tarball to buildhost on every push - see Toolchain
@@ -229,26 +415,44 @@ Distribution below.
 
 Every push whose build+test jobs are green publishes an installable
 linux-amd64 toolchain tarball to buildhost (pazer.build) as project
-`gosmopolitan`: the `publish` job in cosmo-ci.yml runs `make.bash -distpack`
-(official packaging; output `pkg/distpack/go<VERSION>.linux-amd64.tar.gz`,
-currently `go1.26.4cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it via
-GitHub Actions OIDC (audience `https://pazer.build`; direct PUT below
-server-info's `max_direct_upload_bytes`, chunked upload session above it).
-Consumers install the fork in seconds instead of a ~3 minute `make.bash`:
+`gosmopolitan`: the `publish` job in cosmo-ci.yml first stamps VERSION with a
+unique per-release suffix (`go<base>.r<run_number>`), then runs
+`make.bash -distpack` (official packaging; output
+`pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
+`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
+with buildhost's own publish actions (`buildhost-create-release` /
+`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
+`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
+authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
+The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
+each published release a disjoint cmd/go tool-ID (hence build-cache)
+namespace — identical release version strings previously let the org's
+shared GOCACHEPROG cache mix objects across releases into one binary. Local
+source builds are unaffected (they keep the static version), so the existing
+local rule — `go clean -cache` after a local `make.bash` — still applies to
+hand-rebuilt toolchains. Consumers install the fork in seconds instead of a
+~3 minute `make.bash`:
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
-export PATH="$PWD/go/bin:$PATH" GOTOOLCHAIN=local
-go version   # go version go1.26.4cosmo linux/amd64
+export PATH="$PWD/go/bin:$PATH"
+go version   # go version go1.26.4cosmo.r<N> linux/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
 derived from the binary location, no need to set it). Consumer gotchas:
 
-- **Set `GOTOOLCHAIN=local`.** The shipped `go.env` keeps upstream's
-  `GOTOOLCHAIN=auto`, so a consumer go.mod with a `go`/`toolchain` directive
-  newer than this fork's version would silently download an official
-  toolchain and lose cosmo.
+- **`GOTOOLCHAIN=local` is no longer required.** The shipped `go.env` now
+  defaults `GOTOOLCHAIN=local` (upstream ships `auto`, under which a consumer
+  go.mod with a `go`/`toolchain` directive newer than this fork's version
+  would silently download an official toolchain and lose cosmo). An explicit
+  `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
+  go.mod genuinely newer than the fork now fails loudly (`go.mod requires
+  go >= X (running go 1.26)`) instead of silently switching. Note the fork
+  self-identifies as the dev version `1.26` (its `go1.26.4cosmo` string does
+  not parse as a release version), so directives up to `go 1.26` are
+  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
+  still ship `GOTOOLCHAIN=auto` and need the env var.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
   Gotchas); any host-run `go build`/`go install`/`go test` needs
   `GOOS=linux GOARCH=amd64`.
@@ -258,6 +462,31 @@ derived from the binary location, no need to set it). Consumer gotchas:
   auto-increments N per publish, the publish job logs it, and
   `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
   the current one.
+
+## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
+
+`.github/dependabot.yml` disables Dependabot updates — version AND security —
+for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
+and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
+importable package; see 'go help packages'`, and it can neither run
+`go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
+ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
+
+1. Build this tree's toolchain: `cd src && ./make.bash`; use `../bin/go` below.
+   (No `go clean -cache` needed since 2026-07-20: tool IDs are content-derived,
+   so a rebuilt toolchain never reuses stale cache entries — see Fork Gotchas.)
+2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
+   && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
+   cosmo).
+3. If `x/net/http2` changed, regenerate `src/net/http/h2_bundle.go` with
+   `x/tools/cmd/bundle` (the exact command is `src/net/http/http.go`'s
+   `//go:generate bundle` directive, also echoed in h2_bundle.go's header).
+4. Check `git log -- src/vendor/` for fork-local vendored changes that
+   re-vendoring may have wiped; re-apply them.
+5. Rebuild, then run the affected stdlib tests:
+   `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
+
+`src/README.vendor` is the upstream authority on vendoring in std/cmd.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
@@ -298,8 +527,185 @@ the full catalog of fixes and remaining gaps):
   line tables, `llvm-dwarfdump --verify` clean on both ports. On by
   default (~+39% file size), stripped with `-ldflags=-w`. The name
   section now precedes producers, so llvm tools can read Go wasm
-  binaries. Variable location expressions are still placeholders
-  (faithful locations need DW_OP_WASM_location).
+  binaries. Variable location expressions remained placeholders until
+  round 6 gave them a real DW_OP_WASM_location frame base.
+- Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
+  runway (trigger no later than ~halfway to the goal, background credit
+  seeded at cycle start so the allocation that crosses the trigger
+  doesn't assist-burst), idle mark drains are bounded to 2ms, and a new
+  `go_gc_mark_step(budgetMs) -> bool` wasm export lets the host donate
+  idle time between frames (bounded mark work, no-op outside a cycle,
+  returns whether work remains; while the host donates, the in-frame
+  fractional mark quota drops 25% -> 5%). These behaviors are
+  deliberately platform-independent - ALL platforms trigger earlier
+  (trigger pinned ~halfway to the goal, trading some throughput/GC
+  frequency for bounded mark bursts; TestGcPacer models the new math)
+  and bound idle drains, and the budgeted mark step core is portable
+  with runtime tests that run everywhere; only the event-loop yield
+  glue (throttle idle marking + 1ms re-arm instead of starving the
+  event loop until mark completion) and the wasm export are js-only.
+  `testdata/framebench` (10k allocs/frame under node): p99 frame time
+  21.6ms -> 4.8ms, zero frames over 8ms.
+- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
+  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
+  computing the frame base from the SP global (SP + framesize + 8 - the
+  CFA of this x86-model target with a caller-pushed 8-byte return
+  address; SP only moves in the prologue/epilogue, so the constant is
+  exact throughout the body), and every stack-homed parameter and local
+  resolves through its DW_OP_fbreg offset to exactly the linear-memory
+  address codegen uses. The payoff is `-N -l` builds, where named
+  variables live on the stack; heap-escaped variables still carry no
+  location, and register-promoted variables in optimized builds stay
+  name-and-type-only. llvm-dwarfdump decodes the expression natively
+  and --verify stays clean; non-wasm DWARF is byte-identical; a
+  cmd/link/internal/wasm regression test locks the encoding for both
+  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
+  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
+  with Read/Write preserving datagram boundaries, and the
+  same deadline machinery as TCP. Receives import the newer-generation
+  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
+  everywhere and cannot report the source port), so opt-in binaries now
+  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
+  the generation mix, the 128-byte family-tagged address buffer, and
+  the network-byte-order recv_from port quirk (verified live against
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
+  ReadMsgUDP/WriteMsgUDP are ENOSYS
+  (no ancillary data in the extension); DNS and unix sockets stay
+  fake. `testdata/wasip1sock` grew UDP host support plus
+  udpecho/udpconnected guests, and the CI wasm job now runs the whole
+  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
+  js fetch transport streams request bodies: unknown-length bodies
+  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
+  upload through a ReadableStream with duplex "half" instead of being
+  buffered whole, when a cached one-time probe shows the runtime's
+  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
+  everything else keeps the buffered path byte-for-byte). Pulls read
+  64KiB chunks on a goroutine off the event loop, so backpressure
+  reaches the reader, and the body is closed exactly once on every
+  path (EOF, read error, cancel/abort, every RoundTrip exit).
+  Known-length bodies stay buffered on purpose - fetch drops
+  Content-Length for stream bodies, buffering keeps it on the wire -
+  and streamed bodies cannot be replayed, so a redirect that must
+  re-send the body fails with a network error per spec.
+  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
+- Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
+  experimental, GOOS=js only) is toolchain-only groundwork for the wasm
+  threads proposal - real parallelism lands in later phases and the
+  runtime stays single-threaded for now. With it, Go's atomic ops emit
+  the proposal's 0xFE atomic instructions and the linker imports a
+  shared linear memory (`gojs`.`mem`, shared limits flag 0x03, max
+  2048 MiB) instead of declaring a module-local one; `wasm_exec.js`
+  supplies the matching shared `WebAssembly.Memory` via
+  `go.provideMemory(wasmBytes)` (called automatically by
+  `wasm_exec_node.js`, no-op for ordinary modules). Node 18+ needs no
+  flags; browsers will need COOP/COEP headers (cross-origin isolation)
+  for SharedArrayBuffer. wasip1 builds reject the flag at link time
+  (wazero/wasmtime lack the proposal). Without the flag, output is
+  byte-identical to before.
+- Threads worker pool B1 (2026-07-17): under GOWASM=threads the linker
+  now emits PASSIVE data segments (+ DataCount section) - active ones
+  would be re-applied on every instantiation, so a second instance would
+  clobber live heap/runtime state in the shared memory - plus two
+  synthetic exports: `_initmem` (memory.init + data.drop of all
+  segments; called exactly once, by the main instance, from `Go.run` in
+  wasm_exec.js - worker instances must never call it) and
+  `wasm_probe_atomic_add(addr, delta)` (a runtime-state-free wasm
+  i32.atomic.rmw.add workers can call before the scheduler is
+  thread-aware). `wasm_exec_node.js` compiles threads modules once
+  (kept on `go._module`); `lib/wasm/wasm_exec_pool_node.js`
+  (`GoWorkerPool`) + `wasm_exec_worker_node.js`/`wasm_exec_worker.js`
+  spawn N node worker_threads that instantiate the same module against
+  the same shared memory with all gojs runtime imports stubbed - Go
+  code does not run on worker instances yet (that is scheduler
+  integration, phase B2). Demo: `testdata/wasmthreads/pooldemo` driven
+  by `pool_demo.js` (run in CI). Ordinary modules and non-threads
+  builds are unchanged (byte-identical).
+- Threads runtime B2 (2026-07-17): real Go code runs on worker threads
+  under GOWASM=threads. Futex layer over memory.atomic.wait32/notify
+  (`runtime/sys_wasmthreads.s`); futex mutexes/notes for the runtime
+  (`lock_jsthreads.go`; `notetsleepg(n,-1)` parks the g, not the M);
+  `newosproc` hands new Ms through a futex mailbox to pool workers
+  parked in the new `wasm_thread_run` export (raw-wasm wait loop, sets
+  per-instance SP/g to the M's heap-allocated g0 and enters mstart).
+  `wasm_exec_node.js` pre-spawns GOWASMTHREADSPOOL workers (default 4,
+  0 disables; newosproc throws after 10s if none claims); workers get
+  real pure-runtime imports (println/clock/random/exit work on worker
+  Ms) but syscall/js stays main-thread-only. The event loop remains
+  main-M-only (`event_js.go` shared; beforeIdle routes worker Ms to
+  futex parks/timed sleeps). Main M may futex-wait (node-only; event
+  loop stalls while it does - B3 makes that non-blocking). GOMAXPROCS
+  is still clamped to 1 (single P handed between Ms); the demo/test
+  hook `runtime.wasmThreadsRunOnNewM` (pull-linkname with
+  `-ldflags=-checklinkname=0`) pins the caller's goroutine to its M to
+  force the handoff; public LockOSThread is still a wasm no-op. Demo:
+  `testdata/wasmthreads/threaddemo` (CI runs it 10x; three Ms on three
+  threads, channels/mutex/shared heap/GC, exit 0), plus an in-tree
+  runtime spawn test; threads regression set is `go test -short sync
+  sync/atomic internal/runtime/atomic runtime` under GOWASM=threads.
+  Non-threads builds keep identical behavior but are NO LONGER
+  byte-identical across this phase (runtime source split shifts
+  symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
+  preemption, non-blocking main-thread park, syscall/js forwarding
+  from worker Ms, browser workers.
+- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+  unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
+  1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
+  via cross-thread-armed loop backedge checks, a non-blocking main-thread park
+  (main M releases its P and parks in the event loop; woken cross-thread via
+  Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
+  syscall/js calls from worker Ms migrating their goroutine to the main
+  thread (stdout/stderr writes work directly on workers). The B3
+  "lost-wakeup" stalls / exit hang were root-caused to two bugs and fixed:
+  a main-thread microtask livelock (a wasmMainWake bump issued on the main
+  thread inside a resume re-triggers the armed Atomics.waitAsync watcher,
+  and the microtask chain starves every macrotask incl. the worker-posted
+  exit message; fixed by dropping main-thread-issued bumps) and
+  migrate-queue starvation (the queue only the main M can pop had a single
+  push-time wake, and a worker M idling in beforeIdle's timed sleep held
+  the only P through the whole wait; fixed by re-nudging from pidleput and
+  the parked-worker watchdog, and bailing out of the idle P-hold when the
+  main M needs a P).
+
+ Threads B4 (2026-07-19) is the hardening sweep: the rare GOMAXPROCS=4
+  crash class was root-caused to a FALSE deadlock report - checkdead's
+  "all Ms idle + runnable g" inference does not hold under threads
+  because the parked main M executes Go code (self-serve/kicks) while
+  still linked on sched.midle; checkdead now nudges the wake machinery
+  and returns instead of throwing (real deadlock reporting via the
+  host's exit-time probe is unchanged). The pool-headroom perf collapse
+  is fixed: a main M parked in the event loop counts as the far-future
+  -timer covering agent (backstop JS timeout + wakeNetPoller nudge), so
+  loop gates disarm without pool headroom - pool sizing no longer
+  affects parallel throughput for the common shapes. Idle-CPU
+  double-counting that made /cpu/classes/user:cpu-seconds non-monotonic
+  at >1P is fixed. Host events arriving while the main M has no P are
+  queued by wasm_exec.js instead of silently overwriting _pendingEvent.
+  Worker-side traps report their wasm stack (Go function names). New
+  gates: testdata/wasmthreads/holblock (a blocked ASYNC event handler
+  does not head-of-line-block later events; blocking a SYNCHRONOUS
+  nested js.FuncOf callback stays documented-unsupported, as upstream)
+  and testdata/wasmthreads/memgrow (worker-side memory.grow under
+  concurrent main/worker heap+host traffic). Later phases: host-call
+  forwarding, mark-worker knobs, browser hosts.
+
+ Threads grow-observation guard (2026-07-20): the nondeterministic
+  worker trap `memory access out of bounds` at runtime.newMarkBits
+  (~0.22% of loaded smoke runs) was root-caused to the engine
+  bounds-checking ATOMIC accesses against a per-instance cached memory
+  size that lags cross-thread memory.grow — a correctly-synchronized
+  fresh-page pointer from another thread could trap on its first atomic
+  touch. The assembler now emits a guard before EVERY 0xFE atomic memory
+  access under GOWASM=threads (cmd/internal/obj/wasm
+  writeGrowEpochGuard; hot path 5 instructions): compare
+  runtime.wasmGrowEpoch (bumped by sbrk per grow) against a per-instance
+  observed-epoch wasm global, and on mismatch execute memory.grow 0,
+  which resynchronizes that instance's cached size. Covers compiler
+  intrinsics and hand-written .s alike (single emission choke point);
+  wait32/notify included, atomic.fence exempt; non-threads builds are
+  unchanged (no 0xFE ops). CI gate: testdata/wasmthreads/growatomic.
+  Residual: plain accesses rely on trap-handler (guard-page) engines —
+  true of 64-bit V8, the only supported threads host (see
+  WASM_SHORTCOMINGS.md).
 
 The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
 `GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
@@ -327,7 +733,7 @@ grep -r "//go:build.*cosmo" src/
 
 ### 3. Runtime Platform Handling
 
-Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime. When creating `_cosmo.go` files:
+Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime (the NT surface is still growing wave by wave - see DEBUGGING.md) - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
 - Don't assume Linux-only features like `/proc` are available
 - Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
 - Test assumptions about what works on each platform

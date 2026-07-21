@@ -14,8 +14,11 @@ import (
 
 // This file holds the epoll poller used on Linux hosts. Every entry
 // point dispatches at run time on the host OS: macOS has no epoll, so
-// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead.
-// Exactly one of the two is ever initialized in a given process.
+// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead,
+// and Windows NT hosts use the WSAPoll poller in netpoll_cosmo_nt.go
+// (level-triggered, aix-shaped; it also serves the timer heap's
+// unconditional netpollGenericInit). Exactly one of the three is ever
+// initialized in a given process.
 
 var (
 	epfd           int32         = -1 // epoll descriptor
@@ -24,6 +27,10 @@ var (
 )
 
 func netpollinit() {
+	if iswindows() {
+		netpollinitNT()
+		return
+	}
 	if isdarwin() {
 		netpollinitDarwin()
 		return
@@ -52,6 +59,11 @@ func netpollinit() {
 }
 
 func netpollIsPollDescriptor(fd uintptr) bool {
+	if iswindows() {
+		// The NT wake socket is a raw SOCKET with no emulated fd
+		// number, so no fd can ever name it.
+		return false
+	}
 	if isdarwin() {
 		return netpollIsPollDescriptorDarwin(fd)
 	}
@@ -59,6 +71,11 @@ func netpollIsPollDescriptor(fd uintptr) bool {
 }
 
 func netpollopen(fd uintptr, pd *pollDesc) uintptr {
+	if iswindows() {
+		// Sockets only; pipes and files keep failing so
+		// internal/poll falls back to blocking mode for them.
+		return netpollopenNT(fd, pd)
+	}
 	if isdarwin() {
 		return netpollopenDarwin(fd, pd)
 	}
@@ -70,6 +87,9 @@ func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 }
 
 func netpollclose(fd uintptr) uintptr {
+	if iswindows() {
+		return netpollcloseNT(fd)
+	}
 	if isdarwin() {
 		return netpollcloseDarwin(fd)
 	}
@@ -77,9 +97,15 @@ func netpollclose(fd uintptr) uintptr {
 	return cosmo.EpollCtl(epfd, cosmo.EPOLL_CTL_DEL, int32(fd), &ev)
 }
 
-// netpollarm is never called: both pollers are edge-triggered and arm
-// once at netpollopen (netpollLevelTriggered stays false).
+// netpollarm re-arms one direction before a wait. Only the NT WSAPoll
+// poller is level-triggered (it sets netpollLevelTriggered at init);
+// the epoll and kqueue pollers are edge-triggered, arm once at
+// netpollopen, and must never come here.
 func netpollarm(pd *pollDesc, mode int) {
+	if iswindows() {
+		netpollarmNT(pd, mode)
+		return
+	}
 	if isdarwin() {
 		netpollarmDarwin(pd, mode)
 		return
@@ -91,6 +117,14 @@ func netpollarm(pd *pollDesc, mode int) {
 func netpollBreak() {
 	// Failing to cas indicates there is an in-flight wakeup, so we're done here.
 	if !netpollWakeSig.CompareAndSwap(0, 1) {
+		return
+	}
+
+	if iswindows() {
+		// One byte to the wake socket boots the poller out of its
+		// blocking WSAPoll; the poller drains and resets
+		// netpollWakeSig when it wakes blocking.
+		netpollBreakNT()
 		return
 	}
 
@@ -126,6 +160,9 @@ func netpollBreak() {
 // delay == 0: does not block, just polls
 // delay > 0: block for up to that many nanoseconds
 func netpoll(delay int64) (gList, int32) {
+	if iswindows() {
+		return netpollNT(delay)
+	}
 	if isdarwin() {
 		return netpollDarwin(delay)
 	}

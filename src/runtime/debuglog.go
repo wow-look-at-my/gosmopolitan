@@ -912,9 +912,9 @@ func printDebugLogPC(pc uintptr, returnPC bool) {
 	if !fn.valid() {
 		print(" [unknown PC]")
 	} else {
-		name := funcname(fn)
-		file, line := funcline(fn, pc)
-		print(" [", name, "+", hex(pc-fn.entry()),
-			" ", file, ":", line, "]")
+		npfx, name := funcnamePieces(fn)
+		fdir, fbase, line := funclinePieces(fn, pc)
+		print(" [", npfx, name, "+", hex(pc-fn.entry()),
+			" ", fdir, fbase, ":", line, "]")
 	}
 }

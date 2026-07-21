@@ -765,3 +765,60 @@ func TestIssue33961(t *testing.T) {
 		}
 	}
 }
+
+func TestShebang(t *testing.T) {
+	// Test that shebang lines are properly skipped at the beginning of files.
+	tests := []struct {
+		src      string
+		wantTok  token
+		wantLine uint // 1-based line number
+	}{
+		// Basic shebang
+		{"#!/usr/bin/env go run\npackage main", _Package, 2},
+		// Shebang with spaces
+		{"#!/bin/sh\npackage main", _Package, 2},
+		// No shebang - regular Go file
+		{"package main", _Package, 1},
+		// Long shebang line
+		{"#!/usr/bin/env -S go run -v\npackage main", _Package, 2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.src[:min(20, len(test.src))], func(t *testing.T) {
+			var s scanner
+			s.init(strings.NewReader(test.src), errh, 0)
+			s.next()
+
+			if s.tok != test.wantTok {
+				t.Errorf("got token %s, want %s", s.tok, test.wantTok)
+			}
+			if s.line != test.wantLine {
+				t.Errorf("got line %d, want %d", s.line, test.wantLine)
+			}
+		})
+	}
+}
+
+func TestShebangNotShebang(t *testing.T) {
+	// Test that '#' not followed by '!' is treated as an error, not a shebang.
+	tests := []struct {
+		src string
+	}{
+		{"#foo\npackage main"},
+		{"# foo\npackage main"},
+	}
+
+	for _, test := range tests {
+		var errors []string
+		var s scanner
+		s.init(strings.NewReader(test.src), func(line, col uint, msg string) {
+			errors = append(errors, msg)
+		}, 0)
+		s.next()
+
+		// Should get an error about invalid character
+		if len(errors) == 0 {
+			t.Errorf("%q: expected error for invalid character '#'", test.src)
+		}
+	}
+}

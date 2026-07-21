@@ -39,7 +39,6 @@ import (
 	"cmd/link/internal/loader"
 	"cmd/link/internal/loadpe"
 	"cmd/link/internal/sym"
-	"compress/zlib"
 	"debug/elf"
 	"encoding/binary"
 	"fmt"
@@ -3214,6 +3213,9 @@ func (ctxt *Link) AddTramp(s *loader.SymbolBuilder, typ sym.SymKind) {
 
 // compressSyms compresses syms and returns the contents of the
 // compressed section. If the section would get larger, it returns nil.
+// The codec is per-target - zstd for cosmo, zlib elsewhere - and lives in
+// dwarfcompress_zstd.go (with a zlib-only compiler_bootstrap fallback in
+// dwarfcompress_bootstrap.go, where the vendored encoder is unavailable).
 func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 	ldr := ctxt.loader
 	var total int64
@@ -3221,18 +3223,19 @@ func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 		total += ldr.SymSize(sym)
 	}
 
+	codec := dwarfCompressCodec(ctxt)
 	var buf bytes.Buffer
 	if ctxt.IsELF {
 		switch ctxt.Arch.PtrSize {
 		case 8:
 			binary.Write(&buf, ctxt.Arch.ByteOrder, elf.Chdr64{
-				Type:      uint32(elf.COMPRESS_ZLIB),
+				Type:      uint32(codec),
 				Size:      uint64(total),
 				Addralign: uint64(ctxt.Arch.Alignment),
 			})
 		case 4:
 			binary.Write(&buf, ctxt.Arch.ByteOrder, elf.Chdr32{
-				Type:      uint32(elf.COMPRESS_ZLIB),
+				Type:      uint32(codec),
 				Size:      uint32(total),
 				Addralign: uint32(ctxt.Arch.Alignment),
 			})
@@ -3248,13 +3251,9 @@ func compressSyms(ctxt *Link, syms []loader.Sym) []byte {
 
 	var relocbuf []byte // temporary buffer for applying relocations
 
-	// Using zlib.BestSpeed achieves very nearly the same
-	// compression levels of zlib.DefaultCompression, but takes
-	// substantially less time. This is important because DWARF
-	// compression can be a significant fraction of link time.
-	z, err := zlib.NewWriterLevel(&buf, zlib.BestSpeed)
+	z, err := newDwarfCompressor(&buf, codec)
 	if err != nil {
-		log.Fatalf("NewWriterLevel failed: %s", err)
+		log.Fatalf("newDwarfCompressor failed: %s", err)
 	}
 	st := ctxt.makeRelocSymState()
 	for _, s := range syms {

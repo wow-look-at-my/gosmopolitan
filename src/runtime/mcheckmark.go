@@ -263,9 +263,10 @@ func checkFinalizersAndCleanups() {
 			println("Has", kind, "at", hex(uintptr(unsafe.Pointer(r.sp))))
 			funcInfo := findfunc(ctx.funcPC)
 			if funcInfo.valid() {
-				file, line := funcline(funcInfo, ctx.funcPC)
-				print("  ", funcname(funcInfo), "()\n")
-				print("      ", file, ":", line, " +", hex(ctx.funcPC-funcInfo.entry()), "\n")
+				fdir, fbase, line := funclinePieces(funcInfo, ctx.funcPC)
+				fpfx, fname := funcnamePieces(funcInfo)
+				print("  ", fpfx, fname, "()\n")
+				print("      ", fdir, fbase, ":", line, " +", hex(ctx.funcPC-funcInfo.entry()), "\n")
 			} else {
 				print("  <bad pc ", hex(ctx.funcPC), ">\n")
 			}
@@ -273,9 +274,10 @@ func checkFinalizersAndCleanups() {
 			println("created at: ")
 			createInfo := findfunc(ctx.createPC)
 			if createInfo.valid() {
-				file, line := funcline(createInfo, ctx.createPC)
-				print("  ", funcname(createInfo), "()\n")
-				print("      ", file, ":", line, " +", hex(ctx.createPC-createInfo.entry()), "\n")
+				fdir, fbase, line := funclinePieces(createInfo, ctx.createPC)
+				fpfx, fname := funcnamePieces(createInfo)
+				print("  ", fpfx, fname, "()\n")
+				print("      ", fdir, fbase, ":", line, " +", hex(ctx.createPC-createInfo.entry()), "\n")
 			} else {
 				print("  <bad pc ", hex(ctx.createPC), ">\n")
 			}

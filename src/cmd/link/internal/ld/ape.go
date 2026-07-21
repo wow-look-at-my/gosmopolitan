@@ -20,11 +20,15 @@ import (
 // Based on the specification at: ape/specification.md
 //
 // APE creates polyglot executables that work on multiple OSes:
-// - Windows: Uses PE header starting with MZ magic
 // - Linux: Uses embedded ELF header (encoded as octal in printf)
 // - macOS x86-64: Uses dd command to copy Mach-O header backward
 // - macOS ARM64: Runs the arm64 payload natively via the embedded APE
 //   loader source (compiled with cc on first run); no Rosetta involved
+// - Windows: A real PE header maps the embedded cosmo amd64 image and
+//   enters the runtime's NT boot stub through loader-resolved kernel32
+//   imports; the stub joins the common runtime boot with the host
+//   marked as NT (rt0_cosmo_nt_amd64.s). arm64-only APEs keep a
+//   parseable do-nothing stub PE header instead.
 // - Windows shell (MSYS/Cygwin): Delegates to cmd.exe for PE execution
 
 const (
@@ -91,15 +95,30 @@ type apePayload struct {
 	elf    []byte // complete ELF image; p_offset values are payload-relative
 	arch   sys.ArchFamily
 	offset uint64 // file offset of this image inside the APE; set by layoutAPE
+
+	// pe carries the symbol RVAs the real amd64 PE header needs. It is
+	// set only on the thin-link path (convertToAPE), where the loader is
+	// alive to resolve them; nil means no real PE header can be computed
+	// for this payload.
+	pe *apePEInfo
+
+	// head is the 64K APE head of the input file this payload was
+	// extracted from, set only on the -apefat merge path. The amd64
+	// input's head already contains the real PE header computed by its
+	// thin link, valid verbatim in the fat file (the amd64 image lands
+	// at the same file offset with identical bytes), so the fat header
+	// transplants it instead of recomputing.
+	head []byte
 }
 
-// pePayload describes a native Windows PE image embedded in an APE file.
-// The final APE's PE header points its sections at this payload's section
-// bodies, shifted by offset.
-type pePayload struct {
-	pe     []byte
-	arch   sys.ArchFamily
-	offset uint64
+// apePEInfo holds the image RVAs, resolved from the live link's symbol
+// table, that writePECosmoAMD64 places in the PE header. RVAs are
+// relative to peCosmoImageBase, and for this layout equal payload-
+// relative file offsets (every PT_LOAD has vaddr - p_offset ==
+// peCosmoImageBase; see apePayloadLoads).
+type apePEInfo struct {
+	entryRVA   uint32 // _rt0_cosmo_nt, the PE AddressOfEntryPoint
+	importsRVA uint32 // runtime.ntidata, the import directory table
 }
 
 // payloadFromELF validates elf and wraps it as an APE payload.
@@ -117,8 +136,9 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 		return nil, fmt.Errorf("unsupported ELF machine type %#x", m)
 	}
 	// Validate the program header table up front: shiftPOffsets,
-	// makeEmbeddedElfHeader, and makeMachoHeader all index it without
-	// further checks, so a truncated or corrupt input would panic there.
+	// makeEmbeddedElfHeader, makeMachoHeader, payloadExtent,
+	// stripPayload, and apePayloadLoads all index it without further
+	// checks, so a truncated or corrupt input would panic there.
 	phoff := binary.LittleEndian.Uint64(elf[32:40])
 	phentsize := binary.LittleEndian.Uint16(elf[54:56])
 	phnum := binary.LittleEndian.Uint16(elf[56:58])
@@ -132,28 +152,6 @@ func payloadFromELF(elf []byte) (*apePayload, error) {
 		return nil, fmt.Errorf("corrupt ELF: program header table (e_phoff %#x, e_phnum %d) extends past end of file (%d bytes)", phoff, phnum, len(elf))
 	}
 	return &apePayload{elf: elf, arch: arch}, nil
-}
-
-// payloadFromPE validates pe and wraps it as a Windows payload.
-func payloadFromPE(pe []byte) (*pePayload, error) {
-	peoff, err := peHeaderOffset(pe)
-	if err != nil {
-		return nil, err
-	}
-	if len(pe) < peoff+24 {
-		return nil, fmt.Errorf("truncated PE COFF header")
-	}
-	machine := binary.LittleEndian.Uint16(pe[peoff+4:])
-	var arch sys.ArchFamily
-	switch machine {
-	case 0x8664:
-		arch = sys.AMD64
-	case 0xAA64:
-		arch = sys.ARM64
-	default:
-		return nil, fmt.Errorf("unsupported PE machine type %#x", machine)
-	}
-	return &pePayload{pe: pe, arch: arch}, nil
 }
 
 func (p *apePayload) entry() uint64 { return binary.LittleEndian.Uint64(p.elf[24:32]) }
@@ -180,7 +178,10 @@ func (ctxt *Link) convertToAPE() {
 	if p.arch != ctxt.Arch.Family {
 		Exitf("APE conversion: ELF machine type does not match link architecture")
 	}
-	writeAPEFile(outfile, []*apePayload{p}, nil)
+	if p.arch == sys.AMD64 {
+		apePrepareNTBoot(ctxt, p)
+	}
+	writeAPEFile(outfile, []*apePayload{p})
 }
 
 // apePayloadAlign is the alignment of payload images within the APE file.
@@ -191,23 +192,20 @@ const apePayloadAlign = 0x10000
 
 // layoutAPE assigns file offsets to the payloads: the first begins right
 // after the APE header, each subsequent payload at the next aligned boundary.
-func layoutAPE(payloads []*apePayload, win *pePayload) {
+func layoutAPE(payloads []*apePayload) {
 	off := uint64(apeHeaderSize)
 	for _, p := range payloads {
 		p.offset = off
 		off += uint64(len(p.elf))
 		off = (off + apePayloadAlign - 1) &^ uint64(apePayloadAlign-1)
 	}
-	if win != nil {
-		win.offset = off
-	}
 }
 
 // writeAPEFile writes an APE polyglot containing the given payloads.
 // Payload p_offset values are rewritten to absolute file offsets.
-func writeAPEFile(outfile string, payloads []*apePayload, win *pePayload) {
-	layoutAPE(payloads, win)
-	header := makeAPEHeaderForPayloads(payloads, win)
+func writeAPEFile(outfile string, payloads []*apePayload) {
+	layoutAPE(payloads)
+	header := makeAPEHeaderForPayloads(payloads)
 
 	apeFile, err := os.Create(outfile)
 	if err != nil {
@@ -230,17 +228,6 @@ func writeAPEFile(outfile string, payloads []*apePayload, win *pePayload) {
 			Exitf("cannot write APE payload: %v", err)
 		}
 		cur += uint64(len(p.elf))
-	}
-	if win != nil {
-		if win.offset > cur {
-			if _, err := apeFile.Write(make([]byte, win.offset-cur)); err != nil {
-				Exitf("cannot write APE padding: %v", err)
-			}
-			cur = win.offset
-		}
-		if _, err := apeFile.Write(win.pe); err != nil {
-			Exitf("cannot write Windows PE payload: %v", err)
-		}
 	}
 
 	if err := os.Chmod(outfile, 0755); err != nil {
@@ -288,7 +275,7 @@ func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 // and the embedded boot headers dispatch on the host architecture, and the
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first 8192 bytes.
-func makeAPEHeaderForPayloads(payloads []*apePayload, win *pePayload) []byte {
+func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	var amd, arm *apePayload
 	for _, p := range payloads {
 		switch p.arch {
@@ -527,17 +514,23 @@ exit 1
 	}
 
 	// === PE Header at offset 0x80 ===
-	// Required for Windows support. Prefer a real Windows payload when one
-	// was supplied; otherwise keep the legacy parseable stub for single-arch
-	// cosmo-only builds.
-	if win != nil {
-		writePEHeaderFromPayload(header, win)
-	} else {
-		peArch := sys.AMD64
-		if amd == nil {
-			peArch = sys.ARM64
-		}
-		writePEHeader(header, peArch)
+	// The polyglot's MZ magic and e_lfanew presume a PE image header
+	// here. With an amd64 payload the header really maps the embedded
+	// cosmo image and enters the runtime's NT boot stub: computed from
+	// the live link's symbols on the thin path, transplanted verbatim
+	// from the amd64 input's head on the fat path (same payload offset,
+	// same bytes, so the thin header is valid as-is). Without either
+	// source (arm64-only output, or synthetic test payloads) the legacy
+	// do-nothing stub keeps the file parseable as a PE.
+	switch {
+	case amd != nil && amd.pe != nil:
+		writePECosmoAMD64(header, amd)
+	case amd != nil && amd.head != nil:
+		transplantPEHeader(header, amd)
+	case amd != nil:
+		writePEHeader(header, sys.AMD64)
+	default:
+		writePEHeader(header, sys.ARM64)
 	}
 
 	// === Mach-O header for macOS x86-64 ===
@@ -631,6 +624,23 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 	binary.LittleEndian.PutUint16(hdr[58:], 64)
 	binary.LittleEndian.PutUint16(hdr[60:], 0)
 	binary.LittleEndian.PutUint16(hdr[62:], 0)
+
+	// Section header fields normally stay zero: execution never reads
+	// them, and a pristine payload's own table sits at a payload-relative
+	// offset that would be wrong in the assimilated file. The one producer
+	// of an exception is the -apefat compact debug mode (apedebug.go),
+	// whose payload ehdrs reference a section-header view appended past
+	// the payload image at an ABSOLUTE APE file offset - recognizable
+	// here as an offset at or beyond the payload image's end. That offset
+	// stays correct after self-assimilation rewrites the file's first 64
+	// bytes with this header, so propagating it is exactly what lets
+	// debuggers find the appended debug info in the assimilated binary.
+	// Every other payload shape (thin links, stripped or full fat merges)
+	// keeps today's zeroed fields, bit for bit.
+	if shoff := binary.LittleEndian.Uint64(origElf[40:48]); shoff >= uint64(len(origElf)) {
+		binary.LittleEndian.PutUint64(hdr[40:], shoff)
+		copy(hdr[60:64], origElf[60:64]) // e_shnum, e_shstrndx
+	}
 
 	return hdr
 }
@@ -858,101 +868,332 @@ func writeMachoUnixThread(buf *bytes.Buffer, entry uint64) {
 	}
 }
 
-func peHeaderOffset(pe []byte) (int, error) {
-	if len(pe) < 0x40 || string(pe[0:2]) != "MZ" {
-		return 0, fmt.Errorf("not a valid PE binary")
-	}
-	peoff := int(binary.LittleEndian.Uint32(pe[0x3C:]))
-	if peoff < 0 || len(pe) < peoff+4 || string(pe[peoff:peoff+4]) != "PE\x00\x00" {
-		return 0, fmt.Errorf("not a valid PE binary")
-	}
-	return peoff, nil
+// Real PE header parameters for the cosmo amd64 image (writePECosmoAMD64).
+const (
+	// peCosmoImageBase is the cosmo/amd64 link base (amd64/obj.go sets
+	// FlagTextAddr = 0x100000000 + HEADR), already the multiple of 64K
+	// the Windows loader demands of ImageBase. Every PT_LOAD of the
+	// image satisfies vaddr - p_offset == peCosmoImageBase (the layout
+	// invariant Vaddr == Fileoff mod FlagRound plus lockstep address/
+	// offset assignment), so RVA == payload-relative file offset
+	// throughout, and PointerToRawData == apeHeaderSize + RVA once the
+	// payload sits at apeHeaderSize.
+	peCosmoImageBase = 0x100000000
+	peCosmoSectAlign = 0x1000
+	peCosmoFileAlign = 0x200
+	// peCosmoHeadersSize covers the real header chain (ends at 0x208)
+	// rounded to FileAlignment; it must stay at or below the first
+	// section RVA (0x1000) and at or below AddressOfEntryPoint.
+	peCosmoHeadersSize = 0x400
+	// peCosmoImportsSize is DataDirectory[1].Size: one import
+	// descriptor plus the all-zero terminator entry.
+	peCosmoImportsSize = 0x28
+)
+
+// Fixed layout of the runtime.ntidata import blob. Must match the DATA
+// directives and layout comment in runtime/rt0_cosmo_nt_amd64.s.
+const (
+	ntidataSize        = 0x70
+	ntidataILT         = 0x28 // import lookup table (2 entries + terminator)
+	ntidataHintGetProc = 0x40 // hint/name entry for GetProcAddress
+	ntidataHintLoadLib = 0x52 // hint/name entry for LoadLibraryA
+	ntidataDLLName     = 0x62 // "kernel32.dll\0"
+	ntiatSize          = 24   // import address table (2 slots + terminator)
+)
+
+// apePhdr is one PT_LOAD program header of a payload image, with the
+// payload-relative file offset.
+type apePhdr struct {
+	flags  uint32
+	off    uint64
+	vaddr  uint64
+	filesz uint64
+	memsz  uint64
 }
 
-// writePEHeaderFromPayload transplants a native Windows PE header into the
-// APE header. Section RVAs and data-directory RVAs remain unchanged; section
-// raw file offsets are shifted to point into the embedded PE payload.
-func writePEHeaderFromPayload(header []byte, win *pePayload) {
-	const peStart = 0x80
-	peoff, err := peHeaderOffset(win.pe)
-	if err != nil {
-		Exitf("Windows PE payload: %v", err)
-	}
-	coffStart := peoff + 4
-	if len(win.pe) < coffStart+20 {
-		Exitf("Windows PE payload: truncated COFF header")
-	}
-	numSections := int(binary.LittleEndian.Uint16(win.pe[coffStart+2:]))
-	sizeOpt := int(binary.LittleEndian.Uint16(win.pe[coffStart+16:]))
-	optStart := coffStart + 20
-	sectStart := optStart + sizeOpt
-	headersEnd := sectStart + numSections*40
-	if len(win.pe) < headersEnd {
-		Exitf("Windows PE payload: truncated section table")
-	}
-	// The byte at apeScriptOffset-1 is unconditionally overwritten with a
-	// newline so the shell heredoc terminator starts on a fresh line, so
-	// the transplanted headers must end strictly before apeScriptOffset.
-	if peStart+(headersEnd-peoff) >= apeScriptOffset {
-		Exitf("Windows PE payload: PE headers too large for APE script gap")
-	}
-	if win.offset > uint64(^uint32(0)) {
-		Exitf("Windows PE payload: file offset %#x exceeds PE32 raw pointer range", win.offset)
-	}
-	// Data directories that hold raw file offsets rather than RVAs would
-	// need shifting too, but the transplant leaves directories untouched
-	// and Go's internal linker never emits the offset-based ones. Reject a
-	// Certificate Table (directory 4, whose entry is a file offset to the
-	// Authenticode signature) so a signed input fails loudly instead of
-	// shipping a dangling pointer. The Debug directory (6) has the same
-	// caveat - its entries carry unshifted PointerToRawData fields - but
-	// Go's linker does not populate it either.
-	if sizeOpt >= 2 {
-		dirBase := 0
-		switch binary.LittleEndian.Uint16(win.pe[optStart:]) {
-		case 0x20B: // PE32+
-			dirBase = optStart + 112
-		case 0x10B: // PE32
-			dirBase = optStart + 96
-		}
-		certDir := dirBase + 4*8
-		if dirBase != 0 && certDir+8 <= optStart+sizeOpt {
-			if binary.LittleEndian.Uint32(win.pe[certDir+4:]) != 0 {
-				Exitf("Windows PE payload: input has a Certificate Table (Authenticode signature); signed PEs are unsupported as APE payloads")
-			}
-		}
-	}
-
-	copy(header[peStart:], win.pe[peoff:headersEnd])
-
-	newCoffStart := peStart + 4
-	newSizeOpt := int(binary.LittleEndian.Uint16(header[newCoffStart+16:]))
-	newOptStart := newCoffStart + 20
-	newSectStart := newOptStart + newSizeOpt
-	symptr := binary.LittleEndian.Uint32(header[newCoffStart+8:])
-	if symptr != 0 {
-		shifted := uint64(symptr) + win.offset
-		if shifted > uint64(^uint32(0)) {
-			Exitf("Windows PE payload: shifted symbol table pointer %#x exceeds PE32 range", shifted)
-		}
-		binary.LittleEndian.PutUint32(header[newCoffStart+8:], uint32(shifted))
-	}
-	binary.LittleEndian.PutUint32(header[newOptStart+64:], 0) // CheckSum
-	for i := 0; i < numSections; i++ {
-		sect := newSectStart + i*40
-		raw := binary.LittleEndian.Uint32(header[sect+20:])
-		if raw == 0 {
+// apePayloadLoads returns the PT_LOAD program headers of a payload whose
+// table payloadFromELF has already validated.
+func apePayloadLoads(elf []byte) []apePhdr {
+	phoff := binary.LittleEndian.Uint64(elf[32:40])
+	phentsize := binary.LittleEndian.Uint16(elf[54:56])
+	phnum := binary.LittleEndian.Uint16(elf[56:58])
+	var loads []apePhdr
+	for i := uint16(0); i < phnum; i++ {
+		ph := elf[phoff+uint64(i)*uint64(phentsize):]
+		if binary.LittleEndian.Uint32(ph[0:4]) != 1 { // PT_LOAD
 			continue
 		}
-		shifted := uint64(raw) + win.offset
-		if shifted > uint64(^uint32(0)) {
-			Exitf("Windows PE payload: shifted section raw pointer %#x exceeds PE32 range", shifted)
+		loads = append(loads, apePhdr{
+			flags:  binary.LittleEndian.Uint32(ph[4:8]),
+			off:    binary.LittleEndian.Uint64(ph[8:16]),
+			vaddr:  binary.LittleEndian.Uint64(ph[16:24]),
+			filesz: binary.LittleEndian.Uint64(ph[32:40]),
+			memsz:  binary.LittleEndian.Uint64(ph[40:48]),
+		})
+	}
+	return loads
+}
+
+// apeVaddrFileOff translates the virtual address range [vaddr,
+// vaddr+size) to its payload-relative file offset, requiring the whole
+// range to be file-backed (within p_filesz) by a single PT_LOAD.
+func apeVaddrFileOff(loads []apePhdr, vaddr, size uint64, what string) uint64 {
+	for _, l := range loads {
+		if vaddr >= l.vaddr && vaddr+size <= l.vaddr+l.filesz {
+			return l.off + (vaddr - l.vaddr)
 		}
-		binary.LittleEndian.PutUint32(header[sect+20:], uint32(shifted))
+	}
+	Exitf("APE NT boot: %s (vaddr %#x, %d bytes) is not file-backed by any PT_LOAD; it must be initialized data, not BSS", what, vaddr, size)
+	return 0
+}
+
+// apePrepareNTBoot resolves the NT boot symbols from the live link,
+// patches the five RVA fields of the runtime.ntidata import blob in the
+// payload bytes, and attaches the header RVAs to the payload for
+// writePECosmoAMD64. Runs on the thin amd64 path only (convertToAPE),
+// where ctxt.loader is still alive.
+func apePrepareNTBoot(ctxt *Link, p *apePayload) {
+	ldr := ctxt.loader
+	sym := func(name string, wantSize int64) uint64 {
+		s := ldr.Lookup(name, 0)
+		if s == 0 {
+			Exitf("APE NT boot: symbol %s not found; it should be a deadcode root for cosmo/amd64", name)
+		}
+		if wantSize >= 0 && ldr.SymSize(s) != wantSize {
+			Exitf("APE NT boot: %s is %d bytes, want %d (layout contract with rt0_cosmo_nt_amd64.s)", name, ldr.SymSize(s), wantSize)
+		}
+		v := uint64(ldr.SymValue(s))
+		if v < peCosmoImageBase || v-peCosmoImageBase >= 1<<32 {
+			Exitf("APE NT boot: %s at %#x is outside the PE image (base %#x)", name, v, uint64(peCosmoImageBase))
+		}
+		return v
+	}
+	entry := sym("_rt0_cosmo_nt", -1)
+	idata := sym("runtime.ntidata", ntidataSize)
+	iat := sym("runtime.ntiat", ntiatSize)
+
+	loads := apePayloadLoads(p.elf)
+	idataOff := apeVaddrFileOff(loads, idata, ntidataSize, "runtime.ntidata")
+	// The IAT must be file-backed too: the NT loader resolves imports by
+	// overwriting bytes that exist in the file image.
+	apeVaddrFileOff(loads, iat, ntiatSize, "runtime.ntiat")
+
+	// Cross-check the blob's fixed layout against the strings the asm
+	// placed, so a drifted rt0_cosmo_nt_amd64.s fails the link loudly
+	// instead of producing an unloadable import table.
+	blob := p.elf[idataOff : idataOff+ntidataSize]
+	for _, want := range []struct {
+		off int
+		s   string
+	}{
+		{ntidataHintGetProc + 2, "GetProcAddress\x00"},
+		{ntidataHintLoadLib + 2, "LoadLibraryA\x00"},
+		{ntidataDLLName, "kernel32.dll\x00"},
+	} {
+		if got := string(blob[want.off : want.off+len(want.s)]); got != want.s {
+			Exitf("APE NT boot: runtime.ntidata+%#x holds %q, want %q; blob layout out of sync with rt0_cosmo_nt_amd64.s", want.off, got, want.s)
+		}
+	}
+
+	idataRVA := uint32(idata - peCosmoImageBase)
+	iatRVA := uint32(iat - peCosmoImageBase)
+	// Patch the five RVA fields (layout comment in rt0_cosmo_nt_amd64.s).
+	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)                         // IDT[0].OriginalFirstThunk
+	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName)                     // IDT[0].Name
+	binary.LittleEndian.PutUint32(blob[0x10:], iatRVA)                                      // IDT[0].FirstThunk
+	binary.LittleEndian.PutUint64(blob[ntidataILT:], uint64(idataRVA)+ntidataHintGetProc)   // ILT[0]
+	binary.LittleEndian.PutUint64(blob[ntidataILT+8:], uint64(idataRVA)+ntidataHintLoadLib) // ILT[1]
+
+	p.pe = &apePEInfo{
+		entryRVA:   uint32(entry - peCosmoImageBase),
+		importsRVA: idataRVA,
 	}
 }
 
-// writePEHeader writes the PE header for Windows support.
+// peCosmoSection is one section header of the real amd64 PE header.
+type peCosmoSection struct {
+	name  string
+	rva   uint32 // VirtualAddress
+	vsz   uint32 // VirtualSize (BSS beyond rawsz is zero-filled)
+	raw   uint32 // PointerToRawData, an absolute APE file offset
+	rawsz uint32 // SizeOfRawData
+	chars uint32
+}
+
+// writePECosmoAMD64 writes the real PE header for an amd64 payload: a
+// PE32+ image at base peCosmoImageBase whose three sections map the
+// payload's PT_LOADs (skipping the payload's ELF-header page, which the
+// PE headers region occupies virtually), whose entry point is the
+// runtime's _rt0_cosmo_nt stub, and whose import directory points at
+// the runtime.ntidata blob patched by apePrepareNTBoot.
+func writePECosmoAMD64(header []byte, amd *apePayload) {
+	info := amd.pe
+	loads := apePayloadLoads(amd.elf)
+	if len(loads) != 3 {
+		Exitf("APE PE: amd64 payload has %d PT_LOADs, want 3 (RX text, R rodata, RW data)", len(loads))
+	}
+	const (
+		elfPFExec  = 1
+		elfPFWrite = 2
+		elfPFRead  = 4
+	)
+	wantFlags := [3]uint32{elfPFRead | elfPFExec, elfPFRead, elfPFRead | elfPFWrite}
+	for i, l := range loads {
+		if l.flags != wantFlags[i] {
+			Exitf("APE PE: PT_LOAD %d has flags %#x, want %#x", i, l.flags, wantFlags[i])
+		}
+		if l.vaddr-l.off != peCosmoImageBase {
+			Exitf("APE PE: PT_LOAD %d has vaddr %#x - offset %#x != image base %#x; RVAs would not equal payload offsets", i, l.vaddr, l.off, uint64(peCosmoImageBase))
+		}
+		if l.off%peCosmoSectAlign != 0 {
+			Exitf("APE PE: PT_LOAD %d file offset %#x is not %#x-aligned", i, l.off, peCosmoSectAlign)
+		}
+		if l.memsz < l.filesz {
+			Exitf("APE PE: PT_LOAD %d has memsz %#x < filesz %#x", i, l.memsz, l.filesz)
+		}
+	}
+	text, ro, data := loads[0], loads[1], loads[2]
+	if text.off != 0 || text.filesz <= peCosmoSectAlign {
+		Exitf("APE PE: text load must start at payload offset 0 and extend past the ELF header page (off %#x, filesz %#x)", text.off, text.filesz)
+	}
+	if text.memsz != text.filesz {
+		Exitf("APE PE: text load has memsz %#x != filesz %#x", text.memsz, text.filesz)
+	}
+	end := data.off + data.memsz
+	if end >= 1<<32 {
+		Exitf("APE PE: image end %#x does not fit the 32-bit RVA space", end)
+	}
+
+	// .data's SizeOfRawData is p_filesz rounded up to FileAlignment; the
+	// rounding tail is loaded into memory ahead of the zero-filled BSS,
+	// so it must be zero bytes in the file (the linker's next file area
+	// starts at a page-rounded offset, leaving zero padding here).
+	dataRawSize := (data.filesz + peCosmoFileAlign - 1) &^ uint64(peCosmoFileAlign-1)
+	for i := data.off + data.filesz; i < data.off+dataRawSize; i++ {
+		if i >= uint64(len(amd.elf)) || amd.elf[i] != 0 {
+			Exitf("APE PE: byte %#x of the payload is not zero padding; cannot round .data raw size %#x up to FileAlignment", i, data.filesz)
+		}
+	}
+
+	sects := [3]peCosmoSection{
+		{".text", uint32(text.off + peCosmoSectAlign), uint32(text.memsz - peCosmoSectAlign),
+			uint32(amd.offset+text.off) + peCosmoSectAlign, uint32(text.filesz - peCosmoSectAlign),
+			0x60000020}, // CODE | EXECUTE | READ
+		{".rodata", uint32(ro.off), uint32(ro.memsz),
+			uint32(amd.offset + ro.off), uint32(ro.filesz),
+			0x40000040}, // INITIALIZED_DATA | READ
+		{".data", uint32(data.off), uint32(data.memsz),
+			uint32(amd.offset + data.off), uint32(dataRawSize),
+			0xC0000040}, // INITIALIZED_DATA | READ | WRITE
+	}
+	sizeOfImage := (uint32(end) + peCosmoSectAlign - 1) &^ uint32(peCosmoSectAlign-1)
+
+	if t := sects[0]; info.entryRVA < t.rva || info.entryRVA >= t.rva+t.vsz {
+		Exitf("APE PE: entry RVA %#x is outside .text [%#x, %#x)", info.entryRVA, t.rva, t.rva+t.vsz)
+	}
+	if d := sects[2]; info.importsRVA < d.rva || info.importsRVA+peCosmoImportsSize > d.rva+d.vsz {
+		Exitf("APE PE: import directory RVA %#x is outside .data [%#x, %#x)", info.importsRVA, d.rva, d.rva+d.vsz)
+	}
+
+	peStart := 0x80
+	copy(header[peStart:], []byte{'P', 'E', 0, 0})
+
+	// COFF header.
+	coffStart := peStart + 4
+	binary.LittleEndian.PutUint16(header[coffStart+0:], 0x8664) // Machine: amd64
+	binary.LittleEndian.PutUint16(header[coffStart+2:], 3)      // NumberOfSections
+	binary.LittleEndian.PutUint32(header[coffStart+4:], 0)      // TimeDateStamp
+	binary.LittleEndian.PutUint32(header[coffStart+8:], 0)      // PointerToSymbolTable
+	binary.LittleEndian.PutUint32(header[coffStart+12:], 0)     // NumberOfSymbols
+	binary.LittleEndian.PutUint16(header[coffStart+16:], 240)   // SizeOfOptionalHeader
+	// RELOCS_STRIPPED | EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE |
+	// DEBUG_STRIPPED, matching real Cosmopolitan APEs. RELOCS_STRIPPED
+	// is honest: cosmo code is position-dependent and there is no
+	// .reloc section, so the image must load at ImageBase or not at all.
+	binary.LittleEndian.PutUint16(header[coffStart+18:], 0x0223) // Characteristics
+
+	// Optional header (PE32+).
+	optStart := coffStart + 20
+	binary.LittleEndian.PutUint16(header[optStart+0:], 0x20B)               // Magic: PE32+
+	header[optStart+2] = 1                                                  // MajorLinkerVersion
+	header[optStart+3] = 0                                                  // MinorLinkerVersion
+	binary.LittleEndian.PutUint32(header[optStart+4:], 0)                   // SizeOfCode (unused by loaders)
+	binary.LittleEndian.PutUint32(header[optStart+8:], 0)                   // SizeOfInitializedData
+	binary.LittleEndian.PutUint32(header[optStart+12:], 0)                  // SizeOfUninitializedData
+	binary.LittleEndian.PutUint32(header[optStart+16:], info.entryRVA)      // AddressOfEntryPoint
+	binary.LittleEndian.PutUint32(header[optStart+20:], sects[0].rva)       // BaseOfCode
+	binary.LittleEndian.PutUint64(header[optStart+24:], peCosmoImageBase)   // ImageBase
+	binary.LittleEndian.PutUint32(header[optStart+32:], peCosmoSectAlign)   // SectionAlignment
+	binary.LittleEndian.PutUint32(header[optStart+36:], peCosmoFileAlign)   // FileAlignment
+	binary.LittleEndian.PutUint16(header[optStart+40:], 6)                  // MajorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+42:], 0)                  // MinorOSVersion
+	binary.LittleEndian.PutUint16(header[optStart+44:], 0)                  // MajorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+46:], 0)                  // MinorImageVersion
+	binary.LittleEndian.PutUint16(header[optStart+48:], 6)                  // MajorSubsystemVersion
+	binary.LittleEndian.PutUint16(header[optStart+50:], 0)                  // MinorSubsystemVersion
+	binary.LittleEndian.PutUint32(header[optStart+52:], 0)                  // Win32VersionValue
+	binary.LittleEndian.PutUint32(header[optStart+56:], sizeOfImage)        // SizeOfImage
+	binary.LittleEndian.PutUint32(header[optStart+60:], peCosmoHeadersSize) // SizeOfHeaders
+	binary.LittleEndian.PutUint32(header[optStart+64:], 0)                  // CheckSum
+	binary.LittleEndian.PutUint16(header[optStart+68:], 3)                  // Subsystem: CONSOLE
+	// NX_COMPAT | TERMINAL_SERVER_AWARE. Deliberately no DYNAMIC_BASE or
+	// HIGH_ENTROPY_VA: with relocations stripped, ASLR must not be
+	// invited to move the image off its link base.
+	binary.LittleEndian.PutUint16(header[optStart+70:], 0x8100)   // DllCharacteristics
+	binary.LittleEndian.PutUint64(header[optStart+72:], 0x800000) // SizeOfStackReserve (8 MiB)
+	// rt0_go carves g0's stack as [entry SP - 64K, entry SP], so the
+	// commit must hand the entry thread at least 64K up front.
+	binary.LittleEndian.PutUint64(header[optStart+80:], 0x10000)  // SizeOfStackCommit
+	binary.LittleEndian.PutUint64(header[optStart+88:], 0x100000) // SizeOfHeapReserve
+	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)   // SizeOfHeapCommit
+	binary.LittleEndian.PutUint32(header[optStart+104:], 0)       // LoaderFlags
+	binary.LittleEndian.PutUint32(header[optStart+108:], 16)      // NumberOfRvaAndSizes
+	// Data directories: only [1] (imports) is populated.
+	dirStart := optStart + 112
+	binary.LittleEndian.PutUint32(header[dirStart+8:], info.importsRVA)
+	binary.LittleEndian.PutUint32(header[dirStart+12:], peCosmoImportsSize)
+
+	// Section table (ends at 0x208, within the [0x80, 0x7FF) budget the
+	// shell script at apeScriptOffset leaves for the PE header chain).
+	sectStart := optStart + 240
+	for i, s := range sects {
+		sh := header[sectStart+40*i:]
+		copy(sh[0:8], s.name)
+		binary.LittleEndian.PutUint32(sh[8:], s.vsz)
+		binary.LittleEndian.PutUint32(sh[12:], s.rva)
+		binary.LittleEndian.PutUint32(sh[16:], s.rawsz)
+		binary.LittleEndian.PutUint32(sh[20:], s.raw)
+		binary.LittleEndian.PutUint32(sh[24:], 0) // PointerToRelocations
+		binary.LittleEndian.PutUint32(sh[28:], 0) // PointerToLinenumbers
+		binary.LittleEndian.PutUint16(sh[32:], 0) // NumberOfRelocations
+		binary.LittleEndian.PutUint16(sh[34:], 0) // NumberOfLinenumbers
+		binary.LittleEndian.PutUint32(sh[36:], s.chars)
+	}
+}
+
+// transplantPEHeader copies the amd64 input's PE header region verbatim
+// into a fat APE's head. The thin link computed a header whose RVAs and
+// absolute raw data pointers are equally valid in the fat file: the
+// amd64 image lands at the same file offset (apeHeaderSize) with
+// byte-identical content, imports blob included.
+func transplantPEHeader(header []byte, amd *apePayload) {
+	if len(amd.head) < apeScriptOffset {
+		Exitf("APE PE transplant: amd64 input head is %d bytes, want at least %#x", len(amd.head), apeScriptOffset)
+	}
+	if string(amd.head[0x80:0x84]) != "PE\x00\x00" {
+		Exitf("APE PE transplant: amd64 input has no PE signature at 0x80")
+	}
+	if amd.offset != apeHeaderSize {
+		Exitf("APE PE transplant: amd64 payload at %#x, want %#x; the transplanted header's raw data pointers assume the thin layout", amd.offset, uint64(apeHeaderSize))
+	}
+	copy(header[0x80:apeScriptOffset], amd.head[0x80:apeScriptOffset])
+}
+
+// writePEHeader writes the legacy stub PE header: a parseable console
+// PE32+ whose entry immediately returns 0, mapping nothing of the
+// payload. It remains for outputs that cannot carry the real header:
+// arm64-only APEs (no NT support) and synthetic payloads without a live
+// link or an input head (ld tests).
 func writePEHeader(header []byte, arch sys.ArchFamily) {
 	peStart := 0x80
 
