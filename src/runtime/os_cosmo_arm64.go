@@ -220,6 +220,8 @@ var (
 	dlsymNameGetpeername = []byte("getpeername\x00")
 	dlsymNameSendto      = []byte("sendto\x00")
 	dlsymNameRecvfrom    = []byte("recvfrom\x00")
+	dlsymNameSendmsg     = []byte("sendmsg\x00")
+	dlsymNameRecvmsg     = []byte("recvmsg\x00")
 	dlsymNameSetsockopt  = []byte("setsockopt\x00")
 	dlsymNameGetsockopt  = []byte("getsockopt\x00")
 	dlsymNameShutdown    = []byte("shutdown\x00")
@@ -304,6 +306,8 @@ func osArchInit() {
 		Getpeername:   cosmoDlsym(&dlsymNameGetpeername[0]),
 		Sendto:        cosmoDlsym(&dlsymNameSendto[0]),
 		Recvfrom:      cosmoDlsym(&dlsymNameRecvfrom[0]),
+		Sendmsg:       cosmoDlsym(&dlsymNameSendmsg[0]),
+		Recvmsg:       cosmoDlsym(&dlsymNameRecvmsg[0]),
 		Setsockopt:    cosmoDlsym(&dlsymNameSetsockopt[0]),
 		Getsockopt:    cosmoDlsym(&dlsymNameGetsockopt[0]),
 		Shutdown:      cosmoDlsym(&dlsymNameShutdown[0]),

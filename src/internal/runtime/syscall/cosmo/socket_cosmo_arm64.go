@@ -28,10 +28,15 @@ import "unsafe"
 // nosplit check bounds the chains; the sockaddr scratch buffers are the
 // biggest frames at 112 bytes, well under the darwinFstatat precedent).
 //
-// Not emulated (kept visibly ENOSYS): sendmsg/recvmsg - Linux and Apple
-// disagree on struct msghdr/cmsghdr field widths, so passing buffers
-// through would corrupt them; nothing in the basic net TCP/UDP paths
-// needs them (they back oob/fd-passing and ReadMsg*).
+// sendmsg/recvmsg are emulated since 2026-07-21: Linux and Apple
+// disagree on struct msghdr field widths and on struct cmsghdr
+// entirely. darwinSendmsg/darwinRecvmsg below are fixed-size msghdr
+// shape adapters (all the nosplit budget allows); the unbounded halves
+// - sockaddr translation and the cmsg repack, SCM_RIGHTS fd payloads
+// preserved and MSG_CMSG_CLOEXEC emulated via fcntl - run as ordinary
+// Go in package syscall's darwin branch, over the exported helpers in
+// socket_msg_cosmo.go (see that file's header for the split and the
+// resulting raw-syscall contract).
 
 // Linux arm64 socket syscall numbers handled by the slow path.
 const (
@@ -48,6 +53,8 @@ const (
 	sysSETSOCKOPT  = 208
 	sysGETSOCKOPT  = 209
 	sysSHUTDOWN    = 210
+	sysSENDMSG     = 211
+	sysRECVMSG     = 212
 	sysACCEPT4     = 242
 )
 
@@ -162,7 +169,7 @@ func darwinSockaddrIn(addr uintptr, alenp uintptr) {
 func darwinSetNoSigpipe(fd uintptr) {
 	if darwinFns.Setsockopt != 0 {
 		one := uint32(1)
-		darwinLibcCall6(darwinFns.Setsockopt, fd, 0xffff /* Apple SOL_SOCKET */, appleSO_NOSIGPIPE,
+		darwinLibcCall6(darwinFns.Setsockopt, fd, appleSOL_SOCKET, appleSO_NOSIGPIPE,
 			uintptr(unsafe.Pointer(&one)), 4, 0)
 	}
 }
@@ -317,6 +324,103 @@ func darwinRecvfrom(s, p, n, flags, from, fromlenp uintptr) (r1, r2, errno uintp
 	return r1, r2, errno
 }
 
+// darwinSendmsg emulates the Linux sendmsg syscall as a FIXED-SIZE
+// shape adapter: the Linux msghdr's field widths are converted into an
+// Apple msghdr (iovlen u64 -> int32 behind the UIO_MAXIOV bound,
+// controllen u64 -> u32), the iovec array passes through (layouts
+// coincide), and the msg_name/msg_control POINTERS pass through
+// untouched - their BYTES must already be Apple-shaped, per the
+// contract in socket_msg_cosmo.go's header (package syscall's darwin
+// branch performs the sockaddr translation and cmsg repack as
+// ordinary Go before entering the window; nothing unbounded fits the
+// nosplit budget here). SIGPIPE needs no per-call handling: every
+// socket this emulation creates already carries SO_NOSIGPIPE (a
+// broken-pipe send fails with EPIPE, Go's expected semantics).
+//
+//go:nosplit
+func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Sendmsg == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if e := darwinCheckMsgFlags(flags); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	if msgp == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	lm := (*linuxMsghdr)(unsafe.Pointer(msgp))
+	if lm.Iovlen > msgMaxIovlen {
+		return ^uintptr(0), 0, cmsgEMSGSIZE
+	}
+	if lm.Controllen > 0x7fffffff {
+		return ^uintptr(0), 0, darwinEINVAL // Apple's controllen is u32
+	}
+	var amsg appleMsghdr
+	amsg.Name = lm.Name
+	if lm.Name != 0 {
+		amsg.Namelen = lm.Namelen
+	}
+	amsg.Iov = lm.Iov
+	amsg.Iovlen = int32(lm.Iovlen)
+	if lm.Control != 0 && lm.Controllen != 0 {
+		amsg.Control = lm.Control
+		amsg.Controllen = uint32(lm.Controllen)
+	}
+	return darwinCall(darwinFns.Sendmsg, s, uintptr(unsafe.Pointer(&amsg)), flags, 0, 0, 0)
+}
+
+// darwinRecvmsg emulates the Linux recvmsg syscall, the same
+// fixed-size shape adapter as darwinSendmsg: msghdr widths in, msghdr
+// widths and result-flag VALUES (XlatMsgFlags) out. The msg_name and
+// msg_control buffers come back with Apple-shaped BYTES - package
+// syscall's darwin branch rewrites the sockaddr family and repacks
+// the control records (with the MSG_CMSG_CLOEXEC emulation and
+// truncation fd hygiene) after the window; raw SYS_RECVMSG users get
+// the Apple-shaped-buffer contract. MSG_CMSG_CLOEXEC itself is
+// refused EINVAL here like every untranslatable flag (the NT
+// emulation's exact stance): the std path strips it and emulates
+// above, so a raw caller's request is refused visibly rather than
+// silently ignored.
+//
+//go:nosplit
+func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Recvmsg == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if e := darwinCheckMsgFlags(flags); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	if msgp == 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	lm := (*linuxMsghdr)(unsafe.Pointer(msgp))
+	if lm.Iovlen > msgMaxIovlen {
+		return ^uintptr(0), 0, cmsgEMSGSIZE
+	}
+	if lm.Controllen > 0x7fffffff {
+		return ^uintptr(0), 0, darwinEINVAL // Apple's controllen is u32
+	}
+	var amsg appleMsghdr
+	amsg.Name = lm.Name
+	if lm.Name != 0 {
+		amsg.Namelen = lm.Namelen
+	}
+	amsg.Iov = lm.Iov
+	amsg.Iovlen = int32(lm.Iovlen)
+	if lm.Control != 0 && lm.Controllen != 0 {
+		amsg.Control = lm.Control
+		amsg.Controllen = uint32(lm.Controllen)
+	}
+	r1, r2, errno = darwinCall(darwinFns.Recvmsg, s, uintptr(unsafe.Pointer(&amsg)), flags, 0, 0, 0)
+	if errno != 0 {
+		return r1, r2, errno
+	}
+	lm.Namelen = amsg.Namelen
+	lm.Controllen = uint64(amsg.Controllen)
+	lm.Flags = XlatMsgFlags(amsg.Flags)
+	return r1, r2, 0
+}
+
 // darwinSockoptXlat translates a Linux (level, optname) pair to Apple's.
 // Only pairs whose option VALUE also has the same meaning on both
 // systems are listed; everything else reports ENOPROTOOPT so the gap is
@@ -328,8 +432,7 @@ func darwinRecvfrom(s, p, n, flags, from, fromlenp uintptr) (r1, r2, errno uintp
 //go:nosplit
 func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 	switch level {
-	case 1: // Linux SOL_SOCKET
-		const appleSOL_SOCKET = 0xffff
+	case linuxSOL_SOCKET:
 		switch name {
 		case 1: // SO_DEBUG
 			return appleSOL_SOCKET, 0x0001, true
