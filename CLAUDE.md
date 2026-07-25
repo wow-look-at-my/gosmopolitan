@@ -588,6 +588,19 @@ the full catalog of fixes and remaining gaps):
   and streamed bodies cannot be replayed, so a redirect that must
   re-send the body fails with a network error per spec.
   `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
+- Round 7 (2026-07-25): forward jumps skip the dispatcher. Inter-block
+  control flow used to store the target block to PC_B, branch to the entry
+  loop and re-enter through a br_table with one entry per basic block - an
+  indirect branch the engine cannot optimize through - and it did that even
+  for a jump FORWARD, which needs none of it: the prologue opens one block
+  per resume point, so the target's block is still open and a plain `br`
+  lands exactly there. Backward jumps (loop backedges) still use the
+  dispatcher, because their block has already been closed; removing that too
+  needs a real `loop` construct, i.e. the structured-control-flow redesign.
+  Roughly 1.4-1.5x faster wasm across mixed workloads (best ~2x on branchy
+  scanning code, ~1.15x on sort), ~1.1% smaller modules, output unchanged.
+  `cmd/internal/obj/wasm` tests pin that a forward-only function emits zero
+  PC_B stores and that a loop still emits some.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the

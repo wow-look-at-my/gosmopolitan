@@ -435,6 +435,16 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 	// their targets with be filled in later
 	var entryPointLoopBranches []*obj.Prog
 	var unwindExitBranches []*obj.Prog
+	// Branches to a LATER resume point, which do not need the dispatcher at
+	// all: the prologue opens one block per resume point, outermost first, so
+	// while resume point d runs, every block for a resume point > d is still
+	// open and breaking out of it lands exactly at that resume point's code.
+	// Recorded here and pointed at their block once the prologue exists.
+	type forwardBranch struct {
+		p   *obj.Prog
+		idx uint64 // target resume point
+	}
+	var forwardBranches []forwardBranch
 	currentDepth := 0
 	for p := s.Func().Text; p != nil; p = p.Link {
 		switch p.As {
@@ -451,7 +461,20 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 
 			if jmp.To.Type == obj.TYPE_BRANCH {
 				// jump to basic block
-				p = appendp(p, AI32Const, constAddr(jmp.To.Val.(*obj.Prog).Pc))
+				dstPc := jmp.To.Val.(*obj.Prog).Pc
+				// A jump FORWARD to a later resume point can branch straight
+				// out of that resume point's block: no PC_B store and no trip
+				// through the dispatcher's br_table, which is an indirect jump
+				// the engine cannot see through. Backward jumps still need the
+				// dispatcher - their block has already been closed.
+				if srcPc := jmp.Pc; srcPc >= 0 && dstPc >= 0 &&
+					int(srcPc) < len(tableIdxs) && int(dstPc) < len(tableIdxs) &&
+					tableIdxs[dstPc] > tableIdxs[srcPc] {
+					p = appendp(p, ABr)
+					forwardBranches = append(forwardBranches, forwardBranch{p, tableIdxs[dstPc]})
+					break
+				}
+				p = appendp(p, AI32Const, constAddr(dstPc))
 				p = appendp(p, ASet, regAddr(REG_PC_B)) // write next basic block to PC_B
 				p = appendp(p, ABr)                     // jump to beginning of entryPointLoop
 				entryPointLoopBranches = append(entryPointLoopBranches, p)
@@ -773,12 +796,23 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		}
 		if numResumePoints > 0 {
 			// Add Block instructions for resume points and BrTable to jump to selected resume point.
+			// They are emitted outermost first, so the block opened i-th is the
+			// one whose End begins resume point numResumePoints-i: that is the
+			// same correspondence the BrTable depths use, and it is what lets a
+			// forward branch name its target block directly.
+			resumeBlocks := make([]*obj.Prog, 0, numResumePoints+1)
 			for i := 0; i < numResumePoints+1; i++ {
 				p = appendp(p, ABlock)
+				resumeBlocks = append(resumeBlocks, p)
 			}
 			p = appendp(p, AGet, regAddr(REG_PC_B)) // read next basic block from PC_B
 			p = appendp(p, ABrTable, obj.Addr{Val: tableIdxs})
 			p = appendp(p, AEnd) // end of Block
+			for _, fb := range forwardBranches {
+				fb.p.To = obj.Addr{Type: obj.TYPE_BRANCH, Val: resumeBlocks[numResumePoints-int(fb.idx)]}
+			}
+		} else if len(forwardBranches) > 0 {
+			panic("wasm: forward branch without resume points")
 		}
 		for p.Link != nil {
 			p = p.Link // function instructions
