@@ -617,8 +617,14 @@ the full catalog of fixes and remaining gaps):
   folding such a region moves where the runtime lands. Missing that made
   recover() re-enter the wrong block and spin forever; it is why the guard
   is phrased in terms of calls rather than deferreturn alone. Still
-  dispatched: a backward jump crossing a region boundary, i.e. a loop with a
-  call in it. Wasm went from 3.2x native Go to 1.8x (geomean over seven
+  dispatched: a backward jump crossing a region boundary - a loop with a call
+  in it, and the OUTER loop of a nest, since the inner header is branched to
+  and keeps a block whose End falls inside the outer loop. The innermost loop
+  is the one that gets fixed, which is where the iterations are. Over
+  strconv, regexp, encoding/json, compress/flate, bytes, strings and sort
+  (1322 functions), rounds 7+8 take PC_B stores from 10467 to 1865 and turn
+  154 loops in 93 functions into real wasm loops. Wasm went from 3.2x native
+  Go to 1.8x (geomean over seven
   workloads), 1.18-2.88x faster than the unpatched compiler, ~2.1% smaller
   modules. On a real aggregation kernel 97.8 -> 59.6 ms and its RLE decode
   18.1 -> 5.2 ms, output byte-identical. `cmd/internal/obj/wasm` tests pin
