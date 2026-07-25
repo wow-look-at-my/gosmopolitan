@@ -14,14 +14,19 @@ import (
 
 // Inter-block control flow on wasm normally round trips through the
 // dispatcher at the top of the function: store the target block to PC_B,
-// branch to the entry loop, and let a br_table jump back in. A jump FORWARD
-// does not need any of that - the prologue opens one block per resume point,
-// so the target's block is still open and a plain br lands exactly there.
+// branch to the entry loop, and let a br_table jump back in. Two shapes do
+// not need any of that.
 //
-// These tests pin that: a function whose control flow only ever moves forward
-// must emit no PC_B store at all, while a loop must keep them for its
-// backedge, because the dispatcher is still how a backward jump (and every
-// resumption after a call) gets where it is going.
+// A jump FORWARD lands in a block the prologue has not closed yet, so a plain
+// br gets there. And a jump BACK to the start of the region the code is
+// already in is a loop, which wasm can express directly - a region can hold
+// more than one basic block because a block nothing branches to no longer
+// opens one, so an ordinary `for` loop's header and body sit in the same
+// region and its backedge is a br to a real wasm loop.
+//
+// What must keep the dispatcher is a backward jump that crosses a region
+// boundary, which is what a loop with a call in it has: the call's resume
+// point splits the loop, and the runtime has to be able to re-enter there.
 
 const forwardOnlySrc = `
 package p
@@ -53,6 +58,22 @@ var sink int
 func g(n int) {
 	for i := 0; i < n; i++ {
 		sink += i
+	}
+}
+`
+
+const loopWithCallSrc = `
+package p
+
+var sink int
+
+//go:noinline
+func ext(i int) int { return i*3 + 1 }
+
+//go:noinline
+func h(n int) {
+	for i := 0; i < n; i++ {
+		sink += ext(i)
 	}
 }
 `
@@ -92,6 +113,24 @@ func countSetPCB(listing string) int {
 	return n
 }
 
+// countOp counts instructions named op in a -S listing.
+func countOp(listing, op string) int {
+	n := 0
+	for _, line := range strings.Split(listing, "\n") {
+		f := strings.Fields(line)
+		// A listing line is "0xADDR NNNNN (file:line) Op args...".
+		for i, w := range f {
+			if strings.HasPrefix(w, "(") && i+1 < len(f) {
+				if f[i+1] == op {
+					n++
+				}
+				break
+			}
+		}
+	}
+	return n
+}
+
 func TestForwardBranchesSkipDispatcher(t *testing.T) {
 	for _, goos := range []string{"js", "wasip1"} {
 		t.Run(goos, func(t *testing.T) {
@@ -105,16 +144,33 @@ func TestForwardBranchesSkipDispatcher(t *testing.T) {
 	}
 }
 
-func TestBackwardBranchKeepsDispatcher(t *testing.T) {
+func TestLoopBecomesRealLoop(t *testing.T) {
 	for _, goos := range []string{"js", "wasip1"} {
 		t.Run(goos, func(t *testing.T) {
 			listing := compileWasm(t, goos, loopSrc)
-			// The loop's backedge targets a block that has already been closed,
-			// so it must still go through PC_B and the br_table. Losing this
-			// would mean a backward jump had been lowered as if it were
-			// forward, which is a miscompile, not an optimization.
+			// One Loop is the entry point loop the dispatcher branches to; the
+			// second is the counted loop itself. Without it the backedge would
+			// be a store to PC_B and an indirect br_table jump per iteration.
+			if got := countOp(listing, "Loop"); got < 2 {
+				t.Errorf("counted loop compiled to %d Loop instructions, want at least 2"+
+					" (the entry point loop plus the loop itself)\n%s", got, listing)
+			}
+		})
+	}
+}
+
+func TestBackwardBranchAcrossRegionsKeepsDispatcher(t *testing.T) {
+	for _, goos := range []string{"js", "wasip1"} {
+		t.Run(goos, func(t *testing.T) {
+			listing := compileWasm(t, goos, loopWithCallSrc)
+			// The call in the body is a resume point, so the loop spans two
+			// regions and its backedge targets a block that has already been
+			// closed. Losing this would mean a backward jump had been lowered as
+			// if its target were still open, which is a miscompile, not an
+			// optimization.
 			if got := countSetPCB(listing); got == 0 {
-				t.Errorf("loop emitted no PC_B store; its backedge still needs the dispatcher\n%s",
+				t.Errorf("loop with a call in it emitted no PC_B store;"+
+					" its backedge crosses a resume point and still needs the dispatcher\n%s",
 					listing)
 			}
 		})

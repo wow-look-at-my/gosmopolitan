@@ -147,6 +147,11 @@ var (
 const (
 	/* mark flags */
 	WasmImport = 1 << 0
+	// WasmBlockEntry marks an ARESUMEPOINT that ssaGenBlock emitted to open the
+	// next basic block, as opposed to one the runtime re-enters on its own (the
+	// point after a call, deferreturn, maymorestack). Only the former can be
+	// dropped when nothing branches to it.
+	WasmBlockEntry = 1 << 1
 )
 
 // RelocLEBSize is the number of bytes reserved in the instruction stream
@@ -288,12 +293,55 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		pMorestack = appendp(p, ARESUMEPOINT)
 	}
 
+	// Every basic block ends with an ARESUMEPOINT opening the next one, but most
+	// of those blocks are only ever fallen into. Such a block needs no entry in
+	// the dispatcher: no Block in the prologue, no BrTable slot, no End in the
+	// middle of the code. Collect what is actually branched to, so the pass
+	// below can tell the two apart. A branch names the prog AFTER the resume
+	// point (ssagen records bstart, the first prog of the block, and the resume
+	// point belongs to the block before it).
+	branchTargets := make(map[*obj.Prog]bool)
+	for p := s.Func().Text; p != nil; p = p.Link {
+		if p.As == obj.AJMP && p.To.Type == obj.TYPE_BRANCH {
+			branchTargets[p.To.Val.(*obj.Prog)] = true
+		}
+	}
+
+	// A region the dispatcher cannot reach must also be one the RUNTIME cannot
+	// re-enter, and every address the runtime re-enters at comes from a call:
+	// the resume point after it, the pc just before that one (which is what the
+	// linker records as a function's deferreturn, see computeDeferReturn), and
+	// for a CALLNORESUME the resume point preceding it. All of those resolve to
+	// the region the call sits in, so a resume point may only be dropped when no
+	// call follows it before the next resume point - folding such a region would
+	// move the address the runtime jumps to.
+	callFollows := make(map[*obj.Prog]bool)
+	{
+		var pending *obj.Prog
+		for p := s.Func().Text; p != nil; p = p.Link {
+			switch p.As {
+			case ARESUMEPOINT:
+				pending = p
+			case obj.ACALL, ACALLNORESUME:
+				if pending != nil {
+					callFollows[pending] = true
+					pending = nil
+				}
+			}
+		}
+	}
+
 	// Introduce resume points for CALL instructions
 	// and collect other explicit resume points.
 	numResumePoints := 0
 	explicitBlockDepth := 0
 	pc := int64(0) // pc is only incremented when necessary, this avoids bloat of the BrTable instruction
 	var tableIdxs []uint64
+	// resumeEnds[i] is the End that begins region i+1; region 0 begins at the
+	// prologue's own End, recorded separately below. A "region" is one BrTable
+	// destination: the resume point itself plus every fallthrough-only block
+	// that was folded into it above.
+	var resumeEnds []*obj.Prog
 	tablePC := int64(0)
 	base := ctxt.PosTable.Pos(s.Func().Text.Pos).Base()
 	for p := s.Func().Text; p != nil; p = p.Link {
@@ -313,11 +361,21 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			if explicitBlockDepth != 0 {
 				panic("RESUME can only be used on toplevel")
 			}
+			if p.Mark&WasmBlockEntry != 0 && !branchTargets[p.Link] && !callFollows[p] {
+				// Nothing can jump to this block, so it does not need to be
+				// reachable from the dispatcher: drop the End and let its code
+				// continue the region above it. It still advances the pc (the
+				// obj.ANOP rule below), so line numbers and tracebacks are
+				// exactly as before.
+				p.As = obj.ANOP
+				break
+			}
 			p.As = AEnd
 			for tablePC <= pc {
 				tableIdxs = append(tableIdxs, uint64(numResumePoints))
 				tablePC++
 			}
+			resumeEnds = append(resumeEnds, p)
 			numResumePoints++
 			pc++
 
@@ -445,6 +503,13 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		idx uint64 // target resume point
 	}
 	var forwardBranches []forwardBranch
+	// Branches back to the start of the region they are already in: a loop
+	// whose whole body was folded into one region above. Those get a real wasm
+	// loop wrapped around the region and branch straight to it, so the hottest
+	// edge in the program stops being an indirect jump through the BrTable.
+	// Indexed by region, so the loops are opened in a fixed order once the
+	// prologue exists.
+	selfLoopBranches := make([][]*obj.Prog, numResumePoints+1)
 	currentDepth := 0
 	for p := s.Func().Text; p != nil; p = p.Link {
 		switch p.As {
@@ -465,14 +530,28 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 				// A jump FORWARD to a later resume point can branch straight
 				// out of that resume point's block: no PC_B store and no trip
 				// through the dispatcher's br_table, which is an indirect jump
-				// the engine cannot see through. Backward jumps still need the
-				// dispatcher - their block has already been closed.
+				// the engine cannot see through. A jump back to the start of the
+				// region it is already in gets a wasm loop instead. What is left
+				// for the dispatcher is a backward jump that crosses a region
+				// boundary, whose target block has already been closed.
 				if srcPc := jmp.Pc; srcPc >= 0 && dstPc >= 0 &&
-					int(srcPc) < len(tableIdxs) && int(dstPc) < len(tableIdxs) &&
-					tableIdxs[dstPc] > tableIdxs[srcPc] {
-					p = appendp(p, ABr)
-					forwardBranches = append(forwardBranches, forwardBranch{p, tableIdxs[dstPc]})
-					break
+					int(srcPc) < len(tableIdxs) && int(dstPc) < len(tableIdxs) {
+					src, dst := tableIdxs[srcPc], tableIdxs[dstPc]
+					if dst > src {
+						p = appendp(p, ABr)
+						forwardBranches = append(forwardBranches, forwardBranch{p, dst})
+						break
+					}
+					// Landing in the region we are already in can only mean the
+					// region's own start: every branch target is a resume point,
+					// and a resume point that is branched to is kept, so it
+					// begins a region of its own. That is a loop backedge, and a
+					// wasm loop can express it directly.
+					if dst == src && numResumePoints > 0 {
+						p = appendp(p, ABr)
+						selfLoopBranches[dst] = append(selfLoopBranches[dst], p)
+						break
+					}
 				}
 				p = appendp(p, AI32Const, constAddr(dstPc))
 				p = appendp(p, ASet, regAddr(REG_PC_B)) // write next basic block to PC_B
@@ -780,6 +859,8 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		}
 	}
 
+	var regionStart *obj.Prog // the prologue's End: where region 0 begins
+	var tailStart *obj.Prog   // the first prog after the function's own instructions
 	{
 		p := s.Func().Text
 		if len(unwindExitBranches) > 0 {
@@ -808,6 +889,7 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 			p = appendp(p, AGet, regAddr(REG_PC_B)) // read next basic block from PC_B
 			p = appendp(p, ABrTable, obj.Addr{Val: tableIdxs})
 			p = appendp(p, AEnd) // end of Block
+			regionStart = p
 			for _, fb := range forwardBranches {
 				fb.p.To = obj.Addr{Type: obj.TYPE_BRANCH, Val: resumeBlocks[numResumePoints-int(fb.idx)]}
 			}
@@ -817,6 +899,10 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		for p.Link != nil {
 			p = p.Link // function instructions
 		}
+		// Where the function's own instructions stop and the epilogue begins.
+		// appendp writes over a trailing ANOP instead of appending after it, so
+		// in that case the epilogue starts at that prog itself.
+		lastBody, reused := p, p.As == obj.ANOP
 		if len(entryPointLoopBranches) > 0 {
 			p = appendp(p, AEnd) // end of entryPointLoop
 		}
@@ -824,6 +910,46 @@ func preprocess(ctxt *obj.Link, s *obj.LSym, newprog obj.ProgAlloc) {
 		if len(unwindExitBranches) > 0 {
 			p = appendp(p, AEnd) // end of unwindExit
 			p = appendp(p, AI32Const, constAddr(1))
+		}
+		if reused {
+			tailStart = lastBody
+		} else {
+			tailStart = lastBody.Link
+		}
+	}
+
+	// Give every region that branches back to its own start a real wasm loop.
+	// The region runs from the End that begins it to just before the End that
+	// begins the next one, and everything in between is balanced (a resume point
+	// may only appear at top level), so wrapping exactly that span nests
+	// correctly inside the block the region already sits in. Entering the region
+	// from the dispatcher still lands on the End above the loop and falls into
+	// it, so this changes nothing about how the region is reached - only how it
+	// repeats.
+	for idx, branches := range selfLoopBranches {
+		if len(branches) == 0 {
+			continue
+		}
+		start := regionStart
+		if idx > 0 {
+			start = resumeEnds[idx-1]
+		}
+		stop := tailStart
+		if idx < len(resumeEnds) {
+			stop = resumeEnds[idx]
+		}
+		lp := obj.Appendp(start, newprog)
+		lp.As = ALoop
+		lp.Pc = start.Pc
+		last := lp
+		for last.Link != nil && last.Link != stop {
+			last = last.Link
+		}
+		end := obj.Appendp(last, newprog)
+		end.As = AEnd
+		end.Pc = last.Pc
+		for _, b := range branches {
+			b.To = obj.Addr{Type: obj.TYPE_BRANCH, Val: lp}
 		}
 	}
 
