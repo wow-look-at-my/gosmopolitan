@@ -69,6 +69,7 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 | net/http (js) | The Fetch transport buffered every request body with io.ReadAll before starting the request (round 6, 2026-07-19): an unknown-length upload (pipe, io.Reader chain) put nothing on the wire until the writer closed it - request/response pipelines deadlocked against servers that answer as data arrives - and large uploads held the entire body in memory | none verified (upstream TODO in roundtrip_js.go) | 380d5b15 | whole body in memory, nothing sent until EOF -> unknown-length bodies (outgoingLength < 0: ContentLength < 0, or 0 with a non-nil Body - exactly the requests HTTP/1 sends chunked) upload through a ReadableStream with duplex "half" when a cached one-time probe shows the runtime's fetch supports upload streaming (the Request-constructor probe: the duplex option must be read and a ReadableStream body must not stringify into a text/plain Content-Type; Node.js 18+ and Chromium 105+ pass): pulls read 64 KiB chunks on a goroutine off the event loop and resolve the pull promise afterwards, so pulls serialize and backpressure reaches the reader; the body is closed exactly once on every path (io.EOF, read error, stream cancel/abort, every RoundTrip exit). Known-length bodies keep the buffered path on purpose - fetch drops Content-Length for stream bodies, buffering is what keeps it on the wire - and probe-failed runtimes keep it for everything, byte-for-byte. Proven by the testdata/jsfetchstream e2e: chunk A observed server-side while the request body is still open before chunk B exists, 8 MiB streamed at ~174 KiB guest TotalAlloc delta, and mid-stream cancel returns promptly with the pipe closed and the server seeing the abort |
 | cmd/internal/dwarf, cmd/internal/obj | Wasm variable locations were unevaluable (round 6, 2026-07-19): every subprogram's DW_AT_frame_base was DW_OP_call_frame_cfa, but wasm deliberately emits no .debug_frame to define a CFA, so no consumer could resolve a single DW_OP_fbreg variable offset - and the first stack parameter (StackOffset 0) was emitted as a bare DW_OP_call_frame_cfa location, dead for the same reason | none verified | 7386b073 | names-and-types-only variable DIEs -> the frame base computes the CFA directly: DW_OP_WASM_location 0x01 0x00 (the value of wasm global 0, the Go SP) + DW_OP_plus_uconst framesize+8 (wasm is a FixedFrameSize-0 target with an x86-style caller-pushed 8-byte return address, so CFA = SP + framesize + 8; SP only moves in the prologue/epilogue, so the constant is exact throughout the body); StackOffset-0 vars switch to the equivalent DW_OP_fbreg 0; every existing fbreg offset then resolves to exactly the linear-memory address codegen uses (cross-checked against -S output for params and stack locals across two functions); llvm-dwarfdump decodes the expression natively, --verify stays clean, non-wasm DWARF is byte-identical, and a cmd/link/internal/wasm regression test locks the encoding for both ports |
 | cmd/internal/obj/wasm | Every inter-block jump went through the dispatcher (round 7, 2026-07-25): the lowering stored the target block to PC_B, branched to the entry loop, and let a 100+ entry br_table jump back in - an indirect branch the engine cannot see through - even though a jump FORWARD needs none of it. The prologue opens one block per resume point, outermost first, so while resume point d runs, the block of every resume point > d is still open and breaking out of it lands exactly at that resume point's code | golang/go#65440, #43033 (the wider redesign) | this round | every basic-block jump = i32.const + Set PC_B + Br + br_table dispatch -> a forward jump is one Br, no PC_B store and no dispatch (backward jumps, i.e. loop backedges, still use the dispatcher - their block has been closed). PC_B is only ever read by the dispatcher; a call's resume address is a compile-time constant stored to the Go stack, so nothing else depends on it being live. On a real aggregation kernel: 96.0 -> 67.8 ms (1.42x) and its RLE decode 18.1 -> 13.6 ms (1.33x), output byte-identical; across seven wasm workloads run in fresh processes (min of 5): median 1.41x, mean 1.49x, worst 1.15x (sort), best 1.96x (byte-scan with a classifying switch); a forward-only function drops from 5 PC_B stores to 0, a leaking-kernel function from 58 to 8; modules are ~1.1% smaller. Verified: the CI wasm list (runtime, runtime/pprof, sync, sync/atomic, time, os, syscall, syscall/js, math, math/bits, os/signal, net/http) plus strings, bytes, sort, strconv, regexp, encoding/json, reflect, fmt, io, bufio, compress/flate, crypto/sha256 all pass under node 22; runtime also passes under GOGC=1; a control-flow torture program (labeled break/continue, goto, fallthrough, defer/recover, closures) prints byte-identical output; V8 validates both modules; new cmd/internal/obj/wasm tests pin both halves and fail on the unpatched compiler |
+| cmd/internal/obj/wasm | Loop backedges still went through the dispatcher (round 8, 2026-07-25): a `br` can only name a block that is still open, and a loop header's block is closed by the End that starts the loop body, because ssaGenBlock makes EVERY basic block a resume point and the prologue opens one block per resume point. Most of those blocks are dead weight - a block only ever fallen into is not a br_table destination and needs no Block, no BrTable slot and no End in the middle of the code - and dropping them is what puts a loop's header and body in one region, leaving something for the backedge to name | golang/go#65440, #43033 (relooper/Asyncify) | this round | one indirect br_table dispatch per loop iteration -> a `br` to a real wasm `loop` wrapped around the region. ssaGenBlock marks the resume points it emits to open a block; the assembler drops a marked one that nothing branches to, keeping its pc so line numbers and tracebacks are unchanged. A marked resume point with a CALL after it and before the next one is never dropped: every address the runtime re-enters at derives from a call's stored return address, including a function's deferreturn, which the linker records as the pc just before the resume point after that call (computeDeferReturn) - folding that region moves where the runtime lands, and without the guard recover() re-entered the wrong block and spun. What still dispatches is a backward jump crossing a region boundary, i.e. a loop with a call in its body. Wasm went from 3.20x native Go to 1.80x (geomean, seven workloads, min of 3 runs in fresh processes); against the unpatched compiler 1.18x-2.88x, geomean 1.78x, and 1.17x geomean on top of round 7 alone; a counted loop 3.46x native -> 1.20x. On a real aggregation kernel 97.8 -> 59.6 ms and its RLE decode 18.1 -> 5.2 ms (3.49x), output byte-identical; modules ~2.1% smaller. Verified: the CI wasm list plus strings, bytes, sort, strconv, regexp, encoding/json, reflect, fmt, io, bufio, compress/flate, crypto/sha256, container/heap, encoding/binary, hash/crc32, index/suffixarray, text/template under node 22, runtime also under GOGC=1; the wasip1 list under wazero; GOWASM=threads atomics smoke and threaddemo; the control-flow torture program still prints byte-identical output; a program printing tracebacks taken inside a loop and through a recover prints identical file:line values; new cmd/internal/obj/wasm tests pin that a counted loop compiles to a real Loop and that a loop with a call in it keeps its PC_B store |
 
 ## Remaining shortcomings
 
@@ -255,21 +256,33 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
 
 ### Compiler and linker codegen
 
-- P2, upstream megaproject (the FORWARD half is fixed as of round 7,
-  2026-07-25 - see the table): The dispatch-loop execution model. Every
-  function is (i32)->i32; every basic-block boundary is a resume point; every
-  call is ~13 opcodes plus a resume-address store to linear memory
-  (`src/cmd/internal/obj/wasm/wasmobj.go:438-543`). Measured upstream at
-  <= ~20% of native Go in the best case (golang/go#65440); the standing
-  redesign discussion is #43033 (relooper/Asyncify).
-  What remains is the BACKWARD half: a jump to an EARLIER resume point - every
-  loop backedge - still stores PC_B and re-enters through the br_table, so a
-  loop still pays one indirect dispatch per iteration. Removing that needs the
-  target block to still be open at the branch, i.e. a real `loop` construct
-  around the loop body, i.e. a structured-control-flow lowering of the whole
-  function; the block nest is opened once at the top, so a nested loop cannot
-  close blocks that were opened outside it. That is still the megaproject.
-  The forward half, by contrast, fell out of the existing nesting for free.
+- P2, upstream megaproject (forward jumps fixed in round 7 and call-free loop
+  backedges in round 8, both 2026-07-25 - see the table): The dispatch-loop
+  execution model. Every function is (i32)->i32; every basic-block boundary is
+  a resume point; every call is ~13 opcodes plus a resume-address store to
+  linear memory (`src/cmd/internal/obj/wasm/wasmobj.go:438-543`). Measured
+  upstream at <= ~20% of native Go in the best case (golang/go#65440); the
+  standing redesign discussion is #43033 (relooper/Asyncify). On this fork the
+  same seven-workload set is now 1.80x native Go (geomean), down from 3.20x.
+  What remains is a backward jump that CROSSES a region boundary: a loop with a
+  call in its body, whose call's resume point splits the loop into two regions.
+  Rounds 7-8 both work by naming a block that is still open at the branch, and
+  a resume point that the runtime must be able to re-enter has to stay a
+  br_table destination, so the block it opens is necessarily closed in the
+  middle of any loop containing it. Getting those loops too means the block
+  nest can no longer be one flat prologue nest - that is a structured-control-
+  flow lowering of the whole function, and still the megaproject.
+  Two further costs are NOT the dispatcher and are worth separating out when
+  reading the remaining gap. (1) Loop preemption: with no signals, wasm relies
+  on GOEXPERIMENT=preemptibleloops, which puts a g.stackguard1 load, compare
+  and branch on every backedge. Measured by rebuilding the same workloads with
+  GOEXPERIMENT=nopreemptibleloops (which is NOT a supported configuration - a
+  call-free loop then cannot be preempted at all): up to 1.46x on branchy loop
+  code, 1.41x on byte scanning, ~1.02x on a tight counted loop. (2) The Go
+  stack lives in linear memory, so arguments, results and anything live across
+  a call are stored and reloaded rather than kept in registers; call-heavy and
+  formatting workloads sit at the far end of the range (2.2x and 2.9x native)
+  for that reason, not because of branching.
 - P1, needs wasm proposal: No threads (see above), no SIMD (no v128 anywhere
   in the backend), tail calls only behind GOWASM=tailcall (see the next
   bullet - the proposal is standardized but the default wasip1 runtime

@@ -594,13 +594,36 @@ the full catalog of fixes and remaining gaps):
   indirect branch the engine cannot optimize through - and it did that even
   for a jump FORWARD, which needs none of it: the prologue opens one block
   per resume point, so the target's block is still open and a plain `br`
-  lands exactly there. Backward jumps (loop backedges) still use the
-  dispatcher, because their block has already been closed; removing that too
-  needs a real `loop` construct, i.e. the structured-control-flow redesign.
-  Roughly 1.4-1.5x faster wasm across mixed workloads (best ~2x on branchy
-  scanning code, ~1.15x on sort), ~1.1% smaller modules, output unchanged.
-  `cmd/internal/obj/wasm` tests pin that a forward-only function emits zero
-  PC_B stores and that a loop still emits some.
+  lands exactly there. Backward jumps (loop backedges) still used the
+  dispatcher, because their block has already been closed (round 8 fixes
+  that). Roughly 1.4-1.5x faster wasm across mixed workloads (best ~2x on
+  branchy scanning code, ~1.15x on sort), ~1.1% smaller modules, output
+  unchanged. `cmd/internal/obj/wasm` tests pin that a forward-only function
+  emits zero PC_B stores.
+- Round 8 (2026-07-25): loop backedges get a real wasm `loop`. The blocker
+  was that ssaGenBlock makes EVERY basic block a resume point, so a loop
+  header's block is closed by the End that starts the body and there is
+  nothing left for the backedge to name. Most of those blocks are dead
+  weight: one only ever fallen into needs no Block in the prologue and no
+  BrTable slot. So ssaGenBlock now marks the resume points it emits to open
+  a block, and the assembler drops a marked one that nothing branches to -
+  it keeps its own pc, so line numbers and tracebacks are unchanged. A
+  loop's header and body then sit in one region and the backedge is a plain
+  `br` to a `loop` wrapped around it. One marked resume point may NOT be
+  dropped: one with a call after it and before the next. Every address the
+  runtime re-enters at is derived from a call's stored return address -
+  including a function's deferreturn, which the linker records as the pc
+  just before the resume point after that call (`computeDeferReturn`) - so
+  folding such a region moves where the runtime lands. Missing that made
+  recover() re-enter the wrong block and spin forever; it is why the guard
+  is phrased in terms of calls rather than deferreturn alone. Still
+  dispatched: a backward jump crossing a region boundary, i.e. a loop with a
+  call in it. Wasm went from 3.2x native Go to 1.8x (geomean over seven
+  workloads), 1.18-2.88x faster than the unpatched compiler, ~2.1% smaller
+  modules. On a real aggregation kernel 97.8 -> 59.6 ms and its RLE decode
+  18.1 -> 5.2 ms, output byte-identical. `cmd/internal/obj/wasm` tests pin
+  that a counted loop compiles to a real Loop and that a loop with a call in
+  it keeps its PC_B store.
 - Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
   experimental, GOOS=js only) is toolchain-only groundwork for the wasm
   threads proposal - real parallelism lands in later phases and the
