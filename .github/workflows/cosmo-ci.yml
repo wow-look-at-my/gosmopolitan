@@ -729,6 +729,7 @@ jobs:
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
       contents: read
+      artifact-metadata: write
 
     steps:
       - name: Checkout code
