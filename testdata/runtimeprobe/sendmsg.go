@@ -1,10 +1,11 @@
 // Sendmsg/recvmsg checks: the syscall-level scatter-gather message
 // surface - native on Linux hosts, emulated over WSASend/WSARecv on
-// Windows hosts since NT wave 3 item 2. macOS hosts genuinely lack
-// the dispatch (the darwin slow path has no sendmsg/recvmsg case; a
-// documented wave-2 backlog gap), so the check host-skips there and
-// ONLY there. The skip is keyed on the HOST TRIPLE, never on an
-// error: a sendmsg failure on an NT or Linux host is a FAIL.
+// Windows hosts since NT wave 3 item 2, and emulated over dlsym'd
+// Apple libc sendmsg/recvmsg on macOS hosts since the darwin msghdr
+// translation (2026-07-21). Mandatory on ALL THREE hosts - no skip
+// legs: a sendmsg failure anywhere is a FAIL. The raw two-iovec leg
+// exercises exactly the msghdr shape the darwin fixed-size adapter
+// passes through (nil name, nil control, coinciding iovec layouts).
 
 package main
 
@@ -153,10 +154,6 @@ func unixSyscallPair(name string) (a, c int, cleanup func(), errDetail string) {
 //     misaligned iovec splits on the receive side and a short-read
 //     loop that rebuilds the iovecs at the current offset.
 func checkSendmsg() {
-	if !probeHostIsNT() && !probeHostIsLinux() {
-		ok("sendmsg", "skipped (host lacks sendmsg)")
-		return
-	}
 	a, c, cleanup, detail := unixSyscallPair("sendmsg")
 	if detail != "" {
 		fail("sendmsg", "%s", detail)

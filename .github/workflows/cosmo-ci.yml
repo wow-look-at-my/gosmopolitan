@@ -154,6 +154,17 @@ jobs:
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent' cmd/go/internal/work
+          # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
+          # cmsg repack, signal/wait-status translation tables, epoll
+          # layout) are GOOS=cosmo-only code, run on this host via the
+          # misc/cosmo exec wrappers - the test binary is a thin cosmo
+          # APE that executes natively on linux.
+          export PATH="$PWD/misc/cosmo:$PATH"
+          GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
+          # Runtime-package cosmo unit tests: the Apple itimerval ABI
+          # pins + timeval translation behind the darwin SIGPROF
+          # setitimer dispatch, and the signal translation tables.
+          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one

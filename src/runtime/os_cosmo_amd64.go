@@ -110,6 +110,13 @@ func darwinSignalM(mp *m, sig int) {
 //go:noescape
 func sigaltstack(new, old *stackt)
 
+// setitimer is implemented in sys_cosmo_amd64.s (its raw-XNU darwin
+// branch is the pending Intel-mac bring-up path; arm64 dispatches to
+// dlsym'd Apple libc setitimer instead - os_cosmo_arm64.go).
+//
+//go:noescape
+func setitimer(mode int32, new, old *itimerval)
+
 // darwinSigprocmask and darwinSigaction are unreachable on amd64: the
 // GOARCH == "arm64" guards in sigprocmask/sysSigaction compile their
 // call sites away, and the asm paths keep the amd64 behavior. The
