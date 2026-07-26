@@ -116,6 +116,26 @@ thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
 compile.
 
+Parallel sibling build (2026-07-26): the sibling-architecture build runs
+CONCURRENTLY with the primary one. The two share no ordering constraint -
+different GOARCH, different build-cache keys, different output paths - and
+overlapping them reclaims each build's serial tail (cosmo links twice per
+arch): runtimeprobe cold on 4 cores goes 15.4s -> 12.5s, ~19%, with user
+time unchanged, and the output is byte-identical to a sequential build,
+sidecars included. Builds whose package graph already saturates the CPU
+(`go build std`) gain nothing, so the win is concentrated in exactly the
+single-binary builds people run interactively. `GOCOSMOFATSEQ=1` (or `on`)
+forces the old sequential behavior, which halves a fat build's peak memory
+because the two link phases can no longer overlap - reach for it on a
+memory-constrained machine, in preference to `GOCOSMOFAT=0`, which gives up
+fat binaries entirely. The sibling's output is buffered and replayed after
+the primary build's, so concurrent diagnostics never interleave, and a
+failed primary build exits before the sibling is reported (one copy of each
+error, not two). Implementation: `cosmoSibling` in
+`src/cmd/go/internal/work/cosmofat.go`; the child is killed and its scratch
+directory removed via `base.AtExit`, since the primary build can now fail
+while it is still running.
+
 Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
 payload's loadable span - the file range its program headers reference,
 exactly what cosmocc's apelink ships - and writes the pristine unstripped
@@ -432,7 +452,7 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID unit tests plus, via the misc/cosmo
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus, via the misc/cosmo
 wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
 tests (darwin sendmsg/recvmsg cmsg repack, signal translation
 tables, epoll layout) and the runtime-package cosmo tests (Apple

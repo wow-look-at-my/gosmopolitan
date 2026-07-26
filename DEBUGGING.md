@@ -5342,3 +5342,75 @@ creation for the CLOEXEC window and probably giving cosmo's darwin
 dispatch a real atomic pipe2 - a runtime change that wants its own
 change and its own in-CI forensics, the way the wave-9 XNU read(2)
 wedge did.
+
+
+# 2026-07-26: fat APE builds run both architectures in parallel
+
+The fat build spent its whole life doing one architecture at a time, and
+the reason turned out to be an implementation artifact rather than a
+constraint. `cosmoFatten` was a POST-build step: `go build` finished the
+primary architecture, and only then did it re-execute the entire go
+command as a child process with GOARCH flipped
+(`cosmofat.go`, `cmd.Env = append(os.Environ(), "GOARCH="+otherArch, ...)`),
+and merge. Re-running the command line was a good way to inherit every
+build flag exactly; running it afterwards was never necessary. The two
+architectures share nothing that forces an ordering - different GOARCH,
+different build-cache keys, different output paths - and cmd/go's build
+cache is safe for concurrent processes.
+
+**Measured** (runtimeprobe, cold cache, 4 cores, the two modes
+interleaved so machine drift cancels):
+
+| | wall | user | note |
+|---|---|---|---|
+| sequential (`GOCOSMOFATSEQ=1`) | 15.7s, 15.0s | 36.8s | |
+| parallel (default) | 12.3s, 12.6s | 37.5s | **~19% faster** |
+| `go build std`, both arches | 36.8s -> 35.8s | 112s -> 118s | 3%, noise |
+
+User time is unchanged, so this is pure overlap, not extra work. The win
+comes from the serial tail: a single main package leaves cores idle while
+it links (and cosmo links twice per architecture, once per payload), and
+that tail overlaps the other architecture's compile phase. Whole-graph
+builds like `go build std` already saturate the CPU - 3.06x on 4 cores
+before the change - so there is nothing left to reclaim, which is why the
+`go build std` CI step stays sequential.
+
+**Output is byte-identical** to a sequential build, APE and both debug
+sidecars, verified with the same toolchain and commit on both sides. (Do
+not compare across a `make.bash`: tool build IDs are content-derived, so
+rebuilding the toolchain legitimately changes the output, and intervening
+commits move the VCS stamp too. The controlled comparison is same
+toolchain, same commit, parallel vs sequential.)
+
+**Three things the restructure had to get right**, none of which the
+old post-build shape had to worry about:
+
+1. **Orphans and leaked scratch dirs.** The primary build can now fail -
+   and `base.Fatalf` exits - while the sibling is still running. The
+   sibling registers a `base.AtExit` hook that kills the child and
+   removes its temp directory. Verified: a failing build leaves zero
+   `/tmp/gocosmofat*` directories and zero stray go processes.
+2. **Interleaved diagnostics.** Two concurrent builds writing to one
+   terminal shred each other's error messages. The child's stdout and
+   stderr go to a buffer that is replayed verbatim after the primary
+   build's own output. Better still, the build paths now call
+   `base.ExitIfErrors()` before fattening, so a compile error that fails
+   both architectures is printed ONCE - the old sequential code ran the
+   sibling after a failed primary build and printed every error twice.
+3. **Work that should never start.** `-o /dev/null` cannot be fattened
+   (fattening re-reads and re-creates the target), and a library-only
+   `go install` has no main package to merge. Both are now decided
+   BEFORE the sibling starts, via `cosmoFatSkipOutput` and the
+   main-package count, rather than by a post-build filter that would
+   have arrived too late to save the work.
+
+`GOCOSMOFATSEQ=1` restores the sequential behavior. It exists for
+memory: the two link phases can otherwise overlap, and linking is the
+memory-hungry part of a cosmo build, so a constrained machine has a knob
+that is not `GOCOSMOFAT=0` (which gives up fat binaries entirely).
+
+**Verified**: cmd/go/internal/work (incl. new TestCosmoFatParallel and
+TestCosmoFatSkipOutput), cmd/link/internal/ld APE/PE/Macho, go/build +
+cmd/internal/moddeps; fat `go build` and `go install` both produce
+running 45/45 probes with correct sidecars; thin `GOCOSMOFAT=0` builds
+unaffected; apetest 129 PASS 0 FAIL against parallel-built binaries.
