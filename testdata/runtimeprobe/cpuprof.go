@@ -1,12 +1,13 @@
 // CPU-profiling check: pprof.StartCPUProfile must deliver real
-// samples - native setitimer SIGPROF on Linux hosts, the
-// waitable-timer profiler M (NT wave 3 item 3) on Windows hosts.
-// Before item 3, StartCPUProfile on NT succeeded and wrote a valid
-// profile with ZERO samples; asserting Sample records >= 1 is exactly
-// the regression gate for that silent failure. macOS hosts genuinely
-// lack SIGPROF delivery (setitimer is not dispatched on darwin - a
-// documented wave-2 backlog gap), so the check host-skips there and
-// ONLY there, keyed on the HOST TRIPLE, never on an error.
+// samples on every host - native setitimer SIGPROF on Linux hosts,
+// the waitable-timer profiler M (NT wave 3 item 3) on Windows hosts,
+// and dlsym'd Apple libc setitimer (ITIMER_PROF through the wave-9
+// signal machinery, 2026-07-21) on macOS hosts. The zero-sample
+// failure shape is SILENT everywhere: before item 3 NT's
+// StartCPUProfile succeeded and wrote a valid empty profile, and
+// macOS did the same while its setitimer was a no-op asm stub.
+// Asserting Sample records >= 1 is exactly the regression gate for
+// that silence; there are no host-skip legs.
 
 package main
 
@@ -85,10 +86,6 @@ func countPprofSamples(p []byte) (samples int, errDetail string) {
 // assertion would be runner-dependent; 1.2s yields dozens of ticks
 // under either granularity.
 func checkCPUProf() {
-	if !probeHostIsNT() && !probeHostIsLinux() {
-		ok("cpuprof", "skipped (no SIGPROF on this host)")
-		return
-	}
 	var buf bytes.Buffer
 	if err := pprof.StartCPUProfile(&buf); err != nil {
 		fail("cpuprof", "StartCPUProfile: %v", err)
