@@ -98,6 +98,7 @@ var depsRules = `
 	< internal/msan
 	< internal/asan
 	< internal/runtime/sys
+	< internal/runtime/syscall/cosmo
 	< internal/runtime/syscall/linux
 	< internal/runtime/syscall/windows
 	< internal/runtime/atomic

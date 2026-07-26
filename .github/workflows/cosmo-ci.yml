@@ -51,7 +51,7 @@ jobs:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
       - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
-        # The fork stamps the same release-style version (go1.26.4cosmo)
+        # The fork stamps the same release-style version (go1.26.5cosmo)
         # into every build, so tool IDs derived from the -V=full version
         # line alone are identical for any two fork builds. Colliding tool
         # IDs collide action IDs, and a warm build cache (a consumer's
@@ -111,6 +111,25 @@ jobs:
           chmod +x /tmp/shebang-test.go
           /tmp/shebang-test.go
 
+      - name: Build std for cosmo (both arches)
+        # The uprev tripwire. Everything else on this leg compiles only
+        # what fizzbuzz and runtimeprobe import - 84 of the 358 std
+        # packages under GOOS=cosmo - so a whole class of upstream change
+        # lands silently: upstream re-partitions a platform file
+        # (splitting at.go into fchmodat_linux.go + fchmodat_other.go, or
+        # giving statat_unix.go a new tag - both real go1.26.4 breaks) and
+        # cosmo falls off the edge of the new build tags. crypto/x509,
+        # archive/tar, net/http and friends carry exactly those tags and
+        # none of them were being compiled. Cross-compiles, so one leg is
+        # enough; ~40s cold for both arches.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=cosmo GOARCH=amd64 go build std
+          GOOS=cosmo GOARCH=arm64 go build std
+
       - name: Build APE binary
         # Observed max 38s (windows; two fat builds = four link passes).
         timeout-minutes: 10
@@ -153,7 +172,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput' cmd/go/internal/work
           # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
           # cmsg repack, signal/wait-status translation tables, epoll
           # layout) are GOOS=cosmo-only code, run on this host via the
@@ -165,6 +184,23 @@ jobs:
           # pins + timeval translation behind the darwin SIGPROF
           # setitimer dispatch, and the signal translation tables.
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
+
+      - name: Fork-divergence guardrails (go/build policy, moddeps)
+        # go/build's structural tests are what keep a fork's edits honest
+        # across an upstream uprev, and nothing was running them: the
+        # shebang step only runs -run TestReadGoInfo. Both had silently
+        # gone red - TestVendorPackages against the zstd vendored for
+        # cosmo DWARF compression, TestDependencies against
+        # internal/runtime/syscall/cosmo - and an uprev is exactly when a
+        # stale dependency policy stops catching real layering breaks.
+        # cmd/internal/moddeps is the matching check for src/ + src/cmd
+        # module/vendor consistency (see CLAUDE.md's vendoring runbook).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
 
       - name: Loop-aware inlining tests
         # The loop cost discount, the loop-nested call site budget, and the

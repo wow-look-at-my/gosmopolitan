@@ -5,6 +5,8 @@
 package work
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -189,5 +191,66 @@ func TestCosmoStripEnabled(t *testing.T) {
 		if got := cosmoStripEnabled(); got != tt.want {
 			t.Errorf("GOCOSMOSTRIP=%q: cosmoStripEnabled() = %v, want %v", tt.env, got, tt.want)
 		}
+	}
+}
+
+func TestCosmoFatParallel(t *testing.T) {
+	tests := []struct {
+		env  string
+		want bool
+	}{
+		{"", true},
+		{"0", true},
+		{"off", true},
+		{"anything", true},
+		{"1", false},
+		{"on", false},
+	}
+	for _, tt := range tests {
+		t.Setenv("GOCOSMOFATSEQ", tt.env)
+		if got := cosmoFatParallel(); got != tt.want {
+			t.Errorf("GOCOSMOFATSEQ=%q: cosmoFatParallel() = %v, want %v", tt.env, got, tt.want)
+		}
+	}
+}
+
+func TestCosmoFatSkipOutput(t *testing.T) {
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "prog.com")
+	if err := os.WriteFile(regular, []byte("x"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		out  string
+		want bool
+	}{
+		// No -o: the target is a package default name, always regular.
+		{"unset", "", false},
+		// A regular file is the ordinary fat-build target.
+		{"regular file", regular, false},
+		// A -o directory is the dir=true fat build, not a skip.
+		{"directory", dir, false},
+		// Not yet created: go build is about to write a regular file.
+		{"nonexistent", filepath.Join(dir, "notyet.com"), false},
+		// The case that must skip: fattening re-reads and re-creates the
+		// target, which cannot work for a special file, so a sibling
+		// build would be wasted work.
+		{"/dev/null", os.DevNull, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.out == os.DevNull {
+				if fi, err := os.Stat(os.DevNull); err != nil || fi.Mode().IsRegular() {
+					t.Skip("no special-file os.DevNull on this platform")
+				}
+			}
+			defer func(old string) { cfg.BuildO = old }(cfg.BuildO)
+			cfg.BuildO = tt.out
+			if got := cosmoFatSkipOutput(); got != tt.want {
+				t.Errorf("cfg.BuildO=%q: cosmoFatSkipOutput() = %v, want %v", tt.out, got, tt.want)
+			}
+		})
 	}
 }
