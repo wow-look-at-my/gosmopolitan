@@ -220,7 +220,11 @@ func ssaGenBlock(s *ssagen.State, b, next *ssa.Block) {
 	}
 
 	// Entry point for the next block. Used by the JMP in goToBlock.
-	s.Prog(wasm.ARESUMEPOINT)
+	// Marked so the assembler can tell these apart from the resume points the
+	// runtime re-enters on its own (after a call, at deferreturn, after
+	// maymorestack): a block entry that nothing branches to needs no entry in
+	// the dispatcher at all.
+	s.Prog(wasm.ARESUMEPOINT).Mark |= wasm.WasmBlockEntry
 
 	if s.OnWasmStackSkipped != 0 {
 		panic("wasm: bad stack")
