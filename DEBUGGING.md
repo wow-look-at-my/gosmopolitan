@@ -4095,6 +4095,60 @@ expected-red experiment leg therefore cannot live on any branch
 that must merge; that is why the job is removed outright rather
 than kept.
 
+# 2026-07-19: size pass 3c — cross-arch dedup + macOS loader-side decompression: measured, both DROPPED
+
+Two candidate fat-APE size levers were taken to full measurement (at
+HEAD ef935b3c) and dropped with no code change, no branch, no PR.
+Recording the numbers and the layout design facts here so the dead
+ends stay dead and future layout work starts from the constraints.
+
+Lever 1 — cross-arch dedup via shared/overlapping PT_LOAD file
+extents: DROPPED. The read-only identical ceiling is ~921 KB on a
+stdlib-heavy webserver (reconciles pass 1's 2.17 MB figure: that was
+unstripped — strip-by-default already removed the symtab/strtab/DWARF
+share). The ONLY contiguous link-time-alignable run is the
+time/tzdata zip (427,523 B, same order both arches, inside
+go:string.*); funcnametab interiors drift (arch-specific insertions,
+nfunc 6676 vs 6527) and pctab/functab/funcdata are arch-different
+(minLC 1 vs 4). Alignment kills most of the rest: 4K congruence
+breaks ARM64 macOS (the embedded loader hard-refuses congruence not
+mod 16384), 16K drops 64K-page arm64 Linux kernels (supported today),
+and fully-safe 64K captures 323-358 KB net in ONE extent (six 64K
+pages of tzdata) — fizzbuzz and runtimeprobe capture zero. Wire
+benefit under `zstd -19 --long=27` is ZERO (simulated dedup came out
+1,334 B WORSE) — dedup is on-disk-only, 2.5-3.0% of the fat file,
+tzdata-importing binaries only. Only proportionate follow-up if ever
+wanted: special-case a single shared 64K-aligned extent for the
+tzdata zipdata symbol — same 323-358 KB, minimal machinery.
+
+Lever 2 — storing the arm64 image compressed and decompressing in the
+macOS loader: DROPPED on the kill criterion. Every consumer of the
+arm64 image reads raw bytes at absolute file offsets: Linux arm64
+self-assimilation demand-pages in place, an installed/cached `ape`
+loader file-mmaps PT_LOADs, and the m1 loader file-mmaps non-exec
+segments and preads only PF_X spans into anon memory. Compressed
+storage therefore necessarily costs a supported boot path — and
+storing both forms would GROW the file ~2.4 MB. Upstream apelink
+behaves the same way (Pwrites raw PT_LOAD spans; gzips only ~12KB
+loader binaries and zip assets, never machine-code payloads).
+Teaching Linux arm64 to boot via a loader would regress
+zero-dependency boot (noexec /tmp, read-only rootfs), and the shell
+header budget is 2047/2048 bytes. Wire size is already solved by
+distribution-side zstd.
+
+Durable ape.go/boot design facts for any future layout work:
+transplantPEHeader requires the amd64 image at 0x10000 with verbatim
+absolute section raw pointers; shiftPOffsets applies a uniform shift
+(per-phdr rewriting would break makeMachoHeader /
+makeEmbeddedElfHeader assumptions); the m1 loader caps e_phnum at 18
+(1024-byte phdr buffer) and enforces 16 KiB congruence; cosmo/arm64
+links with p_align 0x4000; the merged phdr table has ~3.6 KB of
+in-place growth room (dead section-header bytes before the note);
+GOCOSMOSTRIP=0's byte-for-byte reproduction promise means any dedup
+could only apply to the default stripped path; and Linux-arm64
+self-assimilation has NO CI execution coverage (no arm64 Linux
+runner) — treat arm64-image layout changes as under-tested.
+
 # 2026-07-20: exec.LookPath on NT — unix PATH rules against a Windows PATH
 
 > Reconciliation note (2026-07-21): this entry records the fix as
@@ -4296,6 +4350,14 @@ node js battery, jsfetchstream e2e, wazero wasip1 battery, wasip1sock
 host suite, entire threads step incl. threaddemo 10x, the B3 demo
 gates, the 4-package threads go test and the wasip1 rejection check,
 wasmexport testdir on both targets): all green.
+
+Triage note: with this fix on master, these signatures are REAL
+regressions, never flakes — `threaddemo: FAIL: third spawn reused a
+parked worker M`, `threaddemo: FAIL: worker Ms never parked
+(parked=N after 10s)`, and the test's `re-spawn did not reuse a
+parked M: M count grew A -> B`. Investigate; do not just re-run the
+job (the old "re-kick a parked-M red" practice predates the fix and
+is obsolete).
 
 Same-class sibling, fixed in the same change:
 TestWasmThreadsRunOnNewM's re-spawn assertion
@@ -4565,6 +4627,27 @@ case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
 
+# 2026-07-20: NT — off-host HTTPS from an APE times out (OPEN, no fix landed)
+
+Field observation from consumer CI (windows-latest, fork v213, run
+29741678227 of a downstream repo): the APE's HTTPS GET to
+api.github.com timed out (10s client timeout) in every red run while
+runner-native fetches on the same host succeeded. This is DISTINCT
+from the exec.LookPath defect observed in the same runs (fixed
+2026-07-20, sections above); as of 2026-07-21 no fork-side fix for
+the network half has landed.
+
+Coverage gap: runtimeprobe's TCP/UDP/AF_UNIX checks are
+loopback-only, so off-host connect and name resolution from NT have
+no CI probe — this failure mode is invisible to the current gauntlet.
+Unverified hypothesis (first suspect, not a diagnosis): the pure-Go
+resolver's unix assumptions (/etc/resolv.conf and friends) have no NT
+translation in the path layer, so DNS lookups may never reach a real
+nameserver. Candidate NT-backlog items: root-cause with a minimal
+http.Get repro on windows-latest, an off-host network/DNS probe
+(needs an endpoint reachable from CI), and resolver bring-up on NT if
+the hypothesis holds.
+
 # 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
 
 ## Symptom, evidence
@@ -4667,6 +4750,14 @@ new swallow path appears.
 No src/ or lib/wasm changes — the fix is confined to the demo driver,
 the workflow gate, and docs, so no toolchain rebuild and no non-threads
 byte-identity proof is needed.
+
+# 2026-07-21: stale-PR triage
+
+PRs #35, #36, and #39 were closed 2026-07-21 as invalid/obsolete/moot;
+the rationale for each is in its PR body. Do not reopen or resurrect
+work from their dead head branches (`fix-ape-shell-fallback`,
+`claude/fix-github-actions-logs-YXLsp`,
+`claude/cross-platform-binary-VJeLb`).
 
 # 2026-07-21: darwin sendmsg/recvmsg + SCM_RIGHTS fd passing
 
