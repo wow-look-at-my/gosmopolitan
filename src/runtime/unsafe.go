@@ -42,10 +42,20 @@ func unsafestringcheckptr(ptr unsafe.Pointer, len64 int64) {
 	}
 }
 
+// These are called only from compiler-generated bounds checks for
+// unsafe.String, for conditions that cannot occur in correct code. Like
+// the unsafe.Slice equivalents below (and the goPanic* bounds helpers in
+// panic.go) they are marked yeswritebarrierrec, because panicking reaches
+// gopanic's write barriers: without that, any nowritebarrierrec function
+// that ends up with an inlined unsafe.String is rejected for a call that
+// can never happen.
+
+//go:yeswritebarrierrec
 func panicunsafestringlen() {
 	panic(errorString("unsafe.String: len out of range"))
 }
 
+//go:yeswritebarrierrec
 func panicunsafestringnilptr() {
 	panic(errorString("unsafe.String: ptr is nil and len is not zero"))
 }
