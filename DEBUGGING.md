@@ -5414,3 +5414,122 @@ TestCosmoFatSkipOutput), cmd/link/internal/ld APE/PE/Macho, go/build +
 cmd/internal/moddeps; fat `go build` and `go install` both produce
 running 45/45 probes with correct sidecars; thin `GOCOSMOFAT=0` builds
 unaffected; apetest 129 PASS 0 FAIL against parallel-built binaries.
+
+
+# 2026-07-26: the macOS fork/exec wedge - ROOT CAUSED and fixed (arm64-apple variadic ABI)
+
+Supersedes the datapoint entry earlier today, which recorded the wedge
+as nondeterministic and left two candidate explanations open. Both were
+wrong. The cause is an ABI bug, it was never a flake, and re-running CI
+until it passed was hiding a defect that affected far more than exec.
+
+## What it looked like
+
+The runtimeprobe `fdpass` check wedged on roughly a quarter to a half of
+macOS runs. The parent parked forever in forkExec's read of the child
+status pipe (exec_unix.go:220 readlen), the 90s watchdog fired, and the
+all-goroutine traceback showed only goroutine 1 in that read plus the
+watchdog.
+
+## The two dead ends
+
+**"A concurrent fork leaked the write end."** Killed by the traceback:
+only two goroutines exist, so nothing else in the parent was forking.
+
+**"The child is stuck between fork and exec."** Killed by instrumenting
+the child: it stamps a descriptor census as its first act after exec,
+and the census was always there. The child exec'd fine.
+
+Also killed, earlier and more cheaply than either: `execstress`, a
+60-round fork+exec loop, passed on macOS. Plain exec was never broken.
+
+## What the census showed
+
+Adding a descriptor census to both sides (fcntl+fstat only, so it works
+when process creation is the suspect) produced the answer immediately:
+
+    parent fds: 3:pipeE ... 11:pipe- 12:pipe- 13:pipe- 14:pipe- 15:pipe-
+    child  fds: 3:pipe- ... 11:pipe- 12:pipe- 13:pipe- 14:pipe- 15:pipe- 16:pipe-
+
+Descriptor 10, which carried FD_CLOEXEC, WAS closed by the exec - so
+exec honors the flag. The pipes simply never had it, and the child came
+out of exec holding 16: the status pipe's write end. The parent was
+waiting for an EOF that could not arrive.
+
+A direct assertion over every creation path (`cloexec`) confirmed the
+scope:
+
+    FAIL cloexec: pipe2(O_CLOEXEC) read end: FD_CLOEXEC NOT set;
+      pipe2(O_CLOEXEC) write end: FD_CLOEXEC NOT set; os.Pipe read end:
+      FD_CLOEXEC NOT set; os.Pipe write end: FD_CLOEXEC NOT set;
+      socket(SOCK_CLOEXEC): FD_CLOEXEC NOT set
+
+`open(O_CLOEXEC)` passed in the same run. That asymmetry is the tell:
+every failing path sets the flag with a separate `fcntl(F_SETFD,
+FD_CLOEXEC)`, while open takes O_CLOEXEC as its ordinary fixed flags
+argument.
+
+## Root cause
+
+**arm64-apple passes variadic arguments on the STACK, never in a
+register, even when argument registers are free** - a deliberate
+divergence from AAPCS64. cosmo's libc trampolines (`cosmoLibcCall6` and
+the assembly fast path's `darwin_call`) put every argument in registers.
+
+`fcntl(int, int, ...)` is variadic. So every
+`fcntl(fd, F_SETFD, FD_CLOEXEC)` handed FD_CLOEXEC to Apple's libc in
+R2, which read that argument from uninitialized stack memory instead.
+The value wanted is a flag word, so the call SUCCEEDED while setting
+close-on-exec from whatever was on the stack - set when the garbage
+happened to be odd, clear otherwise. That is the entire "flake": not
+timing, not scheduling, just whichever value was lying at that stack
+slot.
+
+Why only `fdpass`: a leaked status-pipe write end is invisible when the
+child exits promptly, because the exit closes it and the parent's read
+completes. `fdpass`'s child waits for the parent to accept its
+connection, so the leak becomes a true deadlock - parent waiting on the
+child's exec, child waiting on the parent. `execstress` originally
+missed it for exactly this reason and was rebuilt around the real
+shape (fd pressure + a child that waits on a go-ahead the parent can
+only give after Start returns).
+
+Two long-standing oddities were the same bug all along: the
+`F_DUPFD_CLOEXEC` EINVAL on the macOS runner, recorded in the dispatch
+as an unexplained quirk with plain `dup(2)` added as a fallback, and any
+socket left blocking because `F_SETFL`/O_NONBLOCK silently did nothing.
+
+## The fix
+
+`runtime.cosmoLibcCallVariadic1` (sys_cosmo_arm64.s) and
+`darwin_call_v3` (the fast path) place the variadic argument on the
+stack. Every fcntl call site routes through them. `openat` is fixed the
+same way - its mode is variadic, so every O_CREAT open had been taking
+its permission bits from stack garbage.
+
+## Gates
+
+- `cloexec` asserts FD_CLOEXEC really is set by pipe2(O_CLOEXEC),
+  os.Pipe, open(O_CLOEXEC), socket(SOCK_CLOEXEC) and
+  fcntl(F_DUPFD_CLOEXEC), reporting each mechanism separately. ENOSYS is
+  accepted for F_DUPFD_CLOEXEC alone (NT does not implement dup for
+  files or pipes) and is surfaced in the ok line; every other error
+  fails, so the EINVAL this bug produced stays a failure.
+- `execstress` reproduces the deadlock shape deterministically.
+- Both censuses print on a wedge, so a future regression arrives with
+  evidence instead of a bare traceback.
+
+**Verified**: macos-latest went from wedging on 3 of 6 origin-executions
+to green on all three origins, with `ok cloexec`, `ok fdpass`,
+`ok execstress` and `sockpairpoll dupcloexec=ok` (previously
+`dupcloexec=invalid argument`). Linux and Windows stay green.
+
+## The lesson worth keeping
+
+A test that fails a third of the time and passes on re-run is not a
+flake; it is a defect with a probability attached. This one was a silent
+ABI mismatch corrupting close-on-exec, non-blocking flags and file
+permissions across the whole darwin port, and every re-run to green
+bought another day of it. The thing that cracked it was making the
+failing run PRINT its evidence - the descriptor census - rather than
+reasoning harder about a traceback.
