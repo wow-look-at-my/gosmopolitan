@@ -5270,3 +5270,75 @@ new-file discipline cosmo already has. See the PR discussion for the
 specific candidates (hook-and-implementation splits for proc.go's
 threads code, and a pclntab writer/reader pair that is already
 lockstep-coupled by CLAUDE.md's own warning).
+
+
+# 2026-07-26: macOS CI wedge datapoint - checkFdpass hangs in forkExec
+
+Logging another nondeterministic macOS wedge, same spirit as the
+2026-07-05 entry. Surfaced on PR #74 (the go1.26.5 uprev) and,
+independently and slightly earlier, on PR #72, which does not contain
+that merge.
+
+**Symptom.** The runtimeprobe `fdpass` check wedges on macos-latest and
+the 90s watchdog fires:
+
+    FAIL watchdog: probe did not finish within 90s
+    panic: watchdog: probe wedged; all-goroutine traceback follows
+    goroutine 1 [syscall]:
+    syscall.Syscall(0x3f, 0xf, ..., 0x8)        # 0x3f = read
+    syscall.readlen(...)                         zsyscall_cosmo_arm64.go:524
+    syscall.forkExec(...)                        exec_unix.go:220
+    os/exec.(*Cmd).Start(...)
+    main.checkFdpass()                           fdpass.go:132
+
+exec_unix.go:220 is the parent's blocking read of the child status pipe.
+The parent forked and is waiting for the child to either write an errno
+or close the write end at exec. It never does.
+
+**Nondeterministic, and not the uprev.** Each macOS test job runs the
+probe once per origin binary (ubuntu, macos, windows), and which origins
+wedge varies run to run:
+
+| run | branch | ubuntu | macos | windows |
+|---|---|---|---|---|
+| 30217534778 | PR #72 (no 1.26.5 merge) | FAIL | pass | pass |
+| 30217973653 | PR #74 | FAIL | pass | FAIL |
+| 30218189383 | PR #74 | pass | FAIL | pass |
+| 30218365587 | PR #74 | pass | pass | pass |
+
+Same binaries, different outcomes - so it is timing, not a code break.
+PR #72 reproduced it at 19:53, before PR #74's first macOS leg ran at
+20:07. Attribution was also checked from the other direction: of the 20
+non-test .go files go1.26.5 changed, exactly six are compiled into a
+cosmo/arm64 runtimeprobe (os/file_posix.go, os/root.go,
+os/root_openat.go, os/root_unix.go, os/signal/signal.go,
+runtime/slice.go) and none is on the fork/exec path. The merge's actual
+darwin fork/exec changes - the `//go:norace` annotations on
+exec_libc2.go's forkAndExecInChild and syscall_darwin.go's rawSyscall -
+are in `//go:build darwin` files that GOOS=cosmo never compiles.
+
+**Ruled out.** Concurrent-fork leakage of the status pipe's write end,
+the classic cause of this exact hang: exec_unix.go's forkExec holds
+ForkLock across both forkExecPipe and forkAndExecInChild, so Go's own
+forks are serialized against pipe creation.
+
+**Open hypothesis, unproven.** cosmo selects forkpipe2.go (the "atomic
+pipe2" variant) because it advertises SYS_PIPE2, but on a darwin host
+that syscall is emulated: Apple's libc has no pipe2, so
+runtime.pipe2 (os_cosmo_arm64.go) calls the Syslib's flagless `pipe`
+and then applies FD_CLOEXEC with fcntl. Any fd created that way is
+briefly non-CLOEXEC. That is exactly the window forkpipe.go's
+non-atomic variant exists to document, and the tree's ForkLock
+discipline only covers pipes created *through* forkExec - not one
+created concurrently elsewhere in the runtime. A write end leaked into
+any live child would hold the parent's read open forever, which is the
+observed symptom. Unverified: reproducing needs a macOS host, and CI is
+the only one available.
+
+**Not fixed here.** Rate is roughly 4 wedges in 15 origin-executions
+observed post-2026-07-26; a rerun clears it (30218365587 went green on
+all three origins). Chasing it properly means auditing every darwin fd
+creation for the CLOEXEC window and probably giving cosmo's darwin
+dispatch a real atomic pipe2 - a runtime change that wants its own
+change and its own in-CI forensics, the way the wave-9 XNU read(2)
+wedge did.
