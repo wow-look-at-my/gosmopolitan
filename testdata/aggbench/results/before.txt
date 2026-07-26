@@ -1,0 +1,8 @@
+# js/wasm, toolchain WITHOUT the round 7-8 dispatch-loop changes.
+# node v22.22.2, same machine and frame as after.txt.
+
+aggbench_stock.wasm: 4533214 pages -> 283326 cells @ 16 pages
+  module 3.47 MB, compile+instantiate 10.4 ms
+  aggregate   min    7.94  p50    8.33  p90   12.23  max   12.49 ms
+  rle decode  min   21.29  p50   22.41  p90   23.20  max   24.41 ms
+  checksum 208871676  (must match across toolchains)
