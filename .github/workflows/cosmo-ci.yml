@@ -515,6 +515,18 @@ jobs:
           GOOS=js GOARCH=wasm go build std
           GOOS=wasip1 GOARCH=wasm go build std
 
+      - name: Test the wasm object writer (host-side codegen)
+        # Runs on the HOST - it shells out to `go tool compile -S` for both
+        # wasm ports - so it needs an explicit GOOS=linux: this tree targets
+        # cosmo by default and the test binary would not exec. Pins the branch
+        # lowering: a forward-only function must emit no PC_B store, and a loop
+        # must still emit one for its backedge.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/obj/wasm
+
       - name: Test js/wasm under node
         # Observed 1m18s locally. lib/wasm supplies go_js_wasm_exec.
         timeout-minutes: 10
