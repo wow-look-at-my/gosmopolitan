@@ -4005,7 +4005,173 @@ build machinery - the existing ubuntu-built fat APE artifact is the
 input, and fizzbuzz + apetest's runtimeprobe battery is the
 pass/fail instrument.
 
+### Wave-4 experiment verdict: WoA x86-64 emulation — FAIL-to-boot (2026-07-21)
+
+The option-(a) experiment ran; the verdict is FAIL-to-boot. The APE
+BOOTS under Windows-on-ARM's x86-64 emulation - the PE handoff, the
+NT personality, VEH crash delivery, and the 0xC0DE0000|sig
+encoded-signal-death exit protocol are all demonstrably live under
+the emulator - but 100% of launches die at one deterministic
+pre-main READ SIGSEGV during early NT bring-up, before main and
+before any program output. 0 execution tests pass. Option (a) does
+NOT deliver WoA support with the fork as shipped.
+
+Setup: a test-woa job (added 6ab873d2) mirrored the windows-latest
+apetest leg - same three origin artifacts, same AF_UNIX probe and
+fizzbuzz pre-steps, same apetest gauntlet - on windows-11-arm, with
+the windows-latest per-step timeouts doubled for emulation overhead
+and continue-on-error while under evaluation. The job is retired in
+the same change that records this verdict; to revive it,
+cherry-pick/restore it from 6ab873d2. The charter's
+runner-availability question is answered: on this public repo,
+GitHub-hosted windows-11-arm runners scheduled in ~3-4s on both
+attempts (image windows-11-arm64 20260714.109.1).
+
+Evidence: run
+https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29860644973
+attempt 1 (job 88737395780) and attempt 2 (job 88739890277 - a
+rerun on a DIFFERENT VM, against artifacts confirmed identical by
+sha256), plus the test-log-windows-11-arm-<origin>-origin artifacts
+(3-day retention). Both attempts failed with an identical
+signature. Every APE launch - ~270 processes across the two boots,
+ubuntu-, macos-, and windows-origin binaries alike - dies in
+~0.08s with zero stdout: Exception 0xc0000005 with
+ExceptionInformation[0]=0 (READ) at fault address 0x2000c9000,
+exit status 0xC0DE000B (0xC0DE0000|11 = SIGSEGV). The fault
+address is CONSTANT across all ~270 launches and both boots, and
+it sits inside the cosmo image's fixed 0x200000000 span: the
+faulting read targets the APE image mapping, not randomized OS
+state. RIP differs numerically across boots (attempt 1
+0x7ff81e62b518, attempt 2 0x7ffc5a14b518) but is the SAME
+instruction - low 16 bits 0xb518 identical, delta 0x43bb20000
+64KB-aligned, and all 5 system-module stack frames slid rigidly by
+their per-module deltas, i.e. per-boot ASLR only - with RIP in
+non-Go system-module code, on the boot stack, on g0. The register
+file is structurally constant: rcx=r12 = a 64KB-granular early
+allocation base in ~0xcb0000-0xdf0000 (the only varying value),
+rax=rcx+0x338, r10=rcx+0x440, rdx=2, r8=0x200, r9=rdi=0x210,
+rbx=0x21, rsi=r13=r15=0, r14=0x200, rsp=0xbffa80 in stack
+[0x0,0xbffec0), gp=0x1001a8780. Read together: the fault fires
+inside or beneath an early NT call made during runtime bring-up,
+before main. apetest per origin: 81 PASS (every structural/format
+test) / 45 FAIL (every test that execs an APE, all `exit status
+0xc0de000b` with the same SIGSEGV stderr) / 1 SKIP
+(TestDebugSidecars - CI artifacts ship no sidecars); the 45-name
+fail set is set-identical across the three origins AND across
+attempts. runtimeprobe never started - 0 checks ran.
+
+What WORKS under emulation is worth recording: the whole boot
+chain up to the fault (PE header accepted, entry stub, NT
+personality up); VEH-based crash reporting with a full
+register/stack dump; the wait-status encoding observed end to end
+by the harness (exit 0xC0DE000B decoded as a SIGSEGV death);
+console/stderr plumbing carrying the crash report out; the AF_UNIX
+probe at full parity with x64 windows-latest (afunix.sys works,
+including the known SO_REUSEADDR-bind-10045 quirk, byte-identical
+on both WoA VMs); and instant runner scheduling. The control is
+decisive: the SAME binaries (by sha256) passed the full gauntlet
+on x64 windows-latest in this same run - the delta is the
+emulation layer, not the binaries.
+
+Follow-on, per the charter's decision rule: emulation is not
+clean, so the native windows/arm64 bring-up gains urgency and the
+native notes above stand unchanged. One caveat before chartering
+the full native ladder: the failure is a single deterministic
+instruction/address pair, so ONE bounded root-cause investigation
+is worth spending first - WinDbg on a WoA machine stopped at the
+first APE instruction, or narrowing which early NT/loader call
+touches 0x2000c9000 (candidates: xtajit64 reading the image span
+during translation vs an ntdll routine walking our PE mappings).
+If that one fault turns out to be fixable fork-side, option (a)
+may still unlock. Honest scope note: all evidence here is CI-only;
+no interactive WoA debugger was available, so the faulting module
+was never named.
+
+Job fate: job-level continue-on-error keeps the RUN green, but the
+job's own check run still concludes failure, and the org's
+external all-builds aggregator counts job-level conclusions -
+observed "1/9 builds failed: test-woa" on 6ab873d2. An
+expected-red experiment leg therefore cannot live on any branch
+that must merge; that is why the job is removed outright rather
+than kept.
+
+# 2026-07-19: size pass 3c — cross-arch dedup + macOS loader-side decompression: measured, both DROPPED
+
+Two candidate fat-APE size levers were taken to full measurement (at
+HEAD ef935b3c) and dropped with no code change, no branch, no PR.
+Recording the numbers and the layout design facts here so the dead
+ends stay dead and future layout work starts from the constraints.
+
+Lever 1 — cross-arch dedup via shared/overlapping PT_LOAD file
+extents: DROPPED. The read-only identical ceiling is ~921 KB on a
+stdlib-heavy webserver (reconciles pass 1's 2.17 MB figure: that was
+unstripped — strip-by-default already removed the symtab/strtab/DWARF
+share). The ONLY contiguous link-time-alignable run is the
+time/tzdata zip (427,523 B, same order both arches, inside
+go:string.*); funcnametab interiors drift (arch-specific insertions,
+nfunc 6676 vs 6527) and pctab/functab/funcdata are arch-different
+(minLC 1 vs 4). Alignment kills most of the rest: 4K congruence
+breaks ARM64 macOS (the embedded loader hard-refuses congruence not
+mod 16384), 16K drops 64K-page arm64 Linux kernels (supported today),
+and fully-safe 64K captures 323-358 KB net in ONE extent (six 64K
+pages of tzdata) — fizzbuzz and runtimeprobe capture zero. Wire
+benefit under `zstd -19 --long=27` is ZERO (simulated dedup came out
+1,334 B WORSE) — dedup is on-disk-only, 2.5-3.0% of the fat file,
+tzdata-importing binaries only. Only proportionate follow-up if ever
+wanted: special-case a single shared 64K-aligned extent for the
+tzdata zipdata symbol — same 323-358 KB, minimal machinery.
+
+Lever 2 — storing the arm64 image compressed and decompressing in the
+macOS loader: DROPPED on the kill criterion. Every consumer of the
+arm64 image reads raw bytes at absolute file offsets: Linux arm64
+self-assimilation demand-pages in place, an installed/cached `ape`
+loader file-mmaps PT_LOADs, and the m1 loader file-mmaps non-exec
+segments and preads only PF_X spans into anon memory. Compressed
+storage therefore necessarily costs a supported boot path — and
+storing both forms would GROW the file ~2.4 MB. Upstream apelink
+behaves the same way (Pwrites raw PT_LOAD spans; gzips only ~12KB
+loader binaries and zip assets, never machine-code payloads).
+Teaching Linux arm64 to boot via a loader would regress
+zero-dependency boot (noexec /tmp, read-only rootfs), and the shell
+header budget is 2047/2048 bytes. Wire size is already solved by
+distribution-side zstd.
+
+Durable ape.go/boot design facts for any future layout work:
+transplantPEHeader requires the amd64 image at 0x10000 with verbatim
+absolute section raw pointers; shiftPOffsets applies a uniform shift
+(per-phdr rewriting would break makeMachoHeader /
+makeEmbeddedElfHeader assumptions); the m1 loader caps e_phnum at 18
+(1024-byte phdr buffer) and enforces 16 KiB congruence; cosmo/arm64
+links with p_align 0x4000; the merged phdr table has ~3.6 KB of
+in-place growth room (dead section-header bytes before the note);
+GOCOSMOSTRIP=0's byte-for-byte reproduction promise means any dedup
+could only apply to the default stripped path; and Linux-arm64
+self-assimilation has NO CI execution coverage (no arm64 Linux
+runner) — treat arm64-image layout changes as under-tested.
+
 # 2026-07-20: exec.LookPath on NT — unix PATH rules against a Windows PATH
+
+> Reconciliation note (2026-07-21): this entry records the fix as
+> developed on its own branch (#64). A concurrently developed fix for
+> the same bug (#63) merged first, and the reconciled #64 merge kept
+> #63's fuller lp_cosmo.go — so three statements below do not
+> describe the merged tree. In the code as merged: the implicit-CWD
+> probe (NoDefaultCurrentDirectoryInExePath + the full ErrDot/
+> SameFile machinery) IS ported; Command/Start's lookExtensions call
+> sites do NOT stay `runtime.GOOS == "windows"`-gated — they gate on
+> a per-lp-file lookExtensionsEnabled() (true on NT hosts), so
+> explicit paths get PATHEXT resolution there too; and the shipped
+> probe is testdata/runtimeprobe/lookpath.go's self-copy dummy
+> (exec.LookPath AND exec.Command, the resolved child actually run,
+> plus a conditional LookPath("go") repro) — the lpcanary flavor
+> below, which the wine A/B exercised, was superseded in the merge.
+> What survives from this branch: the lp_unix.go constraint comment
+> and the flag-shaped argv contract (probeWantArgs + the apetest
+> tail). The red-then-green commit-split CI pin below was mooted on
+> master (the fix landed minutes earlier via #63). The merged
+> implementation's full record is the "2026-07-20: NT —
+> exec.LookPath never worked on Windows hosts" section at the end of
+> this file.
 
 ## Symptom (consumer regression, initially misdiagnosed as argv loss)
 
@@ -4184,6 +4350,14 @@ node js battery, jsfetchstream e2e, wazero wasip1 battery, wasip1sock
 host suite, entire threads step incl. threaddemo 10x, the B3 demo
 gates, the 4-package threads go test and the wasip1 rejection check,
 wasmexport testdir on both targets): all green.
+
+Triage note: with this fix on master, these signatures are REAL
+regressions, never flakes — `threaddemo: FAIL: third spawn reused a
+parked worker M`, `threaddemo: FAIL: worker Ms never parked
+(parked=N after 10s)`, and the test's `re-spawn did not reuse a
+parked M: M count grew A -> B`. Investigate; do not just re-run the
+job (the old "re-kick a parked-M red" practice predates the fix and
+is obsolete).
 
 Same-class sibling, fixed in the same change:
 TestWasmThreadsRunOnNewM's re-spawn assertion
@@ -4452,3 +4626,403 @@ Still deliberately NOT changed: os.Getenv stays exact-case on cosmo
 case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
+
+# 2026-07-20: NT — off-host HTTPS from an APE times out (OPEN, no fix landed)
+
+Field observation from consumer CI (windows-latest, fork v213, run
+29741678227 of a downstream repo): the APE's HTTPS GET to
+api.github.com timed out (10s client timeout) in every red run while
+runner-native fetches on the same host succeeded. This is DISTINCT
+from the exec.LookPath defect observed in the same runs (fixed
+2026-07-20, sections above); as of 2026-07-21 no fork-side fix for
+the network half has landed.
+
+Coverage gap: runtimeprobe's TCP/UDP/AF_UNIX checks are
+loopback-only, so off-host connect and name resolution from NT have
+no CI probe — this failure mode is invisible to the current gauntlet.
+Unverified hypothesis (first suspect, not a diagnosis): the pure-Go
+resolver's unix assumptions (/etc/resolv.conf and friends) have no NT
+translation in the path layer, so DNS lookups may never reach a real
+nameserver. Candidate NT-backlog items: root-cause with a minimal
+http.Get repro on windows-latest, an off-host network/DNS probe
+(needs an endpoint reachable from CI), and resolver bring-up on NT if
+the hypothesis holds.
+
+# 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
+
+## Symptom, evidence
+
+Green wasm-job logs on master contain, in the pool-demo slot,
+
+    runtime: newosproc: no worker thread claimed the new M within 10s
+    runtime: GOWASM=threads needs the wasm_exec_node.js worker pool (GOWASMTHREADSPOOL > 0, Node.js host)
+    fatal error: newosproc: no wasm worker thread available
+
+followed by the runtime traceback — and none of the demo's own output:
+no `pooldemo: Go main is running`, no `POOLDEMO: PASS`. The step stayed
+green because `node pool_demo.js` exited 0 around the fatal.
+
+Filed as an "occasional exit-code race", but the CI record shows it was
+deterministic, every run, from the B3 scheduler phase on:
+
+- run 29701258648 (ef935b3c, B2): POOLDEMO: PASS present, no fatal
+- run 29705390870 (16c08959, B3): fatal present, PASS gone — first hit
+- every green master wasm job after that (checked through 29839652048,
+  current master) has exactly one fatal and zero demo output
+
+So the pool demo's payload (worker instantiation against the shared
+memory, cross-instance 0xFE atomics, checksum verification) had not
+executed on master CI since 2026-07-19, while the job kept certifying
+it green.
+
+## Root cause: two stacked bugs in pool_demo.js
+
+Bug 1 — the demo never grew a runtime pool. B3 (16c08959) made
+lockOSThread real under GOWASM=threads (dolockOSThread, proc.go:6295 —
+package initializers, syscall/js.init in particular, must stay on the
+main thread), so runtime.main's boot now parks a LOCKED main goroutine
+at gcenable's channel receive (proc.go:213 -> mgc.go:216) while
+bgsweep/bgscavenge sit runnable. The scheduler must hand the P to
+another M: park_m -> schedule -> stoplockedm (proc.go:3831) -> handoffp
+(proc.go:3585) -> startm (proc.go:3544) -> newm -> newosproc ->
+wasmThreadsNewosproc (os_wasmthreads.go:83), which posts to the spawn
+mailbox and futex-waits for a pool worker parked in wasm_thread_run.
+pool_demo.js predates the B2 runtime pool and spawned only B1 probe
+workers (stub imports, and only after boot) — the mailbox had no
+servers, ever. 10s later, os_wasmthreads.go:116 threw the fatal on the
+main thread. Every boot, deterministically.
+
+Bug 2 — the fatal exited 0. The fatal path prints via wasmWrite
+(synchronous fs.writeSync — that is why the log shows it), then
+fatalthrow -> exit(2). runtime·exit (rt0_js_wasm.s:56) calls the
+wasmExit import, sets PAUSE, RETUNWIND: wasm_exec.js records
+`exited = true` and calls `go.exit(2)` — which in pool_demo.js only
+ASSIGNED a variable (`exitCode = code`) that a `process.exit(exitCode
+?? 1)` at the very END of the driver would consume. The driver never
+got there: it was parked on `await ready`, a promise only the (dead) Go
+program's __demoReady callback could resolve. The run() export returned
+cleanly (PAUSE), runDone resolved unobserved, no timers or handles
+remained, node's event loop drained — and an event-loop drain is a
+clean EXIT 0. bash -e saw success; the step moved on to threaddemo.
+
+## Fix (pool_demo.js), gate (cosmo-ci.yml)
+
+pool_demo.js now pre-spawns GOWASMTHREADSPOOL runtime pool workers
+(default 4) exactly like wasm_exec_node.js — goRuntime + threadRun
+workerData for wasm_exec_worker_node.js, unref'd — so the post-B3 boot
+handoff is served and the demo actually runs again. And the exit-code
+discipline is enforced everywhere a failure can surface:
+
+- go.exit before the final verification handoff => nonzero immediately
+  (a runtime fatal's exit(2) now exits the process 2);
+- a runtime pool worker's exit message, error, or thread death before
+  completion => nonzero (also catches a worker-side fatal whose exit
+  message was lost — the host exit hook still ends the worker thread
+  with the fatal's code, surfaced by the parent's 'exit' listener);
+- a wasm trap out of run/resume (runDone rejection) => exit 1;
+- an event-loop drain before completion => forced exit 1 via a
+  process 'exit' guard (with wasm_exec_node.js's exit-time deadlock
+  probe first, so a wedged runtime still prints its stacks).
+
+CI additionally gates the demo's OUTPUT, not just its exit code
+(pipefail + tee): `POOLDEMO: PASS` must be present and no line may
+match `fatal error` — so a fatal-with-green-exit cannot pass even if a
+new swallow path appears.
+
+## Verification
+
+- Pre-fix, stock CI invocation (deterministic repro): the exact CI
+  fatal, node exit 0, no demo output — the bug, on demand.
+- Post-fix, stock invocation: full demo output, POOLDEMO: PASS, exit 0.
+- Post-fix, original failure shape forced (runtime pool spawn disabled
+  in a throwaway driver copy while the runtime still expects pool=4):
+  the identical newosproc fatal now exits 2, with a
+  `pool_demo: FAIL: Go program exited with code 2` trailer.
+- Post-fix, GOWASMTHREADSPOOL=0: deadlock fatal, exit 2.
+- Post-fix soak: 400 CPU-loaded iterations of the stock invocation
+  (4 busy-loop processes on 4 cores; 300 unconstrained + 100 under
+  taskset -c 0,1) — zero failures, zero fatals, POOLDEMO: PASS in
+  every run.
+- Full local mirror of the cosmo-ci.yml threads step (smoke, gated
+  pool_demo, threaddemo x10, speedup/stwgc/liveness, growatomic,
+  threads stdlib tests, wasip1 rejection): green end to end.
+
+No src/ or lib/wasm changes — the fix is confined to the demo driver,
+the workflow gate, and docs, so no toolchain rebuild and no non-threads
+byte-identity proof is needed.
+
+# 2026-07-21: stale-PR triage
+
+PRs #35, #36, and #39 were closed 2026-07-21 as invalid/obsolete/moot;
+the rationale for each is in its PR body. Do not reopen or resurrect
+work from their dead head branches (`fix-ape-shell-fallback`,
+`claude/fix-github-actions-logs-YXLsp`,
+`claude/cross-platform-binary-VJeLb`).
+
+# 2026-07-21: darwin sendmsg/recvmsg + SCM_RIGHTS fd passing
+
+The last darwin socket gap from the wave-6 backlog: SYS_SENDMSG(211)/
+SYS_RECVMSG(212) stayed deliberately ENOSYS on macOS hosts because
+Linux and Apple disagree on every struct involved, and a half-landed
+translation would corrupt buffers silently. Landed whole this time.
+net.UnixConn ReadMsgUnix/WriteMsgUnix and SCM_RIGHTS fd passing over
+pathname AF_UNIX stream sockets now work on macOS hosts; the
+runtimeprobe sendmsg and fdpass checks lost their darwin skip legs
+and are mandatory on all three hosts.
+
+## Layout ground truth (verified against the in-tree darwin port)
+
+msghdr (ztypes_cosmo_* vs ztypes_darwin_arm64.go; offsets identical
+through Iovlen, widths diverge after):
+
+	field       Linux/cosmo (56 B)      Apple arm64 (48 B)
+	msg_name        @0  ptr                 @0  ptr
+	msg_namelen     @8  u32 (+4 pad)        @8  u32 (+4 pad)
+	msg_iov         @16 ptr                 @16 ptr
+	msg_iovlen      @24 u64                 @24 i32 (+4 pad)
+	msg_control     @32 ptr                 @32 ptr
+	msg_controllen  @40 u64                 @40 u32
+	msg_flags       @48 i32 (+4 pad)        @44 i32
+
+struct iovec is {base ptr, len u64} on BOTH systems, so iovec arrays
+pass through untouched - multi-iovec scatter needs no translation
+(unlike NT's reversed-field WSABUF). struct cmsghdr differs
+structurally: Linux {Len u64, Level i32, Type i32} = 16-byte header,
+data aligned to CMSG_ALIGN = sizeof(size_t) = 8; Apple {Len u32,
+Level i32, Type i32} = 12-byte header, data aligned to 4
+(__DARWIN_ALIGN32). Control buffers must therefore be repacked
+cmsg-by-cmsg in both directions; a whole-buffer memcpy is never
+correct, and the alignment difference is exactly where a naive port
+corrupts multi-record buffers.
+
+Constants (Linux <-> Apple): SOL_SOCKET 1 <-> 0xffff; SCM_RIGHTS 1 =
+1; MSG_OOB/PEEK/DONTROUTE coincide (0x1/0x2/0x4, the set
+darwinCheckMsgFlags already admits); result flags differ - MSG_CTRUNC
+0x8 <-> 0x20, MSG_TRUNC 0x20 <-> 0x10, MSG_EOR 0x80 <-> 0x8.
+MSG_CMSG_CLOEXEC (0x40000000) has NO Apple equivalent at all.
+UIO_MAXIOV is 1024 on both. Apple libc exports plain `sendmsg`/
+`recvmsg` symbols (same dlsym names upstream GOOS=darwin binds), so
+resolution rides the existing osArchInit dlsym batch next to
+sendto/recvfrom.
+
+## The nosplit budget forbids in-window translation (measured)
+
+First cut did the whole translation inside the dispatch layer
+(socket_cosmo_arm64.go), where sendto/recvfrom translate theirs. The
+linker priced it immediately: the spine syscall.Syscall(112) ->
+RawSyscall6(96) -> cosmo.Syscall6(112) -> syscall6SlowDarwin(80+80)
+already burns 480 of the 792-byte nosplit budget, darwinCall ->
+darwinLibcCall6 -> darwinErrno needs ~160 more on the failure edge,
+and a sendmsg frame with a 112-byte sockaddr scratch plus any usable
+cmsg scratch came out at 432 bytes - "nosplit stack over 792 byte
+limit", 120-232 bytes over on every edge. The existing emulations fit
+because their frames stay small (sendto's [112]byte sockaddr is the
+prior record); an unbounded control repack never will.
+
+So the work is split across the syscall boundary by cost:
+
+- internal/runtime/syscall/cosmo (socket_cosmo_arm64.go,
+  darwinSendmsg/darwinRecvmsg + two dispatcher cases): FIXED-SIZE
+  msghdr shape adapters only. iovlen u64 -> i32 behind the
+  UIO_MAXIOV bound (EMSGSIZE past it, the kernel's sendmsg/recvmsg
+  spelling), controllen u64 -> u32, iovec pointer passthrough,
+  result msg_flags value translation (XlatMsgFlags). msg_name and
+  msg_control POINTERS pass through untouched. Frame ~100 bytes;
+  the fat link's nosplit check passes.
+- package syscall (new syscall_cosmo_msg.go; recvmsgRaw/sendmsgN in
+  both per-arch files branch on cosmo.Darwin(), a flag only
+  SetDarwinFns' XNU boot path sets): everything unbounded, as
+  ordinary Go BEFORE and AFTER the _Gsyscall window - sockaddr
+  translation both directions (the darwinSockaddrOut/In tables
+  mirrored: {u8 len, u8 family} vs u16 family, AF_INET6 10 <-> 30,
+  abstract AF_UNIX names EINVAL), and the cmsg repack via the new
+  arch-independent exported helpers in socket_msg_cosmo.go
+  (internal/runtime/syscall/cosmo): CmsgToApple / CmsgToLinux.
+  recvmsgRaw/sendmsgN are the single funnel every caller uses
+  (Recvmsg/Sendmsg(N), the Inet4/6 variants, net's ReadMsg*/
+  WriteMsg* via internal/poll), so nothing else needs patching.
+
+Resulting raw-syscall contract, documented in both files: a direct
+syscall.Syscall(SYS_SENDMSG/SYS_RECVMSG) on a macOS host crosses the
+boundary with Apple-shaped msg_name/msg_control BYTES (widths and
+flag values still adapted). The only raw shape anything in the tree
+issues - the runtimeprobe sendmsg check's two-iovec msghdrs with nil
+name and nil control - is host-identical, and that check now proves
+it on macos-latest.
+
+## Cmsg repack semantics (the Linux-parity contract)
+
+Send side (CmsgToApple, caller's oob copied into an Apple-shaped
+allocation - never in place, the input must survive for retry
+loops): SOL_SOCKET/SCM_RIGHTS translates with the fd payload copied
+unchanged; non-SOL_SOCKET levels are silently SKIPPED (what Linux's
+af_unix __scm_send does - live-kernel-verified during NT wave 3 item
+2b); SCM_CREDENTIALS is EOPNOTSUPP (Linux validates credentials this
+emulation cannot - NT's exact stance); unknown SOL_SOCKET types and
+malformed records (cmsg_len under a header, overrunning the buffer)
+are EINVAL; a final CMSG_LEN-tight record without alignment padding
+is legal. A buffer that skips down to nothing sends with no control
+at all, matching what Linux transmits.
+
+Receive side (CmsgToLinux, IN PLACE in the caller's oob buffer - the
+Apple shape of any payload is strictly smaller than its Linux shape,
+so a Linux-provisioned buffer always has room for what Apple
+delivers, and the expansion back can only overflow the caller's
+CAPACITY, never the buffer): three stages so no write overruns
+unread input - (1) compact translatable records to the front
+(forward-safe, records only shrink), (2) plan Linux offsets against
+capacity and apply fd side effects, (3) expand back to front (per
+record dst >= src; payload copied high-to-low; header written after
+its payload moves). Truncation mirrors the live-kernel semantics the
+NT emulation pinned: SCM_RIGHTS truncates at fd granularity -
+(avail-16)/4 fds, so CMSG_SPACE alignment slack still carries whole
+fds ("a 24-byte buffer receives TWO fds") - every undelivered fd is
+CLOSED rather than leaked, MSG_CTRUNC is raised, and the final
+record may sit flush against capacity (tight-fit rule). Only
+SOL_SOCKET/SCM_RIGHTS can actually arrive (darwinSockoptXlat refuses
+every option that would enable timestamps and friends); anything
+else is dropped.
+
+MSG_CMSG_CLOEXEC: net's cosmo build takes the
+unixsock_readmsg_cmsg_cloexec.go variant (setReadMsgCloseOnExec is a
+no-op), i.e. every net.ReadMsgUnix passes the flag - so the darwin
+branch strips it before the raw call and emulates it with fcntl
+F_SETFD FD_CLOEXEC on each DELIVERED rights fd during the repack
+walk (same post-receive window upstream GOOS=darwin's net layer
+has). The dispatch layer refuses the flag EINVAL for raw callers,
+exactly the NT emulation's documented stance, so a raw caller's
+request is refused visibly instead of silently un-honored. SIGPIPE
+needs no per-call work: every emulation-created socket already
+carries SO_NOSIGPIPE (wave 2), and passed-in fds inherit their
+description's options.
+
+Known divergences, by design: SCM_RIGHTS sent on an INET socket
+reaches Apple (which refuses it) instead of Linux's silent drop -
+detecting the family would cost a getsockname per send for a shape
+nothing issues; Apple-side record kinds that cannot arrive are
+dropped rather than surfaced.
+
+## Verification
+
+- socket_msg_cosmo.go is deliberately arch-independent
+  (//go:build cosmo, pure byte manipulation), so
+  socket_msg_cosmo_test.go runs the entire repack matrix under
+  GOOS=cosmo on the linux host (misc/cosmo wrappers): msghdr mirror
+  offsets/sizes against ground truth, single/multi-record round
+  trips, foreign-level skips, odd-payload alignment padding, error
+  table (EINVAL/EOPNOTSUPP/ENOBUFS), fd-granularity truncation (the
+  24-byte/two-fd kernel case), whole-record drops with fd closes,
+  tight fits, malformed tails, in-place expansion byte-exactness.
+  All pass; `GOOS=cosmo go test internal/runtime/syscall/cosmo` ok.
+- make.bash green; fat fizzbuzz + runtimeprobe APEs build (the
+  arm64 leg's nosplit check is the real gate here) and run on the
+  linux host; full apetest suite green (`ok apetest`), 49 ok lines
+  from the probe with `ok sendmsg` and `ok fdpass` REAL (no skip
+  suffix) - the linux leg runs native SCM_RIGHTS, which validates
+  the probe logic the darwin emulation must now match.
+- macOS proof is the cosmo-ci macos-latest leg on this push: it
+  executes the darwin dispatch (dlsym wiring, shape adapters, the
+  syscall-package branches) via the same mandatory checks.
+
+# 2026-07-21: darwin SIGPROF CPU profiling - setitimer via dlsym
+
+The wave-9 backlog's last entry: pprof.StartCPUProfile /
+-test.cpuprofile on macOS hosts produced valid, ZERO-sample
+profiles. The gap was exactly one silent no-op - runtime.setitimer's
+darwin asm branch ("macOS: setitimer not in Syslib ... this is a
+stub") returned without arming anything, while every hz gate
+(prof.hz, mp.profilehz) was set and the handler installed, so
+nothing failed loudly anywhere. Everything downstream of timer-fire
+already worked and was CI-proven since wave 9: setsig ->
+darwinSigaction install, sigtramp's Apple->Linux signo translation
+(SIGPROF is 27 on both systems), host-aware sigctxt pc/sp/lr reads
+from the Apple mcontext, sighandler consuming SIGPROF before any
+sigFromUser gating, and validSIGPROF (an XNU kernel-timer SIGPROF
+carries Apple si_code 0, which falls into the accept-all branch;
+profileTimerValid is never set on cosmo - no timer_create path).
+
+## Fix shape: per-arch setitimer split (sigaltstack/pipe2 precedent)
+
+- os_cosmo_arm64.go: Go dispatcher `setitimer` - isdarwin() ->
+  darwinSetitimer, else setitimerLinux (the renamed asm, its Linux
+  SVC byte-identical; its darwin branch is now a loud crash in the
+  rtsigprocmask_darwin style, since a raw SVC would SIGSYS anyway).
+  amd64 keeps its asm untouched (the raw-XNU branch is the pending
+  Intel-mac bring-up path), decl relocated to os_cosmo_amd64.go.
+- setitimer comes from cosmoDlsym("setitimer") like kqueue/kevent:
+  the loader's Syslib (v10) exports sigaction/sigaltstack/
+  pthread_kill/pthread_sigmask/raise - the signal wave already
+  drives them - but has NO setitimer entry, and extending the
+  Syslib stays rejected per the cosmoDlsym decision record (the
+  compiled-loader cache would serve stale structs). Resolved once
+  in osArchInit (cosmoDarwinSetitimerFn); zero means arming
+  silently does nothing, which the probe turns into a loud FAIL -
+  no new failure plumbing needed.
+- Layout translation: Linux itimerval is 2x timeval{int64 sec,
+  int64 usec}; Apple's is 2x {int64 sec, int32 usec, 4 pad} - both
+  32 bytes, but the usec words sit at Apple offsets 8/24 (the
+  tv_usec i32-vs-i64 caveat, as in wait4's rusage fixup). Mirror
+  types + pure translators live in signal_cosmo_itimer.go,
+  arch-independent so the unit tests run under cosmo on any host
+  (the socket_msg_cosmo.go precedent); darwinSetitimer
+  (signal_cosmo_xnu.go, nosplit, the darwinSigaction pattern)
+  translates BOTH directions and calls through cosmoLibcCall6 (the
+  libc stub is a shallow syscall wrapper - no asmcgocall needed).
+  _ITIMER_PROF=2 on both systems; mode passes through. The
+  int64->int32 usec narrowing is lossless by construction (set_usec
+  takes int32; the profiler stores at most 1e6-1).
+
+## The "add both together" half: pthread libcall bookkeeping
+
+The wave-9 charter deferred upstream's m.libcallpc/sp recording in
+the pthread parking wrappers until SIGPROF timers were wired ("add
+both together"). Wired now: cosmoPthreadLibcCall
+(os_cosmo_arm64_sema.go) is upstream sys_libc.go's libcCall ported
+verbatim - record libcallg/pc/sp when libcallsp==0 (sp set LAST,
+the profiler's publication order), asmcgocall, clear after;
+reentrancy comment preserved - and all 7 pthread wrappers route
+through it. usesLibcall() (proc.go) now lists cosmo, enabling
+sigprof's libcall unwind branch: samples landing inside
+pthread_cond_wait/mutex attribute to the Go caller (semasleep ->
+lock2 -> ...) instead of _System. Linux hosts never set the fields,
+so the branch self-disables there; the shallow syslib/dlsym
+trampolines stay bookkeeping-free on purpose - those samples land
+in _ExternalCode/_System, the shape the NT netpoller already
+accepts.
+
+## Probe flip + EINTR audit
+
+testdata/runtimeprobe cpuprof: the darwin host-skip leg is deleted -
+real samples (>=1 Sample record in the pprof proto) are mandatory on
+all three hosts. Check names and counts are unchanged (apetest
+matches "ok cpuprof" by name; 49 ok lines before and after).
+
+100Hz SIGPROF adds interrupt frequency, not a new interrupt class:
+the handler installs with SA_RESTART (translated to Apple 0x2 by
+darwinSigaction), and every known non-restartable hot path was
+already EINTR-hardened for SIGURG preemption - the kqueue
+netpoller's registration/break/poll retries (netpoll_cosmo_xnu.go),
+the sigNote pipe loops (sigqueue_note_cosmo_arm64.go), semasleep's
+pthread_cond_timedwait spurious-wake loop (os_cosmo_arm64_sema.go),
+and internal/poll's shared ignoringEINTR at the user level. No new
+retry sites were needed.
+
+## Verification
+
+- Linux host: make.bash green; go vet runtime clean for cosmo
+  amd64+arm64; new unit tests green under the misc/cosmo wrappers
+  (GOOS=cosmo go test -run 'TestCosmoXnuItimervalABI|
+  TestCosmoTimevalTranslation' runtime - Apple ABI pins: 16/32-byte
+  sizes, usec offsets 8/24; translation round-trips incl. the
+  hz=100 arm shape and the hz=0 disarm shape), and
+  internal/runtime/syscall/cosmo stays green; the ubuntu CI leg now
+  runs the runtime-package cosmo tests alongside the syscall ones.
+- Fat fizzbuzz + runtimeprobe APEs build (the arm64 nosplit budget
+  is the real gate); probe on the linux host: 49 ok lines with
+  "ok cpuprof samples=17" - real samples through the renamed
+  setitimerLinux path, proving the dispatcher end the host CI can
+  measure. Full apetest suite green ("ok apetest").
+- macOS proof is the cosmo-ci macos-latest leg on this push: the
+  now-mandatory cpuprof check executes the dlsym resolution, the
+  layout translation, the arm, and 1.2s of real SIGPROF delivery
+  against all three origin binaries.

@@ -154,6 +154,17 @@ jobs:
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent' cmd/go/internal/work
+          # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
+          # cmsg repack, signal/wait-status translation tables, epoll
+          # layout) are GOOS=cosmo-only code, run on this host via the
+          # misc/cosmo exec wrappers - the test binary is a thin cosmo
+          # APE that executes natively on linux.
+          export PATH="$PWD/misc/cosmo:$PATH"
+          GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
+          # Runtime-package cosmo unit tests: the Apple itimerval ABI
+          # pins + timeval translation behind the darwin SIGPROF
+          # setitimer dispatch, and the signal translation tables.
+          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
@@ -583,7 +594,17 @@ jobs:
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/wasmthreads-smoke.wasm .)
           node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
-          node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm
+          # pool_demo gate: pipefail propagates node's exit code through
+          # the tee, the PASS line must be present, and no runtime fatal
+          # may hide anywhere in the output. Belt and suspenders on
+          # purpose: a boot-time "fatal error: newosproc: no wasm worker
+          # thread available" used to exit 0 here with none of the demo's
+          # payload run, keeping this job green (see DEBUGGING.md,
+          # pool_demo silent-fatal, 2026-07-21).
+          set -o pipefail
+          node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm 2>&1 | tee /tmp/pooldemo.out
+          grep -q "POOLDEMO: PASS" /tmp/pooldemo.out
+          ! grep -q "fatal error" /tmp/pooldemo.out
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/threaddemo.wasm ./threaddemo)
           for i in $(seq 1 10); do
             echo "=== threaddemo run $i ==="

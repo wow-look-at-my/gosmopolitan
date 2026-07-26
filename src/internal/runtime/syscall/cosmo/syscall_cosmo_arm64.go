@@ -70,6 +70,8 @@ type DarwinFns struct {
 	Getpeername uintptr
 	Sendto      uintptr
 	Recvfrom    uintptr
+	Sendmsg     uintptr
+	Recvmsg     uintptr
 	Setsockopt  uintptr
 	Getsockopt  uintptr
 	Shutdown    uintptr
@@ -98,10 +100,13 @@ var darwinFns DarwinFns
 var darwinErrorFn uintptr
 
 // SetDarwinFns installs the resolved function table. Called once from
-// runtime.osArchInit before any user code runs.
+// runtime.osArchInit before any user code runs. It also latches the
+// darwin-host flag package syscall dispatches its sendmsg/recvmsg
+// translation on (Darwin() in socket_msg_cosmo.go).
 func SetDarwinFns(f *DarwinFns) {
 	darwinFns = *f
 	darwinErrorFn = f.Error
+	darwinHost = true
 }
 
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
@@ -385,6 +390,10 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinSendto(a1, a2, a3, a4, a5, a6)
 	case sysRECVFROM:
 		return darwinRecvfrom(a1, a2, a3, a4, a5, a6)
+	case sysSENDMSG:
+		return darwinSendmsg(a1, a2, a3)
+	case sysRECVMSG:
+		return darwinRecvmsg(a1, a2, a3)
 	case sysSETSOCKOPT:
 		return darwinSetsockopt(a1, a2, a3, a4, a5)
 	case sysGETSOCKOPT:
