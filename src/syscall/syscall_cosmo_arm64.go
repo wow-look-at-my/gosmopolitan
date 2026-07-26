@@ -162,6 +162,12 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 }
 
 func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
+	if cosmo.Darwin() {
+		// macOS host: msghdr/sockaddr/cmsg layouts differ; the darwin
+		// branch (syscall_cosmo_msg.go) translates at this boundary,
+		// where allocation is legal - the nosplit dispatch side cannot.
+		return darwinRecvmsgRaw(fd, p, oob, flags, rsa)
+	}
 	var msg Msghdr
 	msg.Name = (*byte)(unsafe.Pointer(rsa))
 	msg.Namelen = uint32(SizeofSockaddrAny)
@@ -197,6 +203,10 @@ func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn 
 }
 
 func sendmsgN(fd int, p, oob []byte, ptr unsafe.Pointer, salen _Socklen, flags int) (n int, err error) {
+	if cosmo.Darwin() {
+		// macOS host: see recvmsgRaw above.
+		return darwinSendmsgN(fd, p, oob, ptr, salen, flags)
+	}
 	var msg Msghdr
 	msg.Name = (*byte)(ptr)
 	msg.Namelen = uint32(salen)

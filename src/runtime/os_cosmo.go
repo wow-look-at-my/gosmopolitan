@@ -383,8 +383,11 @@ func cgoSigtramp()
 // (signal_cosmo_xnu.go) that translates Apple's stack_t on XNU hosts,
 // on amd64 assembly (macOS-Intel runtime bring-up pending).
 
-//go:noescape
-func setitimer(mode int32, new, old *itimerval)
+// setitimer is per-arch: on arm64 a Go host dispatcher
+// (os_cosmo_arm64.go) that translates the itimerval layout on XNU
+// hosts and calls dlsym'd Apple libc setitimer (darwinSetitimer,
+// signal_cosmo_xnu.go), on amd64 assembly (its raw-XNU branch is the
+// pending Intel-mac bring-up path).
 
 //go:noescape
 func rtsigprocmask(how int32, new, old *sigset, size int32)

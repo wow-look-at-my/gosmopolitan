@@ -29,10 +29,13 @@ package runtime
 // pthread_mutex_lock and pthread_cond_wait are real C functions with
 // real frames, and semasleep/semawakeup run on arbitrary stacks
 // (contended lock2 parks from user g stacks, e.g. channel operations).
-// Upstream matches: its libcCall wraps asmcgocall. (Upstream also
-// records m.libcallpc/sp there for profiler tracebacks; SIGPROF timers
-// are not wired on XNU hosts yet, so that bookkeeping is deliberately
-// omitted here.)
+// Upstream matches: its libcCall wraps asmcgocall. Like upstream's
+// libcCall, cosmoPthreadLibcCall below records m.libcallg/pc/sp
+// around the call, so a SIGPROF landing inside pthread_cond_wait/
+// mutex attributes to the Go call site (usesLibcall lists cosmo;
+// sigprof's libcall unwind branch consumes the fields - wired
+// together with the darwin setitimer bring-up, as the wave-9 charter
+// required).
 //
 // Fork-child note (matches upstream darwin): a forked child's pthread
 // state is undefined, but the child path between fork and execve
@@ -43,6 +46,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/runtime/atomic"
+	"internal/runtime/sys"
 	"unsafe"
 )
 
@@ -108,38 +112,84 @@ func cosmoSemaInit() {
 // contiguous argument block, which the ABI0 trampoline unpacks into C
 // argument registers on the g0 stack that asmcgocall switched to.
 
+// cosmoPthreadLibcCall wraps asmcgocall for the pthread wrappers
+// below, recording the caller's g/PC/SP in m.libcall* so the CPU
+// profiler can traceback from a SIGPROF that lands inside the C call
+// (upstream sys_libc.go's libcCall, ported verbatim; sigprof's
+// libcall unwind branch is enabled by usesLibcall listing cosmo).
+//
+//go:nosplit
+func cosmoPthreadLibcCall(fn, arg unsafe.Pointer) int32 {
+	// Leave caller's PC/SP/G around for traceback.
+	gp := getg()
+	var mp *m
+	if gp != nil {
+		mp = gp.m
+	}
+	if mp != nil && mp.libcallsp == 0 {
+		mp.libcallg.set(gp)
+		mp.libcallpc = sys.GetCallerPC()
+		// sp must be the last, because once async cpu profiler finds
+		// all three values to be non-zero, it will use them
+		mp.libcallsp = sys.GetCallerSP()
+	} else {
+		// Make sure we don't reset libcallsp. This makes
+		// libcCall reentrant; We remember the g/pc/sp for the
+		// first call on an M, until that libcCall instance
+		// returns.  Reentrance only matters for signals, as
+		// libc never calls back into Go.  The tricky case is
+		// where we call libcX from an M and record g/pc/sp.
+		// Before that call returns, a signal arrives on the
+		// same M and the signal handling code calls another
+		// libc function.  We don't want that second libcCall
+		// from within the handler to be recorded, and we
+		// don't want that call's completion to zero
+		// libcallsp.
+		// We don't need to set libcall* while we're in a sighandler
+		// (even if we're not currently in libc) because we block all
+		// signals while we're handling a signal. That includes the
+		// profile signal, which is the one that uses the libcall* info.
+		mp = nil
+	}
+	res := asmcgocall(fn, arg)
+	if mp != nil {
+		mp.libcallsp = 0
+	}
+	return res
+}
+
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_mutex_init(m *pthreadmutex, attr unsafe.Pointer) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_init_trampoline)), unsafe.Pointer(&m))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_init_trampoline)), unsafe.Pointer(&m))
 }
 func cosmo_pthread_mutex_init_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_mutex_lock(m *pthreadmutex) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_lock_trampoline)), unsafe.Pointer(&m))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_lock_trampoline)), unsafe.Pointer(&m))
 }
 func cosmo_pthread_mutex_lock_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_mutex_unlock(m *pthreadmutex) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_unlock_trampoline)), unsafe.Pointer(&m))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_mutex_unlock_trampoline)), unsafe.Pointer(&m))
 }
 func cosmo_pthread_mutex_unlock_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_cond_init(c *pthreadcond, attr unsafe.Pointer) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_init_trampoline)), unsafe.Pointer(&c))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_init_trampoline)), unsafe.Pointer(&c))
 }
 func cosmo_pthread_cond_init_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_cond_wait(c *pthreadcond, m *pthreadmutex) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_wait_trampoline)), unsafe.Pointer(&c))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_wait_trampoline)), unsafe.Pointer(&c))
 }
 func cosmo_pthread_cond_wait_trampoline()
 
@@ -151,14 +201,14 @@ func cosmo_pthread_cond_wait_trampoline()
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_cond_timedwait(c *pthreadcond, m *pthreadmutex, t *timespec) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_timedwait_trampoline)), unsafe.Pointer(&c))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_timedwait_trampoline)), unsafe.Pointer(&c))
 }
 func cosmo_pthread_cond_timedwait_trampoline()
 
 //go:nosplit
 //go:cgo_unsafe_args
 func pthread_cond_signal(c *pthreadcond) int32 {
-	return asmcgocall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_signal_trampoline)), unsafe.Pointer(&c))
+	return cosmoPthreadLibcCall(unsafe.Pointer(abi.FuncPCABI0(cosmo_pthread_cond_signal_trampoline)), unsafe.Pointer(&c))
 }
 func cosmo_pthread_cond_signal_trampoline()
 
