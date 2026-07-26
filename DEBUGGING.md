@@ -5159,3 +5159,258 @@ Effect on std with the shipped default: 1,489 more functions inlinable
 (15,888 -> 17,377), 4,967 more call sites inlined (70,146 -> 75,113).
 The inlheur props goldens are untouched, because with the discount off
 the measured costs are exactly upstream's.
+
+
+# 2026-07-26: go1.26.5 uprev - a clean merge, and what the divergence measurement says
+
+Merged upstream tag go1.26.5 (12 upstream commits on top of the
+go1.26.4 base: the os.Root trailing-slash fix, the ECH outer-hello PSK
+omission, the moveSliceNoCap element-size rounding, the Linux kernel
+release vendor-suffix parse, and friends). One conflict, VERSION,
+resolved to `go1.26.5cosmo` - the same single conflict the go1.26.4
+uprev had.
+
+Unlike go1.26.4, nothing broke: `GOOS=cosmo go build std` was clean on
+amd64 and arm64 on the first try, with zero cosmo fixes needed. The
+delta touched no build tags and added no new platform-partition files,
+which is exactly the property that made it free.
+
+**Verified**: make.bash (go version go1.26.5cosmo linux/amd64); std for
+cosmo/amd64 + cosmo/arm64; fat fizzbuzz + runtimeprobe (45 ok checks,
+including preempt/cpuprof/ctrlbreak/fdpass); apetest 129 PASS 0 FAIL
+against the local fat APEs; cmd/link ld APE/PE/Macho tests; cmd/go
+strip + GOCOSMODEBUG + tool-ID tests; GOOS=cosmo
+internal/runtime/syscall/cosmo and the runtime cosmo tests via the
+misc/cosmo wrappers; host os, os/signal, crypto/tls, go/build,
+cmd/internal/moddeps.
+
+
+## Two guardrails that had gone red without anyone noticing
+
+`go test go/build` failed on this tree, and had been failing since well
+before this merge:
+
+1. `TestVendorPackages` rejected `github.com/klauspost/compress`,
+   vendored into src/cmd/vendor for the ELFCOMPRESS_ZSTD DWARF
+   compression (round 2, 2026-07-20). The test's own instructions are
+   to allowlist a deliberately vendored package; that was never done.
+2. `TestDependencies` had no policy entry for
+   `internal/runtime/syscall/cosmo`, so all four of its importers
+   (itself, runtime, syscall, os/exec) reported as unexpected
+   dependencies.
+
+Neither is cosmetic. `TestDependencies` is the only mechanical check
+that the fork's new packages sit where the tree's layering says they
+may sit; while it is red for a bookkeeping reason it cannot report a
+real layering break, and an uprev is precisely when one would appear.
+CI never caught either because the only go/build test it ran was
+`-run TestReadGoInfo`, inside the shebang step. Both fixed, and
+go/build + cmd/internal/moddeps now run on the ubuntu build leg.
+
+
+## The uprev tripwire: CI compiled 84 of 358 std packages under cosmo
+
+The two go1.26.4 build breaks (`unix.Fchmodat undefined` after upstream
+split at.go into fchmodat_linux.go + fchmodat_other.go;
+`f.lstatatNolog undefined` after statat_unix.go got a new tag) share one
+shape: **upstream re-partitions a platform file and cosmo falls off the
+edge of the new build tags.** No conflict is produced - the merge is
+clean and the breakage is a compile error somewhere in std.
+
+CI could not see that class at all. The cosmo legs build only
+fizzbuzz.com and runtimeprobe.com, which between them reach 84 of the
+358 std packages that exist under GOOS=cosmo - 23%. The uncovered 77%
+includes crypto/x509, archive/tar, net/http and most of the packages
+that actually carry the fragile tags: `crypto/x509/root_unix.go` and
+`archive/tar/stat_actime1.go` are both files whose entire fork delta is
+adding `cosmo` to a `//go:build` line, and neither was being compiled.
+
+`GOOS=cosmo go build std` for both arches now runs on the ubuntu build
+leg. Measured 38s cold for the pair - the cheapest coverage in the
+workflow.
+
+
+## Where the fork's merge liability actually lives
+
+Measured against go1.26.5, over src/ test/ lib/ api/ misc/:
+
+| | files | merge cost |
+|---|---|---|
+| new files added by the fork | 255 | none - they cannot conflict |
+| upstream files, build-tag edit only | 46 | trivial to merge, but the silent-break surface above |
+| upstream files, substantive edits | 173 | the real liability |
+
+The 255-to-0 shape of the first row is the fork doing the right thing:
+cosmo's runtime, syscall layer and NT/darwin emulation live in new
+`*_cosmo*.go` files that upstream will never touch.
+
+The surprise is the third row's composition. Ranked by churn, the
+fork's most-diverged upstream files are:
+
+| file | added lines | wasm/threads | cosmo |
+|---|---|---|---|
+| src/runtime/proc.go | 818 | 256 | 8 |
+| src/cmd/internal/obj/wasm/wasmobj.go | ~470 | all | 0 |
+| lib/wasm/wasm_exec.js | ~438 | all | 0 |
+| src/cmd/link/internal/ld/pcln.go | 340 | 0 | 4 |
+| src/runtime/symtab.go | 234 | 0 | 0 |
+| src/cmd/compile/internal/inline/inl.go | 110 | 0 | 0 |
+
+`runtime/proc.go` is the single most-diverged file in the tree and it is
+**not a cosmo file** - it is the wasm threads scheduler work (B2-B4).
+The cosmo port, the thing this fork exists for, is close to free to
+merge. What costs is the other three product lines the fork carries -
+wasm rounds 1-8 and threads B0-B4, the compact pclntab, and loop-aware
+inlining - all of which are implemented as edits to hot upstream files
+rather than as new ones.
+
+That reframes "make uprevving easier": the lever is not more cosmo
+modularity, it is giving the non-cosmo features the same
+new-file discipline cosmo already has. See the PR discussion for the
+specific candidates (hook-and-implementation splits for proc.go's
+threads code, and a pclntab writer/reader pair that is already
+lockstep-coupled by CLAUDE.md's own warning).
+
+
+# 2026-07-26: macOS CI wedge datapoint - checkFdpass hangs in forkExec
+
+Logging another nondeterministic macOS wedge, same spirit as the
+2026-07-05 entry. Surfaced on PR #74 (the go1.26.5 uprev) and,
+independently and slightly earlier, on PR #72, which does not contain
+that merge.
+
+**Symptom.** The runtimeprobe `fdpass` check wedges on macos-latest and
+the 90s watchdog fires:
+
+    FAIL watchdog: probe did not finish within 90s
+    panic: watchdog: probe wedged; all-goroutine traceback follows
+    goroutine 1 [syscall]:
+    syscall.Syscall(0x3f, 0xf, ..., 0x8)        # 0x3f = read
+    syscall.readlen(...)                         zsyscall_cosmo_arm64.go:524
+    syscall.forkExec(...)                        exec_unix.go:220
+    os/exec.(*Cmd).Start(...)
+    main.checkFdpass()                           fdpass.go:132
+
+exec_unix.go:220 is the parent's blocking read of the child status pipe.
+The parent forked and is waiting for the child to either write an errno
+or close the write end at exec. It never does.
+
+**Nondeterministic, and not the uprev.** Each macOS test job runs the
+probe once per origin binary (ubuntu, macos, windows), and which origins
+wedge varies run to run:
+
+| run | branch | ubuntu | macos | windows |
+|---|---|---|---|---|
+| 30217534778 | PR #72 (no 1.26.5 merge) | FAIL | pass | pass |
+| 30217973653 | PR #74 | FAIL | pass | FAIL |
+| 30218189383 | PR #74 | pass | FAIL | pass |
+| 30218365587 | PR #74 | pass | pass | pass |
+
+Same binaries, different outcomes - so it is timing, not a code break.
+PR #72 reproduced it at 19:53, before PR #74's first macOS leg ran at
+20:07. Attribution was also checked from the other direction: of the 20
+non-test .go files go1.26.5 changed, exactly six are compiled into a
+cosmo/arm64 runtimeprobe (os/file_posix.go, os/root.go,
+os/root_openat.go, os/root_unix.go, os/signal/signal.go,
+runtime/slice.go) and none is on the fork/exec path. The merge's actual
+darwin fork/exec changes - the `//go:norace` annotations on
+exec_libc2.go's forkAndExecInChild and syscall_darwin.go's rawSyscall -
+are in `//go:build darwin` files that GOOS=cosmo never compiles.
+
+**Ruled out.** Concurrent-fork leakage of the status pipe's write end,
+the classic cause of this exact hang: exec_unix.go's forkExec holds
+ForkLock across both forkExecPipe and forkAndExecInChild, so Go's own
+forks are serialized against pipe creation.
+
+**Open hypothesis, unproven.** cosmo selects forkpipe2.go (the "atomic
+pipe2" variant) because it advertises SYS_PIPE2, but on a darwin host
+that syscall is emulated: Apple's libc has no pipe2, so
+runtime.pipe2 (os_cosmo_arm64.go) calls the Syslib's flagless `pipe`
+and then applies FD_CLOEXEC with fcntl. Any fd created that way is
+briefly non-CLOEXEC. That is exactly the window forkpipe.go's
+non-atomic variant exists to document, and the tree's ForkLock
+discipline only covers pipes created *through* forkExec - not one
+created concurrently elsewhere in the runtime. A write end leaked into
+any live child would hold the parent's read open forever, which is the
+observed symptom. Unverified: reproducing needs a macOS host, and CI is
+the only one available.
+
+**Not fixed here.** Rate is roughly 4 wedges in 15 origin-executions
+observed post-2026-07-26; a rerun clears it (30218365587 went green on
+all three origins). Chasing it properly means auditing every darwin fd
+creation for the CLOEXEC window and probably giving cosmo's darwin
+dispatch a real atomic pipe2 - a runtime change that wants its own
+change and its own in-CI forensics, the way the wave-9 XNU read(2)
+wedge did.
+
+
+# 2026-07-26: fat APE builds run both architectures in parallel
+
+The fat build spent its whole life doing one architecture at a time, and
+the reason turned out to be an implementation artifact rather than a
+constraint. `cosmoFatten` was a POST-build step: `go build` finished the
+primary architecture, and only then did it re-execute the entire go
+command as a child process with GOARCH flipped
+(`cosmofat.go`, `cmd.Env = append(os.Environ(), "GOARCH="+otherArch, ...)`),
+and merge. Re-running the command line was a good way to inherit every
+build flag exactly; running it afterwards was never necessary. The two
+architectures share nothing that forces an ordering - different GOARCH,
+different build-cache keys, different output paths - and cmd/go's build
+cache is safe for concurrent processes.
+
+**Measured** (runtimeprobe, cold cache, 4 cores, the two modes
+interleaved so machine drift cancels):
+
+| | wall | user | note |
+|---|---|---|---|
+| sequential (`GOCOSMOFATSEQ=1`) | 15.7s, 15.0s | 36.8s | |
+| parallel (default) | 12.3s, 12.6s | 37.5s | **~19% faster** |
+| `go build std`, both arches | 36.8s -> 35.8s | 112s -> 118s | 3%, noise |
+
+User time is unchanged, so this is pure overlap, not extra work. The win
+comes from the serial tail: a single main package leaves cores idle while
+it links (and cosmo links twice per architecture, once per payload), and
+that tail overlaps the other architecture's compile phase. Whole-graph
+builds like `go build std` already saturate the CPU - 3.06x on 4 cores
+before the change - so there is nothing left to reclaim, which is why the
+`go build std` CI step stays sequential.
+
+**Output is byte-identical** to a sequential build, APE and both debug
+sidecars, verified with the same toolchain and commit on both sides. (Do
+not compare across a `make.bash`: tool build IDs are content-derived, so
+rebuilding the toolchain legitimately changes the output, and intervening
+commits move the VCS stamp too. The controlled comparison is same
+toolchain, same commit, parallel vs sequential.)
+
+**Three things the restructure had to get right**, none of which the
+old post-build shape had to worry about:
+
+1. **Orphans and leaked scratch dirs.** The primary build can now fail -
+   and `base.Fatalf` exits - while the sibling is still running. The
+   sibling registers a `base.AtExit` hook that kills the child and
+   removes its temp directory. Verified: a failing build leaves zero
+   `/tmp/gocosmofat*` directories and zero stray go processes.
+2. **Interleaved diagnostics.** Two concurrent builds writing to one
+   terminal shred each other's error messages. The child's stdout and
+   stderr go to a buffer that is replayed verbatim after the primary
+   build's own output. Better still, the build paths now call
+   `base.ExitIfErrors()` before fattening, so a compile error that fails
+   both architectures is printed ONCE - the old sequential code ran the
+   sibling after a failed primary build and printed every error twice.
+3. **Work that should never start.** `-o /dev/null` cannot be fattened
+   (fattening re-reads and re-creates the target), and a library-only
+   `go install` has no main package to merge. Both are now decided
+   BEFORE the sibling starts, via `cosmoFatSkipOutput` and the
+   main-package count, rather than by a post-build filter that would
+   have arrived too late to save the work.
+
+`GOCOSMOFATSEQ=1` restores the sequential behavior. It exists for
+memory: the two link phases can otherwise overlap, and linking is the
+memory-hungry part of a cosmo build, so a constrained machine has a knob
+that is not `GOCOSMOFAT=0` (which gives up fat binaries entirely).
+
+**Verified**: cmd/go/internal/work (incl. new TestCosmoFatParallel and
+TestCosmoFatSkipOutput), cmd/link/internal/ld APE/PE/Macho, go/build +
+cmd/internal/moddeps; fat `go build` and `go install` both produce
+running 45/45 probes with correct sidecars; thin `GOCOSMOFAT=0` builds
+unaffected; apetest 129 PASS 0 FAIL against parallel-built binaries.

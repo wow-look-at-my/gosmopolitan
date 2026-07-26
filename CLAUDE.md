@@ -116,6 +116,26 @@ thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
 compile.
 
+Parallel sibling build (2026-07-26): the sibling-architecture build runs
+CONCURRENTLY with the primary one. The two share no ordering constraint -
+different GOARCH, different build-cache keys, different output paths - and
+overlapping them reclaims each build's serial tail (cosmo links twice per
+arch): runtimeprobe cold on 4 cores goes 15.4s -> 12.5s, ~19%, with user
+time unchanged, and the output is byte-identical to a sequential build,
+sidecars included. Builds whose package graph already saturates the CPU
+(`go build std`) gain nothing, so the win is concentrated in exactly the
+single-binary builds people run interactively. `GOCOSMOFATSEQ=1` (or `on`)
+forces the old sequential behavior, which halves a fat build's peak memory
+because the two link phases can no longer overlap - reach for it on a
+memory-constrained machine, in preference to `GOCOSMOFAT=0`, which gives up
+fat binaries entirely. The sibling's output is buffered and replayed after
+the primary build's, so concurrent diagnostics never interleave, and a
+failed primary build exits before the sibling is reported (one copy of each
+error, not two). Implementation: `cosmoSibling` in
+`src/cmd/go/internal/work/cosmofat.go`; the child is killed and its scratch
+directory removed via `base.AtExit`, since the primary build can now fail
+while it is still running.
+
 Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
 payload's loadable span - the file range its program headers reference,
 exactly what cosmocc's apelink ships - and writes the pristine unstripped
@@ -364,7 +384,7 @@ go tool compile -bench=out.txt file.go
   this automatically).
 - **Tool build IDs are content-derived (2026-07-20).** Upstream derives
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
-  stamps the same release-style version (`go1.26.4cosmo`) into every build, so
+  stamps the same release-style version (`go1.26.5cosmo`) into every build, so
   any two fork builds used to share tool IDs — and hence action IDs — letting a
   warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
   serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
@@ -395,6 +415,31 @@ GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emi
 cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
 ```
 
+## Uprevving to a new upstream Go release
+
+```bash
+git fetch --no-tags https://github.com/golang/go.git refs/tags/goX.Y.Z:refs/tags/goX.Y.Z
+git merge goX.Y.Z -m "all: merge goX.Y.Z into cosmo"
+printf 'goX.Y.Zcosmo\n' > VERSION      # the one habitual conflict; drop upstream's "time" line
+cd src && ./make.bash
+export PATH="$PWD/../bin:$PATH"
+GOOS=cosmo GOARCH=amd64 go build std && GOOS=cosmo GOARCH=arm64 go build std
+GOOS=linux GOARCH=amd64 go test -short go/build cmd/internal/moddeps
+```
+
+The merge itself is rarely the work — go1.26.4 and go1.26.5 each produced
+exactly one conflict (VERSION). The work is the class of break that
+produces **no** conflict: upstream re-partitions a platform file and cosmo
+falls off the edge of the new `//go:build` tags. 46 upstream files carry a
+fork edit that is nothing but adding `cosmo` to a tag, and they cluster in
+the `_unix`/`_posix`/`_other`/`_stub`/`_nonlinux` families upstream churns
+most. `go build std` for both arches is what catches it; do not skip it
+because the merge looked clean. When a symbol goes undefined, the fix is a
+new `*_cosmo.go` file, never a widened upstream tag.
+
+Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across
+CLAUDE.md, README.md, cosmo-ci.yml), and record the merge in DEBUGGING.md.
+
 ## CI
 
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows); every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0); its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
@@ -407,7 +452,7 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID unit tests plus, via the misc/cosmo
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus, via the misc/cosmo
 wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
 tests (darwin sendmsg/recvmsg cmsg repack, signal translation
 tables, epoll layout) and the runtime-package cosmo tests (Apple
@@ -416,6 +461,24 @@ setitimer dispatch, signal translation tables). Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
+
+The ubuntu build leg also carries the two uprev guardrails (2026-07-26):
+
+- **`GOOS=cosmo go build std` for amd64 and arm64.** The execution suite
+  compiles only what fizzbuzz and runtimeprobe import — 84 of the 358 std
+  packages under cosmo — so an upstream re-partition of a platform file
+  (the go1.26.4 `fchmodat_linux.go`/`fchmodat_other.go` split, statat_unix.go's
+  new tag) drops cosmo off the new build tags with no conflict and no red
+  test. crypto/x509, archive/tar and net/http carry exactly those tags.
+  ~40s cold for both arches.
+- **`go test go/build cmd/internal/moddeps`.** `TestDependencies` is the
+  only mechanical check that the fork's new packages sit where the tree's
+  layering allows, and `TestVendorPackages` the only one guarding what may
+  be vendored; both had silently gone red (see DEBUGGING.md 2026-07-26).
+  Only `-run TestReadGoInfo` was running before.
+
+Run both locally before proposing an uprev — they are what turn a clean
+merge into a verified one.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
@@ -485,12 +548,12 @@ linux-amd64 toolchain tarball to buildhost (pazer.build) as project
 unique per-release suffix (`go<base>.r<run_number>`), then runs
 `make.bash -distpack` (official packaging; output
 `pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
-`go1.26.4cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
+`go1.26.5cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
 with buildhost's own publish actions (`buildhost-create-release` /
 `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
 `wow-look-at-my/buildhost/.github/actions/<name>@master`), each
 authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
-The committed VERSION stays `go1.26.4cosmo`; the publish-only stamp gives
+The committed VERSION stays `go1.26.5cosmo`; the publish-only stamp gives
 each published release a disjoint cmd/go tool-ID (hence build-cache)
 namespace — identical release version strings previously let the org's
 shared GOCACHEPROG cache mix objects across releases into one binary. Local
@@ -503,7 +566,7 @@ install the fork in seconds instead of a ~3 minute `make.bash`:
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.4cosmo.r<N> linux/amd64
+go version   # go version go1.26.5cosmo.r<N> linux/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
@@ -516,7 +579,7 @@ derived from the binary location, no need to set it). Consumer gotchas:
   `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
   go.mod genuinely newer than the fork now fails loudly (`go.mod requires
   go >= X (running go 1.26)`) instead of silently switching. Note the fork
-  self-identifies as the dev version `1.26` (its `go1.26.4cosmo` string does
+  self-identifies as the dev version `1.26` (its `go1.26.5cosmo` string does
   not parse as a release version), so directives up to `go 1.26` are
   satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
   still ship `GOTOOLCHAIN=auto` and need the env var.

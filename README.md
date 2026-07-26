@@ -58,7 +58,7 @@ on every push. Install it in seconds instead of building from source:
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.4cosmo.r<N> linux/amd64
+go version   # go version go1.26.5cosmo.r<N> linux/amd64
 ```
 
 The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs

@@ -531,8 +531,16 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 			if len(a.Deps) == 0 {
 				base.Fatalf("go: no main packages to build")
 			}
+			// Start the sibling-architecture build alongside this one;
+			// the two share no ordering constraint (see cosmoSibling).
+			sib := cosmoFatStart(true)
 			b.Do(ctx, a)
-			cosmoFatten(pkgsMain(pkgs), true)
+			// Exit before fattening if the primary build failed: the
+			// sibling is failing on the same source, and replaying its
+			// diagnostics would print every error twice. Exiting runs
+			// the AtExit hook that kills it.
+			base.ExitIfErrors()
+			cosmoFatten(sib, pkgsMain(pkgs))
 			return
 		}
 		if len(pkgs) > 1 {
@@ -545,10 +553,13 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		p.Stale = true // must build - not up to date
 		p.StaleReason = "build -o flag in use"
 		a := b.AutoAction(moduleLoaderState, ModeInstall, depMode, p)
-		b.Do(ctx, a)
+		var sib *cosmoSibling
 		if p.Name == "main" {
-			cosmoFatten([]*load.Package{p}, false)
+			sib = cosmoFatStart(false)
 		}
+		b.Do(ctx, a)
+		base.ExitIfErrors() // see the -o directory branch above
+		cosmoFatten(sib, []*load.Package{p})
 		return
 	}
 
@@ -826,18 +837,22 @@ func InstallPackages(loaderstate *modload.State, ctx context.Context, patterns [
 		a = b.buildmodeShared(loaderstate, ModeInstall, ModeInstall, patterns, pkgs, a)
 	}
 
-	b.Do(ctx, a)
-	base.ExitIfErrors()
-
 	// Installed GOOS=cosmo executables become fat APEs, exactly like the
-	// go build outputs (see cosmoFattenInstall).
+	// go build outputs (see cosmoFattenInstall). The sibling-architecture
+	// install runs concurrently with this one; the main-package set is
+	// computed up front so a library-only install starts no sibling.
 	var cosmoMains []*load.Package
 	for _, p := range pkgs {
 		if p.Name == "main" && p.Target != "" {
 			cosmoMains = append(cosmoMains, p)
 		}
 	}
-	cosmoFattenInstall(cosmoMains)
+	sib := cosmoFatStartInstall(len(cosmoMains) > 0)
+
+	b.Do(ctx, a)
+	base.ExitIfErrors()
+
+	cosmoFattenInstall(sib, cosmoMains)
 
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,
