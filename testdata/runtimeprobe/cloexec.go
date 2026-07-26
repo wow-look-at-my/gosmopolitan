@@ -96,14 +96,25 @@ func checkCloexec() {
 	// used by net.FileConn and (*net.TCPConn).File. Its command number
 	// differs between Linux and Apple, so it is a translation the
 	// emulation has to get right rather than a coincidence it can rely on.
+	//
+	// ENOSYS is the one accepted answer besides success: internal/poll
+	// treats it as "this kernel lacks the command" and falls back, and NT
+	// hosts deliberately do not implement dup for files or pipes (only
+	// for sockets). Any OTHER error is a failure, which keeps this honest
+	// - the darwin ABI bug reported EINVAL here, and accepting that would
+	// have accepted the very defect this check exists for.
+	dupNote := "ok"
 	base, err := syscall.Open(fpath, syscall.O_RDONLY, 0)
 	if err == nil {
 		r, _, e := syscall.Syscall(syscall.SYS_FCNTL, uintptr(base),
 			uintptr(syscall.F_DUPFD_CLOEXEC), 0)
-		if e != 0 {
-			broken = append(broken, fmt.Sprintf("fcntl(F_DUPFD_CLOEXEC): %v", e))
-		} else {
+		switch {
+		case e == 0:
 			note("fcntl(F_DUPFD_CLOEXEC)", int(r), nil)
+		case e == syscall.ENOSYS:
+			dupNote = "F_DUPFD_CLOEXEC unimplemented (fallback path)"
+		default:
+			broken = append(broken, fmt.Sprintf("fcntl(F_DUPFD_CLOEXEC): %v", e))
 		}
 		syscall.Close(base)
 	}
@@ -112,5 +123,5 @@ func checkCloexec() {
 		fail("cloexec", "%s", strings.Join(broken, "; "))
 		return
 	}
-	ok("cloexec")
+	ok("cloexec", dupNote)
 }
