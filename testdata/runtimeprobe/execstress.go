@@ -4,72 +4,79 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"syscall"
 	"time"
 )
 
-// checkExecStress hammers fork+exec while the watchdog goroutine spins
-// hot, which is the condition under which macOS CI has been losing a
-// forked child: the parent blocks forever in forkExec's read of the
-// child status pipe (exec_unix.go's readlen), the 90s watchdog fires,
-// and the traceback shows goroutine 1 parked in that read with no other
-// goroutine in sight.
+// checkExecStress is the deterministic version of the wedge that macOS
+// CI has been hitting in checkFdpass and clearing by re-running.
 //
-// One exec is enough to hit it perhaps a tenth of the time, which is why
-// a probe that execs three times wedges on roughly a quarter to a half
-// of macOS runs. Looping raises that to a near-certainty, so this check
-// turns a run-to-run coin flip into a deterministic gate.
+// The wedge is a deadlock, and it needs three things at once. Plain
+// fork+exec in a loop has none of them and never reproduces it:
 //
-// The forensic value is the marker file. The child writes its pid there
-// as the very first thing it does after exec, so when a round wedges the
-// marker answers the question that separates the two candidate
-// explanations, and nothing else does:
+//  1. The parent blocks in forkExec's read of the child status pipe
+//     until that pipe's write end is closed everywhere. Close-on-exec is
+//     what normally closes it in the child.
+//  2. Enough open descriptors that the status pipe and the child's
+//     stdio land on high, shifting fd numbers - which is what selects
+//     the fd-shuffling path taken in the child between fork and exec.
+//  3. A child that does NOT exit promptly, but waits on the parent. A
+//     child that exits immediately closes any leaked descriptor on its
+//     way out, so the parent's read completes and the leak is invisible.
+//     checkFdpass's child waits for the parent to accept its connection,
+//     so a leak there is a true deadlock: parent waits for the child's
+//     exec, child waits for the parent.
 //
-//   - marker ABSENT: the child never reached exec. It is stuck between
-//     fork and exec, where only async-signal-safe work is legal and a
-//     signal arriving on the forked thread can wedge it.
-//   - marker PRESENT: the child exec'd and ran fine, so the write end of
-//     the status pipe stayed open in some other process - a close-on-exec
-//     leak, which on a darwin host is possible because cosmo emulates
-//     pipe2 as pipe+fcntl (darwinPipe2, documented "not atomic").
-//
-// Reading the marker needs no exec of its own, so the diagnosis still
-// works when exec is precisely what is broken.
+// So this check reproduces that shape directly: it opens a pile of
+// descriptors, then spawns a child that waits for a go-ahead the parent
+// can only give AFTER Start returns. Without a leak, Start returns at
+// once and the go-ahead releases the child. With one, both sides are
+// stuck - and the reporter prints the parent's and child's descriptor
+// censuses, which name the leaked descriptor instead of leaving a bare
+// traceback to argue over.
 const (
-	execStressRounds  = 60
+	execStressRounds  = 12
+	execStressFdPad   = 24
 	execStressTimeout = 20 * time.Second
 )
 
-// execStressMarkerEnv names the file the execstress child stamps.
-const execStressMarkerEnv = "RUNTIMEPROBE_STRESS_MARKER"
+const (
+	execStressCensusEnv = "RUNTIMEPROBE_STRESS_CENSUS"
+	execStressGoEnv     = "RUNTIMEPROBE_STRESS_GO"
+)
 
-// execStressChild is the child half: stamp the marker and leave. It runs
-// after a successful exec by definition, so the stamp existing is proof
-// the exec completed.
+// execStressChild stamps its descriptor census (proof the exec
+// completed, plus what crossed it) and then waits for the parent's
+// go-ahead, so that any descriptor that leaked stays open long enough to
+// deadlock the parent rather than being closed by a quick exit.
 func execStressChild() {
-	marker := os.Getenv(execStressMarkerEnv)
-	if marker == "" {
+	writeFdCensus(os.Getenv(execStressCensusEnv))
+
+	goFile := os.Getenv(execStressGoEnv)
+	if goFile == "" {
 		return
 	}
-	os.WriteFile(marker, []byte(strconv.Itoa(os.Getpid())), 0644)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(goFile); err == nil {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
-// execStressReport prints what a wedged round can still tell us. It only
-// touches the filesystem - no exec, no fork - because it runs precisely
-// when process creation is suspect.
-func execStressReport(round int, phase, marker string) {
-	data, err := os.ReadFile(marker)
-	switch {
-	case err == nil:
-		fmt.Printf("FAIL execstress: round %d wedged in %s; child DID exec (marker pid %s) -"+
-			" status-pipe write end leaked past exec\n", round, phase, string(data))
-	case os.IsNotExist(err):
-		fmt.Printf("FAIL execstress: round %d wedged in %s; child did NOT reach exec"+
-			" (no marker) - child stuck between fork and exec\n", round, phase)
-	default:
-		fmt.Printf("FAIL execstress: round %d wedged in %s; marker unreadable: %v\n",
-			round, phase, err)
+// execStressPadFds opens spare descriptors so the interesting ones land
+// on high numbers, matching the fd pressure checkFdpass builds up.
+func execStressPadFds(dir string) []*os.File {
+	var pad []*os.File
+	for i := 0; i < execStressFdPad; i++ {
+		f, err := os.Open(dir)
+		if err != nil {
+			break
+		}
+		pad = append(pad, f)
 	}
+	return pad
 }
 
 func checkExecStress() {
@@ -79,58 +86,77 @@ func checkExecStress() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	marker := filepath.Join(dir, "marker")
+
+	pad := execStressPadFds(dir)
+	defer func() {
+		for _, f := range pad {
+			f.Close()
+		}
+	}()
+
+	// A socket too: checkFdpass holds sockets, and socket descriptors
+	// come from a different emulation path than files on non-Linux hosts.
+	if s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0); err == nil {
+		defer syscall.Close(s)
+	}
 
 	for round := 0; round < execStressRounds; round++ {
-		if err := os.Remove(marker); err != nil && !os.IsNotExist(err) {
-			fail("execstress", "round %d: clear marker: %v", round, err)
-			return
-		}
+		census := filepath.Join(dir, fmt.Sprintf("census-%d", round))
+		goFile := filepath.Join(dir, fmt.Sprintf("go-%d", round))
 
 		cmd, _, bad := selfCommand("execstress", "execstress")
 		if bad {
 			return
 		}
-		cmd.Env = append(cmd.Env, execStressMarkerEnv+"="+marker)
+		cmd.Env = append(cmd.Env,
+			execStressCensusEnv+"="+census,
+			execStressGoEnv+"="+goFile)
 
-		// The wedge parks the caller inside Start (or Wait) with no way
-		// to interrupt it, so a side goroutine does the reporting. It
-		// prints before the 90s watchdog panics, which is the only
-		// reason the diagnosis reaches the log at all.
-		phase := make(chan string, 2)
-		done := make(chan struct{})
+		// The reporter has to live in its own goroutine: the wedge parks
+		// the caller inside Start with nothing able to interrupt it, and
+		// the diagnosis must reach the log before the 90s watchdog panic.
+		startDone := make(chan struct{})
 		go func(round int) {
-			cur := "start"
-			for {
-				select {
-				case <-done:
-					return
-				case p := <-phase:
-					cur = p
-				case <-time.After(execStressTimeout):
-					execStressReport(round, cur, marker)
-					return
+			select {
+			case <-startDone:
+			case <-time.After(execStressTimeout):
+				fmt.Printf("FAIL execstress: round %d Start wedged; parent fds=[%s]\n",
+					round, fdCensus())
+				if data, err := os.ReadFile(census); err == nil {
+					fmt.Printf("FAIL execstress: round %d child DID exec: %s\n", round, string(data))
+				} else {
+					fmt.Printf("FAIL execstress: round %d child did NOT reach exec (%v)\n", round, err)
 				}
+				// Release the child so the run can still finish and the
+				// remaining checks report.
+				os.WriteFile(goFile, []byte("go"), 0644)
 			}
 		}(round)
 
 		startErr := cmd.Start()
-		phase <- "wait"
+		close(startDone)
 		if startErr != nil {
-			close(done)
 			fail("execstress", "round %d: start: %v", round, startErr)
 			return
 		}
-		waitErr := cmd.Wait()
-		close(done)
-		if waitErr != nil {
-			fail("execstress", "round %d: wait: %v", round, waitErr)
+
+		// Only now may the child proceed - that ordering is what turns a
+		// leaked status-pipe write end into a deadlock instead of a
+		// harmless delay.
+		if err := os.WriteFile(goFile, []byte("go"), 0644); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			fail("execstress", "round %d: go-ahead: %v", round, err)
 			return
 		}
-		if _, err := os.Stat(marker); err != nil {
-			fail("execstress", "round %d: child exited 0 but left no marker: %v", round, err)
+		if err := cmd.Wait(); err != nil {
+			fail("execstress", "round %d: wait: %v", round, err)
+			return
+		}
+		if _, err := os.Stat(census); err != nil {
+			fail("execstress", "round %d: child exited but left no census: %v", round, err)
 			return
 		}
 	}
-	ok("execstress", fmt.Sprintf("%d fork+exec rounds", execStressRounds))
+	ok("execstress", fmt.Sprintf("%d rounds, %d spare fds", execStressRounds, len(pad)))
 }
