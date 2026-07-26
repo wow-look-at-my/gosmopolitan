@@ -19,11 +19,20 @@ import (
 const loopInlineSrc = `
 package p
 
-// mixLoop's cost is almost entirely inside a loop, which is charged at a
-// discount: inlinable with loop-aware inlining, not without.
+// mixLoop's cost (109) is almost entirely inside a loop, which is charged
+// at a discount, bringing it to 59: inlinable with loop-aware inlining,
+// too complex without it.
 func mixLoop(xs []uint32, k uint32) uint32 {
 	h := k
 	for i, x := range xs {
+		h ^= x * 2654435761
+		h = h<<13 | h>>19
+		h += uint32(i) * 2246822519
+		h ^= h >> 15
+		h *= 3266489917
+		h += x ^ k
+		h = h<<7 | h>>25
+		h -= x >> 3
 		h ^= x * 2654435761
 		h = h<<13 | h>>19
 		h += uint32(i) * 2246822519
@@ -36,9 +45,9 @@ func mixLoop(xs []uint32, k uint32) uint32 {
 	return h
 }
 
-// mixFlat is the same arithmetic without the loop, and stays too complex.
-// It is what keeps this test honest: if the budget had simply been raised,
-// mixFlat would become inlinable too.
+// mixFlat is exactly mixLoop's arithmetic with the loop peeled away, and
+// at cost 99 it stays too complex either way. It is what keeps this test
+// honest: had the budget simply been raised, mixFlat would inline too.
 func mixFlat(x, i, k uint32) uint32 {
 	h := k
 	h ^= x * 2654435761
@@ -60,11 +69,20 @@ func mixFlat(x, i, k uint32) uint32 {
 	return h
 }
 
-// bigLoop is too expensive even with the loop discount, so an ordinary
-// call site cannot afford it. A call site inside a loop can.
+// bigLoop costs 167, or 88 once discounted - inlinable in principle, but
+// more than an ordinary call site will pay. Only a call site inside a loop
+// accepts it.
 func bigLoop(xs []uint32, k uint32) uint32 {
 	h := k
 	for i, x := range xs {
+		h ^= x * 2654435761
+		h = h<<13 | h>>19
+		h += uint32(i) * 2246822519
+		h ^= h >> 15
+		h *= 3266489917
+		h += x ^ k
+		h = h<<7 | h>>25
+		h -= x >> 3
 		h ^= x * 2654435761
 		h = h<<13 | h>>19
 		h += uint32(i) * 2246822519
@@ -82,19 +100,20 @@ func bigLoop(xs []uint32, k uint32) uint32 {
 		h ^= uint32(i) * 3266489917
 		h = h<<17 | h>>15
 		h += x | k
-		h ^= x &^ k
 	}
 	return h
 }
 
 var Sink uint32
 
+// CallCold's calls all run once: it gets mixLoop but must not get bigLoop.
 func CallCold(xs []uint32) {
 	Sink = mixLoop(xs, 1)
 	Sink = mixFlat(2, 3, 4)
 	Sink = bigLoop(xs, 5)
 }
 
+// CallHot's call runs once per element, so it can afford bigLoop.
 func CallHot(xss [][]uint32) {
 	for _, xs := range xss {
 		Sink += bigLoop(xs, 6)
