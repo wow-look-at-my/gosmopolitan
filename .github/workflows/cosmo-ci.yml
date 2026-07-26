@@ -729,10 +729,6 @@ jobs:
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
       contents: read
-      # buildhost-publish-release records what it stored on the org's
-      # linked artifacts page, which needs this scope. Job-level
-      # permissions REPLACE workflow-level ones, so it has to be listed
-      # here alongside the two above rather than inherited.
       artifact-metadata: write
 
     steps:
