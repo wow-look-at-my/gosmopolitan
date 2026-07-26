@@ -166,6 +166,23 @@ jobs:
           # setitimer dispatch, and the signal translation tables.
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
+      - name: Fork-divergence guardrails (go/build policy, moddeps)
+        # go/build's structural tests are what keep a fork's edits honest
+        # across an upstream uprev, and nothing was running them: the
+        # shebang step only runs -run TestReadGoInfo. Both had silently
+        # gone red - TestVendorPackages against the zstd vendored for
+        # cosmo DWARF compression, TestDependencies against
+        # internal/runtime/syscall/cosmo - and an uprev is exactly when a
+        # stale dependency policy stops catching real layering breaks.
+        # cmd/internal/moddeps is the matching check for src/ + src/cmd
+        # module/vendor consistency (see CLAUDE.md's vendoring runbook).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
+
       - name: Loop-aware inlining tests
         # The loop cost discount, the loop-nested call site budget, and the
         # per-caller growth allowance (cmd/compile/internal/inline/loop.go),

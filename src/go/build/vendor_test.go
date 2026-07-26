@@ -22,6 +22,10 @@ var allowedPackagePrefixes = []string{
 	"github.com/google/pprof",
 	"github.com/ianlancetaylor/demangle",
 	"rsc.io/markdown",
+
+	// Fork-local: cmd/link compresses cosmo .debug_* sections with
+	// ELFCOMPRESS_ZSTD (see cmd/link/internal/ld/dwarfcompress_zstd.go).
+	"github.com/klauspost/compress",
 }
 
 // Verify that the vendor directories contain only packages matching the list above.
