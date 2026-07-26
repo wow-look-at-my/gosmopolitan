@@ -114,6 +114,7 @@ func DevirtualizeAndInlinePackage(pkg *ir.Package, profile *pgoir.Profile) {
 							if origCall, inlinedCall := s.edit(&state, i); inlinedCall != nil {
 								// Update AST and recursively mark nodes.
 								paren.X = inlinedCall
+								s.loopDepth = s.loopDepths[i]        // the inlined body lands here
 								ir.EditChildren(inlinedCall, s.mark) // mark may append to parens
 								state.InlinedCall(s.fn, origCall, inlinedCall)
 								done = false
@@ -192,7 +193,22 @@ type inlClosureState struct {
 	resolved  []*ir.Func             // for each call in parens, the resolved target of the call
 	useCounts map[*ir.Func]int       // shared among all InlClosureStates
 	parens    []*ir.ParenExpr
+	// loopDepths[i] is the number of loops enclosing parens[i]; calls
+	// that run many times get a bigger inlining budget. See inline/loop.go.
+	loopDepths []int32
+	// loopDepth is the nesting the mark walk is currently at.
+	loopDepth int32
 	bigCaller bool
+}
+
+// isLoop reports whether n's children may run many times per execution
+// of n.
+func isLoop(n ir.Node) bool {
+	switch n.Op() {
+	case ir.OFOR, ir.ORANGE:
+		return true
+	}
+	return false
 }
 
 // resolve attempts to resolve a call to a potentially inlineable callee
@@ -236,7 +252,7 @@ func (s *inlClosureState) edit(state *devirtualize.State, i int) (*ir.CallExpr, 
 	if count <= 0 {
 		return nil, nil
 	}
-	if inlCall := inline.TryInlineCall(s.fn, call, s.bigCaller, s.profile, count == 1 && callee.ClosureParent != nil); inlCall != nil {
+	if inlCall := inline.TryInlineCall(s.fn, call, s.bigCaller, s.profile, count == 1 && callee.ClosureParent != nil, s.loopDepths[i]); inlCall != nil {
 		return call, inlCall
 	}
 	return nil, nil
@@ -267,11 +283,26 @@ func (s *inlClosureState) mark(n ir.Node) ir.Node {
 
 	ok := match(n)
 
+	// A loop's children run many times per execution of the loop; record
+	// that for the call sites found underneath it. (A for statement's
+	// Init, and the ranged expression of a range statement, run only
+	// once, but are counted at the inner depth anyway: distinguishing
+	// them would mean hand-walking the fields of every loop node, for one
+	// expression per loop.)
+	loop := isLoop(n)
+	if loop {
+		s.loopDepth++
+	}
+
 	// can't wrap TailCall's child into ParenExpr
 	if t, ok := n.(*ir.TailCallStmt); ok {
 		ir.EditChildren(t.Call, s.mark)
 	} else {
 		ir.EditChildren(n, s.mark)
+	}
+
+	if loop {
+		s.loopDepth--
 	}
 
 	if ok {
@@ -283,6 +314,7 @@ func (s *inlClosureState) mark(n ir.Node) ir.Node {
 		}
 
 		s.parens = append(s.parens, p)
+		s.loopDepths = append(s.loopDepths, s.loopDepth)
 		n = p
 	} else if p != nil {
 		n = p // didn't change anything, restore n
@@ -336,6 +368,7 @@ func (s *inlClosureState) fixpoint() bool {
 				if origCall, inlinedCall := s.edit(&state, i); inlinedCall != nil {
 					// Update AST and recursively mark nodes.
 					paren.X = inlinedCall
+					s.loopDepth = s.loopDepths[i]        // the inlined body lands here
 					ir.EditChildren(inlinedCall, s.mark) // mark may append to parens
 					state.InlinedCall(s.fn, origCall, inlinedCall)
 					done = false

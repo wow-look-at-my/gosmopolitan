@@ -47,6 +47,13 @@ type DebugFlags struct {
 	InlStaticInit         int    `help:"allow static initialization of inlined calls" concurrent:"ok"`
 	Libfuzzer             int    `help:"enable coverage instrumentation for libfuzzer"`
 	LiteralAllocHash      string `help:"hash value for use in debugging literal allocation optimizations" concurrent:"ok"`
+	LoopInline            int    `help:"loop-aware inlining: 0 disables the loop cost discount and the loop-nested call site budget" concurrent:"ok"`
+	LoopInlineBudget      int    `help:"loop-aware inlining: analysis budget for a callee called from a loop, and ceiling on a loop-nested call site's max cost" concurrent:"ok"`
+	LoopInlineCredit      int    `help:"loop-aware inlining: cap on the cost credit one function earns from loop-nested code" concurrent:"ok"`
+	LoopInlineDepth       int    `help:"loop-aware inlining: loop depth past which a call site's budget stops growing" concurrent:"ok"`
+	LoopInlineDiv         int    `help:"loop-aware inlining: divisor applied to the cost of loop-nested code" concurrent:"ok"`
+	LoopInlineFactor      int    `help:"loop-aware inlining: factor a call site's max cost grows by per level of loop nesting" concurrent:"ok"`
+	LoopInlineGrowth      int    `help:"loop-aware inlining: cap on the extra cost one function may absorb from loop-boosted inlining" concurrent:"ok"`
 	LoopVar               int    `help:"shared (0, default), 1 (private loop variables), 2, private + log"`
 	LoopVarHash           string `help:"for debugging changes in loop behavior. Overrides experiment and loopvar flag."`
 	LocationLists         int    `help:"print information about DWARF location list creation"`

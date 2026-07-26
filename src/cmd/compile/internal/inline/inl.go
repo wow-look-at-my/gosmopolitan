@@ -169,6 +169,10 @@ func CanInlineFuncs(funcs []*ir.Func, profile *pgoir.Profile) {
 		return
 	}
 
+	// Record which functions this package calls from inside a loop, so
+	// that CanInline can afford them an inline body. See loop.go.
+	markLoopCallees(funcs)
+
 	ir.VisitFuncsBottomUp(funcs, func(funcs []*ir.Func, recursive bool) {
 		for _, fn := range funcs {
 			CanInline(fn, profile)
@@ -218,6 +222,11 @@ func inlineBudget(fn *ir.Func, profile *pgoir.Profile, relaxed bool, verbose boo
 		if verbose {
 			fmt.Printf("hot-node enabled increased budget=%v for func=%v\n", budget, ir.PkgFuncName(fn))
 		}
+	} else if isLoopHotFunc(fn) {
+		// Called from inside a loop somewhere in this package: give it
+		// an inline body, so that the loop-nested call sites that want
+		// it have something to inline. See loop.go.
+		budget = max(budget, loopHotBudget())
 	}
 	if relaxed {
 		budget += inlheur.BudgetExpansion(inlineMaxBudget)
@@ -286,11 +295,17 @@ func CanInline(fn *ir.Func, profile *pgoir.Profile) {
 	// locals, and we use this map to produce a pruned Inline.Dcl
 	// list. See issue 25459 for more context.
 
+	// The visitor is allowed to spend more than the budget before giving
+	// up, because loop-nested code earns a discount that is only known
+	// once the loop has been walked. See loop.go.
+	scanBudget := budget + loopScanCredit()
+
 	visitor := hairyVisitor{
 		curFunc:       fn,
 		debug:         isDebugFn(fn),
 		isBigFunc:     IsBigFunc(fn),
-		budget:        budget,
+		budget:        scanBudget,
+		scanBudget:    scanBudget,
 		maxBudget:     budget,
 		extraCallCost: cc,
 		profile:       profile,
@@ -300,14 +315,15 @@ func CanInline(fn *ir.Func, profile *pgoir.Profile) {
 		return
 	}
 
+	cost := visitor.cost()
 	n.Func.Inl = &ir.Inline{
-		Cost:            budget - visitor.budget,
+		Cost:            cost,
 		Dcl:             pruneUnusedAutos(n.Func.Dcl, &visitor),
 		HaveDcl:         true,
 		CanDelayResults: canDelayResults(fn),
 	}
 	if base.Flag.LowerM != 0 || logopt.Enabled() {
-		noteInlinableFunc(n, fn, budget-visitor.budget)
+		noteInlinableFunc(n, fn, cost)
 	}
 }
 
@@ -431,16 +447,31 @@ func canDelayResults(fn *ir.Func) bool {
 // hairiness and whether or not it can be inlined.
 type hairyVisitor struct {
 	// This is needed to access the current caller in the doNode function.
-	curFunc       *ir.Func
-	isBigFunc     bool
-	debug         bool
-	budget        int32
-	maxBudget     int32
+	curFunc   *ir.Func
+	isBigFunc bool
+	debug     bool
+	budget    int32
+	// scanBudget is the value budget started at: how much the visitor is
+	// willing to spend before giving up, which exceeds maxBudget by the
+	// discount loop-nested code may still earn. See loop.go.
+	scanBudget int32
+	// maxBudget is the cost limit the function is actually held to.
+	maxBudget int32
+	// loopDepth is the number of loops enclosing the node being visited,
+	// and loopCost the cost charged so far for loop-nested code.
+	loopDepth     int32
+	loopCost      int32
 	reason        string
 	extraCallCost int32
 	usedLocals    ir.NameSet
 	do            func(ir.Node) bool
 	profile       *pgoir.Profile
+}
+
+// cost returns the inlining cost measured so far: everything the visitor
+// has charged, less the credit earned by loop-nested code.
+func (v *hairyVisitor) cost() int32 {
+	return v.scanBudget - v.budget - v.loopDiscount()
 }
 
 func isDebugFn(fn *ir.Func) bool {
@@ -458,8 +489,8 @@ func (v *hairyVisitor) tooHairy(fn *ir.Func) bool {
 	if ir.DoChildren(fn, v.do) {
 		return true
 	}
-	if v.budget < 0 {
-		v.reason = fmt.Sprintf("function too complex: cost %d exceeds budget %d", v.maxBudget-v.budget, v.maxBudget)
+	if cost := v.cost(); cost > v.maxBudget {
+		v.reason = fmt.Sprintf("function too complex: cost %d exceeds budget %d", cost, v.maxBudget)
 		return true
 	}
 	return false
@@ -613,7 +644,7 @@ opSwitch:
 			// Check whether we'd actually inline this call. Set
 			// log == false since we aren't actually doing inlining
 			// yet.
-			if ok, _, _ := canInlineCallExpr(v.curFunc, n, callee, v.isBigFunc, false, false); ok {
+			if ok, _, _ := canInlineCallExpr(v.curFunc, n, callee, v.isBigFunc, false, v.loopDepth, false); ok {
 				// mkinlcall would inline this call [1], so use
 				// the cost of the inline body as the cost of
 				// the call, as that is what will actually
@@ -711,6 +742,27 @@ opSwitch:
 	case ir.OCONVNOP:
 		// This doesn't produce code, but the children might.
 		v.budget++ // undo default cost
+
+	case ir.OFOR, ir.ORANGE:
+		// A loop body is charged at a discount: the same amount of code
+		// does far more work per byte inside a loop than outside one, so
+		// it buys correspondingly more when inlined. Track what the body
+		// costs; loopDiscount turns that into a bounded credit against
+		// the total. See loop.go.
+		v.budget-- // the loop statement itself
+		if v.budget < 0 && base.Flag.LowerM < 2 && !logopt.Enabled() && !v.debug {
+			v.reason = "too expensive"
+			return true
+		}
+		v.loopDepth++
+		before := v.budget
+		hairy := ir.DoChildren(n, v.do)
+		v.loopDepth--
+		if v.loopDepth == 0 {
+			// Charge nested loops once, via their outermost enclosing loop.
+			v.loopCost += before - v.budget
+		}
+		return hairy
 
 	case ir.OFALL, ir.OTYPE:
 		// These nodes don't produce code; omit from inlining budget.
@@ -889,8 +941,10 @@ func InlineCallTarget(callerfn *ir.Func, call *ir.CallExpr, profile *pgoir.Profi
 }
 
 // TryInlineCall returns an inlined call expression for call, or nil
-// if inlining is not possible.
-func TryInlineCall(callerfn *ir.Func, call *ir.CallExpr, bigCaller bool, profile *pgoir.Profile, closureCalledOnce bool) *ir.InlinedCallExpr {
+// if inlining is not possible. loopDepth is the number of loops in the
+// caller enclosing the call site; a call that runs many times is worth
+// more inlining effort. See loop.go.
+func TryInlineCall(callerfn *ir.Func, call *ir.CallExpr, bigCaller bool, profile *pgoir.Profile, closureCalledOnce bool, loopDepth int32) *ir.InlinedCallExpr {
 	mightInline, isIntrinsic := inlineCallCheck(callerfn, call)
 
 	// Preserve old logging behavior
@@ -902,7 +956,7 @@ func TryInlineCall(callerfn *ir.Func, call *ir.CallExpr, bigCaller bool, profile
 	}
 
 	if fn := inlCallee(callerfn, call.Fun, profile, false); fn != nil && typecheck.HaveInlineBody(fn) {
-		return mkinlcall(callerfn, call, fn, bigCaller, closureCalledOnce)
+		return mkinlcall(callerfn, call, fn, bigCaller, closureCalledOnce, loopDepth)
 	}
 	return nil
 }
@@ -962,25 +1016,41 @@ var InlineCall = func(callerfn *ir.Func, call *ir.CallExpr, fn *ir.Func, inlInde
 //   - the "max cost" limit used to make the decision (which may differ depending on func size)
 //   - the score assigned to this specific callsite
 //   - whether the inlined function is "hot" according to PGO.
-func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCalledOnce bool) (bool, int32, int32, bool) {
+func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCalledOnce bool, loopDepth int32) (bool, int32, int32, bool) {
 	maxCost := int32(inlineMaxBudget)
+
+	// Ceiling on what loop nesting at the call site may raise maxCost to.
+	// A big caller keeps a low one: it is already too big to grow freely,
+	// loop or no loop.
+	loopCeiling := loopHotBudget()
 
 	if bigCaller {
 		// We use this to restrict inlining into very big functions.
 		// See issue 26546 and 17566.
 		maxCost = inlineBigFunctionMaxCost
+		loopCeiling = min(loopCeiling, inlineMaxBudget)
 	}
 
-	simdMaxCost := simdCreditMultiplier(callee) * maxCost
-
-	if callee.ClosureParent != nil {
-		maxCost *= 2           // favor inlining closures
-		if closureCalledOnce { // really favor inlining the one call to this closure
-			maxCost = max(maxCost, inlineClosureCalledOnceCost)
+	// The credits for SIMD and for closures apply on top of whatever the
+	// size limit is, so they are applied to the loop-boosted limit and the
+	// unboosted one alike: baseMaxCost is exactly what this call site
+	// would have accepted without loop-aware inlining, which is what
+	// decides whether the loop boost is doing the work here.
+	adjust := func(c int32) int32 {
+		simdMaxCost := simdCreditMultiplier(callee) * c
+		if callee.ClosureParent != nil {
+			c *= 2                 // favor inlining closures
+			if closureCalledOnce { // really favor inlining the one call to this closure
+				c = max(c, inlineClosureCalledOnceCost)
+			}
 		}
+		return max(c, simdMaxCost)
 	}
 
-	maxCost = max(maxCost, simdMaxCost)
+	// A call inside a loop runs many times, so it is worth a more
+	// expensive callee than the same call outside one. See loop.go.
+	baseMaxCost := adjust(maxCost)
+	maxCost = adjust(loopSiteMaxCost(maxCost, loopCeiling, loopDepth))
 
 	metric := callee.Inl.Cost
 	if inlheur.Enabled() {
@@ -994,9 +1064,19 @@ func inlineCostOK(n *ir.CallExpr, caller, callee *ir.Func, bigCaller, closureCal
 	csi := pgoir.CallSiteInfo{LineOffset: lineOffset, Caller: caller}
 	_, hot := candHotEdgeMap[csi]
 
-	if metric <= maxCost {
+	if metric <= baseMaxCost {
 		// Simple case. Function is already cheap enough.
 		return true, 0, metric, hot
+	}
+
+	if metric <= maxCost {
+		// Only the call site's loop nesting makes this affordable. Draw
+		// the difference from the caller's growth allowance, so that one
+		// function cannot absorb unbounded loop-boosted inlining.
+		if chargeLoopGrowth(caller, metric-baseMaxCost) {
+			return true, 0, metric, hot
+		}
+		return false, baseMaxCost, metric, false
 	}
 
 	// We'll also allow inlining of hot functions below inlineHotMaxBudget,
@@ -1049,7 +1129,7 @@ func parsePos(pos src.XPos, posTmp []src.Pos) ([]src.Pos, src.Pos) {
 // indicates that the 'cannot inline' reason should be logged.
 //
 // Preconditions: CanInline(callee) has already been called.
-func canInlineCallExpr(callerfn *ir.Func, n *ir.CallExpr, callee *ir.Func, bigCaller, closureCalledOnce bool, log bool) (bool, int32, bool) {
+func canInlineCallExpr(callerfn *ir.Func, n *ir.CallExpr, callee *ir.Func, bigCaller, closureCalledOnce bool, loopDepth int32, log bool) (bool, int32, bool) {
 	if callee.Inl == nil {
 		// callee is never inlinable.
 		if log && logopt.Enabled() {
@@ -1059,7 +1139,7 @@ func canInlineCallExpr(callerfn *ir.Func, n *ir.CallExpr, callee *ir.Func, bigCa
 		return false, 0, false
 	}
 
-	ok, maxCost, callSiteScore, hot := inlineCostOK(n, callerfn, callee, bigCaller, closureCalledOnce)
+	ok, maxCost, callSiteScore, hot := inlineCostOK(n, callerfn, callee, bigCaller, closureCalledOnce, loopDepth)
 	if !ok {
 		// callee cost too high for this call site.
 		if log && logopt.Enabled() {
@@ -1145,8 +1225,8 @@ func canInlineCallExpr(callerfn *ir.Func, n *ir.CallExpr, callee *ir.Func, bigCa
 // The result of mkinlcall MUST be assigned back to n, e.g.
 //
 //	n.Left = mkinlcall(n.Left, fn, isddd)
-func mkinlcall(callerfn *ir.Func, n *ir.CallExpr, fn *ir.Func, bigCaller, closureCalledOnce bool) *ir.InlinedCallExpr {
-	ok, score, hot := canInlineCallExpr(callerfn, n, fn, bigCaller, closureCalledOnce, true)
+func mkinlcall(callerfn *ir.Func, n *ir.CallExpr, fn *ir.Func, bigCaller, closureCalledOnce bool, loopDepth int32) *ir.InlinedCallExpr {
+	ok, score, hot := canInlineCallExpr(callerfn, n, fn, bigCaller, closureCalledOnce, loopDepth, true)
 	if !ok {
 		return nil
 	}
