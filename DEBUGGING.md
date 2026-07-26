@@ -4005,6 +4005,96 @@ build machinery - the existing ubuntu-built fat APE artifact is the
 input, and fizzbuzz + apetest's runtimeprobe battery is the
 pass/fail instrument.
 
+### Wave-4 experiment verdict: WoA x86-64 emulation — FAIL-to-boot (2026-07-21)
+
+The option-(a) experiment ran; the verdict is FAIL-to-boot. The APE
+BOOTS under Windows-on-ARM's x86-64 emulation - the PE handoff, the
+NT personality, VEH crash delivery, and the 0xC0DE0000|sig
+encoded-signal-death exit protocol are all demonstrably live under
+the emulator - but 100% of launches die at one deterministic
+pre-main READ SIGSEGV during early NT bring-up, before main and
+before any program output. 0 execution tests pass. Option (a) does
+NOT deliver WoA support with the fork as shipped.
+
+Setup: a test-woa job (added 6ab873d2) mirrored the windows-latest
+apetest leg - same three origin artifacts, same AF_UNIX probe and
+fizzbuzz pre-steps, same apetest gauntlet - on windows-11-arm, with
+the windows-latest per-step timeouts doubled for emulation overhead
+and continue-on-error while under evaluation. The job is retired in
+the same change that records this verdict; to revive it,
+cherry-pick/restore it from 6ab873d2. The charter's
+runner-availability question is answered: on this public repo,
+GitHub-hosted windows-11-arm runners scheduled in ~3-4s on both
+attempts (image windows-11-arm64 20260714.109.1).
+
+Evidence: run
+https://github.com/wow-look-at-my/gosmopolitan/actions/runs/29860644973
+attempt 1 (job 88737395780) and attempt 2 (job 88739890277 - a
+rerun on a DIFFERENT VM, against artifacts confirmed identical by
+sha256), plus the test-log-windows-11-arm-<origin>-origin artifacts
+(3-day retention). Both attempts failed with an identical
+signature. Every APE launch - ~270 processes across the two boots,
+ubuntu-, macos-, and windows-origin binaries alike - dies in
+~0.08s with zero stdout: Exception 0xc0000005 with
+ExceptionInformation[0]=0 (READ) at fault address 0x2000c9000,
+exit status 0xC0DE000B (0xC0DE0000|11 = SIGSEGV). The fault
+address is CONSTANT across all ~270 launches and both boots, and
+it sits inside the cosmo image's fixed 0x200000000 span: the
+faulting read targets the APE image mapping, not randomized OS
+state. RIP differs numerically across boots (attempt 1
+0x7ff81e62b518, attempt 2 0x7ffc5a14b518) but is the SAME
+instruction - low 16 bits 0xb518 identical, delta 0x43bb20000
+64KB-aligned, and all 5 system-module stack frames slid rigidly by
+their per-module deltas, i.e. per-boot ASLR only - with RIP in
+non-Go system-module code, on the boot stack, on g0. The register
+file is structurally constant: rcx=r12 = a 64KB-granular early
+allocation base in ~0xcb0000-0xdf0000 (the only varying value),
+rax=rcx+0x338, r10=rcx+0x440, rdx=2, r8=0x200, r9=rdi=0x210,
+rbx=0x21, rsi=r13=r15=0, r14=0x200, rsp=0xbffa80 in stack
+[0x0,0xbffec0), gp=0x1001a8780. Read together: the fault fires
+inside or beneath an early NT call made during runtime bring-up,
+before main. apetest per origin: 81 PASS (every structural/format
+test) / 45 FAIL (every test that execs an APE, all `exit status
+0xc0de000b` with the same SIGSEGV stderr) / 1 SKIP
+(TestDebugSidecars - CI artifacts ship no sidecars); the 45-name
+fail set is set-identical across the three origins AND across
+attempts. runtimeprobe never started - 0 checks ran.
+
+What WORKS under emulation is worth recording: the whole boot
+chain up to the fault (PE header accepted, entry stub, NT
+personality up); VEH-based crash reporting with a full
+register/stack dump; the wait-status encoding observed end to end
+by the harness (exit 0xC0DE000B decoded as a SIGSEGV death);
+console/stderr plumbing carrying the crash report out; the AF_UNIX
+probe at full parity with x64 windows-latest (afunix.sys works,
+including the known SO_REUSEADDR-bind-10045 quirk, byte-identical
+on both WoA VMs); and instant runner scheduling. The control is
+decisive: the SAME binaries (by sha256) passed the full gauntlet
+on x64 windows-latest in this same run - the delta is the
+emulation layer, not the binaries.
+
+Follow-on, per the charter's decision rule: emulation is not
+clean, so the native windows/arm64 bring-up gains urgency and the
+native notes above stand unchanged. One caveat before chartering
+the full native ladder: the failure is a single deterministic
+instruction/address pair, so ONE bounded root-cause investigation
+is worth spending first - WinDbg on a WoA machine stopped at the
+first APE instruction, or narrowing which early NT/loader call
+touches 0x2000c9000 (candidates: xtajit64 reading the image span
+during translation vs an ntdll routine walking our PE mappings).
+If that one fault turns out to be fixable fork-side, option (a)
+may still unlock. Honest scope note: all evidence here is CI-only;
+no interactive WoA debugger was available, so the faulting module
+was never named.
+
+Job fate: job-level continue-on-error keeps the RUN green, but the
+job's own check run still concludes failure, and the org's
+external all-builds aggregator counts job-level conclusions -
+observed "1/9 builds failed: test-woa" on 6ab873d2. An
+expected-red experiment leg therefore cannot live on any branch
+that must merge; that is why the job is removed outright rather
+than kept.
+
 # 2026-07-19: size pass 3c — cross-arch dedup + macOS loader-side decompression: measured, both DROPPED
 
 Two candidate fat-APE size levers were taken to full measurement (at
