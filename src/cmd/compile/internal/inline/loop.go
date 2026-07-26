@@ -142,6 +142,9 @@ func loopSiteMaxCost(limit, ceiling, depth int32) int32 {
 	if !loopInlineEnabled() || depth <= 0 {
 		return limit
 	}
+	// The ceiling bounds how far loop nesting may raise the limit; it
+	// never lowers what the call site would have accepted anyway.
+	ceiling = max(ceiling, limit)
 	depth = min(depth, loopMaxDepth())
 	factor := loopSiteFactor()
 	c := limit

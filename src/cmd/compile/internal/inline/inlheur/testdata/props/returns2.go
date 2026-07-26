@@ -12,7 +12,7 @@ package returns2
 // returns2.go T_return_feeds_iface_call 18 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":null,"ResultFlags":null}
-// callsite: returns2.go:19:13|0 flagstr "" flagval 0 score 1 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
+// callsite: returns2.go:19:13|0 flagstr "" flagval 0 score -6 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
 // <endcallsites>
 // <endfuncpreamble>
 func T_return_feeds_iface_call() {
@@ -23,7 +23,7 @@ func T_return_feeds_iface_call() {
 // returns2.go T_multi_return_feeds_iface_call 29 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":null,"ResultFlags":null}
-// callsite: returns2.go:30:20|0 flagstr "" flagval 0 score 3 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
+// callsite: returns2.go:30:20|0 flagstr "" flagval 0 score -4 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
 // <endcallsites>
 // <endfuncpreamble>
 func T_multi_return_feeds_iface_call() {
@@ -70,7 +70,7 @@ func T_multi_return_feeds_indirect_call(q int) {
 // returns2.go T_return_feeds_ifswitch 76 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":[0],"ResultFlags":[0]}
-// callsite: returns2.go:77:14|0 flagstr "" flagval 0 score 10 mask 2048 maskstr "returnFeedsConstToIfAdj"
+// callsite: returns2.go:77:14|0 flagstr "" flagval 0 score 3 mask 2048 maskstr "returnFeedsConstToIfAdj"
 // <endcallsites>
 // <endfuncpreamble>
 func T_return_feeds_ifswitch(q int) int {
@@ -87,7 +87,7 @@ func T_return_feeds_ifswitch(q int) int {
 // returns2.go T_multi_return_feeds_ifswitch 93 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":[0],"ResultFlags":[0]}
-// callsite: returns2.go:94:21|0 flagstr "" flagval 0 score 9 mask 2048 maskstr "returnFeedsConstToIfAdj"
+// callsite: returns2.go:94:21|0 flagstr "" flagval 0 score 2 mask 2048 maskstr "returnFeedsConstToIfAdj"
 // <endcallsites>
 // <endfuncpreamble>
 func T_multi_return_feeds_ifswitch(q int) int {
@@ -104,8 +104,8 @@ func T_multi_return_feeds_ifswitch(q int) int {
 // returns2.go T_two_calls_feed_ifswitch 111 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":[0],"ResultFlags":[0]}
-// callsite: returns2.go:115:14|0 flagstr "" flagval 0 score 25 mask 0 maskstr ""
-// callsite: returns2.go:116:14|1 flagstr "" flagval 0 score 25 mask 0 maskstr ""
+// callsite: returns2.go:115:14|0 flagstr "" flagval 0 score 18 mask 0 maskstr ""
+// callsite: returns2.go:116:14|1 flagstr "" flagval 0 score 18 mask 0 maskstr ""
 // <endcallsites>
 // <endfuncpreamble>
 func T_two_calls_feed_ifswitch(q int) int {
@@ -138,7 +138,7 @@ func T_chained_indirect_call(x, y int) {
 // returns2.go T_chained_conc_iface_call 144 0 1
 // <endpropsdump>
 // {"Flags":0,"ParamFlags":[0,0],"ResultFlags":null}
-// callsite: returns2.go:148:8|0 flagstr "" flagval 0 score 1 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
+// callsite: returns2.go:148:8|0 flagstr "" flagval 0 score -6 mask 16384 maskstr "returnFeedsConcreteToInterfaceCallAdj"
 // <endcallsites>
 // <endfuncpreamble>
 func T_chained_conc_iface_call(x, y int) {
