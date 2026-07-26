@@ -316,6 +316,23 @@ remaining known macOS gaps are AllThreadsSyscall (Linux-only
 rt-signal machinery, unused by the stdlib on cosmo) and the
 Intel-mac runtime bring-up below - see DEBUGGING.md.
 
+**Variadic libc calls must pass their variadic arguments on the STACK
+(2026-07-26).** arm64-apple diverges from AAPCS64 here even when
+argument registers are free, so a variadic callee handed its argument
+in a register reads uninitialized stack memory instead - and, the
+value usually being a flag word, succeeds while doing something other
+than what was asked. `fcntl(fd, F_SETFD, FD_CLOEXEC)` through the
+fixed-argument trampoline set close-on-exec from stack garbage,
+leaving descriptors unprotected perhaps a third of the time; that put
+os/exec's child status pipe into the child and deadlocked any parent
+whose child did not exit promptly - the long-standing "flaky" macOS
+fdpass wedge. The same defect explains the F_DUPFD_CLOEXEC EINVAL and
+O_CREAT modes taken from garbage. Use
+`runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for any variadic
+libc function (fcntl, open/openat with a mode, ioctl); never
+`cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check
+gates it. Full forensics: DEBUGGING.md 2026-07-26.
+
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
 host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link

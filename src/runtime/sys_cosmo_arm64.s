@@ -120,10 +120,43 @@ TEXT runtime·libcCall(SB),NOSPLIT,$0-24
 	MOVD	R0, ret+16(FP)
 	RET
 
+// func cosmoLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+// C-ABI call to a VARIADIC libc function with two fixed arguments and
+// one variadic argument.
+//
+// arm64-apple deliberately diverges from AAPCS64 here: a variadic
+// argument is passed on the STACK, never in a register, even when
+// argument registers are still free. Passing it in R2 like a fixed
+// argument leaves the callee reading uninitialized stack memory, and
+// since the value it wants is usually a flag word, the call then
+// succeeds while doing something other than what was asked.
+//
+// That is not hypothetical. fcntl(2) is variadic, so every
+// fcntl(fd, F_SETFD, FD_CLOEXEC) issued through the fixed-argument
+// trampoline set close-on-exec from whatever happened to be on the
+// stack: descriptors came back without FD_CLOEXEC perhaps a third of
+// the time, which left os/exec's child status pipe open across exec and
+// deadlocked any parent whose child did not exit promptly. The same
+// defect made fcntl(F_DUPFD_CLOEXEC) fail with EINVAL. See DEBUGGING.md
+// "2026-07-26: the macOS fork/exec wedge".
+TEXT runtime·cosmoLibcCallVariadic1(SB),NOSPLIT,$0-40
+	MOVD	fn+0(FP), R12
+	MOVD	a1+8(FP), R0		// fixed arg 1 -> register
+	MOVD	a2+16(FP), R1		// fixed arg 2 -> register
+	MOVD	v1+24(FP), R3
+	SUB	$16, RSP		// align stack for C ABI
+	MOVD	R3, (RSP)		// variadic arg -> STACK, per arm64-apple
+	BL	(R12)
+	ADD	$16, RSP
+	MOVD	R0, ret+32(FP)
+	RET
+
 // func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
 // Generic C-ABI call through a Syslib or dlsym-resolved function pointer
 // with up to six integer arguments. C functions taking fewer arguments
 // simply ignore the extra registers, so one trampoline serves them all.
+// NOT usable for variadic callees on arm64-apple - see
+// cosmoLibcCallVariadic1 above.
 TEXT runtime·cosmoLibcCall6(SB),NOSPLIT,$0-64
 	MOVD	fn+0(FP), R12
 	MOVD	a1+8(FP), R0
