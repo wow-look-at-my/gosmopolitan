@@ -123,6 +123,7 @@ func main() {
 	timed("sockpair", checkSockpair)
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)
+	timed("cloexec", checkCloexec)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)
