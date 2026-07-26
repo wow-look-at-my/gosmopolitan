@@ -185,6 +185,7 @@ func ParseFlags() {
 	Debug.AlignHot = 1
 	Debug.InlFuncsWithClosures = 1
 	Debug.InlStaticInit = 1
+	Debug.LoopInline = 1
 	Debug.FreeAppend = 1
 	Debug.PGOInline = 1
 	Debug.PGODevirtualize = 2

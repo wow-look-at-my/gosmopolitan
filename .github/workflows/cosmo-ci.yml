@@ -166,6 +166,23 @@ jobs:
           # setitimer dispatch, and the signal translation tables.
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
+      - name: Loop-aware inlining tests
+        # The loop cost discount, the loop-nested call site budget, and the
+        # per-caller growth allowance (cmd/compile/internal/inline/loop.go),
+        # plus the end-to-end check that a loop-dominated function inlines
+        # and that -d=loopinline=0 restores the old decisions exactly.
+        # Host-run compiler tests, so GOOS is pinned away from cosmo.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/inline/...
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
+          # The inlining regress tests: more inlining must not break the
+          # existing expectations for what does and does not get inlined.
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
+
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
   # plus the two cross-compiled elsewhere). The windows-latest leg is
