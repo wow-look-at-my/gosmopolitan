@@ -4565,6 +4565,109 @@ case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
 
+# 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
+
+## Symptom, evidence
+
+Green wasm-job logs on master contain, in the pool-demo slot,
+
+    runtime: newosproc: no worker thread claimed the new M within 10s
+    runtime: GOWASM=threads needs the wasm_exec_node.js worker pool (GOWASMTHREADSPOOL > 0, Node.js host)
+    fatal error: newosproc: no wasm worker thread available
+
+followed by the runtime traceback — and none of the demo's own output:
+no `pooldemo: Go main is running`, no `POOLDEMO: PASS`. The step stayed
+green because `node pool_demo.js` exited 0 around the fatal.
+
+Filed as an "occasional exit-code race", but the CI record shows it was
+deterministic, every run, from the B3 scheduler phase on:
+
+- run 29701258648 (ef935b3c, B2): POOLDEMO: PASS present, no fatal
+- run 29705390870 (16c08959, B3): fatal present, PASS gone — first hit
+- every green master wasm job after that (checked through 29839652048,
+  current master) has exactly one fatal and zero demo output
+
+So the pool demo's payload (worker instantiation against the shared
+memory, cross-instance 0xFE atomics, checksum verification) had not
+executed on master CI since 2026-07-19, while the job kept certifying
+it green.
+
+## Root cause: two stacked bugs in pool_demo.js
+
+Bug 1 — the demo never grew a runtime pool. B3 (16c08959) made
+lockOSThread real under GOWASM=threads (dolockOSThread, proc.go:6295 —
+package initializers, syscall/js.init in particular, must stay on the
+main thread), so runtime.main's boot now parks a LOCKED main goroutine
+at gcenable's channel receive (proc.go:213 -> mgc.go:216) while
+bgsweep/bgscavenge sit runnable. The scheduler must hand the P to
+another M: park_m -> schedule -> stoplockedm (proc.go:3831) -> handoffp
+(proc.go:3585) -> startm (proc.go:3544) -> newm -> newosproc ->
+wasmThreadsNewosproc (os_wasmthreads.go:83), which posts to the spawn
+mailbox and futex-waits for a pool worker parked in wasm_thread_run.
+pool_demo.js predates the B2 runtime pool and spawned only B1 probe
+workers (stub imports, and only after boot) — the mailbox had no
+servers, ever. 10s later, os_wasmthreads.go:116 threw the fatal on the
+main thread. Every boot, deterministically.
+
+Bug 2 — the fatal exited 0. The fatal path prints via wasmWrite
+(synchronous fs.writeSync — that is why the log shows it), then
+fatalthrow -> exit(2). runtime·exit (rt0_js_wasm.s:56) calls the
+wasmExit import, sets PAUSE, RETUNWIND: wasm_exec.js records
+`exited = true` and calls `go.exit(2)` — which in pool_demo.js only
+ASSIGNED a variable (`exitCode = code`) that a `process.exit(exitCode
+?? 1)` at the very END of the driver would consume. The driver never
+got there: it was parked on `await ready`, a promise only the (dead) Go
+program's __demoReady callback could resolve. The run() export returned
+cleanly (PAUSE), runDone resolved unobserved, no timers or handles
+remained, node's event loop drained — and an event-loop drain is a
+clean EXIT 0. bash -e saw success; the step moved on to threaddemo.
+
+## Fix (pool_demo.js), gate (cosmo-ci.yml)
+
+pool_demo.js now pre-spawns GOWASMTHREADSPOOL runtime pool workers
+(default 4) exactly like wasm_exec_node.js — goRuntime + threadRun
+workerData for wasm_exec_worker_node.js, unref'd — so the post-B3 boot
+handoff is served and the demo actually runs again. And the exit-code
+discipline is enforced everywhere a failure can surface:
+
+- go.exit before the final verification handoff => nonzero immediately
+  (a runtime fatal's exit(2) now exits the process 2);
+- a runtime pool worker's exit message, error, or thread death before
+  completion => nonzero (also catches a worker-side fatal whose exit
+  message was lost — the host exit hook still ends the worker thread
+  with the fatal's code, surfaced by the parent's 'exit' listener);
+- a wasm trap out of run/resume (runDone rejection) => exit 1;
+- an event-loop drain before completion => forced exit 1 via a
+  process 'exit' guard (with wasm_exec_node.js's exit-time deadlock
+  probe first, so a wedged runtime still prints its stacks).
+
+CI additionally gates the demo's OUTPUT, not just its exit code
+(pipefail + tee): `POOLDEMO: PASS` must be present and no line may
+match `fatal error` — so a fatal-with-green-exit cannot pass even if a
+new swallow path appears.
+
+## Verification
+
+- Pre-fix, stock CI invocation (deterministic repro): the exact CI
+  fatal, node exit 0, no demo output — the bug, on demand.
+- Post-fix, stock invocation: full demo output, POOLDEMO: PASS, exit 0.
+- Post-fix, original failure shape forced (runtime pool spawn disabled
+  in a throwaway driver copy while the runtime still expects pool=4):
+  the identical newosproc fatal now exits 2, with a
+  `pool_demo: FAIL: Go program exited with code 2` trailer.
+- Post-fix, GOWASMTHREADSPOOL=0: deadlock fatal, exit 2.
+- Post-fix soak: 400 CPU-loaded iterations of the stock invocation
+  (4 busy-loop processes on 4 cores; 300 unconstrained + 100 under
+  taskset -c 0,1) — zero failures, zero fatals, POOLDEMO: PASS in
+  every run.
+- Full local mirror of the cosmo-ci.yml threads step (smoke, gated
+  pool_demo, threaddemo x10, speedup/stwgc/liveness, growatomic,
+  threads stdlib tests, wasip1 rejection): green end to end.
+
+No src/ or lib/wasm changes — the fix is confined to the demo driver,
+the workflow gate, and docs, so no toolchain rebuild and no non-threads
+byte-identity proof is needed.
+
 # 2026-07-21: darwin sendmsg/recvmsg + SCM_RIGHTS fd passing
 
 The last darwin socket gap from the wave-6 backlog: SYS_SENDMSG(211)/

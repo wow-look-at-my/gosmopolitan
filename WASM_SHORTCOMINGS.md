@@ -132,7 +132,12 @@ GOWASM=tailcall gate; entries are dated below where the distinction matters.
   cannot run on workers yet. `testdata/wasmthreads/pooldemo` +
   `pool_demo.js` (CI-run) prove the core: 4 workers hammer a shared
   counter from wasm 0xFE atomics to an exact expected sum while the main
-  instance's Go heap/data checksums stay identical.
+  instance's Go heap/data checksums stay identical. (Since the B3 boot
+  sequence needs runtime pool workers to get past gcenable, pool_demo.js
+  also pre-spawns them like wasm_exec_node.js, and it enforces a nonzero
+  exit on any Go exit, worker death, trap, or event-loop drain before
+  the demo completes; CI additionally gates on the POOLDEMO: PASS line -
+  see DEBUGGING.md, pool_demo silent-fatal, 2026-07-21.)
   Phase B2 (2026-07-17) makes REAL Go code run on worker threads. The
   runtime gains a futex layer over memory.atomic.wait32/notify
   (`futexsleep`/`futexwakeup` in `src/runtime/sys_wasmthreads.s`):
