@@ -587,8 +587,8 @@ tgkill_darwin_call:
 	ADD	$16, RSP
 	RET
 
-TEXT runtime·setitimer(SB),NOSPLIT,$0-24
-	CHECK_DARWIN(setitimer_darwin)
+TEXT runtime·setitimerLinux(SB),NOSPLIT,$0-24
+	CHECK_DARWIN(setitimerLinux_darwin)
 	// Linux path
 	MOVW	mode+0(FP), R0
 	MOVD	new+8(FP), R1
@@ -596,9 +596,15 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	MOVD	$SYS_setitimer, R8
 	SVC
 	RET
-setitimer_darwin:
-	// macOS: setitimer not in Syslib, would need to add
-	// For now, this is a stub - profiling timers won't work
+setitimerLinux_darwin:
+	// Unreachable: runtime.setitimer dispatches XNU hosts to
+	// darwinSetitimer (signal_cosmo_xnu.go), which translates the
+	// itimerval layout (Apple tv_usec is 32-bit) and calls Apple
+	// libc setitimer resolved via dlsym - a raw SVC here would
+	// SIGSYS anyway. Crash loudly if a new caller ever bypasses
+	// the dispatch.
+	MOVD	$0, R0
+	MOVD	R0, (R0)
 	RET
 
 TEXT runtime·mincore(SB),NOSPLIT,$0-28

@@ -1,13 +1,13 @@
 // SCM_RIGHTS fd-passing check (fdpass): a parent/child pair over a
 // pathname AF_UNIX stream socket, passing a FILE fd and a SOCKET fd
 // plus inline data in one sendmsg. Native on Linux hosts - which is
-// also what validates the probe's own logic, since the emulation must
-// match those semantics unchanged - and emulated via the NT wire
+// also what validates the probe's own logic, since the emulations
+// must match those semantics unchanged - emulated via the NT wire
 // frame (sender-push WSADuplicateSocketW / DuplicateHandle, wave 3
-// item 2b) on Windows hosts. macOS hosts lack sendmsg entirely, so
-// the check host-skips there and ONLY there; the skip is keyed on the
-// host triple, never on an error - a failure on NT or Linux is a
-// FAIL.
+// item 2b) on Windows hosts, and carried by Apple's native AF_UNIX
+// SCM_RIGHTS through the darwin msghdr/cmsghdr layout translation
+// (2026-07-21) on macOS hosts. Mandatory on ALL THREE hosts - no
+// skip legs: a failure anywhere is a FAIL.
 //
 // Choreography (parent = the probe, child = the probe re-executed
 // with RUNTIMEPROBE_CHILD=fdpass):
@@ -48,11 +48,6 @@ const (
 )
 
 func checkFdpass() {
-	if !probeHostIsNT() && !probeHostIsLinux() {
-		ok("fdpass", "skipped (host lacks sendmsg)")
-		return
-	}
-
 	// Unix listener at a fresh pathname.
 	dir, err := os.MkdirTemp("", "runtimeprobe-fdpass")
 	if err != nil {
