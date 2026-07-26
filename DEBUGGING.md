@@ -5159,3 +5159,114 @@ Effect on std with the shipped default: 1,489 more functions inlinable
 (15,888 -> 17,377), 4,967 more call sites inlined (70,146 -> 75,113).
 The inlheur props goldens are untouched, because with the discount off
 the measured costs are exactly upstream's.
+
+
+# 2026-07-26: go1.26.5 uprev - a clean merge, and what the divergence measurement says
+
+Merged upstream tag go1.26.5 (12 upstream commits on top of the
+go1.26.4 base: the os.Root trailing-slash fix, the ECH outer-hello PSK
+omission, the moveSliceNoCap element-size rounding, the Linux kernel
+release vendor-suffix parse, and friends). One conflict, VERSION,
+resolved to `go1.26.5cosmo` - the same single conflict the go1.26.4
+uprev had.
+
+Unlike go1.26.4, nothing broke: `GOOS=cosmo go build std` was clean on
+amd64 and arm64 on the first try, with zero cosmo fixes needed. The
+delta touched no build tags and added no new platform-partition files,
+which is exactly the property that made it free.
+
+**Verified**: make.bash (go version go1.26.5cosmo linux/amd64); std for
+cosmo/amd64 + cosmo/arm64; fat fizzbuzz + runtimeprobe (45 ok checks,
+including preempt/cpuprof/ctrlbreak/fdpass); apetest 129 PASS 0 FAIL
+against the local fat APEs; cmd/link ld APE/PE/Macho tests; cmd/go
+strip + GOCOSMODEBUG + tool-ID tests; GOOS=cosmo
+internal/runtime/syscall/cosmo and the runtime cosmo tests via the
+misc/cosmo wrappers; host os, os/signal, crypto/tls, go/build,
+cmd/internal/moddeps.
+
+
+## Two guardrails that had gone red without anyone noticing
+
+`go test go/build` failed on this tree, and had been failing since well
+before this merge:
+
+1. `TestVendorPackages` rejected `github.com/klauspost/compress`,
+   vendored into src/cmd/vendor for the ELFCOMPRESS_ZSTD DWARF
+   compression (round 2, 2026-07-20). The test's own instructions are
+   to allowlist a deliberately vendored package; that was never done.
+2. `TestDependencies` had no policy entry for
+   `internal/runtime/syscall/cosmo`, so all four of its importers
+   (itself, runtime, syscall, os/exec) reported as unexpected
+   dependencies.
+
+Neither is cosmetic. `TestDependencies` is the only mechanical check
+that the fork's new packages sit where the tree's layering says they
+may sit; while it is red for a bookkeeping reason it cannot report a
+real layering break, and an uprev is precisely when one would appear.
+CI never caught either because the only go/build test it ran was
+`-run TestReadGoInfo`, inside the shebang step. Both fixed, and
+go/build + cmd/internal/moddeps now run on the ubuntu build leg.
+
+
+## The uprev tripwire: CI compiled 84 of 358 std packages under cosmo
+
+The two go1.26.4 build breaks (`unix.Fchmodat undefined` after upstream
+split at.go into fchmodat_linux.go + fchmodat_other.go;
+`f.lstatatNolog undefined` after statat_unix.go got a new tag) share one
+shape: **upstream re-partitions a platform file and cosmo falls off the
+edge of the new build tags.** No conflict is produced - the merge is
+clean and the breakage is a compile error somewhere in std.
+
+CI could not see that class at all. The cosmo legs build only
+fizzbuzz.com and runtimeprobe.com, which between them reach 84 of the
+358 std packages that exist under GOOS=cosmo - 23%. The uncovered 77%
+includes crypto/x509, archive/tar, net/http and most of the packages
+that actually carry the fragile tags: `crypto/x509/root_unix.go` and
+`archive/tar/stat_actime1.go` are both files whose entire fork delta is
+adding `cosmo` to a `//go:build` line, and neither was being compiled.
+
+`GOOS=cosmo go build std` for both arches now runs on the ubuntu build
+leg. Measured 38s cold for the pair - the cheapest coverage in the
+workflow.
+
+
+## Where the fork's merge liability actually lives
+
+Measured against go1.26.5, over src/ test/ lib/ api/ misc/:
+
+| | files | merge cost |
+|---|---|---|
+| new files added by the fork | 255 | none - they cannot conflict |
+| upstream files, build-tag edit only | 46 | trivial to merge, but the silent-break surface above |
+| upstream files, substantive edits | 173 | the real liability |
+
+The 255-to-0 shape of the first row is the fork doing the right thing:
+cosmo's runtime, syscall layer and NT/darwin emulation live in new
+`*_cosmo*.go` files that upstream will never touch.
+
+The surprise is the third row's composition. Ranked by churn, the
+fork's most-diverged upstream files are:
+
+| file | added lines | wasm/threads | cosmo |
+|---|---|---|---|
+| src/runtime/proc.go | 818 | 256 | 8 |
+| src/cmd/internal/obj/wasm/wasmobj.go | ~470 | all | 0 |
+| lib/wasm/wasm_exec.js | ~438 | all | 0 |
+| src/cmd/link/internal/ld/pcln.go | 340 | 0 | 4 |
+| src/runtime/symtab.go | 234 | 0 | 0 |
+| src/cmd/compile/internal/inline/inl.go | 110 | 0 | 0 |
+
+`runtime/proc.go` is the single most-diverged file in the tree and it is
+**not a cosmo file** - it is the wasm threads scheduler work (B2-B4).
+The cosmo port, the thing this fork exists for, is close to free to
+merge. What costs is the other three product lines the fork carries -
+wasm rounds 1-8 and threads B0-B4, the compact pclntab, and loop-aware
+inlining - all of which are implemented as edits to hot upstream files
+rather than as new ones.
+
+That reframes "make uprevving easier": the lever is not more cosmo
+modularity, it is giving the non-cosmo features the same
+new-file discipline cosmo already has. See the PR discussion for the
+specific candidates (hook-and-implementation splits for proc.go's
+threads code, and a pclntab writer/reader pair that is already
+lockstep-coupled by CLAUDE.md's own warning).
