@@ -42,6 +42,7 @@ import (
 
 const (
 	fdpassSockEnv     = "RUNTIMEPROBE_FDPASS_SOCK"
+	fdpassCensusEnv   = "RUNTIMEPROBE_FDPASS_CENSUS"
 	fdpassInline      = "fdpass-inline-data"
 	fdpassFileContent = "fdpass-file-content\n"
 	fdpassSockPayload = "fdpass-sock-payload"
@@ -125,12 +126,34 @@ func checkFdpass() {
 	if bad {
 		return
 	}
-	cmd.Env = append(cmd.Env, fdpassSockEnv+"="+spath)
+	census := filepath.Join(dir, "child-fds")
+	cmd.Env = append(cmd.Env, fdpassSockEnv+"="+spath, fdpassCensusEnv+"="+census)
 	var childOut, childErr strings.Builder
 	cmd.Stdout = &childOut
 	cmd.Stderr = &childErr
-	if err := cmd.Start(); err != nil {
-		fail("fdpass", "start self (direct=%v): %v", direct, err)
+
+	// This Start is where macOS CI wedges: the parent parks forever in
+	// forkExec's read of the child status pipe, which requires some
+	// process to still hold that pipe's write end. Report the evidence
+	// before the 90s watchdog panics, since the panic traceback alone
+	// has never been enough to tell the two candidate causes apart.
+	startDone := make(chan struct{})
+	go func() {
+		select {
+		case <-startDone:
+		case <-time.After(25 * time.Second):
+			fmt.Printf("FAIL fdpass: Start wedged; parent fds=[%s]\n", fdCensus())
+			if data, err := os.ReadFile(census); err == nil {
+				fmt.Printf("FAIL fdpass: child DID exec: %s\n", string(data))
+			} else {
+				fmt.Printf("FAIL fdpass: child did NOT reach exec (%v)\n", err)
+			}
+		}
+	}()
+	startErr := cmd.Start()
+	close(startDone)
+	if startErr != nil {
+		fail("fdpass", "start self (direct=%v): %v", direct, startErr)
 		return
 	}
 	childFail := func(f string, args ...any) {
@@ -231,6 +254,12 @@ func checkFdpass() {
 // stderr with a nonzero exit; the parent folds them into its FAIL
 // line.
 func fdpassChild() {
+	// First act after exec: record the pid and every descriptor that
+	// crossed the exec. This child blocks waiting for the parent, so if
+	// the status pipe's write end leaked in here the parent is deadlocked
+	// on its own status read - and this census is what names the culprit.
+	writeFdCensus(os.Getenv(fdpassCensusEnv))
+
 	die := func(f string, args ...any) {
 		fmt.Fprintf(os.Stderr, "fdpass child: %s\n", fmt.Sprintf(f, args...))
 		os.Exit(3)
