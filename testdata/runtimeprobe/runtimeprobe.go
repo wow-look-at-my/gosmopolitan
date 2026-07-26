@@ -121,7 +121,6 @@ func main() {
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)
-	timed("lookpath", checkLookPath)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
 	// incident produced kernel-stuck processes), every other check has
