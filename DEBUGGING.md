@@ -5026,3 +5026,136 @@ retry sites were needed.
   now-mandatory cpuprof check executes the dlsym resolution, the
   layout translation, the arm, and 1.2s of real SIGPROF delivery
   against all three origin binaries.
+
+# Loop-aware inlining (2026-07-26)
+
+## The premise, checked before writing any code
+
+The brief was "Go won't inline a function containing a loop". The
+structural form of that has not been true for several releases, and is not
+true on this tree: `for`, `range` over slice/map/string/chan/int/func,
+labelled `break`/`continue`, `goto` loops, and loops containing `switch` or
+`select` all report `can inline`. What remains structurally rejected is
+`OGO`, `ODEFER`, `OTAILCALL`, and `call to recover`.
+
+What is still true is the cost model, in a way that makes the complaint
+accurate in practice. `hairyVisitor` charges one unit per IR node
+regardless of how often that node runs, and `CanInline` compares the total
+against a flat 80. A loop body is where a function's nodes are, so a
+function that does real work in a loop blows the budget while a
+straight-line function half its size fits. Over std: 10,426 functions
+rejected as "function too complex", median cost 203, p25 129.
+
+## The three mechanisms
+
+`src/cmd/compile/internal/inline/loop.go`. Loop nesting is used as the
+static stand-in for a profile, as GCC (growth divided by a
+frequency-weighted benefit), LLVM (block-frequency-driven thresholds) and
+HotSpot C2 (frequency-scaled limits) all do:
+
+1. Cost, callee side: a node inside a loop is charged
+   `1/inlineLoopCostDivisor` of its usual cost, capped by
+   `inlineLoopCostCredit`. Tracked by a new `OFOR`/`ORANGE` case in
+   `hairyVisitor.doNode` that counts what the loop body spends, and
+   subtracted in `hairyVisitor.cost()`. Folding the credit into `Inl.Cost`
+   means every downstream consumer - call-site limit, big-caller limit,
+   PGO, inlheur - sees the discounted number with no export-format change.
+2. Budget, call-site side: `inlineCostOK` takes a `loopDepth` and grows
+   `maxCost` by `inlineLoopSiteFactor` per level up to
+   `inlineLoopMaxDepth`, ceiling `inlineLoopHotBudget`. The depth comes
+   from `interleaved`'s existing `mark` walk; a newly inlined body is
+   re-marked at the depth of the call site it landed in, so calls pulled
+   into a loop are treated as being in it.
+3. Availability, callee side: `markLoopCallees` runs before the bottom-up
+   `CanInline` pass and records what this package calls from inside a loop;
+   those callees are analyzed with the larger budget, exactly as PGO does
+   for profile-hot functions. Without this, part 2 has nothing to inline -
+   a callee over budget never gets an inline body at all. It is
+   intra-package by construction, since inlinability is decided when the
+   callee's own package is compiled.
+
+Plus a per-caller growth allowance that part 2 draws from: inlining into a
+loop makes more of the caller loop-nested, which admits more inlining, and
+that feedback needs a stop.
+
+## Two runtime annotations, both found by CI, neither a workaround
+
+Both are upstream inconsistencies that only surface once more code is
+inlined. An inlining change is a call-graph change, and the runtime's
+`nowritebarrierrec` checker sees call graphs.
+
+- `runtime/unsafe.go`: `panicunsafestringlen` and
+  `panicunsafestringnilptr` lacked the `//go:yeswritebarrierrec` that
+  their `unsafe.Slice` equivalents twenty lines below already carry.
+  `abi.Name.Name` reads a varint in a loop, so it became inlinable, so
+  `rtype.string` acquired a direct call to `panicunsafestringlen`, so
+  every `nowritebarrierrec` root reaching a fatal-error print (`cgoBindM`
+  -> `fatal` -> ... -> `rtype.string`) was rejected for a panic that
+  cannot occur.
+- `runtime/panic.go`: the `goPanicSlice3*` family and
+  `goPanicSliceConvert` lacked it while the 2-index `goPanicSlice*`
+  helpers have it. Visible only on GOARCH=wasm, where bounds checks call
+  these Go functions rather than assembly `panicBounds*`: the chain was
+  `(*mLockProfile).store` -> `storeSlow` -> `saveBlockEventStack` ->
+  `stkbucket`'s 3-index slice -> `goPanicSlice3AlenU` -> `gopanic`.
+
+Operational lesson for this tree: build `runtime` for js/wasm as well as
+the host before believing an inlining change is clean. wasm reaches panic
+paths no other target does, because its bounds-check helpers are Go.
+
+## Two more CI rounds
+
+- `loopSiteMaxCost` applied its ceiling as a plain `min`, so a ceiling
+  below the call site's own limit would have lowered it. Unreachable with
+  the shipped constants; fixed anyway rather than left depending on them.
+- `inlheur`'s `returns2.go` golden scores moved by 7, because its
+  `newBar`/`meaning` helpers contain loops and a callsite score is the
+  callee's cost plus adjustments. Only numbers moved - no property or
+  adjustment classification changed, and the other five props testcases
+  came back byte-identical. Regenerated with `-update-expected`.
+
+## Tuning: what the measurements changed (2026-07-26)
+
+All three mechanisms were implemented, then measured, and the measurement
+moved two of them and killed the third's default.
+
+The methodology mattered more than the compiler did. Configurations
+benchmarked one after another are confounded by machine drift: running the
+BASELINE against ITSELF, second, produced +1.3% median across 67
+benchmarks, 37 of them "slower". Three rounds of numbers - a -1.5% "win",
+then a +6.1% "loss" - were artifacts of run order and were thrown away.
+Only round-robin interleaving, where every configuration is measured in
+every round, gives differences that survive. The same trap caught the
+macro benchmark first, which is why it was interleaved from the start and
+why it is the one that always said "no difference".
+
+Interleaved results, nine whole-task workloads (1.8MB JSON encode/decode,
+deflate/inflate 100KB, regexp medium+hard, sort ints/strings, go/parser,
+text/template), 8 rounds:
+
+| config | median | faster/slower >1% | text |
+|---|---|---|---|
+| call site + availability | -1.1% | 6 / 1 | +5.00% |
+| callee cost discount | +1.1% | 3 / 5 | +1.76% |
+| all three | -1.6% | 5 / 2 | +7.32% |
+
+And on a benchmark built to be the complaint itself - a hot loop calling
+helpers of cost 90/84/125 that the flat budget rejects and this change
+accepts at 49/43/72 - 10 rounds interleaved: call site -2.3% median, best
+-22.5% (trim), -4.8% on a mixed pipeline; discount -2.3% median.
+
+Reading: loop nesting is worth acting on at the CALL SITE, not at the
+callee. The discount makes a loop function cheap at every call site
+including the cold ones, so its growth lands everywhere while its benefit
+only materializes where the call is hot - it helps the targeted shape as
+much as the call-site path does, and costs 1.1% everywhere else.
+Consequence: `inlineLoopCostDivisor` defaults to 0 (off), reachable with
+`-d=loopinlinediv=2` for a workload built out of small hot kernels.
+
+Compiling std is unchanged: 17.5-18.1s whichever compiler does it, with
+the between-config spread smaller than the within-config spread.
+
+Effect on std with the shipped default: 1,489 more functions inlinable
+(15,888 -> 17,377), 4,967 more call sites inlined (70,146 -> 75,113).
+The inlheur props goldens are untouched, because with the discount off
+the measured costs are exactly upstream's.

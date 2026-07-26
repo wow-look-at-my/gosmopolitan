@@ -19,9 +19,10 @@ import (
 const loopInlineSrc = `
 package p
 
-// mixLoop's cost (109) is almost entirely inside a loop, which is charged
-// at a discount, bringing it to 59: inlinable with loop-aware inlining,
-// too complex without it.
+// mixLoop's cost (109) is almost entirely inside a loop. The loop cost
+// discount would bring it to 59 - but that discount is off by default
+// (it measured as a net loss; see loop.go), so mixLoop inlines only
+// under -d=loopinlinediv=2.
 func mixLoop(xs []uint32, k uint32) uint32 {
 	h := k
 	for i, x := range xs {
@@ -45,9 +46,9 @@ func mixLoop(xs []uint32, k uint32) uint32 {
 	return h
 }
 
-// mixFlat is exactly mixLoop's arithmetic with the loop peeled away, and
-// at cost 99 it stays too complex either way. It is what keeps this test
-// honest: had the budget simply been raised, mixFlat would inline too.
+// mixFlat is exactly mixLoop's arithmetic with the loop peeled away, at
+// cost 99, and never inlines. It is what keeps the discount honest: were
+// the budget simply raised, mixFlat would inline too.
 func mixFlat(x, i, k uint32) uint32 {
 	h := k
 	h ^= x * 2654435761
@@ -69,9 +70,10 @@ func mixFlat(x, i, k uint32) uint32 {
 	return h
 }
 
-// bigLoop costs 167, or 88 once discounted - inlinable in principle, but
-// more than an ordinary call site will pay. Only a call site inside a loop
-// accepts it.
+// bigLoop costs 153: over the flat 80-node budget, so the unmodified
+// compiler inlines it nowhere, and under the 160 a call site one loop
+// deep will pay. It is the default mechanism's demonstration - the same
+// callee, accepted at the hot call site and refused at the cold one.
 func bigLoop(xs []uint32, k uint32) uint32 {
 	h := k
 	for i, x := range xs {
@@ -98,15 +100,13 @@ func bigLoop(xs []uint32, k uint32) uint32 {
 		h *= 2654435761
 		h -= x << 2
 		h ^= uint32(i) * 3266489917
-		h = h<<17 | h>>15
-		h += x | k
 	}
 	return h
 }
 
 var Sink uint32
 
-// CallCold's calls all run once: it gets mixLoop but must not get bigLoop.
+// CallCold's calls each run once, so it must not get bigLoop.
 func CallCold(xs []uint32) {
 	Sink = mixLoop(xs, 1)
 	Sink = mixFlat(2, 3, 4)
@@ -148,71 +148,60 @@ func TestLoopInlining(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
 
+	// The shipped default: loop nesting is acted on at the call site.
 	on := buildLoopInlineTest(t, "-m=2")
-	off := buildLoopInlineTest(t, "-m=2 -d=loopinline=0")
-
-	has := func(out, substr string) bool { return strings.Contains(out, substr) }
 
 	for _, tc := range []struct {
-		what    string
-		diag    string
-		wantOn  bool
-		wantOff bool
-		whyOn   string
-		whyOff  string
+		diag string
+		want bool
+		why  string
 	}{
-		{
-			what:    "a loop-dominated function",
-			diag:    "can inline mixLoop",
-			wantOn:  true,
-			wantOff: false,
-			whyOn:   "loop-nested cost is charged at a discount, which should bring mixLoop under budget",
-			whyOff:  "without the discount mixLoop is over the flat budget",
-		},
-		{
-			what:    "the same arithmetic without a loop",
-			diag:    "can inline mixFlat",
-			wantOn:  false,
-			wantOff: false,
-			whyOn:   "the discount must apply to loop-nested code only, not raise the budget for everything",
-			whyOff:  "mixFlat is over the flat budget",
-		},
-		{
-			what:    "an expensive callee at a call site inside a loop",
-			diag:    "inlining call to bigLoop",
-			wantOn:  true,
-			wantOff: false,
-			whyOn:   "a call site nested in a loop should accept a more expensive callee",
-			whyOff:  "without loop-aware inlining no call site accepts it",
-		},
+		{"can inline bigLoop", true,
+			"a function this package calls from inside a loop is analyzed with the larger budget"},
+		{"inlining call to bigLoop", true,
+			"the call site inside CallHot's loop should accept a callee an ordinary site will not"},
+		{"can inline mixLoop", false,
+			"the callee loop-cost discount is off by default; it measured as a net loss"},
+		{"can inline mixFlat", false,
+			"mixFlat is over the flat budget and has no loop to discount"},
 	} {
-		for _, run := range []struct {
-			name string
-			out  string
-			want bool
-			why  string
-		}{
-			{"loopinline=1", on, tc.wantOn, tc.whyOn},
-			{"loopinline=0", off, tc.wantOff, tc.whyOff},
-		} {
-			if got := has(run.out, tc.diag); got != run.want {
-				t.Errorf("%s: %s: %q found = %v, want %v (%s)\ncompiler output:\n%s",
-					run.name, tc.what, tc.diag, got, run.want, run.why, run.out)
-			}
+		if got := strings.Contains(on, tc.diag); got != tc.want {
+			t.Errorf("defaults: %q found = %v, want %v (%s)\ncompiler output:\n%s",
+				tc.diag, got, tc.want, tc.why, on)
 		}
 	}
 
 	// bigLoop is affordable in CallHot's loop but not on CallCold's
 	// straight-line path, so exactly one of its two call sites inlines.
+	// This is the whole point: the same callee, judged by where it is
+	// called from rather than by what it costs alone.
 	if n := strings.Count(on, "inlining call to bigLoop"); n != 1 {
-		t.Errorf("loopinline=1: %d call sites inlined bigLoop, want 1 (the one inside a loop)\n%s", n, on)
+		t.Errorf("%d call sites inlined bigLoop, want 1 (the one inside a loop)\n%s", n, on)
 	}
 }
 
-// TestLoopInliningDisabledIsIdentical checks that -d=loopinline=0 restores
-// the previous inlining decisions exactly, so the mechanism can be turned
-// off to bisect a regression.
-func TestLoopInliningDisabledIsIdentical(t *testing.T) {
+// TestLoopInliningDiscount covers the callee-side cost discount, which is
+// implemented and tested but off by default: measured on its own it cost
+// +1.1% median across nine whole-task workloads (see loop.go).
+func TestLoopInliningDiscount(t *testing.T) {
+	testenv.MustHaveGoRun(t)
+	t.Parallel()
+
+	out := buildLoopInlineTest(t, "-m=2 -d=loopinlinediv=2")
+	if !strings.Contains(out, "can inline mixLoop") {
+		t.Errorf("with the discount on, mixLoop (cost 109, nearly all of it loop-nested) should inline:\n%s", out)
+	}
+	// Same arithmetic, no loop: the discount must not turn into a
+	// general budget increase.
+	if strings.Contains(out, "can inline mixFlat") {
+		t.Errorf("with the discount on, mixFlat (cost 99, no loop) must still be too complex:\n%s", out)
+	}
+}
+
+// TestLoopInliningDisabled checks that -d=loopinline=0 restores the
+// previous inlining decisions exactly, so the mechanism can be turned off
+// to bisect a regression.
+func TestLoopInliningDisabled(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
 
@@ -225,13 +214,19 @@ func TestLoopInliningDisabledIsIdentical(t *testing.T) {
 			t.Errorf("with loopinline=0, unexpectedly found %q:\n%s", unwanted, off)
 		}
 	}
-	if !strings.Contains(off, "cannot inline mixLoop: function too complex") {
-		t.Errorf("with loopinline=0, mixLoop should be reported too complex:\n%s", off)
+	if !strings.Contains(off, "cannot inline bigLoop: function too complex") {
+		t.Errorf("with loopinline=0, bigLoop should be reported too complex:\n%s", off)
+	}
+	// Even the discount flag must not revive it.
+	both := buildLoopInlineTest(t, "-m=2 -d=loopinline=0,loopinlinediv=2")
+	if strings.Contains(both, "can inline mixLoop") {
+		t.Errorf("loopinline=0 must override the per-mechanism flags:\n%s", both)
 	}
 }
 
 // TestLoopInliningTunables checks that each knob is wired up: turning any
-// one of them down individually must lose the inline it is responsible for.
+// one of them down individually must lose exactly the inline it is
+// responsible for.
 func TestLoopInliningTunables(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
@@ -242,13 +237,16 @@ func TestLoopInliningTunables(t *testing.T) {
 		want    bool
 		comment string
 	}{
-		{"", "can inline mixLoop", true, "defaults"},
-		{" -d=loopinlinediv=-1", "can inline mixLoop", false, "no discount, no rescue"},
-		{" -d=loopinlinecredit=1", "can inline mixLoop", false, "credit capped to nothing"},
 		{"", "inlining call to bigLoop", true, "defaults"},
-		{" -d=loopinlinefactor=1", "inlining call to bigLoop", false, "call site budget does not grow"},
-		{" -d=loopinlinegrowth=1", "inlining call to bigLoop", false, "caller growth allowance exhausted"},
-		{" -d=loopinlinebudget=80", "inlining call to bigLoop", false, "callee never gets an inline body"},
+		{" -d=loopinlinefactor=1", "inlining call to bigLoop", false,
+			"call site budget does not grow with loop depth"},
+		{" -d=loopinlinegrowth=1", "inlining call to bigLoop", false,
+			"caller growth allowance exhausted"},
+		{" -d=loopinlinebudget=80", "inlining call to bigLoop", false,
+			"callee never gets an inline body"},
+		{" -d=loopinlinediv=2", "can inline mixLoop", true, "discount enabled"},
+		{" -d=loopinlinediv=2,loopinlinecredit=1", "can inline mixLoop", false,
+			"discount capped to nothing"},
 	} {
 		out := buildLoopInlineTest(t, "-m=2"+tc.flags)
 		if got := strings.Contains(out, tc.diag); got != tc.want {

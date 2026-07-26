@@ -25,13 +25,30 @@ import (
 // (predict.cc assumes a loop iterates several times), LLVM raises the
 // threshold for call sites its block-frequency estimate says are hot, and
 // HotSpot C2 scales its inlining limits by call-site frequency. This file
-// gives cmd/compile the same static estimate, in three parts:
+// gives cmd/compile the same static estimate, in three parts.
+//
+// What the measurements said, because it decided which parts ship on:
+// loop nesting is worth acting on at the CALL SITE and not at the callee.
+// Boosting the budget where the call runs many times (parts 2 and 3) is
+// -1.1% median across nine whole-task workloads, 6 faster and 1 slower.
+// Discounting a callee for containing a loop (part 1) is +1.1% median, 5
+// of 9 slower, because it makes that callee cheap at cold call sites too
+// and the growth lands where nothing is gained. Part 1 therefore defaults
+// off. On code shaped like the original complaint - a hot loop calling
+// helpers the flat budget rejects - the shipped default is -2.3% median
+// with individual workloads up to -22%. All figures from runs that
+// interleave configurations round-robin: measured sequentially, this box
+// drifts +1.3% between the baseline and ITSELF, which is larger than
+// every effect here.
+//
+// The three parts:
 //
 //  1. Cost, callee side (loopCost/loopDiscount below, applied by
 //     hairyVisitor): nodes nested in a loop are charged a fraction of the
 //     usual cost, bounded by inlineLoopCostCredit. A function whose body
 //     is a loop is no longer disqualified just for being one, but a
-//     function with an enormous loop body still is.
+//     function with an enormous loop body still is. OFF by default;
+//     -d=loopinlinediv=2 enables it. See inlineLoopCostDivisor.
 //
 //  2. Budget, call-site side (loopSiteMaxCost): a call nested in a loop
 //     accepts a more expensive callee, growing with loop depth.
@@ -57,7 +74,21 @@ const (
 	// loop are charged against the inlining budget: a loop-nested node
 	// costs 1/inlineLoopCostDivisor of what the same node costs outside
 	// a loop.
-	inlineLoopCostDivisor = 2
+	//
+	// DEFAULT OFF (0), on the measurements below. This is the mechanism
+	// that most directly answers "Go won't inline a function containing
+	// a loop", and measured on its own it is a net loss: it makes a loop
+	// function cheap at EVERY call site, including the cold ones, so the
+	// code growth lands everywhere while the benefit only materializes
+	// where the call is hot. Over nine whole-task workloads (1.8MB JSON
+	// encode/decode, deflate/inflate, regexp, sort, go/parser,
+	// text/template), interleaved so machine drift cancels: +1.1% median,
+	// 3 faster and 5 slower, for +1.76% text. The call-site mechanism
+	// below buys -1.1% median (6 faster, 1 slower) instead.
+	//
+	// Turn it on with -d=loopinlinediv=2 for a workload built out of
+	// small hot kernels, where it measured well.
+	inlineLoopCostDivisor = 0
 
 	// inlineLoopCostCredit caps the total discount a single function may
 	// receive from inlineLoopCostDivisor, so that a function consisting
@@ -117,7 +148,10 @@ func loopInlineEnabled() bool {
 // so that it can measure a loop-heavy function far enough to find out
 // whether the loop discount rescues it.
 func loopScanCredit() int32 {
-	if !loopInlineEnabled() {
+	if !loopInlineEnabled() || loopCostDivisor() <= 0 {
+		// No discount to earn, so there is nothing to keep measuring
+		// for: give up on an over-budget function exactly where the
+		// unmodified compiler would.
 		return 0
 	}
 	return loopCostCredit()
