@@ -2244,6 +2244,13 @@ func usesLibcall() bool {
 	switch GOOS {
 	case "aix", "darwin", "illumos", "ios", "openbsd", "solaris", "windows":
 		return true
+	case "cosmo":
+		// Only XNU hosts record m.libcall* (the pthread parking
+		// wrappers, os_cosmo_arm64_sema.go), so SIGPROF samples
+		// landing inside pthread_cond_wait/mutex unwind from the Go
+		// call site like upstream darwin. On other hosts the fields
+		// stay zero and sigprof's libcall branch self-disables.
+		return true
 	}
 	return false
 }

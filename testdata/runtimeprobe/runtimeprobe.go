@@ -4,17 +4,16 @@
 // CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
-// sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process (both
-// host-skipped on macOS, which lacks the dispatch),
-// readv/writev + net.Buffers (all hosts),
+// sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process,
+// readv/writev + net.Buffers,
 // os.Executable, argv/env, working-directory
 // syscalls, exec.LookPath/exec.Command name resolution over the
 // host-format PATH (';'-separated drive-letter entries with PATHEXT
 // suffix probing on NT hosts), and - since the wave-8 signal work -
 // SIGSEGV recovery
 // (sigpanic), os/signal delivery, async preemption, wait-status
-// signal decoding, CPU profiling (host-skipped on macOS, which
-// lacks SIGPROF delivery), and process-group signaling (Setpgid
+// signal decoding, CPU profiling (real samples required on all
+// hosts), and process-group signaling (Setpgid
 // spawn + kill(-pgid), the console-ctrl chain on Windows hosts).
 //
 // Output contract (consumed by testdata/ape/apetest/runtimeprobe_test.go):

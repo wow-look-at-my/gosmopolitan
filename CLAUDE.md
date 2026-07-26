@@ -250,20 +250,37 @@ window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
 documented-not-asserted) - see DEBUGGING.md's NT wave sections for
 the ladder, the forensics, and the wave-4 backlog.
 
-macOS ARM64 status (2026-07-02, wave 9): file I/O (create/read/write/stat/
+macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/
 rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
 via a getdents64 emulation over Apple's __getdirentries64),
 getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
 After, context timeouts), TCP/UDP loopback sockets with deadlines,
 unix-domain stream sockets (pathname addresses; the abstract namespace
-is Linux-only and refused EINVAL), readv/writev (net.Buffers), os/exec
+is Linux-only and refused EINVAL), readv/writev (net.Buffers),
+sendmsg/recvmsg with SCM_RIGHTS fd passing (2026-07-21:
+msghdr/cmsghdr layouts differ - Linux 16-byte/8-aligned cmsg headers
+vs Apple 12-byte/4-aligned - so the fixed-size msghdr re-shaping
+lives in the nosplit dispatch layer while package syscall's darwin
+branch repacks control buffers as ordinary Go; ReadMsgUnix/
+WriteMsgUnix work, MSG_CMSG_CLOEXEC is emulated via fcntl,
+truncation-dropped fds are closed never leaked, and the runtimeprobe
+sendmsg/fdpass checks are mandatory on macOS - see DEBUGGING.md
+2026-07-21), os/exec
 (fork, pipes, execve, wait4 with Linux-numbered wait statuses),
 os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
 by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
 os/signal Notify delivery, async preemption (SIGURG - tight loops no
 longer hang GC/STW), and kill/raise, with full Linux<->Apple
 signal-number and sigset translation at every darwin boundary (tables
-in src/runtime/sigxlat_cosmo.go). SIGPIPE additionally stays suppressed
+in src/runtime/sigxlat_cosmo.go). SIGPROF CPU profiling works too
+(2026-07-21): runtime/pprof and -test.cpuprofile deliver real samples
+on macOS hosts - setitimer(ITIMER_PROF) via dlsym'd Apple libc
+setitimer with the Linux<->Apple itimerval layout translated at the
+boundary, SIGPROF riding the existing wave-9 signal machinery,
+upstream-darwin attribution semantics; the pthread parking wrappers
+record m.libcall* so samples inside pthread_cond_wait attribute to
+the Go call site, and the runtimeprobe cpuprof check is mandatory on
+macOS. SIGPIPE additionally stays suppressed
 per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics. As of
 wave 9 the darwin netpoller is a kqueue port of upstream
 netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream
@@ -272,9 +289,11 @@ the poll(2)+self-pipe poller and dispatch-semaphore parking after the
 waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
 counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
 returning from a nonblocking read(2) on the poller's wakeup pipe.
-Still missing on macOS hosts: sendmsg/recvmsg (msghdr/cmsghdr layouts
-differ; blocks fd-passing and ReadMsg*) and setitimer-based SIGPROF
-profiling. See DEBUGGING.md for the full list.
+The wave-9 "still missing on macOS hosts" backlog is now closed
+(sendmsg/recvmsg and SIGPROF profiling were its last entries); the
+remaining known macOS gaps are AllThreadsSyscall (Linux-only
+rt-signal machinery, unused by the stdlib on cosmo) and the
+Intel-mac runtime bring-up below - see DEBUGGING.md.
 
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
@@ -387,7 +406,12 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID unit tests. Every build leg additionally
+strip/GOCOSMODEBUG/tool-ID unit tests plus, via the misc/cosmo
+wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
+tests (darwin sendmsg/recvmsg cmsg repack, signal translation
+tables, epoll layout) and the runtime-package cosmo tests (Apple
+itimerval ABI pins + timeval translation behind the darwin SIGPROF
+setitimer dispatch, signal translation tables). Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
