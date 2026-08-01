@@ -37,6 +37,18 @@ const (
 	apeHeaderSize   = 65536
 	apeScriptOffset = 0x800
 
+	// apeMachoOffset is where the Mach-O header is parked for the dd that
+	// copies it over the start of the file on Intel macOS. It also caps the
+	// dispatch script, which runs from apeScriptOffset up to here.
+	//
+	// It was 0x1000, and the script had ONE byte of room left -- a 7-byte
+	// edit to a path in the script was what discovered that, by failing the
+	// link. Nothing needs the header this early (it is inert bytes inside a
+	// heredoc until dd moves it, and the loader source it must stay clear of
+	// sits at 0x8000), so the ceiling is 0x2000 and the script has room to
+	// change. TestAPEScriptHasHeadroom keeps it that way.
+	apeMachoOffset = 0x2000
+
 	// apeMagicMZ is the canonical APE magic (ape/specification.md): a DOS
 	// MZ signature that is also a shell assignment opening a quoted string,
 	// which swallows the binary structures that follow.
@@ -338,7 +350,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		machoHeader = makeMachoHeader(amd.elf, amd.offset, amd.entry())
 		// Place Mach-O header at a specific location in the APE header.
 		// It will be copied backward by the dd command.
-		machoOffset = 0x1000 // 4KB into the header
+		machoOffset = apeMachoOffset
 		machoSize = len(machoHeader)
 	}
 
@@ -450,10 +462,19 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("fi\n")
 
 	// --- ARM64 hosts ---
+	//
+	// The loader cache path carries a "-gosmo<N>" suffix because the embedded
+	// ape-m1.c is no longer upstream's: it also scans a "#!"-headed file for
+	// the printf'd boot headers (-apeshebang; upstream skips straight to
+	// TryElf and dies "didn't embed ELF magic"). The compiled loader is shared
+	// by every APE on the machine, so keeping upstream's .ape-1.10 name would
+	// let a loader compiled from unpatched source -- left there by any other
+	// APE -- be reused, and shebang binaries would fail on that machine only.
+	// Bump the suffix whenever the embedded loader source changes.
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString(`  o="$(command -v "$0")"
-  t="${TMPDIR:-${HOME:-.}}/.ape-1.10"
+  t="${TMPDIR:-${HOME:-.}}/.ape-1.10-gosmo1"
   if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
     # Don't use existing loader if it might be ELF (from Linux)
@@ -810,7 +831,7 @@ func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 // makeMachoHeader creates the Mach-O executable header for macOS x86-64.
 //
 // On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
-// offset 0x1000 in the APE header) over the start of the file, turning the
+// apeMachoOffset in the APE header) over the start of the file, turning the
 // whole APE into a Mach-O executable whose load commands point straight at
 // the embedded amd64 ELF image. The XNU kernel loads it directly - there is
 // no dyld involved (LC_UNIXTHREAD, not LC_MAIN) - so the load commands must

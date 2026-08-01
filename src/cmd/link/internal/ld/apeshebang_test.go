@@ -6,9 +6,12 @@ package ld
 
 import (
 	"bytes"
+	"compress/gzip"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"testing"
 )
@@ -228,6 +231,52 @@ func TestAPEShebangDoesNotDelegateToWindows(t *testing.T) {
 	}
 }
 
+// macOS ARM64 does not assimilate: it compiles the embedded ape-m1.c and
+// execs the loader, which finds the real ELF header by scanning the file for
+// printf statements -- but ONLY for a file starting with one of the spec's
+// three magics. A shebang APE skipped that scan entirely and died with
+// "didn't embed ELF magic" (caught by CI on macos-latest, the one host this
+// cannot be checked on locally), so the fork's copy of the loader takes a
+// "#!" heading as well.
+//
+// This guards the vendored source, whose real risk is a re-vendor from
+// upstream silently dropping the change: the loader itself only compiles
+// under __APPLE__ && __aarch64__, so nothing else here can even build it.
+func TestEmbeddedAPELoaderScansShebangHeadedFiles(t *testing.T) {
+	zr, err := gzip.NewReader(bytes.NewReader(apeM1SourceGz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(src, []byte(`ebuf->buf[0] == '#' && ebuf->buf[1] == '!'`)) {
+		t.Error("the embedded APE loader does not scan shebang-headed files; every -apeshebang binary will fail on macOS ARM64 with \"didn't embed ELF magic\"")
+	}
+	// The spec magics must survive alongside it.
+	for _, magic := range []string{`MZqFpD='`, `jartsr='`, `APEDBG='`} {
+		if !bytes.Contains(src, []byte(magic)) {
+			t.Errorf("the embedded APE loader no longer recognizes %q", magic)
+		}
+	}
+}
+
+// The compiled loader is cached under one name for every APE on the machine,
+// so a fork loader must not answer to upstream's. Otherwise a loader compiled
+// from unpatched source -- left in TMPDIR by any other APE -- is reused and
+// shebang binaries fail on that machine alone, which is the worst shape of
+// bug to chase.
+func TestAPELoaderCacheNameIsForkSpecific(t *testing.T) {
+	_, header := apeHeaderBothWays(t)
+
+	re := regexp.MustCompile(`\.ape-[0-9.]+-gosmo[0-9]+"`)
+	if !re.Match(header[:8192]) {
+		t.Error("the loader cache path is not fork-specific; a stale upstream-compiled loader would be reused")
+	}
+}
+
 // The fat merge reads thin APEs back. It recognized them by the MZ magic
 // alone, so a GOCOSMOSHEBANG=1 fat build failed at the merge with a
 // "not an ELF" error on its own linker's output.
@@ -274,5 +323,51 @@ func TestAPEShebangThinInputIsIngestedByTheMerge(t *testing.T) {
 	}
 	if got := string(fat[:len(apeMagicShebang)]); got != apeMagicShebang {
 		t.Errorf("merged fat APE heading = %q, want %q", got, apeMagicShebang)
+	}
+}
+
+// The dispatch script runs from apeScriptOffset up to the Mach-O header, and
+// overrunning that is a hard link failure. It had exactly one byte spare when
+// the shebang heading landed -- a 7-byte change to a path in the script was
+// what found out, by breaking the build. The ceiling moved to apeMachoOffset;
+// this keeps a real margin so the next edit gets a warning here instead of a
+// broken link, and so nobody has to discover the budget the hard way again.
+func TestAPEScriptHasHeadroom(t *testing.T) {
+	const minFree = 512
+
+	for _, tt := range []struct {
+		name    string
+		shebang bool
+	}{{"default", false}, {"shebang", true}} {
+		t.Run(tt.name, func(t *testing.T) {
+			setAPEShebang(t, tt.shebang)
+			amdElf, armElf := buildTestELFPair(t)
+			amd, err := payloadFromELF(amdElf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			arm, err := payloadFromELF(armElf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payloads := []*apePayload{amd, arm}
+			layoutAPE(payloads)
+			header := makeAPEHeaderForPayloads(payloads)
+
+			// The script ends at its final "exit 1"; everything after is
+			// newline padding up to the Mach-O header.
+			window := header[apeScriptOffset:apeMachoOffset]
+			end := bytes.LastIndex(window, []byte("\nexit 1\n"))
+			if end < 0 {
+				t.Fatal("no script terminator inside the script region")
+			}
+			used := end + len("\nexit 1\n")
+			free := len(window) - used
+			t.Logf("script uses %d of %d bytes (%d free)", used, len(window), free)
+			if free < minFree {
+				t.Errorf("only %d bytes left in the script region (%d used of %d); raise apeMachoOffset rather than shrinking the script into a corner",
+					free, used, len(window))
+			}
+		})
 	}
 }

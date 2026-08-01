@@ -5606,3 +5606,48 @@ built binary: spawned by path with no shell on every origin/host pair CI
 covers, assimilated after the first run, and -- the negative control that
 gives the mode its reason -- the default heading still failing with "exec
 format error" when spawned the same way.
+
+**macOS ARM64 needed the loader patched too (found by CI, not locally).** That
+host does not assimilate: the prologue compiles the embedded `ape-m1.c` and
+execs the loader, which finds the real ELF header by scanning the file for
+printf statements. Upstream's loader only scans a file starting with one of
+the spec's three magics, so a shebang APE skipped the scan entirely and died:
+
+    ape error: .../fizzbuzz-shebang.com: didn't embed ELF magic
+
+The fork's copy of the loader takes a `#!` heading as well (one added
+condition in the same dispatch; a shebang file that is NOT an APE still finds
+no printf and falls through to TryElf exactly as before). Two consequences:
+the compiled loader is cached under one name for every APE on the machine, so
+the cache path gains a `-gosmo<N>` suffix -- otherwise a loader compiled from
+unpatched source, left in TMPDIR by any other APE, is reused and shebang
+binaries fail on that machine alone. And the vendored source's real risk is a
+re-vendor from upstream silently dropping the change, so a unit test asserts
+the embedded `.gz` still carries it (the loader itself compiles only under
+`__APPLE__ && __aarch64__`, so nothing else in the tree can even build it).
+
+**The script region was one byte from full.** Bumping the loader cache path by
+7 characters broke the link outright:
+
+    APE shell script (2054 bytes at 0x800) overlaps Mach-O header at 0x1000
+
+The dispatch script runs from `apeScriptOffset` to wherever the Mach-O header
+is parked, which was 0x1000 -- 2048 bytes, of which the default script used
+2047. Nothing needs that header early (it is inert until dd moves it, and the
+loader source it must stay clear of sits at 0x8000), so `apeMachoOffset` is
+0x2000 and the region is 6144 bytes with ~4KB free. `TestAPEScriptHasHeadroom`
+now fails while 512 bytes remain, so the next edit gets a warning instead of a
+broken link. The tests that hardcoded 0x1000 as "where the script region ends"
+use the constant now.
+
+**dats suite.** `dats/cosmo-shebang.dats` is the black-box middle between the
+linker's byte-level unit tests and apetest's Go driver: `go build` as a user
+types it, then the artifact spawned the way something actually spawns it.
+python3 is the spawner on purpose -- `/bin/sh` and `execvp(3)` (hence `env`)
+FALL BACK to running an ENOEXEC file as a shell script, so no shell-based
+command can show the failure at all. That fallback is exactly why the problem
+stays invisible until a hook runner or language-server client spawns the
+binary directly, and why it looks like a bug in the client when it does. The
+suite pins both sides: execve runs the shebang APE, refuses the MZ one, and a
+shell runs the MZ one fine. cosmo-ci runs it on the linux and macOS legs
+(dats installs as one static binary from buildhost, public, no token).

@@ -166,6 +166,23 @@ jobs:
             fizzbuzz-shebang.com
           retention-days: 1
 
+      - name: CLI contract tests (dats)
+        # Black-box tests of the command line itself: `go build` as a user
+        # types it, then the artifact spawned by execve. Unix only -- the
+        # shebang heading has no Windows story by construction, and the
+        # suite's spawner is python3.
+        #
+        # dats is a single static binary from buildhost (public, no token).
+        # buildhost folds uname spellings to its own os/arch names, so the
+        # raw uname output is a valid query.
+        if: runner.os != 'Windows'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$(uname -s)&arch=$(uname -m)"
+          chmod +x /tmp/dats
+          /tmp/dats test dats
+
       - name: APE merge unit tests (linker + go command)
         # Covers the -apefat/-apestrip/-apedbg merge logic and cmd/go's
         # GOCOSMOSTRIP / -ldflags strip detection. One leg is enough.

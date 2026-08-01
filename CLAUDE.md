@@ -60,6 +60,11 @@ go test ./cmd/compile/...
 go test std
 ```
 
+`dats/cosmo-shebang.dats` is a black-box CLI-contract suite (the org's
+[dats](https://github.com/wow-look-at-my/dats) runner, one static binary from
+buildhost): `go build` as a user types it, then the artifact spawned by
+execve. Run it with `dats test dats` from the repo root after a `make.bash`.
+
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
 ## Building Cosmopolitan Binaries
