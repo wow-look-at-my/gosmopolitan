@@ -101,14 +101,15 @@ jobs:
           retention-days: 1
 
       # dats is a single static binary from buildhost (public, no token).
-      # buildhost folds uname spellings to its own os/arch names, so the raw
-      # uname output is a valid query.
+      # RUNNER_OS/RUNNER_ARCH, not uname: buildhost folds GitHub's spellings
+      # natively, while git-bash on the Windows runner answers `uname -s` with
+      # MINGW64_NT-10.0-20348, which is not a platform buildhost knows.
       - name: Install dats
         if: runner.os != 'Windows'
         timeout-minutes: 3
         shell: bash
         run: |
-          curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$(uname -s)&arch=$(uname -m)"
+          curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$RUNNER_OS&arch=$RUNNER_ARCH"
           chmod +x /tmp/dats
 
       # Black-box tests of the command line itself: `go build` and `go run` as
@@ -359,9 +360,13 @@ jobs:
           APETEST_WINDOWS_BINDIR: ${{ github.workspace }}/binaries/ape-binary-windows-latest
           APETEST_DEADLINE: ${{ matrix.apetest-deadline }}
         run: |
-          curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$(uname -s)&arch=$(uname -m)"
-          chmod +x /tmp/dats
-          /tmp/dats test dats/apetest.dats
+          # The Windows runner needs the .exe name to exec it from git-bash,
+          # and RUNNER_OS rather than uname (which answers MINGW64_NT-… there).
+          dats=/tmp/dats
+          [ "$RUNNER_OS" = Windows ] && dats=/tmp/dats.exe
+          curl -fsSL -o "$dats" "https://dl.pazer.build/dats?os=$RUNNER_OS&arch=$RUNNER_ARCH"
+          chmod +x "$dats"
+          "$dats" test dats/apetest.dats
 
       # The captured log is uploaded immediately: job-level logs only reach the
       # API when the whole job ends, which a wedged later step (or a runner
