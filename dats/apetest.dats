@@ -20,6 +20,13 @@
 # tree, plus APETEST_DEADLINE. A missing directory fails the test rather than
 # skipping it: an origin silently not exercised is the failure this job exists
 # to prevent.
+#
+# Note what these cases do NOT assert directly: that the kernel will load the
+# binary. Every invocation here is `go test`, and the suite it drives reaches
+# the APE through /bin/sh. The execve contract itself -- refused as shipped,
+# accepted once the prologue has assimilated the file, or routed through a
+# compiled loader on arm64 macOS -- is apetest's own execve_test.go, which
+# these three cases pick up per build origin like the rest of the suite.
 
 sandbox: false
 

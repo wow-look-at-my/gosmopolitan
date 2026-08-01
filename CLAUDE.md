@@ -533,6 +533,17 @@ runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
 
+`execve_test.go` covers how the kernel comes to load the binary at all
+— which every other test in the suite skips past by invoking through
+`/bin/sh`. A shipped APE is `MZ`-headed, so `execve(2)` refuses it, and
+the prologue closes that gap two different ways depending on platform:
+the header is rewritten in place on amd64 and on arm64 Linux, while
+arm64 macOS compiles a `$TMPDIR/.ape-<ver>` loader and leaves the file
+untouched. Both branches are asserted, and whichever does not apply
+skips naming the other. Go's `os/exec` is the probe because it is a raw
+execve — a POSIX shell and glibc's `execvp` both retry an ENOEXEC file
+as a shell script, so neither can tell you the kernel refused it.
+
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
 builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
