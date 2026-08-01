@@ -5651,3 +5651,11 @@ binary directly, and why it looks like a bug in the client when it does. The
 suite pins both sides: execve runs the shebang APE, refuses the MZ one, and a
 shell runs the MZ one fine. cosmo-ci runs it on the linux and macOS legs
 (dats installs as one static binary from buildhost, public, no token).
+
+One case had to be weakened to be true on both: a first run leaves an ELF head
+on Linux but NOT on macOS ARM64, which boots through the compiled loader and
+stays a script. The suite asserts the property that holds either way -- a
+second, direct spawn still works -- and the ELF-magic assertion stays in
+apetest, which branches on GOOS. macOS also confirmed the loader patch on real
+hardware: with it, `execve spawns a shebang APE directly` passes on Apple
+Silicon.

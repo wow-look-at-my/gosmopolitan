@@ -78,12 +78,15 @@ tests:
       stdout:
         - "fizzbuzz"
 
-  # The shell involvement is once, not forever: the prologue writes the real
-  # ELF header over the file's own head as it boots.
-  - desc: a shebang APE assimilates to native ELF on its first run
-    cmd: 'cp {shared.shebang.com} {outputs.app} && chmod +x {outputs.app} && {outputs.app} 1 2 >/dev/null && head -c 4 {outputs.app} | od -An -c | tr -d " "'
+  # Running it changes the file -- on Linux the prologue writes the real ELF
+  # header over its own head -- so the property that has to hold is that a
+  # second, direct spawn still works. What the head becomes is per-host (macOS
+  # ARM64 boots through the compiled loader and stays a script), so the
+  # ELF-magic assertion lives in apetest, which can branch on GOOS.
+  - desc: a shebang APE still spawns after its first run
+    cmd: 'cp {shared.shebang.com} {outputs.app} && chmod +x {outputs.app} && {outputs.app} 1 2 >/dev/null && python3 -c "import os,sys; os.execv(sys.argv[1], sys.argv[1:])" {outputs.app} 10 5'
     exit: 0
     timeout: 60s
     outputs:
       stdout:
-        - "177ELF"
+        - "fizzbuzz"
