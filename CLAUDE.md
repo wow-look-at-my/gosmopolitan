@@ -60,12 +60,33 @@ go test ./cmd/compile/...
 go test std
 ```
 
-`dats/cosmo-shebang.dats` is a black-box CLI-contract suite (the org's
-[dats](https://github.com/wow-look-at-my/dats) runner, one static binary from
-buildhost): `go build` as a user types it, then the artifact spawned by
-execve. Run it with `dats test dats` from the repo root after a `make.bash`.
-
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
+
+### CI test suites live in `dats/`, not in the workflow
+
+Every test CI runs is a [dats](https://github.com/wow-look-at-my/dats) suite,
+so the same command reproduces it on a laptop and every case has a name and its
+own pass/fail. `.github/workflows/cosmo-ci.yml` installs dats and invokes a
+suite; it holds no test logic of its own.
+
+```bash
+curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$(uname -s)&arch=$(uname -m)" && chmod +x /tmp/dats
+cd src && ./make.bash        # the suites drive ./bin/go
+/tmp/dats test dats          # or one suite: /tmp/dats test dats/gotests.dats
+```
+
+| Suite | Covers |
+| --- | --- |
+| `dats/goscript.dats` | `go run` on a `#!`-headed .go file, and that file spawned directly |
+| `dats/toolid.dats` | every fork tool reports a content-derived build ID under `-V=full`; a bare version line makes two fork builds share tool IDs and poison warm caches |
+| `dats/gotests.dats` | the fork's package tests: APE merge, cosmo syscall/runtime units, go/build divergence guardrails, loop-inlining |
+| `dats/apetest.dats` | the acceptance suite in `testdata/ape/apetest`, run against a binary built on each host |
+
+`dats/apetest.dats` needs `APETEST_{UBUNTU,MACOS,WINDOWS}_BINDIR` pointing at
+directories of built artifacts; CI sets them from the uploaded ones. The one
+test deliberately NOT a dats suite is the windows-latest NT boot check: it
+drives the binary through `Start-Process` under pwsh to exercise the PE loader,
+and running it from a shell would test MSYS's cmd.exe delegation instead.
 
 ## Building Cosmopolitan Binaries
 
@@ -107,14 +128,6 @@ GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
 # Opt out of the fat build (single-architecture APE for the current GOARCH;
 # thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
-
-# Head the APE with "#!/bin/sh" (linker -apeshebang) so execve runs it
-# directly instead of answering ENOEXEC. Costs the MZ magic, hence native
-# Windows: one signature fits at offset 0. Only the 45-byte preamble and
-# the now-untrue cmd.exe branch change; payloads are identical. For
-# binaries something else spawns (hooks, LSP/MCP servers, ./mytool) --
-# see DEBUGGING.md "GOCOSMOSHEBANG" (2026-08-01).
-GOCOSMOSHEBANG=1 GOOS=cosmo go build -o program.com main.go
 
 # Merge two single-arch cosmo binaries into one fat APE by hand
 # (-apestrip -apedbg is what go build passes by default; omit them for a

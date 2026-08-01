@@ -54,21 +54,6 @@ const (
 	// which swallows the binary structures that follow.
 	apeMagicMZ = "MZqFpD='"
 
-	// apeMagicShebang heads an -apeshebang APE instead. execve() knows only
-	// ELF and "#!", so an MZ-headed APE cannot be spawned directly at all --
-	// the kernel answers ENOEXEC and the caller sees "exec format error"
-	// until something runs it through a shell once. That is why every
-	// consumer of these binaries grew the same workaround: a launcher script
-	// at the path the real binary should occupy. The shebang makes the
-	// kernel do it, and the file self-assimilates to native ELF on that
-	// first run, so only the first exec pays for the shell at all.
-	//
-	// The cost is exactly the MZ magic, and with it native Windows: a file
-	// can carry only one 2-byte signature at offset 0, so directly
-	// executable on unix and loadable by Windows are mutually exclusive.
-	// Hence a mode and not a change of default.
-	apeMagicShebang = "#!/bin/sh\n"
-
 	// ELF constants
 	elfMagic        = "\x7fELF"
 	elfClass64      = 2
@@ -387,30 +372,17 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// - PE header at 0x80 (inside heredoc body)
 	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
 
-	// Bytes 0x00-0x2C are the shell-visible preamble, and they are the ONLY
-	// thing -apeshebang changes: from the heredoc opener at 0x2D onward the
-	// two headers are byte-identical, payloads included.
-	if *flagApeShebang {
-		// "#!/bin/sh\n" then a comment line, which the newline the heredoc
-		// opener begins with terminates. No quoting needed: the shell never
-		// sees past the heredoc.
-		copy(header[0:], apeMagicShebang)
-		for i := len(apeMagicShebang); i < 0x2D; i++ {
-			header[i] = '#'
-		}
-	} else {
-		// Write the APE magic at offset 0
-		copy(header[0:8], []byte(apeMagicMZ))
-		header[8] = '\n'
+	// Write the APE magic at offset 0
+	copy(header[0:8], []byte(apeMagicMZ))
+	header[8] = '\n'
 
-		// Fill bytes 0x09-0x2B with spaces (inside the single-quoted string)
-		for i := 0x09; i < 0x2C; i++ {
-			header[i] = ' '
-		}
-
-		// Close the quoted string at 0x2C
-		header[0x2C] = '\''
+	// Fill bytes 0x09-0x2B with spaces (inside the single-quoted string)
+	for i := 0x09; i < 0x2C; i++ {
+		header[i] = ' '
 	}
+
+	// Close the quoted string at 0x2C
+	header[0x2C] = '\''
 
 	// Heredoc opener at 0x2D-0x3B (15 bytes: "\n: <<'__APE__'\n")
 	// The trailing newline ends the heredoc opener line.
@@ -462,19 +434,10 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("fi\n")
 
 	// --- ARM64 hosts ---
-	//
-	// The loader cache path carries a "-gosmo<N>" suffix because the embedded
-	// ape-m1.c is no longer upstream's: it also scans a "#!"-headed file for
-	// the printf'd boot headers (-apeshebang; upstream skips straight to
-	// TryElf and dies "didn't embed ELF magic"). The compiled loader is shared
-	// by every APE on the machine, so keeping upstream's .ape-1.10 name would
-	// let a loader compiled from unpatched source -- left there by any other
-	// APE -- be reused, and shebang binaries would fail on that machine only.
-	// Bump the suffix whenever the embedded loader source changes.
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString(`  o="$(command -v "$0")"
-  t="${TMPDIR:-${HOME:-.}}/.ape-1.10-gosmo1"
+  t="${TMPDIR:-${HOME:-.}}/.ape-1.10"
   if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
     # Don't use existing loader if it might be ELF (from Linux)
@@ -520,24 +483,13 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	}
 	script.WriteString("fi\n")
 
-	// Under -apeshebang there is no PE image to hand to cmd.exe, so say that
-	// instead of delegating into a "not a valid Win32 application" error.
-	if *flagApeShebang {
-		script.WriteString(`case "$(uname -s 2>/dev/null)" in
-CYGWIN*|MINGW*|MSYS*) echo 'APE: built with -apeshebang, which drops Windows support' >&2; exit 1 ;;
-esac
-echo 'APE: unsupported platform' >&2
-exit 1
-`)
-	} else {
-		script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
+	script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
 case "$(uname -s 2>/dev/null)" in
 CYGWIN*|MINGW*|MSYS*) exec cmd //c "$0" "$@" ;;
 esac
 echo 'APE: unsupported platform' >&2
 exit 1
 `)
-	}
 
 	scriptBytes := script.Bytes()
 
@@ -579,10 +531,6 @@ exit 1
 	}
 
 	// === PE Header at offset 0x80 ===
-	// Written under -apeshebang too, where nothing can reach it: the mode
-	// keeps the payloads and every offset identical, so re-heading the same
-	// binaries the other way (or merging shebang thin APEs into an MZ fat
-	// one) yields a working PE image rather than a hole.
 	//
 	// The polyglot's MZ magic and e_lfanew presume a PE image header
 	// here. With an amd64 payload the header really maps the embedded

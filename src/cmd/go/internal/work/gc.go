@@ -607,8 +607,6 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	if fips140.Enabled() {
 		ldflags = append(ldflags, "-fipso", filepath.Join(root.Objdir, "fips.o"))
 	}
-	// How to head a GOOS=cosmo APE; empty for every other target.
-	ldflags = append(ldflags, cosmoLinkArgs()...)
 
 	// Store BuildID inside toolchain binaries as a unique identifier of the
 	// tool being run, for use by content-based staleness determination.

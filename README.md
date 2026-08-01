@@ -23,22 +23,7 @@ GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
 # Opt out of the fat build (single-architecture APE for the current GOARCH)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
-
-# Head the APE with "#!/bin/sh" so execve() runs it directly -- no shell,
-# no wrapper script. Trades the MZ magic, and with it native Windows.
-GOCOSMOSHEBANG=1 GOOS=cosmo go build -o program.com main.go
 ```
-
-An ordinary APE cannot be *spawned* on unix: `execve` knows ELF and `#!` and
-nothing else, so the kernel answers ENOEXEC and the caller sees "exec format
-error" until something runs the file through a shell once. `GOCOSMOSHEBANG=1`
-hands that first run to the kernel's script loader instead, and because the
-APE assimilates itself into a native ELF as it boots, only that first exec
-involves a shell at all. Use it for binaries something else launches -- hooks,
-language servers, plain `./mytool` -- and never for one that must run on
-Windows: a file has one signature at offset 0, so directly-executable-on-unix
-and loadable-by-Windows cannot both be true. Everything else about the binary,
-payloads included, is identical either way.
 
 The resulting `.com` file runs natively on Linux, macOS, and Windows. On
 Windows the same cosmo amd64 image boots through the APE's PE header via
