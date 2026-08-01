@@ -5659,3 +5659,8 @@ second, direct spawn still works -- and the ELF-magic assertion stays in
 apetest, which branches on GOOS. macOS also confirmed the loader patch on real
 hardware: with it, `execve spawns a shebang APE directly` passes on Apple
 Silicon.
+
+The same wrong assumption was in apetest and cost a second red macOS leg:
+only LINUX assimilates. The Go test now asserts the ELF head on linux alone
+and, everywhere, the property that actually matters -- a second direct spawn
+still works.

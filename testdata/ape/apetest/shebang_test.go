@@ -76,10 +76,15 @@ func TestShebangRunsWithoutAShell(t *testing.T) {
 	assert.Equal(t, "fizzbuzz", out)
 }
 
-// The shell runs once, at most: the first execution rewrites the file's head
-// into the host's native format, and every later spawn is an ordinary ELF
-// exec. A binary that stayed a script would keep paying for /bin/sh forever.
-func TestShebangAssimilatesOnFirstRun(t *testing.T) {
+// Running it changes the file, so what has to hold on every host is that a
+// second, direct spawn still works.
+//
+// How it changes is per-host, and only Linux assimilates: the prologue writes
+// the real ELF header over the file's own head, so the shell is involved once
+// and never again. macOS ARM64 boots through the compiled APE loader instead
+// and the file stays a script forever -- correct, and what CI had to teach
+// this test, which first asserted the head must stop being "#!" everywhere.
+func TestShebangStillSpawnsAfterFirstRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("covered by TestShebangIsNotWindowsLoadable")
 	}
@@ -88,20 +93,15 @@ func TestShebangAssimilatesOnFirstRun(t *testing.T) {
 	_, stderr, err := runDirect(t, bin, "1", "2")
 	require.NoError(t, err, "stderr=%q", stderr)
 
-	data, err := os.ReadFile(bin)
-	require.NoError(t, err)
-	switch runtime.GOOS {
-	case "darwin":
-		// ARM64 macOS boots through the compiled APE loader instead of
-		// assimilating; Intel macOS rewrites a Mach-O head.
-		assert.NotEqual(t, "#!", string(data[:2]),
-			"macOS binary neither assimilated nor kept a loadable head")
-	default:
-		assert.Equal(t, "\x7fELF", string(data[:4]), "first run must assimilate to native ELF")
+	if runtime.GOOS == "linux" {
+		data, err := os.ReadFile(bin)
+		require.NoError(t, err)
+		assert.Equal(t, "\x7fELF", string(data[:4]),
+			"the first run must assimilate to native ELF, so later spawns need no shell")
 	}
 
 	out, stderr, err := runDirect(t, bin, "10", "5")
-	require.NoError(t, err, "second (assimilated) run failed; stderr=%q", stderr)
+	require.NoError(t, err, "second run failed; stderr=%q", stderr)
 	assert.Equal(t, "fizzbuzz", out)
 }
 
