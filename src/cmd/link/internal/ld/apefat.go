@@ -223,11 +223,23 @@ func stripPayload(p *apePayload) {
 	p.elf = elf
 }
 
+// hasAPEHead reports whether data begins with an APE header this linker
+// wrote, under either heading. A -apeshebang thin link is still an ordinary
+// APE below offset 0x2D, so the merge must ingest it like any other -- matching
+// only the MZ magic made a GOCOSMOSHEBANG=1 fat build fail as "not an ELF".
+func hasAPEHead(data []byte) bool {
+	if len(data) <= apeHeaderSize+64 {
+		return false
+	}
+	return string(data[0:len(apeMagicMZ)]) == apeMagicMZ ||
+		string(data[0:len(apeMagicShebang)]) == apeMagicShebang
+}
+
 // payloadFromAPEOrELF extracts an APE payload from data, which may be a raw
 // ELF image or an APE file produced by this linker (whose single payload
 // lives at apeHeaderSize with p_offset values shifted by apeHeaderSize).
 func payloadFromAPEOrELF(data []byte) (*apePayload, error) {
-	if len(data) > apeHeaderSize+64 && string(data[0:7]) == "MZqFpD=" {
+	if hasAPEHead(data) {
 		// Validate before shiftPOffsets touches the program headers.
 		p, err := payloadFromELF(data[apeHeaderSize:])
 		if err != nil {

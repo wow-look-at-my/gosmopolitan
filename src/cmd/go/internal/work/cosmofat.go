@@ -52,6 +52,34 @@ func cosmoStripEnabled() bool {
 	return true
 }
 
+// cosmoShebangEnabled reports whether GOOS=cosmo links should head the APE
+// with "#!/bin/sh" instead of the MZ magic, making execve() run it directly.
+// Off by default: the MZ magic is what lets the same file boot natively on
+// Windows, and a file has only one signature at offset 0. See apeMagicShebang
+// in cmd/link/internal/ld for the whole trade.
+func cosmoShebangEnabled() bool {
+	if cfg.Goos != "cosmo" {
+		return false
+	}
+	switch os.Getenv("GOCOSMOSHEBANG") {
+	case "1", "on":
+		return true
+	}
+	return false
+}
+
+// cosmoLinkArgs returns the cosmo-specific arguments for an ordinary link.
+// It must be a linker FLAG rather than an environment variable read inside
+// the linker: cmd/go hashes the link action from its arguments, so a header
+// choice invisible to that hash would serve a cached binary headed the other
+// way.
+func cosmoLinkArgs() []string {
+	if cosmoShebangEnabled() {
+		return []string{"-apeshebang"}
+	}
+	return nil
+}
+
 // parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the
 // debug mode it selects:
 //
@@ -175,7 +203,10 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 			args = append(args, "-apedbgmode="+mode)
 		}
 	}
-	return args
+	// The merge rewrites the header from scratch, so the fat output needs
+	// the heading told to it again -- the thin inputs' own heads only
+	// supply the PE image bytes.
+	return append(args, cosmoLinkArgs()...)
 }
 
 // cosmoSibling is a sibling-architecture build running concurrently with

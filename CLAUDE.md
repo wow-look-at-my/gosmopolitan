@@ -103,6 +103,14 @@ GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
 # thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
+# Head the APE with "#!/bin/sh" (linker -apeshebang) so execve runs it
+# directly instead of answering ENOEXEC. Costs the MZ magic, hence native
+# Windows: one signature fits at offset 0. Only the 45-byte preamble and
+# the now-untrue cmd.exe branch change; payloads are identical. For
+# binaries something else spawns (hooks, LSP/MCP servers, ./mytool) --
+# see DEBUGGING.md "GOCOSMOSHEBANG" (2026-08-01).
+GOCOSMOSHEBANG=1 GOOS=cosmo go build -o program.com main.go
+
 # Merge two single-arch cosmo binaries into one fat APE by hand
 # (-apestrip -apedbg is what go build passes by default; omit them for a
 # full-payload merge)

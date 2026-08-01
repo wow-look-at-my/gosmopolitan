@@ -5533,3 +5533,76 @@ permissions across the whole darwin port, and every re-run to green
 bought another day of it. The thing that cracked it was making the
 failing run PRINT its evidence - the descriptor census - rather than
 reasoning harder about a traceback.
+
+## GOCOSMOSHEBANG: making an APE directly executable (2026-08-01)
+
+An APE cannot be spawned on unix. `execve` recognizes exactly two things --
+an ELF magic and a `#!` line -- and the canonical APE heading `MZqFpD='` is
+neither, so the kernel answers ENOEXEC. Measured on a fresh fat build from
+this toolchain:
+
+    os.execv('/tmp/fizz.com', [...])  ->  OSError [Errno 8] Exec format error
+    /bin/sh ./fizz.com                ->  runs; file's first 4 bytes are now \x7fELF
+
+The second line is the whole story: the shell interprets the prologue, the
+prologue printfs the embedded boot ELF header over the file's own head, and
+from then on it IS a native ELF that execve accepts. Only the FIRST run ever
+needs a shell -- but nothing arranges that first run, so every consumer grew
+the same workaround independently: buildhost's deb packaging installs an APE
+under /usr/lib with a generated /usr/bin launcher, and a Claude Code plugin
+ships a three-line `#!/bin/sh` launcher at the path its manifest names,
+because the LSP/MCP/hook client execve()s that path and a failed spawn
+surfaces as an unrelated-looking client error. Three workarounds, one root
+cause, none of them in the toolchain that emits the file.
+
+`GOCOSMOSHEBANG=1` (linker flag `-apeshebang`) heads the APE with
+`#!/bin/sh\n` instead. The kernel's script loader then does the first run,
+and the binary assimilates exactly as before.
+
+**What it costs, exactly.** The MZ magic. A file carries one signature at
+offset 0, so "directly executable on unix" and "loadable by Windows" are
+mutually exclusive -- there is no clever layout that gets both, and that is
+why this is a mode and not the default. The mode is for binaries something
+else launches; anything that must run on Windows keeps the MZ heading.
+
+**What it changes in the file.** 45 bytes of preamble, plus the one script
+branch that would otherwise lie:
+
+    0x00..0x09   "#!/bin/sh\n"      (was "MZqFpD='" + newline)
+    0x0A..0x2C   '#' * 35           (a comment line; was spaces inside the
+                                     quoted string the MZ magic opens)
+    0x2D..       unchanged: the "\n: <<'__APE__'\n" heredoc opener, e_lfanew,
+                 the PE image header, the dispatch script, the printf'd boot
+                 ELF headers, the Mach-O header, the loader source, payloads
+
+The MSYS/Cygwin branch stops delegating to `cmd.exe` (there is no PE image to
+load) and says so instead. Diffing two real fat builds of the same program
+shows precisely that, and nothing else, beyond the Go build IDs -- which
+differ because the flag is part of the link action's hash. That is deliberate:
+a linker-side `os.Getenv` would be invisible to cmd/go's action ID and a warm
+cache would serve a binary headed the other way.
+
+The PE image header is still written under the mode, unreachable, so the same
+payloads can be re-headed the other way (or merged into an MZ fat APE) without
+leaving a hole where the PE should be.
+
+**Not a spec magic.** ape/specification.md defines three magics (`MZqFpD='`,
+`jartsr='`, `APEDBG='`); this heading is none of them, so a shebang APE is
+deliberately NOT an APE by the spec's own definition and an APE binfmt_misc
+registration or `ape` loader will not recognize the FILE. It does not need to:
+the kernel runs it as a script. The embedded boot headers are untouched, so
+`ape prog` still works if invoked explicitly, as does the ARM64 Linux branch's
+`type ape && exec ape "$o"` fast path.
+
+**Gates.** `cmd/link/internal/ld/apeshebang_test.go` pins the header contract:
+what changed and what may not, the payload region byte-identical between
+headings, the first line inside the kernel's 128-byte script buffer and free
+of NULs, the preamble parsing as shell (`sh -n` on the real prologue), the
+default heading still MZ, and the fat merge ingesting a shebang thin APE --
+which it did not, at first: `payloadFromAPEOrELF` recognized inputs by the MZ
+magic alone, so a `GOCOSMOSHEBANG=1` fat build failed at the merge with
+"not an ELF" on its own linker's output. `apetest/shebang_test.go` runs the
+built binary: spawned by path with no shell on every origin/host pair CI
+covers, assimilated after the first run, and -- the negative control that
+gives the mode its reason -- the default heading still failing with "exec
+format error" when spawned the same way.

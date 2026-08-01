@@ -141,6 +141,9 @@ jobs:
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
           # The probe is a multi-file package, so build its module directory.
           (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
+          # The same program headed for direct execve (apetest's shebang
+          # suite). Same payloads, same everything from offset 0x2D on.
+          GOCOSMOSHEBANG=1 GOOS=cosmo go build -o fizzbuzz-shebang.com testdata/fizzbuzz/fizzbuzz.go
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
@@ -150,7 +153,8 @@ jobs:
           # default fat build must write next to each output (they are not
           # uploaded; apetest's TestDebugSidecars covers their contents).
           ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
-            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
+            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf \
+            fizzbuzz-shebang.com
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
@@ -159,6 +163,7 @@ jobs:
           path: |
             fizzbuzz.com
             runtimeprobe.com
+            fizzbuzz-shebang.com
           retention-days: 1
 
       - name: APE merge unit tests (linker + go command)
@@ -172,7 +177,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestCosmoShebangLinkArgs|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput' cmd/go/internal/work
           # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
           # cmsg repack, signal/wait-status translation tables, epoll
           # layout) are GOOS=cosmo-only code, run on this host via the
@@ -449,7 +454,7 @@ jobs:
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" FIZZBUZZ_SHEBANG_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz-shebang.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
@@ -472,7 +477,7 @@ jobs:
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" FIZZBUZZ_SHEBANG_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz-shebang.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 
@@ -495,7 +500,7 @@ jobs:
         run: |
           cd testdata/ape/apetest
           rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" FIZZBUZZ_SHEBANG_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz-shebang.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
           cat test-output.log
           exit $rc
 

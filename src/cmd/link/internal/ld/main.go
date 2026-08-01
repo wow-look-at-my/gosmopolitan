@@ -71,6 +71,7 @@ var (
 	flagApeStrip   = flag.Bool("apestrip", false, "with -apefat, embed only each input's loadable span (drop symbol table, DWARF, section headers)")
 	flagApeDbg     = flag.Bool("apedbg", false, "with -apefat, write each input's unstripped ELF image beside the output (.dbg, .aarch64.elf)")
 	flagApeDbgMode = flag.String("apedbgmode", "full", "with -apefat -apedbg, debug info `mode`: full (pristine sidecar ELFs), slim (debug-only sidecars), or compact (slim sidecars plus in-binary compact debug info)")
+	flagApeShebang = flag.Bool("apeshebang", false, "head the APE with #!/bin/sh so execve runs it directly; drops the MZ magic, hence native Windows")
 	flagPluginPath = flag.String("pluginpath", "", "full path name for plugin")
 	flagFipso      = flag.String("fipso", "", "write fips module to `file`")
 
