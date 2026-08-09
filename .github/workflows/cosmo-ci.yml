@@ -642,8 +642,7 @@ jobs:
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
-            // buildhost-upload-artifact takes an exact file path; resolve the
-            // versioned distpack tarball name (go<VERSION>.linux-amd64.tar.gz).
+            // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.linux-amd64.tar.gz)
             const distDir = 'pkg/distpack';
             const names = fs.readdirSync(distDir).filter((f) => /^go.*\.linux-amd64\.tar\.gz$/.test(f));
             if (names.length !== 1) {
