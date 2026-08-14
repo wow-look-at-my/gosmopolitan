@@ -138,6 +138,7 @@ const (
 // Errno values (Linux numbering) produced by the emulation itself.
 const (
 	darwinEIO    = 5
+	darwinEFAULT = 14
 	darwinEINVAL = 22
 	darwinENOSYS = 38
 )
@@ -673,6 +674,14 @@ const (
 	linuxF_DUPFD_CLOEXEC = 1030
 	appleF_DUPFD_CLOEXEC = 67
 
+	// F_GETPATH resolves an fd to its path. Apple-only: it is passed
+	// through under Apple's own number because Linux has no counterpart
+	// to translate from, and 50 is not a Linux fcntl command (Linux uses
+	// 0..16 and 1024+), so nothing else can mean it. The argument is a
+	// buffer of at least MAXPATHLEN bytes, which the caller owns.
+	appleF_GETPATH  = 50
+	appleMAXPATHLEN = 1024
+
 	linuxO_NONBLOCK = 0x800
 	appleO_NONBLOCK = 0x4
 	linuxO_APPEND   = 0x400
@@ -712,6 +721,12 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 		arg = aarg
 	case linuxF_DUPFD_CLOEXEC:
 		cmd = appleF_DUPFD_CLOEXEC
+	case appleF_GETPATH:
+		// Passed through as-is: arg is the caller's MAXPATHLEN buffer,
+		// which Apple fills with a NUL-terminated path.
+		if arg == 0 {
+			return ^uintptr(0), 0, darwinEFAULT
+		}
 	default:
 		// Locking, owner and lease commands have incompatible
 		// argument structures; refuse rather than corrupt.
