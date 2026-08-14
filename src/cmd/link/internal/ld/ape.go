@@ -230,10 +230,43 @@ func writeAPEFile(outfile string, payloads []*apePayload) {
 		}
 		cur += uint64(len(p.elf))
 	}
+	if end := apePEFileEnd(payloads); end > cur {
+		if _, err := apeFile.Write(make([]byte, end-cur)); err != nil {
+			Exitf("cannot write APE PE padding: %v", err)
+		}
+	}
 
 	if err := os.Chmod(outfile, 0755); err != nil {
 		Exitf("cannot chmod APE output: %v", err)
 	}
+}
+
+// apePEFileEnd returns the file offset the amd64 payload's PE sections
+// reach, or 0 when there is no amd64 payload. .data's SizeOfRawData is
+// p_filesz rounded up to FileAlignment (writePECosmoAMD64), so the PE image
+// extends past the payload's loadable span by up to FileAlignment-1 bytes
+// of zero padding.
+//
+// Whether the file covers that tail used to be luck: an unstripped payload
+// carries its debug tail past it, and in a fat APE the next payload's
+// alignment padding covers it. A STRIPPED amd64 payload with nothing after
+// it ends exactly at its loadable span, leaving the PE header referencing
+// bytes past EOF - which the NT loader rejects outright ("%1 is not a valid
+// Win32 application"), the whole image, not just that section.
+func apePEFileEnd(payloads []*apePayload) uint64 {
+	for _, p := range payloads {
+		if p.arch != sys.AMD64 {
+			continue
+		}
+		loads := apePayloadLoads(p.elf)
+		if len(loads) == 0 {
+			return 0
+		}
+		data := loads[len(loads)-1]
+		rounded := (data.filesz + peCosmoFileAlign - 1) &^ uint64(peCosmoFileAlign-1)
+		return p.offset + data.off + rounded
+	}
+	return 0
 }
 
 // shiftPOffsets returns a copy of elf whose program header p_offset values

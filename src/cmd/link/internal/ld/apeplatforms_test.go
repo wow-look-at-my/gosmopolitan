@@ -266,6 +266,40 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 	}
 }
 
+// TestAPEPEImageWithinFile checks that every PE section's raw data is
+// inside the file, for a fat APE and for an amd64-only one. The NT loader
+// refuses the whole image over a section that runs past EOF, and a stripped
+// amd64 payload with nothing after it ends exactly at its loadable span -
+// short of the .data raw size the PE header rounds up to FileAlignment.
+func TestAPEPEImageWithinFile(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		spec     string
+		amd, arm bool
+	}{
+		{"fat", "", true, true},
+		{"amd64 only", "linux/amd64,windows/amd64", true, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setAPEFatFlags(t, true, false) // -apestrip, the default build
+			bin := assembleTest(t, tt.spec, tt.amd, tt.arm)
+
+			nsect := binary.LittleEndian.Uint16(bin[0x86:0x88])
+			optSize := binary.LittleEndian.Uint16(bin[0x94:0x96])
+			sect := 0x98 + int(optSize)
+			for i := 0; i < int(nsect); i++ {
+				s := sect + 40*i
+				name := strings.TrimRight(string(bin[s:s+8]), "\x00")
+				raw := binary.LittleEndian.Uint32(bin[s+20:])
+				rawsz := binary.LittleEndian.Uint32(bin[s+16:])
+				if end := uint64(raw) + uint64(rawsz); end > uint64(len(bin)) {
+					t.Errorf("section %s raw data ends at %#x, past the %#x-byte file", name, end, len(bin))
+				}
+			}
+		})
+	}
+}
+
 // TestAPEPlatformsDefaultUnchanged checks that an unset -apeplatforms
 // assembles byte-identically to naming every platform: the selection is an
 // opt-in restriction, never a change to what a plain build produces.

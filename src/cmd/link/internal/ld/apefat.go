@@ -113,7 +113,13 @@ func apeFatMerge(spec, outfile string) {
 func apeCompactDebugTail(payloads []*apePayload, pristine [][]byte) (tail []byte, tailOff uint64) {
 	layoutAPE(payloads) // same deterministic layout writeAPEFile recomputes
 	last := payloads[len(payloads)-1]
-	tailOff = (last.offset + uint64(len(last.elf)) + 7) &^ uint64(7)
+	end := last.offset + uint64(len(last.elf))
+	// The PE image's rounded .data tail is written after the last payload
+	// (see apePEFileEnd), so the debug tail has to start past it.
+	if pe := apePEFileEnd(payloads); pe > end {
+		end = pe
+	}
+	tailOff = (end + 7) &^ uint64(7)
 	for i, p := range payloads {
 		var view apeCompactView
 		var err error
