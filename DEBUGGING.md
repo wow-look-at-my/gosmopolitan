@@ -5568,23 +5568,33 @@ Two traps in that table:
 
 The APE header is a fixed 64K region, so dropping the Mach-O header, the
 loader source or the real PE header saves **zero bytes**. Only dropping a
-payload architecture changes the size. runtimeprobe, measured:
+payload architecture changes the size. runtimeprobe, every row built by
+one command with `-buildvcs=false -ldflags=-buildid=`:
 
 | selection | payloads | bytes | vs fat |
 |---|---|---|---|
-| unrestricted (all five) | amd64+arm64 | 5,797,088 | - |
-| linux/amd64,darwin/arm64,windows/amd64 | amd64+arm64 | 5,797,088 | 0% |
-| linux/amd64,linux/arm64,windows/amd64 | amd64+arm64 | 5,797,088 | 0% |
-| linux/amd64,windows/amd64 | amd64 | 3,071,648 | -47.0% |
-| linux/amd64 | amd64 | 3,071,648 | -47.0% |
+| unrestricted (all five) | amd64+arm64 | 5,796,992 | - |
+| linux/amd64,darwin/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
+| linux/amd64,linux/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
+| linux/amd64,windows/amd64 | amd64 | 3,072,000 | -47.0% |
+| linux/amd64 | amd64 | 3,072,000 | -47.0% |
 | darwin/arm64 (GOARCH=arm64) | arm64 | 2,782,336 | -52.0% |
 
-So the set consumers usually want - linux x64, macOS arm64, Windows x64 -
-is the same size as today's fat APE. It buys an accurate claim, not
-bytes. Payload-side slimming (dropping the NT emulation or the darwin
-syslib dispatch from a payload that no selected platform boots) is a
-compile-time change to the runtime's build tags and is NOT part of this;
-every payload still carries support for every host.
+Sidecars follow the payloads: an amd64-only build writes only the
+4,362,818-byte `.dbg`, so the 3,912,537-byte `.aarch64.elf` goes too.
+
+**A platform subset is not a size win unless it collapses to one
+architecture.** The set this feature was asked for - linux x64, macOS
+arm64, Windows x64 - weighs exactly what the unrestricted APE weighs,
+because darwin/arm64 boots the arm64 payload and the other two boot the
+amd64 one, so both are still in. What it buys is an accurate claim and a
+host that is refused by name instead of failing mysteriously. Do not
+report it as slimming.
+
+Payload-side slimming - dropping the NT emulation or the darwin syslib
+dispatch from a payload no selected platform boots - is a compile-time
+change to the runtime's build tags and is NOT part of this; every payload
+still carries support for every host.
 
 ## cmd/go
 
