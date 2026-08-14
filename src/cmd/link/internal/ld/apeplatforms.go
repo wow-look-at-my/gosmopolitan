@@ -7,6 +7,7 @@ package ld
 import (
 	"cmd/internal/cosmoape"
 	"cmd/internal/sys"
+	"encoding/binary"
 	"slices"
 	"strings"
 )
@@ -53,6 +54,17 @@ func apePlatforms(payloads []*apePayload) cosmoape.Set {
 		}
 	}
 	return set
+}
+
+// checkNTBootHead ends the link when an explicitly selected windows/amd64
+// would be served by the do-nothing stub PE header the amd64 input carries.
+// The stub maps none of the payload, so the binary would claim a platform
+// on which it starts and immediately returns 0.
+func checkNTBootHead(amd *apePayload) {
+	if n := binary.LittleEndian.Uint16(amd.head[0x86:0x88]); n != peCosmoSections {
+		Exitf("-apeplatforms selects %s, but the amd64 input's PE header has %d sections, want %d: it is the do-nothing stub, not an NT boot header",
+			cosmoape.WindowsAMD64, n, peCosmoSections)
+	}
 }
 
 // apeUnsupportedEcho is the shell statement a host the binary was not built

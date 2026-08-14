@@ -586,6 +586,9 @@ exit 1
 	case amd.pe != nil:
 		writePECosmoAMD64(header, amd)
 	case amd.head != nil:
+		if *flagApePlatforms != "" {
+			checkNTBootHead(amd)
+		}
 		transplantPEHeader(header, amd)
 	case *flagApePlatforms != "":
 		Exitf("-apeplatforms selects %s, but the amd64 input carries no NT boot header: pass the thin APE this linker produced, not a raw ELF", cosmoape.WindowsAMD64)
@@ -1245,11 +1248,6 @@ func transplantPEHeader(header []byte, amd *apePayload) {
 	}
 	if string(amd.head[0x80:0x84]) != "PE\x00\x00" {
 		Exitf("APE PE transplant: amd64 input has no PE signature at 0x80")
-	}
-	// The stub header maps nothing of the payload, so transplanting one
-	// would ship a binary that claims windows/amd64 and does nothing on it.
-	if n := binary.LittleEndian.Uint16(amd.head[0x86:0x88]); n != peCosmoSections {
-		Exitf("APE PE transplant: amd64 input's PE header has %d sections, want %d; it is the do-nothing stub, not an NT boot header", n, peCosmoSections)
 	}
 	if amd.offset != apeHeaderSize {
 		Exitf("APE PE transplant: amd64 payload at %#x, want %#x; the transplanted header's raw data pointers assume the thin layout", amd.offset, uint64(apeHeaderSize))
