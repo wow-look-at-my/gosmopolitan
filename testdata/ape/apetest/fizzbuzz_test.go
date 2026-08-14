@@ -26,11 +26,28 @@ func copyBinary(t *testing.T) string {
 	return tmp
 }
 
-// skipIfExecUnsupported centralizes any future platform execution skips.
+// skipIfExecUnsupported centralizes platform execution skips.
 func skipIfExecUnsupported(t *testing.T) {
 	t.Helper()
 	// ARM64 macOS executes the fat APE's native arm64 image through the
 	// embedded APE loader; no skip needed since fat output landed.
+	//
+	// SLIM_PLATFORMS names the selection the binaries under test were
+	// built with. A host it deliberately dropped cannot run them, and
+	// that refusal is the feature - it is TestSlimPayloads and
+	// TestSlimUnsupportedHostMessage that assert it, not a battery of
+	// execution failures here.
+	sel := os.Getenv("SLIM_PLATFORMS")
+	if sel == "" {
+		return
+	}
+	host := runtime.GOOS + "/" + runtime.GOARCH
+	for _, p := range strings.Split(sel, ",") {
+		if strings.TrimSpace(p) == host {
+			return
+		}
+	}
+	t.Skipf("binaries under test were built for %s, not %s", sel, host)
 }
 
 func runFizzbuzz(t *testing.T, args ...string) (string, string, error) {
