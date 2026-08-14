@@ -24,8 +24,8 @@ import (
 // asserting absence tells the two apart.
 //
 // SLIM_BIN is a fizzbuzz APE built with SLIM_PLATFORMS; both must be set or
-// the suite skips. FIZZBUZZ_BIN, when it is the unrestricted build of the
-// same program, doubles as the size reference.
+// the suite skips. FAT_BIN, when set, is the unrestricted build of the same
+// program, used as the size reference.
 
 func slimPlatforms(t *testing.T) map[string]bool {
 	t.Helper()
@@ -225,9 +225,9 @@ func TestSlimSmallerThanFat(t *testing.T) {
 	if slimWantsArch(sel, "amd64") && slimWantsArch(sel, "arm64") {
 		t.Skip("selection needs both payloads; the file is the same size as the unrestricted build")
 	}
-	fat := os.Getenv("FIZZBUZZ_BIN")
+	fat := os.Getenv("FAT_BIN")
 	if fat == "" {
-		t.Skip("FIZZBUZZ_BIN not set; no size reference")
+		t.Skip("FAT_BIN not set; no unrestricted build to compare against")
 	}
 	fatInfo, err := os.Stat(fat)
 	require.NoError(t, err)
