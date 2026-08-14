@@ -417,6 +417,13 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 			// into, and re-execing would spin on this script forever.
 			fmt.Fprintf(&script, "  [ -d /Applications ] || { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
+		if !darwinAMD {
+			// Refuse macOS BEFORE self-assimilating: the printf writes
+			// an ELF header over the APE header, and with no Mach-O
+			// header to dd back over it the file stops being an APE
+			// and stops being runnable anywhere.
+			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
+		}
 		if linuxAMD {
 			script.WriteString(`  exec 7<> "$o" || exit 121
   printf '`)
@@ -466,6 +473,12 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
     exec "$t" "$o" "$@"
   fi
 `)
+		}
+		if linuxARM && !darwinARM {
+			// Same trap as the amd64 branch: self-assimilation on
+			// macOS would leave a file that is neither an APE nor a
+			// Mach-O.
+			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
 		if linuxARM {
 			script.WriteString(`  # Linux ARM64: prefer an installed loader, else self-assimilate
