@@ -6,6 +6,7 @@ package ld
 
 import (
 	"bytes"
+	"cmd/internal/cosmoape"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"compress/gzip"
@@ -275,6 +276,13 @@ func writePrintfBlob(script *bytes.Buffer, blob []byte) {
 // and the embedded boot headers dispatch on the host architecture, and the
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first 8192 bytes.
+//
+// Which boot mechanisms the header carries follows apePlatforms: each
+// selected platform contributes exactly the pieces it boots through, and a
+// host outside the selection gets a message naming what the binary was
+// built for. The header is a fixed 64K region either way, so deselecting a
+// platform without also dropping its payload architecture changes what the
+// binary claims, not what it weighs.
 func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	var amd, arm *apePayload
 	for _, p := range payloads {
@@ -297,6 +305,13 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		Exitf("APE: no payloads")
 	}
 
+	plat := apePlatforms(payloads)
+	linuxAMD := plat.Has(cosmoape.LinuxAMD64)
+	darwinAMD := plat.Has(cosmoape.DarwinAMD64)
+	windowsAMD := plat.Has(cosmoape.WindowsAMD64)
+	linuxARM := plat.Has(cosmoape.LinuxARM64)
+	darwinARM := plat.Has(cosmoape.DarwinARM64)
+
 	header := make([]byte, apeHeaderSize)
 
 	// Embedded (printf-encoded) boot ELF headers. They serve two purposes:
@@ -304,17 +319,17 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// loader, which octal-decodes every printf in the first 8192 bytes and
 	// uses the first one with an aarch64 machine type.
 	var amdBoot, armBoot []byte
-	if amd != nil {
+	if linuxAMD {
 		amdBoot = makeEmbeddedElfHeader(amd.elf, amd.offset, sys.AMD64)
 	}
-	if arm != nil {
+	if linuxARM || darwinARM {
 		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, sys.ARM64)
 	}
 
 	// Create Mach-O header for macOS x86-64
 	var machoHeader []byte
 	var machoOffset, machoSize int
-	if amd != nil {
+	if darwinAMD {
 		machoHeader = makeMachoHeader(amd.elf, amd.offset, amd.entry())
 		// Place Mach-O header at a specific location in the APE header.
 		// It will be copied backward by the dd command.
@@ -325,7 +340,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// Load gzipped APE loader source for macOS ARM64
 	var apeLoaderGz []byte
 	var apeLoaderOffset, apeLoaderSize int
-	if arm != nil {
+	if darwinARM {
 		apeLoaderGz = getApeLoaderSource()
 		if len(apeLoaderGz) > 0 {
 			// Place gzipped loader at offset 0x8000 (32KB into header).
@@ -394,13 +409,21 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 
 	// --- x86-64 hosts ---
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
-	if amd != nil {
-		script.WriteString(`  o="$(command -v "$0")"
-  exec 7<> "$o" || exit 121
+	switch {
+	case linuxAMD || darwinAMD:
+		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
+		if !linuxAMD {
+			// Without a boot ELF header there is nothing to assimilate
+			// into, and re-execing would spin on this script forever.
+			fmt.Fprintf(&script, "  [ -d /Applications ] || { %s; exit 1; }\n", apeUnsupportedEcho(plat))
+		}
+		if linuxAMD {
+			script.WriteString(`  exec 7<> "$o" || exit 121
   printf '`)
-		writePrintfBlob(&script, amdBoot)
-		script.WriteString("' >&7\n")
-		script.WriteString("  exec 7<&-\n")
+			writePrintfBlob(&script, amdBoot)
+			script.WriteString("' >&7\n")
+			script.WriteString("  exec 7<&-\n")
+		}
 		if machoSize > 0 {
 			bs := 8
 			skip := machoOffset / bs
@@ -410,18 +433,21 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 			fmt.Fprintf(&script, "  fi\n")
 		}
 		script.WriteString("  exec \"$0\" \"$@\"\n")
-	} else {
+	case amd == nil:
 		script.WriteString("  echo 'APE: x86_64 cannot run ARM64 binary' >&2\n")
 		script.WriteString("  exit 1\n")
+	default:
+		fmt.Fprintf(&script, "  %s\n  exit 1\n", apeUnsupportedEcho(plat))
 	}
 	script.WriteString("fi\n")
 
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
-		script.WriteString(`  o="$(command -v "$0")"
-  t="${TMPDIR:-${HOME:-.}}/.ape-1.10"
-  if [ -d /Applications ]; then
+		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
+		script.WriteString("  t=\"${TMPDIR:-${HOME:-.}}/.ape-1.10\"\n")
+		if darwinARM {
+			script.WriteString(`  if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
     # Don't use existing loader if it might be ELF (from Linux)
     if [ -x "$t" ] && file "$t" 2>/dev/null | grep -q "Mach-O"; then
@@ -439,15 +465,28 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
     mv -f "$t.$$" "$t" || exit
     exec "$t" "$o" "$@"
   fi
-  # Linux ARM64: prefer an installed loader, else self-assimilate
+`)
+		}
+		if linuxARM {
+			script.WriteString(`  # Linux ARM64: prefer an installed loader, else self-assimilate
   type ape >/dev/null 2>&1 && exec ape "$o" "$@"
   [ -x "$t" ] && exec "$t" "$o" "$@"
   exec 7<> "$o" || exit 121
   printf '`)
-		writePrintfBlob(&script, armBoot)
-		script.WriteString("' >&7\n")
-		script.WriteString("  exec 7<&-\n")
-		script.WriteString("  exec \"$0\" \"$@\"\n")
+			writePrintfBlob(&script, armBoot)
+			script.WriteString("' >&7\n")
+			script.WriteString("  exec 7<&-\n")
+			script.WriteString("  exec \"$0\" \"$@\"\n")
+		} else {
+			// The printf below is unreachable shell on purpose: the macOS
+			// APE loader locates the aarch64 boot header by decoding every
+			// printf in the file's first 8192 bytes, and it is the only
+			// reader of this one once Linux ARM64 is deselected.
+			fmt.Fprintf(&script, "  %s\n  exit 1\n", apeUnsupportedEcho(plat))
+			script.WriteString("  printf '")
+			writePrintfBlob(&script, armBoot)
+			script.WriteString("' >&7\n")
+		}
 	} else {
 		// Note for this branch: it cannot work on current macOS even via
 		// Rosetta. The assimilated Mach-O fails codesign's strict
@@ -466,11 +505,14 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	}
 	script.WriteString("fi\n")
 
-	script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
+	if windowsAMD {
+		script.WriteString(`# Windows shells (MSYS/Cygwin): delegate to cmd.exe for PE execution
 case "$(uname -s 2>/dev/null)" in
 CYGWIN*|MINGW*|MSYS*) exec cmd //c "$0" "$@" ;;
 esac
-echo 'APE: unsupported platform' >&2
+`)
+	}
+	script.WriteString(`echo 'APE: unsupported platform' >&2
 exit 1
 `)
 
@@ -515,22 +557,27 @@ exit 1
 
 	// === PE Header at offset 0x80 ===
 	// The polyglot's MZ magic and e_lfanew presume a PE image header
-	// here. With an amd64 payload the header really maps the embedded
-	// cosmo image and enters the runtime's NT boot stub: computed from
-	// the live link's symbols on the thin path, transplanted verbatim
-	// from the amd64 input's head on the fat path (same payload offset,
-	// same bytes, so the thin header is valid as-is). Without either
-	// source (arm64-only output, or synthetic test payloads) the legacy
+	// here. For windows/amd64 the header really maps the embedded cosmo
+	// image and enters the runtime's NT boot stub: computed from the live
+	// link's symbols on the thin path, transplanted verbatim from the
+	// amd64 input's head on the fat path (same payload offset, same
+	// bytes, so the thin header is valid as-is). Otherwise the legacy
 	// do-nothing stub keeps the file parseable as a PE.
 	switch {
-	case amd != nil && amd.pe != nil:
+	case !windowsAMD:
+		stubArch := sys.ARM64
+		if amd != nil {
+			stubArch = sys.AMD64
+		}
+		writePEHeader(header, stubArch)
+	case amd.pe != nil:
 		writePECosmoAMD64(header, amd)
-	case amd != nil && amd.head != nil:
+	case amd.head != nil:
 		transplantPEHeader(header, amd)
-	case amd != nil:
-		writePEHeader(header, sys.AMD64)
+	case *flagApePlatforms != "":
+		Exitf("-apeplatforms selects %s, but the amd64 input carries no NT boot header: pass the thin APE this linker produced, not a raw ELF", cosmoape.WindowsAMD64)
 	default:
-		writePEHeader(header, sys.ARM64)
+		writePEHeader(header, sys.AMD64)
 	}
 
 	// === Mach-O header for macOS x86-64 ===
@@ -888,6 +935,9 @@ const (
 	// peCosmoImportsSize is DataDirectory[1].Size: one import
 	// descriptor plus the all-zero terminator entry.
 	peCosmoImportsSize = 0x28
+	// peCosmoSections is the section count of the real header (.text,
+	// .rodata, .data), which also tells it apart from the 1-section stub.
+	peCosmoSections = 3
 )
 
 // Fixed layout of the runtime.ntidata import blob. Must match the DATA
@@ -1100,12 +1150,12 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 
 	// COFF header.
 	coffStart := peStart + 4
-	binary.LittleEndian.PutUint16(header[coffStart+0:], 0x8664) // Machine: amd64
-	binary.LittleEndian.PutUint16(header[coffStart+2:], 3)      // NumberOfSections
-	binary.LittleEndian.PutUint32(header[coffStart+4:], 0)      // TimeDateStamp
-	binary.LittleEndian.PutUint32(header[coffStart+8:], 0)      // PointerToSymbolTable
-	binary.LittleEndian.PutUint32(header[coffStart+12:], 0)     // NumberOfSymbols
-	binary.LittleEndian.PutUint16(header[coffStart+16:], 240)   // SizeOfOptionalHeader
+	binary.LittleEndian.PutUint16(header[coffStart+0:], 0x8664)          // Machine: amd64
+	binary.LittleEndian.PutUint16(header[coffStart+2:], peCosmoSections) // NumberOfSections
+	binary.LittleEndian.PutUint32(header[coffStart+4:], 0)               // TimeDateStamp
+	binary.LittleEndian.PutUint32(header[coffStart+8:], 0)               // PointerToSymbolTable
+	binary.LittleEndian.PutUint32(header[coffStart+12:], 0)              // NumberOfSymbols
+	binary.LittleEndian.PutUint16(header[coffStart+16:], 240)            // SizeOfOptionalHeader
 	// RELOCS_STRIPPED | EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE |
 	// DEBUG_STRIPPED, matching real Cosmopolitan APEs. RELOCS_STRIPPED
 	// is honest: cosmo code is position-dependent and there is no
@@ -1182,6 +1232,11 @@ func transplantPEHeader(header []byte, amd *apePayload) {
 	}
 	if string(amd.head[0x80:0x84]) != "PE\x00\x00" {
 		Exitf("APE PE transplant: amd64 input has no PE signature at 0x80")
+	}
+	// The stub header maps nothing of the payload, so transplanting one
+	// would ship a binary that claims windows/amd64 and does nothing on it.
+	if n := binary.LittleEndian.Uint16(amd.head[0x86:0x88]); n != peCosmoSections {
+		Exitf("APE PE transplant: amd64 input's PE header has %d sections, want %d; it is the do-nothing stub, not an NT boot header", n, peCosmoSections)
 	}
 	if amd.offset != apeHeaderSize {
 		Exitf("APE PE transplant: amd64 payload at %#x, want %#x; the transplanted header's raw data pointers assume the thin layout", amd.offset, uint64(apeHeaderSize))

@@ -12,10 +12,13 @@ import (
 	"strings"
 )
 
-// apeFatMerge implements the -apefat linker mode: it merges the given
-// GOOS=cosmo binaries (one amd64, one arm64; each either an APE produced by
-// this linker or a raw ELF) into a single fat APE at outfile, skipping
-// normal linking entirely.
+// apeFatMerge implements the -apefat linker mode: it assembles the given
+// GOOS=cosmo binaries (at most one per architecture; each either an APE
+// produced by this linker or a raw ELF) into a single APE at outfile,
+// skipping normal linking entirely. Two inputs give a fat APE; one input
+// re-emits a single-architecture APE, which is how a build restricted to
+// one architecture still gets the stripping, sidecars and platform-filtered
+// header a fat build gets.
 //
 // With -apedbg, each input's pristine ELF image (symbol table and DWARF
 // intact) is first written to a debug sidecar beside outfile; with
@@ -43,8 +46,8 @@ func apeFatMerge(spec, outfile string) {
 		Exitf("-apedbgmode: invalid mode %q (valid: full, slim, compact)", *flagApeDbgMode)
 	}
 	inputs := strings.Split(spec, ",")
-	if len(inputs) != 2 {
-		Exitf("-apefat requires exactly two cosmo inputs")
+	if len(inputs) != 1 && len(inputs) != 2 {
+		Exitf("-apefat requires one or two cosmo inputs, got %d", len(inputs))
 	}
 	var payloads []*apePayload
 	for _, in := range inputs {
@@ -58,13 +61,15 @@ func apeFatMerge(spec, outfile string) {
 		}
 		payloads = append(payloads, p)
 	}
-	if payloads[0].arch == payloads[1].arch {
-		Exitf("-apefat: inputs must be different architectures")
-	}
-	// Canonical layout: amd64 image first, so the Mach-O header
-	// references the payload right after the APE header.
-	if payloads[0].arch != sys.AMD64 {
-		payloads[0], payloads[1] = payloads[1], payloads[0]
+	if len(payloads) == 2 {
+		if payloads[0].arch == payloads[1].arch {
+			Exitf("-apefat: inputs must be different architectures")
+		}
+		// Canonical layout: amd64 image first, so the Mach-O header
+		// references the payload right after the APE header.
+		if payloads[0].arch != sys.AMD64 {
+			payloads[0], payloads[1] = payloads[1], payloads[0]
+		}
 	}
 	// Compact mode reads each payload's pristine image (section table,
 	// symtab, DWARF) after stripping has removed it from p.elf, so copy

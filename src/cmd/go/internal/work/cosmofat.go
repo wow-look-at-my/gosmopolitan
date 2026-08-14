@@ -23,22 +23,73 @@ var cosmoFatArches = map[string]string{
 	"arm64": "amd64",
 }
 
+// cosmoAPEBuild reports whether this build produces an APE this command
+// assembles: a GOOS=cosmo build for an architecture an APE can carry, and
+// not the sibling-architecture build, whose single-architecture output is
+// an input to the assembly rather than a subject of it.
+func cosmoAPEBuild() bool {
+	return cfg.Goos == "cosmo" && cosmoFatArches[cfg.Goarch] != "" && os.Getenv("GOCOSMOFAT_INNER") == ""
+}
+
+// cosmoSiblingArch returns the architecture the sibling build must produce,
+// or "" when this build needs only the primary one: GOCOSMOFAT=0, or a
+// GOCOSMOPLATFORMS selection whose platforms all boot the same payload.
+func cosmoSiblingArch() string {
+	if !cosmoAPEBuild() {
+		return ""
+	}
+	if arches := cosmoPlatformArches(); arches != nil {
+		if len(arches) == 1 {
+			return ""
+		}
+		return cosmoFatArches[cfg.Goarch]
+	}
+	if !cosmoFatEnv() {
+		return ""
+	}
+	return cosmoFatArches[cfg.Goarch]
+}
+
 // cosmoFatEnabled reports whether go build should produce fat
 // (amd64+arm64) APE binaries for the current configuration.
 func cosmoFatEnabled() bool {
-	if cfg.Goos != "cosmo" {
-		return false
-	}
-	if cosmoFatArches[cfg.Goarch] == "" {
-		return false
-	}
-	switch os.Getenv("GOCOSMOFAT") {
-	case "0", "off":
-		return false
-	}
-	// Guard against the sibling-architecture build recursing.
-	return os.Getenv("GOCOSMOFAT_INNER") == ""
+	return cosmoSiblingArch() != ""
 }
+
+// cosmoAssembleEnabled reports whether the freshly linked output goes
+// through the linker's APE assembly step. A fat build must - that step is
+// the merge - and a single-architecture build does whenever
+// GOCOSMOPLATFORMS selected the platforms, so a slimmed binary is stripped,
+// gets its sidecars, and carries a header matching the selection, exactly
+// like the fat build it replaces.
+func cosmoAssembleEnabled() bool {
+	if !cosmoAPEBuild() {
+		return false
+	}
+	return cosmoSiblingArch() != "" || cosmoPlatformArches() != nil
+}
+
+// CosmoFat, CosmoStrip and CosmoDebug return the effective GOCOSMOFAT,
+// GOCOSMOSTRIP and GOCOSMODEBUG settings, the values `go env` reports.
+// Each is what the build acts on rather than the raw environment string:
+// GOCOSMOFAT reads "off" whenever the APE will carry one architecture,
+// including when GOCOSMOPLATFORMS is what narrowed it to one.
+func CosmoFat() string {
+	set, _ := cosmoPlatformSpec()
+	if cosmoFatEnv() && len(set.Arches()) > 1 {
+		return "on"
+	}
+	return "off"
+}
+
+func CosmoStrip() string {
+	if cosmoStripEnabled() {
+		return "on"
+	}
+	return "off"
+}
+
+func CosmoDebug() string { return cosmoDebugMode() }
 
 // cosmoStripEnabled reports whether fat APE merges should strip debug info
 // (DWARF, symbol table, section headers) from the shipped binary and write
@@ -112,17 +163,18 @@ func cosmoDebugGcflags(mode string) []string {
 	return []string{"-dwarflocationlists=false", "-gendwarfinl=0"}
 }
 
-// cosmoDebugInit validates GOCOSMODEBUG for GOOS=cosmo builds (an invalid
-// value stops any cosmo build early, not just fat merges) and applies the
-// min mode's compile-time DWARF trims by appending to forcedGcflags.
-// Called from BuildInit.
+// cosmoBuildInit validates the GOCOSMO* environment (an invalid value stops
+// the build early, not just at the assembly step) and applies the debug
+// mode's compile-time DWARF trims by appending to forcedGcflags. Called
+// from BuildInit.
 //
 // Forced flags precede the user's -gcflags in the compiler invocation and
 // later flags win, so an explicit user -gcflags setting overrides the
 // injected trims. The injected flags are part of the build-cache key
 // (like all gcflags), so switching modes with different flags recompiles
 // affected packages rather than reusing stale objects.
-func cosmoDebugInit() {
+func cosmoBuildInit() {
+	cosmoPlatformSpec() // reject an invalid GOCOSMOPLATFORMS on any build
 	if cfg.Goos != "cosmo" || cfg.BuildToolchainName != "gc" {
 		return
 	}
@@ -153,21 +205,31 @@ func ldflagsSpecifyStrip(ldflags []string) bool {
 	return false
 }
 
-// cosmoMergeArgs returns the linker arguments that merge p's built target
-// and its sibling-architecture build into a fat APE at p.Target, applying
-// the default strip-and-sidecar behavior unless GOCOSMOSTRIP=0 or the
-// user's -ldflags for p already specify -s/-w. GOCOSMODEBUG selects how
-// much debug info the sidecars (and, for compact, the APE itself) carry;
-// when the merge passes no strip flags at all there are no sidecars, so
-// the mode has nothing to apply to and is deliberately not passed on.
+// cosmoMergeArgs returns the linker arguments that assemble p's built
+// target - and, when sibling is not empty, its sibling-architecture build -
+// into the APE at p.Target, applying the default strip-and-sidecar behavior
+// unless GOCOSMOSTRIP=0 or the user's -ldflags for p already specify -s/-w.
+// GOCOSMODEBUG selects how much debug info the sidecars (and, for compact,
+// the APE itself) carry; when the merge passes no strip flags at all there
+// are no sidecars, so the mode has nothing to apply to and is deliberately
+// not passed on. A GOCOSMOPLATFORMS selection rides along as
+// -apeplatforms, where the linker turns it into the boot mechanisms the
+// header carries and fails on any platform the payloads cannot serve.
 func cosmoMergeArgs(p *load.Package, sibling string) []string {
-	args := []string{"-apefat", p.Target + "," + sibling, "-o", p.Target}
+	spec := p.Target
+	if sibling != "" {
+		spec += "," + sibling
+	}
+	args := []string{"-apefat", spec, "-o", p.Target}
+	if set, explicit := cosmoPlatformSpec(); explicit {
+		args = append(args, "-apeplatforms="+set.String())
+	}
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
 		if mode := cosmoDebugMode(); mode != "full" {
 			if mode == "min" {
 				// min's extra reduction happens at compile time
-				// (cosmoDebugInit); its merge-time sidecar
+				// (cosmoBuildInit); its merge-time sidecar
 				// transform is exactly slim's, so the linker
 				// only knows the three -apedbgmode values.
 				mode = "slim"
@@ -333,25 +395,30 @@ func cosmoFatStart(dir bool) *cosmoSibling {
 }
 
 // cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
-// of each main package in mains) with a fat (amd64+arm64) APE, merging it
-// with the sibling-architecture binary produced by s using the linker's
-// -apefat mode. By default the merge also strips each embedded payload to
-// its loadable span and writes unstripped per-architecture debug sidecars
-// (<target>.dbg, <target>.aarch64.elf) next to the output; see
+// of each main package in mains) with the assembled APE, merging in the
+// sibling-architecture binary produced by s (when there is one) using the
+// linker's -apefat mode. By default the assembly also strips each embedded
+// payload to its loadable span and writes unstripped per-architecture debug
+// sidecars (<target>.dbg, <target>.aarch64.elf) next to the output; see
 // cosmoMergeArgs.
 func cosmoFatten(s *cosmoSibling, mains []*load.Package) {
-	if s == nil {
+	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}
-	defer s.cleanup()
-	s.wait()
+	if s != nil {
+		defer s.cleanup()
+		s.wait()
+	}
 
-	// Fattening re-reads the freshly written target and re-creates it with
-	// the merged APE. That only makes sense for regular files: with
-	// -o /dev/null (or any other special file) the target reads back empty
-	// and cannot be replaced, so leave the primary build's output as-is.
+	// Assembly re-reads the freshly written target and re-creates it with
+	// the merged APE. That only makes sense for a main package's regular
+	// file: with -o /dev/null (or any other special file) the target reads
+	// back empty and cannot be replaced, so leave the build's output as-is.
 	regular := make([]*load.Package, 0, len(mains))
 	for _, p := range mains {
+		if p.Name != "main" || p.Target == "" {
+			continue
+		}
 		if fi, err := os.Stat(p.Target); err == nil && !fi.Mode().IsRegular() {
 			continue
 		}
@@ -364,15 +431,18 @@ func cosmoFatten(s *cosmoSibling, mains []*load.Package) {
 	link := base.Tool("link")
 	for _, p := range regular {
 		target := p.Target
-		sibling := s.childO
-		if s.dir {
-			sibling = filepath.Join(s.tmp, "out", filepath.Base(target))
+		var sibling string
+		if s != nil {
+			sibling = s.childO
+			if s.dir {
+				sibling = filepath.Join(s.tmp, "out", filepath.Base(target))
+			}
 		}
 		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
-			base.Fatalf("go: cosmo fat build: merging %s: %v", target, err)
+			base.Fatalf("go: cosmo build: assembling %s: %v", target, err)
 		}
 	}
 }
@@ -414,30 +484,32 @@ func cosmoFatStartInstall(hasMains bool) *cosmoSibling {
 }
 
 // cosmoFattenInstall replaces each freshly installed GOOS=cosmo
-// executable (the Target of each main package in mains) with a fat
-// (amd64+arm64) APE, the go-install counterpart of cosmoFatten.
+// executable (the Target of each main package in mains) with the assembled
+// APE, the go-install counterpart of cosmoFatten.
 func cosmoFattenInstall(s *cosmoSibling, mains []*load.Package) {
-	if s == nil {
+	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}
-	defer s.cleanup()
-	s.wait()
+	if s != nil {
+		defer s.cleanup()
+		s.wait()
+	}
 	if len(mains) == 0 {
 		return
 	}
-	otherArch := s.arch
-	tmp := s.tmp
 
 	link := base.Tool("link")
 	for _, p := range mains {
 		target := p.Target
-		name := filepath.Base(target)
-		sibling := filepath.Join(tmp, "bin", "cosmo_"+otherArch, name)
+		var sibling string
+		if s != nil {
+			sibling = filepath.Join(s.tmp, "bin", "cosmo_"+s.arch, filepath.Base(target))
+		}
 		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
 		merge.Stdout = os.Stdout
 		merge.Stderr = os.Stderr
 		if err := merge.Run(); err != nil {
-			base.Fatalf("go: cosmo fat install: merging %s: %v", target, err)
+			base.Fatalf("go: cosmo install: assembling %s: %v", target, err)
 		}
 	}
 }
