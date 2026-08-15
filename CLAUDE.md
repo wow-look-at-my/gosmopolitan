@@ -480,56 +480,19 @@ labels — know this before pushing branches or interpreting PR state:
 
 ## Toolchain Distribution
 
-Every push whose build+test jobs are green publishes an installable
-linux-amd64 toolchain tarball to buildhost (pazer.build) as project
-`gosmopolitan`: the `publish` job in cosmo-ci.yml first stamps VERSION with a
-unique per-release suffix (`go<base>.r<run_number>`), then runs
-`make.bash -distpack` (official packaging; output
-`pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
-`go1.26.5cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
-with buildhost's own publish actions (`buildhost-create-release` /
-`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
-`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
-authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
-The committed VERSION stays `go1.26.5cosmo`; the publish-only stamp gives
-each published release a disjoint cmd/go tool-ID (hence build-cache)
-namespace — identical release version strings previously let the org's
-shared GOCACHEPROG cache mix objects across releases into one binary. Local
-source builds keep the static version and need no stamp: since 2026-07-20
-tool IDs are content-derived (see Fork Gotchas), so a hand-rebuilt
-toolchain self-invalidates stale cache entries and the old `go clean
--cache`-after-`make.bash` rule is obsolete for local builds too. Consumers
-install the fork in seconds instead of a ~3 minute `make.bash`:
+Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64 and
+darwin/arm64** — one release, each platform built on its own runner (distpack packages what a HOST build produced, so
+`GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
 
 ```bash
-curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz   # or os=darwin&arch=arm64
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> linux/amd64
 ```
 
-The tarball extracts to `go/` (official distribution layout; GOROOT is
-derived from the binary location, no need to set it). Consumer gotchas:
-
-- **`GOTOOLCHAIN=local` is no longer required.** The shipped `go.env` now
-  defaults `GOTOOLCHAIN=local` (upstream ships `auto`, under which a consumer
-  go.mod with a `go`/`toolchain` directive newer than this fork's version
-  would silently download an official toolchain and lose cosmo). An explicit
-  `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
-  go.mod genuinely newer than the fork now fails loudly (`go.mod requires
-  go >= X (running go 1.26)`) instead of silently switching. Note the fork
-  self-identifies as the dev version `1.26` (its `go1.26.5cosmo` string does
-  not parse as a release version), so directives up to `go 1.26` are
-  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
-  still ship `GOTOOLCHAIN=auto` and need the env var.
-- **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
-  Gotchas); any host-run `go build`/`go install`/`go test` needs
-  `GOOS=linux GOARCH=amd64`.
-- **Pinning**: `?branch=master` is a rolling latest that moves on every push
-  to master (each branch gets its own `?branch=<name>` latest). Pin an
-  immutable release with `?v=N` in place of the `branch` param; buildhost
-  auto-increments N per publish, the publish job logs it, and
-  `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
-  the current one.
+The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
+committed VERSION stays `go1.26.5cosmo`. Windows, macOS Intel and linux/arm64 build from source. Depth — the three-job
+publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:
+docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 

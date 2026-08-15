@@ -715,12 +715,64 @@ jobs:
   # Auth is a GitHub Actions OIDC token (audience https://pazer.build); the
   # buildhost project auto-provisions on the first authenticated push, and
   # every branch gets its own rolling latest (?branch=<name>).
-  publish:
-    timeout-minutes: 15
+  # Publishing is three jobs so each platform's tarball is built ON that
+  # platform. distpack packages what a HOST build produced, so there is no
+  # cross-package shortcut: GOOS=darwin GOARCH=arm64 ./make.bash -distpack
+  # dies with "distpack: stat bin/darwin_arm64/go: no such file or
+  # directory".
+  #
+  #   publish-create -> one release, so every platform lands in ONE version
+  #   publish-upload -> per-platform build + upload, straight to buildhost
+  #   publish-finish -> publish that release once every platform is in
+  #
+  # Nothing is handed between the jobs: each leg builds its own tarball on
+  # its own runner and uploads it directly, so no GitHub artifact storage is
+  # involved. A failed leg means publish-finish never runs and the release
+  # stays a draft, which buildhost records as INTENT and never serves as
+  # latest -- so a half-uploaded release cannot be installed.
+  publish-create:
+    timeout-minutes: 10
     needs: [build, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
+      contents: read
+      artifact-metadata: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create buildhost release
+        # No version input: buildhost auto-increments the project version.
+        # git_branch/git_commit default to the pushed branch and sha inside
+        # the action, so every branch keeps its own rolling latest and branch
+        # pushes never move ?branch=master.
+        id: release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: gosmopolitan
+
+  publish-upload:
+    # macOS make.bash runs ~4m30s at its slowest observed; distpack adds
+    # seconds.
+    timeout-minutes: 25
+    needs: publish-create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
       contents: read
       artifact-metadata: write
 
@@ -742,16 +794,21 @@ jobs:
         # different releases into one binary. A unique monotonic suffix
         # per publish makes each release's cache namespace disjoint. The
         # committed VERSION is unchanged; this rewrite is publish-only.
+        #
+        # Every leg stamps the SAME string: run_number is one value per
+        # run, so the platforms of one release cannot disagree about which
+        # toolchain they are.
         shell: bash
         run: |
           printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
           echo "VERSION stamped: $(cat VERSION)"
 
       - name: Build distribution tarball
-        # The build job's ubuntu build plus distpack packaging: writes the
-        # official-style go<VERSION>.linux-amd64.tar.gz to pkg/distpack.
-        # make.bash alone is ~2m30s; distpack adds only seconds.
-        timeout-minutes: 10
+        # A host build plus distpack packaging: writes the official-style
+        # go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack. make.bash
+        # alone is ~2m30s on ubuntu and ~4m30s on macos; distpack adds
+        # only seconds.
+        timeout-minutes: 15
         shell: bash
         run: cd src && ./make.bash -distpack
         env:
@@ -764,13 +821,16 @@ jobs:
       - name: Locate distribution tarball
         id: tarball
         uses: wow-look-at-my/actions@typescript#latest
+        env:
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
         with:
           script: |
-            // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.linux-amd64.tar.gz)
+            // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.<goos>-<goarch>.tar.gz)
             const distDir = 'pkg/distpack';
-            const names = fs.readdirSync(distDir).filter((f) => /^go.*\.linux-amd64\.tar\.gz$/.test(f));
+            const suffix = `.${process.env.DIST_SUFFIX}.tar.gz`;
+            const names = fs.readdirSync(distDir).filter((f) => f.startsWith('go') && f.endsWith(suffix));
             if (names.length !== 1) {
-              throw new Error(`want exactly one go*.linux-amd64.tar.gz in ${distDir}, ` +
+              throw new Error(`want exactly one go*${suffix} in ${distDir}, ` +
                 `found [${names.join(', ')}] among [${fs.readdirSync(distDir).join(', ')}]`);
             }
             const tarball = path.join(distDir, names[0]);
@@ -778,35 +838,47 @@ jobs:
             core.setOutput('path', tarball);
             core.setOutput('name', names[0]);
 
-      - name: Create buildhost release
-        # No version input: buildhost auto-increments the project version.
-        # git_branch/git_commit default to the pushed branch and sha inside
-        # the action, so every branch keeps its own rolling latest and branch
-        # pushes never move ?branch=master.
-        id: release
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
-        with:
-          project: gosmopolitan
-
       - name: Upload toolchain tarball
-        timeout-minutes: 5
+        timeout-minutes: 10
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
         with:
           project: gosmopolitan
-          version: ${{ steps.release.outputs.version }}
-          os: linux
-          arch: amd64
+          version: ${{ needs.publish-create.outputs.version }}
+          os: ${{ matrix.goos }}
+          arch: ${{ matrix.goarch }}
           kind: binary
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
+
+      - name: Log uploaded artifact
+        shell: bash
+        run: |
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
+
+  publish-finish:
+    timeout-minutes: 10
+    needs: [publish-create, publish-upload]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
         with:
           project: gosmopolitan
-          version: ${{ steps.release.outputs.version }}
+          version: ${{ needs.publish-create.outputs.version }}
 
       - name: Log published release
         shell: bash
         run: |
-          echo "::notice::published ${{ steps.tarball.outputs.name }} as gosmopolitan v${{ steps.release.outputs.version }}: https://dl.pazer.build/gosmopolitan?branch=${{ github.ref_name }}&os=linux&arch=amd64"
+          v='${{ needs.publish-create.outputs.version }}'
+          b='${{ github.ref_name }}'
+          echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
+          echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
+          echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
