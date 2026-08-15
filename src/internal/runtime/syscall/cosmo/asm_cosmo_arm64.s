@@ -164,7 +164,11 @@ darwin_openat:
 darwin_openat_dirfd_done:
 	BL	runtime·cosmo_xlat_oflags_r2(SB)
 	MOVD	248(R10), R12		// syslib.openat
-	B	darwin_call
+	// openat(int, const char *, int, ...) is VARIADIC: the mode is the
+	// variadic argument, and arm64-apple passes those on the stack. Left
+	// in R3 it is never read, so an O_CREAT open takes its permission
+	// bits from stack garbage.
+	B	darwin_call_v3
 darwin_mmap:
 	// mmap needs flag translation: Linux MAP_ANONYMOUS (0x20) -> macOS MAP_ANON (0x1000)
 	// R3 = flags argument
@@ -210,12 +214,26 @@ darwin_pselect:
 	MOVD	280(R10), R12		// syslib.pselect
 	B	darwin_call
 
+darwin_call_v3:
+	// Call a VARIADIC libc function with three fixed arguments (R0-R2)
+	// and one variadic argument (R3). arm64-apple passes variadic
+	// arguments on the stack even when argument registers are free, so
+	// R3 is stored at the call frame's stack top instead. Falls into the
+	// shared return handling below.
+	CBZ	R12, darwin_enosys	// Function not in syslib
+	SUB	$16, RSP		// Align stack for C ABI
+	MOVD	R3, (RSP)		// variadic arg -> STACK
+	BL	(R12)
+	ADD	$16, RSP
+	B	darwin_call_ret
+
 darwin_call:
 	CBZ	R12, darwin_enosys	// Function not in syslib
 	SUB	$16, RSP		// Align stack for C ABI
 	BL	(R12)
 	ADD	$16, RSP
 
+darwin_call_ret:
 	// Handle return value: negative = -errno, non-negative = success
 	CMN	$4095, R0
 	BCC	darwin_success
@@ -242,6 +260,14 @@ darwin_success:
 // signature and frame layout).
 TEXT ·darwinLibcCall6(SB),NOSPLIT,$0-64
 	JMP	runtime·cosmoLibcCall6(SB)
+
+// func darwinLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+// Tail jump to the runtime's variadic trampoline, which puts v1 on the
+// stack as arm64-apple requires for variadic arguments. Every call to a
+// variadic libc function (fcntl, open with a mode, ioctl) must come
+// through here rather than darwinLibcCall6.
+TEXT ·darwinLibcCallVariadic1(SB),NOSPLIT,$0-40
+	JMP	runtime·cosmoLibcCallVariadic1(SB)
 
 // func xlatErrnoDarwin(errno uintptr) uintptr
 // FP-args wrapper around the register-based shared translation helper so

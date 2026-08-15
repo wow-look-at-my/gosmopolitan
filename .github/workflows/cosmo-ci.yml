@@ -152,6 +152,41 @@ jobs:
           ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
             runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
 
+      - name: Build platform-subset APE binaries
+        # GOCOSMOPLATFORMS restricts which hosts the APE boots on. Two
+        # subsets, both executed on every test leg (see the test job):
+        #
+        #  tri  - linux/amd64, darwin/arm64, windows/amd64. Still needs
+        #         both payloads, so it is the same size as the fat build;
+        #         what it drops is the macOS Intel claim. This is the set
+        #         consumers ask for, and every one of its three platforms
+        #         must still boot the binary.
+        #  amd  - linux/amd64, windows/amd64. One payload: the arm64 image,
+        #         its boot header and its sidecar are gone, which is where
+        #         the size actually drops.
+        #
+        # Cross-compiles, so one leg builds them for all three to run.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          export GOOS=cosmo
+          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+          # Sidecar existence is an assertion: a restricted build is still
+          # stripped and still writes a sidecar per payload it carries, so
+          # the amd-only pair must have no .aarch64.elf.
+          ls -la fizzbuzz-tri.com fizzbuzz-tri.com.dbg fizzbuzz-tri.com.aarch64.elf \
+            fizzbuzz-amd.com fizzbuzz-amd.com.dbg
+          if [ -e fizzbuzz-amd.com.aarch64.elf ]; then
+            echo "FAIL: an amd64-only selection wrote an arm64 debug sidecar"; exit 1
+          fi
+          echo "=== sizes ==="
+          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
+
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
@@ -159,6 +194,11 @@ jobs:
           path: |
             fizzbuzz.com
             runtimeprobe.com
+            fizzbuzz-tri.com
+            runtimeprobe-tri.com
+            fizzbuzz-amd.com
+            runtimeprobe-amd.com
+          if-no-files-found: ignore
           retention-days: 1
 
       - name: APE merge unit tests (linker + go command)
@@ -172,7 +212,13 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput|TestCosmoPlatformSpec|TestCosmoSiblingAndAssemble|TestCosmoMergeArgsPlatforms|TestCosmoEnvReportsEffectiveValues' cmd/go/internal/work
+          # The platform table both commands parse GOCOSMOPLATFORMS and
+          # -apeplatforms through, and the go env readouts a consumer
+          # probes to tell an aware toolchain from one that ignores the
+          # selection - load-bearing outside this repo, so gated here.
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/env_cosmo' cmd/go
           # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
           # cmsg repack, signal/wait-status translation tables, epoll
           # layout) are GOOS=cosmo-only code, run on this host via the
@@ -279,7 +325,7 @@ jobs:
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
-          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz*.com binaries/ape-binary-*/runtimeprobe*.com
 
       # Windows execution acceptance (cosmo NT bring-up), windows leg
       # only: a normal fat APE - cosmo amd64 + arm64, no embedded second
@@ -510,6 +556,53 @@ jobs:
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
+      # A platform-subset APE must boot and run on every platform it still
+      # claims, on the real host - linking is not evidence. Both subsets
+      # run here, on all three legs; each one's TestSlimRuns skips itself
+      # on a host it deliberately dropped (amd on macOS), while the
+      # structural checks - which payload, which boot header, which loader
+      # pieces, and the size against the unrestricted build - run
+      # everywhere.
+      #
+      # -run selects the execution battery plus TestSlim*: the rest of the
+      # suite (TestELF*, TestMacho*, TestPE*, TestFat*, TestShell*) pins
+      # the shape of an UNRESTRICTED build and is asserted against the fat
+      # binaries in the steps above. The subset's own shape is what
+      # TestSlim* asserts, parameterized by SLIM_PLATFORMS.
+      - name: Test platform-subset APEs
+        id: test-subset
+        timeout-minutes: ${{ matrix.apetest-timeout }}
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
+          rc=0
+          : > test-output.log
+          run_subset() {
+            name="$1" platforms="$2"
+            echo "=== subset $name: $platforms ===" >> test-output.log
+            FIZZBUZZ_BIN="$bins/fizzbuzz-$name.com" \
+            RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
+            SLIM_BIN="$bins/fizzbuzz-$name.com" \
+            SLIM_PLATFORMS="$platforms" \
+            FAT_BIN="$bins/fizzbuzz.com" \
+              sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
+              go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
+          }
+          run_subset tri linux/amd64,darwin/arm64,windows/amd64 || rc=$?
+          run_subset amd linux/amd64,windows/amd64 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload subset test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-subset
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) that
   # this fork patches; see WASM_SHORTCOMINGS.md for the catalog of fixes.
   # Wasm output is host-independent, so a single ubuntu leg is enough.
@@ -722,13 +815,66 @@ jobs:
   # Auth is a GitHub Actions OIDC token (audience https://pazer.build); the
   # buildhost project auto-provisions on the first authenticated push, and
   # every branch gets its own rolling latest (?branch=<name>).
-  publish:
-    timeout-minutes: 15
+  # Publishing is three jobs so each platform's tarball is built ON that
+  # platform. distpack packages what a HOST build produced, so there is no
+  # cross-package shortcut: GOOS=darwin GOARCH=arm64 ./make.bash -distpack
+  # dies with "distpack: stat bin/darwin_arm64/go: no such file or
+  # directory".
+  #
+  #   publish-create -> one release, so every platform lands in ONE version
+  #   publish-upload -> per-platform build + upload, straight to buildhost
+  #   publish-finish -> publish that release once every platform is in
+  #
+  # Nothing is handed between the jobs: each leg builds its own tarball on
+  # its own runner and uploads it directly, so no GitHub artifact storage is
+  # involved. A failed leg means publish-finish never runs and the release
+  # stays a draft, which buildhost records as INTENT and never serves as
+  # latest -- so a half-uploaded release cannot be installed.
+  publish-create:
+    timeout-minutes: 10
     needs: [build, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
       contents: read
+      artifact-metadata: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create buildhost release
+        # No version input: buildhost auto-increments the project version.
+        # git_branch/git_commit default to the pushed branch and sha inside
+        # the action, so every branch keeps its own rolling latest and branch
+        # pushes never move ?branch=master.
+        id: release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: gosmopolitan
+
+  publish-upload:
+    # macOS make.bash runs ~4m30s at its slowest observed; distpack adds
+    # seconds.
+    timeout-minutes: 25
+    needs: publish-create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
+      contents: read
+      artifact-metadata: write
 
     steps:
       - name: Checkout code
@@ -748,16 +894,21 @@ jobs:
         # different releases into one binary. A unique monotonic suffix
         # per publish makes each release's cache namespace disjoint. The
         # committed VERSION is unchanged; this rewrite is publish-only.
+        #
+        # Every leg stamps the SAME string: run_number is one value per
+        # run, so the platforms of one release cannot disagree about which
+        # toolchain they are.
         shell: bash
         run: |
           printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
           echo "VERSION stamped: $(cat VERSION)"
 
       - name: Build distribution tarball
-        # The build job's ubuntu build plus distpack packaging: writes the
-        # official-style go<VERSION>.linux-amd64.tar.gz to pkg/distpack.
-        # make.bash alone is ~2m30s; distpack adds only seconds.
-        timeout-minutes: 10
+        # A host build plus distpack packaging: writes the official-style
+        # go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack. make.bash
+        # alone is ~2m30s on ubuntu and ~4m30s on macos; distpack adds
+        # only seconds.
+        timeout-minutes: 15
         shell: bash
         run: cd src && ./make.bash -distpack
         env:
@@ -770,14 +921,16 @@ jobs:
       - name: Locate distribution tarball
         id: tarball
         uses: wow-look-at-my/actions@typescript#latest
+        env:
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
         with:
           script: |
-            // buildhost-upload-artifact takes an exact file path; resolve the
-            // versioned distpack tarball name (go<VERSION>.linux-amd64.tar.gz).
+            // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.<goos>-<goarch>.tar.gz)
             const distDir = 'pkg/distpack';
-            const names = fs.readdirSync(distDir).filter((f) => /^go.*\.linux-amd64\.tar\.gz$/.test(f));
+            const suffix = `.${process.env.DIST_SUFFIX}.tar.gz`;
+            const names = fs.readdirSync(distDir).filter((f) => f.startsWith('go') && f.endsWith(suffix));
             if (names.length !== 1) {
-              throw new Error(`want exactly one go*.linux-amd64.tar.gz in ${distDir}, ` +
+              throw new Error(`want exactly one go*${suffix} in ${distDir}, ` +
                 `found [${names.join(', ')}] among [${fs.readdirSync(distDir).join(', ')}]`);
             }
             const tarball = path.join(distDir, names[0]);
@@ -785,35 +938,47 @@ jobs:
             core.setOutput('path', tarball);
             core.setOutput('name', names[0]);
 
-      - name: Create buildhost release
-        # No version input: buildhost auto-increments the project version.
-        # git_branch/git_commit default to the pushed branch and sha inside
-        # the action, so every branch keeps its own rolling latest and branch
-        # pushes never move ?branch=master.
-        id: release
-        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
-        with:
-          project: gosmopolitan
-
       - name: Upload toolchain tarball
-        timeout-minutes: 5
+        timeout-minutes: 10
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
         with:
           project: gosmopolitan
-          version: ${{ steps.release.outputs.version }}
-          os: linux
-          arch: amd64
+          version: ${{ needs.publish-create.outputs.version }}
+          os: ${{ matrix.goos }}
+          arch: ${{ matrix.goarch }}
           kind: binary
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
+
+      - name: Log uploaded artifact
+        shell: bash
+        run: |
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
+
+  publish-finish:
+    timeout-minutes: 10
+    needs: [publish-create, publish-upload]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
         with:
           project: gosmopolitan
-          version: ${{ steps.release.outputs.version }}
+          version: ${{ needs.publish-create.outputs.version }}
 
       - name: Log published release
         shell: bash
         run: |
-          echo "::notice::published ${{ steps.tarball.outputs.name }} as gosmopolitan v${{ steps.release.outputs.version }}: https://dl.pazer.build/gosmopolitan?branch=${{ github.ref_name }}&os=linux&arch=amd64"
+          v='${{ needs.publish-create.outputs.version }}'
+          b='${{ github.ref_name }}'
+          echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
+          echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
+          echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"

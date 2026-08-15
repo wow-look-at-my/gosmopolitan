@@ -138,6 +138,7 @@ const (
 // Errno values (Linux numbering) produced by the emulation itself.
 const (
 	darwinEIO    = 5
+	darwinEFAULT = 14
 	darwinEINVAL = 22
 	darwinENOSYS = 38
 )
@@ -256,12 +257,37 @@ func darwinXlatDirfd(fd uintptr) uintptr {
 // darwinCall runs a dlsym-resolved libc function that reports failure by
 // returning -1 with errno set, shaping the result for Syscall6.
 //
+// Only for FIXED-arity callees. A variadic one (fcntl, open with a mode,
+// ioctl) needs darwinCallVariadic1: arm64-apple passes variadic
+// arguments on the stack, so handing them over in registers silently
+// feeds the callee stack garbage.
+//
 //go:nosplit
 func darwinCall(fn, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
 	if fn == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
 	}
 	r := darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6)
+	if int64(r) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	return r, 0, 0
+}
+
+// darwinLibcCallVariadic1 calls a variadic libc function with two fixed
+// arguments and one variadic argument, placing the variadic one on the
+// stack as arm64-apple requires. Implemented in asm_cosmo_arm64.s.
+func darwinLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+
+// darwinCallVariadic1 is darwinCall for a variadic callee with two fixed
+// arguments and one variadic argument.
+//
+//go:nosplit
+func darwinCallVariadic1(fn, a1, a2, v1 uintptr) (r1, r2, errno uintptr) {
+	if fn == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	r := darwinLibcCallVariadic1(fn, a1, a2, v1)
 	if int64(r) == -1 {
 		return ^uintptr(0), 0, darwinErrno()
 	}
@@ -648,6 +674,14 @@ const (
 	linuxF_DUPFD_CLOEXEC = 1030
 	appleF_DUPFD_CLOEXEC = 67
 
+	// F_GETPATH resolves an fd to its path. Apple-only: it is passed
+	// through under Apple's own number because Linux has no counterpart
+	// to translate from, and 50 is not a Linux fcntl command (Linux uses
+	// 0..16 and 1024+), so nothing else can mean it. The argument is a
+	// buffer of at least MAXPATHLEN bytes, which the caller owns.
+	appleF_GETPATH  = 50
+	appleMAXPATHLEN = 1024
+
 	linuxO_NONBLOCK = 0x800
 	appleO_NONBLOCK = 0x4
 	linuxO_APPEND   = 0x400
@@ -663,7 +697,7 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 	case fcntlF_DUPFD, fcntlF_GETFD, fcntlF_SETFD:
 		// Identical commands; FD_CLOEXEC is 1 on both systems.
 	case fcntlF_GETFL:
-		r1, r2, errno = darwinCall(darwinFns.Fcntl, fd, cmd, 0, 0, 0, 0)
+		r1, r2, errno = darwinCallVariadic1(darwinFns.Fcntl, fd, cmd, 0)
 		if errno == 0 {
 			// Translate returned status flags Apple -> Linux.
 			out := r1 & 3 // access mode bits agree
@@ -687,12 +721,19 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 		arg = aarg
 	case linuxF_DUPFD_CLOEXEC:
 		cmd = appleF_DUPFD_CLOEXEC
+	case appleF_GETPATH:
+		// Passed through as-is: arg is the caller's MAXPATHLEN buffer,
+		// which Apple fills with a NUL-terminated path.
+		if arg == 0 {
+			return ^uintptr(0), 0, darwinEFAULT
+		}
 	default:
 		// Locking, owner and lease commands have incompatible
 		// argument structures; refuse rather than corrupt.
 		return ^uintptr(0), 0, darwinENOSYS
 	}
-	return darwinCall(darwinFns.Fcntl, fd, cmd, arg, 0, 0, 0)
+	// fcntl is variadic: arg MUST travel on the stack on arm64-apple.
+	return darwinCallVariadic1(darwinFns.Fcntl, fd, cmd, arg)
 }
 
 // darwinGetrandom emulates getrandom(2) with the Syslib's getentropy,

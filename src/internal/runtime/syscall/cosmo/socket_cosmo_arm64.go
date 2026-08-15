@@ -495,10 +495,90 @@ func darwinSetsockopt(s, level, name, val, vallen uintptr) (r1, r2, errno uintpt
 	return darwinCall(darwinFns.Setsockopt, s, alevel, aname, val, vallen, 0)
 }
 
+// Apple's SOL_LOCAL options for AF_UNIX peer identity. SOL_LOCAL is
+// level 0, which is IPPROTO_IP on Linux - the two option namespaces
+// collide outright (Linux IP_TTL is 2, LOCAL_PEERPID is 2), so level 0
+// is NOT passed through. Peer identity is reached through the Linux
+// spelling instead; see darwinPeercred.
+const (
+	appleSOL_LOCAL      = 0
+	appleLOCAL_PEERCRED = 0x001
+	appleLOCAL_PEERPID  = 0x002
+
+	linuxSO_PEERCRED = 17 // level SOL_SOCKET
+)
+
+// appleXucredHead is the leading 16 bytes of Apple's struct xucred:
+// cr_version, cr_uid, cr_ngroups, then cr_groups[0] at offset 12 (gid_t
+// alignment pads the 2-byte cr_ngroups). The rest of cr_groups is the
+// supplementary list, which SO_PEERCRED does not report, so only the head
+// is read - the full 76-byte struct does not fit the 792-byte nosplit
+// budget this dispatch path runs under.
+type appleXucredHead struct {
+	Version uint32
+	Uid     uint32
+	Ngroups int16
+	_       int16
+	Group0  uint32
+}
+
+// linuxUcred is struct ucred, what SO_PEERCRED returns on Linux.
+type linuxUcred struct {
+	Pid int32
+	Uid uint32
+	Gid uint32
+}
+
+// darwinPeercred answers a Linux SO_PEERCRED getsockopt from Apple's two
+// SOL_LOCAL options: LOCAL_PEERPID for the pid, LOCAL_PEERCRED for the
+// uid and primary gid. Either failing fails the call - a half-filled
+// ucred would report a real pid beside an invented uid.
+//
+//go:nosplit
+func darwinPeercred(s, val, vallenp uintptr) (r1, r2, errno uintptr) {
+	if val == 0 || vallenp == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	if *(*uint32)(unsafe.Pointer(vallenp)) < 12 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+
+	// Flat calls to the libc trampoline, not darwinCall: this sits under
+	// darwinGetsockopt on an already-deep nosplit chain, where that
+	// helper's frame does not fit (same reason as darwinSetNoSigpipe).
+	var pid int32
+	pidLen := uint32(4)
+	if int64(darwinLibcCall6(darwinFns.Getsockopt, s, appleSOL_LOCAL, appleLOCAL_PEERPID,
+		uintptr(unsafe.Pointer(&pid)), uintptr(unsafe.Pointer(&pidLen)), 0)) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+
+	var xu appleXucredHead
+	xuLen := uint32(unsafe.Sizeof(xu))
+	if int64(darwinLibcCall6(darwinFns.Getsockopt, s, appleSOL_LOCAL, appleLOCAL_PEERCRED,
+		uintptr(unsafe.Pointer(&xu)), uintptr(unsafe.Pointer(&xuLen)), 0)) == -1 {
+		return ^uintptr(0), 0, darwinErrno()
+	}
+	gid := uint32(0)
+	if xu.Ngroups > 0 {
+		gid = xu.Group0 // Linux reports the primary gid here
+	}
+
+	uc := (*linuxUcred)(unsafe.Pointer(val))
+	uc.Pid = pid
+	uc.Uid = xu.Uid
+	uc.Gid = gid
+	*(*uint32)(unsafe.Pointer(vallenp)) = 12
+	return 0, 0, 0
+}
+
 //go:nosplit
 func darwinGetsockopt(s, level, name, val, vallenp uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Getsockopt == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if level == linuxSOL_SOCKET && name == linuxSO_PEERCRED {
+		return darwinPeercred(s, val, vallenp)
 	}
 	alevel, aname, ok := darwinSockoptXlat(level, name)
 	if !ok {

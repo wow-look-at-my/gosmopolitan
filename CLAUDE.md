@@ -103,6 +103,25 @@ GOOS=cosmo go build -ldflags="-s -w" -o program.com main.go
 # thin builds never strip and get no sidecars)
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
+# Restrict which hosts the APE boots on. Tokens: linux/amd64, linux/arm64,
+# darwin/amd64, darwin/arm64, windows/amd64 (which boots the AMD64 payload
+# through the PE header - there is no windows payload). Unset = every
+# platform, byte-identical to before the flag existed. An unknown token, an
+# empty list, or a platform whose payload is missing fails the build; a
+# selection that needs one architecture skips the sibling build entirely and
+# is still stripped and given its sidecar. NOT a size win by itself: the APE
+# header is a fixed 64K, so only dropping an ARCHITECTURE changes the size
+# (-47% for amd64-only), and linux/amd64+darwin/arm64+windows/amd64 needs
+# both payloads and weighs exactly what the fat APE does. What a subset buys
+# is an accurate claim and a host refused by name. `go env GOCOSMOPLATFORMS` reports
+# the effective selection, which is how a consumer detects support for it.
+# Depth, including the per-platform payload/header table: DEBUGGING.md
+# "Platform-subset APEs".
+GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o program.com main.go
+
+# The same selection at the linker, over already-built payloads (one or two)
+go tool link -apefat amd64.com,arm64.com -apeplatforms linux/amd64,darwin/arm64 -o program.com -apestrip -apedbg
+
 # Merge two single-arch cosmo binaries into one fat APE by hand
 # (-apestrip -apedbg is what go build passes by default; omit them for a
 # full-payload merge)
@@ -194,135 +213,17 @@ stub sets the runtime's NT personality live (__hostos=2) and joins the
 common boot, with kernel32 resolved at runtime from two loader-filled
 IAT slots.
 
-Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the
-LookPath fix - CI-verified by the full 47-check runtimeprobe gauntlet
-on windows-latest, against
-binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
-os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
-CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
-user-level syscall routes through an NT emulation dispatcher (Linux
-numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go)
-covering process identity, ProcessPrng entropy, the whole file I/O
-family with an fd table and a documented Linux<->Win32 path translation
-(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL), getdents64
-emulation (os.ReadDir/WalkDir/RemoveAll), working-directory round-trip,
-os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
-non-pollable on purpose - a posix_spawn-style CreateProcessW path with
-upstream-ported quoting and env block, and wait4 packing the Linux
-wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
-signal deaths 0xC0DE0000|sig decode as Linux termination signals),
-including exec.LookPath/exec.Command name resolution against the
-HOST-format PATH (2026-07-20, src/os/exec/lp_cosmo.go: runtime host
-switch; on NT a lp_windows.go port - ';' split, PATHEXT/.exe probing,
-ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT
-blocks spell "Path" while cosmo's os.Getenv stays exact-case - plus
-an extensionless-APE last resort; unix hosts keep verbatim lp_unix
-behavior - see DEBUGGING.md 2026-07-20 NT LookPath section);
-sockets over classic synchronous winsock (non-overlapped WSASocketW,
-FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
-is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
-refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with
-a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock
-design; the wake channel is a connected loopback TCP pair because real
-NT may drop loopback UDP datagrams - a lost wake stalls the poller;
-pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
-sockets over afunix.sys (sun_path through the path layer; abstract
-names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
-runs show exactly one red there while windows-latest proves it);
-wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
-as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
-writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
-between cosmo processes (sender-push wire frame on the afunix
-stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
-for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
-AF_UNIX carriers only, same user, both ends must be cosmo binaries -
-see DEBUGGING.md wave 3 item 2b for the honest limits); and
-signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
-(kill/tkill with full delivery through sigtrampgo), os/signal Notify,
-async preemption via SuspendThread/SetThreadContext injection
-(preempt ~180ms on the CI runner, upstream preemptM semantics), signal
-deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling
-(runtime/pprof delivers real samples on NT: upstream os_windows.go's
-profileLoop ported as a standing no-P M parked on a waitable timer,
-SuspendThread under ntSuspendLock, direct sigprof calls - no signal
-number anywhere), conhost control events remapped for unix parity -
-CTRL_C -> SIGINT, CTRL_BREAK -> SIGQUIT (the goroutine-dump chord on
-a wedged process), CTRL_CLOSE -> SIGHUP, LOGOFF/SHUTDOWN -> SIGTERM,
-a deliberate divergence from upstream windows Go (which maps BREAK ->
-SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
-groups: SysProcAttr{Setpgid} spawns the child as its own group leader
-(CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
-group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
-probe CI-proves the conhost-injected handler chain end to end. Still
-missing on Windows: Windows/arm64 (the charter's step-one experiment
-ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic
-pre-main SIGSEGV at 0x2000c9000; see DEBUGGING.md's wave-4 verdict
-section - so native bring-up gains urgency), file/pipe dup(2)
-(ENOSYS on purpose - socket dup works, and file/pipe fds still
-transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
-by design - pair ends cannot cross processes),
-off-host networking (loopback sockets are CI-proven, but off-host
-connect + DNS from NT have no probe, and a consumer run
-field-observed outbound HTTPS timing out on 2026-07-20 - see
-DEBUGGING.md's off-host HTTPS section), and
-real-keyboard/CTRL_CLOSE console coverage (the probe covers the
-GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
-window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
-documented-not-asserted) - see DEBUGGING.md's NT wave sections for
-the ladder, the forensics, and the wave-4 backlog.
+Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
+forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
+through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host networking coverage);
+macOS arm64 complete including signals, SIGPROF profiling and SCM_RIGHTS fd passing; macOS Intel structurally
+correct but its runtime bring-up is UNTESTED - do not claim it works.
 
-macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/
-rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
-via a getdents64 emulation over Apple's __getdirentries64),
-getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
-After, context timeouts), TCP/UDP loopback sockets with deadlines,
-unix-domain stream sockets (pathname addresses; the abstract namespace
-is Linux-only and refused EINVAL), readv/writev (net.Buffers),
-sendmsg/recvmsg with SCM_RIGHTS fd passing (2026-07-21:
-msghdr/cmsghdr layouts differ - Linux 16-byte/8-aligned cmsg headers
-vs Apple 12-byte/4-aligned - so the fixed-size msghdr re-shaping
-lives in the nosplit dispatch layer while package syscall's darwin
-branch repacks control buffers as ordinary Go; ReadMsgUnix/
-WriteMsgUnix work, MSG_CMSG_CLOEXEC is emulated via fcntl,
-truncation-dropped fds are closed never leaked, and the runtimeprobe
-sendmsg/fdpass checks are mandatory on macOS - see DEBUGGING.md
-2026-07-21), os/exec
-(fork, pipes, execve, wait4 with Linux-numbered wait statuses),
-os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
-by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
-os/signal Notify delivery, async preemption (SIGURG - tight loops no
-longer hang GC/STW), and kill/raise, with full Linux<->Apple
-signal-number and sigset translation at every darwin boundary (tables
-in src/runtime/sigxlat_cosmo.go). SIGPROF CPU profiling works too
-(2026-07-21): runtime/pprof and -test.cpuprofile deliver real samples
-on macOS hosts - setitimer(ITIMER_PROF) via dlsym'd Apple libc
-setitimer with the Linux<->Apple itimerval layout translated at the
-boundary, SIGPROF riding the existing wave-9 signal machinery,
-upstream-darwin attribution semantics; the pthread parking wrappers
-record m.libcall* so samples inside pthread_cond_wait attribute to
-the Go call site, and the runtimeprobe cpuprof check is mandatory on
-macOS. SIGPIPE additionally stays suppressed
-per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics. As of
-wave 9 the darwin netpoller is a kqueue port of upstream
-netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream
-os_darwin.go's pthread_mutex+pthread_cond design - this pair replaced
-the poll(2)+self-pipe poller and dispatch-semaphore parking after the
-waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
-counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
-returning from a nonblocking read(2) on the poller's wakeup pipe.
-The wave-9 "still missing on macOS hosts" backlog is now closed
-(sendmsg/recvmsg and SIGPROF profiling were its last entries); the
-remaining known macOS gaps are AllThreadsSyscall (Linux-only
-rt-signal machinery, unused by the stdlib on cosmo) and the
-Intel-mac runtime bring-up below - see DEBUGGING.md.
-
-macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
-2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
-host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
-unit tests and apetest), but the darwin-amd64 runtime side (clone/futex/
-sigaction and friends) is still incomplete, and there is no Intel-mac CI
-runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel
-"works" until the runtime bring-up lands and is verified on real hardware.
+**Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64
+here, so a variadic callee handed its argument in a register reads uninitialized stack memory and usually
+succeeds while doing something other than what was asked (this silently unset FD_CLOEXEC for a third of all
+descriptors). Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for fcntl, open/openat with a mode, and
+ioctl; never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
 
 ## Architecture
 
@@ -542,56 +443,19 @@ labels — know this before pushing branches or interpreting PR state:
 
 ## Toolchain Distribution
 
-Every push whose build+test jobs are green publishes an installable
-linux-amd64 toolchain tarball to buildhost (pazer.build) as project
-`gosmopolitan`: the `publish` job in cosmo-ci.yml first stamps VERSION with a
-unique per-release suffix (`go<base>.r<run_number>`), then runs
-`make.bash -distpack` (official packaging; output
-`pkg/distpack/go<base>.r<run_number>.linux-amd64.tar.gz`, e.g.
-`go1.26.5cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and publishes it
-with buildhost's own publish actions (`buildhost-create-release` /
-`buildhost-upload-artifact` / `buildhost-publish-release`, referenced as
-`wow-look-at-my/buildhost/.github/actions/<name>@master`), each
-authenticating via GitHub Actions OIDC (audience `https://pazer.build`).
-The committed VERSION stays `go1.26.5cosmo`; the publish-only stamp gives
-each published release a disjoint cmd/go tool-ID (hence build-cache)
-namespace — identical release version strings previously let the org's
-shared GOCACHEPROG cache mix objects across releases into one binary. Local
-source builds keep the static version and need no stamp: since 2026-07-20
-tool IDs are content-derived (see Fork Gotchas), so a hand-rebuilt
-toolchain self-invalidates stale cache entries and the old `go clean
--cache`-after-`make.bash` rule is obsolete for local builds too. Consumers
-install the fork in seconds instead of a ~3 minute `make.bash`:
+Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64 and
+darwin/arm64** — one release, each platform built on its own runner (distpack packages what a HOST build produced, so
+`GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
 
 ```bash
-curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz   # or os=darwin&arch=arm64
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> linux/amd64
 ```
 
-The tarball extracts to `go/` (official distribution layout; GOROOT is
-derived from the binary location, no need to set it). Consumer gotchas:
-
-- **`GOTOOLCHAIN=local` is no longer required.** The shipped `go.env` now
-  defaults `GOTOOLCHAIN=local` (upstream ships `auto`, under which a consumer
-  go.mod with a `go`/`toolchain` directive newer than this fork's version
-  would silently download an official toolchain and lose cosmo). An explicit
-  `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
-  go.mod genuinely newer than the fork now fails loudly (`go.mod requires
-  go >= X (running go 1.26)`) instead of silently switching. Note the fork
-  self-identifies as the dev version `1.26` (its `go1.26.5cosmo` string does
-  not parse as a release version), so directives up to `go 1.26` are
-  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
-  still ship `GOTOOLCHAIN=auto` and need the env var.
-- **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
-  Gotchas); any host-run `go build`/`go install`/`go test` needs
-  `GOOS=linux GOARCH=amd64`.
-- **Pinning**: `?branch=master` is a rolling latest that moves on every push
-  to master (each branch gets its own `?branch=<name>` latest). Pin an
-  immutable release with `?v=N` in place of the `branch` param; buildhost
-  auto-increments N per publish, the publish job logs it, and
-  `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
-  the current one.
+The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
+committed VERSION stays `go1.26.5cosmo`. Windows, macOS Intel and linux/arm64 build from source. Depth — the three-job
+publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:
+docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 
@@ -620,348 +484,23 @@ ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
 
 ## Loop-aware inlining (all targets)
 
-Upstream's inliner is frequency-blind without a profile: a call on a cold
-error path and a call in a hot inner loop are judged by the same flat
-80-node budget, and a callee is charged the same for a node whether that
-node runs once or a million times. Loop bodies are where the nodes are, so
-"Go won't inline a function containing a loop" stayed true in practice long
-after the structural ban was lifted - the loop is what exhausts the budget.
-This fork adds the static frequency estimate every other production
-compiler has (GCC divides growth by a frequency-weighted benefit, LLVM
-raises the threshold for call sites its block-frequency estimate calls hot,
-HotSpot C2 scales limits by call-site frequency), in
-`src/cmd/compile/internal/inline/loop.go`, for every GOOS/GOARCH.
-
-**What ships on: loop nesting is acted on at the CALL SITE, not at the
-callee.** That split was decided by measurement, not taste - see below.
-
-- **Budget, call-site side** (on) - a call nested in a loop doubles the max
-  callee cost per level (`inlineLoopSiteFactor`) to depth
-  `inlineLoopMaxDepth` (3), ceiling `inlineLoopHotBudget` (320); a "big"
-  caller's reduced limit of 20 grows the same way but never past 80.
-- **Availability, callee side** (on) - the budget boost is useless if the
-  callee never got an inline body, so a function this package calls from
-  inside a loop is analyzed with the 320 budget. This is the mechanism PGO
-  uses for profile-hot functions, driven by static loop nesting instead,
-  and like all inlinability it is decided when the callee's own package is
-  compiled - so it is intra-package by construction.
-- **Growth guard** (on) - one caller absorbs at most
-  `inlineLoopGrowthBudget` (640) of extra cost from loop-boosted inlining,
-  so inlining into a loop (which makes more of the caller loop-nested,
-  which admits more inlining) cannot snowball.
-- **Cost discount, callee side** (OFF by default, `-d=loopinlinediv=2` to
-  enable) - charging a loop-nested node a fraction of its usual cost,
-  bounded by `inlineLoopCostCredit`. This is the mechanism that most
-  directly answers the original complaint, and on its own it measured as a
-  net loss: it makes a loop function cheap at *every* call site, so the
-  code growth lands everywhere while the benefit only materializes where
-  the call is hot.
-
-Measured, all configurations interleaved round-robin so machine drift
-cancels (measured sequentially this box drifts +1.3% between the baseline
-and *itself* - larger than every effect here, and the reason the first
-three rounds of numbers were thrown away):
-
-| | call site (shipped) | callee discount |
-|---|---|---|
-| nine whole-task workloads | **-1.1% median**, 6 faster / 1 slower | +1.1% median, 3 faster / 5 slower |
-| hot loop calling loop helpers | **-2.3% median** (best -22.5%) | -2.3% median |
-| text size (cmd/compile) | +5.00% | +1.76% |
-| compiling std | no measurable change | no measurable change |
-
-Over std the shipped default makes 1,489 more functions inlinable (15,888
--> 17,377) and inlines 4,967 more call sites (70,146 -> 75,113).
-
-Every constant is overridable for re-tuning - `-d=loopinlinediv`,
-`loopinlinecredit`, `loopinlinefactor`, `loopinlinedepth`,
-`loopinlinebudget`, `loopinlinegrowth` (a negative value means zero) - and
-`-d=loopinline=0` restores upstream's decisions exactly, which is the
-bisect switch for a suspected regression. Tests:
-`cmd/compile/internal/inline` (the cost/budget/allowance arithmetic) and
-`TestLoopInlining*` in `cmd/compile/internal/test` (end to end, all three
-polarities, one knob at a time); CI runs both plus the `testdir`
-inline/escape/live regress suites.
-
-Two runtime annotations came with it, both fixing upstream inconsistencies
-that only surface once more code is inlined - an inlining change is a
-call-graph change, and the `nowritebarrierrec` checker sees call graphs.
-The compiler-injected `unsafe.String` panic helpers (`runtime/unsafe.go`)
-and the 3-index `goPanicSlice3*` family plus `goPanicSliceConvert`
-(`runtime/panic.go`) are now `//go:yeswritebarrierrec`, matching the
-`unsafe.Slice` and 2-index `goPanicSlice*` helpers beside them. Without
-that, any `//go:nowritebarrierrec` function reaching an inlined
-`unsafe.String` or a 3-index slice expression is rejected for a panic path
-that cannot occur. The `goPanicSlice3*` case is wasm-only in effect, since
-that is where bounds checks call these Go helpers rather than assembly
-`panicBounds*` - build `runtime` for js/wasm as well as the host before
-believing an inlining change is clean.
+Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget
+as one on a cold error path. This fork adds the static frequency estimate every other production compiler has
+(`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over nine
+whole-task workloads, +5% text size. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect
+switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed:
+docs/LOOP-INLINING.md.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
-This fork diverges from upstream on the wasm ports (upstream inherited them
-untouched until 2026-07-04; see `WASM_SHORTCOMINGS.md` at the repo root for
-the full catalog of fixes and remaining gaps):
+This fork diverges from upstream on both wasm ports: preemptible loops and synchronous stdio by default,
+real fetch/socket transports behind `GODEBUG=jsfetchnode=1` and `GOWASI=wasmedgesock`, DWARF v5 with real
+variable locations, frame-aware GC with a host-donated mark step, a dispatcher-free control flow (rounds 7-8,
+~1.4-2x faster), and `GOWASM=threads` up to a multi-P scheduler. Every round, its measurements and its gates:
+docs/WASM.md. Remaining gaps: WASM_SHORTCOMINGS.md.
 
-- **Preemptible loops are default-on for GOARCH=wasm**: CPU-bound goroutines
-  no longer starve timers/GC/other goroutines. Opt out with
-  `GOEXPERIMENT=nopreemptibleloops`.
-- `GOMAXPROCS` from the environment is clamped to 1 (no more `newosproc`
-  throw at startup).
-- The js argv/env budget is 60KB (61440 bytes, was 8KB), so big CI
-  environments run.
-- `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
-  (default stays on the fake in-memory network).
-- wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
-- Round 2 (2026-07-05): atomic ops are intrinsified and int64 division is
-  inlined (no more runtime calls), `syscall/js` adds `js.Await` and
-  `js.CopyToGo`/`js.CopyToJS` (typed-array bulk copies), and the periodic
-  2-minute forced GC now runs on both wasm ports.
-- Round 3 (2026-07-05): stdout/stderr are synchronous under node (printing
-  no longer hangs while another goroutine is CPU-busy), fully-idle js
-  programs are woken for the periodic GC via a weak unref'd timeout,
-  `GOWASM=tailcall` emits return_call (js-only; wazero rejects it, so it
-  stays off by default), CPU profiling works at 100Hz on both ports
-  (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
-  backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
-  binaries. `runtime/pprof` joined both test lists in the CI wasm job.
-- Round 4 (2026-07-06): `GOWASI=wasmedgesock` (default off) gives wasip1
-  real TCP sockets via the WasmEdge socket extension (Dial, Listen/Accept,
-  deadlines, http.Get/http.Serve); `testdata/wasip1sock` holds the wazero
-  reference host plus the end-to-end tests. Default builds are unchanged.
-  In the same round, wasm binaries gained DWARF v5 debug info in
-  `.debug_*` custom sections per the WebAssembly DWARF convention (code
-  addresses are byte offsets from the start of the code section's
-  contents, the lld/Chrome model): full DIE tree plus statement-level
-  line tables, `llvm-dwarfdump --verify` clean on both ports. On by
-  default (~+39% file size), stripped with `-ldflags=-w`. The name
-  section now precedes producers, so llvm tools can read Go wasm
-  binaries. Variable location expressions remained placeholders until
-  round 6 gave them a real DW_OP_WASM_location frame base.
-- Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
-  runway (trigger no later than ~halfway to the goal, background credit
-  seeded at cycle start so the allocation that crosses the trigger
-  doesn't assist-burst), idle mark drains are bounded to 2ms, and a new
-  `go_gc_mark_step(budgetMs) -> bool` wasm export lets the host donate
-  idle time between frames (bounded mark work, no-op outside a cycle,
-  returns whether work remains; while the host donates, the in-frame
-  fractional mark quota drops 25% -> 5%). These behaviors are
-  deliberately platform-independent - ALL platforms trigger earlier
-  (trigger pinned ~halfway to the goal, trading some throughput/GC
-  frequency for bounded mark bursts; TestGcPacer models the new math)
-  and bound idle drains, and the budgeted mark step core is portable
-  with runtime tests that run everywhere; only the event-loop yield
-  glue (throttle idle marking + 1ms re-arm instead of starving the
-  event loop until mark completion) and the wasm export are js-only.
-  `testdata/framebench` (10k allocs/frame under node): p99 frame time
-  21.6ms -> 4.8ms, zero frames over 8ms.
-- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
-  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
-  computing the frame base from the SP global (SP + framesize + 8 - the
-  CFA of this x86-model target with a caller-pushed 8-byte return
-  address; SP only moves in the prologue/epilogue, so the constant is
-  exact throughout the body), and every stack-homed parameter and local
-  resolves through its DW_OP_fbreg offset to exactly the linear-memory
-  address codegen uses. The payoff is `-N -l` builds, where named
-  variables live on the stack; heap-escaped variables still carry no
-  location, and register-promoted variables in optimized builds stay
-  name-and-type-only. llvm-dwarfdump decodes the expression natively
-  and --verify stays clean; non-wasm DWARF is byte-identical; a
-  cmd/link/internal/wasm regression test locks the encoding for both
-  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
-  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
-  with Read/Write preserving datagram boundaries, and the
-  same deadline machinery as TCP. Receives import the newer-generation
-  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
-  everywhere and cannot report the source port), so opt-in binaries now
-  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
-  the generation mix, the 128-byte family-tagged address buffer, and
-  the network-byte-order recv_from port quirk (verified live against
-  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
-  ReadMsgUDP/WriteMsgUDP are ENOSYS
-  (no ancillary data in the extension); DNS and unix sockets stay
-  fake. `testdata/wasip1sock` grew UDP host support plus
-  udpecho/udpconnected guests, and the CI wasm job now runs the whole
-  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
-  js fetch transport streams request bodies: unknown-length bodies
-  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
-  upload through a ReadableStream with duplex "half" instead of being
-  buffered whole, when a cached one-time probe shows the runtime's
-  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
-  everything else keeps the buffered path byte-for-byte). Pulls read
-  64KiB chunks on a goroutine off the event loop, so backpressure
-  reaches the reader, and the body is closed exactly once on every
-  path (EOF, read error, cancel/abort, every RoundTrip exit).
-  Known-length bodies stay buffered on purpose - fetch drops
-  Content-Length for stream bodies, buffering keeps it on the wire -
-  and streamed bodies cannot be replayed, so a redirect that must
-  re-send the body fails with a network error per spec.
-  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
-- Round 7 (2026-07-25): forward jumps skip the dispatcher. Inter-block
-  control flow used to store the target block to PC_B, branch to the entry
-  loop and re-enter through a br_table with one entry per basic block - an
-  indirect branch the engine cannot optimize through - and it did that even
-  for a jump FORWARD, which needs none of it: the prologue opens one block
-  per resume point, so the target's block is still open and a plain `br`
-  lands exactly there. Backward jumps (loop backedges) still used the
-  dispatcher, because their block has already been closed (round 8 fixes
-  that). Roughly 1.4-1.5x faster wasm across mixed workloads (best ~2x on
-  branchy scanning code, ~1.15x on sort), ~1.1% smaller modules, output
-  unchanged. `cmd/internal/obj/wasm` tests pin that a forward-only function
-  emits zero PC_B stores.
-- Round 8 (2026-07-25): loop backedges get a real wasm `loop`. The blocker
-  was that ssaGenBlock makes EVERY basic block a resume point, so a loop
-  header's block is closed by the End that starts the body and there is
-  nothing left for the backedge to name. Most of those blocks are dead
-  weight: one only ever fallen into needs no Block in the prologue and no
-  BrTable slot. So ssaGenBlock now marks the resume points it emits to open
-  a block, and the assembler drops a marked one that nothing branches to -
-  it keeps its own pc, so line numbers and tracebacks are unchanged. A
-  loop's header and body then sit in one region and the backedge is a plain
-  `br` to a `loop` wrapped around it. One marked resume point may NOT be
-  dropped: one with a call after it and before the next. Every address the
-  runtime re-enters at is derived from a call's stored return address -
-  including a function's deferreturn, which the linker records as the pc
-  just before the resume point after that call (`computeDeferReturn`) - so
-  folding such a region moves where the runtime lands. Missing that made
-  recover() re-enter the wrong block and spin forever; it is why the guard
-  is phrased in terms of calls rather than deferreturn alone. Still
-  dispatched: a backward jump crossing a region boundary - a loop with a call
-  in it, and the OUTER loop of a nest, since the inner header is branched to
-  and keeps a block whose End falls inside the outer loop. The innermost loop
-  is the one that gets fixed, which is where the iterations are. Over
-  strconv, regexp, encoding/json, compress/flate, bytes, strings and sort
-  (1322 functions), rounds 7+8 take PC_B stores from 10467 to 1865 and turn
-  154 loops in 93 functions into real wasm loops. Wasm went from 3.2x native
-  Go to 1.8x (geomean over seven
-  workloads), 1.18-2.88x faster than the unpatched compiler, ~2.1% smaller
-  modules. On a real aggregation kernel 97.8 -> 59.6 ms and its RLE decode
-  18.1 -> 5.2 ms, output byte-identical. `cmd/internal/obj/wasm` tests pin
-  that a counted loop compiles to a real Loop and that a loop with a call in
-  it keeps its PC_B store.
-- Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
-  experimental, GOOS=js only) is toolchain-only groundwork for the wasm
-  threads proposal - real parallelism lands in later phases and the
-  runtime stays single-threaded for now. With it, Go's atomic ops emit
-  the proposal's 0xFE atomic instructions and the linker imports a
-  shared linear memory (`gojs`.`mem`, shared limits flag 0x03, max
-  2048 MiB) instead of declaring a module-local one; `wasm_exec.js`
-  supplies the matching shared `WebAssembly.Memory` via
-  `go.provideMemory(wasmBytes)` (called automatically by
-  `wasm_exec_node.js`, no-op for ordinary modules). Node 18+ needs no
-  flags; browsers will need COOP/COEP headers (cross-origin isolation)
-  for SharedArrayBuffer. wasip1 builds reject the flag at link time
-  (wazero/wasmtime lack the proposal). Without the flag, output is
-  byte-identical to before.
-- Threads worker pool B1 (2026-07-17): under GOWASM=threads the linker
-  now emits PASSIVE data segments (+ DataCount section) - active ones
-  would be re-applied on every instantiation, so a second instance would
-  clobber live heap/runtime state in the shared memory - plus two
-  synthetic exports: `_initmem` (memory.init + data.drop of all
-  segments; called exactly once, by the main instance, from `Go.run` in
-  wasm_exec.js - worker instances must never call it) and
-  `wasm_probe_atomic_add(addr, delta)` (a runtime-state-free wasm
-  i32.atomic.rmw.add workers can call before the scheduler is
-  thread-aware). `wasm_exec_node.js` compiles threads modules once
-  (kept on `go._module`); `lib/wasm/wasm_exec_pool_node.js`
-  (`GoWorkerPool`) + `wasm_exec_worker_node.js`/`wasm_exec_worker.js`
-  spawn N node worker_threads that instantiate the same module against
-  the same shared memory with all gojs runtime imports stubbed - Go
-  code does not run on worker instances yet (that is scheduler
-  integration, phase B2). Demo: `testdata/wasmthreads/pooldemo` driven
-  by `pool_demo.js` (run in CI). Ordinary modules and non-threads
-  builds are unchanged (byte-identical).
-- Threads runtime B2 (2026-07-17): real Go code runs on worker threads
-  under GOWASM=threads. Futex layer over memory.atomic.wait32/notify
-  (`runtime/sys_wasmthreads.s`); futex mutexes/notes for the runtime
-  (`lock_jsthreads.go`; `notetsleepg(n,-1)` parks the g, not the M);
-  `newosproc` hands new Ms through a futex mailbox to pool workers
-  parked in the new `wasm_thread_run` export (raw-wasm wait loop, sets
-  per-instance SP/g to the M's heap-allocated g0 and enters mstart).
-  `wasm_exec_node.js` pre-spawns GOWASMTHREADSPOOL workers (default 4,
-  0 disables; newosproc throws after 10s if none claims); workers get
-  real pure-runtime imports (println/clock/random/exit work on worker
-  Ms) but syscall/js stays main-thread-only. The event loop remains
-  main-M-only (`event_js.go` shared; beforeIdle routes worker Ms to
-  futex parks/timed sleeps). Main M may futex-wait (node-only; event
-  loop stalls while it does - B3 makes that non-blocking). GOMAXPROCS
-  is still clamped to 1 (single P handed between Ms); the demo/test
-  hook `runtime.wasmThreadsRunOnNewM` (pull-linkname with
-  `-ldflags=-checklinkname=0`) pins the caller's goroutine to its M to
-  force the handoff; public LockOSThread is still a wasm no-op. Demo:
-  `testdata/wasmthreads/threaddemo` (CI runs it 10x; three Ms on three
-  threads, channels/mutex/shared heap/GC, exit 0), plus an in-tree
-  runtime spawn test; threads regression set is `go test -short sync
-  sync/atomic internal/runtime/atomic runtime` under GOWASM=threads.
-  Non-threads builds keep identical behavior but are NO LONGER
-  byte-identical across this phase (runtime source split shifts
-  symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
-  preemption, non-blocking main-thread park, syscall/js forwarding
-  from worker Ms, browser workers.
-- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
-  unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
-  1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
-  via cross-thread-armed loop backedge checks, a non-blocking main-thread park
-  (main M releases its P and parks in the event loop; woken cross-thread via
-  Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
-  syscall/js calls from worker Ms migrating their goroutine to the main
-  thread (stdout/stderr writes work directly on workers). The B3
-  "lost-wakeup" stalls / exit hang were root-caused to two bugs and fixed:
-  a main-thread microtask livelock (a wasmMainWake bump issued on the main
-  thread inside a resume re-triggers the armed Atomics.waitAsync watcher,
-  and the microtask chain starves every macrotask incl. the worker-posted
-  exit message; fixed by dropping main-thread-issued bumps) and
-  migrate-queue starvation (the queue only the main M can pop had a single
-  push-time wake, and a worker M idling in beforeIdle's timed sleep held
-  the only P through the whole wait; fixed by re-nudging from pidleput and
-  the parked-worker watchdog, and bailing out of the idle P-hold when the
-  main M needs a P).
-
- Threads B4 (2026-07-19) is the hardening sweep: the rare GOMAXPROCS=4
-  crash class was root-caused to a FALSE deadlock report - checkdead's
-  "all Ms idle + runnable g" inference does not hold under threads
-  because the parked main M executes Go code (self-serve/kicks) while
-  still linked on sched.midle; checkdead now nudges the wake machinery
-  and returns instead of throwing (real deadlock reporting via the
-  host's exit-time probe is unchanged). The pool-headroom perf collapse
-  is fixed: a main M parked in the event loop counts as the far-future
-  -timer covering agent (backstop JS timeout + wakeNetPoller nudge), so
-  loop gates disarm without pool headroom - pool sizing no longer
-  affects parallel throughput for the common shapes. Idle-CPU
-  double-counting that made /cpu/classes/user:cpu-seconds non-monotonic
-  at >1P is fixed. Host events arriving while the main M has no P are
-  queued by wasm_exec.js instead of silently overwriting _pendingEvent.
-  Worker-side traps report their wasm stack (Go function names). New
-  gates: testdata/wasmthreads/holblock (a blocked ASYNC event handler
-  does not head-of-line-block later events; blocking a SYNCHRONOUS
-  nested js.FuncOf callback stays documented-unsupported, as upstream)
-  and testdata/wasmthreads/memgrow (worker-side memory.grow under
-  concurrent main/worker heap+host traffic). Later phases: host-call
-  forwarding, mark-worker knobs, browser hosts.
-
- Threads grow-observation guard (2026-07-20): the nondeterministic
-  worker trap `memory access out of bounds` at runtime.newMarkBits
-  (~0.22% of loaded smoke runs) was root-caused to the engine
-  bounds-checking ATOMIC accesses against a per-instance cached memory
-  size that lags cross-thread memory.grow — a correctly-synchronized
-  fresh-page pointer from another thread could trap on its first atomic
-  touch. The assembler now emits a guard before EVERY 0xFE atomic memory
-  access under GOWASM=threads (cmd/internal/obj/wasm
-  writeGrowEpochGuard; hot path 5 instructions): compare
-  runtime.wasmGrowEpoch (bumped by sbrk per grow) against a per-instance
-  observed-epoch wasm global, and on mismatch execute memory.grow 0,
-  which resynchronizes that instance's cached size. Covers compiler
-  intrinsics and hand-written .s alike (single emission choke point);
-  wait32/notify included, atomic.fence exempt; non-threads builds are
-  unchanged (no 0xFE ops). CI gate: testdata/wasmthreads/growatomic.
-  Residual: plain accesses rely on trap-handler (guard-page) engines —
-  true of 64-bit V8, the only supported threads host (see
-  WASM_SHORTCOMINGS.md).
-
-The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
-`GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
-`GOOS=wasip1 GOARCH=wasm go test <pkg>` finds `go_wasip1_wasm_exec`
-(wasmtime by default; `GOWASIRUNTIME=wazero` also works). Remember the fork
-defaults to GOOS=cosmo: always pin GOOS/GOARCH on wasm commands.
+The exec wrappers live in `lib/wasm/` (not misc/wasm); put it on PATH so `GOOS=js GOARCH=wasm go test` finds
+`go_js_wasm_exec`. The fork defaults to GOOS=cosmo, so always pin GOOS/GOARCH on wasm commands.
 
 ## Adding Cosmo Support to Standard Library Packages
 

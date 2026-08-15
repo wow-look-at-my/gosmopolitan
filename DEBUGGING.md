@@ -5414,3 +5414,255 @@ TestCosmoFatSkipOutput), cmd/link/internal/ld APE/PE/Macho, go/build +
 cmd/internal/moddeps; fat `go build` and `go install` both produce
 running 45/45 probes with correct sidecars; thin `GOCOSMOFAT=0` builds
 unaffected; apetest 129 PASS 0 FAIL against parallel-built binaries.
+
+
+# 2026-07-26: the macOS fork/exec wedge - ROOT CAUSED and fixed (arm64-apple variadic ABI)
+
+Supersedes the datapoint entry earlier today, which recorded the wedge
+as nondeterministic and left two candidate explanations open. Both were
+wrong. The cause is an ABI bug, it was never a flake, and re-running CI
+until it passed was hiding a defect that affected far more than exec.
+
+## What it looked like
+
+The runtimeprobe `fdpass` check wedged on roughly a quarter to a half of
+macOS runs. The parent parked forever in forkExec's read of the child
+status pipe (exec_unix.go:220 readlen), the 90s watchdog fired, and the
+all-goroutine traceback showed only goroutine 1 in that read plus the
+watchdog.
+
+## The two dead ends
+
+**"A concurrent fork leaked the write end."** Killed by the traceback:
+only two goroutines exist, so nothing else in the parent was forking.
+
+**"The child is stuck between fork and exec."** Killed by instrumenting
+the child: it stamps a descriptor census as its first act after exec,
+and the census was always there. The child exec'd fine.
+
+Also killed, earlier and more cheaply than either: `execstress`, a
+60-round fork+exec loop, passed on macOS. Plain exec was never broken.
+
+## What the census showed
+
+Adding a descriptor census to both sides (fcntl+fstat only, so it works
+when process creation is the suspect) produced the answer immediately:
+
+    parent fds: 3:pipeE ... 11:pipe- 12:pipe- 13:pipe- 14:pipe- 15:pipe-
+    child  fds: 3:pipe- ... 11:pipe- 12:pipe- 13:pipe- 14:pipe- 15:pipe- 16:pipe-
+
+Descriptor 10, which carried FD_CLOEXEC, WAS closed by the exec - so
+exec honors the flag. The pipes simply never had it, and the child came
+out of exec holding 16: the status pipe's write end. The parent was
+waiting for an EOF that could not arrive.
+
+A direct assertion over every creation path (`cloexec`) confirmed the
+scope:
+
+    FAIL cloexec: pipe2(O_CLOEXEC) read end: FD_CLOEXEC NOT set;
+      pipe2(O_CLOEXEC) write end: FD_CLOEXEC NOT set; os.Pipe read end:
+      FD_CLOEXEC NOT set; os.Pipe write end: FD_CLOEXEC NOT set;
+      socket(SOCK_CLOEXEC): FD_CLOEXEC NOT set
+
+`open(O_CLOEXEC)` passed in the same run. That asymmetry is the tell:
+every failing path sets the flag with a separate `fcntl(F_SETFD,
+FD_CLOEXEC)`, while open takes O_CLOEXEC as its ordinary fixed flags
+argument.
+
+## Root cause
+
+**arm64-apple passes variadic arguments on the STACK, never in a
+register, even when argument registers are free** - a deliberate
+divergence from AAPCS64. cosmo's libc trampolines (`cosmoLibcCall6` and
+the assembly fast path's `darwin_call`) put every argument in registers.
+
+`fcntl(int, int, ...)` is variadic. So every
+`fcntl(fd, F_SETFD, FD_CLOEXEC)` handed FD_CLOEXEC to Apple's libc in
+R2, which read that argument from uninitialized stack memory instead.
+The value wanted is a flag word, so the call SUCCEEDED while setting
+close-on-exec from whatever was on the stack - set when the garbage
+happened to be odd, clear otherwise. That is the entire "flake": not
+timing, not scheduling, just whichever value was lying at that stack
+slot.
+
+Why only `fdpass`: a leaked status-pipe write end is invisible when the
+child exits promptly, because the exit closes it and the parent's read
+completes. `fdpass`'s child waits for the parent to accept its
+connection, so the leak becomes a true deadlock - parent waiting on the
+child's exec, child waiting on the parent. `execstress` originally
+missed it for exactly this reason and was rebuilt around the real
+shape (fd pressure + a child that waits on a go-ahead the parent can
+only give after Start returns).
+
+Two long-standing oddities were the same bug all along: the
+`F_DUPFD_CLOEXEC` EINVAL on the macOS runner, recorded in the dispatch
+as an unexplained quirk with plain `dup(2)` added as a fallback, and any
+socket left blocking because `F_SETFL`/O_NONBLOCK silently did nothing.
+
+## The fix
+
+`runtime.cosmoLibcCallVariadic1` (sys_cosmo_arm64.s) and
+`darwin_call_v3` (the fast path) place the variadic argument on the
+stack. Every fcntl call site routes through them. `openat` is fixed the
+same way - its mode is variadic, so every O_CREAT open had been taking
+its permission bits from stack garbage.
+
+## Gates
+
+- `cloexec` asserts FD_CLOEXEC really is set by pipe2(O_CLOEXEC),
+  os.Pipe, open(O_CLOEXEC), socket(SOCK_CLOEXEC) and
+  fcntl(F_DUPFD_CLOEXEC), reporting each mechanism separately. ENOSYS is
+  accepted for F_DUPFD_CLOEXEC alone (NT does not implement dup for
+  files or pipes) and is surfaced in the ok line; every other error
+  fails, so the EINVAL this bug produced stays a failure.
+- `execstress` reproduces the deadlock shape deterministically.
+- Both censuses print on a wedge, so a future regression arrives with
+  evidence instead of a bare traceback.
+
+**Verified**: macos-latest went from wedging on 3 of 6 origin-executions
+to green on all three origins, with `ok cloexec`, `ok fdpass`,
+`ok execstress` and `sockpairpoll dupcloexec=ok` (previously
+`dupcloexec=invalid argument`). Linux and Windows stay green.
+
+## The lesson worth keeping
+
+A test that fails a third of the time and passes on re-run is not a
+flake; it is a defect with a probability attached. This one was a silent
+ABI mismatch corrupting close-on-exec, non-blocking flags and file
+permissions across the whole darwin port, and every re-run to green
+bought another day of it. The thing that cracked it was making the
+failing run PRINT its evidence - the descriptor census - rather than
+reasoning harder about a traceback.
+
+---
+
+# Platform-subset APEs (GOCOSMOPLATFORMS, 2026-08-14)
+
+A cosmo APE claimed every host the fork can boot on, whether or not the
+build wanted them. `GOCOSMOPLATFORMS` names the hosts a build must cover;
+cmd/link's `-apeplatforms` turns that selection into the boot mechanisms
+the header carries.
+
+## Platform -> what the binary needs
+
+| platform | payload | header pieces |
+|---|---|---|
+| linux/amd64 | amd64 | printf'd amd64 boot ELF header (self-assimilation) |
+| linux/arm64 | arm64 | printf'd arm64 boot ELF header (self-assimilation) |
+| darwin/amd64 | amd64 | Mach-O header at 0x1000 + the `dd ... conv=notrunc` stanza |
+| darwin/arm64 | arm64 | gzipped APE loader source at 0x8000 + the arm64 printf |
+| windows/amd64 | amd64 | the real NT PE header at 0x80 + the MSYS/Cygwin `cmd //c` line |
+
+Two traps in that table:
+
+- **darwin/arm64 needs the arm64 printf even though it never runs it.**
+  The macOS loader finds the aarch64 image by decoding every `printf '`
+  in the file's first 8192 bytes (ape-m1.c). Selecting darwin/arm64
+  without linux/arm64 therefore emits the printf as unreachable shell,
+  after the `exit 1`, purely so the loader can find it.
+- **windows/amd64 boots the cosmo AMD64 payload**, not a payload of its
+  own. Dropping it saves no payload, only the real PE header - the stub
+  takes its place.
+
+## Where the size actually goes
+
+The APE header is a fixed 64K region, so dropping the Mach-O header, the
+loader source or the real PE header saves **zero bytes**. Only dropping a
+payload architecture changes the size. runtimeprobe, every row built by
+one command with `-buildvcs=false -ldflags=-buildid=`:
+
+| selection | payloads | bytes | vs fat |
+|---|---|---|---|
+| unrestricted (all five) | amd64+arm64 | 5,796,992 | - |
+| linux/amd64,darwin/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
+| linux/amd64,linux/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
+| linux/amd64,windows/amd64 | amd64 | 3,072,000 | -47.0% |
+| linux/amd64 | amd64 | 3,072,000 | -47.0% |
+| darwin/arm64 (GOARCH=arm64) | arm64 | 2,782,336 | -52.0% |
+
+Sidecars follow the payloads: an amd64-only build writes only the
+4,362,818-byte `.dbg`, so the 3,912,537-byte `.aarch64.elf` goes too.
+
+**A platform subset is not a size win unless it collapses to one
+architecture.** The set this feature was asked for - linux x64, macOS
+arm64, Windows x64 - weighs exactly what the unrestricted APE weighs,
+because darwin/arm64 boots the arm64 payload and the other two boot the
+amd64 one, so both are still in. What it buys is an accurate claim and a
+host that is refused by name instead of failing mysteriously. Do not
+report it as slimming.
+
+Payload-side slimming - dropping the NT emulation or the darwin syslib
+dispatch from a payload no selected platform boots - is a compile-time
+change to the runtime's build tags and is NOT part of this; every payload
+still carries support for every host.
+
+## cmd/go
+
+`cosmoSiblingArch` decides whether the sibling-architecture build runs at
+all: a selection whose platforms all boot one payload skips it entirely,
+which is the whole saving. `cosmoAssembleEnabled` then keeps the linker's
+assembly step (`-apefat` with ONE input) so a restricted build is still
+stripped and still gets its sidecars - without it, a one-architecture
+selection would silently produce an unstripped binary with no sidecar,
+which is not what "same build, fewer platforms" should mean.
+
+The selection is passed to the assembly step only, never to the thin
+links. Those keep producing a full-platform header, which is why the
+amd64 thin APE still carries the real NT header the fat merge
+transplants.
+
+## Refusals
+
+- an unknown or empty platform token, in either the variable or the flag;
+- a selected platform whose payload was not built;
+- a payload no selected platform boots;
+- `GOCOSMOFAT=0` with a selection that needs both payloads;
+- a GOARCH the selection does not boot (`rerun with GOARCH=...`);
+- windows/amd64 selected while the amd64 input carries only the
+  do-nothing stub PE header (checked by section count: the real header
+  declares 3, the stub 1).
+
+The last one only fires when the flag is explicit. With no flag the
+linker keeps its old behavior of supporting whatever the payloads allow,
+which is what makes an unrestricted build byte-identical to before.
+
+## The destructive case worth knowing
+
+Deselecting darwin for an architecture whose Linux platform stays
+selected used to leave the macOS branch running the Linux path: the
+`printf` writes a boot ELF header over the APE header, and with no Mach-O
+header to `dd` back over it the file is left neither an APE nor a
+Mach-O - a binary that destroys itself on first run. The bootstrap now
+refuses macOS by name BEFORE the printf in that configuration
+(`[ -d /Applications ] && { echo ...; exit 1; }`).
+
+## Gates
+
+- `cmd/internal/cosmoape` - the token table, canonical ordering, and
+  every rejected spelling.
+- `TestAPEPlatformsHeaderPieces` (cmd/link/internal/ld) - per selection,
+  which payloads, boot headers, Mach-O header, loader source, cmd.exe
+  delegation and unsupported-host message are present, and which must
+  not be.
+- `TestAPEPlatformsDefaultUnchanged` - an unset flag assembles
+  byte-identically to naming every platform.
+- `TestAPEPlatformsRejects` - the refusals above, in process, via the
+  linker's `-h` panic mode.
+- `TestCosmoSiblingAndAssemble` (cmd/go/internal/work) - the sibling and
+  assembly decisions per selection.
+- `env_cosmo.txt` (cmd/go script test) - `go env` reports the effective
+  GOCOSMOPLATFORMS/FAT/STRIP/DEBUG. A consumer probes GOCOSMOPLATFORMS to
+  tell a toolchain that honors the selection from one that ignores it, so
+  this readout is load-bearing outside this repo.
+- `TestSlim*` (testdata/ape/apetest) - the same absence checks against a
+  real binary, plus executing it. cosmo-ci builds two subsets on the
+  ubuntu leg and runs them on all three test legs, so a subset that
+  stopped booting on macOS or Windows fails there rather than in a
+  consumer's hands.
+
+**Verified 2026-08-14**: with GOCOSMOPLATFORMS unset, fizzbuzz.com,
+runtimeprobe.com and all four sidecars are byte-identical (sha256) to the
+same builds from the pre-change tree, comparing with `-ldflags=-buildid=`
+and `-buildvcs=false` so the tool-ID and VCS stamps do not mask the
+comparison. The linux/amd64-only runtimeprobe passes the full apetest
+runtimeprobe suite on this host with no arm64 payload in the file.

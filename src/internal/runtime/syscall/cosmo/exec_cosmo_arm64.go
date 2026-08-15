@@ -78,16 +78,16 @@ func darwinApplyFdFlags(fd, flags uintptr) uintptr {
 		return darwinENOSYS
 	}
 	if flags&linuxO_CLOEXEC != 0 {
-		if int64(darwinLibcCall6(darwinFns.Fcntl, fd, fcntlF_SETFD, fdCLOEXEC, 0, 0, 0)) == -1 {
+		if int64(darwinLibcCallVariadic1(darwinFns.Fcntl, fd, fcntlF_SETFD, fdCLOEXEC)) == -1 {
 			return darwinErrno()
 		}
 	}
 	if flags&linuxO_NONBLOCK != 0 {
-		fl := darwinLibcCall6(darwinFns.Fcntl, fd, fcntlF_GETFL, 0, 0, 0, 0)
+		fl := darwinLibcCallVariadic1(darwinFns.Fcntl, fd, fcntlF_GETFL, 0)
 		if int64(fl) == -1 {
 			return darwinErrno()
 		}
-		if int64(darwinLibcCall6(darwinFns.Fcntl, fd, fcntlF_SETFL, fl|appleO_NONBLOCK, 0, 0, 0)) == -1 {
+		if int64(darwinLibcCallVariadic1(darwinFns.Fcntl, fd, fcntlF_SETFL, fl|appleO_NONBLOCK)) == -1 {
 			return darwinErrno()
 		}
 	}
@@ -141,7 +141,7 @@ func darwinDup3(oldfd, newfd, flags uintptr) (r1, r2, errno uintptr) {
 		return ^uintptr(0), 0, e
 	}
 	if flags&linuxO_CLOEXEC != 0 {
-		if _, _, e := darwinCall(darwinFns.Fcntl, fd, fcntlF_SETFD, fdCLOEXEC, 0, 0, 0); e != 0 {
+		if _, _, e := darwinCallVariadic1(darwinFns.Fcntl, fd, fcntlF_SETFD, fdCLOEXEC); e != 0 {
 			return ^uintptr(0), 0, e
 		}
 	}

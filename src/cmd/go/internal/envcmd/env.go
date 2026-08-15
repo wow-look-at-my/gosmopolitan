@@ -86,6 +86,16 @@ func MkEnv() []cfg.EnvVar {
 		{Name: "GOBIN", Value: cfg.GOBIN},
 		{Name: "GOCACHE"},
 		{Name: "GOCACHEPROG", Value: cfg.GOCACHEPROG, Changed: cfg.GOCACHEPROGChanged},
+
+		// The GOCOSMO* knobs shape every GOOS=cosmo build, and each
+		// value here is the effective one the build acts on, not the raw
+		// environment string: a consumer probes these to learn what this
+		// toolchain will do to its APE.
+		{Name: "GOCOSMODEBUG", Value: work.CosmoDebug(), Changed: os.Getenv("GOCOSMODEBUG") != ""},
+		{Name: "GOCOSMOFAT", Value: work.CosmoFat(), Changed: os.Getenv("GOCOSMOFAT") != ""},
+		{Name: "GOCOSMOPLATFORMS", Value: work.CosmoPlatforms(), Changed: os.Getenv("GOCOSMOPLATFORMS") != ""},
+		{Name: "GOCOSMOSTRIP", Value: work.CosmoStrip(), Changed: os.Getenv("GOCOSMOSTRIP") != ""},
+
 		{Name: "GODEBUG", Value: os.Getenv("GODEBUG")},
 		{Name: "GOENV", Value: envFile, Changed: envFileChanged},
 		{Name: "GOEXE", Value: cfg.ExeSuffix},

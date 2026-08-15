@@ -88,6 +88,11 @@ func main() {
 		// Child mode for checkFdpass: receive fds over SCM_RIGHTS.
 		fdpassChild()
 		return
+	case "execstress":
+		// Child mode for checkExecStress: stamp the marker proving the
+		// exec completed, then exit.
+		execStressChild()
+		return
 	case "ctrlwait":
 		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
 		ctrlwaitChild()
@@ -118,6 +123,11 @@ func main() {
 	timed("sockpair", checkSockpair)
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)
+	timed("cloexec", checkCloexec)
+	timed("hostos", checkHostOS)
+	timed("fdpath", checkFdPath)
+	timed("peercred", checkPeercred)
+	timed("dupfile", checkDupFile)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
 	timed("readdir", checkReadDir)
@@ -132,6 +142,9 @@ func main() {
 	timed("exec", checkExec)
 	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
+	// Deliberately adjacent to the other exec checks: this one is the
+	// deterministic version of the wedge they hit by chance.
+	timed("execstress", checkExecStress)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)
