@@ -168,7 +168,7 @@ jobs:
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 30
         shell: bash
-        run: /tmp/dats test dats/gotests.dats
+        run: /tmp/dats --no-sandbox test dats/gotests.dats
 
       # Platform-table tests added on master after the dats migration. Kept
       # inline here rather than folded into dats/gotests.dats: this branch
@@ -196,18 +196,7 @@ jobs:
         if: runner.os != 'Windows'
         timeout-minutes: 10
         shell: bash
-        run: /tmp/dats test dats/goscript.dats dats/toolid.dats
-
-      # The fork's own package tests (dats/gotests.dats): the APE merge, the
-      # cosmo syscall and runtime units, the go/build divergence guardrails and
-      # the loop-inlining suite. They were three inline blocks stacking `go
-      # test` lines, where the first failure hid every line after it and
-      # nothing named what each invocation covered.
-      - name: Package tests (dats)
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 30
-        shell: bash
-        run: /tmp/dats test dats/gotests.dats
+        run: /tmp/dats --no-sandbox test dats/goscript.dats dats/toolid.dats
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
@@ -443,7 +432,7 @@ jobs:
           [ "$RUNNER_OS" = Windows ] && dats=/tmp/dats.exe
           curl -fsSL -o "$dats" "https://dl.pazer.build/dats?os=$RUNNER_OS&arch=$RUNNER_ARCH"
           chmod +x "$dats"
-          "$dats" test dats/apetest.dats
+          "$dats" --no-sandbox test dats/apetest.dats
 
       # The captured log is uploaded immediately: job-level logs only reach the
       # API when the whole job ends, which a wedged later step (or a runner

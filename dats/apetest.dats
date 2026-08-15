@@ -28,23 +28,21 @@
 # compiled loader on arm64 macOS -- is apetest's own execve_test.go, which
 # these three cases pick up per build origin like the rest of the suite.
 
-sandbox: false
-
 setup:
-  - test -x testdata/ape/apetest/with-deadline.sh
+	- test -x testdata/ape/apetest/with-deadline.sh
 
 tests:
-  - desc: the APE built on ubuntu passes the acceptance suite [origin=ubuntu]
-    cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_UBUNTU_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_UBUNTU_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
-    exit: 0
-    timeout: 30m
+	- desc: the APE built on ubuntu passes the acceptance suite [origin=ubuntu]
+	  cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_UBUNTU_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_UBUNTU_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
+	  exit: 0
+	  timeout: 30m
 
-  - desc: the APE built on macOS passes the acceptance suite [origin=macos]
-    cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_MACOS_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_MACOS_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
-    exit: 0
-    timeout: 30m
+	- desc: the APE built on macOS passes the acceptance suite [origin=macos]
+	  cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_MACOS_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_MACOS_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
+	  exit: 0
+	  timeout: 30m
 
-  - desc: the APE built on Windows passes the acceptance suite [origin=windows]
-    cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_WINDOWS_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_WINDOWS_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
-    exit: 0
-    timeout: 30m
+	- desc: the APE built on Windows passes the acceptance suite [origin=windows]
+	  cmd: 'cd testdata/ape/apetest && rc=0; FIZZBUZZ_BIN="$APETEST_WINDOWS_BINDIR/fizzbuzz.com" RUNTIMEPROBE_BIN="$APETEST_WINDOWS_BINDIR/runtimeprobe.com" sh ./with-deadline.sh "${APETEST_DEADLINE:-600}" go test -v ./... > test-output.log 2>&1 || rc=$?; cat test-output.log; exit $rc'
+	  exit: 0
+	  timeout: 30m
