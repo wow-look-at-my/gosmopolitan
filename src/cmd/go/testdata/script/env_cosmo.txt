@@ -1,0 +1,48 @@
+# The GOCOSMO* knobs are reported by go env, both in the listing and by
+# name. A consumer probes GOCOSMOPLATFORMS to tell a toolchain that honors
+# the platform selection from one that ignores it, so the probe is
+# load-bearing outside this repo: keep it working.
+
+# Unset: every platform the toolchain can emit boot support for.
+go env GOCOSMOPLATFORMS
+stdout '^linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64$'
+
+# Set: the effective selection, in canonical order, not the raw string.
+env GOCOSMOPLATFORMS=windows/amd64,linux/amd64
+go env GOCOSMOPLATFORMS
+stdout '^linux/amd64,windows/amd64$'
+
+# An unknown platform is refused by name, with the accepted ones listed.
+env GOCOSMOPLATFORMS=linux/riscv64
+! go env GOCOSMOPLATFORMS
+stderr 'unknown platform "linux/riscv64"'
+stderr 'darwin/arm64'
+
+env GOCOSMOPLATFORMS=
+
+# The other three cosmo knobs report their effective values too.
+go env GOCOSMOFAT GOCOSMOSTRIP GOCOSMODEBUG
+stdout '^on\non\nfull$'
+
+env GOCOSMOFAT=0
+env GOCOSMOSTRIP=off
+env GOCOSMODEBUG=slim
+go env GOCOSMOFAT GOCOSMOSTRIP GOCOSMODEBUG
+stdout '^off\noff\nslim$'
+
+# A one-architecture selection means no fat build, whatever GOCOSMOFAT says.
+env GOCOSMOFAT=
+env GOCOSMOPLATFORMS=linux/amd64,windows/amd64
+go env GOCOSMOFAT
+stdout '^off$'
+
+env GOCOSMODEBUG=
+env GOCOSMOSTRIP=
+env GOCOSMOPLATFORMS=
+
+# All four appear in the plain listing.
+go env
+stdout GOCOSMODEBUG=
+stdout GOCOSMOFAT=
+stdout GOCOSMOPLATFORMS=
+stdout GOCOSMOSTRIP=
