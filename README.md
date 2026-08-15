@@ -50,16 +50,29 @@ so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
 `zstd -19 --long=27` (distribution-side only - there is no runtime
 self-extraction).
 
-## Installing a Prebuilt Toolchain (Linux amd64)
+## Installing a Prebuilt Toolchain
 
-CI publishes an installable toolchain tarball to [buildhost](https://pazer.build)
-on every push. Install it in seconds instead of building from source:
+CI publishes installable toolchain tarballs to [buildhost](https://pazer.build)
+on every push, for linux/amd64 and darwin/arm64. Install one in seconds
+instead of building from source:
 
 ```bash
+# Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
 go version   # go version go1.26.5cosmo.r<N> linux/amd64
 ```
+
+```bash
+# macOS, Apple Silicon
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
+export PATH="$PWD/go/bin:$PATH"
+go version   # go version go1.26.5cosmo.r<N> darwin/arm64
+```
+
+Both tarballs come from one release, each built on its own platform. Other
+hosts (Windows, macOS Intel, linux/arm64) still build from source - see
+Building the Toolchain below.
 
 The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs
 itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides;
