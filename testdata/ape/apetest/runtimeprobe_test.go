@@ -32,6 +32,7 @@ var probeOkChecks = []string{
 	"socketpair", "sockpairpoll",
 	"sendmsg", "netbuffers", "fdpass",
 	"execchild", "lookpath", "execstress", "cloexec",
+	"hostos", "fdpath", "peercred", "dupfile",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
@@ -105,4 +106,12 @@ func TestRuntimeProbe(t *testing.T) {
 	for _, name := range probeOkChecks {
 		assert.Contains(t, out, "ok "+name, "check %q must pass", name)
 	}
+
+	// The host the probe reports must be the host running it. The probe
+	// can only check its own answer is one of the three; this test knows
+	// which machine it is on, so it is the only place the value can be
+	// held against reality - and getting it wrong is silent everywhere
+	// else, because a cosmo binary reports GOOS "cosmo" on every host.
+	assert.Contains(t, out, "ok hostos "+runtime.GOOS,
+		"probe must report the host it is running on (%s)", runtime.GOOS)
 }
