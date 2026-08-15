@@ -125,7 +125,7 @@ func TestCosmoMergeArgsDebugMode(t *testing.T) {
 
 // TestCosmoDebugModeMinGcflags covers the compile-time flag injection of
 // the min mode: which modes inject, what they inject, and the
-// cosmoDebugInit gating on GOOS and toolchain.
+// cosmoBuildInit gating on GOOS and toolchain.
 func TestCosmoDebugModeMinGcflags(t *testing.T) {
 	for _, tt := range []struct {
 		mode string
@@ -166,7 +166,7 @@ func TestCosmoDebugModeMinGcflags(t *testing.T) {
 		cfg.BuildToolchainName = tt.toolchain
 		forcedGcflags = nil
 		t.Setenv("GOCOSMODEBUG", tt.mode)
-		cosmoDebugInit()
+		cosmoBuildInit()
 		if !reflect.DeepEqual(forcedGcflags, tt.want) {
 			t.Errorf("GOOS=%s toolchain=%s GOCOSMODEBUG=%q: forcedGcflags = %q, want %q",
 				tt.goos, tt.toolchain, tt.mode, forcedGcflags, tt.want)

@@ -152,6 +152,41 @@ jobs:
           ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
             runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
 
+      - name: Build platform-subset APE binaries
+        # GOCOSMOPLATFORMS restricts which hosts the APE boots on. Two
+        # subsets, both executed on every test leg (see the test job):
+        #
+        #  tri  - linux/amd64, darwin/arm64, windows/amd64. Still needs
+        #         both payloads, so it is the same size as the fat build;
+        #         what it drops is the macOS Intel claim. This is the set
+        #         consumers ask for, and every one of its three platforms
+        #         must still boot the binary.
+        #  amd  - linux/amd64, windows/amd64. One payload: the arm64 image,
+        #         its boot header and its sidecar are gone, which is where
+        #         the size actually drops.
+        #
+        # Cross-compiles, so one leg builds them for all three to run.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          export GOOS=cosmo
+          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+          # Sidecar existence is an assertion: a restricted build is still
+          # stripped and still writes a sidecar per payload it carries, so
+          # the amd-only pair must have no .aarch64.elf.
+          ls -la fizzbuzz-tri.com fizzbuzz-tri.com.dbg fizzbuzz-tri.com.aarch64.elf \
+            fizzbuzz-amd.com fizzbuzz-amd.com.dbg
+          if [ -e fizzbuzz-amd.com.aarch64.elf ]; then
+            echo "FAIL: an amd64-only selection wrote an arm64 debug sidecar"; exit 1
+          fi
+          echo "=== sizes ==="
+          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
+
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
@@ -159,6 +194,11 @@ jobs:
           path: |
             fizzbuzz.com
             runtimeprobe.com
+            fizzbuzz-tri.com
+            runtimeprobe-tri.com
+            fizzbuzz-amd.com
+            runtimeprobe-amd.com
+          if-no-files-found: ignore
           retention-days: 1
 
       - name: APE merge unit tests (linker + go command)
@@ -172,7 +212,13 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput|TestCosmoPlatformSpec|TestCosmoSiblingAndAssemble|TestCosmoMergeArgsPlatforms|TestCosmoEnvReportsEffectiveValues' cmd/go/internal/work
+          # The platform table both commands parse GOCOSMOPLATFORMS and
+          # -apeplatforms through, and the go env readouts a consumer
+          # probes to tell an aware toolchain from one that ignores the
+          # selection - load-bearing outside this repo, so gated here.
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/env_cosmo' cmd/go
           # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
           # cmsg repack, signal/wait-status translation tables, epoll
           # layout) are GOOS=cosmo-only code, run on this host via the
@@ -279,7 +325,7 @@ jobs:
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
-          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com binaries/ape-binary-*/runtimeprobe.com
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz*.com binaries/ape-binary-*/runtimeprobe*.com
 
       # Windows execution acceptance (cosmo NT bring-up), windows leg
       # only: a normal fat APE - cosmo amd64 + arm64, no embedded second
@@ -507,6 +553,53 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-log-${{ matrix.test-os }}-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+      # A platform-subset APE must boot and run on every platform it still
+      # claims, on the real host - linking is not evidence. Both subsets
+      # run here, on all three legs; each one's TestSlimRuns skips itself
+      # on a host it deliberately dropped (amd on macOS), while the
+      # structural checks - which payload, which boot header, which loader
+      # pieces, and the size against the unrestricted build - run
+      # everywhere.
+      #
+      # -run selects the execution battery plus TestSlim*: the rest of the
+      # suite (TestELF*, TestMacho*, TestPE*, TestFat*, TestShell*) pins
+      # the shape of an UNRESTRICTED build and is asserted against the fat
+      # binaries in the steps above. The subset's own shape is what
+      # TestSlim* asserts, parameterized by SLIM_PLATFORMS.
+      - name: Test platform-subset APEs
+        id: test-subset
+        timeout-minutes: ${{ matrix.apetest-timeout }}
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
+          rc=0
+          : > test-output.log
+          run_subset() {
+            name="$1" platforms="$2"
+            echo "=== subset $name: $platforms ===" >> test-output.log
+            FIZZBUZZ_BIN="$bins/fizzbuzz-$name.com" \
+            RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
+            SLIM_BIN="$bins/fizzbuzz-$name.com" \
+            SLIM_PLATFORMS="$platforms" \
+            FAT_BIN="$bins/fizzbuzz.com" \
+              sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
+              go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
+          }
+          run_subset tri linux/amd64,darwin/arm64,windows/amd64 || rc=$?
+          run_subset amd linux/amd64,windows/amd64 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload subset test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-subset
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 
