@@ -241,7 +241,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 				t.Errorf("arm64 boot header present = %v, want %v", got, tt.wantARMBoot)
 			}
 
-			gotMacho := binary.LittleEndian.Uint32(bin[0x1000:]) == machoMagic
+			gotMacho := binary.LittleEndian.Uint32(bin[apeMachoOffset:]) == machoMagic
 			if gotMacho != tt.wantMacho {
 				t.Errorf("Mach-O header present = %v, want %v", gotMacho, tt.wantMacho)
 			}
@@ -322,7 +322,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	if amdOnly[0x8000] == 0x1f && amdOnly[0x8001] == 0x8b {
 		t.Error("amd64-only input embedded the macOS ARM64 loader source")
 	}
-	if binary.LittleEndian.Uint32(amdOnly[0x1000:]) != 0xFEEDFACF {
+	if binary.LittleEndian.Uint32(amdOnly[apeMachoOffset:]) != 0xFEEDFACF {
 		t.Error("amd64-only input dropped the Mach-O header, which darwin/amd64 still needs")
 	}
 }

@@ -146,7 +146,7 @@ func TestSlimPayloads(t *testing.T) {
 }
 
 // TestSlimMachO checks the macOS x86-64 assimilation pieces: the Mach-O
-// header at 0x1000 and the dd statement that copies it over the file's
+// header at machoOffset and the dd statement that copies it over the file's
 // start, both present only for darwin/amd64.
 func TestSlimMachO(t *testing.T) {
 	sel := slimPlatforms(t)

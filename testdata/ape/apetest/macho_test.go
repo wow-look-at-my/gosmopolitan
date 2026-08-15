@@ -132,7 +132,7 @@ func TestMachoMagic(t *testing.T) {
 	require.Greater(t, len(bin), machoOffset+4)
 
 	magic := le32(bin[machoOffset : machoOffset+4])
-	assert.Equal(t, uint32(macho.Magic64), magic, "must have MH_MAGIC_64 at 0x1000")
+	assert.Equal(t, uint32(macho.Magic64), magic, "must have MH_MAGIC_64 at machoOffset")
 }
 
 func TestMachoCPUType(t *testing.T) {
@@ -170,7 +170,7 @@ func TestMachoNcmds(t *testing.T) {
 
 func TestMachoDdOffset(t *testing.T) {
 	bs, skip, _ := machoDDParams(t)
-	assert.Equal(t, machoOffset, bs*skip, "dd skip*bs must equal Mach-O offset (0x1000)")
+	assert.Equal(t, machoOffset, bs*skip, "dd skip*bs must equal machoOffset")
 }
 
 // TestMachoDdCountCoversHeader checks that the dd copy covers exactly the
