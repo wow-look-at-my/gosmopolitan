@@ -63,7 +63,7 @@ func BuildInit(loaderstate *modload.State) {
 	modload.Init(loaderstate)
 	instrumentInit()
 	buildModeInit()
-	cosmoDebugInit()
+	cosmoBuildInit()
 	initCompilerConcurrencyPool()
 	cfgChangedEnv = makeCfgChangedEnv()
 
