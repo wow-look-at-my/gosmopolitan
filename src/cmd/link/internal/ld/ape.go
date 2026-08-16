@@ -39,6 +39,12 @@ const (
 	apeHeaderSize   = 65536
 	apeScriptOffset = 0x800
 
+	// What follows the script, and so how much room the script has: it runs
+	// from apeScriptOffset up to the Mach-O header, and the gzipped macOS
+	// ARM64 loader source sits after that.
+	apeMachoOffset     = 0x2000
+	apeLoaderSrcOffset = 0x8000
+
 	// ELF constants
 	elfMagic        = "\x7fELF"
 	elfClass64      = 2
@@ -452,7 +458,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		//
 		// 8KB in, not 4KB: the bootstrap script runs from 0x800 up to here,
 		// and it grew when it stopped writing headers into the file it runs.
-		machoOffset = 0x2000
+		machoOffset = apeMachoOffset
 		machoSize = len(machoHeader)
 	}
 
@@ -464,7 +470,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		if len(apeLoaderGz) > 0 {
 			// Place gzipped loader at offset 0x8000 (32KB into header).
 			// This leaves room for the script.
-			apeLoaderOffset = 0x8000
+			apeLoaderOffset = apeLoaderSrcOffset
 			apeLoaderSize = len(apeLoaderGz)
 		}
 	}
