@@ -230,9 +230,9 @@ by design: there is no runtime self-extraction mechanism. buildhost can
 repackage uploaded artifacts on the fly via its `fmt=` query parameter.
 
 The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
-amd64 image boots on x86-64 Linux (self-assimilation); the cosmo arm64
-image boots on ARM64 Linux (self-assimilation) and ARM64 macOS (compiled
-APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
+amd64 image boots on x86-64 Linux (staged copy); the cosmo arm64
+image boots on ARM64 Linux (installed `ape` loader, else a staged copy)
+and ARM64 macOS (compiled APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
 natively through the APE's PE header (vim.com-style, no embedded second
 build - the windows/amd64 PE payload was removed 2026-07-18): the entry
 stub sets the runtime's NT personality live (__hostos=2) and joins the
@@ -305,10 +305,13 @@ go tool compile -bench=out.txt file.go
   tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses
   (like `testdata/ape/apetest`) should be run with an upstream Go so the test binary
   itself is executable on the host.
-- **APE binaries self-assimilate.** Executing an APE rewrites its own header in
-  place to the host's native format (ELF on Linux, Mach-O on macOS). Inspect or
-  upload only pristine copies; run a throwaway copy (apetest's `copyBinary` does
-  this automatically).
+- **An APE never writes to itself.** The kernel cannot exec the file as it
+  stands, so the bootstrap script stages a copy under
+  `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`, writes the host's real
+  header (ELF on Linux, Mach-O on macOS) into THAT, and execs it. The APE keeps
+  its bytes and its checksum, runs from a read-only path, and stays fat. As
+  root, staging also registers the magic with binfmt_misc and binds the copy
+  over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived (2026-07-20).** Upstream derives
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
   stamps the same release-style version (`go1.26.5cosmo`) into every build, so

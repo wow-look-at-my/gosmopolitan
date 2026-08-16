@@ -435,10 +435,10 @@ func TestMachoHeaderStructure(t *testing.T) {
 	if len(hdr)%8 != 0 {
 		t.Errorf("header length %d is not a multiple of the dd block size 8", len(hdr))
 	}
-	// The header is parked at apeMachoOffset in the APE header; the next
-	// embedded artifact (the gzipped APE loader source) lives at 0x8000.
-	if len(hdr) > 0x8000-apeMachoOffset {
-		t.Errorf("header is %d bytes, exceeding the %#x-0x8000 region", len(hdr), apeMachoOffset)
+	// The header is copied to apeMachoOffset in the APE header; the next embedded
+	// artifact (the gzipped APE loader source) lives at 0x8000.
+	if len(hdr) > apeLoaderSrcOffset-apeMachoOffset {
+		t.Errorf("header is %d bytes, exceeding the %#x-%#x region", len(hdr), apeMachoOffset, apeLoaderSrcOffset)
 	}
 
 	// Simulate the dd transform on a synthetic APE image: the ELF payload
@@ -493,7 +493,7 @@ func TestMachoHeaderStructure(t *testing.T) {
 // assimilation dd command from an APE header.
 func apeDDParams(t *testing.T, header []byte) (bs, skip, count int) {
 	t.Helper()
-	m := regexp.MustCompile(`dd if="\$o" of="\$o" bs=(\d+) skip=(\d+) count=(\d+)`).FindSubmatch(header)
+	m := regexp.MustCompile(`dd if="\$p\.\$\$" of="\$p\.\$\$" bs=(\d+) skip=(\d+) count=(\d+)`).FindSubmatch(header)
 	if m == nil {
 		t.Fatalf("no Mach-O dd command in APE header")
 	}

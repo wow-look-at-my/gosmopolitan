@@ -111,3 +111,59 @@ func TestShellVariableAssignment(t *testing.T) {
 	assert.Equal(t, byte('='), bin[6])
 	assert.Equal(t, byte('\''), bin[7])
 }
+
+// The kernel cannot exec an APE as it stands, so something must write a real
+// header over its first bytes. The script writes them into a copy it stages,
+// never into the file it is running: that file is often read-only, its
+// checksum is what a consumer verifies, and a fat APE stops being fat the
+// moment one platform's header lands on it.
+func TestShellNeverWritesToItself(t *testing.T) {
+	header := first8K(t)
+
+	assert.NotContains(t, string(header), `exec 7<> "$o"`, "the ELF header must go to the staged copy, not to $o")
+	assert.NotContains(t, string(header), `of="$o"`, "the Mach-O header must go to the staged copy, not to $o")
+}
+
+func TestShellStagesACopyAndExecsIt(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `cp "$o" "$p.$$"`, "must copy itself before correcting the header")
+	assert.Contains(t, header, `mv -f "$p.$$" "$p"`, "must publish the copy atomically, so a concurrent first run cannot read a half-written one")
+	assert.Contains(t, header, `exec "$p" "$@"`, "must exec the staged copy")
+	assert.Contains(t, header, `if [ ! -x "$p" ]; then`, "must reuse an already staged copy")
+}
+
+// The copy is keyed by the identity of the file it came from, so a rebuilt
+// binary never runs its predecessor's copy.
+func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `stat -c %d.%i.%.9Y.%s "$o"`, "GNU stat: device, inode, mtime to the nanosecond, size")
+	assert.Contains(t, header, `stat -f %d.%i.%Fm.%z "$o"`, "BSD stat spells the same fields differently")
+	assert.Contains(t, header, `cksum <"$o"`, "a host without stat falls back to the contents")
+}
+
+// Binding the copy over the APE's own path gives the program back the path
+// its caller used. The mount lives in a namespace of its own, so the owner of
+// the file can still delete, move or overwrite it while it runs.
+func TestShellBindsTheCopyInAPrivateNamespace(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `exec unshare -m sh -c `, "the bind must happen in a mount namespace of its own")
+	assert.Contains(t, header, `mount --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"`,
+		"a mount that does not take must fall through to the staged copy, not fail the run")
+	assert.Contains(t, header, `if [ -f "$c/.bind" ]; then`,
+		"the bind runs only where staging proved it works")
+}
+
+// Both host tweaks are best effort. They need root, and a host that refuses
+// them runs the program anyway, with nothing on stderr.
+func TestShellRegistersTheAPEMagicQuietly(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `if [ "$(id -u 2>/dev/null)" = 0 ]; then`, "neither tweak is tried without root")
+	assert.Contains(t, header, `printf ":APE:M::MZqFpD=\047::/bin/sh:"`,
+		`the magic is the APE magic, printf turns \047 into the quote, and the double quotes keep this out of the loader's printf scan`)
+	assert.Contains(t, header, `> /proc/sys/fs/binfmt_misc/register; } 2>/dev/null`,
+		"the redirect belongs inside the group: a shell reports a redirect it cannot open on its own stderr")
+}
