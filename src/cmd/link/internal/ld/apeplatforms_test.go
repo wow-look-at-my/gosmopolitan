@@ -319,7 +319,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	if boots := bootHeaderMachines(t, amdOnly); contains(boots, elfMachineARM64) {
 		t.Error("amd64-only input produced an arm64 boot header")
 	}
-	if amdOnly[0x8000] == 0x1f && amdOnly[0x8001] == 0x8b {
+	if amdOnly[apeLoaderSrcOffset] == 0x1f && amdOnly[apeLoaderSrcOffset+1] == 0x8b {
 		t.Error("amd64-only input embedded the macOS ARM64 loader source")
 	}
 	if binary.LittleEndian.Uint32(amdOnly[apeMachoOffset:]) != 0xFEEDFACF {
