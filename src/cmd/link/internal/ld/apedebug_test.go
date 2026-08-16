@@ -510,7 +510,7 @@ func TestAPEFatMergeCompact(t *testing.T) {
 	if !bytes.Equal(neutralized[:apeScriptOffset], fatFull[:apeScriptOffset]) {
 		t.Errorf("compact APE head differs before the script region")
 	}
-	if !bytes.Equal(neutralized[0x1000:amdOff], fatFull[0x1000:amdOff]) {
+	if !bytes.Equal(neutralized[apeMachoOffset:amdOff], fatFull[apeMachoOffset:amdOff]) {
 		t.Errorf("compact APE head differs after the script region")
 	}
 

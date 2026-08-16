@@ -435,10 +435,10 @@ func TestMachoHeaderStructure(t *testing.T) {
 	if len(hdr)%8 != 0 {
 		t.Errorf("header length %d is not a multiple of the dd block size 8", len(hdr))
 	}
-	// The header is copied to 0x1000 in the APE header; the next embedded
+	// The header is copied to apeMachoOffset in the APE header; the next embedded
 	// artifact (the gzipped APE loader source) lives at 0x8000.
-	if len(hdr) > 0x8000-0x1000 {
-		t.Errorf("header is %d bytes, exceeding the 0x1000-0x8000 region", len(hdr))
+	if len(hdr) > apeLoaderSrcOffset-apeMachoOffset {
+		t.Errorf("header is %d bytes, exceeding the %#x-%#x region", len(hdr), apeMachoOffset, apeLoaderSrcOffset)
 	}
 
 	// Simulate the dd transform on a synthetic APE image: the ELF payload
@@ -493,7 +493,7 @@ func TestMachoHeaderStructure(t *testing.T) {
 // assimilation dd command from an APE header.
 func apeDDParams(t *testing.T, header []byte) (bs, skip, count int) {
 	t.Helper()
-	m := regexp.MustCompile(`dd if="\$o" of="\$o" bs=(\d+) skip=(\d+) count=(\d+)`).FindSubmatch(header)
+	m := regexp.MustCompile(`dd if="\$p\.\$\$" of="\$p\.\$\$" bs=(\d+) skip=(\d+) count=(\d+)`).FindSubmatch(header)
 	if m == nil {
 		t.Fatalf("no Mach-O dd command in APE header")
 	}
@@ -523,8 +523,8 @@ func TestAPEFileMachoTransform(t *testing.T) {
 	}
 
 	bs, skip, count := apeDDParams(t, bin[:8192])
-	if bs*skip != 0x1000 {
-		t.Errorf("dd reads the Mach-O header from %#x, want 0x1000", bs*skip)
+	if bs*skip != apeMachoOffset {
+		t.Errorf("dd reads the Mach-O header from %#x, want %#x", bs*skip, apeMachoOffset)
 	}
 	if bs != 8 {
 		t.Errorf("dd block size = %d, want 8", bs)
@@ -532,7 +532,7 @@ func TestAPEFileMachoTransform(t *testing.T) {
 
 	// The copied region must cover the whole emitted header (mach header
 	// + sizeofcmds) with less than one block of padding.
-	sizeofcmds := binary.LittleEndian.Uint32(bin[0x1000+20 : 0x1000+24])
+	sizeofcmds := binary.LittleEndian.Uint32(bin[apeMachoOffset+20 : apeMachoOffset+24])
 	hdrLen := 32 + int(sizeofcmds)
 	if bs*count < hdrLen || bs*count >= hdrLen+8 {
 		t.Errorf("dd copies %d bytes, want %d rounded up to a block", bs*count, hdrLen)
