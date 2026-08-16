@@ -283,8 +283,9 @@ go tool compile -bench=out.txt file.go
   stands, so the bootstrap script stages a copy under
   `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`, writes the host's real
   header (ELF on Linux, Mach-O on macOS) into THAT, and execs it. The APE keeps
-  its bytes and its checksum, runs from a read-only path, and stays fat. The
-  copy is reused until the binary changes, and `argv[0]` is the copy's path.
+  its bytes and its checksum, runs from a read-only path, and stays fat. As
+  root, staging also registers the magic with binfmt_misc and binds the copy
+  over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived (2026-07-20).** Upstream derives
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
   stamps the same release-style version (`go1.26.5cosmo`) into every build, so

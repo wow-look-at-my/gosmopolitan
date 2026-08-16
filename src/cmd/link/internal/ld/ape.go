@@ -343,8 +343,32 @@ const apeRunDir = `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1`
 // mtime and size, or a checksum where stat is missing), so a rebuilt binary
 // stages a new copy and a re-run of the same one costs a stat and an exec.
 //
-// argv[0] becomes the copy's path. The copy keeps the original's basename to
-// hold `${0##*/}` steady, which is what a usage line prints.
+// The mtime is read to the nanosecond, because seconds are not enough. A
+// rebuild landing within one second of the last one, in place and at the same
+// size, would key to the copy already staged and run the PREVIOUS binary. A
+// build loop produces exactly that.
+//
+// Staging also takes two swings at making the host handle APEs better,
+// both of which fail silently and change nothing when they do not land:
+//
+//   - It registers the APE magic with binfmt_misc, pointing at /bin/sh. That
+//     is the kernel doing what a shell already does on ENOEXEC, so a caller
+//     that execve()s the file -- Go's os/exec, say -- stops needing a shell
+//     in front of it. Needs root and the binfmt_misc filesystem.
+//   - It records whether this host can bind-mount, which the run below uses.
+//
+// A run with that mark binds the copy over the APE's own path inside a
+// PRIVATE mount namespace and execs it there, so argv[0], /proc/self/exe and
+// anything the program resolves next to itself stay where the caller put
+// them. Nothing outside that namespace sees the mount, which is the property
+// that matters: deleting, moving or overwriting the binary, or removing the
+// directory holding it, all keep working while it runs. The bind is taken
+// only when the process is already root -- getting there through a user
+// namespace would have the program see itself as uid 0, which is a stranger
+// surprise than the path it was started from.
+//
+// Without the mark, argv[0] is the copy's path. The copy keeps the original's
+// basename to hold `${0##*/}` steady, which is what a usage line prints.
 func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
 	const ddBlockSize = 8
 	data := struct {
@@ -370,8 +394,14 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // apeStageTmpl is the shell writeStagedCopy renders. The Mach-O block runs
 // after the ELF one because a host that carries both is macOS, where the
 // Mach-O header is the one that counts.
+//
+// The binfmt_misc line quotes its magic with DOUBLE quotes on purpose. The
+// macOS ARM64 loader treats every `printf '` in the first 8K as a boot header
+// to decode, and this one is not one. TestFatBootHeaders holds the count at
+// two. The shell leaves \047 alone inside double quotes, so printf still
+// writes the quote the magic ends with.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
-	`  k=$(stat -c %d.%i.%Y.%s "$o" 2>/dev/null || stat -f %d.%i.%m.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
+	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
   c="{{.RunDir}}/$k"
   p="$c/${0##*/}"
   if [ ! -x "$p" ]; then
@@ -388,6 +418,14 @@ var apeStageTmpl = template.Must(template.New("apestage").Parse(
     fi
 {{- end}}
     chmod 755 "$p.$$" && mv -f "$p.$$" "$p" || { rm -f "$p.$$"; echo "APE: cannot stage $p" >&2; exit 121; }
+    if [ "$(id -u 2>/dev/null)" = 0 ]; then
+      [ -w /proc/sys/fs/binfmt_misc/register ] || mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
+      [ -e /proc/sys/fs/binfmt_misc/APE ] || { printf ":APE:M::MZqFpD=\047::/bin/sh:" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null
+      unshare -m true 2>/dev/null && : > "$c/.bind"
+    fi
+  fi
+  if [ -f "$c/.bind" ]; then
+    exec unshare -m sh -c 'b="$0"; a="$1"; shift; mount --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"' "$p" "$o" "$@"
   fi
   exec "$p" "$@"
 `))
