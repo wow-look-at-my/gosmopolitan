@@ -3,6 +3,7 @@ package apetest
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -13,8 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// runStaged runs bin with HOME pointed at home, which is where the bootstrap
-// script stages the copy it runs.
+// skipWhereNothingIsStaged skips a test on the hosts that boot an APE some
+// other way. Windows maps the PE header, and macOS ARM64 compiles the embedded
+// loader and hands it the original file. Neither stages anything. A Linux
+// ARM64 host with the `ape` loader installed takes that same route.
+func skipWhereNothingIsStaged(t *testing.T) {
+	t.Helper()
+	switch {
+	case runtime.GOOS == "windows":
+		t.Skip("the NT personality boots the APE through its PE header")
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		t.Skip("macOS ARM64 compiles the embedded loader and runs the APE through it")
+	case runtime.GOARCH == "arm64":
+		if _, err := exec.LookPath("ape"); err == nil {
+			t.Skip("an installed ape loader runs the APE as it stands")
+		}
+	}
+}
+
+// runStaged runs bin with the run directory pointed at home, which is where
+// the bootstrap script stages the copy it runs.
 func runStaged(t *testing.T, home, bin string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -22,7 +41,9 @@ func runStaged(t *testing.T, home, bin string, args ...string) string {
 
 	shellArgs := append([]string{bin}, args...)
 	cmd := commandForAPE(ctx, bin, shellArgs, args)
-	cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR=")
+	// Both, and both real: the script reads TMPDIR first, and a compiler the
+	// script may shell out to reads it as well.
+	cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR="+home)
 	var out, errOut strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
@@ -44,9 +65,7 @@ func stagedCopies(t *testing.T, home string) []string {
 // enough to tell those two files apart, which is why the key reads the mtime
 // to the nanosecond -- and a build loop produces exactly this pattern.
 func TestStagedCopyFollowsASameSecondRewrite(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the NT personality boots the APE through its PE header; nothing is staged")
-	}
+	skipWhereNothingIsStaged(t)
 	data, err := os.ReadFile(binPath(t))
 	require.NoError(t, err)
 
@@ -69,9 +88,7 @@ func TestStagedCopyFollowsASameSecondRewrite(t *testing.T) {
 // Every run reuses the staged copy: an unchanged binary must not be copied
 // again.
 func TestStagedCopyIsReused(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the NT personality boots the APE through its PE header; nothing is staged")
-	}
+	skipWhereNothingIsStaged(t)
 	data, err := os.ReadFile(binPath(t))
 	require.NoError(t, err)
 
@@ -93,13 +110,10 @@ func TestStagedCopyIsReused(t *testing.T) {
 	assert.Equal(t, before.ModTime(), after.ModTime(), "the copy was not written again")
 }
 
-// The APE itself is never written. That is the whole point: it is often on a
-// read-only path, its checksum is what a consumer verified, and one platform's
-// header would cost it every other platform.
-func TestStagingLeavesTheAPEAlone(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the NT personality boots the APE through its PE header; nothing is staged")
-	}
+// The APE itself is never written, on any host. That is the whole point: it is
+// often on a read-only path, its checksum is what a consumer verified, and one
+// platform's header would cost it every other platform.
+func TestRunningLeavesTheAPEAlone(t *testing.T) {
 	data, err := os.ReadFile(binPath(t))
 	require.NoError(t, err)
 
