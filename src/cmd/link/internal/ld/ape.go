@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"text/template"
 )
 
 // APE (Actually Portable Executable) format implementation
@@ -291,17 +292,99 @@ func shiftPOffsets(elf []byte, delta uint64) []byte {
 // backslash-quote idiom -- because the APE loader's printf decoder stops at the first
 // raw quote byte when it scans the header for embedded boot ELF headers.
 // Percent signs must be octal as well: printf would treat a bare '%' in its
-// format string as a conversion directive, corrupting the self-assimilation
+// format string as a conversion directive, corrupting the header
 // write whenever a variable header byte (e_entry, e_phoff, ...) is 0x25.
 func writePrintfBlob(script *bytes.Buffer, blob []byte) {
-	for _, b := range blob {
-		if b >= 0x20 && b < 0x7f && b != '\\' && b != '\'' && b != '%' {
-			script.WriteByte(b)
+	script.WriteString(printfBlob(blob))
+}
+
+// printfBlob is writePrintfBlob's escaping, for a caller that renders the
+// statement from a template instead of writing it piece by piece.
+func printfBlob(blob []byte) string {
+	var b strings.Builder
+	for _, c := range blob {
+		if c >= 0x20 && c < 0x7f && c != '\\' && c != '\'' && c != '%' {
+			b.WriteByte(c)
 		} else {
-			fmt.Fprintf(script, "\\%03o", b)
+			fmt.Fprintf(&b, "\\%03o", c)
 		}
 	}
+	return b.String()
 }
+
+// apeRunDir is where the bootstrap script stages the runnable copy it makes
+// of itself. The trailing number is the staging layout's version: a binary
+// built by an older linker keeps its own directory rather than reading one
+// written to a different shape.
+//
+// TMPDIR first, then HOME, matching the loader path the macOS ARM64 branch
+// already uses. Both are per-user, which is what keeps another user from
+// planting a binary at the path this script is about to exec. /tmp is the last
+// resort, for a host that sets neither.
+const apeRunDir = `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1`
+
+// writeStagedCopy emits the shell that gives the host a runnable copy of the
+// APE at "$p", and never touches the APE itself.
+//
+// The kernel cannot exec this file: it starts with the DOS/shell magic, not
+// with an ELF or Mach-O header. Something has to write the real header over
+// those first bytes, and for years that something wrote them into the file it
+// was running -- which needs the file to be writable, breaks its checksum,
+// and costs a fat APE every platform but this one. So the script copies
+// itself once and corrects the COPY.
+//
+// The copy is keyed by the identity of the file it came from (device, inode,
+// mtime and size, or a checksum where stat is missing), so a rebuilt binary
+// stages a new copy and a re-run of the same one costs a stat and an exec.
+//
+// argv[0] becomes the copy's path. The copy keeps the original's basename to
+// hold `${0##*/}` steady, which is what a usage line prints.
+func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
+	const ddBlockSize = 8
+	data := struct {
+		RunDir    string
+		Boot      string
+		Macho     bool
+		BlockSize int
+		Skip      int
+		Count     int
+	}{
+		RunDir:    apeRunDir,
+		Boot:      printfBlob(boot),
+		Macho:     machoSize > 0,
+		BlockSize: ddBlockSize,
+		Skip:      machoOffset / ddBlockSize,
+		Count:     (machoSize + ddBlockSize - 1) / ddBlockSize,
+	}
+	if err := apeStageTmpl.Execute(script, data); err != nil {
+		Exitf("APE: rendering the staging script: %v", err)
+	}
+}
+
+// apeStageTmpl is the shell writeStagedCopy renders. The Mach-O block runs
+// after the ELF one because a host that carries both is macOS, where the
+// Mach-O header is the one that counts.
+var apeStageTmpl = template.Must(template.New("apestage").Parse(
+	`  k=$(stat -c %d.%i.%Y.%s "$o" 2>/dev/null || stat -f %d.%i.%m.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
+  c="{{.RunDir}}/$k"
+  p="$c/${0##*/}"
+  if [ ! -x "$p" ]; then
+    (umask 077; mkdir -p "$c") || { echo "APE: cannot create $c" >&2; exit 121; }
+    cp "$o" "$p.$$" || { echo "APE: cannot stage $p" >&2; exit 121; }
+{{- if .Boot}}
+    exec 7<> "$p.$$" || { echo "APE: cannot stage $p" >&2; exit 121; }
+    printf '{{.Boot}}' >&7
+    exec 7<&-
+{{- end}}
+{{- if .Macho}}
+    if [ -d /Applications ]; then
+      dd if="$p.$$" of="$p.$$" bs={{.BlockSize}} skip={{.Skip}} count={{.Count}} conv=notrunc 2>/dev/null || { echo 'APE: Mach-O relocation failed' >&2; exit 121; }
+    fi
+{{- end}}
+    chmod 755 "$p.$$" && mv -f "$p.$$" "$p" || { rm -f "$p.$$"; echo "APE: cannot stage $p" >&2; exit 121; }
+  fi
+  exec "$p" "$@"
+`))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
 // the given payloads (at most one per architecture family). With both an
@@ -366,7 +449,10 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		machoHeader = makeMachoHeader(amd.elf, amd.offset, amd.entry())
 		// Place Mach-O header at a specific location in the APE header.
 		// It will be copied backward by the dd command.
-		machoOffset = 0x1000 // 4KB into the header
+		//
+		// 8KB in, not 4KB: the bootstrap script runs from 0x800 up to here,
+		// and it grew when it stopped writing headers into the file it runs.
+		machoOffset = 0x2000
 		machoSize = len(machoHeader)
 	}
 
@@ -451,28 +537,12 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 			fmt.Fprintf(&script, "  [ -d /Applications ] || { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
 		if !darwinAMD {
-			// Refuse macOS BEFORE self-assimilating: the printf writes
-			// an ELF header over the APE header, and with no Mach-O
-			// header to dd back over it the file stops being an APE
-			// and stops being runnable anywhere.
+			// Refuse macOS before staging a copy: the printf writes an ELF
+			// header, and with no Mach-O header to put over it the copy
+			// would not run there anyway.
 			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
-		if linuxAMD {
-			script.WriteString(`  exec 7<> "$o" || exit 121
-  printf '`)
-			writePrintfBlob(&script, amdBoot)
-			script.WriteString("' >&7\n")
-			script.WriteString("  exec 7<&-\n")
-		}
-		if machoSize > 0 {
-			bs := 8
-			skip := machoOffset / bs
-			count := (machoSize + bs - 1) / bs
-			fmt.Fprintf(&script, "  if [ -d /Applications ]; then\n")
-			fmt.Fprintf(&script, "    dd if=\"$o\" of=\"$o\" bs=%d skip=%d count=%d conv=notrunc 2>/dev/null || { echo 'APE: Mach-O assimilation failed' >&2; exit 121; }\n", bs, skip, count)
-			fmt.Fprintf(&script, "  fi\n")
-		}
-		script.WriteString("  exec \"$0\" \"$@\"\n")
+		writeStagedCopy(&script, amdBoot, machoOffset, machoSize)
 	case amd == nil:
 		script.WriteString("  echo 'APE: x86_64 cannot run ARM64 binary' >&2\n")
 		script.WriteString("  exit 1\n")
@@ -508,21 +578,16 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 `)
 		}
 		if linuxARM && !darwinARM {
-			// Same trap as the amd64 branch: self-assimilation on
-			// macOS would leave a file that is neither an APE nor a
-			// Mach-O.
+			// Same trap as the amd64 branch: an ELF header on a macOS host
+			// leaves something that runs nowhere.
 			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
 		if linuxARM {
-			script.WriteString(`  # Linux ARM64: prefer an installed loader, else self-assimilate
+			script.WriteString(`  # Linux ARM64: an installed loader runs the file as it stands
   type ape >/dev/null 2>&1 && exec ape "$o" "$@"
   [ -x "$t" ] && exec "$t" "$o" "$@"
-  exec 7<> "$o" || exit 121
-  printf '`)
-			writePrintfBlob(&script, armBoot)
-			script.WriteString("' >&7\n")
-			script.WriteString("  exec 7<&-\n")
-			script.WriteString("  exec \"$0\" \"$@\"\n")
+`)
+			writeStagedCopy(&script, armBoot, 0, 0)
 		} else {
 			// The printf below is unreachable shell on purpose: the macOS
 			// APE loader locates the aarch64 boot header by decoding every
@@ -857,9 +922,10 @@ func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 // makeMachoHeader creates the Mach-O executable header for macOS x86-64.
 //
 // On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
-// offset 0x1000 in the APE header) over the start of the file, turning the
-// whole APE into a Mach-O executable whose load commands point straight at
-// the embedded amd64 ELF image. The XNU kernel loads it directly - there is
+// offset 0x2000 in the APE header) over the start of a COPY of the file,
+// turning that copy into a Mach-O executable whose load commands point
+// straight at the embedded amd64 ELF image. The copy is what runs, and the
+// APE itself is left as it was. The XNU kernel loads it directly - there is
 // no dyld involved (LC_UNIXTHREAD, not LC_MAIN) - so the load commands must
 // satisfy the kernel's parse_machfile/load_segment checks on their own:
 //

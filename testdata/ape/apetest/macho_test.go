@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const machoOffset = 0x1000
+const machoOffset = 0x2000
 
 // machoDDParams extracts the bs/skip/count of the Mach-O assimilation dd
 // command from the bootstrap script.

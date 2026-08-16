@@ -111,3 +111,34 @@ func TestShellVariableAssignment(t *testing.T) {
 	assert.Equal(t, byte('='), bin[6])
 	assert.Equal(t, byte('\''), bin[7])
 }
+
+// The kernel cannot exec an APE as it stands, so something must write a real
+// header over its first bytes. The script writes them into a copy it stages,
+// never into the file it is running: that file is often read-only, its
+// checksum is what a consumer verifies, and a fat APE stops being fat the
+// moment one platform's header lands on it.
+func TestShellNeverWritesToItself(t *testing.T) {
+	header := first8K(t)
+
+	assert.NotContains(t, string(header), `exec 7<> "$o"`, "the ELF header must go to the staged copy, not to $o")
+	assert.NotContains(t, string(header), `of="$o"`, "the Mach-O header must go to the staged copy, not to $o")
+}
+
+func TestShellStagesACopyAndExecsIt(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `cp "$o" "$p.$$"`, "must copy itself before correcting the header")
+	assert.Contains(t, header, `mv -f "$p.$$" "$p"`, "must publish the copy atomically, so a concurrent first run cannot read a half-written one")
+	assert.Contains(t, header, `exec "$p" "$@"`, "must exec the staged copy")
+	assert.Contains(t, header, `if [ ! -x "$p" ]; then`, "must reuse an already staged copy")
+}
+
+// The copy is keyed by the identity of the file it came from, so a rebuilt
+// binary never runs its predecessor's copy.
+func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `stat -c %d.%i.%Y.%s "$o"`, "GNU stat: device, inode, mtime, size")
+	assert.Contains(t, header, `stat -f %d.%i.%m.%z "$o"`, "BSD stat spells the same fields differently")
+	assert.Contains(t, header, `cksum <"$o"`, "a host without stat falls back to the contents")
+}
