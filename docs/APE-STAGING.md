@@ -14,15 +14,24 @@ The bootstrap script now stages a COPY and corrects the copy.
 ## The staged copy
 
 ```
-${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/<basename>
+/tmp/.ape-run-1-<uid>/<file identity>/<basename>
 ```
 
-`HOME` only counts when it looks like a real per-user directory: set,
-non-empty, and not `/`. A container run as a numeric UID with no matching
-`/etc/passwd` entry still gets a non-empty `HOME` -- the runtime sets it to
-`/` itself (confirmed against Docker's own `--user <uid>:<gid>`) -- and a
-bare `${HOME:-/tmp}` would take that value and try to stage under the
-filesystem root. Staging treats that one value the same as an absent `HOME`.
+No environment variable is read to find this path. TMPDIR and HOME are
+both caller-supplied, and neither can be trusted: TMPDIR can be unset,
+empty, or pointed at something unwritable, and a container run as a
+numeric UID with no matching `/etc/passwd` entry gets a non-empty HOME
+anyway -- the runtime sets it to `/` itself (confirmed against Docker's
+own `--user <uid>:<gid>`), which an earlier revision of this staging path
+took as a real home and tried to `mkdir` under the filesystem root. `/tmp`
+is reliably world-writable (mode 1777) on virtually every host this binary
+runs on, so staging goes there unconditionally.
+
+`<uid>` is `id -u` -- a syscall, not an environment variable -- and stands
+in for the per-user isolation a real HOME would otherwise give this path:
+it keeps one user's staged copies out of a directory another user's run
+would also resolve to, without asking the caller's environment for
+anything.
 
 The file identity is `device.inode.mtime.size`, read with `stat -c
 %d.%i.%.9Y.%s` on GNU and `stat -f %d.%i.%Fm.%z` on BSD. A host with no `stat`
