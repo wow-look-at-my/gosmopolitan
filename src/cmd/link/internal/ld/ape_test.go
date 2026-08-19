@@ -97,6 +97,57 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
+// TestHomeOrDefaultShellResolution runs `${TMPDIR:-homeOrDefault(dflt)}`
+// through a real POSIX shell under the env combinations that matter,
+// including HOME="/" -- what a container runtime hands a numeric --user
+// UID with no /etc/passwd entry, confirmed directly against Docker. A
+// plain `${HOME:-dflt}` treats that "/" as a real home and never reaches
+// dflt; homeOrDefault must reject it the same as an absent HOME. Both of
+// this fork's two call sites now pass "/tmp" -- apeRunDir, and the macOS
+// ARM64 loader-cache path, which used to fall to "." (the caller's own
+// current directory: unpredictable, and not guaranteed writable) instead.
+func TestHomeOrDefaultShellResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX sh on windows")
+	}
+	testenv.MustHaveExecPath(t, "sh")
+
+	cases := []struct {
+		name    string
+		home    string // "" leaves HOME unset
+		tmpdir  string // "" leaves TMPDIR unset
+		dflt    string
+		want    string
+	}{
+		{"container UID with no passwd entry", "/", "", "/tmp", "/tmp"},
+		{"neither set", "", "", "/tmp", "/tmp"},
+		{"TMPDIR set wins over HOME", "/", "/custom", "/tmp", "/custom"},
+		{"real per-user HOME", "/root", "", "/tmp", "/root"},
+		{"a different dflt is honored verbatim", "/", "", "/var/cache", "/var/cache"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			expr := "${TMPDIR:-" + homeOrDefault(c.dflt) + "}"
+			cmd := exec.Command("sh", "-c", `printf %s "`+expr+`"`)
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+			if c.home != "" {
+				cmd.Env = append(cmd.Env, "HOME="+c.home)
+			}
+			if c.tmpdir != "" {
+				cmd.Env = append(cmd.Env, "TMPDIR="+c.tmpdir)
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh -c failed: %v\n%s", err, out)
+			}
+			if got := string(out); got != c.want {
+				t.Errorf("resolved to %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // TestWritePrintfBlobShellRoundTrip runs the encoded blob through a real
 // POSIX shell's printf, the way APE self-assimilation does, and checks that
 // the bytes written match the input exactly.
