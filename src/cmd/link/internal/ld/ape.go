@@ -325,9 +325,26 @@ func printfBlob(blob []byte) string {
 //
 // TMPDIR first, then HOME, matching the loader path the macOS ARM64 branch
 // already uses. Both are per-user, which is what keeps another user from
-// planting a binary at the path this script is about to exec. /tmp is the last
-// resort, for a host that sets neither.
-const apeRunDir = `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1`
+// planting a binary at the path this script is about to exec. /tmp is the
+// last resort, for a host that gives us neither.
+//
+// A bare `${HOME:-/tmp}` is not that last resort in practice: a container
+// run as a numeric UID with no matching /etc/passwd entry still gets a
+// non-empty HOME, set by the runtime itself to "/" -- confirmed directly
+// against Docker's own `--user <uid>:<gid>` default. `${VAR:-x}` only
+// falls through on an unset or empty VAR, so "/" wins the substitution and
+// staging tries to mkdir under the filesystem root. homeOrDefault treats
+// that one value the same as an absent HOME.
+var apeRunDir = `${TMPDIR:-` + homeOrDefault("/tmp") + `}/.ape-run-1`
+
+// homeOrDefault builds a shell command-substitution that yields $HOME when
+// it looks like a real per-user directory (set, non-empty, and not the "/"
+// a container runtime hands a UID with no passwd entry) and dflt otherwise.
+// Callers splice this into a `${TMPDIR:-...}` expansion, so it only ever
+// runs once TMPDIR itself is confirmed unset or empty.
+func homeOrDefault(dflt string) string {
+	return `$([ -n "$HOME" ] && [ "$HOME" != / ] && printf %s "$HOME" || printf %s '` + dflt + `')`
+}
 
 // writeStagedCopy emits the shell that gives the host a runnable copy of the
 // APE at "$p", and never touches the APE itself.
@@ -599,7 +616,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
-		script.WriteString("  t=\"${TMPDIR:-${HOME:-.}}/.ape-1.10\"\n")
+		script.WriteString("  t=\"${TMPDIR:-" + homeOrDefault(".") + "}/.ape-1.10\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source

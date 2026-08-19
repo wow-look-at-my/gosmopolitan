@@ -97,6 +97,52 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
+// TestHomeOrDefaultShellResolution runs apeRunDir's `${TMPDIR:-...}`
+// expression through a real POSIX shell under the env combinations that
+// matter, including HOME="/" -- what a container runtime hands a numeric
+// --user UID with no /etc/passwd entry, confirmed directly against Docker.
+// A plain `${HOME:-/tmp}` treats that "/" as a real home and never reaches
+// /tmp; homeOrDefault must reject it the same as an absent HOME.
+func TestHomeOrDefaultShellResolution(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX sh on windows")
+	}
+	testenv.MustHaveExecPath(t, "sh")
+
+	cases := []struct {
+		name    string
+		home    string // "" leaves HOME unset
+		tmpdir  string // "" leaves TMPDIR unset
+		wantDir string
+	}{
+		{"container UID with no passwd entry", "/", "", "/tmp"},
+		{"neither set", "", "", "/tmp"},
+		{"TMPDIR set wins over HOME", "/", "/custom", "/custom"},
+		{"real per-user HOME", "/root", "", "/root"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `printf %s "`+apeRunDir+`"`)
+			cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+			if c.home != "" {
+				cmd.Env = append(cmd.Env, "HOME="+c.home)
+			}
+			if c.tmpdir != "" {
+				cmd.Env = append(cmd.Env, "TMPDIR="+c.tmpdir)
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh -c failed: %v\n%s", err, out)
+			}
+			want := c.wantDir + "/.ape-run-1"
+			if got := string(out); got != want {
+				t.Errorf("apeRunDir resolved to %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // TestWritePrintfBlobShellRoundTrip runs the encoded blob through a real
 // POSIX shell's printf, the way APE self-assimilation does, and checks that
 // the bytes written match the input exactly.

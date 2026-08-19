@@ -17,6 +17,13 @@ The bootstrap script now stages a COPY and corrects the copy.
 ${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/<basename>
 ```
 
+`HOME` only counts when it looks like a real per-user directory: set,
+non-empty, and not `/`. A container run as a numeric UID with no matching
+`/etc/passwd` entry still gets a non-empty `HOME` -- the runtime sets it to
+`/` itself (confirmed against Docker's own `--user <uid>:<gid>`) -- and a
+bare `${HOME:-/tmp}` would take that value and try to stage under the
+filesystem root. Staging treats that one value the same as an absent `HOME`.
+
 The file identity is `device.inode.mtime.size`, read with `stat -c
 %d.%i.%.9Y.%s` on GNU and `stat -f %d.%i.%Fm.%z` on BSD. A host with no `stat`
 falls back to `cksum` over the contents.
