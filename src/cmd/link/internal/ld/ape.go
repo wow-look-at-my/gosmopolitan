@@ -51,9 +51,10 @@ const (
 	// change. TestAPEScriptHasHeadroom keeps it that way.
 	apeMachoOffset = 0x2000
 
-	// What follows the script, and so how much room the script has: it runs
-	// from apeScriptOffset up to the Mach-O header, and the gzipped macOS
-	// ARM64 loader source sits after that.
+	// apeLoaderSrcOffset is where the gzipped macOS ARM64 loader source
+	// sits, just past the dispatch script (which runs from apeScriptOffset
+	// up to apeMachoOffset). What follows the script is how much room the
+	// script has to grow; the loader source sits just past it.
 	apeLoaderSrcOffset = 0x8000
 
 	// apeMagicMZ is the canonical APE magic (ape/specification.md): a DOS

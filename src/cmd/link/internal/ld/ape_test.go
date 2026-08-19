@@ -486,8 +486,8 @@ func TestMachoHeaderStructure(t *testing.T) {
 	if len(hdr)%8 != 0 {
 		t.Errorf("header length %d is not a multiple of the dd block size 8", len(hdr))
 	}
-	// The header is copied to apeMachoOffset in the APE header; the next embedded
-	// artifact (the gzipped APE loader source) lives at 0x8000.
+	// The header is parked/copied at apeMachoOffset in the APE header; the
+	// next embedded artifact (the gzipped APE loader source) lives at 0x8000.
 	if len(hdr) > apeLoaderSrcOffset-apeMachoOffset {
 		t.Errorf("header is %d bytes, exceeding the %#x-%#x region", len(hdr), apeMachoOffset, apeLoaderSrcOffset)
 	}
