@@ -19,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -97,55 +98,72 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// TestHomeOrDefaultShellResolution runs `${TMPDIR:-homeOrDefault(dflt)}`
-// through a real POSIX shell under the env combinations that matter,
-// including HOME="/" -- what a container runtime hands a numeric --user
-// UID with no /etc/passwd entry, confirmed directly against Docker. A
-// plain `${HOME:-dflt}` treats that "/" as a real home and never reaches
-// dflt; homeOrDefault must reject it the same as an absent HOME. Both of
-// this fork's two call sites now pass "/tmp" -- apeRunDir, and the macOS
-// ARM64 loader-cache path, which used to fall to "." (the caller's own
-// current directory: unpredictable, and not guaranteed writable) instead.
-func TestHomeOrDefaultShellResolution(t *testing.T) {
+// TestApeRunDirIgnoresEveryEnvironmentVariable runs apeRunDir through a real
+// POSIX shell with TMPDIR, HOME, and the caller's whole environment cleared,
+// and again with both set to hostile-looking values, and checks the
+// resolved path is identical either way: /tmp, suffixed with the real
+// uid. Earlier revisions read ${TMPDIR:-${HOME:-/tmp}}, which is exactly
+// the shape that broke: a container run as a numeric --user UID with no
+// /etc/passwd entry gets a non-empty HOME anyway, set by the runtime
+// itself to "/" (confirmed directly against Docker), and `${VAR:-x}` only
+// falls through on an unset or empty VAR, so "/" won -- staging then tried
+// to mkdir under the filesystem root. Reading no environment variable at
+// all removes that whole failure class instead of special-casing the one
+// value that was observed to break it.
+func TestApeRunDirIgnoresEveryEnvironmentVariable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX sh on windows")
+	}
+	testenv.MustHaveExecPath(t, "sh")
+	testenv.MustHaveExecPath(t, "id")
+
+	uid := strings.TrimSpace(runAndCapture(t, "id", "-u"))
+	want := "/tmp/.ape-run-1-" + uid
+
+	envs := [][]string{
+		{"PATH=" + os.Getenv("PATH")},
+		{"PATH=" + os.Getenv("PATH"), "HOME=/", "TMPDIR="},
+		{"PATH=" + os.Getenv("PATH"), "HOME=/root", "TMPDIR=/elsewhere"},
+	}
+	for i, env := range envs {
+		t.Run(fmt.Sprintf("env_%d", i), func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `printf %s "`+apeRunDir+`"`)
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh -c failed: %v\n%s", err, out)
+			}
+			if got := string(out); got != want {
+				t.Errorf("apeRunDir resolved to %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestApeUIDSuffixSeparatesUsers confirms two different uids resolve to two
+// different staging directories -- the property a real per-user HOME used
+// to give this path for free, and that apeUIDSuffix now provides without
+// reading HOME at all: id -u is a syscall, not a caller-supplied value.
+func TestApeUIDSuffixSeparatesUsers(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	cases := []struct {
-		name    string
-		home    string // "" leaves HOME unset
-		tmpdir  string // "" leaves TMPDIR unset
-		dflt    string
-		want    string
-	}{
-		{"container UID with no passwd entry", "/", "", "/tmp", "/tmp"},
-		{"neither set", "", "", "/tmp", "/tmp"},
-		{"TMPDIR set wins over HOME", "/", "/custom", "/tmp", "/custom"},
-		{"real per-user HOME", "/root", "", "/tmp", "/root"},
-		{"a different dflt is honored verbatim", "/", "", "/var/cache", "/var/cache"},
+	a := runAndCapture(t, "sh", "-c", `printf %s "`+apeUIDSuffix+`"`)
+	b := runAndCapture(t, "sh", "-c", `HOME=/somewhere-else printf %s "`+apeUIDSuffix+`"`)
+	if a != b {
+		t.Errorf("apeUIDSuffix changed with HOME (%q vs %q); it must depend only on the real uid", a, b)
 	}
+}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			expr := "${TMPDIR:-" + homeOrDefault(c.dflt) + "}"
-			cmd := exec.Command("sh", "-c", `printf %s "`+expr+`"`)
-			cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
-			if c.home != "" {
-				cmd.Env = append(cmd.Env, "HOME="+c.home)
-			}
-			if c.tmpdir != "" {
-				cmd.Env = append(cmd.Env, "TMPDIR="+c.tmpdir)
-			}
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("sh -c failed: %v\n%s", err, out)
-			}
-			if got := string(out); got != c.want {
-				t.Errorf("resolved to %q, want %q", got, c.want)
-			}
-		})
+func runAndCapture(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
 	}
+	return string(out)
 }
 
 // TestWritePrintfBlobShellRoundTrip runs the encoded blob through a real
