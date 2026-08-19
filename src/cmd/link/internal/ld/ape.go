@@ -323,28 +323,31 @@ func printfBlob(blob []byte) string {
 // built by an older linker keeps its own directory rather than reading one
 // written to a different shape.
 //
-// TMPDIR first, then HOME, matching the loader path the macOS ARM64 branch
-// already uses. Both are per-user, which is what keeps another user from
-// planting a binary at the path this script is about to exec. /tmp is the
-// last resort, for a host that gives us neither.
+// Fixed at /tmp. No environment variable is read to find it: TMPDIR and
+// HOME are both caller-supplied and neither can be trusted to exist, to
+// name a writable directory, or even to name a real per-user one. A
+// container run as a numeric UID with no matching /etc/passwd entry gets a
+// non-empty HOME anyway -- set by the runtime itself to "/" -- confirmed
+// directly against Docker's own `--user <uid>:<gid>` default, and TMPDIR
+// is just as easy for a caller to leave unset, point at something
+// unwritable, or forget entirely. /tmp is reliably world-writable (mode
+// 1777) on virtually every host this binary runs on; nothing else is a
+// safer bet with zero information about the caller's environment.
 //
-// A bare `${HOME:-/tmp}` is not that last resort in practice: a container
-// run as a numeric UID with no matching /etc/passwd entry still gets a
-// non-empty HOME, set by the runtime itself to "/" -- confirmed directly
-// against Docker's own `--user <uid>:<gid>` default. `${VAR:-x}` only
-// falls through on an unset or empty VAR, so "/" wins the substitution and
-// staging tries to mkdir under the filesystem root. homeOrDefault treats
-// that one value the same as an absent HOME.
-var apeRunDir = `${TMPDIR:-` + homeOrDefault("/tmp") + `}/.ape-run-1`
+// apeUIDSuffix stands in for the per-user isolation a real HOME would
+// give this path: it keeps one user's staged copies out of a path another
+// user's run would also resolve to, without asking the environment for
+// anything.
+var apeRunDir = "/tmp/.ape-run-1" + apeUIDSuffix
 
-// homeOrDefault builds a shell command-substitution that yields $HOME when
-// it looks like a real per-user directory (set, non-empty, and not the "/"
-// a container runtime hands a UID with no passwd entry) and dflt otherwise.
-// Callers splice this into a `${TMPDIR:-...}` expansion, so it only ever
-// runs once TMPDIR itself is confirmed unset or empty.
-func homeOrDefault(dflt string) string {
-	return `$([ -n "$HOME" ] && [ "$HOME" != / ] && printf %s "$HOME" || printf %s '` + dflt + `')`
-}
+// apeUIDSuffix is a shell command substitution for the running user's
+// numeric uid, read with `id -u` -- a syscall, not an environment
+// variable, so it holds even when the caller has configured nothing at
+// all. "shared" is the fallback for the one host where even `id` itself
+// fails; every real run keeps its own subdirectory as usual, and this one
+// case degrades to the pre-uid-scoping behavior rather than failing to
+// stage at all.
+const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 
 // writeStagedCopy emits the shell that gives the host a runnable copy of the
 // APE at "$p", and never touches the APE itself.
@@ -616,7 +619,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
-		script.WriteString("  t=\"${TMPDIR:-" + homeOrDefault("/tmp") + "}/.ape-1.10\"\n")
+		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
