@@ -53,7 +53,8 @@ const (
 
 	// apeLoaderSrcOffset is where the gzipped macOS ARM64 loader source
 	// sits, just past the dispatch script (which runs from apeScriptOffset
-	// up to apeMachoOffset).
+	// up to apeMachoOffset). What follows the script is how much room the
+	// script has to grow; the loader source sits just past it.
 	apeLoaderSrcOffset = 0x8000
 
 	// apeMagicMZ is the canonical APE magic (ape/specification.md): a DOS
