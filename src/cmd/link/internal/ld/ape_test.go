@@ -97,12 +97,15 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// TestHomeOrDefaultShellResolution runs apeRunDir's `${TMPDIR:-...}`
-// expression through a real POSIX shell under the env combinations that
-// matter, including HOME="/" -- what a container runtime hands a numeric
-// --user UID with no /etc/passwd entry, confirmed directly against Docker.
-// A plain `${HOME:-/tmp}` treats that "/" as a real home and never reaches
-// /tmp; homeOrDefault must reject it the same as an absent HOME.
+// TestHomeOrDefaultShellResolution runs `${TMPDIR:-homeOrDefault(dflt)}`
+// through a real POSIX shell under the env combinations that matter,
+// including HOME="/" -- what a container runtime hands a numeric --user
+// UID with no /etc/passwd entry, confirmed directly against Docker. A
+// plain `${HOME:-dflt}` treats that "/" as a real home and never reaches
+// dflt; homeOrDefault must reject it the same as an absent HOME. Both of
+// this fork's two call sites now pass "/tmp" -- apeRunDir, and the macOS
+// ARM64 loader-cache path, which used to fall to "." (the caller's own
+// current directory: unpredictable, and not guaranteed writable) instead.
 func TestHomeOrDefaultShellResolution(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
@@ -113,17 +116,20 @@ func TestHomeOrDefaultShellResolution(t *testing.T) {
 		name    string
 		home    string // "" leaves HOME unset
 		tmpdir  string // "" leaves TMPDIR unset
-		wantDir string
+		dflt    string
+		want    string
 	}{
-		{"container UID with no passwd entry", "/", "", "/tmp"},
-		{"neither set", "", "", "/tmp"},
-		{"TMPDIR set wins over HOME", "/", "/custom", "/custom"},
-		{"real per-user HOME", "/root", "", "/root"},
+		{"container UID with no passwd entry", "/", "", "/tmp", "/tmp"},
+		{"neither set", "", "", "/tmp", "/tmp"},
+		{"TMPDIR set wins over HOME", "/", "/custom", "/tmp", "/custom"},
+		{"real per-user HOME", "/root", "", "/tmp", "/root"},
+		{"a different dflt is honored verbatim", "/", "", "/var/cache", "/var/cache"},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cmd := exec.Command("sh", "-c", `printf %s "`+apeRunDir+`"`)
+			expr := "${TMPDIR:-" + homeOrDefault(c.dflt) + "}"
+			cmd := exec.Command("sh", "-c", `printf %s "`+expr+`"`)
 			cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 			if c.home != "" {
 				cmd.Env = append(cmd.Env, "HOME="+c.home)
@@ -135,9 +141,8 @@ func TestHomeOrDefaultShellResolution(t *testing.T) {
 			if err != nil {
 				t.Fatalf("sh -c failed: %v\n%s", err, out)
 			}
-			want := c.wantDir + "/.ape-run-1"
-			if got := string(out); got != want {
-				t.Errorf("apeRunDir resolved to %q, want %q", got, want)
+			if got := string(out); got != c.want {
+				t.Errorf("resolved to %q, want %q", got, c.want)
 			}
 		})
 	}

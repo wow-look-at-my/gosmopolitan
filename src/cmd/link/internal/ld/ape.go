@@ -616,7 +616,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
-		script.WriteString("  t=\"${TMPDIR:-" + homeOrDefault(".") + "}/.ape-1.10\"\n")
+		script.WriteString("  t=\"${TMPDIR:-" + homeOrDefault("/tmp") + "}/.ape-1.10\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
