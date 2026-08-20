@@ -57,7 +57,7 @@ import "unsafe"
 // dst, flipping '/' to '\' when flipSlash is set. Invalid UTF-8 bytes
 // become U+FFFD, matching unicode/utf16's encoder.
 func ntUTF16Append(dst []uint16, s string, flipSlash bool) []uint16 {
-	for i := 0; i < len(s); {
+	for i := uint(0); i < uint(len(s)); {
 		c := s[i]
 		if c < 0x80 {
 			if c == '/' && flipSlash {

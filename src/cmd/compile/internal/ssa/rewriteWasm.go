@@ -97,51 +97,6 @@ func rewriteValueWasm(v *Value) bool {
 	case OpAndB:
 		v.Op = OpWasmI64And
 		return true
-	case OpAtomicAdd32:
-		v.Op = OpWasmLoweredAtomicAdd32
-		return true
-	case OpAtomicAdd64:
-		v.Op = OpWasmLoweredAtomicAdd64
-		return true
-	case OpAtomicAnd32:
-		return rewriteValueWasm_OpAtomicAnd32(v)
-	case OpAtomicAnd8:
-		return rewriteValueWasm_OpAtomicAnd8(v)
-	case OpAtomicCompareAndSwap32:
-		return rewriteValueWasm_OpAtomicCompareAndSwap32(v)
-	case OpAtomicCompareAndSwap64:
-		v.Op = OpWasmLoweredAtomicCas64
-		return true
-	case OpAtomicExchange32:
-		v.Op = OpWasmLoweredAtomicExchange32
-		return true
-	case OpAtomicExchange64:
-		v.Op = OpWasmLoweredAtomicExchange64
-		return true
-	case OpAtomicLoad32:
-		v.Op = OpWasmLoweredAtomicLoad32
-		return true
-	case OpAtomicLoad64:
-		v.Op = OpWasmLoweredAtomicLoad64
-		return true
-	case OpAtomicLoad8:
-		v.Op = OpWasmLoweredAtomicLoad8
-		return true
-	case OpAtomicLoadPtr:
-		v.Op = OpWasmLoweredAtomicLoad64
-		return true
-	case OpAtomicOr32:
-		return rewriteValueWasm_OpAtomicOr32(v)
-	case OpAtomicOr8:
-		return rewriteValueWasm_OpAtomicOr8(v)
-	case OpAtomicStore32:
-		return rewriteValueWasm_OpAtomicStore32(v)
-	case OpAtomicStore64:
-		return rewriteValueWasm_OpAtomicStore64(v)
-	case OpAtomicStore8:
-		return rewriteValueWasm_OpAtomicStore8(v)
-	case OpAtomicStorePtrNoWB:
-		return rewriteValueWasm_OpAtomicStorePtrNoWB(v)
 	case OpAndInt16x8:
 		v.Op = OpWasmV128And
 		return true
@@ -190,6 +145,51 @@ func rewriteValueWasm(v *Value) bool {
 	case OpAndUint8x16:
 		v.Op = OpWasmV128And
 		return true
+	case OpAtomicAdd32:
+		v.Op = OpWasmLoweredAtomicAdd32
+		return true
+	case OpAtomicAdd64:
+		v.Op = OpWasmLoweredAtomicAdd64
+		return true
+	case OpAtomicAnd32:
+		return rewriteValueWasm_OpAtomicAnd32(v)
+	case OpAtomicAnd8:
+		return rewriteValueWasm_OpAtomicAnd8(v)
+	case OpAtomicCompareAndSwap32:
+		return rewriteValueWasm_OpAtomicCompareAndSwap32(v)
+	case OpAtomicCompareAndSwap64:
+		v.Op = OpWasmLoweredAtomicCas64
+		return true
+	case OpAtomicExchange32:
+		v.Op = OpWasmLoweredAtomicExchange32
+		return true
+	case OpAtomicExchange64:
+		v.Op = OpWasmLoweredAtomicExchange64
+		return true
+	case OpAtomicLoad32:
+		v.Op = OpWasmLoweredAtomicLoad32
+		return true
+	case OpAtomicLoad64:
+		v.Op = OpWasmLoweredAtomicLoad64
+		return true
+	case OpAtomicLoad8:
+		v.Op = OpWasmLoweredAtomicLoad8
+		return true
+	case OpAtomicLoadPtr:
+		v.Op = OpWasmLoweredAtomicLoad64
+		return true
+	case OpAtomicOr32:
+		return rewriteValueWasm_OpAtomicOr32(v)
+	case OpAtomicOr8:
+		return rewriteValueWasm_OpAtomicOr8(v)
+	case OpAtomicStore32:
+		return rewriteValueWasm_OpAtomicStore32(v)
+	case OpAtomicStore64:
+		return rewriteValueWasm_OpAtomicStore64(v)
+	case OpAtomicStore8:
+		return rewriteValueWasm_OpAtomicStore8(v)
+	case OpAtomicStorePtrNoWB:
+		return rewriteValueWasm_OpAtomicStorePtrNoWB(v)
 	case OpAverageUint16x8:
 		v.Op = OpWasmI16x8AvgrU
 		return true

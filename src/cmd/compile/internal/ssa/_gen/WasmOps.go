@@ -177,7 +177,7 @@ func init() {
 		// load and compare into one op keeps the check a contiguous
 		// wasm-stack-only sequence: Get SP; Get g; I32WrapI64; I32Load;
 		// I32LtU. arg0=SP, arg1=g, arg2=mem, auxint=guard offset.
-		{name: "LoweredPreemptCheck", argLength: 3, reg: regInfo{inputs: []regMask{buildReg("SP"), gp | buildReg("g")}, outputs: []regMask{gp}}, aux: "Int64", typ: "Bool"},
+		{name: "LoweredPreemptCheck", argLength: 3, reg: regInfo{inputs: []regMask{buildReg("SP"), gp.union(buildReg("g"))}, outputs: []regMask{gp}}, aux: "Int64", typ: "Bool"},
 
 		{name: "LoweredGetClosurePtr", reg: gp01},                                                                          // returns wasm.REG_CTXT, the closure pointer
 		{name: "LoweredGetCallerPC", reg: gp01, rematerializeable: true},                                                   // returns the PC of the caller of the current function
@@ -198,12 +198,12 @@ func init() {
 		{name: "LoweredAtomicLoad8", argLength: 2, reg: gpload, typ: "(UInt8,Mem)"},                                                                                                               // read unsigned 8-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
 		{name: "LoweredAtomicLoad32", argLength: 2, reg: gpload, typ: "(UInt32,Mem)"},                                                                                                             // read unsigned 32-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
 		{name: "LoweredAtomicLoad64", argLength: 2, reg: gpload, typ: "(UInt64,Mem)"},                                                                                                             // read 64-bit integer from arg0. arg1=mem. Returns loaded value and new memory.
-		{name: "LoweredAtomicAdd32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
-		{name: "LoweredAtomicAdd64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
-		{name: "LoweredAtomicExchange32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
-		{name: "LoweredAtomicExchange64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
-		{name: "LoweredAtomicCas32", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg1 must be zero-extended. arg3=mem. Reports whether the store happened, and returns new memory.
-		{name: "LoweredAtomicCas64", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, 0}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg3=mem. Reports whether the store happened, and returns new memory.
+		{name: "LoweredAtomicAdd32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
+		{name: "LoweredAtomicAdd64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true},      // *arg0 += arg1. arg2=mem. Returns sum and new memory.
+		{name: "LoweredAtomicExchange32", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt32,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
+		{name: "LoweredAtomicExchange64", argLength: 3, reg: regInfo{inputs: []regMask{gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(UInt64,Mem)", hasSideEffects: true}, // store arg1 to *arg0. arg2=mem. Returns old contents of *arg0 and new memory.
+		{name: "LoweredAtomicCas32", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg1 must be zero-extended. arg3=mem. Reports whether the store happened, and returns new memory.
+		{name: "LoweredAtomicCas64", argLength: 4, reg: regInfo{inputs: []regMask{gpsp, gpsp, gpsp, regMask{}}, outputs: []regMask{gp}}, resultNotInArgs: true, typ: "(Bool,Mem)", hasSideEffects: true},  // if *arg0==arg1, then set *arg0=arg2. arg3=mem. Reports whether the store happened, and returns new memory.
 
 		// GOWASM=threads only: atomic stores and old-style logical ops that
 		// return no value. Without threads, these lower to the ordinary
