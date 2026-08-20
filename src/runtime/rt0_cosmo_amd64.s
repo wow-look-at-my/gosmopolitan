@@ -19,8 +19,6 @@
 // on Linux). __hostos is a 4-byte value read with MOVL by the syscall
 // dispatchers, so zero-extend CL rather than storing raw ECX.
 
-DATA runtime·__hostos+0(SB)/4, $0
-GLOBL runtime·__hostos(SB), NOPTR, $4
 
 TEXT _rt0_amd64_cosmo(SB),NOSPLIT,$-8
 	// Entry point for Cosmopolitan AMD64 binaries
