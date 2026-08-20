@@ -8,12 +8,12 @@ tarballs to buildhost (pazer.build) as project `gosmopolitan`, for
 # Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> linux/amd64
+go version   # go version go1.27.0cosmo.r<N> linux/amd64
 
 # macOS, Apple Silicon
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> darwin/arm64
+go version   # go version go1.27.0cosmo.r<N> darwin/arm64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
@@ -32,7 +32,7 @@ produced -- there is no cross-package shortcut, and
   macos-latest/darwin/arm64. Each leg stamps VERSION, runs
   `make.bash -distpack` on its own runner (output
   `pkg/distpack/go<base>.r<run_number>.<goos>-<goarch>.tar.gz`, e.g.
-  `go1.26.5cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight
+  `go1.27.0cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight
   to buildhost.
 - `publish-finish` publishes the release once every leg is in.
 
@@ -51,7 +51,7 @@ select between them and neither platform can be served the other's bytes.
 ## The version stamp
 
 The publish stamps VERSION with a unique per-release suffix
-(`go<base>.r<run_number>`); the committed VERSION stays `go1.26.5cosmo`.
+(`go<base>.r<run_number>`); the committed VERSION stays `go1.27.0cosmo`.
 Every leg of one run stamps the SAME string, so the platforms of a release
 cannot disagree about which toolchain they are.
 
@@ -75,10 +75,10 @@ a hand-rebuilt toolchain self-invalidates stale cache entries and the old
   would silently download an official toolchain and lose cosmo). An explicit
   `GOTOOLCHAIN` env var or `go env -w` still overrides the default. A
   go.mod genuinely newer than the fork now fails loudly (`go.mod requires
-  go >= X (running go 1.26)`) instead of silently switching. Note the fork
-  self-identifies as the dev version `1.26` (its `go1.26.5cosmo` string does
-  not parse as a release version), so directives up to `go 1.26` are
-  satisfied but `go 1.26.0`+ are not. Releases published BEFORE this change
+  go >= X (running go 1.27)`) instead of silently switching. Note the fork
+  self-identifies as the dev version `1.27` (its `go1.27.0cosmo` string does
+  not parse as a release version), so directives up to `go 1.27` are
+  satisfied but `go 1.27.0`+ are not. Releases published BEFORE this change
   still ship `GOTOOLCHAIN=auto` and need the env var.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
   Gotchas); any host-run `go build`/`go install`/`go test` needs

@@ -288,7 +288,7 @@ go tool compile -bench=out.txt file.go
   over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived (2026-07-20).** Upstream derives
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
-  stamps the same release-style version (`go1.26.5cosmo`) into every build, so
+  stamps the same release-style version (`go1.27.0cosmo`) into every build, so
   any two fork builds used to share tool IDs — and hence action IDs — letting a
   warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
   serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
@@ -331,8 +331,18 @@ GOOS=cosmo GOARCH=amd64 go build std && GOOS=cosmo GOARCH=arm64 go build std
 GOOS=linux GOARCH=amd64 go test -short go/build cmd/internal/moddeps
 ```
 
-The merge itself is rarely the work — go1.26.4 and go1.26.5 each produced
-exactly one conflict (VERSION). The work is the class of break that
+**A patch bump and a minor bump are different jobs.** go1.26.4 and go1.26.5
+each produced exactly one conflict (VERSION). go1.27.0 produced 73, because
+a minor release merges upstream's master, not a release branch: every
+release-branch backport the fork already carries comes back as a conflict
+against upstream's own version of the same change. The single most useful
+triage tool is `git diff --name-only <previous tag> HEAD -- <file>`. An
+empty result means the fork never touched that file, so the conflict is
+release-branch-versus-master noise and upstream's side is correct outright.
+Only the remainder needs judgement. Depth, including the go1.27.0
+resolutions worth knowing about: docs/UPREV-GO1.27.md.
+
+The work that is NOT in the conflict list is the class of break that
 produces **no** conflict: upstream re-partitions a platform file and cosmo
 falls off the edge of the new `//go:build` tags. 46 upstream files carry a
 fork edit that is nothing but adding `cosmo` to a tag, and they cluster in
@@ -341,8 +351,15 @@ most. `go build std` for both arches is what catches it; do not skip it
 because the merge looked clean. When a symbol goes undefined, the fix is a
 new `*_cosmo.go` file, never a widened upstream tag.
 
+A minor bump also moves internal APIs the fork's own code calls, and those
+break the BUILD rather than a tag. Build std for every port the fork
+supports, not just cosmo: `js/wasm`, `wasip1/wasm`, and both under
+`GOWASM=threads`. Regenerate what upstream generates — `go run -C=_gen .`
+in `cmd/compile/internal/ssa` — rather than hand-merging opGen.go.
+
 Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across
-CLAUDE.md, README.md, cosmo-ci.yml), and record the merge in DEBUGGING.md.
+CLAUDE.md, README.md, docs/INSTALL.md, cosmo-ci.yml), and record the merge
+in DEBUGGING.md.
 
 ## CI
 
@@ -456,7 +473,7 @@ export PATH="$PWD/go/bin:$PATH"
 ```
 
 The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
-committed VERSION stays `go1.26.5cosmo`. Windows, macOS Intel and linux/arm64 build from source. Depth — the three-job
+committed VERSION stays `go1.27.0cosmo`. Windows, macOS Intel and linux/arm64 build from source. Depth — the three-job
 publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:
 docs/INSTALL.md.
 
@@ -466,8 +483,8 @@ docs/INSTALL.md.
 for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
 and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
 importable package; see 'go help packages'`, and it can neither run
-`go mod vendor` for std nor regenerate `src/net/http/h2_bundle.go`. Dependabot
-ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
+`go mod vendor` for std. Dependabot ALERTS stay enabled for visibility (repo
+Security tab); resolve them manually:
 
 1. Build this tree's toolchain: `cd src && ./make.bash`; use `../bin/go` below.
    (No `go clean -cache` needed since 2026-07-20: tool IDs are content-derived,
@@ -475,9 +492,10 @@ ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
 2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
    && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
    cosmo).
-3. If `x/net/http2` changed, regenerate `src/net/http/h2_bundle.go` with
-   `x/tools/cmd/bundle` (the exact command is `src/net/http/http.go`'s
-   `//go:generate bundle` directive, also echoed in h2_bundle.go's header).
+3. HTTP/2 needs no regeneration step. go1.27 deleted the generated bundle and
+   moved the implementation into `src/net/http/internal/http2/`, an ordinary
+   in-tree package. `golang.org/x/net/http2` is no longer synchronized with
+   std, so a bump of that module does not reach net/http at all.
 4. Check `git log -- src/vendor/` for fork-local vendored changes that
    re-vendoring may have wiped; re-apply them.
 5. Rebuild, then run the affected stdlib tests:

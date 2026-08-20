@@ -60,14 +60,14 @@ instead of building from source:
 # Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> linux/amd64
+go version   # go version go1.27.0cosmo.r<N> linux/amd64
 ```
 
 ```bash
 # macOS, Apple Silicon
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.26.5cosmo.r<N> darwin/arm64
+go version   # go version go1.27.0cosmo.r<N> darwin/arm64
 ```
 
 Both tarballs come from one release, each built on its own platform. Other

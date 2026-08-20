@@ -15,11 +15,7 @@
 //
 // We need to save X3 and X15 before calling the Go runtime.
 
-DATA runtime·__hostos+0(SB)/4, $0
-GLOBL runtime·__hostos(SB), NOPTR, $4
 
-DATA runtime·__syslib+0(SB)/8, $0
-GLOBL runtime·__syslib(SB), NOPTR, $8
 
 TEXT _rt0_arm64_cosmo(SB),NOSPLIT|NOFRAME,$0
 	// Entry point for Cosmopolitan ARM64 binaries

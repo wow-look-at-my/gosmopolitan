@@ -51,7 +51,7 @@ jobs:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
       - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
-        # The fork stamps the same release-style version (go1.26.5cosmo)
+        # The fork stamps the same release-style version (go1.27.0cosmo)
         # into every build, so tool IDs derived from the -V=full version
         # line alone are identical for any two fork builds. Colliding tool
         # IDs collide action IDs, and a warm build cache (a consumer's

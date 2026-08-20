@@ -22,26 +22,9 @@
 // (those calls are themselves intrinsified where possible, and land on
 // the atomic assembly otherwise).
 
-// Export some functions via linkname to assembly in sync/atomic.
-//
-//go:linkname Loadp
-//go:linkname Loadint32
-//go:linkname Loadint64
-//go:linkname Loaduintptr
-//go:linkname LoadAcquintptr
-//go:linkname Xaddint32
-//go:linkname Xaddint64
-//go:linkname Xadduintptr
-//go:linkname Xchgint32
-//go:linkname Xchgint64
-//go:linkname Xchguintptr
-//go:linkname Casint32
-//go:linkname Casint64
-//go:linkname Casuintptr
-//go:linkname Storeint32
-//go:linkname Storeint64
-//go:linkname Storeuintptr
-//go:linkname StoreReluintptr
+// linkname.go exports this package's functions to sync/atomic's assembly
+// with //go:linknamestd. A second //go:linkname here for one of those names
+// is a duplicate and does not compile.
 
 package atomic
 

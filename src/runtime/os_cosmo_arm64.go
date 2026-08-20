@@ -145,9 +145,38 @@ func libcCall(fn, arg unsafe.Pointer) int64
 // via dlsym) with up to six integer arguments, following the Apple ARM64
 // calling convention. Implemented in sys_cosmo_arm64.s.
 //
+// The syscall packages call this from their own assembly, so the symbol
+// needs a linkname push for cmd/link's cross-package reference check.
+//
+//go:linkname cosmoLibcCall6
 //go:nosplit
 //go:noescape
 func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+
+// cosmoLibcCallVariadic1 calls a VARIADIC C function pointer with two
+// fixed arguments and one variadic argument, which arm64-apple requires
+// on the stack rather than in a register. Implemented in
+// sys_cosmo_arm64.s; see the comment there for what a fixed-argument
+// trampoline silently breaks.
+//
+//go:linkname cosmoLibcCallVariadic1
+//go:nosplit
+//go:noescape
+func cosmoLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+
+// cosmo_xlat_errno_r0 and cosmo_xlat_oflags_r2 are register-convention
+// helpers in sys_cosmo_arm64.s: the first translates an Apple errno in R0
+// to its Linux value, the second translates Linux open(2) flags in R2 to
+// Apple's. Neither takes Go arguments and neither is callable from Go;
+// the syscall packages reach them from their own assembly. They are
+// declared here only so the symbols carry a linkname push, which is what
+// cmd/link's cross-package reference check looks for.
+//
+//go:linkname cosmo_xlat_errno_r0
+func cosmo_xlat_errno_r0()
+
+//go:linkname cosmo_xlat_oflags_r2
+func cosmo_xlat_oflags_r2()
 
 // _RTLD_DEFAULT is Apple's RTLD_DEFAULT dlsym pseudo-handle ((void *)-2):
 // search every image loaded in the process, i.e. the loader's libSystem.
