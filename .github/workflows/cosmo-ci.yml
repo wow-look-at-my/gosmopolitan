@@ -50,6 +50,7 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
+
       - name: Build std for cosmo (both arches)
         # The uprev tripwire. Everything else on this leg compiles only
         # what fizzbuzz and runtimeprobe import - 84 of the 358 std

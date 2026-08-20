@@ -36,6 +36,10 @@ const (
 	active_spin     = 4
 	active_spin_cnt = 30
 	passive_spin    = 1
+
+	// mutexMLocksDelta is the change in gp.m.locks for each lock/unlock of
+	// a mutex; see the comment on the same constant in lock_spinbit.go.
+	mutexMLocksDelta = 16
 )
 
 // We use the uintptr mutex.key and note.key as a uint32.
@@ -67,7 +71,7 @@ func lock2(l *mutex) {
 	if gp.m.locks < 0 {
 		throw("runtime·lock: lock count")
 	}
-	gp.m.locks++
+	gp.m.locks += mutexMLocksDelta
 
 	// Speculative grab for lock.
 	v := atomic.Xchg(key32(&l.key), mutex_locked)
@@ -138,7 +142,7 @@ func unlock2(l *mutex) {
 	}
 
 	gp := getg()
-	gp.m.locks--
+	gp.m.locks -= mutexMLocksDelta
 	if gp.m.locks < 0 {
 		throw("runtime·unlock: lock count")
 	}

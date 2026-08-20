@@ -5666,3 +5666,36 @@ same builds from the pre-change tree, comparing with `-ldflags=-buildid=`
 and `-buildvcs=false` so the tool-ID and VCS stamps do not mask the
 comparison. The linux/amd64-only runtimeprobe passes the full apetest
 runtimeprobe suite on this host with no arm64 payload in the file.
+
+# 2026-08-20: uprev to go1.27.0
+
+Merged upstream go1.27.0 (previous base: go1.26.5). The merge itself is
+documented in docs/UPREV-GO1.27.md - why a minor bump conflicts where a
+patch bump does not, how to separate release-branch noise from real
+disagreement, the resolutions worth knowing about, and the internal APIs
+that moved.
+
+Five things broke that no conflict marker pointed at:
+
+- `decoderune` now takes and returns a `uint` index (os_cosmo_nt_path.go).
+- The ssa generator's `regMask` became a struct, so the fork's Wasm ops
+  moved to `union`/`regMask{}` and opGen.go and rewriteWasm.go were
+  regenerated rather than hand-merged.
+- `internal/runtime/atomic` moved its linkname exports into linkname.go
+  under `//go:linknamestd`, and a second `//go:linkname` for the same name
+  is a compile error now. The GOWASM=threads atomic file carried a
+  duplicate block.
+- `gp.m.locks` is scaled by `mutexMLocksDelta` for mutexes;
+  lock_jsthreads.go was still changing it by one.
+- `cmd/link` now rejects a cross-package assembly reference to a symbol
+  whose DEFINING object carries no linkname push. This hit five cosmo
+  symbols. Two (`__hostos`, `__syslib`) had a Go var holding the push and a
+  shadowing `DATA`/`GLOBL` pair in rt0 assembly - the assembly definition is
+  the one the linker resolves, so the push never reached it; deleting the
+  assembly definitions fixes it. Three are assembly-only helpers and now
+  carry Go declarations that exist purely to carry the push.
+
+Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
+js/wasm and wasip1/wasm, each also under GOWASM=threads; the go/build and
+cmd/internal/moddeps guardrails; fat APEs of fizzbuzz and runtimeprobe with
+both sidecars, executed here; and the full apetest suite against both.
