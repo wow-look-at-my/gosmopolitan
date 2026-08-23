@@ -130,15 +130,6 @@ jobs:
           GOOS=cosmo GOARCH=arm64 go build std
 
       - name: Build downstream go-toolchain consumers for cosmo
-        # `go build std` only proves the standard library. The actual point of
-        # aliasing cosmo into linux is external modules: go-toolchain used to
-        # need a hand-patched cosmocompat package for golang.org/x/sys and
-        # modernc.org/libc, and redirected modernc.org/sqlite onto a
-        # hand-forked github.com/wow-look-at-my/go-sqlite because the stock
-        # module would not cross-compile for cosmo. Build the STOCK, unforked
-        # modules in a throwaway module with a plain `go build` - no patches,
-        # no fork - so a change here that breaks that promise fails CI
-        # instead of surfacing downstream in go-toolchain.
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 10
         shell: bash
