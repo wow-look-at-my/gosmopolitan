@@ -12,7 +12,6 @@ name: Cosmopolitan Cross-Platform CI
 
 on:
   push:
-  workflow_dispatch:
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform
@@ -31,8 +30,8 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
