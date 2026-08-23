@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build linux && !cosmo
+
 #include "textflag.h"
 
 // func rawVforkSyscall(trap, a1, a2, a3 uintptr) (r1, err uintptr)
