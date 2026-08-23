@@ -2041,9 +2041,30 @@ func checkMultiplePathsUncached(ld *Loader, pld *packageLoader, mods []module.Ve
 		if prev, ok := firstPath[src]; !ok {
 			firstPath[src] = mod.Path
 		} else if prev != mod.Path {
+			// A fork replaced onto the path it forked keeps its own path too,
+			// so the same source answers to both -- a vanity path and the
+			// repository it now lives in. That is the whole shape of a fork
+			// consumed through replace, and it is stated in a go.mod rather
+			// than stumbled into, so it is not the accident this reports.
+			if isDeliberateReplacement(ld, mod) {
+				continue
+			}
 			pld.error(fmt.Errorf("%s@%s used for two different module paths (%s and %s)", src.Path, src.Version, prev, mod.Path))
 		}
 	}
+}
+
+// isDeliberateReplacement reports whether mod reaches its source through a
+// replace directive, rather than by being required under its own path.
+//
+// checkMultiplePaths exists to catch one module accidentally answering to two
+// import paths -- the usual cause being a repository that renamed itself and
+// left both names in a build. A fork consumed through replace looks identical
+// from there and is not the same thing: it answers to the path it forked AND
+// to the repository it now lives in, on purpose, said out loud in a go.mod.
+// Only the accident is worth an error.
+func isDeliberateReplacement(ld *Loader, mod module.Version) bool {
+	return Replacement(ld, mod) != (module.Version{})
 }
 
 // checkTidyCompatibility emits an error if any package would be loaded from a
