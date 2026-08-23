@@ -130,6 +130,27 @@ jobs:
           GOOS=cosmo GOARCH=amd64 go build std
           GOOS=cosmo GOARCH=arm64 go build std
 
+      - name: Build downstream go-toolchain consumers for cosmo
+        # `go build std` only proves the standard library. The actual point
+        # of aliasing cosmo into linux is external modules: go-toolchain's
+        # cosmocompat package used to hand-patch golang.org/x/sys and
+        # modernc.org/libc for cosmo builds, and redirects a bare
+        # modernc.org/sqlite requirement onto github.com/wow-look-at-my/go-sqlite.
+        # Prove all three now cross-compile for cosmo with a plain, unpatched
+        # `go build` in a throwaway module, so a change here that breaks that
+        # promise fails CI instead of surfacing downstream in go-toolchain.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          go mod init cosmo-downstream-smoke
+          go get golang.org/x/sys@latest modernc.org/libc@latest github.com/wow-look-at-my/go-sqlite@latest
+          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc github.com/wow-look-at-my/go-sqlite
+          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc github.com/wow-look-at-my/go-sqlite
+
       - name: Build APE binary
         # Observed max 38s (windows; two fat builds = four link passes).
         timeout-minutes: 10
