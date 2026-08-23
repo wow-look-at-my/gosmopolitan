@@ -123,8 +123,9 @@ jobs:
           echo ""
           echo "=== File info ==="
           file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-          ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
-            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+          cd testdata/ape/apetest
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
 
       - name: Build platform-subset APE binaries
         # see docs/CI.md "build job" for the tri/amd subset rationale.
@@ -138,14 +139,12 @@ jobs:
           (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
           GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
           (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
-          # A restricted build is still stripped and still writes a sidecar per payload, so the amd-only pair must have no .aarch64.elf.
-          ls -la fizzbuzz-tri.com fizzbuzz-tri.com.dbg fizzbuzz-tri.com.aarch64.elf \
-            fizzbuzz-amd.com fizzbuzz-amd.com.dbg
-          if [ -e fizzbuzz-amd.com.aarch64.elf ]; then
-            echo "FAIL: an amd64-only selection wrote an arm64 debug sidecar"; exit 1
-          fi
           echo "=== sizes ==="
           ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+          cd testdata/ape/apetest
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4

@@ -13,11 +13,14 @@ default. Limits are sized ~2x (or a round number above) the slowest duration
 observed across recent green runs; see the values at each step.
 
 **Build APE binary.** No GOARCH pin: `GOOS=cosmo go build` emits a fat
-(amd64+arm64) APE regardless of the host architecture. `ls` doubles as an
-existence assertion for the debug sidecars a default fat build must write
-next to each output (they are not uploaded; apetest's `TestDebugSidecars`
-covers their contents). Observed max 38s (windows; two fat builds = four
-link passes).
+(amd64+arm64) APE regardless of the host architecture. `apetest`'s
+`TestFatSidecarsExist` (gated on `APE_REQUIRE_SIDECARS=1`, since sidecars
+are not uploaded and the same suite's bare `go test ./...` runs elsewhere
+must not fail on their absence) requires the debug sidecars a default fat
+build must write next to each output, and checks each is a valid ELF for
+its architecture -- run right here, before upload, since the sidecars never
+leave this runner. Observed max 38s (windows; two fat builds = four link
+passes).
 
 **Build platform-subset APE binaries.** `GOCOSMOPLATFORMS` restricts which
 hosts the APE boots on. Two subsets, both executed on every test leg (see
@@ -31,10 +34,11 @@ the test job):
   boot header and its sidecar are gone, which is where the size actually
   drops.
 
-Cross-compiles, so one leg builds them for all three to run. Sidecar
-existence is an assertion: a restricted build is still stripped and still
-writes a sidecar per payload it carries, so the amd-only pair must have no
-`.aarch64.elf`.
+Cross-compiles, so one leg builds them for all three to run. `apetest`'s
+`TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per
+subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build
+still writes a sidecar per payload it carries, and that the amd-only pair
+has no `.aarch64.elf`.
 
 **APE merge unit tests (linker + go command).** Covers the
 `-apefat`/`-apestrip`/`-apedbg` merge logic and cmd/go's `GOCOSMOSTRIP` /
