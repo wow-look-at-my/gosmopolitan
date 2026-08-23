@@ -21,7 +21,11 @@ func stackGuardMultiplier(race bool) int {
 	// This arithmetic must match that in internal/runtime/sys/consts.go:StackGuardMultiplier.
 	n := 1
 	// On AIX and OpenBSD, a larger stack is needed for syscalls.
-	if buildcfg.GOOS == "aix" || buildcfg.GOOS == "openbsd" {
+	// Cosmo needs it for the same reason: on a darwin host, syscalls run a
+	// nosplit Go emulation over dlsym'd libc (syscall6SlowDarwin), and its
+	// deepest chains do not fit one base unit under wrappers like
+	// golang.org/x/sys/unix's.
+	if buildcfg.GOOS == "aix" || buildcfg.GOOS == "openbsd" || buildcfg.GOOS == "cosmo" {
 		n += 1
 	}
 	// The race build also needs more stack.
