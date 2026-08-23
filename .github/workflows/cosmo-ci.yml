@@ -50,66 +50,6 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
-        # The fork stamps the same release-style version (go1.27.0cosmo)
-        # into every build, so tool IDs derived from the -V=full version
-        # line alone are identical for any two fork builds. Colliding tool
-        # IDs collide action IDs, and a warm build cache (a consumer's
-        # local GOCACHE, or a shared GOCACHEPROG tier that survives
-        # toolchain updates) then serves stale, ABI-incompatible objects
-        # across fork builds — binaries SIGSEGV at startup (the 2026-07-20
-        # go-toolchain consumer core dumps). Every fork tool must report
-        # its own build ID under -V=full so cmd/go derives tool IDs from
-        # tool content. This gate fails if -V=full is the bare version line.
-        shell: bash
-        run: |
-          out="$(./bin/go tool compile -V=full)"
-          echo "compile -V=full: $out"
-          case "$out" in
-            *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
-            *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
-          esac
-
-      # Shebang support tests (Unix only - shebang is a Unix feature)
-      - name: Test shebang support - unit tests
-        if: runner.os != 'Windows'
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          # Pin host GOOS/GOARCH: this toolchain defaults to GOOS=cosmo and
-          # would otherwise emit (fat) APE test binaries the host can't exec.
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-          echo "=== Running shebang unit tests ==="
-          go test ./src/go/scanner/... -run TestShebang -v
-          go test ./src/go/build/... -run TestReadGoInfo -v
-          go test ./src/cmd/compile/internal/syntax/... -run TestShebang -v
-
-      - name: Test shebang support - script execution
-        if: runner.os != 'Windows'
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-
-          # Create a Go script with shebang
-          # env -S is required for multi-word shebang interpreters on Linux
-          cat > /tmp/shebang-test.go << 'EOF'
-          #!/usr/bin/env -S go run
-
-          package main
-
-          import "fmt"
-
-          func main() {
-              fmt.Println("Hello from shebang Go script!")
-          }
-          EOF
-
-          echo "=== Testing go run with shebang file ==="
-          go run /tmp/shebang-test.go
-
-          echo "=== Testing direct script execution ==="
-          chmod +x /tmp/shebang-test.go
-          /tmp/shebang-test.go
 
       - name: Build std for cosmo (both arches)
         # The uprev tripwire. Everything else on this leg compiles only
@@ -131,7 +71,7 @@ jobs:
           GOOS=cosmo GOARCH=arm64 go build std
 
       - name: Build APE binary
-        # Observed max 38s (windows; two fat builds = four link passes).
+        # Observed max 38s (windows; one fat build = two link passes).
         timeout-minutes: 10
         shell: bash
         run: |
@@ -201,69 +141,63 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      - name: APE merge unit tests (linker + go command)
-        # Covers the -apefat/-apestrip/-apedbg merge logic and cmd/go's
-        # GOCOSMOSTRIP / -ldflags strip detection. One leg is enough.
-        # GOOS=linux pin: the fork's go defaults GOOS=cosmo, and these are
-        # host-run unit tests. Observed ~40s (test-package compile).
+      # dats is a single static binary from buildhost (public, no token).
+      # RUNNER_OS/RUNNER_ARCH, not uname: buildhost folds GitHub's spellings
+      # natively, while git-bash on the Windows runner answers `uname -s` with
+      # MINGW64_NT-10.0-20348, which is not a platform buildhost knows.
+      - name: Install dats
+        if: runner.os != 'Windows'
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$RUNNER_OS&arch=$RUNNER_ARCH"
+          chmod +x /tmp/dats
+
+      # The fork's package tests (dats/gotests.dats): the APE merge, the
+      # cosmo syscall and runtime units, the go/build divergence guardrails
+      # and the loop-inlining suite. They were four inline blocks stacking
+      # `go test` lines, where the first failure hid every line after it and
+      # nothing named what each invocation covered.
+      #
+      # master added three platform-table gates to this block (see the inline
+      # step below, which keeps them here because dats/gotests.dats predates
+      # them): the tests both commands parse GOCOSMOPLATFORMS and
+      # -apeplatforms through, and the go env readouts a consumer probes to
+      # tell an aware toolchain from one that ignores the selection -
+      # load-bearing outside this repo, so gated here.
+      - name: Package tests (dats)
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 30
+        shell: bash
+        run: /tmp/dats --no-sandbox test dats/gotests.dats
+
+      # Platform-table tests added on master after the dats migration. Kept
+      # inline here rather than folded into dats/gotests.dats: this branch
+      # cannot claim to cover tests that landed after it. They still gate
+      # GOCOSMOPLATFORMS / -apeplatforms parsing and the env readouts on
+      # every run, exactly as master intended.
+      - name: Platform-table and cosmo env tests
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 8
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput|TestCosmoPlatformSpec|TestCosmoSiblingAndAssemble|TestCosmoMergeArgsPlatforms|TestCosmoEnvReportsEffectiveValues' cmd/go/internal/work
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestCosmoPlatformSpec|TestCosmoSiblingAndAssemble|TestCosmoMergeArgsPlatforms|TestCosmoEnvReportsEffectiveValues' cmd/go/internal/work
           # The platform table both commands parse GOCOSMOPLATFORMS and
           # -apeplatforms through, and the go env readouts a consumer
           # probes to tell an aware toolchain from one that ignores the
           # selection - load-bearing outside this repo, so gated here.
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/env_cosmo' cmd/go
-          # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
-          # cmsg repack, signal/wait-status translation tables, epoll
-          # layout) are GOOS=cosmo-only code, run on this host via the
-          # misc/cosmo exec wrappers - the test binary is a thin cosmo
-          # APE that executes natively on linux.
-          export PATH="$PWD/misc/cosmo:$PATH"
-          GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
-          # Runtime-package cosmo unit tests: the Apple itimerval ABI
-          # pins + timeval translation behind the darwin SIGPROF
-          # setitimer dispatch, and the signal translation tables.
-          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
-      - name: Fork-divergence guardrails (go/build policy, moddeps)
-        # go/build's structural tests are what keep a fork's edits honest
-        # across an upstream uprev, and nothing was running them: the
-        # shebang step only runs -run TestReadGoInfo. Both had silently
-        # gone red - TestVendorPackages against the zstd vendored for
-        # cosmo DWARF compression, TestDependencies against
-        # internal/runtime/syscall/cosmo - and an uprev is exactly when a
-        # stale dependency policy stops catching real layering breaks.
-        # cmd/internal/moddeps is the matching check for src/ + src/cmd
-        # module/vendor consistency (see CLAUDE.md's vendoring runbook).
-        if: matrix.build-os == 'ubuntu-latest'
+      # Black-box tests of the command line itself: `go build` and `go run` as
+      # a user types them, the tool-ID contract cmd/go depends on, and the APE
+      # that comes out. Unix only -- the suites drive a POSIX shell.
+      - name: CLI contract tests (dats)
+        if: runner.os != 'Windows'
         timeout-minutes: 10
         shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
-
-      - name: Loop-aware inlining tests
-        # The loop cost discount, the loop-nested call site budget, and the
-        # per-caller growth allowance (cmd/compile/internal/inline/loop.go),
-        # plus the end-to-end check that a loop-dominated function inlines
-        # and that -d=loopinline=0 restores the old decisions exactly.
-        # Host-run compiler tests, so GOOS is pinned away from cosmo.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/inline/...
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
-          # The inlining regress tests: more inlining must not break the
-          # existing expectations for what does and does not get inlined.
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
+        run: /tmp/dats --no-sandbox test dats/goscript.dats dats/toolid.dats
 
   # Test all APE binaries on each platform using Go tests
   # Each runner tests all 3 origin binaries sequentially (its native one
@@ -478,81 +412,37 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # Each test step runs go test under an in-step process-group killer
-      # (see with-deadline.sh): runner-side step timeouts have been
-      # observed not to fire when a step wedges on the macOS runners
-      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
-      # one wedged process even survived a process-group SIGKILL, i.e. it
-      # was stuck in an uninterruptible kernel state). The killer abandons
-      # such a corpse so the step still ends, and go test's output goes
-      # through a FILE (cat'ed afterwards) so no abandoned descendant can
-      # keep the runner's log pipe open.
-      - name: Test binary built on Ubuntu
-        id: test-ubuntu
+      # The acceptance suite for all three build origins, as one dats run
+      # (dats/apetest.dats). It was three inline blocks here, each hand-rolling
+      # the same rc/log/env dance; the deadline wrapper and the log file are
+      # still there because both are load-bearing on the macOS runners -- see
+      # the suite's own header for why.
+      - name: APE acceptance suite (dats)
         timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
+        env:
+          APETEST_UBUNTU_BINDIR: ${{ github.workspace }}/binaries/ape-binary-ubuntu-latest
+          APETEST_MACOS_BINDIR: ${{ github.workspace }}/binaries/ape-binary-macos-latest
+          APETEST_WINDOWS_BINDIR: ${{ github.workspace }}/binaries/ape-binary-windows-latest
+          APETEST_DEADLINE: ${{ matrix.apetest-deadline }}
         run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
+          # The Windows runner needs the .exe name to exec it from git-bash,
+          # and RUNNER_OS rather than uname (which answers MINGW64_NT-… there).
+          dats=/tmp/dats
+          [ "$RUNNER_OS" = Windows ] && dats=/tmp/dats.exe
+          curl -fsSL -o "$dats" "https://dl.pazer.build/dats?os=$RUNNER_OS&arch=$RUNNER_ARCH"
+          chmod +x "$dats"
+          "$dats" --no-sandbox test dats/apetest.dats
 
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload ubuntu-origin test log
+      # The captured log is uploaded immediately: job-level logs only reach the
+      # API when the whole job ends, which a wedged later step (or a runner
+      # poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload apetest log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-log-${{ matrix.test-os }}-ubuntu-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on macOS
-        id: test-macos
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload macos-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-macos-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
-
-      - name: Test binary built on Windows
-        id: test-windows
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-      # Upload the captured log immediately: job-level logs only reach
-      # the API when the whole job ends, which a wedged later step (or a
-      # runner poisoned by an unkillable corpse) can prevent forever.
-      - name: Upload windows-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-windows-origin
+          name: test-log-${{ matrix.test-os }}
           path: testdata/ape/apetest/test-output.log
           retention-days: 3
 

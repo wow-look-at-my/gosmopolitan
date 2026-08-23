@@ -39,11 +39,28 @@ const (
 	apeHeaderSize   = 65536
 	apeScriptOffset = 0x800
 
-	// What follows the script, and so how much room the script has: it runs
-	// from apeScriptOffset up to the Mach-O header, and the gzipped macOS
-	// ARM64 loader source sits after that.
-	apeMachoOffset     = 0x2000
+	// apeMachoOffset is where the Mach-O header is parked for the dd that
+	// copies it over the start of the file on Intel macOS. It also caps the
+	// dispatch script, which runs from apeScriptOffset up to here.
+	//
+	// It was 0x1000, and the script had ONE byte of room left -- a 7-byte
+	// edit to a path in the script was what discovered that, by failing the
+	// link. Nothing needs the header this early (it is inert bytes inside a
+	// heredoc until dd moves it, and the loader source it must stay clear of
+	// sits at 0x8000), so the ceiling is 0x2000 and the script has room to
+	// change. TestAPEScriptHasHeadroom keeps it that way.
+	apeMachoOffset = 0x2000
+
+	// apeLoaderSrcOffset is where the gzipped macOS ARM64 loader source
+	// sits, just past the dispatch script (which runs from apeScriptOffset
+	// up to apeMachoOffset). What follows the script is how much room the
+	// script has to grow; the loader source sits just past it.
 	apeLoaderSrcOffset = 0x8000
+
+	// apeMagicMZ is the canonical APE magic (ape/specification.md): a DOS
+	// MZ signature that is also a shell assignment opening a quoted string,
+	// which swallows the binary structures that follow.
+	apeMagicMZ = "MZqFpD='"
 
 	// ELF constants
 	elfMagic        = "\x7fELF"
@@ -554,7 +571,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
 
 	// Write the APE magic at offset 0
-	copy(header[0:8], []byte("MZqFpD='"))
+	copy(header[0:8], []byte(apeMagicMZ))
 	header[8] = '\n'
 
 	// Fill bytes 0x09-0x2B with spaces (inside the single-quoted string)
@@ -731,6 +748,7 @@ exit 1
 	}
 
 	// === PE Header at offset 0x80 ===
+	//
 	// The polyglot's MZ magic and e_lfanew presume a PE image header
 	// here. For windows/amd64 the header really maps the embedded cosmo
 	// image and enters the runtime's NT boot stub: computed from the live
@@ -986,7 +1004,7 @@ func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 // makeMachoHeader creates the Mach-O executable header for macOS x86-64.
 //
 // On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
-// offset 0x2000 in the APE header) over the start of a COPY of the file,
+// apeMachoOffset in the APE header) over the start of a COPY of the file,
 // turning that copy into a Mach-O executable whose load commands point
 // straight at the embedded amd64 ELF image. The copy is what runs, and the
 // APE itself is left as it was. The XNU kernel loads it directly - there is

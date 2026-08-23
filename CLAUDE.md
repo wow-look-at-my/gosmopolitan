@@ -62,6 +62,32 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
+### CI test suites live in `dats/`, not in the workflow
+
+Every test CI runs is a [dats](https://github.com/wow-look-at-my/dats) suite,
+so the same command reproduces it on a laptop and every case has a name and its
+own pass/fail. `.github/workflows/cosmo-ci.yml` installs dats and invokes a
+suite; it holds no test logic of its own.
+
+```bash
+curl -fsSL -o /tmp/dats "https://dl.pazer.build/dats?os=$(uname -s)&arch=$(uname -m)" && chmod +x /tmp/dats
+cd src && ./make.bash        # the suites drive ./bin/go
+/tmp/dats test dats          # or one suite: /tmp/dats test dats/gotests.dats
+```
+
+| Suite | Covers |
+| --- | --- |
+| `dats/goscript.dats` | `go run` on a `#!`-headed .go file, and that file spawned directly |
+| `dats/toolid.dats` | every fork tool reports a content-derived build ID under `-V=full`; a bare version line makes two fork builds share tool IDs and poison warm caches |
+| `dats/gotests.dats` | the fork's package tests: APE merge, cosmo syscall/runtime units, go/build divergence guardrails, loop-inlining |
+| `dats/apetest.dats` | the acceptance suite in `testdata/ape/apetest`, run against a binary built on each host |
+
+`dats/apetest.dats` needs `APETEST_{UBUNTU,MACOS,WINDOWS}_BINDIR` pointing at
+directories of built artifacts; CI sets them from the uploaded ones. The one
+test deliberately NOT a dats suite is the windows-latest NT boot check: it
+drives the binary through `Start-Process` under pwsh to exercise the PE loader,
+and running it from a shell would test MSYS's cmd.exe delegation instead.
+
 ## Building Cosmopolitan Binaries
 
 ```bash
@@ -410,6 +436,17 @@ os/exec, os.Executable, argv/env, wd round-trip). The apetest suite
 runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
+
+`execve_test.go` covers how the kernel comes to load the binary at all
+— which every other test in the suite skips past by invoking through
+`/bin/sh`. A shipped APE is `MZ`-headed, so `execve(2)` refuses it, and
+the prologue closes that gap two different ways depending on platform:
+the header is rewritten in place on amd64 and on arm64 Linux, while
+arm64 macOS compiles a `$TMPDIR/.ape-<ver>` loader and leaves the file
+untouched. Both branches are asserted, and whichever does not apply
+skips naming the other. Go's `os/exec` is the probe because it is a raw
+execve — a POSIX shell and glibc's `execvp` both retry an ENOEXEC file
+as a shell script, so neither can tell you the kernel refused it.
 
 A third job (`wasm`, ubuntu-only - wasm output is host-independent)
 regression-gates the fork's WebAssembly ports: it builds the toolchain,
