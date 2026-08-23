@@ -1940,6 +1940,7 @@ func (ctxt *Context) eval(x constraint.Expr, allTags map[string]bool) bool {
 //	solaris (if GOOS = illumos)
 //	darwin (if GOOS = ios)
 //	unix (if this is a Unix GOOS)
+//	linux (if GOOS = cosmo)
 //	boringcrypto (if GOEXPERIMENT=boringcrypto is enabled)
 //	tag (if tag is listed in ctxt.BuildTags, ctxt.ToolTags, or ctxt.ReleaseTags)
 //
@@ -1957,6 +1958,9 @@ func (ctxt *Context) matchTag(name string, allTags map[string]bool) bool {
 		return true
 	}
 	if ctxt.GOOS == "android" && name == "linux" {
+		return true
+	}
+	if ctxt.GOOS == "cosmo" && name == "linux" {
 		return true
 	}
 	if ctxt.GOOS == "illumos" && name == "solaris" {
