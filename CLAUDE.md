@@ -363,12 +363,14 @@ in DEBUGGING.md.
 
 ## CI
 
+Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.md.
+
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows); every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0); its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
 
 CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
-amd64 and cosmo arm64 payloads, stripped by default, with the build step's
-`ls` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build
-platform (sidecars are not uploaded; the artifact ships the bare binaries,
+amd64 and cosmo arm64 payloads, stripped by default, with apetest's
+`TestFatSidecarsExist` asserting the `.dbg`/`.aarch64.elf` sidecars exist on
+every build platform (sidecars are not uploaded; the artifact ships the bare binaries,
 so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
