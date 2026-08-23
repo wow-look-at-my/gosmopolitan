@@ -839,6 +839,9 @@ func getrlimit(resource int, rlim *Rlimit) (err error) {
 	return
 }
 
+// golang.org/x/sys linknames prlimit; do not remove or change the type signature.
+//
+//go:linkname prlimit
 func prlimit(pid int, resource int, newlimit *Rlimit, old *Rlimit) (err error) {
 	_, _, e1 := RawSyscall6(SYS_PRLIMIT64, uintptr(pid), uintptr(resource), uintptr(unsafe.Pointer(newlimit)), uintptr(unsafe.Pointer(old)), 0, 0)
 	if e1 != 0 {
