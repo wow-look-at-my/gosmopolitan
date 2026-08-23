@@ -1,0 +1,29 @@
+# Dependabot CANNOT update Go modules in this repository's src/ and
+# src/cmd/: they are the Go distribution's own modules ("std" and
+# "cmd"), which only the toolchain built from this tree can operate on.
+# Every automated attempt dies with:
+#   go: std: "std" is not an importable package; see 'go help packages'
+# and even a successful edit would desync src/vendor/ and
+# src/net/http/h2_bundle.go, which Dependabot cannot regenerate.
+# The `ignore: "*"` blocks below therefore suppress BOTH version and
+# security update PRs for these directories (per GitHub docs, `ignore`
+# applies to security updates too). Dependabot ALERTS stay enabled for
+# visibility; when one appears, bump the module manually — see
+# "Updating vendored golang.org/x modules" in CLAUDE.md and
+# src/README.vendor for the procedure.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/src"
+    schedule:
+      interval: "monthly"   # required field; updates are fully disabled below
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: "gomod"
+    directory: "/src/cmd"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"

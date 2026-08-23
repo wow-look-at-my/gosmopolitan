@@ -577,7 +577,7 @@ func testSegments(t *testing.T, segments []segment, filename string) {
 	// verify scan
 	var S Scanner
 	file := fset.AddFile(filename, fset.Base(), len(src))
-	S.Init(file, []byte(src), func(pos token.Position, msg string) { t.Error(Error{pos, msg}) }, dontInsertSemis)
+	S.Init(file, []byte(src), func(pos token.Position, msg string) { t.Error(&Error{pos, msg}) }, dontInsertSemis)
 	for _, s := range segments {
 		p, _, lit := S.Scan()
 		pos := file.Position(p)
@@ -1151,5 +1151,262 @@ func TestNumbers(t *testing.T) {
 		if tok != token.EOF {
 			t.Errorf("%q: got %s; want EOF", test.src, tok)
 		}
+	}
+}
+
+func TestScanReuseSemiInNewlineComment(t *testing.T) {
+	fset := token.NewFileSet()
+
+	const src = "identifier /*a\nb*/ + other"
+	var s Scanner
+	s.Init(fset.AddFile("test.go", -1, len(src)), []byte(src), func(pos token.Position, msg string) {
+		t.Fatal(msg)
+	}, ScanComments)
+
+	s.Scan() // IDENT(identifier)
+
+	_, tok, _ := s.Scan() // COMMENT(/*a\nb*/)
+	if tok != token.COMMENT {
+		t.Fatalf("tok = %v; want = token.SEMICOLON", tok)
+	}
+
+	s.Init(fset.AddFile("test.go", -1, len(src)), []byte(src), func(pos token.Position, msg string) {
+		t.Fatal(msg)
+	}, ScanComments)
+
+	_, tok, _ = s.Scan()
+	if tok != token.IDENT {
+		t.Fatalf("tok = %v; want = token.IDENT", tok)
+	}
+}
+
+func TestScannerEnd(t *testing.T) {
+	type tok struct {
+		tok   token.Token
+		start token.Pos
+		end   token.Pos
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		end  []tok
+	}{
+		{
+			name: "operators",
+			src:  "+ - / >> == =",
+			end: []tok{
+				{token.ADD, 1, 2},
+				{token.SUB, 3, 4},
+				{token.QUO, 5, 6},
+				{token.SHR, 7, 9},
+				{token.EQL, 10, 12},
+				{token.ASSIGN, 13, 14},
+				{token.EOF, 14, 14},
+			},
+		},
+		{
+			name: "braces",
+			src:  "{([])}",
+			end: []tok{
+				{token.LBRACE, 1, 2},
+				{token.LPAREN, 2, 3},
+				{token.LBRACK, 3, 4},
+				{token.RBRACK, 4, 5},
+				{token.RPAREN, 5, 6},
+				{token.RBRACE, 6, 7},
+				{token.SEMICOLON, 7, 7},
+				{token.EOF, 7, 7},
+			},
+		},
+		{
+			name: "literals",
+			src:  `"foo" 123 1.23 0b11`,
+			end: []tok{
+				{token.STRING, 1, 6},
+				{token.INT, 7, 10},
+				{token.FLOAT, 11, 15},
+				{token.INT, 16, 20},
+				{token.SEMICOLON, 20, 20},
+				{token.EOF, 20, 20},
+			},
+		},
+		{
+			name: "missing newline at the end of file",
+			src:  "foo",
+			end: []tok{
+				{token.IDENT, 1, 4},
+				{token.SEMICOLON, 4, 4},
+				{token.EOF, 4, 4},
+			},
+		},
+		{
+			name: "newline at the end of file",
+			src:  "foo\n",
+			end: []tok{
+				{token.IDENT, 1, 4},
+				{token.SEMICOLON, 4, 5},
+				{token.EOF, 5, 5},
+			},
+		},
+		{
+			name: "semicolon at the end of file",
+			src:  "foo;",
+			end: []tok{
+				{token.IDENT, 1, 4},
+				{token.SEMICOLON, 4, 5},
+				{token.EOF, 5, 5},
+			},
+		},
+		{
+			name: "semicolon and newline at the end of file",
+			src:  "foo;\n",
+			end: []tok{
+				{token.IDENT, 1, 4},
+				{token.SEMICOLON, 4, 5},
+				{token.EOF, 6, 6},
+			},
+		},
+		{
+			name: "newline in comment acting as semicolon",
+			src:  "foo /*\n*/ bar",
+			end: []tok{
+				{token.IDENT, 1, 4},
+				{token.COMMENT, 5, 10},
+				{token.SEMICOLON, 7, 8},
+				{token.IDENT, 11, 14},
+				{token.SEMICOLON, 14, 14},
+				{token.EOF, 14, 14},
+			},
+		},
+		{
+			name: "BOM",
+			src:  "\uFEFFfoo",
+			end: []tok{
+				{token.IDENT, 4, 7},
+				{token.SEMICOLON, 7, 7},
+				{token.EOF, 7, 7},
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+
+			var s Scanner
+			errorHandler := func(_ token.Position, msg string) { t.Fatal(msg) }
+			s.Init(fset.AddFile("test.go", -1, len(tt.src)), []byte(tt.src), errorHandler, ScanComments)
+
+			if end := s.End(); end != token.NoPos {
+				t.Errorf("after init: s.End() = %v; want token.NoPos", end)
+			}
+
+			var got []tok
+			for {
+				pos, tokTyp, _ := s.Scan()
+				got = append(got, tok{tokTyp, pos, s.End()})
+				if tokTyp == token.EOF {
+					break
+				}
+			}
+
+			if !slices.Equal(got, tt.end) {
+				t.Fatalf("input %q: got = %v; want = %v", tt.src, got, tt.end)
+			}
+		})
+	}
+}
+
+func TestScannerEndReuse(t *testing.T) {
+	fset := token.NewFileSet()
+
+	const src = "identifier /*a\nb*/ + other"
+	var s Scanner
+	s.Init(fset.AddFile("test.go", -1, len(src)), []byte(src), func(pos token.Position, msg string) {
+		t.Fatal(msg)
+	}, ScanComments)
+
+	s.Scan() // IDENT(identifier)
+	s.Scan() // COMMENT(/*a\n*b/)
+
+	_, tok, _ := s.Scan() // SEMICOLON
+	if tok != token.SEMICOLON {
+		t.Fatalf("tok = %v; want = token.SEMICOLON", tok)
+	}
+
+	s.Init(fset.AddFile("test.go", -1, len(src)), []byte(src), func(pos token.Position, msg string) {
+		t.Fatal(msg)
+	}, ScanComments)
+
+	if end := s.End(); end != token.NoPos {
+		t.Errorf("s.End() = %v; want token.NoPos", end)
+	}
+}
+
+func TestShebang(t *testing.T) {
+	// Test that shebang lines are properly skipped at the beginning of files.
+	tests := []struct {
+		src      string
+		wantTok  token.Token
+		wantLit  string
+		wantLine int
+	}{
+		// Basic shebang
+		{"#!/usr/bin/env go run\npackage main", token.PACKAGE, "package", 2},
+		// Shebang with spaces
+		{"#!/bin/sh\npackage main", token.PACKAGE, "package", 2},
+		// Shebang without newline (just shebang, then EOF)
+		{"#!/usr/bin/env go", token.EOF, "", 1},
+		// No shebang - regular Go file
+		{"package main", token.PACKAGE, "package", 1},
+		// Hash but not shebang (# alone)
+		{"# foo\npackage main", token.ILLEGAL, "#", 1},
+		// Hash followed by something other than !
+		{"#foo\npackage main", token.ILLEGAL, "#", 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.src[:min(20, len(test.src))], func(t *testing.T) {
+			fset := token.NewFileSet()
+			file := fset.AddFile("", fset.Base(), len(test.src))
+			var s Scanner
+			s.Init(file, []byte(test.src), nil, 0)
+
+			pos, tok, lit := s.Scan()
+			if tok != test.wantTok {
+				t.Errorf("got token %s, want %s", tok, test.wantTok)
+			}
+			if tok.IsKeyword() || tok == token.IDENT {
+				if lit != test.wantLit {
+					t.Errorf("got literal %q, want %q", lit, test.wantLit)
+				}
+			}
+			gotLine := fset.Position(pos).Line
+			if gotLine != test.wantLine {
+				t.Errorf("got line %d, want %d", gotLine, test.wantLine)
+			}
+		})
+	}
+}
+
+func TestShebangWithBOM(t *testing.T) {
+	// Test that BOM followed by shebang works correctly.
+	src := "\ufeff#!/usr/bin/env go run\npackage main"
+	fset := token.NewFileSet()
+	file := fset.AddFile("", fset.Base(), len(src))
+	var s Scanner
+	s.Init(file, []byte(src), nil, 0)
+
+	pos, tok, lit := s.Scan()
+	if tok != token.PACKAGE {
+		t.Errorf("got token %s, want PACKAGE", tok)
+	}
+	if lit != "package" {
+		t.Errorf("got literal %q, want %q", lit, "package")
+	}
+	gotLine := fset.Position(pos).Line
+	if gotLine != 2 {
+		t.Errorf("got line %d, want 2", gotLine)
 	}
 }

@@ -55,9 +55,11 @@ var (
 )
 
 func init() {
-	flag.Var(&rpath, "r", "set the ELF dynamic linker search `path` to dir1:dir2:...")
 	flag.Var(&flagExtld, "extld", "use `linker` when linking in external mode")
 	flag.Var(&flagExtldflags, "extldflags", "pass `flags` to external linker")
+	flag.Var(&macOS, "macos", "mac OS version to write in build info (only used in internal linking)")
+	flag.Var(&macSDK, "macsdk", "mac SDK version to write in build info (only used in internal linking)")
+	flag.Var(&rpath, "r", "set the ELF dynamic linker search `path` to dir1:dir2:...")
 	flag.Var(&flagW, "w", "disable DWARF generation")
 }
 
@@ -66,10 +68,14 @@ var (
 	flagBuildid = flag.String("buildid", "", "record `id` as Go toolchain build id")
 	flagBindNow = flag.Bool("bindnow", false, "mark a dynamically linked ELF object for immediate function binding")
 
-	flagOutfile    = flag.String("o", "", "write output to `file`")
-	flagApeFat     = flag.String("apefat", "", "merge two GOOS=cosmo binaries (`amd64,arm64`) into one fat APE and exit")
-	flagPluginPath = flag.String("pluginpath", "", "full path name for plugin")
-	flagFipso      = flag.String("fipso", "", "write fips module to `file`")
+	flagOutfile      = flag.String("o", "", "write output to `file`")
+	flagApeFat       = flag.String("apefat", "", "assemble GOOS=cosmo binaries (`amd64[,arm64]`) into one APE and exit")
+	flagApePlatforms = flag.String("apeplatforms", "", "restrict APE boot support to `platforms` (comma-separated os/arch; default: every platform the payloads allow)")
+	flagApeStrip     = flag.Bool("apestrip", false, "with -apefat, embed only each input's loadable span (drop symbol table, DWARF, section headers)")
+	flagApeDbg       = flag.Bool("apedbg", false, "with -apefat, write each input's unstripped ELF image beside the output (.dbg, .aarch64.elf)")
+	flagApeDbgMode   = flag.String("apedbgmode", "full", "with -apefat -apedbg, debug info `mode`: full (pristine sidecar ELFs), slim (debug-only sidecars), or compact (slim sidecars plus in-binary compact debug info)")
+	flagPluginPath   = flag.String("pluginpath", "", "full path name for plugin")
+	flagFipso        = flag.String("fipso", "", "write fips module to `file`")
 
 	flagInstallSuffix = flag.String("installsuffix", "", "set package directory `suffix`")
 	flagDumpDep       = flag.Bool("dumpdep", false, "dump symbol dependency graph")
@@ -428,8 +434,6 @@ func Main(arch *sys.Arch, theArch Arch) {
 
 	bench.Start("textaddress")
 	ctxt.textaddress()
-	bench.Start("typelink")
-	ctxt.typelink()
 	bench.Start("buildinfo")
 	ctxt.buildinfo()
 	bench.Start("pclntab")

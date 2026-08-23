@@ -248,7 +248,22 @@ func runtime_pprof_readProfile() ([]uint64, []unsafe.Pointer, bool) {
 	if GOOS == "darwin" || GOOS == "ios" {
 		readMode = profBufNonBlocking // For #61768; on Darwin notes are not async-signal-safe.  See sigNoteSetup in os_darwin.go.
 	}
+	if GOARCH == "wasm" {
+		// Wasm cannot use the blocking read either: on wasip1 a
+		// goroutine blocked in notetsleepg can only busy-wait
+		// (lock_wasip1.go), so a blocking reader would burn a full CPU
+		// for the whole profiling session. Poll with non-blocking
+		// reads instead, paced by the timer sleep below (timers park
+		// properly on both wasm ports). This mirrors the Darwin
+		// non-blocking mode and its 100ms pacing in
+		// runtime/pprof.profileWriter, except that the pacing has to
+		// live here: profileWriter only sleeps on Darwin.
+		readMode = profBufNonBlocking
+	}
 	data, tags, eof := log.read(readMode)
+	if GOARCH == "wasm" && len(data) == 0 && !eof {
+		timeSleep(100 * 1000 * 1000) // 100ms, matching profileWriter's pacing
+	}
 	if len(data) == 0 && eof {
 		lock(&cpuprof.lock)
 		cpuprof.log = nil

@@ -457,12 +457,6 @@ type mspan struct {
 	// mallocgc, and issue 54596).
 	freeIndexForScan uint16
 
-	// Temporary storage for the object index that caused this span to
-	// be queued for scanning.
-	//
-	// Used only with goexperiment.GreenTeaGC.
-	scanIdx uint16
-
 	// Cache of the allocBits at freeindex. allocCache is shifted
 	// such that the lowest bit corresponds to the bit freeindex.
 	// allocCache holds the complement of allocBits, thus allowing
@@ -523,15 +517,6 @@ type mspan struct {
 
 func (s *mspan) base() uintptr {
 	return s.startAddr
-}
-
-func (s *mspan) layout() (size, n, total uintptr) {
-	total = s.npages << gc.PageShift
-	size = s.elemsize
-	if size > 0 {
-		n = total / size
-	}
-	return
 }
 
 // recordspan adds a newly allocated span to h.allspans.
@@ -2805,7 +2790,7 @@ func freeSpecial(s *special, p unsafe.Pointer, size uintptr) {
 		unlock(&mheap_.speciallock)
 	case _KindSpecialProfile:
 		sp := (*specialprofile)(unsafe.Pointer(s))
-		mProf_Free(sp.b, size)
+		mProf_Free(sp.b)
 		lock(&mheap_.speciallock)
 		mheap_.specialprofilealloc.free(unsafe.Pointer(sp))
 		unlock(&mheap_.speciallock)

@@ -178,14 +178,7 @@ func Elfinit(ctxt *Link) {
 
 	switch ctxt.Arch.Family {
 	// 64-bit architectures
-	case sys.PPC64, sys.S390X:
-		if ctxt.Arch.ByteOrder == binary.BigEndian && ctxt.HeadType != objabi.Hopenbsd {
-			ehdr.Flags = 1 // Version 1 ABI
-		} else {
-			ehdr.Flags = 2 // Version 2 ABI
-		}
-		fallthrough
-	case sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.RISCV64:
+	case sys.AMD64, sys.ARM64, sys.Loong64, sys.MIPS64, sys.PPC64, sys.RISCV64, sys.S390X:
 		if ctxt.Arch.Family == sys.MIPS64 {
 			ehdr.Flags = 0x20000004 // MIPS 3 CPIC
 		}
@@ -202,6 +195,12 @@ func Elfinit(ctxt *Link) {
 		// if ctxt.HeadType == objabi.Hcosmo && ctxt.Arch.Family == sys.ARM64 {
 		// 	ehdr.Flags = 0x0101ca75 // EF_APE_MODERN
 		// }
+		if ctxt.Arch.Family == sys.S390X {
+			ehdr.Flags = 1 // Version 1 ABI
+		}
+		if ctxt.Arch.Family == sys.PPC64 {
+			ehdr.Flags = 2 // Version 2 ABI
+		}
 		elf64 = true
 
 		ehdr.Phoff = ELF64HDRSIZE      // Must be ELF64HDRSIZE: first PHdr must follow ELF header
@@ -886,7 +885,7 @@ func addbuildinfo(ctxt *Link) {
 		}
 
 		if ctxt.IsDarwin() {
-			buildinfo = uuidFromGoBuildId(buildID)
+			buildinfo = uuidFromHash(hash.Sum32([]byte(buildID)))
 			return
 		}
 
@@ -1548,10 +1547,6 @@ func (ctxt *Link) doelf() {
 			dynamic.SetType(sym.SELFSECT)
 		}
 
-		if ctxt.IsS390X() {
-			// S390X uses .got instead of .got.plt
-			gotplt = got
-		}
 		thearch.ELF.SetupPLT(ctxt, ctxt.loader, plt, gotplt, dynamic.Sym())
 
 		// .dynamic table

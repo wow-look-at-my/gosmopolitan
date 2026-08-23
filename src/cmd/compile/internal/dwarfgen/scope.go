@@ -77,12 +77,12 @@ func scopePCs(fnsym *obj.LSym, marks []ir.Mark, dwarfScopes []dwarf.Scope) {
 		if p.Pos == p0.Pos {
 			continue
 		}
-		dwarfScopes[scope].AppendRange(dwarf.Range{Start: p0.Pc, End: p.Pc})
+		dwarfScopes[scope].AppendRange(dwarf.Range{Start: fnsym.DwarfPC(p0), End: fnsym.DwarfPC(p)})
 		p0 = p
 		scope = findScope(marks, p0.Pos)
 	}
-	if p0.Pc < fnsym.Size {
-		dwarfScopes[scope].AppendRange(dwarf.Range{Start: p0.Pc, End: fnsym.Size})
+	if fnsym.DwarfPC(p0) < fnsym.DwarfSize() {
+		dwarfScopes[scope].AppendRange(dwarf.Range{Start: fnsym.DwarfPC(p0), End: fnsym.DwarfSize()})
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"internal/abi"
 	"internal/goarch"
 	"internal/goexperiment"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
@@ -967,6 +968,11 @@ func scanstack(gp *g, gcw *gcWork) int64 {
 		scanblock(uintptr(unsafe.Pointer(&gp.sched.ctxt)), goarch.PtrSize, &oneptrmask[0], gcw, &state)
 	}
 
+	// Scan conservatively the extended register state.
+	if gp.asyncSafePoint {
+		xRegScan(gp, gcw, &state)
+	}
+
 	// Scan the stack. Accumulate a list of stack objects.
 	var u unwinder
 	for u.init(gp, 0); u.valid(); u.next() {
@@ -1068,14 +1074,16 @@ func scanstack(gp *g, gcw *gcWork) int64 {
 //go:nowritebarrier
 func scanframeworker(frame *stkframe, state *stackScanState, gcw *gcWork) {
 	if _DebugGC > 1 && frame.continpc != 0 {
-		print("scanframe ", funcname(frame.fn), "\n")
+		fpfx, fname := funcnamePieces(frame.fn)
+		print("scanframe ", fpfx, fname, "\n")
 	}
 
 	isAsyncPreempt := frame.fn.valid() && frame.fn.funcID == abi.FuncID_asyncPreempt
 	isDebugCall := frame.fn.valid() && frame.fn.funcID == abi.FuncID_debugCallV2
 	if state.conservative || isAsyncPreempt || isDebugCall {
 		if debugScanConservative {
-			println("conservatively scanning function", funcname(frame.fn), "at PC", hex(frame.continpc))
+			fpfx, fname := funcnamePieces(frame.fn)
+			print("conservatively scanning function ", fpfx, fname, " at PC ", hex(frame.continpc), "\n")
 		}
 
 		// Conservatively scan the frame. Unlike the precise
@@ -1089,6 +1097,15 @@ func scanframeworker(frame *stkframe, state *stackScanState, gcw *gcWork) {
 		if frame.varp != 0 {
 			size := frame.varp - frame.sp
 			if size > 0 {
+				isSigPanic := frame.fn.valid() && frame.fn.funcID == abi.FuncID_sigpanic
+				if usesLR && (isSigPanic || isAsyncPreempt || isDebugCall) {
+					// Also include the small frame injected by
+					// (*sigctxt).pushCall. This is the same bump
+					// as the SP bump used in (*unwinder).next.
+					// We need this to ensure LR is scanned (for when
+					// it contains a pointer-y non-PC). See issue 80188.
+					size += alignUp(sys.MinFrameSize, sys.StackAlign)
+				}
 				scanConservative(frame.sp, size, nil, gcw, state)
 			}
 		}
@@ -1162,10 +1179,88 @@ const (
 	gcDrainFractional
 )
 
+// Deadline-bounded idle mark drains.
+//
+// An untimed idle mark drain runs until mark completion or until other
+// work appears (pollWork). On js/wasm the runtime is single-threaded and
+// cooperative toward the host: while the runtime is marking, the
+// JavaScript event loop cannot run, so an untimed idle drain delays the
+// next animation frame by however long the drain takes. Every idle drain
+// is therefore bounded by a deadline (gcIdleMarkDrainBudget): when it
+// expires, the drain returns to the scheduler. On most platforms the
+// scheduler simply reschedules an idle worker if there is still nothing
+// else to do, so the deadline only bounds how long a single drain runs
+// between scheduler checks. On js/wasm, expiry additionally throttles
+// idle marking (wasmIdleMarkYield below) so the scheduler falls through
+// to beforeIdle and yields to the event loop.
+
+// gcIdleMarkDrainBudget bounds a single idle mark drain: long enough to
+// make real progress, short enough that a drain that starts just before
+// other work arrives (on js/wasm: just before a frame event) cannot hold
+// the P for an unbounded burst.
+const gcIdleMarkDrainBudget = 2e6 // 2ms
+
+// wasmIdleMarkYield is set on js/wasm when an idle mark drain hit its
+// deadline with mark work still available. While set (and blackening is
+// enabled), findRunnable does not schedule another idle mark worker, so
+// the scheduler falls through to beforeIdle and returns control to the
+// event loop; beforeIdle (lock_js.go) arms a short wakeup so marking
+// resumes promptly. Cleared on the next entry from JavaScript
+// (handleEvent) and by the budgeted mark step (gcMarkStepBudgeted).
+//
+// Only ever accessed on js/wasm (single-threaded, so a plain global is
+// fine); all uses are gated on goos.IsJs.
+var wasmIdleMarkYield bool
+
+// wasmIdleMarkThrottled reports whether the scheduler should skip
+// scheduling an idle mark worker to let the host event loop run.
+// Constant false on everything but js/wasm.
+//
+// The wasmIdleMarkCanYield condition matters for safety: skipping the
+// idle worker makes findRunnable fall through to beforeIdle, and pausing
+// there is only correct when returning to the event loop is the normal
+// next step (the top JavaScript entry has finished its Go work). In any
+// other state - notably while a go:wasmexport call is being processed
+// after a stack switch, where "pause" would return to the export's JS
+// caller mid-call - keep the upstream behavior of scheduling the idle
+// worker again.
+//
+// Constant false under GOWASM=threads too (see the guard in
+// gcDrainMarkWorkerIdle): the whole yield mechanism exists to keep the
+// single-threaded port's event loop responsive during mark, but with
+// threads the event loop lives on the main M, which parks in it
+// non-blockingly whenever it is idle - and findRunnable runs
+// concurrently on worker Ms, where wasmIdleMarkCanYield's read of the
+// main-thread-only events stack is a data race (observed as a torn
+// slice read crashing with "unexpected signal during runtime
+// execution" in the GOMAXPROCS=4 runtime suite).
+func wasmIdleMarkThrottled() bool {
+	return goos.IsJs != 0 && !wasmThreadsEnabled && wasmIdleMarkYield && wasmIdleMarkCanYield()
+}
+
 // gcDrainMarkWorkerIdle is a wrapper for gcDrain that exists to better account
 // mark time in profiles.
 func gcDrainMarkWorkerIdle(gcw *gcWork) {
+	// The drain is bounded by gcIdleMarkDrainBudget (gcDrain computes its
+	// own deadline for idle drains); on expiry it returns to the
+	// scheduler, which reschedules an idle worker if there is still
+	// nothing else to do.
+	start := nanotime()
 	gcDrain(gcw, gcDrainIdle|gcDrainUntilPreempt|gcDrainFlushBgCredit)
+	if goos.IsJs != 0 && !wasmThreadsEnabled && nanotime()-start >= gcIdleMarkDrainBudget && (!gcw.empty() || gcMarkWorkAvailable()) {
+		// js/wasm: the deadline expired with work remaining. Throttle
+		// idle marking until the event loop has had a chance to run
+		// (see wasmIdleMarkYield above); otherwise the scheduler would
+		// immediately start another idle drain and starve the host
+		// until mark completion.
+		//
+		// Not under GOWASM=threads: idle drains there run on worker Ms
+		// (or on a main M whose event loop stays responsive via the
+		// non-blocking park), the flag write would race the main
+		// thread's clear, and wasmIdleMarkThrottled ignores the flag
+		// under threads anyway (see there).
+		wasmIdleMarkYield = true
+	}
 }
 
 // gcDrainMarkWorkerDedicated is a wrapper for gcDrain that exists to better account
@@ -1255,10 +1350,15 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 	// self-preempt check.
 	checkWork := int64(1<<63 - 1)
 	var check func() bool
+	// idleDeadline, when nonzero, is the nanotime deadline for an idle
+	// drain (see gcIdleMarkDrainBudget): the drain self-preempts when it
+	// passes, at the same granularity as the check function.
+	var idleDeadline int64
 	if flags&(gcDrainIdle|gcDrainFractional) != 0 {
 		checkWork = initScanWork + drainCheckThreshold
 		if idle {
 			check = pollWork
+			idleDeadline = nanotime() + gcIdleMarkDrainBudget
 		} else if flags&gcDrainFractional != 0 {
 			check = pollFractionalWorkerExit
 		}
@@ -1273,6 +1373,9 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 				break
 			}
 			markroot(gcw, job, flushBgCredit)
+			if idleDeadline != 0 && nanotime() >= idleDeadline {
+				goto done
+			}
 			if check != nil && check() {
 				goto done
 			}
@@ -1358,6 +1461,9 @@ func gcDrain(gcw *gcWork, flags gcDrainFlags) {
 
 			if checkWork <= 0 {
 				checkWork += drainCheckThreshold
+				if idleDeadline != 0 && nanotime() >= idleDeadline {
+					break
+				}
 				if check != nil && check() {
 					break
 				}

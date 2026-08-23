@@ -1,6 +1,12 @@
 # CI workflow for GOOS=cosmo cross-platform testing
-# Tests that APE binaries built on any platform run on all platforms
-# Each test runner tests all 3 binaries (native + 2 cross-compiled)
+# Tests that APE binaries built on any platform (Linux/macOS/Windows) run
+# on all platforms. Each of the 3 test-matrix runners tests all 3 origin
+# binaries with the full apetest suite. Windows runs the same fat APEs
+# natively through their PE header via the cosmo runtime's NT
+# personality (NT bring-up wave 2): the windows-latest matrix leg
+# additionally byte-checks real fizzbuzz output before running the
+# shared apetest steps - runtimeprobe included - against all three
+# origin binaries.
 
 name: Cosmopolitan Cross-Platform CI
 
@@ -10,7 +16,13 @@ on:
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform
+  #
+  # Job and step timeout-minutes are deliberate everywhere: a hung cosmo
+  # binary (or a wedged runner) must never burn GitHub's 6-hour default.
+  # Limits are sized ~2x (or a round number above) the slowest duration
+  # observed across recent green runs; see the values at each step.
   build:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +41,8 @@ jobs:
           cache: false
 
       - name: Build Go toolchain
+        # Observed max 3m14s (windows make.bat); unix ~2m30s.
+        timeout-minutes: 8
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -36,35 +50,257 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
+      - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
+        # The fork stamps the same release-style version (go1.27.0cosmo)
+        # into every build, so tool IDs derived from the -V=full version
+        # line alone are identical for any two fork builds. Colliding tool
+        # IDs collide action IDs, and a warm build cache (a consumer's
+        # local GOCACHE, or a shared GOCACHEPROG tier that survives
+        # toolchain updates) then serves stale, ABI-incompatible objects
+        # across fork builds — binaries SIGSEGV at startup (the 2026-07-20
+        # go-toolchain consumer core dumps). Every fork tool must report
+        # its own build ID under -V=full so cmd/go derives tool IDs from
+        # tool content. This gate fails if -V=full is the bare version line.
+        shell: bash
+        run: |
+          out="$(./bin/go tool compile -V=full)"
+          echo "compile -V=full: $out"
+          case "$out" in
+            *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
+            *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
+          esac
+
+      # Shebang support tests (Unix only - shebang is a Unix feature)
+      - name: Test shebang support - unit tests
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          # Pin host GOOS/GOARCH: this toolchain defaults to GOOS=cosmo and
+          # would otherwise emit (fat) APE test binaries the host can't exec.
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+          echo "=== Running shebang unit tests ==="
+          go test ./src/go/scanner/... -run TestShebang -v
+          go test ./src/go/build/... -run TestReadGoInfo -v
+          go test ./src/cmd/compile/internal/syntax/... -run TestShebang -v
+
+      - name: Test shebang support - script execution
+        if: runner.os != 'Windows'
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+
+          # Create a Go script with shebang
+          # env -S is required for multi-word shebang interpreters on Linux
+          cat > /tmp/shebang-test.go << 'EOF'
+          #!/usr/bin/env -S go run
+
+          package main
+
+          import "fmt"
+
+          func main() {
+              fmt.Println("Hello from shebang Go script!")
+          }
+          EOF
+
+          echo "=== Testing go run with shebang file ==="
+          go run /tmp/shebang-test.go
+
+          echo "=== Testing direct script execution ==="
+          chmod +x /tmp/shebang-test.go
+          /tmp/shebang-test.go
+
+      - name: Build std for cosmo (both arches)
+        # The uprev tripwire. Everything else on this leg compiles only
+        # what fizzbuzz and runtimeprobe import - 84 of the 358 std
+        # packages under GOOS=cosmo - so a whole class of upstream change
+        # lands silently: upstream re-partitions a platform file
+        # (splitting at.go into fchmodat_linux.go + fchmodat_other.go, or
+        # giving statat_unix.go a new tag - both real go1.26.4 breaks) and
+        # cosmo falls off the edge of the new build tags. crypto/x509,
+        # archive/tar, net/http and friends carry exactly those tags and
+        # none of them were being compiled. Cross-compiles, so one leg is
+        # enough; ~40s cold for both arches.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=cosmo GOARCH=amd64 go build std
+          GOOS=cosmo GOARCH=arm64 go build std
+
       - name: Build APE binary
+        # Observed max 38s (windows; two fat builds = four link passes).
+        timeout-minutes: 10
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
           # No GOARCH pin: GOOS=cosmo go build emits a fat (amd64+arm64)
           # APE regardless of the host architecture.
           GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+          # The probe is a multi-file package, so build its module directory.
+          (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
           echo "=== APE Header ==="
           head -c 200 fizzbuzz.com
           echo ""
           echo "=== File info ==="
-          file fizzbuzz.com 2>/dev/null || true
-          ls -la fizzbuzz.com
+          file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
+          # ls doubles as an existence assertion for the debug sidecars a
+          # default fat build must write next to each output (they are not
+          # uploaded; apetest's TestDebugSidecars covers their contents).
+          ls -la fizzbuzz.com fizzbuzz.com.dbg fizzbuzz.com.aarch64.elf \
+            runtimeprobe.com runtimeprobe.com.dbg runtimeprobe.com.aarch64.elf
+
+      - name: Build platform-subset APE binaries
+        # GOCOSMOPLATFORMS restricts which hosts the APE boots on. Two
+        # subsets, both executed on every test leg (see the test job):
+        #
+        #  tri  - linux/amd64, darwin/arm64, windows/amd64. Still needs
+        #         both payloads, so it is the same size as the fat build;
+        #         what it drops is the macOS Intel claim. This is the set
+        #         consumers ask for, and every one of its three platforms
+        #         must still boot the binary.
+        #  amd  - linux/amd64, windows/amd64. One payload: the arm64 image,
+        #         its boot header and its sidecar are gone, which is where
+        #         the size actually drops.
+        #
+        # Cross-compiles, so one leg builds them for all three to run.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          export GOOS=cosmo
+          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+          # Sidecar existence is an assertion: a restricted build is still
+          # stripped and still writes a sidecar per payload it carries, so
+          # the amd-only pair must have no .aarch64.elf.
+          ls -la fizzbuzz-tri.com fizzbuzz-tri.com.dbg fizzbuzz-tri.com.aarch64.elf \
+            fizzbuzz-amd.com fizzbuzz-amd.com.dbg
+          if [ -e fizzbuzz-amd.com.aarch64.elf ]; then
+            echo "FAIL: an amd64-only selection wrote an arm64 debug sidecar"; exit 1
+          fi
+          echo "=== sizes ==="
+          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
 
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
           name: ape-binary-${{ matrix.build-os }}
-          path: fizzbuzz.com
+          path: |
+            fizzbuzz.com
+            runtimeprobe.com
+            fizzbuzz-tri.com
+            runtimeprobe-tri.com
+            fizzbuzz-amd.com
+            runtimeprobe-amd.com
+          if-no-files-found: ignore
           retention-days: 1
 
+      - name: APE merge unit tests (linker + go command)
+        # Covers the -apefat/-apestrip/-apedbg merge logic and cmd/go's
+        # GOCOSMOSTRIP / -ldflags strip detection. One leg is enough.
+        # GOOS=linux pin: the fork's go defaults GOOS=cosmo, and these are
+        # host-run unit tests. Observed ~40s (test-package compile).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLdflagsSpecifyStrip|TestCosmoStripEnabled|TestCosmoDebugMode|TestCosmoMergeArgsDebugMode|TestParseToolID|TestCosmoToolIDTracksToolContent|TestCosmoFatParallel|TestCosmoFatSkipOutput|TestCosmoPlatformSpec|TestCosmoSiblingAndAssemble|TestCosmoMergeArgsPlatforms|TestCosmoEnvReportsEffectiveValues' cmd/go/internal/work
+          # The platform table both commands parse GOCOSMOPLATFORMS and
+          # -apeplatforms through, and the go env readouts a consumer
+          # probes to tell an aware toolchain from one that ignores the
+          # selection - load-bearing outside this repo, so gated here.
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/env_cosmo' cmd/go
+          # The cosmo syscall package's unit tests (darwin sendmsg/recvmsg
+          # cmsg repack, signal/wait-status translation tables, epoll
+          # layout) are GOOS=cosmo-only code, run on this host via the
+          # misc/cosmo exec wrappers - the test binary is a thin cosmo
+          # APE that executes natively on linux.
+          export PATH="$PWD/misc/cosmo:$PATH"
+          GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
+          # Runtime-package cosmo unit tests: the Apple itimerval ABI
+          # pins + timeval translation behind the darwin SIGPROF
+          # setitimer dispatch, and the signal translation tables.
+          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
+
+      - name: Fork-divergence guardrails (go/build policy, moddeps)
+        # go/build's structural tests are what keep a fork's edits honest
+        # across an upstream uprev, and nothing was running them: the
+        # shebang step only runs -run TestReadGoInfo. Both had silently
+        # gone red - TestVendorPackages against the zstd vendored for
+        # cosmo DWARF compression, TestDependencies against
+        # internal/runtime/syscall/cosmo - and an uprev is exactly when a
+        # stale dependency policy stops catching real layering breaks.
+        # cmd/internal/moddeps is the matching check for src/ + src/cmd
+        # module/vendor consistency (see CLAUDE.md's vendoring runbook).
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
+
+      - name: Loop-aware inlining tests
+        # The loop cost discount, the loop-nested call site budget, and the
+        # per-caller growth allowance (cmd/compile/internal/inline/loop.go),
+        # plus the end-to-end check that a loop-dominated function inlines
+        # and that -d=loopinline=0 restores the old decisions exactly.
+        # Host-run compiler tests, so GOOS is pinned away from cosmo.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/inline/...
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
+          # The inlining regress tests: more inlining must not break the
+          # existing expectations for what does and does not get inlined.
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
+
   # Test all APE binaries on each platform using Go tests
-  # Each runner tests all 3 binaries sequentially (native + 2 cross-compiled)
+  # Each runner tests all 3 origin binaries sequentially (its native one
+  # plus the two cross-compiled elsewhere). The windows-latest leg is
+  # also the cosmo NT execution acceptance: before the shared apetest
+  # steps it runs two windows-only steps (AF_UNIX runner diagnostic,
+  # direct fizzbuzz NT boot check) - see the comments at those steps.
+  #
+  # Job-level cap: 3 test steps at their per-OS step timeout plus setup;
+  # observed green totals are well under 2 minutes on every leg.
+  # Individual steps carry their own timeout-minutes (and an in-step
+  # killer, see with-deadline.sh). The per-OS knobs ride the matrix:
+  # windows keeps the timings the old dedicated test-windows job proved
+  # out (40-minute job cap; 10-minute apetest step timeouts; 540 s
+  # in-step deadlines - inert there, since with-deadline.sh self-detects
+  # git-bash and degrades to a plain exec, leaving timeout-minutes as
+  # the watchdog); the unix legs keep 25/5/240.
   test:
+    timeout-minutes: ${{ matrix.job-timeout }}
     needs: build
     strategy:
       fail-fast: false
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - test-os: ubuntu-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: macos-latest
+            job-timeout: 25
+            apetest-timeout: 5
+            apetest-deadline: 240
+          - test-os: windows-latest
+            job-timeout: 40
+            apetest-timeout: 10
+            apetest-deadline: 540
 
     runs-on: ${{ matrix.test-os }}
 
@@ -83,34 +319,666 @@ jobs:
         with:
           path: binaries
 
+      # No-op on the windows leg: multicmd runs nothing there (no
+      # windows/default command given), and the exec bit means nothing
+      # on NTFS.
       - name: Make binaries executable
         uses: wow-look-at-my-code/actions/multicmd@master
         with:
-          unix: chmod +x binaries/ape-binary-*/fizzbuzz.com
+          unix: chmod +x binaries/ape-binary-*/fizzbuzz*.com binaries/ape-binary-*/runtimeprobe*.com
 
+      # Windows execution acceptance (cosmo NT bring-up), windows leg
+      # only: a normal fat APE - cosmo amd64 + arm64, no embedded second
+      # build - boots natively on Windows through its PE header and the
+      # cosmo runtime's NT personality. Two windows-only rungs before
+      # the shared apetest steps:
+      #
+      #  1. Direct invocation (ubuntu- and windows-origin artifacts; all
+      #     origins build identical headers): the same contract apetest
+      #     asserts (`fizzbuzz.com <a> <b>` prints fizzbuzz(a+b) + "\n" on
+      #     stdout, exit 0), with a byte-for-byte stdout compare.
+      #  2. The apetest suite, natively, against all three origin binaries
+      #     with FIZZBUZZ_BIN and RUNTIMEPROBE_BIN both set: NT bring-up
+      #     wave 2 grew the runtime surface runtimeprobe needs (file I/O,
+      #     dirents, TCP/UDP/unix sockets, signals, os/exec, timers, async
+      #     preemption), so probe execution is gated here too.
+      #
+      # Diagnostic only (never fails the job): prove what the runner's
+      # afunix.sys actually supports, so a runtimeprobe unixsock failure
+      # can be attributed - runner capability gap vs cosmo port bug. The
+      # native matrix reproduces the cosmo runtime's exact socket recipe
+      # piecewise (creation flags, SO_REUSEADDR - which net's
+      # listenStream sets and which poisons a subsequent afunix bind
+      # with WSAEOPNOTSUPP - and FIONBIO); the managed .NET case is the
+      # canonical known-good control.
+      - name: AF_UNIX capability probe (runner diagnostic)
+        if: matrix.test-os == 'windows-latest'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          $src = @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class AfUnixProbe {
+              [DllImport("ws2_32.dll")] public static extern int WSAStartup(ushort v, byte[] data);
+              [DllImport("ws2_32.dll")] public static extern IntPtr WSASocketW(int af, int type, int proto, IntPtr pi, uint g, uint flags);
+              [DllImport("ws2_32.dll")] public static extern int bind(IntPtr s, byte[] name, int namelen);
+              [DllImport("ws2_32.dll")] public static extern int setsockopt(IntPtr s, int level, int optname, ref int optval, int optlen);
+              [DllImport("ws2_32.dll")] public static extern int ioctlsocket(IntPtr s, int cmd, ref int arg);
+              [DllImport("ws2_32.dll")] public static extern int WSAGetLastError();
+              [DllImport("ws2_32.dll")] public static extern int closesocket(IntPtr s);
+              public static void TryCase(string label, uint flags, string path, bool reuse, bool nonblock) {
+                  IntPtr s = WSASocketW(1, 1, 0, IntPtr.Zero, 0, flags);
+                  if (s == (IntPtr)(-1L)) { Console.WriteLine(label + ": WSASocketW failed " + WSAGetLastError()); return; }
+                  if (reuse) {
+                      int one = 1;
+                      int rr = setsockopt(s, 0xffff, 0x0004, ref one, 4);
+                      Console.WriteLine(label + ": setsockopt SO_REUSEADDR " + (rr == 0 ? "OK" : "failed " + WSAGetLastError()));
+                  }
+                  if (nonblock) {
+                      int nb = 1;
+                      ioctlsocket(s, unchecked((int)0x8004667E), ref nb);
+                  }
+                  byte[] p = Encoding.UTF8.GetBytes(path);
+                  byte[] sa = new byte[110];
+                  sa[0] = 1; sa[1] = 0;
+                  Array.Copy(p, 0, sa, 2, p.Length);
+                  int r = bind(s, sa, 2 + p.Length + 1);
+                  Console.WriteLine(r == 0 ? label + ": bind OK" : label + ": bind failed " + WSAGetLastError());
+                  closesocket(s);
+                  try { System.IO.File.Delete(path); } catch {}
+              }
+              public static void Run(string dir) {
+                  byte[] d = new byte[512]; WSAStartup(0x0202, d);
+                  TryCase("native plain (flags 0x80)", 0x80, System.IO.Path.Combine(dir, "afu-1.sock"), false, false);
+                  TryCase("native +SO_REUSEADDR", 0x80, System.IO.Path.Combine(dir, "afu-2.sock"), true, false);
+                  TryCase("native +FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-3.sock"), false, true);
+                  TryCase("native +SO_REUSEADDR+FIONBIO", 0x80, System.IO.Path.Combine(dir, "afu-4.sock"), true, true);
+                  Console.WriteLine("GetTempPath=" + System.IO.Path.GetTempPath());
+                  TryCase("native plain at GetTempPath", 0x80, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "afu-5.sock"), false, false);
+              }
+          }
+          '@
+          try {
+            Add-Type -TypeDefinition $src
+            [AfUnixProbe]::Run($env:RUNNER_TEMP)
+          } catch { Write-Host "native probe error: $_" }
+          try {
+            $mp = Join-Path $env:RUNNER_TEMP 'afu-managed.sock'
+            $sock = [System.Net.Sockets.Socket]::new([System.Net.Sockets.AddressFamily]::Unix, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::Unspecified)
+            $ep = [System.Net.Sockets.UnixDomainSocketEndPoint]::new($mp)
+            $sock.Bind($ep)
+            Write-Host 'managed .NET UnixDomainSocket: bind OK'
+            $sock.Close()
+            Remove-Item $mp -ErrorAction SilentlyContinue
+          } catch { Write-Host "managed .NET UnixDomainSocket: $_" }
+          exit 0
+
+      - name: Run fizzbuzz on Windows (NT boot acceptance)
+        if: matrix.test-os == 'windows-latest'
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          # A binary the loader refuses to start throws instead of
+          # setting an exit code; make that fail the step immediately.
+          #
+          # The binaries run via Start-Process rather than pwsh native
+          # invocation (& $copy): on be6c8c72 both binaries printed the
+          # correct exit code, yet the pwsh host then sat ~18s past the
+          # final success line and died with exit code 1 and zero
+          # diagnostics - a native-command/console teardown artifact,
+          # not an assertion failure. Start-Process + $p.ExitCode
+          # isolates the check from that teardown path, and the script
+          # ends in an explicit exit so the host quits before whatever
+          # teardown threw. Per-binary lines before and after each run
+          # localize any future hang.
+          #
+          # Cases restate apetest/fizzbuzz_test.go's invocation
+          # contract: `fizzbuzz.com <num1> <num2>` prints
+          # fizzbuzz(num1+num2) and a trailing \n (fmt.Println), exit
+          # 0. TestFizzbuzz_15 (10+5) wants "fizzbuzz"; TestNumber_13
+          # (7+6) wants "13" - the second case proves argv values
+          # actually flow through GetCommandLineW parsing rather than
+          # printing a constant.
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          $cases = @(
+            @{ Args = @('10', '5'); Want = "fizzbuzz`n" },
+            @{ Args = @('7', '6');  Want = "13`n" }
+          )
+          foreach ($origin in @('ubuntu-latest', 'windows-latest')) {
+            # Run a throwaway copy so the downloaded artifact stays
+            # pristine (APE binaries self-assimilate on unix hosts;
+            # keep the same hygiene here).
+            $src = "binaries/ape-binary-$origin/fizzbuzz.com"
+            $copy = Join-Path $env:RUNNER_TEMP "fizzbuzz-$origin.com"
+            Copy-Item $src $copy
+            foreach ($case in $cases) {
+              $out = Join-Path $env:RUNNER_TEMP "stdout-$origin-$($case.Args -join '-').txt"
+              Write-Host "${origin}: launching $copy $($case.Args -join ' ')"
+              $p = Start-Process -FilePath $copy -ArgumentList $case.Args -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out
+              $got = [System.IO.File]::ReadAllText($out)
+              Write-Host "${origin}: exit code $($p.ExitCode) (want 0), stdout $($got | ConvertTo-Json)"
+              if ($p.ExitCode -ne 0) { $failed = $true }
+              if ($got -cne $case.Want) {
+                Write-Host "${origin}: stdout mismatch: got $($got | ConvertTo-Json), want $($case.Want | ConvertTo-Json)"
+                $failed = $true
+              }
+            }
+          }
+          if ($failed) { exit 1 } else { exit 0 }
+
+      # Prefetch test-module dependencies separately so a stalled module
+      # download cannot masquerade as a hung test step.
+      - name: Download apetest modules
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          sh ./with-deadline.sh 150 go mod download
+
+      # Each test step runs go test under an in-step process-group killer
+      # (see with-deadline.sh): runner-side step timeouts have been
+      # observed not to fire when a step wedges on the macOS runners
+      # (jobs sat 30+ minutes past timeout-minutes and uploaded no logs;
+      # one wedged process even survived a process-group SIGKILL, i.e. it
+      # was stuck in an uninterruptible kernel state). The killer abandons
+      # such a corpse so the step still ends, and go test's output goes
+      # through a FILE (cat'ed afterwards) so no abandoned descendant can
+      # keep the runner's log pipe open.
       - name: Test binary built on Ubuntu
         id: test-ubuntu
-        timeout-minutes: 5
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload ubuntu-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-ubuntu-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
 
       - name: Test binary built on macOS
         id: test-macos
-        timeout-minutes: 5
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macos-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload macos-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-macos-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
 
       - name: Test binary built on Windows
         id: test-windows
-        timeout-minutes: 5
+        timeout-minutes: ${{ matrix.apetest-timeout }}
         if: always()
         shell: bash
         run: |
           cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" go test -v ./...
+          rc=0
+          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-windows-latest/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      # Upload the captured log immediately: job-level logs only reach
+      # the API when the whole job ends, which a wedged later step (or a
+      # runner poisoned by an unkillable corpse) can prevent forever.
+      - name: Upload windows-origin test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-windows-origin
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+      # A platform-subset APE must boot and run on every platform it still
+      # claims, on the real host - linking is not evidence. Both subsets
+      # run here, on all three legs; each one's TestSlimRuns skips itself
+      # on a host it deliberately dropped (amd on macOS), while the
+      # structural checks - which payload, which boot header, which loader
+      # pieces, and the size against the unrestricted build - run
+      # everywhere.
+      #
+      # -run selects the execution battery plus TestSlim*: the rest of the
+      # suite (TestELF*, TestMacho*, TestPE*, TestFat*, TestShell*) pins
+      # the shape of an UNRESTRICTED build and is asserted against the fat
+      # binaries in the steps above. The subset's own shape is what
+      # TestSlim* asserts, parameterized by SLIM_PLATFORMS.
+      - name: Test platform-subset APEs
+        id: test-subset
+        timeout-minutes: ${{ matrix.apetest-timeout }}
+        if: always()
+        shell: bash
+        run: |
+          cd testdata/ape/apetest
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
+          rc=0
+          : > test-output.log
+          run_subset() {
+            name="$1" platforms="$2"
+            echo "=== subset $name: $platforms ===" >> test-output.log
+            FIZZBUZZ_BIN="$bins/fizzbuzz-$name.com" \
+            RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
+            SLIM_BIN="$bins/fizzbuzz-$name.com" \
+            SLIM_PLATFORMS="$platforms" \
+            FAT_BIN="$bins/fizzbuzz.com" \
+              sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
+              go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
+          }
+          run_subset tri linux/amd64,darwin/arm64,windows/amd64 || rc=$?
+          run_subset amd linux/amd64,windows/amd64 || rc=$?
+          cat test-output.log
+          exit $rc
+
+      - name: Upload subset test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log-${{ matrix.test-os }}-subset
+          path: testdata/ape/apetest/test-output.log
+          retention-days: 3
+
+  # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) that
+  # this fork patches; see WASM_SHORTCOMINGS.md for the catalog of fixes.
+  # Wasm output is host-independent, so a single ubuntu leg is enough.
+  # Builds std for both ports, runs the stdlib packages the wasm fixes
+  # touch under node 22 (js) and wazero (wasip1), and runs the wasmexport
+  # compiler regression tests via the testdir harness for both targets.
+  #
+  # Job cap is a backstop only: a hung step trips its own timeout-minutes
+  # first, and later steps are skipped on failure. Observed green total is
+  # well under 15 minutes.
+  wasm:
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      # wasm_exec_node.js (the js/wasm exec wrapper in lib/wasm) requires
+      # node >= 18.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wazero (wasip1 runtime)
+        # Observed 23s locally, including the go1.25 toolchain auto-download
+        # the wazero module demands. Runs before the fork toolchain is built
+        # so `go` is unambiguously the bootstrap from setup-go: the fork's
+        # bin/go defaults GOOS=cosmo, so a bare `go install` with it would
+        # cross-compile. GOOS/GOARCH are pinned anyway, belt and braces.
+        timeout-minutes: 5
+        shell: bash
+        run: GOOS=linux GOARCH=amd64 GOBIN="$HOME/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
+
+      - name: Build Go toolchain
+        # Same build as the build job's ubuntu leg; observed ~2m30s.
+        timeout-minutes: 8
+        shell: bash
+        run: cd src && ./make.bash -v
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Build std for js/wasm and wasip1/wasm
+        # Observed 22s + 15s locally on a cold cache.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=js GOARCH=wasm go build std
+          GOOS=wasip1 GOARCH=wasm go build std
+
+      - name: Test the wasm object writer (host-side codegen)
+        # Runs on the HOST - it shells out to `go tool compile -S` for both
+        # wasm ports - so it needs an explicit GOOS=linux: this tree targets
+        # cosmo by default and the test binary would not exec. Pins the branch
+        # lowering: a forward-only function must emit no PC_B store, and a loop
+        # must still emit one for its backedge.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/obj/wasm
+
+      - name: Test js/wasm under node
+        # Observed 1m18s locally. lib/wasm supplies go_js_wasm_exec.
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
+          GOOS=js GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
+
+      - name: Test streaming fetch uploads under node (jsfetchstream e2e)
+        # End-to-end proof that GODEBUG=jsfetchnode=1 request bodies with
+        # unknown length STREAM: the guest writes chunk A, waits until the
+        # node server reports A arrived while the POST body is still open,
+        # then writes chunk B - impossible with a buffered upload. Also
+        # covers the known-length flip side (buffered, Content-Length
+        # preserved), an 8 MiB bounded-memory upload, and mid-stream
+        # context cancellation (prompt return, body closed, server sees
+        # the abort). Observed ~5s locally.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
+          (cd testdata/jsfetchstream && GOOS=js GOARCH=wasm go build -o /tmp/jsfetchstream.wasm .)
+          node testdata/jsfetchstream/run.js lib/wasm /tmp/jsfetchstream.wasm
+
+      - name: Test wasip1/wasm under wazero
+        # Observed 57s locally. lib/wasm supplies go_wasip1_wasm_exec.
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
+          GOWASIRUNTIME=wazero GOOS=wasip1 GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall math
+
+      - name: Test GOWASI=wasmedgesock (wasip1sock reference host, TCP+UDP)
+        # End-to-end tests for the WasmEdge socket extension: the host
+        # module embeds wazero and builds every guest program with the
+        # fork toolchain (bin/go), covering the TCP battery (echo, http
+        # both directions, refused, deadlines) and the UDP paths
+        # (udpecho/udpconnected). Observed ~25s locally on a warm cache;
+        # the first guest build populates the GOWASI=wasmedgesock build
+        # cache. GOOS pinned: the fork defaults GOOS=cosmo.
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          cd testdata/wasip1sock/host
+          GOOS=linux GOARCH=amd64 go test -count=1 ./...
+
+      - name: Test GOWASM=threads under node (js only)
+        # GOWASM=threads: modules import a shared linear memory, use the
+        # 0xFE atomic instructions, carry passive data segments plus a
+        # linker-emitted _initmem export (B1) so worker instances can
+        # share the memory without clobbering it, and (B2) run REAL Go
+        # code on worker threads: futex locks/notes over
+        # memory.atomic.wait32/notify, newosproc handing new Ms to the
+        # worker pool wasm_exec_node.js pre-spawns. Node-only: wazero and
+        # wasmtime lack the threads proposal, so wasip1 rejects the flag
+        # at link time (also asserted here). The pool demo hammers a
+        # shared counter from 4 worker instances; the thread demo runs Go
+        # goroutines on three Ms across three threads (looped 10x to
+        # shake out races).
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/wasmthreads-smoke.wasm .)
+          node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
+          # pool_demo gate: pipefail propagates node's exit code through
+          # the tee, the PASS line must be present, and no runtime fatal
+          # may hide anywhere in the output. Belt and suspenders on
+          # purpose: a boot-time "fatal error: newosproc: no wasm worker
+          # thread available" used to exit 0 here with none of the demo's
+          # payload run, keeping this job green (see DEBUGGING.md,
+          # pool_demo silent-fatal, 2026-07-21).
+          set -o pipefail
+          node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm 2>&1 | tee /tmp/pooldemo.out
+          grep -q "POOLDEMO: PASS" /tmp/pooldemo.out
+          ! grep -q "fatal error" /tmp/pooldemo.out
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/threaddemo.wasm ./threaddemo)
+          for i in $(seq 1 10); do
+            echo "=== threaddemo run $i ==="
+            node lib/wasm/wasm_exec_node.js /tmp/threaddemo.wasm | tee /tmp/threaddemo.out
+            grep -q "THREADDEMO: PASS" /tmp/threaddemo.out
+          done
+          # B3: multi-P demos (reduced iterations for CI).
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/speedup.wasm ./speedup)
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/stwgc.wasm ./stwgc)
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/liveness.wasm ./liveness)
+          # The demos print via println (stderr - any goroutine can land
+          # on a worker M, where fmt/os.Stdout is unavailable), so the
+          # gates must capture stderr; set -o pipefail so a nonzero node
+          # exit fails the step even though the output is piped to tee.
+          set -o pipefail
+          GOMAXPROCS=1 SPEEDUP_ITERS=20000000 node lib/wasm/wasm_exec_node.js /tmp/speedup.wasm 2>&1 | tee /tmp/speedup1.out
+          grep -q "SPEEDUP: DONE" /tmp/speedup1.out
+          GOMAXPROCS=4 GOWASMTHREADSPOOL=6 SPEEDUP_ITERS=20000000 node lib/wasm/wasm_exec_node.js /tmp/speedup.wasm 2>&1 | tee /tmp/speedup4.out
+          grep -q "SPEEDUP: DONE" /tmp/speedup4.out
+          [ "$(grep 'checksum =' /tmp/speedup1.out)" = "$(grep 'checksum =' /tmp/speedup4.out)" ]
+          for i in $(seq 1 3); do
+            echo "=== stwgc run $i ==="
+            GOMAXPROCS=4 STWGC_CYCLES=15 node lib/wasm/wasm_exec_node.js /tmp/stwgc.wasm 2>&1 | tee /tmp/stwgc.out
+            grep -q "STWGC: PASS" /tmp/stwgc.out
+          done
+          GOMAXPROCS=4 GODEBUG=gcstoptheworld=1 STWGC_CYCLES=8 node lib/wasm/wasm_exec_node.js /tmp/stwgc.wasm 2>&1 | tee /tmp/stwgc-stw.out
+          grep -q "STWGC: PASS" /tmp/stwgc-stw.out
+          GOMAXPROCS=4 LIVENESS_BUSY_MS=1200 node lib/wasm/wasm_exec_node.js /tmp/liveness.wasm 2>&1 | tee /tmp/liveness.out
+          grep -q "LIVENESS: PASS" /tmp/liveness.out
+          # Cross-thread grow-observation gate: pinned worker Ms hammer
+          # atomics on chunks another thread just grew the memory for.
+          # Without the assembler's grow-observation guard this traps with
+          # "memory access out of bounds" (the nondeterministic worker
+          # crash at runtime.newMarkBits); with it, it must pass.
+          (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -ldflags=-checklinkname=0 -o /tmp/growatomic.wasm ./growatomic)
+          GOMAXPROCS=4 node lib/wasm/wasm_exec_node.js /tmp/growatomic.wasm 2>&1 | tee /tmp/growatomic.out
+          grep -q "GROWATOMIC: PASS" /tmp/growatomic.out
+          GOOS=js GOARCH=wasm GOWASM=threads go test -short -count=1 sync sync/atomic internal/runtime/atomic runtime
+          if (cd testdata/wasmthreads && GOOS=wasip1 GOARCH=wasm GOWASM=threads go build -o /dev/null .) 2>/tmp/wasip1-threads.err; then
+            echo "expected GOOS=wasip1 GOWASM=threads to be rejected" >&2
+            exit 1
+          fi
+          grep -q "GOWASM=threads is only supported on GOOS=js" /tmp/wasip1-threads.err
+
+      - name: Compiler regression tests (testdir wasmexport, both targets)
+        # Observed 9s locally. GOOS=linux pin: the harness test binary runs
+        # on the host (the fork's go would otherwise target cosmo); -target
+        # selects the wasm port under test.
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
+          GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=js/wasm
+          GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=wasip1/wasm
+
+  # Publish an installable toolchain distribution to buildhost (pazer.build)
+  # on every push, once build+test are green. Consumers then install the fork
+  # in seconds instead of running a ~3 minute make.bash:
+  #
+  #   curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
+  #
+  # Auth is a GitHub Actions OIDC token (audience https://pazer.build); the
+  # buildhost project auto-provisions on the first authenticated push, and
+  # every branch gets its own rolling latest (?branch=<name>).
+  # Publishing is three jobs so each platform's tarball is built ON that
+  # platform. distpack packages what a HOST build produced, so there is no
+  # cross-package shortcut: GOOS=darwin GOARCH=arm64 ./make.bash -distpack
+  # dies with "distpack: stat bin/darwin_arm64/go: no such file or
+  # directory".
+  #
+  #   publish-create -> one release, so every platform lands in ONE version
+  #   publish-upload -> per-platform build + upload, straight to buildhost
+  #   publish-finish -> publish that release once every platform is in
+  #
+  # Nothing is handed between the jobs: each leg builds its own tarball on
+  # its own runner and uploads it directly, so no GitHub artifact storage is
+  # involved. A failed leg means publish-finish never runs and the release
+  # stays a draft, which buildhost records as INTENT and never serves as
+  # latest -- so a half-uploaded release cannot be installed.
+  publish-create:
+    timeout-minutes: 10
+    needs: [build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # mint the OIDC token buildhost authenticates
+      contents: read
+      artifact-metadata: write
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create buildhost release
+        # No version input: buildhost auto-increments the project version.
+        # git_branch/git_commit default to the pushed branch and sha inside
+        # the action, so every branch keeps its own rolling latest and branch
+        # pushes never move ?branch=master.
+        id: release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-create-release@master
+        with:
+          project: gosmopolitan
+
+  publish-upload:
+    # macOS make.bash runs ~4m30s at its slowest observed; distpack adds
+    # seconds.
+    timeout-minutes: 25
+    needs: publish-create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      id-token: write
+      contents: read
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Stamp unique per-release version
+        # The fork identifies as a RELEASE Go version, so cmd/go derives
+        # tool IDs (hence action IDs) from the version string alone. Two
+        # releases sharing one string share a build-cache namespace, and
+        # the org's shared GOCACHEPROG cache then links objects from
+        # different releases into one binary. A unique monotonic suffix
+        # per publish makes each release's cache namespace disjoint. The
+        # committed VERSION is unchanged; this rewrite is publish-only.
+        #
+        # Every leg stamps the SAME string: run_number is one value per
+        # run, so the platforms of one release cannot disagree about which
+        # toolchain they are.
+        shell: bash
+        run: |
+          printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
+          echo "VERSION stamped: $(cat VERSION)"
+
+      - name: Build distribution tarball
+        # A host build plus distpack packaging: writes the official-style
+        # go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack. make.bash
+        # alone is ~2m30s on ubuntu and ~4m30s on macos; distpack adds
+        # only seconds.
+        timeout-minutes: 15
+        shell: bash
+        run: cd src && ./make.bash -distpack
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      # Publish flow: buildhost's own composite actions (create-release ->
+      # upload-artifact -> publish-release) -- the same family the rest of
+      # the org uses -- instead of REST calls hand-rolled in this workflow.
+      # Each action mints its own OIDC token (audience = the server URL).
+      - name: Locate distribution tarball
+        id: tarball
+        uses: wow-look-at-my/actions@typescript#latest
+        env:
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
+        with:
+          script: |
+            // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.<goos>-<goarch>.tar.gz)
+            const distDir = 'pkg/distpack';
+            const suffix = `.${process.env.DIST_SUFFIX}.tar.gz`;
+            const names = fs.readdirSync(distDir).filter((f) => f.startsWith('go') && f.endsWith(suffix));
+            if (names.length !== 1) {
+              throw new Error(`want exactly one go*${suffix} in ${distDir}, ` +
+                `found [${names.join(', ')}] among [${fs.readdirSync(distDir).join(', ')}]`);
+            }
+            const tarball = path.join(distDir, names[0]);
+            core.info(`${tarball}: ${fs.statSync(tarball).size} bytes`);
+            core.setOutput('path', tarball);
+            core.setOutput('name', names[0]);
+
+      - name: Upload toolchain tarball
+        timeout-minutes: 10
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-upload-artifact@master
+        with:
+          project: gosmopolitan
+          version: ${{ needs.publish-create.outputs.version }}
+          os: ${{ matrix.goos }}
+          arch: ${{ matrix.goarch }}
+          kind: binary
+          path: ${{ steps.tarball.outputs.path }}
+          filename: ${{ steps.tarball.outputs.name }}
+
+      - name: Log uploaded artifact
+        shell: bash
+        run: |
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
+
+  publish-finish:
+    timeout-minutes: 10
+    needs: [publish-create, publish-upload]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      artifact-metadata: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Publish buildhost release
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
+        with:
+          project: gosmopolitan
+          version: ${{ needs.publish-create.outputs.version }}
+
+      - name: Log published release
+        shell: bash
+        run: |
+          v='${{ needs.publish-create.outputs.version }}'
+          b='${{ github.ref_name }}'
+          echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
+          echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
+          echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"

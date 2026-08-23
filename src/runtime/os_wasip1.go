@@ -183,7 +183,14 @@ func usleep(usec uint32) {
 	subscription.timeout = timestamp(usec) * 1e3
 	subscription.precision = 1e3
 
-	if poll_oneoff(&in, &out, 1, &nevents) != 0 {
+	if errno := poll_oneoff(&in, &out, 1, &nevents); errno != 0 {
+		if errno == _ENOSYS || errno == _ENOTSUP {
+			// The host does not implement poll_oneoff, so there is no
+			// way to sleep; return without sleeping and remember the
+			// failure for the netpoller (see netpoll_wasip1.go).
+			pollOneoffUnsupported = true
+			return
+		}
 		throw("wasi_snapshot_preview1.poll_oneoff")
 	}
 }
@@ -265,4 +272,14 @@ func nanotime1() int64 {
 		throw("clock_time_get failed")
 	}
 	return int64(time)
+}
+
+//go:nowritebarrierrec
+//go:nosplit
+func libpreinit() {}
+
+//go:nowritebarrierrec
+//go:nosplit
+func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
+	throw("bad newosproc0")
 }

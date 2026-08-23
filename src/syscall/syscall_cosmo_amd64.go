@@ -6,7 +6,10 @@
 
 package syscall
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
 
 func (iov *Iovec) SetLen(length int) {
 	iov.Len = uint64(length)
@@ -82,8 +85,34 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
+			// A leading NUL is either an unnamed socket or a Linux
+			// abstract-namespace name. Every caller passes a pre-zeroed
+			// buffer, so an unnamed socket - the kernel wrote only the
+			// 2-byte family: unbound or socketpair descriptors on Linux
+			// hosts, and every unnamed socket surfaced by the darwin
+			// emulation on macOS hosts - leaves the path all zero,
+			// while a real abstract name has at least one nonzero
+			// byte. Report unnamed as an empty name like the BSD ports
+			// do instead of inventing an abstract "@" name; cosmo is
+			// deliberately absent from the android/linux/windows GOOS
+			// lists in net's tests that expect "@".
+			named := false
+			for _, b := range pp.Path {
+				if b != 0 {
+					named = true
+					break
+				}
+			}
+			if !named {
+				return sa, nil // unnamed: Name stays ""
+			}
+			// Abstract name: rewrite the leading NUL as '@' for
+			// textual display (the standard convention).
 			pp.Path[0] = '@'
 		}
+		// Assume the path ends at the first NUL. Not the full Linux
+		// abstract-name semantics (those are length-delimited binary
+		// blobs), but the convention everything uses.
 		n := 0
 		for n < len(pp.Path) && pp.Path[n] != 0 {
 			n++
@@ -112,6 +141,12 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 }
 
 func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
+	if cosmo.Darwin() {
+		// macOS host: msghdr/sockaddr/cmsg layouts differ; the darwin
+		// branch (syscall_cosmo_msg.go) translates at this boundary,
+		// where allocation is legal - the nosplit dispatch side cannot.
+		return darwinRecvmsgRaw(fd, p, oob, flags, rsa)
+	}
 	var msg Msghdr
 	msg.Name = (*byte)(unsafe.Pointer(rsa))
 	msg.Namelen = uint32(SizeofSockaddrAny)
@@ -147,6 +182,10 @@ func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn 
 }
 
 func sendmsgN(fd int, p, oob []byte, ptr unsafe.Pointer, salen _Socklen, flags int) (n int, err error) {
+	if cosmo.Darwin() {
+		// macOS host: see recvmsgRaw above.
+		return darwinSendmsgN(fd, p, oob, ptr, salen, flags)
+	}
 	var msg Msghdr
 	msg.Name = (*byte)(ptr)
 	msg.Namelen = uint32(salen)

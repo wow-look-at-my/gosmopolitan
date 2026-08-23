@@ -12,6 +12,7 @@ import (
 	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/gc"
+	"internal/runtime/maps"
 	"internal/runtime/sys"
 	"unsafe"
 )
@@ -211,7 +212,7 @@ var (
 	IfaceHash  = ifaceHash
 )
 
-var UseAeshash = &useAeshash
+var UseAeshash = &maps.UseAeshash
 
 func MemclrBytes(b []byte) {
 	s := (*slice)(unsafe.Pointer(&b))
@@ -254,7 +255,6 @@ func SetTracebackEnv(level string) {
 	traceback_env = traceback_cache
 }
 
-var ReadUnaligned32 = readUnaligned32
 var ReadUnaligned64 = readUnaligned64
 
 func CountPagesInUse() (pagesInUse, counted uintptr) {
@@ -273,6 +273,10 @@ func CountPagesInUse() (pagesInUse, counted uintptr) {
 	return
 }
 
+func Blocksampled(cycles, rate int64) bool { return blocksampled(cycles, rate) }
+
+func Cheaprand() uint32         { return cheaprand() }
+func Cheaprand64() int64        { return cheaprand64() }
 func Fastrand() uint32          { return uint32(rand()) }
 func Fastrand64() uint64        { return rand() }
 func Fastrandn(n uint32) uint32 { return randn(n) }
@@ -449,6 +453,16 @@ func ShrinkStackAndVerifyFramePointers() {
 	FPCallers(make([]uintptr, 1024))
 }
 
+type StackPoisonCopyRestore int
+
+func (s StackPoisonCopyRestore) Restore() { stackPoisonCopy = int(s) }
+
+func StackPoisonCopy() StackPoisonCopyRestore {
+	before := stackPoisonCopy
+	stackPoisonCopy = 1
+	return StackPoisonCopyRestore(before)
+}
+
 // BlockOnSystemStack switches to the system stack, prints "x\n" to
 // stderr, and blocks in a stack containing
 // "runtime.blockOnSystemStackInternal".
@@ -546,7 +560,7 @@ func MapNextArenaHint() (start, end uintptr, ok bool) {
 	if !ok {
 		// We were unable to get the requested reservation.
 		// Release what we did get and fail.
-		sysFreeOS(got, physPageSize)
+		sysUnreserve(got, physPageSize)
 	}
 	return
 }
@@ -1087,18 +1101,20 @@ func FreePageAlloc(pp *PageAlloc) {
 	// Free all the mapped space for the summary levels.
 	if pageAlloc64Bit != 0 {
 		for l := 0; l < summaryLevels; l++ {
-			sysFreeOS(unsafe.Pointer(&p.summary[l][0]), uintptr(cap(p.summary[l]))*pallocSumBytes)
+			// This isn't quite right, as some of this memory may
+			// be Ready instead of Reserved. The mappedReady and
+			// testSysStat adjustments below correct for the
+			// difference.
+			sysUnreserve(unsafe.Pointer(&p.summary[l][0]), uintptr(cap(p.summary[l]))*pallocSumBytes)
 		}
 	} else {
 		resSize := uintptr(0)
 		for _, s := range p.summary {
 			resSize += uintptr(cap(s)) * pallocSumBytes
 		}
-		sysFreeOS(unsafe.Pointer(&p.summary[0][0]), alignUp(resSize, physPageSize))
+		// See sysUnreserve comment above.
+		sysUnreserve(unsafe.Pointer(&p.summary[0][0]), alignUp(resSize, physPageSize))
 	}
-
-	// Free extra data structures.
-	sysFreeOS(unsafe.Pointer(&p.scav.index.chunks[0]), uintptr(cap(p.scav.index.chunks))*unsafe.Sizeof(atomicScavChunkData{}))
 
 	// Subtract back out whatever we mapped for the summaries.
 	// sysUsed adds to p.sysStat and memstats.mappedReady no matter what
@@ -1106,6 +1122,12 @@ func FreePageAlloc(pp *PageAlloc) {
 	// way to figure out how much we actually mapped.
 	gcController.mappedReady.Add(-int64(p.summaryMappedReady))
 	testSysStat.add(-int64(p.summaryMappedReady))
+
+	// Free extra data structures.
+	//
+	// TODO(prattmic): As above, some of this may be Ready, so we should
+	// manually adjust mappedReady and testSysStat?
+	sysUnreserve(unsafe.Pointer(&p.scav.index.chunks[0]), uintptr(cap(p.scav.index.chunks))*unsafe.Sizeof(atomicScavChunkData{}))
 
 	// Free the mapped space for chunks.
 	for i := range p.chunks {
@@ -1469,7 +1491,7 @@ func (c *GCController) Revise(d GCControllerReviseDelta) {
 
 func (c *GCController) EndCycle(bytesMarked uint64, assistTime, elapsed int64, gomaxprocs int) {
 	c.assistTime.Store(assistTime)
-	c.endCycle(elapsed, gomaxprocs, false)
+	c.endCycle(elapsed, gomaxprocs)
 	c.resetLive(bytesMarked)
 	c.commit(false)
 }
@@ -1488,6 +1510,27 @@ func (c *GCController) RemoveIdleMarkWorker() {
 
 func (c *GCController) SetMaxIdleMarkWorkers(max int32) {
 	c.setMaxIdleMarkWorkers(max)
+}
+
+// NoteMarkStepDonation records a budgeted mark step donation on this
+// test-only pacer copy, as if the embedder had just called gcMarkStep,
+// so tests can exercise the donation-conditioned fractional worker cap.
+func (c *GCController) NoteMarkStepDonation() {
+	c.lastMarkStepTime.Store(nanotime())
+}
+
+func (c *GCController) FractionalUtilizationGoal() float64 {
+	return c.fractionalUtilizationGoal
+}
+
+const DonatedFractionalUtilizationGoal = donatedFractionalUtilizationGoal
+
+// GCMarkStep exposes the portable budgeted mark step (the core of the
+// js/wasm go_gc_mark_step export) for testing on every platform. Like
+// the export, it records the caller as a donating embedder on the live
+// pacer for markStepRecentNs.
+func GCMarkStep(budgetMs float64) bool {
+	return gcMarkStep(budgetMs)
 }
 
 var alwaysFalse bool
@@ -2078,4 +2121,35 @@ func DumpPrintQuoted(s string) string {
 	gp.writebuf = nil
 
 	return string(buf)
+}
+
+// DumpPrint returns the output of print(v).
+func DumpPrint[T any](v T) string {
+	gp := getg()
+	gp.writebuf = make([]byte, 0, 2048)
+	print(v)
+	buf := gp.writebuf
+	gp.writebuf = nil
+
+	return string(buf)
+}
+
+var (
+	Float64Bytes    = float64Bytes
+	Float32Bytes    = float32Bytes
+	Complex128Bytes = complex128Bytes
+	Complex64Bytes  = complex64Bytes
+)
+
+func GetScanAlloc() uintptr {
+	c := getMCache(getg().m)
+	return c.scanAlloc
+}
+
+func MallocGC(size uintptr, typ *abi.Type, needzero bool) unsafe.Pointer {
+	return mallocgc(size, typ, needzero)
+}
+
+func FuncNamePiecesForPrint(name string) (string, string, string, string, string) {
+	return funcNamePiecesForPrint(name)
 }

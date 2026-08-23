@@ -362,7 +362,8 @@ func (u *unwinder) resolveInternal(innermost, isSyscall bool) {
 		//  F   F   F  | print; panic
 		//  F   F   T  | ignore SPWrite
 		if u.flags&(unwindPrintErrors|unwindSilentErrors) == 0 && !innermost {
-			println("traceback: unexpected SPWRITE function", funcname(f))
+			fpfx, fname := funcnamePieces(f)
+			print("traceback: unexpected SPWRITE function ", fpfx, fname, "\n")
 			throw("traceback")
 		}
 		frame.lr = 0
@@ -438,6 +439,10 @@ func (u *unwinder) resolveInternal(innermost, isSyscall bool) {
 	}
 }
 
+func isInjectedCall(id abi.FuncID) bool {
+	return id == abi.FuncID_sigpanic || id == abi.FuncID_asyncPreempt || id == abi.FuncID_debugCallV2
+}
+
 func (u *unwinder) next() {
 	frame := &u.frame
 	f := frame.fn
@@ -456,7 +461,7 @@ func (u *unwinder) next() {
 		// get everything, so crash loudly.
 		fail := u.flags&(unwindPrintErrors|unwindSilentErrors) == 0
 		doPrint := u.flags&unwindSilentErrors == 0
-		if doPrint && gp.m.incgo && f.funcID == abi.FuncID_sigpanic {
+		if doPrint && gp.m != nil && gp.m.incgo && f.funcID == abi.FuncID_sigpanic {
 			// We can inject sigpanic
 			// calls directly into C code,
 			// in which case we'll see a C
@@ -464,7 +469,8 @@ func (u *unwinder) next() {
 			doPrint = false
 		}
 		if fail || doPrint {
-			print("runtime: g ", gp.goid, ": unexpected return pc for ", funcname(f), " called from ", hex(frame.lr), "\n")
+			fpfx, fname := funcnamePieces(f)
+			print("runtime: g ", gp.goid, ": unexpected return pc for ", fpfx, fname, " called from ", hex(frame.lr), "\n")
 			tracebackHexdump(gp.stack, frame, 0)
 		}
 		if fail {
@@ -482,7 +488,7 @@ func (u *unwinder) next() {
 		throw("traceback stuck")
 	}
 
-	injectedCall := f.funcID == abi.FuncID_sigpanic || f.funcID == abi.FuncID_asyncPreempt || f.funcID == abi.FuncID_debugCallV2
+	injectedCall := isInjectedCall(f.funcID)
 	if injectedCall {
 		u.flags |= unwindTrap
 	} else {
@@ -501,6 +507,7 @@ func (u *unwinder) next() {
 	// before faking a call.
 	if usesLR && injectedCall {
 		x := *(*uintptr)(unsafe.Pointer(frame.sp))
+		// same as the size bump used in scanframeworker.
 		frame.sp += alignUp(sys.MinFrameSize, sys.StackAlign)
 		f = findfunc(frame.pc)
 		frame.fn = f
@@ -627,8 +634,8 @@ func tracebackPCs(u *unwinder, skip int, pcBuf []uintptr) int {
 
 		// TODO: Why does &u.cache cause u to escape? (Same in traceback2)
 		for iu, uf := newInlineUnwinder(f, u.symPC()); n < len(pcBuf) && uf.valid(); uf = iu.next(uf) {
-			sf := iu.srcFunc(uf)
-			if sf.funcID == abi.FuncIDWrapper && elideWrapperCalling(u.calleeFuncID) {
+			funcID := iu.srcFuncID(uf)
+			if funcID == abi.FuncIDWrapper && elideWrapperCalling(u.calleeFuncID) {
 				// ignore wrappers
 			} else if skip > 0 {
 				skip--
@@ -642,7 +649,7 @@ func tracebackPCs(u *unwinder, skip int, pcBuf []uintptr) int {
 				pcBuf[n] = uf.pc + 1
 				n++
 			}
-			u.calleeFuncID = sf.funcID
+			u.calleeFuncID = funcID
 		}
 		// Add cgo frames (if we're done skipping over the requested number of
 		// Go frames).
@@ -737,39 +744,97 @@ printloop:
 }
 
 // funcNamePiecesForPrint returns the function name for printing to the user.
-// It returns three pieces so it doesn't need an allocation for string
+// It returns five pieces so it doesn't need an allocation for string
 // concatenation.
-func funcNamePiecesForPrint(name string) (string, string, string) {
+func funcNamePiecesForPrint(name string) (string, string, string, string, string) {
 	// Replace the shape name in generic function with "...".
 	i := bytealg.IndexByteString(name, '[')
 	if i < 0 {
-		return name, "", ""
+		return name, "", "", "", ""
 	}
 	j := len(name) - 1
 	for name[j] != ']' {
 		j--
 	}
 	if j <= i {
-		return name, "", ""
+		return name, "", "", "", ""
 	}
-	return name[:i], "[...]", name[j+1:]
+
+	interior := name[i+1 : j] // '[' interior ']'
+	// This is an early-out to skip the more-detailed parsing that
+	// follows -- if there's no '[' in the interior, that implies
+	// (assuming balanced brackets) no ']' in the interior, and thus
+	// this will be the answer. If brackets are not balanced
+	// (malformed input, which was already a risk), this will
+	// eat/hide the unbalanced "]".
+	if bytealg.IndexByteString(interior, '[') < 0 {
+		return name[:i], "[...]", name[j+1:], "", ""
+	}
+	// Generic method of generic type.
+	// know interior contains at least "...[..."
+	// expect interior contains "...]___[...".
+	// don't know whether "..." contains balanced brackets or not.
+	// or the compiler might have a bug in its naming-things department.
+	// hope to return name[:i], "[...]", ___, "[...]", name[j+1:]
+	depth := 1 // beginning after first "[", looking for balancing "]"
+	rbr, lbr := -1, -1
+	for k, c := range interior {
+		if c == '[' {
+			depth++
+			if depth != 1 {
+				continue
+			}
+			// rbr != -1 because rbr is only assigned if depth == 0
+			lbr = k
+			break // success, depth == 1, rbr >= 0, lbr > rbr
+		}
+		if c == ']' {
+			depth--
+			if depth < 0 {
+				break // malformed "...]...]"
+			}
+			if depth != 0 {
+				continue
+			}
+			// cannot execute this twice; depth == 0 -> { ']' -> malformed, '[' -> success }
+			rbr = k
+		}
+	}
+	if depth == 1 {
+		if rbr >= 0 && lbr > rbr {
+			return name[:i], "[...]", interior[rbr+1 : lbr], "[...]", name[j+1:]
+		}
+		if rbr == -1 && lbr == -1 {
+			// the bracket seen in the interior must have been balanced in a "[]" pattern, not "]["
+			// return the single-brackets (not a generic method of a generic type) result
+			return name[:i], "[...]", name[j+1:], "", ""
+		}
+	}
+
+	// malformed, return the whole name
+	return name, "", "", "", ""
+
 }
 
 // funcNameForPrint returns the function name for printing to the user.
 func funcNameForPrint(name string) string {
-	a, b, c := funcNamePiecesForPrint(name)
-	return a + b + c
+	a, b, c, d, e := funcNamePiecesForPrint(name)
+	return a + b + c + d + e
 }
 
-// printFuncName prints a function name. name is the function name in
-// the binary's func data table.
-func printFuncName(name string) {
-	if name == "runtime.gopanic" {
+// printFuncName prints a function name given as the two table-aliasing
+// pieces returned by funcnamePieces/namePieces: the shared package prefix
+// and the per-name suffix. It does not allocate. Generic shape brackets
+// always live entirely in the suffix (an invariant of
+// cmd/link/internal/ld/pcln.go:splitFuncName), so the "[...]" elision only
+// needs to look at the suffix.
+func printFuncName(pfx, name string) {
+	if equalPieces(pfx, name, "runtime.gopanic") {
 		print("panic")
 		return
 	}
-	a, b, c := funcNamePiecesForPrint(name)
-	print(a, b, c)
+	a, b, c, d, e := funcNamePiecesForPrint(name)
+	print(pfx, a, b, c, d, e)
 }
 
 func printcreatedby(gp *g) {
@@ -783,7 +848,8 @@ func printcreatedby(gp *g) {
 
 func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
 	print("created by ")
-	printFuncName(funcname(f))
+	fpfx, fname := funcnamePieces(f)
+	printFuncName(fpfx, fname)
 	if goid != 0 {
 		print(" in goroutine ", goid)
 	}
@@ -792,8 +858,8 @@ func printcreatedby1(f funcInfo, pc uintptr, goid uint64) {
 	if pc > f.entry() {
 		tracepc -= sys.PCQuantum
 	}
-	file, line := funcline(f, tracepc)
-	print("\t", file, ":", line)
+	fdir, fbase, line := funclinePieces(f, tracepc)
+	print("\t", fdir, fbase, ":", line)
 	if pc > f.entry() {
 		print(" +", hex(pc-f.entry()))
 	}
@@ -982,13 +1048,13 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int) (n, lastN int) {
 				continue
 			}
 
-			name := sf.name()
-			file, line := iu.fileLine(uf)
+			npfx, name := sf.namePieces()
+			fdir, fbase, line := iu.fileLinePieces(uf)
 			// Print during crash.
 			//	main(0x1, 0x2, 0x3)
 			//		/home/rsc/go/src/runtime/x.go:23 +0xf
 			//
-			printFuncName(name)
+			printFuncName(npfx, name)
 			print("(")
 			if iu.isInlined(uf) {
 				print("...")
@@ -997,7 +1063,7 @@ func traceback2(u *unwinder, showRuntime bool, skip, max int) (n, lastN int) {
 				printArgs(f, argp, u.symPC())
 			}
 			print(")\n")
-			print("\t", file, ":", line)
+			print("\t", fdir, fbase, ":", line)
 			if !iu.isInlined(uf) {
 				if u.frame.pc > f.entry() {
 					print(" +", hex(u.frame.pc-f.entry()))
@@ -1070,10 +1136,11 @@ func printAncestorTraceback(ancestor ancestorInfo) {
 // goroutine being created.
 func printAncestorTracebackFuncInfo(f funcInfo, pc uintptr) {
 	u, uf := newInlineUnwinder(f, pc)
-	file, line := u.fileLine(uf)
-	printFuncName(u.srcFunc(uf).name())
+	fdir, fbase, line := u.fileLinePieces(uf)
+	npfx, name := u.srcFunc(uf).namePieces()
+	printFuncName(npfx, name)
 	print("(...)\n")
-	print("\t", file, ":", line)
+	print("\t", fdir, fbase, ":", line)
 	if pc > f.entry() {
 		print(" +", hex(pc-f.entry()))
 	}
@@ -1148,26 +1215,40 @@ func showfuncinfo(sf srcFunc, firstFrame bool, calleeID abi.FuncID) bool {
 		return true
 	}
 
-	name := sf.name()
+	npfx, name := sf.namePieces()
 
 	// Special case: always show runtime.gopanic frame
 	// in the middle of a stack trace, so that we can
 	// see the boundary between ordinary code and
 	// panic-induced deferred code.
 	// See golang.org/issue/5832.
-	if name == "runtime.gopanic" && !firstFrame {
+	if equalPieces(npfx, name, "runtime.gopanic") && !firstFrame {
 		return true
 	}
 
-	return bytealg.IndexByteString(name, '.') >= 0 && (!stringslite.HasPrefix(name, "runtime.") || isExportedRuntime(name))
+	// A nonempty prefix always ends in '.' (see funcNamePieces), so it
+	// implies the full name contains a dot.
+	hasDot := len(npfx) > 0 || bytealg.IndexByteString(name, '.') >= 0
+	return hasDot && (!hasPrefixPieces(npfx, name, "runtime.") || isExportedRuntime(npfx, name))
 }
 
-// isExportedRuntime reports whether name is an exported runtime function.
-// It is only for runtime functions, so ASCII A-Z is fine.
-func isExportedRuntime(name string) bool {
-	// Check and remove package qualifier.
-	name, found := stringslite.CutPrefix(name, "runtime.")
-	if !found {
+// isExportedRuntime reports whether the function name with the given
+// pieces (see funcnamePieces) is an exported runtime function. It is only
+// for runtime functions, so ASCII A-Z is fine. It does not allocate.
+func isExportedRuntime(pfx, sfx string) bool {
+	// Check and remove the package qualifier. For real runtime symbols
+	// the split prefix is exactly "runtime." (or empty, with the
+	// qualifier at the start of the suffix); a qualifier straddling the
+	// two pieces cannot happen for a package-qualified name, so treat it
+	// as not exported.
+	const q = "runtime."
+	var name string
+	switch {
+	case pfx == "" && stringslite.HasPrefix(sfx, q):
+		name = sfx[len(q):]
+	case pfx == q:
+		name = sfx
+	default:
 		return false
 	}
 	rcvr := ""
@@ -1271,12 +1352,23 @@ func goroutineheader(gp *g) {
 	if bubble := gp.bubble; bubble != nil {
 		print(", synctest bubble ", bubble.id)
 	}
+	print("]")
 	if gp.labels != nil && debug.tracebacklabels.Load() == 1 {
 		labels := (*label.Set)(gp.labels).List
 		if len(labels) > 0 {
-			print(" labels:{")
+			print(" {")
 			for i, kv := range labels {
-				print(quoted(kv.Key), ": ", quoted(kv.Value))
+				// Try to be nice and only quote the keys/values if one of them has characters that need quoting or escaping.
+				printq := func(s string) {
+					if tracebackStringNeedsQuoting(s) {
+						print(quoted(s))
+					} else {
+						print(s)
+					}
+				}
+				printq(kv.Key)
+				print(": ")
+				printq(kv.Value)
 				if i < len(labels)-1 {
 					print(", ")
 				}
@@ -1284,7 +1376,19 @@ func goroutineheader(gp *g) {
 			print("}")
 		}
 	}
-	print("]:\n")
+	print(":\n")
+}
+
+func tracebackStringNeedsQuoting(s string) bool {
+	for _, r := range s {
+		if !('a' <= r && r <= 'z' ||
+			'A' <= r && r <= 'Z' ||
+			'0' <= r && r <= '9' ||
+			r == '.' || r == '/' || r == '_') {
+			return true
+		}
+	}
+	return false
 }
 
 func tracebackothers(me *g) {
@@ -1434,7 +1538,8 @@ func isSystemGoroutine(gp *g, fixed bool) bool {
 		}
 		return !gp.runningCleanups.Load()
 	}
-	return stringslite.HasPrefix(funcname(f), "runtime.")
+	fpfx, fname := funcnamePieces(f)
+	return hasPrefixPieces(fpfx, fname, "runtime.")
 }
 
 // SetCgoTraceback records three C functions to use to gather

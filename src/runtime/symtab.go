@@ -9,6 +9,7 @@ import (
 	"internal/goarch"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
+	"internal/stringslite"
 	"unsafe"
 )
 
@@ -280,7 +281,7 @@ func runtime_expandFinalInlineFrame(stk []uintptr) []uintptr {
 	stk = stk[:len(stk)-1]
 
 	for ; uf.valid(); uf = u.next(uf) {
-		funcID := u.srcFunc(uf).funcID
+		funcID := u.srcFuncID(uf)
 		if funcID == abi.FuncIDWrapper && elideWrapperCalling(calleeID) {
 			// ignore wrappers
 		} else {
@@ -412,21 +413,20 @@ type moduledata struct {
 	findfunctab  uintptr
 	minpc, maxpc uintptr
 
-	text, etext           uintptr
-	noptrdata, enoptrdata uintptr
-	data, edata           uintptr
-	bss, ebss             uintptr
-	noptrbss, enoptrbss   uintptr
-	covctrs, ecovctrs     uintptr
-	end, gcdata, gcbss    uintptr
-	types, etypes         uintptr
-	rodata                uintptr
-	gofunc                uintptr // go.func.*
-	epclntab              uintptr
+	text, etext                uintptr
+	noptrdata, enoptrdata      uintptr
+	data, edata                uintptr
+	bss, ebss                  uintptr
+	noptrbss, enoptrbss        uintptr
+	covctrs, ecovctrs          uintptr
+	end, gcdata, gcbss         uintptr
+	types, typedesclen, etypes uintptr
+	itaboffset, itabsize       uintptr
+	rodata                     uintptr
+	gofunc                     uintptr // go.func.*
+	epclntab                   uintptr
 
 	textsectmap []textsect
-	typelinks   []int32 // offsets from types
-	itablinks   []*itab
 
 	ptab []ptabEntry
 
@@ -445,7 +445,7 @@ type moduledata struct {
 
 	gcdatamask, gcbssmask bitvector
 
-	typemap map[typeOff]*_type // offset to *_rtype in previous module
+	typemap map[*_type]*_type // *_type to use from previous module
 
 	next *moduledata
 }
@@ -468,14 +468,14 @@ type modulehash struct {
 	runtimehash  *string
 }
 
-// pinnedTypemaps are the map[typeOff]*_type from the moduledata objects.
+// pinnedTypemaps are the map[*_type]*_type from the moduledata objects.
 //
 // These typemap objects are allocated at run time on the heap, but the
 // only direct reference to them is in the moduledata, created by the
 // linker and marked SNOPTRDATA so it is ignored by the GC.
 //
 // To make sure the map isn't collected, we keep a second reference here.
-var pinnedTypemaps []map[typeOff]*_type
+var pinnedTypemaps []map[*_type]*_type
 
 // aixStaticDataBase (used only on AIX) holds the unrelocated address
 // of the data section, set by the linker.
@@ -638,13 +638,15 @@ func moduledataverify1(datap *moduledata) {
 		if datap.ftab[i].entryoff > datap.ftab[i+1].entryoff {
 			f1 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i].funcoff])), datap}
 			f2 := funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[i+1].funcoff])), datap}
-			f2name := "end"
+			f2pfx, f2name := "", "end"
 			if i+1 < nftab {
-				f2name = funcname(f2)
+				f2pfx, f2name = funcnamePieces(f2)
 			}
-			println("function symbol table not sorted by PC offset:", hex(datap.ftab[i].entryoff), funcname(f1), ">", hex(datap.ftab[i+1].entryoff), f2name, ", plugin:", datap.pluginpath)
+			f1pfx, f1name := funcnamePieces(f1)
+			print("function symbol table not sorted by PC offset: ", hex(datap.ftab[i].entryoff), " ", f1pfx, f1name, " > ", hex(datap.ftab[i+1].entryoff), " ", f2pfx, f2name, " , plugin: ", datap.pluginpath, "\n")
 			for j := 0; j <= i; j++ {
-				println("\t", hex(datap.ftab[j].entryoff), funcname(funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[j].funcoff])), datap}))
+				fjpfx, fjname := funcnamePieces(funcInfo{(*_func)(unsafe.Pointer(&datap.pclntable[datap.ftab[j].funcoff])), datap})
+				print("\t ", hex(datap.ftab[j].entryoff), " ", fjpfx, fjname, "\n")
 			}
 			if GOOS == "aix" && isarchive {
 				println("-Wl,-bnoobjreorder is mandatory on aix/ppc64 with c-archive")
@@ -754,12 +756,48 @@ func (md *moduledata) textOff(pc uintptr) (uint32, bool) {
 	return res, true
 }
 
-// funcName returns the string at nameOff in the function name table.
-func (md *moduledata) funcName(nameOff int32) string {
+// funcNamePieces returns the function name at nameOff in two pieces: the
+// shared package-path prefix and the per-name suffix. The full name is the
+// concatenation prefix+suffix; the prefix is either empty or ends in '.',
+// and generic "[...]" brackets always live entirely in the suffix. Both
+// pieces alias pclntab memory, so this does not allocate and is safe on
+// traceback, panic and GC print paths. See
+// cmd/link/internal/ld/pcln.go:generateFuncnametab for the table layout.
+func (md *moduledata) funcNamePieces(nameOff int32) (string, string) {
 	if nameOff == 0 {
-		return ""
+		return "", ""
 	}
-	return gostringnocopy(&md.funcnametab[nameOff])
+	tab := md.funcnametab
+	n, idx := readvarint(tab[nameOff:])
+	suffix := gostringnocopy(&tab[uint32(nameOff)+n])
+	prefixOff := *(*uint32)(unsafe.Pointer(&tab[4+4*uintptr(idx)]))
+	return gostringnocopy(&tab[prefixOff]), suffix
+}
+
+// funcName returns the full name at nameOff in the function name table,
+// allocating if the name has a split-off prefix. Print paths that must not
+// allocate use funcNamePieces instead.
+func (md *moduledata) funcName(nameOff int32) string {
+	prefix, suffix := md.funcNamePieces(nameOff)
+	if prefix == "" {
+		return suffix
+	}
+	return prefix + suffix
+}
+
+// hasPrefixPieces reports whether the logical concatenation a+b starts
+// with prefix, without allocating.
+func hasPrefixPieces(a, b, prefix string) bool {
+	if len(a) >= len(prefix) {
+		return a[:len(prefix)] == prefix
+	}
+	return a == prefix[:len(a)] && stringslite.HasPrefix(b, prefix[len(a):])
+}
+
+// equalPieces reports whether the logical concatenation a+b equals s,
+// without allocating.
+func equalPieces(a, b, s string) bool {
+	return len(a)+len(b) == len(s) && hasPrefixPieces(a, b, s)
 }
 
 // Despite being an exported symbol,
@@ -984,6 +1022,15 @@ func (s srcFunc) name() string {
 	return s.datap.funcName(s.nameOff)
 }
 
+// namePieces returns the name of s in two table-aliasing pieces
+// (see (*moduledata).funcNamePieces). It does not allocate.
+func (s srcFunc) namePieces() (string, string) {
+	if s.datap == nil {
+		return "", ""
+	}
+	return s.datap.funcNamePieces(s.nameOff)
+}
+
 //go:linkname badSrcFuncName runtime.srcFunc.name
 func badSrcFuncName(srcFunc) string
 
@@ -1074,14 +1121,47 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	}
 	datap := f.datap
 	p := datap.pctab[off:]
-	pc := f.entry()
+	entry := f.entry()
+	pc := entry
 	prevpc := pc
 	val := int32(-1)
 	for {
-		var ok bool
-		p, ok = step(p, &pc, &val, pc == f.entry())
-		if !ok {
-			break
+		// Decode the next pair inline. This must stay in sync with step
+		// (the grammar is described at cmd/internal/obj/pcln.go:
+		// appendPCPair). The decode is unrolled here because this loop
+		// dominates every pcvalue cache miss: with no call in the loop
+		// body the pair state (p, pc, val, prevpc, targetpc, entry)
+		// stays in registers, while calling out to step - and to
+		// f.entry() for the first-pair test - would spill it around
+		// every pair. readvarint is small enough that the compiler
+		// inlines it here.
+		b := p[0]
+		if b >= 0x80 {
+			// Packed pair: value delta -4..3, pc delta 1..16.
+			val += int32(b>>4&7) - 4
+			pc += uintptr(b&0xF+1) * sys.PCQuantum
+			p = p[1:]
+		} else {
+			uvdelta := uint32(b)
+			if uvdelta == 0 && pc != entry {
+				break // terminator (in any pair but the first)
+			}
+			n := uint32(1)
+			if uvdelta == 0x7F {
+				// Escape: multi-byte zig-zag value delta.
+				n, uvdelta = readvarint(p[1:])
+				n++
+			}
+			val += int32(-(uvdelta & 1) ^ (uvdelta >> 1))
+			p = p[n:]
+
+			pcdelta := uint32(p[0])
+			n = 1
+			if pcdelta&0x80 != 0 {
+				n, pcdelta = readvarint(p)
+			}
+			p = p[n:]
+			pc += uintptr(pcdelta * sys.PCQuantum)
 		}
 		if targetpc < pc {
 			// Replace a random entry in the cache. Random
@@ -1125,7 +1205,8 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 		return -1, 0
 	}
 
-	print("runtime: invalid pc-encoded table f=", funcname(f), " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
+	fpfx, fname := funcnamePieces(f)
+	print("runtime: invalid pc-encoded table f=", fpfx, fname, " pc=", hex(pc), " targetpc=", hex(targetpc), " tab=", p, "\n")
 
 	p = datap.pctab[off:]
 	pc = f.entry()
@@ -1143,6 +1224,9 @@ func pcvalue(f funcInfo, off uint32, targetpc uintptr, strict bool) (int32, uint
 	return -1, 0
 }
 
+// funcname returns the full name of f, allocating if the name has a
+// split-off package prefix. Print paths that must not allocate use
+// funcnamePieces instead.
 func funcname(f funcInfo) string {
 	if !f.valid() {
 		return ""
@@ -1150,8 +1234,24 @@ func funcname(f funcInfo) string {
 	return f.datap.funcName(f.nameOff)
 }
 
+// funcnamePieces returns the name of f in two table-aliasing pieces
+// (see (*moduledata).funcNamePieces). It does not allocate.
+func funcnamePieces(f funcInfo) (string, string) {
+	if !f.valid() {
+		return "", ""
+	}
+	return f.datap.funcNamePieces(f.nameOff)
+}
+
 func funcpkgpath(f funcInfo) string {
-	name := funcNameForPrint(funcname(f))
+	prefix, suffix := funcnamePieces(f)
+	if prefix != "" {
+		// The prefix is the package qualifier including the trailing
+		// dot (see cmd/link/internal/ld/pcln.go:splitFuncName), which
+		// is exactly where the scan below would split the full name.
+		return prefix[:len(prefix)-1]
+	}
+	name := funcNameForPrint(suffix)
 	i := len(name) - 1
 	for ; i > 0; i-- {
 		if name[i] == '/' {
@@ -1166,17 +1266,38 @@ func funcpkgpath(f funcInfo) string {
 	return name[:i]
 }
 
-func funcfile(f funcInfo, fileno int32) string {
+// funcfilePieces returns the file name for fileno in two pieces: the
+// shared directory prefix (empty or ending in '/') and the base name. The
+// full name is the concatenation dir+base. Both pieces alias pclntab
+// memory, so this does not allocate and is safe on traceback, panic and GC
+// print paths. It returns ("", "?") if the pcln section is corrupt. See
+// cmd/link/internal/ld/pcln.go:generateFilenameTabs for the table layout.
+func funcfilePieces(f funcInfo, fileno int32) (string, string) {
 	datap := f.datap
 	if !f.valid() {
-		return "?"
+		return "", "?"
 	}
 	// Make sure the cu index and file offset are valid
 	if fileoff := datap.cutab[f.cuOffset+uint32(fileno)]; fileoff != ^uint32(0) {
-		return gostringnocopy(&datap.filetab[fileoff])
+		tab := datap.filetab
+		n, idx := readvarint(tab[fileoff:])
+		base := gostringnocopy(&tab[fileoff+n])
+		dirOff := *(*uint32)(unsafe.Pointer(&tab[4+4*uintptr(idx)]))
+		return gostringnocopy(&tab[dirOff]), base
 	}
 	// pcln section is corrupt.
-	return "?"
+	return "", "?"
+}
+
+// funcfile returns the full file name for fileno, allocating if the name
+// has a split-off directory. Print paths that must not allocate use
+// funcfilePieces instead.
+func funcfile(f funcInfo, fileno int32) string {
+	dir, base := funcfilePieces(f, fileno)
+	if dir == "" {
+		return base
+	}
+	return dir + base
 }
 
 // funcline1 should be an internal detail,
@@ -1189,28 +1310,45 @@ func funcfile(f funcInfo, fileno int32) string {
 //
 //go:linkname funcline1
 func funcline1(f funcInfo, targetpc uintptr, strict bool) (file string, line int32) {
+	dir, file, line := funcline1Pieces(f, targetpc, strict)
+	if dir != "" {
+		file = dir + file
+	}
+	return file, line
+}
+
+// funcline1Pieces is like funcline1, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func funcline1Pieces(f funcInfo, targetpc uintptr, strict bool) (dir, file string, line int32) {
 	datap := f.datap
 	if !f.valid() {
-		return "?", 0
+		return "", "?", 0
 	}
 	fileno, _ := pcvalue(f, f.pcfile, targetpc, strict)
 	line, _ = pcvalue(f, f.pcln, targetpc, strict)
 	if fileno == -1 || line == -1 || int(fileno) >= len(datap.filetab) {
 		// print("looking for ", hex(targetpc), " in ", funcname(f), " got file=", fileno, " line=", lineno, "\n")
-		return "?", 0
+		return "", "?", 0
 	}
-	file = funcfile(f, fileno)
-	return
+	dir, file = funcfilePieces(f, fileno)
+	return dir, file, line
 }
 
 func funcline(f funcInfo, targetpc uintptr) (file string, line int32) {
 	return funcline1(f, targetpc, true)
 }
 
+// funclinePieces is like funcline, but returns the file name in two
+// table-aliasing pieces (see funcfilePieces). It does not allocate.
+func funclinePieces(f funcInfo, targetpc uintptr) (dir, file string, line int32) {
+	return funcline1Pieces(f, targetpc, true)
+}
+
 func funcspdelta(f funcInfo, targetpc uintptr) int32 {
 	x, _ := pcvalue(f, f.pcsp, targetpc, true)
 	if debugPcln && x&(goarch.PtrSize-1) != 0 {
-		print("invalid spdelta ", funcname(f), " ", hex(f.entry()), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
+		fpfx, fname := funcnamePieces(f)
+		print("invalid spdelta ", fpfx, fname, " ", hex(f.entry()), " ", hex(targetpc), " ", hex(f.pcsp), " ", x, "\n")
 		throw("bad spdelta")
 	}
 	return x
@@ -1233,12 +1371,46 @@ func funcMaxSPDelta(f funcInfo) int32 {
 	}
 }
 
+// pcdatastart returns the offset into pctab of pcdata table `table` for f.
+// Table `table` must be present, i.e. bit `table` of f.pcdataMask must be
+// set; the callers below check that.
 func pcdatastart(f funcInfo, table uint32) uint32 {
-	return *(*uint32)(add(unsafe.Pointer(&f.nfuncdata), unsafe.Sizeof(f.nfuncdata)+uintptr(table)*4))
+	// The offset array after the fixed part of the record holds entries
+	// for present tables only, in index order: the entry for `table` is
+	// at the popcount of the presence bits below it. There are at most
+	// five pcdata tables (abi.PCDATA_PanicBounds == 4; pinned by the
+	// compile-time check below), so the bits below `table` fit in four
+	// bits and a four-term adder beats the OnesCount intrinsic here: it
+	// needs no CPU-feature guard on amd64 v1 baselines and has a shorter
+	// critical path into the dependent offset load.
+	bits := uint32(f.pcdataMask) & (1<<table - 1)
+	idx := uintptr(bits&1 + bits>>1&1 + bits>>2&1 + bits>>3)
+	return *(*uint32)(add(unsafe.Pointer(&f.funcdataMask), unsafe.Sizeof(f.funcdataMask)+idx*4))
+}
+
+// pcdatastart's four-term adder counts the four bits below the highest
+// possible pcdata table index; a sixth pcdata table would silently make
+// it undercount. (internal/abi separately checks the presence bitmap's
+// 8-bit bound.)
+const _ uint = 4 - abi.PCDATA_PanicBounds
+
+// pcdataoff returns the offset into pctab of pcdata table `table` for f,
+// or 0 if f has no such table. Offset 0 is never a real table (pctab
+// starts with a reserved byte) and makes pcvalue return -1, so
+// pcvalue(f, pcdataoff(f, table), pc, strict) is equivalent to
+// pcdatavalue*(f, table, pc, ...). Unlike those, pcdataoff is cheap
+// enough to inline, so hot callers with a constant `table` use it
+// directly: after inlining, the presence test and the bits-below adder
+// in pcdatastart fold to a couple of masks with no variable shifts.
+func pcdataoff(f funcInfo, table uint32) uint32 {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
+		return 0
+	}
+	return pcdatastart(f, table)
 }
 
 func pcdatavalue(f funcInfo, table uint32, targetpc uintptr) int32 {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1
 	}
 	r, _ := pcvalue(f, pcdatastart(f, table), targetpc, true)
@@ -1246,7 +1418,7 @@ func pcdatavalue(f funcInfo, table uint32, targetpc uintptr) int32 {
 }
 
 func pcdatavalue1(f funcInfo, table uint32, targetpc uintptr, strict bool) int32 {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1
 	}
 	r, _ := pcvalue(f, pcdatastart(f, table), targetpc, strict)
@@ -1255,7 +1427,7 @@ func pcdatavalue1(f funcInfo, table uint32, targetpc uintptr, strict bool) int32
 
 // Like pcdatavalue, but also return the start PC of this PCData value.
 func pcdatavalue2(f funcInfo, table uint32, targetpc uintptr) (int32, uintptr) {
-	if table >= f.npcdata {
+	if uint32(f.pcdataMask)>>table&1 == 0 {
 		return -1, 0
 	}
 	return pcvalue(f, pcdatastart(f, table), targetpc, true)
@@ -1264,34 +1436,49 @@ func pcdatavalue2(f funcInfo, table uint32, targetpc uintptr) (int32, uintptr) {
 // funcdata returns a pointer to the ith funcdata for f.
 // funcdata should be kept in sync with cmd/link:writeFuncs.
 func funcdata(f funcInfo, i uint8) unsafe.Pointer {
-	if i < 0 || i >= f.nfuncdata {
+	if uint32(f.funcdataMask)>>i&1 == 0 {
 		return nil
 	}
 	base := f.datap.gofunc // load gofunc address early so that we calculate during cache misses
-	p := uintptr(unsafe.Pointer(&f.nfuncdata)) + unsafe.Sizeof(f.nfuncdata) + uintptr(f.npcdata)*4 + uintptr(i)*4
+	// The offset array after the fixed part of the record holds the
+	// present pcdata table offsets followed by the present funcdata
+	// offsets, in index order. Count the present entries before funcdata
+	// slot i with a single popcount of both bitmaps (sys.OnesCount64 is a
+	// compiler intrinsic).
+	bitsBelow := uint64(f.pcdataMask) | uint64(f.funcdataMask&(1<<i-1))<<8
+	idx := uintptr(sys.OnesCount64(bitsBelow))
+	p := uintptr(unsafe.Pointer(&f.funcdataMask)) + unsafe.Sizeof(f.funcdataMask) + idx*4
 	off := *(*uint32)(unsafe.Pointer(p))
-	// Return off == ^uint32(0) ? 0 : f.datap.gofunc + uintptr(off), but without branches.
-	// The compiler calculates mask on most architectures using conditional assignment.
-	var mask uintptr
-	if off == ^uint32(0) {
-		mask = 1
-	}
-	mask--
-	raw := base + uintptr(off)
-	return unsafe.Pointer(raw & mask)
+	return unsafe.Pointer(base + uintptr(off))
 }
 
 // step advances to the next pc, value pair in the encoded table.
+// The pair grammar is described at cmd/internal/obj/pcln.go:appendPCPair:
+// a first byte >= 0x80 is a whole packed pair (value delta -4..3 in bits
+// 4-6, pc delta 1..16 in bits 0-3), 0x7F escapes a multi-byte zig-zag
+// value delta followed by a uvarint pc delta, and 0x00..0x7E is a
+// one-byte zig-zag value delta followed by a uvarint pc delta. A 0x00
+// value-delta byte terminates the table except in the first pair.
+//
+// pcvalue unrolls this decode into its hot loop (see the comment there);
+// any change here must be mirrored there.
 func step(p []byte, pc *uintptr, val *int32, first bool) (newp []byte, ok bool) {
-	// For both uvdelta and pcdelta, the common case (~70%)
-	// is that they are a single byte. If so, avoid calling readvarint.
-	uvdelta := uint32(p[0])
+	b := uint32(p[0])
+	if b >= 0x80 {
+		// Packed pair (the common case, ~50-70%).
+		*val += int32(b>>4&7) - 4
+		*pc += uintptr((b&0xF + 1) * sys.PCQuantum)
+		return p[1:], true
+	}
+
+	uvdelta := b
 	if uvdelta == 0 && !first {
 		return nil, false
 	}
 	n := uint32(1)
-	if uvdelta&0x80 != 0 {
-		n, uvdelta = readvarint(p)
+	if uvdelta == 0x7F {
+		n, uvdelta = readvarint(p[1:])
+		n++
 	}
 	*val += int32(-(uvdelta & 1) ^ (uvdelta >> 1))
 	p = p[n:]

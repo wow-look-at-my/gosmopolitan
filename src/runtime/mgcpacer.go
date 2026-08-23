@@ -284,6 +284,13 @@ type gcControllerState struct {
 	// that assists and background mark workers started.
 	markStartTime int64
 
+	// lastMarkStepTime is the nanotime of the most recent budgeted mark
+	// step donation from the embedder (see gcMarkStep in mgcstep.go), or
+	// 0 if there has never been one. A recent donation means the host is
+	// frame-aware and donating its idle time to the GC, so the pacer can
+	// keep background marking out of the host's frames (see startCycle).
+	lastMarkStepTime atomic.Int64
+
 	// dedicatedMarkWorkersNeeded is the number of dedicated mark workers
 	// that need to be started. This is computed at the beginning of each
 	// cycle and decremented as dedicated mark workers get started.
@@ -388,6 +395,18 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 	c.stackScanWork.Store(0)
 	c.globalsScanWork.Store(0)
 	c.bgScanCredit.Store(0)
+	// Seed the background scan credit with a small fraction of the
+	// runway's worth of scan work. Assists at the very start of a cycle
+	// otherwise land synchronously inside whatever allocation crossed the
+	// trigger, before background marking has banked any credit - worst on
+	// single-P systems (e.g. wasm, where the triggering host callback is
+	// typically an animation frame and pays the whole burst), but the
+	// same startup burst exists everywhere until the background workers
+	// spin up. The seed is repaid almost immediately once background
+	// marking runs. The cost is bounded: if background marking never
+	// runs, the heap overshoots the goal by at most ~the seed divided by
+	// the assist ratio.
+	c.bgScanCredit.Store(min(int64(c.runway.Load()/8), maxBgCreditSeed))
 	c.assistTime.Store(0)
 	c.dedicatedMarkTime.Store(0)
 	c.fractionalMarkTime.Store(0)
@@ -416,6 +435,14 @@ func (c *gcControllerState) startCycle(markStartTime int64, procs int, trigger g
 		c.fractionalUtilizationGoal = (totalUtilizationGoal - float64(dedicatedMarkWorkersNeeded)) / float64(procs)
 	} else {
 		c.fractionalUtilizationGoal = 0
+	}
+	if c.fractionalUtilizationGoal > donatedFractionalUtilizationGoal && c.markStepRecent(markStartTime) {
+		// The embedder is frame-aware (it recently donated idle time via
+		// the budgeted mark step, see gcMarkStep): cap the fractional
+		// worker's in-frame background marking; see the comment on
+		// donatedFractionalUtilizationGoal. An embedder that does not
+		// donate idle time keeps the standard fractional quota.
+		c.fractionalUtilizationGoal = donatedFractionalUtilizationGoal
 	}
 
 	// In STW mode, we just want dedicated workers.
@@ -595,9 +622,7 @@ func (c *gcControllerState) revise() {
 }
 
 // endCycle computes the consMark estimate for the next cycle.
-// userForced indicates whether the current GC cycle was forced
-// by the application.
-func (c *gcControllerState) endCycle(now int64, procs int, userForced bool) {
+func (c *gcControllerState) endCycle(now int64, procs int) {
 	// Record last heap goal for the scavenger.
 	// We'll be updating the heap goal soon.
 	gcController.lastHeapGoal = c.heapGoal()
@@ -1169,16 +1194,59 @@ const (
 	// the numerator is a single constant integer multiplication.
 	triggerRatioDen = 64
 
-	// The minimum trigger constant was chosen empirically: given a sufficiently
-	// fast/scalable allocator with 48 Ps that could drive the trigger ratio
-	// to <0.05, this constant causes applications to retain the same peak
-	// RSS compared to not having this allocator.
-	minTriggerRatioNum = 45 // ~0.7
+	// The minimum trigger bound: the trigger may sit as early as halfway
+	// between the live heap and the goal, matching the half-headroom
+	// minimum runway clamp in trigger(). Upstream used ~0.7, chosen
+	// empirically so that a sufficiently fast/scalable allocator with 48
+	// Ps (which could drive the trigger ratio to <0.05) retained the same
+	// peak RSS. This runtime deliberately trades some of that allocate-
+	// black RSS margin for latency: mark phases get real runway so mark
+	// work is spread over more of the cycle instead of bursting right
+	// before the goal (essential on single-P frame-driven targets like
+	// wasm, and a milder smoothing everywhere else).
+	minTriggerRatioNum = 32 // ~0.5
 
 	// The maximum trigger constant is chosen somewhat arbitrarily, but the
 	// current constant has served us well over the years.
 	maxTriggerRatioNum = 61 // ~0.95
+
+	// maxBgCreditSeed caps the background scan credit seeded at cycle
+	// start (see startCycle).
+	maxBgCreditSeed = 4 << 20
+
+	// donatedFractionalUtilizationGoal caps the fractional mark worker's
+	// CPU quota while the embedder is donating idle time to the GC via
+	// the budgeted mark step (gcMarkStep in mgcstep.go; on js/wasm the
+	// go_gc_mark_step export). The fractional quota is measured against
+	// wall time, which for an embedder-driven program includes time spent
+	// paused in the host's event loop, so a frame-driven app pays the
+	// whole period's standard 25% inside its frames (~4ms of every 16.7ms
+	// frame on js/wasm, where a single P means background marking can
+	// only be stolen from the mutator). A donating embedder supplies mark
+	// time between frames instead; keep a small fractional quota purely
+	// as a liveness backstop so a CPU-bound, allocation-free goroutine
+	// cannot hold a mark phase open forever. An embedder that never
+	// donates keeps the standard quota.
+	donatedFractionalUtilizationGoal = 0.05
+
+	// markStepRecentNs is how recently the embedder must have called the
+	// budgeted mark step for the pacer to treat it as frame-aware.
+	markStepRecentNs = 5e9 // 5s
 )
+
+// markStepRecent reports whether the embedder donated idle time via the
+// budgeted mark step (gcMarkStep) recently enough to treat it as
+// frame-aware. now may be 0, meaning "read the clock if needed".
+func (c *gcControllerState) markStepRecent(now int64) bool {
+	last := c.lastMarkStepTime.Load()
+	if last == 0 {
+		return false
+	}
+	if now == 0 {
+		now = nanotime()
+	}
+	return now-last < markStepRecentNs
+}
 
 // trigger returns the current point at which a GC should trigger along with
 // the heap goal.
@@ -1241,6 +1309,32 @@ func (c *gcControllerState) trigger() (uint64, uint64) {
 	// Compute the trigger from our bounds and the runway stored by commit.
 	var trigger uint64
 	runway := c.runway.Load()
+	// Minimum-runway clamp: don't let the mark phase be squeezed into a
+	// tiny burst right before the goal. Give the mark phase at least half
+	// the distance from the live heap to the goal, so mark work (assists
+	// plus background marking) is spread across a meaningful fraction of
+	// the cycle instead of concentrating in a latency spike near the
+	// goal. This matters most on single-P frame-driven targets (wasm),
+	// where one mark cycle typically needs several frames' worth of
+	// between-frame idle time to complete - only the host's idle
+	// donations and bounded idle drains run marking off the critical
+	// path - so the runway must span several frames of allocation. The
+	// clamp is proportional to the headroom, so it scales with the heap;
+	// on tiny heaps the trigger bounds below take over (with runway
+	// exactly half the headroom, the trigger lands exactly on the
+	// minimum-trigger lower bound). The result is still subject to the
+	// min/max trigger bounds below.
+	//
+	// Note that with the minimum-trigger ratio at ~0.5 (see
+	// minTriggerRatioNum), this clamp pins the effective trigger at
+	// (approximately) the midpoint between the live heap and the goal
+	// whenever the pacer's cons/mark-based runway comes out smaller than
+	// half the headroom: the cons/mark estimate then only matters for
+	// assist pacing, not for the trigger. That is a deliberate trade of
+	// throughput for latency; see the minTriggerRatioNum comment.
+	if minRunway := (goal - c.heapMarked) / 2; runway < minRunway {
+		runway = minRunway
+	}
 	if runway > goal {
 		trigger = minTrigger
 	} else {

@@ -163,10 +163,10 @@ func SliceMakeCopyLen(s []int) []int {
 func SliceMakeCopyLenPtr(s []*int) []*int {
 	// amd64:`.*runtime\.makeslicecopy`
 	// amd64:-`.*runtime\.makeslice\(`
-	// amd64:-`.*runtime\.typedslicecopy
+	// amd64:-`.*runtime\.typedslicecopy`
 	// ppc64x:`.*runtime\.makeslicecopy`
 	// ppc64x:-`.*runtime\.makeslice\(`
-	// ppc64x:-`.*runtime\.typedslicecopy
+	// ppc64x:-`.*runtime\.typedslicecopy`
 	a := make([]*int, len(s))
 	copy(a, s)
 	return a
@@ -184,7 +184,7 @@ func SliceMakeCopyConst(s []int) []int {
 func SliceMakeCopyConstPtr(s []*int) []*int {
 	// amd64:`.*runtime\.makeslicecopy`
 	// amd64:-`.*runtime\.makeslice\(`
-	// amd64:-`.*runtime\.typedslicecopy
+	// amd64:-`.*runtime\.typedslicecopy`
 	a := make([]*int, 4)
 	copy(a, s)
 	return a
@@ -455,4 +455,16 @@ func SlicePut(a []byte, c uint8) []byte {
 	a[0] = c
 	a = a[1:]
 	return a
+}
+
+func Issue61730() {
+	var x int
+	// amd64:-"MOVQ .*stmp_"
+	_ = [...][]*int{
+		{&x},
+		nil,
+		nil,
+		nil,
+		nil,
+	}
 }

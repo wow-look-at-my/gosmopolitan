@@ -78,6 +78,7 @@ type CmdFlags struct {
 	LowerR CountFlag  "help:\"debug generated wrappers\""
 	LowerT bool       "help:\"enable tracing for debugging the compiler\""
 	LowerW CountFlag  "help:\"debug type checking\""
+	LowerU CountFlag  "help:\"emit unsorted warnings/errors\""
 	LowerV *bool      "help:\"increase debug verbosity\""
 
 	// Special characters
@@ -162,10 +163,13 @@ func ParseFlags() {
 	Flag.LowerP = &Ctxt.Pkgpath
 	Flag.LowerV = &Ctxt.Debugvlog
 
-	Flag.Dwarf = buildcfg.GOARCH != "wasm"
+	Flag.Dwarf = true
 	Flag.DwarfBASEntries = &Ctxt.UseBASEntries
 	Flag.DwarfLocationLists = &Ctxt.Flag_locationlists
-	*Flag.DwarfLocationLists = true
+	// Location lists need a DWARF register mapping, which wasm does not
+	// have (there are no machine registers; locals live in the linear
+	// memory frame). Variable DIEs still get names and types there.
+	*Flag.DwarfLocationLists = buildcfg.GOARCH != "wasm"
 	Flag.Dynlink = &Ctxt.Flag_dynlink
 	Flag.EmbedCfg = readEmbedCfg
 	Flag.Env = addEnv
@@ -182,6 +186,7 @@ func ParseFlags() {
 	Debug.AlignHot = 1
 	Debug.InlFuncsWithClosures = 1
 	Debug.InlStaticInit = 1
+	Debug.LoopInline = 1
 	Debug.FreeAppend = 1
 	Debug.PGOInline = 1
 	Debug.PGODevirtualize = 2
@@ -474,7 +479,6 @@ func concurrentFlagOk() bool {
 		Flag.E == 0 &&
 		Flag.K == 0 &&
 		Flag.L == 0 &&
-		Flag.LowerH == 0 &&
 		Flag.LowerJ == 0 &&
 		Flag.LowerM == 0 &&
 		Flag.LowerR == 0

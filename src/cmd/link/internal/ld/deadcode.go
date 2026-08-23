@@ -82,6 +82,19 @@ func (d *deadcodePass) init() {
 	// runtime.unreachableMethod is a function that will throw if called.
 	// We redirect unreachable methods to it.
 	names = append(names, "runtime.unreachableMethod")
+	if buildcfg.GOWASM.Threads && buildcfg.GOOS == "js" {
+		// The worker-thread entry point (exported as wasm_thread_run,
+		// see cmd/link/internal/wasm) is only ever called by the host;
+		// nothing in Go references it.
+		names = append(names, "wasm_export_thread_run")
+	}
+	if d.ctxt.HeadType == objabi.Hcosmo && d.ctxt.Arch.Family == sys.AMD64 {
+		// The Windows NT boot stub and its PE import structures are
+		// referenced only by the APE PE header that convertToAPE writes
+		// after the link, not by any relocation, so they need explicit
+		// roots (ape.go's apePrepareNTBoot looks all three up by name).
+		names = append(names, "_rt0_cosmo_nt", "runtime.ntidata", "runtime.ntiat")
+	}
 	if d.ctxt.BuildMode == BuildModePlugin {
 		names = append(names, objabi.PathToPrefix(*flagPluginPath)+"..inittask", objabi.PathToPrefix(*flagPluginPath)+".main", "go:plugin.tabs")
 
@@ -545,30 +558,7 @@ func (d *deadcodePass) decodetypeMethods(ldr *loader.Loader, arch *sys.Arch, sym
 	if !decodetypeHasUncommon(arch, p) {
 		panic(fmt.Sprintf("no methods on %q", ldr.SymName(symIdx)))
 	}
-	off := commonsize(arch) // reflect.rtype
-	switch decodetypeKind(arch, p) {
-	case abi.Struct: // reflect.structType
-		off += 4 * arch.PtrSize
-	case abi.Pointer: // reflect.ptrType
-		off += arch.PtrSize
-	case abi.Func: // reflect.funcType
-		off += arch.PtrSize // 4 bytes, pointer aligned
-	case abi.Slice: // reflect.sliceType
-		off += arch.PtrSize
-	case abi.Array: // reflect.arrayType
-		off += 3 * arch.PtrSize
-	case abi.Chan: // reflect.chanType
-		off += 2 * arch.PtrSize
-	case abi.Map:
-		off += 7*arch.PtrSize + 4 // internal/abi.MapType
-		if arch.PtrSize == 8 {
-			off += 4 // padding for final uint32 field (Flags).
-		}
-	case abi.Interface: // reflect.interfaceType
-		off += 3 * arch.PtrSize
-	default:
-		// just Sizeof(rtype)
-	}
+	off := abi.RTypeSize(decodetypeKind(arch, p), arch.PtrSize)
 
 	mcount := int(decodeInuxi(arch, p[off+4:], 2))
 	moff := int(decodeInuxi(arch, p[off+4+2+2:], 4))

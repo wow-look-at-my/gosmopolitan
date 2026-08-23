@@ -37,7 +37,7 @@
 // For arm64, the syscall number goes in R8, arguments in R0-R5.
 // On Darwin ARM64, raw syscalls crash with SIGSYS - we must route
 // through syslib functions instead.
-TEXT ·Syscall6(SB),NOSPLIT,$0-80
+TEXT ·Syscall6(SB),NOSPLIT,$88-80
 	CHECK_DARWIN(syscall6_darwin)
 
 	// Linux path: direct syscall (unchanged)
@@ -105,7 +105,33 @@ syscall6_darwin:
 	CMPW	$SYS_pselect6, R8
 	BEQ	darwin_pselect
 
-	// Unknown syscall - return ENOSYS
+	// Not one of the assembly fast paths: call the Go slow path, which
+	// emulates more syscalls with libc functions resolved via the
+	// Syslib's dlsym. See syscall_cosmo_arm64.go.
+	//
+	// This must be a real CALL with outgoing arguments in this frame.
+	// A tail JMP is NOT safe here: this function contains BL sites, so
+	// the assembler gave it a stack frame, and JMP does not pop that
+	// frame - the target would see every FP offset shifted by 16 and
+	// the caller's stack would be corrupted on return (SIGBUS on
+	// macOS). R0-R5 already hold a1..a6, R8 holds num.
+	MOVD	R8, 8(RSP)
+	MOVD	R0, 16(RSP)
+	MOVD	R1, 24(RSP)
+	MOVD	R2, 32(RSP)
+	MOVD	R3, 40(RSP)
+	MOVD	R4, 48(RSP)
+	MOVD	R5, 56(RSP)
+	CALL	·syscall6SlowDarwin(SB)
+	MOVD	64(RSP), R0
+	MOVD	72(RSP), R1
+	MOVD	80(RSP), R2
+	MOVD	R0, r1+56(FP)
+	MOVD	R1, r2+64(FP)
+	MOVD	R2, errno+72(FP)
+	RET
+
+	// No Syslib, or the required Syslib entry is missing - return ENOSYS
 darwin_enosys:
 	MOVD	$-1, R0
 	MOVD	R0, r1+56(FP)
@@ -125,8 +151,24 @@ darwin_close:
 	MOVD	232(R10), R12		// syslib.close
 	B	darwin_call
 darwin_openat:
+	// Syslib openat is Apple's real openat: translate the Linux
+	// AT_FDCWD sentinel in the dirfd (Linux -100 -> Apple -2) and the
+	// Linux O_* flag bits (shared helper; see its table in
+	// runtime/sys_cosmo_arm64.s). Without this, os.Create's
+	// O_CREAT (Linux 0x40) arrived as Apple O_SHLOCK and no file was
+	// ever created.
+	MOVW	R0, R9
+	CMNW	$100, R9
+	BNE	darwin_openat_dirfd_done
+	MOVD	$-2, R0			// Apple AT_FDCWD
+darwin_openat_dirfd_done:
+	BL	runtime·cosmo_xlat_oflags_r2(SB)
 	MOVD	248(R10), R12		// syslib.openat
-	B	darwin_call
+	// openat(int, const char *, int, ...) is VARIADIC: the mode is the
+	// variadic argument, and arm64-apple passes those on the stack. Left
+	// in R3 it is never read, so an O_CREAT open takes its permission
+	// bits from stack garbage.
+	B	darwin_call_v3
 darwin_mmap:
 	// mmap needs flag translation: Linux MAP_ANONYMOUS (0x20) -> macOS MAP_ANON (0x1000)
 	// R3 = flags argument
@@ -151,6 +193,15 @@ darwin_nanosleep:
 	MOVD	32(R10), R12		// syslib.nanosleep
 	B	darwin_call
 darwin_clock_gettime:
+	// Translate the Linux clockid in a1 to Apple's numbering:
+	// CLOCK_REALTIME is 0 on both; Linux CLOCK_MONOTONIC (1) is Apple
+	// CLOCK_MONOTONIC (6); Linux and Apple CLOCK_MONOTONIC_RAW agree (4).
+	// Other clockids pass through and may fail with EINVAL, which is
+	// more honest than silently reading the wrong clock.
+	CMP	$1, R0
+	BNE	darwin_clock_gettime_xlated
+	MOVD	$6, R0			// Apple CLOCK_MONOTONIC
+darwin_clock_gettime_xlated:
 	MOVD	24(R10), R12		// syslib.clock_gettime
 	B	darwin_call
 darwin_sigaction:
@@ -163,18 +214,35 @@ darwin_pselect:
 	MOVD	280(R10), R12		// syslib.pselect
 	B	darwin_call
 
+darwin_call_v3:
+	// Call a VARIADIC libc function with three fixed arguments (R0-R2)
+	// and one variadic argument (R3). arm64-apple passes variadic
+	// arguments on the stack even when argument registers are free, so
+	// R3 is stored at the call frame's stack top instead. Falls into the
+	// shared return handling below.
+	CBZ	R12, darwin_enosys	// Function not in syslib
+	SUB	$16, RSP		// Align stack for C ABI
+	MOVD	R3, (RSP)		// variadic arg -> STACK
+	BL	(R12)
+	ADD	$16, RSP
+	B	darwin_call_ret
+
 darwin_call:
 	CBZ	R12, darwin_enosys	// Function not in syslib
 	SUB	$16, RSP		// Align stack for C ABI
 	BL	(R12)
 	ADD	$16, RSP
 
+darwin_call_ret:
 	// Handle return value: negative = -errno, non-negative = success
 	CMN	$4095, R0
 	BCC	darwin_success
 
-	// Error case: R0 contains -errno
+	// Error case: R0 contains -errno with an APPLE errno number
+	// (Syslib functions run real Apple libc calls). Translate to the
+	// Linux errno Go expects. Shared helper in runtime/sys_cosmo_arm64.s.
 	NEG	R0, R0			// Make errno positive
+	BL	runtime·cosmo_xlat_errno_r0(SB)
 	MOVD	$-1, R1
 	MOVD	R1, r1+56(FP)
 	MOVD	ZR, r2+64(FP)
@@ -185,4 +253,49 @@ darwin_success:
 	MOVD	R0, r1+56(FP)
 	MOVD	R1, r2+64(FP)
 	MOVD	ZR, errno+72(FP)
+	RET
+
+// func darwinLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+// Tail jump to the runtime's generic C-ABI call trampoline (identical
+// signature and frame layout).
+TEXT ·darwinLibcCall6(SB),NOSPLIT,$0-64
+	JMP	runtime·cosmoLibcCall6(SB)
+
+// func darwinLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+// Tail jump to the runtime's variadic trampoline, which puts v1 on the
+// stack as arm64-apple requires for variadic arguments. Every call to a
+// variadic libc function (fcntl, open with a mode, ioctl) must come
+// through here rather than darwinLibcCall6.
+TEXT ·darwinLibcCallVariadic1(SB),NOSPLIT,$0-40
+	JMP	runtime·cosmoLibcCallVariadic1(SB)
+
+// func xlatErrnoDarwin(errno uintptr) uintptr
+// FP-args wrapper around the register-based shared translation helper so
+// the Apple->Linux errno table has a single definition (in the runtime).
+TEXT ·xlatErrnoDarwin(SB),NOSPLIT,$0-16
+	MOVD	errno+0(FP), R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+8(FP)
+	RET
+
+// func darwinErrno() uintptr
+// Fetches the calling thread's errno via Apple's __error() and
+// translates it to Linux numbering. Returns EIO (5) if __error is
+// unavailable (cause unknowable). Kept in assembly with a 16-byte frame
+// because it sits on the deepest nosplit chains of the darwin syscall
+// emulation.
+TEXT ·darwinErrno(SB),NOSPLIT,$0-8
+	MOVD	·darwinErrorFn(SB), R12
+	CBZ	R12, errno_tramp_unknown
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	CBZ	R0, errno_tramp_unknown
+	MOVW	(R0), R0		// *(int *)__error()
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+0(FP)
+	RET
+errno_tramp_unknown:
+	MOVD	$5, R0			// Linux EIO
+	MOVD	R0, ret+0(FP)
 	RET

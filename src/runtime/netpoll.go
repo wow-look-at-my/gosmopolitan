@@ -207,6 +207,14 @@ var (
 	netpollWaiters atomic.Uint32
 )
 
+// netpollLevelTriggered is set during netpollinit by a poller whose
+// readiness notifications are level-triggered, making pollWait arm the
+// awaited direction first (see the GOOS list in poll_runtime_pollWait).
+// It exists for GOOS=cosmo, which picks its poller at run time:
+// edge-triggered epoll on Linux hosts, level-triggered poll(2) on macOS
+// hosts. Other GOOSes never set it.
+var netpollLevelTriggered bool
+
 // netpollWaiters is accessed in tests
 //go:linkname netpollWaiters
 
@@ -229,6 +237,18 @@ func netpollGenericInit() {
 }
 
 func netpollinited() bool {
+	if GOOS == "js" && wasmThreadsEnabled {
+		// GOWASM=threads: there is nothing to poll on js (see
+		// netpoll_fake.go), and the fake netpoll's instant return would
+		// make findRunnable's poller path spin: an idle M would loop
+		// netpoll -> pidleget -> retry at full speed until the next
+		// timer fires. Report the poller as uninitialized so idle Ms
+		// park instead; timers are fired by the M owning the P, by
+		// stealWork's timer checks, and (for idle Ps) by the main M's
+		// JavaScript timeout backstop (see beforeIdle in
+		// lock_jsthreads.go).
+		return false
+	}
 	return netpollInited.Load() != 0
 }
 
@@ -344,8 +364,10 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	if errcode != pollNoError {
 		return errcode
 	}
-	// As for now only Solaris, illumos, AIX and wasip1 use level-triggered IO.
-	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" || GOOS == "wasip1" {
+	// As for now only Solaris, illumos, AIX and wasip1 use level-triggered
+	// IO unconditionally; cosmo does when running on a macOS host
+	// (netpollLevelTriggered, set by its runtime poller selection).
+	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" || GOOS == "wasip1" || netpollLevelTriggered {
 		netpollarm(pd, mode)
 	}
 	for !netpollblock(pd, int32(mode), false) {

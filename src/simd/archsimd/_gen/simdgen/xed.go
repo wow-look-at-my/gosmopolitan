@@ -5,7 +5,6 @@
 package main
 
 import (
-	"cmp"
 	"fmt"
 	"log"
 	"maps"
@@ -40,6 +39,21 @@ const (
 )
 
 var operandRemarks int
+
+var skipMemOpsInstrs = map[string]bool{
+	// The SHA instructions has confusing semantics which we are too complicated
+	// to support.
+	"SHA1MSG1":    true,
+	"SHA1MSG2":    true,
+	"SHA1RNDS4":   true,
+	"SHA1NEXTE":   true,
+	"SHA256MSG1":  true,
+	"SHA256MSG2":  true,
+	"SHA256RNDS2": true,
+	// We don't support 3 input instructions with a memory operand (this appears
+	// to be the only one).
+	"VPBLENDVB": true,
+}
 
 // TODO: Doc. Returns Values with Def domains.
 func loadXED(xedPath string) []*unify.Value {
@@ -78,7 +92,8 @@ func loadXED(xedPath string) []*unify.Value {
 		switch {
 		case inst.RealOpcode == "N":
 			return // Skip unstable instructions
-		case !(strings.HasPrefix(inst.Extension, "AVX") || strings.HasPrefix(inst.Extension, "SHA")):
+		case !(strings.HasPrefix(inst.Extension, "AVX") || strings.HasPrefix(inst.Extension, "SHA") ||
+			inst.Extension == "FMA" || inst.Extension == "VAES"):
 			// We're only interested in AVX and SHA instructions.
 			return
 		}
@@ -96,15 +111,15 @@ func loadXED(xedPath string) []*unify.Value {
 			return
 		}
 		var data map[string][]opData
+		opcode := inst.Opcode()
 		mem := checkMem(ops)
-		if mem == "vbcst" {
+		if mem == "hasMem" && !skipMemOpsInstrs[opcode] {
 			// A pure vreg variant might exist, wait for later to see if we can
 			// merge them
 			data = memOps
 		} else {
 			data = otherOps
 		}
-		opcode := inst.Opcode()
 		if _, ok := data[opcode]; !ok {
 			s := make([]opData, 1)
 			s[0] = opData{inst, ops, mem}
@@ -121,7 +136,7 @@ func loadXED(xedPath string) []*unify.Value {
 				// Checking if there is a vbcst variant of this operation exist
 				// First check the opcode
 				// Keep this logic in sync with [decodeOperands]
-				if ms, ok := memOps[opcode]; ok {
+				if ms, ok := memOps[opcode]; ok && !strings.HasPrefix(opcode, "VMOV") {
 					feat1, ok1 := decodeCPUFeature(o.inst)
 					// Then check if there exist such an operation that for all vreg
 					// shapes they are the same at the same index
@@ -155,8 +170,8 @@ func loadXED(xedPath string) []*unify.Value {
 								} else {
 									_, ok3 := o.ops[j].(operandVReg)
 									_, ok4 := m.ops[j].(operandMem)
-									// The only difference must be the vreg and mem, no other cases.
-									if !ok3 || !ok4 {
+									// The only difference must be the vreg and mem, and the operand must be a read operand.
+									if !ok3 || !ok4 || !o.ops[j].common().action.r {
 										// A mismatch, skip this memOp
 										continue outer
 									}
@@ -167,7 +182,7 @@ func loadXED(xedPath string) []*unify.Value {
 							feat1Match = feat1
 							feat2Match = feat2
 							if featMismatchCnt > 1 {
-								panic("multiple feature mismatch vbcst memops detected, simdgen failed to distinguish")
+								panic(fmt.Sprintf("multiple feature mismatch vbcst memops detected for %s, simdgen failed to distinguish", opcode))
 							}
 							if !featMismatch {
 								// Mismatch feat is ok but should prioritize matching cases.
@@ -210,16 +225,9 @@ func loadXED(xedPath string) []*unify.Value {
 			}
 			log.Printf("%d unhandled CPU features for %d instructions (use -v for details)", len(unknownFeatures), nInst)
 		} else {
-			keys := slices.SortedFunc(maps.Keys(unknownFeatures), func(a, b cpuFeatureKey) int {
-				return cmp.Or(cmp.Compare(a.Extension, b.Extension),
-					cmp.Compare(a.ISASet, b.ISASet))
-			})
+			keys := slices.Sorted(maps.Keys(unknownFeatures))
 			for _, key := range keys {
-				if key.ISASet == "" || key.ISASet == key.Extension {
-					log.Printf("unhandled Extension %s", key.Extension)
-				} else {
-					log.Printf("unhandled Extension %s and ISASet %s", key.Extension, key.ISASet)
-				}
+				log.Printf("unhandled ISASet %s", key)
 				log.Printf("  opcodes: %s", slices.Sorted(maps.Keys(unknownFeatures[key])))
 			}
 		}
@@ -462,9 +470,28 @@ func decodeOperand(db *xeddata.Database, operand string) (operand, error) {
 				vbcst:         true,
 				unknown:       false,
 			}, nil
+		} else {
+			baseType, elemBits, ok := decodeType(op)
+			if !ok {
+				return nil, fmt.Errorf("failed to decode memory width %q", operand)
+			}
+			sizeStr := db.WidthSize(op.Width, xeddata.OpSize64)
+			bytes, err := strconv.Atoi(sizeStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode memory width %q: %s", operand, err)
+			}
+			if bytes > 0 {
+				memBits := bytes * 8
+				shape := vecShape{elemBits: elemBits, bits: memBits}
+				return operandMem{
+					operandCommon: common,
+					vecShape:      shape,
+					elemBaseType:  baseType,
+					vbcst:         false,
+					unknown:       false,
+				}, nil
+			}
 		}
-		// TODO: parse op.Width better to handle all cases
-		// Right now this will at least miss VPBROADCAST.
 		return operandMem{
 			operandCommon: common,
 			unknown:       true,
@@ -640,7 +667,7 @@ func inferMaskSizes(ops []operand) error {
 	return nil
 }
 
-// addOperandstoDef adds "in", "inVariant", and "out" to an instruction Def.
+// addOperandsToDef adds "in", "inVariant", and "out" to an instruction Def.
 //
 // Optional mask input operands are added to the inVariant field if
 // variant&instVariantMasked, and omitted otherwise.
@@ -704,11 +731,10 @@ func checkMem(ops []operand) string {
 		} else if memCnt > 1 {
 			memState = "tooManyMem"
 		} else {
-			// We only have vbcst case as of now.
 			// This shape has an indication that [bits] fields has two possible value:
 			// 1. The element broadcast width, which is its peer vreg operand's [elemBits] (default val in the parsed XED data)
 			// 2. The full vector width, which is its peer vreg operand's [bits] (godefs should be aware of this)
-			memState = "vbcst"
+			memState = "hasMem"
 		}
 	}
 	return memState
@@ -763,16 +789,24 @@ func instToUVal1(inst *xeddata.Inst, ops []operand, feature string, variant inst
 // decodeCPUFeature returns the CPU feature name required by inst. These match
 // the names of the "Has*" feature checks in the simd package.
 func decodeCPUFeature(inst *xeddata.Inst) (string, bool) {
-	key := cpuFeatureKey{
-		Extension: inst.Extension,
-		ISASet:    isaSetStrip.ReplaceAllLiteralString(inst.ISASet, ""),
+	isaSet := inst.ISASet
+	if isaSet == "" {
+		// Older instructions don't have an ISA set. Use their "extension"
+		// instead.
+		isaSet = inst.Extension
 	}
-	feat, ok := cpuFeatureMap[key]
+	// We require AVX512VL to use AVX512 at all, so strip off the vector length
+	// suffixes.
+	if strings.HasPrefix(isaSet, "AVX512") {
+		isaSet = isaSetVL.ReplaceAllLiteralString(isaSet, "")
+	}
+
+	feat, ok := cpuFeatureMap[isaSet]
 	if !ok {
-		imap := unknownFeatures[key]
+		imap := unknownFeatures[isaSet]
 		if imap == nil {
 			imap = make(map[string]struct{})
-			unknownFeatures[key] = imap
+			unknownFeatures[isaSet] = imap
 		}
 		imap[inst.Opcode()] = struct{}{}
 		return "", false
@@ -783,45 +817,78 @@ func decodeCPUFeature(inst *xeddata.Inst) (string, bool) {
 	return feat, true
 }
 
-var isaSetStrip = regexp.MustCompile("_(128N?|256N?|512)$")
+var isaSetVL = regexp.MustCompile("_(128N?|256N?|512)$")
 
-type cpuFeatureKey struct {
-	Extension, ISASet string
-}
-
-// cpuFeatureMap maps from XED's "EXTENSION" and "ISA_SET" to a CPU feature name
-// that can be used in the SIMD API.
-var cpuFeatureMap = map[cpuFeatureKey]string{
-	{"SHA", "SHA"}: "SHA",
-
-	{"AVX", ""}:              "AVX",
-	{"AVX_VNNI", "AVX_VNNI"}: "AVXVNNI",
-	{"AVX2", ""}:             "AVX2",
-	{"AVXAES", ""}:           "AVX, AES",
+// cpuFeatureMap maps from XED's "ISA_SET" (or "EXTENSION") to a CPU feature
+// name to expose in the SIMD feature check API.
+//
+// See XED's datafiles/*/cpuid.xed.txt for how ISA set names map to CPUID flags.
+var cpuFeatureMap = map[string]string{
+	"AVX":      "AVX",
+	"AVX_VNNI": "AVXVNNI",
+	"AVX2":     "AVX2",
+	"AVXAES":   "AVXAES",
+	"SHA":      "SHA",
+	"FMA":      "FMA",
+	"VAES":     "VAES",
 
 	// AVX-512 foundational features. We combine all of these into one "AVX512" feature.
-	{"AVX512EVEX", "AVX512F"}:  "AVX512",
-	{"AVX512EVEX", "AVX512CD"}: "AVX512",
-	{"AVX512EVEX", "AVX512BW"}: "AVX512",
-	{"AVX512EVEX", "AVX512DQ"}: "AVX512",
-	// AVX512VL doesn't appear explicitly in the ISASet. I guess it's implied by
-	// the vector length suffix.
+	"AVX512F":  "AVX512",
+	"AVX512BW": "AVX512",
+	"AVX512CD": "AVX512",
+	"AVX512DQ": "AVX512",
+	// AVX512VL doesn't appear as its own ISASet; instead, the CPUID flag is
+	// required by the *_128 and *_256 ISASets. We fold it into "AVX512" anyway.
 
 	// AVX-512 extension features
-	{"AVX512EVEX", "AVX512_BITALG"}:     "AVX512BITALG",
-	{"AVX512EVEX", "AVX512_GFNI"}:       "AVX512GFNI",
-	{"AVX512EVEX", "AVX512_VBMI2"}:      "AVX512VBMI2",
-	{"AVX512EVEX", "AVX512_VBMI"}:       "AVX512VBMI",
-	{"AVX512EVEX", "AVX512_VNNI"}:       "AVX512VNNI",
-	{"AVX512EVEX", "AVX512_VPOPCNTDQ"}:  "AVX512VPOPCNTDQ",
-	{"AVX512EVEX", "AVX512_VAES"}:       "AVX512VAES",
-	{"AVX512EVEX", "AVX512_VPCLMULQDQ"}: "AVX512VPCLMULQDQ",
+	"AVX512_BITALG":     "AVX512BITALG",
+	"AVX512_GFNI":       "AVX512GFNI",
+	"AVX512_VBMI":       "AVX512VBMI",
+	"AVX512_VBMI2":      "AVX512VBMI2",
+	"AVX512_VNNI":       "AVX512VNNI",
+	"AVX512_VPOPCNTDQ":  "AVX512VPOPCNTDQ",
+	"AVX512_VAES":       "AVX512VAES",
+	"AVX512_VPCLMULQDQ": "AVX512VPCLMULQDQ",
 
 	// AVX 10.2 (not yet supported)
-	{"AVX512EVEX", "AVX10_2_RC"}: "ignore",
+	"AVX10_2_RC": "ignore",
 }
 
-var unknownFeatures = map[cpuFeatureKey]map[string]struct{}{}
+func init() {
+	// TODO: In general, Intel doesn't make any guarantees about what flags are
+	// set, so this means our feature checks need to ensure these, just to be
+	// sure.
+	var features = map[string]featureInfo{
+		"AVX2":   {Implies: []string{"AVX"}},
+		"AVX512": {Implies: []string{"AVX2"}},
+
+		"AVXAES": {Virtual: true, Implies: []string{"AVX", "AES"}},
+		"FMA":    {Implies: []string{"AVX"}},
+		"VAES":   {Implies: []string{"AVX"}},
+
+		// AVX-512 subfeatures.
+		"AVX512BITALG":    {Implies: []string{"AVX512"}},
+		"AVX512GFNI":      {Implies: []string{"AVX512"}},
+		"AVX512VBMI":      {Implies: []string{"AVX512"}},
+		"AVX512VBMI2":     {Implies: []string{"AVX512"}},
+		"AVX512VNNI":      {Implies: []string{"AVX512"}},
+		"AVX512VPOPCNTDQ": {Implies: []string{"AVX512"}},
+		"AVX512VAES":      {Implies: []string{"AVX512"}},
+
+		// AVX-VNNI and AVX-IFMA are "backports" of the AVX512-VNNI/IFMA
+		// instructions to VEX encoding, limited to 256 bit vectors. They're
+		// intended for lower end CPUs that want to support VNNI/IFMA without
+		// supporting AVX-512. As such, they're built on AVX2's VEX encoding.
+		"AVXVNNI": {Implies: []string{"AVX2"}},
+		"AVXIFMA": {Implies: []string{"AVX2"}},
+	}
+	registerFeatureInfo("amd64", goarchFeatures{
+		featureVar: "X86",
+		features:   features,
+	})
+}
+
+var unknownFeatures = map[string]map[string]struct{}{}
 
 // hasOptionalMask returns whether there is an optional mask operand in ops.
 func hasOptionalMask(ops []operand) bool {

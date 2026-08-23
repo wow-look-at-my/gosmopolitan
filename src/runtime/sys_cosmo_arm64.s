@@ -18,6 +18,11 @@
 
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
+// Apple clockids differ from Linux. On Apple: CLOCK_REALTIME is 0 (same as
+// Linux), CLOCK_MONOTONIC is 6, CLOCK_MONOTONIC_RAW is 4, CLOCK_UPTIME_RAW
+// is 8. Passing the Linux value 1 to Apple clock_gettime asks for an
+// undefined clockid and fails with EINVAL.
+#define CLOCK_MONOTONIC_APPLE 6
 
 // Host OS indicators (must match os_cosmo_arm64.go)
 #define HOSTXNU 8
@@ -115,57 +120,141 @@ TEXT runtime·libcCall(SB),NOSPLIT,$0-24
 	MOVD	R0, ret+16(FP)
 	RET
 
-// dispatch_semaphore_create(value int64) dispatch_semaphore_t
-// Syslib offset 112
-TEXT runtime·dispatch_semaphore_create_trampoline(SB),NOSPLIT,$0-16
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_create_fail
-	MOVD	112(R9), R12
-	CBZ	R12, dsema_create_fail
-	MOVD	value+0(FP), R0
-	SUB	$16, RSP
+// func cosmoLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
+// C-ABI call to a VARIADIC libc function with two fixed arguments and
+// one variadic argument.
+//
+// arm64-apple deliberately diverges from AAPCS64 here: a variadic
+// argument is passed on the STACK, never in a register, even when
+// argument registers are still free. Passing it in R2 like a fixed
+// argument leaves the callee reading uninitialized stack memory, and
+// since the value it wants is usually a flag word, the call then
+// succeeds while doing something other than what was asked.
+//
+// That is not hypothetical. fcntl(2) is variadic, so every
+// fcntl(fd, F_SETFD, FD_CLOEXEC) issued through the fixed-argument
+// trampoline set close-on-exec from whatever happened to be on the
+// stack: descriptors came back without FD_CLOEXEC perhaps a third of
+// the time, which left os/exec's child status pipe open across exec and
+// deadlocked any parent whose child did not exit promptly. The same
+// defect made fcntl(F_DUPFD_CLOEXEC) fail with EINVAL. See DEBUGGING.md
+// "2026-07-26: the macOS fork/exec wedge".
+TEXT runtime·cosmoLibcCallVariadic1(SB),NOSPLIT,$0-40
+	MOVD	fn+0(FP), R12
+	MOVD	a1+8(FP), R0		// fixed arg 1 -> register
+	MOVD	a2+16(FP), R1		// fixed arg 2 -> register
+	MOVD	v1+24(FP), R3
+	SUB	$16, RSP		// align stack for C ABI
+	MOVD	R3, (RSP)		// variadic arg -> STACK, per arm64-apple
 	BL	(R12)
 	ADD	$16, RSP
-	MOVD	R0, ret+8(FP)
-	RET
-dsema_create_fail:
-	MOVD	$0, ret+8(FP)
+	MOVD	R0, ret+32(FP)
 	RET
 
-// dispatch_semaphore_signal(sema uintptr) int64
-// Syslib offset 120
-TEXT runtime·dispatch_semaphore_signal_trampoline(SB),NOSPLIT,$0-16
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_signal_fail
-	MOVD	120(R9), R12
-	CBZ	R12, dsema_signal_fail
-	MOVD	sema+0(FP), R0
-	SUB	$16, RSP
+// func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
+// Generic C-ABI call through a Syslib or dlsym-resolved function pointer
+// with up to six integer arguments. C functions taking fewer arguments
+// simply ignore the extra registers, so one trampoline serves them all.
+// NOT usable for variadic callees on arm64-apple - see
+// cosmoLibcCallVariadic1 above.
+TEXT runtime·cosmoLibcCall6(SB),NOSPLIT,$0-64
+	MOVD	fn+0(FP), R12
+	MOVD	a1+8(FP), R0
+	MOVD	a2+16(FP), R1
+	MOVD	a3+24(FP), R2
+	MOVD	a4+32(FP), R3
+	MOVD	a5+40(FP), R4
+	MOVD	a6+48(FP), R5
+	SUB	$16, RSP		// keep 16-byte alignment for C ABI
 	BL	(R12)
 	ADD	$16, RSP
-	MOVD	R0, ret+8(FP)
-	RET
-dsema_signal_fail:
-	MOVD	$0, ret+8(FP)
+	MOVD	R0, ret+56(FP)
 	RET
 
-// dispatch_semaphore_wait(sema uintptr, timeout uint64) int64
-// Syslib offset 128
-TEXT runtime·dispatch_semaphore_wait_trampoline(SB),NOSPLIT,$0-24
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, dsema_wait_fail
-	MOVD	128(R9), R12
-	CBZ	R12, dsema_wait_fail
-	MOVD	sema+0(FP), R0
-	MOVD	timeout+8(FP), R1
-	SUB	$16, RSP
+// Trampolines for the dlsym'd Apple pthread functions that back M
+// parking on XNU hosts (os_cosmo_arm64_sema.go). They follow upstream
+// sys_darwin_arm64.s exactly: asmcgocall has already switched to the
+// g0 stack and passes a pointer to the Go wrapper's argument block in
+// R0; the trampoline unpacks it into C argument registers and calls
+// the resolved function pointer. The callee address comes from a
+// runtime·cosmoPthread*Fn variable instead of upstream's dyld-bound
+// symbol; if resolution failed the trampoline returns Apple's ENOSYS
+// (78) - semacreate throws long before that can happen, this is
+// belt and braces against jumping to address zero.
+
+TEXT runtime·cosmo_pthread_mutex_init_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexInitFn(SB), R12
+	CBZ	R12, mutex_init_enosys
+	MOVD	8(R0), R1	// arg 2 attr
+	MOVD	0(R0), R0	// arg 1 mutex
 	BL	(R12)
-	ADD	$16, RSP
-	MOVD	R0, ret+16(FP)
 	RET
-dsema_wait_fail:
-	MOVD	$-1, R0
-	MOVD	R0, ret+16(FP)
+mutex_init_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_mutex_lock_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexLockFn(SB), R12
+	CBZ	R12, mutex_lock_enosys
+	MOVD	0(R0), R0	// arg 1 mutex
+	BL	(R12)
+	RET
+mutex_lock_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_mutex_unlock_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadMutexUnlockFn(SB), R12
+	CBZ	R12, mutex_unlock_enosys
+	MOVD	0(R0), R0	// arg 1 mutex
+	BL	(R12)
+	RET
+mutex_unlock_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_init_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondInitFn(SB), R12
+	CBZ	R12, cond_init_enosys
+	MOVD	8(R0), R1	// arg 2 attr
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_init_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_wait_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondWaitFn(SB), R12
+	CBZ	R12, cond_wait_enosys
+	MOVD	8(R0), R1	// arg 2 mutex
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_wait_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_timedwait_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondTimedwaitFn(SB), R12
+	CBZ	R12, cond_timedwait_enosys
+	MOVD	8(R0), R1	// arg 2 mutex
+	MOVD	16(R0), R2	// arg 3 timeout
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_timedwait_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
+	RET
+
+TEXT runtime·cosmo_pthread_cond_signal_trampoline(SB),NOSPLIT,$0
+	MOVD	runtime·cosmoPthreadCondSignalFn(SB), R12
+	CBZ	R12, cond_signal_enosys
+	MOVD	0(R0), R0	// arg 1 cond
+	BL	(R12)
+	RET
+cond_signal_enosys:
+	MOVW	$78, R0		// Apple ENOSYS
 	RET
 
 // Helper macro: check if we're on macOS and jump to label if so
@@ -230,12 +319,15 @@ open_done:
 	MOVW	R0, ret+16(FP)
 	RET
 open_darwin:
-	// macOS path: call Syslib openat
+	// macOS path: call Syslib openat, which is Apple's real openat.
+	// Apple's AT_FDCWD is -2 (Linux uses -100), and the O_* flag bits
+	// differ, so both must be translated before the call.
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	248(R9), R12
-	MOVD	$AT_FDCWD, R0
+	MOVD	$-2, R0			// Apple AT_FDCWD
 	MOVD	name+0(FP), R1
 	MOVW	mode+8(FP), R2
+	BL	runtime·cosmo_xlat_oflags_r2(SB)
 	MOVW	perm+12(FP), R3
 	SUB	$16, RSP
 	BL	(R12)
@@ -292,6 +384,15 @@ write1_darwin:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	// The Syslib write is sysret-wrapped: failure comes back as -errno
+	// with APPLE numbering, but callers (the darwin netpoller's pipe
+	// wakeups) compare against LINUX errnos (-EINTR, -EAGAIN).
+	CMN	$4095, R0
+	BCC	write1_darwin_done
+	NEG	R0, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	NEG	R0, R0
+write1_darwin_done:
 	MOVW	R0, ret+24(FP)
 	RET
 
@@ -314,29 +415,51 @@ read_darwin:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	// Translate a -errno failure from Apple to Linux numbering (see
+	// write1_darwin).
+	CMN	$4095, R0
+	BCC	read_darwin_done
+	NEG	R0, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	NEG	R0, R0
+read_darwin_done:
 	MOVW	R0, ret+24(FP)
 	RET
 
-// func pipe2(flags int32) (r, w int32, errno int32)
-TEXT runtime·pipe2(SB),NOSPLIT,$16-20
-	CHECK_DARWIN(pipe2_darwin)
-	// Linux path
+// func pipe2Linux(flags int32) (r, w int32, errno int32)
+// Linux hosts only; the darwin path lives in Go (runtime.pipe2 in
+// os_cosmo_arm64.go), which emulates the flags with fcntl.
+TEXT runtime·pipe2Linux(SB),NOSPLIT,$16-20
 	MOVD	$r+8(FP), R0
 	MOVW	flags+0(FP), R1
 	MOVW	$SYS_pipe2, R8
 	SVC
 	MOVW	R0, errno+16(FP)
 	RET
-pipe2_darwin:
-	// macOS pipe() doesn't support flags, but Syslib provides pipe()
-	// For now, ignore flags and use basic pipe
+
+// func cosmo_pipe_trampoline(fds *int32) int32
+// Calls the Syslib's pipe (offset 16, v1+). Returns 0 on success or a
+// NEGATIVE Linux errno (the Apple errno from the loader's sysret
+// wrapper is translated).
+TEXT runtime·cosmo_pipe_trampoline(SB),NOSPLIT,$0-12
 	MOVD	runtime·__syslib(SB), R9
+	CBZ	R9, pipe_tramp_enosys
 	MOVD	16(R9), R12
-	MOVD	$r+8(FP), R0	// pointer to int[2] for r,w
+	CBZ	R12, pipe_tramp_enosys
+	MOVD	fds+0(FP), R0
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
-	MOVW	R0, errno+16(FP)
+	CBZ	R0, pipe_tramp_done
+	NEG	R0, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	NEG	R0, R0
+pipe_tramp_done:
+	MOVW	R0, ret+8(FP)
+	RET
+pipe_tramp_enosys:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+8(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$24-4
@@ -398,9 +521,17 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	SVC
 	RET
 raise_darwin:
+	// The Syslib raise is Apple libc raise: translate the runtime's
+	// Linux signal number. Unmapped numbers become 0 (raise(0) is a
+	// no-op existence probe - better than delivering a random signal).
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	160(R9), R12
 	MOVW	sig+0(FP), R0
+	CMPW	$65, R0
+	BHS	raise_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+raise_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
@@ -417,10 +548,16 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	SVC
 	RET
 raiseproc_darwin:
-	// Use raise() which sends signal to current process
+	// Use raise() which sends signal to current process; translate the
+	// Linux signal number to Apple's (see raise_darwin).
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	160(R9), R12
 	MOVW	sig+0(FP), R0
+	CMPW	$65, R0
+	BHS	raiseproc_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+raiseproc_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
@@ -434,12 +571,25 @@ TEXT ·getpid(SB),NOSPLIT,$0-8
 	MOVD	R0, ret+0(FP)
 	RET
 getpid_darwin:
-	// macOS: use getpid from syslib (offset 112)
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	112(R9), R12
+	// macOS: the Syslib has no getpid entry, so osArchInit resolves the
+	// real Apple libc getpid via Syslib dlsym at startup. (This used to
+	// call Syslib offset 112, which is dispatch_semaphore_create: every
+	// call leaked a semaphore and returned the object pointer as the
+	// "pid".) The function pointer, not the value, is cached so that a
+	// fork()ed child still observes its own pid.
+	MOVD	runtime·cosmoDarwinGetpidFn(SB), R12
+	CBZ	R12, getpid_darwin_none
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
+	MOVD	R0, ret+0(FP)
+	RET
+getpid_darwin_none:
+	// dlsym unavailable (pre-v6 loader) or resolution failed. Return -1
+	// so the failure is visible instead of fabricating a plausible pid.
+	// The only runtime caller is signalM, whose darwin tgkill path
+	// ignores the pid and signals through pthread_kill.
+	MOVD	$-1, R0
 	MOVD	R0, ret+0(FP)
 	RET
 
@@ -452,18 +602,26 @@ TEXT ·tgkill(SB),NOSPLIT,$0-24
 	SVC
 	RET
 tgkill_darwin:
-	// macOS: use pthread_kill
+	// macOS: use pthread_kill. (signalM dispatches to darwinSignalM in
+	// Go before reaching this asm; the branch stays correct for any
+	// other caller.) Translate the Linux signal number to Apple's;
+	// unmapped numbers become 0 = existence probe.
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	88(R9), R12
 	MOVD	tid+8(FP), R0	// pthread_t
 	MOVD	sig+16(FP), R1	// signal
+	CMPW	$65, R1
+	BHS	tgkill_darwin_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R1), R1
+tgkill_darwin_call:
 	SUB	$16, RSP
 	BL	(R12)
 	ADD	$16, RSP
 	RET
 
-TEXT runtime·setitimer(SB),NOSPLIT,$0-24
-	CHECK_DARWIN(setitimer_darwin)
+TEXT runtime·setitimerLinux(SB),NOSPLIT,$0-24
+	CHECK_DARWIN(setitimerLinux_darwin)
 	// Linux path
 	MOVW	mode+0(FP), R0
 	MOVD	new+8(FP), R1
@@ -471,9 +629,15 @@ TEXT runtime·setitimer(SB),NOSPLIT,$0-24
 	MOVD	$SYS_setitimer, R8
 	SVC
 	RET
-setitimer_darwin:
-	// macOS: setitimer not in Syslib, would need to add
-	// For now, this is a stub - profiling timers won't work
+setitimerLinux_darwin:
+	// Unreachable: runtime.setitimer dispatches XNU hosts to
+	// darwinSetitimer (signal_cosmo_xnu.go), which translates the
+	// itimerval layout (Apple tv_usec is 32-bit) and calls Apple
+	// libc setitimer resolved via dlsym - a raw SVC here would
+	// SIGSYS anyway. Crash loudly if a new caller ever bypasses
+	// the dispatch.
+	MOVD	$0, R0
+	MOVD	R0, (R0)
 	RET
 
 TEXT runtime·mincore(SB),NOSPLIT,$0-28
@@ -589,11 +753,29 @@ nanotime_noswitch:
 	B	nanotime_finish
 
 nanotime_darwin:
-	// macOS path: call Syslib clock_gettime
+	// macOS path: call Syslib clock_gettime with the APPLE monotonic
+	// clockid. Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC
+	// semantics most closely: monotonic since boot and NTP-slewed (it
+	// pauses during deep sleep on macOS, which Linux's also may).
+	// Upstream darwin Go uses clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+	// via libc, but Syslib only exports clock_gettime.
+	// Zero the result slots first so that even a double failure below
+	// yields 0 rather than uninitialized stack memory.
+	MOVD	ZR, 0(RSP)
+	MOVD	ZR, 8(RSP)
 	MOVD	runtime·__syslib(SB), R9
 	MOVD	24(R9), R12
-	MOVW	$CLOCK_MONOTONIC, R0
+	MOVW	$CLOCK_MONOTONIC_APPLE, R0
 	MOVD	RSP, R1		// timespec pointer
+	BL	(R12)
+	CBZ	R0, nanotime_finish
+	// clock_gettime(CLOCK_MONOTONIC) failed (should not happen on any
+	// supported macOS). Fall back to CLOCK_REALTIME (0 on both Linux
+	// and Apple) rather than returning uninitialized stack values.
+	MOVD	runtime·__syslib(SB), R9
+	MOVD	24(R9), R12
+	MOVW	$CLOCK_REALTIME, R0
+	MOVD	RSP, R1
 	BL	(R12)
 
 nanotime_finish:
@@ -635,15 +817,13 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 rtsigprocmask_done:
 	RET
 rtsigprocmask_darwin:
-	// macOS: use pthread_sigmask
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	96(R9), R12
-	MOVW	how+0(FP), R0
-	MOVD	new+8(FP), R1
-	MOVD	old+16(FP), R2
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
+	// Unreachable: runtime.sigprocmask dispatches XNU hosts to
+	// darwinSigprocmask (signal_cosmo_xnu.go), which translates the
+	// `how` values, the sigset width AND the signal numbering that a
+	// raw pthread_sigmask call here would get wrong. Crash loudly if
+	// a new caller ever bypasses the dispatch.
+	MOVD	$0, R0
+	MOVD	R0, (R0)
 	RET
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
@@ -658,26 +838,54 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	MOVW	R0, ret+32(FP)
 	RET
 rt_sigaction_darwin:
-	// macOS: sigaction structure is different from Linux
-	// For now, return success without calling sigaction
-	// This means signal handling won't work properly, but allows basic execution
-	// TODO: Implement proper sigaction translation layer
-	MOVW	$0, ret+32(FP)
+	// Unreachable: sysSigaction dispatches XNU hosts to darwinSigaction
+	// (signal_cosmo_xnu.go), the Apple sigaction translation layer.
+	// Report ENOSYS (a caller would throw) instead of the old silent
+	// fake-success if a new path ever bypasses the dispatch.
+	MOVW	$-38, R0
+	MOVW	R0, ret+32(FP)
 	RET
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	MOVW	sig+8(FP), R0
+	CHECK_DARWIN(sigfwd_darwin)
+sigfwd_call:
 	MOVD	info+16(FP), R1
 	MOVD	ctx+24(FP), R2
 	MOVD	fn+0(FP), R11
 	BL	(R11)
 	RET
+sigfwd_darwin:
+	// A forwarded handler is foreign code expecting the host's ABI:
+	// info and ctx are already Apple-native (never translated), so
+	// hand it the APPLE signal number too. sig is the runtime's Linux
+	// number; unmapped numbers cannot get here (no handler could have
+	// been installed for them).
+	CMPW	$65, R0
+	BHS	sigfwd_call
+	MOVD	$runtime·cosmoSigL2ATab(SB), R9
+	MOVBU	(R9)(R0), R0
+	B	sigfwd_call
 
 // Called from c-abi, R0: sig, R1: info, R2: cxt
 TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME,$176
 	// Save callee-save registers in the case of signal forwarding.
 	SAVE_R19_TO_R28(8*4)
 	SAVE_F8_TO_F15(8*14)
+
+	// On XNU hosts the kernel delivered an APPLE signal number; the
+	// runtime thinks in Linux numbers everywhere (sigtable, sigsend,
+	// masks), so translate before any Go code sees it. info and ctx
+	// stay Apple-native: sigctxt's accessors are host-aware.
+	MOVW	runtime·__hostos(SB), R9
+	CMPW	$HOSTXNU, R9
+	BNE	sigtramp_signum_ok
+	CMPW	$32, R0
+	BHS	sigtramp_ignore		// out of table: no Linux meaning
+	MOVD	$runtime·cosmoSigA2LTab(SB), R9
+	MOVBU	(R9)(R0), R0
+	CBZW	R0, sigtramp_ignore	// SIGEMT/SIGINFO: no Linux number
+sigtramp_signum_ok:
 
 	// this might be called in external code context,
 	// where g is not set.
@@ -693,6 +901,7 @@ TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME,$176
 	MOVD	$runtime·sigtrampgo<ABIInternal>(SB), R3
 	BL	(R3)
 
+sigtramp_ignore:
 	// Restore callee-save registers.
 	RESTORE_R19_TO_R28(8*4)
 	RESTORE_F8_TO_F15(8*14)
@@ -803,10 +1012,13 @@ mmap_darwin_no_anon:
 	CMN	$4095, R6
 	BCC	mmap_darwin_ok
 
-	// Error case - return error
+	// Error case: syslib mmap returned -errno with an APPLE errno.
+	// Translate to the Linux value Go compares against.
 	NEG	R6, R6
+	MOVD	R6, R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
 	MOVD	$0, p+32(FP)
-	MOVD	R6, err+40(FP)
+	MOVD	R0, err+40(FP)
 	RET
 
 mmap_darwin_ok:
@@ -1035,9 +1247,11 @@ TEXT runtime·mstart_stub_cosmo(SB),NOSPLIT,$160
 
 	RET
 
-TEXT runtime·sigaltstack(SB),NOSPLIT,$0
-	CHECK_DARWIN(sigaltstack_darwin)
-	// Linux path
+// sigaltstackLinux is the Linux-host half of runtime.sigaltstack; the
+// darwin half is darwinSigaltstack in signal_cosmo_xnu.go (Apple's
+// stack_t layout and SS_DISABLE value differ, so the struct cannot be
+// passed through raw).
+TEXT runtime·sigaltstackLinux(SB),NOSPLIT,$0
 	MOVD	new+0(FP), R0
 	MOVD	old+8(FP), R1
 	MOVD	$SYS_sigaltstack, R8
@@ -1047,21 +1261,6 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$0
 	MOVD	$0, R0
 	MOVD	R0, (R0)	// crash
 sigaltstack_ok:
-	RET
-sigaltstack_darwin:
-	// macOS: use Syslib sigaltstack
-	MOVD	runtime·__syslib(SB), R9
-	CBZ	R9, sigaltstack_darwin_ok  // No syslib, skip
-	MOVD	296(R9), R12
-	CBZ	R12, sigaltstack_darwin_ok  // Function not available, skip
-	MOVD	new+0(FP), R0
-	MOVD	old+8(FP), R1
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
-	// Note: darwin sigaltstack returns 0 on success, -1 on error
-	// We treat non-zero as non-fatal here
-sigaltstack_darwin_ok:
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
@@ -1096,8 +1295,13 @@ sched_getaffinity_darwin:
 	RET
 
 // int access(const char *name, int mode)
+// Only reached from Android-specific runtime code today; on macOS raw
+// SVC is not an option and no Syslib equivalent is wired up, so fail
+// with ENOSYS explicitly rather than executing a roulette syscall
+// (XNU dispatches on whatever happens to be in x16).
 TEXT runtime·access(SB),NOSPLIT,$0-20
-	// Use faccessat on both platforms
+	CHECK_DARWIN(access_darwin)
+	// Use faccessat on Linux
 	MOVD	$AT_FDCWD, R0
 	MOVD	name+0(FP), R1
 	MOVW	mode+8(FP), R2
@@ -1105,9 +1309,15 @@ TEXT runtime·access(SB),NOSPLIT,$0-20
 	SVC
 	MOVW	R0, ret+16(FP)
 	RET
+access_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+16(FP)
+	RET
 
 // int connect(int fd, const struct sockaddr *addr, socklen_t len)
+// Android-only callers; explicit ENOSYS on macOS (see access above).
 TEXT runtime·connect(SB),NOSPLIT,$0-28
+	CHECK_DARWIN(connect_darwin)
 	MOVW	fd+0(FP), R0
 	MOVD	addr+8(FP), R1
 	MOVW	len+16(FP), R2
@@ -1115,9 +1325,15 @@ TEXT runtime·connect(SB),NOSPLIT,$0-28
 	SVC
 	MOVW	R0, ret+24(FP)
 	RET
+connect_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+24(FP)
+	RET
 
 // int socket(int domain, int typ, int prot)
+// Android-only callers; explicit ENOSYS on macOS (see access above).
 TEXT runtime·socket(SB),NOSPLIT,$0-20
+	CHECK_DARWIN(socket_darwin)
 	MOVW	domain+0(FP), R0
 	MOVW	typ+4(FP), R1
 	MOVW	prot+8(FP), R2
@@ -1125,16 +1341,153 @@ TEXT runtime·socket(SB),NOSPLIT,$0-20
 	SVC
 	MOVW	R0, ret+16(FP)
 	RET
+socket_darwin:
+	MOVW	$-38, R0	// -ENOSYS
+	MOVW	R0, ret+16(FP)
+	RET
 
 // func sbrk0() uintptr
 TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
+	// mallocinit calls this unconditionally. XNU has no brk; return 0
+	// ("not implemented", matching stubs_nonlinux.go's contract)
+	// instead of issuing a raw SVC whose result register is garbage.
+	CHECK_DARWIN(sbrk0_darwin)
 	// Implemented as brk(NULL).
 	MOVD	$0, R0
 	MOVD	$SYS_brk, R8
 	SVC
 	MOVD	R0, ret+0(FP)
 	RET
-
-// ARM64 doesn't use settls - TLS is set differently
-TEXT runtime·settls(SB),NOSPLIT,$0
+sbrk0_darwin:
+	MOVD	ZR, ret+0(FP)
 	RET
+
+// runtime·cosmo_xlat_oflags_r2 translates Linux open(2) flags in R2 into
+// Apple flags in R2. Leaf; clobbers only R9 and R11, preserves all other
+// registers, so it is BL-safe from any framed darwin openat path.
+//
+// Bit-by-bit mapping (Linux value as this port's syscall package defines
+// it in zerrors_cosmo_arm64.go, which follows the arm64 kernel's
+// asm-generic numbers -> Apple value):
+//   0x3      access mode          -> unchanged (same encoding)
+//   0x40     O_CREAT              -> 0x200
+//   0x80     O_EXCL               -> 0x800
+//   0x100    O_NOCTTY             -> 0x20000
+//   0x200    O_TRUNC              -> 0x400
+//   0x400    O_APPEND             -> 0x8
+//   0x800    O_NONBLOCK           -> 0x4
+//   0x1000   O_DSYNC              -> 0x400000
+//   0x2000   O_ASYNC              -> 0x40
+//   0x4000   O_DIRECTORY          -> 0x100000
+//   0x8000   O_NOFOLLOW           -> 0x100
+//   0x80000  O_CLOEXEC            -> 0x1000000
+//   0x100000 __O_SYNC (O_SYNC hi) -> 0x80
+// Stripped (no Apple equivalent; dropping beats passing garbage bits
+// that Apple would interpret as unrelated flags):
+//   0x10000 O_DIRECT, 0x20000 O_LARGEFILE (asm-generic numbers; before
+//   wave 7 this port's arm64 userspace wrongly carried the amd64-style
+//   O_DIRECTORY/O_NOFOLLOW in exactly these bits, which the arm64
+//   Linux kernel reads as O_DIRECT/O_LARGEFILE - os.ReadDir failed
+//   EINVAL on tmpfs), 0x40000 O_NOATIME, 0x200000 O_PATH (degrades to
+//   a plain read-only open), 0x400000 __O_TMPFILE.
+TEXT runtime·cosmo_xlat_oflags_r2(SB),NOSPLIT|NOFRAME,$0
+	AND	$0x3, R2, R9
+	TBZ	$6, R2, 2(PC)
+	ORR	$0x200, R9, R9		// O_CREAT
+	TBZ	$7, R2, 2(PC)
+	ORR	$0x800, R9, R9		// O_EXCL
+	TBZ	$8, R2, 2(PC)
+	ORR	$0x20000, R9, R9	// O_NOCTTY
+	TBZ	$9, R2, 2(PC)
+	ORR	$0x400, R9, R9		// O_TRUNC
+	TBZ	$10, R2, 2(PC)
+	ORR	$0x8, R9, R9		// O_APPEND
+	TBZ	$11, R2, 2(PC)
+	ORR	$0x4, R9, R9		// O_NONBLOCK
+	TBZ	$12, R2, 2(PC)
+	ORR	$0x400000, R9, R9	// O_DSYNC
+	TBZ	$13, R2, 2(PC)
+	ORR	$0x40, R9, R9		// O_ASYNC
+	TBZ	$14, R2, 2(PC)
+	ORR	$0x100000, R9, R9	// O_DIRECTORY
+	TBZ	$15, R2, 2(PC)
+	ORR	$0x100, R9, R9		// O_NOFOLLOW
+	TBZ	$19, R2, 2(PC)
+	ORR	$0x1000000, R9, R9	// O_CLOEXEC
+	TBZ	$20, R2, 2(PC)
+	ORR	$0x80, R9, R9		// O_SYNC
+	MOVD	R9, R2
+	RET
+
+// func cosmoXlatErrno(errno uintptr) uintptr
+// Go-callable FP wrapper around cosmo_xlat_errno_r0 (register-based)
+// so runtime Go code (netpoller, errno fetches) can use the shared
+// Apple->Linux errno table.
+TEXT runtime·cosmoXlatErrno(SB),NOSPLIT,$0-16
+	MOVD	errno+0(FP), R0
+	BL	runtime·cosmo_xlat_errno_r0(SB)
+	MOVD	R0, ret+8(FP)
+	RET
+
+// runtime·cosmo_xlat_errno_r0 translates a positive Apple errno in R0 into
+// the corresponding positive Linux errno in R0. Values outside 1..106 pass
+// through unchanged. Leaf; clobbers only R9 and R11, so it is BL-safe from
+// any darwin return path (callers are all non-leaf, so their prologue has
+// already saved LR).
+//
+// The APE loader's Syslib functions run real Apple libc calls and report
+// failure as -errno with APPLE errno numbers, while Go compares against
+// LINUX errno values (Errno, EAGAIN, ...). The first 34 values agree; the
+// BSD range diverges. See cosmo_errno_xlat_tab below for the full mapping.
+TEXT runtime·cosmo_xlat_errno_r0(SB),NOSPLIT|NOFRAME,$0
+	CMP	$107, R0
+	BHS	errno_xlat_done
+	MOVD	$runtime·cosmo_errno_xlat_tab(SB), R9
+	MOVBU	(R9)(R0), R11
+	MOVD	R11, R0
+errno_xlat_done:
+	RET
+
+// Apple errno -> Linux errno, indexed by the Apple value (0..106).
+// Both names given as Apple/Linux where they differ:
+//   1..10  identity (EPERM..ECHILD)
+//  11 EDEADLK             -> 35    12..34 identity (ENOMEM..ERANGE)
+//  35 EAGAIN/EWOULDBLOCK  -> 11    36 EINPROGRESS -> 115   37 EALREADY -> 114
+//  38 ENOTSOCK  -> 88   39 EDESTADDRREQ -> 89   40 EMSGSIZE -> 90
+//  41 EPROTOTYPE -> 91  42 ENOPROTOOPT -> 92    43 EPROTONOSUPPORT -> 93
+//  44 ESOCKTNOSUPPORT -> 94  45 ENOTSUP -> 95 (EOPNOTSUPP)
+//  46 EPFNOSUPPORT -> 96  47 EAFNOSUPPORT -> 97  48 EADDRINUSE -> 98
+//  49 EADDRNOTAVAIL -> 99  50 ENETDOWN -> 100    51 ENETUNREACH -> 101
+//  52 ENETRESET -> 102  53 ECONNABORTED -> 103   54 ECONNRESET -> 104
+//  55 ENOBUFS -> 105    56 EISCONN -> 106        57 ENOTCONN -> 107
+//  58 ESHUTDOWN -> 108  59 ETOOMANYREFS -> 109   60 ETIMEDOUT -> 110
+//  61 ECONNREFUSED -> 111  62 ELOOP -> 40        63 ENAMETOOLONG -> 36
+//  64 EHOSTDOWN -> 112  65 EHOSTUNREACH -> 113   66 ENOTEMPTY -> 39
+//  67 EPROCLIM -> 11 (EAGAIN; Linux reports process limits as EAGAIN)
+//  68 EUSERS -> 87      69 EDQUOT -> 122         70 ESTALE -> 116
+//  71 EREMOTE -> 66     72..76 E*RPC*/EPROG* -> 5 (EIO; no Linux analog)
+//  77 ENOLCK -> 37      78 ENOSYS -> 38          79 EFTYPE -> 22 (EINVAL)
+//  80 EAUTH -> 13 (EACCES)  81 ENEEDAUTH -> 13   82 EPWROFF -> 5 (EIO)
+//  83 EDEVERR -> 5      84 EOVERFLOW -> 75       85 EBADEXEC -> 8 (ENOEXEC)
+//  86 EBADARCH -> 8     87 ESHLIBVERS -> 8       88 EBADMACHO -> 8
+//  89 ECANCELED -> 125  90 EIDRM -> 43           91 ENOMSG -> 42
+//  92 EILSEQ -> 84      93 ENOATTR -> 61 (ENODATA)  94 EBADMSG -> 74
+//  95 EMULTIHOP -> 72   96 ENODATA -> 61         97 ENOLINK -> 67
+//  98 ENOSR -> 63       99 ENOSTR -> 60          100 EPROTO -> 71
+// 101 ETIME -> 62      102 EOPNOTSUPP -> 95      103 ENOPOLICY -> 22
+// 104 ENOTRECOVERABLE -> 131  105 EOWNERDEAD -> 130  106 EQFULL -> 22
+DATA runtime·cosmo_errno_xlat_tab+0(SB)/8, $0x0706050403020100
+DATA runtime·cosmo_errno_xlat_tab+8(SB)/8, $0x0f0e0d0c230a0908
+DATA runtime·cosmo_errno_xlat_tab+16(SB)/8, $0x1716151413121110
+DATA runtime·cosmo_errno_xlat_tab+24(SB)/8, $0x1f1e1d1c1b1a1918
+DATA runtime·cosmo_errno_xlat_tab+32(SB)/8, $0x595872730b222120
+DATA runtime·cosmo_errno_xlat_tab+40(SB)/8, $0x61605f5e5d5c5b5a
+DATA runtime·cosmo_errno_xlat_tab+48(SB)/8, $0x6968676665646362
+DATA runtime·cosmo_errno_xlat_tab+56(SB)/8, $0x24286f6e6d6c6b6a
+DATA runtime·cosmo_errno_xlat_tab+64(SB)/8, $0x42747a570b277170
+DATA runtime·cosmo_errno_xlat_tab+72(SB)/8, $0x1626250505050505
+DATA runtime·cosmo_errno_xlat_tab+80(SB)/8, $0x0808084b05050d0d
+DATA runtime·cosmo_errno_xlat_tab+88(SB)/8, $0x484a3d542a2b7d08
+DATA runtime·cosmo_errno_xlat_tab+96(SB)/8, $0x165f3e473c3f433d
+DATA runtime·cosmo_errno_xlat_tab+104(SB)/8, $0x0000000000168283
+GLOBL runtime·cosmo_errno_xlat_tab(SB), RODATA|NOPTR, $112

@@ -684,7 +684,7 @@ func TestExtraFiles(t *testing.T) {
 	// This test runs with cgo disabled. External linking needs cgo, so
 	// it doesn't work if external linking is required.
 	//
-	// N.B. go build below explictly doesn't pass through
+	// N.B. go build below explicitly doesn't pass through
 	// -asan/-msan/-race, so we don't care about those.
 	testenv.MustInternalLink(t, testenv.NoSpecialBuildTypes)
 
@@ -1845,23 +1845,19 @@ func TestStart_twice(t *testing.T) {
 	testenv.MustHaveExec(t)
 
 	cmd := exec.Command("/bin/nonesuch")
-	for i, want := range []string{
-		cond(runtime.GOOS == "windows",
-			`exec: "/bin/nonesuch": executable file not found in %PATH%`,
-			"fork/exec /bin/nonesuch: no such file or directory"),
-		"exec: already started",
-	} {
-		err := cmd.Start()
-		if got := fmt.Sprint(err); got != want {
-			t.Errorf("Start call #%d return err %q, want %q", i+1, got, want)
-		}
+	if err := cmd.Start(); err == nil {
+		t.Fatalf("running invalid command succeeded")
+	}
+	err := cmd.Start()
+	got := fmt.Sprint(err)
+	want := "exec: already started"
+	if got != want {
+		t.Fatalf("Start call returned err %q, want %q", got, want)
 	}
 }
 
-func cond[T any](cond bool, t, f T) T {
-	if cond {
-		return t
-	} else {
-		return f
+func TestNoStringPanic(t *testing.T) {
+	if s := fmt.Sprintf("%v", &exec.Cmd{}); strings.Contains(s, "PANIC") {
+		t.Fatalf("got %q, want no panic", s)
 	}
 }

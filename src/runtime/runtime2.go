@@ -301,8 +301,6 @@ func setMNoWB(mp **m, new *m) {
 }
 
 type gobuf struct {
-	// The offsets of sp, pc, and g are known to (hard-coded in) libmach.
-	//
 	// ctxt is unusual with respect to GC: it may be a
 	// heap-allocated funcval, so GC needs to track it, but it
 	// needs to be set and cleared from assembly, where it's
@@ -478,13 +476,17 @@ type g struct {
 	// stackguard1 is the stack pointer compared in the //go:systemstack stack growth prologue.
 	// It is stack.lo+StackGuard on g0 and gsignal stacks.
 	// It is ~0 on other goroutine stacks, to trigger a call to morestackc (and crash).
+	// On wasm, which has no cgo and whose stack growth prologue only consults
+	// stackguard0, it is instead repurposed on user goroutine stacks as the arming
+	// word for the compiler-inserted loop preemption checks: stackPreempt when
+	// armed, 0 when not. See the wasm loop preemption comment in proc.go.
 	stack       stack   // offset known to runtime/cgo
-	stackguard0 uintptr // offset known to liblink
-	stackguard1 uintptr // offset known to liblink
+	stackguard0 uintptr // offset known to cmd/internal/obj/*
+	stackguard1 uintptr // offset known to cmd/internal/obj/*
 
-	_panic    *_panic // innermost panic - offset known to liblink
+	_panic    *_panic // innermost panic
 	_defer    *_defer // innermost defer
-	m         *m      // current m; offset known to arm liblink
+	m         *m      // current m
 	sched     gobuf
 	syscallsp uintptr // if status==Gsyscall, syscallsp = sched.sp to use during gc
 	syscallpc uintptr // if status==Gsyscall, syscallpc = sched.pc to use during gc
@@ -549,23 +551,33 @@ type g struct {
 	ditWanted       bool // set if g wants to be executed with DIT enabled
 	syncSafePoint   bool // set if g is stopped at a synchronous safe point.
 	runningCleanups atomic.Bool
-	sig             uint32
-	secret          int32 // current nesting of runtime/secret.Do calls.
-	writebuf        []byte
-	sigcode0        uintptr
-	sigcode1        uintptr
-	sigpc           uintptr
-	parentGoid      uint64          // goid of goroutine that created this goroutine
-	gopc            uintptr         // pc of go statement that created this goroutine
-	ancestors       *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc         uintptr         // pc of goroutine function
-	racectx         uintptr
-	waiting         *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	cgoCtxt         []uintptr      // cgo traceback context
-	labels          unsafe.Pointer // profiler labels
-	timer           *timer         // cached timer for time.Sleep
-	sleepWhen       int64          // when to sleep until
-	selectDone      atomic.Uint32  // are we participating in a select and did someone win the race?
+	// wasmMainOnly (GOWASM=threads only) is a nesting counter of open
+	// syscall/js main-thread operations: while nonzero, only the main M
+	// may execute this goroutine (worker instances stub every syscall/js
+	// host import), so schedule() on a worker M hands it to the migrate
+	// queue instead of running it. Only mutated by the goroutine itself
+	// (runtimeBeginMainOp/runtimeEndMainOp via syscall/js); read by other
+	// Ms only while they own the descheduled g, so plain accesses are
+	// sufficient. uint8 in the byte-cluster hole before sig, so g's size
+	// is unchanged on every arch; nesting deeper than 255 throws.
+	wasmMainOnly uint8
+	sig          uint32
+	secret       int32 // current nesting of runtime/secret.Do calls.
+	writebuf     []byte
+	sigcode0     uintptr
+	sigcode1     uintptr
+	sigpc        uintptr
+	parentGoid   uint64          // goid of goroutine that created this goroutine
+	gopc         uintptr         // pc of go statement that created this goroutine
+	ancestors    *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
+	startpc      uintptr         // pc of goroutine function
+	racectx      uintptr
+	waiting      *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	cgoCtxt      []uintptr      // cgo traceback context
+	labels       unsafe.Pointer // profiler labels
+	timer        *timer         // cached timer for time.Sleep
+	sleepWhen    int64          // when to sleep until
+	selectDone   atomic.Uint32  // are we participating in a select and did someone win the race?
 
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile
@@ -622,15 +634,18 @@ type m struct {
 
 	// Fields whose offsets are not known to debuggers.
 
-	procid       uint64            // for debuggers, but offset not hard-coded
-	gsignal      *g                // signal-handling g
-	goSigStack   gsignalStack      // Go-allocated signal handling stack
-	sigmask      sigset            // storage for saved signal mask
-	tls          [tlsSlots]uintptr // thread-local storage (for x86 extern register)
-	mstartfn     func()
-	curg         *g       // current running goroutine
-	caughtsig    guintptr // goroutine running during fatal signal
-	signalSecret uint32   // whether we have secret information in our signal stack
+	procid     uint64            // for debuggers, but offset not hard-coded
+	gsignal    *g                // signal-handling g
+	goSigStack gsignalStack      // Go-allocated signal handling stack
+	sigmask    sigset            // storage for saved signal mask
+	tls        [tlsSlots]uintptr // thread-local storage (for x86 extern register)
+	mstartfn   func()
+	curg       *g       // current running goroutine
+	caughtsig  guintptr // goroutine running during fatal signal
+
+	// Indicates whether we've received a signal while
+	// running in secret mode.
+	signalSecret bool
 
 	// p is the currently attached P for executing Go code, nil if not executing user Go code.
 	//
@@ -640,42 +655,44 @@ type m struct {
 	// from transitioning out of _Gsyscall if it intends to mutate p.
 	p puintptr
 
-	nextp           puintptr // The next P to install before executing. Implies exclusive ownership of this P.
-	oldp            puintptr // The P that was attached before executing a syscall.
-	id              int64
-	mallocing       int32
-	throwing        throwType
-	preemptoff      string // if != "", keep curg running on this m
-	locks           int32
-	dying           int32
-	profilehz       int32
-	spinning        bool // m is out of work and is actively looking for work
-	blocked         bool // m is blocked on a note
-	newSigstack     bool // minit on C thread called sigaltstack
-	printlock       int8
-	incgo           bool          // m is executing a cgo call
-	isextra         bool          // m is an extra m
-	isExtraInC      bool          // m is an extra m that does not have any Go frames
-	isExtraInSig    bool          // m is an extra m in a signal handler
-	freeWait        atomic.Uint32 // Whether it is safe to free g0 and delete m (one of freeMRef, freeMStack, freeMWait)
-	needextram      bool
-	g0StackAccurate bool // whether the g0 stack has accurate bounds
-	traceback       uint8
-	allpSnapshot    []*p          // Snapshot of allp for use after dropping P in findRunnable, nil otherwise.
-	ncgocall        uint64        // number of cgo calls in total
-	ncgo            int32         // number of cgo calls currently in progress
-	cgoCallersUse   atomic.Uint32 // if non-zero, cgoCallers in use temporarily
-	cgoCallers      *cgoCallers   // cgo traceback if crashing in cgo call
-	park            note
-	alllink         *m // on allm
-	schedlink       muintptr
-	idleNode        listNodeManual
-	lockedg         guintptr
-	createstack     [32]uintptr // stack that created this thread, it's used for StackRecord.Stack0, so it must align with it.
-	lockedExt       uint32      // tracking for external LockOSThread
-	lockedInt       uint32      // tracking for internal lockOSThread
-	mWaitList       mWaitList   // list of runtime lock waiters
-	ditEnabled      bool        // set if DIT is currently enabled on this M
+	nextp             puintptr // The next P to install before executing. Implies exclusive ownership of this P.
+	oldp              puintptr // The P that was attached before executing a syscall.
+	id                int64
+	mallocing         int32
+	throwing          throwType
+	preemptoff        string // if != "", keep curg running on this m
+	locks             int32
+	dying             int32
+	profilehz         int32
+	wasmLoopGateCalls int32 // wasm only: backedge hits since the last loop-preemption gate call (see goschedguarded)
+	wasmLoopLastYield int64 // wasm only: nanotime of this M's last rate-limited loop-preemption yield
+	spinning          bool  // m is out of work and is actively looking for work
+	blocked           bool  // m is blocked on a note
+	newSigstack       bool  // minit on C thread called sigaltstack
+	printlock         int8
+	incgo             bool          // m is executing a cgo call
+	isextra           bool          // m is an extra m
+	isExtraInC        bool          // m is an extra m that does not have any Go frames
+	isExtraInSig      bool          // m is an extra m in a signal handler
+	freeWait          atomic.Uint32 // Whether it is safe to free g0 and delete m (one of freeMRef, freeMStack, freeMWait)
+	needextram        bool
+	g0StackAccurate   bool // whether the g0 stack has accurate bounds
+	traceback         uint8
+	allpSnapshot      []*p          // Snapshot of allp for use after dropping P in findRunnable, nil otherwise.
+	ncgocall          uint64        // number of cgo calls in total
+	ncgo              int32         // number of cgo calls currently in progress
+	cgoCallersUse     atomic.Uint32 // if non-zero, cgoCallers in use temporarily
+	cgoCallers        *cgoCallers   // cgo traceback if crashing in cgo call
+	park              note
+	alllink           *m // on allm
+	schedlink         muintptr
+	idleNode          listNodeManual
+	lockedg           guintptr
+	createstack       [32]uintptr // stack that created this thread, it's used for StackRecord.Stack0, so it must align with it.
+	lockedExt         uint32      // tracking for external LockOSThread
+	lockedInt         uint32      // tracking for internal lockOSThread
+	mWaitList         mWaitList   // list of runtime lock waiters
+	ditEnabled        bool        // set if DIT is currently enabled on this M
 
 	mLockProfile mLockProfile // fields relating to runtime.lock contention
 	profStack    []uintptr    // used for memory/block/mutex stack traces
@@ -715,8 +732,9 @@ type m struct {
 
 	mOS
 
-	chacha8   chacha8rand.State
-	cheaprand uint64
+	chacha8     chacha8rand.State
+	cheaprand   uint32
+	cheaprand64 uint64
 
 	// Up to 10 locks held by this m, maintained by the lock ranking code.
 	locksHeldLen int
@@ -783,7 +801,7 @@ type p struct {
 
 	// oldm is the previous m this p ran on.
 	//
-	// We are not assosciated with this m, so we have no control over its
+	// We are not associated with this m, so we have no control over its
 	// lifecycle. This value is an m.self object which points to the m
 	// until the m exits.
 	//
@@ -1069,47 +1087,52 @@ const (
 // See https://golang.org/s/go12symtab.
 // Keep in sync with linker (../cmd/link/internal/ld/pcln.go:/pclntab)
 // and with package debug/gosym and with symtab.go in package runtime.
+//
+// This fork uses a compact layout (abi.CosmoPCLnTabMagic): records are
+// 4-byte aligned, the fixed part is 40 bytes, and the trailing offset
+// arrays store only present entries, described by the pcdataMask and
+// funcdataMask presence bitmaps (which replaced upstream's npcdata count
+// and the 0 / ^uint32(0) sentinel slots).
 type _func struct {
 	sys.NotInHeap // Only in static data
 
 	entryOff uint32 // start pc, as offset from moduledata.text
-	nameOff  int32  // function name, as index into moduledata.funcnametab.
+	nameOff  int32  // function name, as offset of a prefix-split name entry in moduledata.funcnametab (see funcNamePieces)
 
 	args        int32  // in/out args size
 	deferreturn uint32 // offset of start of a deferreturn call instruction from entry, if any.
 
-	pcsp      uint32
-	pcfile    uint32
-	pcln      uint32
-	npcdata   uint32
-	cuOffset  uint32     // runtime.cutab offset of this function's CU
-	startLine int32      // line number of start of function (func keyword/TEXT directive)
-	funcID    abi.FuncID // set for certain special runtime functions
-	flag      abi.FuncFlag
-	_         [1]byte // pad
-	nfuncdata uint8   // must be last, must end on a uint32-aligned boundary
+	pcsp         uint32
+	pcfile       uint32
+	pcln         uint32
+	cuOffset     uint32     // runtime.cutab offset of this function's CU
+	startLine    int32      // line number of start of function (func keyword/TEXT directive)
+	funcID       abi.FuncID // set for certain special runtime functions
+	flag         abi.FuncFlag
+	pcdataMask   uint8 // presence bitmap of pcdata tables; bit i set iff table i is present
+	funcdataMask uint8 // presence bitmap of funcdata slots; must be last, must end on a uint32-aligned boundary
 
 	// The end of the struct is followed immediately by two variable-length
 	// arrays that reference the pcdata and funcdata locations for this
-	// function.
+	// function, holding one uint32 for each set bit of pcdataMask and
+	// funcdataMask respectively, in increasing table/slot index order.
 
 	// pcdata contains the offset into moduledata.pctab for the start of
-	// that index's table. e.g.,
-	// &moduledata.pctab[_func.pcdata[_PCDATA_UnsafePoint]] is the start of
-	// the unsafe point table.
+	// each present table. The entry for table i (present iff bit i of
+	// pcdataMask is set) is pcdata[popcount(pcdataMask & (1<<i - 1))];
+	// see pcdatastart. A cleared bit means there is no table (upstream
+	// encoded that as a 0 offset in a dense [npcdata]uint32 array).
 	//
-	// An offset of 0 indicates that there is no table.
-	//
-	// pcdata [npcdata]uint32
+	// pcdata [popcount(pcdataMask)]uint32
 
 	// funcdata contains the offset past moduledata.gofunc which contains a
-	// pointer to that index's funcdata. e.g.,
-	// *(moduledata.gofunc +  _func.funcdata[_FUNCDATA_ArgsPointerMaps]) is
-	// the argument pointer map.
+	// pointer to each present funcdata. The entry for slot i (present iff
+	// bit i of funcdataMask is set) follows the pcdata array at index
+	// popcount(funcdataMask & (1<<i - 1)); see funcdata. A cleared bit
+	// means there is no entry (upstream encoded that as a ^uint32(0)
+	// sentinel in a dense [nfuncdata]uint32 array).
 	//
-	// An offset of ^uint32(0) indicates that there is no entry.
-	//
-	// funcdata [nfuncdata]uint32
+	// funcdata [popcount(funcdataMask)]uint32
 }
 
 // Pseudo-Func that is returned for PCs that occur in inlined code.
@@ -1175,16 +1198,17 @@ type _panic struct {
 	link *_panic // link to earlier panic
 
 	// startPC and startSP track where _panic.start was called.
+	// (These are the SP and PC of the gopanic frame itself.)
 	startPC uintptr
 	startSP unsafe.Pointer
 
 	// The current stack frame that we're running deferred calls for.
+	pc uintptr
 	sp unsafe.Pointer
-	lr uintptr
 	fp unsafe.Pointer
 
 	// retpc stores the PC where the panic should jump back to, if the
-	// function last returned by _panic.next() recovers the panic.
+	// function last returned by _panic.nextDefer() recovers the panic.
 	retpc uintptr
 
 	// Extra state for handling open-coded defers.
@@ -1195,8 +1219,6 @@ type _panic struct {
 	repanicked  bool // whether this panic repanicked
 	goexit      bool
 	deferreturn bool
-
-	gopanicFP unsafe.Pointer // frame pointer of the gopanic frame
 }
 
 // savedOpenDeferState tracks the extra state from _panic that's

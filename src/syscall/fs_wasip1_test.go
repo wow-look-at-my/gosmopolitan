@@ -9,6 +9,7 @@ package syscall_test
 import (
 	"syscall"
 	"testing"
+	"unsafe"
 )
 
 var joinPathTests = [...]struct {
@@ -65,6 +66,33 @@ func TestJoinPath(t *testing.T) {
 	}
 }
 
+var hasPathPrefixTests = [...]struct {
+	path, prefix string
+	want         bool
+}{
+	0:  {"/", "/", true},
+	1:  {"/data", "/", true},
+	2:  {"/data", "/data", true},
+	3:  {"/data/", "/data", true},
+	4:  {"/data/x", "/data", true},
+	5:  {"/data/x", "/data/", true},
+	6:  {"/database/x", "/database", true},
+	7:  {"/database/x", "/data", false},
+	8:  {"/datax", "/data", false},
+	9:  {"/dat", "/data", false},
+	10: {"/", "/data", false},
+	11: {"tmp/x", "tmp", true},
+	12: {"tmpdir/x", "tmp", false},
+}
+
+func TestHasPathPrefix(t *testing.T) {
+	for i, test := range hasPathPrefixTests {
+		if got := syscall.HasPathPrefix(test.path, test.prefix); got != test.want {
+			t.Errorf("%d: hasPathPrefix(%q, %q) = %v, want %v", i, test.path, test.prefix, got, test.want)
+		}
+	}
+}
+
 func BenchmarkJoinPath(b *testing.B) {
 	for _, test := range joinPathTests {
 		b.Run("", func(b *testing.B) {
@@ -72,5 +100,14 @@ func BenchmarkJoinPath(b *testing.B) {
 				syscall.JoinPath(test.dir, test.file)
 			}
 		})
+	}
+}
+
+func TestRandomGetOverflow(t *testing.T) {
+	// Use unsafe.Slice to avoid actually allocating ~4GB.
+	var dummy byte
+	b := unsafe.Slice(&dummy, int(1<<32))
+	if err := syscall.RandomGet(b); err != syscall.EINVAL {
+		t.Errorf("syscall.RandomGet succeeds given a slice that is larger than what random_get supports, want %v", syscall.EINVAL)
 	}
 }

@@ -25,7 +25,29 @@ func write1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 func wasmWrite(fd uintptr, p unsafe.Pointer, n int32)
 
 func usleep(usec uint32) {
-	// TODO(neelance): implement usleep
+	if wasmThreadsEnabled {
+		// Timed futex sleep (see os_wasmthreads.go). Without threads
+		// there is nothing that could run in the meantime anyway.
+		wasmThreadsUsleep(usec)
+	}
+}
+
+// syscall_wasmWrite lets package syscall write to stdout/stderr through
+// the runtime's raw write import. Under GOWASM=threads the import is
+// implemented on worker threads too (unlike syscall/js), so fmt and os
+// printing keep working from goroutines running on worker Ms.
+//
+//go:linkname syscall_wasmWrite syscall.runtime_wasmWrite
+func syscall_wasmWrite(fd uintptr, p unsafe.Pointer, n int32) {
+	wasmWrite(fd, p, n)
+}
+
+// syscall_onWorkerThread reports whether the caller runs on a worker
+// -thread M under GOWASM=threads (always false without it).
+//
+//go:linkname syscall_onWorkerThread syscall.runtime_onWorkerThread
+func syscall_onWorkerThread() bool {
+	return wasmThreadsEnabled && getg().m != &m0
 }
 
 //go:wasmimport gojs runtime.getRandomData
@@ -39,4 +61,14 @@ func readRandom(r []byte) int {
 
 func goenvs() {
 	goenvs_unix()
+}
+
+//go:nowritebarrierrec
+//go:nosplit
+func libpreinit() {}
+
+//go:nowritebarrierrec
+//go:nosplit
+func newosproc0(stacksize uintptr, fn unsafe.Pointer) {
+	throw("bad newosproc0")
 }

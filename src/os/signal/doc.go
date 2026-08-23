@@ -213,8 +213,9 @@ before raising the signal.
 On Windows a ^C (Control-C) or ^BREAK (Control-Break) normally cause
 the program to exit. If Notify is called for [os.Interrupt], ^C or ^BREAK
 will cause [os.Interrupt] to be sent on the channel, and the program will
-not exit. If Reset is called, or Stop is called on all channels passed
-to Notify, then the default behavior will be restored.
+not exit. [os.Interrupt] is the only signal that can be used on Windows.
+If Reset is called, or Stop is called on all channels passed to Notify,
+then the default behavior will be restored.
 
 Additionally, if Notify is called, and Windows sends CTRL_CLOSE_EVENT,
 CTRL_LOGOFF_EVENT or CTRL_SHUTDOWN_EVENT to the process, Notify will
@@ -229,5 +230,14 @@ give the process an opportunity to clean up before termination.
 On Plan 9, signals have type syscall.Note, which is a string. Calling
 Notify with a syscall.Note will cause that value to be sent on the
 channel when that string is posted as a note.
+
+# WebAssembly
+
+On the js/wasm and wasip1/wasm ports, no signal is ever delivered to
+the program: neither the JavaScript host (browser or Node.js) nor a
+WASI preview 1 host can raise a signal inside the running module.
+Notify compiles and registers channels as usual, but no signal,
+including [os.Interrupt], ever arrives on them. Reset, Stop, and
+Ignore work but have nothing to affect.
 */
 package signal

@@ -6,6 +6,7 @@ package walk
 
 import (
 	"go/constant"
+	"internal/buildcfg"
 	"unicode/utf8"
 
 	"cmd/compile/internal/base"
@@ -23,7 +24,7 @@ func cheapComputableIndex(width int64) bool {
 	// MIPS does not have R+R addressing
 	// Arm64 may lack ability to generate this code in our assembler,
 	// but the architecture supports it.
-	case sys.PPC64, sys.S390X:
+	case sys.Loong64, sys.PPC64, sys.S390X:
 		return width == 1
 	case sys.AMD64, sys.I386, sys.ARM64, sys.ARM:
 		switch width {
@@ -136,7 +137,24 @@ func walkRange(nrange *ir.RangeStmt) ir.Node {
 		}
 
 		// for v1, v2 := range ha { body }
-		if cheapComputableIndex(elem.Size()) {
+		//
+		// When the preemptibleloops experiment is on (the default for
+		// GOARCH=wasm), the index form is used regardless of the element
+		// size: insertLoopReschedChecks inserts a call to goschedguarded
+		// on every loop backedge, and the pointer-and-uintptr scheme
+		// below is built on the assumption that the uintptr variant hu -
+		// which does not keep the backing store alive and is not
+		// adjusted when the stack moves - is never live across a call.
+		// A goroutine parked at the inserted backedge call sits exactly
+		// in the hu-only window with the ha copy dead, so a precise
+		// stack scan there misses the backing array: if nothing else
+		// references it, the GC frees storage the loop is still reading
+		// (observed as use-after-free crashes on wasm, where the gate
+		// yields CPU-bound loops to the garbage collector). The index
+		// form instead keeps ha - a GC-visible variable - live across
+		// the whole loop, and costs only an extra multiply on backedges
+		// that already carry a preemption check.
+		if cheapComputableIndex(elem.Size()) || buildcfg.Experiment.PreemptibleLoops {
 			// v1, v2 = hv1, ha[hv1]
 			tmp := ir.NewIndexExpr(base.Pos, ha, hv1)
 			tmp.SetBounded(true)
@@ -348,6 +366,8 @@ func walkRange(nrange *ir.RangeStmt) ir.Node {
 		// } else {
 		// hv2, hv1 = decoderune(ha, hv1)
 		fn := typecheck.LookupRuntime("decoderune")
+		// decoderune expects a uint, but hv1 is an int.
+		// This is safe because hv1 is always >= 0.
 		call := mkcall1(fn, fn.Type().ResultsTuple(), &nif.Else, ha, hv1)
 		a := ir.NewAssignListStmt(base.Pos, ir.OAS2, []ir.Node{hv2, hv1}, []ir.Node{call})
 		nif.Else.Append(a)
@@ -477,7 +497,7 @@ func mapClear(m, rtyp ir.Node) ir.Node {
 	// instantiate mapclear(typ *type, hmap map[any]any)
 	fn := typecheck.LookupRuntime("mapclear", t.Key(), t.Elem())
 	n := mkcallstmt1(fn, rtyp, m)
-	return walkStmt(typecheck.Stmt(n))
+	return typecheck.Stmt(n)
 }
 
 // Lower n into runtime·memclr if possible, for
@@ -559,14 +579,17 @@ func arrayClear(wbPos src.XPos, a ir.Node, nrange *ir.RangeStmt) ir.Node {
 	}
 
 	// Convert to
-	// if len(a) != 0 {
+	// if ln := len(a); ln != 0 {
 	// 	hp = &a[0]
 	// 	hn = len(a)*sizeof(elem(a))
 	// 	memclr{NoHeap,Has}Pointers(hp, hn)
-	// 	i = len(a) - 1
+	// 	i = ln - 1
 	// }
 	n := ir.NewIfStmt(base.Pos, nil, nil, nil)
-	n.Cond = ir.NewBinaryExpr(base.Pos, ir.ONE, ir.NewUnaryExpr(base.Pos, ir.OLEN, a), ir.NewInt(base.Pos, 0))
+	ln := typecheck.TempAt(base.Pos, ir.CurFunc, types.Types[types.TINT])
+	as := ir.NewAssignStmt(base.Pos, ln, ir.NewUnaryExpr(base.Pos, ir.OLEN, a))
+	n.PtrInit().Append(typecheck.Stmt(as))
+	n.Cond = ir.NewBinaryExpr(base.Pos, ir.ONE, ln, ir.NewInt(base.Pos, 0))
 
 	// hp = &a[0]
 	hp := typecheck.TempAt(base.Pos, ir.CurFunc, types.Types[types.TUNSAFEPTR])
@@ -578,7 +601,7 @@ func arrayClear(wbPos src.XPos, a ir.Node, nrange *ir.RangeStmt) ir.Node {
 
 	// hn = len(a) * sizeof(elem(a))
 	hn := typecheck.TempAt(base.Pos, ir.CurFunc, types.Types[types.TUINTPTR])
-	mul := typecheck.Conv(ir.NewBinaryExpr(base.Pos, ir.OMUL, ir.NewUnaryExpr(base.Pos, ir.OLEN, a), ir.NewInt(base.Pos, elemsize)), types.Types[types.TUINTPTR])
+	mul := typecheck.Conv(ir.NewBinaryExpr(base.Pos, ir.OMUL, ln, ir.NewInt(base.Pos, elemsize)), types.Types[types.TUINTPTR])
 	n.Body.Append(ir.NewAssignStmt(base.Pos, hn, mul))
 
 	var fn ir.Node
@@ -595,7 +618,7 @@ func arrayClear(wbPos src.XPos, a ir.Node, nrange *ir.RangeStmt) ir.Node {
 
 	// For array range clear, also set "i = len(a) - 1"
 	if nrange != nil {
-		idx := ir.NewAssignStmt(base.Pos, nrange.Key, typecheck.Conv(ir.NewBinaryExpr(base.Pos, ir.OSUB, ir.NewUnaryExpr(base.Pos, ir.OLEN, a), ir.NewInt(base.Pos, 1)), nrange.Key.Type()))
+		idx := ir.NewAssignStmt(base.Pos, nrange.Key, typecheck.Conv(ir.NewBinaryExpr(base.Pos, ir.OSUB, ln, ir.NewInt(base.Pos, 1)), nrange.Key.Type()))
 		n.Body.Append(idx)
 	}
 

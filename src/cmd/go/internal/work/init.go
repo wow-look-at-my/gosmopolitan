@@ -47,19 +47,23 @@ func makeCfgChangedEnv() []string {
 	if archenv, val, changed := cfg.GetArchEnv(); changed {
 		env = append(env, archenv+"="+val)
 	}
+	if osenv, val, changed := cfg.GetOSEnv(); changed {
+		env = append(env, osenv+"="+val)
+	}
 	return slices.Clip(env)
 }
 
-func BuildInit(loaderstate *modload.State) {
+func BuildInit(ld *modload.Loader) {
 	if buildInitStarted {
 		base.Fatalf("go: internal error: work.BuildInit called more than once")
 	}
 	buildInitStarted = true
 	base.AtExit(closeBuilders)
 
-	modload.Init(loaderstate)
+	modload.Init(ld)
 	instrumentInit()
 	buildModeInit()
+	cosmoBuildInit()
 	initCompilerConcurrencyPool()
 	cfgChangedEnv = makeCfgChangedEnv()
 

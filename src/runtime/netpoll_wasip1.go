@@ -33,7 +33,18 @@ import "unsafe"
 // Since poll_oneoff is similar to poll(2), the implementation here was derived
 // from netpoll_aix.go.
 
-const _EINTR = 27
+const (
+	_EINTR   = 27
+	_ENOSYS  = 52
+	_ENOTSUP = 58
+)
+
+// pollOneoffUnsupported is set when the host rejects poll_oneoff with
+// ENOSYS or ENOTSUP. Some hosts embedding a WASI module stub out
+// poll_oneoff that way (see go.dev/issue/78513); treat it as "the
+// poller cannot work" and degrade gracefully instead of crashing the
+// program.
+var pollOneoffUnsupported bool
 
 var (
 	evts []event
@@ -185,6 +196,15 @@ func netpollclose(fd uintptr) int32 {
 func netpollBreak() {}
 
 func netpoll(delay int64) (gList, int32) {
+	if pollOneoffUnsupported {
+		// The host does not implement poll_oneoff: there is no way to
+		// wait for fd readiness or to sleep. Return immediately and let
+		// findRunnable spin. Timers still fire, since they are checked
+		// on every scheduler pass, but waiting for one burns CPU, and
+		// I/O on pollable fds never reports readiness.
+		return gList{}, 0
+	}
+
 	lock(&mtx)
 
 	// If delay >= 0, we include a subscription of type Clock that we use as
@@ -211,17 +231,27 @@ retry:
 	var nevents size
 	errno := poll_oneoff(&pollsubs[0], &evts[0], uint32(len(pollsubs)), &nevents)
 	if errno != 0 {
-		if errno != _EINTR {
+		switch errno {
+		case _EINTR:
+			// If a timed sleep was interrupted, just return to
+			// recalculate how long we should sleep now.
+			if delay > 0 {
+				unlock(&mtx)
+				return gList{}, 0
+			}
+			goto retry
+		case _ENOSYS, _ENOTSUP:
+			// The host stubs out poll_oneoff (see go.dev/issue/78513).
+			// Mark the poller broken and degrade instead of crashing;
+			// see the comment at the top of this function for the
+			// consequences.
+			pollOneoffUnsupported = true
+			unlock(&mtx)
+			return gList{}, 0
+		default:
 			println("errno=", errno, " len(pollsubs)=", len(pollsubs))
 			throw("poll_oneoff failed")
 		}
-		// If a timed sleep was interrupted, just return to
-		// recalculate how long we should sleep now.
-		if delay > 0 {
-			unlock(&mtx)
-			return gList{}, 0
-		}
-		goto retry
 	}
 
 	var toRun gList

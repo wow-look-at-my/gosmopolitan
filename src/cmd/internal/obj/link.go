@@ -456,9 +456,10 @@ const (
 // It represents Go symbols in a flat pkg+"."+name namespace.
 type LSym struct {
 	Name string
-	Type objabi.SymKind
 	Attribute
+	Type objabi.SymKind
 
+	Align  int16
 	Size   int64
 	Gotype *LSym
 	P      []byte
@@ -475,7 +476,6 @@ type LSym struct {
 type FuncInfo struct {
 	Args      int32
 	Locals    int32
-	Align     int32
 	FuncID    abi.FuncID
 	FuncFlag  abi.FuncFlag
 	StartLine int32
@@ -490,6 +490,13 @@ type FuncInfo struct {
 	dwarfRangesSym     *LSym
 	dwarfAbsFnSym      *LSym
 	dwarfDebugLinesSym *LSym
+
+	// dwarfBytePC, if non-nil, maps each Prog of the function to the byte
+	// offset of its first encoded byte within the function body (LSym.P).
+	// It is recorded by architectures whose Prog.Pc is not a byte offset
+	// (currently only wasm, where Pc holds a resume-point index) so that
+	// DWARF generation can use real code offsets. See LSym.DwarfPC.
+	dwarfBytePC map[*Prog]int64
 
 	GCArgs             *LSym
 	GCLocals           *LSym
@@ -535,6 +542,36 @@ func (s *LSym) Func() *FuncInfo {
 	}
 	f, _ := (*s.Extra).(*FuncInfo)
 	return f
+}
+
+// RecordDwarfBytePC records the byte offset of each Prog within the
+// function body, for use by DWARF generation on architectures where
+// Prog.Pc is not a byte offset. It is called by the architecture's
+// assembler after the function body has been encoded.
+func (fi *FuncInfo) RecordDwarfBytePC(m map[*Prog]int64) {
+	fi.dwarfBytePC = m
+}
+
+// DwarfPC returns the PC value to use for p in the DWARF line table and
+// PC range attributes of function s. On most architectures this is p.Pc.
+// On wasm, Prog.Pc holds a resume-point index rather than a code offset,
+// and the assembler separately records each instruction's byte offset
+// within the function body; DWARF uses those byte offsets.
+func (s *LSym) DwarfPC(p *Prog) int64 {
+	if m := s.Func().dwarfBytePC; m != nil {
+		return m[p]
+	}
+	return p.Pc
+}
+
+// DwarfSize returns the size of function s in the same units as the PC
+// values returned by DwarfPC: the byte length of the encoded body if
+// byte offsets were recorded, or else s.Size.
+func (s *LSym) DwarfSize() int64 {
+	if s.Func().dwarfBytePC != nil {
+		return int64(len(s.P))
+	}
+	return s.Size
 }
 
 type VarInfo struct {
@@ -799,6 +836,7 @@ const (
 	WasmF32
 	WasmF64
 	WasmPtr
+	WasmV128
 
 	// bool is not really a wasm type, but we allow it on wasmimport/wasmexport
 	// function parameters/results. 32-bit on Wasm side, 8-bit on Go side.
@@ -977,6 +1015,9 @@ const (
 	// Linkname indicates this is a go:linkname'd symbol.
 	AttrLinkname
 
+	// LinknameStd indicates this is a go:linknamestd'd symbol.
+	AttrLinknameStd
+
 	// attrABIBase is the value at which the ABI is encoded in
 	// Attribute. This must be last; all bits after this are
 	// assumed to be an ABI value.
@@ -1007,6 +1048,7 @@ func (a *Attribute) ABIWrapper() bool         { return a.load()&AttrABIWrapper !
 func (a *Attribute) IsPcdata() bool           { return a.load()&AttrPcdata != 0 }
 func (a *Attribute) IsPkgInit() bool          { return a.load()&AttrPkgInit != 0 }
 func (a *Attribute) IsLinkname() bool         { return a.load()&AttrLinkname != 0 }
+func (a *Attribute) IsLinknameStd() bool      { return a.load()&AttrLinknameStd != 0 }
 
 func (a *Attribute) Set(flag Attribute, value bool) {
 	for {
@@ -1057,6 +1099,7 @@ var textAttrStrings = [...]struct {
 	{bit: AttrABIWrapper, s: "ABIWRAPPER"},
 	{bit: AttrPkgInit, s: "PKGINIT"},
 	{bit: AttrLinkname, s: "LINKNAME"},
+	{bit: AttrLinknameStd, s: "LINKNAMESTD"},
 }
 
 // String formats a for printing in as part of a TEXT prog.
@@ -1169,21 +1212,22 @@ type Link struct {
 	Flag_maymorestack    string // If not "", call this function before stack checks
 	Bso                  *bufio.Writer
 	Pathname             string
-	Pkgpath              string           // the current package's import path
-	hashmu               sync.Mutex       // protects hash, funchash
-	hash                 map[string]*LSym // name -> sym mapping
-	funchash             map[string]*LSym // name -> sym mapping for ABIInternal syms
-	statichash           map[string]*LSym // name -> sym mapping for static syms
-	PosTable             src.PosTable
-	InlTree              InlTree // global inlining tree used by gc/inl.go
-	DwFixups             *DwarfFixupTable
-	DwTextCount          int
-	Imports              []goobj.ImportedPkg
-	DiagFunc             func(string, ...any)
-	DiagFlush            func()
-	DebugInfo            func(ctxt *Link, fn *LSym, info *LSym, curfn Func) ([]dwarf.Scope, dwarf.InlCalls)
-	GenAbstractFunc      func(fn *LSym)
-	Errors               int
+	Pkgpath              string // the current package's import path
+
+	hashmu          sync.Mutex       // protects hash, funchash
+	hash            sync.Map         // name(string) -> sym(*syncOnce) mapping
+	funchash        sync.Map         // name(string) -> sym(*syncOnce) mapping for ABIInternal syms
+	statichash      map[string]*LSym // name -> sym mapping for static syms
+	PosTable        src.PosTable
+	InlTree         InlTree // global inlining tree used by gc/inl.go
+	DwFixups        *DwarfFixupTable
+	DwTextCount     int
+	Imports         []goobj.ImportedPkg
+	DiagFunc        func(string, ...any)
+	DiagFlush       func()
+	DebugInfo       func(ctxt *Link, fn *LSym, info *LSym, curfn Func) ([]dwarf.Scope, dwarf.InlCalls)
+	GenAbstractFunc func(fn *LSym)
+	Errors          int
 
 	InParallel    bool // parallel backend phase in effect
 	UseBASEntries bool // use Base Address Selection Entries in location lists and PC ranges
@@ -1215,6 +1259,13 @@ type Link struct {
 	nonpkgrefs   []*LSym // list of referenced non-package symbols
 
 	Fingerprint goobj.FingerprintType // fingerprint of symbol indices, to catch index mismatch
+}
+
+// symOnce is a "marker" value for our sync.Maps. We insert it on lookup and
+// use the atomic value to check whether initialization has been completed.
+type symOnce struct {
+	sym    LSym
+	inited atomic.Bool
 }
 
 // Assert to vet's printf checker that Link.DiagFunc is a printf-like.

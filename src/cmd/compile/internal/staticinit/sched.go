@@ -113,7 +113,7 @@ func (s *Schedule) tryStaticInit(n ir.Node) bool {
 		// "var a, b = f()" that needs type conversion, which is not static.
 		n := n.(*ir.AssignListStmt)
 		for _, rhs := range n.Rhs {
-			for rhs.Op() == ir.OCONVNOP {
+			for rhs.Op() == ir.OCONVNOP || rhs.Op() == ir.OCONVIFACE {
 				rhs = rhs.(*ir.ConvExpr).X
 			}
 			if name, ok := rhs.(*ir.Name); !ok || !name.AutoTemp() {
@@ -228,6 +228,9 @@ func (s *Schedule) staticcopy(l *ir.Name, loff int64, rn *ir.Name, typ *types.Ty
 	case ir.OADDR:
 		r := r.(*ir.AddrExpr)
 		if a, ok := r.X.(*ir.Name); ok && a.Op() == ir.ONAME {
+			if a.Class != ir.PEXTERN {
+				return false // e.g. local from new(expr)
+			}
 			staticdata.InitAddr(l, loff, staticdata.GlobalLinksym(a))
 			return true
 		}
@@ -542,7 +545,7 @@ func (s *Schedule) initplan(n ir.Node) {
 			if a.Sym().IsBlank() {
 				continue
 			}
-			s.addvalue(p, a.Field.Offset, a.Value)
+			s.addvalue(p, typecheck.FieldOffset(n.Type(), a.Field), a.Value)
 		}
 
 	case ir.OMAPLIT:
@@ -760,6 +763,8 @@ func StaticName(t *types.Type) *ir.Name {
 	typecheck.Target.Externs = append(typecheck.Target.Externs, n)
 
 	n.Linksym().Set(obj.AttrStatic, true)
+	n.Linksym().Align = int16(t.Alignment())
+
 	return n
 }
 

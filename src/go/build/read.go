@@ -42,11 +42,28 @@ func newImportReader(name string, r io.Reader) *importReader {
 	if leadingBytes, err := b.Peek(3); err == nil && bytes.Equal(leadingBytes, bom) {
 		b.Discard(3)
 	}
+
+	startLine := 1
+
+	// Skip shebang line if present at the very beginning of the file.
+	// A shebang line is: #!<text><newline>
+	// This allows Go source files to be used as scripts on Unix systems.
+	if shebangBytes, err := b.Peek(2); err == nil && shebangBytes[0] == '#' && shebangBytes[1] == '!' {
+		// Read and discard the shebang line
+		for {
+			c, err := b.ReadByte()
+			if err != nil || c == '\n' {
+				break
+			}
+		}
+		startLine = 2 // First Go code is on line 2
+	}
+
 	return &importReader{
 		b: b,
 		pos: token.Position{
 			Filename: name,
-			Line:     1,
+			Line:     startLine,
 			Column:   1,
 		},
 	}
@@ -311,7 +328,7 @@ func readGoInfo(f io.Reader, info *fileInfo) error {
 	}
 
 	// Parse file header & record imports.
-	info.parsed, info.parseErr = parser.ParseFile(info.fset, info.name, info.header, parser.ImportsOnly|parser.ParseComments)
+	info.parsed, info.parseErr = parser.ParseFile(info.fset, info.name, info.header, parser.ImportsOnly|parser.ParseComments|parser.SkipObjectResolution)
 	if info.parseErr != nil {
 		return nil
 	}
@@ -335,7 +352,7 @@ func readGoInfo(f io.Reader, info *fileInfo) error {
 			if !isValidImport(path) {
 				// The parser used to return a parse error for invalid import paths, but
 				// no longer does, so check for and create the error here instead.
-				info.parseErr = scanner.Error{Pos: info.fset.Position(spec.Pos()), Msg: "invalid import path: " + path}
+				info.parseErr = &scanner.Error{Pos: info.fset.Position(spec.Pos()), Msg: "invalid import path: " + path}
 				info.imports = nil
 				return nil
 			}

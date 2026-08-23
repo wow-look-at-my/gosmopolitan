@@ -203,6 +203,11 @@ type Cmd struct {
 	// stops copying, either because it has reached the end of Stdin
 	// (EOF or a read error), or because writing to the pipe returned an error,
 	// or because a nonzero WaitDelay was set and expired.
+	//
+	// Regardless of WaitDelay, Wait can block until a Read from
+	// Stdin completes. If you need to use a blocking io.Reader,
+	// use the StdinPipe method to get a pipe, copy from the Reader
+	// to the pipe, and arrange to close the Reader after Wait returns.
 	Stdin io.Reader
 
 	// Stdout and Stderr specify the process's standard output and error.
@@ -218,6 +223,12 @@ type Cmd struct {
 	// corresponding Writer. In this case, Wait does not complete until the
 	// goroutine reaches EOF or encounters an error or a nonzero WaitDelay
 	// expires.
+	//
+	// Regardless of WaitDelay, Wait can block until a Write to
+	// Stdout or Stderr completes. If you need to use a blocking io.Writer,
+	// use the StdoutPipe or StderrPipe method to get a pipe,
+	// copy from the pipe to the Writer, and arrange to close the
+	// Writer after Wait returns.
 	//
 	// If Stdout and Stderr are the same writer, and have a type that can
 	// be compared with ==, at most one goroutine at a time will call Write.
@@ -454,8 +465,9 @@ func Command(name string, arg ...string) *Cmd {
 		if err != nil {
 			cmd.Err = err
 		}
-	} else if runtime.GOOS == "windows" && filepath.IsAbs(name) {
-		// We may need to add a filename extension from PATHEXT
+	} else if lookExtensionsEnabled() && filepath.IsAbs(name) {
+		// Windows semantics (GOOS=windows, or a cosmo binary on an NT
+		// host): we may need to add a filename extension from PATHEXT
 		// or verify an extension that is already present.
 		// Since the path is absolute, its extension should be unambiguous
 		// and independent of cmd.Dir, and we can go ahead and cache the lookup now.
@@ -505,7 +517,7 @@ func (c *Cmd) String() string {
 	// report the exact executable path (plus args)
 	b := new(strings.Builder)
 	b.WriteString(c.Path)
-	for _, a := range c.Args[1:] {
+	for _, a := range c.argv()[1:] {
 		b.WriteByte(' ')
 		b.WriteString(a)
 	}
@@ -668,7 +680,7 @@ func (c *Cmd) Start() error {
 		return c.Err
 	}
 	lp := c.Path
-	if runtime.GOOS == "windows" {
+	if lookExtensionsEnabled() {
 		if c.Path == c.cachedLookExtensions.in {
 			// If Command was called with an absolute path, we already resolved
 			// its extension and shouldn't need to do so again (provided c.Path
@@ -917,6 +929,9 @@ func (e *ExitError) Error() string {
 //
 // If any of c.Stdin, c.Stdout or c.Stderr are not an [*os.File], Wait also waits
 // for the respective I/O loop copying to or from the process to complete.
+//
+// Wait must not be called concurrently from multiple goroutines.
+// A custom Cmd.Cancel function should not call Wait.
 //
 // Wait releases any resources associated with the [Cmd].
 func (c *Cmd) Wait() error {
@@ -1254,7 +1269,7 @@ func dedupEnv(env []string) ([]string, error) {
 
 // dedupEnvCase is dedupEnv with a case option for testing.
 // If caseInsensitive is true, the case of keys is ignored.
-// If nulOK is false, items containing NUL characters are allowed.
+// If nulOK is false, items containing NUL characters are rejected.
 func dedupEnvCase(caseInsensitive, nulOK bool, env []string) ([]string, error) {
 	// Construct the output in reverse order, to preserve the
 	// last occurrence of each key.

@@ -72,7 +72,15 @@ const (
 	// to each stack below the usual guard area for OS-specific
 	// purposes like signal handling. Used on Windows, Plan 9,
 	// and iOS because they do not use a separate stack.
-	stackSystem = goos.IsWindows*4096 + goos.IsPlan9*512 + goos.IsIos*goarch.IsArm64*1024
+	// Cosmo matches Windows: on NT hosts the exception dispatcher
+	// writes its frame (EXCEPTION_RECORD + CONTEXT + dispatcher
+	// state, up to ~4KiB with extended machine state) below the
+	// faulting RSP on the goroutine stack itself - without this
+	// reservation a fault near the stack bottom would corrupt
+	// adjacent heap memory (Go stacks have no guard pages). The cost
+	// is paid on every cosmo host (one build serves them all), the
+	// same provisioning philosophy as the fat APE itself.
+	stackSystem = goos.IsWindows*4096 + goos.IsCosmo*4096 + goos.IsPlan9*512 + goos.IsIos*goarch.IsArm64*1024
 
 	// The minimum size of stack used by Go code
 	stackMin = 2048
@@ -677,12 +685,14 @@ func adjustpointers(scanp unsafe.Pointer, bv *bitvector, adjinfo *adjustinfo, f 
 				// Looks like a junk value in a pointer slot.
 				// Live analysis wrong?
 				getg().m.traceback = 2
-				print("runtime: bad pointer in frame ", funcname(f), " at ", pp, ": ", hex(p), "\n")
+				fpfx, fname := funcnamePieces(f)
+				print("runtime: bad pointer in frame ", fpfx, fname, " at ", pp, ": ", hex(p), "\n")
 				throw("invalid pointer found on stack")
 			}
 			if minp <= p && p < maxp {
 				if stackDebug >= 3 {
-					print("adjust ptr ", hex(p), " ", funcname(f), "\n")
+					fpfx, fname := funcnamePieces(f)
+					print("adjust ptr ", hex(p), " ", fpfx, fname, "\n")
 				}
 				if useCAS {
 					ppu := (*unsafe.Pointer)(unsafe.Pointer(pp))
@@ -699,15 +709,6 @@ func adjustpointers(scanp unsafe.Pointer, bv *bitvector, adjinfo *adjustinfo, f 
 
 // Note: the argument/return area is adjusted by the callee.
 func adjustframe(frame *stkframe, adjinfo *adjustinfo) {
-	if frame.continpc == 0 {
-		// Frame is dead.
-		return
-	}
-	f := frame.fn
-	if stackDebug >= 2 {
-		print("    adjusting ", funcname(f), " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
-	}
-
 	// Adjust saved frame pointer if there is one.
 	if (goarch.ArchFamily == goarch.AMD64 || goarch.ArchFamily == goarch.ARM64) && frame.argp-frame.varp == 2*goarch.PtrSize {
 		if stackDebug >= 3 {
@@ -728,6 +729,45 @@ func adjustframe(frame *stkframe, adjinfo *adjustinfo) {
 		// On ARM64, this is the frame pointer of the caller's caller saved
 		// by the caller in its frame (one word below its SP).
 		adjustpointer(adjinfo, unsafe.Pointer(frame.varp))
+	}
+	if goarch.ArchFamily == goarch.ARM64 && isInjectedCall(frame.fn.funcID) {
+		// If this is an injected call on arm64, then we need to adjust
+		// the frame pointer saved by the original function into which
+		// the call was injected. Normally this would be handled when
+		// adjusting the callee's frame or in adjustctxt. But when a
+		// call is injected, the frame is placed 16 bytes below the
+		// original stack pointer to make room to save the link
+		// register, and the frame pointer saved by the original
+		// function isn't inside any call frame. We can adjust that
+		// saved frame pointer here by looking just above frame.fp.
+		//
+		// ^  original call    ^
+		// |  frame above...   |
+		// +-------------------+ <- stack pointer at the time of injection
+		// :  FP saved by      :
+		// :  original func    :
+		// :···················: <- frame pointer register from original function
+		// :  LR saved during  :
+		// :  injection        :
+		// +-------------------+ <- frame.fp (injection decrements SP by 16 bytes)
+		// |  FP saved         |
+		// |  during injection |
+		// +-------------------+
+		// |  injected call    |
+		// V  frame below...   V
+		adjustpointer(adjinfo, unsafe.Pointer(frame.fp+goarch.PtrSize))
+	}
+
+	if frame.continpc == 0 {
+		// Frame is dead. The program might still see the frame pointer
+		// saved in the frame, adjusted above, but we don't need to
+		// adjust the rest of the frame.
+		return
+	}
+	f := frame.fn
+	if stackDebug >= 2 {
+		fpfx, fname := funcnamePieces(f)
+		print("    adjusting ", fpfx, fname, " frame=[", hex(frame.sp), ",", hex(frame.fp), "] pc=", hex(frame.pc), " continpc=", hex(frame.continpc), "\n")
 	}
 
 	locals, args, objs := frame.getStackMap(true)
@@ -1051,13 +1091,13 @@ func newstack() {
 		morebuf := thisg.m.morebuf
 		gp.syscallsp = morebuf.sp
 		gp.syscallpc = morebuf.pc
-		pcname, pcoff := "(unknown)", uintptr(0)
+		pcpfx, pcname, pcoff := "", "(unknown)", uintptr(0)
 		f := findfunc(gp.sched.pc)
 		if f.valid() {
-			pcname = funcname(f)
+			pcpfx, pcname = funcnamePieces(f)
 			pcoff = gp.sched.pc - f.entry()
 		}
-		print("runtime: newstack at ", pcname, "+", hex(pcoff),
+		print("runtime: newstack at ", pcpfx, pcname, "+", hex(pcoff),
 			" sp=", hex(gp.sched.sp), " stack=[", hex(gp.stack.lo), ", ", hex(gp.stack.hi), "]\n",
 			"\tmorebuf={pc:", hex(morebuf.pc), " sp:", hex(morebuf.sp), " lr:", hex(morebuf.lr), "}\n",
 			"\tsched={pc:", hex(gp.sched.pc), " sp:", hex(gp.sched.sp), " lr:", hex(gp.sched.lr), " ctxt:", gp.sched.ctxt, "}\n")

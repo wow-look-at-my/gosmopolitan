@@ -70,6 +70,55 @@ func (s *source) init(in io.Reader, errh func(line, col uint, msg string)) {
 	s.line, s.col = 0, 0
 	s.ch = ' '
 	s.chw = 0
+
+	// Skip shebang line if present at the very beginning of the file.
+	// A shebang line is: #!<text><newline>
+	// This allows Go source files to be used as scripts on Unix systems.
+	s.nextch() // Read first character (handles BOM if present)
+	if s.ch != '#' {
+		// No shebang. Rewind so scanner sees this character.
+		s.unreadChar()
+		return
+	}
+
+	firstCharPos := s.r - s.chw // Position of '#' in buffer
+
+	s.nextch() // Read second character
+	if s.ch != '!' {
+		// Not a shebang (just starts with '#'), rewind to first character.
+		s.r = firstCharPos
+		s.ch = ' '
+		s.chw = 0
+		s.col = 0
+		s.line = 0
+		return
+	}
+
+	// It's a shebang! Skip to end of line.
+	for s.ch != '\n' && s.ch >= 0 {
+		s.nextch()
+	}
+
+	// Set line number so first Go code is on line 2 (shebang was line 1).
+	// s.ch is '\n' or EOF. Either way, prepare for scanner to read next line.
+	if s.ch == '\n' {
+		s.line = 1 // Line numbers are 0-indexed internally; line 2 = index 1
+	}
+	s.ch = ' '
+	s.chw = 0
+	s.col = 0
+}
+
+// unreadChar moves back to re-read the current character on next nextch() call.
+// This can only be called once after a nextch() and before any other operations.
+func (s *source) unreadChar() {
+	if s.chw > 0 {
+		s.r -= s.chw
+	}
+	s.ch = ' '
+	s.chw = 0
+	s.col = 0
+	s.line = 0
 }
 
 // starting points for line and column numbers

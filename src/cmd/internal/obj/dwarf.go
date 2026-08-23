@@ -10,6 +10,7 @@ import (
 	"cmd/internal/dwarf"
 	"cmd/internal/objabi"
 	"cmd/internal/src"
+	"cmd/internal/sys"
 	"fmt"
 	"slices"
 	"strings"
@@ -47,7 +48,7 @@ func (ctxt *Link) generateDebugLinesSymbol(s, lines *LSym) {
 	// we expect at the start of a new sequence.
 	stmt := true
 	line := int64(1)
-	pc := s.Func().Text.Pc
+	pc := s.DwarfPC(s.Func().Text)
 	var lastpc int64 // last PC written to line table, not last PC in func
 	fileIndex := 1
 	prologue, wrotePrologue := false, false
@@ -55,7 +56,7 @@ func (ctxt *Link) generateDebugLinesSymbol(s, lines *LSym) {
 	for p := s.Func().Text; p != nil; p = p.Link {
 		prologue = prologue || (p.Pos.Xlogue() == src.PosPrologueEnd)
 		// If we're not at a real instruction, keep looping!
-		if p.Pos.Line() == 0 || (p.Link != nil && p.Link.Pc == p.Pc) {
+		if p.Pos.Line() == 0 || (p.Link != nil && s.DwarfPC(p.Link) == s.DwarfPC(p)) {
 			continue
 		}
 		newStmt := p.Pos.IsStmt() != src.PosNotStmt
@@ -82,10 +83,11 @@ func (ctxt *Link) generateDebugLinesSymbol(s, lines *LSym) {
 		}
 
 		if line != int64(newLine) || wrote {
-			pcdelta := p.Pc - pc
-			lastpc = p.Pc
+			ppc := s.DwarfPC(p)
+			pcdelta := ppc - pc
+			lastpc = ppc
 			putpclcdelta(ctxt, dctxt, lines, uint64(pcdelta), int64(newLine)-line)
-			line, pc = int64(newLine), p.Pc
+			line, pc = int64(newLine), ppc
 		}
 	}
 
@@ -104,7 +106,7 @@ func (ctxt *Link) generateDebugLinesSymbol(s, lines *LSym) {
 	// text address before the end sequence op. If this isn't done,
 	// GDB will assign a line number of zero the last row in the line
 	// table, which we don't want.
-	lastlen := uint64(s.Size - (lastpc - s.Func().Text.Pc))
+	lastlen := uint64(s.DwarfSize() - (lastpc - s.DwarfPC(s.Func().Text)))
 	dctxt.AddUint8(lines, dwarf.DW_LNS_advance_pc)
 	dwarf.Uleb128put(dctxt, lines, int64(lastlen))
 	dctxt.AddUint8(lines, 0) // start extended opcode
@@ -363,18 +365,31 @@ func (ctxt *Link) populateDWARF(curfn Func, s *LSym) {
 		panic("bad startPos")
 	}
 	fnstate := &dwarf.FnState{
-		Name:          s.Name,
+		Name:          TrimInlineHash(s.Name),
 		Info:          info,
 		Loc:           loc,
 		Ranges:        ranges,
 		Absfn:         absfunc,
 		StartPC:       s,
-		Size:          s.Size,
+		Size:          s.DwarfSize(),
 		StartPos:      startPos,
 		External:      !s.Static(),
 		Scopes:        scopes,
 		InlCalls:      inlcalls,
 		UseBASEntries: ctxt.UseBASEntries,
+	}
+	if ctxt.Arch.Family == sys.Wasm {
+		// Wasm emits no .debug_frame, so the subprogram's frame base
+		// must compute the CFA directly instead of referring to call
+		// frame information. The CFA that variable StackOffsets are
+		// relative to sits just above the frame and the 8-byte return
+		// address the caller pushed (wasm has FixedFrameSize 0 and an
+		// x86-style caller push; see the NAME_PARAM handling in
+		// cmd/internal/obj/wasm.preprocess): CFA = SP + framesize + 8.
+		// SP only moves in the prologue/epilogue on wasm, so a single
+		// constant offset from the SP global is exact throughout the
+		// function body.
+		fnstate.WasmCFAOffset = s.Func().Text.To.Offset + 8
 	}
 	if absfunc != nil {
 		err = dwarf.PutAbstractFunc(dwctxt, fnstate)
@@ -435,7 +450,7 @@ func (ctxt *Link) DwarfAbstractFunc(curfn Func, s *LSym) {
 	scopes, _ := ctxt.DebugInfo(ctxt, s, absfn, curfn)
 	dwctxt := dwCtxt{ctxt}
 	fnstate := dwarf.FnState{
-		Name:          s.Name,
+		Name:          TrimInlineHash(s.Name),
 		Info:          absfn,
 		Absfn:         absfn,
 		StartPos:      ctxt.InnermostPos(curfn.Pos()),

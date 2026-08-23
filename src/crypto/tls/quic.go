@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 )
 
 // QUICEncryptionLevel represents a QUIC encryption level used to transmit
@@ -56,6 +57,9 @@ type QUICConfig struct {
 	// stored in the client session cache.
 	// The application should use [QUICConn.StoreSession] to store sessions.
 	EnableSessionEvents bool
+
+	// ClientHelloInfoConn is the net.Conn to use for the ClientHelloInfo.Conn field.
+	ClientHelloInfoConn net.Conn
 }
 
 // A QUICEventKind is a type of operation on a QUIC connection.
@@ -162,7 +166,7 @@ type quicState struct {
 	started  bool
 	signalc  chan struct{}   // handshake data is available to be read
 	blockedc chan struct{}   // handshake is waiting for data, closed when done
-	cancelc  <-chan struct{} // handshake has been canceled
+	ctx      context.Context // handshake context
 	cancel   context.CancelFunc
 
 	waitingForDrain bool
@@ -176,20 +180,17 @@ type quicState struct {
 	transportParams []byte // to send to the peer
 
 	enableSessionEvents bool
+	clientHelloInfoConn net.Conn
 }
 
 // QUICClient returns a new TLS client side connection using QUICTransport as the
 // underlying transport. The config cannot be nil.
-//
-// The config's MinVersion must be at least TLS 1.3.
 func QUICClient(config *QUICConfig) *QUICConn {
 	return newQUICConn(Client(nil, config.TLSConfig), config)
 }
 
 // QUICServer returns a new TLS server side connection using QUICTransport as the
 // underlying transport. The config cannot be nil.
-//
-// The config's MinVersion must be at least TLS 1.3.
 func QUICServer(config *QUICConfig) *QUICConn {
 	return newQUICConn(Server(nil, config.TLSConfig), config)
 }
@@ -199,6 +200,7 @@ func newQUICConn(conn *Conn, config *QUICConfig) *QUICConn {
 		signalc:             make(chan struct{}),
 		blockedc:            make(chan struct{}),
 		enableSessionEvents: config.EnableSessionEvents,
+		clientHelloInfoConn: config.ClientHelloInfoConn,
 	}
 	conn.quic.events = conn.quic.eventArr[:0]
 	return &QUICConn{
@@ -215,9 +217,6 @@ func (q *QUICConn) Start(ctx context.Context) error {
 		return quicError(errors.New("tls: Start called more than once"))
 	}
 	q.conn.quic.started = true
-	if q.conn.config.MinVersion < VersionTLS13 {
-		return quicError(errors.New("tls: Config MinVersion must be at least TLS 1.3"))
-	}
 	go q.conn.HandshakeContext(ctx)
 	if _, ok := <-q.conn.quic.blockedc; !ok {
 		return q.conn.handshakeErr
@@ -261,10 +260,11 @@ func (q *QUICConn) NextEvent() QUICEvent {
 
 // Close closes the connection and stops any in-progress handshake.
 func (q *QUICConn) Close() error {
-	if q.conn.quic.cancel == nil {
+	if q.conn.quic.ctx == nil {
 		return nil // never started
 	}
 	q.conn.quic.cancel()
+	<-q.conn.quic.signalc
 	for range q.conn.quic.blockedc {
 		// Wait for the handshake goroutine to return.
 	}
@@ -511,20 +511,16 @@ func (c *Conn) quicWaitForSignal() error {
 	// Send on blockedc to notify the QUICConn that the handshake is blocked.
 	// Exported methods of QUICConn wait for the handshake to become blocked
 	// before returning to the user.
-	select {
-	case c.quic.blockedc <- struct{}{}:
-	case <-c.quic.cancelc:
-		return c.sendAlertLocked(alertCloseNotify)
-	}
+	c.quic.blockedc <- struct{}{}
 	// The QUICConn reads from signalc to notify us that the handshake may
 	// be able to proceed. (The QUICConn reads, because we close signalc to
 	// indicate that the handshake has completed.)
-	select {
-	case c.quic.signalc <- struct{}{}:
-		c.hand.Write(c.quic.readbuf)
-		c.quic.readbuf = nil
-	case <-c.quic.cancelc:
+	c.quic.signalc <- struct{}{}
+	if c.quic.ctx.Err() != nil {
+		// The connection has been canceled.
 		return c.sendAlertLocked(alertCloseNotify)
 	}
+	c.hand.Write(c.quic.readbuf)
+	c.quic.readbuf = nil
 	return nil
 }

@@ -1,0 +1,267 @@
+# WebAssembly (GOOS=js / GOOS=wasip1)
+
+
+This fork diverges from upstream on the wasm ports (upstream inherited them
+untouched until 2026-07-04; see `WASM_SHORTCOMINGS.md` at the repo root for
+the full catalog of fixes and remaining gaps):
+
+- **Preemptible loops are default-on for GOARCH=wasm**: CPU-bound goroutines
+  no longer starve timers/GC/other goroutines. Opt out with
+  `GOEXPERIMENT=nopreemptibleloops`.
+- `GOMAXPROCS` from the environment is clamped to 1 (no more `newosproc`
+  throw at startup).
+- The js argv/env budget is 60KB (61440 bytes, was 8KB), so big CI
+  environments run.
+- `GODEBUG=jsfetchnode=1` enables real HTTP via fetch under Node.js >= 18
+  (default stays on the fake in-memory network).
+- wasip1 honors `TZ` (with `time/tzdata` or a preopened zoneinfo dir).
+- Round 2 (2026-07-05): atomic ops are intrinsified and int64 division is
+  inlined (no more runtime calls), `syscall/js` adds `js.Await` and
+  `js.CopyToGo`/`js.CopyToJS` (typed-array bulk copies), and the periodic
+  2-minute forced GC now runs on both wasm ports.
+- Round 3 (2026-07-05): stdout/stderr are synchronous under node (printing
+  no longer hangs while another goroutine is CPU-busy), fully-idle js
+  programs are woken for the periodic GC via a weak unref'd timeout,
+  `GOWASM=tailcall` emits return_call (js-only; wazero rejects it, so it
+  stays off by default), CPU profiling works at 100Hz on both ports
+  (`pprof.StartCPUProfile`, `-test.cpuprofile` - sampled at loop
+  backedges), and `go tool objdump`/`nm`/`addr2line` understand wasm
+  binaries. `runtime/pprof` joined both test lists in the CI wasm job.
+- Round 4 (2026-07-06): `GOWASI=wasmedgesock` (default off) gives wasip1
+  real TCP sockets via the WasmEdge socket extension (Dial, Listen/Accept,
+  deadlines, http.Get/http.Serve); `testdata/wasip1sock` holds the wazero
+  reference host plus the end-to-end tests. Default builds are unchanged.
+  In the same round, wasm binaries gained DWARF v5 debug info in
+  `.debug_*` custom sections per the WebAssembly DWARF convention (code
+  addresses are byte offsets from the start of the code section's
+  contents, the lld/Chrome model): full DIE tree plus statement-level
+  line tables, `llvm-dwarfdump --verify` clean on both ports. On by
+  default (~+39% file size), stripped with `-ldflags=-w`. The name
+  section now precedes producers, so llvm tools can read Go wasm
+  binaries. Variable location expressions remained placeholders until
+  round 6 gave them a real DW_OP_WASM_location frame base.
+- Round 5 (2026-07-17): frame-aware GC. The pacer gives mark phases real
+  runway (trigger no later than ~halfway to the goal, background credit
+  seeded at cycle start so the allocation that crosses the trigger
+  doesn't assist-burst), idle mark drains are bounded to 2ms, and a new
+  `go_gc_mark_step(budgetMs) -> bool` wasm export lets the host donate
+  idle time between frames (bounded mark work, no-op outside a cycle,
+  returns whether work remains; while the host donates, the in-frame
+  fractional mark quota drops 25% -> 5%). These behaviors are
+  deliberately platform-independent - ALL platforms trigger earlier
+  (trigger pinned ~halfway to the goal, trading some throughput/GC
+  frequency for bounded mark bursts; TestGcPacer models the new math)
+  and bound idle drains, and the budgeted mark step core is portable
+  with runtime tests that run everywhere; only the event-loop yield
+  glue (throttle idle marking + 1ms re-arm instead of starving the
+  event loop until mark completion) and the wasm export are js-only.
+  `testdata/framebench` (10k allocs/frame under node): p99 frame time
+  21.6ms -> 4.8ms, zero frames over 8ms.
+- Round 6 (2026-07-19): wasm DWARF variable locations are real: every
+  subprogram's DW_AT_frame_base is now a DW_OP_WASM_location expression
+  computing the frame base from the SP global (SP + framesize + 8 - the
+  CFA of this x86-model target with a caller-pushed 8-byte return
+  address; SP only moves in the prologue/epilogue, so the constant is
+  exact throughout the body), and every stack-homed parameter and local
+  resolves through its DW_OP_fbreg offset to exactly the linear-memory
+  address codegen uses. The payoff is `-N -l` builds, where named
+  variables live on the stack; heap-escaped variables still carry no
+  location, and register-promoted variables in optimized builds stay
+  name-and-type-only. llvm-dwarfdump decodes the expression natively
+  and --verify stays clean; non-wasm DWARF is byte-identical; a
+  cmd/link/internal/wasm regression test locks the encoding for both
+  ports. In the same round, `GOWASI=wasmedgesock` grew real UDP:
+  ListenUDP/ListenPacket with ReadFrom/WriteTo, connected `Dial("udp")`
+  with Read/Write preserving datagram boundaries, and the
+  same deadline machinery as TCP. Receives import the newer-generation
+  `sock_recv_from_v2` (the plain-named `sock_recv_from` is WasmEdge's V1
+  everywhere and cannot report the source port), so opt-in binaries now
+  need WasmEdge 0.12+ (or the reference host) to instantiate at all -
+  the generation mix, the 128-byte family-tagged address buffer, and
+  the network-byte-order recv_from port quirk (verified live against
+  WasmEdge 0.17.1) are documented in `syscall/net_wasip1_wasmedge.go`.
+  ReadMsgUDP/WriteMsgUDP are ENOSYS
+  (no ancillary data in the extension); DNS and unix sockets stay
+  fake. `testdata/wasip1sock` grew UDP host support plus
+  udpecho/udpconnected guests, and the CI wasm job now runs the whole
+  wasip1sock suite. Default (no GOWASI) builds are unchanged. And the
+  js fetch transport streams request bodies: unknown-length bodies
+  (outgoingLength < 0 - exactly the requests HTTP/1 sends chunked)
+  upload through a ReadableStream with duplex "half" instead of being
+  buffered whole, when a cached one-time probe shows the runtime's
+  fetch supports upload streaming (Node.js 18+ and Chromium 105+ pass;
+  everything else keeps the buffered path byte-for-byte). Pulls read
+  64KiB chunks on a goroutine off the event loop, so backpressure
+  reaches the reader, and the body is closed exactly once on every
+  path (EOF, read error, cancel/abort, every RoundTrip exit).
+  Known-length bodies stay buffered on purpose - fetch drops
+  Content-Length for stream bodies, buffering keeps it on the wire -
+  and streamed bodies cannot be replayed, so a redirect that must
+  re-send the body fails with a network error per spec.
+  `testdata/jsfetchstream` is the node e2e; the CI wasm job runs it.
+- Round 7 (2026-07-25): forward jumps skip the dispatcher. Inter-block
+  control flow used to store the target block to PC_B, branch to the entry
+  loop and re-enter through a br_table with one entry per basic block - an
+  indirect branch the engine cannot optimize through - and it did that even
+  for a jump FORWARD, which needs none of it: the prologue opens one block
+  per resume point, so the target's block is still open and a plain `br`
+  lands exactly there. Backward jumps (loop backedges) still used the
+  dispatcher, because their block has already been closed (round 8 fixes
+  that). Roughly 1.4-1.5x faster wasm across mixed workloads (best ~2x on
+  branchy scanning code, ~1.15x on sort), ~1.1% smaller modules, output
+  unchanged. `cmd/internal/obj/wasm` tests pin that a forward-only function
+  emits zero PC_B stores.
+- Round 8 (2026-07-25): loop backedges get a real wasm `loop`. The blocker
+  was that ssaGenBlock makes EVERY basic block a resume point, so a loop
+  header's block is closed by the End that starts the body and there is
+  nothing left for the backedge to name. Most of those blocks are dead
+  weight: one only ever fallen into needs no Block in the prologue and no
+  BrTable slot. So ssaGenBlock now marks the resume points it emits to open
+  a block, and the assembler drops a marked one that nothing branches to -
+  it keeps its own pc, so line numbers and tracebacks are unchanged. A
+  loop's header and body then sit in one region and the backedge is a plain
+  `br` to a `loop` wrapped around it. One marked resume point may NOT be
+  dropped: one with a call after it and before the next. Every address the
+  runtime re-enters at is derived from a call's stored return address -
+  including a function's deferreturn, which the linker records as the pc
+  just before the resume point after that call (`computeDeferReturn`) - so
+  folding such a region moves where the runtime lands. Missing that made
+  recover() re-enter the wrong block and spin forever; it is why the guard
+  is phrased in terms of calls rather than deferreturn alone. Still
+  dispatched: a backward jump crossing a region boundary - a loop with a call
+  in it, and the OUTER loop of a nest, since the inner header is branched to
+  and keeps a block whose End falls inside the outer loop. The innermost loop
+  is the one that gets fixed, which is where the iterations are. Over
+  strconv, regexp, encoding/json, compress/flate, bytes, strings and sort
+  (1322 functions), rounds 7+8 take PC_B stores from 10467 to 1865 and turn
+  154 loops in 93 functions into real wasm loops. Wasm went from 3.2x native
+  Go to 1.8x (geomean over seven
+  workloads), 1.18-2.88x faster than the unpatched compiler, ~2.1% smaller
+  modules. On a real aggregation kernel 97.8 -> 59.6 ms and its RLE decode
+  18.1 -> 5.2 ms, output byte-identical. `cmd/internal/obj/wasm` tests pin
+  that a counted loop compiles to a real Loop and that a loop with a call in
+  it keeps its PC_B store.
+- Threads groundwork B0 (2026-07-17): `GOWASM=threads` (default off,
+  experimental, GOOS=js only) is toolchain-only groundwork for the wasm
+  threads proposal - real parallelism lands in later phases and the
+  runtime stays single-threaded for now. With it, Go's atomic ops emit
+  the proposal's 0xFE atomic instructions and the linker imports a
+  shared linear memory (`gojs`.`mem`, shared limits flag 0x03, max
+  2048 MiB) instead of declaring a module-local one; `wasm_exec.js`
+  supplies the matching shared `WebAssembly.Memory` via
+  `go.provideMemory(wasmBytes)` (called automatically by
+  `wasm_exec_node.js`, no-op for ordinary modules). Node 18+ needs no
+  flags; browsers will need COOP/COEP headers (cross-origin isolation)
+  for SharedArrayBuffer. wasip1 builds reject the flag at link time
+  (wazero/wasmtime lack the proposal). Without the flag, output is
+  byte-identical to before.
+- Threads worker pool B1 (2026-07-17): under GOWASM=threads the linker
+  now emits PASSIVE data segments (+ DataCount section) - active ones
+  would be re-applied on every instantiation, so a second instance would
+  clobber live heap/runtime state in the shared memory - plus two
+  synthetic exports: `_initmem` (memory.init + data.drop of all
+  segments; called exactly once, by the main instance, from `Go.run` in
+  wasm_exec.js - worker instances must never call it) and
+  `wasm_probe_atomic_add(addr, delta)` (a runtime-state-free wasm
+  i32.atomic.rmw.add workers can call before the scheduler is
+  thread-aware). `wasm_exec_node.js` compiles threads modules once
+  (kept on `go._module`); `lib/wasm/wasm_exec_pool_node.js`
+  (`GoWorkerPool`) + `wasm_exec_worker_node.js`/`wasm_exec_worker.js`
+  spawn N node worker_threads that instantiate the same module against
+  the same shared memory with all gojs runtime imports stubbed - Go
+  code does not run on worker instances yet (that is scheduler
+  integration, phase B2). Demo: `testdata/wasmthreads/pooldemo` driven
+  by `pool_demo.js` (run in CI). Ordinary modules and non-threads
+  builds are unchanged (byte-identical).
+- Threads runtime B2 (2026-07-17): real Go code runs on worker threads
+  under GOWASM=threads. Futex layer over memory.atomic.wait32/notify
+  (`runtime/sys_wasmthreads.s`); futex mutexes/notes for the runtime
+  (`lock_jsthreads.go`; `notetsleepg(n,-1)` parks the g, not the M);
+  `newosproc` hands new Ms through a futex mailbox to pool workers
+  parked in the new `wasm_thread_run` export (raw-wasm wait loop, sets
+  per-instance SP/g to the M's heap-allocated g0 and enters mstart).
+  `wasm_exec_node.js` pre-spawns GOWASMTHREADSPOOL workers (default 4,
+  0 disables; newosproc throws after 10s if none claims); workers get
+  real pure-runtime imports (println/clock/random/exit work on worker
+  Ms) but syscall/js stays main-thread-only. The event loop remains
+  main-M-only (`event_js.go` shared; beforeIdle routes worker Ms to
+  futex parks/timed sleeps). Main M may futex-wait (node-only; event
+  loop stalls while it does - B3 makes that non-blocking). GOMAXPROCS
+  is still clamped to 1 (single P handed between Ms); the demo/test
+  hook `runtime.wasmThreadsRunOnNewM` (pull-linkname with
+  `-ldflags=-checklinkname=0`) pins the caller's goroutine to its M to
+  force the handoff; public LockOSThread is still a wasm no-op. Demo:
+  `testdata/wasmthreads/threaddemo` (CI runs it 10x; three Ms on three
+  threads, channels/mutex/shared heap/GC, exit 0), plus an in-tree
+  runtime spawn test; threads regression set is `go test -short sync
+  sync/atomic internal/runtime/atomic runtime` under GOWASM=threads.
+  Non-threads builds keep identical behavior but are NO LONGER
+  byte-identical across this phase (runtime source split shifts
+  symbols/pclntab/DWARF). Still missing (B3): multi-P, real STW
+  preemption, non-blocking main-thread park, syscall/js forwarding
+  from worker Ms, browser workers.
+- Threads B3 (2026-07-17) adds the multi-P scheduler bring-up: GOMAXPROCS is
+  unclamped under GOWASM=threads (capped at GOWASMTHREADSPOOL+1; default still
+  1), real 0xFE atomic bodies + publication fence, cooperative stop-the-world
+  via cross-thread-armed loop backedge checks, a non-blocking main-thread park
+  (main M releases its P and parks in the event loop; woken cross-thread via
+  Atomics.waitAsync on a wake word, with a keep-alive while workers run), and
+  syscall/js calls from worker Ms migrating their goroutine to the main
+  thread (stdout/stderr writes work directly on workers). The B3
+  "lost-wakeup" stalls / exit hang were root-caused to two bugs and fixed:
+  a main-thread microtask livelock (a wasmMainWake bump issued on the main
+  thread inside a resume re-triggers the armed Atomics.waitAsync watcher,
+  and the microtask chain starves every macrotask incl. the worker-posted
+  exit message; fixed by dropping main-thread-issued bumps) and
+  migrate-queue starvation (the queue only the main M can pop had a single
+  push-time wake, and a worker M idling in beforeIdle's timed sleep held
+  the only P through the whole wait; fixed by re-nudging from pidleput and
+  the parked-worker watchdog, and bailing out of the idle P-hold when the
+  main M needs a P).
+
+ Threads B4 (2026-07-19) is the hardening sweep: the rare GOMAXPROCS=4
+  crash class was root-caused to a FALSE deadlock report - checkdead's
+  "all Ms idle + runnable g" inference does not hold under threads
+  because the parked main M executes Go code (self-serve/kicks) while
+  still linked on sched.midle; checkdead now nudges the wake machinery
+  and returns instead of throwing (real deadlock reporting via the
+  host's exit-time probe is unchanged). The pool-headroom perf collapse
+  is fixed: a main M parked in the event loop counts as the far-future
+  -timer covering agent (backstop JS timeout + wakeNetPoller nudge), so
+  loop gates disarm without pool headroom - pool sizing no longer
+  affects parallel throughput for the common shapes. Idle-CPU
+  double-counting that made /cpu/classes/user:cpu-seconds non-monotonic
+  at >1P is fixed. Host events arriving while the main M has no P are
+  queued by wasm_exec.js instead of silently overwriting _pendingEvent.
+  Worker-side traps report their wasm stack (Go function names). New
+  gates: testdata/wasmthreads/holblock (a blocked ASYNC event handler
+  does not head-of-line-block later events; blocking a SYNCHRONOUS
+  nested js.FuncOf callback stays documented-unsupported, as upstream)
+  and testdata/wasmthreads/memgrow (worker-side memory.grow under
+  concurrent main/worker heap+host traffic). Later phases: host-call
+  forwarding, mark-worker knobs, browser hosts.
+
+ Threads grow-observation guard (2026-07-20): the nondeterministic
+  worker trap `memory access out of bounds` at runtime.newMarkBits
+  (~0.22% of loaded smoke runs) was root-caused to the engine
+  bounds-checking ATOMIC accesses against a per-instance cached memory
+  size that lags cross-thread memory.grow — a correctly-synchronized
+  fresh-page pointer from another thread could trap on its first atomic
+  touch. The assembler now emits a guard before EVERY 0xFE atomic memory
+  access under GOWASM=threads (cmd/internal/obj/wasm
+  writeGrowEpochGuard; hot path 5 instructions): compare
+  runtime.wasmGrowEpoch (bumped by sbrk per grow) against a per-instance
+  observed-epoch wasm global, and on mismatch execute memory.grow 0,
+  which resynchronizes that instance's cached size. Covers compiler
+  intrinsics and hand-written .s alike (single emission choke point);
+  wait32/notify included, atomic.fence exempt; non-threads builds are
+  unchanged (no 0xFE ops). CI gate: testdata/wasmthreads/growatomic.
+  Residual: plain accesses rely on trap-handler (guard-page) engines —
+  true of 64-bit V8, the only supported threads host (see
+  WASM_SHORTCOMINGS.md).
+
+The wasm exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so
+`GOOS=js GOARCH=wasm go test <pkg>` finds `go_js_wasm_exec` (Node.js 18+) and
+`GOOS=wasip1 GOARCH=wasm go test <pkg>` finds `go_wasip1_wasm_exec`
+(wasmtime by default; `GOWASIRUNTIME=wazero` also works). Remember the fork
+defaults to GOOS=cosmo: always pin GOOS/GOARCH on wasm commands.

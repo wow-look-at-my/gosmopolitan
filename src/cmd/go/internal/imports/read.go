@@ -33,6 +33,20 @@ func newImportReader(b *bufio.Reader) *importReader {
 	if leadingBytes, err := b.Peek(3); err == nil && bytes.Equal(leadingBytes, bom) {
 		b.Discard(3)
 	}
+
+	// Skip shebang line if present at the very beginning of the file.
+	// A shebang line is: #!<text><newline>
+	// This allows Go source files to be used as scripts on Unix systems.
+	if shebangBytes, err := b.Peek(2); err == nil && shebangBytes[0] == '#' && shebangBytes[1] == '!' {
+		// Read and discard the shebang line
+		for {
+			c, err := b.ReadByte()
+			if err != nil || c == '\n' {
+				break
+			}
+		}
+	}
+
 	return &importReader{b: b}
 }
 

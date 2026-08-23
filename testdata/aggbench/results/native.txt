@@ -1,0 +1,8 @@
+# native amd64, same kernel and frame, as the ceiling the wasm numbers
+# are read against.
+
+frame: 4533214 pages, 32 VMAs, 162735 runs, 3.0% busy, 283326 cells @ 16 pages
+AggregateInto (no mark)          2.60 ms   (min 2.49, max 2.97)
+AggregateInto (mark set)         3.17 ms   (min 3.07, max 4.16)
+DecodeKeyframePages              5.43 ms   (min 4.46, max 8.56)
+checksum: 208871676
