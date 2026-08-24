@@ -84,6 +84,7 @@ const (
 	O_EXCL      = 0x80
 	O_LARGEFILE = 0x0
 	O_NDELAY    = 0x800
+	O_NOATIME   = 0x40000
 	O_NOCTTY    = 0x100
 	O_NOFOLLOW  = 0x20000
 	O_NONBLOCK  = 0x800

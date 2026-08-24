@@ -91,8 +91,12 @@ const (
 	O_EXCL      = 0x80
 	O_LARGEFILE = 0x0
 	O_NDELAY    = 0x800
-	O_NOCTTY    = 0x100
-	O_NOFOLLOW  = 0x8000
+	// O_NOATIME is 0x40000 on both Linux architectures, so it needs no
+	// arm64 spelling of its own. A package whose _linux file names it (go-fuse
+	// does) does not compile for cosmo without it.
+	O_NOATIME  = 0x40000
+	O_NOCTTY   = 0x100
+	O_NOFOLLOW = 0x8000
 	O_NONBLOCK  = 0x800
 	O_RDONLY    = 0x0
 	O_RDWR      = 0x2
