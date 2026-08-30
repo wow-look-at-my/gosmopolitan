@@ -31,7 +31,7 @@ var probeOkChecks = []string{
 	"unixsock", "unixecho",
 	"socketpair", "sockpairpoll",
 	"sendmsg", "netbuffers", "fdpass",
-	"execchild", "lookpath", "execstress", "cloexec",
+	"execchild", "lookpath", "execstress", "pipeeof", "cloexec",
 	"hostos", "fdpath", "peercred", "dupfile",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",

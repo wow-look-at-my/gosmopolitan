@@ -156,6 +156,10 @@ func Mkdir(path string, mode uint32) (err error) {
 	return Mkdirat(_AT_FDCWD, path, mode)
 }
 
+func Mkfifo(path string, mode uint32) (err error) {
+	return Mknod(path, mode|S_IFIFO, 0)
+}
+
 func Mknod(path string, mode uint32, dev int) (err error) {
 	return Mknodat(_AT_FDCWD, path, mode, dev)
 }

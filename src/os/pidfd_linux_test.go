@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// The tag mirrors pidfd_linux.go, which cosmo does not build.
+//go:build linux && !cosmo
+
 package os_test
 
 import (
