@@ -10,7 +10,9 @@ import (
 
 // checkPipeEOF asserts that a child's stdout pipe reaches EOF when the
 // child exits. os/exec waits for that EOF inside Wait, so a pipe whose
-// write end escaped to another process parks the parent forever.
+// write end escaped to another process parks the parent forever. That is
+// the macOS shape go-toolchain hits: a `go` subprocess exits and the
+// parent stays in io.Copy on its stdout until the step budget runs out.
 //
 // A write end can only escape through a fork that happens while the
 // parent still holds it, and that window lives inside Start. So each

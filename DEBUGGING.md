@@ -5940,7 +5940,7 @@ no `FD_CLOEXEC`.
 
 The check was written for go-toolchain's macOS leg, which times out in
 `src/cmd` and `src/vet` at the 30s per-test cap with the parent inside
-`gocommand.runCmdContext` -> `io.Copy` -> `poll.(*FD).Read`. It reports `ok
+`gocommand.runCmdContext` -> `os/exec writerDescriptor` -> `io.Copy` -> `poll.(*FD).Read`. It reports `ok
 pipeeof` on the macOS runner, on all three origin binaries, so an escaped write
 end is NOT that failure.
 
