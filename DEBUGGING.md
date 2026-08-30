@@ -4648,6 +4648,59 @@ http.Get repro on windows-latest, an off-host network/DNS probe
 (needs an endpoint reachable from CI), and resolver bring-up on NT if
 the hypothesis holds.
 
+## 2026-08-30: the hypothesis is CONFIRMED — the resolver never asks Windows
+
+Consumer CI again (go-toolchain PR 426, windows-latest, fork v360),
+this time with the error text instead of a bare timeout:
+
+    lookup dl.pazer.build on [::1]:53: read udp [::1]:57430->[::1]:53:
+    i/o timeout
+
+`[::1]:53` is the tell. It is not a nameserver anybody configured: it
+is `defaultNS` in `dnsconfig.go`, the list `dnsReadConfig` returns
+when it cannot read a resolv.conf. So the resolver did reach
+the network — it sent a real UDP query — and sent it to localhost,
+where nothing is listening. It never had a nameserver to ask.
+
+The path is a build-tag one, not a translation-layer one.
+`dnsconfig_unix.go` is `//go:build !windows`, and GOOS=cosmo is not
+windows, so an APE on an NT host compiles the file that opens
+`/etc/resolv.conf`. `dnsconfig_windows.go` — which reads the
+nameservers from `GetAdaptersAddresses` — is `windows`-tagged and is
+not in a cosmo build at all. Nothing in the NT path layer is at
+fault: the file genuinely does not exist on that host, and the unix
+reader's documented fallback is exactly what ran.
+
+The same run's other network call failed the same way and confirms
+the reach is name resolution rather than one endpoint: the binary's
+update check against api.github.com timed out at its 10s client
+deadline, while the runner's own node-based steps resolved and
+fetched over the same interface in the same job.
+
+This narrows the 2026-07-20 observation to name resolution alone.
+Off-host TCP from NT is still unproven either way — no run has yet
+got past DNS to attempt a connect — so a resolver fix is necessary
+and not known to be sufficient.
+
+Shape of the fix, for whoever picks it up. `ntWinsockEnsure`
+(os_cosmo_nt_sock.go) already loads ws2_32.dll lazily and resolves
+symbols through a local `sym` helper, and `ntdll` is the precedent
+for an optional non-kernel32 import. So the two candidate routes are
+`GetAdaptersAddresses` (iphlpapi) to fill a `dnsConfig`, keeping the
+pure-Go resolver — which then still needs off-host UDP to work — or
+ws2_32's own `GetAddrInfoW`, which hands the whole lookup to Windows
+and does not. The second matches what upstream GOOS=windows does and
+does not depend on the unproven half. Either way the net package
+needs a cosmo-only seam: `lookup_unix.go` is what a cosmo build
+uses, and its `cgoLookupHost` comes from `cgo_stub.go`, which sets
+`cgoAvailable = false` and panics if called — so the Go resolver is
+the only order `hostLookupOrder` can pick today.
+
+Probe, before the fix: runtimeprobe cannot cover this without an
+endpoint reachable from CI. A resolve-only check against a name the
+runner already depends on costs nothing and would have caught this
+in the fork's own gauntlet rather than in a consumer's.
+
 # 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
 
 ## Symptom, evidence

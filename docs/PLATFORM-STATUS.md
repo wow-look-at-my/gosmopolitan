@@ -69,8 +69,12 @@ transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
 by design - pair ends cannot cross processes),
 off-host networking (loopback sockets are CI-proven, but off-host
 connect + DNS from NT have no probe, and a consumer run
-field-observed outbound HTTPS timing out on 2026-07-20 - see
-DEBUGGING.md's off-host HTTPS section), and
+field-observed outbound HTTPS timing out on 2026-07-20; the DNS half
+is now root-caused - a cosmo build takes `dnsconfig_unix.go`, whose
+tag is `!windows`, so it reads a resolv.conf that does not exist on
+NT and falls back to querying localhost, and off-host TCP stays
+unproven because nothing has got past that - see DEBUGGING.md's
+off-host HTTPS section), and
 real-keyboard/CTRL_CLOSE console coverage (the probe covers the
 GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
 window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
