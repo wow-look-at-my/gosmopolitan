@@ -24,7 +24,7 @@ func dnsReadConfig(filename string) *dnsConfig {
 	}
 	file, err := open(filename)
 	if err != nil {
-		conf.servers = defaultNS
+		conf.servers = unreadableConfServers()
 		conf.search = dnsDefaultSearch()
 		conf.err = err
 		return conf
@@ -33,7 +33,7 @@ func dnsReadConfig(filename string) *dnsConfig {
 	if fi, err := file.file.Stat(); err == nil {
 		conf.mtime = fi.ModTime()
 	} else {
-		conf.servers = defaultNS
+		conf.servers = unreadableConfServers()
 		conf.search = dnsDefaultSearch()
 		conf.err = err
 		return conf
@@ -136,12 +136,44 @@ func dnsReadConfig(filename string) *dnsConfig {
 		}
 	}
 	if len(conf.servers) == 0 {
-		conf.servers = defaultNS
+		conf.servers = unreadableConfServers()
 	}
 	if len(conf.search) == 0 {
 		conf.search = dnsDefaultSearch()
 	}
 	return conf
+}
+
+// unreadableConfServers answers when resolv.conf named no usable
+// nameserver, because it was missing, unreadable, or empty.
+//
+// defaultNS is localhost, which is a guess that the machine runs its own
+// resolver. A host that publishes its list somewhere this package cannot
+// open (Windows, under a cosmo build) can be asked instead, and its
+// answer is a measurement. Falling back to localhost there sends every
+// query to a port nothing is listening on.
+func unreadableConfServers() []string {
+	if servers := nameserversFromHost(hostNameservers()); len(servers) > 0 {
+		return servers
+	}
+	return defaultNS
+}
+
+// nameserversFromHost puts the host's answer into the form the resolver
+// dials, applying the checks the resolv.conf parser applies to the same
+// values: an address only, and no more than the small standard limit.
+func nameserversFromHost(addrs []string) []string {
+	var servers []string
+	for _, addr := range addrs {
+		if len(servers) == 3 { // the limit dnsReadConfig imposes above
+			break
+		}
+		if _, err := netip.ParseAddr(addr); err != nil {
+			continue
+		}
+		servers = append(servers, JoinHostPort(addr, "53"))
+	}
+	return servers
 }
 
 func dnsDefaultSearch() []string {

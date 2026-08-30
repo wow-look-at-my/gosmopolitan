@@ -4627,7 +4627,7 @@ case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
 
-# 2026-07-20: NT — off-host HTTPS from an APE times out (OPEN, no fix landed)
+# 2026-07-20: NT — off-host HTTPS from an APE times out (DNS half FIXED 2026-08-30)
 
 Field observation from consumer CI (windows-latest, fork v213, run
 29741678227 of a downstream repo): the APE's HTTPS GET to
@@ -4682,24 +4682,47 @@ Off-host TCP from NT is still unproven either way — no run has yet
 got past DNS to attempt a connect — so a resolver fix is necessary
 and not known to be sufficient.
 
-Shape of the fix, for whoever picks it up. `ntWinsockEnsure`
-(os_cosmo_nt_sock.go) already loads ws2_32.dll lazily and resolves
-symbols through a local `sym` helper, and `ntdll` is the precedent
-for an optional non-kernel32 import. So the two candidate routes are
-`GetAdaptersAddresses` (iphlpapi) to fill a `dnsConfig`, keeping the
-pure-Go resolver — which then still needs off-host UDP to work — or
-ws2_32's own `GetAddrInfoW`, which hands the whole lookup to Windows
-and does not. The second matches what upstream GOOS=windows does and
-does not depend on the unproven half. Either way the net package
-needs a cosmo-only seam: `lookup_unix.go` is what a cosmo build
-uses, and its `cgoLookupHost` comes from `cgo_stub.go`, which sets
-`cgoAvailable = false` and panics if called — so the Go resolver is
-the only order `hostLookupOrder` can pick today.
+## The fix: ask Windows for the servers, keep the Go resolver
 
-Probe, before the fix: runtimeprobe cannot cover this without an
-endpoint reachable from CI. A resolve-only check against a name the
-runner already depends on costs nothing and would have caught this
-in the fork's own gauntlet rather than in a consumer's.
+Two routes were available. Handing the whole lookup to ws2_32's
+`GetAddrInfoW` matches what upstream GOOS=windows does, but `net` gets
+there through `cgoLookupHost`, and on cosmo that comes from
+`cgo_stub.go`, which sets `cgoAvailable = false` and panics if called —
+so taking it means reworking `hostLookupOrder`'s choices for one host.
+Filling the `dnsConfig` instead changes nothing about how a lookup runs;
+only where the server list comes from.
+
+The second is what landed, and the failure above is what makes it safe:
+the resolver DID open a socket, send a UDP query and time out waiting.
+Send, receive and the netpoller deadline all work on NT — only the
+destination was wrong.
+
+- `runtime/os_cosmo_nt_dns.go` loads iphlpapi lazily (the
+  `ntWinsockEnsure` shape, and optional like ntdll: a host without it
+  reports no servers rather than crashing) and calls `GetNetworkParams`.
+  Its FIXED_INFO carries the list as NUL-terminated dotted quads, so
+  nothing parses a sockaddr. The offsets are spelled as sums of their
+  members and pinned by `dns_cosmo_nt_test.go` — a wrong one reads
+  plausible garbage rather than failing, which on this host means
+  handing net a nameserver that is not one.
+- `runtime.CosmoHostDNSServers` exposes it, next to `CosmoHostOS` and
+  answering only on NT.
+- `net/dnsconfig_unix.go` asks, through the `hostNameservers` seam, at
+  the three points where it would otherwise fall back to `defaultNS`.
+  A host that publishes resolv.conf gets nil and is unaffected, and
+  `defaultNS` is still returned by identity when nothing answers, which
+  `isDefaultNS` compares by backing array.
+
+`GetNetworkParams` reports IPv4 servers only. That is what stops the
+queries going to localhost; a v6-only resolver setup is not covered.
+
+Coverage: runtimeprobe grew a `dns` check, so the gap this whole entry
+describes is now measured on all three runners rather than described.
+It resolves a name through net's own resolver and, on failure, prints
+the servers the runtime offered — the two states this entry had to be
+told apart by hand. Verified red first: pointed at an unresolvable
+name it reports `lookup ... on 8.8.8.8:53: no such host`, which is the
+same shape as the `on [::1]:53` line that started this.
 
 # 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
 

@@ -120,6 +120,7 @@ func main() {
 	timed("monotonic", checkMonotonic)
 	timed("timers", checkTimers)
 	timed("sockets", checkSockets)
+	timed("dns", checkDNS)
 	timed("sockpair", checkSockpair)
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)

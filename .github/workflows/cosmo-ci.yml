@@ -185,6 +185,19 @@ jobs:
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
 
+      - name: Host-nameserver path (net) and the NT DNS ABI pins (runtime)
+        # An NT host keeps its resolvers where net cannot open them; see
+        # docs/PLATFORM-STATUS.md and src/runtime/os_cosmo_nt_dns.go. Only
+        # Windows executes the walk, so the offsets are pinned here and the
+        # end-to-end resolve is runtimeprobe's dns check on all three runners.
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestNameserversFromHost|TestUnreadableConfServers|TestDNSReadConfig' net
+          PATH="$PWD/misc/cosmo:$PATH" go test -count=1 -run 'TestNTFixedInfoLayout' runtime
+
       - name: Loop-aware inlining tests
         # see docs/LOOP-INLINING.md. Host-run compiler tests, so GOOS is pinned away from cosmo.
         if: matrix.build-os == 'ubuntu-latest'
