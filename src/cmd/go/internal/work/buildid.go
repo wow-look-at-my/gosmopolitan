@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
@@ -462,6 +463,23 @@ func testRunAction(a *Action) *Action {
 // that flushOutput is eventually called regardless of whether the action
 // succeeds. The flushOutput call must happen after updateBuildID.
 func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, printOutput bool) (ok bool) {
+	// This is the decision the rest of the build hangs off: a hit here means
+	// no compile happens at all, and in a trace that would otherwise read as
+	// an action that did nothing for no reason.
+	if a.lane().Enabled() {
+		start := time.Now()
+		defer func() {
+			outcome := "miss"
+			if ok {
+				outcome = "hit"
+			}
+			a.traceStep("cache lookup", start, map[string]any{
+				"outcome":       outcome,
+				"lookup_target": target,
+			})
+		}()
+	}
+
 	// The second half of the build ID here is a placeholder for the content hash.
 	// It's important that the overall buildID be unlikely verging on impossible
 	// to appear in the output by chance, but that should be taken care of by
@@ -507,7 +525,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 		}
 	}()
 
-	c := cache.Default()
+	c := a.cache()
 
 	if target != "" {
 		buildID, _ := buildid.ReadFile(target)
@@ -696,7 +714,7 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 		}
 	}
 
-	c := cache.Default()
+	c := a.cache()
 
 	// Cache output from compile/link, even if we don't do the rest.
 	switch a.Mode {
@@ -781,7 +799,7 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 			}
 		}
 	}
-	if c, ok := c.(*cache.DiskCache); a.Mode == "link" && a.CacheExecutable && ok {
+	if c, ok := c.(cache.ExecutableCache); a.Mode == "link" && a.CacheExecutable && ok {
 		r, err := os.Open(target)
 		if err == nil {
 			if a.output == nil {

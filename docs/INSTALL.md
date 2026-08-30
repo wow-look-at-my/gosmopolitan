@@ -93,6 +93,17 @@ a hand-rebuilt toolchain self-invalidates stale cache entries and the old
   not parse as a release version), so directives up to `go 1.27` are
   satisfied but `go 1.27.0`+ are not. Releases published BEFORE this change
   still ship `GOTOOLCHAIN=auto` and need the env var.
+- **That unparseable version has a price, and it reaches shipped binaries.**
+  `gover.Parse` rejects a patch release with a trailing word, so
+  `go/version.IsValid(runtime.Version())` is FALSE in every program this fork
+  builds — a program that validates its own Go version gets the wrong answer,
+  and cmd/go's `version_goexperiment` script fails on it
+  (`panic: version not valid: go1.27.0cosmo-X:fieldtrack`). Spelling VERSION
+  `go1.27.0-cosmo` would fix it, because `go/version` cuts at the first `-`.
+  It would also make the fork parse as the RELEASE 1.27.0 and start
+  satisfying the `go 1.27.0`+ directives the paragraph above says it refuses,
+  which changes toolchain selection for every consumer. Both spellings are
+  defensible; pick one deliberately rather than as a side effect.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork
   Gotchas); any host-run `go build`/`go install`/`go test` needs
   `GOOS=linux GOARCH=amd64` (or `darwin`/`arm64`).

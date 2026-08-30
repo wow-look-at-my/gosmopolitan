@@ -75,7 +75,13 @@ localhost, and the servers now come from iphlpapi's
 GetNetworkParams instead, with runtimeprobe's `dns` check measuring
 it on every runner - but nothing had got past DNS to attempt an
 off-host connect, so TCP beyond loopback stays unproven either way
-- see DEBUGGING.md's off-host HTTPS section), and
+- see DEBUGGING.md's off-host HTTPS section; the trust store was the
+same shape of gap one layer up, and is also fixed: every path in
+crypto/x509's `root_cosmo.go` is a unix path, so the root pool came
+back empty and each handshake reported an unknown authority, and the
+roots now come from crypt32's ROOT store, with
+testdata/runtimeprobe's `tls` check measuring a real handshake - see
+DEBUGGING.md's trust-store section), and
 real-keyboard/CTRL_CLOSE console coverage (the probe covers the
 GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
 window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay

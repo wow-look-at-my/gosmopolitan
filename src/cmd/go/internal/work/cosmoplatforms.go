@@ -35,6 +35,23 @@ func cosmoPlatformSpec() (cosmoape.Set, bool) {
 	return set, true
 }
 
+// EnvSelfPublishable reports whether cmd/go may copy this `go env`
+// variable's reported value into its own environment, which main.go does so
+// that the tools it invokes agree with it.
+//
+// GOCOSMOPLATFORMS may not. Every GOCOSMO* variable reports its EFFECTIVE
+// value rather than the raw string, and the other three round-trip: "on",
+// "off" and "slim" parse back to themselves. This one's effective value
+// when the caller chose nothing is every platform -- which parses back as a
+// deliberate selection of all of them. Publishing it therefore rewrites
+// "unset" into a choice nobody made, for this process and for every
+// subprocess that inherits the environment: GOCOSMOFAT=0 dies as a
+// conflict, -apeplatforms lands on merges nobody asked to restrict, and the
+// cosmo sibling build starts up believing its caller picked a platform set.
+func EnvSelfPublishable(name string) bool {
+	return name != CosmoPlatformsEnv
+}
+
 // CosmoPlatforms returns the effective platform selection, the value
 // `go env GOCOSMOPLATFORMS` reports. Consumers probe it to tell a toolchain
 // that honors the selection from one that ignores it.

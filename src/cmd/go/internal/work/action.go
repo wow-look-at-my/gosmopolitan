@@ -126,6 +126,7 @@ type Action struct {
 	json         *actionJSON       // action graph information
 	nonGoOverlay map[string]string // map from non-.go source files to copied files in objdir. Nil if no overlay is used.
 	traceSpan    *trace.Span
+	traceLane    trace.Lane // the row this action's work is recorded on
 }
 
 // BuildActionID returns the action ID section of a's build ID.
@@ -513,7 +514,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 			return fmt.Errorf("error opening target for caching: %w", err)
 		}
 
-		c := cache.Default()
+		c := a.cache()
 		outputID, _, err := c.Put(a.actionID, r)
 		r.Close()
 		if err != nil {

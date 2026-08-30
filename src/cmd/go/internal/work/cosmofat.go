@@ -6,15 +6,18 @@ package work
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/load"
+	"cmd/go/internal/trace"
 )
 
 // cosmoFatArches maps each fat-APE architecture to its sibling.
@@ -266,6 +269,15 @@ type cosmoSibling struct {
 	what   string // "fat build" or "fat install", for diagnostics
 	dir    bool
 	waited bool
+
+	// The sibling is a whole second go command, so in a trace it is its own
+	// row: without one, the largest thing a cosmo build does appears as a
+	// gap the primary build cannot account for. It writes its own trace
+	// file, which importTrace folds into the parent's once it has exited.
+	ctx     context.Context
+	lane    trace.Lane
+	started time.Time
+	trace   string
 }
 
 // cosmoFatParallel reports whether the sibling-architecture build may run
@@ -327,6 +339,18 @@ func (s *cosmoSibling) wait() {
 // runs after the primary build's own output, so the two never interleave.
 func (s *cosmoSibling) finish(err error) {
 	s.waited = true
+	if s.lane.Enabled() {
+		args := map[string]any{
+			"arch":     s.arch,
+			"what":     s.what,
+			"parallel": cosmoFatParallel(),
+			"output":   s.childO,
+		}
+		if err != nil {
+			args["error"] = err.Error()
+		}
+		s.lane.Since("cosmo sibling build", "cosmo", s.started, args)
+	}
 	if s.out.Len() > 0 {
 		os.Stderr.Write(s.out.Bytes())
 		s.out.Reset()
@@ -372,7 +396,7 @@ func cosmoFatSkipOutput() bool {
 //
 // Call this immediately before the primary build; the returned value goes
 // to cosmoFatten afterwards.
-func cosmoFatStart(dir bool) *cosmoSibling {
+func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 	if !cosmoFatEnabled() || cosmoFatSkipOutput() {
 		return nil
 	}
@@ -380,6 +404,7 @@ func cosmoFatStart(dir bool) *cosmoSibling {
 
 	s := &cosmoSibling{arch: cosmoFatArches[cfg.Goarch], what: "fat build", dir: dir}
 	goCmd := s.setup()
+	s.traceOn(ctx) // after setup: the sibling's trace lives in its scratch dir
 
 	s.childO = filepath.Join(s.tmp, "out")
 	if dir {
@@ -388,7 +413,7 @@ func cosmoFatStart(dir bool) *cosmoSibling {
 			base.Fatalf("go: cosmo fat build: %v", err)
 		}
 	}
-	cmd := exec.Command(goCmd, rewriteOutputFlag(os.Args[1:], s.childO)...)
+	cmd := exec.Command(goCmd, s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)
 	cmd.Env = append(os.Environ(), "GOARCH="+s.arch, "GOCOSMOFAT_INNER=1")
 	s.launch(cmd)
 	return s
@@ -401,14 +426,16 @@ func cosmoFatStart(dir bool) *cosmoSibling {
 // payload to its loadable span and writes unstripped per-architecture debug
 // sidecars (<target>.dbg, <target>.aarch64.elf) next to the output; see
 // cosmoMergeArgs.
-func cosmoFatten(s *cosmoSibling, mains []*load.Package) {
+func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}
 	if s != nil {
 		defer s.cleanup()
 		s.wait()
+		s.importTrace()
 	}
+	lane := cosmoMergeLane(ctx)
 
 	// Assembly re-reads the freshly written target and re-creates it with
 	// the merged APE. That only makes sense for a main package's regular
@@ -438,12 +465,32 @@ func cosmoFatten(s *cosmoSibling, mains []*load.Package) {
 				sibling = filepath.Join(s.tmp, "out", filepath.Base(target))
 			}
 		}
-		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
-		merge.Stdout = os.Stdout
-		merge.Stderr = os.Stderr
-		if err := merge.Run(); err != nil {
-			base.Fatalf("go: cosmo build: assembling %s: %v", target, err)
-		}
+		cosmoMerge(lane, link, p, target, sibling, "build")
+	}
+}
+
+// cosmoMerge assembles one target's APE with the linker's -apefat mode, and
+// reports a failure as fatal.
+//
+// The merge is a command this build issues, so -n and -x show it like every
+// other one. Under -n it is only shown: the payloads it reads were printed
+// rather than written, so running it would open a target that does not exist.
+func cosmoMerge(lane trace.Lane, link string, p *load.Package, target, sibling, what string) {
+	args := cosmoMergeArgs(p, sibling)
+	if cfg.BuildN || cfg.BuildX {
+		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(append([]string{link}, args...)))
+	}
+	if cfg.BuildN {
+		return
+	}
+	start := time.Now()
+	merge := exec.Command(link, args...)
+	merge.Stdout = os.Stdout
+	merge.Stderr = os.Stderr
+	err := merge.Run()
+	lane.Since("cosmo fat merge", "cosmo", start, cosmoMergeTraceArgs(p, target, sibling, args, err))
+	if err != nil {
+		base.Fatalf("go: cosmo %s: assembling %s: %v", what, target, err)
 	}
 }
 
@@ -461,7 +508,7 @@ func cosmoFatten(s *cosmoSibling, mains []*load.Package) {
 // the platform the go tool itself runs on). GOMODCACHE keeps pointing
 // at the real module cache so nothing is re-downloaded, and GOBIN is
 // cleared because go install refuses cross-compilation with GOBIN set.
-func cosmoFatStartInstall(hasMains bool) *cosmoSibling {
+func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	if !cosmoFatEnabled() || !hasMains {
 		return nil
 	}
@@ -469,8 +516,9 @@ func cosmoFatStartInstall(hasMains bool) *cosmoSibling {
 
 	s := &cosmoSibling{arch: cosmoFatArches[cfg.Goarch], what: "fat install"}
 	goCmd := s.setup()
+	s.traceOn(ctx) // after setup: the sibling's trace lives in its scratch dir
 
-	cmd := exec.Command(goCmd, os.Args[1:]...)
+	cmd := exec.Command(goCmd, s.traceArgs(os.Args[1:])...)
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+s.arch,
@@ -486,17 +534,19 @@ func cosmoFatStartInstall(hasMains bool) *cosmoSibling {
 // cosmoFattenInstall replaces each freshly installed GOOS=cosmo
 // executable (the Target of each main package in mains) with the assembled
 // APE, the go-install counterpart of cosmoFatten.
-func cosmoFattenInstall(s *cosmoSibling, mains []*load.Package) {
+func cosmoFattenInstall(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
 		return
 	}
 	if s != nil {
 		defer s.cleanup()
 		s.wait()
+		s.importTrace()
 	}
 	if len(mains) == 0 {
 		return
 	}
+	lane := cosmoMergeLane(ctx)
 
 	link := base.Tool("link")
 	for _, p := range mains {
@@ -505,13 +555,135 @@ func cosmoFattenInstall(s *cosmoSibling, mains []*load.Package) {
 		if s != nil {
 			sibling = filepath.Join(s.tmp, "bin", "cosmo_"+s.arch, filepath.Base(target))
 		}
-		merge := exec.Command(link, cosmoMergeArgs(p, sibling)...)
-		merge.Stdout = os.Stdout
-		merge.Stderr = os.Stderr
-		if err := merge.Run(); err != nil {
-			base.Fatalf("go: cosmo install: assembling %s: %v", target, err)
+		cosmoMerge(lane, link, p, target, sibling, "install")
+	}
+}
+
+// traceOn puts this sibling build on its own trace row, named for the
+// architecture it is producing. The row sorts after the build workers.
+func (s *cosmoSibling) traceOn(ctx context.Context) {
+	if !trace.Enabled(ctx) {
+		return
+	}
+	s.ctx = ctx
+	s.started = time.Now()
+	s.lane = trace.LaneOf(trace.StartNamedGoroutine(ctx, "cosmo sibling ("+s.arch+")", cosmoSiblingLaneIndex))
+	s.trace = filepath.Join(s.tmp, "trace.json")
+}
+
+// traceArgs returns the child's command line with -debug-trace pointed at
+// the sibling's own file.
+//
+// The child is this same go command re-run, so without this it inherits the
+// parent's -debug-trace path, truncates the file the parent is still
+// appending to, and the two processes interleave their writes into a
+// document neither can parse. The sibling's file is merged back in by
+// importTrace once the child has exited.
+func (s *cosmoSibling) traceArgs(args []string) []string {
+	if s.trace == "" {
+		return args
+	}
+	return rewriteFlagValue(args, "-debug-trace", s.trace)
+}
+
+// importTrace folds the sibling's trace into the parent's, as its own
+// process group. Called after the child has exited, so the file is
+// complete.
+func (s *cosmoSibling) importTrace() {
+	if s == nil || s.trace == "" {
+		return
+	}
+	f, err := os.Open(s.trace)
+	if err != nil {
+		// The child may have failed before writing anything, which the
+		// build already reported.
+		return
+	}
+	defer f.Close()
+	if err := trace.Import(s.ctx, f, cosmoSiblingPID, "go build (GOARCH="+s.arch+")"); err != nil {
+		fmt.Fprintf(os.Stderr, "go: cosmo %s: reading sibling trace: %v\n", s.what, err)
+	}
+}
+
+// cosmoSiblingPID is the process group the sibling build's rows appear
+// under. The parent is 0.
+const cosmoSiblingPID = 1
+
+// rewriteFlagValue returns args with flag's value replaced by value, in
+// either the "-flag=v" or the "-flag v" spelling, appending "-flag value"
+// when the flag is absent.
+func rewriteFlagValue(args []string, flag, value string) []string {
+	res := make([]string, 0, len(args)+2)
+	replaced := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == flag:
+			res = append(res, flag+"="+value)
+			i++ // skip the original value
+			replaced = true
+		case strings.HasPrefix(a, flag+"="):
+			res = append(res, flag+"="+value)
+			replaced = true
+		default:
+			res = append(res, a)
 		}
 	}
+	if !replaced {
+		res = append(res, flag+"="+value)
+	}
+	return res
+}
+
+// cosmoMergeLane is the row the APE assembly is recorded on. The merge runs
+// after the build workers are done, on the command's own goroutine, so it
+// gets a row of its own rather than borrowing a worker's.
+func cosmoMergeLane(ctx context.Context) trace.Lane {
+	if !trace.Enabled(ctx) {
+		return trace.Lane{}
+	}
+	return trace.LaneOf(trace.StartNamedGoroutine(ctx, "cosmo fat merge", cosmoMergeLaneIndex))
+}
+
+// Rows sort by index, and these two belong under the build workers, which
+// take the indexes below them.
+const (
+	cosmoSiblingLaneIndex = 1000
+	cosmoMergeLaneIndex   = 1001
+)
+
+// cosmoMergeTraceArgs describes one APE assembly: which binary was
+// assembled, from which sibling payload, for which package and module, and
+// what the linker was asked to do with the debug info.
+func cosmoMergeTraceArgs(p *load.Package, target, sibling string, args []string, err error) map[string]any {
+	out := map[string]any{
+		"target":    target,
+		"package":   p.ImportPath,
+		"strip":     CosmoStrip(),
+		"debug":     CosmoDebug(),
+		"platforms": CosmoPlatforms(),
+		"cmd":       strings.Join(args, " "),
+	}
+	if p.Module != nil {
+		out["module"] = p.Module.Path
+		if p.Module.Version != "" {
+			out["module_version"] = p.Module.Version
+		}
+	}
+	if sibling != "" {
+		out["sibling"] = sibling
+		if fi, statErr := os.Stat(sibling); statErr == nil {
+			out["sibling_bytes"] = fi.Size()
+		}
+	}
+	if err != nil {
+		out["error"] = err.Error()
+		return out
+	}
+	if fi, statErr := os.Stat(target); statErr == nil {
+		out["bytes"] = fi.Size()
+	}
+	return out
 }
 
 // rewriteOutputFlag returns args with the value of the -o flag replaced by

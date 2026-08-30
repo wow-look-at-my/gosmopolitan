@@ -1786,8 +1786,14 @@ func checkNotStale(env []string, goBinary string, targets ...string) {
 // We list all supported platforms in this list, so that this is the
 // single point of truth for supported platforms. This list is used
 // by 'go tool dist list'.
+// cgoEnabled is what 'dist list' enumerates AND what generates
+// internal/platform's zosarch.go, so a port left out here is one the go
+// command reports and cmd/dist does not. Cosmo is cgo-less: an APE carries a
+// payload per architecture, and cgo would want a C cross-toolchain for each.
 var cgoEnabled = map[string]bool{
 	"aix/ppc64":       true,
+	"cosmo/amd64":     false,
+	"cosmo/arm64":     false,
 	"darwin/amd64":    true,
 	"darwin/arm64":    true,
 	"dragonfly/amd64": true,

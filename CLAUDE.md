@@ -466,6 +466,20 @@ labels — know this before pushing branches or interpreting PR state:
   `all-builds`: an org guard fails workflows that define one, because the
   status context is reserved for the aggregator.
 
+## Shared build cache: `GOCACHEPROG`, not a vendored client
+
+The org's shared build cache is reached through `GOCACHEPROG`, which `cmd/go`
+supports unchanged; `go-toolchain cacheprog` is the program that speaks it.
+This tree carries no cache client of its own.
+
+`src/cmd` is a vendored module, so anything `cmd/go` imports lands as a copy of
+that module's source under `src/cmd/vendor/`. An in-process client put 8k lines
+of two actively-developed org repos in here, pinned to a branch commit that
+moved within hours — a snapshot nobody re-vendors is a fork with no owner.
+`GOCACHEPROG` gets the same cache with a process boundary instead of a copy.
+Read `src/README.vendor` before adding any `src/cmd` dependency: what looks
+like one import is a whole subtree of somebody else's repository.
+
 ## Toolchain Distribution
 
 Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64,
