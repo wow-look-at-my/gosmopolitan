@@ -5775,3 +5775,168 @@ Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
 js/wasm and wasip1/wasm, each also under GOWASM=threads; the go/build and
 cmd/internal/moddeps guardrails; fat APEs of fizzbuzz and runtimeprobe with
 both sidecars, executed here; and the full apetest suite against both.
+
+# 2026-08-30: NT - os.PathListSeparator was compiled in, so PATH could not be built
+
+`os.PathListSeparator` is an untyped constant on every upstream port, because a
+port knows its host at compile time. A fat APE does not. `path_unix.go` covered
+cosmo, so every APE carried the unix colon and used it on Windows too.
+
+The 2026-07-20 `exec.LookPath` work fixed READING an NT PATH inside `os/exec`,
+which is why this survived: only code outside that package saw the wrong value.
+The field report was go-toolchain JOINING one - it prepends the fork's `bin` to
+PATH before spawning the compiler, and on NT the colon fused the fork's
+directory with the next entry into a path that does not exist. The stock Go that
+`actions/setup-go` had installed won the lookup, and the build died with
+`compile: version "go1.27.0cosmo.r705" does not match go tool version
+"go1.27.0"` - a version-skew message with nothing about paths in it.
+
+The fix: `src/os/path_cosmo.go` declares `PathListSeparator` as a `var`, read
+once at package initialization from `runtime.CosmoHostOS()`. The entry stub
+records the host before any Go code runs, so the value is available that early.
+`PathSeparator` stays a constant slash - NT accepts it beside the backslash.
+
+What that costs, and what it does not:
+
+- `PathListSeparator` is now a `rune` rather than an untyped constant, so a
+  comparison against a byte needs a conversion. Exactly one caller does that,
+  `splitPathList` in `os/executable_cosmo.go`.
+- `path/filepath.ListSeparator` cannot be a constant when the one it copies is
+  not, so it splits by build tag: `listseparator_cosmo.go` holds the var,
+  `listseparator_notcosmo.go` the const. `Separator` stays in `path.go`.
+  Non-cosmo ports are unchanged.
+- `cmd/api` does not include cosmo in its contexts, so there is no api/go1.txt
+  breakage.
+- `internal/filepathlite` keeps its own colon. `filepath.SplitList` reads
+  `filepath`'s value, not that one.
+- `SplitList` follows the host too, in `splitlist_cosmo.go`. Splitting on the
+  right character is only half of it: an NT entry may be quoted, and a quoted
+  entry may hold the separator itself, so `path_unix.go`'s plain
+  `strings.Split` cuts inside one. The quote-aware body is `path_windows.go`'s,
+  factored as `splitListQuoted(path, sep)` - the separator is a parameter so a
+  linux host can still test the NT branch, which is what
+  `TestSplitListQuoted` does with `path_test.go`'s own `winsplitlisttests`
+  cases. `splitList` moved out of `path_unix.go` into `splitlist_notcosmo.go`;
+  non-cosmo ports compile the same function they always did.
+
+Gate: `checkLookPath` in testdata/runtimeprobe now asserts
+`os.PathListSeparator` against its own NT oracle (the `OS=Windows_NT`
+environment variable, independent of `runtime.CosmoHostOS()`) and round-trips
+`filepath.SplitList`. Negative control on linux: `OS=Windows_NT ./runtimeprobe`
+reports `FAIL lookpath: os.PathListSeparator = ":", host wants ";"`. CI runs
+this probe on all three hosts.
+
+## The os and syscall test binaries never built under cosmo
+
+Found while doing the above, and fixed here. Neither package's tests compiled
+for GOOS=cosmo, so nothing in either had ever run on this port.
+
+The fork tags its non-test files honestly - `zero_copy_linux.go`,
+`pidfd_linux.go` and the rest carry `linux && !cosmo`, because cosmo takes
+`zero_copy_stub.go` and `pidfd_other.go` instead. The TEST files were left on
+the bare `_linux` filename, which the fork resolves for cosmo too, so each one
+referenced hooks that do not exist there. The repair is to give every test file
+the tag of the implementation it exercises:
+
+- `os`: `export_linux_test.go`, `readfrom_linux_test.go`, `writeto_linux_test.go`
+  and `pidfd_linux_test.go` gain `linux && !cosmo`; `readfrom_unix_test.go`
+  narrows to `(freebsd || linux || solaris) && !cosmo`.
+- `syscall`: `export_linux_test.go` (which also collided outright with the
+  fork's own `export_cosmo_test.go` over `Tcgetpgrp`/`Tcsetpgrp`),
+  `creds_test.go`, `exec_linux_test.go` and `syscall_linux_test.go` gain the
+  same tag. Netlink, `AllThreadsSyscall`, mount flags, namespaces and
+  `SCM_CREDENTIALS` are Linux kernel surface cosmo does not expose.
+
+One real gap sat under that: `syscall.Mkfifo` was missing for cosmo, which is
+what `os/fifo_test.go` needs. `Mknod` was already there, so it is the same
+one-liner linux has - `Mknod(path, mode|S_IFIFO, 0)`.
+
+`syscall` now passes under cosmo. `os` now BUILDS and RUNS, and doing so
+surfaced its own defects, which are a separate piece of work and are NOT fixed
+here:
+
+- `TestRootConsistencyRename`, `TestRootMultiMkdir`, `TestRootMultiMkdirAllShallow`
+  and `TestRootMultiRemove` fail on trailing-slash handling. `os.Root` and the
+  plain `os` call disagree with each other on the SAME host, so it is cosmo's
+  openat path, not the kernel's: `root.Mkdir("target/")` succeeds against a
+  symlink-to-directory where `os.Mkdir(".../target/")` correctly answers
+  `file exists`. That is `O_NOFOLLOW`/`O_DIRECTORY` behavior inside
+  Cosmopolitan's openat, below Go.
+- `TestExecutableDeleted` fails with `device or resource busy`. Running as
+  root, APE staging binds the staged copy over the original path (see
+  `docs/APE-STAGING.md`), so the running executable cannot be unlinked. That is
+  the staging design rather than a defect, and the test's premise does not hold
+  for an assimilated APE.
+
+Neither is reachable from CI today - no leg runs `dist test os` under cosmo -
+so this change turns nothing red. What it does is make both failures visible
+and gateable for the first time.
+
+## An NT path read as relative, because the path layer was compiled as unix
+
+`internal/filepathlite` is where `IsAbs`, `IsPathSeparator` and `volumeNameLen`
+decide what a path IS, and cosmo took `path_unix.go`. So on a Windows host every
+path the OS handed the APE - drive letter, backslashes - read as relative with
+no volume. A consumer's report:
+
+```
+internal error: go list returned non-absolute Package.Dir: C:\Users\runneradmin\.cache\go-toolchain\cosmo\v372\go\src\internal\goarch
+```
+
+That is x/tools calling `filepath.IsAbs` on a path the native `go list` printed.
+Nothing was wrong with the path.
+
+`path_cosmo.go` moves those predicates onto the host, the same way the separator
+moved. `Separator` stays the slash - NT accepts it beside the backslash, and it
+is what this package emits, so only what a path is READ as changes.
+
+The NT bodies are `path_windows.go`'s: a drive letter, a UNC root, and the
+device prefixes (`\\.\`, `\\?\`, `\??\`) with their fold comparison and their
+rejection of a parent reference inside the volume.
+
+Each NT predicate takes the host as a parameter (`ntIsAbs(path, nt)`), which is
+what lets a linux host test the NT branch - `TestNTIsAbs`,
+`TestNTVolumeNameLen` and `TestNTIsPathSeparator` in
+`internal/filepathlite`, each also checked against the unix branch. Negative
+control: asserting `C:\Users\...` is relative fails with
+`NTIsAbs("C:\\Users\\runneradmin\\.cache", nt) = true, want false`.
+
+Verified on linux/amd64: make.bash; std for cosmo amd64 and arm64, linux,
+windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail; dist
+test of path/filepath, os/exec, syscall and cmd/internal/script, all under
+GOOS=cosmo; `TestSplitListQuoted` with a negative control; and runtimeprobe
+executed here, also with a negative control.
+
+## An instrument for the macOS wedge: EOF on a dead child's stdout pipe
+
+go-toolchain's macOS leg wedges in `src/cmd` and `src/vet` at the 30s cap. The
+stack is x/tools `gocommand.runCmdContext` -> `os/exec writerDescriptor` ->
+`io.Copy` -> `poll.(*FD).Read`: the parent is parked reading a child's stdout
+pipe that never reaches EOF. It is intermittent and does not reproduce on a
+linux host, so there is nothing to bisect from here.
+
+A pipe only stays open past its child's exit while another process holds the
+write end. That process can only have taken it through a fork in the window
+inside `Start`, between the pipe's creation and the parent's close - which is
+the window close-on-exec covers. The arm64-apple variadic ABI defect once left
+`FD_CLOEXEC` unset on a share of all descriptors, so this is the same family.
+
+`checkPipeEOF` (testdata/runtimeprobe/pipeeof.go) reproduces that shape. Each
+round forks a holder child concurrently with a piped child, then requires the
+piped child's `Wait` to return. The holder outlives the piped child, so an
+escaped descriptor wedges rather than merely delaying. On a wedge the check
+prints the parent's descriptor census and the holder's, then releases the
+holder and reports whether that alone unwedged the copy - which separates a
+lost close-on-exec from a pipe the kernel never drained.
+
+Negative control: a scratch build that hands the holder the write end through
+`ExtraFiles` reports
+
+```
+FAIL pipeeof: round 0: the piped child's stdout never reached EOF; parent fds=[... 29:pipeE ...]
+FAIL pipeeof: round 0 holder census: pid=19270 fds=[0:chr- 1:chr- 2:chr- 3:pipe-]
+FAIL pipeeof: round 0 releasing the holder unwedged the copy (wait: <nil>)
+```
+
+The holder's `3:pipe-` is the escaped end, and the trailing `-` says it carried
+no `FD_CLOEXEC`. The shipped check passes on linux.

@@ -5,7 +5,7 @@
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
 // sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process,
-// readv/writev + net.Buffers,
+// readv/writev + net.Buffers, EOF on a dead child's stdout pipe,
 // os.Executable, argv/env, working-directory
 // syscalls, exec.LookPath/exec.Command name resolution over the
 // host-format PATH (';'-separated drive-letter entries with PATHEXT
@@ -93,6 +93,11 @@ func main() {
 		// exec completed, then exit.
 		execStressChild()
 		return
+	case "pipeecho":
+		// Child mode for checkPipeEOF: write one marker line and exit,
+		// so the exit is what closes the stdout pipe.
+		pipeEOFChild()
+		return
 	case "ctrlwait":
 		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
 		ctrlwaitChild()
@@ -147,6 +152,10 @@ func main() {
 	// Deliberately adjacent to the other exec checks: this one is the
 	// deterministic version of the wedge they hit by chance.
 	timed("execstress", checkExecStress)
+	// Same family, other end of the exec: execstress watches the status
+	// pipe the parent reads before Start returns, this one watches the
+	// stdout pipe the parent reads inside Wait.
+	timed("pipeeof", checkPipeEOF)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)

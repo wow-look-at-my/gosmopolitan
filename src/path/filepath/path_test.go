@@ -332,7 +332,8 @@ type SplitListTest struct {
 	result []string
 }
 
-const lsep = filepath.ListSeparator
+// lsep is a var, not a const: cosmo reads the separator from the host.
+var lsep = byte(filepath.ListSeparator)
 
 var splitlisttests = []SplitListTest{
 	{"", []string{}},

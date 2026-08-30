@@ -15,8 +15,9 @@ import (
 )
 
 const defaultLocalISA = "ISA_A64_xml_A_profile-2026-03_96/ISA_A64_xml_A_profile_2026-03_96-2026-03_rel" // ISA_A64_xml_A_profile-2025-06"
-const defaultXedPath = "$XEDPATH" + string(filepath.ListSeparator) + "./simdgen/xeddata" + string(filepath.ListSeparator) + "$HOME/xed/obj/dgen"
-const defaultArm64Path = "$ARM64_ISA_PATH" + string(filepath.ListSeparator) + "./simdgen/armdata" + string(filepath.ListSeparator) + "$HOME/Downloads/" + defaultLocalISA
+// These are vars, not consts: cosmo reads the separator from the host.
+var defaultXedPath = "$XEDPATH" + string(filepath.ListSeparator) + "./simdgen/xeddata" + string(filepath.ListSeparator) + "$HOME/xed/obj/dgen"
+var defaultArm64Path = "$ARM64_ISA_PATH" + string(filepath.ListSeparator) + "./simdgen/armdata" + string(filepath.ListSeparator) + "$HOME/Downloads/" + defaultLocalISA
 
 var (
 	flagTmplgen = flag.Bool("tmplgen", true, "run tmplgen generator")
