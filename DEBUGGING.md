@@ -5775,3 +5775,58 @@ Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
 js/wasm and wasip1/wasm, each also under GOWASM=threads; the go/build and
 cmd/internal/moddeps guardrails; fat APEs of fizzbuzz and runtimeprobe with
 both sidecars, executed here; and the full apetest suite against both.
+
+# 2026-08-30: the Windows trust store
+
+go-toolchain's `smoke-windows` job downloaded a release over HTTPS and got
+`x509: certificate signed by unknown authority`, on every certificate,
+`api.github.com`'s included. A certificate every other host accepts is not
+the suspect: the root pool was empty.
+
+Every path in `crypto/x509`'s `root_cosmo.go` is a unix path
+(`/etc/ssl/certs/...`, `/etc/pki/...`). Windows ships none of them, so the
+scan found nothing, `loadSystemRoots` returned an empty pool with no error,
+and every verification failed. This is the resolv.conf gap one layer up,
+with the same cause: a cosmo binary compiles the unix side of an upstream
+platform split, and NT keeps the answer somewhere else.
+
+Upstream windows Go does not load roots at all - it hands the chain to
+`CertGetCertificateChain` through `systemVerify`, which is a no-op stub
+under the `cosmo` tag, and reaching that engine means a `syscall` surface
+GOOS=cosmo does not have.
+
+The roots now come from crypt32's ROOT store, read by the runtime
+(`os_cosmo_nt_certs.go`) the way the nameservers come from iphlpapi beside
+it: `CertOpenSystemStoreA`, then `CertEnumCertificatesInStore` to walk it,
+copying each context's DER into Go memory. `runtime.CosmoHostRootCerts`
+answers only on an NT host, and `crypto/x509`'s `hostRootPool` seam
+(`root_hostpool_cosmo.go`, with a `return nil, false` beside it for every
+other port) parses what it gets. `SSL_CERT_FILE` and `SSL_CERT_DIR` still
+outrank it.
+
+That is the store, not NT's chain engine: a server omitting an intermediate
+still fails here and still succeeds under the engine, which fetches one.
+`certs_cosmo_nt_test.go` pins the CERT_CONTEXT offsets, for the reason
+`dns_cosmo_nt_test.go` pins the FIXED_INFO ones - a wrong offset reads
+plausible garbage rather than failing - and `testdata/runtimeprobe/tls.go`
+measures a real handshake on every runner.
+
+## The cosmo test tree has more of these, and one is fixed here
+
+A `_linux.go` filename matches cosmo, so upstream's linux-only test files
+compile under it and reach for syscalls cosmo does not have.
+
+`crypto/x509`'s `root_linux_test.go` was one: `syscall.Mount`, `Unmount`,
+`CLONE_NEWNS` and `CLONE_NEWUSER` are all undefined, so
+`GOOS=cosmo go vet crypto/x509` failed to build the test package. It now
+carries `linux && !cosmo`, matching the `root_linux.go` it tests.
+
+`runtime/testdata/testprog` is the other, and it is left: `segv_linux.go`
+and `syscalls_linux.go` use `syscall.Tgkill`, `syscall.Unshare` and
+`syscall.CLONE_FS`, so every runtime test that launches that helper fails
+to build it - 118 of them, which is what
+`go tool dist test -run '^runtime$'` reports under cosmo today. CI does not
+see it because it names individual tests. Excluding the files turns a build
+error into an unknown-command error for the modes they register, so the
+repair is a cosmo variant per mode, and what each mode means on a Windows
+or macOS host is its own decision.
