@@ -304,6 +304,9 @@ func invoke(cmd *base.Command, args []string) {
 	cfg.OrigEnv = toolchain.FilterEnv(os.Environ())
 	cfg.CmdEnv = envcmd.MkEnv()
 	for _, env := range cfg.CmdEnv {
+		if !work.EnvSelfPublishable(env.Name) {
+			continue
+		}
 		if os.Getenv(env.Name) != env.Value {
 			os.Setenv(env.Name, env.Value)
 		}

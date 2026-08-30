@@ -26,19 +26,6 @@ github.com/klauspost/compress/internal/le
 github.com/klauspost/compress/internal/snapref
 github.com/klauspost/compress/zstd
 github.com/klauspost/compress/zstd/internal/xxhash
-# github.com/pierrec/lz4/v4 v4.1.27
-## explicit; go 1.17
-github.com/pierrec/lz4/v4
-github.com/pierrec/lz4/v4/internal/lz4block
-github.com/pierrec/lz4/v4/internal/lz4errors
-github.com/pierrec/lz4/v4/internal/lz4stream
-github.com/pierrec/lz4/v4/internal/xxh32
-# github.com/wow-look-at-my/go-containers v0.0.0-20260826161058-40a3d1ef3d41
-## explicit; go 1.26
-github.com/wow-look-at-my/go-containers/set
-# github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260830053237-bf0b9a22e99c
-## explicit; go 1.26
-github.com/wow-look-at-my/go-s3-server/cacheclient
 # golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97
 ## explicit; go 1.25.0
 golang.org/x/arch/arm/armasm

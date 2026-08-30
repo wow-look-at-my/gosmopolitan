@@ -46,3 +46,18 @@ stdout GOCOSMODEBUG=
 stdout GOCOSMOFAT=
 stdout GOCOSMOPLATFORMS=
 stdout GOCOSMOSTRIP=
+
+# What go env REPORTS for GOCOSMOPLATFORMS must not become what the next
+# reader SEES. cmd/go copies each reported value into its own environment so
+# the tools it invokes agree with it, and the other knobs survive that
+# because their effective values parse back to themselves. This one's does
+# not: every platform is what "unset" reports, and a selection of every
+# platform is a choice. Publish it and GOCOSMOFAT=0 stops working, because
+# the build believes the caller asked for both architectures.
+env GOCOSMOPLATFORMS=
+env GOCOSMOFAT=0
+env GOOS=cosmo
+env GOARCH=amd64
+go env GOCOSMOFAT
+stdout '^off$'
+! stderr 'conflicts with GOCOSMOPLATFORMS'

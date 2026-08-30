@@ -26,13 +26,6 @@ var allowedPackagePrefixes = []string{
 	// Fork-local: cmd/link compresses cosmo .debug_* sections with
 	// ELFCOMPRESS_ZSTD (see cmd/link/internal/ld/dwarfcompress_zstd.go).
 	"github.com/klauspost/compress",
-
-	// Fork-local: cmd/go talks to the org's shared build cache in process
-	// (see cmd/go/internal/cache/shared.go). lz4 is the cache's wire framing
-	// and go-containers/set is the client's own dependency.
-	"github.com/wow-look-at-my/go-s3-server/cacheclient",
-	"github.com/wow-look-at-my/go-containers",
-	"github.com/pierrec/lz4",
 }
 
 // Verify that the vendor directories contain only packages matching the list above.
