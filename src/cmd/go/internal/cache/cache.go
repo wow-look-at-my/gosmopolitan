@@ -75,6 +75,20 @@ type Cache interface {
 	FuzzDir() string
 }
 
+// ExecutableCache is a Cache that can also store an output the build will
+// execute, under a name and with the execute bit set.
+//
+// It is optional because a cache program speaks a protocol that has no such
+// operation. Ask for it by interface rather than for one concrete type: the
+// disk cache, the shared tier over it, and the tracing wrapper over that are
+// all caches that can do this, and a build that names only the first of them
+// silently stops caching executables the moment either of the others is in
+// use.
+type ExecutableCache interface {
+	Cache
+	PutExecutable(id ActionID, name string, file io.ReadSeeker) (_ OutputID, size int64, _ error)
+}
+
 // A Cache is a package cache, backed by a file system directory tree.
 type DiskCache struct {
 	dir string
