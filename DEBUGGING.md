@@ -5906,3 +5906,37 @@ windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail; dist
 test of path/filepath, os/exec, syscall and cmd/internal/script, all under
 GOOS=cosmo; `TestSplitListQuoted` with a negative control; and runtimeprobe
 executed here, also with a negative control.
+
+## An instrument for the macOS wedge: EOF on a dead child's stdout pipe
+
+go-toolchain's macOS leg wedges in `src/cmd` and `src/vet` at the 30s cap. The
+stack is x/tools `gocommand.runCmdContext` -> `os/exec writerDescriptor` ->
+`io.Copy` -> `poll.(*FD).Read`: the parent is parked reading a child's stdout
+pipe that never reaches EOF. It is intermittent and does not reproduce on a
+linux host, so there is nothing to bisect from here.
+
+A pipe only stays open past its child's exit while another process holds the
+write end. That process can only have taken it through a fork in the window
+inside `Start`, between the pipe's creation and the parent's close - which is
+the window close-on-exec covers. The arm64-apple variadic ABI defect once left
+`FD_CLOEXEC` unset on a share of all descriptors, so this is the same family.
+
+`checkPipeEOF` (testdata/runtimeprobe/pipeeof.go) reproduces that shape. Each
+round forks a holder child concurrently with a piped child, then requires the
+piped child's `Wait` to return. The holder outlives the piped child, so an
+escaped descriptor wedges rather than merely delaying. On a wedge the check
+prints the parent's descriptor census and the holder's, then releases the
+holder and reports whether that alone unwedged the copy - which separates a
+lost close-on-exec from a pipe the kernel never drained.
+
+Negative control: a scratch build that hands the holder the write end through
+`ExtraFiles` reports
+
+```
+FAIL pipeeof: round 0: the piped child's stdout never reached EOF; parent fds=[... 29:pipeE ...]
+FAIL pipeeof: round 0 holder census: pid=19270 fds=[0:chr- 1:chr- 2:chr- 3:pipe-]
+FAIL pipeeof: round 0 releasing the holder unwedged the copy (wait: <nil>)
+```
+
+The holder's `3:pipe-` is the escaped end, and the trailing `-` says it carried
+no `FD_CLOEXEC`. The shipped check passes on linux.
