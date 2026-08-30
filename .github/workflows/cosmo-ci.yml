@@ -186,10 +186,7 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
 
       - name: Host-nameserver path (net) and the NT DNS ABI pins (runtime)
-        # An NT host keeps its resolvers where net cannot open them; see
-        # docs/PLATFORM-STATUS.md and src/runtime/os_cosmo_nt_dns.go. Only
-        # Windows executes the walk, so the offsets are pinned here and the
-        # end-to-end resolve is runtimeprobe's dns check on all three runners.
+        # see docs/CI.md "build job" for why this step exists and what it catches.
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 10
         shell: bash
