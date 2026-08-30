@@ -5907,27 +5907,22 @@ test of path/filepath, os/exec, syscall and cmd/internal/script, all under
 GOOS=cosmo; `TestSplitListQuoted` with a negative control; and runtimeprobe
 executed here, also with a negative control.
 
-## An instrument for the macOS wedge: EOF on a dead child's stdout pipe
+## EOF on a dead child's stdout pipe, and what it ruled OUT on macOS
 
-go-toolchain's macOS leg wedges in `src/cmd` and `src/vet` at the 30s cap. The
-stack is x/tools `gocommand.runCmdContext` -> `os/exec writerDescriptor` ->
-`io.Copy` -> `poll.(*FD).Read`: the parent is parked reading a child's stdout
-pipe that never reaches EOF. It is intermittent and does not reproduce on a
-linux host, so there is nothing to bisect from here.
+`checkPipeEOF` (testdata/runtimeprobe/pipeeof.go) asserts that a child's stdout
+pipe reaches EOF once the child exits. os/exec waits for that EOF inside `Wait`,
+so a write end that escaped to another process parks the parent forever. An end
+can only escape through a fork in the window inside `Start`, between the pipe's
+creation and the parent's close - the window close-on-exec covers. The
+arm64-apple variadic ABI defect once left `FD_CLOEXEC` unset on a share of all
+descriptors, so this is the same family.
 
-A pipe only stays open past its child's exit while another process holds the
-write end. That process can only have taken it through a fork in the window
-inside `Start`, between the pipe's creation and the parent's close - which is
-the window close-on-exec covers. The arm64-apple variadic ABI defect once left
-`FD_CLOEXEC` unset on a share of all descriptors, so this is the same family.
-
-`checkPipeEOF` (testdata/runtimeprobe/pipeeof.go) reproduces that shape. Each
-round forks a holder child concurrently with a piped child, then requires the
-piped child's `Wait` to return. The holder outlives the piped child, so an
+Each round forks a holder child concurrently with a piped child, then requires
+the piped child's `Wait` to return. The holder outlives the piped child, so an
 escaped descriptor wedges rather than merely delaying. On a wedge the check
-prints the parent's descriptor census and the holder's, then releases the
-holder and reports whether that alone unwedged the copy - which separates a
-lost close-on-exec from a pipe the kernel never drained.
+prints the parent's descriptor census and the holder's, then releases the holder
+and reports whether that alone unwedged the copy - which separates a lost
+close-on-exec from a pipe the kernel never drained.
 
 Negative control: a scratch build that hands the holder the write end through
 `ExtraFiles` reports
@@ -5939,4 +5934,21 @@ FAIL pipeeof: round 0 releasing the holder unwedged the copy (wait: <nil>)
 ```
 
 The holder's `3:pipe-` is the escaped end, and the trailing `-` says it carried
-no `FD_CLOEXEC`. The shipped check passes on linux.
+no `FD_CLOEXEC`.
+
+### What this ruled out
+
+The check was written for go-toolchain's macOS leg, which times out in
+`src/cmd` and `src/vet` at the 30s per-test cap with the parent inside
+`gocommand.runCmdContext` -> `io.Copy` -> `poll.(*FD).Read`. It reports `ok
+pipeeof` on the macOS runner, on all three origin binaries, so an escaped write
+end is NOT that failure.
+
+Reading the whole dump rather than the copy goroutines says the same thing: the
+`Cmd.Wait` goroutine is parked in `syscall.wait4`, so the child `go list` had
+not exited. Both pipe copies were therefore waiting correctly, and the parent
+was not at fault. The module cache was warm by then - the last `go: downloading`
+line precedes the timeouts by minutes - so a cold fetch is not it either. What
+remains to explain is why a `go list` child under the fork takes more than 30s
+on that host when the same call takes under a second on linux. The check stays
+as a regression guard on the descriptor path it does cover.
