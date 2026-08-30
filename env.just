@@ -39,9 +39,38 @@ test-std:
     PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestNTCertContextLayout|TestCosmo' runtime
     GOOS=linux GOARCH=amd64 go test -run 'TestSystemCertPool|TestSystemRoots' crypto/x509
 
-# Can the toolchain's own commands compile for cosmo? That is the
-# question behind shipping the toolchain itself as fat APEs -- one
-# artifact covering every host -- instead of a tarball per platform.
+# Does the build path reach the APE? One artifact covering every host
+# is only honest if every host builds the same bytes, and the path a
+# runner checks out to is the input that differs between them. Three
+# builds answer it: the same path twice isolates plain nondeterminism,
+# then two paths with and without -trimpath separate the path from
+# everything else. CI asserts the same property across real hosts.
+repro-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{justfile_directory()}}/testdata/runtimeprobe"
+    rm -rf /tmp/reproA /tmp/reproB
+    mkdir -p /tmp/reproA /tmp/reproB
+    cp -R "$src" /tmp/reproA/runtimeprobe
+    cp -R "$src" /tmp/reproB/runtimeprobe
+    build() { (cd "$1/runtimeprobe" && go build $3 -o "$1/$2" .); }
+    report() {
+        if cmp -s "$2" "$3"; then
+            echo "  IDENTICAL  $1"
+        else
+            echo "  DIFFER by $(cmp -l "$2" "$3" | wc -l | tr -d ' ') bytes  $1"
+        fi
+    }
+    build /tmp/reproA control.com ""
+    build /tmp/reproA control2.com ""
+    report "same path, built twice" /tmp/reproA/control.com /tmp/reproA/control2.com
+    build /tmp/reproA probe.com ""
+    build /tmp/reproB probe.com ""
+    report "two paths, no -trimpath" /tmp/reproA/probe.com /tmp/reproB/probe.com
+    build /tmp/reproA probe-tp.com -trimpath
+    build /tmp/reproB probe-tp.com -trimpath
+    report "two paths, -trimpath" /tmp/reproA/probe-tp.com /tmp/reproB/probe-tp.com
+
 # Fat, because the shipped shape is the answer being checked.
 build-tools-cosmo:
     go build -o /tmp/cosmotools/compile.com cmd/compile
