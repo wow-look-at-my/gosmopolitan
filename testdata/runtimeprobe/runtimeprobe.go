@@ -137,6 +137,7 @@ func main() {
 	timed("dupfile", checkDupFile)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
+	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
@@ -847,6 +848,70 @@ func checkFiles() {
 	} else {
 		ok("rmdir")
 	}
+}
+
+// checkSeekReadAt exercises os.File.Seek (all three whence values) and
+// os.File.ReadAt (mid-file offsets, and past-EOF returning io.EOF) on
+// the shipped os.File API. This is the regression canary for the darwin
+// pread/pwrite/lseek emulation: before it, macOS returned ENOSYS
+// ("function not implemented") for both Seek and ReadAt while Linux and
+// Windows dispatched them natively. It runs on every APE host via the
+// apetest suite.
+func checkSeekReadAt() {
+	dir, err := os.MkdirTemp("", "runtimeprobe-seek")
+	if err != nil {
+		fail("seekreadat", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	name := filepath.Join(dir, "seek.bin")
+	// 36 bytes, indices 0..35.
+	data := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		fail("seekreadat", "WriteFile: %v", err)
+		return
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		fail("seekreadat", "Open: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// Seek from start.
+	if off, err := f.Seek(10, io.SeekStart); err != nil || off != 10 {
+		fail("seekreadat", "Seek(10, Start) = %d, %v; want 10, nil", off, err)
+		return
+	}
+	// Seek relative to current (10 + 5 = 15).
+	if off, err := f.Seek(5, io.SeekCurrent); err != nil || off != 15 {
+		fail("seekreadat", "Seek(5, Current) = %d, %v; want 15, nil", off, err)
+		return
+	}
+	// Seek relative to end (36 - 3 = 33).
+	if off, err := f.Seek(-3, io.SeekEnd); err != nil || off != 33 {
+		fail("seekreadat", "Seek(-3, End) = %d, %v; want 33, nil", off, err)
+		return
+	}
+	ok("seekreadat", "seek")
+
+	// ReadAt mid-file: indices 2..6 are "23456".
+	buf := make([]byte, 5)
+	if n, err := f.ReadAt(buf, 2); err != nil || n != 5 || string(buf) != "23456" {
+		fail("seekreadat", "ReadAt(2) = %d, %v, %q; want 5, nil, \"23456\"", n, err, buf)
+		return
+	}
+	// ReadAt past EOF must return io.EOF.
+	if n, err := f.ReadAt(buf, int64(len(data))+1); err != io.EOF || n != 0 {
+		fail("seekreadat", "ReadAt(past EOF) = %d, %v; want 0, io.EOF", n, err)
+		return
+	}
+	// ReadAt exactly at EOF must return io.EOF with zero bytes.
+	if n, err := f.ReadAt(buf, int64(len(data))); err != io.EOF || n != 0 {
+		fail("seekreadat", "ReadAt(at EOF) = %d, %v; want 0, io.EOF", n, err)
+		return
+	}
+	ok("seekreadat", "readat")
 }
 
 // checkReadDir exercises directory listing - the getdents64 syscall on

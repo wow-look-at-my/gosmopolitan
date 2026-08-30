@@ -14,9 +14,12 @@
 #define SYS_read		0
 #define SYS_write		1
 #define SYS_close		3
+#define SYS_lseek		8
 #define SYS_mmap		9
 #define SYS_munmap		11
 #define SYS_mprotect		10
+#define SYS_pread64		17
+#define SYS_pwrite64		18
 #define SYS_nanosleep		35
 #define SYS_exit		60
 #define SYS_exit_group		231
@@ -40,6 +43,9 @@
 #define XNU_gettimeofday	0x2000074	// BSD 116
 #define XNU_select		0x200005d	// BSD 93
 #define XNU_pselect		0x20001ae	// BSD 430
+#define XNU_pread		0x2000099	// BSD 153
+#define XNU_pwrite		0x200009a	// BSD 154
+#define XNU_lseek		0x20000c7	// BSD 199
 
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers R11
@@ -150,6 +156,12 @@ syscall6_darwin:
 	JEQ	darwin_sigaltstack
 	CMPQ	R11, $SYS_pselect6
 	JEQ	darwin_pselect
+	CMPQ	R11, $SYS_pread64
+	JEQ	darwin_pread
+	CMPQ	R11, $SYS_pwrite64
+	JEQ	darwin_pwrite
+	CMPQ	R11, $SYS_lseek
+	JEQ	darwin_lseek
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
@@ -255,6 +267,18 @@ darwin_sigaltstack:
 darwin_pselect:
 	// Use select instead of pselect
 	MOVL	$XNU_select, AX
+	JMP	darwin_syscall
+
+darwin_pread:
+	MOVL	$XNU_pread, AX
+	JMP	darwin_syscall
+
+darwin_pwrite:
+	MOVL	$XNU_pwrite, AX
+	JMP	darwin_syscall
+
+darwin_lseek:
+	MOVL	$XNU_lseek, AX
 	JMP	darwin_syscall
 
 darwin_syscall:
