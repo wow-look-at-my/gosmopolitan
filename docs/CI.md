@@ -5,6 +5,18 @@ Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the
 See CLAUDE.md's "CI" section for the job overview; this file covers the
 per-step rationale that overview doesn't.
 
+## Every job: `submodules: true`
+
+`cmd/go` links the org's shared build cache client in, and the three packages
+that needs live under `src/cmd/vendor` as **git submodules** rather than copied
+source (CLAUDE.md, "Shared build cache"). `src/cmd` builds in vendor mode, so
+those paths must hold real files at build time: a checkout without them leaves
+three empty directories and `cmd/go` fails to build. Every `actions/checkout`
+in this workflow therefore passes `submodules: true`, publish jobs included —
+they check the tree out to package it, and a GOROOT missing `cmd/go` is not
+publishable. The same applies to a developer's clone: use
+`--recurse-submodules`, or `git submodule update --init` afterwards.
+
 ## build job
 
 **Timeouts.** Job and step `timeout-minutes` are deliberate everywhere: a

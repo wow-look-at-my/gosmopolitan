@@ -17,8 +17,7 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
-      # cmd/go's shared-cache client and its two dependencies are submodules
-      # under src/cmd/vendor, so a checkout without them cannot build cmd/go.
+      # src/cmd/vendor holds three submodules; without them cmd/go cannot build.
       - uses: actions/checkout@v4
         with:
           submodules: true
