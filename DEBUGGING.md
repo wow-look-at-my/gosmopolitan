@@ -5872,6 +5872,38 @@ Neither is reachable from CI today - no leg runs `dist test os` under cosmo -
 so this change turns nothing red. What it does is make both failures visible
 and gateable for the first time.
 
+## An NT path read as relative, because the path layer was compiled as unix
+
+`internal/filepathlite` is where `IsAbs`, `IsPathSeparator` and `volumeNameLen`
+decide what a path IS, and cosmo took `path_unix.go`. So on a Windows host every
+path the OS handed the APE - drive letter, backslashes - read as relative with
+no volume. A consumer's report:
+
+```
+internal error: go list returned non-absolute Package.Dir: C:\Users\runneradmin\.cache\go-toolchain\cosmo\v372\go\src\internal\goarch
+```
+
+That is x/tools calling `filepath.IsAbs` on a path the native `go list` printed.
+Nothing was wrong with the path.
+
+`path_cosmo.go` moves those predicates onto the host, the same way the separator
+moved. `Separator` stays the slash - NT accepts it beside the backslash, and it
+is what this package emits, so only what a path is READ as changes.
+
+The NT bodies are `path_windows.go`'s, reduced to the two volume shapes a host
+actually hands out: a drive letter and a UNC root. A device prefix (`\\?\`,
+`\\.\`, `\??\`) is NOT recognized and reads as a UNC root. That is a decision,
+not an oversight: the full form drags in reserved names, fold comparison and
+validation, which is a slab of upstream this fork would re-merge every uprev,
+to cover a shape `go list` does not emit.
+
+Each NT predicate takes the host as a parameter (`ntIsAbs(path, nt)`), which is
+what lets a linux host test the NT branch - `TestNTIsAbs`,
+`TestNTVolumeNameLen` and `TestNTIsPathSeparator` in
+`internal/filepathlite`, each also checked against the unix branch. Negative
+control: asserting `C:\Users\...` is relative fails with
+`NTIsAbs("C:\\Users\\runneradmin\\.cache", nt) = true, want false`.
+
 Verified on linux/amd64: make.bash; std for cosmo amd64 and arm64, linux,
 windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail; dist
 test of path/filepath, os/exec, syscall and cmd/internal/script, all under
