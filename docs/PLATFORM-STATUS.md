@@ -67,10 +67,15 @@ section - so native bring-up gains urgency), file/pipe dup(2)
 (ENOSYS on purpose - socket dup works, and file/pipe fds still
 transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
 by design - pair ends cannot cross processes),
-off-host networking (loopback sockets are CI-proven, but off-host
-connect + DNS from NT have no probe, and a consumer run
-field-observed outbound HTTPS timing out on 2026-07-20 - see
-DEBUGGING.md's off-host HTTPS section), and
+off-host TCP (loopback sockets are CI-proven; the DNS half of the
+2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes
+`dnsconfig_unix.go`, whose tag is `!windows`, so it read a
+resolv.conf that does not exist on NT and fell back to querying
+localhost, and the servers now come from iphlpapi's
+GetNetworkParams instead, with runtimeprobe's `dns` check measuring
+it on every runner - but nothing had got past DNS to attempt an
+off-host connect, so TCP beyond loopback stays unproven either way
+- see DEBUGGING.md's off-host HTTPS section), and
 real-keyboard/CTRL_CLOSE console coverage (the probe covers the
 GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
 window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay

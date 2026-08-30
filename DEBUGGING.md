@@ -4627,7 +4627,7 @@ case-sensitive on cosmo-NT; no global filepath.ListSeparator change
 (that would be a far bigger ABI shift — the lookup is the scoped
 fix).
 
-# 2026-07-20: NT — off-host HTTPS from an APE times out (OPEN, no fix landed)
+# 2026-07-20: NT — off-host HTTPS from an APE times out (DNS half FIXED 2026-08-30)
 
 Field observation from consumer CI (windows-latest, fork v213, run
 29741678227 of a downstream repo): the APE's HTTPS GET to
@@ -4647,6 +4647,82 @@ nameserver. Candidate NT-backlog items: root-cause with a minimal
 http.Get repro on windows-latest, an off-host network/DNS probe
 (needs an endpoint reachable from CI), and resolver bring-up on NT if
 the hypothesis holds.
+
+## 2026-08-30: the hypothesis is CONFIRMED — the resolver never asks Windows
+
+Consumer CI again (go-toolchain PR 426, windows-latest, fork v360),
+this time with the error text instead of a bare timeout:
+
+    lookup dl.pazer.build on [::1]:53: read udp [::1]:57430->[::1]:53:
+    i/o timeout
+
+`[::1]:53` is the tell. It is not a nameserver anybody configured: it
+is `defaultNS` in `dnsconfig.go`, the list `dnsReadConfig` returns
+when it cannot read a resolv.conf. So the resolver did reach
+the network — it sent a real UDP query — and sent it to localhost,
+where nothing is listening. It never had a nameserver to ask.
+
+The path is a build-tag one, not a translation-layer one.
+`dnsconfig_unix.go` is `//go:build !windows`, and GOOS=cosmo is not
+windows, so an APE on an NT host compiles the file that opens
+`/etc/resolv.conf`. `dnsconfig_windows.go` — which reads the
+nameservers from `GetAdaptersAddresses` — is `windows`-tagged and is
+not in a cosmo build at all. Nothing in the NT path layer is at
+fault: the file genuinely does not exist on that host, and the unix
+reader's documented fallback is exactly what ran.
+
+The same run's other network call failed the same way and confirms
+the reach is name resolution rather than one endpoint: the binary's
+update check against api.github.com timed out at its 10s client
+deadline, while the runner's own node-based steps resolved and
+fetched over the same interface in the same job.
+
+This narrows the 2026-07-20 observation to name resolution alone.
+Off-host TCP from NT is still unproven either way — no run has yet
+got past DNS to attempt a connect — so a resolver fix is necessary
+and not known to be sufficient.
+
+## The fix: ask Windows for the servers, keep the Go resolver
+
+Two routes were available. Handing the whole lookup to ws2_32's
+`GetAddrInfoW` matches what upstream GOOS=windows does, but `net` gets
+there through `cgoLookupHost`, and on cosmo that comes from
+`cgo_stub.go`, which sets `cgoAvailable = false` and panics if called —
+so taking it means reworking `hostLookupOrder`'s choices for one host.
+Filling the `dnsConfig` instead changes nothing about how a lookup runs;
+only where the server list comes from.
+
+The second is what landed, and the failure above is what makes it safe:
+the resolver DID open a socket, send a UDP query and time out waiting.
+Send, receive and the netpoller deadline all work on NT — only the
+destination was wrong.
+
+- `runtime/os_cosmo_nt_dns.go` loads iphlpapi lazily (the
+  `ntWinsockEnsure` shape, and optional like ntdll: a host without it
+  reports no servers rather than crashing) and calls `GetNetworkParams`.
+  Its FIXED_INFO carries the list as NUL-terminated dotted quads, so
+  nothing parses a sockaddr. The offsets are spelled as sums of their
+  members and pinned by `dns_cosmo_nt_test.go` — a wrong one reads
+  plausible garbage rather than failing, which on this host means
+  handing net a nameserver that is not one.
+- `runtime.CosmoHostDNSServers` exposes it, next to `CosmoHostOS` and
+  answering only on NT.
+- `net/dnsconfig_unix.go` asks, through the `hostNameservers` seam, at
+  the three points where it would otherwise fall back to `defaultNS`.
+  A host that publishes resolv.conf gets nil and is unaffected, and
+  `defaultNS` is still returned by identity when nothing answers, which
+  `isDefaultNS` compares by backing array.
+
+`GetNetworkParams` reports IPv4 servers only. That is what stops the
+queries going to localhost; a v6-only resolver setup is not covered.
+
+Coverage: runtimeprobe grew a `dns` check, so the gap this whole entry
+describes is now measured on all three runners rather than described.
+It resolves a name through net's own resolver and, on failure, prints
+the servers the runtime offered — the two states this entry had to be
+told apart by hand. Verified red first: pointed at an unresolvable
+name it reports `lookup ... on 8.8.8.8:53: no such host`, which is the
+same shape as the `on [::1]:53` line that started this.
 
 # 2026-07-21: GOWASM=threads — pool_demo printed a boot fatal and exited 0 (silent-fatal, every run since B3)
 

@@ -65,6 +65,16 @@ dependency policy stops catching real layering breaks. `cmd/internal/moddeps`
 is the matching check for `src/` + `src/cmd` module/vendor consistency (see
 CLAUDE.md's vendoring runbook).
 
+**Host-nameserver path (net) and the NT DNS ABI pins (runtime).** An NT host
+publishes its resolvers where `net` cannot open them, so a cosmo binary there
+took `dnsconfig_unix.go`'s missing-file fallback and asked localhost - see
+DEBUGGING.md's off-host HTTPS section. The `net` half of this step covers the
+seam that replaced that fallback; the `runtime` half pins the iphlpapi
+FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, which only a Windows host ever
+executes and where a wrong offset reads plausible garbage rather than failing.
+The end-to-end resolve is runtimeprobe's `dns` check, which every test runner
+executes.
+
 **Loop-aware inlining tests.** See docs/LOOP-INLINING.md for the loop cost
 discount, the loop-nested call site budget, and the per-caller growth
 allowance. Host-run compiler tests, so GOOS is pinned away from cosmo. The
