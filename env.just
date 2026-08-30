@@ -44,7 +44,9 @@ test-std:
 # runner checks out to is the input that differs between them. Three
 # builds answer it: the same path twice isolates plain nondeterminism,
 # then two paths with and without -trimpath separate the path from
-# everything else. CI asserts the same property across real hosts.
+# everything else. A consumer needs -trimpath AND -ldflags=-buildid= to
+# get the same bytes on every host; the second covers the tool ID, which
+# differs because each host builds the toolchain itself.
 repro-check:
     #!/usr/bin/env bash
     set -euo pipefail
