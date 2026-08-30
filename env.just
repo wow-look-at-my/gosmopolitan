@@ -71,6 +71,30 @@ repro-check:
     build /tmp/reproB probe-tp.com -trimpath
     report "two paths, -trimpath" /tmp/reproA/probe-tp.com /tmp/reproB/probe-tp.com
 
+# The other path a runner varies: where the toolchain itself is installed.
+# Copying this GOROOT holds the tool binaries byte-identical and moves only
+# their location, so a difference here is the GOROOT path and nothing else.
+repro-goroot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alt=/tmp/repro-goroot
+    rm -rf "$alt"
+    mkdir -p "$alt"
+    for d in bin pkg src lib api VERSION; do
+        cp -R "{{justfile_directory()}}/$d" "$alt/$d"
+    done
+    src="{{justfile_directory()}}/testdata/runtimeprobe"
+    rm -rf /tmp/reproG && cp -R "$src" /tmp/reproG
+    build() { (cd /tmp/reproG && GOROOT="$1" PATH="$1/bin:$PATH" "$1/bin/go" build $3 -o "$2" .); }
+    build "{{justfile_directory()}}" /tmp/reproG/here.com -trimpath
+    build "$alt" /tmp/reproG/there.com -trimpath
+    if cmp -s /tmp/reproG/here.com /tmp/reproG/there.com; then
+        echo "  IDENTICAL  two GOROOT paths, -trimpath"
+    else
+        echo "  DIFFER by $(cmp -l /tmp/reproG/here.com /tmp/reproG/there.com | wc -l | tr -d ' ') bytes  two GOROOT paths, -trimpath"
+    fi
+    rm -rf "$alt"
+
 # Fat, because the shipped shape is the answer being checked.
 build-tools-cosmo:
     go build -o /tmp/cosmotools/compile.com cmd/compile
