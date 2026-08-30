@@ -691,7 +691,8 @@ jobs:
               throw new Error(`want exactly one go*${suffix} in ${distDir}, ` +
                 `found [${names.join(', ')}] among [${fs.readdirSync(distDir).join(', ')}]`);
             }
-            const tarball = path.join(distDir, names[0]);
+            // Forward slashes: a windows path loses its separators crossing the step output, and node opens either spelling.
+            const tarball = path.posix.join(distDir, names[0]);
             core.info(`${tarball}: ${fs.statSync(tarball).size} bytes`);
             core.setOutput('path', tarball);
             core.setOutput('name', names[0]);
