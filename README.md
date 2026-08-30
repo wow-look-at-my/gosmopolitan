@@ -53,8 +53,8 @@ self-extraction).
 ## Installing a Prebuilt Toolchain
 
 CI publishes installable toolchain tarballs to [buildhost](https://pazer.build)
-on every push, for linux/amd64 and darwin/arm64. Install one in seconds
-instead of building from source:
+on every push, for linux/amd64, darwin/arm64 and windows/amd64. Install one
+in seconds instead of building from source:
 
 ```bash
 # Linux, x86-64
@@ -70,9 +70,16 @@ export PATH="$PWD/go/bin:$PATH"
 go version   # go version go1.27.0cosmo.r<N> darwin/arm64
 ```
 
-Both tarballs come from one release, each built on its own platform. Other
-hosts (Windows, macOS Intel, linux/arm64) still build from source - see
-Building the Toolchain below.
+```bash
+# Windows, x86-64
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" -o go.tar.gz
+tar -xzf go.tar.gz
+go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
+```
+
+All three tarballs come from one release, each built on its own platform.
+macOS Intel and linux/arm64 still build from source - see Building the
+Toolchain below. Depth: docs/INSTALL.md.
 
 The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs
 itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides;
