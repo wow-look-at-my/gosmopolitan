@@ -5809,10 +5809,15 @@ What that costs, and what it does not:
   breakage.
 - `internal/filepathlite` keeps its own colon. `filepath.SplitList` reads
   `filepath`'s value, not that one.
-- Windows PATH quoting is still not honored under cosmo: `SplitList` comes from
-  `path/filepath/path_unix.go`, a plain `strings.Split`, while the quote-aware
-  version lives in `path_windows.go`. Splitting on the right character is the
-  part that was broken; quoting is a separate gap.
+- `SplitList` follows the host too, in `splitlist_cosmo.go`. Splitting on the
+  right character is only half of it: an NT entry may be quoted, and a quoted
+  entry may hold the separator itself, so `path_unix.go`'s plain
+  `strings.Split` cuts inside one. The quote-aware body is `path_windows.go`'s,
+  factored as `splitListQuoted(path, sep)` - the separator is a parameter so a
+  linux host can still test the NT branch, which is what
+  `TestSplitListQuoted` does with `path_test.go`'s own `winsplitlisttests`
+  cases. `splitList` moved out of `path_unix.go` into `splitlist_notcosmo.go`;
+  non-cosmo ports compile the same function they always did.
 
 Gate: `checkLookPath` in testdata/runtimeprobe now asserts
 `os.PathListSeparator` against its own NT oracle (the `OS=Windows_NT`
@@ -5821,15 +5826,54 @@ environment variable, independent of `runtime.CosmoHostOS()`) and round-trips
 reports `FAIL lookpath: os.PathListSeparator = ":", host wants ";"`. CI runs
 this probe on all three hosts.
 
-Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
-linux, windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail;
-dist test of path/filepath, os/exec and cmd/internal/script (all under
-GOOS=cosmo); and runtimeprobe executed here.
+## The os and syscall test binaries never built under cosmo
 
-Found and NOT fixed: the `os` package's own tests have never built under
-GOOS=cosmo. Two independent blockers - `fifo_test.go` needs `syscall.Mkfifo`,
-which the cosmo syscall package does not define, and `readfrom_unix_test.go`
-uses helpers defined in `readfrom_linux_test.go`, whose non-test siblings
-`zero_copy_linux.go` and `pidfd_linux.go` are tagged `linux && !cosmo` while the
-test files are not. Tagging the test files to match is half a fix: it trades
-those errors for the other two.
+Found while doing the above, and fixed here. Neither package's tests compiled
+for GOOS=cosmo, so nothing in either had ever run on this port.
+
+The fork tags its non-test files honestly - `zero_copy_linux.go`,
+`pidfd_linux.go` and the rest carry `linux && !cosmo`, because cosmo takes
+`zero_copy_stub.go` and `pidfd_other.go` instead. The TEST files were left on
+the bare `_linux` filename, which the fork resolves for cosmo too, so each one
+referenced hooks that do not exist there. The repair is to give every test file
+the tag of the implementation it exercises:
+
+- `os`: `export_linux_test.go`, `readfrom_linux_test.go`, `writeto_linux_test.go`
+  and `pidfd_linux_test.go` gain `linux && !cosmo`; `readfrom_unix_test.go`
+  narrows to `(freebsd || linux || solaris) && !cosmo`.
+- `syscall`: `export_linux_test.go` (which also collided outright with the
+  fork's own `export_cosmo_test.go` over `Tcgetpgrp`/`Tcsetpgrp`),
+  `creds_test.go`, `exec_linux_test.go` and `syscall_linux_test.go` gain the
+  same tag. Netlink, `AllThreadsSyscall`, mount flags, namespaces and
+  `SCM_CREDENTIALS` are Linux kernel surface cosmo does not expose.
+
+One real gap sat under that: `syscall.Mkfifo` was missing for cosmo, which is
+what `os/fifo_test.go` needs. `Mknod` was already there, so it is the same
+one-liner linux has - `Mknod(path, mode|S_IFIFO, 0)`.
+
+`syscall` now passes under cosmo. `os` now BUILDS and RUNS, and doing so
+surfaced its own defects, which are a separate piece of work and are NOT fixed
+here:
+
+- `TestRootConsistencyRename`, `TestRootMultiMkdir`, `TestRootMultiMkdirAllShallow`
+  and `TestRootMultiRemove` fail on trailing-slash handling. `os.Root` and the
+  plain `os` call disagree with each other on the SAME host, so it is cosmo's
+  openat path, not the kernel's: `root.Mkdir("target/")` succeeds against a
+  symlink-to-directory where `os.Mkdir(".../target/")` correctly answers
+  `file exists`. That is `O_NOFOLLOW`/`O_DIRECTORY` behavior inside
+  Cosmopolitan's openat, below Go.
+- `TestExecutableDeleted` fails with `device or resource busy`. Running as
+  root, APE staging binds the staged copy over the original path (see
+  `docs/APE-STAGING.md`), so the running executable cannot be unlinked. That is
+  the staging design rather than a defect, and the test's premise does not hold
+  for an assimilated APE.
+
+Neither is reachable from CI today - no leg runs `dist test os` under cosmo -
+so this change turns nothing red. What it does is make both failures visible
+and gateable for the first time.
+
+Verified on linux/amd64: make.bash; std for cosmo amd64 and arm64, linux,
+windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail; dist
+test of path/filepath, os/exec, syscall and cmd/internal/script, all under
+GOOS=cosmo; `TestSplitListQuoted` with a negative control; and runtimeprobe
+executed here, also with a negative control.

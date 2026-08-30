@@ -204,6 +204,14 @@ func checkLookPath() {
 		fail("lookpath", "filepath.SplitList(%q) = %q, want [a b]", "a"+pathSep+"b", parts)
 		return
 	}
+	// An NT entry may be quoted, and the quotes may wrap the separator itself.
+	if onNT {
+		quoted := `"a;b"` + pathSep + "c"
+		if parts := filepath.SplitList(quoted); len(parts) != 2 || parts[0] != "a;b" || parts[1] != "c" {
+			fail("lookpath", "filepath.SplitList(%q) = %q, want [a;b c]", quoted, parts)
+			return
+		}
+	}
 
 	newPath := dir
 	if pathVal != "" {

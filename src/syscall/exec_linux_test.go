@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux
+// Namespaces and mounts are Linux kernel surface cosmo does not expose.
+//go:build linux && !cosmo
 
 package syscall_test
 
