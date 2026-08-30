@@ -38,6 +38,12 @@ test-std:
     GOOS=linux GOARCH=amd64 go test -run 'TestNameserversFromHost|TestUnreadableConfServers|TestDNSReadConfig' net
     PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestCosmo' runtime
 
+# distpack decides which archives a publish writes, and the publish job
+# uploads by exact name, so a change to that naming breaks a platform's
+# download rather than the build. Host-pinned: distpack is a host tool.
+test-distpack:
+    GOOS=linux GOARCH=amd64 go test cmd/distpack
+
 # Build the runtime probe as an APE and run it on this host. CI runs the
 # same binary on all three, so a red here is a red there.
 probe:

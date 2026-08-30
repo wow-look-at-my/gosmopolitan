@@ -55,7 +55,7 @@ is a thin cosmo APE that executes natively on linux. Runtime-package cosmo
 unit tests cover the Apple itimerval ABI pins + timeval translation behind
 the darwin SIGPROF setitimer dispatch, and the signal translation tables.
 
-**Fork-divergence guardrails (go/build policy, moddeps).** go/build's
+**Fork-divergence guardrails (go/build policy, moddeps, distpack naming).** go/build's
 structural tests are what keep a fork's edits honest across an upstream
 uprev, and nothing was running them: the shebang step only runs `-run
 TestReadGoInfo`. Both had silently gone red - `TestVendorPackages` against
@@ -63,7 +63,8 @@ the zstd vendored for cosmo DWARF compression, `TestDependencies` against
 `internal/runtime/syscall/cosmo` - and an uprev is exactly when a stale
 dependency policy stops catching real layering breaks. `cmd/internal/moddeps`
 is the matching check for `src/` + `src/cmd` module/vendor consistency (see
-CLAUDE.md's vendoring runbook).
+CLAUDE.md's vendoring runbook). `cmd/distpack` joins them because the publish
+legs upload by exact filename: see "publish jobs" below.
 
 **Host-nameserver path (net) and the NT DNS ABI pins (runtime).** An NT host
 publishes its resolvers where `net` cannot open them, so a cosmo binary there
@@ -266,10 +267,22 @@ unchanged; this rewrite is publish-only. Every leg stamps the SAME string:
 `run_number` is one value per run, so the platforms of one release cannot
 disagree about which toolchain they are.
 
-**Build distribution tarball.** A host build plus distpack packaging:
+**Build distribution archive.** A host build plus distpack packaging:
 writes the official-style `go<VERSION>.<goos>-<goarch>.tar.gz` to
-`pkg/distpack`. `make.bash` alone is ~2m30s on ubuntu and ~4m30s on macos;
-distpack adds only seconds.
+`pkg/distpack`, on every platform. `make.bash` alone is ~2m30s on ubuntu,
+~4m30s on macos and ~3m15s on windows (`make.bat`, selected by the multicmd
+action); distpack adds only seconds.
+
+Upstream distpack writes a `.zip` for windows INSTEAD of the tar, off the
+one `zipArch` both containers hold. The fork writes both, and the leg
+uploads the tarball: a consumer that already extracts a gzipped tar for two
+platforms would otherwise need a second extractor for the third, and
+go-toolchain's cosmo bootstrap is that consumer. `binaryDistNames`
+(`src/cmd/distpack/pack.go`) is the selection, pinned by
+`TestBinaryDistNames` and run in the build job's guardrails step -- the
+publish uploads by exact name, so a change here breaks a platform's
+download rather than the build, which is the failure a unit test is cheap
+insurance against.
 
 **Publish flow.** Uses buildhost's own composite actions (create-release ->
 upload-artifact -> publish-release) - the same family the rest of the org

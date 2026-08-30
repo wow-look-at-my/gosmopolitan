@@ -176,7 +176,7 @@ jobs:
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
-      - name: Fork-divergence guardrails (go/build policy, moddeps)
+      - name: Fork-divergence guardrails (go/build policy, moddeps, distpack naming)
         # see docs/CI.md "build job" for why this step exists and what it catches.
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 10
@@ -184,6 +184,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/distpack
 
       - name: Host-nameserver path (net) and the NT DNS ABI pins (runtime)
         # see docs/CI.md "build job" for why this step exists and what it catches.
@@ -625,7 +626,7 @@ jobs:
           project: gosmopolitan
 
   publish-upload:
-    # macOS make.bash runs ~4m30s at its slowest observed; distpack adds seconds.
+    # macOS make.bash runs ~4m30s at its slowest observed and windows make.bat ~3m15s; distpack adds seconds.
     timeout-minutes: 25
     needs: publish-create
     strategy:
@@ -638,6 +639,9 @@ jobs:
           - runner: macos-latest
             goos: darwin
             goarch: arm64
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
     runs-on: ${{ matrix.runner }}
     permissions:
       id-token: write
@@ -661,11 +665,13 @@ jobs:
           printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
           echo "VERSION stamped: $(cat VERSION)"
 
-      - name: Build distribution tarball
-        # Writes the official-style go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack.
+      - name: Build distribution archive
+        # Writes the official-style go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack, on every platform -- see docs/CI.md "publish jobs".
         timeout-minutes: 15
-        shell: bash
-        run: cd src && ./make.bash -distpack
+        uses: wow-look-at-my-code/actions/multicmd@master
+        with:
+          unix: cd src && ./make.bash -distpack
+          windows: cd src && .\make.bat -distpack
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 

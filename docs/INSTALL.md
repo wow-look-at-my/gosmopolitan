@@ -2,7 +2,7 @@
 
 Every push whose build+test jobs are green publishes installable toolchain
 tarballs to buildhost (pazer.build) as project `gosmopolitan`, for
-**linux/amd64 and darwin/arm64**.
+**linux/amd64, darwin/arm64 and windows/amd64**.
 
 ```bash
 # Linux, x86-64
@@ -14,10 +14,22 @@ go version   # go version go1.27.0cosmo.r<N> linux/amd64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
 go version   # go version go1.27.0cosmo.r<N> darwin/arm64
+
+# Windows, x86-64 (any tar that reads gzip: bsdtar in System32, or git-bash)
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" -o go.tar.gz
+tar -xzf go.tar.gz
+go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
 ```
 
 The tarball extracts to `go/` (official distribution layout; GOROOT is
 derived from the binary location, no need to set it).
+
+Every slot serves a `.tar.gz`, windows included. go.dev serves a `.zip` for
+windows and distpack still writes one, but a consumer that already extracts
+a gzipped tar for two platforms would need a second extractor for the
+third; the published artifact is the tarball on all three
+(`binaryDistNames`, `src/cmd/distpack/pack.go`). The `.exe` suffix inside
+is what differs: windows carries `go/bin/go.exe`.
 
 ## How the publish works
 
@@ -28,9 +40,10 @@ produced -- there is no cross-package shortcut, and
 
 - `publish-create` opens ONE buildhost release, so every platform lands in
   the same version.
-- `publish-upload` is a matrix over ubuntu-latest/linux/amd64 and
-  macos-latest/darwin/arm64. Each leg stamps VERSION, runs
-  `make.bash -distpack` on its own runner (output
+- `publish-upload` is a matrix over ubuntu-latest/linux/amd64,
+  macos-latest/darwin/arm64 and windows-latest/windows/amd64. Each leg
+  stamps VERSION, runs `make.bash -distpack` (`make.bat -distpack` on
+  windows, through the multicmd action) on its own runner (output
   `pkg/distpack/go<base>.r<run_number>.<goos>-<goarch>.tar.gz`, e.g.
   `go1.27.0cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight
   to buildhost.
@@ -89,5 +102,5 @@ a hand-rebuilt toolchain self-invalidates stale cache entries and the old
   auto-increments N per publish, the publish job logs it, and
   `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves
   the current one.
-- **Other hosts build from source.** Windows, macOS Intel and linux/arm64
-  have no published tarball; `cd src && ./make.bash` is the path there.
+- **Other hosts build from source.** macOS Intel and linux/arm64 have no
+  published tarball; `cd src && ./make.bash` is the path there.

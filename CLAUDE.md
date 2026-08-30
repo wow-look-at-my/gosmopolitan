@@ -425,9 +425,9 @@ end to end), runs the testdata/jsfetchstream streaming-upload e2e under
 node, and runs the wasmexport compiler regression tests via
 cmd/internal/testdir for both wasm targets.
 
-A fourth job (`publish`, ubuntu-only, needs build+test) publishes an
-installable toolchain tarball to buildhost on every push - see Toolchain
-Distribution below.
+Three more jobs (`publish-create`, `publish-upload`, `publish-finish`; they
+need build+test) publish an installable toolchain tarball to buildhost on
+every push, one leg per platform - see Toolchain Distribution below.
 
 ## Repository automation (pr-minder bot)
 
@@ -468,17 +468,19 @@ labels — know this before pushing branches or interpreting PR state:
 
 ## Toolchain Distribution
 
-Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64 and
-darwin/arm64** — one release, each platform built on its own runner (distpack packages what a HOST build produced, so
-`GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
+Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64,
+darwin/arm64 and windows/amd64** — one release, each platform built on its own runner (distpack packages what a HOST
+build produced, so `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
 
 ```bash
-curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz   # or os=darwin&arch=arm64
+curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz   # or darwin/arm64, windows/amd64
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
-committed VERSION stays `go1.27.0cosmo`. Windows, macOS Intel and linux/arm64 build from source. Depth — the three-job
+Every slot serves a `.tar.gz`, windows included, because a consumer extracts one shape on every host; the windows leg
+writes the `.zip` go.dev serves beside it and uploads neither in its place (`binaryDistNames`, `src/cmd/distpack`). The
+publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
+committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job
 publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:
 docs/INSTALL.md.
 
