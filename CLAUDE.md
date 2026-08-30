@@ -215,7 +215,8 @@ IAT slots.
 
 Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
 forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
-through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host networking coverage);
+through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
+resolved from iphlpapi and probed on every runner);
 macOS arm64 complete including signals, SIGPROF profiling and SCM_RIGHTS fd passing; macOS Intel structurally
 correct but its runtime bring-up is UNTESTED - do not claim it works.
 
@@ -408,7 +409,9 @@ execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
 module, built via its directory: file I/O, directory listing, pid,
 NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
 (sigpanic recovery, os/signal, async preemption, wait-status decode),
-os/exec, os.Executable, argv/env, wd round-trip). The apetest suite
+os/exec, os.Executable, argv/env, wd round-trip, and an off-host DNS
+resolve - the one check here that leaves the machine, and the one that
+covers where each host keeps its nameservers). The apetest suite
 runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.

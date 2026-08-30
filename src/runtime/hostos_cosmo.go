@@ -37,3 +37,18 @@ func CosmoHostOS() string {
 	}
 	return "unknown"
 }
+
+// CosmoHostDNSServers returns the nameservers the host has configured,
+// as textual addresses, or nil when this host keeps them somewhere the
+// caller can already read.
+//
+// Only an NT host answers. Linux and macOS publish /etc/resolv.conf,
+// which net reads directly; Windows publishes nothing at a path, so
+// without this the resolver has no server to ask and queries localhost.
+// See os_cosmo_nt_dns.go.
+func CosmoHostDNSServers() []string {
+	if __hostos != _HOSTWINDOWS {
+		return nil
+	}
+	return ntDNSServers()
+}
