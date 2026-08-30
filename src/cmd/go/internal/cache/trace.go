@@ -30,14 +30,18 @@ import (
 // lane and is otherwise the cache it was handed.
 
 // tiered is implemented by a Cache whose Get can report which tier answered.
-// A cache program can put a network tier under the disk one, and a hit that
-// crossed the network costs wall time a local one does not.
+// Without it a hit served over the network is indistinguishable from one
+// served off the local disk, which is the single most useful thing a cache
+// trace can say.
 type tiered interface {
 	getTiered(id ActionID) (entry Entry, tier string, err error)
 }
 
-// tierDisk is what the on-disk cache answers from.
-const tierDisk = "disk"
+// Tier names, as they appear in a trace.
+const (
+	tierDisk   = "disk"
+	tierShared = "shared"
+)
 
 // Traced returns c recording every operation onto lane. It returns c
 // unchanged when the lane records nothing, so an untraced build pays one

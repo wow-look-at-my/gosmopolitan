@@ -54,8 +54,14 @@ func initDefaultCache() Cache {
 		base.Fatalf("failed to initialize build cache at %s: %s\n", dir, err)
 	}
 
+	// A shared tier is linked in, so it needs no subprocess and no cache
+	// program on PATH. GOCACHEPROG still works and still wins when set, for a
+	// cache this toolchain knows nothing about.
 	if cfg.GOCACHEPROG != "" {
 		return startCacheProg(cfg.GOCACHEPROG, diskCache)
+	}
+	if shared := newSharedCache(diskCache); shared != nil {
+		return shared
 	}
 
 	return diskCache
