@@ -57,11 +57,20 @@ func TestNTVolumeNameLen(t *testing.T) {
 		{`\\host\share\dir`, 12},
 		{`\\host\share`, 12},
 		{`//host/share/dir`, 12},
-		{`\\host\`, 0},
-		{`\\host`, 0},
+		{`\\host\`, 7},
+		{`\\host`, 6},
 		{`\Users`, 0},
 		{`Users`, 0},
 		{``, 0},
+		// Device prefixes: the component after the prefix is part of the volume.
+		{`\\.`, 3},
+		{`\\?`, 3},
+		{`\??`, 3},
+		{`\\?\c:\dir`, 6},
+		{`\\.\pipe\name`, 8},
+		{`\??\c:\dir`, 6},
+		{`\\?\UNC\host\share\dir`, 18},
+		{`\\?\..\c:`, 0},
 	} {
 		if got := filepathlite.NTVolumeNameLen(tt.path, true); got != tt.want {
 			t.Errorf("NTVolumeNameLen(%q, nt) = %d, want %d", tt.path, got, tt.want)

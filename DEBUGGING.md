@@ -5890,12 +5890,9 @@ Nothing was wrong with the path.
 moved. `Separator` stays the slash - NT accepts it beside the backslash, and it
 is what this package emits, so only what a path is READ as changes.
 
-The NT bodies are `path_windows.go`'s, reduced to the two volume shapes a host
-actually hands out: a drive letter and a UNC root. A device prefix (`\\?\`,
-`\\.\`, `\??\`) is NOT recognized and reads as a UNC root. That is a decision,
-not an oversight: the full form drags in reserved names, fold comparison and
-validation, which is a slab of upstream this fork would re-merge every uprev,
-to cover a shape `go list` does not emit.
+The NT bodies are `path_windows.go`'s: a drive letter, a UNC root, and the
+device prefixes (`\\.\`, `\\?\`, `\??\`) with their fold comparison and their
+rejection of a parent reference inside the volume.
 
 Each NT predicate takes the host as a parameter (`ntIsAbs(path, nt)`), which is
 what lets a linux host test the NT branch - `TestNTIsAbs`,
