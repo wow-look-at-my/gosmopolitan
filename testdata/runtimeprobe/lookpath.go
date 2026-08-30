@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -189,6 +190,21 @@ func checkLookPath() {
 	if onNT {
 		pathSep = ";"
 	}
+
+	// os.PathListSeparator is a variable under cosmo, resolved from the host
+	// at startup. onNT above reads the NT environment block, so it is an
+	// independent oracle: a build that compiled the unix colon in disagrees
+	// here on a Windows host. filepath.SplitList is the consumer that breaks
+	// when it does - it is how anything reads PATH without exec.LookPath.
+	if got := string(os.PathListSeparator); got != pathSep {
+		fail("lookpath", "os.PathListSeparator = %q, host wants %q", got, pathSep)
+		return
+	}
+	if parts := filepath.SplitList("a" + pathSep + "b"); len(parts) != 2 || parts[0] != "a" || parts[1] != "b" {
+		fail("lookpath", "filepath.SplitList(%q) = %q, want [a b]", "a"+pathSep+"b", parts)
+		return
+	}
+
 	newPath := dir
 	if pathVal != "" {
 		newPath = pathVal + pathSep + dir

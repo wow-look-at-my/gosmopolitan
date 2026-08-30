@@ -5775,3 +5775,61 @@ Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
 js/wasm and wasip1/wasm, each also under GOWASM=threads; the go/build and
 cmd/internal/moddeps guardrails; fat APEs of fizzbuzz and runtimeprobe with
 both sidecars, executed here; and the full apetest suite against both.
+
+# 2026-08-30: NT - os.PathListSeparator was compiled in, so PATH could not be built
+
+`os.PathListSeparator` is an untyped constant on every upstream port, because a
+port knows its host at compile time. A fat APE does not. `path_unix.go` covered
+cosmo, so every APE carried the unix colon and used it on Windows too.
+
+The 2026-07-20 `exec.LookPath` work fixed READING an NT PATH inside `os/exec`,
+which is why this survived: only code outside that package saw the wrong value.
+The field report was go-toolchain JOINING one - it prepends the fork's `bin` to
+PATH before spawning the compiler, and on NT the colon fused the fork's
+directory with the next entry into a path that does not exist. The stock Go that
+`actions/setup-go` had installed won the lookup, and the build died with
+`compile: version "go1.27.0cosmo.r705" does not match go tool version
+"go1.27.0"` - a version-skew message with nothing about paths in it.
+
+The fix: `src/os/path_cosmo.go` declares `PathListSeparator` as a `var`, read
+once at package initialization from `runtime.CosmoHostOS()`. The entry stub
+records the host before any Go code runs, so the value is available that early.
+`PathSeparator` stays a constant slash - NT accepts it beside the backslash.
+
+What that costs, and what it does not:
+
+- `PathListSeparator` is now a `rune` rather than an untyped constant, so a
+  comparison against a byte needs a conversion. Exactly one caller does that,
+  `splitPathList` in `os/executable_cosmo.go`.
+- `path/filepath.ListSeparator` cannot be a constant when the one it copies is
+  not, so it splits by build tag: `listseparator_cosmo.go` holds the var,
+  `listseparator_notcosmo.go` the const. `Separator` stays in `path.go`.
+  Non-cosmo ports are unchanged.
+- `cmd/api` does not include cosmo in its contexts, so there is no api/go1.txt
+  breakage.
+- `internal/filepathlite` keeps its own colon. `filepath.SplitList` reads
+  `filepath`'s value, not that one.
+- Windows PATH quoting is still not honored under cosmo: `SplitList` comes from
+  `path/filepath/path_unix.go`, a plain `strings.Split`, while the quote-aware
+  version lives in `path_windows.go`. Splitting on the right character is the
+  part that was broken; quoting is a separate gap.
+
+Gate: `checkLookPath` in testdata/runtimeprobe now asserts
+`os.PathListSeparator` against its own NT oracle (the `OS=Windows_NT`
+environment variable, independent of `runtime.CosmoHostOS()`) and round-trips
+`filepath.SplitList`. Negative control on linux: `OS=Windows_NT ./runtimeprobe`
+reports `FAIL lookpath: os.PathListSeparator = ":", host wants ";"`. CI runs
+this probe on all three hosts.
+
+Verified on linux/amd64: make.bash; cosmo std for amd64 and arm64; std for
+linux, windows, darwin, plan9, js/wasm and wasip1/wasm; the go/build guardrail;
+dist test of path/filepath, os/exec and cmd/internal/script (all under
+GOOS=cosmo); and runtimeprobe executed here.
+
+Found and NOT fixed: the `os` package's own tests have never built under
+GOOS=cosmo. Two independent blockers - `fifo_test.go` needs `syscall.Mkfifo`,
+which the cosmo syscall package does not define, and `readfrom_unix_test.go`
+uses helpers defined in `readfrom_linux_test.go`, whose non-test siblings
+`zero_copy_linux.go` and `pidfd_linux.go` are tagged `linux && !cosmo` while the
+test files are not. Tagging the test files to match is half a fix: it trades
+those errors for the other two.
