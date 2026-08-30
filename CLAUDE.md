@@ -463,6 +463,33 @@ labels — know this before pushing branches or interpreting PR state:
   `all-builds`: an org guard fails workflows that define one, because the
   status context is reserved for the aggregator.
 
+## Shared build cache (built in, no cache program)
+
+`cmd/go` talks to the org's shared build cache itself. The client is linked in
+(`cmd/vendor/github.com/wow-look-at-my/go-s3-server/cacheclient`, the module in
+the cache server's own repo) and called in process, so there is no `GOCACHEPROG`
+subprocess to install, spawn, or keep alive. Configure it with
+`GO_BUILDCACHE_CONFIG` (base64 JSON: endpoint, bucket, username, password);
+with the variable unset there is no shared tier and nothing dials out.
+
+Why in process rather than a cache program: `GOCACHEPROG` hands `cmd/go` a PATH
+(`Response.DiskPath`), never bytes. A cache program that stores bodies packed
+therefore has to materialize every hit somewhere the compiler can open — a
+loose mirror of the whole cache, or a FUSE mount serving the packs. Linked in,
+a fetched body goes straight into the `DiskCache` that `cmd/go` already opens,
+mmaps and trims, so none of that machinery exists.
+
+- `cmd/go/internal/cache/shared.go` is the tier: disk is authoritative and
+  answers first, the shared tier is asked only on a local miss, and a fetched
+  body is stored locally before it is returned, so `OutputFile` answers for a
+  shared hit exactly as for a local one. An unreachable cache is a slower
+  build, never a failed one.
+- It is `//go:build !cmd_go_bootstrap`, with a nil-returning stub beside it, for
+  the same reason `internal/web` is: `go_bootstrap` may not depend on `net`.
+  Building the toolchain never uses the shared cache.
+- `GOCACHEPROG` still works and still wins when set, for a cache this toolchain
+  knows nothing about.
+
 ## Toolchain Distribution
 
 Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64 and
