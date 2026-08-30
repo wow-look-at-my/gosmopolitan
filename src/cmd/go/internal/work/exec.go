@@ -148,12 +148,22 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				desc += " " + a.Package.Desc()
 			}
 			desc += ")"
-			ctx, span := trace.StartSpan(ctx, desc)
+			// The lane is set before the actor runs, because everything the
+			// actor reaches -- the cache handle, the subprocesses it starts --
+			// records onto it and has no context to find it through.
+			a.traceLane = trace.LaneOf(ctx)
+			ctx, span := trace.StartSpanArgs(ctx, desc, a.traceArgs())
 			a.traceSpan = span
 			for _, d := range a.Deps {
 				trace.Flow(ctx, d.traceSpan, a.traceSpan)
 			}
 			err = a.Actor.Act(b, ctx, a)
+			// The action ID and build ID are computed by the actor, so the
+			// attribution is only complete once it has run.
+			span.SetArgs(a.traceArgs())
+			if err != nil {
+				span.SetArg("error", err.Error())
+			}
 			span.Done()
 		}
 		if a.json != nil {
@@ -224,10 +234,14 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	if cfg.BuildN {
 		par = 1
 	}
+	trace.NameProcess(ctx, "go build")
 	for i := 0; i < par; i++ {
 		wg.Add(1)
 		go func() {
-			ctx := trace.StartGoroutine(ctx)
+			// A named row reads as the worker that owns it. Unnamed, a
+			// parallel build is a wall of numbers in the viewer, and which
+			// number a worker got is an accident of scheduling.
+			ctx := trace.StartNamedGoroutine(ctx, fmt.Sprintf("build worker %d", i), i)
 			defer wg.Done()
 			for {
 				select {
@@ -262,6 +276,12 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
+	// Hashing every input of a package is not free, and it is work no other
+	// step in the build attributes to itself.
+	if a.lane().Enabled() {
+		defer func(start time.Time) { a.traceStep("hash action id", start, nil) }(time.Now())
+	}
+
 	p := a.Package
 	h := cache.NewHash("build " + p.ImportPath)
 
@@ -528,6 +548,7 @@ const (
 // of the buildAction.
 func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName string) (_ *checkCacheProvider, err error) {
 	p := buildAction.Package
+	buildAction.adoptLane(a) // every lookup below is keyed by buildAction
 	sh := b.Shell(a)
 
 	bit := func(x uint32, b bool) uint32 {
@@ -628,7 +649,7 @@ func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName str
 	// Load cached coverage meta-data file fragment, but only if we're
 	// skipping the main build (cachedBuild==true).
 	if cachedBuild && need&needCovMetaFile != 0 {
-		if err := b.loadCachedObjdirFile(buildAction, cache.Default(), covMetaFileName); err == nil {
+		if err := b.loadCachedObjdirFile(buildAction, buildAction.cache(), covMetaFileName); err == nil {
 			need &^= needCovMetaFile
 		}
 	}
@@ -647,6 +668,7 @@ func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName str
 }
 
 func (b *Builder) runCover(a, buildAction *Action, objdir string, gofiles, cgofiles []string) (*coverProvider, error) {
+	buildAction.adoptLane(a) // the objdir files below are cached under buildAction
 	p := a.Package
 	sh := b.Shell(a)
 
@@ -723,7 +745,7 @@ func (b *Builder) runCover(a, buildAction *Action, objdir string, gofiles, cgofi
 			gofiles = append([]string{newoutfiles[0]}, gofiles...)
 		}
 		if ca, ok := a.Actor.(*coverActor); ok && ca.covMetaFileName != "" {
-			b.cacheObjdirFile(buildAction, cache.Default(), ca.covMetaFileName)
+			b.cacheObjdirFile(buildAction, buildAction.cache(), ca.covMetaFileName)
 		}
 	}
 	return &coverProvider{gofiles, cgofiles}, nil
@@ -1110,17 +1132,17 @@ func (b *Builder) loadCachedObjdirFile(a *Action, c cache.Cache, name string) er
 }
 
 func (b *Builder) cacheCgoHdr(a *Action) {
-	c := cache.Default()
+	c := a.cache()
 	b.cacheObjdirFile(a, c, "_cgo_install.h")
 }
 
 func (b *Builder) loadCachedCgoHdr(a *Action) error {
-	c := cache.Default()
+	c := a.cache()
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
-	c := cache.Default()
+	c := a.cache()
 	var buf bytes.Buffer
 	for _, file := range srcfiles {
 		if !strings.HasPrefix(file, a.Objdir) {
@@ -1141,7 +1163,7 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
-	c := cache.Default()
+	c := a.cache()
 	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
@@ -1165,7 +1187,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 }
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
-	c := cache.Default()
+	c := a.cache()
 	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
@@ -1427,7 +1449,7 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 
 	// Check the cache; -a forces a rebuild.
 	if !cfg.BuildA {
-		c := cache.Default()
+		c := a.cache()
 
 		// There may be multiple artifacts in the cache.
 		// We need to retrieve them all, or none:
@@ -1506,7 +1528,7 @@ cachemiss:
 	if f, err := os.Open(vcfg.VetxOutput); err == nil {
 		defer f.Close() // ignore error
 		a.built = vcfg.VetxOutput
-		cache.Default().Put(id, f) // ignore error
+		a.cache().Put(id, f) // ignore error
 	}
 
 	// Save fix archive (if any).
@@ -1514,7 +1536,7 @@ cachemiss:
 		if f, err := os.Open(vcfg.FixArchive); err == nil {
 			defer f.Close() // ignore error
 			a.FixArchive = vcfg.FixArchive
-			cache.Default().Put(fixArchiveKey, f) // ignore error
+			a.cache().Put(fixArchiveKey, f) // ignore error
 		}
 	}
 
@@ -1524,8 +1546,8 @@ cachemiss:
 		if err := VetHandleStdout(f); err != nil {
 			return err
 		}
-		f.Seek(0, io.SeekStart)           // ignore error
-		cache.Default().Put(stdoutKey, f) // ignore error
+		f.Seek(0, io.SeekStart)     // ignore error
+		a.cache().Put(stdoutKey, f) // ignore error
 	}
 
 	return nil

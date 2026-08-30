@@ -72,15 +72,24 @@ func newSharedCache(disk *DiskCache) Cache {
 // body the shared tier serves is written to disk before it is returned, so the
 // Entry this hands back names a file that exists, like any other hit.
 func (c *SharedCache) Get(id ActionID) (Entry, error) {
+	entry, _, err := c.getTiered(id)
+	return entry, err
+}
+
+// getTiered is Get, naming the tier that answered. A hit fetched over the
+// network and a hit read off local disk cost different amounts of wall time
+// and mean different things about the build, so a trace has to tell them
+// apart.
+func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	entry, err := c.DiskCache.Get(id)
 	if err == nil {
-		return entry, nil
+		return entry, tierDisk, nil
 	}
 
 	actionID := hex.EncodeToString(id[:])
 	outputID, body, size, _, miss, rerr := c.remote.Get(actionID)
 	if miss || rerr != nil || body == nil {
-		return Entry{}, err // the local miss, which is what the caller expects
+		return Entry{}, tierShared, err // the local miss, which is what the caller expects
 	}
 	defer body.Close()
 
@@ -89,21 +98,22 @@ func (c *SharedCache) Get(id ActionID) (Entry, error) {
 	// compiler a path to open.
 	data, readErr := io.ReadAll(body)
 	if readErr != nil {
-		return Entry{}, err
+		return Entry{}, tierShared, err
 	}
 	gotID, n, putErr := c.DiskCache.Put(id, bytes.NewReader(data))
 	if putErr != nil {
-		return Entry{}, err
+		return Entry{}, tierShared, err
 	}
 	if want, decErr := decodeOutputID(outputID); decErr == nil && gotID != want {
 		// The shared tier named an outputID the stored body does not have.
 		// Serving it would hand the compiler the wrong object under this key.
-		return Entry{}, err
+		return Entry{}, tierShared, err
 	}
 	if size > 0 && n != size {
-		return Entry{}, err
+		return Entry{}, tierShared, err
 	}
-	return c.DiskCache.Get(id)
+	entry, err = c.DiskCache.Get(id)
+	return entry, tierShared, err
 }
 
 // Put stores locally, then offers the body to the shared tier. The local store

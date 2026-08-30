@@ -359,6 +359,12 @@ func maybeStartTrace(pctx context.Context) context.Context {
 	if err != nil {
 		base.Fatalf("failed to start trace: %v", err)
 	}
+	// Name the row the command itself runs on. Everything that is not a
+	// build worker -- flag parsing, package loading, module resolution, the
+	// APE merge at the end -- lands here, and an unnamed row leaves the
+	// reader guessing which of the numbers is the main thread.
+	trace.NameProcess(ctx, "go "+strings.Join(os.Args[1:], " "))
+	trace.LaneOf(ctx).Name("go command", 0)
 	base.AtExit(func() {
 		if err := close(); err != nil {
 			base.Fatalf("failed to stop trace: %v", err)
