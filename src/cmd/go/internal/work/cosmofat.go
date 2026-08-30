@@ -465,16 +465,32 @@ func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 				sibling = filepath.Join(s.tmp, "out", filepath.Base(target))
 			}
 		}
-		args := cosmoMergeArgs(p, sibling)
-		start := time.Now()
-		merge := exec.Command(link, args...)
-		merge.Stdout = os.Stdout
-		merge.Stderr = os.Stderr
-		err := merge.Run()
-		lane.Since("cosmo fat merge", "cosmo", start, cosmoMergeTraceArgs(p, target, sibling, args, err))
-		if err != nil {
-			base.Fatalf("go: cosmo build: assembling %s: %v", target, err)
-		}
+		cosmoMerge(lane, link, p, target, sibling, "build")
+	}
+}
+
+// cosmoMerge assembles one target's APE with the linker's -apefat mode, and
+// reports a failure as fatal.
+//
+// The merge is a command this build issues, so -n and -x show it like every
+// other one. Under -n it is only shown: the payloads it reads were printed
+// rather than written, so running it would open a target that does not exist.
+func cosmoMerge(lane trace.Lane, link string, p *load.Package, target, sibling, what string) {
+	args := cosmoMergeArgs(p, sibling)
+	if cfg.BuildN || cfg.BuildX {
+		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(append([]string{link}, args...)))
+	}
+	if cfg.BuildN {
+		return
+	}
+	start := time.Now()
+	merge := exec.Command(link, args...)
+	merge.Stdout = os.Stdout
+	merge.Stderr = os.Stderr
+	err := merge.Run()
+	lane.Since("cosmo fat merge", "cosmo", start, cosmoMergeTraceArgs(p, target, sibling, args, err))
+	if err != nil {
+		base.Fatalf("go: cosmo %s: assembling %s: %v", what, target, err)
 	}
 }
 
@@ -539,16 +555,7 @@ func cosmoFattenInstall(ctx context.Context, s *cosmoSibling, mains []*load.Pack
 		if s != nil {
 			sibling = filepath.Join(s.tmp, "bin", "cosmo_"+s.arch, filepath.Base(target))
 		}
-		args := cosmoMergeArgs(p, sibling)
-		start := time.Now()
-		merge := exec.Command(link, args...)
-		merge.Stdout = os.Stdout
-		merge.Stderr = os.Stderr
-		err := merge.Run()
-		lane.Since("cosmo fat merge", "cosmo", start, cosmoMergeTraceArgs(p, target, sibling, args, err))
-		if err != nil {
-			base.Fatalf("go: cosmo install: assembling %s: %v", target, err)
-		}
+		cosmoMerge(lane, link, p, target, sibling, "install")
 	}
 }
 
