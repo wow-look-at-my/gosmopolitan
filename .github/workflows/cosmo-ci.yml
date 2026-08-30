@@ -704,7 +704,7 @@ jobs:
           version: ${{ needs.publish-create.outputs.version }}
           os: ${{ matrix.goos }}
           arch: ${{ matrix.goarch }}
-          kind: binary
+          kind: archive
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
 
