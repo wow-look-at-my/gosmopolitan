@@ -17,7 +17,11 @@ jobs:
     runs-on: ${{ matrix.build-os }}
 
     steps:
+      # cmd/go's shared-cache client and its two dependencies are submodules
+      # under src/cmd/vendor, so a checkout without them cannot build cmd/go.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
       - name: Setup Go bootstrap toolchain
@@ -235,6 +239,8 @@ jobs:
     steps:
       - name: Checkout code (for Go tests)
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -465,6 +471,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -618,6 +626,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Create buildhost release
         # No version input: buildhost auto-increments it. See docs/CI.md "publish jobs".
@@ -652,6 +662,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -727,6 +739,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master

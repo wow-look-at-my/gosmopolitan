@@ -483,14 +483,25 @@ somewhere the compiler can open it. `GOCACHEPROG` is still honored when no
 shared tier is configured — this fork does not take it away from a cache it
 knows nothing about.
 
-`src/cmd` is a vendored module, so the require lands under `src/cmd/vendor/`.
-That subtree is `go mod vendor` output, not a hand copy, and it cannot be a
-submodule: `cmd/internal/moddeps` `TestAllDependencies` re-runs `go mod vendor`
-and fails unless the tree matches it byte for byte. Re-vendor after bumping the
-client (`cd src/cmd && GOOS=linux ../../bin/go mod tidy && GOOS=linux
-../../bin/go mod vendor`), and read `src/README.vendor` before adding any other
-`src/cmd` dependency: what looks like one import is a whole subtree of somebody
-else's repository.
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor
+mode, so the require needs its packages under `src/cmd/vendor/`; those three
+paths are **git submodules**, not copied files, so this repo stores a commit
+pointer and the source keeps its own history and owner:
+
+| vendor path | repository |
+|---|---|
+| `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
+| `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
+
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will
+not build; every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true`
+for the same reason. To move the client, check the submodule out at the commit
+you want and update the matching version in `src/cmd/go.mod`. **Never run
+`go mod vendor` here** — it would replace the submodules with copied files,
+which is exactly what this arrangement exists to prevent. Read
+`src/README.vendor` before adding any other `src/cmd` dependency: what looks
+like one import is a whole subtree of somebody else's repository.
 
 ## Toolchain Distribution
 
