@@ -234,6 +234,41 @@ func TestSharedCache_UnconfiguredIsNoTier(t *testing.T) {
 	}
 }
 
+// A configured shared tier must be chosen over a cache program, so an org
+// build talks to the cache in process and never forks one. The program named
+// here does not exist: starting it would kill the build, which is what makes
+// this assert the choice rather than the outcome.
+func TestChooseCache_SharedTierBeatsACacheProgram(t *testing.T) {
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	disk, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := chooseCache(disk, "no-such-cache-program-should-ever-run")
+	if _, ok := c.(*SharedCache); !ok {
+		t.Fatalf("chooseCache returned %T, want *SharedCache", c)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+// With no shared tier configured, a cache program is still honored: this fork
+// does not take GOCACHEPROG away from a cache it knows nothing about.
+func TestChooseCache_NoSharedTierKeepsTheCacheProgram(t *testing.T) {
+	t.Setenv(cacheclient.ConfigEnv, "")
+
+	disk, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := chooseCache(disk, ""); c != Cache(disk) {
+		t.Fatalf("chooseCache with no tier and no program returned %T, want the disk cache", c)
+	}
+}
+
 // readOutputFile reads what OutputFile names, which is what the compiler does
 // with the path a cache hit hands it.
 func readOutputFile(c Cache, id OutputID) ([]byte, error) {

@@ -466,19 +466,31 @@ labels — know this before pushing branches or interpreting PR state:
   `all-builds`: an org guard fails workflows that define one, because the
   status context is reserved for the aggregator.
 
-## Shared build cache: `GOCACHEPROG`, not a vendored client
+## Shared build cache: the client is linked into `cmd/go`
 
-The org's shared build cache is reached through `GOCACHEPROG`, which `cmd/go`
-supports unchanged; `go-toolchain cacheprog` is the program that speaks it.
-This tree carries no cache client of its own.
+The org's shared build cache is reached in process. `cmd/go` requires
+`github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from
+`cmd/go/internal/cache/shared.go`, which layers a network tier under the disk
+cache: disk stays authoritative, the shared tier is consulted only on a local
+miss, and a fetched body is written to disk before it is returned, so a shared
+hit hands the compiler a path exactly as a local hit does.
 
-`src/cmd` is a vendored module, so anything `cmd/go` imports lands as a copy of
-that module's source under `src/cmd/vendor/`. An in-process client put 8k lines
-of two actively-developed org repos in here, pinned to a branch commit that
-moved within hours — a snapshot nobody re-vendors is a fork with no owner.
-`GOCACHEPROG` gets the same cache with a process boundary instead of a copy.
-Read `src/README.vendor` before adding any `src/cmd` dependency: what looks
-like one import is a whole subtree of somebody else's repository.
+**A configured shared tier beats `GOCACHEPROG`** (`chooseCache` in
+`cmd/go/internal/cache/default.go`), so an org build never forks a cache
+program. That ordering is the point: `GOCACHEPROG` answers with a PATH rather
+than bytes, so a program storing bodies in packs has to materialize every hit
+somewhere the compiler can open it. `GOCACHEPROG` is still honored when no
+shared tier is configured — this fork does not take it away from a cache it
+knows nothing about.
+
+`src/cmd` is a vendored module, so the require lands under `src/cmd/vendor/`.
+That subtree is `go mod vendor` output, not a hand copy, and it cannot be a
+submodule: `cmd/internal/moddeps` `TestAllDependencies` re-runs `go mod vendor`
+and fails unless the tree matches it byte for byte. Re-vendor after bumping the
+client (`cd src/cmd && GOOS=linux ../../bin/go mod tidy && GOOS=linux
+../../bin/go mod vendor`), and read `src/README.vendor` before adding any other
+`src/cmd` dependency: what looks like one import is a whole subtree of somebody
+else's repository.
 
 ## Toolchain Distribution
 

@@ -54,17 +54,25 @@ func initDefaultCache() Cache {
 		base.Fatalf("failed to initialize build cache at %s: %s\n", dir, err)
 	}
 
-	// A shared tier is linked in, so it needs no subprocess and no cache
-	// program on PATH. GOCACHEPROG still works and still wins when set, for a
-	// cache this toolchain knows nothing about.
-	if cfg.GOCACHEPROG != "" {
-		return startCacheProg(cfg.GOCACHEPROG, diskCache)
-	}
-	if shared := newSharedCache(diskCache); shared != nil {
+	return chooseCache(diskCache, cfg.GOCACHEPROG)
+}
+
+// chooseCache layers a tier over disk. The shared tier is linked in, and it
+// wins: a configured shared cache and a cache program name the same store
+// here, and reaching it through a subprocess is what the client exists to
+// stop. The program boundary costs a fork, a pipe, and a materialized copy of
+// every hit, because GOCACHEPROG answers with a path rather than bytes.
+//
+// GOCACHEPROG still works where there is no shared tier to prefer, which is
+// every cache this toolchain knows nothing about.
+func chooseCache(disk *DiskCache, cacheProg string) Cache {
+	if shared := newSharedCache(disk); shared != nil {
 		return shared
 	}
-
-	return diskCache
+	if cacheProg != "" {
+		return startCacheProg(cacheProg, disk)
+	}
+	return disk
 }
 
 var (
