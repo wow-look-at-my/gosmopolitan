@@ -10,3 +10,5 @@ package runtime
 // only architecture an APE boots on Windows. Nothing here has a host to
 // ask.
 func ntDNSServers() []string { return nil }
+
+func ntRootCerts() [][]byte { return nil }

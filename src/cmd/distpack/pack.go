@@ -232,11 +232,10 @@ func main() {
 
 	writeTgz(distpack(version+".src.tar.gz"), srcArch)
 
-	if goos == "windows" {
-		writeZip(distpack(version+"."+goos+"-"+goarch+".zip"), zipArch)
-	} else {
-		writeTgz(distpack(version+"."+goos+"-"+goarch+".tar.gz"), zipArch)
-	}
+	// Upstream writes a .zip here for windows, which go.dev serves. This fork
+	// publishes to buildhost, which stores the one archive and serves any
+	// format from it, so windows takes the same gzipped tar as every host.
+	writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch)
 
 	writeZip(distpack(modVers+".zip"), modArch)
 	writeFile(distpack(modVers+".mod"),

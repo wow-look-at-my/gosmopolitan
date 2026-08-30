@@ -36,7 +36,73 @@ build-std:
 test-std:
     GOOS=linux GOARCH=amd64 go test -short go/build cmd/internal/moddeps
     GOOS=linux GOARCH=amd64 go test -run 'TestNameserversFromHost|TestUnreadableConfServers|TestDNSReadConfig' net
-    PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestCosmo' runtime
+    PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestNTCertContextLayout|TestCosmo' runtime
+    GOOS=linux GOARCH=amd64 go test -run 'TestSystemCertPool|TestSystemRoots' crypto/x509
+
+# Does the build path reach the APE? One artifact covering every host
+# is only honest if every host builds the same bytes, and the path a
+# runner checks out to is the input that differs between them. Three
+# builds answer it: the same path twice isolates plain nondeterminism,
+# then two paths with and without -trimpath separate the path from
+# everything else. A consumer needs -trimpath AND -ldflags=-buildid= to
+# get the same bytes on every host; the second covers the tool ID, which
+# differs because each host builds the toolchain itself.
+repro-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="{{justfile_directory()}}/testdata/runtimeprobe"
+    rm -rf /tmp/reproA /tmp/reproB
+    mkdir -p /tmp/reproA /tmp/reproB
+    cp -R "$src" /tmp/reproA/runtimeprobe
+    cp -R "$src" /tmp/reproB/runtimeprobe
+    build() { (cd "$1/runtimeprobe" && go build $3 -o "$1/$2" .); }
+    report() {
+        if cmp -s "$2" "$3"; then
+            echo "  IDENTICAL  $1"
+        else
+            echo "  DIFFER by $(cmp -l "$2" "$3" | wc -l | tr -d ' ') bytes  $1"
+        fi
+    }
+    build /tmp/reproA control.com ""
+    build /tmp/reproA control2.com ""
+    report "same path, built twice" /tmp/reproA/control.com /tmp/reproA/control2.com
+    build /tmp/reproA probe.com ""
+    build /tmp/reproB probe.com ""
+    report "two paths, no -trimpath" /tmp/reproA/probe.com /tmp/reproB/probe.com
+    build /tmp/reproA probe-tp.com -trimpath
+    build /tmp/reproB probe-tp.com -trimpath
+    report "two paths, -trimpath" /tmp/reproA/probe-tp.com /tmp/reproB/probe-tp.com
+
+# The other path a runner varies: where the toolchain itself is installed.
+# Copying this GOROOT holds the tool binaries byte-identical and moves only
+# their location, so a difference here is the GOROOT path and nothing else.
+repro-goroot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alt=/tmp/repro-goroot
+    rm -rf "$alt"
+    mkdir -p "$alt"
+    for d in bin pkg src lib api VERSION; do
+        cp -R "{{justfile_directory()}}/$d" "$alt/$d"
+    done
+    src="{{justfile_directory()}}/testdata/runtimeprobe"
+    rm -rf /tmp/reproG && cp -R "$src" /tmp/reproG
+    build() { (cd /tmp/reproG && GOROOT="$1" PATH="$1/bin:$PATH" "$1/bin/go" build $3 -o "$2" .); }
+    build "{{justfile_directory()}}" /tmp/reproG/here.com -trimpath
+    build "$alt" /tmp/reproG/there.com -trimpath
+    if cmp -s /tmp/reproG/here.com /tmp/reproG/there.com; then
+        echo "  IDENTICAL  two GOROOT paths, -trimpath"
+    else
+        echo "  DIFFER by $(cmp -l /tmp/reproG/here.com /tmp/reproG/there.com | wc -l | tr -d ' ') bytes  two GOROOT paths, -trimpath"
+    fi
+    rm -rf "$alt"
+
+# Fat, because the shipped shape is the answer being checked.
+build-tools-cosmo:
+    go build -o /tmp/cosmotools/compile.com cmd/compile
+    go build -o /tmp/cosmotools/link.com cmd/link
+    go build -o /tmp/cosmotools/asm.com cmd/asm
+    go build -o /tmp/cosmotools/go.com cmd/go
 
 # Build the runtime probe as an APE and run it on this host. CI runs the
 # same binary on all three, so a red here is a red there.

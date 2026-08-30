@@ -55,7 +55,7 @@ is a thin cosmo APE that executes natively on linux. Runtime-package cosmo
 unit tests cover the Apple itimerval ABI pins + timeval translation behind
 the darwin SIGPROF setitimer dispatch, and the signal translation tables.
 
-**Fork-divergence guardrails (go/build policy, moddeps).** go/build's
+**Fork-divergence guardrails (go/build policy, moddeps, distpack naming).** go/build's
 structural tests are what keep a fork's edits honest across an upstream
 uprev, and nothing was running them: the shebang step only runs `-run
 TestReadGoInfo`. Both had silently gone red - `TestVendorPackages` against
@@ -266,10 +266,23 @@ unchanged; this rewrite is publish-only. Every leg stamps the SAME string:
 `run_number` is one value per run, so the platforms of one release cannot
 disagree about which toolchain they are.
 
-**Build distribution tarball.** A host build plus distpack packaging:
+**Build distribution archive.** A host build plus distpack packaging:
 writes the official-style `go<VERSION>.<goos>-<goarch>.tar.gz` to
-`pkg/distpack`. `make.bash` alone is ~2m30s on ubuntu and ~4m30s on macos;
-distpack adds only seconds.
+`pkg/distpack`, on every platform. `make.bash` alone is ~2m30s on ubuntu,
+~4m30s on macos and ~3m15s on windows (`make.bat`, selected by the multicmd
+action); distpack adds only seconds.
+
+Upstream distpack writes a `.zip` for windows INSTEAD of the tar, off the
+one `zipArch` both containers hold; the fork writes the tar there too and
+drops the zip. buildhost stores one blob per os/arch and repackages it at
+download time, so the archive IS the artifact and `&fmt=zip` serves a zip
+from it. A second container written at build time is a copy nothing
+fetches.
+
+A GOROOT is why an archive is uploaded at all: buildhost's stored unit is
+one file, and `bin/`, `pkg/`, `src/` and `lib/` cannot be one file any
+other way. That is unlike every other project here, which uploads the
+binary itself.
 
 **Publish flow.** Uses buildhost's own composite actions (create-release ->
 upload-artifact -> publish-release) - the same family the rest of the org

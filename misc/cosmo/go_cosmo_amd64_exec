@@ -8,10 +8,10 @@
 #   export PATH="$GOROOT/misc/cosmo:$PATH"
 # a plain "GOOS=cosmo go test <pkg>" works on a Linux or macOS host.
 #
-# An APE binary that has already self-assimilated into the host's
-# native format (ELF or Mach-O) is executed directly. A pristine APE
-# still carrying its MZqFpD boot script is started via /bin/sh, which
-# runs the script and self-assimilates the file in place.
+# An APE keeps its own bytes: the boot script stages a copy under
+# $TMPDIR and writes the host's native header into that. So a direct
+# exec works only where binfmt_misc carries an APE entry, and this
+# falls back to /bin/sh, which is what reads the MZqFpD header.
 
 if [ "$#" -lt 1 ]; then
 	echo "usage: ${0##*/} binary [args...]" >&2
