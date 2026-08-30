@@ -24,12 +24,12 @@ go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
 The tarball extracts to `go/` (official distribution layout; GOROOT is
 derived from the binary location, no need to set it).
 
-Every slot serves a `.tar.gz`, windows included. go.dev serves a `.zip` for
-windows and distpack still writes one, but a consumer that already extracts
-a gzipped tar for two platforms would need a second extractor for the
-third; the published artifact is the tarball on all three
-(`binaryDistNames`, `src/cmd/distpack/pack.go`). The `.exe` suffix inside
-is what differs: windows carries `go/bin/go.exe`.
+Every slot uploads a `.tar.gz`, windows included. A GOROOT is a directory
+tree, and buildhost stores one blob per os/arch and repackages it at
+download time, so the archive IS the artifact and `&fmt=zip` (or `tar.xz`,
+`tar.zst`) serves any other shape from it. Upstream's windows-only `.zip`
+would be a second copy nothing fetches, so distpack no longer writes one.
+The `.exe` suffix inside is what differs: windows carries `go/bin/go.exe`.
 
 ## How the publish works
 

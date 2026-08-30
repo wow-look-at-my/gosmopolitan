@@ -52,3 +52,18 @@ func CosmoHostDNSServers() []string {
 	}
 	return ntDNSServers()
 }
+
+// CosmoHostRootCerts returns the DER bytes of the certificates the host
+// trusts as roots, or nil when this host keeps them somewhere the caller
+// can already read.
+//
+// Only an NT host answers. Linux and macOS publish a PEM bundle at a
+// path crypto/x509 scans for; Windows publishes none, so without this the
+// root pool is empty and every certificate is signed by an unknown
+// authority. See os_cosmo_nt_certs.go.
+func CosmoHostRootCerts() [][]byte {
+	if __hostos != _HOSTWINDOWS {
+		return nil
+	}
+	return ntRootCerts()
+}

@@ -36,13 +36,18 @@ build-std:
 test-std:
     GOOS=linux GOARCH=amd64 go test -short go/build cmd/internal/moddeps
     GOOS=linux GOARCH=amd64 go test -run 'TestNameserversFromHost|TestUnreadableConfServers|TestDNSReadConfig' net
-    PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestCosmo' runtime
+    PATH="{{justfile_directory()}}/misc/cosmo:$PATH" go test -run 'TestNTFixedInfoLayout|TestNTCertContextLayout|TestCosmo' runtime
+    GOOS=linux GOARCH=amd64 go test -run 'TestSystemCertPool|TestSystemRoots' crypto/x509
 
-# distpack decides which archives a publish writes, and the publish job
-# uploads by exact name, so a change to that naming breaks a platform's
-# download rather than the build. Host-pinned: distpack is a host tool.
-test-distpack:
-    GOOS=linux GOARCH=amd64 go test cmd/distpack
+# Can the toolchain's own commands compile for cosmo? That is the
+# question behind shipping the toolchain itself as fat APEs -- one
+# artifact covering every host -- instead of a tarball per platform.
+# Fat, because the shipped shape is the answer being checked.
+build-tools-cosmo:
+    go build -o /tmp/cosmotools/compile.com cmd/compile
+    go build -o /tmp/cosmotools/link.com cmd/link
+    go build -o /tmp/cosmotools/asm.com cmd/asm
+    go build -o /tmp/cosmotools/go.com cmd/go
 
 # Build the runtime probe as an APE and run it on this host. CI runs the
 # same binary on all three, so a red here is a red there.

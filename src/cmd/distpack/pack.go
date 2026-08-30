@@ -232,11 +232,10 @@ func main() {
 
 	writeTgz(distpack(version+".src.tar.gz"), srcArch)
 
-	tgzName, zipName := binaryDistNames(goos, version+"."+goosDashGoarch)
-	writeTgz(distpack(tgzName), zipArch)
-	if zipName != "" {
-		writeZip(distpack(zipName), zipArch)
-	}
+	// Upstream writes a .zip here for windows, which go.dev serves. This fork
+	// publishes to buildhost, which stores the one archive and serves any
+	// format from it, so windows takes the same gzipped tar as every host.
+	writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch)
 
 	writeZip(distpack(modVers+".zip"), modArch)
 	writeFile(distpack(modVers+".mod"),
@@ -319,17 +318,6 @@ func check1(err error) {
 }
 
 // writeTgz writes the archive in tgz form to the file named name.
-// binaryDistNames names the binary distribution archives for goos. Every
-// platform writes the gzipped tar, because the fork's own consumers extract
-// one shape on every host. Windows keeps the .zip go.dev serves beside it;
-// zipName is empty where there is none to write.
-func binaryDistNames(goos, base string) (tgzName, zipName string) {
-	if goos == "windows" {
-		return base + ".tar.gz", base + ".zip"
-	}
-	return base + ".tar.gz", ""
-}
-
 func writeTgz(name string, a *Archive) {
 	out, err := os.Create(name)
 	if err != nil {

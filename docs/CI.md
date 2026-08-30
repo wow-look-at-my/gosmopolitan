@@ -63,8 +63,7 @@ the zstd vendored for cosmo DWARF compression, `TestDependencies` against
 `internal/runtime/syscall/cosmo` - and an uprev is exactly when a stale
 dependency policy stops catching real layering breaks. `cmd/internal/moddeps`
 is the matching check for `src/` + `src/cmd` module/vendor consistency (see
-CLAUDE.md's vendoring runbook). `cmd/distpack` joins them because the publish
-legs upload by exact filename: see "publish jobs" below.
+CLAUDE.md's vendoring runbook).
 
 **Host-nameserver path (net) and the NT DNS ABI pins (runtime).** An NT host
 publishes its resolvers where `net` cannot open them, so a cosmo binary there
@@ -274,15 +273,16 @@ writes the official-style `go<VERSION>.<goos>-<goarch>.tar.gz` to
 action); distpack adds only seconds.
 
 Upstream distpack writes a `.zip` for windows INSTEAD of the tar, off the
-one `zipArch` both containers hold. The fork writes both, and the leg
-uploads the tarball: a consumer that already extracts a gzipped tar for two
-platforms would otherwise need a second extractor for the third, and
-go-toolchain's cosmo bootstrap is that consumer. `binaryDistNames`
-(`src/cmd/distpack/pack.go`) is the selection, pinned by
-`TestBinaryDistNames` and run in the build job's guardrails step -- the
-publish uploads by exact name, so a change here breaks a platform's
-download rather than the build, which is the failure a unit test is cheap
-insurance against.
+one `zipArch` both containers hold; the fork writes the tar there too and
+drops the zip. buildhost stores one blob per os/arch and repackages it at
+download time, so the archive IS the artifact and `&fmt=zip` serves a zip
+from it. A second container written at build time is a copy nothing
+fetches.
+
+A GOROOT is why an archive is uploaded at all: buildhost's stored unit is
+one file, and `bin/`, `pkg/`, `src/` and `lib/` cannot be one file any
+other way. That is unlike every other project here, which uploads the
+binary itself.
 
 **Publish flow.** Uses buildhost's own composite actions (create-release ->
 upload-artifact -> publish-release) - the same family the rest of the org

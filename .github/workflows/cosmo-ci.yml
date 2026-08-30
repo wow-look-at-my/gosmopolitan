@@ -176,7 +176,7 @@ jobs:
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
 
-      - name: Fork-divergence guardrails (go/build policy, moddeps, distpack naming)
+      - name: Fork-divergence guardrails (go/build policy, moddeps)
         # see docs/CI.md "build job" for why this step exists and what it catches.
         if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 10
@@ -184,7 +184,6 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/distpack
 
       - name: Host-nameserver path (net) and the NT DNS ABI pins (runtime)
         # see docs/CI.md "build job" for why this step exists and what it catches.

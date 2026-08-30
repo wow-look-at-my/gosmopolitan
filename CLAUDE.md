@@ -477,8 +477,8 @@ curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linu
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot serves a `.tar.gz`, windows included, because a consumer extracts one shape on every host; the windows leg
-writes the `.zip` go.dev serves beside it and uploads neither in its place (`binaryDistNames`, `src/cmd/distpack`). The
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it
+serves `&fmt=zip` and the rest from that one archive. So distpack drops upstream's windows-only `.zip`. The
 publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
 committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job
 publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:

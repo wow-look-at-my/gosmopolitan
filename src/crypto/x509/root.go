@@ -147,6 +147,15 @@ func loadSystemRoots() (*CertPool, error) {
 		}
 	}
 
+	// A host that keeps its roots somewhere other than a file answers
+	// here. An explicit SSL_CERT_FILE or SSL_CERT_DIR outranks it, the
+	// same way it outranks the platform pool above.
+	if certFilePath == "" && certDirPath == "" {
+		if pool, ok := hostRootPool(); ok {
+			return pool, nil
+		}
+	}
+
 	return loadOnDiskRoots(certFilePath, certDirPath)
 }
 
