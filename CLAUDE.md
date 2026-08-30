@@ -466,18 +466,41 @@ labels — know this before pushing branches or interpreting PR state:
   `all-builds`: an org guard fails workflows that define one, because the
   status context is reserved for the aggregator.
 
-## Shared build cache: `GOCACHEPROG`, not a vendored client
+## Shared build cache: the client is linked into `cmd/go`
 
-The org's shared build cache is reached through `GOCACHEPROG`, which `cmd/go`
-supports unchanged; `go-toolchain cacheprog` is the program that speaks it.
-This tree carries no cache client of its own.
+The org's shared build cache is reached in process. `cmd/go` requires
+`github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from
+`cmd/go/internal/cache/shared.go`, which layers a network tier under the disk
+cache: disk stays authoritative, the shared tier is consulted only on a local
+miss, and a fetched body is written to disk before it is returned, so a shared
+hit hands the compiler a path exactly as a local hit does.
 
-`src/cmd` is a vendored module, so anything `cmd/go` imports lands as a copy of
-that module's source under `src/cmd/vendor/`. An in-process client put 8k lines
-of two actively-developed org repos in here, pinned to a branch commit that
-moved within hours — a snapshot nobody re-vendors is a fork with no owner.
-`GOCACHEPROG` gets the same cache with a process boundary instead of a copy.
-Read `src/README.vendor` before adding any `src/cmd` dependency: what looks
+**A configured shared tier beats `GOCACHEPROG`** (`chooseCache` in
+`cmd/go/internal/cache/default.go`), so an org build never forks a cache
+program. That ordering is the point: `GOCACHEPROG` answers with a PATH rather
+than bytes, so a program storing bodies in packs has to materialize every hit
+somewhere the compiler can open it. `GOCACHEPROG` is still honored when no
+shared tier is configured — this fork does not take it away from a cache it
+knows nothing about.
+
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor
+mode, so the require needs its packages under `src/cmd/vendor/`; those three
+paths are **git submodules**, not copied files, so this repo stores a commit
+pointer and the source keeps its own history and owner:
+
+| vendor path | repository |
+|---|---|
+| `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
+| `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
+
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will
+not build; every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true`
+for the same reason. To move the client, check the submodule out at the commit
+you want and update the matching version in `src/cmd/go.mod`. **Never run
+`go mod vendor` here** — it would replace the submodules with copied files,
+which is exactly what this arrangement exists to prevent. Read
+`src/README.vendor` before adding any other `src/cmd` dependency: what looks
 like one import is a whole subtree of somebody else's repository.
 
 ## Toolchain Distribution
