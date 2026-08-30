@@ -100,7 +100,7 @@ func splitPathList(pathList string) []string {
 	}
 	n := 1
 	for i := 0; i < len(pathList); i++ {
-		if pathList[i] == PathListSeparator {
+		if rune(pathList[i]) == PathListSeparator {
 			n++
 		}
 	}
@@ -108,7 +108,7 @@ func splitPathList(pathList string) []string {
 	a := make([]string, n)
 	na := 0
 	for i := 0; i+1 <= len(pathList) && na+1 < n; i++ {
-		if pathList[i] == PathListSeparator {
+		if rune(pathList[i]) == PathListSeparator {
 			a[na] = pathList[start:i]
 			na++
 			start = i + 1
