@@ -157,9 +157,14 @@ go version -m $GOPATH/bin/a$GOEXE
 stdout '^\tdep\trsc.io/quote\tv1.5.2\t'
 rm $GOPATH/bin
 
+# An exclude directive drops the matching require: rsc.io/quote v1.5.1 is
+# both required and excluded, so the build resolves quote to the next
+# available version instead.
 go mod download example.com/cmd@v1.0.0-exclude
 go install example.com/cmd/a@v1.0.0-exclude
 exists $GOPATH/bin/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
+stdout '^\tdep\trsc.io/quote\tv1.5.2\t'
 rm $GOPATH/bin
 
 # 'go install pkg@version' should report an error if the module requires a

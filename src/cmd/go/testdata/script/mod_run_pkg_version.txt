@@ -51,6 +51,7 @@ stdout '^Hello, world.$'
 
 go mod download example.com/cmd@v1.0.0-exclude
 go run example.com/cmd/a@v1.0.0-exclude
+stdout '^Hello, world.$'
 
 
 # 'go run dir@version' works like a normal 'go run' command if

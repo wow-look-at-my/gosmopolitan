@@ -3382,9 +3382,8 @@ func GoFilesPackage(ld *modload.Loader, ctx context.Context, opts PackageOpts, g
 // ambiguity. All arguments must have the same version suffix (not just a suffix
 // that resolves to the same version). They must refer to packages in the same
 // module, which must not be std or cmd. That module is not considered the main
-// module, but its own replace directives (if it has any) are still honored via
-// Loader.SetOutsideModuleReplace; its exclude directives are not applied, since
-// exclusion affects module-graph version selection rather than a single lookup.
+// module, but its own replace and exclude directives (if it has any) are still
+// honored, via Loader.SetOutsideModuleReplace and SetOutsideModuleExclude.
 func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opts PackageOpts, args []string) ([]*Package, error) {
 	if !ld.ForceUseModules {
 		panic("modload.ForceUseModules must be true")
@@ -3462,6 +3461,7 @@ func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opt
 		return nil, fmt.Errorf("%s (in %s): %w", args[0], rootMod, err)
 	}
 	ld.SetOutsideModuleReplace(f.Replace)
+	ld.SetOutsideModuleExclude(f.Exclude)
 
 	// Since we are in NoRoot mode, the build list initially contains only
 	// the dummy command-line-arguments module. Add a requirement on the
