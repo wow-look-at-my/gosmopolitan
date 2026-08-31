@@ -329,6 +329,13 @@ func CheckDeprecation(ld *Loader, ctx context.Context, m module.Version) (deprec
 	return summary.deprecated, nil
 }
 
+// SetOutsideModuleReplace records the replace directives of a module loaded
+// by PackagesAndErrorsOutsideModule (as in 'go install pkg@version'), so that
+// Replacement honors them even though that module is never a main module.
+func (ld *Loader) SetOutsideModuleReplace(replace []*modfile.Replace) {
+	ld.outsideModuleReplace = toReplaceMap(replace)
+}
+
 func replacement(mod module.Version, replace map[module.Version]module.Version) (fromVersion string, to module.Version, ok bool) {
 	if r, ok := replace[mod]; ok {
 		return mod.Version, r, true
@@ -350,6 +357,9 @@ func Replacement(ld *Loader, mod module.Version) module.Version {
 // replacementFrom returns the replacement for mod, if any, the modroot of the replacement if it appeared in a go.mod,
 // and the source of the replacement. The replacement is relative to the go.work or go.mod file it appears in.
 func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot string, fromFile string) {
+	if _, r, ok := replacement(mod, ld.outsideModuleReplace); ok {
+		return r, "", ""
+	}
 	foundFrom, found, foundModRoot := "", module.Version{}, ""
 	if ld.MainModules == nil {
 		return module.Version{}, "", ""

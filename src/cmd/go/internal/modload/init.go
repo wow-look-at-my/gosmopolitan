@@ -460,6 +460,12 @@ type Loader struct {
 	// disabled
 	workFilePath string
 	fetcher      *modfetch.Fetcher
+
+	// outsideModuleReplace holds the replace directives read from a module
+	// queried by PackagesAndErrorsOutsideModule (as in 'go install
+	// pkg@version'). That module is never a main module, so replacementFrom
+	// would otherwise ignore its own go.mod replace directives.
+	outsideModuleReplace map[module.Version]module.Version
 }
 
 func NewLoader() *Loader {
