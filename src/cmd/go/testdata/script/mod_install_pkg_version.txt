@@ -147,15 +147,27 @@ go install example.com/cmd/err...@v1.0.0
 stderr '^go: warning: "example.com/cmd/err\.\.\." matched only non-main packages$'
 
 
-# 'go install pkg@version' should report errors if the module contains
-# replace or exclude directives.
+# 'go install pkg@version' succeeds on a module whose go.mod contains
+# replace or exclude directives; a replace directive is honored, redirecting
+# the required rsc.io/quote v1.0.0 to the replacement v1.5.2. 'go version -m'
+# prints a replaced module as two lines: the original on the 'dep' line, the
+# resolved one on the '=>' line that follows it.
 go mod download example.com/cmd@v1.0.0-replace
-! go install example.com/cmd/a@v1.0.0-replace
-cmp stderr replace-err
+go install example.com/cmd/a@v1.0.0-replace
+exists $GOPATH/bin/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
+stdout '^\t=>\trsc.io/quote\tv1.5.2\t'
+rm $GOPATH/bin
 
+# An exclude directive drops the matching require: rsc.io/quote v1.5.1 is
+# both required and excluded, so the build resolves quote to the next
+# available version instead.
 go mod download example.com/cmd@v1.0.0-exclude
-! go install example.com/cmd/a@v1.0.0-exclude
-cmp stderr exclude-err
+go install example.com/cmd/a@v1.0.0-exclude
+exists $GOPATH/bin/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
+stdout '^\tdep\trsc.io/quote\tv1.5.2\t'
+rm $GOPATH/bin
 
 # 'go install pkg@version' should report an error if the module requires a
 # higher version of itself.
@@ -205,13 +217,3 @@ require example.com/cmd v1.1.0-doesnotexist
 package main
 
 func main() {}
--- replace-err --
-go: example.com/cmd/a@v1.0.0-replace (in example.com/cmd@v1.0.0-replace):
-	The go.mod file for the module providing named packages contains one or
-	more replace directives. It must not contain directives that would cause
-	it to be interpreted differently than if it were the main module.
--- exclude-err --
-go: example.com/cmd/a@v1.0.0-exclude (in example.com/cmd@v1.0.0-exclude):
-	The go.mod file for the module providing named packages contains one or
-	more exclude directives. It must not contain directives that would cause
-	it to be interpreted differently than if it were the main module.

@@ -376,15 +376,30 @@ func writeTgz(name string, a *Archive) {
 	}
 
 	for _, f = range a.Files {
-		h := check(tar.FileInfoHeader(f.Info(), ""))
+		// os.Readlink is the authoritative symlink test: it succeeds only
+		// for a real symlink, unlike trusting a walked FileInfo's mode bits.
+		link, isSymlink := "", false
+		if target, err := os.Readlink(f.Src); err == nil {
+			link, isSymlink = target, true
+		}
+		h := check(tar.FileInfoHeader(f.Info(), link))
+		if isSymlink {
+			h.Typeflag = tar.TypeSymlink
+			h.Size = 0
+			h.Linkname = link
+		}
 		mkdirAll(path.Dir(f.Name))
 		h.Name = f.Name
 		if err := tw.WriteHeader(h); err != nil {
 			panic(err)
 		}
-		r := check(os.Open(f.Src))
-		check(io.Copy(tw, r))
-		check1(r.Close())
+		// A symlink header carries no data: os.Open follows the link and
+		// would copy the TARGET file's content against a Size=0 header.
+		if !isSymlink {
+			r := check(os.Open(f.Src))
+			check(io.Copy(tw, r))
+			check1(r.Close())
+		}
 	}
 	f.Name = ""
 	check1(tw.Close())
@@ -419,10 +434,21 @@ func writeZip(name string, a *Archive) {
 		h := check(zip.FileInfoHeader(f.Info()))
 		h.Name = f.Name
 		h.Method = zip.Deflate
-		w := check(zw.CreateHeader(h))
-		r := check(os.Open(f.Src))
-		check(io.Copy(w, r))
-		check1(r.Close())
+		// os.Readlink is the authoritative symlink test: it succeeds only
+		// for a real symlink, unlike trusting a walked FileInfo's mode bits.
+		// A zip symlink entry's content is the link target text, not the
+		// target file: os.Open follows the link and reads the wrong data.
+		if target, err := os.Readlink(f.Src); err == nil {
+			h.UncompressedSize64 = uint64(len(target))
+			h.UncompressedSize = uint32(len(target))
+			w := check(zw.CreateHeader(h))
+			check(io.WriteString(w, target))
+		} else {
+			w := check(zw.CreateHeader(h))
+			r := check(os.Open(f.Src))
+			check(io.Copy(w, r))
+			check1(r.Close())
+		}
 	}
 	f.Name = ""
 	check1(zw.Close())
