@@ -376,11 +376,17 @@ func writeTgz(name string, a *Archive) {
 	}
 
 	for _, f = range a.Files {
-		h := check(tar.FileInfoHeader(f.Info(), ""))
+		h := check(tar.FileInfoHeader(f.Info(), f.Linkname))
 		mkdirAll(path.Dir(f.Name))
 		h.Name = f.Name
 		if err := tw.WriteHeader(h); err != nil {
 			panic(err)
+		}
+		// A symlink entry carries its target in h.Linkname, not a data
+		// body. Opening f.Src would follow the link and copy the target
+		// file's own content, overflowing the header's zero size.
+		if f.Mode&fs.ModeSymlink != 0 {
+			continue
 		}
 		r := check(os.Open(f.Src))
 		check(io.Copy(tw, r))
@@ -420,6 +426,13 @@ func writeZip(name string, a *Archive) {
 		h.Name = f.Name
 		h.Method = zip.Deflate
 		w := check(zw.CreateHeader(h))
+		// A symlink entry's content is its target path, not the target
+		// file's own bytes. h.UncompressedSize64 already matches
+		// len(f.Linkname): fs.FileInfo.Size() for a symlink is that length.
+		if f.Mode&fs.ModeSymlink != 0 {
+			check(w.Write([]byte(f.Linkname)))
+			continue
+		}
 		r := check(os.Open(f.Src))
 		check(io.Copy(w, r))
 		check1(r.Close())
