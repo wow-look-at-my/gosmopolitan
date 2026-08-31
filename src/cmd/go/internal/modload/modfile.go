@@ -153,8 +153,13 @@ func (ld *Loader) CheckAllowed(ctx context.Context, m module.Version) error {
 var ErrDisallowed = errors.New("disallowed module version")
 
 // CheckExclusions returns an error equivalent to ErrDisallowed if module m is
-// excluded by the main module's go.mod file.
+// excluded by the main module's go.mod file, or by the go.mod file of a
+// module queried by PackagesAndErrorsOutsideModule (see
+// Loader.SetOutsideModuleExclude).
 func (ld *Loader) CheckExclusions(ctx context.Context, m module.Version) error {
+	if ld.outsideModuleExclude[m] {
+		return module.VersionError(m, errExcluded)
+	}
 	for _, mainModule := range ld.MainModules.Versions() {
 		if index := ld.MainModules.Index(mainModule); index != nil && index.exclude[m] {
 			return module.VersionError(m, errExcluded)
@@ -329,6 +334,24 @@ func CheckDeprecation(ld *Loader, ctx context.Context, m module.Version) (deprec
 	return summary.deprecated, nil
 }
 
+// SetOutsideModuleReplace records the replace directives of a module loaded
+// by PackagesAndErrorsOutsideModule (as in 'go install pkg@version'), so that
+// Replacement honors them even though that module is never a main module.
+func (ld *Loader) SetOutsideModuleReplace(replace []*modfile.Replace) {
+	ld.outsideModuleReplace = toReplaceMap(replace)
+}
+
+// SetOutsideModuleExclude records the exclude directives of a module loaded
+// by PackagesAndErrorsOutsideModule (as in 'go install pkg@version'), so that
+// CheckExclusions and goModSummary honor them even though that module is
+// never a main module.
+func (ld *Loader) SetOutsideModuleExclude(exclude []*modfile.Exclude) {
+	ld.outsideModuleExclude = make(map[module.Version]bool, len(exclude))
+	for _, x := range exclude {
+		ld.outsideModuleExclude[x.Mod] = true
+	}
+}
+
 func replacement(mod module.Version, replace map[module.Version]module.Version) (fromVersion string, to module.Version, ok bool) {
 	if r, ok := replace[mod]; ok {
 		return mod.Version, r, true
@@ -350,6 +373,9 @@ func Replacement(ld *Loader, mod module.Version) module.Version {
 // replacementFrom returns the replacement for mod, if any, the modroot of the replacement if it appeared in a go.mod,
 // and the source of the replacement. The replacement is relative to the go.work or go.mod file it appears in.
 func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot string, fromFile string) {
+	if _, r, ok := replacement(mod, ld.outsideModuleReplace); ok {
+		return r, "", ""
+	}
 	foundFrom, found, foundModRoot := "", module.Version{}, ""
 	if ld.MainModules == nil {
 		return module.Version{}, "", ""
@@ -642,31 +668,41 @@ func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 	}
 
 	for _, mainModule := range ld.MainModules.Versions() {
-		if index := ld.MainModules.Index(mainModule); index != nil && len(index.exclude) > 0 {
-			// Drop any requirements on excluded versions.
-			// Don't modify the cached summary though, since we might need the raw
-			// summary separately.
-			haveExcludedReqs := false
-			for _, r := range summary.require {
-				if index.exclude[r] {
-					haveExcludedReqs = true
-					break
-				}
-			}
-			if haveExcludedReqs {
-				s := new(modFileSummary)
-				*s = *summary
-				s.require = make([]module.Version, 0, len(summary.require))
-				for _, r := range summary.require {
-					if !index.exclude[r] {
-						s.require = append(s.require, r)
-					}
-				}
-				summary = s
-			}
+		if index := ld.MainModules.Index(mainModule); index != nil {
+			summary = dropExcludedRequire(summary, index.exclude)
 		}
 	}
+	summary = dropExcludedRequire(summary, ld.outsideModuleExclude)
 	return summary, nil
+}
+
+// dropExcludedRequire returns a summary with any requirement on a version in
+// exclude removed, without modifying the cached summary (the raw summary may
+// still be needed separately). It returns summary unchanged if exclude names
+// none of summary's requirements.
+func dropExcludedRequire(summary *modFileSummary, exclude map[module.Version]bool) *modFileSummary {
+	if len(exclude) == 0 {
+		return summary
+	}
+	haveExcludedReqs := false
+	for _, r := range summary.require {
+		if exclude[r] {
+			haveExcludedReqs = true
+			break
+		}
+	}
+	if !haveExcludedReqs {
+		return summary
+	}
+	s := new(modFileSummary)
+	*s = *summary
+	s.require = make([]module.Version, 0, len(summary.require))
+	for _, r := range summary.require {
+		if !exclude[r] {
+			s.require = append(s.require, r)
+		}
+	}
+	return s
 }
 
 // rawGoModSummary returns a new summary of the go.mod file for module m,

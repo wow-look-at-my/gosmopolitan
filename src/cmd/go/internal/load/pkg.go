@@ -3382,9 +3382,8 @@ func GoFilesPackage(ld *modload.Loader, ctx context.Context, opts PackageOpts, g
 // ambiguity. All arguments must have the same version suffix (not just a suffix
 // that resolves to the same version). They must refer to packages in the same
 // module, which must not be std or cmd. That module is not considered the main
-// module, but its go.mod file (if it has one) must not contain directives that
-// would cause it to be interpreted differently if it were the main module
-// (replace, exclude).
+// module, but its own replace and exclude directives (if it has any) are still
+// honored, via Loader.SetOutsideModuleReplace and SetOutsideModuleExclude.
 func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opts PackageOpts, args []string) ([]*Package, error) {
 	if !ld.ForceUseModules {
 		panic("modload.ForceUseModules must be true")
@@ -3428,9 +3427,8 @@ func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opt
 	}
 	patterns = search.CleanPatterns(patterns)
 
-	// Query the module providing the first argument, load its go.mod file, and
-	// check that it doesn't contain directives that would cause it to be
-	// interpreted differently if it were the main module.
+	// Query the module providing the first argument and load its go.mod file
+	// so a malformed one is caught before the build proceeds.
 	//
 	// If multiple modules match the first argument, accept the longest match
 	// (first result). It's possible this module won't provide packages named by
@@ -3462,16 +3460,8 @@ func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opt
 	if err != nil {
 		return nil, fmt.Errorf("%s (in %s): %w", args[0], rootMod, err)
 	}
-	directiveFmt := "%s (in %s):\n" +
-		"\tThe go.mod file for the module providing named packages contains one or\n" +
-		"\tmore %s directives. It must not contain directives that would cause\n" +
-		"\tit to be interpreted differently than if it were the main module."
-	if len(f.Replace) > 0 {
-		return nil, fmt.Errorf(directiveFmt, args[0], rootMod, "replace")
-	}
-	if len(f.Exclude) > 0 {
-		return nil, fmt.Errorf(directiveFmt, args[0], rootMod, "exclude")
-	}
+	ld.SetOutsideModuleReplace(f.Replace)
+	ld.SetOutsideModuleExclude(f.Exclude)
 
 	// Since we are in NoRoot mode, the build list initially contains only
 	// the dummy command-line-arguments module. Add a requirement on the
