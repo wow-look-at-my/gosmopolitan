@@ -376,15 +376,24 @@ func writeTgz(name string, a *Archive) {
 	}
 
 	for _, f = range a.Files {
-		h := check(tar.FileInfoHeader(f.Info(), ""))
+		isSymlink := f.Info().Mode()&fs.ModeSymlink != 0
+		link := ""
+		if isSymlink {
+			link = check(os.Readlink(f.Src))
+		}
+		h := check(tar.FileInfoHeader(f.Info(), link))
 		mkdirAll(path.Dir(f.Name))
 		h.Name = f.Name
 		if err := tw.WriteHeader(h); err != nil {
 			panic(err)
 		}
-		r := check(os.Open(f.Src))
-		check(io.Copy(tw, r))
-		check1(r.Close())
+		// A symlink header carries no data: os.Open follows the link and
+		// would copy the TARGET file's content against a Size=0 header.
+		if !isSymlink {
+			r := check(os.Open(f.Src))
+			check(io.Copy(tw, r))
+			check1(r.Close())
+		}
 	}
 	f.Name = ""
 	check1(tw.Close())
@@ -420,9 +429,16 @@ func writeZip(name string, a *Archive) {
 		h.Name = f.Name
 		h.Method = zip.Deflate
 		w := check(zw.CreateHeader(h))
-		r := check(os.Open(f.Src))
-		check(io.Copy(w, r))
-		check1(r.Close())
+		// A zip symlink entry's content is the link target text, not the
+		// target file: os.Open follows the link and reads the wrong data.
+		if f.Info().Mode()&fs.ModeSymlink != 0 {
+			target := check(os.Readlink(f.Src))
+			check(io.WriteString(w, target))
+		} else {
+			r := check(os.Open(f.Src))
+			check(io.Copy(w, r))
+			check1(r.Close())
+		}
 	}
 	f.Name = ""
 	check1(zw.Close())
