@@ -149,12 +149,14 @@ stderr '^go: warning: "example.com/cmd/err\.\.\." matched only non-main packages
 
 # 'go install pkg@version' succeeds on a module whose go.mod contains
 # replace or exclude directives; a replace directive is honored, redirecting
-# the required rsc.io/quote v1.0.0 to the replacement v1.5.2.
+# the required rsc.io/quote v1.0.0 to the replacement v1.5.2. 'go version -m'
+# prints a replaced module as two lines: the original on the 'dep' line, the
+# resolved one on the '=>' line that follows it.
 go mod download example.com/cmd@v1.0.0-replace
 go install example.com/cmd/a@v1.0.0-replace
 exists $GOPATH/bin/a$GOEXE
 go version -m $GOPATH/bin/a$GOEXE
-stdout '^\tdep\trsc.io/quote\tv1.5.2\t'
+stdout '^\t=>\trsc.io/quote\tv1.5.2\t'
 rm $GOPATH/bin
 
 # An exclude directive drops the matching require: rsc.io/quote v1.5.1 is
