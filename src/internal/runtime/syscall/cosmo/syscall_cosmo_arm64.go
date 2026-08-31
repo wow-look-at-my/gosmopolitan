@@ -57,7 +57,14 @@ type DarwinFns struct {
 	// offset like Linux getdents64 (so lseek/dup semantics carry over),
 	// which is what makes a stateless emulation possible.
 	Getdirentries uintptr
-	Error         uintptr // int *__error(void): Apple's errno location
+	// Pread/Pwrite/Lseek back SYS_PREAD64/SYS_PWRITE64/SYS_LSEEK
+	// (os.File.ReadAt/WriteAt/Seek). Fixed-arity libc entries whose
+	// argument layouts and whence values are identical on Linux and
+	// Apple, so they pass straight through darwinCall.
+	Pread  uintptr
+	Pwrite uintptr
+	Lseek  uintptr
+	Error  uintptr // int *__error(void): Apple's errno location
 
 	// Socket layer (socket_cosmo_arm64.go).
 	Socket      uintptr
@@ -122,6 +129,8 @@ const (
 	sysGETDENTS64 = 61
 	sysREADV      = 65
 	sysWRITEV     = 66
+	sysPWRITE64   = 68
+	sysLSEEK      = 62
 	sysREADLINKAT = 78
 	sysNEWFSTATAT = 79
 	sysFSTAT      = 80
@@ -381,6 +390,15 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinCall(darwinFns.Readv, a1, a2, a3, 0, 0, 0)
 	case sysWRITEV:
 		return darwinCall(darwinFns.Writev, a1, a2, a3, 0, 0, 0)
+	case sysLSEEK:
+		// lseek(fd, offset, whence): SEEK_SET/CUR/END are 0/1/2 on both
+		// systems. Returns the new offset.
+		return darwinCall(darwinFns.Lseek, a1, a2, a3, 0, 0, 0)
+	case SYS_PREAD64:
+		// pread(fd, buf, count, offset): fixed arity, identical layout.
+		return darwinCall(darwinFns.Pread, a1, a2, a3, a4, 0, 0)
+	case sysPWRITE64:
+		return darwinCall(darwinFns.Pwrite, a1, a2, a3, a4, 0, 0)
 	case sysREADLINKAT:
 		return darwinCall(darwinFns.Readlinkat, darwinXlatDirfd(a1), a2, a3, a4, 0, 0)
 	case sysNEWFSTATAT:
