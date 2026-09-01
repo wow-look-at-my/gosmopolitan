@@ -251,6 +251,69 @@ func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
 	}
 }
 
+// A network hit must restore exactly the mode the original PutExecutable (or
+// Put) call chose -- never a guess from content, never a blanket +x. The
+// build system execs some cached outputs directly (go run, a shebang
+// script), and the choice of Put vs PutExecutable already carries that
+// decision; this pins that it survives the round trip through the wire's
+// executable metadata instead of being lost or defaulted.
+func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	exeBody := []byte("#!/bin/sh\necho hi\n")
+	exeID := testActionID("network-hit-executable")
+	plainBody := []byte("ordinary compiled package output")
+	plainID := testActionID("network-hit-plain")
+
+	first := openShared(t, t.TempDir())
+	exeCache, ok := first.(ExecutableCache)
+	if !ok {
+		t.Fatalf("%T does not implement ExecutableCache", first)
+	}
+	if _, _, err := exeCache.PutExecutable(exeID, "cached-script", bytes.NewReader(exeBody)); err != nil {
+		t.Fatalf("PutExecutable: %v", err)
+	}
+	if _, _, err := first.Put(plainID, bytes.NewReader(plainBody)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.stored() != 2 {
+		t.Fatalf("stored %d objects, want 2", f.stored())
+	}
+
+	second := openShared(t, t.TempDir())
+	defer second.Close()
+
+	exeEntry, err := second.Get(exeID)
+	if err != nil {
+		t.Fatalf("Get executable after a cold local cache: %v", err)
+	}
+	exeName := second.OutputFile(exeEntry.OutputID)
+	info, err := os.Stat(exeName)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", exeName, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("network hit for a PutExecutable object %s has mode %v, want an executable bit set", exeName, info.Mode())
+	}
+
+	plainEntry, err := second.Get(plainID)
+	if err != nil {
+		t.Fatalf("Get plain object after a cold local cache: %v", err)
+	}
+	plainName := second.OutputFile(plainEntry.OutputID)
+	info, err = os.Stat(plainName)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", plainName, err)
+	}
+	if info.Mode()&0o111 != 0 {
+		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want no executable bit", plainName, info.Mode())
+	}
+}
+
 // A local hit must not touch the network: the disk cache stays the fast path.
 func TestSharedCache_LocalHitSkipsTheNetwork(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
