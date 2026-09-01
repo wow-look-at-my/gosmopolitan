@@ -16,8 +16,8 @@ github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
 github.com/wow-look-at-my/go-containers v0.0.0-20260826161058-40a3d1ef3d41 h1:mi/frNfEWPA/O57Qxsxyz6QEmOlQM8I0loFcRrmU9do=
 github.com/wow-look-at-my/go-containers v0.0.0-20260826161058-40a3d1ef3d41/go.mod h1:7j8wbDwrqh+uJnlENqD5iwsgYkF4y3kIgremn/ctvVE=
-github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260830192305-84ca26c6535b h1:EAXQx1fTFnf1utULQhg+c+LCHVuspk9g1Gn5dZDFLV0=
-github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260830192305-84ca26c6535b/go.mod h1:BI/XsBo9rG7lyHeaUEq0RBzZPnOGNG/B0HojgZ19n7k=
+github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260901060028-622782384470 h1:Zwwq5YGYPCRf/ToTabq5yGQFR6wK9t94IiPDXj6iR3M=
+github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260901060028-622782384470/go.mod h1:BI/XsBo9rG7lyHeaUEq0RBzZPnOGNG/B0HojgZ19n7k=
 github.com/yuin/goldmark v1.6.0 h1:boZcn2GTjpsynOsC0iJHnBWa4Bi0qzfJjthwauItG68=
 github.com/yuin/goldmark v1.6.0/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97 h1:OEbDVxixMxnrAI3whhcFkCb0rPrEHwxeSSUMdN0V414=

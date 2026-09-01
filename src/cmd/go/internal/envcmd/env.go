@@ -84,7 +84,6 @@ func MkEnv() []cfg.EnvVar {
 		{Name: "GOARCH", Value: cfg.Goarch, Changed: cfg.Goarch != runtime.GOARCH},
 		{Name: "GOAUTH", Value: cfg.GOAUTH, Changed: cfg.GOAUTHChanged},
 		{Name: "GOCACHE"},
-		{Name: "GOCACHEPROG", Value: cfg.GOCACHEPROG, Changed: cfg.GOCACHEPROGChanged},
 
 		// The GOCOSMO* knobs shape every GOOS=cosmo build, and each
 		// value here is the effective one the build acts on, not the raw

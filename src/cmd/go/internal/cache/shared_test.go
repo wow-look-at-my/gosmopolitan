@@ -28,15 +28,15 @@ import (
 // path -- HTTP, basic auth, lz4 framing, the outputid header and the guards.
 type fakeCacheServer struct {
 	mu      sync.Mutex
-	objects map[string][]byte // key -> lz4-framed body
-	meta    map[string]string // key -> outputID
+	objects map[string][]byte            // key -> lz4-framed body
+	meta    map[string]map[string]string // key -> metadata (all X-Cache-Meta-* keys, lowercased)
 	puts    int
 	gets    int
 }
 
 func newFakeCacheServer(t *testing.T) (*fakeCacheServer, *httptest.Server) {
 	t.Helper()
-	f := &fakeCacheServer{objects: map[string][]byte{}, meta: map[string]string{}}
+	f := &fakeCacheServer{objects: map[string][]byte{}, meta: map[string]map[string]string{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -64,14 +64,22 @@ func (f *fakeCacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.objects[key] = body
-		f.meta[key] = r.Header.Get("X-Cache-Meta-Outputid")
+		meta := map[string]string{}
+		for name, vals := range r.Header {
+			const prefix = "X-Cache-Meta-"
+			if len(vals) == 0 || len(name) < len(prefix) || !strings.EqualFold(name[:len(prefix)], prefix) {
+				continue
+			}
+			meta[strings.ToLower(name[len(prefix):])] = vals[0]
+		}
+		f.meta[key] = meta
 		f.puts++
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
 		f.mu.Lock()
 		body, ok := f.objects[key]
-		outputID := f.meta[key]
+		meta := f.meta[key]
 		if ok {
 			f.gets++
 		}
@@ -80,7 +88,9 @@ func (f *fakeCacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("X-Cache-Meta-Outputid", outputID)
+		for k, v := range meta {
+			w.Header().Set("X-Cache-Meta-"+k, v)
+		}
 		w.Write(body)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -169,6 +179,78 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 }
 
+// An executable stored through the shared tier must come back on a cold
+// machine in the shape the build can run: a directory entry holding a 0777
+// file named for the binary. A plain-file materialization is exactly the
+// regression this pins -- the hit exists, useCache trusts it, and go run
+// dies at fork/exec with permission denied.
+func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	body := []byte("#!/bin/sh\nfake APE payload for the round trip\n")
+	name := "shebang-test"
+	id := testActionID("shared-executable-round-trip")
+
+	first := openShared(t, t.TempDir())
+	exec, ok := first.(ExecutableCache)
+	if !ok {
+		t.Fatalf("%T is not an ExecutableCache", first)
+	}
+	outputID, size, err := exec.PutExecutable(id, name, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("PutExecutable: %v", err)
+	}
+	if size != int64(len(body)) {
+		t.Fatalf("PutExecutable stored %d bytes, want %d", size, len(body))
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.stored() == 0 {
+		t.Fatal("nothing reached the shared cache")
+	}
+
+	// The metadata traveled: the stored object carries the exe name.
+	f.mu.Lock()
+	var meta map[string]string
+	for _, m := range f.meta {
+		meta = m
+	}
+	f.mu.Unlock()
+	if meta["exe-name"] != name {
+		t.Fatalf("stored metadata exe-name = %q, want %q", meta["exe-name"], name)
+	}
+
+	// A different machine: same shared cache, empty local cache.
+	second := openShared(t, t.TempDir())
+	defer second.Close()
+	entry, err := second.Get(id)
+	if err != nil {
+		t.Fatalf("Get after a cold local cache: %v", err)
+	}
+	if entry.OutputID != outputID {
+		t.Fatalf("Get returned outputID %x, want %x", entry.OutputID, outputID)
+	}
+
+	// The executable shape: OutputFile names a 0777 file the build can exec.
+	exe := second.OutputFile(entry.OutputID)
+	info, err := os.Stat(exe)
+	if err != nil {
+		t.Fatalf("stat %s: %v", exe, err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("%s has mode %v, want an executable bit", exe, info.Mode().Perm())
+	}
+	got, err := os.ReadFile(exe)
+	if err != nil {
+		t.Fatalf("read %s: %v", exe, err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("the shared cache served %q, want %q", got, body)
+	}
+}
+
 // A local hit must not touch the network: the disk cache stays the fast path.
 func TestSharedCache_LocalHitSkipsTheNetwork(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
@@ -234,19 +316,20 @@ func TestSharedCache_UnconfiguredIsNoTier(t *testing.T) {
 	}
 }
 
-// A configured shared tier must be chosen over a cache program, so an org
-// build talks to the cache in process and never forks one. The program named
-// here does not exist: starting it would kill the build, which is what makes
-// this assert the choice rather than the outcome.
-func TestChooseCache_SharedTierBeatsACacheProgram(t *testing.T) {
+// A configured shared tier is the choice, full stop: GOCACHEPROG is gone, so
+// a leftover variable in the environment must not fork a program or fail the
+// build.
+func TestChooseCache_SharedTierIsTheOnlyAlternativeToDisk(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
+
+	t.Setenv("GOCACHEPROG", "no-such-cache-program-should-ever-run")
 
 	disk, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := chooseCache(disk, "no-such-cache-program-should-ever-run")
+	c := chooseCache(disk)
 	if _, ok := c.(*SharedCache); !ok {
 		t.Fatalf("chooseCache returned %T, want *SharedCache", c)
 	}
@@ -255,17 +338,18 @@ func TestChooseCache_SharedTierBeatsACacheProgram(t *testing.T) {
 	}
 }
 
-// With no shared tier configured, a cache program is still honored: this fork
-// does not take GOCACHEPROG away from a cache it knows nothing about.
-func TestChooseCache_NoSharedTierKeepsTheCacheProgram(t *testing.T) {
+// The choice is shared-or-disk and nothing else: GOCACHEPROG is deleted, so
+// a leftover GOCACHEPROG variable in the environment names nothing.
+func TestChooseCache_NoSharedTierIsTheDiskCache(t *testing.T) {
 	t.Setenv(cacheclient.ConfigEnv, "")
 
 	disk, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := chooseCache(disk, ""); c != Cache(disk) {
-		t.Fatalf("chooseCache with no tier and no program returned %T, want the disk cache", c)
+	t.Setenv("GOCACHEPROG", "no-such-cache-program")
+	if c := chooseCache(disk); c != Cache(disk) {
+		t.Fatalf("chooseCache with no tier returned %T, want the disk cache", c)
 	}
 }
 

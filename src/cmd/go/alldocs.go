@@ -2404,10 +2404,6 @@
 // GODEBUG=gocachetest=1 causes the go command to print details of its
 // decisions about whether to reuse a cached test result.
 //
-// The GOCACHEPROG environment variable can be used to provide an
-// externally managed build cache. For details see:
-// "go doc cmd/go/internal/cacheprog".
-//
 // # Environment variables
 //
 // The go command and the tools it invokes consult environment variables
@@ -2441,10 +2437,6 @@
 //	GOCACHE
 //		The directory where the go command will store cached
 //		information for reuse in future builds. Must be an absolute path.
-//	GOCACHEPROG
-//		A command (with optional space-separated flags) that implements an
-//		external go command build cache.
-//		See 'go doc cmd/go/internal/cacheprog'.
 //	GODEBUG
 //		Enable various debugging facilities for programs built with Go,
 //		including the go command. Cannot be set using 'go env -w'.
