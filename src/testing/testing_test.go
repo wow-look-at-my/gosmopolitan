@@ -237,22 +237,23 @@ func TestSetenv(t *testing.T) {
 	}
 }
 
-func expectParallelConflict(t *testing.T) {
-	want := testing.ParallelConflict
-	if got := recover(); got != want {
-		t.Fatalf("expected panic; got %#v want %q", got, want)
+// expectNoPanic reports a panic escaping a process-wide mutation that now takes
+// the serial barrier rather than rejecting the test.
+func expectNoPanic(t *testing.T) {
+	if got := recover(); got != nil {
+		t.Fatalf("expected no panic; got %#v", got)
 	}
 }
 
 func testWithParallelAfter(t *testing.T, fn func(*testing.T)) {
-	defer expectParallelConflict(t)
+	defer expectNoPanic(t)
 
 	fn(t)
 	t.Parallel()
 }
 
 func testWithParallelBefore(t *testing.T, fn func(*testing.T)) {
-	defer expectParallelConflict(t)
+	defer expectNoPanic(t)
 
 	t.Parallel()
 	fn(t)
@@ -262,7 +263,7 @@ func testWithParallelParentBefore(t *testing.T, fn func(*testing.T)) {
 	t.Parallel()
 
 	t.Run("child", func(t *testing.T) {
-		defer expectParallelConflict(t)
+		defer expectNoPanic(t)
 
 		fn(t)
 	})
@@ -273,7 +274,7 @@ func testWithParallelGrandParentBefore(t *testing.T, fn func(*testing.T)) {
 
 	t.Run("child", func(t *testing.T) {
 		t.Run("grand-child", func(t *testing.T) {
-			defer expectParallelConflict(t)
+			defer expectNoPanic(t)
 
 			fn(t)
 		})
