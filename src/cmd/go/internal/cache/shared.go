@@ -125,6 +125,15 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	if size > 0 && n != size {
 		return Entry{}, tierShared, err
 	}
+	// The wire protocol carries no executable flag, so Put above always
+	// wrote a plain, non-executable file. A build action later runs some
+	// cached outputs directly (go run, a shebang script) -- fork/exec then
+	// fails EACCES on a file this same content built locally would have had
+	// +x on. Granting +x here is a no-op for a non-executable object and a
+	// real fix for one the compiler is about to exec.
+	if chmodErr := os.Chmod(c.DiskCache.OutputFile(gotID), 0o755); chmodErr != nil {
+		return Entry{}, tierShared, err
+	}
 	entry, err = c.DiskCache.Get(id)
 	return entry, tierShared, err
 }

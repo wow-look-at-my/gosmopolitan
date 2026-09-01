@@ -169,6 +169,44 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 }
 
+// A cached binary must stay runnable after a network fetch: the build system
+// execs some cached outputs directly (go run, a shebang script), and the wire
+// protocol carries no executable flag for getTiered to key its Put call on.
+func TestSharedCache_NetworkHitIsExecutable(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	body := []byte("#!/bin/sh\necho hi\n")
+	id := testActionID("network-hit-executable")
+
+	first := openShared(t, t.TempDir())
+	if _, _, err := first.Put(id, bytes.NewReader(body)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.stored() == 0 {
+		t.Fatal("nothing reached the shared cache")
+	}
+
+	second := openShared(t, t.TempDir())
+	defer second.Close()
+	entry, err := second.Get(id)
+	if err != nil {
+		t.Fatalf("Get after a cold local cache: %v", err)
+	}
+
+	name := second.OutputFile(entry.OutputID)
+	info, err := os.Stat(name)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", name, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("network hit %s has mode %v, want an executable bit set", name, info.Mode())
+	}
+}
+
 // A local hit must not touch the network: the disk cache stays the fast path.
 func TestSharedCache_LocalHitSkipsTheNetwork(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
