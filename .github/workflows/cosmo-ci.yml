@@ -9,6 +9,9 @@ jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
       - name: Setup Go bootstrap toolchain
@@ -465,6 +469,9 @@ jobs:
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
@@ -472,6 +479,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+
+      - uses: wow-look-at-my/actions@secret-server#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5

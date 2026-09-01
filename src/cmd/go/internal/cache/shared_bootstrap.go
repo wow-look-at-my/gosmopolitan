@@ -15,3 +15,7 @@ func Shared() bool { return false }
 
 // newSharedCache has no tier to build in a bootstrap toolchain.
 func newSharedCache(*DiskCache) Cache { return nil }
+
+// validateCIShared has nothing to check: go_bootstrap builds this toolchain
+// once from source already on disk, not a CI job's own packages.
+func validateCIShared() error { return nil }
