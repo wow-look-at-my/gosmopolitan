@@ -100,7 +100,7 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	}
 
 	actionID := hex.EncodeToString(id[:])
-	outputID, body, size, _, miss, rerr := c.remote.Get(actionID)
+	outputID, body, size, _, miss, executable, rerr := c.remote.Get(actionID)
 	if miss || rerr != nil || body == nil {
 		return Entry{}, tierShared, err // the local miss, which is what the caller expects
 	}
@@ -113,7 +113,25 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	if readErr != nil {
 		return Entry{}, tierShared, err
 	}
-	gotID, n, putErr := c.DiskCache.Put(id, bytes.NewReader(data))
+	// executable is the same decision offer made when it chose Put vs
+	// PutExecutable for this action (a compiled package vs a link output);
+	// it rode the wire as metadata instead of being re-derived from the
+	// bytes. Restoring it through the matching local call is what makes a
+	// network hit indistinguishable from a local one.
+	var (
+		gotID  OutputID
+		n      int64
+		putErr error
+	)
+	if executable {
+		// PutExecutable needs a non-empty base name for the file it writes
+		// inside the cache's directory-shaped entry; OutputFile reads back
+		// whatever single file is there regardless of what it is named, so
+		// the outputID hex the wire already gave us is as good as any.
+		gotID, n, putErr = c.DiskCache.PutExecutable(id, outputID, bytes.NewReader(data))
+	} else {
+		gotID, n, putErr = c.DiskCache.Put(id, bytes.NewReader(data))
+	}
 	if putErr != nil {
 		return Entry{}, tierShared, err
 	}
@@ -137,7 +155,7 @@ func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	if err != nil {
 		return outputID, size, err
 	}
-	c.offer(id, outputID, size)
+	c.offer(id, outputID, size, false)
 	return outputID, size, nil
 }
 
@@ -147,19 +165,25 @@ func (c *SharedCache) PutExecutable(id ActionID, name string, file io.ReadSeeker
 	if err != nil {
 		return outputID, size, err
 	}
-	c.offer(id, outputID, size)
+	c.offer(id, outputID, size, true)
 	return outputID, size, nil
 }
 
 // offer uploads the stored body. It reads back the file the DiskCache just
 // wrote rather than rewinding the caller's reader: the caller owns that reader
-// and the contract does not promise it is still seekable afterwards.
-func (c *SharedCache) offer(id ActionID, outputID OutputID, size int64) {
+// and the contract does not promise it is still seekable afterwards. executable
+// carries forward the same Put-vs-PutExecutable decision the caller already
+// made, so a later network hit on this object restores the same mode.
+func (c *SharedCache) offer(id ActionID, outputID OutputID, size int64, executable bool) {
 	f, err := os.Open(c.DiskCache.OutputFile(outputID))
 	if err != nil {
 		return
 	}
 	defer f.Close()
+	if executable {
+		_ = c.remote.PutExecutable(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), f, size)
+		return
+	}
 	_ = c.remote.Put(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), f, size)
 }
 
