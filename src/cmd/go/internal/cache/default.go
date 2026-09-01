@@ -54,6 +54,10 @@ func initDefaultCache() Cache {
 		base.Fatalf("failed to initialize build cache at %s: %s\n", dir, err)
 	}
 
+	if err := validateCIShared(); err != nil {
+		base.Fatalf("%v", err)
+	}
+
 	return chooseCache(diskCache, cfg.GOCACHEPROG)
 }
 

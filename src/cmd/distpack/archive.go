@@ -28,6 +28,11 @@ type File struct {
 	Mode fs.FileMode
 	Size int64
 	Src  string // source file in OS file system
+
+	// Linkname is the symlink target, set only when Mode has ModeSymlink.
+	// A symlink entry carries no data body: writeTgz and writeZip both
+	// store Linkname instead of following Src to its target's content.
+	Linkname string
 }
 
 // Info returns a FileInfo about the file, for use with tar.FileInfoHeader
@@ -79,15 +84,26 @@ func NewArchive(dir string) (*Archive, error) {
 
 // Add adds a file with the given name and info to the archive.
 // The content of the file comes from the operating system file src.
+// If info describes a symlink, src is read as the link's own target
+// instead of being opened, and the link is not followed.
 // After a sequence of one or more calls to Add,
 // the caller should invoke Sort to re-sort the archive's files.
 func (a *Archive) Add(name, src string, info fs.FileInfo) {
+	var linkname string
+	if info.Mode()&fs.ModeSymlink != 0 {
+		target, err := os.Readlink(src)
+		if err != nil {
+			log.Fatal(err)
+		}
+		linkname = target
+	}
 	a.Files = append(a.Files, File{
-		Name: name,
-		Time: info.ModTime(),
-		Mode: info.Mode(),
-		Size: info.Size(),
-		Src:  src,
+		Name:     name,
+		Time:     info.ModTime(),
+		Mode:     info.Mode(),
+		Size:     info.Size(),
+		Src:      src,
+		Linkname: linkname,
 	})
 }
 

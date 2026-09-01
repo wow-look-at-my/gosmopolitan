@@ -28,15 +28,15 @@ import (
 // path -- HTTP, basic auth, lz4 framing, the outputid header and the guards.
 type fakeCacheServer struct {
 	mu      sync.Mutex
-	objects map[string][]byte // key -> lz4-framed body
-	meta    map[string]string // key -> outputID
+	objects map[string][]byte      // key -> lz4-framed body
+	meta    map[string]http.Header // key -> every X-Cache-Meta-* header sent on its PUT
 	puts    int
 	gets    int
 }
 
 func newFakeCacheServer(t *testing.T) (*fakeCacheServer, *httptest.Server) {
 	t.Helper()
-	f := &fakeCacheServer{objects: map[string][]byte{}, meta: map[string]string{}}
+	f := &fakeCacheServer{objects: map[string][]byte{}, meta: map[string]http.Header{}}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
@@ -64,14 +64,14 @@ func (f *fakeCacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Lock()
 		f.objects[key] = body
-		f.meta[key] = r.Header.Get("X-Cache-Meta-Outputid")
+		f.meta[key] = r.Header.Clone()
 		f.puts++
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
 		f.mu.Lock()
 		body, ok := f.objects[key]
-		outputID := f.meta[key]
+		meta := f.meta[key]
 		if ok {
 			f.gets++
 		}
@@ -80,7 +80,13 @@ func (f *fakeCacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("X-Cache-Meta-Outputid", outputID)
+		// Generic passthrough, matching the real server: every X-Cache-Meta-*
+		// header sent on the PUT is reflected back on the GET.
+		for name, vals := range meta {
+			if strings.HasPrefix(strings.ToLower(name), "x-cache-meta-") {
+				w.Header().Set(name, vals[0])
+			}
+		}
 		w.Write(body)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -166,6 +172,69 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("the shared cache served %q, want %q", got, body)
+	}
+}
+
+// A network hit must restore exactly the mode the original PutExecutable (or
+// Put) call chose -- never a guess from content, never a blanket +x. The
+// build system execs some cached outputs directly (go run, a shebang
+// script), and the choice of Put vs PutExecutable already carries that
+// decision; this pins that it survives the round trip through the wire's
+// executable metadata instead of being lost or defaulted.
+func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	exeBody := []byte("#!/bin/sh\necho hi\n")
+	exeID := testActionID("network-hit-executable")
+	plainBody := []byte("ordinary compiled package output")
+	plainID := testActionID("network-hit-plain")
+
+	first := openShared(t, t.TempDir())
+	exeCache, ok := first.(ExecutableCache)
+	if !ok {
+		t.Fatalf("%T does not implement ExecutableCache", first)
+	}
+	if _, _, err := exeCache.PutExecutable(exeID, "cached-script", bytes.NewReader(exeBody)); err != nil {
+		t.Fatalf("PutExecutable: %v", err)
+	}
+	if _, _, err := first.Put(plainID, bytes.NewReader(plainBody)); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f.stored() != 2 {
+		t.Fatalf("stored %d objects, want 2", f.stored())
+	}
+
+	second := openShared(t, t.TempDir())
+	defer second.Close()
+
+	exeEntry, err := second.Get(exeID)
+	if err != nil {
+		t.Fatalf("Get executable after a cold local cache: %v", err)
+	}
+	exeName := second.OutputFile(exeEntry.OutputID)
+	info, err := os.Stat(exeName)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", exeName, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("network hit for a PutExecutable object %s has mode %v, want an executable bit set", exeName, info.Mode())
+	}
+
+	plainEntry, err := second.Get(plainID)
+	if err != nil {
+		t.Fatalf("Get plain object after a cold local cache: %v", err)
+	}
+	plainName := second.OutputFile(plainEntry.OutputID)
+	info, err = os.Stat(plainName)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", plainName, err)
+	}
+	if info.Mode()&0o111 != 0 {
+		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want no executable bit", plainName, info.Mode())
 	}
 }
 
@@ -266,6 +335,40 @@ func TestChooseCache_NoSharedTierKeepsTheCacheProgram(t *testing.T) {
 	}
 	if c := chooseCache(disk, ""); c != Cache(disk) {
 		t.Fatalf("chooseCache with no tier and no program returned %T, want the disk cache", c)
+	}
+}
+
+// Outside CI, an unconfigured shared cache is a developer's ordinary machine,
+// never a build failure.
+func TestValidateCIShared_NotCIPasses(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv(cacheclient.ConfigEnv, "")
+	if err := validateCIShared(); err != nil {
+		t.Fatalf("validateCIShared outside CI: %v", err)
+	}
+}
+
+// A CI run with the shared tier configured passes, whatever else CI carries.
+func TestValidateCIShared_CIWithSharedConfiguredPasses(t *testing.T) {
+	t.Setenv("CI", "true")
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	if err := validateCIShared(); err != nil {
+		t.Fatalf("validateCIShared with a configured shared tier: %v", err)
+	}
+}
+
+// A CI run with no shared tier configured must fail outright: no env var
+// downgrades this to a warning.
+func TestValidateCIShared_CIWithoutSharedFails(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv(cacheclient.ConfigEnv, "")
+	err := validateCIShared()
+	if err == nil {
+		t.Fatal("validateCIShared in CI with no shared cache must fail")
+	}
+	if !strings.Contains(err.Error(), "GO_BUILDCACHE_CONFIG") {
+		t.Fatalf("error %q must name the missing variable", err)
 	}
 }
 

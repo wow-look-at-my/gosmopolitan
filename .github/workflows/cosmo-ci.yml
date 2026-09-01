@@ -9,6 +9,9 @@ jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
       - name: Setup Go bootstrap toolchain
@@ -174,8 +178,8 @@ jobs:
           # No -run filter: a named list only ever covers the tests somebody remembered to add to it, and a fork test outside the list is a test nobody runs.
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/go/internal/work
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
-          # A list here, unlike the one above: cmd/go carries thousands of upstream scripts and the whole suite outruns this step's budget, so these name the fork-rewritten paths (cosmo env, the APE merge under -n, modload's replace check).
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/(env_cosmo|build_gcflags_order|godebug_removed|install_backslash|modfile_flag|run_vers|work_install_submodule|mod_replace|mod_tidy_replace|mod_vendor_replace|work_sync_check_multiple_paths_once)$' cmd/go
+          # A list here, unlike the one above: cmd/go carries thousands of upstream scripts and the whole suite outruns this step's budget, so these name the fork-rewritten paths (cosmo env, the APE merge under -n, modload's replace check, and go install/run pkg@version honoring a queried module's own replace/exclude directives).
+          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/(env_cosmo|build_gcflags_order|godebug_removed|install_backslash|modfile_flag|run_vers|work_install_submodule|mod_replace|mod_tidy_replace|mod_vendor_replace|mod_install_pkg_version|mod_run_pkg_version|work_sync_check_multiple_paths_once)$' cmd/go
           # GOOS=cosmo-only code, run on this host via the misc/cosmo exec wrappers (see docs/CI.md "build job").
           export PATH="$PWD/misc/cosmo:$PATH"
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
@@ -465,6 +469,9 @@ jobs:
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
@@ -472,6 +479,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+
+      - uses: wow-look-at-my/actions@secret-server#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
