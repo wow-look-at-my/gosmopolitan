@@ -45,6 +45,19 @@ func Shared() bool {
 	return cacheclient.ConfigFromEnv().Bucket != ""
 }
 
+// validateCIShared fails a CI build that has no shared cache configured. A
+// CI run's cache decides whether every other CI run recompiles the same
+// packages, so an unconfigured CI run must never build quietly.
+func validateCIShared() error {
+	if os.Getenv("CI") == "" {
+		return nil
+	}
+	if Shared() {
+		return nil
+	}
+	return fmt.Errorf("CI build cache not configured: GO_BUILDCACHE_CONFIG is not set")
+}
+
 // newSharedCache layers the configured shared tier over disk. It returns nil
 // when no shared cache is configured, which is the ordinary case for a
 // developer's machine.

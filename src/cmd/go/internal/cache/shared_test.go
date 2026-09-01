@@ -269,6 +269,40 @@ func TestChooseCache_NoSharedTierKeepsTheCacheProgram(t *testing.T) {
 	}
 }
 
+// Outside CI, an unconfigured shared cache is a developer's ordinary machine,
+// never a build failure.
+func TestValidateCIShared_NotCIPasses(t *testing.T) {
+	t.Setenv("CI", "")
+	t.Setenv(cacheclient.ConfigEnv, "")
+	if err := validateCIShared(); err != nil {
+		t.Fatalf("validateCIShared outside CI: %v", err)
+	}
+}
+
+// A CI run with the shared tier configured passes, whatever else CI carries.
+func TestValidateCIShared_CIWithSharedConfiguredPasses(t *testing.T) {
+	t.Setenv("CI", "true")
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	if err := validateCIShared(); err != nil {
+		t.Fatalf("validateCIShared with a configured shared tier: %v", err)
+	}
+}
+
+// A CI run with no shared tier configured must fail outright: no env var
+// downgrades this to a warning.
+func TestValidateCIShared_CIWithoutSharedFails(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv(cacheclient.ConfigEnv, "")
+	err := validateCIShared()
+	if err == nil {
+		t.Fatal("validateCIShared in CI with no shared cache must fail")
+	}
+	if !strings.Contains(err.Error(), "GO_BUILDCACHE_CONFIG") {
+		t.Fatalf("error %q must name the missing variable", err)
+	}
+}
+
 // readOutputFile reads what OutputFile names, which is what the compiler does
 // with the path a cache hit hands it.
 func readOutputFile(c Cache, id OutputID) ([]byte, error) {
