@@ -149,9 +149,9 @@ func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
 	// it, exactly as glibc and the linux port do. macOS could honor the
 	// flag, but one APE answering the same call differently per host is
 	// worse than answering it consistently.
-	if flags&^_AT_SYMLINK_NOFOLLOW != 0 {
+	if flags&^(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
 		return EINVAL
-	} else if flags&_AT_SYMLINK_NOFOLLOW != 0 {
+	} else if flags&(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
 		return EOPNOTSUPP
 	}
 	return fchmodat(dirfd, path, mode)
@@ -293,18 +293,6 @@ func Getgroups() (gids []int, err error) {
 	return
 }
 
-func Setgroups(gids []int) (err error) {
-	if len(gids) == 0 {
-		return setgroups(0, nil)
-	}
-
-	a := make([]_Gid_t, len(gids))
-	for i, v := range gids {
-		a[i] = _Gid_t(v)
-	}
-	return setgroups(len(a), &a[0])
-}
-
 type WaitStatus uint32
 
 func (w WaitStatus) Exited() bool { return w&0x7f == 0 }
@@ -377,6 +365,7 @@ const (
 	_AT_REMOVEDIR        = 0x200
 	_AT_SYMLINK_NOFOLLOW = 0x100
 	_AT_EACCESS          = 0x200
+	_AT_EMPTY_PATH       = 0x1000
 )
 
 //sys	fstat(fd int, stat *Stat_t) (err error)
@@ -393,7 +382,6 @@ func Lchown(path string, uid int, gid int) (err error) {
 }
 
 //sys	getgroups(n int, list *_Gid_t) (nn int, err error)
-//sys	setgroups(n int, list *_Gid_t) (err error)
 //sys	utimes(path string, times *[2]Timeval) (err error)
 //sys	futimesat(dirfd int, path string, times *[2]Timeval) (err error)
 //sys	Getpriority(which int, who int) (prio int, err error)
@@ -449,16 +437,8 @@ func Dup2(oldfd int, newfd int) (err error) {
 //sys	Pread(fd int, p []byte, offset int64) (n int, err error)
 //sys	Pwrite(fd int, p []byte, offset int64) (n int, err error)
 //sys	Seek(fd int, offset int64, whence int) (off int64, err error) = SYS_LSEEK
-//sys	Setfsgid(gid int) (err error)
-//sys	Setfsuid(uid int) (err error)
 //sys	Setpgid(pid int, pgid int) (err error)
 //sys	Setsid() (pid int, err error)
-//sys	Setuid(uid int) (err error)
-//sys	Setgid(gid int) (err error)
-//sys	Setreuid(ruid int, euid int) (err error)
-//sys	Setregid(rgid int, egid int) (err error)
-//sys	Setresuid(ruid int, euid int, suid int) (err error)
-//sys	Setresgid(rgid int, egid int, sgid int) (err error)
 //sys	Sync()
 //sys	Truncate(path string, length int64) (err error)
 //sys	Umask(mask int) (oldmask int)

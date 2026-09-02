@@ -19,23 +19,56 @@ import "unsafe"
 // Windows emulation (runtime.ntSyscallEmulate) have no case for this
 // syscall number, so both answer ENOSYS.
 
-// The ptrace request numbers. The linux port names them PTRACE_PEEKTEXT and
-// so on in zerrors_linux_amd64.go and zerrors_linux_arm64.go, which cosmo
-// does not build. Both linux tables give each request the same value.
+// The ptrace requests, options and events, named as the linux port names
+// them in zerrors_linux_amd64.go and zerrors_linux_arm64.go, which cosmo
+// does not build. Both linux tables give each name the same value.
 const (
-	ptraceReqPeekText    = 0x1
-	ptraceReqPeekData    = 0x2
-	ptraceReqPokeText    = 0x4
-	ptraceReqPokeData    = 0x5
-	ptraceReqCont        = 0x7
-	ptraceReqSingleStep  = 0x9
-	ptraceReqAttach      = 0x10
-	ptraceReqDetach      = 0x11
-	ptraceReqSyscall     = 0x18
-	ptraceReqSetOptions  = 0x4200
-	ptraceReqGetEventMsg = 0x4201
-	ptraceReqGetRegset   = 0x4204
-	ptraceReqSetRegset   = 0x4205
+	PTRACE_ARCH_PRCTL        = 0x1e
+	PTRACE_ATTACH            = 0x10
+	PTRACE_CONT              = 0x7
+	PTRACE_DETACH            = 0x11
+	PTRACE_EVENT_CLONE       = 0x3
+	PTRACE_EVENT_EXEC        = 0x4
+	PTRACE_EVENT_EXIT        = 0x6
+	PTRACE_EVENT_FORK        = 0x1
+	PTRACE_EVENT_VFORK       = 0x2
+	PTRACE_EVENT_VFORK_DONE  = 0x5
+	PTRACE_GETEVENTMSG       = 0x4201
+	PTRACE_GETFPREGS         = 0xe
+	PTRACE_GETFPXREGS        = 0x12
+	PTRACE_GETREGS           = 0xc
+	PTRACE_GETREGSET         = 0x4204
+	PTRACE_GETSIGINFO        = 0x4202
+	PTRACE_GET_THREAD_AREA   = 0x19
+	PTRACE_KILL              = 0x8
+	PTRACE_OLDSETOPTIONS     = 0x15
+	PTRACE_O_MASK            = 0x7f
+	PTRACE_O_TRACECLONE      = 0x8
+	PTRACE_O_TRACEEXEC       = 0x10
+	PTRACE_O_TRACEEXIT       = 0x40
+	PTRACE_O_TRACEFORK       = 0x2
+	PTRACE_O_TRACESYSGOOD    = 0x1
+	PTRACE_O_TRACEVFORK      = 0x4
+	PTRACE_O_TRACEVFORKDONE  = 0x20
+	PTRACE_PEEKDATA          = 0x2
+	PTRACE_PEEKTEXT          = 0x1
+	PTRACE_PEEKUSR           = 0x3
+	PTRACE_POKEDATA          = 0x5
+	PTRACE_POKETEXT          = 0x4
+	PTRACE_POKEUSR           = 0x6
+	PTRACE_SETFPREGS         = 0xf
+	PTRACE_SETFPXREGS        = 0x13
+	PTRACE_SETOPTIONS        = 0x4200
+	PTRACE_SETREGS           = 0xd
+	PTRACE_SETREGSET         = 0x4205
+	PTRACE_SETSIGINFO        = 0x4203
+	PTRACE_SET_THREAD_AREA   = 0x1a
+	PTRACE_SINGLEBLOCK       = 0x21
+	PTRACE_SINGLESTEP        = 0x9
+	PTRACE_SYSCALL           = 0x18
+	PTRACE_SYSEMU            = 0x1f
+	PTRACE_SYSEMU_SINGLESTEP = 0x20
+	PTRACE_TRACEME           = 0x0
 
 	_NT_PRSTATUS = 1
 )
@@ -97,11 +130,11 @@ func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, err erro
 }
 
 func PtracePeekText(pid int, addr uintptr, out []byte) (count int, err error) {
-	return ptracePeek(ptraceReqPeekText, pid, addr, out)
+	return ptracePeek(PTRACE_PEEKTEXT, pid, addr, out)
 }
 
 func PtracePeekData(pid int, addr uintptr, out []byte) (count int, err error) {
-	return ptracePeek(ptraceReqPeekData, pid, addr, out)
+	return ptracePeek(PTRACE_PEEKDATA, pid, addr, out)
 }
 
 func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (count int, err error) {
@@ -156,48 +189,48 @@ func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (c
 }
 
 func PtracePokeText(pid int, addr uintptr, data []byte) (count int, err error) {
-	return ptracePoke(ptraceReqPokeText, ptraceReqPeekText, pid, addr, data)
+	return ptracePoke(PTRACE_POKETEXT, PTRACE_PEEKTEXT, pid, addr, data)
 }
 
 func PtracePokeData(pid int, addr uintptr, data []byte) (count int, err error) {
-	return ptracePoke(ptraceReqPokeData, ptraceReqPeekData, pid, addr, data)
+	return ptracePoke(PTRACE_POKEDATA, PTRACE_PEEKDATA, pid, addr, data)
 }
 
 func PtraceGetRegs(pid int, regsout *PtraceRegs) (err error) {
 	var iov Iovec
 	iov.Base = (*byte)(unsafe.Pointer(regsout))
 	iov.SetLen(int(unsafe.Sizeof(*regsout)))
-	return ptracePtr(ptraceReqGetRegset, pid, uintptr(_NT_PRSTATUS), unsafe.Pointer(&iov))
+	return ptracePtr(PTRACE_GETREGSET, pid, uintptr(_NT_PRSTATUS), unsafe.Pointer(&iov))
 }
 
 func PtraceSetRegs(pid int, regs *PtraceRegs) (err error) {
 	var iov Iovec
 	iov.Base = (*byte)(unsafe.Pointer(regs))
 	iov.SetLen(int(unsafe.Sizeof(*regs)))
-	return ptracePtr(ptraceReqSetRegset, pid, uintptr(_NT_PRSTATUS), unsafe.Pointer(&iov))
+	return ptracePtr(PTRACE_SETREGSET, pid, uintptr(_NT_PRSTATUS), unsafe.Pointer(&iov))
 }
 
 func PtraceSetOptions(pid int, options int) (err error) {
-	return ptrace(ptraceReqSetOptions, pid, 0, uintptr(options))
+	return ptrace(PTRACE_SETOPTIONS, pid, 0, uintptr(options))
 }
 
 func PtraceGetEventMsg(pid int) (msg uint, err error) {
 	var data _C_long
-	err = ptracePtr(ptraceReqGetEventMsg, pid, 0, unsafe.Pointer(&data))
+	err = ptracePtr(PTRACE_GETEVENTMSG, pid, 0, unsafe.Pointer(&data))
 	msg = uint(data)
 	return
 }
 
 func PtraceCont(pid int, signal int) (err error) {
-	return ptrace(ptraceReqCont, pid, 0, uintptr(signal))
+	return ptrace(PTRACE_CONT, pid, 0, uintptr(signal))
 }
 
 func PtraceSyscall(pid int, signal int) (err error) {
-	return ptrace(ptraceReqSyscall, pid, 0, uintptr(signal))
+	return ptrace(PTRACE_SYSCALL, pid, 0, uintptr(signal))
 }
 
-func PtraceSingleStep(pid int) (err error) { return ptrace(ptraceReqSingleStep, pid, 0, 0) }
+func PtraceSingleStep(pid int) (err error) { return ptrace(PTRACE_SINGLESTEP, pid, 0, 0) }
 
-func PtraceAttach(pid int) (err error) { return ptrace(ptraceReqAttach, pid, 0, 0) }
+func PtraceAttach(pid int) (err error) { return ptrace(PTRACE_ATTACH, pid, 0, 0) }
 
-func PtraceDetach(pid int) (err error) { return ptrace(ptraceReqDetach, pid, 0, 0) }
+func PtraceDetach(pid int) (err error) { return ptrace(PTRACE_DETACH, pid, 0, 0) }

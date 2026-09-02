@@ -779,6 +779,90 @@ func runPerThreadSyscall() {
 	gp.m.needPerThreadSyscall.Store(0)
 }
 
+// syscall_runtime_doAllThreadsSyscall executes a system call on every M.
+// It is the linux port's driver (os_linux.go) over the cosmo syscall
+// entry, and it depends on the same three properties that one documents:
+// every existing OS thread has an M in allm, every M in allm gets a
+// thread, and a thread created after the read of allm clones from one
+// that already ran the call.
+//
+// On a darwin or NT host the call runs on the calling thread alone. XNU
+// keeps credentials per process, so one call is the process-wide change
+// the caller asked for, and neither host can deliver sigPerThreadSyscall
+// to another thread (darwinSignalM drops the realtime range; NT has no
+// cross-thread signal at all), so the wait below would never end there.
+//
+//go:linkname syscall_runtime_doAllThreadsSyscall syscall.runtime_doAllThreadsSyscall
+//go:uintptrescapes
+func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr) {
+	if isdarwin() || iswindows() {
+		return cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
+
+	// STW so user goroutines see an atomic change to thread state.
+	stw := stopTheWorld(stwAllThreadsSyscall)
+
+	// allocmLock prevents new Ms while this runs, and serializes callers.
+	allocmLock.lock()
+	acquirem()
+
+	r1, r2, errno := cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	if errno != 0 {
+		releasem(getg().m)
+		allocmLock.unlock()
+		startTheWorld(stw)
+		return r1, r2, errno
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{
+		trap: trap,
+		a1:   a1,
+		a2:   a2,
+		a3:   a3,
+		a4:   a4,
+		a5:   a5,
+		a6:   a6,
+		r1:   r1,
+		r2:   r2,
+	}
+
+	// Wait for every thread to set procid before any signal goes out, so
+	// no thread runs the call twice (once itself, once in a child it
+	// cloned after inheriting the state).
+	for mp := allm; mp != nil; mp = mp.alllink {
+		for atomic.Load64(&mp.procid) == 0 {
+			osyield()
+		}
+	}
+
+	gp := getg()
+	tid := gp.m.procid
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if atomic.Load64(&mp.procid) == tid {
+			continue
+		}
+		mp.needPerThreadSyscall.Store(1)
+		signalM(mp, sigPerThreadSyscall)
+	}
+
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if mp.procid == tid {
+			continue
+		}
+		for mp.needPerThreadSyscall.Load() != 0 {
+			osyield()
+		}
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{}
+
+	releasem(getg().m)
+	allocmLock.unlock()
+	startTheWorld(stw)
+
+	return r1, r2, errno
+}
+
 // futex is implemented in assembly
 //
 //go:noescape

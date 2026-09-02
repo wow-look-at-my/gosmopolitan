@@ -491,11 +491,44 @@ type SockFprog struct {
 	Filter    *SockFilter
 }
 
+// The names below are the linux port's (ztypes_linux_arm64.go); every Linux
+// architecture agrees on each value except IFLA_MAX.
+const (
+	SizeofInotifyEvent = 0x10
+	SizeofSockFilter   = 0x8
+	SizeofSockFprog    = 0x10
+
+	IFLA_LINKINFO   = 0x12
+	IFLA_NET_NS_PID = 0x13
+	IFLA_IFALIAS    = 0x14
+	IFLA_MAX        = 0x24
+
+	RT_TABLE_COMPAT = 0xfc
+
+	RTNLGRP_NONE        = 0x0
+	RTNLGRP_LINK        = 0x1
+	RTNLGRP_NOTIFY      = 0x2
+	RTNLGRP_NEIGH       = 0x3
+	RTNLGRP_TC          = 0x4
+	RTNLGRP_IPV4_IFADDR = 0x5
+	RTNLGRP_IPV4_MROUTE = 0x6
+	RTNLGRP_IPV4_ROUTE  = 0x7
+	RTNLGRP_IPV4_RULE   = 0x8
+	RTNLGRP_IPV6_IFADDR = 0x9
+	RTNLGRP_IPV6_MROUTE = 0xa
+	RTNLGRP_IPV6_ROUTE  = 0xb
+	RTNLGRP_IPV6_IFINFO = 0xc
+	RTNLGRP_IPV6_PREFIX = 0x12
+	RTNLGRP_IPV6_RULE   = 0x13
+	RTNLGRP_ND_USEROPT  = 0x14
+)
+
 type InotifyEvent struct {
 	Wd     int32
 	Mask   uint32
 	Cookie uint32
 	Len    uint32
+	Name   [0]uint8
 }
 
 // This is struct user_pt_regs, the arm64 layout, as ztypes_linux_arm64.go
@@ -587,15 +620,19 @@ const RNDGETENTCNT = 0x80045200
 
 const PERF_IOC_FLAG_GROUP = 0x1
 
+// Termios is the linux port's shape (ztypes_linux_arm64.go): Cc holds 32
+// slots although the kernel fills 19, so Ispeed and Ospeed sit where a
+// program written for linux expects them.
 type Termios struct {
-	Iflag  uint32
-	Oflag  uint32
-	Cflag  uint32
-	Lflag  uint32
-	Line   uint8
-	Cc     [19]uint8
-	Ispeed uint32
-	Ospeed uint32
+	Iflag     uint32
+	Oflag     uint32
+	Cflag     uint32
+	Lflag     uint32
+	Line      uint8
+	Cc        [32]uint8
+	Pad_cgo_0 [3]byte
+	Ispeed    uint32
+	Ospeed    uint32
 }
 
 type Winsize struct {
