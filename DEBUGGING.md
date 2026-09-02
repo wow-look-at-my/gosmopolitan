@@ -6488,3 +6488,17 @@ What no fix can reach on either arch: the `siginfo` and `ucontext` a
 handler receives keep their Apple layouts. Only the signal number is
 translated back. A raw-syscall caller that reads the context is looking
 at Apple's, and always was.
+
+## The wasm job's TestMemoryProfiler flake is a GC phase change mid-loop (2026-09-02)
+
+Three master pushes went red in the wasm job alone, always in
+`runtime/pprof` TestMemoryProfiler/debug=1 under wazero (wasip1; js
+excludes the file). The 32 `Obj32` allocations landed in two buckets
+whose stacks differ by one frame: while GC marks, the size-class fast
+path `mallocgcSmallScanNoHeaderSC4` delegates to
+`mallocgcSmallScanSlowPath`, and that callee shifts what `callers(3)` in
+`mProf_Malloc` records. The test tolerates 4 or 5 PCs but needs all 32
+on one path, and the 2 MB transient allocations just before the loop
+start the cycle that then ends inside it. Reproduced locally at 1 in 3
+runs on wasip1. The test now calls `runtime.GC()` before the loop; six
+green runs after.
