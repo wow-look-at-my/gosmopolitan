@@ -1962,9 +1962,17 @@ func (t *T) Serial() {
 	serialExclusive.Store(true)
 }
 
+// inSerialTree reports whether this test, or a test above it, holds the
+// barrier exclusively. A parent that holds it shared does not count: that
+// parent releases its hold before its parallel subtests run.
+func (c *common) inSerialTree() bool {
+	h := c.barrierHolder()
+	return h != nil && h.barrierHeld == barrierExclusive
+}
+
 // acquireBarrier takes the shared hold the test's function body runs under.
 func (t *T) acquireBarrier() {
-	if t.parent == nil || t.isSynctest || t.common.barrierHolder() != nil {
+	if t.parent == nil || t.isSynctest || t.common.inSerialTree() {
 		return
 	}
 	serialBarrier.RLock()
@@ -2000,7 +2008,7 @@ func (t *T) Parallel() {
 	if t.isSynctest {
 		panic("testing: t.Parallel called inside synctest bubble")
 	}
-	if h := t.common.barrierHolder(); h != nil && h.barrierHeld == barrierExclusive {
+	if t.common.inSerialTree() {
 		return
 	}
 	if t.parent.barrier == nil {
@@ -2275,7 +2283,7 @@ func tRunner(t *T, fn func(t *T)) {
 	// subtests then run one at a time. Parallel charges the time before it to
 	// t.start, so t.start is set first.
 	t.start = highPrecisionTimeNow()
-	if t.parent != nil && !t.isSynctest && t.common.barrierHolder() == nil {
+	if t.parent != nil && !t.isSynctest && !t.common.inSerialTree() {
 		t.Parallel()
 	}
 	t.acquireBarrier()

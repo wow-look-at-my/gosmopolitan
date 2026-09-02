@@ -181,6 +181,7 @@ func TestTempDirGOTMPDIR(t *testing.T) {
 }
 
 func TestSetenv(t *testing.T) {
+	t.Serial() // The subtests must run inside the loop that sets each initial value.
 	tests := []struct {
 		name               string
 		key                string
@@ -322,6 +323,7 @@ func TestChdirWithParallelGrandParentBefore(t *testing.T) {
 }
 
 func TestChdir(t *testing.T) {
+	t.Serial() // The subtests must run in order, from the original directory.
 	oldDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -874,6 +876,7 @@ func TestRunningTestsInCleanup(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		t.Serial() // The outer subtests must run one at a time, inside t.Run.
 		for i := 0; i < 2; i++ {
 			t.Run(fmt.Sprintf("outer%d", i), func(t *testing.T) {
 				// Not parallel: we expect to see only one outer test,
