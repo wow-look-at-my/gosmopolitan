@@ -36,7 +36,21 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
+
+// ntSetSyscallFns installs the syscall-package hook table. Called from
+// osArchInit on NT hosts, before any user code runs. The composite
+// literal does not escape (SetWindowsFns copies it), so this is safe
+// pre-mallocinit.
+func ntSetSyscallFns() {
+	cosmo.SetWindowsFns(&cosmo.WindowsFns{
+		Emulate: ntSyscallEmulate,
+		Spawn:   ntSpawn,
+	})
+}
 
 // Linux amd64 syscall numbers emulated here (the shared subset lives
 // in internal/runtime/syscall/cosmo/defs_cosmo_amd64.go; duplicating
@@ -159,7 +173,6 @@ const (
 
 	_NT_INVALID_HANDLE_VALUE    = ^uintptr(0)
 	_NT_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
-	_NT_CURRENT_PROCESS         = ^uintptr(0) // GetCurrentProcess() pseudo-handle
 
 	_NT_MOVEFILE_REPLACE_EXISTING = 0x1
 

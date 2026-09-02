@@ -107,7 +107,7 @@ functionality is missing.
 | 1b | same file, `darwin_error` (FIXED 2026-09-02) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`, followed by a call to `runtime·cosmo_xlat_errno_ax` for the numbering. See Section 4.1c: the same defect ran through the runtime's own darwin branches. |
 | 1c | `src/runtime/sys_cosmo_amd64.s` (FIXED 2026-09-02) | The identical carry-flag defect, in the runtime's own raw-XNU branches. `open` returned the errno as a file descriptor (`ENOENT` opened "fd 2"); `read`/`write1` returned it as a byte count, so a failed write read as a short write; `pipe2` produced a pair of fds out of it; `mmap` returned a mapping at address `ENOMEM` that every caller then wrote to. Each failing branch now tests the carry flag and, where the value reaches Go, translates the errno. `munmap` and `rtsigprocmask` keep their crash-on-failure pokes, now reached by `JCC`. |
 | 2 | ~~`cosmoDarwinKqueueSupported` returns false~~ | Fixed with Section 3.5: the poller is served by raw XNU syscall. What is left on macOS-Intel is thread creation and parking, which is a narrower and more accurate claim than "the netpoller is unsupported". |
-| 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented**, and is not reachable either: the APE carries no windows/arm64 boot path (Windows boots the AMD64 payload through the PE header), and `GOCOSMOPLATFORMS` has no token for it. Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". None of these is a syscall gap — they are Win32 calls the amd64 side already makes in Go, blocked on an arm64 `ntcall` trampoline and a boot path. The file exists so the arm64 build links. **Both ends of "unreachable" are now enforced, not asserted**: `iswindows` is a constant `false` on arm64, so the compiler deletes every call site, and `TestPlatformTableIsClosed` (`cmd/internal/cosmoape`, run unfiltered by the ubuntu leg) fails if a windows row for any non-amd64 arch is added to the linker's boot-mechanism table without the runtime to back it. |
+| 3 | `src/runtime/os_cosmo_nt_arm64.go` | **The Win32 layer is implemented on arm64; the boot path and the netpoller are not.** `sys_cosmo_nt_arm64.s` supplies the AAPCS64 `ntcall6`/`ntcall10` trampolines (TEB via `R18_PLATFORM`, the `SetLastError(0)` bracket), the thread start, the VEH/VCH thunks and the console/signal trampolines, and `os_cosmo_nt_ctx_arm64.go` supplies the `ARM64_NT_CONTEXT` record and the five operations preemption performs on it. Every file that was `cosmo && amd64` is now `cosmo`, so `ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`/`Free`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl` and the profiler are live code on both arches. Sourcing is upstream's own windows/arm64 port (`runtime/sys_windows_arm64.s`, `internal/runtime/syscall/windows/defs_windows_arm64.go`, `signal_windows_arm64.go`). Still throwing: `netpollinitNT` and friends, because they sit on the syscall-emulation layer, which is written against Linux **amd64** numbering — arm64 has no bare `stat`/`lstat`/`open`, its `struct stat` is 144 bytes rather than 128, and `O_DIRECTORY` differs. That split is its own job. **Still unreachable, and still enforced rather than asserted**: `iswindows` remains a constant `false` on arm64, because no APE boot stub sets `__hostos` there (`rt0_cosmo_nt_amd64.s` has no arm64 twin and the APE has no arm64 PE header), and `TestPlatformTableIsClosed` (`cmd/internal/cosmoape`, run unfiltered by the ubuntu leg) fails if a windows row for a non-amd64 arch is added to the linker's boot-mechanism table without the runtime to back it. |
 
 ---
 
@@ -257,9 +257,10 @@ Section 4.1.
   callers and still installs nothing. None of it is verified, because
   there is no Intel-mac runner — read and reasoned about, never
   executed.
-- Windows/arm64 (Section 4.3) is entirely unimplemented and entirely
-  unreachable: no APE boot path, no platform token. Its stubs exist to
-  make the arm64 build link.
+- Windows/arm64 (Section 4.3) has its Win32 layer now — trampolines,
+  thread start, exception dispatch, preemption context. It is still
+  unreachable (no APE boot path, no platform token), and its netpoller
+  still throws, waiting on an arm64 split of the syscall emulation.
 
 ## 8. Recommended follow-up
 
@@ -289,14 +290,15 @@ Section 4.1.
    executed. That remains the honest blocker on the platform, and
    `Default()` leaves darwin/amd64 out of a default build for exactly
    this reason.
-4. Implement Windows/arm64, or refuse to boot on it. **It already
-   refuses**, in the only two places that could let it through, and both
-   are now checked rather than described (Section 4.3). This is not a
-   syscall gap: the stubs are Win32 calls, and bringing them up means an
-   arm64 `ntcall` trampoline, an arm64 `CONTEXT` layout for preemption, a
-   VEH thunk — and a boot mechanism the linker has no way to emit. Until
-   that boot path exists, code written here cannot be started, let alone
-   tested.
+4. Windows/arm64: the `ntcall` trampolines, the `CONTEXT` layout and the
+   VEH thunks are written (Section 4.3), sourced from upstream's own
+   windows/arm64 port. Two things are left. The netpoller needs the
+   syscall emulation split per architecture — numbers, `struct stat`
+   width and `O_DIRECTORY` all differ. And the boot mechanism does not
+   exist: the linker has no way to emit an arm64 PE header, so nothing
+   sets `__hostos` there. Until it does, none of this code can be
+   started, let alone tested, and `iswindows` stays a constant `false`
+   so the compiler deletes it.
 5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go`
    carries no cosmo build tag, so `io.Copy` from a file to a socket
    never reaches the syscall on any cosmo host; only a caller that uses

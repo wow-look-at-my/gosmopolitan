@@ -92,7 +92,6 @@ import (
 
 // Win32 constants for the exec surface.
 const (
-	_NT_DUPLICATE_SAME_ACCESS      = 0x2
 	_NT_STARTF_USESTDHANDLES       = 0x100
 	_NT_CREATE_UNICODE_ENVIRONMENT = 0x400
 	_NT_CREATE_NEW_PROCESS_GROUP   = 0x200
