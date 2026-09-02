@@ -706,6 +706,7 @@ type common struct {
 	finished    bool                 // Test function has completed.
 	inFuzzFn    bool                 // Whether the fuzz target, if this is one, is running.
 	isSynctest  bool
+	barrierHeld int8 // The serialBarrier hold this test owns: barrierNone, barrierShared or barrierExclusive.
 
 	chatty         *chattyPrinter // A copy of chattyPrinter, if the chatty flag is set.
 	bench          bool           // Whether the current test is a benchmark.
@@ -1017,8 +1018,7 @@ var (
 // may be called simultaneously from multiple goroutines.
 type T struct {
 	common
-	denyParallel bool
-	tstate       *testState // For running tests and subtests.
+	tstate *testState // For running tests and subtests.
 }
 
 func (c *common) private() {}
@@ -1902,22 +1902,133 @@ func pcToName(pc uintptr) string {
 	return frame.Function
 }
 
-const parallelConflict = `testing: test using t.Setenv, t.Chdir, or cryptotest.SetGlobalRandom can not use t.Parallel`
+// serialBarrier orders a test that mutates process-wide state against every
+// other running test. A test holds it shared while its function body runs;
+// [T.Serial] upgrades that hold to exclusive, so the caller and its subtests
+// are the only test code that runs.
+//
+// The hold never outlives the function body. A test that waits for its
+// parallel subtests holds nothing, because those subtests wait for a -parallel
+// slot, and a test that holds the barrier while it waits for a slot deadlocks
+// against a Serial caller that holds a slot while it waits for the barrier.
+var serialBarrier sync.RWMutex
+
+// serialExclusive is set while a test holds serialBarrier exclusively. It is
+// how a process-wide measurement (AllocsPerRun) knows no other test runs.
+var serialExclusive atomic.Bool
+
+// Barrier hold states for common.barrierHeld.
+const (
+	barrierNone int8 = iota
+	barrierShared
+	barrierExclusive
+)
+
+// barrierHolder returns the nearest test, this one included, that holds the
+// serial barrier, or nil. A subtest of a serial test and a synctest bubble
+// hold nothing of their own: an ancestor's exclusive hold covers them.
+func (c *common) barrierHolder() *common {
+	for ; c != nil; c = c.parent {
+		if c.barrierHeld != barrierNone {
+			return c
+		}
+	}
+	return nil
+}
+
+// Serial pauses until every other test has stopped, then runs the caller alone
+// until it returns. Tests are parallel by default, so this is how a test that
+// mutates process-wide state - the working directory, the environment, a
+// package-level variable another test reads - declares that it needs the
+// process to itself.
+//
+// The subtests of a serial test run one at a time, inside the calls to
+// [T.Run] that start them, under the same hold. Calling Serial again, from the
+// test or from one of its subtests, does nothing.
+func (t *T) Serial() {
+	c := t.common.barrierHolder()
+	if c == nil {
+		// The root test: nothing else runs to be serialized against.
+		return
+	}
+	switch c.barrierHeld {
+	case barrierExclusive:
+		return
+	case barrierShared:
+		serialBarrier.RUnlock()
+	}
+	serialBarrier.Lock()
+	c.barrierHeld = barrierExclusive
+	serialExclusive.Store(true)
+}
+
+// inSerialTree reports whether this test, or a test above it, holds the
+// barrier exclusively. A parent that holds it shared does not count: that
+// parent releases its hold before its parallel subtests run.
+func (c *common) inSerialTree() bool {
+	h := c.barrierHolder()
+	return h != nil && h.barrierHeld == barrierExclusive
+}
+
+// ownsBarrierHold reports whether this test runs in parallel under a hold of
+// its own. The root holds nothing. A synctest bubble and the subtree of a
+// serial test run inside their parent's body, under the parent's hold. So
+// does every test under a root that is not running under tRunner - a
+// hand-made root in this package's tests - because only tRunner releases
+// parallel subtests, and such a root may allow no parallelism at all. A
+// parent with no barrier (fuzzing, and some hand-made roots) never releases
+// them either.
+func (t *T) ownsBarrierHold() bool {
+	if t.parent == nil || t.parent.barrier == nil || t.isSynctest || t.common.inSerialTree() {
+		return false
+	}
+	root := t.parent
+	for root.parent != nil {
+		root = root.parent
+	}
+	return root.runner != ""
+}
+
+// acquireBarrier takes the shared hold the test's function body runs under.
+func (t *T) acquireBarrier() {
+	if !t.ownsBarrierHold() {
+		return
+	}
+	serialBarrier.RLock()
+	t.barrierHeld = barrierShared
+}
+
+// releaseBarrier drops whichever hold the test ended up with.
+func (t *T) releaseBarrier() {
+	held := t.barrierHeld
+	t.barrierHeld = barrierNone
+	switch held {
+	case barrierShared:
+		serialBarrier.RUnlock()
+	case barrierExclusive:
+		serialExclusive.Store(false)
+		serialBarrier.Unlock()
+	}
+}
 
 // Parallel signals that this test is to be run in parallel with (and only with)
 // other parallel tests, and pauses until all non-parallel tests have finished.
+//
+// Tests are already parallel by default, so calling this is redundant and does
+// nothing. [T.Serial] is the opt out, and inside a serial test Parallel does
+// nothing either: the subtests of a serial test run one at a time.
 //
 // When a test is run multiple times due to use of -test.count or -test.cpu,
 // multiple instances of a single test never run in parallel with each other.
 func (t *T) Parallel() {
 	if t.isParallel {
-		panic("testing: t.Parallel called multiple times")
+		return
 	}
 	if t.isSynctest {
 		panic("testing: t.Parallel called inside synctest bubble")
 	}
-	if t.denyParallel {
-		panic(parallelConflict)
+	if t.common.inSerialTree() {
+		return
 	}
 	if t.parent.barrier == nil {
 		// T.Parallel has no effect when fuzzing.
@@ -1982,26 +2093,18 @@ func checkParallel(t *T) {
 }
 
 func (t *T) checkParallel() {
-	// Non-parallel subtests that have parallel ancestors may still
-	// run in parallel with other tests: they are only non-parallel
-	// with respect to the other subtests of the same parent.
-	// Since calls like SetEnv or Chdir affects the whole process, we need
-	// to deny those if the current test or any parent is parallel.
-	for c := &t.common; c != nil; c = c.parent {
-		if c.isParallel {
-			panic(parallelConflict)
-		}
-	}
-
-	t.denyParallel = true
+	// SetEnv and Chdir affect the whole process, so the test needs the process
+	// to itself. Taking the barrier is what gives it that.
+	t.Serial()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
 // restore the environment variable to its original value
 // after the test.
 //
-// Because Setenv affects the whole process, it cannot be used
-// in parallel tests or tests with parallel ancestors.
+// Because Setenv affects the whole process, it takes the serial barrier: the
+// test runs alone from this call until it returns, as if it had called
+// [T.Serial].
 func (t *T) Setenv(key, value string) {
 	t.checkParallel()
 	t.common.Setenv(key, value)
@@ -2011,8 +2114,9 @@ func (t *T) Setenv(key, value string) {
 // working directory to its original value after the test. On Unix, it
 // also sets PWD environment variable for the duration of the test.
 //
-// Because Chdir affects the whole process, it cannot be used
-// in parallel tests or tests with parallel ancestors.
+// Because Chdir affects the whole process, it takes the serial barrier: the
+// test runs alone from this call until it returns, as if it had called
+// [T.Serial].
 func (t *T) Chdir(dir string) {
 	t.checkParallel()
 	t.common.Chdir(dir)
@@ -2035,6 +2139,11 @@ func tRunner(t *T, fn func(t *T)) {
 	// a call to runtime.Goexit, record the duration and send
 	// a signal saying that the test is done.
 	defer func() {
+		// The function body is over, and the cleanup of a test without
+		// parallel subtests already ran under the hold. The parallel
+		// subtests below take holds of their own.
+		t.releaseBarrier()
+
 		t.checkRaces()
 
 		// Check if the test panicked or Goexited inappropriately.
@@ -2188,7 +2297,18 @@ func tRunner(t *T, fn func(t *T)) {
 		}
 	}()
 
+	// Parallel by default. A test that needs the process to itself calls
+	// t.Serial (or t.Setenv/t.Chdir, which take the barrier for it), and its
+	// subtests then run one at a time. Parallel charges the time before it to
+	// t.start, so t.start is set first. Only tRunner releases parallel
+	// subtests, so a parent that is not running under it (a hand-made root
+	// in this package's tests) runs its subtests inside Run.
 	t.start = highPrecisionTimeNow()
+	if t.ownsBarrierHold() {
+		t.Parallel()
+	}
+	t.acquireBarrier()
+
 	t.resetRaces()
 	fn(t)
 
