@@ -56,10 +56,9 @@ type Set uint
 //
 // linux/arm64 and darwin/amd64 are omitted because a default build should
 // not claim a host nothing verifies. darwin/amd64 is the sharper case: its
-// syscall surface is complete, but signal delivery is still a stub
-// (rt_sigaction returns success without installing a handler) and there is
-// no Intel-mac runner, so nothing there has ever been executed. An APE that
-// advertised it would announce a platform on which it has never run.
+// syscall and signal surfaces are implemented, but there is no Intel-mac
+// runner, so nothing there has ever been executed. An APE that advertised
+// it would announce a platform on which it has never run.
 //
 // Naming a platform in GOCOSMOPLATFORMS still selects it. This changes what
 // silence means, not what is reachable.

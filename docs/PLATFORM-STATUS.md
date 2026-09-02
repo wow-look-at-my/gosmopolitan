@@ -186,11 +186,10 @@ installing anything, so no handler the runtime set was ever present. The
 (`internal/runtime/syscall/cosmo`) had the identical stub and closed the same
 day, with its own trampoline: the runtime's dispatches through
 `runtime·sigtramp` and would run the runtime's handler rather than the
-caller's. What is
-still incomplete is the sigset-width bridge in `darwinSigprocmask`: the mask
-path translates `how` and then hands a kernel that reads a 4-byte Apple
-sigset the 8-byte Linux one. Thread creation joined the closed list via
-bsdthread_create, and parking via a polled wait since XNU has no futex.
+caller's. `darwinSigprocmask` translates `how` and bridges the sigset width
+(8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread
+creation joined the closed list via bsdthread_create, and parking via a
+polled wait since XNU has no futex.
 There is still no
 Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
 and is verified on real hardware.

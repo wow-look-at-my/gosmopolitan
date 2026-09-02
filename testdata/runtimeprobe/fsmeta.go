@@ -120,21 +120,43 @@ func checkFsMeta() {
 		}
 	}
 
-	// linkat. A hard link is one inode under two names, so the size the
-	// new name reports is what proves the link is the same file rather
-	// than a copy.
+	// linkat. A hard link is one inode under two names. SameFile compares
+	// the identity (inode, or the NT file index), which a copy of the same
+	// size cannot fake.
 	link := filepath.Join(dir, "hard")
 	if s.do("Link", os.Link(path, link)) {
-		if fi, err := os.Stat(link); err == nil && fi.Size() != 3 {
-			s.do("Link size", fmt.Errorf("size %d, want 3", fi.Size()))
+		a, errA := os.Stat(path)
+		b, errB := os.Stat(link)
+		switch {
+		case errA != nil:
+			s.do("Link stat", errA)
+		case errB != nil:
+			s.do("Link stat", errB)
+		case !os.SameFile(a, b):
+			s.do("Link identity", fmt.Errorf("%s is not the same file as %s", link, path))
 		}
 	}
 
 	// fchdir. The working directory is process-wide and checkWd asserts
-	// against it, so the original is restored before returning.
+	// against it, so the original is restored before returning. Getwd
+	// proves the directory changed; a stub that returns 0 does not pass.
 	if wd, err := os.Getwd(); err == nil {
 		if d, err := os.Open(dir); err == nil {
-			s.do("Fchdir", syscall.Fchdir(int(d.Fd())))
+			if s.do("Fchdir", syscall.Fchdir(int(d.Fd()))) {
+				got, err := os.Getwd()
+				if err == nil {
+					got, err = filepath.EvalSymlinks(got)
+				}
+				want, werr := filepath.EvalSymlinks(dir)
+				switch {
+				case err != nil:
+					s.do("Fchdir getwd", err)
+				case werr != nil:
+					s.do("Fchdir getwd", werr)
+				case got != want:
+					s.do("Fchdir getwd", fmt.Errorf("wd %q after Fchdir, want %q", got, want))
+				}
+			}
 			d.Close()
 			if err := os.Chdir(wd); err != nil {
 				fail("fsmeta", "restore wd %q: %v", wd, err)

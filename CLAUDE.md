@@ -108,8 +108,8 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 # through the PE header - there is no windows payload). UNSET selects the
 # three supported platforms, linux/amd64 + darwin/arm64 + windows/amd64, not
 # all five: linux/arm64 and darwin/amd64 stay selectable but a default build
-# does not claim them, because nothing verifies either and darwin/amd64's
-# runtime bring-up is incomplete (clone is ENOSYS). An unknown token, an
+# does not claim them, because nothing verifies either: there is no runner
+# for linux/arm64 or darwin/amd64. An unknown token, an
 # empty list, or a platform whose payload is missing fails the build; a
 # selection that needs one architecture skips the sibling build entirely and
 # is still stripped and given its sidecar. NOT a size win by itself: the APE

@@ -5649,7 +5649,7 @@ one command with `-buildvcs=false -ldflags=-buildid=`:
 
 | selection | payloads | bytes | vs fat |
 |---|---|---|---|
-| unrestricted (all five) | amd64+arm64 | 5,796,992 | - |
+| all five (explicit; the default at the time of measurement) | amd64+arm64 | 5,796,992 | - |
 | linux/amd64,darwin/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
 | linux/amd64,linux/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
 | linux/amd64,windows/amd64 | amd64 | 3,072,000 | -47.0% |
@@ -6328,11 +6328,12 @@ got far enough to hit one.
 `cosmoape.Default()` was every row in the table. It is now
 linux/amd64 + darwin/arm64 + windows/amd64, by operator decision, and
 the reasoning holds up on its own: a default build should not claim a
-host nothing verifies. darwin/amd64 is the sharp case - its runtime
-bring-up is incomplete (`clone` is ENOSYS, so the process dies at the
-first `newosproc`) and there is no Intel-mac runner, so an APE that
-advertised it announced a platform it cannot run on. linux/arm64 has no
-runner either.
+host nothing verifies. darwin/amd64 is the sharp case - at the time of
+this decision its runtime bring-up was incomplete (`clone` was ENOSYS, so
+the process died at the first `newosproc`; closed the same day via
+bsdthread_create), and there is no Intel-mac runner, so an APE that
+advertised it announced a platform on which it has never run. linux/arm64
+has no runner either.
 
 `all` keeps all five rows. Naming either dropped platform in
 GOCOSMOPLATFORMS still selects it and still works exactly as before.

@@ -416,6 +416,7 @@ func captureStderr(t *testing.T, fn func()) string {
 func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
+	holdQuietWindowOpen(t)
 	t.Setenv(CacheDebugEnv, "")
 	t.Setenv("CI", "true")
 
@@ -442,6 +443,7 @@ func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	f.failPuts = true
 	configureShared(t, srv)
+	holdQuietWindowOpen(t)
 	t.Setenv(CacheDebugEnv, "")
 	t.Setenv("CI", "true")
 
@@ -481,6 +483,7 @@ func TestSharedCache_OutsideCIAlwaysReports(t *testing.T) {
 func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
+	holdQuietWindowOpen(t)
 	t.Setenv(CacheDebugEnv, "1")
 	t.Setenv("CI", "true")
 
@@ -491,6 +494,16 @@ func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
 	if !strings.Contains(out, "cacheprog:") {
 		t.Fatalf("GOCACHEDEBUG=1 must report the tier's trouble, got:\n%s", out)
 	}
+}
+
+// holdQuietWindowOpen moves the deadline an hour ahead for one test. The
+// tests of what the window DOES must not depend on today's date; only
+// TestSharedCache_QuietWindowExpires reads the real deadline.
+func holdQuietWindowOpen(t *testing.T) {
+	t.Helper()
+	saved := cacheQuietUntil
+	t.Cleanup(func() { cacheQuietUntil = saved })
+	cacheQuietUntil = time.Now().Add(time.Hour)
 }
 
 // The window ends by itself. Past the deadline a failing tier reports again

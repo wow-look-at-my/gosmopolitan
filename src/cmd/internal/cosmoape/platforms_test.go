@@ -17,8 +17,8 @@ import (
 // 16 files under `cosmo && amd64`, and os_cosmo_nt_arm64.go answers every entry
 // point with a throw. Those throws are safe ONLY because no APE this toolchain
 // emits can start on a Windows/arm64 host: `all` is the complete set of boot
-// mechanisms the linker knows how to write, Default() is all of it, and nothing
-// in it pairs windows with arm64. (The runtime holds up the other end - iswindows
+// mechanisms the linker knows how to write, Default() is a subset of it, and
+// nothing in it pairs windows with arm64. (The runtime holds up the other end - iswindows
 // is a constant false on arm64, so the compiler deletes the call sites.)
 //
 // Adding a row here without bringing up the matching runtime turns those throws
@@ -109,8 +109,8 @@ func TestParseRejects(t *testing.T) {
 // TestDefaultIsTheSupportedThree pins what a build with no
 // GOCOSMOPLATFORMS claims. The default is narrower than the table on
 // purpose: linux/arm64 and darwin/amd64 are selectable but not promised,
-// and darwin/amd64 in particular has an incomplete runtime (clone is
-// ENOSYS) and no CI runner, so a default build must not advertise it.
+// and darwin/amd64 in particular has never executed (no Intel-mac runner),
+// so a default build must not advertise it.
 //
 // Both arches are still required, because darwin/arm64 is in the set.
 // Narrowing the default is an accuracy change, not a size one.

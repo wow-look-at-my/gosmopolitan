@@ -42,7 +42,12 @@ func skipWithoutMacho(t *testing.T) {
 // This asserts the pairing in the direction the skips above cannot: a build
 // that quietly stopped emitting a header it should emit fails here.
 func TestMachoAbsentUnlessDarwinAMD64(t *testing.T) {
-	claimed := strings.Contains(string(first8K(t)), "darwin/amd64")
+	// The linker names the claimed platforms in the unsupported-host echo,
+	// and writes that echo only when some platform is left out. No echo
+	// means every platform is claimed, darwin/amd64 among them.
+	header := string(first8K(t))
+	claimed := !strings.Contains(header, "this binary was built for") ||
+		strings.Contains(header, "darwin/amd64")
 	assert.Equal(t, claimed, hasMacho(t),
 		"a Mach-O header must be present exactly when the APE claims darwin/amd64")
 }
