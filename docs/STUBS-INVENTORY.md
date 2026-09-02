@@ -16,14 +16,20 @@ wave implemented and the few calls Apple genuinely cannot serve. The
 amd64 half stands as written. The same wave closed the NT metadata
 syscalls Win32 can serve (Section 5a).
 
+The same wave also closed the macOS-Intel SYSCALL TABLE (Section 6b) and
+fixed the error-detection bug underneath it (Section 4.1b).
+
 **Scope note.** "Missing syscall" here means a call the host CAN serve
-that the emulation did not. It does not cover the two remaining PORTS —
-macOS-Intel (Section 4.1) and Windows/arm64 (Section 4.3) — where the
-gap is not a syscall table but a runtime bring-up: thread creation,
-parking, signals and the netpoller. Those are Section 8 items 2-4, and
-neither is reachable from CI as it stands (no Intel-mac and no
-Windows/arm64 runner), so neither can be written and verified the way
-this wave was.
+that the emulation did not. What remains after this wave is not that:
+
+- **macOS-Intel** has its syscall table now, but no runtime bring-up —
+  clone, futex and the netpoller are still ENOSYS (Section 3), and
+  nothing there is verified because there is no Intel-mac CI runner.
+- **Windows/arm64** (Section 4.3) is a port that does not exist: every
+  `nt*` function throws. Also no runner.
+
+Both are Section 8 items 2-4. Neither is a syscall table, and neither
+can be written and *proven* the way this wave was.
 
 ---
 
@@ -91,7 +97,8 @@ functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions** (lines 103, 243, 285). Per CLAUDE.md, macOS does not allow raw syscalls — "Code that uses raw `SYSCALL`/`SVC` instructions will crash with SIGSYS on macOS." So the entire amd64 darwin path is structurally broken, not just the missing syscalls. macOS-Intel runtime bring-up is untested per CLAUDE.md. |
+| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The amd64 design is therefore sound in principle — but macOS-Intel runtime bring-up (clone/futex/netpoller) is still absent, and there is no Intel-mac CI runner, so none of it is verified. Do not claim it works. |
+| 1b | same file, `darwin_error` (FIXED 2026-09-02, detection half) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`. The errno NUMBERING is still Apple's: the translation table is a DATA symbol in package runtime, and a data symbol cannot be pushed across packages the way `cosmo_xlat_errno_r0` is, so closing it needs a runtime-side entry point the amd64 dispatch can call. |
 | 2 | `src/runtime/os_cosmo_amd64.go:67-69` | `cosmoDarwinKqueueSupported` returns false: "macOS-Intel execution is not implemented: clone/futex are ENOSYS there". The netpoller is unsupported on amd64. |
 | 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented.** Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". |
 
@@ -189,6 +196,35 @@ brought this surface up, and the log records what it answered.
 
 ---
 
+## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
+
+The amd64 darwin dispatch carried 18 syscalls and answered everything
+else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod,
+fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid,
+setreuid, setregid, getpgid, and statfs/fstatfs (the last two through
+XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path
+applies, so a Linux-layout buffer is refused rather than overrun).
+`getpriority` applies the Linux `20-nice` bias, which the carry-flag
+convention makes unambiguous — the value alone cannot say whether the
+call failed.
+
+**Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the
+tree's own authority, not from memory. That mattered: statfs64 is 345,
+not the 338 recall suggested. Anything that file does not carry is
+deliberately absent rather than guessed — a wrong syscall number does
+not fail, it calls a DIFFERENT syscall. That is why the *at family
+(`linkat`, `symlinkat`, `fchmodat`, `fchownat`) and `utimensat` stay
+ENOSYS on amd64 while arm64 serves them: arm64 resolves by NAME through
+dlsym and never needs a number. `uname` stays ENOSYS for a different
+reason — XNU has no uname syscall at all; it is a libc function over
+sysctl. `sendfile` stays ENOSYS because Apple's argument order, its
+value-result count pointer and its untouched file offset need real
+control flow, which the arm64 Go slow path has and an assembly dispatch
+does not.
+
+This closes the syscall TABLE. It does not bring up macOS-Intel: see
+Section 4.1.
+
 ## 7. What this means
 
 - The macOS arm64 syscall surface is complete for everything the
@@ -206,14 +242,14 @@ brought this surface up, and the log records what it answered.
 1. ~~Implement the remaining darwin arm64 syscalls in
    `syscall6SlowDarwin`.~~ Done; see Section 6.
 2. Replace the amd64 darwin "return success" stubs (`darwin_nanosleep`,
-   `darwin_sigaction`, `rt_sigaction`) with real Syslib/dlsym-backed
-   implementations, or make them fail loudly instead of silently.
-3. Decide the fate of the amd64 darwin raw-XNU path: either bring up
-   macOS-Intel properly (Syslib-based, like arm64) or refuse to run
-   rather than crash with SIGSYS. Until then the macOS-Intel half of the
-   metadata wave is deliberately ENOSYS (`bigbuf_cosmo_amd64.go`): a
-   struct conversion cannot help a dispatch path the kernel answers with
-   SIGSYS, and pretending otherwise would hide item 3, not fix it.
+   `darwin_sigaction`, `rt_sigaction`) with real implementations, or make
+   them fail loudly instead of silently. These are now the largest
+   remaining lie in the tree.
+3. Bring up macOS-Intel: clone/futex/netpoller (Section 3), and give the
+   amd64 dispatch a runtime-side entry point so it can translate Apple
+   errnos (Section 4.1b). The syscall table itself is done (Section 6b).
+   None of this can be verified until an Intel-mac runner exists, which
+   is the honest blocker on the whole platform.
 4. Implement Windows/arm64, or refuse to boot on it.
 5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go`
    carries no cosmo build tag, so `io.Copy` from a file to a socket

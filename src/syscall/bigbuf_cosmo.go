@@ -6,7 +6,10 @@
 
 package syscall
 
-import "internal/runtime/syscall/cosmo"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
 
 // statfs, fstatfs and uname each fill a struct whose shape belongs to
 // the host. Apple's are far bigger than the Linux ones this package
@@ -35,6 +38,37 @@ func Uname(buf *Utsname) (err error) {
 		return darwinUname(buf)
 	}
 	return uname(buf)
+}
+
+// The size argument is not decoration. Both emulations refuse a buffer
+// smaller than the Apple struct - arm64 in Go, amd64 with a compare
+// ahead of the raw XNU call - so a caller that reached SYS_STATFS with a
+// Linux Statfs_t is refused instead of overrun.
+
+func darwinStatfsPath(path string, buf *Statfs_t) (err error) {
+	p, err := BytePtrFromString(path)
+	if err != nil {
+		return err
+	}
+	var ast cosmo.DarwinStatfs
+	_, _, e := Syscall(SYS_STATFS, uintptr(unsafe.Pointer(p)),
+		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	if e != 0 {
+		return errnoErr(e)
+	}
+	darwinStatfsToLinux(buf, &ast)
+	return nil
+}
+
+func darwinStatfsFd(fd int, buf *Statfs_t) (err error) {
+	var ast cosmo.DarwinStatfs
+	_, _, e := Syscall(SYS_FSTATFS, uintptr(fd),
+		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	if e != 0 {
+		return errnoErr(e)
+	}
+	darwinStatfsToLinux(buf, &ast)
+	return nil
 }
 
 // Apple mount flags (sys/mount.h) and the Linux statfs f_flags bits

@@ -11,39 +11,11 @@ import (
 	"unsafe"
 )
 
-// macOS statfs and uname: allocate the Apple-layout buffer here and
-// convert. See bigbuf_cosmo.go for why the emulation cannot do it.
-//
-// The size argument is not decoration. The emulation refuses a buffer
-// that is smaller than the Apple struct, so a caller that reached
-// SYS_STATFS with a Linux Statfs_t gets EINVAL instead of a two-kilobyte
-// write into 120 bytes.
-
-func darwinStatfsPath(path string, buf *Statfs_t) (err error) {
-	p, err := BytePtrFromString(path)
-	if err != nil {
-		return err
-	}
-	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_STATFS, uintptr(unsafe.Pointer(p)),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
-	}
-	darwinStatfsToLinux(buf, &ast)
-	return nil
-}
-
-func darwinStatfsFd(fd int, buf *Statfs_t) (err error) {
-	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_FSTATFS, uintptr(fd),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
-	}
-	darwinStatfsToLinux(buf, &ast)
-	return nil
-}
+// uname is the one big-buffer call that is arm64-only, so statfs sits
+// in bigbuf_cosmo.go and this does not. The arm64 emulation resolves
+// Apple's uname by NAME through dlsym; the amd64 one dispatches raw XNU
+// numbers, and XNU has no uname syscall at all - it is a libc function
+// over sysctl. See bigbuf_cosmo_amd64.go.
 
 func darwinUname(buf *Utsname) (err error) {
 	var aun cosmo.DarwinUtsname

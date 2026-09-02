@@ -29,6 +29,27 @@
 #define SYS_sigaltstack		131
 #define SYS_pselect6		270
 
+// Linux amd64 numbers for the metadata wave, as
+// syscall/zsysnum_cosmo_amd64.go records them.
+#define SYS_fsync		74
+#define SYS_truncate		76
+#define SYS_ftruncate		77
+#define SYS_fchdir		81
+#define SYS_fchmod		91
+#define SYS_fchown		93
+#define SYS_setuid		105
+#define SYS_setgid		106
+#define SYS_setreuid		113
+#define SYS_setregid		114
+#define SYS_getgroups		115
+#define SYS_setgroups		116
+#define SYS_getpgid		121
+#define SYS_statfs		137
+#define SYS_fstatfs		138
+#define SYS_getpriority		140
+#define SYS_setpriority		141
+#define SYS_chroot		161
+
 // macOS/XNU BSD syscall numbers (with SYSCALL_CLASS_UNIX prefix 0x2000000)
 #define XNU_exit		0x2000001	// BSD 1
 #define XNU_read		0x2000003	// BSD 3
@@ -46,6 +67,43 @@
 #define XNU_pread		0x2000099	// BSD 153
 #define XNU_pwrite		0x200009a	// BSD 154
 #define XNU_lseek		0x20000c7	// BSD 199
+
+// Metadata and credential syscalls (2026-09-02). Every BSD number here
+// is the one syscall/zsysnum_darwin_amd64.go records - the tree's own
+// authority for XNU numbering - not a remembered value. Anything whose
+// number that file does not carry is deliberately absent below rather
+// than guessed: a wrong number does not fail, it calls a DIFFERENT
+// syscall. That is why the *at family and utimensat stay ENOSYS here
+// while arm64 serves them (arm64 resolves by NAME through dlsym, so it
+// never needs a number at all).
+#define XNU_fchdir		0x200000d	// BSD 13
+#define XNU_mknod		0x200000e	// BSD 14
+#define XNU_setuid		0x2000017	// BSD 23
+#define XNU_chroot		0x200003d	// BSD 61
+#define XNU_getgroups		0x200004f	// BSD 79
+#define XNU_setgroups		0x2000050	// BSD 80
+#define XNU_fsync		0x200005f	// BSD 95
+#define XNU_setpriority		0x2000060	// BSD 96
+#define XNU_getpriority		0x2000064	// BSD 100
+#define XNU_fchown		0x200007b	// BSD 123
+#define XNU_fchmod		0x200007c	// BSD 124
+#define XNU_setreuid		0x200007e	// BSD 126
+#define XNU_setregid		0x200007f	// BSD 127
+#define XNU_getpgid		0x2000097	// BSD 151
+#define XNU_setgid		0x20000b5	// BSD 181
+#define XNU_getrlimit		0x20000c2	// BSD 194
+#define XNU_setrlimit		0x20000c3	// BSD 195
+#define XNU_truncate		0x20000c8	// BSD 200
+#define XNU_ftruncate		0x20000c9	// BSD 201
+#define XNU_sendfile		0x2000151	// BSD 337
+#define XNU_statfs64		0x2000159	// BSD 345
+#define XNU_fstatfs64		0x200015a	// BSD 346
+
+// The Apple struct statfs the syscall package allocates on the
+// emulation's behalf (bigbuf_cosmo.go). Its size travels in a3 so a
+// caller that arrived with a Linux-layout buffer is refused instead of
+// overrun - the same fail-closed guard the arm64 path applies in Go.
+#define APPLE_STATFS_SIZE	2168
 
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers R11
@@ -162,6 +220,42 @@ syscall6_darwin:
 	JEQ	darwin_pwrite
 	CMPQ	R11, $SYS_lseek
 	JEQ	darwin_lseek
+	CMPQ	R11, $SYS_fsync
+	JEQ	darwin_fsync
+	CMPQ	R11, $SYS_ftruncate
+	JEQ	darwin_ftruncate
+	CMPQ	R11, $SYS_truncate
+	JEQ	darwin_truncate
+	CMPQ	R11, $SYS_fchmod
+	JEQ	darwin_fchmod
+	CMPQ	R11, $SYS_fchown
+	JEQ	darwin_fchown
+	CMPQ	R11, $SYS_fchdir
+	JEQ	darwin_fchdir
+	CMPQ	R11, $SYS_chroot
+	JEQ	darwin_chroot
+	CMPQ	R11, $SYS_getgroups
+	JEQ	darwin_getgroups
+	CMPQ	R11, $SYS_setgroups
+	JEQ	darwin_setgroups
+	CMPQ	R11, $SYS_setpriority
+	JEQ	darwin_setpriority
+	CMPQ	R11, $SYS_getpriority
+	JEQ	darwin_getpriority
+	CMPQ	R11, $SYS_setuid
+	JEQ	darwin_setuid
+	CMPQ	R11, $SYS_setgid
+	JEQ	darwin_setgid
+	CMPQ	R11, $SYS_setreuid
+	JEQ	darwin_setreuid
+	CMPQ	R11, $SYS_setregid
+	JEQ	darwin_setregid
+	CMPQ	R11, $SYS_getpgid
+	JEQ	darwin_getpgid
+	CMPQ	R11, $SYS_statfs
+	JEQ	darwin_statfs
+	CMPQ	R11, $SYS_fstatfs
+	JEQ	darwin_fstatfs
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
@@ -241,8 +335,7 @@ darwin_clock_gettime:
 	MOVQ	SI, DI		// timeval pointer (reuse timespec buffer)
 	MOVQ	$0, SI		// timezone = NULL
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JHI	darwin_error
+	JCS	darwin_error	// XNU signals failure with the carry flag
 	// Convert: timespec.tv_nsec = timeval.tv_usec * 1000
 	MOVQ	8(R12), AX	// tv_usec
 	IMULQ	$1000, AX	// convert to nsec
@@ -281,19 +374,128 @@ darwin_lseek:
 	MOVL	$XNU_lseek, AX
 	JMP	darwin_syscall
 
+darwin_fsync:
+	MOVL	$XNU_fsync, AX
+	JMP	darwin_syscall
+
+darwin_ftruncate:
+	MOVL	$XNU_ftruncate, AX
+	JMP	darwin_syscall
+
+darwin_truncate:
+	MOVL	$XNU_truncate, AX
+	JMP	darwin_syscall
+
+darwin_fchmod:
+	MOVL	$XNU_fchmod, AX
+	JMP	darwin_syscall
+
+darwin_fchown:
+	MOVL	$XNU_fchown, AX
+	JMP	darwin_syscall
+
+darwin_fchdir:
+	MOVL	$XNU_fchdir, AX
+	JMP	darwin_syscall
+
+darwin_chroot:
+	MOVL	$XNU_chroot, AX
+	JMP	darwin_syscall
+
+darwin_getgroups:
+	// gid_t is a 32-bit unsigned integer on both systems.
+	MOVL	$XNU_getgroups, AX
+	JMP	darwin_syscall
+
+darwin_setgroups:
+	MOVL	$XNU_setgroups, AX
+	JMP	darwin_syscall
+
+darwin_setpriority:
+	// PRIO_PROCESS/PRIO_PGRP/PRIO_USER are 0/1/2 on both systems.
+	MOVL	$XNU_setpriority, AX
+	JMP	darwin_syscall
+
+darwin_setuid:
+	MOVL	$XNU_setuid, AX
+	JMP	darwin_syscall
+
+darwin_setgid:
+	MOVL	$XNU_setgid, AX
+	JMP	darwin_syscall
+
+darwin_setreuid:
+	MOVL	$XNU_setreuid, AX
+	JMP	darwin_syscall
+
+darwin_setregid:
+	MOVL	$XNU_setregid, AX
+	JMP	darwin_syscall
+
+darwin_getpgid:
+	MOVL	$XNU_getpgid, AX
+	JMP	darwin_syscall
+
+// statfs/fstatfs fill an Apple struct statfs, which the syscall package
+// allocates and converts (bigbuf_cosmo.go). a3 carries that buffer's
+// size; anything smaller is refused rather than overrun.
+darwin_statfs:
+	CMPQ	DX, $APPLE_STATFS_SIZE
+	JB	darwin_enosys
+	MOVL	$XNU_statfs64, AX
+	JMP	darwin_syscall
+
+darwin_fstatfs:
+	CMPQ	DX, $APPLE_STATFS_SIZE
+	JB	darwin_enosys
+	MOVL	$XNU_fstatfs64, AX
+	JMP	darwin_syscall
+
+// getpriority is the one caller here that cannot read its own result.
+// XNU returns the nice value, where -1 is legal, and the LINUX SYSCALL
+// returns 20-nice so its result is never negative. The carry flag - not
+// the value - says whether the call failed, so the bias can be applied
+// unconditionally on the success path.
+darwin_getpriority:
+	MOVL	$XNU_getpriority, AX
+	SYSCALL
+	JCS	darwin_error
+	MOVQ	$20, R11
+	SUBQ	AX, R11
+	MOVQ	R11, AX		// r1 = 20 - nice
+	MOVQ	$0, BX		// r2
+	MOVQ	$0, CX		// errno = 0
+	RET
+
 darwin_syscall:
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JHI	darwin_error
+	JCS	darwin_error
 	// Success
 	MOVQ	DX, BX		// r2
 	MOVQ	$0, CX		// errno = 0
 	RET
 
+// XNU reports failure by SETTING THE CARRY FLAG and returning a
+// POSITIVE Apple errno - not the negative-return convention Linux uses,
+// which this path assumed until 2026-09-02. Under the old test a
+// failing call returned its errno as a plausible SUCCESS value (ENOENT
+// became a result of 2), and even a detected error carried Apple's
+// numbering into Go code that compares against Linux values.
+//
+// The detection half is fixed here: the carry flag decides.
+//
+// The NUMBERING half is not, and the errno below is still Apple's. The
+// translation table lives in package runtime (sys_cosmo_errno.s) and a
+// data symbol cannot be pushed across packages the way runtime's
+// cosmo_xlat_errno_r0 function is, so reaching it from here needs a
+// runtime-side entry point that does not exist yet. arm64 is unaffected
+// - it calls that function. Until then a macOS-Intel caller sees the
+// Apple number, which is wrong for the ~70 values that diverge but is
+// strictly better than the previous behavior, where a failure was
+// reported as SUCCESS carrying the errno as its result. Tracked in
+// docs/STUBS-INVENTORY.md section 4.
 darwin_error:
-	// Error: AX contains negative error code
-	NEGQ	AX
-	MOVQ	AX, CX		// errno
+	MOVQ	AX, CX		// errno (still APPLE numbering; see above)
 	MOVQ	$-1, AX		// r1 = -1
 	MOVQ	$0, BX		// r2 = 0
 	RET
