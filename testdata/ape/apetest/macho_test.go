@@ -14,8 +14,6 @@ import (
 
 const machoOffset = 0x2000
 
-// machoDDParams extracts the bs/skip/count of the Mach-O assimilation dd
-// command from the bootstrap script.
 // hasMacho reports whether this APE carries the Mach-O header at all. The
 // header boots the amd64 payload on macOS INTEL. macOS arm64 does not use it
 // - it boots through the compiled APE loader - so an APE that does not claim
@@ -49,6 +47,8 @@ func TestMachoAbsentUnlessDarwinAMD64(t *testing.T) {
 		"a Mach-O header must be present exactly when the APE claims darwin/amd64")
 }
 
+// machoDDParams extracts the bs/skip/count of the Mach-O assimilation dd
+// command from the bootstrap script.
 func machoDDParams(t *testing.T) (bs, skip, count int) {
 	t.Helper()
 	skipWithoutMacho(t)
