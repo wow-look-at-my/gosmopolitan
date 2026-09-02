@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && amd64
+//go:build cosmo
 
 // Windows NT async preemption and console control (wave 2 chunk D2).
 //
@@ -41,7 +41,7 @@
 //
 // Console control: SetConsoleCtrlHandler's callback runs on a thread
 // INJECTED by Windows - no g, no TLS, no Go. The asm handler
-// (ntCtrlTramp, sys_cosmo_nt_amd64.s) only sets a bit in ntCtrlMask,
+// (ntCtrlTramp, sys_cosmo_nt_<goarch>.s) only sets a bit in ntCtrlMask,
 // SetEvents ntCtrlEvent, and returns 1 (CTRL_C -> SIGINT, CTRL_BREAK
 // -> SIGQUIT) or blocks forever (CLOSE -> SIGHUP, LOGOFF/SHUTDOWN ->
 // SIGTERM - Windows kills the process the moment such a handler
@@ -65,19 +65,14 @@ package runtime
 
 import (
 	"internal/abi"
-	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
 
-const (
-	// CONTEXT_AMD64 | CONTEXT_CONTROL: capture SegSs/Rsp/SegCs/Rip/
-	// EFlags only. asyncPreempt saves everything else itself, so the
-	// suspended thread's other registers stay untouched.
-	_NT_CONTEXT_CONTROL = 0x100001
-
-	_NT_CURRENT_THREAD = ^uintptr(1) // GetCurrentThread() pseudo-handle (-2)
-)
+// _NT_CURRENT_THREAD is the GetCurrentThread() pseudo-handle (-2).
+// The CONTEXT flag word that goes with it is architecture-dependent:
+// _NT_CONTEXT_CONTROL, in os_cosmo_nt_ctx_<goarch>.go.
+const _NT_CURRENT_THREAD = ^uintptr(1)
 
 // ntSuspendLock protects simultaneous SuspendThread operations from
 // suspending each other (see the file comment).
@@ -220,19 +215,15 @@ func ntPreemptM(mp *m) {
 	unlock(&ntSuspendLock)
 
 	// Does it want a preemption and is it safe to preempt?
-	gp := ntGFromSP(mp, uintptr(c.rsp))
+	gp := ntGFromSP(mp, c.getSP())
 	if gp != nil && wantAsyncPreempt(gp) {
-		if ok, resumePC := isAsyncSafePoint(gp, uintptr(c.rip), uintptr(c.rsp), 0); ok {
-			// Inject a call to asyncPreempt: the same fake-CALL
-			// arrangement upstream PushCall performs - push the
-			// (possibly adjusted) resume PC, point RIP at the
-			// asyncPreempt entry. The stack write is a plain store
-			// from this thread; the target is suspended and goroutine
-			// stacks are ordinary memory.
-			sp := uintptr(c.rsp) - goarch.PtrSize
-			*(*uintptr)(unsafe.Pointer(sp)) = resumePC
-			c.rsp = uint64(sp)
-			c.rip = uint64(abi.FuncPCABI0(asyncPreempt))
+		if ok, resumePC := isAsyncSafePoint(gp, c.getPC(), c.getSP(), c.getLR()); ok {
+			// Inject a call to asyncPreempt: the fake-CALL
+			// arrangement upstream PushCall performs. The stack write
+			// inside pushCall is a plain store from this thread; the
+			// target is suspended and goroutine stacks are ordinary
+			// memory.
+			c.pushCall(abi.FuncPCABI0(asyncPreempt), resumePC)
 			ntcall(ntSetThreadContextFn, thread, uintptr(unsafe.Pointer(c)), 0, 0, 0, 0)
 		}
 	}
@@ -246,8 +237,8 @@ func ntPreemptM(mp *m) {
 	ntcall(ntCloseHandleFn, thread, 0, 0, 0, 0, 0)
 }
 
-// ntExit is the NT leg of runtime.exit (tail-jumped from the exit asm
-// in sys_cosmo_amd64.s). Disallow thread suspension for preemption
+// ntExit is the NT leg of runtime.exit (tail-jumped from the amd64
+// exit asm). Disallow thread suspension for preemption
 // before dying: otherwise ExitProcess and SuspendThread can race -
 // SuspendThread queues a suspension request for this thread,
 // ExitProcess kills the suspending thread, and then this thread
@@ -287,7 +278,7 @@ var ntCtrlEvent uintptr
 var ntCtrlMask uint32
 
 // ntCtrlTramp is the SetConsoleCtrlHandler callback (asm,
-// sys_cosmo_nt_amd64.s): Go-free, since it runs on an injected
+// sys_cosmo_nt_<goarch>.s): Go-free, since it runs on an injected
 // foreign thread.
 func ntCtrlTramp()
 

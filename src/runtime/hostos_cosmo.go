@@ -15,8 +15,8 @@ package runtime
 // which of a tool's platform branches to run - has had to infer it, and
 // every available inference is unreliable:
 //
-//   - syscall.Uname is ENOSYS on darwin hosts (the emulation dispatcher
-//     has no case for it) and on NT.
+//   - syscall.Uname is ENOSYS on macOS-Intel and on NT (the emulation
+//     dispatchers there have no case for it).
 //   - filesystem probes (/System/Library/CoreServices, /proc/self) are
 //     answered by whatever sandbox the process is running under. A macOS
 //     seatbelt profile that denies the first probe turns a Mac into a

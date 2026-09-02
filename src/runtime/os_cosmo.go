@@ -42,6 +42,10 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 		ntFutexsleep(addr, val, ns)
 		return
 	}
+	if isdarwin() {
+		darwinFutexsleep(addr, val, ns)
+		return
+	}
 	if ns < 0 {
 		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
 		return
@@ -52,6 +56,83 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, &ts, nil, 0)
 }
 
+// darwinFutexsleep is FUTEX_WAIT built out of a timed sleep, for XNU
+// hosts. XNU has no futex, and the primitives closest to one -
+// __ulock_wait and the psynch family - are not in this tree's syscall
+// table, so their numbers would have to be guessed; a wrong syscall
+// number does not fail, it calls a different syscall. What IS available
+// is a real sleep, so the wait is a poll of the word with a backoff.
+//
+// The futex contract permits this. A sleeper may wake spuriously, and
+// the only hard requirement is that it stops waiting once *addr leaves
+// val - which it observes on its own, without being signalled. So
+// darwinFutexwakeup has nothing to do; see futexwakeup.
+//
+// The cost is latency, bounded by maxSleepUsec: a waiter can sit up to
+// 5ms past the store that should have woken it. The backoff keeps an
+// idle M at 200 wakeups a second rather than the 50,000 a fixed 20us
+// poll would cost.
+//
+// Only cosmo/amd64 reaches this. cosmo/arm64 builds lock_sema.go and
+// parks on the Syslib's pthread condition variables instead
+// (os_cosmo_arm64_sema.go), which amd64 cannot do: the Syslib is the
+// ARM64 APE loader's, and there is no dlsym without it.
+//
+//go:nosplit
+func darwinFutexsleep(addr *uint32, val uint32, ns int64) {
+	const (
+		minSleepUsec = 20
+		maxSleepUsec = 5000
+	)
+	var deadline int64
+	if ns >= 0 {
+		deadline = nanotime() + ns
+	}
+	sleep := uint32(minSleepUsec)
+	for atomic.Load(addr) == val {
+		var left int64
+		if ns >= 0 {
+			left = deadline - nanotime()
+		}
+		d, expired := darwinFutexDelay(sleep, left, ns >= 0)
+		if expired {
+			return
+		}
+		usleep(d)
+		if sleep < maxSleepUsec {
+			sleep *= 2
+		}
+	}
+}
+
+// darwinFutexDelay decides one iteration of darwinFutexsleep's wait: how
+// long to sleep in microseconds, and whether the deadline has already
+// passed. leftNsec is the time remaining and is read only when timed.
+//
+// Split out because it is the only arithmetic here that can be wrong in
+// a way the host cannot show us - the poll loop around it needs a macOS
+// host, this does not.
+//
+//go:nosplit
+func darwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (usec uint32, expired bool) {
+	if !timed {
+		return sleep, false
+	}
+	if leftNsec <= 0 {
+		return 0, true
+	}
+	// Never overshoot the caller's deadline, and never round a nonzero
+	// remainder down to a no-op sleep that would spin the CPU.
+	if int64(sleep)*1000 > leftNsec {
+		d := uint32(leftNsec / 1000)
+		if d == 0 {
+			d = 1
+		}
+		return d, false
+	}
+	return sleep, false
+}
+
 // If any procs are sleeping on addr, wake up at most cnt.
 //
 //go:nosplit
@@ -60,6 +141,14 @@ func futexwakeup(addr *uint32, cnt uint32) {
 		// Every caller passes cnt==1 (see the wave-1 design in
 		// DEBUGGING.md), so WakeByAddressSingle suffices.
 		ntFutexwakeup(addr)
+		return
+	}
+	if isdarwin() {
+		// Nothing to signal. A darwin waiter polls the word
+		// (darwinFutexsleep), so the store this caller already made is
+		// what ends its wait. Before this branch existed, the ENOSYS
+		// from the asm stub fell through to the crash poke below on the
+		// first contended unlock on a macOS-Intel host.
 		return
 	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
@@ -395,11 +484,15 @@ func rtsigprocmask(how int32, new, old *sigset, size int32)
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
-	if isdarwin() && GOARCH == "arm64" {
+	if isdarwin() {
 		// Apple `how` values, sigset width and signal numbering all
-		// differ; darwinSigprocmask (signal_cosmo_xnu.go) translates.
-		// amd64 stays on its raw-XNU asm branch until the Intel-mac
-		// runtime bring-up.
+		// differ; darwinSigprocmask translates all three. Both arches
+		// now. The GOARCH == "arm64" guard that used to be here sent
+		// amd64 to rtsigprocmask's darwin branch, which translated
+		// `how` but passed the 8-byte Linux mask through untouched -
+		// so every mask it set named the wrong signals. arm64 goes
+		// through the Syslib (signal_cosmo_xnu.go), amd64 through the
+		// raw sigprocmask syscall (signal_cosmo_xnu_amd64.go).
 		darwinSigprocmask(how, new, old)
 		return
 	}
@@ -474,7 +567,7 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 // signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
 // sysSigaction calls the rt_sigaction system call (Linux hosts) or the
-// Apple sigaction translation layer (XNU hosts, arm64).
+// Apple sigaction translation layer (XNU hosts).
 //
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
@@ -484,7 +577,13 @@ func sysSigaction(sig uint32, new, old *sigactiont) {
 		// handler state itself and self-directed delivery consults
 		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
 		ret = ntSigaction(sig, new, old)
-	} else if isdarwin() && GOARCH == "arm64" {
+	} else if isdarwin() {
+		// Both arches now. The GOARCH == "arm64" guard that used to be
+		// here sent amd64 to rt_sigaction's darwin branch, which
+		// returned success WITHOUT INSTALLING ANYTHING - so every
+		// handler the runtime believed it had set was absent. arm64
+		// goes through the Syslib, amd64 through raw __sigaction with
+		// its own trampoline; both translate the same struct.
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
@@ -678,6 +777,90 @@ func runPerThreadSyscall() {
 	}
 
 	gp.m.needPerThreadSyscall.Store(0)
+}
+
+// syscall_runtime_doAllThreadsSyscall executes a system call on every M.
+// It is the linux port's driver (os_linux.go) over the cosmo syscall
+// entry, and it depends on the same three properties that one documents:
+// every existing OS thread has an M in allm, every M in allm gets a
+// thread, and a thread created after the read of allm clones from one
+// that already ran the call.
+//
+// On a darwin or NT host the call runs on the calling thread alone. XNU
+// keeps credentials per process, so one call is the process-wide change
+// the caller asked for, and neither host can deliver sigPerThreadSyscall
+// to another thread (darwinSignalM drops the realtime range; NT has no
+// cross-thread signal at all), so the wait below would never end there.
+//
+//go:linkname syscall_runtime_doAllThreadsSyscall syscall.runtime_doAllThreadsSyscall
+//go:uintptrescapes
+func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr) {
+	if isdarwin() || iswindows() {
+		return cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
+
+	// STW so user goroutines see an atomic change to thread state.
+	stw := stopTheWorld(stwAllThreadsSyscall)
+
+	// allocmLock prevents new Ms while this runs, and serializes callers.
+	allocmLock.lock()
+	acquirem()
+
+	r1, r2, errno := cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	if errno != 0 {
+		releasem(getg().m)
+		allocmLock.unlock()
+		startTheWorld(stw)
+		return r1, r2, errno
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{
+		trap: trap,
+		a1:   a1,
+		a2:   a2,
+		a3:   a3,
+		a4:   a4,
+		a5:   a5,
+		a6:   a6,
+		r1:   r1,
+		r2:   r2,
+	}
+
+	// Wait for every thread to set procid before any signal goes out, so
+	// no thread runs the call twice (once itself, once in a child it
+	// cloned after inheriting the state).
+	for mp := allm; mp != nil; mp = mp.alllink {
+		for atomic.Load64(&mp.procid) == 0 {
+			osyield()
+		}
+	}
+
+	gp := getg()
+	tid := gp.m.procid
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if atomic.Load64(&mp.procid) == tid {
+			continue
+		}
+		mp.needPerThreadSyscall.Store(1)
+		signalM(mp, sigPerThreadSyscall)
+	}
+
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if mp.procid == tid {
+			continue
+		}
+		for mp.needPerThreadSyscall.Load() != 0 {
+			osyield()
+		}
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{}
+
+	releasem(getg().m)
+	allocmLock.unlock()
+	startTheWorld(stw)
+
+	return r1, r2, errno
 }
 
 // futex is implemented in assembly

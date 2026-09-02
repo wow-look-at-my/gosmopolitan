@@ -66,6 +66,11 @@ code, run on this host via the `misc/cosmo` exec wrappers - the test binary
 is a thin cosmo APE that executes natively on linux. Runtime-package cosmo
 unit tests cover the Apple itimerval ABI pins + timeval translation behind
 the darwin SIGPROF setitimer dispatch, and the signal translation tables.
+Three named `syscall` tests run alongside them: the macOS statfs/utsname
+struct conversions, which live in package `syscall` because the Apple
+buffers are far past the emulation's nosplit budget. They are named
+rather than run as a package because syscall's own suite needs a real
+host surface, while these are pure struct rewriting.
 
 **Fork-divergence guardrails (go/build policy, moddeps, distpack naming).** go/build's
 structural tests are what keep a fork's edits honest across an upstream

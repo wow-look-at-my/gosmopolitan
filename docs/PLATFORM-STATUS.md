@@ -59,8 +59,17 @@ SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
 groups: SysProcAttr{Setpgid} spawns the child as its own group leader
 (CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
 group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
-probe CI-proves the conhost-injected handler chain end to end. Still
-missing on Windows: Windows/arm64 (the charter's step-one experiment
+probe CI-proves the conhost-injected handler chain end to end.
+
+File metadata followed (2026-09-02, the metadata wave): utimensat,
+truncate, fchdir and linkat over SetFileTime, SetEndOfFile,
+GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so
+os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The
+runtimeprobe fsmeta check is a hard assertion on this host too;
+docs/STUBS-INVENTORY.md section 5a lists what Windows still cannot
+serve, all of it absent from upstream's own windows port as well.
+
+Still missing on Windows: Windows/arm64 (the charter's step-one experiment
 ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic
 pre-main SIGSEGV at 0x2000c9000; see DEBUGGING.md's wave-4 verdict
 section - so native bring-up gains urgency), file/pipe dup(2)
@@ -128,8 +137,20 @@ waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
 counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
 returning from a nonblocking read(2) on the poller's wakeup pipe.
 The wave-9 "still missing on macOS hosts" backlog is now closed
-(sendmsg/recvmsg and SIGPROF profiling were its last entries); the
-remaining known macOS gaps are AllThreadsSyscall (Linux-only
+(sendmsg/recvmsg and SIGPROF profiling were its last entries).
+
+File metadata and system information followed (2026-09-02, the
+metadata wave): fsync, truncate/ftruncate, chmod/fchmod/fchmodat,
+chown/fchown/fchownat, fchdir, link/symlink, chtimes (utimensat),
+mkfifo, statfs/fstatfs, uname, getrlimit/setrlimit (prlimit64),
+get/setpriority, getpgid, get/setgroups, the uid/gid setters, chroot
+and sendfile. Everything the syscall package exposes and Apple can
+serve now works on macOS; docs/STUBS-INVENTORY.md section 6 lists what
+each one needed and the few Apple genuinely lacks (setresuid/setresgid,
+setfsuid/setfsgid, a directory-relative mknodat). The runtimeprobe
+fsmeta/sysinfo/sendfile checks are mandatory on macOS.
+
+The remaining known macOS gaps are AllThreadsSyscall (Linux-only
 rt-signal machinery, unused by the stdlib on cosmo) and the
 Intel-mac runtime bring-up below - see DEBUGGING.md.
 
@@ -153,7 +174,34 @@ gates it. Full forensics: DEBUGGING.md 2026-07-26.
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
 host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
-unit tests and apetest), but the darwin-amd64 runtime side (clone/futex/
-sigaction and friends) is still incomplete, and there is no Intel-mac CI
-runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel
-"works" until the runtime bring-up lands and is verified on real hardware.
+unit tests and apetest). The syscall surface closed on 2026-09-02: the
+metadata table, the XNU carry-flag error convention, Apple-to-Linux errno
+numbering, the kqueue/kevent netpoller and hw.ncpu. Signal INSTALLATION
+closed the same day: `darwinSigaction` translates the Linux `sigactiont` and
+issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its
+`sa_tramp`, the trampoline libc supplies for the arm64 path and a raw caller
+must supply itself. Before that the asm branch returned success without
+installing anything, so no handler the runtime set was ever present. The
+`syscall` package's own `rt_sigaction` emulation
+(`internal/runtime/syscall/cosmo`) had the identical stub and closed the same
+day, with its own trampoline: the runtime's dispatches through
+`runtime·sigtramp` and would run the runtime's handler rather than the
+caller's. `darwinSigprocmask` translates `how` and bridges the sigset width
+(8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread
+creation joined the closed list via bsdthread_create, and parking via a
+polled wait since XNU has no futex. Signal DELIVERY is closed too:
+`sigctxt` dispatches on the host and reads XNU's `user_ucontext64` (the
+mcontext is behind a pointer at offset 48, registers as
+`x86_thread_state64`) and `user64_siginfo` (`si_addr` at 24), the
+trampolines translate the Apple signal number to Linux's before Go sees
+it and pass the kernel's token back to `sigreturn(uctx, infostyle,
+token)`, `sigaltstack` translates Apple's `{sp, size, flags}` `stack_t`
+and `SS_DISABLE` (4, not 2), `raise`/`raiseproc`/`tgkill` send Apple
+numbers with `tgkill` issuing `__pthread_kill` on the mach port
+`m.procid` holds, `exitThread` is `bsdthread_terminate` rather than
+process exit, `osyield` is the `swtch_pri` mach trap, and the GS base is
+set to `&m.tls[0]-0x28` with no go1.8 `0x8a0` bias. Apple's SIGFPE
+`si_code` values are remapped to Linux's for sigpanic.
+There is still no
+Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
+and is verified on real hardware.

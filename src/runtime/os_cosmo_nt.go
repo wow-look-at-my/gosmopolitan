@@ -2,21 +2,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && amd64
+//go:build cosmo
 
-// Windows NT personality for cosmo/amd64 (wave 1).
+// Windows NT personality (wave 1).
 //
 // Everything in this file is gated on iswindows() (__hostos ==
 // _HOSTWINDOWS) and is inert until the NT boot stub (_rt0_cosmo_nt)
 // stops exiting early and joins the common boot with __hostos = 2.
 //
 // Foreign-call model: win64 functions are reached through
-// runtime·ntcall6 (sys_cosmo_nt_amd64.s), a SysV->win64 trampoline
+// runtime·ntcall6 (sys_cosmo_nt_<goarch>.s), a host-ABI trampoline
 // invoked via asmcgocall so the g0 stack switch and stack accounting
 // come for free. The function-pointer table is resolved at osArchInit
 // time from the two loader-filled IAT slots (GetProcAddress and
 // LoadLibraryA, rt0_cosmo_nt_amd64.s), mirroring the darwin port's
 // dlsym-at-osArchInit idiom.
+//
+// Windows/arm64 has no APE boot stub yet, so on arm64 nothing here is
+// reachable: iswindows() can never be true.
 //
 // Crash pokes (all *(addr) = addr stores, so the fault address names
 // the failure; same idiom as the 0xf1 pokes in sys_cosmo_amd64.s):
@@ -34,7 +37,6 @@ package runtime
 import (
 	"internal/abi"
 	"internal/runtime/atomic"
-	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
 
@@ -68,13 +70,20 @@ var (
 
 	// Wave 2 (file I/O, identity, console; all kernel32, all present
 	// since forever - resolved with the same crash-poke discipline).
-	ntGetLastErrorFn                 uintptr
-	ntCloseHandleFn                  uintptr
-	ntCreateFileWFn                  uintptr
-	ntReadFileFn                     uintptr
-	ntSetFilePointerExFn             uintptr
-	ntSetEndOfFileFn                 uintptr
-	ntFlushFileBuffersFn             uintptr
+	ntGetLastErrorFn     uintptr
+	ntCloseHandleFn      uintptr
+	ntCreateFileWFn      uintptr
+	ntReadFileFn         uintptr
+	ntSetFilePointerExFn uintptr
+	ntSetEndOfFileFn     uintptr
+	ntFlushFileBuffersFn uintptr
+	// The metadata wave's four (os_cosmo_nt_meta.go). All optional: a
+	// zero pointer answers ENOSYS at the use site rather than crashing
+	// the boot over a call most programs never make.
+	ntSetFileTimeFn                  uintptr
+	ntGetSystemTimeAsFileTimeFn      uintptr
+	ntGetFinalPathNameByHandleWFn    uintptr
+	ntCreateHardLinkWFn              uintptr
 	ntGetFileInformationByHandleFn   uintptr
 	ntGetFileInformationByHandleExFn uintptr
 	ntDeleteFileWFn                  uintptr
@@ -172,6 +181,10 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameSetFileTime       = []byte("SetFileTime\x00")
+	ntNameGetSysTimeAsFt    = []byte("GetSystemTimeAsFileTime\x00")
+	ntNameGetFinalPathW     = []byte("GetFinalPathNameByHandleW\x00")
+	ntNameCreateHardLinkW   = []byte("CreateHardLinkW\x00")
 	ntNameGetFileInfoByH    = []byte("GetFileInformationByHandle\x00")
 	ntNameGetFileInfoByHEx  = []byte("GetFileInformationByHandleEx\x00")
 	ntNameDeleteFileW       = []byte("DeleteFileW\x00")
@@ -232,6 +245,11 @@ const (
 
 	_NT_INFINITE = 0xFFFFFFFF
 
+	// GetCurrentProcess() pseudo-handle, and the DuplicateHandle
+	// option every caller of it uses.
+	_NT_CURRENT_PROCESS       = ^uintptr(0)
+	_NT_DUPLICATE_SAME_ACCESS = 0x2
+
 	_NT_STD_INPUT_HANDLE  = 0xFFFFFFF6 // (DWORD)-10, zero-extended
 	_NT_STD_OUTPUT_HANDLE = 0xFFFFFFF5 // (DWORD)-11, zero-extended
 	_NT_STD_ERROR_HANDLE  = 0xFFFFFFF4 // (DWORD)-12, zero-extended
@@ -275,7 +293,7 @@ type ntcallArgs10 struct {
 	ret uintptr
 }
 
-// Implemented in sys_cosmo_nt_amd64.s.
+// Implemented in sys_cosmo_nt_<goarch>.s.
 func ntcall6()
 func ntcall10()
 func tstart_cosmo_nt()
@@ -503,6 +521,16 @@ func ntResolve() {
 	if ntdll := ntcall(lla, uintptr(unsafe.Pointer(&ntNameNtdll[0])), 0, 0, 0, 0, 0); ntdll != 0 {
 		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
 	}
+	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate,
+	// fchdir, linkat. Every one of these has shipped in kernel32 since
+	// Vista at the latest, so a zero here means a host stranger than
+	// any this port targets - which is exactly why it degrades to
+	// ENOSYS instead of poking a crash address.
+	ntSetFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileTime[0])), 0, 0, 0, 0)
+	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
+	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
+	ntCreateHardLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateHardLinkW[0])), 0, 0, 0, 0)
+
 	if bp := ntcall(lla, uintptr(unsafe.Pointer(&ntNameBcryptPrimitives[0])), 0, 0, 0, 0, 0); bp != 0 {
 		ntProcessPrngFn = ntcall(gpa, bp, uintptr(unsafe.Pointer(&ntNameProcessPrng[0])), 0, 0, 0, 0)
 	}
@@ -643,17 +671,6 @@ func ntVirtualAlloc(v unsafe.Pointer, n uintptr, allocType, prot uintptr) unsafe
 //go:nosplit
 func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	return ntcall(ntVirtualFreeFn, uintptr(v), n, freeType, 0, 0, 0)
-}
-
-// ntSetSyscallFns installs the syscall-package hook table. Called from
-// osArchInit on NT hosts, before any user code runs. The composite
-// literal does not escape (SetWindowsFns copies it), so this is safe
-// pre-mallocinit. The dispatcher lives in os_cosmo_nt_sys.go.
-func ntSetSyscallFns() {
-	cosmo.SetWindowsFns(&cosmo.WindowsFns{
-		Emulate: ntSyscallEmulate,
-		Spawn:   ntSpawn,
-	})
 }
 
 // Command line and environment. The NT boot stub fabricates a

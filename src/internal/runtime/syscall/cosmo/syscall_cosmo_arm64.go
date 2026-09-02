@@ -93,6 +93,39 @@ type DarwinFns struct {
 	Wait4   uintptr
 	Kill    uintptr
 
+	// File and metadata layer (file_cosmo_arm64.go).
+	Fsync     uintptr
+	Ftruncate uintptr
+	Truncate  uintptr
+	Fchmod    uintptr
+	Fchmodat  uintptr
+	Fchown    uintptr
+	Fchownat  uintptr
+	Fchdir    uintptr
+	Linkat    uintptr
+	Symlinkat uintptr
+	Mknod     uintptr
+	Utimensat uintptr
+	Statfs    uintptr
+	Fstatfs   uintptr
+	Sendfile  uintptr
+
+	// Credential, priority and resource-limit layer
+	// (proc_cosmo_arm64.go).
+	Chroot      uintptr
+	Setuid      uintptr
+	Setgid      uintptr
+	Setreuid    uintptr
+	Setregid    uintptr
+	Getpgid     uintptr
+	Getgroups   uintptr
+	Setgroups   uintptr
+	Getpriority uintptr
+	Setpriority uintptr
+	Getrlimit   uintptr
+	Setrlimit   uintptr
+	Uname       uintptr
+
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
 	Getentropy  uintptr // Syslib v5+; sysret-wrapped (-errno on failure)
@@ -119,29 +152,56 @@ func SetDarwinFns(f *DarwinFns) {
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
 // fast-path numbers live in defs_cosmo_arm64.go.
 const (
-	sysGETCWD     = 17
-	sysDUP        = 23
-	sysMKDIRAT    = 34
-	sysUNLINKAT   = 35
-	sysRENAMEAT   = 38
-	sysFACCESSAT  = 48
-	sysCHDIR      = 49
-	sysGETDENTS64 = 61
-	sysREADV      = 65
-	sysWRITEV     = 66
-	sysPWRITE64   = 68
-	sysLSEEK      = 62
-	sysREADLINKAT = 78
-	sysNEWFSTATAT = 79
-	sysFSTAT      = 80
-	sysUMASK      = 166
-	sysGETPPID    = 173
-	sysGETUID     = 174
-	sysGETEUID    = 175
-	sysGETGID     = 176
-	sysGETEGID    = 177
-	sysRENAMEAT2  = 276
-	sysGETRANDOM  = 278
+	sysGETCWD      = 17
+	sysDUP         = 23
+	sysMKNODAT     = 33
+	sysMKDIRAT     = 34
+	sysUNLINKAT    = 35
+	sysSYMLINKAT   = 36
+	sysLINKAT      = 37
+	sysRENAMEAT    = 38
+	sysSTATFS      = 43
+	sysFSTATFS     = 44
+	sysTRUNCATE    = 45
+	sysFTRUNCATE   = 46
+	sysFACCESSAT   = 48
+	sysCHDIR       = 49
+	sysFCHDIR      = 50
+	sysCHROOT      = 51
+	sysFCHMOD      = 52
+	sysFCHMODAT    = 53
+	sysFCHOWNAT    = 54
+	sysFCHOWN      = 55
+	sysGETDENTS64  = 61
+	sysLSEEK       = 62
+	sysREADV       = 65
+	sysWRITEV      = 66
+	sysPWRITE64    = 68
+	sysSENDFILE    = 71
+	sysREADLINKAT  = 78
+	sysNEWFSTATAT  = 79
+	sysFSTAT       = 80
+	sysFSYNC       = 82
+	sysUTIMENSAT   = 88
+	sysSETPRIORITY = 140
+	sysGETPRIORITY = 141
+	sysSETREGID    = 143
+	sysSETGID      = 144
+	sysSETREUID    = 145
+	sysSETUID      = 146
+	sysGETPGID     = 155
+	sysGETGROUPS   = 158
+	sysSETGROUPS   = 159
+	sysUNAME       = 160
+	sysUMASK       = 166
+	sysGETPPID     = 173
+	sysGETUID      = 174
+	sysGETEUID     = 175
+	sysGETGID      = 176
+	sysGETEGID     = 177
+	sysPRLIMIT64   = 261
+	sysRENAMEAT2   = 276
+	sysGETRANDOM   = 278
 )
 
 // Errno values (Linux numbering) produced by the emulation itself.
@@ -411,6 +471,71 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFcntl(a1, a2, a3)
 	case sysGETRANDOM:
 		return darwinGetrandom(a1, a2)
+
+	// File and metadata syscalls whose Apple entries take the same
+	// arguments and give the same meaning to every value.
+	case sysFSYNC:
+		return darwinCall(darwinFns.Fsync, a1, 0, 0, 0, 0, 0)
+	case sysFTRUNCATE:
+		return darwinCall(darwinFns.Ftruncate, a1, a2, 0, 0, 0, 0)
+	case sysTRUNCATE:
+		return darwinCall(darwinFns.Truncate, a1, a2, 0, 0, 0, 0)
+	case sysFCHMOD:
+		return darwinCall(darwinFns.Fchmod, a1, a2, 0, 0, 0, 0)
+	case sysFCHMODAT:
+		// The Linux syscall has no flags argument (syscall.Fchmodat
+		// rejects a nonzero one); Apple's libc entry takes one, so
+		// pass 0.
+		return darwinCall(darwinFns.Fchmodat, darwinXlatDirfd(a1), a2, a3, 0, 0, 0)
+	case sysFCHOWN:
+		return darwinCall(darwinFns.Fchown, a1, a2, a3, 0, 0, 0)
+	case sysFCHOWNAT:
+		return darwinFchownat(a1, a2, a3, a4, a5)
+	case sysFCHDIR:
+		return darwinCall(darwinFns.Fchdir, a1, 0, 0, 0, 0, 0)
+	case sysLINKAT:
+		return darwinLinkat(a1, a2, a3, a4, a5)
+	case sysSYMLINKAT:
+		// symlinkat(target, newdirfd, linkpath): the target is a plain
+		// string, so only the second argument is a descriptor.
+		return darwinCall(darwinFns.Symlinkat, a1, darwinXlatDirfd(a2), a3, 0, 0, 0)
+	case sysMKNODAT:
+		return darwinMknodat(a1, a2, a3, a4)
+	case sysUTIMENSAT:
+		return darwinUtimensat(a1, a2, a3, a4)
+	case sysSENDFILE:
+		return darwinSendfile(a1, a2, a3, a4)
+	case sysSTATFS:
+		return darwinStatfs(darwinFns.Statfs, a1, a2, a3)
+	case sysFSTATFS:
+		return darwinStatfs(darwinFns.Fstatfs, a1, a2, a3)
+	case sysUNAME:
+		return darwinUname(a1, a2)
+
+	// Credentials, priority and resource limits.
+	case sysCHROOT:
+		return darwinCall(darwinFns.Chroot, a1, 0, 0, 0, 0, 0)
+	case sysSETUID:
+		return darwinCall(darwinFns.Setuid, a1, 0, 0, 0, 0, 0)
+	case sysSETGID:
+		return darwinCall(darwinFns.Setgid, a1, 0, 0, 0, 0, 0)
+	case sysSETREUID:
+		return darwinCall(darwinFns.Setreuid, a1, a2, 0, 0, 0, 0)
+	case sysSETREGID:
+		return darwinCall(darwinFns.Setregid, a1, a2, 0, 0, 0, 0)
+	case sysGETPGID:
+		return darwinCall(darwinFns.Getpgid, a1, 0, 0, 0, 0, 0)
+	case sysGETGROUPS:
+		// gid_t is a 32-bit unsigned integer on both systems.
+		return darwinCall(darwinFns.Getgroups, a1, a2, 0, 0, 0, 0)
+	case sysSETGROUPS:
+		return darwinCall(darwinFns.Setgroups, a1, a2, 0, 0, 0, 0)
+	case sysGETPRIORITY:
+		return darwinGetpriority(a1, a2)
+	case sysSETPRIORITY:
+		return darwinCall(darwinFns.Setpriority, a1, a2, a3, 0, 0, 0)
+	case sysPRLIMIT64:
+		return darwinPrlimit(a1, a2, a3, a4)
 
 	case sysSOCKET:
 		return darwinSocket(a1, a2, a3)

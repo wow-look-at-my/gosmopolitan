@@ -3,9 +3,18 @@
 # the platform selection from one that ignores it, so the probe is
 # load-bearing outside this repo: keep it working.
 
-# Unset: every platform the toolchain can emit boot support for.
+# Unset: the three supported platforms, NOT every row of the token table.
+# linux/arm64 and darwin/amd64 remain selectable but a default build does
+# not claim them - nothing verifies either, and darwin/amd64's runtime
+# bring-up is incomplete.
 go env GOCOSMOPLATFORMS
-stdout '^linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64$'
+stdout '^linux/amd64,darwin/arm64,windows/amd64$'
+
+# Both dropped platforms are still accepted when asked for by name.
+env GOCOSMOPLATFORMS=darwin/amd64,linux/arm64
+go env GOCOSMOPLATFORMS
+stdout '^linux/arm64,darwin/amd64$'
+env GOCOSMOPLATFORMS=
 
 # Set: the effective selection, in canonical order, not the raw string.
 env GOCOSMOPLATFORMS=windows/amd64,linux/amd64
