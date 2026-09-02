@@ -189,7 +189,19 @@ day, with its own trampoline: the runtime's dispatches through
 caller's. `darwinSigprocmask` translates `how` and bridges the sigset width
 (8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread
 creation joined the closed list via bsdthread_create, and parking via a
-polled wait since XNU has no futex.
+polled wait since XNU has no futex. Signal DELIVERY is closed too:
+`sigctxt` dispatches on the host and reads XNU's `user_ucontext64` (the
+mcontext is behind a pointer at offset 48, registers as
+`x86_thread_state64`) and `user64_siginfo` (`si_addr` at 24), the
+trampolines translate the Apple signal number to Linux's before Go sees
+it and pass the kernel's token back to `sigreturn(uctx, infostyle,
+token)`, `sigaltstack` translates Apple's `{sp, size, flags}` `stack_t`
+and `SS_DISABLE` (4, not 2), `raise`/`raiseproc`/`tgkill` send Apple
+numbers with `tgkill` issuing `__pthread_kill` on the mach port
+`m.procid` holds, `exitThread` is `bsdthread_terminate` rather than
+process exit, `osyield` is the `swtch_pri` mach trap, and the GS base is
+set to `&m.tls[0]-0x28` with no go1.8 `0x8a0` bias. Apple's SIGFPE
+`si_code` values are remapped to Linux's for sigpanic.
 There is still no
 Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
 and is verified on real hardware.

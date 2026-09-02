@@ -19,3 +19,11 @@ func XnuKsigactionLayout() (size, handler, tramp, mask, flags uintptr) {
 	return unsafe.Sizeof(s), unsafe.Offsetof(s.handler), unsafe.Offsetof(s.tramp),
 		unsafe.Offsetof(s.mask), unsafe.Offsetof(s.flags)
 }
+
+// XnuSigactionLayout reports the size and field offsets of Apple's
+// user64_sigaction, the old-action shape __sigaction copies out.
+func XnuSigactionLayout() (size, handler, mask, flags uintptr) {
+	var s xnuSigactiont
+	return unsafe.Sizeof(s), unsafe.Offsetof(s.handler),
+		unsafe.Offsetof(s.mask), unsafe.Offsetof(s.flags)
+}

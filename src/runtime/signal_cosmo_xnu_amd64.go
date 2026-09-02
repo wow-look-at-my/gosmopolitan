@@ -43,6 +43,22 @@ type xnuKsigactiont struct {
 	sa_flags   int32
 }
 
+// xnuSigactiont is Apple's user64_sigaction, the OLD action __sigaction
+// copies out (XNU kern_sig.c sigaction_kern_to_user64). It has no
+// sa_tramp: the kernel keeps the trampoline and never reports it back.
+type xnuSigactiont struct {
+	sa_handler uintptr
+	sa_mask    uint32
+	sa_flags   int32
+}
+
+// Apple sigaltstack flag values. SS_ONSTACK is 1 on both systems;
+// SS_DISABLE is 4 on Apple, 2 on Linux (_SS_DISABLE, os2_cosmo.go).
+const (
+	xnuSS_ONSTACK = 0x1
+	xnuSS_DISABLE = 0x4
+)
+
 // cosmoXnuSigtramp is in sys_cosmo_amd64.s. The KERNEL enters it - it is
 // never called from Go - so the declaration exists for asmdecl and for
 // taking its address.
@@ -67,7 +83,8 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 		}
 		return 0
 	}
-	var anew, aold xnuKsigactiont
+	var anew xnuKsigactiont
+	var aold xnuSigactiont
 	var anewp, aoldp uintptr
 	if new != nil {
 		// SIG_DFL (0) and SIG_IGN (1) coincide on both systems; a real
@@ -133,3 +150,72 @@ func darwinSigprocmask(how int32, new, old *sigset) {
 		old[1] = uint32(m >> 32)
 	}
 }
+
+// darwinSigaltstack implements sigaltstack on macOS-Intel: translate the
+// Linux stackt {sp, flags, pad, size} to and from Apple's user64_sigaltstack
+// {sp, size, flags} and SS_DISABLE (2 on Linux, 4 on Apple), then issue
+// the raw sigaltstack syscall. arm64 does the same over Apple libc
+// (signal_cosmo_xnu.go).
+//
+// Crashes on failure like the Linux asm path: a stack the kernel did not
+// take would surface later as a fault on the wrong stack.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func darwinSigaltstack(new, old *stackt) {
+	var anew, aold xnuStackt
+	var anewp, aoldp uintptr
+	if new != nil {
+		anew.ss_sp = *(*uintptr)(unsafe.Pointer(&new.ss_sp))
+		anew.ss_size = new.ss_size
+		var fl int32
+		if new.ss_flags&_SS_DISABLE != 0 {
+			fl |= xnuSS_DISABLE
+		}
+		if new.ss_flags&xnuSS_ONSTACK != 0 {
+			fl |= xnuSS_ONSTACK
+		}
+		anew.ss_flags = fl
+		anewp = uintptr(unsafe.Pointer(&anew))
+	}
+	if old != nil {
+		aoldp = uintptr(unsafe.Pointer(&aold))
+	}
+	if _, errno := cosmoXnuSyscall6(_XNU_sigaltstack, anewp, aoldp, 0, 0, 0, 0); errno != 0 {
+		throw("darwinSigaltstack: sigaltstack failed")
+	}
+	if old != nil {
+		// Uintptr store: stackt.ss_sp is *byte, but this can run in
+		// nowritebarrierrec contexts (same trick as setSignalstackSP).
+		*(*uintptr)(unsafe.Pointer(&old.ss_sp)) = aold.ss_sp
+		old.ss_size = aold.ss_size
+		var fl int32
+		if aold.ss_flags&xnuSS_DISABLE != 0 {
+			fl |= _SS_DISABLE
+		}
+		if aold.ss_flags&xnuSS_ONSTACK != 0 {
+			fl |= xnuSS_ONSTACK
+		}
+		old.ss_flags = fl
+	}
+}
+
+// sigaltstack dispatches on the host: Apple's stack_t layout and flag
+// values differ from Linux's, so the raw syscall path serves Linux and
+// NT hosts only.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func sigaltstack(new, old *stackt) {
+	if isdarwin() {
+		darwinSigaltstack(new, old)
+		return
+	}
+	sigaltstackLinux(new, old)
+}
+
+// sigaltstackLinux is the raw Linux sigaltstack syscall
+// (sys_cosmo_amd64.s); its NT branch is a no-op.
+//
+//go:noescape
+func sigaltstackLinux(new, old *stackt)

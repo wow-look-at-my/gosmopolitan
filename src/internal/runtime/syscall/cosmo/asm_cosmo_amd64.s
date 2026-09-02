@@ -715,10 +715,11 @@ xnusigaction_err:
 //	DX  sig (APPLE numbering)
 //	CX  info
 //	R8  ctx
+//	R9  token, which sigreturn needs back
 //
 // It calls the handler with the (sig, info, ctx) arguments a Linux
-// handler is entered with, then issues sigreturn, which the kernel
-// leaves to the trampoline.
+// handler is entered with, then issues sigreturn(uctx, infostyle,
+// token), which the kernel leaves to the trampoline.
 //
 // runtime·cosmoXnuSigtramp does not fit here: it drops the handler and
 // dispatches through runtime·sigtramp, which is right for the handlers
@@ -727,6 +728,7 @@ xnusigaction_err:
 // info and ctx keep their Apple layouts. Only the signal number can be
 // made to match what the caller asked for.
 TEXT ·sigactionTramp(SB),NOSPLIT,$32-0
+	MOVQ	R9, 8(SP)		// token, before R9 is reused
 	MOVL	SI, 24(SP)		// infostyle, before SI is reused
 	MOVQ	R8, 16(SP)		// ctx, likewise
 	MOVQ	DI, AX			// handler
@@ -750,6 +752,7 @@ sigactiontramp_sig:
 	CALL	AX
 	MOVQ	16(SP), DI		// ctx
 	MOVL	24(SP), SI		// infostyle
+	MOVQ	8(SP), DX		// token
 	MOVL	$XNU_sigreturn, AX
 	SYSCALL
 	INT	$3			// sigreturn does not return

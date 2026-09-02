@@ -46,6 +46,15 @@ type xnuKsigactiont struct {
 	flags   int32
 }
 
+// xnuSigactiont is Apple's user64_sigaction, the OLD action __sigaction
+// copies out (XNU kern_sig.c sigaction_kern_to_user64). It has no
+// tramp: the kernel keeps the trampoline and never reports it back.
+type xnuSigactiont struct {
+	handler uintptr
+	mask    uint32
+	flags   int32
+}
+
 // sigA2LTab maps an Apple signal number (index 1..31) to the Linux
 // number, 0 if there is none. sigactionTramp indexes it directly, which
 // is why the correspondence is a table here and a switch in
@@ -103,7 +112,8 @@ func darwinSigaction(sig, new, old, sigsetsize uintptr) (r1, errno uintptr) {
 		// Signal 0 maps to 0 and is not a signal to install on.
 		return ^uintptr(0), darwinEINVAL
 	}
-	var anew, aold xnuKsigactiont
+	var anew xnuKsigactiont
+	var aold xnuSigactiont
 	var anewp, aoldp unsafe.Pointer
 	if new != 0 {
 		lnew := (*linuxSigactiont)(unsafe.Pointer(new))

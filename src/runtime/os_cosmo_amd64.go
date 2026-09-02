@@ -93,6 +93,10 @@ func cosmoBsdthreadStart()
 //go:linkname cosmo_xlat_errno_ax
 func cosmo_xlat_errno_ax()
 
+// cosmoXlatErrno is the Go-callable form of cosmo_xlat_errno_ax
+// (sys_cosmo_amd64.s), so a test can pin the table.
+func cosmoXlatErrno(e uint32) uint32
+
 // cosmoDarwinNumCPU reads hw.ncpu through raw XNU __sysctl. amd64 has no
 // Syslib and so cannot call sysctlbyname the way arm64 does, but the
 // numeric MIB needs no name lookup: the syscall number and both MIB
@@ -122,6 +126,7 @@ func cosmoDarwinNumCPU() int32 {
 const (
 	_XNU_sigaction   = 0x2000000 | 46
 	_XNU_sigprocmask = 0x2000000 | 48
+	_XNU_sigaltstack = 0x2000000 | 53
 	_XNU_sysctl      = 0x2000000 | 202
 	_XNU_kqueue      = 0x2000000 | 362
 	_XNU_kevent      = 0x2000000 | 363
@@ -182,33 +187,43 @@ func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32,
 // pipe2 is implemented in sys_cosmo_amd64.s.
 func pipe2(flags int32) (r, w int32, errno int32)
 
-// minitProcid: Linux hosts use the tid. (The macOS-Intel runtime
-// bring-up is pending; gettid's darwin branch is a raw-XNU stub.)
-// NT (wave 2): GetCurrentThreadId, resolved at osArchInit - which
-// runs before m0's minit and long before any other thread starts.
-// Must agree with the SYS_GETTID emulation (os_cosmo_nt_sys.go).
-// Signal sends are still dropped on NT; the thread id becomes
-// load-bearing in the signals/preemption wave.
+// minitProcid: Linux hosts use the tid. macOS hosts use the thread's
+// mach port, which __pthread_kill (tgkill's darwin branch) addresses:
+// cosmoBsdthreadStart stores the port the kernel hands a new thread
+// before minit runs, and m0, which no bsdthread_create made, asks
+// thread_self_trap. NT (wave 2): GetCurrentThreadId, resolved at
+// osArchInit - which runs before m0's minit and long before any other
+// thread starts. Must agree with the SYS_GETTID emulation
+// (os_cosmo_nt_sys.go).
 //
 //go:nosplit
 func minitProcid() uint64 {
 	if iswindows() {
 		return uint64(uint32(ntcall(ntGetCurrentThreadIdFn, 0, 0, 0, 0, 0, 0)))
 	}
+	if isdarwin() {
+		if port := getg().m.procid; port != 0 {
+			return port
+		}
+		return uint64(cosmoMachThreadSelf())
+	}
 	return uint64(gettid())
 }
 
-// darwinSignalM: macOS-Intel execution is not implemented; keep the
-// pre-dispatch behavior (tgkill's asm has its own darwin branch).
+// cosmoMachThreadSelf is in sys_cosmo_amd64.s: the thread_self_trap mach
+// trap, returning this thread's port name. XNU hosts only.
+func cosmoMachThreadSelf() uint32
+
+// darwinSignalM sends sig (a LINUX signal number) to mp's thread. tgkill's
+// darwin branch translates the number and issues __pthread_kill on the
+// mach port in m.procid; a signal with no Apple number is dropped there.
 func darwinSignalM(mp *m, sig int) {
 	tgkill(getpid(), int(mp.procid), sig)
 }
 
-// sigaltstack is implemented in sys_cosmo_amd64.s (its darwin branch
-// is a raw-XNU stub; the Intel-mac runtime bring-up is pending).
-//
-//go:noescape
-func sigaltstack(new, old *stackt)
+// sigaltstack is a Go host dispatcher (signal_cosmo_xnu_amd64.go): it
+// translates Apple's stack_t on XNU hosts and issues the raw Linux
+// syscall (sigaltstackLinux, sys_cosmo_amd64.s) elsewhere.
 
 // setitimer is implemented in sys_cosmo_amd64.s (its raw-XNU darwin
 // branch is the pending Intel-mac bring-up path; arm64 dispatches to

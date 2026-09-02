@@ -46,3 +46,22 @@ func TestXnuKsigactionLayout(t *testing.T) {
 		}
 	}
 }
+
+// Apple's user64_sigaction, the OLD action __sigaction copies out
+// (XNU kern_sig.c sigaction_kern_to_user64): no sa_tramp, 16 bytes.
+func TestXnuSigactionLayout(t *testing.T) {
+	size, handler, mask, flags := cosmo.XnuSigactionLayout()
+	for _, f := range []struct {
+		name      string
+		got, want uintptr
+	}{
+		{"size", size, 16},
+		{"sa_handler", handler, 0},
+		{"sa_mask", mask, 8},
+		{"sa_flags", flags, 12},
+	} {
+		if f.got != f.want {
+			t.Errorf("xnuSigactiont %s = %d, want %d", f.name, f.got, f.want)
+		}
+	}
+}

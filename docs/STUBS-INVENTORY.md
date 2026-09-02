@@ -25,10 +25,14 @@ that the emulation did not. What remains after this wave is not that:
 - **macOS-Intel** is closed by that definition. The table, the errno
   convention and numbering, the netpoller, the CPU count, parking,
   nanosleep, thread creation and signal installation all landed
-  (Sections 2, 3, 4 and 6b). What is left is the sigprocmask
-  sigset-width bridge. Nothing there is verified: there is no Intel-mac
-  CI runner, so all of it was read and reasoned about and never
-  executed.
+  (Sections 2, 3, 4 and 6b), and so did signal DELIVERY: `sigctxt`
+  reads the XNU `user_ucontext64`/`x86_thread_state64`/`user64_siginfo`
+  layouts on darwin hosts, the trampoline translates the Apple signal
+  number and passes the sigreturn token back, `sigaltstack` translates
+  Apple's `stack_t`, `raise`/`kill`/`tgkill` send Apple numbers, and
+  `tgkill` is `__pthread_kill` on the thread's mach port. Nothing there
+  is verified: there is no Intel-mac CI runner, so all of it was read
+  and reasoned about and never executed.
 - **Windows/arm64** (Section 4.3) is a port, not a syscall table: every
   `nt*` stub is a Win32 call the amd64 side already makes in Go. Also no
   runner, and no APE boot path to reach it through.
@@ -89,7 +93,7 @@ functionality is missing.
 |---|----------|----------|
 | 1 | ~~`futex` darwin (amd64)~~ | The asm stub still answers ENOSYS, but nothing reaches it: `futexsleep`/`futexwakeup` branch on `isdarwin()` first (`os_cosmo.go`). XNU has no futex, and the primitives closest to one — `__ulock_wait` and the psynch family — are not in this tree's syscall table, so their numbers would have to be guessed. The wait is a poll of the word with a 20µs→5ms backoff instead, which the futex contract permits: a sleeper may wake spuriously, and it observes `*addr` leaving `val` on its own. The wake is therefore a no-op. Cost is latency, bounded by 5ms. **This also removed a live crash**: the ENOSYS used to fall through to `futexwakeup`'s crash poke on the first contended unlock on a macOS-Intel host. |
 | 2 | ~~`clone` darwin (amd64)~~ (FIXED 2026-09-02) | Was: ENOSYS, so `newosproc` threw and macOS-Intel could not start a second thread. XNU has no clone; it has `bsdthread_create` (360), which is exactly how **Go's own darwin port created threads until it moved to libc in Go 1.12**. That port is the ABI source — not a reconstruction: `PTHREAD_START_CUSTOM` (0x01000000), registration through `bsdthread_register` (366) at `osArchInit`, the kernel entering the new thread with `DX`=arg1, `CX`=arg2, `R8`=stack, and `bsdthread_terminate` (361) if the entry returns. Only two values reach the child, so `gp` is not passed: `newosproc` always passes `mp.g0` and the stub derives it from the m, as Go did; `newosproc0`'s nil m takes the same path the Linux child's `nog2` does. |
-| 2b | ~~`settls` darwin (amd64)~~ (FIXED 2026-09-02) | Was: `RET` — "TLS may need different handling". A silent no-op, so any darwin thread read `g` from whatever the GS base happened to point at. Nothing noticed while `clone` was ENOSYS and no second thread existed; it became load-bearing the moment one could. Now the `thread_fast_set_cthread_self` machdep call (0x3000003), biased by `0x8a0` (the kernel adds that to what it is handed) plus cosmo's own `0x28`, so `gs:0x28` lands on `m.tls[0]` exactly as the Linux path arranges. |
+| 2b | ~~`settls` darwin (amd64)~~ (FIXED 2026-09-02) | Was: `RET` — "TLS may need different handling". A silent no-op, so any darwin thread read `g` from whatever the GS base happened to point at. Nothing noticed while `clone` was ENOSYS and no second thread existed; it became load-bearing the moment one could. Now the `thread_fast_set_cthread_self` machdep call (0x3000003) with `&m.tls[0]-0x28`, so `gs:0x28` lands on `m.tls[0]` exactly as the Linux path arranges. The kernel stores the value it is handed as the GS base unchanged (`machine_thread_set_tsd_base`); the `0x8a0` go1.8 subtracted was that linker's own TLS offset, and applying it here pointed `gs:0x28` 0x8a0 bytes below the g slot. |
 | 3 | `src/runtime/sys_cosmo_arm64.s:1099-1101` (`futex` darwin) | Returns ENOSYS, and is unreachable: cosmo/arm64 builds `lock_sema.go`, not `lock_futex.go` (see the build tags), so it parks on the Syslib's pthread condition variables (`os_cosmo_arm64_sema.go`). That split is why macOS arm64 never hit the crash item 1 describes. |
 | 4 | `src/runtime/sys_cosmo_arm64.s:654-655` (`mincore` darwin) | Returns -1 (ENOSYS). "mincore not in Syslib". |
 | 5 | ~~`cosmoDarwinKqueue`/`cosmoDarwinKevent` on amd64~~ | Was: ENOSYS, on the reasoning that the poller needs Apple libc through a Syslib amd64 does not have. It needs no libc. `SYS_KQUEUE` (362) and `SYS_KEVENT` (363) are both in `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's 64-bit `struct kevent` (`netpoll_cosmo_xnu.go`), shared with arm64. Both are served by raw XNU syscall now, and `cosmoDarwinKqueueSupported` reports true. |
