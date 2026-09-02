@@ -6260,7 +6260,20 @@ wrong does not fail, it starts a thread on a bad stack.
 
 Windows/arm64 is a different shape again: every `nt*` stub is a Win32
 call the amd64 side already makes in Go, blocked on an arm64 `ntcall`
-trampoline. It is also unreachable - the APE has no windows/arm64 boot
-path (Windows boots the AMD64 payload through the PE header) and
-`GOCOSMOPLATFORMS` has no token for one. That file exists so the arm64
-build links.
+trampoline. It is also unreachable, and that was checked in the source
+rather than taken from a doc:
+
+- `cmd/internal/cosmoape`'s `all` is the complete list of boot
+  mechanisms the linker knows how to write, and `Default()` is all of
+  it. Five rows, none of them windows/arm64. There is no flag that adds
+  one, so no APE this toolchain emits can start on such a host.
+- `iswindows` is a constant `false` in `os_cosmo_nt_arm64.go`, so the
+  compiler deletes the NT branches in shared code outright. The throws
+  are not merely unvisited; their call sites do not survive compilation.
+
+Both facts are load-bearing for leaving those throws in place, so the
+first one is now a test - `TestPlatformTableIsClosed`, which the ubuntu
+leg already runs since it invokes that package with no `-run` filter.
+Adding a windows row for another arch without the runtime behind it
+fails there instead of turning up as a scheduler crash on a host that
+got far enough to hit one.
