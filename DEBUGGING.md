@@ -6185,14 +6185,47 @@ macOS-Intel runs - nothing reaches netpollinit while `clone` is ENOSYS.
 It is the removal of a second, wrong statement of the blocker. The real
 one is stated once, on `clone` and `futex`.
 
-**What is genuinely left, and why it is not a forward.** `futex` has no
-XNU counterpart; `__ulock_wait`/`__ulock_wake` is the closest thing and
-its numbers are not in the tree's table, so writing them would be
-guessing - and a wrong syscall number does not fail, it calls a
-different syscall. `clone` maps to `bsdthread_create` (360, which the
-table does carry), but the call is only usable after
-`bsdthread_register` installs a pthread entry point under an ABI
-contract nothing here can verify.
+## futex was a crash on macOS-Intel, and lock_sema is why arm64 escaped it
+
+`futex` returns ENOSYS on both darwin branches, and `futexwakeup` reacts
+to a negative return by printing and poking `0x1006` - a deliberate
+crash. So the first CONTENDED unlock on a macOS-Intel host killed the
+process. That is a stronger statement than "parking is missing".
+
+macOS arm64 never hit it, and the reason is one build tag:
+`lock_futex.go` is `(cosmo && !arm64) || ...` while `lock_sema.go` is
+`aix || (cosmo && arm64) || darwin || ...`. cosmo/arm64 parks on the
+Syslib's pthread condition variables (`os_cosmo_arm64_sema.go`) and
+never calls futex at all. amd64 cannot follow it there: the Syslib is
+the ARM64 APE loader's, and without it there is no dlsym.
+
+So `futexsleep` gets a darwin branch beside the NT one, and the wait is
+a poll of the word with a 20us -> 5ms backoff. **The futex contract
+permits this.** A sleeper may wake spuriously, and the only hard
+requirement is that it stops waiting once `*addr` leaves `val` - which
+it observes itself, unsignalled. `futexwakeup` therefore has nothing to
+do on darwin, and the store the caller already made is what ends the
+wait. The cost is latency, bounded by the 5ms cap; the backoff is what
+keeps an idle M at 200 wakeups a second instead of the 50,000 a fixed
+20us poll would cost.
+
+`__ulock_wait`/`__ulock_wake` would be the real primitive and is not
+used: its numbers are not in this tree's table, and a guessed syscall
+number does not fail, it calls a different syscall.
+
+The poll loop needs a macOS host to exercise, but its arithmetic does
+not, so `darwinFutexDelay` is split out and unit-tested
+(`TestCosmoDarwinFutexDelay`, wired into the ubuntu leg). Writing that
+test found a genuine collision between its own two rules: the 1us floor
+that stops a zero-length sleep IS an overshoot when under a microsecond
+remains. The floor wins - 1us of overshoot is below any timer resolution
+here, and the alternative is a wait that spins.
+
+**What is genuinely left on macOS-Intel is `clone`, and nothing else.**
+It maps to `bsdthread_create` (360, which the table does carry), but the
+call is only usable after `bsdthread_register` installs a pthread entry
+point under an ABI contract nothing here can verify - and getting that
+wrong does not fail, it starts a thread on a bad stack.
 
 Windows/arm64 is a different shape again: every `nt*` stub is a Win32
 call the amd64 side already makes in Go, blocked on an arm64 `ntcall`

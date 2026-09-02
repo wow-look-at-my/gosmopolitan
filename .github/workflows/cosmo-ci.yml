@@ -183,7 +183,7 @@ jobs:
           # GOOS=cosmo-only code, run on this host via the misc/cosmo exec wrappers (see docs/CI.md "build job").
           export PATH="$PWD/misc/cosmo:$PATH"
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
-          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig' runtime
+          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay' runtime
           # A list, not the whole package: syscall's suite needs a real host surface, while these are pure Apple-struct conversions the emulation cannot host-test.
           GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux' syscall
 

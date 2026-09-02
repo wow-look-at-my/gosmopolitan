@@ -177,7 +177,7 @@ host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
 unit tests and apetest). The syscall surface closed on 2026-09-02: the
 metadata table, the XNU carry-flag error convention, Apple-to-Linux errno
 numbering, the kqueue/kevent netpoller and hw.ncpu. What is still incomplete
-is thread creation and parking (clone/futex) and signal delivery (sigaction),
-and there is still no Intel-mac CI runner, so end-to-end execution there is
-UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
+is thread creation (clone) and signal delivery (sigaction) - parking joined
+the closed list, over a polled wait, since XNU has no futex - and there is
+still no Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
 and is verified on real hardware.

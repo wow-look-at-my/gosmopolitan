@@ -82,9 +82,9 @@ functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `src/runtime/sys_cosmo_amd64.s:843-844` (`futex` darwin) | Returns ENOSYS. macOS has no futex. |
-| 2 | `src/runtime/sys_cosmo_amd64.s:919-921` (`clone` darwin) | Returns ENOSYS. Comment: "Thread creation on macOS should use pthread_create". |
-| 3 | `src/runtime/sys_cosmo_arm64.s:1099-1101` (`futex` darwin) | Returns ENOSYS. Comment: "use dispatch_semaphore ... For now, return ENOSYS". |
+| 1 | ~~`futex` darwin (amd64)~~ | The asm stub still answers ENOSYS, but nothing reaches it: `futexsleep`/`futexwakeup` branch on `isdarwin()` first (`os_cosmo.go`). XNU has no futex, and the primitives closest to one — `__ulock_wait` and the psynch family — are not in this tree's syscall table, so their numbers would have to be guessed. The wait is a poll of the word with a 20µs→5ms backoff instead, which the futex contract permits: a sleeper may wake spuriously, and it observes `*addr` leaving `val` on its own. The wake is therefore a no-op. Cost is latency, bounded by 5ms. **This also removed a live crash**: the ENOSYS used to fall through to `futexwakeup`'s crash poke on the first contended unlock on a macOS-Intel host. |
+| 2 | `src/runtime/sys_cosmo_amd64.s` (`clone` darwin) | Returns ENOSYS. The last macOS-Intel gap. `bsdthread_create` is 360 in the tree's table, but it is only usable after `bsdthread_register` installs a pthread entry point under an ABI contract nothing here can check, so it is not written rather than guessed. |
+| 3 | `src/runtime/sys_cosmo_arm64.s:1099-1101` (`futex` darwin) | Returns ENOSYS, and is unreachable: cosmo/arm64 builds `lock_sema.go`, not `lock_futex.go` (see the build tags), so it parks on the Syslib's pthread condition variables (`os_cosmo_arm64_sema.go`). That split is why macOS arm64 never hit the crash item 1 describes. |
 | 4 | `src/runtime/sys_cosmo_arm64.s:654-655` (`mincore` darwin) | Returns -1 (ENOSYS). "mincore not in Syslib". |
 | 5 | ~~`cosmoDarwinKqueue`/`cosmoDarwinKevent` on amd64~~ | Was: ENOSYS, on the reasoning that the poller needs Apple libc through a Syslib amd64 does not have. It needs no libc. `SYS_KQUEUE` (362) and `SYS_KEVENT` (363) are both in `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's 64-bit `struct kevent` (`netpoll_cosmo_xnu.go`), shared with arm64. Both are served by raw XNU syscall now, and `cosmoDarwinKqueueSupported` reports true. |
 | 6 | ~~`cosmoDarwinNumCPU` on amd64~~ | Was: 0 ("no Syslib, so no sysctl access"), so `getCPUCount` fell back to 1. The numeric MIB needs no name lookup: `SYS___SYSCTL` is 202 in the same table, and `_CTL_HW`/`_HW_NCPU` are 6/3 in `runtime/os_darwin.go`'s own `getCPUCount`. Reads hw.ncpu directly now. |
@@ -243,10 +243,11 @@ Section 4.1.
   they hide failures. `time.Sleep` and signal handling on macOS-Intel
   silently do nothing.
 - The macOS-Intel (amd64) SYSCALL surface is closed: the table, the
-  error convention, the errno numbering, the netpoller and the CPU
-  count. What is left there is `clone` and `futex` — thread creation and
-  parking — neither of which XNU serves by a number this tree records.
-  None of it is verified, because there is no Intel-mac runner.
+  error convention, the errno numbering, the netpoller, the CPU count
+  and parking. What is left there is `clone` — thread creation — which
+  XNU serves only through a pthread registration contract this tree
+  cannot check. None of it is verified, because there is no Intel-mac
+  runner.
 - Windows/arm64 (Section 4.3) is entirely unimplemented and entirely
   unreachable: no APE boot path, no platform token. Its stubs exist to
   make the arm64 build link.
@@ -259,22 +260,20 @@ Section 4.1.
    `darwin_sigaction`, `rt_sigaction`) with real implementations, or make
    them fail loudly instead of silently. These are now the largest
    remaining lie in the tree.
-3. Bring up macOS-Intel. What is left is `clone` and `futex` — thread
-   creation and parking. Everything else that was filed under this
-   heading turned out to be a syscall with a known number and is done:
-   the table (Section 6b), the errno convention and numbering
-   (Section 4.1b/4.1c), the netpoller (Section 3.5) and the CPU count
-   (Section 3.6).
+3. Bring up macOS-Intel. **What is left is `clone` — thread creation,
+   and nothing else.** Everything else filed under this heading turned
+   out to be reachable and is done: the metadata table (Section 6b), the
+   error convention and errno numbering (Section 4.1b/4.1c), the
+   netpoller (Section 3.5), the CPU count (Section 3.6) and parking
+   (Section 3.1).
 
-   Neither remaining one is a forward. `futex` has no XNU counterpart at
-   all; the closest primitive, `__ulock_wait`/`__ulock_wake`, is not in
-   `syscall/zsysnum_darwin_amd64.go`, and a guessed syscall number does
-   not fail — it calls a different syscall. `clone` maps to
+   `clone` is the one that cannot be written honestly here. It maps to
    `bsdthread_create` (360, which the table does carry), but that call
    is only usable after `bsdthread_register` installs a pthread entry
-   point with an ABI contract no test here can check. Both stay ENOSYS
-   until an Intel-mac runner exists, which is the honest blocker on the
-   platform.
+   point under an ABI contract nothing in this tree can check — and
+   getting it wrong does not fail, it starts a thread on a bad stack.
+   It stays ENOSYS until an Intel-mac runner exists, which is the honest
+   blocker on the platform: none of the work above is verified either.
 4. Implement Windows/arm64, or refuse to boot on it. Note this is not a
    syscall gap and cannot be exercised today: there is no windows/arm64
    APE boot path and no `GOCOSMOPLATFORMS` token for one (Section 4.3).

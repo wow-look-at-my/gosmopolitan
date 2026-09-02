@@ -42,6 +42,10 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 		ntFutexsleep(addr, val, ns)
 		return
 	}
+	if isdarwin() {
+		darwinFutexsleep(addr, val, ns)
+		return
+	}
 	if ns < 0 {
 		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
 		return
@@ -52,6 +56,83 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, &ts, nil, 0)
 }
 
+// darwinFutexsleep is FUTEX_WAIT built out of a timed sleep, for XNU
+// hosts. XNU has no futex, and the primitives closest to one -
+// __ulock_wait and the psynch family - are not in this tree's syscall
+// table, so their numbers would have to be guessed; a wrong syscall
+// number does not fail, it calls a different syscall. What IS available
+// is a real sleep, so the wait is a poll of the word with a backoff.
+//
+// The futex contract permits this. A sleeper may wake spuriously, and
+// the only hard requirement is that it stops waiting once *addr leaves
+// val - which it observes on its own, without being signalled. So
+// darwinFutexwakeup has nothing to do; see futexwakeup.
+//
+// The cost is latency, bounded by maxSleepUsec: a waiter can sit up to
+// 5ms past the store that should have woken it. The backoff keeps an
+// idle M at 200 wakeups a second rather than the 50,000 a fixed 20us
+// poll would cost.
+//
+// Only cosmo/amd64 reaches this. cosmo/arm64 builds lock_sema.go and
+// parks on the Syslib's pthread condition variables instead
+// (os_cosmo_arm64_sema.go), which amd64 cannot do: the Syslib is the
+// ARM64 APE loader's, and there is no dlsym without it.
+//
+//go:nosplit
+func darwinFutexsleep(addr *uint32, val uint32, ns int64) {
+	const (
+		minSleepUsec = 20
+		maxSleepUsec = 5000
+	)
+	var deadline int64
+	if ns >= 0 {
+		deadline = nanotime() + ns
+	}
+	sleep := uint32(minSleepUsec)
+	for atomic.Load(addr) == val {
+		var left int64
+		if ns >= 0 {
+			left = deadline - nanotime()
+		}
+		d, expired := darwinFutexDelay(sleep, left, ns >= 0)
+		if expired {
+			return
+		}
+		usleep(d)
+		if sleep < maxSleepUsec {
+			sleep *= 2
+		}
+	}
+}
+
+// darwinFutexDelay decides one iteration of darwinFutexsleep's wait: how
+// long to sleep in microseconds, and whether the deadline has already
+// passed. leftNsec is the time remaining and is read only when timed.
+//
+// Split out because it is the only arithmetic here that can be wrong in
+// a way the host cannot show us - the poll loop around it needs a macOS
+// host, this does not.
+//
+//go:nosplit
+func darwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (usec uint32, expired bool) {
+	if !timed {
+		return sleep, false
+	}
+	if leftNsec <= 0 {
+		return 0, true
+	}
+	// Never overshoot the caller's deadline, and never round a nonzero
+	// remainder down to a no-op sleep that would spin the CPU.
+	if int64(sleep)*1000 > leftNsec {
+		d := uint32(leftNsec / 1000)
+		if d == 0 {
+			d = 1
+		}
+		return d, false
+	}
+	return sleep, false
+}
+
 // If any procs are sleeping on addr, wake up at most cnt.
 //
 //go:nosplit
@@ -60,6 +141,14 @@ func futexwakeup(addr *uint32, cnt uint32) {
 		// Every caller passes cnt==1 (see the wave-1 design in
 		// DEBUGGING.md), so WakeByAddressSingle suffices.
 		ntFutexwakeup(addr)
+		return
+	}
+	if isdarwin() {
+		// Nothing to signal. A darwin waiter polls the word
+		// (darwinFutexsleep), so the store this caller already made is
+		// what ends its wait. Before this branch existed, the ENOSYS
+		// from the asm stub fell through to the crash poke below on the
+		// first contended unlock on a macOS-Intel host.
 		return
 	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
