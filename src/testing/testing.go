@@ -706,6 +706,7 @@ type common struct {
 	finished    bool                 // Test function has completed.
 	inFuzzFn    bool                 // Whether the fuzz target, if this is one, is running.
 	isSynctest  bool
+	barrierHeld int8 // The serialBarrier hold this test owns: barrierNone, barrierShared or barrierExclusive.
 
 	chatty         *chattyPrinter // A copy of chattyPrinter, if the chatty flag is set.
 	bench          bool           // Whether the current test is a benchmark.
@@ -1017,14 +1018,7 @@ var (
 // may be called simultaneously from multiple goroutines.
 type T struct {
 	common
-	denyParallel bool
-	tstate       *testState // For running tests and subtests.
-
-	// barrierOwner is the top-level test whose serial-barrier hold covers this
-	// test; a top-level test owns its own. Nil when no barrier applies.
-	barrierOwner *T
-	barrierMu    sync.Mutex
-	barrierHeld  int // One of barrierNone, barrierShared, barrierExclusive.
+	tstate *testState // For running tests and subtests.
 }
 
 func (c *common) private() {}
@@ -1908,20 +1902,35 @@ func pcToName(pc uintptr) string {
 	return frame.Function
 }
 
-const parallelConflict = `testing: t.Parallel called after t.Serial`
-
 // serialBarrier orders a test that mutates process-wide state against every
-// other running test. Each top-level test holds it shared for the whole tree
-// below it; [T.Serial] upgrades that hold to exclusive, so the caller and its
-// subtests are the only test code running.
+// other running test. A test holds it shared while its function body runs;
+// [T.Serial] upgrades that hold to exclusive, so the caller and its subtests
+// are the only test code that runs.
+//
+// The hold never outlives the function body. A test that waits for its
+// parallel subtests holds nothing, because those subtests wait for a -parallel
+// slot, and a test that holds the barrier while it waits for a slot deadlocks
+// against a Serial caller that holds a slot while it waits for the barrier.
 var serialBarrier sync.RWMutex
 
 // Barrier hold states for common.barrierHeld.
 const (
-	barrierNone = iota
+	barrierNone int8 = iota
 	barrierShared
 	barrierExclusive
 )
+
+// barrierHolder returns the nearest test, this one included, that holds the
+// serial barrier, or nil. A subtest of a serial test and a synctest bubble
+// hold nothing of their own: an ancestor's exclusive hold covers them.
+func (c *common) barrierHolder() *common {
+	for ; c != nil; c = c.parent {
+		if c.barrierHeld != barrierNone {
+			return c
+		}
+	}
+	return nil
+}
 
 // Serial pauses until every other test has stopped, then runs the caller alone
 // until it returns. Tests are parallel by default, so this is how a test that
@@ -1929,50 +1938,38 @@ const (
 // package-level variable another test reads - declares that it needs the
 // process to itself.
 //
-// Calling it twice, or from several subtests of one test, is allowed: the tree
-// below a top-level test shares one hold.
+// The subtests of a serial test run one at a time, inside the calls to
+// [T.Run] that start them, under the same hold. Calling Serial again, from the
+// test or from one of its subtests, does nothing.
 func (t *T) Serial() {
-	owner := t.barrierOwner
-	if owner == nil {
-		// The root test, or a test running without the parallel machinery
-		// (fuzzing): nothing else is running to be serialized against.
+	c := t.common.barrierHolder()
+	if c == nil {
+		// The root test: nothing else runs to be serialized against.
 		return
 	}
-	owner.barrierMu.Lock()
-	defer owner.barrierMu.Unlock()
-	if owner.barrierHeld == barrierExclusive {
+	switch c.barrierHeld {
+	case barrierExclusive:
 		return
-	}
-	if owner.barrierHeld == barrierShared {
+	case barrierShared:
 		serialBarrier.RUnlock()
 	}
 	serialBarrier.Lock()
-	owner.barrierHeld = barrierExclusive
-	t.denyParallel = true
+	c.barrierHeld = barrierExclusive
 }
 
-// acquireBarrier takes the shared hold a top-level test runs its whole tree
-// under. Subtests inherit the hold rather than taking one of their own, so a
-// subtest calling Serial cannot deadlock against its own ancestors.
+// acquireBarrier takes the shared hold the test's function body runs under.
 func (t *T) acquireBarrier() {
-	if t.barrierOwner != t {
+	if t.parent == nil || t.isSynctest || t.common.barrierHolder() != nil {
 		return
 	}
 	serialBarrier.RLock()
-	t.barrierMu.Lock()
 	t.barrierHeld = barrierShared
-	t.barrierMu.Unlock()
 }
 
 // releaseBarrier drops whichever hold the test ended up with.
 func (t *T) releaseBarrier() {
-	if t.barrierOwner != t {
-		return
-	}
-	t.barrierMu.Lock()
 	held := t.barrierHeld
 	t.barrierHeld = barrierNone
-	t.barrierMu.Unlock()
 	switch held {
 	case barrierShared:
 		serialBarrier.RUnlock()
@@ -1985,7 +1982,8 @@ func (t *T) releaseBarrier() {
 // other parallel tests, and pauses until all non-parallel tests have finished.
 //
 // Tests are already parallel by default, so calling this is redundant and does
-// nothing. [T.Serial] is the opt out.
+// nothing. [T.Serial] is the opt out, and inside a serial test Parallel does
+// nothing either: the subtests of a serial test run one at a time.
 //
 // When a test is run multiple times due to use of -test.count or -test.cpu,
 // multiple instances of a single test never run in parallel with each other.
@@ -1996,8 +1994,8 @@ func (t *T) Parallel() {
 	if t.isSynctest {
 		panic("testing: t.Parallel called inside synctest bubble")
 	}
-	if t.denyParallel {
-		panic(parallelConflict)
+	if h := t.common.barrierHolder(); h != nil && h.barrierHeld == barrierExclusive {
+		return
 	}
 	if t.parent.barrier == nil {
 		// T.Parallel has no effect when fuzzing.
@@ -2103,15 +2101,16 @@ var errNilPanicOrGoexit = errors.New("test executed panic(nil) or runtime.Goexit
 func tRunner(t *T, fn func(t *T)) {
 	t.runner = callerName(0)
 
-	// Registered first so it runs last: the hold covers this test's subtests
-	// and cleanup, which later defers wait for. A no-op if never acquired.
-	defer t.releaseBarrier()
-
 	// When this goroutine is done, either because fn(t)
 	// returned normally or because a test failure triggered
 	// a call to runtime.Goexit, record the duration and send
 	// a signal saying that the test is done.
 	defer func() {
+		// The function body is over, and the cleanup of a test without
+		// parallel subtests already ran under the hold. The parallel
+		// subtests below take holds of their own.
+		t.releaseBarrier()
+
 		t.checkRaces()
 
 		// Check if the test panicked or Goexited inappropriately.
@@ -2266,13 +2265,15 @@ func tRunner(t *T, fn func(t *T)) {
 	}()
 
 	// Parallel by default. A test that needs the process to itself calls
-	// t.Serial (or t.Setenv/t.Chdir, which take the barrier for it).
-	if t.parent != nil && t.parent.barrier != nil && !t.isParallel && !t.isSynctest {
+	// t.Serial (or t.Setenv/t.Chdir, which take the barrier for it), and its
+	// subtests then run one at a time. Parallel charges the time before it to
+	// t.start, so t.start is set first.
+	t.start = highPrecisionTimeNow()
+	if t.parent != nil && !t.isSynctest && t.common.barrierHolder() == nil {
 		t.Parallel()
 	}
 	t.acquireBarrier()
 
-	t.start = highPrecisionTimeNow()
 	t.resetRaces()
 	fn(t)
 
@@ -2310,8 +2311,7 @@ func (t *T) Run(name string, f func(t *T)) bool {
 	// There's no reason to inherit this context from parent. The user's code can't observe
 	// the difference between the background context and the one from the parent test.
 	ctx, cancelCtx := context.WithCancel(context.Background())
-	owner := t.barrierOwner
-	sub := &T{
+	t = &T{
 		common: common{
 			barrier:    make(chan bool),
 			signal:     make(chan bool, 1),
@@ -2327,13 +2327,6 @@ func (t *T) Run(name string, f func(t *T)) bool {
 		},
 		tstate: t.tstate,
 	}
-	if owner == nil {
-		// A test whose parent is the root is top-level: it owns the hold its
-		// whole subtree runs under.
-		owner = sub
-	}
-	sub.barrierOwner = owner
-	t = sub
 	t.w = indenter{&t.common}
 	t.setOutputWriter()
 
