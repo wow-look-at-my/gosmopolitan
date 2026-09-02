@@ -266,6 +266,39 @@ var (
 	dlsymNameExecve  = []byte("execve\x00")
 	dlsymNameWait4   = []byte("wait4\x00")
 	dlsymNameKill    = []byte("kill\x00")
+
+	// File and metadata layer. arm64 has only the 64-bit-inode ABI, so
+	// stat/statfs entries carry no $INODE64 suffix the way the x86_64
+	// ones do.
+	dlsymNameFsync     = []byte("fsync\x00")
+	dlsymNameFtruncate = []byte("ftruncate\x00")
+	dlsymNameTruncate  = []byte("truncate\x00")
+	dlsymNameFchmod    = []byte("fchmod\x00")
+	dlsymNameFchmodat  = []byte("fchmodat\x00")
+	dlsymNameFchown    = []byte("fchown\x00")
+	dlsymNameFchownat  = []byte("fchownat\x00")
+	dlsymNameFchdir    = []byte("fchdir\x00")
+	dlsymNameLinkat    = []byte("linkat\x00")
+	dlsymNameSymlinkat = []byte("symlinkat\x00")
+	dlsymNameMknod     = []byte("mknod\x00")
+	dlsymNameUtimensat = []byte("utimensat\x00")
+	dlsymNameStatfs    = []byte("statfs\x00")
+	dlsymNameFstatfs   = []byte("fstatfs\x00")
+	dlsymNameSendfile  = []byte("sendfile\x00")
+
+	dlsymNameChroot      = []byte("chroot\x00")
+	dlsymNameSetuid      = []byte("setuid\x00")
+	dlsymNameSetgid      = []byte("setgid\x00")
+	dlsymNameSetreuid    = []byte("setreuid\x00")
+	dlsymNameSetregid    = []byte("setregid\x00")
+	dlsymNameGetpgid     = []byte("getpgid\x00")
+	dlsymNameGetgroups   = []byte("getgroups\x00")
+	dlsymNameSetgroups   = []byte("setgroups\x00")
+	dlsymNameGetpriority = []byte("getpriority\x00")
+	dlsymNameSetpriority = []byte("setpriority\x00")
+	dlsymNameGetrlimit   = []byte("getrlimit\x00")
+	dlsymNameSetrlimit   = []byte("setrlimit\x00")
+	dlsymNameUname       = []byte("uname\x00")
 )
 
 // cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2)
@@ -363,9 +396,39 @@ func osArchInit() {
 		Execve:        cosmoDlsym(&dlsymNameExecve[0]),
 		Wait4:         cosmoDlsym(&dlsymNameWait4[0]),
 		Kill:          cosmoDlsym(&dlsymNameKill[0]),
-		PthreadSelf:   __syslib.pthread_self,
-		Getentropy:    cosmoSyslibGetentropy(),
-		Close:         __syslib.close,
+
+		Fsync:     cosmoDlsym(&dlsymNameFsync[0]),
+		Ftruncate: cosmoDlsym(&dlsymNameFtruncate[0]),
+		Truncate:  cosmoDlsym(&dlsymNameTruncate[0]),
+		Fchmod:    cosmoDlsym(&dlsymNameFchmod[0]),
+		Fchmodat:  cosmoDlsym(&dlsymNameFchmodat[0]),
+		Fchown:    cosmoDlsym(&dlsymNameFchown[0]),
+		Fchownat:  cosmoDlsym(&dlsymNameFchownat[0]),
+		Fchdir:    cosmoDlsym(&dlsymNameFchdir[0]),
+		Linkat:    cosmoDlsym(&dlsymNameLinkat[0]),
+		Symlinkat: cosmoDlsym(&dlsymNameSymlinkat[0]),
+		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
+		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
+		Statfs:    cosmoDlsym(&dlsymNameStatfs[0]),
+		Fstatfs:   cosmoDlsym(&dlsymNameFstatfs[0]),
+		Sendfile:  cosmoDlsym(&dlsymNameSendfile[0]),
+
+		Chroot:      cosmoDlsym(&dlsymNameChroot[0]),
+		Setuid:      cosmoDlsym(&dlsymNameSetuid[0]),
+		Setgid:      cosmoDlsym(&dlsymNameSetgid[0]),
+		Setreuid:    cosmoDlsym(&dlsymNameSetreuid[0]),
+		Setregid:    cosmoDlsym(&dlsymNameSetregid[0]),
+		Getpgid:     cosmoDlsym(&dlsymNameGetpgid[0]),
+		Getgroups:   cosmoDlsym(&dlsymNameGetgroups[0]),
+		Setgroups:   cosmoDlsym(&dlsymNameSetgroups[0]),
+		Getpriority: cosmoDlsym(&dlsymNameGetpriority[0]),
+		Setpriority: cosmoDlsym(&dlsymNameSetpriority[0]),
+		Getrlimit:   cosmoDlsym(&dlsymNameGetrlimit[0]),
+		Setrlimit:   cosmoDlsym(&dlsymNameSetrlimit[0]),
+		Uname:       cosmoDlsym(&dlsymNameUname[0]),
+		PthreadSelf: __syslib.pthread_self,
+		Getentropy:  cosmoSyslibGetentropy(),
+		Close:       __syslib.close,
 	})
 }
 

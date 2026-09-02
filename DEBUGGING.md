@@ -6007,3 +6007,80 @@ line precedes the timeouts by minutes - so a cold fetch is not it either. What
 remains to explain is why a `go list` child under the fork takes more than 30s
 on that host when the same call takes under a second on linux. The check stays
 as a regression guard on the descriptor path it does cover.
+
+# 2026-09-02: the macOS metadata wave - every remaining darwin arm64 syscall
+
+`docs/STUBS-INVENTORY.md` section 6 listed the syscalls that fell
+through `syscall6SlowDarwin` to `darwinENOSYS`: everything to do with
+file metadata and system information. `os.File.Sync`, `os.Truncate`,
+`os.Chmod`, `os.Chtimes`, `os.Link`, `os.Symlink`, `syscall.Statfs`,
+`syscall.Uname`, `syscall.Getrlimit` and the credential getters all
+failed on macOS. The apetest path never called them, so CI stayed green
+over the whole gap.
+
+All of them are emulated now. The inventory carries the per-syscall
+table; what is worth keeping here is the three things that shaped the
+implementation.
+
+## The nosplit budget decides where a conversion can live
+
+The dispatch spine runs after `entersyscall`, so every handler on it is
+`//go:nosplit` and a stack split there is a fatal "stack split at bad
+time". That is a hard ceiling on a handler's frame, and Apple's
+`struct statfs` is 2168 bytes with `struct utsname` at 1280 - neither
+fits.
+
+So those three do not build their buffer in the emulation. Package
+`syscall` allocates the Apple-layout struct (ordinary Go, allocation
+legal) and converts it, exactly as the 2026-07-21 cmsg work split
+control-buffer repacking across the same boundary. The emulation then
+only forwards a pointer.
+
+That split has an obvious way to go wrong: a caller reaching
+`SYS_STATFS` with a Linux `Statfs_t` would take a two-kilobyte write
+into 120 bytes. The size travels as an argument and the emulation
+refuses a buffer smaller than the Apple struct, so that caller gets
+EINVAL. `darwinabi_cosmo_test.go` pins the struct sizes and offsets, and
+the size guard is what makes the pin load-bearing rather than decorative.
+
+## Three syscalls are not a forward, and one of them looks like one
+
+- `getpriority` returns a value where -1 is legal, so "did it fail?"
+  cannot be read off the return. errno is zeroed through Apple's
+  `__error()` before the call and read back after - Apple's own man page
+  prescribes exactly this. It also has to return `20-nice`, because the
+  LINUX SYSCALL applies that bias (glibc removes it again) and a Linux
+  host reports the biased number. The runtimeprobe `sysinfo` check reads
+  `prio=20` on linux, which is the contract macOS must match.
+- `prlimit64` has no Apple counterpart taking a pid, numbers resources
+  differently above `RLIMIT_CORE` (Linux NOFILE 7 is Apple 8; MEMLOCK
+  and NPROC swap), and uses `2^63-1` where Linux uses `~0` for
+  "unlimited". Passing either sentinel through unrewritten turns an
+  unlimited resource into a nonsense finite one.
+- `sendfile` reverses Apple's first two arguments against Linux's,
+  reports its count through a pointer that is filled even when the call
+  fails, and never moves the file offset - so a Linux caller passing no
+  offset needs an lseek before and after. errno must be read before that
+  second lseek, or the fixup clobbers it.
+
+## What the tests actually prove, and where
+
+The translation tables are pure arithmetic over Apple's numbering, so
+they moved into `darwinabi_cosmo.go` under a plain `cosmo` build tag
+rather than an arm64 one. That is not tidying: cosmo package tests run
+on the ubuntu CI leg, and an arm64-tagged table would have been a table
+no CI run ever executed.
+
+The syscalls themselves are covered by runtimeprobe's `fsmeta`,
+`sysinfo` and `sendfile` checks, which apetest runs on all three
+runners. The linux run is the ground truth - it pins the semantics the
+darwin emulation has to reproduce - and the macOS run is what proves
+the dlsym wiring behind it. On a Windows host the three checks report
+what each step answered instead of failing, following `checkDupFile`:
+the NT emulation has not brought this surface up, and a check that
+fails there would say nothing new.
+
+Negative control, run before trusting any of it: breaking one flag
+mapping in `darwinMntFlagsToLinux` turned `TestDarwinStatfsToLinux` and
+`TestDarwinMntFlagsToLinux` red with the exact wrong bit named
+(`Flags = 0x7, want 0x403`).

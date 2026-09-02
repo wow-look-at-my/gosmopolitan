@@ -217,7 +217,9 @@ Per-platform runtime status - what works today on each host an APE boots on, wha
 forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
 through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
 resolved from iphlpapi and probed on every runner);
-macOS arm64 complete including signals, SIGPROF profiling and SCM_RIGHTS fd passing; macOS Intel structurally
+macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
+metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
+cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel structurally
 correct but its runtime bring-up is UNTESTED - do not claim it works.
 
 **Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64

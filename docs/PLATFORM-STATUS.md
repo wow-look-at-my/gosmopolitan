@@ -128,8 +128,20 @@ waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
 counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
 returning from a nonblocking read(2) on the poller's wakeup pipe.
 The wave-9 "still missing on macOS hosts" backlog is now closed
-(sendmsg/recvmsg and SIGPROF profiling were its last entries); the
-remaining known macOS gaps are AllThreadsSyscall (Linux-only
+(sendmsg/recvmsg and SIGPROF profiling were its last entries).
+
+File metadata and system information followed (2026-09-02, the
+metadata wave): fsync, truncate/ftruncate, chmod/fchmod/fchmodat,
+chown/fchown/fchownat, fchdir, link/symlink, chtimes (utimensat),
+mkfifo, statfs/fstatfs, uname, getrlimit/setrlimit (prlimit64),
+get/setpriority, getpgid, get/setgroups, the uid/gid setters, chroot
+and sendfile. Everything the syscall package exposes and Apple can
+serve now works on macOS; docs/STUBS-INVENTORY.md section 6 lists what
+each one needed and the few Apple genuinely lacks (setresuid/setresgid,
+setfsuid/setfsgid, a directory-relative mknodat). The runtimeprobe
+fsmeta/sysinfo/sendfile checks are mandatory on macOS.
+
+The remaining known macOS gaps are AllThreadsSyscall (Linux-only
 rt-signal machinery, unused by the stdlib on cosmo) and the
 Intel-mac runtime bring-up below - see DEBUGGING.md.
 

@@ -139,6 +139,9 @@ func main() {
 	timed("files", checkFiles)
 	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)
+	timed("fsmeta", checkFsMeta)
+	timed("sysinfo", checkSysInfo)
+	timed("sendfile", checkSendfile)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
 	// incident produced kernel-stuck processes), every other check has

@@ -143,6 +143,17 @@ func Faccessat(dirfd int, path string, mode uint32, flags int) (err error) {
 //sys	fchmodat(dirfd int, path string, mode uint32) (err error)
 
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
+	// The Linux fchmodat syscall takes no flags, so a request not to
+	// follow the symlink cannot be honored - and applying the mode to
+	// the link target instead is not what the caller asked for. Report
+	// it, exactly as glibc and the linux port do. macOS could honor the
+	// flag, but one APE answering the same call differently per host is
+	// worse than answering it consistently.
+	if flags&^_AT_SYMLINK_NOFOLLOW != 0 {
+		return EINVAL
+	} else if flags&_AT_SYMLINK_NOFOLLOW != 0 {
+		return EOPNOTSUPP
+	}
 	return fchmodat(dirfd, path, mode)
 }
 
@@ -351,8 +362,14 @@ func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int,
 //sys	Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (err error)
 
 //sys	sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
-//sys	Fstatfs(fd int, buf *Statfs_t) (err error)
-//sys	Statfs(path string, buf *Statfs_t) (err error)
+
+// statfs, fstatfs and uname fill a struct the host defines, and macOS
+// defines a much larger one. The exported wrappers live in
+// bigbuf_cosmo_arm64.go, which converts on a macOS host and calls
+// straight through everywhere else.
+//
+//sys	fstatfs(fd int, buf *Statfs_t) (err error)
+//sys	statfs(path string, buf *Statfs_t) (err error)
 
 // Constants
 const (
@@ -445,7 +462,7 @@ func Dup2(oldfd int, newfd int) (err error) {
 //sys	Sync()
 //sys	Truncate(path string, length int64) (err error)
 //sys	Umask(mask int) (oldmask int)
-//sys	Uname(buf *Utsname) (err error)
+//sys	uname(buf *Utsname) (err error)
 //sys	Write(fd int, p []byte) (n int, err error)
 //sys	munmap(addr uintptr, length uintptr) (err error)
 //sys	mmap(addr uintptr, length uintptr, prot int, flags int, fd int, offset int64) (xaddr uintptr, err error)

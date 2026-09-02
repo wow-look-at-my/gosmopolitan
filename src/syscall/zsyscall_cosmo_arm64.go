@@ -229,7 +229,7 @@ func sendfile(outfd int, infd int, offset *int64, count int) (written int, err e
 	return
 }
 
-func Fstatfs(fd int, buf *Statfs_t) (err error) {
+func fstatfs(fd int, buf *Statfs_t) (err error) {
 	_, _, e1 := Syscall(SYS_FSTATFS, uintptr(fd), uintptr(unsafe.Pointer(buf)), 0)
 	if e1 != 0 {
 		err = errnoErr(e1)
@@ -237,7 +237,7 @@ func Fstatfs(fd int, buf *Statfs_t) (err error) {
 	return
 }
 
-func Statfs(path string, buf *Statfs_t) (err error) {
+func statfs(path string, buf *Statfs_t) (err error) {
 	var _p0 *byte
 	_p0, err = BytePtrFromString(path)
 	if err != nil {
@@ -643,7 +643,7 @@ func Umask(mask int) (oldmask int) {
 	return
 }
 
-func Uname(buf *Utsname) (err error) {
+func uname(buf *Utsname) (err error) {
 	_, _, e1 := RawSyscall(SYS_UNAME, uintptr(unsafe.Pointer(buf)), 0, 0)
 	if e1 != 0 {
 		err = errnoErr(e1)
