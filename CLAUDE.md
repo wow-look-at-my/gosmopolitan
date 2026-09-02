@@ -105,15 +105,18 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 # Restrict which hosts the APE boots on. Tokens: linux/amd64, linux/arm64,
 # darwin/amd64, darwin/arm64, windows/amd64 (which boots the AMD64 payload
-# through the PE header - there is no windows payload). Unset = every
-# platform, byte-identical to before the flag existed. An unknown token, an
+# through the PE header - there is no windows payload). UNSET selects the
+# three supported platforms, linux/amd64 + darwin/arm64 + windows/amd64, not
+# all five: linux/arm64 and darwin/amd64 stay selectable but a default build
+# does not claim them, because nothing verifies either and darwin/amd64's
+# runtime bring-up is incomplete (clone is ENOSYS). An unknown token, an
 # empty list, or a platform whose payload is missing fails the build; a
 # selection that needs one architecture skips the sibling build entirely and
 # is still stripped and given its sidecar. NOT a size win by itself: the APE
 # header is a fixed 64K, so only dropping an ARCHITECTURE changes the size
-# (-47% for amd64-only), and linux/amd64+darwin/arm64+windows/amd64 needs
-# both payloads and weighs exactly what the fat APE does. What a subset buys
-# is an accurate claim and a host refused by name. `go env GOCOSMOPLATFORMS` reports
+# (-47% for amd64-only), and the default needs both payloads and weighs
+# exactly what the fat APE does. What a subset buys is an accurate claim and
+# a host refused by name. `go env GOCOSMOPLATFORMS` reports
 # the effective selection, which is how a consumer detects support for it.
 # Depth, including the per-platform payload/header table: DEBUGGING.md
 # "Platform-subset APEs".

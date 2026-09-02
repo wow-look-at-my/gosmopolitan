@@ -5721,7 +5721,9 @@ refuses macOS by name BEFORE the printf in that configuration
   delegation and unsupported-host message are present, and which must
   not be.
 - `TestAPEPlatformsDefaultUnchanged` - an unset flag assembles
-  byte-identically to naming every platform.
+  byte-identically to naming the default set explicitly. (The default is
+  the three supported platforms, not the whole table - see "The default
+  platform set is three, not five" below.)
 - `TestAPEPlatformsRejects` - the refusals above, in process, via the
   linker's `-h` panic mode.
 - `TestCosmoSiblingAndAssemble` (cmd/go/internal/work) - the sibling and
@@ -6277,3 +6279,33 @@ leg already runs since it invokes that package with no `-run` filter.
 Adding a windows row for another arch without the runtime behind it
 fails there instead of turning up as a scheduler crash on a host that
 got far enough to hit one.
+
+## The default platform set is three, not five (2026-09-02)
+
+`cosmoape.Default()` was every row in the table. It is now
+linux/amd64 + darwin/arm64 + windows/amd64, by operator decision, and
+the reasoning holds up on its own: a default build should not claim a
+host nothing verifies. darwin/amd64 is the sharp case - its runtime
+bring-up is incomplete (`clone` is ENOSYS, so the process dies at the
+first `newosproc`) and there is no Intel-mac runner, so an APE that
+advertised it announced a platform it cannot run on. linux/arm64 has no
+runner either.
+
+`all` keeps all five rows. Naming either dropped platform in
+GOCOSMOPLATFORMS still selects it and still works exactly as before.
+This changes what SILENCE claims, not what is reachable.
+
+Two consequences worth knowing:
+
+- **An amd64-only build no longer carries a Mach-O header.** The only
+  darwin platform in the default is darwin/arm64, which an amd64 payload
+  cannot serve, so the header is dropped and the binary claims
+  linux/amd64 and windows/amd64. `GOCOSMOPLATFORMS=darwin/amd64` brings
+  it back. Two linker tests asserted the old behavior and were rewritten
+  rather than worked around: one now asserts the header's ABSENCE plus
+  its return under an explicit selection, and `TestAPEFileMachoTransform`
+  - whose whole subject is the Mach-O transform - now names darwin/amd64,
+  since an unset selection would leave it nothing to inspect.
+- **Not a size change.** The default still needs both payloads, because
+  darwin/arm64 is in it, and the APE header is a fixed 64K. Only dropping
+  an ARCHITECTURE moves the number.

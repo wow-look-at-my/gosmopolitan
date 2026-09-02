@@ -50,8 +50,32 @@ var (
 // Set is a set of platforms.
 type Set uint
 
-// Default is the set an unrestricted build covers: every platform.
-func Default() Set { return Set(1<<len(all)) - 1 }
+// Default is the set a build covers when GOCOSMOPLATFORMS is unset. It is
+// deliberately NOT every platform in all: it is the three this fork stands
+// behind, and the other two stay selectable rather than promised.
+//
+// linux/arm64 and darwin/amd64 are omitted because a default build should
+// not claim a host nothing verifies. darwin/amd64 is the sharper case -
+// its runtime bring-up is incomplete (clone is ENOSYS, so the process dies
+// at the first newosproc) and there is no Intel-mac runner, so an APE that
+// advertised it would announce a platform it cannot run on.
+//
+// Naming a platform in GOCOSMOPLATFORMS still selects it. This changes what
+// silence means, not what is reachable.
+func Default() Set {
+	return 1<<indexOf(LinuxAMD64) | 1<<indexOf(DarwinARM64) | 1<<indexOf(WindowsAMD64)
+}
+
+// indexOf returns p's bit position, panicking on a platform not in all so a
+// typo in Default cannot silently produce an empty set.
+func indexOf(p Platform) uint {
+	for i, q := range all {
+		if q == p {
+			return uint(i)
+		}
+	}
+	panic("cosmoape: platform not in table: " + p.String())
+}
 
 // Names returns the accepted platform tokens, for diagnostics.
 func Names() string {

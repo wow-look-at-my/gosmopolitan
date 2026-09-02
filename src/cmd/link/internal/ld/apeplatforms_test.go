@@ -322,8 +322,20 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	if amdOnly[apeLoaderSrcOffset] == 0x1f && amdOnly[apeLoaderSrcOffset+1] == 0x8b {
 		t.Error("amd64-only input embedded the macOS ARM64 loader source")
 	}
-	if binary.LittleEndian.Uint32(amdOnly[apeMachoOffset:]) != 0xFEEDFACF {
-		t.Error("amd64-only input dropped the Mach-O header, which darwin/amd64 still needs")
+	// No Mach-O header either. The only darwin platform in the default set
+	// is darwin/arm64, which this input cannot serve, so an amd64-only
+	// build claims linux/amd64 and windows/amd64 and carries no Mach-O
+	// boot path at all. A build that wants Intel-mac boot asks for it:
+	// GOCOSMOPLATFORMS=darwin/amd64, covered below.
+	if binary.LittleEndian.Uint32(amdOnly[apeMachoOffset:]) == 0xFEEDFACF {
+		t.Error("amd64-only input emitted a Mach-O header for a darwin platform it does not claim")
+	}
+
+	// Asking for darwin/amd64 brings it back, so the header is driven by
+	// the selection rather than by the payload's architecture.
+	intelMac := assembleTest(t, cosmoape.DarwinAMD64.String(), true, false)
+	if binary.LittleEndian.Uint32(intelMac[apeMachoOffset:]) != 0xFEEDFACF {
+		t.Error("GOCOSMOPLATFORMS=darwin/amd64 produced no Mach-O header")
 	}
 }
 
