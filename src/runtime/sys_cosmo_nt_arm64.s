@@ -133,25 +133,31 @@ TEXT runtime·ntcall10(SB),NOSPLIT|NOFRAME,$0
 // itself is NOSPLIT $0 and cannot make a framed call, so its NT branch
 // tail-jumps here and this trampoline performs the ABI0 stack-argument
 // call. arm64's write1 has no NT branch yet, so nothing reaches this.
+//
+// 0(RSP) holds this frame's saved LR (the arm64 prologue stores it
+// there), so the outgoing ABI0 arguments start at 8(RSP): fd at 8, p at
+// 16, n at 24, and the int32 result comes back at 32. The $32 frame
+// covers exactly that span.
 TEXT runtime·ntwrite1tramp(SB),NOSPLIT,$32-28
 	MOVD	fd+0(FP), R0
-	MOVD	R0, 0(RSP)
-	MOVD	p+8(FP), R0
 	MOVD	R0, 8(RSP)
+	MOVD	p+8(FP), R0
+	MOVD	R0, 16(RSP)
 	MOVW	n+16(FP), R0
-	MOVW	R0, 16(RSP)
+	MOVW	R0, 24(RSP)
 	BL	runtime·ntwrite1(SB)
-	MOVW	24(RSP), R0
+	MOVW	32(RSP), R0
 	MOVW	R0, ret+24(FP)
 	RET
 
 // func ntSetTEBg()
 //
-// Records g in this thread's TEB ArbitraryUserPointer, the slot
-// ntsigtramp reads. The amd64 port gets this for free: gs:0x28 is the
-// same TEB field, and rt0's TLS setup already writes it. arm64 keeps g
-// in a register and never touches thread-local storage, so the NT boot
-// thread has to publish it explicitly.
+// Records g in this thread's TEB ArbitraryUserPointer. The caller runs
+// on g0 (ntBootInit), so the slot holds the boot thread's g0, the same
+// value tstart_cosmo_nt publishes for every created thread. Nothing
+// updates the slot afterwards: save_g is a no-op without cgo, so it
+// never tracks curg. ntsigtramp reads it only for a fault outside Go
+// text.
 TEXT runtime·ntSetTEBg(SB),NOSPLIT|NOFRAME,$0
 	MOVD	g, TEB_ArbitraryPtr(R18_PLATFORM)
 	RET
@@ -222,9 +228,16 @@ TEXT runtime·ntGetTEBStackBounds(SB),NOSPLIT|NOFRAME,$0-16
 // establishes g, and calls runtime.ntSigtrampGo(ep, kind). The int32
 // verdict goes back to the dispatcher in R0.
 //
-// g comes from the TEB ArbitraryUserPointer rather than from x28. A
-// thread that never ran Go code has no g, and reading the TEB slot
-// answers that case with 0, which the nosplit ntSigtrampGo checks.
+// g is the faulting thread's x28 from the saved CONTEXT when the
+// faulting PC lies in Go text: Go code keeps g in x28 at all times, and
+// the TEB ArbitraryUserPointer slot never tracks curg (it holds the
+// thread's g0 for the thread's whole life). For a PC outside Go text
+// x28 is whatever the foreign code left there, so g comes from the TEB
+// slot instead, which is 0 on a thread that never ran Go code; the
+// nosplit ntSigtrampGo checks that.
+//
+// Frame layout: 0(RSP) saved LR, 8/16(RSP) the ABI0 arguments to
+// ntSigtrampGo, 24(RSP) its result, 32..112 R19-R28, 112..176 F8-F15.
 //
 // Runs on the faulting thread's current stack (goroutine stacks
 // included - stackSystem reserves the dispatch headroom); the Go side
@@ -235,12 +248,26 @@ TEXT ntsigtramp<>(SB),NOSPLIT,$176
 
 	MOVD	R0, R19		// ep
 	MOVD	R1, R20		// kind
-	MOVD	TEB_ArbitraryPtr(R18_PLATFORM), g
 
-	MOVD	R19, 0(RSP)
-	MOVW	R20, 8(RSP)
+	MOVD	(ntExceptionPointers_context)(R19), R2
+	MOVD	(ntContextARM64_pc)(R2), R3
+	MOVD	$runtime·firstmoduledata(SB), R4
+	MOVD	(moduledata_text)(R4), R5
+	MOVD	(moduledata_etext)(R4), R6
+	CMP	R5, R3
+	BLO	sigtramp_foreign	// pc < text
+	CMP	R6, R3
+	BHI	sigtramp_foreign	// etext < pc
+	MOVD	(ntContextARM64_x+28*8)(R2), g
+	B	sigtramp_haveg
+sigtramp_foreign:
+	MOVD	TEB_ArbitraryPtr(R18_PLATFORM), g
+sigtramp_haveg:
+
+	MOVD	R19, 8(RSP)
+	MOVW	R20, 16(RSP)
 	BL	runtime·ntSigtrampGo(SB)
-	MOVW	16(RSP), R0	// verdict (int32)
+	MOVW	24(RSP), R0	// verdict (int32)
 
 	RESTORE_R19_TO_R28(8*4)
 	RESTORE_F8_TO_F15(8*14)

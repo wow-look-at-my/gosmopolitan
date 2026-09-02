@@ -138,23 +138,22 @@ func checkFsMeta() {
 	}
 
 	// fchdir. The working directory is process-wide and checkWd asserts
-	// against it, so the original is restored before returning. Getwd
-	// proves the directory changed; a stub that returns 0 does not pass.
+	// against it, so the original is restored before returning. Stat of
+	// "." proves the directory changed; a stub that returns 0 does not
+	// pass. Identity, not the path string: on NT the temp directory is
+	// reached through the /tmp alias and reads back under its real path.
 	if wd, err := os.Getwd(); err == nil {
 		if d, err := os.Open(dir); err == nil {
 			if s.do("Fchdir", syscall.Fchdir(int(d.Fd()))) {
-				got, err := os.Getwd()
-				if err == nil {
-					got, err = filepath.EvalSymlinks(got)
-				}
-				want, werr := filepath.EvalSymlinks(dir)
+				here, err := os.Stat(".")
+				want, werr := os.Stat(dir)
 				switch {
 				case err != nil:
-					s.do("Fchdir getwd", err)
+					s.do("Fchdir stat", err)
 				case werr != nil:
-					s.do("Fchdir getwd", werr)
-				case got != want:
-					s.do("Fchdir getwd", fmt.Errorf("wd %q after Fchdir, want %q", got, want))
+					s.do("Fchdir stat", werr)
+				case !os.SameFile(here, want):
+					s.do("Fchdir identity", fmt.Errorf("working directory after Fchdir is not %s", dir))
 				}
 			}
 			d.Close()

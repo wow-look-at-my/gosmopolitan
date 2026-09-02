@@ -24,29 +24,11 @@ import (
 // frameless.
 const _NT_CONTEXT_CONTROL = 0x400003
 
-// ntNeon128 is the win64/arm64 NEON128 (16 bytes).
-type ntNeon128 struct {
-	low  uint64
-	high int64
-}
-
-// ntContext is the ARM64_NT_CONTEXT layout. The VEH handlers only read
-// pc and sp on OS-allocated records, but ntPreemptM allocates its own
+// ntContext is the ARM64_NT_CONTEXT layout, declared in
+// os_cosmo_nt_ctx_arm64_layout.go. The VEH handlers only read pc, sp
+// and x[28] on OS-allocated records, but ntPreemptM allocates its own
 // buffer for GetThreadContext, which requires the complete struct.
-type ntContext struct {
-	contextFlags uint32
-	cpsr         uint32
-	x            [31]uint64 // fp is x[29], lr is x[30]
-	xsp          uint64
-	pc           uint64
-	v            [32]ntNeon128
-	fpcr         uint32
-	fpsr         uint32
-	bcr          [8]uint32
-	bvr          [8]uint64
-	wcr          [2]uint32
-	wvr          [2]uint64
-}
+type ntContext = ntContextARM64
 
 //go:nosplit
 func (c *ntContext) getPC() uintptr { return uintptr(c.pc) }
@@ -84,9 +66,10 @@ func ntSetSyntheticPCSP(uc *ucontext, pc, sp uintptr) {
 	regs.sp = uint64(sp)
 }
 
-// ntSetTEBg publishes g in this thread's TEB ArbitraryUserPointer, the
-// slot the exception trampolines read. Implemented in
-// sys_cosmo_nt_arm64.s.
+// ntSetTEBg publishes g in this thread's TEB ArbitraryUserPointer. It
+// runs on g0 at boot, so the slot holds the thread's g0; ntsigtramp
+// falls back to it for a fault in foreign code, where x28 is not g.
+// Implemented in sys_cosmo_nt_arm64.s.
 func ntSetTEBg()
 
 // ntDumpregs prints the CONTEXT registers (upstream dumpregs,

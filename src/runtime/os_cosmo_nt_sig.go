@@ -226,12 +226,17 @@ func ntIsGoException(info *ntExceptionRecord, r *ntContext) bool {
 }
 
 // ntIsAbort reports whether the context describes a fault raised by
-// runtime.abort (INT3). On NT the reported RIP is one byte AFTER the
-// INT3, unlike unix hosts (upstream isAbort, signal_windows.go:58-66).
+// runtime.abort. On amd64 NT reports the RIP one byte AFTER the INT3,
+// unlike unix hosts; on arm64 the reported PC is the faulting
+// instruction itself (upstream isAbort, signal_windows.go).
 //
 //go:nosplit
 func ntIsAbort(r *ntContext) bool {
-	return isAbortPC(r.getPC() - 1)
+	pc := r.getPC()
+	if GOARCH == "amd64" {
+		pc--
+	}
+	return isAbortPC(pc)
 }
 
 // ntSigtrampGo is called (via the asm thunks) from the NT exception
@@ -240,6 +245,9 @@ func ntIsAbort(r *ntContext) bool {
 //
 //go:nosplit
 func ntSigtrampGo(ep *ntExceptionPointers, kind int32) int32 {
+	// g was established by the asm thunk: on amd64 from TLS (gs:0x28),
+	// on arm64 from the faulting CONTEXT's x28 when the PC is in Go
+	// text and from the TEB slot (this thread's g0) otherwise.
 	gp := getg()
 	if gp == nil {
 		// Exception on a thread that never ran Go code (none exist
@@ -340,11 +348,19 @@ func ntFirstContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 
 }
 
 // ntLastContinueHandler is reached when nothing handled the exception
-// (upstream lastcontinuehandler; the DLL/archive and arm64 special
-// cases do not apply to an APE). Print the crash and die.
+// (upstream lastcontinuehandler; the DLL/archive case does not apply to
+// an APE). Print the crash and die.
 //
 //go:nosplit
 func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
+	// arm64 MSVC-built DLLs (the APE loads kernel32, ws2_32, iphlpapi,
+	// bcryptprimitives) probe CPU features at load time by trapping
+	// illegal instructions under SEH. VEH runs before SEH, so an
+	// illegal instruction from non-Go code is that probe: pass it on.
+	if GOARCH == "arm64" && info.exceptionCode == _NT_EXCEPTION_ILLEGAL_INSTRUCTION &&
+		(r.getPC() < firstmoduledata.text || firstmoduledata.etext < r.getPC()) {
+		return _NT_EXCEPTION_CONTINUE_SEARCH
+	}
 	ntWinthrow(info, r, gp)
 	return 0 // not reached
 }

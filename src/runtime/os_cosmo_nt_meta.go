@@ -97,22 +97,25 @@ func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags i
 		return ntFail3(ntErrno(werr))
 	}
 
+	// aptr and mptr stay unsafe.Pointer until the call expression: atime
+	// and mtime live on this stack, and a stack copy adjusts only typed
+	// pointers, never a uintptr.
 	var atime, mtime ntFiletime
-	aptr, mptr := uintptr(0), uintptr(0)
-	set := func(ts ntLinuxTimespec, dst *ntFiletime) uintptr {
+	var aptr, mptr unsafe.Pointer
+	set := func(ts ntLinuxTimespec, dst *ntFiletime) (unsafe.Pointer, uintptr) {
 		switch ts.nsec {
 		case _NT_UTIME_OMIT:
-			return 0 // NULL: SetFileTime leaves this stamp alone
+			return nil, 0 // NULL: SetFileTime leaves this stamp alone
 		case _NT_UTIME_NOW:
 			now, ok := ntNowFiletime()
 			if !ok {
-				return 0
+				return nil, ntENOSYS
 			}
 			*dst = now
 		default:
 			*dst = ntTimespecToFiletime(ts)
 		}
-		return uintptr(unsafe.Pointer(dst))
+		return unsafe.Pointer(dst), 0
 	}
 	if times == nil {
 		now, ok := ntNowFiletime()
@@ -121,16 +124,23 @@ func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags i
 			return ntFail3(ntENOSYS)
 		}
 		atime, mtime = now, now
-		aptr = uintptr(unsafe.Pointer(&atime))
-		mptr = uintptr(unsafe.Pointer(&mtime))
+		aptr = unsafe.Pointer(&atime)
+		mptr = unsafe.Pointer(&mtime)
 	} else {
-		aptr = set(times[0], &atime)
-		mptr = set(times[1], &mtime)
+		var e uintptr
+		aptr, e = set(times[0], &atime)
+		if e == 0 {
+			mptr, e = set(times[1], &mtime)
+		}
+		if e != 0 {
+			ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
+			return ntFail3(e)
+		}
 	}
 
 	// The creation time (first pointer) stays NULL: Linux utimensat has
 	// no such stamp to carry, and stat reports it as ctime.
-	r, werr2 := ntcallE(ntSetFileTimeFn, h, 0, aptr, mptr, 0, 0, 0)
+	r, werr2 := ntcallE(ntSetFileTimeFn, h, 0, uintptr(aptr), uintptr(mptr), 0, 0, 0)
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	if r == 0 {
 		return ntFail3(ntErrno(werr2))
@@ -169,24 +179,36 @@ func ntEmuTruncate(cpath *byte, length int64) (r1, r2, errno uintptr) {
 }
 
 // ntHandlePathW recovers a handle's path as a wide string.
-// GetFinalPathNameByHandleW answers in \\?\ form, which
-// SetCurrentDirectoryW does not accept, so the prefix is dropped when
-// it is the plain drive form (a \\?\UNC\ path is left alone - trimming
-// it would produce a path that names something else).
+// GetFinalPathNameByHandleW answers in \\?\ form. SetCurrentDirectoryW
+// accepts that form, but it stores the string as given, so the prefix
+// is rewritten away to keep the current directory in the ordinary
+// spelling GetCurrentDirectoryW reports: \\?\C:\dir becomes C:\dir and
+// \\?\UNC\server\share becomes \\server\share.
 func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 	if ntGetFinalPathNameByHandleWFn == 0 {
 		return nil, ntENOSYS
 	}
 	buf := make([]uint16, 4096)
 	n, werr := ntcallE(ntGetFinalPathNameByHandleWFn, h, uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(len(buf)-1), _NT_VOLUME_NAME_DOS, 0, 0, 0)
-	if n == 0 || n >= uintptr(len(buf)) {
+		uintptr(len(buf)), _NT_VOLUME_NAME_DOS, 0, 0, 0)
+	if n == 0 {
 		return nil, ntErrno(werr)
 	}
+	if n >= uintptr(len(buf)) {
+		// A too-small buffer returns the required size without
+		// setting the last error, so werr is stale here.
+		return nil, ntENAMETOOLONG
+	}
 	p := buf[:n]
-	if len(p) > 6 && p[0] == '\\' && p[1] == '\\' && p[2] == '?' && p[3] == '\\' &&
-		p[5] == ':' {
-		p = p[4:]
+	if len(p) > 6 && p[0] == '\\' && p[1] == '\\' && p[2] == '?' && p[3] == '\\' {
+		if p[5] == ':' {
+			p = p[4:]
+		} else if len(p) > 8 && p[4] == 'U' && p[5] == 'N' && p[6] == 'C' && p[7] == '\\' {
+			// \\?\UNC\server\share -> \\server\share: keep one of the
+			// two leading backslashes and drop "?\UNC\".
+			p = p[6:]
+			p[0] = '\\'
+		}
 	}
 	// SetCurrentDirectoryW needs a NUL-terminated string, and the slice
 	// above stops at the length the call reported.
