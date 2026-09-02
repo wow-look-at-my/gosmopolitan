@@ -49,6 +49,13 @@
 #define SYS_getpriority		140
 #define SYS_setpriority		141
 #define SYS_chroot		161
+#define SYS_fchownat		260
+#define SYS_linkat		265
+#define SYS_symlinkat		266
+#define SYS_fchmodat		268
+
+#define LINUX_AT_FDCWD			-100
+#define LINUX_AT_SYMLINK_NOFOLLOW	0x100
 
 // macOS/XNU BSD syscall numbers (with SYSCALL_CLASS_UNIX prefix 0x2000000)
 #define XNU_exit		0x2000001	// BSD 1
@@ -98,6 +105,18 @@
 #define XNU_sendfile		0x2000151	// BSD 337
 #define XNU_statfs64		0x2000159	// BSD 345
 #define XNU_fstatfs64		0x200015a	// BSD 346
+
+// The classic path-based calls the *at family is served with when its
+// directory argument is AT_FDCWD. XNU's own *at syscalls sit in the
+// 464+ range that zsysnum_darwin_amd64.go does not record, and these
+// do exactly the same work for the only case the standard library
+// reaches (os.Chmod, os.Lchown, os.Link and os.Symlink all pass
+// AT_FDCWD).
+#define XNU_link		0x2000009	// BSD 9
+#define XNU_chmod		0x200000f	// BSD 15
+#define XNU_chown		0x2000010	// BSD 16
+#define XNU_symlink		0x2000039	// BSD 57
+#define XNU_lchown		0x200016c	// BSD 364
 
 // The Apple struct statfs the syscall package allocates on the
 // emulation's behalf (bigbuf_cosmo.go). Its size travels in a3 so a
@@ -256,6 +275,14 @@ syscall6_darwin:
 	JEQ	darwin_statfs
 	CMPQ	R11, $SYS_fstatfs
 	JEQ	darwin_fstatfs
+	CMPQ	R11, $SYS_fchmodat
+	JEQ	darwin_fchmodat
+	CMPQ	R11, $SYS_fchownat
+	JEQ	darwin_fchownat
+	CMPQ	R11, $SYS_linkat
+	JEQ	darwin_linkat
+	CMPQ	R11, $SYS_symlinkat
+	JEQ	darwin_symlinkat
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
@@ -449,6 +476,61 @@ darwin_fstatfs:
 	CMPQ	DX, $APPLE_STATFS_SIZE
 	JB	darwin_enosys
 	MOVL	$XNU_fstatfs64, AX
+	JMP	darwin_syscall
+
+// The *at family, served with the classic path calls for AT_FDCWD.
+// A real directory descriptor is refused rather than resolved against
+// the process working directory, which would silently act on the wrong
+// file. os.Chmod, os.Lchown, os.Link and os.Symlink all pass AT_FDCWD.
+
+darwin_fchmodat:
+	// fchmodat(dirfd, path, mode) -> chmod(path, mode).
+	CMPQ	DI, $LINUX_AT_FDCWD
+	JNE	darwin_enosys
+	MOVQ	SI, DI		// path
+	MOVQ	DX, SI		// mode
+	MOVL	$XNU_chmod, AX
+	JMP	darwin_syscall
+
+darwin_fchownat:
+	// fchownat(dirfd, path, uid, gid, flags) -> chown/lchown(path, uid, gid).
+	CMPQ	DI, $LINUX_AT_FDCWD
+	JNE	darwin_enosys
+	MOVQ	SI, DI		// path
+	MOVQ	DX, SI		// uid
+	MOVQ	R10, DX		// gid
+	CMPQ	R8, $0
+	JEQ	darwin_fchownat_follow
+	CMPQ	R8, $LINUX_AT_SYMLINK_NOFOLLOW
+	JNE	darwin_enosys
+	MOVL	$XNU_lchown, AX
+	JMP	darwin_syscall
+darwin_fchownat_follow:
+	MOVL	$XNU_chown, AX
+	JMP	darwin_syscall
+
+darwin_linkat:
+	// linkat(olddirfd, oldpath, newdirfd, newpath, flags) -> link(old, new).
+	// AT_SYMLINK_FOLLOW has no expressible alternative here: link(2)
+	// follows, so a request NOT to follow is refused rather than
+	// silently followed.
+	CMPQ	DI, $LINUX_AT_FDCWD
+	JNE	darwin_enosys
+	CMPQ	DX, $LINUX_AT_FDCWD
+	JNE	darwin_enosys
+	MOVQ	SI, DI		// oldpath
+	MOVQ	R10, SI		// newpath
+	MOVL	$XNU_link, AX
+	JMP	darwin_syscall
+
+darwin_symlinkat:
+	// symlinkat(target, newdirfd, linkpath) -> symlink(target, linkpath).
+	// Only the SECOND argument is a descriptor; the target is a plain
+	// string the kernel never resolves.
+	CMPQ	SI, $LINUX_AT_FDCWD
+	JNE	darwin_enosys
+	MOVQ	DX, SI		// linkpath
+	MOVL	$XNU_symlink, AX
 	JMP	darwin_syscall
 
 // getpriority is the one caller here that cannot read its own result.
