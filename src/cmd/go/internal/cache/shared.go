@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -67,16 +68,12 @@ func newSharedCache(disk *DiskCache) Cache {
 		return nil
 	}
 	// The client writes diagnostics nowhere until a consumer says otherwise,
-	// and this consumer says so only when asked. A cache tier never changes
-	// what a build produces, so its per-request trouble is not a build
-	// diagnostic; routing it to stderr makes the go command's own output
-	// depend on a network service's health, and every test that reads that
-	// output (cmd/internal/testdir asserts it is empty) fails when the
-	// service is unwell. An unreachable tier is still reported once, below.
-	if cacheDebug() {
+	// and cmd/go's stderr is where a build's warnings already go. The one
+	// exception is the outage window below, which ends by itself.
+	if !cacheQuiet() {
 		cacheclient.SetLogger(goLogger{})
 	}
-	remote, err := newWebBackendQuietly(cfg)
+	remote, err := newWebBackend(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
@@ -217,24 +214,50 @@ func decodeOutputID(s string) (OutputID, error) {
 	return out, nil
 }
 
-// newWebBackendQuietly builds the backend with os.Stderr pointed at the null
-// device, so the one diagnostic path the Logger above does not cover cannot
-// reach the go command's output either.
+// cacheQuietUntil ends the outage window. The shared cache server answers 404
+// for its index and for every upload, and the client reports each one, so a
+// go command prints hundreds of lines it did not use to. Tests that read a go
+// command's output then fail: cmd/internal/testdir asserts a go run prints
+// nothing, and one of those lines landed inside a generated .go file.
+//
+// The window is a DEADLINE, not a switch. It expires on its own, and the
+// diagnostics come back with no edit. Silencing this permanently would mean a
+// broken cache nobody hears about; a date means somebody hears about it again
+// on this day whether or not anyone remembered.
+//
+// TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
+// deliberate edit to a test that says why.
+var cacheQuietUntil = time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+
+// cacheQuiet reports whether to hold the shared tier's per-request
+// diagnostics back. GOCACHEDEBUG asks for them regardless.
+func cacheQuiet() bool {
+	if cacheDebug() {
+		return false
+	}
+	return time.Now().Before(cacheQuietUntil)
+}
+
+// CacheDebugEnv asks for the shared tier's per-request diagnostics during the
+// window above. Anything but the empty string enables them.
+const CacheDebugEnv = "GOCACHEDEBUG"
+
+// cacheDebug reports whether the caller asked to see those diagnostics.
+func cacheDebug() bool {
+	return os.Getenv(CacheDebugEnv) != ""
+}
+
+// newWebBackend builds the backend, during the window with os.Stderr pointed
+// at the null device.
 //
 // The client aggregates its HTTP errors through a writer it captures ONCE,
 // when the backend is built, and that writer is os.Stderr. SetLogger does not
-// reach it. Swapping os.Stderr across this one call is therefore what decides
-// where those summaries go for the life of the backend. Narrow by
-// construction: cmd/go builds exactly one backend, before it has anything
-// else to say.
-//
-// TestSharedCache_HTTPErrorsStayOffTheBuildsOutput fails if the client stops
-// capturing at construction, which is the assumption this rests on. The
-// client is being fixed to route these through the Logger too; this stays
-// correct either way, and until then it is what keeps a build here
-// independent of that cache server's health.
-func newWebBackendQuietly(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, error) {
-	if cacheDebug() {
+// reach it, so the gate above covers only half the output. Swapping os.Stderr
+// across this one call is what decides where those summaries go for the life
+// of the backend. Narrow by construction: cmd/go builds exactly one backend,
+// before it has anything else to say.
+func newWebBackend(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, error) {
+	if !cacheQuiet() {
 		return cacheclient.NewWebBackend(cfg)
 	}
 	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -246,16 +269,6 @@ func newWebBackendQuietly(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, e
 	os.Stderr = devnull
 	defer func() { os.Stderr = saved }()
 	return cacheclient.NewWebBackend(cfg)
-}
-
-// CacheDebugEnv turns on the shared tier's per-request diagnostics. Anything
-// but the empty string enables them.
-const CacheDebugEnv = "GOCACHEDEBUG"
-
-// cacheDebug reports whether the caller asked to see the shared tier's
-// per-request diagnostics.
-func cacheDebug() bool {
-	return os.Getenv(CacheDebugEnv) != ""
 }
 
 // goLogger sends the client's diagnostics to stderr, where a build's warnings

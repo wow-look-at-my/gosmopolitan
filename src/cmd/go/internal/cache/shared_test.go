@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -434,8 +435,8 @@ func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
 // landing in that server's repo either -- it is built with this toolchain,
 // so this tree cannot wait on it.
 //
-// This also guards the assumption newWebBackendQuietly rests on. If the
-// client ever captures the writer later than construction, this goes red.
+// This also guards the assumption newWebBackend rests on. If the client ever
+// captures the writer later than construction, this goes red.
 func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	f.failPuts = true
@@ -454,8 +455,8 @@ func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
 	}
 }
 
-// The diagnostics are not deleted, only asked for. Anyone debugging the
-// cache sets GOCACHEDEBUG and gets the same messages back.
+// The diagnostics are not deleted, only held back. Anyone debugging the cache
+// sets GOCACHEDEBUG and gets the same messages back during the window.
 func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
@@ -467,6 +468,37 @@ func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
 	})
 	if !strings.Contains(out, "cacheprog:") {
 		t.Fatalf("GOCACHEDEBUG=1 must report the tier's trouble, got:\n%s", out)
+	}
+}
+
+// The window ends by itself. Past the deadline a failing tier reports again
+// with nobody editing anything, which is what makes this an outage window
+// rather than a permanently muted warning.
+//
+// This test also fails once the real deadline passes and the window was
+// never removed, so extending it is a deliberate edit here and not a drift.
+func TestSharedCache_QuietWindowExpires(t *testing.T) {
+	if !cacheQuietUntil.After(time.Now()) {
+		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+
+			"or say here why it moves", cacheQuietUntil.Format(time.RFC3339))
+	}
+
+	saved := cacheQuietUntil
+	t.Cleanup(func() { cacheQuietUntil = saved })
+	cacheQuietUntil = time.Now().Add(-time.Second)
+
+	f, srv := newFakeCacheServer(t)
+	f.failPuts = true
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		PutBytes(c, testActionID("expired"), []byte("body"))
+		c.(*SharedCache).Close()
+	})
+	if !strings.Contains(out, "cacheprog:") {
+		t.Fatalf("past the deadline a failing tier must report again, got:\n%s", out)
 	}
 }
 
