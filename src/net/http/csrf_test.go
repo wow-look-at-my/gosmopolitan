@@ -301,7 +301,7 @@ func TestCrossOriginProtectionServer(t *testing.T) {
 	handler := protection.Handler(okHandler)
 
 	ts := httptest.NewServer(handler)
-	defer ts.Close()
+	t.Cleanup(ts.Close) // The subtests run after this function returns.
 
 	tests := []struct {
 		name           string

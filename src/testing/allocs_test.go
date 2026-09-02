@@ -21,6 +21,7 @@ var allocsPerRunTests = []struct {
 }
 
 func TestAllocsPerRun(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	for _, tt := range allocsPerRunTests {
 		if allocs := testing.AllocsPerRun(100, tt.fn); allocs != tt.allocs {
 			t.Errorf("AllocsPerRun(100, %s) = %v, want %v", tt.name, allocs, tt.allocs)

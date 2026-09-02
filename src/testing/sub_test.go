@@ -991,6 +991,7 @@ func TestBenchmark(t *T) {
 }
 
 func TestCleanup(t *T) {
+	t.Serial() // The cleanup order is checked right after t.Run returns.
 	var cleanups []int
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { cleanups = append(cleanups, 1) })
@@ -1002,6 +1003,7 @@ func TestCleanup(t *T) {
 }
 
 func TestConcurrentCleanup(t *T) {
+	t.Serial() // The cleanup count is checked right after t.Run returns.
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		var wg sync.WaitGroup
@@ -1026,6 +1028,7 @@ func TestConcurrentCleanup(t *T) {
 }
 
 func TestCleanupCalledEvenAfterGoexit(t *T) {
+	t.Serial() // The cleanup count is checked right after t.Run returns.
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {
@@ -1041,6 +1044,7 @@ func TestCleanupCalledEvenAfterGoexit(t *T) {
 }
 
 func TestRunCleanup(t *T) {
+	t.Serial() // The cleanup counts are checked right after t.Run returns.
 	outerCleanup := 0
 	innerCleanup := 0
 	t.Run("test", func(t *T) {
@@ -1058,6 +1062,7 @@ func TestRunCleanup(t *T) {
 }
 
 func TestCleanupParallelSubtests(t *T) {
+	t.Serial() // The cleanup count is checked right after t.Run returns.
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { ranCleanup++ })
@@ -1074,6 +1079,7 @@ func TestCleanupParallelSubtests(t *T) {
 }
 
 func TestNestedCleanup(t *T) {
+	t.Serial() // The cleanup count is checked right after t.Run returns.
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {

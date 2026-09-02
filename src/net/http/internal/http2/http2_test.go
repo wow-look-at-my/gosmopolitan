@@ -45,6 +45,7 @@ func TestSettingString(t *testing.T) {
 }
 
 func TestSorterPoolAllocs(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	h := Header{
 		"a": nil,
 		"b": nil,

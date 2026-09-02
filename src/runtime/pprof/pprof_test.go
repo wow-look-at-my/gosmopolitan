@@ -917,6 +917,7 @@ func TestBlockProfile(t *testing.T) {
 	}
 
 	// Generate block profile
+	t.Serial() // The block profile rate is process-wide.
 	runtime.SetBlockProfileRate(1)
 	defer runtime.SetBlockProfileRate(0)
 	for _, test := range tests {
@@ -1157,6 +1158,7 @@ func blockCond(t *testing.T) {
 
 // See http://golang.org/cl/299991.
 func TestBlockProfileBias(t *testing.T) {
+	t.Serial()        // The block profile rate is process-wide.
 	rate := int(1000) // arbitrary value
 	runtime.SetBlockProfileRate(rate)
 	defer runtime.SetBlockProfileRate(0)
@@ -1225,6 +1227,7 @@ func blockInfrequentLong(rate int) {
 func blockevent(cycles int64, skip int)
 
 func TestMutexProfile(t *testing.T) {
+	t.Serial() // The mutex profile rate is process-wide.
 	// Generate mutex profile
 
 	old := runtime.SetMutexProfileFraction(1)
@@ -1344,6 +1347,7 @@ func TestMutexProfile(t *testing.T) {
 }
 
 func TestMutexProfileRateAdjust(t *testing.T) {
+	t.Serial() // The mutex profile rate is process-wide.
 	old := runtime.SetMutexProfileFraction(1)
 	defer runtime.SetMutexProfileFraction(old)
 	if old != 0 {
@@ -2770,6 +2774,7 @@ func TestTimeVDSO(t *testing.T) {
 }
 
 func TestProfilerStackDepth(t *testing.T) {
+	t.Serial() // disableSampling sets process-wide profile rates.
 	t.Cleanup(disableSampling())
 
 	const depth = 128
@@ -2957,6 +2962,7 @@ func TestMutexBlockFullAggregation(t *testing.T) {
 
 	var m sync.Mutex
 
+	t.Serial() // The mutex and block profile rates are process-wide.
 	prev := runtime.SetMutexProfileFraction(-1)
 	defer runtime.SetMutexProfileFraction(prev)
 
@@ -3021,6 +3027,7 @@ func inlineF(mu *sync.Mutex, wg *sync.WaitGroup) {
 }
 
 func TestBlockMutexProfileInlineExpansion(t *testing.T) {
+	t.Serial() // The block and mutex profile rates are process-wide.
 	runtime.SetBlockProfileRate(1)
 	defer runtime.SetBlockProfileRate(0)
 	prev := runtime.SetMutexProfileFraction(1)
@@ -3075,6 +3082,7 @@ runtime/pprof.inlineA`,
 }
 
 func TestProfileRecordNullPadding(t *testing.T) {
+	t.Serial() // disableSampling sets process-wide profile rates.
 	// Produce events for the different profile types.
 	t.Cleanup(disableSampling())
 	memSink = make([]byte, 1)      // MemProfile

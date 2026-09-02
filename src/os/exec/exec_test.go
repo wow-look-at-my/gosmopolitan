@@ -614,6 +614,7 @@ func TestStdinCloseRace(t *testing.T) {
 
 // Issue 5071
 func TestPipeLookPathLeak(t *testing.T) {
+	t.Serial() // The descriptor census counts every fd in the process.
 	if runtime.GOOS == "windows" {
 		t.Skip("we don't currently suppore counting open handles on windows")
 	}

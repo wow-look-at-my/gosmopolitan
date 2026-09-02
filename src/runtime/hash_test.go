@@ -704,6 +704,7 @@ func BenchmarkHash1024(b *testing.B)  { benchmarkHash(b, 1024) }
 func BenchmarkHash65536(b *testing.B) { benchmarkHash(b, 65536) }
 
 func TestArrayHash(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	// Make sure that "" in arrays hash correctly. The hash
 	// should at least scramble the input seed so that, e.g.,
 	// {"","foo"} and {"foo",""} have different hashes.
@@ -744,6 +745,7 @@ func TestArrayHash(t *testing.T) {
 	}
 }
 func TestStructHash(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	// See the comment in TestArrayHash.
 	f := func() {
 		type key struct {

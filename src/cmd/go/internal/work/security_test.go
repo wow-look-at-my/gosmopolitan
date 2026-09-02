@@ -306,6 +306,7 @@ func TestCheckLinkerFlags(t *testing.T) {
 }
 
 func TestCheckFlagAllowDisallow(t *testing.T) {
+	t.Serial() // os.Setenv is process-wide.
 	if err := checkCompilerFlags("TEST", "test", []string{"-disallow"}); err == nil {
 		t.Fatalf("missing error for -disallow")
 	}

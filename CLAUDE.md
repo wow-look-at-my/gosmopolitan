@@ -62,6 +62,14 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
+**Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called
+`t.Parallel()`, which is now a no-op. A test that mutates process-wide state - a package global, the environment,
+the working directory, `GOMAXPROCS` - calls `t.Serial()`, which waits for every other test to stop and runs the
+caller alone until it returns; `t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` take it themselves, and
+`testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold. A
+test failing only under this fork's `go test` is almost always one of these. Depth: DEBUGGING.md "tests parallel
+by default" (2026-09-02).
+
 ## Building Cosmopolitan Binaries
 
 ```bash
