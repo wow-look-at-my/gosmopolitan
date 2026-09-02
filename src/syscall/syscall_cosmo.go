@@ -196,7 +196,13 @@ func Pipe2(p []int, flags int) error {
 		return EINVAL
 	}
 	var pp [2]_C_int
+	// On a darwin host pipe2 is pipe + fcntl, so a fork between the two
+	// inherits the ends without close-on-exec and a child's stdout pipe
+	// never reaches EOF. Hold the fork lock across the pair, as darwin's
+	// own Pipe2 does.
+	ForkLock.RLock()
 	err := pipe2(&pp, flags)
+	ForkLock.RUnlock()
 	if err == nil {
 		p[0] = int(pp[0])
 		p[1] = int(pp[1])

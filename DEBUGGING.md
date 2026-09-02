@@ -6529,3 +6529,16 @@ than by hand, and so did the linker and cmd/go tests that write flag or
 `cfg` globals directly. The one-line CI reproduction is
 `GOOS=js GOARCH=wasm go test -short sync`: it deadlocked before, and
 `TestOnceValues` panicked on the guard after the deadlock fix.
+
+## pipeeof caught its first real escape on the macOS runner (2026-09-02)
+
+The check above ("EOF on a dead child's stdout pipe") reported a wedge on
+the macos-latest leg with a holder census of `32:pipe- 33:pipe-`: both
+ends of the piped child's stdout pipe, inherited by a concurrently forked
+child with no `FD_CLOEXEC`. That is the fork window the check was written
+for. `darwinPipe2` is `pipe` + `fcntl`, and `syscall.Pipe2` called it with
+nothing held, so a `forkExec` on another thread between the two calls
+copied the bare descriptors. Darwin's own `Pipe2` holds `ForkLock` for
+exactly this reason; the cosmo one now does too. It reproduced once in
+several runs of the same binary, which is what a two-syscall window under
+`execstress` looks like.
