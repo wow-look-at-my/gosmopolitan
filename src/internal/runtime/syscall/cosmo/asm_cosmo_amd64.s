@@ -162,7 +162,11 @@
 // arg in CX, not R10.
 //
 // On Darwin x86_64, we use BSD syscall numbers with XNU prefix (0x2000000).
-TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$0
+// The 48-byte frame belongs to darwin_nanosleep, the one case here that
+// has to build a struct the caller did not pass: a timeval for select,
+// and the two timevals that measure how much of the request is left when
+// a signal cuts the sleep short. Every other path ignores it.
+TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$48
 	// Safety net: on NT hosts everything not routed through the
 	// WindowsFns table (syscall_cosmo_nt.go) is ENOSYS - never a raw
 	// SYSCALL.
@@ -342,13 +346,109 @@ darwin_exit:
 	MOVL	$XNU_exit, AX
 	JMP	darwin_syscall
 
+// nanosleep(req *timespec, rem *timespec).
+//
+// XNU has no nanosleep syscall. select with a timeout and no descriptors
+// is a sleep, which is what the runtime's own usleep already does on
+// this host. This used to return success WITHOUT SLEEPING, so every
+// caller ran straight through its delay and could not tell.
+//
+// Linux fills rem with the unslept remainder when a signal cuts the
+// sleep short, and BSD select does not update its timeout, so the
+// remainder is measured here: gettimeofday before and after, subtract
+// the elapsed time from the request, clamp at zero. A caller that loops
+// on EINTR with rem needs that to be real, or it sleeps twice.
+//
+//	0(SP)  timeval handed to select
+//	16(SP) timeval before the sleep
+//	32(SP) timeval after it
 darwin_nanosleep:
-	// macOS doesn't have nanosleep syscall, use select with timeout
-	// This is a simplified implementation
-	// For now, just return success (sleep is best-effort)
-	MOVQ	$0, AX		// r1 = 0 (success)
-	MOVQ	$0, BX		// r2 = 0
-	MOVQ	$0, CX		// errno = 0
+	MOVQ	DI, R12		// req
+	MOVQ	SI, R13		// rem, may be NULL
+	CMPQ	R12, $0
+	JEQ	darwin_efault
+
+	LEAQ	16(SP), DI	// before
+	MOVQ	$0, SI
+	XORL	DX, DX		// post-Sierra third argument; see clock_gettime
+	MOVL	$XNU_gettimeofday, AX
+	SYSCALL
+
+	MOVQ	0(R12), AX	// tv_sec
+	MOVQ	AX, 0(SP)
+	MOVQ	8(R12), AX	// tv_nsec
+	XORQ	DX, DX
+	MOVQ	$1000, CX
+	DIVQ	CX
+	MOVQ	AX, 8(SP)	// tv_usec
+
+	MOVQ	$0, DI		// nfds
+	MOVQ	$0, SI		// readfds
+	MOVQ	$0, DX		// writefds
+	MOVQ	$0, R10		// exceptfds
+	LEAQ	0(SP), R8	// timeout
+	MOVL	$XNU_select, AX
+	SYSCALL
+	JCS	darwin_nanosleep_intr
+
+	// The timeout expired, so the whole request was slept.
+	CMPQ	R13, $0
+	JEQ	darwin_nanosleep_ok
+	MOVQ	$0, 0(R13)
+	MOVQ	$0, 8(R13)
+darwin_nanosleep_ok:
+	MOVQ	$0, AX		// r1
+	MOVQ	$0, BX		// r2
+	MOVQ	$0, CX		// errno
+	RET
+
+darwin_nanosleep_intr:
+	MOVQ	AX, R11		// Apple errno, translated at the end
+	CMPQ	R13, $0
+	JEQ	darwin_nanosleep_err
+
+	LEAQ	32(SP), DI	// after
+	MOVQ	$0, SI
+	XORL	DX, DX
+	MOVL	$XNU_gettimeofday, AX
+	SYSCALL
+
+	// elapsed = (after.sec - before.sec)*1e9 + (after.usec - before.usec)*1e3
+	MOVQ	32(SP), AX
+	SUBQ	16(SP), AX
+	IMULQ	$1000000000, AX
+	MOVQ	40(SP), DX
+	SUBQ	24(SP), DX
+	IMULQ	$1000, DX
+	ADDQ	DX, AX
+
+	// remaining = requested - elapsed, floored at zero
+	MOVQ	0(R12), CX
+	IMULQ	$1000000000, CX
+	ADDQ	8(R12), CX
+	SUBQ	AX, CX
+	JGE	darwin_nanosleep_rem
+	XORQ	CX, CX
+darwin_nanosleep_rem:
+	MOVQ	CX, AX
+	XORQ	DX, DX
+	MOVQ	$1000000000, R9
+	DIVQ	R9
+	MOVQ	AX, 0(R13)	// rem.tv_sec
+	MOVQ	DX, 8(R13)	// rem.tv_nsec
+
+darwin_nanosleep_err:
+	MOVQ	R11, AX
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	AX, CX		// errno (Linux numbering)
+	MOVQ	$-1, AX		// r1
+	MOVQ	$0, BX		// r2
+	RET
+
+darwin_efault:
+	MOVQ	$-1, AX
+	MOVQ	$0, BX
+	MOVQ	$14, CX		// EFAULT
 	RET
 
 darwin_clock_gettime:

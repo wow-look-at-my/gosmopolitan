@@ -6221,6 +6221,37 @@ that stops a zero-length sleep IS an overshoot when under a microsecond
 remains. The floor wins - 1us of overshoot is below any timer resolution
 here, and the alternative is a wait that spins.
 
+## nanosleep returned success without sleeping
+
+The same wave found the other half of the parking problem, in the
+syscall dispatch rather than the runtime: `darwin_nanosleep` set r1=0,
+errno=0 and returned. Every caller ran straight through its delay with
+no way to tell.
+
+`select` with a timeout and no descriptors is a sleep, which is what
+`runtime.usleep` already does on this host, so the fix is that call.
+What takes the space is `rem`. Linux fills it with the unslept
+remainder when a signal cuts the sleep short; BSD `select` does not
+update its timeout, so there is nothing to read it out of. The
+remainder is measured instead - `gettimeofday` either side, subtract
+elapsed from the request, clamp at zero. A caller looping on EINTR
+sleeps twice without that.
+
+This is what the 48-byte frame on `Syscall6` is for: three timevals,
+one for select and two for the bracket. It is the only path here that
+has to build a struct the caller did not pass. The link is what proves
+the frame still fits the nosplit budget - the dispatch runs after
+`entersyscall`, where a stack split is fatal.
+
+The old inventory note said `time.Sleep` was silently doing nothing on
+macOS-Intel. It was not: `time.Sleep` goes through the runtime's timers
+and `usleep`, whose darwin branch was already real. `syscall.Nanosleep`
+was the caller that got the lie.
+
+The probe check that covers it asserts on the CLOCK, not on the error.
+That distinction is the whole point: a check that only looked at `err`
+would have passed against the stub for as long as it existed.
+
 **What is genuinely left on macOS-Intel is `clone`, and nothing else.**
 It maps to `bsdthread_create` (360, which the table does carry), but the
 call is only usable after `bsdthread_register` installs a pthread entry

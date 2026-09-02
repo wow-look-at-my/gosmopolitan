@@ -65,7 +65,7 @@ operation was skipped. These are the worst kind of stub.
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s:224-228` (`darwin_nanosleep`) | Returns success (r1=0, errno=0) **without sleeping**. Comment: "For now, just return success (sleep is best-effort)". `time.Sleep` on macOS-Intel silently does nothing. |
+| 1 | ~~`darwin_nanosleep`~~ (FIXED 2026-09-02) | Was: success (r1=0, errno=0) **without sleeping**, so every caller ran straight through its delay and could not tell. XNU has no nanosleep, but `select` with a timeout and no descriptors is a sleep — which is what the runtime's own `usleep` already does on this host. `rem` is filled for real: BSD `select` does not update its timeout, so the remainder is measured with `gettimeofday` either side and clamped at zero, because a caller looping on EINTR would otherwise sleep twice. (The old note here also claimed `time.Sleep` was affected. It was not: `time.Sleep` goes through the runtime's timers and `usleep`, whose darwin branch was already real. `syscall.Nanosleep` was the caller that got the lie.) Covered by `testdata/runtimeprobe`'s `nanosleep` check, which asserts on the CLOCK — an error-only check passes against a stub that never sleeps. |
 | 2 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s:255-258` (`darwin_sigaction`) | Returns success **without installing the signal handler**. Comment: "For basic functionality, return success". Signal delivery on macOS-Intel is silently broken. |
 | 3 | `src/runtime/sys_cosmo_amd64.s:618-620` (`rt_sigaction` darwin branch) | Returns success without calling sigaction. Comment: "For now, return success without calling sigaction / TODO: Implement proper sigaction translation layer". |
 | 4 | `src/runtime/sys_cosmo_amd64.s:623-625` (`rt_sigaction` NT branch) | Returns success on NT wave 1 (no signal machinery). Comment: "the same benign lie the darwin stub above tells". |
@@ -256,10 +256,12 @@ Section 4.1.
 
 1. ~~Implement the remaining darwin arm64 syscalls in
    `syscall6SlowDarwin`.~~ Done; see Section 6.
-2. Replace the amd64 darwin "return success" stubs (`darwin_nanosleep`,
-   `darwin_sigaction`, `rt_sigaction`) with real implementations, or make
-   them fail loudly instead of silently. These are now the largest
-   remaining lie in the tree.
+2. Replace the remaining amd64 darwin "return success" stubs
+   (`darwin_sigaction`, `rt_sigaction`) with real implementations, or
+   make them fail loudly instead of silently. `darwin_nanosleep` is done
+   (Section 2.1); what is left is signal delivery, which needs the
+   sigaction struct translation and a trampoline rather than a syscall
+   forward. These are now the largest remaining lie in the tree.
 3. Bring up macOS-Intel. **What is left is `clone` — thread creation,
    and nothing else.** Everything else filed under this heading turned
    out to be reachable and is done: the metadata table (Section 6b), the

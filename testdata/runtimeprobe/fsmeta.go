@@ -290,6 +290,49 @@ func cstr(b []byte) string {
 	return string(b[:n])
 }
 
+// checkNanosleep exercises the nanosleep syscall directly. Nothing else
+// in the probe reaches it: time.Sleep goes through the runtime's timers
+// and its own usleep, so syscall.Nanosleep is a path only a caller of
+// that function takes.
+//
+// It is a syscall that CAN return success while doing nothing, and on
+// macOS-Intel it did exactly that for a long time - XNU has no nanosleep
+// and the emulation returned 0 without sleeping. So the assertion is on
+// the clock, not on the error: a check that only looked at err would
+// have passed against a stub that never slept.
+//
+// The floor is deliberately well under the request. Sleeps overshoot,
+// never undershoot, and a scheduler hiccup must not turn this into a
+// flake; anything that returns early enough to trip 30ms is a stub, not
+// a timing artifact.
+func checkNanosleep() {
+	s := &softStep{name: "nanosleep", soft: cosmoHostOS() == "windows"}
+
+	const request = 50 * time.Millisecond
+	const floor = 30 * time.Millisecond
+
+	req := syscall.NsecToTimespec(int64(request))
+	var rem syscall.Timespec
+	start := time.Now()
+	err := syscall.Nanosleep(&req, &rem)
+	elapsed := time.Since(start)
+
+	if !s.do("Nanosleep", err) {
+		s.finish("")
+		return
+	}
+	if elapsed < floor {
+		s.do("Nanosleep duration", fmt.Errorf("returned after %v, want at least %v - the call did not sleep", elapsed, floor))
+	}
+	// An uninterrupted sleep leaves nothing remaining. A signal during
+	// this window is possible in principle, so a nonzero remainder is
+	// only wrong if it exceeds what was asked for.
+	if left := time.Duration(syscall.TimespecToNsec(rem)); left > request {
+		s.do("Nanosleep remainder", fmt.Errorf("rem = %v, longer than the %v requested", left, request))
+	}
+	s.finish(fmt.Sprintf("slept %v for a %v request", elapsed.Round(time.Millisecond), request))
+}
+
 // checkSendfile exercises the sendfile syscall directly. Nothing in the
 // standard library reaches it on cosmo - internal/poll's sendfile file
 // carries no cosmo build tag - so a caller that uses syscall.Sendfile is

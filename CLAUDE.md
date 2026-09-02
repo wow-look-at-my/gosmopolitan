@@ -414,7 +414,10 @@ NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
 (sigpanic recovery, os/signal, async preemption, wait-status decode),
 os/exec, os.Executable, argv/env, wd round-trip, and an off-host DNS
 resolve - the one check here that leaves the machine, and the one that
-covers where each host keeps its nameservers). The apetest suite
+covers where each host keeps its nameservers). Its `nanosleep` check
+asserts on the elapsed CLOCK, not on the error: a syscall that returns
+success without sleeping passes an error-only check, which is exactly
+what macOS-Intel did. The apetest suite
 runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.
