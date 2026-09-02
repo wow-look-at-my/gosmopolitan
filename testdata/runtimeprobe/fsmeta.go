@@ -16,10 +16,18 @@ import (
 // and the credential getters all bottom out in a syscall the fast path
 // does not carry. So this is the check that keeps them working.
 //
-// On a Windows host the NT emulation has not brought this surface up.
-// Following checkDupFile, the block then reports what each step
-// answered instead of failing: the log records the gap, and the day NT
-// grows one of these the line is already there.
+// The split across three checks is by HOST SUPPORT, so that each one
+// can be a hard assertion everywhere it runs:
+//
+//   - fsmeta covers what every host serves, Windows included.
+//   - fsmetaunix covers what NT has no counterpart for (unix ownership
+//     and permission bits, symlinks, FIFOs).
+//   - sysinfo covers statfs/uname/rlimit/priority/credentials, which
+//     upstream's own windows port does not expose either.
+//
+// The last two follow checkDupFile on a Windows host: they report what
+// each step answered instead of failing, so the log records the gap and
+// the day NT grows one the line is already there.
 
 // softStep runs one step of a check. On a host where the surface is
 // expected to work, an error fails the check; elsewhere it is recorded.
@@ -55,8 +63,12 @@ func (s *softStep) finish(detail string) {
 	ok(s.name, detail)
 }
 
+// checkFsMeta covers the metadata syscalls every host serves. It is a
+// hard assertion everywhere, Windows included: the NT emulation grew
+// truncate, utimensat, fchdir and linkat in the same wave that closed
+// the macOS gap.
 func checkFsMeta() {
-	s := &softStep{name: "fsmeta", soft: cosmoHostOS() == "windows"}
+	s := &softStep{name: "fsmeta"}
 
 	dir, err := os.MkdirTemp("", "rp-fsmeta")
 	if err != nil {
@@ -92,23 +104,6 @@ func checkFsMeta() {
 		}
 	}
 
-	// fchmod then fchmodat. Permission bits have the same values on
-	// every host, so the mode read back is compared exactly.
-	if s.do("File.Chmod", f.Chmod(0o640)) {
-		if fi, err := f.Stat(); err == nil && fi.Mode().Perm() != 0o640 {
-			s.do("File.Chmod mode", fmt.Errorf("mode %v, want -rw-r-----", fi.Mode().Perm()))
-		}
-	}
-	if s.do("Chmod", os.Chmod(path, 0o600)) {
-		if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != 0o600 {
-			s.do("Chmod mode", fmt.Errorf("mode %v, want -rw-------", fi.Mode().Perm()))
-		}
-	}
-
-	// fchownat with both ids -1 changes nothing, so it needs no
-	// privilege and still proves the call reaches the kernel.
-	s.do("Chown", os.Chown(path, -1, -1))
-
 	// utimensat, twice: once with both stamps, once with a zero atime,
 	// which os.Chtimes turns into the UTIME_OMIT sentinel the emulation
 	// has to rewrite for Apple.
@@ -125,26 +120,13 @@ func checkFsMeta() {
 		}
 	}
 
-	// linkat and symlinkat.
+	// linkat. A hard link is one inode under two names, so the size the
+	// new name reports is what proves the link is the same file rather
+	// than a copy.
 	link := filepath.Join(dir, "hard")
 	if s.do("Link", os.Link(path, link)) {
 		if fi, err := os.Stat(link); err == nil && fi.Size() != 3 {
 			s.do("Link size", fmt.Errorf("size %d, want 3", fi.Size()))
-		}
-	}
-	sym := filepath.Join(dir, "sym")
-	if s.do("Symlink", os.Symlink(path, sym)) {
-		if got, err := os.Readlink(sym); err == nil && got != path {
-			s.do("Readlink", fmt.Errorf("target %q, want %q", got, path))
-		}
-	}
-
-	// mknodat. Apple has no directory-relative mknod, so the emulation
-	// serves this only for AT_FDCWD - which is what Mkfifo passes.
-	fifo := filepath.Join(dir, "fifo")
-	if s.do("Mkfifo", syscall.Mkfifo(fifo, 0o600)) {
-		if fi, err := os.Lstat(fifo); err == nil && fi.Mode()&os.ModeNamedPipe == 0 {
-			s.do("Mkfifo mode", fmt.Errorf("mode %v, want a named pipe", fi.Mode()))
 		}
 	}
 
@@ -161,7 +143,67 @@ func checkFsMeta() {
 		}
 	}
 
-	s.finish("sync/truncate/chmod/chown/chtimes/link/symlink/mkfifo/fchdir")
+	s.finish("sync/truncate/chtimes/link/fchdir")
+}
+
+// checkFsMetaUnix covers the metadata syscalls NT has no counterpart
+// for: unix ownership and permission bits, symlinks, and FIFOs. It
+// reports rather than fails on a Windows host.
+func checkFsMetaUnix() {
+	s := &softStep{name: "fsmetaunix", soft: cosmoHostOS() == "windows"}
+
+	dir, err := os.MkdirTemp("", "rp-fsmetaunix")
+	if err != nil {
+		fail("fsmetaunix", "mkdtemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "f")
+	f, err := os.Create(path)
+	if err != nil {
+		fail("fsmetaunix", "create: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// fchmod then fchmodat. Permission bits have the same values on
+	// every unix host, so the mode read back is compared exactly.
+	if s.do("File.Chmod", f.Chmod(0o640)) {
+		if fi, err := f.Stat(); err == nil && fi.Mode().Perm() != 0o640 {
+			s.do("File.Chmod mode", fmt.Errorf("mode %v, want -rw-r-----", fi.Mode().Perm()))
+		}
+	}
+	if s.do("Chmod", os.Chmod(path, 0o600)) {
+		if fi, err := os.Stat(path); err == nil && fi.Mode().Perm() != 0o600 {
+			s.do("Chmod mode", fmt.Errorf("mode %v, want -rw-------", fi.Mode().Perm()))
+		}
+	}
+
+	// fchownat with both ids -1 changes nothing, so it needs no
+	// privilege and still proves the call reaches the kernel.
+	s.do("Chown", os.Chown(path, -1, -1))
+
+	// symlinkat. The NT port resolves no symlinks at all, which is why
+	// this sits here rather than in checkFsMeta.
+	sym := filepath.Join(dir, "sym")
+	if s.do("Symlink", os.Symlink(path, sym)) {
+		if got, err := os.Readlink(sym); err == nil && got != path {
+			s.do("Readlink", fmt.Errorf("target %q, want %q", got, path))
+		}
+	}
+
+	// mknodat. Apple has no directory-relative mknod, so the darwin
+	// emulation serves this only for AT_FDCWD - which is what Mkfifo
+	// passes.
+	fifo := filepath.Join(dir, "fifo")
+	if s.do("Mkfifo", syscall.Mkfifo(fifo, 0o600)) {
+		if fi, err := os.Lstat(fifo); err == nil && fi.Mode()&os.ModeNamedPipe == 0 {
+			s.do("Mkfifo mode", fmt.Errorf("mode %v, want a named pipe", fi.Mode()))
+		}
+	}
+
+	s.finish("chmod/chown/symlink/mkfifo")
 }
 
 func checkSysInfo() {

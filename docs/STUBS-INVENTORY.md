@@ -13,7 +13,17 @@ broader pattern, not an isolated bug.
 
 The arm64 half of that is now closed — Section 6 lists what the metadata
 wave implemented and the few calls Apple genuinely cannot serve. The
-amd64 half stands as written.
+amd64 half stands as written. The same wave closed the NT metadata
+syscalls Win32 can serve (Section 5a).
+
+**Scope note.** "Missing syscall" here means a call the host CAN serve
+that the emulation did not. It does not cover the two remaining PORTS —
+macOS-Intel (Section 4.1) and Windows/arm64 (Section 4.3) — where the
+gap is not a syscall table but a runtime bring-up: thread creation,
+parking, signals and the netpoller. Those are Section 8 items 2-4, and
+neither is reachable from CI as it stands (no Intel-mac and no
+Windows/arm64 runner), so neither can be written and verified the way
+this wave was.
 
 ---
 
@@ -86,6 +96,36 @@ functionality is missing.
 | 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented.** Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". |
 
 ---
+
+## 5a. NT metadata syscalls (partly CLOSED — metadata wave, 2026-09-02)
+
+The NT emulation already served fsync, ftruncate, fchmod, chdir and
+getcwd. The metadata wave added the four Win32 can serve and programs
+actually reach (`src/runtime/os_cosmo_nt_meta.go`):
+
+| syscall | Win32 | notes |
+|---|---|---|
+| `utimensat` | `SetFileTime` | Win32's own convention IS the sentinel: a NULL stamp pointer means "leave alone", which is exactly UTIME_OMIT. UTIME_NOW is filled from `GetSystemTimeAsFileTime`. |
+| `truncate` | `SetEndOfFile` | The path form of the ftruncate NT already had; NT resizes only through a handle, so it opens one. |
+| `fchdir` | `GetFinalPathNameByHandleW` + `SetCurrentDirectoryW` | NT has no handle-relative chdir. The `\\?\` prefix is trimmed for the drive form, because SetCurrentDirectoryW rejects it. |
+| `linkat` | `CreateHardLinkW` | Argument order is reversed against linkat. |
+
+These four are resolved from kernel32 OPTIONALLY: a zero pointer answers
+ENOSYS at the use site rather than poking a crash address at boot over a
+call most programs never make.
+
+**Still ENOSYS on NT**, because Windows has no counterpart and upstream's
+own windows port does not expose them either: `statfs`/`fstatfs`,
+`uname`, `prlimit64`, `getpriority`/`setpriority`, `getgroups`/
+`setgroups`, the uid/gid setters, `chroot`, `sendfile`, `mknodat`, and
+`symlinkat` (this port resolves no symlinks at all — `readlinkat`
+answers only `/proc/self/exe`). `fchmod`/`fchmodat` remain a documented
+no-op after an existence check, and `fchown`/`fchownat` have no unix
+ownership to change; see the reasoning in `ntEmuFchmod`.
+
+The runtimeprobe split follows exactly this line: `fsmeta` is a hard
+assertion on all three hosts, `fsmetaunix` and `sysinfo` report rather
+than fail on a Windows host.
 
 ## 5. NT gaps (Windows host)
 

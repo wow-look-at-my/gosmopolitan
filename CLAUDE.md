@@ -215,7 +215,8 @@ IAT slots.
 
 Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
 forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
-through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
+through NT bring-up wave 3 plus the 2026-09-02 metadata syscalls (chtimes/truncate/fchdir/link; still missing:
+Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
 resolved from iphlpapi and probed on every runner);
 macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
 metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple

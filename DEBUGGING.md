@@ -6084,3 +6084,44 @@ Negative control, run before trusting any of it: breaking one flag
 mapping in `darwinMntFlagsToLinux` turned `TestDarwinStatfsToLinux` and
 `TestDarwinMntFlagsToLinux` red with the exact wrong bit named
 (`Flags = 0x7, want 0x403`).
+
+## The NT half of the same wave
+
+Windows had the same shape of gap, smaller. The emulation already served
+fsync, ftruncate, fchmod, chdir and getcwd; utimensat, truncate, fchdir
+and linkat were ENOSYS, which is `os.Chtimes`, `os.Truncate`,
+`os.File.Chdir` and `os.Link` failing on a Windows host.
+`os_cosmo_nt_meta.go` implements those four over SetFileTime,
+SetEndOfFile, GetFinalPathNameByHandleW+SetCurrentDirectoryW, and
+CreateHardLinkW.
+
+Two details worth keeping:
+
+- **utimensat needs no sentinel arithmetic on NT.** SetFileTime already
+  leaves a stamp alone when its pointer is NULL, which is precisely what
+  UTIME_OMIT asks for, so the sentinel becomes a nil pointer rather than
+  a translated value. Only UTIME_NOW needs a clock read.
+- **fchdir has to round-trip through a path.** NT has no
+  handle-relative chdir, and GetFinalPathNameByHandleW answers in `\\?\`
+  form, which SetCurrentDirectoryW rejects. The prefix is trimmed for
+  the plain drive form only — trimming a `\\?\UNC\` path would name a
+  different file.
+
+All four kernel32 entries resolve optionally. They have shipped since
+Vista at the latest, so a zero pointer means a host stranger than any
+this port targets; that is a reason to answer ENOSYS at the call, not to
+poke a crash address during boot.
+
+The probe split changed to match what each host can actually serve, so
+that a check is a hard assertion everywhere it runs: `fsmeta`
+(sync/truncate/chtimes/link/fchdir) now fails on ALL THREE hosts,
+including Windows, while `fsmetaunix` (chmod/chown/symlink/mkfifo) and
+`sysinfo` report rather than fail there. A single soft block spanning
+both would have let an NT regression in the four new syscalls pass as a
+recorded note.
+
+What this wave deliberately does NOT touch: macOS-Intel and
+Windows/arm64. Neither is a syscall-table gap - both are runtime
+bring-ups (thread creation, parking, signals, netpoller), and neither
+has a CI runner, so neither could be written and verified the way this
+was. They stay as STUBS-INVENTORY.md section 8 items 2-4.

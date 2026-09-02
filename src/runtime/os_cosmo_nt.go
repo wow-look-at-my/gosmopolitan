@@ -68,13 +68,20 @@ var (
 
 	// Wave 2 (file I/O, identity, console; all kernel32, all present
 	// since forever - resolved with the same crash-poke discipline).
-	ntGetLastErrorFn                 uintptr
-	ntCloseHandleFn                  uintptr
-	ntCreateFileWFn                  uintptr
-	ntReadFileFn                     uintptr
-	ntSetFilePointerExFn             uintptr
-	ntSetEndOfFileFn                 uintptr
-	ntFlushFileBuffersFn             uintptr
+	ntGetLastErrorFn     uintptr
+	ntCloseHandleFn      uintptr
+	ntCreateFileWFn      uintptr
+	ntReadFileFn         uintptr
+	ntSetFilePointerExFn uintptr
+	ntSetEndOfFileFn     uintptr
+	ntFlushFileBuffersFn uintptr
+	// The metadata wave's four (os_cosmo_nt_meta.go). All optional: a
+	// zero pointer answers ENOSYS at the use site rather than crashing
+	// the boot over a call most programs never make.
+	ntSetFileTimeFn                  uintptr
+	ntGetSystemTimeAsFileTimeFn      uintptr
+	ntGetFinalPathNameByHandleWFn    uintptr
+	ntCreateHardLinkWFn              uintptr
 	ntGetFileInformationByHandleFn   uintptr
 	ntGetFileInformationByHandleExFn uintptr
 	ntDeleteFileWFn                  uintptr
@@ -172,6 +179,10 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameSetFileTime       = []byte("SetFileTime\x00")
+	ntNameGetSysTimeAsFt    = []byte("GetSystemTimeAsFileTime\x00")
+	ntNameGetFinalPathW     = []byte("GetFinalPathNameByHandleW\x00")
+	ntNameCreateHardLinkW   = []byte("CreateHardLinkW\x00")
 	ntNameGetFileInfoByH    = []byte("GetFileInformationByHandle\x00")
 	ntNameGetFileInfoByHEx  = []byte("GetFileInformationByHandleEx\x00")
 	ntNameDeleteFileW       = []byte("DeleteFileW\x00")
@@ -503,6 +514,16 @@ func ntResolve() {
 	if ntdll := ntcall(lla, uintptr(unsafe.Pointer(&ntNameNtdll[0])), 0, 0, 0, 0, 0); ntdll != 0 {
 		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
 	}
+	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate,
+	// fchdir, linkat. Every one of these has shipped in kernel32 since
+	// Vista at the latest, so a zero here means a host stranger than
+	// any this port targets - which is exactly why it degrades to
+	// ENOSYS instead of poking a crash address.
+	ntSetFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileTime[0])), 0, 0, 0, 0)
+	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
+	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
+	ntCreateHardLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateHardLinkW[0])), 0, 0, 0, 0)
+
 	if bp := ntcall(lla, uintptr(unsafe.Pointer(&ntNameBcryptPrimitives[0])), 0, 0, 0, 0, 0); bp != 0 {
 		ntProcessPrngFn = ntcall(gpa, bp, uintptr(unsafe.Pointer(&ntNameProcessPrng[0])), 0, 0, 0, 0)
 	}

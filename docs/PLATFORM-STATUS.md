@@ -59,8 +59,17 @@ SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
 groups: SysProcAttr{Setpgid} spawns the child as its own group leader
 (CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
 group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
-probe CI-proves the conhost-injected handler chain end to end. Still
-missing on Windows: Windows/arm64 (the charter's step-one experiment
+probe CI-proves the conhost-injected handler chain end to end.
+
+File metadata followed (2026-09-02, the metadata wave): utimensat,
+truncate, fchdir and linkat over SetFileTime, SetEndOfFile,
+GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so
+os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The
+runtimeprobe fsmeta check is a hard assertion on this host too;
+docs/STUBS-INVENTORY.md section 5a lists what Windows still cannot
+serve, all of it absent from upstream's own windows port as well.
+
+Still missing on Windows: Windows/arm64 (the charter's step-one experiment
 ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic
 pre-main SIGSEGV at 0x2000c9000; see DEBUGGING.md's wave-4 verdict
 section - so native bring-up gains urgency), file/pipe dup(2)

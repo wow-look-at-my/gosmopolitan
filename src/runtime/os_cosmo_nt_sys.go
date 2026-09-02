@@ -76,9 +76,11 @@ const (
 	ntSysFcntl      = 72
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
+	ntSysTruncate   = 76
 	ntSysFtruncate  = 77
 	ntSysGetcwd     = 79
 	ntSysChdir      = 80
+	ntSysFchdir     = 81
 	ntSysFchmod     = 91
 	ntSysUmask      = 95
 	ntSysGetuid     = 102
@@ -99,8 +101,10 @@ const (
 	ntSysRenameat   = 264
 	ntSysReadlinkat = 267
 	ntSysAccept4    = 288
+	ntSysLinkat     = 265
 	ntSysFchmodat   = 268
 	ntSysFaccessat  = 269
+	ntSysUtimensat  = 280
 	ntSysPipe2      = 293
 	ntSysGetrandom  = 318
 )
@@ -312,6 +316,16 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuGetcwd(unsafe.Pointer(a1), a2)
 	case ntSysFtruncate:
 		return ntEmuFtruncate(int32(a1), int64(a2))
+	case ntSysTruncate:
+		return ntEmuTruncate((*byte)(unsafe.Pointer(a1)), int64(a2))
+	case ntSysFchdir:
+		return ntEmuFchdir(int32(a1))
+	case ntSysLinkat:
+		return ntEmuLinkat(int32(a1), (*byte)(unsafe.Pointer(a2)),
+			int32(a3), (*byte)(unsafe.Pointer(a4)), int32(a5))
+	case ntSysUtimensat:
+		return ntEmuUtimensat(int32(a1), (*byte)(unsafe.Pointer(a2)),
+			(*[2]ntLinuxTimespec)(unsafe.Pointer(a3)), int32(a4))
 	case ntSysFsync, ntSysFdatasync:
 		return ntEmuFsync(int32(a1))
 	case ntSysFchmod:

@@ -140,6 +140,7 @@ func main() {
 	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)
 	timed("fsmeta", checkFsMeta)
+	timed("fsmetaunix", checkFsMetaUnix)
 	timed("sysinfo", checkSysInfo)
 	timed("sendfile", checkSendfile)
 	// Exec and signal checks run at the END on purpose, in that order.
