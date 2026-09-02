@@ -70,6 +70,9 @@ func TestShellPrintfOctalOnly(t *testing.T) {
 }
 
 func TestShellDdStatement(t *testing.T) {
+	// The dd statement relocates the Mach-O header, so it exists only when
+	// the header does. See skipWithoutMacho.
+	skipWithoutMacho(t)
 	header := first8K(t)
 
 	// Spec: dd if="$o" of="$o" bs=... skip=... count=... conv=notrunc

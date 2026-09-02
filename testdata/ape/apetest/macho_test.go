@@ -5,6 +5,7 @@ import (
 	"debug/macho"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,8 +16,42 @@ const machoOffset = 0x2000
 
 // machoDDParams extracts the bs/skip/count of the Mach-O assimilation dd
 // command from the bootstrap script.
+// hasMacho reports whether this APE carries the Mach-O header at all. The
+// header boots the amd64 payload on macOS INTEL. macOS arm64 does not use it
+// - it boots through the compiled APE loader - so an APE that does not claim
+// darwin/amd64 carries no Mach-O header, and the default selection does not
+// claim it. Build with GOCOSMOPLATFORMS=darwin/amd64 to get one.
+func hasMacho(t *testing.T) bool {
+	t.Helper()
+	bin := loadBinary(t)
+	if len(bin) < machoOffset+4 {
+		return false
+	}
+	return le32(bin[machoOffset:machoOffset+4]) == uint32(macho.Magic64)
+}
+
+// skipWithoutMacho skips a test that reads the Mach-O header when this APE
+// has none. TestMachoAbsentUnlessDarwinAMD64 asserts the absence itself, so a
+// silently header-less build cannot pass by skipping alone.
+func skipWithoutMacho(t *testing.T) {
+	t.Helper()
+	if !hasMacho(t) {
+		t.Skip("no Mach-O header: this APE does not claim darwin/amd64")
+	}
+}
+
+// The Mach-O header is present exactly when the APE claims darwin/amd64.
+// This asserts the pairing in the direction the skips above cannot: a build
+// that quietly stopped emitting a header it should emit fails here.
+func TestMachoAbsentUnlessDarwinAMD64(t *testing.T) {
+	claimed := strings.Contains(string(first8K(t)), "darwin/amd64")
+	assert.Equal(t, claimed, hasMacho(t),
+		"a Mach-O header must be present exactly when the APE claims darwin/amd64")
+}
+
 func machoDDParams(t *testing.T) (bs, skip, count int) {
 	t.Helper()
+	skipWithoutMacho(t)
 	header := first8K(t)
 	ddPattern := regexp.MustCompile(`dd\s+if=.*of=.*bs=(\d+)\s+skip=(\d+)\s+count=(\d+)`)
 	match := ddPattern.FindSubmatch(header)
@@ -31,6 +66,7 @@ func machoDDParams(t *testing.T) (bs, skip, count int) {
 // header region is copied over the start of the file.
 func machoTransform(t *testing.T) []byte {
 	t.Helper()
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	bs, skip, count := machoDDParams(t)
 	require.Greater(t, len(bin), bs*(skip+count))
@@ -128,6 +164,7 @@ func elfLoadSegments(t *testing.T) []elfProgHeader {
 }
 
 func TestMachoMagic(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), machoOffset+4)
 
@@ -136,6 +173,7 @@ func TestMachoMagic(t *testing.T) {
 }
 
 func TestMachoCPUType(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), machoOffset+8)
 
@@ -144,6 +182,7 @@ func TestMachoCPUType(t *testing.T) {
 }
 
 func TestMachoCPUSubtype(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), machoOffset+12)
 
@@ -153,6 +192,7 @@ func TestMachoCPUSubtype(t *testing.T) {
 }
 
 func TestMachoFileType(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), machoOffset+16)
 
@@ -161,6 +201,7 @@ func TestMachoFileType(t *testing.T) {
 }
 
 func TestMachoNcmds(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	require.Greater(t, len(bin), machoOffset+20)
 
@@ -177,6 +218,7 @@ func TestMachoDdOffset(t *testing.T) {
 // emitted Mach-O header (mach header + sizeofcmds), with less than one dd
 // block of padding.
 func TestMachoDdCountCoversHeader(t *testing.T) {
+	skipWithoutMacho(t)
 	bin := loadBinary(t)
 	bs, _, count := machoDDParams(t)
 
