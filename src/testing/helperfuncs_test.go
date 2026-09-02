@@ -41,8 +41,8 @@ func testTestHelper(t *testing.T) {
 }
 
 func testHelper(t *testing.T) {
-	// Check combinations of directly and indirectly
-	// calling helper functions.
+	t.Serial() // The subtests must log in order. Keep this a one-line edit.
+	// Check directly and indirectly called helper functions.
 	notHelper(t, "0")
 	helper(t, "1")
 	notHelperCallingHelper(t, "2")

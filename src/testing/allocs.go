@@ -17,9 +17,13 @@ import (
 //
 // AllocsPerRun sets [runtime.GOMAXPROCS] to 1 during its measurement and will restore
 // it before returning.
+//
+// The count and the GOMAXPROCS change are process-wide, so a test must call
+// [T.Serial] before it calls AllocsPerRun: tests are parallel by default, and
+// AllocsPerRun panics while another test runs.
 func AllocsPerRun(runs int, f func()) (avg float64) {
-	if parallelStart.Load() != parallelStop.Load() {
-		panic("testing: AllocsPerRun called during parallel test")
+	if parallelStart.Load() != parallelStop.Load() && !serialExclusive.Load() {
+		panic("testing: AllocsPerRun called during parallel test; call t.Serial first")
 	}
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 

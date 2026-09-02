@@ -143,6 +143,7 @@ func catchExitf(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Serial() // -h, os.Stderr and nerrors are process-wide; a concurrent restore turns the panic back into a real exit.
 	oldH, oldErr, oldN := *flagH, os.Stderr, nerrors
 	*flagH, os.Stderr = true, w
 	defer func() { *flagH, os.Stderr, nerrors = oldH, oldErr, oldN }()
