@@ -50,9 +50,11 @@ func Times(tms *Tms) (ticks uintptr, err error) {
 	return
 }
 
-// Time reads the wall clock through Gettimeofday. The amd64 linux port
-// reads it the same way, through its own private gettimeofday helper.
-func Time(t *Time_t) (Time_t, error) {
+// cosmoTime reads the wall clock. Both linux architectures read the
+// clock this way. The per-architecture Time wrappers call this helper,
+// because the linux port declares Time with different result names on
+// each architecture.
+func cosmoTime(t *Time_t) (Time_t, error) {
 	var tv Timeval
 	err := Gettimeofday(&tv)
 	if err != nil {

@@ -44,6 +44,10 @@ func Select(nfd int, r *FdSet, w *FdSet, e *FdSet, timeout *Timeval) (n int, err
 	return
 }
 
+func Time(t *Time_t) (Time_t, error) {
+	return cosmoTime(t)
+}
+
 func Utime(path string, buf *Utimbuf) error {
 	if buf == nil {
 		return Utimes(path, nil)

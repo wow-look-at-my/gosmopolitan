@@ -29,6 +29,10 @@ func Select(nfd int, r *FdSet, w *FdSet, e *FdSet, timeout *Timeval) (n int, err
 	return
 }
 
+func Time(t *Time_t) (tt Time_t, err error) {
+	return cosmoTime(t)
+}
+
 func Ustat(dev int, ubuf *Ustat_t) (err error) {
 	_, _, e1 := Syscall(SYS_USTAT, uintptr(dev), uintptr(unsafe.Pointer(ubuf)), 0)
 	if e1 != 0 {
