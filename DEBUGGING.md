@@ -6542,3 +6542,11 @@ copied the bare descriptors. Darwin's own `Pipe2` holds `ForkLock` for
 exactly this reason; the cosmo one now does too. It reproduced once in
 several runs of the same binary, which is what a two-syscall window under
 `execstress` looks like.
+
+The first cut locked inside `Pipe2` itself and hung every probe at
+`execchild` on the macOS leg: `forkExec` creates its own status pipe
+through `forkExecPipe` while it holds the conceptual WRITE lock, and the
+shared `forkpipe2.go` routed that through `Pipe2`, so the read lock
+waited on its own caller. The cosmo port now has its own `forkExecPipe`
+that skips the lock, and the shared one lives in `forkpipe2_cloexec.go`
+with cosmo excluded from its tag.
