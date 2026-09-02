@@ -191,7 +191,23 @@ func Pipe(p []int) error {
 
 //sysnb pipe2(p *[2]_C_int, flags int) (err error)
 
+// Pipe2 holds the fork lock across the pipe creation: on a darwin host pipe2
+// is pipe + fcntl, so a fork between the two inherits the ends without
+// close-on-exec and a child's stdout pipe never reaches EOF. Darwin's own
+// Pipe2 does the same.
 func Pipe2(p []int, flags int) error {
+	ForkLock.RLock()
+	defer ForkLock.RUnlock()
+	return pipe2Unlocked(p, flags)
+}
+
+// forkExecPipe runs under the fork write lock, so it must not take the read
+// lock Pipe2 takes.
+func forkExecPipe(p []int) error {
+	return pipe2Unlocked(p, O_CLOEXEC)
+}
+
+func pipe2Unlocked(p []int, flags int) error {
 	if len(p) != 2 {
 		return EINVAL
 	}

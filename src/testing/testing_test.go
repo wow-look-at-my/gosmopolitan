@@ -181,6 +181,7 @@ func TestTempDirGOTMPDIR(t *testing.T) {
 }
 
 func TestSetenv(t *testing.T) {
+	t.Serial() // The subtests must run inside the loop that sets each initial value.
 	tests := []struct {
 		name               string
 		key                string
@@ -237,22 +238,23 @@ func TestSetenv(t *testing.T) {
 	}
 }
 
-func expectParallelConflict(t *testing.T) {
-	want := testing.ParallelConflict
-	if got := recover(); got != want {
-		t.Fatalf("expected panic; got %#v want %q", got, want)
+// expectNoPanic reports a panic escaping a process-wide mutation that now takes
+// the serial barrier rather than rejecting the test.
+func expectNoPanic(t *testing.T) {
+	if got := recover(); got != nil {
+		t.Fatalf("expected no panic; got %#v", got)
 	}
 }
 
 func testWithParallelAfter(t *testing.T, fn func(*testing.T)) {
-	defer expectParallelConflict(t)
+	defer expectNoPanic(t)
 
 	fn(t)
 	t.Parallel()
 }
 
 func testWithParallelBefore(t *testing.T, fn func(*testing.T)) {
-	defer expectParallelConflict(t)
+	defer expectNoPanic(t)
 
 	t.Parallel()
 	fn(t)
@@ -262,7 +264,7 @@ func testWithParallelParentBefore(t *testing.T, fn func(*testing.T)) {
 	t.Parallel()
 
 	t.Run("child", func(t *testing.T) {
-		defer expectParallelConflict(t)
+		defer expectNoPanic(t)
 
 		fn(t)
 	})
@@ -273,7 +275,7 @@ func testWithParallelGrandParentBefore(t *testing.T, fn func(*testing.T)) {
 
 	t.Run("child", func(t *testing.T) {
 		t.Run("grand-child", func(t *testing.T) {
-			defer expectParallelConflict(t)
+			defer expectNoPanic(t)
 
 			fn(t)
 		})
@@ -321,6 +323,7 @@ func TestChdirWithParallelGrandParentBefore(t *testing.T) {
 }
 
 func TestChdir(t *testing.T) {
+	t.Serial() // The subtests must run in order, from the original directory.
 	oldDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -873,6 +876,7 @@ func TestRunningTestsInCleanup(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		t.Serial() // The outer subtests must run one at a time, inside t.Run.
 		for i := 0; i < 2; i++ {
 			t.Run(fmt.Sprintf("outer%d", i), func(t *testing.T) {
 				// Not parallel: we expect to see only one outer test,
@@ -955,6 +959,7 @@ func TestConcurrentRun(t *testing.T) {
 	// Regression test for https://go.dev/issue/64402:
 	// this deadlocked after https://go.dev/cl/506755.
 
+	t.Serial() // The body waits for the subtests, so they must run inside t.Run.
 	block := make(chan struct{})
 	var ready, done sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -975,6 +980,7 @@ func TestParentRun(t1 *testing.T) {
 	// Regression test for https://go.dev/issue/64402:
 	// this deadlocked after https://go.dev/cl/506755.
 
+	t1.Serial() // The inner Run must happen while t1's body still runs.
 	t1.Run("outer", func(t2 *testing.T) {
 		t2.Log("Hello outer!")
 		t1.Run("not_inner", func(t3 *testing.T) { // Note: this is t1.Run, not t2.Run.
@@ -984,6 +990,7 @@ func TestParentRun(t1 *testing.T) {
 }
 
 func TestContext(t *testing.T) {
+	t.Serial() // inner2 reads what inner left behind, so the two must run in order.
 	ctx := t.Context()
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("expected non-canceled context, got %v", err)

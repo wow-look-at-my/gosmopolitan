@@ -72,6 +72,7 @@ func TestLargeCopyViaNetwork(t *testing.T) {
 }
 
 func TestCopyFileToFile(t *testing.T) {
+	t.Serial() // The subtests seek one shared src, so they must run in order.
 	const size = 1 * 1024 * 1024
 	dir := t.TempDir()
 

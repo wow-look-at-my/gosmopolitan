@@ -1434,11 +1434,9 @@ func TestSOCKS5Proxy(t *testing.T) {
 	run(t, testSOCKS5Proxy, []testMode{http1Mode, https1Mode, http2Mode})
 }
 func testSOCKS5Proxy(t *testing.T, mode testMode) {
-	ch := make(chan string, 1)
-	l := newLocalListener(t)
-	defer l.Close()
-	defer close(ch)
-	proxy := func(t *testing.T) {
+	// Each subtest gets its own listener and channel: subtests run in
+	// parallel, after this function returns.
+	proxy := func(t *testing.T, l net.Listener, ch chan<- string) {
 		s, err := l.Accept()
 		if err != nil {
 			t.Errorf("socks5 proxy Accept(): %v", err)
@@ -1501,11 +1499,6 @@ func testSOCKS5Proxy(t *testing.T, mode testMode) {
 		targetConn.Close()
 	}
 
-	pu, err := url.Parse("socks5://" + l.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	sentinelHeader := "X-Sentinel"
 	sentinelValue := "12345"
 	h := HandlerFunc(func(w ResponseWriter, r *Request) {
@@ -1513,8 +1506,16 @@ func testSOCKS5Proxy(t *testing.T, mode testMode) {
 	})
 	for _, useTLS := range []bool{false, true} {
 		t.Run(fmt.Sprintf("useTLS=%v", useTLS), func(t *testing.T) {
+			ch := make(chan string, 1)
+			l := newLocalListener(t)
+			defer l.Close()
+			defer close(ch)
+			pu, err := url.Parse("socks5://" + l.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
 			ts := newClientServerTest(t, mode, h).ts
-			go proxy(t)
+			go proxy(t, l, ch)
 			c := ts.Client()
 			c.Transport.(*Transport).Proxy = ProxyURL(pu)
 			r, err := c.Head(ts.URL)
@@ -3666,6 +3667,7 @@ func testProxyForRequest(t *testing.T, tt proxyFromEnvTest, proxyForRequest func
 }
 
 func TestProxyFromEnvironment(t *testing.T) {
+	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {
@@ -3681,6 +3683,7 @@ func TestProxyFromEnvironment(t *testing.T) {
 }
 
 func TestProxyFromEnvironmentLowerCase(t *testing.T) {
+	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {

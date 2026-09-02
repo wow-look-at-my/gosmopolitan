@@ -224,6 +224,7 @@ func TestLargeStringConcat(t *testing.T) {
 }
 
 func TestConcatTempString(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	s := "bytes"
 	b := []byte(s)
 	n := testing.AllocsPerRun(1000, func() {
@@ -237,6 +238,7 @@ func TestConcatTempString(t *testing.T) {
 }
 
 func TestCompareTempString(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	s := strings.Repeat("x", sizeNoStack)
 	b := []byte(s)
 	n := testing.AllocsPerRun(1000, func() {
@@ -268,6 +270,7 @@ func TestCompareTempString(t *testing.T) {
 }
 
 func TestStringIndexHaystack(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	// See issue 25864.
 	haystack := []byte("hello")
 	needle := "ll"
@@ -282,6 +285,7 @@ func TestStringIndexHaystack(t *testing.T) {
 }
 
 func TestStringIndexNeedle(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	// See issue 25864.
 	haystack := "hello"
 	needle := []byte("ll")
@@ -328,6 +332,7 @@ func TestIntString(t *testing.T) {
 }
 
 func TestIntStringAllocs(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	unknown := '0'
 	n := testing.AllocsPerRun(1000, func() {
 		s1 := string(unknown)
@@ -342,6 +347,7 @@ func TestIntStringAllocs(t *testing.T) {
 }
 
 func TestRangeStringCast(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	s := strings.Repeat("x", sizeNoStack)
 	n := testing.AllocsPerRun(1000, func() {
 		for i, c := range []byte(s) {
