@@ -1973,11 +1973,20 @@ func (c *common) inSerialTree() bool {
 // ownsBarrierHold reports whether this test runs in parallel under a hold of
 // its own. The root holds nothing. A synctest bubble and the subtree of a
 // serial test run inside their parent's body, under the parent's hold. So
-// does a subtest whose parent is not running under tRunner - a hand-made
-// root in this package's tests - because only tRunner releases parallel
-// subtests.
+// does every test under a root that is not running under tRunner - a
+// hand-made root in this package's tests - because only tRunner releases
+// parallel subtests, and such a root may allow no parallelism at all. A
+// parent with no barrier (fuzzing, and some hand-made roots) never releases
+// them either.
 func (t *T) ownsBarrierHold() bool {
-	return t.parent != nil && t.parent.runner != "" && !t.isSynctest && !t.common.inSerialTree()
+	if t.parent == nil || t.parent.barrier == nil || t.isSynctest || t.common.inSerialTree() {
+		return false
+	}
+	root := t.parent
+	for root.parent != nil {
+		root = root.parent
+	}
+	return root.runner != ""
 }
 
 // acquireBarrier takes the shared hold the test's function body runs under.
