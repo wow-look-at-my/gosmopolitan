@@ -18,6 +18,7 @@ import (
 // setAPEPlatforms sets the -apeplatforms flag value for one test.
 func setAPEPlatforms(t *testing.T, spec string) {
 	t.Helper()
+	t.Serial() // The flag is a package global every merge reads.
 	old := *flagApePlatforms
 	*flagApePlatforms = spec
 	t.Cleanup(func() { *flagApePlatforms = old })
