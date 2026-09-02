@@ -131,6 +131,15 @@ func TestDarwinStructSizes(t *testing.T) {
 	if got := unsafe.Offsetof(sf.Mntonname); got != 88 {
 		t.Errorf("offsetof(DarwinStatfs.Mntonname) = %d, want 88", got)
 	}
+	if got := unsafe.Offsetof(sf.Fstypename); got != 72 {
+		t.Errorf("offsetof(DarwinStatfs.Fstypename) = %d, want 72", got)
+	}
+	if got := unsafe.Offsetof(sf.Mntfromname); got != 1112 {
+		t.Errorf("offsetof(DarwinStatfs.Mntfromname) = %d, want 1112", got)
+	}
+	if got := unsafe.Offsetof(sf.FlagsExt); got != 2136 {
+		t.Errorf("offsetof(DarwinStatfs.FlagsExt) = %d, want 2136", got)
+	}
 
 	// struct utsname: five 256-byte fields, no domainname.
 	var un cosmo.DarwinUtsname

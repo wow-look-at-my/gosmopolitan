@@ -105,6 +105,10 @@ func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) 
 	if darwinFns.Sendfile == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
 	}
+	// Apple reads a zero count as "send to EOF". Linux sends nothing.
+	if count == 0 {
+		return 0, 0, 0
+	}
 	var off int64
 	if offptr != 0 {
 		off = *(*int64)(unsafe.Pointer(offptr))

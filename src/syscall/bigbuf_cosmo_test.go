@@ -8,6 +8,7 @@ import (
 	"internal/runtime/syscall/cosmo"
 	"syscall"
 	"testing"
+	"unsafe"
 )
 
 // Package syscall's own tests cannot import testing (os imports syscall),
@@ -115,6 +116,21 @@ func TestDarwinMntFlagsToLinux(t *testing.T) {
 		if got := darwinMntFlagsToLinux(tc.apple); got != tc.linux {
 			t.Errorf("%s: got %#x, want %#x", tc.name, got, tc.linux)
 		}
+	}
+}
+
+// TestLinuxStructSizes pins the Linux side of the conversions. The
+// Linux kernel fills these on a Linux host, so a field change here is a
+// buffer the kernel overruns there.
+func TestLinuxStructSizes(t *testing.T) {
+	if got := unsafe.Sizeof(syscall.Statfs_t{}); got != 120 {
+		t.Errorf("sizeof(Statfs_t) = %d, want 120", got)
+	}
+	if got := unsafe.Sizeof(syscall.Utsname{}); got != 6*65 {
+		t.Errorf("sizeof(Utsname) = %d, want %d", got, 6*65)
+	}
+	if got := unsafe.Sizeof(syscall.Rlimit{}); got != 16 {
+		t.Errorf("sizeof(Rlimit) = %d, want 16", got)
 	}
 }
 

@@ -452,6 +452,12 @@ darwin_efault:
 	MOVQ	$14, CX		// EFAULT
 	RET
 
+darwin_einval:
+	MOVQ	$-1, AX
+	MOVQ	$0, BX
+	MOVQ	$22, CX		// EINVAL
+	RET
+
 darwin_clock_gettime:
 	// macOS doesn't have clock_gettime syscall, use gettimeofday
 	// This gives wall time for CLOCK_REALTIME, approximation for CLOCK_MONOTONIC
@@ -577,13 +583,13 @@ darwin_getpgid:
 // size; anything smaller is refused rather than overrun.
 darwin_statfs:
 	CMPQ	DX, $APPLE_STATFS_SIZE
-	JB	darwin_enosys
+	JB	darwin_einval
 	MOVL	$XNU_statfs64, AX
 	JMP	darwin_syscall
 
 darwin_fstatfs:
 	CMPQ	DX, $APPLE_STATFS_SIZE
-	JB	darwin_enosys
+	JB	darwin_einval
 	MOVL	$XNU_fstatfs64, AX
 	JMP	darwin_syscall
 

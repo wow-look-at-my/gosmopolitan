@@ -365,7 +365,7 @@ func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int,
 
 // statfs, fstatfs and uname fill a struct the host defines, and macOS
 // defines a much larger one. The exported wrappers live in
-// bigbuf_cosmo_arm64.go, which converts on a macOS host and calls
+// bigbuf_cosmo.go, which converts on a macOS host and calls
 // straight through everywhere else.
 //
 //sys	fstatfs(fd int, buf *Statfs_t) (err error)
