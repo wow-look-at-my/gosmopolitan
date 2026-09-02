@@ -6400,3 +6400,90 @@ kernel that reads Apple's 4-byte one. `darwinSigprocmask` is where that
 bridge belongs and it still throws. And none of this is verified: there
 is no Intel-mac runner, so this was read and reasoned about and never
 executed.
+
+## The syscall package had the same stub, and it needs a DIFFERENT trampoline (2026-09-02)
+
+`internal/runtime/syscall/cosmo`'s own darwin dispatch carried the same
+lie one layer down. `darwin_sigaction` in `asm_cosmo_amd64.s` set AX, BX
+and CX to zero and returned, under a comment that called it "basic
+functionality", so `syscall.RawSyscall(SYS_RT_SIGACTION, ...)` on an XNU
+host installed nothing and reported success. That is Section 2 item 2 of
+`docs/STUBS-INVENTORY.md`.
+
+The translation is the same shape as the runtime's and lives in
+`sigaction_cosmo_amd64.go`, because a struct rebuild, a bit-by-bit
+sigset remap and a flag table are not asm work. The package already owns
+the signal-number correspondence (`sig_cosmo.go`), so only the mask, the
+flags and the two structs are new. It cannot import the runtime, so the
+tables are a second copy, and `TestSigactionFlagXlat` /
+`TestSigactionMaskXlat` pin them to the same numbers
+`runtime/sigxlat_cosmo_test.go` pins.
+
+The trampoline is the part that is NOT shared, and the reason is worth
+keeping. `runtime·cosmoXnuSigtramp` throws the handler away: the kernel
+hands it one in DI and it calls `runtime·sigtramp`, which dispatches by
+signal through the runtime's own table. That is exactly right for a
+handler the runtime installed and exactly wrong for a caller's, which
+would never run. So this package has `sigactionTramp`, which calls the
+handler the kernel passes it and then issues `sigreturn` (BSD 184)
+itself.
+
+`sigactionTramp` also translates the signal number back to Linux
+numbering before entering the handler, because the caller installed
+under a Linux number and the kernel delivers an Apple one - a handler
+registered for SIGUSR1 would otherwise be entered with 30. It indexes a
+byte table (`sigA2LTab`) rather than calling the package's own
+`darwinXlatSignalA2L`, since it runs on a kernel-entered frame;
+`TestSigA2LTab` pins the table to that function so the two cannot drift.
+`siginfo` and the `ucontext` still arrive in Apple's layouts. Nothing
+can be done about that from here, and the trampoline says so.
+
+A signal with no Apple number reports EINVAL rather than the runtime
+path's no-op success. The runtime needs that success because `initsig`
+walks every signal and must not fail; a caller naming one signal is
+better told that this host cannot deliver it.
+
+Unverified as ever: no Intel-mac runner.
+
+## The arm64 side of that dispatch forwarded arguments to a function that wanted different ones (2026-09-02)
+
+The amd64 stub was the reported bug. The arm64 branch beside it looked
+fine, because it did something:
+
+	darwin_sigaction:
+		MOVD	272(R10), R12		// syslib.sigaction
+		B	darwin_call
+
+Offset 272 is Apple libc's `sigaction`, and `signal_cosmo_xnu.go`
+already writes down what that wants: an APPLE signal number, Apple flag
+values, and Apple's LIBC `struct sigaction` {handler, mask u32, flags
+i32}. The forward supplied none of those. It handed over the Linux
+signal number, so a handler installed for SIGUSR1 (Linux 10) landed on
+Apple SIGBUS. It handed over the 32-byte Linux struct, whose second
+8-byte field is `sa_flags`, to a callee that reads a 4-byte `sa_mask`
+there and its own `sa_flags` four bytes later - the high half of the
+Linux flags word, which is always zero. So SA_SIGINFO, SA_ONSTACK and
+SA_RESTART were dropped on every call, and the installed mask was
+whatever the flags value happened to spell. Reading `old` back wrote 16
+Apple bytes into a 32-byte Linux struct.
+
+One thing about it WAS right, and it is the part that usually is not:
+the Syslib entry is sysret-wrapped (0 or -errno), and `darwin_call`'s
+return handling already treats a small negative as an error and
+translates the numbering. So the errno convention needed nothing.
+
+Nothing in the runtime ever went through here - `setsig` reaches Apple
+libc through `runtime.darwinSigaction` - so this served
+`syscall.RawSyscall` callers only, which is why CI on the macOS runner
+never showed it. The branch now calls `darwinSigactionSyslib` and does
+the translation in Go, the same shape as every other arm64 syscall that
+needs one. The Syslib table is not reachable from Go here (this package
+cannot linkname `runtime.__syslib`), so the assembly loads the entry and
+passes it as the first argument. Everything the two arches share - the
+flag table, the sigset remap, the Linux struct - moved into
+`sigaction_cosmo.go`, so a correction to either lands once.
+
+What no fix can reach on either arch: the `siginfo` and `ucontext` a
+handler receives keep their Apple layouts. Only the signal number is
+translated back. A raw-syscall caller that reads the context is looking
+at Apple's, and always was.

@@ -181,7 +181,12 @@ closed the same day: `darwinSigaction` translates the Linux `sigactiont` and
 issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its
 `sa_tramp`, the trampoline libc supplies for the arm64 path and a raw caller
 must supply itself. Before that the asm branch returned success without
-installing anything, so no handler the runtime set was ever present. What is
+installing anything, so no handler the runtime set was ever present. The
+`syscall` package's own `rt_sigaction` emulation
+(`internal/runtime/syscall/cosmo`) had the identical stub and closed the same
+day, with its own trampoline: the runtime's dispatches through
+`runtime·sigtramp` and would run the runtime's handler rather than the
+caller's. What is
 still incomplete is the sigset-width bridge in `darwinSigprocmask`: the mask
 path translates `how` and then hands a kernel that reads a 4-byte Apple
 sigset the 8-byte Linux one. Thread creation joined the closed list via

@@ -67,6 +67,7 @@
 #define XNU_munmap		0x2000049	// BSD 73
 #define XNU_mprotect		0x200004a	// BSD 74
 #define XNU_sigaction		0x200002e	// BSD 46
+#define XNU_sigreturn		0x20000b8	// BSD 184
 #define XNU_sigaltstack		0x2000035	// BSD 53
 #define XNU_gettimeofday	0x2000074	// BSD 116
 #define XNU_select		0x200005d	// BSD 93
@@ -472,12 +473,20 @@ darwin_clock_gettime:
 	MOVQ	$0, CX
 	RET
 
+// rt_sigaction(sig, new, old, sigsetsize). The struct, the signal
+// number, the mask width and the flag bits all differ, so the work is
+// done in Go (sigaction_cosmo_amd64.go). This must be a real CALL with
+// outgoing arguments in this frame - a tail JMP would leave the $48
+// frame in place and shift every FP offset the callee sees.
 darwin_sigaction:
-	// macOS sigaction has different structure from Linux rt_sigaction
-	// For basic functionality, return success
-	MOVQ	$0, AX
-	MOVQ	$0, BX
-	MOVQ	$0, CX
+	MOVQ	DI, 0(SP)
+	MOVQ	SI, 8(SP)
+	MOVQ	DX, 16(SP)
+	MOVQ	R10, 24(SP)
+	CALL	·darwinSigaction(SB)
+	MOVQ	32(SP), AX	// r1
+	MOVQ	40(SP), CX	// errno
+	MOVQ	$0, BX		// r2
 	RET
 
 darwin_sigaltstack:
@@ -668,3 +677,73 @@ darwin_error:
 	MOVQ	$-1, AX		// r1 = -1
 	MOVQ	$0, BX		// r2 = 0
 	RET
+
+// func xnuSigaction(sig, new, old uintptr) (r1, errno uintptr)
+//
+// The raw __sigaction syscall over Apple's KERNEL struct sigaction.
+// darwinSigaction builds both structs; this only carries them across.
+TEXT ·xnuSigaction(SB),NOSPLIT,$0-40
+	MOVQ	sig+0(FP), DI
+	MOVQ	new+8(FP), SI
+	MOVQ	old+16(FP), DX
+	MOVL	$XNU_sigaction, AX
+	SYSCALL
+	JCS	xnusigaction_err
+	MOVQ	AX, r1+24(FP)
+	MOVQ	$0, errno+32(FP)
+	RET
+xnusigaction_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	AX, errno+32(FP)
+	MOVQ	$-1, AX
+	MOVQ	AX, r1+24(FP)
+	RET
+
+// func sigactionTramp()
+//
+// The sa_tramp of every handler installed through this package. The
+// KERNEL enters it, not Go, with:
+//
+//	DI  handler
+//	SI  infostyle, which sigreturn needs back
+//	DX  sig (APPLE numbering)
+//	CX  info
+//	R8  ctx
+//
+// It calls the handler with the (sig, info, ctx) arguments a Linux
+// handler is entered with, then issues sigreturn, which the kernel
+// leaves to the trampoline.
+//
+// runtime·cosmoXnuSigtramp does not fit here: it drops the handler and
+// dispatches through runtime·sigtramp, which is right for the handlers
+// the runtime installs and wrong for a caller's own.
+//
+// info and ctx keep their Apple layouts. Only the signal number can be
+// made to match what the caller asked for.
+TEXT ·sigactionTramp(SB),NOSPLIT,$32-0
+	MOVL	SI, 24(SP)		// infostyle, before SI is reused
+	MOVQ	R8, 16(SP)		// ctx, likewise
+	MOVQ	DI, AX			// handler
+
+	// Apple -> Linux signal number: the handler was installed under a
+	// Linux number. SIGEMT and SIGINFO have no Linux number and keep
+	// Apple's.
+	MOVBLZX	DX, R9
+	CMPL	R9, $32
+	JAE	sigactiontramp_sig
+	MOVQ	$·sigA2LTab(SB), R10
+	MOVBLZX	(R10)(R9*1), R9
+	CMPL	R9, $0
+	JEQ	sigactiontramp_sig
+	MOVL	R9, DX
+
+sigactiontramp_sig:
+	MOVL	DX, DI			// sig
+	MOVQ	CX, SI			// info
+	MOVQ	R8, DX			// ctx
+	CALL	AX
+	MOVQ	16(SP), DI		// ctx
+	MOVL	24(SP), SI		// infostyle
+	MOVL	$XNU_sigreturn, AX
+	SYSCALL
+	INT	$3			// sigreturn does not return
