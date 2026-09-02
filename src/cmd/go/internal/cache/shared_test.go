@@ -372,6 +372,68 @@ func TestValidateCIShared_CIWithoutSharedFails(t *testing.T) {
 	}
 }
 
+// captureStderr swaps os.Stderr for a pipe across fn and returns what was
+// written. The swap happens before fn runs because the client captures
+// os.Stderr as a writer when it builds its backend, not per message.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	fn()
+	os.Stderr = old
+	w.Close()
+	out := <-done
+	r.Close()
+	return out
+}
+
+// A shared tier in trouble must not write to the go command's stderr. The
+// fake server refuses the index endpoint, which is exactly what an unwell
+// server does in production, and the client says so on every build. That
+// output is not a build diagnostic -- a cache tier cannot change what a
+// build produces -- and cmd/internal/testdir asserts a go run prints
+// nothing, so a talkative cache turns an unrelated service's health into
+// red tests across the tree.
+func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		c.(*SharedCache).Get(testActionID("quiet"))
+	})
+	if out != "" {
+		t.Fatalf("shared tier wrote to the build's stderr:\n%s", out)
+	}
+}
+
+// The diagnostics are not deleted, only asked for. Anyone debugging the
+// cache sets GOCACHEDEBUG and gets the same messages back.
+func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "1")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		c.(*SharedCache).Get(testActionID("loud"))
+	})
+	if !strings.Contains(out, "cacheprog:") {
+		t.Fatalf("GOCACHEDEBUG=1 must report the tier's trouble, got:\n%s", out)
+	}
+}
+
 // readOutputFile reads what OutputFile names, which is what the compiler does
 // with the path a cache hit hands it.
 func readOutputFile(c Cache, id OutputID) ([]byte, error) {

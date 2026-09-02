@@ -67,8 +67,15 @@ func newSharedCache(disk *DiskCache) Cache {
 		return nil
 	}
 	// The client writes diagnostics nowhere until a consumer says otherwise,
-	// and cmd/go's stderr is where a build's warnings already go.
-	cacheclient.SetLogger(goLogger{})
+	// and this consumer says so only when asked. A cache tier never changes
+	// what a build produces, so its per-request trouble is not a build
+	// diagnostic; routing it to stderr makes the go command's own output
+	// depend on a network service's health, and every test that reads that
+	// output (cmd/internal/testdir asserts it is empty) fails when the
+	// service is unwell. An unreachable tier is still reported once, below.
+	if cacheDebug() {
+		cacheclient.SetLogger(goLogger{})
+	}
 	remote, err := cacheclient.NewWebBackend(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
@@ -208,6 +215,16 @@ func decodeOutputID(s string) (OutputID, error) {
 	}
 	copy(out[:], raw)
 	return out, nil
+}
+
+// CacheDebugEnv turns on the shared tier's per-request diagnostics. Anything
+// but the empty string enables them.
+const CacheDebugEnv = "GOCACHEDEBUG"
+
+// cacheDebug reports whether the caller asked to see the shared tier's
+// per-request diagnostics.
+func cacheDebug() bool {
+	return os.Getenv(CacheDebugEnv) != ""
 }
 
 // goLogger sends the client's diagnostics to stderr, where a build's warnings
