@@ -417,6 +417,7 @@ func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "")
+	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
@@ -442,6 +443,7 @@ func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
 	f.failPuts = true
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "")
+	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
@@ -455,12 +457,32 @@ func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
 	}
 }
 
+// A developer is never quiet, whatever the window says. They are watching the
+// build, and a cache that stopped working is theirs to see at once.
+func TestSharedCache_OutsideCIAlwaysReports(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	f.failPuts = true
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "")
+	t.Setenv("CI", "")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		PutBytes(c, testActionID("local"), []byte("body"))
+		c.(*SharedCache).Close()
+	})
+	if !strings.Contains(out, "cacheprog:") {
+		t.Fatalf("outside CI a failing tier must report, got:\n%s", out)
+	}
+}
+
 // The diagnostics are not deleted, only held back. Anyone debugging the cache
 // sets GOCACHEDEBUG and gets the same messages back during the window.
 func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "1")
+	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
@@ -491,6 +513,7 @@ func TestSharedCache_QuietWindowExpires(t *testing.T) {
 	f.failPuts = true
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "")
+	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())

@@ -220,19 +220,28 @@ func decodeOutputID(s string) (OutputID, error) {
 // command's output then fail: cmd/internal/testdir asserts a go run prints
 // nothing, and one of those lines landed inside a generated .go file.
 //
-// The window is a DEADLINE, not a switch. It expires on its own, and the
-// diagnostics come back with no edit. Silencing this permanently would mean a
-// broken cache nobody hears about; a date means somebody hears about it again
-// on this day whether or not anyone remembered.
+// The window is a DEADLINE, not a switch, and it applies to CI alone. It
+// expires on its own, and the diagnostics come back with no edit. Silencing
+// this permanently would mean a broken cache nobody hears about; a date means
+// somebody hears about it again on this day whether or not anyone remembered,
+// and the CI condition means a developer never stops hearing about it.
 //
 // TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
 // deliberate edit to a test that says why.
 var cacheQuietUntil = time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
 
 // cacheQuiet reports whether to hold the shared tier's per-request
-// diagnostics back. GOCACHEDEBUG asks for them regardless.
+// diagnostics back.
+//
+// Only a CI run is ever quiet. CI is where the output-reading tests are, and
+// it is the one place a person is not watching. A developer sees a failing
+// cache the moment it fails, on every build, window or no window.
+// GOCACHEDEBUG asks for them back anywhere.
 func cacheQuiet() bool {
 	if cacheDebug() {
+		return false
+	}
+	if os.Getenv("CI") == "" {
 		return false
 	}
 	return time.Now().Before(cacheQuietUntil)
