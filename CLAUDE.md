@@ -219,8 +219,11 @@ IAT slots.
 Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
 forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
 through NT bring-up wave 3 plus the 2026-09-02 metadata syscalls (chtimes/truncate/fchdir/link; still missing:
-Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
-resolved from iphlpapi and probed on every runner);
+file/pipe dup(2), off-host TCP coverage - DNS is
+resolved from iphlpapi and probed on every runner). Windows/arm64 has its Win32 layer as of 2026-09-02 -
+AAPCS64 ntcall trampolines, ARM64_NT_CONTEXT, VEH thunks - but no boot path (the APE has no arm64 PE header,
+so `iswindows` is a constant false there) and no netpoller, which waits on an arm64 split of the
+amd64-numbered syscall emulation;
 macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
 metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
 cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of
