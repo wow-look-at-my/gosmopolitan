@@ -484,11 +484,15 @@ func rtsigprocmask(how int32, new, old *sigset, size int32)
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
-	if isdarwin() && GOARCH == "arm64" {
+	if isdarwin() {
 		// Apple `how` values, sigset width and signal numbering all
-		// differ; darwinSigprocmask (signal_cosmo_xnu.go) translates.
-		// amd64 stays on its raw-XNU asm branch until the Intel-mac
-		// runtime bring-up.
+		// differ; darwinSigprocmask translates all three. Both arches
+		// now. The GOARCH == "arm64" guard that used to be here sent
+		// amd64 to rtsigprocmask's darwin branch, which translated
+		// `how` but passed the 8-byte Linux mask through untouched -
+		// so every mask it set named the wrong signals. arm64 goes
+		// through the Syslib (signal_cosmo_xnu.go), amd64 through the
+		// raw sigprocmask syscall (signal_cosmo_xnu_amd64.go).
 		darwinSigprocmask(how, new, old)
 		return
 	}
@@ -563,7 +567,7 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 // signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
 // sysSigaction calls the rt_sigaction system call (Linux hosts) or the
-// Apple sigaction translation layer (XNU hosts, arm64).
+// Apple sigaction translation layer (XNU hosts).
 //
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
@@ -573,7 +577,13 @@ func sysSigaction(sig uint32, new, old *sigactiont) {
 		// handler state itself and self-directed delivery consults
 		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
 		ret = ntSigaction(sig, new, old)
-	} else if isdarwin() && GOARCH == "arm64" {
+	} else if isdarwin() {
+		// Both arches now. The GOARCH == "arm64" guard that used to be
+		// here sent amd64 to rt_sigaction's darwin branch, which
+		// returned success WITHOUT INSTALLING ANYTHING - so every
+		// handler the runtime believed it had set was absent. arm64
+		// goes through the Syslib, amd64 through raw __sigaction with
+		// its own trampoline; both translate the same struct.
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))

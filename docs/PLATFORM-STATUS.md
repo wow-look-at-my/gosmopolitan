@@ -176,9 +176,16 @@ macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
 unit tests and apetest). The syscall surface closed on 2026-09-02: the
 metadata table, the XNU carry-flag error convention, Apple-to-Linux errno
-numbering, the kqueue/kevent netpoller and hw.ncpu. What is still incomplete
-is signal delivery (sigaction), which is a struct translation rather than a
-syscall. Thread creation joined the closed list via bsdthread_create, and
-parking via a polled wait since XNU has no futex. There is still no
+numbering, the kqueue/kevent netpoller and hw.ncpu. Signal INSTALLATION
+closed the same day: `darwinSigaction` translates the Linux `sigactiont` and
+issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its
+`sa_tramp`, the trampoline libc supplies for the arm64 path and a raw caller
+must supply itself. Before that the asm branch returned success without
+installing anything, so no handler the runtime set was ever present. What is
+still incomplete is the sigset-width bridge in `darwinSigprocmask`: the mask
+path translates `how` and then hands a kernel that reads a 4-byte Apple
+sigset the 8-byte Linux one. Thread creation joined the closed list via
+bsdthread_create, and parking via a polled wait since XNU has no futex.
+There is still no
 Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
 and is verified on real hardware.

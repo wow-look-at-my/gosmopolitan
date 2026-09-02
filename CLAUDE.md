@@ -225,8 +225,10 @@ macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing
 metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
 cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of
 2026-09-02 (metadata, errno convention and numbering, netpoller, CPU count, parking, nanosleep, and thread
-creation via bsdthread_create), but signal delivery is still a stub and there is no Intel-mac runner, so
-nothing there has ever executed - do not claim it works. It is deliberately absent from the default
+creation via bsdthread_create), and so are signals - darwinSigaction issues the raw __sigaction syscall with
+its own sa_tramp trampoline and darwinSigprocmask bridges the sigset width (8-byte Linux, 4-byte Apple),
+where the old asm branches returned success without installing anything and set a mask naming the wrong
+signals. There is no Intel-mac runner, so nothing there has ever executed - do not claim it works. It is deliberately absent from the default
 GOCOSMOPLATFORMS set for that reason.
 
 **Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64

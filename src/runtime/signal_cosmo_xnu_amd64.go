@@ -1,0 +1,135 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build cosmo && amd64
+
+package runtime
+
+import (
+	"internal/abi"
+	"unsafe"
+)
+
+// Real signal-handler installation on macOS-Intel hosts.
+//
+// arm64 reaches Apple's LIBC sigaction through the APE loader's Syslib
+// (signal_cosmo_xnu.go). amd64 has no Syslib, so it issues the raw
+// __sigaction syscall - which is a different interface, not the same one
+// by another route:
+//
+//   - The kernel struct carries an sa_tramp field that the libc struct
+//     does not. libc fills it with its own trampoline; a raw caller must
+//     supply one, and cosmoXnuSigtramp is it.
+//   - The kernel enters that trampoline with the handler, an infostyle
+//     token, and the signal arguments, and the trampoline is responsible
+//     for calling sigreturn when the handler comes back. libc does that
+//     part too, which is why the arm64 path can ignore it.
+//
+// The flag and mask translations are shared with arm64
+// (signal_cosmo_xnu_flags.go, sigxlat_cosmo.go): only the call differs.
+//
+// The ABI is Go's own pre-1.12 darwin port (go1.8
+// runtime/sys_darwin_amd64.s, defs_darwin_amd64.go), the same source the
+// bsdthread thread-creation path came from.
+
+// xnuKsigactiont is Apple's KERNEL struct sigaction, what __sigaction
+// takes. Upstream's darwin port calls it sigactiont; the libc-facing one
+// without sa_tramp is xnuSigactiont on the arm64 side.
+type xnuKsigactiont struct {
+	sa_handler uintptr
+	sa_tramp   uintptr
+	sa_mask    uint32
+	sa_flags   int32
+}
+
+// cosmoXnuSigtramp is in sys_cosmo_amd64.s. The KERNEL enters it - it is
+// never called from Go - so the declaration exists for asmdecl and for
+// taking its address.
+func cosmoXnuSigtramp()
+
+// darwinSigaction implements sysSigaction on macOS-Intel: translate the
+// Linux sigactiont both ways and issue __sigaction. Returns 0 on
+// success, nonzero on failure, like rt_sigaction.
+//
+// Signals with no Apple equivalent (SIGSTKFLT, SIGPWR, the realtime
+// range) succeed as a no-op and read back as SIG_DFL, matching arm64:
+// they cannot be raised on an XNU host, and initsig and
+// clearSignalHandlers must stay oblivious.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
+	asig := cosmoSigL2A(sig)
+	if asig == 0 {
+		if old != nil {
+			*old = sigactiont{}
+		}
+		return 0
+	}
+	var anew, aold xnuKsigactiont
+	var anewp, aoldp uintptr
+	if new != nil {
+		// SIG_DFL (0) and SIG_IGN (1) coincide on both systems; a real
+		// handler pointer passes through untranslated.
+		anew.sa_handler = new.sa_handler
+		anew.sa_flags = xnuSigFlagsL2A(new.sa_flags)
+		anew.sa_mask = cosmoSigmaskL2A(new.sa_mask)
+		// Only a real handler needs a trampoline. Giving one to SIG_DFL
+		// or SIG_IGN would hand the kernel a return path for a delivery
+		// it is never going to make.
+		if anew.sa_handler > 1 {
+			anew.sa_tramp = abi.FuncPCABI0(cosmoXnuSigtramp)
+		}
+		anewp = uintptr(unsafe.Pointer(&anew))
+	}
+	if old != nil {
+		aoldp = uintptr(unsafe.Pointer(&aold))
+	}
+	if _, errno := cosmoXnuSyscall6(_XNU_sigaction, uintptr(asig), anewp, aoldp, 0, 0, 0); errno != 0 {
+		return -1
+	}
+	if old != nil {
+		old.sa_handler = aold.sa_handler
+		old.sa_flags = xnuSigFlagsA2L(aold.sa_flags)
+		old.sa_restorer = 0
+		old.sa_mask = cosmoSigmaskA2L(aold.sa_mask)
+	}
+	return 0
+}
+
+// darwinSigprocmask implements sigprocmask on macOS-Intel: translate
+// `how` (Linux 0/1/2 to Apple 1/2/3) and remap the sigset bits in both
+// directions, then issue the raw sigprocmask syscall. arm64 reaches
+// Apple libc pthread_sigmask instead (signal_cosmo_xnu.go); the
+// translations are the same.
+//
+// A Linux sigset is 8 bytes and an Apple one is 4, and the two number
+// their signals differently. The asm path this replaces
+// (rtsigprocmask's darwin branch) handed the kernel the Linux mask
+// untouched, so every mask it set named the wrong signals.
+//
+// Crashes on failure like the Linux asm path, so a bad mask can never
+// be silently ignored.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func darwinSigprocmask(how int32, new, old *sigset) {
+	var anew, aold uint32
+	var anewp, aoldp uintptr
+	if new != nil {
+		anew = cosmoSigmaskL2A(uint64(new[0]) | uint64(new[1])<<32)
+		anewp = uintptr(unsafe.Pointer(&anew))
+	}
+	if old != nil {
+		aoldp = uintptr(unsafe.Pointer(&aold))
+	}
+	if _, errno := cosmoXnuSyscall6(_XNU_sigprocmask, uintptr(how+1), anewp, aoldp, 0, 0, 0); errno != 0 {
+		throw("darwinSigprocmask: sigprocmask failed")
+	}
+	if old != nil {
+		m := cosmoSigmaskA2L(aold)
+		old[0] = uint32(m)
+		old[1] = uint32(m >> 32)
+	}
+}

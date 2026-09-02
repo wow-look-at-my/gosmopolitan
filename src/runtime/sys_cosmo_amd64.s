@@ -622,22 +622,14 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 rtsigprocmask_darwin:
-	// macOS sigprocmask doesn't have size parameter.
-	// The `how` values also differ: Linux SIG_BLOCK/UNBLOCK/SETMASK
-	// are 0/1/2, Apple's are 1/2/3. Passing Linux values raw meant
-	// SIG_BLOCK arrived as the invalid 0 (EINVAL -> deliberate crash
-	// below) and SETMASK arrived as Apple SIG_UNBLOCK. Translate by
-	// adding 1. (The 8-byte Linux sigset vs 4-byte Apple sigset
-	// mismatch remains - macOS signal handling is still stubbed and
-	// tracked for the signal-translation wave.)
-	MOVL	how+0(FP), DI
-	INCL	DI
-	MOVQ	new+8(FP), SI
-	MOVQ	old+16(FP), DX
-	MOVL	$XNU_sigprocmask, AX
-	SYSCALL
-	JCC	2(PC)
-	MOVL	$0xf1, 0xf1  // crash
+	// Unreachable: sigprocmask routes darwin hosts through
+	// darwinSigprocmask (signal_cosmo_xnu_amd64.go), which translates
+	// the mask as well as `how`. This branch translated `how` alone and
+	// handed the kernel the 8-byte Linux mask untouched, so every mask
+	// it set named the wrong signals.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf3, 0xf3
 	RET
 rtsigprocmask_nt:
 	RET
@@ -655,9 +647,14 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	MOVL	AX, ret+32(FP)
 	RET
 rt_sigaction_darwin:
-	// macOS sigaction has different structure
-	// For now, return success without calling sigaction
-	// TODO: Implement proper sigaction translation layer
+	// Unreachable: sysSigaction routes darwin hosts through
+	// darwinSigaction (signal_cosmo_xnu_amd64.go), which translates the
+	// struct and issues __sigaction with a real trampoline. This used to
+	// return success without installing anything, so every handler the
+	// runtime thought it had set was absent.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf3, 0xf3
 	MOVL	$0, ret+32(FP)
 	RET
 rt_sigaction_nt:
@@ -706,6 +703,35 @@ TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME|NOFRAME,$0
 // Used instead of sigtramp in programs that use cgo.
 TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
 	JMP	runtime·sigtramp(SB)
+
+// cosmoXnuSigtramp is the sa_tramp of a raw __sigaction
+// (signal_cosmo_xnu_amd64.go). The KERNEL enters it, not Go, with:
+//
+//	DI  handler (ignored - sigtrampgo dispatches by signal)
+//	SI  infostyle, which sigreturn needs back
+//	DX  sig
+//	CX  info
+//	R8  ctx
+//
+// arm64 needs none of this: Apple libc supplies its own trampoline
+// there, and the Syslib hands it the already-installed handler. A raw
+// caller owns both ends - entering the handler and calling sigreturn
+// when it comes back.
+//
+// The reshuffle lands on the (sig, info, ctx) contract runtime·sigtramp
+// already implements, so the C-to-Go transition is not written twice.
+TEXT runtime·cosmoXnuSigtramp(SB),NOSPLIT,$32
+	MOVL	SI, 24(SP)		// infostyle, before SI is reused
+	MOVQ	R8, 16(SP)		// ctx, likewise
+	MOVL	DX, DI			// sig
+	MOVQ	CX, SI			// info
+	MOVQ	R8, DX			// ctx
+	CALL	runtime·sigtramp(SB)
+	MOVQ	16(SP), DI		// ctx
+	MOVL	24(SP), SI		// infostyle
+	MOVL	$XNU_sigreturn, AX
+	SYSCALL
+	INT	$3			// sigreturn does not return
 
 TEXT runtime·sigreturn__sigaction(SB),NOSPLIT,$0
 	CHECK_DARWIN(sigreturn_darwin)

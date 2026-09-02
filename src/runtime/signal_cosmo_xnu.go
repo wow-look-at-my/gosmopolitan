@@ -45,14 +45,10 @@ import "unsafe"
 // exec. Everything is nosplit, takes no locks, allocates nothing, and
 // calls only the pre-resolved async-signal-safe libc entries.
 
-// Apple sigaction flag values (upstream defs_darwin_arm64.go). The
-// Linux values these translate from are in defs_cosmo_arm64.go:
-// _SA_SIGINFO 0x4, _SA_ONSTACK 0x8000000, _SA_RESTART 0x10000000.
-const (
-	xnuSA_ONSTACK = 0x1
-	xnuSA_RESTART = 0x2
-	xnuSA_SIGINFO = 0x40
-)
+// The Apple sigaction flag values and both translation directions live
+// in signal_cosmo_xnu_flags.go, which carries no architecture tag: amd64
+// reaches Apple sigaction through the raw __sigaction syscall rather
+// than the Syslib, and the flags are identical either way.
 
 // Apple sigaltstack flag values. SS_ONSTACK is 1 on both systems;
 // SS_DISABLE is 4 on Apple, 2 on Linux (_SS_DISABLE, os2_cosmo.go).
@@ -99,17 +95,7 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 		// SIG_DFL (0) and SIG_IGN (1) coincide on both systems; real
 		// handler pointers (our sigtramp) pass through untranslated.
 		anew.sa_handler = new.sa_handler
-		var fl int32
-		if new.sa_flags&_SA_SIGINFO != 0 {
-			fl |= xnuSA_SIGINFO
-		}
-		if new.sa_flags&_SA_ONSTACK != 0 {
-			fl |= xnuSA_ONSTACK
-		}
-		if new.sa_flags&_SA_RESTART != 0 {
-			fl |= xnuSA_RESTART
-		}
-		anew.sa_flags = fl
+		anew.sa_flags = xnuSigFlagsL2A(new.sa_flags)
 		anew.sa_mask = cosmoSigmaskL2A(new.sa_mask)
 		anewp = uintptr(unsafe.Pointer(&anew))
 	}
@@ -122,17 +108,7 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	}
 	if old != nil {
 		old.sa_handler = aold.sa_handler
-		var fl uint64
-		if aold.sa_flags&xnuSA_SIGINFO != 0 {
-			fl |= _SA_SIGINFO
-		}
-		if aold.sa_flags&xnuSA_ONSTACK != 0 {
-			fl |= _SA_ONSTACK
-		}
-		if aold.sa_flags&xnuSA_RESTART != 0 {
-			fl |= _SA_RESTART
-		}
-		old.sa_flags = fl
+		old.sa_flags = xnuSigFlagsA2L(aold.sa_flags)
 		old.sa_restorer = 0
 		old.sa_mask = cosmoSigmaskA2L(aold.sa_mask)
 	}

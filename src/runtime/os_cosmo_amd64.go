@@ -120,9 +120,11 @@ func cosmoDarwinNumCPU() int32 {
 // 64-bit layout keventt already describes (netpoll_cosmo_xnu.go) - the
 // same one arm64 passes to Apple libc.
 const (
-	_XNU_sysctl = 0x2000000 | 202
-	_XNU_kqueue = 0x2000000 | 362
-	_XNU_kevent = 0x2000000 | 363
+	_XNU_sigaction   = 0x2000000 | 46
+	_XNU_sigprocmask = 0x2000000 | 48
+	_XNU_sysctl      = 0x2000000 | 202
+	_XNU_kqueue      = 0x2000000 | 362
+	_XNU_kevent      = 0x2000000 | 363
 )
 
 // The hw.ncpu MIB, spelled the way os_darwin.go spells it. That file is
@@ -144,8 +146,9 @@ func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno in
 // so the poller is served directly.
 //
 // This says nothing about whether macOS-Intel has ever been RUN. Its
-// syscall surface is complete now, thread creation included, but signal
-// delivery is still a stub and there is no Intel-mac runner.
+// syscall surface is complete now - thread creation, signal
+// installation and the signal mask included - but there is no
+// Intel-mac runner, so none of it has executed.
 func cosmoDarwinKqueueSupported() bool { return true }
 
 // cosmoDarwinKqueue creates a kqueue. Returns the descriptor, or
@@ -213,18 +216,3 @@ func sigaltstack(new, old *stackt)
 //
 //go:noescape
 func setitimer(mode int32, new, old *itimerval)
-
-// darwinSigprocmask and darwinSigaction are unreachable on amd64: the
-// GOARCH == "arm64" guards in sigprocmask/sysSigaction compile their
-// call sites away, and the asm paths keep the amd64 behavior. The
-// stubs exist so the shared code links.
-//
-//go:nosplit
-func darwinSigprocmask(how int32, new, old *sigset) {
-	throw("darwinSigprocmask: not implemented on amd64")
-}
-
-//go:nosplit
-func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
-	return -1
-}

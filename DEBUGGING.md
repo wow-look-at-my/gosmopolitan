@@ -6352,3 +6352,51 @@ Two consequences worth knowing:
 - **Not a size change.** The default still needs both payloads, because
   darwin/arm64 is in it, and the APE header is a fixed 64K. Only dropping
   an ARCHITECTURE moves the number.
+
+## Signal installation on macOS-Intel: a raw __sigaction owns its own trampoline (2026-09-02)
+
+`sysSigaction` sent darwin hosts to `darwinSigaction` only when GOARCH
+was arm64. amd64 fell through to `rt_sigaction`, whose darwin branch
+returned success without calling anything. So every handler the runtime
+believed it had installed was absent, and nothing reported it: `getsig`
+read back what the stub never wrote, and `initsig` finished happily.
+
+The guard is gone and both arches reach `darwinSigaction` now. arm64
+keeps its Syslib route into Apple libc. amd64 has no Syslib, so it
+issues the raw `__sigaction` syscall (BSD 46) - and that is a different
+interface, not the same one by another road.
+
+The kernel struct carries an `sa_tramp` field the libc struct does not.
+libc fills it with its own trampoline, which is why the arm64 path never
+had to think about it. A raw caller supplies one, and
+`runtime·cosmoXnuSigtramp` (`sys_cosmo_amd64.s`) is it. The kernel
+enters that trampoline with the handler in DI, an infostyle token in SI,
+and the signal arguments in DX, CX and R8. It saves the infostyle and
+the context, moves sig, info and ctx into DI, SI and DX, and calls
+`runtime·sigtramp` - the (sig, info, ctx) contract the rest of the
+runtime already implements, so the C-to-Go transition is not written a
+second time. When the handler returns, the trampoline calls `sigreturn`
+(BSD 184) with the saved context and infostyle. Owning that return is
+the other half of the job libc does for arm64; a trampoline that simply
+returned would resume the kernel's stub with no signal frame to unwind.
+
+The ABI is Go's own pre-1.12 darwin port (go1.8
+`runtime/sys_darwin_amd64.s`, `defs_darwin_amd64.go`) - the same source
+`bsdthread_create` came from. Reading a published contract beat guessing
+at one again.
+
+Two smaller pieces went with it. The asm darwin branch of
+`rt_sigaction` is now a crash poke rather than a return-0: nothing
+routes there any more, and a new caller that enters the assembly
+directly should die instead of inheriting the old lie. And the Apple
+sigaction flag constants with both translation directions moved out of
+the arm64-only `signal_cosmo_xnu.go` into `signal_cosmo_xnu_flags.go`,
+tagged `cosmo` alone. The flags are identical on both arches; a second
+copy would drift the first time somebody corrected an entry.
+
+What is left on this platform is the mask. `rtsigprocmask`'s darwin
+branch translates `how` and then passes the Linux 8-byte sigset to a
+kernel that reads Apple's 4-byte one. `darwinSigprocmask` is where that
+bridge belongs and it still throws. And none of this is verified: there
+is no Intel-mac runner, so this was read and reasoned about and never
+executed.
