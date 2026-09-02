@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && amd64
+//go:build cosmo
 
 // Windows NT CPU profiling (wave 3 item 3): upstream os_windows.go's
 // profileLoop/profilem ported to the NT function-table idiom.
@@ -200,9 +200,8 @@ func ntProfileLoop() {
 
 // ntProfileM records one CPU sample of mp, whose thread (handle
 // thread) is suspended: upstream profilem. CONTEXT_CONTROL suffices -
-// sigprof consumes only pc and sp (lr is 0 on amd64), and unlike
-// preemption nothing is written back, so the thread's other registers
-// are never touched.
+// sigprof consumes only pc, sp and lr - and unlike preemption nothing
+// is written back, so the thread's other registers are never touched.
 func ntProfileM(mp *m, thread uintptr) {
 	// 16-align the CONTEXT buffer (the ntPreemptM idiom).
 	var c *ntContext
@@ -215,6 +214,6 @@ func ntProfileM(mp *m, thread uintptr) {
 		// thread is suspended.)
 		return
 	}
-	gp := ntGFromSP(mp, uintptr(c.rsp))
-	sigprof(uintptr(c.rip), uintptr(c.rsp), 0, gp, mp)
+	gp := ntGFromSP(mp, c.getSP())
+	sigprof(c.getPC(), c.getSP(), c.getLR(), gp, mp)
 }

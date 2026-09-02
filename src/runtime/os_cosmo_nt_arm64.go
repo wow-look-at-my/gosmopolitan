@@ -6,94 +6,38 @@
 
 package runtime
 
-import "unsafe"
-
-// Windows NT is amd64-only (Windows/arm64 is out of scope for the NT
-// bring-up). iswindows is constant false here so the shared cosmo
-// code's NT branches compile away, and the nt* stubs below exist only
-// so that shared code links - they are unreachable. Mirrors the
-// darwinSigprocmask/darwinSigaction stub idiom on amd64.
-
+// iswindows reports whether the host is Windows NT.
+//
+// It is constant false on arm64. The APE carries no Windows/arm64 boot
+// stub, so nothing ever sets __hostos to _HOSTWINDOWS on this
+// architecture, and the shared cosmo code's NT branches compile away.
+// The runtime surface underneath them is real - os_cosmo_nt*.go and
+// sys_cosmo_nt_arm64.s build for arm64 - so what is missing is the
+// boot path that would reach it, plus the syscall-emulation layer
+// described below.
+//
 //go:nosplit
 func iswindows() bool {
 	return false
 }
 
-//go:nosplit
-func ntFutexsleep(addr *uint32, val uint32, ns int64) {
-	throw("ntFutexsleep: not implemented on arm64")
-}
+// The syscall-emulation layer (os_cosmo_nt_sys.go, and the fd, socket,
+// message, path, metadata, exec, DNS and certificate files under it)
+// stays amd64 only. It is written against LINUX AMD64 syscall
+// numbering, struct stat and O_* flag values, and all three differ on
+// arm64. The stubs below stand in for the parts of that layer the
+// shared cosmo code names by hand. Nothing can reach them, because
+// iswindows() is false.
 
-//go:nosplit
-func ntFutexwakeup(addr *uint32) {
-	throw("ntFutexwakeup: not implemented on arm64")
-}
-
-func ntNewosproc(mp *m) {
-	throw("ntNewosproc: not implemented on arm64")
-}
-
-func ntNumCPU() int32 {
-	return 1
-}
-
-//go:nosplit
-func ntVirtualAlloc(v unsafe.Pointer, n uintptr, allocType, prot uintptr) unsafe.Pointer {
-	throw("ntVirtualAlloc: not implemented on arm64")
-	return nil
-}
-
-func cosmoNTGoargs() bool {
-	return false
-}
-
-//go:nosplit
-func ntSigaction(sig uint32, new, old *sigactiont) int32 {
-	throw("ntSigaction: not implemented on arm64")
-	return -1
-}
-
+// ntReadRandom reports that it filled no bytes, which is what
+// readRandom (os_cosmo.go) reads as "ask the next source".
 func ntReadRandom(r []byte) int {
 	return 0
 }
 
-func ntGoenvs() {
-	throw("ntGoenvs: not implemented on arm64")
-}
-
-func ntPreemptM(mp *m) {
-	throw("ntPreemptM: not implemented on arm64")
-}
-
-func ntMinitThread() {
-	throw("ntMinitThread: not implemented on arm64")
-}
-
-//go:nosplit
-func ntUnminitThread() {
-	throw("ntUnminitThread: not implemented on arm64")
-}
-
-func ntInitConsoleCtrl() {
-	throw("ntInitConsoleCtrl: not implemented on arm64")
-}
-
-func ntSetProcessCPUProfiler(hz int32) {
-	throw("ntSetProcessCPUProfiler: not implemented on arm64")
-}
-
-func ntSetThreadCPUProfiler(hz int32) {
-	throw("ntSetThreadCPUProfiler: not implemented on arm64")
-}
-
-//go:nosplit
-func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
-	throw("ntVirtualFree: not implemented on arm64")
-	return 0
-}
-
 // NT netpoller stubs (netpoll_cosmo.go dispatches here only when
-// iswindows(), which is constant false on arm64).
+// iswindows(), which is constant false on arm64). The netpoller sits
+// on WSAPoll and the fd table, both inside the emulation layer.
 
 func netpollinitNT() {
 	throw("netpollinitNT: not implemented on arm64")

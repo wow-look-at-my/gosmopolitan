@@ -26,8 +26,8 @@ func apeArchName(a sys.ArchFamily) string {
 
 // apePlatforms returns the host platforms the APE being written boots on.
 //
-// Without -apeplatforms the answer is descriptive: every platform the
-// payloads on hand can serve. With -apeplatforms it is a requirement, so a
+// Without -apeplatforms the answer is descriptive: the default set, less
+// any platform the payloads on hand cannot serve. With -apeplatforms it is a requirement, so a
 // selected platform whose payload is absent, or a payload no selected
 // platform boots, ends the link. Either way the boot mechanisms
 // makeAPEHeaderForPayloads emits are exactly the ones these platforms need.

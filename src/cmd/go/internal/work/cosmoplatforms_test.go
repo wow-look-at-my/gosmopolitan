@@ -18,8 +18,12 @@ func TestCosmoPlatformSpec(t *testing.T) {
 		want         string
 		wantExplicit bool
 	}{
-		{"", "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64", false},
+		// Unset is the three platforms something verifies, not every
+		// platform the table can name.
+		{"", "linux/amd64,darwin/arm64,windows/amd64", false},
 		{"linux/amd64", "linux/amd64", true},
+		// The two the default leaves out stay selectable by name.
+		{"darwin/amd64,linux/arm64", "linux/arm64,darwin/amd64", true},
 		// Canonical order and deduplication, so the string handed to the
 		// linker as -apeplatforms is the same for any spelling of a set.
 		{"windows/amd64,linux/amd64,windows/amd64", "linux/amd64,windows/amd64", true},

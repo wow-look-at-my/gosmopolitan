@@ -5649,7 +5649,7 @@ one command with `-buildvcs=false -ldflags=-buildid=`:
 
 | selection | payloads | bytes | vs fat |
 |---|---|---|---|
-| unrestricted (all five) | amd64+arm64 | 5,796,992 | - |
+| all five (explicit; the default at the time of measurement) | amd64+arm64 | 5,796,992 | - |
 | linux/amd64,darwin/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
 | linux/amd64,linux/arm64,windows/amd64 | amd64+arm64 | 5,796,992 | 0% |
 | linux/amd64,windows/amd64 | amd64 | 3,072,000 | -47.0% |
@@ -5721,7 +5721,9 @@ refuses macOS by name BEFORE the printf in that configuration
   delegation and unsupported-host message are present, and which must
   not be.
 - `TestAPEPlatformsDefaultUnchanged` - an unset flag assembles
-  byte-identically to naming every platform.
+  byte-identically to naming the default set explicitly. (The default is
+  the three supported platforms, not the whole table - see "The default
+  platform set is three, not five" below.)
 - `TestAPEPlatformsRejects` - the refusals above, in process, via the
   linker's `-h` panic mode.
 - `TestCosmoSiblingAndAssemble` (cmd/go/internal/work) - the sibling and
@@ -6007,3 +6009,482 @@ line precedes the timeouts by minutes - so a cold fetch is not it either. What
 remains to explain is why a `go list` child under the fork takes more than 30s
 on that host when the same call takes under a second on linux. The check stays
 as a regression guard on the descriptor path it does cover.
+
+# 2026-09-02: the macOS metadata wave - every remaining darwin arm64 syscall
+
+`docs/STUBS-INVENTORY.md` section 6 listed the syscalls that fell
+through `syscall6SlowDarwin` to `darwinENOSYS`: everything to do with
+file metadata and system information. `os.File.Sync`, `os.Truncate`,
+`os.Chmod`, `os.Chtimes`, `os.Link`, `os.Symlink`, `syscall.Statfs`,
+`syscall.Uname`, `syscall.Getrlimit` and the credential getters all
+failed on macOS. The apetest path never called them, so CI stayed green
+over the whole gap.
+
+All of them are emulated now. The inventory carries the per-syscall
+table; what is worth keeping here is the three things that shaped the
+implementation.
+
+## The nosplit budget decides where a conversion can live
+
+The dispatch spine runs after `entersyscall`, so every handler on it is
+`//go:nosplit` and a stack split there is a fatal "stack split at bad
+time". That is a hard ceiling on a handler's frame, and Apple's
+`struct statfs` is 2168 bytes with `struct utsname` at 1280 - neither
+fits.
+
+So those three do not build their buffer in the emulation. Package
+`syscall` allocates the Apple-layout struct (ordinary Go, allocation
+legal) and converts it, exactly as the 2026-07-21 cmsg work split
+control-buffer repacking across the same boundary. The emulation then
+only forwards a pointer.
+
+That split has an obvious way to go wrong: a caller reaching
+`SYS_STATFS` with a Linux `Statfs_t` would take a two-kilobyte write
+into 120 bytes. The size travels as an argument and the emulation
+refuses a buffer smaller than the Apple struct, so that caller gets
+EINVAL. `darwinabi_cosmo_test.go` pins the struct sizes and offsets, and
+the size guard is what makes the pin load-bearing rather than decorative.
+
+## Three syscalls are not a forward, and one of them looks like one
+
+- `getpriority` returns a value where -1 is legal, so "did it fail?"
+  cannot be read off the return. errno is zeroed through Apple's
+  `__error()` before the call and read back after - Apple's own man page
+  prescribes exactly this. It also has to return `20-nice`, because the
+  LINUX SYSCALL applies that bias (glibc removes it again) and a Linux
+  host reports the biased number. The runtimeprobe `sysinfo` check reads
+  `prio=20` on linux, which is the contract macOS must match.
+- `prlimit64` has no Apple counterpart taking a pid, numbers resources
+  differently above `RLIMIT_CORE` (Linux NOFILE 7 is Apple 8; MEMLOCK
+  and NPROC swap), and uses `2^63-1` where Linux uses `~0` for
+  "unlimited". Passing either sentinel through unrewritten turns an
+  unlimited resource into a nonsense finite one.
+- `sendfile` reverses Apple's first two arguments against Linux's,
+  reports its count through a pointer that is filled even when the call
+  fails, and never moves the file offset - so a Linux caller passing no
+  offset needs an lseek before and after. errno must be read before that
+  second lseek, or the fixup clobbers it.
+
+## What the tests actually prove, and where
+
+The translation tables are pure arithmetic over Apple's numbering, so
+they moved into `darwinabi_cosmo.go` under a plain `cosmo` build tag
+rather than an arm64 one. That is not tidying: cosmo package tests run
+on the ubuntu CI leg, and an arm64-tagged table would have been a table
+no CI run ever executed.
+
+The syscalls themselves are covered by runtimeprobe's `fsmeta`,
+`sysinfo` and `sendfile` checks, which apetest runs on all three
+runners. The linux run is the ground truth - it pins the semantics the
+darwin emulation has to reproduce - and the macOS run is what proves
+the dlsym wiring behind it. On a Windows host the three checks report
+what each step answered instead of failing, following `checkDupFile`:
+the NT emulation has not brought this surface up, and a check that
+fails there would say nothing new.
+
+Negative control, run before trusting any of it: breaking one flag
+mapping in `darwinMntFlagsToLinux` turned `TestDarwinStatfsToLinux` and
+`TestDarwinMntFlagsToLinux` red with the exact wrong bit named
+(`Flags = 0x7, want 0x403`).
+
+## The NT half of the same wave
+
+Windows had the same shape of gap, smaller. The emulation already served
+fsync, ftruncate, fchmod, chdir and getcwd; utimensat, truncate, fchdir
+and linkat were ENOSYS, which is `os.Chtimes`, `os.Truncate`,
+`os.File.Chdir` and `os.Link` failing on a Windows host.
+`os_cosmo_nt_meta.go` implements those four over SetFileTime,
+SetEndOfFile, GetFinalPathNameByHandleW+SetCurrentDirectoryW, and
+CreateHardLinkW.
+
+Two details worth keeping:
+
+- **utimensat needs no sentinel arithmetic on NT.** SetFileTime already
+  leaves a stamp alone when its pointer is NULL, which is precisely what
+  UTIME_OMIT asks for, so the sentinel becomes a nil pointer rather than
+  a translated value. Only UTIME_NOW needs a clock read.
+- **fchdir has to round-trip through a path.** NT has no
+  handle-relative chdir, and GetFinalPathNameByHandleW answers in `\\?\`
+  form, which SetCurrentDirectoryW rejects. The prefix is trimmed for
+  the plain drive form only — trimming a `\\?\UNC\` path would name a
+  different file.
+
+All four kernel32 entries resolve optionally. They have shipped since
+Vista at the latest, so a zero pointer means a host stranger than any
+this port targets; that is a reason to answer ENOSYS at the call, not to
+poke a crash address during boot.
+
+The probe split changed to match what each host can actually serve, so
+that a check is a hard assertion everywhere it runs: `fsmeta`
+(sync/truncate/chtimes/link/fchdir) now fails on ALL THREE hosts,
+including Windows, while `fsmetaunix` (chmod/chown/symlink/mkfifo) and
+`sysinfo` report rather than fail there. A single soft block spanning
+both would have let an NT regression in the four new syscalls pass as a
+recorded note.
+
+What this wave deliberately does NOT touch: macOS-Intel and
+Windows/arm64. Neither is a syscall-table gap - both are runtime
+bring-ups (thread creation, parking, signals, netpoller), and neither
+has a CI runner, so neither could be written and verified the way this
+was. They stay as STUBS-INVENTORY.md section 8 items 2-4.
+
+## The carry flag was wrong everywhere, not just in one dispatch (2026-09-02)
+
+Fixing the XNU error convention in the cosmo syscall dispatch found one
+site. The same defect ran through `runtime/sys_cosmo_amd64.s`, where
+every darwin branch tested `AX > -4096` after a raw XNU `SYSCALL`. XNU
+sets the CARRY FLAG and returns a POSITIVE Apple errno, which that test
+reads as an ordinary small result:
+
+- `open` returned the errno as a file descriptor. `ENOENT` opened fd 2 -
+  stderr - and the caller then read from it.
+- `read` and `write1` returned it as a byte count, so a failed 4096-byte
+  write reported a successful short write of 9 bytes.
+- `pipe2` built a descriptor pair out of it.
+- `mmap` returned a mapping at address 12 (`ENOMEM`) with err = 0, and
+  the allocator wrote to it.
+
+Each branch now tests the carry flag. `munmap` and `rtsigprocmask` keep
+their deliberate crash pokes and reach them by `JCC`.
+
+**The numbering half closes too, and my earlier note about why it could
+not was wrong.** That note said a DATA symbol cannot be pushed across
+packages the way `cosmo_xlat_errno_r0` is. True, and beside the point:
+what crosses the package boundary is the FUNCTION that reads the table,
+and arm64 had been doing exactly that from
+`internal/runtime/syscall/cosmo`'s own assembly all along.
+`runtime·cosmo_xlat_errno_ax` is the amd64 twin, over the same 112 bytes
+in `sys_cosmo_errno.s`, with a linkname push in `os_cosmo_amd64.go` to
+satisfy cmd/link's cross-package reference check. A failed macOS-Intel
+syscall now reports the Linux errno Go compares against.
+
+`go build std` does not catch a missing push - the LINK does. Both
+arches link a cosmo binary in the verify loop for this reason; that is
+the step that rejected the DATA-symbol attempt.
+
+## Two more macOS-Intel "bring-ups" were syscalls all along (2026-09-02)
+
+The netpoller and the CPU count were both filed as macOS-Intel runtime
+bring-up, on the reasoning that they need Apple libc and amd64 has no
+Syslib to reach it with. Neither needs libc.
+
+- **kqueue and kevent are BSD 362 and 363**, both recorded in
+  `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's
+  64-bit `struct kevent` in `netpoll_cosmo_xnu.go` - the same struct
+  arm64 hands to Apple libc. `kevent` 363 is the legacy entry, which is
+  the one that takes that layout.
+- **hw.ncpu is `__sysctl` (202) with the numeric MIB.** The name lookup
+  is what needs libc; the MIB does not. `_CTL_HW` and `_HW_NCPU` are 6
+  and 3 in `runtime/os_darwin.go`'s own `getCPUCount`.
+
+Both go through one new primitive, `runtime·cosmoXnuSyscall6`, for
+darwin calls that have no Linux number for `Syscall6` to dispatch on. It
+refuses to issue anything unless `__hostos` is XNU: a mis-gated caller
+must get ENOSYS rather than run BSD 362 as whatever Linux calls 362.
+
+`cosmoDarwinKqueueSupported` now reports true. That is not a claim that
+macOS-Intel runs - nothing reaches netpollinit while `clone` is ENOSYS.
+It is the removal of a second, wrong statement of the blocker. The real
+one is stated once, on `clone` and `futex`.
+
+## futex was a crash on macOS-Intel, and lock_sema is why arm64 escaped it
+
+`futex` returns ENOSYS on both darwin branches, and `futexwakeup` reacts
+to a negative return by printing and poking `0x1006` - a deliberate
+crash. So the first CONTENDED unlock on a macOS-Intel host killed the
+process. That is a stronger statement than "parking is missing".
+
+macOS arm64 never hit it, and the reason is one build tag:
+`lock_futex.go` is `(cosmo && !arm64) || ...` while `lock_sema.go` is
+`aix || (cosmo && arm64) || darwin || ...`. cosmo/arm64 parks on the
+Syslib's pthread condition variables (`os_cosmo_arm64_sema.go`) and
+never calls futex at all. amd64 cannot follow it there: the Syslib is
+the ARM64 APE loader's, and without it there is no dlsym.
+
+So `futexsleep` gets a darwin branch beside the NT one, and the wait is
+a poll of the word with a 20us -> 5ms backoff. **The futex contract
+permits this.** A sleeper may wake spuriously, and the only hard
+requirement is that it stops waiting once `*addr` leaves `val` - which
+it observes itself, unsignalled. `futexwakeup` therefore has nothing to
+do on darwin, and the store the caller already made is what ends the
+wait. The cost is latency, bounded by the 5ms cap; the backoff is what
+keeps an idle M at 200 wakeups a second instead of the 50,000 a fixed
+20us poll would cost.
+
+`__ulock_wait`/`__ulock_wake` would be the real primitive and is not
+used: its numbers are not in this tree's table, and a guessed syscall
+number does not fail, it calls a different syscall.
+
+The poll loop needs a macOS host to exercise, but its arithmetic does
+not, so `darwinFutexDelay` is split out and unit-tested
+(`TestCosmoDarwinFutexDelay`, wired into the ubuntu leg). Writing that
+test found a genuine collision between its own two rules: the 1us floor
+that stops a zero-length sleep IS an overshoot when under a microsecond
+remains. The floor wins - 1us of overshoot is below any timer resolution
+here, and the alternative is a wait that spins.
+
+## nanosleep returned success without sleeping
+
+The same wave found the other half of the parking problem, in the
+syscall dispatch rather than the runtime: `darwin_nanosleep` set r1=0,
+errno=0 and returned. Every caller ran straight through its delay with
+no way to tell.
+
+`select` with a timeout and no descriptors is a sleep, which is what
+`runtime.usleep` already does on this host, so the fix is that call.
+What takes the space is `rem`. Linux fills it with the unslept
+remainder when a signal cuts the sleep short; BSD `select` does not
+update its timeout, so there is nothing to read it out of. The
+remainder is measured instead - `gettimeofday` either side, subtract
+elapsed from the request, clamp at zero. A caller looping on EINTR
+sleeps twice without that.
+
+This is what the 48-byte frame on `Syscall6` is for: three timevals,
+one for select and two for the bracket. It is the only path here that
+has to build a struct the caller did not pass. The link is what proves
+the frame still fits the nosplit budget - the dispatch runs after
+`entersyscall`, where a stack split is fatal.
+
+The old inventory note said `time.Sleep` was silently doing nothing on
+macOS-Intel. It was not: `time.Sleep` goes through the runtime's timers
+and `usleep`, whose darwin branch was already real. `syscall.Nanosleep`
+was the caller that got the lie.
+
+The probe check that covers it asserts on the CLOCK, not on the error.
+That distinction is the whole point: a check that only looked at `err`
+would have passed against the stub for as long as it existed.
+
+## clone on macOS-Intel: Go's own darwin port is the ABI source
+
+I twice wrote that `clone` could not be implemented here, because
+`bsdthread_create` needs a `bsdthread_register` contract "nothing in
+this tree records". The second half was true and the conclusion did not
+follow. **Go's own runtime created darwin threads exactly this way until
+it moved to libc in Go 1.12** (`go1.8 runtime/sys_darwin_amd64.s`,
+`os_darwin.go`), so the contract is published, in this project's own
+history. Reading it beat asserting it was unknowable.
+
+What that source gives, and what is now implemented:
+
+- `bsdthread_create(fn, arg, stack, pthread, flags)` = BSD 360, with
+  `flags = PTHREAD_START_CUSTOM (0x01000000)` and `pthread = 0`, because
+  the runtime already owns the g0 stack.
+- `bsdthread_register(start, wqstart, ...)` = BSD 366, once, before the
+  first create. `osArchInit` does it and throws on failure - an
+  unregistered process cannot create a thread at all, so dying there
+  beats dying at the first `newosproc` with a vaguer message.
+- The kernel enters the new thread with `DI` = pthread, `SI` = mach
+  port, `DX` = arg1, `CX` = arg2, `R8` = stack top, and SP 128 bytes
+  below that top - so the first instruction takes the real stack.
+- `bsdthread_terminate` = BSD 361 if the entry ever returns. Ending the
+  THREAD, not the process, is the point: the others are still running.
+
+**Only two values reach the child**, DX and CX, and cosmo's `clone`
+takes flags, stk, mp, gp and fn. gp is the one that does not fit, and it
+does not need to: `newosproc` always passes `mp.g0`, so the stub derives
+g0 from the m exactly as Go's did. `newosproc0` passes a nil m and takes
+the same path the Linux child's `nog2` label does.
+
+**settls was a silent no-op, and that mattered the moment clone worked.**
+`settls_darwin` was a bare `RET` under a comment saying TLS "may need
+different handling", so a darwin thread read `g` from wherever the GS
+base already pointed. With no second thread ever created, nothing
+noticed. x86-64 XNU sets a GS base through the `thread_fast_set_cthread_self`
+machdep call (class `0x3000000`, number 3), and the kernel ADDS `0x8a0`
+to what it is handed - which is why Go subtracts that constant before
+the trap. cosmo needs `gs:0x28` to address `m.tls[0]`, so it subtracts
+`0x28 + 0x8a0`.
+
+This closes the macOS-Intel syscall surface. What is left there is
+signal delivery: `rt_sigaction` and `darwin_sigaction` still return
+success without installing a handler, and that is a struct translation
+plus a trampoline, not a forward. And none of it is verified - there is
+no Intel-mac runner, so every line has been read and reasoned about and
+never executed. That is why `cosmoape.Default()` leaves darwin/amd64 out
+of a default build.
+
+Windows/arm64 is a different shape again: every `nt*` stub is a Win32
+call the amd64 side already makes in Go, blocked on an arm64 `ntcall`
+trampoline. It is also unreachable, and that was checked in the source
+rather than taken from a doc:
+
+- `cmd/internal/cosmoape`'s `all` is the complete list of boot
+  mechanisms the linker knows how to write, and `Default()` is all of
+  it. Five rows, none of them windows/arm64. There is no flag that adds
+  one, so no APE this toolchain emits can start on such a host.
+- `iswindows` is a constant `false` in `os_cosmo_nt_arm64.go`, so the
+  compiler deletes the NT branches in shared code outright. The throws
+  are not merely unvisited; their call sites do not survive compilation.
+
+Both facts are load-bearing for leaving those throws in place, so the
+first one is now a test - `TestPlatformTableIsClosed`, which the ubuntu
+leg already runs since it invokes that package with no `-run` filter.
+Adding a windows row for another arch without the runtime behind it
+fails there instead of turning up as a scheduler crash on a host that
+got far enough to hit one.
+
+## The default platform set is three, not five (2026-09-02)
+
+`cosmoape.Default()` was every row in the table. It is now
+linux/amd64 + darwin/arm64 + windows/amd64, by operator decision, and
+the reasoning holds up on its own: a default build should not claim a
+host nothing verifies. darwin/amd64 is the sharp case - at the time of
+this decision its runtime bring-up was incomplete (`clone` was ENOSYS, so
+the process died at the first `newosproc`; closed the same day via
+bsdthread_create), and there is no Intel-mac runner, so an APE that
+advertised it announced a platform on which it has never run. linux/arm64
+has no runner either.
+
+`all` keeps all five rows. Naming either dropped platform in
+GOCOSMOPLATFORMS still selects it and still works exactly as before.
+This changes what SILENCE claims, not what is reachable.
+
+Two consequences worth knowing:
+
+- **An amd64-only build no longer carries a Mach-O header.** The only
+  darwin platform in the default is darwin/arm64, which an amd64 payload
+  cannot serve, so the header is dropped and the binary claims
+  linux/amd64 and windows/amd64. `GOCOSMOPLATFORMS=darwin/amd64` brings
+  it back. Two linker tests asserted the old behavior and were rewritten
+  rather than worked around: one now asserts the header's ABSENCE plus
+  its return under an explicit selection, and `TestAPEFileMachoTransform`
+  - whose whole subject is the Mach-O transform - now names darwin/amd64,
+  since an unset selection would leave it nothing to inspect.
+- **Not a size change.** The default still needs both payloads, because
+  darwin/arm64 is in it, and the APE header is a fixed 64K. Only dropping
+  an ARCHITECTURE moves the number.
+
+## Signal installation on macOS-Intel: a raw __sigaction owns its own trampoline (2026-09-02)
+
+`sysSigaction` sent darwin hosts to `darwinSigaction` only when GOARCH
+was arm64. amd64 fell through to `rt_sigaction`, whose darwin branch
+returned success without calling anything. So every handler the runtime
+believed it had installed was absent, and nothing reported it: `getsig`
+read back what the stub never wrote, and `initsig` finished happily.
+
+The guard is gone and both arches reach `darwinSigaction` now. arm64
+keeps its Syslib route into Apple libc. amd64 has no Syslib, so it
+issues the raw `__sigaction` syscall (BSD 46) - and that is a different
+interface, not the same one by another road.
+
+The kernel struct carries an `sa_tramp` field the libc struct does not.
+libc fills it with its own trampoline, which is why the arm64 path never
+had to think about it. A raw caller supplies one, and
+`runtime·cosmoXnuSigtramp` (`sys_cosmo_amd64.s`) is it. The kernel
+enters that trampoline with the handler in DI, an infostyle token in SI,
+and the signal arguments in DX, CX and R8. It saves the infostyle and
+the context, moves sig, info and ctx into DI, SI and DX, and calls
+`runtime·sigtramp` - the (sig, info, ctx) contract the rest of the
+runtime already implements, so the C-to-Go transition is not written a
+second time. When the handler returns, the trampoline calls `sigreturn`
+(BSD 184) with the saved context and infostyle. Owning that return is
+the other half of the job libc does for arm64; a trampoline that simply
+returned would resume the kernel's stub with no signal frame to unwind.
+
+The ABI is Go's own pre-1.12 darwin port (go1.8
+`runtime/sys_darwin_amd64.s`, `defs_darwin_amd64.go`) - the same source
+`bsdthread_create` came from. Reading a published contract beat guessing
+at one again.
+
+Two smaller pieces went with it. The asm darwin branch of
+`rt_sigaction` is now a crash poke rather than a return-0: nothing
+routes there any more, and a new caller that enters the assembly
+directly should die instead of inheriting the old lie. And the Apple
+sigaction flag constants with both translation directions moved out of
+the arm64-only `signal_cosmo_xnu.go` into `signal_cosmo_xnu_flags.go`,
+tagged `cosmo` alone. The flags are identical on both arches; a second
+copy would drift the first time somebody corrected an entry.
+
+What is left on this platform is the mask. `rtsigprocmask`'s darwin
+branch translates `how` and then passes the Linux 8-byte sigset to a
+kernel that reads Apple's 4-byte one. `darwinSigprocmask` is where that
+bridge belongs and it still throws. And none of this is verified: there
+is no Intel-mac runner, so this was read and reasoned about and never
+executed.
+
+## The syscall package had the same stub, and it needs a DIFFERENT trampoline (2026-09-02)
+
+`internal/runtime/syscall/cosmo`'s own darwin dispatch carried the same
+lie one layer down. `darwin_sigaction` in `asm_cosmo_amd64.s` set AX, BX
+and CX to zero and returned, under a comment that called it "basic
+functionality", so `syscall.RawSyscall(SYS_RT_SIGACTION, ...)` on an XNU
+host installed nothing and reported success. That is Section 2 item 2 of
+`docs/STUBS-INVENTORY.md`.
+
+The translation is the same shape as the runtime's and lives in
+`sigaction_cosmo_amd64.go`, because a struct rebuild, a bit-by-bit
+sigset remap and a flag table are not asm work. The package already owns
+the signal-number correspondence (`sig_cosmo.go`), so only the mask, the
+flags and the two structs are new. It cannot import the runtime, so the
+tables are a second copy, and `TestSigactionFlagXlat` /
+`TestSigactionMaskXlat` pin them to the same numbers
+`runtime/sigxlat_cosmo_test.go` pins.
+
+The trampoline is the part that is NOT shared, and the reason is worth
+keeping. `runtime·cosmoXnuSigtramp` throws the handler away: the kernel
+hands it one in DI and it calls `runtime·sigtramp`, which dispatches by
+signal through the runtime's own table. That is exactly right for a
+handler the runtime installed and exactly wrong for a caller's, which
+would never run. So this package has `sigactionTramp`, which calls the
+handler the kernel passes it and then issues `sigreturn` (BSD 184)
+itself.
+
+`sigactionTramp` also translates the signal number back to Linux
+numbering before entering the handler, because the caller installed
+under a Linux number and the kernel delivers an Apple one - a handler
+registered for SIGUSR1 would otherwise be entered with 30. It indexes a
+byte table (`sigA2LTab`) rather than calling the package's own
+`darwinXlatSignalA2L`, since it runs on a kernel-entered frame;
+`TestSigA2LTab` pins the table to that function so the two cannot drift.
+`siginfo` and the `ucontext` still arrive in Apple's layouts. Nothing
+can be done about that from here, and the trampoline says so.
+
+A signal with no Apple number reports EINVAL rather than the runtime
+path's no-op success. The runtime needs that success because `initsig`
+walks every signal and must not fail; a caller naming one signal is
+better told that this host cannot deliver it.
+
+Unverified as ever: no Intel-mac runner.
+
+## The arm64 side of that dispatch forwarded arguments to a function that wanted different ones (2026-09-02)
+
+The amd64 stub was the reported bug. The arm64 branch beside it looked
+fine, because it did something:
+
+	darwin_sigaction:
+		MOVD	272(R10), R12		// syslib.sigaction
+		B	darwin_call
+
+Offset 272 is Apple libc's `sigaction`, and `signal_cosmo_xnu.go`
+already writes down what that wants: an APPLE signal number, Apple flag
+values, and Apple's LIBC `struct sigaction` {handler, mask u32, flags
+i32}. The forward supplied none of those. It handed over the Linux
+signal number, so a handler installed for SIGUSR1 (Linux 10) landed on
+Apple SIGBUS. It handed over the 32-byte Linux struct, whose second
+8-byte field is `sa_flags`, to a callee that reads a 4-byte `sa_mask`
+there and its own `sa_flags` four bytes later - the high half of the
+Linux flags word, which is always zero. So SA_SIGINFO, SA_ONSTACK and
+SA_RESTART were dropped on every call, and the installed mask was
+whatever the flags value happened to spell. Reading `old` back wrote 16
+Apple bytes into a 32-byte Linux struct.
+
+One thing about it WAS right, and it is the part that usually is not:
+the Syslib entry is sysret-wrapped (0 or -errno), and `darwin_call`'s
+return handling already treats a small negative as an error and
+translates the numbering. So the errno convention needed nothing.
+
+Nothing in the runtime ever went through here - `setsig` reaches Apple
+libc through `runtime.darwinSigaction` - so this served
+`syscall.RawSyscall` callers only, which is why CI on the macOS runner
+never showed it. The branch now calls `darwinSigactionSyslib` and does
+the translation in Go, the same shape as every other arm64 syscall that
+needs one. The Syslib table is not reachable from Go here (this package
+cannot linkname `runtime.__syslib`), so the assembly loads the entry and
+passes it as the first argument. Everything the two arches share - the
+flag table, the sigset remap, the Linux struct - moved into
+`sigaction_cosmo.go`, so a correction to either lands once.
+
+What no fix can reach on either arch: the `siginfo` and `ucontext` a
+handler receives keep their Apple layouts. Only the signal number is
+translated back. A raw-syscall caller that reads the context is looking
+at Apple's, and always was.

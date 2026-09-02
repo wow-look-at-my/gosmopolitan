@@ -6,6 +6,7 @@ package ld
 
 import (
 	"bytes"
+	"cmd/internal/cosmoape"
 	"debug/macho"
 	"debug/pe"
 	"encoding/binary"
@@ -583,6 +584,14 @@ func TestAPEFileMachoTransform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// The subject here is the Mach-O transform, so the selection has to name
+	// a darwin platform this amd64 payload can serve. darwin/amd64 left the
+	// DEFAULT set (its runtime bring-up is incomplete and nothing verifies
+	// it), which is why an unset selection would emit no Mach-O header at
+	// all and this test would have nothing to look at.
+	defer func(old string) { *flagApePlatforms = old }(*flagApePlatforms)
+	*flagApePlatforms = cosmoape.DarwinAMD64.String()
 
 	out := filepath.Join(t.TempDir(), "ape.com")
 	writeAPEFile(out, []*apePayload{p})
