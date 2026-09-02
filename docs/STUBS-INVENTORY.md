@@ -75,7 +75,7 @@ operation was skipped. These are the worst kind of stub.
 | 3 | ~~`rt_sigaction` darwin branch~~ (FIXED 2026-09-02) | Was: success without calling sigaction at all, so every handler the runtime believed it had installed was absent. `sysSigaction` lost its `GOARCH == "arm64"` guard and routes both arches through `darwinSigaction`; on amd64 that is `signal_cosmo_xnu_amd64.go`, which translates the Linux `sigactiont` both ways and issues the raw `__sigaction` syscall (BSD 46). The kernel struct carries an `sa_tramp` field the libc struct does not — libc fills it with its own trampoline, so a raw caller must supply one, and `runtime·cosmoXnuSigtramp` (`sys_cosmo_amd64.s`) is it: the kernel enters it with the handler, an infostyle token and the signal arguments, it reshuffles onto `runtime·sigtramp`'s (sig, info, ctx) contract, and it calls `sigreturn` (BSD 184) when the handler returns. The ABI source is Go's own pre-1.12 darwin port (go1.8 `runtime/sys_darwin_amd64.s`, `defs_darwin_amd64.go`), the same source `bsdthread_create` came from. The asm darwin branch is now a crash poke, reached only if a new caller enters the assembly directly. Still unverified: there is no Intel-mac runner. |
 | 4 | `src/runtime/sys_cosmo_amd64.s:623-625` (`rt_sigaction` NT branch) | Returns success on NT wave 1 (no signal machinery). Comment: "the same benign lie the darwin stub above tells". |
 | 5 | `src/runtime/sys_cosmo_amd64.s:601` (`rtsigprocmask_nt`) | Returns success on NT (no signal machinery). |
-| 6 | `src/runtime/sys_cosmo_amd64.s` (`rtsigprocmask` darwin) | Translates `how` (Linux 0/1/2 to Apple 1/2/3) but passes the mask through untouched, so the 8-byte Linux sigset reaches a kernel expecting a 4-byte Apple one. With item 3 fixed, this width bridge is the last piece of macOS-Intel signal support. `darwinSigprocmask` (`os_cosmo_amd64.go`) still throws, and its call site is still compiled away by the `GOARCH == "arm64"` guard in `sigprocmask`, so the mask path stays in assembly for now. |
+| 6 | ~~`rtsigprocmask` darwin branch~~ (FIXED 2026-09-02) | Was: translated `how` (Linux 0/1/2 to Apple 1/2/3) but passed the mask through untouched, so the 8-byte Linux sigset reached a kernel expecting a 4-byte Apple one and every mask it set named the wrong signals. `sigprocmask` lost its `GOARCH == "arm64"` guard, so both arches route through `darwinSigprocmask`; on amd64 that is `signal_cosmo_xnu_amd64.go`, which remaps the set in both directions through the same `cosmoSigmaskL2A`/`cosmoSigmaskA2L` arm64 uses and issues the raw syscall (BSD 48). It crashes on failure, as the Linux asm path does. The asm darwin branch is now a crash poke. Still unverified: there is no Intel-mac runner. |
 | 7 | ~~`src/syscall/syscall_cosmo_arm64.go` (`Getpgrp`)~~ | Was: calls `Getpgid(0)` and discards the error, so an ENOSYS `Getpgid` on macOS silently returned 0. `Getpgid` is emulated now (Section 6), and `getpgid(0)` cannot fail; the discard matches what the linux port does. The runtimeprobe `sysinfo` check asserts `Getpgrp() == Getpgid(0)` and that both are positive, so a regression to the silent zero fails CI. |
 
 ---
@@ -94,7 +94,7 @@ functionality is missing.
 | 4 | `src/runtime/sys_cosmo_arm64.s:654-655` (`mincore` darwin) | Returns -1 (ENOSYS). "mincore not in Syslib". |
 | 5 | ~~`cosmoDarwinKqueue`/`cosmoDarwinKevent` on amd64~~ | Was: ENOSYS, on the reasoning that the poller needs Apple libc through a Syslib amd64 does not have. It needs no libc. `SYS_KQUEUE` (362) and `SYS_KEVENT` (363) are both in `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's 64-bit `struct kevent` (`netpoll_cosmo_xnu.go`), shared with arm64. Both are served by raw XNU syscall now, and `cosmoDarwinKqueueSupported` reports true. |
 | 6 | ~~`cosmoDarwinNumCPU` on amd64~~ | Was: 0 ("no Syslib, so no sysctl access"), so `getCPUCount` fell back to 1. The numeric MIB needs no name lookup: `SYS___SYSCTL` is 202 in the same table, and `_CTL_HW`/`_HW_NCPU` are 6/3 in `runtime/os_darwin.go`'s own `getCPUCount`. Reads hw.ncpu directly now. |
-| 7 | `src/runtime/os_cosmo_amd64.go` (`darwinSigprocmask`) | `throw("darwinSigprocmask: not implemented on amd64")`. Unreachable: `sigprocmask` still compiles the call site away on amd64, and the mask goes through `rtsigprocmask`'s darwin branch instead (Section 2.6). |
+| 7 | ~~`darwinSigprocmask` on amd64~~ | Was: `throw("not implemented on amd64")`, a stub that existed so the amd64 build linked. Real now — `signal_cosmo_xnu_amd64.go`, see Section 2.6. |
 | 8 | ~~`darwinSigaction` on amd64~~ | Was: -1, a stub that existed so the amd64 build linked. Real now — `signal_cosmo_xnu_amd64.go`, see Section 2.3. |
 
 ---
@@ -103,7 +103,7 @@ functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The design is sound in principle, and as of 2026-09-02 the syscall surface behind it is complete — clone, futex, the netpoller and the rest all landed. **It is still unverified.** There is no Intel-mac CI runner, so nothing here has ever executed, and signal delivery is still a stub. Do not claim it works. |
+| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The design is sound in principle, and as of 2026-09-02 the syscall surface behind it is complete — clone, futex, the netpoller and the rest all landed. **It is still unverified.** There is no Intel-mac CI runner, so nothing here has ever executed. Do not claim it works. |
 | 1b | same file, `darwin_error` (FIXED 2026-09-02) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`, followed by a call to `runtime·cosmo_xlat_errno_ax` for the numbering. See Section 4.1c: the same defect ran through the runtime's own darwin branches. |
 | 1c | `src/runtime/sys_cosmo_amd64.s` (FIXED 2026-09-02) | The identical carry-flag defect, in the runtime's own raw-XNU branches. `open` returned the errno as a file descriptor (`ENOENT` opened "fd 2"); `read`/`write1` returned it as a byte count, so a failed write read as a short write; `pipe2` produced a pair of fds out of it; `mmap` returned a mapping at address `ENOMEM` that every caller then wrote to. Each failing branch now tests the carry flag and, where the value reaches Go, translates the errno. `munmap` and `rtsigprocmask` keep their crash-on-failure pokes, now reached by `JCC`. |
 | 2 | ~~`cosmoDarwinKqueueSupported` returns false~~ | Fixed with Section 3.5: the poller is served by raw XNU syscall. What is left on macOS-Intel is thread creation and parking, which is a narrower and more accurate claim than "the netpoller is unsupported". |
@@ -249,13 +249,14 @@ Section 4.1.
   items: they hide failures.
 - The macOS-Intel (amd64) SYSCALL surface is closed: the table, the
   error convention, the errno numbering, the netpoller, the CPU count,
-  parking, thread creation, TLS and nanosleep. Signal INSTALLATION is
-  closed too — `darwinSigaction` issues a real `__sigaction` with its
-  own trampoline (Section 2.3). What is left is the sigset-width bridge
-  in the mask path: `rtsigprocmask`'s darwin branch hands a kernel that
-  wants a 4-byte Apple sigset the 8-byte Linux one (Section 2.6). None
-  of it is verified, because there is no Intel-mac runner — read and
-  reasoned about, never executed.
+  parking, thread creation, TLS and nanosleep. So are signals in the
+  runtime: `darwinSigaction` issues a real `__sigaction` with its own
+  trampoline (Section 2.3), and `darwinSigprocmask` bridges the sigset
+  width (Section 2.6). What is left is `darwin_sigaction` in the
+  `syscall` package (Section 2.2), which serves `syscall.Sigaction`
+  callers and still installs nothing. None of it is verified, because
+  there is no Intel-mac runner — read and reasoned about, never
+  executed.
 - Windows/arm64 (Section 4.3) is entirely unimplemented and entirely
   unreachable: no APE boot path, no platform token. Its stubs exist to
   make the arm64 build link.
@@ -275,14 +276,13 @@ Section 4.1.
    error convention and errno numbering (Section 4.1b/4.1c), the
    netpoller (Section 3.5), the CPU count (Section 3.6), parking
    (Section 3.1), thread creation and TLS (Section 3.2/3.2b), and
-   nanosleep (Section 2.1). Signal INSTALLATION is done as well: the
-   runtime issues a real `__sigaction` with a translated struct and its
-   own trampoline (Section 2.3).
+   nanosleep (Section 2.1). Signals in the runtime are done as well: a
+   real `__sigaction` with a translated struct and its own trampoline
+   (Section 2.3), and a mask path that remaps the sigset instead of
+   handing a kernel that reads 4 bytes the Linux 8 (Section 2.6).
 
-   What is left is the **sigset-width bridge** in the mask path.
-   `rtsigprocmask`'s darwin branch translates `how` and then passes the
-   Linux 8-byte sigset to a kernel that reads 4 bytes (Section 2.6).
-   `darwinSigprocmask` is where that belongs, and it still throws.
+   What is left on the platform is item 2 above, in the `syscall`
+   package rather than the runtime.
 
    And none of it is verified. There is no Intel-mac runner, so every
    line of the above has been read and reasoned about but never
