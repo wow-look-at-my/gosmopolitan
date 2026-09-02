@@ -56,7 +56,31 @@ func osArchInit() {
 		ntSetSyscallFns()
 		ntBootInit()
 	}
+	if isdarwin() {
+		// The kernel has to be told where to enter a new thread before
+		// the first bsdthread_create, and there is nowhere later to do
+		// it: newosproc runs on whatever M needs the thread. Failing
+		// here is right - an unregistered process cannot create a
+		// thread at all, so the alternative is dying at the first
+		// newosproc with a less specific message.
+		if errno := cosmoBsdthreadRegister(); errno != 0 {
+			print("runtime: bsdthread_register failed with errno ", errno, "\n")
+			throw("cosmo: bsdthread_register")
+		}
+	}
 }
+
+// cosmoBsdthreadRegister is in sys_cosmo_amd64.s. It registers
+// cosmoBsdthreadStart as the entry point for threads made by
+// bsdthread_create, which is how darwin/amd64 serves clone.
+func cosmoBsdthreadRegister() int32
+
+// cosmoBsdthreadStart is in sys_cosmo_amd64.s. Nothing in Go calls it -
+// the KERNEL enters it, with a register state of its own choosing, when a
+// bsdthread_create thread starts. The declaration exists because asmdecl
+// requires every asm TEXT in the package to have one; taking its address
+// is all the Go side ever does.
+func cosmoBsdthreadStart()
 
 // cosmo_xlat_errno_ax is a register-convention helper in sys_cosmo_amd64.s:
 // it translates an Apple errno in AX to its Linux value. It takes no Go
@@ -119,10 +143,9 @@ func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno in
 // amd64 darwin path issues raw XNU syscalls, and both numbers are known,
 // so the poller is served directly.
 //
-// This says nothing about macOS-Intel as a whole. Thread creation and
-// parking are still ENOSYS there (see clone and futex below), so nothing
-// reaches netpollinit yet; that blocker is stated once, where it lives,
-// rather than mirrored into a second false claim here.
+// This says nothing about whether macOS-Intel has ever been RUN. Its
+// syscall surface is complete now, thread creation included, but signal
+// delivery is still a stub and there is no Intel-mac runner.
 func cosmoDarwinKqueueSupported() bool { return true }
 
 // cosmoDarwinKqueue creates a kqueue. Returns the descriptor, or

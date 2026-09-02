@@ -83,7 +83,8 @@ functionality is missing.
 | # | Location | Behavior |
 |---|----------|----------|
 | 1 | ~~`futex` darwin (amd64)~~ | The asm stub still answers ENOSYS, but nothing reaches it: `futexsleep`/`futexwakeup` branch on `isdarwin()` first (`os_cosmo.go`). XNU has no futex, and the primitives closest to one — `__ulock_wait` and the psynch family — are not in this tree's syscall table, so their numbers would have to be guessed. The wait is a poll of the word with a 20µs→5ms backoff instead, which the futex contract permits: a sleeper may wake spuriously, and it observes `*addr` leaving `val` on its own. The wake is therefore a no-op. Cost is latency, bounded by 5ms. **This also removed a live crash**: the ENOSYS used to fall through to `futexwakeup`'s crash poke on the first contended unlock on a macOS-Intel host. |
-| 2 | `src/runtime/sys_cosmo_amd64.s` (`clone` darwin) | Returns ENOSYS. The last macOS-Intel gap. `bsdthread_create` is 360 in the tree's table, but it is only usable after `bsdthread_register` installs a pthread entry point under an ABI contract nothing here can check, so it is not written rather than guessed. |
+| 2 | ~~`clone` darwin (amd64)~~ (FIXED 2026-09-02) | Was: ENOSYS, so `newosproc` threw and macOS-Intel could not start a second thread. XNU has no clone; it has `bsdthread_create` (360), which is exactly how **Go's own darwin port created threads until it moved to libc in Go 1.12**. That port is the ABI source — not a reconstruction: `PTHREAD_START_CUSTOM` (0x01000000), registration through `bsdthread_register` (366) at `osArchInit`, the kernel entering the new thread with `DX`=arg1, `CX`=arg2, `R8`=stack, and `bsdthread_terminate` (361) if the entry returns. Only two values reach the child, so `gp` is not passed: `newosproc` always passes `mp.g0` and the stub derives it from the m, as Go did; `newosproc0`'s nil m takes the same path the Linux child's `nog2` does. |
+| 2b | ~~`settls` darwin (amd64)~~ (FIXED 2026-09-02) | Was: `RET` — "TLS may need different handling". A silent no-op, so any darwin thread read `g` from whatever the GS base happened to point at. Nothing noticed while `clone` was ENOSYS and no second thread existed; it became load-bearing the moment one could. Now the `thread_fast_set_cthread_self` machdep call (0x3000003), biased by `0x8a0` (the kernel adds that to what it is handed) plus cosmo's own `0x28`, so `gs:0x28` lands on `m.tls[0]` exactly as the Linux path arranges. |
 | 3 | `src/runtime/sys_cosmo_arm64.s:1099-1101` (`futex` darwin) | Returns ENOSYS, and is unreachable: cosmo/arm64 builds `lock_sema.go`, not `lock_futex.go` (see the build tags), so it parks on the Syslib's pthread condition variables (`os_cosmo_arm64_sema.go`). That split is why macOS arm64 never hit the crash item 1 describes. |
 | 4 | `src/runtime/sys_cosmo_arm64.s:654-655` (`mincore` darwin) | Returns -1 (ENOSYS). "mincore not in Syslib". |
 | 5 | ~~`cosmoDarwinKqueue`/`cosmoDarwinKevent` on amd64~~ | Was: ENOSYS, on the reasoning that the poller needs Apple libc through a Syslib amd64 does not have. It needs no libc. `SYS_KQUEUE` (362) and `SYS_KEVENT` (363) are both in `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's 64-bit `struct kevent` (`netpoll_cosmo_xnu.go`), shared with arm64. Both are served by raw XNU syscall now, and `cosmoDarwinKqueueSupported` reports true. |
@@ -97,7 +98,7 @@ functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The amd64 design is therefore sound in principle — but macOS-Intel runtime bring-up (clone/futex/netpoller) is still absent, and there is no Intel-mac CI runner, so none of it is verified. Do not claim it works. |
+| 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The design is sound in principle, and as of 2026-09-02 the syscall surface behind it is complete — clone, futex, the netpoller and the rest all landed. **It is still unverified.** There is no Intel-mac CI runner, so nothing here has ever executed, and signal delivery is still a stub. Do not claim it works. |
 | 1b | same file, `darwin_error` (FIXED 2026-09-02) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`, followed by a call to `runtime·cosmo_xlat_errno_ax` for the numbering. See Section 4.1c: the same defect ran through the runtime's own darwin branches. |
 | 1c | `src/runtime/sys_cosmo_amd64.s` (FIXED 2026-09-02) | The identical carry-flag defect, in the runtime's own raw-XNU branches. `open` returned the errno as a file descriptor (`ENOENT` opened "fd 2"); `read`/`write1` returned it as a byte count, so a failed write read as a short write; `pipe2` produced a pair of fds out of it; `mmap` returned a mapping at address `ENOMEM` that every caller then wrote to. Each failing branch now tests the carry flag and, where the value reaches Go, translates the errno. `munmap` and `rtsigprocmask` keep their crash-on-failure pokes, now reached by `JCC`. |
 | 2 | ~~`cosmoDarwinKqueueSupported` returns false~~ | Fixed with Section 3.5: the poller is served by raw XNU syscall. What is left on macOS-Intel is thread creation and parking, which is a narrower and more accurate claim than "the netpoller is unsupported". |
@@ -243,11 +244,11 @@ Section 4.1.
   they hide failures. `time.Sleep` and signal handling on macOS-Intel
   silently do nothing.
 - The macOS-Intel (amd64) SYSCALL surface is closed: the table, the
-  error convention, the errno numbering, the netpoller, the CPU count
-  and parking. What is left there is `clone` — thread creation — which
-  XNU serves only through a pthread registration contract this tree
-  cannot check. None of it is verified, because there is no Intel-mac
-  runner.
+  error convention, the errno numbering, the netpoller, the CPU count,
+  parking, thread creation, TLS and nanosleep. What is left there is
+  signal delivery, which is a translation layer rather than a syscall.
+  None of it is verified, because there is no Intel-mac runner — read
+  and reasoned about, never executed.
 - Windows/arm64 (Section 4.3) is entirely unimplemented and entirely
   unreachable: no APE boot path, no platform token. Its stubs exist to
   make the arm64 build link.
@@ -262,20 +263,24 @@ Section 4.1.
    (Section 2.1); what is left is signal delivery, which needs the
    sigaction struct translation and a trampoline rather than a syscall
    forward. These are now the largest remaining lie in the tree.
-3. Bring up macOS-Intel. **What is left is `clone` — thread creation,
-   and nothing else.** Everything else filed under this heading turned
-   out to be reachable and is done: the metadata table (Section 6b), the
+3. **The macOS-Intel syscall surface is closed.** Every item once filed
+   under this heading is done: the metadata table (Section 6b), the
    error convention and errno numbering (Section 4.1b/4.1c), the
-   netpoller (Section 3.5), the CPU count (Section 3.6) and parking
-   (Section 3.1).
+   netpoller (Section 3.5), the CPU count (Section 3.6), parking
+   (Section 3.1), thread creation and TLS (Section 3.2/3.2b), and
+   nanosleep (Section 2.1).
 
-   `clone` is the one that cannot be written honestly here. It maps to
-   `bsdthread_create` (360, which the table does carry), but that call
-   is only usable after `bsdthread_register` installs a pthread entry
-   point under an ABI contract nothing in this tree can check — and
-   getting it wrong does not fail, it starts a thread on a bad stack.
-   It stays ENOSYS until an Intel-mac runner exists, which is the honest
-   blocker on the platform: none of the work above is verified either.
+   What is left is **signal delivery** — `rt_sigaction` and
+   `darwin_sigaction` still return success without installing anything
+   (Section 2). That is not a syscall forward: Apple's `sigaction`
+   struct differs from Linux's and needs a translation layer and a
+   trampoline, which is its own wave.
+
+   And none of it is verified. There is no Intel-mac runner, so every
+   line of the above has been read and reasoned about but never
+   executed. That remains the honest blocker on the platform, and
+   `Default()` leaves darwin/amd64 out of a default build for exactly
+   this reason.
 4. Implement Windows/arm64, or refuse to boot on it. **It already
    refuses**, in the only two places that could let it through, and both
    are now checked rather than described (Section 4.3). This is not a

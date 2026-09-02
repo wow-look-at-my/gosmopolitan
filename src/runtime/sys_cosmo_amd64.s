@@ -81,6 +81,23 @@
 #define XNU_mmap		0x20000c5	// BSD 197
 #define XNU_sigreturn		0x20000b8	// BSD 184
 
+// Thread creation. Numbers from syscall/zsysnum_darwin_amd64.go; the ABI
+// around them is Go's own pre-1.12 darwin port (sys_darwin_amd64.s), which
+// created threads exactly this way before Go moved to libc.
+#define XNU_bsdthread_create	0x2000168	// BSD 360
+#define XNU_bsdthread_terminate	0x2000169	// BSD 361
+#define XNU_bsdthread_register	0x200016e	// BSD 366
+
+// PTHREAD_START_CUSTOM: the caller supplies the stack, which is the only
+// mode that makes sense for a runtime that already allocated a g0 stack.
+#define PTHREAD_START_CUSTOM	0x01000000
+
+// thread_fast_set_cthread_self, a machdep call (class 0x3000000), is how
+// x86-64 XNU sets a thread's GS base. The kernel adds 0x8a0 to the value
+// it is given, so a caller that wants BASE passes BASE-0x8a0.
+#define XNU_set_cthread_self	0x3000003
+#define XNU_cthread_self_bias	0x8a0
+
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers AX
 #define CHECK_DARWIN(label) \
@@ -942,12 +959,110 @@ nog2:
 	SYSCALL
 	JMP	-3(PC)	// keep exiting
 
+// XNU has no clone. It has bsdthread_create, which is what Go's own
+// darwin port used until it moved to libc in Go 1.12, and the ABI below
+// is that port's (go1.8 runtime/sys_darwin_amd64.s).
+//
+// bsdthread_create(fn, arg, stack, pthread, flags). The kernel relays
+// arg1 into DX and arg2 into CX in the new thread, so only TWO values
+// reach the child. gp is therefore not passed: newosproc always passes
+// mp.g0, and cosmoBsdthreadStart derives it from the m, exactly as Go
+// did. newosproc0 passes a nil m and the stub skips the g setup, which
+// is the nog2 case on the Linux side.
+//
+// The stub must be registered before the first create; osArchInit does
+// that (os_cosmo_amd64.go), and an unregistered create fails rather than
+// starting a thread at an address the kernel does not know.
 clone_darwin:
-	// macOS doesn't have clone, return error
-	// Thread creation on macOS should use pthread_create
-	// which requires cgo or a different approach
-	MOVL	$-38, AX	// ENOSYS
+	MOVQ	fn+32(FP), DI		// relayed to the child in DX
+	MOVQ	mp+16(FP), SI		// relayed to the child in CX
+	MOVQ	stk+8(FP), DX
+	MOVQ	$0, R10			// pthread: none, we own the stack
+	MOVQ	$PTHREAD_START_CUSTOM, R8
+	MOVQ	$0, R9
+	MOVL	$XNU_bsdthread_create, AX
+	SYSCALL
+	JCS	clone_darwin_err
+	MOVL	$0, ret+40(FP)
+	RET
+clone_darwin_err:
+	// newosproc reads a negative return as -errno and retries EAGAIN, so
+	// the Apple number has to become the Linux one before the sign flip.
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+40(FP)
+	RET
+
+// cosmoBsdthreadStart is where the kernel enters a thread made by
+// bsdthread_create. It is not called; it is jumped to with a register
+// state the kernel chooses:
+//
+//	DI  pthread (unused - we passed none)
+//	SI  mach port for this thread
+//	DX  arg1 of the create call, our fn
+//	CX  arg2 of the create call, our m
+//	R8  stack top
+//	R9  flags
+//
+// SP arrives 128 bytes below the stack top, so the first move is to take
+// the stack the caller actually allocated.
+TEXT runtime·cosmoBsdthreadStart(SB),NOSPLIT,$0
+	MOVQ	R8, SP
+	CMPQ	CX, $0
+	JEQ	bsdthread_start_nog
+
+	// settls takes &m.tls[0] in DI and points the GS base 0x28 below it,
+	// so gs:0x28 addresses m.tls[0] - the same slot g lives in on Linux.
+	PUSHQ	DX
+	PUSHQ	CX
+	PUSHQ	SI
+	LEAQ	m_tls(CX), DI
+	CALL	runtime·settls(SB)
+	POPQ	SI
+	POPQ	CX
+	POPQ	DX
+
+	MOVQ	SI, m_procid(CX)	// the mach port is this thread's id
+	MOVQ	m_g0(CX), AX
+	MOVQ	CX, g_m(AX)
+	get_tls(BX)
+	MOVQ	AX, g(BX)
+	MOVQ	AX, R14			// g register, for ABIInternal callees
+	CALL	runtime·stackcheck(SB)
+
+bsdthread_start_nog:
+	CALL	DX			// fn, an ABI0 entry (mstart)
+
+	// fn is not supposed to return. If it does, end this thread rather
+	// than the process: every other thread is still running.
+	MOVQ	$0, DI			// stack to free: none, the runtime owns it
+	MOVQ	$0, SI
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+	MOVL	$XNU_bsdthread_terminate, AX
+	SYSCALL
+	MOVL	$0xf2, 0xf2		// crash: bsdthread_terminate returned
+	RET
+
+// func cosmoBsdthreadRegister() int32
+//
+// Tells the kernel which address to enter new threads at. Must run once,
+// before any bsdthread_create. Returns 0, or a LINUX errno.
+TEXT runtime·cosmoBsdthreadRegister(SB),NOSPLIT,$0-4
+	MOVQ	$runtime·cosmoBsdthreadStart(SB), DI
+	MOVQ	$0, SI			// no workqueue thread entry
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+	MOVQ	$0, R8
+	MOVQ	$0, R9
+	MOVL	$XNU_bsdthread_register, AX
+	SYSCALL
+	JCS	bsdthread_register_err
+	MOVL	$0, ret+0(FP)
+	RET
+bsdthread_register_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVL	AX, ret+0(FP)
 	RET
 
 TEXT runtime·sigaltstack(SB),NOSPLIT,$0
@@ -1000,9 +1115,17 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 settls_nt:
 	RET
 settls_darwin:
-	// macOS x86_64 TLS is handled differently
-	// Use thread_fast_set_cthread_self which is a Mach trap
-	// For now, just return success - TLS may need different handling
+	// DI is &m.tls[0], and the GS base must land 0x28 below it so that
+	// gs:0x28 addresses that slot. thread_fast_set_cthread_self adds
+	// 0x8a0 to what it is handed, so subtract both.
+	//
+	// This used to return without doing anything, which left every
+	// darwin thread reading g from whatever the GS base already pointed
+	// at. Nothing noticed while clone was ENOSYS and no second thread
+	// existed.
+	SUBQ	$(0x28+XNU_cthread_self_bias), DI
+	MOVL	$XNU_set_cthread_self, AX
+	SYSCALL
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0

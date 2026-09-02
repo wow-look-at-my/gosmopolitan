@@ -6254,11 +6254,54 @@ The probe check that covers it asserts on the CLOCK, not on the error.
 That distinction is the whole point: a check that only looked at `err`
 would have passed against the stub for as long as it existed.
 
-**What is genuinely left on macOS-Intel is `clone`, and nothing else.**
-It maps to `bsdthread_create` (360, which the table does carry), but the
-call is only usable after `bsdthread_register` installs a pthread entry
-point under an ABI contract nothing here can verify - and getting that
-wrong does not fail, it starts a thread on a bad stack.
+## clone on macOS-Intel: Go's own darwin port is the ABI source
+
+I twice wrote that `clone` could not be implemented here, because
+`bsdthread_create` needs a `bsdthread_register` contract "nothing in
+this tree records". The second half was true and the conclusion did not
+follow. **Go's own runtime created darwin threads exactly this way until
+it moved to libc in Go 1.12** (`go1.8 runtime/sys_darwin_amd64.s`,
+`os_darwin.go`), so the contract is published, in this project's own
+history. Reading it beat asserting it was unknowable.
+
+What that source gives, and what is now implemented:
+
+- `bsdthread_create(fn, arg, stack, pthread, flags)` = BSD 360, with
+  `flags = PTHREAD_START_CUSTOM (0x01000000)` and `pthread = 0`, because
+  the runtime already owns the g0 stack.
+- `bsdthread_register(start, wqstart, ...)` = BSD 366, once, before the
+  first create. `osArchInit` does it and throws on failure - an
+  unregistered process cannot create a thread at all, so dying there
+  beats dying at the first `newosproc` with a vaguer message.
+- The kernel enters the new thread with `DI` = pthread, `SI` = mach
+  port, `DX` = arg1, `CX` = arg2, `R8` = stack top, and SP 128 bytes
+  below that top - so the first instruction takes the real stack.
+- `bsdthread_terminate` = BSD 361 if the entry ever returns. Ending the
+  THREAD, not the process, is the point: the others are still running.
+
+**Only two values reach the child**, DX and CX, and cosmo's `clone`
+takes flags, stk, mp, gp and fn. gp is the one that does not fit, and it
+does not need to: `newosproc` always passes `mp.g0`, so the stub derives
+g0 from the m exactly as Go's did. `newosproc0` passes a nil m and takes
+the same path the Linux child's `nog2` label does.
+
+**settls was a silent no-op, and that mattered the moment clone worked.**
+`settls_darwin` was a bare `RET` under a comment saying TLS "may need
+different handling", so a darwin thread read `g` from wherever the GS
+base already pointed. With no second thread ever created, nothing
+noticed. x86-64 XNU sets a GS base through the `thread_fast_set_cthread_self`
+machdep call (class `0x3000000`, number 3), and the kernel ADDS `0x8a0`
+to what it is handed - which is why Go subtracts that constant before
+the trap. cosmo needs `gs:0x28` to address `m.tls[0]`, so it subtracts
+`0x28 + 0x8a0`.
+
+This closes the macOS-Intel syscall surface. What is left there is
+signal delivery: `rt_sigaction` and `darwin_sigaction` still return
+success without installing a handler, and that is a struct translation
+plus a trampoline, not a forward. And none of it is verified - there is
+no Intel-mac runner, so every line has been read and reasoned about and
+never executed. That is why `cosmoape.Default()` leaves darwin/amd64 out
+of a default build.
 
 Windows/arm64 is a different shape again: every `nt*` stub is a Win32
 call the amd64 side already makes in Go, blocked on an arm64 `ntcall`

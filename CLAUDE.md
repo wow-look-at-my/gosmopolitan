@@ -223,8 +223,11 @@ Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
 resolved from iphlpapi and probed on every runner);
 macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
 metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
-cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel structurally
-correct but its runtime bring-up is UNTESTED - do not claim it works.
+cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of
+2026-09-02 (metadata, errno convention and numbering, netpoller, CPU count, parking, nanosleep, and thread
+creation via bsdthread_create), but signal delivery is still a stub and there is no Intel-mac runner, so
+nothing there has ever executed - do not claim it works. It is deliberately absent from the default
+GOCOSMOPLATFORMS set for that reason.
 
 **Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64
 here, so a variadic callee handed its argument in a register reads uninitialized stack memory and usually
