@@ -1913,6 +1913,10 @@ func pcToName(pc uintptr) string {
 // against a Serial caller that holds a slot while it waits for the barrier.
 var serialBarrier sync.RWMutex
 
+// serialExclusive is set while a test holds serialBarrier exclusively. It is
+// how a process-wide measurement (AllocsPerRun) knows no other test runs.
+var serialExclusive atomic.Bool
+
 // Barrier hold states for common.barrierHeld.
 const (
 	barrierNone int8 = iota
@@ -1955,6 +1959,7 @@ func (t *T) Serial() {
 	}
 	serialBarrier.Lock()
 	c.barrierHeld = barrierExclusive
+	serialExclusive.Store(true)
 }
 
 // acquireBarrier takes the shared hold the test's function body runs under.
@@ -1974,6 +1979,7 @@ func (t *T) releaseBarrier() {
 	case barrierShared:
 		serialBarrier.RUnlock()
 	case barrierExclusive:
+		serialExclusive.Store(false)
 		serialBarrier.Unlock()
 	}
 }

@@ -6488,3 +6488,44 @@ What no fix can reach on either arch: the `siginfo` and `ucontext` a
 handler receives keep their Apple layouts. Only the signal number is
 translated back. A raw-syscall caller that reads the context is looking
 at Apple's, and always was.
+
+## Tests parallel by default, and the barrier that makes t.Serial safe (2026-09-02)
+
+`src/testing` now runs every test and subtest as if it had called
+`t.Parallel()`. The opt-out is `t.Serial()`: wait for every other test to
+stop, then run alone until the test returns. `t.Setenv` and `t.Chdir`
+call it themselves, so the upstream "cannot use t.Parallel" panic is
+gone.
+
+The first cut held one `sync.RWMutex` read lock per TOP-LEVEL test for
+its whole subtree, and upgraded it to the write lock on Serial. CI showed
+two things. The ubuntu leg printed `TestAPEFatMergeStripAndSidecars
+(-9223372036.85s)`: the auto-Parallel ran before `t.start` was set, and
+Parallel charges the time since `t.start` to the test, so every test was
+charged the time since the zero instant. The wasm leg hung until its
+timeout, and the reason generalizes: a top-level test waiting for its
+parallel subtests holds the read lock while those subtests wait for a
+`-parallel` slot; a Serial caller in another test holds a slot while it
+waits for the write lock. With `-parallel=1`, which is what GOMAXPROCS
+gives a wasm binary, that cycle closes on the first Serial call. (Go's
+RWMutex also blocks new readers behind a waiting writer, so even a
+larger slot count fills with tests parked in RLock.)
+
+The hold is now per test and lasts only for the function body: acquire
+before `fn`, release in the deferred epilogue before the parallel
+subtests run, each of which takes its own. Nothing that holds the barrier
+ever waits for a slot. Serial upgrades in place. A serial test's subtests
+skip the auto-Parallel and run one at a time inside `t.Run`, under the
+parent's exclusive hold, which is what "runs alone until it returns"
+means for a table test. `barrierHolder` walks the parent chain so a
+subtest or a synctest bubble finds the hold that covers it.
+
+`testing.AllocsPerRun` counts process-wide mallocs and sets GOMAXPROCS=1,
+and its guard (`parallelStart != parallelStop`) fires for EVERY test
+now. It accepts a caller inside an exclusive hold (`serialExclusive`)
+and names `t.Serial` in the panic otherwise. Every AllocsPerRun caller in
+the packages CI runs got a `t.Serial()`, inserted by an AST tool rather
+than by hand, and so did the linker and cmd/go tests that write flag or
+`cfg` globals directly. The one-line CI reproduction is
+`GOOS=js GOARCH=wasm go test -short sync`: it deadlocked before, and
+`TestOnceValues` panicked on the guard after the deadlock fix.
