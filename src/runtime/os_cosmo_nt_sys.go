@@ -36,7 +36,21 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/syscall/cosmo"
+	"unsafe"
+)
+
+// ntSetSyscallFns installs the syscall-package hook table. Called from
+// osArchInit on NT hosts, before any user code runs. The composite
+// literal does not escape (SetWindowsFns copies it), so this is safe
+// pre-mallocinit.
+func ntSetSyscallFns() {
+	cosmo.SetWindowsFns(&cosmo.WindowsFns{
+		Emulate: ntSyscallEmulate,
+		Spawn:   ntSpawn,
+	})
+}
 
 // Linux amd64 syscall numbers emulated here (the shared subset lives
 // in internal/runtime/syscall/cosmo/defs_cosmo_amd64.go; duplicating
@@ -76,9 +90,11 @@ const (
 	ntSysFcntl      = 72
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
+	ntSysTruncate   = 76
 	ntSysFtruncate  = 77
 	ntSysGetcwd     = 79
 	ntSysChdir      = 80
+	ntSysFchdir     = 81
 	ntSysFchmod     = 91
 	ntSysUmask      = 95
 	ntSysGetuid     = 102
@@ -99,8 +115,10 @@ const (
 	ntSysRenameat   = 264
 	ntSysReadlinkat = 267
 	ntSysAccept4    = 288
+	ntSysLinkat     = 265
 	ntSysFchmodat   = 268
 	ntSysFaccessat  = 269
+	ntSysUtimensat  = 280
 	ntSysPipe2      = 293
 	ntSysGetrandom  = 318
 )
@@ -155,7 +173,6 @@ const (
 
 	_NT_INVALID_HANDLE_VALUE    = ^uintptr(0)
 	_NT_INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
-	_NT_CURRENT_PROCESS         = ^uintptr(0) // GetCurrentProcess() pseudo-handle
 
 	_NT_MOVEFILE_REPLACE_EXISTING = 0x1
 
@@ -312,6 +329,16 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuGetcwd(unsafe.Pointer(a1), a2)
 	case ntSysFtruncate:
 		return ntEmuFtruncate(int32(a1), int64(a2))
+	case ntSysTruncate:
+		return ntEmuTruncate((*byte)(unsafe.Pointer(a1)), int64(a2))
+	case ntSysFchdir:
+		return ntEmuFchdir(int32(a1))
+	case ntSysLinkat:
+		return ntEmuLinkat(int32(a1), (*byte)(unsafe.Pointer(a2)),
+			int32(a3), (*byte)(unsafe.Pointer(a4)), int32(a5))
+	case ntSysUtimensat:
+		return ntEmuUtimensat(int32(a1), (*byte)(unsafe.Pointer(a2)),
+			(*[2]ntLinuxTimespec)(unsafe.Pointer(a3)), int32(a4))
 	case ntSysFsync, ntSysFdatasync:
 		return ntEmuFsync(int32(a1))
 	case ntSysFchmod:

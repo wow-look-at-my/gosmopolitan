@@ -10,6 +10,38 @@ import (
 	"testing"
 )
 
+// TestPlatformTableIsClosed pins the whole platform table, and windows/arm64's
+// absence from it in particular.
+//
+// That absence is load-bearing rather than incidental. runtime's NT surface is
+// 16 files under `cosmo && amd64`, and os_cosmo_nt_arm64.go answers every entry
+// point with a throw. Those throws are safe ONLY because no APE this toolchain
+// emits can start on a Windows/arm64 host: `all` is the complete set of boot
+// mechanisms the linker knows how to write, Default() is a subset of it, and
+// nothing in it pairs windows with arm64. (The runtime holds up the other end - iswindows
+// is a constant false on arm64, so the compiler deletes the call sites.)
+//
+// Adding a row here without bringing up the matching runtime turns those throws
+// from dead code into a crash in the scheduler on a host that got that far. If
+// this test is what stopped you, that is the work it is asking for.
+func TestPlatformTableIsClosed(t *testing.T) {
+	want := []Platform{
+		{"linux", "amd64"},
+		{"linux", "arm64"},
+		{"darwin", "amd64"},
+		{"darwin", "arm64"},
+		{"windows", "amd64"},
+	}
+	if !reflect.DeepEqual(all[:], want) {
+		t.Fatalf("platform table = %v, want %v", all, want)
+	}
+	for _, p := range Default().Platforms() {
+		if p.OS == "windows" && p.Arch != "amd64" {
+			t.Errorf("%s is bootable, but runtime has no NT support on %s", p, p.Arch)
+		}
+	}
+}
+
 func TestParse(t *testing.T) {
 	tests := []struct {
 		spec   string
@@ -74,11 +106,26 @@ func TestParseRejects(t *testing.T) {
 	}
 }
 
-func TestDefaultCoversEveryPlatform(t *testing.T) {
+// TestDefaultIsTheSupportedThree pins what a build with no
+// GOCOSMOPLATFORMS claims. The default is narrower than the table on
+// purpose: linux/arm64 and darwin/amd64 are selectable but not promised,
+// and darwin/amd64 in particular has never executed (no Intel-mac runner),
+// so a default build must not advertise it.
+//
+// Both arches are still required, because darwin/arm64 is in the set.
+// Narrowing the default is an accuracy change, not a size one.
+func TestDefaultIsTheSupportedThree(t *testing.T) {
 	d := Default()
-	for _, p := range all {
-		if !d.Has(p) {
-			t.Errorf("Default() lacks %s", p)
+	want := []Platform{LinuxAMD64, DarwinARM64, WindowsAMD64}
+	if got := d.Platforms(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Default() = %v, want %v", got, want)
+	}
+	for _, p := range []Platform{LinuxARM64, DarwinAMD64} {
+		if d.Has(p) {
+			t.Errorf("Default() claims %s, which nothing verifies", p)
+		}
+		if _, err := Parse(p.String()); err != nil {
+			t.Errorf("Parse(%q) = %v, want it to stay selectable", p, err)
 		}
 	}
 	if got := d.Arches(); !reflect.DeepEqual(got, []string{"amd64", "arm64"}) {
@@ -88,13 +135,20 @@ func TestDefaultCoversEveryPlatform(t *testing.T) {
 
 func TestRestrictToArches(t *testing.T) {
 	// A build with no explicit selection supports what its payloads allow:
-	// an amd64-only build claims no arm64 platform.
+	// an amd64-only build claims no arm64 platform. darwin/amd64 is absent
+	// because the default never contained it, not because of the arch
+	// filter.
 	got := Default().RestrictToArches([]string{"amd64"})
-	want := []Platform{LinuxAMD64, DarwinAMD64, WindowsAMD64}
+	want := []Platform{LinuxAMD64, WindowsAMD64}
 	if !reflect.DeepEqual(got.Platforms(), want) {
 		t.Errorf("Default().RestrictToArches([amd64]) = %v, want %v", got.Platforms(), want)
 	}
 	if got.NeedsArch("arm64") {
 		t.Error("amd64-only set still needs an arm64 payload")
+	}
+	// The arm64 half of the same build claims darwin and nothing else.
+	arm := Default().RestrictToArches([]string{"arm64"})
+	if w := []Platform{DarwinARM64}; !reflect.DeepEqual(arm.Platforms(), w) {
+		t.Errorf("Default().RestrictToArches([arm64]) = %v, want %v", arm.Platforms(), w)
 	}
 }

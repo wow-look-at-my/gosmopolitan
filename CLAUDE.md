@@ -105,15 +105,18 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 # Restrict which hosts the APE boots on. Tokens: linux/amd64, linux/arm64,
 # darwin/amd64, darwin/arm64, windows/amd64 (which boots the AMD64 payload
-# through the PE header - there is no windows payload). Unset = every
-# platform, byte-identical to before the flag existed. An unknown token, an
+# through the PE header - there is no windows payload). UNSET selects the
+# three supported platforms, linux/amd64 + darwin/arm64 + windows/amd64, not
+# all five: linux/arm64 and darwin/amd64 stay selectable but a default build
+# does not claim them, because nothing verifies either: there is no runner
+# for linux/arm64 or darwin/amd64. An unknown token, an
 # empty list, or a platform whose payload is missing fails the build; a
 # selection that needs one architecture skips the sibling build entirely and
 # is still stripped and given its sidecar. NOT a size win by itself: the APE
 # header is a fixed 64K, so only dropping an ARCHITECTURE changes the size
-# (-47% for amd64-only), and linux/amd64+darwin/arm64+windows/amd64 needs
-# both payloads and weighs exactly what the fat APE does. What a subset buys
-# is an accurate claim and a host refused by name. `go env GOCOSMOPLATFORMS` reports
+# (-47% for amd64-only), and the default needs both payloads and weighs
+# exactly what the fat APE does. What a subset buys is an accurate claim and
+# a host refused by name. `go env GOCOSMOPLATFORMS` reports
 # the effective selection, which is how a consumer detects support for it.
 # Depth, including the per-platform payload/header table: DEBUGGING.md
 # "Platform-subset APEs".
@@ -215,10 +218,21 @@ IAT slots.
 
 Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
 forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
-through NT bring-up wave 3 (still missing: Windows/arm64, file/pipe dup(2), off-host TCP coverage - DNS is
-resolved from iphlpapi and probed on every runner);
-macOS arm64 complete including signals, SIGPROF profiling and SCM_RIGHTS fd passing; macOS Intel structurally
-correct but its runtime bring-up is UNTESTED - do not claim it works.
+through NT bring-up wave 3 plus the 2026-09-02 metadata syscalls (chtimes/truncate/fchdir/link; still missing:
+file/pipe dup(2), off-host TCP coverage - DNS is
+resolved from iphlpapi and probed on every runner). Windows/arm64 has its Win32 layer as of 2026-09-02 -
+AAPCS64 ntcall trampolines, ARM64_NT_CONTEXT, VEH thunks - but no boot path (the APE has no arm64 PE header,
+so `iswindows` is a constant false there) and no netpoller, which waits on an arm64 split of the
+amd64-numbered syscall emulation;
+macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
+metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
+cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of
+2026-09-02 (metadata, errno convention and numbering, netpoller, CPU count, parking, nanosleep, and thread
+creation via bsdthread_create), and so are signals - darwinSigaction issues the raw __sigaction syscall with
+its own sa_tramp trampoline and darwinSigprocmask bridges the sigset width (8-byte Linux, 4-byte Apple),
+where the old asm branches returned success without installing anything and set a mask naming the wrong
+signals. There is no Intel-mac runner, so nothing there has ever executed - do not claim it works. It is deliberately absent from the default
+GOCOSMOPLATFORMS set for that reason.
 
 **Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64
 here, so a variadic callee handed its argument in a register reads uninitialized stack memory and usually
@@ -411,7 +425,10 @@ NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
 (sigpanic recovery, os/signal, async preemption, wait-status decode),
 os/exec, os.Executable, argv/env, wd round-trip, and an off-host DNS
 resolve - the one check here that leaves the machine, and the one that
-covers where each host keeps its nameservers). The apetest suite
+covers where each host keeps its nameservers). Its `nanosleep` check
+asserts on the elapsed CLOCK, not on the error: a syscall that returns
+success without sleeping passes an error-only check, which is exactly
+what macOS-Intel did. The apetest suite
 runs both against all three origin binaries via the FIZZBUZZ_BIN and
 RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
 executes the darwin (Syslib) code paths.

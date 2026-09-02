@@ -102,6 +102,26 @@ func (sa *SockaddrUnix) sockaddr() (unsafe.Pointer, _Socklen, error) {
 
 func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 	switch rsa.Addr.Family {
+	case AF_NETLINK:
+		pp := (*RawSockaddrNetlink)(unsafe.Pointer(rsa))
+		sa := new(SockaddrNetlink)
+		sa.Family = pp.Family
+		sa.Pad = pp.Pad
+		sa.Pid = pp.Pid
+		sa.Groups = pp.Groups
+		return sa, nil
+
+	case AF_PACKET:
+		pp := (*RawSockaddrLinklayer)(unsafe.Pointer(rsa))
+		sa := new(SockaddrLinklayer)
+		sa.Protocol = pp.Protocol
+		sa.Ifindex = int(pp.Ifindex)
+		sa.Hatype = pp.Hatype
+		sa.Pkttype = pp.Pkttype
+		sa.Halen = pp.Halen
+		sa.Addr = pp.Addr
+		return sa, nil
+
 	case AF_UNIX:
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)

@@ -6,7 +6,7 @@
 
 package runtime
 
-import _ "unsafe" // for go:linkname
+import "unsafe"
 
 // Host OS constants (passed in CL by APE loader on x86_64)
 const (
@@ -56,59 +56,174 @@ func osArchInit() {
 		ntSetSyscallFns()
 		ntBootInit()
 	}
+	if isdarwin() {
+		// The kernel has to be told where to enter a new thread before
+		// the first bsdthread_create, and there is nowhere later to do
+		// it: newosproc runs on whatever M needs the thread. Failing
+		// here is right - an unregistered process cannot create a
+		// thread at all, so the alternative is dying at the first
+		// newosproc with a less specific message.
+		if errno := cosmoBsdthreadRegister(); errno != 0 {
+			print("runtime: bsdthread_register failed with errno ", errno, "\n")
+			throw("cosmo: bsdthread_register")
+		}
+	}
 }
 
-// cosmoDarwinNumCPU: no Syslib on amd64, so no sysctl access; report
-// "unknown" and let getCPUCount fall back to 1.
-func cosmoDarwinNumCPU() int32 { return 0 }
+// cosmoBsdthreadRegister is in sys_cosmo_amd64.s. It registers
+// cosmoBsdthreadStart as the entry point for threads made by
+// bsdthread_create, which is how darwin/amd64 serves clone.
+func cosmoBsdthreadRegister() int32
 
-// cosmoDarwinKqueueSupported: the darwin netpoller needs Apple libc's
-// kqueue/kevent, reached through the arm64 Syslib's dlsym. amd64 has no
-// Syslib (and macOS-Intel execution is not implemented: clone/futex are
-// ENOSYS there), so the poller is unsupported and netpollinit fails
-// with a clear message instead of issuing Linux syscalls XNU would kill.
-func cosmoDarwinKqueueSupported() bool { return false }
+// cosmoBsdthreadStart is in sys_cosmo_amd64.s. Nothing in Go calls it -
+// the KERNEL enters it, with a register state of its own choosing, when a
+// bsdthread_create thread starts. The declaration exists because asmdecl
+// requires every asm TEXT in the package to have one; taking its address
+// is all the Go side ever does.
+func cosmoBsdthreadStart()
 
-// cosmoDarwinKqueue and cosmoDarwinKevent are unreachable on amd64
-// (netpollinit throws first); keep the failures honest anyway.
+// cosmo_xlat_errno_ax is a register-convention helper in sys_cosmo_amd64.s:
+// it translates an Apple errno in AX to its Linux value. It takes no Go
+// arguments and is not callable from Go; internal/runtime/syscall/cosmo
+// reaches it from its own assembly. The declaration exists only so the
+// symbol carries a linkname push, which is what cmd/link's cross-package
+// reference check looks for. arm64's counterpart is cosmo_xlat_errno_r0
+// (os_cosmo_arm64.go); both read the one table in sys_cosmo_errno.s.
+//
+//go:linkname cosmo_xlat_errno_ax
+func cosmo_xlat_errno_ax()
+
+// cosmoXlatErrno is the Go-callable form of cosmo_xlat_errno_ax
+// (sys_cosmo_amd64.s), so a test can pin the table.
+func cosmoXlatErrno(e uint32) uint32
+
+// cosmoDarwinNumCPU reads hw.ncpu through raw XNU __sysctl. amd64 has no
+// Syslib and so cannot call sysctlbyname the way arm64 does, but the
+// numeric MIB needs no name lookup: the syscall number and both MIB
+// constants come from this tree (syscall/zsysnum_darwin_amd64.go and
+// os_darwin.go's own getCPUCount). Returns 0 when the call fails, which
+// is what getCPUCount treats as "unknown".
+func cosmoDarwinNumCPU() int32 {
+	mib := [2]uint32{_CTL_HW, _HW_NCPU}
+	out := uint32(0)
+	nout := unsafe.Sizeof(out)
+	_, e := cosmoXnuSyscall6(_XNU_sysctl,
+		uintptr(unsafe.Pointer(&mib[0])), 2,
+		uintptr(unsafe.Pointer(&out)),
+		uintptr(unsafe.Pointer(&nout)),
+		0, 0)
+	if e != 0 {
+		return 0
+	}
+	return int32(out)
+}
+
+// XNU BSD numbers for the netpoller's two syscalls, from the tree's own
+// authority (syscall/zsysnum_darwin_amd64.go), with the SYSCALL_CLASS_UNIX
+// prefix. kevent 363 is the legacy entry, whose struct kevent is the
+// 64-bit layout keventt already describes (netpoll_cosmo_xnu.go) - the
+// same one arm64 passes to Apple libc.
+const (
+	_XNU_sigaction   = 0x2000000 | 46
+	_XNU_sigprocmask = 0x2000000 | 48
+	_XNU_sigaltstack = 0x2000000 | 53
+	_XNU_sysctl      = 0x2000000 | 202
+	_XNU_kqueue      = 0x2000000 | 362
+	_XNU_kevent      = 0x2000000 | 363
+)
+
+// The hw.ncpu MIB, spelled the way os_darwin.go spells it. That file is
+// GOOS=darwin only, so cosmo cannot share the declaration.
+const (
+	_CTL_HW  = 6
+	_HW_NCPU = 3
+)
+
+// cosmoXnuSyscall6 is in sys_cosmo_amd64.s. It answers ENOSYS on any
+// host that is not XNU.
+//
+//go:noescape
+func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno int32)
+
+// cosmoDarwinKqueueSupported: amd64 has no Syslib, so it cannot reach
+// Apple libc kqueue the way arm64 does - but it does not need to. The
+// amd64 darwin path issues raw XNU syscalls, and both numbers are known,
+// so the poller is served directly.
+//
+// This says nothing about whether macOS-Intel has ever been RUN. Its
+// syscall surface is complete now - thread creation, signal
+// installation and the signal mask included - but there is no
+// Intel-mac runner, so none of it has executed.
+func cosmoDarwinKqueueSupported() bool { return true }
+
+// cosmoDarwinKqueue creates a kqueue. Returns the descriptor, or
+// (-1, errno) with a LINUX errno number.
 func cosmoDarwinKqueue() (int32, int32) {
-	return -1, 38 // ENOSYS
+	r, e := cosmoXnuSyscall6(_XNU_kqueue, 0, 0, 0, 0, 0, 0)
+	if e != 0 {
+		return -1, e
+	}
+	return int32(r), 0
 }
 
+// cosmoDarwinKevent registers changes and collects events. Returns the
+// number of events placed in ev, or (-1, errno) with a LINUX errno
+// number. A nil ts means "block indefinitely", which XNU spells the same
+// way Apple libc does: a null pointer.
 func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
-	return -1, 38 // ENOSYS
+	r, e := cosmoXnuSyscall6(_XNU_kevent,
+		uintptr(uint32(kq)),
+		uintptr(unsafe.Pointer(ch)),
+		uintptr(uint32(nch)),
+		uintptr(unsafe.Pointer(ev)),
+		uintptr(uint32(nev)),
+		uintptr(unsafe.Pointer(ts)))
+	if e != 0 {
+		return -1, e
+	}
+	return int32(r), 0
 }
 
 // pipe2 is implemented in sys_cosmo_amd64.s.
 func pipe2(flags int32) (r, w int32, errno int32)
 
-// minitProcid: Linux hosts use the tid. (The macOS-Intel runtime
-// bring-up is pending; gettid's darwin branch is a raw-XNU stub.)
-// NT (wave 2): GetCurrentThreadId, resolved at osArchInit - which
-// runs before m0's minit and long before any other thread starts.
-// Must agree with the SYS_GETTID emulation (os_cosmo_nt_sys.go).
-// Signal sends are still dropped on NT; the thread id becomes
-// load-bearing in the signals/preemption wave.
+// minitProcid: Linux hosts use the tid. macOS hosts use the thread's
+// mach port, which __pthread_kill (tgkill's darwin branch) addresses:
+// cosmoBsdthreadStart stores the port the kernel hands a new thread
+// before minit runs, and m0, which no bsdthread_create made, asks
+// thread_self_trap. NT (wave 2): GetCurrentThreadId, resolved at
+// osArchInit - which runs before m0's minit and long before any other
+// thread starts. Must agree with the SYS_GETTID emulation
+// (os_cosmo_nt_sys.go).
 //
 //go:nosplit
 func minitProcid() uint64 {
 	if iswindows() {
 		return uint64(uint32(ntcall(ntGetCurrentThreadIdFn, 0, 0, 0, 0, 0, 0)))
 	}
+	if isdarwin() {
+		if port := getg().m.procid; port != 0 {
+			return port
+		}
+		return uint64(cosmoMachThreadSelf())
+	}
 	return uint64(gettid())
 }
 
-// darwinSignalM: macOS-Intel execution is not implemented; keep the
-// pre-dispatch behavior (tgkill's asm has its own darwin branch).
+// cosmoMachThreadSelf is in sys_cosmo_amd64.s: the thread_self_trap mach
+// trap, returning this thread's port name. XNU hosts only.
+func cosmoMachThreadSelf() uint32
+
+// darwinSignalM sends sig (a LINUX signal number) to mp's thread. tgkill's
+// darwin branch translates the number and issues __pthread_kill on the
+// mach port in m.procid; a signal with no Apple number is dropped there.
 func darwinSignalM(mp *m, sig int) {
 	tgkill(getpid(), int(mp.procid), sig)
 }
 
-// sigaltstack is implemented in sys_cosmo_amd64.s (its darwin branch
-// is a raw-XNU stub; the Intel-mac runtime bring-up is pending).
-//
-//go:noescape
-func sigaltstack(new, old *stackt)
+// sigaltstack is a Go host dispatcher (signal_cosmo_xnu_amd64.go): it
+// translates Apple's stack_t on XNU hosts and issues the raw Linux
+// syscall (sigaltstackLinux, sys_cosmo_amd64.s) elsewhere.
 
 // setitimer is implemented in sys_cosmo_amd64.s (its raw-XNU darwin
 // branch is the pending Intel-mac bring-up path; arm64 dispatches to
@@ -116,18 +231,3 @@ func sigaltstack(new, old *stackt)
 //
 //go:noescape
 func setitimer(mode int32, new, old *itimerval)
-
-// darwinSigprocmask and darwinSigaction are unreachable on amd64: the
-// GOARCH == "arm64" guards in sigprocmask/sysSigaction compile their
-// call sites away, and the asm paths keep the amd64 behavior. The
-// stubs exist so the shared code links.
-//
-//go:nosplit
-func darwinSigprocmask(how int32, new, old *sigset) {
-	throw("darwinSigprocmask: not implemented on amd64")
-}
-
-//go:nosplit
-func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
-	return -1
-}
