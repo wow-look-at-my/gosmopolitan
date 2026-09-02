@@ -76,7 +76,7 @@ func newSharedCache(disk *DiskCache) Cache {
 	if cacheDebug() {
 		cacheclient.SetLogger(goLogger{})
 	}
-	remote, err := cacheclient.NewWebBackend(cfg)
+	remote, err := newWebBackendQuietly(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
@@ -215,6 +215,37 @@ func decodeOutputID(s string) (OutputID, error) {
 	}
 	copy(out[:], raw)
 	return out, nil
+}
+
+// newWebBackendQuietly builds the backend with os.Stderr pointed at the null
+// device, so the one diagnostic path the Logger above does not cover cannot
+// reach the go command's output either.
+//
+// The client aggregates its HTTP errors through a writer it captures ONCE,
+// when the backend is built, and that writer is os.Stderr. SetLogger does not
+// reach it. Swapping os.Stderr across this one call is therefore what decides
+// where those summaries go for the life of the backend. Narrow by
+// construction: cmd/go builds exactly one backend, before it has anything
+// else to say.
+//
+// TestSharedCache_HTTPErrorsStayOffTheBuildsOutput fails if the client stops
+// capturing at construction, which is the assumption this rests on. The
+// client is being fixed to route these through the Logger too; this stays
+// correct either way, and until then it is what keeps a build here
+// independent of that cache server's health.
+func newWebBackendQuietly(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, error) {
+	if cacheDebug() {
+		return cacheclient.NewWebBackend(cfg)
+	}
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		// No null device is not a reason to give up a working cache.
+		return cacheclient.NewWebBackend(cfg)
+	}
+	saved := os.Stderr
+	os.Stderr = devnull
+	defer func() { os.Stderr = saved }()
+	return cacheclient.NewWebBackend(cfg)
 }
 
 // CacheDebugEnv turns on the shared tier's per-request diagnostics. Anything

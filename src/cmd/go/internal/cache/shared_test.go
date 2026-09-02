@@ -32,6 +32,10 @@ type fakeCacheServer struct {
 	meta    map[string]http.Header // key -> every X-Cache-Meta-* header sent on its PUT
 	puts    int
 	gets    int
+
+	// failPuts refuses every upload, which is what an unwell server does and
+	// what drives the client's HTTP error summaries.
+	failPuts bool
 }
 
 func newFakeCacheServer(t *testing.T) (*fakeCacheServer, *httptest.Server) {
@@ -57,6 +61,10 @@ func (f *fakeCacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Path
 	switch r.Method {
 	case http.MethodPut:
+		if f.failPuts {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -415,6 +423,34 @@ func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
 	})
 	if out != "" {
 		t.Fatalf("shared tier wrote to the build's stderr:\n%s", out)
+	}
+}
+
+// The client's HTTP error summaries do not go through the Logger: the
+// backend captures a writer once, when it is built, and that writer was
+// os.Stderr. So a cache server refusing writes put lines on the go
+// command's stderr no matter what this package installed. A build here must
+// not depend on that server's health, and it must not depend on a fix
+// landing in that server's repo either -- it is built with this toolchain,
+// so this tree cannot wait on it.
+//
+// This also guards the assumption newWebBackendQuietly rests on. If the
+// client ever captures the writer later than construction, this goes red.
+func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	f.failPuts = true
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		if err := PutBytes(c, testActionID("refused"), []byte("body")); err != nil {
+			t.Logf("put failed, which is the point: %v", err)
+		}
+		c.(*SharedCache).Close()
+	})
+	if out != "" {
+		t.Fatalf("refused uploads reached the build's stderr:\n%s", out)
 	}
 }
 
