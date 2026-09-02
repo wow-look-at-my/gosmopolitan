@@ -86,8 +86,8 @@ functionality is missing.
 | 2 | `src/runtime/sys_cosmo_amd64.s:919-921` (`clone` darwin) | Returns ENOSYS. Comment: "Thread creation on macOS should use pthread_create". |
 | 3 | `src/runtime/sys_cosmo_arm64.s:1099-1101` (`futex` darwin) | Returns ENOSYS. Comment: "use dispatch_semaphore ... For now, return ENOSYS". |
 | 4 | `src/runtime/sys_cosmo_arm64.s:654-655` (`mincore` darwin) | Returns -1 (ENOSYS). "mincore not in Syslib". |
-| 5 | `src/runtime/os_cosmo_amd64.go:75-80` (`cosmoDarwinKqueue`/`cosmoDarwinKevent`) | Return ENOSYS. The darwin netpoller is unsupported on amd64. |
-| 6 | `src/runtime/os_cosmo_amd64.go:63` (`cosmoDarwinNumCPU`) | Returns 0 ("unknown"), so `getCPUCount` falls back to 1 on macOS-Intel. |
+| 5 | ~~`cosmoDarwinKqueue`/`cosmoDarwinKevent` on amd64~~ | Was: ENOSYS, on the reasoning that the poller needs Apple libc through a Syslib amd64 does not have. It needs no libc. `SYS_KQUEUE` (362) and `SYS_KEVENT` (363) are both in `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's 64-bit `struct kevent` (`netpoll_cosmo_xnu.go`), shared with arm64. Both are served by raw XNU syscall now, and `cosmoDarwinKqueueSupported` reports true. |
+| 6 | ~~`cosmoDarwinNumCPU` on amd64~~ | Was: 0 ("no Syslib, so no sysctl access"), so `getCPUCount` fell back to 1. The numeric MIB needs no name lookup: `SYS___SYSCTL` is 202 in the same table, and `_CTL_HW`/`_HW_NCPU` are 6/3 in `runtime/os_darwin.go`'s own `getCPUCount`. Reads hw.ncpu directly now. |
 | 7 | `src/runtime/os_cosmo_amd64.go:127` (`darwinSigprocmask`) | `throw("darwinSigprocmask: not implemented on amd64")`. |
 | 8 | `src/runtime/os_cosmo_amd64.go:131` (`darwinSigaction`) | Returns -1 (unreachable on amd64; stub for linking). |
 
@@ -100,8 +100,8 @@ functionality is missing.
 | 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The amd64 design is therefore sound in principle — but macOS-Intel runtime bring-up (clone/futex/netpoller) is still absent, and there is no Intel-mac CI runner, so none of it is verified. Do not claim it works. |
 | 1b | same file, `darwin_error` (FIXED 2026-09-02) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`, followed by a call to `runtime·cosmo_xlat_errno_ax` for the numbering. See Section 4.1c: the same defect ran through the runtime's own darwin branches. |
 | 1c | `src/runtime/sys_cosmo_amd64.s` (FIXED 2026-09-02) | The identical carry-flag defect, in the runtime's own raw-XNU branches. `open` returned the errno as a file descriptor (`ENOENT` opened "fd 2"); `read`/`write1` returned it as a byte count, so a failed write read as a short write; `pipe2` produced a pair of fds out of it; `mmap` returned a mapping at address `ENOMEM` that every caller then wrote to. Each failing branch now tests the carry flag and, where the value reaches Go, translates the errno. `munmap` and `rtsigprocmask` keep their crash-on-failure pokes, now reached by `JCC`. |
-| 2 | `src/runtime/os_cosmo_amd64.go:67-69` | `cosmoDarwinKqueueSupported` returns false: "macOS-Intel execution is not implemented: clone/futex are ENOSYS there". The netpoller is unsupported on amd64. |
-| 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented.** Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". |
+| 2 | ~~`cosmoDarwinKqueueSupported` returns false~~ | Fixed with Section 3.5: the poller is served by raw XNU syscall. What is left on macOS-Intel is thread creation and parking, which is a narrower and more accurate claim than "the netpoller is unsupported". |
+| 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented**, and is not reachable either: the APE carries no windows/arm64 boot path (Windows boots the AMD64 payload through the PE header), and `GOCOSMOPLATFORMS` has no token for it. Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". None of these is a syscall gap — they are Win32 calls the amd64 side already makes in Go, blocked on an arm64 `ntcall` trampoline and a boot path. The file exists so the arm64 build links. |
 
 ---
 
@@ -242,9 +242,14 @@ Section 4.1.
 - The "return success" stubs (Section 2) are now the highest-risk items:
   they hide failures. `time.Sleep` and signal handling on macOS-Intel
   silently do nothing.
-- The macOS-Intel (amd64) surface is still largely stubbed or
-  structurally broken, and Windows/arm64 (Section 4.3) is entirely
-  unimplemented.
+- The macOS-Intel (amd64) SYSCALL surface is closed: the table, the
+  error convention, the errno numbering, the netpoller and the CPU
+  count. What is left there is `clone` and `futex` — thread creation and
+  parking — neither of which XNU serves by a number this tree records.
+  None of it is verified, because there is no Intel-mac runner.
+- Windows/arm64 (Section 4.3) is entirely unimplemented and entirely
+  unreachable: no APE boot path, no platform token. Its stubs exist to
+  make the arm64 build link.
 
 ## 8. Recommended follow-up
 
@@ -254,12 +259,25 @@ Section 4.1.
    `darwin_sigaction`, `rt_sigaction`) with real implementations, or make
    them fail loudly instead of silently. These are now the largest
    remaining lie in the tree.
-3. Bring up macOS-Intel: clone/futex/netpoller (Section 3), and give the
-   amd64 dispatch a runtime-side entry point so it can translate Apple
-   errnos (Section 4.1b). The syscall table itself is done (Section 6b).
-   None of this can be verified until an Intel-mac runner exists, which
-   is the honest blocker on the whole platform.
-4. Implement Windows/arm64, or refuse to boot on it.
+3. Bring up macOS-Intel. What is left is `clone` and `futex` — thread
+   creation and parking. Everything else that was filed under this
+   heading turned out to be a syscall with a known number and is done:
+   the table (Section 6b), the errno convention and numbering
+   (Section 4.1b/4.1c), the netpoller (Section 3.5) and the CPU count
+   (Section 3.6).
+
+   Neither remaining one is a forward. `futex` has no XNU counterpart at
+   all; the closest primitive, `__ulock_wait`/`__ulock_wake`, is not in
+   `syscall/zsysnum_darwin_amd64.go`, and a guessed syscall number does
+   not fail — it calls a different syscall. `clone` maps to
+   `bsdthread_create` (360, which the table does carry), but that call
+   is only usable after `bsdthread_register` installs a pthread entry
+   point with an ABI contract no test here can check. Both stay ENOSYS
+   until an Intel-mac runner exists, which is the honest blocker on the
+   platform.
+4. Implement Windows/arm64, or refuse to boot on it. Note this is not a
+   syscall gap and cannot be exercised today: there is no windows/arm64
+   APE boot path and no `GOCOSMOPLATFORMS` token for one (Section 4.3).
 5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go`
    carries no cosmo build tag, so `io.Copy` from a file to a socket
    never reaches the syscall on any cosmo host; only a caller that uses

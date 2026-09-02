@@ -1143,6 +1143,43 @@ sbrk0_darwin:
 	MOVQ	$0, ret+0(FP)
 	RET
 
+// func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno int32)
+//
+// A raw XNU syscall by BSD number (caller supplies the 0x2000000 class
+// prefix), for the darwin calls that have no Linux number to dispatch on
+// - kqueue and kevent. errno is 0 on success and a LINUX errno on
+// failure; r1 is meaningless unless errno is 0.
+//
+// Refuses to issue anything on a non-XNU host: this is the one entry
+// here a caller reaches by naming an Apple syscall directly, so a
+// mis-gated caller must get ENOSYS rather than run BSD number 362 as
+// whatever Linux calls 362.
+TEXT runtime·cosmoXnuSyscall6(SB),NOSPLIT,$0-68
+	MOVL	runtime·__hostos(SB), R11
+	CMPL	R11, $HOSTXNU
+	JNE	cosmoXnuSyscall6_enosys
+	MOVQ	a1+8(FP), DI
+	MOVQ	a2+16(FP), SI
+	MOVQ	a3+24(FP), DX
+	MOVQ	a4+32(FP), R10
+	MOVQ	a5+40(FP), R8
+	MOVQ	a6+48(FP), R9
+	MOVQ	num+0(FP), AX
+	SYSCALL
+	JCS	cosmoXnuSyscall6_err
+	MOVQ	AX, r1+56(FP)
+	MOVL	$0, errno+64(FP)
+	RET
+cosmoXnuSyscall6_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	$0, r1+56(FP)
+	MOVL	AX, errno+64(FP)
+	RET
+cosmoXnuSyscall6_enosys:
+	MOVQ	$0, r1+56(FP)
+	MOVL	$38, errno+64(FP)	// ENOSYS
+	RET
+
 // runtime·cosmo_xlat_errno_ax translates a positive Apple errno in AX into
 // the corresponding positive Linux errno in AX. A value above 106 passes
 // through unchanged. Leaf; clobbers only R11, so any darwin return path can

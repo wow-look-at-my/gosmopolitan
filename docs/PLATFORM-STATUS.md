@@ -174,7 +174,10 @@ gates it. Full forensics: DEBUGGING.md 2026-07-26.
 macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
 host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
-unit tests and apetest), but the darwin-amd64 runtime side (clone/futex/
-sigaction and friends) is still incomplete, and there is no Intel-mac CI
-runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel
-"works" until the runtime bring-up lands and is verified on real hardware.
+unit tests and apetest). The syscall surface closed on 2026-09-02: the
+metadata table, the XNU carry-flag error convention, Apple-to-Linux errno
+numbering, the kqueue/kevent netpoller and hw.ncpu. What is still incomplete
+is thread creation and parking (clone/futex) and signal delivery (sigaction),
+and there is still no Intel-mac CI runner, so end-to-end execution there is
+UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
+and is verified on real hardware.

@@ -6159,3 +6159,44 @@ syscall now reports the Linux errno Go compares against.
 `go build std` does not catch a missing push - the LINK does. Both
 arches link a cosmo binary in the verify loop for this reason; that is
 the step that rejected the DATA-symbol attempt.
+
+## Two more macOS-Intel "bring-ups" were syscalls all along (2026-09-02)
+
+The netpoller and the CPU count were both filed as macOS-Intel runtime
+bring-up, on the reasoning that they need Apple libc and amd64 has no
+Syslib to reach it with. Neither needs libc.
+
+- **kqueue and kevent are BSD 362 and 363**, both recorded in
+  `syscall/zsysnum_darwin_amd64.go`, and `keventt` is already Apple's
+  64-bit `struct kevent` in `netpoll_cosmo_xnu.go` - the same struct
+  arm64 hands to Apple libc. `kevent` 363 is the legacy entry, which is
+  the one that takes that layout.
+- **hw.ncpu is `__sysctl` (202) with the numeric MIB.** The name lookup
+  is what needs libc; the MIB does not. `_CTL_HW` and `_HW_NCPU` are 6
+  and 3 in `runtime/os_darwin.go`'s own `getCPUCount`.
+
+Both go through one new primitive, `runtime·cosmoXnuSyscall6`, for
+darwin calls that have no Linux number for `Syscall6` to dispatch on. It
+refuses to issue anything unless `__hostos` is XNU: a mis-gated caller
+must get ENOSYS rather than run BSD 362 as whatever Linux calls 362.
+
+`cosmoDarwinKqueueSupported` now reports true. That is not a claim that
+macOS-Intel runs - nothing reaches netpollinit while `clone` is ENOSYS.
+It is the removal of a second, wrong statement of the blocker. The real
+one is stated once, on `clone` and `futex`.
+
+**What is genuinely left, and why it is not a forward.** `futex` has no
+XNU counterpart; `__ulock_wait`/`__ulock_wake` is the closest thing and
+its numbers are not in the tree's table, so writing them would be
+guessing - and a wrong syscall number does not fail, it calls a
+different syscall. `clone` maps to `bsdthread_create` (360, which the
+table does carry), but the call is only usable after
+`bsdthread_register` installs a pthread entry point under an ABI
+contract nothing here can verify.
+
+Windows/arm64 is a different shape again: every `nt*` stub is a Win32
+call the amd64 side already makes in Go, blocked on an arm64 `ntcall`
+trampoline. It is also unreachable - the APE has no windows/arm64 boot
+path (Windows boots the AMD64 payload through the PE header) and
+`GOCOSMOPLATFORMS` has no token for one. That file exists so the arm64
+build links.
