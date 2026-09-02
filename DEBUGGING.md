@@ -6125,3 +6125,37 @@ Windows/arm64. Neither is a syscall-table gap - both are runtime
 bring-ups (thread creation, parking, signals, netpoller), and neither
 has a CI runner, so neither could be written and verified the way this
 was. They stay as STUBS-INVENTORY.md section 8 items 2-4.
+
+## The carry flag was wrong everywhere, not just in one dispatch (2026-09-02)
+
+Fixing the XNU error convention in the cosmo syscall dispatch found one
+site. The same defect ran through `runtime/sys_cosmo_amd64.s`, where
+every darwin branch tested `AX > -4096` after a raw XNU `SYSCALL`. XNU
+sets the CARRY FLAG and returns a POSITIVE Apple errno, which that test
+reads as an ordinary small result:
+
+- `open` returned the errno as a file descriptor. `ENOENT` opened fd 2 -
+  stderr - and the caller then read from it.
+- `read` and `write1` returned it as a byte count, so a failed 4096-byte
+  write reported a successful short write of 9 bytes.
+- `pipe2` built a descriptor pair out of it.
+- `mmap` returned a mapping at address 12 (`ENOMEM`) with err = 0, and
+  the allocator wrote to it.
+
+Each branch now tests the carry flag. `munmap` and `rtsigprocmask` keep
+their deliberate crash pokes and reach them by `JCC`.
+
+**The numbering half closes too, and my earlier note about why it could
+not was wrong.** That note said a DATA symbol cannot be pushed across
+packages the way `cosmo_xlat_errno_r0` is. True, and beside the point:
+what crosses the package boundary is the FUNCTION that reads the table,
+and arm64 had been doing exactly that from
+`internal/runtime/syscall/cosmo`'s own assembly all along.
+`runtime·cosmo_xlat_errno_ax` is the amd64 twin, over the same 112 bytes
+in `sys_cosmo_errno.s`, with a linkname push in `os_cosmo_amd64.go` to
+satisfy cmd/link's cross-package reference check. A failed macOS-Intel
+syscall now reports the Linux errno Go compares against.
+
+`go build std` does not catch a missing push - the LINK does. Both
+arches link a cosmo binary in the verify loop for this reason; that is
+the step that rejected the DATA-symbol attempt.

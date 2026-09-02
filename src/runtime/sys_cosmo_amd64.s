@@ -171,17 +171,19 @@ TEXT runtime·open(SB),NOSPLIT,$0-20
 	MOVL	AX, ret+16(FP)
 	RET
 open_darwin:
-	// macOS path - use open directly
+	// macOS path - use open directly. XNU sets the carry flag on
+	// failure and returns a positive errno; the Linux -4096 test this
+	// used to apply read ENOENT (2) as a successful open on fd 2.
 	MOVQ	name+0(FP), DI
 	MOVL	mode+8(FP), SI
 	MOVL	perm+12(FP), DX
 	MOVL	$XNU_open, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	open_darwin_ok
-	MOVL	$-1, AX
-open_darwin_ok:
+	JCS	open_darwin_err
 	MOVL	AX, ret+16(FP)
+	RET
+open_darwin_err:
+	MOVL	$-1, ret+16(FP)
 	RET
 
 TEXT runtime·closefd(SB),NOSPLIT,$0-12
@@ -199,11 +201,11 @@ closefd_darwin:
 	MOVL	fd+0(FP), DI
 	MOVL	$XNU_close, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	closefd_darwin_ok
-	MOVL	$-1, AX
-closefd_darwin_ok:
+	JCS	closefd_darwin_err
 	MOVL	AX, ret+8(FP)
+	RET
+closefd_darwin_err:
+	MOVL	$-1, ret+8(FP)
 	RET
 
 TEXT runtime·write1(SB),NOSPLIT,$0-28
@@ -218,11 +220,20 @@ TEXT runtime·write1(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 write1_darwin:
+	// Callers read a negative result as -errno, so a failure must not
+	// come back as XNU's positive Apple errno - that reads as a short
+	// write of that many bytes.
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$XNU_write, AX
 	SYSCALL
+	JCS	write1_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+write1_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 write1_nt:
@@ -242,11 +253,18 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 read_darwin:
+	// -errno on failure, like write1_darwin above.
 	MOVL	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$XNU_read, AX
 	SYSCALL
+	JCS	read_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+read_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -265,19 +283,20 @@ pipe2_darwin:
 	// pipe() returns r in AX, w in DX
 	MOVL	$XNU_pipe, AX
 	SYSCALL
-	// On macOS, pipe() returns fds in AX (read) and DX (write) on success
-	// On error, returns -1 in AX
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	pipe2_darwin_ok
+	// On success pipe() returns the read fd in AX and the write fd in
+	// DX. On failure the carry flag is set and AX holds a positive
+	// Apple errno, which the old -4096 test accepted as a pair of fds.
+	JCS	pipe2_darwin_err
+	MOVL	AX, r+8(FP)
+	MOVL	DX, w+12(FP)
+	MOVL	$0, errno+16(FP)
+	RET
+pipe2_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
 	MOVL	$-1, r+8(FP)
 	MOVL	$-1, w+12(FP)
 	NEGQ	AX
 	MOVL	AX, errno+16(FP)
-	RET
-pipe2_darwin_ok:
-	MOVL	AX, r+8(FP)
-	MOVL	DX, w+12(FP)
-	MOVL	$0, errno+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$24
@@ -479,6 +498,12 @@ mincore_darwin:
 	MOVQ	dst+16(FP), DX
 	MOVL	$XNU_mincore, AX
 	SYSCALL
+	JCS	mincore_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+mincore_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -594,8 +619,7 @@ rtsigprocmask_darwin:
 	MOVQ	old+16(FP), DX
 	MOVL	$XNU_sigprocmask, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
+	JCC	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 rtsigprocmask_nt:
@@ -721,16 +745,16 @@ mmap_darwin_no_anon:
 
 	MOVL	$XNU_mmap, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	mmap_darwin_ok
-	NOTQ	AX
-	INCQ	AX
-	MOVQ	$0, p+32(FP)
-	MOVQ	AX, err+40(FP)
-	RET
-mmap_darwin_ok:
+	// The carry flag decides. A failed mmap used to come back as a
+	// mapping at address ENOMEM (12), which every caller then wrote to.
+	JCS	mmap_darwin_err
 	MOVQ	AX, p+32(FP)
 	MOVQ	$0, err+40(FP)
+	RET
+mmap_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	$0, p+32(FP)
+	MOVQ	AX, err+40(FP)
 	RET
 
 // func munmap(addr unsafe.Pointer, n uintptr)
@@ -750,8 +774,7 @@ munmap_darwin:
 	MOVQ	n+8(FP), SI
 	MOVL	$XNU_munmap, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
+	JCC	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
@@ -817,6 +840,12 @@ madvise_darwin:
 	MOVL	flags+16(FP), DX
 	MOVL	$XNU_madvise, AX
 	SYSCALL
+	JCS	madvise_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+madvise_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -1033,6 +1062,12 @@ access_darwin:
 	MOVL	mode+8(FP), SI
 	MOVL	$0x2000021, AX	// XNU access
 	SYSCALL
+	JCS	access_darwin_err
+	MOVL	AX, ret+16(FP)
+	RET
+access_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -1053,6 +1088,14 @@ connect_darwin:
 	MOVL	len+16(FP), DX
 	MOVL	$XNU_connect, AX
 	SYSCALL
+	JCS	connect_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+connect_darwin_err:
+	// The caller compares against -EINPROGRESS, so the Apple number
+	// has to become the Linux one before the sign flip.
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -1073,6 +1116,12 @@ socket_darwin:
 	MOVL	prot+8(FP), DX
 	MOVL	$XNU_socket, AX
 	SYSCALL
+	JCS	socket_darwin_err
+	MOVL	AX, ret+16(FP)
+	RET
+socket_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -1092,4 +1141,25 @@ TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
 sbrk0_darwin:
 	// macOS doesn't have brk, return 0
 	MOVQ	$0, ret+0(FP)
+	RET
+
+// runtime·cosmo_xlat_errno_ax translates a positive Apple errno in AX into
+// the corresponding positive Linux errno in AX. A value above 106 passes
+// through unchanged. Leaf; clobbers only R11, so any darwin return path can
+// CALL it.
+//
+// XNU reports failure by setting the carry flag and returning a POSITIVE
+// APPLE errno, while Go compares against LINUX values (Errno, EAGAIN, and
+// the rest). The first 34 agree; the BSD range diverges. The table is
+// runtime·cosmo_errno_xlat_tab in sys_cosmo_errno.s, shared with arm64's
+// cosmo_xlat_errno_r0 - same 112 bytes, one copy.
+//
+// internal/runtime/syscall/cosmo reaches this from its own assembly, which
+// is what the linkname push in os_cosmo_amd64.go is for.
+TEXT runtime·cosmo_xlat_errno_ax(SB),NOSPLIT|NOFRAME,$0
+	CMPQ	AX, $107
+	JAE	errno_xlat_done
+	MOVQ	$runtime·cosmo_errno_xlat_tab(SB), R11
+	MOVBLZX	(R11)(AX*1), AX
+errno_xlat_done:
 	RET

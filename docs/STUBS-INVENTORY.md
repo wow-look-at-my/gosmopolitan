@@ -98,7 +98,8 @@ functionality is missing.
 | # | Location | Behavior |
 |---|----------|----------|
 | 1 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (whole darwin path) | The amd64 darwin path issues **raw XNU `SYSCALL` instructions**. CLAUDE.md's blanket "macOS does not allow raw syscalls" is overbroad: that restriction is what ARM64 macOS enforces, which is why arm64 needs the Syslib and dlsym at all, and cosmopolitan itself issues raw syscalls on x86-64 XNU. The amd64 design is therefore sound in principle — but macOS-Intel runtime bring-up (clone/futex/netpoller) is still absent, and there is no Intel-mac CI runner, so none of it is verified. Do not claim it works. |
-| 1b | same file, `darwin_error` (FIXED 2026-09-02, detection half) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`. The errno NUMBERING is still Apple's: the translation table is a DATA symbol in package runtime, and a data symbol cannot be pushed across packages the way `cosmo_xlat_errno_r0` is, so closing it needs a runtime-side entry point the amd64 dispatch can call. |
+| 1b | same file, `darwin_error` (FIXED 2026-09-02) | The darwin return path tested for failure with the LINUX convention (`AX > -4096`). XNU signals failure with the CARRY FLAG and returns a POSITIVE errno, so every failing syscall was reported as SUCCESS carrying the errno as its result — `ENOENT` came back as a result of 2. Now `JCS`, followed by a call to `runtime·cosmo_xlat_errno_ax` for the numbering. See Section 4.1c: the same defect ran through the runtime's own darwin branches. |
+| 1c | `src/runtime/sys_cosmo_amd64.s` (FIXED 2026-09-02) | The identical carry-flag defect, in the runtime's own raw-XNU branches. `open` returned the errno as a file descriptor (`ENOENT` opened "fd 2"); `read`/`write1` returned it as a byte count, so a failed write read as a short write; `pipe2` produced a pair of fds out of it; `mmap` returned a mapping at address `ENOMEM` that every caller then wrote to. Each failing branch now tests the carry flag and, where the value reaches Go, translates the errno. `munmap` and `rtsigprocmask` keep their crash-on-failure pokes, now reached by `JCC`. |
 | 2 | `src/runtime/os_cosmo_amd64.go:67-69` | `cosmoDarwinKqueueSupported` returns false: "macOS-Intel execution is not implemented: clone/futex are ENOSYS there". The netpoller is unsupported on amd64. |
 | 3 | `src/runtime/os_cosmo_nt_arm64.go:24-121` | **Windows/arm64 is entirely not implemented.** Every `nt*` function (`ntFutexsleep`, `ntNewosproc`, `ntVirtualAlloc`, `ntSigaction`, `ntGoenvs`, `ntPreemptM`, `ntMinitThread`, `ntInitConsoleCtrl`, `ntSetProcessCPUProfiler`, `ntVirtualFree`, and all `netpoll*NT`) throws "not implemented on arm64". |
 
@@ -207,6 +208,14 @@ applies, so a Linux-layout buffer is refused rather than overrun).
 `getpriority` applies the Linux `20-nice` bias, which the carry-flag
 convention makes unambiguous — the value alone cannot say whether the
 call failed.
+
+Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax`
+(`sys_cosmo_amd64.s`) is the amd64 twin of arm64's
+`cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`,
+and a linkname push makes it reachable from this package's assembly —
+the same mechanism arm64 already used. An earlier note here claimed that
+could not be done; it was reasoning about the DATA table rather than the
+function that wraps it.
 
 **Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the
 tree's own authority, not from memory. That mattered: statfs64 is 345,

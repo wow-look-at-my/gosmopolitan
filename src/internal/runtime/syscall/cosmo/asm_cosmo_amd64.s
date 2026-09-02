@@ -558,26 +558,13 @@ darwin_syscall:
 	RET
 
 // XNU reports failure by SETTING THE CARRY FLAG and returning a
-// POSITIVE Apple errno - not the negative-return convention Linux uses,
-// which this path assumed until 2026-09-02. Under the old test a
-// failing call returned its errno as a plausible SUCCESS value (ENOENT
-// became a result of 2), and even a detected error carried Apple's
-// numbering into Go code that compares against Linux values.
-//
-// The detection half is fixed here: the carry flag decides.
-//
-// The NUMBERING half is not, and the errno below is still Apple's. The
-// translation table lives in package runtime (sys_cosmo_errno.s) and a
-// data symbol cannot be pushed across packages the way runtime's
-// cosmo_xlat_errno_r0 function is, so reaching it from here needs a
-// runtime-side entry point that does not exist yet. arm64 is unaffected
-// - it calls that function. Until then a macOS-Intel caller sees the
-// Apple number, which is wrong for the ~70 values that diverge but is
-// strictly better than the previous behavior, where a failure was
-// reported as SUCCESS carrying the errno as its result. Tracked in
-// docs/STUBS-INVENTORY.md section 4.
+// POSITIVE Apple errno - not the negative-return convention Linux uses.
+// The carry flag decides, and runtime·cosmo_xlat_errno_ax turns Apple's
+// number into the Linux one Go compares against. arm64 does the same
+// through cosmo_xlat_errno_r0, over the same table.
 darwin_error:
-	MOVQ	AX, CX		// errno (still APPLE numbering; see above)
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	AX, CX		// errno (Linux numbering)
 	MOVQ	$-1, AX		// r1 = -1
 	MOVQ	$0, BX		// r2 = 0
 	RET

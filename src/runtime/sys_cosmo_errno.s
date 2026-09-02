@@ -9,17 +9,15 @@
 // Apple errno -> Linux errno, indexed by the Apple value (0..106).
 //
 // It carries no instructions, only data, so it lives in an
-// architecture-neutral file rather than inside sys_cosmo_arm64.s: the
-// amd64 raw-XNU return path needs the same 112 bytes, and a second copy
-// would drift the first time anybody corrected an entry.
+// architecture-neutral file rather than inside sys_cosmo_arm64.s: both
+// return paths need the same 112 bytes, and a second copy would drift
+// the first time anybody corrected an entry.
 //
-// Only arm64 reads it today, through runtime·cosmo_xlat_errno_r0. The
-// amd64 side detects failure correctly (the carry flag) but still
-// reports Apple's number, because a DATA symbol cannot be pushed across
-// packages the way that function is, and the emulation lives in
-// internal/runtime/syscall/cosmo. Closing that needs a runtime-side
-// entry point the amd64 dispatch can call; see docs/STUBS-INVENTORY.md
-// section 4.
+// Two register-convention readers wrap it, one per architecture:
+// runtime·cosmo_xlat_errno_r0 (sys_cosmo_arm64.s, R0) and
+// runtime·cosmo_xlat_errno_ax (sys_cosmo_amd64.s, AX). Each is pushed
+// by a linkname declaration so the syscall packages can call it from
+// their own assembly.
 //
 // Why the translation exists at all: a darwin host reports failure with
 // APPLE errno numbers - the Syslib's libc calls return -errno on arm64,

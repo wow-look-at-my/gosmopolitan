@@ -58,6 +58,17 @@ func osArchInit() {
 	}
 }
 
+// cosmo_xlat_errno_ax is a register-convention helper in sys_cosmo_amd64.s:
+// it translates an Apple errno in AX to its Linux value. It takes no Go
+// arguments and is not callable from Go; internal/runtime/syscall/cosmo
+// reaches it from its own assembly. The declaration exists only so the
+// symbol carries a linkname push, which is what cmd/link's cross-package
+// reference check looks for. arm64's counterpart is cosmo_xlat_errno_r0
+// (os_cosmo_arm64.go); both read the one table in sys_cosmo_errno.s.
+//
+//go:linkname cosmo_xlat_errno_ax
+func cosmo_xlat_errno_ax()
+
 // cosmoDarwinNumCPU: no Syslib on amd64, so no sysctl access; report
 // "unknown" and let getCPUCount fall back to 1.
 func cosmoDarwinNumCPU() int32 { return 0 }
