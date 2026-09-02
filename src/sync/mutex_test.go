@@ -73,6 +73,7 @@ func HammerMutex(m *Mutex, loops int, cdone chan bool) {
 }
 
 func TestMutex(t *testing.T) {
+	t.Serial() // The mutex profile rate is process-wide.
 	if n := runtime.SetMutexProfileFraction(1); n != 0 {
 		t.Logf("got mutexrate %d expected 0", n)
 	}

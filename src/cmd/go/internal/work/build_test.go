@@ -223,6 +223,7 @@ func pkgImportPath(pkgpath string) *load.Package {
 func TestRespectSetgidDir(t *testing.T) {
 	// Check that `cp` is called instead of `mv` by looking at the output
 	// of `(*Shell).ShowCmd` afterwards as a sanity check.
+	t.Serial() // cfg.BuildX is a package global.
 	cfg.BuildX = true
 	var cmdBuf strings.Builder
 	sh := NewShell("", &load.TextPrinter{Writer: &cmdBuf})
