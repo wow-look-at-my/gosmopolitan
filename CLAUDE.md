@@ -533,6 +533,14 @@ which is exactly what this arrangement exists to prevent. Read
 `src/README.vendor` before adding any other `src/cmd` dependency: what looks
 like one import is a whole subtree of somebody else's repository.
 
+That subtree carries packages the build never imports, and one upstream test
+fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in
+GOPATH mode, which walks `src/cmd/vendor` on disk and cannot resolve
+go-s3-server's `main.go`/`metrics.go` (cobra, prometheus) or lz4's `cmd/lz4c`
+(bytefmt, cmdflag, progressbar). A pruned vendor tree is what upstream's test
+assumes, and only `go mod vendor` or per-package repositories produce one, so
+the check stays red while whole-repo submodules stand.
+
 ## Toolchain Distribution
 
 Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64,
