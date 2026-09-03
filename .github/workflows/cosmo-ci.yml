@@ -685,7 +685,7 @@ jobs:
           cache: false
 
       - name: Stamp unique per-release version
-        # see docs/CI.md "publish jobs" -- avoids collisions in the shared GOCACHEPROG cache namespace.
+        # see docs/CI.md "publish jobs" -- avoids collisions in the shared build cache namespace.
         shell: bash
         run: |
           printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION

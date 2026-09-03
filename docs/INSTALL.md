@@ -71,7 +71,7 @@ cannot disagree about which toolchain they are.
 The stamp exists because the fork identifies as a RELEASE Go version, so
 cmd/go derives tool IDs (hence action IDs) from the version string alone.
 Two releases sharing one string share a build-cache namespace, and the
-org's shared GOCACHEPROG cache then links objects from different releases
+org's shared build cache then links objects from different releases
 into one binary. A monotonic suffix per publish keeps each release's cache
 namespace disjoint.
 

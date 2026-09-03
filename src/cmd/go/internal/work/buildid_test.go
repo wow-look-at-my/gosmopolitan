@@ -64,8 +64,8 @@ func TestParseToolID(t *testing.T) {
 // consumer cache-poisoning incident. The fork stamps the same release-style
 // version (go1.26.4cosmo) into every build, so cmd/go's tool IDs used to be
 // identical for any two fork builds. Action IDs therefore collided across
-// builds, and build caches — a consumer's local GOCACHE, or a shared
-// GOCACHEPROG tier that survives across toolchain updates — served objects
+// builds, and build caches — a consumer's local GOCACHE, or a shared cache
+// tier that survives across toolchain updates — served objects
 // compiled by an older fork build into links done by a newer one, producing
 // binaries that crash at startup.
 //

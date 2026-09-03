@@ -313,7 +313,7 @@ go tool compile -bench=out.txt file.go
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
   stamps the same release-style version (`go1.27.0cosmo`) into every build, so
   any two fork builds used to share tool IDs — and hence action IDs — letting a
-  warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
+  warm build cache (a local GOCACHE, or a consumer's shared cache tier)
   serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
   Fork tools now print their own build ID under `-V=full` (like devel
   toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt
@@ -500,13 +500,18 @@ cache: disk stays authoritative, the shared tier is consulted only on a local
 miss, and a fetched body is written to disk before it is returned, so a shared
 hit hands the compiler a path exactly as a local hit does.
 
-**A configured shared tier beats `GOCACHEPROG`** (`chooseCache` in
-`cmd/go/internal/cache/default.go`), so an org build never forks a cache
-program. That ordering is the point: `GOCACHEPROG` answers with a PATH rather
-than bytes, so a program storing bodies in packs has to materialize every hit
-somewhere the compiler can open it. `GOCACHEPROG` is still honored when no
-shared tier is configured — this fork does not take it away from a cache it
-knows nothing about.
+**`GOCACHEPROG` is deleted** — the variable, the protocol, and
+`cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared
+tier over disk, or disk alone; nothing forks a cache program, and a leftover
+`GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not
+the feature: it answered with a PATH rather than bytes, so a program storing
+bodies in packs had to materialize every hit where the compiler could open it.
+
+`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`); unset,
+the build stays on disk. A run with `CI` set and no shared cache fails outright,
+because an unconfigured CI run decides whether every other CI run recompiles.
+`GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s
+quiet window.
 
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor
 mode, so the require needs its packages under `src/cmd/vendor/`; those three

@@ -188,7 +188,7 @@ func (b *Builder) toolID(name string) string {
 // field is present, the tool ID is the content ID part of the tool's build
 // ID, so the ID describes what the tool is, not what version it claims to
 // be: two different toolchain builds must never share tool IDs, or build
-// caches (GOCACHE and any shared GOCACHEPROG tier) will serve stale,
+// caches (GOCACHE and any shared tier under it) will serve stale,
 // ABI-incompatible objects across toolchain builds. Using only the content
 // ID (not the action ID half) is what lets make.bash's bootstrap stages
 // converge; GOEXPERIMENT variation stays visible because experiments are
