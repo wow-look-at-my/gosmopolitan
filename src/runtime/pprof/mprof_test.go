@@ -84,6 +84,11 @@ func TestMemoryProfiler(t *testing.T) {
 	allocateTransient1M()
 	allocateTransient2M()
 	allocateTransient2MInline()
+	// The 32 allocations below take the size-class slow path while GC marks,
+	// and that path adds one frame to the profiled stack. A cycle that ends
+	// inside the loop splits the 32 into two buckets, which the wasip1 CI leg
+	// hit. Finish any cycle first.
+	runtime.GC()
 	allocatePersistent1K()
 	allocateReflect()
 	memSink = nil
@@ -102,7 +107,7 @@ func TestMemoryProfiler(t *testing.T) {
 		stk: []string{"runtime/pprof.allocatePersistent1K", "runtime/pprof.TestMemoryProfiler"},
 		legacy: fmt.Sprintf(`%v: %v \[%v: %v\] @( 0x[0-9,a-f]+){4,6}
 #	0x[0-9,a-f]+	runtime/pprof\.allocatePersistent1K\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:48
-#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:87
+#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:92
 `, 32*memoryProfilerRun, 1024*memoryProfilerRun, 32*memoryProfilerRun, 1024*memoryProfilerRun),
 	}, {
 		stk: []string{"runtime/pprof.allocateTransient1M", "runtime/pprof.TestMemoryProfiler"},
