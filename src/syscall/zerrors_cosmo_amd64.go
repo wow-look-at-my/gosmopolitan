@@ -168,6 +168,9 @@ const (
 	TCP_KEEPIDLE  = 0x4
 	TCP_KEEPINTVL = 0x5
 
+	// TCP connection statistics, read with getsockopt
+	TCP_INFO = 0xb
+
 	// Memory mapping flags
 	PROT_EXEC  = 0x4
 	PROT_NONE  = 0x0
