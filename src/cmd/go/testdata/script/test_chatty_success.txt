@@ -1,12 +1,17 @@
 # Run chatty tests. Assert on CONT lines.
 go test chatty_test.go -v
 
-# Non-parallel tests should not print CONT.
-! stdout CONT
-
-# The assertion is condensed into one line so that it precisely matches output,
-# rather than skipping lines and allow rogue CONT lines.
-stdout '=== RUN   TestChatty\n=== RUN   TestChatty/sub-0\n    chatty_test.go:12: this is sub-0\n    chatty_test.go:12: this is sub-0\n=== RUN   TestChatty/sub-1\n    chatty_test.go:12: this is sub-1\n    chatty_test.go:12: this is sub-1\n=== RUN   TestChatty/sub-2\n    chatty_test.go:12: this is sub-2\n    chatty_test.go:12: this is sub-2\n--- PASS: TestChatty'
+# This fork starts every test in parallel, so the three subtests interleave and
+# finish in any order. Pinning that order would pin a race. What the framing
+# must still do is announce each subtest before its output resumes, and print
+# every log line exactly once.
+stdout '=== (CONT|NAME)  TestChatty/sub-0'
+stdout '=== (CONT|NAME)  TestChatty/sub-1'
+stdout '=== (CONT|NAME)  TestChatty/sub-2'
+stdout -count=2 'this is sub-0'
+stdout -count=2 'this is sub-1'
+stdout -count=2 'this is sub-2'
+stdout '--- PASS: TestChatty'
 
 -- chatty_test.go --
 package chatty_test
