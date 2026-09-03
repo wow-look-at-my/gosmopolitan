@@ -276,7 +276,7 @@ latest and branch pushes never move `?branch=master`.
 **Stamp unique per-release version.** The fork identifies as a RELEASE Go
 version, so cmd/go derives tool IDs (hence action IDs) from the version
 string alone. Two releases sharing one string share a build-cache
-namespace, and the org's shared GOCACHEPROG cache then links objects from
+namespace, and the org's shared build cache then links objects from
 different releases into one binary. A unique monotonic suffix per publish
 makes each release's cache namespace disjoint. The committed VERSION is
 unchanged; this rewrite is publish-only. Every leg stamps the SAME string:

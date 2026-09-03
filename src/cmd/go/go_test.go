@@ -302,6 +302,11 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("GOBIN")
 	os.Unsetenv("GOPATH")
 	os.Unsetenv("GIT_ALLOW_PROTOCOL")
+	// A shared cache tier reports a failing server on the go command's stderr,
+	// and several tests here assert that a go command prints nothing. The tests
+	// must not depend on the developer's cache either.
+	os.Unsetenv("GO_BUILDCACHE_CONFIG")
+	os.Unsetenv("GOCACHEDEBUG")
 	os.Setenv("HOME", "/test-go-home-does-not-exist")
 	// On some systems the default C compiler is ccache.
 	// Setting HOME to a non-existent directory will break
