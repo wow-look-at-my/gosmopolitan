@@ -2404,9 +2404,13 @@
 // GODEBUG=gocachetest=1 causes the go command to print details of its
 // decisions about whether to reuse a cached test result.
 //
-// The GOCACHEPROG environment variable can be used to provide an
-// externally managed build cache. For details see:
-// "go doc cmd/go/internal/cacheprog".
+// The go command can put a shared, network-backed tier under the local
+// cache. GO_BUILDCACHE_CONFIG holds that tier's configuration, as
+// base64-encoded JSON; with the variable unset, the build uses the local
+// cache alone. The go command asks the shared tier only after a local miss,
+// and it stores what the tier returns in the local cache before the build
+// uses it. Set GOCACHEDEBUG to any non-empty value to see the tier's
+// per-request diagnostics.
 //
 // # Environment variables
 //
@@ -2441,10 +2445,6 @@
 //	GOCACHE
 //		The directory where the go command will store cached
 //		information for reuse in future builds. Must be an absolute path.
-//	GOCACHEPROG
-//		A command (with optional space-separated flags) that implements an
-//		external go command build cache.
-//		See 'go doc cmd/go/internal/cacheprog'.
 //	GODEBUG
 //		Enable various debugging facilities for programs built with Go,
 //		including the go command. Cannot be set using 'go env -w'.

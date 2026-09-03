@@ -234,7 +234,7 @@ func (versionFlag) Set(s string) error {
 	// version line alone cannot distinguish two different builds of the
 	// toolchain. Include the build ID for those too, so that cmd/go's
 	// tool IDs (and hence action IDs) change whenever the tools do and
-	// build caches — GOCACHE and any shared GOCACHEPROG tier — can never
+	// build caches — GOCACHE and any shared tier under it — can never
 	// serve objects compiled by one fork build into another.
 	if s == "full" {
 		if strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo") {
