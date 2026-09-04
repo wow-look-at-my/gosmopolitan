@@ -132,6 +132,7 @@ func main() {
 	timed("netbuffers", checkNetBuffers)
 	timed("cloexec", checkCloexec)
 	timed("hostos", checkHostOS)
+	timed("auxv", checkAuxv)
 	timed("fdpath", checkFdPath)
 	timed("peercred", checkPeercred)
 	timed("dupfile", checkDupFile)
