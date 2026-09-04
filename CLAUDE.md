@@ -371,12 +371,14 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus, via the misc/cosmo
-wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
-tests (darwin sendmsg/recvmsg cmsg repack, signal translation
-tables, epoll layout) and the runtime-package cosmo tests (Apple
-itimerval ABI pins + timeval translation behind the darwin SIGPROF
-setitimer dispatch, signal translation tables). Every build leg additionally
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`,
+which runs the GOOS=cosmo package tests through the misc/cosmo wrappers:
+internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal
+translation tables, epoll layout), the runtime's Apple itimerval ABI pins and
+timeval translation behind the darwin SIGPROF setitimer dispatch, and the
+syscall package's Apple struct conversions plus the /proc/self/auxv shim. The
+name lists live in that suite, where an engineer can run them, rather than in a
+workflow step. Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
