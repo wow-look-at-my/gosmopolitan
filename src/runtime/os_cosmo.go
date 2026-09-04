@@ -362,10 +362,10 @@ func sysauxv(auxv []uintptr) (pairs int) {
 
 func osinit() {
 	osArchInit()
-	// The APE loader builds a System V stack on a macOS host, so there
-	// IS a vector, but it carries no AT_HWCAP - XNU has no such tag to
-	// pass on. This runs here rather than in sysargs because it asks
-	// the host, and the host is only safe to ask once osArchInit ran.
+	// A macOS host's AT_HWCAP needs fixing up before internal/cpu reads
+	// it in cpuinit. This runs here rather than in sysargs because it
+	// asks the host, and the host is only safe to ask once osArchInit
+	// ran.
 	fixAuxv()
 	numCPUStartup = getCPUCount()
 }

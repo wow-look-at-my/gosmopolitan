@@ -11,9 +11,9 @@ package runtime
 // same answers through sysctl, and the APE answers in Linux vocabulary,
 // so darwinHWCAP translates.
 //
-// hwcap_CPUID stays absent on purpose. It advertises that the kernel
-// emulates the ID_AA64ISAR* registers, and a reader that believes it
-// executes MRS, which macOS answers with SIGILL.
+// hwcap_CPUID is the one bit here that is never SET, only cleared. It
+// advertises that the kernel emulates the ID_AA64ISAR* registers, and a
+// reader that believes it executes MRS, which macOS answers with SIGILL.
 const (
 	hwcap_FP      = 1 << 0
 	hwcap_ASIMD   = 1 << 1
@@ -23,6 +23,7 @@ const (
 	hwcap_SHA2    = 1 << 6
 	hwcap_CRC32   = 1 << 7
 	hwcap_ATOMICS = 1 << 8
+	hwcap_CPUID   = 1 << 11
 	hwcap_SHA3    = 1 << 17
 	hwcap_SHA512  = 1 << 21
 	hwcap_DIT     = 1 << 24
@@ -43,24 +44,44 @@ var (
 // the AT_HWCAP pair, so a reader that walks it sees both.
 var darwinAuxvBuf [64]uintptr
 
-// fixAuxv gives a macOS host the AT_HWCAP entry it does not pass, so
-// internal/cpu enables the arm64 AES/SHA/CRC32 assembly there.
+// fixAuxv makes a macOS host's AT_HWCAP safe to believe, so internal/cpu
+// enables the arm64 AES/SHA/CRC32 assembly there.
 //
-// It is not what saves golang.org/x/sys/cpu from its SIGILL. That
-// package reads /proc/self/auxv, never this vector - its own init order
+// The APE loader usually passes one already: the macos-latest runner
+// reports 0xffb3ffff, a value darwinHWCAP cannot produce. That value
+// sets hwcap_CPUID, which claims the kernel emulates the ID_AA64ISAR*
+// registers - Linux does, XNU does not - and internal/cpu answers it by
+// issuing an MRS for the MIDR. So the loader's pair is taken over with
+// that one bit cleared. Only a host that passes no pair at all gets the
+// sysctl-built value.
+//
+// None of this is what saves golang.org/x/sys/cpu from its own SIGILL.
+// That package reads /proc/self/auxv, never this vector - its init order
 // leaves the runtime hook nil - so syscall's procauxv_cosmo.go is the
 // half that keeps it off the MRS. The two compose: that file serves
-// whatever this function has already put in the vector, AT_HWCAP
-// included, so x/sys/cpu ends up with real feature bits rather than
-// only a pulse.
+// whatever this function settled on, so x/sys/cpu gets real feature bits
+// rather than only a pulse.
 func fixAuxv() {
 	if !isdarwin() {
 		return
 	}
 	for i := 0; i+1 < len(auxv); i += 2 {
-		if auxv[i] == _AT_HWCAP {
+		if auxv[i] != _AT_HWCAP {
+			continue
+		}
+		hwcap := auxv[i+1] &^ hwcap_CPUID
+		if hwcap == auxv[i+1] {
+			archauxv(_AT_HWCAP, hwcap)
 			return
 		}
+		// The vector sits on the boot stack, so edit a copy.
+		n := copy(darwinAuxvBuf[:len(darwinAuxvBuf)-2], auxv)
+		darwinAuxvBuf[i+1] = hwcap
+		darwinAuxvBuf[n] = _AT_NULL
+		darwinAuxvBuf[n+1] = 0
+		auxv = darwinAuxvBuf[:n:n]
+		archauxv(_AT_HWCAP, hwcap)
+		return
 	}
 	n := copy(darwinAuxvBuf[:len(darwinAuxvBuf)-4], auxv)
 	hwcap := darwinHWCAP()

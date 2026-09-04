@@ -274,16 +274,17 @@ go tool compile -bench=out.txt file.go
   asks `__hostos` first and only reads `/proc` on a Linux host.
   `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s
   syscall shims.
-- **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** The
-  loader's vector carries none, and a reader without one reads the
-  `ID_AA64ISAR*` registers - an `MRS` macOS answers with SIGILL, which
-  killed any binary importing `golang.org/x/sys/cpu` before `main`.
-  `fixAuxv` appends the pair in `osinit` from Apple's `hw.optional`
-  sysctls, which is what `internal/cpu` reads. x/sys/cpu never consults
-  that vector - its own init order beats the hook - so `syscall` serves
-  it `/proc/self/auxv` instead. Never set `hwcap_CPUID`: it claims the
-  kernel emulates those registers. Depth: DEBUGGING.md "AT_HWCAP" and
-  "Working uname" (2026-09-03/04).
+- **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** A
+  reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS
+  answers with SIGILL, which killed any binary importing
+  `golang.org/x/sys/cpu` before `main`. The APE loader does pass a pair,
+  but it sets `hwcap_CPUID`, claiming the kernel emulates those
+  registers; `fixAuxv` clears that bit in `osinit` (and builds a pair
+  from Apple's `hw.optional` sysctls when none came), which is what
+  `internal/cpu` reads. x/sys/cpu never consults that vector - its own
+  init order beats the hook - so `syscall` serves it `/proc/self/auxv`
+  instead. Depth: DEBUGGING.md "AT_HWCAP" and "Working uname"
+  (2026-09-03/04).
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,

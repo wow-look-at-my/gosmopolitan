@@ -6705,19 +6705,20 @@ Windows: the trap is in `cpu_linux_arm64.go`, the APE has no arm64 PE
 header, and the amd64 `doinit` reads CPUID instead of the auxv.
 
 **How this composes with `fixAuxv`** (the AT_HWCAP section below, landed
-in parallel). That function fabricates the `AT_HWCAP` pair in `osinit`
-from Apple's sysctls, which is what `internal/cpu` reads - it cannot
-reach x/sys/cpu, for the init-order reason above. This file is read long
-after `osinit`, so what it serves already carries that pair. Neither
-change alone gets x/sys/cpu both alive and correct on macOS; together
-they do.
+in parallel). That function settles the `AT_HWCAP` pair in `osinit` -
+clearing the loader's `hwcap_CPUID` claim, or building one from Apple's
+sysctls when no pair came - which is what `internal/cpu` reads. It
+cannot reach x/sys/cpu, for the init-order reason above. This file is
+read long after `osinit`, so what it serves is the settled vector.
+Neither change alone gets x/sys/cpu both alive and correct on macOS;
+together they do.
 
 The gate is runtimeprobe's `procauxv` check, which reads the file exactly
 as x/sys/cpu does and asserts `AT_PAGESZ` against `os.Getpagesize`. It
 skips on a Windows host for the reason above. It is red on macOS without
 this change, which is the property that makes it a gate.
 
-## AT_HWCAP: macOS passes no AT_HWCAP, so an arm64 reader falls back to an illegal instruction (2026-09-04)
+## AT_HWCAP: an arm64 reader without one falls back to an illegal instruction (2026-09-04)
 
 An APE that merely imports `golang.org/x/sys/cpu` - through x/crypto,
 through go-git - died on macOS arm64 before reaching `main`:
@@ -6733,9 +6734,10 @@ runtime.doInit1 -> runtime.main
 
 The chain is entirely reasonable at each step. cosmo aliases into the
 `linux` build tag, so x/sys/cpu compiles its Linux arm64 port. That port
-asks the auxiliary vector for AT_HWCAP; the vector the APE loader builds
-on macOS carries none, and there is no `/proc/self/auxv` to read either,
-so `readHWCAP` fails. Its documented fallback is to
+asks the auxiliary vector for AT_HWCAP and finds nothing - for the
+init-order reason in "Working uname" above, not because the vector is
+empty - and there is no `/proc/self/auxv` to read either, so `readHWCAP`
+fails. Its documented fallback is to
 read the `ID_AA64ISAR*` registers, guarded by "is this kernel 4.11+",
 which it decides with `Uname`. The APE answers that honestly with the
 Darwin kernel version, which is far above 4.11, so the guard opens and
@@ -6747,15 +6749,33 @@ every host, so the stdlib's AES, SHA, CRC32 and atomics assembly was off
 even on Linux arm64.
 
 `fixAuxv` (`runtime/hwcap_cosmo_arm64.go`) runs in `osinit` - after
-`osArchInit`, so the host is safe to ask - and appends an AT_HWCAP pair
-when a darwin host passed none. The value comes from the same Apple
-sysctls `internal/cpu`'s own darwin port reads
-(`hw.optional.armv8_1_atomics`, `armv8_crc32`, `armv8_2_sha512`,
-`armv8_2_sha3`, `arm.FEAT_DIT`) over Syslib `sysctlbyname`, plus the
-M1 baseline macOS 11 publishes no key for: FP, ASIMD, AES, PMULL, SHA1,
-SHA2. `hwcap_CPUID` stays clear deliberately - it advertises that the
-kernel emulates those very registers, and `internal/cpu` MRSes for the
-MIDR when it is set.
+`osArchInit`, so the host is safe to ask, and before `cpuinit`, so
+`internal/cpu` reads what it settled on. When a darwin host passed no
+pair it builds one from the same Apple sysctls `internal/cpu`'s own
+darwin port reads (`hw.optional.armv8_1_atomics`, `armv8_crc32`,
+`armv8_2_sha512`, `armv8_2_sha3`, `arm.FEAT_DIT`) over Syslib
+`sysctlbyname`, plus the M1 baseline macOS 11 publishes no key for: FP,
+ASIMD, AES, PMULL, SHA1, SHA2.
+
+**But that fallback does not fire on the runner.** The first cut of this
+returned early whenever a pair was already present, on the assumption
+that a macOS host passes none. The `hwcap` check then reported
+`AT_HWCAP=0xffb3ffff` there - a value `darwinHWCAP` cannot produce, so
+the APE loader passes its own pair and the sysctl path was dead code on
+the one host it was written for. `sysauxv` had already handed that value
+to `archauxv`, so `internal/cpu` was reading the loader's answer, not
+this function's.
+
+That matters because `0xffb3ffff` sets `hwcap_CPUID`, the one bit this
+file never sets on purpose: it advertises that the kernel emulates the
+`ID_AA64ISAR*` registers, and `internal/cpu` answers it by issuing an
+`MRS` for the MIDR (`cpu_arm64_hwcap.go`, `if ARM64.HasCPUID`). Linux
+emulates that; XNU is under no obligation to, and the same class of
+instruction is what killed x/sys/cpu. The precaution was stated and then
+defeated by the loader. `fixAuxv` now takes the loader's pair over with
+that bit cleared - into `darwinAuxvBuf`, because the vector it edits
+sits on the boot stack - and re-publishes through `archauxv`. The
+`hwcap` check's reported value is what shows it fired.
 
 Gate: runtimeprobe's `hwcap` check, which reaches `runtime.getAuxv` by
 linkname and fails when no AT_HWCAP comes back. It runs on every host,
@@ -6763,10 +6783,10 @@ and the macos-latest leg is the one that covers this. A binary that
 merely started was never proof: the crash needs a package that reads CPU
 features, and the probe imports none.
 
-This does NOT by itself keep x/sys/cpu off the MRS, though the section
-above once read as if it did. That package never consults this vector -
-its own init order leaves the runtime hook nil - so it goes to
-`/proc/self/auxv`, which `syscall`'s `procauxv_cosmo.go` answers. What
-`fixAuxv` buys x/sys/cpu is that the file it reads carries real feature
-bits; what it buys `internal/cpu` is the stdlib's arm64 assembly. See
-"Working uname" above for the init-order forensics.
+None of this keeps x/sys/cpu off its own MRS, though this section once
+read as if it did. That package never consults this vector - its init
+order leaves the runtime hook nil - so it goes to `/proc/self/auxv`,
+which `syscall`'s `procauxv_cosmo.go` answers. What `fixAuxv` buys
+x/sys/cpu is that the file it reads carries a sanitized AT_HWCAP; what
+it buys `internal/cpu` is the stdlib's arm64 assembly without the CPUID
+claim. See "Working uname" above for the init-order forensics.
