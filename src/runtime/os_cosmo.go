@@ -280,29 +280,32 @@ func mincore(addr unsafe.Pointer, n uintptr, dst *byte) int32
 
 var auxvreadbuf [128]uintptr
 
+// darwinauxv backs the single pair sysargs publishes on a macOS host.
+var darwinauxv [2]uintptr
+
 func sysargs(argc int32, argv **byte) {
-	if isdarwin() {
-		// An auxv is a System V convention. A Mach-O stack ends in
-		// the apple[] strings instead, so there is nothing here to
-		// walk to, and XNU serves no /proc to read one from either.
-		// Build the vector rather than leave it empty: a reader
-		// that gets none asks the CPU itself for its features, and
-		// on arm64 that means an MRS of ID_AA64ISAR0_EL1, which
-		// only a Linux kernel traps and emulates.
-		// golang.org/x/sys/cpu takes exactly that path inside its
-		// package init, and the process dies of SIGILL before main.
-		//
-		// The page size is the one tag this can answer. Nothing
-		// writes AT_HWCAP, so a reader sees no optional CPU
-		// feature, which is what archauxv reports on every host.
-		probePageSize()
-		if physPageSize != 0 {
-			darwinauxv = [2]uintptr{_AT_PAGESZ, physPageSize}
-			auxv = darwinauxv[:]
-		}
+	sysargsFromHost(argc, argv)
+	if !isdarwin() || len(auxv) != 0 || physPageSize == 0 {
 		return
 	}
+	// An auxv is a System V convention. A Mach-O stack ends in the
+	// apple[] strings instead, and XNU serves no /proc to read one
+	// from, so every route above comes back empty on a macOS host.
+	// Publish one anyway: a reader that finds none asks the CPU
+	// itself for its features, and on arm64 that means an MRS of
+	// ID_AA64ISAR0_EL1, which only a Linux kernel traps and
+	// emulates. golang.org/x/sys/cpu takes exactly that path inside
+	// its package init, and the process dies of SIGILL before main.
+	//
+	// The page size is the one tag this can answer, and it reports
+	// what the code above already settled on rather than deciding
+	// it. Nothing writes AT_HWCAP, so a reader sees no optional CPU
+	// feature, which is what archauxv reports on every host.
+	darwinauxv = [2]uintptr{_AT_PAGESZ, physPageSize}
+	auxv = darwinauxv[:]
+}
 
+func sysargsFromHost(argc int32, argv **byte) {
 	n := argc + 1
 
 	// skip over argv, envp to get to auxv
@@ -333,7 +336,23 @@ func sysargs(argc int32, argv **byte) {
 	if fd < 0 {
 		// On some platforms, /proc might not be available.
 		// Try to detect page size using mincore.
-		probePageSize()
+		const size = 256 << 10
+		p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
+		if err != 0 {
+			return
+		}
+		var n uintptr
+		for n = 4 << 10; n < size; n <<= 1 {
+			err := mincore(unsafe.Pointer(uintptr(p)+n), 1, &addrspace_vec[0])
+			if err == 0 {
+				physPageSize = n
+				break
+			}
+		}
+		if physPageSize == 0 {
+			physPageSize = size
+		}
+		munmap(p, size)
 		return
 	}
 
@@ -345,30 +364,6 @@ func sysargs(argc int32, argv **byte) {
 	auxvreadbuf[len(auxvreadbuf)-2] = _AT_NULL
 	pairs := sysauxv(auxvreadbuf[:])
 	auxv = auxvreadbuf[: pairs*2 : pairs*2]
-}
-
-// darwinauxv backs the single pair sysargs publishes on a macOS host.
-var darwinauxv [2]uintptr
-
-// probePageSize sets physPageSize by mapping a region and asking mincore
-// where the next page starts. It serves a host that reports no AT_PAGESZ.
-func probePageSize() {
-	const size = 256 << 10
-	p, err := mmap(nil, size, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_PRIVATE, -1, 0)
-	if err != 0 {
-		return
-	}
-	var n uintptr
-	for n = 4 << 10; n < size; n <<= 1 {
-		if mincore(unsafe.Pointer(uintptr(p)+n), 1, &addrspace_vec[0]) == 0 {
-			physPageSize = n
-			break
-		}
-	}
-	if physPageSize == 0 {
-		physPageSize = size
-	}
-	munmap(p, size)
 }
 
 var secureMode bool

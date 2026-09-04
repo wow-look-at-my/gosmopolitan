@@ -6603,12 +6603,36 @@ without emulating it.
 Nothing about that is x/sys's mistake: it asked the host what it was and
 believed the answer. The gap is that the cosmo runtime published no auxv
 on a host it fully supports, and an empty auxv is what sends a reader to
-a Linux-only probe. `sysargs` now builds the vector for a macOS host, the
-way the NT boot stub already fabricates one, carrying the one tag it can
-answer: `AT_PAGESZ`, from the same `mincore` probe that already set
-`physPageSize` there. No `AT_HWCAP` pair is written, so a reader sees no
-optional CPU feature, which is exactly what `archauxv` (a no-op on cosmo)
-reports to the standard library's own `internal/cpu`.
+a Linux-only probe. `sysargs` now publishes one for a macOS host, the way
+the NT boot stub already fabricates one, carrying the one tag it can
+answer: `AT_PAGESZ`, reporting the `physPageSize` the routes above
+settled on. No `AT_HWCAP` pair is written, so a reader sees no optional
+CPU feature, which is exactly what `archauxv` (a no-op on cosmo) reports
+to the standard library's own `internal/cpu`.
+
+The publication is strictly additive, and the first cut was not. That cut
+gave darwin its own branch at the TOP of `sysargs`, on the reasoning that
+a Mach-O stack holds no vector to walk to and `/proc/self/auxv` cannot
+open, so both routes were dead there anyway. Every macOS run then died
+even earlier, in `mallocinit`'s first heap growth:
+
+```
+fatal error: unaligned sysNoHugePageOS
+runtime.sysNoHugePageOS(...)
+	mem_cosmo.go:190
+runtime.(*mheap).sysAlloc(...)
+	malloc.go:871
+```
+
+`physPageSize` is the alignment `sysNoHugePageOS` checks, and on cosmo
+only `sysargs` ever sets it. Taking the branch early skipped whichever
+route was setting it on that host and left the `mincore` fallback to
+decide, which answered with its own `256 << 10` last resort. So the
+routes are not dead on darwin after all, and which one runs is worth
+knowing rather than assuming. `sysargs` now runs the original body
+untouched and adds the pair afterwards, only when the host is macOS and
+what ran left the vector empty. The `auxv` check's `pairs=` count reports
+which case a macOS run actually lands in.
 
 The gate is a `runtimeprobe` check, `auxv`, that fails on an empty vector
 and on an `AT_PAGESZ` that disagrees with `os.Getpagesize`. It reaches
