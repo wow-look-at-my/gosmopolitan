@@ -77,8 +77,9 @@ func copyProbeBinary(t *testing.T) string {
 //
 // An empty auxv is what sends golang.org/x/sys/cpu to read the ARM64 ID
 // registers, which XNU traps: that killed go-toolchain's published APE at
-// package init. sysargs publishes a pair for exactly this case, and this
-// is the only place that can reach it.
+// package init. Every macOS fix downstream of it - fixAuxv's AT_HWCAP,
+// syscall's /proc/self/auxv - assumes the loader ran, so this is the one
+// place that can catch a kernel that stops requiring it.
 //
 // A kernel that refuses the file outright is a fact about this host, not a
 // failure: the probe never starts, so it reports nothing to judge. Say so

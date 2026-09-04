@@ -6601,17 +6601,18 @@ underneath and executed `MRS ID_AA64ISAR0_EL1` on a kernel that traps it
 without emulating it.
 
 Nothing about that is x/sys's mistake: it asked the host what it was and
-believed the answer. The gap is that the cosmo runtime published no auxv
-on a host it fully supports, and an empty auxv is what sends a reader to
-a Linux-only probe. `sysargs` now publishes one for a macOS host, the way
-the NT boot stub already fabricates one, carrying the one tag it can
-answer: `AT_PAGESZ`, reporting the `physPageSize` the routes above
-settled on. No `AT_HWCAP` pair is written, so a reader sees no optional
-CPU feature, which is exactly what `archauxv` (a no-op on cosmo) reports
-to the standard library's own `internal/cpu`.
+believed the answer. The first hypothesis was that the cosmo runtime
+published no auxv on a host it fully supports, and an empty auxv is what
+sends a reader to a Linux-only probe. So `sysargs` grew a macOS branch,
+the way the NT boot stub already fabricates one, carrying the one tag it
+could answer: `AT_PAGESZ`, reporting the `physPageSize` the routes above
+settled on.
 
-The publication is strictly additive, and the first cut was not. That cut
-gave darwin its own branch at the TOP of `sysargs`, on the reasoning that
+**That branch is gone.** What follows is why it was written and how it
+was disproved; the measurements it produced are the part worth keeping.
+
+The publication had to be strictly additive, and the first cut was not.
+That cut gave darwin its own branch at the TOP of `sysargs`, on the reasoning that
 a Mach-O stack holds no vector to walk to and `/proc/self/auxv` cannot
 open, so both routes were dead there anyway. Every macOS run then died
 even earlier, in `mallocinit`'s first heap growth:
@@ -6629,10 +6630,10 @@ only `sysargs` ever sets it. Taking the branch early skipped whichever
 route was setting it on that host and left the `mincore` fallback to
 decide, which answered with its own `256 << 10` last resort. So the
 routes are not dead on darwin after all, and which one runs is worth
-knowing rather than assuming. `sysargs` now runs the original body
-untouched and adds the pair afterwards, only when the host is macOS and
-what ran left the vector empty. The `auxv` check's `pairs=` count reports
-which case a macOS run actually lands in.
+knowing rather than assuming. The branch moved to the END of `sysargs`,
+firing only when the host was macOS and what ran left the vector empty.
+The `auxv` check's `pairs=` count then reported which case a macOS run
+actually lands in - and that count is what removed the branch.
 
 The gate is a `runtimeprobe` check, `auxv`, that fails on an empty vector
 and on an `AT_PAGESZ` that disagrees with `os.Getpagesize`. It reaches
@@ -6642,11 +6643,12 @@ so it runs on all three hosts.
 On the macOS runner it reports `pagesz=16384 pairs=15`, for all three
 origin binaries: apetest starts an APE through `/bin/sh`, that hands
 control to the APE loader, and the loader builds a System V stack with a
-full vector on it. So the publication above never fires on that path, and
-the check passes there without reaching the case it exists for. The
-crashing consumer had no vector at all, which its own traceback proves:
-`readARM64Registers` is reachable only after `readHWCAP` returns an error,
-and that needs `getAuxv` empty AND `/proc/self/auxv` unreadable.
+full vector on it. So the branch never fired on that path, and the check
+passed without reaching the case it existed for. Combined with
+`TestRuntimeProbeDirectExecAuxv` below - XNU refuses to exec an APE with
+no shell in front of it, so there is no macOS path that skips the loader
+- the branch was a guard for a state the system is never in, and it was
+deleted. `sysargs` is back to its original body.
 
 `TestRuntimeProbeDirectExecAuxv` reached for that state and ruled the
 launch path out: XNU answers `exec format error` for the APE with no
@@ -6678,11 +6680,9 @@ whatever the runtime published. Linux never notices because
 error path runs, `Uname` now parses as a modern Linux kernel, and the MRS
 executes.
 
-So the publication above is worth having - `x/sys/unix` and every
-consumer that asks after package init now gets a real vector on macOS -
-and it does not fix this crash. Nothing the runtime writes can: the
-reader is not looking at it yet. The fix has to make `readHWCAP`'s second
-question answerable on a macOS host.
+So no amount of publishing fixes this crash. Nothing the runtime writes
+can: the reader is not looking at it yet. The fix has to make
+`readHWCAP`'s second question answerable on a macOS host.
 
 **The fix: package syscall serves that one path.** `procauxv_cosmo.go`
 answers a read-only open of `/proc/self/auxv` on a darwin host from
@@ -6704,12 +6704,20 @@ paths instead of a SIGILL. And the same reasoning does not extend to
 Windows: the trap is in `cpu_linux_arm64.go`, the APE has no arm64 PE
 header, and the amd64 `doinit` reads CPUID instead of the auxv.
 
+**How this composes with `fixAuxv`** (the AT_HWCAP section below, landed
+in parallel). That function fabricates the `AT_HWCAP` pair in `osinit`
+from Apple's sysctls, which is what `internal/cpu` reads - it cannot
+reach x/sys/cpu, for the init-order reason above. This file is read long
+after `osinit`, so what it serves already carries that pair. Neither
+change alone gets x/sys/cpu both alive and correct on macOS; together
+they do.
+
 The gate is runtimeprobe's `procauxv` check, which reads the file exactly
 as x/sys/cpu does and asserts `AT_PAGESZ` against `os.Getpagesize`. It
 skips on a Windows host for the reason above. It is red on macOS without
 this change, which is the property that makes it a gate.
 
-## AT_HWCAP: macOS passes no auxv, so an arm64 reader falls back to an illegal instruction (2026-09-04)
+## AT_HWCAP: macOS passes no AT_HWCAP, so an arm64 reader falls back to an illegal instruction (2026-09-04)
 
 An APE that merely imports `golang.org/x/sys/cpu` - through x/crypto,
 through go-git - died on macOS arm64 before reaching `main`:
@@ -6725,8 +6733,9 @@ runtime.doInit1 -> runtime.main
 
 The chain is entirely reasonable at each step. cosmo aliases into the
 `linux` build tag, so x/sys/cpu compiles its Linux arm64 port. That port
-asks the auxiliary vector for AT_HWCAP; macOS passes no auxv and has no
-`/proc/self/auxv`, so `readHWCAP` fails. Its documented fallback is to
+asks the auxiliary vector for AT_HWCAP; the vector the APE loader builds
+on macOS carries none, and there is no `/proc/self/auxv` to read either,
+so `readHWCAP` fails. Its documented fallback is to
 read the `ID_AA64ISAR*` registers, guarded by "is this kernel 4.11+",
 which it decides with `Uname`. The APE answers that honestly with the
 Darwin kernel version, which is far above 4.11, so the guard opens and
@@ -6749,7 +6758,15 @@ kernel emulates those very registers, and `internal/cpu` MRSes for the
 MIDR when it is set.
 
 Gate: runtimeprobe's `hwcap` check, which reaches `runtime.getAuxv` by
-linkname exactly as x/sys/cpu does and fails when no AT_HWCAP comes back.
-It runs on every host, and the macos-latest leg is the one that covers
-this. A binary that merely started was never proof: the crash needs a
-package that reads CPU features, and the probe imports none.
+linkname and fails when no AT_HWCAP comes back. It runs on every host,
+and the macos-latest leg is the one that covers this. A binary that
+merely started was never proof: the crash needs a package that reads CPU
+features, and the probe imports none.
+
+This does NOT by itself keep x/sys/cpu off the MRS, though the section
+above once read as if it did. That package never consults this vector -
+its own init order leaves the runtime hook nil - so it goes to
+`/proc/self/auxv`, which `syscall`'s `procauxv_cosmo.go` answers. What
+`fixAuxv` buys x/sys/cpu is that the file it reads carries real feature
+bits; what it buys `internal/cpu` is the stdlib's arm64 assembly. See
+"Working uname" above for the init-order forensics.

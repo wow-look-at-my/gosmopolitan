@@ -280,32 +280,7 @@ func mincore(addr unsafe.Pointer, n uintptr, dst *byte) int32
 
 var auxvreadbuf [128]uintptr
 
-// darwinauxv backs the single pair sysargs publishes on a macOS host.
-var darwinauxv [2]uintptr
-
 func sysargs(argc int32, argv **byte) {
-	sysargsFromHost(argc, argv)
-	if !isdarwin() || len(auxv) != 0 || physPageSize == 0 {
-		return
-	}
-	// An auxv is a System V convention. A Mach-O stack ends in the
-	// apple[] strings instead, and XNU serves no /proc to read one
-	// from, so every route above comes back empty on a macOS host.
-	// Publish one anyway: a reader that finds none asks the CPU
-	// itself for its features, and on arm64 that means an MRS of
-	// ID_AA64ISAR0_EL1, which only a Linux kernel traps and
-	// emulates. golang.org/x/sys/cpu takes exactly that path inside
-	// its package init, and the process dies of SIGILL before main.
-	//
-	// The page size is the one tag this can answer, and it reports
-	// what the code above already settled on rather than deciding
-	// it. Nothing writes AT_HWCAP, so a reader sees no optional CPU
-	// feature, which is what archauxv reports on every host.
-	darwinauxv = [2]uintptr{_AT_PAGESZ, physPageSize}
-	auxv = darwinauxv[:]
-}
-
-func sysargsFromHost(argc int32, argv **byte) {
 	n := argc + 1
 
 	// skip over argv, envp to get to auxv
@@ -387,10 +362,10 @@ func sysauxv(auxv []uintptr) (pairs int) {
 
 func osinit() {
 	osArchInit()
-	// macOS hands a program no auxiliary vector, so the answers a Linux
-	// program reads out of one have to come from somewhere else. This
-	// runs here rather than in sysargs because it asks the host, and the
-	// host is only safe to ask once osArchInit has run.
+	// The APE loader builds a System V stack on a macOS host, so there
+	// IS a vector, but it carries no AT_HWCAP - XNU has no such tag to
+	// pass on. This runs here rather than in sysargs because it asks
+	// the host, and the host is only safe to ask once osArchInit ran.
 	fixAuxv()
 	numCPUStartup = getCPUCount()
 }

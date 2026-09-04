@@ -43,10 +43,16 @@ var (
 // the AT_HWCAP pair, so a reader that walks it sees both.
 var darwinAuxvBuf [64]uintptr
 
-// fixAuxv gives a macOS host the AT_HWCAP entry it does not pass. A
-// reader that finds no auxv at all falls back to reading the ID_AA64ISAR*
-// registers, and that MRS is illegal on macOS: golang.org/x/sys/cpu dies
-// with SIGILL in its own init. internal/cpu wants the same answer.
+// fixAuxv gives a macOS host the AT_HWCAP entry it does not pass, so
+// internal/cpu enables the arm64 AES/SHA/CRC32 assembly there.
+//
+// It is not what saves golang.org/x/sys/cpu from its SIGILL. That
+// package reads /proc/self/auxv, never this vector - its own init order
+// leaves the runtime hook nil - so syscall's procauxv_cosmo.go is the
+// half that keeps it off the MRS. The two compose: that file serves
+// whatever this function has already put in the vector, AT_HWCAP
+// included, so x/sys/cpu ends up with real feature bits rather than
+// only a pulse.
 func fixAuxv() {
 	if !isdarwin() {
 		return

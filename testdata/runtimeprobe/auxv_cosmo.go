@@ -27,10 +27,10 @@ const atPagesz = 6
 //
 // An empty vector is not a harmless gap. A consumer that finds none asks
 // the hardware directly, and on arm64 that is an MRS of ID_AA64ISAR0_EL1
-// that only a Linux kernel emulates: x/sys/cpu ran it inside its package
-// init on macOS and every binary that links x/crypto died of SIGILL
-// before main. Linux supplies the vector on the stack; the NT stub and
-// sysargs's macOS branch build one.
+// that only a Linux kernel emulates. Linux supplies the vector on the
+// stack, the NT stub fabricates one, and on macOS the APE loader builds
+// a System V stack that carries one - which is the property this check
+// holds the loader to.
 func checkAuxv() {
 	a := getAuxv()
 	if len(a) == 0 {
