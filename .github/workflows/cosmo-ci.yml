@@ -186,7 +186,7 @@ jobs:
           GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
           GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay' runtime
           # A list, not the whole package: syscall's suite needs a real host surface, while these are pure Apple-struct conversions the emulation cannot host-test.
-          GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes' syscall
+          GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes|TestOpenAuxv' syscall
 
       - name: Fork-divergence guardrails (go/build policy, moddeps)
         # see docs/CI.md "build job" for why this step exists and what it catches.

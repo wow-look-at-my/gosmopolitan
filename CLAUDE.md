@@ -284,6 +284,16 @@ go tool compile -bench=out.txt file.go
   assembly is enabled on arm64 hosts now. Never set `hwcap_CPUID`: it means
   "the kernel emulates those registers". Depth: DEBUGGING.md "AT_HWCAP"
   (2026-09-04).
+- **`/proc/self/auxv` is served by the APE off a Linux host.** A library
+  written for Linux reads the auxiliary vector out of that file rather
+  than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv`
+  linkname, but the init that ARMS it sorts after the init that CALLS it,
+  so the call always sees nil and the file is the path it really takes.
+  `syscall.Openat` answers the path from `runtime.getAuxv` when the real
+  open fails, handing back the read end of a pipe holding the pairs plus
+  the AT_NULL terminator. So AT_HWCAP now reaches x/sys/cpu too, which is
+  what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md
+  "AT_HWCAP" (2026-09-04).
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,

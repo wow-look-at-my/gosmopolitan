@@ -6,16 +6,7 @@
 
 package main
 
-import (
-	"fmt"
-	_ "unsafe" // for linkname
-)
-
-// getAuxv reads the runtime's auxiliary vector the way an outside package
-// does. golang.org/x/sys/cpu takes exactly this path in its own init.
-//
-//go:linkname getAuxv runtime.getAuxv
-func getAuxv() []uintptr
+import "fmt"
 
 const (
 	atHWCAP     = 16

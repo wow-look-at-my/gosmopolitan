@@ -176,13 +176,19 @@ func Mknod(path string, mode uint32, dev int) (err error) {
 }
 
 func Open(path string, mode int, perm uint32) (fd int, err error) {
-	return openat(_AT_FDCWD, path, mode|O_LARGEFILE, perm)
+	return Openat(_AT_FDCWD, path, mode, perm)
 }
 
 //sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, err error)
 
 func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) {
-	return openat(dirfd, path, flags|O_LARGEFILE, mode)
+	fd, err = openat(dirfd, path, flags|O_LARGEFILE, mode)
+	if err != nil && path == procSelfAuxv {
+		// Only a Linux host owns this file; elsewhere the APE answers
+		// it. See openAuxv.
+		return openAuxv(flags)
+	}
+	return fd, err
 }
 
 func Pipe(p []int) error {

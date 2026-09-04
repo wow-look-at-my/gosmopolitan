@@ -32,7 +32,7 @@ var probeOkChecks = []string{
 	"socketpair", "sockpairpoll",
 	"sendmsg", "netbuffers", "fdpass",
 	"execchild", "lookpath", "execstress", "pipeeof", "cloexec",
-	"hostos", "hwcap", "fdpath", "peercred", "dupfile",
+	"hostos", "hwcap", "procauxv", "fdpath", "peercred", "dupfile",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",

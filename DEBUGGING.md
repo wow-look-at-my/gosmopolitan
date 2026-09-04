@@ -6609,3 +6609,39 @@ linkname exactly as x/sys/cpu does and fails when no AT_HWCAP comes back.
 It runs on every host, and the macos-latest leg is the one that covers
 this. A binary that merely started was never proof: the crash needs a
 package that reads CPU features, and the probe imports none.
+
+### The auxv fix did not reach x/sys/cpu: it never asks the runtime
+
+The APE now held an AT_HWCAP, and go-toolchain's own APE still died on
+macos-latest with the identical SIGILL in `x/sys/cpu.getisar0`, built by
+a fork release that carried `fixAuxv`. The reason is in x/sys, not here.
+`readHWCAP` asks `getAuxv()` first, and `getAuxvFn` - the variable that
+call goes through - is assigned in an `init` in `runtime_auxv_go121.go`,
+while the `init` that calls `archInit` sits in `cpu.go`. A package runs
+its init functions in file-name order, so the caller always runs first
+and always finds nil. Reproduced with a two-file package here: the
+first init reports `nil` every time.
+
+So the only path x/sys/cpu really takes on Linux is `/proc/self/auxv`,
+and a macOS or NT host has no such file. The failing read then leads to
+`linuxKernelCanEmulateCPUID`, which asks `syscall.Uname`. That call
+started answering on darwin hosts on 2026-09-02; before it did, the
+release string was empty, `parseRelease` failed, and the code took the
+harmless `/proc/cpuinfo` branch. Once Uname worked, macOS reported a
+major version well past 4.11, x/sys believed the kernel emulates the
+ID_AA64ISAR registers, and the MRS killed the process. That is why this
+regressed on a date when nothing in x/sys or in go-toolchain changed.
+
+Fix: `syscall.Openat` (`syscall/auxv_cosmo.go`) answers `/proc/self/auxv`
+itself when the real open fails. It writes the runtime's own pairs plus
+the AT_NULL terminator into a pipe and returns the read end, so the
+descriptor reads and closes like any other and a Linux host keeps using
+the kernel's file. The vector is a few hundred bytes, far below a pipe
+buffer, so the write cannot block.
+
+Gates: `syscall`'s `TestOpenAuxvMatchesTheKernelFile`, which holds the
+served bytes against the kernel's own file on a Linux host and found
+them identical, and runtimeprobe's `procauxv` check, which reads the
+path through `os.ReadFile` and compares it with `runtime.getAuxv` on
+every host - the macos-latest and windows-latest legs are what cover
+the hosts where the shim is the only answer.
