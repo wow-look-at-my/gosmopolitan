@@ -6648,11 +6648,41 @@ crashing consumer had no vector at all, which its own traceback proves:
 `readARM64Registers` is reachable only after `readHWCAP` returns an error,
 and that needs `getAuxv` empty AND `/proc/self/auxv` unreadable.
 
-`TestRuntimeProbeDirectExecAuxv` is what reaches for that state: same
-probe, no shell, macOS only. A kernel that accepts the APE's embedded
-Mach-O header skips the loader, and a Mach-O stack carries no auxv. A
-kernel that refuses the file instead is a fact about the host rather than
-a failure, so the test skips with the exec error rather than going red -
-and that outcome would say the empty vector arrives some other way, which
-is worth knowing either way. The end-to-end proof is go-toolchain's own
-darwin leg once a release carries this.
+`TestRuntimeProbeDirectExecAuxv` reached for that state and ruled the
+launch path out: XNU answers `exec format error` for the APE with no
+shell in front of it, so the test skips. There is no way to start one on
+macOS that does not go through the loader, and the loader always builds
+the vector.
+
+**The empty vector is not the runtime's at all.** Re-read the frame the
+traceback names:
+
+```
+golang.org/x/sys/cpu.doinit()       cpu_linux_arm64.go:79
+golang.org/x/sys/cpu.archInit(...)  cpu_arm64.go:51
+golang.org/x/sys/cpu.init.0()       cpu.go:255
+```
+
+`cpu.go`, not `runtime_auxv_go121.go`. Those two files are no longer the
+mutually exclusive pair the older x/sys had. In v0.47.0 `runtime_auxv.go`
+carries no build tag and declares `var getAuxvFn func() []uintptr`, with
+`getAuxv` returning nil while it is nil; `runtime_auxv_go121.go` assigns
+it from an `init()`. `go list` under the published fork confirms both
+files compile into the package.
+
+`init` functions run in sorted filename order, and `cpu.go` sorts before
+`runtime_auxv_go121.go`. So `cpu.init.0` calls `archInit` -> `doinit` ->
+`readHWCAP` -> `getAuxv` while `getAuxvFn` is still nil, and gets nil back
+whatever the runtime published. Linux never notices because
+`/proc/self/auxv` answers the next question. macOS has neither, so the
+error path runs, `Uname` now parses as a modern Linux kernel, and the MRS
+executes.
+
+So the publication above is worth having - `x/sys/unix` and every
+consumer that asks after package init now gets a real vector on macOS -
+and it does not fix this crash. Nothing the runtime writes can: the
+reader is not looking at it yet. The fix has to make `readHWCAP`'s second
+question answerable on a macOS host, which means serving
+`/proc/self/auxv` there, or carrying a patched `x/sys`. That is a
+decision about the fork's emulation surface, not a bug fix, so it is
+recorded here rather than guessed at.
