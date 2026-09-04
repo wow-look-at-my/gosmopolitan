@@ -1980,6 +1980,11 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // registry, a counter another test also writes - because a child starts with
 // its own copy that no other test can reach.
 //
+// Fork does not serialize anything. The child runs parallel-by-default like
+// any other run, so the subtests of a forked test still run at the same time,
+// and the rest of this suite keeps running here. A test that needs a process
+// of its own AND the process to itself calls [T.Serial] as well.
+//
 // The child re-runs this test from a fresh process, so the package's
 // initialization happens again and nothing another test did here is visible.
 // It inherits this process's environment and its -test.v, -test.timeout,

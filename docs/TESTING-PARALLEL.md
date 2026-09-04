@@ -26,6 +26,10 @@ only guarantees that nothing else runs *at the same time*; it does not give the 
 counter another test already advanced is still advanced. Fork also leaves the rest of the suite running, where
 Serial stops it.
 
+Fork does NOT serialize. The child runs parallel-by-default like any other run, so a forked test's subtests still run
+at the same time, and the rest of the suite keeps running in the parent. A test that needs a process of its own AND
+the process to itself calls `t.Serial()` as well - in either order, since the child runs the body from the top.
+
 Mechanics:
 
 - The child re-runs that one test via `-test.run`, anchored per slash-separated name element, so a subtest that
