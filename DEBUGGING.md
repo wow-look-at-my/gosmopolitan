@@ -6708,3 +6708,48 @@ The gate is runtimeprobe's `procauxv` check, which reads the file exactly
 as x/sys/cpu does and asserts `AT_PAGESZ` against `os.Getpagesize`. It
 skips on a Windows host for the reason above. It is red on macOS without
 this change, which is the property that makes it a gate.
+
+## AT_HWCAP: macOS passes no auxv, so an arm64 reader falls back to an illegal instruction (2026-09-04)
+
+An APE that merely imports `golang.org/x/sys/cpu` - through x/crypto,
+through go-git - died on macOS arm64 before reaching `main`:
+
+```
+SIGILL: illegal instruction
+golang.org/x/sys/cpu.getisar0()
+	cpu/cpu_arm64.s:12
+golang.org/x/sys/cpu.doinit()
+	cpu/cpu_linux_arm64.go:79
+runtime.doInit1 -> runtime.main
+```
+
+The chain is entirely reasonable at each step. cosmo aliases into the
+`linux` build tag, so x/sys/cpu compiles its Linux arm64 port. That port
+asks the auxiliary vector for AT_HWCAP; macOS passes no auxv and has no
+`/proc/self/auxv`, so `readHWCAP` fails. Its documented fallback is to
+read the `ID_AA64ISAR*` registers, guarded by "is this kernel 4.11+",
+which it decides with `Uname`. The APE answers that honestly with the
+Darwin kernel version, which is far above 4.11, so the guard opens and
+the `MRS` executes. Linux emulates that instruction. macOS answers SIGILL.
+
+The guard is not wrong; the fork had left the question unanswered. The
+same value drives `internal/cpu`, whose cosmo `archauxv` was a no-op on
+every host, so the stdlib's AES, SHA, CRC32 and atomics assembly was off
+even on Linux arm64.
+
+`fixAuxv` (`runtime/hwcap_cosmo_arm64.go`) runs in `osinit` - after
+`osArchInit`, so the host is safe to ask - and appends an AT_HWCAP pair
+when a darwin host passed none. The value comes from the same Apple
+sysctls `internal/cpu`'s own darwin port reads
+(`hw.optional.armv8_1_atomics`, `armv8_crc32`, `armv8_2_sha512`,
+`armv8_2_sha3`, `arm.FEAT_DIT`) over Syslib `sysctlbyname`, plus the
+M1 baseline macOS 11 publishes no key for: FP, ASIMD, AES, PMULL, SHA1,
+SHA2. `hwcap_CPUID` stays clear deliberately - it advertises that the
+kernel emulates those very registers, and `internal/cpu` MRSes for the
+MIDR when it is set.
+
+Gate: runtimeprobe's `hwcap` check, which reaches `runtime.getAuxv` by
+linkname exactly as x/sys/cpu does and fails when no AT_HWCAP comes back.
+It runs on every host, and the macos-latest leg is the one that covers
+this. A binary that merely started was never proof: the crash needs a
+package that reads CPU features, and the probe imports none.
