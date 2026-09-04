@@ -220,9 +220,10 @@ func SetTraceback(level string)
 // the soft memory limit in more detail, as well as a variety of common
 // use-cases and scenarios.
 //
-// The initial setting is [math.MaxInt64] unless the GOMEMLIMIT
-// environment variable is set, in which case it provides the initial
-// setting. GOMEMLIMIT is a numeric value in bytes with an optional
+// The initial setting is the GOMEMLIMIT environment variable when it
+// is set. When it is unset, the initial setting is the memory limit of
+// the cgroup containing the process, or [math.MaxInt64] where there is
+// no such limit. GOMEMLIMIT is a numeric value in bytes with an optional
 // unit suffix. The supported suffixes include B, KiB, MiB, GiB, and
 // TiB. These suffixes represent quantities of bytes as defined by
 // the IEC 80000-13 standard. That is, they are based on powers of

@@ -9,6 +9,7 @@ package runtime_test
 import (
 	"fmt"
 	"internal/cgrouptest"
+	"math"
 	"runtime"
 	"strings"
 	"syscall"
@@ -296,6 +297,82 @@ func TestCgroupGOMAXPROCSUpdate(t *testing.T) {
 			t.Fatalf("output got %q want OK", got)
 		}
 	})
+}
+
+// mustSetMemoryMax sets the cgroup's memory limit, skipping the test when the
+// parent cgroup does not delegate the memory controller.
+func mustSetMemoryMax(t *testing.T, c *cgrouptest.CgroupV2, limit int64) {
+	t.Helper()
+	if err := c.SetMemoryMax(limit); err != nil {
+		t.Skipf("unable to set memory limit: %v", err)
+	}
+}
+
+// An unset GOMEMLIMIT takes the cgroup's memory limit.
+func TestCgroupMemoryLimit(t *testing.T) {
+	exe, err := buildTestProg(t, "testprog")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const limit = 4 << 30
+
+	cgrouptest.InCgroupV2(t, func(c *cgrouptest.CgroupV2) {
+		mustSetMemoryMax(t, c, limit)
+
+		got := runBuiltTestProg(t, exe, "PrintMemoryLimit")
+		want := fmt.Sprintf("%d\n", limit)
+		if got != want {
+			t.Fatalf("output got %q want %q", got, want)
+		}
+	})
+}
+
+// Without a cgroup limit, there is no memory limit.
+func TestCgroupMemoryLimitNoLimit(t *testing.T) {
+	exe, err := buildTestProg(t, "testprog")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cgrouptest.InCgroupV2(t, func(c *cgrouptest.CgroupV2) {
+		mustSetMemoryMax(t, c, -1)
+
+		got := runBuiltTestProg(t, exe, "PrintMemoryLimit")
+		want := fmt.Sprintf("%d\n", int64(math.MaxInt64))
+		if got != want {
+			t.Fatalf("output got %q want %q", got, want)
+		}
+	})
+}
+
+// GOMEMLIMIT wins over the cgroup limit, "off" included.
+func TestCgroupMemoryLimitEnvironment(t *testing.T) {
+	exe, err := buildTestProg(t, "testprog")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		env  string
+		want int64
+	}{
+		{env: "GOMEMLIMIT=off", want: math.MaxInt64},
+		{env: "GOMEMLIMIT=100MiB", want: 100 << 20},
+	}
+	for _, tc := range tests {
+		t.Run(tc.env, func(t *testing.T) {
+			cgrouptest.InCgroupV2(t, func(c *cgrouptest.CgroupV2) {
+				mustSetMemoryMax(t, c, 4<<30)
+
+				got := runBuiltTestProg(t, exe, "PrintMemoryLimit", tc.env)
+				want := fmt.Sprintf("%d\n", tc.want)
+				if got != want {
+					t.Fatalf("output got %q want %q", got, want)
+				}
+			})
+		})
+	}
 }
 
 func TestCgroupGOMAXPROCSDontUpdate(t *testing.T) {
