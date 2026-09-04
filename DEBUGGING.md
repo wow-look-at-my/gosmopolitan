@@ -6637,5 +6637,22 @@ which case a macOS run actually lands in.
 The gate is a `runtimeprobe` check, `auxv`, that fails on an empty vector
 and on an `AT_PAGESZ` that disagrees with `os.Getpagesize`. It reaches
 `runtime.getAuxv` through the same `go:linkname` the real consumers use,
-so it runs on all three hosts and would have caught this on the commit
-that landed `uname`.
+so it runs on all three hosts.
+
+On the macOS runner it reports `pagesz=16384 pairs=15`, for all three
+origin binaries: apetest starts an APE through `/bin/sh`, that hands
+control to the APE loader, and the loader builds a System V stack with a
+full vector on it. So the publication above never fires on that path, and
+the check passes there without reaching the case it exists for. The
+crashing consumer had no vector at all, which its own traceback proves:
+`readARM64Registers` is reachable only after `readHWCAP` returns an error,
+and that needs `getAuxv` empty AND `/proc/self/auxv` unreadable.
+
+`TestRuntimeProbeDirectExecAuxv` is what reaches for that state: same
+probe, no shell, macOS only. A kernel that accepts the APE's embedded
+Mach-O header skips the loader, and a Mach-O stack carries no auxv. A
+kernel that refuses the file instead is a fact about the host rather than
+a failure, so the test skips with the exec error rather than going red -
+and that outcome would say the empty vector arrives some other way, which
+is worth knowing either way. The end-to-end proof is go-toolchain's own
+darwin leg once a release carries this.
