@@ -28,9 +28,12 @@ program. GOMEMLIMIT is a numeric value in bytes with an optional unit suffix.
 The supported suffixes include B, KiB, MiB, GiB, and TiB. These suffixes
 represent quantities of bytes as defined by the IEC 80000-13 standard. That is,
 they are based on powers of two: KiB means 2^10 bytes, MiB means 2^20 bytes,
-and so on. The default setting is [math.MaxInt64], which effectively disables the
-memory limit. [runtime/debug.SetMemoryLimit] allows changing this limit at run
-time.
+and so on. When GOMEMLIMIT is unset, the limit is the memory limit of the
+cgroup containing the process, so a container's Go heap stays under its own
+ceiling; without such a limit, and on a host with no cgroups, the default is
+[math.MaxInt64], which effectively disables the memory limit. Setting
+GOMEMLIMIT=off also disables it. [runtime/debug.SetMemoryLimit] allows changing
+this limit at run time.
 
 The GODEBUG variable controls debugging variables within the runtime.
 It is a comma-separated list of name=val pairs setting these named variables:

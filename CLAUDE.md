@@ -320,6 +320,15 @@ go tool compile -bench=out.txt file.go
   toolchain automatically invalidates cached objects. The old rule "run
   `go clean -cache` after every make.bash" is obsolete; CI asserts the
   discriminator on every build platform.
+- **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT`
+  reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the
+  process's own cgroup at `gcinit` and uses it as the initial soft limit, so a
+  containerized binary caps its heap instead of allocating until the kernel
+  OOM-kills it. An explicit `GOMEMLIMIT`, `off` included, still wins, and
+  a host with no cgroups is unaffected. This holds for cosmo too: the APE
+  asks `__hostos` first and only reads `/proc` on a Linux host.
+  `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s
+  syscall shims.
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
