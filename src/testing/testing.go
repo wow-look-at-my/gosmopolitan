@@ -1962,6 +1962,141 @@ func (t *T) Serial() {
 	serialExclusive.Store(true)
 }
 
+// forkTargetEnv names the test a forked child process was started to run. Fork
+// sets it on the child, and reads it to tell a child from a parent: a process
+// that already carries it never forks again, so a forked test that runs
+// subtests, or calls Fork from one, still runs in exactly one child.
+const forkTargetEnv = "GO_TEST_FORK_TARGET"
+
+// Fork runs the rest of the calling test in a child process, alone, and takes
+// that process's result as this test's own. It returns in the child, where the
+// body goes on to run. In the parent it does not return.
+//
+// [T.Serial] and Fork both give a test state nobody else touches, and they pay
+// for it differently. Serial keeps the test in this process and stops every
+// other test for the duration. Fork leaves the rest of the suite running and
+// gives this test a process instead. Fork is the one to reach for when the
+// state is process-global and shared - a package-level variable, a metrics
+// registry, a counter another test also writes - because a child starts with
+// its own copy that no other test can reach.
+//
+// The child re-runs this test from a fresh process, so the package's
+// initialization happens again and nothing another test did here is visible.
+// It inherits this process's environment and its -test.v, -test.timeout,
+// -test.short, -test.fullpath and -test.gocoverdir settings, so verbose output
+// still appears and coverage still counts toward the same profile.
+//
+// The child's output becomes this test's output and its exit status decides
+// whether this test passes. Fork reports a failure it cannot attribute - a
+// child that could not be started, or died on a signal - against this test.
+func (t *T) Fork() {
+	if os.Getenv(forkTargetEnv) != "" {
+		// Already the dedicated child: run the body right here.
+		return
+	}
+	t.Helper()
+
+	output, err := t.runForked()
+	if len(output) > 0 {
+		t.log(strings.TrimRight(string(output), "\n"), err != nil)
+	}
+	if err != nil {
+		t.Fail()
+		t.log("fork: "+err.Error(), true)
+	}
+
+	// The body belongs to the child, so stop the parent's copy here. This is
+	// FailNow's mechanism without its failure: the deferred functions in
+	// tRunner still run, and they are what report the test.
+	t.mu.Lock()
+	t.finished = true
+	t.mu.Unlock()
+	runtime.Goexit()
+}
+
+// runForked starts one child process for this test, and returns everything the
+// child wrote together with the reason it did not pass, if it did not.
+func (t *T) runForked() ([]byte, error) {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		// A test binary invoked through a wrapper or a relative path may have
+		// no resolvable executable; argv[0] is what it was started as.
+		exe = os.Args[0]
+	}
+
+	args := []string{exe, "-test.run=" + forkRunPattern(t.Name()), "-test.count=1"}
+	if chatty.on {
+		args = append(args, "-test.v=true")
+	}
+	if *short {
+		args = append(args, "-test.short")
+	}
+	if *fullPath {
+		args = append(args, "-test.fullpath")
+	}
+	if *timeout > 0 {
+		args = append(args, "-test.timeout="+timeout.String())
+	}
+	if *gocoverdir != "" {
+		// Same directory, so the child's counters land in the profile this run
+		// is already writing.
+		args = append(args, "-test.gocoverdir="+*gocoverdir)
+	}
+
+	// One pipe for both streams keeps the child's interleaving intact.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
+		Env:   append(os.Environ(), forkTargetEnv+"="+t.Name()),
+		Files: []*os.File{nil, pw, pw},
+	})
+	// The parent must drop its own write end, or reading the pipe never sees
+	// the end of the child's output.
+	pw.Close()
+	if err != nil {
+		pr.Close()
+		return nil, err
+	}
+
+	output, readErr := io.ReadAll(pr)
+	pr.Close()
+
+	state, waitErr := proc.Wait()
+	switch {
+	case waitErr != nil:
+		return output, waitErr
+	case !state.Success():
+		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
+	}
+	return output, readErr
+}
+
+// forkRunPattern builds the -test.run value that selects one test, and only
+// that test, in the child. -test.run matches each slash-separated element
+// against its own pattern, so every element is anchored separately.
+func forkRunPattern(name string) string {
+	elems := strings.Split(name, "/")
+	for i, e := range elems {
+		elems[i] = "^" + forkQuoteMeta(e) + "$"
+	}
+	return strings.Join(elems, "/")
+}
+
+// forkQuoteMeta escapes the regexp metacharacters a test name can contain.
+// regexp.QuoteMeta would do this, but testing must not depend on regexp.
+func forkQuoteMeta(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; strings.IndexByte(`\.+*?()|[]{}^$`, c) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // inSerialTree reports whether this test, or a test above it, holds the
 // barrier exclusively. A parent that holds it shared does not count: that
 // parent releases its hold before its parallel subtests run.
