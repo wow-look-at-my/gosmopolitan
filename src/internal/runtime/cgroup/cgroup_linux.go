@@ -2,19 +2,18 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux && !cosmo
+//go:build linux
 
 package cgroup
-
-import (
-	"internal/runtime/syscall/linux"
-)
 
 // Include explicit NUL to be sure we include it in the slice.
 const (
 	v2MaxFile    = "/cpu.max\x00"
 	v1QuotaFile  = "/cpu.cfs_quota_us\x00"
 	v1PeriodFile = "/cpu.cfs_period_us\x00"
+
+	v2MemoryMaxFile   = "/memory.max\x00"
+	v1MemoryLimitFile = "/memory.limit_in_bytes\x00"
 )
 
 // CPU owns the FDs required to read the CPU limit from a cgroup.
@@ -33,10 +32,10 @@ type CPU struct {
 func (c CPU) Close() {
 	switch c.version {
 	case V1:
-		linux.Close(c.quotaFD)
-		linux.Close(c.periodFD)
+		sysClose(c.quotaFD)
+		sysClose(c.periodFD)
 	case V2:
-		linux.Close(c.quotaFD)
+		sysClose(c.quotaFD)
 	default:
 		throw("impossible cgroup version")
 	}
@@ -68,7 +67,7 @@ func OpenCPU(scratch []byte) (CPU, error) {
 	case 1:
 		n2 := copy(base[n:], v1QuotaFile)
 		path := base[:n+n2]
-		quotaFD, errno := linux.Open(&path[0], linux.O_RDONLY|linux.O_CLOEXEC, 0)
+		quotaFD, errno := sysOpenRead(&path[0])
 		if errno != 0 {
 			// This may fail if this process was migrated out of
 			// the cgroup found by FindCPU and that cgroup has been
@@ -78,7 +77,7 @@ func OpenCPU(scratch []byte) (CPU, error) {
 
 		n2 = copy(base[n:], v1PeriodFile)
 		path = base[:n+n2]
-		periodFD, errno := linux.Open(&path[0], linux.O_RDONLY|linux.O_CLOEXEC, 0)
+		periodFD, errno := sysOpenRead(&path[0])
 		if errno != 0 {
 			// This may fail if this process was migrated out of
 			// the cgroup found by FindCPU and that cgroup has been
@@ -95,7 +94,7 @@ func OpenCPU(scratch []byte) (CPU, error) {
 	case 2:
 		n2 := copy(base[n:], v2MaxFile)
 		path := base[:n+n2]
-		maxFD, errno := linux.Open(&path[0], linux.O_RDONLY|linux.O_CLOEXEC, 0)
+		maxFD, errno := sysOpenRead(&path[0])
 		if errno != 0 {
 			// This may fail if this process was migrated out of
 			// the cgroup found by FindCPU and that cgroup has been
@@ -156,7 +155,7 @@ func readV1Number(fd int) (int64, error) {
 	//
 	// Always read from the beginning of the file to get a fresh value.
 	var b [64]byte
-	n, errno := linux.Pread(fd, b[:], 0)
+	n, errno := sysPread(fd, b[:], 0)
 	if errno != 0 {
 		return 0, errSyscallFailed
 	}
@@ -188,7 +187,7 @@ func readV2Limit(fd int) (float64, bool, error) {
 	//
 	// Always read from the beginning of the file to get a fresh value.
 	var b [64]byte
-	n, errno := linux.Pread(fd, b[:], 0)
+	n, errno := sysPread(fd, b[:], 0)
 	if errno != 0 {
 		return 0, false, errSyscallFailed
 	}
@@ -234,8 +233,8 @@ func FindCPU(out []byte, scratch []byte) (int, Version, error) {
 // Returns ErrNoCgroup if the process is not in a CPU cgroup.
 func FindCPUCgroup(out []byte, scratch []byte) (int, Version, error) {
 	path := []byte("/proc/self/cgroup\x00")
-	fd, errno := linux.Open(&path[0], linux.O_RDONLY|linux.O_CLOEXEC, 0)
-	if errno == linux.ENOENT {
+	fd, errno := sysOpenRead(&path[0])
+	if sysNotExist(errno) {
 		return 0, 0, ErrNoCgroup
 	} else if errno != 0 {
 		return 0, 0, errSyscallFailed
@@ -243,13 +242,13 @@ func FindCPUCgroup(out []byte, scratch []byte) (int, Version, error) {
 
 	// The relative path always starts with /, so we can directly append it
 	// to the mount point.
-	n, version, err := parseCPUCgroup(fd, linux.Read, out[:], scratch)
+	n, version, err := parseCPUCgroup(fd, sysRead, out[:], scratch)
 	if err != nil {
-		linux.Close(fd)
+		sysClose(fd)
 		return 0, 0, err
 	}
 
-	linux.Close(fd)
+	sysClose(fd)
 	return n, version, nil
 }
 
@@ -268,19 +267,19 @@ func FindCPUMountPoint(out, cgroup []byte, version Version, scratch []byte) (int
 	checkBufferSize(scratch, ParseSize)
 
 	path := []byte("/proc/self/mountinfo\x00")
-	fd, errno := linux.Open(&path[0], linux.O_RDONLY|linux.O_CLOEXEC, 0)
-	if errno == linux.ENOENT {
+	fd, errno := sysOpenRead(&path[0])
+	if sysNotExist(errno) {
 		return 0, ErrNoCgroup
 	} else if errno != 0 {
 		return 0, errSyscallFailed
 	}
 
-	n, err := parseCPUMount(fd, linux.Read, out, cgroup, version, scratch)
+	n, err := parseCPUMount(fd, sysRead, out, cgroup, version, scratch)
 	if err != nil {
-		linux.Close(fd)
+		sysClose(fd)
 		return 0, err
 	}
-	linux.Close(fd)
+	sysClose(fd)
 
 	return n, nil
 }
