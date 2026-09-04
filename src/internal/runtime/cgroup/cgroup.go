@@ -69,6 +69,41 @@ func parseV1Number(buf []byte) (int64, error) {
 	return val, nil
 }
 
+// noMemoryLimit is the floor above which a memory limit means "unlimited".
+//
+// cgroup v1 spells no limit as the largest int64 rounded down to a page
+// boundary, which depends on the page size. No machine has this much memory,
+// so anything at or above it is a sentinel rather than a limit.
+const noMemoryLimit = uint64(1) << 62
+
+// parseMemoryLimit parses the contents of a memory limit file: memory.max on
+// cgroup v2, memory.limit_in_bytes on v1. ok is false when the cgroup sets no
+// limit.
+func parseMemoryLimit(buf []byte) (uint64, bool, error) {
+	// Ignore trailing newline.
+	i := bytealg.IndexByte(buf, '\n')
+	if i < 0 {
+		return 0, false, errMalformedFile
+	}
+	buf = buf[:i]
+
+	if bytealg.Compare(buf, []byte("max")) == 0 {
+		// No limit (cgroup v2).
+		return 0, false, nil
+	}
+
+	val, err := strconv.ParseUint(string(buf), 10, 64)
+	if err != nil {
+		return 0, false, errMalformedFile
+	}
+	if val >= noMemoryLimit {
+		// No limit (cgroup v1 sentinel).
+		return 0, false, nil
+	}
+
+	return val, true, nil
+}
+
 func parseV2Limit(buf []byte) (float64, bool, error) {
 	i := bytealg.IndexByte(buf, ' ')
 	if i < 0 {
@@ -107,16 +142,25 @@ func parseV2Limit(buf []byte) (float64, bool, error) {
 // fd is a file descriptor for /proc/self/cgroup.
 // Returns the number of bytes written and the cgroup version (1 or 2).
 func parseCPUCgroup(fd int, read func(fd int, b []byte) (int, uintptr), out []byte, scratch []byte) (int, Version, error) {
+	return parseCgroup(fd, read, out, scratch, "cpu")
+}
+
+// Finds the path of the current process's cgroup for controller and writes it
+// to out.
+//
+// fd is a file descriptor for /proc/self/cgroup.
+// Returns the number of bytes written and the cgroup version (1 or 2).
+func parseCgroup(fd int, read func(fd int, b []byte) (int, uintptr), out []byte, scratch []byte, controller string) (int, Version, error) {
 	// The format of each line is
 	//
 	//   hierarchy-ID:controller-list:cgroup-path
 	//
 	// controller-list is comma-separated.
 	//
-	// cgroup v2 has hierarchy-ID 0. If a v1 hierarchy contains "cpu", that
-	// is the CPU controller. Otherwise the v2 hierarchy (if any) is the
-	// CPU controller. It is not possible to mount the same controller
-	// simultaneously under both the v1 and the v2 hierarchies.
+	// cgroup v2 has hierarchy-ID 0. If a v1 hierarchy lists controller,
+	// that is the controller. Otherwise the v2 hierarchy (if any) holds
+	// it. It is not possible to mount the same controller simultaneously
+	// under both the v1 and the v2 hierarchies.
 	//
 	// See man 7 cgroups for more details.
 	//
@@ -186,9 +230,9 @@ func parseCPUCgroup(fd int, read func(fd int, b []byte) (int, uintptr), out []by
 			// CPU controller, which takes precedence.
 		} else {
 			// v1 hierarchy
-			if containsCPU(controllers) {
-				// Found a v1 CPU controller. This must be the
-				// only one, so we're done.
+			if containsController(controllers, controller) {
+				// Found a v1 hierarchy for this controller. This
+				// must be the only one, so we're done.
 				return copy(out, path), V1, nil
 			}
 		}
@@ -205,17 +249,22 @@ func parseCPUCgroup(fd int, read func(fd int, b []byte) (int, uintptr), out []by
 
 // Returns true if comma-separated list b contains "cpu".
 func containsCPU(b []byte) bool {
+	return containsController(b, "cpu")
+}
+
+// Returns true if comma-separated list b contains name.
+func containsController(b []byte, name string) bool {
 	for len(b) > 0 {
 		i := bytealg.IndexByte(b, ',')
 		if i < 0 {
 			// Neither cmd/compile nor gccgo allocates for these string conversions.
-			return string(b) == "cpu"
+			return string(b) == name
 		}
 
 		curr := b[:i]
 		rest := b[i+1:]
 
-		if string(curr) == "cpu" {
+		if string(curr) == name {
 			return true
 		}
 
@@ -230,6 +279,15 @@ func containsCPU(b []byte) bool {
 // fd is a file descriptor for /proc/self/mountinfo.
 // Returns the number of bytes written.
 func parseCPUMount(fd int, read func(fd int, b []byte) (int, uintptr), out, cgroup []byte, version Version, scratch []byte) (int, error) {
+	return parseMount(fd, read, out, cgroup, version, scratch, "cpu")
+}
+
+// Returns the path to the specified cgroup and version with the controller
+// mounted.
+//
+// fd is a file descriptor for /proc/self/mountinfo.
+// Returns the number of bytes written.
+func parseMount(fd int, read func(fd int, b []byte) (int, uintptr), out, cgroup []byte, version Version, scratch []byte, controller string) (int, error) {
 	// The format of each line is:
 	//
 	// 36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue
@@ -254,7 +312,7 @@ func parseCPUMount(fd int, read func(fd int, b []byte) (int, uintptr), out, cgro
 	// show_path. We must unescape before returning.
 	//
 	// A mount point matches if the filesystem type (9) is cgroup2,
-	// or cgroup with "cpu" in the super options (11),
+	// or cgroup with controller in the super options (11),
 	// and the cgroup is in the root (4). If there are multiple matches,
 	// the first one is selected.
 	//
@@ -353,7 +411,7 @@ func parseCPUMount(fd int, read func(fd int, b []byte) (int, uintptr), out, cgro
 			line = line[i+1:]
 
 			// (11) super options:  per super block options
-			if !containsCPU(line) {
+			if !containsController(line, controller) {
 				continue
 			}
 		case V2:
