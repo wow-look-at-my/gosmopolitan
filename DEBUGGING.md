@@ -6682,7 +6682,29 @@ So the publication above is worth having - `x/sys/unix` and every
 consumer that asks after package init now gets a real vector on macOS -
 and it does not fix this crash. Nothing the runtime writes can: the
 reader is not looking at it yet. The fix has to make `readHWCAP`'s second
-question answerable on a macOS host, which means serving
-`/proc/self/auxv` there, or carrying a patched `x/sys`. That is a
-decision about the fork's emulation surface, not a bug fix, so it is
-recorded here rather than guessed at.
+question answerable on a macOS host.
+
+**The fix: package syscall serves that one path.** `procauxv_cosmo.go`
+answers a read-only open of `/proc/self/auxv` on a darwin host from
+`runtime.getAuxv`, over a pipe - the vector is a few hundred bytes, far
+under a pipe buffer, so one write fills it and closing the write end
+gives the reader EOF. Nothing touches the filesystem. `Open` and `Openat`
+consult it and fall through to the real `openat` for everything else,
+including a darwin host whose vector is somehow empty, so the caller
+still sees the host's own error rather than a file that lies.
+
+This is the emulation the fork already claims: a Linux syscall surface on
+a host that has none. It is deliberately one exact path, not a `/proc`.
+
+Two things worth knowing about the shape of the fix. `readHWCAP` returns
+nil on ANY successful read, whatever tags the file carries, so serving it
+is what stops the MRS - the feature bits are a separate question, and a
+host whose loader publishes no `AT_HWCAP` simply gets x/crypto's generic
+paths instead of a SIGILL. And the same reasoning does not extend to
+Windows: the trap is in `cpu_linux_arm64.go`, the APE has no arm64 PE
+header, and the amd64 `doinit` reads CPUID instead of the auxv.
+
+The gate is runtimeprobe's `procauxv` check, which reads the file exactly
+as x/sys/cpu does and asserts `AT_PAGESZ` against `os.Getpagesize`. It
+skips on a Windows host for the reason above. It is red on macOS without
+this change, which is the property that makes it a gate.

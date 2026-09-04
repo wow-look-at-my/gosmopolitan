@@ -176,12 +176,19 @@ func Mknod(path string, mode uint32, dev int) (err error) {
 }
 
 func Open(path string, mode int, perm uint32) (fd int, err error) {
+	if fd, err, ok := openProcSelfAuxv(path, mode); ok {
+		return fd, err
+	}
 	return openat(_AT_FDCWD, path, mode|O_LARGEFILE, perm)
 }
 
 //sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, err error)
 
 func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) {
+	// The path is absolute, so dirfd cannot change which file it names.
+	if fd, err, ok := openProcSelfAuxv(path, flags); ok {
+		return fd, err
+	}
 	return openat(dirfd, path, flags|O_LARGEFILE, mode)
 }
 

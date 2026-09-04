@@ -134,6 +134,7 @@ func main() {
 	timed("cloexec", checkCloexec)
 	timed("hostos", checkHostOS)
 	timed("auxv", checkAuxv)
+	timed("procauxv", checkProcAuxv)
 	timed("fdpath", checkFdPath)
 	timed("peercred", checkPeercred)
 	timed("dupfile", checkDupFile)

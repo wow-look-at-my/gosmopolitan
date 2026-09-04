@@ -10,3 +10,6 @@ package main
 // darwin or windows binary genuinely has no auxv, so the check would
 // fail there for a reason it does not exist to report.
 func checkAuxv() { ok("auxv", "skipped: not a cosmo build") }
+
+// checkProcAuxv covers the /proc emulation only a cosmo build carries.
+func checkProcAuxv() { ok("procauxv", "skipped: not a cosmo build") }
