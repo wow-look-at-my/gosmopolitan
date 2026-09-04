@@ -6564,3 +6564,54 @@ shared `forkpipe2.go` routed that through `Pipe2`, so the read lock
 waited on its own caller. The cosmo port now has its own `forkExecPipe`
 that skips the lock, and the shared one lives in `forkpipe2_cloexec.go`
 with cosmo excluded from its tag.
+
+## Working uname made every macOS APE that links x/crypto die at init (2026-09-03)
+
+`syscall.Uname` used to fail on macOS. The darwin syscall work above gave
+it a real answer, and that turned a dormant hazard into a crash on every
+binary that reaches `golang.org/x/sys/cpu`. go-toolchain found it: its own
+APE, built on linux and run on macos-latest, died before `main` with
+
+```
+SIGILL: illegal instruction
+golang.org/x/sys/cpu.getisar0()
+	cpu_arm64.s:12
+golang.org/x/sys/cpu.readARM64Registers()
+golang.org/x/sys/cpu.doinit()
+	cpu_linux_arm64.go:79
+golang.org/x/sys/cpu.init.0()
+```
+
+The chain, and why it needed a working `uname` to fire. `GOOS=cosmo`
+aliases into `linux`, so `cpu_linux_arm64.go` is the file that compiles.
+Its `doinit` asks `readHWCAP` first, which reads `runtime.getAuxv` and
+then `/proc/self/auxv`. XNU supplies neither: it puts no auxv on the
+process stack, so `sysargs` walked past `envp` and found no pair, and it
+serves no `/proc`, so the open failed too. `getAuxv` therefore answered
+empty and `readHWCAP` returned an error.
+
+That is the point where `doinit` chooses. On an old kernel it parses
+`/proc/cpuinfo`; on Linux 4.11 or newer it reads the ID registers
+directly, because the kernel traps and emulates the `MRS`. It tells the
+two apart with `syscall.Uname` and the major version of `Release`. While
+`Uname` failed, `Release` stayed all zeros, the parse failed, and the safe
+`/proc/cpuinfo` branch ran and found nothing. With `Uname` working, the
+field reads `24.x`, so the code concluded a modern Linux kernel was
+underneath and executed `MRS ID_AA64ISAR0_EL1` on a kernel that traps it
+without emulating it.
+
+Nothing about that is x/sys's mistake: it asked the host what it was and
+believed the answer. The gap is that the cosmo runtime published no auxv
+on a host it fully supports, and an empty auxv is what sends a reader to
+a Linux-only probe. `sysargs` now builds the vector for a macOS host, the
+way the NT boot stub already fabricates one, carrying the one tag it can
+answer: `AT_PAGESZ`, from the same `mincore` probe that already set
+`physPageSize` there. No `AT_HWCAP` pair is written, so a reader sees no
+optional CPU feature, which is exactly what `archauxv` (a no-op on cosmo)
+reports to the standard library's own `internal/cpu`.
+
+The gate is a `runtimeprobe` check, `auxv`, that fails on an empty vector
+and on an `AT_PAGESZ` that disagrees with `os.Getpagesize`. It reaches
+`runtime.getAuxv` through the same `go:linkname` the real consumers use,
+so it runs on all three hosts and would have caught this on the commit
+that landed `uname`.
