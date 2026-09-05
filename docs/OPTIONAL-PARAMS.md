@@ -39,7 +39,8 @@ two roots and cannot say so, or a second exported function per default.
 | Step | Package | State |
 |---|---|---|
 | Parse `= expr`, carry it on `syntax.Field.Default`, print it again | `cmd/compile/internal/syntax` | done |
-| Check the expression, record it on the parameter, enforce trailing | `cmd/compile/internal/types2` | to do |
+| Check the expression and enforce trailing | `cmd/compile/internal/types2` | done |
+| Record the expression on the parameter | `cmd/compile/internal/types2` | to do |
 | Accept a call that omits a defaulted suffix | `cmd/compile/internal/types2` | to do |
 | Insert the default expressions at the call site | `cmd/compile/internal/noder` | to do |
 | The same four for tooling | `go/ast`, `go/parser`, `go/types` | to do |
