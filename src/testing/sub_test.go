@@ -1282,11 +1282,15 @@ func TestOutputEscape2(t *T) { testOutputEscape(t) }
 var global *T
 
 func testOutputEscape(t *T) {
+	t.Serial("both callers share the global below, and the second one logs to a test that must already be done")
 	if global == nil {
 		// Store t in a global, to set up for the second execution.
 		global = t
 	} else {
 		// global is inactive here.
 		global.Log("hello")
+		// Under -count=N the next iteration gets a new root, and a test held
+		// from this one has no incomplete parent left to log to.
+		global = nil
 	}
 }

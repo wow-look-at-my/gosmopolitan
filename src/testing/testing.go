@@ -2900,6 +2900,10 @@ func (m *M) Run() (code int) {
 		fuzzTargetsRan, fuzzTargetsOk := runFuzzTests(m.deps, m.fuzzTargets, deadline)
 		exampleRan, exampleOk := runExamples(m.deps.MatchString, m.examples)
 		m.stopAlarm()
+		// A serial test stops every other test in the package, so a call that
+		// did not justify itself is reported where a green run still shows
+		// it. The per-test log this repeats only appears under -v.
+		serialReasons.report(os.Stderr)
 		if !testRan && !exampleRan && !fuzzTargetsRan && *matchBenchmarks == "" && *matchFuzz == "" {
 			fmt.Fprintln(os.Stderr, "testing: warning: no tests to run")
 			if testingTesting && *match != "^$" {

@@ -33,6 +33,17 @@ against the calling test as `warning: t.Serial: ...`:
 | Does not repeat the test's name or file | Both sit next to the warning already; repeating them spends the length saying nothing. |
 | At most 98% the same as another reason in the binary | This is the rule with teeth. |
 
+Each warning is logged against the calling test, and the run prints one summary to stderr after the tests finish:
+
+```
+testing: 2 t.Serial call(s) did not justify stopping the package:
+	widget_test.go:88: no reason given. Pass one: ...
+	widget_test.go:140: reason is 99.1% the same as the one TestOther gives at widget_test.go:88 ...
+```
+
+The summary is the visible half. A log line on a passing test appears only under `-v`, and this rule is about a cost
+the whole package pays whether or not anything failed.
+
 The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly stops
 being parallel: each call looks defensible on its own, and the 84th one costs as much as the first. Two tests that
 serialize for the same reason usually want `t.Fork` instead, which gives each a process and stops nobody.

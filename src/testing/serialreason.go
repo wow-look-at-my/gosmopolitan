@@ -6,6 +6,7 @@ package testing
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 )
@@ -37,9 +38,10 @@ type serialReason struct {
 // reason in isolation would pass a file whose every test pastes the same
 // sentence.
 type serialReasonRegistry struct {
-	mu    sync.Mutex
-	sites map[string]bool // call sites already registered
-	all   []serialReason
+	mu       sync.Mutex
+	sites    map[string]bool // call sites already registered
+	all      []serialReason
+	reported []string // warnings, for the summary at the end of the run
 }
 
 // serialReasons is the registry the running test binary shares.
@@ -103,14 +105,47 @@ func (r *serialReasonRegistry) check(testName, file string, line int, reason []s
 	return warnings
 }
 
+// report writes the run's collected warnings and forgets them. It is called
+// once, after the tests, because a warning logged against a passing test is
+// invisible without -v, and this rule is about a cost the whole package pays.
+func (r *serialReasonRegistry) report(w io.Writer) {
+	r.mu.Lock()
+	reported := r.reported
+	r.reported = nil
+	r.mu.Unlock()
+
+	if len(reported) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "testing: %d t.Serial call(s) did not justify stopping the package:\n", len(reported))
+	for _, line := range reported {
+		fmt.Fprintf(w, "\t%s\n", line)
+	}
+}
+
+// takeReported drops the warnings collected so far and returns them. A test
+// that produced a warning on purpose calls it, so the deliberate warning does
+// not reach the summary at the end of the run.
+func (r *serialReasonRegistry) takeReported() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reported := r.reported
+	r.reported = nil
+	return reported
+}
+
 // checkSerialReason reports every rule this test's reason breaks. Each report
 // is a warning and the test still runs alone: refusing to serialize a test
 // that asked for it would run that test against the state it is guarding, and
 // a suite must not fail over its own prose.
 func (t *T) checkSerialReason(reason []string, file string, line int) {
 	t.Helper()
+	site := fmt.Sprintf("%s:%d", baseName(file), line)
 	for _, w := range serialReasons.check(t.Name(), file, line, reason) {
 		t.Logf("warning: t.Serial: %s", w)
+		serialReasons.mu.Lock()
+		serialReasons.reported = append(serialReasons.reported, site+": "+w)
+		serialReasons.mu.Unlock()
 	}
 }
 

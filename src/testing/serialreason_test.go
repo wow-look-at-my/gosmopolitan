@@ -231,6 +231,34 @@ func TestSerialWarnsThroughT(t *T) {
 	if !strings.Contains(out, "warning: t.Serial: no reason given") {
 		t.Errorf("output did not carry the warning:\n%s", out)
 	}
+	// The warning above was asked for, so it must not reach the summary the
+	// run prints at the end.
+	if got := serialReasons.takeReported(); len(got) != 1 {
+		t.Errorf("the run collected %d warnings, want the one this test made: %q", len(got), got)
+	}
+}
+
+func TestSerialReasonReport(t *T) {
+	var r serialReasonRegistry
+	var buf bytes.Buffer
+
+	r.report(&buf)
+	if buf.Len() != 0 {
+		t.Errorf("a run with nothing to report wrote %q", buf.String())
+	}
+
+	r.reported = []string{"a_test.go:1: no reason given"}
+	r.report(&buf)
+	out := buf.String()
+	if !strings.Contains(out, "1 t.Serial call(s)") || !strings.Contains(out, "a_test.go:1") {
+		t.Errorf("summary did not name the count and the site:\n%s", out)
+	}
+	// Reporting forgets, so a second call says nothing.
+	buf.Reset()
+	r.report(&buf)
+	if buf.Len() != 0 {
+		t.Errorf("the summary repeated itself: %q", buf.String())
+	}
 }
 
 type lockedWriter struct {

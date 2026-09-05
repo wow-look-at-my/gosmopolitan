@@ -980,7 +980,7 @@ func TestParentRun(t1 *testing.T) {
 	// Regression test for https://go.dev/issue/64402:
 	// this deadlocked after https://go.dev/cl/506755.
 
-	t1.Serial() // The inner Run must happen while t1's body still runs.
+	t1.Serial("the inner Run has to happen while the outer body is still running, which only a hold guarantees")
 	t1.Run("outer", func(t2 *testing.T) {
 		t2.Log("Hello outer!")
 		t1.Run("not_inner", func(t3 *testing.T) { // Note: this is t1.Run, not t2.Run.
