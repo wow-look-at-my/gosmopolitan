@@ -223,7 +223,12 @@ func decodeOutputID(s string) (OutputID, error) {
 //
 // TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
 // deliberate edit to a test that says why.
-var cacheQuietUntil = time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+//
+// It moves because the outage is still on: the CI run that first tripped the
+// deadline printed `web index fetch: HTTP 404` and a `web put ... HTTP 404`
+// for every batch, on every go command in the job. Delete this and the gates
+// below once a run comes back without them.
+var cacheQuietUntil = time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)
 
 // cacheQuiet reports whether to hold the shared tier's per-request
 // diagnostics back.
