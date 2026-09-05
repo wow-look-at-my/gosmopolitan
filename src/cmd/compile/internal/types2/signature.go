@@ -393,12 +393,12 @@ func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type, 
 	var x operand
 	check.expr(nil, &x, field.Default)
 	check.assignment(&x, typ, "parameter default")
-	if x.mode == invalid {
+	if !x.isValid() {
 		return nil
 	}
 	// A caller in another package reads this value out of export data, so a
 	// constant is the whole of what a default can be for now.
-	if x.mode != constant_ {
+	if x.mode() != constant_ {
 		check.error(field.Default, BadDecl, "parameter default must be a constant")
 		return nil
 	}
