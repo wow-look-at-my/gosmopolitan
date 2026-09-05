@@ -37,29 +37,46 @@ func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !cosmo.Darwin() {
 		return 0, nil, false
 	}
-	auxv := runtime_getAuxv()
-	if len(auxv) == 0 {
+	if len(runtime_getAuxv()) == 0 {
 		// Let the real openat answer, so the caller sees the host's own
 		// error rather than an empty file claiming the vector is empty.
 		return 0, nil, false
 	}
+	fd, err = openAuxv(flags)
+	return fd, err, true
+}
+
+// openAuxv serves the file, with no host test of its own. Openat calls it
+// after the real open failed, which is how a host that is neither macOS nor
+// Linux gets an answer: Windows serves no /proc either, and x/sys/cpu asks
+// for this path there too, because GOOS=cosmo compiles its Linux port.
+func openAuxv(flags int) (fd int, err error) {
+	if flags&O_ACCMODE != O_RDONLY {
+		return -1, EACCES
+	}
+	auxv := runtime_getAuxv()
+	// The kernel's file ends in an AT_NULL pair. runtime.getAuxv leaves it
+	// out, so a reader that stops on the terminator rather than on EOF
+	// needs it put back.
+	pairs := make([]uintptr, len(auxv)+2)
+	copy(pairs, auxv)
 
 	var p [2]int
 	if err := Pipe2(p[:], flags&O_CLOEXEC); err != nil {
-		return 0, err, true
+		return -1, err
 	}
 	word := int(unsafe.Sizeof(uintptr(0)))
-	buf := make([]byte, len(auxv)*word)
-	for i, v := range auxv {
+	buf := make([]byte, len(pairs)*word)
+	for i, v := range pairs {
 		putUintptrLE(buf[i*word:], v)
 	}
 	_, werr := Write(p[1], buf)
 	Close(p[1])
 	if werr != nil {
 		Close(p[0])
-		return 0, werr, true
+		return -1, werr
 	}
-	return p[0], nil, true
+	return p[0], nil
 }
 
 // putUintptrLE writes one auxv word in the little-endian layout the
