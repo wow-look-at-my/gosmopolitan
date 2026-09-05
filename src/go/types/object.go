@@ -297,7 +297,15 @@ type Var struct {
 	origin   *Var // if non-nil, the Var from which this one was instantiated
 	kind     VarKind
 	embedded bool // if set, the variable is an embedded struct field, and name is the type name
+	// deflt is the value of the "= expr" on a parameter, and nil on every other
+	// variable. A call may omit the argument for such a parameter, and the
+	// compiler passes this value instead. Depth: docs/OPTIONAL-PARAMS.md.
+	deflt constant.Value
 }
+
+// Default reports the value a call passes when it omits this parameter, and
+// nil when the parameter has no default.
+func (obj *Var) Default() constant.Value { return obj.deflt }
 
 // A VarKind discriminates the various kinds of variables.
 type VarKind uint8

@@ -8,10 +8,55 @@ package types
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/token"
 	. "internal/types/errors"
+	"strconv"
 	"strings"
 )
+
+// fillParamDefaults appends an argument for each trailing parameter the call
+// omitted, and answers nil when any of them has no default. The arguments are
+// ordinary syntax, so everything after this point sees a full call. Depth:
+// docs/OPTIONAL-PARAMS.md.
+func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, params *Tuple, nargs, npars int) []*operand {
+	for i := nargs; i < npars; i++ {
+		if params.vars[i].deflt == nil {
+			return nil
+		}
+	}
+	// The call site is where the value is spelled, so that is where it points.
+	pos := call.Pos()
+	for i := nargs; i < npars; i++ {
+		arg := defaultLiteral(params.vars[i].deflt, pos)
+		if arg == nil {
+			return nil
+		}
+		call.Args = append(call.Args, arg)
+		x := new(operand)
+		check.expr(nil, x, arg)
+		args = append(args, x)
+	}
+	return args
+}
+
+// defaultLiteral spells a constant as the source a caller would have written.
+// It answers nil for a kind with no such spelling, which paramDefault has
+// already refused at the declaration.
+func defaultLiteral(v constant.Value, pos token.Pos) ast.Expr {
+	switch v.Kind() {
+	case constant.Bool:
+		if constant.BoolVal(v) {
+			return &ast.Ident{NamePos: pos, Name: "true"}
+		}
+		return &ast.Ident{NamePos: pos, Name: "false"}
+	case constant.String:
+		return &ast.BasicLit{ValuePos: pos, Kind: token.STRING, Value: strconv.Quote(constant.StringVal(v))}
+	case constant.Int:
+		return &ast.BasicLit{ValuePos: pos, Kind: token.INT, Value: v.ExactString()}
+	}
+	return nil
+}
 
 // funcInst type-checks a function instantiation.
 // The incoming x must be a generic function.
@@ -526,6 +571,15 @@ func (check *Checker) arguments(call *ast.CallExpr, sig *Signature, targs []Type
 			return
 		}
 		// standard_func(a, b, c)
+	}
+
+	// A call omits a suffix of the parameter list when every parameter in that
+	// suffix carries a default.
+	if !ddd && !sig.variadic && nargs < npars && sigParams != nil {
+		if filled := check.fillParamDefaults(call, args, sigParams, nargs, npars); filled != nil {
+			args = filled
+			nargs = len(args)
+		}
 	}
 
 	// check argument count

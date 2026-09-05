@@ -43,7 +43,17 @@ two roots and cannot say so, or a second exported function per default.
 | Check the constant and enforce trailing | `cmd/compile/internal/types2` | done |
 | Record it on the parameter (`Var.Default`) | `cmd/compile/internal/types2` | done |
 | Accept a call that omits a defaulted suffix, and fill it | `cmd/compile/internal/types2` | done |
-| The same for tooling | `go/ast`, `go/parser`, `go/types` | to do |
+| Parse `= expr`, carry it on `ast.Field.Default`, print it again | `go/ast`, `go/parser`, `go/printer` | done |
+| The same checks and the same fill | `go/types` | done |
+
+`src/internal/types/testdata/check/paramdefaults.go` is one file both
+checkers read, so a rule either package forgets shows up as a missing error
+in that package alone.
+
+An `ast.Field` holds one default and however many names, so `go/parser` gives
+a parameter that has one a field of its own. `gofmt` therefore reprints
+`f(a, b int = 1)` as `f(a int, b int = 1)`. The two declare the same
+function, and no file without a default reformats at all.
 
 The arity check and the lowering land **together**, in one place: `arguments`
 appends a synthesized literal to the call for each omitted parameter, before
