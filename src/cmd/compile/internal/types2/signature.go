@@ -372,6 +372,27 @@ func (check *Checker) recordParenthesizedRecvTypes(expr syntax.Expr, typ Type) {
 	}
 }
 
+// paramDefault checks the "= expr" on one parameter: that the parameter is
+// one that can carry a default at all, and that the expression is assignable
+// to its type. Depth: docs/OPTIONAL-PARAMS.md.
+func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type, isVariadic bool) {
+	if field.Default == nil {
+		return
+	}
+	if kind != ParamVar {
+		check.error(field.Default, BadDecl, "only a function parameter takes a default")
+		return
+	}
+	if isVariadic {
+		// A variadic parameter already defaults to no elements.
+		check.error(field.Default, BadDecl, "variadic parameter cannot take a default")
+		return
+	}
+	var x operand
+	check.expr(nil, &x, field.Default)
+	check.assignment(&x, typ, "parameter default")
+}
+
 // collectParams collects (but does not declare) all parameter/result
 // variables of list and returns the list of names and corresponding
 // variables, and whether the (parameter) list is variadic.
@@ -415,6 +436,7 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 			names = append(names, field.Name)
 			params = append(params, par)
 			named = true
+			check.paramDefault(field, kind, typ, variadic && i == len(list)-1)
 		} else {
 			// anonymous parameter
 			par := newVar(kind, field.Pos(), check.pkg, "", typ)
@@ -422,6 +444,22 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 			names = append(names, nil)
 			params = append(params, par)
 			anonymous = true
+		}
+	}
+
+	// A call omits a suffix of the parameter list, so a default before a
+	// required parameter names a value nothing can ever read.
+	if kind == ParamVar {
+		for i, field := range list {
+			if field.Default == nil {
+				continue
+			}
+			for _, later := range list[i+1:] {
+				if later.Default == nil {
+					check.error(field.Default, BadDecl, "parameter default must not precede a parameter without one")
+					break
+				}
+			}
 		}
 	}
 
