@@ -1,7 +1,8 @@
 // Runtimeprobe exercises the runtime and os-package surface that must
 // work on every APE host today: file I/O, directory listing
 // (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
-// CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
+// the boot auxv every host has to publish, CPU count, the monotonic
+// clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
 // sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process,
@@ -132,6 +133,8 @@ func main() {
 	timed("netbuffers", checkNetBuffers)
 	timed("cloexec", checkCloexec)
 	timed("hostos", checkHostOS)
+	timed("auxv", checkAuxv)
+	timed("procauxv", checkProcAuxv)
 	timed("hwcap", checkHWCAP)
 	timed("procauxv", checkProcAuxv)
 	timed("fdpath", checkFdPath)

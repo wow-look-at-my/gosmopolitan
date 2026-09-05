@@ -176,12 +176,18 @@ func Mknod(path string, mode uint32, dev int) (err error) {
 }
 
 func Open(path string, mode int, perm uint32) (fd int, err error) {
+	// Openat serves /proc/self/auxv itself and adds O_LARGEFILE,
+	// so Open keeps no logic of its own.
 	return Openat(_AT_FDCWD, path, mode, perm)
 }
 
 //sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, err error)
 
 func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) {
+	// The path is absolute, so dirfd cannot change which file it names.
+	if fd, err, ok := openProcSelfAuxv(path, flags); ok {
+		return fd, err
+	}
 	fd, err = openat(dirfd, path, flags|O_LARGEFILE, mode)
 	if err != nil && path == procSelfAuxv {
 		// Only a Linux host owns this file; elsewhere the APE answers

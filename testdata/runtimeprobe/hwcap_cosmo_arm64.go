@@ -8,6 +8,8 @@ package main
 
 import "fmt"
 
+// getAuxv is declared once for the whole package, in auxv_cosmo.go.
+
 const (
 	atHWCAP     = 16
 	hwcapFP     = 1 << 0
@@ -19,11 +21,12 @@ const (
 // through the auxiliary vector.
 //
 // A reader that finds no answer there reads the ID_AA64ISAR* registers
-// instead, and macOS answers that MRS with SIGILL. golang.org/x/sys/cpu
-// does this in its own init, so a binary that merely imports it - through
-// x/crypto, through go-git - dies before main on a Mac. The same value
-// drives internal/cpu, so an absent one also costs the stdlib its AES,
-// SHA and CRC32 assembly on every host.
+// instead, and macOS answers that MRS with SIGILL. That is what killed
+// any binary importing golang.org/x/sys/cpu - through x/crypto, through
+// go-git - before main on a Mac. This value is what internal/cpu reads,
+// so an absent one also costs the stdlib its AES, SHA and CRC32
+// assembly; x/sys/cpu reads /proc/self/auxv instead, which the procauxv
+// check covers.
 func checkHWCAP() {
 	auxv := getAuxv()
 	for i := 0; i+1 < len(auxv); i += 2 {
