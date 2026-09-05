@@ -288,9 +288,11 @@ go tool compile -bench=out.txt file.go
   than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv`
   linkname, but the init that ARMS it sorts after the init that CALLS it,
   so the call always sees nil and the file is the path it really takes.
-  `syscall.Openat` answers the path from `runtime.getAuxv` when the real
-  open fails, handing back the read end of a pipe holding the pairs plus
-  the AT_NULL terminator. So AT_HWCAP now reaches x/sys/cpu too, which is
+  `syscall.Openat` answers the path from `runtime.getAuxv`, handing back
+  the read end of a pipe holding the pairs plus the AT_NULL terminator:
+  before the real open on a macOS host, and after it fails anywhere else,
+  which leaves a Linux host on the kernel's own file and still answers
+  on NT. So AT_HWCAP now reaches x/sys/cpu too, which is
   what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md
   "AT_HWCAP" (2026-09-04).
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).

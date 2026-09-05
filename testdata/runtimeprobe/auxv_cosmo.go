@@ -9,6 +9,9 @@ package main
 import (
 	"fmt"
 	"os"
+
+	// The linkname below needs it.
+	_ "unsafe"
 )
 
 // getAuxv reaches the runtime's own vector the way golang.org/x/sys/cpu

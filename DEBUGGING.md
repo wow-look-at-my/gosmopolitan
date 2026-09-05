@@ -6805,12 +6805,18 @@ major version well past 4.11, x/sys believed the kernel emulates the
 ID_AA64ISAR registers, and the MRS killed the process. That is why this
 regressed on a date when nothing in x/sys or in go-toolchain changed.
 
-Fix: `syscall.Openat` (`syscall/auxv_cosmo.go`) answers `/proc/self/auxv`
-itself when the real open fails. It writes the runtime's own pairs plus
-the AT_NULL terminator into a pipe and returns the read end, so the
-descriptor reads and closes like any other and a Linux host keeps using
-the kernel's file. The vector is a few hundred bytes, far below a pipe
-buffer, so the write cannot block.
+Fix: `syscall.Openat` (`syscall/procauxv_cosmo.go`) answers
+`/proc/self/auxv` itself. It writes the runtime's own pairs plus the
+AT_NULL terminator into a pipe and returns the read end, so the
+descriptor reads and closes like any other. The vector is a few hundred
+bytes, far below a pipe buffer, so the write cannot block.
+
+Two call sites reach the same body. A macOS host takes it before the
+real openat, because there is nothing there to open. Every other host
+takes it only after the real open failed, which keeps a Linux host on
+the kernel's own file and still answers on NT, where `/proc` is equally
+absent and x/sys asks for the path anyway - `GOOS=cosmo` compiles its
+Linux port everywhere.
 
 Gates: `syscall`'s `TestOpenAuxvMatchesTheKernelFile`, which holds the
 served bytes against the kernel's own file on a Linux host and found

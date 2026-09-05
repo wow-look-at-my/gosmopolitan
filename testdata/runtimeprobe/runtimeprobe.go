@@ -136,7 +136,6 @@ func main() {
 	timed("auxv", checkAuxv)
 	timed("procauxv", checkProcAuxv)
 	timed("hwcap", checkHWCAP)
-	timed("procauxv", checkProcAuxv)
 	timed("fdpath", checkFdPath)
 	timed("peercred", checkPeercred)
 	timed("dupfile", checkDupFile)
