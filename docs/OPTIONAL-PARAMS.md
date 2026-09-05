@@ -45,6 +45,7 @@ two roots and cannot say so, or a second exported function per default.
 | Accept a call that omits a defaulted suffix, and fill it | `cmd/compile/internal/types2` | done |
 | Parse `= expr`, carry it on `ast.Field.Default`, print it again | `go/ast`, `go/parser`, `go/printer` | done |
 | The same checks and the same fill | `go/types` | done |
+| Carry it through export data | `cmd/compile/internal/noder`, both importers | done |
 
 `src/internal/types/testdata/check/paramdefaults.go` is one file both
 checkers read, so a rule either package forgets shows up as a missing error
@@ -65,6 +66,18 @@ feature.
 ## Export data
 
 A default is part of a function's signature for a caller in another package,
-so it has to survive export. Until it does, a default is usable only inside
-the package that declares it. A call from another package still compiles: it
-sees a parameter with no default, and has to pass every argument.
+so it rides the unified IR. `pkgbits.V5` adds it: the writer emits a bool per
+parameter and the constant behind it, and the three readers take it back —
+`noder` for the compiler, `cmd/compile/internal/importer` for types2, and
+`go/internal/gcimporter` for `go/types`. A stream at an older version carries
+no such bit, so nothing there changes.
+
+The compiler's own reader drops the value it reads. types2 fills an omitted
+argument before the IR exists, so every call `noder` sees is already full and
+the default has nothing left to do.
+
+Three tests cover it. `test/paramdefaults.dir` compiles a library and a caller
+in separate packages and runs the result. `TestParameterDefaults` in
+`go/internal/gcimporter` reads the same defaults back off a compiled object
+through `go/types`. And `src/internal/types/testdata/check/paramdefaults.go`
+holds the rules both checkers enforce inside one package.

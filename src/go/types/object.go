@@ -307,6 +307,10 @@ type Var struct {
 // nil when the parameter has no default.
 func (obj *Var) Default() constant.Value { return obj.deflt }
 
+// SetDefault sets the value a call passes when it omits this parameter. The
+// importer calls it to restore a default the export data carried.
+func (obj *Var) SetDefault(val constant.Value) { obj.deflt = val }
+
 // A VarKind discriminates the various kinds of variables.
 type VarKind uint8
 

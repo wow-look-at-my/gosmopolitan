@@ -371,7 +371,11 @@ func (r *reader) param() *types2.Var {
 	pkg, name := r.localIdent()
 	typ := r.typ()
 
-	return types2.NewParam(pos, pkg, name, typ)
+	param := types2.NewParam(pos, pkg, name, typ)
+	if r.Version().Has(pkgbits.ParamDefaults) && r.Bool() {
+		param.SetDefault(r.Value())
+	}
+	return param
 }
 
 // @@@ Objects
