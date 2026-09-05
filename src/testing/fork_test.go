@@ -122,6 +122,62 @@ func TestForkReportsTheChildsFailure(t *T) {
 	}
 }
 
+// TestAllocsPerRunForks: AllocsPerRun measures the whole process, so a caller
+// that shares it forks. Tests are parallel by default, so this test is such a
+// caller: the measurement below runs only in a child that runs this test alone.
+func TestAllocsPerRunForks(t *T) {
+	if os.Getenv(forkTargetEnv) == "" {
+		AllocsPerRun(1, func() {})
+		t.Fatal("AllocsPerRun returned in a process this test shares with others; it must fork first")
+	}
+
+	if allocs := AllocsPerRun(100, func() { allocsSink = new(int32) }); allocs != 1 {
+		t.Errorf("AllocsPerRun(100, new(int32)) = %v, want 1", allocs)
+	}
+}
+
+var allocsSink any
+
+// TestAllocsPerRunUnderSerialDoesNotFork: a serial test already has the process
+// to itself, so the measurement happens right here. A fork would run the rest
+// of this test in a child, where the marker is set.
+func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
+	t.Serial()
+
+	AllocsPerRun(1, func() {})
+	if got := os.Getenv(forkTargetEnv); got != "" {
+		t.Fatalf("%s = %q: AllocsPerRun forked a serial test", forkTargetEnv, got)
+	}
+}
+
+// TestAllocsPerRunRefusesBesideASibling: a fork gives the test a process, not
+// the process to itself, so the subtests of a forked test still run at the
+// same time. A second fork would land in the same place, so the measurement
+// refuses here and names the method that stops them.
+func TestAllocsPerRunRefusesBesideASibling(t *T) {
+	t.Fork()
+
+	running, release := make(chan struct{}), make(chan struct{})
+	t.Run("busy", func(t *T) {
+		close(running)
+		<-release
+	})
+	t.Run("measuring", func(t *T) {
+		<-running
+		defer close(release)
+		defer func() {
+			err, ok := recover().(error)
+			if !ok {
+				t.Fatal("AllocsPerRun measured while a sibling subtest was running")
+			}
+			if !strings.Contains(err.Error(), "t.Serial") {
+				t.Errorf("panic says %q; it must name t.Serial, which is the fix", err)
+			}
+		}()
+		AllocsPerRun(1, func() {})
+	})
+}
+
 func TestForkRunPattern(t *T) {
 	for _, tc := range []struct{ name, want string }{
 		{"TestFoo", "^TestFoo$"},

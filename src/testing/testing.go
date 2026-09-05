@@ -2000,7 +2000,19 @@ func (t *T) Fork() {
 		return
 	}
 	t.Helper()
+	t.forkAndTakeTheResult()
 
+	// The body belongs to the child, so stop the parent's copy here. This is
+	// FailNow's mechanism without its failure: the deferred functions in
+	// tRunner still run, and they are what report the test.
+	runtime.Goexit()
+}
+
+// forkAndTakeTheResult runs this test in a child process and makes the child's
+// result this test's own. It marks the test finished, because the body it
+// belongs to is over here either way: Fork calls this from the body and stops
+// it, and an allocsFork panic reaches tRunner with the body already unwound.
+func (t *T) forkAndTakeTheResult() {
 	output, err := t.runForked()
 	if len(output) > 0 {
 		t.log(strings.TrimRight(string(output), "\n"), err != nil)
@@ -2010,13 +2022,9 @@ func (t *T) Fork() {
 		t.log("fork: "+err.Error(), true)
 	}
 
-	// The body belongs to the child, so stop the parent's copy here. This is
-	// FailNow's mechanism without its failure: the deferred functions in
-	// tRunner still run, and they are what report the test.
 	t.mu.Lock()
 	t.finished = true
 	t.mu.Unlock()
-	runtime.Goexit()
 }
 
 // runForked starts one child process for this test, and returns everything the
@@ -2296,6 +2304,14 @@ func tRunner(t *T, fn func(t *T)) {
 		// find short inputs that cause panics.
 		err := recover()
 		signal := true
+
+		if _, ok := err.(allocsFork); ok {
+			// AllocsPerRun asked for a process of its own, from a function that
+			// gets no *T. Give it one here: the body is over, and the child
+			// re-runs this test alone, exactly as Fork does.
+			err = nil
+			t.forkAndTakeTheResult()
+		}
 
 		t.mu.RLock()
 		finished := t.finished
