@@ -179,6 +179,8 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/go/internal/work
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/go/internal/cache
+          # The fork inverts this package's own default -- tests are parallel, and Serial and Fork are the two opt-outs -- so its suite is the only thing that covers the divergence.
+          GOOS=linux GOARCH=amd64 go test -count=1 testing
           # A list here, unlike the one above: cmd/go carries thousands of upstream scripts and the whole suite outruns this step's budget, so these name the fork-rewritten paths (cosmo env, the APE merge under -n, modload's replace check, and go install/run pkg@version honoring a queried module's own replace/exclude directives).
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/(env_cosmo|build_gcflags_order|godebug_removed|install_backslash|modfile_flag|run_vers|work_install_submodule|mod_replace|mod_tidy_replace|mod_vendor_replace|mod_install_pkg_version|mod_run_pkg_version|work_sync_check_multiple_paths_once)$' cmd/go
 

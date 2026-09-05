@@ -9,9 +9,17 @@ A test failing only under this fork's `go test` is almost always one of these.
 ## t.Serial
 
 A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` -
-calls `t.Serial(reason)`, which waits for every other test to stop and runs the caller alone until it returns;
-`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` take it themselves. A serial test's subtests run one at a time
-under its hold.
+calls `t.Serial(reason)`, which waits for every other test to stop and runs the caller alone until it returns.
+`testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
+
+`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each
+changes state the child gets its own copy of, so all three reach `t.Fork()` instead and leave the suite running. One
+test setting an environment variable is no reason to stop every other test in the binary.
+
+They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no
+process creation, and iOS does not let a process exec another one. The isolation is the same either way; only the
+price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the
+process state and cannot be given one.
 
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
@@ -76,9 +84,18 @@ Mechanics:
   calls Fork gets a child running exactly that subtest.
 - The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. Its
   presence is also how a child knows never to fork again, so a forked test that runs subtests - or whose subtests
-  call Fork - still runs in exactly one child.
-- The child inherits the environment plus `-test.v`, `-test.timeout`, `-test.short`, `-test.fullpath` and
-  `-test.gocoverdir`, so verbose output still appears and the child's coverage counts toward the same profile.
+  call Fork - still runs in exactly one child. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside
+  the child they change the process in place rather than starting a grandchild.
+- The parent runs the body as far as the Fork call before it hands over, so whatever the test does before that point
+  happens twice. This is worth knowing where `t.Setenv` sits partway down a test rather than at the top.
+- The children alive at once cannot outnumber `-parallel`, because a forked test holds its slot while it waits.
+- The child inherits the environment plus the arguments the run was given, with only `-test.run` and `-test.count`
+  replaced. Verbose output still appears and the child's coverage counts toward the same profile, and a package's
+  own flags survive too - `cmd/internal/testdir` reads `-target` to decide what it compiles for, and a child without
+  it would test the host and report that as the answer.
+- The child's `-test.run` anchors the forked test and then carries the rest of the run's own pattern, so the tests
+  BELOW it stay filtered. Anchoring the name alone would select every subtest under it, which is how one forked
+  top-level test turns `-run Test/wasmexport` into a full compile of `GOROOT/test`.
 - The child's output becomes the test's output, and a child that cannot be started, or that dies on a signal, is
   reported against the test.
 
@@ -88,6 +105,11 @@ so it panics with the internal `allocsFork` value; `tRunner` already recovers, a
 The child re-runs that one test alone and measures. A caller that already has the process - a forked child, a serial
 test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a
 goroutine that is no test, its message names `t.Fork` and `t.Serial`.
+
+On `js`, `wasip1` and `ios` there is no child to measure in, so that panic fails the test with a message naming
+`t.Serial()` - the one way left to give the measurement the process. No runner executes that path, since every host
+this fork builds on can start a process; it exists so the failure names the remedy instead of a pipe the host was
+never going to open.
 
 It is fork+exec, not `fork(2)`: the child is a fresh process re-running the test binary. A bare `fork(2)` is not
 safe in Go - the child would inherit only the calling thread, with the runtime's other threads gone and any lock

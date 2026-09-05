@@ -66,7 +66,8 @@ To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/
 `t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial(reason)` stops every other test and runs the
 caller alone in this process; `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit
 status as the verdict - which is what a test wants when the shared state is process-global, since the child gets
-its own copy. A test failing only under this fork's `go test` is almost always one of these.
+its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite.
+A test failing only under this fork's `go test` is almost always one of these.
 `Serial` warns, and runs the test anyway, when its reason is missing, under 48 characters, an echo of the test's own
 name or file, or over 98% the same as another reason in the same test binary - a pasted sentence across a file is how
 a package stops being parallel one defensible-looking call at a time.
