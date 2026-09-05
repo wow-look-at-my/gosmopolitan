@@ -127,8 +127,15 @@ func run[T TBRun[T]](t T, f func(t T, mode testMode), opts ...any) {
 			t.Fatalf("unknown option type %T", opt)
 		}
 	}
-	if t, ok := any(t).(*testing.T); ok && parallel {
-		setParallel(t)
+	if t, ok := any(t).(*testing.T); ok {
+		if parallel {
+			setParallel(t)
+		} else {
+			// testNotParallel used to work by not calling t.Parallel. Tests are
+			// parallel by default here and that call is a no-op, so the option
+			// means nothing unless it takes the barrier.
+			t.Serial("the caller passed testNotParallel: its modes share fixtures only one runner may touch")
+		}
 	}
 	for _, mode := range modes {
 		// TODO(nsh): re-enable the tests once tree re-opens.
