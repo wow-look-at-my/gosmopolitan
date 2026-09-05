@@ -103,16 +103,25 @@ allowance. Host-run compiler tests, so GOOS is pinned away from cosmo. The
 inlining regress tests assert that more inlining does not break the
 existing expectations for what does and does not get inlined.
 
-**Parameter defaults (checkers, export data, cross-package).** See
-docs/OPTIONAL-PARAMS.md. Three layers, and nothing in this workflow ran any
-of them before: `TestCheck/paramdefaults.go` is the one testdata file both
-checkers read, so a rule either package forgets shows up as a missing error
-in that package alone; `TestParameterDefaults` in `go/internal/gcimporter`
-reads the defaults back off a compiled object through `go/types`; and
-`test/paramdefaults.go` compiles a library and a caller in separate packages
-and runs the result, which is the only one of the three that fails when a
-default stops crossing the package boundary. Host-run compiler tests, so
-GOOS is pinned away from cosmo.
+**The type checkers and their importers.** This workflow runs no `all.bash`
+and no `go test std`, so every other step here names the tests it wants. A
+test nobody names never runs, which makes green a statement about the list
+rather than about the tree. This step names PACKAGES instead:
+`cmd/compile/internal/types2`, `go/types` and `go/internal/gcimporter` run
+whole, and a test added to any of them runs without an edit here.
+
+What that buys today is the parameter-default work of
+docs/OPTIONAL-PARAMS.md, in three layers.
+`internal/types/testdata/check/paramdefaults.go` is one file both checkers
+read, so a rule either package forgets shows up as a missing error in that
+package alone. `TestParameterDefaults` reads the defaults back off a
+compiled object through `go/types`. And `test/paramdefaults.go` compiles a
+library and a caller in separate packages and runs the result, which is the
+layer that goes red when a default stops crossing the package boundary.
+
+That last one keeps a `-run` filter, because its package is the whole
+`test/` corpus and running it entire is an hour, not a minute. Host-run
+compiler tests, so GOOS is pinned away from cosmo.
 
 ## test job
 

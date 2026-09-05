@@ -222,15 +222,14 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
 
-      - name: Parameter defaults (checkers, export data, cross-package)
-        # see docs/OPTIONAL-PARAMS.md. Host-run compiler tests, so GOOS is pinned away from cosmo.
+      - name: The type checkers and their importers
+        # whole packages, so a test added there runs without editing this file. see docs/CI.md.
         if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
+        timeout-minutes: 20
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestCheck/paramdefaults' cmd/compile/internal/types2 go/types
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestParameterDefaults' go/internal/gcimporter
+          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/types2 go/types go/internal/gcimporter
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/paramdefaults\.go'
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
