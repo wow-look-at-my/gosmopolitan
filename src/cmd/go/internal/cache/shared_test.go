@@ -590,6 +590,13 @@ func holdQuietWindowOpen(t *testing.T) {
 //
 // This test also fails once the real deadline passes and the window was
 // never removed, so extending it is a deliberate edit here and not a drift.
+//
+// The deadline stands past its first date because the outage has not ended.
+// The build leg that fired this test printed `web index fetch: HTTP 404` and
+// `web put [...]: HTTP 404` beside it, so the server still refuses its index
+// and every upload, and the shared tier stores nothing in CI. The window buys
+// silence, never a fix: a green build here says the cache is quiet, not that
+// the cache works.
 func TestSharedCache_QuietWindowExpires(t *testing.T) {
 	if !cacheQuietUntil.After(time.Now()) {
 		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+

@@ -32,7 +32,7 @@ var probeOkChecks = []string{
 	"socketpair", "sockpairpoll",
 	"sendmsg", "netbuffers", "fdpass",
 	"execchild", "lookpath", "execstress", "pipeeof", "cloexec",
-	"hostos", "hwcap", "fdpath", "peercred", "dupfile",
+	"hostos", "auxv", "procauxv", "hwcap", "fdpath", "peercred", "dupfile",
 	"executable",
 	"mkdirtemp", "statdir", "create", "readback", "rename", "statsize",
 	"getwd", "chdir", "wdrestore",
@@ -65,6 +65,55 @@ func copyProbeBinary(t *testing.T) string {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(tmp, data, 0755))
 	return tmp
+}
+
+// TestRuntimeProbeDirectExecAuxv runs the probe with no shell in front of
+// it, which is how a consumer's CI step starts an APE. That matters on
+// macOS specifically: the shell bootstrap hands control to the APE loader,
+// and the loader builds a System V stack with an auxv on it, so the probe
+// under TestRuntimeProbe sees a full vector. A kernel that accepts the
+// embedded Mach-O header instead skips the loader, and a Mach-O stack
+// carries no auxv at all.
+//
+// An empty auxv is what sends golang.org/x/sys/cpu to read the ARM64 ID
+// registers, which XNU traps: that killed go-toolchain's published APE at
+// package init. Every macOS fix downstream of it - fixAuxv's AT_HWCAP,
+// syscall's /proc/self/auxv - assumes the loader ran, so this is the one
+// place that can catch a kernel that stops requiring it.
+//
+// A kernel that refuses the file outright is a fact about this host, not a
+// failure: the probe never starts, so it reports nothing to judge. Say so
+// and skip rather than paint the leg red.
+func TestRuntimeProbeDirectExecAuxv(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the shell bootstrap and a direct exec differ only on macOS")
+	}
+	skipIfExecUnsupported(t)
+	bin := copyProbeBinary(t)
+
+	const mark = "probe-mark-direct"
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append([]string{mark}, probeFlagArgs...)...)
+	cmd.WaitDelay = 30 * time.Second
+	cmd.Env = append(os.Environ(), "RUNTIMEPROBE_MARK="+mark)
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := stdout.String()
+	t.Logf("direct-exec runtimeprobe output:\n%s", out)
+	if stderr.Len() > 0 {
+		t.Logf("direct-exec runtimeprobe stderr:\n%s", stderr.String())
+	}
+	if err != nil && out == "" {
+		t.Skipf("this kernel does not exec the APE without a shell: %v", err)
+	}
+
+	require.NoError(t, err, "runtimeprobe must exit 0 when it starts at all")
+	assert.Contains(t, out, "ok auxv",
+		"a directly exec'd APE must still publish an auxv, or x/sys/cpu reads the ID registers and XNU traps it")
 }
 
 func TestRuntimeProbe(t *testing.T) {

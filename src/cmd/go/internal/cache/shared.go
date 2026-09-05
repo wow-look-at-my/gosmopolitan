@@ -223,7 +223,7 @@ func decodeOutputID(s string) (OutputID, error) {
 //
 // TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
 // deliberate edit to a test that says why.
-var cacheQuietUntil = time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+var cacheQuietUntil = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 
 // cacheQuiet reports whether to hold the shared tier's per-request
 // diagnostics back.
