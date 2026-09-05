@@ -32,8 +32,8 @@ two roots and cannot say so, or a second exported function per default.
   as a rational.
 - The constant must be **assignable to the parameter type**, by the ordinary
   assignability rules. An untyped one converts exactly as an argument would.
-- A **variadic** parameter already has a default (no elements) and takes no
-  `=`.
+- A **variadic** parameter already has a default: no elements. The parser
+  reads `...T` and stops there, so an `=` after one is a syntax error.
 
 ## Where it lives
 

@@ -38,3 +38,22 @@ func _() {
 	f := read
 	_ = f()
 }
+
+var global int
+
+func _(n int = global /* ERROR "parameter default must be a constant" */) {}
+
+func _(s string = read /* ERROR "parameter default must be a constant" */ ()) {}
+
+func _(f float64 = 1.5 /* ERROR "parameter default must be a boolean, string or integer constant" */) {}
+
+func _(s string = 1 /* ERROR "cannot use 1" */) {}
+
+func _(a int = 1 /* ERROR "parameter default must not precede a parameter without one" */, b int) {}
+
+func _() (r int = 1 /* ERROR "only a function parameter takes a default" */) { return r }
+
+// A parameter without a default is still required.
+func _() {
+	_ = required /* ERROR "not enough arguments" */ ()
+}

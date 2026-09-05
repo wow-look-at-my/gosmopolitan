@@ -377,17 +377,12 @@ func (check *Checker) recordParenthesizedRecvTypes(expr syntax.Expr, typ Type) {
 // checks that the parameter is one that can carry a default at all, and that
 // the expression is a constant assignable to its type. Depth:
 // docs/OPTIONAL-PARAMS.md.
-func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type, isVariadic bool) constant.Value {
+func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type) constant.Value {
 	if field.Default == nil {
 		return nil
 	}
 	if kind != ParamVar {
 		check.error(field.Default, BadDecl, "only a function parameter takes a default")
-		return nil
-	}
-	if isVariadic {
-		// A variadic parameter already defaults to no elements.
-		check.error(field.Default, BadDecl, "variadic parameter cannot take a default")
 		return nil
 	}
 	var x operand
@@ -455,7 +450,7 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 			names = append(names, field.Name)
 			params = append(params, par)
 			named = true
-			par.deflt = check.paramDefault(field, kind, typ, variadic && i == len(list)-1)
+			par.deflt = check.paramDefault(field, kind, typ)
 		} else {
 			// anonymous parameter
 			par := newVar(kind, field.Pos(), check.pkg, "", typ)
