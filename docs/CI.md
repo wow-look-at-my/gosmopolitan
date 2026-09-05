@@ -103,6 +103,17 @@ allowance. Host-run compiler tests, so GOOS is pinned away from cosmo. The
 inlining regress tests assert that more inlining does not break the
 existing expectations for what does and does not get inlined.
 
+**Parameter defaults (checkers, export data, cross-package).** See
+docs/OPTIONAL-PARAMS.md. Three layers, and nothing in this workflow ran any
+of them before: `TestCheck/paramdefaults.go` is the one testdata file both
+checkers read, so a rule either package forgets shows up as a missing error
+in that package alone; `TestParameterDefaults` in `go/internal/gcimporter`
+reads the defaults back off a compiled object through `go/types`; and
+`test/paramdefaults.go` compiles a library and a caller in separate packages
+and runs the result, which is the only one of the three that fails when a
+default stops crossing the package boundary. Host-run compiler tests, so
+GOOS is pinned away from cosmo.
+
 ## test job
 
 **Windows execution acceptance overview.** The windows-latest leg is also
