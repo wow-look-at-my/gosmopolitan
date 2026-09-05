@@ -2073,36 +2073,61 @@ func (t *T) runForked() ([]byte, error) {
 // for, and a child without it silently tests the host instead.
 func forkArgs(name string, argv []string) []string {
 	args := make([]string, 0, len(argv)+2)
-	dropValue := false
+	run, awaiting := "", ""
 	for _, arg := range argv {
-		if dropValue {
-			dropValue = false
+		if awaiting != "" {
+			if awaiting == "test.run" {
+				run = arg
+			}
+			awaiting = ""
 			continue
 		}
-		// The child names its own selection below, so the run's must go. Left
-		// in place, -test.run would keep the parent's narrower pattern and the
-		// child would select nothing, or none of what the parent asked for.
-		if flagName, hasValue := forkFlagName(arg); flagName == "test.run" || flagName == "test.count" {
-			dropValue = !hasValue
+		flagName, value, hasValue := forkFlag(arg)
+		if flagName != "test.run" && flagName != "test.count" {
+			args = append(args, arg)
 			continue
 		}
-		args = append(args, arg)
+		if !hasValue {
+			awaiting = flagName
+			continue
+		}
+		if flagName == "test.run" {
+			run = value
+		}
 	}
-	return append(args, "-test.run="+forkRunPattern(name), "-test.count=1")
+	return append(args, "-test.run="+forkRunValue(name, run), "-test.count=1")
 }
 
-// forkFlagName returns the flag an argument names, and whether the argument
-// carries the value as well. An argument that names no flag returns an empty
-// name.
-func forkFlagName(arg string) (name string, hasValue bool) {
+// forkRunValue builds the child's -test.run: this test, anchored element by
+// element, and then whatever the run's own pattern says about the tests BELOW
+// it.
+//
+// That tail is what keeps the child's work the same size as the parent's.
+// Anchoring the name alone selects the test AND every subtest under it, so a
+// top-level test that forks under -run Test/wasmexport would compile the whole
+// suite instead of the handful the run named.
+func forkRunValue(name, run string) string {
+	pattern := forkRunPattern(name)
+	depth := strings.Count(name, "/") + 1
+	tail := strings.Split(run, "/")
+	if run == "" || len(tail) <= depth {
+		return pattern
+	}
+	return pattern + "/" + strings.Join(tail[depth:], "/")
+}
+
+// forkFlag returns the flag an argument names, its value, and whether the
+// argument carries that value rather than leaving it to the next argument. An
+// argument that names no flag returns an empty name.
+func forkFlag(arg string) (name, value string, hasValue bool) {
 	if !strings.HasPrefix(arg, "-") {
-		return "", false
+		return "", "", false
 	}
 	arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
-	if before, _, ok := strings.Cut(arg, "="); ok {
-		return before, true
+	if before, after, ok := strings.Cut(arg, "="); ok {
+		return before, after, true
 	}
-	return arg, false
+	return arg, "", false
 }
 
 // forkRunPattern builds the -test.run value that selects one test, and only

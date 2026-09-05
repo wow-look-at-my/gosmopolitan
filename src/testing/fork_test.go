@@ -197,12 +197,12 @@ func TestForkArgs(t *T) {
 	}{
 		{
 			name: "a custom flag is carried",
-			argv: []string{"-test.run=Test/wasmexport", "-target=js/wasm"},
+			argv: []string{"-test.run=TestFoo", "-target=js/wasm"},
 			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
 		},
 		{
-			name: "a selection given as two words drops both",
-			argv: []string{"-test.run", "Test/wasmexport", "-target=js/wasm"},
+			name: "a selection given as two words is read, not passed on",
+			argv: []string{"-test.run", "TestFoo", "-target=js/wasm"},
 			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
 		},
 		{
@@ -220,6 +220,14 @@ func TestForkArgs(t *T) {
 			argv: []string{"positional", "-test.short"},
 			want: []string{"positional", "-test.short", "-test.run=^TestFoo$", "-test.count=1"},
 		},
+		{
+			// The whole reason the run's pattern is read rather than dropped:
+			// the child must compile what the run named, not every subtest
+			// under it. This is the shape that ran the testdir suite dry.
+			name: "the run's filter on the subtests below survives",
+			argv: []string{"-test.run=TestFoo/wasmexport", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$/wasmexport", "-test.count=1"},
+		},
 	} {
 		t.Run(tc.name, func(t *T) {
 			got := forkArgs("TestFoo", tc.argv)
@@ -232,6 +240,22 @@ func TestForkArgs(t *T) {
 				}
 			}
 		})
+	}
+}
+
+func TestForkRunValue(t *T) {
+	for _, tc := range []struct{ name, run, want string }{
+		{"Test", "", "^Test$"},
+		{"Test", "Test", "^Test$"},
+		{"Test", "Test/wasmexport", "^Test$/wasmexport"},
+		{"Test", "Test/wasmexport/deeper", "^Test$/wasmexport/deeper"},
+		// The forked test already names every element the run did, so there is
+		// no tail left to carry.
+		{"Test/wasmexport", "Test/wasmexport", "^Test$/^wasmexport$"},
+	} {
+		if got := forkRunValue(tc.name, tc.run); got != tc.want {
+			t.Errorf("forkRunValue(%q, %q) = %q, want %q", tc.name, tc.run, got, tc.want)
+		}
 	}
 }
 

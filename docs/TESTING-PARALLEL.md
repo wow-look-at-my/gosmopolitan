@@ -53,6 +53,9 @@ Mechanics:
   replaced. Verbose output still appears and the child's coverage counts toward the same profile, and a package's
   own flags survive too - `cmd/internal/testdir` reads `-target` to decide what it compiles for, and a child without
   it would test the host and report that as the answer.
+- The child's `-test.run` anchors the forked test and then carries the rest of the run's own pattern, so the tests
+  BELOW it stay filtered. Anchoring the name alone would select every subtest under it, which is how one forked
+  top-level test turns `-run Test/wasmexport` into a full compile of `GOROOT/test`.
 - The child's output becomes the test's output, and a child that cannot be started, or that dies on a signal, is
   reported against the test.
 
