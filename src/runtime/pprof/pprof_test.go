@@ -421,6 +421,7 @@ func parseProfile(t *testing.T, valBytes []byte, f func(uintptr, []*profile.Loca
 // testCPUProfile runs f under the CPU profiler, checking for some conditions specified by need,
 // as interpreted by matches, and returns the parsed profile.
 func testCPUProfile(t *testing.T, matches profileMatchFunc, f func(dur time.Duration)) *profile.Profile {
+	t.Serial("there is one CPU profile for the process, and a second start while this one runs fails outright")
 	switch runtime.GOOS {
 	case "darwin":
 		out, err := testenv.Command(t, "uname", "-a").CombinedOutput()
@@ -623,6 +624,7 @@ func matchAndAvoidStacks(matches sampleMatchFunc, need []string, avoid []string)
 // Fork can hang if preempted with signals frequently enough (see issue 5517).
 // Ensure that we do not do this.
 func TestCPUProfileWithFork(t *testing.T) {
+	t.Serial("the child below must be started while a profile runs, and only one can be running here")
 	testenv.MustHaveExec(t)
 
 	exe, err := os.Executable()
@@ -665,6 +667,7 @@ func TestCPUProfileWithFork(t *testing.T) {
 // If it did, it would see inconsistent state and would either record an incorrect stack
 // or crash because the stack was malformed.
 func TestGoroutineSwitch(t *testing.T) {
+	t.Serial("each try below starts and stops the single process-wide profiler, which nothing else may hold")
 	if runtime.Compiler == "gccgo" {
 		t.Skip("not applicable for gccgo")
 	}
@@ -1803,6 +1806,7 @@ func TestGoroutineLeakProfileConcurrency(t *testing.T) {
 }
 
 func TestGoroutineProfileConcurrency(t *testing.T) {
+	t.Serial("a goroutine profile lists every goroutine alive, so one parked in another test appears in it")
 	testenv.MustHaveParallelism(t)
 
 	goroutineProf := Lookup("goroutine")
@@ -2431,6 +2435,7 @@ func parallelLabelHog(ctx context.Context, dur time.Duration, gogc int) {
 // Check that there is no deadlock when the program receives SIGPROF while in
 // 64bit atomics' critical section. Used to happen on mips{,le}. See #20146.
 func TestAtomicLoadStore64(t *testing.T) {
+	t.Serial("the SIGPROF stream this needs comes from the one profiler the whole process shares")
 	f, err := os.CreateTemp("", "profatomic")
 	if err != nil {
 		t.Fatalf("TempFile: %v", err)
@@ -2458,6 +2463,7 @@ func TestAtomicLoadStore64(t *testing.T) {
 }
 
 func TestTracebackAll(t *testing.T) {
+	t.Serial("profiling signals have to be arriving during the tracebacks below, from the process-wide profiler")
 	// With gccgo, if a profiling signal arrives at the wrong time
 	// during traceback, it may crash or hang. See issue #29448.
 	f, err := os.CreateTemp("", "proftraceback")

@@ -665,6 +665,7 @@ func TestPrlimitSelf(t *testing.T) {
 }
 
 func TestPrlimitOtherProcess(t *testing.T) {
+	t.Serial("the saved original fd limit is a package global that every file open here consults")
 	origLimit := syscall.OrigRlimitNofile()
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 
@@ -717,6 +718,7 @@ func TestPrlimitFileLimit(t *testing.T) {
 		return
 	}
 
+	t.Serial("this swaps the recorded fd limit and puts it back, so a concurrent open would see the swap")
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 	defer origRlimitNofile.Store(origRlimitNofile.Load())
 
