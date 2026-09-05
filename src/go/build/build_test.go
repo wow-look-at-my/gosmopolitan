@@ -515,6 +515,7 @@ func TestImportDirNotExist(t *testing.T) {
 		{"Import(local, FindOnly)", "./doesnotexist", filepath.Join(ctxt.GOROOT, "src/go/build"), FindOnly},
 	}
 
+	t.Serial() // os.Setenv is process-wide.
 	defer os.Setenv("GO111MODULE", os.Getenv("GO111MODULE"))
 
 	for _, GO111MODULE := range []string{"off", "on"} {

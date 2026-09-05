@@ -62,6 +62,14 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
+**Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called
+`t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial()` stops every other test and runs the caller
+alone in this process; `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit
+status as the verdict - which is what a test wants when the shared state is process-global, since the child gets
+its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite.
+A test failing only under this fork's `go test` is almost always one of these.
+Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+
 ## Building Cosmopolitan Binaries
 
 ```bash
@@ -138,65 +146,10 @@ thin on purpose: they are host-run throwaway artifacts executed right here
 (via the `misc/cosmo` wrappers), and fattening would triple every test
 compile.
 
-Parallel sibling build (2026-07-26): the sibling-architecture build runs
-CONCURRENTLY with the primary one. The two share no ordering constraint -
-different GOARCH, different build-cache keys, different output paths - and
-overlapping them reclaims each build's serial tail (cosmo links twice per
-arch): runtimeprobe cold on 4 cores goes 15.4s -> 12.5s, ~19%, with user
-time unchanged, and the output is byte-identical to a sequential build,
-sidecars included. Builds whose package graph already saturates the CPU
-(`go build std`) gain nothing, so the win is concentrated in exactly the
-single-binary builds people run interactively. `GOCOSMOFATSEQ=1` (or `on`)
-forces the old sequential behavior, which halves a fat build's peak memory
-because the two link phases can no longer overlap - reach for it on a
-memory-constrained machine, in preference to `GOCOSMOFAT=0`, which gives up
-fat binaries entirely. The sibling's output is buffered and replayed after
-the primary build's, so concurrent diagnostics never interleave, and a
-failed primary build exits before the sibling is reported (one copy of each
-error, not two). Implementation: `cosmoSibling` in
-`src/cmd/go/internal/work/cosmofat.go`; the child is killed and its scratch
-directory removed via `base.AtExit`, since the primary build can now fail
-while it is still running.
-
-Strip-and-sidecar default (2026-07-18): the fat merge embeds only each
-payload's loadable span - the file range its program headers reference,
-exactly what cosmocc's apelink ships - and writes the pristine unstripped
-per-arch linker ELFs next to the output as `<output>.dbg` (amd64) and
-`<output>.aarch64.elf` (arm64), the names cosmo libc's FindDebugBinary
-probes. Naming is exact output name plus suffix: bare `go build` of
-package `web` gives `web`, `web.dbg`, `web.aarch64.elf`, like cosmocc's
-`hello`/`hello.dbg`/`hello.aarch64.elf`. `GOCOSMOSTRIP=0` (or `off`,
-parsed like GOCOSMOFAT) restores full embedded payloads with no sidecars;
-an explicit `-s` or `-w` in `-ldflags` also suppresses sidecars and embeds
-the user-stripped payloads as-is. Stripping does not affect runtime
-tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a
-loaded segment); the sidecars are for gdb/delve and offline tools - see
-DEBUGGING.md "debug sidecars" (2026-07-18).
-
-Debug tiers (2026-07-19 + round 2 2026-07-20, GOCOSMODEBUG): `slim`
-swaps the sidecars for debug-only ELFs (in-linker objcopy
---only-keep-debug: alloc contents dropped to NOBITS, symtab + all DWARF
-kept, not runnable, ~-68% - runtimeprobe sidecar pair 7,818,173 ->
-2,418,888 B); `min` is slim's sidecar shape plus generation-time DWARF
-trims cmd/go injects into every cosmo compile (-dwarflocationlists=false
--gendwarfinl=0; explicit user -gcflags override them): sidecars shrink
-another ~-38% (rp pair 1,502,680 B) at the cost of debugger
-argument/local values (garbage or <optimized out>; file:line
-backtraces, runtime tracebacks, and pprof stay exact - "backtraces yes,
-variables no"; per-tier gcflags also fork the build cache, so the first
-build after switching tiers recompiles); `compact` appends line-level
-debug info (symtab + DWARF info/abbrev/line/rnglists/addr/frame;
-loclists dropped) past the APE's load span and points the payload +
-boot ELF headers at it, so the assimilated `.com` is debugger-readable
-with no sidecar (runtimeprobe 5,517,216 -> 7,539,064 B, +38%; args show
-<optimized out> - variables are sidecar territory). Since round 2 all
-cosmo `.debug_*` sections are zstd-compressed (ELFCOMPRESS_ZSTD,
-in-linker klauspost encoder, -13..-16% of stored DWARF vs the old
-zlib): readers need gdb >= 13 / binutils >= 2.40 / Go debug/elf >= 1.21
-(delve reads it; verified live with gdb 15.1 + dlv 1.27). Non-cosmo
-targets keep upstream zlib. Full numbers, gdb/delve recipes, and
-gotchas: DEBUGGING.md "GOCOSMODEBUG" (2026-07-19) and "debug round 2"
-(2026-07-20).
+The fat build's own mechanics - the concurrent sibling build and
+`GOCOSMOFATSEQ`, the strip-and-sidecar default and the sidecar names,
+and what each `GOCOSMODEBUG` tier trades away, with the measurements:
+docs/APE-BUILD.md.
 
 Shipping APEs: distribute release binaries zstd-compressed - the two arch
 payloads make APE images highly redundant, so the wire cost collapses.
@@ -305,13 +258,44 @@ go tool compile -bench=out.txt file.go
   release-toolchain tool IDs from the tools' `-V=full` version line; the fork
   stamps the same release-style version (`go1.27.0cosmo`) into every build, so
   any two fork builds used to share tool IDs — and hence action IDs — letting a
-  warm build cache (a local GOCACHE, or a consumer's shared GOCACHEPROG tier)
+  warm build cache (a local GOCACHE, or a consumer's shared cache tier)
   serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
   Fork tools now print their own build ID under `-V=full` (like devel
   toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt
   toolchain automatically invalidates cached objects. The old rule "run
   `go clean -cache` after every make.bash" is obsolete; CI asserts the
   discriminator on every build platform.
+- **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT`
+  reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the
+  process's own cgroup at `gcinit` and uses it as the initial soft limit, so a
+  containerized binary caps its heap instead of allocating until the kernel
+  OOM-kills it. An explicit `GOMEMLIMIT`, `off` included, still wins, and
+  a host with no cgroups is unaffected. This holds for cosmo too: the APE
+  asks `__hostos` first and only reads `/proc` on a Linux host.
+  `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s
+  syscall shims.
+- **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** A
+  reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS
+  answers with SIGILL, which killed any binary importing
+  `golang.org/x/sys/cpu` before `main`. The APE loader does pass a
+  pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those
+  registers; `fixAuxv` clears that bit in `osinit` (and builds a pair
+  from Apple's `hw.optional` sysctls when none came), which is what
+  `internal/cpu` reads. Never set `hwcap_CPUID`: it means "the kernel
+  emulates those registers". Depth: DEBUGGING.md "AT_HWCAP" and
+  "Working uname" (2026-09-03/04).
+- **`/proc/self/auxv` is served by the APE off a Linux host.** A library
+  written for Linux reads the auxiliary vector out of that file rather
+  than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv`
+  linkname, but the init that ARMS it sorts after the init that CALLS it,
+  so the call always sees nil and the file is the path it really takes.
+  `syscall.Openat` answers the path from `runtime.getAuxv`, handing back
+  the read end of a pipe holding the pairs plus the AT_NULL terminator:
+  before the real open on a macOS host, and after it fails anywhere else,
+  which leaves a Linux host on the kernel's own file and still answers
+  on NT. So AT_HWCAP now reaches x/sys/cpu too, which is
+  what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md
+  "AT_HWCAP" (2026-09-04).
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
@@ -390,12 +374,14 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus, via the misc/cosmo
-wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
-tests (darwin sendmsg/recvmsg cmsg repack, signal translation
-tables, epoll layout) and the runtime-package cosmo tests (Apple
-itimerval ABI pins + timeval translation behind the darwin SIGPROF
-setitimer dispatch, signal translation tables). Every build leg additionally
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`,
+which runs the GOOS=cosmo package tests through the misc/cosmo wrappers:
+internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal
+translation tables, epoll layout), the runtime's Apple itimerval ABI pins and
+timeval translation behind the darwin SIGPROF setitimer dispatch, and the
+syscall package's Apple struct conversions plus the /proc/self/auxv shim. The
+name lists live in that suite, where an engineer can run them, rather than in a
+workflow step. Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
@@ -492,13 +478,18 @@ cache: disk stays authoritative, the shared tier is consulted only on a local
 miss, and a fetched body is written to disk before it is returned, so a shared
 hit hands the compiler a path exactly as a local hit does.
 
-**A configured shared tier beats `GOCACHEPROG`** (`chooseCache` in
-`cmd/go/internal/cache/default.go`), so an org build never forks a cache
-program. That ordering is the point: `GOCACHEPROG` answers with a PATH rather
-than bytes, so a program storing bodies in packs has to materialize every hit
-somewhere the compiler can open it. `GOCACHEPROG` is still honored when no
-shared tier is configured — this fork does not take it away from a cache it
-knows nothing about.
+**`GOCACHEPROG` is deleted** — the variable, the protocol, and
+`cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared
+tier over disk, or disk alone; nothing forks a cache program, and a leftover
+`GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not
+the feature: it answered with a PATH rather than bytes, so a program storing
+bodies in packs had to materialize every hit where the compiler could open it.
+
+`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`); unset,
+the build stays on disk. A run with `CI` set and no shared cache fails outright,
+because an unconfigured CI run decides whether every other CI run recompiles.
+`GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s
+quiet window.
 
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor
 mode, so the require needs its packages under `src/cmd/vendor/`; those three
@@ -519,6 +510,14 @@ you want and update the matching version in `src/cmd/go.mod`. **Never run
 which is exactly what this arrangement exists to prevent. Read
 `src/README.vendor` before adding any other `src/cmd` dependency: what looks
 like one import is a whole subtree of somebody else's repository.
+
+That subtree carries packages the build never imports, and one upstream test
+fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in
+GOPATH mode, which walks `src/cmd/vendor` on disk and cannot resolve
+go-s3-server's `main.go`/`metrics.go` (cobra, prometheus) or lz4's `cmd/lz4c`
+(bytefmt, cmdflag, progressbar). A pruned vendor tree is what upstream's test
+assumes, and only `go mod vendor` or per-package repositories produce one, so
+the check stays red while whole-repo submodules stand.
 
 ## Toolchain Distribution
 

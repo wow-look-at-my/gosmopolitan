@@ -29,6 +29,7 @@ func Tcsetpgrp(fd int, pgid int32) (err error) {
 // macOS struct conversions need a window.
 
 var (
+	OpenAuxvForTest              = openAuxv
 	DarwinStatfsToLinuxForTest   = darwinStatfsToLinux
 	DarwinMntFlagsToLinuxForTest = darwinMntFlagsToLinux
 	DarwinUtsnameToLinuxForTest  = darwinUtsnameToLinux

@@ -107,6 +107,7 @@ func TestChunkReadMultiple(t *testing.T) {
 }
 
 func TestChunkReaderAllocs(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	if testing.Short() {
 		t.Skip("skipping in short mode")
 	}

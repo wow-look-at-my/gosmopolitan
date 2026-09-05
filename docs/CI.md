@@ -59,18 +59,23 @@ has no `.aarch64.elf`.
 ~40s (test-package compile). The platform table both commands parse
 `GOCOSMOPLATFORMS` and `-apeplatforms` through, and the `go env` readouts a
 consumer probes to tell an aware toolchain from one that ignores the
-selection, is load-bearing outside this repo, so it's gated here. The cosmo
-syscall package's unit tests (darwin sendmsg/recvmsg cmsg repack,
-signal/wait-status translation tables, epoll layout) are `GOOS=cosmo`-only
-code, run on this host via the `misc/cosmo` exec wrappers - the test binary
-is a thin cosmo APE that executes natively on linux. Runtime-package cosmo
-unit tests cover the Apple itimerval ABI pins + timeval translation behind
-the darwin SIGPROF setitimer dispatch, and the signal translation tables.
-Three named `syscall` tests run alongside them: the macOS statfs/utsname
-struct conversions, which live in package `syscall` because the Apple
-buffers are far past the emulation's nosplit budget. They are named
-rather than run as a package because syscall's own suite needs a real
-host surface, while these are pure struct rewriting.
+selection, is load-bearing outside this repo, so it's gated here.
+
+**GOOS=cosmo package tests (dats).** `dats/cosmo-tests.dats`, run through
+the org's `wow-look-at-my/dats@master` action. Three commands, each
+`GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec
+wrappers - the test binary is a thin cosmo APE that runs natively on
+linux. The cosmo syscall shim package covers the darwin sendmsg/recvmsg
+cmsg repack, the signal and wait-status translation tables, and the epoll
+layout. The runtime commands cover the Apple itimerval ABI pins and the
+timeval translation behind the darwin SIGPROF setitimer dispatch. The
+`syscall` command covers the macOS statfs/utsname struct conversions -
+which live in package `syscall` because the Apple buffers are far past
+the emulation's nosplit budget - and the `/proc/self/auxv` shim. Two of
+the three name the tests they cover rather than running the whole
+package, and a name list is a test-selection decision: it belongs in the
+suite, where an engineer can run it, not in a workflow step. Observed
+~75s warm.
 
 **Fork-divergence guardrails (go/build policy, moddeps, distpack naming).** go/build's
 structural tests are what keep a fork's edits honest across an upstream
@@ -276,7 +281,7 @@ latest and branch pushes never move `?branch=master`.
 **Stamp unique per-release version.** The fork identifies as a RELEASE Go
 version, so cmd/go derives tool IDs (hence action IDs) from the version
 string alone. Two releases sharing one string share a build-cache
-namespace, and the org's shared GOCACHEPROG cache then links objects from
+namespace, and the org's shared build cache then links objects from
 different releases into one binary. A unique monotonic suffix per publish
 makes each release's cache namespace disjoint. The committed VERSION is
 unchanged; this rewrite is publish-only. Every leg stamps the SAME string:

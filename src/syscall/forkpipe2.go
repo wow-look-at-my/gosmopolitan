@@ -8,12 +8,6 @@ package syscall
 
 import "sync"
 
-// forkExecPipe atomically opens a pipe with O_CLOEXEC set on both file
-// descriptors.
-func forkExecPipe(p []int) error {
-	return Pipe2(p, O_CLOEXEC)
-}
-
 var (
 	// Guard the forking variable.
 	forkingLock sync.Mutex

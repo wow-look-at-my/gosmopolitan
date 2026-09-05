@@ -661,3 +661,21 @@ func cosmoDarwinNumCPU() int32 {
 	}
 	return int32(n)
 }
+
+// cosmoDarwinSysctlEnabled reads a boolean hw.optional sysctl. name must
+// be NUL-terminated. An absent key, an older Syslib, or any other failure
+// answers false, which reports the feature as absent.
+func cosmoDarwinSysctlEnabled(name *byte) bool {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return false
+	}
+	var v int32
+	sz := uintptr(unsafe.Sizeof(v))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&v)),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	return r == 0 && v != 0
+}

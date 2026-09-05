@@ -706,6 +706,7 @@ type common struct {
 	finished    bool                 // Test function has completed.
 	inFuzzFn    bool                 // Whether the fuzz target, if this is one, is running.
 	isSynctest  bool
+	barrierHeld int8 // The serialBarrier hold this test owns: barrierNone, barrierShared or barrierExclusive.
 
 	chatty         *chattyPrinter // A copy of chattyPrinter, if the chatty flag is set.
 	bench          bool           // Whether the current test is a benchmark.
@@ -1017,8 +1018,7 @@ var (
 // may be called simultaneously from multiple goroutines.
 type T struct {
 	common
-	denyParallel bool
-	tstate       *testState // For running tests and subtests.
+	tstate *testState // For running tests and subtests.
 }
 
 func (c *common) private() {}
@@ -1902,22 +1902,347 @@ func pcToName(pc uintptr) string {
 	return frame.Function
 }
 
-const parallelConflict = `testing: test using t.Setenv, t.Chdir, or cryptotest.SetGlobalRandom can not use t.Parallel`
+// serialBarrier orders a test that mutates process-wide state against every
+// other running test. A test holds it shared while its function body runs;
+// [T.Serial] upgrades that hold to exclusive, so the caller and its subtests
+// are the only test code that runs.
+//
+// The hold never outlives the function body. A test that waits for its
+// parallel subtests holds nothing, because those subtests wait for a -parallel
+// slot, and a test that holds the barrier while it waits for a slot deadlocks
+// against a Serial caller that holds a slot while it waits for the barrier.
+var serialBarrier sync.RWMutex
+
+// serialExclusive is set while a test holds serialBarrier exclusively. It is
+// how a process-wide measurement (AllocsPerRun) knows no other test runs.
+var serialExclusive atomic.Bool
+
+// Barrier hold states for common.barrierHeld.
+const (
+	barrierNone int8 = iota
+	barrierShared
+	barrierExclusive
+)
+
+// barrierHolder returns the nearest test, this one included, that holds the
+// serial barrier, or nil. A subtest of a serial test and a synctest bubble
+// hold nothing of their own: an ancestor's exclusive hold covers them.
+func (c *common) barrierHolder() *common {
+	for ; c != nil; c = c.parent {
+		if c.barrierHeld != barrierNone {
+			return c
+		}
+	}
+	return nil
+}
+
+// Serial pauses until every other test has stopped, then runs the caller alone
+// until it returns. Tests are parallel by default, so this is how a test that
+// mutates process-wide state - the working directory, the environment, a
+// package-level variable another test reads - declares that it needs the
+// process to itself.
+//
+// The subtests of a serial test run one at a time, inside the calls to
+// [T.Run] that start them, under the same hold. Calling Serial again, from the
+// test or from one of its subtests, does nothing.
+func (t *T) Serial() {
+	c := t.common.barrierHolder()
+	if c == nil {
+		// The root test: nothing else runs to be serialized against.
+		return
+	}
+	switch c.barrierHeld {
+	case barrierExclusive:
+		return
+	case barrierShared:
+		serialBarrier.RUnlock()
+	}
+	serialBarrier.Lock()
+	c.barrierHeld = barrierExclusive
+	serialExclusive.Store(true)
+}
+
+// forkTargetEnv names the test a forked child process was started to run. Fork
+// sets it on the child, and reads it to tell a child from a parent: a process
+// that already carries it never forks again, so a forked test that runs
+// subtests, or calls Fork from one, still runs in exactly one child.
+const forkTargetEnv = "GO_TEST_FORK_TARGET"
+
+// Fork runs the rest of the calling test in a child process, alone, and takes
+// that process's result as this test's own. It returns in the child, where the
+// body goes on to run. In the parent it does not return.
+//
+// [T.Serial] and Fork both give a test state nobody else touches, and they pay
+// for it differently. Serial keeps the test in this process and stops every
+// other test for the duration. Fork leaves the rest of the suite running and
+// gives this test a process instead. Fork is the one to reach for when the
+// state is process-global and shared - a package-level variable, a metrics
+// registry, a counter another test also writes - because a child starts with
+// its own copy that no other test can reach.
+//
+// Fork does not serialize anything. The child runs parallel-by-default like
+// any other run, so the subtests of a forked test still run at the same time,
+// and the rest of this suite keeps running here. A test that needs a process
+// of its own AND the process to itself calls [T.Serial] as well.
+//
+// The child re-runs this test from a fresh process, so the package's
+// initialization happens again and nothing another test did here is visible.
+// The parent has already run the body as far as this call, so whatever the test
+// does before it happens twice: once here, and once more in the child.
+// It inherits this process's environment and the arguments this run was given,
+// its package's own flags included, with only the test selection replaced. So
+// verbose output still appears, coverage still counts toward the same profile,
+// and a suite whose flags decide what it tests still tests that.
+//
+// The child's output becomes this test's output and its exit status decides
+// whether this test passes. Fork reports a failure it cannot attribute - a
+// child that could not be started, or died on a signal - against this test.
+func (t *T) Fork() {
+	if os.Getenv(forkTargetEnv) != "" {
+		// Already the dedicated child: run the body right here.
+		return
+	}
+	t.Helper()
+	t.forkAndTakeTheResult()
+
+	// The body belongs to the child, so stop the parent's copy here. This is
+	// FailNow's mechanism without its failure: the deferred functions in
+	// tRunner still run, and they are what report the test.
+	runtime.Goexit()
+}
+
+// forkAndTakeTheResult runs this test in a child process and makes the child's
+// result this test's own. It marks the test finished, because the body it
+// belongs to is over here either way: Fork calls this from the body and stops
+// it, and an allocsFork panic reaches tRunner with the body already unwound.
+func (t *T) forkAndTakeTheResult() {
+	output, err := t.runForked()
+	if len(output) > 0 {
+		t.log(strings.TrimRight(string(output), "\n"), err != nil)
+	}
+	if err != nil {
+		t.Fail()
+		t.log("fork: "+err.Error(), true)
+	}
+
+	t.mu.Lock()
+	t.finished = true
+	t.mu.Unlock()
+}
+
+// failWithoutAChild reports an allocsFork panic on a host that starts no child
+// process. The measurement still needs the process to itself, and the barrier
+// is the only way left to give it one, so the failure names that rather than
+// the pipe the host was never going to open.
+func (t *T) failWithoutAChild() {
+	t.Fail()
+	t.log("AllocsPerRun needs this process to itself, and "+runtime.GOOS+
+		" starts no child process: call t.Serial() in this test", true)
+
+	t.mu.Lock()
+	t.finished = true
+	t.mu.Unlock()
+}
+
+// runForked starts one child process for this test, and returns everything the
+// child wrote together with the reason it did not pass, if it did not.
+func (t *T) runForked() ([]byte, error) {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		// A test binary invoked through a wrapper or a relative path may have
+		// no resolvable executable; argv[0] is what it was started as.
+		exe = os.Args[0]
+	}
+
+	args := append([]string{exe}, forkArgs(t.Name(), os.Args[1:])...)
+
+	// One pipe for both streams keeps the child's interleaving intact.
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
+		Env:   append(os.Environ(), forkTargetEnv+"="+t.Name()),
+		Files: []*os.File{nil, pw, pw},
+	})
+	// The parent must drop its own write end, or reading the pipe never sees
+	// the end of the child's output.
+	pw.Close()
+	if err != nil {
+		pr.Close()
+		return nil, err
+	}
+
+	output, readErr := io.ReadAll(pr)
+	pr.Close()
+
+	state, waitErr := proc.Wait()
+	switch {
+	case waitErr != nil:
+		return output, waitErr
+	case !state.Success():
+		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
+	}
+	return output, readErr
+}
+
+// forkArgs returns the child's arguments: the ones this run was given, with the
+// test selection replaced by the one test the child exists to run.
+//
+// Forwarding the run's own arguments is what carries a package's CUSTOM flags,
+// which a fixed list of -test.* names cannot know about. cmd/internal/testdir
+// is the case that proves it: -target=js/wasm decides what that suite compiles
+// for, and a child without it silently tests the host instead.
+func forkArgs(name string, argv []string) []string {
+	args := make([]string, 0, len(argv)+2)
+	run, awaiting := "", ""
+	for _, arg := range argv {
+		if awaiting != "" {
+			if awaiting == "test.run" {
+				run = arg
+			}
+			awaiting = ""
+			continue
+		}
+		flagName, value, hasValue := forkFlag(arg)
+		if flagName != "test.run" && flagName != "test.count" {
+			args = append(args, arg)
+			continue
+		}
+		if !hasValue {
+			awaiting = flagName
+			continue
+		}
+		if flagName == "test.run" {
+			run = value
+		}
+	}
+	return append(args, "-test.run="+forkRunValue(name, run), "-test.count=1")
+}
+
+// forkRunValue builds the child's -test.run: this test, anchored element by
+// element, and then whatever the run's own pattern says about the tests BELOW
+// it.
+//
+// That tail is what keeps the child's work the same size as the parent's.
+// Anchoring the name alone selects the test AND every subtest under it, so a
+// top-level test that forks under -run Test/wasmexport would compile the whole
+// suite instead of the handful the run named.
+func forkRunValue(name, run string) string {
+	pattern := forkRunPattern(name)
+	depth := strings.Count(name, "/") + 1
+	tail := strings.Split(run, "/")
+	if run == "" || len(tail) <= depth {
+		return pattern
+	}
+	return pattern + "/" + strings.Join(tail[depth:], "/")
+}
+
+// forkFlag returns the flag an argument names, its value, and whether the
+// argument carries that value rather than leaving it to the next argument. An
+// argument that names no flag returns an empty name.
+func forkFlag(arg string) (name, value string, hasValue bool) {
+	if !strings.HasPrefix(arg, "-") {
+		return "", "", false
+	}
+	arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if before, after, ok := strings.Cut(arg, "="); ok {
+		return before, after, true
+	}
+	return arg, "", false
+}
+
+// forkRunPattern builds the -test.run value that selects one test, and only
+// that test, in the child. -test.run matches each slash-separated element
+// against its own pattern, so every element is anchored separately.
+func forkRunPattern(name string) string {
+	elems := strings.Split(name, "/")
+	for i, e := range elems {
+		elems[i] = "^" + forkQuoteMeta(e) + "$"
+	}
+	return strings.Join(elems, "/")
+}
+
+// forkQuoteMeta escapes the regexp metacharacters a test name can contain.
+// regexp.QuoteMeta would do this, but testing must not depend on regexp.
+func forkQuoteMeta(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; strings.IndexByte(`\.+*?()|[]{}^$`, c) >= 0 {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+// inSerialTree reports whether this test, or a test above it, holds the
+// barrier exclusively. A parent that holds it shared does not count: that
+// parent releases its hold before its parallel subtests run.
+func (c *common) inSerialTree() bool {
+	h := c.barrierHolder()
+	return h != nil && h.barrierHeld == barrierExclusive
+}
+
+// ownsBarrierHold reports whether this test runs in parallel under a hold of
+// its own. The root holds nothing. A synctest bubble and the subtree of a
+// serial test run inside their parent's body, under the parent's hold. So
+// does every test under a root that is not running under tRunner - a
+// hand-made root in this package's tests - because only tRunner releases
+// parallel subtests, and such a root may allow no parallelism at all. A
+// parent with no barrier (fuzzing, and some hand-made roots) never releases
+// them either.
+func (t *T) ownsBarrierHold() bool {
+	if t.parent == nil || t.parent.barrier == nil || t.isSynctest || t.common.inSerialTree() {
+		return false
+	}
+	root := t.parent
+	for root.parent != nil {
+		root = root.parent
+	}
+	return root.runner != ""
+}
+
+// acquireBarrier takes the shared hold the test's function body runs under.
+func (t *T) acquireBarrier() {
+	if !t.ownsBarrierHold() {
+		return
+	}
+	serialBarrier.RLock()
+	t.barrierHeld = barrierShared
+}
+
+// releaseBarrier drops whichever hold the test ended up with.
+func (t *T) releaseBarrier() {
+	held := t.barrierHeld
+	t.barrierHeld = barrierNone
+	switch held {
+	case barrierShared:
+		serialBarrier.RUnlock()
+	case barrierExclusive:
+		serialExclusive.Store(false)
+		serialBarrier.Unlock()
+	}
+}
 
 // Parallel signals that this test is to be run in parallel with (and only with)
 // other parallel tests, and pauses until all non-parallel tests have finished.
+//
+// Tests are already parallel by default, so calling this is redundant and does
+// nothing. [T.Serial] is the opt out, and inside a serial test Parallel does
+// nothing either: the subtests of a serial test run one at a time.
 //
 // When a test is run multiple times due to use of -test.count or -test.cpu,
 // multiple instances of a single test never run in parallel with each other.
 func (t *T) Parallel() {
 	if t.isParallel {
-		panic("testing: t.Parallel called multiple times")
+		return
 	}
 	if t.isSynctest {
 		panic("testing: t.Parallel called inside synctest bubble")
 	}
-	if t.denyParallel {
-		panic(parallelConflict)
+	if t.common.inSerialTree() {
+		return
 	}
 	if t.parent.barrier == nil {
 		// T.Parallel has no effect when fuzzing.
@@ -1981,27 +2306,39 @@ func checkParallel(t *T) {
 	t.checkParallel()
 }
 
-func (t *T) checkParallel() {
-	// Non-parallel subtests that have parallel ancestors may still
-	// run in parallel with other tests: they are only non-parallel
-	// with respect to the other subtests of the same parent.
-	// Since calls like SetEnv or Chdir affects the whole process, we need
-	// to deny those if the current test or any parent is parallel.
-	for c := &t.common; c != nil; c = c.parent {
-		if c.isParallel {
-			panic(parallelConflict)
-		}
+// canFork reports whether this platform can start a child process. wasm has no
+// process creation at all, and iOS does not let a process exec another one.
+func canFork() bool {
+	switch runtime.GOOS {
+	case "js", "wasip1", "ios":
+		return false
 	}
+	return true
+}
 
-	t.denyParallel = true
+func (t *T) checkParallel() {
+	// Setenv and Chdir change the process, so the test needs isolation from
+	// every other test. A child is the cheaper way to buy it, because it leaves
+	// the suite running. A host that cannot start one still has the barrier,
+	// which buys the same isolation by stopping every other test.
+	if canFork() {
+		t.Fork()
+		return
+	}
+	t.Serial()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
 // restore the environment variable to its original value
 // after the test.
 //
-// Because Setenv affects the whole process, it cannot be used
-// in parallel tests or tests with parallel ancestors.
+// Because Setenv changes the whole process, the rest of the test runs in a
+// child process of its own, as if it had called [T.Fork]. The child applies the
+// variable to its own environment, and the rest of the suite keeps running
+// here. A test that is already the forked child sets the variable in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Setenv(key, value string) {
 	t.checkParallel()
 	t.common.Setenv(key, value)
@@ -2011,8 +2348,13 @@ func (t *T) Setenv(key, value string) {
 // working directory to its original value after the test. On Unix, it
 // also sets PWD environment variable for the duration of the test.
 //
-// Because Chdir affects the whole process, it cannot be used
-// in parallel tests or tests with parallel ancestors.
+// Because Chdir changes the whole process, the rest of the test runs in a child
+// process of its own, as if it had called [T.Fork]. The child changes its own
+// working directory, and the rest of the suite keeps running here. A test that
+// is already the forked child changes the directory in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Chdir(dir string) {
 	t.checkParallel()
 	t.common.Chdir(dir)
@@ -2035,6 +2377,11 @@ func tRunner(t *T, fn func(t *T)) {
 	// a call to runtime.Goexit, record the duration and send
 	// a signal saying that the test is done.
 	defer func() {
+		// The function body is over, and the cleanup of a test without
+		// parallel subtests already ran under the hold. The parallel
+		// subtests below take holds of their own.
+		t.releaseBarrier()
+
 		t.checkRaces()
 
 		// Check if the test panicked or Goexited inappropriately.
@@ -2047,6 +2394,18 @@ func tRunner(t *T, fn func(t *T)) {
 		// find short inputs that cause panics.
 		err := recover()
 		signal := true
+
+		if _, ok := err.(allocsFork); ok {
+			// AllocsPerRun asked for a process of its own, from a function that
+			// gets no *T. Give it one here: the body is over, and the child
+			// re-runs this test alone, exactly as Fork does.
+			err = nil
+			if canFork() {
+				t.forkAndTakeTheResult()
+			} else {
+				t.failWithoutAChild()
+			}
+		}
 
 		t.mu.RLock()
 		finished := t.finished
@@ -2188,7 +2547,18 @@ func tRunner(t *T, fn func(t *T)) {
 		}
 	}()
 
+	// Parallel by default. A test that needs the process to itself calls
+	// t.Serial (or t.Setenv/t.Chdir, which take the barrier for it), and its
+	// subtests then run one at a time. Parallel charges the time before it to
+	// t.start, so t.start is set first. Only tRunner releases parallel
+	// subtests, so a parent that is not running under it (a hand-made root
+	// in this package's tests) runs its subtests inside Run.
 	t.start = highPrecisionTimeNow()
+	if t.ownsBarrierHold() {
+		t.Parallel()
+	}
+	t.acquireBarrier()
+
 	t.resetRaces()
 	fn(t)
 

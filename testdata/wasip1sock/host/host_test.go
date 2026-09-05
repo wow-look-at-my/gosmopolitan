@@ -256,7 +256,9 @@ func TestHTTPServe(t *testing.T) {
 	case addr = <-watcher.ch:
 	case res := <-resc:
 		t.Fatalf("guest exited before listening: code %d\n%s", res.code, res.out)
-	case <-time.After(30 * time.Second):
+	// runGuest gives the guest 2 minutes; a shorter budget here fails a guest
+	// that is only slow, which is what sibling guests on a 2-core runner make it.
+	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for the guest to listen")
 	}
 	t.Logf("guest listening on %s", addr)
@@ -284,12 +286,13 @@ func TestHTTPServe(t *testing.T) {
 		if !strings.Contains(res.out, "SERVED") {
 			t.Errorf("guest did not confirm serving")
 		}
-	case <-time.After(30 * time.Second):
+	case <-time.After(2 * time.Minute):
 		t.Fatal("timed out waiting for the guest to exit")
 	}
 }
 
 func TestDialRefused(t *testing.T) {
+	t.Serial() // The host-side clock below measures wall time; a sibling guest run inflates it.
 	// Find a port that is closed: bind one, note it, close it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

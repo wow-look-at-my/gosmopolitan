@@ -1452,7 +1452,7 @@ non-gated change; cosmo/amd64 codegen-global):
   GOOS=cosmo std objects. Rule for toolchain hackers: go clean -cache
   (or -a) after every make.bash before trusting a cosmo binary.
   [FIXED 2026-07-20: this same defect, amplified through go-toolchain
-  CI's persistent shared GOCACHEPROG web cache, shipped consumer APEs
+  CI's persistent shared web build cache, shipped consumer APEs
   that SIGSEGV'd at startup in internal/cpu.doinit (fault addr 0x28 -
   the identical crash class). Fork tools now print their own build ID
   under -V=full and cmd/go derives tool IDs from tool content, so a
@@ -6488,3 +6488,344 @@ What no fix can reach on either arch: the `siginfo` and `ucontext` a
 handler receives keep their Apple layouts. Only the signal number is
 translated back. A raw-syscall caller that reads the context is looking
 at Apple's, and always was.
+
+## The wasm job's TestMemoryProfiler flake is a GC phase change mid-loop (2026-09-02)
+
+Three master pushes went red in the wasm job alone, always in
+`runtime/pprof` TestMemoryProfiler/debug=1 under wazero (wasip1; js
+excludes the file). The 32 `Obj32` allocations landed in two buckets
+whose stacks differ by one frame: while GC marks, the size-class fast
+path `mallocgcSmallScanNoHeaderSC4` delegates to
+`mallocgcSmallScanSlowPath`, and that callee shifts what `callers(3)` in
+`mProf_Malloc` records. The test tolerates 4 or 5 PCs but needs all 32
+on one path, and the 2 MB transient allocations just before the loop
+start the cycle that then ends inside it. Reproduced locally at 1 in 3
+runs on wasip1. The test now calls `runtime.GC()` before the loop; six
+green runs after.
+
+## Tests parallel by default, and the barrier that makes t.Serial safe (2026-09-02)
+
+`src/testing` now runs every test and subtest as if it had called
+`t.Parallel()`. The opt-out is `t.Serial()`: wait for every other test to
+stop, then run alone until the test returns. `t.Setenv` and `t.Chdir`
+call it themselves, so the upstream "cannot use t.Parallel" panic is
+gone.
+
+The first cut held one `sync.RWMutex` read lock per TOP-LEVEL test for
+its whole subtree, and upgraded it to the write lock on Serial. CI showed
+two things. The ubuntu leg printed `TestAPEFatMergeStripAndSidecars
+(-9223372036.85s)`: the auto-Parallel ran before `t.start` was set, and
+Parallel charges the time since `t.start` to the test, so every test was
+charged the time since the zero instant. The wasm leg hung until its
+timeout, and the reason generalizes: a top-level test waiting for its
+parallel subtests holds the read lock while those subtests wait for a
+`-parallel` slot; a Serial caller in another test holds a slot while it
+waits for the write lock. With `-parallel=1`, which is what GOMAXPROCS
+gives a wasm binary, that cycle closes on the first Serial call. (Go's
+RWMutex also blocks new readers behind a waiting writer, so even a
+larger slot count fills with tests parked in RLock.)
+
+The hold is now per test and lasts only for the function body: acquire
+before `fn`, release in the deferred epilogue before the parallel
+subtests run, each of which takes its own. Nothing that holds the barrier
+ever waits for a slot. Serial upgrades in place. A serial test's subtests
+skip the auto-Parallel and run one at a time inside `t.Run`, under the
+parent's exclusive hold, which is what "runs alone until it returns"
+means for a table test. `barrierHolder` walks the parent chain so a
+subtest or a synctest bubble finds the hold that covers it.
+
+`testing.AllocsPerRun` counts process-wide mallocs and sets GOMAXPROCS=1,
+and its guard (`parallelStart != parallelStop`) fires for EVERY test
+now. It accepts a caller inside an exclusive hold (`serialExclusive`)
+and names `t.Serial` in the panic otherwise. Every AllocsPerRun caller in
+the packages CI runs got a `t.Serial()`, inserted by an AST tool rather
+than by hand, and so did the linker and cmd/go tests that write flag or
+`cfg` globals directly. The one-line CI reproduction is
+`GOOS=js GOARCH=wasm go test -short sync`: it deadlocked before, and
+`TestOnceValues` panicked on the guard after the deadlock fix.
+
+## pipeeof caught its first real escape on the macOS runner (2026-09-02)
+
+The check above ("EOF on a dead child's stdout pipe") reported a wedge on
+the macos-latest leg with a holder census of `32:pipe- 33:pipe-`: both
+ends of the piped child's stdout pipe, inherited by a concurrently forked
+child with no `FD_CLOEXEC`. That is the fork window the check was written
+for. `darwinPipe2` is `pipe` + `fcntl`, and `syscall.Pipe2` called it with
+nothing held, so a `forkExec` on another thread between the two calls
+copied the bare descriptors. Darwin's own `Pipe2` holds `ForkLock` for
+exactly this reason; the cosmo one now does too. It reproduced once in
+several runs of the same binary, which is what a two-syscall window under
+`execstress` looks like.
+
+The first cut locked inside `Pipe2` itself and hung every probe at
+`execchild` on the macOS leg: `forkExec` creates its own status pipe
+through `forkExecPipe` while it holds the conceptual WRITE lock, and the
+shared `forkpipe2.go` routed that through `Pipe2`, so the read lock
+waited on its own caller. The cosmo port now has its own `forkExecPipe`
+that skips the lock, and the shared one lives in `forkpipe2_cloexec.go`
+with cosmo excluded from its tag.
+
+## Working uname made every macOS APE that links x/crypto die at init (2026-09-03)
+
+`syscall.Uname` used to fail on macOS. The darwin syscall work above gave
+it a real answer, and that turned a dormant hazard into a crash on every
+binary that reaches `golang.org/x/sys/cpu`. go-toolchain found it: its own
+APE, built on linux and run on macos-latest, died before `main` with
+
+```
+SIGILL: illegal instruction
+golang.org/x/sys/cpu.getisar0()
+	cpu_arm64.s:12
+golang.org/x/sys/cpu.readARM64Registers()
+golang.org/x/sys/cpu.doinit()
+	cpu_linux_arm64.go:79
+golang.org/x/sys/cpu.init.0()
+```
+
+The chain, and why it needed a working `uname` to fire. `GOOS=cosmo`
+aliases into `linux`, so `cpu_linux_arm64.go` is the file that compiles.
+Its `doinit` asks `readHWCAP` first, which reads `runtime.getAuxv` and
+then `/proc/self/auxv`. XNU supplies neither: it puts no auxv on the
+process stack, so `sysargs` walked past `envp` and found no pair, and it
+serves no `/proc`, so the open failed too. `getAuxv` therefore answered
+empty and `readHWCAP` returned an error.
+
+That is the point where `doinit` chooses. On an old kernel it parses
+`/proc/cpuinfo`; on Linux 4.11 or newer it reads the ID registers
+directly, because the kernel traps and emulates the `MRS`. It tells the
+two apart with `syscall.Uname` and the major version of `Release`. While
+`Uname` failed, `Release` stayed all zeros, the parse failed, and the safe
+`/proc/cpuinfo` branch ran and found nothing. With `Uname` working, the
+field reads `24.x`, so the code concluded a modern Linux kernel was
+underneath and executed `MRS ID_AA64ISAR0_EL1` on a kernel that traps it
+without emulating it.
+
+Nothing about that is x/sys's mistake: it asked the host what it was and
+believed the answer. The first hypothesis was that the cosmo runtime
+published no auxv on a host it fully supports, and an empty auxv is what
+sends a reader to a Linux-only probe. So `sysargs` grew a macOS branch,
+the way the NT boot stub already fabricates one, carrying the one tag it
+could answer: `AT_PAGESZ`, reporting the `physPageSize` the routes above
+settled on.
+
+**That branch is gone.** What follows is why it was written and how it
+was disproved; the measurements it produced are the part worth keeping.
+
+The publication had to be strictly additive, and the first cut was not.
+That cut gave darwin its own branch at the TOP of `sysargs`, on the reasoning that
+a Mach-O stack holds no vector to walk to and `/proc/self/auxv` cannot
+open, so both routes were dead there anyway. Every macOS run then died
+even earlier, in `mallocinit`'s first heap growth:
+
+```
+fatal error: unaligned sysNoHugePageOS
+runtime.sysNoHugePageOS(...)
+	mem_cosmo.go:190
+runtime.(*mheap).sysAlloc(...)
+	malloc.go:871
+```
+
+`physPageSize` is the alignment `sysNoHugePageOS` checks, and on cosmo
+only `sysargs` ever sets it. Taking the branch early skipped whichever
+route was setting it on that host and left the `mincore` fallback to
+decide, which answered with its own `256 << 10` last resort. So the
+routes are not dead on darwin after all, and which one runs is worth
+knowing rather than assuming. The branch moved to the END of `sysargs`,
+firing only when the host was macOS and what ran left the vector empty.
+The `auxv` check's `pairs=` count then reported which case a macOS run
+actually lands in - and that count is what removed the branch.
+
+The gate is a `runtimeprobe` check, `auxv`, that fails on an empty vector
+and on an `AT_PAGESZ` that disagrees with `os.Getpagesize`. It reaches
+`runtime.getAuxv` through the same `go:linkname` the real consumers use,
+so it runs on all three hosts.
+
+On the macOS runner it reports `pagesz=16384 pairs=15`, for all three
+origin binaries: apetest starts an APE through `/bin/sh`, that hands
+control to the APE loader, and the loader builds a System V stack with a
+full vector on it. So the branch never fired on that path, and the check
+passed without reaching the case it existed for. Combined with
+`TestRuntimeProbeDirectExecAuxv` below - XNU refuses to exec an APE with
+no shell in front of it, so there is no macOS path that skips the loader
+- the branch was a guard for a state the system is never in, and it was
+deleted. `sysargs` is back to its original body.
+
+`TestRuntimeProbeDirectExecAuxv` reached for that state and ruled the
+launch path out: XNU answers `exec format error` for the APE with no
+shell in front of it, so the test skips. There is no way to start one on
+macOS that does not go through the loader, and the loader always builds
+the vector.
+
+**The empty vector is not the runtime's at all.** Re-read the frame the
+traceback names:
+
+```
+golang.org/x/sys/cpu.doinit()       cpu_linux_arm64.go:79
+golang.org/x/sys/cpu.archInit(...)  cpu_arm64.go:51
+golang.org/x/sys/cpu.init.0()       cpu.go:255
+```
+
+`cpu.go`, not `runtime_auxv_go121.go`. Those two files are no longer the
+mutually exclusive pair the older x/sys had. In v0.47.0 `runtime_auxv.go`
+carries no build tag and declares `var getAuxvFn func() []uintptr`, with
+`getAuxv` returning nil while it is nil; `runtime_auxv_go121.go` assigns
+it from an `init()`. `go list` under the published fork confirms both
+files compile into the package.
+
+`init` functions run in sorted filename order, and `cpu.go` sorts before
+`runtime_auxv_go121.go`. So `cpu.init.0` calls `archInit` -> `doinit` ->
+`readHWCAP` -> `getAuxv` while `getAuxvFn` is still nil, and gets nil back
+whatever the runtime published. Linux never notices because
+`/proc/self/auxv` answers the next question. macOS has neither, so the
+error path runs, `Uname` now parses as a modern Linux kernel, and the MRS
+executes.
+
+So no amount of publishing fixes this crash. Nothing the runtime writes
+can: the reader is not looking at it yet. The fix has to make
+`readHWCAP`'s second question answerable on a macOS host.
+
+**The fix: package syscall serves that one path.** `procauxv_cosmo.go`
+answers a read-only open of `/proc/self/auxv` on a darwin host from
+`runtime.getAuxv`, over a pipe - the vector is a few hundred bytes, far
+under a pipe buffer, so one write fills it and closing the write end
+gives the reader EOF. Nothing touches the filesystem. `Open` and `Openat`
+consult it and fall through to the real `openat` for everything else,
+including a darwin host whose vector is somehow empty, so the caller
+still sees the host's own error rather than a file that lies.
+
+This is the emulation the fork already claims: a Linux syscall surface on
+a host that has none. It is deliberately one exact path, not a `/proc`.
+
+Two things worth knowing about the shape of the fix. `readHWCAP` returns
+nil on ANY successful read, whatever tags the file carries, so serving it
+is what stops the MRS - the feature bits are a separate question, and a
+host whose loader publishes no `AT_HWCAP` simply gets x/crypto's generic
+paths instead of a SIGILL. And the same reasoning does not extend to
+Windows: the trap is in `cpu_linux_arm64.go`, the APE has no arm64 PE
+header, and the amd64 `doinit` reads CPUID instead of the auxv.
+
+**How this composes with `fixAuxv`** (the AT_HWCAP section below, landed
+in parallel). That function settles the `AT_HWCAP` pair in `osinit` -
+clearing the loader's `hwcap_CPUID` claim, or building one from Apple's
+sysctls when no pair came - which is what `internal/cpu` reads. It
+cannot reach x/sys/cpu, for the init-order reason above. This file is
+read long after `osinit`, so what it serves is the settled vector.
+Neither change alone gets x/sys/cpu both alive and correct on macOS;
+together they do.
+
+The gate is runtimeprobe's `procauxv` check, which reads the file exactly
+as x/sys/cpu does and asserts `AT_PAGESZ` against `os.Getpagesize`. It
+skips on a Windows host for the reason above. It is red on macOS without
+this change, which is the property that makes it a gate.
+
+## AT_HWCAP: an arm64 reader without one falls back to an illegal instruction (2026-09-04)
+
+An APE that merely imports `golang.org/x/sys/cpu` - through x/crypto,
+through go-git - died on macOS arm64 before reaching `main`:
+
+```
+SIGILL: illegal instruction
+golang.org/x/sys/cpu.getisar0()
+	cpu/cpu_arm64.s:12
+golang.org/x/sys/cpu.doinit()
+	cpu/cpu_linux_arm64.go:79
+runtime.doInit1 -> runtime.main
+```
+
+The chain is entirely reasonable at each step. cosmo aliases into the
+`linux` build tag, so x/sys/cpu compiles its Linux arm64 port. That port
+asks the auxiliary vector for AT_HWCAP and finds nothing - for the
+init-order reason in "Working uname" above, not because the vector is
+empty - and there is no `/proc/self/auxv` to read either, so `readHWCAP`
+fails. Its documented fallback is to
+read the `ID_AA64ISAR*` registers, guarded by "is this kernel 4.11+",
+which it decides with `Uname`. The APE answers that honestly with the
+Darwin kernel version, which is far above 4.11, so the guard opens and
+the `MRS` executes. Linux emulates that instruction. macOS answers SIGILL.
+
+The guard is not wrong; the fork had left the question unanswered. The
+same value drives `internal/cpu`, whose cosmo `archauxv` was a no-op on
+every host, so the stdlib's AES, SHA, CRC32 and atomics assembly was off
+even on Linux arm64.
+
+`fixAuxv` (`runtime/hwcap_cosmo_arm64.go`) runs in `osinit` - after
+`osArchInit`, so the host is safe to ask, and before `cpuinit`, so
+`internal/cpu` reads what it settled on. When a darwin host passed no
+pair it builds one from the same Apple sysctls `internal/cpu`'s own
+darwin port reads (`hw.optional.armv8_1_atomics`, `armv8_crc32`,
+`armv8_2_sha512`, `armv8_2_sha3`, `arm.FEAT_DIT`) over Syslib
+`sysctlbyname`, plus the M1 baseline macOS 11 publishes no key for: FP,
+ASIMD, AES, PMULL, SHA1, SHA2.
+
+**But that fallback does not fire on the runner.** The first cut of this
+returned early whenever a pair was already present, on the assumption
+that a macOS host passes none. The `hwcap` check then reported
+`AT_HWCAP=0xffb3ffff` there - a value `darwinHWCAP` cannot produce, so
+the APE loader passes its own pair and the sysctl path was dead code on
+the one host it was written for. `sysauxv` had already handed that value
+to `archauxv`, so `internal/cpu` was reading the loader's answer, not
+this function's.
+
+That matters because `0xffb3ffff` sets `hwcap_CPUID`, the one bit this
+file never sets on purpose: it advertises that the kernel emulates the
+`ID_AA64ISAR*` registers, and `internal/cpu` answers it by issuing an
+`MRS` for the MIDR (`cpu_arm64_hwcap.go`, `if ARM64.HasCPUID`). Linux
+emulates that; XNU is under no obligation to, and the same class of
+instruction is what killed x/sys/cpu. The precaution was stated and then
+defeated by the loader. `fixAuxv` now takes the loader's pair over with
+that bit cleared - into `darwinAuxvBuf`, because the vector it edits
+sits on the boot stack - and re-publishes through `archauxv`. The
+`hwcap` check's reported value is what shows it fired.
+
+Gate: runtimeprobe's `hwcap` check, which reaches `runtime.getAuxv` by
+linkname exactly as x/sys/cpu does and fails when no AT_HWCAP comes back.
+It runs on every host, and the macos-latest leg is the one that covers
+this. A binary that merely started was never proof: the crash needs a
+package that reads CPU features, and the probe imports none.
+
+### The auxv fix did not reach x/sys/cpu: it never asks the runtime
+
+The APE now held an AT_HWCAP, and go-toolchain's own APE still died on
+macos-latest with the identical SIGILL in `x/sys/cpu.getisar0`, built by
+a fork release that carried `fixAuxv`. The reason is in x/sys, not here.
+`readHWCAP` asks `getAuxv()` first, and `getAuxvFn` - the variable that
+call goes through - is assigned in an `init` in `runtime_auxv_go121.go`,
+while the `init` that calls `archInit` sits in `cpu.go`. A package runs
+its init functions in file-name order, so the caller always runs first
+and always finds nil. Reproduced with a two-file package here: the
+first init reports `nil` every time.
+
+So the only path x/sys/cpu really takes on Linux is `/proc/self/auxv`,
+and a macOS or NT host has no such file. The failing read then leads to
+`linuxKernelCanEmulateCPUID`, which asks `syscall.Uname`. That call
+started answering on darwin hosts on 2026-09-02; before it did, the
+release string was empty, `parseRelease` failed, and the code took the
+harmless `/proc/cpuinfo` branch. Once Uname worked, macOS reported a
+major version well past 4.11, x/sys believed the kernel emulates the
+ID_AA64ISAR registers, and the MRS killed the process. That is why this
+regressed on a date when nothing in x/sys or in go-toolchain changed.
+
+Fix: `syscall.Openat` (`syscall/procauxv_cosmo.go`) answers
+`/proc/self/auxv` itself. It writes the runtime's own pairs plus the
+AT_NULL terminator into a pipe and returns the read end, so the
+descriptor reads and closes like any other. The vector is a few hundred
+bytes, far below a pipe buffer, so the write cannot block.
+
+Two call sites reach the same body. A macOS host takes it before the
+real openat, because there is nothing there to open. Every other host
+takes it only after the real open failed, which keeps a Linux host on
+the kernel's own file and still answers on NT, where `/proc` is equally
+absent and x/sys asks for the path anyway - `GOOS=cosmo` compiles its
+Linux port everywhere.
+
+Gates: `syscall`'s `TestOpenAuxvMatchesTheKernelFile`, which holds the
+served bytes against the kernel's own file on a Linux host and found
+them identical, and runtimeprobe's `procauxv` check, which reads the
+path through `os.ReadFile` and compares it with `runtime.getAuxv` on
+every host - the macos-latest and windows-latest legs are what cover
+the hosts where the shim is the only answer.
+
+None of this keeps x/sys/cpu off its own MRS on its own: what `fixAuxv`
+buys x/sys/cpu is that the file it reads carries a sanitized AT_HWCAP;
+what it buys `internal/cpu` is the stdlib's arm64 assembly without the
+CPUID claim. See "Working uname" above for the init-order forensics.

@@ -58,23 +58,19 @@ func initDefaultCache() Cache {
 		base.Fatalf("%v", err)
 	}
 
-	return chooseCache(diskCache, cfg.GOCACHEPROG)
+	return chooseCache(diskCache)
 }
 
-// chooseCache layers a tier over disk. The shared tier is linked in, and it
-// wins: a configured shared cache and a cache program name the same store
-// here, and reaching it through a subprocess is what the client exists to
-// stop. The program boundary costs a fork, a pipe, and a materialized copy of
-// every hit, because GOCACHEPROG answers with a path rather than bytes.
-//
-// GOCACHEPROG still works where there is no shared tier to prefer, which is
-// every cache this toolchain knows nothing about.
-func chooseCache(disk *DiskCache, cacheProg string) Cache {
+// chooseCache layers the shared tier over disk, and that is the whole choice.
+// GOCACHEPROG is gone: the shared cache client is linked into cmd/go and
+// speaks HTTP directly, so there is no subprocess protocol left to name a
+// program for. The program boundary cost a fork, a pipe, and a materialized
+// copy of every hit, because GOCACHEPROG answers with a path rather than
+// bytes -- the in-process client hands the compiler the bytes and stores them
+// itself.
+func chooseCache(disk *DiskCache) Cache {
 	if shared := newSharedCache(disk); shared != nil {
 		return shared
-	}
-	if cacheProg != "" {
-		return startCacheProg(cacheProg, disk)
 	}
 	return disk
 }
