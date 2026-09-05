@@ -2030,6 +2030,20 @@ func (t *T) forkAndTakeTheResult() {
 	t.mu.Unlock()
 }
 
+// failWithoutAChild reports an allocsFork panic on a host that starts no child
+// process. The measurement still needs the process to itself, and the barrier
+// is the only way left to give it one, so the failure names that rather than
+// the pipe the host was never going to open.
+func (t *T) failWithoutAChild() {
+	t.Fail()
+	t.log("AllocsPerRun needs this process to itself, and "+runtime.GOOS+
+		" starts no child process: call t.Serial() in this test", true)
+
+	t.mu.Lock()
+	t.finished = true
+	t.mu.Unlock()
+}
+
 // runForked starts one child process for this test, and returns everything the
 // child wrote together with the reason it did not pass, if it did not.
 func (t *T) runForked() ([]byte, error) {
@@ -2386,7 +2400,11 @@ func tRunner(t *T, fn func(t *T)) {
 			// gets no *T. Give it one here: the body is over, and the child
 			// re-runs this test alone, exactly as Fork does.
 			err = nil
-			t.forkAndTakeTheResult()
+			if canFork() {
+				t.forkAndTakeTheResult()
+			} else {
+				t.failWithoutAChild()
+			}
 		}
 
 		t.mu.RLock()

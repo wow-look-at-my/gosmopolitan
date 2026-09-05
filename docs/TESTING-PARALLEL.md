@@ -66,6 +66,11 @@ The child re-runs that one test alone and measures. A caller that already has th
 test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a
 goroutine that is no test, its message names `t.Fork` and `t.Serial`.
 
+On `js`, `wasip1` and `ios` there is no child to measure in, so that panic fails the test with a message naming
+`t.Serial()` - the one way left to give the measurement the process. No runner executes that path, since every host
+this fork builds on can start a process; it exists so the failure names the remedy instead of a pipe the host was
+never going to open.
+
 It is fork+exec, not `fork(2)`: the child is a fresh process re-running the test binary. A bare `fork(2)` is not
 safe in Go - the child would inherit only the calling thread, with the runtime's other threads gone and any lock
 they held at fork time held forever - and it would be the wrong semantics anyway, since copy-on-write would hand
