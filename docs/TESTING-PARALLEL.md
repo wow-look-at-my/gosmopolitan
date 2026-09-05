@@ -49,8 +49,10 @@ Mechanics:
 - The parent runs the body as far as the Fork call before it hands over, so whatever the test does before that point
   happens twice. This is worth knowing where `t.Setenv` sits partway down a test rather than at the top.
 - The children alive at once cannot outnumber `-parallel`, because a forked test holds its slot while it waits.
-- The child inherits the environment plus `-test.v`, `-test.timeout`, `-test.short`, `-test.fullpath` and
-  `-test.gocoverdir`, so verbose output still appears and the child's coverage counts toward the same profile.
+- The child inherits the environment plus the arguments the run was given, with only `-test.run` and `-test.count`
+  replaced. Verbose output still appears and the child's coverage counts toward the same profile, and a package's
+  own flags survive too - `cmd/internal/testdir` reads `-target` to decide what it compiles for, and a child without
+  it would test the host and report that as the answer.
 - The child's output becomes the test's output, and a child that cannot be started, or that dies on a signal, is
   reported against the test.
 

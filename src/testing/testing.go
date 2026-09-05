@@ -1989,9 +1989,10 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // initialization happens again and nothing another test did here is visible.
 // The parent has already run the body as far as this call, so whatever the test
 // does before it happens twice: once here, and once more in the child.
-// It inherits this process's environment and its -test.v, -test.timeout,
-// -test.short, -test.fullpath and -test.gocoverdir settings, so verbose output
-// still appears and coverage still counts toward the same profile.
+// It inherits this process's environment and the arguments this run was given,
+// its package's own flags included, with only the test selection replaced. So
+// verbose output still appears, coverage still counts toward the same profile,
+// and a suite whose flags decide what it tests still tests that.
 //
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
@@ -2031,24 +2032,7 @@ func (t *T) runForked() ([]byte, error) {
 		exe = os.Args[0]
 	}
 
-	args := []string{exe, "-test.run=" + forkRunPattern(t.Name()), "-test.count=1"}
-	if chatty.on {
-		args = append(args, "-test.v=true")
-	}
-	if *short {
-		args = append(args, "-test.short")
-	}
-	if *fullPath {
-		args = append(args, "-test.fullpath")
-	}
-	if *timeout > 0 {
-		args = append(args, "-test.timeout="+timeout.String())
-	}
-	if *gocoverdir != "" {
-		// Same directory, so the child's counters land in the profile this run
-		// is already writing.
-		args = append(args, "-test.gocoverdir="+*gocoverdir)
-	}
+	args := append([]string{exe}, forkArgs(t.Name(), os.Args[1:])...)
 
 	// One pipe for both streams keeps the child's interleaving intact.
 	pr, pw, err := os.Pipe()
@@ -2078,6 +2062,47 @@ func (t *T) runForked() ([]byte, error) {
 		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
 	}
 	return output, readErr
+}
+
+// forkArgs returns the child's arguments: the ones this run was given, with the
+// test selection replaced by the one test the child exists to run.
+//
+// Forwarding the run's own arguments is what carries a package's CUSTOM flags,
+// which a fixed list of -test.* names cannot know about. cmd/internal/testdir
+// is the case that proves it: -target=js/wasm decides what that suite compiles
+// for, and a child without it silently tests the host instead.
+func forkArgs(name string, argv []string) []string {
+	args := make([]string, 0, len(argv)+2)
+	dropValue := false
+	for _, arg := range argv {
+		if dropValue {
+			dropValue = false
+			continue
+		}
+		// The child names its own selection below, so the run's must go. Left
+		// in place, -test.run would keep the parent's narrower pattern and the
+		// child would select nothing, or none of what the parent asked for.
+		if flagName, hasValue := forkFlagName(arg); flagName == "test.run" || flagName == "test.count" {
+			dropValue = !hasValue
+			continue
+		}
+		args = append(args, arg)
+	}
+	return append(args, "-test.run="+forkRunPattern(name), "-test.count=1")
+}
+
+// forkFlagName returns the flag an argument names, and whether the argument
+// carries the value as well. An argument that names no flag returns an empty
+// name.
+func forkFlagName(arg string) (name string, hasValue bool) {
+	if !strings.HasPrefix(arg, "-") {
+		return "", false
+	}
+	arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		return before, true
+	}
+	return arg, false
 }
 
 // forkRunPattern builds the -test.run value that selects one test, and only

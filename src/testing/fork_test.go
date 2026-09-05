@@ -185,6 +185,56 @@ func TestSetenvInAChildStaysInPlace(t *T) {
 	}
 }
 
+// TestForkArgs: the child inherits the run's arguments and replaces only the
+// selection. The -target case is the one that matters -- cmd/internal/testdir
+// reads it to decide what to compile for, so a child that loses it tests the
+// host and reports that as the answer.
+func TestForkArgs(t *T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{
+			name: "a custom flag is carried",
+			argv: []string{"-test.run=Test/wasmexport", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a selection given as two words drops both",
+			argv: []string{"-test.run", "Test/wasmexport", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "the run's own count does not survive",
+			argv: []string{"-test.count=5", "-test.v=true"},
+			want: []string{"-test.v=true", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a double dash names the same flag",
+			argv: []string{"--test.run=Whatever", "--target=wasip1/wasm"},
+			want: []string{"--target=wasip1/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a word that is not a flag is carried",
+			argv: []string{"positional", "-test.short"},
+			want: []string{"positional", "-test.short", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+	} {
+		t.Run(tc.name, func(t *T) {
+			got := forkArgs("TestFoo", tc.argv)
+			if len(got) != len(tc.want) {
+				t.Fatalf("forkArgs(%q) = %q, want %q", tc.argv, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("forkArgs(%q) = %q, want %q", tc.argv, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestForkRunPattern(t *T) {
 	for _, tc := range []struct{ name, want string }{
 		{"TestFoo", "^TestFoo$"},
