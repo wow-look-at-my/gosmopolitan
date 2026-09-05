@@ -499,6 +499,7 @@ func killAThread(c <-chan struct{}) {
 // the syscalls. Care should be taken to mirror any enhancements to
 // this test here in that file too.
 func TestSetuidEtc(t *testing.T) {
+	t.Serial("the calls below change the credentials of the whole process before putting them back")
 	if syscall.Getuid() != 0 {
 		t.Skip("skipping root only test")
 	}
