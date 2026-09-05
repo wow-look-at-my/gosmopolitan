@@ -122,6 +122,143 @@ func TestForkReportsTheChildsFailure(t *T) {
 	}
 }
 
+// TestSetenvForks: Setenv changes the process, and a child is how the test gets
+// one of its own. The barrier would give the same isolation and stop the suite
+// to do it, so the test asserts the variable is set AND that nothing was
+// stopped.
+func TestSetenvForks(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process, so Setenv takes the barrier")
+	}
+	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
+
+	if serialExclusive.Load() {
+		t.Error("Setenv took the serial barrier; it must fork and leave the suite running")
+	}
+	if got := os.Getenv(forkTargetEnv); got != t.Name() {
+		t.Fatalf("%s = %q, want %q: Setenv did not fork", forkTargetEnv, got, t.Name())
+	}
+	if got := os.Getenv("GO_TEST_SETENV_FORKS"); got != "yes" {
+		t.Errorf("the variable is %q in the child, want %q", got, "yes")
+	}
+}
+
+// TestChdirForks is the same rule for the other process-wide change.
+func TestChdirForks(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process, so Chdir takes the barrier")
+	}
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	if serialExclusive.Load() {
+		t.Error("Chdir took the serial barrier; it must fork and leave the suite running")
+	}
+	if got := os.Getenv(forkTargetEnv); got != t.Name() {
+		t.Fatalf("%s = %q, want %q: Chdir did not fork", forkTargetEnv, got, t.Name())
+	}
+	switch after, err := os.Getwd(); {
+	case err != nil:
+		t.Fatal(err)
+	case after == before:
+		t.Errorf("the working directory is still %q: the child did not change it", after)
+	}
+}
+
+// TestSetenvInAChildStaysInPlace: the marker check covers Setenv too, so a test
+// that already has a process of its own sets the variable there. Without it the
+// child would fork a grandchild, and this test would not finish.
+func TestSetenvInAChildStaysInPlace(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process")
+	}
+	t.Fork()
+
+	pid := os.Getpid()
+	t.Setenv("GO_TEST_SETENV_IN_CHILD", "yes")
+
+	if got := os.Getpid(); got != pid {
+		t.Fatalf("Setenv moved the test to pid %d from pid %d: it forked a second time", got, pid)
+	}
+}
+
+// TestForkArgs: the child inherits the run's arguments and replaces only the
+// selection. The -target case is the one that matters -- cmd/internal/testdir
+// reads it to decide what to compile for, so a child that loses it tests the
+// host and reports that as the answer.
+func TestForkArgs(t *T) {
+	for _, tc := range []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{
+			name: "a custom flag is carried",
+			argv: []string{"-test.run=TestFoo", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a selection given as two words is read, not passed on",
+			argv: []string{"-test.run", "TestFoo", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "the run's own count does not survive",
+			argv: []string{"-test.count=5", "-test.v=true"},
+			want: []string{"-test.v=true", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a double dash names the same flag",
+			argv: []string{"--test.run=Whatever", "--target=wasip1/wasm"},
+			want: []string{"--target=wasip1/wasm", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			name: "a word that is not a flag is carried",
+			argv: []string{"positional", "-test.short"},
+			want: []string{"positional", "-test.short", "-test.run=^TestFoo$", "-test.count=1"},
+		},
+		{
+			// The whole reason the run's pattern is read rather than dropped:
+			// the child must compile what the run named, not every subtest
+			// under it. This is the shape that ran the testdir suite dry.
+			name: "the run's filter on the subtests below survives",
+			argv: []string{"-test.run=TestFoo/wasmexport", "-target=js/wasm"},
+			want: []string{"-target=js/wasm", "-test.run=^TestFoo$/wasmexport", "-test.count=1"},
+		},
+	} {
+		t.Run(tc.name, func(t *T) {
+			got := forkArgs("TestFoo", tc.argv)
+			if len(got) != len(tc.want) {
+				t.Fatalf("forkArgs(%q) = %q, want %q", tc.argv, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("forkArgs(%q) = %q, want %q", tc.argv, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestForkRunValue(t *T) {
+	for _, tc := range []struct{ name, run, want string }{
+		{"Test", "", "^Test$"},
+		{"Test", "Test", "^Test$"},
+		{"Test", "Test/wasmexport", "^Test$/wasmexport"},
+		{"Test", "Test/wasmexport/deeper", "^Test$/wasmexport/deeper"},
+		// The forked test already names every element the run did, so there is
+		// no tail left to carry.
+		{"Test/wasmexport", "Test/wasmexport", "^Test$/^wasmexport$"},
+	} {
+		if got := forkRunValue(tc.name, tc.run); got != tc.want {
+			t.Errorf("forkRunValue(%q, %q) = %q, want %q", tc.name, tc.run, got, tc.want)
+		}
+	}
+}
+
 // TestAllocsPerRunForks: AllocsPerRun measures the whole process, so a caller
 // that shares it forks. Tests are parallel by default, so this test is such a
 // caller: the measurement below runs only in a child that runs this test alone.
