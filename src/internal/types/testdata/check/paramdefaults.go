@@ -55,5 +55,5 @@ func _() (r int = 1 /* ERROR "only a function parameter takes a default" */) { r
 
 // A parameter without a default is still required.
 func _() {
-	_ = required /* ERROR "not enough arguments" */ ()
+	_ = required() /* ERROR "not enough arguments" */
 }
