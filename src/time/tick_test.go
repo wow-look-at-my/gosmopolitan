@@ -266,6 +266,7 @@ func BenchmarkTickerResetNaive(b *testing.B) {
 }
 
 func TestTimerGC(t *testing.T) {
+	t.Serial("ReadMemStats counts the live objects of the whole process, so memory another test holds reads as a leak")
 	run := func(t *testing.T, what string, f func()) {
 		t.Helper()
 		t.Run(what, func(t *testing.T) {

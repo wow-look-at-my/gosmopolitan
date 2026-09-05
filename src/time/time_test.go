@@ -1081,6 +1081,7 @@ func TestParseDurationRoundTrip(t *testing.T) {
 
 // golang.org/issue/4622
 func TestLocationRace(t *testing.T) {
+	t.Serial("resetting the local zone changes it for every goroutine until the line at the end puts it back")
 	ResetLocalOnceForTest() // reset the Once to trigger the race
 
 	c := make(chan string, 1)
