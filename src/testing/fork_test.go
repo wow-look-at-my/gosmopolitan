@@ -150,6 +150,34 @@ func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
 	}
 }
 
+// TestAllocsPerRunRefusesBesideASibling: a fork gives the test a process, not
+// the process to itself, so the subtests of a forked test still run at the
+// same time. A second fork would land in the same place, so the measurement
+// refuses here and names the method that stops them.
+func TestAllocsPerRunRefusesBesideASibling(t *T) {
+	t.Fork()
+
+	running, release := make(chan struct{}), make(chan struct{})
+	t.Run("busy", func(t *T) {
+		close(running)
+		<-release
+	})
+	t.Run("measuring", func(t *T) {
+		<-running
+		defer close(release)
+		defer func() {
+			err, ok := recover().(error)
+			if !ok {
+				t.Fatal("AllocsPerRun measured while a sibling subtest was running")
+			}
+			if !strings.Contains(err.Error(), "t.Serial") {
+				t.Errorf("panic says %q; it must name t.Serial, which is the fix", err)
+			}
+		}()
+		AllocsPerRun(1, func() {})
+	})
+}
+
 func TestForkRunPattern(t *T) {
 	for _, tc := range []struct{ name, want string }{
 		{"TestFoo", "^TestFoo$"},
