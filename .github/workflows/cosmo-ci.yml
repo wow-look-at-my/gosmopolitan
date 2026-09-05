@@ -183,12 +183,14 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 testing
           # A list here, unlike the one above: cmd/go carries thousands of upstream scripts and the whole suite outruns this step's budget, so these name the fork-rewritten paths (cosmo env, the APE merge under -n, modload's replace check, and go install/run pkg@version honoring a queried module's own replace/exclude directives).
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/(env_cosmo|build_gcflags_order|godebug_removed|install_backslash|modfile_flag|run_vers|work_install_submodule|mod_replace|mod_tidy_replace|mod_vendor_replace|mod_install_pkg_version|mod_run_pkg_version|work_sync_check_multiple_paths_once)$' cmd/go
-          # GOOS=cosmo-only code, run on this host via the misc/cosmo exec wrappers (see docs/CI.md "build job").
-          export PATH="$PWD/misc/cosmo:$PATH"
-          GOOS=cosmo go test -count=1 internal/runtime/syscall/cosmo
-          GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay' runtime
-          # A list, not the whole package: syscall's suite needs a real host surface, while these are pure Apple-struct conversions the emulation cannot host-test.
-          GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes' syscall
+
+      # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
+      - name: GOOS=cosmo package tests (dats)
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 8
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/cosmo-tests.dats
 
       - name: Fork-divergence guardrails (go/build policy, moddeps)
         # see docs/CI.md "build job" for why this step exists and what it catches.

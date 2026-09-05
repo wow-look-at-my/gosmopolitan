@@ -277,14 +277,25 @@ go tool compile -bench=out.txt file.go
 - **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** A
   reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS
   answers with SIGILL, which killed any binary importing
-  `golang.org/x/sys/cpu` before `main`. The APE loader does pass a pair,
-  but it sets `hwcap_CPUID`, claiming the kernel emulates those
+  `golang.org/x/sys/cpu` before `main`. The APE loader does pass a
+  pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those
   registers; `fixAuxv` clears that bit in `osinit` (and builds a pair
   from Apple's `hw.optional` sysctls when none came), which is what
-  `internal/cpu` reads. x/sys/cpu never consults that vector - its own
-  init order beats the hook - so `syscall` serves it `/proc/self/auxv`
-  instead. Depth: DEBUGGING.md "AT_HWCAP" and "Working uname"
-  (2026-09-03/04).
+  `internal/cpu` reads. Never set `hwcap_CPUID`: it means "the kernel
+  emulates those registers". Depth: DEBUGGING.md "AT_HWCAP" and
+  "Working uname" (2026-09-03/04).
+- **`/proc/self/auxv` is served by the APE off a Linux host.** A library
+  written for Linux reads the auxiliary vector out of that file rather
+  than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv`
+  linkname, but the init that ARMS it sorts after the init that CALLS it,
+  so the call always sees nil and the file is the path it really takes.
+  `syscall.Openat` answers the path from `runtime.getAuxv`, handing back
+  the read end of a pipe holding the pairs plus the AT_NULL terminator:
+  before the real open on a macOS host, and after it fails anywhere else,
+  which leaves a Linux host on the kernel's own file and still answers
+  on NT. So AT_HWCAP now reaches x/sys/cpu too, which is
+  what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md
+  "AT_HWCAP" (2026-09-04).
 - **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
   Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
   40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
@@ -363,12 +374,14 @@ so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
 runtimeprobe) runs on all three test runners, and the ubuntu build leg
 also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus, via the misc/cosmo
-wrappers, the GOOS=cosmo internal/runtime/syscall/cosmo package
-tests (darwin sendmsg/recvmsg cmsg repack, signal translation
-tables, epoll layout) and the runtime-package cosmo tests (Apple
-itimerval ABI pins + timeval translation behind the darwin SIGPROF
-setitimer dispatch, signal translation tables). Every build leg additionally
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`,
+which runs the GOOS=cosmo package tests through the misc/cosmo wrappers:
+internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal
+translation tables, epoll layout), the runtime's Apple itimerval ABI pins and
+timeval translation behind the darwin SIGPROF setitimer dispatch, and the
+syscall package's Apple struct conversions plus the /proc/self/auxv shim. The
+name lists live in that suite, where an engineer can run them, rather than in a
+workflow step. Every build leg additionally
 asserts, right after make.bash, that `compile -V=full` reports a
 content-derived `buildID=` (the cross-build cache-poisoning guard —
 see the tool-build-ID bullet in Fork Gotchas).
