@@ -59,6 +59,13 @@ Mechanics:
 - The child's output becomes the test's output, and a child that cannot be started, or that dies on a signal, is
   reported against the test.
 
+`testing.AllocsPerRun` forks itself over this machinery. Its count and its `GOMAXPROCS(1)` are process-wide, so a
+caller that shares the process with other tests measures nothing meaningful. It takes no `*T` and cannot call `Fork`,
+so it panics with the internal `allocsFork` value; `tRunner` already recovers, and it forks there instead of dying.
+The child re-runs that one test alone and measures. A caller that already has the process - a forked child, a serial
+test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a
+goroutine that is no test, its message names `t.Fork` and `t.Serial`.
+
 It is fork+exec, not `fork(2)`: the child is a fresh process re-running the test binary. A bare `fork(2)` is not
 safe in Go - the child would inherit only the calling thread, with the runtime's other threads gone and any lock
 they held at fork time held forever - and it would be the wrong semantics anyway, since copy-on-write would hand
