@@ -26,11 +26,12 @@ two roots and cannot say so, or a second exported function per default.
   read; the parser rejects both.
 - Defaults must be **trailing**. A call omits a suffix of the parameter list,
   so a default before a required parameter could never be used.
-- A default is an **expression**, not a constant. It is evaluated at the call
-  site, in the caller's package, once per call that omits it — the same
-  ordering an explicit argument would get.
-- The expression must be **assignable to the parameter type**, by the ordinary
-  assignability rules.
+- A default is a **constant**, and a boolean, string or integer one. The call
+  site is given the value spelled back as source, and only those three kinds
+  have a spelling that reads back as the same constant. A float would arrive
+  as a rational.
+- The constant must be **assignable to the parameter type**, by the ordinary
+  assignability rules. An untyped one converts exactly as an argument would.
 - A **variadic** parameter already has a default (no elements) and takes no
   `=`.
 
@@ -39,18 +40,21 @@ two roots and cannot say so, or a second exported function per default.
 | Step | Package | State |
 |---|---|---|
 | Parse `= expr`, carry it on `syntax.Field.Default`, print it again | `cmd/compile/internal/syntax` | done |
-| Check the expression and enforce trailing | `cmd/compile/internal/types2` | done |
-| Record the expression on the parameter | `cmd/compile/internal/types2` | to do |
-| Accept a call that omits a defaulted suffix | `cmd/compile/internal/types2` | to do |
-| Insert the default expressions at the call site | `cmd/compile/internal/noder` | to do |
-| The same four for tooling | `go/ast`, `go/parser`, `go/types` | to do |
+| Check the constant and enforce trailing | `cmd/compile/internal/types2` | done |
+| Record it on the parameter (`Var.Default`) | `cmd/compile/internal/types2` | done |
+| Accept a call that omits a defaulted suffix, and fill it | `cmd/compile/internal/types2` | done |
+| The same for tooling | `go/ast`, `go/parser`, `go/types` | to do |
 
-The arity check and the lowering must land **together**. A relaxed check on
-its own type-checks a call and then emits one with too few arguments, which is
-a miscompile rather than a missing feature.
+The arity check and the lowering land **together**, in one place: `arguments`
+appends a synthesized literal to the call for each omitted parameter, before
+it counts them. So `noder` needs no change at all — it reads a call that is
+already full. A relaxed check with no fill would type-check a call and then
+emit one with too few arguments, which is a miscompile rather than a missing
+feature.
 
 ## Export data
 
 A default is part of a function's signature for a caller in another package,
 so it has to survive export. Until it does, a default is usable only inside
-the package that declares it.
+the package that declares it. A call from another package still compiles: it
+sees a parameter with no default, and has to pass every argument.

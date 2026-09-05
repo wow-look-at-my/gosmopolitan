@@ -7,6 +7,7 @@ package types2
 import (
 	"cmd/compile/internal/syntax"
 	"fmt"
+	"go/constant"
 	. "internal/types/errors"
 	"path/filepath"
 	"strings"
@@ -372,25 +373,43 @@ func (check *Checker) recordParenthesizedRecvTypes(expr syntax.Expr, typ Type) {
 	}
 }
 
-// paramDefault checks the "= expr" on one parameter: that the parameter is
-// one that can carry a default at all, and that the expression is assignable
-// to its type. Depth: docs/OPTIONAL-PARAMS.md.
-func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type, isVariadic bool) {
+// paramDefault checks the "= expr" on one parameter and returns its value. It
+// checks that the parameter is one that can carry a default at all, and that
+// the expression is a constant assignable to its type. Depth:
+// docs/OPTIONAL-PARAMS.md.
+func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type, isVariadic bool) constant.Value {
 	if field.Default == nil {
-		return
+		return nil
 	}
 	if kind != ParamVar {
 		check.error(field.Default, BadDecl, "only a function parameter takes a default")
-		return
+		return nil
 	}
 	if isVariadic {
 		// A variadic parameter already defaults to no elements.
 		check.error(field.Default, BadDecl, "variadic parameter cannot take a default")
-		return
+		return nil
 	}
 	var x operand
 	check.expr(nil, &x, field.Default)
 	check.assignment(&x, typ, "parameter default")
+	if x.mode == invalid {
+		return nil
+	}
+	// A caller in another package reads this value out of export data, so a
+	// constant is the whole of what a default can be for now.
+	if x.mode != constant_ {
+		check.error(field.Default, BadDecl, "parameter default must be a constant")
+		return nil
+	}
+	// The call site is given the value spelled back as source, and only these
+	// three kinds have a spelling that reads back as the same constant.
+	switch x.val.Kind() {
+	case constant.Bool, constant.String, constant.Int:
+		return x.val
+	}
+	check.error(field.Default, BadDecl, "parameter default must be a boolean, string or integer constant")
+	return nil
 }
 
 // collectParams collects (but does not declare) all parameter/result
@@ -436,7 +455,7 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 			names = append(names, field.Name)
 			params = append(params, par)
 			named = true
-			check.paramDefault(field, kind, typ, variadic && i == len(list)-1)
+			par.deflt = check.paramDefault(field, kind, typ, variadic && i == len(list)-1)
 		} else {
 			// anonymous parameter
 			par := newVar(kind, field.Pos(), check.pkg, "", typ)
