@@ -9,9 +9,12 @@ A test failing only under this fork's `go test` is almost always one of these.
 ## t.Serial
 
 A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` -
-calls `t.Serial()`, which waits for every other test to stop and runs the caller alone until it returns; `t.Setenv`,
-`t.Chdir` and `cryptotest.SetGlobalRandom` take it themselves, and `testing.AllocsPerRun` panics unless the caller
-did. A serial test's subtests run one at a time under its hold.
+calls `t.Serial()`, which waits for every other test to stop and runs the caller alone until it returns.
+`testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
+
+`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier: each changes state the child gets its
+own copy of, so all three reach `t.Fork()` instead and leave the suite running. One test setting an environment
+variable is no reason to stop every other test in the binary.
 
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
@@ -36,7 +39,11 @@ Mechanics:
   calls Fork gets a child running exactly that subtest.
 - The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. Its
   presence is also how a child knows never to fork again, so a forked test that runs subtests - or whose subtests
-  call Fork - still runs in exactly one child.
+  call Fork - still runs in exactly one child. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside
+  the child they change the process in place rather than starting a grandchild.
+- The parent runs the body as far as the Fork call before it hands over, so whatever the test does before that point
+  happens twice. This is worth knowing where `t.Setenv` sits partway down a test rather than at the top.
+- The children alive at once cannot outnumber `-parallel`, because a forked test holds its slot while it waits.
 - The child inherits the environment plus `-test.v`, `-test.timeout`, `-test.short`, `-test.fullpath` and
   `-test.gocoverdir`, so verbose output still appears and the child's coverage counts toward the same profile.
 - The child's output becomes the test's output, and a child that cannot be started, or that dies on a signal, is
