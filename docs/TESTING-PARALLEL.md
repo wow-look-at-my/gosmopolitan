@@ -12,9 +12,14 @@ A test that mutates process-wide state - a package global, the environment, the 
 calls `t.Serial()`, which waits for every other test to stop and runs the caller alone until it returns.
 `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
 
-`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier: each changes state the child gets its
-own copy of, so all three reach `t.Fork()` instead and leave the suite running. One test setting an environment
-variable is no reason to stop every other test in the binary.
+`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each
+changes state the child gets its own copy of, so all three reach `t.Fork()` instead and leave the suite running. One
+test setting an environment variable is no reason to stop every other test in the binary.
+
+They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no
+process creation, and iOS does not let a process exec another one. The isolation is the same either way; only the
+price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the
+process state and cannot be given one.
 
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 

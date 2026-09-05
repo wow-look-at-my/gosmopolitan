@@ -127,6 +127,9 @@ func TestForkReportsTheChildsFailure(t *T) {
 // to do it, so the test asserts the variable is set AND that nothing was
 // stopped.
 func TestSetenvForks(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process, so Setenv takes the barrier")
+	}
 	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
 
 	if serialExclusive.Load() {
@@ -142,6 +145,9 @@ func TestSetenvForks(t *T) {
 
 // TestChdirForks is the same rule for the other process-wide change.
 func TestChdirForks(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process, so Chdir takes the barrier")
+	}
 	before, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +172,9 @@ func TestChdirForks(t *T) {
 // that already has a process of its own sets the variable there. Without it the
 // child would fork a grandchild, and this test would not finish.
 func TestSetenvInAChildStaysInPlace(t *T) {
+	if !canFork() {
+		t.Skip("this platform cannot start a child process")
+	}
 	t.Fork()
 
 	pid := os.Getpid()

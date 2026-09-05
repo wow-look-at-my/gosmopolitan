@@ -2234,11 +2234,26 @@ func checkParallel(t *T) {
 	t.checkParallel()
 }
 
+// canFork reports whether this platform can start a child process. wasm has no
+// process creation at all, and iOS does not let a process exec another one.
+func canFork() bool {
+	switch runtime.GOOS {
+	case "js", "wasip1", "ios":
+		return false
+	}
+	return true
+}
+
 func (t *T) checkParallel() {
-	// Setenv and Chdir change the process, so the test needs a process no other
-	// test shares. Fork gives it one and leaves the suite running. The barrier
-	// gives it the same isolation and stops every other test to do it.
-	t.Fork()
+	// Setenv and Chdir change the process, so the test needs isolation from
+	// every other test. A child is the cheaper way to buy it, because it leaves
+	// the suite running. A host that cannot start one still has the barrier,
+	// which buys the same isolation by stopping every other test.
+	if canFork() {
+		t.Fork()
+		return
+	}
+	t.Serial()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
@@ -2249,6 +2264,9 @@ func (t *T) checkParallel() {
 // child process of its own, as if it had called [T.Fork]. The child applies the
 // variable to its own environment, and the rest of the suite keeps running
 // here. A test that is already the forked child sets the variable in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Setenv(key, value string) {
 	t.checkParallel()
 	t.common.Setenv(key, value)
@@ -2262,6 +2280,9 @@ func (t *T) Setenv(key, value string) {
 // process of its own, as if it had called [T.Fork]. The child changes its own
 // working directory, and the rest of the suite keeps running here. A test that
 // is already the forked child changes the directory in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Chdir(dir string) {
 	t.checkParallel()
 	t.common.Chdir(dir)
