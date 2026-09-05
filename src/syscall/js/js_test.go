@@ -654,7 +654,7 @@ var allocTests = []struct {
 
 // TestCallAllocations ensures the correct allocation profile for Value.Call
 func TestCallAllocations(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("calling into JavaScript must not allocate, and the count includes whatever another goroutine did")
 	for _, test := range allocTests {
 		args := make([]any, test.argLen)
 
@@ -671,7 +671,7 @@ func TestCallAllocations(t *testing.T) {
 
 // TestInvokeAllocations ensures the correct allocation profile for Value.Invoke
 func TestInvokeAllocations(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("invoking a JavaScript value has a fixed allocation budget shared with the rest of the process")
 	for _, test := range allocTests {
 		args := make([]any, test.argLen)
 
@@ -689,7 +689,7 @@ func TestInvokeAllocations(t *testing.T) {
 
 // TestNewAllocations ensures the correct allocation profile for Value.New
 func TestNewAllocations(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("constructing a JavaScript object is measured against a budget no concurrent allocation may spend")
 	arrayConstructor := js.Global().Get("Array")
 
 	for _, test := range allocTests {

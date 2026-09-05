@@ -24,9 +24,7 @@ const (
 	maxSerialReasonSimilarity = 0.98
 )
 
-// serialReason records one accepted reason and where it came from. The site
-// keys the registry, so a Serial call in a loop or a table-driven subtest
-// registers once and never reports itself as its own duplicate.
+// serialReason records one accepted reason and the call it came from.
 type serialReason struct {
 	site   string // "file.go:line" of the Serial call
 	test   string // the test that called Serial
@@ -34,75 +32,86 @@ type serialReason struct {
 	folded string // text, normalized for comparison
 }
 
-var serialReasons struct {
-	sync.Mutex
-	byNormalized map[string]serialReason // folded text -> first site that used it
-	seenSites    map[string]bool         // sites already registered
-	all          []serialReason
+// serialReasonRegistry holds every reason a test binary has given so far. It
+// is what makes the similarity rule mean anything: a rule that judged one
+// reason in isolation would pass a file whose every test pastes the same
+// sentence.
+type serialReasonRegistry struct {
+	mu    sync.Mutex
+	sites map[string]bool // call sites already registered
+	all   []serialReason
 }
 
-// checkSerialReason validates the reason a test gave for stopping every other
-// test, and reports every rule it breaks against that test. Each report is a
-// warning: the test still runs alone, because refusing to serialize a test
-// that asked for it would run it against the very state it is guarding.
-func (t *T) checkSerialReason(reason []string, file string, line int) {
-	site := fmt.Sprintf("%s:%d", baseName(file), line)
+// serialReasons is the registry the running test binary shares.
+var serialReasons serialReasonRegistry
 
+// check validates one Serial call and returns the warnings it earns, in the
+// order the rules are stated. It returns nothing for a reason that breaks no
+// rule.
+//
+// A call site registers once. A Serial inside a loop or a table-driven subtest
+// therefore never reports itself as its own duplicate, and the similarity rule
+// stays a statement about distinct calls in the source.
+func (r *serialReasonRegistry) check(testName, file string, line int, reason []string) []string {
 	if len(reason) == 0 {
-		t.serialWarnf("no reason given. Pass one: t.Serial(%q). Serializing costs every other test in the package.",
-			"why this test cannot share the process with any other")
-		return
+		return []string{fmt.Sprintf("no reason given. Pass one: t.Serial(%q). Every other test in this package stops for the duration.",
+			"why this test cannot share the process")}
 	}
 	text := strings.Join(reason, " ")
 
+	var warnings []string
+	warnf := func(format string, args ...any) {
+		warnings = append(warnings, fmt.Sprintf(format, args...))
+	}
+
 	if n := len([]rune(text)); n < minSerialReasonLen {
-		t.serialWarnf("reason is %d characters, and %d is the minimum: %q. Say what state is shared and who else touches it.",
+		warnf("reason is %d characters and %d is the minimum: %q. Name the shared state and who else touches it.",
 			n, minSerialReasonLen, text)
 	}
 
-	// The name and the file are on the screen already, next to this warning.
-	// A reason that repeats them spends its length saying nothing.
-	for _, echo := range serialSelfReferences(t.Name(), file) {
+	// The test's name and file sit next to this warning on the screen. A
+	// reason that repeats either one spends its length saying nothing.
+	for _, echo := range serialSelfReferences(testName, file) {
 		if containsFold(text, echo) {
-			t.serialWarnf("reason names %q, which the reader already has from the test's own name and file: %q.", echo, text)
+			warnf("reason repeats %q, which the reader already has from the test's own name and file: %q.", echo, text)
 			break
 		}
 	}
 
+	site := fmt.Sprintf("%s:%d", baseName(file), line)
 	folded := foldSerialReason(text)
 
-	serialReasons.Lock()
-	defer serialReasons.Unlock()
-	if serialReasons.seenSites[site] {
-		return
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sites[site] {
+		return warnings
 	}
-	for _, other := range serialReasons.all {
+	for _, other := range r.all {
 		sim := similarity(folded, other.folded)
 		if sim <= maxSerialReasonSimilarity {
 			continue
 		}
-		t.serialWarnf("reason is %.0f%% the same as the one %s gives at %s (the bound is %.0f%%): %q. Two tests that serialize for the same reason usually want t.Fork, which stops nobody.",
+		warnf("reason is %.1f%% the same as the one %s gives at %s, and the bound is %.0f%%: %q. Two tests serializing for one reason usually want t.Fork, which stops nobody.",
 			sim*100, other.test, other.site, maxSerialReasonSimilarity*100, text)
 		break
 	}
-	if serialReasons.byNormalized == nil {
-		serialReasons.byNormalized = make(map[string]serialReason)
-		serialReasons.seenSites = make(map[string]bool)
+	if r.sites == nil {
+		r.sites = make(map[string]bool)
 	}
-	r := serialReason{site: site, test: t.Name(), text: text, folded: folded}
-	serialReasons.seenSites[site] = true
-	serialReasons.all = append(serialReasons.all, r)
-	if _, ok := serialReasons.byNormalized[folded]; !ok {
-		serialReasons.byNormalized[folded] = r
-	}
+	r.sites[site] = true
+	r.all = append(r.all, serialReason{site: site, test: testName, text: text, folded: folded})
+	return warnings
 }
 
-// serialWarnf reports one broken rule against the calling test. It is a log
-// line, not a failure: the point is to make a blanket opt-out of parallelism
-// visible to whoever reads the run, not to break a suite over its prose.
-func (t *T) serialWarnf(format string, args ...any) {
+// checkSerialReason reports every rule this test's reason breaks. Each report
+// is a warning and the test still runs alone: refusing to serialize a test
+// that asked for it would run that test against the state it is guarding, and
+// a suite must not fail over its own prose.
+func (t *T) checkSerialReason(reason []string, file string, line int) {
 	t.Helper()
-	t.Logf("warning: t.Serial: "+format, args...)
+	for _, w := range serialReasons.check(t.Name(), file, line, reason) {
+		t.Logf("warning: t.Serial: %s", w)
+	}
 }
 
 // serialSelfReferences returns the strings a reason must not contain: the

@@ -860,7 +860,7 @@ func testSchedPauseMetrics(t *testing.T, fn func(t *testing.T), isGC, isOther bo
 }
 
 func TestSchedPauseMetrics(t *testing.T) {
-	t.Serial() // The pause counters are process-wide; another test's GC moves the baseline.
+	t.Serial("the pause counters are cumulative for the process, so another goroutine collecting moves the baseline")
 	tests := []struct {
 		name   string
 		isGC   bool

@@ -45,7 +45,7 @@ func TestSettingString(t *testing.T) {
 }
 
 func TestSorterPoolAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the sorter comes from a shared pool, and the allocation count covers every goroutine that touches it")
 	h := Header{
 		"a": nil,
 		"b": nil,

@@ -292,7 +292,7 @@ func TestHTTPServe(t *testing.T) {
 }
 
 func TestDialRefused(t *testing.T) {
-	t.Serial() // The host-side clock below measures wall time; a sibling guest run inflates it.
+	t.Serial("the clock below measures wall time, and a sibling guest run on this machine inflates it")
 	// Find a port that is closed: bind one, note it, close it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

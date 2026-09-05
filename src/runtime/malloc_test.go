@@ -140,7 +140,7 @@ func TestMemStats(t *testing.T) {
 }
 
 func TestStringConcatenationAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("AllocsPerRun charges this count every allocation the process makes, and a byte slice filled in a loop should show one")
 	n := testing.AllocsPerRun(1e3, func() {
 		b := make([]byte, 10)
 		for i := 0; i < 10; i++ {
@@ -334,7 +334,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		// makes these tests convenient).
 
 		t.Run("allocs-baseline", func(t *testing.T) {
-			t.Serial() // AllocsPerRun measures the whole process.
+			t.Serial("the baseline count for a run with no explicit free means nothing if another goroutine allocates beside it")
 			// Baseline result without any explicit free.
 			allocs := testing.AllocsPerRun(100, func() {
 				for range 100 {
@@ -350,7 +350,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		})
 
 		t.Run("allocs-with-free", func(t *testing.T) {
-			t.Serial() // AllocsPerRun measures the whole process.
+			t.Serial("explicit free is expected to report zero allocations, which any concurrent allocator in this process would spoil")
 			// Same allocations, but now using explicit free so that
 			// no allocs get reported. (Again, not the desired long-term behavior).
 			if SizeSpecializedMallocEnabled && !noscan {
@@ -373,7 +373,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		})
 
 		t.Run("free-multiple", func(t *testing.T) {
-			t.Serial() // AllocsPerRun measures the whole process.
+			t.Serial("several outstanding allocations must stay inside the smallest free list, so nothing else may allocate meanwhile")
 			// Multiple allocations outstanding before explicitly freeing,
 			// but still within the limit of our smallest free list size
 			// so that no allocs are reported. (Again, not long-term behavior).

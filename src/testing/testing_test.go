@@ -181,7 +181,7 @@ func TestTempDirGOTMPDIR(t *testing.T) {
 }
 
 func TestSetenv(t *testing.T) {
-	t.Serial() // The subtests must run inside the loop that sets each initial value.
+	t.Serial("the subtests must run inside the loop that sets each initial value into the environment")
 	tests := []struct {
 		name               string
 		key                string
@@ -323,7 +323,7 @@ func TestChdirWithParallelGrandParentBefore(t *testing.T) {
 }
 
 func TestChdir(t *testing.T) {
-	t.Serial() // The subtests must run in order, from the original directory.
+	t.Serial("the subtests each change the working directory and must start from the original one")
 	oldDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -876,7 +876,7 @@ func TestRunningTestsInCleanup(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		t.Serial() // The outer subtests must run one at a time, inside t.Run.
+		t.Serial("the outer subtests must run one at a time, so the cleanup sees a known set of running tests")
 		for i := 0; i < 2; i++ {
 			t.Run(fmt.Sprintf("outer%d", i), func(t *testing.T) {
 				// Not parallel: we expect to see only one outer test,
@@ -959,7 +959,7 @@ func TestConcurrentRun(t *testing.T) {
 	// Regression test for https://go.dev/issue/64402:
 	// this deadlocked after https://go.dev/cl/506755.
 
-	t.Serial() // The body waits for the subtests, so they must run inside t.Run.
+	t.Serial("the body waits for its subtests to finish, so they have to run inside the calls that start them")
 	block := make(chan struct{})
 	var ready, done sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -990,7 +990,7 @@ func TestParentRun(t1 *testing.T) {
 }
 
 func TestContext(t *testing.T) {
-	t.Serial() // inner2 reads what inner left behind, so the two must run in order.
+	t.Serial("the second inner test reads what the first one left behind, so the two must run in order")
 	ctx := t.Context()
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("expected non-canceled context, got %v", err)

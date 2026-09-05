@@ -3667,7 +3667,7 @@ func testProxyForRequest(t *testing.T, tt proxyFromEnvTest, proxyForRequest func
 }
 
 func TestProxyFromEnvironment(t *testing.T) {
-	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
+	t.Serial("the proxy variables and the resolved-proxy cache are process state no concurrent test may see half-set")
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {
@@ -3683,7 +3683,7 @@ func TestProxyFromEnvironment(t *testing.T) {
 }
 
 func TestProxyFromEnvironmentLowerCase(t *testing.T) {
-	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
+	t.Serial("this sets the lowercase proxy variables, and the cached lookup they feed belongs to the whole process")
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {

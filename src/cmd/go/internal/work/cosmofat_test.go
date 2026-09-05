@@ -141,7 +141,7 @@ func TestCosmoDebugModeMinGcflags(t *testing.T) {
 		}
 	}
 
-	t.Serial() // cfg and forcedGcflags are package globals.
+	t.Serial("cfg and forcedGcflags are package globals that every build in this process reads")
 	restore := func(goos, toolchain string, forced []string) func() {
 		return func() {
 			cfg.Goos = goos
@@ -247,7 +247,7 @@ func TestCosmoFatSkipOutput(t *testing.T) {
 					t.Skip("no special-file os.DevNull on this platform")
 				}
 			}
-			t.Serial() // cfg.BuildO is a package global.
+			t.Serial("cfg.BuildO is a package global, and the output name it holds decides where a sibling build writes")
 			defer func(old string) { cfg.BuildO = old }(cfg.BuildO)
 			cfg.BuildO = tt.out
 			if got := cosmoFatSkipOutput(); got != tt.want {

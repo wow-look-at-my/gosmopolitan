@@ -44,7 +44,7 @@ func TestForkStaysParallel(t *T) {
 // TestForkWithSerialIsSerial: Serial is how a forked test asks for the process
 // to itself as well, and it still means that inside the child.
 func TestForkWithSerialIsSerial(t *T) {
-	t.Serial()
+	t.Serial("this checks that an exclusive barrier hold survives into a child process, so nothing else may hold it")
 	t.Fork()
 
 	if !serialExclusive.Load() {
@@ -142,7 +142,7 @@ var allocsSink any
 // to itself, so the measurement happens right here. A fork would run the rest
 // of this test in a child, where the marker is set.
 func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
-	t.Serial()
+	t.Serial("a measurement taken while the barrier is held must not fork, which only holding it here proves")
 
 	AllocsPerRun(1, func() {})
 	if got := os.Getenv(forkTargetEnv); got != "" {

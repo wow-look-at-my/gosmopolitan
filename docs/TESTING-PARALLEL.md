@@ -9,11 +9,40 @@ A test failing only under this fork's `go test` is almost always one of these.
 ## t.Serial
 
 A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` -
-calls `t.Serial()`, which waits for every other test to stop and runs the caller alone until it returns; `t.Setenv`,
-`t.Chdir` and `cryptotest.SetGlobalRandom` take it themselves. A serial test's subtests run one at a time under its
-hold.
+calls `t.Serial(reason)`, which waits for every other test to stop and runs the caller alone until it returns;
+`t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` take it themselves. A serial test's subtests run one at a time
+under its hold.
 
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
+
+### The reason argument
+
+```go
+t.Serial("cfg.BuildX is a package global, and turning it on changes what every other build prints")
+```
+
+The reason is what the next reader has instead of the shared state, which is invisible from the call. `Serial` checks
+it and **warns**, then runs the test alone anyway - a suite must not fail over its own prose, and refusing to
+serialize a test that asked to be serialized would run it against the state it is guarding. Four rules, all reported
+against the calling test as `warning: t.Serial: ...`:
+
+| Rule | Why |
+|---|---|
+| A reason is given | An unexplained serial test is a `-parallel 1` nobody can review. |
+| At least 48 characters | "process-wide state" and "AllocsPerRun" name a category, not this test's problem. |
+| Does not repeat the test's name or file | Both sit next to the warning already; repeating them spends the length saying nothing. |
+| At most 98% the same as another reason in the binary | This is the rule with teeth. |
+
+The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly stops
+being parallel: each call looks defensible on its own, and the 84th one costs as much as the first. Two tests that
+serialize for the same reason usually want `t.Fork` instead, which gives each a process and stops nobody.
+
+Mechanics: reasons are compared normalized - lowercased, with runs of non-alphanumerics collapsed - so case and
+punctuation do not make one reason look like two. The score is Levenshtein distance over the length of the longer
+reason. The registry is per test binary, so the bound is a statement about one package. A call site registers once,
+so a `Serial` in a loop or in a table-driven subtest never reports itself as its own duplicate.
+
+Implementation: `src/testing/serialreason.go`; tests in `src/testing/serialreason_test.go`.
 
 ## t.Fork
 

@@ -1112,7 +1112,7 @@ var mallocTest = []struct {
 }
 
 func TestCountMallocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("the malloc counts here come from process-wide statistics that any other goroutine moves")
 	if testing.Short() {
 		t.Skip("skipping malloc count in short mode")
 	}
@@ -1777,7 +1777,7 @@ func TestMarshalBinaryVersion2Bugfix(t *testing.T) {
 }
 
 func TestUnmarshalTextAllocations(t *testing.T) {
-	t.Serial()                       // AllocsPerRun measures the whole process.
+	t.Serial("parsing a timestamp must not allocate, and the counter cannot separate this goroutine from the rest")
 	in := []byte(testdataRFC3339UTC) // short enough to be stack allocated
 	if allocs := testing.AllocsPerRun(100, func() {
 		var t Time

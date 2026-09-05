@@ -63,10 +63,13 @@ go test std
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
 **Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called
-`t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial()` stops every other test and runs the caller
-alone in this process; `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit
+`t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial(reason)` stops every other test and runs the
+caller alone in this process; `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit
 status as the verdict - which is what a test wants when the shared state is process-global, since the child gets
 its own copy. A test failing only under this fork's `go test` is almost always one of these.
+`Serial` warns, and runs the test anyway, when its reason is missing, under 48 characters, an echo of the test's own
+name or file, or over 98% the same as another reason in the same test binary - a pasted sentence across a file is how
+a package stops being parallel one defensible-looking call at a time.
 Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
 
 ## Building Cosmopolitan Binaries
