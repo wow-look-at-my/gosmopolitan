@@ -40,7 +40,10 @@ func TestCacheKeys(t *testing.T) {
 }
 
 func ResetProxyEnv() {
-	for _, v := range []string{"HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "REQUEST_METHOD"} {
+	// HTTPS_PROXY belongs here too: without it a machine that sets one has it
+	// answer every https request the tests make, whatever they put in the
+	// lowercase variable.
+	for _, v := range []string{"HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "REQUEST_METHOD"} {
 		os.Unsetenv(v)
 	}
 	ResetCachedEnvironment()
