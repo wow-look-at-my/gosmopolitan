@@ -222,15 +222,13 @@ jobs:
           GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
           GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
 
-      - name: The type checkers and their importers
-        # whole packages, so a test added there runs without editing this file. see docs/CI.md.
+      - name: The whole test suite (run.bash)
+        # the distribution's own all-tests entry point, so a new test runs without editing this file. see docs/CI.md.
         if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 20
+        timeout-minutes: 60
         shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/types2 go/types go/internal/gcimporter
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/paramdefaults\.go'
+        working-directory: src
+        run: ./run.bash
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
