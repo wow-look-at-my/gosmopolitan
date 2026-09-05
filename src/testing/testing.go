@@ -2060,7 +2060,7 @@ func (t *T) forkAndTakeTheResult() {
 func (t *T) failWithoutAChild() {
 	t.Fail()
 	t.log("AllocsPerRun needs this process to itself, and "+runtime.GOOS+
-		" starts no child process: call t.Serial() in this test", true)
+		" starts no child process: call t.Serial(reason) in this test", true)
 
 	t.mu.Lock()
 	t.finished = true
