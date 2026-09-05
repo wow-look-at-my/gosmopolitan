@@ -1945,7 +1945,30 @@ func (c *common) barrierHolder() *common {
 // The subtests of a serial test run one at a time, inside the calls to
 // [T.Run] that start them, under the same hold. Calling Serial again, from the
 // test or from one of its subtests, does nothing.
-func (t *T) Serial() {
+//
+// Pass the reason this test cannot share the process. It is what the next
+// reader has instead of the shared state itself, which is invisible from the
+// call. Serial reports a warning, and runs the test alone anyway, when the
+// reason is missing, when it is shorter than 48 characters, when it repeats
+// the test's own name or file, or when it is more than 98% the same as the
+// reason another test in this binary gives. Those bounds are there because a
+// serial test stops every other test in the package: a reason pasted across a
+// whole file turns a suite parallel by default back into a serial one, one
+// call at a time, and nothing else in the build would say so.
+//
+//	t.Serial("SetGCPercent is process-wide, and a concurrent test's allocation moves the heap goal this measures")
+func (t *T) Serial(reason ...string) {
+	t.Helper()
+	if _, file, line, ok := runtime.Caller(1); ok {
+		t.checkSerialReason(reason, file, line)
+	}
+	t.serialize()
+}
+
+// serialize upgrades this test's hold on the serial barrier to exclusive. It
+// is Serial without the justification: the callers here are [T.Setenv] and
+// [T.Chdir], which name the process-wide state in their own documentation.
+func (t *T) serialize() {
 	c := t.common.barrierHolder()
 	if c == nil {
 		// The root test: nothing else runs to be serialized against.
@@ -2243,7 +2266,7 @@ func checkParallel(t *T) {
 func (t *T) checkParallel() {
 	// SetEnv and Chdir affect the whole process, so the test needs the process
 	// to itself. Taking the barrier is what gives it that.
-	t.Serial()
+	t.serialize()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
