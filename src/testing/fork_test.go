@@ -122,6 +122,60 @@ func TestForkReportsTheChildsFailure(t *T) {
 	}
 }
 
+// TestSetenvForks: Setenv changes the process, and a child is how the test gets
+// one of its own. The barrier would give the same isolation and stop the suite
+// to do it, so the test asserts the variable is set AND that nothing was
+// stopped.
+func TestSetenvForks(t *T) {
+	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
+
+	if serialExclusive.Load() {
+		t.Error("Setenv took the serial barrier; it must fork and leave the suite running")
+	}
+	if got := os.Getenv(forkTargetEnv); got != t.Name() {
+		t.Fatalf("%s = %q, want %q: Setenv did not fork", forkTargetEnv, got, t.Name())
+	}
+	if got := os.Getenv("GO_TEST_SETENV_FORKS"); got != "yes" {
+		t.Errorf("the variable is %q in the child, want %q", got, "yes")
+	}
+}
+
+// TestChdirForks is the same rule for the other process-wide change.
+func TestChdirForks(t *T) {
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	if serialExclusive.Load() {
+		t.Error("Chdir took the serial barrier; it must fork and leave the suite running")
+	}
+	if got := os.Getenv(forkTargetEnv); got != t.Name() {
+		t.Fatalf("%s = %q, want %q: Chdir did not fork", forkTargetEnv, got, t.Name())
+	}
+	switch after, err := os.Getwd(); {
+	case err != nil:
+		t.Fatal(err)
+	case after == before:
+		t.Errorf("the working directory is still %q: the child did not change it", after)
+	}
+}
+
+// TestSetenvInAChildStaysInPlace: the marker check covers Setenv too, so a test
+// that already has a process of its own sets the variable there. Without it the
+// child would fork a grandchild, and this test would not finish.
+func TestSetenvInAChildStaysInPlace(t *T) {
+	t.Fork()
+
+	pid := os.Getpid()
+	t.Setenv("GO_TEST_SETENV_IN_CHILD", "yes")
+
+	if got := os.Getpid(); got != pid {
+		t.Fatalf("Setenv moved the test to pid %d from pid %d: it forked a second time", got, pid)
+	}
+}
+
 func TestForkRunPattern(t *T) {
 	for _, tc := range []struct{ name, want string }{
 		{"TestFoo", "^TestFoo$"},

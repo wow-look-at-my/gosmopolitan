@@ -1987,6 +1987,8 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 //
 // The child re-runs this test from a fresh process, so the package's
 // initialization happens again and nothing another test did here is visible.
+// The parent has already run the body as far as this call, so whatever the test
+// does before it happens twice: once here, and once more in the child.
 // It inherits this process's environment and its -test.v, -test.timeout,
 // -test.short, -test.fullpath and -test.gocoverdir settings, so verbose output
 // still appears and coverage still counts toward the same profile.
@@ -2233,18 +2235,20 @@ func checkParallel(t *T) {
 }
 
 func (t *T) checkParallel() {
-	// SetEnv and Chdir affect the whole process, so the test needs the process
-	// to itself. Taking the barrier is what gives it that.
-	t.Serial()
+	// Setenv and Chdir change the process, so the test needs a process no other
+	// test shares. Fork gives it one and leaves the suite running. The barrier
+	// gives it the same isolation and stops every other test to do it.
+	t.Fork()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
 // restore the environment variable to its original value
 // after the test.
 //
-// Because Setenv affects the whole process, it takes the serial barrier: the
-// test runs alone from this call until it returns, as if it had called
-// [T.Serial].
+// Because Setenv changes the whole process, the rest of the test runs in a
+// child process of its own, as if it had called [T.Fork]. The child applies the
+// variable to its own environment, and the rest of the suite keeps running
+// here. A test that is already the forked child sets the variable in place.
 func (t *T) Setenv(key, value string) {
 	t.checkParallel()
 	t.common.Setenv(key, value)
@@ -2254,9 +2258,10 @@ func (t *T) Setenv(key, value string) {
 // working directory to its original value after the test. On Unix, it
 // also sets PWD environment variable for the duration of the test.
 //
-// Because Chdir affects the whole process, it takes the serial barrier: the
-// test runs alone from this call until it returns, as if it had called
-// [T.Serial].
+// Because Chdir changes the whole process, the rest of the test runs in a child
+// process of its own, as if it had called [T.Fork]. The child changes its own
+// working directory, and the rest of the suite keeps running here. A test that
+// is already the forked child changes the directory in place.
 func (t *T) Chdir(dir string) {
 	t.checkParallel()
 	t.common.Chdir(dir)
