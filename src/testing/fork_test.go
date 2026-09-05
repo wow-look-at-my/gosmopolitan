@@ -7,7 +7,50 @@ package testing
 import (
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
+
+// TestForkStaysParallel: Fork gives the test a process, not a serial hold. The
+// child runs parallel-by-default like any other run, so the subtests of a
+// forked test must reach a rendezvous only concurrent code can reach.
+func TestForkStaysParallel(t *T) {
+	t.Fork()
+
+	if serialExclusive.Load() {
+		t.Error("Fork took the serial barrier; it must leave the caller parallel")
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	met := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(met)
+	}()
+
+	for _, name := range []string{"one", "two"} {
+		t.Run(name, func(t *T) {
+			wg.Done()
+			select {
+			case <-met:
+			case <-time.After(10 * time.Second):
+				t.Errorf("%s waited alone: the subtests of a forked test ran one at a time", t.Name())
+			}
+		})
+	}
+}
+
+// TestForkWithSerialIsSerial: Serial is how a forked test asks for the process
+// to itself as well, and it still means that inside the child.
+func TestForkWithSerialIsSerial(t *T) {
+	t.Serial()
+	t.Fork()
+
+	if !serialExclusive.Load() {
+		t.Error("Serial before Fork must still hold the barrier in the child")
+	}
+}
 
 // TestForkRunsTheBodyInAChildProcess: the body runs only where the fork
 // marker is set, which is a process Fork started for exactly this test.
