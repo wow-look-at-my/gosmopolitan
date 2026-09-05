@@ -2344,7 +2344,12 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
-	if canFork() {
+	//
+	// Inside a child there is no second fork to take, and the child's own
+	// subtests are parallel like any other run, so the barrier is what
+	// isolates the caller from them. Without it a test whose subtests each set
+	// an environment variable would have them overwrite each other.
+	if canFork() && os.Getenv(forkTargetEnv) == "" {
 		t.Fork()
 		return
 	}

@@ -74,7 +74,11 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 
 	pid := os.Getpid()
-	if os.Getenv("GO_EXEC_TEST_PID") == "" {
+	// A child t.Fork started is a test process, not one of the helper commands
+	// below, and it inherits GO_EXEC_TEST_PID from the process that started it.
+	// Its marker is what tells the two apart. t.Setenv and t.Chdir fork, so
+	// every test here that calls either one reaches this.
+	if os.Getenv("GO_EXEC_TEST_PID") == "" || os.Getenv("GO_TEST_FORK_TARGET") != "" {
 		os.Setenv("GO_EXEC_TEST_PID", strconv.Itoa(pid))
 
 		if runtime.GOOS == "windows" {
