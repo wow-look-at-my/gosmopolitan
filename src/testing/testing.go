@@ -2010,9 +2010,12 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 //
 // The child re-runs this test from a fresh process, so the package's
 // initialization happens again and nothing another test did here is visible.
-// It inherits this process's environment and its -test.v, -test.timeout,
-// -test.short, -test.fullpath and -test.gocoverdir settings, so verbose output
-// still appears and coverage still counts toward the same profile.
+// The parent has already run the body as far as this call, so whatever the test
+// does before it happens twice: once here, and once more in the child.
+// It inherits this process's environment and the arguments this run was given,
+// its package's own flags included, with only the test selection replaced. So
+// verbose output still appears, coverage still counts toward the same profile,
+// and a suite whose flags decide what it tests still tests that.
 //
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
@@ -2050,6 +2053,20 @@ func (t *T) forkAndTakeTheResult() {
 	t.mu.Unlock()
 }
 
+// failWithoutAChild reports an allocsFork panic on a host that starts no child
+// process. The measurement still needs the process to itself, and the barrier
+// is the only way left to give it one, so the failure names that rather than
+// the pipe the host was never going to open.
+func (t *T) failWithoutAChild() {
+	t.Fail()
+	t.log("AllocsPerRun needs this process to itself, and "+runtime.GOOS+
+		" starts no child process: call t.Serial() in this test", true)
+
+	t.mu.Lock()
+	t.finished = true
+	t.mu.Unlock()
+}
+
 // runForked starts one child process for this test, and returns everything the
 // child wrote together with the reason it did not pass, if it did not.
 func (t *T) runForked() ([]byte, error) {
@@ -2060,24 +2077,7 @@ func (t *T) runForked() ([]byte, error) {
 		exe = os.Args[0]
 	}
 
-	args := []string{exe, "-test.run=" + forkRunPattern(t.Name()), "-test.count=1"}
-	if chatty.on {
-		args = append(args, "-test.v=true")
-	}
-	if *short {
-		args = append(args, "-test.short")
-	}
-	if *fullPath {
-		args = append(args, "-test.fullpath")
-	}
-	if *timeout > 0 {
-		args = append(args, "-test.timeout="+timeout.String())
-	}
-	if *gocoverdir != "" {
-		// Same directory, so the child's counters land in the profile this run
-		// is already writing.
-		args = append(args, "-test.gocoverdir="+*gocoverdir)
-	}
+	args := append([]string{exe}, forkArgs(t.Name(), os.Args[1:])...)
 
 	// One pipe for both streams keeps the child's interleaving intact.
 	pr, pw, err := os.Pipe()
@@ -2107,6 +2107,72 @@ func (t *T) runForked() ([]byte, error) {
 		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
 	}
 	return output, readErr
+}
+
+// forkArgs returns the child's arguments: the ones this run was given, with the
+// test selection replaced by the one test the child exists to run.
+//
+// Forwarding the run's own arguments is what carries a package's CUSTOM flags,
+// which a fixed list of -test.* names cannot know about. cmd/internal/testdir
+// is the case that proves it: -target=js/wasm decides what that suite compiles
+// for, and a child without it silently tests the host instead.
+func forkArgs(name string, argv []string) []string {
+	args := make([]string, 0, len(argv)+2)
+	run, awaiting := "", ""
+	for _, arg := range argv {
+		if awaiting != "" {
+			if awaiting == "test.run" {
+				run = arg
+			}
+			awaiting = ""
+			continue
+		}
+		flagName, value, hasValue := forkFlag(arg)
+		if flagName != "test.run" && flagName != "test.count" {
+			args = append(args, arg)
+			continue
+		}
+		if !hasValue {
+			awaiting = flagName
+			continue
+		}
+		if flagName == "test.run" {
+			run = value
+		}
+	}
+	return append(args, "-test.run="+forkRunValue(name, run), "-test.count=1")
+}
+
+// forkRunValue builds the child's -test.run: this test, anchored element by
+// element, and then whatever the run's own pattern says about the tests BELOW
+// it.
+//
+// That tail is what keeps the child's work the same size as the parent's.
+// Anchoring the name alone selects the test AND every subtest under it, so a
+// top-level test that forks under -run Test/wasmexport would compile the whole
+// suite instead of the handful the run named.
+func forkRunValue(name, run string) string {
+	pattern := forkRunPattern(name)
+	depth := strings.Count(name, "/") + 1
+	tail := strings.Split(run, "/")
+	if run == "" || len(tail) <= depth {
+		return pattern
+	}
+	return pattern + "/" + strings.Join(tail[depth:], "/")
+}
+
+// forkFlag returns the flag an argument names, its value, and whether the
+// argument carries that value rather than leaving it to the next argument. An
+// argument that names no flag returns an empty name.
+func forkFlag(arg string) (name, value string, hasValue bool) {
+	if !strings.HasPrefix(arg, "-") {
+		return "", "", false
+	}
+	arg = strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-")
+	if before, after, ok := strings.Cut(arg, "="); ok {
+		return before, after, true
+	}
+	return arg, "", false
 }
 
 // forkRunPattern builds the -test.run value that selects one test, and only
@@ -2263,9 +2329,25 @@ func checkParallel(t *T) {
 	t.checkParallel()
 }
 
+// canFork reports whether this platform can start a child process. wasm has no
+// process creation at all, and iOS does not let a process exec another one.
+func canFork() bool {
+	switch runtime.GOOS {
+	case "js", "wasip1", "ios":
+		return false
+	}
+	return true
+}
+
 func (t *T) checkParallel() {
-	// SetEnv and Chdir affect the whole process, so the test needs the process
-	// to itself. Taking the barrier is what gives it that.
+	// Setenv and Chdir change the process, so the test needs isolation from
+	// every other test. A child is the cheaper way to buy it, because it leaves
+	// the suite running. A host that cannot start one still has the barrier,
+	// which buys the same isolation by stopping every other test.
+	if canFork() {
+		t.Fork()
+		return
+	}
 	t.serialize()
 }
 
@@ -2273,9 +2355,13 @@ func (t *T) checkParallel() {
 // restore the environment variable to its original value
 // after the test.
 //
-// Because Setenv affects the whole process, it takes the serial barrier: the
-// test runs alone from this call until it returns, as if it had called
-// [T.Serial].
+// Because Setenv changes the whole process, the rest of the test runs in a
+// child process of its own, as if it had called [T.Fork]. The child applies the
+// variable to its own environment, and the rest of the suite keeps running
+// here. A test that is already the forked child sets the variable in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Setenv(key, value string) {
 	t.checkParallel()
 	t.common.Setenv(key, value)
@@ -2285,9 +2371,13 @@ func (t *T) Setenv(key, value string) {
 // working directory to its original value after the test. On Unix, it
 // also sets PWD environment variable for the duration of the test.
 //
-// Because Chdir affects the whole process, it takes the serial barrier: the
-// test runs alone from this call until it returns, as if it had called
-// [T.Serial].
+// Because Chdir changes the whole process, the rest of the test runs in a child
+// process of its own, as if it had called [T.Fork]. The child changes its own
+// working directory, and the rest of the suite keeps running here. A test that
+// is already the forked child changes the directory in place.
+//
+// A platform that cannot start a child process takes the serial barrier
+// instead, as if the test had called [T.Serial].
 func (t *T) Chdir(dir string) {
 	t.checkParallel()
 	t.common.Chdir(dir)
@@ -2333,7 +2423,11 @@ func tRunner(t *T, fn func(t *T)) {
 			// gets no *T. Give it one here: the body is over, and the child
 			// re-runs this test alone, exactly as Fork does.
 			err = nil
-			t.forkAndTakeTheResult()
+			if canFork() {
+				t.forkAndTakeTheResult()
+			} else {
+				t.failWithoutAChild()
+			}
 		}
 
 		t.mu.RLock()
