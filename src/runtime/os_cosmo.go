@@ -362,10 +362,10 @@ func sysauxv(auxv []uintptr) (pairs int) {
 
 func osinit() {
 	osArchInit()
-	// macOS hands a program no auxiliary vector, so the answers a Linux
-	// program reads out of one have to come from somewhere else. This
-	// runs here rather than in sysargs because it asks the host, and the
-	// host is only safe to ask once osArchInit has run.
+	// A macOS host's AT_HWCAP needs fixing up before internal/cpu reads
+	// it in cpuinit. This runs here rather than in sysargs because it
+	// asks the host, and the host is only safe to ask once osArchInit
+	// ran.
 	fixAuxv()
 	numCPUStartup = getCPUCount()
 }
