@@ -29,8 +29,7 @@ const (
 type serialReason struct {
 	site   string // "file.go:line" of the Serial call
 	test   string // the test that called Serial
-	text   string // the reason as written
-	folded string // text, normalized for comparison
+	folded string // the reason, normalized for comparison
 }
 
 // serialReasonRegistry holds every reason a test binary has given so far. It
@@ -101,7 +100,7 @@ func (r *serialReasonRegistry) check(testName, file string, line int, reason []s
 		r.sites = make(map[string]bool)
 	}
 	r.sites[site] = true
-	r.all = append(r.all, serialReason{site: site, test: testName, text: text, folded: folded})
+	r.all = append(r.all, serialReason{site: site, test: testName, folded: folded})
 	return warnings
 }
 
