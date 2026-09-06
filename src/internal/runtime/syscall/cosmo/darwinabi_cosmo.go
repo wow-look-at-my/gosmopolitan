@@ -242,8 +242,10 @@ func DarwinRusageToLinux(src *DarwinRusage, dst *LinuxRusage) {
 // never a remembered one: a wrong request does not fail, it performs a
 // DIFFERENT operation on the descriptor.
 //
-// The set is exactly the requests whose ARGUMENT needs no translation.
-// The termios family is deliberately absent - see darwinIoctl.
+// The set is exactly the requests whose ARGUMENT needs no translation:
+// struct winsize is four uint16 fields on both systems, and the rest
+// take an int or nothing at all. The termios requests take a struct that
+// needs converting, so they have their own table below.
 const (
 	linuxTIOCSCTTY  = 0x540e
 	linuxTIOCGPGRP  = 0x540f
@@ -259,6 +261,41 @@ const (
 	appleTIOCSWINSZ = 0x80087467
 	appleTIOCNOTTY  = 0x20007471
 )
+
+// The termios requests. These are kept apart from the table above
+// because their ARGUMENT is a struct the two systems shape differently,
+// so serving one is a conversion rather than a forward
+// (darwinTermiosIoctl). TCSETSW and TCSETSF differ from TCSETS only in
+// when the change takes effect - after the output drains, and after the
+// input is flushed as well - which Apple spells the same way.
+const (
+	linuxTCGETS  = 0x5401
+	linuxTCSETS  = 0x5402
+	linuxTCSETSW = 0x5403
+	linuxTCSETSF = 0x5404
+
+	appleTIOCGETA  = 0x40487413
+	appleTIOCSETA  = 0x80487414
+	appleTIOCSETAW = 0x80487415
+	appleTIOCSETAF = 0x80487416
+)
+
+// darwinXlatTermiosIoctl maps a Linux termios request to Apple's.
+//
+//go:nosplit
+func darwinXlatTermiosIoctl(req uintptr) (uintptr, bool) {
+	switch uint32(req) {
+	case linuxTCGETS:
+		return appleTIOCGETA, true
+	case linuxTCSETS:
+		return appleTIOCSETA, true
+	case linuxTCSETSW:
+		return appleTIOCSETAW, true
+	case linuxTCSETSF:
+		return appleTIOCSETAF, true
+	}
+	return 0, false
+}
 
 // DarwinXlatIoctl maps a Linux ioctl request to Apple's. The second
 // result is false for a request this emulation does not serve, which the

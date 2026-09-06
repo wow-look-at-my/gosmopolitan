@@ -104,10 +104,21 @@ func checkRusage() {
 // caller passes on every host; the macOS emulation translates it to
 // Apple's. The syscall package carries no name for it (its zerrors
 // covers the job-control requests only), hence the literal.
-const linuxTIOCGWINSZ = 0x5413
+const (
+	linuxTIOCGWINSZ = 0x5413
+	linuxTCGETS     = 0x5401
+)
 
 type winsize struct {
 	Row, Col, Xpixel, Ypixel uint16
+}
+
+// linuxTermios is the 36-byte struct TCGETS fills - four flag words, the
+// line discipline, and nineteen control characters.
+type linuxTermios struct {
+	Iflag, Oflag, Cflag, Lflag uint32
+	Line                       uint8
+	Cc                         [19]uint8
 }
 
 // checkIoctl covers the ioctl emulation. CI runs the probe with no
@@ -137,5 +148,38 @@ func checkIoctl() {
 		// emulation refusing, so it passes - with the value named, since
 		// this is the branch nobody predicted.
 		s.finish("stdin answered " + err.Error())
+	}
+}
+
+// checkTermios covers the TCGETS/TCSETS emulation, which is what a
+// program calls to put a terminal into raw mode. The struct conversion
+// itself is pinned by unit tests (the tables are pure arithmetic and run
+// on every host); what needs a real syscall is proof that the request
+// reaches the kernel at all.
+//
+// So the assertion is the same shape as checkIoctl's: with no terminal
+// attached, ENOTTY is the kernel answering and ENOSYS is the emulation
+// refusing. When a terminal IS attached, the settings it reports must be
+// a terminal's - a zero flag word means the struct never got converted.
+func checkTermios() {
+	s := &softStep{name: "termios", soft: cosmoHostOS() == "windows"}
+
+	var t linuxTermios
+	err := syscall.Ioctl(int(os.Stdin.Fd()), linuxTCGETS, uintptr(unsafe.Pointer(&t)))
+	switch {
+	case err == syscall.ENOSYS:
+		s.do("Ioctl TCGETS", fmt.Errorf("ENOSYS: this host cannot put a terminal into raw mode"))
+		s.finish("")
+	case err == syscall.ENOTTY:
+		s.finish("ENOTTY with no terminal attached, which is the kernel answering")
+	case err != nil:
+		s.finish("stdin answered " + err.Error())
+	case t.Cflag == 0 && t.Lflag == 0 && t.Cc[4] == 0:
+		// A terminal always has SOME character size and a VEOF of ^D.
+		// All-zero is what an unconverted or unfilled struct looks like.
+		s.do("Ioctl TCGETS", fmt.Errorf("succeeded but reported an all-zero termios"))
+		s.finish("")
+	default:
+		s.finish(fmt.Sprintf("cflag=%#x lflag=%#x veof=%d", t.Cflag, t.Lflag, t.Cc[4]))
 	}
 }

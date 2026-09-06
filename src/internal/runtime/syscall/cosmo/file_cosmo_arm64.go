@@ -204,25 +204,68 @@ func darwinSync() (r1, r2, errno uintptr) {
 // syscall.Foreground issue two of them between fork and exec, which is
 // why this sits on the nosplit spine.
 //
-// The termios family (TCGETS and friends) is NOT here. Apple's struct
-// termios is a different shape - 64-bit flag words, twenty control
-// characters rather than nineteen, separate speed fields - and its flag
-// bits and c_cc indices are numbered differently again. That is a
-// translation table, not a forward, and it needs a pty to test against.
-// Until it exists an unhandled request answers ENOSYS, which is a
-// visible refusal; a forwarded Linux request number would instead ask
-// the kernel to perform whatever Apple operation happens to share it.
+// The termios family goes to darwinTermiosIoctl, which converts the
+// struct as well as the request. Anything else answers ENOSYS, which is
+// a visible refusal; forwarding an unknown Linux request number would
+// instead ask the kernel for whatever Apple operation happens to carry
+// that number.
 //
 // ioctl is VARIADIC, so the argument goes on the stack. See
 // darwinCallVariadic1.
 //
 //go:nosplit
 func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
-	areq, ok := DarwinXlatIoctl(req)
+	if areq, ok := DarwinXlatIoctl(req); ok {
+		return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, arg)
+	}
+	if _, ok := darwinXlatTermiosIoctl(req); ok {
+		return darwinTermiosIoctl(fd, req, arg)
+	}
+	return ^uintptr(0), 0, darwinENOSYS
+}
+
+// darwinTermiosIoctl serves TCGETS and the three TCSETS forms over
+// Apple's TIOCGETA/TIOCSETA family, converting the struct in both
+// directions (termios_cosmo.go).
+//
+// A set is a read-modify-write rather than a plain write: Apple's termios
+// carries settings a Linux caller cannot name, and writing only what the
+// caller passed would clear them. The read also fails first, and with the
+// right errno, when the descriptor is not a terminal at all.
+//
+// Deliberately not nosplit: the 72-byte Apple struct is too much for the
+// dispatch spine's budget. Nothing calls this between fork and exec -
+// syscall.Setctty and syscall.Foreground use the job-control requests,
+// which stay on the nosplit path above.
+func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Ioctl == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if arg == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	areq, ok := darwinXlatTermiosIoctl(req)
 	if !ok {
 		return ^uintptr(0), 0, darwinENOSYS
 	}
-	return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, arg)
+
+	var at DarwinTermios
+	if _, _, e := darwinCallVariadic1(darwinFns.Ioctl, fd, appleTIOCGETA,
+		uintptr(unsafe.Pointer(&at))); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	if req == linuxTCGETS {
+		if !DarwinTermiosToLinux(&at, (*LinuxTermios)(unsafe.Pointer(arg))) {
+			// The terminal reports a line speed with no Linux code. A
+			// wrong speed would be worse than a refused call.
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		return 0, 0, 0
+	}
+	if !DarwinTermiosFromLinux((*LinuxTermios)(unsafe.Pointer(arg)), &at) {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, uintptr(unsafe.Pointer(&at)))
 }
 
 // darwinUname emulates uname. Same caller-owned-buffer contract as
