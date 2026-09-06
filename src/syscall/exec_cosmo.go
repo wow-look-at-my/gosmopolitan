@@ -111,6 +111,14 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	}
 	nextfd++
 
+	// An APE cannot be exec'd directly, so prepare its /bin/sh form now,
+	// while allocation is still legal. The child retries with it when
+	// execve answers ENOEXEC. See exec_cosmo_ape.go.
+	var shArgv []*byte
+	if isAPEPath(argv0) {
+		shArgv = apeShellArgv(argv0, argv)
+	}
+
 	// About to call fork.
 	// No more allocation or calls of non-assembly functions.
 	runtime_BeforeFork()
@@ -264,6 +272,14 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
+	if err1 == ENOEXEC && shArgv != nil {
+		// The target is an APE and this host has no binfmt_misc entry
+		// for it, so hand it to the shell that reads its header.
+		_, _, err1 = RawSyscall(SYS_EXECVE,
+			uintptr(unsafe.Pointer(&apeShellPath[0])),
+			uintptr(unsafe.Pointer(&shArgv[0])),
+			uintptr(unsafe.Pointer(&envv[0])))
+	}
 
 childerror:
 	// send error code on pipe

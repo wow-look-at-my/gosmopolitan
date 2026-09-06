@@ -11,7 +11,7 @@ package syscall
 import (
 	errorspkg "errors"
 	"internal/bytealg"
-	"runtime"
+	"internal/goos"
 	"sync"
 	"unsafe"
 )
@@ -168,7 +168,9 @@ func forkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 		return 0, err
 	}
 
-	if (runtime.GOOS == "freebsd" || runtime.GOOS == "dragonfly") && len(argv) > 0 && len(argv[0]) > len(argv0) {
+	// goos, not runtime.GOOS: this asks which PORT is compiled, and on
+	// cosmo runtime.GOOS answers the host instead.
+	if (goos.IsFreebsd == 1 || goos.IsDragonfly == 1) && len(argv) > 0 && len(argv[0]) > len(argv0) {
 		argvp[0] = argv0p
 	}
 
@@ -289,8 +291,14 @@ func Exec(argv0 string, argv []string, envv []string) (err error) {
 	}
 
 	var err1 error
-	switch runtime.GOOS {
-	case "aix", "darwin", "illumos", "ios", "openbsd", "solaris":
+	// goos, not runtime.GOOS: which PORT is compiled decides whether
+	// RawSyscall is usable, and on cosmo runtime.GOOS answers the host.
+	// A cosmo binary on a Mac must still take the RawSyscall branch,
+	// because its dispatcher is what reaches Apple libc - and
+	// execveLibc is nil there, so the libc branch would panic.
+	switch {
+	case goos.IsAix == 1 || goos.IsDarwin == 1 || goos.IsIllumos == 1 ||
+		goos.IsIos == 1 || goos.IsOpenbsd == 1 || goos.IsSolaris == 1:
 		// RawSyscall should never be used on these platforms.
 		err1 = execveLibc(argv0p, &argvp[0], &envvp[0])
 
@@ -299,6 +307,7 @@ func Exec(argv0 string, argv []string, envv []string) (err error) {
 			uintptr(unsafe.Pointer(argv0p)),
 			uintptr(unsafe.Pointer(&argvp[0])),
 			uintptr(unsafe.Pointer(&envvp[0])))
+		err1 = execAPEFallback(argv0p, argvp, envvp, err1)
 	}
 	runtime_AfterExec()
 	return err1
