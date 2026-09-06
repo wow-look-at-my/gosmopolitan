@@ -7,6 +7,7 @@
 package os
 
 import (
+	"errors"
 	"internal/byteorder"
 	"internal/goarch"
 	"io"
@@ -142,6 +143,16 @@ func (f *File) readdir(n int, mode readdirMode) (names []string, dirents []DirEn
 			if IsNotExist(err) {
 				// File disappeared between readdir and stat.
 				// Treat as if it didn't exist.
+				continue
+			}
+			if errors.Is(err, syscall.EBADF) {
+				// Work around go.dev/issue/80143 during
+				// os.ReadDir("/dev/fd") by skipping kqueue fds.
+				// A macOS host reports DT_UNKNOWN there, so the
+				// entry is statted, and a kqueue fd has no stat.
+				// dir_darwin.go carries the same skip; a cosmo
+				// binary meets that host through this file.
+				// Exercised by TestReadDirFD.
 				continue
 			}
 			if err != nil {
