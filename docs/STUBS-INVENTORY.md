@@ -88,9 +88,7 @@ The NT emulation already served fsync, ftruncate, fchmod, chdir and getcwd. The 
 
 These four are resolved from kernel32 OPTIONALLY: a zero pointer answers ENOSYS at the use site rather than poking a crash address at boot.
 
-**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose it either: `prlimit64`. (`uname` and `statfs`/`fstatfs` both left this list. See Section 6a.) `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
-
-The claim that Windows has no counterpart for `statfs` was wrong. Three Win32 calls answer between them, and Section 6a names each. The claim survived because nothing tested it. A sentence is not a measurement.
+**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose it either: `prlimit64`. `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
 
 The runtimeprobe split follows exactly this line: `fsmeta` and `volume` are hard assertions on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on.
 
@@ -129,43 +127,6 @@ Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's own fil
 
 ---
 
-## 6a. The six the metadata wave missed (lock/ioctl wave, 2026-09-06)
-
-Section 6 below claimed the arm64 surface was complete. The claim is what made the gap hard to see. Six syscalls the package exposes, and Apple serves, still answered ENOSYS. A program failed to take its own lock file. It reported `flock: function not implemented`.
-
-To find the gap, list every `SYS_*` the cosmo `syscall` package names. Diff that list against the dispatch. Do not read the switch and judge it complete. Do that diff before you write "closed" again.
-
-| syscall | what it took |
-|---|---|
-| `flock` | A forward. Apple's flock is BSD's, and Linux took `LOCK_SH`/`LOCK_EX`/`LOCK_NB`/`LOCK_UN` from BSD, so the operation passes through unchanged. Served on macOS-Intel too, and on NT over `LockFileEx`/`UnlockFileEx` (Section 5a). |
-| `fdatasync` | A forward to Apple's entry, with `fsync` standing in when it is absent — a STRONGER guarantee than the caller asked for, which is the right way to be wrong here. |
-| `sync` | A forward. Apple's returns void, so the Linux success value is supplied rather than forwarding a register the callee never set. |
-| `getrusage` | Apple's `struct timeval` has a 32-bit microsecond field with four bytes of padding. The Linux field is a full 64 bits. Both rusages are 144 bytes. So a forward keeps its SIZE and loses its CONTENTS. It gives no error. It gives a garbage microsecond count. `darwinabi_cosmo.go` converts it. A test pins it. |
-| `gettimeofday` | The same timeval. The obsolete timezone argument is refused rather than filled. |
-| `ioctl` | Request numbers encode direction and argument size, so the two systems number even the calls they share differently. Six requests need only that translation. They are `TIOCGWINSZ` and `TIOCSWINSZ`, where struct winsize is four `uint16` on both systems. They also include the four job-control requests. `syscall.Setctty` and `syscall.Foreground` issue two of those between fork and exec. The termios four also need their struct converted. See below. |
-
-**The termios family** (`TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`) landed in the same wave, in `termios_cosmo.go`. Nothing lines up in this family. Apple's flag words are 64 bits. The Linux words are 32. Apple carries twenty control characters against nineteen. It numbers them differently. It keeps the line speeds in their own fields. Linux encodes those speeds inside `c_cflag`. Nearly every flag bit sits somewhere else.
-
-Two collisions are worse than merely wrong. Linux `IXON` (0x400) is Apple `IXOFF`. Linux `IUCLC` (0x200) is Apple `IXON`. So a forwarded flag word does not fail. It turns flow control inside out.
-
-Three details are worth knowing:
-
-- **A set is a read-modify-write.** Apple has settings Linux cannot name. They are `ALTWERASE`, `NOKERNINFO`, `ONOEOT` and `OXTABS`. A write of only what the caller passed clears them. Every terminal library does a get-modify-set, so it hits this.
-- **The Linux-only flags are dropped, not refused.** They are `IUCLC`, `OLCUC`, `XCASE`, `CMSPAR` and the output-delay fields. Linux leaves every one of them to the driver. No terminal driver in use implements any of them. A refusal here breaks an ordinary raw-mode setup for nothing. This is the single lossy point. This text states it rather than hide it.
-- **An unencodable line speed is refused with EINVAL.** This applies in both directions. The emulation does not report some other speed.
-
-The emulation writes exactly the 36 bytes the kernel writes. That is the `struct termios` that `TCGETS` fills. It is not the larger `termios2`. So the emulation does not overrun a caller that allocated what the kernel fills.
-
-**Coverage.** `darwinabi_cosmo_test.go` unit-tests the request tables and the rusage conversion. It also tests the whole termios translation. That covers the flag maps, the `c_cc` indices and the baud codes. It covers the round trip. It covers the Apple-only bits that survive one. These tables are pure arithmetic. They run on any host. The ubuntu leg runs them. `testdata/runtimeprobe` runs the syscalls end to end on all three runners. Its checks are `flock`, `durable`, `rusage`, `ioctl` and `termios`. `flock` asserts exclusion between two descriptors and the EWOULDBLOCK errno. An error-only check is not enough. `ioctl` asserts WHICH errno comes back with no terminal attached. ENOTTY is the kernel answering. ENOSYS is the emulation refusing.
-
-**macOS-Intel** takes `flock`, `fdatasync` and `sync` in the same wave. All three are pass-throughs. Each BSD number comes from `zsysnum_darwin_amd64.go`. `ioctl`, `getrusage` and `gettimeofday` stay ENOSYS there. Section 6b gives the reason for the `*at` family, and it applies here. Each needs real control flow, such as a request table or a struct conversion. That path is assembly that issues raw XNU syscalls. No runner can test it.
-
-**NT** takes `flock`, `sync`, `uname` and `statfs`/`fstatfs`. `uname` reports Sysname and Machine as the constants they are on this host. It takes the real build number from `RtlGetVersion`. `GetVersionExW` answers 6.2 to an unmanifested process, which is a wrong number rather than a missing one. Nodename comes from `GetComputerNameW`, and stays empty when the name is not ASCII, because this path has no UTF-16 decoder. Domainname stays empty. NT has no counterpart for it. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
-
-`statfs` and `fstatfs` live in `src/runtime/os_cosmo_nt_statfs.go`. NT answers over a VOLUME rather than a path. So each emulation first maps its argument to the volume mount point with `GetVolumePathNameW`. `fstatfs` recovers the descriptor's path from its handle first, through `GetFinalPathNameByHandleW`. Win32 then fills the Linux struct from three sources. `GetDiskFreeSpaceW` gives the cluster geometry, which is what Linux calls a block. `GetDiskFreeSpaceExW` gives the byte totals, and its first output is the quota-aware figure. That split is the one Linux draws between `f_bfree` and `f_bavail`. The Ex form also survives a volume too large for the 32-bit cluster counts, so its numbers win where it answers. `GetVolumeInformationW` gives the maximum name length, the volume serial number and the filesystem name. The name maps to the Linux `f_type` magic for the same filesystem. An unknown name reports zero, which is what Linux reports for a filesystem with no magic. `Files` and `Ffree` count inodes. NTFS has no inode count, so both stay zero rather than invented. A descriptor that is a socket or a pipe belongs to no filesystem and reports ENOSYS.
-
-The `volume` runtimeprobe check is a hard assertion on every runner. It asserts that `statfs` and `fstatfs` agree on the block size for one filesystem. It asserts that the free-block count does not exceed the block count. A positive-value check alone passes a conversion that divided by the wrong unit.
-
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 
 The amd64 darwin dispatch carried 18 syscalls and answered everything else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod, fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid, setreuid, setregid, getpgid, and statfs/fstatfs (the last two through XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path applies, so a Linux-layout buffer is refused rather than overrun). `getpriority` applies the Linux `20-nice` bias, which the carry-flag convention makes unambiguous — the value alone cannot say whether the call failed.
@@ -178,7 +139,7 @@ This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1
 
 ## 7. What this means
 
-- The macOS arm64 syscall surface serves everything the `syscall` package exposes and Apple can serve. That includes the termios ioctls. See Sections 6 and 6a. The wording here once said "complete" while six syscalls were absent. That is how they stayed absent. Before you write that word again, list every `SYS_*` the cosmo `syscall` package names. Diff it against the dispatch. Untested is not the same as unbuilt. The termios round trip has never run against a live terminal. No CI runner has one.
+- The macOS arm64 syscall surface serves everything the `syscall` package exposes and Apple can serve, termios ioctls included. Before writing "complete" here, diff every `SYS_*` the cosmo `syscall` package names against the dispatch. The termios round trip has never run against a live terminal: no CI runner has one.
 - The "return success" stubs (Section 2) are still the highest-risk items: they hide failures.
 - The macOS-Intel (amd64) SYSCALL surface is closed: the table, the error convention, the errno numbering, the netpoller, the CPU count, parking, thread creation, TLS. So are signals in the runtime: `darwinSigaction` issues a real `__sigaction` with its own trampoline (Section 2.3), and `darwinSigprocmask` bridges the sigset width (Section 2.6). The `syscall` package's own `rt_sigaction` emulation installs handlers for real too (Section 2.2). None of it is verified, because there is no Intel-mac runner — read and reasoned about, never executed.
 - Windows/arm64 (Section 4.3) has its Win32 layer now — trampolines, thread start, exception dispatch, preemption context. It is still unreachable (no APE boot path, no platform token), and its netpoller still throws, waiting on an arm64 split of the syscall emulation.
@@ -191,5 +152,5 @@ This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1
 
    None of it is verified. There is no Intel-mac runner, so every line of the above has been read and reasoned about but never executed. That remains the honest blocker on the platform, and `Default()` leaves darwin/amd64 out of a default build for exactly this reason.
 4. Windows/arm64: the `ntcall` trampolines, the `CONTEXT` layout and the VEH thunks are written (Section 4.3), sourced from upstream's own windows/arm64 port. Two things are left. The netpoller needs the syscall emulation split per architecture — numbers, `struct stat` width and `O_DIRECTORY` all differ. And the boot mechanism does not exist: the linker has no way to emit an arm64 PE header, so nothing sets `__hostos` there. Until it does, none of this code can be started, let alone tested, and `iswindows` stays a constant `false` so the compiler deletes it.
-5. Exercise the termios conversion against a real pty. The tables are unit-tested. The syscall is proven to reach the kernel. See Section 6a. No CI runner has a terminal. So the round trip has never run against a live driver.
+5. Exercise the termios conversion against a real pty. The tables are unit-tested and the syscall reaches the kernel, but no CI runner has a terminal, so the round trip has never run against a live driver.
 6. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go` carries no cosmo build tag, so `io.Copy` from a file to a socket never reaches the syscall on any cosmo host. Only a caller that uses `syscall.Sendfile` directly does. Adding cosmo to that tag needs the NT emulation to serve sendfile too, which it does not yet.

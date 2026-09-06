@@ -166,6 +166,14 @@ jobs:
         with:
           tests: dats/cosmo-tests.dats
 
+      # Prose nobody asked for is a defect like any other, so a check refuses it.
+      - name: No wordspam
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/no-wordspam.dats
+
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
         timeout-minutes: 90

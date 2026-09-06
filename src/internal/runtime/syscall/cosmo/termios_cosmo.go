@@ -8,23 +8,13 @@ package cosmo
 
 // struct termios, both shapes, and the translation between them.
 //
-// This is the one ioctl family where nothing lines up. Apple's flag words
-// are 64 bits against Linux's 32; it carries twenty control characters
-// against nineteen and numbers them differently; it keeps the line speeds
-// in their own fields where Linux encodes them inside c_cflag; and almost
-// every flag bit sits at a different position. Two of those collisions
-// are actively dangerous rather than merely wrong: Linux IXON (0x400) is
-// Apple IXOFF, and Linux IUCLC (0x200) is Apple IXON. A forwarded flag
-// word does not fail - it turns flow control inside out.
+// Nothing lines up in this family, and two collisions are dangerous
+// rather than merely wrong: Linux IXON (0x400) is Apple IXOFF, and Linux
+// IUCLC (0x200) is Apple IXON. A forwarded flag word does not fail, it
+// turns flow control inside out.
 //
-// Every value here comes from the tree's own tables
-// (cmd/vendor/golang.org/x/sys/unix/zerrors_linux_arm64.go and
-// zerrors_darwin_arm64.go for the bits, ztypes_*.go for the structs),
-// never from memory, and the tests pin them.
-//
-// The file is architecture-neutral: Apple numbers these identically on
-// both its architectures, and keeping it so lets the tests run wherever
-// cosmo tests run. The code that CALLS it is arm64-only.
+// Architecture-neutral on purpose - Apple numbers these identically on
+// both its architectures - so the tests run wherever cosmo tests run.
 
 // DarwinTermios is Apple's struct termios: 72 bytes.
 type DarwinTermios struct {
@@ -263,17 +253,13 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 // Apple's TIOCSETA wants. It reports false for a baud code Apple has no
 // rate for.
 //
-// dst is READ as well as written: the caller passes the terminal's
-// current Apple settings, and every bit Linux cannot name (ALTWERASE,
-// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had. Without
-// that, the ordinary get-modify-set a terminal library performs would
-// silently clear the settings it never knew were there.
+// dst is READ as well as written: every bit Linux cannot name (ALTWERASE,
+// NOKERNINFO, ONOEOT, OXTABS) keeps the value it already had, so a
+// get-modify-set does not clear settings it never knew were there.
 //
-// The Linux-only flags (IUCLC, OLCUC, XCASE, CMSPAR and the output-delay
-// fields) are dropped rather than failing the call. They are the ones
-// Linux itself leaves to the driver, and no terminal driver in use
-// implements any of them; refusing an otherwise ordinary raw-mode setup
-// over a bit nothing honours anywhere would be the worse answer.
+// The Linux-only flags (IUCLC, OLCUC, XCASE, CMSPAR, the output delays)
+// are dropped rather than failing the call: Linux leaves them to the
+// driver, and no driver in use implements any of them.
 func DarwinTermiosFromLinux(src *LinuxTermios, dst *DarwinTermios) bool {
 	dst.Iflag = mergeLinuxBits(dst.Iflag, src.Iflag, termiosIflag[:])
 	dst.Oflag = mergeLinuxBits(dst.Oflag, src.Oflag, termiosOflag[:])
