@@ -355,7 +355,7 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 	gp.m.preemptGen.Add(1)
 	gp.m.signalPending.Store(0)
 
-	if goos.IsDarwin == 1 || goos.IsIos == 1 {
+	if hostIsDarwin() {
 		pendingPreemptSignals.Add(-1)
 	}
 }
@@ -371,12 +371,12 @@ const preemptMSupported = true
 func preemptM(mp *m) {
 	// On Darwin, don't try to preempt threads during exec.
 	// Issue #41702.
-	if goos.IsDarwin == 1 || goos.IsIos == 1 {
+	if hostIsDarwin() {
 		execLock.rlock()
 	}
 
 	if mp.signalPending.CompareAndSwap(0, 1) {
-		if goos.IsDarwin == 1 || goos.IsIos == 1 {
+		if hostIsDarwin() {
 			pendingPreemptSignals.Add(1)
 		}
 
@@ -388,7 +388,7 @@ func preemptM(mp *m) {
 		signalM(mp, sigPreempt)
 	}
 
-	if goos.IsDarwin == 1 || goos.IsIos == 1 {
+	if hostIsDarwin() {
 		execLock.runlock()
 	}
 }
@@ -455,7 +455,7 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 			// no non-Go signal handler for sigPreempt.
 			// The default behavior for sigPreempt is to ignore
 			// the signal, so badsignal will be a no-op anyway.
-			if goos.IsDarwin == 1 || goos.IsIos == 1 {
+			if hostIsDarwin() {
 				pendingPreemptSignals.Add(-1)
 			}
 			return
@@ -1197,7 +1197,7 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	// This function and its caller sigtrampgo assumes SIGPIPE is delivered on the
 	// originating thread. This property does not hold on macOS (golang.org/issue/33384),
 	// so we have no choice but to ignore SIGPIPE.
-	if (goos.IsDarwin == 1 || goos.IsIos == 1) && sig == _SIGPIPE {
+	if hostIsDarwin() && sig == _SIGPIPE {
 		return true
 	}
 

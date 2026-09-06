@@ -18,6 +18,13 @@ package runtime
 // sandbox the process runs under, so a seatbelt profile that denies
 // /System/Library/CoreServices turns a Mac into a "linux" answer,
 // silently, and only inside the sandbox - where a test suite runs.
+// hostIsDarwin reports whether the kernel under this program is Apple's.
+// The runtime asks this where a branch is about the kernel rather than
+// the port: Apple delivers SIGPIPE on another thread, and refuses to
+// preempt one during exec. The other ports answer from their own port
+// in hostos_notcosmo.go.
+func hostIsDarwin() bool { return isdarwin() }
+
 func CosmoHostOS() string {
 	switch __hostos {
 	case _HOSTLINUX:
