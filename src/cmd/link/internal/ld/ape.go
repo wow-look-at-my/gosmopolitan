@@ -415,13 +415,20 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // after the ELF one because a host that carries both is macOS, where the
 // Mach-O header is the one that counts.
 //
+// The first line appends the standard directories to PATH. Staging needs
+// stat, cksum, tr, mkdir, cp, chmod and mv, and a program started with a
+// scrubbed environment has no PATH to find them with. Without this an APE
+// run by, say, a test harness that sets its own Env does not start at all.
+// The caller's own PATH stays in front, so nothing it chose is shadowed.
+//
 // The binfmt_misc line quotes its magic with DOUBLE quotes on purpose. The
 // macOS ARM64 loader treats every `printf '` in the first 8K as a boot header
 // to decode, and this one is not one. TestFatBootHeaders holds the count at
 // two. The shell leaves \047 alone inside double quotes, so printf still
 // writes the quote the magic ends with.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
-	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
+	`  PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"; export PATH
+  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
   c="{{.RunDir}}/$k"
   p="$c/${0##*/}"
   if [ ! -x "$p" ]; then
