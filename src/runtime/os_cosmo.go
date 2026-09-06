@@ -353,14 +353,17 @@ func osinit() {
 	// entry stub has already recorded which one that is.
 	setGOOS()
 	osArchInit()
+	ntBoot("osArchInit done")
 	// After osArchInit: the NT probe needs the resolved import table.
 	setGOARCH()
+	ntBoot("setGOARCH done")
 	// A macOS host's AT_HWCAP needs fixing up before internal/cpu reads
 	// it in cpuinit. This runs here rather than in sysargs because it
 	// asks the host, and the host is only safe to ask once osArchInit
 	// ran.
 	fixAuxv()
 	numCPUStartup = getCPUCount()
+	ntBoot("osinit done")
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")

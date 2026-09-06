@@ -1279,7 +1279,9 @@ func schedinit() {
 	moduledataverify()
 	stackinit()
 	randinit() // must run before mallocinit, AlgInit, mcommoninit
+	ntBoot("randinit done")
 	mallocinit()
+	ntBoot("mallocinit done")
 	cpuinit(godebug) // must run before AlgInit
 	maps.AlgInit()   // maps, hash, rand must not be used before this call
 	mcommoninit(gp.m, -1)
@@ -1287,14 +1289,18 @@ func schedinit() {
 	typelinksinit() // uses maps, activeModules
 	itabsinit()     // uses activeModules
 	stkobjinit()    // must run before GC starts
+	ntBoot("stkobjinit done")
 
 	sigsave(&gp.m.sigmask)
 	initSigmask = gp.m.sigmask
 
 	goargs()
+	ntBoot("goargs done")
 	goenvs()
+	ntBoot("goenvs done")
 	secure()
 	checkfds()
+	ntBoot("checkfds done")
 	if !parsedGodebug {
 		// Some platforms, e.g., Windows, didn't make env vars available "early",
 		// so try again now.
@@ -1302,6 +1308,7 @@ func schedinit() {
 	}
 	finishDebugVarsSetup()
 	gcinit()
+	ntBoot("gcinit done")
 
 	// Allocate stack space that can be used when crashing due to bad stack
 	// conditions, e.g. morestack on g0.

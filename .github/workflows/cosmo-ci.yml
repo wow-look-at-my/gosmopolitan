@@ -218,7 +218,11 @@ jobs:
             "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
             echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
           done
-          # Every published master toolchain through v476 builds a fizzbuzz that runs here, so the break is on this branch. The winbisect job names the commit.
+          # The boot prints its milestones under -tags cosmontdebug, so a binary that dies before it can say anything still says how far it got. It exits 139 there, a fault rather than a throw.
+          GOOS=cosmo go build -tags cosmontdebug -o "$RUNNER_TEMP/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go
+          rc=0
+          out="$("$RUNNER_TEMP/fbtrace.com" 10 5 2>&1)" || rc=$?
+          echo "fizzbuzz -tags cosmontdebug exit=$rc output=[$out]"
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
           # Three shapes: no arguments, a listing that never runs a test, and one test.

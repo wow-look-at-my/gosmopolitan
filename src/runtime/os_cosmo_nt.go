@@ -407,6 +407,23 @@ func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr
 //
 //go:nosplit
 func ntCrash(code uintptr) {
+	// Say which one first. The fault alone names the failure only to
+	// somebody holding this table and a debugger, and the boot has a
+	// writer of its own by now (ntResolveWriter).
+	var msg [40]byte
+	copy(msg[:], "runtime: NT boot failed at 0x")
+	n := 29
+	for shift := 4; shift >= 0; shift -= 4 {
+		d := byte(code>>uint(shift)) & 0xf
+		if d < 10 {
+			msg[n] = '0' + d
+		} else {
+			msg[n] = 'a' + d - 10
+		}
+		n++
+	}
+	msg[n] = '\n'
+	ntwrite1(2, unsafe.Pointer(&msg[0]), int32(n+1))
 	*(*uintptr)(unsafe.Pointer(code)) = code
 }
 
@@ -439,6 +456,7 @@ func ntResolve() {
 	ntStdin = ntcall(ntGetStdHandleFn, _NT_STD_INPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
+	ntBoot("handles cached")
 	ntExitProcessFn = k32sym(&ntNameExitProcess[0])
 	ntExitThreadFn = k32sym(&ntNameExitThread[0])
 	ntCreateThreadFn = k32sym(&ntNameCreateThread[0])

@@ -53,8 +53,11 @@ func iswindows() bool {
 func osArchInit() {
 	if iswindows() {
 		ntResolve()
+		ntBoot("ntResolve done")
 		ntSetSyscallFns()
+		ntBoot("syscall fns set")
 		ntBootInit()
+		ntBoot("ntBootInit done")
 	}
 	if isdarwin() {
 		// The kernel has to be told where to enter a new thread before
