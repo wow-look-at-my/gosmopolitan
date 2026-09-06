@@ -16,6 +16,7 @@ import (
 )
 
 func TestSubscribers(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	validate := func(t *testing.T, source string, tr []byte) {
 		t.Log("validating", source)
 		defer func() {
