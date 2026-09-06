@@ -20,6 +20,6 @@ Vulnerabilities resulting from compiler/assembler errors must be reported upstre
 
 If you have discovered a security vulnerability in this project, please report it privately. **Do not disclose it as a public issue.** This gives.
 
-Please disclose it at [security advisory](https://github.com/klauspost/compress/security/advisories/new). If possible please provide a minimal reproducer. If the issue only applies to a single platform, it can be helpful to provide access to that.
+Please disclose it at [security advisory](https://github.com/klauspost/compress/security/advisories/new). If possible please provide a minimal reproducer. If the issue only applies to a single platform. It can be helpful to provide access to that.
 
 This project is maintained by a team of volunteers on a reasonable-effort basis. As such, vulnerabilities will be disclosed in a best effort base.

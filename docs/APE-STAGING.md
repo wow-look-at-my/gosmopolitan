@@ -18,7 +18,7 @@ No environment variable is read to find this path. TMPDIR and HOME are both call
 
 The file identity is `device.inode.mtime.size`, read with `stat -c %d.%i.%.9Y.%s` on GNU and `stat -f %d.%i.%Fm.%z` on BSD. A host with no `stat` falls back to `cksum` over the contents.
 
-The mtime is read to the NANOSECOND. Seconds are not enough: a rebuild that lands within one second of the last one, in place and at the same size, keys to. A build loop produces exactly that, and the failure is silent.
+The mtime is read to the NANOSECOND. Seconds are not enough: a rebuild that lands within one second of the last one, in place and at the same size, keys to. A build loop produces exactly that. The failure is silent.
 
 The copy is published with `mv -f` from a `$$`-suffixed temporary, so a second process starting at the same moment either sees no copy. A later run costs one `stat` and one `exec`.
 
@@ -36,7 +36,7 @@ Both need root. Both fail silently and change nothing when they do not land. Nei
 
 That is the kernel doing what a shell already does on ENOEXEC. With it registered, a caller that `execve`s the file directly -- Go's `os/exec`, a build system, a test harness -- stops needing a shell in.
 
-The registration is written with a DOUBLE-quoted `printf`. The macOS ARM64 loader decodes every `printf '` in the first 8192 bytes as a candidate boot header, and this string is not one. `TestFatBootHeaders` holds that count at two for a fat APE. The redirect sits inside a `{ ...; } 2>/dev/null` group, because a shell reports a redirect it cannot open on its own stderr -- outside the group, every.
+The registration is written with a DOUBLE-quoted `printf`. The macOS ARM64 loader decodes every `printf '` in the first 8192 bytes as a candidate boot header. This string is not one. `TestFatBootHeaders` holds that count at two for a fat APE. The redirect sits inside a `{ ...; } 2>/dev/null` group, because a shell reports a redirect it cannot open on its own stderr -- outside the group, every.
 
 **A bind mount.** Staging records whether this host can `unshare -m`. A run that finds that mark binds the staged copy over the APE's own path inside a private mount namespace and execs it there. `argv[0]`, `/proc/self/exe`, and anything the program resolves next to itself then point where the caller put them, not into the run directory.
 
@@ -44,7 +44,7 @@ The bind is taken only when the process is ALREADY root. Reaching a mount namesp
 
 Nothing outside that namespace sees the mount. While it is live, the owner of the file can still overwrite it in place, move it, delete it, and `rm -rf` the directory holding. `testdata/ape/apetest` covers the shape of the script. The mount behaviour is a property of private namespaces, not of this code.
 
-A mount that does not take falls through to exec'ing the staged copy, so the program runs either way.
+A mount that does not take falls through to exec'ing the staged copy. The program runs either way.
 
 ## What it costs
 

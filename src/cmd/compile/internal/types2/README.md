@@ -19,7 +19,7 @@ They differ primarily in what syntax tree they operate on:
 
 We aim to keep the respective sources very closely in sync. **Any change will need to be made to both typechecker source bases**.
 
-Many go/types files can be generated automatically from the corresponding types2 sources. This is done via a generator (go/types/generate_test.go) which may be invoked via `go generate` in the go/types directory. Generated files are clearly marked with a comment at the top and must not be modified by hand. For this reason, it is usually best to make changes to the types2 sources first. The changes only need to be ported by hand for the go/types files that cannot be generated yet.
+Many go/types files can be generated automatically from the corresponding types2 sources. This is done via a generator (go/types/generate_test.go) which may be invoked via `go generate` in the go/types directory. Generated files are clearly marked with a comment at the top and must not be modified by hand. For this reason. It is usually best to make changes to the types2 sources first. The changes only need to be ported by hand for the go/types files that cannot be generated yet.
 
 New files may be added to the list of generated files by adding a respective entry to the table in generate_test.go (and possibly describing any necessary source transformations).
 
@@ -36,7 +36,7 @@ There is a comprehensive suite of tests in the form of annotated source files. T
 
 Tests are .go files annotated with `/* ERROR "msg" */` or `/* ERRORx "msg" */` comments (or the respective line comment form). For each such error comment, typechecking the respective file is expected to report an error at the position of the syntactic token _immediately preceding_. For `ERROR`, the `"msg"` string must be a substring of the error message reported by the typechecker. For `ERRORx`, the `"msg"` string must be a regular expresspion matching the reported error.
 
-For each issue #NNNN that is fixed in the typecheckers, a test must be added as src/internal/types/testdata/fixedbugs/issueNNNN.go.
+For each issue #NNNN that is fixed in the typecheckers. A test must be added as src/internal/types/testdata/fixedbugs/issueNNNN.go.
 
 
 #
@@ -65,7 +65,7 @@ A `Checker` maintains all typechecking state relevant for typechecking a package
 
 File: operand.go
 
-An `operand` describes the type and value (if any) of an expression. The `operandMode` describes the kind of expression (constant, variable, etc.). Operands are the primary result of typechecking an expression. If typechecking of an expression fails, the resulting operand has mode `invalid`.
+An `operand` describes the type and value (if any) of an expression. The `operandMode` describes the kind of expression (constant, variable, etc.). Operands are the primary result of typechecking an expression. If typechecking of an expression fails. The resulting operand has mode `invalid`.
 
 
 #### Typ
@@ -86,7 +86,7 @@ Predicates are typically named in form `isX`, such as `isInteger`.
 
 #### Type-checking expressions
 
-Typically, there is a Checker method for typechecking a particular expression. For instance, there is a method `Checker.unary` that typechecks unary expressions. The basic form of such a function f is as follows:
+Typically. There is a Checker method for typechecking a particular expression. For instance. There is a method `Checker.unary` that typechecks unary expressions. The basic form of such a function f is as follows:
 ```
 func (check *Checker) f(x *operand, e syntax.Expr, /* addition arguments, if any */)
 ```

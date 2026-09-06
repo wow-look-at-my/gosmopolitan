@@ -1,6 +1,5 @@
 ---
-title: "Go, Backwards Compatibility, and GODEBUG" layout: article
----
+## title: "Go, Backwards Compatibility, and GODEBUG" layout: article
 
 <!-- This document is kept in the Go repo, not x/website, because it documents the full list of known GODEBUG settings, which are tied to.
 
@@ -14,15 +13,15 @@ A GODEBUG setting is a `key=value` pair that controls the execution of certain p
 
 then that Go program will disable the use of HTTP/2 by default in both the HTTP client and the HTTP server. Unrecognized settings in the `GODEBUG` environment variable are ignored. It is also possible to set the default `GODEBUG` for a given program (discussed below).
 
-When preparing any change that is permitted by Go 1 compatibility but may nonetheless break some existing programs, we first engineer the change to. For the remaining programs, we define a new GODEBUG setting that allows individual programs to opt back in to the old behavior. A GODEBUG setting may not be added if doing so is infeasible, but that must be extremely rare.
+When preparing any change that is permitted by Go 1 compatibility but may nonetheless break some existing programs, we first engineer the change to. For the remaining programs, we define a new GODEBUG setting that allows individual programs to opt back in to the old behavior. A GODEBUG setting may not be added if doing so is infeasible. That must be extremely rare.
 
 GODEBUG settings added for compatibility will be maintained for a minimum of two years (four Go releases). Some, such as `http2client` and `http2server`, will be maintained much longer, even indefinitely.
 
-When possible, each GODEBUG setting has an associated [runtime/metrics](/pkg/runtime/metrics/) counter named `/godebug/non-default-behavior/<name>:events` that counts the number of times a particular program's behavior has. For example, when `GODEBUG=http2client=0` is set, `/godebug/non-default-behavior/http2client:events` counts the number of HTTP transports that the program has configured without HTTP/2 support.
+When possible. Each GODEBUG setting has an associated [runtime/metrics](/pkg/runtime/metrics/) counter named `/godebug/non-default-behavior/<name>:events` that counts the number of times a particular program's behavior has. For example, when `GODEBUG=http2client=0` is set, `/godebug/non-default-behavior/http2client:events` counts the number of HTTP transports that the program has configured without HTTP/2 support.
 
 ## Default GODEBUG Values {#default}
 
-When a GODEBUG setting is not listed in the environment variable, its value is derived from three sources: the defaults for the Go toolchain.
+When a GODEBUG setting is not listed in the environment variable. Its value is derived from three sources: the defaults for the Go toolchain.
 
 The [GODEBUG History](#history) gives the exact defaults for each Go toolchain version. For example, Go 1.21 introduces the `panicnil` setting, controlling whether `panic(nil)` is allowed. It defaults to `panicnil=0`, making `panic(nil)` a run-time error. Using `panicnil=1` restores the behavior of Go 1.20 and earlier.
 
@@ -36,7 +35,7 @@ To override these defaults, starting in Go 1.23, the work module's `go.mod` or t
 
 	godebug ( default=go1.21 panicnil=1 asynctimerchan=0 )
 
-The special key `default` indicates a Go version to take unspecified settings from. This allows setting the GODEBUG defaults separately from the Go language version in the module. In this example, the program is asking for Go 1.21 semantics and then asking for the old pre-Go 1.21 `panic(nil)` behavior and the new.
+The special key `default` indicates a Go version to take unspecified settings from. This allows setting the GODEBUG defaults separately from the Go language version in the module. In this example. The program is asking for Go 1.21 semantics and then asking for the old pre-Go 1.21 `panic(nil)` behavior and the new.
 
 Only the work module's `go.mod` is consulted for `godebug` directives. Any directives in required dependency modules are ignored. It is an error to list a `godebug` with an unrecognized setting. (Toolchains older than Go 1.23 reject all `godebug` lines, since they do not understand `godebug` at all.) When a workspace is in use, `godebug` directives in `go.mod` files are ignored, and `go.work` will be consulted for `godebug` directives instead.
 
@@ -52,7 +51,7 @@ The defaults that will be compiled into a main package are reported by the comma
 
 Only differences from the base Go toolchain defaults are reported.
 
-When testing a package, `//go:debug` lines in the `*_test.go` files are treated as directives for the test's main package. In any other context, `//go:debug` lines are ignored by the toolchain; `go` `vet` reports such lines as misplaced.
+When testing a package, `//go:debug` lines in the `*_test.go` files are treated as directives for the test's main package. In any other context, `//go:debug` lines are ignored by the toolchain.`go` `vet` reports such lines as misplaced.
 
 ## GODEBUG History {#history}
 
@@ -185,7 +184,7 @@ Go 1.22 changed the default TLS cipher suites used by clients and servers when n
 
 Go 1.22 disabled [`ConnectionState.ExportKeyingMaterial`](/pkg/crypto/tls/#ConnectionState.ExportKeyingMaterial) when the connection supports neither TLS 1.3 nor Extended Master Secret (implemented in Go 1.21). It can be reenabled with the [`tlsunsafeekm` setting](/pkg/crypto/tls/#ConnectionState.ExportKeyingMaterial). This setting will be removed in Go 1.27.
 
-Go 1.22 changed how the runtime interacts with transparent huge pages on Linux. In particular, a common default Linux kernel configuration can result in significant memory overheads, and Go 1.22 no longer works around this default. To work around this issue without adjusting kernel settings, transparent huge pages can be disabled for Go memory with the [`disablethp` setting](/pkg/runtime#hdr-Environment_Variables). This behavior was backported to Go 1.21.1, but the setting is only available starting with Go 1.21.6. This setting may be removed in a future release, and users impacted by this issue must adjust their Linux configuration according to the recommendations.
+Go 1.22 changed how the runtime interacts with transparent huge pages on Linux. In particular, a common default Linux kernel configuration can result in significant memory overheads, and Go 1.22 no longer works around this default. To work around this issue without adjusting kernel settings, transparent huge pages can be disabled for Go memory with the [`disablethp` setting](/pkg/runtime#hdr-Environment_Variables). This behavior was backported to Go 1.21.1. The setting is only available starting with Go 1.21.6. This setting may be removed in a future release, and users impacted by this issue must adjust their Linux configuration according to the recommendations.
 
 Go 1.22 added contention on runtime-internal locks to the [`mutex` profile](/pkg/runtime/pprof#Profile). Contention on these locks is always reported at `runtime._LostContendedRuntimeLock`. Complete stack traces of runtime locks can be enabled with the [`runtimecontentionstacks` setting](/pkg/runtime#hdr-Environment_Variables). These stack traces have non-standard semantics, see setting documentation for details.
 

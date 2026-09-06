@@ -4,7 +4,7 @@ This package provides Huff0 encoding and decoding as used in zstd.
             
 [Huff0](https://github.com/Cyan4973/FiniteStateEntropy#new-generation-entropy-coders), a Huffman codec designed for modern CPU, featuring OoO (Out of Order) operations on multiple ALU (Arithmetic Logic Unit), achieving extremely fast compression and decompression speeds.
 
-This can be used for compressing input with a lot of similar input values to the smallest number of bytes. This does not perform any multi-byte [dictionary coding](https://en.wikipedia.org/wiki/Dictionary_coder) as LZ coders, but it can be used as a secondary step to compressors (like Snappy).
+This can be used for compressing input with a lot of similar input values to the smallest number of bytes. This does not perform any multi-byte [dictionary coding](https://en.wikipedia.org/wiki/Dictionary_coder) as LZ coders. It can be used as a secondary step to compressors (like Snappy).
 
 * [Godoc documentation](https://godoc.org/github.com/klauspost/compress/huff0)
 
@@ -18,7 +18,7 @@ This ensures that most functionality is well tested.
 
 This package provides a low level interface that allows to compress single independent blocks.
 
-Each block is separate, and there is no built in integrity checks. This means that the caller must keep track of block sizes and also do checksums if needed.
+Each block is separate. There is no built in integrity checks. This means that the caller must keep track of block sizes and also do checksums if needed.
 
 Compressing a block is done via the [`Compress1X`](https://godoc.org/github.com/klauspost/compress/huff0#Compress1X) and [`Compress4X`](https://godoc.org/github.com/klauspost/compress/huff0#Compress4X) functions. You must provide input and will receive the output and maybe an error.
 
@@ -35,7 +35,7 @@ These error values can be returned:
 
 As can be seen above some of there are errors that will be returned even under normal operation so it is important to handle.
 
-To reduce allocations you can provide a [`Scratch`](https://godoc.org/github.com/klauspost/compress/huff0#Scratch) object that can be re-used for successive calls. Both compression and decompression accepts a `Scratch` object, and the same object can be used for both.
+To reduce allocations you can provide a [`Scratch`](https://godoc.org/github.com/klauspost/compress/huff0#Scratch) object that can be re-used for successive calls. Both compression and decompression accepts a `Scratch` object. The same object can be used for both.
 
 Be aware, that when re-using a `Scratch` object that the *output* buffer is also re-used, so if you are still using this you must. The same buffer is used for compression and decompression output.
 
@@ -49,7 +49,7 @@ The Scratch object allows you to set a [`ReusePolicy`](https://godoc.org/github.
 
 Do however note that this information is *not* stored in the output block and it is up to the users of the package to.
 
-If you want to store the table separate from the data, you can access them as `OutData` and `OutTable` on the [`Scratch`](https://godoc.org/github.com/klauspost/compress/huff0#Scratch) object.
+If you want to store the table separate from the data. You can access them as `OutData` and `OutTable` on the [`Scratch`](https://godoc.org/github.com/klauspost/compress/huff0#Scratch) object.
 
 ## Decompressing
 

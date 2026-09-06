@@ -28,7 +28,7 @@ APE defines three separate file magics, all of which are 8 characters long. Any 
 - ASCII: `MZqFpD='`
 - Hex: 4d 5a 71 46 70 44 3d 27
 
-This is the canonical magic used by almost all APE programs. It enables maximum portability between OSes. When interpreted as a shell script, it is assigning a single quoted string to an unused variable. The shell will then ignore subsequent binary content that is placed inside the string.
+This is the canonical magic used by almost all APE programs. It enables maximum portability between OSes. When interpreted as a shell script. It is assigning a single quoted string to an unused variable. The shell will then ignore subsequent binary content that is placed inside the string.
 
 It is strongly recommended that this magic value be immediately followed by a newline (\n or hex 0a) character. Some shells, e.g. FreeBSD SH and Zsh impose a binary safety check before handing off files that do not have a shebang to `/bin/sh`. That check applies to the first line, which cannot contain NUL characters.
 
@@ -70,7 +70,7 @@ The 0x4a relative offset of the magic causes execution to jump into the MS-DOS s
 - ASCII: `jartsr='`
 - Hex: 6a 61 72 74 73 72 3d 27
 
-Being a novel executable format that was first published in 2020, the APE file format is less understood by industry tools compared to the. For this reason, APE programs that use the MZ magic above can attract attention from Windows AV software, which may be unwanted by developers. Therefore the `jartsr='` magic is defined which enables the creation of APE binaries that can safely target all non-Windows platforms. Even though this magic is less common, APE interpreters and binfmt-misc installations MUST support this.
+Being a novel executable format that was first published in 2020. The APE file format is less understood by industry tools compared to the. For this reason, APE programs that use the MZ magic above can attract attention from Windows AV software, which may be unwanted by developers. Therefore the `jartsr='` magic is defined which enables the creation of APE binaries that can safely target all non-Windows platforms. Even though this magic is less common, APE interpreters and binfmt-misc installations MUST support this.
 
 It is strongly recommended that this magic value be immediately followed by a newline (\n or hex 0a) character. Some shells, e.g. FreeBSD SH and Zsh impose a binary safety check before handing off files that do not have a shebang to `/bin/sh`. That check applies to the first line, which cannot contain NUL characters.
 
@@ -99,7 +99,7 @@ APE interpreters, execve() implementations, and binfmt-misc installs MUST ignore
 
 ## Embedded ELF Header
 
-APE binaries MAY embed an ELF header inside them. Unlike conventional executable file formats, this header is not stored at a fixed offset. It is instead encoded as octal escape codes in a shell script `printf` statement. For example:
+APE binaries MAY embed an ELF header inside them. Unlike conventional executable file formats. This header is not stored at a fixed offset. It is instead encoded as octal escape codes in a shell script `printf` statement. For example:
 
 ```
 printf '\177ELF\2\1\1\011\0\0\0\0\0\0\0\0\2\0\076\0\1\0\0\0\166\105\100\000\000\000\000\000\060\013\000\000\000\000\000\000\000\000\000\000\000\000\000\000\165\312\1\1\100\0\070\0\005\000\0\0\000\000\000\000'
@@ -109,7 +109,7 @@ This `printf` statement MUST appear in the first 8192 bytes of the APE executabl
 
 Multiple such `printf` statements MAY appear in the first 8192 bytes, in order to specify multiple architectures. For example, fat binaries built by the `apelink` program (provided by Cosmo Libc) will have two encoded ELF headers, for AMD64 and ARM64, each of which point. Therefore, kernels and interpreters which load the APE format directly MUST check the `e_machine` field of the `Elf64_Ehdr` that is decoded from the octal.
 
-Where the decoded header is WRITTEN is the script's own business, and a parser must not assume it lands in the APE. This implementation copies the file and writes the header into the copy, so the APE keeps its bytes, its checksum, and every architecture it. A parser reads the header out of the `printf` statement either way.
+Where the decoded header is WRITTEN is the script's own business. A parser must not assume it lands in the APE. This implementation copies the file and writes the header into the copy. The APE keeps its bytes, its checksum, and every architecture it. A parser reads the header out of the `printf` statement either way.
 
 These printf statements MUST always use only unescaped ASCII characters or octal escape codes. These printf statements MUST NOT use space saving escape codes such as `\n`. For example, rather than saying `\n` it can be valid to say `\012` instead. It is also valid to say `\12` but only if the encoded characters that follow are not an octal digit.
 
@@ -135,11 +135,11 @@ static int ape_parse_octal(const unsigned char page[8192], int i, int *pc)
 }
 ```
 
-APE aware interpreters SHOULD only take `e_machine` into consideration. It is the responsibility of the `_start()` function to detect the OS. Therefore, multiple `printf` statements are only embedded in the shell script for different CPU architectures.
+APE aware interpreters MUST only take `e_machine` into consideration. It is the responsibility of the `_start()` function to detect the OS. Therefore, multiple `printf` statements are only embedded in the shell script for different CPU architectures.
 
-The OS ABI field of an APE embedded `Elf64_Ehdr` SHOULD be set to `ELFOSABI_FREEBSD`, since it is the only UNIX OS APE supports that. However different values MAY be chosen for binaries that do not intend to have FreeBSD in their support vector.
+The OS ABI field of an APE embedded `Elf64_Ehdr` MUST be set to `ELFOSABI_FREEBSD`, since it is the only UNIX OS APE supports that. However different values MAY be chosen for binaries that do not intend to have FreeBSD in their support vector.
 
-Counter-intuitively, the ARM64 ELF header is used on the MacOS ARM64 platform when loading from fat binaries.
+Counter-intuitively. The ARM64 ELF header is used on the MacOS ARM64 platform when loading from fat binaries.
 
 ## Embedded Mach-O Header (x86-64 only)
 
@@ -157,7 +157,7 @@ These `dd` statements have traditionally been generated by the GNU as and ld.bfd
 - `arg=$(( 9293))` b/c busybox sh disliked quoted space
 - `arg=9293 ` is generated by modern apelink program
 
-Software that parses the APE file format, which needs to extract the Macho-O x86-64 header SHOULD support the old binaries that use the previous. To make backwards compatibility simple the following regular expression may be used, which generalizes to all defined formats:
+Software that parses the APE file format, which needs to extract the Macho-O x86-64 header MUST support the old binaries that use the previous. To make backwards compatibility simple the following regular expression may be used, which generalizes to all defined formats:
 
 ```c
 regcomp(&rx,
@@ -188,11 +188,11 @@ For further details, see the canonical implementation in `cosmopolitan/tool/buil
 
 Actually Portable Executables are always statically linked. This revision of the specification does not define any facility for storing code in dynamic shared objects.
 
-Cosmopolitan Libc provides a solution that enables APE binaries have limited access to dlopen(). By manually loading a platform-specific executable and asking the OS-specific libc's dlopen() to load OS-specific libraries, it becomes possible to use GPUs and. This has worked great for AI projects like llamafile.
+Cosmopolitan Libc provides a solution that enables APE binaries have limited access to dlopen(). By manually loading a platform-specific executable and asking the OS-specific libc's dlopen() to load OS-specific libraries. It becomes possible to use GPUs and. This has worked great for AI projects like llamafile.
 
 There is no way for an Actually Portable Executable to interact with OS-specific dynamic shared object extension modules to programming languages. For example, a Lua interpreter compiled as an Actually Portable Executable can have no way of linking extension libraries downloaded from the Lua Rocks. This is primarily because different OSes define incompatible ABIs.
 
-While it was possible to polyglot PE+ELF+MachO to create multi-OS executables, it simply is not possible to do that same thing for DLL+DYLIB+SO. Therefore, in order to have DSOs, APE can need to either choose one of the existing formats or invent one of its own, and. In the future, the APE specification may expand to encompass this. However the focus to date has been exclusively on executables with limited dlopen() support.
+While it was possible to polyglot PE+ELF+MachO to create multi-OS executables. It simply is not possible to do that same thing for DLL+DYLIB+SO. Therefore, in order to have DSOs, APE can need to either choose one of the existing formats or invent one of its own, and. In the future, the APE specification may expand to encompass this. However the focus to date has been exclusively on executables with limited dlopen() support.
 
 ## Application Binary Interface (ABI)
 
@@ -227,11 +227,11 @@ Here is the TLS memory layout on aarch64:
     __get_tls()
 ```
 
-The ARM64 code in actually portable executables use the `x28` register to store the address of the thread information block. All aarch64 code linked into these executables SHOULD be compiled with `-ffixed-x28` which is supported by both Clang and GCC.
+The ARM64 code in actually portable executables use the `x28` register to store the address of the thread information block. All aarch64 code linked into these executables MUST be compiled with `-ffixed-x28` which is supported by both Clang and GCC.
 
 The runtime library for an actually portable executables MAY choose to use `tpidr_el0` instead, if OSes like MacOS are not being targeted. For example, if the goal is to create a Linux-only fat binary linker program for Musl Libc, then choosing to use the existing `tpidr_el0`.
 
-It is not possible for an APE runtime that targets the full range of OSes to use the `tpidr_el0` register for TLS because Apple. On MacOS ARM64 systems, this register can only be used by a runtime to implement the `sched_getcpu()` system call. It is reserved by MacOS.
+It is not possible for an APE runtime that targets the full range of OSes to use the `tpidr_el0` register for TLS because Apple. On MacOS ARM64 systems. This register can only be used by a runtime to implement the `sched_getcpu()` system call. It is reserved by MacOS.
 
 #### x86-64
 
@@ -303,7 +303,7 @@ The `cosmocc` script internally uses a tool named `tlscc` which wraps a gcc or c
 
 The above functions do not clobber any registers. The function name specifies the register to which the result is stored or added. The only above function that can be called by C code is `__get_tls_rax`.
 
-When Windows and MacOS are not in the support vector, then the above assembly rewriting pass can be avoided entirely, and the binary can.
+When Windows and MacOS are not in the support vector, then the above assembly rewriting pass can be avoided entirely. The binary can.
 
 ### Thread Information Block (TIB)
 
@@ -333,7 +333,7 @@ Actually Portable Executable defines `char` as signed.
 
 Therefore conformant APE software MUST use `-fsigned-char` when building code for aarch64, as well as any other architecture that (unlike x86-64) can otherwise define `char`.
 
-This decision was one of the cases where it made sense to offer a more consistent runtime experience for fat multi-arch binaries. However you SHOULD still write code to assume `char` can go either way. But if all you care about is using APE, then you CAN assume `char` is signed.
+This decision was one of the cases where it made sense to offer a more consistent runtime experience for fat multi-arch binaries. However you MUST still write code to assume `char` can go either way. But if all you care about is using APE. You CAN assume `char` is signed.
 
 ### Long Double
 
@@ -345,7 +345,7 @@ We accept inconsistency in this case, because hardware acceleration is far more 
 
 One challenge arises on AMD64 for supporting `long double` across OSes. Unlike UNIX systems, the Windows Executive on x86-64 initializes the x87 FPU to have double (64-bit) precision rather than 80-bit. That is because code compiled by MSVC treats `long double` as though it were `double` to prefer always using the more modern SSE instructions. However System V requires genuine 80-bit `long double` support on AMD64.
 
-Therefore, if an APE program detects that it is been started on a Windows x86-64 system, then it SHOULD use the following assembly to.
+Therefore, if an APE program detects that it is been started on a Windows x86-64 system, then it MUST use the following assembly to.
 
 ```asm
 	fldcw	1f(%rip)
@@ -372,25 +372,25 @@ Therefore, if an APE program detects that it is been started on a Windows x86-64
 
 Actually Portable Executable is a statically-linked flat executable file format that is, as a thing in itself, agnostic to file alignments. For example, the shell script payload at the beginning of the file and its statements have no such requirements. Alignment requirements are however imposed by the executable formats that APE wraps.
 
-1. ELF requires that file offsets be congruent with virtual addresses modulo the CPU page size. So when we add a shell script to the start of an executable, we need to round up to the page size in order. Although no such roundup is required on the program segments once the invariant is restored. ELF loaders will happily map program headers from arbitrary file intervals (which may overlap) onto arbitrarily virtual intervals (which do not need to be contiguous). In order to do that, the loaders will generally use UNIX's mmap() function which is more restrictive and only accepts addresses and offsets. To make it possible to map an unaligned ELF program header that can potentially start and stop at any byte, ELF loaders round-out the. Thanks to the cleverness of ELF, it is possible to have an executable file be very tiny, without needing any alignment bytes, and it.
+1. ELF requires that file offsets be congruent with virtual addresses modulo the CPU page size. So when we add a shell script to the start of an executable, we need to round up to the page size in order. Although no such roundup is required on the program segments once the invariant is restored. ELF loaders will happily map program headers from arbitrary file intervals (which may overlap) onto arbitrarily virtual intervals (which do not need to be contiguous). In order to do that. The loaders will generally use UNIX's mmap() function which is more restrictive and only accepts addresses and offsets. To make it possible to map an unaligned ELF program header that can potentially start and stop at any byte, ELF loaders round-out the. Thanks to the cleverness of ELF. It is possible to have an executable file be very tiny, without needing any alignment bytes, and it.
 
-2. PE does not care about congruence and instead defines two separate kinds of alignment. First, PE requires that the layout of segment memory inside the file be aligned on at minimum the classic 512 byte MS-DOS page size. This means that, unlike ELF, some alignment padding may need to be encoded into the file, making it slightly larger. Next PE imposes an alignment restriction on segments once they have been mapped into the virtual address space, which must be rounded to the. Like ELF, PE segments need to be properly ordered but they are allowed to drift apart once mapped in a non-contiguous sparsely mapped way. When inserting shell script content at the start of a PE file, the most problematic thing is the need to round up to the.
+2. PE does not care about congruence and instead defines two separate kinds of alignment. First, PE requires that the layout of segment memory inside the file be aligned on at minimum the classic 512 byte MS-DOS page size. This means that, unlike ELF, some alignment padding may need to be encoded into the file, making it slightly larger. Next PE imposes an alignment restriction on segments once they have been mapped into the virtual address space, which must be rounded to the. Like ELF, PE segments need to be properly ordered but they are allowed to drift apart once mapped in a non-contiguous sparsely mapped way. When inserting shell script content at the start of a PE file. The most problematic thing is the need to round up to the.
 
 3. Apple's Mach-O format is the strictest of them all. While both ELF and PE are defined in such a way that invites great creativity, XNU will simply refuse to an executable that does. All loaded segments need to both start and end on a page aligned address. XNU also wants segments to be contiguous similar to portable executable, except it applies to both the file and virtual spaces, which must follow.
 
 Actually Portable Executables must conform to the strictest requirements demanded by the support vector. Therefore an APE binary that has headers for all three of the above executable formats MUST conform to the Apple way of doing things. GNU ld linker scripts are not very good at producing ELF binaries that rigidly conform to this simple naive layout. There are so many ways things can go wrong, where third party code can slip its own custom section name in-between the linker script. The best `ld` flag that helps is `--orphan-handling=error` which can help with explaining such mysteries.
 
-While Cosmopolitan was originally defined to just use stock GNU tools, this proved intractable over time, and the project has been evolving in the. Inventing the `apelink` program was what enabled the project to achieve multi-architecture binaries whereas previously it was only possible to do multi-OS binaries. In the future, our hope is that a fast power linker like Mold can be adapted to produce fat APE binaries directly from object.
+While Cosmopolitan was originally defined to just use stock GNU tools, this proved intractable over time. The project has been evolving in the. Inventing the `apelink` program was what enabled the project to achieve multi-architecture binaries whereas previously it was only possible to do multi-OS binaries. In the future, our hope is that a fast power linker like Mold can be adapted to produce fat APE binaries directly from object.
 
 ## Position Independent Code
 
 APE does not currently support position independent executable formats. This is because APE was originally written for the GNU linker, where PIC and PIE were after-thoughts and never fully incorporated with the older. Future iterations of this specification are intended to converge on modern standards, as our tooling becomes developed enough to support it.
 
-However this only applies to the wrapped executable formats themselves. While our convention to date has been to always load ELF programs at the 4mb mark, this is not guaranteed across OSes and architectures. Programs must have no expectations that a program will be loaded to any given address. For example, Cosmo currently implements APE on AARCH64 as loading executables to a starting address of 0x000800000000. This address occupies a sweet spot of requirements.
+However this only applies to the wrapped executable formats themselves. While our convention to date has been to always load ELF programs at the 4mb mark. This is not guaranteed across OSes and architectures. Programs must have no expectations that a program will be loaded to any given address. For example, Cosmo currently implements APE on AARCH64 as loading executables to a starting address of 0x000800000000. This address occupies a sweet spot of requirements.
 
 ## Address Space
 
-In order to create a single binary that supports as many platforms as possible without needing to be recompiled, there is a very narrow. That range is somewhere between 32 bits and 39 bits.
+In order to create a single binary that supports as many platforms as possible without needing to be recompiled. There is a very narrow. That range is somewhere between 32 bits and 39 bits.
 
 - Embedded devices that claim to be 64-bit will oftentimes only support a virtual address space that is 39 bits in size.
 

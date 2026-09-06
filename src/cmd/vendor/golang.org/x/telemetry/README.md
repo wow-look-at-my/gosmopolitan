@@ -18,7 +18,7 @@ This repository uses Gerrit for code changes. To learn how to submit changes to 
 
 The git repository is https://go.googlesource.com/telemetry.
 
-The main issue tracker for the telemetry repository is located at https://go.dev/issues. Prefix your issue with "x/telemetry:" in the subject line, so it is easy to find.
+The main issue tracker for the telemetry repository is located at https://go.dev/issues. Prefix your issue with "x/telemetry:" in the subject line. It is easy to find.
 
 ### Linting & Formatting
 
@@ -29,7 +29,7 @@ See the style guides:
 - [TypeScript](https://google.github.io/styleguide/tsguide.html)
 - [CSS](https://go.dev/wiki/CSSStyleGuide)
 
-It is encouraged that all TS and CSS code be run through formatters before submitting a change. However, it is not a strict requirement enforced by CI.
+It is encouraged that all TS and CSS code be run through formatters before submitting a change. However. It is not a strict requirement enforced by CI.
 
 ### Installing npm Dependencies:
 

@@ -14,7 +14,7 @@ go1.26.5 -> go1.27.0: 1,748 upstream commits, 73 conflicted files, of which 29 w
 git diff --name-only go1.26.5 HEAD -- <conflicted file>
 ```
 
-An empty result means the fork never edited that file since the previous tag, so it has no stake in the conflict and upstream's.
+An empty result means the fork never edited that file since the previous tag. It has no stake in the conflict and upstream's.
 
 ```sh
 git show :3:<file> > <file>   # stage 3 is "theirs"
@@ -24,7 +24,7 @@ git show :3:<file> > <file>   # stage 3 is "theirs"
 
 ## Resolutions worth knowing about
 
-- **`src/net/http/h2_bundle.go` is gone.** go1.27 deleted the generated bundle and moved HTTP/2 into `src/net/http/internal/http2/`, an ordinary in-tree package. `golang.org/x/net/http2` is no longer synchronized with std. The fork never edited the bundle, so the deletion is accepted as-is.
+- **`src/net/http/h2_bundle.go` is gone.** go1.27 deleted the generated bundle and moved HTTP/2 into `src/net/http/internal/http2/`, an ordinary in-tree package. `golang.org/x/net/http2` is no longer synchronized with std. The fork never edited the bundle. The deletion is accepted as-is.
 - **`runtime/os_linux32.go` was upstreamed.** The fork's kernel-version selection of the 64-bit time syscalls is now upstream's code, so upstream's file wins whole. It additionally replaces the `setNsec` downgrade with `mustDowncastToTimespec32`.
 - **The fork's vendored `x/tools` backports are superseded.** go1.27 vendors a newer x/tools that already contains them. After resolving, the vendored tree matches go1.27.0 byte for byte. Only `klauspost/compress` (the linker's zstd DWARF encoder) is re-added on top of upstream's module files.
 - **`funcNamePiecesForPrint` returns five pieces now**, not three. The fork's `printFuncName` keeps its table-aliasing prefix argument and passes all five.
@@ -39,7 +39,7 @@ These break the build rather than a build tag, so `go build std` for cosmo is no
 - `decoderune` takes and returns a `uint` index.
 - The ssa generator's `regMask` is a struct (`v1`, `v2`) with `union`/`addReg` methods, not a scalar. Do not hand-merge `opGen.go`. Run `go run -C=_gen .` in `cmd/compile/internal/ssa` and commit what it writes.
 - `internal/runtime/atomic` exports its linknames from `linkname.go` under `//go:linknamestd`, and a second `//go:linkname` for the same name is now a compile error.
-- `gp.m.locks` is scaled by `mutexMLocksDelta` for mutexes, so an M can tell it is releasing its last mutex even with preemption disabled for other. Every lock implementation must use it.
+- `gp.m.locks` is scaled by `mutexMLocksDelta` for mutexes. An M can tell it is releasing its last mutex even with preemption disabled for other. Every lock implementation must use it.
 
 ## The linker's cross-package reference check
 

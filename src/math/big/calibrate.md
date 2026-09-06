@@ -8,11 +8,11 @@ For example, for small inputs, multiplication using the “grade school algorith
 
 [Karatsuba's algorithm](https://en.wikipedia.org/wiki/Karatsuba_algorithm) multiplies two N-digit numbers by splitting them in half, computing three N/2-digit products, and then reconstructing the final product using a. It runs in O(N\*\*log₂ 3) = O(N\*\*1.58) time. The grade school loop runs faster for small inputs, but eventually Karatsuba's smaller asymptotic run time wins.
 
-The multiplication implementation must decide which to use. Under the assumption that once Karatsuba is faster for some N, it will be larger for all larger N as well, the rule is.
+The multiplication implementation must decide which to use. Under the assumption that once Karatsuba is faster for some N. It will be larger for all larger N as well. The rule is.
 
-Calibration is the process of determining what karatsubaThreshold must be set to. It does not sound like it must be that hard, but it is:
+Calibration is the process of determining what karatsubaThreshold must be set to. It does not sound like it must be that hard. It is:
 - Theoretical analysis does not help: the answer depends on the actual machines and the actual constant factors in the two implementations.
-- We are picking a single karatsubaThreshold for all systems, despite them having different relative execution speeds for the operations in the two algorithms. (We can in theory pick different thresholds for different architectures, but there can still be significant variation within a given architecture.)
+- We are picking a single karatsubaThreshold for all systems, despite them having different relative execution speeds for the operations in the two algorithms. (We can in theory pick different thresholds for different architectures. There can still be significant variation within a given architecture.)
 - The assumption that there is a single N where an asymptotically better algorithm becomes faster and stays faster is not true in general.
 - Recursive algorithms like Karatsuba's may have different optimal thresholds for different large input sizes.
 - Thresholds can interfere. For example, changing the karatsubaThreshold makes multiplication faster or slower, which in turn affects the best divRecursiveThreshold (because divisions use multiplication).
@@ -27,7 +27,7 @@ Any particular input is sensitive to only a few transitions in threshold. For ex
 
 ![KaratsubaThreshold on an Apple M3 Pro, N=320 only](https://swtch.com/math/big/_calibrate/KaratsubaMul/cal.mac320.svg)
 
-For this input, all thresholds from 21 to 40 perform optimally and identically: they all mean “recurse at N=40 but not at N=20”. From the single input of size N=320, we cannot decide which of these 20 thresholds is best.
+For this input, all thresholds from 21 to 40 perform optimally and identically: they all mean “recurse at N=40 but not at N=20”. From the single input of size N=320. We cannot decide which of these 20 thresholds is best.
 
 Other inputs exercise other decision points. For example, here is the timing for N=240:
 
@@ -49,7 +49,7 @@ Unfortunately, other chips are different. Here is an Intel Xeon server chip:
 
 ![KaratsubaThreshold on an Apple M3 Pro](https://swtch.com/math/big/_calibrate/KaratsubaMul/cal.c2s16.svg)
 
-On this chip, the best threshold is closer to 60. Luckily, 40 is not a terrible choice either: it is only about 2% slower on average.
+On this chip. The best threshold is closer to 60. Luckily, 40 is not a terrible choice either: it is only about 2% slower on average.
 
 The rest of this document presents the timings measured for the `math/big` thresholds on a variety of machines and justifies the final thresholds. The timings used these machines:
 
@@ -71,7 +71,7 @@ The majority of systems have optimum thresholds near 40, so we chose karatsubaTh
 
 ## Basic Squaring
 
-For squaring a number (`z.Mul(x, x)`), math/big uses grade school multiplication up to basicSqrThreshold, where it switches to a customized algorithm that is still quadratic. That algorithm's inner loops are not as tight as the grade school multiplication, so it is slower for small inputs. How small?
+For squaring a number (`z.Mul(x, x)`), math/big uses grade school multiplication up to basicSqrThreshold, where it switches to a customized algorithm that is still quadratic. That algorithm's inner loops are not as tight as the grade school multiplication. It is slower for small inputs. How small?
 
 Here are the timings:
 

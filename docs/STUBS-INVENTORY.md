@@ -2,7 +2,7 @@
 
 This document catalogs stubbed-out or broken functionality in the cosmo syscall emulation and runtime. Each item lists the file, line, and the observed behavior. The goal is a complete, honest accounting of what "works" only by pretending to, what fails loudly, and what is structurally broken — so follow-up.
 
-The finding this document was opened on: **the darwin (macOS) syscall emulation is incomplete, and the amd64 darwin path is largely stubbed and structurally.
+The finding this document was opened on: **the darwin (macOS) syscall emulation is incomplete. The amd64 darwin path is largely stubbed and structurally.
 
 The arm64 half of that is now closed — Section 6 lists what the metadata wave implemented and the few calls Apple genuinely cannot serve. The amd64 half stands as written. The same wave closed the NT metadata syscalls Win32 can serve (Section 5a).
 
@@ -19,7 +19,7 @@ Both remain Section 8 items. The difference from the work above is that neither 
 
 ## 1. The Seek/ReadAt gap (FIXED on this branch)
 
-**Before this branch:** on macOS (both arm64 and amd64), `os.File.Seek` and `os.File.ReadAt` returned `ENOSYS` ("function not implemented"). Linux and Windows already dispatched `pread`/`lseek` natively, so the gap was macOS-only — but it was real and user-visible.
+**Before this branch:** on macOS (both arm64 and amd64), `os.File.Seek` and `os.File.ReadAt` returned `ENOSYS` ("function not implemented"). Linux and Windows already dispatched `pread`/`lseek` natively. The gap was macOS-only — but it was real and user-visible.
 
 - arm64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the `syscall6SlowDarwin` switch in `src/internal/runtime/syscall/cosmo/syscall_cosmo_arm64.go`, so they fell through to the `darwinENOSYS` default.
 - amd64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the darwin dispatch in `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s`, so they fell through to `darwin_enosys`.
@@ -46,7 +46,7 @@ These pretend to succeed while doing nothing. A caller cannot tell the operation
 
 ## 3. ENOSYS stubs (visible failure, functionality missing)
 
-These fail loudly with `ENOSYS`, so they are honest — but the functionality is missing.
+These fail loudly with `ENOSYS`. They are honest — but the functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
@@ -131,7 +131,7 @@ Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's own fil
 
 The amd64 darwin dispatch carried 18 syscalls and answered everything else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod, fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid, setreuid, setregid, getpgid, and statfs/fstatfs (the last two through XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path applies, so a Linux-layout buffer is refused rather than overrun). `getpriority` applies the Linux `20-nice` bias, which the carry-flag convention makes unambiguous — the value alone cannot say whether the call failed.
 
-Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax` (`sys_cosmo_amd64.s`) is the amd64 twin of arm64's `cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`, and a linkname push makes it reachable from. An earlier note here claimed that cannot be done. It was reasoning about the DATA table rather than the function that wraps it.
+Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax` (`sys_cosmo_amd64.s`) is the amd64 twin of arm64's `cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`. A linkname push makes it reachable from. An earlier note here claimed that cannot be done. It was reasoning about the DATA table rather than the function that wraps it.
 
 **Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the tree's own authority, not from memory. That mattered: statfs64 is 345, not the 338 recall suggested. Anything that file does not carry is deliberately absent rather than guessed — a wrong syscall number does not fail, it calls a DIFFERENT syscall. That is why the *at family (`linkat`, `symlinkat`, `fchmodat`, `fchownat`) and `utimensat` stay ENOSYS on amd64 while arm64 serves them: arm64 resolves by NAME through dlsym and. `uname` stays ENOSYS for a different reason — XNU has no uname syscall at all. It is a libc function over sysctl. `sendfile` stays ENOSYS because Apple's argument order, its value-result count pointer and its untouched file offset need real control flow, which the arm64 Go.
 

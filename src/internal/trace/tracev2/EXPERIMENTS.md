@@ -2,7 +2,7 @@
 
 Execution traces allow for trialing new events on an experimental basis via trace experiments. This document is a guide that explains how you can define your own trace experiments.
 
-Note that if you are just trying to do some debugging or perform some light instrumentation, then a trace experiment is way overkill. Use `runtime/trace.Log` instead. Even if you are just trying to create a proof-of-concept for a low-frequency event, `runtime/trace.Log` will probably be easier overall if you can make.
+Note that if you are just trying to do some debugging or perform some light instrumentation. A trace experiment is way overkill. Use `runtime/trace.Log` instead. Even if you are just trying to create a proof-of-concept for a low-frequency event, `runtime/trace.Log` will probably be easier overall if you can make.
 
 Consider a trace experiment if:
 - The volume of new trace events will be relatively high, and so the events can benefit from a more compact representation (creating new tables to deduplicate data, taking advantage of the varint representation, etc.).
@@ -12,13 +12,13 @@ Consider a trace experiment if:
 
 To define a new experiment, modify `internal/trace/tracev2` to define a new `Experiment` enum value.
 
-An experiment consists of two parts: timed events and experimental batches. Timed events are events like any other and follow the same format. They are easier to order and require less work to make use of. Experimental batches are essentially bags of bytes that correspond to an entire trace generation. What they contain and how they are interpreted is totally up to you, but they are most often useful for tables that your other. For example, the AllocFree experiment uses them to store type information that allocation events can refer to.
+An experiment consists of two parts: timed events and experimental batches. Timed events are events like any other and follow the same format. They are easier to order and require less work to make use of. Experimental batches are essentially bags of bytes that correspond to an entire trace generation. What they contain and how they are interpreted is totally up to you. They are most often useful for tables that your other. For example, the AllocFree experiment uses them to store type information that allocation events can refer to.
 
 ### Defining new events
 
 1. Define your new experiment event types (by convention, experimental events types start at ID 127, so look for the `const` block defining events starting there).
 2. Describe your new events in `specs`. Use the documentation for `Spec` to write your new specs, and check your work by running the tests in the `internal/trace/tracev2` package. If you wish for your event argument to be interpreted in a particular way, follow the naming convention in `src/internal/trace/tracev2/spec.go`. For example, if you intend to emit a string argument, make sure the argument name has the suffix `string`.
-3. Add ordering and validation logic for your new events to `src/internal/trace/order.go` by listing handlers for those events in the `orderingDispatch` table. If your events are always emitted in a regular user goroutine context, then the handler must be trivial and just validate the scheduling context. If it is more complicated, see `(*ordering).advanceAllocFree` for a slightly more complicated example that handles events from a larger variety of execution environments. If you need to encode a partial ordering, look toward the scheduler events (names beginning with `Go`) or just ask someone for help.
+3. Add ordering and validation logic for your new events to `src/internal/trace/order.go` by listing handlers for those events in the `orderingDispatch` table. If your events are always emitted in a regular user goroutine context. The handler must be trivial and just validate the scheduling context. If it is more complicated, see `(*ordering).advanceAllocFree` for a slightly more complicated example that handles events from a larger variety of execution environments. If you need to encode a partial ordering, look toward the scheduler events (names beginning with `Go`) or just ask someone for help.
 4. Add your new events to the `tracev2Type2Kind` table in `src/internal/trace/event.go`.
 
 ## Emitting data
@@ -30,7 +30,7 @@ An experiment consists of two parts: timed events and experimental batches. Time
 
 ### Emitting experimental batches
 
-To emit experimental batches, use the `runtime.unsafeTraceExpWriter` to write experimental batches associated with your experiment. Heed the warnings and make sure that while you write them, the trace generation cannot advance. Note that each experiment can only have one distinguishable set of batches.
+To emit experimental batches, use the `runtime.unsafeTraceExpWriter` to write experimental batches associated with your experiment. Heed the warnings and make sure that while you write them. The trace generation cannot advance. Note that each experiment can only have one distinguishable set of batches.
 
 ## Recovering experimental data
 

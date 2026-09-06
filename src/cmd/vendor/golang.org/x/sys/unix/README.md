@@ -2,7 +2,7 @@
 
 The sys/unix package provides access to the raw system call interface of the underlying operating system. See: https://godoc.org/golang.org/x/sys/unix
 
-Porting Go to a new architecture/OS combination or adding syscalls, types, or constants to an existing architecture/OS pair requires some manual effort. However, there are tools that automate much of the process.
+Porting Go to a new architecture/OS combination or adding syscalls, types, or constants to an existing architecture/OS pair requires some manual effort. However. There are tools that automate much of the process.
 
 ## Build Systems
 
@@ -22,9 +22,9 @@ Requirements: bash, go
 
 The new build system uses a Docker container to generate the go files directly from source checkouts of the kernel and various system libraries. This means that on any platform that supports Docker, all the files using the new build system can be generated at once, and generated.
 
-The OS specific files for the new build system are located in the `${GOOS}` directory, and the build is coordinated by the `${GOOS}/mkall.go` program. When the kernel or system library updates, modify the Dockerfile at `${GOOS}/Dockerfile` to checkout the new release of the source.
+The OS specific files for the new build system are located in the `${GOOS}` directory. The build is coordinated by the `${GOOS}/mkall.go` program. When the kernel or system library updates, modify the Dockerfile at `${GOOS}/Dockerfile` to checkout the new release of the source.
 
-To build all the files under the new build system, you must be on an amd64/Linux system and have your GOOS and GOARCH set. Running `mkall.sh` will then generate all of the files for all of the GOOS/GOARCH pairs in the new build system. Running `mkall.sh -n` shows the commands that will be run.
+To build all the files under the new build system. You must be on an amd64/Linux system and have your GOOS and GOARCH set. Running `mkall.sh` will then generate all of the files for all of the GOOS/GOARCH pairs in the new build system. Running `mkall.sh -n` shows the commands that will be run.
 
 Requirements: bash, go, docker
 
@@ -40,9 +40,9 @@ The hand-written assembly file at `asm_${GOOS}_${GOARCH}.s` implements system ca
   func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr)
   func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2, err uintptr)
 ```
-The first and second are the standard ones. They differ only in how many arguments can be passed to the kernel. The third is for low-level use by the ForkExec wrapper. Unlike the first two, it does not call into the scheduler to let it know that a system call is running.
+The first and second are the standard ones. They differ only in how many arguments can be passed to the kernel. The third is for low-level use by the ForkExec wrapper. Unlike the first two. It does not call into the scheduler to let it know that a system call is running.
 
-When porting Go to a new architecture/OS, this file must be implemented for each GOOS/GOARCH pair.
+When porting Go to a new architecture/OS. This file must be implemented for each GOOS/GOARCH pair.
 
 ### mksysnum
 
@@ -60,9 +60,9 @@ Adding a new syscall often just requires adding a new `//sys` function prototype
 
 ### types files
 
-For each OS, there is a hand-written Go file at `${GOOS}/types.go` (or `types_${GOOS}.go` on the old system). This file includes standard C headers and creates Go type aliases to the corresponding C types. The file is then fed through godef to get the Go compatible definitions. Finally, the generated code is fed though mkpost.go to format the code correctly and remove any hidden or private identifiers. This cleaned-up code is written to `ztypes_${GOOS}_${GOARCH}.go`.
+For each OS. There is a hand-written Go file at `${GOOS}/types.go` (or `types_${GOOS}.go` on the old system). This file includes standard C headers and creates Go type aliases to the corresponding C types. The file is then fed through godef to get the Go compatible definitions. Finally. The generated code is fed though mkpost.go to format the code correctly and remove any hidden or private identifiers. This cleaned-up code is written to `ztypes_${GOOS}_${GOARCH}.go`.
 
-The hardest part about preparing this file is figuring out which headers to include and which symbols need to be `#define`d to get. Some C libraries preset alternate versions for binary compatibility and translate them on the way in and out of system calls, but there is. See `types_darwin.go` and `linux/types.go` for examples.
+The hardest part about preparing this file is figuring out which headers to include and which symbols need to be `#define`d to get. Some C libraries preset alternate versions for binary compatibility and translate them on the way in and out of system calls. There is. See `types_darwin.go` and `linux/types.go` for examples.
 
 To add a new type, add in the necessary include statement at the top of the file (if it is not already there) and add in a type alias. Note that if your type is significantly different on different architectures, you may need some `#if/#elif` macros in your include statements.
 

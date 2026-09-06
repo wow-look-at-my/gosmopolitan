@@ -287,11 +287,11 @@ Use the links above for more information on each.
 	* gzhttp: Add zstd to transport [#400](https://github.com/klauspost/compress/pull/400)
 	* gzhttp: Make content-type optional [#510](https://github.com/klauspost/compress/pull/510)
 
-Both compression and decompression now supports "synchronous" stream operations. This means that whenever "concurrency" is set to 1, they will operate without spawning goroutines.
+Both compression and decompression now supports "synchronous" stream operations. This means that whenever "concurrency" is set to 1. They will operate without spawning goroutines.
 
 Stream decompression is now faster on asynchronous, since the goroutine allocation much more effectively splits the workload. On typical streams this will typically use 2 cores fully for decompression. When a stream has finished decoding no goroutines will be left over, so decoders can now safely be pooled and still be garbage collected.
 
-While the release has been extensively tested, it is recommended to testing when upgrading.
+While the release has been extensively tested. It is recommended to testing when upgrading.
 
 </details>
 
@@ -572,7 +572,7 @@ While the release has been extensively tested, it is recommended to testing when
 * Feb 19, 2016: Faster bit writer, level -2 is 15% faster, level 1 is 4% faster.
 * Feb 19, 2016: Handle small payloads faster in level 1-3.
 * Feb 19, 2016: Added faster level 2 + 3 compression modes.
-* Feb 19, 2016: [Rebalanced compression levels](https://blog.klauspost.com/rebalancing-deflate-compression-levels/), so there is a more even progression in terms of compression. New default level is 5.
+* Feb 19, 2016: [Rebalanced compression levels](https://blog.klauspost.com/rebalancing-deflate-compression-levels/). There is a more even progression in terms of compression. New default level is 5.
 * Feb 14, 2016: Snappy: Merge upstream changes.
 * Feb 14, 2016: Snappy: Fix aggressive skipping.
 * Feb 14, 2016: Snappy: Update benchmark.
@@ -609,7 +609,7 @@ Typical speed is about 2x of the standard library packages.
 
 You may also be interested in [pgzip](https://github.com/klauspost/pgzip), which is a drop-in replacement for gzip, which support multithreaded compression on big files and the.
 
-The packages implement the same API as the standard library, so you can use the original godoc documentation: [gzip](http://golang.org/pkg/compress/gzip/), [zip](http://golang.org/pkg/archive/zip/), [zlib](http://golang.org/pkg/compress/zlib/).
+The packages implement the same API as the standard library. You can use the original godoc documentation: [gzip](http://golang.org/pkg/compress/gzip/), [zip](http://golang.org/pkg/archive/zip/), [zlib](http://golang.org/pkg/compress/zlib/).
 
 Currently there is only minor speedup on decompression (mostly CRC32 calculation).
 

@@ -6,4 +6,4 @@ One section, named EXAMPLE_NAME.Output, contains the example's output, the value
 
 The other, named EXAMPLE_NAME.Play, contains the formatted code for a playable version of the example, the value of the field Example.Play.
 
-If a section is missing, it is treated as being empty.
+If a section is missing. It is treated as being empty.

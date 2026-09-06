@@ -11,7 +11,7 @@ It is a good measure of the backend because it is nothing but the shapes wasm co
 - `aggregate` -- one full pass over the frame, producing every cell texel.
 - `rle decode` -- expanding the run-length-encoded keyframe back into the page state array, the other per-frame cost.
 
-Every pass is **checksummed**, and the checksum is printed. A toolchain that produces a different cell buffer is wrong, not fast -- which is the failure mode that matters when the thing under test. The Go tests hold the same line from the other side: the two fast paths are pinned against a naive per-page reference implementation by.
+Every pass is **checksummed**. The checksum is printed. A toolchain that produces a different cell buffer is wrong, not fast -- which is the failure mode that matters when the thing under test. The Go tests hold the same line from the other side: the two fast paths are pinned against a naive per-page reference implementation by.
 
 ## The frame
 
@@ -51,7 +51,7 @@ go test -run '^$' -bench . -benchtime 100x     # per-phase Go benchmarks
 
 ## Results
 
-`results/` holds runs recorded on one machine, same frame, same kernel, so the only variable is the compiler:
+`results/` holds runs recorded on one machine, same frame, same kernel. The only variable is the compiler:
 
 | | aggregate (p50) | rle decode (p50) |
 |---|---|---|

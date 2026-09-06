@@ -1,8 +1,8 @@
-We have been working inside Google on a fork of Go that uses BoringCrypto (the core of [BoringSSL](https://boringssl.googlesource.com/boringssl/)) for various crypto primitives, in. We have heard that some external users of Go can be interested in this code as well, so we have published this code here.
+We have been working inside Google on a fork of Go that uses BoringCrypto (the core of [BoringSSL](https://boringssl.googlesource.com/boringssl/)) for various crypto primitives, in. We have heard that some external users of Go can be interested in this code as well. We have published this code here.
 
 Use of GOEXPERIMENT=boringcrypto outside Google is _unsupported_. This mode is not part of the [Go 1 compatibility rules](https://go.dev/doc/go1compat), and it may change incompatibly or break in other ways at any.
 
-To be clear, we are not making any statements or representations about the suitability of this code in relation to the FIPS 140 standard. Interested users will have to evaluate for themselves whether the code is useful for their own purposes.
+To be clear. We are not making any statements or representations about the suitability of this code in relation to the FIPS 140 standard. Interested users will have to evaluate for themselves whether the code is useful for their own purposes.
 
 ---
 

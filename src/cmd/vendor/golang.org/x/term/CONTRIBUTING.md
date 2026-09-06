@@ -20,4 +20,4 @@ General questions must go to the [golang-nuts mailing list](https://groups.googl
 
 Please read the [Contribution Guidelines](https://golang.org/doc/contribute.html) before sending patches.
 
-Unless otherwise noted, the Go source files are distributed under the BSD-style license found in the LICENSE file.
+Unless otherwise noted. The Go source files are distributed under the BSD-style license found in the LICENSE file.

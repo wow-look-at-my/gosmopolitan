@@ -6,19 +6,19 @@ The `initial` and `next` subdirectories of this directory are for release notes.
 
 Release notes must be added to `next` by editing existing files or creating new files. **Do not add RELNOTE=yes comments in CLs.** Instead, add.
 
-At the end of the development cycle, the files will be merged by being concatenated in sorted order by pathname. Files in the directory matching the glob "*stdlib/*minor" are treated specially. They must be in subdirectories corresponding to standard library package paths, and headings for those package paths will be generated automatically.
+At the end of the development cycle. The files will be merged by being concatenated in sorted order by pathname. Files in the directory matching the glob "*stdlib/*minor" are treated specially. They must be in subdirectories corresponding to standard library package paths, and headings for those package paths will be generated automatically.
 
 Files in this repo's `api/next` directory must have corresponding files in `doc/next/*stdlib/*minor`. The files must be in the subdirectory for the package with the new API, and must be named after the issue number of the. For example, if the directory `6-stdlib/99-minor` is present, then an `api/next` file with the line
 
     pkg net/http, function F #12345
 
-must have a corresponding file named `doc/next/6-stdlib/99-minor/net/http/12345.md`. At a minimum, that file must contain either a full sentence or a TODO, ideally referring to a person with the responsibility to complete.
+must have a corresponding file named `doc/next/6-stdlib/99-minor/net/http/12345.md`. At a minimum. That file must contain either a full sentence or a TODO, ideally referring to a person with the responsibility to complete.
 
 If your CL addresses an accepted proposal, mention the proposal issue number in your release note in the form `/issue/NUMBER`. A link to the issue in the text will have this form (see below). If you do not want to mention the issue in the text, add it as a comment:
 ```
 <!-- go.dev/issue/12345 -->
 ```
-If an accepted proposal is mentioned in a CL but not in the release notes, it will be flagged as a TODO by the. That is true even for proposals that add API.
+If an accepted proposal is mentioned in a CL but not in the release notes. It will be flagged as a TODO by the. That is true even for proposals that add API.
 
 Use the following forms in your markdown:
 

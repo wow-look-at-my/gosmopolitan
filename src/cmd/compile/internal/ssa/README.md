@@ -8,25 +8,25 @@ It is recommended that you first read [cmd/compile/README.md](../../README.md) i
 
 ### Key concepts
 
-The names described below may be loosely related to their Go counterparts, but note that they are not equivalent. For example, a Go block statement has a variable scope, yet SSA has no notion of variables nor variable scopes.
+The names described below may be loosely related to their Go counterparts, but note that they are not equivalent. For example. A Go block statement has a variable scope, yet SSA has no notion of variables nor variable scopes.
 
-It may also be surprising that values and blocks are named after their unique sequential IDs. They rarely correspond to named entities in the original code, such as variables or function parameters. The sequential IDs also allow the compiler to avoid maps, and it is always possible to track back the values to Go code using.
+It may also be surprising that values and blocks are named after their unique sequential IDs. They rarely correspond to named entities in the original code, such as variables or function parameters. The sequential IDs also allow the compiler to avoid maps. It is always possible to track back the values to Go code using.
 
 #### Values
 
-Values are the basic building blocks of SSA. Per SSA's very definition, a value is defined exactly once, but it may be used any number of times. A value mainly consists of a unique identifier, an operator, a type, and some arguments.
+Values are the basic building blocks of SSA. Per SSA's very definition. A value is defined exactly once, but it may be used any number of times. A value mainly consists of a unique identifier, an operator, a type, and some arguments.
 
 An operator or `Op` describes the operation that computes the value. The semantics of each operator can be found in `_gen/*Ops.go`. For example, `OpAdd8` takes two value arguments holding 8-bit integers and results in their addition. Here is a possible SSA representation of the addition of two `uint8` values:
 
 	// var c uint8 = a + b v4 = Add8 <uint8> v2 v3
 
-A value's type will usually be a Go type. For example, the value in the example above has a `uint8` type, and a constant boolean value will have a `bool` type. However, certain types do not come from Go and are special. Below we will cover `memory`, the most common of them.
+A value's type will usually be a Go type. For example, the value in the example above has a `uint8` type. A constant boolean value will have a `bool` type. However, certain types do not come from Go and are special. Below we will cover `memory`, the most common of them.
 
 Some operators contain an auxiliary field. The aux fields are usually printed as enclosed in `[]` or `{}`, and can be the constant op argument, argument type, etc. For example:
 
 	v13 (?) = Const64 <int> [1]
 
-Here the aux field is the constant op argument, the op is creating a `Const64` value of 1. One more example:
+Here the aux field is the constant op argument. The op is creating a `Const64` value of 1. One more example:
 
 	v17 (361) = Store <mem> {int} v16 v14 v8
 
@@ -36,11 +36,11 @@ See [value.go](value.go) and `_gen/*Ops.go` for more information.
 
 #### Memory types
 
-`memory` represents the global memory state. An `Op` that takes a memory argument depends on that memory state, and an `Op` which has the memory type impacts the state of. This ensures that memory operations are kept in the right order. For example:
+`memory` represents the global memory state. An `Op` that takes a memory argument depends on that memory state. An `Op` with the memory type impacts that state. This ensures that memory operations are kept in the right order. For example:
 
 	// *a = 3 // *b = *a v10 = Store <mem> {int} v6 v8 v1 v14 = Store <mem> {int} v7 v8 v10
 
-Here, `Store` stores its second argument (of type `int`) into the first argument (of type `*int`). The last argument is the memory state. Since the second store depends on the memory value defined by the first store, the two stores cannot be reordered.
+Here, `Store` stores its second argument (of type `int`) into the first argument (of type `*int`). The last argument is the memory state. Since the second store depends on the memory value defined by the first store. The two stores cannot be reordered.
 
 See [cmd/compile/internal/types/type.go](../types/type.go) for more information.
 
@@ -52,7 +52,7 @@ The simplest kind is a `plain` block. It simply hands the control flow to anothe
 
 Another common block kind is the `exit` block. These have a final value, called control value, which must return a memory state. This is necessary for functions to return some values, for example - the caller needs some memory state to depend on, to ensure that it.
 
-The last important block kind we will mention is the `if` block. It has a single control value that must be a boolean value, and it has exactly two successor blocks. The control flow is handed to the first successor if the bool is true, and to the second otherwise.
+The last important block kind we will mention is the `if` block. It has a single control value that must be a boolean value. It has exactly two successor blocks. The control flow is handed to the first successor if the bool is true, and to the second otherwise.
 
 Here is a sample if-else control flow represented with basic blocks:
 
@@ -64,15 +64,15 @@ See [block.go](block.go) for more information.
 
 #### Functions
 
-A function represents a function declaration along with its body. It mainly consists of a name, a type (its signature), a list of blocks that form its body, and the entry block within said list.
+A function represents a function declaration along with its body. It mainly consists of a name, a type (its signature), a list of blocks that form its body. The entry block within said list.
 
-When a function is called, the control flow is handed to its entry block. If the function terminates, the control flow will eventually reach an exit block, thus ending the function call.
+When a function is called. The control flow is handed to its entry block. If the function terminates. The control flow will eventually reach an exit block, thus ending the function call.
 
 Note that a function may have zero or multiple exit blocks, just like a Go function can have any number of return points, but.
 
 Also note that some SSA functions are autogenerated, such as the hash functions for each type used as a map key.
 
-For example, this is what an empty function can look like in SSA, with a single exit block that returns an uninteresting memory state:
+For example. This is what an empty function can look like in SSA, with a single exit block that returns an uninteresting memory state:
 
 	foo func() b1: v1 = InitMem <mem> Ret v1
 
@@ -110,7 +110,7 @@ The users may also print the Control Flow Graph(CFG) by specifying in `GOSSAFUNC
 
 	GOSSAFUNC="$FunctionName:$PassName1,$PassName2,..." go build
 
-For example, the following command will print SSA with CFGs attached to the `sccp` and `generic deadcode` pass columns:
+For example. The following command will print SSA with CFGs attached to the `sccp` and `generic deadcode` pass columns:
 
 	GOSSAFUNC="blah.Foo:sccp,generic deadcode" go build
 

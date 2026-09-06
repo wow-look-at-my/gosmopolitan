@@ -15,7 +15,7 @@ The UIR version written by the compiler is controlled by `src/cmd/compile/intern
 
 ## The Readers
 
-Besides the compiler itself, there are other readers in go, x/tools, and externally. Those in x/tools and the general public exist because `go list -export` produces export data files in this format and we support the ability of applications.
+Besides the compiler itself. There are other readers in go, x/tools, and externally. Those in x/tools and the general public exist because `go list -export` produces export data files in this format and we support the ability of applications.
 
 > Note that there is an upcoming plan to decouple the compiler's IR from x/tools > by changing the format encoded by `go list -export`. This can make UIR a > private detail of the compiler, free to break at any time. For now, these > instructions must still be followed.
 
@@ -24,7 +24,7 @@ We assume that external readers will update on their own. The necessary reader u
 ### go
 
 3. Update the compiler's own UIR reader in `src/cmd/compile/internal/noder/reader.go` to guard the reading of any fields added in N+1.
-4. Repeat this change for the readers in `src/go/internal/gcimporter/ureader.go` and `src/cmd/compile/internal/importer/ureader.go`. Note that these readers only read data needed for type checking (in `src/go/types` and `src/cmd/compile/internal/types2` respectively). For instance, they do not read exported function bodies. Thus, it is possible that a change to UIR (such as the encoding of function bodies) can require no change to these readers.
+4. Repeat this change for the readers in `src/go/internal/gcimporter/ureader.go` and `src/cmd/compile/internal/importer/ureader.go`. Note that these readers only read data needed for type checking (in `src/go/types` and `src/cmd/compile/internal/types2` respectively). For instance. They do not read exported function bodies. Thus. It is possible that a change to UIR (such as the encoding of function bodies) can require no change to these readers.
 
 ### x/tools
 
@@ -36,10 +36,10 @@ We assume that external readers will update on their own. The necessary reader u
 
 > If this UIR change will be tested, check the [following section](#testing) and > consider when it makes to finalize.
 
-Only after reviewing *all* of the readers, bump the UIR version written by the writer to N+1 in `src/cmd/compile/internal/noder/unified.go`. Because the readers have already been updated to handle version N+1, this change is compatible.
+Only after reviewing *all* of the readers, bump the UIR version written by the writer to N+1 in `src/cmd/compile/internal/noder/unified.go`. Because the readers have already been updated to handle version N+1. This change is compatible.
 
 ## Testing
 
-If making changes related to some new feature requiring extensive testing, it is best to postpone bumping the UIR version until *all* of the. To commit tests incrementally, develop them with a locally-incremented UIR version and commit *skipped* tests. Do not yet bump the remote UIR version.
+If making changes related to some new feature requiring extensive testing. It is best to postpone bumping the UIR version until *all* of the. To commit tests incrementally, develop them with a locally-incremented UIR version and commit *skipped* tests. Do not yet bump the remote UIR version.
 
 Once all of the required tests are in, bump the remote UIR version while turning on all of the previously skipped tests. This minimizes churn on the UIR version as testing uncovers any discrepancies.

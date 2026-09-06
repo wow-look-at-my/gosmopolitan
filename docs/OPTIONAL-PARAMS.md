@@ -17,7 +17,7 @@ This removes the pattern the feature exists for: an API whose every production c
 
 ## Rules
 
-- Only a **named ordinary parameter** takes a default. A type parameter list reads `=` as a type, and an unnamed parameter gives the callee nothing to read. The parser rejects both.
+- Only a **named ordinary parameter** takes a default. A type parameter list reads `=` as a type. An unnamed parameter gives the callee nothing to read. The parser rejects both.
 - Defaults must be **trailing**. A call omits a suffix of the parameter list, so a default before a required parameter can never be used.
 - A default is a **constant**, and a boolean, string or integer one. The call site is given the value spelled back as source, and only those three kinds have a spelling that reads back as the. A float can arrive as a rational.
 - The constant must be **assignable to the parameter type**, by the ordinary assignability rules. An untyped one converts exactly as an argument can.

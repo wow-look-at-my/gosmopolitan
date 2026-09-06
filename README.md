@@ -54,7 +54,7 @@ go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
 
 All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides. Releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+The shipped `go.env` defaults `GOTOOLCHAIN=local`. The fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides. Releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 
@@ -82,6 +82,6 @@ Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (p
 
 ## License
 
-Unless otherwise noted, the Go source files are distributed under the BSD-style license found in the LICENSE file.
+Unless otherwise noted. The Go source files are distributed under the BSD-style license found in the LICENSE file.
 
 ![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg) *Gopher image by [Renee French](https://reneefrench.blogspot.com/), licensed under [Creative Commons 4.0 Attribution license](https://creativecommons.org/licenses/by/4.0/).*

@@ -1,4 +1,4 @@
-<style> main ul li { margin: 0.5em 0; } </style>
+<style> main ul li { margin: 0.5em 0. } </style>
 
 ## DRAFT RELEASE NOTES — Introduction to Go 1.N {#introduction}
 

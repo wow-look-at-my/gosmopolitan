@@ -21,7 +21,7 @@ go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
 
 The tarball extracts to `go/` (official distribution layout. GOROOT is derived from the binary location, no need to set it).
 
-Every slot uploads a `.tar.gz`, windows included. A GOROOT is a directory tree, and buildhost stores one blob per os/arch and repackages it at download time, so the archive IS the. Upstream's windows-only `.zip` can be a second copy nothing fetches, so distpack no longer writes one. The `.exe` suffix inside is what differs: windows carries `go/bin/go.exe`.
+Every slot uploads a `.tar.gz`, windows included. A GOROOT is a directory tree, and buildhost stores one blob per os/arch and repackages it at download time. The archive IS the. Upstream's windows-only `.zip` can be a second copy nothing fetches, so distpack no longer writes one. The `.exe` suffix inside is what differs: windows carries `go/bin/go.exe`.
 
 ## How the publish works
 
@@ -49,4 +49,4 @@ Local source builds keep the static version and need no stamp: since 2026-07-20 
 - **That unparseable version has a price, and it reaches shipped binaries.** `gover.Parse` rejects a patch release with a trailing word, so `go/version.IsValid(runtime.Version())` is FALSE. Spelling VERSION `go1.27.0-cosmo` can fix it, because `go/version` cuts at the first `-`. It can also make the fork parse as the RELEASE 1.27.0 and start satisfying the `go 1.27.0`+ directives the paragraph above says it refuses, which. Both spellings are defensible. Pick one deliberately rather than as a side effect.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork Gotchas). Any host-run `go build`/`go install`/`go test` needs `GOOS=linux GOARCH=amd64` (or `darwin`/`arm64`).
 - **Pinning**: `?branch=master` is a rolling latest that moves on every push to master (each branch gets its own `?branch=<name>` latest). Pin an immutable release with `?v=N` in place of the `branch` param. Buildhost auto-increments N per publish, the publish job logs it, and `https://pazer.build/api/v1/projects/gosmopolitan/releases/latest` resolves the current one.
-- **Other hosts build from source.** macOS Intel and linux/arm64 have no published tarball; `cd src && ./make.bash` is the path there.
+- **Other hosts build from source.** macOS Intel and linux/arm64 have no published tarball.`cd src && ./make.bash` is the path there.

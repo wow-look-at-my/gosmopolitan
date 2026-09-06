@@ -10,4 +10,4 @@ This repository uses Gerrit for code changes. To learn how to submit changes to 
 
 The git repository is https://go.googlesource.com/term.
 
-The main issue tracker for the term repository is located at https://go.dev/issues. Prefix your issue with "x/term:" in the subject line, so it is easy to find.
+The main issue tracker for the term repository is located at https://go.dev/issues. Prefix your issue with "x/term:" in the subject line. It is easy to find.

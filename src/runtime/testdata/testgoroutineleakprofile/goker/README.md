@@ -314,7 +314,7 @@ select [
 
 ### Description
 
-When we `Start` the `Compactor`, it may already have received `Suggestions`, leaking the previously blocking write to a full channel.
+When we `Start` the `Compactor`. It may already have received `Suggestions`, leaking the previously blocking write to a full channel.
 
 ### Example execution
 
@@ -360,7 +360,7 @@ G1
 
 ### Description
 
-Previously, the outbox can fail during startup without closing its `RowChannel`. This can lead to goroutine leaks in rare cases due to channel communication mismatch.
+Previously. The outbox can fail during startup without closing its `RowChannel`. This can lead to goroutine leaks in rare cases due to channel communication mismatch.
 
 ### Example execution
 
@@ -374,7 +374,7 @@ Previously, the outbox can fail during startup without closing its `RowChannel`.
 
 ### Description
 
-Previously, if a processor that reads from multiple inputs was waiting on one input to provide more data, and the other input was full. The cancellation method wrote metadata messages to each inbound stream one at a time, so if the first one was full, the canceller can.
+Previously, if a processor that reads from multiple inputs was waiting on one input to provide more data. The other input was full. The cancellation method wrote metadata messages to each inbound stream one at a time, so if the first one was full. The canceller can.
 
 ### Example execution
 
@@ -652,7 +652,7 @@ tm.addSimpleTokenCh <- true           .
 
 ### Description
 
-If the follower gooroutine acquires `mu.Lock()` first and calls `rc.release()`, it will be blocked sending over `rcNextc`. Only the leader can `close(nextc)` to unblock the follower. However, in order to invoke `rc.release()`, the leader needs to acquires `mu.Lock()`. The fix is to remove the lock and unlock around `rc.release()`.
+If the follower gooroutine acquires `mu.Lock()` first and calls `rc.release()`. It will be blocked sending over `rcNextc`. Only the leader can `close(nextc)` to unblock the follower. However, in order to invoke `rc.release()`. The leader needs to acquires `mu.Lock()`. The fix is to remove the lock and unlock around `rc.release()`.
 
 ### Example execution
 
@@ -687,7 +687,7 @@ wg.Wait()
 
 ### Description
 
-Two goroutines are involved in this leak. The main goroutine is blocked at `case <- donec`, and is waiting for the second goroutine to close the channel. The second goroutine is created by the main goroutine. It is blocked when calling `stream.Read()`, which invokes `recvBufferRead.Read()`. The second goroutine is blocked at case `i := r.recv.get()`, and it is waiting for someone to send a message to this channel. It is the `client.CloseSream()` method called by the main goroutine that must send the message, but it is not. The patch is to send out this message.
+Two goroutines are involved in this leak. The main goroutine is blocked at `case <- donec`, and is waiting for the second goroutine to close the channel. The second goroutine is created by the main goroutine. It is blocked when calling `stream.Read()`, which invokes `recvBufferRead.Read()`. The second goroutine is blocked at case `i := r.recv.get()`. It is waiting for someone to send a message to this channel. It is the `client.CloseSream()` method called by the main goroutine that must send the message. It is not. The patch is to send out this message.
 
 ### Example execution
 
@@ -738,7 +738,7 @@ close()
 
 ### Description
 
-When gRPC keepalives are enabled (which is not the case by default at this time) and PermitWithoutStream is false (the default), the client can leak goroutines when transitioning between having no active stream and.
+When gRPC keepalives are enabled (which is not the case by default at this time) and PermitWithoutStream is false (the default). The client can leak goroutines when transitioning between having no active stream and.
 
 ### Example execution
 
@@ -1126,7 +1126,7 @@ No sender for line 33.
 
 ### Description
 
-If the main goroutine selects a case that doesn’t consumes the channels, the anonymous goroutine will be blocked on sending to channel.
+If the main goroutine selects a case that doesn’t consumes the channels. The anonymous goroutine will be blocked on sending to channel.
 
 ### Example execution
 
@@ -1152,7 +1152,7 @@ time.After()
 
 The rules for read and write lock: allows concurrent read lock. Write lock has higher priority than read lock.
 
-There are two queues (queue 1 and queue 2) involved in this bug, and the two queues are protected by the same read-write lock (`rq.workerLock.RLock()`). Before getting an element from queue 1 or queue 2, `rq.workerLock.RLock()` is acquired. If the queue is empty, `cond.Wait()` will be invoked. There is another goroutine (goroutine D), which will periodically invoke `rq.workerLock.Lock()`. Under the following situation, deadlock will happen. Queue 1 is empty, so that some goroutines hold `rq.workerLock.RLock()`, and block at `cond.Wait()`. Goroutine D is blocked when acquiring `rq.workerLock.Lock()`. Some goroutines try to process jobs in queue 2, but they are blocked when acquiring `rq.workerLock.RLock()`, since write lock has a higher priority.
+There are two queues (queue 1 and queue 2) involved in this bug. The two queues are protected by the same read-write lock (`rq.workerLock.RLock()`). Before getting an element from queue 1 or queue 2, `rq.workerLock.RLock()` is acquired. If the queue is empty, `cond.Wait()` will be invoked. There is another goroutine (goroutine D), which will periodically invoke `rq.workerLock.Lock()`. Under the following situation, deadlock will happen. Queue 1 is empty, so that some goroutines hold `rq.workerLock.RLock()`, and block at `cond.Wait()`. Goroutine D is blocked when acquiring `rq.workerLock.Lock()`. Some goroutines try to process jobs in queue 2. They are blocked when acquiring `rq.workerLock.RLock()`, since write lock has a higher priority.
 
 The fix is to not acquire `rq.workerLock.RLock()`, while pulling data from any queue. Therefore, when a goroutine is blocked at `cond.Wait()`, `rq.workLock.RLock()` is not held.
 
@@ -1441,7 +1441,7 @@ The the lock for the struct svm has already been locked when calling `svm.hotRem
 
 ### Description
 
-The root cause and patch is clearly explained in the commit description. The global lock is `devices.Lock()`, and the device lock is `baseInfo.lock.Lock()`. It is very likely that this bug can be reproduced.
+The root cause and patch is clearly explained in the commit description. The global lock is `devices.Lock()`. The device lock is `baseInfo.lock.Lock()`. It is very likely that this bug can be reproduced.
 
 ## Moby/7559
 

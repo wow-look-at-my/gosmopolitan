@@ -4,7 +4,7 @@ This package provides Finite State Entropy encoding and decoding.
             
 Finite State Entropy (also referenced as [tANS](https://en.wikipedia.org/wiki/Asymmetric_numeral_systems#tANS)) encoding provides a fast near-optimal symbol encoding/decoding for byte blocks as implemented in [zstandard](https://github.com/facebook/zstd).
 
-This can be used for compressing input with a lot of similar input values to the smallest number of bytes. This does not perform any multi-byte [dictionary coding](https://en.wikipedia.org/wiki/Dictionary_coder) as LZ coders, but it can be used as a secondary step to compressors (like Snappy).
+This can be used for compressing input with a lot of similar input values to the smallest number of bytes. This does not perform any multi-byte [dictionary coding](https://en.wikipedia.org/wiki/Dictionary_coder) as LZ coders. It can be used as a secondary step to compressors (like Snappy).
 
 * [Godoc documentation](https://godoc.org/github.com/klauspost/compress/fse)
 
@@ -16,7 +16,7 @@ This can be used for compressing input with a lot of similar input values to the
 
 This package provides a low level interface that allows to compress single independent blocks.
 
-Each block is separate, and there is no built in integrity checks. This means that the caller must keep track of block sizes and also do checksums if needed.
+Each block is separate. There is no built in integrity checks. This means that the caller must keep track of block sizes and also do checksums if needed.
 
 Compressing a block is done via the [`Compress`](https://godoc.org/github.com/klauspost/compress/fse#Compress) function. You must provide input and will receive the output and maybe an error.
 
@@ -31,7 +31,7 @@ These error values can be returned:
 
 As can be seen above there are errors that will be returned even under normal operation so it is important to handle these.
 
-To reduce allocations you can provide a [`Scratch`](https://godoc.org/github.com/klauspost/compress/fse#Scratch) object that can be re-used for successive calls. Both compression and decompression accepts a `Scratch` object, and the same object can be used for both.
+To reduce allocations you can provide a [`Scratch`](https://godoc.org/github.com/klauspost/compress/fse#Scratch) object that can be re-used for successive calls. Both compression and decompression accepts a `Scratch` object. The same object can be used for both.
 
 Be aware, that when re-using a `Scratch` object that the *output* buffer is also re-used, so if you are still using this you must. The same buffer is used for compression and decompression output.
 

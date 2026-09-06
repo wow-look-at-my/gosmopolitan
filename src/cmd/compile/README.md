@@ -14,7 +14,7 @@ It must be clarified that the name "gc" stands for "Go compiler", and has little
 
 * `cmd/compile/internal/syntax` (lexer, parser, syntax tree)
 
-In the first phase of compilation, source code is tokenized (lexical analysis), parsed (syntax analysis), and a syntax tree is constructed for each source file.
+In the first phase of compilation, source code is tokenized (lexical analysis), parsed (syntax analysis). A syntax tree is constructed for each source file.
 
 Each syntax tree is an exact representation of the respective source file, with nodes corresponding to the various elements of the source such as. The syntax tree also includes position information which is used for error reporting and the creation of debugging information.
 
@@ -63,7 +63,7 @@ In this phase, IR is converted into Static Single Assignment (SSA) form, a lower
 
 During this conversion, function intrinsics are applied. These are special functions that the compiler has been taught to replace with heavily optimized code on a case-by-case basis.
 
-Certain nodes are also lowered into simpler components during the AST to SSA conversion, so that the rest of the compiler can work with. For instance, the copy builtin is replaced by memory moves, and range loops are rewritten into for loops. Some of these currently happen before the conversion to SSA due to historical reasons, but the long-term plan is to move all of them.
+Certain nodes are also lowered into simpler components during the AST to SSA conversion, so that the rest of the compiler can work with. For instance. The copy builtin is replaced by memory moves, and range loops are rewritten into for loops. Some of these currently happen before the conversion to SSA due to historical reasons, but the long-term plan is to move all of them.
 
 Then, a series of machine-independent passes and rules are applied. These do not concern any single computer architecture, and thus run on all `GOARCH` variants. These passes include dead code elimination, removal of unneeded nil checks, and removal of unused branches. The generic rewrite rules mainly concern expressions, such as replacing some expressions with constant values, and optimizing multiplications and float operations.
 
@@ -86,13 +86,13 @@ At the end of the SSA generation phase, Go functions have been transformed into 
 
 In addition to writing a file of object code for the linker, the compiler also writes a file of "export data" for downstream compilation. The export data file holds all the information computed during compilation of package P that may be needed when compiling a package Q that. It includes type information for all exported declarations, IR for bodies of functions that are candidates for inlining, IR for bodies of generic functions.
 
-The format of the export data file has gone through a number of iterations. Its current form is called "unified", and it is a serialized representation of an object graph, with an index allowing lazy decoding of parts. See [here](internal/noder/README.md) for details on making changes to unified IR.
+The format of the export data file has gone through a number of iterations. Its current form is called "unified". It is a serialized representation of an object graph, with an index allowing lazy decoding of parts. See [here](internal/noder/README.md) for details on making changes to unified IR.
 
 The GOROOT repository contains a reader and a writer for the unified format. It encodes from/decodes to the compiler's IR. The golang.org/x/tools repository also provides a public API for an export data reader (using the go/types representation) that always supports the compiler's current file format and a. (It is used by x/tools/go/packages in modes that require type information but not type-annotated syntax.)
 
 The x/tools repository also provides public APIs for reading and writing exported type information (but nothing more) using the older "indexed" format. (For example, gopls uses this version for its database of workspace information, which includes types.)
 
-Export data usually provides a "deep" summary, so that compilation of package Q can read the export data files only for each direct import. Deep export data is simpler for build systems, since only one file is needed per direct dependency. However, it does have a tendency to grow as one gets higher up the import graph of a big repository: if there is a. This problem motivated the "indexed" design, which allowed partial loading on demand. (gopls does less work than the compiler for each import and is thus more sensitive to export data overheads. For this reason, it uses "shallow" export data, in which indirect information is not recorded at all. This demands random access to the export data files of all dependencies, so is not suitable for distributed build systems.)
+Export data usually provides a "deep" summary, so that compilation of package Q can read the export data files only for each direct import. Deep export data is simpler for build systems, since only one file is needed per direct dependency. However. It does have a tendency to grow as one gets higher up the import graph of a big repository: if there is a. This problem motivated the "indexed" design, which allowed partial loading on demand. (gopls does less work than the compiler for each import and is thus more sensitive to export data overheads. For this reason, it uses "shallow" export data, in which indirect information is not recorded at all. This demands random access to the export data files of all dependencies, so is not suitable for distributed build systems.)
 
 
 ### 8. Tips
@@ -158,7 +158,7 @@ Export data usually provides a "deep" summary, so that compilation of package Q 
 
 * If you are in a branch and your PATH includes `<go-repo>/bin`, doing `go install cmd/compile` will build the compiler using the code from your branch and.
 
-* [toolstash](https://pkg.go.dev/golang.org/x/tools/cmd/toolstash) provides a way to save, run, and restore a known good copy of the Go toolchain. For example, it can be a good practice to initially build your branch, save that version of the toolchain, then restore the known good.
+* [toolstash](https://pkg.go.dev/golang.org/x/tools/cmd/toolstash) provides a way to save, run, and restore a known good copy of the Go toolchain. For example. It can be a good practice to initially build your branch, save that version of the toolchain, then restore the known good.
 
   Sample set up steps:
   ```
@@ -183,7 +183,7 @@ Export data usually provides a "deep" summary, so that compilation of package Q 
   $ go build -toolexec "toolstash -cmp" -a -v std # compare latest vs. saved compiler
   ```
 
-* If versions appear to get out of sync (for example, with errors like `linked object header mismatch` with version strings like `devel go1.21-db3f952b1f`), you can need to do `toolstash restore && go install cmd/...` to update all the tools under cmd.
+* If versions appear to get out of sync (for example, with errors like `linked object header mismatch` with version strings like `devel go1.21-db3f952b1f`). You can need to do `toolstash restore && go install cmd/...` to update all the tools under cmd.
 
 #### Additional helpful tools
 
@@ -207,7 +207,7 @@ Export data usually provides a "deep" summary, so that compilation of package Q 
 
 #### -gcflags and 'go build' vs. 'go tool compile'
 
-* `-gcflags` is a go command [build flag](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies). `go build -gcflags=<args>` passes the supplied `<args>` to the underlying `compile` invocation(s) while still doing everything that the `go build` command normally does (e.g., handling the build cache, modules, and so on). In contrast, `go tool compile <args>` asks the `go` command to invoke `compile <args>` a single time without involving the standard `go build` machinery. In some cases, it can be helpful to have fewer moving parts by doing `go tool compile <args>`, such as if you have a small standalone source. In other cases, it is more convenient to pass `-gcflags` to a build command like `go build`, `go test`, or `go install`.
+* `-gcflags` is a go command [build flag](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies). `go build -gcflags=<args>` passes the supplied `<args>` to the underlying `compile` invocation(s) while still doing everything that the `go build` command normally does (e.g., handling the build cache, modules, and so on). In contrast, `go tool compile <args>` asks the `go` command to invoke `compile <args>` a single time without involving the standard `go build` machinery. In some cases. It can be helpful to have fewer moving parts by doing `go tool compile <args>`, such as if you have a small standalone source. In other cases. It is more convenient to pass `-gcflags` to a build command like `go build`, `go test`, or `go install`.
 
 * `-gcflags` by default applies to the packages named on the command line, but can use package patterns such as `-gcflags='all=-m=1 -l'`, or multiple package patterns. For details, see the [cmd/go documentation](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies).
 
