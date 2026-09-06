@@ -4,62 +4,11 @@
 
 //go:build cosmo
 
-// Windows NT async preemption and console control (wave 2 chunk D2).
+// Windows NT async preemption and console control.
 //
-// Async preemption is upstream os_windows.go's preemptM ported to the
-// NT function-table idiom: suspend the target M's thread
-// (SuspendThread), wait for the suspension to complete
-// (GetThreadContext - SuspendThread alone only queues it), and if the
-// interrupted PC/SP is an async-safe point of a goroutine that wants
-// preemption, rewrite the saved CONTEXT so the thread calls
-// asyncPreempt on resume (SP-=8, [SP]=resume PC, RIP=asyncPreempt -
-// the same fake-CALL shape the VEH uses for sigpanic0). Three locks
-// keep this sound, all with upstream's exact semantics:
-//
-//   - mp.preemptExtLock (CAS): ntPreemptM vs external code on the
-//     target thread. Foreign calls that can block or take the loader
-//     lock (the ntcallSE/ntcallSE10 bracket) hold it, so a preemption
-//     attempt against a thread in win64 code fails fast instead of
-//     suspending a thread that might be mid-ExitProcess.
-//   - mp.threadLock: guards mp.thread (the per-M duplicated thread
-//     handle) between ntPreemptM's DuplicateHandle and
-//     minit/unminit's install/close.
-//   - ntSuspendLock: serializes ALL SuspendThread callers -
-//     SuspendThread is asynchronous, so two threads suspending each
-//     other would deadlock - held until GetThreadContext confirms the
-//     suspension. ntExit takes it FOREVER before ExitProcess, so no
-//     suspension can be mid-flight while the process dies (the
-//     suspender-killed-mid-suspend wedge, upstream exit()).
-//
-// The scheduler reaches this machinery through the fork's shared
-// signalM (os_cosmo.go): preemptM (signal_unix.go) CASes
-// mp.signalPending and calls signalM(mp, sigPreempt), whose NT leg
-// calls ntPreemptM - which therefore also clears signalPending after
-// acking preemptGen (the unix ack protocol doSigPreempt performs on
-// signal-delivery hosts; without the clear the wrapper's CAS gate
-// would stay shut and preemption would fire exactly once).
-//
-// Console control: SetConsoleCtrlHandler's callback runs on a thread
-// INJECTED by Windows - no g, no TLS, no Go. The asm handler
-// (ntCtrlTramp, sys_cosmo_nt_<goarch>.s) only sets a bit in ntCtrlMask,
-// SetEvents ntCtrlEvent, and returns 1 (CTRL_C -> SIGINT, CTRL_BREAK
-// -> SIGQUIT) or blocks forever (CLOSE -> SIGHUP, LOGOFF/SHUTDOWN ->
-// SIGTERM - Windows kills the process the moment such a handler
-// returns; blocking gives Go handlers the OS's grace window to clean
-// up, upstream ctrlHandler's block()). The BREAK -> SIGQUIT and
-// CLOSE -> SIGHUP legs deliberately diverge from upstream Go's
-// windows mapping (BREAK -> SIGINT, CLOSE -> SIGTERM) for unix
-// parity: Ctrl-Break is the SIGQUIT chord - on a wedged process an
-// unwatched SIGQUIT produces the goroutine dump - and closing the
-// console window is a hangup (DEBUGGING.md wave 3 item 4). A
-// dedicated relay M - created via newm at boot, parked in
-// WaitForSingleObject on its g0 - picks the event up and feeds
-// ntKillSelf(sig), which consults ntSigActs and either drops
-// (SIG_IGN), dies with the encoded status (SIG_DFL - matching the
-// Linux default action for SIGINT/SIGHUP/SIGTERM), or delivers
-// through the D1 trampoline into sigtrampgo -> sighandler ->
-// sigsend/os signal (unwatched SIGQUIT: goroutine dump + encoded
-// death, the fork sigtable's _SigThrow - Linux parity).
+// The scheduler reaches this through the fork's shared signalM
+// (os_cosmo.go): preemptM CASes mp.signalPending and calls
+// signalM(mp, sigPreempt), whose NT leg is ntPreemptM.
 
 package runtime
 
@@ -74,8 +23,12 @@ import (
 // _NT_CONTEXT_CONTROL, in os_cosmo_nt_ctx_<goarch>.go.
 const _NT_CURRENT_THREAD = ^uintptr(1)
 
-// ntSuspendLock protects simultaneous SuspendThread operations from
-// suspending each other (see the file comment).
+// ntSuspendLock serializes ALL SuspendThread callers: SuspendThread is
+// asynchronous, so two threads suspending each other would deadlock. A
+// caller holds it until GetThreadContext confirms the suspension.
+// ntExit takes it FOREVER before ExitProcess, so no suspension can be
+// in flight while the process dies - the suspender-killed-mid-suspend
+// wedge upstream's os_windows.go exit() also guards.
 var ntSuspendLock mutex
 
 // ntExiting is set when the process is exiting (under ntSuspendLock).
@@ -137,15 +90,26 @@ func ntGFromSP(mp *m, sp uintptr) *g {
 
 // ntPreemptAck acknowledges a preemption attempt: bump preemptGen
 // (the requesting P spins on it) and reopen preemptM's signalPending
-// CAS gate - the unix ack order doSigPreempt uses.
+// CAS gate - the unix ack order doSigPreempt uses. Both halves are
+// required: without the clear the CAS gate stays shut and preemption
+// fires exactly once.
 func ntPreemptAck(mp *m) {
 	mp.preemptGen.Add(1)
 	mp.signalPending.Store(0)
 }
 
 // ntPreemptM sends an async-preemption request to mp: upstream
-// os_windows.go preemptM, on the NT function table. Every path acks
-// (ntPreemptAck) so the requester never spins forever.
+// os_windows.go preemptM, on the NT function table. It suspends the
+// target thread, waits for the suspension with GetThreadContext -
+// SuspendThread alone only queues it - and, at an async-safe point,
+// rewrites the saved CONTEXT so the thread calls asyncPreempt on
+// resume. Every path acks, so the requester never spins forever.
+//
+// Three locks keep this sound, with upstream's exact semantics.
+// mp.preemptExtLock fails a preemption fast against a thread in win64
+// code, which might be mid-ExitProcess. mp.threadLock guards mp.thread
+// between the DuplicateHandle here and minit/unminit. ntSuspendLock is
+// documented on its own declaration.
 func ntPreemptM(mp *m) {
 	if mp == getg().m {
 		throw("self-preempt")
@@ -278,8 +242,17 @@ var ntCtrlEvent uintptr
 var ntCtrlMask uint32
 
 // ntCtrlTramp is the SetConsoleCtrlHandler callback (asm,
-// sys_cosmo_nt_<goarch>.s): Go-free, since it runs on an injected
-// foreign thread.
+// sys_cosmo_nt_<goarch>.s): Go-free, since it runs on a thread
+// Windows INJECTS - no g, no TLS. It sets a bit in ntCtrlMask, signals
+// ntCtrlEvent, and then either returns 1 (CTRL_C, CTRL_BREAK) or
+// blocks forever (CLOSE, LOGOFF, SHUTDOWN). Windows kills the process
+// the moment such a handler returns, so blocking is what gives Go
+// handlers the OS grace window, as upstream ctrlHandler's block() does.
+//
+// BREAK maps to SIGQUIT and CLOSE to SIGHUP, which diverges from
+// upstream windows (SIGINT, SIGTERM) for unix parity: Ctrl-Break is
+// the SIGQUIT chord, whose unwatched action dumps goroutines on a
+// wedged process, and closing the console window is a hangup.
 func ntCtrlTramp()
 
 // ntInitConsoleCtrl wires console-control events into os/signal:

@@ -399,6 +399,9 @@ func TestBlankFields(t *testing.T) {
 }
 
 func TestSizeStructCache(t *testing.T) {
+	// Counts what one call adds to the package's cache, which every other
+	// test in it also writes.
+	t.Serial()
 	// Reset the cache, otherwise multiple test runs fail.
 	structSize = sync.Map{}
 

@@ -4,62 +4,18 @@
 
 //go:build cosmo && amd64
 
-// Windows NT socket emulation (wave 2 chunk C): the winsock backends
-// for the Linux-numbered socket syscalls dispatched by
-// ntSyscallEmulate (os_cosmo_nt_sys.go).
+// Windows NT socket emulation: the winsock backends for the
+// Linux-numbered socket syscalls ntSyscallEmulate dispatches.
 //
-// Model: linux-shaped nonblocking BSD sockets over the classic
-// synchronous ws2_32 surface - WSASocketW WITHOUT WSA_FLAG_OVERLAPPED
-// (plus WSA_FLAG_NO_HANDLE_INHERIT), ioctlsocket(FIONBIO) for
-// O_NONBLOCK, plain recv/send/recvfrom/sendto/accept/connect, and
-// readiness from the WSAPoll netpoller (netpoll_cosmo_nt.go). None of
-// upstream's IOCP/OVERLAPPED machinery is involved. (windows-latest's
-// AF_UNIX capability probe confirms afunix.sys binds fine on exactly
-// this creation shape - non-overlapped, family 1, UTF-8 sun_path,
-// namelen 2+len+1 - so no per-family creation deltas exist.)
+// The model is linux-shaped nonblocking BSD sockets over the classic
+// synchronous ws2_32 surface: WSASocketW WITHOUT WSA_FLAG_OVERLAPPED,
+// ioctlsocket(FIONBIO) for O_NONBLOCK, plain
+// recv/send/recvfrom/sendto/accept/connect, and readiness from the
+// WSAPoll netpoller. None of upstream's IOCP or OVERLAPPED machinery
+// is involved.
 //
-// Translation happens at exactly this boundary, in both directions:
-//
-//   - Address families: AF_UNSPEC/AF_UNIX/AF_INET match Linux;
-//     AF_INET6 is 23 on NT vs 10 on Linux and is rewritten inside
-//     every sockaddr crossing the boundary (the layouts are otherwise
-//     byte-identical - NT sockaddrs have no sa_len, unlike darwin).
-//   - Errors: winsock failures land in the same TEB last-error slot
-//     every Win32 call uses (WSAGetLastError reads the same word), so
-//     ntcallE/ntcallSE already capture them; ntWSAToLinux maps the
-//     WSAE* range onto Linux errnos. connect's WSAEWOULDBLOCK
-//     specifically becomes EINPROGRESS so internal/poll's nonblocking
-//     connect loop (wait-writable, then SO_ERROR) works unchanged.
-//   - Options: a curated (level,optname) value map, darwin-style;
-//     unknown combinations report ENOPROTOOPT. SO_ERROR additionally
-//     translates the returned VALUE, and SO_LINGER converts between
-//     Linux's {i32,i32} and winsock's {u16,u16} linger structs.
-//   - AF_UNIX: pathname stream sockets over afunix.sys (Win10 17063+).
-//     sun_path is translated through the chunk-A path layer (afunix
-//     takes UTF-8), and the Linux-spelling name is RECORDED in the fd
-//     table: getsockname/getpeername report the recorded bytes, like
-//     the Linux kernel returns exactly what was bound, because
-//     translating winsock's stored Windows path back would surface
-//     the /c/... alias. Abstract-namespace names (leading NUL) are
-//     refused EINVAL exactly like the darwin leg; autobind (empty
-//     path) likewise. Socket files are reparse points that are NOT
-//     auto-deleted on close; unlink(2) removes them like any file.
-//
-// UDP: SIO_UDP_CONNRESET and SIO_UDP_NETRESET are disabled at
-// socket() time (best-effort), so an ICMP unreachable latched by an
-// earlier send cannot fail unrelated recvs with WSAECONNRESET - the
-// same fix upstream net applies on Windows. A datagram longer than
-// the recv buffer fails WSAEMSGSIZE on winsock; Linux silently
-// truncates, so the emulation reports a full buffer instead.
-//
-// sendmsg/recvmsg are emulated since wave 3 item 2 - the plain
-// scatter-gather data path over WSASend/WSARecv lives in
-// os_cosmo_nt_msg.go (ancillary data/SCM_RIGHTS still pending there).
-// socketpair is emulated since wave 3 item 1 (ntEmuSocketpair below):
-// a connected loopback TCP pair dressed as unnamed AF_UNIX, built by
-// the same recipe as the netpoller's wake channel (ntLoopbackTCPPair,
-// shared with netpollinitNT). dup(2) is emulated for socket-kind fds
-// only (ntEmuDup) - net.FileConn needs it.
+// Every Linux/NT translation happens at this one boundary. sendmsg and
+// recvmsg live next door in os_cosmo_nt_msg.go.
 
 package runtime
 
@@ -308,7 +264,13 @@ func ntWinsockEnsure() uintptr {
 
 // ntWSAToLinux maps a winsock (WSAE*) last-error value to the Linux
 // errno the unix-shaped standard library expects. Non-winsock codes
-// fall through to the general Win32 table.
+// fall through to the general Win32 table. A winsock failure lands in
+// the same TEB last-error slot every Win32 call uses - WSAGetLastError
+// reads that word - so ntcallE and ntcallSE already captured it.
+//
+// connect's WSAEWOULDBLOCK becomes EINPROGRESS, not EAGAIN, so
+// internal/poll's nonblocking connect loop - wait writable, then read
+// SO_ERROR - works unchanged.
 func ntWSAToLinux(werr uintptr) uintptr {
 	switch werr {
 	case 0:
@@ -386,6 +348,11 @@ func ntWSAToLinux(werr uintptr) uintptr {
 }
 
 // ---- sockaddr translation ----
+//
+// AF_UNSPEC, AF_UNIX and AF_INET share Linux's numbers. AF_INET6 is 23
+// on NT against 10 on Linux, so it is rewritten inside every sockaddr
+// that crosses this boundary. The layouts are otherwise byte-identical
+// - an NT sockaddr has no sa_len, unlike darwin's.
 
 const ntSockaddrBufMax = 112 // sizeof(syscall.RawSockaddrAny)
 
@@ -531,6 +498,12 @@ func ntSockLookup(fd int32) (ntFDEntry, uintptr) {
 
 // ---- syscall backends ----
 
+// ntEmuSocket creates the socket non-overlapped and uninheritable.
+// afunix.sys binds fine on exactly this shape, so no family needs a
+// creation delta. For UDP it also disables SIO_UDP_CONNRESET and
+// SIO_UDP_NETRESET, best-effort: without that an ICMP unreachable
+// latched by an earlier send fails an unrelated recv with
+// WSAECONNRESET, the same trap upstream net avoids on Windows.
 func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 	if eno := ntWinsockEnsure(); eno != 0 {
 		return ntFail3(eno)
@@ -587,27 +560,18 @@ func ntEmuSocket(domain, typ, proto int32) (r1, r2, errno uintptr) {
 	return uintptr(fd), 0, 0
 }
 
-// ntLoopbackTCPPair builds a connected loopback TCP pair - the
-// netpoller wake-channel recipe of wave 2, factored out here in wave
-// 3 so the socketpair emulation shares it: loopback listener, bind
-// 127.0.0.1:0, blocking connect against the one-slot backlog, accept,
-// close the listener. All in-kernel and immediate. Returns the
-// accepted and client SOCKETs - blocking, TCP_NODELAY both ways,
-// uninheritable - or, on failure, the failing step's name (a static
-// string) plus the Win32/WSA error, with every socket it opened
-// already closed. Allocation-free: also called from netpollinitNT,
-// which can run under runtime locks (the first timer's
-// netpollGenericInit) where entersyscall is off-limits too - hence
-// plain ntcallE throughout, like the wave-2 inline original.
+// ntLoopbackTCPPair builds a connected loopback TCP pair, shared by
+// the netpoller's wake channel and the socketpair emulation: loopback
+// listener, bind 127.0.0.1:0, blocking connect against a one-slot
+// backlog, accept, close the listener. It returns both SOCKETs -
+// blocking, TCP_NODELAY, uninheritable - or the failing step's static
+// name plus the Win32/WSA error, having closed what it opened. It must
+// stay allocation-free and on plain ntcallE, because netpollinitNT
+// calls it under runtime locks.
 //
-// Hardening both callers gain over the inline original: after the
-// accept, the client's getsockname must equal the accepted end's
-// getpeername (family, port AND address) - otherwise some OTHER
-// local process won the connect race against the one-slot backlog
-// and the two ends would not be connected to each other. The window
-// is tiny and 127.0.0.1-only, but the failure mode (a "pair" whose
-// halves talk to a stranger) is worth the two name queries; a
-// mismatch reports WSAECONNABORTED.
+// After the accept the client's getsockname MUST equal the accepted
+// end's getpeername, else another local process won the connect race
+// and the halves talk to a stranger. A mismatch is WSAECONNABORTED.
 func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 	l, lerr := ntcallE(ntWSASocketWFn, _NT_AF_INET, _NT_SOCK_STREAM, 0,
 		0, 0, _NT_WSA_FLAG_NO_HANDLE_INHERIT, 0)
@@ -692,29 +656,18 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 	return a, c, "", 0
 }
 
-// ntEmuSocketpair emulates socketpair(2) with a connected loopback
-// TCP pair dressed as AF_UNIX (ntLoopbackTCPPair above). Accepted
-// shape: AF_UNIX (=AF_LOCAL) SOCK_STREAM with protocol 0, plus the
-// SOCK_NONBLOCK/SOCK_CLOEXEC creation flags (stripped exactly like
-// ntEmuSocket). Refusals, each deliberate:
-//   - SOCK_DGRAM -> EOPNOTSUPP: a datagram pair would have to ride
-//     loopback UDP, which legally DROPS datagrams on real NT - the
-//     wave-2 netpoller lesson, where one lost wake datagram wedged
-//     the poller for its full timeout - and afunix.sys has no DGRAM
-//     support to fall back on; there is no lossless NT transport
-//     with datagram semantics. (Other non-stream types likewise.)
-//   - other domains -> EOPNOTSUPP (Linux refuses AF_INET socketpair
-//     with the same errno).
-//   - protocols other than 0 -> EPROTONOSUPPORT.
+// ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP
+// pair dressed as AF_UNIX. It accepts AF_UNIX SOCK_STREAM protocol 0
+// plus the SOCK_NONBLOCK/SOCK_CLOEXEC flags. SOCK_DGRAM is EOPNOTSUPP:
+// a datagram pair would ride loopback UDP, which legally DROPS
+// datagrams on real NT, and afunix.sys has no DGRAM to fall back on.
+// Another domain is EOPNOTSUPP too, Linux's own errno for AF_INET
+// here, and any other protocol is EPROTONOSUPPORT.
 //
-// The ends are real TCP sockets under the covers, so data flow,
-// shutdown(2), FIONBIO and WSAPoll readiness all work through the
-// existing socket-kind machinery; the fd entries carry sockPair so
-// name queries synthesize the Linux truth (unnamed AF_UNIX, see
-// ntEmuGetsockname) and never leak the 127.0.0.1 backing address.
-// os/exec interaction is nil by construction: both ends are born
-// uninheritable and ntForkExec rejects ExtraFiles (>3 attr.Files,
-// ENOSYS), so a pair end cannot cross into a child process on NT.
+// The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO
+// and WSAPoll readiness all work through the socket-kind machinery.
+// The fd entries carry sockPair, so a name query synthesizes the Linux
+// truth and never leaks the 127.0.0.1 backing address.
 func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uintptr) {
 	if sv == nil {
 		return ntFail3(ntEFAULT)
@@ -770,22 +723,17 @@ func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uint
 	return 0, 0, 0
 }
 
-// ntEmuDup implements dup(2) for SOCKET-kind fds via DuplicateHandle
-// - the exact call upstream Go's poll.DupCloseOnExec makes on
-// windows: msafd sockets are real kernel file handles, and a
-// same-process duplicate refers to the same socket object with an
-// independent handle lifetime, which is dup(2)'s contract (shared
-// socket state, separately closeable; the object lives until the
-// last handle closes). Who needs it: net.FileConn/FileListener wrap
-// an *os.File by fcntl F_DUPFD_CLOEXEC - ENOSYS from ntFcntl - then
-// fall back to plain dup(2), landing here (poll.dupCloseOnExecOld).
-// MSDN's warning against DuplicateHandle on sockets concerns non-IFS
-// layered providers, which the base msafd/afunix stacks are not (and
-// upstream Go has shipped exactly this call for years).
+// ntEmuDup implements dup(2) for SOCKET-kind fds via DuplicateHandle,
+// the call upstream Go's poll.DupCloseOnExec makes on windows. An
+// msafd socket is a real kernel file handle, and a same-process
+// duplicate names the same socket object with an independent handle
+// lifetime, which is dup(2)'s contract. net.FileConn is what needs it:
+// F_DUPFD_CLOEXEC is ENOSYS from ntFcntl, so it falls back to plain
+// dup. MSDN's warning against DuplicateHandle on sockets concerns
+// non-IFS layered providers, which msafd and afunix are not.
 //
-// Non-socket kinds stay ENOSYS on purpose: nothing in std needs a
-// file/pipe dup on NT yet, and a visible gap beats an untested path
-// (the cosmo graceful-stub philosophy).
+// A non-socket kind stays ENOSYS on purpose: nothing in std needs a
+// file or pipe dup on NT, and a visible gap beats an untested path.
 func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {
@@ -826,6 +774,10 @@ func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 	return uintptr(nfd), 0, 0
 }
 
+// ntEmuBind records the Linux-spelling AF_UNIX name on the fd entry,
+// which is what ntEmuGetsockname reports back. An afunix socket file
+// is a reparse point and is NOT auto-deleted on close: unlink(2)
+// removes it like any other file, as on Linux.
 func ntEmuBind(fd int32, sa unsafe.Pointer, salen uint32) (r1, r2, errno uintptr) {
 	e, eno := ntSockLookup(fd)
 	if eno != 0 {
@@ -943,8 +895,11 @@ func ntEmuAccept4(fd int32, rsa unsafe.Pointer, alen *uint32, flags int32) (r1, 
 	return uintptr(nfd), 0, 0
 }
 
-// ntEmuGetsockname backs both getsockname (peer=false) and
-// getpeername (peer=true).
+// ntEmuGetsockname backs both getsockname (peer=false) and getpeername
+// (peer=true). For AF_UNIX it answers the Linux-spelling name RECORDED
+// in the fd table, the way the Linux kernel returns exactly what was
+// bound. Back-translating winsock's stored Windows path would surface
+// the /c/... alias instead. An unnamed pair answers unnamed AF_UNIX.
 func ntEmuGetsockname(fd int32, rsa unsafe.Pointer, alen *uint32, peer bool) (r1, r2, errno uintptr) {
 	e, eno := ntSockLookup(fd)
 	if eno != 0 {

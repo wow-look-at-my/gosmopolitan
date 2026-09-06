@@ -16,7 +16,11 @@ import (
 
 // A simple in-out test: Do we print what we parse?
 
-func setArch(goarch string) (*arch.Arch, *obj.Link) {
+// setArch points the whole process at one architecture: buildcfg.GOARCH
+// is a package-level variable that every later call reads. So the caller
+// takes the serial barrier, and the next architecture waits.
+func setArch(t *testing.T, goarch string) (*arch.Arch, *obj.Link) {
+	t.Serial()
 	buildcfg.GOOS = "linux" // obj can handle this OS for all architectures.
 	buildcfg.GOARCH = goarch
 	architecture := arch.Set(goarch, false)
@@ -28,8 +32,8 @@ func setArch(goarch string) (*arch.Arch, *obj.Link) {
 	return architecture, ctxt
 }
 
-func newParser(goarch string) *Parser {
-	architecture, ctxt := setArch(goarch)
+func newParser(t *testing.T, goarch string) *Parser {
+	architecture, ctxt := setArch(t, goarch)
 	return NewParser(ctxt, architecture, nil)
 }
 
@@ -90,7 +94,7 @@ func testOperandParser(t *testing.T, parser *Parser, tests []operandTest) {
 }
 
 func TestAMD64OperandParser(t *testing.T) {
-	parser := newParser("amd64")
+	parser := newParser(t, "amd64")
 	testOperandParser(t, parser, amd64OperandTests)
 	testBadOperandParser(t, parser, amd64BadOperandTests)
 	parser.allowABI = true
@@ -99,41 +103,41 @@ func TestAMD64OperandParser(t *testing.T) {
 }
 
 func Test386OperandParser(t *testing.T) {
-	parser := newParser("386")
+	parser := newParser(t, "386")
 	testOperandParser(t, parser, x86OperandTests)
 }
 
 func TestARMOperandParser(t *testing.T) {
-	parser := newParser("arm")
+	parser := newParser(t, "arm")
 	testOperandParser(t, parser, armOperandTests)
 }
 func TestARM64OperandParser(t *testing.T) {
-	parser := newParser("arm64")
+	parser := newParser(t, "arm64")
 	testOperandParser(t, parser, arm64OperandTests)
 }
 
 func TestPPC64OperandParser(t *testing.T) {
-	parser := newParser("ppc64")
+	parser := newParser(t, "ppc64")
 	testOperandParser(t, parser, ppc64OperandTests)
 }
 
 func TestMIPSOperandParser(t *testing.T) {
-	parser := newParser("mips")
+	parser := newParser(t, "mips")
 	testOperandParser(t, parser, mipsOperandTests)
 }
 
 func TestMIPS64OperandParser(t *testing.T) {
-	parser := newParser("mips64")
+	parser := newParser(t, "mips64")
 	testOperandParser(t, parser, mips64OperandTests)
 }
 
 func TestLOONG64OperandParser(t *testing.T) {
-	parser := newParser("loong64")
+	parser := newParser(t, "loong64")
 	testOperandParser(t, parser, loong64OperandTests)
 }
 
 func TestS390XOperandParser(t *testing.T) {
-	parser := newParser("s390x")
+	parser := newParser(t, "s390x")
 	testOperandParser(t, parser, s390xOperandTests)
 }
 
@@ -154,7 +158,7 @@ func TestFuncAddress(t *testing.T) {
 		{"s390x", s390xOperandTests},
 	} {
 		t.Run(sub.arch, func(t *testing.T) {
-			parser := newParser(sub.arch)
+			parser := newParser(t, sub.arch)
 			for _, test := range sub.tests {
 				parser.start(lex.Tokenize(test.input))
 				name, _, ok := parser.funcAddress()

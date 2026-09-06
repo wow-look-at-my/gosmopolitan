@@ -2086,7 +2086,7 @@ func (t *T) runForked() ([]byte, error) {
 		return nil, err
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Env:   forkEnv(os.Environ(), t.Name()),
+		Env:   forkEnv(startEnv, t.Name()),
 		Files: []*os.File{nil, pw, pw},
 	})
 	// The parent must drop its own write end, or reading the pipe never sees
@@ -2109,6 +2109,16 @@ func (t *T) runForked() ([]byte, error) {
 	}
 	return output, readErr
 }
+
+// startEnv is the environment this test binary was started with. A child
+// gets that, not what the process holds when it forks.
+//
+// The difference is a TestMain that runs the binary as a tool when it sees
+// its own variable, and sets that variable so the subprocesses it starts
+// inherit it. cmd/pack does exactly this. A child started from the live
+// environment reads the variable, runs the tool, and prints a usage
+// message where a test result belongs.
+var startEnv = os.Environ()
 
 // forkEnv returns this run's environment with the fork marker naming the test
 // the child exists to run. It REPLACES any marker already there: a subtest of a

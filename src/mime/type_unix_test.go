@@ -12,6 +12,12 @@ import (
 
 func initMimeUnixTest(t *testing.T) {
 	once.Do(initMime)
+	// The globs2 loader keeps the FIRST type it sees for an extension,
+	// so a host whose own database names one of these extensions wins
+	// over the testdata below and the test measures that host. macOS
+	// ships /etc/apache2/mime.types, which names .t3. Resetting to the
+	// builtin table leaves the testdata as the only other source.
+	setMimeTypes(builtinTypesLower, builtinTypesLower)
 	err := loadMimeGlobsFile("testdata/test.types.globs2")
 	if err != nil {
 		t.Fatal(err)

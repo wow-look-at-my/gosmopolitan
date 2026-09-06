@@ -10,11 +10,11 @@
 package syscall
 
 const (
-	AF_INET      = 0x2
-	AF_INET6     = 0xa
-	AF_LOCAL     = 0x1
-	AF_UNIX      = 0x1
-	AF_UNSPEC    = 0x0
+	AF_INET   = 0x2
+	AF_INET6  = 0xa
+	AF_LOCAL  = 0x1
+	AF_UNIX   = 0x1
+	AF_UNSPEC = 0x0
 
 	DT_BLK     = 0x6
 	DT_CHR     = 0x2

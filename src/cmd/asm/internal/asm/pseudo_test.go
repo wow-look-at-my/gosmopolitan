@@ -79,7 +79,7 @@ func TestErroneous(t *testing.T) {
 
 	// Note these errors should be independent of the architecture.
 	// Just run the test with amd64.
-	parser := newParser("amd64")
+	parser := newParser(t, "amd64")
 	var buf strings.Builder
 	parser.errorWriter = &buf
 

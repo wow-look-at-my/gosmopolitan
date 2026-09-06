@@ -8,7 +8,9 @@ package unix
 
 import (
 	"internal/strconv"
+	"runtime"
 	"syscall"
+	"unsafe"
 )
 
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
@@ -18,16 +20,28 @@ func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
 	if flags == 0 {
 		return syscall.Fchmodat(dirfd, path, mode, 0)
 	}
+	if runtime.GOOS == "darwin" {
+		// Apple's own fchmodat takes the flag, so the emulation
+		// forwards it (translated) and no detour is needed.
+		p, err := syscall.BytePtrFromString(path)
+		if err != nil {
+			return err
+		}
+		_, _, e := syscall.Syscall6(fchmodatTrap, uintptr(dirfd),
+			uintptr(unsafe.Pointer(p)), uintptr(mode),
+			uintptr(AT_SYMLINK_NOFOLLOW), 0, 0)
+		if e != 0 {
+			return e
+		}
+		return nil
+	}
 
-	// AT_SYMLINK_NOFOLLOW: the cosmo syscall layer speaks the Linux
-	// fchmodat(2) ABI, which silently ignores the flag (and fchmodat2
-	// is not wired up). Passing the flag through would chmod the
-	// symlink TARGET, the exact escape Root.Chmod uses the flag to
-	// prevent. Use the same workaround as GNU libc and musl: open an
-	// O_PATH descriptor and chmod it via /proc/self/fd, refusing
-	// symlinks. On hosts without procfs (macOS) this reports
-	// EOPNOTSUPP instead of silently following; the darwin syscall
-	// emulation does not implement the chmod family yet anyway.
+	// AT_SYMLINK_NOFOLLOW: the Linux fchmodat(2) ABI has no flags
+	// argument and silently ignores the request (and fchmodat2 is not
+	// wired up). Passing the flag through would chmod the symlink
+	// TARGET, the exact escape Root.Chmod uses the flag to prevent. Use
+	// the same workaround as GNU libc and musl: open an O_PATH
+	// descriptor and chmod it via /proc/self/fd, refusing symlinks.
 	fd, err := Openat(dirfd, path, O_PATH|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return err

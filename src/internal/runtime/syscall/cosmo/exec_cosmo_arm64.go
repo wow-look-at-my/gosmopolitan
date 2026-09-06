@@ -8,37 +8,23 @@ package cosmo
 
 import "unsafe"
 
-// Darwin (macOS ARM64) process syscall emulation: the pieces os/exec
-// needs beyond fork (which syscall.rawVforkSyscall already routes to the
-// Syslib in assembly). Linux syscall numbers and layouts in, Apple libc
-// functions (dlsym-resolved at startup) out.
+// Darwin (macOS ARM64) process syscall emulation: what os/exec needs
+// beyond fork, which syscall.rawVforkSyscall already routes to the
+// Syslib in assembly. Linux syscall numbers and layouts in,
+// dlsym-resolved Apple libc functions out.
 //
-// Fork-child safety: dup3, setsid, setpgid, execve (plus fcntl, chdir,
-// close and write from the base emulation) run in the child between
-// fork and exec, where only async-signal-safe functions may be called
-// and the stack must not grow. All of them are thin syscall wrappers in
-// libSystem and on POSIX's async-signal-safe list; their pointers were
-// resolved at osinit, long before the first fork (dlsym itself would
-// NOT be fork-child safe); and every function here is nosplit, which
-// the linker's nosplit check enforces. The Syslib's fork runs Apple's
-// real libc fork including its atfork handlers, so libSystem itself is
-// reinitialized and usable in the child.
-//
-// wait4/pipe2 run only in the parent but are nosplit anyway - they are
-// reached inside the _Gsyscall window like the rest of the emulation.
-//
-// waitid (os.blockUntilWaitable) is intentionally NOT emulated: its
-// caller falls back cleanly on ENOSYS to a blocking wait4, which is
-// upstream darwin's behavior too (it has no usable waitid and builds
-// wait_unimp.go).
-//
-// Wait status encoding: Apple and Linux agree on the layout (exit code
-// in bits 8..15, termination signal in bits 0..6, core-dump flag 0x80),
-// but the embedded SIGNAL NUMBERS are the host's (Apple SIGUSR1 is 30,
-// Linux's is 10); darwinWait4 rewrites them to Linux numbering at the
-// emulation boundary so syscall.WaitStatus decodes correctly.
+// dup3, setsid, setpgid and execve run in the child between fork and
+// exec, where only an async-signal-safe function may be called and the
+// stack must not grow. Each is a thin libSystem syscall wrapper on
+// POSIX's list, every pointer was resolved at osinit long before the
+// first fork - dlsym itself is NOT fork-child safe - and everything
+// here is nosplit, which the linker enforces. The Syslib's fork runs
+// Apple's own libc fork, atfork handlers included.
 
 // Linux arm64 process syscall numbers handled by the slow path.
+// waitid is deliberately absent: os.blockUntilWaitable falls back
+// cleanly on ENOSYS to a blocking wait4, which is upstream darwin's
+// behavior too - it has no usable waitid and builds wait_unimp.go.
 const (
 	sysDUP3    = 24
 	sysPIPE2   = 59
@@ -165,22 +151,16 @@ func darwinKill(pid, sig uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(darwinFns.Kill, pid, asig, 0, 0, 0, 0)
 }
 
-// darwinWait4 emulates wait4(2): option flags are translated, and the
-// signal numbers embedded in the wait status are rewritten from Apple
-// to Linux numbering (the status ENCODING - exit code in bits 8..15,
-// termination signal in bits 0..6, core flag 0x80, stop marker 0x7f,
-// stop signal in bits 8..15 - is identical on both systems, so only
-// the signal fields change). syscall.WaitStatus then decodes with the
-// Linux numbers the rest of the process uses (a child killed by Apple
-// SIGUSR1=30 reports syscall.SIGUSR1=10).
+// darwinWait4 emulates wait4(2): option flags translate, and the SIGNAL
+// NUMBERS in the wait status are rewritten from Apple to Linux. The
+// status ENCODING is identical on both systems, so only those fields
+// change and syscall.WaitStatus decodes as the process expects.
 //
-// The rusage buffer is passed straight to Apple wait4 and fixed up IN
-// PLACE afterwards: struct rusage is 144 bytes on both systems with
-// every field at the same offset EXCEPT tv_usec in the two timevals,
-// which Apple declares as int32-plus-padding where Linux has int64.
-// Widening those two fields in place (the padding bytes Apple never
-// wrote become the upper halves) avoids a 144-byte local that would
-// blow the nosplit budget of this chain.
+// The rusage buffer goes straight to Apple wait4 and is fixed up IN
+// PLACE. struct rusage is 144 bytes on both systems with every field at
+// the same offset EXCEPT tv_usec in the two timevals, which Apple
+// declares int32-plus-padding where Linux has int64. Widening those two
+// in place avoids a 144-byte local that would blow the nosplit budget.
 //
 //go:nosplit
 func darwinWait4(pid, wstatus, options, rusage uintptr) (r1, r2, errno uintptr) {

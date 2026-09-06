@@ -218,7 +218,7 @@ func TestScopeRanges(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	t.Parallel()
 
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
 
@@ -489,7 +489,7 @@ func TestEmptyDwarfRanges(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
 
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
 

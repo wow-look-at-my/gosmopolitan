@@ -825,6 +825,12 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 				if pkg.cgo && strings.HasPrefix(exp.name, "_Cvar_") {
 					x.typ_ = x.typ().(*Pointer).base
 				}
+				if check.inConstExpr {
+					if v, ok := dynamicConstVal(exp); ok {
+						x.mode_ = constant_
+						x.val = v
+					}
+				}
 			case *Func:
 				x.mode_ = funcMode
 				x.typ_ = exp.typ

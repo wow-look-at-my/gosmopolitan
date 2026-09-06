@@ -168,6 +168,7 @@ var writeSetCookiesTests = []struct {
 }
 
 func TestWriteSetCookies(t *testing.T) {
+	t.Serial() // Reads back what the package logged, through log's one writer.
 	defer log.SetOutput(os.Stderr)
 	var logbuf strings.Builder
 	log.SetOutput(&logbuf)
@@ -553,6 +554,7 @@ func TestSetCookieDoubleQuotes(t *testing.T) {
 }
 
 func TestCookieSanitizeValue(t *testing.T) {
+	t.Serial() // Reads back what the package logged, through log's one writer.
 	defer log.SetOutput(os.Stderr)
 	var logbuf strings.Builder
 	log.SetOutput(&logbuf)
@@ -589,6 +591,7 @@ func TestCookieSanitizeValue(t *testing.T) {
 }
 
 func TestCookieSanitizePath(t *testing.T) {
+	t.Serial() // Reads back what the package logged, through log's one writer.
 	defer log.SetOutput(os.Stderr)
 	var logbuf strings.Builder
 	log.SetOutput(&logbuf)

@@ -7,6 +7,11 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
+# A run takes over an hour, so pushes to one branch queue behind each other and the newest answer arrives last. Master keeps every run: each one publishes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
@@ -173,6 +178,85 @@ jobs:
         uses: wow-look-at-my/dats@master
         with:
           tests: dats/no-wordspam.dats
+
+      # GOOS and GOARCH report the host, and Go cannot make them read-only.
+      - name: GOOS and GOARCH stay read-only
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/goos-readonly.dats
+
+      # Both name the host, and a const over either still has to compile.
+      - name: GOOS and GOARCH fold in a constant
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 5
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/dynamic-const.dats
+
+      # A host ELF, Mach-O or PE leaving a build means a port went missing.
+      - name: Every emitted binary is an APE or wasm
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 10
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/emitted-binaries.dats
+
+      # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
+      - name: A cosmo test binary runs on this host
+        if: matrix.build-os == 'windows-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
+          # fizzbuzz boots here and is fat; a test binary is thin, so build it both ways.
+          for fat in 1 0; do
+            GOCOSMOFAT=$fat GOOS=cosmo go build -o "$RUNNER_TEMP/fb$fat.com" testdata/fizzbuzz/fizzbuzz.go
+            rc=0
+            "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
+            echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
+          done
+          # Published master toolchains, oldest first: the first fizzbuzz to exit 2 names the release that broke the NT boot. tar's rc is ignored, not its output: these tarballs carry one symlink windows refuses, well after go/bin/go.
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          for v in 411 424 441 455 470 476; do
+            d="$tmp/gt$v"
+            mkdir -p "$d"
+            rc=0
+            curl -fsSL --compressed -o "$d/gt.tgz" "https://dl.pazer.build/gosmopolitan?v=$v&os=windows&arch=amd64" || rc=$?
+            if [ "$rc" != 0 ]; then
+              echo "v$v download exit=$rc"
+              continue
+            fi
+            rc=0
+            tar --force-local -xzf "$d/gt.tgz" -C "$d" || rc=$?
+            rm -f "$d/gt.tgz"
+            if [ ! -x "$d/go/bin/go" ]; then
+              echo "v$v untar exit=$rc (no go/bin/go)"
+              continue
+            fi
+            rc=0
+            GOOS=cosmo "$d/go/bin/go" build -o "$tmp/fb-$v.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
+            rm -rf "$d"
+            if [ "$rc" != 0 ]; then
+              echo "v$v build exit=$rc"
+              continue
+            fi
+            rc=0
+            out="$("$tmp/fb-$v.com" 10 5 2>&1)" || rc=$?
+            echo "v$v fizzbuzz exit=$rc output=[$out]"
+          done
+          GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
+          ls -l "$RUNNER_TEMP/strings.test"
+          # Three shapes: no arguments, a listing that never runs a test, and one test.
+          for args in "" "-test.list=." "-test.run=TestLastIndexByte -test.v"; do
+            rc=0
+            "$RUNNER_TEMP/strings.test" $args > "$RUNNER_TEMP/out.txt" 2>&1 || rc=$?
+            echo "strings.test [$args] exit=$rc output:"
+            cat "$RUNNER_TEMP/out.txt"
+          done
+          exit $rc
 
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
@@ -535,7 +619,7 @@ jobs:
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/wasmthreads-smoke.wasm .)
           node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
-          # pool_demo gate: see DEBUGGING.md, pool_demo silent-fatal.
+          # pool_demo gate: a silent fatal there must fail the leg.
           set -o pipefail
           node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm 2>&1 | tee /tmp/pooldemo.out
           grep -q "POOLDEMO: PASS" /tmp/pooldemo.out

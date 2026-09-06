@@ -6,58 +6,44 @@
 
 package cosmo
 
-// Windows NT syscall emulation hook (wave 1: write/exit; wave 2: the
-// general Emulate dispatcher).
-//
-// On NT hosts no raw SYSCALL may execute: the assembly Syscall6
-// dispatcher returns ENOSYS for everything when __hostos is Windows
-// (the safety net), and the syscall package routes emulated calls
-// through this table instead. Mirrors the DarwinFns / SetDarwinFns
-// pattern (syscall_cosmo_arm64.go), except the emulation is a Go
-// function installed by the runtime rather than raw C pointers.
-//
+// Windows NT syscall emulation hook. No raw SYSCALL may execute on an
+// NT host: the assembly Syscall6 dispatcher answers ENOSYS for
+// everything when __hostos is Windows, and the syscall package routes
+// emulated calls through this table. Mirrors the DarwinFns pattern,
+// except the emulation is a Go function rather than raw C pointers.
 // Unlike the darwin path, the NT emulation runs OUTSIDE the
-// entersyscall/exitsyscall window: syscall.Syscall/Syscall6 skip
-// entersyscall when this table is installed (see
-// src/syscall/syscall_cosmo.go), so Emulate is ordinary Go code - it
-// may allocate, grow the stack, and block - and it brackets the
-// individual potentially-blocking Win32 calls with entersyscall
-// itself (the cgocall model). That is what makes path translation
-// (UTF-8 -> UTF-16) and Linux-struct synthesis (stat, dirent)
-// implementable at all. The darwin emulation has no equivalent
-// problem: XNU syscalls consume the caller's C strings and buffers
-// directly, so its fixed-size translations fit the nosplit budget.
+// entersyscall window: Syscall and Syscall6 skip entersyscall when this
+// table is installed, so Emulate is ordinary Go that may allocate, grow
+// the stack and block, and it brackets its own blocking Win32 calls.
+// That is what makes path translation and struct synthesis possible.
+// Darwin has no such problem: XNU consumes the caller's strings and
+// buffers directly, so its translations fit nosplit.
 
 // WindowsFns is the NT emulation table. A nil table (any host but NT)
 // means no routing: callers fall through to the assembly dispatcher.
 type WindowsFns struct {
 	// Emulate performs the given Linux-NUMBERED syscall using Win32
-	// primitives, returning (r1, r2, errno) with a positive LINUX
-	// errno. Installed by runtime.ntSetSyscallFns; the dispatcher and
-	// the catalog of emulated calls live in
-	// runtime/os_cosmo_nt_sys.go.
+	// primitives, answering (r1, r2, errno) with a positive LINUX
+	// errno. runtime.ntSetSyscallFns installs it and
+	// runtime/os_cosmo_nt_sys.go holds the dispatcher.
 	//
-	// Contract: the dispatcher entry is nosplit and converts every
+	// Contract: the dispatcher entry is nosplit, as is the caller chain
+	// from syscall.Syscall down to it, and it converts every
 	// pointer-carrying uintptr argument to a real pointer type before
-	// any stack growth can occur (the caller chain from
-	// syscall.Syscall down to the dispatcher is nosplit), because
-	// arguments may point into the calling goroutine's stack and raw
-	// uintptrs are not adjusted when the stack moves.
+	// any stack growth can occur. An argument may point into the
+	// calling goroutine's stack, and a raw uintptr is not adjusted when
+	// that stack moves.
 	Emulate func(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr)
 
-	// Spawn launches a child process via CreateProcessW
-	// (runtime.ntSpawn) - the posix_spawn-shaped seam the syscall
-	// package's forkAndExecInChild NT branch calls instead of
-	// fork+execve, which cannot be emulated syscall-by-syscall.
-	// argv0 and dir are linux-shaped paths (the runtime translates
-	// them); cmdline and env are ready-made NUL-terminated /
-	// double-NUL-terminated UTF-16 blocks (the syscall layer owns
-	// the Windows quoting and env-sorting algebra, ported from
-	// upstream exec_windows.go); stdio are parent fds for the
-	// child's std handles, -1 = none; flags is a Spawn* bit set.
-	// Returns the child pid or a positive Linux errno. Ordinary Go
-	// code: may allocate and block (no nosplit chain - the caller
-	// is not in syscall state).
+	// Spawn launches a child through CreateProcessW: the
+	// posix_spawn-shaped seam forkAndExecInChild's NT branch calls
+	// instead of fork+execve, which cannot be emulated
+	// syscall-by-syscall. argv0 and dir are linux-shaped paths the
+	// runtime translates. cmdline and env are ready-made UTF-16 blocks,
+	// because the syscall layer owns the Windows quoting and env-sorting
+	// algebra. stdio are parent fds for the child's std handles, -1 for
+	// none. It answers the child pid or a positive Linux errno, and it
+	// is ordinary Go: the caller is not in syscall state.
 	Spawn func(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uint32) (pid int32, errno uintptr)
 }
 

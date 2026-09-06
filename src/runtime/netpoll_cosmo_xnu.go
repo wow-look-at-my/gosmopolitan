@@ -6,38 +6,18 @@
 
 package runtime
 
-// Darwin (XNU) network poller for GOOS=cosmo, built on kqueue.
+// Darwin (XNU) network poller for GOOS=cosmo, built on kqueue. One
+// runtime serves Linux, macOS and Windows, so the poller cannot be
+// chosen by build tag: netpoll_cosmo.go holds the epoll implementation
+// and dispatches on __hostos to this file when the host is XNU. kqueue
+// and kevent are Apple libc wrappers, resolved through the Syslib's
+// dlsym at osinit. amd64 has no Syslib, so its stubs report the poller
+// unsupported and netpollinit fails visibly.
 //
-// A cosmo binary runs on Linux, macOS and Windows with one runtime, so
-// the poller cannot be chosen with build tags: netpoll_cosmo.go holds
-// the epoll implementation used on Linux hosts and dispatches at run
-// time on __hostos to the functions in this file when the host is XNU.
-// kqueue and kevent are Apple libc's plain syscall wrappers, resolved
-// through the Syslib's dlsym at osinit like the rest of the darwin
-// emulation (no Syslib on amd64, so the amd64 stubs report the poller
-// unsupported and netpollinit fails visibly).
-//
-// This is a port of upstream netpoll_kqueue.go + netpoll_kqueue_event.go
-// - the poller upstream darwin itself uses: descriptors are registered
-// once at netpollopen with EV_ADD|EV_CLEAR (edge-triggered, both
-// filters), netpollBreak is an EVFILT_USER self-event triggered with
-// NOTE_TRIGGER, and kevent registration is thread-safe in the kernel,
-// so there are NO runtime locks and no wakeup pipe here.
-//
-// It replaces a port of netpoll_aix.go: level-triggered poll(2) over a
-// mutex-protected pollfd array with a self-pipe, where one M polled
-// while HOLDING xnuMtxset and mutators booted it out through the pipe.
-// That design wedged nondeterministically on macOS CI from wave 6
-// through wave 9 (~20-30% of probe runs on bad days) and the wave-9
-// counter forensics (DEBUGGING.md 2026-07-02) localized the wedge to
-// the poller M itself freezing between a SUCCESSFUL poll(2) return
-// (n=1, the wakeup byte visible) and its release of xnuMtxset - inside
-// the pipe-drain/scan tail, while M parking demonstrably kept working
-// (semawake counters advancing throughout). Holding a runtime mutex
-// across a blocking syscall was also the only place the runtime did
-// anything of the sort. kqueue removes the pipe, the drain, both
-// mutexes and the level-triggered arming protocol wholesale; what
-// remains matches upstream darwin mechanics exactly.
+// This ports upstream netpoll_kqueue.go: a descriptor is registered
+// once at netpollopen with EV_ADD|EV_CLEAR, netpollBreak is an
+// EVFILT_USER self-event, and kevent registration is thread-safe in
+// the kernel. So there are NO runtime locks and no wakeup pipe here.
 
 import (
 	"internal/runtime/atomic"
@@ -63,10 +43,10 @@ const (
 	_EVFILT_WRITE_xnu = -0x2
 	_EVFILT_USER_xnu  = -0xa
 
-	_EV_ADD_xnu    = 0x1
-	_EV_CLEAR_xnu  = 0x20
-	_EV_ERROR_xnu  = 0x4000
-	_EV_EOF_xnu    = 0x8000
+	_EV_ADD_xnu       = 0x1
+	_EV_CLEAR_xnu     = 0x20
+	_EV_ERROR_xnu     = 0x4000
+	_EV_EOF_xnu       = 0x8000
 	_NOTE_TRIGGER_xnu = 0x1000000
 
 	// Magic identifier for the EVFILT_USER wakeup event; same value as
@@ -82,14 +62,12 @@ const (
 // xnuKq is the kqueue descriptor, valid only on XNU hosts.
 var xnuKq int32 = -1
 
-// Poller forensics, kept from the wave-9 wedge hunt (three atomic
-// stores per kevent cycle - noise next to the syscall). The
-// runtimeprobe watchdog samples them twice through cosmoNetpollDiag
-// when it fires, so any future poller stall names itself in the CI
-// log: a frozen cycle counter with exit older than enter means stuck
-// inside kevent, done < cycles means stuck between kevent and cycle
-// end, and the sema counters showing wakeups advancing/lagging tell
-// the parking side's story.
+// Poller forensics: three atomic stores per kevent cycle, noise next
+// to the syscall. The runtimeprobe watchdog samples them twice through
+// cosmoNetpollDiag when it fires, so a poller stall names itself in
+// the CI log. A frozen cycle counter with exit older than enter means
+// stuck inside kevent; done < cycles means stuck between kevent and
+// cycle end; the sema counters tell the parking side's story.
 var (
 	xnuPollCycles  atomic.Uint64 // kevent cycles started
 	xnuPollDone    atomic.Uint64 // kevent cycles completed

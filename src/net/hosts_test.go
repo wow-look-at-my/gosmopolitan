@@ -59,6 +59,7 @@ var lookupStaticHostTests = []struct {
 }
 
 func TestLookupStaticHost(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 
 	for _, tt := range lookupStaticHostTests {
@@ -128,6 +129,7 @@ var lookupStaticAddrTests = []struct {
 }
 
 func TestLookupStaticAddr(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 
 	for _, tt := range lookupStaticAddrTests {
@@ -151,6 +153,7 @@ func testStaticAddr(t *testing.T, hostsPath string, ent staticHostEntry) {
 func TestHostCacheModification(t *testing.T) {
 	// Ensure that programs can't modify the internals of the host cache.
 	// See https://golang.org/issues/14212.
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 
 	hostsFilePath = "testdata/ipv4-hosts"
@@ -195,6 +198,7 @@ var lookupStaticHostAliasesTest = []struct {
 }
 
 func TestLookupStaticHostAliases(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 
 	hostsFilePath = "testdata/aliases"

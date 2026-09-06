@@ -21,8 +21,11 @@ const prSetKeepCaps = 8
 // for a regression vs. the fix for #43149.
 func TestAllThreadsSyscallSignals(t *testing.T) {
 	t.Serial() // signal disposition is process-wide
-	if _, _, err := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, prSetKeepCaps, 0, 0); err == syscall.ENOTSUP {
-		t.Skip("AllThreadsSyscall disabled with cgo")
+	// ENOTSUP is cgo having disabled it. Any other errno is a host that
+	// cannot serve prctl at all: one APE meets macOS and NT too, and
+	// neither has AllThreadsSyscall's rt-signal machinery.
+	if _, _, err := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, prSetKeepCaps, 0, 0); err != 0 {
+		t.Skipf("AllThreadsSyscall(PR_SET_KEEPCAPS): %v", err)
 	}
 
 	sig := make(chan os.Signal, 1)

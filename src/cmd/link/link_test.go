@@ -1275,7 +1275,7 @@ func main() {
 func TestIssue42396(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
-	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH) {
 		t.Skip("no race detector support")
 	}
 

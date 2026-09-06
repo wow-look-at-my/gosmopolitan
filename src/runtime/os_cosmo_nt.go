@@ -4,33 +4,17 @@
 
 //go:build cosmo
 
-// Windows NT personality (wave 1).
+// Windows NT personality.
 //
-// Everything in this file is gated on iswindows() (__hostos ==
-// _HOSTWINDOWS) and is inert until the NT boot stub (_rt0_cosmo_nt)
-// stops exiting early and joins the common boot with __hostos = 2.
+// Everything here is gated on iswindows() (__hostos == _HOSTWINDOWS).
+// Windows/arm64 has no APE boot stub, so nothing here is reachable on
+// arm64: iswindows() can never be true there.
 //
-// Foreign-call model: win64 functions are reached through
-// runtime·ntcall6 (sys_cosmo_nt_<goarch>.s), a host-ABI trampoline
-// invoked via asmcgocall so the g0 stack switch and stack accounting
-// come for free. The function-pointer table is resolved at osArchInit
-// time from the two loader-filled IAT slots (GetProcAddress and
-// LoadLibraryA, rt0_cosmo_nt_amd64.s), mirroring the darwin port's
-// dlsym-at-osArchInit idiom.
-//
-// Windows/arm64 has no APE boot stub yet, so on arm64 nothing here is
-// reachable: iswindows() can never be true.
-//
-// Crash pokes (all *(addr) = addr stores, so the fault address names
-// the failure; same idiom as the 0xf1 pokes in sys_cosmo_amd64.s):
-//
-//	0xf2  LoadLibraryA("kernel32.dll") failed
-//	0xf3  GetProcAddress(kernel32, ...) missing symbol
-//	0xf4  LoadLibraryA("api-ms-win-core-synch-l1-2-0.dll") failed
-//	0xf5  GetProcAddress(synch dll, ...) missing symbol
-//	0xf6  VirtualFree(MEM_RELEASE) failed (sysFreeOS, mem_cosmo.go)
-//	0xf7  rawSyscallNoError reached on NT (src/syscall asm)
-//	0xf8  rawVforkSyscall reached on NT (src/syscall asm)
+// A win64 function is reached through runtime·ntcall6, a host-ABI
+// trampoline invoked via asmcgocall, so the g0 stack switch and the
+// stack accounting come for free. The function-pointer table resolves
+// at osArchInit from the two loader-filled IAT slots, GetProcAddress
+// and LoadLibraryA, which mirrors the darwin port's dlsym idiom.
 
 package runtime
 
@@ -85,6 +69,10 @@ var (
 	// uname's two sources (ntEmuUname). Both optional.
 	ntRtlGetVersionFn    uintptr
 	ntGetComputerNameWFn uintptr
+	// The host machine, for GOARCH (hostarch_cosmo.go). Optional: a zero
+	// keeps the payload's own architecture, which is right on every host
+	// that runs the payload natively.
+	ntIsWow64Process2Fn uintptr
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). All optional.
 	ntGetVolumePathNameWFn    uintptr
 	ntGetDiskFreeSpaceWFn     uintptr
@@ -197,6 +185,7 @@ var (
 	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
 	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
+	ntNameIsWow64Process2   = []byte("IsWow64Process2\x00")
 	ntNameGetVolumePathW    = []byte("GetVolumePathNameW\x00")
 	ntNameGetDiskFreeSpaceW = []byte("GetDiskFreeSpaceW\x00")
 	ntNameGetDiskFreeSpcExW = []byte("GetDiskFreeSpaceExW\x00")
@@ -355,17 +344,14 @@ func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
 }
 
 // ntcallE ("with error") performs ntcall7 and returns the thread's
-// GetLastError alongside the result. The error value is captured by
-// the ntcall10 trampoline itself, immediately after the call target
-// returns, into this M's mOS.ntLastError (chunk D2) - so it is exact
-// by construction, with no window in which a suspension or another
-// win64 call on this thread could lose it. The g.m read below stays
-// on the calling thread: this is nosplit runtime code with no
-// preemption point between the trampoline's store and the load.
-// Callers pass pointers as uintptr(unsafe.Pointer(x)) directly in the
-// argument list; nosplit (plus liveness at the call site or an
-// explicit KeepAlive) keeps the pointee valid and unmoved for the
-// duration.
+// GetLastError alongside the result. The trampoline captures the error
+// into this M's mOS.ntLastError immediately after the target returns,
+// so it is exact by construction: no suspension or other win64 call on
+// this thread can lose it. This is nosplit, with no preemption point
+// between that store and the load below, so the g.m read stays on the
+// calling thread. A caller passes a pointer as
+// uintptr(unsafe.Pointer(x)) in the argument list, and nosplit plus
+// call-site liveness keeps the pointee valid and unmoved.
 //
 //go:nosplit
 func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
@@ -375,22 +361,15 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 }
 
 // ntcallSE ("syscall-state, with error") is ntcallE bracketed by
-// entersyscall/exitsyscall, for Win32 calls that can block
-// indefinitely (ReadFile/WriteFile on consoles and pipes,
-// FlushFileBuffers): the P can be retaken by sysmon while the thread
-// is parked in the kernel, exactly like a real blocking syscall.
-// Must only be used from user-goroutine context - the
-// syscall-emulation layer - never from boot, g0, or runtime-internal
-// paths. The g stays bound to this M between entersyscall and
-// exitsyscall, so the trampoline-captured error is this thread's.
-//
-// The osPreemptExtEnter/Exit bracket (chunk D2) marks the foreign
-// call for ntPreemptM exactly like upstream's cgocall model: while
-// the thread is inside (or possibly blocked in) win64 code, an async
-// preemption attempt fails fast instead of suspending a thread that
-// may hold the loader lock or be about to ExitProcess. The bracket
-// sits strictly inside the entersyscall window so the M can never
-// run other goroutines while holding preemptExtLock.
+// entersyscall and exitsyscall, for a Win32 call that can block
+// indefinitely, so sysmon can retake the P while the thread parks in
+// the kernel. Use it ONLY from user-goroutine context. The g stays on
+// this M, so the error is this thread's. The osPreemptExtEnter/Exit
+// bracket marks the foreign call for ntPreemptM the way upstream's
+// cgocall model does: a preemption against a thread in win64 code
+// fails fast rather than suspending one that may hold the loader lock.
+// It sits strictly inside the entersyscall window, so the M cannot run
+// a goroutine while it holds preemptExtLock.
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
@@ -418,6 +397,14 @@ func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr
 	return
 }
 
+// ntCrash stores code at address code, so the faulting address names
+// the failure. Same idiom as the 0xf1 pokes in sys_cosmo_amd64.s.
+//
+//	0xf2  LoadLibraryA("kernel32.dll")   0xf6  VirtualFree(MEM_RELEASE)
+//	0xf3  GetProcAddress(kernel32)       0xf7  rawSyscallNoError on NT
+//	0xf4  LoadLibraryA(synch dll)        0xf8  rawVforkSyscall on NT
+//	0xf5  GetProcAddress(synch dll)
+//
 //go:nosplit
 func ntCrash(code uintptr) {
 	*(*uintptr)(unsafe.Pointer(code)) = code
@@ -559,6 +546,9 @@ func ntResolve() {
 	// flock(2) (ntEmuFlock). Same stance as the four above.
 	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
 	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
+	// The host machine, for GOARCH. Absent before Win10 1511, where a
+	// zero leaves the payload's own architecture standing.
+	ntIsWow64Process2Fn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameIsWow64Process2[0])), 0, 0, 0, 0)
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). Same stance again.
 	ntGetVolumePathNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetVolumePathW[0])), 0, 0, 0, 0)
 	ntGetDiskFreeSpaceWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetDiskFreeSpaceW[0])), 0, 0, 0, 0)
@@ -626,7 +616,7 @@ func ntFutexsleep(addr *uint32, val uint32, ns int64) {
 }
 
 // ntFutexwakeup implements futexwakeup. Every futexwakeup caller
-// passes cnt==1 (exhaustive grep, see DEBUGGING.md wave-1 design), so
+// passes cnt==1, so
 // WakeByAddressSingle suffices; WakeByAddress* returns void, nothing
 // to check.
 //

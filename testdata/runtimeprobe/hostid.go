@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -15,19 +16,24 @@ import (
 // is running takes the wrong branch quietly.
 
 // checkHostOS asserts the runtime reports the host it is actually running
-// on. runtime.GOOS is "cosmo" everywhere, so anything that must know the
-// real host has had to infer it - and every inference is deniable by a
-// sandbox (filesystem probes) or unimplemented (syscall.Uname is ENOSYS on
-// darwin and NT). cosmoHostOS reads what the entry stub recorded and the
-// runtime dispatches every syscall on, so it cannot disagree with reality.
+// on. GOOS and GOARCH are variables on cosmo, read at startup from what
+// the APE entry stub recorded, so a package that switches on GOOS takes
+// the branch for the kernel underneath. cosmoHostOS reads the same
+// record the runtime dispatches every syscall on, so the two cannot
+// disagree.
 func checkHostOS() {
 	host := cosmoHostOS()
 	switch host {
 	case "linux", "darwin", "windows":
-		ok("hostos", host)
 	default:
 		fail("hostos", "reported %q, want the real host", host)
+		return
 	}
+	if runtime.GOOS != host {
+		fail("hostos", "runtime.GOOS is %q on a %s host", runtime.GOOS, host)
+		return
+	}
+	ok("hostos", host+"/"+runtime.GOARCH)
 }
 
 // checkFdPath exercises fcntl(F_GETPATH), the darwin way to resolve a

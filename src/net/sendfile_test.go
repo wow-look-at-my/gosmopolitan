@@ -30,6 +30,7 @@ const (
 
 func hookSupportsSendfile(t *testing.T) {
 	if runtime.GOOS == "windows" {
+		t.Serial()
 		origHook := testHookSupportsSendfile
 		testHookSupportsSendfile = func() bool { return true }
 		t.Cleanup(func() {
@@ -83,14 +84,20 @@ func expectSendfile(t *testing.T, wantConn Conn, f func()) {
 	}
 }
 
-func TestSendfile(t *testing.T) { testSendfile(t, newton, newtonSHA256, newtonLen, 0) }
+func TestSendfile(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
+	testSendfile(t, newton, newtonSHA256, newtonLen, 0)
+}
 func TestSendfileWithExactLimit(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
 	testSendfile(t, newton, newtonSHA256, newtonLen, newtonLen)
 }
 func TestSendfileWithLimitLargerThanFile(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
 	testSendfile(t, newton, newtonSHA256, newtonLen, newtonLen*2)
 }
 func TestSendfileWithLargeFile(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
 	// Some platforms are not capable of handling large files with sendfile
 	// due to limited system resource, so we only run this test on amd64 and
 	// arm64 for the moment.
@@ -187,6 +194,7 @@ func testSendfile(t *testing.T, filePath, fileHash string, size, limit int64) {
 }
 
 func TestSendfileParts(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
 	ln := newLocalListener(t, "tcp")
 	defer ln.Close()
 
@@ -244,6 +252,7 @@ func TestSendfileParts(t *testing.T) {
 }
 
 func TestSendfileSeeked(t *testing.T) {
+	t.Serial() // expectSendfile installs a package-level hook.
 	ln := newLocalListener(t, "tcp")
 	defer ln.Close()
 

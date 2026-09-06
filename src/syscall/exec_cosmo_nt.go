@@ -4,27 +4,18 @@
 
 //go:build cosmo
 
-// NT leg of process creation (wave 2 chunk B). On a Windows host the
-// linux-shaped forkAndExecInChild cannot run - there is no fork - so
+// NT leg of process creation. A Windows host cannot run the
+// linux-shaped forkAndExecInChild, because there is no fork, so
 // exec_cosmo.go branches here BEFORE any fork machinery and the child
-// is launched posix_spawn-style through the runtime's CreateProcessW
-// hook (cosmo.WindowsFns.Spawn, runtime.ntSpawn).
+// launches posix_spawn-style through the runtime's CreateProcessW hook.
 //
-// This file owns the Windows-specific string algebra, ported from
-// upstream src/syscall/exec_windows.go (which never builds for
-// GOOS=cosmo): MSVCRT-convention argument quoting (backslash doubling
-// before quotes, quote-if-space/tab/empty), the case-insensitively
-// sorted double-NUL-terminated UTF-16 environment block, and the
-// UTF-16 command line. The runtime hook owns everything that needs
-// Win32 state: path translation, the fd table, handle duplication,
-// CreateProcessW itself, and the pid->handle table that wait4 reaps.
-//
-// The status pipe protocol degenerates cleanly: CreatePipe handles
-// are born non-inheritable, so the child never holds the pipe's write
-// end; once forkExec closes the parent copy, the status read returns
-// EOF immediately - the "exec succeeded" outcome. Spawn failures
-// surface synchronously as this function's errno instead of arriving
-// through the pipe.
+// This file owns the Windows string algebra, ported from upstream
+// exec_windows.go, which never builds for GOOS=cosmo: MSVCRT argument
+// quoting, the case-insensitively sorted double-NUL-terminated UTF-16
+// environment block, and the command line. The runtime hook owns
+// everything needing Win32 state. The status pipe degenerates cleanly:
+// its handles are born non-inheritable, so the read sees EOF at once
+// and a spawn failure surfaces as this function's own errno.
 
 package syscall
 

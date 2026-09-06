@@ -116,6 +116,12 @@ func (check *Checker) ident(x *operand, e *syntax.Name, wantType bool) {
 			return
 		}
 		x.mode_ = variable
+		if check.inConstExpr {
+			if v, ok := dynamicConstVal(obj); ok {
+				x.mode_ = constant_
+				x.val = v
+			}
+		}
 
 	case *Func:
 		check.addDeclDep(obj)

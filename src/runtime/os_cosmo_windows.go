@@ -26,19 +26,19 @@ const (
 
 // Windows memory constants
 const (
-	_MEM_COMMIT     = 0x1000
-	_MEM_RESERVE    = 0x2000
-	_MEM_RELEASE    = 0x8000
-	_PAGE_READWRITE = 0x04
+	_MEM_COMMIT             = 0x1000
+	_MEM_RESERVE            = 0x2000
+	_MEM_RELEASE            = 0x8000
+	_PAGE_READWRITE         = 0x04
 	_PAGE_EXECUTE_READWRITE = 0x40
 )
 
 // Windows wait constants
 const (
-	_INFINITE         = 0xFFFFFFFF
-	_WAIT_OBJECT_0    = 0
-	_WAIT_TIMEOUT     = 0x102
-	_WAIT_FAILED      = 0xFFFFFFFF
+	_INFINITE      = 0xFFFFFFFF
+	_WAIT_OBJECT_0 = 0
+	_WAIT_TIMEOUT  = 0x102
+	_WAIT_FAILED   = 0xFFFFFFFF
 )
 
 // Windows API function declarations (assembly in sys_cosmo_windows_amd64.s)

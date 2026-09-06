@@ -579,7 +579,6 @@ func uname(buf *Utsname) (err error) {
 	return
 }
 
-
 func munmap(addr uintptr, length uintptr) (err error) {
 	_, _, e1 := Syscall(SYS_MUNMAP, uintptr(addr), uintptr(length), 0)
 	if e1 != 0 {
@@ -622,7 +621,6 @@ func fcntl(fd int, cmd int, arg int) (val int, err error) {
 	}
 	return
 }
-
 
 func bind(s int, addr unsafe.Pointer, addrlen _Socklen) (err error) {
 	_, _, e1 := Syscall(SYS_BIND, uintptr(s), uintptr(addr), uintptr(addrlen))

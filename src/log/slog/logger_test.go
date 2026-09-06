@@ -79,6 +79,8 @@ func TestLogTextHandler(t *testing.T) {
 }
 
 func TestConnections(t *testing.T) {
+	// Replaces the default logger and log's own writer, both process-wide.
+	t.Serial()
 	var logbuf, slogbuf bytes.Buffer
 
 	// Revert any changes to the default logger. This is important because other
@@ -181,6 +183,8 @@ func TestAttrs(t *testing.T) {
 }
 
 func TestCallDepth(t *testing.T) {
+	// Replaces the default logger, which is process-wide.
+	t.Serial()
 	ctx := context.Background()
 	h := &captureHandler{}
 	var startLine int
@@ -238,6 +242,8 @@ func TestCallDepth(t *testing.T) {
 }
 
 func TestCallDepthConnection(t *testing.T) {
+	// Replaces the default logger and log's own writer, both process-wide.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
 	}
@@ -328,6 +334,8 @@ func TestCallDepthConnection(t *testing.T) {
 }
 
 func TestAlloc(t *testing.T) {
+	// Replaces the default logger, which is process-wide.
+	t.Serial()
 	ctx := context.Background()
 	dl := New(discardTestHandler{})
 	defer SetDefault(Default()) // restore
@@ -447,6 +455,8 @@ func TestSetAttrs(t *testing.T) {
 }
 
 func TestSetDefault(t *testing.T) {
+	// Replaces the default logger and log's own writer, both process-wide.
+	t.Serial()
 	// Verify that setting the default to itself does not result in deadlock.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -466,6 +476,8 @@ func TestSetDefault(t *testing.T) {
 
 // Test defaultHandler minimum level without calling slog.SetDefault.
 func TestLogLoggerLevelForDefaultHandler(t *testing.T) {
+	// Replaces the default logger, its level and log's own writer, all process-wide.
+	t.Serial()
 	// Revert any changes to the default logger, flags, and level of log and slog.
 	currentLogLoggerLevel := logLoggerLevel.Level()
 	currentLogWriter := log.Writer()
@@ -499,6 +511,8 @@ func TestLogLoggerLevelForDefaultHandler(t *testing.T) {
 
 // Test handlerWriter minimum level by calling slog.SetDefault.
 func TestLogLoggerLevelForHandlerWriter(t *testing.T) {
+	// Replaces the default logger, its level and log's own writer, all process-wide.
+	t.Serial()
 	removeTime := func(_ []string, a Attr) Attr {
 		if a.Key == TimeKey {
 			return Attr{}
@@ -570,6 +584,8 @@ func TestLoggerNoOps(t *testing.T) {
 }
 
 func TestContext(t *testing.T) {
+	// Replaces the default logger, which is process-wide.
+	t.Serial()
 	// Verify that the context argument to log output methods is passed to the handler.
 	// Also check the level.
 	h := &captureHandler{}
@@ -768,6 +784,8 @@ func (p panicTextAndJsonMarshaler) MarshalJSON() ([]byte, error) {
 }
 
 func TestPanics(t *testing.T) {
+	// Replaces the default logger and log's own writer, both process-wide.
+	t.Serial()
 	// Revert any changes to the default logger. This is important because other
 	// tests might change the default logger using SetDefault. Also ensure we
 	// restore the default logger at the end of the test.

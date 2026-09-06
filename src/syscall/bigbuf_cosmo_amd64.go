@@ -12,12 +12,9 @@ package syscall
 //
 // uname is not, and cannot be. XNU has no uname syscall - it is a libc
 // function over sysctl - and the amd64 path dispatches by NUMBER, so
-// there is nothing to dispatch to. arm64 escapes this only because it
-// resolves Apple's libc uname by name through dlsym, a mechanism amd64
-// does not have (the Syslib comes from the ARM64 APE loader).
-//
-// Reporting ENOSYS is the honest answer here. Synthesizing a plausible
-// utsname from sysctl values would be inventing a system's identity
-// rather than reading it.
+// there is nothing to dispatch to. arm64 escapes this only by resolving
+// Apple's libc uname through dlsym, which amd64 has no Syslib for.
+// ENOSYS is the honest answer: synthesizing a plausible utsname from
+// sysctl values would invent a system's identity rather than read it.
 
 func darwinUname(buf *Utsname) error { return ENOSYS }

@@ -41,6 +41,7 @@ type environment struct {
 	version       goVersion              // current accepted language version; changes across files
 	iota          constant.Value         // value of iota in a constant declaration; nil otherwise
 	errpos        positioner             // if set, identifier position of a constant with inherited initializer
+	inConstExpr   bool                   // set while checking an expression that must be constant (see dynconst.go)
 	inTParamList  bool                   // set if inside a type parameter list
 	sig           *Signature             // function signature if inside a function; nil otherwise
 	isPanic       map[*ast.CallExpr]bool // set of panic call expressions (used for termination check)

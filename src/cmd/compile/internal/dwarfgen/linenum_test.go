@@ -9,7 +9,6 @@ import (
 	"internal/platform"
 	"internal/testenv"
 	"io"
-	"runtime"
 	"testing"
 )
 
@@ -17,8 +16,8 @@ func TestIssue75249(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
 
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
-		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
+		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", testenv.GOOS, testenv.GOARCH)
 	}
 
 	code := `

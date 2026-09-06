@@ -187,15 +187,13 @@ const _RTLD_DEFAULT = ^uintptr(1)
 // binaries is v10). Returns 0 if dlsym is unavailable or the lookup fails.
 // name must be a NUL-terminated C string.
 //
-// This is how the runtime obtains host functions the Syslib does not
-// export (getpid and friends). The alternative - extending the embedded
-// ape-m1.c Syslib struct and bumping SYSLIB_VERSION - was rejected: the
-// compiled loader is cached at ${TMPDIR:-$HOME}/.ape-1.10 keyed only by
-// the APE loader version string, and any existing Mach-O there (including
-// one compiled from an upstream cosmopolitan binary's embedded source) is
-// reused as-is, so a stale v10 loader would silently satisfy the cache and
-// the new fields would never reliably exist. dlsym works with every v6+
-// loader in the wild, cached or fresh.
+// This is how the runtime obtains a host function the Syslib does not
+// export. Never extend the embedded ape-m1.c Syslib struct and bump
+// SYSLIB_VERSION instead: the compiled loader is cached keyed only by
+// the APE loader version string, so any existing Mach-O there is reused
+// as is, a stale loader silently satisfies the cache, and the new
+// fields would never reliably exist. dlsym works with every v6+ loader
+// in the wild, cached or fresh.
 func cosmoDlsym(name *byte) uintptr {
 	lib := __syslib
 	if lib == nil || lib.version < 6 || lib.dlsym == 0 {
@@ -305,6 +303,7 @@ var (
 	dlsymNameGetrlimit    = []byte("getrlimit\x00")
 	dlsymNameSetrlimit    = []byte("setrlimit\x00")
 	dlsymNameUname        = []byte("uname\x00")
+	dlsymNameClockNsec    = []byte("clock_gettime_nsec_np\x00")
 	dlsymNameGetrusage    = []byte("getrusage\x00")
 	dlsymNameGettimeofday = []byte("gettimeofday\x00")
 )
@@ -334,6 +333,14 @@ var cosmoDarwinErrorFn uintptr
 // cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by
 // the runtime's own fcntl on darwin. Zero when unresolved.
 var cosmoDarwinFcntlFn uintptr
+
+// cosmoDarwinClockNsecFn is Apple's clock_gettime_nsec_np, resolved at
+// startup and read by nanotime1's darwin branch. The Syslib exports only
+// clock_gettime, whose Apple resolution is a MICROSECOND: a caller that
+// times its own work reads one instant many times, and a timing-jitter
+// entropy source degenerates on that. Zero when unresolved, which that
+// branch reports by falling back to clock_gettime.
+var cosmoDarwinClockNsecFn uintptr
 
 // cosmoDarwinMincoreFn is Apple libc mincore, resolved at startup and
 // read by ·mincore's darwin branch in sys_cosmo_arm64.s. Zero when
@@ -370,6 +377,7 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
@@ -688,6 +696,38 @@ func cosmoDarwinNumCPU() int32 {
 		return 0
 	}
 	return int32(n)
+}
+
+var sysctlKernHostname = []byte("kern.hostname\x00")
+
+// cosmoDarwinHostname reads kern.hostname, which is where macOS keeps
+// the machine's name and where a native darwin build's os.Hostname reads
+// it. Answers "" when the key cannot be read, which the caller reports
+// rather than papers over.
+func cosmoDarwinHostname() string {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return ""
+	}
+	var buf [512]byte // MAXHOSTNAMELEN is 256; a DNS name fits twice over
+	sz := uintptr(len(buf))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(&sysctlKernHostname[0])),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	if r != 0 || sz == 0 {
+		return ""
+	}
+	n := int(sz)
+	if n > len(buf) {
+		return ""
+	}
+	// sysctl counts the NUL it wrote; the string must not.
+	for n > 0 && buf[n-1] == 0 {
+		n--
+	}
+	return string(buf[:n])
 }
 
 // cosmoDarwinSysctlEnabled reads a boolean hw.optional sysctl. name must

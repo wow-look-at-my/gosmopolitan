@@ -349,6 +349,10 @@ var builtins = map[string]any{
 }
 
 func testParse(doCopy bool, t *testing.T) {
+	// textFormat is a package global that decides how a text node
+	// prints. Every test that reads a node's String output wants the
+	// quoted form, so no other test may run while it is set.
+	t.Serial()
 	textFormat = "%q"
 	defer func() { textFormat = "%s" }()
 	for _, test := range parseTests {
@@ -389,6 +393,7 @@ func TestParseCopy(t *testing.T) {
 }
 
 func TestParseWithComments(t *testing.T) {
+	t.Serial()
 	textFormat = "%q"
 	defer func() { textFormat = "%s" }()
 	tests := [...]parseTest{
@@ -446,6 +451,7 @@ func TestKeywordsAndFuncs(t *testing.T) {
 	// Check collisions between functions and new keywords like 'break'. When a
 	// break function is provided, the parser should treat 'break' as a function,
 	// not a keyword.
+	t.Serial()
 	textFormat = "%q"
 	defer func() { textFormat = "%s" }()
 
@@ -473,6 +479,7 @@ func TestKeywordsAndFuncs(t *testing.T) {
 }
 
 func TestSkipFuncCheck(t *testing.T) {
+	t.Serial()
 	oldTextFormat := textFormat
 	textFormat = "%q"
 	defer func() { textFormat = oldTextFormat }()
