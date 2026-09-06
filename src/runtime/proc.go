@@ -2254,15 +2254,19 @@ func startTheWorldWithSema(now int64, w worldStop) int64 {
 // usesLibcall indicates whether this runtime performs system calls
 // via libcall.
 func usesLibcall() bool {
+	// The cosmo arm comes first because GOOS names the HOST there, and
+	// this asks about the PORT.
+	//
+	// Only XNU hosts record m.libcall* (the pthread parking wrappers,
+	// os_cosmo_arm64_sema.go), so SIGPROF samples landing inside
+	// pthread_cond_wait/mutex unwind from the Go call site like upstream
+	// darwin. On other hosts the fields stay zero and sigprof's libcall
+	// branch self-disables.
+	if goos.IsCosmo == 1 {
+		return true
+	}
 	switch GOOS {
 	case "aix", "darwin", "illumos", "ios", "openbsd", "solaris", "windows":
-		return true
-	case "cosmo":
-		// Only XNU hosts record m.libcall* (the pthread parking
-		// wrappers, os_cosmo_arm64_sema.go), so SIGPROF samples
-		// landing inside pthread_cond_wait/mutex unwind from the Go
-		// call site like upstream darwin. On other hosts the fields
-		// stay zero and sigprof's libcall branch self-disables.
 		return true
 	}
 	return false
@@ -2271,14 +2275,16 @@ func usesLibcall() bool {
 // mStackIsSystemAllocated indicates whether this runtime starts on a
 // system-allocated stack.
 func mStackIsSystemAllocated() bool {
+	// The cosmo arm comes first because GOOS names the HOST there, and
+	// this asks about the PORT. On macOS threads are created with
+	// pthread_create, which provides system stacks, while on Linux
+	// clone() needs Go-allocated stacks.
+	if goos.IsCosmo == 1 {
+		return cosmoStacksAreSystemAllocated()
+	}
 	switch GOOS {
 	case "aix", "darwin", "plan9", "illumos", "ios", "openbsd", "solaris", "windows":
 		return true
-	case "cosmo":
-		// A cosmo binary only learns its host OS at run time: on macOS
-		// threads are created with pthread_create, which provides system
-		// stacks, while on Linux clone() needs Go-allocated stacks.
-		return cosmoStacksAreSystemAllocated()
 	}
 	return false
 }

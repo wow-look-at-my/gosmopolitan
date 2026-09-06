@@ -9,6 +9,7 @@ import (
 	"internal/bytealg"
 	"internal/goarch"
 	"internal/godebugs"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/strconv"
 	"unsafe"
@@ -73,10 +74,13 @@ func args(c int32, v **byte) {
 }
 
 func goargs() {
-	if GOOS == "windows" {
+	// GOOS is the HOST on cosmo, and this is a question about the PORT:
+	// the windows port gets its arguments elsewhere, and a cosmo binary
+	// on a Windows host does not. goos.IsX is the port either way.
+	if goos.IsWindows == 1 {
 		return
 	}
-	if GOOS == "cosmo" && cosmoNTGoargs() {
+	if goos.IsCosmo == 1 && cosmoNTGoargs() {
 		// NT hosts parse the real argv from GetCommandLineW
 		// (os_cosmo_nt.go); the boot-block argv fabricated by the NT
 		// entry stub is a single placeholder entry.

@@ -99,6 +99,9 @@ func TestBuffers_WriteTo(t *testing.T) {
 }
 
 func testBuffer_writeTo(t *testing.T, chunks int, useCopy bool) {
+	// poll.TestHookDidWritev is one variable in internal/poll, so two
+	// of these at once count each other's writes.
+	t.Serial()
 	oldHook := poll.TestHookDidWritev
 	defer func() { poll.TestHookDidWritev = oldHook }()
 	var writeLog struct {
