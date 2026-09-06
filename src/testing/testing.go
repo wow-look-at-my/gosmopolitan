@@ -2223,9 +2223,9 @@ func (c *common) inSerialTree() bool {
 	return h != nil && h.barrierHeld == barrierExclusive
 }
 
-// eligibleForBarrier reports whether this test may hold the serial barrier at
-// all. The root holds nothing. A synctest bubble and the subtree of a serial
-// test run inside their parent's body, under the parent's hold. So does every
+// eligibleForBarrier reports whether this test takes a hold of the serial
+// barrier. The root holds nothing. A synctest bubble and the subtree of a
+// serial test run inside their parent's body, under the parent's hold. So does every
 // test under a root that is not running under tRunner - a hand-made root in
 // this package's tests - because only tRunner releases parallel subtests, and
 // such a root may allow no parallelism at all. A parent with no barrier
@@ -2254,15 +2254,26 @@ func (t *T) implicitlyParallel() bool {
 }
 
 // acquireBarrier takes the shared hold the test's function body runs under. A
-// test that an ancestor's hold already covers takes nothing: a second read
-// lock, from a test the holder waits for, deadlocks behind a pending Serial
-// caller, because Go queues a new reader behind a waiting writer.
+// caller that already holds one keeps it: only tRunner and Parallel take a
+// hold, and each takes it once.
 func (t *T) acquireBarrier() {
-	if !t.eligibleForBarrier() || t.common.barrierHolder() != nil {
+	if !t.eligibleForBarrier() || t.barrierHeld != barrierNone {
 		return
 	}
 	serialBarrier.RLock()
 	t.barrierHeld = barrierShared
+}
+
+// yieldBarrier drops a shared hold for the length of a wait, and reports
+// whether the caller takes it back afterwards. An exclusive hold stays: a
+// Serial test keeps the process for its whole subtree, and the subtests under
+// it hold nothing of their own.
+func (t *T) yieldBarrier() bool {
+	if t.barrierHeld != barrierShared {
+		return false
+	}
+	t.releaseBarrier()
+	return true
 }
 
 // releaseBarrier drops whichever hold the test ended up with.
@@ -2333,14 +2344,17 @@ func (t *T) Parallel() {
 	}
 	running.Delete(t.name)
 
+	// The hold never covers a wait. A test that waits on a -parallel slot
+	// while it holds the barrier deadlocks against a Serial caller: the Serial
+	// caller holds a slot while it waits for the barrier, and Go queues every
+	// later reader behind that pending writer.
+	t.releaseBarrier()
+
 	t.signal <- true   // Release calling test.
 	<-t.parent.barrier // Wait for the parent test to complete.
 	t.tstate.waitParallel()
 	parallelStart.Add(1)
 
-	// The parent dropped its hold before it released this test, so the hold
-	// that covered the body up to here is gone. Take one of this test's own,
-	// or the rest of the body runs against a Serial test.
 	t.acquireBarrier()
 
 	if t.chatty != nil {
@@ -2661,6 +2675,7 @@ func (t *T) Run(name string, f func(t *T)) bool {
 	// There's no reason to inherit this context from parent. The user's code can't observe
 	// the difference between the background context and the one from the parent test.
 	ctx, cancelCtx := context.WithCancel(context.Background())
+	caller := t
 	t = &T{
 		common: common{
 			barrier:    make(chan bool),
@@ -2698,10 +2713,20 @@ func (t *T) Run(name string, f func(t *T)) bool {
 	// To avoid confusing false-negatives, we leave the parent in the running map
 	// even though in the typical case it is blocked.
 
+	// The subtest takes a hold of its own, so the caller drops its one here.
+	// Two holds in one line of descent deadlock: the inner test queues behind
+	// a pending Serial caller, and the outer one waits for the inner test
+	// without ever reaching the release in its own tRunner.
+	resume := caller.yieldBarrier()
+
 	if !<-t.signal {
 		// At this point, it is likely that FailNow was called on one of the
 		// parent tests by one of the subtests. Continue aborting up the chain.
 		runtime.Goexit()
+	}
+
+	if resume {
+		caller.acquireBarrier()
 	}
 
 	if t.chatty != nil && t.chatty.json {

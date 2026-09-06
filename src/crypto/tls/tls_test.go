@@ -54,6 +54,11 @@ var testConfigClient = &Config{
 		testClientMLDSA44Cert, testClientMLDSA65Cert, testClientMLDSA87Cert},
 	RootCAs:    testRootCertPool,
 	ServerName: "test.golang.example",
+	// The recorded handshakes offer every version from TLS 1.0, so the
+	// config every client test starts from has to offer them too. This used
+	// to arrive by accident: the TLS 1.0 runner set MinVersion on this shared
+	// config, and every test that ran after it inherited the change.
+	MinVersion: VersionTLS10,
 }
 
 func TestX509KeyPair(t *testing.T) {
@@ -205,6 +210,11 @@ func newLocalListener(t testing.TB) net.Listener {
 }
 
 func runWithFIPSEnabled(t *testing.T, testFunc func(t *testing.T)) {
+	// The FIPS mode is process-wide, and it decides which TLS versions and
+	// which curves every handshake in the process offers. So this test needs
+	// the process while it holds the flag flipped.
+	t.Serial()
+
 	originalFIPS := fips140tls.Required()
 	defer func() {
 		if originalFIPS {
@@ -219,6 +229,9 @@ func runWithFIPSEnabled(t *testing.T, testFunc func(t *testing.T)) {
 }
 
 func runWithFIPSDisabled(t *testing.T, testFunc func(t *testing.T)) {
+	// See runWithFIPSEnabled: the flag this clears is process-wide too.
+	t.Serial()
+
 	if fips140.Enforced() {
 		t.Run("no-fips140tls", func(t *testing.T) {
 			t.Skip("can't run no-fips140tls tests in fips140=only mode")

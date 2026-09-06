@@ -476,23 +476,28 @@ func runClientTestForVersion(t *testing.T, template *clientTest, version, option
 	runTestAndUpdateIfNeeded(t, version, test.run)
 }
 
+// clientTestConfig returns the template's config, or a copy of the shared one.
+// It never hands back testConfigClient itself: the callers below set
+// MinVersion on what they get, and every other test in the process reads that
+// config.
+func clientTestConfig(template *clientTest, min uint16) *Config {
+	config := template.config
+	if config == nil {
+		config = testConfigClient.Clone()
+	}
+	if config.MinVersion == 0 {
+		config.MinVersion = min
+	}
+	return config
+}
+
 func runClientTestTLS10(t *testing.T, template *clientTest) {
-	if template.config == nil {
-		template.config = testConfigClient
-	}
-	if template.config.MinVersion == 0 {
-		template.config.MinVersion = VersionTLS10
-	}
+	template.config = clientTestConfig(template, VersionTLS10)
 	runClientTestForVersion(t, template, "TLSv10", "-tls1")
 }
 
 func runClientTestTLS11(t *testing.T, template *clientTest) {
-	if template.config == nil {
-		template.config = testConfigClient
-	}
-	if template.config.MinVersion == 0 {
-		template.config.MinVersion = VersionTLS11
-	}
+	template.config = clientTestConfig(template, VersionTLS11)
 	runClientTestForVersion(t, template, "TLSv11", "-tls1_1")
 }
 
@@ -522,6 +527,9 @@ func TestHandshakeClientRSARC4(t *testing.T) {
 func TestHandshakeClientRSAAES128GCM(t *testing.T) {
 	config := testConfigClient.Clone()
 	config.CipherSuites = []uint16{TLS_RSA_WITH_AES_128_GCM_SHA256}
+	// The recorded handshake offers TLS 1.2 and 1.3 only, so say so. Every
+	// other client transcript here offers TLS 1.0 upwards.
+	config.MinVersion = VersionTLS12
 	test := &clientTest{
 		name:       "AES128-GCM-SHA256",
 		args:       []string{"-cipher", "AES128-GCM-SHA256"},
@@ -535,6 +543,8 @@ func TestHandshakeClientRSAAES128GCM(t *testing.T) {
 func TestHandshakeClientRSAAES256GCM(t *testing.T) {
 	config := testConfigClient.Clone()
 	config.CipherSuites = []uint16{TLS_RSA_WITH_AES_256_GCM_SHA384}
+	// See TestHandshakeClientRSAAES128GCM: this transcript offers TLS 1.2 up.
+	config.MinVersion = VersionTLS12
 	test := &clientTest{
 		name:       "AES256-GCM-SHA384",
 		args:       []string{"-cipher", "AES256-GCM-SHA384"},
