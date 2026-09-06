@@ -44,11 +44,16 @@ unset CDPATH	# in case user has it set
 export GOHOSTOS
 export CC
 
-# GOOS and GOARCH name the port dist test says it is testing, and every go
-# command it starts has to agree. This fork's go defaults to GOOS=cosmo, so an
-# unexported GOOS leaves each test binary an APE, which execve cannot start: a
-# shell has to read the header. That is every test on a host with no APE
-# binfmt_misc handler.
+# dist test tests the HOST port, and every go command it starts has to agree.
+# This fork's go defaults to GOOS=cosmo, so an unexported GOOS leaves each test
+# binary an APE, which execve cannot start: a shell has to read the header.
+# That is every test on a host with no APE binfmt_misc handler.
+#
+# The host values are what get exported, NOT the ones `dist env` reports in
+# GOOS/GOARCH. Those name the fork's default TARGET, which is cosmo, so
+# exporting them builds the very APEs this is here to prevent.
+GOOS=$GOHOSTOS
+GOARCH=$GOHOSTARCH
 export GOOS
 export GOARCH
 
