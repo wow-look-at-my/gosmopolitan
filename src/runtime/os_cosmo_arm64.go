@@ -688,6 +688,38 @@ func cosmoDarwinNumCPU() int32 {
 	return int32(n)
 }
 
+var sysctlKernHostname = []byte("kern.hostname\x00")
+
+// cosmoDarwinHostname reads kern.hostname, which is where macOS keeps
+// the machine's name and where a native darwin build's os.Hostname reads
+// it. Answers "" when the key cannot be read, which the caller reports
+// rather than papers over.
+func cosmoDarwinHostname() string {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return ""
+	}
+	var buf [512]byte // MAXHOSTNAMELEN is 256; a DNS name fits twice over
+	sz := uintptr(len(buf))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(&sysctlKernHostname[0])),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	if r != 0 || sz == 0 {
+		return ""
+	}
+	n := int(sz)
+	if n > len(buf) {
+		return ""
+	}
+	// sysctl counts the NUL it wrote; the string must not.
+	for n > 0 && buf[n-1] == 0 {
+		n--
+	}
+	return string(buf[:n])
+}
+
 // cosmoDarwinSysctlEnabled reads a boolean hw.optional sysctl. name must
 // be NUL-terminated. An absent key, an older Syslib, or any other failure
 // answers false, which reports the feature as absent.

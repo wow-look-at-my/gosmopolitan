@@ -30,6 +30,20 @@ func CosmoHostOS() string {
 	return "unknown"
 }
 
+// CosmoHostname returns the host's name, or "" when this host keeps it
+// somewhere the caller can already read.
+//
+// Only a macOS host answers. Linux publishes /proc/sys/kernel/hostname
+// and NT fills uname's nodename, but Apple's uname reports an empty
+// nodename on a machine whose name is set only in kern.hostname, which
+// is where os.Hostname reads it on a native darwin build.
+func CosmoHostname() string {
+	if __hostos != _HOSTXNU {
+		return ""
+	}
+	return cosmoDarwinHostname()
+}
+
 // CosmoHostDNSServers returns the nameservers the host has configured,
 // as textual addresses, or nil when this host keeps them somewhere the
 // caller can already read.

@@ -127,6 +127,30 @@ func cosmoDarwinNumCPU() int32 {
 	return int32(out)
 }
 
+// cosmoDarwinHostname reads kern.hostname through the same raw __sysctl,
+// with the numeric MIB. That is where macOS keeps the machine's name and
+// where a native darwin build's os.Hostname reads it. Answers "" when
+// the call fails, which the caller reports rather than papers over.
+func cosmoDarwinHostname() string {
+	mib := [2]uint32{_CTL_KERN, _KERN_HOSTNAME}
+	var buf [512]byte // MAXHOSTNAMELEN is 256; a DNS name fits twice over
+	nout := uintptr(len(buf))
+	_, e := cosmoXnuSyscall6(_XNU_sysctl,
+		uintptr(unsafe.Pointer(&mib[0])), 2,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&nout)),
+		0, 0)
+	if e != 0 || nout == 0 || nout > uintptr(len(buf)) {
+		return ""
+	}
+	n := int(nout)
+	// sysctl counts the NUL it wrote; the string must not.
+	for n > 0 && buf[n-1] == 0 {
+		n--
+	}
+	return string(buf[:n])
+}
+
 // XNU BSD numbers for the netpoller's two syscalls, from the tree's own
 // authority (syscall/zsysnum_darwin_amd64.go), with the SYSCALL_CLASS_UNIX
 // prefix. kevent 363 is the legacy entry, whose struct kevent is the
@@ -146,6 +170,9 @@ const (
 const (
 	_CTL_HW  = 6
 	_HW_NCPU = 3
+
+	_CTL_KERN      = 1
+	_KERN_HOSTNAME = 10
 )
 
 // cosmoXnuSyscall6 is in sys_cosmo_amd64.s. It answers ENOSYS on any
