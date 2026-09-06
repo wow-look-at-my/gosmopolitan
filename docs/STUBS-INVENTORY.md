@@ -34,13 +34,10 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 
 | # | Package | Behavior |
 |---|---------|----------|
-| 0 | every package, on the windows leg | Each fails in about a tenth of a second with a bare `exit status 2` and NO output. The test binary dies before it prints anything, so nothing here has run yet. Not diagnosed. The macos leg's wall of failures had one cause and is fixed; this is a second one. |
-| 1 | `cmd/addr2line`, `cmd/link`, `cmd/compile/internal/ssa`, `runtime` (`TestUnsafePoint`) | Each opens a linked binary with `debug/elf` or `go tool nm` and gets `bad magic number '[77 90 113 70]'`, `no symbols`, or `dwarf too short`. Those bytes are `MZqF`: the APE header. `objfile.Open` reads the sidecar now, and `debug/elf` does not, so a test that opens the file itself still sees the container. An APE that has RUN assimilates itself on a Linux host and parses fine, which is why this reproduces only on a binary nothing executed. |
-| 2 | `cmd/link` (`TestELFHeadersSorted`, `TestIssue42396`) | Each asks for a build mode the port does not have, `pie` and `-race`, and reads the refusal as a failure rather than a skip. `testenv.GOOS` is the guard the objdump tests now use. |
-| 3 | `cmd/compile/internal/test` (the PGO inlining family) | The inline decisions the golden output names do not match what the compiler produces here. Not yet diagnosed: this fork also adds loop-aware inlining. |
-| 4 | `net/http/internal/http2` (`TestServer_Request_Connect_InvalidPath`) | Panics with "running on the wrong goroutine" inside a synctest bubble. Tests are parallel by default here, and synctest is what that meets. |
-| 5 | `runtime` (`TestGoroutineProfile`) | `GoroutineProfile failed`, then SIGQUIT. Not diagnosed. |
-| 7 | `cmd/go` (`TestLinkSysoFiles`, `TestScript`) | Not diagnosed. CLAUDE.md already records `list_symlink_issue35941` as red over the whole-repo vendor submodules, which is a different thing. |
+| 0 | every package, on the windows leg | NO cosmo binary runs on that host, fizzbuzz included: fat and thin alike exit 2 and write nothing, with no arguments, with `-test.list=.`, and with a test named. The PE header is the real 3-section one in every case, so the boot header is not what differs. Exit 2 with no output is a runtime throw whose print went nowhere, which puts the failure before the NT layer caches its std handles. |
+| 1 | `net/http/internal/http2` (`TestServer_Request_Connect_InvalidPath`) | Panics with "running on the wrong goroutine" inside a synctest bubble. Tests are parallel by default here, and synctest is what that meets. |
+| 2 | `net/http` (`TestTransportReusesConns/RequestClose`) | Counts which connection a second request lands on. Not diagnosed. |
+| 3 | `go/internal/srcimporter` | Not diagnosed. |
 | 6 | `os` (`TestExecutableDeleted`) | EBUSY on removing a running APE. This is a root-only sandbox artifact: as root the staging bootstrap bind-mounts the copy over the original path, and a mount point does not unlink. A CI runner is not root, and this passes there. |
 
 ## 5. NT gaps Windows cannot close
