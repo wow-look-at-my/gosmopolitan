@@ -1368,8 +1368,11 @@ func schedinit() {
 	}
 	unlock(&sched.lock)
 
+	ntBoot("procresize done")
+
 	// World is effectively started now, as P's can run.
 	worldStarted()
+	ntBoot("schedinit done")
 
 	if buildVersion == "" {
 		// Condition should never trigger. This code just serves
@@ -2377,11 +2380,13 @@ func mstart1() {
 
 	asminit()
 	minit()
+	ntBoot("minit done")
 
 	// Install signal handlers; after minit so that minit can
 	// prepare the thread to be able to handle the signals.
 	if gp.m == &m0 {
 		mstartm0()
+		ntBoot("mstartm0 done")
 	}
 
 	if debug.dataindependenttiming == 1 {
