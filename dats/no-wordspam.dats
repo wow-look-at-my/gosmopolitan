@@ -2,11 +2,12 @@
 # markdown size budget, a paragraph word cap, a comment-run line cap, and
 # changelog phrasing by name.
 #
-# The scan covers every markdown file this fork wrote and every cosmo
-# source. Adding a path is how the rule spreads; removing one is not.
+# Markdown is scanned by glob, so a new doc is covered the day it lands.
+# Go sources are named: the fork's own files only. An upstream file the
+# fork merely tagged carries upstream's prose, which is not ours to cut.
 tests:
 	- desc: no wordspam in the fork's own markdown
-	  cmd: dats/no-wordspam.sh CLAUDE.md README.md docs/APE-BUILD.md docs/APE-STAGING.md docs/CI.md docs/INSTALL.md docs/LOOP-INLINING.md docs/OPTIONAL-PARAMS.md docs/PLATFORM-STATUS.md docs/STUBS-INVENTORY.md docs/TESTING-PARALLEL.md docs/UPREV-GO1.27.md docs/WASM.md WASM_SHORTCOMINGS.md dats/no-wordspam.dats dats/no-wordspam.sh
+	  cmd: dats/no-wordspam.sh *.md docs/*.md dats/*.dats dats/*.sh
 	  exit: 0
 
 	- desc: no wordspam in the cosmo runtime

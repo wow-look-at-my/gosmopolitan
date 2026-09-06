@@ -8,19 +8,10 @@ package syscall
 
 import "unsafe"
 
-// An APE is a shell script by construction. Its first bytes are the
-// MZqFpD header, which no unix kernel will exec, so execve answers
-// ENOEXEC unless the host carries a binfmt_misc entry for the magic -
-// which needs root, and a CI runner is not root. /bin/sh is what reads
-// that header, and misc/cosmo's exec wrappers are the same fallback
-// applied from outside. Without this, one cosmo binary cannot start
-// another: every re-exec of a test binary fails "exec format error".
-//
-// The retry is unconditional on ENOEXEC rather than gated on a read of
-// the target's first bytes. That read costs an open per exec, it cannot
-// run in the child, and a host that answers a bad image with some other
-// errno leaves the gate shut. execvp(3) hands any ENOEXEC file to the
-// shell for the same reason.
+// An APE is a shell script by construction, and its MZqFpD header is one
+// no unix kernel execs. So execve answers ENOEXEC unless the host has a
+// binfmt_misc entry for the magic, which needs root. /bin/sh reads that
+// header. Without this, one cosmo binary cannot start another.
 
 // apeShellPath is the interpreter, as a NUL-terminated C string.
 var apeShellPath = [...]byte{'/', 'b', 'i', 'n', '/', 's', 'h', 0}
