@@ -1,13 +1,13 @@
 # Run chatty tests. Assert on CONT lines.
 go test chatty_test.go -v
 
-# This fork starts every test in parallel, so the three subtests interleave and
-# finish in any order. Pinning that order would pin a race. What the framing
-# must still do is announce each subtest before its output resumes, and print
+# A subtest runs inside the t.Run that starts it, even in this fork, so each is
+# announced with RUN. One that took itself parallel would resume with CONT or
+# NAME. Either way the framing announces a subtest before its output, and prints
 # every log line exactly once.
-stdout '=== (CONT|NAME)  TestChatty/sub-0'
-stdout '=== (CONT|NAME)  TestChatty/sub-1'
-stdout '=== (CONT|NAME)  TestChatty/sub-2'
+stdout '=== (RUN|CONT|NAME) +TestChatty/sub-0'
+stdout '=== (RUN|CONT|NAME) +TestChatty/sub-1'
+stdout '=== (RUN|CONT|NAME) +TestChatty/sub-2'
 stdout -count=2 'this is sub-0'
 stdout -count=2 'this is sub-1'
 stdout -count=2 'this is sub-2'

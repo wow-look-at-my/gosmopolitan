@@ -2080,9 +2080,12 @@ func testBuildmodePIE(t *testing.T, useCgo, setBuildmodeToPIE bool) {
 }
 
 func TestUpxCompression(t *testing.T) {
-	if runtime.GOOS != "linux" ||
-		(runtime.GOARCH != "amd64" && runtime.GOARCH != "386") {
-		t.Skipf("skipping upx test on %s/%s", runtime.GOOS, runtime.GOARCH)
+	// The port, not the host: upx packs the binary the go command builds.
+	// It refuses an APE ("superfluous data between sections"), because a
+	// polyglot header is not the plain ELF its packer knows.
+	if testenv.GOOS != "linux" ||
+		(testenv.GOARCH != "amd64" && testenv.GOARCH != "386") {
+		t.Skipf("skipping upx test on %s/%s", testenv.GOOS, testenv.GOARCH)
 	}
 
 	testenv.MustHaveExecPath(t, "upx")

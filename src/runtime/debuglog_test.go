@@ -32,6 +32,9 @@ import (
 )
 
 func skipDebugLog(t *testing.T) {
+	// The runtime holds ONE debug log. Every test here resets it and reads
+	// it back, so no other test may run beside them.
+	t.Serial()
 	if runtime.DlogEnabled {
 		t.Skip("debug log tests disabled to avoid collisions with real debug logs")
 	}

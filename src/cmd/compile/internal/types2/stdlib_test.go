@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"go/build"
 	"internal/testenv"
+	"internal/vendorlist"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -438,52 +439,6 @@ func typecheckFiles(path string, filenames []string, importer Importer) (*Packag
 }
 
 // pkgFilenames returns the list of package filenames for the given directory.
-// vendorLists caches one vendor tree's modules.txt package set, by the
-// vendor directory. A nil set means the file is absent.
-var vendorLists sync.Map
-
-// vendorsPkg reports whether the distribution vendors the package in dir.
-// A vendor directory here holds whole repositories, checked out as git
-// submodules, so it also carries packages nothing in the distribution
-// imports, whose own dependencies were never vendored. modules.txt names
-// the packages that are part of the build; the rest are checkout residue.
-// A directory outside any vendor tree is always the distribution's own.
-func vendorsPkg(dir string) bool {
-	parts := strings.Split(filepath.ToSlash(dir), "/")
-	i := slices.Index(parts, "vendor")
-	if i < 0 {
-		return true
-	}
-	vendorDir := filepath.FromSlash(strings.Join(parts[:i+1], "/"))
-
-	set, ok := vendorLists.Load(vendorDir)
-	if !ok {
-		set, _ = vendorLists.LoadOrStore(vendorDir, readModulesTxt(vendorDir))
-	}
-	pkgs, _ := set.(map[string]bool)
-	if pkgs == nil {
-		return true
-	}
-	return pkgs[strings.Join(parts[i+1:], "/")]
-}
-
-// readModulesTxt reads the package paths a vendor tree's modules.txt names.
-// It answers nil when the file is absent, which is not an error: a tree
-// without one makes no claim about what it holds.
-func readModulesTxt(vendorDir string) map[string]bool {
-	data, err := os.ReadFile(filepath.Join(vendorDir, "modules.txt"))
-	if err != nil {
-		return nil
-	}
-	pkgs := make(map[string]bool)
-	for line := range strings.Lines(string(data)) {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			pkgs[line] = true
-		}
-	}
-	return pkgs
-}
 
 func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 	ctxt := build.Default
@@ -498,7 +453,10 @@ func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 	if excluded[pkg.ImportPath] {
 		return nil, nil
 	}
-	if !vendorsPkg(pkg.Dir) {
+	// src/cmd/vendor holds whole repositories, checked out as submodules,
+	// so it carries packages the distribution never vendored and cannot
+	// type-check. modules.txt names the ones that are part of the build.
+	if !vendorlist.Vendors(pkg.Dir) {
 		return nil, nil
 	}
 	if slices.Contains(strings.Split(pkg.ImportPath, "/"), "_asm") {

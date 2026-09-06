@@ -75,6 +75,7 @@ func TestDialLocal(t *testing.T) {
 }
 
 func TestDialerDualStackFDLeak(t *testing.T) {
+	t.Serial() // Counts the process's open sockets.
 	switch runtime.GOOS {
 	case "plan9":
 		t.Skipf("%s does not have full support of socktest", runtime.GOOS)

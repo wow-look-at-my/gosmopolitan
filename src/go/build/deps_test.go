@@ -254,6 +254,9 @@ var depsRules = `
 	io, os, path/filepath, strings
 	< internal/ape;
 
+	os, path/filepath, slices, strings
+	< internal/vendorlist;
+
 	# encodings
 	# core ones do not use fmt.
 	io, strconv, slices

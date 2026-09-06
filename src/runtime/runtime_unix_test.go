@@ -19,6 +19,9 @@ import (
 )
 
 func TestGoroutineProfile(t *testing.T) {
+	// Profiles every goroutine in the process into a fixed 128-record
+	// buffer, and sets GOMAXPROCS, so it runs alone.
+	t.Serial()
 	// GoroutineProfile used to use the wrong starting sp for
 	// goroutines coming out of system calls, causing possible
 	// crashes.
