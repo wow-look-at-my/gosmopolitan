@@ -49,6 +49,6 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 
 ## 6. macOS gaps Apple cannot close
 
-`Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `mknodat` with a directory descriptor are ENOSYS: Apple has no counterpart. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host, because the Linux syscall takes no flags and one APE must not answer the same call differently per host.
+`Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `mknodat` with a directory descriptor are ENOSYS: Apple has no counterpart. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host. The Linux syscall takes no flags, and one APE must not answer one call two ways.
 
 Two Linux `Statfs_t` fields have no Apple source: `Type` carries Apple's own filesystem-type number, and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
