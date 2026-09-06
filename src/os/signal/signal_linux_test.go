@@ -20,6 +20,7 @@ const prSetKeepCaps = 8
 // is blocked waiting to receive signals from the kernel. This monitors
 // for a regression vs. the fix for #43149.
 func TestAllThreadsSyscallSignals(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	if _, _, err := syscall.AllThreadsSyscall(syscall.SYS_PRCTL, prSetKeepCaps, 0, 0); err == syscall.ENOTSUP {
 		t.Skip("AllThreadsSyscall disabled with cgo")
 	}

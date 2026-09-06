@@ -102,7 +102,9 @@ type TBRun[T any] interface {
 // To run in a different set of configurations, pass a []testMode option.
 //
 // Tests call t.Parallel() by default.
-// To disable parallel execution, pass the testNotParallel option.
+// To disable parallel execution, pass the testNotParallel option. Tests are
+// parallel by default in this fork, so that option takes t.Serial: a test
+// that reads or writes a global test hook needs the process to itself.
 func run[T TBRun[T]](t T, f func(t T, mode testMode), opts ...any) {
 	t.Helper()
 	modes := []testMode{http1Mode, http2Mode, http3Mode}
@@ -127,8 +129,12 @@ func run[T TBRun[T]](t T, f func(t T, mode testMode), opts ...any) {
 			t.Fatalf("unknown option type %T", opt)
 		}
 	}
-	if t, ok := any(t).(*testing.T); ok && parallel {
-		setParallel(t)
+	if t, ok := any(t).(*testing.T); ok {
+		if parallel {
+			setParallel(t)
+		} else {
+			t.Serial()
+		}
 	}
 	for _, mode := range modes {
 		// TODO(nsh): re-enable the tests once tree re-opens.
