@@ -190,8 +190,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
-          # fizzbuzz.com boots here, and it is fat. A test binary is thin, so
-          # build fizzbuzz both ways to say which property the failure follows.
+          # fizzbuzz boots here and is fat; a test binary is thin, so build it both ways.
           for fat in 1 0; do
             GOCOSMOFAT=$fat GOOS=cosmo go build -o "$RUNNER_TEMP/fb$fat.com" testdata/fizzbuzz/fizzbuzz.go
             rc=0
