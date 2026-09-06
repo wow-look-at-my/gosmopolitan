@@ -137,7 +137,6 @@ const (
 	ntEAGAIN       = 11
 	ntENOMEM       = 12
 	ntEACCES       = 13
-	ntEFAULT       = 14
 	ntEBUSY        = 16
 	ntEEXIST       = 17
 	ntEXDEV        = 18
