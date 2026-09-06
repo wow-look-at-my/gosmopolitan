@@ -20,12 +20,21 @@ const (
 // the host cannot be asked, and the caller then keeps the payload's own
 // architecture.
 //
-// Linux and macOS need no probe: the APE boot path selects the payload
-// whose architecture matches the machine, and this fork does not run
-// under Rosetta. NT is the exception, because the APE carries only an
-// amd64 PE header, so an ARM64 Windows machine runs the amd64 payload
-// through its x86-64 emulator.
+// No host is probed. The boot path picks the payload matching the
+// machine, and the one case where it would not - an amd64 payload under
+// WoA emulation - fails to boot at all, so nothing reaches here.
+//
+// This runs in osinit, ahead of the NT layer's std handles, where a
+// wrong call is a throw that prints nowhere and exits 2.
 func cosmoHostArch() string {
+	return ""
+}
+
+// cosmoHostArchNT reads the machine from IsWow64Process2, which reports
+// it even for a process that is not under WOW64. Nothing calls it yet:
+// it is the probe an arm64 Windows bring-up needs, kept beside the
+// numbers it reads rather than rewritten from scratch then.
+func cosmoHostArchNT() string {
 	if !iswindows() || ntIsWow64Process2Fn == 0 {
 		return ""
 	}
