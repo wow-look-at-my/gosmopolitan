@@ -1848,6 +1848,7 @@ func TestOnProxyConnectResponse(t *testing.T) {
 // Issue 28012: verify that the Transport closes its TCP connection to http proxies
 // when they're slow to reply to HTTPS CONNECT responses.
 func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
+	t.Serial("the CONNECT timeout hook is one package variable, so a concurrent proxy dial takes this one instead")
 	cancelc := make(chan struct{})
 	SetTestHookProxyConnectTimeout(t, func(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(ctx)
@@ -5080,6 +5081,10 @@ func testTransportReuseConnEmptyResponseBody(t *testing.T, mode testMode) {
 
 // Issue 13839
 func TestNoCrashReturningTransportAltConn(t *testing.T) {
+	// The pending-dial hooks below are process-wide, and they count into a
+	// WaitGroup this test owns. A concurrent dial inside a synctest bubble adds
+	// to it from the bubble and the runtime kills the binary for it.
+	t.Serial("the pending-dial hooks count every dial in the process into a WaitGroup this one test owns")
 	cert, err := tls.X509KeyPair(testcert.LocalhostCert, testcert.LocalhostKey)
 	if err != nil {
 		t.Fatal(err)
@@ -7437,6 +7442,11 @@ func testProxyAuthHeader(t *testing.T, mode testMode) {
 
 // Issue 61708
 func TestTransportReqCancelerCleanupOnRequestBodyWriteError(t *testing.T) {
+	// The read-loop hook below is one process-wide variable, and the function it
+	// holds sends on a channel only this test receives from. Every other
+	// transport in the process runs it, so a concurrent test wedges its own
+	// readLoop there forever.
+	t.Serial("the read-loop hook is process-wide and blocks whoever runs it on a channel only one test drains")
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
 
