@@ -40,6 +40,9 @@ func hostIsDarwin() bool { return isdarwin() }
 // the handler has to follow the kernel rather than the port.
 func hostIsLinux() bool { return __hostos == _HOSTLINUX }
 
+// hostIsWindows reports whether the kernel under this program is NT.
+func hostIsWindows() bool { return iswindows() }
+
 // CosmoHostname returns the host's name, or "" when this host keeps it
 // somewhere the caller can already read.
 //

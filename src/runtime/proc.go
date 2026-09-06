@@ -1206,6 +1206,15 @@ func getGodebugEarly() (string, bool) {
 	const prefix = "GODEBUG="
 	var env string
 	switch goos.GOOS {
+	case "cosmo":
+		// The environment follows argv on every host but NT, where the
+		// runtime asks GetEnvironmentStringsW later. Without this,
+		// cpuinit reads no GODEBUG at all and cpu.all=off does nothing.
+		if hostIsWindows() {
+			return "", false
+		}
+		fallthrough
+
 	case "aix", "darwin", "ios", "dragonfly", "freebsd", "netbsd", "openbsd", "illumos", "solaris", "linux":
 		// Similar to goenv_unix but extracts the environment value for
 		// GODEBUG directly.
