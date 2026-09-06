@@ -651,7 +651,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sha: [051a06ba, 2b5c9490, e2f008f8, 4e8ff115, 949ffa8b, 6d4bf7e8, 964acf1f, a410cbf0]
+        # Full SHAs: actions/checkout reads a short one as a branch name and finds nothing.
+        sha:
+          - 051a06ba433924b57043e4ae4a50aea7e2d95d10
+          - 2b5c9490fe476b66526afc94ea8d6973bd89a180
+          - e2f008f824e0f543880374351e07bb750c761ff3
+          - 4e8ff115c6834470c6d56bb2587d9e56fe6d9b1b
+          - 949ffa8bbda90b998b7f04f74779e28d7d3c3fa8
+          - 6d4bf7e83be121ba03fa1bcadb30c7fbca8992bb
+          - 964acf1f17e8ca17c4647607d0e69160b9e72440
+          - a410cbf0e0a742e33262d7107af8d69ae8121a12
 
     runs-on: windows-latest
 

@@ -432,6 +432,13 @@ func ntResolve() {
 	ntVirtualFreeFn = k32sym(&ntNameVirtualFree[0])
 	ntWriteFileFn = k32sym(&ntNameWriteFile[0])
 	ntGetStdHandleFn = k32sym(&ntNameGetStdHandle[0])
+	// The std handles are cached HERE, next to the two calls that reach
+	// them, rather than at the end of this function. Everything below can
+	// throw, and a throw with no handle prints nowhere: the process exits
+	// 2 in silence and the reason for it dies with it.
+	ntStdin = ntcall(ntGetStdHandleFn, _NT_STD_INPUT_HANDLE, 0, 0, 0, 0, 0)
+	ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
+	ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
 	ntExitProcessFn = k32sym(&ntNameExitProcess[0])
 	ntExitThreadFn = k32sym(&ntNameExitThread[0])
 	ntCreateThreadFn = k32sym(&ntNameCreateThread[0])
@@ -564,9 +571,6 @@ func ntResolve() {
 		}
 	}
 
-	ntStdin = ntcall(ntGetStdHandleFn, _NT_STD_INPUT_HANDLE, 0, 0, 0, 0, 0)
-	ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
-	ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
 }
 
 // ntwrite1 is the NT leg of runtime·write1, reached through
