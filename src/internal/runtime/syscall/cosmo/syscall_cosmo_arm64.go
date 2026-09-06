@@ -108,10 +108,10 @@ type DarwinFns struct {
 	Utimensat uintptr
 	// Flock backs SYS_FLOCK. Apple's flock(2) is BSD's, which is where
 	// Linux took the LOCK_* values from, so operation passes through.
-	Flock     uintptr
-	Statfs    uintptr
-	Fstatfs   uintptr
-	Sendfile  uintptr
+	Flock    uintptr
+	Statfs   uintptr
+	Fstatfs  uintptr
+	Sendfile uintptr
 
 	// Credential, priority and resource-limit layer
 	// (proc_cosmo_arm64.go).

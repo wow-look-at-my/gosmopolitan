@@ -1031,12 +1031,21 @@ type ntOverlapped struct {
 // whole file, the range every flock caller means.
 //
 // NT locks a HANDLE where Linux locks the open file description. The two
-// agree on what matters here: both are released by the last close of the
-// thing that took the lock, and both keep a second opener out. They part
-// on an upgrade - Linux converts a shared lock to exclusive in place,
-// while NT holds the two separately, so an upgrade here unlocks first.
-// That gap is the same one flock(2) documents on Linux: an upgrade is not
-// atomic, and the lock can be lost in between.
+// agree on what matters: both keep a second opener out, and both release
+// when the thing that took the lock closes.
+//
+// They part on a RE-lock. Linux replaces the operation the fd holds, so
+// LOCK_SH after LOCK_EX, or LOCK_EX twice, is one step. NT refuses a
+// second lock over a range this handle already holds, so a re-lock here
+// unlocks first and takes the new one after. Another process can win the
+// range in that window. Linux documents the same window for a conversion
+// (flock(2): "it is not guaranteed that the conversion is atomic"), and a
+// caller that takes one lock and holds it - which is what a lock file is
+// for - never reaches this path at all.
+//
+// The uintptr(unsafe.Pointer(&ov)) conversions stay INSIDE the call
+// expressions: a uintptr held in a variable is not a reference, and ov
+// lives on the stack.
 func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {
@@ -1049,19 +1058,19 @@ func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
 		return ntFail3(ntENOSYS)
 	}
 	nb := op&_NT_LOCK_NB != 0
-	switch op &^ _NT_LOCK_NB {
+	mode := op &^ _NT_LOCK_NB
+	switch mode {
 	case _NT_LOCK_SH, _NT_LOCK_EX, _NT_LOCK_UN:
 	default:
 		return ntFail3(ntEINVAL)
 	}
 	var ov ntOverlapped
-	povl := uintptr(unsafe.Pointer(&ov))
-	if op&^_NT_LOCK_NB == _NT_LOCK_UN {
+	if mode == _NT_LOCK_UN {
 		r, werr := ntcallSE(ntUnlockFileExFn, e.handle, 0,
-			_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0, 0)
-		KeepAlive(&ov)
+			_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+			uintptr(unsafe.Pointer(&ov)), 0, 0)
 		if r == 0 {
-			// Unlocking a file this handle never locked is a no-op on
+			// Unlocking what this handle never locked is a no-op on
 			// Linux, so do not turn NT's complaint into an error.
 			if werr == _NT_ERROR_NOT_LOCKED {
 				return 0, 0, 0
@@ -1070,21 +1079,21 @@ func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
 		}
 		return 0, 0, 0
 	}
-	// An exclusive request over a shared one this handle already holds
-	// would deadlock against itself, so drop what is held first. The
-	// unlock is best-effort: it fails only when nothing was held.
+	// Drop whatever this handle holds, per the re-lock note above. It
+	// fails when nothing was held, which is the ordinary first-lock case.
 	ntcallSE(ntUnlockFileExFn, e.handle, 0,
-		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0, 0)
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+		uintptr(unsafe.Pointer(&ov)), 0, 0)
 	flags := uintptr(0)
-	if op&^_NT_LOCK_NB == _NT_LOCK_EX {
+	if mode == _NT_LOCK_EX {
 		flags |= _NT_LOCKFILE_EXCLUSIVE_LOCK
 	}
 	if nb {
 		flags |= _NT_LOCKFILE_FAIL_IMMEDIATELY
 	}
 	r, werr := ntcallSE(ntLockFileExFn, e.handle, flags, 0,
-		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0)
-	KeepAlive(&ov)
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+		uintptr(unsafe.Pointer(&ov)), 0)
 	if r == 0 {
 		// LOCK_NB's whole contract is this errno: a caller reads
 		// EWOULDBLOCK as "somebody else holds it" and anything else as a

@@ -31,10 +31,10 @@
 
 // Linux amd64 numbers for the metadata wave, as
 // syscall/zsysnum_cosmo_amd64.go records them.
+#define SYS_flock		73
 #define SYS_fsync		74
 #define SYS_truncate		76
 #define SYS_ftruncate		77
-#define SYS_flock		73
 #define SYS_fchdir		81
 #define SYS_fchmod		91
 #define SYS_fchown		93
@@ -94,11 +94,11 @@
 #define XNU_fsync		0x200005f	// BSD 95
 #define XNU_setpriority		0x2000060	// BSD 96
 #define XNU_getpriority		0x2000064	// BSD 100
-#define XNU_flock		0x2000083	// BSD 131
 #define XNU_fchown		0x200007b	// BSD 123
 #define XNU_fchmod		0x200007c	// BSD 124
 #define XNU_setreuid		0x200007e	// BSD 126
 #define XNU_setregid		0x200007f	// BSD 127
+#define XNU_flock		0x2000083	// BSD 131
 #define XNU_getpgid		0x2000097	// BSD 151
 #define XNU_setgid		0x20000b5	// BSD 181
 #define XNU_getrlimit		0x20000c2	// BSD 194
