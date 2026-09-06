@@ -158,7 +158,7 @@ The emulation writes exactly the 36 bytes the kernel writes. That is the `struct
 
 **macOS-Intel** takes `flock`, `fdatasync` and `sync` in the same wave. All three are pass-throughs. Each BSD number comes from `zsysnum_darwin_amd64.go`. `ioctl`, `getrusage` and `gettimeofday` stay ENOSYS there. Section 6b gives the reason for the `*at` family, and it applies here. Each needs real control flow, such as a request table or a struct conversion. That path is assembly that issues raw XNU syscalls. No runner can test it.
 
-**NT** takes `flock` only. `ioctl`, `getrusage`, `gettimeofday` and `sync` have no Win32 counterpart in the emulation yet. `fdatasync` already maps to `FlushFileBuffers`.
+**NT** takes `flock` and `sync`. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
 
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 

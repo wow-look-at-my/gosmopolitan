@@ -89,6 +89,7 @@ const (
 	ntSysKill       = 62
 	ntSysFcntl      = 72
 	ntSysFlock      = 73
+	ntSysSync       = 162
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
 	ntSysTruncate   = 76
@@ -367,6 +368,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuFsync(int32(a1))
 	case ntSysFlock:
 		return ntEmuFlock(int32(a1), int32(a2))
+	case ntSysSync:
+		return ntEmuSync()
 	case ntSysFchmod:
 		return ntEmuFchmod(int32(a1))
 	case ntSysFchmodat:
@@ -1013,6 +1016,37 @@ func ntEmuFsync(fd int32) (r1, r2, errno uintptr) {
 	r, werr := ntcallSE(ntFlushFileBuffersFn, e.handle, 0, 0, 0, 0, 0, 0)
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
+	}
+	return 0, 0, 0
+}
+
+// ntEmuSync emulates sync(2) by flushing every open file this process
+// holds, which is the part of "flush everything" an emulation can reach.
+// NT has no whole-system flush, and FlushFileBuffers is per handle.
+//
+// sync(2) returns void on Linux and reports nothing, so a failed flush
+// has no channel to travel down. That is the syscall's own contract
+// rather than a swallowed error: a caller who needs to know uses fsync
+// on the descriptor it cares about.
+//
+// The handles are copied out under the lock and flushed after it is
+// released. A flush can block, and the fd table must not be held while
+// it does.
+func ntEmuSync() (r1, r2, errno uintptr) {
+	handles := make([]uintptr, 0, ntFDMax)
+	lock(&ntFDLock)
+	for fd := int32(0); fd < ntFDMax; fd++ {
+		e := &ntFDTable[fd]
+		if e.kind == ntFDFile && e.handle != 0 {
+			handles = append(handles, e.handle)
+		}
+	}
+	unlock(&ntFDLock)
+
+	if ntFlushFileBuffersFn != 0 {
+		for _, h := range handles {
+			ntcallSE(ntFlushFileBuffersFn, h, 0, 0, 0, 0, 0, 0)
+		}
 	}
 	return 0, 0, 0
 }
