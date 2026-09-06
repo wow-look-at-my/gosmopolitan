@@ -47,6 +47,7 @@ func testCreate(t *testing.T, dir string) {
 	// Now check it.
 	ar = openArchive(name, os.O_RDONLY, []string{helloFile.name})
 	var buf strings.Builder
+	t.Serial()
 	stdout = &buf
 	verbose = true
 	defer func() {
@@ -91,6 +92,7 @@ func TestTableOfContents(t *testing.T) {
 
 	// Now print it.
 	var buf strings.Builder
+	t.Serial()
 	stdout = &buf
 	verbose = true
 	defer func() {

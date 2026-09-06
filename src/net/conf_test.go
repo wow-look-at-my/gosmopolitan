@@ -386,6 +386,7 @@ func TestConfHostLookupOrder(t *testing.T) {
 		},
 	}
 
+	t.Serial()
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 	defer setSystemNSS(getSystemNSS(), 0)

@@ -878,6 +878,7 @@ func TestLookupContextCancel(t *testing.T) {
 	mustHaveExternalNetwork(t)
 	testenv.SkipFlakyNet(t)
 
+	t.Serial()
 	origTestHookLookupIP := testHookLookupIP
 	defer func() {
 		dnsWaitGroup.Wait()

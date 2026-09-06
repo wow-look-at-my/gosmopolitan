@@ -70,6 +70,7 @@ const (
 	ntSysWritev     = 20
 	ntSysDup        = 32
 	ntSysGetpid     = 39
+	ntSysSendfile   = 40
 	ntSysSocket     = 41
 	ntSysConnect    = 42
 	ntSysSendto     = 44
@@ -393,6 +394,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuGetrandom(unsafe.Pointer(a1), a2)
 	case ntSysPipe2:
 		return ntEmuPipe2((*[2]int32)(unsafe.Pointer(a1)), int32(a2))
+	case ntSysSendfile:
+		return ntEmuSendfile(int32(a1), int32(a2), (*int64)(unsafe.Pointer(a3)), a4)
 	case ntSysWait4:
 		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
 

@@ -28,7 +28,7 @@ import (
 // has not modified the source or destination,
 // and the caller should perform the copy using a fallback implementation.
 func SendFile(dstFD *FD, src uintptr, size int64) (n int64, err error, handled bool) {
-	if goos := runtime.GOOS; goos == "linux" || goos == "android" {
+	if sendfileIsLinuxShaped {
 		// Linux's sendfile doesn't require any setup:
 		// It sends from the current position of the source file and
 		// updates the position of the source after sending.
@@ -131,10 +131,11 @@ func sendFile(dstFD *FD, src int, offset *int64, size int64) (written int64, err
 }
 
 func sendFileChunk(dst, src int, offset *int64, size int, written int64) (n int, err error) {
-	switch runtime.GOOS {
-	case "linux", "android":
+	if sendfileIsLinuxShaped {
 		// The offset is always nil on Linux.
-		n, err = syscall.Sendfile(dst, src, offset, size)
+		return syscall.Sendfile(dst, src, offset, size)
+	}
+	switch runtime.GOOS {
 	case "solaris", "illumos":
 		// Trust the offset, not the return value from sendfile.
 		start := *offset

@@ -1648,6 +1648,7 @@ func TestSystemRootsError(t *testing.T) {
 		t.Skip("Windows and darwin do not use (or support) systemRoots")
 	}
 
+	t.Serial()
 	defer func(oldSystemRoots *CertPool) { systemRoots = oldSystemRoots }(systemRootsPool())
 
 	opts := VerifyOptions{
