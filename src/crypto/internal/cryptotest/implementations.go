@@ -14,6 +14,19 @@ import (
 	"testing"
 )
 
+// selecting runs f with pkg set to one implementation. The selection is a
+// package global and tests are parallel by default in this fork, so the
+// subtest makes the choice itself and holds the process while it uses it. The
+// loop below cannot make it: t.Run returns at once, and the next turn of the
+// loop selects again before the subtest reads anything.
+func selecting(pkg, name string, f func(t *testing.T)) func(t *testing.T) {
+	return func(t *testing.T) {
+		t.Serial()
+		impl.Select(pkg, name)
+		f(t)
+	}
+}
+
 // TestAllImplementations runs the provided test function with each available
 // implementation of the package registered with crypto/internal/impl. If there
 // are no alternative implementations for pkg, f is invoked directly once.
@@ -34,7 +47,7 @@ func TestAllImplementations(t *testing.T, pkg string, f func(t *testing.T)) {
 
 	for _, name := range impls {
 		if available := impl.Select(pkg, name); available {
-			t.Run(name, f)
+			t.Run(name, selecting(pkg, name, f))
 		} else {
 			t.Run(name, func(t *testing.T) {
 				// Report an error if we're on the most capable builder for the
@@ -50,7 +63,7 @@ func TestAllImplementations(t *testing.T, pkg string, f func(t *testing.T)) {
 
 	// Test the generic implementation.
 	impl.Select(pkg, "")
-	t.Run("Base", f)
+	t.Run("Base", selecting(pkg, "", f))
 }
 
 func flagshipBuilder() bool {
