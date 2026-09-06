@@ -5,11 +5,15 @@
 #
 # The toolchain must already be built: run make.bash first.
 tests:
+	# The two readings differ on purpose: a constant is the PORT this was
+	# built for (cosmo/amd64) and a plain read is the HOST it booted on
+	# (linux/amd64 here). GOARCH agrees either way, which is what the
+	# `unaligned` shape in the wild is really asking.
 	- desc: a const over runtime.GOARCH compiles and reports the port
 	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; go run testdata/dynconst/dynconst.go
 	  outputs:
 		stdout:
-			- "const linux/amd64"
+			- "const cosmo/amd64"
 			- "read linux/amd64"
 			- "unaligned true"
 

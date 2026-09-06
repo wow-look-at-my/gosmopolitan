@@ -31,16 +31,11 @@ func setGOOS() {
 // GOARCH is the running program's architecture target:
 // one of 386, amd64, arm, s390x, and so on.
 //
-// A variable for the same reason as GOOS. The loader picks the payload
-// whose architecture matches the machine, so this equals the compiled
-// one on every host that boots today. It stops being equal the moment a
-// payload runs under emulation, and then the honest answer is the
-// machine - which is why this is read at startup rather than compiled in.
-//
-// Cost: `const x = runtime.GOARCH == "amd64"` is a compile error against
-// a variable, and third-party code writes that (golang.org/x/crypto).
-// Only the compiler can serve both, by folding the build value in a
-// constant context while a plain read still loads the variable.
+// A variable for the same reason as GOOS: a payload can run on a machine
+// of another architecture, and then the honest answer is the machine.
+// `const x = runtime.GOARCH == "amd64"` still compiles - the type checker
+// folds the build value where a constant is required. See
+// cmd/compile/internal/types2/dynconst.go.
 var GOARCH string = goarch.GOARCH
 
 func setGOARCH() {

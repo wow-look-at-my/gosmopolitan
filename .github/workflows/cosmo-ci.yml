@@ -187,6 +187,14 @@ jobs:
         with:
           tests: dats/goos-readonly.dats
 
+      # Both name the host, and a const over either still has to compile.
+      - name: GOOS and GOARCH fold in a constant
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 5
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/dynamic-const.dats
+
       # A host ELF, Mach-O or PE leaving a build means a port went missing.
       - name: Every emitted binary is an APE or wasm
         if: matrix.build-os == 'ubuntu-latest'
