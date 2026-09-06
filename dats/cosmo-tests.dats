@@ -9,8 +9,8 @@ tests:
 		stdout:
 			- "ok  \tinternal/runtime/syscall/cosmo"
 
-	- desc: the runtime's Apple ABI pins and signal tables
-	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay' runtime
+	- desc: the runtime's Apple ABI pins, signal tables and the NT DNS layout pin
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay|TestNTFixedInfoLayout' runtime
 	  outputs:
 		stdout:
 			- "ok  \truntime"

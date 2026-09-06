@@ -52,15 +52,6 @@ subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build
 still writes a sidecar per payload it carries, and that the amd-only pair
 has no `.aarch64.elf`.
 
-**APE merge unit tests (linker + go command).** Covers the
-`-apefat`/`-apestrip`/`-apedbg` merge logic and cmd/go's `GOCOSMOSTRIP` /
-`-ldflags` strip detection. One leg is enough. `GOOS=linux` pin: the fork's
-`go` defaults `GOOS=cosmo`, and these are host-run unit tests. Observed
-~40s (test-package compile). The platform table both commands parse
-`GOCOSMOPLATFORMS` and `-apeplatforms` through, and the `go env` readouts a
-consumer probes to tell an aware toolchain from one that ignores the
-selection, is load-bearing outside this repo, so it's gated here.
-
 **GOOS=cosmo package tests (dats).** `dats/cosmo-tests.dats`, run through
 the org's `wow-look-at-my/dats@master` action. Three commands, each
 `GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec
@@ -71,53 +62,35 @@ layout. The runtime commands cover the Apple itimerval ABI pins and the
 timeval translation behind the darwin SIGPROF setitimer dispatch. The
 `syscall` command covers the macOS statfs/utsname struct conversions -
 which live in package `syscall` because the Apple buffers are far past
-the emulation's nosplit budget - and the `/proc/self/auxv` shim. Two of
-the three name the tests they cover rather than running the whole
-package, and a name list is a test-selection decision: it belongs in the
-suite, where an engineer can run it, not in a workflow step. Observed
-~75s warm.
+the emulation's nosplit budget - and the `/proc/self/auxv` shim. The
+runtime command also pins the iphlpapi FIXED_INFO offsets
+`os_cosmo_nt_dns.go` walks, where a wrong offset reads plausible garbage
+rather than failing. Two of the three name the tests they cover rather
+than running the whole package, and a name list is a test-selection
+decision: it belongs in the suite, where an engineer can run it, not in a
+workflow step. Observed ~75s warm.
 
-**Fork-divergence guardrails (go/build policy, moddeps, distpack naming).** go/build's
-structural tests are what keep a fork's edits honest across an upstream
-uprev, and nothing was running them: the shebang step only runs `-run
-TestReadGoInfo`. Both had silently gone red - `TestVendorPackages` against
-the zstd vendored for cosmo DWARF compression, `TestDependencies` against
-`internal/runtime/syscall/cosmo` - and an uprev is exactly when a stale
-dependency policy stops catching real layering breaks. `cmd/internal/moddeps`
-is the matching check for `src/` + `src/cmd` module/vendor consistency (see
-CLAUDE.md's vendoring runbook).
-
-**Host-nameserver path (net) and the NT DNS ABI pins (runtime).** An NT host
-publishes its resolvers where `net` cannot open them, so a cosmo binary there
-took `dnsconfig_unix.go`'s missing-file fallback and asked localhost - see
-DEBUGGING.md's off-host HTTPS section. The `net` half of this step covers the
-seam that replaced that fallback; the `runtime` half pins the iphlpapi
-FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, which only a Windows host ever
-executes and where a wrong offset reads plausible garbage rather than failing.
-The end-to-end resolve is runtimeprobe's `dns` check, which every test runner
-executes.
-
-**Loop-aware inlining tests.** See docs/LOOP-INLINING.md for the loop cost
-discount, the loop-nested call site budget, and the per-caller growth
-allowance. Host-run compiler tests, so GOOS is pinned away from cosmo. The
-inlining regress tests assert that more inlining does not break the
-existing expectations for what does and does not get inlined.
-
-**The whole test suite (run.bash).** Every other step here names the tests
-it wants, and a test nobody names never runs. That makes green a statement
-about the list rather than about the tree, and it is how three
-parameter-default tests shipped covered by nothing. `run.bash` is the
+**The whole test suite (run.bash).** Every other test step here used to
+name the tests it wanted, and a test nobody names never runs. That makes
+green a statement about the list rather than about the tree, and it is how
+the parameter-default tests shipped covered by nothing. `run.bash` is the
 distribution's own answer: it execs `go tool dist test -rebuild`, which is
 the single call that runs everything - the stdlib and `cmd` packages, the
 `test/` corpus through `cmd/internal/testdir`, and the toolchain's own
 harnesses. A plain `go test` reaches none of the last two.
 
+It runs on every build leg, not one. Upstream runs the same suite on each
+builder because a port is a host, and this fork's whole subject is code
+that behaves differently per host. Windows takes `run.bat`, which is the
+same `dist test` call.
+
 It runs in short mode. `dist test` reads `GO_BUILDER_NAME`, and a nameless
 builder gets the short set, which is what upstream's ordinary builders run.
 
-Read a failure here as news rather than as noise. Nothing in this workflow
-has ever run the suite, so its first green is also the first evidence that
-the fork's own edits leave the distribution's tests standing.
+One failure is known and structural: cmd/go's `list_symlink_issue35941`
+walks `src/cmd/vendor` on disk and cannot resolve the whole-repo
+submodules' own commands. See CLAUDE.md's vendoring section for why a
+pruned vendor tree is not available here.
 
 ## test job
 

@@ -372,37 +372,40 @@ amd64 and cosmo arm64 payloads, stripped by default, with apetest's
 every build platform (sidecars are not uploaded; the artifact ships the bare binaries,
 so apetest's TestDebugSidecars skips on the test runners). Structural
 format tests run everywhere; the full execution suite (fizzbuzz +
-runtimeprobe) runs on all three test runners, and the ubuntu build leg
-also runs the cmd/link APE-merge/debug-view and cmd/go
-strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`,
-which runs the GOOS=cosmo package tests through the misc/cosmo wrappers:
-internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal
-translation tables, epoll layout), the runtime's Apple itimerval ABI pins and
-timeval translation behind the darwin SIGPROF setitimer dispatch, and the
-syscall package's Apple struct conversions plus the /proc/self/auxv shim. The
-name lists live in that suite, where an engineer can run them, rather than in a
-workflow step. Every build leg additionally
-asserts, right after make.bash, that `compile -V=full` reports a
-content-derived `buildID=` (the cross-build cache-poisoning guard —
-see the tool-build-ID bullet in Fork Gotchas).
+runtimeprobe) runs on all three test runners.
 
-The ubuntu build leg also carries the two uprev guardrails (2026-07-26):
+**Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs
+`go tool dist test -rebuild`. That is the distribution's own all-tests entry
+point and the only test gate here: the stdlib and `cmd` packages, the `test/`
+corpus through `cmd/internal/testdir`, and the toolchain's own harnesses. A
+plain `go test` reaches none of the last two. It replaced a set of steps that
+each named the tests it wanted, which made green a statement about the name
+lists rather than about the tree. Never reintroduce a `-run` list here: a test
+nobody names never runs. Upstream runs the same suite per builder, and a port
+is a host, so this fork runs it on each of the three. `dist test` reads
+`GO_BUILDER_NAME`, and a nameless builder gets the short set. Known red:
+cmd/go's `list_symlink_issue35941`, over the whole-repo vendor submodules.
 
-- **`GOOS=cosmo go build std` for amd64 and arm64.** The execution suite
-  compiles only what fizzbuzz and runtimeprobe import — 84 of the 358 std
-  packages under cosmo — so an upstream re-partition of a platform file
-  (the go1.26.4 `fchmodat_linux.go`/`fchmodat_other.go` split, statat_unix.go's
-  new tag) drops cosmo off the new build tags with no conflict and no red
-  test. crypto/x509, archive/tar and net/http carry exactly those tags.
-  ~40s cold for both arches.
-- **`go test go/build cmd/internal/moddeps`.** `TestDependencies` is the
-  only mechanical check that the fork's new packages sit where the tree's
-  layering allows, and `TestVendorPackages` the only one guarding what may
-  be vendored; both had silently gone red (see DEBUGGING.md 2026-07-26).
-  Only `-run TestReadGoInfo` was running before.
+The ubuntu leg keeps `dats/cosmo-tests.dats`, which runs the GOOS=cosmo package
+tests through the misc/cosmo wrappers: internal/runtime/syscall/cosmo (darwin
+sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the
+runtime's Apple itimerval ABI pins, the timeval translation behind the darwin
+SIGPROF setitimer dispatch, the iphlpapi FIXED_INFO offsets, and the syscall
+package's Apple struct conversions plus the /proc/self/auxv shim. Those name
+lists live in the suite, where an engineer can run them, rather than in a
+workflow step. Every build leg additionally asserts, right after make.bash,
+that `compile -V=full` reports a content-derived `buildID=` (the cross-build
+cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas).
 
-Run both locally before proposing an uprev — they are what turn a clean
-merge into a verified one.
+The ubuntu build leg also carries the uprev guardrail `GOOS=cosmo go build std`
+for amd64 and arm64 (2026-07-26). The execution suite compiles only what
+fizzbuzz and runtimeprobe import — 84 of the 358 std packages under cosmo — so
+an upstream re-partition of a platform file (the go1.26.4
+`fchmodat_linux.go`/`fchmodat_other.go` split, statat_unix.go's new tag) drops
+cosmo off the new build tags with no conflict and no red test. crypto/x509,
+archive/tar and net/http carry exactly those tags. ~40s cold for both arches.
+Run it locally before proposing an uprev — it is what turns a clean merge into
+a verified one.
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
 execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
