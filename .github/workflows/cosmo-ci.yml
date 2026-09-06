@@ -218,9 +218,9 @@ jobs:
             "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
             echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
           done
-          # Published master toolchains, oldest first: the first version whose fizzbuzz exits 2 names the release that broke the NT boot.
+          # Published master toolchains, oldest first: the first fizzbuzz to exit 2 names the release that broke the NT boot. tar's rc is ignored, not its output: these tarballs carry one symlink windows refuses, well after go/bin/go.
           tmp="$(cygpath -u "$RUNNER_TEMP")"
-          for v in 393 411 424 441 455 470; do
+          for v in 411 424 441 455 470 476; do
             d="$tmp/gt$v"
             mkdir -p "$d"
             rc=0
@@ -232,7 +232,7 @@ jobs:
             rc=0
             tar --force-local -xzf "$d/gt.tgz" -C "$d" || rc=$?
             rm -f "$d/gt.tgz"
-            if [ "$rc" != 0 ] || [ ! -x "$d/go/bin/go" ]; then
+            if [ ! -x "$d/go/bin/go" ]; then
               echo "v$v untar exit=$rc (no go/bin/go)"
               continue
             fi
