@@ -670,7 +670,11 @@ rtsigprocmask_darwin:
 	MOVL	$0xf3, 0xf3
 	RET
 rtsigprocmask_nt:
-	RET
+	// Unreachable: sigprocmask routes NT hosts through ntSigprocmask,
+	// which keeps the mask the self-delivery path consults. This used to
+	// return success while blocking nothing, so a critical section that
+	// had just masked every signal could still be reentered by one.
+	MOVL	$0xf5, 0xf5
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	CHECK_WINDOWS(rt_sigaction_nt)
@@ -696,11 +700,13 @@ rt_sigaction_darwin:
 	MOVL	$0, ret+32(FP)
 	RET
 rt_sigaction_nt:
-	// NT wave 1: no signal machinery; return success so
-	// sysSigaction's "sigaction failed" throw stays quiet (the same
-	// benign lie the darwin stub above tells).
-	MOVL	$0, ret+32(FP)
-	RET
+	// Unreachable: sysSigaction routes NT hosts through ntSigaction
+	// (os_cosmo_nt_sig.go), which records the handler the self-delivery
+	// path then consults. This used to return success without recording
+	// anything, which is the same lie the darwin stub above told.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf4, 0xf4
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	MOVL	sig+8(FP),   DI

@@ -651,7 +651,28 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 mincore_darwin:
-	// macOS ARM64: mincore not in Syslib, return -1 (ENOSYS)
+	// The Syslib has no mincore entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym like getpid above. The old
+	// stub returned -1 unconditionally, and its one caller
+	// (sysauxv's page-size probe, os_cosmo.go) reads a failure as "try
+	// the next size" - so every probe failed and physPageSize fell back
+	// to 256K. The APE loader supplies an auxv on macOS, so that probe
+	// is not reached today; a wrong page size is not a thing to leave
+	// lying behind a branch that might be.
+	MOVD	runtime·cosmoDarwinMincoreFn(SB), R12
+	CBZ	R12, mincore_darwin_none
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	MOVD	dst+16(FP), R2
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc mincore returns 0 or -1 with errno; the Linux
+	// syscall returns 0 or a negative errno. The caller only tests
+	// against zero, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+mincore_darwin_none:
 	MOVW	$-1, R0
 	MOVW	R0, ret+24(FP)
 	RET

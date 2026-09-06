@@ -501,6 +501,15 @@ func sigprocmask(how int32, new, old *sigset) {
 		darwinSigprocmask(how, new, old)
 		return
 	}
+	if iswindows() {
+		// NT has no kernel signal mask. The runtime keeps its own and
+		// the self-delivery path consults it (os_cosmo_nt_sig.go); the
+		// asm branch this used to reach returned success while blocking
+		// nothing, so a critical section that had just masked every
+		// signal could still be reentered by one.
+		ntSigprocmask(how, new, old)
+		return
+	}
 	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
 }
 

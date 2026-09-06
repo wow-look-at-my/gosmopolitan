@@ -286,6 +286,7 @@ var (
 	dlsymNameFdatasync = []byte("fdatasync\x00")
 	dlsymNameSync      = []byte("sync\x00")
 	dlsymNameIoctl     = []byte("ioctl\x00")
+	dlsymNameMincore   = []byte("mincore\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
@@ -333,6 +334,12 @@ var cosmoDarwinErrorFn uintptr
 // the runtime's own fcntl on darwin. Zero when unresolved.
 var cosmoDarwinFcntlFn uintptr
 
+// cosmoDarwinMincoreFn is Apple libc mincore, resolved at startup and
+// read by ·mincore's darwin branch in sys_cosmo_arm64.s. Zero when
+// unresolved, which that branch reports as a failure rather than
+// answering for a page it never asked about.
+var cosmoDarwinMincoreFn uintptr
+
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -354,6 +361,7 @@ func osArchInit() {
 	cosmoDarwinKqueueFn = cosmoDlsym(&dlsymNameKqueue[0])
 	cosmoDarwinKeventFn = cosmoDlsym(&dlsymNameKevent[0])
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
+	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
