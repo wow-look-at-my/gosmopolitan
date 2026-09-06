@@ -1145,11 +1145,13 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	MOVW	R0, ret+40(FP)
 	RET
 futex_darwin:
-	// macOS: futex not available, use dispatch_semaphore
-	// This is a simplified implementation for basic cases
-	// For now, return ENOSYS to indicate not supported
-	// The Go runtime will need alternative synchronization
-	MOVW	$-38, R0	// ENOSYS
+	// Unreachable. cosmo/arm64 builds lock_sema.go, so an M parks on the
+	// Syslib's pthread condition variables, and futexsleep/futexwakeup
+	// (os_cosmo.go) branch on isdarwin() before they reach here. A crash
+	// poke rather than an errno: a caller that enters this assembly
+	// directly has found a hole, and an ENOSYS would let it pass.
+	MOVD	$0xf9, R0
+	MOVD	R0, (R0)
 	MOVW	R0, ret+40(FP)
 	RET
 
