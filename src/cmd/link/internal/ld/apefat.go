@@ -16,18 +16,14 @@ import (
 // GOOS=cosmo binaries (at most one per architecture; each either an APE
 // produced by this linker or a raw ELF) into a single APE at outfile,
 // skipping normal linking entirely. Two inputs give a fat APE; one input
-// re-emits a single-architecture APE, which is how a build restricted to
-// one architecture still gets the stripping, sidecars and platform-filtered
-// header a fat build gets.
+// re-emits a single-architecture APE, so a build restricted to one
+// architecture still gets a fat build's stripping, sidecars and header.
 //
-// With -apedbg, each input's pristine ELF image (symbol table and DWARF
-// intact) is first written to a debug sidecar beside outfile; with
-// -apestrip, each embedded payload is then reduced to the file span its
-// program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. -apedbgmode selects how much debug info the
-// sidecars (and, for compact, the output itself) carry; see apedebug.go.
-// The policy for when cmd/go passes these flags lives in
-// cmd/go/internal/work.cosmoMergeArgs.
+// With -apedbg each input's pristine ELF goes to a sidecar beside
+// outfile; with -apestrip each payload is then cut to the span its
+// program headers reference. -apedbgmode selects how much the sidecars
+// carry (apedebug.go); work.cosmoMergeArgs decides when cmd/go passes
+// these flags.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")

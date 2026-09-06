@@ -17,6 +17,10 @@ tests:
 	  cmd: dats/no-wordspam.sh src/internal/runtime/syscall/cosmo/*.go src/syscall/*cosmo*.go src/internal/poll/sendfile_shape*.go
 	  exit: 0
 
+	- desc: no wordspam in the fork's own std packages
+	  cmd: dats/no-wordspam.sh src/internal/ape/*.go src/cmd/internal/cosmoape/*.go src/cmd/internal/objfile/ape.go src/cmd/link/internal/ld/ape*.go
+	  exit: 0
+
 	- desc: the scanner refuses a paragraph over the cap
 	  cmd: printf 'x %.0s' $(seq 1 200) > "$TMPDIR/spam.md"; dats/no-wordspam.sh "$TMPDIR/spam.md"; test $? -eq 2
 	  exit: 0

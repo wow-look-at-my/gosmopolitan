@@ -19,20 +19,15 @@ import (
 	"text/template"
 )
 
-// APE (Actually Portable Executable) format implementation
-// Based on the specification at: ape/specification.md
-//
-// APE creates polyglot executables that work on multiple OSes:
-// - Linux: Uses embedded ELF header (encoded as octal in printf)
-// - macOS x86-64: Uses dd command to copy Mach-O header backward
-// - macOS ARM64: Runs the arm64 payload natively via the embedded APE
-//   loader source (compiled with cc on first run); no Rosetta involved
-// - Windows: A real PE header maps the embedded cosmo amd64 image and
-//   enters the runtime's NT boot stub through loader-resolved kernel32
-//   imports; the stub joins the common runtime boot with the host
-//   marked as NT (rt0_cosmo_nt_amd64.s). arm64-only APEs keep a
-//   parseable do-nothing stub PE header instead.
-// - Windows shell (MSYS/Cygwin): Delegates to cmd.exe for PE execution
+// APE (Actually Portable Executable), per ape/specification.md. One
+// polyglot boots on several hosts:
+// - Linux: an embedded ELF header, written by printf in octal.
+// - macOS x86-64: dd copies the Mach-O header backward.
+// - macOS ARM64: the embedded loader source, compiled by cc on first run.
+// - Windows: a real PE header maps the amd64 image and enters the NT boot
+//   stub (rt0_cosmo_nt_amd64.s). An arm64-only APE keeps a do-nothing
+//   stub header, which stays parseable as a PE.
+// - Windows shell (MSYS/Cygwin): cmd.exe runs the PE.
 
 const (
 	// APE header must be page-aligned for ELF loading
@@ -256,12 +251,10 @@ func writeAPEFile(outfile string, payloads []*apePayload) {
 // extends past the payload's loadable span by up to FileAlignment-1 bytes
 // of zero padding.
 //
-// Whether the file covers that tail used to be luck: an unstripped payload
-// carries its debug tail past it, and in a fat APE the next payload's
-// alignment padding covers it. A STRIPPED amd64 payload with nothing after
-// it ends exactly at its loadable span, leaving the PE header referencing
-// bytes past EOF - which the NT loader rejects outright ("%1 is not a valid
-// Win32 application"), the whole image, not just that section.
+// The file must cover that tail. A STRIPPED amd64 payload with nothing
+// after it ends exactly at its loadable span, and a PE header that then
+// references bytes past EOF makes the NT loader reject the whole image
+// ("%1 is not a valid Win32 application").
 func apePEFileEnd(payloads []*apePayload) uint64 {
 	for _, p := range payloads {
 		if p.arch != sys.AMD64 {
@@ -325,21 +318,13 @@ func printfBlob(blob []byte) string {
 // built by an older linker keeps its own directory rather than reading one
 // written to a different shape.
 //
-// Fixed at /tmp. No environment variable is read to find it: TMPDIR and
-// HOME are both caller-supplied and neither can be trusted to exist, to
-// name a writable directory, or even to name a real per-user one. A
-// container run as a numeric UID with no matching /etc/passwd entry gets a
-// non-empty HOME anyway -- set by the runtime itself to "/" -- confirmed
-// directly against Docker's own `--user <uid>:<gid>` default, and TMPDIR
-// is just as easy for a caller to leave unset, point at something
-// unwritable, or forget entirely. /tmp is reliably world-writable (mode
-// 1777) on virtually every host this binary runs on; nothing else is a
-// safer bet with zero information about the caller's environment.
+// Fixed at /tmp, and no environment variable is read to find it. TMPDIR
+// and HOME are caller-supplied: either can be unset, unwritable, or not
+// per-user at all, and a container run by numeric UID gets HOME="/" from
+// the runtime itself. /tmp is world-writable on virtually every host.
 //
 // apeUIDSuffix stands in for the per-user isolation a real HOME would
-// give this path: it keeps one user's staged copies out of a path another
-// user's run would also resolve to, without asking the environment for
-// anything.
+// give, keeping one user's staged copies out of another user's path.
 var apeRunDir = "/tmp/.ape-run-1" + apeUIDSuffix
 
 // apeUIDSuffix is a shell command substitution for the running user's
@@ -351,46 +336,18 @@ var apeRunDir = "/tmp/.ape-run-1" + apeUIDSuffix
 // stage at all.
 const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 
-// writeStagedCopy emits the shell that gives the host a runnable copy of the
-// APE at "$p", and never touches the APE itself.
-//
-// The kernel cannot exec this file: it starts with the DOS/shell magic, not
-// with an ELF or Mach-O header. Something has to write the real header over
-// those first bytes, and for years that something wrote them into the file it
-// was running -- which needs the file to be writable, breaks its checksum,
-// and costs a fat APE every platform but this one. So the script copies
-// itself once and corrects the COPY.
-//
-// The copy is keyed by the identity of the file it came from (device, inode,
-// mtime and size, or a checksum where stat is missing), so a rebuilt binary
-// stages a new copy and a re-run of the same one costs a stat and an exec.
-//
-// The mtime is read to the nanosecond, because seconds are not enough. A
-// rebuild landing within one second of the last one, in place and at the same
-// size, would key to the copy already staged and run the PREVIOUS binary. A
-// build loop produces exactly that.
-//
-// Staging also takes two swings at making the host handle APEs better,
-// both of which fail silently and change nothing when they do not land:
-//
-//   - It registers the APE magic with binfmt_misc, pointing at /bin/sh. That
-//     is the kernel doing what a shell already does on ENOEXEC, so a caller
-//     that execve()s the file -- Go's os/exec, say -- stops needing a shell
-//     in front of it. Needs root and the binfmt_misc filesystem.
-//   - It records whether this host can bind-mount, which the run below uses.
-//
-// A run with that mark binds the copy over the APE's own path inside a
-// PRIVATE mount namespace and execs it there, so argv[0], /proc/self/exe and
-// anything the program resolves next to itself stay where the caller put
-// them. Nothing outside that namespace sees the mount, which is the property
-// that matters: deleting, moving or overwriting the binary, or removing the
-// directory holding it, all keep working while it runs. The bind is taken
-// only when the process is already root -- getting there through a user
-// namespace would have the program see itself as uid 0, which is a stranger
-// surprise than the path it was started from.
-//
-// Without the mark, argv[0] is the copy's path. The copy keeps the original's
-// basename to hold `${0##*/}` steady, which is what a usage line prints.
+// writeStagedCopy emits the shell that gives the host a runnable copy of
+// the APE at "$p". It never touches the APE itself: the kernel refuses
+// the DOS/shell magic, and writing the real header into the running file
+// needs it writable and breaks its checksum, so the COPY is corrected.
+// The copy is keyed by the source's device, inode, size and mtime to the
+// NANOSECOND, or a checksum where stat is missing: a rebuild within one
+// second, in place and at one size, would run the previous binary's copy.
+// Staging also registers the magic with binfmt_misc and records whether
+// the host can bind-mount; both fail silently. With that mark, and only
+// as root, the run binds the copy over the APE's own path in a PRIVATE
+// mount namespace, so argv[0] and /proc/self/exe stay put. Without it
+// argv[0] is the copy, under the original's basename.
 func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
 	const ddBlockSize = 8
 	data := struct {
@@ -417,17 +374,13 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // after the ELF one because a host that carries both is macOS, where the
 // Mach-O header is the one that counts.
 //
-// The first line appends the standard directories to PATH. Staging needs
+// The first line appends the standard directories to PATH: staging needs
 // stat, cksum, tr, mkdir, cp, chmod and mv, and a program started with a
-// scrubbed environment has no PATH to find them with. Without this an APE
-// run by, say, a test harness that sets its own Env does not start at all.
-// The caller's own PATH stays in front, so nothing it chose is shadowed.
-//
-// The binfmt_misc line quotes its magic with DOUBLE quotes on purpose. The
-// macOS ARM64 loader treats every `printf '` in the first 8K as a boot header
-// to decode, and this one is not one. TestFatBootHeaders holds the count at
-// two. The shell leaves \047 alone inside double quotes, so printf still
-// writes the quote the magic ends with.
+// scrubbed environment has no PATH to find them with. The caller's own
+// PATH stays in front. The binfmt_misc line quotes its magic with DOUBLE
+// quotes on purpose: the macOS ARM64 loader decodes every `printf '` in
+// the first 8K as a boot header, and TestFatBootHeaders holds that count
+// at two. The shell leaves \047 alone inside double quotes.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
 	`  PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"; export PATH
   k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
@@ -466,12 +419,10 @@ var apeStageTmpl = template.Must(template.New("apestage").Parse(
 // macOS ARM64 APE loader finds the aarch64 image by decoding every printf
 // statement in the first 8192 bytes.
 //
-// Which boot mechanisms the header carries follows apePlatforms: each
-// selected platform contributes exactly the pieces it boots through, and a
-// host outside the selection gets a message naming what the binary was
-// built for. The header is a fixed 64K region either way, so deselecting a
-// platform without also dropping its payload architecture changes what the
-// binary claims, not what it weighs.
+// apePlatforms decides which boot mechanisms the header carries, and a
+// host outside the selection gets a message naming what it was built
+// for. The header is a fixed 64K either way, so deselecting a platform
+// without dropping its architecture changes the claim, not the size.
 func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	var amd, arm *apePayload
 	for _, p := range payloads {
@@ -542,25 +493,15 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		}
 	}
 
-	// === Build the APE header with shell script ===
-	//
-	// The APE format is a polyglot that must satisfy:
-	// 1. DOS/PE: Starts with "MZ", e_lfanew at 0x3C points to PE header at 0x80
-	// 2. Shell: Valid shell script that can run on UNIX systems
-	//
-	// CRITICAL: The e_lfanew field at 0x3C contains null bytes (0x80 0x00 0x00 0x00).
-	// Bash cannot handle null bytes in the shell-parsed portion of a script.
-	// Solution: Start the heredoc BEFORE 0x3C so null bytes are in heredoc body.
-	//
-	// Structure:
-	// - Bytes 0x00-0x07: "MZqFpD='" - DOS magic + shell variable start
-	// - Byte 0x08: newline (inside quoted string)
-	// - Bytes 0x09-0x2B: spaces (inside quoted string, 35 bytes)
-	// - Byte 0x2C: "'" - close the quoted string
-	// - Bytes 0x2D-0x3B: "\n: <<'__APE__'\n" - heredoc opener (15 bytes)
-	// - Bytes 0x3C+: heredoc body (contains e_lfanew with null bytes - SAFE!)
-	// - PE header at 0x80 (inside heredoc body)
-	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
+	// The header is one file that is both a DOS/PE image, whose e_lfanew
+	// at 0x3C points at the PE header at 0x80, and a shell script. The
+	// e_lfanew field holds null bytes, which bash refuses to parse, so the
+	// heredoc opens BEFORE 0x3C and puts them in its body:
+	// - 0x00-0x07: "MZqFpD='", the DOS magic and a shell assignment
+	// - 0x08-0x2C: a newline, 35 spaces and the closing quote
+	// - 0x2D-0x3B: "\n: <<'__APE__'\n", the heredoc opener
+	// - 0x3C+: the heredoc body, e_lfanew and the PE header at 0x80 in it
+	// - apeScriptOffset: "__APE__\n" closes the heredoc, then the script
 
 	// Write the APE magic at offset 0
 	copy(header[0:8], ape.Magic)
@@ -994,22 +935,16 @@ func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
 
 // makeMachoHeader creates the Mach-O executable header for macOS x86-64.
 //
-// On x86-64 macOS the APE bootstrap script dd-copies this header (placed at
-// offset 0x2000 in the APE header) over the start of a COPY of the file,
-// turning that copy into a Mach-O executable whose load commands point
-// straight at the embedded amd64 ELF image. The copy is what runs, and the
-// APE itself is left as it was. The XNU kernel loads it directly - there is
-// no dyld involved (LC_UNIXTHREAD, not LC_MAIN) - so the load commands must
-// satisfy the kernel's parse_machfile/load_segment checks on their own:
-//
-//   - __PAGEZERO covers [0, lowest mapped address) with no access.
-//   - One LC_SEGMENT_64 per PT_LOAD, with initprot/maxprot translated from
-//     p_flags and vmsize covering p_memsz (BSS zero-fill), at the ELF's own
-//     virtual addresses.
-//   - The text segment is extended down to file offset 0 so an R+X segment
-//     maps the Mach-O header (a hard kernel requirement).
-//   - LC_UNIXTHREAD holds rip = the ELF entry point (unmodified) and the
-//     XNU host-OS indicator in rcx for rt0_cosmo_amd64.s.
+// The bootstrap script dd-copies this header, which sits at 0x2000 in the
+// APE header, over the start of a COPY of the file. Its load commands
+// point at the embedded amd64 ELF image, and XNU loads it with no dyld
+// (LC_UNIXTHREAD, not LC_MAIN), so they must pass parse_machfile and
+// load_segment on their own: __PAGEZERO covers [0, lowest mapped address)
+// with no access; one LC_SEGMENT_64 per PT_LOAD carries initprot and
+// maxprot from p_flags and a vmsize covering p_memsz, at the ELF's own
+// addresses; the text segment reaches down to file offset 0, so an R+X
+// segment maps the header, which the kernel demands; and LC_UNIXTHREAD
+// holds the ELF entry in rip and the XNU host indicator in rcx.
 func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
 	segs := machoSegmentsFromELF(elfData, elfOffset)
 

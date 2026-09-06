@@ -26,19 +26,13 @@ const Magic = "MZqFpD='"
 const HeaderSize = 65536
 
 // Payload returns a reader over the first ELF image in an APE, or nil
-// when r is not one.
+// when r is not one. A pristine APE begins with Magic, and one that has
+// run on a Linux host begins with the header its loader wrote; both hold
+// the image at HeaderSize, and the first image is the amd64 one.
 //
-// Two shapes carry an image. A pristine APE begins with Magic. One that
-// has run on a Linux host begins with the ELF header its loader wrote
-// over the polyglot one, which describes the payload for EXECUTION and
-// names no sections at all. Either shape holds the image itself at
-// HeaderSize.
-//
-// The first image is the amd64 one whenever the file has one, and a
-// single-architecture APE has only that image. A payload's program
-// headers carry absolute file offsets into the APE, so read an image
-// through this reader by its SECTIONS: those offsets stay relative to
-// the image, which is what a symbol table or DWARF reader asks for.
+// Read the image by its SECTIONS. Its program headers carry absolute
+// offsets into the APE, while section offsets stay relative to the
+// image, which is what a symbol table or DWARF reader asks for.
 func Payload(r io.ReaderAt) io.ReaderAt {
 	var head [ehdrSize]byte
 	if _, err := r.ReadAt(head[:], 0); err != nil {
