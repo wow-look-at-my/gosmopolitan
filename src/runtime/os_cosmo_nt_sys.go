@@ -88,6 +88,7 @@ const (
 	ntSysWait4      = 61
 	ntSysKill       = 62
 	ntSysFcntl      = 72
+	ntSysFlock      = 73
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
 	ntSysTruncate   = 76
@@ -223,6 +224,29 @@ const (
 	_NT_DT_REG = 8
 )
 
+// flock(2) emulation (ntEmuFlock).
+const (
+	// Linux LOCK_* operations, which are BSD's own values.
+	_NT_LOCK_SH = 1
+	_NT_LOCK_EX = 2
+	_NT_LOCK_NB = 4
+	_NT_LOCK_UN = 8
+
+	// LockFileEx flags.
+	_NT_LOCKFILE_FAIL_IMMEDIATELY = 0x1
+	_NT_LOCKFILE_EXCLUSIVE_LOCK   = 0x2
+
+	// The byte range every flock caller means: all of it. NT locks a
+	// range rather than a file, and a range past EOF is legal, so this
+	// covers a file that grows after the lock is taken.
+	_NT_LOCK_BYTES_LOW  = 0xffffffff
+	_NT_LOCK_BYTES_HIGH = 0xffffffff
+
+	_NT_ERROR_LOCK_VIOLATION = 33
+	_NT_ERROR_NOT_LOCKED     = 158
+	_NT_ERROR_IO_PENDING     = 997
+)
+
 // ntErrno maps a Win32 GetLastError code to the Linux errno the
 // unix-shaped standard library expects. One table, used by every
 // emulated file syscall (cosmo libc keeps an equivalent
@@ -341,6 +365,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 			(*[2]ntLinuxTimespec)(unsafe.Pointer(a3)), int32(a4))
 	case ntSysFsync, ntSysFdatasync:
 		return ntEmuFsync(int32(a1))
+	case ntSysFlock:
+		return ntEmuFlock(int32(a1), int32(a2))
 	case ntSysFchmod:
 		return ntEmuFchmod(int32(a1))
 	case ntSysFchmodat:
@@ -986,6 +1012,87 @@ func ntEmuFsync(fd int32) (r1, r2, errno uintptr) {
 	}
 	r, werr := ntcallSE(ntFlushFileBuffersFn, e.handle, 0, 0, 0, 0, 0, 0)
 	if r == 0 {
+		return ntFail3(ntErrno(werr))
+	}
+	return 0, 0, 0
+}
+
+// ntOverlapped is Win32's OVERLAPPED. LockFileEx and UnlockFileEx take
+// the lock's byte offset in it, and every other field must be zero.
+type ntOverlapped struct {
+	internal     uintptr
+	internalHigh uintptr
+	offset       uint32
+	offsetHigh   uint32
+	hEvent       uintptr
+}
+
+// ntEmuFlock emulates flock(2) with LockFileEx/UnlockFileEx over the
+// whole file, the range every flock caller means.
+//
+// NT locks a HANDLE where Linux locks the open file description. The two
+// agree on what matters here: both are released by the last close of the
+// thing that took the lock, and both keep a second opener out. They part
+// on an upgrade - Linux converts a shared lock to exclusive in place,
+// while NT holds the two separately, so an upgrade here unlocks first.
+// That gap is the same one flock(2) documents on Linux: an upgrade is not
+// atomic, and the lock can be lost in between.
+func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
+	e, ok := ntFDLookup(fd)
+	if !ok {
+		return ntFail3(ntEBADF)
+	}
+	if e.kind != ntFDFile {
+		return ntFail3(ntEINVAL)
+	}
+	if ntLockFileExFn == 0 || ntUnlockFileExFn == 0 {
+		return ntFail3(ntENOSYS)
+	}
+	nb := op&_NT_LOCK_NB != 0
+	switch op &^ _NT_LOCK_NB {
+	case _NT_LOCK_SH, _NT_LOCK_EX, _NT_LOCK_UN:
+	default:
+		return ntFail3(ntEINVAL)
+	}
+	var ov ntOverlapped
+	povl := uintptr(unsafe.Pointer(&ov))
+	if op&^_NT_LOCK_NB == _NT_LOCK_UN {
+		r, werr := ntcallSE(ntUnlockFileExFn, e.handle, 0,
+			_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0, 0)
+		KeepAlive(&ov)
+		if r == 0 {
+			// Unlocking a file this handle never locked is a no-op on
+			// Linux, so do not turn NT's complaint into an error.
+			if werr == _NT_ERROR_NOT_LOCKED {
+				return 0, 0, 0
+			}
+			return ntFail3(ntErrno(werr))
+		}
+		return 0, 0, 0
+	}
+	// An exclusive request over a shared one this handle already holds
+	// would deadlock against itself, so drop what is held first. The
+	// unlock is best-effort: it fails only when nothing was held.
+	ntcallSE(ntUnlockFileExFn, e.handle, 0,
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0, 0)
+	flags := uintptr(0)
+	if op&^_NT_LOCK_NB == _NT_LOCK_EX {
+		flags |= _NT_LOCKFILE_EXCLUSIVE_LOCK
+	}
+	if nb {
+		flags |= _NT_LOCKFILE_FAIL_IMMEDIATELY
+	}
+	r, werr := ntcallSE(ntLockFileExFn, e.handle, flags, 0,
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH, povl, 0)
+	KeepAlive(&ov)
+	if r == 0 {
+		// LOCK_NB's whole contract is this errno: a caller reads
+		// EWOULDBLOCK as "somebody else holds it" and anything else as a
+		// real failure. The shared table answers EACCES for a lock
+		// violation, which is right for an ordinary read or write.
+		if nb && (werr == _NT_ERROR_LOCK_VIOLATION || werr == _NT_ERROR_IO_PENDING) {
+			return ntFail3(ntEAGAIN)
+		}
 		return ntFail3(ntErrno(werr))
 	}
 	return 0, 0, 0

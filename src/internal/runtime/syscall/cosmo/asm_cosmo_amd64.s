@@ -34,6 +34,7 @@
 #define SYS_fsync		74
 #define SYS_truncate		76
 #define SYS_ftruncate		77
+#define SYS_flock		73
 #define SYS_fchdir		81
 #define SYS_fchmod		91
 #define SYS_fchown		93
@@ -93,6 +94,7 @@
 #define XNU_fsync		0x200005f	// BSD 95
 #define XNU_setpriority		0x2000060	// BSD 96
 #define XNU_getpriority		0x2000064	// BSD 100
+#define XNU_flock		0x2000083	// BSD 131
 #define XNU_fchown		0x200007b	// BSD 123
 #define XNU_fchmod		0x200007c	// BSD 124
 #define XNU_setreuid		0x200007e	// BSD 126
@@ -256,6 +258,8 @@ syscall6_darwin:
 	JEQ	darwin_fchown
 	CMPQ	R11, $SYS_fchdir
 	JEQ	darwin_fchdir
+	CMPQ	R11, $SYS_flock
+	JEQ	darwin_flock
 	CMPQ	R11, $SYS_chroot
 	JEQ	darwin_chroot
 	CMPQ	R11, $SYS_getgroups
@@ -538,6 +542,12 @@ darwin_fchown:
 
 darwin_fchdir:
 	MOVL	$XNU_fchdir, AX
+	JMP	darwin_syscall
+
+darwin_flock:
+	// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+	// Linux took them from BSD, which is what XNU still serves.
+	MOVL	$XNU_flock, AX
 	JMP	darwin_syscall
 
 darwin_chroot:

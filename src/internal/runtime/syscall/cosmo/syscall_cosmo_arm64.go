@@ -106,6 +106,9 @@ type DarwinFns struct {
 	Symlinkat uintptr
 	Mknod     uintptr
 	Utimensat uintptr
+	// Flock backs SYS_FLOCK. Apple's flock(2) is BSD's, which is where
+	// Linux took the LOCK_* values from, so operation passes through.
+	Flock     uintptr
 	Statfs    uintptr
 	Fstatfs   uintptr
 	Sendfile  uintptr
@@ -154,6 +157,7 @@ func SetDarwinFns(f *DarwinFns) {
 const (
 	sysGETCWD      = 17
 	sysDUP         = 23
+	sysFLOCK       = 32
 	sysMKNODAT     = 33
 	sysMKDIRAT     = 34
 	sysUNLINKAT    = 35
@@ -493,6 +497,12 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFchownat(a1, a2, a3, a4, a5)
 	case sysFCHDIR:
 		return darwinCall(darwinFns.Fchdir, a1, 0, 0, 0, 0, 0)
+	case sysFLOCK:
+		// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+		// Linux took them from BSD, which is what Apple still ships.
+		// Linux's own LOCK_MAND extension has no Apple counterpart and
+		// reaches libc as an unknown operation, which answers EINVAL.
+		return darwinCall(darwinFns.Flock, a1, a2, 0, 0, 0, 0)
 	case sysLINKAT:
 		return darwinLinkat(a1, a2, a3, a4, a5)
 	case sysSYMLINKAT:

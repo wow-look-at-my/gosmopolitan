@@ -77,6 +77,11 @@ var (
 	ntSetFilePointerExFn uintptr
 	ntSetEndOfFileFn     uintptr
 	ntFlushFileBuffersFn uintptr
+	// The flock(2) pair. Optional like the metadata wave's: a zero
+	// pointer answers ENOSYS where flock is called rather than
+	// crashing the boot.
+	ntLockFileExFn   uintptr
+	ntUnlockFileExFn uintptr
 	// The metadata wave's four (os_cosmo_nt_meta.go). All optional: a
 	// zero pointer answers ENOSYS at the use site rather than crashing
 	// the boot over a call most programs never make.
@@ -181,6 +186,8 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameLockFileEx        = []byte("LockFileEx\x00")
+	ntNameUnlockFileEx      = []byte("UnlockFileEx\x00")
 	ntNameSetFileTime       = []byte("SetFileTime\x00")
 	ntNameGetSysTimeAsFt    = []byte("GetSystemTimeAsFileTime\x00")
 	ntNameGetFinalPathW     = []byte("GetFinalPathNameByHandleW\x00")
@@ -530,6 +537,9 @@ func ntResolve() {
 	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
 	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
 	ntCreateHardLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateHardLinkW[0])), 0, 0, 0, 0)
+	// flock(2) (ntEmuFlock). Same stance as the four above.
+	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
+	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
 
 	if bp := ntcall(lla, uintptr(unsafe.Pointer(&ntNameBcryptPrimitives[0])), 0, 0, 0, 0, 0); bp != 0 {
 		ntProcessPrngFn = ntcall(gpa, bp, uintptr(unsafe.Pointer(&ntNameProcessPrng[0])), 0, 0, 0, 0)

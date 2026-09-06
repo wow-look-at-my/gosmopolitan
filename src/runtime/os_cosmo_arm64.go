@@ -282,6 +282,7 @@ var (
 	dlsymNameSymlinkat = []byte("symlinkat\x00")
 	dlsymNameMknod     = []byte("mknod\x00")
 	dlsymNameUtimensat = []byte("utimensat\x00")
+	dlsymNameFlock     = []byte("flock\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
@@ -409,6 +410,7 @@ func osArchInit() {
 		Symlinkat: cosmoDlsym(&dlsymNameSymlinkat[0]),
 		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
 		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
+		Flock:     cosmoDlsym(&dlsymNameFlock[0]),
 		Statfs:    cosmoDlsym(&dlsymNameStatfs[0]),
 		Fstatfs:   cosmoDlsym(&dlsymNameFstatfs[0]),
 		Sendfile:  cosmoDlsym(&dlsymNameSendfile[0]),
