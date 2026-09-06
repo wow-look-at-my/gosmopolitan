@@ -29,10 +29,10 @@ Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 t.Serial("cfg.BuildX is a package global, and turning it on changes what every other build prints")
 ```
 
-The reason is what the next reader has instead of the shared state, which is invisible from the call. `Serial` checks
-it and **warns**, then runs the test alone anyway - a suite must not fail over its own prose, and refusing to
-serialize a test that asked to be serialized would run it against the state it is guarding. Four rules, all reported
-against the calling test as `warning: t.Serial: ...`:
+The shared state is invisible from the call, so the reason is what the next reader has instead. `Serial` checks
+it and **warns**, then runs the test alone anyway. A suite must not fail over its own prose. Refusing to serialize
+a test that asked for it would run that test against the state it guards. Four rules, all reported against the
+calling test as `warning: t.Serial: ...`:
 
 | Rule | Why |
 |---|---|
@@ -49,12 +49,12 @@ testing: 2 t.Serial call(s) did not justify stopping the package:
 	widget_test.go:140: reason is 99.1% the same as the one TestOther gives at widget_test.go:88 ...
 ```
 
-The summary is the visible half. A log line on a passing test appears only under `-v`, and this rule is about a cost
+The summary is the visible half. A log line on a passing test appears only under `-v`. This rule is about a cost
 the whole package pays whether or not anything failed.
 
-The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly stops
-being parallel: each call looks defensible on its own, and the 84th one costs as much as the first. Two tests that
-serialize for the same reason usually want `t.Fork` instead, which gives each a process and stops nobody.
+The similarity rule is the reason the others are worth having. One pasted sentence is how a package quietly
+stops being parallel. Each call looks defensible on its own, and the 84th one costs as much as the first. Two tests
+with the same reason usually want `t.Fork`. It gives each one a process and stops nobody.
 
 Mechanics: reasons are compared normalized - lowercased, with runs of non-alphanumerics collapsed - so case and
 punctuation do not make one reason look like two. The score is Levenshtein distance over the length of the longer
