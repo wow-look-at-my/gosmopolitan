@@ -47,17 +47,21 @@ func TestMatch(t *testing.T) {
 		}
 	}
 
-	match(runtime.GOOS+","+runtime.GOARCH, map[string]bool{runtime.GOOS: true, runtime.GOARCH: true})
-	match(runtime.GOOS+","+runtime.GOARCH+",!foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
+	// The context's own GOOS and GOARCH, not the host's: a cosmo binary
+	// runs on three hosts, and what this context matches is the port it
+	// was built for.
+	goos, goarch := ctxt.GOOS, ctxt.GOARCH
+	match(goos+","+goarch, map[string]bool{goos: true, goarch: true})
+	match(goos+","+goarch+",!foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	nomatch(goos+","+goarch+",foo", map[string]bool{goos: true, goarch: true, "foo": true})
 
 	what = "modified"
 	ctxt.BuildTags = []string{"foo"}
-	match(runtime.GOOS+","+runtime.GOARCH, map[string]bool{runtime.GOOS: true, runtime.GOARCH: true})
-	match(runtime.GOOS+","+runtime.GOARCH+",foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",!foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	match(runtime.GOOS+","+runtime.GOARCH+",!bar", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "bar": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",bar", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "bar": true})
+	match(goos+","+goarch, map[string]bool{goos: true, goarch: true})
+	match(goos+","+goarch+",foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	nomatch(goos+","+goarch+",!foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	match(goos+","+goarch+",!bar", map[string]bool{goos: true, goarch: true, "bar": true})
+	nomatch(goos+","+goarch+",bar", map[string]bool{goos: true, goarch: true, "bar": true})
 }
 
 func TestDotSlashImport(t *testing.T) {
