@@ -450,8 +450,42 @@ func darwinSockoptXlat(level, name uintptr) (alevel, aname uintptr, ok bool) {
 		case 6: // TCP_KEEPCNT
 			return 6, 0x102, true
 		}
+	case 0: // IPPROTO_IP. Apple's SOL_LOCAL shares this number, but the
+		// emulation never forwards a SOL_LOCAL option - peer identity
+		// arrives under the Linux SO_PEERCRED spelling at SOL_SOCKET
+		// (see darwinPeercred) - so level 0 means IPPROTO_IP here.
+		switch name {
+		case 1: // IP_TOS
+			return 0, 3, true
+		case 2: // IP_TTL
+			return 0, 4, true
+		case 3: // IP_HDRINCL
+			return 0, 2, true
+		case 32: // IP_MULTICAST_IF (struct ip_mreq matches)
+			return 0, 9, true
+		case 33: // IP_MULTICAST_TTL
+			return 0, 10, true
+		case 34: // IP_MULTICAST_LOOP
+			return 0, 11, true
+		case 35: // IP_ADD_MEMBERSHIP
+			return 0, 12, true
+		case 36: // IP_DROP_MEMBERSHIP
+			return 0, 13, true
+		}
 	case 41: // IPPROTO_IPV6
 		switch name {
+		case 16: // IPV6_UNICAST_HOPS
+			return 41, 4, true
+		case 17: // IPV6_MULTICAST_IF
+			return 41, 9, true
+		case 18: // IPV6_MULTICAST_HOPS
+			return 41, 10, true
+		case 19: // IPV6_MULTICAST_LOOP
+			return 41, 11, true
+		case 20: // IPV6_JOIN_GROUP (struct ipv6_mreq matches)
+			return 41, 12, true
+		case 21: // IPV6_LEAVE_GROUP
+			return 41, 13, true
 		case 26: // IPV6_V6ONLY
 			return 41, 27, true
 		}
