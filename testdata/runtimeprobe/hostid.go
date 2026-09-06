@@ -16,13 +16,13 @@ import (
 // is running takes the wrong branch quietly.
 
 // checkHostOS asserts the runtime reports the host it is actually running
-// on, through runtime.GOOS and runtime.GOARCH. Both are variables on
-// cosmo, set from what the APE entry stub recorded before any Go code
-// runs, so a package that switches on GOOS takes the branch for the
-// kernel underneath it. cosmoHostOS reads the same record the runtime
-// dispatches every syscall on, so the two cannot disagree. GOARCH is
-// right by construction - the loader runs the payload built for this
-// machine - so this reports it rather than asserting it.
+// on. GOOS is a variable on cosmo, set from what the APE entry stub
+// recorded before any Go code runs, so a package that switches on it
+// takes the branch for the kernel underneath. cosmoHostOS reads the same
+// record the runtime dispatches every syscall on, so the two cannot
+// disagree. GOARCH stays a constant and is right by construction - the
+// loader runs the payload built for this machine - so this reports it
+// rather than asserting it.
 func checkHostOS() {
 	host := cosmoHostOS()
 	switch host {

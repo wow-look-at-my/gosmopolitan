@@ -22,6 +22,10 @@ func (w errWriter) Write([]byte) (int, error) {
 }
 
 func TestWriteLogger(t *testing.T) {
+	// The log package's writer, flags and prefix are process-wide, and
+	// this test replaces all three to read back what it logged.
+	t.Serial()
+
 	olw := log.Writer()
 	olf := log.Flags()
 	olp := log.Prefix()
@@ -54,6 +58,10 @@ func TestWriteLogger(t *testing.T) {
 }
 
 func TestWriteLogger_errorOnWrite(t *testing.T) {
+	// The log package's writer, flags and prefix are process-wide, and
+	// this test replaces all three to read back what it logged.
+	t.Serial()
+
 	olw := log.Writer()
 	olf := log.Flags()
 	olp := log.Prefix()
@@ -83,6 +91,10 @@ func TestWriteLogger_errorOnWrite(t *testing.T) {
 }
 
 func TestReadLogger(t *testing.T) {
+	// The log package's writer, flags and prefix are process-wide, and
+	// this test replaces all three to read back what it logged.
+	t.Serial()
+
 	olw := log.Writer()
 	olf := log.Flags()
 	olp := log.Prefix()
@@ -120,6 +132,10 @@ func TestReadLogger(t *testing.T) {
 }
 
 func TestReadLogger_errorOnRead(t *testing.T) {
+	// The log package's writer, flags and prefix are process-wide, and
+	// this test replaces all three to read back what it logged.
+	t.Serial()
+
 	olw := log.Writer()
 	olf := log.Flags()
 	olp := log.Prefix()

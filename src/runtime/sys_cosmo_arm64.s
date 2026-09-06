@@ -23,6 +23,8 @@
 // is 8. Passing the Linux value 1 to Apple clock_gettime asks for an
 // undefined clockid and fails with EINVAL.
 #define CLOCK_MONOTONIC_APPLE 6
+// clock_gettime_nsec_np's clockid: monotonic since boot, not slewed.
+#define CLOCK_UPTIME_RAW_APPLE 8
 
 // Host OS indicators (must match os_cosmo_arm64.go)
 #define HOSTXNU 8
@@ -785,12 +787,25 @@ nanotime_noswitch:
 	B	nanotime_finish
 
 nanotime_darwin:
-	// macOS path: call Syslib clock_gettime with the APPLE monotonic
-	// clockid. Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC
-	// semantics most closely: monotonic since boot and NTP-slewed (it
-	// pauses during deep sleep on macOS, which Linux's also may).
-	// Upstream darwin Go uses clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-	// via libc, but Syslib only exports clock_gettime.
+	// Apple's clock_gettime resolves to a MICROSECOND, so a caller that
+	// times its own work reads the same instant many times over. A
+	// timing-jitter entropy source degenerates on that, and crypto's
+	// repetition-count health test fails. clock_gettime_nsec_np is what
+	// upstream darwin Go calls and it answers in nanoseconds, so take it
+	// when osArchInit resolved it.
+	MOVD	runtime·cosmoDarwinClockNsecFn(SB), R12
+	CBZ	R12, nanotime_darwin_ts
+	MOVW	$CLOCK_UPTIME_RAW_APPLE, R0
+	BL	(R12)
+	CBZ	R0, nanotime_darwin_ts	// 0 is its only failure report
+	MOVD	R0, R5			// whole reading, in nanoseconds
+	MOVD	ZR, R3			// no seconds to scale
+	B	nanotime_have
+
+nanotime_darwin_ts:
+	// Fallback: Syslib clock_gettime with the APPLE monotonic clockid.
+	// Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC semantics
+	// most closely: monotonic since boot and NTP-slewed.
 	// Zero the result slots first so that even a double failure below
 	// yields 0 rather than uninitialized stack memory.
 	MOVD	ZR, 0(RSP)
@@ -814,6 +829,7 @@ nanotime_finish:
 	MOVD	0(RSP), R3	// sec
 	MOVD	8(RSP), R5	// nsec
 
+nanotime_have:
 	MOVD	R20, RSP	// restore SP
 	MOVD	16(RSP), R1
 	MOVD	R1, m_vdsoSP(R21)

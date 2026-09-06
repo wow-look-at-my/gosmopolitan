@@ -303,6 +303,7 @@ var (
 	dlsymNameGetrlimit    = []byte("getrlimit\x00")
 	dlsymNameSetrlimit    = []byte("setrlimit\x00")
 	dlsymNameUname        = []byte("uname\x00")
+	dlsymNameClockNsec    = []byte("clock_gettime_nsec_np\x00")
 	dlsymNameGetrusage    = []byte("getrusage\x00")
 	dlsymNameGettimeofday = []byte("gettimeofday\x00")
 )
@@ -332,6 +333,14 @@ var cosmoDarwinErrorFn uintptr
 // cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by
 // the runtime's own fcntl on darwin. Zero when unresolved.
 var cosmoDarwinFcntlFn uintptr
+
+// cosmoDarwinClockNsecFn is Apple's clock_gettime_nsec_np, resolved at
+// startup and read by nanotime1's darwin branch. The Syslib exports only
+// clock_gettime, whose Apple resolution is a MICROSECOND: a caller that
+// times its own work reads one instant many times, and a timing-jitter
+// entropy source degenerates on that. Zero when unresolved, which that
+// branch reports by falling back to clock_gettime.
+var cosmoDarwinClockNsecFn uintptr
 
 // cosmoDarwinMincoreFn is Apple libc mincore, resolved at startup and
 // read by ·mincore's darwin branch in sys_cosmo_arm64.s. Zero when
@@ -368,6 +377,7 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),

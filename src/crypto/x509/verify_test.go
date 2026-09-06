@@ -1701,8 +1701,10 @@ func macosMajorVersion(t *testing.T) (int, error) {
 }
 
 func TestIssue51759(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("only affects darwin")
+	// The bug is in Apple's own verifier, which only a build that binds
+	// it can reach. A cosmo binary on macOS is not such a build.
+	if runtime.GOOS != "darwin" || !hasPlatformVerifier {
+		t.Skip("only affects a darwin build with the platform verifier")
 	}
 
 	testenv.MustHaveExecPath(t, "sw_vers")
