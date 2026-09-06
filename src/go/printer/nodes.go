@@ -371,6 +371,11 @@ func (p *printer) parameters(fields *ast.FieldList, mode paramMode) {
 			}
 			// parameter type
 			p.expr(stripParensAlways(par.Type))
+			// parameter default
+			if par.Default != nil {
+				p.print(blank, token.ASSIGN, blank)
+				p.expr(par.Default)
+			}
 			prevLine = parLineEnd
 		}
 

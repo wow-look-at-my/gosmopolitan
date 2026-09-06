@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// The code under test carries the same constraint: the cosmo port replaces it with a stub.
+//
+//go:build linux && !cosmo
+
 package net
 
 import (

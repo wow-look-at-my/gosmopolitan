@@ -7,6 +7,7 @@ package testing
 import (
 	"os"
 	"runtime"
+	"strings"
 )
 
 // allocsFork asks the calling test for a process of its own. AllocsPerRun
@@ -27,33 +28,20 @@ func (allocsFork) Error() string {
 // itself. A serial test stops every other one, and a caller with no parallel
 // test in flight - a benchmark, a root test - shares the process with nothing.
 //
-// A forked child runs one test, so that test is the only thing in flight while
-// its body runs. Its subtests are not: they run at the same time as each
-// other, and a measurement taken in one of them counts another's allocations.
-// So the child asks how many are in flight rather than assuming it is alone.
+// A forked child runs ONE test, and the tests in flight with it are its own
+// ancestors: a parent stays counted while it waits for the subtest it started.
+// The marker names the target, so the number of elements in that name is how
+// many the child may see. Anything above it is a sibling, whose allocations
+// would land in the measurement.
 func allocsIndependent() bool {
 	if serialExclusive.Load() {
 		return true
 	}
 	inFlight := parallelStart.Load() - parallelStop.Load()
-	if inForkedChild() {
-		return inFlight <= 1
+	if target := os.Getenv(forkTargetEnv); target != "" {
+		return inFlight <= int64(strings.Count(target, "/"))+1
 	}
 	return inFlight == 0
-}
-
-// inForkedChild reports whether this process is the child Fork started. Such a
-// child cannot fork again: a second child would run the same test and reach
-// the same place.
-func inForkedChild() bool { return os.Getenv(forkTargetEnv) != "" }
-
-// allocsSiblings asks a forked test to stop its own subtests. It is what
-// AllocsPerRun panics with where a fork would not help, because the process is
-// already a child and the tests sharing it are the caller's own siblings.
-type allocsSiblings struct{}
-
-func (allocsSiblings) Error() string {
-	return "testing: AllocsPerRun measures the whole process, and the subtests of a forked test run at the same time; call t.Serial in the forked test"
 }
 
 // AllocsPerRun returns the average number of allocations during calls to f.
@@ -72,14 +60,11 @@ func (allocsSiblings) Error() string {
 // re-runs that test alone from the top. A test that already called [T.Fork] or
 // [T.Serial] measures here.
 //
-// The subtests of a forked test are the case a second fork cannot help: they
-// share the child with each other. Measuring from one of them while another
-// runs panics, and the message names [T.Serial], which is what stops them.
+// The subtests of a forked test share that child with each other, so one of
+// them measuring counts another's allocations. Such a subtest gets a child of
+// its own, because the fork marker names one test rather than a process.
 func AllocsPerRun(runs int, f func()) (avg float64) {
 	if !allocsIndependent() {
-		if inForkedChild() {
-			panic(allocsSiblings{})
-		}
 		panic(allocsFork{})
 	}
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))

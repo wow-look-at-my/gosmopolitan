@@ -19,6 +19,7 @@ import (
 )
 
 func TestPool(t *testing.T) {
+	t.Serial() // The pool is drained by a GC this test triggers, and another test's live values keep entries alive.
 	// disable GC so we can control when it happens.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	var p Pool

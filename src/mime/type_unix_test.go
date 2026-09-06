@@ -21,6 +21,7 @@ func initMimeUnixTest(t *testing.T) {
 }
 
 func TestTypeByExtensionUNIX(t *testing.T) {
+	t.Serial() // This test replaces the package's mime table and its sync.Once.
 	initMimeUnixTest(t)
 	typeTests := map[string]string{
 		".T1":       "application/test",

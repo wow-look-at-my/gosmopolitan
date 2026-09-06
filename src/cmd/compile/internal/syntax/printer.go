@@ -739,6 +739,12 @@ func (p *printer) printFields(fields []*Field, tags []*BasicLit, i, j int) {
 		p.print(blank)
 		p.printNode(fields[i].Type)
 	}
+	// The default rides the field that parsed it, which is the last of a
+	// group sharing one type -- the only place "= expr" can appear.
+	if d := fields[j-1].Default; d != nil {
+		p.print(blank, _Assign, blank)
+		p.printNode(d)
+	}
 	if i < len(tags) && tags[i] != nil {
 		p.print(blank)
 		p.printNode(tags[i])

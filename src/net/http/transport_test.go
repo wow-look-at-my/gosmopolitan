@@ -5080,6 +5080,7 @@ func testTransportReuseConnEmptyResponseBody(t *testing.T, mode testMode) {
 
 // Issue 13839
 func TestNoCrashReturningTransportAltConn(t *testing.T) {
+	t.Serial() // every other test reaches the global dial hooks this sets
 	cert, err := tls.X509KeyPair(testcert.LocalhostCert, testcert.LocalhostKey)
 	if err != nil {
 		t.Fatal(err)
@@ -7437,6 +7438,7 @@ func testProxyAuthHeader(t *testing.T, mode testMode) {
 
 // Issue 61708
 func TestTransportReqCancelerCleanupOnRequestBodyWriteError(t *testing.T) {
+	t.Serial() // every other test reaches the global dial hooks this sets
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
 

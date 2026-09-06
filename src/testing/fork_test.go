@@ -12,8 +12,8 @@ import (
 )
 
 // TestForkStaysParallel: Fork gives the test a process, not a serial hold. The
-// child runs parallel-by-default like any other run, so the subtests of a
-// forked test must reach a rendezvous only concurrent code can reach.
+// child allows parallelism like any other run, so two subtests that ask for it
+// must reach a rendezvous only concurrent code can reach.
 func TestForkStaysParallel(t *T) {
 	t.Fork()
 
@@ -31,6 +31,7 @@ func TestForkStaysParallel(t *T) {
 
 	for _, name := range []string{"one", "two"} {
 		t.Run(name, func(t *T) {
+			t.Parallel()
 			wg.Done()
 			select {
 			case <-met:
@@ -38,6 +39,25 @@ func TestForkStaysParallel(t *T) {
 				t.Errorf("%s waited alone: the subtests of a forked test ran one at a time", t.Name())
 			}
 		})
+	}
+}
+
+// TestSubtestsRunInsideRun: a subtest is not parallel unless it asks. Run
+// blocks until the subtest returns, so the parent's later statements and its
+// deferred calls come after the subtest rather than underneath it.
+func TestSubtestsRunInsideRun(t *T) {
+	var order []string
+	func() {
+		defer func() { order = append(order, "parent defer") }()
+		t.Run("sub", func(t *T) {
+			order = append(order, "sub")
+		})
+		order = append(order, "after Run")
+	}()
+
+	want := "sub, after Run, parent defer"
+	if got := strings.Join(order, ", "); got != want {
+		t.Errorf("order is %q; want %q", got, want)
 	}
 }
 
@@ -78,23 +98,45 @@ func TestForkFromASubtest(t *T) {
 	})
 }
 
-// TestForkDoesNotForkAgain: a child runs its own subtests in place. Without the
-// marker check in Fork, each of these would start another process, and this
-// test would not finish.
-func TestForkDoesNotForkAgain(t *T) {
+// TestForkSubtestsGetTheirOwnChild: the subtests of a forked test share that
+// child with each other, so a subtest asking for a process of its own must get
+// one. Each ends up the target of a child of its own, and the run terminates:
+// the marker names one test, and every test it runs under stays in place
+// rather than forking its own parent.
+func TestForkSubtestsGetTheirOwnChild(t *T) {
 	t.Fork()
 
-	pid := os.Getpid()
 	for _, name := range []string{"one", "two"} {
 		t.Run(name, func(t *T) {
 			t.Fork()
 
-			if got := os.Getpid(); got != pid {
-				t.Fatalf("subtest ran in pid %d, want its parent's pid %d: it forked a second time", got, pid)
+			if got := os.Getenv(forkTargetEnv); got != t.Name() {
+				t.Fatalf("%s = %q, want this subtest's own name %q: it shares its parent's child",
+					forkTargetEnv, got, t.Name())
 			}
 		})
 	}
 }
+
+// TestAllocsPerRunInAForkedSubtest is the reason the rule above exists.
+// AllocsPerRun counts the whole process, so a sibling subtest running beside
+// the caller counts into the measurement. The measurement used to refuse; it
+// now gets the child it asks for.
+func TestAllocsPerRunInAForkedSubtest(t *T) {
+	t.Fork()
+
+	for _, name := range []string{"one", "two"} {
+		t.Run(name, func(t *T) {
+			got := AllocsPerRun(10, func() { forkAllocSink = make([]byte, 64) })
+			if got != 1 {
+				t.Fatalf("AllocsPerRun = %v, want 1: the measurement did not get the process", got)
+			}
+		})
+	}
+}
+
+// forkAllocSink keeps the measured allocation from being optimized away.
+var forkAllocSink []byte
 
 // TestForkReportsTheChildsFailure is the negative control on the rule that the
 // child's exit status is the verdict. A test cannot fail itself to prove it, so
@@ -296,10 +338,12 @@ func TestAllocsPerRunRefusesBesideASibling(t *T) {
 
 	running, release := make(chan struct{}), make(chan struct{})
 	t.Run("busy", func(t *T) {
+		t.Parallel()
 		close(running)
 		<-release
 	})
 	t.Run("measuring", func(t *T) {
+		t.Parallel()
 		<-running
 		defer close(release)
 		defer func() {
