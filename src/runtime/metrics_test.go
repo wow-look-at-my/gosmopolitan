@@ -39,6 +39,8 @@ func prepareAllMetricsSamples() (map[string]metrics.Description, []metrics.Sampl
 }
 
 func TestReadMetrics(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Run a GC cycle to get some of the stats to be non-zero.
 	runtime.GC()
 
@@ -972,6 +974,8 @@ func TestSchedPauseMetrics(t *testing.T) {
 }
 
 func TestRuntimeLockMetricsAndProfile(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	old := runtime.SetMutexProfileFraction(0) // enabled during sub-tests
 	defer runtime.SetMutexProfileFraction(old)
 	if old != 0 {

@@ -55,6 +55,8 @@ func TestGcDeepNesting(t *testing.T) {
 }
 
 func TestGcMapIndirection(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer debug.SetGCPercent(debug.SetGCPercent(1))
 	runtime.GC()
 	type T struct {
@@ -580,6 +582,8 @@ func BenchmarkReadMemStatsLatency(b *testing.B) {
 }
 
 func TestUserForcedGC(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Test that runtime.GC() triggers a GC even if GOGC=off.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 

@@ -64,6 +64,8 @@ func allocateReflect() {
 var memoryProfilerRun = 0
 
 func TestMemoryProfiler(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if asan.Enabled {
 		t.Skip("extra allocations with -asan throw off the test; see #70079")
 	}

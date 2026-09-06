@@ -426,6 +426,8 @@ func TestIPv6LinkLocalUnicastTCP(t *testing.T) {
 }
 
 func TestTCPConcurrentAccept(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	ln, err := Listen("tcp", "127.0.0.1:0")
 	if err != nil {

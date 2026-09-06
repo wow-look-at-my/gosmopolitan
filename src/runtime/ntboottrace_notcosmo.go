@@ -10,5 +10,10 @@ package runtime
 // compiler removes the calls. os_cosmo_nt_boottrace.go has the other
 // half.
 //
+// The name carries no _cosmo component on purpose. cmd/dist reads the
+// FILENAME for a GOOS before it reads the build line, so a file called
+// os_cosmo_nt_...off.go is cosmo-only to the bootstrap however its
+// //go:build line reads, and every other port loses this declaration.
+//
 //go:nosplit
 func ntBoot(msg string) {}
