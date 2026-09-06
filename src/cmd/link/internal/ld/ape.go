@@ -548,7 +548,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
 	switch {
 	case linuxAMD || darwinAMD:
-		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"\n")
+		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"; [ -f \"$o\" ] || o=\"$PWD/${0##*/}\"\n")
 		if !linuxAMD {
 			// Without a boot ELF header there is nothing to assimilate
 			// into, and re-execing would spin on this script forever.
@@ -572,7 +572,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
-		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"\n")
+		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"; [ -f \"$o\" ] || o=\"$PWD/${0##*/}\"\n")
 		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
