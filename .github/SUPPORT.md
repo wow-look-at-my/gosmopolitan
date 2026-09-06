@@ -1,5 +1,4 @@
-Unlike many projects on GitHub, the Go project does not use its bug tracker for general discussion or asking questions.
-We only use our bug tracker for tracking bugs and tracking proposals going through the [Proposal Process](https://go.dev/s/proposal-process).
+Unlike many projects on GitHub, the Go project does not use its bug tracker for general discussion or asking questions. We only use our bug tracker for tracking bugs and tracking proposals going through the [Proposal Process](https://go.dev/s/proposal-process).
 
 For asking questions, see:
 
