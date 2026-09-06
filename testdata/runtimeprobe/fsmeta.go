@@ -227,8 +227,11 @@ func checkFsMetaUnix() {
 	s.finish("chmod/chown/symlink/mkfifo")
 }
 
-func checkSysInfo() {
-	s := &softStep{name: "sysinfo", soft: cosmoHostOS() == "windows"}
+// checkVolume covers statfs, fstatfs and uname. Every host serves all
+// three, so this is a hard assertion everywhere. It is separate from
+// checkSysInfo because the rest of that step is still ENOSYS on NT.
+func checkVolume() {
+	s := &softStep{name: "volume"}
 	var detail []string
 
 	// statfs and fstatfs. Both fill the same struct, so the block size
@@ -239,6 +242,12 @@ func checkSysInfo() {
 			s.do("Statfs values", fmt.Errorf("bsize %d blocks %d, want both positive", sfs.Bsize, sfs.Blocks))
 		} else {
 			detail = append(detail, fmt.Sprintf("bsize=%d", sfs.Bsize))
+		}
+		// A volume cannot have more free blocks than it has blocks. This
+		// catches a conversion that divided by the wrong unit, which a
+		// positive-value check alone lets through.
+		if sfs.Blocks != 0 && sfs.Bfree > sfs.Blocks {
+			s.do("Statfs free", fmt.Errorf("bfree %d > blocks %d", sfs.Bfree, sfs.Blocks))
 		}
 	}
 	if f, err := os.Open(os.TempDir()); err == nil {
@@ -260,6 +269,13 @@ func checkSysInfo() {
 			detail = append(detail, "uname="+sys)
 		}
 	}
+
+	s.finish(strings.Join(detail, " "))
+}
+
+func checkSysInfo() {
+	s := &softStep{name: "sysinfo", soft: cosmoHostOS() == "windows"}
+	var detail []string
 
 	// prlimit64. RLIMIT_NOFILE is the one the runtime itself raises at
 	// startup, so a wrong resource number here would be visible.

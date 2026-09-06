@@ -31,7 +31,10 @@
 
 // Linux amd64 numbers for the metadata wave, as
 // syscall/zsysnum_cosmo_amd64.go records them.
+#define SYS_flock		73
 #define SYS_fsync		74
+#define SYS_fdatasync		75
+#define SYS_sync		162
 #define SYS_truncate		76
 #define SYS_ftruncate		77
 #define SYS_fchdir		81
@@ -62,6 +65,7 @@
 #define XNU_read		0x2000003	// BSD 3
 #define XNU_write		0x2000004	// BSD 4
 #define XNU_open		0x2000005	// BSD 5
+#define XNU_openat		0x20001cf	// BSD 463
 #define XNU_close		0x2000006	// BSD 6
 #define XNU_mmap		0x20000c5	// BSD 197
 #define XNU_munmap		0x2000049	// BSD 73
@@ -90,13 +94,16 @@
 #define XNU_chroot		0x200003d	// BSD 61
 #define XNU_getgroups		0x200004f	// BSD 79
 #define XNU_setgroups		0x2000050	// BSD 80
+#define XNU_sync		0x2000024	// BSD 36
 #define XNU_fsync		0x200005f	// BSD 95
+#define XNU_fdatasync		0x20000bb	// BSD 187
 #define XNU_setpriority		0x2000060	// BSD 96
 #define XNU_getpriority		0x2000064	// BSD 100
 #define XNU_fchown		0x200007b	// BSD 123
 #define XNU_fchmod		0x200007c	// BSD 124
 #define XNU_setreuid		0x200007e	// BSD 126
 #define XNU_setregid		0x200007f	// BSD 127
+#define XNU_flock		0x2000083	// BSD 131
 #define XNU_getpgid		0x2000097	// BSD 151
 #define XNU_setgid		0x20000b5	// BSD 181
 #define XNU_getrlimit		0x20000c2	// BSD 194
@@ -256,6 +263,12 @@ syscall6_darwin:
 	JEQ	darwin_fchown
 	CMPQ	R11, $SYS_fchdir
 	JEQ	darwin_fchdir
+	CMPQ	R11, $SYS_flock
+	JEQ	darwin_flock
+	CMPQ	R11, $SYS_fdatasync
+	JEQ	darwin_fdatasync
+	CMPQ	R11, $SYS_sync
+	JEQ	darwin_sync
 	CMPQ	R11, $SYS_chroot
 	JEQ	darwin_chroot
 	CMPQ	R11, $SYS_getgroups
@@ -310,18 +323,26 @@ darwin_close:
 	JMP	darwin_syscall
 
 darwin_openat:
-	// macOS open() takes (path, flags, mode) not (dirfd, path, flags, mode)
-	// For AT_FDCWD (-100), shift args: path=SI->DI, flags=DX->SI, mode=R10->DX
+	// The Linux O_* bits are not Apple's. Untranslated, O_CREAT (0x40)
+	// arrives as Apple O_SHLOCK and os.Create makes no file.
 	CMPQ	DI, $-100	// AT_FDCWD
 	JNE	darwin_openat_with_fd
+	// Apple open(path, flags, mode): shift the dirfd off the front.
 	MOVQ	SI, DI		// path
 	MOVQ	DX, SI		// flags
 	MOVQ	R10, DX		// mode
+	XCHGQ	SI, DX		// the helper reads and writes DX
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	XCHGQ	SI, DX
 	MOVL	$XNU_open, AX
 	JMP	darwin_syscall
 darwin_openat_with_fd:
-	// Non-FDCWD openat not directly supported, return ENOSYS
-	JMP	darwin_enosys
+	// Apple's openat takes the same argument order, so only the flags
+	// move. A real descriptor is never the AT_FDCWD sentinel, so the
+	// -100/-2 difference cannot reach here.
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	MOVL	$XNU_openat, AX
+	JMP	darwin_syscall
 
 darwin_mmap:
 	// mmap needs flag translation: Linux MAP_ANONYMOUS (0x20) -> macOS MAP_ANON (0x1000)
@@ -538,6 +559,26 @@ darwin_fchown:
 
 darwin_fchdir:
 	MOVL	$XNU_fchdir, AX
+	JMP	darwin_syscall
+
+darwin_fdatasync:
+	MOVL	$XNU_fdatasync, AX
+	JMP	darwin_syscall
+
+// sync returns void on XNU, so AX holds nothing a caller may read. The
+// Linux syscall returns 0, and that is what goes back.
+darwin_sync:
+	MOVL	$XNU_sync, AX
+	SYSCALL
+	MOVQ	$0, AX		// r1
+	MOVQ	$0, BX		// r2
+	MOVQ	$0, CX		// errno
+	RET
+
+darwin_flock:
+	// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+	// Linux took them from BSD, which is what XNU still serves.
+	MOVL	$XNU_flock, AX
 	JMP	darwin_syscall
 
 darwin_chroot:
