@@ -573,19 +573,51 @@ func ntResolve() {
 
 }
 
+// ntResolveWriter resolves WriteFile, GetStdHandle and the three std
+// handles from the IAT alone. It is what makes a throw before
+// ntResolve say something rather than exit 2 in silence.
+//
+//go:nosplit
+func ntResolveWriter() {
+	gpa, lla := ntiat[0], ntiat[1]
+	if gpa == 0 || lla == 0 {
+		return
+	}
+	k32 := ntcall(lla, uintptr(unsafe.Pointer(&ntNameKernel32[0])), 0, 0, 0, 0, 0)
+	if k32 == 0 {
+		return
+	}
+	if ntWriteFileFn == 0 {
+		ntWriteFileFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWriteFile[0])), 0, 0, 0, 0)
+	}
+	if ntGetStdHandleFn == 0 {
+		ntGetStdHandleFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetStdHandle[0])), 0, 0, 0, 0)
+	}
+	if ntGetStdHandleFn == 0 {
+		return
+	}
+	if ntStdout == 0 {
+		ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
+	}
+	if ntStderr == 0 {
+		ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
+	}
+}
+
 // ntwrite1 is the NT leg of runtime·write1, reached through
-// ntwrite1tramp. fds 1 and 2 map straight to the cached std handles -
-// deliberately NOT through the wave-2 fd table: write1 is the panic
-// and runtime-print path, and the runtime only ever writes to 1/2, so
-// the fewer moving parts the better. (User-level syscall.Write goes
-// through the table, os_cosmo_nt_sys.go.) Anything else is EBADF.
-// Returns the byte count or a negative errno, matching the write1
-// convention. write1 runs during panics, but always with a valid g
-// once boot completes, so routing through ntcall/asmcgocall is safe
-// (pre-boot printing is out of scope).
+// ntwrite1tramp. fds 1 and 2 map straight to the cached std handles,
+// never through the fd table: this is the panic path, and the runtime
+// writes to 1 and 2 only. Anything else is EBADF. It returns the byte
+// count or a negative errno, as write1 does.
+//
+// A caller from before ntResolve has no table and no handles, and gets
+// them here from the IAT. A throw that early is the one worth reading.
 //
 //go:nosplit
 func ntwrite1(fd uintptr, p unsafe.Pointer, n int32) int32 {
+	if ntWriteFileFn == 0 || ntGetStdHandleFn == 0 {
+		ntResolveWriter()
+	}
 	var h uintptr
 	switch fd {
 	case 1:
