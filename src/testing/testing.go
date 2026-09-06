@@ -2223,15 +2223,14 @@ func (c *common) inSerialTree() bool {
 	return h != nil && h.barrierHeld == barrierExclusive
 }
 
-// ownsBarrierHold reports whether this test runs in parallel under a hold of
-// its own. The root holds nothing. A synctest bubble and the subtree of a
-// serial test run inside their parent's body, under the parent's hold. So
-// does every test under a root that is not running under tRunner - a
-// hand-made root in this package's tests - because only tRunner releases
-// parallel subtests, and such a root may allow no parallelism at all. A
-// parent with no barrier (fuzzing, and some hand-made roots) never releases
-// them either.
-func (t *T) ownsBarrierHold() bool {
+// eligibleForBarrier reports whether this test may hold the serial barrier at
+// all. The root holds nothing. A synctest bubble and the subtree of a serial
+// test run inside their parent's body, under the parent's hold. So does every
+// test under a root that is not running under tRunner - a hand-made root in
+// this package's tests - because only tRunner releases parallel subtests, and
+// such a root may allow no parallelism at all. A parent with no barrier
+// (fuzzing, and some hand-made roots) never releases them either.
+func (t *T) eligibleForBarrier() bool {
 	if t.parent == nil || t.parent.barrier == nil || t.isSynctest || t.common.inSerialTree() {
 		return false
 	}
@@ -2242,9 +2241,24 @@ func (t *T) ownsBarrierHold() bool {
 	return root.runner != ""
 }
 
-// acquireBarrier takes the shared hold the test's function body runs under.
+// implicitlyParallel reports whether tRunner starts this test in parallel
+// without being asked. Only a top-level test qualifies. A subtest keeps the
+// order [T.Run] promises: it runs inside the call that starts it, so the
+// parent's later statements and its deferred calls come after the subtest
+// rather than underneath it. Test code relies on that order everywhere. A
+// parent closes the file its subtests read. A loop sets a package variable
+// before each subtest. A subtest that wants parallelism asks for it with
+// [T.Parallel], as it always could.
+func (t *T) implicitlyParallel() bool {
+	return t.eligibleForBarrier() && t.parent.parent == nil
+}
+
+// acquireBarrier takes the shared hold the test's function body runs under. A
+// test that an ancestor's hold already covers takes nothing: a second read
+// lock, from a test the holder waits for, deadlocks behind a pending Serial
+// caller, because Go queues a new reader behind a waiting writer.
 func (t *T) acquireBarrier() {
-	if !t.ownsBarrierHold() {
+	if !t.eligibleForBarrier() || t.common.barrierHolder() != nil {
 		return
 	}
 	serialBarrier.RLock()
@@ -2267,9 +2281,11 @@ func (t *T) releaseBarrier() {
 // Parallel signals that this test is to be run in parallel with (and only with)
 // other parallel tests, and pauses until all non-parallel tests have finished.
 //
-// Tests are already parallel by default, so calling this is redundant and does
-// nothing. [T.Serial] is the opt out, and inside a serial test Parallel does
-// nothing either: the subtests of a serial test run one at a time.
+// Top-level tests are already parallel by default, so calling this in one is
+// redundant and does nothing, and [T.Serial] is the opt out. A subtest runs
+// inside the [T.Run] call that starts it, so Parallel means there what it
+// always meant. Inside a serial test Parallel does nothing: the subtests of a
+// serial test run one at a time.
 //
 // When a test is run multiple times due to use of -test.count or -test.cpu,
 // multiple instances of a single test never run in parallel with each other.
@@ -2321,6 +2337,11 @@ func (t *T) Parallel() {
 	<-t.parent.barrier // Wait for the parent test to complete.
 	t.tstate.waitParallel()
 	parallelStart.Add(1)
+
+	// The parent dropped its hold before it released this test, so the hold
+	// that covered the body up to here is gone. Take one of this test's own,
+	// or the rest of the body runs against a Serial test.
+	t.acquireBarrier()
 
 	if t.chatty != nil {
 		t.chatty.Updatef(t.name, "=== CONT  %s\n", t.name)
@@ -2591,14 +2612,14 @@ func tRunner(t *T, fn func(t *T)) {
 		}
 	}()
 
-	// Parallel by default. A test that needs the process to itself calls
-	// t.Serial (or t.Setenv/t.Chdir, which take the barrier for it), and its
-	// subtests then run one at a time. Parallel charges the time before it to
-	// t.start, so t.start is set first. Only tRunner releases parallel
-	// subtests, so a parent that is not running under it (a hand-made root
-	// in this package's tests) runs its subtests inside Run.
+	// Top-level tests are parallel by default. A test that needs the process
+	// to itself calls t.Serial (or t.Setenv/t.Chdir, which take the barrier
+	// for it), and its subtests then run one at a time. Parallel charges the
+	// time before it to t.start, so t.start is set first. Only tRunner
+	// releases parallel subtests, so a parent that is not running under it (a
+	// hand-made root in this package's tests) runs its subtests inside Run.
 	t.start = highPrecisionTimeNow()
-	if t.ownsBarrierHold() {
+	if t.implicitlyParallel() {
 		t.Parallel()
 	}
 	t.acquireBarrier()

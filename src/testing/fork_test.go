@@ -12,8 +12,8 @@ import (
 )
 
 // TestForkStaysParallel: Fork gives the test a process, not a serial hold. The
-// child runs parallel-by-default like any other run, so the subtests of a
-// forked test must reach a rendezvous only concurrent code can reach.
+// child allows parallelism like any other run, so two subtests that ask for it
+// must reach a rendezvous only concurrent code can reach.
 func TestForkStaysParallel(t *T) {
 	t.Fork()
 
@@ -31,6 +31,7 @@ func TestForkStaysParallel(t *T) {
 
 	for _, name := range []string{"one", "two"} {
 		t.Run(name, func(t *T) {
+			t.Parallel()
 			wg.Done()
 			select {
 			case <-met:
@@ -38,6 +39,25 @@ func TestForkStaysParallel(t *T) {
 				t.Errorf("%s waited alone: the subtests of a forked test ran one at a time", t.Name())
 			}
 		})
+	}
+}
+
+// TestSubtestsRunInsideRun: a subtest is not parallel unless it asks. Run
+// blocks until the subtest returns, so the parent's later statements and its
+// deferred calls come after the subtest rather than underneath it.
+func TestSubtestsRunInsideRun(t *T) {
+	var order []string
+	func() {
+		defer func() { order = append(order, "parent defer") }()
+		t.Run("sub", func(t *T) {
+			order = append(order, "sub")
+		})
+		order = append(order, "after Run")
+	}()
+
+	want := "sub, after Run, parent defer"
+	if got := strings.Join(order, ", "); got != want {
+		t.Errorf("order is %q; want %q", got, want)
 	}
 }
 
@@ -318,10 +338,12 @@ func TestAllocsPerRunRefusesBesideASibling(t *T) {
 
 	running, release := make(chan struct{}), make(chan struct{})
 	t.Run("busy", func(t *T) {
+		t.Parallel()
 		close(running)
 		<-release
 	})
 	t.Run("measuring", func(t *T) {
+		t.Parallel()
 		<-running
 		defer close(release)
 		defer func() {
