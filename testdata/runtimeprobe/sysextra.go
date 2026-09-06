@@ -16,8 +16,12 @@ import (
 
 // checkDurable covers fdatasync and sync. os.File.Sync is fsync, a
 // different syscall, so fdatasync has no in-tree caller to break it.
+//
+// A hard assertion on every host, Windows included: the NT emulation
+// serves fdatasync through FlushFileBuffers, and sync reports nothing
+// anywhere.
 func checkDurable() {
-	s := &softStep{name: "durable", soft: cosmoHostOS() == "windows"}
+	s := &softStep{name: "durable"}
 
 	dir, err := os.MkdirTemp("", "rp-durable")
 	if err != nil {
