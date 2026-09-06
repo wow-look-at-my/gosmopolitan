@@ -1895,7 +1895,6 @@ func TestTLSServerWithoutTLSConn(t *testing.T) {
 
 func TestServeTLS(t *testing.T) {
 	CondSkipHTTP2(t)
-	t.Serial("this rewrites the package's global http2 test hooks, which every other test in the binary reads")
 	defer afterTest(t)
 
 	cert, err := tls.X509KeyPair(testcert.LocalhostCert, testcert.LocalhostKey)
@@ -2062,7 +2061,6 @@ func TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(t *testing.T) {
 
 func testAutomaticHTTP2_ListenAndServe(t *testing.T, tlsConf *tls.Config) {
 	CondSkipHTTP2(t)
-	t.Serial("the automatic http2 upgrade here installs global hooks that decide what every other server does")
 	defer afterTest(t)
 	var ok bool
 	var s *Server
