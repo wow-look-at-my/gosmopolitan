@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -93,7 +94,18 @@ func u64(b []byte) uint64 {
 // APE, in the order to prefer them. A default build strips the APE
 // itself, so these hold the section headers, the symbol table and the
 // DWARF.
-var sidecars = []string{".dbg", ".aarch64.elf"}
+var sidecars = hostFirst()
+
+// hostFirst orders the sidecars by the machine reading them. A fat APE
+// carries both architectures, and a tool asked about one on THIS machine
+// means the payload that runs here: nm on an arm64 host reporting the
+// amd64 image gives addresses no running process ever has.
+func hostFirst() []string {
+	if runtime.GOARCH == "arm64" {
+		return []string{".aarch64.elf", ".dbg"}
+	}
+	return []string{".dbg", ".aarch64.elf"}
+}
 
 // Sidecar returns the file to read an APE's ELF structure from, or ""
 // when name is not an APE or nothing is beside it.

@@ -19,6 +19,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/runtime/atomic"
 	"unsafe"
@@ -732,7 +733,7 @@ func ntUTF16ToString(s []uint16) string {
 // http://daviddeley.com/autohotkey/parameters/parameters.htm#WINARGV.
 // It is a port of commandLineToArgv/readNextArg/appendBSBytes from
 // os/exec_windows.go: package os only runs that parse when
-// GOOS == "windows"; under GOOS=cosmo os.Args comes from the
+// the windows port builds it; under GOOS=cosmo os.Args comes from the
 // runtime's argslice, so the parse has to happen here.
 func ntCommandLineToArgv(cmd string) []string {
 	var args []string

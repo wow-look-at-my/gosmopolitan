@@ -12,7 +12,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -102,9 +101,9 @@ var s390xGnuNeed = []string{
 }
 
 func mustHaveDisasm(t *testing.T) {
-	switch runtime.GOARCH {
+	switch testenv.GOARCH {
 	case "mips", "mipsle", "mips64", "mips64le":
-		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
+		t.Skipf("skipping on %s, issue 12559", testenv.GOARCH)
 	}
 }
 
@@ -121,7 +120,7 @@ var target = flag.String("target", "", "test disassembly of `goos/goarch` binary
 
 func testDisasm(t *testing.T, srcfname string, printCode bool, printGnuAsm bool, flags ...string) {
 	mustHaveDisasm(t)
-	goarch := runtime.GOARCH
+	goarch := testenv.GOARCH
 	if *target != "" {
 		f := strings.Split(*target, "/")
 		if len(f) != 2 {
@@ -340,9 +339,9 @@ func TestDisasmWasm(t *testing.T) {
 
 func TestDisasmExtld(t *testing.T) {
 	testenv.MustHaveCGO(t)
-	switch runtime.GOOS {
+	switch testenv.GOOS {
 	case "plan9":
-		t.Skipf("skipping on %s", runtime.GOOS)
+		t.Skipf("skipping on %s", testenv.GOOS)
 	}
 	t.Parallel()
 	testDisasm(t, "fmthello.go", false, false, "-ldflags=-linkmode=external")
@@ -399,7 +398,7 @@ func TestDisasmGoobj(t *testing.T) {
 			ok = false
 		}
 	}
-	if runtime.GOARCH == "386" {
+	if testenv.GOARCH == "386" {
 		if strings.Contains(text, "(IP)") {
 			t.Errorf("disassembly contains PC-Relative addressing on 386")
 			ok = false

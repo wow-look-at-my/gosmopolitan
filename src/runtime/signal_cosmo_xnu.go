@@ -31,6 +31,9 @@ import "unsafe"
 const (
 	xnuSS_ONSTACK = 0x1
 	xnuSS_DISABLE = 0x4
+
+	// The smallest stack this host accepts, MINSIGSTKSZ in signal.h.
+	xnuMINSIGSTKSZ = 32768
 )
 
 // xnuSigactiont is Apple's libc struct sigaction (what sigaction(2)'s
@@ -152,6 +155,12 @@ func darwinSigaltstack(new, old *stackt) {
 			fl |= xnuSS_ONSTACK
 		}
 		anew.ss_flags = fl
+		if fl&xnuSS_DISABLE != 0 && anew.ss_size < xnuMINSIGSTKSZ {
+			// A disable carries no stack, so Linux sends a zero size.
+			// This host measures the size first and answers ENOMEM, so
+			// the disable never reaches the flag it asked for.
+			anew.ss_size = xnuMINSIGSTKSZ
+		}
 		anewp = uintptr(unsafe.Pointer(&anew))
 	}
 	if old != nil {

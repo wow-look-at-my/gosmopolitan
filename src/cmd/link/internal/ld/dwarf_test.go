@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +27,7 @@ import (
 func mustHaveDWARF(t testing.TB) {
 	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Helper()
-		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
+		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", testenv.GOOS, testenv.GOARCH)
 	}
 }
 
@@ -836,7 +835,7 @@ func TestAbstractOriginSanityIssue25459(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
 	mustHaveDWARF(t)
-	if runtime.GOARCH != "amd64" && runtime.GOARCH != "386" {
+	if testenv.GOARCH != "amd64" && testenv.GOARCH != "386" {
 		t.Skip("skipping on not-amd64 not-386; location lists not supported")
 	}
 
@@ -868,7 +867,7 @@ func TestRuntimeTypeAttrExternal(t *testing.T) {
 
 	mustHaveDWARF(t)
 
-	if runtime.GOOS == "aix" {
+	if testenv.GOOS == "aix" {
 		// This fails with something like: DWARF type offset was 0xf18+0x200008b8, but test program said 0x1100017d0
 		t.Skip("-linkmode=external not supported on aix")
 	}
@@ -1207,7 +1206,7 @@ func TestMachoIssue32233(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveCGO(t)
 
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		t.Skip("skipping; test only interesting on darwin")
 	}
 
@@ -1217,7 +1216,7 @@ func TestMachoIssue32233(t *testing.T) {
 
 func TestWindowsIssue36495(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skip("skipping: test only on windows")
 	}
 

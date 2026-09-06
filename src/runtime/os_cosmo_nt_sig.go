@@ -16,6 +16,7 @@
 package runtime
 
 import (
+	"internal/goarch"
 	"internal/abi"
 	"internal/runtime/sys"
 	"unsafe"
@@ -206,7 +207,7 @@ func ntIsGoException(info *ntExceptionRecord, r *ntContext) bool {
 //go:nosplit
 func ntIsAbort(r *ntContext) bool {
 	pc := r.getPC()
-	if GOARCH == "amd64" {
+	if goarch.IsAmd64 == 1 {
 		pc--
 	}
 	return isAbortPC(pc)
@@ -330,7 +331,7 @@ func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 	// bcryptprimitives) probe CPU features at load time by trapping
 	// illegal instructions under SEH. VEH runs before SEH, so an
 	// illegal instruction from non-Go code is that probe: pass it on.
-	if GOARCH == "arm64" && info.exceptionCode == _NT_EXCEPTION_ILLEGAL_INSTRUCTION &&
+	if goarch.IsArm64 == 1 && info.exceptionCode == _NT_EXCEPTION_ILLEGAL_INSTRUCTION &&
 		(r.getPC() < firstmoduledata.text || firstmoduledata.etext < r.getPC()) {
 		return _NT_EXCEPTION_CONTINUE_SEARCH
 	}

@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/goarch"
 	"unsafe"
@@ -50,7 +51,7 @@ func (c *sigctxt) preparePanic(sig uint32, gp *g) {
 	// Work around Leopard bug that doesn't set FPE_INTDIV.
 	// Look at instruction to see if it is a divide.
 	// Not necessary in Snow Leopard (si_code will be != 0).
-	if GOOS == "darwin" && sig == _SIGFPE && gp.sigcode0 == 0 {
+	if goos.IsDarwin == 1 && sig == _SIGFPE && gp.sigcode0 == 0 {
 		pc := (*[4]byte)(unsafe.Pointer(gp.sigpc))
 		i := 0
 		if pc[i]&0xF0 == 0x40 { // 64-bit REX prefix

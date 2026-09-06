@@ -528,7 +528,7 @@ func setsig(i uint32, fn uintptr) {
 	var sa sigactiont
 	sa.sa_flags = _SA_SIGINFO | _SA_ONSTACK | _SA_RESTORER | _SA_RESTART
 	sigfillset(&sa.sa_mask)
-	if GOARCH == "386" || GOARCH == "amd64" {
+	if goarch.Is386 == 1 || goarch.IsAmd64 == 1 {
 		sa.sa_restorer = abi.FuncPCABI0(sigreturn__sigaction)
 	}
 	if fn == abi.FuncPCABIInternal(sighandler) {

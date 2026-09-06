@@ -10,7 +10,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -62,7 +61,7 @@ func runAddr2Line(t *testing.T, dbgExePath, addr string) (funcname, path, lineno
 	funcname = f[0]
 	pathAndLineNo := f[1]
 	f = strings.Split(pathAndLineNo, ":")
-	if runtime.GOOS == "windows" && len(f) == 3 {
+	if testenv.GOOS == "windows" && len(f) == 3 {
 		// Reattach drive letter.
 		f = []string{f[0] + ":" + f[1], f[2]}
 	}

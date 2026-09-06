@@ -1997,7 +1997,17 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
 // child that could not be started, or died on a signal - against this test.
+//
+// A host that starts no child process - js, wasip1, ios - takes the barrier
+// instead, which buys the same isolation by stopping every other test. There
+// is one process there, so no other test can reach this one's state either
+// way. [AllocsPerRun] is the exception: it needs the process itself, and fails
+// on such a host rather than measuring the wrong thing.
 func (t *T) Fork() {
+	if !canFork() {
+		t.Serial()
+		return
+	}
 	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
 		// Already the dedicated child: run the body right here. A test the
 		// target runs UNDER stays here too, or the child forks its own parent
@@ -2405,11 +2415,7 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
-	if canFork() {
-		t.Fork()
-		return
-	}
-	t.Serial()
+	t.Fork()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to

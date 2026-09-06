@@ -584,7 +584,7 @@ func mallocinit() {
 		}
 
 		var vmaSize int
-		if GOARCH == "riscv64" {
+		if goarch.IsRiscv64 == 1 {
 			// Identify which memory layout is in use based on the system
 			// stack address, knowing that the bottom half of virtual memory
 			// is user space. This should result in 39, 48 or 57. It may be
@@ -600,7 +600,7 @@ func mallocinit() {
 		for i := 0x7f; i >= 0; i-- {
 			var p uintptr
 			switch {
-			case raceenabled && GOARCH == "riscv64" && vmaSize == 39:
+			case raceenabled && goarch.IsRiscv64 == 1 && vmaSize == 39:
 				p = uintptr(i)<<28 | uintptrMask&(0x0013<<28)
 				if p >= uintptrMask&0x000f00000000 {
 					continue
@@ -616,13 +616,13 @@ func mallocinit() {
 			case randomizeHeapBase:
 				prefix := uintptr(randHeapBasePrefix+byte(i)) << (randHeapAddrBits - 8)
 				p = prefix | (randHeapBase & randHeapBasePrefixMask)
-			case GOARCH == "arm64" && GOOS == "ios":
+			case goarch.IsArm64 == 1 && goos.IsIos == 1:
 				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
-			case GOARCH == "arm64":
+			case goarch.IsArm64 == 1:
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
-			case GOARCH == "riscv64" && vmaSize == 39:
+			case goarch.IsRiscv64 == 1 && vmaSize == 39:
 				p = uintptr(i)<<32 | uintptrMask&(0x0013<<28)
-			case GOOS == "aix":
+			case goos.IsAix == 1:
 				if i == 0 {
 					// We don't use addresses directly after 0x0A00000000000000
 					// to avoid collisions with others mmaps done by non-go programs.

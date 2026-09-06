@@ -405,7 +405,7 @@ func parseRuntimeDebugVars(godebug string) {
 	debug.cgocheck = 1
 	debug.invalidptr = 1
 	debug.adaptivestackstart = 1 // set this to 0 to turn larger initial goroutine stacks off
-	if GOOS == "linux" {
+	if goos.IsLinux == 1 {
 		// On Linux, MADV_FREE is faster than MADV_DONTNEED,
 		// but doesn't affect many of the statistics that
 		// MADV_DONTNEED does until the memory is actually
@@ -593,7 +593,7 @@ func setTraceback(level string) {
 	case "crash":
 		t = 2<<tracebackShift | tracebackAll | tracebackCrash
 	case "wer":
-		if GOOS == "windows" {
+		if goos.IsWindows == 1 {
 			t = 2<<tracebackShift | tracebackAll | tracebackCrash
 			enableWER()
 			break
