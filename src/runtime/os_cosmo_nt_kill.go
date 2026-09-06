@@ -60,35 +60,16 @@ func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// ntEmuKillGroup implements kill(-pgid, sig): signal a whole process
-// group. Only groups WE created are addressable - pgid must be the
-// pid of a spawned child launched with CREATE_NEW_PROCESS_GROUP
-// (SysProcAttr{Setpgid: true} through ntForkExec/ntSpawn); everything
-// else is ESRCH, mirroring the own-children-only rule of the
-// positive-pid arm.
-//
-//   - SIGQUIT -> GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pgid):
-//     THE reliably deliverable group-targeted console event (upstream
-//     Go's own TestCtrlBreak uses exactly this pairing). In a cosmo
-//     child the injected handler maps CTRL_BREAK back to SIGQUIT,
-//     completing the Linux-shaped round trip.
-//   - SIGINT -> GenerateConsoleCtrlEvent(CTRL_C_EVENT, pgid),
-//     best-effort: NT creates CREATE_NEW_PROCESS_GROUP children with
-//     Ctrl-C DISABLED until they opt back in (SetConsoleCtrlHandler
-//     (NULL, FALSE)), so delivery to a child that never re-enabled it
-//     silently no-ops. Upstream windows Go has the identical hole;
-//     callers wanting a reliable group chord send SIGQUIT.
-//   - sig 0 -> existence probe.
-//   - any other sig -> TerminateProcess(leader, encoded status): no
-//     NT API delivers arbitrary signals group-wide, so group-kill
-//     degrades to leader-kill - the leader is the group's one member
-//     we know of. Same
-//     best-effort result discipline as the positive arm (a dead
-//     leader is the Linux kill-a-zombie success).
-//
-// A GenerateConsoleCtrlEvent failure (e.g. no console attached)
-// surfaces as the mapped errno from the trampoline-captured last
-// error.
+// ntEmuKillGroup implements kill(-pgid, sig). Only a group WE created
+// is addressable: pgid must be a child spawned with
+// CREATE_NEW_PROCESS_GROUP, and anything else is ESRCH, mirroring the
+// own-children-only rule of the positive-pid arm. Each signal is
+// handled on the case that maps it. SIGQUIT is the reliable group
+// chord, because NT creates such a child with Ctrl-C DISABLED until it
+// opts back in, so a SIGINT to one that never did silently no-ops -
+// upstream windows Go has the identical hole. No NT API delivers an
+// arbitrary signal group-wide, so any other signal degrades to killing
+// the leader, the one member of the group known here.
 func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
 	h, ok := ntProcFindGroup(pgid)
 	if !ok {
@@ -98,6 +79,10 @@ func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
 	case 0:
 		return 0, 0, 0 // existence probe
 	case _SIGINT, _SIGQUIT:
+		// A cosmo child's injected handler maps CTRL_BREAK back to
+		// SIGQUIT, which completes the Linux-shaped round trip. A
+		// failure here, such as no console attached, surfaces as the
+		// errno the trampoline captured.
 		ev := uintptr(_NT_CTRL_BREAK_EVENT)
 		if sig == _SIGINT {
 			ev = _NT_CTRL_C_EVENT

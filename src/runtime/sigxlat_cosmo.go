@@ -6,48 +6,17 @@
 
 package runtime
 
-// Linux <-> Apple (XNU) signal number translation.
+// Linux <-> Apple (XNU) signal number translation. A cosmo binary
+// thinks in LINUX numbers everywhere: sigtable, the _SIG* constants,
+// os/signal and syscall. A macOS kernel speaks Apple's, which diverges
+// for the BSD-heritage signals. So every darwin boundary translates -
+// out when installing, masking and sending, back when receiving.
 //
-// A cosmo binary thinks in LINUX signal numbers everywhere: sigtable,
-// the _SIG* constants, os/signal and syscall all use them. On macOS
-// hosts the kernel speaks Apple's numbering, which diverges for the
-// BSD-heritage signals. Every darwin boundary therefore translates:
-// Linux->Apple when installing handlers, masking, and sending
-// (sigaction, sigprocmask, kill, pthread_kill, raise), Apple->Linux
-// when receiving (sigtramp) and when decoding wait statuses.
-//
-// The tables below are derived from defs_cosmo_arm64.go (identical to
-// upstream defs_linux_arm64.go for 1..31) and upstream
-// defs_darwin_arm64.go:
-//
-//	signal      Linux  Apple        signal      Linux  Apple
-//	SIGHUP        1      1          SIGCHLD      17     20
-//	SIGINT        2      2          SIGCONT      18     19
-//	SIGQUIT       3      3          SIGSTOP      19     17
-//	SIGILL        4      4          SIGTSTP      20     18
-//	SIGTRAP       5      5          SIGTTIN      21     21
-//	SIGABRT       6      6          SIGTTOU      22     22
-//	SIGBUS        7     10          SIGURG       23     16
-//	SIGFPE        8      8          SIGXCPU      24     24
-//	SIGKILL       9      9          SIGXFSZ      25     25
-//	SIGUSR1      10     30          SIGVTALRM    26     26
-//	SIGSEGV      11     11          SIGPROF      27     27
-//	SIGUSR2      12     31          SIGWINCH     28     28
-//	SIGPIPE      13     13          SIGIO        29     23
-//	SIGALRM      14     14          SIGPWR       30      -
-//	SIGTERM      15     15          SIGSYS       31     12
-//	SIGSTKFLT    16      -          SIGEMT        -      7
-//	                                SIGINFO       -     29
-//
-// Signals without a counterpart translate to 0: Linux SIGSTKFLT and
-// SIGPWR and the realtime range (32..64) do not exist on XNU; Apple
-// SIGEMT and SIGINFO have no Linux number, so this runtime never
-// installs a handler for them and they keep their default action.
-//
-// The tables are plain initialized data (no init function) so they are
-// usable from the earliest signal paths, and they are shared with the
-// assembly in sys_cosmo_arm64.s (sigtramp, raise, tgkill, sigfwd),
-// which indexes them directly.
+// A signal with no counterpart translates to 0: Linux SIGSTKFLT,
+// SIGPWR and the realtime range do not exist on XNU, and Apple SIGEMT
+// and SIGINFO have no Linux number, so nothing installs a handler for
+// them and they keep their default action. sys_cosmo_arm64.s indexes
+// the tables directly, so they stay plain data with no init.
 
 // cosmoSigL2ATab maps a Linux signal number (index 1..31) to the Apple
 // number, 0 if there is none. Index 0 and 32..64 are 0.

@@ -4,50 +4,14 @@
 
 //go:build cosmo
 
-// Windows NT signals (wave 2 chunk D1): vectored exception handling
-// feeding the fork's linux-shaped sigpanic, self-directed signal
-// delivery through the real signal trampoline, and the encoded
-// signal-death exit status.
+// Windows NT signals: vectored exception handling feeding the fork's
+// linux-shaped sigpanic, self-directed delivery through the real signal
+// trampoline, and the encoded signal-death exit status.
 //
-// Design:
-//
-//   - Hardware faults: a vectored exception handler (ntExceptionTramp,
-//     first position) ported from upstream signal_windows.go. Faults
-//     with a Go-text PC and a known exception code are translated to
-//     LINUX signal numbers; panic-class signals (SEGV/BUS/FPE, per the
-//     fork's linux sigtable) record sig/sigcode0/sigcode1/sigpc on the
-//     g and rewrite the saved CONTEXT so the faulting goroutine calls
-//     sigpanic0 on resume - recover() then works exactly as on Linux.
-//     Throw-class codes (breakpoint/illegal instruction), throwsplit
-//     contexts, and runtime.abort crash via ntWinthrow. Everything
-//     else returns EXCEPTION_CONTINUE_SEARCH; a last vectored CONTINUE
-//     handler prints the crash report for exceptions nothing handled.
-//
-//   - Signal deaths exit with 0xC0DE0000|signo (ExitProcess), the
-//     fork-private encoding chunk B's wait4 already decodes into a
-//     Linux "killed by signal" status. runtime.raise/raiseproc on NT
-//     jump straight to that exit (they are only called on paths that
-//     expect the process to die: dieFromSignal, raisebadsignal).
-//
-//   - Self-directed signals (kill/tkill/tgkill with the caller as
-//     target): the runtime records sigaction state itself (ntSigActs -
-//     there is no kernel-side sigaction on NT) and ntKillSelf performs
-//     the kernel's decision tree: ignored/default-ignored signals are
-//     dropped, uncatchable/default-terminate signals exit encoded, and
-//     signals with the Go handler installed are DELIVERED by running
-//     the real trampoline (sigtramp -> sigtrampgo -> sighandler) on
-//     the calling thread's gsignal stack with a synthesized
-//     linux-format siginfo/ucontext - os/signal's Notify pipeline
-//     observes them exactly as on Linux, and unwatched fatal signals
-//     die through the ordinary dieFromSignal path.
-//
-//   - Signals aimed at a spawned child terminate it with the encoded
-//     status via the stored process handle (TerminateProcess); the
-//     parent's wait4 then reports "killed by signal N". kill(-pgid)
-//     reaches a child spawned as its own group leader
-//     (CREATE_NEW_PROCESS_GROUP) via GenerateConsoleCtrlEvent for
-//     SIGINT/SIGQUIT, degrading to leader TerminateProcess for other
-//     signals (wave 3 item 4). Unknown pids/pgids are ESRCH.
+// NT has no kernel-side sigaction, so the runtime records the
+// disposition itself in ntSigActs and ntKillSelf runs the kernel's
+// decision tree over it. Signals aimed at a spawned child go through
+// os_cosmo_nt_kill.go instead.
 
 package runtime
 
@@ -96,27 +60,26 @@ const (
 	_NT_SEM_NOOPENFILEERRORBOX    = 0x8000
 	_NT_WER_FAULT_REPORTING_NO_UI = 0x0020
 
-	// Fork-private signal-death exit status base: a process that
-	// dies of signal N exits
-	// with 0xC0DE0000|N, which wait4 decodes into the Linux "killed
-	// by signal N" status. Must match ntExitEncoded's asm.
+	// Fork-private signal-death exit status base: a process that dies
+	// of signal N exits with 0xC0DE0000|N, which wait4 decodes into
+	// the Linux "killed by signal N" status. Must match
+	// ntExitEncoded's asm. raise and raiseproc jump straight to that
+	// exit, because their only callers - dieFromSignal, raisebadsignal
+	// - already expect the process to die.
 	_NT_SIGDEATH_BASE = 0xC0DE0000
 )
 
-// TEB stack-bounds policy: a deliberately WIDE NT_TIB window covering
-// the whole user address space, installed on the boot thread
-// (ntInitSignals) and on every CreateThread thread after its stack
-// pivot (tstart_cosmo_nt). Go code runs on heap-allocated stacks that move
-// (user goroutines) or are Go-allocated (g0s), so no per-thread real
-// range can cover every RSP the exception dispatch and
-// continue/unwind validity checks will see; a wide window makes every
-// live stack "within system stack limits", which removes the need for
-// upstream's sigresume workaround (signal_windows.go:174-192) - the
-// modified CONTEXT can resume straight onto the faulting goroutine
-// stack. Go stacks have no guard pages, so the kernel's guard-based
-// stack growth machinery never consults these fields; the only
-// remaining consumers are exception dispatch/continue and foreign SEH
-// frame validation, all of which the wide window satisfies.
+// The NT_TIB stack window is deliberately WIDE, covering the whole
+// user address space. It is installed on the boot thread and on every
+// CreateThread thread after its stack pivot. Go runs on stacks that
+// move or are Go-allocated, so no real per-thread range can cover
+// every RSP that exception dispatch and the continue and unwind
+// validity checks will see. A wide window makes every live stack
+// "within system stack limits", which is what removes the need for
+// upstream's sigresume workaround: the modified CONTEXT can resume
+// straight onto the faulting goroutine stack. Go stacks have no guard
+// pages, so the kernel's stack-growth machinery never reads these
+// fields, and the remaining consumers are satisfied.
 const (
 	_NT_TEB_WIDE_BASE  = 0x00007FFFFFFF0000 // highest user-mode address (exclusive-ish)
 	_NT_TEB_WIDE_LIMIT = 0x10000            // above the NULL-guard region
@@ -125,6 +88,17 @@ const (
 // Implemented in sys_cosmo_nt_<goarch>.s.
 func ntSetTEBStackBounds(hi, lo uintptr)
 func ntGetTEBStackBounds() (hi, lo uintptr)
+
+// ntExceptionTramp is the first-position vectored exception handler,
+// ported from upstream signal_windows.go. A fault with a Go-text PC
+// and a known exception code becomes a LINUX signal number. A
+// panic-class signal records sig, sigcode0, sigcode1 and sigpc on the
+// g and rewrites the saved CONTEXT so the faulting goroutine calls
+// sigpanic0 on resume, which is what makes recover() work as on Linux.
+// A throw-class code, a throwsplit context and runtime.abort crash via
+// ntWinthrow. Anything else returns EXCEPTION_CONTINUE_SEARCH, and a
+// last vectored CONTINUE handler prints the report for what nothing
+// handled.
 func ntExceptionTramp()
 func ntFirstVCHTramp()
 func ntLastVCHTramp()
@@ -446,10 +420,9 @@ func ntSigaction(sig uint32, new, old *sigactiont) int32 {
 // ---- signal mask ----
 
 // ntSigMask is the blocked-signal set, and ntSigPending the signals a
-// send found blocked. NT has no kernel signal mask, and the asm
-// rtsigprocmask stub used to return success while blocking nothing - so
-// a runtime that had just blocked every signal around a critical section
-// could still be reentered by one.
+// send found blocked. NT has no kernel signal mask, so a mask this
+// file does not keep is a mask that blocks nothing, and a critical
+// section that had masked every signal could still be reentered.
 //
 // Recording it here is the whole implementation, for the same reason
 // ntSigActs is: the only sender that reaches a thread on this host is
@@ -549,6 +522,14 @@ func ntSigDefaultIgnored(sig uint32) bool {
 // self-directed signal, on the calling thread. Returns a Linux errno
 // (0 on success). Runs as ordinary Go in the syscall-emulation
 // context (user goroutine).
+//
+// An ignored or default-ignored signal drops. An uncatchable or
+// default-terminate one exits encoded. One carrying the Go handler is
+// DELIVERED by running the real trampoline - sigtramp, sigtrampgo,
+// sighandler - on this thread's gsignal stack, over a synthesized
+// linux-format siginfo and ucontext. So os/signal's Notify pipeline
+// observes it exactly as on Linux, and an unwatched fatal signal dies
+// through the ordinary dieFromSignal path.
 func ntKillSelf(sig uint32) uintptr {
 	if sig == 0 {
 		return 0
