@@ -44,12 +44,11 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 
 ## 5. Wordspam the hook does not yet scan
 
-`dats/no-wordspam.dats` covers every markdown file this fork wrote and a handful of cosmo sources. Two bodies stay outside it:
+`dats/no-wordspam.dats` covers every markdown file this fork wrote and a handful of cosmo sources. One body stays outside it:
 
 | # | Location | Behavior |
 |---|----------|----------|
-| 1 | `WASM_SHORTCOMINGS.md` | 56 KB against a 40 KB budget. A 25 KB "Fixed in this fork" table carries a row per fix, with its commit and a before-and-after. That is a changelog in a file whose subject is what is still missing, so it goes and git keeps it. |
-| 2 | `src/runtime/*cosmo*.go`, `src/internal/runtime/syscall/cosmo/*.go`, `src/syscall/*cosmo*.go` | About forty files carry a comment block past the twelve-line cap, up to 121 lines. Each needs the invariant kept and the narrative around it cut. |
+| 1 | `src/runtime/*cosmo*.go`, `src/internal/runtime/syscall/cosmo/*.go`, `src/syscall/*cosmo*.go` | About forty files carry a comment block past the twelve-line cap, up to 121 lines. Each needs the invariant kept and the narrative around it cut. |
 
 ## 6. NT gaps Windows cannot close
 

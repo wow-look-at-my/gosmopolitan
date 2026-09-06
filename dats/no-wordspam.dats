@@ -6,13 +6,12 @@
 # sources the rule has been brought up to. Adding a path is how the rule
 # spreads; removing one is not.
 #
-# Two bodies are not in it yet, and docs/STUBS-INVENTORY.md tracks both:
-# WASM_SHORTCOMINGS.md, over the byte budget by a changelog table, and
+# One body is not in it yet, and docs/STUBS-INVENTORY.md tracks it:
 # about forty cosmo runtime and syscall files whose comment blocks run
 # past the twelve-line cap.
 tests:
 	- desc: no wordspam in the fork's own markdown
-	  cmd: .claude/hooks/no-wordspam.sh CLAUDE.md README.md docs/APE-BUILD.md docs/APE-STAGING.md docs/CI.md docs/INSTALL.md docs/LOOP-INLINING.md docs/OPTIONAL-PARAMS.md docs/PLATFORM-STATUS.md docs/STUBS-INVENTORY.md docs/TESTING-PARALLEL.md docs/UPREV-GO1.27.md docs/WASM.md dats/no-wordspam.dats .claude/hooks/no-wordspam.sh
+	  cmd: .claude/hooks/no-wordspam.sh CLAUDE.md README.md docs/APE-BUILD.md docs/APE-STAGING.md docs/CI.md docs/INSTALL.md docs/LOOP-INLINING.md docs/OPTIONAL-PARAMS.md docs/PLATFORM-STATUS.md docs/STUBS-INVENTORY.md docs/TESTING-PARALLEL.md docs/UPREV-GO1.27.md docs/WASM.md WASM_SHORTCOMINGS.md dats/no-wordspam.dats .claude/hooks/no-wordspam.sh
 	  exit: 0
 
 	- desc: no wordspam in the cosmo syscall emulation
