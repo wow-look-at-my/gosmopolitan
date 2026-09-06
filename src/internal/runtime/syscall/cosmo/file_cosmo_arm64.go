@@ -115,7 +115,13 @@ func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) 
 	} else {
 		r, _, e := darwinCall(darwinFns.Lseek, infd, 0, seekCUR, 0, 0, 0)
 		if e != 0 {
-			return ^uintptr(0), 0, e
+			// A pipe or a socket has no offset to read, so it is a
+			// file type sendfile cannot serve. Linux says EINVAL for
+			// that, and internal/poll reads EINVAL as its cue to copy
+			// the bytes itself. ESPIPE is an error nobody there
+			// expects, so the copy never happens and the reader on
+			// the other end waits for bytes that never arrive.
+			return ^uintptr(0), 0, darwinEINVAL
 		}
 		off = int64(r)
 	}
