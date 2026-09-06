@@ -106,25 +106,36 @@ type DarwinFns struct {
 	Symlinkat uintptr
 	Mknod     uintptr
 	Utimensat uintptr
-	Statfs    uintptr
-	Fstatfs   uintptr
-	Sendfile  uintptr
+	// Flock backs SYS_FLOCK. Apple's flock(2) is BSD's, which is where
+	// Linux took the LOCK_* values from, so operation passes through.
+	Flock uintptr
+	// Fdatasync may be absent; darwinFdatasync falls back to Fsync.
+	Fdatasync uintptr
+	Sync      uintptr
+	// Ioctl is VARIADIC: it must be called through
+	// darwinCallVariadic1, never darwinCall.
+	Ioctl    uintptr
+	Statfs   uintptr
+	Fstatfs  uintptr
+	Sendfile uintptr
 
 	// Credential, priority and resource-limit layer
 	// (proc_cosmo_arm64.go).
-	Chroot      uintptr
-	Setuid      uintptr
-	Setgid      uintptr
-	Setreuid    uintptr
-	Setregid    uintptr
-	Getpgid     uintptr
-	Getgroups   uintptr
-	Setgroups   uintptr
-	Getpriority uintptr
-	Setpriority uintptr
-	Getrlimit   uintptr
-	Setrlimit   uintptr
-	Uname       uintptr
+	Chroot       uintptr
+	Setuid       uintptr
+	Setgid       uintptr
+	Setreuid     uintptr
+	Setregid     uintptr
+	Getpgid      uintptr
+	Getgroups    uintptr
+	Setgroups    uintptr
+	Getpriority  uintptr
+	Setpriority  uintptr
+	Getrlimit    uintptr
+	Setrlimit    uintptr
+	Uname        uintptr
+	Getrusage    uintptr
+	Gettimeofday uintptr
 
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
@@ -152,56 +163,62 @@ func SetDarwinFns(f *DarwinFns) {
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
 // fast-path numbers live in defs_cosmo_arm64.go.
 const (
-	sysGETCWD      = 17
-	sysDUP         = 23
-	sysMKNODAT     = 33
-	sysMKDIRAT     = 34
-	sysUNLINKAT    = 35
-	sysSYMLINKAT   = 36
-	sysLINKAT      = 37
-	sysRENAMEAT    = 38
-	sysSTATFS      = 43
-	sysFSTATFS     = 44
-	sysTRUNCATE    = 45
-	sysFTRUNCATE   = 46
-	sysFACCESSAT   = 48
-	sysCHDIR       = 49
-	sysFCHDIR      = 50
-	sysCHROOT      = 51
-	sysFCHMOD      = 52
-	sysFCHMODAT    = 53
-	sysFCHOWNAT    = 54
-	sysFCHOWN      = 55
-	sysGETDENTS64  = 61
-	sysLSEEK       = 62
-	sysREADV       = 65
-	sysWRITEV      = 66
-	sysPWRITE64    = 68
-	sysSENDFILE    = 71
-	sysREADLINKAT  = 78
-	sysNEWFSTATAT  = 79
-	sysFSTAT       = 80
-	sysFSYNC       = 82
-	sysUTIMENSAT   = 88
-	sysSETPRIORITY = 140
-	sysGETPRIORITY = 141
-	sysSETREGID    = 143
-	sysSETGID      = 144
-	sysSETREUID    = 145
-	sysSETUID      = 146
-	sysGETPGID     = 155
-	sysGETGROUPS   = 158
-	sysSETGROUPS   = 159
-	sysUNAME       = 160
-	sysUMASK       = 166
-	sysGETPPID     = 173
-	sysGETUID      = 174
-	sysGETEUID     = 175
-	sysGETGID      = 176
-	sysGETEGID     = 177
-	sysPRLIMIT64   = 261
-	sysRENAMEAT2   = 276
-	sysGETRANDOM   = 278
+	sysGETCWD       = 17
+	sysDUP          = 23
+	sysIOCTL        = 29
+	sysFLOCK        = 32
+	sysMKNODAT      = 33
+	sysMKDIRAT      = 34
+	sysUNLINKAT     = 35
+	sysSYMLINKAT    = 36
+	sysLINKAT       = 37
+	sysRENAMEAT     = 38
+	sysSTATFS       = 43
+	sysFSTATFS      = 44
+	sysTRUNCATE     = 45
+	sysFTRUNCATE    = 46
+	sysFACCESSAT    = 48
+	sysCHDIR        = 49
+	sysFCHDIR       = 50
+	sysCHROOT       = 51
+	sysFCHMOD       = 52
+	sysFCHMODAT     = 53
+	sysFCHOWNAT     = 54
+	sysFCHOWN       = 55
+	sysGETDENTS64   = 61
+	sysLSEEK        = 62
+	sysREADV        = 65
+	sysWRITEV       = 66
+	sysPWRITE64     = 68
+	sysSENDFILE     = 71
+	sysREADLINKAT   = 78
+	sysNEWFSTATAT   = 79
+	sysFSTAT        = 80
+	sysSYNC         = 81
+	sysFSYNC        = 82
+	sysFDATASYNC    = 83
+	sysUTIMENSAT    = 88
+	sysSETPRIORITY  = 140
+	sysGETPRIORITY  = 141
+	sysSETREGID     = 143
+	sysSETGID       = 144
+	sysSETREUID     = 145
+	sysSETUID       = 146
+	sysGETPGID      = 155
+	sysGETGROUPS    = 158
+	sysSETGROUPS    = 159
+	sysUNAME        = 160
+	sysGETRUSAGE    = 165
+	sysUMASK        = 166
+	sysGETTIMEOFDAY = 169
+	sysGETPPID      = 173
+	sysGETUID       = 174
+	sysGETEUID      = 175
+	sysGETGID       = 176
+	sysGETEGID      = 177
+	sysPRLIMIT64    = 261
+	sysRENAMEAT2    = 276
+	sysGETRANDOM    = 278
 )
 
 // Errno values (Linux numbering) produced by the emulation itself.
@@ -493,6 +510,22 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFchownat(a1, a2, a3, a4, a5)
 	case sysFCHDIR:
 		return darwinCall(darwinFns.Fchdir, a1, 0, 0, 0, 0, 0)
+	case sysIOCTL:
+		return darwinIoctl(a1, a2, a3)
+	case sysSYNC:
+		return darwinSync()
+	case sysFDATASYNC:
+		return darwinFdatasync(a1)
+	case sysGETRUSAGE:
+		return darwinGetrusage(a1, a2)
+	case sysGETTIMEOFDAY:
+		return darwinGettimeofday(a1, a2)
+	case sysFLOCK:
+		// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+		// Linux took them from BSD, which is what Apple still ships.
+		// Linux's own LOCK_MAND extension has no Apple counterpart and
+		// reaches libc as an unknown operation, which answers EINVAL.
+		return darwinCall(darwinFns.Flock, a1, a2, 0, 0, 0, 0)
 	case sysLINKAT:
 		return darwinLinkat(a1, a2, a3, a4, a5)
 	case sysSYMLINKAT:

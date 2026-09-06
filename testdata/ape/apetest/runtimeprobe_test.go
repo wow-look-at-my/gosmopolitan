@@ -39,7 +39,8 @@ var probeOkChecks = []string{
 	"remove", "rmdir",
 	"readdir", "walkdir", "removeall",
 	"seekreadat",
-	"fsmeta", "fsmetaunix", "sysinfo", "nanosleep", "sendfile",
+	"fsmeta", "fsmetaunix", "volume", "sysinfo", "flock", "durable", "rusage", "ioctl",
+	"termios", "nanosleep", "sendfile",
 	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "waitsig",
 	"all",
 }

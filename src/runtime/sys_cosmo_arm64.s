@@ -651,7 +651,28 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 mincore_darwin:
-	// macOS ARM64: mincore not in Syslib, return -1 (ENOSYS)
+	// The Syslib has no mincore entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym like getpid above. The old
+	// stub returned -1 unconditionally, and its one caller
+	// (sysauxv's page-size probe, os_cosmo.go) reads a failure as "try
+	// the next size" - so every probe failed and physPageSize fell back
+	// to 256K. The APE loader supplies an auxv on macOS, so that probe
+	// is not reached today; a wrong page size is not a thing to leave
+	// lying behind a branch that might be.
+	MOVD	runtime·cosmoDarwinMincoreFn(SB), R12
+	CBZ	R12, mincore_darwin_none
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	MOVD	dst+16(FP), R2
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc mincore returns 0 or -1 with errno; the Linux
+	// syscall returns 0 or a negative errno. The caller only tests
+	// against zero, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+mincore_darwin_none:
 	MOVW	$-1, R0
 	MOVW	R0, ret+24(FP)
 	RET
@@ -1073,9 +1094,39 @@ TEXT runtime·madvise(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 madvise_darwin:
-	// macOS ARM64: madvise not in Syslib, return 0 (success)
-	// The Go runtime handles madvise failures gracefully
-	MOVW	$0, ret+24(FP)
+	// The Syslib has no madvise entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym, like mincore below. The old
+	// stub answered 0 without advising anything, so MADV_DONTNEED and
+	// MADV_FREE never reached the kernel and the heap kept every page it
+	// had ever touched.
+	MOVD	runtime·cosmoDarwinMadviseFn(SB), R12
+	CBZ	R12, madvise_darwin_none
+	// The advice numbers agree only up to MADV_DONTNEED (4). Linux
+	// MADV_FREE is 8, which Apple numbers 5 and spends on
+	// MADV_FREE_REUSE instead, so a forward would advise the wrong
+	// thing. Anything else is Linux-only (MADV_HUGEPAGE and friends)
+	// and fails rather than naming an unrelated Apple advice.
+	MOVW	flags+16(FP), R2
+	CMPW	$8, R2			// Linux MADV_FREE
+	BNE	madvise_darwin_range
+	MOVW	$5, R2			// Apple MADV_FREE
+	B	madvise_darwin_call
+madvise_darwin_range:
+	CMPW	$4, R2			// 0..4 are the same on both
+	BHI	madvise_darwin_none
+madvise_darwin_call:
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc madvise returns 0 or -1 with errno. Every caller here
+	// tests against zero only, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+madvise_darwin_none:
+	MOVW	$-1, R0
+	MOVW	R0, ret+24(FP)
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
@@ -1094,11 +1145,13 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	MOVW	R0, ret+40(FP)
 	RET
 futex_darwin:
-	// macOS: futex not available, use dispatch_semaphore
-	// This is a simplified implementation for basic cases
-	// For now, return ENOSYS to indicate not supported
-	// The Go runtime will need alternative synchronization
-	MOVW	$-38, R0	// ENOSYS
+	// Unreachable. cosmo/arm64 builds lock_sema.go, so an M parks on the
+	// Syslib's pthread condition variables, and futexsleep/futexwakeup
+	// (os_cosmo.go) branch on isdarwin() before they reach here. A crash
+	// poke rather than an errno: a caller that enters this assembly
+	// directly has found a hole, and an ENOSYS would let it pass.
+	MOVD	$0xf9, R0
+	MOVD	R0, (R0)
 	MOVW	R0, ret+40(FP)
 	RET
 

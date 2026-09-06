@@ -670,7 +670,11 @@ rtsigprocmask_darwin:
 	MOVL	$0xf3, 0xf3
 	RET
 rtsigprocmask_nt:
-	RET
+	// Unreachable: sigprocmask routes NT hosts through ntSigprocmask,
+	// which keeps the mask the self-delivery path consults. This used to
+	// return success while blocking nothing, so a critical section that
+	// had just masked every signal could still be reentered by one.
+	MOVL	$0xf5, 0xf5
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	CHECK_WINDOWS(rt_sigaction_nt)
@@ -696,11 +700,13 @@ rt_sigaction_darwin:
 	MOVL	$0, ret+32(FP)
 	RET
 rt_sigaction_nt:
-	// NT wave 1: no signal machinery; return success so
-	// sysSigaction's "sigaction failed" throw stays quiet (the same
-	// benign lie the darwin stub above tells).
-	MOVL	$0, ret+32(FP)
-	RET
+	// Unreachable: sysSigaction routes NT hosts through ntSigaction
+	// (os_cosmo_nt_sig.go), which records the handler the self-delivery
+	// path then consults. This used to return success without recording
+	// anything, which is the same lie the darwin stub above told.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf4, 0xf4
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	MOVL	sig+8(FP),   DI
@@ -1433,4 +1439,74 @@ TEXT runtime·cosmo_xlat_errno_ax(SB),NOSPLIT|NOFRAME,$0
 	MOVQ	$runtime·cosmo_errno_xlat_tab(SB), R11
 	MOVBLZX	(R11)(AX*1), AX
 errno_xlat_done:
+	RET
+
+// runtime·cosmo_xlat_oflags_dx translates Linux open(2) flags in DX into
+// Apple flags in DX. Leaf; clobbers only R11, so any darwin open path can
+// CALL it. arm64's counterpart is cosmo_xlat_oflags_r2.
+//
+// The bit POSITIONS are the amd64 kernel's, which are not arm64's: this
+// port's arm64 userspace follows the asm-generic numbers, where
+// O_DIRECTORY and O_NOFOLLOW sit four bits lower. So the two tables cannot
+// be shared, and reading either one for the other host mistakes
+// O_DIRECTORY for O_DIRECT.
+//
+// Bit-by-bit mapping (Linux value as zerrors_cosmo_amd64.go defines it ->
+// Apple value):
+//   0x3      access mode          -> unchanged (same encoding)
+//   0x40     O_CREAT              -> 0x200
+//   0x80     O_EXCL               -> 0x800
+//   0x100    O_NOCTTY             -> 0x20000
+//   0x200    O_TRUNC              -> 0x400
+//   0x400    O_APPEND             -> 0x8
+//   0x800    O_NONBLOCK           -> 0x4
+//   0x1000   O_DSYNC              -> 0x400000
+//   0x2000   O_ASYNC              -> 0x40
+//   0x10000  O_DIRECTORY          -> 0x100000
+//   0x20000  O_NOFOLLOW           -> 0x100
+//   0x80000  O_CLOEXEC            -> 0x1000000
+//   0x100000 __O_SYNC (O_SYNC hi) -> 0x80
+// Stripped (no Apple equivalent; dropping beats passing a bit Apple reads
+// as an unrelated flag): 0x4000 O_DIRECT, 0x40000 O_NOATIME, 0x200000
+// O_PATH (degrades to a plain read-only open), 0x400000 __O_TMPFILE.
+// O_LARGEFILE is 0 on amd64 and needs no entry.
+TEXT runtime·cosmo_xlat_oflags_dx(SB),NOSPLIT|NOFRAME,$0
+	MOVQ	DX, R11
+	ANDQ	$0x3, DX		// access mode
+	BTQ	$6, R11
+	JNC	2(PC)
+	ORQ	$0x200, DX		// O_CREAT
+	BTQ	$7, R11
+	JNC	2(PC)
+	ORQ	$0x800, DX		// O_EXCL
+	BTQ	$8, R11
+	JNC	2(PC)
+	ORQ	$0x20000, DX		// O_NOCTTY
+	BTQ	$9, R11
+	JNC	2(PC)
+	ORQ	$0x400, DX		// O_TRUNC
+	BTQ	$10, R11
+	JNC	2(PC)
+	ORQ	$0x8, DX		// O_APPEND
+	BTQ	$11, R11
+	JNC	2(PC)
+	ORQ	$0x4, DX		// O_NONBLOCK
+	BTQ	$12, R11
+	JNC	2(PC)
+	ORQ	$0x400000, DX		// O_DSYNC
+	BTQ	$13, R11
+	JNC	2(PC)
+	ORQ	$0x40, DX		// O_ASYNC
+	BTQ	$16, R11
+	JNC	2(PC)
+	ORQ	$0x100000, DX		// O_DIRECTORY
+	BTQ	$17, R11
+	JNC	2(PC)
+	ORQ	$0x100, DX		// O_NOFOLLOW
+	BTQ	$19, R11
+	JNC	2(PC)
+	ORQ	$0x1000000, DX		// O_CLOEXEC
+	BTQ	$20, R11
+	JNC	2(PC)
+	ORQ	$0x80, DX		// O_SYNC
 	RET
