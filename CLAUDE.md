@@ -62,7 +62,7 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`). Then plain `GOOS=cosmo go test <pkg>` works.
 
-**Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called `t.Parallel()`, which is now a. Two methods opt out. `t.Serial()` stops every other test and runs the caller alone in this process.`t.Fork()` runs the caller in a child process instead, alone, and. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these. Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+**Top-level tests are parallel by default in this fork** (`src/testing`): each starts as if it had called `t.Parallel()`, which is a no-op there. A SUBTEST is not, and runs inside the `t.Run` call that starts it, so a parent's later statements and its deferred calls come after it. That is the order upstream promises and the order test code relies on. A subtest asks for parallelism with `t.Parallel()`. Two methods opt a top-level test out. `t.Serial()` stops every other test and runs the caller alone in this process.`t.Fork()` runs the caller in a child process instead, alone, and. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these. Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
 
 ## Building Cosmopolitan Binaries
 

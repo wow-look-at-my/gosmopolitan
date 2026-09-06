@@ -1,12 +1,16 @@
-# Tests are parallel by default
+# Top-level tests are parallel by default
 
-`src/testing` in this fork runs every test and subtest as if it had called `t.Parallel()`, which is now a no-op. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork starts every top-level test as if it had called `t.Parallel()`, which is a no-op there. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+
+A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 
 A test failing only under this fork's `go test` is almost always one of these.
 
 ## t.Serial
 
-A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial()`, which waits for every other test to. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
+A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial()`, which waits for every other test to. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run under its hold and take none of their own.
+
+The hold never covers a wait. `t.Run` drops the caller's hold while it waits, then takes it back. `t.Parallel()` drops one before it waits for a slot. Two holds in one line of descent deadlock. Go queues a new reader behind a waiting writer. So the inner test blocks on a pending `t.Serial()`, and the outer test waits for the inner one.
 
 `t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each changes state the child gets its own copy of. One test setting an environment variable is no reason to stop every other test in the binary.
 
@@ -20,7 +24,7 @@ Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
 Reach for it over Serial when the state is process-global and SHARED - a package variable, a metrics registry, a counter another test also writes. Serial only guarantees that nothing else runs *at the same time*. It does not give the test its own copy of anything, so a counter another test already advanced is still advanced. Fork also leaves the rest of the suite running, where Serial stops it.
 
-Fork does NOT serialize. The child runs parallel-by-default like any other run, so a forked test's subtests still run at the same time as each other, and the. A test that needs a process of its own AND the process to itself calls `t.Serial()` as well - in either order, since the child. A subtest that wants a process to itself calls Fork, which gives it one rather than its parent's.
+Fork does NOT serialize. The child allows parallelism like any other run, so two subtests of a forked test that call `t.Parallel()` still run at the same time. A test that needs a process of its own AND the process to itself calls `t.Serial()` as well, in either order. A subtest that wants a process to itself calls Fork, which gives it one rather than its parent's.
 
 Mechanics:
 
