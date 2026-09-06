@@ -287,6 +287,7 @@ var (
 	dlsymNameSync      = []byte("sync\x00")
 	dlsymNameIoctl     = []byte("ioctl\x00")
 	dlsymNameMincore   = []byte("mincore\x00")
+	dlsymNameMadvise   = []byte("madvise\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
@@ -340,6 +341,12 @@ var cosmoDarwinFcntlFn uintptr
 // answering for a page it never asked about.
 var cosmoDarwinMincoreFn uintptr
 
+// cosmoDarwinMadviseFn is Apple libc madvise, resolved at startup and
+// read by ·madvise's darwin branch in sys_cosmo_arm64.s. Zero when
+// unresolved, which that branch reports as a failure: sysUnused reads
+// one and falls back, where a fake success left the pages held.
+var cosmoDarwinMadviseFn uintptr
+
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -362,6 +369,7 @@ func osArchInit() {
 	cosmoDarwinKeventFn = cosmoDlsym(&dlsymNameKevent[0])
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
+	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),

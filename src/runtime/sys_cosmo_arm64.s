@@ -1094,9 +1094,39 @@ TEXT runtime·madvise(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 madvise_darwin:
-	// macOS ARM64: madvise not in Syslib, return 0 (success)
-	// The Go runtime handles madvise failures gracefully
-	MOVW	$0, ret+24(FP)
+	// The Syslib has no madvise entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym, like mincore below. The old
+	// stub answered 0 without advising anything, so MADV_DONTNEED and
+	// MADV_FREE never reached the kernel and the heap kept every page it
+	// had ever touched.
+	MOVD	runtime·cosmoDarwinMadviseFn(SB), R12
+	CBZ	R12, madvise_darwin_none
+	// The advice numbers agree only up to MADV_DONTNEED (4). Linux
+	// MADV_FREE is 8, which Apple numbers 5 and spends on
+	// MADV_FREE_REUSE instead, so a forward would advise the wrong
+	// thing. Anything else is Linux-only (MADV_HUGEPAGE and friends)
+	// and fails rather than naming an unrelated Apple advice.
+	MOVW	flags+16(FP), R2
+	CMPW	$8, R2			// Linux MADV_FREE
+	BNE	madvise_darwin_range
+	MOVW	$5, R2			// Apple MADV_FREE
+	B	madvise_darwin_call
+madvise_darwin_range:
+	CMPW	$4, R2			// 0..4 are the same on both
+	BHI	madvise_darwin_none
+madvise_darwin_call:
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc madvise returns 0 or -1 with errno. Every caller here
+	// tests against zero only, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+madvise_darwin_none:
+	MOVW	$-1, R0
+	MOVW	R0, ret+24(FP)
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,

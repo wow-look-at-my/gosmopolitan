@@ -68,10 +68,9 @@ const (
 // ntProfTimer is the process-wide profiling timer ntProfileLoop parks
 // on. Created once by ntSetProcessCPUProfiler (which runs under
 // prof.signalLock, serializing the create), armed and disarmed by
-// ntSetThreadCPUProfiler. 0 until profiling first starts - and 0
-// forever if every timer-creation fallback failed, in which case
-// profiling stays silently sampleless (the pre-item-3 behavior)
-// rather than hot-looping on an invalid handle.
+// ntSetThreadCPUProfiler. 0 until profiling first starts; a failed
+// create throws rather than leaving it 0, because a 0 here means every
+// profile comes back empty and says nothing about why.
 var ntProfTimer uintptr
 
 // ntSetProcessCPUProfiler is setProcessCPUProfiler's NT leg: on first
@@ -101,7 +100,10 @@ func ntSetProcessCPUProfiler(hz int32) {
 		timer = ntcall(ntCreateWaitableTimerWFn, 0, 0, 0, 0, 0, 0) // auto-reset, unnamed
 	}
 	if timer == 0 {
-		return
+		// Every fallback failed, so no sample will ever be taken. A
+		// profile that quietly comes back empty reads as "this program
+		// spends no time anywhere", which is worse than no profile.
+		throw("cosmo: NT CPU profiling: no waitable timer")
 	}
 	atomic.Storeuintptr(&ntProfTimer, timer)
 	newm(ntProfileLoop, nil, -1)
