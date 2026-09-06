@@ -94,40 +94,6 @@ These four are resolved from kernel32 OPTIONALLY: a zero pointer answers ENOSYS 
 The runtimeprobe split follows exactly this line: `fsmeta` and `volume` are hard assertions on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on.
 
 
-## 6. macOS arm64: the syscall gap (CLOSED — metadata wave, 2026-09-02)
-
-The arm64 slow path (`syscall6SlowDarwin`) handles a fixed set of syscalls. Everything else returns `darwinENOSYS`. That set used to stop at the file-I/O, socket and process syscalls the apetest path reaches, so every metadata and system-information call fell through —.
-
-All of them are emulated now, in `internal/runtime/syscall/cosmo/{file,proc,darwinabi}_cosmo*.go`. Most are fixed-arity Apple libc entries whose arguments and constants already agree, so they pass straight through `darwinCall`. The ones that do not:
-
-| syscall | why it needed more than a forward |
-|---|---|
-| `getpriority` | Apple returns the nice value; the Linux syscall returns `20-nice`. -1 is a legal result, so errno is cleared first and read back. |
-| `prlimit64` | Apple's getrlimit/setrlimit take no pid, number the resources differently above `RLIMIT_CORE`, and use a different infinity sentinel. |
-| `utimensat` | `UTIME_NOW`/`UTIME_OMIT` are `(1<<30)-1`/`-2` on Linux and `-1`/`-2` on Apple. |
-| `sendfile` | Apple takes the file first and the socket second, reports the count through a pointer (filled even on failure), and never moves the file offset. |
-| `linkat`, `fchownat` | `AT_SYMLINK_FOLLOW`/`AT_SYMLINK_NOFOLLOW` have different values. |
-| `mknodat` | Apple has no directory-relative form. Served for `AT_FDCWD` (what `Mknod`/`Mkfifo` pass) over `mknod`; any other dirfd is ENOSYS rather than a path silently resolved against the wrong directory. |
-| `statfs`, `fstatfs`, `uname` | Apple's structs are 2168 and 1280 bytes, far past the nosplit budget the dispatch spine runs under. The Apple-layout buffer is allocated in package `syscall` (`bigbuf_cosmo*.go`) and converted there; the emulation refuses a buffer smaller than the Apple struct, so a caller that reached `SYS_STATFS` with a Linux `Statfs_t` gets EINVAL instead of a two-kilobyte overrun. |
-
-Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's own filesystem-type number (the choice `Stat_t.Dev` already makes for device numbers) and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
-
-**Still ENOSYS on macOS, because Apple has no counterpart:** `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid`, and `mknodat` with a directory descriptor. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags, and one APE answering the same call differently per host.
-
-**Coverage.** The pure translation tables are unit-tested where cosmo tests run (`darwinabi_cosmo_test.go`, `bigbuf_cosmo_test.go`, both on the ubuntu CI leg). The syscalls themselves are exercised end to end by `testdata/runtimeprobe`'s `fsmeta`, `sysinfo` and `sendfile` checks, which the apetest suite runs on all three. Those checks report rather than fail on a Windows host, following `checkDupFile`: the NT emulation has not brought this surface up, and the log.
-
----
-
-## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
-
-The amd64 darwin dispatch carried 18 syscalls and answered everything else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod, fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid, setreuid, setregid, getpgid, and statfs/fstatfs (the last two through XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path applies, so a Linux-layout buffer is refused rather than overrun). `getpriority` applies the Linux `20-nice` bias, which the carry-flag convention makes unambiguous — the value alone cannot say whether the call failed.
-
-Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax` (`sys_cosmo_amd64.s`) is the amd64 twin of arm64's `cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`. A linkname push makes it reachable from. An earlier note here claimed that cannot be done. It was reasoning about the DATA table rather than the function that wraps it.
-
-**Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the tree's own authority, not from memory. That mattered: statfs64 is 345, not the 338 recall suggested. Anything that file does not carry is deliberately absent rather than guessed — a wrong syscall number does not fail, it calls a DIFFERENT syscall. That is why the *at family (`linkat`, `symlinkat`, `fchmodat`, `fchownat`) and `utimensat` stay ENOSYS on amd64 while arm64 serves them: arm64 resolves by NAME through dlsym and. `uname` stays ENOSYS for a different reason — XNU has no uname syscall at all. It is a libc function over sysctl. `sendfile` stays ENOSYS because Apple's argument order, its value-result count pointer and its untouched file offset need real control flow, which the arm64 Go.
-
-This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1.
-
 ## 7. What this means
 
 - The macOS arm64 syscall surface serves everything the `syscall` package exposes and Apple can serve, termios ioctls included. Before writing "complete" here, diff every `SYS_*` the cosmo `syscall` package names against the dispatch. The termios round trip has never run against a live terminal: no CI runner has one.
