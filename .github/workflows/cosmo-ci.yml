@@ -646,60 +646,6 @@ jobs:
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=js/wasm
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=wasip1/wasm
 
-  # Which commit on this branch stopped a cosmo binary booting on NT? Every published master toolchain runs fizzbuzz on this runner and this branch's does not, so the answer is one of these commits. A red leg is a commit whose fizzbuzz does not run. Delete this job once its answer is in a fix.
-  winbisect:
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        # Full SHAs: actions/checkout reads a short one as a branch name and finds nothing.
-        sha:
-          - 051a06ba433924b57043e4ae4a50aea7e2d95d10
-          - 2b5c9490fe476b66526afc94ea8d6973bd89a180
-          - e2f008f824e0f543880374351e07bb750c761ff3
-          - 4e8ff115c6834470c6d56bb2587d9e56fe6d9b1b
-          - 949ffa8bbda90b998b7f04f74779e28d7d3c3fa8
-          - 6d4bf7e83be121ba03fa1bcadb30c7fbca8992bb
-          - 964acf1f17e8ca17c4647607d0e69160b9e72440
-          - a410cbf0e0a742e33262d7107af8d69ae8121a12
-
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          ref: ${{ matrix.sha }}
-          fetch-depth: 0
-
-      - uses: wow-look-at-my/actions@secret-server#latest
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
-
-      - name: Build Go toolchain
-        timeout-minutes: 12
-        shell: cmd
-        run: cd src && make.bat -v
-        env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
-
-      - name: fizzbuzz runs
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo go build -o "$RUNNER_TEMP/fb.com" testdata/fizzbuzz/fizzbuzz.go
-          rc=0
-          out="$("$RUNNER_TEMP/fb.com" 10 5 2>&1)" || rc=$?
-          echo "${{ matrix.sha }} fizzbuzz exit=$rc output=[$out]"
-          exit $rc
-
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10

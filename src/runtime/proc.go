@@ -204,7 +204,9 @@ func main() {
 		inittrace.active = true
 	}
 
+	ntBoot("runtime.main entered")
 	doInit(runtime_inittasks) // Must be before defer.
+	ntBoot("runtime inittasks done")
 
 	// Defer unlock so that runtime.Goexit during init does the unlock too.
 	needUnlock := true
@@ -215,7 +217,9 @@ func main() {
 	}()
 
 	gcenable()
+	ntBoot("gcenable done")
 	defaultGOMAXPROCSUpdateEnable() // don't STW before runtime initialized.
+	ntBoot("GOMAXPROCS updater on")
 
 	// If we encountered a removed GODEBUG during startup we can panic now.
 	if k := invalidGODEBUG.key; k != "" {
@@ -271,6 +275,7 @@ func main() {
 			break
 		}
 	}
+	ntBoot("package inits done")
 
 	// Disable init tracing after main init done to avoid overhead
 	// of collecting statistics in malloc and newproc
@@ -305,7 +310,9 @@ func main() {
 		return
 	}
 	fn := main_main // make an indirect call, as the linker doesn't know the address of the main package when laying down the runtime
+	ntBoot("calling main.main")
 	fn()
+	ntBoot("main.main returned")
 
 	// Check for C memory leaks if using ASAN and we've made cgo calls,
 	// or if we are running as a library in a C program.
