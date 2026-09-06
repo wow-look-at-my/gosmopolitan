@@ -7,25 +7,17 @@
 package runtime
 
 // CosmoHostOS returns the operating system the process is running on:
-// "linux", "darwin", "windows", or "unknown" for a host this runtime has
-// no port for. It is the authoritative answer, not a guess.
+// "linux", "darwin", "windows", or "unknown" for a host this runtime
+// has no port for. It is authoritative, not a guess. The APE entry stub
+// records __hostos before any Go code runs and this runtime dispatches
+// every syscall on it, so a wrong answer here would already have the
+// process issuing the wrong syscalls.
 //
-// GOOS=cosmo binaries report runtime.GOOS == "cosmo" on every host, so
-// code that must know where it actually landed - which paths to translate,
-// which of a tool's platform branches to run - has had to infer it, and
-// every available inference is unreliable:
-//
-//   - syscall.Uname is ENOSYS on macOS-Intel and on NT (the emulation
-//     dispatchers there have no case for it).
-//   - filesystem probes (/System/Library/CoreServices, /proc/self) are
-//     answered by whatever sandbox the process is running under. A macOS
-//     seatbelt profile that denies the first probe turns a Mac into a
-//     "linux" answer, silently, and only inside the sandbox - which is
-//     exactly where a test suite runs.
-//
-// __hostos needs neither: the APE entry stub records it before any Go
-// code runs, and this runtime dispatches every syscall on it. If it were
-// wrong the process would already be issuing the wrong syscalls.
+// Every other way to answer is unreliable. syscall.Uname is ENOSYS on
+// macOS-Intel and on NT. A filesystem probe is answered by whatever
+// sandbox the process runs under, so a seatbelt profile that denies
+// /System/Library/CoreServices turns a Mac into a "linux" answer,
+// silently, and only inside the sandbox - where a test suite runs.
 func CosmoHostOS() string {
 	switch __hostos {
 	case _HOSTLINUX:

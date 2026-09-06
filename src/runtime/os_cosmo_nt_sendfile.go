@@ -15,16 +15,14 @@ const ntSendfileChunk = 8 << 10
 // ntEmuSendfile implements the Linux sendfile syscall.
 //
 // Windows has no sendfile. TransmitFile moves a file to a socket
-// without a copy, but it serves only a socket, and Linux's sendfile
-// serves any writable descriptor. So this copies through a buffer,
-// which is what a caller falling back to io.Copy would do anyway. What
-// it buys is that the fallback is not needed: internal/poll's SendFile
-// reaches the syscall on every host an APE runs on.
+// without a copy, but it serves only a socket, where Linux's sendfile
+// serves any writable descriptor. So this copies through a buffer, the
+// same thing a caller falling back to io.Copy would do. What it buys is
+// that internal/poll's SendFile reaches the syscall on every host.
 //
 // The offset rules are Linux's. With off nil the read advances the
-// input file's own position. With off set the position stays where it
-// is, and off names where to read and receives the offset after the
-// last byte read.
+// input file's own position. With off set the position stays put, and
+// off names where to read and receives the offset after the last byte.
 func ntEmuSendfile(out, in int32, off *int64, count uintptr) (r1, r2, errno uintptr) {
 	ein, ok := ntFDLookup(in)
 	if !ok {

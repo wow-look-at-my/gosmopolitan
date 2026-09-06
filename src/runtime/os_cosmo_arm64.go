@@ -187,15 +187,13 @@ const _RTLD_DEFAULT = ^uintptr(1)
 // binaries is v10). Returns 0 if dlsym is unavailable or the lookup fails.
 // name must be a NUL-terminated C string.
 //
-// This is how the runtime obtains host functions the Syslib does not
-// export (getpid and friends). The alternative - extending the embedded
-// ape-m1.c Syslib struct and bumping SYSLIB_VERSION - was rejected: the
-// compiled loader is cached at ${TMPDIR:-$HOME}/.ape-1.10 keyed only by
-// the APE loader version string, and any existing Mach-O there (including
-// one compiled from an upstream cosmopolitan binary's embedded source) is
-// reused as-is, so a stale v10 loader would silently satisfy the cache and
-// the new fields would never reliably exist. dlsym works with every v6+
-// loader in the wild, cached or fresh.
+// This is how the runtime obtains a host function the Syslib does not
+// export. Never extend the embedded ape-m1.c Syslib struct and bump
+// SYSLIB_VERSION instead: the compiled loader is cached keyed only by
+// the APE loader version string, so any existing Mach-O there is reused
+// as is, a stale loader silently satisfies the cache, and the new
+// fields would never reliably exist. dlsym works with every v6+ loader
+// in the wild, cached or fresh.
 func cosmoDlsym(name *byte) uintptr {
 	lib := __syslib
 	if lib == nil || lib.version < 6 || lib.dlsym == 0 {

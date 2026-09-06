@@ -45,21 +45,18 @@ var adviseUnused = uint32(_MADV_FREE)
 
 const madviseUnsupported = 0
 
-// ntCommitPages and ntDecommitPages are the NT commit/decommit
-// primitives, ported from upstream mem_windows.go's halving loops. A
-// single VirtualAlloc(MEM_COMMIT) or VirtualFree(MEM_DECOMMIT) call
-// may only touch pages from ONE prior reservation, but the heap merges
-// virtually-adjacent reservations (e.g. two 64MiB arenas reserved back
-// to back land contiguously), so a span straddling the boundary makes
-// the single-call fast path fail even though every page is validly
-// reserved. Whether reservations end up adjacent depends on NT's
-// address-space randomization - that made the fast-path-only version
-// of this code fail nondeterministically (~1 in 2 windows-latest CI
-// rounds: "fatal error: runtime: cannot commit pages" from
-// schedinit's stackpoolalloc, failing range ending exactly on a 64MiB
-// arena boundary). On failure, retry successively smaller
-// page-aligned chunks so each call lands within one reservation;
-// throw only if a single-page call fails.
+// ntCommitPages and ntDecommitPages are the NT commit and decommit
+// primitives, ported from upstream mem_windows.go's halving loops.
+//
+// One VirtualAlloc(MEM_COMMIT) or VirtualFree(MEM_DECOMMIT) call may
+// only touch pages from ONE prior reservation. The heap merges
+// virtually-adjacent reservations, so a span straddling the boundary
+// fails the single-call fast path even though every page is validly
+// reserved, and whether reservations land adjacent depends on NT's
+// address-space randomization. So a fast-path-only version fails
+// nondeterministically. On failure, retry successively smaller
+// page-aligned chunks until each call lands within one reservation,
+// and throw only when a single-page call fails.
 
 func ntCommitPages(v unsafe.Pointer, n uintptr) {
 	if p := ntVirtualAlloc(v, n, _NT_MEM_COMMIT, _NT_PAGE_READWRITE); p != nil {

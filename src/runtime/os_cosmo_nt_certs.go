@@ -12,22 +12,17 @@ import (
 )
 
 // Where an NT host keeps its trusted roots.
-//
 // crypto/x509 finds roots by scanning a list of file paths, and the
-// cosmo list holds Linux paths. macOS happens to ship /etc/ssl/cert.pem
-// so the scan lands there; NT ships none of them. The pool comes out
-// empty and every HTTPS request fails to verify, which is the same
-// shape as the resolv.conf gap next door.
+// cosmo list holds Linux paths. macOS happens to ship
+// /etc/ssl/cert.pem, so the scan lands there. NT ships none of them,
+// the pool comes out empty, and every HTTPS request fails to verify.
 //
 // crypt32's CertOpenSystemStore reads the ROOT store the rest of the
 // system trusts. Each certificate arrives as a DER blob the caller
-// copies out, so nothing here parses a certificate.
-//
-// This is the store, not NT's chain engine: no CTLs, no auto-update of
-// roots, no disallowed list. It is what makes a public CA verify.
-//
-// The library is optional, like iphlpapi beside it: a host without it
-// reports no roots, never a crash.
+// copies out, so nothing here parses one. This is the STORE, not NT's
+// chain engine: no CTLs, no root auto-update, no disallowed list. It is
+// what makes a public CA verify. The library is optional, like
+// iphlpapi beside it, and a host without it reports no roots.
 
 // CERT_CONTEXT, win64. Spelled as the sum of the members rather than as
 // a total, because a total is a number nobody can check;
