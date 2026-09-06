@@ -14,3 +14,10 @@
 # See golang.org/issue/9281.
 
 * -text
+
+# The vendor trees are other projects' code, copied in by `go mod vendor`
+# rather than written here. GitHub reads these for the language bar and the
+# diff view, and re-vendoring restores whatever upstream ships, so a house
+# style this repo applies to its own prose does not reach them.
+src/vendor/** linguist-vendored
+src/cmd/vendor/** linguist-vendored
