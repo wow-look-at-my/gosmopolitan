@@ -248,6 +248,8 @@ func debugCallUnsafePointWorker(gpp **runtime.G, ready, stop *uint32) {
 }
 
 func TestDebugCallUnsafePoint(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	skipUnderDebugger(t)
 
 	// This can deadlock if there aren't enough threads or if a GC
@@ -277,6 +279,8 @@ func TestDebugCallUnsafePoint(t *testing.T) {
 }
 
 func TestDebugCallPanic(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	skipUnderDebugger(t)
 
 	// This can deadlock if there aren't enough threads.

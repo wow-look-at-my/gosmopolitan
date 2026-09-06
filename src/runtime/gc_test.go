@@ -360,6 +360,8 @@ func BenchmarkAllocation(b *testing.B) {
 }
 
 func TestPrintGC(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
@@ -804,6 +806,8 @@ func TestMyGenericFunc(t *testing.T) {
 }
 
 func TestWeakToStrongMarkTermination(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	testenv.MustHaveParallelism(t)
 
 	type T struct {

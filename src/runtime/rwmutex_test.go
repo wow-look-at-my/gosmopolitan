@@ -124,6 +124,8 @@ func HammerRWMutex(gomaxprocs, numReaders, num_iterations int) {
 }
 
 func TestRWMutex(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(-1))
 	n := 1000
 	if testing.Short() {

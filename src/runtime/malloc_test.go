@@ -599,6 +599,8 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 }
 
 func TestPageCacheLeak(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(1))
 	leaked := PageCachePagesLeaked()
 	if leaked != 0 {

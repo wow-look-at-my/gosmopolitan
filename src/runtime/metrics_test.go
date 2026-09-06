@@ -209,6 +209,8 @@ func TestReadMetrics(t *testing.T) {
 }
 
 func TestReadMetricsConsistency(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	// Tests whether readMetrics produces consistent, sensible values.
 	// The values are read concurrently with the runtime doing other
 	// things (e.g. allocating) so what we read can't reasonably compared
@@ -1466,6 +1468,8 @@ func (w *contentionWorker) run() {
 }
 
 func TestCPUStats(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	// Run a few GC cycles to get some of the stats to be non-zero.
 	runtime.GC()
 	runtime.GC()
