@@ -725,6 +725,15 @@ func (w *writer) param(param *types2.Var) {
 	w.pos(param)
 	w.localIdent(param)
 	w.typ(param.Type())
+	// A default belongs to the signature a caller in another package reads, so
+	// it rides the export data. Depth: docs/OPTIONAL-PARAMS.md.
+	if w.Version().Has(pkgbits.ParamDefaults) {
+		deflt := param.Default()
+		w.Bool(deflt != nil)
+		if deflt != nil {
+			w.Value(deflt)
+		}
+	}
 }
 
 // @@@ Objects

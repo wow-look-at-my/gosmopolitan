@@ -7,6 +7,7 @@ package types
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	. "internal/types/errors"
 	"path/filepath"
@@ -395,6 +396,40 @@ func (check *Checker) recordParenthesizedRecvTypes(expr ast.Expr, typ Type) {
 	}
 }
 
+// paramDefault checks the "= expr" on one parameter and returns its value. It
+// checks that the parameter is one that can carry a default at all, and that
+// the expression is a constant assignable to its type. Depth:
+// docs/OPTIONAL-PARAMS.md.
+func (check *Checker) paramDefault(field *ast.Field, kind VarKind, typ Type) constant.Value {
+	if field.Default == nil {
+		return nil
+	}
+	if kind != ParamVar {
+		check.error(field.Default, BadDecl, "only a function parameter takes a default")
+		return nil
+	}
+	var x operand
+	check.expr(nil, &x, field.Default)
+	check.assignment(&x, typ, "parameter default")
+	if !x.isValid() {
+		return nil
+	}
+	// A caller in another package reads this value out of export data, so a
+	// constant is the whole of what a default can be for now.
+	if x.mode() != constant_ {
+		check.error(field.Default, BadDecl, "parameter default must be a constant")
+		return nil
+	}
+	// The call site is given the value spelled back as source, and only these
+	// three kinds have a spelling that reads back as the same constant.
+	switch x.val.Kind() {
+	case constant.Bool, constant.String, constant.Int:
+		return x.val
+	}
+	check.error(field.Default, BadDecl, "parameter default must be a boolean, string or integer constant")
+	return nil
+}
+
 // collectParams collects (but does not declare) all parameter/result
 // variables of list and returns the list of names and corresponding
 // variables, and whether the (parameter) list is variadic.
@@ -430,6 +465,7 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 				// named parameter is declared by caller
 				names = append(names, name)
 				params = append(params, par)
+				par.deflt = check.paramDefault(field, kind, typ)
 			}
 			named = true
 		} else {
@@ -439,6 +475,22 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 			names = append(names, nil)
 			params = append(params, par)
 			anonymous = true
+		}
+	}
+
+	// A call omits a suffix of the parameter list, so a default before a
+	// required parameter names a value nothing can ever read.
+	if kind == ParamVar {
+		for i, field := range list.List {
+			if field.Default == nil {
+				continue
+			}
+			for _, later := range list.List[i+1:] {
+				if later.Default == nil {
+					check.error(field.Default, BadDecl, "parameter default must not precede a parameter without one")
+					break
+				}
+			}
 		}
 	}
 

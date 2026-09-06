@@ -53,12 +53,12 @@ var serialReasons serialReasonRegistry
 // A call site registers once. A Serial inside a loop or a table-driven subtest
 // therefore never reports itself as its own duplicate, and the similarity rule
 // stays a statement about distinct calls in the source.
-func (r *serialReasonRegistry) check(testName, file string, line int, reason []string) []string {
-	if len(reason) == 0 {
+func (r *serialReasonRegistry) check(testName, file string, line int, reason string) []string {
+	text := strings.TrimSpace(reason)
+	if text == "" {
 		return []string{fmt.Sprintf("no reason given. Pass one: t.Serial(%q). Every other test in this package stops for the duration.",
 			"why this test cannot share the process")}
 	}
-	text := strings.Join(reason, " ")
 
 	var warnings []string
 	warnf := func(format string, args ...any) {
@@ -137,7 +137,7 @@ func (r *serialReasonRegistry) takeReported() []string {
 // is a warning and the test still runs alone: refusing to serialize a test
 // that asked for it would run that test against the state it is guarding, and
 // a suite must not fail over its own prose.
-func (t *T) checkSerialReason(reason []string, file string, line int) {
+func (t *T) checkSerialReason(reason string, file string, line int) {
 	t.Helper()
 	site := fmt.Sprintf("%s:%d", baseName(file), line)
 	for _, w := range serialReasons.check(t.Name(), file, line, reason) {

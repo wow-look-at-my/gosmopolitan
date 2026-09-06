@@ -784,8 +784,9 @@ func (p *parser) parseDotsType() *ast.Ellipsis {
 }
 
 type field struct {
-	name *ast.Ident
-	typ  ast.Expr
+	name  *ast.Ident
+	typ   ast.Expr
+	deflt ast.Expr // parameter default ("= expr"); or nil
 }
 
 func (p *parser) parseParamDecl(name *ast.Ident, typeSetsOK bool) (f field) {
@@ -800,7 +801,7 @@ func (p *parser) parseParamDecl(name *ast.Ident, typeSetsOK bool) (f field) {
 		p.tok = token.IDENT // force token.IDENT case in switch below
 	} else if typeSetsOK && p.tok == token.TILDE {
 		// "~" ...
-		return field{nil, p.embeddedElem(nil)}
+		return field{nil, p.embeddedElem(nil), nil}
 	}
 
 	switch p.tok {
@@ -868,6 +869,18 @@ func (p *parser) parseParamDecl(name *ast.Ident, typeSetsOK bool) (f field) {
 		f.typ = p.embeddedElem(f.typ)
 	}
 
+	// name type "=" expr -- a default for this parameter. Only a named ordinary
+	// parameter can carry one: a type parameter's "=" would be a type, and an
+	// unnamed parameter has nothing for the callee to read. This mirrors
+	// paramDeclOrNil in the syntax package.
+	// Whether this parameter has a name is not known yet: a list of types only
+	// arrives here as a list of names, and the sweep below sorts that out. So
+	// the unnamed case is reported there, not here.
+	if !typeSetsOK && p.tok == token.ASSIGN {
+		p.next()
+		f.deflt = p.parseRhs()
+	}
+
 	return
 }
 
@@ -902,7 +915,7 @@ func (p *parser) parseParameterList(name0 *ast.Ident, typ0 ast.Expr, closing tok
 			if tparams {
 				typ0 = p.embeddedElem(typ0)
 			}
-			par = field{name0, typ0}
+			par = field{name0, typ0, nil}
 		} else {
 			par = p.parseParamDecl(name0, tparams)
 		}
@@ -1031,6 +1044,9 @@ func (p *parser) parseParameterList(name0 *ast.Ident, typ0 ast.Expr, closing tok
 		// parameter list consists of types only
 		for _, par := range list {
 			assert(par.typ != nil, "nil type in unnamed parameter list")
+			if par.deflt != nil {
+				p.error(par.deflt.Pos(), "cannot set a default for an unnamed parameter")
+			}
 			params = append(params, &ast.Field{Type: par.typ})
 		}
 		return
@@ -1040,23 +1056,34 @@ func (p *parser) parseParameterList(name0 *ast.Ident, typ0 ast.Expr, closing tok
 	// collect all names with the same types into a single ast.Field.
 	var names []*ast.Ident
 	var typ ast.Expr
-	addParams := func() {
+	addParams := func(deflt ast.Expr) {
 		assert(typ != nil, "nil type in named parameter list")
-		field := &ast.Field{Names: names, Type: typ}
+		field := &ast.Field{Names: names, Type: typ, Default: deflt}
 		params = append(params, field)
 		names = nil
 	}
 	for _, par := range list {
 		if par.typ != typ {
 			if len(names) > 0 {
-				addParams()
+				addParams(nil)
 			}
 			typ = par.typ
+		}
+		// A default belongs to ONE parameter, and an ast.Field carries one for
+		// however many names it holds. So a parameter that has one gets a field
+		// of its own, and the names before it are closed off first.
+		if par.deflt != nil {
+			if len(names) > 0 {
+				addParams(nil)
+			}
+			names = append(names, par.name)
+			addParams(par.deflt)
+			continue
 		}
 		names = append(names, par.name)
 	}
 	if len(names) > 0 {
-		addParams()
+		addParams(nil)
 	}
 	return
 }

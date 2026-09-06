@@ -74,11 +74,10 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 
 	pid := os.Getpid()
-	// A child t.Fork started is a test process, not one of the helper commands
-	// below, and it inherits GO_EXEC_TEST_PID from the process that started it.
-	// Its marker is what tells the two apart. t.Setenv and t.Chdir fork, so
-	// every test here that calls either one reaches this.
-	if os.Getenv("GO_EXEC_TEST_PID") == "" || os.Getenv("GO_TEST_FORK_TARGET") != "" {
+	// A test that calls t.Setenv or t.Chdir re-runs itself in a child process,
+	// and that child inherits GO_EXEC_TEST_PID. It is not a helper. A helper
+	// always carries the command to impersonate as its first argument.
+	if os.Getenv("GO_EXEC_TEST_PID") == "" || flag.NArg() == 0 {
 		os.Setenv("GO_EXEC_TEST_PID", strconv.Itoa(pid))
 
 		if runtime.GOOS == "windows" {

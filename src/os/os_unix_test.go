@@ -231,9 +231,10 @@ func TestMkdirStickyUmask(t *testing.T) {
 	if runtime.GOOS == "wasip1" {
 		t.Skip("file permissions not supported on " + runtime.GOOS)
 	}
-	// Issue #69788: This test temporarily changes the umask for testing purposes,
-	// so it shouldn't be run in parallel with other test cases
-	// to avoid other tests (e.g., TestCopyFS) creating files with an unintended umask.
+	// Issue #69788: this test changes the umask, which every other test that
+	// creates a file or a directory reads. Without the barrier those files get
+	// an unintended mode.
+	t.Serial()
 
 	const umask = 0077
 	dir := t.TempDir()

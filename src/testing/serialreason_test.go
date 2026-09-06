@@ -14,7 +14,9 @@ import (
 // one of the other rules is not also reported for its length.
 const okReason = "GOMAXPROCS is process-wide and another runner would change what this counts"
 
-func checkOne(reason ...string) []string {
+// checkOne takes the reason the same way Serial does, with a default, so an
+// omitted argument here reaches check the same way t.Serial() reaches it.
+func checkOne(reason string = "") []string {
 	var r serialReasonRegistry
 	return r.check("TestSomething", "/src/pkg/thing_test.go", 10, reason)
 }
@@ -79,7 +81,7 @@ func TestSerialReasonEchoesNameOrFile(t *T) {
 func TestSerialReasonShortNameElementIgnored(t *T) {
 	var r serialReasonRegistry
 	got := r.check("TestDial/tcp", "/src/net/dial_test.go", 3,
-		[]string{"the resolver cache is a package global that survives between calls"})
+		"the resolver cache is a package global that survives between calls")
 	for _, w := range got {
 		if strings.Contains(w, "repeats") {
 			t.Errorf("the 3-character name element %q matched prose: %q", "tcp", w)
@@ -91,22 +93,22 @@ func TestSerialReasonSimilarity(t *T) {
 	var r serialReasonRegistry
 	const first = "the profile rate is a process-wide setting that another test would move under this one"
 
-	if w := r.check("TestOne", "/src/a_test.go", 1, []string{first}); len(w) != 0 {
+	if w := r.check("TestOne", "/src/a_test.go", 1, first); len(w) != 0 {
 		t.Fatalf("the first reason warned with nothing to compare against: %q", w)
 	}
 	// A verbatim paste, from a different site.
-	got := r.check("TestTwo", "/src/a_test.go", 2, []string{first})
+	got := r.check("TestTwo", "/src/a_test.go", 2, first)
 	if len(got) != 1 || !strings.Contains(got[0], "the same as the one TestOne gives") {
 		t.Fatalf("a verbatim paste: got %q, want one similarity warning naming TestOne", got)
 	}
 	// Punctuation and case are not a way to make one reason look like two.
-	got = r.check("TestThree", "/src/a_test.go", 3, []string{strings.ToUpper(first) + "!!!"})
+	got = r.check("TestThree", "/src/a_test.go", 3, strings.ToUpper(first)+"!!!")
 	if len(got) != 1 || !strings.Contains(got[0], "the same as the one") {
 		t.Fatalf("a recased paste: got %q, want one similarity warning", got)
 	}
 	// A reason that says something else clears the bound.
 	if w := r.check("TestFour", "/src/a_test.go", 4,
-		[]string{"the working directory is per-process, so a concurrent open would resolve somewhere else"}); len(w) != 0 {
+		"the working directory is per-process, so a concurrent open would resolve somewhere else"); len(w) != 0 {
 		t.Errorf("a distinct reason warned: %q", w)
 	}
 }
@@ -116,7 +118,7 @@ func TestSerialReasonSimilarity(t *T) {
 func TestSerialReasonSameSiteRepeats(t *T) {
 	var r serialReasonRegistry
 	for i := range 3 {
-		if w := r.check("TestLoop", "/src/a_test.go", 7, []string{okReason}); len(w) != 0 {
+		if w := r.check("TestLoop", "/src/a_test.go", 7, okReason); len(w) != 0 {
 			t.Fatalf("iteration %d of one call site warned: %q", i, w)
 		}
 	}
@@ -124,19 +126,33 @@ func TestSerialReasonSameSiteRepeats(t *T) {
 
 func TestSerialReasonBreaksEveryRuleAtOnce(t *T) {
 	var r serialReasonRegistry
-	r.check("TestOther", "/src/a_test.go", 1, []string{okReason})
+	r.check("TestOther", "/src/a_test.go", 1, okReason)
 	// Short, and an echo of the test's own name.
-	got := r.check("TestShort", "/src/a_test.go", 2, []string{"TestShort is slow"})
+	got := r.check("TestShort", "/src/a_test.go", 2, "TestShort is slow")
 	if len(got) != 2 {
 		t.Fatalf("got %d warnings, want one for the length and one for the echo: %q", len(got), got)
 	}
 }
 
-func TestSerialReasonJoinsItsArguments(t *T) {
-	var r serialReasonRegistry
-	if w := r.check("TestJoin", "/src/a_test.go", 1,
-		[]string{"the signal disposition is per-process,", "so another test would see this handler"}); len(w) != 0 {
-		t.Errorf("two fragments that are long enough together warned: %q", w)
+// The default the parameter carries is the empty string, so t.Serial() and
+// t.Serial("") reach check the same way and earn the same warning. A default
+// that were anything else would let the omitted form pass silently.
+func TestSerialReasonDefaultIsEmpty(t *T) {
+	omitted := checkOne()
+	explicit := checkOne("")
+	if len(omitted) != 1 || len(explicit) != 1 {
+		t.Fatalf("omitted %q and explicit %q, want one warning each", omitted, explicit)
+	}
+	if omitted[0] != explicit[0] {
+		t.Errorf("omitted warns %q, explicit warns %q, want the same", omitted[0], explicit[0])
+	}
+}
+
+// A reason of nothing but whitespace is a missing reason, not a short one.
+func TestSerialReasonBlankIsMissing(t *T) {
+	got := checkOne("   \t\n ")
+	if len(got) != 1 || !strings.Contains(got[0], "no reason given") {
+		t.Errorf("a blank reason: got %q, want the missing-reason warning", got)
 	}
 }
 
@@ -198,7 +214,7 @@ func TestSerialReasonRegistryConcurrent(t *T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			r.check("TestConcurrent", "/src/a_test.go", i, []string{okReason})
+			r.check("TestConcurrent", "/src/a_test.go", i, okReason)
 		}(i)
 	}
 	wg.Wait()

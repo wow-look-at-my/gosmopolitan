@@ -299,7 +299,12 @@ func (t *tester) maybeLogMetadata() error {
 	//
 	// TODO(prattmic): If we split dist bootstrap and dist test then this
 	// could be simplified to directly use internal/sysinfo here.
-	return t.dirCmd(filepath.Join(goroot, "src/cmd/internal/metadata"), gorootBinGo, []string{"run", "main.go"}).Run()
+	cmd := t.dirCmd(filepath.Join(goroot, "src/cmd/internal/metadata"), gorootBinGo, []string{"run", "main.go"})
+	// This helper reports THIS machine, so build it for this machine. The default
+	// target is cosmo, and a mac cannot exec an APE: the loader reads a shell
+	// header that execve does not.
+	cmd.Env = append(os.Environ(), "GOOS="+gohostos, "GOARCH="+gohostarch)
+	return cmd.Run()
 }
 
 // testName returns the dist test name for a given package and variant.

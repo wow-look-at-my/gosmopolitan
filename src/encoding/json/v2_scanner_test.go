@@ -135,7 +135,7 @@ func TestCompactSeparators(t *testing.T) {
 // Tests of a large random structure.
 
 func TestCompactBig(t *testing.T) {
-	initBig()
+	jsonBig := bigJSON()
 	var buf bytes.Buffer
 	if err := Compact(&buf, jsonBig); err != nil {
 		t.Fatalf("Compact error: %v", err)
@@ -150,7 +150,7 @@ func TestCompactBig(t *testing.T) {
 
 func TestIndentBig(t *testing.T) {
 	t.Parallel()
-	initBig()
+	jsonBig := bigJSON()
 	var buf bytes.Buffer
 	if err := Indent(&buf, jsonBig, "", "\t"); err != nil {
 		t.Fatalf("Indent error: %v", err)
@@ -229,9 +229,10 @@ func trim(b []byte) []byte {
 
 // Generate a random JSON object.
 
-var jsonBig []byte
-
-func initBig() {
+// bigJSON returns a document of its own for each caller. One package
+// variable cannot serve two tests that run at the same time: the second
+// call replaces the document the first one is in the middle of reading.
+func bigJSON() []byte {
 	n := 10000
 	if testing.Short() {
 		n = 100
@@ -240,7 +241,7 @@ func initBig() {
 	if err != nil {
 		panic(err)
 	}
-	jsonBig = b
+	return b
 }
 
 func genValue(n int) any {

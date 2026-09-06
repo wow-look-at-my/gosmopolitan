@@ -1989,6 +1989,16 @@ func (p *parser) paramDeclOrNil(name *Name, follow token) *Field {
 		// [name] type "|"
 		f = p.embeddedElem(f)
 	}
+	// name type "=" expr -- a default for this parameter. Only a named
+	// ordinary parameter can carry one: a type parameter's "=" would be a
+	// type, and an unnamed parameter has nothing for the callee to read.
+	if !typeSetsOk && p.tok == _Assign {
+		p.next()
+		if f.Name == nil {
+			p.syntaxErrorAt(p.pos(), "cannot set a default for an unnamed parameter")
+		}
+		f.Default = p.expr()
+	}
 	if f.Name != nil || f.Type != nil {
 		return f
 	}
