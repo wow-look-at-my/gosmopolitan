@@ -21,6 +21,13 @@ process creation, and iOS does not let a process exec another one. The isolation
 price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the
 process state and cannot be given one.
 
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and
+`-test.coverprofile`, so it writes its own report into the parent's directory and the two race - the parent's
+rename of the meta file finds the file already gone, and the package fails with `error generating coverage
+report`. Taking the barrier keeps the counters in the run that reports them, which is also what makes the test's
+coverage count at all: the parent does not execute a forked test's body, so a child's discarded profile would
+read as dead code.
+
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
 ## t.Fork

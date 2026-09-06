@@ -2306,14 +2306,20 @@ func checkParallel(t *T) {
 	t.checkParallel()
 }
 
-// canFork reports whether this platform can start a child process. wasm has no
+// canFork reports whether a child process can carry this test. wasm has no
 // process creation at all, and iOS does not let a process exec another one.
+//
+// A covered binary is the third case. The child inherits -test.gocoverdir and
+// -test.coverprofile, so it writes its own report over the parent's, and the
+// two race: the parent's rename of the meta file finds the file already gone.
+// The barrier buys the same isolation in this process, where the counters
+// belong to the run that reports them.
 func canFork() bool {
 	switch runtime.GOOS {
 	case "js", "wasip1", "ios":
 		return false
 	}
-	return true
+	return CoverMode() == ""
 }
 
 func (t *T) checkParallel() {
