@@ -9,6 +9,8 @@ package cosmo
 // Exports for darwinabi_cosmo_test.go.
 
 var (
+	XlatTermiosIoctlForTest = darwinXlatTermiosIoctl
+
 	XlatResourceForTest  = darwinXlatResource
 	RlimitToLinuxForTest = darwinRlimitToLinux
 	RlimitToAppleForTest = darwinRlimitToApple
@@ -16,6 +18,30 @@ var (
 )
 
 const (
+	LinuxTIOCSCTTYForTest  = linuxTIOCSCTTY
+	LinuxTIOCGPGRPForTest  = linuxTIOCGPGRP
+	LinuxTIOCSPGRPForTest  = linuxTIOCSPGRP
+	LinuxTIOCGWINSZForTest = linuxTIOCGWINSZ
+	LinuxTIOCSWINSZForTest = linuxTIOCSWINSZ
+	LinuxTIOCNOTTYForTest  = linuxTIOCNOTTY
+
+	AppleTIOCSCTTYForTest  = appleTIOCSCTTY
+	AppleTIOCGPGRPForTest  = appleTIOCGPGRP
+	AppleTIOCSPGRPForTest  = appleTIOCSPGRP
+	AppleTIOCGWINSZForTest = appleTIOCGWINSZ
+	AppleTIOCSWINSZForTest = appleTIOCSWINSZ
+	AppleTIOCNOTTYForTest  = appleTIOCNOTTY
+
+	LinuxTCGETSForTest  = linuxTCGETS
+	LinuxTCSETSForTest  = linuxTCSETS
+	LinuxTCSETSWForTest = linuxTCSETSW
+	LinuxTCSETSFForTest = linuxTCSETSF
+
+	AppleTIOCGETAForTest  = appleTIOCGETA
+	AppleTIOCSETAForTest  = appleTIOCSETA
+	AppleTIOCSETAWForTest = appleTIOCSETAW
+	AppleTIOCSETAFForTest = appleTIOCSETAF
+
 	NiceBiasForTest       = darwinNiceBias
 	LinuxRlimInfinityTest = linuxRLIM_INFINITY
 	AppleRlimInfinityTest = appleRLIM_INFINITY
