@@ -27,6 +27,8 @@ It runs on every build leg, not one. Upstream runs the same suite on each builde
 
 It runs in short mode. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set, which is what upstream's ordinary builders run.
 
+It tests the HOST port, and `run.bash` exports the `GOOS` and `GOARCH` that `dist env` reports so that every go command it starts agrees with it. This fork's go defaults to `GOOS=cosmo`, and an unexported `GOOS` left each test binary an APE. `execve` cannot start one: a shell has to read the header first. So the mac leg failed every package with `exec format error` while `dist test` reported `# GOOS: darwin`, and the linux leg only escaped because the runner carries an APE `binfmt_misc` entry. The host port is also the larger suite: compare `dist test -list` for the host against the same command under `GOOS=cosmo`, and the extra entries are the race and cgo variants. The cosmo port keeps its own coverage in `dats/cosmo-tests.dats`.
+
 One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
 
 ## test job

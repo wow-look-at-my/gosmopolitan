@@ -44,6 +44,14 @@ unset CDPATH	# in case user has it set
 export GOHOSTOS
 export CC
 
+# GOOS and GOARCH name the port dist test says it is testing, and every go
+# command it starts has to agree. This fork's go defaults to GOOS=cosmo, so an
+# unexported GOOS leaves each test binary an APE, which execve cannot start: a
+# shell has to read the header. That is every test on a host with no APE
+# binfmt_misc handler.
+export GOOS
+export GOARCH
+
 # no core files, please
 ulimit -c 0
 
