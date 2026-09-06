@@ -127,6 +127,29 @@ Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's own fil
 
 ---
 
+## 6a. The six the metadata wave missed (lock/ioctl wave, 2026-09-06)
+
+Section 6 below claimed the arm64 surface was complete "for everything the `syscall` package exposes and Apple can serve". It was not, and the claim is what made the gap hard to see: six syscalls the package exposes, and Apple serves, still answered ENOSYS. The report that opened this wave was a program failing to take its own lock file — `flock: function not implemented`.
+
+The gap was found by listing every `SYS_*` the cosmo `syscall` package names and diffing that against the dispatch, rather than by reading the switch and judging it complete. Do that diff before writing "closed" again.
+
+| syscall | what it took |
+|---|---|
+| `flock` | A forward. Apple's flock is BSD's, and Linux took `LOCK_SH`/`LOCK_EX`/`LOCK_NB`/`LOCK_UN` from BSD, so the operation passes through unchanged. Served on macOS-Intel too, and on NT over `LockFileEx`/`UnlockFileEx` (Section 5a). |
+| `fdatasync` | A forward to Apple's entry, with `fsync` standing in when it is absent — a STRONGER guarantee than the caller asked for, which is the right way to be wrong here. |
+| `sync` | A forward. Apple's returns void, so the Linux success value is supplied rather than forwarding a register the callee never set. |
+| `getrusage` | Apple's `struct timeval` carries a 32-bit microsecond field with four bytes of padding; Linux's is a full 64 bits. Both rusages are 144 bytes, so a forward keeps its SIZE and loses its CONTENTS — no error, just a garbage microsecond count. Converted in `darwinabi_cosmo.go` and pinned by a test. |
+| `gettimeofday` | The same timeval. The obsolete timezone argument is refused rather than filled. |
+| `ioctl` | Request numbers encode direction and argument size, so the two systems number even the calls they share differently. Served for the six whose ARGUMENT needs no translation: `TIOCGWINSZ`/`TIOCSWINSZ` (struct winsize is four `uint16` on both) and the four job-control requests `syscall.Setctty` and `syscall.Foreground` issue between fork and exec. |
+
+**Still ENOSYS on macOS, and this one matters: the termios family** (`TCGETS`, `TCSETS`, `TCSETSW`, `TCSETSF`). Apple's `struct termios` has 64-bit flag words against Linux's 32-bit, twenty control characters against nineteen, and separate speed fields where Linux encodes the baud rate in `c_cflag`; the flag bits and the `c_cc` indices are numbered differently again. That is a translation table with a baud map, not a forward, and it needs a pty to test against rather than a CI runner with no terminal. Until it lands, **a program cannot put a terminal into raw mode on macOS** — the gap a TUI hits first. An unhandled request answers ENOSYS, which is a visible refusal; forwarding the Linux number instead would ask the kernel for whatever Apple operation happens to carry it.
+
+**Coverage.** The request table and the rusage conversion are unit-tested in `darwinabi_cosmo_test.go` (ubuntu leg). The syscalls run end to end in `testdata/runtimeprobe`'s `flock`, `durable`, `rusage` and `ioctl` checks on all three runners. `flock` asserts exclusion between two descriptors and the EWOULDBLOCK errno, not just the return code. `ioctl` asserts on WHICH errno comes back with no terminal attached: ENOTTY is the kernel answering, ENOSYS is the emulation refusing.
+
+**macOS-Intel** takes `flock`, `fdatasync` and `sync` in the same wave — all three are pass-throughs with a BSD number from `zsysnum_darwin_amd64.go`. `ioctl`, `getrusage` and `gettimeofday` stay ENOSYS there for the reason Section 6b already gives for the `*at` family: they need real control flow (a request table, a struct conversion), and that path is assembly issuing raw XNU syscalls with no runner to test it on.
+
+**NT** takes `flock` only. `ioctl`, `getrusage`, `gettimeofday` and `sync` have no Win32 counterpart the emulation serves yet; `fdatasync` was already mapped to `FlushFileBuffers`.
+
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 
 The amd64 darwin dispatch carried 18 syscalls and answered everything else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod, fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid, setreuid, setregid, getpgid, and statfs/fstatfs (the last two through XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path applies, so a Linux-layout buffer is refused rather than overrun). `getpriority` applies the Linux `20-nice` bias, which the carry-flag convention makes unambiguous — the value alone cannot say whether the call failed.
@@ -139,7 +162,7 @@ This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1
 
 ## 7. What this means
 
-- The macOS arm64 syscall surface is complete for everything the `syscall` package exposes and Apple can serve (Section 6). What remains there is the handful Apple genuinely lacks.
+- The macOS arm64 syscall surface serves everything the `syscall` package exposes and Apple can serve, EXCEPT the termios ioctls (Sections 6 and 6a). Raw terminal mode is the one user-visible thing still missing there. The wording that used to sit here said "complete" while six syscalls were absent, so state the exception or do not make the claim.
 - The "return success" stubs (Section 2) are still the highest-risk items: they hide failures.
 - The macOS-Intel (amd64) SYSCALL surface is closed: the table, the error convention, the errno numbering, the netpoller, the CPU count, parking, thread creation, TLS. So are signals in the runtime: `darwinSigaction` issues a real `__sigaction` with its own trampoline (Section 2.3), and `darwinSigprocmask` bridges the sigset width (Section 2.6). The `syscall` package's own `rt_sigaction` emulation installs handlers for real too (Section 2.2). None of it is verified, because there is no Intel-mac runner — read and reasoned about, never executed.
 - Windows/arm64 (Section 4.3) has its Win32 layer now — trampolines, thread start, exception dispatch, preemption context. It is still unreachable (no APE boot path, no platform token), and its netpoller still throws, waiting on an arm64 split of the syscall emulation.
@@ -152,4 +175,5 @@ This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1
 
    None of it is verified. There is no Intel-mac runner, so every line of the above has been read and reasoned about but never executed. That remains the honest blocker on the platform, and `Default()` leaves darwin/amd64 out of a default build for exactly this reason.
 4. Windows/arm64: the `ntcall` trampolines, the `CONTEXT` layout and the VEH thunks are written (Section 4.3), sourced from upstream's own windows/arm64 port. Two things are left. The netpoller needs the syscall emulation split per architecture — numbers, `struct stat` width and `O_DIRECTORY` all differ. And the boot mechanism does not exist: the linker has no way to emit an arm64 PE header, so nothing sets `__hostos` there. Until it does, none of this code can be started, let alone tested, and `iswindows` stays a constant `false` so the compiler deletes it.
-5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go` carries no cosmo build tag, so `io.Copy` from a file to a socket never reaches the syscall on any cosmo host. Only a caller that uses `syscall.Sendfile` directly does. Adding cosmo to that tag needs the NT emulation to serve sendfile too, which it does not yet.
+5. Serve the termios ioctls on macOS (Section 6a): the two struct layouts, the flag bits, the `c_cc` indices and the baud encoding, with a pty test. Until this lands no program can put a terminal into raw mode on a macOS host.
+6. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go` carries no cosmo build tag, so `io.Copy` from a file to a socket never reaches the syscall on any cosmo host. Only a caller that uses `syscall.Sendfile` directly does. Adding cosmo to that tag needs the NT emulation to serve sendfile too, which it does not yet.

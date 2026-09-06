@@ -149,3 +149,135 @@ func darwinRlimitToApple(v uint64) uint64 {
 // returns the nice value itself, so the emulation applies the bias to
 // give a caller on macOS the same number a Linux host returns.
 const darwinNiceBias = 20
+
+// DarwinTimeval is Apple's struct timeval. The microsecond field is
+// 32 bits with four bytes of padding behind it, where the Linux one is a
+// full 64 bits - the same 16 bytes, and different contents. So every
+// struct that embeds a timeval needs converting rather than forwarding,
+// and a pass-through would hand the caller whatever the padding held.
+type DarwinTimeval struct {
+	Sec  int64
+	Usec int32
+	_    int32
+}
+
+// LinuxTimeval is struct timeval as the cosmo syscall package declares it.
+type LinuxTimeval struct {
+	Sec  int64
+	Usec int64
+}
+
+// DarwinRusage is Apple's struct rusage. Every field after the two
+// timevals is a 64-bit signed integer in the same order Linux uses -
+// Linux took the layout from BSD - so only the timevals are translated.
+type DarwinRusage struct {
+	Utime    DarwinTimeval
+	Stime    DarwinTimeval
+	Maxrss   int64
+	Ixrss    int64
+	Idrss    int64
+	Isrss    int64
+	Minflt   int64
+	Majflt   int64
+	Nswap    int64
+	Inblock  int64
+	Oublock  int64
+	Msgsnd   int64
+	Msgrcv   int64
+	Nsignals int64
+	Nvcsw    int64
+	Nivcsw   int64
+}
+
+// LinuxRusage is struct rusage as the Linux kernel fills it.
+type LinuxRusage struct {
+	Utime    LinuxTimeval
+	Stime    LinuxTimeval
+	Maxrss   int64
+	Ixrss    int64
+	Idrss    int64
+	Isrss    int64
+	Minflt   int64
+	Majflt   int64
+	Nswap    int64
+	Inblock  int64
+	Oublock  int64
+	Msgsnd   int64
+	Msgrcv   int64
+	Nsignals int64
+	Nvcsw    int64
+	Nivcsw   int64
+}
+
+// DarwinTimevalToLinux widens one Apple timeval into a Linux one.
+func DarwinTimevalToLinux(src *DarwinTimeval, dst *LinuxTimeval) {
+	dst.Sec = src.Sec
+	dst.Usec = int64(src.Usec)
+}
+
+// DarwinRusageToLinux converts one Apple struct rusage into a Linux one.
+func DarwinRusageToLinux(src *DarwinRusage, dst *LinuxRusage) {
+	DarwinTimevalToLinux(&src.Utime, &dst.Utime)
+	DarwinTimevalToLinux(&src.Stime, &dst.Stime)
+	dst.Maxrss = src.Maxrss
+	dst.Ixrss = src.Ixrss
+	dst.Idrss = src.Idrss
+	dst.Isrss = src.Isrss
+	dst.Minflt = src.Minflt
+	dst.Majflt = src.Majflt
+	dst.Nswap = src.Nswap
+	dst.Inblock = src.Inblock
+	dst.Oublock = src.Oublock
+	dst.Msgsnd = src.Msgsnd
+	dst.Msgrcv = src.Msgrcv
+	dst.Nsignals = src.Nsignals
+	dst.Nvcsw = src.Nvcsw
+	dst.Nivcsw = src.Nivcsw
+}
+
+// ioctl request numbers. A request encodes the direction and the size of
+// its argument, so the two systems number even the requests they share
+// differently. Every value here is the one the tree's own tables record
+// (syscall/zerrors_linux_arm64.go and syscall/zerrors_darwin_arm64.go),
+// never a remembered one: a wrong request does not fail, it performs a
+// DIFFERENT operation on the descriptor.
+//
+// The set is exactly the requests whose ARGUMENT needs no translation.
+// The termios family is deliberately absent - see darwinIoctl.
+const (
+	linuxTIOCSCTTY  = 0x540e
+	linuxTIOCGPGRP  = 0x540f
+	linuxTIOCSPGRP  = 0x5410
+	linuxTIOCGWINSZ = 0x5413
+	linuxTIOCSWINSZ = 0x5414
+	linuxTIOCNOTTY  = 0x5422
+
+	appleTIOCSCTTY  = 0x20007461
+	appleTIOCGPGRP  = 0x40047477
+	appleTIOCSPGRP  = 0x80047476
+	appleTIOCGWINSZ = 0x40087468
+	appleTIOCSWINSZ = 0x80087467
+	appleTIOCNOTTY  = 0x20007471
+)
+
+// DarwinXlatIoctl maps a Linux ioctl request to Apple's. The second
+// result is false for a request this emulation does not serve, which the
+// caller reports as ENOSYS rather than passing a Linux number to a
+// kernel that reads it as something else entirely.
+func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
+	switch uint32(req) {
+	case linuxTIOCSCTTY:
+		return appleTIOCSCTTY, true
+	case linuxTIOCGPGRP:
+		return appleTIOCGPGRP, true
+	case linuxTIOCSPGRP:
+		return appleTIOCSPGRP, true
+	case linuxTIOCGWINSZ:
+		return appleTIOCGWINSZ, true
+	case linuxTIOCSWINSZ:
+		return appleTIOCSWINSZ, true
+	case linuxTIOCNOTTY:
+		return appleTIOCNOTTY, true
+	}
+	return 0, false
+}

@@ -169,6 +169,62 @@ func darwinStatfs(fn, pathOrFd, buf, size uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(fn, pathOrFd, buf, 0, 0, 0, 0)
 }
 
+// darwinFdatasync emulates fdatasync. Apple ships the entry, and fsync
+// stands in when it is absent: fsync flushes the metadata fdatasync is
+// allowed to leave behind, so the caller gets a STRONGER guarantee than
+// it asked for rather than a weaker one. Reporting ENOSYS for a durable
+// write is the outcome worth avoiding here.
+//
+//go:nosplit
+func darwinFdatasync(fd uintptr) (r1, r2, errno uintptr) {
+	fn := darwinFns.Fdatasync
+	if fn == 0 {
+		fn = darwinFns.Fsync
+	}
+	return darwinCall(fn, fd, 0, 0, 0, 0, 0)
+}
+
+// darwinSync emulates sync. Apple's sync returns void and cannot fail,
+// so the Linux success value is supplied here rather than forwarding a
+// return value the callee never set.
+//
+//go:nosplit
+func darwinSync() (r1, r2, errno uintptr) {
+	if darwinFns.Sync == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	darwinLibcCall6(darwinFns.Sync, 0, 0, 0, 0, 0, 0)
+	return 0, 0, 0
+}
+
+// darwinIoctl emulates ioctl for the requests whose argument means the
+// same thing on both systems: the two window-size calls (struct winsize
+// is four uint16 fields on both) and the four job-control calls, whose
+// argument is an int or nothing at all. syscall.Setctty and
+// syscall.Foreground issue two of them between fork and exec, which is
+// why this sits on the nosplit spine.
+//
+// The termios family (TCGETS and friends) is NOT here. Apple's struct
+// termios is a different shape - 64-bit flag words, twenty control
+// characters rather than nineteen, separate speed fields - and its flag
+// bits and c_cc indices are numbered differently again. That is a
+// translation table, not a forward, and it needs a pty to test against.
+// Until it exists an unhandled request answers ENOSYS, which is a
+// visible refusal; a forwarded Linux request number would instead ask
+// the kernel to perform whatever Apple operation happens to share it.
+//
+// ioctl is VARIADIC, so the argument goes on the stack. See
+// darwinCallVariadic1.
+//
+//go:nosplit
+func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
+	areq, ok := DarwinXlatIoctl(req)
+	if !ok {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, arg)
+}
+
 // darwinUname emulates uname. Same caller-owned-buffer contract as
 // darwinStatfs, with the buffer as the only libc argument.
 //

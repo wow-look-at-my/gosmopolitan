@@ -283,23 +283,28 @@ var (
 	dlsymNameMknod     = []byte("mknod\x00")
 	dlsymNameUtimensat = []byte("utimensat\x00")
 	dlsymNameFlock     = []byte("flock\x00")
+	dlsymNameFdatasync = []byte("fdatasync\x00")
+	dlsymNameSync      = []byte("sync\x00")
+	dlsymNameIoctl     = []byte("ioctl\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
 
-	dlsymNameChroot      = []byte("chroot\x00")
-	dlsymNameSetuid      = []byte("setuid\x00")
-	dlsymNameSetgid      = []byte("setgid\x00")
-	dlsymNameSetreuid    = []byte("setreuid\x00")
-	dlsymNameSetregid    = []byte("setregid\x00")
-	dlsymNameGetpgid     = []byte("getpgid\x00")
-	dlsymNameGetgroups   = []byte("getgroups\x00")
-	dlsymNameSetgroups   = []byte("setgroups\x00")
-	dlsymNameGetpriority = []byte("getpriority\x00")
-	dlsymNameSetpriority = []byte("setpriority\x00")
-	dlsymNameGetrlimit   = []byte("getrlimit\x00")
-	dlsymNameSetrlimit   = []byte("setrlimit\x00")
-	dlsymNameUname       = []byte("uname\x00")
+	dlsymNameChroot       = []byte("chroot\x00")
+	dlsymNameSetuid       = []byte("setuid\x00")
+	dlsymNameSetgid       = []byte("setgid\x00")
+	dlsymNameSetreuid     = []byte("setreuid\x00")
+	dlsymNameSetregid     = []byte("setregid\x00")
+	dlsymNameGetpgid      = []byte("getpgid\x00")
+	dlsymNameGetgroups    = []byte("getgroups\x00")
+	dlsymNameSetgroups    = []byte("setgroups\x00")
+	dlsymNameGetpriority  = []byte("getpriority\x00")
+	dlsymNameSetpriority  = []byte("setpriority\x00")
+	dlsymNameGetrlimit    = []byte("getrlimit\x00")
+	dlsymNameSetrlimit    = []byte("setrlimit\x00")
+	dlsymNameUname        = []byte("uname\x00")
+	dlsymNameGetrusage    = []byte("getrusage\x00")
+	dlsymNameGettimeofday = []byte("gettimeofday\x00")
 )
 
 // cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2)
@@ -411,26 +416,31 @@ func osArchInit() {
 		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
 		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
 		Flock:     cosmoDlsym(&dlsymNameFlock[0]),
+		Fdatasync: cosmoDlsym(&dlsymNameFdatasync[0]),
+		Sync:      cosmoDlsym(&dlsymNameSync[0]),
+		Ioctl:     cosmoDlsym(&dlsymNameIoctl[0]),
 		Statfs:    cosmoDlsym(&dlsymNameStatfs[0]),
 		Fstatfs:   cosmoDlsym(&dlsymNameFstatfs[0]),
 		Sendfile:  cosmoDlsym(&dlsymNameSendfile[0]),
 
-		Chroot:      cosmoDlsym(&dlsymNameChroot[0]),
-		Setuid:      cosmoDlsym(&dlsymNameSetuid[0]),
-		Setgid:      cosmoDlsym(&dlsymNameSetgid[0]),
-		Setreuid:    cosmoDlsym(&dlsymNameSetreuid[0]),
-		Setregid:    cosmoDlsym(&dlsymNameSetregid[0]),
-		Getpgid:     cosmoDlsym(&dlsymNameGetpgid[0]),
-		Getgroups:   cosmoDlsym(&dlsymNameGetgroups[0]),
-		Setgroups:   cosmoDlsym(&dlsymNameSetgroups[0]),
-		Getpriority: cosmoDlsym(&dlsymNameGetpriority[0]),
-		Setpriority: cosmoDlsym(&dlsymNameSetpriority[0]),
-		Getrlimit:   cosmoDlsym(&dlsymNameGetrlimit[0]),
-		Setrlimit:   cosmoDlsym(&dlsymNameSetrlimit[0]),
-		Uname:       cosmoDlsym(&dlsymNameUname[0]),
-		PthreadSelf: __syslib.pthread_self,
-		Getentropy:  cosmoSyslibGetentropy(),
-		Close:       __syslib.close,
+		Chroot:       cosmoDlsym(&dlsymNameChroot[0]),
+		Setuid:       cosmoDlsym(&dlsymNameSetuid[0]),
+		Setgid:       cosmoDlsym(&dlsymNameSetgid[0]),
+		Setreuid:     cosmoDlsym(&dlsymNameSetreuid[0]),
+		Setregid:     cosmoDlsym(&dlsymNameSetregid[0]),
+		Getpgid:      cosmoDlsym(&dlsymNameGetpgid[0]),
+		Getgroups:    cosmoDlsym(&dlsymNameGetgroups[0]),
+		Setgroups:    cosmoDlsym(&dlsymNameSetgroups[0]),
+		Getpriority:  cosmoDlsym(&dlsymNameGetpriority[0]),
+		Setpriority:  cosmoDlsym(&dlsymNameSetpriority[0]),
+		Getrlimit:    cosmoDlsym(&dlsymNameGetrlimit[0]),
+		Setrlimit:    cosmoDlsym(&dlsymNameSetrlimit[0]),
+		Uname:        cosmoDlsym(&dlsymNameUname[0]),
+		Getrusage:    cosmoDlsym(&dlsymNameGetrusage[0]),
+		Gettimeofday: cosmoDlsym(&dlsymNameGettimeofday[0]),
+		PthreadSelf:  __syslib.pthread_self,
+		Getentropy:   cosmoSyslibGetentropy(),
+		Close:        __syslib.close,
 	})
 }
 

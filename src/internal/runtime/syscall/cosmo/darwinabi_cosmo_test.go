@@ -149,4 +149,104 @@ func TestDarwinStructSizes(t *testing.T) {
 	if got := unsafe.Offsetof(un.Machine); got != 4*256 {
 		t.Errorf("offsetof(DarwinUtsname.Machine) = %d, want %d", got, 4*256)
 	}
+
+	// The two rusage structs are the same 144 bytes, which is what makes
+	// the difference easy to miss: Apple's microsecond field is 32 bits
+	// with padding behind it, Linux's is 64. A forwarded buffer therefore
+	// keeps its size and loses its meaning.
+	var dru cosmo.DarwinRusage
+	var lru cosmo.LinuxRusage
+	if got := unsafe.Sizeof(dru); got != 144 {
+		t.Errorf("sizeof(DarwinRusage) = %d, want 144", got)
+	}
+	if got := unsafe.Sizeof(lru); got != 144 {
+		t.Errorf("sizeof(LinuxRusage) = %d, want 144", got)
+	}
+	if got := unsafe.Sizeof(cosmo.DarwinTimeval{}); got != 16 {
+		t.Errorf("sizeof(DarwinTimeval) = %d, want 16", got)
+	}
+	if got := unsafe.Offsetof(dru.Maxrss); got != 32 {
+		t.Errorf("offsetof(DarwinRusage.Maxrss) = %d, want 32", got)
+	}
+	if got := unsafe.Offsetof(lru.Maxrss); got != 32 {
+		t.Errorf("offsetof(LinuxRusage.Maxrss) = %d, want 32", got)
+	}
+}
+
+// TestDarwinRusageToLinux pins the one thing the conversion has to get
+// right: the microseconds survive the width change, and every counter
+// after the timevals lands in the same field it started in. A memcpy
+// would pass a size check and fail this.
+func TestDarwinRusageToLinux(t *testing.T) {
+	src := cosmo.DarwinRusage{
+		Utime:  cosmo.DarwinTimeval{Sec: 12, Usec: 999999},
+		Stime:  cosmo.DarwinTimeval{Sec: 34, Usec: 1},
+		Maxrss: 1, Ixrss: 2, Idrss: 3, Isrss: 4,
+		Minflt: 5, Majflt: 6, Nswap: 7, Inblock: 8,
+		Oublock: 9, Msgsnd: 10, Msgrcv: 11, Nsignals: 12,
+		Nvcsw: 13, Nivcsw: 14,
+	}
+	var dst cosmo.LinuxRusage
+	cosmo.DarwinRusageToLinux(&src, &dst)
+
+	if dst.Utime.Sec != 12 || dst.Utime.Usec != 999999 {
+		t.Errorf("Utime = %d.%06d, want 12.999999", dst.Utime.Sec, dst.Utime.Usec)
+	}
+	if dst.Stime.Sec != 34 || dst.Stime.Usec != 1 {
+		t.Errorf("Stime = %d.%06d, want 34.000001", dst.Stime.Sec, dst.Stime.Usec)
+	}
+	for i, pair := range []struct {
+		name      string
+		got, want int64
+	}{
+		{"Maxrss", dst.Maxrss, 1}, {"Ixrss", dst.Ixrss, 2},
+		{"Idrss", dst.Idrss, 3}, {"Isrss", dst.Isrss, 4},
+		{"Minflt", dst.Minflt, 5}, {"Majflt", dst.Majflt, 6},
+		{"Nswap", dst.Nswap, 7}, {"Inblock", dst.Inblock, 8},
+		{"Oublock", dst.Oublock, 9}, {"Msgsnd", dst.Msgsnd, 10},
+		{"Msgrcv", dst.Msgrcv, 11}, {"Nsignals", dst.Nsignals, 12},
+		{"Nvcsw", dst.Nvcsw, 13}, {"Nivcsw", dst.Nivcsw, 14},
+	} {
+		if pair.got != pair.want {
+			t.Errorf("field %d (%s) = %d, want %d", i, pair.name, pair.got, pair.want)
+		}
+	}
+}
+
+// TestDarwinXlatIoctl pins the request numbers against the tree's own
+// tables. An ioctl request encodes direction and argument size, so the
+// two systems number even the calls they share differently - and a
+// request forwarded unchanged does not fail, it asks the kernel for
+// whatever operation happens to carry that number there.
+func TestDarwinXlatIoctl(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		linux, apple uintptr
+	}{
+		{"TIOCSCTTY", cosmo.LinuxTIOCSCTTYForTest, cosmo.AppleTIOCSCTTYForTest},
+		{"TIOCGPGRP", cosmo.LinuxTIOCGPGRPForTest, cosmo.AppleTIOCGPGRPForTest},
+		{"TIOCSPGRP", cosmo.LinuxTIOCSPGRPForTest, cosmo.AppleTIOCSPGRPForTest},
+		{"TIOCGWINSZ", cosmo.LinuxTIOCGWINSZForTest, cosmo.AppleTIOCGWINSZForTest},
+		{"TIOCSWINSZ", cosmo.LinuxTIOCSWINSZForTest, cosmo.AppleTIOCSWINSZForTest},
+		{"TIOCNOTTY", cosmo.LinuxTIOCNOTTYForTest, cosmo.AppleTIOCNOTTYForTest},
+	} {
+		got, ok := cosmo.DarwinXlatIoctl(tc.linux)
+		if !ok {
+			t.Errorf("%s (%#x): not served", tc.name, tc.linux)
+			continue
+		}
+		if got != tc.apple {
+			t.Errorf("%s: %#x -> %#x, want %#x", tc.name, tc.linux, got, tc.apple)
+		}
+	}
+
+	// A request outside the set must be refused rather than forwarded.
+	// TCGETS is the one a terminal library reaches for first, so it is
+	// the case worth naming: the termios structs and their flag bits
+	// need a translation table that does not exist yet.
+	for _, req := range []uintptr{0x5401 /* TCGETS */, 0x5402 /* TCSETS */, 0} {
+		if _, ok := cosmo.DarwinXlatIoctl(req); ok {
+			t.Errorf("request %#x reported as served; it is not", req)
+		}
+	}
 }

@@ -147,6 +147,9 @@ func main() {
 	timed("fsmetaunix", checkFsMetaUnix)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
+	timed("durable", checkDurable)
+	timed("rusage", checkRusage)
+	timed("ioctl", checkIoctl)
 	timed("sendfile", checkSendfile)
 	timed("nanosleep", checkNanosleep)
 	// Exec and signal checks run at the END on purpose, in that order.

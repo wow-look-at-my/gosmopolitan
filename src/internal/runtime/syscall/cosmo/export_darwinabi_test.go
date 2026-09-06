@@ -16,6 +16,20 @@ var (
 )
 
 const (
+	LinuxTIOCSCTTYForTest  = linuxTIOCSCTTY
+	LinuxTIOCGPGRPForTest  = linuxTIOCGPGRP
+	LinuxTIOCSPGRPForTest  = linuxTIOCSPGRP
+	LinuxTIOCGWINSZForTest = linuxTIOCGWINSZ
+	LinuxTIOCSWINSZForTest = linuxTIOCSWINSZ
+	LinuxTIOCNOTTYForTest  = linuxTIOCNOTTY
+
+	AppleTIOCSCTTYForTest  = appleTIOCSCTTY
+	AppleTIOCGPGRPForTest  = appleTIOCGPGRP
+	AppleTIOCSPGRPForTest  = appleTIOCSPGRP
+	AppleTIOCGWINSZForTest = appleTIOCGWINSZ
+	AppleTIOCSWINSZForTest = appleTIOCSWINSZ
+	AppleTIOCNOTTYForTest  = appleTIOCNOTTY
+
 	NiceBiasForTest       = darwinNiceBias
 	LinuxRlimInfinityTest = linuxRLIM_INFINITY
 	AppleRlimInfinityTest = appleRLIM_INFINITY

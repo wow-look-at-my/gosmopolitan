@@ -33,6 +33,8 @@
 // syscall/zsysnum_cosmo_amd64.go records them.
 #define SYS_flock		73
 #define SYS_fsync		74
+#define SYS_fdatasync		75
+#define SYS_sync		162
 #define SYS_truncate		76
 #define SYS_ftruncate		77
 #define SYS_fchdir		81
@@ -91,7 +93,9 @@
 #define XNU_chroot		0x200003d	// BSD 61
 #define XNU_getgroups		0x200004f	// BSD 79
 #define XNU_setgroups		0x2000050	// BSD 80
+#define XNU_sync		0x2000024	// BSD 36
 #define XNU_fsync		0x200005f	// BSD 95
+#define XNU_fdatasync		0x20000bb	// BSD 187
 #define XNU_setpriority		0x2000060	// BSD 96
 #define XNU_getpriority		0x2000064	// BSD 100
 #define XNU_fchown		0x200007b	// BSD 123
@@ -260,6 +264,10 @@ syscall6_darwin:
 	JEQ	darwin_fchdir
 	CMPQ	R11, $SYS_flock
 	JEQ	darwin_flock
+	CMPQ	R11, $SYS_fdatasync
+	JEQ	darwin_fdatasync
+	CMPQ	R11, $SYS_sync
+	JEQ	darwin_sync
 	CMPQ	R11, $SYS_chroot
 	JEQ	darwin_chroot
 	CMPQ	R11, $SYS_getgroups
@@ -543,6 +551,20 @@ darwin_fchown:
 darwin_fchdir:
 	MOVL	$XNU_fchdir, AX
 	JMP	darwin_syscall
+
+darwin_fdatasync:
+	MOVL	$XNU_fdatasync, AX
+	JMP	darwin_syscall
+
+// sync returns void on XNU, so AX holds nothing a caller may read. The
+// Linux syscall returns 0, and that is what goes back.
+darwin_sync:
+	MOVL	$XNU_sync, AX
+	SYSCALL
+	MOVQ	$0, AX		// r1
+	MOVQ	$0, BX		// r2
+	MOVQ	$0, CX		// errno
+	RET
 
 darwin_flock:
 	// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
