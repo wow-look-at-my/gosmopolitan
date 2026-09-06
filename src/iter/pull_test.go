@@ -32,6 +32,8 @@ func squares(n int) Seq2[int, int64] {
 }
 
 func TestPull(t *testing.T) {
+	// Counts the process's goroutines, so no other test may run beside it.
+	t.Serial()
 	for end := 0; end <= 3; end++ {
 		t.Run(fmt.Sprint(end), func(t *testing.T) {
 			ng := stableNumGoroutine()
@@ -74,6 +76,8 @@ func TestPull(t *testing.T) {
 }
 
 func TestPull2(t *testing.T) {
+	// Counts the process's goroutines, so no other test may run beside it.
+	t.Serial()
 	for end := 0; end <= 3; end++ {
 		t.Run(fmt.Sprint(end), func(t *testing.T) {
 			ng := stableNumGoroutine()

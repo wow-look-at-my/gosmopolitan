@@ -181,7 +181,10 @@ func firstComment(filename string) string {
 
 	var first string
 	var s scanner.Scanner
-	s.Init(fset.AddFile("", fset.Base(), n), src[:n], nil /* ignore errors */, scanner.ScanComments)
+	// A negative base makes AddFile take the current base itself. Reading
+	// fset.Base() here instead races: tests share one FileSet and run beside
+	// each other, so the base can advance between the read and the add.
+	s.Init(fset.AddFile("", -1, n), src[:n], nil /* ignore errors */, scanner.ScanComments)
 	for {
 		_, tok, lit := s.Scan()
 		switch tok {
@@ -285,6 +288,10 @@ func testTestDir(t *testing.T, path string, ignore ...string) {
 }
 
 func TestStdTest(t *testing.T) {
+	// Shares stdLibImporter, and a source importer holds the packages it is
+	// part way through. A second test importing the same package reads that
+	// as an import cycle, or races the objects going into its scope.
+	t.Serial()
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -303,6 +310,7 @@ func TestStdTest(t *testing.T) {
 }
 
 func TestStdFixed(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -348,6 +356,7 @@ func TestStdFixed(t *testing.T) {
 }
 
 func TestStdKen(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	testTestDir(t, filepath.Join(testenv.GOROOT(t), "test", "ken"))
@@ -435,6 +444,53 @@ func typecheckFiles(path string, filenames []string, importer Importer) (*Packag
 }
 
 // pkgFilenames returns the list of package filenames for the given directory.
+// vendorLists caches one vendor tree's modules.txt package set, by the
+// vendor directory. A nil set means the file is absent.
+var vendorLists sync.Map
+
+// vendorsPkg reports whether the distribution vendors the package in dir.
+// A vendor directory here holds whole repositories, checked out as git
+// submodules, so it also carries packages nothing in the distribution
+// imports, whose own dependencies were never vendored. modules.txt names
+// the packages that are part of the build; the rest are checkout residue.
+// A directory outside any vendor tree is always the distribution's own.
+func vendorsPkg(dir string) bool {
+	parts := strings.Split(filepath.ToSlash(dir), "/")
+	i := slices.Index(parts, "vendor")
+	if i < 0 {
+		return true
+	}
+	vendorDir := filepath.FromSlash(strings.Join(parts[:i+1], "/"))
+
+	set, ok := vendorLists.Load(vendorDir)
+	if !ok {
+		set, _ = vendorLists.LoadOrStore(vendorDir, readModulesTxt(vendorDir))
+	}
+	pkgs, _ := set.(map[string]bool)
+	if pkgs == nil {
+		return true
+	}
+	return pkgs[strings.Join(parts[i+1:], "/")]
+}
+
+// readModulesTxt reads the package paths a vendor tree's modules.txt names.
+// It answers nil when the file is absent, which is not an error: a tree
+// without one makes no claim about what it holds.
+func readModulesTxt(vendorDir string) map[string]bool {
+	data, err := os.ReadFile(filepath.Join(vendorDir, "modules.txt"))
+	if err != nil {
+		return nil
+	}
+	pkgs := make(map[string]bool)
+	for line := range strings.Lines(string(data)) {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			pkgs[line] = true
+		}
+	}
+	return pkgs
+}
+
 func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 	ctxt := build.Default
 	ctxt.CgoEnabled = false
@@ -446,6 +502,9 @@ func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 		return nil, err
 	}
 	if excluded[pkg.ImportPath] {
+		return nil, nil
+	}
+	if !vendorsPkg(pkg.Dir) {
 		return nil, nil
 	}
 	if slices.Contains(strings.Split(pkg.ImportPath, "/"), "_asm") {
