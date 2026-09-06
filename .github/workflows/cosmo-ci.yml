@@ -220,22 +220,25 @@ jobs:
           done
           # Published master toolchains, oldest first: the first version whose fizzbuzz exits 2 names the release that broke the NT boot.
           tmp="$(cygpath -u "$RUNNER_TEMP")"
-          for v in 372 411 441 455 470 476; do
-            rm -rf "$tmp/go" "$tmp/gt.tgz"
+          for v in 393 411 424 441 455 470; do
+            d="$tmp/gt$v"
+            mkdir -p "$d"
             rc=0
-            curl -fsSL --compressed -o "$tmp/gt.tgz" "https://dl.pazer.build/gosmopolitan?v=$v&os=windows&arch=amd64" || rc=$?
+            curl -fsSL --compressed -o "$d/gt.tgz" "https://dl.pazer.build/gosmopolitan?v=$v&os=windows&arch=amd64" || rc=$?
             if [ "$rc" != 0 ]; then
               echo "v$v download exit=$rc"
               continue
             fi
             rc=0
-            tar --force-local -xzf "$tmp/gt.tgz" -C "$tmp" || rc=$?
-            if [ "$rc" != 0 ] || [ ! -x "$tmp/go/bin/go" ]; then
+            tar --force-local -xzf "$d/gt.tgz" -C "$d" || rc=$?
+            rm -f "$d/gt.tgz"
+            if [ "$rc" != 0 ] || [ ! -x "$d/go/bin/go" ]; then
               echo "v$v untar exit=$rc (no go/bin/go)"
               continue
             fi
             rc=0
-            GOOS=cosmo "$tmp/go/bin/go" build -o "$tmp/fb-$v.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
+            GOOS=cosmo "$d/go/bin/go" build -o "$tmp/fb-$v.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
+            rm -rf "$d"
             if [ "$rc" != 0 ]; then
               echo "v$v build exit=$rc"
               continue
