@@ -30,11 +30,12 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 
 ## 4. The distribution suite under the cosmo port
 
-`run.bash` runs `dist test` for the cosmo port on every CI leg. These packages are still red on a Linux host.
+`run.bash` runs `dist test` for the cosmo port on every CI leg. These are red.
 
 | # | Package | Behavior |
 |---|---------|----------|
-| 1 | `cmd/addr2line`, `cmd/link`, `cmd/compile/internal/ssa`, `runtime` (`TestUnsafePoint`) | Each opens a linked binary with `debug/elf` or `go tool nm` and gets `bad magic number '[77 90 113 70]'`, `no symbols`, or `dwarf too short`. Those bytes are `MZqF`: the APE header. `objfile.Open` reads the sidecar now, and `debug/elf` does not, so a test that opens the file itself still sees the container. |
+| 0 | every package, on the windows leg | Each fails in about a tenth of a second with a bare `exit status 2` and NO output. The test binary dies before it prints anything, so nothing here has run yet. Not diagnosed. The macos leg's wall of failures had one cause and is fixed; this is a second one. |
+| 1 | `cmd/addr2line`, `cmd/link`, `cmd/compile/internal/ssa`, `runtime` (`TestUnsafePoint`) | Each opens a linked binary with `debug/elf` or `go tool nm` and gets `bad magic number '[77 90 113 70]'`, `no symbols`, or `dwarf too short`. Those bytes are `MZqF`: the APE header. `objfile.Open` reads the sidecar now, and `debug/elf` does not, so a test that opens the file itself still sees the container. An APE that has RUN assimilates itself on a Linux host and parses fine, which is why this reproduces only on a binary nothing executed. |
 | 2 | `cmd/link` (`TestELFHeadersSorted`, `TestIssue42396`) | Each asks for a build mode the port does not have, `pie` and `-race`, and reads the refusal as a failure rather than a skip. `testenv.GOOS` is the guard the objdump tests now use. |
 | 3 | `cmd/compile/internal/test` (the PGO inlining family) | The inline decisions the golden output names do not match what the compiler produces here. Not yet diagnosed: this fork also adds loop-aware inlining. |
 | 4 | `net/http/internal/http2` (`TestServer_Request_Connect_InvalidPath`) | Panics with "running on the wrong goroutine" inside a synctest bubble. Tests are parallel by default here, and synctest is what that meets. |
