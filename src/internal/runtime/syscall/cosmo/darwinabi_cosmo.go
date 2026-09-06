@@ -48,6 +48,60 @@ type DarwinUtsname struct {
 	Machine  [256]byte
 }
 
+// DarwinFlock is Apple's struct flock. It holds the same five fields as
+// Linux's Flock_t in a different order and eight bytes less, so an fcntl
+// lock command hands this emulation a record of THIS shape and the
+// syscall package converts, the way it does for statfs and utsname.
+// Lock types differ too: Linux counts from zero, Apple starts at one and
+// puts the write lock last.
+type DarwinFlock struct {
+	Start  int64
+	Len    int64
+	Pid    int32
+	Type   int16
+	Whence int16
+}
+
+// Apple's lock types. Whence needs no translation: SEEK_SET, SEEK_CUR
+// and SEEK_END agree.
+const (
+	linuxF_RDLCK  = 0
+	linuxF_WRLCK  = 1
+	linuxF_UNLCK  = 2
+	darwinF_RDLCK = 1
+	darwinF_UNLCK = 2
+	darwinF_WRLCK = 3
+)
+
+// DarwinLockType translates a Linux flock l_type to Apple's. It reports
+// false for a value Apple has no lock type for, which is the whole set
+// of reasons a record cannot be translated.
+func DarwinLockType(t int16) (int16, bool) {
+	switch t {
+	case linuxF_RDLCK:
+		return darwinF_RDLCK, true
+	case linuxF_WRLCK:
+		return darwinF_WRLCK, true
+	case linuxF_UNLCK:
+		return darwinF_UNLCK, true
+	}
+	return 0, false
+}
+
+// LinuxLockType is the reverse. F_GETLK answers through the record, so
+// the type comes back as well as goes out.
+func LinuxLockType(t int16) (int16, bool) {
+	switch t {
+	case darwinF_RDLCK:
+		return linuxF_RDLCK, true
+	case darwinF_WRLCK:
+		return linuxF_WRLCK, true
+	case darwinF_UNLCK:
+		return linuxF_UNLCK, true
+	}
+	return 0, false
+}
+
 // utimensat's "leave this stamp alone" and "use the current time"
 // sentinels sit in the nanosecond field. Linux encodes them as large
 // positive values, Apple as small negative ones.

@@ -832,6 +832,16 @@ const (
 	linuxF_DUPFD_CLOEXEC = 1030
 	appleF_DUPFD_CLOEXEC = 67
 
+	// Record locks. Both systems number these three consecutively and
+	// both take a struct flock, but the numbers and the record's field
+	// order differ. See DarwinFlock.
+	linuxF_GETLK  = 5
+	linuxF_SETLK  = 6
+	linuxF_SETLKW = 7
+	appleF_GETLK  = 7
+	appleF_SETLK  = 8
+	appleF_SETLKW = 9
+
 	// F_GETPATH resolves an fd to its path. Apple-only: it is passed
 	// through under Apple's own number because Linux has no counterpart
 	// to translate from, and 50 is not a Linux fcntl command (Linux uses
@@ -885,6 +895,14 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 		if arg == 0 {
 			return ^uintptr(0), 0, darwinEFAULT
 		}
+	case linuxF_GETLK, linuxF_SETLK, linuxF_SETLKW:
+		// arg is a DarwinFlock the syscall package built, the same
+		// caller-owned-buffer contract F_GETPATH has. Only the command
+		// number is this function's to translate.
+		if arg == 0 {
+			return ^uintptr(0), 0, darwinEFAULT
+		}
+		cmd += appleF_GETLK - linuxF_GETLK
 	default:
 		// Locking, owner and lease commands have incompatible
 		// argument structures; refuse rather than corrupt.
