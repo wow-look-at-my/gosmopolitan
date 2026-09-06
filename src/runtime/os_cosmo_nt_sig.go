@@ -444,6 +444,92 @@ func ntSigaction(sig uint32, new, old *sigactiont) int32 {
 	return 0
 }
 
+// ---- signal mask ----
+
+// ntSigMask is the blocked-signal set, and ntSigPending the signals a
+// send found blocked. NT has no kernel signal mask, and the asm
+// rtsigprocmask stub used to return success while blocking nothing - so
+// a runtime that had just blocked every signal around a critical section
+// could still be reentered by one.
+//
+// Recording it here is the whole implementation, for the same reason
+// ntSigActs is: the only sender that reaches a thread on this host is
+// the process itself (ntKillSelf), so a set this file consults is a set
+// that decides delivery. Unsynchronized like ntSigActs, and for the same
+// reason - a thread's own mask is written only by that thread.
+var (
+	ntSigMask    sigset
+	ntSigPending sigset
+)
+
+//go:nosplit
+func ntSigsetHas(mask *sigset, sig uint32) bool {
+	if sig == 0 || sig >= _NSIG {
+		return false
+	}
+	return mask[(sig-1)/32]&(1<<((sig-1)&31)) != 0
+}
+
+// ntSigprocmask is the NT leg of sigprocmask (os_cosmo.go). It applies
+// the change and then delivers whatever the change unblocked, which is
+// what the kernel does at the end of its own sigprocmask.
+//
+//go:nosplit
+func ntSigprocmask(how int32, new, old *sigset) {
+	if old != nil {
+		*old = ntSigMask
+	}
+	if new == nil {
+		return
+	}
+	switch how {
+	case _SIG_BLOCK:
+		ntSigMask[0] |= new[0]
+		ntSigMask[1] |= new[1]
+	case _SIG_UNBLOCK:
+		ntSigMask[0] &^= new[0]
+		ntSigMask[1] &^= new[1]
+	case _SIG_SETMASK:
+		ntSigMask = *new
+	default:
+		return
+	}
+	// SIGKILL and SIGSTOP cannot be blocked on Linux either.
+	sigdelset(&ntSigMask, _SIGKILL)
+	sigdelset(&ntSigMask, _SIGSTOP)
+	ntFlushPendingSignals()
+}
+
+// ntFlushPendingSignals delivers signals that arrived while they were
+// blocked and are not blocked any more.
+//
+// Only from a user goroutine: delivery runs a handler on the gsignal
+// stack, and the boot and signal-handling paths that call sigprocmask on
+// g0 must not re-enter it. A signal stays pending until the next
+// unblock from ordinary Go code, which is where every caller that can
+// receive one already is.
+//
+//go:nosplit
+func ntFlushPendingSignals() {
+	gp := getg()
+	if gp == nil || gp.m == nil || gp == gp.m.g0 || gp == gp.m.gsignal {
+		return
+	}
+	for sig := uint32(1); sig < _NSIG; sig++ {
+		if !ntSigsetHas(&ntSigPending, sig) || ntSigsetHas(&ntSigMask, sig) {
+			continue
+		}
+		sigdelset(&ntSigPending, int(sig))
+		// The decision tree runs again rather than the handler being
+		// called directly: SIG_IGN may have been installed while the
+		// signal waited, and a default-terminate signal must still
+		// terminate. ntKillSelf may grow the stack, which is why the
+		// guard above has to come first - it is only ever reached from a
+		// user goroutine.
+		ntKillSelf(sig)
+	}
+}
+
 // ---- kill / tkill / tgkill emulation ----
 
 // ntSigDefaultIgnored reports whether SIG_DFL for sig discards it
@@ -477,6 +563,12 @@ func ntKillSelf(sig uint32) uintptr {
 	}
 	handler := ntSigActs[sig].sa_handler
 	if handler == _SIG_IGN {
+		return 0
+	}
+	// A blocked signal is neither delivered nor discarded: it waits.
+	// SIGKILL is already gone above, and nothing else outranks the mask.
+	if ntSigsetHas(&ntSigMask, sig) {
+		sigaddset(&ntSigPending, int(sig))
 		return 0
 	}
 	if handler == _SIG_DFL {

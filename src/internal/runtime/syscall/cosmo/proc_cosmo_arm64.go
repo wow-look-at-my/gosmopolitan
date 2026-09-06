@@ -63,6 +63,53 @@ func darwinPrlimit(pid, res, newp, oldp uintptr) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
+// darwinGetrusage emulates getrusage. RUSAGE_SELF and RUSAGE_CHILDREN
+// are 0 and -1 on both systems, and every field after the two timevals
+// is a 64-bit integer in the same order, so the conversion is the
+// timevals alone (DarwinRusageToLinux).
+//
+// Deliberately not nosplit: the 144-byte Apple struct is too much for
+// the dispatch spine's budget, and nothing between fork and exec calls
+// this - the same reasoning the stat family follows.
+func darwinGetrusage(who, buf uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Getrusage == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if buf == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	var ru DarwinRusage
+	if _, _, e := darwinCall(darwinFns.Getrusage, who, uintptr(unsafe.Pointer(&ru)), 0, 0, 0, 0); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	DarwinRusageToLinux(&ru, (*LinuxRusage)(unsafe.Pointer(buf)))
+	return 0, 0, 0
+}
+
+// darwinGettimeofday emulates gettimeofday. The timezone argument is
+// obsolete on both systems and every caller passes nil, so a non-nil one
+// is refused rather than filled with a value Apple no longer maintains.
+//
+//go:nosplit
+func darwinGettimeofday(tv, tz uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Gettimeofday == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if tz != 0 {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	if tv == 0 {
+		// Both systems accept a nil buffer as "do nothing, succeed".
+		return 0, 0, 0
+	}
+	var atv DarwinTimeval
+	if _, _, e := darwinCall(darwinFns.Gettimeofday, uintptr(unsafe.Pointer(&atv)), 0, 0, 0, 0, 0); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	DarwinTimevalToLinux(&atv, (*LinuxTimeval)(unsafe.Pointer(tv)))
+	return 0, 0, 0
+}
+
 // darwinGetpriority emulates getpriority, whose successful result may
 // legitimately be -1. The only way to tell that apart from failure is to
 // zero errno first and read it back, which is exactly what Apple's own

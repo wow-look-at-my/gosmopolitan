@@ -88,6 +88,11 @@ const (
 	ntSysWait4      = 61
 	ntSysKill       = 62
 	ntSysFcntl      = 72
+	ntSysFlock      = 73
+	ntSysSync       = 162
+	ntSysUname      = 63
+	ntSysStatfs     = 137
+	ntSysFstatfs    = 138
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
 	ntSysTruncate   = 76
@@ -223,6 +228,29 @@ const (
 	_NT_DT_REG = 8
 )
 
+// flock(2) emulation (ntEmuFlock).
+const (
+	// Linux LOCK_* operations, which are BSD's own values.
+	_NT_LOCK_SH = 1
+	_NT_LOCK_EX = 2
+	_NT_LOCK_NB = 4
+	_NT_LOCK_UN = 8
+
+	// LockFileEx flags.
+	_NT_LOCKFILE_FAIL_IMMEDIATELY = 0x1
+	_NT_LOCKFILE_EXCLUSIVE_LOCK   = 0x2
+
+	// The byte range every flock caller means: all of it. NT locks a
+	// range rather than a file, and a range past EOF is legal, so this
+	// covers a file that grows after the lock is taken.
+	_NT_LOCK_BYTES_LOW  = 0xffffffff
+	_NT_LOCK_BYTES_HIGH = 0xffffffff
+
+	_NT_ERROR_LOCK_VIOLATION = 33
+	_NT_ERROR_NOT_LOCKED     = 158
+	_NT_ERROR_IO_PENDING     = 997
+)
+
 // ntErrno maps a Win32 GetLastError code to the Linux errno the
 // unix-shaped standard library expects. One table, used by every
 // emulated file syscall (cosmo libc keeps an equivalent
@@ -341,6 +369,16 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 			(*[2]ntLinuxTimespec)(unsafe.Pointer(a3)), int32(a4))
 	case ntSysFsync, ntSysFdatasync:
 		return ntEmuFsync(int32(a1))
+	case ntSysFlock:
+		return ntEmuFlock(int32(a1), int32(a2))
+	case ntSysSync:
+		return ntEmuSync()
+	case ntSysUname:
+		return ntEmuUname((*ntLinuxUtsname)(unsafe.Pointer(a1)))
+	case ntSysStatfs:
+		return ntEmuStatfs((*byte)(unsafe.Pointer(a1)), (*ntLinuxStatfs)(unsafe.Pointer(a2)))
+	case ntSysFstatfs:
+		return ntEmuFstatfs(int32(a1), (*ntLinuxStatfs)(unsafe.Pointer(a2)))
 	case ntSysFchmod:
 		return ntEmuFchmod(int32(a1))
 	case ntSysFchmodat:
@@ -986,6 +1024,243 @@ func ntEmuFsync(fd int32) (r1, r2, errno uintptr) {
 	}
 	r, werr := ntcallSE(ntFlushFileBuffersFn, e.handle, 0, 0, 0, 0, 0, 0)
 	if r == 0 {
+		return ntFail3(ntErrno(werr))
+	}
+	return 0, 0, 0
+}
+
+// ntLinuxUtsname is the struct uname(2) fills: six 65-byte fields. It
+// must match syscall.Utsname for GOOS=cosmo.
+type ntLinuxUtsname struct {
+	Sysname    [65]byte
+	Nodename   [65]byte
+	Release    [65]byte
+	Version    [65]byte
+	Machine    [65]byte
+	Domainname [65]byte
+}
+
+// ntRtlOSVersionInfo is RTL_OSVERSIONINFOW. Only the four numbers are
+// read; szCSDVersion is present so the size RtlGetVersion checks is the
+// size it expects.
+type ntRtlOSVersionInfo struct {
+	OSVersionInfoSize uint32
+	MajorVersion      uint32
+	MinorVersion      uint32
+	BuildNumber       uint32
+	PlatformId        uint32
+	CSDVersion        [128]uint16
+}
+
+// ntUtsPut copies a string into one 65-byte uname field, NUL-terminated
+// and truncated to fit.
+func ntUtsPut(dst *[65]byte, s string) {
+	n := len(s)
+	if n > len(dst)-1 {
+		n = len(dst) - 1
+	}
+	for i := 0; i < n; i++ {
+		dst[i] = s[i]
+	}
+	dst[n] = 0
+}
+
+// ntUtsPutUint appends a decimal number to a field that already holds a
+// prefix, and returns the new length.
+func ntUtsPutUint(dst *[65]byte, at int, v uint32) int {
+	var tmp [10]byte
+	i := len(tmp)
+	for {
+		i--
+		tmp[i] = byte('0' + v%10)
+		v /= 10
+		if v == 0 {
+			break
+		}
+	}
+	for ; i < len(tmp) && at < len(dst)-1; i++ {
+		dst[at] = tmp[i]
+		at++
+	}
+	dst[at] = 0
+	return at
+}
+
+// ntEmuUname emulates uname(2).
+//
+// Sysname and Machine are constants because they are constants here: an
+// APE that boots the NT personality is this host and this payload.
+// Release carries the real build (RtlGetVersion - GetVersionExW answers
+// 6.2 to an unmanifested process on every modern host, which is a wrong
+// number rather than a missing one).
+//
+// A field this host cannot answer stays EMPTY rather than invented.
+// Nodename is empty when the computer name is unavailable, and also when
+// it is not ASCII: this path has no UTF-16 decoder, and a mangled name
+// is worse than no name. Domainname has no NT counterpart at all, which
+// is the same choice the darwin emulation makes.
+func ntEmuUname(buf *ntLinuxUtsname) (r1, r2, errno uintptr) {
+	if buf == nil {
+		return ntFail3(ntEFAULT)
+	}
+	*buf = ntLinuxUtsname{}
+	ntUtsPut(&buf.Sysname, "Windows_NT")
+	ntUtsPut(&buf.Machine, "x86_64")
+
+	if ntRtlGetVersionFn != 0 {
+		var vi ntRtlOSVersionInfo
+		vi.OSVersionInfoSize = uint32(unsafe.Sizeof(vi))
+		// RtlGetVersion answers STATUS_SUCCESS (0) and cannot fail for a
+		// correctly sized buffer.
+		if r, _ := ntcallE(ntRtlGetVersionFn, uintptr(unsafe.Pointer(&vi)), 0, 0, 0, 0, 0, 0); r == 0 {
+			n := ntUtsPutUint(&buf.Release, 0, vi.MajorVersion)
+			buf.Release[n] = '.'
+			n = ntUtsPutUint(&buf.Release, n+1, vi.MinorVersion)
+			buf.Release[n] = '.'
+			ntUtsPutUint(&buf.Release, n+1, vi.BuildNumber)
+			ntUtsPut(&buf.Version, "Windows_NT")
+		}
+	}
+
+	if ntGetComputerNameWFn != 0 {
+		var name [16 + 1]uint16 // MAX_COMPUTERNAME_LENGTH is 15
+		size := uint32(len(name))
+		r, _ := ntcallE(ntGetComputerNameWFn, uintptr(unsafe.Pointer(&name[0])),
+			uintptr(unsafe.Pointer(&size)), 0, 0, 0, 0, 0)
+		if r != 0 && size < uint32(len(name)) {
+			ascii := true
+			for i := uint32(0); i < size; i++ {
+				if name[i] >= 0x80 {
+					ascii = false
+					break
+				}
+			}
+			if ascii {
+				for i := uint32(0); i < size && i < uint32(len(buf.Nodename)-1); i++ {
+					buf.Nodename[i] = byte(name[i])
+				}
+			}
+		}
+	}
+	return 0, 0, 0
+}
+
+// ntEmuSync emulates sync(2) by flushing every open file this process
+// holds, which is the part of "flush everything" an emulation can reach.
+// NT has no whole-system flush, and FlushFileBuffers is per handle.
+//
+// sync(2) returns void on Linux and reports nothing, so a failed flush
+// has no channel to travel down. That is the syscall's own contract
+// rather than a swallowed error: a caller who needs to know uses fsync
+// on the descriptor it cares about.
+//
+// The handles are copied out under the lock and flushed after it is
+// released. A flush can block, and the fd table must not be held while
+// it does.
+func ntEmuSync() (r1, r2, errno uintptr) {
+	handles := make([]uintptr, 0, ntFDMax)
+	lock(&ntFDLock)
+	for fd := int32(0); fd < ntFDMax; fd++ {
+		e := &ntFDTable[fd]
+		if e.kind == ntFDFile && e.handle != 0 {
+			handles = append(handles, e.handle)
+		}
+	}
+	unlock(&ntFDLock)
+
+	if ntFlushFileBuffersFn != 0 {
+		for _, h := range handles {
+			ntcallSE(ntFlushFileBuffersFn, h, 0, 0, 0, 0, 0, 0)
+		}
+	}
+	return 0, 0, 0
+}
+
+// ntOverlapped is Win32's OVERLAPPED. LockFileEx and UnlockFileEx take
+// the lock's byte offset in it, and every other field must be zero.
+type ntOverlapped struct {
+	internal     uintptr
+	internalHigh uintptr
+	offset       uint32
+	offsetHigh   uint32
+	hEvent       uintptr
+}
+
+// ntEmuFlock emulates flock(2) with LockFileEx/UnlockFileEx over the
+// whole file, the range every flock caller means.
+//
+// NT locks a HANDLE where Linux locks the open file description. The two
+// agree on what matters: both keep a second opener out, and both release
+// when the thing that took the lock closes.
+//
+// They part on a RE-lock. Linux replaces the operation the fd holds, so
+// LOCK_SH after LOCK_EX, or LOCK_EX twice, is one step. NT refuses a
+// second lock over a range this handle already holds, so a re-lock here
+// unlocks first and takes the new one after. Another process can win the
+// range in that window. Linux documents the same window for a conversion
+// (flock(2): "it is not guaranteed that the conversion is atomic"), and a
+// caller that takes one lock and holds it - which is what a lock file is
+// for - never reaches this path at all.
+//
+// The uintptr(unsafe.Pointer(&ov)) conversions stay INSIDE the call
+// expressions: a uintptr held in a variable is not a reference, and ov
+// lives on the stack.
+func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
+	e, ok := ntFDLookup(fd)
+	if !ok {
+		return ntFail3(ntEBADF)
+	}
+	if e.kind != ntFDFile {
+		return ntFail3(ntEINVAL)
+	}
+	if ntLockFileExFn == 0 || ntUnlockFileExFn == 0 {
+		return ntFail3(ntENOSYS)
+	}
+	nb := op&_NT_LOCK_NB != 0
+	mode := op &^ _NT_LOCK_NB
+	switch mode {
+	case _NT_LOCK_SH, _NT_LOCK_EX, _NT_LOCK_UN:
+	default:
+		return ntFail3(ntEINVAL)
+	}
+	var ov ntOverlapped
+	if mode == _NT_LOCK_UN {
+		r, werr := ntcallSE(ntUnlockFileExFn, e.handle, 0,
+			_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+			uintptr(unsafe.Pointer(&ov)), 0, 0)
+		if r == 0 {
+			// Unlocking what this handle never locked is a no-op on
+			// Linux, so do not turn NT's complaint into an error.
+			if werr == _NT_ERROR_NOT_LOCKED {
+				return 0, 0, 0
+			}
+			return ntFail3(ntErrno(werr))
+		}
+		return 0, 0, 0
+	}
+	// Drop whatever this handle holds, per the re-lock note above. It
+	// fails when nothing was held, which is the ordinary first-lock case.
+	ntcallSE(ntUnlockFileExFn, e.handle, 0,
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+		uintptr(unsafe.Pointer(&ov)), 0, 0)
+	flags := uintptr(0)
+	if mode == _NT_LOCK_EX {
+		flags |= _NT_LOCKFILE_EXCLUSIVE_LOCK
+	}
+	if nb {
+		flags |= _NT_LOCKFILE_FAIL_IMMEDIATELY
+	}
+	r, werr := ntcallSE(ntLockFileExFn, e.handle, flags, 0,
+		_NT_LOCK_BYTES_LOW, _NT_LOCK_BYTES_HIGH,
+		uintptr(unsafe.Pointer(&ov)), 0)
+	if r == 0 {
+		// LOCK_NB's whole contract is this errno: a caller reads
+		// EWOULDBLOCK as "somebody else holds it" and anything else as a
+		// real failure. The shared table answers EACCES for a lock
+		// violation, which is right for an ordinary read or write.
+		if nb && (werr == _NT_ERROR_LOCK_VIOLATION || werr == _NT_ERROR_IO_PENDING) {
+			return ntFail3(ntEAGAIN)
+		}
 		return ntFail3(ntErrno(werr))
 	}
 	return 0, 0, 0
