@@ -842,7 +842,6 @@ func testTransportMaxConnsPerHost(t *testing.T, mode testMode) {
 
 func TestTransportMaxConnsPerHostDialCancellation(t *testing.T) {
 	run(t, testTransportMaxConnsPerHostDialCancellation,
-		testNotParallel, // because test uses SetPendingDialHooks
 		[]testMode{http1Mode, https1Mode, http2Mode},
 	)
 }
@@ -867,8 +866,8 @@ func testTransportMaxConnsPerHostDialCancellation(t *testing.T, mode testMode) {
 	// This request is canceled when dial is queued, which preempts dialing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	SetPendingDialHooks(cancel, nil)
-	defer SetPendingDialHooks(nil, nil)
+	tr.SetPendingDialHooks(cancel, nil)
+	defer tr.SetPendingDialHooks(nil, nil)
 
 	req, _ := NewRequestWithContext(ctx, "GET", ts.URL, nil)
 	_, err := c.Do(req)
@@ -877,7 +876,7 @@ func testTransportMaxConnsPerHostDialCancellation(t *testing.T, mode testMode) {
 	}
 
 	// This request should succeed.
-	SetPendingDialHooks(nil, nil)
+	tr.SetPendingDialHooks(nil, nil)
 	req, _ = NewRequest("GET", ts.URL, nil)
 	resp, err := c.Do(req)
 	if err != nil {
@@ -1086,7 +1085,7 @@ func testTransportHeadResponses(t *testing.T, mode testMode) {
 // TestTransportHeadChunkedResponse verifies that we ignore chunked transfer-encoding
 // on responses to HEAD requests.
 func TestTransportHeadChunkedResponse(t *testing.T) {
-	run(t, testTransportHeadChunkedResponse, []testMode{http1Mode}, testNotParallel)
+	run(t, testTransportHeadChunkedResponse, []testMode{http1Mode})
 }
 func testTransportHeadChunkedResponse(t *testing.T, mode testMode) {
 	ts := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {
@@ -1102,8 +1101,9 @@ func testTransportHeadChunkedResponse(t *testing.T, mode testMode) {
 	// Ensure that we wait for the readLoop to complete before
 	// calling Head again
 	didRead := make(chan bool)
-	SetReadLoopBeforeNextReadHook(func() { didRead <- true })
-	defer SetReadLoopBeforeNextReadHook(nil)
+	tr := c.Transport.(*Transport)
+	tr.SetReadLoopBeforeNextReadHook(func() { didRead <- true })
+	defer tr.SetReadLoopBeforeNextReadHook(nil)
 
 	res1, err := c.Head(ts.URL)
 	<-didRead
@@ -1849,17 +1849,6 @@ func TestOnProxyConnectResponse(t *testing.T) {
 // when they're slow to reply to HTTPS CONNECT responses.
 func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
 	cancelc := make(chan struct{})
-	SetTestHookProxyConnectTimeout(t, func(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(ctx)
-		go func() {
-			select {
-			case <-cancelc:
-			case <-ctx.Done():
-			}
-			cancel()
-		}()
-		return ctx, cancel
-	})
 
 	defer afterTest(t)
 
@@ -1898,13 +1887,23 @@ func TestTransportProxyHTTPSConnectLeak(t *testing.T) {
 		return
 	}()
 
-	c := &Client{
-		Transport: &Transport{
-			Proxy: func(*Request) (*url.URL, error) {
-				return url.Parse("http://" + ln.Addr().String())
-			},
+	tr := &Transport{
+		Proxy: func(*Request) (*url.URL, error) {
+			return url.Parse("http://" + ln.Addr().String())
 		},
 	}
+	tr.SetTestHookProxyConnectTimeout(func(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-cancelc:
+			case <-ctx.Done():
+			}
+			cancel()
+		}()
+		return ctx, cancel
+	})
+	c := &Client{Transport: tr}
 	req, err := NewRequest("GET", "https://golang.fake.tld/", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -2457,9 +2456,8 @@ func testIssue3644(t *testing.T, mode testMode) {
 // Test that a client receives a server's reply, even if the server doesn't read
 // the entire request body.
 func TestIssue3595(t *testing.T) {
-	// Not parallel: modifies the global rstAvoidanceDelay.
 	// HTTP/3 fails on WASM.
-	run(t, testIssue3595, testNotParallel, http3SkippedMode)
+	run(t, testIssue3595, http3SkippedMode)
 }
 func testIssue3595(t *testing.T, mode testMode) {
 	runTimeSensitiveTest(t, []time.Duration{
@@ -2472,17 +2470,15 @@ func testIssue3595(t *testing.T, mode testMode) {
 		time.Second,
 		5 * time.Second,
 	}, func(t *testing.T, timeout time.Duration) error {
-		SetRSTAvoidanceDelay(t, timeout)
 		t.Logf("set RST avoidance delay to %v", timeout)
 
 		const deniedMsg = "sorry, denied."
 		cst := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {
 			Error(w, deniedMsg, StatusUnauthorized)
 		}))
-		// We need to close cst explicitly here so that in-flight server
-		// requests don't race with the call to SetRSTAvoidanceDelay for a retry.
 		defer cst.close()
 		ts := cst.ts
+		ts.Config.SetRSTAvoidanceDelay(timeout)
 		c := ts.Client()
 
 		res, err := c.Post(ts.URL, "application/octet-stream", neverEnding('a'))
@@ -2531,7 +2527,7 @@ func TestTransportConcurrency(t *testing.T) {
 	run(t, testTransportConcurrency, testNotParallel, []testMode{http1Mode})
 }
 func testTransportConcurrency(t *testing.T, mode testMode) {
-	// Not parallel: uses global test hooks.
+	// Not parallel: GOMAXPROCS below is process-wide.
 	maxProcs, numReqs := 16, 500
 	if testing.Short() {
 		maxProcs, numReqs = 4, 50
@@ -2550,10 +2546,11 @@ func testTransportConcurrency(t *testing.T, mode testMode) {
 	// the leak checker happy, keep track of pending dials and
 	// wait for them to finish (and be closed or returned to the
 	// idle pool) before we close idle connections.
-	SetPendingDialHooks(func() { wg.Add(1) }, wg.Done)
-	defer SetPendingDialHooks(nil, nil)
-
 	c := ts.Client()
+	tr := c.Transport.(*Transport)
+	tr.SetPendingDialHooks(func() { wg.Add(1) }, wg.Done)
+	defer tr.SetPendingDialHooks(nil, nil)
+
 	reqs := make(chan string)
 	defer close(reqs)
 
@@ -3667,7 +3664,7 @@ func testProxyForRequest(t *testing.T, tt proxyFromEnvTest, proxyForRequest func
 }
 
 func TestProxyFromEnvironment(t *testing.T) {
-	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
+	t.Serial("the proxy variables and the resolved-proxy cache are process state no concurrent test may see half-set")
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {
@@ -3683,7 +3680,7 @@ func TestProxyFromEnvironment(t *testing.T) {
 }
 
 func TestProxyFromEnvironmentLowerCase(t *testing.T) {
-	t.Serial() // os.Setenv and the cached proxy environment are process-wide.
+	t.Serial("this sets the lowercase proxy variables, and the cached lookup they feed belongs to the whole process")
 	ResetProxyEnv()
 	defer ResetProxyEnv()
 	for _, tt := range proxyFromEnvTests {
@@ -3699,10 +3696,9 @@ func TestProxyFromEnvironmentLowerCase(t *testing.T) {
 }
 
 func TestIdleConnChannelLeak(t *testing.T) {
-	run(t, testIdleConnChannelLeak, []testMode{http1Mode}, testNotParallel)
+	run(t, testIdleConnChannelLeak, []testMode{http1Mode})
 }
 func testIdleConnChannelLeak(t *testing.T, mode testMode) {
-	// Not parallel: uses global test hooks.
 	var mu sync.Mutex
 	var n int
 
@@ -3714,11 +3710,11 @@ func testIdleConnChannelLeak(t *testing.T, mode testMode) {
 
 	const nReqs = 5
 	didRead := make(chan bool, nReqs)
-	SetReadLoopBeforeNextReadHook(func() { didRead <- true })
-	defer SetReadLoopBeforeNextReadHook(nil)
 
 	c := ts.Client()
 	tr := c.Transport.(*Transport)
+	tr.SetReadLoopBeforeNextReadHook(func() { didRead <- true })
+	defer tr.SetReadLoopBeforeNextReadHook(nil)
 	tr.Dial = func(netw, addr string) (net.Conn, error) {
 		return net.Dial(netw, ts.Listener.Addr().String())
 	}
@@ -4147,10 +4143,11 @@ func testRetryRequestsOnError(t *testing.T, mode testMode) {
 				}, nil
 			}
 
-			SetRoundTripRetried(func() {
+			tr := c.Transport.(*Transport)
+			tr.SetRoundTripRetried(func() {
 				logf("Retried.")
 			})
-			defer SetRoundTripRetried(nil)
+			defer tr.SetRoundTripRetried(nil)
 
 			for i := 0; i < 3; i++ {
 				t0 := time.Now()
@@ -4727,7 +4724,7 @@ func testTransportContentEncodingCaseInsensitive(t *testing.T, mode testMode) {
 
 // https://go.dev/issue/49621
 func TestConnClosedBeforeRequestIsWritten(t *testing.T) {
-	run(t, testConnClosedBeforeRequestIsWritten, testNotParallel, []testMode{http1Mode})
+	run(t, testConnClosedBeforeRequestIsWritten, []testMode{http1Mode})
 }
 func testConnClosedBeforeRequestIsWritten(t *testing.T, mode testMode) {
 	ts := newClientServerTest(t, mode, HandlerFunc(func(w ResponseWriter, r *Request) {}),
@@ -4750,12 +4747,14 @@ func testConnClosedBeforeRequestIsWritten(t *testing.T, mode testMode) {
 	// before it reads the request to send. If this delay is too short, we may instead
 	// exercise the path where writeLoop accepts the request and then fails to write it.
 	// That's fine, so long as we get the desired path often enough.
-	SetEnterRoundTripHook(func() {
+	c := ts.Client()
+	tr := c.Transport.(*Transport)
+	tr.SetEnterRoundTripHook(func() {
 		time.Sleep(1 * time.Millisecond)
 	})
-	defer SetEnterRoundTripHook(nil)
+	defer tr.SetEnterRoundTripHook(nil)
 	var closes int
-	_, err := ts.Client().Post(ts.URL, "text/plain", countCloseReader{&closes, strings.NewReader("hello")})
+	_, err := c.Post(ts.URL, "text/plain", countCloseReader{&closes, strings.NewReader("hello")})
 	if err == nil {
 		t.Fatalf("expected request to fail, but it did not")
 	}
@@ -4902,8 +4901,7 @@ func (c *wgReadCloser) Close() error {
 
 // Issue 11745.
 func TestTransportPrefersResponseOverWriteError(t *testing.T) {
-	// Not parallel: modifies the global rstAvoidanceDelay.
-	run(t, testTransportPrefersResponseOverWriteError, testNotParallel, http3SkippedMode)
+	run(t, testTransportPrefersResponseOverWriteError, http3SkippedMode)
 }
 func testTransportPrefersResponseOverWriteError(t *testing.T, mode testMode) {
 	if testing.Short() {
@@ -4920,7 +4918,6 @@ func testTransportPrefersResponseOverWriteError(t *testing.T, mode testMode) {
 		time.Second,
 		5 * time.Second,
 	}, func(t *testing.T, timeout time.Duration) error {
-		SetRSTAvoidanceDelay(t, timeout)
 		t.Logf("set RST avoidance delay to %v", timeout)
 
 		const contentLengthLimit = 1024 * 1024 // 1MB
@@ -4932,10 +4929,9 @@ func testTransportPrefersResponseOverWriteError(t *testing.T, mode testMode) {
 			}
 			w.WriteHeader(StatusOK)
 		}))
-		// We need to close cst explicitly here so that in-flight server
-		// requests don't race with the call to SetRSTAvoidanceDelay for a retry.
 		defer cst.close()
 		ts := cst.ts
+		ts.Config.SetRSTAvoidanceDelay(timeout)
 		c := ts.Client()
 
 		count := 100
@@ -5089,8 +5085,6 @@ func TestNoCrashReturningTransportAltConn(t *testing.T) {
 	defer ln.Close()
 
 	var wg sync.WaitGroup
-	SetPendingDialHooks(func() { wg.Add(1) }, wg.Done)
-	defer SetPendingDialHooks(nil, nil)
 
 	testDone := make(chan struct{})
 	defer close(testDone)
@@ -5150,6 +5144,8 @@ func TestNoCrashReturningTransportAltConn(t *testing.T) {
 			return tc, nil
 		},
 	}
+	tr.SetPendingDialHooks(func() { wg.Add(1) }, wg.Done)
+	defer tr.SetPendingDialHooks(nil, nil)
 	c := &Client{Transport: tr}
 
 	_, err = c.Do(req)
@@ -7461,10 +7457,9 @@ func TestTransportReqCancelerCleanupOnRequestBodyWriteError(t *testing.T) {
 	}()
 
 	didRead := make(chan bool)
-	SetReadLoopBeforeNextReadHook(func() { didRead <- true })
-	defer SetReadLoopBeforeNextReadHook(nil)
-
 	tr := &Transport{}
+	tr.SetReadLoopBeforeNextReadHook(func() { didRead <- true })
+	defer tr.SetReadLoopBeforeNextReadHook(nil)
 
 	// Send a request with a body guaranteed to fail on write.
 	req, err := NewRequest("POST", "http://"+addr, io.LimitReader(neverEnding('x'), 1<<30))

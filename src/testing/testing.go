@@ -1945,7 +1945,32 @@ func (c *common) barrierHolder() *common {
 // The subtests of a serial test run one at a time, inside the calls to
 // [T.Run] that start them, under the same hold. Calling Serial again, from the
 // test or from one of its subtests, does nothing.
-func (t *T) Serial() {
+//
+// Pass the reason this test cannot share the process. It is what the next
+// reader has instead of the shared state itself, which is invisible from the
+// call. The parameter carries a default, so an existing t.Serial() still
+// compiles; it earns the first warning below. Serial reports a warning, and
+// runs the test alone anyway, when the reason is missing, when it is shorter
+// than 48 characters, when it repeats the test's own name or file, or when it
+// is more than 98% the same as the reason another test in this binary gives.
+// Those bounds are there because a serial test stops every other test in the
+// package: a reason pasted across a whole file turns a suite parallel by
+// default back into a serial one, one call at a time, and nothing else in the
+// build would say so.
+//
+//	t.Serial("SetGCPercent is process-wide, and a concurrent test's allocation moves the heap goal this measures")
+func (t *T) Serial(reason string = "") {
+	t.Helper()
+	if _, file, line, ok := runtime.Caller(1); ok {
+		t.checkSerialReason(reason, file, line)
+	}
+	t.serialize()
+}
+
+// serialize upgrades this test's hold on the serial barrier to exclusive. It
+// is Serial without the justification: the callers here are [T.Setenv] and
+// [T.Chdir], which name the process-wide state in their own documentation.
+func (t *T) serialize() {
 	c := t.common.barrierHolder()
 	if c == nil {
 		// The root test: nothing else runs to be serialized against.
@@ -2061,7 +2086,7 @@ func (t *T) failWithoutAChild() {
 	}
 	t.Fail()
 	t.log("AllocsPerRun needs this process to itself, and "+reason+
-		": call t.Serial() in this test", true)
+		": call t.Serial(reason) in this test", true)
 
 	t.mu.Lock()
 	t.finished = true
@@ -2395,11 +2420,16 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
-	if canFork() {
+	//
+	// Inside a child there is no second fork to take, and the child's own
+	// subtests are parallel like any other run, so the barrier is what
+	// isolates the caller from them. Without it a test whose subtests each set
+	// an environment variable would have them overwrite each other.
+	if canFork() && os.Getenv(forkTargetEnv) == "" {
 		t.Fork()
 		return
 	}
-	t.Serial()
+	t.serialize()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
@@ -3061,6 +3091,10 @@ func (m *M) Run() (code int) {
 		fuzzTargetsRan, fuzzTargetsOk := runFuzzTests(m.deps, m.fuzzTargets, deadline)
 		exampleRan, exampleOk := runExamples(m.deps.MatchString, m.examples)
 		m.stopAlarm()
+		// A serial test stops every other test in the package, so a call that
+		// did not justify itself is reported where a green run still shows
+		// it. The per-test log this repeats only appears under -v.
+		serialReasons.report(os.Stderr)
 		if !testRan && !exampleRan && !fuzzTargetsRan && *matchBenchmarks == "" && *matchFuzz == "" {
 			fmt.Fprintln(os.Stderr, "testing: warning: no tests to run")
 			if testingTesting && *match != "^$" {

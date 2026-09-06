@@ -97,7 +97,7 @@ func TestGrowth(t *testing.T) {
 }
 
 func TestVerifyPanic(t *testing.T) {
-	t.Serial() // os.Setenv and the verify global are process-wide.
+	t.Serial("the verify flag is a package global and its environment variable is process state, both read on every open")
 	os.Setenv("GODEBUG", "gocacheverify=1")
 	initEnv()
 	defer func() {

@@ -297,7 +297,7 @@ func TestCompareAndSwap_NonExistingKey(t *testing.T) {
 }
 
 func TestMapRangeNoAllocations(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process. // Issue 62404
+	t.Serial("iterating must allocate nothing, and the process-wide counter would charge another goroutine to it")
 	testenv.SkipIfOptimizationOff(t)
 	var m sync.Map
 	allocs := testing.AllocsPerRun(10, func() {
@@ -358,7 +358,7 @@ func TestConcurrentClear(t *testing.T) {
 }
 
 func TestMapClearOneAllocation(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("clearing must cost exactly one allocation, a budget a concurrent test would blow through unnoticed")
 	testenv.SkipIfOptimizationOff(t)
 	var m sync.Map
 	allocs := testing.AllocsPerRun(10, func() {

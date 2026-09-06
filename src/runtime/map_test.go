@@ -574,7 +574,7 @@ func TestMapIterDuplicate(t *testing.T) {
 }
 
 func TestMapStringBytesLookup(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("large string keys keep the count exact, and an allocation from another goroutine would make it wrong again")
 	// Use large string keys to avoid small-allocation coalescing,
 	// which can cause AllocsPerRun to report lower counts than it should.
 	m := map[string]int{
@@ -677,7 +677,7 @@ func TestIgnoreBogusMapHint(t *testing.T) {
 var testNonEscapingMapVariable int = 8
 
 func TestNonEscapingMap(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("a map literal that never escapes must allocate nothing, and every goroutine reaches the same counter")
 	n := testing.AllocsPerRun(1000, func() {
 		m := map[int]int{}
 		m[0] = 0

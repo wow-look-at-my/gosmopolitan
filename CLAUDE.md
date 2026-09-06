@@ -62,7 +62,11 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`). Then plain `GOOS=cosmo go test <pkg>` works.
 
-**Top-level tests are parallel by default in this fork** (`src/testing`): each starts as if it had called `t.Parallel()`, which is a no-op there. A SUBTEST is not, and runs inside the `t.Run` call that starts it, so a parent's later statements and its deferred calls come after it. That is the order upstream promises and the order test code relies on. A subtest asks for parallelism with `t.Parallel()`. Two methods opt a top-level test out. `t.Serial()` stops every other test and runs the caller alone in this process.`t.Fork()` runs the caller in a child process instead, alone, and. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these. Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+**Top-level tests are parallel by default in this fork** (`src/testing`): each starts as if it had called `t.Parallel()`, which is a no-op there. A SUBTEST is not, and runs inside the `t.Run` call that starts it, so a parent's later statements and its deferred calls come after it. That is the order upstream promises and the order test code relies on. A subtest asks for parallelism with `t.Parallel()`. Two methods opt a top-level test out. `t.Serial(reason string = "")` stops every other test and runs the caller alone in this process. `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit status as the verdict. A test wants that when the shared state is process-global, because the child gets its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these.
+
+`Serial`'s reason carries a default, so `t.Serial()` still compiles and runs - and warns, as it does when the reason is under 48 characters or an echo of the test's own name or file. It warns again when the reason is over 98% the same as another one in the same test binary. One sentence pasted across a file is how a package stops being parallel, one defensible-looking call at a time.
+
+Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
 
 ## Building Cosmopolitan Binaries
 

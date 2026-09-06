@@ -13,7 +13,6 @@ import (
 	"net"
 	"net/url"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 )
@@ -42,8 +41,6 @@ func init() {
 	// We only want to pay for this cost during testing.
 	// When not under test, these values are always nil
 	// and never assigned to.
-	testHookMu = new(sync.Mutex)
-
 	testHookClientDoResult = func(res *Response, err error) {
 		if err != nil {
 			if _, ok := err.(*url.Error); !ok {
@@ -66,32 +63,38 @@ func CondSkipHTTP2(t testing.TB) {
 	}
 }
 
-var (
-	SetEnterRoundTripHook = hookSetter(&testHookEnterRoundTrip)
-	SetRoundTripRetried   = hookSetter(&testHookRoundTripRetried)
-)
+// Each hook below belongs to the transport or the server the caller names.
+// Every request the process makes runs the hooks of the transport that made
+// it, so a test arms its own transport and nobody else's - several of these
+// hooks block, and one that fires inside another test's readLoop wedges it.
+// Set a hook before the first request, and leave it alone after.
 
-func SetReadLoopBeforeNextReadHook(f func()) {
-	unnilTestHook(&f)
-	testHookReadLoopBeforeNextRead = f
+func (t *Transport) hooksForTest() *transportTestHooks {
+	if t.testHooks == nil {
+		t.testHooks = &transportTestHooks{}
+	}
+	return t.testHooks
+}
+
+func (t *Transport) SetEnterRoundTripHook(f func()) { t.hooksForTest().enterRoundTrip = f }
+
+func (t *Transport) SetRoundTripRetried(f func()) { t.hooksForTest().roundTripRetried = f }
+
+func (t *Transport) SetReadLoopBeforeNextReadHook(f func()) {
+	t.hooksForTest().readLoopBeforeNextRead = f
 }
 
 // SetPendingDialHooks sets the hooks that run before and after handling
-// pending dials.
-func SetPendingDialHooks(before, after func()) {
-	unnilTestHook(&before)
-	unnilTestHook(&after)
-	testHookPrePendingDial, testHookPostPendingDial = before, after
+// pending dials on t.
+func (t *Transport) SetPendingDialHooks(before, after func()) {
+	h := t.hooksForTest()
+	h.prePendingDial, h.postPendingDial = before, after
 }
 
-func SetTestHookServerServe(fn func(*Server, net.Listener)) { testHookServerServe = fn }
+func (s *Server) SetTestHookServerServe(fn func(*Server, net.Listener)) { s.testHookServe = fn }
 
-func SetTestHookProxyConnectTimeout(t *testing.T, f func(context.Context, time.Duration) (context.Context, context.CancelFunc)) {
-	orig := testHookProxyConnectTimeout
-	t.Cleanup(func() {
-		testHookProxyConnectTimeout = orig
-	})
-	testHookProxyConnectTimeout = f
+func (t *Transport) SetTestHookProxyConnectTimeout(f func(context.Context, time.Duration) (context.Context, context.CancelFunc)) {
+	t.hooksForTest().proxyConnectTimeout = f
 }
 
 func NewTestTimeoutHandler(handler Handler, ctx context.Context) Handler {
@@ -227,21 +230,6 @@ func (t *Transport) PutIdleTestConnH2(scheme, addr string, alt RoundTripper) boo
 	}) == nil
 }
 
-// All test hooks must be non-nil so they can be called directly,
-// but the tests use nil to mean hook disabled.
-func unnilTestHook(f *func()) {
-	if *f == nil {
-		*f = nop
-	}
-}
-
-func hookSetter(dst *func()) func(func()) {
-	return func(fn func()) {
-		unnilTestHook(&fn)
-		*dst = fn
-	}
-}
-
 func (s *Server) ExportAllConnsIdle() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -303,12 +291,10 @@ func init() {
 	rstAvoidanceDelay = 1 * time.Nanosecond
 }
 
-// SetRSTAvoidanceDelay sets how long we are willing to wait between calling
-// CloseWrite on a connection and fully closing the connection.
-func SetRSTAvoidanceDelay(t *testing.T, d time.Duration) {
-	prevDelay := rstAvoidanceDelay
-	t.Cleanup(func() {
-		rstAvoidanceDelay = prevDelay
-	})
-	rstAvoidanceDelay = d
+// SetRSTAvoidanceDelay sets how long s is willing to wait between calling
+// CloseWrite on a connection and fully closing the connection. It is per
+// server: the package default that init sets above is read by every server
+// in the process, so raising it there would retime whatever else is running.
+func (s *Server) SetRSTAvoidanceDelay(d time.Duration) {
+	s.testHookRSTAvoidanceDelay = d
 }

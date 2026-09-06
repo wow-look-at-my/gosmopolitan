@@ -4412,6 +4412,7 @@ func testTransportBlockingRequestWrite(t *testing.T, req2 *http.Request) {
 }
 
 func TestTransportCloseRequestBody(t *testing.T) {
+	t.Serial("a defer closes the client connection the subtests use, and both share one status variable")
 	var statusCode int
 	ts := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(statusCode)

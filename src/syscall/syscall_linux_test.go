@@ -499,6 +499,7 @@ func killAThread(c <-chan struct{}) {
 // the syscalls. Care should be taken to mirror any enhancements to
 // this test here in that file too.
 func TestSetuidEtc(t *testing.T) {
+	t.Serial("the calls below change the credentials of the whole process before putting them back")
 	if syscall.Getuid() != 0 {
 		t.Skip("skipping root only test")
 	}
@@ -665,6 +666,7 @@ func TestPrlimitSelf(t *testing.T) {
 }
 
 func TestPrlimitOtherProcess(t *testing.T) {
+	t.Serial("the saved original fd limit is a package global that every file open here consults")
 	origLimit := syscall.OrigRlimitNofile()
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 
@@ -717,6 +719,7 @@ func TestPrlimitFileLimit(t *testing.T) {
 		return
 	}
 
+	t.Serial("this swaps the recorded fd limit and puts it back, so a concurrent open would see the swap")
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 	defer origRlimitNofile.Store(origRlimitNofile.Load())
 
