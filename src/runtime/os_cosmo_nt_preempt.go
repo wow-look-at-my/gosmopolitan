@@ -210,11 +210,7 @@ func ntPreemptM(mp *m) {
 //
 //go:nosplit
 func ntExit(code int32) {
-	if code == 0 {
-		ntBoot("ntExit 0")
-	} else {
-		ntBoot("ntExit nonzero")
-	}
+	ntBootCode("ntExit", uintptr(uint32(code)))
 	lock(&ntSuspendLock)
 	atomic.Store(&ntExiting, 1)
 	ntcall(ntExitProcessFn, uintptr(uint32(code)), 0, 0, 0, 0, 0)

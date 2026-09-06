@@ -17,3 +17,6 @@ package runtime
 //
 //go:nosplit
 func ntBoot(msg string) {}
+
+//go:nosplit
+func ntBootCode(msg string, v uintptr) {}
