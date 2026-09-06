@@ -499,10 +499,17 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 	case sysFCHMOD:
 		return darwinCall(darwinFns.Fchmod, a1, a2, 0, 0, 0, 0)
 	case sysFCHMODAT:
-		// The Linux syscall has no flags argument (syscall.Fchmodat
-		// rejects a nonzero one); Apple's libc entry takes one, so
-		// pass 0.
-		return darwinCall(darwinFns.Fchmodat, darwinXlatDirfd(a1), a2, a3, 0, 0, 0)
+		// The Linux syscall takes no flags, so a4 is this port's own
+		// argument and only os.Root's chmod sends one. Apple's entry
+		// does take flags, and the numbers differ.
+		aflags := uintptr(0)
+		if a4&^uintptr(linuxAT_SYMLINK_NOFOLLOW) != 0 {
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		if a4&linuxAT_SYMLINK_NOFOLLOW != 0 {
+			aflags = appleAT_SYMLINK_NOFOLLOW
+		}
+		return darwinCall(darwinFns.Fchmodat, darwinXlatDirfd(a1), a2, a3, aflags, 0, 0)
 	case sysFCHOWN:
 		return darwinCall(darwinFns.Fchown, a1, a2, a3, 0, 0, 0)
 	case sysFCHOWNAT:

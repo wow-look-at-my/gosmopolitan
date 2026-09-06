@@ -2,11 +2,11 @@
 # goos-readonly.sh -- refuse any assignment to runtime.GOOS or
 # runtime.GOARCH.
 #
-# Go has no read-only exported variable, and on cosmo GOOS must be one:
-# a single APE boots on several kernels. So the compiler cannot stop a
-# package from writing to it, and this check does. Only setGOOS in
-# runtime/goos_cosmo.go may assign. GOARCH stays a constant, and the
-# compiler refuses an assignment to it by itself.
+# Go has no read-only exported variable, and on cosmo these two must be
+# variables: one APE boots on several kernels, and a payload can run on a
+# machine of another architecture. So the compiler cannot stop a package
+# from writing to them, and this check does. Only setGOOS and setGOARCH
+# in runtime/goos_cosmo.go may assign.
 
 set -uo pipefail
 

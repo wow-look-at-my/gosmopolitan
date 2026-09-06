@@ -158,7 +158,14 @@ func darwinSigaltstack(new, old *stackt) {
 		aoldp = uintptr(unsafe.Pointer(&aold))
 	}
 	// Sysret-wrapped: 0 or -errno (Apple numbering).
-	if int64(cosmoLibcCall6(lib.sigaltstack, anewp, aoldp, 0, 0, 0, 0)) < 0 {
+	if r := int64(cosmoLibcCall6(lib.sigaltstack, anewp, aoldp, 0, 0, 0, 0)); r < 0 {
+		// Apple rejects a NEW stack carrying any flag but SS_DISABLE
+		// (EINVAL 22), one smaller than MINSIGSTKSZ (ENOMEM 12), and
+		// any change made while running on it (EPERM 1). Print what it
+		// said and what it was given: the message alone names none of
+		// the three.
+		print("runtime: sigaltstack errno=", -r, " sp=", hex(anew.ss_sp),
+			" size=", anew.ss_size, " flags=", anew.ss_flags, "\n")
 		throw("darwinSigaltstack: sigaltstack failed")
 	}
 	if old != nil {
