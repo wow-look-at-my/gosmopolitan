@@ -88,7 +88,7 @@ The NT emulation already served fsync, ftruncate, fchmod, chdir and getcwd. The 
 
 These four are resolved from kernel32 OPTIONALLY: a zero pointer answers ENOSYS at the use site rather than poking a crash address at boot.
 
-**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose them either: `statfs`/`fstatfs`, `uname`, `prlimit64`. `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
+**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose them either: `statfs`/`fstatfs` and `prlimit64`. (`uname` left this list in the lock/ioctl wave. See Section 6a.) `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
 
 The runtimeprobe split follows exactly this line: `fsmeta` is a hard assertion on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on.
 
@@ -158,7 +158,7 @@ The emulation writes exactly the 36 bytes the kernel writes. That is the `struct
 
 **macOS-Intel** takes `flock`, `fdatasync` and `sync` in the same wave. All three are pass-throughs. Each BSD number comes from `zsysnum_darwin_amd64.go`. `ioctl`, `getrusage` and `gettimeofday` stay ENOSYS there. Section 6b gives the reason for the `*at` family, and it applies here. Each needs real control flow, such as a request table or a struct conversion. That path is assembly that issues raw XNU syscalls. No runner can test it.
 
-**NT** takes `flock` and `sync`. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
+**NT** takes `flock`, `sync` and `uname`. `uname` reports Sysname and Machine as the constants they are on this host. It takes the real build number from `RtlGetVersion`. `GetVersionExW` answers 6.2 to an unmanifested process, which is a wrong number rather than a missing one. Nodename comes from `GetComputerNameW`, and stays empty when the name is not ASCII, because this path has no UTF-16 decoder. Domainname stays empty. NT has no counterpart for it. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
 
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 

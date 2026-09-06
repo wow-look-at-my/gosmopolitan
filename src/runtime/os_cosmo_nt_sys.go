@@ -90,6 +90,7 @@ const (
 	ntSysFcntl      = 72
 	ntSysFlock      = 73
 	ntSysSync       = 162
+	ntSysUname      = 63
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
 	ntSysTruncate   = 76
@@ -136,6 +137,7 @@ const (
 	ntEAGAIN       = 11
 	ntENOMEM       = 12
 	ntEACCES       = 13
+	ntEFAULT       = 14
 	ntEBUSY        = 16
 	ntEEXIST       = 17
 	ntEXDEV        = 18
@@ -370,6 +372,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuFlock(int32(a1), int32(a2))
 	case ntSysSync:
 		return ntEmuSync()
+	case ntSysUname:
+		return ntEmuUname((*ntLinuxUtsname)(unsafe.Pointer(a1)))
 	case ntSysFchmod:
 		return ntEmuFchmod(int32(a1))
 	case ntSysFchmodat:
@@ -1016,6 +1020,122 @@ func ntEmuFsync(fd int32) (r1, r2, errno uintptr) {
 	r, werr := ntcallSE(ntFlushFileBuffersFn, e.handle, 0, 0, 0, 0, 0, 0)
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
+	}
+	return 0, 0, 0
+}
+
+// ntLinuxUtsname is the struct uname(2) fills: six 65-byte fields. It
+// must match syscall.Utsname for GOOS=cosmo.
+type ntLinuxUtsname struct {
+	Sysname    [65]byte
+	Nodename   [65]byte
+	Release    [65]byte
+	Version    [65]byte
+	Machine    [65]byte
+	Domainname [65]byte
+}
+
+// ntRtlOSVersionInfo is RTL_OSVERSIONINFOW. Only the four numbers are
+// read; szCSDVersion is present so the size RtlGetVersion checks is the
+// size it expects.
+type ntRtlOSVersionInfo struct {
+	OSVersionInfoSize uint32
+	MajorVersion      uint32
+	MinorVersion      uint32
+	BuildNumber       uint32
+	PlatformId        uint32
+	CSDVersion        [128]uint16
+}
+
+// ntUtsPut copies a string into one 65-byte uname field, NUL-terminated
+// and truncated to fit.
+func ntUtsPut(dst *[65]byte, s string) {
+	n := len(s)
+	if n > len(dst)-1 {
+		n = len(dst) - 1
+	}
+	for i := 0; i < n; i++ {
+		dst[i] = s[i]
+	}
+	dst[n] = 0
+}
+
+// ntUtsPutUint appends a decimal number to a field that already holds a
+// prefix, and returns the new length.
+func ntUtsPutUint(dst *[65]byte, at int, v uint32) int {
+	var tmp [10]byte
+	i := len(tmp)
+	for {
+		i--
+		tmp[i] = byte('0' + v%10)
+		v /= 10
+		if v == 0 {
+			break
+		}
+	}
+	for ; i < len(tmp) && at < len(dst)-1; i++ {
+		dst[at] = tmp[i]
+		at++
+	}
+	dst[at] = 0
+	return at
+}
+
+// ntEmuUname emulates uname(2).
+//
+// Sysname and Machine are constants because they are constants here: an
+// APE that boots the NT personality is this host and this payload.
+// Release carries the real build (RtlGetVersion - GetVersionExW answers
+// 6.2 to an unmanifested process on every modern host, which is a wrong
+// number rather than a missing one).
+//
+// A field this host cannot answer stays EMPTY rather than invented.
+// Nodename is empty when the computer name is unavailable, and also when
+// it is not ASCII: this path has no UTF-16 decoder, and a mangled name
+// is worse than no name. Domainname has no NT counterpart at all, which
+// is the same choice the darwin emulation makes.
+func ntEmuUname(buf *ntLinuxUtsname) (r1, r2, errno uintptr) {
+	if buf == nil {
+		return ntFail3(ntEFAULT)
+	}
+	*buf = ntLinuxUtsname{}
+	ntUtsPut(&buf.Sysname, "Windows_NT")
+	ntUtsPut(&buf.Machine, "x86_64")
+
+	if ntRtlGetVersionFn != 0 {
+		var vi ntRtlOSVersionInfo
+		vi.OSVersionInfoSize = uint32(unsafe.Sizeof(vi))
+		// RtlGetVersion answers STATUS_SUCCESS (0) and cannot fail for a
+		// correctly sized buffer.
+		if r, _ := ntcallE(ntRtlGetVersionFn, uintptr(unsafe.Pointer(&vi)), 0, 0, 0, 0, 0, 0); r == 0 {
+			n := ntUtsPutUint(&buf.Release, 0, vi.MajorVersion)
+			buf.Release[n] = '.'
+			n = ntUtsPutUint(&buf.Release, n+1, vi.MinorVersion)
+			buf.Release[n] = '.'
+			ntUtsPutUint(&buf.Release, n+1, vi.BuildNumber)
+			ntUtsPut(&buf.Version, "Windows_NT")
+		}
+	}
+
+	if ntGetComputerNameWFn != 0 {
+		var name [16 + 1]uint16 // MAX_COMPUTERNAME_LENGTH is 15
+		size := uint32(len(name))
+		r, _ := ntcallE(ntGetComputerNameWFn, uintptr(unsafe.Pointer(&name[0])),
+			uintptr(unsafe.Pointer(&size)), 0, 0, 0, 0, 0)
+		if r != 0 && size < uint32(len(name)) {
+			ascii := true
+			for i := uint32(0); i < size; i++ {
+				if name[i] >= 0x80 {
+					ascii = false
+					break
+				}
+			}
+			if ascii {
+				for i := uint32(0); i < size && i < uint32(len(buf.Nodename)-1); i++ {
+					buf.Nodename[i] = byte(name[i])
+				}
+			}
+		}
 	}
 	return 0, 0, 0
 }

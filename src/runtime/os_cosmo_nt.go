@@ -82,6 +82,9 @@ var (
 	// crashing the boot.
 	ntLockFileExFn   uintptr
 	ntUnlockFileExFn uintptr
+	// uname's two sources (ntEmuUname). Both optional.
+	ntRtlGetVersionFn    uintptr
+	ntGetComputerNameWFn uintptr
 	// The metadata wave's four (os_cosmo_nt_meta.go). All optional: a
 	// zero pointer answers ENOSYS at the use site rather than crashing
 	// the boot over a call most programs never make.
@@ -186,6 +189,8 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
+	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
 	ntNameUnlockFileEx      = []byte("UnlockFileEx\x00")
 	ntNameSetFileTime       = []byte("SetFileTime\x00")
@@ -527,7 +532,12 @@ func ntResolve() {
 	// (RtlGenRandom), which has the same (buf, len) signature.
 	if ntdll := ntcall(lla, uintptr(unsafe.Pointer(&ntNameNtdll[0])), 0, 0, 0, 0, 0); ntdll != 0 {
 		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
+		// uname's release and version (ntEmuUname). RtlGetVersion is the
+		// one call that reports the real build: GetVersionExW lies to an
+		// unmanifested process and answers 6.2 on every modern host.
+		ntRtlGetVersionFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameRtlGetVersion[0])), 0, 0, 0, 0)
 	}
+	ntGetComputerNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetComputerNameW[0])), 0, 0, 0, 0)
 	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate,
 	// fchdir, linkat. Every one of these has shipped in kernel32 since
 	// Vista at the latest, so a zero here means a host stranger than
