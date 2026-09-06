@@ -198,13 +198,22 @@ jobs:
             echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
           done
           # The published toolchain was built when this leg last ran binaries.
-          curl -fsSL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" | tar -xz -C "$RUNNER_TEMP"
           rc=0
-          GOOS=cosmo "$RUNNER_TEMP/go/bin/go" build -o "$RUNNER_TEMP/fb-published.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
-          echo "published-toolchain build exit=$rc"
-          rc=0
-          "$RUNNER_TEMP/fb-published.com" 10 5 || rc=$?
-          echo "fizzbuzz from the published toolchain exit=$rc"
+          curl -fsS --compressed -o "$RUNNER_TEMP/gt.tgz" "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" || rc=$?
+          echo "published-toolchain download exit=$rc"
+          if [ "$rc" = 0 ]; then
+            rc=0
+            tar -xzf "$RUNNER_TEMP/gt.tgz" -C "$RUNNER_TEMP" || rc=$?
+            echo "published-toolchain untar exit=$rc size=$(wc -c < "$RUNNER_TEMP/gt.tgz")"
+          fi
+          if [ -x "$RUNNER_TEMP/go/bin/go" ]; then
+            rc=0
+            GOOS=cosmo "$RUNNER_TEMP/go/bin/go" build -o "$RUNNER_TEMP/fb-published.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
+            echo "published-toolchain build exit=$rc"
+            rc=0
+            "$RUNNER_TEMP/fb-published.com" 10 5 || rc=$?
+            echo "fizzbuzz from the published toolchain exit=$rc"
+          fi
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
           # Three shapes: no arguments, a listing that never runs a test, and one test.
