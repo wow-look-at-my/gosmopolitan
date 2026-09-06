@@ -13,8 +13,10 @@ import (
 	"debug/elf"
 	"encoding/binary"
 	"fmt"
+	"internal/ape"
 	"internal/platform"
 	"internal/testenv"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -364,7 +366,7 @@ func TestPIESize(t *testing.T) {
 	}
 
 	var linkmodes []string
-	if platform.InternalLinkPIESupported(runtime.GOOS, runtime.GOARCH) {
+	if platform.InternalLinkPIESupported(testenv.GOOS, testenv.GOARCH) {
 		linkmodes = append(linkmodes, "internal")
 	}
 	linkmodes = append(linkmodes, "external")
@@ -579,7 +581,18 @@ func TestFlagD(t *testing.T) {
 	// Test that using the -D flag to specify data section address generates
 	// a working binary with data at the specified address.
 	t.Parallel()
+	skipIfDataAddrIsFixed(t)
 	testFlagD(t, "0x10000000", "", 0x10000000)
+}
+
+// skipIfDataAddrIsFixed skips a -D test on a port whose container fixes
+// each segment's address. An APE's PE header gives every segment an RVA
+// equal to its file offset, so the data cannot be placed elsewhere, and
+// the linker refuses -D there rather than write a header that lies.
+func skipIfDataAddrIsFixed(t *testing.T) {
+	if testenv.GOOS == "cosmo" && testenv.GOARCH == "amd64" {
+		t.Skip("skipping: -D is not supported on cosmo/amd64")
+	}
 }
 
 func TestFlagDUnaligned(t *testing.T) {
@@ -712,14 +725,27 @@ func testELFHeadersSorted(t *testing.T, buildmode string) {
 	}
 
 	// Check that the first section header is all zeroes.
-	f, err := os.Open(exe)
+	//
+	// A cosmo build writes an APE: a polyglot header, then the ELF image,
+	// or a stripped image with the whole one beside it. This test parses
+	// the header by hand, so open the image rather than the container.
+	name := exe
+	if side := ape.Sidecar(exe); side != "" {
+		name = side
+	}
+	f, err := os.Open(name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
 
+	var r io.ReaderAt = f
+	if payload := ape.Payload(f); payload != nil {
+		r = payload
+	}
+
 	var ident [elf.EI_NIDENT]byte
-	if _, err := f.Read(ident[:]); err != nil {
+	if _, err := r.ReadAt(ident[:], 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -739,7 +765,7 @@ func testELFHeadersSorted(t *testing.T, buildmode string) {
 	case elf.ELFCLASS32:
 		var hdr elf.Header32
 		data := make([]byte, unsafe.Sizeof(hdr))
-		if _, err := f.ReadAt(data, 0); err != nil {
+		if _, err := r.ReadAt(data, 0); err != nil {
 			t.Fatal(err)
 		}
 		shoff = int64(bo.Uint32(data[unsafe.Offsetof(hdr.Shoff):]))
@@ -748,7 +774,7 @@ func testELFHeadersSorted(t *testing.T, buildmode string) {
 	case elf.ELFCLASS64:
 		var hdr elf.Header64
 		data := make([]byte, unsafe.Sizeof(hdr))
-		if _, err := f.ReadAt(data, 0); err != nil {
+		if _, err := r.ReadAt(data, 0); err != nil {
 			t.Fatal(err)
 		}
 		shoff = int64(bo.Uint64(data[unsafe.Offsetof(hdr.Shoff):]))
@@ -760,7 +786,7 @@ func testELFHeadersSorted(t *testing.T, buildmode string) {
 
 	if shoff > 0 {
 		data := make([]byte, shsize)
-		if _, err := f.ReadAt(data, shoff); err != nil {
+		if _, err := r.ReadAt(data, shoff); err != nil {
 			t.Fatal(err)
 		}
 		for i, c := range data {
@@ -770,7 +796,7 @@ func testELFHeadersSorted(t *testing.T, buildmode string) {
 		}
 	}
 
-	ef, err := elf.NewFile(f)
+	ef, err := elf.NewFile(r)
 	if err != nil {
 		t.Fatal(err)
 	}

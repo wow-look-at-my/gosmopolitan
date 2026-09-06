@@ -354,7 +354,7 @@ func MustHaveCGO(t testing.TB) {
 // CanInternalLink reports whether the current system can link programs with
 // internal linking.
 func CanInternalLink(withCgo bool) bool {
-	return !platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, withCgo)
+	return !platform.MustLinkExternal(GOOS, GOARCH, withCgo)
 }
 
 // SpecialBuildTypes are interesting build types that may affect linking.
@@ -378,9 +378,9 @@ func MustInternalLink(t testing.TB, with SpecialBuildTypes) {
 	if !CanInternalLink(with.Cgo) {
 		t.Helper()
 		if with.Cgo && CanInternalLink(false) {
-			t.Skipf("skipping test: internal linking on %s/%s is not supported with cgo", runtime.GOOS, runtime.GOARCH)
+			t.Skipf("skipping test: internal linking on %s/%s is not supported with cgo", GOOS, GOARCH)
 		}
-		t.Skipf("skipping test: internal linking on %s/%s is not supported", runtime.GOOS, runtime.GOARCH)
+		t.Skipf("skipping test: internal linking on %s/%s is not supported", GOOS, GOARCH)
 	}
 }
 
@@ -388,9 +388,9 @@ func MustInternalLink(t testing.TB, with SpecialBuildTypes) {
 // internal linking.
 // If not, MustInternalLinkPIE calls t.Skip with an explanation.
 func MustInternalLinkPIE(t testing.TB) {
-	if !platform.InternalLinkPIESupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.InternalLinkPIESupported(GOOS, GOARCH) {
 		t.Helper()
-		t.Skipf("skipping test: internal linking for buildmode=pie on %s/%s is not supported", runtime.GOOS, runtime.GOARCH)
+		t.Skipf("skipping test: internal linking for buildmode=pie on %s/%s is not supported", GOOS, GOARCH)
 	}
 }
 

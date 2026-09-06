@@ -25,7 +25,7 @@ func testDWARF(t *testing.T, buildmode string, expectDWARF bool, env ...string) 
 	testenv.MustHaveCGO(t)
 	testenv.MustHaveGoBuild(t)
 
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
 
@@ -312,7 +312,7 @@ func TestDWARFLocationList(t *testing.T) {
 	testenv.MustHaveCGO(t)
 	testenv.MustHaveGoBuild(t)
 
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
 
@@ -403,7 +403,7 @@ func TestFlagW(t *testing.T) {
 	if runtime.GOOS == "aix" {
 		t.Skip("internal/xcoff cannot parse file without symbol table")
 	}
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
 

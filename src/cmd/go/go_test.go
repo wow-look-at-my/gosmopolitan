@@ -274,9 +274,9 @@ func TestMain(m *testing.M) {
 		}
 		testGOCACHE = strings.TrimSpace(string(out))
 
-		canMSan = testenv.HasCGO() && platform.MSanSupported(runtime.GOOS, runtime.GOARCH)
-		canASan = testenv.HasCGO() && platform.ASanSupported(runtime.GOOS, runtime.GOARCH)
-		canRace = testenv.HasCGO() && platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH)
+		canMSan = testenv.HasCGO() && platform.MSanSupported(testenv.GOOS, testenv.GOARCH)
+		canASan = testenv.HasCGO() && platform.ASanSupported(testenv.GOOS, testenv.GOARCH)
+		canRace = testenv.HasCGO() && platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH)
 		// The race detector doesn't work on Alpine Linux:
 		// golang.org/issue/14481
 		// gccgo does not support the race detector.

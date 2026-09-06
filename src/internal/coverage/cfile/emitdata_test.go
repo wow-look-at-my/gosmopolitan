@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -465,7 +464,7 @@ func TestIssue56006EmitDataRaceCoverRunningGoroutine(t *testing.T) {
 	// This test requires "go test -race -cover", meaning that we need
 	// go build, go run, and "-race" support.
 	testenv.MustHaveGoRun(t)
-	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) ||
+	if !platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH) ||
 		!testenv.HasCGO() {
 		t.Skip("skipped due to lack of race detector support / CGO")
 	}

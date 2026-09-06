@@ -9,6 +9,7 @@ package syscall_test
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,6 +52,21 @@ func TestAPEExec(t *testing.T) {
 	out, err := exec.Command(target, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("running the APE %s failed: %v\n%s", target, err, out)
+	}
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("the APE printed %q, which does not contain %q", out, want)
+	}
+
+	// The same target by a relative name, from the directory holding it.
+	// The check that recognizes an APE runs before the fork, where the
+	// working directory is still the caller's, so a relative name has to
+	// be resolved against Dir or it names nothing. cmd/pack and cmd/go
+	// start helpers exactly this way.
+	cmd := exec.Command("./"+filepath.Base(target), args...)
+	cmd.Dir = filepath.Dir(target)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the APE as %s from %s failed: %v\n%s", cmd.Path, cmd.Dir, err, out)
 	}
 	if !strings.Contains(string(out), want) {
 		t.Fatalf("the APE printed %q, which does not contain %q", out, want)

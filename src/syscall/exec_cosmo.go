@@ -115,7 +115,7 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	// while allocation is still legal. The child retries with it when
 	// execve answers ENOEXEC. See exec_cosmo_ape.go.
 	var shArgv []*byte
-	if isAPEPath(argv0) {
+	if isAPEPath(dir, argv0) {
 		shArgv = apeShellArgv(argv0, argv)
 	}
 

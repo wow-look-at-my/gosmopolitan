@@ -23,8 +23,21 @@ var apeShellPath = [...]byte{'/', 'b', 'i', 'n', '/', 's', 'h', 0}
 // isAPEPath reports whether the NUL-terminated path names a file whose
 // first bytes are the APE magic. It must run BEFORE the fork: it opens
 // and reads, and the child may do neither before its execve.
-func isAPEPath(path *byte) bool {
+//
+// dir is the directory the child chdirs into, or nil. A relative path
+// names a file there rather than here, so the check opens it from there
+// too. An absolute path ignores the directory, as openat does.
+func isAPEPath(dir, path *byte) bool {
 	dirfd := _AT_FDCWD
+	if dir != nil {
+		d, _, e := RawSyscall6(SYS_OPENAT, uintptr(dirfd),
+			uintptr(unsafe.Pointer(dir)), uintptr(O_RDONLY|O_CLOEXEC|O_DIRECTORY), 0, 0, 0)
+		if e != 0 {
+			return false
+		}
+		defer RawSyscall(SYS_CLOSE, d, 0, 0)
+		dirfd = int(d)
+	}
 	fd, _, e := RawSyscall6(SYS_OPENAT, uintptr(dirfd),
 		uintptr(unsafe.Pointer(path)), uintptr(O_RDONLY|O_CLOEXEC), 0, 0, 0)
 	if e != 0 {
@@ -43,7 +56,7 @@ func isAPEPath(path *byte) bool {
 // the target to /bin/sh, when the target is an APE. Exec replaces this
 // process, so a success never returns.
 func execAPEFallback(argv0 *byte, argv, envv []*byte, err error) error {
-	if err != ENOEXEC || !isAPEPath(argv0) {
+	if err != ENOEXEC || !isAPEPath(nil, argv0) {
 		return err
 	}
 	sh := apeShellArgv(argv0, argv)

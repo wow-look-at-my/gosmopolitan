@@ -13,6 +13,7 @@ import (
 	_ "embed"
 	"encoding/binary"
 	"fmt"
+	"internal/ape"
 	"os"
 	"strings"
 	"text/template"
@@ -35,8 +36,9 @@ import (
 
 const (
 	// APE header must be page-aligned for ELF loading
-	// Using 64KB for Windows allocation granularity compatibility
-	apeHeaderSize   = 65536
+	// Using 64KB for Windows allocation granularity compatibility.
+	// internal/ape states the same size to every reader of the output.
+	apeHeaderSize   = ape.HeaderSize
 	apeScriptOffset = 0x800
 
 	// What follows the script, and so how much room the script has: it runs
@@ -561,7 +563,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// - Script at apeScriptOffset starts with "__APE__\n" to terminate heredoc
 
 	// Write the APE magic at offset 0
-	copy(header[0:8], []byte("MZqFpD='"))
+	copy(header[0:8], ape.Magic)
 	header[8] = '\n'
 
 	// Fill bytes 0x09-0x2B with spaces (inside the single-quoted string)

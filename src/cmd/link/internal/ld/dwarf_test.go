@@ -26,7 +26,7 @@ import (
 )
 
 func mustHaveDWARF(t testing.TB) {
-	if !platform.ExecutableHasDWARF(runtime.GOOS, runtime.GOARCH) {
+	if !platform.ExecutableHasDWARF(testenv.GOOS, testenv.GOARCH) {
 		t.Helper()
 		t.Skipf("skipping on %s/%s: no DWARF symbol table in executables", runtime.GOOS, runtime.GOARCH)
 	}
@@ -945,7 +945,7 @@ func f(x *X) { // Make sure that there is dwarf recorded for *X.
 		t.Fatalf("*main.X DIE had no runtime type attr. DIE: %v", dies[0])
 	}
 
-	if platform.DefaultPIE(runtime.GOOS, runtime.GOARCH, false) {
+	if platform.DefaultPIE(testenv.GOOS, testenv.GOARCH, false) {
 		return // everything is PIE, addresses are relocated
 	}
 	if rtAttr.(uint64)+types.Addr != addr {

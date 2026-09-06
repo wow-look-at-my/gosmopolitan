@@ -338,6 +338,14 @@ func Main(arch *sys.Arch, theArch Arch) {
 		Exitf("invalid -D value 0x%x: not aligned to rounding quantum 0x%x", *FlagDataAddr, *FlagRound)
 	}
 
+	// An APE's PE header maps the payload by giving every segment an RVA
+	// equal to its file offset, so each segment's address is fixed by
+	// where it lands in the file. Placing the data anywhere else breaks
+	// that at the header, deep in the write, so refuse it here.
+	if *FlagDataAddr != -1 && ctxt.HeadType == objabi.Hcosmo && ctxt.Arch.Family == sys.AMD64 {
+		Exitf("-D is not supported on cosmo/amd64: the APE's PE header pins each segment's address to its file offset")
+	}
+
 	if ctxt.linkShared && !ctxt.IsELF {
 		Exitf("-linkshared can only be used on elf systems")
 	}
