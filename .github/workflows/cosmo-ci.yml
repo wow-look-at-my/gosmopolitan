@@ -182,9 +182,7 @@ jobs:
         with:
           tests: dats/goos-readonly.dats
 
-      # run.bat reports "exit status 2" and nothing else, once per package, so it
-      # names neither the failure nor the package that saw it. One test binary,
-      # run by hand, is where that error is legible.
+      # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
       - name: A cosmo test binary runs on this host
         if: matrix.build-os == 'windows-latest'
         timeout-minutes: 10
