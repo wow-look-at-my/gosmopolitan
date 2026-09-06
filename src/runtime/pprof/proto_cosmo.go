@@ -32,7 +32,9 @@ func (b *profileBuilder) readMapping() {
 		b.addMappingEntry(0, 0, 0, "", "", true)
 		return
 	}
-	b.addMapping(start, end, start, exe, buildID)
+	// The third argument is the file offset the mapping starts at, which
+	// for the image the loader placed at its own base is zero.
+	b.addMapping(start, end, 0, exe, buildID)
 }
 
 // readMainModuleMapping reports the main module's text range. buildID

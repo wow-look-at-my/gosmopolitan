@@ -374,16 +374,12 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // after the ELF one because a host that carries both is macOS, where the
 // Mach-O header is the one that counts.
 //
-// The first line appends the standard directories to PATH: staging needs
-// stat, cksum, tr, mkdir, cp, chmod and mv, and a program started with a
-// scrubbed environment has no PATH to find them with. The caller's own
-// PATH stays in front. The binfmt_misc line quotes its magic with DOUBLE
+// The binfmt_misc line quotes its magic with DOUBLE
 // quotes on purpose: the macOS ARM64 loader decodes every `printf '` in
 // the first 8K as a boot header, and TestFatBootHeaders holds that count
 // at two. The shell leaves \047 alone inside double quotes.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
-	`  PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"; export PATH
-  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
+	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
   c="{{.RunDir}}/$k"
   p="$c/${0##*/}"
   if [ ! -x "$p" ]; then
@@ -537,6 +533,14 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// Here-doc terminator
 	script.WriteString("__APE__\n")
 
+	// The standard directories go on PATH before anything reads it. This
+	// script runs uname, stat, cksum, tr, mkdir, cp, chmod and mv, and a
+	// program started with a scrubbed environment finds none of them. A
+	// missing uname is the worst of the set: the arch dispatch then falls
+	// back to x86_64 and an arm64 machine is told it cannot run its own
+	// binary. The caller's own PATH stays in front.
+	script.WriteString("PATH=\"${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin\"; export PATH\n")
+
 	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
 
@@ -544,7 +548,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
 	switch {
 	case linuxAMD || darwinAMD:
-		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
+		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"\n")
 		if !linuxAMD {
 			// Without a boot ELF header there is nothing to assimilate
 			// into, and re-execing would spin on this script forever.
@@ -568,7 +572,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
-		script.WriteString("  o=\"$(command -v \"$0\")\"\n")
+		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"\n")
 		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
