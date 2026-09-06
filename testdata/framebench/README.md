@@ -1,15 +1,8 @@
 # framebench
 
-A frame-loop allocation benchmark for js/wasm: measures per-frame wall
-time of a workload that allocates ~10,000 short-lived objects of mixed
-sizes per frame (small pointer-bearing structs, 64-256 byte slices,
-512-1536 byte slices), keeping each frame's objects alive for 3 frames
-so the live heap churns like a real animation/simulation workload.
+A frame-loop allocation benchmark for js/wasm: measures per-frame wall time of a workload that allocates ~10,000 short-lived objects of mixed sizes per frame (small pointer-bearing structs, 64-256 byte slices, 512-1536 byte slices), keeping each frame's objects alive for 3 frames so the live heap churns like a real animation/simulation workload.
 
-Frame time is measured on the JS side as the wall time of each
-`bench_frame` export call — GC assists, GC start/termination pauses,
-and any in-frame background marking all land inside it, exactly as
-they would inside a `requestAnimationFrame` callback.
+Frame time is measured on the JS side as the wall time of each `bench_frame` export call — GC assists, GC start/termination pauses, and any in-frame background marking all land inside it, exactly as they would inside a `requestAnimationFrame` callback.
 
 ## Build
 
@@ -34,13 +27,8 @@ node bench.js framebench.wasm
 node bench.js framebench.wasm --markstep
 ```
 
-Flags: `--frames N` (default 2000 measured frames), `--warmup N`
-(default 300), `--frame-budget MS` (default 16.7), `--markstep`.
+Flags: `--frames N` (default 2000 measured frames), `--warmup N` (default 300), `--frame-budget MS` (default 16.7), `--markstep`.
 
-Output: one JSON line plus a human-readable summary with
-p50/p90/p99/max frame ms, frames over 8ms / 16.7ms, and the number of
-GC cycles completed during the measured window.
+Output: one JSON line plus a human-readable summary with p50/p90/p99/max frame ms, frames over 8ms / 16.7ms, and the number of GC cycles completed during the measured window.
 
-`results/` holds saved runs: `baseline.txt` (unmodified runtime,
-no `--markstep`) and `after.txt` (frame-aware GC runtime changes,
-with `--markstep`), both recorded on the same machine.
+`results/` holds saved runs: `baseline.txt` (unmodified runtime, no `--markstep`) and `after.txt` (frame-aware GC runtime changes, with `--markstep`), both recorded on the same machine.

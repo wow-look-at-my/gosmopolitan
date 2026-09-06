@@ -25,36 +25,11 @@ GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs natively on Linux, macOS, and Windows. On
-Windows the same cosmo amd64 image boots through the APE's PE header via
-the runtime's NT personality (no embedded second build). As of wave 2
-(CI-verified by the runtimeprobe gauntlet on windows-latest) the surface
-covers console programs (stdout/stderr, args, environment, exit codes),
-process identity, entropy, timers, the file I/O family (open/read/write/
-stat, directory listing, working directory, os.Executable, temp files),
-os/exec (pipes, CreateProcessW spawn, Linux-shaped wait statuses),
-TCP/UDP/unix-domain sockets with deadlines (winsock emulation plus a
-WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV
-recover via VEH, os/signal delivery, async preemption, kill/wait-status
-decode, console Ctrl-C -> SIGINT). sendmsg/recvmsg with SCM_RIGHTS fd
-passing works on Windows (wave 3) and macOS (2026-07-21, the darwin
-msghdr translation); SIGPROF CPU profiling works on Windows, Linux,
-and macOS (2026-07-21, dlsym'd Apple setitimer) - the wave-9 darwin
-backlog is closed. Still missing on Windows: Windows/arm64
-and a few documented fd edges. See `DEBUGGING.md` for the detailed
-ladder. Debug with the sidecars
-(`gdb program.com.dbg`, or `symbol-file` against the running APE);
-runtime tracebacks and pprof need no sidecar. When distributing APEs,
-ship them zstd-compressed: the two arch payloads are highly redundant,
-so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after
-`zstd -19 --long=27` (distribution-side only - there is no runtime
-self-extraction).
+The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows the same cosmo amd64 image boots through the APE's PE header via the runtime's NT personality (no embedded second build). As of wave 2 (CI-verified by the runtimeprobe gauntlet on windows-latest) the surface covers console programs (stdout/stderr, args, environment, exit codes), process identity, entropy, timers, the file I/O family (open/read/write/ stat, directory listing, working directory, os.Executable, temp files), os/exec (pipes, CreateProcessW spawn, Linux-shaped wait statuses), TCP/UDP/unix-domain sockets with deadlines (winsock emulation plus a WSAPoll netpoller; unix sockets ride afunix.sys), and signals (SIGSEGV recover via VEH, os/signal delivery, async preemption, kill/wait-status decode, console Ctrl-C -> SIGINT). sendmsg/recvmsg with SCM_RIGHTS fd passing works on Windows (wave 3) and macOS (2026-07-21, the darwin msghdr translation); SIGPROF CPU profiling works on Windows, Linux, and macOS (2026-07-21, dlsym'd Apple setitimer) - the wave-9 darwin backlog is closed. Still missing on Windows: Windows/arm64 and a few documented fd edges. See `DEBUGGING.md` for the detailed ladder. Debug with the sidecars (`gdb program.com.dbg`, or `symbol-file` against the running APE); runtime tracebacks and pprof need no sidecar. When distributing APEs, ship them zstd-compressed: the two arch payloads are highly redundant, so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB after `zstd -19 --long=27` (distribution-side only - there is no runtime self-extraction).
 
 ## Installing a Prebuilt Toolchain
 
-CI publishes installable toolchain tarballs to [buildhost](https://pazer.build)
-on every push, for linux/amd64, darwin/arm64 and windows/amd64. Install one
-in seconds instead of building from source:
+CI publishes installable toolchain tarballs to [buildhost](https://pazer.build) on every push, for linux/amd64, darwin/arm64 and windows/amd64. Install one in seconds instead of building from source:
 
 ```bash
 # Linux, x86-64
@@ -77,16 +52,9 @@ tar -xzf go.tar.gz
 go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
 ```
 
-All three tarballs come from one release, each built on its own platform.
-macOS Intel and linux/arm64 still build from source - see Building the
-Toolchain below. Depth: docs/INSTALL.md.
+All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the Toolchain below. Depth: docs/INSTALL.md.
 
-The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs
-itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides;
-releases published before 2026-07-20 shipped `auto` and still need
-`GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin
-`GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of
-the rolling branch latest, use `?v=N` in place of `branch=master`.
+The shipped `go.env` defaults `GOTOOLCHAIN=local`, so the fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides; releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 
@@ -105,16 +73,7 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
-Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64
-Windows (plus ARM64 Linux via qemu during development). Windows execution
-is cosmo-native (NT personality in the runtime; the old embedded
-windows/amd64 PE payload is gone); windows-latest CI runs the full
-runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals,
-async preemption, os/exec - against binaries built on all three platforms
-(see `DEBUGGING.md` for what is still missing). macOS Intel support
-is structural so far: the Mach-O assimilation header is verified against the
-XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is
-incomplete and untested end to end (no Intel CI runner).
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (plus ARM64 Linux via qemu during development). Windows execution is cosmo-native (NT personality in the runtime; the old embedded windows/amd64 PE payload is gone); windows-latest CI runs the full runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals, async preemption, os/exec - against binaries built on all three platforms (see `DEBUGGING.md` for what is still missing). macOS Intel support is structural so far: the Mach-O assimilation header is verified against the XNU loader's requirements by tests, but the darwin-amd64 runtime bring-up is incomplete and untested end to end (no Intel CI runner).
 
 ## Related Projects
 
@@ -125,5 +84,4 @@ incomplete and untested end to end (no Intel CI runner).
 
 Unless otherwise noted, the Go source files are distributed under the BSD-style license found in the LICENSE file.
 
-![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg)
-*Gopher image by [Renee French](https://reneefrench.blogspot.com/), licensed under [Creative Commons 4.0 Attribution license](https://creativecommons.org/licenses/by/4.0/).*
+![Gopher image](https://golang.org/doc/gopher/fiveyears.jpg) *Gopher image by [Renee French](https://reneefrench.blogspot.com/), licensed under [Creative Commons 4.0 Attribution license](https://creativecommons.org/licenses/by/4.0/).*
