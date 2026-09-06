@@ -19,7 +19,6 @@
 package runtime
 
 import (
-	"internal/goos"
 	"internal/abi"
 	"internal/runtime/atomic"
 	"unsafe"
