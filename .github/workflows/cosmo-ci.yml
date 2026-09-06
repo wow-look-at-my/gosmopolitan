@@ -4,6 +4,8 @@ name: Cosmopolitan Cross-Platform CI
 
 on:
   push:
+    # matches every branch and no tag, so a tag push does not re-enter this workflow.
+    branches: ['**']
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
