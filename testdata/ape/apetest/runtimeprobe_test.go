@@ -40,7 +40,7 @@ var probeOkChecks = []string{
 	"readdir", "walkdir", "removeall",
 	"seekreadat",
 	"fsmeta", "fsmetaunix", "volume", "sysinfo", "flock", "durable", "rusage", "ioctl",
-	"termios", "nanosleep", "sendfile",
+	"termios", "pty", "nanosleep", "sendfile",
 	"segvrecover", "sigterm", "sigusr2", "preempt", "cpuprof", "ctrlbreak", "waitsig",
 	"all",
 }
