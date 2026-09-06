@@ -16,5 +16,5 @@ No `-exec` flag is needed; cmd/go finds the wrapper automatically.
 Notes:
 
 - On an x86-64 host only cosmo/amd64 binaries can run. Test cosmo/arm64 the same way on an ARM64 host (or under qemu-aarch64 with binfmt).
-- Build the test with `GOCOSMOFAT=0` if you want a single-architecture binary; fat APEs work too but build both architectures first.
-- Tests that fork/exec freshly built pristine APEs directly (not via the wrapper) still fail on hosts without an APE binfmt handler; that is a host limitation, not a wrapper bug.
+- Build the test with `GOCOSMOFAT=0` if you want a single-architecture binary. Fat APEs work too but build both architectures first.
+- Tests that fork/exec freshly built pristine APEs directly (not via the wrapper) still fail on hosts without an APE binfmt handler. That is a host limitation, not a wrapper bug.

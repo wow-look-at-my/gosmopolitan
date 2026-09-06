@@ -42,7 +42,7 @@ The registration is written with a DOUBLE-quoted `printf`. The macOS ARM64 loade
 
 The bind is taken only when the process is ALREADY root. Reaching a mount namespace through a user namespace instead would have the program see itself as uid 0, which is a stranger surprise than an unexpected `argv[0]`.
 
-Nothing outside that namespace sees the mount. While it is live, the owner of the file can still overwrite it in place, move it, delete it, and `rm -rf` the directory holding it. `testdata/ape/apetest` covers the shape of the script; the mount behaviour is a property of private namespaces, not of this code.
+Nothing outside that namespace sees the mount. While it is live, the owner of the file can still overwrite it in place, move it, delete it, and `rm -rf` the directory holding it. `testdata/ape/apetest` covers the shape of the script. The mount behaviour is a property of private namespaces, not of this code.
 
 A mount that does not take falls through to exec'ing the staged copy, so the program runs either way.
 
