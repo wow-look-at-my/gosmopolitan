@@ -8,7 +8,7 @@ A test failing only under this fork's `go test` is almost always one of these.
 
 ## t.Serial
 
-A test that mutates process-wide state - a package global, the environment, the working directory, `GOMAXPROCS` - calls `t.Serial(reason)`, which waits for every other test to stop and runs the caller alone until it returns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
+A test that mutates process-wide state calls `t.Serial(reason ...string)`. Process-wide state is a package global, the environment, the working directory, or `GOMAXPROCS`. Serial waits for every other test to stop, then runs the caller alone until it returns. The reason is variadic, so `t.Serial()` compiles and runs, and warns. `testing.AllocsPerRun` panics unless the caller did. A serial test's subtests run one at a time under its hold.
 
 `t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each
 changes state the child gets its own copy of, so all three reach `t.Fork()` instead and leave the suite running. One
@@ -62,11 +62,10 @@ Fork does NOT serialize. The child runs parallel-by-default like any other run, 
 
 Mechanics:
 
-- The child re-runs that one test via `-test.run`, anchored per slash-separated name element. A subtest that calls
-  Fork therefore gets a child running exactly that subtest.
+- The child re-runs that one test via `-test.run`, anchored per slash-separated name element. A subtest that calls Fork therefore gets a child running exactly that subtest.
 - The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. Its
-  presence is also how a child knows never to fork again, so a forked test that runs subtests - or whose subtests
-  call Fork - still runs in exactly one child. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside
+  presence is also how a child knows never to fork again. A forked test that runs subtests, or whose subtests call
+  Fork, therefore still runs in exactly one child. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside
   the child they change the process in place rather than starting a grandchild.
 - The parent runs the body as far as the Fork call before it hands over, so whatever the test does before that point
   happens twice. This is worth knowing where `t.Setenv` sits partway down a test rather than at the top.
