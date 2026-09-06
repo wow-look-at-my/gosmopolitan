@@ -42,20 +42,12 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 | 7 | `cmd/go` (`TestLinkSysoFiles`, `TestScript`) | Not diagnosed. CLAUDE.md already records `list_symlink_issue35941` as red over the whole-repo vendor submodules, which is a different thing. |
 | 6 | `os` (`TestExecutableDeleted`) | EBUSY on removing a running APE. This is a root-only sandbox artifact: as root the staging bootstrap bind-mounts the copy over the original path, and a mount point does not unlink. A CI runner is not root, and this passes there. |
 
-## 5. Wordspam the hook does not yet scan
-
-`dats/no-wordspam.dats` covers every markdown file this fork wrote and a handful of cosmo sources. One body stays outside it:
-
-| # | Location | Behavior |
-|---|----------|----------|
-| 1 | `src/runtime/*cosmo*.go`, `src/internal/runtime/syscall/cosmo/*.go`, `src/syscall/*cosmo*.go` | About forty files carry a comment block past the twelve-line cap, up to 121 lines. Each needs the invariant kept and the narrative around it cut. |
-
-## 6. NT gaps Windows cannot close
+## 5. NT gaps Windows cannot close
 
 `prlimit64` is ENOSYS: Windows has no counterpart and upstream's own windows port does not expose it either. `fchmod`/`fchmodat` are a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. The reasoning is in `ntEmuFchmod`.
 
 
-## 7. macOS gaps Apple cannot close
+## 6. macOS gaps Apple cannot close
 
 `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `mknodat` with a directory descriptor are ENOSYS: Apple has no counterpart. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host, because the Linux syscall takes no flags and one APE must not answer the same call differently per host.
 

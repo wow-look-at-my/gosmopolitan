@@ -396,12 +396,11 @@ func darwinCallNoError(fn uintptr) (r1, r2, errno uintptr) {
 // called from Syscall6's darwin path, so it must keep exactly Syscall6's
 // signature.
 //
-// The dispatch spine and every syscall a forked child can reach (the
-// id family, umask, fcntl, chdir) are nosplit so that path never grows
-// the stack; the linker verifies the bound. The stat family, getcwd
-// and getrandom are deliberately NOT nosplit - they are never invoked
-// between fork and exec, and their Apple stat buffers would blow the
-// nosplit budget.
+// The dispatch spine and every syscall a forked child can reach are
+// nosplit, so that path never grows the stack, and the linker verifies
+// the bound. The stat family, getcwd and getrandom are deliberately NOT
+// nosplit: nothing invokes them between fork and exec, and their Apple
+// stat buffers would blow the budget.
 //
 //go:nosplit
 func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -738,49 +737,32 @@ func darwinFstat(fd, statbuf uintptr) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// Dirent record header sizes for the getdents64 emulation. The fixed
-// fields before d_name:
+// Dirent header sizes for the getdents64 emulation, the fixed fields
+// before d_name:
 //
-//	Apple __getdirentries64 record     Linux dirent64 record
-//	 0  d_ino     uint64                0  d_ino    uint64
-//	 8  d_seekoff uint64                8  d_off    int64
-//	16  d_reclen  uint16               16  d_reclen uint16
-//	18  d_namlen  uint16               18  d_type   uint8
-//	20  d_type    uint8                19  d_name   [] (NUL-terminated)
-//	21  d_name    [] (NUL-terminated)
+//	Apple  0 d_ino u64, 8 d_seekoff u64, 16 d_reclen u16,
+//	       18 d_namlen u16, 20 d_type u8, 21 d_name
+//	Linux  0 d_ino u64, 8 d_off i64,     16 d_reclen u16,
+//	       18 d_type u8, 19 d_name
 //
-// d_ino/d_reclen line up; d_seekoff is the next-entry seek cookie, the
-// same role Linux gives d_off. The d_type VALUES are identical on both
-// systems (shared BSD lineage, DT_* = S_IFMT>>12): DT_UNKNOWN 0,
-// DT_FIFO 1, DT_CHR 2, DT_DIR 4, DT_BLK 6, DT_REG 8, DT_LNK 10,
-// DT_SOCK 12, DT_WHT 14 - verified against Linux include/dirent.h and
-// Apple bsd/sys/dirent.h, so d_type passes through untranslated.
+// d_ino and d_reclen line up, and d_seekoff is the cookie Linux calls
+// d_off. The d_type VALUES are identical - shared BSD lineage, DT_* =
+// S_IFMT>>12 - so d_type passes through untranslated.
 const (
 	appleDirentHdrLen = 21
 	linuxDirentHdrLen = 19
 )
 
 // darwinGetdents64 emulates the Linux getdents64 syscall with Apple's
-// __getdirentries64 (the raw fd-offset-based directory read behind
-// libc readdir; resolved via dlsym - xnu's own userspace tests link it,
-// it is exported from libSystem). Apple fills the caller's buffer with
-// Apple-layout records, which are then rewritten IN PLACE into Linux
-// dirent64 records.
-//
-// The in-place rewrite is safe front to back: for any name length the
-// Linux record is never longer than the Apple record (19- vs 21-byte
-// header, both padded to 8), so the write cursor can never pass the
-// read cursor; the header fields are copied into locals before the
-// destination header is stored, and the name copy runs low-to-high
-// with dst+19 <= src+21. This also means every rewritten record fits
-// where its source stood - no partial-record truncation is possible.
-//
-// Quirk (xnu bsd/sys/dirent_private.h): when bufsize >= 1024, the
-// kernel reserves the FINAL 4 bytes of the buffer for a flags word
-// (GETDIRENTRIES64_EOF) and fills at most bufsize-4 bytes of records.
-// Returning slightly fewer bytes per call than Linux would is fine;
-// the flags word lands beyond the returned length, where callers
-// (syscall.ParseDirent, os) never look.
+// __getdirentries64, the raw fd-offset directory read behind libc
+// readdir. Apple fills the caller's buffer with Apple-layout records,
+// which are rewritten IN PLACE into Linux dirent64 records. That is
+// safe front to back: for any name length the Linux record is never
+// longer than the Apple one, so the write cursor never passes the read
+// cursor and no record can be truncated. Quirk: at bufsize >= 1024 the
+// kernel reserves the FINAL 4 bytes for a flags word and fills at most
+// bufsize-4. Returning slightly fewer bytes per call than Linux is
+// fine, since that word lands beyond the returned length.
 //
 //go:nosplit
 func darwinGetdents64(fd, buf, count uintptr) (r1, r2, errno uintptr) {

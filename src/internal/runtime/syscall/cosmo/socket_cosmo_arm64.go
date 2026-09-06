@@ -9,34 +9,17 @@ package cosmo
 import "unsafe"
 
 // Darwin (macOS ARM64) socket syscall emulation, the socket half of the
-// slow path in syscall_cosmo_arm64.go. Socket syscalls arrive with Linux
-// numbers, Linux struct sockaddr layouts and Linux option constants;
-// Apple libc (resolved via the Syslib's dlsym at startup) wants its own
-// versions of all three, so everything is translated here, in one place,
-// in both directions:
+// slow path in syscall_cosmo_arm64.go. A socket syscall arrives with
+// Linux numbers, Linux sockaddr layouts and Linux option constants, and
+// Apple libc wants its own of all three, so everything translates here,
+// in one place, in both directions.
 //
-//   - sockaddr: Linux starts with a 16-bit family; Apple replaces it
-//     with {uint8 sa_len, uint8 sa_family}. The payload beyond those two
-//     bytes (port, address, path) has an identical layout for every
-//     family this emulation admits (AF_UNIX, AF_INET, AF_INET6).
-//   - family values: AF_UNSPEC/AF_UNIX/AF_INET coincide; AF_INET6 is 10
-//     on Linux, 30 on Apple.
-//   - options: see darwinSockoptXlat for the (level, optname) table.
-//
-// Everything here is reached from syscall.Syscall/Syscall6, i.e. inside
-// the _Gsyscall window, so every function is nosplit (the linker's
-// nosplit check bounds the chains; the sockaddr scratch buffers are the
-// biggest frames at 112 bytes, well under the darwinFstatat precedent).
-//
-// sendmsg/recvmsg are emulated since 2026-07-21: Linux and Apple
-// disagree on struct msghdr field widths and on struct cmsghdr
-// entirely. darwinSendmsg/darwinRecvmsg below are fixed-size msghdr
-// shape adapters (all the nosplit budget allows); the unbounded halves
-// - sockaddr translation and the cmsg repack, SCM_RIGHTS fd payloads
-// preserved and MSG_CMSG_CLOEXEC emulated via fcntl - run as ordinary
-// Go in package syscall's darwin branch, over the exported helpers in
-// socket_msg_cosmo.go (see that file's header for the split and the
-// resulting raw-syscall contract).
+// A Linux sockaddr starts with a 16-bit family where Apple has {uint8
+// sa_len, uint8 sa_family}, and the payload past those two bytes is
+// identical for every family this admits. AF_UNSPEC, AF_UNIX and
+// AF_INET coincide; AF_INET6 is 10 on Linux and 30 on Apple. The option
+// table is darwinSockoptXlat. All of it is reached inside the _Gsyscall
+// window, so every function is nosplit.
 
 // Linux arm64 socket syscall numbers handled by the slow path.
 const (
@@ -325,17 +308,14 @@ func darwinRecvfrom(s, p, n, flags, from, fromlenp uintptr) (r1, r2, errno uintp
 }
 
 // darwinSendmsg emulates the Linux sendmsg syscall as a FIXED-SIZE
-// shape adapter: the Linux msghdr's field widths are converted into an
-// Apple msghdr (iovlen u64 -> int32 behind the UIO_MAXIOV bound,
-// controllen u64 -> u32), the iovec array passes through (layouts
-// coincide), and the msg_name/msg_control POINTERS pass through
-// untouched - their BYTES must already be Apple-shaped, per the
-// contract in socket_msg_cosmo.go's header (package syscall's darwin
-// branch performs the sockaddr translation and cmsg repack as
-// ordinary Go before entering the window; nothing unbounded fits the
-// nosplit budget here). SIGPIPE needs no per-call handling: every
-// socket this emulation creates already carries SO_NOSIGPIPE (a
-// broken-pipe send fails with EPIPE, Go's expected semantics).
+// shape adapter: msghdr field widths convert, the iovec array passes
+// through because the layouts coincide, and the msg_name and
+// msg_control POINTERS pass through untouched. Their BYTES must
+// ALREADY be Apple-shaped. Package syscall's darwin branch does the
+// sockaddr translation and cmsg repack as ordinary Go before entering
+// the window, because nothing unbounded fits the nosplit budget here.
+// SIGPIPE needs no handling: every socket this emulation creates
+// carries SO_NOSIGPIPE, so a broken-pipe send fails with EPIPE.
 //
 //go:nosplit
 func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
@@ -370,17 +350,13 @@ func darwinSendmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {
 }
 
 // darwinRecvmsg emulates the Linux recvmsg syscall, the same
-// fixed-size shape adapter as darwinSendmsg: msghdr widths in, msghdr
-// widths and result-flag VALUES (XlatMsgFlags) out. The msg_name and
-// msg_control buffers come back with Apple-shaped BYTES - package
-// syscall's darwin branch rewrites the sockaddr family and repacks
-// the control records (with the MSG_CMSG_CLOEXEC emulation and
-// truncation fd hygiene) after the window; raw SYS_RECVMSG users get
-// the Apple-shaped-buffer contract. MSG_CMSG_CLOEXEC itself is
-// refused EINVAL here like every untranslatable flag (the NT
-// emulation's exact stance): the std path strips it and emulates
-// above, so a raw caller's request is refused visibly rather than
-// silently ignored.
+// fixed-size shape adapter as darwinSendmsg: msghdr widths in, widths
+// and result-flag VALUES out. The msg_name and msg_control buffers
+// come back with Apple-shaped BYTES, and package syscall's darwin
+// branch rewrites the sockaddr family and repacks the control records
+// after the window. MSG_CMSG_CLOEXEC is refused EINVAL here like every
+// untranslatable flag: the std path strips it and emulates it above,
+// so a raw caller's request is refused visibly, never ignored.
 //
 //go:nosplit
 func darwinRecvmsg(s, msgp, flags uintptr) (r1, r2, errno uintptr) {

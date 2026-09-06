@@ -11,16 +11,14 @@ import "unsafe"
 // rt_sigaction emulation for macOS ARM64 hosts.
 //
 // The Syslib's sigaction (offset 272) is a sysret-wrapped passthrough
-// to Apple libc sigaction: it takes Apple's LIBC struct sigaction,
-// Apple signal numbers and Apple flag values, and it returns 0 or
-// -errno rather than -1 with errno set. Every one of those differs from
-// what rt_sigaction's caller passes, so the arguments cannot be
-// forwarded: the two structs are 16 and 32 bytes with no field at a
-// shared offset, and libc would read the Linux sa_flags word as its
-// sa_mask.
-//
-// Apple libc supplies the signal trampoline itself, which is why
-// nothing here matches the sa_tramp the amd64 side has to build.
+// to Apple libc sigaction: Apple's LIBC struct, Apple signal numbers,
+// Apple flag values, answering 0 or -errno rather than -1 with errno
+// set. Every one of those differs from what rt_sigaction's caller
+// passes, so NEVER forward the arguments - the two structs are 16 and
+// 32 bytes with no field at a shared offset, and libc would read the
+// Linux sa_flags word as its sa_mask. Apple libc supplies the signal
+// trampoline itself, which is why nothing here matches the sa_tramp
+// the amd64 side has to build.
 
 // xnuSigactiont is Apple's LIBC struct sigaction, matching
 // runtime.xnuSigactiont in signal_cosmo_xnu.go (upstream
@@ -33,17 +31,14 @@ type xnuSigactiont struct {
 
 // darwinSigactionSyslib emulates rt_sigaction with the Syslib's
 // sigaction, whose address the assembly dispatch reads out of the
-// Syslib table and passes in fn (this package cannot reach
-// runtime.__syslib from Go, and DarwinFns holds only dlsym-resolved
-// entries).
+// Syslib table and passes in fn: this package cannot reach
+// runtime.__syslib from Go, and DarwinFns holds only dlsym entries. It
+// is called from Syscall6's darwin path, so it keeps that result shape
+// and must not grow the stack.
 //
-// It is called from Syscall6's darwin path, so it keeps that function's
-// result shape and must not grow the stack.
-//
-// A signal with no Apple number (SIGSTKFLT, SIGPWR, the realtime range)
-// fails with EINVAL rather than reporting a handler this host can never
-// deliver. The runtime's own path treats the same case as a no-op
-// success, because initsig walks every signal and must not fail.
+// A signal with no Apple number fails EINVAL rather than reporting a
+// handler this host can never deliver. The runtime's own path answers
+// no-op success there, because initsig walks every signal.
 //
 //go:nosplit
 func darwinSigactionSyslib(fn, sig, new, old, sigsetsize uintptr) (r1, r2, errno uintptr) {

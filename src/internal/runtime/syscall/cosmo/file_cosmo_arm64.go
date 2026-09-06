@@ -198,20 +198,15 @@ func darwinSync() (r1, r2, errno uintptr) {
 }
 
 // darwinIoctl emulates ioctl for the requests whose argument means the
-// same thing on both systems: the two window-size calls (struct winsize
-// is four uint16 fields on both) and the four job-control calls, whose
-// argument is an int or nothing at all. syscall.Setctty and
-// syscall.Foreground issue two of them between fork and exec, which is
-// why this sits on the nosplit spine.
-//
+// same on both systems: the two window-size calls, where struct winsize
+// is four uint16s either way, and the four job-control calls, whose
+// argument is an int or nothing. Setctty and Foreground issue two
+// between fork and exec, which puts this on the nosplit spine.
 // The termios family goes to darwinTermiosIoctl, which converts the
-// struct as well as the request. Anything else answers ENOSYS, which is
-// a visible refusal; forwarding an unknown Linux request number would
-// instead ask the kernel for whatever Apple operation happens to carry
-// that number.
-//
-// ioctl is VARIADIC, so the argument goes on the stack. See
-// darwinCallVariadic1.
+// struct as well as the request. Anything else answers ENOSYS: never
+// forward an unknown Linux request number, which would ask for whatever
+// Apple operation carries it. ioctl is VARIADIC, so the argument goes
+// on the stack - see darwinCallVariadic1.
 //
 //go:nosplit
 func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
@@ -228,15 +223,14 @@ func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 // Apple's TIOCGETA/TIOCSETA family, converting the struct in both
 // directions (termios_cosmo.go).
 //
-// A set is a read-modify-write rather than a plain write: Apple's termios
+// A set is a read-modify-write, never a plain write: Apple's termios
 // carries settings a Linux caller cannot name, and writing only what the
-// caller passed would clear them. The read also fails first, and with the
-// right errno, when the descriptor is not a terminal at all.
+// caller passed would clear them. The read also fails first, with the
+// right errno, when the descriptor is not a terminal.
 //
-// Deliberately not nosplit: the 72-byte Apple struct is too much for the
-// dispatch spine's budget. Nothing calls this between fork and exec -
-// syscall.Setctty and syscall.Foreground use the job-control requests,
-// which stay on the nosplit path above.
+// Deliberately not nosplit, because the 72-byte Apple struct is too much
+// for the dispatch spine's budget. Nothing calls this between fork and
+// exec: Setctty and Foreground use the job-control requests above.
 func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Ioctl == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
