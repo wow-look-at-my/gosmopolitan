@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"internal/cfg"
 	"internal/goarch"
+	"internal/goos"
 	"internal/platform"
 	"os"
 	"os/exec"
@@ -393,13 +394,24 @@ func MustInternalLinkPIE(t testing.TB) {
 	}
 }
 
+// GOOS and GOARCH name the port this test binary was BUILT for, which
+// is also the port a go command it starts builds for. They are the
+// question to ask about what the toolchain supports.
+//
+// runtime.GOOS and runtime.GOARCH answer about the HOST on cosmo, where
+// one APE runs on three of them. Everywhere else the two agree.
+const (
+	GOOS   = goos.GOOS
+	GOARCH = goarch.GOARCH
+)
+
 // MustHaveBuildMode reports whether the current system can build programs in
 // the given build mode.
 // If not, MustHaveBuildMode calls t.Skip with an explanation.
 func MustHaveBuildMode(t testing.TB, buildmode string) {
-	if !platform.BuildModeSupported(runtime.Compiler, buildmode, runtime.GOOS, runtime.GOARCH) {
+	if !platform.BuildModeSupported(runtime.Compiler, buildmode, GOOS, GOARCH) {
 		t.Helper()
-		t.Skipf("skipping test: build mode %s on %s/%s is not supported by the %s compiler", buildmode, runtime.GOOS, runtime.GOARCH, runtime.Compiler)
+		t.Skipf("skipping test: build mode %s on %s/%s is not supported by the %s compiler", buildmode, GOOS, GOARCH, runtime.Compiler)
 	}
 }
 

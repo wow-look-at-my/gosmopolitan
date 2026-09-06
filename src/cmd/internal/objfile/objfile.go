@@ -70,6 +70,12 @@ var openers = []func(io.ReaderAt) (rawFile, error){
 // Open opens the named file.
 // The caller must call f.Close when the file is no longer needed.
 func Open(name string) (*File, error) {
+	// A default cosmo build strips the APE and writes the symbols to a
+	// sidecar ELF beside it. Read that instead, so a tool over this
+	// package answers about the binary the user named.
+	if side := apeDebugFile(name); side != "" {
+		name = side
+	}
 	r, err := os.Open(name)
 	if err != nil {
 		return nil, err

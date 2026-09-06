@@ -349,10 +349,10 @@ func TestDisasmExtld(t *testing.T) {
 }
 
 func TestDisasmPIE(t *testing.T) {
-	if !platform.BuildModeSupported("gc", "pie", runtime.GOOS, runtime.GOARCH) {
-		t.Skipf("skipping on %s/%s, PIE buildmode not supported", runtime.GOOS, runtime.GOARCH)
+	if !platform.BuildModeSupported("gc", "pie", testenv.GOOS, testenv.GOARCH) {
+		t.Skipf("skipping on %s/%s, PIE buildmode not supported", testenv.GOOS, testenv.GOARCH)
 	}
-	if !platform.InternalLinkPIESupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.InternalLinkPIESupported(testenv.GOOS, testenv.GOARCH) {
 		// require cgo on platforms that PIE needs external linking
 		testenv.MustHaveCGO(t)
 	}
