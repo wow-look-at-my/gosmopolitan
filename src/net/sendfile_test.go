@@ -30,6 +30,7 @@ const (
 
 func hookSupportsSendfile(t *testing.T) {
 	if runtime.GOOS == "windows" {
+		t.Serial()
 		origHook := testHookSupportsSendfile
 		testHookSupportsSendfile = func() bool { return true }
 		t.Cleanup(func() {

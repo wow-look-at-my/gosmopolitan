@@ -89,6 +89,7 @@ func TestDialerDualStackFDLeak(t *testing.T) {
 
 	before := sw.Sockets()
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 	handler := func(dss *dualStackServer, ln Listener) {
@@ -322,6 +323,7 @@ func TestDialerFallbackDelay(t *testing.T) {
 	}
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupSlowFast
 
@@ -437,6 +439,7 @@ func TestDialParallelSpuriousConnection(t *testing.T) {
 	var dialing sync.WaitGroup
 	dialing.Add(2)
 	origTestHookDialTCP := testHookDialTCP
+	t.Serial()
 	defer func() { testHookDialTCP = origTestHookDialTCP }()
 	testHookDialTCP = func(ctx context.Context, net string, laddr, raddr *TCPAddr) (*TCPConn, error) {
 		// Wait until Happy Eyeballs kicks in and both connections are dialing,
@@ -586,6 +589,7 @@ func TestDialerLocalAddr(t *testing.T) {
 	}
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 	handler := func(ls *localServer, ln Listener) {
@@ -648,6 +652,7 @@ func TestDialerDualStack(t *testing.T) {
 	closedPortDelay := dialClosedPort(t)
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 	handler := func(dss *dualStackServer, ln Listener) {
@@ -690,6 +695,7 @@ func TestDialerDualStack(t *testing.T) {
 }
 
 func TestDialerKeepAlive(t *testing.T) {
+	t.Serial()
 	t.Cleanup(func() {
 		testHookSetKeepAlive = func(KeepAliveConfig) {}
 	})

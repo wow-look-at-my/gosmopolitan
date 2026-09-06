@@ -389,6 +389,7 @@ func TestConfHostLookupOrder(t *testing.T) {
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 	defer setSystemNSS(getSystemNSS(), 0)
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -422,6 +423,7 @@ func TestAddrLookupOrder(t *testing.T) {
 	}
 
 	defer setSystemNSS(getSystemNSS(), 0)
+	t.Serial()
 	c, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)

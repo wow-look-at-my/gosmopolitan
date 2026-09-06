@@ -329,6 +329,7 @@ var resolveTCPAddrTests = []resolveTCPAddrTest{
 
 func TestResolveTCPAddr(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 
@@ -778,6 +779,7 @@ func TestDialTCPDefaultKeepAlive(t *testing.T) {
 	defer ln.Close()
 
 	got := time.Duration(-1)
+	t.Serial()
 	testHookSetKeepAlive = func(cfg KeepAliveConfig) { got = cfg.Idle }
 	defer func() { testHookSetKeepAlive = func(KeepAliveConfig) {} }()
 

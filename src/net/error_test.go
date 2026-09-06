@@ -144,6 +144,7 @@ func TestDialError(t *testing.T) {
 	}
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = func(ctx context.Context, fn func(context.Context, string, string) ([]IPAddr, error), network, host string) ([]IPAddr, error) {
 		return nil, &DNSError{Err: "dial error test", Name: "name", Server: "server", IsTimeout: true}
@@ -299,6 +300,7 @@ func TestListenError(t *testing.T) {
 	}
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = func(_ context.Context, fn func(context.Context, string, string) ([]IPAddr, error), network, host string) ([]IPAddr, error) {
 		return nil, &DNSError{Err: "listen error test", Name: "name", Server: "server", IsTimeout: true}
@@ -359,6 +361,7 @@ func TestListenPacketError(t *testing.T) {
 	}
 
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = func(_ context.Context, fn func(context.Context, string, string) ([]IPAddr, error), network, host string) ([]IPAddr, error) {
 		return nil, &DNSError{Err: "listen error test", Name: "name", Server: "server", IsTimeout: true}
