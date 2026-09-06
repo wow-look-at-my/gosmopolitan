@@ -65,6 +65,7 @@
 #define XNU_read		0x2000003	// BSD 3
 #define XNU_write		0x2000004	// BSD 4
 #define XNU_open		0x2000005	// BSD 5
+#define XNU_openat		0x20001cf	// BSD 463
 #define XNU_close		0x2000006	// BSD 6
 #define XNU_mmap		0x20000c5	// BSD 197
 #define XNU_munmap		0x2000049	// BSD 73
@@ -322,18 +323,26 @@ darwin_close:
 	JMP	darwin_syscall
 
 darwin_openat:
-	// macOS open() takes (path, flags, mode) not (dirfd, path, flags, mode)
-	// For AT_FDCWD (-100), shift args: path=SI->DI, flags=DX->SI, mode=R10->DX
+	// The Linux O_* bits are not Apple's. Untranslated, O_CREAT (0x40)
+	// arrives as Apple O_SHLOCK and os.Create makes no file.
 	CMPQ	DI, $-100	// AT_FDCWD
 	JNE	darwin_openat_with_fd
+	// Apple open(path, flags, mode): shift the dirfd off the front.
 	MOVQ	SI, DI		// path
 	MOVQ	DX, SI		// flags
 	MOVQ	R10, DX		// mode
+	XCHGQ	SI, DX		// the helper reads and writes DX
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	XCHGQ	SI, DX
 	MOVL	$XNU_open, AX
 	JMP	darwin_syscall
 darwin_openat_with_fd:
-	// Non-FDCWD openat not directly supported, return ENOSYS
-	JMP	darwin_enosys
+	// Apple's openat takes the same argument order, so only the flags
+	// move. A real descriptor is never the AT_FDCWD sentinel, so the
+	// -100/-2 difference cannot reach here.
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	MOVL	$XNU_openat, AX
+	JMP	darwin_syscall
 
 darwin_mmap:
 	// mmap needs flag translation: Linux MAP_ANONYMOUS (0x20) -> macOS MAP_ANON (0x1000)

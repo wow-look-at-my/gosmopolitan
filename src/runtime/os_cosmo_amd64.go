@@ -93,6 +93,15 @@ func cosmoBsdthreadStart()
 //go:linkname cosmo_xlat_errno_ax
 func cosmo_xlat_errno_ax()
 
+// cosmo_xlat_oflags_dx is the same shape: a register-convention helper in
+// sys_cosmo_amd64.s that turns Linux open(2) flags in DX into Apple ones.
+// internal/runtime/syscall/cosmo's openat reaches it from assembly, so the
+// symbol needs the linkname push. arm64's counterpart is
+// cosmo_xlat_oflags_r2 (os_cosmo_arm64.go).
+//
+//go:linkname cosmo_xlat_oflags_dx
+func cosmo_xlat_oflags_dx()
+
 // cosmoXlatErrno is the Go-callable form of cosmo_xlat_errno_ax
 // (sys_cosmo_amd64.s), so a test can pin the table.
 func cosmoXlatErrno(e uint32) uint32

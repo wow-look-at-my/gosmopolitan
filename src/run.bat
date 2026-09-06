@@ -16,12 +16,10 @@ set GOENV=off
 call .\env.bat
 del env.bat
 
-:: dist test tests the HOST port, and every go command it starts has to agree.
-:: env.bat carries the fork's default TARGET in GOOS, which is cosmo, so the
-:: host values replace it. Otherwise every test binary is an APE, and NT starts
-:: a program by its extension rather than by reading a shell header.
-set GOOS=%GOHOSTOS%
-set GOARCH=%GOHOSTARCH%
+:: Test binaries are APEs. One boots natively through its own PE header, but
+:: NT starts a program by its extension, so cmd/go runs a cross-GOOS test
+:: binary through go_%GOOS%_%GOARCH%_exec.bat. misc\cosmo goes on PATH.
+set PATH=%CD%\..\misc\cosmo;%PATH%
 
 set GOPATH=c:\nonexist-gopath
 ..\bin\go tool dist test --rebuild %* || exit /b 1
