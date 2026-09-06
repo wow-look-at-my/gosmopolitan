@@ -4,127 +4,18 @@
 
 //go:build cosmo && amd64
 
-// Windows NT sendmsg/recvmsg emulation (wave 3 item 2): the plain
-// scatter-gather DATA path behind SYS_SENDMSG/SYS_RECVMSG, dispatched
-// by ntSyscallEmulate (os_cosmo_nt_sys.go), plus the socket-only
-// SYS_READV/SYS_WRITEV cases built on the same WSABUF machinery
-// (ntEmuReadv/ntEmuWritev below - what makes net.Buffers work).
+// Windows NT sendmsg/recvmsg emulation: the scatter-gather data path
+// behind SYS_SENDMSG/SYS_RECVMSG, dispatched by ntSyscallEmulate, and
+// the socket-only SYS_READV/SYS_WRITEV on the same WSABUF machinery -
+// what makes net.Buffers work.
 //
-// Layouts: callers hand the runtime LINUX amd64 structures
-// (syscall.Msghdr/syscall.Iovec, mirrored below as ntLinuxMsghdr/
-// ntLinuxIovec); winsock wants WSABUF arrays, whose field order is
-// REVERSED relative to iovec ({u32 len, char *buf} vs {base, len}),
-// so every call translates through a WSABUF array - stack-backed up
-// to ntWSABufStackCap entries, heap-allocated above (the emulation
-// layer is ordinary Go; allocation is legal here).
+// Callers hand in LINUX amd64 structures (ntLinuxMsghdr/ntLinuxIovec).
+// A WSABUF is {u32 len, char *buf}, the REVERSE field order of an
+// iovec, so every call translates through a WSABUF array.
 //
-// Routing:
-//
-//   - msg_name == nil: WSASend/WSARecv on the (connected) socket -
-//     the scatter-gather cousins of the plain send/recv that
-//     ntSockRead/ntSockWrite use. Both are 7-argument calls through
-//     ntcallSE (blocking-capable, last-error captured in-trampoline);
-//     WSARecv's flags argument is a POINTER (in/out).
-//   - msg_name != nil: delegate to ntEmuSendto/ntEmuRecvfrom so the
-//     sockaddr translation lives in exactly one place; multiple
-//     iovecs coalesce through an allocated buffer first (winsock's
-//     sendto/recvfrom take one buffer). AF_UNIX needs no datagram
-//     story - afunix.sys is SOCK_STREAM only - and stream SENDS pass
-//     a nil name; recvmsg's always-supplied name buffer (the syscall
-//     package never omits it) is answered by recvfrom, which ignores
-//     it on connected streams and leaves the pre-zeroed buffer as
-//     family AF_UNSPEC = "no source address", exactly the signal
-//     syscall.Recvmsg keys on. (One knowing divergence: Linux also
-//     rewrites msg_namelen to 0 there; the recvfrom delegate reports
-//     the family-AF_UNSPEC length instead, which no std caller
-//     reads.)
-//
-// MSG_* flags reuse ntMsgFlags (OOB/PEEK/DONTROUTE pass; anything
-// else EINVAL). Error mapping mirrors ntSockRead/ntSockWrite exactly:
-// recv-side WSAESHUTDOWN is EOF (0 bytes), send-side WSAESHUTDOWN
-// becomes EPIPE via ntWSAToLinux's table, and recv-side WSAEMSGSIZE
-// reports a full buffer like the recvfrom emulation (Linux truncates
-// datagrams silently) - the msghdr path additionally raises MSG_TRUNC
-// in msg_flags, which plain recvfrom has nowhere to report.
-//
-// ANCILLARY DATA (wave 3 item 2b): SCM_RIGHTS fd passing over
-// pathname AF_UNIX SOCK_STREAM sockets, sender-push model. There is
-// no NT primitive for attaching handles to socket messages, so the
-// emulation defines a WIRE FRAME that rides the ordinary afunix byte
-// stream, emitted only by sendmsg calls that actually carry rights
-// (plain sends stay unframed, wire-compatible with write/send):
-//
-//	offset  size  field
-//	0       8     magic F5 "SCMRIG" '0' (improbable first byte -
-//	              0xF5 is illegal UTF-8 lead and non-ASCII; the
-//	              final byte is the protocol VERSION)
-//	8       4     nfds (u32, <= ntSCMMaxFD)
-//	12      4     sender pid (u32, diagnostic only)
-//	16      4     dataLen (u32): payload bytes after the records
-//	20      4     reserved (0)
-//	24      ...   nfds records, then dataLen data bytes
-//
-//	record: u32 kind (ntSCMKind*), u32 Linux O_* flags, then
-//	  kind file/pipe: u64 receiver-relative HANDLE value
-//	  kind sock:      u16 infoLen (= 628) + WSAPROTOCOL_INFOW bytes
-//
-// All fields little-endian. SENDER-PUSH: the transfer happens at
-// sendmsg time - WSADuplicateSocketW(s, peerPid) for sockets,
-// OpenProcess(PROCESS_DUP_HANDLE, peerPid) + DuplicateHandle for
-// files/pipes - so the sender may close (or exit) immediately after
-// sendmsg returns, the Linux invariant. (Receiver-pull was rejected
-// for exactly that reason: the source handle could be gone or
-// recycled by recvmsg time.) The peer pid comes from the afunix.sys
-// SIO_AF_UNIX_GETPEERPID WSAIoctl and is cached on the fd entry (a
-// connection's peer can never change). The whole frame + data goes
-// out as ONE vectored WSASend (looped to completion on short sends).
-// recvmsg-with-a-control-buffer MSG_PEEKs 8 bytes: on magic match it
-// consumes the self-delimiting frame, reconstructs the fds (sockets
-// via WSASocketW(FROM_PROTOCOL_INFO), files/pipes by inserting the
-// already-receiver-relative handle), synthesizes the Linux SCM_RIGHTS
-// cmsg, and returns the data; otherwise the plain path runs.
-//
-// HONEST LIMITS, by design:
-//   - Both ends must be cosmo-Go binaries speaking this frame. A
-//     foreign peer reads frame bytes as data; a foreign sender's raw
-//     bytes could alias the magic with probability ~2^-64 per message
-//     boundary (surfaced as EBADMSG/EPROTO, never silent corruption).
-//     Likewise the RECEIVER must ask for the rights: a plain read
-//     concurrent with a frame arrival sees frame bytes as data (Linux
-//     instead quietly discards the fds there).
-//   - Same-user only: OpenProcess(PROCESS_DUP_HANDLE) across users
-//     needs privileges the emulation does not negotiate.
-//   - Pathname AF_UNIX SOCK_STREAM carriers only. socketpair ends are
-//     refused EOPNOTSUPP as carriers AND as payload (their peer is by
-//     construction in-process - ExtraFiles is ENOSYS, so a pair end
-//     can never reach another process - and their backing loopback
-//     TCP identity must not leak). dir/stdio fds are refused
-//     EOPNOTSUPP as payload; files, pipes and non-pair sockets pass.
-//   - A socket whose LAST sender-side handle closes before the
-//     receiver imports the WSAPROTOCOL_INFOW is provider-dependent
-//     (msafd keeps it importable in practice); receivers should
-//     import before signaling the sender to close, which the fdpass
-//     probe sequences deliberately.
-//   - MSG_PEEK on a frame is refused EOPNOTSUPP (a peek cannot
-//     deliver fds nondestructively); MSG_CMSG_CLOEXEC is already
-//     refused EINVAL by ntMsgFlags like every untranslatable flag,
-//     so received fds have CLOEXEC clear, the Linux default.
-//   - Data bytes past the caller's iovecs are consumed and DISCARDED
-//     with MSG_TRUNC (the frame is a unit; Linux would leave stream
-//     tails readable). Control-buffer truncation follows Linux
-//     exactly: deliver fdmax = (controllen-16)/4 fds, close the
-//     overflow, raise MSG_CTRUNC.
-//
-// Errno contract (verified against a live Linux kernel, 2026-07-19):
-// SCM_RIGHTS on an INET/INET6 socket is silently DROPPED and the data
-// sent (__sock_cmsg_send: "semantically in SOL_UNIX"); non-SOL_SOCKET
-// cmsg levels are skipped; an unknown SOL_SOCKET cmsg type is EINVAL;
-// a bad payload fd is EBADF before any data moves; SCM_CREDENTIALS is
-// EOPNOTSUPP here (Linux validates credentials we cannot). Win32
-// failures mid-transfer map through ntErrno/ntWSAToLinux (EPROTO for
-// the no-progress degenerate case); a torn or malformed frame - bad
-// version byte, absurd nfds/dataLen, EOF mid-frame, wrong infoLen -
-// is EBADMSG.
+// A nil msg_name takes WSASend/WSARecv on the connected socket. A
+// non-nil one delegates to ntEmuSendto/ntEmuRecvfrom, which keeps the
+// sockaddr translation in one place. See ntSCMMagic for SCM_RIGHTS.
 
 package runtime
 
@@ -315,8 +206,18 @@ const (
 	ntEBADMSG = 74
 )
 
-// ntSCMMagic opens every rights frame; see the file comment. The
-// final byte is the protocol version.
+// ntSCMMagic opens the wire frame SCM_RIGHTS rides, because NT has no
+// primitive for attaching handles to a socket message. Only a sendmsg
+// carrying rights emits one, so a plain send stays wire-compatible with
+// write. The last magic byte is the version. Fields are little-endian:
+//
+//	0  8  magic       12  4  sender pid (diagnostic)
+//	8  4  nfds        16  4  dataLen    20  4  reserved (0)
+//	24 .. nfds records, then dataLen data bytes
+//
+//	record: u32 kind (ntSCMKind*), u32 Linux O_* flags, then
+//	  file/pipe: u64 receiver-relative HANDLE
+//	  sock:      u16 infoLen (628) + WSAPROTOCOL_INFOW
 var ntSCMMagic = [8]byte{0xF5, 'S', 'C', 'M', 'R', 'I', 'G', '0'}
 
 // Frame record kinds - wire values, deliberately decoupled from the
@@ -498,9 +399,17 @@ func ntSCMRecvExact(h uintptr, p []byte) uintptr {
 }
 
 // ntSendmsgControl is the send-side ancillary path: ntEmuSendmsg
-// routes here whenever the caller supplied a non-empty control
-// buffer, BEFORE any data moves. See the file comment for the frame
-// protocol and the errno contract.
+// routes here whenever the caller supplied a non-empty control buffer,
+// BEFORE any data moves. The transfer is SENDER-PUSH - the duplicate
+// happens here, so the sender may close or exit the moment sendmsg
+// returns, which is the Linux invariant. Receiver-pull cannot hold it:
+// the source handle can be gone or recycled by recvmsg time. The peer
+// pid comes from SIO_AF_UNIX_GETPEERPID and is cached on the fd entry.
+// Same-user only, because OpenProcess(PROCESS_DUP_HANDLE) across users
+// needs privileges nothing here negotiates. Carriers are pathname
+// AF_UNIX SOCK_STREAM only; a socketpair end is refused EOPNOTSUPP as
+// carrier and as payload, so its loopback TCP identity cannot leak.
+// Frame and data go out as ONE vectored WSASend, looped on short ones.
 func ntSendmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (r1, r2, errno uintptr) {
 	wflags, eno := ntMsgFlags(flags) // caller validated; recompute for the delegates
 	if eno != 0 {
@@ -670,11 +579,18 @@ func ntSCMFail(eno uintptr) (bool, uintptr, uintptr, uintptr) {
 	return true, ^uintptr(0), 0, eno
 }
 
-// ntRecvmsgControl is the receive-side ancillary path: ntEmuRecvmsg
-// calls it when (and only when) the caller supplied a control buffer,
-// BEFORE the plain receive. It MSG_PEEKs for the frame magic; on a
-// match it owns the whole receive (handled=true), otherwise the plain
-// path runs (which zeroes msg_controllen - no ancillary arrived).
+// ntRecvmsgControl is the receive-side ancillary path, called only for
+// a caller-supplied control buffer and before the plain receive. It
+// MSG_PEEKs for the frame magic; on a match it owns the receive
+// (handled=true), else the plain path zeroes msg_controllen.
+//
+// The receiver MUST ask for the rights: a plain read racing a frame
+// sees frame bytes as data, where Linux discards the fds. A torn or
+// aliased frame is EBADMSG, never silent corruption. MSG_PEEK over a
+// frame is EOPNOTSUPP: a peek cannot deliver fds. Data past the
+// caller's iovecs is consumed and DISCARDED with MSG_TRUNC - the frame
+// is one unit. Truncation follows Linux: deliver (controllen-16)/4
+// fds, close the overflow, raise MSG_CTRUNC.
 func ntRecvmsgControl(fd int32, e *ntFDEntry, msg *ntLinuxMsghdr, flags int32) (handled bool, r1, r2, errno uintptr) {
 	if e.sockFam != _NT_AF_UNIX || e.sockPair {
 		// Frames only ever travel on pathname AF_UNIX streams (the
