@@ -84,7 +84,7 @@
 // already-receiver-relative handle), synthesizes the Linux SCM_RIGHTS
 // cmsg, and returns the data; otherwise the plain path runs.
 //
-// HONEST LIMITS, by design (also recorded in DEBUGGING.md):
+// HONEST LIMITS, by design:
 //   - Both ends must be cosmo-Go binaries speaking this frame. A
 //     foreign peer reads frame bytes as data; a foreign sender's raw
 //     bytes could alias the magic with probability ~2^-64 per message

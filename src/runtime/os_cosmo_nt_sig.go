@@ -9,7 +9,7 @@
 // delivery through the real signal trampoline, and the encoded
 // signal-death exit status.
 //
-// Design (full record in DEBUGGING.md "Wave 2 chunk D1"):
+// Design:
 //
 //   - Hardware faults: a vectored exception handler (ntExceptionTramp,
 //     first position) ported from upstream signal_windows.go. Faults
@@ -96,8 +96,8 @@ const (
 	_NT_SEM_NOOPENFILEERRORBOX    = 0x8000
 	_NT_WER_FAULT_REPORTING_NO_UI = 0x0020
 
-	// Fork-private signal-death exit status base (DEBUGGING.md chunk
-	// B wait-status protocol): a process that dies of signal N exits
+	// Fork-private signal-death exit status base: a process that
+	// dies of signal N exits
 	// with 0xC0DE0000|N, which wait4 decodes into the Linux "killed
 	// by signal N" status. Must match ntExitEncoded's asm.
 	_NT_SIGDEATH_BASE = 0xC0DE0000
@@ -106,8 +106,7 @@ const (
 // TEB stack-bounds policy: a deliberately WIDE NT_TIB window covering
 // the whole user address space, installed on the boot thread
 // (ntInitSignals) and on every CreateThread thread after its stack
-// pivot (tstart_cosmo_nt). Rationale + wine evidence in DEBUGGING.md
-// "Wave 2 chunk D1": Go code runs on heap-allocated stacks that move
+// pivot (tstart_cosmo_nt). Go code runs on heap-allocated stacks that move
 // (user goroutines) or are Go-allocated (g0s), so no per-thread real
 // range can cover every RSP the exception dispatch and
 // continue/unwind validity checks will see; a wide window makes every

@@ -138,8 +138,7 @@ func darwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (usec uint32, ex
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
 	if iswindows() {
-		// Every caller passes cnt==1 (see the wave-1 design in
-		// DEBUGGING.md), so WakeByAddressSingle suffices.
+		// Every caller passes cnt==1, so WakeByAddressSingle suffices.
 		ntFutexwakeup(addr)
 		return
 	}

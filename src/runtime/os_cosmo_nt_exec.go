@@ -407,8 +407,8 @@ func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uin
 		// The child becomes the leader of a new process group whose
 		// id is its pid; note NT then also DISABLES Ctrl-C in the
 		// child until it opts back in (the documented
-		// CREATE_NEW_PROCESS_GROUP side effect - DEBUGGING.md wave 3
-		// item 4). CTRL_BREAK delivery is unaffected.
+		// CREATE_NEW_PROCESS_GROUP side effect). CTRL_BREAK delivery
+		// is unaffected.
 		creation |= _NT_CREATE_NEW_PROCESS_GROUP
 	}
 	r, werr := ntcallSE10(ntCreateProcessWFn,

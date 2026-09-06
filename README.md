@@ -4,7 +4,7 @@ This is an **experimental fork** of the [Go programming language](https://github
 
 ## What are APE binaries?
 
-APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere. This fork's output executes on Linux, macOS, and Windows (the Windows runtime surface is still growing wave by wave. See `DEBUGGING.md`).
+APE binaries are single executables that run natively on multiple operating systems—Linux, macOS, and Windows—without modification or recompilation. Build once, run anywhere. This fork's output executes on Linux, macOS, and Windows.
 
 ## Building APE Binaries
 
@@ -25,7 +25,11 @@ GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 ```
 
-The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows the same cosmo amd64 image boots through the APE's PE header via the runtime's NT personality (no embedded second build). As of wave 2 (CI-verified by the runtimeprobe gauntlet on windows-latest) the surface covers console programs (stdout/stderr, args, environment, exit codes), process identity, entropy, timers, the file I/O family (open/read/write/ stat, directory listing, working. Unix sockets ride afunix.sys), and signals (SIGSEGV recover via VEH, os/signal delivery, async preemption, kill/wait-status decode, console Ctrl-C -> SIGINT). sendmsg/recvmsg with SCM_RIGHTS fd passing works on Windows (wave 3) and macOS (2026-07-21, the darwin msghdr translation). SIGPROF CPU profiling works on Windows, Linux, and macOS (2026-07-21, dlsym can Apple setitimer) - the wave-9 darwin backlog is closed. Still missing on Windows: Windows/arm64 and a few documented fd edges. See `DEBUGGING.md` for the detailed ladder. Debug with the sidecars (`gdb program.com.dbg`, or `symbol-file` against the running APE). Runtime tracebacks and pprof need no sidecar. When distributing APEs, ship them zstd-compressed: the two arch payloads are highly redundant, so e.g. a stdlib-heavy 12.3 MB webserver APE is ~3.6 MB.
+The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows the same cosmo amd64 image boots through the APE's PE header, so there is no second build inside it. What each host supports today, and what it does not: `docs/PLATFORM-STATUS.md`.
+
+Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
+
+Ship release APEs zstd-compressed. The two architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
 
 ## Installing a Prebuilt Toolchain
 

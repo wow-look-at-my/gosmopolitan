@@ -13,15 +13,10 @@ package runtime
 // a per-M pthread_mutex/pthread_cond pair (resolved from Apple libc via
 // dlsym) guarding a count.
 //
-// XNU parking used to be Syslib dispatch semaphores. That primitive
-// nondeterministically LOST wakeups under load: the wave-6..8 macOS CI
-// wedge, where an M slept through the dispatch_semaphore_signal for a
-// runtime lock that was provably released every 100ms (DEBUGGING.md
-// 2026-07-02, wave 8, has the full forensic chain: poll-level loss,
-// wake-decision logic and wait-side-stuck theories were each eliminated
-// on CI evidence, leaving the semaphore's signal side / M identity).
-// Upstream darwin pointedly parks Ms on pthread primitives, not
-// dispatch semaphores; this file is that design.
+// A Syslib dispatch semaphore loses wakeups under load: an M sleeps
+// through the dispatch_semaphore_signal for a lock that is provably
+// released. Upstream darwin pointedly parks Ms on pthread primitives
+// rather than dispatch semaphores, and this file is that design.
 //
 // The pthread calls go through asmcgocall (via the trampolines in
 // sys_cosmo_arm64.s), which switches to the g0 stack first: unlike the

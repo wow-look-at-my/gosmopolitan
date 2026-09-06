@@ -634,7 +634,7 @@ func ntFutexsleep(addr *uint32, val uint32, ns int64) {
 }
 
 // ntFutexwakeup implements futexwakeup. Every futexwakeup caller
-// passes cnt==1 (exhaustive grep, see DEBUGGING.md wave-1 design), so
+// passes cnt==1, so
 // WakeByAddressSingle suffices; WakeByAddress* returns void, nothing
 // to check.
 //

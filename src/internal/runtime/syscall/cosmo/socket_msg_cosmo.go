@@ -176,8 +176,7 @@ func XlatMsgFlags(aflags int32) int32 {
 // CmsgToApple repacks a Linux-shaped control buffer at (src, srcLen)
 // into an Apple-shaped one at (dst, dstCap), returning the Apple
 // controllen and 0, or 0 and a Linux errno. Policy mirrors what
-// Linux's af_unix send path does with each record (verified against a
-// live kernel for the NT emulation, DEBUGGING.md wave 3 item 2b):
+// Linux's af_unix send path does with each record:
 //
 //   - SOL_SOCKET/SCM_RIGHTS: translated (level 1 -> 0xffff), the fd
 //     payload copied unchanged.
@@ -252,8 +251,7 @@ func CmsgToApple(src, srcLen, dst, dstCap uintptr) (dlen, errno uintptr) {
 // everything else is dropped - no other record type can arrive, since
 // the sockopt layer cannot enable timestamping and friends on macOS
 // hosts (darwinSockoptXlat refuses the options). Truncation semantics
-// mirror the Linux kernel's, pinned live for the NT emulation
-// (DEBUGGING.md wave 3 item 2b): SCM_RIGHTS truncates at fd
+// mirror the Linux kernel's: SCM_RIGHTS truncates at fd
 // granularity - (avail-hdr)/4 fds delivered, so CMSG_SPACE alignment
 // slack still carries whole fds ("a 24-byte buffer receives TWO fds") -
 // with every undelivered fd CLOSED (never leaked into the process) and

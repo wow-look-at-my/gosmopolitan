@@ -543,7 +543,7 @@ jobs:
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/wasmthreads-smoke.wasm .)
           node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
-          # pool_demo gate: see DEBUGGING.md, pool_demo silent-fatal.
+          # pool_demo gate: a silent fatal there must fail the leg.
           set -o pipefail
           node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm 2>&1 | tee /tmp/pooldemo.out
           grep -q "POOLDEMO: PASS" /tmp/pooldemo.out

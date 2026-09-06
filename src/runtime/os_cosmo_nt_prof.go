@@ -33,8 +33,7 @@
 // 10ms; serializing them against preemption's suspensions costs
 // nothing measurable.
 //
-// Deadlock discipline (audited; recorded in DEBUGGING.md wave-3
-// item 3):
+// Deadlock discipline:
 //   - Lock order matches ntPreemptM exactly: mp.threadLock is taken
 //     and RELEASED before ntSuspendLock; nothing is ever suspended
 //     while this M holds any threadLock, and no threadLock is taken

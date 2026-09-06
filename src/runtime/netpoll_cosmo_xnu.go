@@ -27,10 +27,8 @@ package runtime
 // It replaces a port of netpoll_aix.go: level-triggered poll(2) over a
 // mutex-protected pollfd array with a self-pipe, where one M polled
 // while HOLDING xnuMtxset and mutators booted it out through the pipe.
-// That design wedged nondeterministically on macOS CI from wave 6
-// through wave 9 (~20-30% of probe runs on bad days) and the wave-9
-// counter forensics (DEBUGGING.md 2026-07-02) localized the wedge to
-// the poller M itself freezing between a SUCCESSFUL poll(2) return
+// That design wedged nondeterministically on macOS, in the poller M
+// itself, between a SUCCESSFUL poll(2) return
 // (n=1, the wakeup byte visible) and its release of xnuMtxset - inside
 // the pipe-drain/scan tail, while M parking demonstrably kept working
 // (semawake counters advancing throughout). Holding a runtime mutex

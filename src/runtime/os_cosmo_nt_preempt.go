@@ -51,7 +51,7 @@
 // windows mapping (BREAK -> SIGINT, CLOSE -> SIGTERM) for unix
 // parity: Ctrl-Break is the SIGQUIT chord - on a wedged process an
 // unwatched SIGQUIT produces the goroutine dump - and closing the
-// console window is a hangup (DEBUGGING.md wave 3 item 4). A
+// console window is a hangup. A
 // dedicated relay M - created via newm at boot, parked in
 // WaitForSingleObject on its g0 - picks the event up and feeds
 // ntKillSelf(sig), which consults ntSigActs and either drops

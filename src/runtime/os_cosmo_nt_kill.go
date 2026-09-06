@@ -82,7 +82,7 @@ func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 //   - any other sig -> TerminateProcess(leader, encoded status): no
 //     NT API delivers arbitrary signals group-wide, so group-kill
 //     degrades to leader-kill - the leader is the group's one member
-//     we know of (documented in DEBUGGING.md wave 3 item 4). Same
+//     we know of. Same
 //     best-effort result discipline as the positive arm (a dead
 //     leader is the Linux kill-a-zombie success).
 //

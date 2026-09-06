@@ -37,7 +37,7 @@ type DarwinFns struct {
 	Fcntl   uintptr
 	// Dup backs SYS_DUP for internal/poll's dupCloseOnExecOld -
 	// net.FileConn's fallback when the F_DUPFD_CLOEXEC fcntl path
-	// errors (see the wave-3 item-1 CI followup in DEBUGGING.md).
+	// errors.
 	Dup        uintptr
 	Mkdirat    uintptr
 	Unlinkat   uintptr
