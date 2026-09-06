@@ -34,7 +34,7 @@ func mkzversion(dir, file string) {
 //	const defaultGO386 = <go386>
 //	...
 //	const defaultGOOS = `cosmo`
-//	const defaultGOARCH = runtime.GOARCH
+//	var defaultGOARCH = runtime.GOARCH
 //
 // The defaultGOOS is set to "cosmo" (cosmopolitan) to produce portable
 // APE (Actually Portable Executable) binaries by default. The use of
@@ -60,7 +60,9 @@ func mkbuildcfg(file string) {
 	fmt.Fprintf(&buf, "const defaultGO_LDSO = `%s`\n", defaultldso)
 	fmt.Fprintf(&buf, "const version = `%s`\n", findgoversion())
 	fmt.Fprintf(&buf, "const defaultGOOS = `cosmo`\n")
-	fmt.Fprintf(&buf, "const defaultGOARCH = runtime.GOARCH\n")
+	// A var, not a const: runtime.GOARCH is a variable on cosmo, where
+	// one APE runs on more than one machine.
+	fmt.Fprintf(&buf, "var defaultGOARCH = runtime.GOARCH\n")
 	fmt.Fprintf(&buf, "const DefaultGOFIPS140 = `%s`\n", gofips140)
 	fmt.Fprintf(&buf, "const DefaultCGO_ENABLED = %s\n", quote(os.Getenv("CGO_ENABLED")))
 

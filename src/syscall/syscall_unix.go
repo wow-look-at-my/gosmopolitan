@@ -10,11 +10,11 @@ import (
 	errorspkg "errors"
 	"internal/asan"
 	"internal/bytealg"
+	"internal/goos"
 	"internal/msan"
 	"internal/oserror"
 	"internal/race"
 	"internal/strconv"
-	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -25,9 +25,12 @@ var (
 	Stderr = 2
 )
 
+// goos.IsX rather than runtime.GOOS: these size the ABI this package was
+// COMPILED for, which stays constant, while runtime.GOOS names the host
+// and on cosmo is not known until boot.
 const (
-	darwin64Bit = (runtime.GOOS == "darwin" || runtime.GOOS == "ios") && sizeofPtr == 8
-	netbsd32Bit = runtime.GOOS == "netbsd" && sizeofPtr == 4
+	darwin64Bit = (goos.IsDarwin == 1 || goos.IsIos == 1) && sizeofPtr == 8
+	netbsd32Bit = goos.IsNetbsd == 1 && sizeofPtr == 4
 )
 
 // clen returns the index of the first NULL byte in n or len(n) if n contains no NULL byte.

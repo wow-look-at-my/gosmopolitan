@@ -1053,7 +1053,7 @@ func switchToCrashStack(fn func()) {
 // Disable crash stack on Windows for now. Apparently, throwing an exception
 // on a non-system-allocated crash stack causes EXCEPTION_STACK_OVERFLOW and
 // hangs the process (see issue 63938).
-const crashStackImplemented = GOOS != "windows"
+const crashStackImplemented = goos.IsWindows == 0
 
 //go:noescape
 func switchToCrashStack0(fn func()) // in assembly
@@ -1521,7 +1521,7 @@ func (mp *m) hasCgoOnStack() bool {
 const (
 	// osHasLowResTimer indicates that the platform's internal timer system has a low resolution,
 	// typically on the order of 1 ms or more.
-	osHasLowResTimer = GOOS == "windows" || GOOS == "openbsd" || GOOS == "netbsd"
+	osHasLowResTimer = goos.IsWindows == 1 || goos.IsOpenbsd == 1 || goos.IsNetbsd == 1
 
 	// osHasLowResClockInt is osHasLowResClock but in integer form, so it can be used to create
 	// constants conditionally.
@@ -7286,7 +7286,7 @@ var forcegcperiod int64 = 2 * 60 * 1e9
 // haveSysmon indicates whether there is sysmon thread support.
 //
 // No threads on wasm yet, so no sysmon.
-const haveSysmon = GOARCH != "wasm"
+const haveSysmon = goarch.IsWasm == 0
 
 // Always runs without a P, so write barriers are not allowed.
 //

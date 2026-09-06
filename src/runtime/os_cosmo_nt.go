@@ -85,6 +85,10 @@ var (
 	// uname's two sources (ntEmuUname). Both optional.
 	ntRtlGetVersionFn    uintptr
 	ntGetComputerNameWFn uintptr
+	// The host machine, for GOARCH (hostarch_cosmo.go). Optional: a zero
+	// keeps the payload's own architecture, which is right on every host
+	// that runs the payload natively.
+	ntIsWow64Process2Fn uintptr
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). All optional.
 	ntGetVolumePathNameWFn    uintptr
 	ntGetDiskFreeSpaceWFn     uintptr
@@ -197,6 +201,7 @@ var (
 	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
 	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
+	ntNameIsWow64Process2   = []byte("IsWow64Process2\x00")
 	ntNameGetVolumePathW    = []byte("GetVolumePathNameW\x00")
 	ntNameGetDiskFreeSpaceW = []byte("GetDiskFreeSpaceW\x00")
 	ntNameGetDiskFreeSpcExW = []byte("GetDiskFreeSpaceExW\x00")
@@ -559,6 +564,9 @@ func ntResolve() {
 	// flock(2) (ntEmuFlock). Same stance as the four above.
 	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
 	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
+	// The host machine, for GOARCH. Absent before Win10 1511, where a
+	// zero leaves the payload's own architecture standing.
+	ntIsWow64Process2Fn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameIsWow64Process2[0])), 0, 0, 0, 0)
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). Same stance again.
 	ntGetVolumePathNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetVolumePathW[0])), 0, 0, 0, 0)
 	ntGetDiskFreeSpaceWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetDiskFreeSpaceW[0])), 0, 0, 0, 0)

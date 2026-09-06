@@ -361,7 +361,12 @@ func sysauxv(auxv []uintptr) (pairs int) {
 }
 
 func osinit() {
+	// Before anything else: GOOS names the host on this port, and the
+	// entry stub has already recorded which one that is.
+	setGOOS()
 	osArchInit()
+	// After osArchInit: the NT probe needs the resolved import table.
+	setGOARCH()
 	// A macOS host's AT_HWCAP needs fixing up before internal/cpu reads
 	// it in cpuinit. This runs here rather than in sysargs because it
 	// asks the host, and the host is only safe to ask once osArchInit
@@ -618,7 +623,7 @@ func rt_sigaction(sig uintptr, new, old *sigactiont, size uintptr) int32
 
 //go:nosplit
 func fixSigactionForCgo(new *sigactiont) {
-	if GOARCH == "386" && new != nil {
+	if goarch.Is386 == 1 && new != nil {
 		new.sa_flags &^= _SA_RESTORER
 		new.sa_restorer = 0
 	}
@@ -781,7 +786,7 @@ func runPerThreadSyscall() {
 
 	args := perThreadSyscall
 	r1, r2, errno := cosmo.Syscall6(args.trap, args.a1, args.a2, args.a3, args.a4, args.a5, args.a6)
-	if GOARCH == "ppc64" || GOARCH == "ppc64le" {
+	if goarch.IsPpc64 == 1 || goarch.IsPpc64le == 1 {
 		r2 = 0
 	}
 	if errno != 0 || r1 != args.r1 || r2 != args.r2 {
@@ -888,7 +893,7 @@ func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 
 // Go-allocated stacks. (The NT CreateThread path also pivots onto the
 // Go-allocated g0 stack, so it keeps the Linux bookkeeping.)
 func cosmoStacksAreSystemAllocated() bool {
-	return GOARCH == "arm64" && isdarwin()
+	return goarch.IsArm64 == 1 && isdarwin()
 }
 
 // cosmoHostIsWindows reports whether the cosmo binary is running on a

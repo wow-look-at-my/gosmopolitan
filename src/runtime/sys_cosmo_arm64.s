@@ -640,6 +640,17 @@ setitimerLinux_darwin:
 	MOVD	R0, (R0)
 	RET
 
+// runtime·sigreturn__sigaction is the sa_restorer trampoline the x86
+// rt_sigaction ABI requires. arm64 has no sa_restorer, so setsig never
+// takes its address here - but os_cosmo.go declares the function for
+// both arches, and a declaration with no definition is a hole the
+// linker only notices once something references it. It crashes rather
+// than returning, because reaching it means the caller found that hole.
+TEXT runtime·sigreturn__sigaction(SB),NOSPLIT,$0
+	MOVD	$0xfa, R0
+	MOVD	R0, (R0)
+	RET
+
 TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	CHECK_DARWIN(mincore_darwin)
 	// Linux path
