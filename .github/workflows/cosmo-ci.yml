@@ -39,7 +39,7 @@ jobs:
       - name: Build Go toolchain
         # Observed max 3m14s (windows make.bat); unix ~2m30s.
         timeout-minutes: 8
-        uses: wow-look-at-my-code/actions/multicmd@master
+        uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
           windows: cd src && .\make.bat -v
@@ -169,7 +169,7 @@ jobs:
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
         timeout-minutes: 90
-        uses: wow-look-at-my-code/actions/multicmd@master
+        uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./run.bash
           windows: cd src && .\run.bat
@@ -217,7 +217,7 @@ jobs:
 
       # No-op on windows: multicmd runs nothing there, and the exec bit means nothing on NTFS.
       - name: Make binaries executable
-        uses: wow-look-at-my-code/actions/multicmd@master
+        uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: chmod +x binaries/ape-binary-*/fizzbuzz*.com binaries/ape-binary-*/runtimeprobe*.com
 
@@ -650,7 +650,7 @@ jobs:
       - name: Build distribution archive
         # Writes the official-style go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack, on every platform -- see docs/CI.md "publish jobs".
         timeout-minutes: 15
-        uses: wow-look-at-my-code/actions/multicmd@master
+        uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -distpack
           windows: cd src && .\make.bat -distpack
