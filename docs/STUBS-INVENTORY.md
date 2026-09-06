@@ -1,36 +1,76 @@
 # Cosmo syscall-emulation stub inventory
 
-This document catalogs stubbed-out or broken functionality in the cosmo syscall emulation and runtime. Each item lists the file, line, and the observed behavior. The goal is a complete, honest accounting of what "works" only by pretending to, what fails loudly, and what is structurally broken — so follow-up work can be triaged.
+This document catalogs stubbed-out or broken functionality in the cosmo
+syscall emulation and runtime. Each item lists the file, line, and the
+observed behavior. The goal is a complete, honest accounting of what
+"works" only by pretending to, what fails loudly, and what is
+structurally broken — so follow-up work can be triaged.
 
-The finding this document was opened on: **the darwin (macOS) syscall emulation is incomplete, and the amd64 darwin path is largely stubbed and structurally broken.** `Seek`/`ReadAt` were one instance of a broader pattern, not an isolated bug.
+The finding this document was opened on: **the darwin (macOS) syscall
+emulation is incomplete, and the amd64 darwin path is largely stubbed
+and structurally broken.** `Seek`/`ReadAt` were one instance of a
+broader pattern, not an isolated bug.
 
-The arm64 half of that is now closed — Section 6 lists what the metadata wave implemented and the few calls Apple genuinely cannot serve. The amd64 half stands as written. The same wave closed the NT metadata syscalls Win32 can serve (Section 5a).
+The arm64 half of that is now closed — Section 6 lists what the metadata
+wave implemented and the few calls Apple genuinely cannot serve. The
+amd64 half stands as written. The same wave closed the NT metadata
+syscalls Win32 can serve (Section 5a).
 
-The same wave also closed the macOS-Intel SYSCALL TABLE (Section 6b) and fixed the error-detection bug underneath it (Section 4.1b).
+The same wave also closed the macOS-Intel SYSCALL TABLE (Section 6b) and
+fixed the error-detection bug underneath it (Section 4.1b).
 
-**Scope note.** "Missing syscall" here means a call the host CAN serve that the emulation did not. What remains after this wave is not that:
+**Scope note.** "Missing syscall" here means a call the host CAN serve
+that the emulation did not. What remains after this wave is not that:
 
-- **macOS-Intel** is closed by that definition. The table, the errno convention and numbering, the netpoller, the CPU count, parking, nanosleep, thread creation and signal installation all landed (Sections 2, 3, 4 and 6b), and so did signal DELIVERY: `sigctxt` reads the XNU `user_ucontext64`/`x86_thread_state64`/`user64_siginfo` layouts on darwin hosts, the trampoline translates the Apple signal number and passes the sigreturn token back, `sigaltstack` translates Apple's `stack_t`, `raise`/`kill`/`tgkill` send Apple numbers, and `tgkill` is `__pthread_kill` on the thread's mach port. Nothing there is verified: there is no Intel-mac CI runner, so all of it was read and reasoned about and never executed.
-- **Windows/arm64** (Section 4.3) is a port, not a syscall table: every `nt*` stub is a Win32 call the amd64 side already makes in Go. Also no runner, and no APE boot path to reach it through.
+- **macOS-Intel** is closed by that definition. The table, the errno
+  convention and numbering, the netpoller, the CPU count, parking,
+  nanosleep, thread creation and signal installation all landed
+  (Sections 2, 3, 4 and 6b), and so did signal DELIVERY: `sigctxt`
+  reads the XNU `user_ucontext64`/`x86_thread_state64`/`user64_siginfo`
+  layouts on darwin hosts, the trampoline translates the Apple signal
+  number and passes the sigreturn token back, `sigaltstack` translates
+  Apple's `stack_t`, `raise`/`kill`/`tgkill` send Apple numbers, and
+  `tgkill` is `__pthread_kill` on the thread's mach port. Nothing there
+  is verified: there is no Intel-mac CI runner, so all of it was read
+  and reasoned about and never executed.
+- **Windows/arm64** (Section 4.3) is a port, not a syscall table: every
+  `nt*` stub is a Win32 call the amd64 side already makes in Go. Also no
+  runner, and no APE boot path to reach it through.
 
-Both remain Section 8 items. The difference from the work above is that neither can be *proven* here.
+Both remain Section 8 items. The difference from the work above is that
+neither can be *proven* here.
 
 ---
 
 ## 1. The Seek/ReadAt gap (FIXED on this branch)
 
-**Before this branch:** on macOS (both arm64 and amd64), `os.File.Seek` and `os.File.ReadAt` returned `ENOSYS` ("function not implemented"). Linux and Windows already dispatched `pread`/`lseek` natively, so the gap was macOS-only — but it was real and user-visible.
+**Before this branch:** on macOS (both arm64 and amd64), `os.File.Seek`
+and `os.File.ReadAt` returned `ENOSYS` ("function not implemented").
+Linux and Windows already dispatched `pread`/`lseek` natively, so the
+gap was macOS-only — but it was real and user-visible.
 
-- arm64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the `syscall6SlowDarwin` switch in `src/internal/runtime/syscall/cosmo/syscall_cosmo_arm64.go`, so they fell through to the `darwinENOSYS` default.
-- amd64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the darwin dispatch in `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s`, so they fell through to `darwin_enosys`.
+- arm64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the
+  `syscall6SlowDarwin` switch in
+  `src/internal/runtime/syscall/cosmo/syscall_cosmo_arm64.go`, so they
+  fell through to the `darwinENOSYS` default.
+- amd64: `SYS_PREAD64`/`SYS_PWRITE64`/`SYS_LSEEK` were absent from the
+  darwin dispatch in `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s`,
+  so they fell through to `darwin_enosys`.
 
-**Fix (this branch):** added `Pread`/`Pwrite`/`Lseek` to `DarwinFns` (dlsym-resolved via the Syslib), handled the three syscalls in the arm64 slow path, and added the three XNU dispatch entries to the amd64 asm. Verified on macOS arm64: all three `Seek` whence values and `ReadAt` (mid-file, past-EOF, at-EOF) return correct results, 5/5 runs. A regression check (`seekreadat`) is wired into `testdata/runtimeprobe`, which the CI matrix runs on Linux, macOS, and Windows.
+**Fix (this branch):** added `Pread`/`Pwrite`/`Lseek` to `DarwinFns`
+(dlsym-resolved via the Syslib), handled the three syscalls in the arm64
+slow path, and added the three XNU dispatch entries to the amd64 asm.
+Verified on macOS arm64: all three `Seek` whence values and `ReadAt`
+(mid-file, past-EOF, at-EOF) return correct results, 5/5 runs. A
+regression check (`seekreadat`) is wired into `testdata/runtimeprobe`,
+which the CI matrix runs on Linux, macOS, and Windows.
 
 ---
 
 ## 2. Silent "return success" stubs (most dangerous)
 
-These pretend to succeed while doing nothing. A caller cannot tell the operation was skipped. These are the worst kind of stub.
+These pretend to succeed while doing nothing. A caller cannot tell the
+operation was skipped. These are the worst kind of stub.
 
 | # | Location | Behavior |
 |---|----------|----------|
@@ -46,7 +86,8 @@ These pretend to succeed while doing nothing. A caller cannot tell the operation
 
 ## 3. ENOSYS stubs (visible failure, functionality missing)
 
-These fail loudly with `ENOSYS`, so they are honest — but the functionality is missing.
+These fail loudly with `ENOSYS`, so they are honest — but the
+functionality is missing.
 
 | # | Location | Behavior |
 |---|----------|----------|
@@ -77,7 +118,9 @@ These fail loudly with `ENOSYS`, so they are honest — but the functionality is
 
 ## 5a. NT metadata syscalls (partly CLOSED — metadata wave, 2026-09-02)
 
-The NT emulation already served fsync, ftruncate, fchmod, chdir and getcwd. The metadata wave added the four Win32 can serve and programs actually reach (`src/runtime/os_cosmo_nt_meta.go`):
+The NT emulation already served fsync, ftruncate, fchmod, chdir and
+getcwd. The metadata wave added the four Win32 can serve and programs
+actually reach (`src/runtime/os_cosmo_nt_meta.go`):
 
 | syscall | Win32 | notes |
 |---|---|---|
@@ -86,11 +129,22 @@ The NT emulation already served fsync, ftruncate, fchmod, chdir and getcwd. The 
 | `fchdir` | `GetFinalPathNameByHandleW` + `SetCurrentDirectoryW` | NT has no handle-relative chdir. The `\\?\` prefix is trimmed for the drive form, because SetCurrentDirectoryW rejects it. |
 | `linkat` | `CreateHardLinkW` | Argument order is reversed against linkat. |
 
-These four are resolved from kernel32 OPTIONALLY: a zero pointer answers ENOSYS at the use site rather than poking a crash address at boot over a call most programs never make.
+These four are resolved from kernel32 OPTIONALLY: a zero pointer answers
+ENOSYS at the use site rather than poking a crash address at boot over a
+call most programs never make.
 
-**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose them either: `statfs`/`fstatfs`, `uname`, `prlimit64`, `getpriority`/`setpriority`, `getgroups`/ `setgroups`, the uid/gid setters, `chroot`, `sendfile`, `mknodat`, and `symlinkat` (this port resolves no symlinks at all — `readlinkat` answers only `/proc/self/exe`). `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change; see the reasoning in `ntEmuFchmod`.
+**Still ENOSYS on NT**, because Windows has no counterpart and upstream's
+own windows port does not expose them either: `statfs`/`fstatfs`,
+`uname`, `prlimit64`, `getpriority`/`setpriority`, `getgroups`/
+`setgroups`, the uid/gid setters, `chroot`, `sendfile`, `mknodat`, and
+`symlinkat` (this port resolves no symlinks at all — `readlinkat`
+answers only `/proc/self/exe`). `fchmod`/`fchmodat` remain a documented
+no-op after an existence check, and `fchown`/`fchownat` have no unix
+ownership to change; see the reasoning in `ntEmuFchmod`.
 
-The runtimeprobe split follows exactly this line: `fsmeta` is a hard assertion on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on a Windows host.
+The runtimeprobe split follows exactly this line: `fsmeta` is a hard
+assertion on all three hosts, `fsmetaunix` and `sysinfo` report rather
+than fail on a Windows host.
 
 ## 5. NT gaps (Windows host)
 
@@ -105,9 +159,21 @@ The runtimeprobe split follows exactly this line: `fsmeta` is a hard assertion o
 
 ## 6. macOS arm64: the syscall gap (CLOSED — metadata wave, 2026-09-02)
 
-The arm64 slow path (`syscall6SlowDarwin`) handles a fixed set of syscalls. Everything else returns `darwinENOSYS`. That set used to stop at the file-I/O, socket and process syscalls the apetest path reaches, so every metadata and system-information call fell through — `Fsync`, `Ftruncate`, `Truncate`, `Fchmod`, `Fchown`, `Fchdir`, `Statfs`, `Fstatfs`, `Uname`, `Getrlimit`, `Getpriority`, `Setpriority`, `Getpgid`, `Setuid`, `Setgid`, `Setreuid`, `Setregid`, `Chroot`, `Sendfile`, `getgroups`, `setgroups`, `fchmodat`, `fchownat`, `linkat`, `symlinkat`, `utimensat` (and with it `utimes`, `futimesat` and `os.Chtimes`), `Mknodat`, and `prlimit`.
+The arm64 slow path (`syscall6SlowDarwin`) handles a fixed set of
+syscalls; everything else returns `darwinENOSYS`. That set used to stop
+at the file-I/O, socket and process syscalls the apetest path reaches,
+so every metadata and system-information call fell through — `Fsync`,
+`Ftruncate`, `Truncate`, `Fchmod`, `Fchown`, `Fchdir`, `Statfs`,
+`Fstatfs`, `Uname`, `Getrlimit`, `Getpriority`, `Setpriority`,
+`Getpgid`, `Setuid`, `Setgid`, `Setreuid`, `Setregid`, `Chroot`,
+`Sendfile`, `getgroups`, `setgroups`, `fchmodat`, `fchownat`, `linkat`,
+`symlinkat`, `utimensat` (and with it `utimes`, `futimesat` and
+`os.Chtimes`), `Mknodat`, and `prlimit`.
 
-All of them are emulated now, in `internal/runtime/syscall/cosmo/{file,proc,darwinabi}_cosmo*.go`. Most are fixed-arity Apple libc entries whose arguments and constants already agree, so they pass straight through `darwinCall`. The ones that do not:
+All of them are emulated now, in
+`internal/runtime/syscall/cosmo/{file,proc,darwinabi}_cosmo*.go`. Most
+are fixed-arity Apple libc entries whose arguments and constants already
+agree, so they pass straight through `darwinCall`. The ones that do not:
 
 | syscall | why it needed more than a forward |
 |---|---|
@@ -119,37 +185,121 @@ All of them are emulated now, in `internal/runtime/syscall/cosmo/{file,proc,darw
 | `mknodat` | Apple has no directory-relative form. Served for `AT_FDCWD` (what `Mknod`/`Mkfifo` pass) over `mknod`; any other dirfd is ENOSYS rather than a path silently resolved against the wrong directory. |
 | `statfs`, `fstatfs`, `uname` | Apple's structs are 2168 and 1280 bytes, far past the nosplit budget the dispatch spine runs under. The Apple-layout buffer is allocated in package `syscall` (`bigbuf_cosmo*.go`) and converted there; the emulation refuses a buffer smaller than the Apple struct, so a caller that reached `SYS_STATFS` with a Linux `Statfs_t` gets EINVAL instead of a two-kilobyte overrun. |
 
-Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's own filesystem-type number (the choice `Stat_t.Dev` already makes for device numbers) and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
+Two Linux `Statfs_t` fields have no Apple source. `Type` carries Apple's
+own filesystem-type number (the choice `Stat_t.Dev` already makes for
+device numbers) and `Namelen` stays zero rather than carrying a guess.
+`Utsname.Domainname` stays empty for the same reason.
 
-**Still ENOSYS on macOS, because Apple has no counterpart:** `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid`, and `mknodat` with a directory descriptor. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags, and one APE answering the same call differently per host is worse than answering it consistently.
+**Still ENOSYS on macOS, because Apple has no counterpart:**
+`Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid`, and `mknodat` with a
+directory descriptor. `Fchmodat` reports `EOPNOTSUPP` for
+`AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags,
+and one APE answering the same call differently per host is worse than
+answering it consistently.
 
-**Coverage.** The pure translation tables are unit-tested where cosmo tests run (`darwinabi_cosmo_test.go`, `bigbuf_cosmo_test.go`, both on the ubuntu CI leg). The syscalls themselves are exercised end to end by `testdata/runtimeprobe`'s `fsmeta`, `sysinfo` and `sendfile` checks, which the apetest suite runs on all three CI runners — the macOS runner is what proves the dlsym wiring. Those checks report rather than fail on a Windows host, following `checkDupFile`: the NT emulation has not brought this surface up, and the log records what it answered.
+**Coverage.** The pure translation tables are unit-tested where cosmo
+tests run (`darwinabi_cosmo_test.go`, `bigbuf_cosmo_test.go`, both on
+the ubuntu CI leg). The syscalls themselves are exercised end to end by
+`testdata/runtimeprobe`'s `fsmeta`, `sysinfo` and `sendfile` checks,
+which the apetest suite runs on all three CI runners — the macOS runner
+is what proves the dlsym wiring. Those checks report rather than fail on
+a Windows host, following `checkDupFile`: the NT emulation has not
+brought this surface up, and the log records what it answered.
 
 ---
 
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 
-The amd64 darwin dispatch carried 18 syscalls and answered everything else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod, fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid, setreuid, setregid, getpgid, and statfs/fstatfs (the last two through XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path applies, so a Linux-layout buffer is refused rather than overrun). `getpriority` applies the Linux `20-nice` bias, which the carry-flag convention makes unambiguous — the value alone cannot say whether the call failed.
+The amd64 darwin dispatch carried 18 syscalls and answered everything
+else ENOSYS. It now also serves fsync, truncate, ftruncate, fchmod,
+fchown, fchdir, chroot, get/setgroups, get/setpriority, setuid, setgid,
+setreuid, setregid, getpgid, and statfs/fstatfs (the last two through
+XNU's statfs64/fstatfs64, with the same buffer-size guard the arm64 path
+applies, so a Linux-layout buffer is refused rather than overrun).
+`getpriority` applies the Linux `20-nice` bias, which the carry-flag
+convention makes unambiguous — the value alone cannot say whether the
+call failed.
 
-Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax` (`sys_cosmo_amd64.s`) is the amd64 twin of arm64's `cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`, and a linkname push makes it reachable from this package's assembly — the same mechanism arm64 already used. An earlier note here claimed that could not be done. It was reasoning about the DATA table rather than the function that wraps it.
+Failures now report LINUX errno numbers. `runtime·cosmo_xlat_errno_ax`
+(`sys_cosmo_amd64.s`) is the amd64 twin of arm64's
+`cosmo_xlat_errno_r0`, over the one shared table in `sys_cosmo_errno.s`,
+and a linkname push makes it reachable from this package's assembly —
+the same mechanism arm64 already used. An earlier note here claimed that
+could not be done; it was reasoning about the DATA table rather than the
+function that wraps it.
 
-**Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the tree's own authority, not from memory. That mattered: statfs64 is 345, not the 338 recall suggested. Anything that file does not carry is deliberately absent rather than guessed — a wrong syscall number does not fail, it calls a DIFFERENT syscall. That is why the *at family (`linkat`, `symlinkat`, `fchmodat`, `fchownat`) and `utimensat` stay ENOSYS on amd64 while arm64 serves them: arm64 resolves by NAME through dlsym and never needs a number. `uname` stays ENOSYS for a different reason — XNU has no uname syscall at all. It is a libc function over sysctl. `sendfile` stays ENOSYS because Apple's argument order, its value-result count pointer and its untouched file offset need real control flow, which the arm64 Go slow path has and an assembly dispatch does not.
+**Every BSD number came from `syscall/zsysnum_darwin_amd64.go`**, the
+tree's own authority, not from memory. That mattered: statfs64 is 345,
+not the 338 recall suggested. Anything that file does not carry is
+deliberately absent rather than guessed — a wrong syscall number does
+not fail, it calls a DIFFERENT syscall. That is why the *at family
+(`linkat`, `symlinkat`, `fchmodat`, `fchownat`) and `utimensat` stay
+ENOSYS on amd64 while arm64 serves them: arm64 resolves by NAME through
+dlsym and never needs a number. `uname` stays ENOSYS for a different
+reason — XNU has no uname syscall at all; it is a libc function over
+sysctl. `sendfile` stays ENOSYS because Apple's argument order, its
+value-result count pointer and its untouched file offset need real
+control flow, which the arm64 Go slow path has and an assembly dispatch
+does not.
 
-This closes the syscall TABLE. It does not bring up macOS-Intel: see Section 4.1.
+This closes the syscall TABLE. It does not bring up macOS-Intel: see
+Section 4.1.
 
 ## 7. What this means
 
-- The macOS arm64 syscall surface is complete for everything the `syscall` package exposes and Apple can serve (Section 6). What remains there is the handful Apple genuinely lacks.
-- The "return success" stubs (Section 2) are still the highest-risk items: they hide failures.
-- The macOS-Intel (amd64) SYSCALL surface is closed: the table, the error convention, the errno numbering, the netpoller, the CPU count, parking, thread creation, TLS and nanosleep. So are signals in the runtime: `darwinSigaction` issues a real `__sigaction` with its own trampoline (Section 2.3), and `darwinSigprocmask` bridges the sigset width (Section 2.6). The `syscall` package's own `rt_sigaction` emulation installs handlers for real too (Section 2.2). None of it is verified, because there is no Intel-mac runner — read and reasoned about, never executed.
-- Windows/arm64 (Section 4.3) has its Win32 layer now — trampolines, thread start, exception dispatch, preemption context. It is still unreachable (no APE boot path, no platform token), and its netpoller still throws, waiting on an arm64 split of the syscall emulation.
+- The macOS arm64 syscall surface is complete for everything the
+  `syscall` package exposes and Apple can serve (Section 6). What
+  remains there is the handful Apple genuinely lacks.
+- The "return success" stubs (Section 2) are still the highest-risk
+  items: they hide failures.
+- The macOS-Intel (amd64) SYSCALL surface is closed: the table, the
+  error convention, the errno numbering, the netpoller, the CPU count,
+  parking, thread creation, TLS and nanosleep. So are signals in the
+  runtime: `darwinSigaction` issues a real `__sigaction` with its own
+  trampoline (Section 2.3), and `darwinSigprocmask` bridges the sigset
+  width (Section 2.6). The `syscall` package's own `rt_sigaction`
+  emulation installs handlers for real too (Section 2.2). None of it is
+  verified, because there is no Intel-mac runner — read and reasoned
+  about, never executed.
+- Windows/arm64 (Section 4.3) has its Win32 layer now — trampolines,
+  thread start, exception dispatch, preemption context. It is still
+  unreachable (no APE boot path, no platform token), and its netpoller
+  still throws, waiting on an arm64 split of the syscall emulation.
 
 ## 8. Recommended follow-up
 
-1. ~~Implement the remaining darwin arm64 syscalls in `syscall6SlowDarwin`.~~ Done; see Section 6.
-2. ~~Replace the remaining amd64 darwin "return success" stub, `darwin_sigaction` in `internal/runtime/syscall/cosmo`.~~ Done; see Section 2.2.
-3. **The macOS-Intel syscall surface is closed.** Every item once filed under this heading is done: the metadata table (Section 6b), the error convention and errno numbering (Section 4.1b/4.1c), the netpoller (Section 3.5), the CPU count (Section 3.6), parking (Section 3.1), thread creation and TLS (Section 3.2/3.2b), and nanosleep (Section 2.1). Signals in the runtime are done as well: a real `__sigaction` with a translated struct and its own trampoline (Section 2.3), and a mask path that remaps the sigset instead of handing a kernel that reads 4 bytes the Linux 8 (Section 2.6). The `syscall` package's `rt_sigaction` emulation is done too (item 2).
+1. ~~Implement the remaining darwin arm64 syscalls in
+   `syscall6SlowDarwin`.~~ Done; see Section 6.
+2. ~~Replace the remaining amd64 darwin "return success" stub,
+   `darwin_sigaction` in `internal/runtime/syscall/cosmo`.~~ Done; see
+   Section 2.2.
+3. **The macOS-Intel syscall surface is closed.** Every item once filed
+   under this heading is done: the metadata table (Section 6b), the
+   error convention and errno numbering (Section 4.1b/4.1c), the
+   netpoller (Section 3.5), the CPU count (Section 3.6), parking
+   (Section 3.1), thread creation and TLS (Section 3.2/3.2b), and
+   nanosleep (Section 2.1). Signals in the runtime are done as well: a
+   real `__sigaction` with a translated struct and its own trampoline
+   (Section 2.3), and a mask path that remaps the sigset instead of
+   handing a kernel that reads 4 bytes the Linux 8 (Section 2.6). The
+   `syscall` package's `rt_sigaction` emulation is done too (item 2).
 
-   None of it is verified. There is no Intel-mac runner, so every line of the above has been read and reasoned about but never executed. That remains the honest blocker on the platform, and `Default()` leaves darwin/amd64 out of a default build for exactly this reason.
-4. Windows/arm64: the `ntcall` trampolines, the `CONTEXT` layout and the VEH thunks are written (Section 4.3), sourced from upstream's own windows/arm64 port. Two things are left. The netpoller needs the syscall emulation split per architecture — numbers, `struct stat` width and `O_DIRECTORY` all differ. And the boot mechanism does not exist: the linker has no way to emit an arm64 PE header, so nothing sets `__hostos` there. Until it does, none of this code can be started, let alone tested, and `iswindows` stays a constant `false` so the compiler deletes it.
-5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go` carries no cosmo build tag, so `io.Copy` from a file to a socket never reaches the syscall on any cosmo host. Only a caller that uses `syscall.Sendfile` directly does. Adding cosmo to that tag needs the NT emulation to serve sendfile too, which it does not yet.
+   None of it is verified. There is no Intel-mac runner, so every
+   line of the above has been read and reasoned about but never
+   executed. That remains the honest blocker on the platform, and
+   `Default()` leaves darwin/amd64 out of a default build for exactly
+   this reason.
+4. Windows/arm64: the `ntcall` trampolines, the `CONTEXT` layout and the
+   VEH thunks are written (Section 4.3), sourced from upstream's own
+   windows/arm64 port. Two things are left. The netpoller needs the
+   syscall emulation split per architecture — numbers, `struct stat`
+   width and `O_DIRECTORY` all differ. And the boot mechanism does not
+   exist: the linker has no way to emit an arm64 PE header, so nothing
+   sets `__hostos` there. Until it does, none of this code can be
+   started, let alone tested, and `iswindows` stays a constant `false`
+   so the compiler deletes it.
+5. Give `sendfile` an in-tree consumer. `internal/poll/sendfile_unix.go`
+   carries no cosmo build tag, so `io.Copy` from a file to a socket
+   never reaches the syscall on any cosmo host; only a caller that uses
+   `syscall.Sendfile` directly does. Adding cosmo to that tag needs the
+   NT emulation to serve sendfile too, which it does not yet.

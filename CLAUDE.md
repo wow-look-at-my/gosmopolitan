@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Do not Ask Stupid Questions
+## Don't Ask Stupid Questions
 
-When there is a specification, **follow the specification**. Never ask "should I follow the spec or do something different?" - the answer is always follow the spec. That is what specs are for. If the implementation does not match the spec, fix the implementation.
+When there's a specification, **follow the specification**. Never ask "should I follow the spec or do something different?" - the answer is always follow the spec. That's what specs are for. If the implementation doesn't match the spec, fix the implementation.
 
 ## Project Overview
 
@@ -12,12 +12,12 @@ This is a fork of the Go programming language toolchain that adds support for **
 
 ## No Rosetta Dependency
 
-**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it is proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. This fork's own output executes on Linux, macOS, and (since the cosmo-native NT bring-up, wave 1) Windows - see Building Cosmopolitan Binaries below for the per-platform status.
+**APE binaries run natively on all platforms without emulation.** This is not a goal or theory - it's proven, working technology. Real APE executables (like `vim.com` from Cosmopolitan) already run natively on x86_64 Linux, x86_64 macOS, ARM64 macOS, and Windows today without Rosetta. This fork's own output executes on Linux, macOS, and (since the cosmo-native NT bring-up, wave 1) Windows - see Building Cosmopolitan Binaries below for the per-platform status.
 
 - APE binaries contain native code for multiple architectures (AMD64 + ARM64)
 - On ARM64 macOS, APE runs native ARM64 code - NOT x86_64 via Rosetta
-- The cosmocc toolchain does not need Rosetta, neither do we
-- If something "works via Rosetta", that is not actually working - it is a bug
+- The cosmocc toolchain doesn't need Rosetta, neither do we
+- If something "works via Rosetta", that's not actually working - it's a bug
 
 When building/testing:
 - `GOARCH=amd64` produces x86_64 code only - will NOT work natively on ARM64 macOS
@@ -60,9 +60,18 @@ go test ./cmd/compile/...
 go test std
 ```
 
-To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`). Then plain `GOOS=cosmo go test <pkg>` works.
+To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`); then plain `GOOS=cosmo go test <pkg>` works.
 
-**Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called `t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial(reason)` stops every other test. It then runs the caller alone in this process. `t.Fork()` runs the caller in a child process instead, alone. It takes the child's exit status as the verdict. A test wants that when the shared state is process-global, because the child gets its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier. A test failing only under this fork's `go test` is almost always one of these. `Serial` warns, and runs the test anyway, when the reason is missing, under 48 characters, or an echo of the test's own name or file. It warns again when the reason is over 98% the same as another one in this test binary. One sentence pasted across a file is how a package stops being parallel, one call at a time. Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+**Tests are parallel by default in this fork** (`src/testing`): every test and subtest runs as if it had called
+`t.Parallel()`, which is now a no-op. Two methods opt out. `t.Serial(reason)` stops every other test and runs the
+caller alone in this process; `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit
+status as the verdict - which is what a test wants when the shared state is process-global, since the child gets
+its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite.
+A test failing only under this fork's `go test` is almost always one of these.
+`Serial` warns, and runs the test anyway, when its reason is missing, under 48 characters, an echo of the test's own
+name or file, or over 98% the same as another reason in the same test binary - a pasted sentence across a file is how
+a package stops being parallel one defensible-looking call at a time.
+Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
 
 ## Building Cosmopolitan Binaries
 
@@ -133,17 +142,59 @@ go tool link -apefat amd64.com,arm64.com -apeplatforms linux/amd64,darwin/arm64 
 go tool link -apefat amd64.com,arm64.com -o program.com -apestrip -apedbg
 ```
 
-Fat-build coverage: `go build` (with or without `-o`; a plain single-main-package build defaults its output name and fattens too) and `go install` both produce fat APEs. `go test` / `go test -c` binaries stay thin on purpose: they are host-run throwaway artifacts executed right here (via the `misc/cosmo` wrappers), and fattening would triple every test compile.
+Fat-build coverage: `go build` (with or without `-o`; a plain
+single-main-package build defaults its output name and fattens too) and
+`go install` both produce fat APEs. `go test` / `go test -c` binaries stay
+thin on purpose: they are host-run throwaway artifacts executed right here
+(via the `misc/cosmo` wrappers), and fattening would triple every test
+compile.
 
-The fat build's own mechanics - the concurrent sibling build and `GOCOSMOFATSEQ`, the strip-and-sidecar default and the sidecar names, and what each `GOCOSMODEBUG` tier trades away, with the measurements: docs/APE-BUILD.md.
+The fat build's own mechanics - the concurrent sibling build and
+`GOCOSMOFATSEQ`, the strip-and-sidecar default and the sidecar names,
+and what each `GOCOSMODEBUG` tier trades away, with the measurements:
+docs/APE-BUILD.md.
 
-Shipping APEs: distribute release binaries zstd-compressed - the two arch payloads make APE images highly redundant, so the wire cost collapses. Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png, time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and 3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only, by design: there is no runtime self-extraction mechanism. buildhost can repackage uploaded artifacts on the fly via its `fmt=` query parameter.
+Shipping APEs: distribute release binaries zstd-compressed - the two arch
+payloads make APE images highly redundant, so the wire cost collapses.
+Measured on a stdlib-heavy webserver (net/http, crypto/tls, image/png,
+time/tzdata): 17.3 MB unstripped fat, 12.3 MB stripped default, and
+3.6 MB on the wire after `zstd -19 --long=27`. Distribution-side only,
+by design: there is no runtime self-extraction mechanism. buildhost can
+repackage uploaded artifacts on the fly via its `fmt=` query parameter.
 
-The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64 image boots on x86-64 Linux (staged copy). The cosmo arm64 image boots on ARM64 Linux (installed `ape` loader, else a staged copy) and ARM64 macOS (compiled APE loader, no Rosetta). On Windows the SAME cosmo amd64 image boots natively through the APE's PE header (vim.com-style, no embedded second build - the windows/amd64 PE payload was removed 2026-07-18): the entry stub sets the runtime's NT personality live (__hostos=2) and joins the common boot, with kernel32 resolved at runtime from two loader-filled IAT slots.
+The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo
+amd64 image boots on x86-64 Linux (staged copy); the cosmo arm64
+image boots on ARM64 Linux (installed `ape` loader, else a staged copy)
+and ARM64 macOS (compiled APE loader, no Rosetta); on Windows the SAME cosmo amd64 image boots
+natively through the APE's PE header (vim.com-style, no embedded second
+build - the windows/amd64 PE payload was removed 2026-07-18): the entry
+stub sets the runtime's NT personality live (__hostos=2) and joins the
+common boot, with kernel32 resolved at runtime from two loader-filled
+IAT slots.
 
-Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete through NT bring-up wave 3 plus the 2026-09-02 metadata syscalls (chtimes/truncate/fchdir/link; still missing: file/pipe dup(2), off-host TCP coverage - DNS is resolved from iphlpapi and probed on every runner). Windows/arm64 has its Win32 layer as of 2026-09-02 - AAPCS64 ntcall trampolines, ARM64_NT_CONTEXT, VEH thunks - but no boot path (the APE has no arm64 PE header, so `iswindows` is a constant false there) and no netpoller, which waits on an arm64 split of the amd64-numbered syscall emulation; macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest. The few Apple cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of 2026-09-02 (metadata, errno convention and numbering, netpoller, CPU count, parking, nanosleep, and thread creation via bsdthread_create), and so are signals - darwinSigaction issues the raw __sigaction syscall with its own sa_tramp trampoline and darwinSigprocmask bridges the sigset width (8-byte Linux, 4-byte Apple), where the old asm branches returned success without installing anything and set a mask naming the wrong signals. There is no Intel-mac runner, so nothing there has ever executed - do not claim it works. It is deliberately absent from the default GOCOSMOPLATFORMS set for that reason.
+Per-platform runtime status - what works today on each host an APE boots on, what is still missing, and the
+forensics behind each: docs/PLATFORM-STATUS.md. In short: Linux amd64/arm64 complete; Windows amd64 complete
+through NT bring-up wave 3 plus the 2026-09-02 metadata syscalls (chtimes/truncate/fchdir/link; still missing:
+file/pipe dup(2), off-host TCP coverage - DNS is
+resolved from iphlpapi and probed on every runner). Windows/arm64 has its Win32 layer as of 2026-09-02 -
+AAPCS64 ntcall trampolines, ARM64_NT_CONTEXT, VEH thunks - but no boot path (the APE has no arm64 PE header,
+so `iswindows` is a constant false there) and no netpoller, which waits on an arm64 split of the
+amd64-numbered syscall emulation;
+macOS arm64 complete including signals, SIGPROF profiling, SCM_RIGHTS fd passing and (2026-09-02) the file
+metadata and system-information syscalls - statfs/uname/rlimit/chtimes/priority and the rest; the few Apple
+cannot serve are listed in docs/STUBS-INVENTORY.md section 6. macOS Intel's SYSCALL surface is complete as of
+2026-09-02 (metadata, errno convention and numbering, netpoller, CPU count, parking, nanosleep, and thread
+creation via bsdthread_create), and so are signals - darwinSigaction issues the raw __sigaction syscall with
+its own sa_tramp trampoline and darwinSigprocmask bridges the sigset width (8-byte Linux, 4-byte Apple),
+where the old asm branches returned success without installing anything and set a mask naming the wrong
+signals. There is no Intel-mac runner, so nothing there has ever executed - do not claim it works. It is deliberately absent from the default
+GOCOSMOPLATFORMS set for that reason.
 
-**Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64 here, so a variadic callee handed its argument in a register reads uninitialized stack memory and usually succeeds while doing something other than what was asked (this silently unset FD_CLOEXEC for a third of all descriptors). Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for fcntl, open/openat with a mode, and ioctl; never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
+**Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64
+here, so a variadic callee handed its argument in a register reads uninitialized stack memory and usually
+succeeds while doing something other than what was asked (this silently unset FD_CLOEXEC for a third of all
+descriptors). Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for fcntl, open/openat with a mode, and
+ioctl; never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
 
 ## Architecture
 
@@ -194,13 +245,70 @@ go tool compile -bench=out.txt file.go
 
 ## Fork Gotchas
 
-- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses (like `testdata/ape/apetest`) should be run with an upstream Go so the test binary itself is executable on the host.
-- **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`, writes the host's real header (ELF on Linux, Mach-O on macOS) into THAT, and execs it. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
-- **Tool build IDs are content-derived (2026-07-20).** Upstream derives release-toolchain tool IDs from the tools' `-V=full` version line; the fork stamps the same release-style version (`go1.27.0cosmo`) into every build, so any two fork builds used to share tool IDs — and hence action IDs — letting a warm build cache (a local GOCACHE, or a consumer's shared cache tier) serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs). Fork tools now print their own build ID under `-V=full` (like devel toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt toolchain automatically invalidates cached objects. The old rule "run `go clean -cache` after every make.bash" is obsolete. CI asserts the discriminator on every build platform.
-- **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses it as the initial soft limit, so a containerized binary caps its heap instead of allocating until the kernel OOM-kills it. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
-- **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers with SIGILL, which killed any binary importing `golang.org/x/sys/cpu` before `main`. The APE loader does pass a pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those registers. `fixAuxv` clears that bit in `osinit` (and builds a pair from Apple's `hw.optional` sysctls when none came), which is what `internal/cpu` reads. Never set `hwcap_CPUID`: it means "the kernel emulates those registers". Depth: DEBUGGING.md "AT_HWCAP" and "Working uname" (2026-09-03/04).
-- **`/proc/self/auxv` is served by the APE off a Linux host.** A library written for Linux reads the auxiliary vector out of that file rather than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv` linkname, but the init that ARMS it sorts after the init that CALLS it, so the call always sees nil and the file is the path it really takes. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real open on a macOS host, and after it fails anywhere else, which leaves a Linux host on the kernel's own file and still answers on NT. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md "AT_HWCAP" (2026-09-04).
-- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19). Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked 40-B `_func` records with presence-bitmap pcdata/funcdata arrays, prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B InlTree records. Consequence: upstream debug/gosym-based tools cannot parse fork binaries. The fork's own debug/gosym, objdump, nm, and addr2line are updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and readers must move in lockstep: `cmd/link/internal/ld/pcln.go` + `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <-> `debug/gosym`.
+- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test`
+  run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host
+  tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses
+  (like `testdata/ape/apetest`) should be run with an upstream Go so the test binary
+  itself is executable on the host.
+- **An APE never writes to itself.** The kernel cannot exec the file as it
+  stands, so the bootstrap script stages a copy under
+  `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`, writes the host's real
+  header (ELF on Linux, Mach-O on macOS) into THAT, and execs it. The APE keeps
+  its bytes and its checksum, runs from a read-only path, and stays fat. As
+  root, staging also registers the magic with binfmt_misc and binds the copy
+  over the original path in a private namespace. See `docs/APE-STAGING.md`.
+- **Tool build IDs are content-derived (2026-07-20).** Upstream derives
+  release-toolchain tool IDs from the tools' `-V=full` version line; the fork
+  stamps the same release-style version (`go1.27.0cosmo`) into every build, so
+  any two fork builds used to share tool IDs — and hence action IDs — letting a
+  warm build cache (a local GOCACHE, or a consumer's shared cache tier)
+  serve stale, ABI-incompatible objects across fork builds (startup SIGSEGVs).
+  Fork tools now print their own build ID under `-V=full` (like devel
+  toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt
+  toolchain automatically invalidates cached objects. The old rule "run
+  `go clean -cache` after every make.bash" is obsolete; CI asserts the
+  discriminator on every build platform.
+- **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT`
+  reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the
+  process's own cgroup at `gcinit` and uses it as the initial soft limit, so a
+  containerized binary caps its heap instead of allocating until the kernel
+  OOM-kills it. An explicit `GOMEMLIMIT`, `off` included, still wins, and
+  a host with no cgroups is unaffected. This holds for cosmo too: the APE
+  asks `__hostos` first and only reads `/proc` on a Linux host.
+  `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s
+  syscall shims.
+- **An arm64 APE on macOS needs AT_HWCAP, and it takes two fixes.** A
+  reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS
+  answers with SIGILL, which killed any binary importing
+  `golang.org/x/sys/cpu` before `main`. The APE loader does pass a
+  pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those
+  registers; `fixAuxv` clears that bit in `osinit` (and builds a pair
+  from Apple's `hw.optional` sysctls when none came), which is what
+  `internal/cpu` reads. Never set `hwcap_CPUID`: it means "the kernel
+  emulates those registers". Depth: DEBUGGING.md "AT_HWCAP" and
+  "Working uname" (2026-09-03/04).
+- **`/proc/self/auxv` is served by the APE off a Linux host.** A library
+  written for Linux reads the auxiliary vector out of that file rather
+  than out of the runtime: `golang.org/x/sys/cpu` declares the `getAuxv`
+  linkname, but the init that ARMS it sorts after the init that CALLS it,
+  so the call always sees nil and the file is the path it really takes.
+  `syscall.Openat` answers the path from `runtime.getAuxv`, handing back
+  the read end of a pipe holding the pairs plus the AT_NULL terminator:
+  before the real open on a macOS host, and after it fails anywhere else,
+  which leaves a Linux host on the kernel's own file and still answers
+  on NT. So AT_HWCAP now reaches x/sys/cpu too, which is
+  what stops the arm64 MRS fallback and its SIGILL. Depth: DEBUGGING.md
+  "AT_HWCAP" (2026-09-04).
+- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19).
+  Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked
+  40-B `_func` records with presence-bitmap pcdata/funcdata arrays,
+  prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B
+  InlTree records. Consequence: upstream debug/gosym-based tools cannot parse
+  fork binaries; the fork's own debug/gosym, objdump, nm, and addr2line are
+  updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and
+  readers must move in lockstep: `cmd/link/internal/ld/pcln.go` +
+  `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <->
+  `debug/gosym`.
 
 ## Local Verify Loop
 
@@ -225,55 +333,171 @@ GOOS=cosmo GOARCH=amd64 go build std && GOOS=cosmo GOARCH=arm64 go build std
 GOOS=linux GOARCH=amd64 go test -short go/build cmd/internal/moddeps
 ```
 
-**A patch bump and a minor bump are different jobs.** go1.26.4 and go1.26.5 each produced exactly one conflict (VERSION). go1.27.0 produced 73, because a minor release merges upstream's master, not a release branch: every release-branch backport the fork already carries comes back as a conflict against upstream's own version of the same change. The single most useful triage tool is `git diff --name-only <previous tag> HEAD -- <file>`. An empty result means the fork never touched that file, so the conflict is release-branch-versus-master noise and upstream's side is correct outright. Only the remainder needs judgement. Depth, including the go1.27.0 resolutions worth knowing about: docs/UPREV-GO1.27.md.
+**A patch bump and a minor bump are different jobs.** go1.26.4 and go1.26.5
+each produced exactly one conflict (VERSION). go1.27.0 produced 73, because
+a minor release merges upstream's master, not a release branch: every
+release-branch backport the fork already carries comes back as a conflict
+against upstream's own version of the same change. The single most useful
+triage tool is `git diff --name-only <previous tag> HEAD -- <file>`. An
+empty result means the fork never touched that file, so the conflict is
+release-branch-versus-master noise and upstream's side is correct outright.
+Only the remainder needs judgement. Depth, including the go1.27.0
+resolutions worth knowing about: docs/UPREV-GO1.27.md.
 
-The work that is NOT in the conflict list is the class of break that produces **no** conflict: upstream re-partitions a platform file and cosmo falls off the edge of the new `//go:build` tags. 46 upstream files carry a fork edit that is nothing but adding `cosmo` to a tag, and they cluster in the `_unix`/`_posix`/`_other`/`_stub`/`_nonlinux` families upstream churns most. `go build std` for both arches is what catches it. Do not skip it because the merge looked clean. When a symbol goes undefined, the fix is a new `*_cosmo.go` file, never a widened upstream tag.
+The work that is NOT in the conflict list is the class of break that
+produces **no** conflict: upstream re-partitions a platform file and cosmo
+falls off the edge of the new `//go:build` tags. 46 upstream files carry a
+fork edit that is nothing but adding `cosmo` to a tag, and they cluster in
+the `_unix`/`_posix`/`_other`/`_stub`/`_nonlinux` families upstream churns
+most. `go build std` for both arches is what catches it; do not skip it
+because the merge looked clean. When a symbol goes undefined, the fix is a
+new `*_cosmo.go` file, never a widened upstream tag.
 
-A minor bump also moves internal APIs the fork's own code calls, and those break the BUILD rather than a tag. Build std for every port the fork supports, not just cosmo: `js/wasm`, `wasip1/wasm`, and both under `GOWASM=threads`. Regenerate what upstream generates — `go run -C=_gen .` in `cmd/compile/internal/ssa` — rather than hand-merging opGen.go.
+A minor bump also moves internal APIs the fork's own code calls, and those
+break the BUILD rather than a tag. Build std for every port the fork
+supports, not just cosmo: `js/wasm`, `wasip1/wasm`, and both under
+`GOWASM=threads`. Regenerate what upstream generates — `go run -C=_gen .`
+in `cmd/compile/internal/ssa` — rather than hand-merging opGen.go.
 
-Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across CLAUDE.md, README.md, docs/INSTALL.md, cosmo-ci.yml), and record the merge in DEBUGGING.md.
+Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across
+CLAUDE.md, README.md, docs/INSTALL.md, cosmo-ci.yml), and record the merge
+in DEBUGGING.md.
 
 ## CI
 
 Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.md.
 
-The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows). Every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0). Its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
+The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly on all three. The single `test` job is a 3-OS matrix (ubuntu/macos/windows); every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner vs port) and real fizzbuzz invocations of the ubuntu-origin and windows-origin fat APEs (byte-comparing stdout against the apetest contract - e.g. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0); its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as per-OS matrix values.
 
-CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo amd64 and cosmo arm64 payloads, stripped by default, with apetest's `TestFatSidecarsExist` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build platform (sidecars are not uploaded; the artifact ships the bare binaries, so apetest's TestDebugSidecars skips on the test runners). Structural format tests run everywhere. The full execution suite (fizzbuzz + runtimeprobe) runs on all three test runners, and the ubuntu build leg also runs the cmd/link APE-merge/debug-view and cmd/go strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`, which runs the GOOS=cosmo package tests through the misc/cosmo wrappers: internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the runtime's Apple itimerval ABI pins and timeval translation behind the darwin SIGPROF setitimer dispatch, and the syscall package's Apple struct conversions plus the /proc/self/auxv shim. The name lists live in that suite, where an engineer can run them, rather than in a workflow step. Every build leg additionally asserts, right after make.bash, that `compile -V=full` reports a content-derived `buildID=` (the cross-build cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas).
+CI builds one fat APE per platform; no GOARCH pin. The output contains cosmo
+amd64 and cosmo arm64 payloads, stripped by default, with apetest's
+`TestFatSidecarsExist` asserting the `.dbg`/`.aarch64.elf` sidecars exist on
+every build platform (sidecars are not uploaded; the artifact ships the bare binaries,
+so apetest's TestDebugSidecars skips on the test runners). Structural
+format tests run everywhere; the full execution suite (fizzbuzz +
+runtimeprobe) runs on all three test runners, and the ubuntu build leg
+also runs the cmd/link APE-merge/debug-view and cmd/go
+strip/GOCOSMODEBUG/tool-ID/fat-parallel unit tests plus `dats/cosmo-tests.dats`,
+which runs the GOOS=cosmo package tests through the misc/cosmo wrappers:
+internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal
+translation tables, epoll layout), the runtime's Apple itimerval ABI pins and
+timeval translation behind the darwin SIGPROF setitimer dispatch, and the
+syscall package's Apple struct conversions plus the /proc/self/auxv shim. The
+name lists live in that suite, where an engineer can run them, rather than in a
+workflow step. Every build leg additionally
+asserts, right after make.bash, that `compile -V=full` reports a
+content-derived `buildID=` (the cross-build cache-poisoning guard —
+see the tool-build-ID bullet in Fork Gotchas).
 
 The ubuntu build leg also carries the two uprev guardrails (2026-07-26):
 
-- **`GOOS=cosmo go build std` for amd64 and arm64.** The execution suite compiles only what fizzbuzz and runtimeprobe import — 84 of the 358 std packages under cosmo — so an upstream re-partition of a platform file (the go1.26.4 `fchmodat_linux.go`/`fchmodat_other.go` split, statat_unix.go's new tag) drops cosmo off the new build tags with no conflict and no red test. crypto/x509, archive/tar and net/http carry exactly those tags. ~40s cold for both arches.
-- **`go test go/build cmd/internal/moddeps`.** `TestDependencies` is the only mechanical check that the fork's new packages sit where the tree's layering allows, and `TestVendorPackages` the only one guarding what may be vendored. Both had silently gone red (see DEBUGGING.md 2026-07-26). Only `-run TestReadGoInfo` was running before.
+- **`GOOS=cosmo go build std` for amd64 and arm64.** The execution suite
+  compiles only what fizzbuzz and runtimeprobe import — 84 of the 358 std
+  packages under cosmo — so an upstream re-partition of a platform file
+  (the go1.26.4 `fchmodat_linux.go`/`fchmodat_other.go` split, statat_unix.go's
+  new tag) drops cosmo off the new build tags with no conflict and no red
+  test. crypto/x509, archive/tar and net/http carry exactly those tags.
+  ~40s cold for both arches.
+- **`go test go/build cmd/internal/moddeps`.** `TestDependencies` is the
+  only mechanical check that the fork's new packages sit where the tree's
+  layering allows, and `TestVendorPackages` the only one guarding what may
+  be vendored; both had silently gone red (see DEBUGGING.md 2026-07-26).
+  Only `-run TestReadGoInfo` was running before.
 
-Run both locally before proposing an uprev — they are what turn a clean merge into a verified one.
+Run both locally before proposing an uprev — they are what turn a clean
+merge into a verified one.
 
-Two test programs ship in each build's artifact: `fizzbuzz.com` (basic execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file module, built via its directory: file I/O, directory listing, pid, NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals (sigpanic recovery, os/signal, async preemption, wait-status decode), os/exec, os.Executable, argv/env, wd round-trip, and an off-host DNS resolve - the one check here that leaves the machine, and the one that covers where each host keeps its nameservers). Its `nanosleep` check asserts on the elapsed CLOCK, not on the error: a syscall that returns success without sleeping passes an error-only check, which is exactly what macOS-Intel did. The apetest suite runs both against all three origin binaries via the FIZZBUZZ_BIN and RUNTIMEPROBE_BIN env vars. The macos-latest runner is what actually executes the darwin (Syslib) code paths.
+Two test programs ship in each build's artifact: `fizzbuzz.com` (basic
+execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file
+module, built via its directory: file I/O, directory listing, pid,
+NumCPU, monotonic clock, timers, TCP/UDP/unix sockets, signals
+(sigpanic recovery, os/signal, async preemption, wait-status decode),
+os/exec, os.Executable, argv/env, wd round-trip, and an off-host DNS
+resolve - the one check here that leaves the machine, and the one that
+covers where each host keeps its nameservers). Its `nanosleep` check
+asserts on the elapsed CLOCK, not on the error: a syscall that returns
+success without sleeping passes an error-only check, which is exactly
+what macOS-Intel did. The apetest suite
+runs both against all three origin binaries via the FIZZBUZZ_BIN and
+RUNTIMEPROBE_BIN env vars; the macos-latest runner is what actually
+executes the darwin (Syslib) code paths.
 
-A third job (`wasm`, ubuntu-only - wasm output is host-independent) regression-gates the fork's WebAssembly ports: it builds the toolchain, builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm fixes touch under node 22 (js) and wazero (wasip1), runs the full testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP end to end), runs the testdata/jsfetchstream streaming-upload e2e under node, and runs the wasmexport compiler regression tests via cmd/internal/testdir for both wasm targets.
+A third job (`wasm`, ubuntu-only - wasm output is host-independent)
+regression-gates the fork's WebAssembly ports: it builds the toolchain,
+builds std for js/wasm and wasip1/wasm, runs the stdlib packages the wasm
+fixes touch under node 22 (js) and wazero (wasip1), runs the full
+testdata/wasip1sock reference-host suite (GOWASI=wasmedgesock TCP and UDP
+end to end), runs the testdata/jsfetchstream streaming-upload e2e under
+node, and runs the wasmexport compiler regression tests via
+cmd/internal/testdir for both wasm targets.
 
-Three more jobs (`publish-create`, `publish-upload`, `publish-finish`; they need build+test) publish an installable toolchain tarball to buildhost on every push, one leg per platform - see Toolchain Distribution below.
+Three more jobs (`publish-create`, `publish-upload`, `publish-finish`; they
+need build+test) publish an installable toolchain tarball to buildhost on
+every push, one leg per platform - see Toolchain Distribution below.
 
 ## Repository automation (pr-minder bot)
 
-This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr-minder** GitHub bot. Its observed behavior around branches, PRs, and labels — know this before pushing branches or interpreting PR state:
+This repo, like the rest of the wow-look-at-my org, is watched by the org's
+**pr-minder** GitHub bot. Its observed behavior around branches, PRs, and
+labels — know this before pushing branches or interpreting PR state:
 
-- **Auto-opened PRs.** Any lingering `claude/*` branch gets a **non-draft** PR auto-opened for it within about a minute of the push. Expect the PR to exist before you open one by hand; edit the auto-opened PR (title/body) rather than opening a duplicate.
-- **Label-triggered merges.** The bot merges a PR when the repository owner applies the `auto-pr-merge` label. Draft status is NOT protection: a green draft carrying the label is flipped ready-for-review and squash-merged within seconds. If the PR only goes green later (label already in place), the merge lands on the bot's next hourly reconcile pass instead of immediately. Head branches are deleted after merge.
-- **Body regeneration.** The bot can regenerate/overwrite PR bodies during its update passes. If a PR body matters, keep a copy and re-apply it once after a rewrite — do not loop against the bot.
-- **Base-branch updates.** The bot merges the base branch (master) into PR branches as siblings merge — ordinary forward merge commits, never force pushes. Pull before pushing to a branch the bot may have advanced.
-- **Timeline attribution.** Ready-for-review, auto-merge, and merge events show the bot as the *actor* even when the repository owner initiated them by applying the label. Judge intent by the PR's `labeled` timeline events (who applied `auto-pr-merge`), not by the executor of the follow-on events. Symmetrically, the bot re-enforces state it was told to arm: reverting it (e.g. flipping the PR back to draft) is counter-flipped within seconds — a durable change needs the owner to change the labels.
-- **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only merges when its head SHA carries a green `all-builds` commit status — posted by an org-side app that aggregates every build on the SHA externally (cosmo-ci.yml needs, and has, no aggregator job; see the DEBUGGING.md note in the PE-header work). Do not name any CI job `all-builds`: an org guard fails workflows that define one, because the status context is reserved for the aggregator.
+- **Auto-opened PRs.** Any lingering `claude/*` branch gets a **non-draft**
+  PR auto-opened for it within about a minute of the push. Expect the PR to
+  exist before you open one by hand; edit the auto-opened PR (title/body)
+  rather than opening a duplicate.
+- **Label-triggered merges.** The bot merges a PR when the repository owner
+  applies the `auto-pr-merge` label. Draft status is NOT protection: a green
+  draft carrying the label is flipped ready-for-review and squash-merged
+  within seconds. If the PR only goes green later (label already in place),
+  the merge lands on the bot's next hourly reconcile pass instead of
+  immediately. Head branches are deleted after merge.
+- **Body regeneration.** The bot can regenerate/overwrite PR bodies during
+  its update passes. If a PR body matters, keep a copy and re-apply it once
+  after a rewrite — don't loop against the bot.
+- **Base-branch updates.** The bot merges the base branch (master) into PR
+  branches as siblings merge — ordinary forward merge commits, never force
+  pushes. Pull before pushing to a branch the bot may have advanced.
+- **Timeline attribution.** Ready-for-review, auto-merge, and merge events
+  show the bot as the *actor* even when the repository owner initiated them
+  by applying the label. Judge intent by the PR's `labeled` timeline events
+  (who applied `auto-pr-merge`), not by the executor of the follow-on
+  events. Symmetrically, the bot re-enforces state it was told to arm:
+  reverting it (e.g. flipping the PR back to draft) is counter-flipped
+  within seconds — a durable change needs the owner to change the labels.
+- **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only
+  merges when its head SHA carries a green `all-builds` commit status —
+  posted by an org-side app that aggregates every build on the SHA
+  externally (cosmo-ci.yml needs, and has, no aggregator job; see the
+  DEBUGGING.md note in the PE-header work). Do not name any CI job
+  `all-builds`: an org guard fails workflows that define one, because the
+  status context is reserved for the aggregator.
 
 ## Shared build cache: the client is linked into `cmd/go`
 
-The org's shared build cache is reached in process. `cmd/go` requires `github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from `cmd/go/internal/cache/shared.go`, which layers a network tier under the disk cache: disk stays authoritative, the shared tier is consulted only on a local miss, and a fetched body is written to disk before it is returned, so a shared hit hands the compiler a path exactly as a local hit does.
+The org's shared build cache is reached in process. `cmd/go` requires
+`github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from
+`cmd/go/internal/cache/shared.go`, which layers a network tier under the disk
+cache: disk stays authoritative, the shared tier is consulted only on a local
+miss, and a fetched body is written to disk before it is returned, so a shared
+hit hands the compiler a path exactly as a local hit does.
 
-**`GOCACHEPROG` is deleted** — the variable, the protocol, and `cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared tier over disk, or disk alone. Nothing forks a cache program, and a leftover `GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not the feature: it answered with a PATH rather than bytes, so a program storing bodies in packs had to materialize every hit where the compiler could open it.
+**`GOCACHEPROG` is deleted** — the variable, the protocol, and
+`cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared
+tier over disk, or disk alone; nothing forks a cache program, and a leftover
+`GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not
+the feature: it answered with a PATH rather than bytes, so a program storing
+bodies in packs had to materialize every hit where the compiler could open it.
 
-`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`). Unset, the build stays on disk. A run with `CI` set and no shared cache fails outright, because an unconfigured CI run decides whether every other CI run recompiles. `GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s quiet window.
+`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`); unset,
+the build stays on disk. A run with `CI` set and no shared cache fails outright,
+because an unconfigured CI run decides whether every other CI run recompiles.
+`GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s
+quiet window.
 
-**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode, so the require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and owner:
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor
+mode, so the require needs its packages under `src/cmd/vendor/`; those three
+paths are **git submodules**, not copied files, so this repo stores a commit
+pointer and the source keeps its own history and owner:
 
 | vendor path | repository |
 |---|---|
@@ -281,42 +505,86 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 
-Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build; every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. To move the client, check the submodule out at the commit you want and update the matching version in `src/cmd/go.mod`. **Never run `go mod vendor` here** — it would replace the submodules with copied files, which is exactly what this arrangement exists to prevent. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will
+not build; every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true`
+for the same reason. To move the client, check the submodule out at the commit
+you want and update the matching version in `src/cmd/go.mod`. **Never run
+`go mod vendor` here** — it would replace the submodules with copied files,
+which is exactly what this arrangement exists to prevent. Read
+`src/README.vendor` before adding any other `src/cmd` dependency: what looks
+like one import is a whole subtree of somebody else's repository.
 
-That subtree carries packages the build never imports, and one upstream test fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in GOPATH mode, which walks `src/cmd/vendor` on disk and cannot resolve go-s3-server's `main.go`/`metrics.go` (cobra, prometheus) or lz4's `cmd/lz4c` (bytefmt, cmdflag, progressbar). A pruned vendor tree is what upstream's test assumes, and only `go mod vendor` or per-package repositories produce one, so the check stays red while whole-repo submodules stand.
+That subtree carries packages the build never imports, and one upstream test
+fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in
+GOPATH mode, which walks `src/cmd/vendor` on disk and cannot resolve
+go-s3-server's `main.go`/`metrics.go` (cobra, prometheus) or lz4's `cmd/lz4c`
+(bytefmt, cmdflag, progressbar). A pruned vendor tree is what upstream's test
+assumes, and only `go mod vendor` or per-package repositories produce one, so
+the check stays red while whole-repo submodules stand.
 
 ## Toolchain Distribution
 
-Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64, darwin/arm64 and windows/amd64** — one release, each platform built on its own runner (distpack packages what a HOST build produced, so `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
+Every green push publishes installable toolchain tarballs to buildhost as project `gosmopolitan`, for **linux/amd64,
+darwin/arm64 and windows/amd64** — one release, each platform built on its own runner (distpack packages what a HOST
+build produced, so `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails; there is no cross-package shortcut).
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz   # or darwin/arm64, windows/amd64
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the rest from that one archive. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it
+serves `&fmt=zip` and the rest from that one archive. So distpack drops upstream's windows-only `.zip`. The
+publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint; the
+committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job
+publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas:
+docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 
-`.github/dependabot.yml` disables Dependabot updates — version AND security — for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std" and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an importable package; see 'go help packages'`, and it can neither run `go mod vendor` for std. Dependabot ALERTS stay enabled for visibility (repo Security tab); resolve them manually:
+`.github/dependabot.yml` disables Dependabot updates — version AND security —
+for `/src` and `/src/cmd`. Those are the Go distribution's own modules ("std"
+and "cmd"): Dependabot's stock `go get` dies with `go: std: "std" is not an
+importable package; see 'go help packages'`, and it can neither run
+`go mod vendor` for std. Dependabot ALERTS stay enabled for visibility (repo
+Security tab); resolve them manually:
 
-1. Build this tree's toolchain: `cd src && ./make.bash`. Use `../bin/go` below. (No `go clean -cache` needed since 2026-07-20: tool IDs are content-derived, so a rebuilt toolchain never reuses stale cache entries — see Fork Gotchas.)
-2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to cosmo).
-3. HTTP/2 needs no regeneration step. go1.27 deleted the generated bundle and moved the implementation into `src/net/http/internal/http2/`, an ordinary in-tree package. `golang.org/x/net/http2` is no longer synchronized with std, so a bump of that module does not reach net/http at all.
-4. Check `git log -- src/vendor/` for fork-local vendored changes that re-vendoring may have wiped; re-apply them.
-5. Rebuild, then run the affected stdlib tests: `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
+1. Build this tree's toolchain: `cd src && ./make.bash`; use `../bin/go` below.
+   (No `go clean -cache` needed since 2026-07-20: tool IDs are content-derived,
+   so a rebuilt toolchain never reuses stale cache entries — see Fork Gotchas.)
+2. `cd src && GOOS=linux go get golang.org/x/net@vX.Y.Z && GOOS=linux go mod tidy
+   && GOOS=linux go mod vendor` (pin GOOS to the host — the fork defaults to
+   cosmo).
+3. HTTP/2 needs no regeneration step. go1.27 deleted the generated bundle and
+   moved the implementation into `src/net/http/internal/http2/`, an ordinary
+   in-tree package. `golang.org/x/net/http2` is no longer synchronized with
+   std, so a bump of that module does not reach net/http at all.
+4. Check `git log -- src/vendor/` for fork-local vendored changes that
+   re-vendoring may have wiped; re-apply them.
+5. Rebuild, then run the affected stdlib tests:
+   `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
 
 `src/README.vendor` is the upstream authority on vendoring in std/cmd.
 
 ## Loop-aware inlining (all targets)
 
-Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget as one on a cold error path. This fork adds the static frequency estimate every other production compiler has (`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over nine whole-task workloads, +5% text size. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed: docs/LOOP-INLINING.md.
+Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget
+as one on a cold error path. This fork adds the static frequency estimate every other production compiler has
+(`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over nine
+whole-task workloads, +5% text size. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect
+switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed:
+docs/LOOP-INLINING.md.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
-This fork diverges from upstream on both wasm ports: preemptible loops and synchronous stdio by default, real fetch/socket transports behind `GODEBUG=jsfetchnode=1` and `GOWASI=wasmedgesock`, DWARF v5 with real variable locations, frame-aware GC with a host-donated mark step, a dispatcher-free control flow (rounds 7-8, ~1.4-2x faster), and `GOWASM=threads` up to a multi-P scheduler. Every round, its measurements and its gates: docs/WASM.md. Remaining gaps: WASM_SHORTCOMINGS.md.
+This fork diverges from upstream on both wasm ports: preemptible loops and synchronous stdio by default,
+real fetch/socket transports behind `GODEBUG=jsfetchnode=1` and `GOWASI=wasmedgesock`, DWARF v5 with real
+variable locations, frame-aware GC with a host-donated mark step, a dispatcher-free control flow (rounds 7-8,
+~1.4-2x faster), and `GOWASM=threads` up to a multi-P scheduler. Every round, its measurements and its gates:
+docs/WASM.md. Remaining gaps: WASM_SHORTCOMINGS.md.
 
-The exec wrappers live in `lib/wasm/` (not misc/wasm). Put it on PATH so `GOOS=js GOARCH=wasm go test` finds `go_js_wasm_exec`. The fork defaults to GOOS=cosmo, so always pin GOOS/GOARCH on wasm commands.
+The exec wrappers live in `lib/wasm/` (not misc/wasm); put it on PATH so `GOOS=js GOARCH=wasm go test` finds
+`go_js_wasm_exec`. The fork defaults to GOOS=cosmo, so always pin GOOS/GOARCH on wasm commands.
 
 ## Adding Cosmo Support to Standard Library Packages
 
@@ -339,7 +607,7 @@ grep -r "//go:build.*cosmo" src/
 ### 3. Runtime Platform Handling
 
 Cosmopolitan binaries run on Linux, macOS, AND Windows at runtime (the NT surface is still growing wave by wave - see DEBUGGING.md) - so never bake in single-OS assumptions. When creating `_cosmo.go` files:
-- Do not assume Linux-only features like `/proc` are available
+- Don't assume Linux-only features like `/proc` are available
 - Cosmopolitan Libc translates Linux syscalls to native OS calls at runtime
 - Test assumptions about what works on each platform
 
@@ -368,7 +636,7 @@ For filename-based constraints, create new files rather than modifying the build
 ## Debugging ARM64 Cosmo
 
 **Keep `DEBUGGING.md` updated** when working on ARM64 cosmo support. Log:
-- What you have tried (with debug exit codes used)
+- What you've tried (with debug exit codes used)
 - What worked vs what failed
 - Current hypothesis and next steps
 
@@ -381,4 +649,4 @@ This prevents going in circles and losing context across sessions.
 The vim.com binary is a working APE that runs on macOS ARM64. When fixing APE generation:
 1. Compare our output to vim.com's shell header structure
 2. Match vim.com's macOS ARM64 handling (embedded APE loader, cc compilation)
-3. Do not invent new approaches - copy what works in vim.com
+3. Don't invent new approaches - copy what works in vim.com

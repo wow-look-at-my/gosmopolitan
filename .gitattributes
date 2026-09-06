@@ -14,21 +14,3 @@
 # See golang.org/issue/9281.
 
 * -text
-
-# The vendor trees are other projects' code, copied in by `go mod vendor`
-# rather than written here. GitHub reads these for the language bar and the
-# diff view, and re-vendoring restores whatever upstream ships, so a house
-# style this repo applies to its own prose does not reach them.
-src/vendor/** linguist-vendored
-src/cmd/vendor/** linguist-vendored
-
-# The prose under the imported tree is upstream Go's, not this fork's. The
-# fork's own writing sits in CLAUDE.md, DEBUGGING.md, docs/ and ape/. Editing
-# these would conflict on every uprev merge, which is the whole reason a fork
-# leaves upstream's files alone. The Go code here is ours to change and is not
-# marked.
-doc/**/*.md linguist-vendored
-src/**/*.md linguist-vendored
-test/**/*.md linguist-vendored
-api/**/*.md linguist-vendored
-lib/**/*.md linguist-vendored
