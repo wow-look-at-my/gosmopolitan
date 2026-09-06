@@ -199,7 +199,7 @@ jobs:
           done
           # The published toolchain was built when this leg last ran binaries.
           rc=0
-          curl -fsS --compressed -o "$RUNNER_TEMP/gt.tgz" "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" || rc=$?
+          curl -fsSL --compressed -o "$RUNNER_TEMP/gt.tgz" "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" || rc=$?
           echo "published-toolchain download exit=$rc"
           if [ "$rc" = 0 ]; then
             rc=0
