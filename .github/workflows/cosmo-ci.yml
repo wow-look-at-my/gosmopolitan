@@ -210,23 +210,32 @@ jobs:
             "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
             echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
           done
-          # The published toolchain was built when this leg last ran binaries.
-          rc=0
-          curl -fsSL --compressed -o "$RUNNER_TEMP/gt.tgz" "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" || rc=$?
-          echo "published-toolchain download exit=$rc"
-          if [ "$rc" = 0 ]; then
+          # Published master toolchains, oldest first: the first version whose fizzbuzz exits 2 names the release that broke the NT boot.
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          for v in 372 411 441 455 470 476; do
+            rm -rf "$tmp/go" "$tmp/gt.tgz"
             rc=0
-            tar -xzf "$RUNNER_TEMP/gt.tgz" -C "$RUNNER_TEMP" || rc=$?
-            echo "published-toolchain untar exit=$rc size=$(wc -c < "$RUNNER_TEMP/gt.tgz")"
-          fi
-          if [ -x "$RUNNER_TEMP/go/bin/go" ]; then
+            curl -fsSL --compressed -o "$tmp/gt.tgz" "https://dl.pazer.build/gosmopolitan?v=$v&os=windows&arch=amd64" || rc=$?
+            if [ "$rc" != 0 ]; then
+              echo "v$v download exit=$rc"
+              continue
+            fi
             rc=0
-            GOOS=cosmo "$RUNNER_TEMP/go/bin/go" build -o "$RUNNER_TEMP/fb-published.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
-            echo "published-toolchain build exit=$rc"
+            tar --force-local -xzf "$tmp/gt.tgz" -C "$tmp" || rc=$?
+            if [ "$rc" != 0 ] || [ ! -x "$tmp/go/bin/go" ]; then
+              echo "v$v untar exit=$rc (no go/bin/go)"
+              continue
+            fi
             rc=0
-            "$RUNNER_TEMP/fb-published.com" 10 5 || rc=$?
-            echo "fizzbuzz from the published toolchain exit=$rc"
-          fi
+            GOOS=cosmo "$tmp/go/bin/go" build -o "$tmp/fb-$v.com" testdata/fizzbuzz/fizzbuzz.go || rc=$?
+            if [ "$rc" != 0 ]; then
+              echo "v$v build exit=$rc"
+              continue
+            fi
+            rc=0
+            out="$("$tmp/fb-$v.com" 10 5 2>&1)" || rc=$?
+            echo "v$v fizzbuzz exit=$rc output=[$out]"
+          done
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
           # Three shapes: no arguments, a listing that never runs a test, and one test.
