@@ -578,6 +578,40 @@ func TestIssue13566(t *testing.T) {
 	}
 }
 
+// A parameter default is part of the signature a caller in another package
+// reads, so the export data has to carry it. See docs/OPTIONAL-PARAMS.md.
+func TestParameterDefaults(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+
+	// This package only handles gc export data.
+	if runtime.Compiler != "gc" {
+		t.Skipf("gc-built packages not available (compiler = %s)", runtime.Compiler)
+	}
+
+	tmpdir := mktmpdir(t)
+	defer os.RemoveAll(tmpdir)
+
+	compile(t, "testdata", "paramdefaults.go", filepath.Join(tmpdir, "testdata"), nil)
+	pkg := importPkg(t, "./testdata/paramdefaults", tmpdir)
+
+	params := pkg.Scope().Lookup("Repeat").Type().(*types.Signature).Params()
+	want := []string{`"x"`, "2", "true"}
+	for i, w := range want {
+		deflt := params.At(i).Default()
+		if deflt == nil {
+			t.Fatalf("Repeat parameter %s carries no default", params.At(i).Name())
+		}
+		if got := deflt.String(); got != w {
+			t.Errorf("Repeat parameter %s default = %s, want %s", params.At(i).Name(), got, w)
+		}
+	}
+
+	plain := pkg.Scope().Lookup("Plain").Type().(*types.Signature).Params()
+	if deflt := plain.At(0).Default(); deflt != nil {
+		t.Errorf("Plain parameter s reports default %s, want none", deflt)
+	}
+}
+
 func TestTypeNamingOrder(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 

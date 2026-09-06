@@ -20,6 +20,7 @@ func TestCanonMap(t *testing.T) {
 }
 
 func TestCanonMapBadHash(t *testing.T) {
+	t.Serial() // This test asks a GC to clear the map, and another test's live handles keep entries in it.
 	testCanonMap(t, func() *canonMap[string] {
 		return newBadCanonMap[string]()
 	})

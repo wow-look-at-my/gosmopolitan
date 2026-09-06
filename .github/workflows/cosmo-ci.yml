@@ -4,12 +4,14 @@ name: Cosmopolitan Cross-Platform CI
 
 on:
   push:
+    # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
-    timeout-minutes: 45
+    # run.bash is the bulk of it, and dist test reruns anything it has to rebuild.
+    timeout-minutes: 150
     permissions:
       id-token: write
       contents: read
@@ -54,18 +56,6 @@ jobs:
             *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
             *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
           esac
-
-      # Shebang support tests (Unix only - shebang is a Unix feature)
-      - name: Test shebang support - unit tests
-        if: runner.os != 'Windows'
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          # Pin host GOOS/GOARCH: the fork defaults to GOOS=cosmo, which would otherwise emit fat APE test binaries the host can't exec.
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-          echo "=== Running shebang unit tests ==="
-          go test ./src/go/scanner/... -run TestShebang -v
-          go test ./src/go/build/... -run TestReadGoInfo -v
-          go test ./src/cmd/compile/internal/syntax/... -run TestShebang -v
 
       - name: Test shebang support - script execution
         if: runner.os != 'Windows'
@@ -168,23 +158,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 1
 
-      - name: APE merge unit tests (linker + go command)
-        # see docs/CI.md "build job". GOOS=linux pin: the fork's go defaults GOOS=cosmo, and these are host-run unit tests.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 8
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestAPE|TestPE|TestWritePrintf|TestMacho' cmd/link/internal/ld
-          # No -run filter: a named list only ever covers the tests somebody remembered to add to it, and a fork test outside the list is a test nobody runs.
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/go/internal/work
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/cosmoape
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/go/internal/cache
-          # The fork inverts this package's own default -- tests are parallel, and Serial and Fork are the two opt-outs -- so its suite is the only thing that covers the divergence.
-          GOOS=linux GOARCH=amd64 go test -count=1 testing
-          # A list here, unlike the one above: cmd/go carries thousands of upstream scripts and the whole suite outruns this step's budget, so these name the fork-rewritten paths (cosmo env, the APE merge under -n, modload's replace check, and go install/run pkg@version honoring a queried module's own replace/exclude directives).
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestScript/(env_cosmo|build_gcflags_order|godebug_removed|install_backslash|modfile_flag|run_vers|work_install_submodule|mod_replace|mod_tidy_replace|mod_vendor_replace|mod_install_pkg_version|mod_run_pkg_version|work_sync_check_multiple_paths_once)$' cmd/go
-
       # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
       - name: GOOS=cosmo package tests (dats)
         if: matrix.build-os == 'ubuntu-latest'
@@ -193,35 +166,13 @@ jobs:
         with:
           tests: dats/cosmo-tests.dats
 
-      - name: Fork-divergence guardrails (go/build policy, moddeps)
-        # see docs/CI.md "build job" for why this step exists and what it catches.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -short go/build cmd/internal/moddeps
-
-      - name: Host-nameserver path (net) and the NT DNS ABI pins (runtime)
-        # see docs/CI.md "build job" for why this step exists and what it catches.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestNameserversFromHost|TestUnreadableConfServers|TestDNSReadConfig' net
-          PATH="$PWD/misc/cosmo:$PATH" go test -count=1 -run 'TestNTFixedInfoLayout' runtime
-
-      - name: Loop-aware inlining tests
-        # see docs/LOOP-INLINING.md. Host-run compiler tests, so GOOS is pinned away from cosmo.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/compile/internal/inline/...
-          GOOS=linux GOARCH=amd64 go test -count=1 -run 'TestLoopInlining' cmd/compile/internal/test
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/testdir -run 'Test/(inline.*\.go|newinline\.go|escape.*\.go|live.*\.go)'
+      - name: The whole test suite (run.bash)
+        # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
+        timeout-minutes: 90
+        uses: wow-look-at-my-code/actions/multicmd@master
+        with:
+          unix: cd src && ./run.bash
+          windows: cd src && .\run.bat
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:

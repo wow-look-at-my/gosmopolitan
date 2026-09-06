@@ -202,6 +202,7 @@ type Field struct {
 	Doc     *CommentGroup // associated documentation; or nil
 	Names   []*Ident      // field/method/(type) parameter names; or nil
 	Type    Expr          // field/method/parameter type; or nil
+	Default Expr          // parameter default ("= expr"); or nil
 	Tag     *BasicLit     // field tag; or nil
 	Comment *CommentGroup // line comments; or nil
 }
@@ -219,6 +220,9 @@ func (f *Field) Pos() token.Pos {
 func (f *Field) End() token.Pos {
 	if f.Tag != nil {
 		return f.Tag.End()
+	}
+	if f.Default != nil {
+		return f.Default.End()
 	}
 	if f.Type != nil {
 		return f.Type.End()

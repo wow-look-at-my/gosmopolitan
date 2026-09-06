@@ -256,6 +256,12 @@ func mustDecodeHex(t *testing.T, in string) []byte {
 }
 
 func TestVectors(t *testing.T) {
+	// The vectors need a fixed ephemeral key, which arrives through the
+	// testingOnlyGenerateKey package variable. Every encap in the process
+	// reads it, so any other test running beside this one gets that one key
+	// whatever curve it asked for.
+	t.Serial()
+
 	t.Run("rfc9180", func(t *testing.T) {
 		testVectors(t, "rfc9180")
 	})
