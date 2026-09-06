@@ -91,6 +91,8 @@ const (
 	ntSysFlock      = 73
 	ntSysSync       = 162
 	ntSysUname      = 63
+	ntSysStatfs     = 137
+	ntSysFstatfs    = 138
 	ntSysFsync      = 74
 	ntSysFdatasync  = 75
 	ntSysTruncate   = 76
@@ -373,6 +375,10 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuSync()
 	case ntSysUname:
 		return ntEmuUname((*ntLinuxUtsname)(unsafe.Pointer(a1)))
+	case ntSysStatfs:
+		return ntEmuStatfs((*byte)(unsafe.Pointer(a1)), (*ntLinuxStatfs)(unsafe.Pointer(a2)))
+	case ntSysFstatfs:
+		return ntEmuFstatfs(int32(a1), (*ntLinuxStatfs)(unsafe.Pointer(a2)))
 	case ntSysFchmod:
 		return ntEmuFchmod(int32(a1))
 	case ntSysFchmodat:

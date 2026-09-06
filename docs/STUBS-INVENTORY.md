@@ -88,9 +88,11 @@ The NT emulation already served fsync, ftruncate, fchmod, chdir and getcwd. The 
 
 These four are resolved from kernel32 OPTIONALLY: a zero pointer answers ENOSYS at the use site rather than poking a crash address at boot.
 
-**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose them either: `statfs`/`fstatfs` and `prlimit64`. (`uname` left this list in the lock/ioctl wave. See Section 6a.) `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
+**Still ENOSYS on NT**, because Windows has no counterpart and upstream's own windows port does not expose it either: `prlimit64`. (`uname` and `statfs`/`fstatfs` both left this list. See Section 6a.) `fchmod`/`fchmodat` remain a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. See the reasoning in `ntEmuFchmod`.
 
-The runtimeprobe split follows exactly this line: `fsmeta` is a hard assertion on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on.
+The claim that Windows has no counterpart for `statfs` was wrong. Three Win32 calls answer between them, and Section 6a names each. The claim survived because nothing tested it. A sentence is not a measurement.
+
+The runtimeprobe split follows exactly this line: `fsmeta` and `volume` are hard assertions on all three hosts, `fsmetaunix` and `sysinfo` report rather than fail on.
 
 ## 5. NT gaps (Windows host)
 
@@ -158,7 +160,11 @@ The emulation writes exactly the 36 bytes the kernel writes. That is the `struct
 
 **macOS-Intel** takes `flock`, `fdatasync` and `sync` in the same wave. All three are pass-throughs. Each BSD number comes from `zsysnum_darwin_amd64.go`. `ioctl`, `getrusage` and `gettimeofday` stay ENOSYS there. Section 6b gives the reason for the `*at` family, and it applies here. Each needs real control flow, such as a request table or a struct conversion. That path is assembly that issues raw XNU syscalls. No runner can test it.
 
-**NT** takes `flock`, `sync` and `uname`. `uname` reports Sysname and Machine as the constants they are on this host. It takes the real build number from `RtlGetVersion`. `GetVersionExW` answers 6.2 to an unmanifested process, which is a wrong number rather than a missing one. Nodename comes from `GetComputerNameW`, and stays empty when the name is not ASCII, because this path has no UTF-16 decoder. Domainname stays empty. NT has no counterpart for it. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
+**NT** takes `flock`, `sync`, `uname` and `statfs`/`fstatfs`. `uname` reports Sysname and Machine as the constants they are on this host. It takes the real build number from `RtlGetVersion`. `GetVersionExW` answers 6.2 to an unmanifested process, which is a wrong number rather than a missing one. Nodename comes from `GetComputerNameW`, and stays empty when the name is not ASCII, because this path has no UTF-16 decoder. Domainname stays empty. NT has no counterpart for it. NT has no whole-system flush. So `sync` flushes every open file this process holds, through `FlushFileBuffers`. That is the part an emulation can reach. `fdatasync` already maps to the same call. `ioctl`, `getrusage` and `gettimeofday` have no Win32 counterpart in the emulation yet.
+
+`statfs` and `fstatfs` live in `src/runtime/os_cosmo_nt_statfs.go`. NT answers over a VOLUME rather than a path. So each emulation first maps its argument to the volume mount point with `GetVolumePathNameW`. `fstatfs` recovers the descriptor's path from its handle first, through `GetFinalPathNameByHandleW`. Win32 then fills the Linux struct from three sources. `GetDiskFreeSpaceW` gives the cluster geometry, which is what Linux calls a block. `GetDiskFreeSpaceExW` gives the byte totals, and its first output is the quota-aware figure. That split is the one Linux draws between `f_bfree` and `f_bavail`. The Ex form also survives a volume too large for the 32-bit cluster counts, so its numbers win where it answers. `GetVolumeInformationW` gives the maximum name length, the volume serial number and the filesystem name. The name maps to the Linux `f_type` magic for the same filesystem. An unknown name reports zero, which is what Linux reports for a filesystem with no magic. `Files` and `Ffree` count inodes. NTFS has no inode count, so both stay zero rather than invented. A descriptor that is a socket or a pipe belongs to no filesystem and reports ENOSYS.
+
+The `volume` runtimeprobe check is a hard assertion on every runner. It asserts that `statfs` and `fstatfs` agree on the block size for one filesystem. It asserts that the free-block count does not exceed the block count. A positive-value check alone passes a conversion that divided by the wrong unit.
 
 ## 6b. macOS-Intel: the syscall table (CLOSED — metadata wave, 2026-09-02)
 

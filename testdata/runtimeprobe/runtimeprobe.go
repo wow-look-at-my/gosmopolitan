@@ -145,6 +145,7 @@ func main() {
 	timed("readdir", checkReadDir)
 	timed("fsmeta", checkFsMeta)
 	timed("fsmetaunix", checkFsMetaUnix)
+	timed("volume", checkVolume)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
 	timed("durable", checkDurable)

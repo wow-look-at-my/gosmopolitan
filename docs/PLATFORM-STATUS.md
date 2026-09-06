@@ -13,7 +13,9 @@ File metadata and system information followed (2026-09-02, the metadata wave): f
 
 Locking, durability and the terminal followed (2026-09-06, the lock/ioctl wave). The wave added flock, fdatasync, sync, getrusage and gettimeofday. It also added ioctl: the window-size and job-control requests, plus the termios family (TCGETS/TCSETS/TCSETSW/TCSETSF) over Apple's TIOCGETA/TIOCSETA. So a program can put a terminal into raw mode here. The termios path converts the struct as well as the request. Apple has 64-bit flag words against 32. It has twenty control characters against nineteen, at different indices. It keeps the speeds in their own fields rather than inside c_cflag. Some flag bits collide: Linux IXON is Apple IXOFF. The sentence above it claimed everything the syscall package exposes and Apple can serve already worked. Those six answered ENOSYS while it said so. A program that failed to take its own lock file opened this wave. Windows serves flock too, over LockFileEx.
 
-Runtimeprobe checks: flock, durable, rusage, ioctl, termios. Unit tests on the ubuntu leg pin the termios translation. No CI runner has a terminal. So its round trip has never run against a live driver. It is untested, not unbuilt.
+Windows also takes statfs and fstatfs in this wave, over GetVolumePathNameW, GetDiskFreeSpaceW, GetDiskFreeSpaceExW and GetVolumeInformationW. The earlier claim that Windows has no counterpart was wrong, and nothing tested it.
+
+Runtimeprobe checks: flock, durable, rusage, ioctl, termios, volume. Unit tests on the ubuntu leg pin the termios translation. No CI runner has a terminal. So its round trip has never run against a live driver. It is untested, not unbuilt.
 
 The remaining known macOS gaps are AllThreadsSyscall (Linux-only rt-signal machinery, unused by the stdlib on cosmo) and the Intel-mac runtime bring-up below - see DEBUGGING.md.
 
