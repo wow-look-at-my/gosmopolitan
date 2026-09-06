@@ -4,53 +4,18 @@
 
 //go:build cosmo
 
-// Windows NT CPU profiling (wave 3 item 3): upstream os_windows.go's
+// Windows NT CPU profiling: upstream os_windows.go's
 // profileLoop/profilem ported to the NT function-table idiom.
 //
-// There is no SIGPROF on NT. Upstream Go's model - which this file
-// copies - is a dedicated profiler M parked on a waitable timer: each
-// tick it walks allm, suspends each eligible M's thread, reads its
-// context, and calls sigprof(pc, sp, lr, gp, mp) DIRECTLY - the same
-// host-independent sample-recording routine the unix SIGPROF handler
-// calls, reached without any signal. No Linux signal number is ever
-// involved, so "SIGPROF parity" needs no numbering translation at
-// all; the setitimer asm and the SYS_SETITIMER=38 ENOSYS dispatch
-// stay untouched and unreachable on NT.
+// There is no SIGPROF on NT. The model, upstream's, is a dedicated
+// profiler M parked on a waitable timer: each tick it walks allm,
+// suspends each eligible M's thread, reads its context and calls
+// sigprof DIRECTLY - the same host-independent recording routine the
+// unix SIGPROF handler calls, reached without any signal. So the
+// setitimer asm and the ENOSYS SYS_SETITIMER dispatch stay unreachable.
 //
-// The profiler runs on a REAL M (newm, no P) - the ntCtrlRelay
-// precedent - so it has g0 and TLS and may use the plain ntcall
-// trampolines; the foreign-thread prohibition (console-handler rule)
-// never applies. It never entersyscalls (no P to hand back), so all
-// waits are plain ntcall, never ntcallSE.
-//
-// ONE deliberate divergence from upstream: upstream's profileLoop
-// suspends threads without any suspension lock. Here every
-// SuspendThread in the runtime happens under ntSuspendLock (the
-// wave-2 contract): ntExit takes that lock FOREVER before
-// ExitProcess, so a profile tick can never be mid-suspension while
-// the process dies (the suspender-killed-mid-suspend wedge upstream
-// exit() only guards against for preemption). Profiling ticks at
-// 10ms; serializing them against preemption's suspensions costs
-// nothing measurable.
-//
-// Deadlock discipline:
-//   - Lock order matches ntPreemptM exactly: mp.threadLock is taken
-//     and RELEASED before ntSuspendLock; nothing is ever suspended
-//     while this M holds any threadLock, and no threadLock is taken
-//     under ntSuspendLock.
-//   - A suspended thread may hold arbitrary locks, so between
-//     SuspendThread and ResumeThread this M runs only suspension-safe
-//     code: sigprof and its callees are the exact set the unix
-//     SIGPROF handler runs with a thread interrupted at an arbitrary
-//     point (cpuprof.add: "called from signal handlers ... cannot
-//     allocate memory or acquire locks that might be held at the time
-//     of the signal"). The one lock down there, prof.signalLock, is a
-//     CAS spinlock whose only other taker is setcpuprofilerate -
-//     which clears THIS thread's mp.profilehz before acquiring it, so
-//     the post-suspend profilehz re-check below guarantees the
-//     suspended thread does not hold it. No print/throw/alloc happens
-//     while any thread is suspended (sigprof's mallocing++ trap
-//     enforces the alloc part).
+// The profiler runs on a REAL M (newm, no P), so it has g0 and TLS and
+// may use the plain ntcall trampolines. It never entersyscalls.
 package runtime
 
 import (
@@ -172,11 +137,12 @@ func ntProfileLoop() {
 
 			// mp may exit between the DuplicateHandle above and the
 			// SuspendThread. The handle stays valid, but SuspendThread
-			// then fails. Serialize the suspension under ntSuspendLock
-			// (divergence from upstream's lock-free walk; see the file
-			// comment) and hold it until ResumeThread: GetThreadContext
-			// is what completes the suspension, and ntExit must never
-			// interleave with any of this window.
+			// then fails. Upstream walks lock-free here; this
+			// serializes under ntSuspendLock and holds it until
+			// ResumeThread, because GetThreadContext is what completes
+			// the suspension and ntExit must never interleave with
+			// this window. Lock order matches ntPreemptM: threadLock
+			// is released above, BEFORE ntSuspendLock is taken.
 			lock(&ntSuspendLock)
 			if int32(uint32(ntcall(ntSuspendThreadFn, thread, 0, 0, 0, 0, 0))) == -1 {
 				// The thread no longer exists.
@@ -203,6 +169,14 @@ func ntProfileLoop() {
 // thread) is suspended: upstream profilem. CONTEXT_CONTROL suffices -
 // sigprof consumes only pc, sp and lr - and unlike preemption nothing
 // is written back, so the thread's other registers are never touched.
+//
+// A suspended thread may hold arbitrary locks, so everything between
+// SuspendThread and ResumeThread must be suspension-safe: sigprof and
+// its callees, the exact set the unix SIGPROF handler runs against a
+// thread interrupted anywhere. Nothing here may print, throw or
+// allocate. The one lock down there, prof.signalLock, has only
+// setcpuprofilerate as its other taker, and that clears the thread's
+// mp.profilehz first - which the profilehz re-check relies on.
 func ntProfileM(mp *m, thread uintptr) {
 	// 16-align the CONTEXT buffer (the ntPreemptM idiom).
 	var c *ntContext
