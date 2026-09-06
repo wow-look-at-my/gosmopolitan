@@ -4,6 +4,7 @@ name: Cosmopolitan Cross-Platform CI
 
 on:
   push:
+    branches: ['**']
 
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
