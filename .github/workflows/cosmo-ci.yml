@@ -182,6 +182,23 @@ jobs:
         with:
           tests: dats/goos-readonly.dats
 
+      # run.bat reports "exit status 2" and nothing else, once per package, so it
+      # names neither the failure nor the package that saw it. One test binary,
+      # run by hand, is where that error is legible.
+      - name: A cosmo test binary runs on this host
+        if: matrix.build-os == 'windows-latest'
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
+          GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
+          ls -l "$RUNNER_TEMP/strings.test"
+          rc=0
+          "$RUNNER_TEMP/strings.test" -test.run=TestLastIndexByte -test.v || rc=$?
+          echo "direct exit=$rc"
+          exit $rc
+
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
         timeout-minutes: 90
