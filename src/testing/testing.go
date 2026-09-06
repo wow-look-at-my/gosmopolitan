@@ -1998,8 +1998,10 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // whether this test passes. Fork reports a failure it cannot attribute - a
 // child that could not be started, or died on a signal - against this test.
 func (t *T) Fork() {
-	if os.Getenv(forkTargetEnv) != "" {
-		// Already the dedicated child: run the body right here.
+	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+		// Already the dedicated child: run the body right here. A test the
+		// target runs UNDER stays here too, or the child forks its own parent
+		// and never reaches the target.
 		return
 	}
 	t.Helper()
@@ -2016,7 +2018,25 @@ func (t *T) Fork() {
 // belongs to is over here either way: Fork calls this from the body and stops
 // it, and an allocsFork panic reaches tRunner with the body already unwound.
 func (t *T) forkAndTakeTheResult() {
+	// The child does the work, so this test holds the barrier for nothing while
+	// it waits. Keeping the hold deadlocks the run: a Serial test wants the
+	// barrier exclusively, and Go queues later readers behind that writer, so
+	// every test still to start blocks on a test that is only waiting.
+	held := t.barrierHeld
+	t.releaseBarrier()
+
 	output, err := t.runForked()
+
+	switch held {
+	case barrierShared:
+		serialBarrier.RLock()
+		t.barrierHeld = barrierShared
+	case barrierExclusive:
+		serialBarrier.Lock()
+		t.barrierHeld = barrierExclusive
+		serialExclusive.Store(true)
+	}
+
 	if len(output) > 0 {
 		t.log(strings.TrimRight(string(output), "\n"), err != nil)
 	}
@@ -2030,14 +2050,18 @@ func (t *T) forkAndTakeTheResult() {
 	t.mu.Unlock()
 }
 
-// failWithoutAChild reports an allocsFork panic on a host that starts no child
-// process. The measurement still needs the process to itself, and the barrier
-// is the only way left to give it one, so the failure names that rather than
-// the pipe the host was never going to open.
+// failWithoutAChild reports an allocsFork panic that no child can answer. A
+// host may start no child process, or this test may already BE the child's
+// target, where a second child reaches the same place. The barrier is the only
+// way left to give the measurement the process, so the failure names it.
 func (t *T) failWithoutAChild() {
+	reason := runtime.GOOS + " starts no child process"
+	if os.Getenv(forkTargetEnv) == t.Name() {
+		reason = "this test already runs in a child of its own"
+	}
 	t.Fail()
-	t.log("AllocsPerRun needs this process to itself, and "+runtime.GOOS+
-		" starts no child process: call t.Serial() in this test", true)
+	t.log("AllocsPerRun needs this process to itself, and "+reason+
+		": call t.Serial() in this test", true)
 
 	t.mu.Lock()
 	t.finished = true
@@ -2062,7 +2086,7 @@ func (t *T) runForked() ([]byte, error) {
 		return nil, err
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Env:   append(os.Environ(), forkTargetEnv+"="+t.Name()),
+		Env:   forkEnv(os.Environ(), t.Name()),
 		Files: []*os.File{nil, pw, pw},
 	})
 	// The parent must drop its own write end, or reading the pipe never sees
@@ -2084,6 +2108,21 @@ func (t *T) runForked() ([]byte, error) {
 		return output, errors.New("the forked run of " + t.Name() + " " + state.String())
 	}
 	return output, readErr
+}
+
+// forkEnv returns this run's environment with the fork marker naming the test
+// the child exists to run. It REPLACES any marker already there: a subtest of a
+// forked test forks from a process that carries its parent's marker, and Getenv
+// answers with the first entry, so an appended one is never read. The child
+// then thinks it is its own parent and forks again, without end.
+func forkEnv(env []string, name string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, forkTargetEnv+"=") {
+			out = append(out, kv)
+		}
+	}
+	return append(out, forkTargetEnv+"="+name)
 }
 
 // forkArgs returns the child's arguments: the ones this run was given, with the
@@ -2400,9 +2439,14 @@ func tRunner(t *T, fn func(t *T)) {
 			// gets no *T. Give it one here: the body is over, and the child
 			// re-runs this test alone, exactly as Fork does.
 			err = nil
-			if canFork() {
+			switch {
+			case os.Getenv(forkTargetEnv) == t.Name():
+				// This test IS the child's target and still shares the
+				// process, so a second child reaches this same place.
+				t.failWithoutAChild()
+			case canFork():
 				t.forkAndTakeTheResult()
-			} else {
+			default:
 				t.failWithoutAChild()
 			}
 		}

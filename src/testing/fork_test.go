@@ -78,23 +78,45 @@ func TestForkFromASubtest(t *T) {
 	})
 }
 
-// TestForkDoesNotForkAgain: a child runs its own subtests in place. Without the
-// marker check in Fork, each of these would start another process, and this
-// test would not finish.
-func TestForkDoesNotForkAgain(t *T) {
+// TestForkSubtestsGetTheirOwnChild: the subtests of a forked test share that
+// child with each other, so a subtest asking for a process of its own must get
+// one. Each ends up the target of a child of its own, and the run terminates:
+// the marker names one test, and every test it runs under stays in place
+// rather than forking its own parent.
+func TestForkSubtestsGetTheirOwnChild(t *T) {
 	t.Fork()
 
-	pid := os.Getpid()
 	for _, name := range []string{"one", "two"} {
 		t.Run(name, func(t *T) {
 			t.Fork()
 
-			if got := os.Getpid(); got != pid {
-				t.Fatalf("subtest ran in pid %d, want its parent's pid %d: it forked a second time", got, pid)
+			if got := os.Getenv(forkTargetEnv); got != t.Name() {
+				t.Fatalf("%s = %q, want this subtest's own name %q: it shares its parent's child",
+					forkTargetEnv, got, t.Name())
 			}
 		})
 	}
 }
+
+// TestAllocsPerRunInAForkedSubtest is the reason the rule above exists.
+// AllocsPerRun counts the whole process, so a sibling subtest running beside
+// the caller counts into the measurement. The measurement used to refuse; it
+// now gets the child it asks for.
+func TestAllocsPerRunInAForkedSubtest(t *T) {
+	t.Fork()
+
+	for _, name := range []string{"one", "two"} {
+		t.Run(name, func(t *T) {
+			got := AllocsPerRun(10, func() { forkAllocSink = make([]byte, 64) })
+			if got != 1 {
+				t.Fatalf("AllocsPerRun = %v, want 1: the measurement did not get the process", got)
+			}
+		})
+	}
+}
+
+// forkAllocSink keeps the measured allocation from being optimized away.
+var forkAllocSink []byte
 
 // TestForkReportsTheChildsFailure is the negative control on the rule that the
 // child's exit status is the verdict. A test cannot fail itself to prove it, so

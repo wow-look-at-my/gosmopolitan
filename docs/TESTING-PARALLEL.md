@@ -35,17 +35,23 @@ counter another test already advanced is still advanced. Fork also leaves the re
 Serial stops it.
 
 Fork does NOT serialize. The child runs parallel-by-default like any other run, so a forked test's subtests still run
-at the same time, and the rest of the suite keeps running in the parent. A test that needs a process of its own AND
-the process to itself calls `t.Serial()` as well - in either order, since the child runs the body from the top.
+at the same time as each other, and the rest of the suite keeps running in the parent. A test that needs a process of
+its own AND the process to itself calls `t.Serial()` as well - in either order, since the child runs the body from the
+top. A subtest that wants a process to itself calls Fork, which gives it one rather than its parent's.
 
 Mechanics:
 
 - The child re-runs that one test via `-test.run`, anchored per slash-separated name element, so a subtest that
   calls Fork gets a child running exactly that subtest.
-- The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. Its
-  presence is also how a child knows never to fork again, so a forked test that runs subtests - or whose subtests
-  call Fork - still runs in exactly one child. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside
-  the child they change the process in place rather than starting a grandchild.
+- The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. The
+  marker names ONE test, not the process: the target and every test it runs under stay in place, and a SUBTEST of
+  the target forks a child of its own. That subtest shares the target's child with its siblings, so it does not yet
+  have the process Fork promises. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside the child
+  they change the process in place rather than starting a grandchild.
+- Starting a child REPLACES the marker rather than appending it. `os.Getenv` answers with the first entry, so an
+  appended one is never read, and a grandchild would take its parent's target for its own and fork without end.
+- A test waiting for its child releases the barrier for that time, and takes it again afterward. It does no work
+  here while it waits, and a hold it keeps blocks every `t.Serial()` in the binary.
 - The parent runs the body as far as the Fork call before it hands over, so whatever the test does before that point
   happens twice. This is worth knowing where `t.Setenv` sits partway down a test rather than at the top.
 - The children alive at once cannot outnumber `-parallel`, because a forked test holds its slot while it waits.
@@ -62,9 +68,14 @@ Mechanics:
 `testing.AllocsPerRun` forks itself over this machinery. Its count and its `GOMAXPROCS(1)` are process-wide, so a
 caller that shares the process with other tests measures nothing meaningful. It takes no `*T` and cannot call `Fork`,
 so it panics with the internal `allocsFork` value; `tRunner` already recovers, and it forks there instead of dying.
-The child re-runs that one test alone and measures. A caller that already has the process - a forked child, a serial
-test, or a run with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a
-goroutine that is no test, its message names `t.Fork` and `t.Serial`.
+The child re-runs that one test alone and measures. A caller that already has the process - a serial test, or a run
+with no parallel test in flight - measures in place. Where the panic reaches any other recover, or a goroutine that is
+no test, its message names `t.Fork` and `t.Serial`.
+
+A forked child measures in place only when the tests in flight are the target's own ancestors. A parent stays counted
+while it waits for the subtest it started, so the bound is the number of elements in the target's name. Anything above
+that is a sibling, whose allocations would land in the count, and the subtest forks a child of its own instead. A test
+that IS the target and still shares the process fails, because a second child reaches the same place.
 
 On `js`, `wasip1` and `ios` there is no child to measure in, so that panic fails the test with a message naming
 `t.Serial()` - the one way left to give the measurement the process. No runner executes that path, since every host
