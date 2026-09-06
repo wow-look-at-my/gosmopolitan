@@ -2,9 +2,7 @@
 
 VENDORED: Go to [github.com/cespare/xxhash](https://github.com/cespare/xxhash) for original package.
 
-xxhash is a Go implementation of the 64-bit [xxHash] algorithm, XXH64. This is a
-high-quality hashing algorithm that is much faster than anything in the Go
-standard library.
+xxhash is a Go implementation of the 64-bit [xxHash] algorithm, XXH64. This is a high-quality hashing algorithm that is much faster than anything in the Go standard library.
 
 This package provides a straightforward API:
 
@@ -23,17 +21,13 @@ func (*Digest) WriteString(string) (int, error)
 func (*Digest) Sum64() uint64
 ```
 
-The package is written with optimized pure Go and also contains even faster
-assembly implementations for amd64 and arm64. If desired, the `purego` build tag
-opts into using the Go code even on those architectures.
+The package is written with optimized pure Go and also contains even faster assembly implementations for amd64 and arm64. If desired, the `purego` build tag opts into using the Go code even on those architectures.
 
 [xxHash]: http://cyan4973.github.io/xxHash/
 
 ## Compatibility
 
-This package is in a module and the latest code is in version 2 of the module.
-You need a version of Go with at least "minimal module compatibility" to use
-github.com/cespare/xxhash/v2:
+This package is in a module and the latest code is in version 2 of the module. You need a version of Go with at least "minimal module compatibility" to use github.com/cespare/xxhash/v2:
 
 * 1.9.7+ for Go 1.9
 * 1.10.3+ for Go 1.10
@@ -43,8 +37,7 @@ I recommend using the latest release of Go.
 
 ## Benchmarks
 
-Here are some quick benchmarks comparing the pure-Go and assembly
-implementations of Sum64.
+Here are some quick benchmarks comparing the pure-Go and assembly implementations of Sum64.
 
 | input size | purego    | asm       |
 | ---------- | --------- | --------- |
@@ -54,8 +47,7 @@ implementations of Sum64.
 | 4 KB       | 11.7 GB/s | 16.7 GB/s |
 | 10 MB      | 12.0 GB/s | 17.3 GB/s |
 
-These numbers were generated on Ubuntu 20.04 with an Intel Xeon Platinum 8252C
-CPU using the following commands under Go 1.19.2:
+These numbers were generated on Ubuntu 20.04 with an Intel Xeon Platinum 8252C CPU using the following commands under Go 1.19.2:
 
 ```
 benchstat <(go test -tags purego -benchtime 500ms -count 15 -bench 'Sum64$')

@@ -630,7 +630,14 @@ func (r *reader) params() []*types.Field {
 
 func (r *reader) param() *types.Field {
 	r.Sync(pkgbits.SyncParam)
-	return types.NewField(r.pos(), r.localIdent(), r.typ())
+	field := types.NewField(r.pos(), r.localIdent(), r.typ())
+	// types2 fills an omitted argument before the IR is built, so every call
+	// the backend sees is already full and the default is spent. Read it to
+	// stay in step with the writer, and drop it.
+	if r.Version().Has(pkgbits.ParamDefaults) && r.Bool() {
+		r.Value()
+	}
+	return field
 }
 
 // @@@ Objects

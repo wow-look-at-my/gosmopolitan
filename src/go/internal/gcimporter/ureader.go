@@ -432,6 +432,9 @@ func (r *reader) param(kind types.VarKind) *types.Var {
 
 	param := types.NewParam(pos, pkg, name, typ)
 	param.SetKind(kind) // ∈ {Recv,Param,Result}Var
+	if r.Version().Has(pkgbits.ParamDefaults) && r.Bool() {
+		param.SetDefault(r.Value())
+	}
 	return param
 }
 

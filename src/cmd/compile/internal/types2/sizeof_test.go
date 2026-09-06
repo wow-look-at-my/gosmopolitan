@@ -39,7 +39,7 @@ func TestSizeof(t *testing.T) {
 		{PkgName{}, 56, 96},
 		{Const{}, 60, 104},
 		{TypeName{}, 52, 88},
-		{Var{}, 60, 104},
+		{Var{}, 68, 120},
 		{Func{}, 60, 104},
 		{Label{}, 56, 96},
 		{Builtin{}, 56, 96},
