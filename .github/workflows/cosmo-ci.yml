@@ -199,9 +199,13 @@ jobs:
           done
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
-          rc=0
-          "$RUNNER_TEMP/strings.test" -test.run=TestLastIndexByte -test.v || rc=$?
-          echo "direct exit=$rc"
+          # Three shapes: no arguments, a listing that never runs a test, and one test.
+          for args in "" "-test.list=." "-test.run=TestLastIndexByte -test.v"; do
+            rc=0
+            "$RUNNER_TEMP/strings.test" $args > "$RUNNER_TEMP/out.txt" 2>&1 || rc=$?
+            echo "strings.test [$args] exit=$rc output:"
+            cat "$RUNNER_TEMP/out.txt"
+          done
           exit $rc
 
       - name: The whole test suite (run.bash)
