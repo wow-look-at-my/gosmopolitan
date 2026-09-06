@@ -170,7 +170,7 @@ func TestForkReportsTheChildsFailure(t *T) {
 // stopped.
 func TestSetenvForks(t *T) {
 	if !canFork() {
-		t.Skip("this platform cannot start a child process, so Setenv takes the barrier")
+		t.Skip("this run cannot fork, so Setenv takes the barrier")
 	}
 	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
 
@@ -188,7 +188,7 @@ func TestSetenvForks(t *T) {
 // TestChdirForks is the same rule for the other process-wide change.
 func TestChdirForks(t *T) {
 	if !canFork() {
-		t.Skip("this platform cannot start a child process, so Chdir takes the barrier")
+		t.Skip("this run cannot fork, so Chdir takes the barrier")
 	}
 	before, err := os.Getwd()
 	if err != nil {
@@ -215,7 +215,7 @@ func TestChdirForks(t *T) {
 // child would fork a grandchild, and this test would not finish.
 func TestSetenvInAChildStaysInPlace(t *T) {
 	if !canFork() {
-		t.Skip("this platform cannot start a child process")
+		t.Skip("this run cannot fork")
 	}
 	t.Fork()
 

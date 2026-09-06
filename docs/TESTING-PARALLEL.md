@@ -16,6 +16,13 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and
+`-test.coverprofile`, so it writes its own report into the parent's directory and the two race - the parent's
+rename of the meta file finds the file already gone, and the package fails with `error generating coverage
+report`. Taking the barrier keeps the counters in the run that reports them, which is also what makes the test's
+coverage count at all: the parent does not execute a forked test's body, so a child's discarded profile would
+read as dead code.
+
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
 ## t.Fork
