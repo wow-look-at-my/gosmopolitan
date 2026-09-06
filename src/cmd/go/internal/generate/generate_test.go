@@ -9,8 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
+
+	"cmd/go/internal/cfg"
 )
 
 type splitTest struct {
@@ -32,14 +33,16 @@ var splitTests = []splitTest{
 	{"x", []string{"x"}},
 	{" a b\tc ", []string{"a", "b", "c"}},
 	{` " a " `, []string{" a "}},
-	{"$GOARCH", []string{runtime.GOARCH}},
-	{"$GOOS", []string{runtime.GOOS}},
+	{"$GOARCH", []string{cfg.BuildContext.GOARCH}},
+	// setEnv publishes the BUILD TARGET, not the host, so a run that
+	// cross-compiles expands $GOOS to what it builds for.
+	{"$GOOS", []string{cfg.BuildContext.GOOS}},
 	{"$GOFILE", []string{"proc.go"}},
 	{"$GOPACKAGE", []string{"sys"}},
 	{"a $XXNOTDEFINEDXX b", []string{"a", "", "b"}},
 	{"/$XXNOTDEFINED/", []string{"//"}},
 	{"/$DOLLAR/", []string{"/$/"}},
-	{"yacc -o $GOARCH/yacc_$GOFILE", []string{"go", "tool", "yacc", "-o", runtime.GOARCH + "/yacc_proc.go"}},
+	{"yacc -o $GOARCH/yacc_$GOFILE", []string{"go", "tool", "yacc", "-o", cfg.BuildContext.GOARCH + "/yacc_proc.go"}},
 }
 
 func TestGenerateCommandParse(t *testing.T) {
