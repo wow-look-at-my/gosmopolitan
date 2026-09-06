@@ -165,7 +165,7 @@ func sigInstallGoHandler(sig uint32) bool {
 		}
 	}
 
-	if (goos.IsLinux == 1 || goos.IsAndroid == 1) && !iscgo && sig == sigPerThreadSyscall {
+	if hostIsLinux() && !iscgo && sig == sigPerThreadSyscall {
 		// sigPerThreadSyscall is the same signal used by glibc for
 		// per-thread syscalls on Linux. We use it for the same purpose
 		// in non-cgo binaries.
@@ -681,7 +681,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	if (goos.IsLinux == 1 || goos.IsAndroid == 1) && sig == sigPerThreadSyscall {
+	if hostIsLinux() && sig == sigPerThreadSyscall {
 		// sigPerThreadSyscall is the same signal used by glibc for
 		// per-thread syscalls on Linux. We use it for the same purpose
 		// in non-cgo binaries. Since this signal is not _SigNotify,
@@ -1264,7 +1264,7 @@ var sigsetAllExiting = func() sigset {
 	// Apply GOOS-specific overrides here, rather than in osinit,
 	// because osinit may be called before sigsetAllExiting is
 	// initialized (#51913).
-	if goos.IsLinux == 1 && iscgo {
+	if hostIsLinux() && iscgo {
 		// #42494 glibc and musl reserve some signals for
 		// internal use and require they not be blocked by
 		// the rest of a normal C runtime. When the go runtime

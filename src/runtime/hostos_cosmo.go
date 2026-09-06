@@ -35,6 +35,11 @@ func CosmoHostOS() string {
 // port. Every other port answers from its port, in hostos_notcosmo.go.
 func hostIsDarwin() bool { return isdarwin() }
 
+// hostIsLinux reports whether the kernel under this program is Linux.
+// Signal 33 carries the per-thread syscall there and nowhere else, so
+// the handler has to follow the kernel rather than the port.
+func hostIsLinux() bool { return __hostos == _HOSTLINUX }
+
 // CosmoHostname returns the host's name, or "" when this host keeps it
 // somewhere the caller can already read.
 //

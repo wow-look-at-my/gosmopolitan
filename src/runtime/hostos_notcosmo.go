@@ -12,3 +12,6 @@ import "internal/goos"
 // Every port but cosmo is built for one kernel, so the port answers.
 // The cosmo half is in hostos_cosmo.go, where it asks the host.
 func hostIsDarwin() bool { return goos.IsDarwin == 1 || goos.IsIos == 1 }
+
+// hostIsLinux reports whether the kernel under this program is Linux.
+func hostIsLinux() bool { return goos.IsLinux == 1 || goos.IsAndroid == 1 }
