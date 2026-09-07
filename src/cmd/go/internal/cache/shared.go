@@ -226,19 +226,20 @@ func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	return outputID, size, nil
 }
 
-// offer uploads the stored body. It reads back the file the DiskCache just
-// wrote rather than rewinding the caller's reader: the caller owns that reader
-// and the contract does not promise it is still seekable afterwards.
+// offer uploads the stored body. It names the file the DiskCache just wrote
+// rather than rewinding the caller's reader: the caller owns that reader and
+// the contract does not promise it is still seekable afterwards.
 //
-// The read happens here and the compression does not. Put takes the bytes and
-// returns, so the goroutine that just finished a compile goes back to
-// compiling instead of spending its next milliseconds on lz4.
+// Neither the read nor the compression happens here. A prep worker does both,
+// so the goroutine that just finished a compile goes back to compiling instead
+// of spending its next milliseconds on a body-sized copy and zstd. Handing
+// over the path also keeps that body out of the prep queue, which is several
+// times a worker count deep and used to hold every one of them uncompressed.
+//
+// PutFile owes the file's lifetime to the caller, and Close below is what pays
+// it: the backend drains before the DiskCache trims.
 func (c *SharedCache) offer(id ActionID, outputID OutputID) {
-	data, err := os.ReadFile(c.DiskCache.OutputFile(outputID))
-	if err != nil {
-		return
-	}
-	_ = c.remote.Put(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), data)
+	_ = c.remote.PutFile(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), c.DiskCache.OutputFile(outputID))
 }
 
 // Close drains the shared tier's in-flight uploads before the disk cache
