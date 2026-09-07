@@ -276,6 +276,10 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 `GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`). Unset. The build stays on disk. A run with `CI` set and no shared cache fails outright, because an unconfigured CI run decides whether every other CI run recompiles. `GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s quiet window.
 
+**`SharedCache.populate` is what makes look-ahead real.** The client fetches objects ahead of the build on its own goroutines, and hands them to `OnBatchEntries`. Nothing else stores them. Leaving that nil turns look-ahead off, which is what it was for a long time: every prefetched body was parsed and dropped. `putVerified` writes a hit without recomputing the hash the client just checked. Depth, and the measurements: `docs/look-ahead.md` in the go-s3-server repo.
+
+**The cache stores bytes under a key of source and compiler. Nothing else.** `PutExecutable` keeps its local 0777 shape, and offers the shared tier the same plain bytes as any other object. The executable's NAME never goes on the wire. It comes from the package being built (`Internal.ExeName`, else `DefaultExecName`), so whoever asks already knows it. Nothing reads it back off a shared hit either. Such a hit skips the link step that sets `cachedExecutable`, and both callers of `CachedExecutable` fall back when it is empty.
+
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
 | vendor path | repository |

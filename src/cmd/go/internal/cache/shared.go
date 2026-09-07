@@ -158,7 +158,7 @@ func (c *SharedCache) populate(entries []cacheclient.BatchEntry) {
 		if _, err := c.DiskCache.Get(id); err == nil {
 			continue // already local; nothing to do
 		}
-		data, ok := c.remote.Verify(actionID, e.OutputID, e.Data)
+		data, ok := c.remote.Verify(e, actionID)
 		if !ok {
 			continue
 		}
