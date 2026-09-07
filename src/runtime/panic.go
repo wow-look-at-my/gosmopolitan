@@ -5,9 +5,9 @@
 package runtime
 
 import (
-	"internal/goos"
 	"internal/abi"
 	"internal/goarch"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
