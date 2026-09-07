@@ -36,6 +36,8 @@ type largeScalar [UserArenaChunkBytes + 1]byte
 type largePointer [UserArenaChunkBytes/unsafe.Sizeof(&smallPointer{}) + 1]*smallPointer
 
 func TestUserArena(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if Clobberfree() {
 		// This test crashes with SEGV in clobberfree in mgcsweep.go with GODEBUG=clobberfree=1.
 		t.Skip("triggers SEGV with GODEBUG=clobberfree=1")

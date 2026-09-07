@@ -44,28 +44,28 @@ exists ./cover.out
 
 # Test flags from GOFLAGS should be forwarded to the test binary,
 # with the 'test.' prefix in the GOFLAGS entry...
-env GOFLAGS='-test.timeout=24h0m0s -count=1'
+env GOFLAGS='-test.timeout=24h0m0s -count=2'
 go test -v -x ./x
 stdout 'timeout: 24h0m0s$'
-stderr '-test.count=1'
+stderr '-test.count=2'
 
 # ...or without.
-env GOFLAGS='-timeout=24h0m0s -count=1'
+env GOFLAGS='-timeout=24h0m0s -count=2'
 go test -v -x ./x
 stdout 'timeout: 24h0m0s$'
-stderr '-test.count=1'
+stderr '-test.count=2'
 
 # Arguments from the command line should override GOFLAGS...
 go test -v -x -timeout=25h0m0s ./x
 stdout 'timeout: 25h0m0s$'
-stderr '-test.count=1'
+stderr '-test.count=2'
 
 # ...even if they use a different flag name.
 go test -v -x -test.timeout=26h0m0s ./x
 stdout 'timeout: 26h0m0s$'
 stderr '-test\.timeout=26h0m0s'
 ! stderr 'timeout=24h0m0s'
-stderr '-test.count=1'
+stderr '-test.count=2'
 
 # Invalid flags should be reported exactly once.
 ! go test -covermode=walrus ./x

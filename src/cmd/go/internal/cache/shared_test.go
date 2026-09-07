@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -188,85 +189,17 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 }
 
-// An executable stored through the shared tier must come back on a cold
-// machine in the shape the build can run: a directory entry holding a 0777
-// file named for the binary. A plain-file materialization is exactly the
-// regression this pins -- the hit exists, useCache trusts it, and go run
-// dies at fork/exec with permission denied.
-func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	configureShared(t, srv)
-
-	body := []byte("#!/bin/sh\nfake APE payload for the round trip\n")
-	name := "shebang-test"
-	id := testActionID("shared-executable-round-trip")
-
-	first := openShared(t, t.TempDir())
-	exec, ok := first.(ExecutableCache)
-	if !ok {
-		t.Fatalf("%T is not an ExecutableCache", first)
-	}
-	outputID, size, err := exec.PutExecutable(id, name, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("PutExecutable: %v", err)
-	}
-	if size != int64(len(body)) {
-		t.Fatalf("PutExecutable stored %d bytes, want %d", size, len(body))
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if f.stored() == 0 {
-		t.Fatal("nothing reached the shared cache")
-	}
-
-	// The metadata traveled: the stored object carries the exe name.
-	f.mu.Lock()
-	var meta map[string]string
-	for _, m := range f.meta {
-		meta = m
-	}
-	f.mu.Unlock()
-	if meta["exe-name"] != name {
-		t.Fatalf("stored metadata exe-name = %q, want %q", meta["exe-name"], name)
-	}
-
-	// A different machine: same shared cache, empty local cache.
-	second := openShared(t, t.TempDir())
-	defer second.Close()
-	entry, err := second.Get(id)
-	if err != nil {
-		t.Fatalf("Get after a cold local cache: %v", err)
-	}
-	if entry.OutputID != outputID {
-		t.Fatalf("Get returned outputID %x, want %x", entry.OutputID, outputID)
-	}
-
-	// The executable shape: OutputFile names a 0777 file the build can exec.
-	exe := second.OutputFile(entry.OutputID)
-	info, err := os.Stat(exe)
-	if err != nil {
-		t.Fatalf("stat %s: %v", exe, err)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("%s has mode %v, want an executable bit", exe, info.Mode().Perm())
-	}
-	got, err := os.ReadFile(exe)
-	if err != nil {
-		t.Fatalf("read %s: %v", exe, err)
-	}
-	if !bytes.Equal(got, body) {
-		t.Fatalf("the shared cache served %q, want %q", got, body)
-	}
-}
-
-// A network hit must restore exactly the mode the original PutExecutable (or
-// Put) call chose -- never a guess from content, never a blanket +x. The
-// build system execs some cached outputs directly (go run, a shebang
-// script), and the choice of Put vs PutExecutable already carries that
-// decision; this pins that it survives the round trip through the wire's
-// executable metadata instead of being lost or defaulted.
-func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
+// A network hit the build is going to run must come back as a directory
+// holding a file of the caller's name. The wire carries bytes and no name, so
+// the restore writes a plain file instead, and useCache hands that path to
+// a.built for a cached link -- "fork/exec ...-d: permission denied" on Unix,
+// "executable file not found in %PATH%" on Windows, where exec rejects an
+// extension PATHEXT does not list.
+//
+// GetExecutableFile takes the name from the caller and rewrites the file. An
+// ordinary Put object stays the plain file Put wrote, so the rewrite is what
+// the caller asked for, never something the cache guessed.
+func TestSharedCache_NetworkHitIsRunnable(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 
@@ -296,19 +229,53 @@ func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
 	second := openShared(t, t.TempDir())
 	defer second.Close()
 
-	exeEntry, err := second.Get(exeID)
+	// The plain file first. Asserting it is what stops this test passing
+	// because the restore happened to write the directory by itself.
+	rawEntry, err := second.Get(exeID)
 	if err != nil {
 		t.Fatalf("Get executable after a cold local cache: %v", err)
 	}
-	exeName := second.OutputFile(exeEntry.OutputID)
-	info, err := os.Stat(exeName)
-	if err != nil {
-		t.Fatalf("Stat(%s): %v", exeName, err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("network hit for a PutExecutable object %s has mode %v, want an executable bit set", exeName, info.Mode())
+	raw := second.OutputFile(rawEntry.OutputID)
+	if got := filepath.Base(filepath.Dir(raw)); got == fmt.Sprintf("%x", rawEntry.OutputID)+"-d" {
+		t.Fatalf("a restore already wrote the directory at %s; this test no longer covers the rewrite", raw)
 	}
 
+	exeFile, exeEntry, err := GetExecutableFile(second, exeID, "cached-script")
+	if err != nil {
+		t.Fatalf("GetExecutableFile: %v", err)
+	}
+	if got, want := filepath.Base(exeFile), "cached-script"; got != want {
+		t.Fatalf("GetExecutableFile returned %s, want a file named %s", exeFile, want)
+	}
+	if got, want := filepath.Base(filepath.Dir(exeFile)), fmt.Sprintf("%x", exeEntry.OutputID)+"-d"; got != want {
+		t.Fatalf("GetExecutableFile returned %s, want it inside %s", exeFile, want)
+	}
+	info, err := os.Stat(exeFile)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", exeFile, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("converted executable %s has mode %v, want an executable bit set", exeFile, info.Mode())
+	}
+	got, err := os.ReadFile(exeFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", exeFile, err)
+	}
+	if !bytes.Equal(got, exeBody) {
+		t.Fatalf("converted executable holds %q, want %q", got, exeBody)
+	}
+
+	// A second call is a plain hit: the directory is there, so it must not
+	// rewrite anything.
+	againFile, _, err := GetExecutableFile(second, exeID, "cached-script")
+	if err != nil {
+		t.Fatalf("GetExecutableFile again: %v", err)
+	}
+	if againFile != exeFile {
+		t.Fatalf("GetExecutableFile again returned %s, want %s", againFile, exeFile)
+	}
+
+	// An ordinary object is untouched: nothing asked for it to be runnable.
 	plainEntry, err := second.Get(plainID)
 	if err != nil {
 		t.Fatalf("Get plain object after a cold local cache: %v", err)
@@ -318,8 +285,8 @@ func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(%s): %v", plainName, err)
 	}
-	if info.Mode()&0o111 != 0 {
-		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want no executable bit", plainName, info.Mode())
+	if info.IsDir() {
+		t.Fatalf("network hit for an ordinary Put object %s is a directory, want a plain file", plainName)
 	}
 }
 
@@ -598,6 +565,7 @@ func holdQuietWindowOpen(t *testing.T) {
 // silence, never a fix: a green build here says the cache is quiet, not that
 // the cache works.
 func TestSharedCache_QuietWindowExpires(t *testing.T) {
+	t.Serial()
 	if !cacheQuietUntil.After(time.Now()) {
 		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+
 			"or say here why it moves", cacheQuietUntil.Format(time.RFC3339))

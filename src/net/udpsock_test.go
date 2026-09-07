@@ -93,6 +93,7 @@ var resolveUDPAddrTests = []resolveUDPAddrTest{
 
 func TestResolveUDPAddr(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 

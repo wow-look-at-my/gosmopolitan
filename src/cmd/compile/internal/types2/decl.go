@@ -349,6 +349,10 @@ func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited boo
 			// (see issues go.dev/issue/42991, go.dev/issue/42992).
 			check.errpos = obj.pos
 		}
+		// A constant context: runtime.GOOS and runtime.GOARCH fold to
+		// the build value here. See dynconst.go.
+		defer func(prev bool) { check.inConstExpr = prev }(check.inConstExpr)
+		check.inConstExpr = true
 		check.expr(nil, &x, init)
 	}
 	check.initConst(obj, &x)

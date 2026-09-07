@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -105,7 +106,17 @@ func runTerminalPassthrough(t *testing.T, r, w *os.File) (stdout, stderr bool) {
 	n, err := io.ReadFull(r, buf)
 	if err != nil || !(buf[0] == '1' || buf[0] == 'X') || !(buf[1] == '2' || buf[1] == 'X') {
 		t.Logf("read error: %v", err)
-		t.Fatalf("expected 2 bytes matching `[1X][2X]`; got %q", buf[:n])
+		// Stdout and stderr are the same file here, so anything the child
+		// says on the way up arrives before the two bytes this reads and is
+		// then thrown away. The macOS leg failed with "ru", the head of a
+		// message nobody could see. Report the rest of it.
+		rest := make([]byte, 4096)
+		var m int
+		if derr := r.SetReadDeadline(time.Now().Add(2 * time.Second)); derr == nil {
+			m, _ = r.Read(rest)
+			r.SetReadDeadline(time.Time{})
+		}
+		t.Fatalf("expected 2 bytes matching `[1X][2X]`; got %q followed by %q", buf[:n], rest[:m])
 	}
 	return buf[0] == '1', buf[1] == '2'
 }

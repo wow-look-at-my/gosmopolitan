@@ -370,7 +370,7 @@ The available conditions are:
 [GOEXPERIMENT:*]
 	GOEXPERIMENT <suffix> is enabled
 [GOOS:*]
-	runtime.GOOS == <suffix>
+	goos.GOOS == <suffix>
 [abscc]
 	default $CC path is absolute and exists
 [asan]

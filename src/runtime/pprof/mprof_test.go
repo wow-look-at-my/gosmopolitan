@@ -64,6 +64,8 @@ func allocateReflect() {
 var memoryProfilerRun = 0
 
 func TestMemoryProfiler(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if asan.Enabled {
 		t.Skip("extra allocations with -asan throw off the test; see #70079")
 	}
@@ -80,16 +82,20 @@ func TestMemoryProfiler(t *testing.T) {
 		memSink = make([]byte, 1024)
 	}
 
-	// Do the interesting allocations.
-	allocateTransient1M()
-	allocateTransient2M()
-	allocateTransient2MInline()
+	// Do the interesting allocations. The expectations below name these call
+	// sites by line, so each one reads its own line rather than repeating a
+	// number that an edit above would make stale.
+	_, _, transientLine, _ := runtime.Caller(0)
+	allocateTransient1M()       // transientLine+1
+	allocateTransient2M()       // transientLine+2
+	allocateTransient2MInline() // transientLine+3
 	// The 32 allocations below take the size-class slow path while GC marks,
 	// and that path adds one frame to the profiled stack. A cycle that ends
 	// inside the loop splits the 32 into two buckets, which the wasip1 CI leg
 	// hit. Finish any cycle first.
 	runtime.GC()
-	allocatePersistent1K()
+	_, _, persistentLine, _ := runtime.Caller(0)
+	allocatePersistent1K() // persistentLine+1
 	allocateReflect()
 	memSink = nil
 
@@ -107,26 +113,26 @@ func TestMemoryProfiler(t *testing.T) {
 		stk: []string{"runtime/pprof.allocatePersistent1K", "runtime/pprof.TestMemoryProfiler"},
 		legacy: fmt.Sprintf(`%v: %v \[%v: %v\] @( 0x[0-9,a-f]+){4,6}
 #	0x[0-9,a-f]+	runtime/pprof\.allocatePersistent1K\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:48
-#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:92
-`, 32*memoryProfilerRun, 1024*memoryProfilerRun, 32*memoryProfilerRun, 1024*memoryProfilerRun),
+#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test\.go:%v
+`, 32*memoryProfilerRun, 1024*memoryProfilerRun, 32*memoryProfilerRun, 1024*memoryProfilerRun, persistentLine+1),
 	}, {
 		stk: []string{"runtime/pprof.allocateTransient1M", "runtime/pprof.TestMemoryProfiler"},
 		legacy: fmt.Sprintf(`0: 0 \[%v: %v\] @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime/pprof\.allocateTransient1M\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:25
-#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:84
-`, (1<<10)*memoryProfilerRun, (1<<20)*memoryProfilerRun),
+#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:%v
+`, (1<<10)*memoryProfilerRun, (1<<20)*memoryProfilerRun, transientLine+1),
 	}, {
 		stk: []string{"runtime/pprof.allocateTransient2M", "runtime/pprof.TestMemoryProfiler"},
 		legacy: fmt.Sprintf(`0: 0 \[%v: %v\] @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime/pprof\.allocateTransient2M\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:31
-#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:85
-`, memoryProfilerRun, (2<<20)*memoryProfilerRun),
+#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:%v
+`, memoryProfilerRun, (2<<20)*memoryProfilerRun, transientLine+2),
 	}, {
 		stk: []string{"runtime/pprof.allocateTransient2MInline", "runtime/pprof.TestMemoryProfiler"},
 		legacy: fmt.Sprintf(`0: 0 \[%v: %v\] @ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+ 0x[0-9,a-f]+
 #	0x[0-9,a-f]+	runtime/pprof\.allocateTransient2MInline\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:35
-#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:86
-`, memoryProfilerRun, (2<<20)*memoryProfilerRun),
+#	0x[0-9,a-f]+	runtime/pprof\.TestMemoryProfiler\+0x[0-9,a-f]+	.*runtime/pprof/mprof_test.go:%v
+`, memoryProfilerRun, (2<<20)*memoryProfilerRun, transientLine+3),
 	}, {
 		stk: []string{"runtime/pprof.allocateReflectTransient"},
 		legacy: fmt.Sprintf(`0: 0 \[%v: %v\] @( 0x[0-9,a-f]+)+

@@ -111,6 +111,7 @@ func (f readerFunc) Read(b []byte) (int, error) {
 }
 
 func TestReadUsesReader(t *testing.T) {
+	t.Serial()
 	var called bool
 	defer func(r io.Reader) { Reader = r }(Reader)
 	Reader = readerFunc(func(b []byte) (int, error) {
@@ -156,6 +157,7 @@ func testConcurrentRead(t *testing.T, Read func([]byte) (int, error)) {
 var sink byte
 
 func TestAllocations(t *testing.T) {
+	t.Serial()
 	cryptotest.SkipTestAllocations(t)
 	n := int(testing.AllocsPerRun(10, func() {
 		buf := make([]byte, 32)
@@ -168,6 +170,7 @@ func TestAllocations(t *testing.T) {
 }
 
 func TestReadError(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
 	}

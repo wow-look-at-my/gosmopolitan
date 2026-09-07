@@ -641,6 +641,7 @@ func TestTRun(t *T) {
 }
 
 func TestBRun(t *T) {
+	t.Serial()
 	work := func(b *B) {
 		for i := 0; i < b.N; i++ {
 			time.Sleep(time.Nanosecond)

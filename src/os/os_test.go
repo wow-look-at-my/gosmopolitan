@@ -2910,6 +2910,8 @@ func mkdirTree(t *testing.T, root string, level, max int) {
 // Test that simultaneous RemoveAll do not report an error.
 // As long as it gets removed, we should be happy.
 func TestRemoveAllRace(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.GOOS == "windows" {
 		// Windows has very strict rules about things like
 		// removing directories while someone else has

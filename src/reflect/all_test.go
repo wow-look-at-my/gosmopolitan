@@ -4876,8 +4876,11 @@ var gFloat32 float32
 const snan uint32 = 0x7f800001
 
 func TestConvertNaNs(t *testing.T) {
+	t.Serial(
 	// Test to see if a store followed by a load of a signaling NaN
 	// maintains the signaling bit. (This used to fail on the 387 port.)
+	)
+
 	gFloat32 = math.Float32frombits(snan)
 	runtime.Gosched() // make sure we don't optimize the store/load away
 	if got := math.Float32bits(gFloat32); got != snan {
@@ -6848,9 +6851,12 @@ func (pi *Inner) M() {
 }
 
 func TestCallMethodJump(t *testing.T) {
+	t.Serial(
 	// In reflect.Value.Call, trigger a garbage collection after reflect.call
 	// returns but before the args frame has been discarded.
 	// This is a little clumsy but makes the failure repeatable.
+	)
+
 	*CallGC = true
 
 	p := &Outer{Inner: new(Inner)}
@@ -6862,6 +6868,7 @@ func TestCallMethodJump(t *testing.T) {
 }
 
 func TestCallArgLive(t *testing.T) {
+	t.Serial()
 	type T struct{ X, Y *string } // pointerful aggregate
 
 	F := func(t T) { *t.X = "ok" }

@@ -458,7 +458,7 @@ func Init() {
 	artifacts = flag.Bool("test.artifacts", false, "store test artifacts in test.,outputdir")
 	// Report as tests are run; default is silent for success.
 	flag.Var(&chatty, "test.v", "verbose: print additional output")
-	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times")
+	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times, where 0 runs none and any other value runs them once")
 	coverProfile = flag.String("test.coverprofile", "", "write a coverage profile to `file`")
 	gocoverdir = flag.String("test.gocoverdir", "", "write coverage intermediate files to this directory")
 	matchList = flag.String("test.list", "", "list tests, examples, and benchmarks matching `regexp` then exit")
@@ -1997,12 +1997,38 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
 // child that could not be started, or died on a signal - against this test.
+//
+// A host that starts no child process - js, wasip1, ios - takes the barrier
+// instead, which buys the same isolation by stopping every other test. There
+// is one process there, so no other test can reach this one's state either
+// way. [AllocsPerRun] is the exception: it needs the process itself, and fails
+// on such a host rather than measuring the wrong thing.
+//
+// A call inside a fork child never starts a second one. The child is alone in
+// its process, so it has what a fork would buy.
 func (t *T) Fork() {
-	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+	if !canFork() {
+		t.Serial()
+		return
+	}
+	if target, forked := os.LookupEnv(forkTargetEnv); forked {
 		// Already the dedicated child: run the body right here. A test the
 		// target runs UNDER stays here too, or the child forks its own parent
 		// and never reaches the target.
-		return
+		if target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+			return
+		}
+		// A test BELOW the target forks normally: it gets its own child, which
+		// is what a subtest asks Fork for.
+		if !strings.HasPrefix(t.Name(), target+"/") {
+			// Anything else is a test the child was never selected to run, so
+			// forking it starts a peer rather than a descendant and the two
+			// spawn each other. The windows leg reached "cannot allocate
+			// memory" that way, through archive/tar's two forking tests. The
+			// barrier gives this one what a child would, without the process.
+			t.Serial()
+			return
+		}
 	}
 	t.Helper()
 	t.forkAndTakeTheResult()
@@ -2086,7 +2112,7 @@ func (t *T) runForked() ([]byte, error) {
 		return nil, err
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Env:   forkEnv(os.Environ(), t.Name()),
+		Env:   forkEnv(startEnv, t.Name()),
 		Files: []*os.File{nil, pw, pw},
 	})
 	// The parent must drop its own write end, or reading the pipe never sees
@@ -2109,6 +2135,16 @@ func (t *T) runForked() ([]byte, error) {
 	}
 	return output, readErr
 }
+
+// startEnv is the environment this test binary was started with. A child
+// gets that, not what the process holds when it forks.
+//
+// The difference is a TestMain that runs the binary as a tool when it sees
+// its own variable, and sets that variable so the subprocesses it starts
+// inherit it. cmd/pack does exactly this. A child started from the live
+// environment reads the variable, runs the tool, and prints a usage
+// message where a test result belongs.
+var startEnv = os.Environ()
 
 // forkEnv returns this run's environment with the fork marker naming the test
 // the child exists to run. It REPLACES any marker already there: a subtest of a
@@ -2298,8 +2334,8 @@ func (t *T) releaseBarrier() {
 // always meant. Inside a serial test Parallel does nothing: the subtests of a
 // serial test run one at a time.
 //
-// When a test is run multiple times due to use of -test.count or -test.cpu,
-// multiple instances of a single test never run in parallel with each other.
+// When a test is run multiple times due to use of -test.cpu, multiple
+// instances of a single test never run in parallel with each other.
 func (t *T) Parallel() {
 	if t.isParallel {
 		return
@@ -2395,11 +2431,7 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
-	if canFork() {
-		t.Fork()
-		return
-	}
-	t.Serial()
+	t.Fork()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
@@ -3165,18 +3197,25 @@ func RunTests(matchString func(pat, str string) (bool, error), tests []InternalT
 	return ok
 }
 
+// runCount reports how many times to run each test, benchmark and fuzz seed.
+// -test.count=0 selects no run at all. Every other value selects exactly one:
+// this toolchain does not repeat a test to see whether it passes again.
+func runCount() uint {
+	if *count == 0 {
+		return 0
+	}
+	return 1
+}
+
 func runTests(modulePath, importPath string, matchString func(pat, str string) (bool, error), tests []InternalTest, deadline time.Time) (ran, ok bool) {
 	ok = true
 	for _, procs := range cpuList {
 		runtime.GOMAXPROCS(procs)
-		for i := uint(0); i < *count; i++ {
+		// runCount, not *count: a positive count runs the tests once here.
+		// Repeating a test is not a repair. A test that passes only sometimes
+		// is broken, and the fix belongs in the test.
+		for i := uint(0); i < runCount(); i++ {
 			if shouldFailFast() {
-				break
-			}
-			if i > 0 && !ran {
-				// There were no tests to run on the first
-				// iteration. This won't change, so no reason
-				// to keep trying.
 				break
 			}
 			ctx, cancelCtx := context.WithCancel(context.Background())

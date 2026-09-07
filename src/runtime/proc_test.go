@@ -36,6 +36,8 @@ func perpetuumMobile() {
 }
 
 func TestStopTheWorldDeadlock(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if runtime.GOARCH == "wasm" {
 		t.Skip("no preemption on wasm yet")
 	}
@@ -109,6 +111,8 @@ func TestYieldLocked(t *testing.T) {
 }
 
 func TestGoroutineParallelism(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		// Takes too long, too easy to deadlock, etc.
 		t.Skip("skipping on uniprocessor")
@@ -344,6 +348,8 @@ func TestPreemption(t *testing.T) {
 }
 
 func TestPreemptionGC(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if runtime.GOARCH == "wasm" {
 		t.Skip("no preemption on wasm yet")
 	}
@@ -434,6 +440,8 @@ func TestNumGoroutine(t *testing.T) {
 }
 
 func TestPingPongHog(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if runtime.GOARCH == "wasm" {
 		t.Skip("no preemption on wasm yet")
 	}
@@ -556,6 +564,8 @@ func stackGrowthRecursive(i int) {
 }
 
 func TestPreemptSplitBig(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("skipping in -short mode")
 	}
@@ -631,6 +641,8 @@ func TestSchedLocalQueueSteal(t *testing.T) {
 }
 
 func TestSchedLocalQueueEmpty(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		// Takes too long and does not trigger the race.
 		t.Skip("skipping on uniprocessor")

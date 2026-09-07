@@ -13,6 +13,7 @@ import (
 var testAllocationsSink byte
 
 func TestEdwards25519Allocations(t *testing.T) {
+	t.Serial()
 	cryptotest.SkipTestAllocations(t)
 	if allocs := testing.AllocsPerRun(100, func() {
 		p := NewIdentityPoint()

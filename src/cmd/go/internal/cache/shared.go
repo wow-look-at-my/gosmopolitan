@@ -13,8 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	goCfg "cmd/go/internal/cfg"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -39,6 +43,40 @@ type SharedCache struct {
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// sharedModule holds the main module's path for cache provenance.
+//
+// It is a variable rather than an argument because of when each side happens:
+// the cache is built the first time anything asks for it, and the main module
+// is not known until the module loader has run. Whichever comes first, the
+// backend ends up with the path -- SetSharedModule reaches a backend that
+// already exists, and newSharedCache reads the value for one built later.
+var sharedModule atomic.Pointer[string]
+
+// SetSharedModule records which module's build is running, for the shared
+// cache's provenance headers. The module loader calls it once it knows.
+func SetSharedModule(path string) {
+	if path == "" {
+		return
+	}
+	sharedModule.Store(&path)
+	if c := liveShared.Load(); c != nil {
+		c.remote.SetModule(path)
+	}
+}
+
+// liveShared is the backend this process built, if it built one. Reaching it
+// through Default() here would construct the cache as a side effect of naming
+// a module, which is not what a setter may do.
+var liveShared atomic.Pointer[SharedCache]
+
+// mainModulePath is the recorded module path, or "" before the loader runs.
+func mainModulePath() string {
+	if p := sharedModule.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // Shared reports whether a shared cache tier is configured for this process.
@@ -67,6 +105,13 @@ func newSharedCache(disk *DiskCache) Cache {
 	if cfg.Bucket == "" {
 		return nil
 	}
+	// Provenance. The environment names the endpoint and the credential; what
+	// this build IS comes from the build itself, and the server has no other
+	// way to learn it. Without these its log can say how many objects moved and
+	// nothing about whose build moved them.
+	cfg.Target = goCfg.Goos + "/" + goCfg.Goarch
+	cfg.Version = runtime.Version()
+	cfg.Module = mainModulePath()
 	// The client writes diagnostics nowhere until a consumer says otherwise,
 	// and cmd/go's stderr is where a build's warnings already go. The one
 	// exception is the outage window below, which ends by itself.
@@ -82,7 +127,65 @@ func newSharedCache(disk *DiskCache) Cache {
 		}
 		return nil
 	}
-	return &SharedCache{DiskCache: disk, remote: remote}
+	c := &SharedCache{DiskCache: disk, remote: remote}
+	// Without this the look-ahead pool has nowhere to put what it fetches, and
+	// the client turns it off. This is the whole mechanism: objects land on
+	// disk before the build asks for them, so the ask is a local read.
+	remote.OnBatchEntries = c.populate
+	liveShared.Store(c)
+	return c
+}
+
+// populate stores objects the look-ahead pool fetched before the build asked
+// for them. It runs on that pool's goroutines, several at a time.
+//
+// The cheap checks come first and the expensive one last. An object already on
+// disk costs a stat here; an object that is not costs a decompress and a hash.
+// Doing it the other way round would decompress the whole window on every
+// request to discover the build already had it.
+func (c *SharedCache) populate(entries []cacheclient.BatchEntry) {
+	for _, e := range entries {
+		actionID, ok := c.remote.ActionIDFromKey(e.Key)
+		if !ok {
+			continue
+		}
+		var id ActionID
+		raw, err := hex.DecodeString(actionID)
+		if err != nil || len(raw) != len(id) {
+			continue
+		}
+		copy(id[:], raw)
+		if _, err := c.DiskCache.Get(id); err == nil {
+			continue // already local; nothing to do
+		}
+		data, ok := c.remote.Verify(e, actionID)
+		if !ok {
+			continue
+		}
+		out, decErr := decodeOutputID(e.OutputID)
+		if decErr != nil {
+			continue
+		}
+		// The client hashed this body to check it against its outputID a moment
+		// ago. Put would hash it again to derive the same answer.
+		c.putVerified(id, out, data)
+	}
+}
+
+// putVerified writes a body whose OutputID is already known and already
+// checked, skipping the hash Put would otherwise recompute.
+//
+// It writes one plain file, exactly as Put does, because the wire carries
+// bytes and no name. An entry the build is going to run has to be a directory
+// holding a named file instead. GetExecutableFile takes that name from the
+// caller and rewrites this file the first time the build asks to run it.
+func (c *SharedCache) putVerified(id ActionID, out OutputID, data []byte) {
+	if err := c.DiskCache.copyFile(bytes.NewReader(data), "", out, int64(len(data)), 0o666); err != nil {
+		return
+	}
+	// allowVerify is false: this body came off the network, so the local
+	// reproducibility check has nothing to say about it.
+	_ = c.DiskCache.putIndexEntry(id, out, int64(len(data)), false)
 }
 
 // Get answers from disk, and asks the shared tier only when disk misses. A
@@ -104,43 +207,18 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	}
 
 	actionID := hex.EncodeToString(id[:])
-	outputID, exeName, body, size, _, miss, rerr := c.remote.GetExecutable(actionID)
-	if miss || rerr != nil || body == nil {
+	outputID, data, _, miss := c.remote.Get(actionID)
+	if miss || data == nil {
 		return Entry{}, tierShared, err // the local miss, which is what the caller expects
 	}
-	defer body.Close()
 
-	// The client has already verified this body against its outputID and its
-	// build id. Storing it locally re-verifies it on the way in and gives the
-	// compiler a path to open.
-	data, readErr := io.ReadAll(body)
-	if readErr != nil {
+	// The client hashed this body against its outputID before answering, so
+	// the value is known good and Put would only compute it a second time.
+	out, decErr := decodeOutputID(outputID)
+	if decErr != nil {
 		return Entry{}, tierShared, err
 	}
-	var gotID OutputID
-	var n int64
-	var putErr error
-	if exeName != "" {
-		// An executable entry must land in the shape the build can fork/exec:
-		// a directory holding a 0777 file of this name, not a 0666 regular
-		// file. A plain Put here is exactly the regression this tier shipped
-		// with: the hit exists, useCache trusts it, go run dies with
-		// permission denied.
-		gotID, n, putErr = c.DiskCache.PutExecutable(id, exeName, bytes.NewReader(data))
-	} else {
-		gotID, n, putErr = c.DiskCache.Put(id, bytes.NewReader(data))
-	}
-	if putErr != nil {
-		return Entry{}, tierShared, err
-	}
-	if want, decErr := decodeOutputID(outputID); decErr == nil && gotID != want {
-		// The shared tier named an outputID the stored body does not have.
-		// Serving it would hand the compiler the wrong object under this key.
-		return Entry{}, tierShared, err
-	}
-	if size > 0 && n != size {
-		return Entry{}, tierShared, err
-	}
+	c.putVerified(id, out, data)
 	entry, err = c.DiskCache.Get(id)
 	return entry, tierShared, err
 }
@@ -153,37 +231,43 @@ func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	if err != nil {
 		return outputID, size, err
 	}
-	c.offer(id, outputID, size)
+	c.offer(id, outputID)
 	return outputID, size, nil
 }
 
-// PutExecutable mirrors Put for an output the build will execute. The
-// executable's name rides the shared tier's metadata, because the name is
-// the only carrier of what the body is: a cosmo APE starts with a '#!'
-// shell header, so no byte sniff could recover it on the way back.
+// PutExecutable stores an output the build will later run. Locally that means
+// a directory holding a 0777 file of the given name, which is what lets go run
+// exec it.
+//
+// The shared tier is handed the same bytes as any other object and is told
+// nothing about the name. The name is not a property of the bytes: it comes
+// from the package being built (Internal.ExeName, else DefaultExecName), so
+// whoever asks for this entry already knows it and does not need the cache to
+// remember it. Nothing reads it back off a shared hit either -- a hit skips
+// the link step that would have set cachedExecutable, and both callers of
+// CachedExecutable fall back when it is empty.
 func (c *SharedCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
 	outputID, size, err := c.DiskCache.PutExecutable(id, name, file)
 	if err != nil {
 		return outputID, size, err
 	}
-	f, err := os.Open(c.DiskCache.OutputFile(outputID))
-	if err == nil {
-		_ = c.remote.PutExecutable(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), name, f, size)
-		f.Close()
-	}
+	c.offer(id, outputID)
 	return outputID, size, nil
 }
 
 // offer uploads the stored body. It reads back the file the DiskCache just
 // wrote rather than rewinding the caller's reader: the caller owns that reader
 // and the contract does not promise it is still seekable afterwards.
-func (c *SharedCache) offer(id ActionID, outputID OutputID, size int64) {
-	f, err := os.Open(c.DiskCache.OutputFile(outputID))
+//
+// The read happens here and the compression does not. Put takes the bytes and
+// returns, so the goroutine that just finished a compile goes back to
+// compiling instead of spending its next milliseconds on lz4.
+func (c *SharedCache) offer(id ActionID, outputID OutputID) {
+	data, err := os.ReadFile(c.DiskCache.OutputFile(outputID))
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	_ = c.remote.Put(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), f, size)
+	_ = c.remote.Put(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), data)
 }
 
 // Close drains the shared tier's in-flight uploads before the disk cache

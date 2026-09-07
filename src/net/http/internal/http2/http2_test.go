@@ -155,6 +155,17 @@ func TestNoUnicodeStrings(t *testing.T) {
 
 // SetForTest sets *p = v, and restores its original value in t.Cleanup.
 func SetForTest[T any](t testing.TB, p *T, v T) {
+	// The whole point of this helper is a package variable every other test
+	// in the process can see, and top level tests here run in parallel. A
+	// test that installs got1xxFuncForTests was collecting the 1xx responses
+	// of whatever else was running: TestTransportUnknown1xx read back a
+	// "code=100" that a 100-continue test next door had produced.
+	//
+	// Serial is on *testing.T rather than on TB, and a benchmark does not
+	// have one, so ask rather than require.
+	if s, ok := t.(interface{ Serial() }); ok {
+		s.Serial()
+	}
 	orig := *p
 	t.Cleanup(func() {
 		*p = orig

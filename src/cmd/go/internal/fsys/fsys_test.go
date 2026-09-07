@@ -96,6 +96,7 @@ var statInfoChildrenTests = []struct {
 }
 
 func TestStatInfo(t *testing.T) {
+	t.Serial()
 	tmp := "/tmp"
 	if runtime.GOOS == "windows" {
 		tmp = `C:\tmp`
@@ -1284,6 +1285,7 @@ var badOverlayTests = []struct {
 }
 
 func TestBadOverlay(t *testing.T) {
+	t.Serial()
 	tmp := "/tmp"
 	if runtime.GOOS == "windows" {
 		tmp = `C:\tmp`
