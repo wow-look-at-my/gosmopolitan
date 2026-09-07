@@ -354,6 +354,12 @@ var cosmoDarwinMincoreFn uintptr
 // one and falls back, where a fake success left the pages held.
 var cosmoDarwinMadviseFn uintptr
 
+// cosmoDarwinKillFn is Apple libc kill, resolved at startup and read by
+// darwinRaiseproc. The Syslib exports raise, and POSIX raise in a
+// threaded program signals the CALLING thread, so the crash relay in
+// sighandler sent SIGQUIT back to the thread that already held it.
+var cosmoDarwinKillFn uintptr
+
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -377,6 +383,7 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinKillFn = cosmoDlsym(&dlsymNameKill[0])
 	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
@@ -603,6 +610,24 @@ func darwinSignalM(mp *m, sig int) {
 		return
 	}
 	cosmoLibcCall6(lib.pthread_kill, uintptr(mp.procid), uintptr(asig), 0, 0, 0, 0)
+}
+
+// darwinRaiseproc sends sig (a LINUX signal number) to the whole process,
+// which is what sighandler's crash relay needs: the kernel then picks a
+// thread that has not blocked it, and each M in turn dumps its own stack.
+// raiseproc's darwin branch in sys_cosmo_arm64.s jumps here.
+//
+// Falling back to raise would signal this thread, which already holds the
+// signal, so the relay would stop at one M.
+//
+//go:nosplit
+func darwinRaiseproc(sig uint32) {
+	asig := cosmoSigL2A(sig)
+	if asig == 0 || cosmoDarwinKillFn == 0 || cosmoDarwinGetpidFn == 0 {
+		return
+	}
+	pid := cosmoLibcCall6(cosmoDarwinGetpidFn, 0, 0, 0, 0, 0, 0)
+	cosmoLibcCall6(cosmoDarwinKillFn, uintptr(pid), uintptr(asig), 0, 0, 0, 0)
 }
 
 // cosmoDarwinKqueueSupported reports whether the darwin netpoller can

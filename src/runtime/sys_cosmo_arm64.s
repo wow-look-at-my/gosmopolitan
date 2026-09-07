@@ -550,20 +550,10 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	SVC
 	RET
 raiseproc_darwin:
-	// Use raise() which sends signal to current process; translate the
-	// Linux signal number to Apple's (see raise_darwin).
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	160(R9), R12
-	MOVW	sig+0(FP), R0
-	CMPW	$65, R0
-	BHS	raiseproc_darwin_call
-	MOVD	$runtime·cosmoSigL2ATab(SB), R9
-	MOVBU	(R9)(R0), R0
-raiseproc_darwin_call:
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
-	RET
+	// kill(getpid(), sig) through Apple libc, not the Syslib raise: raise
+	// signals the calling thread. Same signature, so the FP slot carries
+	// over.
+	JMP	runtime·darwinRaiseproc(SB)
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	CHECK_DARWIN(getpid_darwin)
