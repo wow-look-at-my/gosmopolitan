@@ -500,21 +500,9 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 		a.buildID = actionID + buildIDSeparator + mainpkg.buildID + buildIDSeparator + contentID
 	}
 
-	// If user requested -a, we force a rebuild, so don't use the cache.
-	if cfg.BuildA {
-		if p := a.Package; p != nil && !p.Stale {
-			p.Stale = true
-			p.StaleReason = "build -a flag in use"
-		}
-		// Begin saving output for later writing to cache.
-		a.output = []byte{}
-		return false
-	}
-
 	defer func() {
 		// Increment counters for cache hits and misses based on the return value
-		// of this function. Don't increment counters if we return early because of
-		// cfg.BuildA above because we don't even look at the cache in that case.
+		// of this function.
 		if ok {
 			counterCacheHit.Inc()
 		} else {

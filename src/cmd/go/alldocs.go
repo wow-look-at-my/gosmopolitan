@@ -111,8 +111,6 @@
 //		Any files named on the command line are interpreted after
 //		changing directories.
 //		If used, this flag must be the first one in the command line.
-//	-a
-//		force rebuilding of packages that are already up-to-date.
 //	-n
 //		print the commands but do not run them.
 //	-p n
@@ -2379,9 +2377,7 @@
 // should not be necessary in typical use. However, the build cache
 // does not detect changes to C libraries imported with cgo.
 // If you have made changes to the C libraries on your system, you
-// will need to clean the cache explicitly or else use the -a build flag
-// (see 'go help build') to force rebuilding of packages that
-// depend on the updated C libraries.
+// will need to clean the cache explicitly.
 //
 // The go command also caches successful package test results.
 // See 'go help test' for details. Running 'go clean -testcache' removes
