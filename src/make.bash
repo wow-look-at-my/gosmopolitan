@@ -190,6 +190,15 @@ if [[ "$GOROOT_BOOTSTRAP" == "$GOROOT" ]]; then
 	echo "Set \$GOROOT_BOOTSTRAP to a working Go tree >= Go $bootgo." >&2
 	exit 1
 fi
+# cmd/go requires packages that live under src/cmd/vendor as git submodules, so
+# a clone made without them fails much later with "no required module provides
+# package", which reads as a missing dependency and sends the reader to go get.
+if [[ ! -f cmd/vendor/github.com/wow-look-at-my/go-s3-server/go.mod ]]; then
+	echo "ERROR: src/cmd/vendor submodules are not checked out." >&2
+	echo "Run: git submodule update --init --recursive" >&2
+	exit 1
+fi
+
 rm -f cmd/dist/dist
 bootstrapenv "$GOROOT_BOOTSTRAP/bin/go" build -o cmd/dist/dist ./cmd/dist
 

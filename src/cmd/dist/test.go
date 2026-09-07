@@ -430,7 +430,9 @@ func (opts *goTest) run(t *tester) error {
 // The caller must call setupCmd on the resulting exec.Cmd to set its directory
 // and environment.
 func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, setupCmd func(*exec.Cmd)) {
-	run = append(run, "-count=1") // Disallow caching
+	// No -count=1 here. Defeating the test cache is only ever needed when the
+	// cache is wrong, and a cache that is wrong is the defect to fix. Forcing
+	// every run to repeat work hides that defect and pays for it on each run.
 	if opts.timeout != 0 {
 		d := opts.timeout * time.Duration(t.timeoutScale)
 		run = append(run, "-timeout="+d.String())
