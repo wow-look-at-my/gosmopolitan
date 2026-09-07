@@ -1218,6 +1218,12 @@ func (l *filterListener) Accept() (net.Conn, error) {
 }
 
 func TestServer_MaxQueuedControlFrames(t *testing.T) {
+	// DisableGoroutineTracking in the body asks for the serial barrier, and the
+	// barrier is a process-wide wait. Asking from inside the bubble parks a
+	// bubble goroutine on a condition no bubble goroutine can signal, which
+	// synctest reports as a deadlock. Serial is idempotent, so the inner ask
+	// still runs and costs nothing.
+	t.Serial()
 	synctest.Test(t, testServer_MaxQueuedControlFrames)
 }
 func testServer_MaxQueuedControlFrames(t *testing.T) {
@@ -2554,10 +2560,6 @@ func testServer_Response_ManyHeaders_With_Continuation(t *testing.T) {
 // defer sc.closeAllStreamsOnConnClose) when the serverConn serve loop
 // ended.
 func TestServer_NoCrash_HandlerClose_Then_ClientClose(t *testing.T) {
-	// SetTestHookOnPanic in the body reaches SetForTest, which asks for the
-	// serial barrier. Take it out here: a bubble goroutine blocked on a
-	// process-wide wait reads to synctest as a deadlock.
-	t.Serial()
 	synctest.Test(t, testServer_NoCrash_HandlerClose_Then_ClientClose)
 }
 func testServer_NoCrash_HandlerClose_Then_ClientClose(t *testing.T) {

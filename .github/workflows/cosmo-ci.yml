@@ -195,6 +195,14 @@ jobs:
         with:
           tests: dats/unix-tag-agrees.dats
 
+      # Serial waits on every other test, which inside a bubble is a deadlock.
+      - name: No synctest bubble waits on the serial barrier
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 3
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/bubble-serial.dats
+
       # runtime.GOOS is the host; an open flag belongs to the build target.
       - name: No GOOS predicate decides a syscall flag
         if: matrix.build-os == 'ubuntu-latest'
