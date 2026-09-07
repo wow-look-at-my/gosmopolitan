@@ -174,9 +174,23 @@ func (c *SharedCache) populate(entries []cacheclient.BatchEntry) {
 
 // putVerified writes a body whose OutputID is already known and already
 // checked, skipping the hash Put would otherwise recompute.
+//
+// The file is runnable. A shared hit is a plain file at the output path, and
+// that is the path useCache hands to a.built, so `go run` execs this exact
+// file when the link action hits. A local PutExecutable answers the same need
+// with a directory and a 0777 member; the network restore has no name to make
+// one with, so the mode is the whole difference. 0666 here is
+// "fork/exec ...-d: permission denied" on every cached go run.
 func (c *SharedCache) putVerified(id ActionID, out OutputID, data []byte) {
-	if err := c.DiskCache.copyFile(bytes.NewReader(data), "", out, int64(len(data)), 0o666); err != nil {
+	name := c.DiskCache.OutputFile(out)
+	if err := c.DiskCache.copyFile(bytes.NewReader(data), "", out, int64(len(data)), 0o777); err != nil {
 		return
+	}
+	// copyFile passes perm to OpenFile, which applies it on create and ignores
+	// it on a file that is already there. An object an older client left at
+	// 0666 has to be raised here or it stays unrunnable forever.
+	if info, err := os.Stat(name); err == nil && info.Mode()&0o111 == 0 {
+		_ = os.Chmod(name, info.Mode()|0o111)
 	}
 	// allowVerify is false: this body came off the network, so the local
 	// reproducibility check has nothing to say about it.

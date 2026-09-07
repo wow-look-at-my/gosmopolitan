@@ -260,13 +260,13 @@ func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
 	}
 }
 
-// A network hit must restore exactly the mode the original PutExecutable (or
-// Put) call chose -- never a guess from content, never a blanket +x. The
-// build system execs some cached outputs directly (go run, a shebang
-// script), and the choice of Put vs PutExecutable already carries that
-// decision; this pins that it survives the round trip through the wire's
-// executable metadata instead of being lost or defaulted.
-func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
+// Every network hit is runnable. The wire carries bytes and nothing else, so
+// a restore cannot tell a linked executable from an ordinary package output.
+// useCache hands the restored file straight to a.built, and `go run` execs
+// that path, so a restore that is not runnable fails the build with
+// "fork/exec ...-d: permission denied". Both shapes are checked here because
+// the fix must not depend on which one it is.
+func TestSharedCache_NetworkHitIsRunnable(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 
@@ -318,8 +318,8 @@ func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(%s): %v", plainName, err)
 	}
-	if info.Mode()&0o111 != 0 {
-		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want no executable bit", plainName, info.Mode())
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want an executable bit set", plainName, info.Mode())
 	}
 }
 
