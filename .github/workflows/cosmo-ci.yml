@@ -555,7 +555,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/obj/wasm
+          GOOS=linux GOARCH=amd64 go test cmd/internal/obj/wasm
 
       - name: Test js/wasm under node
         # Observed 1m18s locally. lib/wasm supplies go_js_wasm_exec.
@@ -589,7 +589,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           cd testdata/wasip1sock/host
-          GOOS=linux GOARCH=amd64 go test -count=1 ./...
+          GOOS=linux GOARCH=amd64 go test./...
 
       - name: Test GOWASM=threads under node (js only)
         # see docs/CI.md "wasm job" and docs/WASM.md for the multi-P scheduler this exercises.

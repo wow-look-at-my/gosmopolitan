@@ -172,9 +172,12 @@ go test testcache -v -run=TestCoverageCache -coverprofile=coverage_v2.out
 stdout '\(cached\)'
 cmp coverage_v.out coverage_v2.out
 
-# Test that -count affects caching.
+# -count must NOT affect caching. A positive count selects one run either way,
+# so the flag is dropped before the cache is consulted and the earlier result
+# still answers. Nothing on the command line turns the cache off on purpose.
 go test testcache -run=TestCoverageCache -coverprofile=coverage_count.out -count=2
-! stdout '\(cached\)'
+stdout '\(cached\)'
+cmp coverage_count.out coverage_v.out
 
 # Executables within GOROOT and GOPATH should affect caching,
 # even if the test does not stat them explicitly.

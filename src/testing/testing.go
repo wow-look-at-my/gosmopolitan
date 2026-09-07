@@ -458,7 +458,7 @@ func Init() {
 	artifacts = flag.Bool("test.artifacts", false, "store test artifacts in test.,outputdir")
 	// Report as tests are run; default is silent for success.
 	flag.Var(&chatty, "test.v", "verbose: print additional output")
-	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times")
+	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times, where 0 runs none and any other value runs them once")
 	coverProfile = flag.String("test.coverprofile", "", "write a coverage profile to `file`")
 	gocoverdir = flag.String("test.gocoverdir", "", "write coverage intermediate files to this directory")
 	matchList = flag.String("test.list", "", "list tests, examples, and benchmarks matching `regexp` then exit")
@@ -2334,8 +2334,8 @@ func (t *T) releaseBarrier() {
 // always meant. Inside a serial test Parallel does nothing: the subtests of a
 // serial test run one at a time.
 //
-// When a test is run multiple times due to use of -test.count or -test.cpu,
-// multiple instances of a single test never run in parallel with each other.
+// When a test is run multiple times due to use of -test.cpu, multiple
+// instances of a single test never run in parallel with each other.
 func (t *T) Parallel() {
 	if t.isParallel {
 		return
@@ -3197,18 +3197,25 @@ func RunTests(matchString func(pat, str string) (bool, error), tests []InternalT
 	return ok
 }
 
+// runCount reports how many times to run each test, benchmark and fuzz seed.
+// -test.count=0 selects no run at all. Every other value selects exactly one:
+// this toolchain does not repeat a test to see whether it passes again.
+func runCount() uint {
+	if *count == 0 {
+		return 0
+	}
+	return 1
+}
+
 func runTests(modulePath, importPath string, matchString func(pat, str string) (bool, error), tests []InternalTest, deadline time.Time) (ran, ok bool) {
 	ok = true
 	for _, procs := range cpuList {
 		runtime.GOMAXPROCS(procs)
-		for i := uint(0); i < *count; i++ {
+		// runCount, not *count: a positive count runs the tests once here.
+		// Repeating a test is not a repair. A test that passes only sometimes
+		// is broken, and the fix belongs in the test.
+		for i := uint(0); i < runCount(); i++ {
 			if shouldFailFast() {
-				break
-			}
-			if i > 0 && !ran {
-				// There were no tests to run on the first
-				// iteration. This won't change, so no reason
-				// to keep trying.
 				break
 			}
 			ctx, cancelCtx := context.WithCancel(context.Background())
