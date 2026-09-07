@@ -91,14 +91,7 @@ func buildPkgsite(ctx context.Context) string {
 	load.CheckPackageErrors([]*load.Package{p})
 
 	a := b.LinkAction(loader, work.ModeBuild, work.ModeBuild, p)
-	a.CacheExecutable = true
 	b.Do(ctx, a)
-
-	// Both paths return an executable in GOCACHE: CachedExecutable is set on
-	// fresh builds, while BuiltTarget is set on cache hits.
-	if cached := a.CachedExecutable(); cached != "" {
-		return cached
-	}
 	return a.BuiltTarget()
 }
 

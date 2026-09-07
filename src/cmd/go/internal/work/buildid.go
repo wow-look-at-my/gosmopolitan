@@ -608,23 +608,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	}
 
 	// Check to see if the action output is cached.
-	//
-	// A cached link the build is going to run has to come back as a directory
-	// holding a named file, and a body restored from the shared tier arrives
-	// as a plain one. Ask by name here, where the package that supplies the
-	// name is in hand. See cache.GetExecutableFile.
-	get := cache.GetFile
-	if a.Mode == "link" && a.CacheExecutable && a.Package != nil {
-		name := a.Package.Internal.ExeName
-		if name == "" {
-			name = a.Package.DefaultExecName()
-		}
-		name += cfg.ExeSuffix
-		get = func(c cache.Cache, id cache.ActionID) (string, cache.Entry, error) {
-			return cache.GetExecutableFile(c, id, name)
-		}
-	}
-	if file, _, err := get(c, actionHash); err == nil {
+	if file, _, err := cache.GetFile(c, actionHash); err == nil {
 		if a.Mode == "preprocess PGO profile" {
 			// Preprocessed PGO profiles don't embed a build ID, so
 			// skip the build ID lookup.
@@ -815,24 +799,5 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 			}
 		}
 	}
-	if c, ok := c.(cache.ExecutableCache); a.Mode == "link" && a.CacheExecutable && ok {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			name := a.Package.Internal.ExeName
-			if name == "" {
-				name = a.Package.DefaultExecName()
-			}
-			outputID, _, err := c.PutExecutable(a.actionID, name+cfg.ExeSuffix, r)
-			r.Close()
-			a.cachedExecutable = c.OutputFile(outputID)
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, a.cachedExecutable)))
-			}
-		}
-	}
-
 	return nil
 }

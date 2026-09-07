@@ -174,13 +174,8 @@ func (c *SharedCache) populate(entries []cacheclient.BatchEntry) {
 
 // putVerified writes a body whose OutputID is already known and already
 // checked, skipping the hash Put would otherwise recompute.
-//
-// It writes one plain file, exactly as Put does, because the wire carries
-// bytes and no name. An entry the build is going to run has to be a directory
-// holding a named file instead. GetExecutableFile takes that name from the
-// caller and rewrites this file the first time the build asks to run it.
 func (c *SharedCache) putVerified(id ActionID, out OutputID, data []byte) {
-	if err := c.DiskCache.copyFile(bytes.NewReader(data), "", out, int64(len(data)), 0o666); err != nil {
+	if err := c.DiskCache.copyFile(bytes.NewReader(data), out, int64(len(data))); err != nil {
 		return
 	}
 	// allowVerify is false: this body came off the network, so the local
@@ -228,26 +223,6 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 // is best effort and the client coalesces it with the rest of the build's.
 func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, error) {
 	outputID, size, err := c.DiskCache.Put(id, file)
-	if err != nil {
-		return outputID, size, err
-	}
-	c.offer(id, outputID)
-	return outputID, size, nil
-}
-
-// PutExecutable stores an output the build will later run. Locally that means
-// a directory holding a 0777 file of the given name, which is what lets go run
-// exec it.
-//
-// The shared tier is handed the same bytes as any other object and is told
-// nothing about the name. The name is not a property of the bytes: it comes
-// from the package being built (Internal.ExeName, else DefaultExecName), so
-// whoever asks for this entry already knows it and does not need the cache to
-// remember it. Nothing reads it back off a shared hit either -- a hit skips
-// the link step that would have set cachedExecutable, and both callers of
-// CachedExecutable fall back when it is empty.
-func (c *SharedCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	outputID, size, err := c.DiskCache.PutExecutable(id, name, file)
 	if err != nil {
 		return outputID, size, err
 	}

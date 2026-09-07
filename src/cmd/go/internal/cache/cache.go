@@ -75,20 +75,6 @@ type Cache interface {
 	FuzzDir() string
 }
 
-// ExecutableCache is a Cache that can also store an output the build will
-// execute, under a name and with the execute bit set.
-//
-// It is optional because a cache program speaks a protocol that has no such
-// operation. Ask for it by interface rather than for one concrete type: the
-// disk cache, the shared tier over it, and the tracing wrapper over that are
-// all caches that can do this, and a build that names only the first of them
-// silently stops caching executables the moment either of the others is in
-// use.
-type ExecutableCache interface {
-	Cache
-	PutExecutable(id ActionID, name string, file io.ReadSeeker) (_ OutputID, size int64, _ error)
-}
-
 // A Cache is a package cache, backed by a file system directory tree.
 type DiskCache struct {
 	dir string
@@ -292,50 +278,6 @@ func GetFile(c Cache, id ActionID) (file string, entry Entry, err error) {
 	return file, entry, nil
 }
 
-// GetExecutableFile is GetFile for an entry the build is going to run. It
-// returns a path the operating system will exec.
-//
-// Put writes one file, <outputID>-d. PutExecutable instead makes <outputID>-d
-// a DIRECTORY and writes the body inside it under the given name, and
-// OutputFile returns that inner file. The name is what lets the build run it:
-// the file carries mode 0777, and on Windows it ends in .exe, without which
-// exec refuses a path whose extension PATHEXT does not list.
-//
-// A body restored from the shared tier has no name. The wire carries bytes
-// keyed by action ID and nothing else, so a restore writes the plain 0666
-// file that Put writes, and running that path fails: "permission denied" on
-// Unix, "executable file not found in %PATH%" on Windows. Rewriting it as the
-// directory needs a name, so this takes one from the caller, which is
-// building the package and therefore already has it. The name stays a
-// property of the package. It is never stored beside the bytes and never
-// crosses the wire.
-func GetExecutableFile(c Cache, id ActionID, name string) (string, Entry, error) {
-	file, entry, err := GetFile(c, id)
-	if err != nil {
-		return "", Entry{}, err
-	}
-	// OutputFile returned the file inside <outputID>-d, so the directory is
-	// already there and the entry is already runnable. fileName builds that
-	// name; this reads it back.
-	if filepath.Base(filepath.Dir(file)) == fmt.Sprintf("%x", entry.OutputID)+"-d" {
-		return file, entry, nil
-	}
-	ec, ok := c.(ExecutableCache)
-	if !ok {
-		return "", Entry{}, &entryNotFoundError{Err: errors.New("cache cannot store executables")}
-	}
-	// Read first: copyFile deletes this file to free the path for the
-	// directory that replaces it.
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return "", Entry{}, &entryNotFoundError{Err: err}
-	}
-	if _, _, err := ec.PutExecutable(id, name, bytes.NewReader(data)); err != nil {
-		return "", Entry{}, &entryNotFoundError{Err: err}
-	}
-	return GetFile(c, id)
-}
-
 // GetBytes looks up the action ID in the cache and returns
 // the corresponding output bytes.
 // GetBytes should only be used for data that can be expected to fit in memory.
@@ -376,17 +318,7 @@ func GetMmap(c Cache, id ActionID) ([]byte, Entry, bool, error) {
 // OutputFile returns the name of the cache file storing output with the given OutputID.
 func (c *DiskCache) OutputFile(out OutputID) string {
 	file := c.fileName(out, "d")
-	isDir := c.markUsed(file)
-	if isDir { // => cached executable
-		entries, err := os.ReadDir(file)
-		if err != nil {
-			return fmt.Sprintf("DO NOT USE - missing binary cache entry: %v", err)
-		}
-		if len(entries) != 1 {
-			return "DO NOT USE - invalid binary cache entry"
-		}
-		return filepath.Join(file, entries[0].Name())
-	}
+	c.markUsed(file)
 	return file
 }
 
@@ -594,21 +526,7 @@ func (c *DiskCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, error
 	if isNoVerify {
 		file = wrapper.ReadSeeker
 	}
-	return c.put(id, "", file, !isNoVerify)
-}
-
-// PutExecutable is used to store the output as the output for the action ID into a
-// file with the given base name, with the executable mode bit set.
-// It may read file twice. The content of file must not change between the two passes.
-func (c *DiskCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	if name == "" {
-		panic("PutExecutable called without a name")
-	}
-	wrapper, isNoVerify := file.(noVerifyReadSeeker)
-	if isNoVerify {
-		file = wrapper.ReadSeeker
-	}
-	return c.put(id, name, file, !isNoVerify)
+	return c.put(id, file, !isNoVerify)
 }
 
 // PutNoVerify is like Put but disables the verify check
@@ -619,7 +537,7 @@ func PutNoVerify(c Cache, id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	return c.Put(id, noVerifyReadSeeker{file})
 }
 
-func (c *DiskCache) put(id ActionID, executableName string, file io.ReadSeeker, allowVerify bool) (OutputID, int64, error) {
+func (c *DiskCache) put(id ActionID, file io.ReadSeeker, allowVerify bool) (OutputID, int64, error) {
 	// Compute output ID.
 	h := sha256.New()
 	if _, err := file.Seek(0, 0); err != nil {
@@ -633,11 +551,7 @@ func (c *DiskCache) put(id ActionID, executableName string, file io.ReadSeeker, 
 	h.Sum(out[:0])
 
 	// Copy to cached output file (if not already present).
-	fileMode := fs.FileMode(0o666)
-	if executableName != "" {
-		fileMode = 0o777
-	}
-	if err := c.copyFile(file, executableName, out, size, fileMode); err != nil {
+	if err := c.copyFile(file, out, size); err != nil {
 		return out, size, err
 	}
 
@@ -653,45 +567,9 @@ func PutBytes(c Cache, id ActionID, data []byte) error {
 
 // copyFile copies file into the cache, expecting it to have the given
 // output ID and size, if that file is not present already.
-func (c *DiskCache) copyFile(file io.ReadSeeker, executableName string, out OutputID, size int64, perm os.FileMode) error {
-	name := c.fileName(out, "d") // TODO(matloob): use a different suffix for the executable cache?
+func (c *DiskCache) copyFile(file io.ReadSeeker, out OutputID, size int64) error {
+	name := c.fileName(out, "d")
 	info, err := os.Stat(name)
-	if executableName != "" {
-		// This is an executable file. The file at name won't hold the output itself, but will
-		// be a directory that holds the output, named according to executableName. Check to see
-		// if the directory already exists, and if it does not, create it. Then reset name
-		// to the name we want the output written to.
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
-			if err := os.Mkdir(name, 0o777); err != nil {
-				return err
-			}
-			if info, err = os.Stat(name); err != nil {
-				return err
-			}
-		}
-		if !info.IsDir() {
-			// A restore from the shared tier wrote a plain file here, because
-			// the wire carries no name to put inside a directory. It holds
-			// the same bytes this call is storing, so delete it and build the
-			// directory over it.
-			if err := os.Remove(name); err != nil {
-				return err
-			}
-			if err := os.Mkdir(name, 0o777); err != nil {
-				return err
-			}
-			if info, err = os.Stat(name); err != nil {
-				return err
-			}
-		}
-
-		// directory exists. now set name to the inner file
-		name = filepath.Join(name, executableName)
-		info, err = os.Stat(name)
-	}
 	if err == nil && info.Size() == size {
 		// Check hash.
 		if f, err := os.Open(name); err == nil {
@@ -712,7 +590,7 @@ func (c *DiskCache) copyFile(file io.ReadSeeker, executableName string, out Outp
 	if err == nil && info.Size() > size { // shouldn't happen but fix in case
 		mode |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(name, mode, perm)
+	f, err := os.OpenFile(name, mode, 0o666)
 	if err != nil {
 		if base.IsETXTBSY(err) {
 			// This file is being used by an executable. It must have

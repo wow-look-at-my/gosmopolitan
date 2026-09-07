@@ -50,25 +50,12 @@ func Traced(c Cache, lane trace.Lane) Cache {
 	if c == nil || !lane.Enabled() {
 		return c
 	}
-	traced := &tracedCache{Cache: c, lane: lane}
-	// The wrapper must answer the ExecutableCache assertion exactly when the
-	// cache under it does. A wrapper that always carries the method makes the
-	// assertion succeed over a cache that cannot store an executable; one that
-	// never carries it turns executable caching off for every traced build.
-	if exec, ok := c.(ExecutableCache); ok {
-		return &tracedExecutableCache{tracedCache: traced, exec: exec}
-	}
-	return traced
+	return &tracedCache{Cache: c, lane: lane}
 }
 
 type tracedCache struct {
 	Cache
 	lane trace.Lane
-}
-
-type tracedExecutableCache struct {
-	*tracedCache
-	exec ExecutableCache
 }
 
 func (c *tracedCache) Get(id ActionID) (Entry, error) {
@@ -104,15 +91,6 @@ func (c *tracedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	start := time.Now()
 	out, size, err := c.Cache.Put(id, file)
 	c.lane.Since("cache put", "cache", start, putArgs(id, out, size, err))
-	return out, size, err
-}
-
-func (c *tracedExecutableCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	start := time.Now()
-	out, size, err := c.exec.PutExecutable(id, name, file)
-	args := putArgs(id, out, size, err)
-	args["name"] = name
-	c.lane.Since("cache put executable", "cache", start, args)
 	return out, size, err
 }
 
