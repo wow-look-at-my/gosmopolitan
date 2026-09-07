@@ -1917,7 +1917,7 @@ func pcToName(pc uintptr) string {
 // parallel subtests holds nothing, because those subtests wait for a -parallel
 // slot, and a test that holds the barrier while it waits for a slot deadlocks
 // against a Serial caller that holds a slot while it waits for the barrier.
-var serialBarrier sync.RWMutex
+var serialBarrier = newSerialGate()
 
 // serialExclusive is set while a test holds serialBarrier exclusively. It is
 // how a process-wide measurement (AllocsPerRun) knows no other test runs.
@@ -1961,9 +1961,9 @@ func (t *T) Serial() {
 	case barrierExclusive:
 		return
 	case barrierShared:
-		serialBarrier.RUnlock()
+		serialBarrier.release()
 	}
-	serialBarrier.Lock()
+	serialBarrier.acquireExclusive()
 	c.barrierHeld.Store(barrierExclusive)
 	serialExclusive.Store(true)
 }
@@ -2061,10 +2061,10 @@ func (t *T) forkAndTakeTheResult() {
 
 	switch held {
 	case barrierShared:
-		serialBarrier.RLock()
+		serialBarrier.resume()
 		t.barrierHeld.Store(barrierShared)
 	case barrierExclusive:
-		serialBarrier.Lock()
+		serialBarrier.acquireExclusive()
 		t.barrierHeld.Store(barrierExclusive)
 		serialExclusive.Store(true)
 	}
@@ -2299,10 +2299,21 @@ func (t *T) implicitlyParallel() bool {
 // caller that already holds one keeps it: only tRunner and Parallel take a
 // hold, and each takes it once.
 func (t *T) acquireBarrier() {
+	t.takeBarrier(serialBarrier.acquire)
+}
+
+// resumeBarrier takes back the hold yieldBarrier dropped. It is NOT
+// acquireBarrier: a test that already ran may hold locks another test wants,
+// so making it queue behind a Serial caller closes a cycle. See serialgate.go.
+func (t *T) resumeBarrier() {
+	t.takeBarrier(serialBarrier.resume)
+}
+
+func (t *T) takeBarrier(take func()) {
 	if !t.eligibleForBarrier() || t.barrierHeld.Load() != barrierNone {
 		return
 	}
-	serialBarrier.RLock()
+	take()
 	t.barrierHeld.Store(barrierShared)
 }
 
@@ -2323,10 +2334,10 @@ func (t *T) releaseBarrier() {
 	held := t.barrierHeld.Swap(barrierNone)
 	switch held {
 	case barrierShared:
-		serialBarrier.RUnlock()
+		serialBarrier.release()
 	case barrierExclusive:
 		serialExclusive.Store(false)
-		serialBarrier.Unlock()
+		serialBarrier.releaseExclusive()
 	}
 }
 
@@ -2763,7 +2774,7 @@ func (t *T) Run(name string, f func(t *T)) bool {
 	}
 
 	if resume {
-		caller.acquireBarrier()
+		caller.resumeBarrier()
 	}
 
 	if t.chatty != nil && t.chatty.json {
