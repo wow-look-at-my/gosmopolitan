@@ -318,36 +318,39 @@ func printfBlob(blob []byte) string {
 	return b.String()
 }
 
-// apeRunDir is where the bootstrap script stages the runnable copy it makes
-// of itself. The trailing number is the staging layout's version: a binary
-// built by an older linker keeps its own directory rather than reading one
-// written to a different shape.
+// apeRunDirs are the directories the bootstrap script stages its runnable
+// copy in, tried in order. The script keeps the first that can both hold a
+// file and RUN one. The "1" in the .ape-run-1 path it builds under them is
+// the staging layout's version: a binary built by an older linker keeps its
+// own directory rather than reading one written to a different shape.
 //
-// /tmp by default. TMPDIR and HOME are still not read: both are
-// caller-supplied and neither can be trusted to exist, to name a writable
-// directory, or even to name a real per-user one. A container run as a
-// numeric UID with no matching /etc/passwd entry gets a non-empty HOME
-// anyway -- set by the runtime itself to "/" -- confirmed directly against
-// Docker's own `--user <uid>:<gid>` default, and TMPDIR is just as easy for
-// a caller to leave unset, point at something unwritable, or forget
-// entirely. /tmp is reliably world-writable (mode 1777) on virtually every
-// host this binary runs on.
+// Writability alone is not enough, and assuming it was is what broke. A
+// container commonly mounts a noexec filesystem over /tmp. The copy is
+// written there, execve refuses it, and the binary cannot start by any
+// path. Nothing in the environment could say so, so the script establishes
+// it: it copies a shell into the candidate and runs it. Only exec answers
+// that question, because noexec belongs to the mount and every stat on a
+// file under one still reports its mode bits.
 //
-// APE_RUNDIR overrides it, and is read for the case /tmp cannot serve at
-// all: a container that mounts a noexec filesystem over /tmp, where the
-// copy is written and then refused by execve, and the binary cannot start
-// by any path. Writability is not the only property staging needs. This
-// variable differs from TMPDIR in what setting it MEANS: TMPDIR says where
-// scratch files go and every process inherits one, while a caller sets this
-// one to name a directory it has established the APE can be run from.
-// Nothing here validates it -- mkdir and cp already fail loudly -- and an
-// unset variable changes nothing.
+// The verdict is cached in the candidate as .ape-ok-<uid>, so a warm run
+// costs one stat and no fork. A host where /tmp works keeps using /tmp and
+// pays the probe once.
 //
-// apeUIDSuffix stands in for the per-user isolation a real HOME would
-// give this path: it keeps one user's staged copies out of a path another
-// user's run would also resolve to, without asking the environment for
-// anything.
-var apeRunDir = "${APE_RUNDIR:-/tmp}/.ape-run-1" + apeUIDSuffix
+// TMPDIR and HOME stay unread: both are caller-supplied and neither can be
+// trusted to exist, to name a writable directory, or even to name a real
+// per-user one. A container run as a numeric UID with no matching
+// /etc/passwd entry gets a non-empty HOME anyway -- set by the runtime
+// itself to "/" -- confirmed directly against Docker's own
+// `--user <uid>:<gid>` default. APE_RUNDIR is read, and is tried before
+// these: it is not a scratch path every process inherits but an operator
+// naming where staging goes. It needs no special trust, because it is
+// probed like any other candidate.
+//
+// The <uid> the script appends stands in for the per-user isolation a real
+// HOME would give this path: it keeps one user's staged copies out of a
+// path another user's run would also resolve to, without asking the
+// environment for anything.
+var apeRunDirs = []string{"/tmp", "/var/tmp", "/dev/shm", "/var/lib/ape"}
 
 // apeUIDSuffix is a shell command substitution for the running user's
 // numeric uid, read with `id -u` -- a syscall, not an environment
@@ -401,14 +404,14 @@ const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
 	const ddBlockSize = 8
 	data := struct {
-		RunDir    string
+		RunDirs   string
 		Boot      string
 		Macho     bool
 		BlockSize int
 		Skip      int
 		Count     int
 	}{
-		RunDir:    apeRunDir,
+		RunDirs:   strings.Join(apeRunDirs, " "),
 		Boot:      printfBlob(boot),
 		Macho:     machoSize > 0,
 		BlockSize: ddBlockSize,
@@ -431,7 +434,24 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // writes the quote the magic ends with.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
 	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
-  c="{{.RunDir}}/$k"
+  u=$(id -u 2>/dev/null || echo shared)
+  s=/bin/sh; [ -x "$s" ] || s=$(command -v sh 2>/dev/null)
+  d=
+  for b in ${APE_RUNDIR:-} {{.RunDirs}}; do
+    [ -d "$b" ] || continue
+    if [ -f "$b/.ape-ok-$u" ]; then d=$b; break; fi
+    if [ -z "$s" ]; then d=$b; break; fi
+    q="$b/.ape-probe-$u.$$"
+    (umask 077; mkdir -p "$q") 2>/dev/null || continue
+    if cp "$s" "$q/sh" 2>/dev/null && chmod 0700 "$q/sh" 2>/dev/null && "$q/sh" -c : 2>/dev/null; then
+      : > "$b/.ape-ok-$u" 2>/dev/null
+      d=$b
+    fi
+    rm -rf "$q" 2>/dev/null
+    [ -n "$d" ] && break
+  done
+  [ -n "$d" ] || { echo "APE: no directory can both hold and run the staged copy; tried ${APE_RUNDIR:+$APE_RUNDIR }{{.RunDirs}}" >&2; exit 121; }
+  c="$d/.ape-run-1-$u/$k"
   p="$c/${0##*/}"
   if [ ! -x "$p" ]; then
     (umask 077; mkdir -p "$c") || { echo "APE: cannot create $c" >&2; exit 121; }

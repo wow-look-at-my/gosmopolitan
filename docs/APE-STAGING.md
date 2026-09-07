@@ -9,14 +9,18 @@ The bootstrap script now stages a COPY and corrects the copy.
 ## The staged copy
 
 ```
-${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/<basename>
+<chosen directory>/.ape-run-1-<uid>/<file identity>/<basename>
 ```
 
-TMPDIR and HOME are not read. Both are caller-supplied, and neither can be trusted: TMPDIR can be unset, empty, or pointed at something unwritable, and a container. `/tmp` is reliably world-writable (mode 1777) on virtually every host this binary runs on, so staging goes there by default.
+The script chooses the directory. It tries `$APE_RUNDIR`, then `/tmp`, `/var/tmp`, `/dev/shm` and `/var/lib/ape`. It keeps the first that can both hold a file and **run** one.
 
-`APE_RUNDIR` overrides that default. It exists for the case `/tmp` cannot serve at all. A container that mounts a **noexec** filesystem over it stages the copy fine, and then execve refuses the copy. The binary cannot start by any path. Writability is not the only property staging needs.
+Writability alone is not enough. A container commonly mounts a **noexec** filesystem over `/tmp`. The copy is written there and execve refuses it. The binary then cannot start by any path. No stat sees this coming. Noexec belongs to the mount, so a file under one still reports its mode bits.
 
-Setting this variable means something different from setting TMPDIR. TMPDIR says where scratch files go, and every process inherits one. A caller sets `APE_RUNDIR` to name a directory it has established the APE can run from. Nothing validates it: `mkdir` and `cp` already fail loudly. An unset or empty value keeps `/tmp`.
+So the script establishes it rather than assuming it. It copies a shell into the candidate and runs it, because only exec answers that question. The verdict is cached in the candidate as `.ape-ok-<uid>`. A warm run therefore costs one stat and no fork. A host where `/tmp` works keeps using `/tmp`, and pays the probe once.
+
+A host with no shell to copy skips the probe. It takes the first candidate that exists, which is the behavior this replaces.
+
+TMPDIR and HOME are not read. Both are caller-supplied, and neither can be trusted: TMPDIR can be unset, empty, or pointed at something unwritable, and a container. `APE_RUNDIR` is read, and is tried first, for an operator placing the directory deliberately. It needs no special trust, because it is probed like every other candidate.
 
 `<uid>` is `id -u` -- a syscall, not an environment variable -- and stands in for the per-user isolation a real HOME can otherwise give this path.
 
