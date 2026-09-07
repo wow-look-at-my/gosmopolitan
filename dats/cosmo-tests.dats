@@ -34,3 +34,11 @@ tests:
 	  outputs:
 		stdout:
 			- "ok  \tsyscall"
+
+	# The boot script runs uname, stat and cp, and puts the standard
+	# directories on PATH to find them. What the program is left holding
+	# must still be the caller's own PATH: net/http/cgi hands a child
+	# PATH=/wibble and reads it back.
+	- desc: the boot script hands the program the caller's own PATH
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go build -o "$TMPDIR/printpath.com" ./testdata/printpath/main.go && test "$(env -i PATH=/wibble "$TMPDIR/printpath.com")" = /wibble
+	  exit: 0

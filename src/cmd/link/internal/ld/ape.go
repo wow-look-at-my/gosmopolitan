@@ -403,9 +403,15 @@ var apeStageTmpl = template.Must(template.New("apestage").Parse(
     fi
   fi
   if [ -f "$c/.bind" ]; then
-    exec unshare -m sh -c 'b="$0"; a="$1"; shift; mount --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"' "$p" "$o" "$@"
+    u=$(command -v unshare 2>/dev/null); m=$(command -v mount 2>/dev/null); s=$(command -v sh 2>/dev/null)
+    if [ -n "$u" ] && [ -n "$m" ] && [ -n "$s" ]; then
+      # Every tool here is resolved BEFORE the caller's PATH comes back,
+      # because that PATH may name none of them.
+      apepath
+      exec "$u" -m "$s" -c 'b="$0"; a="$1"; n="$2"; shift 2; "$n" --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"' "$p" "$o" "$m" "$@"
+    fi
   fi
-  exec "$p" "$@"
+  apepath; exec "$p" "$@"
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
@@ -545,7 +551,12 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// missing uname is the worst of the set: the arch dispatch then falls
 	// back to x86_64 and an arm64 machine is told it cannot run its own
 	// binary. The caller's own PATH stays in front.
+	script.WriteString("apeP=${PATH-}; apeS=${PATH+1}\n")
 	script.WriteString("PATH=\"${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin\"; export PATH\n")
+	// The program gets the PATH its caller gave it, not the one this script
+	// runs its own tools under. net/http/cgi hands a child PATH=/wibble and
+	// reads it back, so an appended /usr/bin is a wrong answer.
+	script.WriteString("apepath() { if [ -n \"$apeS\" ]; then PATH=$apeP; export PATH; else unset PATH; fi; }\n")
 
 	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
@@ -585,7 +596,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
     # macOS ARM64: use compiled Mach-O loader or compile from source
     # Don't use existing loader if it might be ELF (from Linux)
     if [ -x "$t" ] && file "$t" 2>/dev/null | grep -q "Mach-O"; then
-      exec "$t" "$o" "$@"
+      apepath; exec "$t" "$o" "$@"
     fi
     # Compile APE loader from embedded source
     if ! type cc >/dev/null 2>&1; then
@@ -597,7 +608,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
     mv -f "$t.c.$$" "$t.c" || exit
     cc -w -O -o "$t.$$" "$t.c" || exit
     mv -f "$t.$$" "$t" || exit
-    exec "$t" "$o" "$@"
+    apepath; exec "$t" "$o" "$@"
   fi
 `)
 		}
@@ -608,8 +619,8 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		}
 		if linuxARM {
 			script.WriteString(`  # Linux ARM64: an installed loader runs the file as it stands
-  type ape >/dev/null 2>&1 && exec ape "$o" "$@"
-  [ -x "$t" ] && exec "$t" "$o" "$@"
+  a=$(command -v ape 2>/dev/null); [ -n "$a" ] && { apepath; exec "$a" "$o" "$@"; }
+  [ -x "$t" ] && { apepath; exec "$t" "$o" "$@"; }
 `)
 			writeStagedCopy(&script, armBoot, 0, 0)
 		} else {
