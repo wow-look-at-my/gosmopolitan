@@ -2003,16 +2003,32 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // is one process there, so no other test can reach this one's state either
 // way. [AllocsPerRun] is the exception: it needs the process itself, and fails
 // on such a host rather than measuring the wrong thing.
+//
+// A call inside a fork child never starts a second one. The child is alone in
+// its process, so it has what a fork would buy.
 func (t *T) Fork() {
 	if !canFork() {
 		t.Serial()
 		return
 	}
-	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+	if target, forked := os.LookupEnv(forkTargetEnv); forked {
 		// Already the dedicated child: run the body right here. A test the
 		// target runs UNDER stays here too, or the child forks its own parent
 		// and never reaches the target.
-		return
+		if target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+			return
+		}
+		// A test BELOW the target forks normally: it gets its own child, which
+		// is what a subtest asks Fork for.
+		if !strings.HasPrefix(t.Name(), target+"/") {
+			// Anything else is a test the child was never selected to run, so
+			// forking it starts a peer rather than a descendant and the two
+			// spawn each other. The windows leg reached "cannot allocate
+			// memory" that way, through archive/tar's two forking tests. The
+			// barrier gives this one what a child would, without the process.
+			t.Serial()
+			return
+		}
 	}
 	t.Helper()
 	t.forkAndTakeTheResult()
