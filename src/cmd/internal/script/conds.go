@@ -6,6 +6,7 @@ package script
 
 import (
 	"fmt"
+	"internal/goos"
 	"internal/syslist"
 	"os"
 	"runtime"
@@ -19,10 +20,15 @@ import (
 func DefaultConds() map[string]Cond {
 	conds := make(map[string]Cond)
 
+	// goos.GOOS, not runtime.GOOS. A script asks what port it is testing, and
+	// on cosmo runtime.GOOS answers with the HOST instead: one APE boots on
+	// three of them. The macOS runner therefore matched GOOS:darwin and ran
+	// darwin_no_cgo against the cosmo port, where the script means nothing.
+	// Everywhere else the two are the same string.
 	conds["GOOS"] = PrefixCondition(
-		"runtime.GOOS == <suffix>",
+		"goos.GOOS == <suffix>",
 		func(_ *State, suffix string) (bool, error) {
-			if suffix == runtime.GOOS {
+			if suffix == goos.GOOS {
 				return true, nil
 			}
 			if _, ok := syslist.KnownOS[suffix]; !ok {
