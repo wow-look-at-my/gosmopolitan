@@ -2082,27 +2082,6 @@ func (t *T) forkAndTakeTheResult() {
 	t.mu.Unlock()
 }
 
-// forkChildStarts reports whether a fork child should start this top-level
-// test. Outside a child every test starts, so this answers true there.
-//
-// A child exists to run ONE test, and forkAndTakeTheResult keeps only that
-// test's result. Every other top-level test the child starts is work whose
-// result is thrown away, and it is not free: it shares the process with the
-// target. That is what leaves AllocsPerRun unable to measure in a child of its
-// own, because a sibling's allocations land in the count.
-//
-// The target names one test, so its first path element is the top-level test
-// the child was started for. A subtest below that element still runs, which is
-// what Fork's own target checks are about.
-func forkChildStarts(name string) bool {
-	target := os.Getenv(forkTargetEnv)
-	if target == "" {
-		return true
-	}
-	top, _, _ := strings.Cut(target, "/")
-	return name == top
-}
-
 // failWithoutAChild reports an allocsFork panic that no child can answer. A
 // host may start no child process, or this test may already BE the child's
 // target, where a second child reaches the same place. The barrier is the only
@@ -3264,9 +3243,6 @@ func runTests(modulePath, importPath string, matchString func(pat, str string) (
 			}
 			tRunner(t, func(t *T) {
 				for _, test := range tests {
-					if !forkChildStarts(test.Name) {
-						continue
-					}
 					t.Run(test.Name, test.F)
 				}
 			})

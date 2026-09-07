@@ -6,6 +6,7 @@ package testing
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -83,33 +84,29 @@ func TestForkRunsTheBodyInAChildProcess(t *T) {
 	}
 }
 
-// TestForkChildStartsOnlyItsTarget: a child runs ONE top-level test. Every
-// other one it starts shares the process with the target, and a sibling's
-// allocations are what stop AllocsPerRun from measuring in a child of its own.
+// TestForkChildSelectsItsTargetByFlag: a child runs one test because
+// forkArgs anchors -test.run to it, NOT because anything reads the fork
+// marker to filter the test list.
 //
-// The rule is asserted directly rather than through a second test that records
-// whether it ran. That observation depends on which test the child's scheduler
-// reaches first, and a test that answers differently on timing is broken.
-func TestForkChildStartsOnlyItsTarget(t *T) {
-	t.Setenv(forkTargetEnv, "TestOuter/inner")
+// The distinction is the whole reason this test exists. The marker is an
+// environment variable, so every subprocess a test starts inherits it, and a
+// filter keyed on it silences that subprocess's own -test.run. Selection
+// belongs on the command line, where it reaches exactly the process the
+// caller meant.
+func TestForkChildSelectsItsTargetByFlag(t *T) {
+	args := forkArgs("TestOuter", []string{"-test.v"})
 
-	for _, tc := range []struct {
-		name string
-		want bool
-	}{
-		{"TestOuter", true},     // the target's own top-level test
-		{"TestOther", false},    // a sibling, whose result the child discards
-		{"TestOuterish", false}, // a longer name the prefix must not swallow
-	} {
-		if got := forkChildStarts(tc.name); got != tc.want {
-			t.Errorf("forkChildStarts(%q) = %v, want %v", tc.name, got, tc.want)
+	var run string
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "-test.run="); ok {
+			run = v
 		}
 	}
-
-	// Outside a child nothing is filtered, or an ordinary run loses every test.
-	os.Unsetenv(forkTargetEnv)
-	if !forkChildStarts("TestAnything") {
-		t.Error("forkChildStarts must answer true when no fork marker is set")
+	if !strings.Contains(run, "TestOuter") {
+		t.Errorf("forkArgs gave -test.run=%q, want it to name the target", run)
+	}
+	if !slices.Contains(args, "-test.v") {
+		t.Errorf("forkArgs dropped the run's own flags: %q", args)
 	}
 }
 
