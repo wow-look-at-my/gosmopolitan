@@ -478,7 +478,10 @@ func BenchmarkReadMetricsLatency(b *testing.B) {
 var readMetricsSink [1024]any
 
 func TestReadMetricsCumulative(t *testing.T) {
+	t.Serial(
 	// Set up the set of metrics marked cumulative.
+	)
+
 	descs := metrics.All()
 	var samples [2][]metrics.Sample
 	samples[0] = make([]metrics.Sample, len(descs))

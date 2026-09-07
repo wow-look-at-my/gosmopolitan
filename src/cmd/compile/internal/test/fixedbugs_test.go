@@ -30,6 +30,7 @@ var g T
 var sink any
 
 func TestIssue15854(t *testing.T) {
+	t.Serial()
 	for i := 0; i < 10000; i++ {
 		if g.x[0] != 0 {
 			t.Fatalf("g.x[0] clobbered with %x\n", g.x[0])
@@ -45,6 +46,7 @@ func TestIssue15854(t *testing.T) {
 	}
 }
 func TestIssue15854b(t *testing.T) {
+	t.Serial()
 	const N = 10000
 	a := make([]T, N)
 	for i := 0; i < N; i++ {

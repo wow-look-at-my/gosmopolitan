@@ -690,6 +690,11 @@ var defaultVetFlags = []string{
 	"-stringintconv",
 	// "-structtag",
 	// "-testinggoroutine",
+	// testglobals is this fork's own. Top level tests run in parallel here, so
+	// a package variable a test writes is one every other test can read, and
+	// the failure that produces looks like a test reading a value it never
+	// wrote. std and cmd carry no violations, so it runs on every test build.
+	"-testglobals",
 	"-tests",
 	// "-timeformat",
 	// "-unmarshal",

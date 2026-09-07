@@ -305,6 +305,7 @@ func TestForkRunValue(t *T) {
 // that shares it forks. Tests are parallel by default, so this test is such a
 // caller: the measurement below runs only in a child that runs this test alone.
 func TestAllocsPerRunForks(t *T) {
+	t.Serial()
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
 		t.Fatal("AllocsPerRun returned in a process this test shares with others; it must fork first")

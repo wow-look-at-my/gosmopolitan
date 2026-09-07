@@ -53,6 +53,7 @@ func testString(t *testing.T, s, name, data string) {
 }
 
 func TestXGlobal(t *testing.T) {
+	t.Serial()
 	testFiles(t, global, "testdata/hello.txt", "hello, world\n")
 	testString(t, concurrency, "concurrency", "Concurrency is not parallelism.\n")
 	testString(t, string(glass), "glass", "I can eat glass and it doesn't hurt me.\n")

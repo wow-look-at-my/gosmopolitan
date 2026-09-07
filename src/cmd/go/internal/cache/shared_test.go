@@ -565,6 +565,7 @@ func holdQuietWindowOpen(t *testing.T) {
 // silence, never a fix: a green build here says the cache is quiet, not that
 // the cache works.
 func TestSharedCache_QuietWindowExpires(t *testing.T) {
+	t.Serial()
 	if !cacheQuietUntil.After(time.Now()) {
 		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+
 			"or say here why it moves", cacheQuietUntil.Format(time.RFC3339))

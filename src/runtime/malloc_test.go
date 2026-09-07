@@ -27,6 +27,7 @@ import (
 var testMemStatsCount int
 
 func TestMemStats(t *testing.T) {
+	t.Serial()
 	testMemStatsCount++
 
 	// Make sure there's at least one forced GC.
@@ -636,8 +637,11 @@ type acLink struct {
 var arenaCollisionSink []*acLink
 
 func TestArenaCollision(t *testing.T) {
+	t.Serial(
 	// Test that mheap.sysAlloc handles collisions with other
 	// memory mappings.
+	)
+
 	if os.Getenv("TEST_ARENA_COLLISION") != "1" {
 		cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t), "-test.run=^TestArenaCollision$", "-test.v"))
 		cmd.Env = append(cmd.Env, "TEST_ARENA_COLLISION=1")

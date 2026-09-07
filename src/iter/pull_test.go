@@ -153,6 +153,7 @@ func stableNumGoroutine() int {
 }
 
 func TestPullDoubleNext(t *testing.T) {
+	t.Serial()
 	next, _ := Pull(doDoubleNext())
 	nextSlot = next
 	next()
@@ -175,6 +176,7 @@ func doDoubleNext() Seq[int] {
 }
 
 func TestPullDoubleNext2(t *testing.T) {
+	t.Serial()
 	next, _ := Pull2(doDoubleNext2())
 	nextSlot2 = next
 	next()
@@ -197,6 +199,7 @@ func doDoubleNext2() Seq2[int, int] {
 }
 
 func TestPullDoubleYield(t *testing.T) {
+	t.Serial()
 	next, stop := Pull(storeYield())
 	next()
 	if yieldSlot == nil {
@@ -226,6 +229,7 @@ func storeYield() Seq[int] {
 var yieldSlot func(int) bool
 
 func TestPullDoubleYield2(t *testing.T) {
+	t.Serial()
 	next, stop := Pull2(storeYield2())
 	next()
 	if yieldSlot2 == nil {

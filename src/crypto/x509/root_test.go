@@ -27,8 +27,11 @@ func TestFallbackPanic(t *testing.T) {
 }
 
 func TestFallback(t *testing.T) {
+	t.Serial(
 	// call systemRootsPool so that the sync.Once is triggered, and we can
 	// manipulate systemRoots without worrying about our working being overwritten
+	)
+
 	systemRootsPool()
 	if systemRoots != nil {
 		originalSystemRoots := *systemRoots
