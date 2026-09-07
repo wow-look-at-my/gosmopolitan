@@ -590,7 +590,7 @@ func TestAPEFileMachoTransform(t *testing.T) {
 	// DEFAULT set (its runtime bring-up is incomplete and nothing verifies
 	// it), which is why an unset selection would emit no Mach-O header at
 	// all and this test would have nothing to look at.
-	t.Serial() // -apeplatforms is a package global every merge reads.
+	t.Serial("the platform selection is a package global that every merge in this binary consults")
 	defer func(old string) { *flagApePlatforms = old }(*flagApePlatforms)
 	*flagApePlatforms = cosmoape.DarwinAMD64.String()
 

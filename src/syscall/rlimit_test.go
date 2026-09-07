@@ -13,6 +13,9 @@ import (
 )
 
 func TestOpenFileLimit(t *testing.T) {
+	// A child, not the barrier: 1200 descriptors need a table nothing else has
+	// filled, and stopping the other tests does not close what they hold.
+	t.Fork()
 	// For open file count,
 	// macOS sets the default soft limit to 256 and no hard limit.
 	// CentOS and Fedora set the default soft limit to 1024,

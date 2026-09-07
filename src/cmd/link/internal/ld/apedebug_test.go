@@ -271,7 +271,7 @@ func TestAPESlimELFDebug(t *testing.T) {
 // setAPEDbgMode sets the -apedbgmode flag value for one test.
 func setAPEDbgMode(t *testing.T, mode string) {
 	t.Helper()
-	t.Serial() // The flag is a package global every merge reads.
+	t.Serial("the debug-mode flag is a package global that every merge in this process reads")
 	old := *flagApeDbgMode
 	*flagApeDbgMode = mode
 	t.Cleanup(func() { *flagApeDbgMode = old })

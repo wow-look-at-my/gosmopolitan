@@ -2028,6 +2028,7 @@ func TestRootNoLstat(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
+	t.Serial("a defer closes the handle the subtests open through, and their stat hook is process-wide")
 
 	test := func(name string, fn func(t *testing.T, f *os.File)) {
 		t.Run(name, func(t *testing.T) {

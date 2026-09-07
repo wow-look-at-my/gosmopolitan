@@ -6,7 +6,6 @@ package ld
 
 import (
 	"internal/testenv"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func main() {
 `
 
 func TestIssue33808(t *testing.T) {
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		return
 	}
 	testenv.MustHaveGoBuild(t)

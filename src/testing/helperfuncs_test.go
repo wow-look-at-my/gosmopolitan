@@ -41,7 +41,7 @@ func testTestHelper(t *testing.T) {
 }
 
 func testHelper(t *testing.T) {
-	t.Serial() // The subtests must log in order. Keep this a one-line edit.
+	t.Serial("the calls below log in a fixed order, and their line numbers are what the parent asserts on")
 	// Check directly and indirectly called helper functions.
 	notHelper(t, "0")
 	helper(t, "1")

@@ -58,6 +58,7 @@ func setupEnvCleanup(tb testing.TB) {
 }
 
 func TestClearenv(t *testing.T) {
+	t.Serial("this empties and rebuilds the environment of the whole process, which every other test reads")
 	setupEnvCleanup(t)
 
 	t.Run("DummyVars-4096", func(t *testing.T) {

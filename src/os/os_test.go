@@ -2910,6 +2910,8 @@ func mkdirTree(t *testing.T, root string, level, max int) {
 // Test that simultaneous RemoveAll do not report an error.
 // As long as it gets removed, we should be happy.
 func TestRemoveAllRace(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.GOOS == "windows" {
 		// Windows has very strict rules about things like
 		// removing directories while someone else has
@@ -3497,7 +3499,7 @@ func TestDirFSReadFileProc(t *testing.T) {
 }
 
 func TestWriteStringAlloc(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("writing a string to a file must not copy it, and the allocation count covers the whole process")
 	if runtime.GOOS == "js" {
 		t.Skip("js allocates a lot during File.WriteString")
 	}

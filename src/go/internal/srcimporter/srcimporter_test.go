@@ -83,6 +83,10 @@ func walkDir(t *testing.T, path string, endTime time.Time) (int, bool) {
 }
 
 func TestImportStdLib(t *testing.T) {
+	// A source importer holds the packages it is part way through, and the
+	// one above is shared, so a second test importing the same package
+	// reads that as an import cycle.
+	t.Serial()
 	testenv.MustHaveSource(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -107,6 +111,7 @@ var importedObjectTests = []struct {
 }
 
 func TestImportedTypes(t *testing.T) {
+	t.Serial() // Shares the importer. See TestImportStdLib.
 	testenv.MustHaveSource(t)
 
 	for _, test := range importedObjectTests {
@@ -189,6 +194,7 @@ func TestReimport(t *testing.T) {
 }
 
 func TestIssue20855(t *testing.T) {
+	t.Serial() // Shares the importer. See TestImportStdLib.
 	testenv.MustHaveSource(t)
 
 	pkg, err := importer.ImportFrom("go/internal/srcimporter/testdata/issue20855", ".", 0)
@@ -221,6 +227,7 @@ func testImportPath(t *testing.T, pkgPath string) {
 
 // TestIssue23092 tests relative imports.
 func TestIssue23092(t *testing.T) {
+	t.Serial() // Shares the importer. See TestImportStdLib.
 	testImportPath(t, "./testdata/issue23092")
 }
 

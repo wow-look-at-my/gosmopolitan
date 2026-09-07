@@ -662,6 +662,10 @@ func testAmbientCaps(t *testing.T, userns bool) {
 		t.Fatal(err)
 	}
 
+	// A fork in another test holds every open descriptor until it execs, so a
+	// write handle to the file below can outlive the Close here and make the
+	// exec fail with ETXTBSY.
+	t.Serial("nothing else may fork while the copy below is open for writing, or the exec of it fails")
 	// Copy the test binary to a temporary location which is readable by nobody.
 	f, err := os.CreateTemp("", "gotest")
 	if err != nil {

@@ -1,6 +1,10 @@
 {"Action":"start"}
 {"Action":"run","Test":"TestAscii"}
 {"Action":"output","Test":"TestAscii","Output":"=== RUN   TestAscii\n","OutputType":"frame"}
+{"Action":"output","Test":"TestAscii","Output":"=== PAUSE TestAscii\n","OutputType":"frame"}
+{"Action":"pause","Test":"TestAscii"}
+{"Action":"cont","Test":"TestAscii"}
+{"Action":"output","Test":"TestAscii","Output":"=== CONT  TestAscii\n","OutputType":"frame"}
 {"Action":"run","Test":"TestAscii/Log"}
 {"Action":"output","Test":"TestAscii/Log","Output":"=== RUN   TestAscii/Log\n","OutputType":"frame"}
 {"Action":"output","Test":"TestAscii/Log","Output":"    x_test.go:8: \u0000\n"}
@@ -266,5 +270,3 @@
 {"Action":"output","Test":"TestAscii/Error","Output":"    x_test.go:13: ~\n","OutputType":"error"}
 {"Action":"output","Test":"TestAscii/Error","Output":"    x_test.go:13: \n","OutputType":"error"}
 {"Action":"output","Test":"TestAscii/Error","Output":"--- FAIL: TestAscii/Error (0.00s)\n","OutputType":"frame"}
-{"Action":"fail","Test":"TestAscii/Error"}
-{"Action":"output","Test":"TestAscii","Output":"--- FAIL: TestAscii (0.00s)\n","OutputType":"frame"}

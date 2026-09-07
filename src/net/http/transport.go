@@ -298,6 +298,14 @@ type Transport struct {
 	h3Transport        dialClientConner // non-nil if http3 wired up
 	tlsNextProtoWasNil bool             // whether TLSNextProto was nil when the Once fired
 
+	// Hooks the tests in this package install, nil in any other build. They
+	// belong to one transport, so a test arms only the connections it made:
+	// a package variable here fires inside every other test's transport too,
+	// and several of these hooks block or count. Set each one before the
+	// first request and leave it alone after, the way a field of a live
+	// Transport has to be.
+	testHooks *transportTestHooks
+
 	// ForceAttemptHTTP2 controls whether HTTP/2 is enabled when a non-zero
 	// Dial, DialTLS, or DialContext func or TLSClientConfig is provided.
 	// By default, use of any those fields conservatively disables HTTP/2.
@@ -759,7 +767,7 @@ func (t *Transport) roundTrip(req *Request) (_ *Response, err error) {
 			}
 			return nil, err
 		}
-		testHookRoundTripRetried()
+		callHook(t.hooks().roundTripRetried)
 
 		// Rewind the body if we're able to.
 		req, err = rewindBody(req)
@@ -1601,8 +1609,8 @@ func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (_ *persis
 		ctx:        dialCtx,
 		cancelCtx:  dialCancel,
 		result:     make(chan connOrError, 1),
-		beforeDial: testHookPrePendingDial,
-		afterDial:  testHookPostPendingDial,
+		beforeDial: t.hooks().prePendingDial,
+		afterDial:  t.hooks().postPendingDial,
 	}
 	defer func() {
 		if err != nil {
@@ -1659,7 +1667,7 @@ func (t *Transport) getConn(treq *transportRequest, cm connectMethod) (_ *persis
 // queueForDial queues w to wait for permission to begin dialing.
 // Once w receives permission to dial, it will do so in a separate goroutine.
 func (t *Transport) queueForDial(w *wantConn) {
-	w.beforeDial()
+	callHook(w.beforeDial)
 
 	t.connsPerHostMu.Lock()
 	defer t.connsPerHostMu.Unlock()
@@ -1704,7 +1712,7 @@ func (t *Transport) startDialConnForLocked(w *wantConn) {
 // dialConnFor has received permission to dial w.cm and is counted in t.connCount[w.cm.key()].
 // If the dial is canceled or unsuccessful, dialConnFor decrements t.connCount[w.cm.key()].
 func (t *Transport) dialConnFor(w *wantConn) {
-	defer w.afterDial()
+	defer callHook(w.afterDial)
 	ctx := w.getCtxForDial()
 	if ctx == nil {
 		t.decConnsPerHost(w.key)
@@ -1831,7 +1839,14 @@ type erringRoundTripper interface {
 	RoundTripErr() error
 }
 
-var testHookProxyConnectTimeout = context.WithTimeout
+// proxyConnectTimeout is context.WithTimeout, or what a test in this package
+// put in this transport's place.
+func (t *Transport) proxyConnectTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if f := t.hooks().proxyConnectTimeout; f != nil {
+		return f(ctx, d)
+	}
+	return context.WithTimeout(ctx, d)
+}
 
 func (t *Transport) dialConn(ctx context.Context, cm connectMethod, isClientConn bool, internalStateHook func()) (pconn *persistConn, err error) {
 	// TODO: actually support HTTP/3. Among other things:
@@ -1992,7 +2007,7 @@ func (t *Transport) dialConn(ctx context.Context, cm connectMethod, isClientConn
 		// Set a (long) timeout here to make sure we don't block forever
 		// and leak a goroutine if the connection stops replying after
 		// the TCP connect.
-		connectCtx, cancel := testHookProxyConnectTimeout(ctx, 1*time.Minute)
+		connectCtx, cancel := t.proxyConnectTimeout(ctx, 1*time.Minute)
 		defer cancel()
 
 		didReadResponse := make(chan struct{}) // closed after CONNECT write+read is done or fails
@@ -2473,9 +2488,7 @@ func (pc *persistConn) readLoop() {
 	defer close(eofc) // unblock reader on errors
 
 	// Read this once, before loop starts. (to avoid races in tests)
-	testHookMu.Lock()
-	testHookReadLoopBeforeNextRead := testHookReadLoopBeforeNextRead
-	testHookMu.Unlock()
+	testHookReadLoopBeforeNextRead := pc.t.hooks().readLoopBeforeNextRead
 
 	alive := true
 	for alive {
@@ -2555,7 +2568,7 @@ func (pc *persistConn) readLoop() {
 			// Now that they've read from the unbuffered channel, they're safely
 			// out of the select that also waits on this goroutine to die, so
 			// we're allowed to exit now if needed (if alive is false)
-			testHookReadLoopBeforeNextRead()
+			callHook(testHookReadLoopBeforeNextRead)
 			continue
 		}
 
@@ -2623,7 +2636,7 @@ func (pc *persistConn) readLoop() {
 		}
 
 		rc.treq.cancel(errRequestDone)
-		testHookReadLoopBeforeNextRead()
+		callHook(testHookReadLoopBeforeNextRead)
 	}
 }
 
@@ -2945,17 +2958,38 @@ var errRequestDone = errors.New("net/http: request completed")
 
 func nop() {}
 
-// testHooks. Always non-nil.
-var (
-	testHookEnterRoundTrip   = nop
-	testHookWaitResLoop      = nop
-	testHookRoundTripRetried = nop
-	testHookPrePendingDial   = nop
-	testHookPostPendingDial  = nop
+// testHookWaitResLoop stays a package variable: nothing sets it.
+var testHookWaitResLoop = nop
 
-	testHookMu                     sync.Locker = fakeLocker{} // guards following
-	testHookReadLoopBeforeNextRead             = nop
-)
+// transportTestHooks holds the hooks one Transport runs. A nil field, and a
+// nil transportTestHooks, both mean the hook is off, which is every build
+// except a test in this package that asks for one.
+type transportTestHooks struct {
+	enterRoundTrip         func()
+	roundTripRetried       func()
+	prePendingDial         func()
+	postPendingDial        func()
+	readLoopBeforeNextRead func()
+	proxyConnectTimeout    func(context.Context, time.Duration) (context.Context, context.CancelFunc)
+}
+
+// hooks returns t's test hooks, never nil, so a caller reads a field instead
+// of testing the pointer first.
+func (t *Transport) hooks() *transportTestHooks {
+	if t == nil || t.testHooks == nil {
+		return &noTestHooks
+	}
+	return t.testHooks
+}
+
+var noTestHooks transportTestHooks
+
+// callHook runs f when a test installed one.
+func callHook(f func()) {
+	if f != nil {
+		f()
+	}
+}
 
 func (pc *persistConn) waitForAvailability(ctx context.Context) error {
 	select {
@@ -2969,7 +3003,7 @@ func (pc *persistConn) waitForAvailability(ctx context.Context) error {
 }
 
 func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err error) {
-	testHookEnterRoundTrip()
+	callHook(pc.t.hooks().enterRoundTrip)
 
 	pc.mu.Lock()
 	if pc.isClientConn {
@@ -3387,14 +3421,6 @@ type tlsHandshakeTimeoutError struct{}
 func (tlsHandshakeTimeoutError) Timeout() bool   { return true }
 func (tlsHandshakeTimeoutError) Temporary() bool { return true }
 func (tlsHandshakeTimeoutError) Error() string   { return "net/http: TLS handshake timeout" }
-
-// fakeLocker is a sync.Locker which does nothing. It's used to guard
-// test-only fields when not under test, to avoid runtime atomic
-// overhead.
-type fakeLocker struct{}
-
-func (fakeLocker) Lock()   {}
-func (fakeLocker) Unlock() {}
 
 // cloneTLSConfig returns a shallow clone of cfg, or a new zero tls.Config if
 // cfg is nil. This is safe to call even if cfg is in active use by a TLS

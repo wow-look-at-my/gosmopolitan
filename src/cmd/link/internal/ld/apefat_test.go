@@ -94,7 +94,7 @@ func buildTestELFPair(t *testing.T) (amdElf, armElf []byte) {
 // setAPEFatFlags sets the -apestrip/-apedbg flag values for one test.
 func setAPEFatFlags(t *testing.T, strip, dbg bool) {
 	t.Helper()
-	t.Serial() // The flags are package globals every merge reads.
+	t.Serial("the strip and debug flags are package globals, and a merge running beside this one would pick them up")
 	oldStrip, oldDbg := *flagApeStrip, *flagApeDbg
 	*flagApeStrip, *flagApeDbg = strip, dbg
 	t.Cleanup(func() { *flagApeStrip, *flagApeDbg = oldStrip, oldDbg })

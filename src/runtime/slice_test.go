@@ -515,7 +515,7 @@ func byteSlice(n int) []byte {
 	return r
 }
 func TestAppendByteInLoop(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("appending one byte in a loop must not allocate, and the count covers every goroutine in this process")
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")
@@ -577,7 +577,7 @@ func ptrSlice(n int, p *[]*byte) {
 	*p = r
 }
 func TestAppendPtrInLoop(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("appending a pointer in a loop must stay allocation free, which a concurrent test makes impossible to see")
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")
@@ -647,7 +647,7 @@ func byteCapSlice(n int) ([]byte, int) {
 	return r, cap(r)
 }
 func TestAppendByteCapInLoop(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("growing to capacity in a loop is counted here, and the counter cannot tell whose allocation it saw")
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")

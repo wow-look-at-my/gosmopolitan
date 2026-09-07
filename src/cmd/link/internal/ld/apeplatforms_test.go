@@ -18,7 +18,7 @@ import (
 // setAPEPlatforms sets the -apeplatforms flag value for one test.
 func setAPEPlatforms(t *testing.T, spec string) {
 	t.Helper()
-	t.Serial() // The flag is a package global every merge reads.
+	t.Serial("the platform flag is a package global, so a concurrent merge would read whatever is set here")
 	old := *flagApePlatforms
 	*flagApePlatforms = spec
 	t.Cleanup(func() { *flagApePlatforms = old })
@@ -143,7 +143,7 @@ func catchExitf(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Serial() // -h, os.Stderr and nerrors are process-wide; a concurrent restore turns the panic back into a real exit.
+	t.Serial("-h, os.Stderr and nerrors are process-wide, and a concurrent restore turns the caught panic into a real exit")
 	oldH, oldErr, oldN := *flagH, os.Stderr, nerrors
 	*flagH, os.Stderr = true, w
 	defer func() { *flagH, os.Stderr, nerrors = oldH, oldErr, oldN }()

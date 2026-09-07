@@ -991,7 +991,7 @@ func TestBenchmark(t *T) {
 }
 
 func TestCleanup(t *T) {
-	t.Serial() // The cleanup order is checked right after t.Run returns.
+	t.Serial("the ordering of cleanups is checked right after the call that runs the subtest returns")
 	var cleanups []int
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { cleanups = append(cleanups, 1) })
@@ -1003,7 +1003,7 @@ func TestCleanup(t *T) {
 }
 
 func TestConcurrentCleanup(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the cleanup counter is read as soon as the subtests return, so nothing may still be pending")
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		var wg sync.WaitGroup
@@ -1028,7 +1028,7 @@ func TestConcurrentCleanup(t *T) {
 }
 
 func TestCleanupCalledEvenAfterGoexit(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the number of cleanups is checked the moment the subtest is gone, with nothing else in flight")
 	cleanups := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {
@@ -1044,7 +1044,7 @@ func TestCleanupCalledEvenAfterGoexit(t *T) {
 }
 
 func TestRunCleanup(t *T) {
-	t.Serial() // The cleanup counts are checked right after t.Run returns.
+	t.Serial("how many cleanups ran is asserted immediately, so no other subtest may add to the total")
 	outerCleanup := 0
 	innerCleanup := 0
 	t.Run("test", func(t *T) {
@@ -1062,7 +1062,7 @@ func TestRunCleanup(t *T) {
 }
 
 func TestCleanupParallelSubtests(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the cleanup count is read once the subtests return, and it counts only the ones started here")
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() { ranCleanup++ })
@@ -1079,7 +1079,7 @@ func TestCleanupParallelSubtests(t *T) {
 }
 
 func TestNestedCleanup(t *T) {
-	t.Serial() // The cleanup count is checked right after t.Run returns.
+	t.Serial("the nested cleanups are counted right after the outer call returns, and their order matters")
 	ranCleanup := 0
 	t.Run("test", func(t *T) {
 		t.Cleanup(func() {
@@ -1282,11 +1282,15 @@ func TestOutputEscape2(t *T) { testOutputEscape(t) }
 var global *T
 
 func testOutputEscape(t *T) {
+	t.Serial("both callers share the global below, and the second one logs to a test that must already be done")
 	if global == nil {
 		// Store t in a global, to set up for the second execution.
 		global = t
 	} else {
 		// global is inactive here.
 		global.Log("hello")
+		// Under -count=N the next iteration gets a new root, and a test held
+		// from this one has no incomplete parent left to log to.
+		global = nil
 	}
 }

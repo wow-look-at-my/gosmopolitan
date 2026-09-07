@@ -14,6 +14,8 @@ import (
 )
 
 func TestReadGCStats(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer SetGCPercent(SetGCPercent(-1))
 
 	var stats GCStats
@@ -156,6 +158,8 @@ var (
 )
 
 func TestSetGCPercent(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	testenv.SkipFlaky(t, 20076)
 
 	// Test that the variable is being set and returned correctly.
