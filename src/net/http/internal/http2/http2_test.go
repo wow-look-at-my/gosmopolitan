@@ -163,6 +163,12 @@ func SetForTest[T any](t testing.TB, p *T, v T) {
 	//
 	// Serial is on *testing.T rather than on TB, and a benchmark does not
 	// have one, so ask rather than require.
+	//
+	// A CALLER INSIDE A synctest BUBBLE MUST TAKE THE BARRIER FIRST, in the
+	// test function that calls synctest.Test. The wait below is process-wide,
+	// and a bubble goroutine blocked on it parks with every other goroutine in
+	// the bubble, which synctest reports as a deadlock rather than as this
+	// line. Serial is idempotent, so taking it early costs the caller nothing.
 	if s, ok := t.(interface{ Serial() }); ok {
 		s.Serial()
 	}

@@ -990,7 +990,15 @@ func testTransportResPatternBubble(t *testing.T, expect100Continue, resHeader he
 }
 
 // Issue 26189, Issue 17739: ignore unknown 1xx responses
-func TestTransportUnknown1xx(t *testing.T) { synctest.Test(t, testTransportUnknown1xx) }
+func TestTransportUnknown1xx(t *testing.T) {
+	// The body sets got1xxFuncForTests, so SetForTest asks for the serial
+	// barrier. Taking it here rather than in there is the whole point: inside
+	// a bubble that wait blocks a bubble goroutine on a process-wide
+	// condition, every other bubble goroutine is already parked, and synctest
+	// reports a deadlock. Serial is idempotent, so the inner ask is free.
+	t.Serial()
+	synctest.Test(t, testTransportUnknown1xx)
+}
 func testTransportUnknown1xx(t *testing.T) {
 	var buf bytes.Buffer
 	SetTestHookGot1xx(t, func(code int, header textproto.MIMEHeader) error {

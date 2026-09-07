@@ -2554,6 +2554,10 @@ func testServer_Response_ManyHeaders_With_Continuation(t *testing.T) {
 // defer sc.closeAllStreamsOnConnClose) when the serverConn serve loop
 // ended.
 func TestServer_NoCrash_HandlerClose_Then_ClientClose(t *testing.T) {
+	// SetTestHookOnPanic in the body reaches SetForTest, which asks for the
+	// serial barrier. Take it out here: a bubble goroutine blocked on a
+	// process-wide wait reads to synctest as a deadlock.
+	t.Serial()
 	synctest.Test(t, testServer_NoCrash_HandlerClose_Then_ClientClose)
 }
 func testServer_NoCrash_HandlerClose_Then_ClientClose(t *testing.T) {
