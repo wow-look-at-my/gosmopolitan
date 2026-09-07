@@ -305,18 +305,20 @@ func TestForkRunValue(t *T) {
 // that shares it forks. Tests are parallel by default, so this test is such a
 // caller: the measurement below runs only in a child that runs this test alone.
 func TestAllocsPerRunForks(t *T) {
-	t.Serial()
+	// No barrier here, deliberately: sharing the process IS the condition under
+	// test. The sink is a local for the same reason, so the analyzer that asks
+	// for one has nothing to ask about.
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
 		t.Fatal("AllocsPerRun returned in a process this test shares with others; it must fork first")
 	}
 
-	if allocs := AllocsPerRun(100, func() { allocsSink = new(int32) }); allocs != 1 {
+	var sink any
+	if allocs := AllocsPerRun(100, func() { sink = new(int32) }); allocs != 1 {
 		t.Errorf("AllocsPerRun(100, new(int32)) = %v, want 1", allocs)
 	}
+	_ = sink
 }
-
-var allocsSink any
 
 // TestAllocsPerRunUnderSerialDoesNotFork: a serial test already has the process
 // to itself, so the measurement happens right here. A fork would run the rest
