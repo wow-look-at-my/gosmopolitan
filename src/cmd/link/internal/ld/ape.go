@@ -323,22 +323,31 @@ func printfBlob(blob []byte) string {
 // built by an older linker keeps its own directory rather than reading one
 // written to a different shape.
 //
-// Fixed at /tmp. No environment variable is read to find it: TMPDIR and
-// HOME are both caller-supplied and neither can be trusted to exist, to
-// name a writable directory, or even to name a real per-user one. A
-// container run as a numeric UID with no matching /etc/passwd entry gets a
-// non-empty HOME anyway -- set by the runtime itself to "/" -- confirmed
-// directly against Docker's own `--user <uid>:<gid>` default, and TMPDIR
-// is just as easy for a caller to leave unset, point at something
-// unwritable, or forget entirely. /tmp is reliably world-writable (mode
-// 1777) on virtually every host this binary runs on; nothing else is a
-// safer bet with zero information about the caller's environment.
+// /tmp by default. TMPDIR and HOME are still not read: both are
+// caller-supplied and neither can be trusted to exist, to name a writable
+// directory, or even to name a real per-user one. A container run as a
+// numeric UID with no matching /etc/passwd entry gets a non-empty HOME
+// anyway -- set by the runtime itself to "/" -- confirmed directly against
+// Docker's own `--user <uid>:<gid>` default, and TMPDIR is just as easy for
+// a caller to leave unset, point at something unwritable, or forget
+// entirely. /tmp is reliably world-writable (mode 1777) on virtually every
+// host this binary runs on.
+//
+// APE_RUNDIR overrides it, and is read for the case /tmp cannot serve at
+// all: a container that mounts a noexec filesystem over /tmp, where the
+// copy is written and then refused by execve, and the binary cannot start
+// by any path. Writability is not the only property staging needs. This
+// variable differs from TMPDIR in what setting it MEANS: TMPDIR says where
+// scratch files go and every process inherits one, while a caller sets this
+// one to name a directory it has established the APE can be run from.
+// Nothing here validates it -- mkdir and cp already fail loudly -- and an
+// unset variable changes nothing.
 //
 // apeUIDSuffix stands in for the per-user isolation a real HOME would
 // give this path: it keeps one user's staged copies out of a path another
 // user's run would also resolve to, without asking the environment for
 // anything.
-var apeRunDir = "/tmp/.ape-run-1" + apeUIDSuffix
+var apeRunDir = "${APE_RUNDIR:-/tmp}/.ape-run-1" + apeUIDSuffix
 
 // apeUIDSuffix is a shell command substitution for the running user's
 // numeric uid, read with `id -u` -- a syscall, not an environment
