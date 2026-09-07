@@ -1283,6 +1283,10 @@ func TestOutputEscape2(t *T) { testOutputEscape(t) }
 var global *T
 
 func testOutputEscape(t *T) {
+	// Either order is fine, but not at the same time: the pair works by one of
+	// them storing t and the OTHER logging to it once it is inactive. Run
+	// together, both read a nil global and neither reaches the case under test.
+	t.Serial()
 	if global == nil {
 		// Store t in a global, to set up for the second execution.
 		global = t
