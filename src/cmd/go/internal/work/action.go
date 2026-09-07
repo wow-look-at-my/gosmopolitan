@@ -166,8 +166,15 @@ func (b *Builder) RunnableTarget(a *Action) (string, error) {
 	if dir == "" {
 		dir = b.WorkDir + string(filepath.Separator)
 	}
+	// A cache hit skips the work that would have made this directory, so it is
+	// not there to copy into. On windows that read as "The system cannot find
+	// the path specified" against b001, an objdir the build never had to make.
+	sh := b.Shell(a)
+	if err := sh.Mkdir(dir); err != nil {
+		return "", err
+	}
 	exe := dir + name
-	if err := b.Shell(a).CopyFile(exe, built, 0o777, true); err != nil {
+	if err := sh.CopyFile(exe, built, 0o777, true); err != nil {
 		return "", err
 	}
 	return exe, nil
