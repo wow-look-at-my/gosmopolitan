@@ -99,19 +99,16 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// TestApeRunDirIgnoresTMPDIRAndHOME runs apeRunDir through a real
-// POSIX shell with TMPDIR, HOME, and the caller's whole environment cleared,
-// and again with both set to hostile-looking values, and checks the
-// resolved path is identical either way: /tmp, suffixed with the real
-// uid. Earlier revisions read ${TMPDIR:-${HOME:-/tmp}}, which is exactly
-// the shape that broke: a container run as a numeric --user UID with no
-// /etc/passwd entry gets a non-empty HOME anyway, set by the runtime
-// itself to "/" (confirmed directly against Docker), and `${VAR:-x}` only
-// falls through on an unset or empty VAR, so "/" won -- staging then tried
-// to mkdir under the filesystem root. Reading no environment variable at
-// all removes that whole failure class instead of special-casing the one
-// value that was observed to break it. APE_RUNDIR is the one variable that
-// does count, and TestApeRunDirHonoursAPERunDir covers it.
+// TestApeRunDirIgnoresTMPDIRAndHOME resolves apeRunDir in a real POSIX shell
+// twice: once with the environment cleared, once with TMPDIR and HOME set to
+// hostile values. Both must give /tmp plus the real uid.
+//
+// `${TMPDIR:-${HOME:-/tmp}}` falls through only on an unset or empty value,
+// so a container run as a bare numeric UID staged under "/", its own
+// runtime's HOME. Reading no variable removes the class.
+//
+// APE_RUNDIR is the one variable that counts. TestApeRunDirHonoursAPERunDir
+// covers it.
 func TestApeRunDirIgnoresTMPDIRAndHOME(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")

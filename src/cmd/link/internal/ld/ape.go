@@ -314,34 +314,17 @@ func printfBlob(blob []byte) string {
 }
 
 // apeRunDir is where the bootstrap script stages the runnable copy it makes
-// of itself. The trailing number is the staging layout's version: a binary
-// built by an older linker keeps its own directory rather than reading one
-// written to a different shape.
+// of itself. The trailing number is the layout version, so a binary built by
+// an older linker keeps its own directory.
 //
-// /tmp by default. TMPDIR and HOME are still not read: both are
-// caller-supplied and neither can be trusted to exist, to name a writable
-// directory, or even to name a real per-user one. A container run as a
-// numeric UID with no matching /etc/passwd entry gets a non-empty HOME
-// anyway -- set by the runtime itself to "/" -- confirmed directly against
-// Docker's own `--user <uid>:<gid>` default, and TMPDIR is just as easy for
-// a caller to leave unset, point at something unwritable, or forget
-// entirely. /tmp is reliably world-writable (mode 1777) on virtually every
-// host this binary runs on.
+// Never read TMPDIR or HOME here. Neither is sure to exist or to name a
+// writable per-user directory, and a container run as a bare numeric UID
+// still gets HOME="/". /tmp is world-writable on almost every host.
 //
-// APE_RUNDIR overrides it, and is read for the case /tmp cannot serve at
-// all: a container that mounts a noexec filesystem over /tmp, where the
-// copy is written and then refused by execve, and the binary cannot start
-// by any path. Writability is not the only property staging needs. This
-// variable differs from TMPDIR in what setting it MEANS: TMPDIR says where
-// scratch files go and every process inherits one, while a caller sets this
-// one to name a directory it has established the APE can be run from.
-// Nothing here validates it -- mkdir and cp already fail loudly -- and an
-// unset variable changes nothing.
-//
-// apeUIDSuffix stands in for the per-user isolation a real HOME would
-// give this path: it keeps one user's staged copies out of a path another
-// user's run would also resolve to, without asking the environment for
-// anything.
+// APE_RUNDIR overrides it, for the one case /tmp cannot serve: a noexec
+// mount, where the copy is written and then refused by execve. mkdir and cp
+// fail loudly, so nothing here validates it. apeUIDSuffix keeps one user's
+// staged copies out of a path another user's run resolves to.
 var apeRunDir = "${APE_RUNDIR:-/tmp}/.ape-run-1" + apeUIDSuffix
 
 // apeUIDSuffix is a shell command substitution for the running user's
