@@ -226,13 +226,13 @@ fi
 # Bootstrap installs a proper cmd/dist, built with the new toolchain.
 # Throw ours, built with the bootstrap toolchain, away after bootstrap.
 #
-# No -a. Upstream passes it because dist predates the content-addressed build
-# cache and wanted a toolchain that could not have reused an object built by a
-# different compiler. This fork already has that: parseToolID takes the tool's
-# own content ID, so a compiler that changed at all gets new action IDs and
-# cannot hit a stale entry. -a on top of that only guarantees the cache is
-# never used, which is a full recompile of std and cmd on every build.
-# GO_DISTFLAGS=-a still forces one.
+# There is no -a. dist does not take one any more. Upstream had it because
+# dist predates the content-addressed build cache and wanted a toolchain that
+# could not have reused an object built by a different compiler. This fork
+# already has that: parseToolID takes the tool's own content ID, so a compiler
+# that changed at all gets new action IDs and cannot hit a stale entry. -a on
+# top of that only guaranteed the cache was never used, which is a full
+# recompile of std and cmd on every build. Use "dist clean" to empty the tree.
 ./cmd/dist/dist bootstrap $vflag $GO_DISTFLAGS "$@"
 rm -f ./cmd/dist/dist
 
