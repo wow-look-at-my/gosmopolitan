@@ -71,4 +71,24 @@ func TestAPEExec(t *testing.T) {
 	if !strings.Contains(string(out), want) {
 		t.Fatalf("the APE printed %q, which does not contain %q", out, want)
 	}
+
+	// The same target by a BARE name, which is what net/http/cgi hands the
+	// kernel: it splits the script path into a directory and a name and
+	// passes each separately. The shell retry then sees a $0 with no slash
+	// and has to resolve it the way execvp does, or the APE loader takes it
+	// for a PATH lookup and reports the name as not found.
+	base := filepath.Base(target)
+	cmd = &exec.Cmd{
+		Path: base,
+		Args: append([]string{base}, args...),
+		Dir:  filepath.Dir(target),
+		Env:  []string{"PATH=/usr/bin:/bin"},
+	}
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running the APE as the bare name %s from %s failed: %v\n%s", base, cmd.Dir, err, out)
+	}
+	if !strings.Contains(string(out), want) {
+		t.Fatalf("the APE printed %q, which does not contain %q", out, want)
+	}
 }

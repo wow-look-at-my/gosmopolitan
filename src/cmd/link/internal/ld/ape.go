@@ -529,6 +529,12 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 
 	// The script starts after the transplanted PE headers.
 	var script bytes.Buffer
+	// apeSelfPath resolves $0 to an absolute path in o, which is the only
+	// thing the loader and the staged copy can open. A caller that execs a
+	// bare name relies on execvp's rules, so a name with no slash is looked
+	// up on PATH and otherwise taken as ./name - the darwin ENOEXEC retry
+	// hands the shell exactly that, and net/http/cgi is where it shows up.
+	const apeSelfPath = `  o=$0; case $o in */*) ;; *) c=$(command -v "$o" 2>/dev/null); [ -n "$c" ] && o=$c || o=./$o ;; esac; [ -f "$o" ] || o=$(pwd)/${0##*/}; case $o in /*) ;; *) o=$(pwd)/${o#./} ;; esac` + "\n"
 
 	// Here-doc terminator
 	script.WriteString("__APE__\n")
@@ -548,7 +554,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
 	switch {
 	case linuxAMD || darwinAMD:
-		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"; [ -f \"$o\" ] || o=\"$PWD/${0##*/}\"\n")
+		script.WriteString(apeSelfPath)
 		if !linuxAMD {
 			// Without a boot ELF header there is nothing to assimilate
 			// into, and re-execing would spin on this script forever.
@@ -572,7 +578,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
-		script.WriteString("  o=\"$(command -v \"$0\")\"; [ -n \"$o\" ] || o=\"$0\"; [ -f \"$o\" ] || o=\"$PWD/${0##*/}\"\n")
+		script.WriteString(apeSelfPath)
 		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
