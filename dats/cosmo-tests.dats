@@ -42,3 +42,12 @@ tests:
 	- desc: the boot script hands the program the caller's own PATH
 	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go build -o "$TMPDIR/printpath.com" ./testdata/printpath/main.go && test "$(env -i PATH=/wibble "$TMPDIR/printpath.com")" = /wibble
 	  exit: 0
+
+	# A child that loses its arguments takes down every forking test: it
+	# ignores -test.run, runs the whole package, and each test in it forks
+	# again.
+	- desc: a cosmo child receives its arguments
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go build -o "$TMPDIR/argvecho.com" ./testdata/argvecho/main.go && "$TMPDIR/argvecho.com"
+	  outputs:
+		stdout:
+			- "argv reached the child"

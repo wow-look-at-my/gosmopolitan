@@ -223,6 +223,11 @@ jobs:
           rc=0
           out="$("$RUNNER_TEMP/fbtrace.com" 10 5 2>&1)" || rc=$?
           echo "fizzbuzz -tags cosmontdebug exit=$rc output=[$out]"
+          # A child that loses its arguments ignores -test.run and forks forever; archive/tar is where that shows.
+          GOOS=cosmo go build -o "$RUNNER_TEMP/argvecho.com" ./testdata/argvecho/main.go
+          rc=0
+          "$RUNNER_TEMP/argvecho.com" || rc=$?
+          echo "argvecho exit=$rc"
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
           # Three shapes: no arguments, a listing that never runs a test, and one test.
