@@ -1644,8 +1644,19 @@ func cmdbootstrap() {
 		os.Setenv("CC", compilerEnvLookup("CC", defaultcc, goos, goarch))
 		xprintf("Building packages and commands for target, %s/%s.\n", goos, goarch)
 	}
-	goInstall(nil, goBootstrap, "std")
-	goInstall(toolenv(), goBootstrap, toolsToInstall...)
+	// $GOROOT/bin/go is the only binary this build produces that carries the
+	// shared cache client. go_bootstrap cannot carry it: the tier speaks HTTP,
+	// and runInstall above fails a go_bootstrap that depends on net. So
+	// go_bootstrap installs cmd/go alone, and bin/go installs everything else.
+	// This is the largest compile in make.bash, and under bin/go a cold build
+	// fetches what a warm one already published instead of repeating it.
+	//
+	// The two drivers must agree on every action ID, or bin/go writes entries
+	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
+	// that: go_bootstrap must find nothing stale in what bin/go just installed.
+	goInstall(toolenv(), goBootstrap, "cmd/go")
+	goInstall(nil, gorootBinGo, "std")
+	goInstall(toolenv(), gorootBinGo, toolsToInstall...)
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
 	checkNotStale(toolenv(), goBootstrap, toolsToInstall...)

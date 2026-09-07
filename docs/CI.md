@@ -14,7 +14,11 @@ Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `ya
 
 **The build cache during make.bash.** `cmd/dist` points `GOCACHE` at `$GOROOT/pkg/obj/go-build` for toolchain1, `go_bootstrap`, toolchain2 and toolchain3. That directory is wiped at startup, so those stages start clean. The final `std` and `cmd` install returns to the caller's own `GOCACHE`. A key there names the tool's content, because `parseToolID` reads the `buildID=` field every tool of this fork prints. A changed compiler cannot hit an entry an older one wrote. So a repeat `make.bash` reuses `std` rather than recompiling it.
 
-That phase reaches no shared cache tier, and it cannot as it stands. `go_bootstrap` runs the final install, and the shared tier speaks HTTP. `runInstall` fails the build when `go_bootstrap` depends on `net`, `os/user` or `crypto/x509`, because each of the three needs cgo. A shared tier under this phase therefore needs the install to run under `$GOROOT/bin/go`, which exists only after `cmd/go` is installed.
+`$GOROOT/bin/go` runs that install. `go_bootstrap` does not. bin/go is the only binary the build produces that carries the shared cache client. It is therefore the only one that can fetch `std` and the tools rather than compile them. `go_bootstrap` cannot carry the client. The tier speaks HTTP, and `runInstall` fails a `go_bootstrap` that depends on `net`, `os/user` or `crypto/x509`. Each of the three needs cgo. So `go_bootstrap` installs `cmd/go` alone, which puts bin/go in place. bin/go installs the rest.
+
+The two drivers must agree on every action ID. `checkNotStale` asserts it both ways. `go_bootstrap` must find nothing stale in what bin/go installed, and bin/go must find nothing stale either. A divergence fails the build by name. It does not leave one driver unable to read the other's entries.
+
+Every job that runs `make.bash` therefore needs `GO_BUILDCACHE_CONFIG`. The `secret-server` step in the build, wasm and publish jobs exports it. A CI run without it already failed before this. `validateCIShared` refuses to let an unconfigured CI run decide whether every other run recompiles.
 
 **Build platform-subset APE binaries.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
