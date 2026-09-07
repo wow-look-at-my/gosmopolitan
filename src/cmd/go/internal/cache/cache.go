@@ -292,6 +292,50 @@ func GetFile(c Cache, id ActionID) (file string, entry Entry, err error) {
 	return file, entry, nil
 }
 
+// GetExecutableFile is GetFile for an entry the build is going to run. It
+// returns a path the operating system will exec.
+//
+// Put writes one file, <outputID>-d. PutExecutable instead makes <outputID>-d
+// a DIRECTORY and writes the body inside it under the given name, and
+// OutputFile returns that inner file. The name is what lets the build run it:
+// the file carries mode 0777, and on Windows it ends in .exe, without which
+// exec refuses a path whose extension PATHEXT does not list.
+//
+// A body restored from the shared tier has no name. The wire carries bytes
+// keyed by action ID and nothing else, so a restore writes the plain 0666
+// file that Put writes, and running that path fails: "permission denied" on
+// Unix, "executable file not found in %PATH%" on Windows. Rewriting it as the
+// directory needs a name, so this takes one from the caller, which is
+// building the package and therefore already has it. The name stays a
+// property of the package. It is never stored beside the bytes and never
+// crosses the wire.
+func GetExecutableFile(c Cache, id ActionID, name string) (string, Entry, error) {
+	file, entry, err := GetFile(c, id)
+	if err != nil {
+		return "", Entry{}, err
+	}
+	// OutputFile returned the file inside <outputID>-d, so the directory is
+	// already there and the entry is already runnable. fileName builds that
+	// name; this reads it back.
+	if filepath.Base(filepath.Dir(file)) == fmt.Sprintf("%x", entry.OutputID)+"-d" {
+		return file, entry, nil
+	}
+	ec, ok := c.(ExecutableCache)
+	if !ok {
+		return "", Entry{}, &entryNotFoundError{Err: errors.New("cache cannot store executables")}
+	}
+	// Read first: copyFile deletes this file to free the path for the
+	// directory that replaces it.
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", Entry{}, &entryNotFoundError{Err: err}
+	}
+	if _, _, err := ec.PutExecutable(id, name, bytes.NewReader(data)); err != nil {
+		return "", Entry{}, &entryNotFoundError{Err: err}
+	}
+	return GetFile(c, id)
+}
+
 // GetBytes looks up the action ID in the cache and returns
 // the corresponding output bytes.
 // GetBytes should only be used for data that can be expected to fit in memory.
@@ -629,7 +673,19 @@ func (c *DiskCache) copyFile(file io.ReadSeeker, executableName string, out Outp
 			}
 		}
 		if !info.IsDir() {
-			return errors.New("internal error: invalid binary cache entry: not a directory")
+			// A restore from the shared tier wrote a plain file here, because
+			// the wire carries no name to put inside a directory. It holds
+			// the same bytes this call is storing, so delete it and build the
+			// directory over it.
+			if err := os.Remove(name); err != nil {
+				return err
+			}
+			if err := os.Mkdir(name, 0o777); err != nil {
+				return err
+			}
+			if info, err = os.Stat(name); err != nil {
+				return err
+			}
 		}
 
 		// directory exists. now set name to the inner file
