@@ -195,6 +195,14 @@ jobs:
         with:
           tests: dats/unix-tag-agrees.dats
 
+      # runtime.GOOS is the host; an open flag belongs to the build target.
+      - name: No GOOS predicate decides a syscall flag
+        if: matrix.build-os == 'ubuntu-latest'
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/goos-not-syscall-flags.dats
+
       # Both name the host, and a const over either still has to compile.
       - name: GOOS and GOARCH fold in a constant
         if: matrix.build-os == 'ubuntu-latest'
