@@ -134,10 +134,12 @@ the result is not cached. In this toolchain -count never leaves that set:
 a positive count selects one run either way, so the flag is dropped before
 the cache is consulted. Nothing on the command line turns the cache off on
 purpose, because a cached result that is wrong is a defect to repair.
-Tests that open files within
-the package's module or that consult environment variables only
-match future runs in which the files and environment variables are
-unchanged. A cached test result is treated as executing in no time
+Tests that open files or that consult environment variables only match
+future runs in which those files and environment variables are unchanged.
+A file counts wherever it sits, inside the module and outside it alike,
+because a file the test read is an input to the test. The one exception is
+the temporary directory, which holds nothing carried over from an earlier
+run. A cached test result is treated as executing in no time
 at all, so a successful package test result will be cached and
 reused regardless of -timeout setting.
 
@@ -2054,8 +2056,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if a.Package.Root == "" || search.InDir(name, a.Package.Root) == "" {
-				// Do not recheck files outside the module, GOPATH, or GOROOT root.
+			if isRunScratch(name) {
 				break
 			}
 			fmt.Fprintf(h, "stat %s %x\n", name, hashStat(name))
@@ -2063,8 +2064,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			if !filepath.IsAbs(name) {
 				name = filepath.Join(pwd, name)
 			}
-			if a.Package.Root == "" || search.InDir(name, a.Package.Root) == "" {
-				// Do not recheck files outside the module, GOPATH, or GOROOT root.
+			if isRunScratch(name) {
 				break
 			}
 			fh, err := hashOpen(name)
@@ -2079,6 +2079,32 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 	}
 	sum := h.Sum()
 	return sum, nil
+}
+
+// isRunScratch reports whether name is scratch space this run created, which is
+// the temporary directory and nothing else. Such a path holds no state from an
+// earlier run, so hashing it says only that the clock moved: t.TempDir names a
+// fresh directory every time, and hashOpen refuses a file that young, so every
+// test using one would stop caching for a reason that is not about its inputs.
+//
+// Every other path IS hashed, inside the module root and outside it alike. A
+// file the test read is an input to the test, and where it sits on disk does
+// not change that. Dropping the ones outside the root is what let a test read a
+// config file, a fixture or a sibling checkout and then replay a stale pass
+// after that file changed. A test whose reads genuinely cannot be pinned down,
+// such as one that reads /proc, now misses instead. A miss costs a run. A
+// wrong hit costs the trust that makes the cache worth having at all.
+func isRunScratch(name string) bool {
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		tmp = os.TempDir()
+	}
+	real, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		// The path is gone, so only its own directory prefix can answer.
+		real = name
+	}
+	return search.InDir(real, tmp) != ""
 }
 
 func hashGetenv(name string) cache.ActionID {

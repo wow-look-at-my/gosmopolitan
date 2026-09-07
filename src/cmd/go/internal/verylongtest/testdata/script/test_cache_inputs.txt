@@ -99,7 +99,11 @@ go test testcache -run=DirList
 go test testcache -run=DirList
 stdout '\(cached\)'
 
-# Files outside GOROOT and GOPATH should not affect caching.
+# A file outside GOROOT and GOPATH DOES affect caching now: a file the test read
+# is an input to the test wherever it sits. This script cannot show that, because
+# $WORK is under the temporary directory, which is the one place still exempt --
+# it is scratch this run created, not state carried over from an earlier one. So
+# these runs stay cached for the scratch reason. TestRunScratch covers the rule.
 env TEST_EXTERNAL_FILE=$WORK/external.txt
 go test testcache -run=ExternalFile
 go test testcache -run=ExternalFile
