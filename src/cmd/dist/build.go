@@ -1076,6 +1076,7 @@ func packagefile(pkg string) string {
 var unixOS = map[string]bool{
 	"aix":       true,
 	"android":   true,
+	"cosmo":     true,
 	"darwin":    true,
 	"dragonfly": true,
 	"freebsd":   true,
