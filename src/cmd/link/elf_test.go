@@ -586,12 +586,13 @@ func TestFlagD(t *testing.T) {
 }
 
 // skipIfDataAddrIsFixed skips a -D test on a port whose container fixes
-// each segment's address. An APE's PE header gives every segment an RVA
-// equal to its file offset, so the data cannot be placed elsewhere, and
-// the linker refuses -D there rather than write a header that lies.
+// each segment's address. On cosmo/amd64 the APE's PE header gives every
+// segment an RVA equal to its file offset; on cosmo/arm64 the text base
+// sits further from any -D address than an ADRP pair reaches. The linker
+// refuses -D on both rather than emit something that cannot work.
 func skipIfDataAddrIsFixed(t *testing.T) {
-	if testenv.GOOS == "cosmo" && testenv.GOARCH == "amd64" {
-		t.Skip("skipping: -D is not supported on cosmo/amd64")
+	if testenv.GOOS == "cosmo" {
+		t.Skip("skipping: -D is not supported on " + testenv.GOOS + "/" + testenv.GOARCH)
 	}
 }
 

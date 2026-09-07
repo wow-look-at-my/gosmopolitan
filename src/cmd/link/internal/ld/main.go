@@ -342,8 +342,18 @@ func Main(arch *sys.Arch, theArch Arch) {
 	// equal to its file offset, so each segment's address is fixed by
 	// where it lands in the file. Placing the data anywhere else breaks
 	// that at the header, deep in the write, so refuse it here.
-	if *FlagDataAddr != -1 && ctxt.HeadType == objabi.Hcosmo && ctxt.Arch.Family == sys.AMD64 {
-		Exitf("-D is not supported on cosmo/amd64: the APE's PE header pins each segment's address to its file offset")
+	//
+	// arm64 has no PE header and fails later instead: the text base is far
+	// above where -D puts the data, and an ADRP pair reaches 4GB, so every
+	// reference overflows with "program too large". Refuse that here too,
+	// where the message can say which address it could not reach.
+	if *FlagDataAddr != -1 && ctxt.HeadType == objabi.Hcosmo {
+		switch ctxt.Arch.Family {
+		case sys.AMD64:
+			Exitf("-D is not supported on cosmo/amd64: the APE's PE header pins each segment's address to its file offset")
+		case sys.ARM64:
+			Exitf("-D is not supported on cosmo/arm64: the APE fixes the text base at 0x%x, and 0x%x is further than an ADRP pair reaches", *FlagTextAddr, *FlagDataAddr)
+		}
 	}
 
 	if ctxt.linkShared && !ctxt.IsELF {
