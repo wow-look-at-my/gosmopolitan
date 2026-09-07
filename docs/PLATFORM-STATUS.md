@@ -26,7 +26,11 @@ SIGPROF CPU profiling: runtime/pprof and -test.cpuprofile deliver real samples o
 
 As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream os_darwin.go's pthread_mutex+pthread_cond design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
 
-A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` cannot resolve a function because of it. `objTool.Open` computes `offset = mappingStart - loadAddress`. loadAddress is the first executable PT_LOAD's vaddr. The same program measured on two hosts: linux/amd64 reports mapping 0x100000000 against loadAddress 0x100000000. The offset is 0 there and disassembly works. darwin/arm64 reports 0x800001000 against 0x800000000. Every address moves by 0x1000 and `main.main` matches nothing. The samples themselves are right. The profile symbolizes main.main through the pclntab, so what is wrong is the reported mapping rather than the sampling. Linux reads the mapping from /proc/self/maps and gets the real base. The darwin path reports the text start instead. cmd/pprof's TestDisasm fails on that leg alone.
+A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` then resolves no function.
+
+`objTool.Open` computes `offset = mappingStart - loadAddress`. loadAddress is the first executable PT_LOAD's vaddr. On linux/amd64 both values are 0x100000000. The offset is 0 there. On darwin/arm64 the mapping reads 0x800001000 against 0x800000000. Every address moves by 0x1000. `main.main` matches nothing.
+
+The samples are correct. The profile still symbolizes main.main through the pclntab. Linux reads the real base from /proc/self/maps. The darwin path reports the text start instead. cmd/pprof's TestDisasm fails on that leg alone.
 
 File metadata and system information followed (2026-09-02, the metadata wave): fsync, truncate/ftruncate, chmod/fchmod/fchmodat, chown/fchown/fchownat, fchdir, link/symlink, chtimes (utimensat), mkfifo, statfs/fstatfs, uname, getrlimit/setrlimit (prlimit64), get/setpriority, getpgid, get/setgroups, the. Everything the syscall package exposes and Apple can serve now works on macOS. The runtimeprobe fsmeta/sysinfo/sendfile checks are mandatory on macOS.
 
