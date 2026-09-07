@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -433,10 +434,16 @@ func TestSharedCache_AHealthyTierIsSilent(t *testing.T) {
 		c := openShared(t, t.TempDir())
 		c.(*SharedCache).Get(testActionID("quiet"))
 	})
-	if strings.Contains(out, "web index:") {
+	// The ROUTINE line is "web index: <n> keys". Match that shape rather than
+	// the "web index:" prefix, which the FAILURE line "web index: fetch
+	// failed; using <n> cached keys" also carries -- and does carry here,
+	// because the fake server has no index endpoint to answer with.
+	if routineIndexLine.MatchString(out) {
 		t.Fatalf("a working tier reported its index size to the build:\n%s", out)
 	}
 }
+
+var routineIndexLine = regexp.MustCompile(`web index: [0-9]+ keys`)
 
 // The reporting is held back, not deleted. Anyone looking at the cache asks
 // for it and gets the same lines.
