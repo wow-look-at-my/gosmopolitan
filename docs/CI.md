@@ -12,6 +12,10 @@ Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `ya
 
 **Build APE binary.** No GOARCH pin: `GOOS=cosmo go build` emits a fat (amd64+arm64) APE regardless of the host architecture. `apetest`'s `TestFatSidecarsExist` (gated on `APE_REQUIRE_SIDECARS=1`, since sidecars are not uploaded and the same suite's bare `go test ./...` runs elsewhere must not fail on their absence) requires the debug sidecars a default fat build must write next to each output, and checks each is a valid. Observed max 38s (windows. Two fat builds = four link passes).
 
+**The build cache during make.bash.** `cmd/dist` points `GOCACHE` at `$GOROOT/pkg/obj/go-build` for toolchain1, `go_bootstrap`, toolchain2 and toolchain3. That directory is wiped at startup, so those stages start clean. The final `std` and `cmd` install returns to the caller's own `GOCACHE`. A key there names the tool's content, because `parseToolID` reads the `buildID=` field every tool of this fork prints. A changed compiler cannot hit an entry an older one wrote. So a repeat `make.bash` reuses `std` rather than recompiling it.
+
+That phase reaches no shared cache tier, and it cannot as it stands. `go_bootstrap` runs the final install, and the shared tier speaks HTTP. `runInstall` fails the build when `go_bootstrap` depends on `net`, `os/user` or `crypto/x509`, because each of the three needs cgo. A shared tier under this phase therefore needs the install to run under `$GOROOT/bin/go`, which exists only after `cmd/go` is installed.
+
 **Build platform-subset APE binaries.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
 - `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. What it drops is the macOS Intel claim. This is the set consumers ask for, and every one of its three platforms must still boot the binary.
