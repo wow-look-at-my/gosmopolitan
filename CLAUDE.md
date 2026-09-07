@@ -292,6 +292,8 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. To move the client, check the submodule out at the commit you want and update the matching version in `src/cmd/go.mod`. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
+**The pinned commit must be on go-s3-server's master.** A gitlink to a feature-branch commit dangles when the branch is deleted, and a squash merge deletes it without preserving the SHA. So a cmd/go change that needs a new client API waits for the client's own pull request. It lands in the same commit as the pin that carries it.
+
 That subtree carries packages the build never imports. One upstream test fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in GOPATH mode, which walks. A pruned vendor tree is what upstream's test assumes, and only `go mod vendor` or per-package repositories produce one. The check stays red while whole-repo.
 
 ## Toolchain Distribution
