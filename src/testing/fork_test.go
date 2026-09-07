@@ -83,6 +83,36 @@ func TestForkRunsTheBodyInAChildProcess(t *T) {
 	}
 }
 
+// TestForkChildStartsOnlyItsTarget: a child runs ONE top-level test. Every
+// other one it starts shares the process with the target, and a sibling's
+// allocations are what stop AllocsPerRun from measuring in a child of its own.
+//
+// The rule is asserted directly rather than through a second test that records
+// whether it ran. That observation depends on which test the child's scheduler
+// reaches first, and a test that answers differently on timing is broken.
+func TestForkChildStartsOnlyItsTarget(t *T) {
+	t.Setenv(forkTargetEnv, "TestOuter/inner")
+
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"TestOuter", true},     // the target's own top-level test
+		{"TestOther", false},    // a sibling, whose result the child discards
+		{"TestOuterish", false}, // a longer name the prefix must not swallow
+	} {
+		if got := forkChildStarts(tc.name); got != tc.want {
+			t.Errorf("forkChildStarts(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+
+	// Outside a child nothing is filtered, or an ordinary run loses every test.
+	os.Unsetenv(forkTargetEnv)
+	if !forkChildStarts("TestAnything") {
+		t.Error("forkChildStarts must answer true when no fork marker is set")
+	}
+}
+
 // TestForkFromASubtest: Fork names the subtest, not its parent, so the child's
 // -test.run reaches the subtest that asked for it.
 func TestForkFromASubtest(t *T) {
