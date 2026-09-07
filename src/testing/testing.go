@@ -706,7 +706,13 @@ type common struct {
 	finished    bool                 // Test function has completed.
 	inFuzzFn    bool                 // Whether the fuzz target, if this is one, is running.
 	isSynctest  bool
-	barrierHeld int8 // The serialBarrier hold this test owns: barrierNone, barrierShared or barrierExclusive.
+	// barrierHeld is the serialBarrier hold this test owns: barrierNone,
+	// barrierShared or barrierExclusive. It is atomic because a test reads its
+	// ANCESTORS' holds, on its own goroutine, while each of those ancestors is
+	// still running and may drop its own. A starting subtest walks the parent
+	// chain in barrierHolder at the same moment the parent releases in
+	// yieldBarrier, and a stale read there decides parallelism wrongly.
+	barrierHeld atomic.Int32
 
 	chatty         *chattyPrinter // A copy of chattyPrinter, if the chatty flag is set.
 	bench          bool           // Whether the current test is a benchmark.
@@ -1919,7 +1925,7 @@ var serialExclusive atomic.Bool
 
 // Barrier hold states for common.barrierHeld.
 const (
-	barrierNone int8 = iota
+	barrierNone int32 = iota
 	barrierShared
 	barrierExclusive
 )
@@ -1929,7 +1935,7 @@ const (
 // hold nothing of their own: an ancestor's exclusive hold covers them.
 func (c *common) barrierHolder() *common {
 	for ; c != nil; c = c.parent {
-		if c.barrierHeld != barrierNone {
+		if c.barrierHeld.Load() != barrierNone {
 			return c
 		}
 	}
@@ -1951,14 +1957,14 @@ func (t *T) Serial() {
 		// The root test: nothing else runs to be serialized against.
 		return
 	}
-	switch c.barrierHeld {
+	switch c.barrierHeld.Load() {
 	case barrierExclusive:
 		return
 	case barrierShared:
 		serialBarrier.RUnlock()
 	}
 	serialBarrier.Lock()
-	c.barrierHeld = barrierExclusive
+	c.barrierHeld.Store(barrierExclusive)
 	serialExclusive.Store(true)
 }
 
@@ -2048,7 +2054,7 @@ func (t *T) forkAndTakeTheResult() {
 	// it waits. Keeping the hold deadlocks the run: a Serial test wants the
 	// barrier exclusively, and Go queues later readers behind that writer, so
 	// every test still to start blocks on a test that is only waiting.
-	held := t.barrierHeld
+	held := t.barrierHeld.Load()
 	t.releaseBarrier()
 
 	output, err := t.runForked()
@@ -2056,10 +2062,10 @@ func (t *T) forkAndTakeTheResult() {
 	switch held {
 	case barrierShared:
 		serialBarrier.RLock()
-		t.barrierHeld = barrierShared
+		t.barrierHeld.Store(barrierShared)
 	case barrierExclusive:
 		serialBarrier.Lock()
-		t.barrierHeld = barrierExclusive
+		t.barrierHeld.Store(barrierExclusive)
 		serialExclusive.Store(true)
 	}
 
@@ -2256,7 +2262,7 @@ func forkQuoteMeta(s string) string {
 // parent releases its hold before its parallel subtests run.
 func (c *common) inSerialTree() bool {
 	h := c.barrierHolder()
-	return h != nil && h.barrierHeld == barrierExclusive
+	return h != nil && h.barrierHeld.Load() == barrierExclusive
 }
 
 // eligibleForBarrier reports whether this test takes a hold of the serial
@@ -2293,11 +2299,11 @@ func (t *T) implicitlyParallel() bool {
 // caller that already holds one keeps it: only tRunner and Parallel take a
 // hold, and each takes it once.
 func (t *T) acquireBarrier() {
-	if !t.eligibleForBarrier() || t.barrierHeld != barrierNone {
+	if !t.eligibleForBarrier() || t.barrierHeld.Load() != barrierNone {
 		return
 	}
 	serialBarrier.RLock()
-	t.barrierHeld = barrierShared
+	t.barrierHeld.Store(barrierShared)
 }
 
 // yieldBarrier drops a shared hold for the length of a wait, and reports
@@ -2305,7 +2311,7 @@ func (t *T) acquireBarrier() {
 // Serial test keeps the process for its whole subtree, and the subtests under
 // it hold nothing of their own.
 func (t *T) yieldBarrier() bool {
-	if t.barrierHeld != barrierShared {
+	if t.barrierHeld.Load() != barrierShared {
 		return false
 	}
 	t.releaseBarrier()
@@ -2314,8 +2320,7 @@ func (t *T) yieldBarrier() bool {
 
 // releaseBarrier drops whichever hold the test ended up with.
 func (t *T) releaseBarrier() {
-	held := t.barrierHeld
-	t.barrierHeld = barrierNone
+	held := t.barrierHeld.Swap(barrierNone)
 	switch held {
 	case barrierShared:
 		serialBarrier.RUnlock()
