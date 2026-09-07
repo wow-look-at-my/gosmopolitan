@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -189,10 +190,9 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 }
 
 // An executable stored through the shared tier must come back on a cold
-// machine in the shape the build can run: a directory entry holding a 0777
-// file named for the binary. A plain-file materialization is exactly the
-// regression this pins -- the hit exists, useCache trusts it, and go run
-// dies at fork/exec with permission denied.
+// machine as a directory holding a 0777 file named for the binary. A plain
+// file is exactly the regression this pins: the hit exists, useCache trusts
+// it, and go run dies at fork/exec with permission denied.
 func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
@@ -260,12 +260,16 @@ func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
 	}
 }
 
-// Every network hit is runnable. The wire carries bytes and nothing else, so
-// a restore cannot tell a linked executable from an ordinary package output.
-// useCache hands the restored file straight to a.built, and `go run` execs
-// that path, so a restore that is not runnable fails the build with
-// "fork/exec ...-d: permission denied". Both shapes are checked here because
-// the fix must not depend on which one it is.
+// A network hit the build is going to run must come back as a directory
+// holding a file of the caller's name. The wire carries bytes and no name, so
+// the restore writes a plain file instead, and useCache hands that path to
+// a.built for a cached link -- "fork/exec ...-d: permission denied" on Unix,
+// "executable file not found in %PATH%" on Windows, where exec rejects an
+// extension PATHEXT does not list.
+//
+// GetExecutableFile takes the name from the caller and rewrites the file. An
+// ordinary Put object stays the plain file Put wrote, so the rewrite is what
+// the caller asked for, never something the cache guessed.
 func TestSharedCache_NetworkHitIsRunnable(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
@@ -296,19 +300,53 @@ func TestSharedCache_NetworkHitIsRunnable(t *testing.T) {
 	second := openShared(t, t.TempDir())
 	defer second.Close()
 
-	exeEntry, err := second.Get(exeID)
+	// The plain file first. Asserting it is what stops this test passing
+	// because the restore happened to write the directory by itself.
+	rawEntry, err := second.Get(exeID)
 	if err != nil {
 		t.Fatalf("Get executable after a cold local cache: %v", err)
 	}
-	exeName := second.OutputFile(exeEntry.OutputID)
-	info, err := os.Stat(exeName)
-	if err != nil {
-		t.Fatalf("Stat(%s): %v", exeName, err)
-	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("network hit for a PutExecutable object %s has mode %v, want an executable bit set", exeName, info.Mode())
+	raw := second.OutputFile(rawEntry.OutputID)
+	if got := filepath.Base(filepath.Dir(raw)); got == fmt.Sprintf("%x", rawEntry.OutputID)+"-d" {
+		t.Fatalf("a restore already wrote the directory at %s; this test no longer covers the rewrite", raw)
 	}
 
+	exeFile, exeEntry, err := GetExecutableFile(second, exeID, "cached-script")
+	if err != nil {
+		t.Fatalf("GetExecutableFile: %v", err)
+	}
+	if got, want := filepath.Base(exeFile), "cached-script"; got != want {
+		t.Fatalf("GetExecutableFile returned %s, want a file named %s", exeFile, want)
+	}
+	if got, want := filepath.Base(filepath.Dir(exeFile)), fmt.Sprintf("%x", exeEntry.OutputID)+"-d"; got != want {
+		t.Fatalf("GetExecutableFile returned %s, want it inside %s", exeFile, want)
+	}
+	info, err := os.Stat(exeFile)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", exeFile, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("converted executable %s has mode %v, want an executable bit set", exeFile, info.Mode())
+	}
+	got, err := os.ReadFile(exeFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", exeFile, err)
+	}
+	if !bytes.Equal(got, exeBody) {
+		t.Fatalf("converted executable holds %q, want %q", got, exeBody)
+	}
+
+	// A second call is a plain hit: the directory is there, so it must not
+	// rewrite anything.
+	againFile, _, err := GetExecutableFile(second, exeID, "cached-script")
+	if err != nil {
+		t.Fatalf("GetExecutableFile again: %v", err)
+	}
+	if againFile != exeFile {
+		t.Fatalf("GetExecutableFile again returned %s, want %s", againFile, exeFile)
+	}
+
+	// An ordinary object is untouched: nothing asked for it to be runnable.
 	plainEntry, err := second.Get(plainID)
 	if err != nil {
 		t.Fatalf("Get plain object after a cold local cache: %v", err)
@@ -318,8 +356,8 @@ func TestSharedCache_NetworkHitIsRunnable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat(%s): %v", plainName, err)
 	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want an executable bit set", plainName, info.Mode())
+	if info.IsDir() {
+		t.Fatalf("network hit for an ordinary Put object %s is a directory, want a plain file", plainName)
 	}
 }
 
