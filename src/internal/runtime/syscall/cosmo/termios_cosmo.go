@@ -273,8 +273,6 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 // are dropped rather than failing the call: Linux leaves them to the
 // driver, and no driver in use implements any of them.
 //
-// Nosplit for the same reason as DarwinTermiosToLinux above.
-//
 //go:nosplit
 func DarwinTermiosFromLinux(src *LinuxTermios, dst *DarwinTermios) bool {
 	dst.Iflag = mergeLinuxBits(dst.Iflag, src.Iflag, termiosIflag[:])
