@@ -416,6 +416,42 @@ func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
 	}
 }
 
+// A HEALTHY tier says nothing. Its routine reporting is the index size on
+// every go command and a summary per batch, and a go command's output is data
+// somebody parses: internal/godebugs opened one of those lines as a file path,
+// and go/doc/comment read one as a package name.
+func TestSharedCache_AHealthyTierIsSilent(t *testing.T) {
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		c.(*SharedCache).Get(testActionID("quiet"))
+		c.(*SharedCache).Close()
+	})
+	if out != "" {
+		t.Fatalf("a working tier wrote to the build's output:\n%s", out)
+	}
+}
+
+// The reporting is held back, not deleted. Anyone looking at the cache asks
+// for it and gets the same lines.
+func TestSharedCache_CacheDebugRestoresTheReporting(t *testing.T) {
+	_, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+	t.Setenv(CacheDebugEnv, "1")
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		c.(*SharedCache).Get(testActionID("loud"))
+		c.(*SharedCache).Close()
+	})
+	if !strings.Contains(out, "cacheprog:") {
+		t.Fatalf("GOCACHEDEBUG=1 must restore the tier's reporting, got:\n%s", out)
+	}
+}
+
 // readOutputFile reads what OutputFile names, which is what the compiler does
 // with the path a cache hit hands it.
 func readOutputFile(c Cache, id OutputID) ([]byte, error) {

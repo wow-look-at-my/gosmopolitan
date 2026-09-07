@@ -266,9 +266,29 @@ func decodeOutputID(s string) (OutputID, error) {
 
 // goLogger sends the client's diagnostics to stderr, where a build's warnings
 // already go. cmd/go's stdout carries program output.
+//
+// A TIER IN TROUBLE IS ALWAYS REPORTED. What is held back is the routine
+// success reporting: the index size on every go command, and a summary per
+// batch. Those say the cache is working, which the build does not need told,
+// and there is one per go invocation or more.
+//
+// A go command's output is DATA to whoever ran it. Tests across this tree run
+// `go list` and read the answer, so a routine line on that stream becomes a
+// package name, a directory, or a file path somebody then opens. That is not
+// hypothetical: it is what internal/godebugs, crypto/internal/fips140test and
+// go/doc/comment did with it.
 type goLogger struct{}
 
+// CacheDebugEnv turns the routine success reporting back on. Anything but the
+// empty string enables it.
+const CacheDebugEnv = "GOCACHEDEBUG"
+
+func cacheDebug() bool { return os.Getenv(CacheDebugEnv) != "" }
+
 func (goLogger) Infof(format string, args ...any) {
+	if !cacheDebug() {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
 }
 
