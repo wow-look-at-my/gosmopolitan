@@ -9,10 +9,14 @@ The bootstrap script now stages a COPY and corrects the copy.
 ## The staged copy
 
 ```
-/tmp/.ape-run-1-<uid>/<file identity>/<basename>
+${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/<basename>
 ```
 
-No environment variable is read to find this path. TMPDIR and HOME are both caller-supplied, and neither can be trusted: TMPDIR can be unset, empty, or pointed at something unwritable, and a container. `/tmp` is reliably world-writable (mode 1777) on virtually every host this binary runs on, so staging goes there unconditionally.
+TMPDIR and HOME are not read. Both are caller-supplied, and neither can be trusted: TMPDIR can be unset, empty, or pointed at something unwritable, and a container. `/tmp` is reliably world-writable (mode 1777) on virtually every host this binary runs on, so staging goes there by default.
+
+`APE_RUNDIR` overrides that default. It exists for the case `/tmp` cannot serve at all. A container that mounts a **noexec** filesystem over it stages the copy fine, and then execve refuses the copy. The binary cannot start by any path. Writability is not the only property staging needs.
+
+Setting this variable means something different from setting TMPDIR. TMPDIR says where scratch files go, and every process inherits one. A caller sets `APE_RUNDIR` to name a directory it has established the APE can run from. Nothing validates it: `mkdir` and `cp` already fail loudly. An unset or empty value keeps `/tmp`.
 
 `<uid>` is `id -u` -- a syscall, not an environment variable -- and stands in for the per-user isolation a real HOME can otherwise give this path.
 
