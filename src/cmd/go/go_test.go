@@ -306,7 +306,6 @@ func TestMain(m *testing.M) {
 	// and several tests here assert that a go command prints nothing. The tests
 	// must not depend on the developer's cache either.
 	os.Unsetenv("GO_BUILDCACHE_CONFIG")
-	os.Unsetenv("GOCACHEDEBUG")
 	// A go command with CI set and no shared cache refuses to build at
 	// all (cmd/go/internal/cache.validateCIShared), and the line above
 	// is what leaves it unset. These commands are a test fixture, not

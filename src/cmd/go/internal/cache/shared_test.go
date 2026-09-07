@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -394,143 +393,26 @@ func captureStderr(t *testing.T, fn func()) string {
 	return out
 }
 
-// A shared tier in trouble must not write to the go command's stderr. The
-// fake server refuses the index endpoint, which is exactly what an unwell
-// server does in production, and the client says so on every build. That
-// output is not a build diagnostic -- a cache tier cannot change what a
-// build produces -- and cmd/internal/testdir asserts a go run prints
-// nothing, so a talkative cache turns an unrelated service's health into
-// red tests across the tree.
-func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
-	_, srv := newFakeCacheServer(t)
-	configureShared(t, srv)
-	holdQuietWindowOpen(t)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
+// A tier that stopped working reports it, on every build and to everybody.
+// The alternative is a cache nobody hears about, which reads as a build that
+// is simply slow. The client's HTTP error summaries do not go through the
+// Logger either: the backend captures os.Stderr once, when it is built. So
+// this covers both halves of the output.
+func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
+	for _, ci := range []string{"true", ""} {
+		f, srv := newFakeCacheServer(t)
+		f.failPuts = true
+		configureShared(t, srv)
+		t.Setenv("CI", ci)
 
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		c.(*SharedCache).Get(testActionID("quiet"))
-	})
-	if out != "" {
-		t.Fatalf("shared tier wrote to the build's stderr:\n%s", out)
-	}
-}
-
-// The client's HTTP error summaries do not go through the Logger: the
-// backend captures a writer once, when it is built, and that writer was
-// os.Stderr. So a cache server refusing writes put lines on the go
-// command's stderr no matter what this package installed. A build here must
-// not depend on that server's health, and it must not depend on a fix
-// landing in that server's repo either -- it is built with this toolchain,
-// so this tree cannot wait on it.
-//
-// This also guards the assumption newWebBackend rests on. If the client ever
-// captures the writer later than construction, this goes red.
-func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	holdQuietWindowOpen(t)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		if err := PutBytes(c, testActionID("refused"), []byte("body")); err != nil {
-			t.Logf("put failed, which is the point: %v", err)
+		out := captureStderr(t, func() {
+			c := openShared(t, t.TempDir())
+			PutBytes(c, testActionID("refused"), []byte("body"))
+			c.(*SharedCache).Close()
+		})
+		if !strings.Contains(out, "cacheprog:") {
+			t.Fatalf("CI=%q: a failing tier must report, got:\n%s", ci, out)
 		}
-		c.(*SharedCache).Close()
-	})
-	if out != "" {
-		t.Fatalf("refused uploads reached the build's stderr:\n%s", out)
-	}
-}
-
-// A developer is never quiet, whatever the window says. They are watching the
-// build, and a cache that stopped working is theirs to see at once.
-func TestSharedCache_OutsideCIAlwaysReports(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		PutBytes(c, testActionID("local"), []byte("body"))
-		c.(*SharedCache).Close()
-	})
-	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("outside CI a failing tier must report, got:\n%s", out)
-	}
-}
-
-// The diagnostics are not deleted, only held back. Anyone debugging the cache
-// sets GOCACHEDEBUG and gets the same messages back during the window.
-func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
-	_, srv := newFakeCacheServer(t)
-	configureShared(t, srv)
-	holdQuietWindowOpen(t)
-	t.Setenv(CacheDebugEnv, "1")
-	t.Setenv("CI", "true")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		c.(*SharedCache).Get(testActionID("loud"))
-	})
-	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("GOCACHEDEBUG=1 must report the tier's trouble, got:\n%s", out)
-	}
-}
-
-// holdQuietWindowOpen moves the deadline an hour ahead for one test. The
-// tests of what the window DOES must not depend on today's date; only
-// TestSharedCache_QuietWindowExpires reads the real deadline.
-func holdQuietWindowOpen(t *testing.T) {
-	t.Helper()
-	saved := cacheQuietUntil
-	t.Cleanup(func() { cacheQuietUntil = saved })
-	cacheQuietUntil = time.Now().Add(time.Hour)
-}
-
-// The window ends by itself. Past the deadline a failing tier reports again
-// with nobody editing anything, which is what makes this an outage window
-// rather than a permanently muted warning.
-//
-// This test also fails once the real deadline passes and the window was
-// never removed, so extending it is a deliberate edit here and not a drift.
-//
-// The deadline stands past its first date because the outage has not ended.
-// The build leg that fired this test printed `web index fetch: HTTP 404` and
-// `web put [...]: HTTP 404` beside it, so the server still refuses its index
-// and every upload, and the shared tier stores nothing in CI. The window buys
-// silence, never a fix: a green build here says the cache is quiet, not that
-// the cache works.
-func TestSharedCache_QuietWindowExpires(t *testing.T) {
-	t.Serial()
-	if !cacheQuietUntil.After(time.Now()) {
-		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+
-			"or say here why it moves", cacheQuietUntil.Format(time.RFC3339))
-	}
-
-	saved := cacheQuietUntil
-	t.Cleanup(func() { cacheQuietUntil = saved })
-	cacheQuietUntil = time.Now().Add(-time.Second)
-
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		PutBytes(c, testActionID("expired"), []byte("body"))
-		c.(*SharedCache).Close()
-	})
-	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("past the deadline a failing tier must report again, got:\n%s", out)
 	}
 }
 

@@ -2409,8 +2409,8 @@
 // base64-encoded JSON; with the variable unset, the build uses the local
 // cache alone. The go command asks the shared tier only after a local miss,
 // and it stores what the tier returns in the local cache before the build
-// uses it. Set GOCACHEDEBUG to any non-empty value to see the tier's
-// per-request diagnostics.
+// uses it. A tier that cannot be reached leaves the build on the local cache
+// and says so on stderr.
 //
 // # Environment variables
 //

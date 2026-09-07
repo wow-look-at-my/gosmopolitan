@@ -274,7 +274,7 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 **`GOCACHEPROG` is deleted** — the variable, the protocol, and `cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared tier over disk, or disk alone. Nothing forks a cache program, and a leftover `GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not the feature: it answered with a PATH rather than bytes, so a program storing bodies in packs had.
 
-`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`). Unset. The build stays on disk. A run with `CI` set and no shared cache fails outright, because an unconfigured CI run decides whether every other CI run recompiles. `GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s quiet window.
+`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`). Unset. The build stays on disk. A run with `CI` set and no shared cache fails outright, because an unconfigured CI run decides whether every other CI run recompiles. A tier that cannot be reached leaves the build on disk and reports it on stderr, on every build and to everybody.
 
 **`SharedCache.populate` is what makes look-ahead real.** The client fetches objects ahead of the build on its own goroutines, and hands them to `OnBatchEntries`. Nothing else stores them. Leaving that nil turns look-ahead off, which is what it was for a long time: every prefetched body was parsed and dropped. `putVerified` writes a hit without recomputing the hash the client just checked. Depth, and the measurements: `docs/look-ahead.md` in the go-s3-server repo.
 

@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	goCfg "cmd/go/internal/cfg"
 
@@ -113,12 +112,9 @@ func newSharedCache(disk *DiskCache) Cache {
 	cfg.Version = runtime.Version()
 	cfg.Module = mainModulePath()
 	// The client writes diagnostics nowhere until a consumer says otherwise,
-	// and cmd/go's stderr is where a build's warnings already go. The one
-	// exception is the outage window below, which ends by itself.
-	if !cacheQuiet() {
-		cacheclient.SetLogger(goLogger{})
-	}
-	remote, err := newWebBackend(cfg)
+	// and cmd/go's stderr is where a build's warnings already go.
+	cacheclient.SetLogger(goLogger{})
+	remote, err := cacheclient.NewWebBackend(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
@@ -266,77 +262,6 @@ func decodeOutputID(s string) (OutputID, error) {
 	}
 	copy(out[:], raw)
 	return out, nil
-}
-
-// cacheQuietUntil ends the outage window. The shared cache server answers 404
-// for its index and for every upload, and the client reports each one, so a
-// go command prints hundreds of lines it did not use to. Tests that read a go
-// command's output then fail: cmd/internal/testdir asserts a go run prints
-// nothing, and one of those lines landed inside a generated .go file.
-//
-// The window is a DEADLINE, not a switch, and it applies to CI alone. It
-// expires on its own, and the diagnostics come back with no edit. Silencing
-// this permanently would mean a broken cache nobody hears about; a date means
-// somebody hears about it again on this day whether or not anyone remembered,
-// and the CI condition means a developer never stops hearing about it.
-//
-// TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
-// deliberate edit to a test that says why.
-//
-// It moves because the outage is still on: the CI run that first tripped the
-// deadline printed `web index fetch: HTTP 404` and a `web put ... HTTP 404`
-// for every batch, on every go command in the job. Delete this and the gates
-// below once a run comes back without them.
-var cacheQuietUntil = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
-
-// cacheQuiet reports whether to hold the shared tier's per-request
-// diagnostics back.
-//
-// Only a CI run is ever quiet. CI is where the output-reading tests are, and
-// it is the one place a person is not watching. A developer sees a failing
-// cache the moment it fails, on every build, window or no window.
-// GOCACHEDEBUG asks for them back anywhere.
-func cacheQuiet() bool {
-	if cacheDebug() {
-		return false
-	}
-	if os.Getenv("CI") == "" {
-		return false
-	}
-	return time.Now().Before(cacheQuietUntil)
-}
-
-// CacheDebugEnv asks for the shared tier's per-request diagnostics during the
-// window above. Anything but the empty string enables them.
-const CacheDebugEnv = "GOCACHEDEBUG"
-
-// cacheDebug reports whether the caller asked to see those diagnostics.
-func cacheDebug() bool {
-	return os.Getenv(CacheDebugEnv) != ""
-}
-
-// newWebBackend builds the backend, during the window with os.Stderr pointed
-// at the null device.
-//
-// The client aggregates its HTTP errors through a writer it captures ONCE,
-// when the backend is built, and that writer is os.Stderr. SetLogger does not
-// reach it, so the gate above covers only half the output. Swapping os.Stderr
-// across this one call is what decides where those summaries go for the life
-// of the backend. Narrow by construction: cmd/go builds exactly one backend,
-// before it has anything else to say.
-func newWebBackend(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, error) {
-	if !cacheQuiet() {
-		return cacheclient.NewWebBackend(cfg)
-	}
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		// No null device is not a reason to give up a working cache.
-		return cacheclient.NewWebBackend(cfg)
-	}
-	saved := os.Stderr
-	os.Stderr = devnull
-	defer func() { os.Stderr = saved }()
-	return cacheclient.NewWebBackend(cfg)
 }
 
 // goLogger sends the client's diagnostics to stderr, where a build's warnings
