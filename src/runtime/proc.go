@@ -362,7 +362,6 @@ func main() {
 //
 //go:linkname os_beforeExit os.runtime_beforeExit
 func os_beforeExit(exitCode int) {
-	ntBootCode("os.Exit", uintptr(exitCode))
 	runExitHooks(exitCode)
 	if exitCode == 0 && raceenabled {
 		racefini()
