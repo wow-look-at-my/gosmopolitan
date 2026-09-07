@@ -1253,6 +1253,8 @@ func cgroup_throw(s string) {
 //go:linkname throw
 //go:nosplit
 func throw(s string) {
+	ntBoot("throw")
+	ntBoot(s)
 	// Everything throw does should be recursively nosplit so it
 	// can be called even when it's unsafe to grow the stack.
 	systemstack(func() {
@@ -1465,6 +1467,7 @@ func fatalthrow(t throwType) {
 	// things worse if the runtime is in a bad state.
 	systemstack(func() {
 		if isSecureMode() {
+			ntBoot("fatalthrow secure")
 			exit(2)
 		}
 
@@ -1489,6 +1492,7 @@ func fatalthrow(t throwType) {
 //
 //go:nosplit
 func fatalpanic(msgs *_panic) {
+	ntBoot("fatalpanic")
 	pc := sys.GetCallerPC()
 	sp := sys.GetCallerSP()
 	gp := getg()
