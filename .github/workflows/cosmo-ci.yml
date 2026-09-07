@@ -589,7 +589,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           cd testdata/wasip1sock/host
-          GOOS=linux GOARCH=amd64 go test./...
+          GOOS=linux GOARCH=amd64 go test ./...
 
       - name: Test GOWASM=threads under node (js only)
         # see docs/CI.md "wasm job" and docs/WASM.md for the multi-P scheduler this exercises.
