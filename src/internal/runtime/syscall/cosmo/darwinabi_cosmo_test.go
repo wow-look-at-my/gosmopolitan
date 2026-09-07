@@ -430,3 +430,37 @@ func TestDarwinBaud(t *testing.T) {
 		t.Error("76800 baud reported as encodable; Linux has no code for it")
 	}
 }
+
+func TestDarwinFlock(t *testing.T) {
+	var af cosmo.DarwinFlock
+	if got := unsafe.Sizeof(af); got != 24 {
+		t.Errorf("sizeof(DarwinFlock) = %d, want 24", got)
+	}
+	if got := unsafe.Offsetof(af.Type); got != 20 {
+		t.Errorf("offsetof(DarwinFlock.Type) = %d, want 20", got)
+	}
+	if got := unsafe.Offsetof(af.Pid); got != 16 {
+		t.Errorf("offsetof(DarwinFlock.Pid) = %d, want 16", got)
+	}
+
+	// Linux numbers read, write and unlock 0/1/2. Apple agrees on none
+	// of the three, so an untranslated type asks for the wrong lock -
+	// and a read lock where the caller wanted a write lock is a weaker
+	// lock rather than an error.
+	for _, tc := range []struct{ linux, darwin int16 }{{0, 1}, {1, 3}, {2, 2}} {
+		got, ok := cosmo.DarwinLockType(tc.linux)
+		if !ok || got != tc.darwin {
+			t.Errorf("DarwinLockType(%d) = %d, %v; want %d, true", tc.linux, got, ok, tc.darwin)
+		}
+		back, ok := cosmo.LinuxLockType(tc.darwin)
+		if !ok || back != tc.linux {
+			t.Errorf("LinuxLockType(%d) = %d, %v; want %d, true", tc.darwin, back, ok, tc.linux)
+		}
+	}
+	if _, ok := cosmo.DarwinLockType(9); ok {
+		t.Error("Linux lock type 9 accepted; Apple has no value for it")
+	}
+	if _, ok := cosmo.LinuxLockType(0); ok {
+		t.Error("Apple lock type 0 accepted; Apple numbers its types from one")
+	}
+}

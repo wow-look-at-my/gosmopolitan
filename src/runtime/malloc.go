@@ -584,7 +584,7 @@ func mallocinit() {
 		}
 
 		var vmaSize int
-		if GOARCH == "riscv64" {
+		if goarch.IsRiscv64 == 1 {
 			// Identify which memory layout is in use based on the system
 			// stack address, knowing that the bottom half of virtual memory
 			// is user space. This should result in 39, 48 or 57. It may be
@@ -600,7 +600,7 @@ func mallocinit() {
 		for i := 0x7f; i >= 0; i-- {
 			var p uintptr
 			switch {
-			case raceenabled && GOARCH == "riscv64" && vmaSize == 39:
+			case raceenabled && goarch.IsRiscv64 == 1 && vmaSize == 39:
 				p = uintptr(i)<<28 | uintptrMask&(0x0013<<28)
 				if p >= uintptrMask&0x000f00000000 {
 					continue
@@ -616,13 +616,13 @@ func mallocinit() {
 			case randomizeHeapBase:
 				prefix := uintptr(randHeapBasePrefix+byte(i)) << (randHeapAddrBits - 8)
 				p = prefix | (randHeapBase & randHeapBasePrefixMask)
-			case GOARCH == "arm64" && GOOS == "ios":
+			case goarch.IsArm64 == 1 && goos.IsIos == 1:
 				p = uintptr(i)<<40 | uintptrMask&(0x0013<<28)
-			case GOARCH == "arm64":
+			case goarch.IsArm64 == 1:
 				p = uintptr(i)<<40 | uintptrMask&(0x0040<<32)
-			case GOARCH == "riscv64" && vmaSize == 39:
+			case goarch.IsRiscv64 == 1 && vmaSize == 39:
 				p = uintptr(i)<<32 | uintptrMask&(0x0013<<28)
-			case GOOS == "aix":
+			case goos.IsAix == 1:
 				if i == 0 {
 					// We don't use addresses directly after 0x0A00000000000000
 					// to avoid collisions with others mmaps done by non-go programs.
@@ -1036,7 +1036,7 @@ const doubleCheckMalloc = false
 // mallocgc implementation: the experiment must be enabled, and none of the sanitizers should
 // be enabled. The tables used to select the size-specialized malloc function do not compile
 // properly on plan9, so size-specialized malloc is also disabled on plan9.
-const sizeSpecializedMallocEnabled = goexperiment.SizeSpecializedMalloc && GOOS != "plan9" && !asanenabled && !raceenabled && !msanenabled && !valgrindenabled
+const sizeSpecializedMallocEnabled = goexperiment.SizeSpecializedMalloc && goos.IsPlan9 == 0 && !asanenabled && !raceenabled && !msanenabled && !valgrindenabled
 
 // runtimeFreegcEnabled is the set of conditions where we enable the runtime.freegc
 // implementation and the corresponding allocation-related changes: the experiment must be

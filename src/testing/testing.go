@@ -2022,12 +2022,38 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
 // child that could not be started, or died on a signal - against this test.
+//
+// A host that starts no child process - js, wasip1, ios - takes the barrier
+// instead, which buys the same isolation by stopping every other test. There
+// is one process there, so no other test can reach this one's state either
+// way. [AllocsPerRun] is the exception: it needs the process itself, and fails
+// on such a host rather than measuring the wrong thing.
+//
+// A call inside a fork child never starts a second one. The child is alone in
+// its process, so it has what a fork would buy.
 func (t *T) Fork() {
-	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+	if !canFork() {
+		t.Serial()
+		return
+	}
+	if target, forked := os.LookupEnv(forkTargetEnv); forked {
 		// Already the dedicated child: run the body right here. A test the
 		// target runs UNDER stays here too, or the child forks its own parent
 		// and never reaches the target.
-		return
+		if target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+			return
+		}
+		// A test BELOW the target forks normally: it gets its own child, which
+		// is what a subtest asks Fork for.
+		if !strings.HasPrefix(t.Name(), target+"/") {
+			// Anything else is a test the child was never selected to run, so
+			// forking it starts a peer rather than a descendant and the two
+			// spawn each other. The windows leg reached "cannot allocate
+			// memory" that way, through archive/tar's two forking tests. The
+			// barrier gives this one what a child would, without the process.
+			t.Serial()
+			return
+		}
 	}
 	t.Helper()
 	t.forkAndTakeTheResult()
@@ -2111,7 +2137,7 @@ func (t *T) runForked() ([]byte, error) {
 		return nil, err
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Env:   forkEnv(os.Environ(), t.Name()),
+		Env:   forkEnv(startEnv, t.Name()),
 		Files: []*os.File{nil, pw, pw},
 	})
 	// The parent must drop its own write end, or reading the pipe never sees
@@ -2134,6 +2160,16 @@ func (t *T) runForked() ([]byte, error) {
 	}
 	return output, readErr
 }
+
+// startEnv is the environment this test binary was started with. A child
+// gets that, not what the process holds when it forks.
+//
+// The difference is a TestMain that runs the binary as a tool when it sees
+// its own variable, and sets that variable so the subprocesses it starts
+// inherit it. cmd/pack does exactly this. A child started from the live
+// environment reads the variable, runs the tool, and prints a usage
+// message where a test result belongs.
+var startEnv = os.Environ()
 
 // forkEnv returns this run's environment with the fork marker naming the test
 // the child exists to run. It REPLACES any marker already there: a subtest of a
@@ -2420,6 +2456,7 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
+.<<<<<<< claude/serial-reason-validation-3a7xe4
 	//
 	// Inside a child there is no second fork to take, and the child's own
 	// subtests are parallel like any other run, so the barrier is what
@@ -2430,6 +2467,9 @@ func (t *T) checkParallel() {
 		return
 	}
 	t.serialize()
+.=======
+	t.Fork()
+.>>>>>>> claude/session-lock-feature-hxi7mp
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to

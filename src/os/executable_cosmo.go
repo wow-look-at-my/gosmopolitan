@@ -6,7 +6,10 @@
 
 package os
 
-import "internal/stringslite"
+import (
+	"internal/stringslite"
+	"sync"
+)
 
 // Cosmopolitan binaries run on several host operating systems. On Linux
 // hosts /proc/self/exe gives the answer directly. On hosts without
@@ -19,6 +22,18 @@ import "internal/stringslite"
 // errWd will be checked later, if we need to use initWd
 var initWd, errWd = Getwd()
 
+// The resolved path is remembered. The search below reaches the file
+// through the filesystem, so it stops answering once the program deletes
+// its own binary - which a running program may do, and which the kernel
+// answers on Linux and Apple answers from the arguments it passed. The
+// path a process was started from does not change, so one resolution
+// serves every later call.
+var exeOnce struct {
+	sync.Once
+	path string
+	err  error
+}
+
 func executable() (string, error) {
 	if path, err := Readlink("/proc/self/exe"); err == nil {
 		// When the executable has been deleted then Readlink returns a
@@ -26,7 +41,12 @@ func executable() (string, error) {
 		return stringslite.TrimSuffix(path, " (deleted)"), nil
 	}
 
-	// No usable procfs on this host: resolve Args[0] instead.
+	// No usable procfs on this host: resolve Args[0] instead, once.
+	exeOnce.Do(func() { exeOnce.path, exeOnce.err = resolveArgv0() })
+	return exeOnce.path, exeOnce.err
+}
+
+func resolveArgv0() (string, error) {
 	var exePath string
 	if len(Args) == 0 || Args[0] == "" {
 		return "", ErrNotExist

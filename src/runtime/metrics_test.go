@@ -39,6 +39,8 @@ func prepareAllMetricsSamples() (map[string]metrics.Description, []metrics.Sampl
 }
 
 func TestReadMetrics(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Run a GC cycle to get some of the stats to be non-zero.
 	runtime.GC()
 
@@ -209,6 +211,8 @@ func TestReadMetrics(t *testing.T) {
 }
 
 func TestReadMetricsConsistency(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	// Tests whether readMetrics produces consistent, sensible values.
 	// The values are read concurrently with the runtime doing other
 	// things (e.g. allocating) so what we read can't reasonably compared
@@ -970,6 +974,8 @@ func TestSchedPauseMetrics(t *testing.T) {
 }
 
 func TestRuntimeLockMetricsAndProfile(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	old := runtime.SetMutexProfileFraction(0) // enabled during sub-tests
 	defer runtime.SetMutexProfileFraction(old)
 	if old != 0 {
@@ -1466,6 +1472,8 @@ func (w *contentionWorker) run() {
 }
 
 func TestCPUStats(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	// Run a few GC cycles to get some of the stats to be non-zero.
 	runtime.GC()
 	runtime.GC()
@@ -1566,6 +1574,9 @@ func TestReadMetricsCleanups(t *testing.T) {
 }
 
 func TestReadMetricsFinalizers(t *testing.T) {
+	// The counters are process-wide and the difference must be EXACTLY N, so
+	// one finalizer set by any other test lands in this count.
+	t.Serial()
 	runtime.GC()                                                  // End any in-progress GC.
 	runtime.BlockUntilEmptyFinalizerQueue(int64(1 * time.Second)) // Flush any queued finalizers.
 

@@ -111,6 +111,11 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	}
 	nextfd++
 
+	// An APE cannot be exec'd directly, so prepare its /bin/sh form now,
+	// while allocation is still legal. The child retries with it when
+	// execve answers ENOEXEC. See exec_cosmo_ape.go.
+	shArgv := apeShellArgv(argv0, argv)
+
 	// About to call fork.
 	// No more allocation or calls of non-assembly functions.
 	runtime_BeforeFork()
@@ -264,6 +269,15 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
+	if err1 == ENOEXEC {
+		// The kernel refused the image. An APE is a shell script, so
+		// hand it to the shell that reads its header. This is what
+		// execvp(3) does with any ENOEXEC file.
+		_, _, err1 = RawSyscall(SYS_EXECVE,
+			uintptr(unsafe.Pointer(&apeShellPath[0])),
+			uintptr(unsafe.Pointer(&shArgv[0])),
+			uintptr(unsafe.Pointer(&envv[0])))
+	}
 
 childerror:
 	// send error code on pipe

@@ -94,7 +94,7 @@ func Mod32(x uint32) uint32 {
 // getting racefuncenter/racefuncexit instrumentation when instantiated in
 // other packages with optimizations disabled.
 func TestIssue77597(t *testing.T) {
-	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("race detector not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	testenv.MustHaveGoBuild(t)

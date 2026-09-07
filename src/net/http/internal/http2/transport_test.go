@@ -373,6 +373,11 @@ func testTransportReusesConns(t *testing.T, wantSame bool, modReq func(*http.Req
 }
 
 func TestTransportReusesConns(t *testing.T) {
+	// Each case sends two requests and asks whether the second reused
+	// the first one's connection. Traffic from a concurrent test closes
+	// that connection first, and the answer stops being about this
+	// test's own requests.
+	t.Serial()
 	for _, test := range []struct {
 		name     string
 		modReq   func(*http.Request)

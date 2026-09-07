@@ -212,6 +212,13 @@ func NewRoundRobinWriteScheduler() WriteScheduler {
 }
 
 func DisableGoroutineTracking(t testing.TB) {
+	// The flag is process-wide. A serverConn built while it is set
+	// records no goroutine, and the first check after it clears reads
+	// that zero as the wrong goroutine and panics. So the caller holds
+	// the whole binary for as long as it keeps the flag set.
+	if s, ok := t.(interface{ Serial() }); ok {
+		s.Serial()
+	}
 	disableDebugGoroutines.Store(true)
 	t.Cleanup(func() {
 		disableDebugGoroutines.Store(false)

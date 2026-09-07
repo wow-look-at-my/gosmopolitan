@@ -1345,7 +1345,6 @@ var wantIntrinsics = map[testIntrinsicKey]struct{}{
 	{"wasm", "internal/runtime/atomic", "Xchgint32"}:                   struct{}{},
 	{"wasm", "internal/runtime/atomic", "Xchgint64"}:                   struct{}{},
 	{"wasm", "internal/runtime/atomic", "Xchguintptr"}:                 struct{}{},
-	{"wasm", "internal/runtime/math", "Mul64"}:                         struct{}{},
 	{"s390x", "crypto/internal/constanttime", "boolToUint8"}:           struct{}{},
 	{"wasm", "internal/runtime/sys", "GetCallerPC"}:                    struct{}{},
 	{"wasm", "internal/runtime/sys", "GetCallerSP"}:                    struct{}{},
@@ -1385,8 +1384,6 @@ var wantIntrinsics = map[testIntrinsicKey]struct{}{
 	{"wasm", "math/bits", "TrailingZeros8"}:                            struct{}{},
 	{"wasm", "runtime", "KeepAlive"}:                                   struct{}{},
 	{"wasm", "runtime", "slicebytetostringtmp"}:                        struct{}{},
-	{"wasm", "sync", "runtime_LoadAcquintptr"}:                         struct{}{},
-	{"wasm", "sync", "runtime_StoreReluintptr"}:                        struct{}{},
 	{"wasm", "sync/atomic", "AddInt32"}:                                struct{}{},
 	{"wasm", "sync/atomic", "AddInt64"}:                                struct{}{},
 	{"wasm", "sync/atomic", "AddUint32"}:                               struct{}{},
@@ -1416,6 +1413,9 @@ var wantIntrinsics = map[testIntrinsicKey]struct{}{
 }
 
 func TestIntrinsics(t *testing.T) {
+	// initIntrinsics fills the package's own intrinsics map. Two of
+	// these at once is a concurrent map write, which is fatal.
+	t.Serial()
 	cfg := &intrinsicBuildConfig{
 		goppc64:   10,
 		goriscv64: 23,
@@ -1460,6 +1460,7 @@ func TestIntrinsics(t *testing.T) {
 }
 
 func TestIntrinsicBuilders(t *testing.T) {
+	t.Serial()
 	cfg := &intrinsicBuildConfig{}
 	initIntrinsics(cfg)
 

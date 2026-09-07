@@ -452,6 +452,8 @@ func TestToNorm(t *testing.T) {
 }
 
 func TestUNC(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Test that this doesn't go into an infinite recursion.
 	// See golang.org/issue/15879.
 	defer debug.SetMaxStack(debug.SetMaxStack(1e6))
