@@ -185,8 +185,12 @@ const (
 )
 
 // DarwinBaudToLinux maps an Apple line rate to its Linux c_cflag code.
+//
+//go:nosplit
 func DarwinBaudToLinux(rate uint64) (uint32, bool) {
-	for _, b := range termiosBauds {
+	// Slice, not the array: ranging the array copies all 304 bytes of it
+	// into this frame, and this frame has a nosplit budget to fit inside.
+	for _, b := range termiosBauds[:] {
 		if b.rate == rate {
 			return b.code, true
 		}
@@ -195,8 +199,11 @@ func DarwinBaudToLinux(rate uint64) (uint32, bool) {
 }
 
 // DarwinBaudFromLinux maps a Linux c_cflag baud code to the rate itself.
+//
+//go:nosplit
 func DarwinBaudFromLinux(code uint32) (uint64, bool) {
-	for _, b := range termiosBauds {
+	// Slice, not the array: see DarwinBaudToLinux above.
+	for _, b := range termiosBauds[:] {
 		if b.code == code {
 			return b.rate, true
 		}
@@ -212,6 +219,11 @@ func DarwinBaudFromLinux(code uint32) (uint64, bool) {
 // Nothing is invented. A bit Apple has and Linux does not (ALTWERASE,
 // NOKERNINFO, ONOEOT, OXTABS) has nowhere to go and is dropped, and every
 // Linux bit whose Apple counterpart is clear stays clear.
+//
+// Nosplit: darwinTermiosIoctl reaches this from inside a syscall window, and
+// a stack growth there is a fatal "stack split at bad time".
+//
+//go:nosplit
 func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 	dst.Iflag = appleBitsToLinux(src.Iflag, termiosIflag[:])
 	dst.Oflag = appleBitsToLinux(src.Oflag, termiosOflag[:])
@@ -226,7 +238,7 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 	// has here. Apple has no such field.
 	dst.Line = 0
 
-	for l, a := range termiosCcIndex {
+	for l, a := range termiosCcIndex[:] {
 		if a < 0 {
 			dst.Cc[l] = 0
 			continue
@@ -260,6 +272,10 @@ func DarwinTermiosToLinux(src *DarwinTermios, dst *LinuxTermios) bool {
 // The Linux-only flags (IUCLC, OLCUC, XCASE, CMSPAR, the output delays)
 // are dropped rather than failing the call: Linux leaves them to the
 // driver, and no driver in use implements any of them.
+//
+// Nosplit for the same reason as DarwinTermiosToLinux above.
+//
+//go:nosplit
 func DarwinTermiosFromLinux(src *LinuxTermios, dst *DarwinTermios) bool {
 	dst.Iflag = mergeLinuxBits(dst.Iflag, src.Iflag, termiosIflag[:])
 	dst.Oflag = mergeLinuxBits(dst.Oflag, src.Oflag, termiosOflag[:])
@@ -269,7 +285,7 @@ func DarwinTermiosFromLinux(src *LinuxTermios, dst *DarwinTermios) bool {
 	dst.Cflag &^= appleCSIZE
 	dst.Cflag |= (uint64(src.Cflag) & linuxCSIZE) << csizeShift
 
-	for l, a := range termiosCcIndex {
+	for l, a := range termiosCcIndex[:] {
 		if a < 0 {
 			continue
 		}
@@ -292,6 +308,9 @@ func DarwinTermiosFromLinux(src *LinuxTermios, dst *DarwinTermios) bool {
 	return true
 }
 
+// Nosplit: the whole termios chain runs inside a syscall window.
+//
+//go:nosplit
 func appleBitsToLinux(v uint64, tab []termiosBit) uint32 {
 	var out uint32
 	for _, b := range tab {
@@ -305,6 +324,10 @@ func appleBitsToLinux(v uint64, tab []termiosBit) uint32 {
 // mergeLinuxBits rewrites every Apple bit this table knows about from the
 // Linux word, and leaves the rest of cur alone - those are the settings
 // the Linux caller could not see and must not clobber.
+//
+// Nosplit: the whole termios chain runs inside a syscall window.
+//
+//go:nosplit
 func mergeLinuxBits(cur uint64, v uint32, tab []termiosBit) uint64 {
 	for _, b := range tab {
 		cur &^= b.apple

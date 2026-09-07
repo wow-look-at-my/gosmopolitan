@@ -234,9 +234,13 @@ func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 // caller passed would clear them. The read also fails first, with the
 // right errno, when the descriptor is not a terminal.
 //
-// Deliberately not nosplit, because the 72-byte Apple struct is too much
-// for the dispatch spine's budget. Nothing calls this between fork and
-// exec: Setctty and Foreground use the job-control requests above.
+// NOSPLIT IS NOT OPTIONAL HERE, whatever the 72-byte Apple struct costs.
+// syscall.Syscall has already called entersyscall by the time the dispatch
+// spine reaches this, and growing the stack inside that window is
+// "fatal error: runtime: stack split at bad time". term.IsTerminal in an
+// ordinary package init is enough to reach it.
+//
+//go:nosplit
 func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Ioctl == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
