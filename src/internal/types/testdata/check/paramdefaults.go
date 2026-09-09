@@ -93,4 +93,4 @@ type other struct{ ints, floats int }
 
 func _(b budget = other /* ERROR "cannot use" */ {ints: 1}) {}
 
-func _(p *budget = &budget /* ERROR "parameter default must be a constant or a struct literal" */ {}) {}
+func _(p *budget = & /* ERROR "parameter default must be a constant or a struct literal" */ budget{}) {}
