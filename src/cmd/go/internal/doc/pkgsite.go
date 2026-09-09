@@ -50,8 +50,12 @@ func pickUnusedPort() (int, error) {
 	return port, nil
 }
 
-// buildPkgsite builds a pkgsite binary whose build may be cached.
-func buildPkgsite(ctx context.Context) string {
+// buildPkgsite builds a pkgsite binary and returns a path in dir the caller can
+// exec. Neither answer the builder gives is one: a fresh link writes into the
+// builder's work directory, which b.Close removes below, and a cache hit answers
+// with the cache's own file, which is 0666 because a mode is not a property of
+// the bytes. So the binary is copied into dir, which outlives the builder.
+func buildPkgsite(ctx context.Context, dir string) string {
 	load.ClearPackageCache()
 	loader := modload.NewLoader()
 
@@ -91,15 +95,13 @@ func buildPkgsite(ctx context.Context) string {
 	load.CheckPackageErrors([]*load.Package{p})
 
 	a := b.LinkAction(loader, work.ModeBuild, work.ModeBuild, p)
-	a.CacheExecutable = true
 	b.Do(ctx, a)
 
-	// Both paths return an executable in GOCACHE: CachedExecutable is set on
-	// fresh builds, while BuiltTarget is set on cache hits.
-	if cached := a.CachedExecutable(); cached != "" {
-		return cached
+	exe := filepath.Join(dir, "pkgsite"+cfg.ExeSuffix)
+	if err := b.Shell(a).CopyFile(exe, a.BuiltTarget(), 0o777, true); err != nil {
+		base.Fatal(err)
 	}
-	return a.BuiltTarget()
+	return exe
 }
 
 func doPkgsite(ctx context.Context, urlPath, fragment string) error {
@@ -143,7 +145,13 @@ func doPkgsite(ctx context.Context, urlPath, fragment string) error {
 		env = append(env, "GOPROXY="+gomodcache+","+goproxy)
 	}
 
-	pkgsite := buildPkgsite(ctx)
+	exeDir, err := os.MkdirTemp("", "go-doc-pkgsite")
+	if err != nil {
+		return fmt.Errorf("failed to make a directory for the documentation server: %v", err)
+	}
+	defer os.RemoveAll(exeDir)
+
+	pkgsite := buildPkgsite(ctx, exeDir)
 	if os.Getenv("TEST_GODOC_BUILD_ONLY") != "" {
 		if _, err := os.Stat(pkgsite); err != nil {
 			return fmt.Errorf("built pkgsite binary does not exist: %w", err)

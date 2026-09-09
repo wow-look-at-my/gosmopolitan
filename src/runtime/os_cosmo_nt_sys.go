@@ -4,35 +4,18 @@
 
 //go:build cosmo && amd64
 
-// Windows NT syscall emulation (wave 2): the Emulate dispatcher
-// installed into internal/runtime/syscall/cosmo's WindowsFns table.
+// Windows NT syscall emulation: the Emulate dispatcher installed into
+// internal/runtime/syscall/cosmo's WindowsFns table.
 //
-// Every user-level syscall on an NT host funnels here with LINUX
-// amd64 numbering and must come back with Linux semantics: Linux
-// errnos, Linux struct layouts (stat, dirent64), Linux flag values.
-// The Win32 mapping follows cosmo libc's precedent throughout.
+// Every user-level syscall on an NT host funnels here with LINUX amd64
+// numbering and must come back with Linux semantics: Linux errnos,
+// struct layouts and flag values. The Win32 mapping follows cosmo
+// libc's precedent, and an unimplemented syscall answers ENOSYS.
 //
-// Execution model (see syscall_cosmo_nt.go and syscall_cosmo.go): the
-// syscall package skips entersyscall on the NT route, so the backends
-// here are ordinary Go - they allocate for path translation and
-// struct synthesis - and individually bracket the genuinely blocking
-// Win32 calls (ReadFile/WriteFile/FlushFileBuffers) with
-// entersyscall via ntcallSE. Quick metadata calls (CreateFileW,
-// stat, delete, move, mkdir, cwd) stay plain ntcallE: they are
-// bounded local-disk operations.
-//
-// Pointer discipline: syscall arguments may point into the calling
-// goroutine's STACK. Raw uintptrs are not adjusted when a stack
-// grows, so ntSyscallEmulate is nosplit (as is its entire caller
-// chain from syscall.Syscall down) and re-types every
-// pointer-carrying argument in the dispatch call expression itself;
-// from there on the backends hold real pointers, which stack copying
-// adjusts. Passing them back to Win32 as uintptr happens only inside
-// the nosplit ntcallE/ntcallSE helpers, where no growth can occur.
-//
-// Unimplemented syscalls return ENOSYS so gaps stay visible (the
-// cosmo graceful-stub philosophy); the probe's socket and exec checks
-// currently fail through exactly that path.
+// The syscall package skips entersyscall on the NT route, so the
+// backends here are ordinary Go and may allocate. Each brackets its
+// own genuinely blocking Win32 call with ntcallSE. A bounded
+// local-disk metadata call stays on plain ntcallE.
 
 package runtime
 
@@ -70,6 +53,7 @@ const (
 	ntSysWritev     = 20
 	ntSysDup        = 32
 	ntSysGetpid     = 39
+	ntSysSendfile   = 40
 	ntSysSocket     = 41
 	ntSysConnect    = 42
 	ntSysSendto     = 44
@@ -305,10 +289,15 @@ func ntFail3(errno uintptr) (uintptr, uintptr, uintptr) {
 }
 
 // ntSyscallEmulate is the WindowsFns.Emulate hook: dispatch by Linux
-// syscall number to the typed backends. MUST stay nosplit and MUST
-// convert pointer-carrying uintptr arguments to pointer types right
-// here in the call expressions - see the pointer-discipline note at
-// the top of the file.
+// syscall number to the typed backends.
+//
+// A syscall argument may point into the calling goroutine's STACK, and
+// a raw uintptr is not adjusted when that stack grows. So this MUST
+// stay nosplit, as must its whole caller chain from syscall.Syscall
+// down, and it MUST re-type every pointer-carrying argument in the
+// dispatch call expression itself. The backends then hold real
+// pointers, which stack copying adjusts. Handing one back to Win32 as
+// a uintptr happens only inside nosplit ntcallE and ntcallSE.
 //
 //go:nosplit
 func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -393,6 +382,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuGetrandom(unsafe.Pointer(a1), a2)
 	case ntSysPipe2:
 		return ntEmuPipe2((*[2]int32)(unsafe.Pointer(a1)), int32(a2))
+	case ntSysSendfile:
+		return ntEmuSendfile(int32(a1), int32(a2), (*int64)(unsafe.Pointer(a3)), a4)
 	case ntSysWait4:
 		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
 
@@ -532,9 +523,19 @@ func ntEmuRead(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 		// Sockets speak recv, not ReadFile (os_cosmo_nt_sock.go).
 		return ntSockRead(e.handle, p, n)
 	}
+	// A disk file reads at the shared pointer and advances it, so it
+	// takes the slot's lock against a concurrent positional transfer.
+	// Nothing else here has a pointer to share.
+	seekable := e.kind == ntFDFile
+	if seekable {
+		lock(&ntFilePos[fd])
+	}
 	var got uint32
 	r, werr := ntcallSE(ntReadFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&got)), 0, 0, 0)
+	if seekable {
+		unlock(&ntFilePos[fd])
+	}
 	if r == 0 {
 		// A pipe closed by the writer or an explicit EOF both mean
 		// end-of-file in Linux terms.
@@ -567,9 +568,16 @@ func ntEmuWrite(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 		// Sockets speak send, not WriteFile (os_cosmo_nt_sock.go).
 		return ntSockWrite(e.handle, p, n)
 	}
+	seekable := e.kind == ntFDFile
+	if seekable {
+		lock(&ntFilePos[fd])
+	}
 	var written uint32
 	r, werr := ntcallSE(ntWriteFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&written)), 0, 0, 0)
+	if seekable {
+		unlock(&ntFilePos[fd])
+	}
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
 	}
@@ -937,7 +945,10 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 	if whence > _NT_FILE_END {
 		return ntFail3(ntEINVAL)
 	}
+	// Every kind left here has a pointer of its own to move.
+	lock(&ntFilePos[fd])
 	newpos, werr := ntSeekHandle(e.handle, off, whence)
+	unlock(&ntFilePos[fd])
 	if werr != 0 {
 		return ntFail3(ntErrno(werr))
 	}
@@ -945,11 +956,11 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 }
 
 // ntEmuPreadPwrite implements pread64/pwrite64 by seeking around the
-// shared file pointer (save, seek, transfer, restore). Linux's
-// pointer-untouched guarantee holds only against concurrent users of
-// OTHER descriptors; concurrent plain reads on the SAME fd can
-// observe the temporary seek. internal/poll only mixes them per-fd
-// under its own locks, so this is sound for the standard library.
+// shared file pointer (save, seek, transfer, restore) under the slot's
+// ntFilePos lock, which every other user of that pointer takes too.
+// The four steps have to look like one: a caller of pread expects the
+// offset it asked for and expects its own file position back
+// afterwards, and neither survives an interleaved seek.
 func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bool) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {
@@ -967,11 +978,14 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	if n == 0 {
 		return 0, 0, 0
 	}
+	lock(&ntFilePos[fd])
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, off, _NT_FILE_BEGIN); werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	var moved uint32
@@ -982,6 +996,7 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	r, werr2 := ntcallSE(fn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&moved)), 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // best-effort restore
+	unlock(&ntFilePos[fd])
 	if r == 0 {
 		if !isWrite && (werr2 == _NT_ERROR_BROKEN_PIPE || werr2 == _NT_ERROR_HANDLE_EOF) {
 			return 0, 0, 0
@@ -1002,15 +1017,20 @@ func ntEmuFtruncate(fd int32, length int64) (r1, r2, errno uintptr) {
 	if length < 0 {
 		return ntFail3(ntEINVAL)
 	}
+	// SetEndOfFile truncates at the pointer, so this walks it too.
+	lock(&ntFilePos[fd])
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, length, _NT_FILE_BEGIN); werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	r, werr2 := ntcallE(ntSetEndOfFileFn, e.handle, 0, 0, 0, 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // Linux keeps the offset
+	unlock(&ntFilePos[fd])
 	if r == 0 {
 		return ntFail3(ntErrno(werr2))
 	}
@@ -1090,15 +1110,14 @@ func ntUtsPutUint(dst *[65]byte, at int, v uint32) int {
 //
 // Sysname and Machine are constants because they are constants here: an
 // APE that boots the NT personality is this host and this payload.
-// Release carries the real build (RtlGetVersion - GetVersionExW answers
-// 6.2 to an unmanifested process on every modern host, which is a wrong
-// number rather than a missing one).
+// Release carries the real build from RtlGetVersion, because
+// GetVersionExW answers 6.2 to an unmanifested process on every modern
+// host - a wrong number rather than a missing one.
 //
 // A field this host cannot answer stays EMPTY rather than invented.
-// Nodename is empty when the computer name is unavailable, and also when
-// it is not ASCII: this path has no UTF-16 decoder, and a mangled name
-// is worse than no name. Domainname has no NT counterpart at all, which
-// is the same choice the darwin emulation makes.
+// Nodename is empty when the computer name is unavailable and when it
+// is not ASCII, since this path has no UTF-16 decoder. Domainname has
+// no NT counterpart at all, the same choice darwin makes.
 func ntEmuUname(buf *ntLinuxUtsname) (r1, r2, errno uintptr) {
 	if buf == nil {
 		return ntFail3(ntEFAULT)
@@ -1187,24 +1206,17 @@ type ntOverlapped struct {
 }
 
 // ntEmuFlock emulates flock(2) with LockFileEx/UnlockFileEx over the
-// whole file, the range every flock caller means.
-//
-// NT locks a HANDLE where Linux locks the open file description. The two
-// agree on what matters: both keep a second opener out, and both release
-// when the thing that took the lock closes.
+// whole file, the range every flock caller means. NT locks a HANDLE
+// where Linux locks the open file description; both keep a second
+// opener out and both release when the holder closes.
 //
 // They part on a RE-lock. Linux replaces the operation the fd holds, so
-// LOCK_SH after LOCK_EX, or LOCK_EX twice, is one step. NT refuses a
-// second lock over a range this handle already holds, so a re-lock here
-// unlocks first and takes the new one after. Another process can win the
-// range in that window. Linux documents the same window for a conversion
-// (flock(2): "it is not guaranteed that the conversion is atomic"), and a
-// caller that takes one lock and holds it - which is what a lock file is
-// for - never reaches this path at all.
-//
-// The uintptr(unsafe.Pointer(&ov)) conversions stay INSIDE the call
-// expressions: a uintptr held in a variable is not a reference, and ov
-// lives on the stack.
+// LOCK_SH after LOCK_EX is one step. NT refuses a second lock over a
+// range this handle already holds, so a re-lock here unlocks first and
+// takes the new one after, and another process can win the range in
+// that window. flock(2) documents the same window for a conversion,
+// and a caller that holds one lock never comes here. The
+// uintptr(unsafe.Pointer(&ov)) conversions stay INSIDE the calls.
 func ntEmuFlock(fd int32, op int32) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {

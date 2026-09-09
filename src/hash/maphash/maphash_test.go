@@ -13,6 +13,7 @@ import (
 	"math"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 )
@@ -300,7 +301,9 @@ func testComparable[T comparable](t *testing.T, v T, v2 ...T) {
 	})
 }
 
-var use byte
+// use exists so the compiler cannot drop local below. It is atomic because
+// tests are parallel by default here, so two of them grow the stack at once.
+var use atomic.Uint32
 
 //go:noinline
 func stackGrow(dep int) {
@@ -310,7 +313,7 @@ func stackGrow(dep int) {
 	var local [1024]byte
 	// make sure local is allocated on the stack.
 	local[randUint64()%1024] = byte(randUint64())
-	use = local[randUint64()%1024]
+	use.Store(uint32(local[randUint64()%1024]))
 	stackGrow(dep - 1)
 }
 

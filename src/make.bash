@@ -190,6 +190,15 @@ if [[ "$GOROOT_BOOTSTRAP" == "$GOROOT" ]]; then
 	echo "Set \$GOROOT_BOOTSTRAP to a working Go tree >= Go $bootgo." >&2
 	exit 1
 fi
+# cmd/go requires packages that live under src/cmd/vendor as git submodules, so
+# a clone made without them fails much later with "no required module provides
+# package", which reads as a missing dependency and sends the reader to go get.
+if [[ ! -f cmd/vendor/github.com/wow-look-at-my/go-s3-server/go.mod ]]; then
+	echo "ERROR: src/cmd/vendor submodules are not checked out." >&2
+	echo "Run: git submodule update --init --recursive" >&2
+	exit 1
+fi
+
 rm -f cmd/dist/dist
 bootstrapenv "$GOROOT_BOOTSTRAP/bin/go" build -o cmd/dist/dist ./cmd/dist
 
@@ -216,7 +225,15 @@ fi
 # Run dist bootstrap to complete make.bash.
 # Bootstrap installs a proper cmd/dist, built with the new toolchain.
 # Throw ours, built with the bootstrap toolchain, away after bootstrap.
-./cmd/dist/dist bootstrap -a $vflag $GO_DISTFLAGS "$@"
+#
+# There is no -a. dist does not take one any more. Upstream had it because
+# dist predates the content-addressed build cache and wanted a toolchain that
+# could not have reused an object built by a different compiler. This fork
+# already has that: parseToolID takes the tool's own content ID, so a compiler
+# that changed at all gets new action IDs and cannot hit a stale entry. -a on
+# top of that only guaranteed the cache was never used, which is a full
+# recompile of std and cmd on every build. Use "dist clean" to empty the tree.
+./cmd/dist/dist bootstrap $vflag $GO_DISTFLAGS "$@"
 rm -f ./cmd/dist/dist
 
 # DO NOT ADD ANY NEW CODE HERE.

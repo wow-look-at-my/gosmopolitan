@@ -8,6 +8,7 @@ package testenv
 
 import (
 	"fmt"
+	"internal/goos"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,10 +16,17 @@ import (
 )
 
 var hasSymlink = sync.OnceValues(func() (ok bool, reason string) {
+	// goos.IsCosmo, not runtime.GOOS: one APE boots on three kernels and NT
+	// has no symlink behind this port's emulation, so the answer is a probe
+	// rather than a name.
+	probe := goos.IsCosmo == 1
 	switch runtime.GOOS {
 	case "plan9":
 		return false, ""
 	case "android", "wasip1":
+		probe = true
+	}
+	if probe {
 		// For wasip1, some runtimes forbid absolute symlinks,
 		// or symlinks that escape the current working directory.
 		// Perform a simple test to see whether the runtime

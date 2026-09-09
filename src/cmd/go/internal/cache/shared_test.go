@@ -15,10 +15,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -188,138 +188,48 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 }
 
-// An executable stored through the shared tier must come back on a cold
-// machine in the shape the build can run: a directory entry holding a 0777
-// file named for the binary. A plain-file materialization is exactly the
-// regression this pins -- the hit exists, useCache trusts it, and go run
-// dies at fork/exec with permission denied.
-func TestSharedCache_ExecutableSurvivesTheNetworkRoundTrip(t *testing.T) {
+// Every cache entry is one plain file. The cache once made an entry the build
+// was going to run a DIRECTORY holding a named file instead, which a restore
+// off the wire could not reproduce: the wire carries bytes and no name.
+func TestSharedCache_NetworkHitIsAPlainFile(t *testing.T) {
 	f, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 
-	body := []byte("#!/bin/sh\nfake APE payload for the round trip\n")
-	name := "shebang-test"
-	id := testActionID("shared-executable-round-trip")
+	body := []byte("ordinary compiled package output")
+	id := testActionID("network-hit-plain")
 
 	first := openShared(t, t.TempDir())
-	exec, ok := first.(ExecutableCache)
-	if !ok {
-		t.Fatalf("%T is not an ExecutableCache", first)
-	}
-	outputID, size, err := exec.PutExecutable(id, name, bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("PutExecutable: %v", err)
-	}
-	if size != int64(len(body)) {
-		t.Fatalf("PutExecutable stored %d bytes, want %d", size, len(body))
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if f.stored() == 0 {
-		t.Fatal("nothing reached the shared cache")
-	}
-
-	// The metadata traveled: the stored object carries the exe name.
-	f.mu.Lock()
-	var meta map[string]string
-	for _, m := range f.meta {
-		meta = m
-	}
-	f.mu.Unlock()
-	if meta["exe-name"] != name {
-		t.Fatalf("stored metadata exe-name = %q, want %q", meta["exe-name"], name)
-	}
-
-	// A different machine: same shared cache, empty local cache.
-	second := openShared(t, t.TempDir())
-	defer second.Close()
-	entry, err := second.Get(id)
-	if err != nil {
-		t.Fatalf("Get after a cold local cache: %v", err)
-	}
-	if entry.OutputID != outputID {
-		t.Fatalf("Get returned outputID %x, want %x", entry.OutputID, outputID)
-	}
-
-	// The executable shape: OutputFile names a 0777 file the build can exec.
-	exe := second.OutputFile(entry.OutputID)
-	info, err := os.Stat(exe)
-	if err != nil {
-		t.Fatalf("stat %s: %v", exe, err)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		t.Fatalf("%s has mode %v, want an executable bit", exe, info.Mode().Perm())
-	}
-	got, err := os.ReadFile(exe)
-	if err != nil {
-		t.Fatalf("read %s: %v", exe, err)
-	}
-	if !bytes.Equal(got, body) {
-		t.Fatalf("the shared cache served %q, want %q", got, body)
-	}
-}
-
-// A network hit must restore exactly the mode the original PutExecutable (or
-// Put) call chose -- never a guess from content, never a blanket +x. The
-// build system execs some cached outputs directly (go run, a shebang
-// script), and the choice of Put vs PutExecutable already carries that
-// decision; this pins that it survives the round trip through the wire's
-// executable metadata instead of being lost or defaulted.
-func TestSharedCache_NetworkHitRestoresExecutableBit(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	configureShared(t, srv)
-
-	exeBody := []byte("#!/bin/sh\necho hi\n")
-	exeID := testActionID("network-hit-executable")
-	plainBody := []byte("ordinary compiled package output")
-	plainID := testActionID("network-hit-plain")
-
-	first := openShared(t, t.TempDir())
-	exeCache, ok := first.(ExecutableCache)
-	if !ok {
-		t.Fatalf("%T does not implement ExecutableCache", first)
-	}
-	if _, _, err := exeCache.PutExecutable(exeID, "cached-script", bytes.NewReader(exeBody)); err != nil {
-		t.Fatalf("PutExecutable: %v", err)
-	}
-	if _, _, err := first.Put(plainID, bytes.NewReader(plainBody)); err != nil {
+	if _, _, err := first.Put(id, bytes.NewReader(body)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if f.stored() != 2 {
-		t.Fatalf("stored %d objects, want 2", f.stored())
+	if f.stored() != 1 {
+		t.Fatalf("stored %d objects, want 1", f.stored())
 	}
 
 	second := openShared(t, t.TempDir())
 	defer second.Close()
 
-	exeEntry, err := second.Get(exeID)
+	entry, err := second.Get(id)
 	if err != nil {
-		t.Fatalf("Get executable after a cold local cache: %v", err)
+		t.Fatalf("Get after a cold local cache: %v", err)
 	}
-	exeName := second.OutputFile(exeEntry.OutputID)
-	info, err := os.Stat(exeName)
+	name := second.OutputFile(entry.OutputID)
+	info, err := os.Stat(name)
 	if err != nil {
-		t.Fatalf("Stat(%s): %v", exeName, err)
+		t.Fatalf("Stat(%s): %v", name, err)
 	}
-	if info.Mode()&0o111 == 0 {
-		t.Fatalf("network hit for a PutExecutable object %s has mode %v, want an executable bit set", exeName, info.Mode())
+	if info.IsDir() {
+		t.Fatalf("network hit %s is a directory, want a plain file", name)
 	}
-
-	plainEntry, err := second.Get(plainID)
+	got, err := os.ReadFile(name)
 	if err != nil {
-		t.Fatalf("Get plain object after a cold local cache: %v", err)
+		t.Fatalf("ReadFile(%s): %v", name, err)
 	}
-	plainName := second.OutputFile(plainEntry.OutputID)
-	info, err = os.Stat(plainName)
-	if err != nil {
-		t.Fatalf("Stat(%s): %v", plainName, err)
-	}
-	if info.Mode()&0o111 != 0 {
-		t.Fatalf("network hit for an ordinary Put object %s has mode %v, want no executable bit", plainName, info.Mode())
+	if !bytes.Equal(got, body) {
+		t.Fatalf("network hit holds %q, want %q", got, body)
 	}
 }
 
@@ -484,142 +394,71 @@ func captureStderr(t *testing.T, fn func()) string {
 	return out
 }
 
-// A shared tier in trouble must not write to the go command's stderr. The
-// fake server refuses the index endpoint, which is exactly what an unwell
-// server does in production, and the client says so on every build. That
-// output is not a build diagnostic -- a cache tier cannot change what a
-// build produces -- and cmd/internal/testdir asserts a go run prints
-// nothing, so a talkative cache turns an unrelated service's health into
-// red tests across the tree.
-func TestSharedCache_DiagnosticsStayOffTheBuildsOutput(t *testing.T) {
+// A tier that stopped working reports it, on every build and to everybody.
+// The alternative is a cache nobody hears about, which reads as a build that
+// is simply slow. The client's HTTP error summaries do not go through the
+// Logger either: the backend captures os.Stderr once, when it is built. So
+// this covers both halves of the output.
+func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
+	for _, ci := range []string{"true", ""} {
+		f, srv := newFakeCacheServer(t)
+		f.failPuts = true
+		configureShared(t, srv)
+		t.Setenv("CI", ci)
+
+		out := captureStderr(t, func() {
+			c := openShared(t, t.TempDir())
+			PutBytes(c, testActionID("refused"), []byte("body"))
+			c.(*SharedCache).Close()
+		})
+		if !strings.Contains(out, "cacheprog:") {
+			t.Fatalf("CI=%q: a failing tier must report, got:\n%s", ci, out)
+		}
+	}
+}
+
+// A HEALTHY tier's routine reporting stays off the build's output. That
+// reporting is the index size on every go command, and a go command's output
+// is data somebody parses: internal/godebugs opened one of those lines as a
+// file path, and go/doc/comment read one as a package name.
+//
+// This covers what goLogger decides, which is what this repo controls. The
+// client's own batch summary reaches a writer it captured at construction, so
+// where THAT goes is settled in cacheclient, beside the code that writes it.
+func TestSharedCache_AHealthyTierIsSilent(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
-	holdQuietWindowOpen(t)
 	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
 		c.(*SharedCache).Get(testActionID("quiet"))
 	})
-	if out != "" {
-		t.Fatalf("shared tier wrote to the build's stderr:\n%s", out)
+	// The ROUTINE line is "web index: <n> keys". Match that shape rather than
+	// the "web index:" prefix, which the FAILURE line "web index: fetch
+	// failed; using <n> cached keys" also carries -- and does carry here,
+	// because the fake server has no index endpoint to answer with.
+	if routineIndexLine.MatchString(out) {
+		t.Fatalf("a working tier reported its index size to the build:\n%s", out)
 	}
 }
 
-// The client's HTTP error summaries do not go through the Logger: the
-// backend captures a writer once, when it is built, and that writer was
-// os.Stderr. So a cache server refusing writes put lines on the go
-// command's stderr no matter what this package installed. A build here must
-// not depend on that server's health, and it must not depend on a fix
-// landing in that server's repo either -- it is built with this toolchain,
-// so this tree cannot wait on it.
-//
-// This also guards the assumption newWebBackend rests on. If the client ever
-// captures the writer later than construction, this goes red.
-func TestSharedCache_HTTPErrorsStayOffTheBuildsOutput(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	holdQuietWindowOpen(t)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
+var routineIndexLine = regexp.MustCompile(`web index: [0-9]+ keys`)
 
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		if err := PutBytes(c, testActionID("refused"), []byte("body")); err != nil {
-			t.Logf("put failed, which is the point: %v", err)
-		}
-		c.(*SharedCache).Close()
-	})
-	if out != "" {
-		t.Fatalf("refused uploads reached the build's stderr:\n%s", out)
-	}
-}
-
-// A developer is never quiet, whatever the window says. They are watching the
-// build, and a cache that stopped working is theirs to see at once.
-func TestSharedCache_OutsideCIAlwaysReports(t *testing.T) {
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		PutBytes(c, testActionID("local"), []byte("body"))
-		c.(*SharedCache).Close()
-	})
-	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("outside CI a failing tier must report, got:\n%s", out)
-	}
-}
-
-// The diagnostics are not deleted, only held back. Anyone debugging the cache
-// sets GOCACHEDEBUG and gets the same messages back during the window.
-func TestSharedCache_CacheDebugRestoresDiagnostics(t *testing.T) {
+// The reporting is held back, not deleted. Anyone looking at the cache asks
+// for it and gets the same lines.
+func TestSharedCache_CacheDebugRestoresTheReporting(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
-	holdQuietWindowOpen(t)
 	t.Setenv(CacheDebugEnv, "1")
-	t.Setenv("CI", "true")
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
 		c.(*SharedCache).Get(testActionID("loud"))
-	})
-	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("GOCACHEDEBUG=1 must report the tier's trouble, got:\n%s", out)
-	}
-}
-
-// holdQuietWindowOpen moves the deadline an hour ahead for one test. The
-// tests of what the window DOES must not depend on today's date; only
-// TestSharedCache_QuietWindowExpires reads the real deadline.
-func holdQuietWindowOpen(t *testing.T) {
-	t.Helper()
-	saved := cacheQuietUntil
-	t.Cleanup(func() { cacheQuietUntil = saved })
-	cacheQuietUntil = time.Now().Add(time.Hour)
-}
-
-// The window ends by itself. Past the deadline a failing tier reports again
-// with nobody editing anything, which is what makes this an outage window
-// rather than a permanently muted warning.
-//
-// This test also fails once the real deadline passes and the window was
-// never removed, so extending it is a deliberate edit here and not a drift.
-//
-// The deadline stands past its first date because the outage has not ended.
-// The build leg that fired this test printed `web index fetch: HTTP 404` and
-// `web put [...]: HTTP 404` beside it, so the server still refuses its index
-// and every upload, and the shared tier stores nothing in CI. The window buys
-// silence, never a fix: a green build here says the cache is quiet, not that
-// the cache works.
-func TestSharedCache_QuietWindowExpires(t *testing.T) {
-	if !cacheQuietUntil.After(time.Now()) {
-		t.Fatalf("the quiet window closed at %s: delete it and the gates that read it, "+
-			"or say here why it moves", cacheQuietUntil.Format(time.RFC3339))
-	}
-
-	saved := cacheQuietUntil
-	t.Cleanup(func() { cacheQuietUntil = saved })
-	cacheQuietUntil = time.Now().Add(-time.Second)
-
-	f, srv := newFakeCacheServer(t)
-	f.failPuts = true
-	configureShared(t, srv)
-	t.Setenv(CacheDebugEnv, "")
-	t.Setenv("CI", "true")
-
-	out := captureStderr(t, func() {
-		c := openShared(t, t.TempDir())
-		PutBytes(c, testActionID("expired"), []byte("body"))
 		c.(*SharedCache).Close()
 	})
 	if !strings.Contains(out, "cacheprog:") {
-		t.Fatalf("past the deadline a failing tier must report again, got:\n%s", out)
+		t.Fatalf("GOCACHEDEBUG=1 must restore the tier's reporting, got:\n%s", out)
 	}
 }
 

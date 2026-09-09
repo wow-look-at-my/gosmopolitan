@@ -39,8 +39,8 @@ import (
 // it should do so by copying the result into an allocation created by the caller.
 //
 // Limitations:
-//   - Currently only supported on linux/amd64 and linux/arm64.  On unsupported
-//     platforms, Do will invoke f directly.
+//   - Currently only supported on linux/amd64, linux/arm64 and the cosmo
+//     port of each. On unsupported platforms, Do will invoke f directly.
 //   - Protection does not extend to any global variables written by f.
 //   - If f calls runtime.Goexit, erasure can be delayed by defers
 //     higher up on the call stack.
@@ -59,13 +59,16 @@ import (
 //     the object. Since this function is intended to be used with constant-time
 //     cryptographic code, this requirement is usually fulfilled implicitly.
 func Do(f func()) {
+	// A constant context, so this folds to the PORT rather than reading the
+	// host. cosmo builds the runtime half of this feature: secret.go's tag
+	// is (amd64 || arm64) && linux, and the cosmo port satisfies linux.
 	const osArch = runtime.GOOS + "/" + runtime.GOARCH
 	switch osArch {
 	default:
 		// unsupported, just invoke f directly.
 		f()
 		return
-	case "linux/amd64", "linux/arm64":
+	case "linux/amd64", "linux/arm64", "cosmo/amd64", "cosmo/arm64":
 	}
 
 	// Place to store any panic value.

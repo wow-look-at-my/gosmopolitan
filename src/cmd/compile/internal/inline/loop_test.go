@@ -11,7 +11,12 @@ import (
 	"cmd/compile/internal/ir"
 )
 
+// base.Debug is one package variable, and the three tests here each rewrite
+// it. Top-level tests are parallel by default in this fork, so without the
+// barrier they read each other's flags: this one setting LoopInline back to 0
+// below is what turned every loopDiscount case in TestLoopTunables into 0.
 func TestLoopSiteMaxCost(t *testing.T) {
+	t.Serial()
 	defer func(saved base.DebugFlags) { base.Debug = saved }(base.Debug)
 	base.Debug.LoopInline = 1
 
@@ -55,6 +60,7 @@ func TestLoopSiteMaxCost(t *testing.T) {
 }
 
 func TestLoopTunables(t *testing.T) {
+	t.Serial()
 	defer func(saved base.DebugFlags) { base.Debug = saved }(base.Debug)
 	base.Debug = base.DebugFlags{LoopInline: 1}
 
@@ -93,6 +99,7 @@ func TestLoopTunables(t *testing.T) {
 }
 
 func TestLoopGrowthBudget(t *testing.T) {
+	t.Serial()
 	defer func(saved base.DebugFlags) { base.Debug = saved }(base.Debug)
 	base.Debug = base.DebugFlags{LoopInline: 1, LoopInlineGrowth: 100}
 

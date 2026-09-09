@@ -38,6 +38,8 @@ func TestSemaHandoff(t *testing.T) {
 }
 
 func TestSemaHandoff1(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if GOMAXPROCS(-1) <= 1 {
 		t.Skip("GOMAXPROCS <= 1")
 	}
@@ -47,6 +49,8 @@ func TestSemaHandoff1(t *testing.T) {
 }
 
 func TestSemaHandoff2(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if GOMAXPROCS(-1) <= 2 {
 		t.Skip("GOMAXPROCS <= 2")
 	}

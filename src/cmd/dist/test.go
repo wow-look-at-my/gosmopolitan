@@ -32,10 +32,10 @@ func cmdtest() {
 
 	t.asmflags = os.Getenv("GO_TEST_ASMFLAGS")
 
-	var noRebuild bool
+	// There is no -rebuild or -no-rebuild. Both existed to drive a
+	// `go install -a` of the whole toolchain, and -a is gone: a build ID
+	// already rebuilds whatever changed, so forcing the rest is pure cost.
 	flag.BoolVar(&t.listMode, "list", false, "list available tests")
-	flag.BoolVar(&t.rebuild, "rebuild", false, "rebuild everything first")
-	flag.BoolVar(&noRebuild, "no-rebuild", false, "overrides -rebuild (historical dreg)")
 	flag.BoolVar(&t.keepGoing, "k", false, "keep going even when error occurred")
 	flag.BoolVar(&t.race, "race", false, "run in race builder mode (different set of tests)")
 	flag.BoolVar(&t.compileOnly, "compile-only", false, "compile tests, but don't run them")
@@ -48,9 +48,6 @@ func cmdtest() {
 	flag.BoolVar(&t.json, "json", false, "report test results in JSON")
 
 	xflagparse(-1) // any number of args
-	if noRebuild {
-		t.rebuild = false
-	}
 
 	t.run()
 }
@@ -61,7 +58,6 @@ type tester struct {
 	msan        bool
 	asan        bool
 	listMode    bool
-	rebuild     bool
 	failed      bool
 	keepGoing   bool
 	compileOnly bool // just try to compile all tests, but no need to run
@@ -158,16 +154,10 @@ func (t *tester) run() {
 		}
 	}
 
-	if t.rebuild {
-		t.out("Building packages and commands.")
-		// Force rebuild the whole toolchain.
-		goInstall(toolenv(), gorootBinGo, append([]string{"-a"}, toolchain...)...)
-	}
-
 	if !t.listMode {
 		if builder := os.Getenv("GO_BUILDER_NAME"); builder == "" {
-			// Ensure that installed commands are up to date, even with -no-rebuild,
-			// so that tests that run commands end up testing what's actually on disk.
+			// Ensure that installed commands are up to date, so that tests that
+			// run commands end up testing what's actually on disk.
 			// If everything is up-to-date, this is a no-op.
 			// We first build the toolchain twice to allow it to converge,
 			// as when we first bootstrap.
@@ -430,7 +420,9 @@ func (opts *goTest) run(t *tester) error {
 // The caller must call setupCmd on the resulting exec.Cmd to set its directory
 // and environment.
 func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, setupCmd func(*exec.Cmd)) {
-	run = append(run, "-count=1") // Disallow caching
+	// No -count=1 here. Defeating the test cache is only ever needed when the
+	// cache is wrong, and a cache that is wrong is the defect to fix. Forcing
+	// every run to repeat work hides that defect and pays for it on each run.
 	if opts.timeout != 0 {
 		d := opts.timeout * time.Duration(t.timeoutScale)
 		run = append(run, "-timeout="+d.String())

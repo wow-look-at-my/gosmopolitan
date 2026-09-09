@@ -52,7 +52,10 @@ func TestAnd32(t *testing.T) {
 }
 
 func TestAnd64(t *testing.T) {
+	t.Serial(
 	// Basic sanity check.
+	)
+
 	x := uint64(0xffffffffffffffff)
 	sink = &x
 	for i := uint64(0); i < 64; i++ {
@@ -130,7 +133,10 @@ func TestOr32(t *testing.T) {
 }
 
 func TestOr64(t *testing.T) {
+	t.Serial(
 	// Basic sanity check.
+	)
+
 	x := uint64(0)
 	sink = &x
 	for i := uint64(0); i < 64; i++ {

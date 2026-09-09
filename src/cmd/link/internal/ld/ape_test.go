@@ -99,19 +99,17 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// TestApeRunDirIgnoresEveryEnvironmentVariable runs apeRunDir through a real
-// POSIX shell with TMPDIR, HOME, and the caller's whole environment cleared,
-// and again with both set to hostile-looking values, and checks the
-// resolved path is identical either way: /tmp, suffixed with the real
-// uid. Earlier revisions read ${TMPDIR:-${HOME:-/tmp}}, which is exactly
-// the shape that broke: a container run as a numeric --user UID with no
-// /etc/passwd entry gets a non-empty HOME anyway, set by the runtime
-// itself to "/" (confirmed directly against Docker), and `${VAR:-x}` only
-// falls through on an unset or empty VAR, so "/" won -- staging then tried
-// to mkdir under the filesystem root. Reading no environment variable at
-// all removes that whole failure class instead of special-casing the one
-// value that was observed to break it.
-func TestApeRunDirIgnoresEveryEnvironmentVariable(t *testing.T) {
+// TestApeRunDirIgnoresTMPDIRAndHOME resolves apeRunDir in a real POSIX shell
+// twice: once with the environment cleared, once with TMPDIR and HOME set to
+// hostile values. Both must give /tmp plus the real uid.
+//
+// `${TMPDIR:-${HOME:-/tmp}}` falls through only on an unset or empty value,
+// so a container run as a bare numeric UID staged under "/", its own
+// runtime's HOME. Reading no variable removes the class.
+//
+// APE_RUNDIR is the one variable that counts. TestApeRunDirHonoursAPERunDir
+// covers it.
+func TestApeRunDirIgnoresTMPDIRAndHOME(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
 	}
@@ -136,6 +134,45 @@ func TestApeRunDirIgnoresEveryEnvironmentVariable(t *testing.T) {
 			}
 			if got := string(out); got != want {
 				t.Errorf("apeRunDir resolved to %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// TestApeRunDirHonoursAPERunDir covers the case /tmp cannot serve at all: a
+// container that mounts a noexec filesystem over it stages the copy fine and
+// then execve refuses it, so the binary cannot start by any path. A caller
+// that has established a directory the APE runs from names it here. An unset
+// or empty value keeps /tmp, so a caller who sets nothing is unaffected.
+func TestApeRunDirHonoursAPERunDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no POSIX sh on windows")
+	}
+	testenv.MustHaveExecPath(t, "sh")
+	testenv.MustHaveExecPath(t, "id")
+
+	uid := strings.TrimSpace(runAndCapture(t, "id", "-u"))
+	cases := []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"set", []string{"APE_RUNDIR=/var/lib/ape"}, "/var/lib/ape/.ape-run-1-" + uid},
+		{"empty", []string{"APE_RUNDIR="}, "/tmp/.ape-run-1-" + uid},
+		{"unset", nil, "/tmp/.ape-run-1-" + uid},
+		// TMPDIR must not stand in for it: the two say different things.
+		{"tmpdir_does_not_count", []string{"TMPDIR=/var/lib/ape"}, "/tmp/.ape-run-1-" + uid},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command("sh", "-c", `printf %s "`+apeRunDir+`"`)
+			cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, tc.env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("sh -c failed: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Errorf("apeRunDir resolved to %q, want %q", got, tc.want)
 			}
 		})
 	}

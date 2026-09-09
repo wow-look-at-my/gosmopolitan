@@ -14,7 +14,6 @@ import (
 	"maps"
 	"net"
 	"net/netip"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -561,8 +560,13 @@ func (c *Certificate) Verify(opts VerifyOptions) ([][]*Certificate, error) {
 		}
 	}
 
-	// Use platform verifiers, where available, if Roots is from SystemCertPool.
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	// Use platform verifiers, where available, if Roots is from
+	// SystemCertPool. Whether one is available is a property of the
+	// BUILD, not of the host: one APE runs on macOS with no
+	// Security.framework binding compiled in, and this build's
+	// systemVerify answers (nil, nil), which reads as an accepted
+	// certificate.
+	if hasPlatformVerifier {
 		// Don't use the system verifier if the system pool was replaced with a non-system pool,
 		// i.e. if SetFallbackRoots was called with x509usefallbackroots=1.
 		systemPool := systemRootsPool()

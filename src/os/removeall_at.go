@@ -7,8 +7,8 @@
 package os
 
 import (
+	"internal/goos"
 	"io"
-	"runtime"
 	"syscall"
 )
 
@@ -36,11 +36,15 @@ func removeAll(path string) error {
 	parentDir, base := splitPath(path)
 
 	flag := O_RDONLY
-	if runtime.GOOS == "windows" {
+	if goos.IsWindows == 1 {
 		// On Windows, the process might not have read permission on the parent directory,
 		// but still can delete files in it. See https://go.dev/issue/74134.
 		// We can open a file even if we don't have read permission by passing the
 		// O_WRONLY | O_RDWR flag, which is mapped to FILE_READ_ATTRIBUTES.
+		//
+		// The predicate is the BUILD's target, not runtime.GOOS. That names the
+		// host here, and a cosmo binary on an NT host still opens through
+		// Cosmopolitan, where a directory opened for write is EISDIR.
 		flag = O_WRONLY | O_RDWR
 	}
 	parent, err := OpenFile(parentDir, flag, 0)

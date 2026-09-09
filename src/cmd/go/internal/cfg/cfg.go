@@ -68,7 +68,6 @@ func ToolExeSuffix() string {
 
 // These are general "build flags" used by build and other commands.
 var (
-	BuildA                 bool     // -a flag
 	BuildBuildmode         string   // -buildmode flag
 	BuildBuildvcs          = "auto" // -buildvcs flag: "true", "false", or "auto"
 	BuildContext           = defaultContext()

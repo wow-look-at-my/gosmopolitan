@@ -8,7 +8,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,36 +31,36 @@ func pprofPath(t testing.TB) string {
 
 // See also runtime/pprof.cpuProfilingBroken.
 func mustHaveCPUProfiling(t *testing.T) {
-	switch runtime.GOOS {
+	switch testenv.GOOS {
 	case "plan9":
-		t.Skipf("skipping on %s, unimplemented", runtime.GOOS)
+		t.Skipf("skipping on %s, unimplemented", testenv.GOOS)
 	case "aix":
-		t.Skipf("skipping on %s, issue 45170", runtime.GOOS)
+		t.Skipf("skipping on %s, issue 45170", testenv.GOOS)
 	case "ios", "dragonfly", "netbsd", "illumos", "solaris":
-		t.Skipf("skipping on %s, issue 13841", runtime.GOOS)
+		t.Skipf("skipping on %s, issue 13841", testenv.GOOS)
 	case "openbsd":
-		if runtime.GOARCH == "arm" || runtime.GOARCH == "arm64" {
-			t.Skipf("skipping on %s/%s, issue 13841", runtime.GOOS, runtime.GOARCH)
+		if testenv.GOARCH == "arm" || testenv.GOARCH == "arm64" {
+			t.Skipf("skipping on %s/%s, issue 13841", testenv.GOOS, testenv.GOARCH)
 		}
 	}
 }
 
 func mustHaveDisasm(t *testing.T) {
-	switch runtime.GOARCH {
+	switch testenv.GOARCH {
 	case "loong64":
-		t.Skipf("skipping on %s.", runtime.GOARCH)
+		t.Skipf("skipping on %s.", testenv.GOARCH)
 	case "mips", "mipsle", "mips64", "mips64le":
-		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
+		t.Skipf("skipping on %s, issue 12559", testenv.GOARCH)
 	case "riscv64":
-		t.Skipf("skipping on %s, issue 36738", runtime.GOARCH)
+		t.Skipf("skipping on %s, issue 36738", testenv.GOARCH)
 	case "s390x":
-		t.Skipf("skipping on %s, issue 15255", runtime.GOARCH)
+		t.Skipf("skipping on %s, issue 15255", testenv.GOARCH)
 	}
 
 	// pprof can only disassemble PIE on some platforms.
 	// Skip the ones it can't handle yet.
-	if runtime.GOOS == "android" && runtime.GOARCH == "arm" {
-		t.Skipf("skipping on %s/%s, issue 46639", runtime.GOOS, runtime.GOARCH)
+	if testenv.GOOS == "android" && testenv.GOARCH == "arm" {
+		t.Skipf("skipping on %s/%s, issue 46639", testenv.GOOS, testenv.GOARCH)
 	}
 }
 

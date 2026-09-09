@@ -1823,6 +1823,7 @@ func TestMultipleCertificates(t *testing.T) {
 }
 
 func TestAESCipherReordering(t *testing.T) {
+	t.Serial()  // hasAESGCMHardwareSupport is one variable in this package.
 	skipFIPS(t) // No CHACHA20_POLY1305 for FIPS.
 
 	currentAESSupport := hasAESGCMHardwareSupport
@@ -1968,6 +1969,7 @@ func TestAESCipherReordering(t *testing.T) {
 }
 
 func TestAESCipherReorderingTLS13(t *testing.T) {
+	t.Serial()  // hasAESGCMHardwareSupport is one variable in this package.
 	skipFIPS(t) // No CHACHA20_POLY1305 for FIPS.
 
 	currentAESSupport := hasAESGCMHardwareSupport
