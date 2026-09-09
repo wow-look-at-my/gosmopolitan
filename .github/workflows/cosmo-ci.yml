@@ -16,7 +16,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         build-os: [ubuntu-latest, macos-latest, windows-latest]
 
