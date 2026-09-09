@@ -14,13 +14,12 @@ import "internal/goarch"
 //
 // A variable here rather than a constant. One APE boots on Linux, macOS
 // and Windows, so the answer is the HOST, which the entry stub records
-// before any Go code runs. Everything that switches on GOOS to match
-// platform semantics - os.Root's trailing-slash rules, path handling,
-// os/exec - then gets the kernel it is actually talking to.
+// before any Go code runs. Everything that switches on GOOS - os.Root,
+// path handling, os/exec - then gets the kernel it is talking to.
 //
 // setGOOS runs in osinit, ahead of every package init, so no Go code can
-// observe the placeholder. "readonly" refuses every assignment from another
-// package at compile time; only setGOOS writes it.
+// observe the placeholder. "readonly" makes it a compile error for any
+// other package to assign it; only setGOOS writes it.
 readonly var GOOS string = "cosmo"
 
 func setGOOS() {
