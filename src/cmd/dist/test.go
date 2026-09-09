@@ -471,7 +471,8 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 		run = append(run, "-skip="+opts.skip)
 	}
 	if opts.vet != "" {
-		run = append(run, "-vet="+opts.vet)
+		// A build flag, so a compile-only test (go test -c) vets with it too.
+		build = append(build, "-vet="+opts.vet)
 	}
 	if t.json {
 		run = append(run, "-json")
