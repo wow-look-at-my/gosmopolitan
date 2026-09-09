@@ -49,9 +49,9 @@ func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, par
 // and its type is elided. The check runs as that package, under the
 // parameter's type.
 func (check *Checker) defaultArg(x *operand, arg ast.Expr, par *Var) {
-	pkg := check.pkg
-	check.pkg = par.pkg
-	defer func() { check.pkg = pkg }()
+	pkg, filling := check.pkg, check.fillingDefault
+	check.pkg, check.fillingDefault = par.pkg, true
+	defer func() { check.pkg, check.fillingDefault = pkg, filling }()
 	check.rawExpr(nil, x, arg, par.typ, false)
 	check.exclude(x, 1<<novalue|1<<builtin|1<<typexpr)
 	check.singleValue(x)
@@ -859,6 +859,11 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 				x.typ_ = exp.typ
 			case *Var:
 				x.mode_ = variable
+				// A readonly var is a value in every package but its own; a
+				// qualified name is never in its own.
+				if exp.readonly {
+					x.mode_ = value
+				}
 				x.typ_ = exp.typ
 				if pkg.cgo && strings.HasPrefix(exp.name, "_Cvar_") {
 					x.typ_ = x.typ().(*Pointer).base

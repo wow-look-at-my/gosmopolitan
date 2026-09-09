@@ -323,7 +323,7 @@ type (
 		init      []ast.Expr
 		inherited bool
 	}
-	varDecl  struct {
+	varDecl struct {
 		spec     *ast.ValueSpec
 		readonly bool // declared "readonly var"
 	}

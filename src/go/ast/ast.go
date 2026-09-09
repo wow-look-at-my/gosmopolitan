@@ -1018,7 +1018,7 @@ type (
 
 // Pos and End implementations for declaration nodes.
 
-func (d *BadDecl) Pos() token.Pos  { return d.From }
+func (d *BadDecl) Pos() token.Pos { return d.From }
 func (d *GenDecl) Pos() token.Pos {
 	if d.Readonly.IsValid() {
 		return d.Readonly
