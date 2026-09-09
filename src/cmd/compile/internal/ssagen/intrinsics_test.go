@@ -1416,6 +1416,7 @@ var wantIntrinsics = map[testIntrinsicKey]struct{}{
 }
 
 func TestIntrinsics(t *testing.T) {
+	t.Serial()
 	cfg := &intrinsicBuildConfig{
 		goppc64:   10,
 		goriscv64: 23,
@@ -1460,6 +1461,7 @@ func TestIntrinsics(t *testing.T) {
 }
 
 func TestIntrinsicBuilders(t *testing.T) {
+	t.Serial()
 	cfg := &intrinsicBuildConfig{}
 	initIntrinsics(cfg)
 
