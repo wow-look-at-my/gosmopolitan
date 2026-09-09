@@ -90,6 +90,7 @@ func testOperandParser(t *testing.T, parser *Parser, tests []operandTest) {
 }
 
 func TestAMD64OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("amd64")
 	testOperandParser(t, parser, amd64OperandTests)
 	testBadOperandParser(t, parser, amd64BadOperandTests)
@@ -99,45 +100,54 @@ func TestAMD64OperandParser(t *testing.T) {
 }
 
 func Test386OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("386")
 	testOperandParser(t, parser, x86OperandTests)
 }
 
 func TestARMOperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("arm")
 	testOperandParser(t, parser, armOperandTests)
 }
 func TestARM64OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("arm64")
 	testOperandParser(t, parser, arm64OperandTests)
 }
 
 func TestPPC64OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("ppc64")
 	testOperandParser(t, parser, ppc64OperandTests)
 }
 
 func TestMIPSOperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("mips")
 	testOperandParser(t, parser, mipsOperandTests)
 }
 
 func TestMIPS64OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("mips64")
 	testOperandParser(t, parser, mips64OperandTests)
 }
 
 func TestLOONG64OperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("loong64")
 	testOperandParser(t, parser, loong64OperandTests)
 }
 
 func TestS390XOperandParser(t *testing.T) {
+	t.Serial()
 	parser := newParser("s390x")
 	testOperandParser(t, parser, s390xOperandTests)
 }
 
 func TestFuncAddress(t *testing.T) {
+	t.Serial()
 	type subtest struct {
 		arch  string
 		tests []operandTest
