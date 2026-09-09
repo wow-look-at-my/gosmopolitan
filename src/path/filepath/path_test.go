@@ -484,6 +484,7 @@ var winjointests = []JoinTest{
 }
 
 func TestJoin(t *testing.T) {
+	t.Serial()
 	if runtime.GOOS == "windows" {
 		jointests = append(jointests, winjointests...)
 	} else {

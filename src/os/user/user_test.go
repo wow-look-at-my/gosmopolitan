@@ -24,6 +24,7 @@ func checkUser(t *testing.T) {
 }
 
 func TestCurrent(t *testing.T) {
+	t.Serial()
 	old := userBuffer
 	defer func() {
 		userBuffer = old
@@ -119,6 +120,7 @@ func checkGroup(t *testing.T) {
 }
 
 func TestLookupGroup(t *testing.T) {
+	t.Serial()
 	old := groupBuffer
 	defer func() {
 		groupBuffer = old

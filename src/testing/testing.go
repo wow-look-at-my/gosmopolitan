@@ -458,7 +458,7 @@ func Init() {
 	artifacts = flag.Bool("test.artifacts", false, "store test artifacts in test.,outputdir")
 	// Report as tests are run; default is silent for success.
 	flag.Var(&chatty, "test.v", "verbose: print additional output")
-	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times")
+	count = flag.Uint("test.count", 1, "run tests and benchmarks `n` times, where 0 runs none and any other value runs them once")
 	coverProfile = flag.String("test.coverprofile", "", "write a coverage profile to `file`")
 	gocoverdir = flag.String("test.gocoverdir", "", "write coverage intermediate files to this directory")
 	matchList = flag.String("test.list", "", "list tests, examples, and benchmarks matching `regexp` then exit")
@@ -706,7 +706,13 @@ type common struct {
 	finished    bool                 // Test function has completed.
 	inFuzzFn    bool                 // Whether the fuzz target, if this is one, is running.
 	isSynctest  bool
-	barrierHeld int8 // The serialBarrier hold this test owns: barrierNone, barrierShared or barrierExclusive.
+	// barrierHeld is the serialBarrier hold this test owns: barrierNone,
+	// barrierShared or barrierExclusive. It is atomic because a test reads its
+	// ANCESTORS' holds, on its own goroutine, while each of those ancestors is
+	// still running and may drop its own. A starting subtest walks the parent
+	// chain in barrierHolder at the same moment the parent releases in
+	// yieldBarrier, and a stale read there decides parallelism wrongly.
+	barrierHeld atomic.Int32
 
 	chatty         *chattyPrinter // A copy of chattyPrinter, if the chatty flag is set.
 	bench          bool           // Whether the current test is a benchmark.
@@ -1911,7 +1917,7 @@ func pcToName(pc uintptr) string {
 // parallel subtests holds nothing, because those subtests wait for a -parallel
 // slot, and a test that holds the barrier while it waits for a slot deadlocks
 // against a Serial caller that holds a slot while it waits for the barrier.
-var serialBarrier sync.RWMutex
+var serialBarrier = newSerialGate()
 
 // serialExclusive is set while a test holds serialBarrier exclusively. It is
 // how a process-wide measurement (AllocsPerRun) knows no other test runs.
@@ -1919,7 +1925,7 @@ var serialExclusive atomic.Bool
 
 // Barrier hold states for common.barrierHeld.
 const (
-	barrierNone int8 = iota
+	barrierNone int32 = iota
 	barrierShared
 	barrierExclusive
 )
@@ -1929,7 +1935,7 @@ const (
 // hold nothing of their own: an ancestor's exclusive hold covers them.
 func (c *common) barrierHolder() *common {
 	for ; c != nil; c = c.parent {
-		if c.barrierHeld != barrierNone {
+		if c.barrierHeld.Load() != barrierNone {
 			return c
 		}
 	}
@@ -1951,14 +1957,14 @@ func (t *T) Serial() {
 		// The root test: nothing else runs to be serialized against.
 		return
 	}
-	switch c.barrierHeld {
+	switch c.barrierHeld.Load() {
 	case barrierExclusive:
 		return
 	case barrierShared:
-		serialBarrier.RUnlock()
+		serialBarrier.release()
 	}
-	serialBarrier.Lock()
-	c.barrierHeld = barrierExclusive
+	serialBarrier.acquireExclusive()
+	c.barrierHeld.Store(barrierExclusive)
 	serialExclusive.Store(true)
 }
 
@@ -1997,12 +2003,38 @@ const forkTargetEnv = "GO_TEST_FORK_TARGET"
 // The child's output becomes this test's output and its exit status decides
 // whether this test passes. Fork reports a failure it cannot attribute - a
 // child that could not be started, or died on a signal - against this test.
+//
+// A host that starts no child process - js, wasip1, ios - takes the barrier
+// instead, which buys the same isolation by stopping every other test. There
+// is one process there, so no other test can reach this one's state either
+// way. [AllocsPerRun] is the exception: it needs the process itself, and fails
+// on such a host rather than measuring the wrong thing.
+//
+// A call inside a fork child never starts a second one. The child is alone in
+// its process, so it has what a fork would buy.
 func (t *T) Fork() {
-	if target := os.Getenv(forkTargetEnv); target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+	if !canFork() {
+		t.Serial()
+		return
+	}
+	if target, forked := os.LookupEnv(forkTargetEnv); forked {
 		// Already the dedicated child: run the body right here. A test the
 		// target runs UNDER stays here too, or the child forks its own parent
 		// and never reaches the target.
-		return
+		if target == t.Name() || strings.HasPrefix(target, t.Name()+"/") {
+			return
+		}
+		// A test BELOW the target forks normally: it gets its own child, which
+		// is what a subtest asks Fork for.
+		if !strings.HasPrefix(t.Name(), target+"/") {
+			// Anything else is a test the child was never selected to run, so
+			// forking it starts a peer rather than a descendant and the two
+			// spawn each other. The windows leg reached "cannot allocate
+			// memory" that way, through archive/tar's two forking tests. The
+			// barrier gives this one what a child would, without the process.
+			t.Serial()
+			return
+		}
 	}
 	t.Helper()
 	t.forkAndTakeTheResult()
@@ -2022,18 +2054,18 @@ func (t *T) forkAndTakeTheResult() {
 	// it waits. Keeping the hold deadlocks the run: a Serial test wants the
 	// barrier exclusively, and Go queues later readers behind that writer, so
 	// every test still to start blocks on a test that is only waiting.
-	held := t.barrierHeld
+	held := t.barrierHeld.Load()
 	t.releaseBarrier()
 
 	output, err := t.runForked()
 
 	switch held {
 	case barrierShared:
-		serialBarrier.RLock()
-		t.barrierHeld = barrierShared
+		serialBarrier.resume()
+		t.barrierHeld.Store(barrierShared)
 	case barrierExclusive:
-		serialBarrier.Lock()
-		t.barrierHeld = barrierExclusive
+		serialBarrier.acquireExclusive()
+		t.barrierHeld.Store(barrierExclusive)
 		serialExclusive.Store(true)
 	}
 
@@ -2086,7 +2118,7 @@ func (t *T) runForked() ([]byte, error) {
 		return nil, err
 	}
 	proc, err := os.StartProcess(exe, args, &os.ProcAttr{
-		Env:   forkEnv(os.Environ(), t.Name()),
+		Env:   forkEnv(startEnv, t.Name()),
 		Files: []*os.File{nil, pw, pw},
 	})
 	// The parent must drop its own write end, or reading the pipe never sees
@@ -2109,6 +2141,16 @@ func (t *T) runForked() ([]byte, error) {
 	}
 	return output, readErr
 }
+
+// startEnv is the environment this test binary was started with. A child
+// gets that, not what the process holds when it forks.
+//
+// The difference is a TestMain that runs the binary as a tool when it sees
+// its own variable, and sets that variable so the subprocesses it starts
+// inherit it. cmd/pack does exactly this. A child started from the live
+// environment reads the variable, runs the tool, and prints a usage
+// message where a test result belongs.
+var startEnv = os.Environ()
 
 // forkEnv returns this run's environment with the fork marker naming the test
 // the child exists to run. It REPLACES any marker already there: a subtest of a
@@ -2220,7 +2262,7 @@ func forkQuoteMeta(s string) string {
 // parent releases its hold before its parallel subtests run.
 func (c *common) inSerialTree() bool {
 	h := c.barrierHolder()
-	return h != nil && h.barrierHeld == barrierExclusive
+	return h != nil && h.barrierHeld.Load() == barrierExclusive
 }
 
 // eligibleForBarrier reports whether this test takes a hold of the serial
@@ -2257,11 +2299,22 @@ func (t *T) implicitlyParallel() bool {
 // caller that already holds one keeps it: only tRunner and Parallel take a
 // hold, and each takes it once.
 func (t *T) acquireBarrier() {
-	if !t.eligibleForBarrier() || t.barrierHeld != barrierNone {
+	t.takeBarrier(serialBarrier.acquire)
+}
+
+// resumeBarrier takes back the hold yieldBarrier dropped. It is NOT
+// acquireBarrier: a test that already ran may hold locks another test wants,
+// so making it queue behind a Serial caller closes a cycle. See serialgate.go.
+func (t *T) resumeBarrier() {
+	t.takeBarrier(serialBarrier.resume)
+}
+
+func (t *T) takeBarrier(take func()) {
+	if !t.eligibleForBarrier() || t.barrierHeld.Load() != barrierNone {
 		return
 	}
-	serialBarrier.RLock()
-	t.barrierHeld = barrierShared
+	take()
+	t.barrierHeld.Store(barrierShared)
 }
 
 // yieldBarrier drops a shared hold for the length of a wait, and reports
@@ -2269,7 +2322,7 @@ func (t *T) acquireBarrier() {
 // Serial test keeps the process for its whole subtree, and the subtests under
 // it hold nothing of their own.
 func (t *T) yieldBarrier() bool {
-	if t.barrierHeld != barrierShared {
+	if t.barrierHeld.Load() != barrierShared {
 		return false
 	}
 	t.releaseBarrier()
@@ -2278,14 +2331,13 @@ func (t *T) yieldBarrier() bool {
 
 // releaseBarrier drops whichever hold the test ended up with.
 func (t *T) releaseBarrier() {
-	held := t.barrierHeld
-	t.barrierHeld = barrierNone
+	held := t.barrierHeld.Swap(barrierNone)
 	switch held {
 	case barrierShared:
-		serialBarrier.RUnlock()
+		serialBarrier.release()
 	case barrierExclusive:
 		serialExclusive.Store(false)
-		serialBarrier.Unlock()
+		serialBarrier.releaseExclusive()
 	}
 }
 
@@ -2298,8 +2350,8 @@ func (t *T) releaseBarrier() {
 // always meant. Inside a serial test Parallel does nothing: the subtests of a
 // serial test run one at a time.
 //
-// When a test is run multiple times due to use of -test.count or -test.cpu,
-// multiple instances of a single test never run in parallel with each other.
+// When a test is run multiple times due to use of -test.cpu, multiple
+// instances of a single test never run in parallel with each other.
 func (t *T) Parallel() {
 	if t.isParallel {
 		return
@@ -2401,11 +2453,7 @@ func (t *T) checkParallel() {
 	// every other test. A child is the cheaper way to buy it, because it leaves
 	// the suite running. A host that cannot start one still has the barrier,
 	// which buys the same isolation by stopping every other test.
-	if canFork() {
-		t.Fork()
-		return
-	}
-	t.Serial()
+	t.Fork()
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to
@@ -2732,7 +2780,7 @@ func (t *T) Run(name string, f func(t *T)) bool {
 	}
 
 	if resume {
-		caller.acquireBarrier()
+		caller.resumeBarrier()
 	}
 
 	if t.chatty != nil && t.chatty.json {
@@ -3171,18 +3219,25 @@ func RunTests(matchString func(pat, str string) (bool, error), tests []InternalT
 	return ok
 }
 
+// runCount reports how many times to run each test, benchmark and fuzz seed.
+// -test.count=0 selects no run at all. Every other value selects exactly one:
+// this toolchain does not repeat a test to see whether it passes again.
+func runCount() uint {
+	if *count == 0 {
+		return 0
+	}
+	return 1
+}
+
 func runTests(modulePath, importPath string, matchString func(pat, str string) (bool, error), tests []InternalTest, deadline time.Time) (ran, ok bool) {
 	ok = true
 	for _, procs := range cpuList {
 		runtime.GOMAXPROCS(procs)
-		for i := uint(0); i < *count; i++ {
+		// runCount, not *count: a positive count runs the tests once here.
+		// Repeating a test is not a repair. A test that passes only sometimes
+		// is broken, and the fix belongs in the test.
+		for i := uint(0); i < runCount(); i++ {
 			if shouldFailFast() {
-				break
-			}
-			if i > 0 && !ran {
-				// There were no tests to run on the first
-				// iteration. This won't change, so no reason
-				// to keep trying.
 				break
 			}
 			ctx, cancelCtx := context.WithCancel(context.Background())

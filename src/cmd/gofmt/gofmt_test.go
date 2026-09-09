@@ -143,6 +143,9 @@ func runTest(t *testing.T, in, out string) {
 //
 // in the processed file within the first 20 lines, if any.
 func TestRewrite(t *testing.T) {
+	// resetFlags and initRewrite below write gofmt's own flag
+	// variables and its parser mode, which the whole process shares.
+	t.Serial()
 	// determine input files
 	match, err := filepath.Glob("testdata/*.input")
 	if err != nil {
@@ -171,6 +174,7 @@ func TestRewrite(t *testing.T) {
 // TestDiff runs gofmt with the -d flag on the input files and checks that the
 // expected exit code is set.
 func TestDiff(t *testing.T) {
+	t.Serial()
 	tests := []struct {
 		in       string
 		exitCode int

@@ -1457,6 +1457,7 @@ func TestRepeatPanics(t *testing.T) {
 var leak *int
 
 func TestIssue68488(t *testing.T) {
+	t.Serial()
 	s := make([]int, 3)
 	clone := Clone(s[1:1])
 	switch unsafe.SliceData(clone) {

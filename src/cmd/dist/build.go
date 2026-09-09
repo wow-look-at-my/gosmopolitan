@@ -60,9 +60,8 @@ var (
 	defaultpkgconfig string
 	defaultldso      string
 
-	rebuildall bool
-	noOpt      bool
-	isRelease  bool
+	noOpt     bool
+	isRelease bool
 
 	vflag int // verbosity
 )
@@ -555,9 +554,6 @@ func setup() {
 	}
 
 	goosGoarch := pathf("%s/pkg/%s_%s", goroot, gohostos, gohostarch)
-	if rebuildall {
-		xremoveall(goosGoarch)
-	}
 	xmkdirall(goosGoarch)
 	xatexit(func() {
 		if files := xreaddir(goosGoarch); len(files) == 0 {
@@ -566,11 +562,7 @@ func setup() {
 	})
 
 	if goos != gohostos || goarch != gohostarch {
-		p := pathf("%s/pkg/%s_%s", goroot, goos, goarch)
-		if rebuildall {
-			xremoveall(p)
-		}
-		xmkdirall(p)
+		xmkdirall(pathf("%s/pkg/%s_%s", goroot, goos, goarch))
 	}
 
 	// Create object directory.
@@ -585,26 +577,28 @@ func setup() {
 	xatexit(func() { xremove(obj) })
 
 	// Create build cache directory.
+	//
+	// It OUTLIVES the build. Deleting it on the way out, which is what
+	// upstream does, means every make.bash starts from an empty cache and
+	// recompiles std and cmd in full -- the second build of an unchanged tree
+	// cost the same as the first, measured. Keeping it is safe here because
+	// the cache is content-addressed and parseToolID gives each tool an ID
+	// derived from its own content, so a compiler that changed cannot read
+	// what an older one wrote.
 	objGobuild := pathf("%s/pkg/obj/go-build", goroot)
-	if rebuildall {
-		xremoveall(objGobuild)
-	}
 	xmkdirall(objGobuild)
-	xatexit(func() { xremoveall(objGobuild) })
 
 	// Create directory for bootstrap versions of standard library .a files.
+	//
+	// These are plain archives with no content addressing, so they are NOT
+	// kept: nothing would notice one that no longer matches its source.
 	objGoBootstrap := pathf("%s/pkg/obj/go-bootstrap", goroot)
-	if rebuildall {
-		xremoveall(objGoBootstrap)
-	}
+	xremoveall(objGoBootstrap)
 	xmkdirall(objGoBootstrap)
 	xatexit(func() { xremoveall(objGoBootstrap) })
 
 	// Create tool directory.
 	// We keep it in pkg/, just like the object directory above.
-	if rebuildall {
-		xremoveall(tooldir)
-	}
 	xmkdirall(tooldir)
 
 	// Remove tool binaries from before the tool/gohostos_gohostarch
@@ -814,7 +808,7 @@ func runInstall(pkg string, ch chan struct{}) {
 
 	// Is the target up-to-date?
 	var gofiles, sfiles []string
-	stale := rebuildall
+	stale := false
 	files = filter(files, func(p string) bool {
 		for _, suf := range depsuffix {
 			if strings.HasSuffix(p, suf) {
@@ -1082,6 +1076,7 @@ func packagefile(pkg string) string {
 var unixOS = map[string]bool{
 	"aix":       true,
 	"android":   true,
+	"cosmo":     true,
 	"darwin":    true,
 	"dragonfly": true,
 	"freebsd":   true,
@@ -1242,23 +1237,24 @@ func clean() {
 		return nil
 	})
 
-	if rebuildall {
-		// Remove object tree.
-		xremoveall(pathf("%s/pkg/obj/%s_%s", goroot, gohostos, gohostarch))
+	// This ran only under -a. "dist clean" means clean, so it is what the
+	// command does now, and nothing else reaches it.
 
-		// Remove installed packages and tools.
-		xremoveall(pathf("%s/pkg/%s_%s", goroot, gohostos, gohostarch))
-		xremoveall(pathf("%s/pkg/%s_%s", goroot, goos, goarch))
-		xremoveall(pathf("%s/pkg/%s_%s_race", goroot, gohostos, gohostarch))
-		xremoveall(pathf("%s/pkg/%s_%s_race", goroot, goos, goarch))
-		xremoveall(tooldir)
+	// Remove object tree.
+	xremoveall(pathf("%s/pkg/obj/%s_%s", goroot, gohostos, gohostarch))
 
-		// Remove cached version info.
-		xremove(pathf("%s/VERSION.cache", goroot))
+	// Remove installed packages and tools.
+	xremoveall(pathf("%s/pkg/%s_%s", goroot, gohostos, gohostarch))
+	xremoveall(pathf("%s/pkg/%s_%s", goroot, goos, goarch))
+	xremoveall(pathf("%s/pkg/%s_%s_race", goroot, gohostos, gohostarch))
+	xremoveall(pathf("%s/pkg/%s_%s_race", goroot, goos, goarch))
+	xremoveall(tooldir)
 
-		// Remove distribution packages.
-		xremoveall(pathf("%s/pkg/distpack", goroot))
-	}
+	// Remove cached version info.
+	xremove(pathf("%s/VERSION.cache", goroot))
+
+	// Remove distribution packages.
+	xremoveall(pathf("%s/pkg/distpack", goroot))
 }
 
 /*
@@ -1434,8 +1430,11 @@ func cmdbootstrap() {
 	timelog("start", "dist bootstrap")
 	defer timelog("end", "dist bootstrap")
 
+	// No -a. It cleaned the tree and forced every phase to recompile what the
+	// build cache already held, which is the whole cost of a second build and
+	// buys nothing here: tool IDs are content-derived, so a compiler that
+	// changed cannot read what an older one wrote.
 	var debug, distpack, force, noBanner, noClean bool
-	flag.BoolVar(&rebuildall, "a", rebuildall, "rebuild all")
 	flag.BoolVar(&debug, "d", debug, "enable debugging of bootstrap process")
 	flag.BoolVar(&distpack, "distpack", distpack, "write distribution files to pkg/distpack")
 	flag.BoolVar(&force, "force", force, "build even if the port is marked as broken")
@@ -1495,10 +1494,6 @@ func cmdbootstrap() {
 			"Please (check what's there and) remove it and try again.\n"+
 			"See https://golang.org/s/go14nopkg\n",
 			pathf("%s/src/pkg", goroot))
-	}
-
-	if rebuildall {
-		clean()
 	}
 
 	setup()
@@ -1593,7 +1588,14 @@ func cmdbootstrap() {
 		xprintf("\n")
 	}
 	xprintf("Building Go toolchain3 using go_bootstrap and Go toolchain2.\n")
-	goInstall(toolenv(), goBootstrap, append([]string{"-a"}, toolchain...)...)
+	// No -a. The paragraph above says the force-install exists because a
+	// RELEASE build reports its version in place of the build ID, so the go
+	// command never sees toolchain1 become toolchain2 and nothing looks
+	// stale. That is upstream. Here parseToolID gives every tool an ID from
+	// its own content, release or not, so toolchain2 IS a new compiler as far
+	// as the go command is concerned and what depends on it rebuilds because
+	// it is genuinely out of date. -a only added the packages that were not.
+	goInstall(toolenv(), goBootstrap, toolchain...)
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
 		copyfile(pathf("%s/compile3", tooldir), pathf("%s/compile", tooldir), writeExec)
@@ -1604,16 +1606,13 @@ func cmdbootstrap() {
 	// Now prime the build cache with the rest of the standard library for
 	// testing, and so that the user can run 'go install std cmd' to quickly
 	// iterate on local changes without waiting for a full rebuild.
-	if _, err := os.Stat(pathf("%s/VERSION", goroot)); err == nil {
-		// If we have a VERSION file, then we use the Go version
-		// instead of build IDs as a cache key, and there is no guarantee
-		// that code hasn't changed since the last time we ran a build
-		// with this exact VERSION file (especially if someone is working
-		// on a release branch). We must not fall back to the shared build cache
-		// in this case. Leave $GOCACHE alone.
-	} else {
-		os.Setenv("GOCACHE", oldgocache)
-	}
+	//
+	// The user's own GOCACHE is safe to return to, VERSION file or not. A key
+	// here names the tool's CONTENT, never the version string: parseToolID
+	// takes the content ID out of the buildID= field that every tool of this
+	// fork prints. A changed compiler therefore cannot hit an entry an older
+	// one wrote, so a repeat make.bash reuses std instead of recompiling it.
+	os.Setenv("GOCACHE", oldgocache)
 
 	if goos == oldgoos && goarch == oldgoarch {
 		// Common case - not setting up for cross-compilation.
@@ -1646,8 +1645,19 @@ func cmdbootstrap() {
 		os.Setenv("CC", compilerEnvLookup("CC", defaultcc, goos, goarch))
 		xprintf("Building packages and commands for target, %s/%s.\n", goos, goarch)
 	}
-	goInstall(nil, goBootstrap, "std")
-	goInstall(toolenv(), goBootstrap, toolsToInstall...)
+	// $GOROOT/bin/go is the only binary this build produces that carries the
+	// shared cache client. go_bootstrap cannot carry it: the tier speaks HTTP,
+	// and runInstall above fails a go_bootstrap that depends on net. So
+	// go_bootstrap installs cmd/go alone, and bin/go installs everything else.
+	// This is the largest compile in make.bash, and under bin/go a cold build
+	// fetches what a warm one already published instead of repeating it.
+	//
+	// The two drivers must agree on every action ID, or bin/go writes entries
+	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
+	// that: go_bootstrap must find nothing stale in what bin/go just installed.
+	goInstall(toolenv(), goBootstrap, "cmd/go")
+	goInstall(nil, gorootBinGo, "std")
+	goInstall(toolenv(), gorootBinGo, toolsToInstall...)
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
 	checkNotStale(toolenv(), goBootstrap, toolsToInstall...)

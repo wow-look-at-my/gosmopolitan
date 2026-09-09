@@ -67,8 +67,6 @@ and test commands:
 		Any files named on the command line are interpreted after
 		changing directories.
 		If used, this flag must be the first one in the command line.
-	-a
-		force rebuilding of packages that are already up-to-date.
 	-n
 		print the commands but do not run them.
 	-p n
@@ -312,7 +310,8 @@ const (
 func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	base.AddBuildFlagsNX(&cmd.Flag)
 	base.AddChdirFlag(&cmd.Flag)
-	cmd.Flag.BoolVar(&cfg.BuildA, "a", false, "")
+	// There is no -a. Forcing a rebuild of everything discards a correct cache
+	// on purpose, and the build ID already rebuilds whatever actually changed.
 	cmd.Flag.IntVar(&cfg.BuildP, "p", cfg.BuildP, "")
 	if mask&OmitVFlag == 0 {
 		cmd.Flag.BoolVar(&cfg.BuildV, "v", false, "")

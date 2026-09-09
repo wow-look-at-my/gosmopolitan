@@ -329,6 +329,7 @@ var resolveTCPAddrTests = []resolveTCPAddrTest{
 
 func TestResolveTCPAddr(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	testHookLookupIP = lookupLocalhost
 
@@ -425,6 +426,8 @@ func TestIPv6LinkLocalUnicastTCP(t *testing.T) {
 }
 
 func TestTCPConcurrentAccept(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	ln, err := Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -778,6 +781,7 @@ func TestDialTCPDefaultKeepAlive(t *testing.T) {
 	defer ln.Close()
 
 	got := time.Duration(-1)
+	t.Serial()
 	testHookSetKeepAlive = func(cfg KeepAliveConfig) { got = cfg.Idle }
 	defer func() { testHookSetKeepAlive = func(KeepAliveConfig) {} }()
 

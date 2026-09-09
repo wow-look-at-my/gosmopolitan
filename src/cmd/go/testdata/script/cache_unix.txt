@@ -2,10 +2,12 @@ env GO111MODULE=off
 
 # Integration test for cache directory calculation (cmd/go/internal/cache).
 
-[GOOS:windows] skip 'windows does not use XDG_CACHE_HOME'
-[GOOS:darwin]  skip 'darwin does not use XDG_CACHE_HOME'
-[GOOS:ios]     skip 'ios does not use XDG_CACHE_HOME'
-[GOOS:plan9]   skip 'plan9 does not use XDG_CACHE_HOME'
+# GOHOSTOS, not GOOS: go env GOCACHE comes from os.UserCacheDir, which
+# picks its layout from the host rather than from the port.
+[GOHOSTOS:windows] skip 'windows does not use XDG_CACHE_HOME'
+[GOHOSTOS:darwin]  skip 'darwin does not use XDG_CACHE_HOME'
+[GOHOSTOS:ios]     skip 'ios does not use XDG_CACHE_HOME'
+[GOHOSTOS:plan9]   skip 'plan9 does not use XDG_CACHE_HOME'
 
 mkdir $WORK/gocache
 mkdir $WORK/xdg

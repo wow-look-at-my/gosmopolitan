@@ -2175,6 +2175,7 @@ func TestACVP(t *testing.T) {
 }
 
 func TestTooFewArgs(t *testing.T) {
+	t.Serial()
 	commands["test"] = command{
 		requiredArgs: 1,
 		handler: func(args [][]byte) ([][]byte, error) {
@@ -2197,6 +2198,7 @@ func TestTooFewArgs(t *testing.T) {
 }
 
 func TestTooManyArgs(t *testing.T) {
+	t.Serial()
 	commands["test"] = command{
 		requiredArgs: 1,
 		handler: func(args [][]byte) ([][]byte, error) {

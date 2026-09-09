@@ -26,8 +26,12 @@ import (
 // result against a golden file.
 
 func testEndToEnd(t *testing.T, goarch, file string) {
+	// asm.go's testOut is one package-level buffer, and the assembler
+	// writes every instruction it prints to it. Two of these at once
+	// read each other's output, or none at all.
+	t.Serial()
 	input := filepath.Join("testdata", file+".s")
-	architecture, ctxt := setArch(goarch)
+	architecture, ctxt := setArch(t, goarch)
 	architecture.Init(ctxt)
 	lexer := lex.NewLexer(input)
 	parser := NewParser(ctxt, architecture, lexer)
@@ -287,7 +291,7 @@ var (
 
 func testErrors(t *testing.T, goarch, file string, flags ...string) {
 	input := filepath.Join("testdata", file+".s")
-	architecture, ctxt := setArch(goarch)
+	architecture, ctxt := setArch(t, goarch)
 	architecture.Init(ctxt)
 	lexer := lex.NewLexer(input)
 	parser := NewParser(ctxt, architecture, lexer)

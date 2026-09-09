@@ -251,6 +251,12 @@ var depsRules = `
 	io, reflect
 	< internal/saferio;
 
+	io, os, path/filepath, strings
+	< internal/ape;
+
+	os, path/filepath, slices, strings
+	< internal/vendorlist;
+
 	# encodings
 	# core ones do not use fmt.
 	io, strconv, slices
@@ -334,7 +340,7 @@ var depsRules = `
 	< index/suffixarray;
 
 	# executable parsing
-	FMT, encoding/binary, compress/zlib, internal/saferio, internal/zstd, sort
+	FMT, encoding/binary, compress/zlib, internal/ape, internal/saferio, internal/zstd, sort
 	< runtime/debug
 	< debug/dwarf
 	< debug/elf, debug/gosym, debug/macho, debug/pe, debug/plan9obj, internal/xcoff
@@ -697,7 +703,7 @@ var depsRules = `
 
 	# Profiling
 	internal/runtime/pprof/label, runtime, context < internal/runtime/pprof;
-	FMT, compress/gzip, encoding/binary, sort, text/tabwriter, internal/runtime/pprof, internal/runtime/pprof/label
+	FMT, compress/gzip, encoding/binary, sort, text/tabwriter, internal/runtime/pprof, internal/runtime/pprof/label, internal/ape
 	< runtime/pprof;
 
 	OS, compress/gzip, internal/lazyregexp

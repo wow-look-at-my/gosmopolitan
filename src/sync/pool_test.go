@@ -61,6 +61,8 @@ func TestPool(t *testing.T) {
 }
 
 func TestPoolNew(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// disable GC so we can control when it happens.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 

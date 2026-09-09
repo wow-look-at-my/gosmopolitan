@@ -878,6 +878,7 @@ func TestLookupContextCancel(t *testing.T) {
 	mustHaveExternalNetwork(t)
 	testenv.SkipFlakyNet(t)
 
+	t.Serial()
 	origTestHookLookupIP := testHookLookupIP
 	defer func() {
 		dnsWaitGroup.Wait()
@@ -1092,6 +1093,7 @@ func TestIPVersion(t *testing.T) {
 // preserve the values from the context that was passed into LookupIPAddr.
 func TestLookupIPAddrPreservesContextValues(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 
 	keyValues := []struct {
@@ -1141,6 +1143,7 @@ func TestLookupIPAddrPreservesContextValues(t *testing.T) {
 // Issue 30521: The lookup group should call the resolver for each network.
 func TestLookupIPAddrConcurrentCallsForNetworks(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 
 	queries := [][]string{
@@ -1325,6 +1328,7 @@ func TestResolverLookupIP(t *testing.T) {
 // A context timeout should still return a DNSError.
 func TestDNSTimeout(t *testing.T) {
 	origTestHookLookupIP := testHookLookupIP
+	t.Serial()
 	defer func() { testHookLookupIP = origTestHookLookupIP }()
 	defer dnsWaitGroup.Wait()
 

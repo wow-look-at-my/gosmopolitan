@@ -6,6 +6,7 @@ package testing
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,6 +81,32 @@ func TestForkRunsTheBodyInAChildProcess(t *T) {
 	if got := os.Getenv(forkTargetEnv); got != t.Name() {
 		t.Fatalf("in the body, %s = %q, want the test's own name %q: the body did not run in a forked child",
 			forkTargetEnv, got, t.Name())
+	}
+}
+
+// TestForkChildSelectsItsTargetByFlag: a child runs one test because
+// forkArgs anchors -test.run to it, NOT because anything reads the fork
+// marker to filter the test list.
+//
+// The distinction is the whole reason this test exists. The marker is an
+// environment variable, so every subprocess a test starts inherits it, and a
+// filter keyed on it silences that subprocess's own -test.run. Selection
+// belongs on the command line, where it reaches exactly the process the
+// caller meant.
+func TestForkChildSelectsItsTargetByFlag(t *T) {
+	args := forkArgs("TestOuter", []string{"-test.v"})
+
+	var run string
+	for _, a := range args {
+		if v, ok := strings.CutPrefix(a, "-test.run="); ok {
+			run = v
+		}
+	}
+	if !strings.Contains(run, "TestOuter") {
+		t.Errorf("forkArgs gave -test.run=%q, want it to name the target", run)
+	}
+	if !slices.Contains(args, "-test.v") {
+		t.Errorf("forkArgs dropped the run's own flags: %q", args)
 	}
 }
 
@@ -305,17 +332,20 @@ func TestForkRunValue(t *T) {
 // that shares it forks. Tests are parallel by default, so this test is such a
 // caller: the measurement below runs only in a child that runs this test alone.
 func TestAllocsPerRunForks(t *T) {
+	// No barrier here, deliberately: sharing the process IS the condition under
+	// test. The sink is a local for the same reason, so the analyzer that asks
+	// for one has nothing to ask about.
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
 		t.Fatal("AllocsPerRun returned in a process this test shares with others; it must fork first")
 	}
 
-	if allocs := AllocsPerRun(100, func() { allocsSink = new(int32) }); allocs != 1 {
+	var sink any
+	if allocs := AllocsPerRun(100, func() { sink = new(int32) }); allocs != 1 {
 		t.Errorf("AllocsPerRun(100, new(int32)) = %v, want 1", allocs)
 	}
+	_ = sink
 }
-
-var allocsSink any
 
 // TestAllocsPerRunUnderSerialDoesNotFork: a serial test already has the process
 // to itself, so the measurement happens right here. A fork would run the rest

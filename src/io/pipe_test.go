@@ -428,6 +428,7 @@ var (
 )
 
 func TestPipeAllocations(t *testing.T) {
+	t.Serial()
 	numAllocs := testing.AllocsPerRun(10, func() {
 		rSink, wSink = Pipe()
 	})

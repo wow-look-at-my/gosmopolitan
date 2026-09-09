@@ -415,7 +415,9 @@ func checkCounters(t *testing.T, telemetryDir string) {
 //
 // disabledOnPlatform indicates whether telemetry is disabled
 // due to bugs in the current platform.
-const disabledOnPlatform = false ||
+// A var, not a const: runtime.GOOS is a variable on cosmo, because one
+// APE runs on several hosts.
+var disabledOnPlatform = false ||
 	// The following platforms could potentially be supported in the future:
 	runtime.GOOS == "openbsd" || // #60614
 	runtime.GOOS == "solaris" || // #60968 #60970

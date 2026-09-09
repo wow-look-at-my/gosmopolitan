@@ -27,6 +27,7 @@ import (
 var testMemStatsCount int
 
 func TestMemStats(t *testing.T) {
+	t.Serial()
 	testMemStatsCount++
 
 	// Make sure there's at least one forced GC.
@@ -599,6 +600,8 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 }
 
 func TestPageCacheLeak(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(1))
 	leaked := PageCachePagesLeaked()
 	if leaked != 0 {
@@ -634,8 +637,11 @@ type acLink struct {
 var arenaCollisionSink []*acLink
 
 func TestArenaCollision(t *testing.T) {
+	t.Serial(
 	// Test that mheap.sysAlloc handles collisions with other
 	// memory mappings.
+	)
+
 	if os.Getenv("TEST_ARENA_COLLISION") != "1" {
 		cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t), "-test.run=^TestArenaCollision$", "-test.v"))
 		cmd.Env = append(cmd.Env, "TEST_ARENA_COLLISION=1")

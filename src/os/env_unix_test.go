@@ -43,6 +43,9 @@ var shellSpecialVarTests = []struct {
 }
 
 func TestExpandEnvShellSpecialVar(t *testing.T) {
+	// Setenv is process-wide, and TestEnvironConsistency reads the whole
+	// environment. Both take the process.
+	t.Serial()
 	for _, tt := range shellSpecialVarTests {
 		Setenv(tt.k, tt.v)
 		defer Unsetenv(tt.k)
