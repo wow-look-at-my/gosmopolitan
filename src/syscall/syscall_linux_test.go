@@ -665,6 +665,7 @@ func TestPrlimitSelf(t *testing.T) {
 }
 
 func TestPrlimitOtherProcess(t *testing.T) {
+	t.Serial()
 	origLimit := syscall.OrigRlimitNofile()
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 
@@ -708,6 +709,7 @@ const magicRlimitValue = 42
 // prlimit to change its NOFILE limit, and have that updated limit be
 // seen by children. See issue #66797.
 func TestPrlimitFileLimit(t *testing.T) {
+	t.Serial()
 	switch os.Getenv("GO_WANT_HELPER_PROCESS") {
 	case "prlimit1":
 		testPrlimitFileLimitHelper1(t)

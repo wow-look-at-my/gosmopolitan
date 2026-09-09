@@ -466,6 +466,7 @@ func TestSetDefault(t *testing.T) {
 
 // Test defaultHandler minimum level without calling slog.SetDefault.
 func TestLogLoggerLevelForDefaultHandler(t *testing.T) {
+	t.Serial()
 	// Revert any changes to the default logger, flags, and level of log and slog.
 	currentLogLoggerLevel := logLoggerLevel.Level()
 	currentLogWriter := log.Writer()
@@ -570,6 +571,7 @@ func TestLoggerNoOps(t *testing.T) {
 }
 
 func TestContext(t *testing.T) {
+	t.Serial()
 	// Verify that the context argument to log output methods is passed to the handler.
 	// Also check the level.
 	h := &captureHandler{}
