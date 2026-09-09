@@ -61,8 +61,12 @@ _testmain.go
 # use alternative ways to exclude files from git.
 # For example, set up .git/info/exclude or use a global .gitignore.
 
-# Claude Code and TLDR artifacts
-.claude/
+# Claude Code and TLDR artifacts. The hooks tree is checked in, because
+# dats/no-wordspam.dats runs the scanner on every push.
+.claude/*
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/no-wordspam.sh
 .tldr/
 .tldrignore
 

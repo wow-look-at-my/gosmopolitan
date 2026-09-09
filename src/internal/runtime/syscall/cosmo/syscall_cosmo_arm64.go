@@ -920,9 +920,9 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 // struct fields are in a different order and the Apple one is shorter. The
 // commands are numbered differently. So are the lock types.
 //
-// This used to refuse the whole family with ENOSYS. A caller that locks a file
-// to make its writes safe reported an I/O error it could not act on: SQLite
-// answers SQLITE_IOERR_LOCK, and a database never opens.
+// Refusing the family with ENOSYS hands a caller that locks a file to make its
+// writes safe an I/O error it cannot act on: SQLite answers SQLITE_IOERR_LOCK,
+// and a database never opens.
 //
 //go:nosplit
 func darwinFcntlFlock(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {

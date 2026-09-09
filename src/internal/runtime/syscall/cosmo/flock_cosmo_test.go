@@ -14,10 +14,9 @@ import (
 
 // A POSIX record lock is the one fcntl family whose argument is a struct, and
 // the two systems disagree about all three parts of it: the field order, the
-// command numbers and the lock types. The emulation used to refuse the family
-// with ENOSYS, so a caller that locks a file to make its writes safe got an
-// I/O error it could not act on. SQLite reports SQLITE_IOERR_LOCK for it, and
-// a database never opens.
+// command numbers and the lock types. Refusing the family with ENOSYS hands a
+// caller that locks a file to make its writes safe an I/O error it cannot act
+// on. SQLite reports SQLITE_IOERR_LOCK for it, and a database never opens.
 //
 // Ground truth is upstream Go's own darwin/arm64 definitions, which are
 // generated from Apple's headers: syscall.Flock_t in ztypes_darwin_arm64.go
