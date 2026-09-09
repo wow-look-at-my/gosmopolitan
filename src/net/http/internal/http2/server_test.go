@@ -1218,6 +1218,7 @@ func (l *filterListener) Accept() (net.Conn, error) {
 }
 
 func TestServer_MaxQueuedControlFrames(t *testing.T) {
+	t.Serial()
 	synctest.Test(t, testServer_MaxQueuedControlFrames)
 }
 func testServer_MaxQueuedControlFrames(t *testing.T) {
