@@ -199,6 +199,7 @@ func TestSetenvForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Setenv takes the barrier")
 	}
+	t.Parallel() // A parallel test shares the process, which is what makes Setenv fork.
 	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
 
 	if serialExclusive.Load() {
@@ -217,6 +218,7 @@ func TestChdirForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Chdir takes the barrier")
 	}
+	t.Parallel() // A parallel test shares the process, which is what makes Chdir fork.
 	before, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -333,8 +335,10 @@ func TestForkRunValue(t *T) {
 // caller: the measurement below runs only in a child that runs this test alone.
 func TestAllocsPerRunForks(t *T) {
 	// No barrier here, deliberately: sharing the process IS the condition under
-	// test. The sink is a local for the same reason, so the analyzer that asks
-	// for one has nothing to ask about.
+	// test. Parallel makes it so when parallelByDefault is off, and is a no-op
+	// when it is on. The sink is a local for the same reason, so the analyzer
+	// that asks for one has nothing to ask about.
+	t.Parallel()
 	if os.Getenv(forkTargetEnv) == "" {
 		AllocsPerRun(1, func() {})
 		t.Fatal("AllocsPerRun returned in a process this test shares with others; it must fork first")

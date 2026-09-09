@@ -2302,8 +2302,14 @@ func (t *T) eligibleForBarrier() bool {
 // before each subtest. A subtest that wants parallelism asks for it with
 // [T.Parallel], as it always could.
 func (t *T) implicitlyParallel() bool {
-	return t.eligibleForBarrier() && t.parent.parent == nil
+	return parallelByDefault && t.eligibleForBarrier() && t.parent.parent == nil
 }
+
+// parallelByDefault decides whether a top-level test starts in parallel
+// without a call to [T.Parallel]. It is off until the suite runs green on every
+// CI leg with it on. Every t.Serial call and the fork machinery stay in place
+// either way.
+const parallelByDefault = false
 
 // acquireBarrier takes the shared hold the test's function body runs under. A
 // caller that already holds one keeps it: only tRunner and Parallel take a
@@ -2459,11 +2465,18 @@ func canFork() bool {
 }
 
 func (t *T) checkParallel() {
-	// Setenv and Chdir change the process, so the test needs isolation from
-	// every other test. A child is the cheaper way to buy it, because it leaves
-	// the suite running. A host that cannot start one still has the barrier,
-	// which buys the same isolation by stopping every other test.
-	t.Fork()
+	// Setenv and Chdir change the process, so a test that runs beside others
+	// needs isolation from every one of them. A child is the cheaper way to
+	// buy it, because it leaves the suite running. A host that cannot start
+	// one still has the barrier, which buys the same isolation by stopping
+	// every other test. A test with no parallel ancestor already has the
+	// process to itself.
+	for c := &t.common; c != nil; c = c.parent {
+		if c.isParallel {
+			t.Fork()
+			return
+		}
+	}
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to

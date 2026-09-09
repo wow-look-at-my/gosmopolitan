@@ -1,6 +1,6 @@
 # Top-level tests are parallel by default
 
-`src/testing` in this fork starts every top-level test as if it had called `t.Parallel()`, which is a no-op there. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
 
 A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 

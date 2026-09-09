@@ -345,7 +345,13 @@ type goTest struct {
 	pkg  string   // A single package to test
 
 	testFlags []string // Additional flags accepted by this test
+
+	vet string // The -vet list for go test; empty keeps go test's default
 }
+
+// upstreamTestVet is the analyzer list upstream's go test runs, which is this
+// fork's default list without testglobals (cmd/go/internal/test defaultVetFlags).
+const upstreamTestVet = "atomic,bools,buildtag,directive,errorsas,ifaceassert,nilfunc,printf,slog,stdversion,stringintconv,tests"
 
 // compileOnly reports whether this test is only for compiling,
 // indicated by runTests being set to '^$' and bench being false.
@@ -463,6 +469,9 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	}
 	if opts.skip != "" {
 		run = append(run, "-skip="+opts.skip)
+	}
+	if opts.vet != "" {
+		run = append(run, "-vet="+opts.vet)
 	}
 	if t.json {
 		run = append(run, "-json")
@@ -750,6 +759,9 @@ func (t *tester) registerTests() {
 				pkg:      "crypto/...",
 				runTests: run,
 				env:      []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+version)},
+				// A snapshot is upstream's frozen module. Nobody can add a
+				// t.Serial to its tests, so it is vetted with upstream's list.
+				vet: upstreamTestVet,
 			})
 		}
 	}
