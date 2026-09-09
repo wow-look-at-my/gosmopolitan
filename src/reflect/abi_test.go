@@ -22,6 +22,10 @@ import (
 type MagicLastTypeNameForTestingRegisterABI struct{}
 
 func TestMethodValueCallABI(t *testing.T) {
+	// SetArgRegs writes reflect's package-level register counts and replaces
+	// the shared layout cache. Another test reads both through Value.Call.
+	t.Serial()
+
 	// Enable register-based reflect.Call and ensure we don't
 	// use potentially incorrect cached versions by clearing
 	// the cache before we start and after we're done.
@@ -154,6 +158,8 @@ func (m *StructWithMethods) ValueRegMethodSpillPtr(s StructFillRegs, i *byte, _ 
 }
 
 func TestReflectCallABI(t *testing.T) {
+	t.Serial() // SetArgRegs writes package-level state; see TestMethodValueCallABI.
+
 	// Enable register-based reflect.Call and ensure we don't
 	// use potentially incorrect cached versions by clearing
 	// the cache before we start and after we're done.
@@ -191,6 +197,8 @@ func TestReflectCallABI(t *testing.T) {
 }
 
 func TestReflectMakeFuncCallABI(t *testing.T) {
+	t.Serial() // SetArgRegs writes package-level state; see TestMethodValueCallABI.
+
 	// Enable register-based reflect.MakeFunc and ensure we don't
 	// use potentially incorrect cached versions by clearing
 	// the cache before we start and after we're done.

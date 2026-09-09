@@ -7105,6 +7105,11 @@ func clobber() {
 }
 
 func TestFuncLayout(t *testing.T) {
+	// The subtests below call SetArgRegs, which writes reflect's package-level
+	// register counts and replaces the shared layout cache. Take the hold here,
+	// so it covers every subtest.
+	t.Serial()
+
 	align := func(x uintptr) uintptr {
 		return (x + goarch.PtrSize - 1) &^ (goarch.PtrSize - 1)
 	}
