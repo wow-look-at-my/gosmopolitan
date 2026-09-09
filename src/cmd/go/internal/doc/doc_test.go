@@ -76,6 +76,7 @@ var isDotSlashTests = []isDotSlashTest{
 }
 
 func TestIsDotSlashPath(t *testing.T) {
+	t.Serial()
 	for _, test := range isDotSlashTests {
 		if result := isDotSlash(test.str); result != test.result {
 			t.Errorf("isDotSlash(%q) = %t; expected %t", test.str, result, test.result)
@@ -1040,6 +1041,7 @@ var tests = []test{
 }
 
 func TestDoc(t *testing.T) {
+	t.Serial()
 	maybeSkip(t)
 	defer log.SetOutput(log.Writer())
 	for _, test := range tests {
@@ -1092,6 +1094,7 @@ func TestDoc(t *testing.T) {
 // This needs to find math/rand.Float64; however crypto/rand, which doesn't
 // have the symbol, usually appears first in the directory listing.
 func TestMultiplePackages(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("scanning file system takes too long")
 	}
@@ -1145,6 +1148,7 @@ func TestMultiplePackages(t *testing.T) {
 }
 
 func TestInternalPackagesArePreferredLast(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("scanning file system takes too long")
 	}
@@ -1191,6 +1195,7 @@ func TestInternalPackagesArePreferredLast(t *testing.T) {
 // which again needs to find math/rand and not give up after crypto/rand,
 // which has no such function.
 func TestTwoArgLookup(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("scanning file system takes too long")
 	}
@@ -1234,6 +1239,7 @@ func TestTwoArgLookup(t *testing.T) {
 // Our test case is in effect "cd src/text; doc ./template". This should get
 // text/template but before Issue 23383 was fixed would give html/template.
 func TestDotSlashLookup(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("scanning file system takes too long")
 	}
@@ -1257,6 +1263,7 @@ func TestDotSlashLookup(t *testing.T) {
 // Test that we don't print spurious package clauses
 // when there should be no output at all. Issue 37969.
 func TestNoPackageClauseWhenNoMatch(t *testing.T) {
+	t.Serial()
 	maybeSkip(t)
 	var b strings.Builder
 	var flagSet flag.FlagSet
@@ -1289,6 +1296,7 @@ var trimTests = []trimTest{
 }
 
 func TestTrim(t *testing.T) {
+	t.Serial()
 	for _, test := range trimTests {
 		result, ok := trim(test.path, test.prefix)
 		if ok != test.ok {

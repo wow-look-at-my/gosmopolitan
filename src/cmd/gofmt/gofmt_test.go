@@ -143,6 +143,7 @@ func runTest(t *testing.T, in, out string) {
 //
 // in the processed file within the first 20 lines, if any.
 func TestRewrite(t *testing.T) {
+	t.Serial()
 	// determine input files
 	match, err := filepath.Glob("testdata/*.input")
 	if err != nil {
@@ -171,6 +172,7 @@ func TestRewrite(t *testing.T) {
 // TestDiff runs gofmt with the -d flag on the input files and checks that the
 // expected exit code is set.
 func TestDiff(t *testing.T) {
+	t.Serial()
 	tests := []struct {
 		in       string
 		exitCode int
@@ -210,6 +212,7 @@ func TestDiff(t *testing.T) {
 
 // Test case for issue 3961.
 func TestCRLF(t *testing.T) {
+	t.Serial()
 	const input = "testdata/crlf.input"   // must contain CR/LF's
 	const golden = "testdata/crlf.golden" // must not contain any CR's
 
@@ -231,6 +234,7 @@ func TestCRLF(t *testing.T) {
 }
 
 func TestBackupFile(t *testing.T) {
+	t.Serial()
 	dir, err := os.MkdirTemp("", "gofmt_test")
 	if err != nil {
 		t.Fatal(err)
