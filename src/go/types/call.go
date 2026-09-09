@@ -46,6 +46,17 @@ func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, par
 	return args
 }
 
+// recordParamDefaults reports the arguments fillParamDefaults supplied for
+// one call. It lives here rather than in recording.go, which is generated
+// from types2, where a call keeps no such record.
+func (check *Checker) recordParamDefaults(call *ast.CallExpr, args []ast.Expr) {
+	assert(call != nil)
+	assert(len(args) > 0)
+	if m := check.ParamDefaults; m != nil {
+		m[call] = args
+	}
+}
+
 // defaultLiteral spells a constant as the source a caller would have written.
 // It answers nil for a kind with no such spelling, which paramDefault has
 // already refused at the declaration.

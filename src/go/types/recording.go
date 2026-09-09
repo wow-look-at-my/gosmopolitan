@@ -178,14 +178,6 @@ func (check *Checker) recordImplicit(node ast.Node, obj Object) {
 	}
 }
 
-func (check *Checker) recordParamDefaults(call *ast.CallExpr, args []ast.Expr) {
-	assert(call != nil)
-	assert(len(args) > 0)
-	if m := check.ParamDefaults; m != nil {
-		m[call] = args
-	}
-}
-
 func (check *Checker) recordSelection(x *ast.SelectorExpr, kind SelectionKind, recv Type, obj Object, index []int, indirect bool) {
 	assert(obj != nil && (recv == nil || len(index) > 0))
 	check.recordUse(x.Sel, obj)
