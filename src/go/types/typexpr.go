@@ -115,6 +115,11 @@ func (check *Checker) ident(x *operand, e *ast.Ident, wantType bool) {
 			return
 		}
 		x.mode_ = variable
+		// A readonly var is a value everywhere but its own package, so no
+		// assignment, address, or method with a pointer receiver reaches it.
+		if obj.readonly && obj.pkg != check.pkg {
+			x.mode_ = value
+		}
 		if check.inConstExpr {
 			if v, ok := dynamicConstVal(obj); ok {
 				x.mode_ = constant_

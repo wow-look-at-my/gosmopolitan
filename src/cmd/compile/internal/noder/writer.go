@@ -731,8 +731,23 @@ func (w *writer) param(param *types2.Var) {
 		deflt := param.Default()
 		w.Bool(deflt != nil)
 		if deflt != nil {
-			w.Value(deflt)
+			w.paramDefault(deflt)
 		}
+	}
+}
+
+// paramDefault writes one default: a bool that says whether it is a struct
+// literal, then the constant, or the fields as name and default pairs.
+func (w *writer) paramDefault(d *types2.ParamDefault) {
+	w.Bool(d.Const == nil)
+	if d.Const != nil {
+		w.Value(d.Const)
+		return
+	}
+	w.Len(len(d.Fields))
+	for _, f := range d.Fields {
+		w.String(f.Name)
+		w.paramDefault(f.Value)
 	}
 }
 
@@ -956,6 +971,9 @@ func (w *writer) doObj(wext *writer, obj types2.Object) pkgbits.CodeObj {
 	case *types2.Var:
 		w.pos(obj)
 		w.typ(obj.Type())
+		if w.Version().Has(pkgbits.ReadonlyVars) {
+			w.Bool(obj.Readonly())
+		}
 		wext.varExt(obj)
 		return pkgbits.ObjVar
 	}

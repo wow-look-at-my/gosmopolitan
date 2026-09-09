@@ -57,3 +57,40 @@ func _() (r int = 1 /* ERROR "only a function parameter takes a default" */) { r
 func _() {
 	_ = required() /* ERROR "not enough arguments" */
 }
+
+// A struct literal of constants is a default too. Its fields are keyed, and
+// each value follows the rules a plain default does.
+type budget struct {
+	ints, floats int
+	wide         bool
+	inner        limits
+}
+
+type limits struct{ n int }
+
+func withBudget(b budget = budget{ints: 9, floats: 15}) int { return b.ints }
+
+func nested(b budget = budget{inner: limits{n: 1}}) int { return b.inner.n }
+
+func empty(b budget = budget{}) int { return b.ints }
+
+func _() {
+	_ = withBudget()
+	_ = withBudget(budget{})
+	_ = nested()
+	_ = empty()
+}
+
+func _(b budget = budget{9 /* ERROR "parameter default struct literal must key every field" */, 15, false, limits{}}) {}
+
+func _(b budget = budget{ints: global /* ERROR "parameter default must be a constant" */}) {}
+
+type alias = budget
+
+func _(b budget = alias{ints: 1}) {}
+
+type other struct{ ints, floats int }
+
+func _(b budget = other /* ERROR "cannot use" */ {ints: 1}) {}
+
+func _(p *budget = &budget /* ERROR "parameter default must be a constant or a struct literal" */ {}) {}

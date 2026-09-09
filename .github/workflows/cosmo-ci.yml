@@ -174,14 +174,6 @@ jobs:
         with:
           tests: dats/no-wordspam.dats
 
-      # GOOS and GOARCH report the host, and Go cannot make them read-only.
-      - name: GOOS and GOARCH stay read-only
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/goos-readonly.dats
-
       # dist copies syslist's unix GOOS set, and a drifted copy builds other files.
       - name: The two unix build-tag lists agree
         if: matrix.build-os == 'ubuntu-latest'

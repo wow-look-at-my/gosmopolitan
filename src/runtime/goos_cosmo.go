@@ -19,8 +19,9 @@ import "internal/goarch"
 // os/exec - then gets the kernel it is actually talking to.
 //
 // setGOOS runs in osinit, ahead of every package init, so no Go code can
-// observe the placeholder.
-var GOOS string = "cosmo"
+// observe the placeholder. "readonly" refuses every assignment from another
+// package at compile time; only setGOOS writes it.
+readonly var GOOS string = "cosmo"
 
 func setGOOS() {
 	if s := CosmoHostOS(); s != "unknown" {
@@ -36,7 +37,7 @@ func setGOOS() {
 // `const x = runtime.GOARCH == "amd64"` still compiles - the type checker
 // folds the build value where a constant is required. See
 // cmd/compile/internal/types2/dynconst.go.
-var GOARCH string = goarch.GOARCH
+readonly var GOARCH string = goarch.GOARCH
 
 func setGOARCH() {
 	if s := cosmoHostArch(); s != "" {

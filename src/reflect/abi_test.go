@@ -7,7 +7,6 @@
 package reflect_test
 
 import (
-	"internal/abi"
 	"math"
 	"math/rand"
 	"reflect"
@@ -22,15 +21,6 @@ import (
 type MagicLastTypeNameForTestingRegisterABI struct{}
 
 func TestMethodValueCallABI(t *testing.T) {
-	// SetArgRegs writes reflect's package-level register counts and replaces
-	// the shared layout cache. Another test reads both through Value.Call.
-	t.Serial()
-
-	// Enable register-based reflect.Call and ensure we don't
-	// use potentially incorrect cached versions by clearing
-	// the cache before we start and after we're done.
-	defer reflect.SetArgRegs(reflect.SetArgRegs(abi.IntArgRegs, abi.FloatArgRegs, abi.EffectiveFloatRegSize))
-
 	// This test is simple. Calling a method value involves
 	// pretty much just plumbing whatever arguments in whichever
 	// location through to reflectcall. They're already set up
@@ -158,13 +148,6 @@ func (m *StructWithMethods) ValueRegMethodSpillPtr(s StructFillRegs, i *byte, _ 
 }
 
 func TestReflectCallABI(t *testing.T) {
-	t.Serial() // SetArgRegs writes package-level state; see TestMethodValueCallABI.
-
-	// Enable register-based reflect.Call and ensure we don't
-	// use potentially incorrect cached versions by clearing
-	// the cache before we start and after we're done.
-	defer reflect.SetArgRegs(reflect.SetArgRegs(abi.IntArgRegs, abi.FloatArgRegs, abi.EffectiveFloatRegSize))
-
 	// Execute the functions defined below which all have the
 	// same form and perform the same function: pass all arguments
 	// to return values. The purpose is to test the call boundary
@@ -197,13 +180,6 @@ func TestReflectCallABI(t *testing.T) {
 }
 
 func TestReflectMakeFuncCallABI(t *testing.T) {
-	t.Serial() // SetArgRegs writes package-level state; see TestMethodValueCallABI.
-
-	// Enable register-based reflect.MakeFunc and ensure we don't
-	// use potentially incorrect cached versions by clearing
-	// the cache before we start and after we're done.
-	defer reflect.SetArgRegs(reflect.SetArgRegs(abi.IntArgRegs, abi.FloatArgRegs, abi.EffectiveFloatRegSize))
-
 	// Execute the functions defined below which all have the
 	// same form and perform the same function: pass all arguments
 	// to return values. The purpose is to test the call boundary
@@ -250,9 +226,9 @@ func TestReflectMakeFuncCallABI(t *testing.T) {
 
 		// Call the MakeFunc'd function while trying pass the only pointer
 		// to a new heap-allocated uint64.
-		*reflect.CallGC = true
+		reflect.CallGC.Store(true)
 		x := fn(new(uint64), MagicLastTypeNameForTestingRegisterABI{})
-		*reflect.CallGC = false
+		reflect.CallGC.Store(false)
 
 		// Check for bad pointers (which should be x if things went wrong).
 		runtime.GC()

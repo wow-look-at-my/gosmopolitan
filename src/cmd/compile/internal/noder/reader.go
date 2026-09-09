@@ -635,9 +635,22 @@ func (r *reader) param() *types.Field {
 	// the backend sees is already full and the default is spent. Read it to
 	// stay in step with the writer, and drop it.
 	if r.Version().Has(pkgbits.ParamDefaults) && r.Bool() {
-		r.Value()
+		r.skipParamDefault()
 	}
 	return field
+}
+
+// skipParamDefault reads past one default in the form the writer's
+// paramDefault wrote it.
+func (r *reader) skipParamDefault() {
+	if r.Version().Has(pkgbits.StructParamDefaults) && r.Bool() {
+		for range r.Len() {
+			r.String()
+			r.skipParamDefault()
+		}
+		return
+	}
+	r.Value()
 }
 
 // @@@ Objects
@@ -883,6 +896,11 @@ func (pr *pkgReader) objIdxMayFail(idx index, implicits, explicits []*types.Type
 	case pkgbits.ObjVar:
 		name := do(ir.ONAME, false)
 		setType(name, r.typ())
+		// types2 refused every assignment from another package, so the
+		// readonly bit is spent by the time the IR is built.
+		if r.Version().Has(pkgbits.ReadonlyVars) {
+			r.Bool()
+		}
 		rext.varExt(name)
 		return name, nil
 	}

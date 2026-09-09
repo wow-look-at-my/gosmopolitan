@@ -389,6 +389,7 @@ func (check *Checker) collectObjects() {
 				values := syntax.UnpackListExpr(s.Values)
 				for i, name := range s.NameList {
 					obj := newVar(PackageVar, name.Pos(), pkg, name.Value, nil)
+					obj.readonly = s.Readonly
 					lhs[i] = obj
 
 					d := d1

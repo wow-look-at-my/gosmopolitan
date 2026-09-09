@@ -27,22 +27,44 @@ func (check *Checker) fillParamDefaults(call *syntax.CallExpr, args []*operand, 
 	// The call site is where the value is spelled, so that is where it points.
 	pos := call.Pos()
 	for i := nargs; i < npars; i++ {
-		arg := defaultLiteral(params.vars[i].deflt, pos)
-		if arg == nil {
-			return nil
-		}
+		par := params.vars[i]
+		arg := defaultLiteral(par.deflt, pos)
 		call.ArgList = append(call.ArgList, arg)
 		x := new(operand)
-		check.expr(nil, x, arg)
+		check.defaultArg(x, arg, par)
 		args = append(args, x)
 	}
 	return args
 }
 
-// defaultLiteral spells a constant as the source a caller would have written.
-// It answers nil for a kind with no such spelling, which paramDefault has
-// already refused at the declaration.
-func defaultLiteral(v constant.Value, pos syntax.Pos) syntax.Expr {
+// defaultArg type-checks a filled argument. A default is written in the
+// declaring package, so a struct literal in it may name unexported fields,
+// and its type is elided. The check runs as that package, under the
+// parameter's type.
+func (check *Checker) defaultArg(x *operand, arg syntax.Expr, par *Var) {
+	pkg := check.pkg
+	check.pkg = par.pkg
+	defer func() { check.pkg = pkg }()
+	check.rawExpr(nil, x, arg, par.typ, false)
+	check.exclude(x, 1<<novalue|1<<builtin|1<<typexpr)
+	check.singleValue(x)
+}
+
+// defaultLiteral spells a default as the source a caller would have written.
+// A struct literal is spelled without its type; the call fills it under the
+// parameter's type. paramDefault refused every value with no spelling.
+func defaultLiteral(d *ParamDefault, pos syntax.Pos) syntax.Expr {
+	if d.Const == nil {
+		lit := &syntax.CompositeLit{NKeys: len(d.Fields)}
+		lit.SetPos(pos)
+		for _, f := range d.Fields {
+			kv := &syntax.KeyValueExpr{Key: syntax.NewName(pos, f.Name), Value: defaultLiteral(f.Value, pos)}
+			kv.SetPos(pos)
+			lit.ElemList = append(lit.ElemList, kv)
+		}
+		return lit
+	}
+	v := d.Const
 	switch v.Kind() {
 	case constant.Bool:
 		if constant.BoolVal(v) {

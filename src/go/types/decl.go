@@ -323,7 +323,10 @@ type (
 		init      []ast.Expr
 		inherited bool
 	}
-	varDecl  struct{ spec *ast.ValueSpec }
+	varDecl  struct {
+		spec     *ast.ValueSpec
+		readonly bool // declared "readonly var"
+	}
 	typeDecl struct{ spec *ast.TypeSpec }
 	funcDecl struct{ decl *ast.FuncDecl }
 )
@@ -367,7 +370,7 @@ func (check *Checker) walkDecl(d ast.Decl, f func(decl)) {
 					f(constDecl{spec: s, iota: iota, typ: last.Type, init: last.Values, inherited: inherited})
 				case token.VAR:
 					check.arityMatch(s, nil)
-					f(varDecl{s})
+					f(varDecl{s, d.Readonly.IsValid()})
 				default:
 					check.errorf(s, InvalidSyntaxTree, "invalid token %s", d.Tok)
 				}
