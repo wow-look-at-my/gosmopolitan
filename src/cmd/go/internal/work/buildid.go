@@ -174,6 +174,16 @@ func (b *Builder) toolID(name string) string {
 		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
+		// A binary that stands in for a tool, such as cmd/compile's test
+		// binary, carries no stamped build ID and prints an empty one. An
+		// empty tool ID is one every such binary shares, and a build cache
+		// then serves objects across incompatible compilers. Hash the file.
+		if id == "" {
+			id = b.fileHash(path)
+			if id == "" {
+				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
+			}
+		}
 		return id
 	})
 }
@@ -204,6 +214,11 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 		return "", false
 	}
 	if strings.HasPrefix(f[len(f)-1], "buildID=") {
+		// An unstamped tool prints an empty ID. Report it as empty, never as
+		// the constant "buildID=": toolID hashes the file for it.
+		if f[len(f)-1] == "buildID=" {
+			return "", true
+		}
 		// Use the content ID part of the tool's own build ID.
 		return contentID(f[len(f)-1]), true
 	}
