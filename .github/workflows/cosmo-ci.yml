@@ -21,7 +21,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         build-os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -276,7 +276,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: build
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
