@@ -39,21 +39,21 @@ CI publishes installable toolchain tarballs to [buildhost](https://pazer.build) 
 # Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0cosmo.r<N> linux/amd64
+go version   # go version go1.27.0-cosmo.r<N> linux/amd64
 ```
 
 ```bash
 # macOS, Apple Silicon
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0cosmo.r<N> darwin/arm64
+go version   # go version go1.27.0-cosmo.r<N> darwin/arm64
 ```
 
 ```bash
 # Windows, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" -o go.tar.gz
 tar -xzf go.tar.gz
-go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
+go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 ```
 
 All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.

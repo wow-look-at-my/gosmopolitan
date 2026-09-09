@@ -37,6 +37,23 @@ func DefaultConds() map[string]Cond {
 			return false, nil
 		})
 
+	// The other half of that split: the machine the script is running on,
+	// which on cosmo is not the port. A script predicting a path that
+	// os.UserCacheDir or os.UserConfigDir returns has to ask this one,
+	// because those read runtime.GOOS and lay the directory out the way
+	// the host does.
+	conds["GOHOSTOS"] = PrefixCondition(
+		"runtime.GOOS == <suffix>",
+		func(_ *State, suffix string) (bool, error) {
+			if suffix == runtime.GOOS {
+				return true, nil
+			}
+			if _, ok := syslist.KnownOS[suffix]; !ok {
+				return false, fmt.Errorf("unrecognized GOOS %q", suffix)
+			}
+			return false, nil
+		})
+
 	conds["GOARCH"] = PrefixCondition(
 		"runtime.GOARCH == <suffix>",
 		func(_ *State, suffix string) (bool, error) {

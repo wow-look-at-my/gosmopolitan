@@ -7,11 +7,6 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
-# A run takes over an hour, so pushes to one branch queue behind each other and the newest answer arrives last. Master keeps every run: each one publishes.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
-
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
@@ -21,7 +16,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         build-os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -276,7 +271,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: build
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:

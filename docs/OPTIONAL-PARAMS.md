@@ -32,7 +32,7 @@ This removes the pattern the feature exists for: an API whose every production c
 | Record it on the parameter (`Var.Default`) | `cmd/compile/internal/types2` | done |
 | Accept a call that omits a defaulted suffix, and fill it | `cmd/compile/internal/types2` | done |
 | Parse `= expr`, carry it on `ast.Field.Default`, print it again | `go/ast`, `go/parser`, `go/printer` | done |
-| The same checks and the same fill | `go/types` | done |
+| The same checks, and a fill the call does not see | `go/types` | done |
 | Carry it through export data | `cmd/compile/internal/noder`, both importers | done |
 
 `src/internal/types/testdata/check/paramdefaults.go` is one file both checkers read, so a rule either package forgets shows up as a missing error in that package alone.
@@ -40,6 +40,8 @@ This removes the pattern the feature exists for: an API whose every production c
 An `ast.Field` holds one default and however many names, so `go/parser` gives a parameter that has one a field of its own. `gofmt` therefore reprints `f(a, b int = 1)` as `f(a int, b int = 1)`. The two declare the same function, and no file without a default reformats at all.
 
 The arity check and the lowering land **together**, in one place: `arguments` appends a synthesized literal to the call for each omitted parameter, before. So `noder` needs no change at all — it reads a call that is already full. A relaxed check with no fill can type-check a call and then emit one with too few arguments, which is a miscompile rather than.
+
+`go/types` checks the same literals and throws the same errors. It does **not** append them to the call. It serves tools rather than a code generator. A tool prints the tree back. A fill written into `CallExpr.Args` made gofmt-on-save rewrite `Greet()` as `Greet("world", false)` in the user's own file. The values reach a client through `Info.ParamDefaults` instead, keyed by the call. Each one carries the call's position and has an entry in `Info.Types`. A client that wants the value rather than its syntax reads `Var.Default` off the signature. That is what `go/ssa` and the inliner in gosmopolitan_tools do. Depth: docs/GOPLS.md.
 
 ## Export data
 

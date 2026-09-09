@@ -586,6 +586,10 @@ func TestWriteInvalidRune(t *testing.T) {
 }
 
 func TestReadStringAllocs(t *testing.T) {
+	// AllocsPerRun counts this process's allocations, so it needs the
+	// process to itself.
+	t.Serial()
+
 	if asan.Enabled {
 		t.Skip("test allocates more with -asan; see #70079")
 	}

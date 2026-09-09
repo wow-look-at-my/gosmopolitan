@@ -197,6 +197,8 @@ go tool compile -bench=out.txt file.go
 ## Fork Gotchas
 
 - **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses (like `testdata/ape/apetest`) must be run with an upstream Go so the test binary itself is executable on the host.
+- **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
+- **Tool build IDs are content-derived (2026-07-20).** Upstream derives release-toolchain tool IDs from the tools' `-V=full` version line. The fork stamps the same release-style version (`go1.27.0-cosmo`) into every build, so any two fork builds used to share tool IDs — and hence action. Fork tools now print their own build ID under `-V=full` (like devel toolchains) and cmd/go uses its content ID as the tool ID, so a rebuilt. The old rule "run `go clean -cache` after every make.bash" is obsolete. CI asserts the discriminator on every build platform.
 - **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/`. TMPDIR and HOME are not read. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does. cmd/go takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
@@ -307,7 +309,7 @@ curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linu
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0-cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 
@@ -320,6 +322,10 @@ Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost 
 5. Rebuild, then run the affected stdlib tests: `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
 
 `src/README.vendor` is the upstream authority on vendoring in std/cmd.
+
+## Editor tooling (gopls)
+
+gopls parses with the `go/*` packages of the toolchain that builds it. It must therefore be built by THIS one. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
 
 ## Loop-aware inlining (all targets)
 

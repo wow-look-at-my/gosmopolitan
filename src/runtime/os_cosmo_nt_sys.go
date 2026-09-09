@@ -523,9 +523,19 @@ func ntEmuRead(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 		// Sockets speak recv, not ReadFile (os_cosmo_nt_sock.go).
 		return ntSockRead(e.handle, p, n)
 	}
+	// A disk file reads at the shared pointer and advances it, so it
+	// takes the slot's lock against a concurrent positional transfer.
+	// Nothing else here has a pointer to share.
+	seekable := e.kind == ntFDFile
+	if seekable {
+		lock(&ntFilePos[fd])
+	}
 	var got uint32
 	r, werr := ntcallSE(ntReadFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&got)), 0, 0, 0)
+	if seekable {
+		unlock(&ntFilePos[fd])
+	}
 	if r == 0 {
 		// A pipe closed by the writer or an explicit EOF both mean
 		// end-of-file in Linux terms.
@@ -558,9 +568,16 @@ func ntEmuWrite(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 		// Sockets speak send, not WriteFile (os_cosmo_nt_sock.go).
 		return ntSockWrite(e.handle, p, n)
 	}
+	seekable := e.kind == ntFDFile
+	if seekable {
+		lock(&ntFilePos[fd])
+	}
 	var written uint32
 	r, werr := ntcallSE(ntWriteFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&written)), 0, 0, 0)
+	if seekable {
+		unlock(&ntFilePos[fd])
+	}
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
 	}
@@ -928,7 +945,10 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 	if whence > _NT_FILE_END {
 		return ntFail3(ntEINVAL)
 	}
+	// Every kind left here has a pointer of its own to move.
+	lock(&ntFilePos[fd])
 	newpos, werr := ntSeekHandle(e.handle, off, whence)
+	unlock(&ntFilePos[fd])
 	if werr != 0 {
 		return ntFail3(ntErrno(werr))
 	}
@@ -936,11 +956,11 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 }
 
 // ntEmuPreadPwrite implements pread64/pwrite64 by seeking around the
-// shared file pointer (save, seek, transfer, restore). Linux's
-// pointer-untouched guarantee holds only against concurrent users of
-// OTHER descriptors; concurrent plain reads on the SAME fd can
-// observe the temporary seek. internal/poll only mixes them per-fd
-// under its own locks, so this is sound for the standard library.
+// shared file pointer (save, seek, transfer, restore) under the slot's
+// ntFilePos lock, which every other user of that pointer takes too.
+// The four steps have to look like one: a caller of pread expects the
+// offset it asked for and expects its own file position back
+// afterwards, and neither survives an interleaved seek.
 func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bool) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {
@@ -958,11 +978,14 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	if n == 0 {
 		return 0, 0, 0
 	}
+	lock(&ntFilePos[fd])
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, off, _NT_FILE_BEGIN); werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	var moved uint32
@@ -973,6 +996,7 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	r, werr2 := ntcallSE(fn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&moved)), 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // best-effort restore
+	unlock(&ntFilePos[fd])
 	if r == 0 {
 		if !isWrite && (werr2 == _NT_ERROR_BROKEN_PIPE || werr2 == _NT_ERROR_HANDLE_EOF) {
 			return 0, 0, 0
@@ -993,15 +1017,20 @@ func ntEmuFtruncate(fd int32, length int64) (r1, r2, errno uintptr) {
 	if length < 0 {
 		return ntFail3(ntEINVAL)
 	}
+	// SetEndOfFile truncates at the pointer, so this walks it too.
+	lock(&ntFilePos[fd])
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, length, _NT_FILE_BEGIN); werr != 0 {
+		unlock(&ntFilePos[fd])
 		return ntFail3(ntErrno(werr))
 	}
 	r, werr2 := ntcallE(ntSetEndOfFileFn, e.handle, 0, 0, 0, 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // Linux keeps the offset
+	unlock(&ntFilePos[fd])
 	if r == 0 {
 		return ntFail3(ntErrno(werr2))
 	}
