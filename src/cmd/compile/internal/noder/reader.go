@@ -645,7 +645,7 @@ func (r *reader) param() *types.Field {
 func (r *reader) skipParamDefault() {
 	if r.Version().Has(pkgbits.StructParamDefaults) && r.Bool() {
 		for range r.Len() {
-			r.String()
+			_ = r.String() // the field name
 			r.skipParamDefault()
 		}
 		return
