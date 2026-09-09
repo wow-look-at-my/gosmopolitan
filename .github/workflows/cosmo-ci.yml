@@ -175,10 +175,7 @@ jobs:
           tests: dats/no-wordspam.dats
 
       - name: The whole test suite (run.bash)
-        # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
-        # GOOS pinned: the fork defaults GOOS=cosmo, and dist test's children call `go build` with
-        # no GOOS of their own. Each helper then lands as an APE, and a runner with no binfmt
-        # handler answers a bare exec with ENOEXEC.
+        # GOOS pinned: the fork defaults GOOS=cosmo, so dist test's children would build APEs no bare exec can start. see docs/CI.md.
         timeout-minutes: 90
         uses: wow-look-at-my/actions/multicmd@master
         with:
