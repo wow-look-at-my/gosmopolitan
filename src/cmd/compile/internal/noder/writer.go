@@ -2618,7 +2618,10 @@ func (w *writer) structElems(typ *types2.Struct, valuesOnly bool, elems []syntax
 		kv := elem.(*syntax.KeyValueExpr)
 		w.pos(kv.Key) // use position of Key rather than of elem (which has position of ':')
 		// TODO(gri): rather than doing this lookup again, perhaps the index should be recorded by types2
-		fld, index, _ := types2.LookupFieldOrMethod(typ, false, w.p.curpkg, kv.Key.(*syntax.Name).Value)
+		// The lookup runs as the field's own package: a filled parameter
+		// default names unexported fields of a type from another package.
+		key := kv.Key.(*syntax.Name)
+		fld, index, _ := types2.LookupFieldOrMethod(typ, false, w.p.info.Uses[key].Pkg(), key.Value)
 		if n := len(index); n > 1 {
 			// embedded field
 			w.Int(-n)

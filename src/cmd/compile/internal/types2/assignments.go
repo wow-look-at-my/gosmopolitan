@@ -227,6 +227,10 @@ func (check *Checker) lhsVar(lhs syntax.Expr) Type {
 	case variable, mapindex:
 		// ok
 	default:
+		if v := check.readonlyVar(x.expr); v != nil {
+			check.errorf(&x, UnassignableOperand, "cannot assign to %s: it is readonly outside package %s", x.expr, v.pkg.name)
+			return Typ[Invalid]
+		}
 		if sel, ok := x.expr.(*syntax.SelectorExpr); ok {
 			var op operand
 			check.expr(nil, &op, sel.X)
@@ -235,36 +239,11 @@ func (check *Checker) lhsVar(lhs syntax.Expr) Type {
 				return Typ[Invalid]
 			}
 		}
-		if v := check.readonlyVar(x.expr); v != nil {
-			check.errorf(&x, UnassignableOperand, "cannot assign to %s: it is readonly outside package %s", x.expr, v.pkg.name)
-			return Typ[Invalid]
-		}
 		check.errorf(&x, UnassignableOperand, "cannot assign to %s (neither addressable nor a map index expression)", x.expr)
 		return Typ[Invalid]
 	}
 
 	return x.typ()
-}
-
-// readonlyVar answers the readonly var an expression names, and nil when it
-// names anything else. A readonly var reads as a value from another package,
-// so this is what tells that failure apart from any other unassignable one.
-func (check *Checker) readonlyVar(e syntax.Expr) *Var {
-	var obj Object
-	switch e := syntax.Unparen(e).(type) {
-	case *syntax.Name:
-		obj = check.lookup(e.Value)
-	case *syntax.SelectorExpr:
-		if base, _ := e.X.(*syntax.Name); base != nil {
-			if pn, _ := check.lookup(base.Value).(*PkgName); pn != nil {
-				obj = pn.imported.scope.Lookup(e.Sel.Value)
-			}
-		}
-	}
-	if v, _ := obj.(*Var); v != nil && v.readonly {
-		return v
-	}
-	return nil
 }
 
 // assignVar checks the assignment lhs = rhs (if x == nil), or lhs = x (if x != nil).
