@@ -175,19 +175,18 @@ jobs:
           tests: dats/no-wordspam.dats
 
       - name: The whole test suite (run.bash)
-        # GOOS pinned in GOENV, not the environment: the fork defaults GOOS=cosmo, and a dist test child that replaces its own env would still build an APE no bare exec can start. see docs/CI.md.
+        # GOOS pinned in the environment, which is the one channel a test cannot turn off: the fork defaults GOOS=cosmo, so an unpinned child builds an APE no bare exec can start. see docs/CI.md.
         timeout-minutes: 90
         uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: |
             cd src
-            ../bin/go env -w GOOS="$(../bin/go env GOHOSTOS)" GOARCH="$(../bin/go env GOHOSTARCH)"
+            export GOOS="$(../bin/go env GOHOSTOS)" GOARCH="$(../bin/go env GOHOSTARCH)"
             ./run.bash
           windows: |
             cd src
-            $h = ..\bin\go.exe env GOHOSTOS
-            $a = ..\bin\go.exe env GOHOSTARCH
-            ..\bin\go.exe env -w "GOOS=$h" "GOARCH=$a"
+            $env:GOOS = (..\bin\go.exe env GOHOSTOS)
+            $env:GOARCH = (..\bin\go.exe env GOHOSTARCH)
             .\run.bat
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
