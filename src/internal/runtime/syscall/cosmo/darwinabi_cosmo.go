@@ -318,3 +318,112 @@ func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 	}
 	return 0, false
 }
+
+// POSIX record locks. Linux and Apple disagree about all three parts of the
+// fcntl lock interface: the struct layout, the command numbers, and the lock
+// type numbers. Nothing here is architecture-specific, so it sits beside the
+// other translations and the Linux CI leg pins it.
+//
+// The type numbering is the dangerous half. Apple numbers a write lock where
+// Linux numbers an unlock, so an untranslated request reaches a real and wrong
+// command instead of failing.
+const (
+	linuxF_GETLK  = 5
+	linuxF_SETLK  = 6
+	linuxF_SETLKW = 7
+	appleF_GETLK  = 7
+	appleF_SETLK  = 8
+	appleF_SETLKW = 9
+
+	linuxF_RDLCK = 0
+	linuxF_WRLCK = 1
+	linuxF_UNLCK = 2
+	appleF_RDLCK = 1
+	appleF_UNLCK = 2
+	appleF_WRLCK = 3
+)
+
+// linuxFlock is struct flock as the Linux ABI lays it out, which is what a
+// caller of fcntl hands this layer.
+type linuxFlock struct {
+	Type   int16
+	Whence int16
+	_      [4]byte
+	Start  int64
+	Len    int64
+	Pid    int32
+	_      [4]byte
+}
+
+// appleFlock is struct flock as XNU lays it out. Every field sits somewhere
+// else and the struct is shorter, so the two are not reinterpretable.
+type appleFlock struct {
+	Start  int64
+	Len    int64
+	Pid    int32
+	Type   int16
+	Whence int16
+}
+
+// flockToApple repacks a caller's Linux struct flock for Apple.
+//
+//go:nosplit
+func flockToApple(lk *linuxFlock) (appleFlock, bool) {
+	atype, ok := appleLockType(lk.Type)
+	if !ok {
+		return appleFlock{}, false
+	}
+	return appleFlock{
+		Start:  lk.Start,
+		Len:    lk.Len,
+		Pid:    lk.Pid,
+		Type:   atype,
+		Whence: lk.Whence,
+	}, true
+}
+
+// flockFromApple writes Apple's answer back into the caller's struct, which is
+// how F_GETLK reports the holder of a conflicting lock.
+//
+//go:nosplit
+func flockFromApple(lk *linuxFlock, af *appleFlock) bool {
+	ltype, ok := linuxLockType(af.Type)
+	if !ok {
+		return false
+	}
+	lk.Type = ltype
+	lk.Whence = af.Whence
+	lk.Start = af.Start
+	lk.Len = af.Len
+	lk.Pid = af.Pid
+	return true
+}
+
+// appleLockType maps a Linux lock type to Apple's. An unknown one is refused
+// rather than mapped to zero, which Linux reads as a read lock.
+//
+//go:nosplit
+func appleLockType(t int16) (int16, bool) {
+	switch t {
+	case linuxF_RDLCK:
+		return appleF_RDLCK, true
+	case linuxF_WRLCK:
+		return appleF_WRLCK, true
+	case linuxF_UNLCK:
+		return appleF_UNLCK, true
+	}
+	return 0, false
+}
+
+//go:nosplit
+func linuxLockType(t int16) (int16, bool) {
+	switch t {
+	case appleF_RDLCK:
+		return linuxF_RDLCK, true
+	case appleF_WRLCK:
+		return linuxF_WRLCK, true
+	case appleF_UNLCK:
+		return linuxF_UNLCK, true
+	}
+	return 0, false
+}

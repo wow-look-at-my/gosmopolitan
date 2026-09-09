@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && arm64
+//go:build cosmo
 
 package cosmo_test
 
@@ -41,7 +41,6 @@ func TestFlockLayoutsDiffer(t *testing.T) {
 	if got, want := unsafe.Offsetof(lk.Pid), uintptr(24); got != want {
 		t.Errorf("Linux l_pid at %d, want %d", got, want)
 	}
-
 	var af cosmo.AppleFlockForTest
 	if got, want := unsafe.Sizeof(af), uintptr(24); got != want {
 		t.Errorf("Apple struct flock is %d bytes, want %d", got, want)
