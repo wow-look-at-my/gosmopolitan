@@ -850,6 +850,22 @@ const (
 	linuxF_DUPFD_CLOEXEC = 1030
 	appleF_DUPFD_CLOEXEC = 67
 
+	// POSIX record locks. The commands are numbered differently on the two
+	// systems, and so are the lock types, so both need translating.
+	linuxF_GETLK  = 5
+	linuxF_SETLK  = 6
+	linuxF_SETLKW = 7
+	appleF_GETLK  = 7
+	appleF_SETLK  = 8
+	appleF_SETLKW = 9
+
+	linuxF_RDLCK = 0
+	linuxF_WRLCK = 1
+	linuxF_UNLCK = 2
+	appleF_RDLCK = 1
+	appleF_UNLCK = 2
+	appleF_WRLCK = 3
+
 	// F_GETPATH resolves an fd to its path. Apple-only: it is passed
 	// through under Apple's own number because Linux has no counterpart
 	// to translate from, and 50 is not a Linux fcntl command (Linux uses
@@ -903,13 +919,140 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 		if arg == 0 {
 			return ^uintptr(0), 0, darwinEFAULT
 		}
+	case linuxF_GETLK, linuxF_SETLK, linuxF_SETLKW:
+		return darwinFcntlFlock(fd, cmd, arg)
 	default:
-		// Locking, owner and lease commands have incompatible
-		// argument structures; refuse rather than corrupt.
+		// Owner and lease commands have argument structures with no
+		// Apple counterpart; refuse rather than corrupt.
 		return ^uintptr(0), 0, darwinENOSYS
 	}
 	// fcntl is variadic: arg MUST travel on the stack on arm64-apple.
 	return darwinCallVariadic1(darwinFns.Fcntl, fd, cmd, arg)
+}
+
+// linuxFlock is struct flock as the Linux arm64 ABI lays it out, which is what
+// a caller of fcntl hands this layer.
+type linuxFlock struct {
+	Type   int16
+	Whence int16
+	_      [4]byte
+	Start  int64
+	Len    int64
+	Pid    int32
+	_      [4]byte
+}
+
+// appleFlock is struct flock as XNU lays it out. Every field sits somewhere
+// else, and it is shorter, so the two are not reinterpretable.
+type appleFlock struct {
+	Start  int64
+	Len    int64
+	Pid    int32
+	Type   int16
+	Whence int16
+}
+
+// darwinFcntlFlock runs a POSIX record lock through Apple fcntl.
+//
+// Three things differ, and every one of them is silent when it is wrong. The
+// struct fields are in a different order and the Apple one is shorter. The
+// commands are numbered differently. So are the lock types.
+//
+// This used to refuse the whole family with ENOSYS. A caller that locks a file
+// to make its writes safe reported an I/O error it could not act on: SQLite
+// answers SQLITE_IOERR_LOCK, and a database never opens.
+//
+//go:nosplit
+func darwinFcntlFlock(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
+	if arg == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	lk := (*linuxFlock)(unsafe.Pointer(arg))
+	af, ok := flockToApple(lk)
+	if !ok {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+
+	var acmd uintptr
+	switch cmd {
+	case linuxF_GETLK:
+		acmd = appleF_GETLK
+	case linuxF_SETLK:
+		acmd = appleF_SETLK
+	default:
+		acmd = appleF_SETLKW
+	}
+
+	r1, r2, errno = darwinCallVariadic1(darwinFns.Fcntl, fd, acmd, uintptr(unsafe.Pointer(&af)))
+	if errno != 0 || cmd != linuxF_GETLK {
+		return r1, r2, errno
+	}
+
+	// F_GETLK answers in the caller's struct: the holder of the conflicting
+	// lock, or F_UNLCK when there is none.
+	if !flockFromApple(lk, &af) {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	return r1, r2, errno
+}
+
+// flockToApple repacks a caller's Linux struct flock for Apple.
+//
+//go:nosplit
+func flockToApple(lk *linuxFlock) (appleFlock, bool) {
+	atype, ok := appleLockType(lk.Type)
+	if !ok {
+		return appleFlock{}, false
+	}
+	return appleFlock{
+		Start:  lk.Start,
+		Len:    lk.Len,
+		Pid:    lk.Pid,
+		Type:   atype,
+		Whence: lk.Whence,
+	}, true
+}
+
+// flockFromApple writes Apple's answer back into the caller's struct.
+//
+//go:nosplit
+func flockFromApple(lk *linuxFlock, af *appleFlock) bool {
+	ltype, ok := linuxLockType(af.Type)
+	if !ok {
+		return false
+	}
+	lk.Type = ltype
+	lk.Whence = af.Whence
+	lk.Start = af.Start
+	lk.Len = af.Len
+	lk.Pid = af.Pid
+	return true
+}
+
+//go:nosplit
+func appleLockType(t int16) (int16, bool) {
+	switch t {
+	case linuxF_RDLCK:
+		return appleF_RDLCK, true
+	case linuxF_WRLCK:
+		return appleF_WRLCK, true
+	case linuxF_UNLCK:
+		return appleF_UNLCK, true
+	}
+	return 0, false
+}
+
+//go:nosplit
+func linuxLockType(t int16) (int16, bool) {
+	switch t {
+	case appleF_RDLCK:
+		return linuxF_RDLCK, true
+	case appleF_WRLCK:
+		return linuxF_WRLCK, true
+	case appleF_UNLCK:
+		return linuxF_UNLCK, true
+	}
+	return 0, false
 }
 
 // darwinGetrandom emulates getrandom(2) with the Syslib's getentropy,
