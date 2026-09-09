@@ -42,6 +42,19 @@ gopls signature main.go:12:24      # shows "= <default>" on an optional paramete
 
 The tools repo gates the same behavior on every push. Its `.github/workflows/cosmo-ci.yml` installs the published toolchain, builds gopls with it, and runs the tests for each package in the table.
 
+## Known gap: staticcheck's own IR builder
+
+staticcheck (`honnef.co/go/tools`) does not use `go/ssa`. It builds its own IR, and that builder indexes one argument per parameter, exactly as `go/ssa` did. A call that omits a defaulted argument panics it:
+
+```
+panic: runtime error: index out of range
+	honnef.co/go/tools/go/ir.(*builder).setCall
+```
+
+gopls recovers a panic in an analyzer. The editor keeps working. The user loses every staticcheck diagnostic for the package that holds such a call. gopls enables a subset of staticcheck by default. So the loss needs no opt-in.
+
+staticcheck is a third-party module and is not forked here. Closing this needs the same change `go/ssa` took, in that module: read the value off `Var.Default` for each parameter the call left out. Until then, a workspace that leans on staticcheck must pass every argument.
+
 ## Delve, and other tools that read a binary
 
 A tool that consumes a fork BINARY is a separate question from one that reads fork SOURCE. The pclntab format has diverged from upstream, so a tool that parses it needs the fork's own `debug/gosym`. The DWARF sidecars are untouched, which is why gdb and delve work. See the pclntab bullet in CLAUDE.md.
