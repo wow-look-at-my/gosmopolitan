@@ -2025,13 +2025,8 @@ func (t *T) Fork() {
 			return
 		}
 		// A test BELOW the target forks normally: it gets its own child, which
-		// is what a subtest asks Fork for.
-		if !strings.HasPrefix(t.Name(), target+"/") {
-			// Anything else is a test the child was never selected to run, so
-			// forking it starts a peer rather than a descendant and the two
-			// spawn each other. The windows leg reached "cannot allocate
-			// memory" that way, through archive/tar's two forking tests. The
-			// barrier gives this one what a child would, without the process.
+		// is what a subtest asks Fork for. A peer takes the barrier instead.
+		if t.forkPeerOfTarget() {
 			t.Serial()
 			return
 		}
@@ -2082,14 +2077,29 @@ func (t *T) forkAndTakeTheResult() {
 	t.mu.Unlock()
 }
 
+// forkPeerOfTarget reports whether this test runs in a fork child that was
+// started for a test neither above nor below it. Forking such a test starts a
+// peer rather than a descendant, and the two spawn each other. The windows
+// leg reached "cannot allocate memory" that way, through archive/tar's two
+// forking tests.
+func (t *T) forkPeerOfTarget() bool {
+	target, forked := os.LookupEnv(forkTargetEnv)
+	if !forked || target == t.Name() {
+		return false
+	}
+	return !strings.HasPrefix(target, t.Name()+"/") && !strings.HasPrefix(t.Name(), target+"/")
+}
+
 // failWithoutAChild reports an allocsFork panic that no child can answer. A
 // host may start no child process, or this test may already BE the child's
 // target, where a second child reaches the same place. The barrier is the only
 // way left to give the measurement the process, so the failure names it.
 func (t *T) failWithoutAChild() {
 	reason := runtime.GOOS + " starts no child process"
-	if os.Getenv(forkTargetEnv) == t.Name() {
+	if target := os.Getenv(forkTargetEnv); target == t.Name() {
 		reason = "this test already runs in a child of its own"
+	} else if t.forkPeerOfTarget() {
+		reason = "this test runs in the child started for " + target
 	}
 	t.Fail()
 	t.log("AllocsPerRun needs this process to itself, and "+reason+
@@ -2529,9 +2539,10 @@ func tRunner(t *T, fn func(t *T)) {
 			// re-runs this test alone, exactly as Fork does.
 			err = nil
 			switch {
-			case os.Getenv(forkTargetEnv) == t.Name():
+			case os.Getenv(forkTargetEnv) == t.Name(), t.forkPeerOfTarget():
 				// This test IS the child's target and still shares the
-				// process, so a second child reaches this same place.
+				// process, so a second child reaches this same place. A peer
+				// of the target would start a child that starts this one.
 				t.failWithoutAChild()
 			case canFork():
 				t.forkAndTakeTheResult()
