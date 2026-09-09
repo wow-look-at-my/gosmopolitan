@@ -15,9 +15,13 @@ import (
 	"strings"
 )
 
-// fillParamDefaults appends an argument for each trailing parameter the call
-// omitted, and answers nil when any of them has no default. The arguments are
-// ordinary syntax, so everything after this point sees a full call. Depth:
+// fillParamDefaults type-checks an argument for each trailing parameter the
+// call omitted, and answers nil when any of them has no default. The call's
+// own Args keep what the source wrote: this package serves tools that print
+// the tree back, and a printer must reproduce the call the user typed. The
+// synthesized arguments reach a client through Info.ParamDefaults instead.
+// The compiler's own checker (cmd/compile/internal/types2) does append them
+// to the call, because the IR builder after it reads a full call. Depth:
 // docs/OPTIONAL-PARAMS.md.
 func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, params *Tuple, nargs, npars int) []*operand {
 	for i := nargs; i < npars; i++ {
@@ -27,16 +31,18 @@ func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, par
 	}
 	// The call site is where the value is spelled, so that is where it points.
 	pos := call.Pos()
+	filled := make([]ast.Expr, 0, npars-nargs)
 	for i := nargs; i < npars; i++ {
 		arg := defaultLiteral(params.vars[i].deflt, pos)
 		if arg == nil {
 			return nil
 		}
-		call.Args = append(call.Args, arg)
+		filled = append(filled, arg)
 		x := new(operand)
 		check.expr(nil, x, arg)
 		args = append(args, x)
 	}
+	check.recordParamDefaults(call, filled)
 	return args
 }
 
