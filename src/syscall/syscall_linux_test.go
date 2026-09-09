@@ -731,6 +731,16 @@ func TestPrlimitFileLimit(t *testing.T) {
 	}
 	max := lim.Max
 
+	// The soft limit drops to 43 below, and it is the whole process that
+	// carries it. TestOpenFileLimit opens 1200 files and fails on whatever
+	// order leaves it running after this test.
+	orig := lim
+	defer func() {
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &orig); err != nil {
+			t.Errorf("restoring RLIMIT_NOFILE: %v", err)
+		}
+	}()
+
 	lim = syscall.Rlimit{
 		Cur: magicRlimitValue + 1,
 		Max: max,
