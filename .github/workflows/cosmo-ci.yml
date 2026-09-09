@@ -176,11 +176,21 @@ jobs:
 
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
+        # GOOS pinned: the fork defaults GOOS=cosmo, and dist test's children call `go build` with
+        # no GOOS of their own. Each helper then lands as an APE, and a runner with no binfmt
+        # handler answers a bare exec with ENOEXEC.
         timeout-minutes: 90
         uses: wow-look-at-my/actions/multicmd@master
         with:
-          unix: cd src && ./run.bash
-          windows: cd src && .\run.bat
+          unix: |
+            cd src
+            export GOOS="$(../bin/go env GOHOSTOS)" GOARCH="$(../bin/go env GOHOSTARCH)"
+            ./run.bash
+          windows: |
+            cd src
+            $env:GOOS = (..\bin\go.exe env GOHOSTOS)
+            $env:GOARCH = (..\bin\go.exe env GOHOSTARCH)
+            .\run.bat
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
