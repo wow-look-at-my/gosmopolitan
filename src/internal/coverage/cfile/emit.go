@@ -424,11 +424,34 @@ func (s *emitState) emitMetaDataFile(finalHash [16]byte, tlen uint64) error {
 
 	// Temp file has now been flushed and closed. Rename the temp to the
 	// final desired path.
-	if err := os.Rename(s.mftmp, s.mfname); err != nil {
+	if err := renameFile(s.mftmp, s.mfname); err != nil {
+		// Another process of this same binary wrote the file between the stat
+		// in openMetaFile and here. That is routine when a test suite forks:
+		// every child emits into the directory its parent named. The meta-data
+		// is decided by the hash in the file name, so the file already there
+		// carries what this rename carried. Windows refuses the rename while
+		// the other process holds the file open, and POSIX quietly replaces
+		// the file with a copy of itself.
+		if metaFileIsAlreadyThere(s.mfname, tlen) {
+			os.Remove(s.mftmp)
+			return nil
+		}
 		return fmt.Errorf("writing %s: rename from %s failed: %v\n", s.mfname, s.mftmp, err)
 	}
 
 	return nil
+}
+
+// renameFile is a variable so a test can make the rename fail on a host whose
+// rename never does.
+var renameFile = os.Rename
+
+// metaFileIsAlreadyThere reports whether path holds the meta-data file this run
+// was about to write. The hash in the name decides the content, and tlen is the
+// length that content has, so a file of that length at that name is that file.
+func metaFileIsAlreadyThere(path string, tlen uint64) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Size() == int64(tlen)
 }
 
 // needMetaDataFile returns TRUE if we need to emit a meta-data file
