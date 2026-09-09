@@ -81,6 +81,18 @@ var (
 	ntFDTable [ntFDMax]ntFDEntry
 )
 
+// ntFilePos serializes one slot's Win32 file pointer. That pointer is
+// per HANDLE and shared by every operation on it, so a positional
+// transfer - which Linux serves with pread, moving nothing - has to
+// seek, transfer and seek back, and those three steps are one
+// indivisible operation. Two ReadAt calls that interleave there each
+// read at the other's offset.
+//
+// The lock has to live down here because nothing above it takes one:
+// internal/poll's Pread calls incref rather than readLock, since a
+// real pread needs no exclusion to be atomic.
+var ntFilePos [ntFDMax]mutex
+
 // ntFDAlloc claims the lowest free slot (unix semantics) for the
 // given handle and returns the fd, or -EMFILE when the table is full.
 // The caller allocated pathW beforehand; nothing allocates under the
