@@ -56,7 +56,7 @@ Job-level cap: 3 test steps at their per-OS step timeout plus setup. Observed gr
 
 The AF_UNIX probe is diagnostic only (never fails the job): it proves what the runner's `afunix.sys` actually supports. A runtimeprobe unixsock failure can be attributed - runner. The native matrix reproduces the cosmo runtime's exact socket recipe piecewise (creation flags, `SO_REUSEADDR` - which net's `listenStream` sets and which poisons a subsequent afunix bind with `WSAEOPNOTSUPP` - and `FIONBIO`). The managed .NET case is the canonical known-good control.
 
-The fizzbuzz NT boot check starts each binary with `Start-Process` rather than pwsh's native invocation, and reads `$p.ExitCode`. That keeps the check clear of pwsh's own teardown. The script ends in an explicit exit. A line before and after each run localizes a future hang.
+The fizzbuzz NT boot check (`dats/nt.dats`, over `dats/nt-boot.ps1`) starts each binary with `Start-Process` rather than pwsh's native invocation, and reads `$p.ExitCode`. That keeps the check clear of pwsh's own teardown. The script ends in an explicit exit. A line before and after each run localizes a future hang.
 
 The cases restate the contract in `apetest/fizzbuzz_test.go`. `fizzbuzz.com <a> <b>` prints `fizzbuzz(a+b)` and a newline, and exits 0. `TestFizzbuzz_15` sends 10 and 5 and wants "fizzbuzz". `TestNumber_13` sends 7 and 6 and wants "13", which proves the values reach the program through the `GetCommandLineW` parse rather than a constant.
 
