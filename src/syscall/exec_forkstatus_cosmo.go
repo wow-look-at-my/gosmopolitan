@@ -6,7 +6,9 @@
 
 package syscall
 
-import "internal/strconv"
+import (
+	"internal/strconv"
+)
 
 // forkExecStatusBudget bounds the wait for a child's exec, in nanoseconds. A
 // child that has not exec'd by then is stuck between fork and exec, and the
@@ -44,26 +46,14 @@ func readForkExecStatus(fd int, p *byte, np int, pid int) (n int, err error) {
 	}
 }
 
-// forkExecStatusReport describes a child that has not exec'd by the budget,
-// before the kill. It runs only with GOCOSMOFORKDIAG set: ps says whether
-// the child is still this program or already the exec'd one, and on macOS
-// sample says where it sits. Temporary, until the stall on macOS is found.
+// forkExecStatusReport names a child that has not exec'd by the budget,
+// before the kill. It must not fork: once one child is stuck between fork
+// and exec, every later child of this process sticks the same way, so a
+// helper forked here hangs inside the report.
 func forkExecStatusReport(pid int) {
 	if v, ok := Getenv("GOCOSMOFORKDIAG"); !ok || v == "" {
 		return
 	}
-	script := "echo forkExec: child $0 has not exec'd after 120s >&2; " +
-		"ps -o pid,ppid,stat,wchan,command -p $0 >&2; " +
-		"if command -v sample >/dev/null 2>&1; then sample $0 1 -file /dev/stderr; fi"
-	attr := &ProcAttr{Files: []uintptr{0, 1, 2}, Env: Environ()}
-	child, err := forkExec("/bin/sh", []string{"sh", "-c", script, strconv.Itoa(pid)}, attr)
-	if err != nil {
-		return
-	}
-	var status WaitStatus
-	for {
-		if _, err := Wait4(child, &status, 0, nil); err != EINTR {
-			return
-		}
-	}
+	msg := "forkExec: child " + strconv.Itoa(pid) + " has not exec'd after 120s; killing it\n"
+	Write(2, []byte(msg))
 }
