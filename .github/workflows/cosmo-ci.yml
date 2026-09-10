@@ -310,15 +310,6 @@ jobs:
         shell: bash
         run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
-      # Temporary diagnostic, never fails: the srcimporter test stalls under wasmtime on this runner and nowhere else. The scheduler trace says what the one M is doing.
-      - name: Trace the scheduler through srcimporter (diagnostic)
-        if: matrix.port == 'wasip1'
-        timeout-minutes: 6
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-          GODEBUG=schedtrace=2000,scheddetail=1 GOOS=wasip1 GOARCH=wasm go test -short -count=1 -timeout 4m -run TestImportedTypes go/internal/srcimporter 2>&1 | tail -400 || true
-
       - name: The whole test suite (dist test)
         # lib/wasm supplies the exec wrapper for the port; dist test reads GOOS and GOARCH.
         shell: bash
