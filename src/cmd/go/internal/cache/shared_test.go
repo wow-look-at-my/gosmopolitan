@@ -119,6 +119,11 @@ func configureShared(t *testing.T, srv *httptest.Server) {
 	t.Helper()
 	cfg := fmt.Sprintf(`{"endpoint":%q,"bucket":"b","username":"u","password":"p"}`, srv.URL)
 	t.Setenv(cacheclient.ConfigEnv, base64.StdEncoding.EncodeToString([]byte(cfg)))
+	// The fake server 404s the index on purpose. Under dist test every
+	// process inherits GOCACHELOG, and the notices those 404s raise would
+	// read as an outage on the build's stderr.
+	t.Setenv(CacheLogEnv, "")
+	resetCacheLog(t)
 }
 
 // openShared builds a shared cache over a fresh disk cache in dir.
@@ -414,8 +419,6 @@ func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
 		f.failPuts = true
 		configureShared(t, srv)
 		t.Setenv("CI", ci)
-		t.Setenv(CacheLogEnv, "")
-		resetCacheLog(t)
 
 		out := captureStderr(t, func() {
 			c := openShared(t, t.TempDir())
@@ -490,8 +493,6 @@ func TestSharedCache_CacheDebugRestoresTheReporting(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "1")
-	t.Setenv(CacheLogEnv, "")
-	resetCacheLog(t)
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())
