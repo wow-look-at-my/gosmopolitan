@@ -27,8 +27,11 @@ func TestFallbackPanic(t *testing.T) {
 }
 
 func TestFallback(t *testing.T) {
+	t.Serial(
 	// call systemRootsPool so that the sync.Once is triggered, and we can
 	// manipulate systemRoots without worrying about our working being overwritten
+	)
+
 	systemRootsPool()
 	if systemRoots != nil {
 		originalSystemRoots := *systemRoots
@@ -190,6 +193,7 @@ func TestEnvVars(t *testing.T) {
 	}
 
 	// Save old settings so we can restore before the test ends.
+	t.Serial()
 	origCertFiles, origCertDirectories := certFiles, certDirectories
 	origFile, origDir := os.Getenv(certFileEnv), os.Getenv(certDirEnv)
 	defer func() {
@@ -252,6 +256,7 @@ func TestEnvVars(t *testing.T) {
 // loadSystemRoots to load all the roots from the respective directories.
 // See https://golang.org/issue/35325.
 func TestLoadSystemCertsLoadColonSeparatedDirs(t *testing.T) {
+	t.Serial()
 	origFile, origDir := os.Getenv(certFileEnv), os.Getenv(certDirEnv)
 	origCertFiles := certFiles[:]
 

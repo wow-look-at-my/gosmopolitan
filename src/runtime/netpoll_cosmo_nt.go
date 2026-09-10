@@ -4,64 +4,18 @@
 
 //go:build cosmo && amd64
 
-// The Windows NT netpoller (wave 2 chunk C): WSAPoll readiness over
-// the netpoll_aix.go two-lock, level-triggered design. This replaces
-// chunk A's timer-only WaitOnAddress stub wholesale.
+// The Windows NT netpoller: WSAPoll readiness over netpoll_aix.go's
+// two-lock, level-triggered design.
 //
-// Why WSAPoll and not upstream's IOCP netpoll: IOCP reports the
-// COMPLETION of a previously submitted OVERLAPPED operation, which
-// only works with internal/poll's windows-specific execIO machinery.
-// The fork's internal/poll is linux-shaped - nonblocking fds, EAGAIN,
-// wait-for-readiness, retry - and WSAPoll is the one winsock call
-// that answers the readiness question directly.
+// Not IOCP. IOCP reports the COMPLETION of a submitted OVERLAPPED
+// operation, which needs internal/poll's windows-specific execIO. This
+// fork's internal/poll is linux-shaped - nonblocking fds, EAGAIN, wait
+// for readiness, retry - and WSAPoll is the one winsock call that
+// answers readiness directly.
 //
-// Shape (netpoll_aix.go, kept line-for-line where possible):
-//
-//   - Fixed arrays of WSAPOLLFD / *pollDesc / emulated-fd numbers.
-//     Fixed, not slices: netpollinit and netpollopen can run under
-//     runtime locks (netpollGenericInit fires from the first timer's
-//     addHeap), so nothing here allocates. pd.user holds the fd's
-//     slot index, maintained across swap-deletes.
-//   - Two-lock protocol: mutators (open/close/arm) take ntMtxpoll,
-//     poke the poller off its blocking WSAPoll (one byte to the wake
-//     socket, deduplicated by ntPollPendingUpdates), then take
-//     ntMtxset - which the poller holds across WSAPoll - and release
-//     ntMtxpoll. The poller re-takes both at the top of each cycle.
-//   - Level-triggered: delivery CLEARS the direction bit from
-//     events; pollWait re-arms each wait via netpollarm
-//     (netpollLevelTriggered, set here at init). netpoll(0) returns
-//     empty like AIX - a nonblocking check would contend ntMtxset
-//     with the blocked poller - which sysmon and findrunnable
-//     tolerate.
-//   - The wakeup channel is a connected loopback TCP pair: sends on
-//     ntWakeSock (the client end) surface as readability on
-//     ntWakeRecv (the accepted end), which sits at slot 0. WSAPoll
-//     has no pipe/eventfd concept, and the transport MUST be
-//     lossless: chunk C shipped a self-connected UDP socket here,
-//     and windows-latest disproved it - UDP, loopback included, may
-//     drop datagrams on real NT (wine's in-process loopback never
-//     does), and one dropped wake byte leaves the poller asleep for
-//     its full WSAPoll timeout while every mutator (netpollopen/arm/
-//     close block on ntMtxset below) and every new-earlier timer
-//     (wakeNetPoller -> netpollBreak) waits it out - the observed
-//     ~5s windows-latest probe stalls, rescued only by whatever
-//     stale deadline the poller already held. TCP retransmits, so a
-//     wake byte cannot be lost; upstream's netpollBreak transports
-//     are lossless for the same reason (windows uses
-//     PostQueuedCompletionStatus, aix a pipe). netpollBreak sends
-//     one byte, guarded by the shared netpollWakeSig dedup; the
-//     poller drains with nonblocking recvs when it blocks.
-//
-// WSAPOLLFD is NOT the Linux pollfd: the fd is a SOCKET (8 bytes on
-// win64), so the struct is 16 bytes, and the POLL* constants have
-// different values. Only POLLRDNORM/POLLWRNORM may be REQUESTED
-// (WSAPoll rejects POLLERR/POLLHUP/POLLPRI in events with WSAEINVAL);
-// ERR/HUP/NVAL are revents-only and always reported.
-//
-// The wave-9 forensic counters (xnuPoll*, netpoll_cosmo_xnu.go) are
-// fed from this poller too - exactly one host poller is live per
-// process - so a stall names itself through cosmoNetpollDiag in the
-// runtimeprobe watchdog output on NT as well.
+// Mutators take ntMtxpoll, poke the poller off WSAPoll, then take
+// ntMtxset (which the poller holds across WSAPoll) and release
+// ntMtxpoll. The poller re-takes both at the top of each cycle.
 
 package runtime
 
@@ -75,7 +29,9 @@ type ntWSAPollFD struct {
 	revents int16
 }
 
-// Winsock POLL* values (NOT the Linux ones).
+// Winsock POLL* values (NOT the Linux ones). Only RDNORM and WRNORM
+// may be REQUESTED - WSAPoll answers ERR/HUP/PRI in events with
+// WSAEINVAL. ERR, HUP and NVAL are revents-only and always reported.
 const (
 	_NT_POLLRDNORM = 0x0100
 	_NT_POLLRDBAND = 0x0200
@@ -87,6 +43,10 @@ const (
 
 // One slot per possible socket fd plus the wake socket: the fd table
 // caps live sockets at ntFDMax, so registration can never overflow.
+// The arrays below are FIXED, not slices: netpollinit and netpollopen
+// can run under runtime locks, because netpollGenericInit fires from
+// the first timer's addHeap, so nothing here may allocate. pd.user
+// holds the fd's slot index, maintained across swap-deletes.
 const ntPollMax = ntFDMax + 1
 
 var (
@@ -99,6 +59,13 @@ var (
 	ntMtxset             mutex
 	ntPollPendingUpdates int32
 
+	// The wake channel MUST be lossless, because WSAPoll has no pipe
+	// or eventfd concept. UDP, loopback included, may drop a datagram
+	// on real NT, and one dropped wake byte leaves the poller asleep
+	// for a whole WSAPoll timeout while every mutator and every
+	// new-earlier timer waits it out. TCP retransmits. Upstream's
+	// transports are lossless for the same reason: windows uses
+	// PostQueuedCompletionStatus, aix a pipe.
 	ntWakeSock uintptr // loopback TCP wake pair: send (client) end
 	ntWakeRecv uintptr // loopback TCP wake pair: polled (accepted) end, slot 0
 	ntWakeByte = [1]byte{'x'}
@@ -110,10 +77,9 @@ func netpollinitNT() {
 		println("runtime: netpollinit: winsock unavailable, errno", eno)
 		throw("runtime: netpollinit failed")
 	}
-	// Build the lossless TCP wake pair (see the file comment) with
-	// the shared recipe - ntLoopbackTCPPair, os_cosmo_nt_sock.go,
-	// which the wave-3 socketpair emulation reuses. Blocking,
-	// TCP_NODELAY, uninheritable, peer-verified.
+	// Build the lossless TCP wake pair (see ntWakeSock) with the
+	// shared ntLoopbackTCPPair recipe, which socketpair reuses too:
+	// blocking, TCP_NODELAY, uninheritable, peer-verified.
 	a, c, step, werr := ntLoopbackTCPPair()
 	if werr != 0 {
 		println("runtime: netpollinit: wake pair", step, "failed with", werr)
@@ -212,6 +178,9 @@ func netpollcloseNT(fd uintptr) uintptr {
 	return 0
 }
 
+// netpollarmNT re-arms one direction. The poller is level-triggered
+// (netpollLevelTriggered is set at init): delivery CLEARS the
+// direction bit from events, and pollWait re-arms through here.
 func netpollarmNT(pd *pollDesc, mode int) {
 	lock(&ntMtxpoll)
 	ntNetpollwakeup()
@@ -248,9 +217,10 @@ func netpollBreakNT() {
 
 // netpollNT is the NT leg of netpoll: one WSAPoll cycle.
 //
-// delay < 0: blocks indefinitely; delay == 0: returns empty without
-// polling (see the file comment); delay > 0: blocks up to that many
-// nanoseconds.
+// delay < 0 blocks indefinitely and delay > 0 blocks that many
+// nanoseconds. delay == 0 returns empty without polling, as AIX does:
+// a nonblocking check would contend ntMtxset with the blocked poller,
+// and sysmon and findRunnable both tolerate the empty answer.
 func netpollNT(delay int64) (gList, int32) {
 	var timeoutMs int32
 	if delay < 0 {

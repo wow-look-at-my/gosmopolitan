@@ -4,50 +4,13 @@
 
 //go:build cosmo && amd64
 
-// Path translation for the Windows NT personality (wave 2).
+// Path translation for the Windows NT personality.
 //
 // Cosmo binaries and the whole unix-shaped standard library speak
-// Linux-style paths ("/tmp/x", "/dev/null", forward slashes). Every
-// file syscall emulated in os_cosmo_nt_sys.go funnels its paths
-// through exactly one function pair defined here:
-//
-//	ntPathW      Linux-style UTF-8  ->  Win32 UTF-16 (NUL-terminated)
-//	ntPathToLinux  Win32 UTF-16     ->  Linux-style UTF-8
-//
-// POLICY (following cosmo libc's precedent for NT path munging):
-//
-//	"/dev/null"          -> "NUL"           (the NT null device)
-//	"/tmp" or "/tmp/x"   -> GetTempPathW()+"x"
-//	    MAGIC, documented here once: cosmo's os.TempDir() returns
-//	    "/tmp" when TMPDIR is unset, and NT has no /tmp - so the
-//	    bare name and the subtree are grafted onto the per-user NT
-//	    temp directory (e.g. "C:\Users\u\AppData\Local\Temp\x").
-//	    This makes os.MkdirTemp/CreateTemp work unmodified.
-//	"/c" or "/c/x"       -> "C:\" / "C:\x"  (single ASCII letter
-//	    after the leading slash = drive letter, cosmo convention)
-//	"C:..." or "c:..."   -> passthrough      (already drive-shaped;
-//	    slashes flipped)
-//	other absolute "/x"  -> "\x"             (current-drive rooted)
-//	relative "x/y"       -> "x\y"            (resolved by Win32
-//	    against the process working directory, same as Linux)
-//
-// The reverse direction (getcwd, os.Executable) always produces the
-// "/c/..." form with a LOWERCASE drive letter, so unix-shaped
-// filepath code sees IsAbs() == true and Chdir(Getwd()) round-trips
-// through ntPathW exactly. Note the round trip is exact for the
-// /c/-form; a "/tmp/x" path deliberately comes BACK as its real
-// "/c/users/.../temp/x" spelling (the probe's checkWd compares via
-// os.SameFile for exactly this kind of aliasing, as with macOS's
-// /var symlink).
-//
-// Long paths: plain paths are preferred (CI temp paths are short);
-// the \\?\ prefix is prepended only when a converted drive-absolute
-// path exceeds the classic MAX_PATH budget. \\?\ requires
-// backslash-only, fully-qualified paths, which is what ntPathW
-// produces.
-//
-// No symlink support this wave: readlink returns EINVAL (the Linux
-// errno for "not a symlink"), and lstat == stat.
+// Linux-style paths. Every emulated file syscall funnels its paths
+// through exactly one function pair defined here: ntPathW forward, and
+// ntPathToLinux back. Symlinks are unsupported, so readlink is EINVAL
+// - Linux's own errno for "not a symlink" - and lstat is stat.
 
 package runtime
 
@@ -106,9 +69,10 @@ func ntTempPathW() []uint16 {
 
 const _NT_MAX_PATH = 260
 
-// ntPathW converts a Linux-style path to a NUL-terminated Win32
-// UTF-16 path per the policy above. Returns nil for the empty path
-// (callers report ENOENT, matching Linux).
+// ntPathW converts a Linux-style path to a NUL-terminated Win32 UTF-16
+// path, following cosmo libc's own NT munging. It returns nil for the
+// empty path, which callers report as ENOENT like Linux. Each rule is
+// stated on the case that applies it.
 func ntPathW(path string) []uint16 {
 	if path == "" {
 		return nil
@@ -119,6 +83,10 @@ func ntPathW(path string) []uint16 {
 	w := make([]uint16, 0, len(path)+8)
 	switch {
 	case path == "/tmp" || ntHasPrefix(path, "/tmp/"):
+		// cosmo's os.TempDir() answers "/tmp" with TMPDIR unset and NT
+		// has no /tmp, so the name and its subtree are grafted onto
+		// the per-user NT temp directory. os.MkdirTemp then works
+		// unmodified.
 		if tmp := ntTempPathW(); tmp != nil {
 			w = append(w, tmp...) // "C:\...\Temp\"
 			rest := path[len("/tmp"):]
@@ -138,7 +106,8 @@ func ntPathW(path string) []uint16 {
 			w = ntUTF16Append(w, path, true)
 		case path[0] == '/' && len(path) >= 2 && ntIsAlpha(path[1]) &&
 			(len(path) == 2 || path[2] == '/'):
-			// "/c" or "/c/x": drive-letter form.
+			// "/c" or "/c/x": one ASCII letter after the leading
+			// slash is a drive letter, the cosmo convention.
 			drive := path[1] &^ 0x20 // upper-case for Win32
 			w = append(w, uint16(drive), ':')
 			rest := path[2:]
@@ -153,7 +122,8 @@ func ntPathW(path string) []uint16 {
 			w = ntUTF16Append(w, path, true)
 		}
 	}
-	// Long-path safety: prefer plain paths; prefix \\?\ only when a
+	// A plain path is preferred, because the \\?\ prefix demands
+	// backslash-only fully-qualified paths. Prefix it only when a
 	// drive-absolute result would not fit the classic MAX_PATH.
 	if len(w) >= _NT_MAX_PATH-1 && len(w) >= 2 && w[1] == ':' {
 		w = append([]uint16{'\\', '\\', '?', '\\'}, w...)
@@ -166,11 +136,17 @@ func ntHasPrefix(s, prefix string) bool {
 	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }
 
-// ntPathToLinux converts a Win32 path (no NUL) to the Linux-style
-// spelling: "\\?\" is stripped, a leading drive letter becomes the
-// lower-case "/c/..." form, backslashes flip to forward slashes, and
-// a trailing slash is trimmed (except at a drive root, which becomes
-// the bare "/c"). Only the drive letter changes case.
+// ntPathToLinux converts a Win32 path (no NUL) to the Linux spelling
+// and is what getcwd and os.Executable answer with. "\\?\" is
+// stripped, a leading drive letter becomes the LOWERCASE "/c/..."
+// form, backslashes flip, and a trailing slash is trimmed except at a
+// drive root, which becomes the bare "/c". Only the drive changes case.
+//
+// The lowercase /c/ form is what makes unix-shaped filepath code see
+// IsAbs() and Chdir(Getwd()) round-trip through ntPathW exactly. That
+// holds for the /c/ form only: a "/tmp/x" path deliberately comes BACK
+// as its real "/c/users/.../temp/x" spelling, an aliasing os.SameFile
+// settles the way it settles macOS's /var symlink.
 func ntPathToLinux(w []uint16) string {
 	s := ntUTF16ToString(w)
 	if len(s) >= 4 && s[0] == '\\' && s[1] == '\\' && s[2] == '?' && s[3] == '\\' {

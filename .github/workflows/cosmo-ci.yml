@@ -84,29 +84,6 @@ jobs:
           chmod +x /tmp/shebang-test.go
           /tmp/shebang-test.go
 
-      - name: Build std for cosmo (both arches)
-        # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo GOARCH=amd64 go build std
-          GOOS=cosmo GOARCH=arm64 go build std
-
-      - name: Build downstream go-toolchain consumers for cosmo
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          workdir=$(mktemp -d)
-          cd "$workdir"
-          go mod init cosmo-downstream-smoke
-          go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
-          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-
       - name: Build APE binary
         # see docs/CI.md "build job" -- no GOARCH pin, and what the ls asserts.
         timeout-minutes: 10
@@ -125,9 +102,114 @@ jobs:
           cd testdata/ape/apetest
           FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
 
+      - name: Stage the APE binaries for the test job
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com "$RUNNER_TEMP/handoff/"
+
+      - name: Hand the APE binaries to the test job
+        uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: ape-binary-${{ matrix.build-os }}
+          path: ${{ runner.temp }}/handoff
+
+      # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
+      - name: A cosmo test binary runs on this host
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
+          # fizzbuzz boots here and is fat; a test binary is thin, so build it both ways.
+          for fat in 1 0; do
+            GOCOSMOFAT=$fat GOOS=cosmo go build -o "$RUNNER_TEMP/fb$fat.com" testdata/fizzbuzz/fizzbuzz.go
+            rc=0
+            "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
+            echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
+          done
+          # The boot prints its milestones under -tags cosmontdebug, so a binary that dies before it can say anything still says how far it got. It exits 139 there, a fault rather than a throw.
+          GOOS=cosmo go build -tags cosmontdebug -o "$RUNNER_TEMP/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go
+          rc=0
+          out="$("$RUNNER_TEMP/fbtrace.com" 10 5 2>&1)" || rc=$?
+          echo "fizzbuzz -tags cosmontdebug exit=$rc output=[$out]"
+          # A child that loses its arguments ignores -test.run and forks forever; archive/tar is where that shows.
+          GOOS=cosmo go build -o "$RUNNER_TEMP/argvecho.com" ./testdata/argvecho/main.go
+          rc=0
+          "$RUNNER_TEMP/argvecho.com" || rc=$?
+          echo "argvecho exit=$rc"
+          # The runtime probe on this host, ahead of the test job that waits on every build leg.
+          if [ "$(go env GOHOSTOS)" != windows ]; then
+            export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+            (cd testdata/ape/apetest && RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" go test -count=1 -run "TestRuntimeProbe$" -v .)
+          fi
+          GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
+          ls -l "$RUNNER_TEMP/strings.test"
+          # Three shapes: no arguments, a listing that never runs a test, and one test.
+          for args in "" "-test.list=." "-test.run=TestLastIndexByte -test.v"; do
+            rc=0
+            "$RUNNER_TEMP/strings.test" $args > "$RUNNER_TEMP/out.txt" 2>&1 || rc=$?
+            echo "strings.test [$args] exit=$rc output:"
+            cat "$RUNNER_TEMP/out.txt"
+          done
+          exit $rc
+
+      - name: The whole test suite (run.bash)
+        # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
+        timeout-minutes: 90
+        uses: wow-look-at-my/actions/multicmd@master
+        with:
+          unix: cd src && ./run.bash
+          windows: cd src && .\run.bat
+
+  # Checks whose answer does not depend on the host. Each runs once, here, not once per matrix leg.
+  cosmo-checks:
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Build Go toolchain
+        timeout-minutes: 8
+        shell: bash
+        run: cd src && ./make.bash -v
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Build std for cosmo (both arches)
+        # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=cosmo GOARCH=amd64 go build std
+          GOOS=cosmo GOARCH=arm64 go build std
+
+      - name: Build downstream go-toolchain consumers for cosmo
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          go mod init cosmo-downstream-smoke
+          go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
+          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
+          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
+
       - name: Build platform-subset APE binaries
         # see docs/CI.md "build job" for the tri/amd subset rationale.
-        if: matrix.build-os == 'ubuntu-latest'
         timeout-minutes: 10
         shell: bash
         run: |
@@ -138,63 +220,35 @@ jobs:
           GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
           (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
           echo "=== sizes ==="
-          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
+          ls -l fizzbuzz-tri.com fizzbuzz-amd.com
           export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
           cd testdata/ape/apetest
           SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
           SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
 
-      - name: Upload APE binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ape-binary-${{ matrix.build-os }}
-          path: |
-            fizzbuzz.com
-            runtimeprobe.com
-            fizzbuzz-tri.com
-            runtimeprobe-tri.com
-            fizzbuzz-amd.com
-            runtimeprobe-amd.com
-          if-no-files-found: ignore
-          retention-days: 1
+      - name: Stage the platform-subset APE binaries for the test job
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
 
-      # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
-      - name: GOOS=cosmo package tests (dats)
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 8
+      - name: Hand the platform-subset APE binaries to the test job
+        uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: ape-binary-subset
+          path: ${{ runner.temp }}/handoff
+
+      # Every suite under dats/. Which tests each covers is the suite's decision, not this file's.
+      - name: The dats suites
+        timeout-minutes: 30
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/cosmo-tests.dats
-
-      # Prose nobody asked for is a defect like any other, so a check refuses it.
-      - name: No wordspam
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/no-wordspam.dats
-
-      - name: The whole test suite (run.bash)
-        # GOOS pinned in the environment, which is the one channel a test cannot turn off: the fork defaults GOOS=cosmo, so an unpinned child builds an APE no bare exec can start. see docs/CI.md.
-        timeout-minutes: 90
-        uses: wow-look-at-my/actions/multicmd@master
-        with:
-          unix: |
-            cd src
-            export GOOS="$(../bin/go env GOHOSTOS)" GOARCH="$(../bin/go env GOHOSTARCH)"
-            ./run.bash
-          windows: |
-            cd src
-            $env:GOOS = (..\bin\go.exe env GOHOSTOS)
-            $env:GOARCH = (..\bin\go.exe env GOHOSTARCH)
-            .\run.bat
+          tests: dats
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     timeout-minutes: ${{ matrix.job-timeout }}
-    needs: build
+    needs: [build, cosmo-checks]
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -225,10 +279,29 @@ jobs:
           go-version: '1.24'
           cache: false
 
-      - name: Download all APE binaries
-        uses: actions/download-artifact@v4
+      - name: Download the ubuntu-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          path: binaries
+          name: ape-binary-ubuntu-latest
+          path: binaries/ape-binary-ubuntu-latest
+
+      - name: Download the macOS-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-macos-latest
+          path: binaries/ape-binary-macos-latest
+
+      - name: Download the windows-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-windows-latest
+          path: binaries/ape-binary-windows-latest
+
+      - name: Download the platform-subset APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-subset
+          path: binaries/ape-binary-subset
 
       # No-op on windows: multicmd runs nothing there, and the exec bit means nothing on NTFS.
       - name: Make binaries executable
@@ -354,14 +427,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload ubuntu-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-ubuntu-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       - name: Test binary built on macOS
         id: test-macos
@@ -375,14 +440,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload macos-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-macos-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       - name: Test binary built on Windows
         id: test-windows
@@ -396,14 +453,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload windows-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-windows-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       # A platform-subset APE must boot and run on the real host on every platform it claims -- see docs/CI.md "test job".
       - name: Test platform-subset APEs
@@ -413,7 +462,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-subset"
           rc=0
           : > test-output.log
           run_subset() {
@@ -423,7 +472,7 @@ jobs:
             RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
             SLIM_BIN="$bins/fizzbuzz-$name.com" \
             SLIM_PLATFORMS="$platforms" \
-            FAT_BIN="$bins/fizzbuzz.com" \
+            FAT_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" \
               sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
               go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
           }
@@ -432,13 +481,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      - name: Upload subset test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-subset
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
@@ -497,15 +539,7 @@ jobs:
         shell: bash
         run: |
           export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test -count=1 cmd/internal/obj/wasm
-
-      - name: Test js/wasm under node
-        # Observed 1m18s locally. lib/wasm supplies go_js_wasm_exec.
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
-          GOOS=js GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall syscall/js math math/bits os/signal net/http
+          GOOS=linux GOARCH=amd64 go test cmd/internal/obj/wasm
 
       - name: Test streaming fetch uploads under node (jsfetchstream e2e)
         # Proves GODEBUG=jsfetchnode=1 request bodies with unknown length actually STREAM -- see docs/CI.md "wasm job".
@@ -516,14 +550,6 @@ jobs:
           (cd testdata/jsfetchstream && GOOS=js GOARCH=wasm go build -o /tmp/jsfetchstream.wasm .)
           node testdata/jsfetchstream/run.js lib/wasm /tmp/jsfetchstream.wasm
 
-      - name: Test wasip1/wasm under wazero
-        # Observed 57s locally. lib/wasm supplies go_wasip1_wasm_exec.
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
-          GOWASIRUNTIME=wazero GOOS=wasip1 GOARCH=wasm go test -short -count=1 runtime runtime/pprof sync sync/atomic time os syscall math
-
       - name: Test GOWASI=wasmedgesock (wasip1sock reference host, TCP+UDP)
         # see docs/CI.md "wasm job". GOOS pinned: the fork defaults GOOS=cosmo.
         timeout-minutes: 10
@@ -531,7 +557,7 @@ jobs:
         run: |
           export PATH="$PWD/bin:$PATH"
           cd testdata/wasip1sock/host
-          GOOS=linux GOARCH=amd64 go test -count=1 ./...
+          GOOS=linux GOARCH=amd64 go test ./...
 
       - name: Test GOWASM=threads under node (js only)
         # see docs/CI.md "wasm job" and docs/WASM.md for the multi-P scheduler this exercises.
@@ -542,7 +568,7 @@ jobs:
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/wasmthreads-smoke.wasm .)
           node lib/wasm/wasm_exec_node.js /tmp/wasmthreads-smoke.wasm
           (cd testdata/wasmthreads && GOOS=js GOARCH=wasm GOWASM=threads go build -o /tmp/pooldemo.wasm ./pooldemo)
-          # pool_demo gate: see DEBUGGING.md, pool_demo silent-fatal.
+          # pool_demo gate: a silent fatal there must fail the leg.
           set -o pipefail
           node testdata/wasmthreads/pool_demo.js lib/wasm /tmp/pooldemo.wasm 2>&1 | tee /tmp/pooldemo.out
           grep -q "POOLDEMO: PASS" /tmp/pooldemo.out
@@ -593,10 +619,83 @@ jobs:
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=js/wasm
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=wasip1/wasm
 
+  # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
+  wasm-suite:
+    timeout-minutes: 120
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        port: [js, wasip1]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: wow-look-at-my/actions@secret-server#latest
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Setup Node.js
+        if: matrix.port == 'js'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wasmtime (wasip1 runtime)
+        # The exec wrapper's default engine, and the one upstream's wasip1 builder runs. test/wasmmemsize measures the engine: wazero sits 10 pages over its ceiling.
+        if: matrix.port == 'wasip1'
+        timeout-minutes: 5
+        shell: bash
+        run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v37.0.0
+
+      - name: Build Go toolchain
+        timeout-minutes: 8
+        shell: bash
+        run: cd src && ./make.bash -v
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      # Temporary diagnostic, never fails: the srcimporter test stalls under wasmtime on this runner and nowhere else. The scheduler trace says what the one M is doing.
+      - name: Trace the scheduler through srcimporter (diagnostic)
+        if: matrix.port == 'wasip1'
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          GODEBUG=schedtrace=2000,scheddetail=1 GOOS=wasip1 GOARCH=wasm go test -short -count=1 -timeout 4m -run TestImportedTypes go/internal/srcimporter 2>&1 | tail -400 || true
+
+      - name: The whole test suite (dist test)
+        # lib/wasm supplies the exec wrapper for the port; dist test reads GOOS and GOARCH.
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
+
+
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
+  # The hand-offs live in the actions cache. Delete them once every consumer has run.
+  cache-cleanup:
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: wow-look-at-my/actions@cache-cleanup#latest
+
   publish-create:
     timeout-minutes: 10
-    needs: [build, test]
+    needs: [build, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates

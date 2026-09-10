@@ -28,6 +28,11 @@ func TestCancelRemoves(t *testing.T) {
 	XTestCancelRemoves(t) // uses unexported context types
 }
 func TestCustomContextGoroutines(t *testing.T) {
+	// context.goroutines counts every watcher the package has ever started,
+	// and this test reads the difference across one call. Any other test
+	// building a context at the same moment is counted here too, which is a
+	// "2 goroutines created, want 1" on whichever host wins the race.
+	t.Serial()
 	XTestCustomContextGoroutines(t) // reads the context.goroutines counter
 }
 

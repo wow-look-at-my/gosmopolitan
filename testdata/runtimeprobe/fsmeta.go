@@ -379,7 +379,7 @@ func checkNanosleep() {
 // anything else, and the payload is small enough to fit in the socket
 // buffer so the write cannot block.
 func checkSendfile() {
-	s := &softStep{name: "sendfile", soft: cosmoHostOS() == "windows"}
+	s := &softStep{name: "sendfile"}
 
 	dir, err := os.MkdirTemp("", "rp-sendfile")
 	if err != nil {

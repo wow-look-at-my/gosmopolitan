@@ -13,6 +13,7 @@ import (
 	"internal/cpu"
 	"internal/goarch"
 	"internal/goexperiment"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/gc"
 	"internal/runtime/sys"
@@ -52,7 +53,7 @@ const (
 	// physPageAlignedStacks indicates whether stack allocations must be
 	// physical page aligned. This is a requirement for MAP_STACK on
 	// OpenBSD.
-	physPageAlignedStacks = GOOS == "openbsd"
+	physPageAlignedStacks = goos.IsOpenbsd == 1
 )
 
 // Main malloc heap.

@@ -19,6 +19,11 @@ import (
 )
 
 func TestGoroutineProfile(t *testing.T) {
+	// Profiles every goroutine in the process into a fixed 128-record
+	// buffer, and sets GOMAXPROCS, so it needs the process to itself. A
+	// child gives it one; the barrier would instead wait out every other
+	// test, and one of them waits on a subprocess of its own.
+	t.Fork()
 	// GoroutineProfile used to use the wrong starting sp for
 	// goroutines coming out of system calls, causing possible
 	// crashes.

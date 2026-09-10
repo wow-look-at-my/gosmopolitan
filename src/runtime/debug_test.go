@@ -133,6 +133,9 @@ func skipUnderDebugger(t *testing.T) {
 }
 
 func TestDebugCall(t *testing.T) {
+	// InjectDebugCall installs the one SIGTRAP hook the process has, so two
+	// injections at once trap on the wrong M.
+	t.Serial()
 	g, after := startDebugCallWorker(t)
 	defer after()
 
@@ -184,6 +187,9 @@ func TestDebugCall(t *testing.T) {
 }
 
 func TestDebugCallLarge(t *testing.T) {
+	// InjectDebugCall installs the one SIGTRAP hook the process has, so two
+	// injections at once trap on the wrong M.
+	t.Serial()
 	g, after := startDebugCallWorker(t)
 	defer after()
 
@@ -213,6 +219,9 @@ func TestDebugCallLarge(t *testing.T) {
 }
 
 func TestDebugCallGC(t *testing.T) {
+	// InjectDebugCall installs the one SIGTRAP hook the process has, so two
+	// injections at once trap on the wrong M.
+	t.Serial()
 	g, after := startDebugCallWorker(t)
 	defer after()
 
@@ -223,6 +232,9 @@ func TestDebugCallGC(t *testing.T) {
 }
 
 func TestDebugCallGrowStack(t *testing.T) {
+	// InjectDebugCall installs the one SIGTRAP hook the process has, so two
+	// injections at once trap on the wrong M.
+	t.Serial()
 	g, after := startDebugCallWorker(t)
 	defer after()
 
@@ -248,6 +260,8 @@ func debugCallUnsafePointWorker(gpp **runtime.G, ready, stop *uint32) {
 }
 
 func TestDebugCallUnsafePoint(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	skipUnderDebugger(t)
 
 	// This can deadlock if there aren't enough threads or if a GC
@@ -277,6 +291,8 @@ func TestDebugCallUnsafePoint(t *testing.T) {
 }
 
 func TestDebugCallPanic(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	skipUnderDebugger(t)
 
 	// This can deadlock if there aren't enough threads.

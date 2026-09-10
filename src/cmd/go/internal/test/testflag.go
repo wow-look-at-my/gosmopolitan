@@ -50,7 +50,7 @@ func init() {
 	cf.String("benchtime", "", "")
 	cf.StringVar(&testBlockProfile, "blockprofile", "", "")
 	cf.String("blockprofilerate", "", "")
-	cf.Int("count", 0, "")
+	cf.IntVar(&testCount, "count", 0, "")
 	cf.String("cpu", "", "")
 	cf.StringVar(&testCPUProfile, "cpuprofile", "", "")
 	cf.BoolVar(&testFailFast, "failfast", false, "")
@@ -213,6 +213,34 @@ func (f *shuffleFlag) Set(value string) error {
 	return nil
 }
 
+// normalizeCount settles what -count means here. A negative count names no run
+// at all and is fatal. Zero still reaches the test binary, which builds and runs
+// nothing. Every other value runs the tests exactly once, so the flag is dropped
+// rather than forwarded: it selects no behavior, and an argument the go command
+// does not recognize is what turns the test cache off. A repeat is not a repair.
+// A test that passes only sometimes is broken, and the fix belongs in the test.
+//
+// explicitArgs holds the flags already destined for the test binary, and
+// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both.
+func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string {
+	if testCount < 0 {
+		base.Fatalf("go: -count must not be negative")
+	}
+	if testCount == 0 {
+		return explicitArgs
+	}
+	delete(fromGOFLAGS, "count")
+	delete(fromGOFLAGS, "test.count")
+	kept := explicitArgs[:0]
+	for _, arg := range explicitArgs {
+		if strings.HasPrefix(arg, "-test.count=") {
+			continue
+		}
+		kept = append(kept, arg)
+	}
+	return kept
+}
+
 // testFlags processes the command line, grabbing -x and -c, rewriting known flags
 // to have "test" before them, and reading the command line for the test binary.
 // Unfortunately for us, we need to do our own flag processing because go test
@@ -361,6 +389,8 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 			cfg.BuildJSON = true
 		}
 	}
+
+	explicitArgs = normalizeCount(explicitArgs, addFromGOFLAGS)
 
 	// Inject flags from GOFLAGS before the explicit command-line arguments.
 	// (They must appear before the flag terminator or first non-flag argument.)

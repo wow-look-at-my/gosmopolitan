@@ -12,18 +12,14 @@ import (
 )
 
 // sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS, and
-// the kernel hands the signal handler its native context structure -
-// a Linux ucontext with an embedded sigcontext, or an Apple ucontext
-// whose uc_mcontext FIELD IS A POINTER to a __darwin_mcontext64 in the
-// signal frame. Every accessor dispatches on __hostos (the established
-// runtime-dispatch pattern; the Linux branch is byte-for-byte the old
-// code). Writes (set_pc/set_sp for sigpanic injection and async
-// preemption's pushCall) go through the same dispatch, so on macOS
-// they land in the kernel's own mcontext and Apple's sigreturn
-// restores them - no context copying or translation is needed.
+// the kernel hands the handler its native context - a Linux ucontext
+// with an embedded sigcontext, or an Apple ucontext whose uc_mcontext
+// FIELD IS A POINTER to a __darwin_mcontext64 in the signal frame. So
+// every accessor dispatches on __hostos, writes included: set_pc and
+// set_sp land in the kernel's own mcontext and Apple's sigreturn
+// restores them, with no context copying.
 //
-// The Apple layouts below mirror upstream defs_darwin_arm64.go
-// (ucontext, mcontext64, regs64, exceptionstate64, siginfo); the
+// The Apple layouts below mirror upstream defs_darwin_arm64.go. The
 // neonstate64 tail of mcontext64 is never accessed and is omitted.
 
 type sigctxt struct {

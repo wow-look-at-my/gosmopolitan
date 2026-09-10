@@ -12,21 +12,17 @@ import (
 )
 
 // Where an NT host keeps its nameservers.
-//
 // net's resolv.conf reader is constrained !windows, and cosmo is not
 // windows, so a cosmo binary compiles it on every host. NT has no
 // /etc/resolv.conf: the read fails, net falls back to defaultNS, and
-// every lookup goes to localhost, where nothing answers. The list has
-// to come from Windows instead.
+// every lookup goes to localhost, where nothing answers.
 //
-// iphlpapi's GetNetworkParams is the smallest way to ask. One call
-// fills a FIXED_INFO, and its DnsServerList arrives as NUL-terminated
-// dotted quads rather than sockaddrs, so nothing here parses an
-// address. It reports IPv4 servers only, which is what the resolver
-// needs to stop asking localhost.
-//
-// The library is optional, like ntdll and bcryptprimitives above it: a
-// host without it degrades to no servers, never a crash.
+// iphlpapi's GetNetworkParams is the smallest way to ask instead. One
+// call fills a FIXED_INFO, whose DnsServerList arrives as
+// NUL-terminated dotted quads rather than sockaddrs, so nothing here
+// parses an address. It reports IPv4 servers only, which is what stops
+// the resolver asking localhost. The library is optional, like ntdll
+// above it, and a host without it degrades to no servers.
 
 // FIXED_INFO and IP_ADDR_STRING, win64. Spelled as the sum of the
 // members rather than as a total, because a total is a number nobody

@@ -47,6 +47,7 @@ var (
 var oneMB []byte // Will be allocated to 1MB of random data by TestCountMallocs.
 
 func TestCountMallocs(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("skipping malloc count in short mode")
 	}
@@ -79,6 +80,7 @@ var Sink struct {
 }
 
 func TestAllocationsFromBytes(t *testing.T) {
+	t.Serial()
 	const runsPerTest = 100
 	bytes := struct{ Bool, Number, String, Buffer []byte }{
 		Bool:   []byte("false"),

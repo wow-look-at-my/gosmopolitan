@@ -896,9 +896,7 @@ compilers, compiler options, and so on: cleaning the cache explicitly
 should not be necessary in typical use. However, the build cache
 does not detect changes to C libraries imported with cgo.
 If you have made changes to the C libraries on your system, you
-will need to clean the cache explicitly or else use the -a build flag
-(see 'go help build') to force rebuilding of packages that
-depend on the updated C libraries.
+will need to clean the cache explicitly.
 
 The go command also caches successful package test results.
 See 'go help test' for details. Running 'go clean -testcache' removes
@@ -930,8 +928,9 @@ cache. GO_BUILDCACHE_CONFIG holds that tier's configuration, as
 base64-encoded JSON; with the variable unset, the build uses the local
 cache alone. The go command asks the shared tier only after a local miss,
 and it stores what the tier returns in the local cache before the build
-uses it. Set GOCACHEDEBUG to any non-empty value to see the tier's
-per-request diagnostics.
+uses it. A tier that cannot be reached leaves the build on the local cache
+and says so on stderr. Set GOCACHEDEBUG to any non-empty value to also see
+the tier's routine per-request reporting.
 `,
 }
 

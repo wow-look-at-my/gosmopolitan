@@ -349,7 +349,9 @@ var builtins = map[string]any{
 }
 
 func testParse(doCopy bool, t *testing.T) {
-	// textFormat is package-level, and every String() in this package reads it.
+	// textFormat is a package global that decides how a text node
+	// prints. Every test that reads a node's String output wants the
+	// quoted form, so no other test may run while it is set.
 	t.Serial()
 	textFormat = "%q"
 	defer func() { textFormat = "%s" }()

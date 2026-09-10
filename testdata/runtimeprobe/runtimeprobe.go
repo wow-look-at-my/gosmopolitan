@@ -132,6 +132,7 @@ func main() {
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)
 	timed("cloexec", checkCloexec)
+	timed("execstdin", checkExecStdin)
 	timed("hostos", checkHostOS)
 	timed("auxv", checkAuxv)
 	timed("procauxv", checkProcAuxv)
@@ -152,6 +153,7 @@ func main() {
 	timed("rusage", checkRusage)
 	timed("ioctl", checkIoctl)
 	timed("termios", checkTermios)
+	timed("pty", checkPty)
 	timed("sendfile", checkSendfile)
 	timed("nanosleep", checkNanosleep)
 	// Exec and signal checks run at the END on purpose, in that order.

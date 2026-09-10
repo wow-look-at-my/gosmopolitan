@@ -308,6 +308,7 @@ func TestIndex32(t *testing.T) {
 }
 
 func TestIndex64(t *testing.T) {
+	t.Serial()
 	maxData32 = -1
 	defer func() {
 		maxData32 = realMaxData32

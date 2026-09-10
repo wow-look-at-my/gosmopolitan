@@ -8,6 +8,7 @@ package bytes_test
 
 import (
 	. "bytes"
+	"runtime"
 	"syscall"
 	"testing"
 )
@@ -26,6 +27,10 @@ import (
 func dangerousSlice(t *testing.T) []byte {
 	pagesize := syscall.Getpagesize()
 	b, err := syscall.Mmap(0, 0, 3*pagesize, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_ANONYMOUS|syscall.MAP_PRIVATE)
+	if err == syscall.ENOSYS {
+		// A cosmo binary builds this file and can boot on a host with no mmap.
+		t.Skipf("host %s has no mmap", runtime.GOOS)
+	}
 	if err != nil {
 		t.Fatalf("mmap failed %s", err)
 	}

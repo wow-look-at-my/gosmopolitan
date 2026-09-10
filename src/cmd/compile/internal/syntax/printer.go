@@ -671,6 +671,9 @@ func (p *printer) printRawNode(n Node) {
 
 	case *VarDecl:
 		if n.Group == nil {
+			if n.Readonly {
+				p.print(_Name, "readonly", blank)
+			}
 			p.print(_Var, blank)
 		}
 		p.printNameList(n.NameList)
@@ -701,6 +704,9 @@ func (p *printer) printRawNode(n Node) {
 		}
 
 	case *printGroup:
+		if n.Readonly {
+			p.print(_Name, "readonly", blank)
+		}
 		p.print(n.Tok, blank, _Lparen)
 		if len(n.Decls) > 0 {
 			p.print(newline, indent)
@@ -828,8 +834,9 @@ func groupFor(d Decl) (token, *Group) {
 
 type printGroup struct {
 	node
-	Tok   token
-	Decls []Decl
+	Tok      token
+	Readonly bool // a "readonly var" group
+	Decls    []Decl
 }
 
 func (p *printer) printDecl(list []Decl) {
@@ -857,6 +864,9 @@ func (p *printer) printDecl(list []Decl) {
 	var pg printGroup
 	// *pg.Comments() = *group.Comments()
 	pg.Tok = tok
+	if v, ok := list[0].(*VarDecl); ok {
+		pg.Readonly = v.Readonly
+	}
 	pg.Decls = list
 	p.printNode(&pg)
 }

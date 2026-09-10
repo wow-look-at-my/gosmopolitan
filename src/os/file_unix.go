@@ -396,6 +396,16 @@ func Remove(name string) error {
 }
 
 func tempDir() string {
+	// A cosmo binary takes this file on every host, and runtime.GOOS names the
+	// host it booted on. NT sets TMP or TEMP and never TMPDIR, so the unix
+	// default hands back /tmp, a path that host does not have. Every
+	// t.TempDir on the windows leg then built under it.
+	//
+	// This is the order GetTempPath documents, which is what os.TempDir
+	// answers on a real windows build.
+	if runtime.GOOS == "windows" {
+		return ntTempDir(Getenv)
+	}
 	dir := Getenv("TMPDIR")
 	if dir == "" {
 		if runtime.GOOS == "android" {
@@ -405,6 +415,18 @@ func tempDir() string {
 		}
 	}
 	return dir
+}
+
+// ntTempDir answers TempDir on an NT host, in the order GetTempPath documents,
+// which is what a real windows build returns. getenv is a parameter so a test
+// can run this on the host it is already on.
+func ntTempDir(getenv func(string) string) string {
+	for _, key := range [...]string{"TMP", "TEMP", "USERPROFILE"} {
+		if dir := getenv(key); dir != "" {
+			return dir
+		}
+	}
+	return `C:\Windows\Temp`
 }
 
 // Link creates newname as a hard link to the oldname file.

@@ -7,7 +7,10 @@ package chacha20
 import "runtime"
 
 // Platforms that have fast unaligned 32-bit little endian accesses.
-const unaligned = runtime.GOARCH == "386" ||
+//
+// Fork-local: a var rather than a const, because runtime.GOARCH is a
+// variable on cosmo. Re-apply after re-vendoring (src/README.vendor).
+var unaligned = runtime.GOARCH == "386" ||
 	runtime.GOARCH == "amd64" ||
 	runtime.GOARCH == "arm64" ||
 	runtime.GOARCH == "ppc64le" ||

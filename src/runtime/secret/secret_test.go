@@ -65,6 +65,7 @@ func heapSTiny() *secretType {
 // are freed.
 // See runtime/mheap.go:freeSpecial.
 func TestHeap(t *testing.T) {
+	t.Serial()
 	var addr uintptr
 	var p weak.Pointer[S]
 	Do(func() {
@@ -81,6 +82,7 @@ func TestHeap(t *testing.T) {
 }
 
 func TestHeapTiny(t *testing.T) {
+	t.Serial()
 	var addr uintptr
 	var p weak.Pointer[secretType]
 	Do(func() {
@@ -100,6 +102,7 @@ func TestHeapTiny(t *testing.T) {
 // by the argument to secret.Do.
 // See runtime/secret.go:secret_dec.
 func TestStack(t *testing.T) {
+	t.Serial()
 	checkStackForSecret(t) // if this fails, something is wrong with the test
 
 	Do(func() {
@@ -118,6 +121,7 @@ func use(s *S) {
 // Test that when we copy a stack, we zero the old one.
 // See runtime/stack.go:copystack.
 func TestStackCopy(t *testing.T) {
+	t.Serial()
 	checkStackForSecret(t) // if this fails, something is wrong with the test
 
 	var lo, hi uintptr
@@ -145,6 +149,7 @@ func growStack1(n int) {
 }
 
 func TestPanic(t *testing.T) {
+	t.Serial()
 	checkStackForSecret(t) // if this fails, something is wrong with the test
 
 	defer func() {
@@ -188,6 +193,7 @@ func dividePanic() {
 var zero int
 
 func TestGoExit(t *testing.T) {
+	t.Serial()
 	checkStackForSecret(t) // if this fails, something is wrong with the test
 
 	c := make(chan uintptr, 2)
@@ -268,6 +274,7 @@ func waitCollected[P any](t *testing.T, ptr weak.Pointer[P]) {
 }
 
 func TestRegisters(t *testing.T) {
+	t.Serial()
 	Do(func() {
 		s := makeS()
 		loadRegisters(unsafe.Pointer(&s))
@@ -285,6 +292,7 @@ func TestRegisters(t *testing.T) {
 }
 
 func TestSecretInheritance(t *testing.T) {
+	t.Serial()
 	ch := make(chan bool, 2)
 	Do(func() {
 		ch <- Enabled()
@@ -301,6 +309,7 @@ func TestSecretInheritance(t *testing.T) {
 }
 
 func TestSignalStacks(t *testing.T) {
+	t.Serial()
 	Do(func() {
 		s := makeS()
 		loadRegisters(unsafe.Pointer(&s))

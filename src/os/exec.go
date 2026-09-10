@@ -6,6 +6,7 @@ package os
 
 import (
 	"errors"
+	"internal/goos"
 	"internal/testlog"
 	"runtime"
 	"sync"
@@ -281,7 +282,10 @@ func (p *Process) Release() error {
 	// than Windows, Release sets the Pid field to -1.
 	// This causes the race detector to report a problem
 	// on concurrent calls to Release, but we can't change it now.
-	if runtime.GOOS != "windows" {
+	// The PORT throughout this function: only the windows port keeps a
+	// process handle here. A cosmo binary uses the pid implementation on
+	// every host, including an NT one.
+	if goos.IsWindows == 0 {
 		p.Pid = -1
 	}
 
@@ -289,7 +293,7 @@ func (p *Process) Release() error {
 
 	// For backward compatibility, on Windows only,
 	// we return EINVAL on a second call to Release.
-	if runtime.GOOS == "windows" {
+	if goos.IsWindows == 1 {
 		if oldStatus == statusReleased {
 			return syscall.EINVAL
 		}

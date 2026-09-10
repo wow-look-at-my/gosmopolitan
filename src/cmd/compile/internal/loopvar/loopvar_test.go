@@ -73,6 +73,9 @@ func TestLoopVarGo1_21(t *testing.T) {
 		for _, f := range tc.files {
 			source := f
 			cmd := testenv.Command(t, gocmd, "build", "-o", output, "-gcflags=-lang=go1.21 -d=loopvar="+tc.lvFlag, source)
+			// cmd.Environ, not cmd.Env: appending to a nil Env REPLACES the
+			// environment, and a go command with no PATH cannot find the
+			// exec wrapper that starts a cross-GOOS binary.
 			cmd.Env = append(cmd.Environ(), "GOEXPERIMENT=loopvar", "HOME="+tmpdir)
 			cmd.Dir = "testdata"
 			t.Logf("File %s loopvar=%s expect '%s' exit code %d", f, tc.lvFlag, tc.buildExpect, tc.expectRC)

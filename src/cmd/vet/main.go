@@ -7,6 +7,7 @@ package main
 import (
 	"cmd/internal/objabi"
 	"cmd/internal/telemetry/counter"
+	"cmd/vet/internal/testglobals"
 
 	"golang.org/x/tools/go/analysis/suite/vet"
 	"golang.org/x/tools/go/analysis/unitchecker"
@@ -18,5 +19,7 @@ func main() {
 	objabi.AddVersionFlag()
 	counter.Inc("vet/invocations")
 
-	unitchecker.Main(vet.Suite...) // (never returns)
+	// testglobals is this fork's own: top level tests run in parallel here, so
+	// a package variable a test writes is one every other test can see.
+	unitchecker.Main(append(vet.Suite, testglobals.Analyzer)...) // (never returns)
 }
