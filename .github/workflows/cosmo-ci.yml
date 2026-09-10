@@ -647,11 +647,11 @@ jobs:
           node-version: '22'
 
       - name: Install wasmtime (wasip1 runtime)
-        # The exec wrapper's default engine, and the one upstream's wasip1 builder runs. test/wasmmemsize measures the engine: wazero sits 10 pages over its ceiling.
+        # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages over test/wasmmemsize's ceiling.
         if: matrix.port == 'wasip1'
         timeout-minutes: 5
         shell: bash
-        run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v37.0.0
+        run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
       - name: Build Go toolchain
         timeout-minutes: 8
