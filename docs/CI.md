@@ -69,7 +69,7 @@ Each origin runs a throwaway copy, because an APE self-assimilates on a unix hos
 
 ## wasm-suite job
 
-A matrix over the wasm ports. Each leg builds the toolchain. It then runs `go tool dist test` with `GOOS` set to the port. js runs under node and wasip1 under wasmtime v14.0.4, the exec wrapper's default engine at the release upstream pins. `test/wasmmemsize` measures the engine, and wazero sits ten pages over its ceiling. It is the same suite `run.bash` runs on the cosmo legs. The legs are separate jobs, so neither waits for the other. A failed leg cancels the other. The job cap is 60 minutes: js takes about 9, wasip1 about 46. A named list of packages is a smoke test. This is the gate.
+A matrix over the wasm ports. Each leg builds the toolchain. It then runs `go tool dist test` with `GOOS` set to the port. js runs under node. wasip1 runs under wasmtime v14.0.4, the exec wrapper's default engine, at the release upstream pins. `test/wasmmemsize` measures the engine, and wazero sits ten pages over its ceiling. It is the same suite `run.bash` runs on the cosmo legs. The legs are separate jobs, so neither waits for the other. A failed leg cancels the other. The job cap is 60 minutes: js takes about 9, wasip1 about 46. A named list of packages is a smoke test. This is the gate.
 
 ## wasm job
 
