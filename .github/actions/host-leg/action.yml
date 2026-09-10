@@ -84,7 +84,7 @@ runs:
     - name: A cosmo binary built here runs here (dats)
       uses: wow-look-at-my/dats@master
       with:
-        tests: dats/host-binary.dats
+        tests: dats/host
 
     - name: The whole test suite (run.bash)
       # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.

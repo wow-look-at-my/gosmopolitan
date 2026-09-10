@@ -3,9 +3,9 @@
 # Runs in the test job on windows, over the binaries it downloaded.
 tests:
 	- desc: AF_UNIX binds on this runner, natively and through .NET
-	  cmd: pwsh -NoProfile -File dats/af-unix.ps1
+	  cmd: pwsh -NoProfile -File dats/test/af-unix.ps1
 	  exit: 0
 
 	- desc: the Linux- and Windows-origin fizzbuzz boot and answer
-	  cmd: pwsh -NoProfile -File dats/nt-boot.ps1
+	  cmd: pwsh -NoProfile -File dats/test/nt-boot.ps1
 	  exit: 0

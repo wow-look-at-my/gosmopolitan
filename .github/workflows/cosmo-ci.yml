@@ -113,33 +113,12 @@ jobs:
         shell: bash
         run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
-      - name: Build std for cosmo (both arches)
-        # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo GOARCH=amd64 go build std
-          GOOS=cosmo GOARCH=arm64 go build std
-
-      - name: Build downstream go-toolchain consumers for cosmo
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          workdir=$(mktemp -d)
-          cd "$workdir"
-          go mod init cosmo-downstream-smoke
-          go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
-          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-
-      # Every suite under dats/. Which tests each covers is the suite's decision, not this file's.
+      # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
-        timeout-minutes: 30
+        timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats
+          tests: dats/checks
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
@@ -189,14 +168,6 @@ jobs:
           name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
-      # The NT host suite: AF_UNIX on the runner, and the downloaded APEs booting here.
-      - name: The NT host suite (dats)
-        if: matrix.test-os == 'windows-latest'
-        timeout-minutes: 8
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/nt.dats
-
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
         timeout-minutes: 3
@@ -205,12 +176,12 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # apetest on every origin, then the subsets; the deadlines are in the suite.
+      # apetest on every origin, then the subsets; windows adds the NT host suite. The deadlines are in the suites.
       - name: The APE binaries run on this host (dats)
-        timeout-minutes: 40
+        timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/apetest.dats
+          tests: ${{ matrix.test-os == 'windows-latest' && 'dats/test' || 'dats/test/apetest.dats' }}
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
@@ -245,7 +216,7 @@ jobs:
         # Runs before the fork toolchain is built so `go` is unambiguously the setup-go bootstrap -- see docs/CI.md "wasm job".
         timeout-minutes: 5
         shell: bash
-        run: GOOS=linux GOARCH=amd64 GOBIN="$HOME/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
+        run: GOOS=linux GOARCH=amd64 GOBIN="$RUNNER_TEMP/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "$RUNNER_TEMP/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
@@ -257,54 +228,12 @@ jobs:
         shell: bash
         run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
-      - name: Build std for js/wasm and wasip1/wasm
-        # Observed 22s + 15s locally on a cold cache.
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=js GOARCH=wasm go build std
-          GOOS=wasip1 GOARCH=wasm go build std
-
-      - name: Test the wasm object writer (host-side codegen)
-        # Runs on the HOST, so it needs an explicit GOOS=linux -- see docs/CI.md "wasm job".
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=linux GOARCH=amd64 go test cmd/internal/obj/wasm
-
-      - name: Test streaming fetch uploads under node (jsfetchstream e2e)
-        # Proves GODEBUG=jsfetchnode=1 request bodies with unknown length actually STREAM -- see docs/CI.md "wasm job".
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$PATH"
-          (cd testdata/jsfetchstream && GOOS=js GOARCH=wasm go build -o /tmp/jsfetchstream.wasm .)
-          node testdata/jsfetchstream/run.js lib/wasm /tmp/jsfetchstream.wasm
-
-      - name: Test GOWASI=wasmedgesock (wasip1sock reference host, TCP+UDP)
-        # see docs/CI.md "wasm job". GOOS pinned: the fork defaults GOOS=cosmo.
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          cd testdata/wasip1sock/host
-          GOOS=linux GOARCH=amd64 go test ./...
-
-      - name: GOWASM=threads under node (dats)
-        timeout-minutes: 15
+      # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
+      - name: The wasm dats suites
+        timeout-minutes: 40
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/wasmthreads.dats
-      - name: Compiler regression tests (testdir wasmexport, both targets)
-        # GOOS=linux pin: the harness test binary runs on the host (the fork's go would otherwise target cosmo).
-        timeout-minutes: 5
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
-          GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=js/wasm
-          GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=wasip1/wasm
+          tests: dats/wasm
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:

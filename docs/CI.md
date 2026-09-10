@@ -31,7 +31,7 @@ Checks whose answer does not depend on the host. Each runs once, on the linux to
 
 Cross-compiles, so every build leg builds them with the fat binary, and the test legs run the ubuntu-origin ones. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.
 
-**GOOS=cosmo package tests (dats).** `dats/cosmo-tests.dats`, run through the org's `wow-look-at-my/dats@master` action. Three commands, each `GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec wrappers - the test binary is a thin cosmo APE that. The cosmo syscall shim package covers the darwin sendmsg/recvmsg cmsg repack, the signal and wait-status translation tables, and the epoll layout. The runtime commands cover the Apple itimerval ABI pins and the timeval translation behind the darwin SIGPROF setitimer dispatch. The `syscall` command covers the macOS statfs/utsname struct conversions - which live in package `syscall` because the Apple buffers are far past the emulation's nosplit. The runtime command also pins the iphlpapi FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, where a wrong offset reads plausible garbage rather than failing. Two of the three name the tests they cover rather than running the whole package. A name list is a test-selection decision: it. Observed ~75s warm.
+**GOOS=cosmo package tests (dats).** `dats/checks/cosmo-tests.dats`, run through the org's `wow-look-at-my/dats@master` action. Three commands, each `GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec wrappers - the test binary is a thin cosmo APE that. The cosmo syscall shim package covers the darwin sendmsg/recvmsg cmsg repack, the signal and wait-status translation tables, and the epoll layout. The runtime commands cover the Apple itimerval ABI pins and the timeval translation behind the darwin SIGPROF setitimer dispatch. The `syscall` command covers the macOS statfs/utsname struct conversions - which live in package `syscall` because the Apple buffers are far past the emulation's nosplit. The runtime command also pins the iphlpapi FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, where a wrong offset reads plausible garbage rather than failing. Two of the three name the tests they cover rather than running the whole package. A name list is a test-selection decision: it. Observed ~75s warm.
 
 **The whole test suite (run.bash).** It execs `go tool dist test`, the one call that runs everything: the stdlib and `cmd` packages, and the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches neither of the last two. Never name the tests a step wants here. A test nobody names never runs, which makes green a statement about the name list rather than about the tree.
 
@@ -39,7 +39,7 @@ It runs on every build leg, not one. Upstream runs the same suite on each builde
 
 It runs in short mode. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set, which is what upstream's ordinary builders run.
 
-It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist env` reports, so every go command it starts agrees with it, and it prepends `misc/cosmo` to PATH. The test binaries are APEs, and `execve` refuses one without a `binfmt_misc` entry, so cmd/go runs each through `go_cosmo_<arch>_exec`. The cosmo port keeps its own extra coverage in `dats/cosmo-tests.dats`.
+It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist env` reports, so every go command it starts agrees with it, and it prepends `misc/cosmo` to PATH. The test binaries are APEs, and `execve` refuses one without a `binfmt_misc` entry, so cmd/go runs each through `go_cosmo_<arch>_exec`. The cosmo port keeps its own extra coverage in `dats/checks/cosmo-tests.dats`.
 
 One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
 
@@ -56,7 +56,7 @@ Job-level cap: 3 test steps at their per-OS step timeout plus setup. Observed gr
 
 The AF_UNIX probe is diagnostic only (never fails the job): it proves what the runner's `afunix.sys` actually supports. A runtimeprobe unixsock failure can be attributed - runner. The native matrix reproduces the cosmo runtime's exact socket recipe piecewise (creation flags, `SO_REUSEADDR` - which net's `listenStream` sets and which poisons a subsequent afunix bind with `WSAEOPNOTSUPP` - and `FIONBIO`). The managed .NET case is the canonical known-good control.
 
-The fizzbuzz NT boot check (`dats/nt.dats`, over `dats/nt-boot.ps1`) starts each binary with `Start-Process` rather than pwsh's native invocation, and reads `$p.ExitCode`. That keeps the check clear of pwsh's own teardown. The script ends in an explicit exit. A line before and after each run localizes a future hang.
+The fizzbuzz NT boot check (`dats/test/nt.dats`, over `dats/test/nt-boot.ps1`) starts each binary with `Start-Process` rather than pwsh's native invocation, and reads `$p.ExitCode`. That keeps the check clear of pwsh's own teardown. The script ends in an explicit exit. A line before and after each run localizes a future hang.
 
 The cases restate the contract in `apetest/fizzbuzz_test.go`. `fizzbuzz.com <a> <b>` prints `fizzbuzz(a+b)` and a newline, and exits 0. `TestFizzbuzz_15` sends 10 and 5 and wants "fizzbuzz". `TestNumber_13` sends 7 and 6 and wants "13", which proves the values reach the program through the `GetCommandLineW` parse rather than a constant.
 
@@ -73,7 +73,7 @@ A matrix over the wasm ports. Each leg builds the toolchain. It then runs `go to
 
 ## wasm job
 
-Regression-gates the fork's WebAssembly ports (`GOOS=js` and `GOOS=wasip1`). See docs/WASM.md for every round's measurements and gates, and WASM_SHORTCOMINGS.md for the catalog of fixes. Wasm output is host-independent. A single ubuntu leg is enough. Job cap is a backstop only: a hung step trips its own `timeout-minutes` first, and later steps are skipped on failure. Observed green total is well under 15 minutes.
+Regression-gates the fork's WebAssembly ports (`GOOS=js` and `GOOS=wasip1`). Every check below is a test in `dats/wasm/`, which the job runs as one step. See docs/WASM.md for every round's measurements and gates, and WASM_SHORTCOMINGS.md for the catalog of fixes. Wasm output is host-independent. A single ubuntu leg is enough. Job cap is a backstop only: a hung step trips its own `timeout-minutes` first, and later steps are skipped on failure. Observed green total is well under 15 minutes.
 
 `wasm_exec_node.js` (the js/wasm exec wrapper in `lib/wasm`) requires node >= 18. Wazero installs before the fork toolchain is built so `go` is unambiguously the bootstrap from setup-go: the fork's `bin/go` defaults `GOOS=cosmo`, so a bare. GOOS/GOARCH are pinned anyway, belt and braces. Observed 23s locally, including the go1.25 toolchain auto-download the wazero module demands.
 

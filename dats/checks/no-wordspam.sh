@@ -7,7 +7,7 @@
 #   3. A run of adjacent comment lines may not exceed MAX_COMMENT lines.
 #   4. Changelog phrasing is refused by name.
 #
-# dats/no-wordspam.dats runs it over the tree, so CI enforces the rule.
+# dats/checks/no-wordspam.dats runs it over the tree, so CI enforces the rule.
 # It lives here, in the repo, for exactly that reason: a check that runs
 # a file the checkout does not contain enforces nothing.
 
