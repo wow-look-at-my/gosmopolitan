@@ -13,7 +13,10 @@ jobs:
     # run.bash is the bulk of it, and dist test reruns anything it has to rebuild.
     timeout-minutes: 150
     permissions:
-      id-token: write
+ bin/ and pkg/tool/ are the build; std comes from the shared cache.
+      - name: Stage the toolchain
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"id-token: write
       contents: read
     strategy:
       fail-fast: false
