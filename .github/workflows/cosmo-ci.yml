@@ -121,18 +121,6 @@ jobs:
           name: ape-binary-${{ matrix.build-os }}
           path: ${{ runner.temp }}/handoff
 
-      # cosmo-checks runs on this toolchain rather than building it a second time. bin/ and pkg/tool/ are the build; std comes from the shared cache.
-      - name: Stage the toolchain for cosmo-checks
-        if: matrix.build-os == 'ubuntu-latest'
-        shell: bash
-        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
-
-      - name: Hand the toolchain to cosmo-checks
-        if: matrix.build-os == 'ubuntu-latest'
-        uses: wow-look-at-my/actions@cache-upload#latest
-        with:
-          name: toolchain-linux
-          path: ${{ runner.temp }}/toolchain
 
       # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
       - name: A cosmo test binary runs on this host
@@ -180,10 +168,47 @@ jobs:
           # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
           GOCOSMOFORKDIAG: 1
 
-  # Checks whose answer does not depend on the host. Each runs once, here, on the ubuntu leg's toolchain, beside the test job.
+  # One linux build of the toolchain, for every job that runs it on linux but does not test the linux host: cosmo-checks, wasm, wasm-suite. The ubuntu build leg keeps its own, so the three host legs start together.
+  toolchain-linux:
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Build Go toolchain
+        timeout-minutes: 8
+        shell: bash
+        run: cd src && ./make.bash -v
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      # bin/ and pkg/tool/ are the build; std comes from the shared cache.
+      - name: Stage the toolchain
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+
+      - name: Hand the toolchain over
+        uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: toolchain-linux
+          path: ${{ runner.temp }}/toolchain
+
+  # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
     timeout-minutes: 60
-    needs: build
+    needs: toolchain-linux
     permissions:
       id-token: write
       contents: read
@@ -195,7 +220,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
 
-      - name: Take the toolchain the ubuntu leg built
+      - name: Take the toolchain toolchain-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: toolchain-linux
@@ -469,6 +494,7 @@ jobs:
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: 45
+    needs: toolchain-linux
     permissions:
       id-token: write
       contents: read
@@ -500,13 +526,15 @@ jobs:
         shell: bash
         run: GOOS=linux GOARCH=amd64 GOBIN="$HOME/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
 
-      - name: Build Go toolchain
-        # Same build as the build job's ubuntu leg; observed ~2m30s.
-        timeout-minutes: 8
+      - name: Take the toolchain toolchain-linux built
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: toolchain-linux
+          path: .
+
+      - name: The restored go answers
         shell: bash
-        run: cd src && ./make.bash -v
-        env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
       - name: Build std for js/wasm and wasip1/wasm
         # Observed 22s + 15s locally on a cold cache.
@@ -606,6 +634,7 @@ jobs:
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
     timeout-minutes: 120
+    needs: toolchain-linux
     permissions:
       id-token: write
       contents: read
@@ -642,12 +671,15 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      - name: Build Go toolchain
-        timeout-minutes: 8
+      - name: Take the toolchain toolchain-linux built
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: toolchain-linux
+          path: .
+
+      - name: The restored go answers
         shell: bash
-        run: cd src && ./make.bash -v
-        env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
       # Temporary diagnostic, never fails: the srcimporter test stalls under wasmtime on this runner and nowhere else. The scheduler trace says what the one M is doing.
       - name: Trace the scheduler through srcimporter (diagnostic)
@@ -668,7 +700,7 @@ jobs:
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
   cache-cleanup:
-    needs: [test, cosmo-checks]
+    needs: [test, cosmo-checks, wasm, wasm-suite]
     if: always()
     runs-on: ubuntu-latest
     permissions:

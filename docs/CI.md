@@ -22,7 +22,7 @@ Every job that runs `make.bash` therefore needs `GO_BUILDCACHE_CONFIG`. The `sec
 
 ## cosmo-checks job
 
-Checks whose answer does not depend on the host. Each runs once, on the toolchain the ubuntu build leg hands over (`bin/` and `pkg/tool/`, through the cache hand-off), beside the test job. Nothing builds the toolchain twice. A step that runs on two or more hosts stays in the build matrix.
+Checks whose answer does not depend on the host. Each runs once, on the linux toolchain that the `toolchain-linux` job builds once and hands to this job, `wasm` and `wasm-suite` (`bin/` and `pkg/tool/`, through the cache hand-off). The ubuntu build leg keeps its own build so the three host legs start together. A step that runs on two or more hosts stays in the build matrix.
 
 **Build platform-subset APE binaries** (in the build job's APE step)**.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
