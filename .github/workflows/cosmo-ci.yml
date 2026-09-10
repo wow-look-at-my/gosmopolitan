@@ -116,7 +116,7 @@ jobs:
 
       - name: The restored go answers
         shell: bash
-        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
+        run: ./bin/go version
 
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
@@ -251,7 +251,7 @@ jobs:
 
       - name: The restored go answers
         shell: bash
-        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
+        run: ./bin/go version
 
       # Every wasm suite: std for both ports, the object writer, the node and wasip1sock transports, wasmexport and GOWASM=threads.
       - name: The wasm dats suites
@@ -308,7 +308,7 @@ jobs:
 
       - name: The restored go answers
         shell: bash
-        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
+        run: ./bin/go version
 
       - name: The whole test suite (dist test)
         # lib/wasm supplies the exec wrapper for the port; dist test reads GOOS and GOARCH.
