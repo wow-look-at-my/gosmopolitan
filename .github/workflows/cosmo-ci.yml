@@ -152,16 +152,10 @@ jobs:
         include:
           - test-os: ubuntu-latest
             job-timeout: 25
-            apetest-timeout: 5
-            apetest-deadline: 240
           - test-os: macos-latest
             job-timeout: 25
-            apetest-timeout: 5
-            apetest-deadline: 240
           - test-os: windows-latest
             job-timeout: 40
-            apetest-timeout: 10
-            apetest-deadline: 540
 
     runs-on: ${{ matrix.test-os }}
 
@@ -211,73 +205,12 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # In-step process-group killer (with-deadline.sh) -- see docs/CI.md "test job" for why runner-side timeouts aren't enough.
-      - name: Test binary built on Ubuntu
-        id: test-ubuntu
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-Linux/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-Linux/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-
-      - name: Test binary built on macOS
-        id: test-macos
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macOS/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-macOS/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-
-      - name: Test binary built on Windows
-        id: test-windows
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          rc=0
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-Windows/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-Windows/runtimeprobe.com" sh ./with-deadline.sh ${{ matrix.apetest-deadline }} go test -v ./... > test-output.log 2>&1 || rc=$?
-          cat test-output.log
-          exit $rc
-
-
-      # A platform-subset APE must boot and run on the real host on every platform it claims -- see docs/CI.md "test job".
-      - name: Test platform-subset APEs
-        id: test-subset
-        timeout-minutes: ${{ matrix.apetest-timeout }}
-        if: always()
-        shell: bash
-        run: |
-          cd testdata/ape/apetest
-          bins="$GITHUB_WORKSPACE/binaries/ape-binary-Linux"
-          rc=0
-          : > test-output.log
-          run_subset() {
-            name="$1" platforms="$2"
-            echo "=== subset $name: $platforms ===" >> test-output.log
-            FIZZBUZZ_BIN="$bins/fizzbuzz-$name.com" \
-            RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
-            SLIM_BIN="$bins/fizzbuzz-$name.com" \
-            SLIM_PLATFORMS="$platforms" \
-            FAT_BIN="$bins/fizzbuzz.com" \
-              sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
-              go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
-          }
-          run_subset tri linux/amd64,darwin/arm64,windows/amd64 || rc=$?
-          run_subset amd linux/amd64,windows/amd64 || rc=$?
-          cat test-output.log
-          exit $rc
-
+      # apetest on every origin, then the subsets; the deadlines are in the suite.
+      - name: The APE binaries run on this host (dats)
+        timeout-minutes: 40
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/apetest.dats
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
