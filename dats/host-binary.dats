@@ -8,17 +8,23 @@
 tests:
 	- desc: a fat fizzbuzz runs on this host
 	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=cosmo go build -o "$TMPDIR/fb1.com" testdata/fizzbuzz/fizzbuzz.go && "$TMPDIR/fb1.com" 10 5
-	  stdout: "fizzbuzz\n"
+	  outputs:
+		stdout:
+			- "fizzbuzz"
 	  exit: 0
 
 	- desc: a thin fizzbuzz runs on this host
 	  cmd: export PATH="$PWD/bin:$PATH"; GOCOSMOFAT=0 GOOS=cosmo go build -o "$TMPDIR/fb0.com" testdata/fizzbuzz/fizzbuzz.go && "$TMPDIR/fb0.com" 10 5
-	  stdout: "fizzbuzz\n"
+	  outputs:
+		stdout:
+			- "fizzbuzz"
 	  exit: 0
 
 	- desc: the boot trace build runs and prints its milestones
 	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=cosmo go build -tags cosmontdebug -o "$TMPDIR/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go && "$TMPDIR/fbtrace.com" 10 5 2>&1 | tail -1
-	  stdout: "fizzbuzz\n"
+	  outputs:
+		stdout:
+			- "fizzbuzz"
 	  exit: 0
 
 	- desc: a child keeps its arguments
