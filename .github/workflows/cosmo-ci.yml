@@ -98,19 +98,41 @@ jobs:
           echo ""
           echo "=== File info ==="
           file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
+          # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
+          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+          echo "=== sizes ==="
+          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
           export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
           cd testdata/ape/apetest
           FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
 
       - name: Stage the APE binaries for the test job
         shell: bash
-        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com "$RUNNER_TEMP/handoff/"
+        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
 
       - name: Hand the APE binaries to the test job
         uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: ape-binary-${{ matrix.build-os }}
           path: ${{ runner.temp }}/handoff
+
+      # cosmo-checks runs on this toolchain rather than building it a second time. bin/ and pkg/tool/ are the build; std comes from the shared cache.
+      - name: Stage the toolchain for cosmo-checks
+        if: matrix.build-os == 'ubuntu-latest'
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+
+      - name: Hand the toolchain to cosmo-checks
+        if: matrix.build-os == 'ubuntu-latest'
+        uses: wow-look-at-my/actions@cache-upload#latest
+        with:
+          name: toolchain-linux
+          path: ${{ runner.temp }}/toolchain
 
       # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
       - name: A cosmo test binary runs on this host
@@ -158,9 +180,10 @@ jobs:
           # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
           GOCOSMOFORKDIAG: 1
 
-  # Checks whose answer does not depend on the host. Each runs once, here, not once per matrix leg.
+  # Checks whose answer does not depend on the host. Each runs once, here, on the ubuntu leg's toolchain, beside the test job.
   cosmo-checks:
     timeout-minutes: 60
+    needs: build
     permissions:
       id-token: write
       contents: read
@@ -172,18 +195,15 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
 
-      - name: Setup Go bootstrap toolchain
-        uses: actions/setup-go@v5
+      - name: Take the toolchain the ubuntu leg built
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          go-version: '1.24'
-          cache: false
+          name: toolchain-linux
+          path: .
 
-      - name: Build Go toolchain
-        timeout-minutes: 8
+      - name: The restored go answers
         shell: bash
-        run: cd src && ./make.bash -v
-        env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+        run: chmod +x bin/* pkg/tool/*/* && ./bin/go version
 
       - name: Build std for cosmo (both arches)
         # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
@@ -206,34 +226,6 @@ jobs:
           GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
           GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
 
-      - name: Build platform-subset APE binaries
-        # see docs/CI.md "build job" for the tri/amd subset rationale.
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          export GOOS=cosmo
-          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
-          echo "=== sizes ==="
-          ls -l fizzbuzz-tri.com fizzbuzz-amd.com
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-          cd testdata/ape/apetest
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-
-      - name: Stage the platform-subset APE binaries for the test job
-        shell: bash
-        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
-
-      - name: Hand the platform-subset APE binaries to the test job
-        uses: wow-look-at-my/actions@cache-upload#latest
-        with:
-          name: ape-binary-subset
-          path: ${{ runner.temp }}/handoff
-
       # Every suite under dats/. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 30
@@ -244,7 +236,7 @@ jobs:
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     timeout-minutes: ${{ matrix.job-timeout }}
-    needs: [build, cosmo-checks]
+    needs: build
     strategy:
       fail-fast: true
       matrix:
@@ -294,12 +286,6 @@ jobs:
         with:
           name: ape-binary-windows-latest
           path: binaries/ape-binary-windows-latest
-
-      - name: Download the platform-subset APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
-        with:
-          name: ape-binary-subset
-          path: binaries/ape-binary-subset
 
       # No-op on windows: multicmd runs nothing there, and the exec bit means nothing on NTFS.
       - name: Make binaries executable
@@ -460,7 +446,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          bins="$GITHUB_WORKSPACE/binaries/ape-binary-subset"
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
           rc=0
           : > test-output.log
           run_subset() {
@@ -470,7 +456,7 @@ jobs:
             RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
             SLIM_BIN="$bins/fizzbuzz-$name.com" \
             SLIM_PLATFORMS="$platforms" \
-            FAT_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" \
+            FAT_BIN="$bins/fizzbuzz.com" \
               sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
               go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
           }
@@ -682,7 +668,7 @@ jobs:
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
   cache-cleanup:
-    needs: [test]
+    needs: [test, cosmo-checks]
     if: always()
     runs-on: ubuntu-latest
     permissions:
