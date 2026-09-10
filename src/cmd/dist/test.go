@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -270,7 +271,8 @@ func (t *tester) run() {
 // routeCacheNotices points every go command of the run at one file for the
 // shared build cache's notices (cmd/go reads GOCACHELOG). A test compares the
 // stderr of the go command it runs, so a cache outage on that stream is a
-// test failure. The file is printed on this process's stderr at exit.
+// test failure. This process relays the file to its own stderr as the
+// notices arrive, and drains it once more at exit.
 func (t *tester) routeCacheNotices() {
 	if os.Getenv("GOCACHELOG") != "" {
 		return // an outer build owns the file
@@ -279,19 +281,37 @@ func (t *tester) routeCacheNotices() {
 	if err != nil {
 		fatalf("cannot create the cache notice file: %v", err)
 	}
-	f.Close()
 	os.Setenv("GOCACHELOG", f.Name())
-	xatexit(func() {
-		data, err := os.ReadFile(f.Name())
-		os.Remove(f.Name())
+	var mu sync.Mutex
+	relay := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		// f's offset is where the last relay stopped; the writers append.
+		data, err := io.ReadAll(f)
 		if err != nil {
 			errprintf("cannot read the cache notice file %s: %v\n", f.Name(), err)
 			return
 		}
-		if len(data) == 0 {
-			return
+		if len(data) > 0 {
+			os.Stderr.Write(data)
 		}
-		errprintf("\n##### shared build cache notices\n%s", data)
+	}
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Second):
+				relay()
+			}
+		}
+	}()
+	xatexit(func() {
+		close(stop)
+		relay()
+		f.Close()
+		os.Remove(f.Name())
 	})
 }
 
