@@ -259,7 +259,7 @@ Two test programs ship in each build's artifact: `fizzbuzz.com` (basic execution
 
 A third job (`wasm`, ubuntu-only - wasm output is host-independent) regression-gates the fork's WebAssembly ports: it builds the toolchain, builds std for js/wasm and wasip1/wasm, and runs the smoke programs. A `wasm-suite` matrix job runs `go tool dist test` for each port, js under node and wasip1 under wasmtime. That is the gate the other ports get.
 
-Three more jobs (`publish-create`, `publish-upload`, `publish-finish`. They need build+test) publish an installable toolchain tarball to buildhost on every push, one leg per platform - see Toolchain Distribution below.
+Three more jobs (`publish-create`, `publish-upload`, `publish-finish`. They need every other job green: build, cosmo-checks, test, wasm and wasm-suite) publish an installable toolchain tarball to buildhost on every push, one leg per platform - see Toolchain Distribution below.
 
 ## Repository automation (pr-minder bot)
 
