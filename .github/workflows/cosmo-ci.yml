@@ -682,7 +682,6 @@ jobs:
           GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
 
 
-  # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
   cache-cleanup:
     needs: [test]
@@ -693,6 +692,7 @@ jobs:
     steps:
       - uses: wow-look-at-my/actions@cache-cleanup#latest
 
+  # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
     needs: [build, cosmo-checks, test]
