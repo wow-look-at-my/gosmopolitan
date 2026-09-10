@@ -14,7 +14,7 @@ tests:
 	  cmd: |
 		set -eu
 		export PATH="$PWD/bin:$PATH"
-		cd "$TMPDIR"
+		cd "$(mktemp -d)"
 		go mod init cosmo-downstream-smoke
 		go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
 		GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
