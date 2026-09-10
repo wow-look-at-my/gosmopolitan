@@ -84,29 +84,6 @@ jobs:
           chmod +x /tmp/shebang-test.go
           /tmp/shebang-test.go
 
-      - name: Build std for cosmo (both arches)
-        # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo GOARCH=amd64 go build std
-          GOOS=cosmo GOARCH=arm64 go build std
-
-      - name: Build downstream go-toolchain consumers for cosmo
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          workdir=$(mktemp -d)
-          cd "$workdir"
-          go mod init cosmo-downstream-smoke
-          go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
-          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
-
       - name: Build APE binary
         # see docs/CI.md "build job" -- no GOARCH pin, and what the ls asserts.
         timeout-minutes: 10
@@ -125,25 +102,6 @@ jobs:
           cd testdata/ape/apetest
           FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
 
-      - name: Build platform-subset APE binaries
-        # see docs/CI.md "build job" for the tri/amd subset rationale.
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          export GOOS=cosmo
-          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
-          echo "=== sizes ==="
-          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-          cd testdata/ape/apetest
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-
       - name: Upload APE binary
         uses: actions/upload-artifact@v4
         with:
@@ -151,72 +109,11 @@ jobs:
           path: |
             fizzbuzz.com
             runtimeprobe.com
-            fizzbuzz-tri.com
-            runtimeprobe-tri.com
-            fizzbuzz-amd.com
-            runtimeprobe-amd.com
           if-no-files-found: ignore
           retention-days: 1
 
-      # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
-      - name: GOOS=cosmo package tests (dats)
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 8
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/cosmo-tests.dats
-
-      # Prose nobody asked for is a defect like any other, so a check refuses it.
-      - name: No wordspam
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/no-wordspam.dats
-
-      # dist copies syslist's unix GOOS set, and a drifted copy builds other files.
-      - name: The two unix build-tag lists agree
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/unix-tag-agrees.dats
-
-      # Serial waits on every other test, which inside a bubble is a deadlock.
-      - name: No synctest bubble waits on the serial barrier
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 3
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/bubble-serial.dats
-
-      # runtime.GOOS is the host; an open flag belongs to the build target.
-      - name: No GOOS predicate decides a syscall flag
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/goos-not-syscall-flags.dats
-
-      # Both name the host, and a const over either still has to compile.
-      - name: GOOS and GOARCH fold in a constant
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 5
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/dynamic-const.dats
-
-      # A host ELF, Mach-O or PE leaving a build means a port went missing.
-      - name: Every emitted binary is an APE or wasm
-        if: matrix.build-os == 'ubuntu-latest'
-        timeout-minutes: 10
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/emitted-binaries.dats
-
       # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
       - name: A cosmo test binary runs on this host
-        if: matrix.build-os == 'windows-latest'
         timeout-minutes: 10
         shell: bash
         run: |
@@ -258,10 +155,136 @@ jobs:
           unix: cd src && ./run.bash
           windows: cd src && .\run.bat
 
+  # Checks whose answer does not depend on the host. Each runs once, here, not once per matrix leg.
+  cosmo-checks:
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
+
+      - name: Setup Go bootstrap toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      - name: Build Go toolchain
+        timeout-minutes: 8
+        shell: bash
+        run: cd src && ./make.bash -v
+        env:
+          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+
+      - name: Build std for cosmo (both arches)
+        # The uprev tripwire -- see CLAUDE.md "CI" for what it catches.
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          GOOS=cosmo GOARCH=amd64 go build std
+          GOOS=cosmo GOARCH=arm64 go build std
+
+      - name: Build downstream go-toolchain consumers for cosmo
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          go mod init cosmo-downstream-smoke
+          go get golang.org/x/sys@latest modernc.org/libc@latest modernc.org/sqlite@latest
+          GOOS=cosmo GOARCH=amd64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
+          GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
+
+      - name: Build platform-subset APE binaries
+        # see docs/CI.md "build job" for the tri/amd subset rationale.
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          export PATH="$PWD/bin:$PATH"
+          export GOOS=cosmo
+          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+          echo "=== sizes ==="
+          ls -l fizzbuzz-tri.com fizzbuzz-amd.com
+          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+          cd testdata/ape/apetest
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+
+      - name: Upload the platform-subset APE binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ape-binary-subset
+          path: |
+            fizzbuzz-tri.com
+            runtimeprobe-tri.com
+            fizzbuzz-amd.com
+            runtimeprobe-amd.com
+          retention-days: 1
+
+      # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
+      - name: GOOS=cosmo package tests (dats)
+        timeout-minutes: 8
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/cosmo-tests.dats
+
+      # Prose nobody asked for is a defect like any other, so a check refuses it.
+      - name: No wordspam
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/no-wordspam.dats
+
+      # dist copies syslist's unix GOOS set, and a drifted copy builds other files.
+      - name: The two unix build-tag lists agree
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/unix-tag-agrees.dats
+
+      # Serial waits on every other test, which inside a bubble is a deadlock.
+      - name: No synctest bubble waits on the serial barrier
+        timeout-minutes: 3
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/bubble-serial.dats
+
+      # runtime.GOOS is the host; an open flag belongs to the build target.
+      - name: No GOOS predicate decides a syscall flag
+        timeout-minutes: 2
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/goos-not-syscall-flags.dats
+
+      # Both name the host, and a const over either still has to compile.
+      - name: GOOS and GOARCH fold in a constant
+        timeout-minutes: 5
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/dynamic-const.dats
+
+      # A host ELF, Mach-O or PE leaving a build means a port went missing.
+      - name: Every emitted binary is an APE or wasm
+        timeout-minutes: 10
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/emitted-binaries.dats
+
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     timeout-minutes: ${{ matrix.job-timeout }}
-    needs: build
+    needs: [build, cosmo-checks]
     strategy:
       fail-fast: true
       matrix:
@@ -482,7 +505,7 @@ jobs:
         shell: bash
         run: |
           cd testdata/ape/apetest
-          bins="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest"
+          bins="$GITHUB_WORKSPACE/binaries/ape-binary-subset"
           rc=0
           : > test-output.log
           run_subset() {
@@ -492,7 +515,7 @@ jobs:
             RUNTIMEPROBE_BIN="$bins/runtimeprobe-$name.com" \
             SLIM_BIN="$bins/fizzbuzz-$name.com" \
             SLIM_PLATFORMS="$platforms" \
-            FAT_BIN="$bins/fizzbuzz.com" \
+            FAT_BIN="$GITHUB_WORKSPACE/binaries/ape-binary-ubuntu-latest/fizzbuzz.com" \
               sh ./with-deadline.sh ${{ matrix.apetest-deadline }} \
               go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... >> test-output.log 2>&1
           }
@@ -703,7 +726,7 @@ jobs:
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
-    needs: [build, test]
+    needs: [build, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates

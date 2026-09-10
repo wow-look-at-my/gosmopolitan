@@ -18,14 +18,18 @@ Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `ya
 
 The two drivers must agree on every action ID. `checkNotStale` asserts it both ways. `go_bootstrap` must find nothing stale in what bin/go installed, and bin/go must find nothing stale either. A divergence fails the build by name. It does not leave one driver unable to read the other's entries.
 
-Every job that runs `make.bash` therefore needs `GO_BUILDCACHE_CONFIG`. The `secret-server` step in the build, wasm and publish jobs exports it. A CI run without it already failed before this. `validateCIShared` refuses to let an unconfigured CI run decide whether every other run recompiles.
+Every job that runs `make.bash` therefore needs `GO_BUILDCACHE_CONFIG`. The `secret-server` step in the build, cosmo-checks, wasm and publish jobs exports it. A CI run without it already failed before this. `validateCIShared` refuses to let an unconfigured CI run decide whether every other run recompiles.
+
+## cosmo-checks job
+
+Checks whose answer does not depend on the host. Each runs once, on ubuntu, after its own `make.bash`. A step that runs on two or more hosts stays in the build matrix.
 
 **Build platform-subset APE binaries.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
 - `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. What it drops is the macOS Intel claim. This is the set consumers ask for, and every one of its three platforms must still boot the binary.
 - `amd` - linux/amd64, windows/amd64. One payload: the arm64 image, its boot header and its sidecar are gone, which is where the size actually drops.
 
-Cross-compiles, so one leg builds them for all three to run. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.
+Cross-compiles, so this job builds them for all three test legs to run. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.
 
 **GOOS=cosmo package tests (dats).** `dats/cosmo-tests.dats`, run through the org's `wow-look-at-my/dats@master` action. Three commands, each `GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec wrappers - the test binary is a thin cosmo APE that. The cosmo syscall shim package covers the darwin sendmsg/recvmsg cmsg repack, the signal and wait-status translation tables, and the epoll layout. The runtime commands cover the Apple itimerval ABI pins and the timeval translation behind the darwin SIGPROF setitimer dispatch. The `syscall` command covers the macOS statfs/utsname struct conversions - which live in package `syscall` because the Apple buffers are far past the emulation's nosplit. The runtime command also pins the iphlpapi FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, where a wrong offset reads plausible garbage rather than failing. Two of the three name the tests they cover rather than running the whole package. A name list is a test-selection decision: it. Observed ~75s warm.
 
