@@ -17,6 +17,7 @@ runs:
 
     - name: Test shebang support - script execution
       if: runner.os != 'Windows'
+      shell: bash
       run: |
         export PATH="$PWD/bin:$PATH"
         # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.

@@ -37,8 +37,8 @@ jobs:
           cache: false
 
       - name: Build Go toolchain
-        # Observed max 3m14s (windows make.bat); unix ~2m30s.
-        timeout-minutes: 8
+        # A cold build, with the shared cache unreachable, takes over 8 minutes on macOS.
+        timeout-minutes: 20
         uses: wow-look-at-my/actions/multicmd@master
         with:
           unix: cd src && ./make.bash -v
@@ -69,7 +69,7 @@ jobs:
           cache: false
 
       - name: Build Go toolchain
-        timeout-minutes: 8
+        timeout-minutes: 20
         shell: bash
         run: cd src && ./make.bash -v
         env:
