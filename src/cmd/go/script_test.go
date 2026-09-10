@@ -231,6 +231,8 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"GOCACHE=" + testGOCACHE,
 		"GOCOVERDIR=" + os.Getenv("GOCOVERDIR"),
 		"GODEBUG=" + os.Getenv("GODEBUG"),
+		// Temporary: the fork diagnostic reaches the go command under test (syscall/exec_forkstatus_cosmo.go).
+		"GOCOSMOFORKDIAG=" + os.Getenv("GOCOSMOFORKDIAG"),
 		"GOEXE=" + cfg.ExeSuffix,
 		"GOEXPERIMENT=" + os.Getenv("GOEXPERIMENT"),
 		"GOOS=" + runtime.GOOS,
