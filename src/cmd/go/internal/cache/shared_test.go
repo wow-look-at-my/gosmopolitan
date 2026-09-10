@@ -158,12 +158,7 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 		t.Fatalf("Put stored %d bytes, want %d", size, len(body))
 	}
 	// Close drains the upload; until then it may still be in flight.
-	if err := first.Close(); err != nil {
-		if errors.Is(err, errors.ErrUnsupported) {
-			t.Skipf("the disk cache cannot trim here: %v", err)
-		}
-		t.Fatalf("Close: %v", err)
-	}
+	closeShared(t, first)
 	if f.stored() == 0 {
 		t.Fatal("nothing reached the shared cache")
 	}
@@ -206,9 +201,7 @@ func TestSharedCache_NetworkHitIsAPlainFile(t *testing.T) {
 	if _, _, err := first.Put(id, bytes.NewReader(body)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	closeShared(t, first)
 	if f.stored() != 1 {
 		t.Fatalf("stored %d objects, want 1", f.stored())
 	}
@@ -319,9 +312,7 @@ func TestChooseCache_SharedTierIsTheOnlyAlternativeToDisk(t *testing.T) {
 	if _, ok := c.(*SharedCache); !ok {
 		t.Fatalf("chooseCache returned %T, want *SharedCache", c)
 	}
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	closeShared(t, c)
 }
 
 // The choice is shared-or-disk and nothing else: GOCACHEPROG is deleted, so
@@ -380,7 +371,7 @@ func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
+		t.Skipf("this host has no pipes: %v", err)
 	}
 	old := os.Stderr
 	os.Stderr = w
@@ -474,4 +465,19 @@ func readOutputFile(c Cache, id OutputID) ([]byte, error) {
 		return nil, fmt.Errorf("OutputFile(%x) is empty", id)
 	}
 	return os.ReadFile(name)
+}
+
+// closeShared closes a cache and fails the test on an error. A host with no
+// file locks cannot trim the disk cache; that is a property of the host, not
+// of the cache, so the test skips there.
+func closeShared(t *testing.T, c interface{ Close() error }) {
+	t.Helper()
+	err := c.Close()
+	if err == nil {
+		return
+	}
+	if errors.Is(err, errors.ErrUnsupported) {
+		t.Skipf("the disk cache cannot trim here: %v", err)
+	}
+	t.Fatalf("Close: %v", err)
 }

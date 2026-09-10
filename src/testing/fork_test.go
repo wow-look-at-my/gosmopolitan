@@ -349,6 +349,9 @@ func TestForkRunValue(t *T) {
 // that shares it forks. Tests are parallel by default, so this test is such a
 // caller: the measurement below runs only in a child that runs this test alone.
 func TestAllocsPerRunForks(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so AllocsPerRun takes the barrier")
+	}
 	// No barrier here, deliberately: sharing the process IS the condition under
 	// test. Parallel makes it so when parallelByDefault is off, and is a no-op
 	// when it is on. The sink is a local for the same reason, so the analyzer
