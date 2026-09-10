@@ -154,6 +154,9 @@ jobs:
         with:
           unix: cd src && ./run.bash
           windows: cd src && .\run.bat
+        env:
+          # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
+          GOCOSMOFORKDIAG: 1
 
   # Checks whose answer does not depend on the host. Each runs once, here, not once per matrix leg.
   cosmo-checks:
