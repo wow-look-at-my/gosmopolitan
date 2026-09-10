@@ -262,14 +262,14 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    timeout-minutes: 120
+    timeout-minutes: 60
     needs: build-linux
     permissions:
       id-token: write
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         port: [js, wasip1]
 
