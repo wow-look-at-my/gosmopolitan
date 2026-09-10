@@ -1,9 +1,5 @@
 name: Host leg
 description: Everything a build leg does after its toolchain exists. The three host legs share it.
-inputs:
-  os:
-    description: 'The runner label, which names the hand-off (ape-binary-<os>)'
-    required: true
 runs:
   using: composite
   steps:
@@ -79,7 +75,7 @@ runs:
     - name: Hand the APE binaries to the test job
       uses: wow-look-at-my/actions@cache-upload#latest
       with:
-        name: ape-binary-${{ inputs.os }}
+        name: ape-binary-${{ runner.os }}
         path: ${{ runner.temp }}/handoff
 
 
