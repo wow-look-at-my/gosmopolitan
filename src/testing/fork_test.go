@@ -16,6 +16,9 @@ import (
 // child allows parallelism like any other run, so two subtests that ask for it
 // must reach a rendezvous only concurrent code can reach.
 func TestForkStaysParallel(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	t.Fork()
 
 	if serialExclusive.Load() {
@@ -76,6 +79,9 @@ func TestForkWithSerialIsSerial(t *T) {
 // TestForkRunsTheBodyInAChildProcess: the body runs only where the fork
 // marker is set, which is a process Fork started for exactly this test.
 func TestForkRunsTheBodyInAChildProcess(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	t.Fork()
 
 	if got := os.Getenv(forkTargetEnv); got != t.Name() {
@@ -113,6 +119,9 @@ func TestForkChildSelectsItsTargetByFlag(t *T) {
 // TestForkFromASubtest: Fork names the subtest, not its parent, so the child's
 // -test.run reaches the subtest that asked for it.
 func TestForkFromASubtest(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	t.Run("child", func(t *T) {
 		t.Fork()
 
@@ -131,6 +140,9 @@ func TestForkFromASubtest(t *T) {
 // the marker names one test, and every test it runs under stays in place
 // rather than forking its own parent.
 func TestForkSubtestsGetTheirOwnChild(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	t.Fork()
 
 	for _, name := range []string{"one", "two"} {
@@ -170,6 +182,9 @@ var forkAllocSink []byte
 // it drives runForked directly and checks that a failing child comes back as an
 // error naming the test, with the child's output attached.
 func TestForkReportsTheChildsFailure(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	if os.Getenv(forkTargetEnv) != "" {
 		// Some other Fork's child; one process runs one forked test.
 		return
@@ -368,6 +383,9 @@ func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
 // same time. A second fork would land in the same place, so the measurement
 // refuses here and names the method that stops them.
 func TestAllocsPerRunRefusesBesideASibling(t *T) {
+	if !canFork() {
+		t.Skip("this run cannot fork, so Fork takes the barrier")
+	}
 	t.Fork()
 
 	running, release := make(chan struct{}), make(chan struct{})

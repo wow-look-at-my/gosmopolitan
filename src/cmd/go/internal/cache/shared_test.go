@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,6 +159,9 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 	// Close drains the upload; until then it may still be in flight.
 	if err := first.Close(); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			t.Skipf("the disk cache cannot trim here: %v", err)
+		}
 		t.Fatalf("Close: %v", err)
 	}
 	if f.stored() == 0 {

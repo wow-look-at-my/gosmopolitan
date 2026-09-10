@@ -646,8 +646,7 @@ jobs:
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=js/wasm
           GOWASIRUNTIME=wazero GOOS=linux GOARCH=amd64 go test cmd/internal/testdir -run 'Test/wasmexport' -target=wasip1/wasm
 
-  # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
-  # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm job".
+  # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
     timeout-minutes: 120
     permissions:
@@ -700,6 +699,7 @@ jobs:
           GOWASIRUNTIME=wazero GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
 
 
+  # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
     needs: [build, test]
