@@ -64,7 +64,6 @@ Each origin runs a throwaway copy, because an APE self-assimilates on a unix hos
 
 **Test binary built on \<OS\> steps.** Each test step runs `go test` under an in-step process-group killer (see `with-deadline.sh`): runner-side step timeouts have been observed not. One wedged process even survived a process-group SIGKILL, i.e. it was stuck in an uninterruptible kernel state). The killer abandons such a corpse so the step still ends, and `go test`'s output goes through a file (`cat`'ed afterwards) so no abandoned descendant.
 
-**Upload \<origin\> test log steps.** Uploaded immediately: job-level logs only reach the API when the whole job ends, which a wedged later step (or.
 
 **Test platform-subset APEs.** A platform-subset APE must boot and run on every platform it still claims, on the real host - linking is not evidence. Both subsets run here, on all three legs. Each one's `TestSlimRuns` skips itself on a host it deliberately dropped (amd on macOS), while the structural checks - which payload, which boot header, which loader pieces. `-run` selects the execution battery plus `TestSlim*`: the rest of the suite (`TestELF*`, `TestMacho*`, `TestPE*`, `TestFat*`, `TestShell*`) pins the shape of an UNRESTRICTED build and is asserted against. The subset's own shape is what `TestSlim*` asserts, parameterized by `SLIM_PLATFORMS`.
 

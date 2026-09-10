@@ -102,15 +102,15 @@ jobs:
           cd testdata/ape/apetest
           FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
 
-      - name: Upload APE binary
-        uses: actions/upload-artifact@v4
+      - name: Stage the APE binaries for the test job
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com "$RUNNER_TEMP/handoff/"
+
+      - name: Hand the APE binaries to the test job
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: ape-binary-${{ matrix.build-os }}
-          path: |
-            fizzbuzz.com
-            runtimeprobe.com
-          if-no-files-found: ignore
-          retention-days: 1
+          path: ${{ runner.temp }}/handoff
 
       # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
       - name: A cosmo test binary runs on this host
@@ -221,16 +221,15 @@ jobs:
           SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
           SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
 
-      - name: Upload the platform-subset APE binaries
-        uses: actions/upload-artifact@v4
+      - name: Stage the platform-subset APE binaries for the test job
+        shell: bash
+        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
+
+      - name: Hand the platform-subset APE binaries to the test job
+        uses: wow-look-at-my/actions@cache-upload#latest
         with:
           name: ape-binary-subset
-          path: |
-            fizzbuzz-tri.com
-            runtimeprobe-tri.com
-            fizzbuzz-amd.com
-            runtimeprobe-amd.com
-          retention-days: 1
+          path: ${{ runner.temp }}/handoff
 
       # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
       - name: GOOS=cosmo package tests (dats)
@@ -317,10 +316,29 @@ jobs:
           go-version: '1.24'
           cache: false
 
-      - name: Download all APE binaries
-        uses: actions/download-artifact@v4
+      - name: Download the ubuntu-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          path: binaries
+          name: ape-binary-ubuntu-latest
+          path: binaries/ape-binary-ubuntu-latest
+
+      - name: Download the macOS-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-macos-latest
+          path: binaries/ape-binary-macos-latest
+
+      - name: Download the windows-origin APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-windows-latest
+          path: binaries/ape-binary-windows-latest
+
+      - name: Download the platform-subset APE binaries
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-subset
+          path: binaries/ape-binary-subset
 
       # No-op on windows: multicmd runs nothing there, and the exec bit means nothing on NTFS.
       - name: Make binaries executable
@@ -446,14 +464,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload ubuntu-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-ubuntu-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       - name: Test binary built on macOS
         id: test-macos
@@ -467,14 +477,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload macos-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-macos-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       - name: Test binary built on Windows
         id: test-windows
@@ -488,14 +490,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      # Uploaded immediately: job-level logs only reach the API when the whole job ends (see docs/CI.md "test job").
-      - name: Upload windows-origin test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-windows-origin
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
       # A platform-subset APE must boot and run on the real host on every platform it claims -- see docs/CI.md "test job".
       - name: Test platform-subset APEs
@@ -524,13 +518,6 @@ jobs:
           cat test-output.log
           exit $rc
 
-      - name: Upload subset test log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-log-${{ matrix.test-os }}-subset
-          path: testdata/ape/apetest/test-output.log
-          retention-days: 3
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
@@ -724,6 +711,16 @@ jobs:
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
+  # The hand-offs live in the actions cache. Delete them once every consumer has run.
+  cache-cleanup:
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: wow-look-at-my/actions@cache-cleanup#latest
+
   publish-create:
     timeout-minutes: 10
     needs: [build, cosmo-checks, test]
