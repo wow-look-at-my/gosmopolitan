@@ -59,8 +59,8 @@ runs:
         # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
         GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
         (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
         echo "=== sizes ==="
         ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
         export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
@@ -82,9 +82,28 @@ runs:
 
     # The suite says what a bare "exit status 2" from run.bat means.
     - name: A cosmo binary built here runs here (dats)
+      if: runner.os != 'Windows'
       uses: wow-look-at-my/dats@master
       with:
         tests: dats/host
+
+    # The dats action runs a suite inside WSL on NT, which tests Linux. The host suites run on NT itself, which has no sandbox backend.
+    - name: Download dats
+      if: runner.os == 'Windows'
+      id: dats
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      with:
+        project: dats
+
+    - name: A cosmo binary built here runs here (dats, on NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        DATS_BIN: ${{ steps.dats.outputs.path }}
+      run: |
+        Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
+        & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
+        exit $LASTEXITCODE
 
     - name: The whole test suite (run.bash)
       # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.

@@ -176,12 +176,32 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # apetest on every origin, then the subsets; windows adds the NT host suite. The deadlines are in the suites.
+      # apetest on every origin, then the subsets. The deadlines are in the suite.
       - name: The APE binaries run on this host (dats)
+        if: matrix.test-os != 'windows-latest'
         timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: ${{ matrix.test-os == 'windows-latest' && 'dats/test' || 'dats/test/apetest.dats' }}
+          tests: dats/test/apetest.dats
+
+      # The dats action runs a suite inside WSL on NT, which tests Linux. These suites are about NT itself, which has no sandbox backend.
+      - name: Download dats
+        if: matrix.test-os == 'windows-latest'
+        id: dats
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        with:
+          project: dats
+
+      - name: The APE binaries run on this host, and the NT host suite (dats, on NT)
+        if: matrix.test-os == 'windows-latest'
+        timeout-minutes: 45
+        shell: pwsh
+        env:
+          DATS_BIN: ${{ steps.dats.outputs.path }}
+        run: |
+          Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
+          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test
+          exit $LASTEXITCODE
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
