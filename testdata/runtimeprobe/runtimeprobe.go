@@ -132,6 +132,7 @@ func main() {
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)
 	timed("cloexec", checkCloexec)
+	timed("execstdin", checkExecStdin)
 	timed("hostos", checkHostOS)
 	timed("auxv", checkAuxv)
 	timed("procauxv", checkProcAuxv)
