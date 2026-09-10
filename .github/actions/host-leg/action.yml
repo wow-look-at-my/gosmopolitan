@@ -107,11 +107,45 @@ runs:
 
     - name: The whole test suite (run.bash)
       # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
-      uses: wow-look-at-my/actions/multicmd@master
-      with:
-        unix: cd src && ./run.bash
-        windows: cd src && .\run.bat
-      env:
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
         # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
-        GOCOSMOFORKDIAG: 1
+        diag="$RUNNER_TEMP/forkdiag"
+        mkdir -p "$diag"
+        export GOCOSMOFORKDIAG="$diag"
+        watcher=
+        if [ "$(uname)" = Darwin ]; then
+          (
+            while :; do
+              for f in "$diag"/[0-9]*; do
+                [ -e "$f" ] || continue
+                pid="$(basename "$f")"
+                ps -o pid,ppid,stat,wchan,command -p "$pid" > "$diag/ps-$pid.txt" 2>&1
+                sudo sample "$pid" 2 -mayDie -file "$diag/sample-$pid.txt" > /dev/null 2>&1
+                sudo lldb -p "$pid" --batch -o 'bt all' -o 'detach' > "$diag/lldb-$pid.txt" 2>&1
+                rm -f "$f"
+              done
+              sleep 1
+            done
+          ) &
+          watcher=$!
+        fi
+        rc=0
+        (cd src && ./run.bash) || rc=$?
+        [ -z "$watcher" ] || kill "$watcher"
+        for f in "$diag"/*.txt; do
+          [ -e "$f" ] || continue
+          echo "===== $f ====="
+          cat "$f"
+        done
+        exit "$rc"
+
+    - name: The whole test suite (run.bat)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        cd src
+        .\run.bat
+        exit $LASTEXITCODE
 
