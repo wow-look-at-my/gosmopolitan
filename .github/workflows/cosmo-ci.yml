@@ -136,11 +136,6 @@ jobs:
           rc=0
           "$RUNNER_TEMP/argvecho.com" || rc=$?
           echo "argvecho exit=$rc"
-          # The runtime probe on this host, ahead of the test job that waits on every build leg.
-          if [ "$(go env GOHOSTOS)" != windows ]; then
-            export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-            (cd testdata/ape/apetest && RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" go test -count=1 -run "TestRuntimeProbe$" -v .)
-          fi
           GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
           ls -l "$RUNNER_TEMP/strings.test"
           # Three shapes: no arguments, a listing that never runs a test, and one test.
