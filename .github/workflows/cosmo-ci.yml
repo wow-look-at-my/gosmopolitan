@@ -678,11 +678,12 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install wazero (wasip1 runtime)
+      - name: Install wasmtime (wasip1 runtime)
+        # The exec wrapper's default engine, and the one upstream's wasip1 builder runs. test/wasmmemsize measures the engine: wazero sits 10 pages over its ceiling.
         if: matrix.port == 'wasip1'
         timeout-minutes: 5
         shell: bash
-        run: GOOS=linux GOARCH=amd64 GOBIN="$HOME/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
+        run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v37.0.0
 
       - name: Build Go toolchain
         timeout-minutes: 8
@@ -695,8 +696,8 @@ jobs:
         # lib/wasm supplies the exec wrapper for the port; dist test reads GOOS and GOARCH.
         shell: bash
         run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/wasibin:$PATH"
-          GOWASIRUNTIME=wazero GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
+          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+          GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
