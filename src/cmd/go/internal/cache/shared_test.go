@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -389,17 +390,32 @@ func captureStderr(t *testing.T, fn func()) string {
 	return out
 }
 
+// resetCacheLog makes the next notice read GOCACHELOG again. The sink is
+// decided once per process, and each test here sets the variable itself.
+func resetCacheLog(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		if cacheLogFile != nil {
+			cacheLogFile.Close()
+		}
+		cacheLogFile = nil
+		cacheLogOnce = sync.Once{}
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
 // A tier that stopped working reports it, on every build and to everybody.
 // The alternative is a cache nobody hears about, which reads as a build that
-// is simply slow. The client's HTTP error summaries do not go through the
-// Logger either: the backend captures os.Stderr once, when it is built. So
-// this covers both halves of the output.
+// is simply slow.
 func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
 	for _, ci := range []string{"true", ""} {
 		f, srv := newFakeCacheServer(t)
 		f.failPuts = true
 		configureShared(t, srv)
 		t.Setenv("CI", ci)
+		t.Setenv(CacheLogEnv, "")
+		resetCacheLog(t)
 
 		out := captureStderr(t, func() {
 			c := openShared(t, t.TempDir())
@@ -409,6 +425,34 @@ func TestSharedCache_AFailingTierAlwaysReports(t *testing.T) {
 		if !strings.Contains(out, "cacheprog:") {
 			t.Fatalf("CI=%q: a failing tier must report, got:\n%s", ci, out)
 		}
+	}
+}
+
+// With GOCACHELOG set the same report lands in that file and the go
+// command's stderr stays clean: a test that compares it must not fail on the
+// cache. The build that set the variable prints the file itself.
+func TestSharedCache_GOCACHELOGTakesTheReport(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	f.failPuts = true
+	configureShared(t, srv)
+	logPath := filepath.Join(t.TempDir(), "notices.txt")
+	t.Setenv(CacheLogEnv, logPath)
+	resetCacheLog(t)
+
+	out := captureStderr(t, func() {
+		c := openShared(t, t.TempDir())
+		PutBytes(c, testActionID("refused"), []byte("body"))
+		c.(*SharedCache).Close()
+	})
+	if strings.Contains(out, "cacheprog:") {
+		t.Fatalf("with %s set the report must stay off stderr, got:\n%s", CacheLogEnv, out)
+	}
+	logged, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("the notice file was not written: %v", err)
+	}
+	if !strings.Contains(string(logged), "cacheprog:") {
+		t.Fatalf("the notice file must carry the report, got:\n%s", logged)
 	}
 }
 
@@ -446,6 +490,8 @@ func TestSharedCache_CacheDebugRestoresTheReporting(t *testing.T) {
 	_, srv := newFakeCacheServer(t)
 	configureShared(t, srv)
 	t.Setenv(CacheDebugEnv, "1")
+	t.Setenv(CacheLogEnv, "")
+	resetCacheLog(t)
 
 	out := captureStderr(t, func() {
 		c := openShared(t, t.TempDir())

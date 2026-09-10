@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	goCfg "cmd/go/internal/cfg"
 
@@ -124,7 +125,7 @@ func newSharedCache(disk *DiskCache) Cache {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "go: shared build cache disabled: %v\n", err)
+			cacheNotice("shared build cache disabled: %v", err)
 		}
 		return nil
 	}
@@ -289,17 +290,51 @@ type goLogger struct{}
 // empty string enables it.
 const CacheDebugEnv = "GOCACHEDEBUG"
 
+// CacheLogEnv names a file that takes the tier's notices in place of stderr.
+// A build that compares the stderr of the go commands it runs sets it (dist
+// test does) and prints the file on its own stderr at the end. So an outage
+// reaches the build's output and never a test's.
+const CacheLogEnv = "GOCACHELOG"
+
 func cacheDebug() bool { return os.Getenv(CacheDebugEnv) != "" }
+
+var (
+	cacheLogOnce sync.Once
+	cacheLogFile *os.File // nil: the notices go to stderr
+)
+
+// cacheNotice writes one notice where CacheLogEnv says. A file that cannot be
+// opened is reported once, and the notices fall back to stderr.
+func cacheNotice(format string, args ...any) {
+	cacheLogOnce.Do(func() {
+		path := os.Getenv(CacheLogEnv)
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go: %s: %v; the cache notices go to stderr\n", CacheLogEnv, err)
+			return
+		}
+		cacheLogFile = f
+	})
+	if cacheLogFile == nil {
+		fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+		return
+	}
+	stamp := fmt.Sprintf("%s [%d] ", time.Now().Format(time.TimeOnly), os.Getpid())
+	fmt.Fprintf(cacheLogFile, stamp+format+"\n", args...)
+}
 
 func (goLogger) Infof(format string, args ...any) {
 	if !cacheDebug() {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+	cacheNotice(format, args...)
 }
 
 func (goLogger) Warnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+	cacheNotice(format, args...)
 }
 
 func (goLogger) Debugf(string, ...any) {}

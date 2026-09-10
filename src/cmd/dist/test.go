@@ -111,6 +111,7 @@ func (t *tester) run() {
 	timelog("start", "dist test")
 
 	os.Setenv("PATH", fmt.Sprintf("%s%c%s", gorootBin, os.PathListSeparator, os.Getenv("PATH")))
+	t.routeCacheNotices()
 
 	t.short = true
 	if v := os.Getenv("GO_TEST_SHORT"); v != "" {
@@ -264,6 +265,34 @@ func (t *tester) run() {
 	if t.failed {
 		xexit(1)
 	}
+}
+
+// routeCacheNotices points every go command of the run at one file for the
+// shared build cache's notices (cmd/go reads GOCACHELOG). A test compares the
+// stderr of the go command it runs, so a cache outage on that stream is a
+// test failure. The file is printed on this process's stderr at exit.
+func (t *tester) routeCacheNotices() {
+	if os.Getenv("GOCACHELOG") != "" {
+		return // an outer build owns the file
+	}
+	f, err := os.CreateTemp("", "gocachelog-*.txt")
+	if err != nil {
+		fatalf("cannot create the cache notice file: %v", err)
+	}
+	f.Close()
+	os.Setenv("GOCACHELOG", f.Name())
+	xatexit(func() {
+		data, err := os.ReadFile(f.Name())
+		os.Remove(f.Name())
+		if err != nil {
+			errprintf("cannot read the cache notice file %s: %v\n", f.Name(), err)
+			return
+		}
+		if len(data) == 0 {
+			return
+		}
+		errprintf("\n##### shared build cache notices\n%s", data)
+	})
 }
 
 func (t *tester) shouldRunTest(name string) bool {
