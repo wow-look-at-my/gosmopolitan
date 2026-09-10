@@ -111,6 +111,11 @@ func newSharedCache(disk *DiskCache) Cache {
 	cfg.Target = goCfg.Goos + "/" + goCfg.Goarch
 	cfg.Version = runtime.Version()
 	cfg.Module = mainModulePath()
+	// The key index's disk copy lives beside the cache it describes. Builds
+	// that share GOCACHE then share one copy, whatever their TMPDIR: cmd/go's
+	// script tests give every script its own, and fetched the whole index
+	// once per script.
+	cfg.IndexDir = disk.dir
 	// The client writes diagnostics nowhere until a consumer says otherwise,
 	// and cmd/go's stderr is where a build's warnings already go.
 	cacheclient.SetLogger(goLogger{})
