@@ -260,3 +260,31 @@ func TestFatApeLoaderEmbedded(t *testing.T) {
 	require.NoError(t, err, "loader source must decompress")
 	assert.Contains(t, string(src), "ApeLoader", "decompressed source must be the APE loader")
 }
+
+// TestFatPayloadsOffLibSystem pins each payload's load range off the
+// ranges libSystem takes before the macOS loader maps it: the 4 GB page
+// zero below, and the malloc zone macOS 26 reserves from 0x800000000.
+// The loader exits when the range is taken, so an image linked into one
+// runs nowhere on macOS.
+func TestFatPayloadsOffLibSystem(t *testing.T) {
+	bin := loadBinary(t)
+	const pageZeroEnd = 0x100000000
+	const mallocZone, mallocZoneEnd = 0x800000000, 0x900000000
+	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
+		hdr := bootHeaderByMachine(t, machine)
+		require.NotNil(t, hdr, "missing boot header for %v", machine)
+		phoff := le64(hdr[32:])
+		phentsize := uint64(le16(hdr[54:]))
+		phnum := uint64(le16(hdr[56:]))
+		for i := uint64(0); i < phnum; i++ {
+			ph := bin[phoff+i*phentsize:]
+			if le32(ph[0:]) != uint32(elf.PT_LOAD) {
+				continue
+			}
+			lo := le64(ph[16:])
+			hi := lo + le64(ph[40:])
+			assert.GreaterOrEqual(t, lo, uint64(pageZeroEnd), "%v: PT_LOAD at 0x%x lies in the loader's page zero", machine, lo)
+			assert.False(t, lo < mallocZoneEnd && hi > mallocZone, "%v: PT_LOAD 0x%x-0x%x lies in the range macOS malloc reserves", machine, lo, hi)
+		}
+	}
+}

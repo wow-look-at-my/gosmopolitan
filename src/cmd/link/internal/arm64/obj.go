@@ -113,8 +113,12 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagRound = 0x4000 // 16K page alignment for ARM64
 		}
 		if *ld.FlagTextAddr == -1 {
-			// Use 0x800000000 to match Cosmopolitan ARM64 layout
-			*ld.FlagTextAddr = ld.Rnd(0x800000000, *ld.FlagRound) + int64(ld.HEADR)
+			// The image is not PIE, so the APE loader maps it here with
+			// MAP_FIXED. It must be above the loader's 4 GB page zero and
+			// off every range libSystem takes before the loader runs:
+			// macOS 26's malloc zone reserves 0x800000000 up, and the
+			// shared cache sits below 0x300000000.
+			*ld.FlagTextAddr = ld.Rnd(0x400000000, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
 	case objabi.Hdarwin: /* apple MACH */

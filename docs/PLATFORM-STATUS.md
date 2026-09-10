@@ -28,7 +28,7 @@ As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go
 
 A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` then resolves no function.
 
-`objTool.Open` computes `offset = mappingStart - loadAddress`. loadAddress is the first executable PT_LOAD's vaddr. On linux/amd64 both values are 0x100000000. The offset is 0 there. On darwin/arm64 the mapping reads 0x800001000 against 0x800000000. Every address moves by 0x1000. `main.main` matches nothing.
+`objTool.Open` computes `offset = mappingStart - loadAddress`. loadAddress is the first executable PT_LOAD's vaddr. On linux/amd64 both values are 0x100000000. The offset is 0 there. On darwin/arm64 the mapping reads 0x400001000 against 0x400000000. Every address moves by 0x1000. `main.main` matches nothing.
 
 The samples are correct. The profile still symbolizes main.main through the pclntab. Linux reads the real base from /proc/self/maps. The darwin path reports the text start instead. cmd/pprof's TestDisasm fails on that leg alone.
 
