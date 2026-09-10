@@ -39,7 +39,8 @@ func mkzversion(dir, file string) {
 // The defaultGOOS is set to "cosmo" (cosmopolitan) to produce portable
 // APE (Actually Portable Executable) binaries by default. The use of
 // runtime.GOARCH makes sure that the default architecture matches the
-// host system.
+// host system. A binary on a port no APE boots on (js, wasip1) targets
+// that port instead: see buildcfg.portDefaultGOOS.
 func mkbuildcfg(file string) {
 	var buf strings.Builder
 	writeHeader(&buf)

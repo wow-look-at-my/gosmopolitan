@@ -12,15 +12,9 @@ import (
 	"testing"
 )
 
-// The context under test answers for the PORT, so the names it accepts are
-// the port's. runtime.GOOS names the host a cosmo binary runs on; a
-// constant context folds the build value instead.
-const (
-	thisOS   = runtime.GOOS
-	thisArch = runtime.GOARCH
-)
-
 var (
+	thisOS    = runtime.GOOS
+	thisArch  = runtime.GOARCH
 	otherOS   = anotherOS()
 	otherArch = anotherArch()
 )

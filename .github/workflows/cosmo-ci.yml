@@ -231,54 +231,12 @@ jobs:
           name: ape-binary-subset
           path: ${{ runner.temp }}/handoff
 
-      # The GOOS=cosmo package tests. Each one names the tests it covers, and a name list is a test-selection decision the suite owns, not this file.
-      - name: GOOS=cosmo package tests (dats)
-        timeout-minutes: 8
+      # Every suite under dats/. Which tests each covers is the suite's decision, not this file's.
+      - name: The dats suites
+        timeout-minutes: 30
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/cosmo-tests.dats
-
-      # Prose nobody asked for is a defect like any other, so a check refuses it.
-      - name: No wordspam
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/no-wordspam.dats
-
-      # dist copies syslist's unix GOOS set, and a drifted copy builds other files.
-      - name: The two unix build-tag lists agree
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/unix-tag-agrees.dats
-
-      # Serial waits on every other test, which inside a bubble is a deadlock.
-      - name: No synctest bubble waits on the serial barrier
-        timeout-minutes: 3
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/bubble-serial.dats
-
-      # runtime.GOOS is the host; an open flag belongs to the build target.
-      - name: No GOOS predicate decides a syscall flag
-        timeout-minutes: 2
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/goos-not-syscall-flags.dats
-
-      # Both name the host, and a const over either still has to compile.
-      - name: GOOS and GOARCH fold in a constant
-        timeout-minutes: 5
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/dynamic-const.dats
-
-      # A host ELF, Mach-O or PE leaving a build means a port went missing.
-      - name: Every emitted binary is an APE or wasm
-        timeout-minutes: 10
-        uses: wow-look-at-my/dats@master
-        with:
-          tests: dats/emitted-binaries.dats
+          tests: dats
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
