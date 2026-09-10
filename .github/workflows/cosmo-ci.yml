@@ -13,10 +13,7 @@ jobs:
     # run.bash is the bulk of it, and dist test reruns anything it has to rebuild.
     timeout-minutes: 150
     permissions:
- bin/ and pkg/tool/ are the build; std comes from the shared cache.
-      - name: Stage the toolchain
-        shell: bash
-        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"id-token: write
+      id-token: write
       contents: read
     strategy:
       fail-fast: false
@@ -78,10 +75,14 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      # bin/ and pkg/tool/ are the build; std comes from the shared cache.
+      # bin/, pkg/tool/ and the sources dist generates are the build; std comes from the shared cache.
       - name: Stage the toolchain
         shell: bash
-        run: mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+        run: |
+          mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+          for f in src/cmd/go/internal/cfg/zdefaultcc.go src/cmd/internal/objabi/zbootstrap.go src/go/build/zcgo.go src/internal/buildcfg/zbootstrap.go src/internal/runtime/sys/zversion.go src/time/tzdata/zzipdata.go; do
+            mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"
+          done
 
       - name: Hand the toolchain over
         uses: wow-look-at-my/actions@cache-upload#latest
