@@ -418,6 +418,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unicode"
 	_ "unsafe" // for linkname
@@ -1711,7 +1712,12 @@ func (c *common) Chdir(dir string) {
 		c.Fatal(err)
 	}
 	if err := os.Chdir(dir); err != nil {
-		c.Fatal(err)
+		// A relative dir resolves against the process directory. Name it
+		// both ways: os.Getwd trusts $PWD when it matches, getcwd asks the
+		// kernel.
+		wd, _ := os.Getwd()
+		raw, _ := syscall.Getwd()
+		c.Fatalf("%v (os.Getwd %q, getcwd %q)", err, wd, raw)
 	}
 	// On POSIX platforms, PWD represents “an absolute pathname of the
 	// current working directory.” Since we are changing the working
