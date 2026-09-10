@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        build-os: [ubuntu-latest, macos-latest, windows-latest]
+        build-os: [macos-latest, windows-latest]
 
     runs-on: ${{ matrix.build-os }}
 
@@ -46,131 +46,13 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
-        # see CLAUDE.md "Fork Gotchas" -- "Tool build IDs are content-derived"
-        shell: bash
-        run: |
-          out="$(./bin/go tool compile -V=full)"
-          echo "compile -V=full: $out"
-          case "$out" in
-            *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
-            *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
-          esac
-
-      - name: Test shebang support - script execution
-        if: runner.os != 'Windows'
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-
-          # env -S is required for multi-word shebang interpreters on Linux.
-          cat > /tmp/shebang-test.go << 'EOF'
-          #!/usr/bin/env -S go run
-
-          package main
-
-          import "fmt"
-
-          func main() {
-              fmt.Println("Hello from shebang Go script!")
-          }
-          EOF
-
-          echo "=== Testing go run with shebang file ==="
-          go run /tmp/shebang-test.go
-
-          echo "=== Testing direct script execution ==="
-          chmod +x /tmp/shebang-test.go
-          /tmp/shebang-test.go
-
-      - name: Build APE binary
-        # see docs/CI.md "build job" -- no GOARCH pin, and what the ls asserts.
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
-          # The probe is a multi-file package, so build its module directory.
-          (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
-          echo "=== APE Header ==="
-          head -c 200 fizzbuzz.com
-          echo ""
-          echo "=== File info ==="
-          file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
-          # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
-          GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-          GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-          (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
-          echo "=== sizes ==="
-          ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
-          export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
-          cd testdata/ape/apetest
-          FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-          SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
-
-      - name: Stage the APE binaries for the test job
-        shell: bash
-        run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
-
-      - name: Hand the APE binaries to the test job
-        uses: wow-look-at-my/actions@cache-upload#latest
+      - uses: ./.github/actions/host-leg
         with:
-          name: ape-binary-${{ matrix.build-os }}
-          path: ${{ runner.temp }}/handoff
+          os: ${{ matrix.build-os }}
 
-
-      # run.bat reports a bare "exit status 2" per package; one binary run by hand says why.
-      - name: A cosmo test binary runs on this host
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PATH"
-          echo "GOOS=$(GOOS=cosmo go env GOOS) GOHOSTOS=$(go env GOHOSTOS) GOARCH=$(GOOS=cosmo go env GOARCH)"
-          # fizzbuzz boots here and is fat; a test binary is thin, so build it both ways.
-          for fat in 1 0; do
-            GOCOSMOFAT=$fat GOOS=cosmo go build -o "$RUNNER_TEMP/fb$fat.com" testdata/fizzbuzz/fizzbuzz.go
-            rc=0
-            "$RUNNER_TEMP/fb$fat.com" 10 5 || rc=$?
-            echo "fizzbuzz GOCOSMOFAT=$fat exit=$rc"
-          done
-          # The boot prints its milestones under -tags cosmontdebug, so a binary that dies before it can say anything still says how far it got. It exits 139 there, a fault rather than a throw.
-          GOOS=cosmo go build -tags cosmontdebug -o "$RUNNER_TEMP/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go
-          rc=0
-          out="$("$RUNNER_TEMP/fbtrace.com" 10 5 2>&1)" || rc=$?
-          echo "fizzbuzz -tags cosmontdebug exit=$rc output=[$out]"
-          # A child that loses its arguments ignores -test.run and forks forever; archive/tar is where that shows.
-          GOOS=cosmo go build -o "$RUNNER_TEMP/argvecho.com" ./testdata/argvecho/main.go
-          rc=0
-          "$RUNNER_TEMP/argvecho.com" || rc=$?
-          echo "argvecho exit=$rc"
-          GOOS=cosmo go test -c -o "$RUNNER_TEMP/strings.test" strings
-          ls -l "$RUNNER_TEMP/strings.test"
-          # Three shapes: no arguments, a listing that never runs a test, and one test.
-          for args in "" "-test.list=." "-test.run=TestLastIndexByte -test.v"; do
-            rc=0
-            "$RUNNER_TEMP/strings.test" $args > "$RUNNER_TEMP/out.txt" 2>&1 || rc=$?
-            echo "strings.test [$args] exit=$rc output:"
-            cat "$RUNNER_TEMP/out.txt"
-          done
-          exit $rc
-
-      - name: The whole test suite (run.bash)
-        # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
-        timeout-minutes: 90
-        uses: wow-look-at-my/actions/multicmd@master
-        with:
-          unix: cd src && ./run.bash
-          windows: cd src && .\run.bat
-        env:
-          # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
-          GOCOSMOFORKDIAG: 1
-
-  # One linux build of the toolchain, for every job that runs it on linux but does not test the linux host: cosmo-checks, wasm, wasm-suite. The ubuntu build leg keeps its own, so the three host legs start together.
-  toolchain-linux:
-    timeout-minutes: 15
+  # The ubuntu host leg, its own job so cosmo-checks, wasm and wasm-suite can take its toolchain the moment it exists: needs waits on a whole matrix.
+  build-linux:
+    timeout-minutes: 150
     permissions:
       id-token: write
       contents: read
@@ -180,6 +62,7 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
+      - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -205,10 +88,14 @@ jobs:
           name: toolchain-linux
           path: ${{ runner.temp }}/toolchain
 
+      - uses: ./.github/actions/host-leg
+        with:
+          os: ubuntu-latest
+
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
     timeout-minutes: 60
-    needs: toolchain-linux
+    needs: build-linux
     permissions:
       id-token: write
       contents: read
@@ -220,7 +107,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
 
-      - name: Take the toolchain toolchain-linux built
+      - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: toolchain-linux
@@ -261,7 +148,7 @@ jobs:
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
     timeout-minutes: ${{ matrix.job-timeout }}
-    needs: build
+    needs: [build, build-linux]
     strategy:
       fail-fast: true
       matrix:
@@ -494,7 +381,7 @@ jobs:
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
     timeout-minutes: 45
-    needs: toolchain-linux
+    needs: build-linux
     permissions:
       id-token: write
       contents: read
@@ -526,7 +413,7 @@ jobs:
         shell: bash
         run: GOOS=linux GOARCH=amd64 GOBIN="$HOME/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0
 
-      - name: Take the toolchain toolchain-linux built
+      - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: toolchain-linux
@@ -634,7 +521,7 @@ jobs:
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
     timeout-minutes: 120
-    needs: toolchain-linux
+    needs: build-linux
     permissions:
       id-token: write
       contents: read
@@ -671,7 +558,7 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
-      - name: Take the toolchain toolchain-linux built
+      - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
           name: toolchain-linux
@@ -711,7 +598,7 @@ jobs:
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
-    needs: [build, cosmo-checks, test, wasm, wasm-suite]
+    needs: [build, build-linux, cosmo-checks, test, wasm, wasm-suite]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
