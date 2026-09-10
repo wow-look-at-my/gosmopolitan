@@ -87,7 +87,7 @@ func forkExecStatusReport(pid int) {
 
 // forkExecDiagWait is how long forkExecStatusReport waits for the watcher,
 // in seconds.
-const forkExecDiagWait = 60
+const forkExecDiagWait = 120
 
 // forkExecStatusKilled reports what the kill found: a child that is gone
 // (ESRCH) or already a zombie means the pipe's write end is held elsewhere,

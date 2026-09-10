@@ -123,7 +123,18 @@ runs:
                 pid="$(basename "$f")"
                 ps -o pid,ppid,stat,wchan,command -p "$pid" > "$diag/ps-$pid.txt" 2>&1
                 sudo sample "$pid" 2 -mayDie -file "$diag/sample-$pid.txt" > /dev/null 2>&1
-                sudo lldb -p "$pid" --batch -o 'bt all' -o 'detach' > "$diag/lldb-$pid.txt" 2>&1
+                sudo lldb -p "$pid" --batch -o 'bt all' -o 'register read' -o 'disassemble -n _objc_atfork_child' -o 'image lookup -n sDataLists' -o 'detach' > "$diag/lldb-$pid.txt" 2>&1
+                # Every callee-saved register that points into the shared cache: dump the words there, in the child and in the parent.
+                cmds=()
+                for a in $(awk '/^ +x(19|2[0-8]) = /{print $3}' "$diag/lldb-$pid.txt" | grep -E '^0x0*[12][0-9a-f]{8}$' | sort -u); do
+                  cmds+=(-o "memory read -s8 -c 96 -f x $a")
+                done
+                if [ "${#cmds[@]}" -gt 0 ]; then
+                  sudo lldb -p "$pid" --batch "${cmds[@]}" -o 'detach' > "$diag/lldb-mem-$pid.txt" 2>&1
+                  ppid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+                  sudo lldb -p "$ppid" --batch "${cmds[@]}" -o 'detach' > "$diag/lldb-parent-$ppid-of-$pid.txt" 2>&1
+                fi
+                sudo vmmap "$pid" > "$diag/vmmap-$pid.txt" 2>&1
                 rm -f "$f"
               done
               sleep 1
