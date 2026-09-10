@@ -20,8 +20,9 @@ tests:
 			- "fizzbuzz"
 	  exit: 0
 
+	# On NT the last line is the ntExit milestone, after the program's own output.
 	- desc: the boot trace build runs and prints its milestones
-	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=cosmo go build -tags cosmontdebug -o "$TMPDIR/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go && "$TMPDIR/fbtrace.com" 10 5 2>&1 | tail -1
+	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=cosmo go build -tags cosmontdebug -o "$TMPDIR/fbtrace.com" testdata/fizzbuzz/fizzbuzz.go && "$TMPDIR/fbtrace.com" 10 5 2>&1
 	  outputs:
 		stdout:
 			- "fizzbuzz"
