@@ -1077,6 +1077,9 @@ func (t *tester) registerTests() {
 					pkg:         "cmd/internal/testdir",
 					testFlags:   []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)},
 					runOnHost:   true,
+					// The corpus runs as cosmo binaries through the exec
+					// wrapper on a hosted runner, past go test's 10 minutes.
+					timeout: 30 * time.Minute,
 				},
 			)
 		}
