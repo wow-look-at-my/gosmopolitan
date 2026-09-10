@@ -257,7 +257,7 @@ The ubuntu build leg also carries the uprev guardrail `GOOS=cosmo go build std` 
 
 Two test programs ship in each build's artifact: `fizzbuzz.com` (basic execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file module, built via its directory: file I/O, directory listing. Its `nanosleep` check asserts on the elapsed CLOCK, not on the error: a syscall that returns success without sleeping passes an error-only check, which. The apetest suite runs both against all three origin binaries via the FIZZBUZZ_BIN and RUNTIMEPROBE_BIN env vars. The macos-latest runner is what actually executes the darwin (Syslib) code paths.
 
-A third job (`wasm`, ubuntu-only - wasm output is host-independent) regression-gates the fork's WebAssembly ports: it builds the toolchain, builds std for js/wasm and wasip1/wasm, runs the stdlib packages the.
+A third job (`wasm`, ubuntu-only - wasm output is host-independent) regression-gates the fork's WebAssembly ports: it builds the toolchain, builds std for js/wasm and wasip1/wasm, and runs the smoke programs. A `wasm-suite` matrix job runs `go tool dist test` for each port, js under node and wasip1 under wazero. That is the gate the other ports get.
 
 Three more jobs (`publish-create`, `publish-upload`, `publish-finish`. They need build+test) publish an installable toolchain tarball to buildhost on every push, one leg per platform - see Toolchain Distribution below.
 

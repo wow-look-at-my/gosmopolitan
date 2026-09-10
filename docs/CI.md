@@ -64,6 +64,10 @@ Each origin runs a throwaway copy, because an APE self-assimilates on a unix hos
 
 **Test platform-subset APEs.** A platform-subset APE must boot and run on every platform it still claims, on the real host - linking is not evidence. Both subsets run here, on all three legs. Each one's `TestSlimRuns` skips itself on a host it deliberately dropped (amd on macOS), while the structural checks - which payload, which boot header, which loader pieces. `-run` selects the execution battery plus `TestSlim*`: the rest of the suite (`TestELF*`, `TestMacho*`, `TestPE*`, `TestFat*`, `TestShell*`) pins the shape of an UNRESTRICTED build and is asserted against. The subset's own shape is what `TestSlim*` asserts, parameterized by `SLIM_PLATFORMS`.
 
+## wasm-suite job
+
+A matrix over the wasm ports. Each leg builds the toolchain. It then runs `go tool dist test` with `GOOS` set to the port. js runs under node and wasip1 under wazero, through the exec wrapper in `lib/wasm`. It is the same suite `run.bash` runs on the cosmo legs. The legs are separate jobs, so neither waits for the other. A named list of packages is a smoke test. This is the gate.
+
 ## wasm job
 
 Regression-gates the fork's WebAssembly ports (`GOOS=js` and `GOOS=wasip1`). See docs/WASM.md for every round's measurements and gates, and WASM_SHORTCOMINGS.md for the catalog of fixes. Wasm output is host-independent. A single ubuntu leg is enough. Job cap is a backstop only: a hung step trips its own `timeout-minutes` first, and later steps are skipped on failure. Observed green total is well under 15 minutes.
