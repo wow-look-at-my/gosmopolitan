@@ -721,6 +721,7 @@ type common struct {
 	cleanupStarted atomic.Bool    // Registered cleanup callbacks have started to execute
 	runner         string         // Function name of tRunner running the test.
 	isParallel     bool           // Whether the test is parallel.
+	changedProcess bool           // Setenv or Chdir ran in this process for the test.
 
 	parent     *common
 	level      int       // Nesting depth of test or benchmark.
@@ -1682,6 +1683,7 @@ func removeAll(path string) error {
 // in parallel tests or tests with parallel ancestors.
 func (c *common) Setenv(key, value string) {
 	c.checkFuzzFn("Setenv")
+	c.changedProcess = true
 	prevValue, ok := os.LookupEnv(key)
 
 	if err := os.Setenv(key, value); err != nil {
@@ -1707,6 +1709,7 @@ func (c *common) Setenv(key, value string) {
 // in parallel tests or tests with parallel ancestors.
 func (c *common) Chdir(dir string) {
 	c.checkFuzzFn("Chdir")
+	c.changedProcess = true
 	oldwd, err := os.Open(".")
 	if err != nil {
 		c.Fatal(err)
@@ -2377,6 +2380,14 @@ func (t *T) releaseBarrier() {
 func (t *T) Parallel() {
 	if t.isParallel {
 		return
+	}
+	if t.changedProcess {
+		// The test changed the environment or the directory here, and
+		// Parallel would park it with that change in place while the serial
+		// tests run. A child of its own keeps the change private. Fork
+		// returns only in that child, or with the barrier held on a host
+		// that starts no child.
+		t.Fork()
 	}
 	if t.isSynctest {
 		panic("testing: t.Parallel called inside synctest bubble")

@@ -15,6 +15,7 @@ import (
 var sink any
 
 func TestType(t *testing.T) {
+	t.Serial() // sink is a package variable.
 	// Testing:
 	// - Defined as another struct's field is ok
 	// - Pointer is ok
@@ -59,6 +60,7 @@ func TestUncomparable(t *testing.T) {
 }
 
 func TestFuncValue(t *testing.T) {
+	t.Serial() // sink is a package variable.
 	// Test that simd intrinsic can be used as a function value.
 	xv := [4]int32{1, 2, 3, 4}
 	yv := [4]int32{5, 6, 7, 8}
