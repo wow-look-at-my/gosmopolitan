@@ -16,5 +16,5 @@ tests:
 	  exit: 0
 
 	- desc: the platform-subset APEs boot and run here
-	  cmd: cd testdata/ape/apetest && bins="$PWD/../../../binaries/ape-binary-Linux" && for sub in "tri linux/amd64,darwin/arm64,windows/amd64" "amd linux/amd64,windows/amd64"; do set -- $sub; FIZZBUZZ_BIN="$bins/fizzbuzz-$1.com" RUNTIMEPROBE_BIN="$bins/runtimeprobe-$1.com" SLIM_BIN="$bins/fizzbuzz-$1.com" SLIM_PLATFORMS="$2" FAT_BIN="$bins/fizzbuzz.com" sh ./with-deadline.sh 540 go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... || exit 1; done
+	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && bins="$PWD/../../../binaries/ape-binary-Linux" && for sub in "tri linux/amd64,darwin/arm64,windows/amd64" "amd linux/amd64,windows/amd64"; do set -- $sub; FIZZBUZZ_BIN="$bins/fizzbuzz-$1.com" RUNTIMEPROBE_BIN="$bins/runtimeprobe-$1.com" SLIM_BIN="$bins/fizzbuzz-$1.com" SLIM_PLATFORMS="$2" FAT_BIN="$bins/fizzbuzz.com" sh ./with-deadline.sh 540 go test -v -run 'Fizz|Buzz|Number|Large|Mixed|Error|RuntimeProbe|Slim' ./... || exit 1; done
 	  exit: 0
