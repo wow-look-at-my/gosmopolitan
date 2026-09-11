@@ -41,6 +41,17 @@ func setDummyEnv(tb testing.TB, envList []env) {
 
 func setupEnvCleanup(tb testing.TB) {
 	tb.Helper()
+	// The environment is process-wide, and the cleanup below wipes it with
+	// Clearenv before restoring it. Top level tests here run in parallel, so
+	// that window is visible to every other test in this package: TestSetpgid
+	// reached exec.LookPath("cat") inside it and failed with "executable file
+	// not found in $PATH".
+	//
+	// Serial is on *testing.T, and a benchmark has none, so ask rather than
+	// require.
+	if s, ok := tb.(interface{ Serial() }); ok {
+		s.Serial()
+	}
 	originalEnv := map[string]string{}
 	for _, env := range syscall.Environ() {
 		fields := strings.SplitN(env, "=", 2)

@@ -22,6 +22,7 @@ const (
 )
 
 func TestReadFile(t *testing.T) {
+	t.Serial()
 	f, err := os.CreateTemp("", "buildid-test-")
 	if err != nil {
 		t.Fatal(err)

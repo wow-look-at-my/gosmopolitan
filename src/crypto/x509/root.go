@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	_ "unsafe" // for linkname
@@ -137,7 +136,12 @@ var x509sslcertoverrideplatform = godebug.New("x509sslcertoverrideplatform")
 func loadSystemRoots() (*CertPool, error) {
 	certFilePath, certDirPath := os.Getenv(certFileEnv), os.Getenv(certDirEnv)
 
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	// platformVerifier, not runtime.GOOS. An empty systemPool means "ask
+	// systemVerify instead", and only a build whose systemVerify answers
+	// may return one. On cosmo runtime.GOOS names the HOST, so a macOS
+	// host took this branch and got a pool nothing could fill: cosmo's
+	// systemVerify is the stub that returns no chains.
+	if platformVerifier {
 		if certFilePath == "" && certDirPath == "" {
 			return &CertPool{systemPool: true}, nil
 		}

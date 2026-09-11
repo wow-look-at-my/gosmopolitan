@@ -160,3 +160,45 @@ func TestRunningLeavesTheAPEAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, data, after, "the APE must be byte-identical after running")
 }
+
+// An APE reached through a symlink keys on what the link POINTS AT. Both stat
+// implementations lstat by default, so the identity used to describe the link
+// itself: an inode and an mtime that a rebuild of the target never moves. The
+// staged copy from the very first run then answered every later one, and a
+// tool installed as ~/.local/bin/<name> ran its original build for ever.
+func TestStagedCopyFollowsTheSymlinkTarget(t *testing.T) {
+	skipWhereNothingIsStaged(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("no symlink without a privilege on NT")
+	}
+	data, err := os.ReadFile(binPath(t))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "fizzbuzz.com")
+	require.NoError(t, os.WriteFile(target, data, 0o755))
+
+	// The link is what gets run, exactly as a $PATH install would be.
+	link := filepath.Join(dir, "fizzbuzz-link.com")
+	require.NoError(t, os.Symlink(target, link))
+
+	before := stagedCopySet(t)
+	first := runStaged(t, link, "10", "5")
+	require.Len(t, newEntries(before, stagedCopySet(t)), 1, "the first run through the link stages one copy")
+
+	linkStat, err := os.Lstat(link)
+	require.NoError(t, err)
+
+	// Rebuild what the link points at. The link is untouched, so an identity
+	// read off the link cannot tell this apart from the run above.
+	require.NoError(t, os.WriteFile(target, data, 0o755))
+	second := runStaged(t, link, "10", "5")
+
+	afterStat, err := os.Lstat(link)
+	require.NoError(t, err)
+	require.Equal(t, linkStat.ModTime(), afterStat.ModTime(), "the link itself never changed, which is the whole trap")
+
+	assert.Equal(t, first, second, "the rebuilt binary still runs through the link")
+	assert.Len(t, newEntries(before, stagedCopySet(t)), 2,
+		"the rebuild must stage a copy of its own: one copy means the link's own inode keyed it and the first build runs for ever")
+}

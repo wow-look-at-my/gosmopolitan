@@ -25,8 +25,8 @@ import (
 )
 
 // uirVersion is the unified IR version to use for encoding/decoding.
-// Use V5 for parameter defaults.
-const uirVersion = pkgbits.V5
+// Use V6 for struct literal parameter defaults.
+const uirVersion = pkgbits.V6
 
 // localPkgReader holds the package reader used for reading the local
 // package. It exists so the unified IR linker can refer back to it

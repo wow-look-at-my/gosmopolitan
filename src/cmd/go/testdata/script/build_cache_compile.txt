@@ -9,13 +9,10 @@ mkdir $GOCACHE
 go build -x lib.go
 stderr '(compile|gccgo)( |\.exe).*lib\.go'
 
-# ... but not again ...
+# ... but not again. There is no -a to force it: a cached result IS the
+# answer, and discarding a correct one on request is what -a was for.
 go build -x lib.go
 ! stderr '(compile|gccgo)( |\.exe).*lib\.go'
-
-# ... unless we use -a.
-go build -a -x lib.go
-stderr '(compile|gccgo)( |\.exe)'
 
 -- lib.go --
 package lib

@@ -240,11 +240,36 @@ func TestDarwinXlatIoctl(t *testing.T) {
 		}
 	}
 
+	// The pty trio is already Apple's and comes back unchanged. Linux
+	// grants through libc and asks TIOCGPTN for a NUMBER, where Apple
+	// answers TIOCPTYGNAME with a NAME, so there is no Linux request to
+	// translate from and a caller on a Darwin host passes Apple's own.
+	for _, tc := range []struct {
+		name string
+		req  uintptr
+	}{
+		{"TIOCPTYGRANT", cosmo.AppleTIOCPTYGRANTForTest},
+		{"TIOCPTYUNLK", cosmo.AppleTIOCPTYUNLKForTest},
+		{"TIOCPTYGNAME", cosmo.AppleTIOCPTYGNAMEForTest},
+	} {
+		got, ok := cosmo.DarwinXlatIoctl(tc.req)
+		if !ok {
+			t.Errorf("%s (%#x): not served, so ptySlave answers ENOSYS", tc.name, tc.req)
+			continue
+		}
+		if got != tc.req {
+			t.Errorf("%s: %#x -> %#x, want it unchanged", tc.name, tc.req, got)
+		}
+	}
+
 	// The termios requests are served by their own table, because their
 	// argument is a struct that has to be converted rather than passed
-	// along. This one must not claim them.
+	// along. This one must not claim them. The zero request also stands
+	// for every number nobody listed: the pty entries above are named
+	// pass-throughs, not an opening for any Apple request at all.
 	for _, req := range []uintptr{
 		cosmo.LinuxTCGETSForTest, cosmo.LinuxTCSETSForTest, 0,
+		0x2000745f, // an unlisted BSD _IO request in the same 't' group
 	} {
 		if _, ok := cosmo.DarwinXlatIoctl(req); ok {
 			t.Errorf("request %#x reported as served by the plain table; it is not", req)
@@ -428,5 +453,39 @@ func TestDarwinBaud(t *testing.T) {
 	}
 	if _, ok := cosmo.DarwinBaudToLinux(76800); ok {
 		t.Error("76800 baud reported as encodable; Linux has no code for it")
+	}
+}
+
+func TestDarwinFlock(t *testing.T) {
+	var af cosmo.DarwinFlock
+	if got := unsafe.Sizeof(af); got != 24 {
+		t.Errorf("sizeof(DarwinFlock) = %d, want 24", got)
+	}
+	if got := unsafe.Offsetof(af.Type); got != 20 {
+		t.Errorf("offsetof(DarwinFlock.Type) = %d, want 20", got)
+	}
+	if got := unsafe.Offsetof(af.Pid); got != 16 {
+		t.Errorf("offsetof(DarwinFlock.Pid) = %d, want 16", got)
+	}
+
+	// Linux numbers read, write and unlock 0/1/2. Apple agrees on none
+	// of the three, so an untranslated type asks for the wrong lock -
+	// and a read lock where the caller wanted a write lock is a weaker
+	// lock rather than an error.
+	for _, tc := range []struct{ linux, darwin int16 }{{0, 1}, {1, 3}, {2, 2}} {
+		got, ok := cosmo.DarwinLockType(tc.linux)
+		if !ok || got != tc.darwin {
+			t.Errorf("DarwinLockType(%d) = %d, %v; want %d, true", tc.linux, got, ok, tc.darwin)
+		}
+		back, ok := cosmo.LinuxLockType(tc.darwin)
+		if !ok || back != tc.linux {
+			t.Errorf("LinuxLockType(%d) = %d, %v; want %d, true", tc.darwin, back, ok, tc.linux)
+		}
+	}
+	if _, ok := cosmo.DarwinLockType(9); ok {
+		t.Error("Linux lock type 9 accepted; Apple has no value for it")
+	}
+	if _, ok := cosmo.LinuxLockType(0); ok {
+		t.Error("Apple lock type 0 accepted; Apple numbers its types from one")
 	}
 }

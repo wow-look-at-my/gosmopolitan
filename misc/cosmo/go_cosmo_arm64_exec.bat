@@ -6,7 +6,15 @@
 :: cmd/go looks for it on %PATH% whenever GOOS is not the host GOOS.
 ::
 :: The APE boots natively through its own PE header, but NT starts a
-:: program by its extension, so the binary is copied to a .exe first.
+:: program by its extension, so the binary gets an .exe name first. A
+:: hard link costs no disk: dist test links one APE per test package,
+:: and a copy of each doubles that.
+::
+:: The argument list is NOT rebuilt token by token. cmd.exe's tokeniser
+:: treats "=", "," and ";" as separators, so "%~1" turns
+:: -test.short=true into two arguments, and the test binary reads "true"
+:: as a positional. Everything after the first token is passed through
+:: exactly as it arrived.
 
 @echo off
 setlocal
@@ -16,22 +24,18 @@ if "%~1"=="" (
 )
 set "BIN=%~1"
 set "EXT=%~x1"
-shift
 
 set "EXE=%BIN%"
 if /i not "%EXT%"==".exe" (
     set "EXE=%BIN%.exe"
-    copy /y "%BIN%" "%BIN%.exe" >nul || exit /b 1
+    if not exist "%BIN%.exe" (
+        mklink /h "%BIN%.exe" "%BIN%" >nul 2>&1 || copy /y "%BIN%" "%BIN%.exe" >nul || exit /b 1
+    )
 )
 
-:: %* still carries the binary, so the argument list is rebuilt.
-set "ARGS="
-:args
-if "%~1"=="" goto run
-set ARGS=%ARGS% "%~1"
-shift
-goto args
+:: %* still carries the binary, so cut the first token off the front.
+set "ARGS=%*"
+call set "ARGS=%%ARGS:*%1=%%"
 
-:run
 "%EXE%"%ARGS%
 exit /b %ERRORLEVEL%

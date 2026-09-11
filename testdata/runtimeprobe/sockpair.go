@@ -75,7 +75,7 @@ func checkSockpairRaw() {
 			return
 		}
 		ua, isUnix := sa.(*syscall.SockaddrUnix)
-		if !isUnix || ua.Name != "" {
+		if !isUnix || !isUnnamedSockName(ua.Name) {
 			fail("socketpair", "getsockname fd[%d] = %#v (%T), want unnamed *SockaddrUnix", i, sa, sa)
 			return
 		}
@@ -130,7 +130,7 @@ func checkSockpairPoll() {
 	defer c1.Close()
 
 	la, isUnix := c0.LocalAddr().(*net.UnixAddr)
-	if !isUnix || la.Name != "" {
+	if !isUnix || !isUnnamedSockName(la.Name) {
 		fail("sockpairpoll", "LocalAddr = %#v (%T), want unnamed *net.UnixAddr", c0.LocalAddr(), c0.LocalAddr())
 		return
 	}

@@ -26,7 +26,10 @@ func TestNTIsAbs(t *testing.T) {
 		{`\Users`, false},
 		{`Users\x`, false},
 		{``, false},
-		{`/usr/bin`, false},
+		{`/usr/bin`, true},
+		{`/d/a/x`, true},
+		{`/`, true},
+		{`//`, true},
 	} {
 		if got := filepathlite.NTIsAbs(tt.path, true); got != tt.want {
 			t.Errorf("NTIsAbs(%q, nt) = %v, want %v", tt.path, got, tt.want)
@@ -56,7 +59,9 @@ func TestNTVolumeNameLen(t *testing.T) {
 		{`C:`, 2},
 		{`\\host\share\dir`, 12},
 		{`\\host\share`, 12},
-		{`//host/share/dir`, 12},
+		{`//host/share/dir`, 0},
+		{`//`, 0},
+		{`/d/a/x`, 0},
 		{`\\host\`, 7},
 		{`\\host`, 6},
 		{`\Users`, 0},

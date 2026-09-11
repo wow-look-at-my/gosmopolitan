@@ -175,6 +175,14 @@ func (m *Match) MatchPackages() {
 				return filepath.SkipDir
 			}
 
+			// A vendor tree here holds whole repositories, checked out as
+			// submodules, so it carries packages the distribution never
+			// vendored and whose imports do not resolve. modules.txt names
+			// the ones that are part of the build.
+			if !vendorlist.Vendors(path) {
+				return nil
+			}
+
 			if have[name] {
 				return nil
 			}

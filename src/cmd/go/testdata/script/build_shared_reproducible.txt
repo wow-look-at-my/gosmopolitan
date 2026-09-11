@@ -5,6 +5,14 @@
 
 env GO111MODULE=off
 env CGO_ENABLED=1
-go install -a -trimpath -buildvcs=false -buildmode=shared -pkgdir=pkgdir1 runtime
-go install -a -trimpath -buildvcs=false -buildmode=shared -pkgdir=pkgdir2 runtime
+# A cache apiece, so the second install links a shared object of its own
+# rather than reusing the first. Comparing a hit against its own source
+# proves nothing about reproducibility.
+env GOCACHE=$WORK/cache1
+mkdir $GOCACHE
+go install -trimpath -buildvcs=false -buildmode=shared -pkgdir=pkgdir1 runtime
+
+env GOCACHE=$WORK/cache2
+mkdir $GOCACHE
+go install -trimpath -buildvcs=false -buildmode=shared -pkgdir=pkgdir2 runtime
 [GOOS:linux] cmp -q pkgdir1/libruntime.so pkgdir2/libruntime.so

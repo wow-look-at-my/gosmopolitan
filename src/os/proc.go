@@ -7,8 +7,8 @@
 package os
 
 import (
+	"internal/goos"
 	"internal/testlog"
-	"runtime"
 	"syscall"
 )
 
@@ -16,7 +16,10 @@ import (
 var Args []string
 
 func init() {
-	if runtime.GOOS == "windows" {
+	// The PORT, not runtime.GOOS: this asks which file supplies Args, and
+	// only the windows port has exec_windows.go. A cosmo binary on an NT
+	// host reports GOOS "windows" and still gets its Args from here.
+	if goos.IsWindows == 1 {
 		// Initialized in exec_windows.go.
 		return
 	}

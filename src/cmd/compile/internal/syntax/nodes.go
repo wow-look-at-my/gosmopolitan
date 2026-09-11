@@ -101,6 +101,7 @@ type (
 		NameList []*Name
 		Type     Expr // nil means no type
 		Values   Expr // nil means no values
+		Readonly bool // "readonly var": only the declaring package may assign
 		decl
 	}
 

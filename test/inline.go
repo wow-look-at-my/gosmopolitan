@@ -187,8 +187,13 @@ func switchConst1(p func(string)) { // ERROR "can inline switchConst" "p does no
 	}
 }
 
+// goos is a constant even where runtime.GOOS is the fork's readonly variable:
+// a constant context folds the build value. A switch on the variable itself
+// cannot fold, and a hundred string compares are past the inline budget.
+const goos = runtime.GOOS
+
 func switchConst2() string { // ERROR "can inline switchConst2"
-	switch runtime.GOOS {
+	switch goos {
 	case "linux":
 		return "Leenooks"
 	case "windows":
@@ -202,7 +207,7 @@ func switchConst2() string { // ERROR "can inline switchConst2"
 	}
 }
 func switchConst3() string { // ERROR "can inline switchConst3"
-	switch runtime.GOOS {
+	switch goos {
 	case "Linux":
 		panic("Linux")
 	case "Windows":

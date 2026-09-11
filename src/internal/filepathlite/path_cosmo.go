@@ -76,6 +76,12 @@ func ntIsAbs(path string, nt bool) bool {
 	if !nt {
 		return stringslite.HasPrefix(path, "/")
 	}
+	if stringslite.HasPrefix(path, "/") {
+		// Cosmo-rooted, and the runtime hands these out: getcwd and
+		// os.Executable answer "/d/a/...". ntPathW resolves one against
+		// the current drive, so it names a file on its own.
+		return true
+	}
 	l := ntVolumeNameLen(path, nt)
 	if l == 0 {
 		return false
@@ -98,6 +104,15 @@ func volumeNameLen(path string) int {
 
 func ntVolumeNameLen(path string, nt bool) int {
 	if !nt {
+		return 0
+	}
+	if stringslite.HasPrefix(path, "/") {
+		// The forward slash is the cosmo spelling and carries no volume:
+		// ntPathW reads "/c/x" as the drive and anything else as the
+		// current drive's root. Windows' own spellings all begin with a
+		// letter or a backslash and fall through. Without this, "//"
+		// reads as a UNC root, so Clean("//") answers "//" and
+		// Join("/", "") does too.
 		return 0
 	}
 	if len(path) >= 2 && path[1] == ':' {

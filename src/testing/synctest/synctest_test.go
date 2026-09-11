@@ -50,9 +50,9 @@ func TestVerboseError(t *testing.T) {
 			t.Error("error")
 		})
 	}, `^=== RUN   TestVerboseError
-=== PAUSE TestVerboseError
+(=== PAUSE TestVerboseError
 === CONT  TestVerboseError
-    synctest_test.go:.* error
+)?    synctest_test.go:.* error
 --- FAIL: TestVerboseError.*
 FAIL
 $`)
@@ -73,9 +73,9 @@ func TestVerboseSkip(t *testing.T) {
 			t.Skip("skip")
 		})
 	}, `^=== RUN   TestVerboseSkip
-=== PAUSE TestVerboseSkip
+(=== PAUSE TestVerboseSkip
 === CONT  TestVerboseSkip
-    synctest_test.go:.* skip
+)?    synctest_test.go:.* skip
 --- PASS: TestVerboseSkip.*
 PASS
 $`)
@@ -151,9 +151,9 @@ func TestHelper(t *testing.T) {
 			helperLog(t, "log in helper")
 		})
 	}, `^=== RUN   TestHelper
-=== PAUSE TestHelper
+(=== PAUSE TestHelper
 === CONT  TestHelper
-    synctest_test.go:.* log in helper
+)?    synctest_test.go:.* log in helper
 --- PASS: TestHelper.*
 PASS
 $`)

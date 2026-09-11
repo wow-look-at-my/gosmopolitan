@@ -4,7 +4,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"unsafe"
+	"internal/goos"
+)
 
 // OS memory management abstraction layer
 //
@@ -200,7 +203,7 @@ retry:
 		return nil, 0
 	case p&(align-1) == 0:
 		return unsafe.Pointer(p), size + align
-	case GOOS == "windows" || cosmoHostIsWindows():
+	case goos.IsWindows == 1 || cosmoHostIsWindows():
 		// On Windows (including a cosmo binary running on an NT
 		// host, where the same VirtualAlloc reservations back
 		// sysReserve) we can't release pieces of a

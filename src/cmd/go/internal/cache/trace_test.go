@@ -6,47 +6,14 @@ package cache
 
 import (
 	"bytes"
-	"io"
 	"testing"
 
 	"cmd/go/internal/trace"
 )
 
-// execOnly is a Cache that can store an executable.
-type execOnly struct{ Cache }
-
-func (execOnly) PutExecutable(ActionID, string, io.ReadSeeker) (OutputID, int64, error) {
-	return OutputID{}, 0, nil
-}
-
-// plainOnly is a Cache that cannot, which is what a cache program is: its
-// protocol has no such operation.
+// plainOnly is a bare Cache, which is every cache there is: one Put, one Get,
+// one file per entry.
 type plainOnly struct{ Cache }
-
-// A traced cache must answer the ExecutableCache assertion exactly when the
-// cache under it does. Answering it always makes the caller store an
-// executable through a cache that cannot; answering it never turns
-// executable caching off for every traced build, silently, since the caller
-// tests the assertion and moves on.
-func TestTracedPreservesExecutableCache(t *testing.T) {
-	// An inert lane returns the cache unchanged, so this needs a live one.
-	ctx, done, err := trace.Start(t.Context(), t.TempDir()+"/trace.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer done()
-	lane := trace.LaneOf(ctx)
-	if !lane.Enabled() {
-		t.Fatal("trace.Start gave a lane that records nothing")
-	}
-
-	if _, ok := Traced(execOnly{}, lane).(ExecutableCache); !ok {
-		t.Error("a traced ExecutableCache is not an ExecutableCache")
-	}
-	if _, ok := Traced(plainOnly{}, lane).(ExecutableCache); ok {
-		t.Error("a traced plain Cache reports that it can store an executable")
-	}
-}
 
 // An inert lane must leave the cache alone: an untraced build pays one
 // comparison, not an indirection on every lookup.

@@ -8,7 +8,7 @@
 [short] skip
 
 # Kick off test.
-go test -vet=off -count=1 -coverprofile=cov.p ./...
+go test -vet=off -coverprofile=cov.p ./...
 
 # Generate a function profile.
 go tool cover -func=cov.p

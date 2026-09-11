@@ -368,6 +368,35 @@ func TestSplitPath(t *testing.T) {
 	}
 }
 
+// A cosmo binary takes file_unix.go on every host it boots on, and NT names
+// its temp directory in TMP or TEMP and sets no TMPDIR. The unix default
+// answered /tmp there, a path that host does not have, so every t.TempDir on
+// the windows leg built under it and its cleanup reported "open /tmp: is a
+// directory".
+//
+// The order is the one GetTempPath documents, which is what os.TempDir
+// answers on a real windows build.
+func TestNTTempDirReadsTheVariablesNTSets(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"tmp wins", map[string]string{"TMP": `C:\a`, "TEMP": `C:\b`, "USERPROFILE": `C:\c`}, `C:\a`},
+		{"temp is next", map[string]string{"TEMP": `C:\b`, "USERPROFILE": `C:\c`}, `C:\b`},
+		{"then the profile", map[string]string{"USERPROFILE": `C:\c`}, `C:\c`},
+		{"an empty value is unset", map[string]string{"TMP": "", "TEMP": `C:\b`}, `C:\b`},
+		{"nothing set", nil, `C:\Windows\Temp`},
+		// The one that mattered: TMPDIR is a unix name and NT sets none.
+		{"tmpdir does not count", map[string]string{"TMPDIR": "/tmp"}, `C:\Windows\Temp`},
+	} {
+		if got := NTTempDir(func(k string) string { return tt.env[k] }); got != tt.want {
+			t.Errorf("%s: NTTempDir = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 // Test that copying to files opened with O_APPEND works and
 // the copy_file_range syscall isn't used on Linux.
 //

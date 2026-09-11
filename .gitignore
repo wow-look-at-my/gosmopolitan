@@ -33,6 +33,10 @@ _testmain.go
 /src/_artifacts/
 /src/cmd/cgo/zdefaultcc.go
 /src/cmd/dist/dist
+# The fork's cosmo builds drop debug sidecars beside every binary, so ignoring
+# the binary alone still leaves two multi-megabyte files for the next `add -A`.
+/src/cmd/dist/dist.dbg
+/src/cmd/dist/dist.aarch64.elf
 /src/cmd/go/internal/cfg/zdefaultcc.go
 /src/cmd/internal/objabi/zbootstrap.go
 /src/go/build/zcgo.go
@@ -68,3 +72,5 @@ _testmain.go
 
 # wasip1sock reference-host binary (go build in testdata/wasip1sock/host)
 /testdata/wasip1sock/host/wasip1sockhost
+/build/
+/.gocache/

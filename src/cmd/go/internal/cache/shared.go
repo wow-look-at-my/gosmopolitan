@@ -13,8 +13,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	goCfg "cmd/go/internal/cfg"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
 )
@@ -39,6 +43,40 @@ type SharedCache struct {
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// sharedModule holds the main module's path for cache provenance.
+//
+// It is a variable rather than an argument because of when each side happens:
+// the cache is built the first time anything asks for it, and the main module
+// is not known until the module loader has run. Whichever comes first, the
+// backend ends up with the path -- SetSharedModule reaches a backend that
+// already exists, and newSharedCache reads the value for one built later.
+var sharedModule atomic.Pointer[string]
+
+// SetSharedModule records which module's build is running, for the shared
+// cache's provenance headers. The module loader calls it once it knows.
+func SetSharedModule(path string) {
+	if path == "" {
+		return
+	}
+	sharedModule.Store(&path)
+	if c := liveShared.Load(); c != nil {
+		c.remote.SetModule(path)
+	}
+}
+
+// liveShared is the backend this process built, if it built one. Reaching it
+// through Default() here would construct the cache as a side effect of naming
+// a module, which is not what a setter may do.
+var liveShared atomic.Pointer[SharedCache]
+
+// mainModulePath is the recorded module path, or "" before the loader runs.
+func mainModulePath() string {
+	if p := sharedModule.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // Shared reports whether a shared cache tier is configured for this process.
@@ -67,22 +105,84 @@ func newSharedCache(disk *DiskCache) Cache {
 	if cfg.Bucket == "" {
 		return nil
 	}
+	// Provenance. The environment names the endpoint and the credential; what
+	// this build IS comes from the build itself, and the server has no other
+	// way to learn it. Without these its log can say how many objects moved and
+	// nothing about whose build moved them.
+	cfg.Target = goCfg.Goos + "/" + goCfg.Goarch
+	cfg.Version = runtime.Version()
+	cfg.Module = mainModulePath()
+	// The key index's disk copy lives beside the cache it describes. Builds
+	// that share GOCACHE then share one copy, whatever their TMPDIR: cmd/go's
+	// script tests give every script its own, and fetched the whole index
+	// once per script.
+	cfg.IndexDir = disk.dir
 	// The client writes diagnostics nowhere until a consumer says otherwise,
-	// and cmd/go's stderr is where a build's warnings already go. The one
-	// exception is the outage window below, which ends by itself.
-	if !cacheQuiet() {
-		cacheclient.SetLogger(goLogger{})
-	}
-	remote, err := newWebBackend(cfg)
+	// and cmd/go's stderr is where a build's warnings already go.
+	cacheclient.SetLogger(goLogger{})
+	remote, err := cacheclient.NewWebBackend(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "go: shared build cache disabled: %v\n", err)
+			cacheNotice("shared build cache disabled: %v", err)
 		}
 		return nil
 	}
-	return &SharedCache{DiskCache: disk, remote: remote}
+	c := &SharedCache{DiskCache: disk, remote: remote}
+	// Without this the look-ahead pool has nowhere to put what it fetches, and
+	// the client turns it off. This is the whole mechanism: objects land on
+	// disk before the build asks for them, so the ask is a local read.
+	remote.OnBatchEntries = c.populate
+	liveShared.Store(c)
+	return c
+}
+
+// populate stores objects the look-ahead pool fetched before the build asked
+// for them. It runs on that pool's goroutines, several at a time.
+//
+// The cheap checks come first and the expensive one last. An object already on
+// disk costs a stat here; an object that is not costs a decompress and a hash.
+// Doing it the other way round would decompress the whole window on every
+// request to discover the build already had it.
+func (c *SharedCache) populate(entries []cacheclient.BatchEntry) {
+	for _, e := range entries {
+		actionID, ok := c.remote.ActionIDFromKey(e.Key)
+		if !ok {
+			continue
+		}
+		var id ActionID
+		raw, err := hex.DecodeString(actionID)
+		if err != nil || len(raw) != len(id) {
+			continue
+		}
+		copy(id[:], raw)
+		if _, err := c.DiskCache.Get(id); err == nil {
+			continue // already local; nothing to do
+		}
+		data, ok := c.remote.Verify(e, actionID)
+		if !ok {
+			continue
+		}
+		out, decErr := decodeOutputID(e.OutputID)
+		if decErr != nil {
+			continue
+		}
+		// The client hashed this body to check it against its outputID a moment
+		// ago. Put would hash it again to derive the same answer.
+		c.putVerified(id, out, data)
+	}
+}
+
+// putVerified writes a body whose OutputID is already known and already
+// checked, skipping the hash Put would otherwise recompute.
+func (c *SharedCache) putVerified(id ActionID, out OutputID, data []byte) {
+	if err := c.DiskCache.copyFile(bytes.NewReader(data), out, int64(len(data))); err != nil {
+		return
+	}
+	// allowVerify is false: this body came off the network, so the local
+	// reproducibility check has nothing to say about it.
+	_ = c.DiskCache.putIndexEntry(id, out, int64(len(data)), false)
 }
 
 // Get answers from disk, and asks the shared tier only when disk misses. A
@@ -104,43 +204,18 @@ func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	}
 
 	actionID := hex.EncodeToString(id[:])
-	outputID, exeName, body, size, _, miss, rerr := c.remote.GetExecutable(actionID)
-	if miss || rerr != nil || body == nil {
+	outputID, data, _, miss := c.remote.Get(actionID)
+	if miss || data == nil {
 		return Entry{}, tierShared, err // the local miss, which is what the caller expects
 	}
-	defer body.Close()
 
-	// The client has already verified this body against its outputID and its
-	// build id. Storing it locally re-verifies it on the way in and gives the
-	// compiler a path to open.
-	data, readErr := io.ReadAll(body)
-	if readErr != nil {
+	// The client hashed this body against its outputID before answering, so
+	// the value is known good and Put would only compute it a second time.
+	out, decErr := decodeOutputID(outputID)
+	if decErr != nil {
 		return Entry{}, tierShared, err
 	}
-	var gotID OutputID
-	var n int64
-	var putErr error
-	if exeName != "" {
-		// An executable entry must land in the shape the build can fork/exec:
-		// a directory holding a 0777 file of this name, not a 0666 regular
-		// file. A plain Put here is exactly the regression this tier shipped
-		// with: the hit exists, useCache trusts it, go run dies with
-		// permission denied.
-		gotID, n, putErr = c.DiskCache.PutExecutable(id, exeName, bytes.NewReader(data))
-	} else {
-		gotID, n, putErr = c.DiskCache.Put(id, bytes.NewReader(data))
-	}
-	if putErr != nil {
-		return Entry{}, tierShared, err
-	}
-	if want, decErr := decodeOutputID(outputID); decErr == nil && gotID != want {
-		// The shared tier named an outputID the stored body does not have.
-		// Serving it would hand the compiler the wrong object under this key.
-		return Entry{}, tierShared, err
-	}
-	if size > 0 && n != size {
-		return Entry{}, tierShared, err
-	}
+	c.putVerified(id, out, data)
 	entry, err = c.DiskCache.Get(id)
 	return entry, tierShared, err
 }
@@ -153,37 +228,24 @@ func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	if err != nil {
 		return outputID, size, err
 	}
-	c.offer(id, outputID, size)
+	c.offer(id, outputID)
 	return outputID, size, nil
 }
 
-// PutExecutable mirrors Put for an output the build will execute. The
-// executable's name rides the shared tier's metadata, because the name is
-// the only carrier of what the body is: a cosmo APE starts with a '#!'
-// shell header, so no byte sniff could recover it on the way back.
-func (c *SharedCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	outputID, size, err := c.DiskCache.PutExecutable(id, name, file)
-	if err != nil {
-		return outputID, size, err
-	}
-	f, err := os.Open(c.DiskCache.OutputFile(outputID))
-	if err == nil {
-		_ = c.remote.PutExecutable(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), name, f, size)
-		f.Close()
-	}
-	return outputID, size, nil
-}
-
-// offer uploads the stored body. It reads back the file the DiskCache just
-// wrote rather than rewinding the caller's reader: the caller owns that reader
-// and the contract does not promise it is still seekable afterwards.
-func (c *SharedCache) offer(id ActionID, outputID OutputID, size int64) {
-	f, err := os.Open(c.DiskCache.OutputFile(outputID))
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_ = c.remote.Put(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), f, size)
+// offer uploads the stored body. It names the file the DiskCache just wrote
+// rather than rewinding the caller's reader: the caller owns that reader and
+// the contract does not promise it is still seekable afterwards.
+//
+// Neither the read nor the compression happens here. A prep worker does both,
+// so the goroutine that just finished a compile goes back to compiling instead
+// of spending its next milliseconds on a body-sized copy and zstd. Handing
+// over the path also keeps that body out of the prep queue, which is several
+// times a worker count deep and used to hold every one of them uncompressed.
+//
+// PutFile owes the file's lifetime to the caller, and Close below is what pays
+// it: the backend drains before the DiskCache trims.
+func (c *SharedCache) offer(id ActionID, outputID OutputID) {
+	_ = c.remote.PutFile(hex.EncodeToString(id[:]), hex.EncodeToString(outputID[:]), c.DiskCache.OutputFile(outputID))
 }
 
 // Close drains the shared tier's in-flight uploads before the disk cache
@@ -209,87 +271,70 @@ func decodeOutputID(s string) (OutputID, error) {
 	return out, nil
 }
 
-// cacheQuietUntil ends the outage window. The shared cache server answers 404
-// for its index and for every upload, and the client reports each one, so a
-// go command prints hundreds of lines it did not use to. Tests that read a go
-// command's output then fail: cmd/internal/testdir asserts a go run prints
-// nothing, and one of those lines landed inside a generated .go file.
-//
-// The window is a DEADLINE, not a switch, and it applies to CI alone. It
-// expires on its own, and the diagnostics come back with no edit. Silencing
-// this permanently would mean a broken cache nobody hears about; a date means
-// somebody hears about it again on this day whether or not anyone remembered,
-// and the CI condition means a developer never stops hearing about it.
-//
-// TestSharedCache_QuietWindowExpires pins that, so extending the date takes a
-// deliberate edit to a test that says why.
-//
-// It moves because the outage is still on: the CI run that first tripped the
-// deadline printed `web index fetch: HTTP 404` and a `web put ... HTTP 404`
-// for every batch, on every go command in the job. Delete this and the gates
-// below once a run comes back without them.
-var cacheQuietUntil = time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
-
-// cacheQuiet reports whether to hold the shared tier's per-request
-// diagnostics back.
-//
-// Only a CI run is ever quiet. CI is where the output-reading tests are, and
-// it is the one place a person is not watching. A developer sees a failing
-// cache the moment it fails, on every build, window or no window.
-// GOCACHEDEBUG asks for them back anywhere.
-func cacheQuiet() bool {
-	if cacheDebug() {
-		return false
-	}
-	if os.Getenv("CI") == "" {
-		return false
-	}
-	return time.Now().Before(cacheQuietUntil)
-}
-
-// CacheDebugEnv asks for the shared tier's per-request diagnostics during the
-// window above. Anything but the empty string enables them.
-const CacheDebugEnv = "GOCACHEDEBUG"
-
-// cacheDebug reports whether the caller asked to see those diagnostics.
-func cacheDebug() bool {
-	return os.Getenv(CacheDebugEnv) != ""
-}
-
-// newWebBackend builds the backend, during the window with os.Stderr pointed
-// at the null device.
-//
-// The client aggregates its HTTP errors through a writer it captures ONCE,
-// when the backend is built, and that writer is os.Stderr. SetLogger does not
-// reach it, so the gate above covers only half the output. Swapping os.Stderr
-// across this one call is what decides where those summaries go for the life
-// of the backend. Narrow by construction: cmd/go builds exactly one backend,
-// before it has anything else to say.
-func newWebBackend(cfg cacheclient.WebConfig) (*cacheclient.WebBackend, error) {
-	if !cacheQuiet() {
-		return cacheclient.NewWebBackend(cfg)
-	}
-	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		// No null device is not a reason to give up a working cache.
-		return cacheclient.NewWebBackend(cfg)
-	}
-	saved := os.Stderr
-	os.Stderr = devnull
-	defer func() { os.Stderr = saved }()
-	return cacheclient.NewWebBackend(cfg)
-}
-
 // goLogger sends the client's diagnostics to stderr, where a build's warnings
 // already go. cmd/go's stdout carries program output.
+//
+// A TIER IN TROUBLE IS ALWAYS REPORTED. What is held back is the routine
+// success reporting: the index size on every go command, and a summary per
+// batch. Those say the cache is working, which the build does not need told,
+// and there is one per go invocation or more.
+//
+// A go command's output is DATA to whoever ran it. Tests across this tree run
+// `go list` and read the answer, so a routine line on that stream becomes a
+// package name, a directory, or a file path somebody then opens. That is not
+// hypothetical: it is what internal/godebugs, crypto/internal/fips140test and
+// go/doc/comment did with it.
 type goLogger struct{}
 
+// CacheDebugEnv turns the routine success reporting back on. Anything but the
+// empty string enables it.
+const CacheDebugEnv = "GOCACHEDEBUG"
+
+// CacheLogEnv names a file that takes the tier's notices in place of stderr.
+// A build that compares the stderr of the go commands it runs sets it (dist
+// test does) and prints the file on its own stderr at the end. So an outage
+// reaches the build's output and never a test's.
+const CacheLogEnv = "GOCACHELOG"
+
+func cacheDebug() bool { return os.Getenv(CacheDebugEnv) != "" }
+
+var (
+	cacheLogOnce sync.Once
+	cacheLogFile *os.File // nil: the notices go to stderr
+)
+
+// cacheNotice writes one notice where CacheLogEnv says. A file that cannot be
+// opened is reported once, and the notices fall back to stderr.
+func cacheNotice(format string, args ...any) {
+	cacheLogOnce.Do(func() {
+		path := os.Getenv(CacheLogEnv)
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o666)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "go: %s: %v; the cache notices go to stderr\n", CacheLogEnv, err)
+			return
+		}
+		cacheLogFile = f
+	})
+	if cacheLogFile == nil {
+		fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+		return
+	}
+	stamp := fmt.Sprintf("%s [%d] ", time.Now().Format(time.TimeOnly), os.Getpid())
+	fmt.Fprintf(cacheLogFile, stamp+format+"\n", args...)
+}
+
 func (goLogger) Infof(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+	if !cacheDebug() {
+		return
+	}
+	cacheNotice(format, args...)
 }
 
 func (goLogger) Warnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
+	cacheNotice(format, args...)
 }
 
 func (goLogger) Debugf(string, ...any) {}

@@ -15,6 +15,8 @@ import (
 )
 
 func TestChan(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	N := 200
 	if testing.Short() {
@@ -301,6 +303,8 @@ func TestNonblockSelectRace2(t *testing.T) {
 }
 
 func TestSelfSelect(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	// Ensure that send/recv on the same chan in select
 	// does not crash nor deadlock.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
@@ -339,6 +343,8 @@ func TestSelfSelect(t *testing.T) {
 }
 
 func TestSelectStress(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(10))
 	var c [4]chan int
 	c[0] = make(chan int)

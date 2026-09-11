@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,10 +33,10 @@ func cmdtest() {
 
 	t.asmflags = os.Getenv("GO_TEST_ASMFLAGS")
 
-	var noRebuild bool
+	// There is no -rebuild or -no-rebuild. Both existed to drive a
+	// `go install -a` of the whole toolchain, and -a is gone: a build ID
+	// already rebuilds whatever changed, so forcing the rest is pure cost.
 	flag.BoolVar(&t.listMode, "list", false, "list available tests")
-	flag.BoolVar(&t.rebuild, "rebuild", false, "rebuild everything first")
-	flag.BoolVar(&noRebuild, "no-rebuild", false, "overrides -rebuild (historical dreg)")
 	flag.BoolVar(&t.keepGoing, "k", false, "keep going even when error occurred")
 	flag.BoolVar(&t.race, "race", false, "run in race builder mode (different set of tests)")
 	flag.BoolVar(&t.compileOnly, "compile-only", false, "compile tests, but don't run them")
@@ -48,9 +49,6 @@ func cmdtest() {
 	flag.BoolVar(&t.json, "json", false, "report test results in JSON")
 
 	xflagparse(-1) // any number of args
-	if noRebuild {
-		t.rebuild = false
-	}
 
 	t.run()
 }
@@ -61,7 +59,6 @@ type tester struct {
 	msan        bool
 	asan        bool
 	listMode    bool
-	rebuild     bool
 	failed      bool
 	keepGoing   bool
 	compileOnly bool // just try to compile all tests, but no need to run
@@ -115,6 +112,7 @@ func (t *tester) run() {
 	timelog("start", "dist test")
 
 	os.Setenv("PATH", fmt.Sprintf("%s%c%s", gorootBin, os.PathListSeparator, os.Getenv("PATH")))
+	t.routeCacheNotices()
 
 	t.short = true
 	if v := os.Getenv("GO_TEST_SHORT"); v != "" {
@@ -158,16 +156,10 @@ func (t *tester) run() {
 		}
 	}
 
-	if t.rebuild {
-		t.out("Building packages and commands.")
-		// Force rebuild the whole toolchain.
-		goInstall(toolenv(), gorootBinGo, append([]string{"-a"}, toolchain...)...)
-	}
-
 	if !t.listMode {
 		if builder := os.Getenv("GO_BUILDER_NAME"); builder == "" {
-			// Ensure that installed commands are up to date, even with -no-rebuild,
-			// so that tests that run commands end up testing what's actually on disk.
+			// Ensure that installed commands are up to date, so that tests that
+			// run commands end up testing what's actually on disk.
 			// If everything is up-to-date, this is a no-op.
 			// We first build the toolchain twice to allow it to converge,
 			// as when we first bootstrap.
@@ -276,6 +268,53 @@ func (t *tester) run() {
 	}
 }
 
+// routeCacheNotices points every go command of the run at one file for the
+// shared build cache's notices (cmd/go reads GOCACHELOG). A test compares the
+// stderr of the go command it runs, so a cache outage on that stream is a
+// test failure. This process relays the file to its own stderr as the
+// notices arrive, and drains it once more at exit.
+func (t *tester) routeCacheNotices() {
+	if os.Getenv("GOCACHELOG") != "" {
+		return // an outer build owns the file
+	}
+	f, err := os.CreateTemp("", "gocachelog-*.txt")
+	if err != nil {
+		fatalf("cannot create the cache notice file: %v", err)
+	}
+	os.Setenv("GOCACHELOG", f.Name())
+	var mu sync.Mutex
+	relay := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		// f's offset is where the last relay stopped; the writers append.
+		data, err := io.ReadAll(f)
+		if err != nil {
+			errprintf("cannot read the cache notice file %s: %v\n", f.Name(), err)
+			return
+		}
+		if len(data) > 0 {
+			os.Stderr.Write(data)
+		}
+	}
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Second):
+				relay()
+			}
+		}
+	}()
+	xatexit(func() {
+		close(stop)
+		relay()
+		f.Close()
+		os.Remove(f.Name())
+	})
+}
+
 func (t *tester) shouldRunTest(name string) bool {
 	if t.runRx != nil {
 		return t.runRx.MatchString(name) == t.runRxWant
@@ -355,7 +394,13 @@ type goTest struct {
 	pkg  string   // A single package to test
 
 	testFlags []string // Additional flags accepted by this test
+
+	vet string // The -vet list for go test; empty keeps go test's default
 }
+
+// upstreamTestVet is the analyzer list upstream's go test runs, which is this
+// fork's default list without testglobals (cmd/go/internal/test defaultVetFlags).
+const upstreamTestVet = "atomic,bools,buildtag,directive,errorsas,ifaceassert,nilfunc,printf,slog,stdversion,stringintconv,tests"
 
 // compileOnly reports whether this test is only for compiling,
 // indicated by runTests being set to '^$' and bench being false.
@@ -430,7 +475,9 @@ func (opts *goTest) run(t *tester) error {
 // The caller must call setupCmd on the resulting exec.Cmd to set its directory
 // and environment.
 func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, setupCmd func(*exec.Cmd)) {
-	run = append(run, "-count=1") // Disallow caching
+	// No -count=1 here. Defeating the test cache is only ever needed when the
+	// cache is wrong, and a cache that is wrong is the defect to fix. Forcing
+	// every run to repeat work hides that defect and pays for it on each run.
 	if opts.timeout != 0 {
 		d := opts.timeout * time.Duration(t.timeoutScale)
 		run = append(run, "-timeout="+d.String())
@@ -471,6 +518,10 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	}
 	if opts.skip != "" {
 		run = append(run, "-skip="+opts.skip)
+	}
+	if opts.vet != "" {
+		// A build flag, so a compile-only test (go test -c) vets with it too.
+		build = append(build, "-vet="+opts.vet)
 	}
 	if t.json {
 		run = append(run, "-json")
@@ -758,6 +809,9 @@ func (t *tester) registerTests() {
 				pkg:      "crypto/...",
 				runTests: run,
 				env:      []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+version)},
+				// A snapshot is upstream's frozen module. Nobody can add a
+				// t.Serial to its tests, so it is vetted with upstream's list.
+				vet: upstreamTestVet,
 			})
 		}
 	}
@@ -1072,6 +1126,9 @@ func (t *tester) registerTests() {
 					pkg:         "cmd/internal/testdir",
 					testFlags:   []string{fmt.Sprintf("-shard=%d", shard), fmt.Sprintf("-shards=%d", nShards)},
 					runOnHost:   true,
+					// The corpus runs as cosmo binaries through the exec
+					// wrapper on a hosted runner, past go test's 10 minutes.
+					timeout: 30 * time.Minute,
 				},
 			)
 		}

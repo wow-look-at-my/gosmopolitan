@@ -32,6 +32,11 @@ import (
 )
 
 func skipDebugLog(t *testing.T) {
+	// The runtime holds ONE debug log. Every test here resets it and reads
+	// it back, so a child process rather than the barrier: the barrier
+	// still shares the ring with whatever wrote to it last, and on a
+	// macOS host TestDebugLogSym read the record TestDebugLogTypes left.
+	t.Fork()
 	if runtime.DlogEnabled {
 		t.Skip("debug log tests disabled to avoid collisions with real debug logs")
 	}

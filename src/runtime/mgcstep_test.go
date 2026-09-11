@@ -72,6 +72,8 @@ func TestGCMarkStepNoCycle(t *testing.T) {
 // correctly, and that repeatedly calling it drives the cycle through mark
 // termination.
 func TestGCMarkStepDrivesMark(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("allocates and scans a large heap")
 	}

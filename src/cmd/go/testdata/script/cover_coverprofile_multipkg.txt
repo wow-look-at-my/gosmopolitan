@@ -10,7 +10,7 @@
 [short] skip
 
 # Kick off test.
-go test -p=10 -vet=off -count=1 -coverprofile=cov.p ./...
+go test -p=10 -vet=off -coverprofile=cov.p ./...
 
 # Make sure resulting profile is digestible.
 go tool cover -func=cov.p

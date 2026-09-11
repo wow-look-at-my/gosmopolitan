@@ -174,6 +174,16 @@ func (b *Builder) toolID(name string) string {
 		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
+		// A binary that stands in for a tool, such as cmd/compile's test
+		// binary, carries no stamped build ID and prints an empty one. An
+		// empty tool ID is one every such binary shares, and a build cache
+		// then serves objects across incompatible compilers. Hash the file.
+		if id == "" {
+			id = b.fileHash(path)
+			if id == "" {
+				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
+			}
+		}
 		return id
 	})
 }
@@ -204,6 +214,11 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 		return "", false
 	}
 	if strings.HasPrefix(f[len(f)-1], "buildID=") {
+		// An unstamped tool prints an empty ID. Report it as empty, never as
+		// the constant "buildID=": toolID hashes the file for it.
+		if f[len(f)-1] == "buildID=" {
+			return "", true
+		}
 		// Use the content ID part of the tool's own build ID.
 		return contentID(f[len(f)-1]), true
 	}
@@ -500,21 +515,9 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 		a.buildID = actionID + buildIDSeparator + mainpkg.buildID + buildIDSeparator + contentID
 	}
 
-	// If user requested -a, we force a rebuild, so don't use the cache.
-	if cfg.BuildA {
-		if p := a.Package; p != nil && !p.Stale {
-			p.Stale = true
-			p.StaleReason = "build -a flag in use"
-		}
-		// Begin saving output for later writing to cache.
-		a.output = []byte{}
-		return false
-	}
-
 	defer func() {
 		// Increment counters for cache hits and misses based on the return value
-		// of this function. Don't increment counters if we return early because of
-		// cfg.BuildA above because we don't even look at the cache in that case.
+		// of this function.
 		if ok {
 			counterCacheHit.Inc()
 		} else {
@@ -799,24 +802,5 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 			}
 		}
 	}
-	if c, ok := c.(cache.ExecutableCache); a.Mode == "link" && a.CacheExecutable && ok {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			name := a.Package.Internal.ExeName
-			if name == "" {
-				name = a.Package.DefaultExecName()
-			}
-			outputID, _, err := c.PutExecutable(a.actionID, name+cfg.ExeSuffix, r)
-			r.Close()
-			a.cachedExecutable = c.OutputFile(outputID)
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, a.cachedExecutable)))
-			}
-		}
-	}
-
 	return nil
 }

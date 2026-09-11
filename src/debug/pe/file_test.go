@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"runtime"
 	"strconv"
 	"testing"
 	"text/template"
@@ -348,7 +347,7 @@ func getImageBase(f *File) uintptr {
 }
 
 func testDWARF(t *testing.T, linktype int) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skip("skipping windows only test")
 	}
 	testenv.MustHaveGoRun(t)
@@ -460,7 +459,7 @@ func testDWARF(t *testing.T, linktype int) {
 func TestBSSHasZeros(t *testing.T) {
 	testenv.MustHaveExec(t)
 
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skip("skipping windows only test")
 	}
 	gccpath, err := exec.LookPath("gcc")
@@ -577,7 +576,7 @@ func main() {
 func TestBuildingWindowsGUI(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skip("skipping windows only test")
 	}
 	tmpdir := t.TempDir()
@@ -614,8 +613,8 @@ func TestBuildingWindowsGUI(t *testing.T) {
 }
 
 func TestImportTableInUnknownSection(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("skipping Windows-only test")
+	if testenv.GOOS != "windows" {
+		t.Skip("skipping windows only test")
 	}
 
 	// ws2_32.dll import table is located in ".rdata" section,

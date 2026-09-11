@@ -300,16 +300,63 @@ type Var struct {
 	// deflt is the value of the "= expr" on a parameter, and nil on every other
 	// variable. A call may omit the argument for such a parameter, and the
 	// compiler passes this value instead. Depth: docs/OPTIONAL-PARAMS.md.
-	deflt constant.Value
+	deflt *ParamDefault
+	// readonly marks a "readonly var": every other package reads it as a
+	// value, so nothing outside the declaring package can assign to it or
+	// take its address. Depth: docs/READONLY-VARS.md.
+	readonly bool
+}
+
+// Readonly reports whether the variable was declared "readonly var", so
+// only its own package may assign to it.
+func (obj *Var) Readonly() bool { return obj.readonly }
+
+// SetReadonly marks the variable "readonly var". The importer calls it to
+// restore what the export data carried.
+func (obj *Var) SetReadonly(ro bool) { obj.readonly = ro }
+
+// A ParamDefault is the value a call passes when it omits a parameter. It is
+// a constant, or a keyed struct literal of the parameter's type whose every
+// field value is itself a ParamDefault. Exactly one of Const and Fields
+// describes it; an empty struct literal has a nil Const and no Fields.
+type ParamDefault struct {
+	Const  constant.Value // a constant default; nil for a struct literal
+	Fields []FieldDefault // the keyed fields of a struct literal, in source order
+}
+
+// A FieldDefault is one field of a struct literal parameter default.
+type FieldDefault struct {
+	Name  string
+	Value *ParamDefault
+}
+
+// String spells the default as the source that declares it, without the
+// struct literal's type.
+func (d *ParamDefault) String() string {
+	if d.Const != nil {
+		return d.Const.String()
+	}
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, f := range d.Fields {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(f.Name)
+		buf.WriteString(": ")
+		buf.WriteString(f.Value.String())
+	}
+	buf.WriteByte('}')
+	return buf.String()
 }
 
 // Default reports the value a call passes when it omits this parameter, and
 // nil when the parameter has no default.
-func (obj *Var) Default() constant.Value { return obj.deflt }
+func (obj *Var) Default() *ParamDefault { return obj.deflt }
 
 // SetDefault sets the value a call passes when it omits this parameter. The
 // importer calls it to restore a default the export data carried.
-func (obj *Var) SetDefault(val constant.Value) { obj.deflt = val }
+func (obj *Var) SetDefault(val *ParamDefault) { obj.deflt = val }
 
 // A VarKind discriminates the various kinds of variables.
 type VarKind uint8

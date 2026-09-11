@@ -323,7 +323,10 @@ type (
 		init      []ast.Expr
 		inherited bool
 	}
-	varDecl  struct{ spec *ast.ValueSpec }
+	varDecl struct {
+		spec     *ast.ValueSpec
+		readonly bool // declared "readonly var"
+	}
 	typeDecl struct{ spec *ast.TypeSpec }
 	funcDecl struct{ decl *ast.FuncDecl }
 )
@@ -367,7 +370,7 @@ func (check *Checker) walkDecl(d ast.Decl, f func(decl)) {
 					f(constDecl{spec: s, iota: iota, typ: last.Type, init: last.Values, inherited: inherited})
 				case token.VAR:
 					check.arityMatch(s, nil)
-					f(varDecl{s})
+					f(varDecl{s, d.Readonly.IsValid()})
 				default:
 					check.errorf(s, InvalidSyntaxTree, "invalid token %s", d.Tok)
 				}
@@ -425,6 +428,10 @@ func (check *Checker) constDecl(obj *Const, typ, init ast.Expr, inherited bool) 
 			// (see issues go.dev/issue/42991, go.dev/issue/42992).
 			check.errpos = atPos(obj.pos)
 		}
+		// A constant context: runtime.GOOS and runtime.GOARCH fold to
+		// the build value here. See dynconst.go.
+		defer func(prev bool) { check.inConstExpr = prev }(check.inConstExpr)
+		check.inConstExpr = true
 		check.expr(nil, &x, init)
 	}
 	check.initConst(obj, &x)

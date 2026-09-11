@@ -364,6 +364,7 @@ func TestConcurrentWrite(t *testing.T) {
 }
 
 func TestConcurrentReconnect(t *testing.T) {
+	t.Serial()
 	crashy = true
 	defer func() { crashy = false }()
 

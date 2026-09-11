@@ -90,6 +90,8 @@ func TestEncoder(t *testing.T) {
 }
 
 func TestEncoderErrorAndReuseEncodeState(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Disable the GC temporarily to prevent encodeState's in Pool being cleaned away during the test.
 	percent := debug.SetGCPercent(-1)
 	defer debug.SetGCPercent(percent)

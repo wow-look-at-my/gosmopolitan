@@ -13,6 +13,10 @@ import (
 // macOS has no default SSL_CERT_{FILE,DIR} paths.
 var certFiles, certDirectories []string
 
+// platformVerifier is true: systemVerify below asks Security.framework,
+// so there is no on-disk scan to do. See root.go.
+const platformVerifier = true
+
 func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate, err error) {
 	certs := macos.CFArrayCreateMutable()
 	defer macos.ReleaseCFArray(certs)

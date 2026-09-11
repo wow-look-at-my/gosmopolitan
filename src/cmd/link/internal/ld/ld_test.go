@@ -11,7 +11,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -68,7 +67,7 @@ func TestUndefinedRelocErrors(t *testing.T) {
 		case n > 0:
 			t.Errorf("unmatched error: %s (x%d)", want, n)
 		case n < 0:
-			if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+			if testenv.GOOS == "android" && testenv.GOARCH == "arm64" {
 				testenv.SkipFlaky(t, 58807)
 			}
 			t.Errorf("extra errors: %s (x%d)", want, -n)
@@ -98,13 +97,13 @@ func TestArchiveBuildInvokeWithExec(t *testing.T) {
 
 	// run this test on just a small set of platforms (no need to test it
 	// across the board given the nature of the test).
-	pair := runtime.GOOS + "-" + runtime.GOARCH
+	pair := testenv.GOOS + "-" + testenv.GOARCH
 	switch pair {
 	case "darwin-amd64", "darwin-arm64", "linux-amd64", "freebsd-amd64":
 	default:
 		t.Skip("no need for test on " + pair)
 	}
-	switch runtime.GOOS {
+	switch testenv.GOOS {
 	case "openbsd", "windows":
 		t.Skip("c-archive unsupported")
 	}
@@ -138,15 +137,15 @@ func TestArchiveBuildInvokeWithExec(t *testing.T) {
 }
 
 func TestLargeTextSectionSplitting(t *testing.T) {
-	switch runtime.GOARCH {
+	switch testenv.GOARCH {
 	case "ppc64", "ppc64le", "arm":
 	case "arm64":
-		if runtime.GOOS == "darwin" {
+		if testenv.GOOS == "darwin" {
 			break
 		}
 		fallthrough
 	default:
-		t.Skipf("text section splitting is not done in %s/%s", runtime.GOOS, runtime.GOARCH)
+		t.Skipf("text section splitting is not done in %s/%s", testenv.GOOS, testenv.GOARCH)
 	}
 
 	testenv.MustHaveGoBuild(t)
@@ -182,7 +181,7 @@ func TestLargeTextSectionSplitting(t *testing.T) {
 }
 
 func TestWindowsBuildmodeCSharedASLR(t *testing.T) {
-	platform := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	platform := fmt.Sprintf("%s/%s", testenv.GOOS, testenv.GOARCH)
 	switch platform {
 	case "windows/amd64", "windows/386":
 	default:
@@ -200,7 +199,7 @@ func TestWindowsBuildmodeCSharedASLR(t *testing.T) {
 }
 
 func TestWindowsBuildmodeCSharedTrailingDotOutput(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skip("skipping windows only test")
 	}
 

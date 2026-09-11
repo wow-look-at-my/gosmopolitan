@@ -230,6 +230,10 @@ func (check *Checker) lhsVar(lhs ast.Expr) Type {
 	case variable, mapindex:
 		// ok
 	default:
+		if v := check.readonlyVar(x.expr); v != nil {
+			check.errorf(&x, UnassignableOperand, "cannot assign to %s: it is readonly outside package %s", x.expr, v.pkg.name)
+			return Typ[Invalid]
+		}
 		if sel, ok := x.expr.(*ast.SelectorExpr); ok {
 			var op operand
 			check.expr(nil, &op, sel.X)

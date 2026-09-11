@@ -154,6 +154,8 @@ func defer3() {
 
 // golang.org/issue/7063
 func TestStopCPUProfilingWithProfilerOff(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	SetCPUProfileRate(0)
 }
 

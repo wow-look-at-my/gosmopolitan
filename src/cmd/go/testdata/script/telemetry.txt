@@ -11,15 +11,17 @@ env TEST_TELEMETRY_DIR=
 
 # Set userconfig dir, which is determined by os.UserConfigDir.
 # The telemetry dir is determined using that.
+# GOHOSTOS, not GOOS: os.UserConfigDir reads runtime.GOOS, so the layout
+# follows the machine this runs on and not the port it was built for.
 mkdir $WORK/userconfig
 env AppData=$WORK\userconfig # windows
-[GOOS:windows] env userconfig=$AppData
+[GOHOSTOS:windows] env userconfig=$AppData
 env HOME=$WORK/userconfig # darwin,unix,ios
-[GOOS:darwin] env userconfig=$HOME'/Library/Application Support'
-[GOOS:ios] env userconfig=$HOME'/Library/Application Support'
-[!GOOS:windows] [!GOOS:darwin] [!GOOS:ios] [!GOOS:plan9] env userconfig=$HOME/.config
+[GOHOSTOS:darwin] env userconfig=$HOME'/Library/Application Support'
+[GOHOSTOS:ios] env userconfig=$HOME'/Library/Application Support'
+[!GOHOSTOS:windows] [!GOHOSTOS:darwin] [!GOHOSTOS:ios] [!GOHOSTOS:plan9] env userconfig=$HOME/.config
 env home=$WORK/userconfig # plan9
-[GOOS:plan9] env userconfig=$home/lib
+[GOHOSTOS:plan9] env userconfig=$home/lib
 
 go telemetry
 stdout 'local'

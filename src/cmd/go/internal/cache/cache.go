@@ -75,20 +75,6 @@ type Cache interface {
 	FuzzDir() string
 }
 
-// ExecutableCache is a Cache that can also store an output the build will
-// execute, under a name and with the execute bit set.
-//
-// It is optional because a cache program speaks a protocol that has no such
-// operation. Ask for it by interface rather than for one concrete type: the
-// disk cache, the shared tier over it, and the tracing wrapper over that are
-// all caches that can do this, and a build that names only the first of them
-// silently stops caching executables the moment either of the others is in
-// use.
-type ExecutableCache interface {
-	Cache
-	PutExecutable(id ActionID, name string, file io.ReadSeeker) (_ OutputID, size int64, _ error)
-}
-
 // A Cache is a package cache, backed by a file system directory tree.
 type DiskCache struct {
 	dir string
@@ -332,17 +318,7 @@ func GetMmap(c Cache, id ActionID) ([]byte, Entry, bool, error) {
 // OutputFile returns the name of the cache file storing output with the given OutputID.
 func (c *DiskCache) OutputFile(out OutputID) string {
 	file := c.fileName(out, "d")
-	isDir := c.markUsed(file)
-	if isDir { // => cached executable
-		entries, err := os.ReadDir(file)
-		if err != nil {
-			return fmt.Sprintf("DO NOT USE - missing binary cache entry: %v", err)
-		}
-		if len(entries) != 1 {
-			return "DO NOT USE - invalid binary cache entry"
-		}
-		return filepath.Join(file, entries[0].Name())
-	}
+	c.markUsed(file)
 	return file
 }
 
@@ -550,21 +526,7 @@ func (c *DiskCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, error
 	if isNoVerify {
 		file = wrapper.ReadSeeker
 	}
-	return c.put(id, "", file, !isNoVerify)
-}
-
-// PutExecutable is used to store the output as the output for the action ID into a
-// file with the given base name, with the executable mode bit set.
-// It may read file twice. The content of file must not change between the two passes.
-func (c *DiskCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	if name == "" {
-		panic("PutExecutable called without a name")
-	}
-	wrapper, isNoVerify := file.(noVerifyReadSeeker)
-	if isNoVerify {
-		file = wrapper.ReadSeeker
-	}
-	return c.put(id, name, file, !isNoVerify)
+	return c.put(id, file, !isNoVerify)
 }
 
 // PutNoVerify is like Put but disables the verify check
@@ -575,7 +537,7 @@ func PutNoVerify(c Cache, id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	return c.Put(id, noVerifyReadSeeker{file})
 }
 
-func (c *DiskCache) put(id ActionID, executableName string, file io.ReadSeeker, allowVerify bool) (OutputID, int64, error) {
+func (c *DiskCache) put(id ActionID, file io.ReadSeeker, allowVerify bool) (OutputID, int64, error) {
 	// Compute output ID.
 	h := sha256.New()
 	if _, err := file.Seek(0, 0); err != nil {
@@ -589,11 +551,7 @@ func (c *DiskCache) put(id ActionID, executableName string, file io.ReadSeeker, 
 	h.Sum(out[:0])
 
 	// Copy to cached output file (if not already present).
-	fileMode := fs.FileMode(0o666)
-	if executableName != "" {
-		fileMode = 0o777
-	}
-	if err := c.copyFile(file, executableName, out, size, fileMode); err != nil {
+	if err := c.copyFile(file, out, size); err != nil {
 		return out, size, err
 	}
 
@@ -609,33 +567,9 @@ func PutBytes(c Cache, id ActionID, data []byte) error {
 
 // copyFile copies file into the cache, expecting it to have the given
 // output ID and size, if that file is not present already.
-func (c *DiskCache) copyFile(file io.ReadSeeker, executableName string, out OutputID, size int64, perm os.FileMode) error {
-	name := c.fileName(out, "d") // TODO(matloob): use a different suffix for the executable cache?
+func (c *DiskCache) copyFile(file io.ReadSeeker, out OutputID, size int64) error {
+	name := c.fileName(out, "d")
 	info, err := os.Stat(name)
-	if executableName != "" {
-		// This is an executable file. The file at name won't hold the output itself, but will
-		// be a directory that holds the output, named according to executableName. Check to see
-		// if the directory already exists, and if it does not, create it. Then reset name
-		// to the name we want the output written to.
-		if err != nil {
-			if !os.IsNotExist(err) {
-				return err
-			}
-			if err := os.Mkdir(name, 0o777); err != nil {
-				return err
-			}
-			if info, err = os.Stat(name); err != nil {
-				return err
-			}
-		}
-		if !info.IsDir() {
-			return errors.New("internal error: invalid binary cache entry: not a directory")
-		}
-
-		// directory exists. now set name to the inner file
-		name = filepath.Join(name, executableName)
-		info, err = os.Stat(name)
-	}
 	if err == nil && info.Size() == size {
 		// Check hash.
 		if f, err := os.Open(name); err == nil {
@@ -656,7 +590,7 @@ func (c *DiskCache) copyFile(file io.ReadSeeker, executableName string, out Outp
 	if err == nil && info.Size() > size { // shouldn't happen but fix in case
 		mode |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(name, mode, perm)
+	f, err := os.OpenFile(name, mode, 0o666)
 	if err != nil {
 		if base.IsETXTBSY(err) {
 			// This file is being used by an executable. It must have

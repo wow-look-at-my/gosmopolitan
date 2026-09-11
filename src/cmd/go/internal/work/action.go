@@ -99,15 +99,12 @@ type Action struct {
 
 	TryCache func(*Builder, *Action, *Action) bool // callback for cache bypass
 
-	CacheExecutable bool // Whether to cache executables produced by link steps
-
 	// Generated files, directories.
-	Objdir           string         // directory for intermediate objects
-	Target           string         // goal of the action: the created package or executable
-	built            string         // the actual created package or executable
-	cachedExecutable string         // the cached executable, if CacheExecutable was set
-	actionID         cache.ActionID // cache ID of action input
-	buildID          string         // build ID of action output
+	Objdir   string         // directory for intermediate objects
+	Target   string         // goal of the action: the created package or executable
+	built    string         // the actual created package or executable
+	actionID cache.ActionID // cache ID of action input
+	buildID  string         // build ID of action output
 
 	VetxOnly   bool       // Mode=="vet": only being called to supply info about dependencies
 	needVet    bool       // Mode=="build": need to fill in vet config
@@ -142,9 +139,46 @@ func (a *Action) BuildID() string { return a.buildID }
 // from Target when the result was cached.
 func (a *Action) BuiltTarget() string { return a.built }
 
-// CachedExecutable returns the cached executable, if CacheExecutable
-// was set and the executable could be cached, and "" otherwise.
-func (a *Action) CachedExecutable() string { return a.cachedExecutable }
+// RunnableTarget returns a path the operating system will exec, for a caller
+// that is about to run what this action built.
+//
+// A cache hit sets built to the cache file, and a cache entry is one plain
+// 0666 file: mode is not a property of the bytes, so the cache does not carry
+// one. Running that path is "fork/exec ...-d: permission denied", and on
+// Windows exec refuses it for a second reason, an extension PATHEXT does not
+// list. So the copy lands in the action's own directory, with the package's
+// name, which is also what keeps argv[0] off a.out.
+//
+// A freshly linked binary is already executable and is returned as it stands.
+func (b *Builder) RunnableTarget(a *Action) (string, error) {
+	built := a.BuiltTarget()
+	if info, err := os.Stat(built); err == nil && info.Mode()&0o111 != 0 {
+		return built, nil
+	}
+	name := "a.out"
+	if p := a.Package; p != nil {
+		if name = p.Internal.ExeName; name == "" {
+			name = p.DefaultExecName()
+		}
+	}
+	name += cfg.ExeSuffix
+	dir := a.Objdir
+	if dir == "" {
+		dir = b.WorkDir + string(filepath.Separator)
+	}
+	// A cache hit skips the work that would have made this directory, so it is
+	// not there to copy into. On windows that read as "The system cannot find
+	// the path specified" against b001, an objdir the build never had to make.
+	sh := b.Shell(a)
+	if err := sh.Mkdir(dir); err != nil {
+		return "", err
+	}
+	exe := dir + name
+	if err := sh.CopyFile(exe, built, 0o777, true); err != nil {
+		return "", err
+	}
+	return exe, nil
+}
 
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action

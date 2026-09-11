@@ -48,6 +48,60 @@ type DarwinUtsname struct {
 	Machine  [256]byte
 }
 
+// DarwinFlock is Apple's struct flock. It holds the same five fields as
+// Linux's Flock_t in a different order and eight bytes less, so an fcntl
+// lock command hands this emulation a record of THIS shape and the
+// syscall package converts, the way it does for statfs and utsname.
+// Lock types differ too: Linux counts from zero, Apple starts at one and
+// puts the write lock last.
+type DarwinFlock struct {
+	Start  int64
+	Len    int64
+	Pid    int32
+	Type   int16
+	Whence int16
+}
+
+// Apple's lock types. Whence needs no translation: SEEK_SET, SEEK_CUR
+// and SEEK_END agree.
+const (
+	linuxF_RDLCK  = 0
+	linuxF_WRLCK  = 1
+	linuxF_UNLCK  = 2
+	darwinF_RDLCK = 1
+	darwinF_UNLCK = 2
+	darwinF_WRLCK = 3
+)
+
+// DarwinLockType translates a Linux flock l_type to Apple's. It reports
+// false for a value Apple has no lock type for, which is the whole set
+// of reasons a record cannot be translated.
+func DarwinLockType(t int16) (int16, bool) {
+	switch t {
+	case linuxF_RDLCK:
+		return darwinF_RDLCK, true
+	case linuxF_WRLCK:
+		return darwinF_WRLCK, true
+	case linuxF_UNLCK:
+		return darwinF_UNLCK, true
+	}
+	return 0, false
+}
+
+// LinuxLockType is the reverse. F_GETLK answers through the record, so
+// the type comes back as well as goes out.
+func LinuxLockType(t int16) (int16, bool) {
+	switch t {
+	case darwinF_RDLCK:
+		return linuxF_RDLCK, true
+	case darwinF_WRLCK:
+		return linuxF_WRLCK, true
+	case darwinF_UNLCK:
+		return linuxF_UNLCK, true
+	}
+	return 0, false
+}
+
 // utimensat's "leave this stamp alone" and "use the current time"
 // sentinels sit in the nanosecond field. Linux encodes them as large
 // positive values, Apple as small negative ones.
@@ -260,6 +314,16 @@ const (
 	appleTIOCGWINSZ = 0x40087468
 	appleTIOCSWINSZ = 0x80087467
 	appleTIOCNOTTY  = 0x20007471
+
+	// The pty grant/unlock/name trio has no Linux spelling to translate
+	// FROM. Linux grants through libc, unlocks with TIOCSPTLCK and asks
+	// TIOCGPTN for a NUMBER, naming the slave /dev/pts/N; Apple answers
+	// TIOCPTYGNAME with a NAME, /dev/ttysNNN. A number cannot carry that,
+	// so a caller that wants a slave on a Darwin host asks for Apple's
+	// request and gets it unchanged.
+	appleTIOCPTYGRANT = 0x20007454
+	appleTIOCPTYUNLK  = 0x20007452
+	appleTIOCPTYGNAME = 0x40807453
 )
 
 // The termios requests. These are kept apart from the table above
@@ -315,6 +379,12 @@ func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 		return appleTIOCSWINSZ, true
 	case linuxTIOCNOTTY:
 		return appleTIOCNOTTY, true
+	case appleTIOCPTYGRANT, appleTIOCPTYUNLK, appleTIOCPTYGNAME:
+		// Already Apple's, and named here so the pass-through is a
+		// decision rather than a hole: an unlisted request still answers
+		// ENOSYS. No Linux number collides -- these carry BSD's own
+		// direction bits and sizes.
+		return req, true
 	}
 	return 0, false
 }
