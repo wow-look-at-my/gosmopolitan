@@ -307,6 +307,11 @@ func TestMain(m *testing.M) {
 	// must not depend on the developer's cache either.
 	os.Unsetenv("GO_BUILDCACHE_CONFIG")
 	os.Unsetenv("GOCACHEDEBUG")
+	// A go command with CI set and no shared cache refuses to build at
+	// all (cmd/go/internal/cache.validateCIShared), and the line above
+	// is what leaves it unset. These commands are a test fixture, not
+	// the CI build, so they are not the run that rule is about.
+	os.Unsetenv("CI")
 	os.Setenv("HOME", "/test-go-home-does-not-exist")
 	// On some systems the default C compiler is ccache.
 	// Setting HOME to a non-existent directory will break
