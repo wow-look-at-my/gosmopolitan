@@ -351,7 +351,11 @@ func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 	g0 := getg()
 
-	if panicking.Load() != 0 { // traceback already printed
+	if panicking.Load() != 0 {
+		// The report is already printed, or a fault stopped it. Say
+		// which exception ended the panic, past the print machinery
+		// the fault may have come from.
+		ntWinthrowNested(info.exceptionCode, r.getPC())
 		exit(2)
 	}
 	panicking.Store(1)
@@ -590,4 +594,40 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	// ordinary path. The stack is otherwise unused on NT and the
 	// delivery is synchronous, so borrowing it is safe.
 	ntSignalTramp(handler, uintptr(sig), unsafe.Pointer(&info), unsafe.Pointer(&uc), gp.m.gsignal.stack.hi)
+}
+
+// ntWinthrowNested writes "runtime: NT exception <code> at <pc> while
+// panicking" with ntwrite1 alone, for a fault that arrives after
+// panicking is set: the print machinery may be what faulted.
+//
+//go:nosplit
+func ntWinthrowNested(code uint32, pc uintptr) {
+	var line [96]byte
+	n := copy(line[:], "runtime: NT exception 0x")
+	n = ntHexInto(line[:], n, uintptr(code))
+	n += copy(line[n:], " at 0x")
+	n = ntHexInto(line[:], n, pc)
+	n += copy(line[n:], " while panicking\n")
+	ntwrite1(2, unsafe.Pointer(&line[0]), int32(n))
+}
+
+// ntHexInto writes v in hex at line[n:] and returns the new length.
+//
+//go:nosplit
+func ntHexInto(line []byte, n int, v uintptr) int {
+	started := false
+	for shift := 60; shift >= 0; shift -= 4 {
+		d := byte(v>>uint(shift)) & 0xf
+		if d == 0 && !started && shift != 0 {
+			continue
+		}
+		started = true
+		if d < 10 {
+			line[n] = '0' + d
+		} else {
+			line[n] = 'a' + d - 10
+		}
+		n++
+	}
+	return n
 }
