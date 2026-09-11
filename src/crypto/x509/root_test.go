@@ -10,7 +10,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -223,7 +222,7 @@ func TestEnvVars(t *testing.T) {
 				t.Fatal("nil roots")
 			}
 
-			wantSystemPool := (runtime.GOOS == "darwin" || runtime.GOOS == "windows") && tc.dirEnv == "" && tc.fileEnv == ""
+			wantSystemPool := platformVerifier && tc.dirEnv == "" && tc.fileEnv == ""
 
 			if wantSystemPool {
 				if !r.systemPool {
@@ -363,11 +362,11 @@ func TestSSLCertEnvOverride(t *testing.T) {
 		t.Fatalf("unexpected failure: %s", err)
 	}
 
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	if platformVerifier {
 		if !p.systemPool {
 			t.Fatal("x509sslcertoverrideplatform did not override SSL_CERT_{FILE,DIR}")
 		}
 	} else if p.systemPool {
-		t.Fatal("x509sslcertoverrideplatform caused a systemPool to be returned on OS other than windows or darwin")
+		t.Fatal("x509sslcertoverrideplatform returned a systemPool on a build whose systemVerify answers nothing")
 	}
 }
