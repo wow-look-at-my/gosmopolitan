@@ -91,20 +91,11 @@ jobs:
 
     runs-on: ${{ matrix.suite-os }}
 
-    # The NT runner's C: drive is small, and this job builds with a cold cache.
-    env:
-      GOCACHE: ${{ runner.temp }}/gocache
-      GOTMPDIR: ${{ runner.temp }}/gotmp
-
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
-
-      - name: Make the cache and temp directories the suite writes to
-        shell: bash
-        run: mkdir -p "$GOCACHE" "$GOTMPDIR"
 
       - uses: ./.github/actions/suite-leg
 

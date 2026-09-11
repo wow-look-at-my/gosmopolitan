@@ -4,6 +4,15 @@ runs:
   using: composite
   steps:
 
+    # The default sits on the NT runner's small C: drive, and the seatbelt dats runs under cannot create the macOS one, which make.bash used to make.
+    - name: Put the build cache and the temp tree on the workspace volume
+      shell: bash
+      run: |
+        tmp="${RUNNER_TEMP//\\//}"
+        mkdir -p "$tmp/gocache" "$tmp/gotmp"
+        echo "GOCACHE=$tmp/gocache" >> "$GITHUB_ENV"
+        echo "GOTMPDIR=$tmp/gotmp" >> "$GITHUB_ENV"
+
     - name: Take the toolchain its build leg built
       uses: wow-look-at-my/actions@cache-download#latest
       with:
