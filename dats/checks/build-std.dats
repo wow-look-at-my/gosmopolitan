@@ -21,3 +21,15 @@ tests:
 		GOOS=cosmo GOARCH=arm64 go build golang.org/x/sys/unix modernc.org/libc modernc.org/sqlite
 	  timeout: 10m
 	  exit: 0
+
+	- desc: go-mmap builds and tests for cosmo on both architectures
+	  cmd: |
+		set -eu
+		export PATH="$PWD/bin:$PATH" GOFLAGS=-mod=mod
+		cd "$(mktemp -d)"
+		go mod init cosmo-mmap-smoke
+		go get github.com/wow-look-at-my/go-mmap@latest
+		GOOS=cosmo GOARCH=amd64 go build github.com/wow-look-at-my/go-mmap
+		GOOS=cosmo GOARCH=arm64 go build github.com/wow-look-at-my/go-mmap
+	  timeout: 10m
+	  exit: 0

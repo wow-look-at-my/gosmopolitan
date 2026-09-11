@@ -42,6 +42,12 @@ func ntSetSyscallFns() {
 const (
 	ntSysRead       = 0
 	ntSysWrite      = 1
+	ntSysMmap       = 9
+	ntSysMunmap     = 11
+	ntSysMsync      = 26
+	ntSysMadvise    = 28
+	ntSysMlock      = 149
+	ntSysMunlock    = 150
 	ntSysClose      = 3
 	ntSysStat       = 4
 	ntSysFstat      = 5
@@ -356,6 +362,20 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysUtimensat:
 		return ntEmuUtimensat(int32(a1), (*byte)(unsafe.Pointer(a2)),
 			(*[2]ntLinuxTimespec)(unsafe.Pointer(a3)), int32(a4))
+	case ntSysMmap:
+		return ntEmuMmap(a1, a2, a3, a4, int32(a5), int64(a6))
+	case ntSysMunmap:
+		return ntEmuMunmap(a1, a2)
+	case ntSysMsync:
+		return ntEmuMsync(a1, a2)
+	case ntSysMlock:
+		return ntEmuMlock(a1, a2, true)
+	case ntSysMunlock:
+		return ntEmuMlock(a1, a2, false)
+	case ntSysMadvise:
+		// Every advice is a hint, and NT takes none of them. A
+		// caller that asked for one loses nothing but the hint.
+		return 0, 0, 0
 	case ntSysFsync, ntSysFdatasync:
 		return ntEmuFsync(int32(a1))
 	case ntSysFlock:

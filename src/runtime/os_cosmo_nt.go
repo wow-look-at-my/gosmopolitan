@@ -65,6 +65,15 @@ var (
 	// moves once a timer tick, so a caller measuring tens of
 	// nanoseconds needs this instead.
 	ntQueryPerfCounterFn uintptr
+	// The section API behind mmap (os_cosmo_nt_mmap.go). Optional: a
+	// zero answers ENOSYS where it is called.
+	ntCreateFileMappingWFn uintptr
+	ntMapViewOfFileFn      uintptr
+	ntUnmapViewOfFileFn    uintptr
+	ntFlushViewOfFileFn    uintptr
+	ntVirtualQueryFn       uintptr
+	ntVirtualLockFn        uintptr
+	ntVirtualUnlockFn      uintptr
 	// The flock(2) pair. Optional like the metadata wave's: a zero
 	// pointer answers ENOSYS where flock is called rather than
 	// crashing the boot.
@@ -187,6 +196,13 @@ var (
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
 	ntNameQueryPerfCounter  = []byte("QueryPerformanceCounter\x00")
+	ntNameCreateFileMapping = []byte("CreateFileMappingW\x00")
+	ntNameMapViewOfFile     = []byte("MapViewOfFile\x00")
+	ntNameUnmapViewOfFile   = []byte("UnmapViewOfFile\x00")
+	ntNameFlushViewOfFile   = []byte("FlushViewOfFile\x00")
+	ntNameVirtualQuery      = []byte("VirtualQuery\x00")
+	ntNameVirtualLock       = []byte("VirtualLock\x00")
+	ntNameVirtualUnlock     = []byte("VirtualUnlock\x00")
 	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
 	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
@@ -510,6 +526,13 @@ func ntResolve() {
 	ntSetEndOfFileFn = k32sym(&ntNameSetEndOfFile[0])
 	ntFlushFileBuffersFn = k32sym(&ntNameFlushFileBuffers[0])
 	ntQueryPerfCounterFn = k32sym(&ntNameQueryPerfCounter[0])
+	ntCreateFileMappingWFn = k32sym(&ntNameCreateFileMapping[0])
+	ntMapViewOfFileFn = k32sym(&ntNameMapViewOfFile[0])
+	ntUnmapViewOfFileFn = k32sym(&ntNameUnmapViewOfFile[0])
+	ntFlushViewOfFileFn = k32sym(&ntNameFlushViewOfFile[0])
+	ntVirtualQueryFn = k32sym(&ntNameVirtualQuery[0])
+	ntVirtualLockFn = k32sym(&ntNameVirtualLock[0])
+	ntVirtualUnlockFn = k32sym(&ntNameVirtualUnlock[0])
 	ntGetFileInformationByHandleFn = k32sym(&ntNameGetFileInfoByH[0])
 	ntGetFileInformationByHandleExFn = k32sym(&ntNameGetFileInfoByHEx[0])
 	ntDeleteFileWFn = k32sym(&ntNameDeleteFileW[0])
