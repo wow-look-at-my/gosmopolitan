@@ -1,6 +1,6 @@
 # Top-level tests are parallel by default
 
-`src/testing` in this fork starts every top-level test as if it had called `t.Parallel()`, which is a no-op there. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
 
 A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 
@@ -15,6 +15,13 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 `t.Setenv`, `t.Chdir` and `cryptotest.SetGlobalRandom` do NOT take the barrier where a child is available: each changes state the child gets its own copy of. One test setting an environment variable is no reason to stop every other test in the binary.
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
+
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and
+`-test.coverprofile`, so it writes its own report into the parent's directory and the two race - the parent's
+rename of the meta file finds the file already gone, and the package fails with `error generating coverage
+report`. Taking the barrier keeps the counters in the run that reports them, which is also what makes the test's
+coverage count at all: the parent does not execute a forked test's body, so a child's discarded profile would
+read as dead code.
 
 Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 

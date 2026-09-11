@@ -13,7 +13,14 @@ import (
 	"unsafe"
 )
 
+// The tail of this test closes a descriptor and then asserts that the number
+// is dead. That is a claim about the process's fd table, which every other
+// test shares, and top-level tests are parallel by default in this fork. A
+// test that opened a file in between takes the number, F_GETFD answers for the
+// file it now names, and the assertion reads "Fcntl succeeded unexpectedly".
 func TestNonblockingPipe(t *testing.T) {
+	t.Serial()
+
 	// NonblockingPipe is the test name for nonblockingPipe.
 	r, w, errno := runtime.NonblockingPipe()
 	if errno != 0 {

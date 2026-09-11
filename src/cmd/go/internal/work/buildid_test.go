@@ -37,6 +37,10 @@ func TestParseToolID(t *testing.T) {
 		{"link", false, "link version go1.26.4cosmo buildID=ee/ff\n", "ff", true},
 		// An alternative vet tool may print any leading name.
 		{"vet", true, "myanalyzer version devel comments-go-here buildID=11/22\n", "22", true},
+		// A stand-in tool with no stamped build ID parses to an empty ID,
+		// which toolID then replaces with the file's hash.
+		{"compile", false, "compile.test version go1.27.0-cosmo buildID=\n", "", false},
+		{"compile", false, "compile version go1.27.0-cosmo buildID=\n", "", true},
 		// Malformed lines.
 		{"compile", false, "", "", false},
 		{"compile", false, "compile version\n", "", false},
@@ -57,6 +61,33 @@ func TestParseToolID(t *testing.T) {
 	id2, _ := parseToolID("compile", false, "compile version go1.26.4cosmo buildID=aa/cc\n")
 	if id1 == id2 {
 		t.Errorf("tool IDs for same-version, different-buildID tools collide: %q", id1)
+	}
+}
+
+// TestToolIDHashesUnstampedTool checks that a tool which prints an empty
+// build ID gets a tool ID from its own bytes. cmd/compile's test binary
+// stands in for compile under TestScript and prints exactly that; the empty
+// ID it used to get made every such binary share cache entries.
+func TestToolIDHashesUnstampedTool(t *testing.T) {
+	t.Serial() // VetTool is a package variable.
+	testenv.MustHaveExecPath(t, "sh")
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "fakevet")
+	body := "#!/bin/sh\necho 'fakevet version go1.27.0-cosmo buildID='\n"
+	if err := os.WriteFile(tool, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := VetTool
+	VetTool = tool
+	defer func() { VetTool = old }()
+
+	b := &Builder{}
+	got := b.toolID("vet")
+	if got == "" {
+		t.Fatal("toolID is empty for a tool that prints no build ID")
+	}
+	if want := b.fileHash(tool); got != want {
+		t.Errorf("toolID = %q, want the file hash %q", got, want)
 	}
 }
 

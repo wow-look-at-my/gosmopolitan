@@ -26,8 +26,12 @@ import (
 // result against a golden file.
 
 func testEndToEnd(t *testing.T, goarch, file string) {
+	// asm.go's testOut is one package-level buffer, and the assembler
+	// writes every instruction it prints to it. Two of these at once
+	// read each other's output, or none at all.
+	t.Serial()
 	input := filepath.Join("testdata", file+".s")
-	architecture, ctxt := setArch(goarch)
+	architecture, ctxt := setArch(t, goarch)
 	architecture.Init(ctxt)
 	lexer := lex.NewLexer(input)
 	parser := NewParser(ctxt, architecture, lexer)
@@ -287,7 +291,7 @@ var (
 
 func testErrors(t *testing.T, goarch, file string, flags ...string) {
 	input := filepath.Join("testdata", file+".s")
-	architecture, ctxt := setArch(goarch)
+	architecture, ctxt := setArch(t, goarch)
 	architecture.Init(ctxt)
 	lexer := lex.NewLexer(input)
 	parser := NewParser(ctxt, architecture, lexer)
@@ -379,10 +383,12 @@ func testErrors(t *testing.T, goarch, file string, flags ...string) {
 }
 
 func Test386EndToEnd(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "386", "386")
 }
 
 func TestARMEndToEnd(t *testing.T) {
+	t.Serial()
 	defer func(old int) { buildcfg.GOARM.Version = old }(buildcfg.GOARM.Version)
 	for _, goarm := range []int{5, 6, 7} {
 		t.Logf("GOARM=%d", goarm)
@@ -395,26 +401,32 @@ func TestARMEndToEnd(t *testing.T) {
 }
 
 func TestGoBuildErrors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "amd64", "buildtagerror")
 }
 
 func TestGenericErrors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "amd64", "duperror")
 }
 
 func TestARMErrors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "arm", "armerror")
 }
 
 func TestARM64EndToEnd(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "arm64", "arm64")
 }
 
 func TestARM64Encoder(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "arm64", "arm64enc")
 }
 
 func TestARM64SVEEncoder(t *testing.T) {
+	t.Serial()
 	if !buildcfg.Experiment.SIMD {
 		t.Skip("test requires GOEXPERIMENT=simd")
 	}
@@ -422,6 +434,7 @@ func TestARM64SVEEncoder(t *testing.T) {
 }
 
 func TestARM64SVEErrors(t *testing.T) {
+	t.Serial()
 	if !buildcfg.Experiment.SIMD {
 		t.Skip("test requires GOEXPERIMENT=simd")
 	}
@@ -429,18 +442,22 @@ func TestARM64SVEErrors(t *testing.T) {
 }
 
 func TestARM64Errors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "arm64", "arm64error")
 }
 
 func TestAMD64EndToEnd(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "amd64", "amd64")
 }
 
 func Test386Encoder(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "386", "386enc")
 }
 
 func TestAMD64Encoder(t *testing.T) {
+	t.Serial()
 	filenames := [...]string{
 		"amd64enc",
 		"amd64enc_extra",
@@ -468,19 +485,23 @@ func TestAMD64Encoder(t *testing.T) {
 }
 
 func TestAMD64Errors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "amd64", "amd64error")
 }
 
 func TestAMD64DynLinkErrors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "amd64", "amd64dynlinkerror", "dynlink")
 }
 
 func TestMIPSEndToEnd(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "mips", "mips")
 	testEndToEnd(t, "mips64", "mips64")
 }
 
 func TestLOONG64Encoder(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "loong64", "loong64enc1")
 	testEndToEnd(t, "loong64", "loong64enc2")
 	testEndToEnd(t, "loong64", "loong64enc3")
@@ -491,10 +512,12 @@ func TestLOONG64Encoder(t *testing.T) {
 }
 
 func TestLOONG64Errors(t *testing.T) {
+	t.Serial()
 	testErrors(t, "loong64", "loong64error")
 }
 
 func TestPPC64EndToEnd(t *testing.T) {
+	t.Serial()
 	defer func(old int) { buildcfg.GOPPC64 = old }(buildcfg.GOPPC64)
 	for _, goppc64 := range []int{8, 9, 10} {
 		t.Logf("GOPPC64=power%d", goppc64)
@@ -519,23 +542,27 @@ func testRISCV64AllProfiles(t *testing.T, testFn func(t *testing.T)) {
 }
 
 func TestRISCV64EndToEnd(t *testing.T) {
+	t.Serial()
 	testRISCV64AllProfiles(t, func(t *testing.T) {
 		testEndToEnd(t, "riscv64", "riscv64")
 	})
 }
 
 func TestRISCV64Errors(t *testing.T) {
+	t.Serial()
 	testRISCV64AllProfiles(t, func(t *testing.T) {
 		testErrors(t, "riscv64", "riscv64error")
 	})
 }
 
 func TestRISCV64Validation(t *testing.T) {
+	t.Serial()
 	testRISCV64AllProfiles(t, func(t *testing.T) {
 		testErrors(t, "riscv64", "riscv64validation")
 	})
 }
 
 func TestS390XEndToEnd(t *testing.T) {
+	t.Serial()
 	testEndToEnd(t, "s390x", "s390x")
 }

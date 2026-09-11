@@ -8,13 +8,15 @@ package modindex
 
 import (
 	"go/build"
-	"runtime"
 	"testing"
 )
 
+// The port these files are selected for, not the host running the test:
+// goodOSArchFile answers about build.Default, and runtime.GOOS names the
+// host a cosmo binary runs on.
 var (
-	thisOS    = runtime.GOOS
-	thisArch  = runtime.GOARCH
+	thisOS    = build.Default.GOOS
+	thisArch  = build.Default.GOARCH
 	otherOS   = anotherOS()
 	otherArch = anotherArch()
 )

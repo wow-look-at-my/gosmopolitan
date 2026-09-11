@@ -1340,7 +1340,13 @@ func addCriticalEnv(env []string) []string {
 			return env
 		}
 	}
-	return append(env, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"))
+	v, ok := lookupCriticalEnv("SYSTEMROOT")
+	if !ok || v == "" {
+		// An empty SYSTEMROOT is worse than none: it overrides whatever
+		// the child would otherwise inherit.
+		return env
+	}
+	return append(env, "SYSTEMROOT="+v)
 }
 
 // ErrDot indicates that a path lookup resolved to an executable

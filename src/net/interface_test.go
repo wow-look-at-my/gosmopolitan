@@ -49,6 +49,9 @@ func ipv6LinkLocalUnicastAddr(ifi *Interface) string {
 }
 
 func TestInterfaces(t *testing.T) {
+	if !interfacesServedHere() {
+		t.Skip("the interface table is netlink-only on cosmo; this host serves no netlink (docs/STUBS-INVENTORY.md)")
+	}
 	ift, err := Interfaces()
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +85,9 @@ func TestInterfaces(t *testing.T) {
 }
 
 func TestInterfaceAddrs(t *testing.T) {
+	if !interfacesServedHere() {
+		t.Skip("the interface table is netlink-only on cosmo; this host serves no netlink (docs/STUBS-INVENTORY.md)")
+	}
 	ift, err := Interfaces()
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +107,9 @@ func TestInterfaceAddrs(t *testing.T) {
 }
 
 func TestInterfaceUnicastAddrs(t *testing.T) {
+	if !interfacesServedHere() {
+		t.Skip("the interface table is netlink-only on cosmo; this host serves no netlink (docs/STUBS-INVENTORY.md)")
+	}
 	ift, err := Interfaces()
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +137,9 @@ func TestInterfaceUnicastAddrs(t *testing.T) {
 }
 
 func TestInterfaceMulticastAddrs(t *testing.T) {
+	if !interfacesServedHere() {
+		t.Skip("the interface table is netlink-only on cosmo; this host serves no netlink (docs/STUBS-INVENTORY.md)")
+	}
 	ift, err := Interfaces()
 	if err != nil {
 		t.Fatal(err)

@@ -2862,6 +2862,19 @@ func (p *parser) parseDecl(sync map[token.Token]bool) ast.Decl {
 		defer un(trace(p, "Declaration"))
 	}
 
+	// "readonly" is a keyword only here, where a declaration must start, so
+	// a variable of that name stays legal everywhere else.
+	var readonly token.Pos
+	if p.tok == token.IDENT && p.lit == "readonly" {
+		readonly = p.pos
+		p.next()
+		if p.tok != token.VAR {
+			p.errorExpected(p.pos, "'var' after readonly")
+			p.advance(sync)
+			return &ast.BadDecl{From: readonly, To: p.pos}
+		}
+	}
+
 	var f parseSpecFunction
 	switch p.tok {
 	case token.IMPORT:
@@ -2883,7 +2896,9 @@ func (p *parser) parseDecl(sync map[token.Token]bool) ast.Decl {
 		return &ast.BadDecl{From: pos, To: p.pos}
 	}
 
-	return p.parseGenDecl(p.tok, f)
+	d := p.parseGenDecl(p.tok, f)
+	d.Readonly = readonly
+	return d
 }
 
 // ----------------------------------------------------------------------------

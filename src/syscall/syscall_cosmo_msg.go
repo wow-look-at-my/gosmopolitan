@@ -11,26 +11,18 @@ import (
 	"unsafe"
 )
 
-// Darwin-host halves of sendmsg/recvmsg. A GOOS=cosmo binary speaks
-// the Linux ABI everywhere, but on a macOS host SYS_SENDMSG/
-// SYS_RECVMSG reach a dlsym-dispatched Apple libc whose struct msghdr,
-// struct sockaddr and struct cmsghdr all differ from Linux's. The
-// dispatch side (internal/runtime/syscall/cosmo, socket_cosmo_arm64.go)
-// runs inside the _Gsyscall window where every frame is nosplit, so it
-// can only re-shape the fixed-size msghdr; everything unbounded - the
-// sockaddr translation, the cmsg repack, the MSG_CMSG_CLOEXEC
-// emulation, closing fds a truncation cannot deliver - happens HERE,
-// as ordinary Go before and after the syscall, in the darwin branches
-// recvmsgRaw and sendmsgN take (the single funnel every caller uses:
-// Recvmsg, Sendmsg(N), their Inet4/Inet6 variants, and net's
-// ReadMsg*/WriteMsg* via internal/poll).
+// Darwin-host halves of sendmsg/recvmsg. A GOOS=cosmo binary speaks the
+// Linux ABI everywhere, but on a macOS host SYS_SENDMSG and SYS_RECVMSG
+// reach a dlsym-dispatched Apple libc whose msghdr, sockaddr and
+// cmsghdr all differ. The dispatch side runs inside the _Gsyscall
+// window, where every frame is nosplit, so it re-shapes only the
+// fixed-size msghdr. Everything unbounded happens HERE, as ordinary Go
+// before and after the syscall, in the darwin branches recvmsgRaw and
+// sendmsgN take - the one funnel every caller reaches.
 //
-// The resulting raw-syscall contract on macOS hosts only: a direct
-// syscall.Syscall(SYS_SENDMSG/SYS_RECVMSG) caller's msg_name and
-// msg_control buffers cross the boundary with Apple-shaped BYTES
-// (widths and flag values are still adapted by the dispatch side).
-// Raw msghdr I/O with nil name and nil control - the only raw shape
-// anything in the tree issues - behaves identically on every host.
+// So on a macOS host a direct syscall.Syscall caller's msg_name and
+// msg_control buffers cross the boundary with Apple-shaped BYTES. The
+// nil-name nil-control shape behaves identically on every host.
 
 // appleAF_INET6 is Apple's AF_INET6 value (Linux's is 10); the other
 // admitted families (AF_UNSPEC/AF_UNIX/AF_INET) coincide. Same table

@@ -21,7 +21,8 @@ var (
 )
 
 // SupportedPlatform reports if this platform supports Open()
-const SupportedPlatform = !telemetry.DisabledOnPlatform
+// Fork-local: a var, because DisabledOnPlatform is one. See its comment.
+var SupportedPlatform = !telemetry.DisabledOnPlatform
 
 func isOpen() bool {
 	openedMu.Lock()

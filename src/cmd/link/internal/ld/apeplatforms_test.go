@@ -7,6 +7,7 @@ package ld
 import (
 	"bytes"
 	"encoding/binary"
+	"internal/testenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -345,6 +346,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 // ends the link. Each of these would otherwise ship a binary that claims a
 // platform it cannot boot, or carries a payload nothing boots.
 func TestAPEPlatformsRejects(t *testing.T) {
+	testenv.MustHaveExec(t)
 	tests := []struct {
 		name     string
 		spec     string

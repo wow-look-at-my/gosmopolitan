@@ -19,20 +19,16 @@ func runtime_getAuxv() []uintptr
 
 // openProcSelfAuxv answers a read of /proc/self/auxv on a macOS host,
 // which serves no /proc, from the vector the runtime already holds.
-//
-// golang.org/x/sys/cpu is why this exists. Its package init reaches
+// golang.org/x/sys/cpu is why this exists: its package init reaches
 // readHWCAP before the init that assigns getAuxvFn, so the runtime
-// answers nil however full its vector is, and this file is the only
-// route left. Any successful read satisfies cpu. An unsuccessful one
-// sends it to an MRS of ID_AA64ISAR0_EL1 that XNU traps, which killed
-// every APE linking x/crypto before main.
+// answers nil however full its vector is. Any successful read satisfies
+// cpu; an unsuccessful one sends it to an MRS of ID_AA64ISAR0_EL1 that
+// XNU traps, killing an APE linking x/crypto before main.
 //
-// The answer rides a pipe: an auxv is a few hundred bytes, far under a
-// pipe buffer, so one write fills it and closing the write end makes the
-// read end report EOF. Nothing touches the filesystem.
-//
-// It reports ok false when it did not handle the call, so the caller
-// carries on to the real openat.
+// The answer rides a pipe: an auxv is far under a pipe buffer, so one
+// write fills it and closing the write end reports EOF, and nothing
+// touches the filesystem. ok is false when this did not handle the
+// call, so the caller carries on to the real openat.
 func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !cosmo.Darwin() {
 		return 0, nil, false

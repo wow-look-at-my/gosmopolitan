@@ -546,7 +546,11 @@ func TestGoVerify(t *testing.T) {
 }
 
 func TestSystemVerify(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	// The question is whether this BUILD carries a systemVerify, which is
+	// what the code under test branches on. runtime.GOOS names the host,
+	// and a cosmo binary on an NT host answers "windows" to it while
+	// compiling the pool-based verifier that knows no platform root.
+	if !hasPlatformVerifier {
 		t.Skipf("skipping verify test using system APIs on %q", runtime.GOOS)
 	}
 
@@ -1648,6 +1652,7 @@ func TestSystemRootsError(t *testing.T) {
 		t.Skip("Windows and darwin do not use (or support) systemRoots")
 	}
 
+	t.Serial()
 	defer func(oldSystemRoots *CertPool) { systemRoots = oldSystemRoots }(systemRootsPool())
 
 	opts := VerifyOptions{
@@ -1700,8 +1705,10 @@ func macosMajorVersion(t *testing.T) (int, error) {
 }
 
 func TestIssue51759(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("only affects darwin")
+	// The bug is in Apple's own verifier, which only a build that binds
+	// it can reach. A cosmo binary on macOS is not such a build.
+	if runtime.GOOS != "darwin" || !hasPlatformVerifier {
+		t.Skip("only affects a darwin build with the platform verifier")
 	}
 
 	testenv.MustHaveExecPath(t, "sw_vers")

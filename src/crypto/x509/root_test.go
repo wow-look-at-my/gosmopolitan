@@ -10,7 +10,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -27,8 +26,11 @@ func TestFallbackPanic(t *testing.T) {
 }
 
 func TestFallback(t *testing.T) {
+	t.Serial(
 	// call systemRootsPool so that the sync.Once is triggered, and we can
 	// manipulate systemRoots without worrying about our working being overwritten
+	)
+
 	systemRootsPool()
 	if systemRoots != nil {
 		originalSystemRoots := *systemRoots
@@ -190,6 +192,7 @@ func TestEnvVars(t *testing.T) {
 	}
 
 	// Save old settings so we can restore before the test ends.
+	t.Serial()
 	origCertFiles, origCertDirectories := certFiles, certDirectories
 	origFile, origDir := os.Getenv(certFileEnv), os.Getenv(certDirEnv)
 	defer func() {
@@ -219,7 +222,7 @@ func TestEnvVars(t *testing.T) {
 				t.Fatal("nil roots")
 			}
 
-			wantSystemPool := (runtime.GOOS == "darwin" || runtime.GOOS == "windows") && tc.dirEnv == "" && tc.fileEnv == ""
+			wantSystemPool := platformVerifier && tc.dirEnv == "" && tc.fileEnv == ""
 
 			if wantSystemPool {
 				if !r.systemPool {
@@ -252,6 +255,7 @@ func TestEnvVars(t *testing.T) {
 // loadSystemRoots to load all the roots from the respective directories.
 // See https://golang.org/issue/35325.
 func TestLoadSystemCertsLoadColonSeparatedDirs(t *testing.T) {
+	t.Serial()
 	origFile, origDir := os.Getenv(certFileEnv), os.Getenv(certDirEnv)
 	origCertFiles := certFiles[:]
 
@@ -358,11 +362,11 @@ func TestSSLCertEnvOverride(t *testing.T) {
 		t.Fatalf("unexpected failure: %s", err)
 	}
 
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	if platformVerifier {
 		if !p.systemPool {
 			t.Fatal("x509sslcertoverrideplatform did not override SSL_CERT_{FILE,DIR}")
 		}
 	} else if p.systemPool {
-		t.Fatal("x509sslcertoverrideplatform caused a systemPool to be returned on OS other than windows or darwin")
+		t.Fatal("x509sslcertoverrideplatform returned a systemPool on a build whose systemVerify answers nothing")
 	}
 }

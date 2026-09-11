@@ -197,6 +197,10 @@ func verifyChain(c *Certificate, chainCtx *syscall.CertChainContext, opts *Verif
 	return chain, nil
 }
 
+// platformVerifier is true: systemVerify below asks CryptoAPI, so there
+// is no on-disk scan to do. See root.go.
+const platformVerifier = true
+
 // systemVerify is like Verify, except that it uses CryptoAPI calls
 // to build certificate chains and verify them.
 func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate, err error) {

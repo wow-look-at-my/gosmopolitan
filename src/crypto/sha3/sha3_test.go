@@ -224,6 +224,7 @@ func testReset(t *testing.T) {
 var sinkSHA3 byte
 
 func TestAllocations(t *testing.T) {
+	t.Serial()
 	cryptotest.SkipTestAllocations(t)
 	t.Run("New", func(t *testing.T) {
 		if allocs := testing.AllocsPerRun(10, func() {

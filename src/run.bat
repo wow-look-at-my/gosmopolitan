@@ -22,4 +22,4 @@ del env.bat
 set PATH=%CD%\..\misc\cosmo;%PATH%
 
 set GOPATH=c:\nonexist-gopath
-..\bin\go tool dist test --rebuild %* || exit /b 1
+..\bin\go tool dist test %* || exit /b 1

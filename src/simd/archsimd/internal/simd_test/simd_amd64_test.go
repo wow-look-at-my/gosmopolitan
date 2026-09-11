@@ -298,6 +298,7 @@ func TestBitMaskToBits(t *testing.T) {
 var maskForTestBitMaskFromBitsStore uint8
 
 func TestBitMaskToBitsStore(t *testing.T) {
+	t.Serial() // maskForTestBitMaskFromBitsStore is a package variable.
 	if !archsimd.X86.AVX512() {
 		t.Skip("Test requires X86.AVX512, not available on this hardware")
 		return

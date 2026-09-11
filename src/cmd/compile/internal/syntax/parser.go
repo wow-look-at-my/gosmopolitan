@@ -460,6 +460,23 @@ func (p *parser) fileOrNil() *File {
 			}
 
 		default:
+			// "readonly" is a keyword only here, where a declaration must
+			// start, so a variable of that name stays legal everywhere else.
+			if p.tok == _Name && p.lit == "readonly" {
+				p.next()
+				if p.tok != _Var {
+					p.syntaxError("readonly must precede var")
+					p.advance(_Import, _Const, _Type, _Var, _Func)
+					continue
+				}
+				p.next()
+				first := len(f.DeclList)
+				f.DeclList = p.appendGroup(f.DeclList, p.varDecl)
+				for _, d := range f.DeclList[first:] {
+					d.(*VarDecl).Readonly = true
+				}
+				break
+			}
 			if p.tok == _Lbrace && len(f.DeclList) > 0 && isEmptyFuncDecl(f.DeclList[len(f.DeclList)-1]) {
 				// opening { of function declaration on next line
 				p.syntaxError("unexpected semicolon or newline before {")

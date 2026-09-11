@@ -5,6 +5,8 @@
 package runtime
 
 import (
+	"internal/goos"
+	"internal/goarch"
 	"internal/abi"
 	"internal/stringslite"
 	"unsafe"
@@ -324,7 +326,7 @@ func libpreinit() {
 func mpreinit(mp *m) {
 	mp.gsignal = malg(32 * 1024) // OS X wants >= 8K
 	mp.gsignal.m = mp
-	if GOOS == "darwin" && GOARCH == "arm64" {
+	if goos.IsDarwin == 1 && goarch.IsArm64 == 1 {
 		// mlock the signal stack to work around a kernel bug where it may
 		// SIGILL when the signal stack is not faulted in while a signal
 		// arrives. See issue 42774.
@@ -337,7 +339,7 @@ func mpreinit(mp *m) {
 func minit() {
 	// iOS does not support alternate signal stack.
 	// The signal handler handles it directly.
-	if !(GOOS == "ios" && GOARCH == "arm64") {
+	if !(goos.IsIos == 1 && goarch.IsArm64 == 1) {
 		minitSignalStack()
 	}
 	minitSignalMask()
@@ -350,7 +352,7 @@ func minit() {
 func unminit() {
 	// iOS does not support alternate signal stack.
 	// See minit.
-	if !(GOOS == "ios" && GOARCH == "arm64") {
+	if !(goos.IsIos == 1 && goarch.IsArm64 == 1) {
 		unminitSignals()
 	}
 	getg().m.procid = 0

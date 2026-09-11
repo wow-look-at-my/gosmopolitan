@@ -1756,7 +1756,11 @@ func (p *printer) spec(spec ast.Spec, n int, doIndent bool) {
 
 func (p *printer) genDecl(d *ast.GenDecl) {
 	p.setComment(d.Doc)
-	p.setPos(d.Pos())
+	if d.Readonly.IsValid() {
+		p.setPos(d.Readonly)
+		p.print(&ast.Ident{NamePos: d.Readonly, Name: "readonly"}, blank)
+	}
+	p.setPos(d.TokPos)
 	p.print(d.Tok, blank)
 
 	if d.Lparen.IsValid() || len(d.Specs) != 1 {

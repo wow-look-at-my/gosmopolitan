@@ -1447,8 +1447,9 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 		fixArchiveKey = cache.Subkey(id, "fix.zip") // for .fix.zip file
 	)
 
-	// Check the cache; -a forces a rebuild.
-	if !cfg.BuildA {
+	// Check the cache. The block is bare rather than dedented because
+	// goto cachemiss below may not jump over the declarations it guards.
+	{
 		c := a.cache()
 
 		// There may be multiple artifacts in the cache.

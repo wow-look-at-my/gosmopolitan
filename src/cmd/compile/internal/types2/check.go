@@ -34,16 +34,18 @@ type exprInfo struct {
 // An environment represents the environment within which an object is
 // type-checked.
 type environment struct {
-	decl          *declInfo                 // package-level declaration whose init expression/function body is checked
-	scope         *Scope                    // top-most scope for lookups
-	version       goVersion                 // current accepted language version; changes across files
-	iota          constant.Value            // value of iota in a constant declaration; nil otherwise
-	errpos        syntax.Pos                // if valid, identifier position of a constant with inherited initializer
-	inTParamList  bool                      // set if inside a type parameter list
-	sig           *Signature                // function signature if inside a function; nil otherwise
-	isPanic       map[*syntax.CallExpr]bool // set of panic call expressions (used for termination check)
-	hasLabel      bool                      // set if a function makes use of labels (only ~1% of functions); unused outside functions
-	hasCallOrRecv bool                      // set if an expression contains a function call or channel receive operation
+	decl           *declInfo                 // package-level declaration whose init expression/function body is checked
+	scope          *Scope                    // top-most scope for lookups
+	version        goVersion                 // current accepted language version; changes across files
+	iota           constant.Value            // value of iota in a constant declaration; nil otherwise
+	errpos         syntax.Pos                // if valid, identifier position of a constant with inherited initializer
+	inConstExpr    bool                      // set while checking an expression that must be constant (see dynconst.go)
+	fillingDefault bool                      // set while checking a filled parameter default (see call.go defaultArg)
+	inTParamList   bool                      // set if inside a type parameter list
+	sig            *Signature                // function signature if inside a function; nil otherwise
+	isPanic        map[*syntax.CallExpr]bool // set of panic call expressions (used for termination check)
+	hasLabel       bool                      // set if a function makes use of labels (only ~1% of functions); unused outside functions
+	hasCallOrRecv  bool                      // set if an expression contains a function call or channel receive operation
 }
 
 // lookupScope looks up name in the current environment and if an object

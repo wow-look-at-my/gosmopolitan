@@ -1,0 +1,98 @@
+name: Build leg
+description: "What a build leg does once its toolchain exists: assert the toolchain, build the APE binaries, hand both over. No test suite runs here, so every downstream job starts as soon as this does."
+runs:
+  using: composite
+  steps:
+
+    - name: Assert tool IDs are content-derived (cross-build cache poisoning guard)
+      # see CLAUDE.md "Fork Gotchas" -- "Tool build IDs are content-derived"
+      shell: bash
+      run: |
+        out="$(./bin/go tool compile -V=full)"
+        echo "compile -V=full: $out"
+        case "$out" in
+          *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
+          *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
+        esac
+
+    - name: Test shebang support - script execution
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        export PATH="$PWD/bin:$PATH"
+        # Pin host GOOS/GOARCH (see above); applies to the shebang go run too.
+        export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+
+        # env -S is required for multi-word shebang interpreters on Linux.
+        cat > /tmp/shebang-test.go << 'EOF'
+        #!/usr/bin/env -S go run
+
+        package main
+
+        import "fmt"
+
+        func main() {
+            fmt.Println("Hello from shebang Go script!")
+        }
+        EOF
+
+        echo "=== Testing go run with shebang file ==="
+        go run /tmp/shebang-test.go
+
+        echo "=== Testing direct script execution ==="
+        chmod +x /tmp/shebang-test.go
+        /tmp/shebang-test.go
+
+    - name: Build APE binary
+      # see docs/CI.md "build job" -- no GOARCH pin, and what the ls asserts.
+      shell: bash
+      run: |
+        export PATH="$PWD/bin:$PATH"
+        GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+        # The probe is a multi-file package, so build its module directory.
+        (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
+        echo "=== APE Header ==="
+        head -c 200 fizzbuzz.com
+        echo ""
+        echo "=== File info ==="
+        file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
+        # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
+        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+        echo "=== sizes ==="
+        ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
+        export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
+        cd testdata/ape/apetest
+        FIZZBUZZ_BIN="$GITHUB_WORKSPACE/fizzbuzz.com" RUNTIMEPROBE_BIN="$GITHUB_WORKSPACE/runtimeprobe.com" APE_REQUIRE_SIDECARS=1 go test -run TestFatSidecarsExist -v .
+        SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-tri.com" SLIM_PLATFORMS=linux/amd64,darwin/arm64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+        SLIM_BIN="$GITHUB_WORKSPACE/fizzbuzz-amd.com" SLIM_PLATFORMS=linux/amd64,windows/amd64 APE_REQUIRE_SIDECARS=1 go test -run TestSlimSidecarsExist -v .
+
+    - name: Stage the APE binaries for the test job
+      shell: bash
+      run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
+
+    - name: Hand the APE binaries to the test job
+      uses: wow-look-at-my/actions@cache-upload#latest
+      with:
+        name: ape-binary-${{ runner.os }}
+        path: ${{ runner.temp }}/handoff
+
+
+
+    # bin/, pkg/tool/ and the sources dist generates are the build; std comes from the shared cache.
+    - name: Stage the toolchain
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+        # The generated sources are the ignored .go files the build left in src/.
+        for f in $(git ls-files --others --ignored --exclude-standard src | grep '\.go$'); do
+          mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"
+        done
+
+    - name: Hand the toolchain over
+      uses: wow-look-at-my/actions@cache-upload#latest
+      with:
+        name: toolchain-${{ runner.os }}
+        path: ${{ runner.temp }}/toolchain

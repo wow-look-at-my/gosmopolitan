@@ -24,6 +24,7 @@ func init() {
 func TestDialContextCancelRace(t *testing.T) {
 	oldConnectFunc := connectFunc
 	oldGetsockoptIntFunc := getsockoptIntFunc
+	t.Serial()
 	oldTestHookCanceledDial := testHookCanceledDial
 	defer func() {
 		connectFunc = oldConnectFunc

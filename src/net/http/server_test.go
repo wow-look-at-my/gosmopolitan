@@ -190,6 +190,7 @@ func TestExactMatch(t *testing.T) {
 }
 
 func TestEscapedPathsAndPatterns(t *testing.T) {
+	t.Serial()
 	matches := []struct {
 		pattern  string
 		paths    []string // paths that match the pattern
