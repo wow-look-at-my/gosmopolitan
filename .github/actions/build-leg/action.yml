@@ -1,5 +1,5 @@
-name: Host leg
-description: Everything a build leg does after its toolchain exists. The three host legs share it.
+name: Build leg
+description: "What a build leg does once its toolchain exists: assert the toolchain, build the APE binaries, hand both over. No test suite runs here, so every downstream job starts as soon as this does."
 runs:
   using: composite
   steps:
@@ -80,83 +80,19 @@ runs:
         path: ${{ runner.temp }}/handoff
 
 
-    # The suite says what a bare "exit status 2" from run.bat means.
-    - name: A cosmo binary built here runs here (dats)
-      if: runner.os != 'Windows'
-      uses: wow-look-at-my/dats@master
-      with:
-        tests: dats/host
 
-    # The dats action runs a suite inside WSL on NT, which tests Linux. The host suites run on NT itself, which has no sandbox backend.
-    - name: Download dats
-      if: runner.os == 'Windows'
-      id: dats
-      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
-      with:
-        project: dats
-
-    - name: A cosmo binary built here runs here (dats, on NT)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      env:
-        DATS_BIN: ${{ steps.dats.outputs.path }}
-      run: |
-        Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
-        & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
-        exit $LASTEXITCODE
-
-    - name: The whole test suite (run.bash)
-      # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
-      if: runner.os != 'Windows'
+    # bin/, pkg/tool/ and the sources dist generates are the build; std comes from the shared cache.
+    - name: Stage the toolchain
       shell: bash
       run: |
-        # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
-        diag="/tmp/forkdiag"
-        mkdir -p "$diag"
-        export GOCOSMOFORKDIAG="$diag"
-        watcher=
-        if [ "$(uname)" = Darwin ]; then
-          (
-            while :; do
-              for f in "$diag"/[0-9]*; do
-                [ -e "$f" ] || continue
-                pid="$(basename "$f")"
-                ps -o pid,ppid,stat,wchan,command -p "$pid" > "$diag/ps-$pid.txt" 2>&1 || true
-                sudo sample "$pid" 2 -mayDie -file "$diag/sample-$pid.txt" > /dev/null 2>&1 || true
-                sudo lldb -p "$pid" --batch -o 'bt all' -o 'register read' -o 'disassemble -n _objc_atfork_child' -o 'image lookup -n sDataLists' -o 'detach' > "$diag/lldb-$pid.txt" 2>&1 || true
-                # Every callee-saved register that points into the shared cache: dump the words there, in the child and in the parent.
-                cmds=()
-                for a in $(awk '/^ +x(19|2[0-8]) = /{print $3}' "$diag/lldb-$pid.txt" | grep -E '^0x0*[12][0-9a-f]{8}$' | sort -u); do
-                  cmds+=(-o "memory read -s8 -c 96 -f x $a")
-                done
-                if [ "${#cmds[@]}" -gt 0 ]; then
-                  sudo lldb -p "$pid" --batch "${cmds[@]}" -o 'detach' > "$diag/lldb-mem-$pid.txt" 2>&1 || true
-                  ppid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
-                  sudo lldb -p "$ppid" --batch "${cmds[@]}" -o 'detach' > "$diag/lldb-parent-$ppid-of-$pid.txt" 2>&1 || true
-                fi
-                sudo vmmap "$pid" > "$diag/vmmap-$pid.txt" 2>&1 || true
-                rm -f "$f"
-              done
-              sleep 1
-            done
-          ) &
-          watcher=$!
-        fi
-        rc=0
-        (cd src && ./run.bash) || rc=$?
-        [ -z "$watcher" ] || kill "$watcher"
-        for f in "$diag"/*.txt; do
-          [ -e "$f" ] || continue
-          echo "===== $f ====="
-          cat "$f"
+        mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+        # The generated sources are the ignored .go files the build left in src/.
+        for f in $(git ls-files --others --ignored --exclude-standard src | grep '\.go$'); do
+          mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"
         done
-        exit "$rc"
 
-    - name: The whole test suite (run.bat)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        cd src
-        .\run.bat
-        exit $LASTEXITCODE
-
+    - name: Hand the toolchain over
+      uses: wow-look-at-my/actions@cache-upload#latest
+      with:
+        name: toolchain-${{ runner.os }}
+        path: ${{ runner.temp }}/toolchain

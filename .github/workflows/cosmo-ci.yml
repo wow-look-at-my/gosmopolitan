@@ -10,8 +10,8 @@ on:
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
-    # run.bash is the bulk of it, and dist test reruns anything it has to rebuild.
-    timeout-minutes: 150
+    # make.bash plus the APE builds; the suite is its own job.
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
@@ -46,11 +46,11 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      - uses: ./.github/actions/host-leg
+      - uses: ./.github/actions/build-leg
 
-  # The ubuntu host leg, its own job so cosmo-checks, wasm and wasm-suite can take its toolchain the moment it exists: needs waits on a whole matrix.
+  # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits on a whole matrix.
   build-linux:
-    timeout-minutes: 150
+    timeout-minutes: 45
     permissions:
       id-token: write
       contents: read
@@ -75,23 +75,29 @@ jobs:
         env:
           GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
 
-      # bin/, pkg/tool/ and the sources dist generates are the build; std comes from the shared cache.
-      - name: Stage the toolchain
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
-          # The generated sources are the ignored .go files the build left in src/.
-          for f in $(git ls-files --others --ignored --exclude-standard src | grep '\.go$'); do
-            mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"
-          done
+      - uses: ./.github/actions/build-leg
 
-      - name: Hand the toolchain over
-        uses: wow-look-at-my/actions@cache-upload#latest
+  # One job per host for the whole suite, so nothing downstream of a build waits on it.
+  suite:
+    timeout-minutes: 150
+    needs: [build, build-linux]
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite-os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.suite-os }}
+
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: toolchain-linux
-          path: ${{ runner.temp }}/toolchain
+          submodules: true
+      - uses: wow-look-at-my/actions@secret-server#latest
 
-      - uses: ./.github/actions/host-leg
+      - uses: ./.github/actions/suite-leg
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
@@ -111,7 +117,7 @@ jobs:
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
-          name: toolchain-linux
+          name: toolchain-Linux
           path: .
 
       - name: The restored go answers
@@ -246,7 +252,7 @@ jobs:
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
-          name: toolchain-linux
+          name: toolchain-Linux
           path: .
 
       - name: The restored go answers
@@ -303,7 +309,7 @@ jobs:
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
-          name: toolchain-linux
+          name: toolchain-Linux
           path: .
 
       - name: The restored go answers
@@ -320,7 +326,7 @@ jobs:
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
   cache-cleanup:
-    needs: [test, cosmo-checks, wasm, wasm-suite]
+    needs: [test, suite, cosmo-checks, wasm, wasm-suite]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -331,7 +337,7 @@ jobs:
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
-    needs: [build, build-linux, cosmo-checks, test, wasm, wasm-suite]
+    needs: [build, build-linux, suite, cosmo-checks, test, wasm, wasm-suite]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates

@@ -8,6 +8,12 @@ Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `ya
 
 ## build job
 
+A build leg builds the toolchain, asserts it, builds the APE binaries, and hands both over. It runs no tests. So `cosmo-checks`, `wasm`, `wasm-suite` and `test` start on a toolchain that is minutes old. The test suite used to run inside this job. It is the long pole.
+
+## suite job
+
+`run.bash` on unix and `run.bat` on NT, one leg per host, over the toolchain that host's build leg handed over. It is the distribution's own all-tests entry point. It is the only test gate for the stdlib, the `cmd` packages and the `test/` corpus. Its own job, so a red suite no longer hides every downstream job behind a skipped build.
+
 **Timeouts.** Job and step `timeout-minutes` are deliberate everywhere: a hung cosmo binary (or a wedged runner) must never burn GitHub's 6-hour default. Limits are sized ~2x (or a round number above) the slowest duration observed across recent green runs. See the values at each step.
 
 **Build APE binary.** No GOARCH pin: `GOOS=cosmo go build` emits a fat (amd64+arm64) APE regardless of the host architecture. `apetest`'s `TestFatSidecarsExist` (gated on `APE_REQUIRE_SIDECARS=1`, since sidecars are not uploaded and the same suite's bare `go test ./...` runs elsewhere must not fail on their absence) requires the debug sidecars a default fat build must write next to each output, and checks each is a valid. Observed max 38s (windows. Two fat builds = four link passes).
