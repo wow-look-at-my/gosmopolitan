@@ -111,7 +111,7 @@ runs:
       shell: bash
       run: |
         # Temporary: a fork child that never execs is sampled before the budget kills it (syscall/exec_forkstatus_cosmo.go).
-        diag="$RUNNER_TEMP/forkdiag"
+        diag="/tmp/forkdiag"
         mkdir -p "$diag"
         export GOCOSMOFORKDIAG="$diag"
         watcher=
