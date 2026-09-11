@@ -141,8 +141,8 @@ func TestShellStagesACopyAndExecsIt(t *testing.T) {
 func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `stat -c %d.%i.%.9Y.%s "$o"`, "GNU stat: device, inode, mtime to the nanosecond, size")
-	assert.Contains(t, header, `stat -f %d.%i.%Fm.%z "$o"`, "BSD stat spells the same fields differently")
+	assert.Contains(t, header, `stat -L -c %d.%i.%.9Y.%s "$o"`, "GNU stat, -L so a symlink keys on its target: device, inode, mtime to the nanosecond, size")
+	assert.Contains(t, header, `stat -L -f %d.%i.%Fm.%z "$o"`, "BSD stat spells the same fields differently")
 	assert.Contains(t, header, `cksum <"$o"`, "a host without stat falls back to the contents")
 }
 

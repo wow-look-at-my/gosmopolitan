@@ -343,6 +343,10 @@ const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 // The copy is keyed by the source's device, inode, size and mtime to the
 // NANOSECOND, or a checksum where stat is missing: a rebuild within one
 // second, in place and at one size, would run the previous binary's copy.
+// stat gets -L so the key describes the TARGET. Both stat implementations
+// lstat by default, and a symlink's own inode and mtime never change when
+// what it points at is rebuilt, so an APE invoked through one on $PATH
+// re-ran its first staged copy for ever.
 // Staging also registers the magic with binfmt_misc and records whether
 // the host can bind-mount; both fail silently. With that mark, and only
 // as root, the run binds the copy over the APE's own path in a PRIVATE
@@ -379,7 +383,7 @@ func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize i
 // the first 8K as a boot header, and TestFatBootHeaders holds that count
 // at two. The shell leaves \047 alone inside double quotes.
 var apeStageTmpl = template.Must(template.New("apestage").Parse(
-	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
+	`  k=$(stat -L -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -L -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
   c="{{.RunDir}}/$k"
   p="$c/${0##*/}"
   if [ ! -x "$p" ]; then
