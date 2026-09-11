@@ -1672,7 +1672,7 @@ func TestChdirAndGetwd(t *testing.T) {
 	// (unlike, say, /var, /etc), except /tmp, which we handle below.
 	dirs := []string{"/", "/usr/bin", "/tmp"}
 	// /usr/bin does not usually exist on Plan 9 or Android.
-	switch runtime.GOOS {
+	switch testenv.GOOS {
 	case "android":
 		dirs = []string{"/system/bin"}
 	case "plan9":

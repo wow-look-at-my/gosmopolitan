@@ -817,7 +817,7 @@ func TestDirectives(t *testing.T) {
 	}
 
 	check := func(name string, list []Directive, want string) {
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			want = strings.ReplaceAll(want, "testdata/directives/", `testdata\\directives\\`)
 		}
 		t.Helper()

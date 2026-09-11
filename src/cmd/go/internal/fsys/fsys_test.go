@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -98,13 +97,13 @@ var statInfoChildrenTests = []struct {
 func TestStatInfo(t *testing.T) {
 	t.Serial()
 	tmp := "/tmp"
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tmp = `C:\tmp`
 	}
 	cwd = sync.OnceValue(func() string { return tmp })
 
 	winFix := func(s string) string {
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			s = strings.ReplaceAll(s, `/tmp`, tmp) // fix tmp
 			s = strings.ReplaceAll(s, `/`, `\`)    // use backslashes
 		}
@@ -1287,14 +1286,14 @@ var badOverlayTests = []struct {
 func TestBadOverlay(t *testing.T) {
 	t.Serial()
 	tmp := "/tmp"
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tmp = `C:\tmp`
 	}
 	cwd = sync.OnceValue(func() string { return tmp })
 	defer resetForTesting()
 
 	for i, tt := range badOverlayTests {
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			tt.json = strings.ReplaceAll(tt.json, `/tmp`, tmp) // fix tmp
 			tt.json = strings.ReplaceAll(tt.json, `/`, `\`)    // use backslashes
 			tt.json = strings.ReplaceAll(tt.json, `\`, `\\`)   // JSON escaping

@@ -394,7 +394,7 @@ func TestLineDirectivesWithDir(t *testing.T) {
 	}
 
 	var absPaths []test
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		absPaths = []test{
 			{"//line c:\\bar:1\n", "c:\\bar"},
 		}
