@@ -383,14 +383,13 @@ func TestNTTempDirReadsTheVariablesNTSets(t *testing.T) {
 		env  map[string]string
 		want string
 	}{
-		{"tmp wins", map[string]string{"TMP": `C:\a`, "TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/a"},
-		{"temp is next", map[string]string{"TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/b"},
-		{"then the profile", map[string]string{"USERPROFILE": `C:\c`}, "/c/c"},
-		{"an empty value is unset", map[string]string{"TMP": "", "TEMP": `C:\b`}, "/c/b"},
-		{"nothing set", nil, "/c/Windows/Temp"},
+		{"tmp wins", map[string]string{"TMP": `C:\a`, "TEMP": `C:\b`, "USERPROFILE": `C:\c`}, `C:\a`},
+		{"temp is next", map[string]string{"TEMP": `C:\b`, "USERPROFILE": `C:\c`}, `C:\b`},
+		{"then the profile", map[string]string{"USERPROFILE": `C:\c`}, `C:\c`},
+		{"an empty value is unset", map[string]string{"TMP": "", "TEMP": `C:\b`}, `C:\b`},
+		{"nothing set", nil, `C:\Windows\Temp`},
 		// The one that mattered: TMPDIR is a unix name and NT sets none.
-		{"tmpdir does not count", map[string]string{"TMPDIR": "/tmp"}, "/c/Windows/Temp"},
-		{"the spelling is the port's", map[string]string{"TMP": `C:\Users\RUNNER~1\AppData\Local\Temp\`}, "/c/Users/RUNNER~1/AppData/Local/Temp"},
+		{"tmpdir does not count", map[string]string{"TMPDIR": "/tmp"}, `C:\Windows\Temp`},
 	} {
 		if got := NTTempDir(func(k string) string { return tt.env[k] }); got != tt.want {
 			t.Errorf("%s: NTTempDir = %q, want %q", tt.name, got, tt.want)

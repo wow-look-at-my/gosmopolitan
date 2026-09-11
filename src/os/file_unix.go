@@ -423,30 +423,10 @@ func tempDir() string {
 func ntTempDir(getenv func(string) string) string {
 	for _, key := range [...]string{"TMP", "TEMP", "USERPROFILE"} {
 		if dir := getenv(key); dir != "" {
-			return ntLinuxSpelling(dir)
+			return dir
 		}
 	}
-	return "/c/Windows/Temp"
-}
-
-// ntLinuxSpelling is the port's spelling of an NT path, the one Getwd
-// answers: slashes, and a drive letter as a lowercase root directory,
-// so `C:\Users\x` is "/c/Users/x". Every path the port hands out on
-// NT must agree, or a join of two of them mixes the two forms.
-func ntLinuxSpelling(p string) string {
-	b := []byte(p)
-	for i, c := range b {
-		if c == 0x5c {
-			b[i] = 0x2f
-		}
-	}
-	if len(b) >= 2 && b[1] == 0x3a && (b[0] >= 0x41 && b[0] <= 0x5a || b[0] >= 0x61 && b[0] <= 0x7a) {
-		b = append([]byte{0x2f, b[0] | 0x20}, b[2:]...)
-	}
-	if len(b) > 3 && b[len(b)-1] == 0x2f {
-		b = b[:len(b)-1]
-	}
-	return string(b)
+	return `C:\Windows\Temp`
 }
 
 // Link creates newname as a hard link to the oldname file.
