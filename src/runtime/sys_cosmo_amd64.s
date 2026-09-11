@@ -235,7 +235,12 @@ closefd_darwin_err:
 	MOVL	$-1, ret+8(FP)
 	RET
 
-TEXT runtime·write1(SB),NOSPLIT,$0-28
+// NOFRAME is load-bearing here, because write1_nt tail-jumps. The amd64
+// assembler gives a frame pointer to any TEXT that is not NOFRAME and makes a
+// call, and write1_darwin_err calls cosmo_xlat_errno_ax. A RET pops that
+// PUSHQ BP. A JMP does not, so the trampoline reads its arguments one slot low
+// and returns through the caller's saved BP, which is a stack address.
+TEXT runtime·write1(SB),NOSPLIT|NOFRAME,$0-28
 	CHECK_WINDOWS(write1_nt)
 	CHECK_DARWIN(write1_darwin)
 	// Linux path
