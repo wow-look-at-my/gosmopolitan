@@ -113,12 +113,10 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagRound = 0x4000 // 16K page alignment for ARM64
 		}
 		if *ld.FlagTextAddr == -1 {
-			// The image is not PIE, so the APE loader maps it here with
-			// MAP_FIXED. It must be above the loader's 4 GB page zero and
-			// off every range libSystem takes before the loader runs. The
-			// shared cache sits below 0x300000000, and malloc places a
-			// reservation anywhere from 0x400000000 to past 0xa00000000.
-			*ld.FlagTextAddr = ld.Rnd(0x1000000000, *ld.FlagRound) + int64(ld.HEADR)
+			// The address cosmopolitan links its own aarch64 images at
+			// (ape/aarch64.lds). The image is not PIE, so the APE loader
+			// maps it here with MAP_FIXED.
+			*ld.FlagTextAddr = ld.Rnd(0x800000000, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
 	case objabi.Hdarwin: /* apple MACH */

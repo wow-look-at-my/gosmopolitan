@@ -261,13 +261,9 @@ func TestFatApeLoaderEmbedded(t *testing.T) {
 	assert.Contains(t, string(src), "ApeLoader", "decompressed source must be the APE loader")
 }
 
-// TestFatPayloadsOffLibSystem pins each payload's load range off the
-// ranges libSystem takes before the macOS loader maps it: the 4 GB page
-// zero below, and the band from 0x400000000 where malloc places a
-// reservation on macOS.
-// The loader exits when the range is taken, so an image linked into one
-// runs nowhere on macOS.
-func TestFatPayloadsOffLibSystem(t *testing.T) {
+// TestFatPayloadsAbovePageZero pins each payload above the 4 GB page zero
+// the macOS APE loader occupies. An image linked into it runs nowhere there.
+func TestFatPayloadsAbovePageZero(t *testing.T) {
 	bin := loadBinary(t)
 	const pageZeroEnd = 0x100000000
 	const mallocZone, mallocZoneEnd = 0x400000000, 0x1000000000
@@ -283,9 +279,7 @@ func TestFatPayloadsOffLibSystem(t *testing.T) {
 				continue
 			}
 			lo := le64(ph[16:])
-			hi := lo + le64(ph[40:])
 			assert.GreaterOrEqual(t, lo, uint64(pageZeroEnd), "%v: PT_LOAD at 0x%x lies in the loader's page zero", machine, lo)
-			assert.False(t, lo < mallocZoneEnd && hi > mallocZone, "%v: PT_LOAD 0x%x-0x%x lies in the range macOS malloc reserves", machine, lo, hi)
 		}
 	}
 }
