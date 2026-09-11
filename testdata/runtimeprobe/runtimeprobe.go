@@ -504,13 +504,17 @@ func checkSockets() {
 	// local name; this is the regression canary for unnamed-vs-abstract
 	// confusion in the sockaddr parse. (Windows's stack reports unnamed
 	// as "@"; net's own unixsock tests encode that.)
-	udir, err := os.MkdirTemp("", "runtimeprobe-unix")
+	udir, err := shortSockDir("rp-unix")
 	if err != nil {
 		fail("unixsock", "MkdirTemp: %v", err)
 		return
 	}
 	defer os.RemoveAll(udir)
-	spath := filepath.Join(udir, "probe.sock")
+	spath := filepath.Join(udir, "p")
+	if len(spath) >= sunPathMax {
+		fail("unixsock", "socket path is %d bytes, over the %d sun_path holds: %s", len(spath), sunPathMax, spath)
+		return
+	}
 	uln, err := net.Listen("unix", spath)
 	if err != nil {
 		fail("unixsock", "listen: %v", err)
@@ -551,8 +555,8 @@ func checkSockets() {
 	switch {
 	case uln.Addr().String() != spath:
 		fail("unixsock", "listener addr %q, want %q", uln.Addr(), spath)
-	case !laOK || la.Name != "":
-		fail("unixsock", "dialed local addr %#v, want empty name", usock.LocalAddr())
+	case !laOK || !isUnnamedSockName(la.Name):
+		fail("unixsock", "dialed local addr %#v, want an unnamed one", usock.LocalAddr())
 	case !raOK || ra.Name != spath:
 		fail("unixsock", "dialed remote addr %#v, want name %q", usock.RemoteAddr(), spath)
 	default:
