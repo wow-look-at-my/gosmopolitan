@@ -113,10 +113,21 @@ func archinit(ctxt *ld.Link) {
 			*ld.FlagRound = 0x4000 // 16K page alignment for ARM64
 		}
 		if *ld.FlagTextAddr == -1 {
-			// The address cosmopolitan links its own aarch64 images at
-			// (ape/aarch64.lds). The image is not PIE, so the APE loader
-			// maps it here with MAP_FIXED.
-			*ld.FlagTextAddr = ld.Rnd(0x800000000, *ld.FlagRound) + int64(ld.HEADR)
+			// The image is not PIE, so the APE loader maps it here with
+			// MAP_FIXED, and the range has to be one nothing else wants.
+			//
+			// 4 TiB, not cosmopolitan's own 0x800000000 (ape/aarch64.lds).
+			// That address is 34 GB, and on macOS the default malloc zone
+			// reserves arenas by searching upward from a low address, so a
+			// large image reaches the range a zone later carves an
+			// allocation out of. MAP_FIXED replaces the reservation, the
+			// zone still believes it owns it, and the first write to such
+			// an allocation lands in this image's read-only rodata: a
+			// protection fault with nothing to handle it, which hangs the
+			// process forever. A cosmopolitan binary is small enough never
+			// to meet a zone; a 48 MB `go` is not. Nothing searches as far
+			// as 4 TiB.
+			*ld.FlagTextAddr = ld.Rnd(0x40000000000, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
 	case objabi.Hdarwin: /* apple MACH */
