@@ -39,14 +39,14 @@ tests:
 	# run.bat reports these two packages as a bare "exit status 2". The
 	# boot trace build says how far the test binary gets.
 	- desc: the archive/tar tests pass on this host
-	  cmd: set -o pipefail; export PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v archive/tar 2>&1 | tail -40
+	  cmd: set -o pipefail; export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v archive/tar 2>&1 | tail -40
 	  outputs:
 		stdout:
 			- "PASS"
 	  exit: 0
 
 	- desc: the debug/dwarf tests pass on this host
-	  cmd: set -o pipefail; export PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v debug/dwarf 2>&1 | tail -40
+	  cmd: set -o pipefail; export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v debug/dwarf 2>&1 | tail -40
 	  outputs:
 		stdout:
 			- "PASS"
