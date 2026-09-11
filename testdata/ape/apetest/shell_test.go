@@ -152,8 +152,10 @@ func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
 func TestShellBindsTheCopyInAPrivateNamespace(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `exec unshare -m sh -c `, "the bind must happen in a mount namespace of its own")
-	assert.Contains(t, header, `mount --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"`,
+	assert.Contains(t, header, `exec "$u" -m "$s" -c `, "the bind must happen in a mount namespace of its own")
+	assert.Contains(t, header, `u=$(command -v unshare 2>/dev/null); m=$(command -v mount 2>/dev/null); s=$(command -v sh 2>/dev/null)`,
+		"every tool is resolved before the caller's PATH comes back, because that PATH may name none of them")
+	assert.Contains(t, header, `"$n" --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"`,
 		"a mount that does not take must fall through to the staged copy, not fail the run")
 	assert.Contains(t, header, `if [ -f "$c/.bind" ]; then`,
 		"the bind runs only where staging proved it works")
