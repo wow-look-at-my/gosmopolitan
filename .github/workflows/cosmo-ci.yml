@@ -86,8 +86,6 @@ jobs:
   suite:
     timeout-minutes: 150
     needs: [build, build-linux]
-    # The NT leg reports in full but does not hold the branch. waiver-expires: 2026-09-18
-    continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
     permissions:
       id-token: write
       contents: read
@@ -105,6 +103,8 @@ jobs:
       - uses: wow-look-at-my/actions@secret-server#latest
 
       - uses: ./.github/actions/suite-leg
+        # The NT leg reports in full; its red does not hold the branch. On the STEP, not the job: all-builds tallies jobs, and a job-level key leaves the job's own conclusion `failure`. waiver-expires: 2026-09-18
+        continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
