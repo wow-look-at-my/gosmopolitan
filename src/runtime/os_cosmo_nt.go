@@ -61,6 +61,10 @@ var (
 	ntSetFilePointerExFn uintptr
 	ntSetEndOfFileFn     uintptr
 	ntFlushFileBuffersFn uintptr
+	// QueryPerformanceCounter. nanotime reads KUSER_SHARED_DATA, which
+	// moves once a timer tick, so a caller measuring tens of
+	// nanoseconds needs this instead.
+	ntQueryPerfCounterFn uintptr
 	// The flock(2) pair. Optional like the metadata wave's: a zero
 	// pointer answers ENOSYS where flock is called rather than
 	// crashing the boot.
@@ -182,6 +186,7 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameQueryPerfCounter  = []byte("QueryPerformanceCounter\x00")
 	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
 	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
@@ -360,6 +365,23 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
+// ntHighPrecisionTicks reads QueryPerformanceCounter, and reports
+// whether it answered. nanotime reads KUSER_SHARED_DATA's
+// InterruptTime, which moves once a timer tick - about 15ms - so a
+// caller measuring tens of nanoseconds gets a run of identical values
+// from it. The SP 800-90B jitter entropy source is one, and it fails
+// its startup health test on a clock that never changes.
+func ntHighPrecisionTicks() (int64, bool) {
+	if !iswindows() || ntQueryPerfCounterFn == 0 {
+		return 0, false
+	}
+	var ticks int64
+	if ntcall7(ntQueryPerfCounterFn, uintptr(unsafe.Pointer(&ticks)), 0, 0, 0, 0, 0, 0) == 0 {
+		return 0, false
+	}
+	return ticks, true
+}
+
 // ntcallSEcheck refuses a blocking call made under a runtime lock. An
 // exitsyscall that does not win a P back calls stopm, which throws
 // "stopm holding locks" - a rare crash, far from the lock that caused
@@ -487,6 +509,7 @@ func ntResolve() {
 	ntSetFilePointerExFn = k32sym(&ntNameSetFilePointerEx[0])
 	ntSetEndOfFileFn = k32sym(&ntNameSetEndOfFile[0])
 	ntFlushFileBuffersFn = k32sym(&ntNameFlushFileBuffers[0])
+	ntQueryPerfCounterFn = k32sym(&ntNameQueryPerfCounter[0])
 	ntGetFileInformationByHandleFn = k32sym(&ntNameGetFileInfoByH[0])
 	ntGetFileInformationByHandleExFn = k32sym(&ntNameGetFileInfoByHEx[0])
 	ntDeleteFileWFn = k32sym(&ntNameDeleteFileW[0])

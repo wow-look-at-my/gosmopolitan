@@ -4,6 +4,36 @@ runs:
   using: composite
   steps:
 
+    # dist test links one APE per test package. The image leaves too little room on C: for that.
+    - name: Make room for the suite (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $before = (Get-PSDrive C).Free
+        $junk = @(
+          'C:\Android',
+          'C:\Program Files (x86)\Android',
+          'C:\Program Files\Microsoft SDKs\Android',
+          'C:\Program Files\Google\Chrome',
+          'C:\Program Files\Mozilla Firefox',
+          'C:\Program Files\MongoDB',
+          'C:\Program Files\PostgreSQL',
+          'C:\Program Files\Unity',
+          'C:\Miniconda',
+          'C:\Julia',
+          'C:\hostedtoolcache\windows\CodeQL',
+          'C:\hostedtoolcache\windows\Ruby',
+          'C:\hostedtoolcache\windows\PyPy',
+          'C:\hostedtoolcache\windows\Python',
+          'C:\hostedtoolcache\windows\node'
+        )
+        foreach ($p in $junk) {
+          if (Test-Path $p) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $p }
+        }
+        $after = (Get-PSDrive C).Free
+        $gb = 1GB
+        Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ($after/$gb), ($before/$gb))
+
     - name: Take the toolchain its build leg built
       uses: wow-look-at-my/actions@cache-download#latest
       with:
