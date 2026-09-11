@@ -360,6 +360,18 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
+// ntcallSEcheck refuses a blocking call made under a runtime lock. An
+// exitsyscall that does not win a P back calls stopm, which throws
+// "stopm holding locks" - a rare crash, far from the lock that caused
+// it. This names the caller instead, on every such call.
+//
+//go:nosplit
+func ntcallSEcheck() {
+	if getg().m.locks != 0 {
+		throw("ntcallSE: runtime lock held across a blocking win64 call")
+	}
+}
+
 // ntcallSE ("syscall-state, with error") is ntcallE bracketed by
 // entersyscall and exitsyscall, for a Win32 call that can block
 // indefinitely, so sysmon can retake the P while the thread parks in
@@ -373,6 +385,7 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
+	ntcallSEcheck()
 	entersyscall()
 	osPreemptExtEnter(getg().m)
 	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
@@ -388,6 +401,7 @@ func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 //
 //go:nosplit
 func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
+	ntcallSEcheck()
 	entersyscall()
 	osPreemptExtEnter(getg().m)
 	r = ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)

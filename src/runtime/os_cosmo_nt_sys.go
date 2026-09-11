@@ -528,13 +528,13 @@ func ntEmuRead(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 	// Nothing else here has a pointer to share.
 	seekable := e.kind == ntFDFile
 	if seekable {
-		lock(&ntFilePos[fd])
+		ntFilePosLock(fd)
 	}
 	var got uint32
 	r, werr := ntcallSE(ntReadFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&got)), 0, 0, 0)
 	if seekable {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 	}
 	if r == 0 {
 		// A pipe closed by the writer or an explicit EOF both mean
@@ -570,13 +570,13 @@ func ntEmuWrite(fd int32, p unsafe.Pointer, n int32) (r1, r2, errno uintptr) {
 	}
 	seekable := e.kind == ntFDFile
 	if seekable {
-		lock(&ntFilePos[fd])
+		ntFilePosLock(fd)
 	}
 	var written uint32
 	r, werr := ntcallSE(ntWriteFileFn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&written)), 0, 0, 0)
 	if seekable {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 	}
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
@@ -946,9 +946,9 @@ func ntEmuLseek(fd int32, off int64, whence uintptr) (r1, r2, errno uintptr) {
 		return ntFail3(ntEINVAL)
 	}
 	// Every kind left here has a pointer of its own to move.
-	lock(&ntFilePos[fd])
+	ntFilePosLock(fd)
 	newpos, werr := ntSeekHandle(e.handle, off, whence)
-	unlock(&ntFilePos[fd])
+	ntFilePosUnlock(fd)
 	if werr != 0 {
 		return ntFail3(ntErrno(werr))
 	}
@@ -978,14 +978,14 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	if n == 0 {
 		return 0, 0, 0
 	}
-	lock(&ntFilePos[fd])
+	ntFilePosLock(fd)
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, off, _NT_FILE_BEGIN); werr != 0 {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 		return ntFail3(ntErrno(werr))
 	}
 	var moved uint32
@@ -996,7 +996,7 @@ func ntEmuPreadPwrite(fd int32, p unsafe.Pointer, n int32, off int64, isWrite bo
 	r, werr2 := ntcallSE(fn, e.handle, uintptr(p), uintptr(uint32(n)),
 		uintptr(unsafe.Pointer(&moved)), 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // best-effort restore
-	unlock(&ntFilePos[fd])
+	ntFilePosUnlock(fd)
 	if r == 0 {
 		if !isWrite && (werr2 == _NT_ERROR_BROKEN_PIPE || werr2 == _NT_ERROR_HANDLE_EOF) {
 			return 0, 0, 0
@@ -1018,19 +1018,19 @@ func ntEmuFtruncate(fd int32, length int64) (r1, r2, errno uintptr) {
 		return ntFail3(ntEINVAL)
 	}
 	// SetEndOfFile truncates at the pointer, so this walks it too.
-	lock(&ntFilePos[fd])
+	ntFilePosLock(fd)
 	cur, werr := ntSeekHandle(e.handle, 0, _NT_FILE_CURRENT)
 	if werr != 0 {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 		return ntFail3(ntErrno(werr))
 	}
 	if _, werr = ntSeekHandle(e.handle, length, _NT_FILE_BEGIN); werr != 0 {
-		unlock(&ntFilePos[fd])
+		ntFilePosUnlock(fd)
 		return ntFail3(ntErrno(werr))
 	}
 	r, werr2 := ntcallE(ntSetEndOfFileFn, e.handle, 0, 0, 0, 0, 0, 0)
 	ntSeekHandle(e.handle, cur, _NT_FILE_BEGIN) // Linux keeps the offset
-	unlock(&ntFilePos[fd])
+	ntFilePosUnlock(fd)
 	if r == 0 {
 		return ntFail3(ntErrno(werr2))
 	}

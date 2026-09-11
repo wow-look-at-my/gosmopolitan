@@ -19,7 +19,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/atomic"
+	"unsafe"
+)
 
 // The table is a fixed ntFDMax slots, a few KiB of BSS, so no lookup
 // path allocates - the runtime's own fcntl is nosplit - and a full
@@ -91,7 +94,26 @@ var (
 // The lock has to live down here because nothing above it takes one:
 // internal/poll's Pread calls incref rather than readLock, since a
 // real pread needs no exclusion to be atomic.
-var ntFilePos [ntFDMax]mutex
+//
+// It is NOT a runtime mutex. The transfer under it enters syscall
+// state, and an exitsyscall that does not get a P back calls stopm,
+// which throws "stopm holding locks" on any M with a runtime lock.
+// A contended caller yields its goroutine instead. Contention is rare:
+// internal/poll already serializes plain reads and writes per fd, so
+// only a ReadAt against another transfer on the same fd waits here.
+var ntFilePos [ntFDMax]uint32
+
+// ntFilePosLock takes slot fd's file-pointer lock.
+func ntFilePosLock(fd int32) {
+	for !atomic.Cas(&ntFilePos[fd], 0, 1) {
+		Gosched()
+	}
+}
+
+// ntFilePosUnlock releases it.
+func ntFilePosUnlock(fd int32) {
+	atomic.Store(&ntFilePos[fd], 0)
+}
 
 // ntFDAlloc claims the lowest free slot (unix semantics) for the
 // given handle and returns the fd, or -EMFILE when the table is full.
