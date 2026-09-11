@@ -161,13 +161,6 @@ jobs:
           go-version: '1.24'
           cache: false
 
-      # The sandbox dats runs under exposes the work tree and not the home directory the default cache sits in.
-      - name: Put the build cache in the work tree
-        shell: bash
-        run: |
-          mkdir -p .gocache
-          echo "GOCACHE=$PWD/.gocache" >> "$GITHUB_ENV"
-
       - name: Download the ubuntu-origin APE binaries
         uses: wow-look-at-my/actions@cache-download#latest
         with:
