@@ -240,11 +240,36 @@ func TestDarwinXlatIoctl(t *testing.T) {
 		}
 	}
 
+	// The pty trio is already Apple's and comes back unchanged. Linux
+	// grants through libc and asks TIOCGPTN for a NUMBER, where Apple
+	// answers TIOCPTYGNAME with a NAME, so there is no Linux request to
+	// translate from and a caller on a Darwin host passes Apple's own.
+	for _, tc := range []struct {
+		name string
+		req  uintptr
+	}{
+		{"TIOCPTYGRANT", cosmo.AppleTIOCPTYGRANTForTest},
+		{"TIOCPTYUNLK", cosmo.AppleTIOCPTYUNLKForTest},
+		{"TIOCPTYGNAME", cosmo.AppleTIOCPTYGNAMEForTest},
+	} {
+		got, ok := cosmo.DarwinXlatIoctl(tc.req)
+		if !ok {
+			t.Errorf("%s (%#x): not served, so ptySlave answers ENOSYS", tc.name, tc.req)
+			continue
+		}
+		if got != tc.req {
+			t.Errorf("%s: %#x -> %#x, want it unchanged", tc.name, tc.req, got)
+		}
+	}
+
 	// The termios requests are served by their own table, because their
 	// argument is a struct that has to be converted rather than passed
-	// along. This one must not claim them.
+	// along. This one must not claim them. The zero request also stands
+	// for every number nobody listed: the pty entries above are named
+	// pass-throughs, not an opening for any Apple request at all.
 	for _, req := range []uintptr{
 		cosmo.LinuxTCGETSForTest, cosmo.LinuxTCSETSForTest, 0,
+		0x2000745f, // an unlisted BSD _IO request in the same 't' group
 	} {
 		if _, ok := cosmo.DarwinXlatIoctl(req); ok {
 			t.Errorf("request %#x reported as served by the plain table; it is not", req)

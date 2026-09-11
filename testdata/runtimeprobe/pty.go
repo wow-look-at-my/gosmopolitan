@@ -115,8 +115,9 @@ func checkPty() {
 
 // ptySlave opens the slave end of the pair m holds, the way XNU names
 // it: grant, unlock, then read the name out of a 128-byte buffer. The
-// three requests carry Apple's own numbers, so they pass through the
-// Linux translation untouched.
+// three carry Apple's own request numbers, which DarwinXlatIoctl names
+// and returns unchanged. An unlisted request answers ENOSYS instead, so
+// this only works because that table lists these three.
 func ptySlave(m *os.File) (*os.File, error) {
 	fd := int(m.Fd())
 	if err := syscall.Ioctl(fd, xnuTIOCPTYGRANT, 0); err != nil {

@@ -32,6 +32,11 @@ const (
 	AppleTIOCSWINSZForTest = appleTIOCSWINSZ
 	AppleTIOCNOTTYForTest  = appleTIOCNOTTY
 
+	// Apple's own pty requests, served unchanged.
+	AppleTIOCPTYGRANTForTest = appleTIOCPTYGRANT
+	AppleTIOCPTYUNLKForTest  = appleTIOCPTYUNLK
+	AppleTIOCPTYGNAMEForTest = appleTIOCPTYGNAME
+
 	LinuxTCGETSForTest  = linuxTCGETS
 	LinuxTCSETSForTest  = linuxTCSETS
 	LinuxTCSETSWForTest = linuxTCSETSW
