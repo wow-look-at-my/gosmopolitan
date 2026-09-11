@@ -251,6 +251,9 @@ var depsRules = `
 	io, reflect
 	< internal/saferio;
 
+	os, path/filepath, slices, strings
+	< internal/vendorlist;
+
 	# encodings
 	# core ones do not use fmt.
 	io, strconv, slices

@@ -140,6 +140,8 @@ func genFilenames(t *testing.T, filenames chan<- string) {
 }
 
 func TestAll(t *testing.T) {
+	t.Serial()
+
 	if testing.Short() {
 		return
 	}
