@@ -35,3 +35,19 @@ tests:
 	- desc: a test binary runs with no arguments, lists, and runs one test
 	  cmd: export PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -c -o "$TMPDIR/strings.test" strings && "$TMPDIR/strings.test" >/dev/null && "$TMPDIR/strings.test" -test.list=. | grep -q TestLastIndexByte && "$TMPDIR/strings.test" -test.run=TestLastIndexByte -test.v | grep -q '^PASS'
 	  exit: 0
+
+	# run.bat reports these two packages as a bare "exit status 2". The
+	# boot trace build says how far the test binary gets.
+	- desc: the archive/tar tests pass on this host
+	  cmd: set -o pipefail; export PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v archive/tar 2>&1 | tail -40
+	  outputs:
+		stdout:
+			- "PASS"
+	  exit: 0
+
+	- desc: the debug/dwarf tests pass on this host
+	  cmd: set -o pipefail; export PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -count=1 -tags cosmontdebug -v debug/dwarf 2>&1 | tail -40
+	  outputs:
+		stdout:
+			- "PASS"
+	  exit: 0
