@@ -42,19 +42,17 @@ eval $(../bin/go tool dist env)
 unset CDPATH	# in case user has it set
 
 export GOHOSTOS
+export GOHOSTARCH
 export CC
 
 # GOOS and GOARCH name the port dist test is testing, and every go command it
 # starts has to agree. This fork's go defaults to GOOS=cosmo, so an unexported
-# GOOS leaves each go command guessing.
+# GOOS left every test binary an APE, which the host cannot exec. dist test
+# tests the host port, so GOOS and GOARCH are pinned to the host values.
+GOOS=$GOHOSTOS
+GOARCH=$GOHOSTARCH
 export GOOS
 export GOARCH
-
-# Test binaries are APEs, and execve refuses one on a host with no binfmt_misc
-# entry: a shell has to read the MZqFpD header. cmd/go runs a cross-GOOS test
-# binary through go_${GOOS}_${GOARCH}_exec, so misc/cosmo goes on PATH.
-PATH="$(cd .. && pwd)/misc/cosmo:$PATH"
-export PATH
 
 # no core files, please
 ulimit -c 0

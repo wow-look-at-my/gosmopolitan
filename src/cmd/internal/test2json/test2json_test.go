@@ -401,6 +401,7 @@ func diffRaw(t *testing.T, have, want []byte) {
 		if have[i] == '\n' {
 			nl = i
 		}
+		i++
 	}
 
 	if nl == 0 {

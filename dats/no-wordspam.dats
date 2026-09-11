@@ -6,13 +6,13 @@
 # path here is how the rule spreads; removing one is not.
 tests:
 	- desc: no wordspam in the hook tree or the platform status
-	  cmd: .claude/hooks/no-wordspam.sh .claude/hooks/no-wordspam.sh dats/no-wordspam.dats docs/PLATFORM-STATUS.md
+	  cmd: dats/no-wordspam.sh dats/no-wordspam.sh dats/no-wordspam.dats docs/PLATFORM-STATUS.md
 	  exit: 0
 
 	- desc: no wordspam in the cosmo syscall emulation
-	  cmd: .claude/hooks/no-wordspam.sh src/runtime/os_cosmo_nt_statfs.go src/internal/runtime/syscall/cosmo/termios_cosmo.go src/internal/runtime/syscall/cosmo/darwinabi_cosmo.go src/syscall/bigbuf_cosmo.go
+	  cmd: dats/no-wordspam.sh src/runtime/os_cosmo_nt_statfs.go src/internal/runtime/syscall/cosmo/termios_cosmo.go src/internal/runtime/syscall/cosmo/darwinabi_cosmo.go src/syscall/bigbuf_cosmo.go
 	  exit: 0
 
 	- desc: the scanner refuses a paragraph over the cap
-	  cmd: printf 'x %.0s' $(seq 1 200) > "$TMPDIR/spam.md"; .claude/hooks/no-wordspam.sh "$TMPDIR/spam.md"; test $? -eq 2
+	  cmd: printf 'x %.0s' $(seq 1 200) > "$TMPDIR/spam.md"; dats/no-wordspam.sh "$TMPDIR/spam.md"; test $? -eq 2
 	  exit: 0
