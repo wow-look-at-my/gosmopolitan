@@ -351,11 +351,10 @@ func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 	g0 := getg()
 
+	// One line past the print machinery first: a fault inside the
+	// report below would otherwise leave nothing.
+	ntWinthrowLine(info, r, gp, panicking.Load() != 0)
 	if panicking.Load() != 0 {
-		// The report is already printed, or a fault stopped it. Say
-		// which exception ended the panic, past the print machinery
-		// the fault may have come from.
-		ntWinthrowNested(info.exceptionCode, r.getPC())
 		exit(2)
 	}
 	panicking.Store(1)
@@ -596,18 +595,32 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	ntSignalTramp(handler, uintptr(sig), unsafe.Pointer(&info), unsafe.Pointer(&uc), gp.m.gsignal.stack.hi)
 }
 
-// ntWinthrowNested writes "runtime: NT exception <code> at <pc> while
-// panicking" with ntwrite1 alone, for a fault that arrives after
-// panicking is set: the print machinery may be what faulted.
+// ntWinthrowLine writes one line about the exception with ntwrite1
+// alone: code, PC, the access kind and address, SP, the g the thread
+// carries, and whether a panic was already under way.
 //
 //go:nosplit
-func ntWinthrowNested(code uint32, pc uintptr) {
-	var line [96]byte
+func ntWinthrowLine(info *ntExceptionRecord, r *ntContext, gp *g, nested bool) {
+	var line [200]byte
 	n := copy(line[:], "runtime: NT exception 0x")
-	n = ntHexInto(line[:], n, uintptr(code))
-	n += copy(line[n:], " at 0x")
-	n = ntHexInto(line[:], n, pc)
-	n += copy(line[n:], " while panicking\n")
+	n = ntHexInto(line[:], n, uintptr(info.exceptionCode))
+	n += copy(line[n:], " pc=0x")
+	n = ntHexInto(line[:], n, r.getPC())
+	n += copy(line[n:], " kind=")
+	n = ntHexInto(line[:], n, info.exceptionInformation[0])
+	n += copy(line[n:], " addr=0x")
+	n = ntHexInto(line[:], n, info.exceptionInformation[1])
+	n += copy(line[n:], " sp=0x")
+	n = ntHexInto(line[:], n, r.getSP())
+	n += copy(line[n:], " g=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(gp)))
+	n += copy(line[n:], " tebg=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(getg())))
+	if nested {
+		n += copy(line[n:], " while panicking")
+	}
+	line[n] = 0x0a
+	n++
 	ntwrite1(2, unsafe.Pointer(&line[0]), int32(n))
 }
 
