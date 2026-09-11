@@ -155,6 +155,9 @@ runs:
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
       shell: pwsh
+      # Temporary experiment: does the NT crash class survive without asynchronous preemption?
+      env:
+        GODEBUG: asyncpreemptoff=1
       run: |
         cd src
         .\run.bat
