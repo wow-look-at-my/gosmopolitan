@@ -115,10 +115,10 @@ func archinit(ctxt *ld.Link) {
 		if *ld.FlagTextAddr == -1 {
 			// The image is not PIE, so the APE loader maps it here with
 			// MAP_FIXED. It must be above the loader's 4 GB page zero and
-			// off every range libSystem takes before the loader runs:
-			// macOS 26's malloc zone reserves 0x800000000 up, and the
-			// shared cache sits below 0x300000000.
-			*ld.FlagTextAddr = ld.Rnd(0x400000000, *ld.FlagRound) + int64(ld.HEADR)
+			// off every range libSystem takes before the loader runs. The
+			// shared cache sits below 0x300000000, and malloc places a
+			// reservation anywhere from 0x400000000 to past 0xa00000000.
+			*ld.FlagTextAddr = ld.Rnd(0x1000000000, *ld.FlagRound) + int64(ld.HEADR)
 		}
 
 	case objabi.Hdarwin: /* apple MACH */

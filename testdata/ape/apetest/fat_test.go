@@ -263,13 +263,14 @@ func TestFatApeLoaderEmbedded(t *testing.T) {
 
 // TestFatPayloadsOffLibSystem pins each payload's load range off the
 // ranges libSystem takes before the macOS loader maps it: the 4 GB page
-// zero below, and the malloc zone macOS 26 reserves from 0x800000000.
+// zero below, and the band from 0x400000000 where malloc places a
+// reservation on macOS.
 // The loader exits when the range is taken, so an image linked into one
 // runs nowhere on macOS.
 func TestFatPayloadsOffLibSystem(t *testing.T) {
 	bin := loadBinary(t)
 	const pageZeroEnd = 0x100000000
-	const mallocZone, mallocZoneEnd = 0x800000000, 0x900000000
+	const mallocZone, mallocZoneEnd = 0x400000000, 0x1000000000
 	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
 		hdr := bootHeaderByMachine(t, machine)
 		require.NotNil(t, hdr, "missing boot header for %v", machine)
