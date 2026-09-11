@@ -7,11 +7,6 @@
 # A tail JMP has no epilogue. The callee then reads its arguments one slot low,
 # and its own RET pops the saved register, which holds a STACK address.
 #
-# runtime.write1 shipped that shape. Its darwin branch calls
-# cosmo_xlat_errno_ax, so the whole function got a PUSHQ BP, and its NT branch
-# tail-jumped to ntwrite1tramp. Every runtime print on an NT host then jumped
-# into its own stack and died of a DEP access violation, which cost the panic
-# report of every fatal error on that host.
 
 set -uo pipefail
 
