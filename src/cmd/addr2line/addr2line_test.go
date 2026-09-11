@@ -63,8 +63,9 @@ func runAddr2Line(t *testing.T, dbgExePath, addr string) (funcname, path, lineno
 	funcname = f[0]
 	pathAndLineNo := f[1]
 	f = strings.Split(pathAndLineNo, ":")
-	if testenv.GOOS == "windows" && len(f) == 3 {
-		// Reattach drive letter.
+	if runtime.GOOS == "windows" && len(f) == 3 {
+		// Reattach drive letter. The path came from the host's own
+		// filesystem, so the host decides whether it carries one.
 		f = []string{f[0] + ":" + f[1], f[2]}
 	}
 	if len(f) != 2 {

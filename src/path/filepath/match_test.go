@@ -9,6 +9,7 @@ import (
 	"internal/testenv"
 	"os"
 	. "path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -90,7 +91,7 @@ func TestMatch(t *testing.T) {
 	for _, tt := range matchTests {
 		pattern := tt.pattern
 		s := tt.s
-		if testenv.GOOS == "windows" {
+		if runtime.GOOS == "windows" {
 			if strings.Contains(pattern, "\\") {
 				// no escape allowed on windows.
 				continue
@@ -135,7 +136,7 @@ func TestGlob(t *testing.T) {
 	for _, tt := range globTests {
 		pattern := tt.pattern
 		result := tt.result
-		if testenv.GOOS == "windows" {
+		if runtime.GOOS == "windows" {
 			pattern = Clean(pattern)
 			result = Clean(result)
 		}
@@ -273,7 +274,7 @@ func (test *globTest) globRel(root string) error {
 }
 
 func TestWindowsGlob(t *testing.T) {
-	if testenv.GOOS != "windows" {
+	if runtime.GOOS != "windows" {
 		t.Skipf("skipping windows specific test")
 	}
 
@@ -360,7 +361,7 @@ func TestWindowsGlob(t *testing.T) {
 }
 
 func TestNonWindowsGlobEscape(t *testing.T) {
-	if testenv.GOOS == "windows" {
+	if runtime.GOOS == "windows" {
 		t.Skipf("skipping non-windows specific test")
 	}
 	pattern := `\match.go`

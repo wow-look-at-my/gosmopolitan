@@ -896,8 +896,11 @@ func TestCancelAfterDial(t *testing.T) {
 }
 
 func TestDialClosedPortFailFast(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		// Reported by go.dev/issues/23366.
+		// The question is which dialer this build compiled, not which
+		// host is underneath: the cosmo port dials through its own
+		// poller and the retry loop below never ends there.
 		t.Skip("skipping windows only test")
 	}
 	for _, network := range []string{"tcp", "tcp4", "tcp6"} {

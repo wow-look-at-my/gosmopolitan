@@ -84,23 +84,16 @@ var (
 	ntFDTable [ntFDMax]ntFDEntry
 )
 
-// ntFilePos serializes one slot's Win32 file pointer. That pointer is
-// per HANDLE and shared by every operation on it, so a positional
-// transfer - which Linux serves with pread, moving nothing - has to
-// seek, transfer and seek back, and those three steps are one
-// indivisible operation. Two ReadAt calls that interleave there each
-// read at the other's offset.
-//
-// The lock has to live down here because nothing above it takes one:
-// internal/poll's Pread calls incref rather than readLock, since a
-// real pread needs no exclusion to be atomic.
+// ntFilePos serializes one slot's Win32 file pointer, which is per
+// HANDLE. A positional transfer has to seek, transfer and seek back,
+// and those three steps are one indivisible operation. Nothing above
+// here takes a lock: internal/poll's Pread calls incref, because a real
+// pread needs no exclusion to be atomic.
 //
 // It is NOT a runtime mutex. The transfer under it enters syscall
 // state, and an exitsyscall that does not get a P back calls stopm,
-// which throws "stopm holding locks" on any M with a runtime lock.
-// A contended caller yields its goroutine instead. Contention is rare:
-// internal/poll already serializes plain reads and writes per fd, so
-// only a ReadAt against another transfer on the same fd waits here.
+// which throws on any M holding a runtime lock. A waiter yields its
+// goroutine instead, which is cheap because contention is rare.
 var ntFilePos [ntFDMax]uint32
 
 // ntFilePosLock takes slot fd's file-pointer lock.

@@ -546,7 +546,11 @@ func TestGoVerify(t *testing.T) {
 }
 
 func TestSystemVerify(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	// The question is whether this BUILD carries a systemVerify, which is
+	// what the code under test branches on. runtime.GOOS names the host,
+	// and a cosmo binary on an NT host answers "windows" to it while
+	// compiling the pool-based verifier that knows no platform root.
+	if !hasPlatformVerifier {
 		t.Skipf("skipping verify test using system APIs on %q", runtime.GOOS)
 	}
 
