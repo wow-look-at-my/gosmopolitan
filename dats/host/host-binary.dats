@@ -51,3 +51,9 @@ tests:
 		stdout:
 			- "PASS"
 	  exit: 0
+
+	# The same package under the distribution's own runner, verbose. go test
+	# from a shell passes it; run.bat reports a bare exit status 2.
+	- desc: archive/tar passes under dist test on this host
+	  cmd: cd src && if [ -f ../bin/go.exe ]; then GOFLAGS=-tags=cosmontdebug ./run.bat -v -run='^go_test:archive/tar$'; else GOFLAGS=-tags=cosmontdebug ./run.bash -v -run='^go_test:archive/tar$'; fi
+	  exit: 0
