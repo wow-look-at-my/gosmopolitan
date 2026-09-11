@@ -32,9 +32,7 @@ func readForkExecStatus(fd int, p *byte, np int, pid int) (n int, err error) {
 			return n, err
 		}
 		if waited >= forkExecStatusBudget {
-			forkExecStatusReport(pid)
-			killErr := Kill(pid, SIGKILL)
-			forkExecStatusKilled(pid, killErr)
+			forkExecStatusKill(pid)
 			return 0, ETIMEDOUT
 		}
 		Nanosleep(&step, nil)
@@ -47,67 +45,21 @@ func readForkExecStatus(fd int, p *byte, np int, pid int) (n int, err error) {
 	}
 }
 
-// forkExecStatusReport names a child that has not exec'd by the budget,
-// before the kill. It must not fork: once one child is stuck between fork
-// and exec, every later child of this process sticks the same way, so a
-// helper forked here hangs inside the report.
+// forkExecStatusKill kills a child that is past the budget and names it on
+// stderr. The kill is not silent: the parent is about to report ETIMEDOUT
+// for a spawn that got as far as fork, and only this line says which pid
+// never reached exec.
 //
-// When GOCOSMOFORKDIAG names a directory, the report also writes the pid
-// into <dir>/<pid> and waits for a watcher outside this process to sample
-// the child and remove the file, for at most forkExecDiagWait.
-func forkExecStatusReport(pid int) {
-	dir, ok := Getenv("GOCOSMOFORKDIAG")
-	if !ok || dir == "" {
-		return
-	}
+// It must not fork. Once one child is stuck between fork and exec, every
+// later child of this process sticks the same way, so a helper forked here
+// hangs too.
+func forkExecStatusKill(pid int) {
 	spid := strconv.Itoa(pid)
-	Write(2, []byte("forkExec: child "+spid+" has not exec'd after 120s; killing it\n"))
-	if dir[0] != '/' {
-		return
-	}
-	path := dir + "/" + spid
-	fd, err := Open(path, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644)
-	if err != nil {
-		Write(2, []byte("forkExec: diag file "+path+": "+err.Error()+"\n"))
-		return
-	}
-	Write(fd, []byte(spid+"\n"))
-	Close(fd)
-	step := Timespec{Sec: 1}
-	var stat Stat_t
-	for waited := int64(0); waited < forkExecDiagWait; waited++ {
-		if err := Stat(path, &stat); err != nil {
-			Write(2, []byte("forkExec: child "+spid+" sampled after "+strconv.Itoa(int(waited))+"s\n"))
-			return
-		}
-		Nanosleep(&step, nil)
-	}
-	Write(2, []byte("forkExec: no watcher removed "+path+" within "+strconv.Itoa(forkExecDiagWait)+"s\n"))
-}
-
-// forkExecDiagWait is how long forkExecStatusReport waits for the watcher,
-// in seconds.
-const forkExecDiagWait = 120
-
-// forkExecStatusKilled reports what the kill found: a child that is gone
-// (ESRCH) or already a zombie means the pipe's write end is held elsewhere,
-// not by a stuck child.
-func forkExecStatusKilled(pid int, killErr error) {
-	if v, ok := Getenv("GOCOSMOFORKDIAG"); !ok || v == "" {
-		return
-	}
-	spid := strconv.Itoa(pid)
-	if killErr != nil {
-		Write(2, []byte("forkExec: kill "+spid+": "+killErr.Error()+"\n"))
-		return
-	}
-	var ws WaitStatus
-	wpid, err := Wait4(pid, &ws, WNOHANG, nil)
-	msg := "forkExec: kill " + spid + " ok; wait4(WNOHANG) pid=" + strconv.Itoa(wpid)
-	if err != nil {
-		msg += " err=" + err.Error()
-	} else if wpid == pid {
-		msg += " signaled=" + strconv.Itoa(int(ws.Signal())) + " exited=" + strconv.Itoa(ws.ExitStatus())
+	msg := "forkExec: child " + spid + " has not exec'd after 120s; killing it"
+	if err := Kill(pid, SIGKILL); err != nil {
+		// ESRCH, or a zombie, means the pipe's write end is held somewhere
+		// else. The child is not what the read was waiting on.
+		msg += ": kill: " + err.Error()
 	}
 	Write(2, []byte(msg+"\n"))
 }
