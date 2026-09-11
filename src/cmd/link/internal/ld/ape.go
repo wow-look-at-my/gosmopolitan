@@ -340,18 +340,14 @@ const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 // the APE at "$p". It never touches the APE itself: the kernel refuses
 // the DOS/shell magic, and writing the real header into the running file
 // needs it writable and breaks its checksum, so the COPY is corrected.
-// The copy is keyed by the source's device, inode, size and mtime to the
-// NANOSECOND, or a checksum where stat is missing: a rebuild within one
-// second, in place and at one size, would run the previous binary's copy.
-// stat gets -L so the key describes the TARGET. Both stat implementations
-// lstat by default, and a symlink's own inode and mtime never change when
-// what it points at is rebuilt, so an APE invoked through one on $PATH
-// re-ran its first staged copy for ever.
+// Keyed on the source's device, inode, size and mtime to the NANOSECOND:
+// a same-second in-place rebuild at one size would otherwise run the old
+// copy. stat needs -L, or the key is the symlink's own and a rebuild
+// never moves it. A checksum stands in where stat is missing.
 // Staging also registers the magic with binfmt_misc and records whether
 // the host can bind-mount; both fail silently. With that mark, and only
 // as root, the run binds the copy over the APE's own path in a PRIVATE
-// mount namespace, so argv[0] and /proc/self/exe stay put. Without it
-// argv[0] is the copy, under the original's basename.
+// mount namespace, so argv[0] and /proc/self/exe stay put.
 func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
 	const ddBlockSize = 8
 	data := struct {
