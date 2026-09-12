@@ -948,6 +948,13 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					modroot = gorootSrcCmd
 				}
 			}
+			// A dependency that generates part of its own API ships a package
+			// the compiler reads as empty. Read the generated copy instead.
+			if dir := generateDir(r.dir, modroot); dir != r.dir {
+				r.dir = dir
+				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
+				goto Happy
+			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {
 					data.p, data.err = rp.Import(cfg.BuildContext, buildMode)
