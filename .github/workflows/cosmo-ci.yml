@@ -7,11 +7,6 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
-# One run per branch, so a push does not starve itself; master publishes, so it never cancels.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
-
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
