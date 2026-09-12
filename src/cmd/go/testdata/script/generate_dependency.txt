@@ -1,0 +1,38 @@
+# A module zip carries no generated file. So a dependency that generates part
+# of its own API ships a package the compiler reads as empty, and the consumer
+# fails on a symbol the dependency's source never declares. cmd/go runs that
+# dependency's own directives first.
+
+env GOFLAGS=-mod=mod
+
+# The package declares what it produces, and the zip does not carry it.
+go mod download example.com/generated
+! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# The build reads the generated copy rather than the empty package.
+go build ./...
+
+# The generated tree is in the module cache, beside the module it comes from,
+# rather than inside it: go.sum pins the bytes the proxy served, and a generated
+# file in that tree would report every module as modified.
+exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+go mod verify
+
+# GOGENERATEDEPS=off reads exactly what was fetched, so the symbol is undefined.
+env GOGENERATEDEPS=off
+! go build ./...
+stderr 'undefined: lang\.Name'
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generated v1.0.0
+-- use.go --
+package use
+
+import "example.com/generated/lang"
+
+var Name = lang.Name()
