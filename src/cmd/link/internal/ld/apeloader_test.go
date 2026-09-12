@@ -29,18 +29,13 @@ func apeLoaderSource(t *testing.T) string {
 }
 
 // TestApeLoaderScanStartsAtTheImage pins the lower bound of the loader's
-// live-memory scan.
+// live-memory scan to the lowest PT_LOAD. A bound of zero walks from the
+// start of the address space, meets the loader's own Mach-O text, and
+// refuses every ET_EXEC image.
 //
-// The scan refuses to map a fixed image over memory that is already live.
-// Its lower bound has to be the lowest PT_LOAD address. A bound of zero
-// makes it walk from the start of the address space, where the first
-// readable region it meets is the loader's own Mach-O text, so every
-// ET_EXEC image is refused.
-//
-// A machine caches the compiled loader under a path carrying only the
-// loader's version, so whichever APE runs first decides the loader every
-// later APE reuses. A loader bug therefore does not reliably reach a test
-// that runs an APE, and this reads the source instead.
+// This reads the source rather than running an APE: a machine caches the
+// compiled loader under the loader's version alone, so whichever APE runs
+// first decides the loader every later APE reuses.
 func TestApeLoaderScanStartsAtTheImage(t *testing.T) {
 	src := apeLoaderSource(t)
 
