@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin || dragonfly || netbsd
+//go:build cosmo || darwin || dragonfly || netbsd
 
 package routebsd
 
