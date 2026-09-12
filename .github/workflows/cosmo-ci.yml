@@ -86,6 +86,9 @@ jobs:
   suite:
     timeout-minutes: 150
     needs: [build, build-linux]
+    env:
+      # dist multiplies each per-package test timeout by this: a loaded runner runs out the clock, and that red skips the publish.
+      GO_TEST_TIMEOUT_SCALE: 3
     permissions:
       id-token: write
       contents: read
@@ -275,8 +278,11 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    timeout-minutes: 60
+    timeout-minutes: 150
     needs: build-linux
+    env:
+      # Same clock, same cure as the suite job. The job cap rises with it, or the cap becomes the new timeout.
+      GO_TEST_TIMEOUT_SCALE: 3
     permissions:
       id-token: write
       contents: read
