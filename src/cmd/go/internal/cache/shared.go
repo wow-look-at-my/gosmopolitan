@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,6 +41,13 @@ import (
 type SharedCache struct {
 	*DiskCache
 	remote *cacheclient.WebBackend
+
+	// What each tier answered, and what it moved. The remote's own totals
+	// cover the wire; these two cover the disk, which nothing else counts.
+	localHits     atomic.Int64
+	localHitBytes atomic.Int64
+	localPuts     atomic.Int64
+	localPutBytes atomic.Int64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -182,7 +190,12 @@ func (c *SharedCache) putVerified(id ActionID, out OutputID, data []byte) {
 	}
 	// allowVerify is false: this body came off the network, so the local
 	// reproducibility check has nothing to say about it.
-	_ = c.DiskCache.putIndexEntry(id, out, int64(len(data)), false)
+	if err := c.DiskCache.putIndexEntry(id, out, int64(len(data)), false); err != nil {
+		return
+	}
+	// A fetched body lands on disk like any other, so it is a local put too.
+	c.localPuts.Add(1)
+	c.localPutBytes.Add(int64(len(data)))
 }
 
 // Get answers from disk, and asks the shared tier only when disk misses. A
@@ -200,6 +213,8 @@ func (c *SharedCache) Get(id ActionID) (Entry, error) {
 func (c *SharedCache) getTiered(id ActionID) (Entry, string, error) {
 	entry, err := c.DiskCache.Get(id)
 	if err == nil {
+		c.localHits.Add(1)
+		c.localHitBytes.Add(entry.Size)
 		return entry, tierDisk, nil
 	}
 
@@ -228,6 +243,8 @@ func (c *SharedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	if err != nil {
 		return outputID, size, err
 	}
+	c.localPuts.Add(1)
+	c.localPutBytes.Add(size)
 	c.offer(id, outputID)
 	return outputID, size, nil
 }
@@ -253,8 +270,33 @@ func (c *SharedCache) offer(id ActionID, outputID OutputID) {
 func (c *SharedCache) Close() error {
 	c.closeOnce.Do(func() {
 		c.closeErr = errors.Join(c.remote.Close(), c.DiskCache.Close())
+		c.reportTiers()
 	})
 	return c.closeErr
+}
+
+// reportTiers names what each tier answered and what it moved. Close drains
+// the uploads first, so the remote totals here are final rather than in
+// flight. Without this line a build reports its wall time and nothing about
+// where that time went, which is how a cache regression stays invisible.
+func (c *SharedCache) reportTiers() {
+	web := c.remote.SummarySnapshot()
+	cacheNotice("cache: local %s, %s stored | server %s, %s pushed | index %s",
+		countBytes(c.localHits.Load(), c.localHitBytes.Load()),
+		countBytes(c.localPuts.Load(), c.localPutBytes.Load()),
+		countBytes(int64(web.Hits), int64(web.HitBytes)),
+		countBytes(int64(web.Puts), int64(web.PutBytes)),
+		formatMB(int64(web.IndexBytes)))
+}
+
+// countBytes renders one tier as its entry count and its size.
+func countBytes(n, bytes int64) string {
+	return strconv.FormatInt(n, 10) + " (" + formatMB(bytes) + ")"
+}
+
+// formatMB renders a byte total in MB, which is the scale a build moves.
+func formatMB(bytes int64) string {
+	return strconv.FormatFloat(float64(bytes)/(1<<20), 'f', 1, 64) + " MB"
 }
 
 // decodeOutputID parses the hex outputID the shared tier reports.
