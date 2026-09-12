@@ -286,6 +286,7 @@ var (
 	dlsymNameIoctl     = []byte("ioctl\x00")
 	dlsymNameMincore   = []byte("mincore\x00")
 	dlsymNameMadvise   = []byte("madvise\x00")
+	dlsymNameSysctl    = []byte("sysctl\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
@@ -360,6 +361,26 @@ var cosmoDarwinMadviseFn uintptr
 // sighandler sent SIGQUIT back to the thread that already held it.
 var cosmoDarwinKillFn uintptr
 
+// cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved
+// at startup. The Syslib exports sysctlbyname only, and the routing
+// table has no name to ask for: net.route is reached by number alone.
+// Zero when unresolved, which CosmoDarwinSysctl reports as a failure.
+var cosmoDarwinSysctlFn uintptr
+
+// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB. It
+// returns the libc return value, 0 or -1; the caller reads oldlen for
+// how much was written. Six plain integer arguments, so the ordinary
+// call works: sysctl is not variadic.
+func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldlen *uintptr, newp unsafe.Pointer, newlen uintptr) int32 {
+	if cosmoDarwinSysctlFn == 0 {
+		return -1
+	}
+	return int32(cosmoLibcCall6(cosmoDarwinSysctlFn,
+		uintptr(unsafe.Pointer(mib)), uintptr(miblen),
+		uintptr(old), uintptr(unsafe.Pointer(oldlen)),
+		uintptr(newp), newlen))
+}
+
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -383,6 +404,7 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinSysctlFn = cosmoDlsym(&dlsymNameSysctl[0])
 	cosmoDarwinKillFn = cosmoDlsym(&dlsymNameKill[0])
 	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{

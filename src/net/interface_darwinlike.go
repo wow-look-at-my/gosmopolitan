@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build cosmo || darwin
+
+// The Darwin routing-socket reader. cosmo shares it: only an Apple
+// kernel serves this table, and one APE may boot on one.
+
 package net
 
 import (
@@ -13,9 +18,9 @@ func interfaceMessages(ifindex int) ([]routebsd.Message, error) {
 	return routebsd.FetchRIBMessages(syscall.NET_RT_IFLIST, ifindex)
 }
 
-// interfaceMulticastAddrTable returns addresses for a specific
+// bsdInterfaceMulticastAddrTable returns addresses for a specific
 // interface.
-func interfaceMulticastAddrTable(ifi *Interface) ([]Addr, error) {
+func bsdInterfaceMulticastAddrTable(ifi *Interface) ([]Addr, error) {
 	msgs, err := routebsd.FetchRIBMessages(syscall.NET_RT_IFLIST2, ifi.Index)
 	if err != nil {
 		return nil, err

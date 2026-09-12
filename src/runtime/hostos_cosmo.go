@@ -6,6 +6,8 @@
 
 package runtime
 
+import "unsafe"
+
 // CosmoHostOS returns the operating system the process is running on:
 // "linux", "darwin", "windows", or "unknown" for a host this runtime
 // has no port for. It is authoritative, not a guess. The APE entry stub
@@ -92,4 +94,33 @@ func CosmoHostRootCerts() [][]byte {
 		return nil
 	}
 	return ntRootCerts()
+}
+
+// CosmoDarwinSysctl issues Apple's sysctl with a numeric MIB and reports
+// how many bytes it wrote. A nil out asks for the size alone, which is
+// how a caller sizes a buffer for a table that changes under it.
+//
+// Only a Darwin host answers; anywhere else this is -1 and nobody asked
+// the kernel. The routing table is the reason it exists: net.route has
+// no name, so sysctlbyname cannot reach it, and only the MIB form can.
+// See syscall.RouteRIB.
+//
+//go:linkname syscall_cosmoDarwinSysctl syscall.cosmoDarwinSysctl
+func syscall_cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
+	return CosmoDarwinSysctl(mib, out)
+}
+
+func CosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
+	if __hostos != _HOSTXNU || len(mib) == 0 {
+		return 0, false
+	}
+	n := uintptr(len(out))
+	var p unsafe.Pointer
+	if len(out) > 0 {
+		p = unsafe.Pointer(&out[0])
+	}
+	if cosmoDarwinSysctlCall(&mib[0], uint32(len(mib)), p, &n, nil, 0) != 0 {
+		return 0, false
+	}
+	return int(n), true
 }
