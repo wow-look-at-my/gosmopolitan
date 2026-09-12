@@ -6,8 +6,6 @@ package load
 
 import (
 	"bufio"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"io/fs"
@@ -16,9 +14,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
+	"cmd/go/internal/modfetch"
 	"cmd/go/internal/str"
 )
 
@@ -133,17 +131,20 @@ func allPresent(dir string, produces []string) bool {
 	return true
 }
 
-// generateModule copies a module out of the read-only module cache and runs
-// the named package's directives in the copy. It answers the copy's package
-// directory. The copy is keyed by the module's own cache path, so a second
-// build of the same dependency reuses it.
+// generateModule answers the package directory of a generated module tree,
+// building that tree when it is not there yet.
+//
+// It lives in the module cache, beside the module it comes from, so it is
+// cached and shared exactly like every other fetched thing. It is a sibling of
+// the extracted module rather than the extracted module itself: go.sum pins the
+// bytes the proxy served, `go mod verify` hashes that tree against it, and a
+// generated file inside it would report every module as modified.
 func generateModule(modroot, pkgrel string) (string, error) {
-	cacheDir, _, err := cache.DefaultDir()
+	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256([]byte(modroot))
-	root := filepath.Join(cacheDir, "generate", hex.EncodeToString(sum[:10]))
+	root := filepath.Join(cfg.GOMODCACHE, "cache", "generate", rel)
 	if err := os.MkdirAll(filepath.Dir(root), 0o777); err != nil {
 		return "", err
 	}
@@ -156,11 +157,11 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	}
 	defer unlock()
 
-	done := filepath.Join(root, ".generated")
+	done := root + ".generated"
 	if _, err := os.Stat(done); err == nil {
 		return filepath.Join(root, pkgrel), nil
 	}
-	if err := os.RemoveAll(root); err != nil {
+	if err := modfetch.RemoveAll(root); err != nil {
 		return "", err
 	}
 	if err := copyTree(modroot, root); err != nil {
@@ -172,16 +173,48 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	if err := os.WriteFile(done, nil, 0o666); err != nil {
 		return "", err
 	}
+	// The module cache is read-only, and what it holds now is a build input
+	// like any other.
+	if !cfg.ModCacheRW {
+		makeTreeReadOnly(root)
+	}
 	return filepath.Join(root, pkgrel), nil
 }
 
-// runGenerate runs `go generate` for one package of the copied module.
+// makeTreeReadOnly drops write permission on dir and everything under it,
+// children before parents.
+func makeTreeReadOnly(dir string) {
+	var dirs []string
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if info, err := os.Stat(dirs[i]); err == nil {
+			os.Chmod(dirs[i], info.Mode()&^0o222)
+		}
+	}
+}
+
+// runGenerate runs `go generate` for one package of the generated tree.
+//
+// A directive is a command a dependency's author wrote, and a build runs it
+// without anybody reading it first. So it runs confined: it may write the tree
+// it generates and the caches a go command needs, and nothing else. The network
+// stays reachable, because a generator that fetches its own inputs is the case
+// this exists for.
 func runGenerate(root, pkgrel string) error {
 	goCmd, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(goCmd, "generate", "./"+filepath.ToSlash(pkgrel))
+	argv, err := sandboxArgv(root, goCmd, "generate", "./"+filepath.ToSlash(pkgrel))
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	// A generator is a program of this module, so it builds against the same

@@ -7,10 +7,17 @@ env GOFLAGS=-mod=mod
 
 # The package declares what it produces, and the zip does not carry it.
 go mod download example.com/generated
-! exists $GOMODCACHE/example.com/generated@v1.0.0/lang/lang.gen.go
+! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
 
 # The build reads the generated copy rather than the empty package.
 go build ./...
+
+# The generated tree is in the module cache, beside the module it comes from,
+# rather than inside it: go.sum pins the bytes the proxy served, and a generated
+# file in that tree would report every module as modified.
+exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+go mod verify
 
 # GOGENERATEDEPS=off reads exactly what was fetched, so the symbol is undefined.
 env GOGENERATEDEPS=off
