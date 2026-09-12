@@ -2,6 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build cosmo || darwin
+
+// The Darwin routing stack. cosmo shares it: an APE boots on three
+// kernels and only the Apple one serves this table at all.
+
 package routebsd
 
 import "syscall"
@@ -27,8 +32,8 @@ func probeRoutingStack() (int, map[int]*wireFormat) {
 	ifmam2.parse = ifmam2.parseInterfaceMulticastAddrMessage
 	// Darwin kernels require 32-bit aligned access to routing facilities.
 	return 4, map[int]*wireFormat{
-		syscall.RTM_NEWADDR:   ifam,
-		syscall.RTM_DELADDR:   ifam,
+		rtmNewAddr:            ifam,
+		rtmDelAddr:            ifam,
 		syscall.RTM_IFINFO:    ifm,
 		syscall.RTM_NEWMADDR:  ifmam,
 		syscall.RTM_DELMADDR:  ifmam,
