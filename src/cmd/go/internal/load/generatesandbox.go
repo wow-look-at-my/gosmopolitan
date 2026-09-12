@@ -80,14 +80,23 @@ func seatbeltArgv(writable string, argv []string) ([]string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("(version 1)(allow default)(deny file-write*)")
-	for _, dir := range append([]string{writable}, writableCaches()...) {
+	// A device write is not a file write. /dev/null in particular: a shell
+	// redirects to it constantly, and an APE's own bootstrap header does.
+	b.WriteString(`(allow file-write-data (subpath "/dev"))`)
+	dirs := append([]string{writable, os.TempDir()}, writableCaches()...)
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o777); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(&b, `(allow file-write* (subpath %q))`, dir)
+		// Seatbelt matches the REAL path. On darwin os.TempDir() is
+		// /var/folders/..., a symlink to /private/var/folders/..., so a rule
+		// written from the unresolved name matches nothing at all.
+		real, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			real = dir
+		}
+		fmt.Fprintf(&b, `(allow file-write* (subpath %q))`, real)
 	}
-	// A generator writes temporary files, and every toolchain expects to.
-	fmt.Fprintf(&b, `(allow file-write* (subpath %q))`, os.TempDir())
 	return append([]string{sandboxExec, "-p", b.String()}, argv...), nil
 }
 
@@ -95,8 +104,15 @@ func seatbeltArgv(writable string, argv []string) ([]string, error) {
 // work: the build cache and the module cache the generator's own dependencies
 // land in.
 func writableCaches() []string {
+	// An APE stages a runnable copy of itself before it can exec, and the go
+	// command being run here is one. Its directory is not os.TempDir(): it is
+	// /tmp unless APE_RUNDIR names another.
+	apeRunDir := os.Getenv("APE_RUNDIR")
+	if apeRunDir == "" {
+		apeRunDir = "/tmp"
+	}
 	var dirs []string
-	for _, dir := range []string{cfg.GOMODCACHE, os.Getenv("GOCACHE")} {
+	for _, dir := range []string{cfg.GOMODCACHE, os.Getenv("GOCACHE"), apeRunDir} {
 		if dir != "" && filepath.IsAbs(dir) {
 			dirs = append(dirs, dir)
 		}
