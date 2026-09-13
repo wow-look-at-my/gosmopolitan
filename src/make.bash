@@ -199,6 +199,13 @@ if [[ ! -f cmd/vendor/github.com/wow-look-at-my/go-s3-server/go.mod ]]; then
 	exit 1
 fi
 
+# A submodule follows this repository's branch, so a build reads the branch a
+# change is on rather than a commit somebody wrote down once. A remote this
+# cannot reach leaves the checkout alone.
+if [[ "${GOSUBMODULEBRANCH:-}" != "off" ]]; then
+	./submodulebranch.bash
+fi
+
 rm -f cmd/dist/dist
 bootstrapenv "$GOROOT_BOOTSTRAP/bin/go" build -o cmd/dist/dist ./cmd/dist
 

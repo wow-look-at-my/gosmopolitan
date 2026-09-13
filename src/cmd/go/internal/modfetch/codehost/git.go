@@ -5,6 +5,7 @@
 package codehost
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -933,7 +934,83 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 		return nil, err
 	}
 
+	archive, err = r.addGitlinks(ctx, info.Name, subdir, archive)
+	if err != nil {
+		return nil, err
+	}
 	return io.NopCloser(bytes.NewReader(archive)), nil
+}
+
+// gitlinksFile is where a zip records the commit each submodule points at.
+const gitlinksFile = ".gitlinks"
+
+// addGitlinks writes the submodule commits into the archive.
+//
+// A tree records a submodule as a gitlink: a path and the commit it points at.
+// `git archive` writes an empty directory for one and drops the commit, so a
+// fetched module names which submodules exist and not which commit each one is.
+// .gitmodules survives on its own, because it is a tracked file.
+//
+// Each line is a commit and a path, the shape `git ls-tree` prints them in.
+func (r *gitRepo) addGitlinks(ctx context.Context, rev, subdir string, archive []byte) ([]byte, error) {
+	cmdline := []any{"git", "ls-tree", "-r", "--full-tree", "-z", rev}
+	if subdir != "" {
+		cmdline = append(cmdline, subdir)
+	}
+	out, err := r.runGit(ctx, cmdline...)
+	if err != nil {
+		return archive, nil
+	}
+
+	var links bytes.Buffer
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, ok := strings.Cut(entry, "\t")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 3 || fields[0] != "160000" {
+			continue
+		}
+		fmt.Fprintf(&links, "%s %s\n", fields[2], path)
+	}
+	if links.Len() == 0 {
+		return archive, nil
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	prefix := "prefix/"
+	for _, entry := range reader.File {
+		// CreateRaw and OpenRaw copy the compressed bytes across untouched, so
+		// the entries git archive wrote keep the content they already had.
+		dst, err := writer.CreateRaw(&entry.FileHeader)
+		if err != nil {
+			return nil, err
+		}
+		src, err := entry.OpenRaw()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.Copy(dst, src); err != nil {
+			return nil, err
+		}
+	}
+	dst, err := writer.Create(prefix + gitlinksFile)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dst.Write(links.Bytes()); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ensureGitAttributes makes sure export-subst and export-ignore features are

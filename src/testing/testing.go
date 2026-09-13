@@ -2984,8 +2984,10 @@ func Main(matchString func(pat, str string) (bool, error), tests []InternalTest,
 	os.Exit(MainStart(matchStringOnly(matchString), tests, benchmarks, nil, examples).Run())
 }
 
-// M is a type passed to a TestMain function to run the actual tests.
-type M struct {
+// Runner holds one package's tests, benchmarks, fuzz targets and examples,
+// reads the -test.* flags, runs what they select, and reports an exit code.
+// A TestMain function is handed one.
+type Runner struct {
 	deps        testDeps
 	tests       []InternalTest
 	benchmarks  []InternalBenchmark
@@ -3001,6 +3003,9 @@ type M struct {
 	// harness calls os.Exit with this code. See #34129.
 	exitCode int
 }
+
+// M is an alias for [Runner]. New code writes Runner.
+type M = Runner
 
 // testDeps is an internal interface of functionality that is
 // passed into this package by a test's generated main package.

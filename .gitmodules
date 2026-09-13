@@ -7,9 +7,11 @@
 [submodule "src/cmd/vendor/github.com/wow-look-at-my/go-s3-server"]
 	path = src/cmd/vendor/github.com/wow-look-at-my/go-s3-server
 	url = https://github.com/wow-look-at-my/go-s3-server.git
+	branch = .
 [submodule "src/cmd/vendor/github.com/wow-look-at-my/go-containers"]
 	path = src/cmd/vendor/github.com/wow-look-at-my/go-containers
 	url = https://github.com/wow-look-at-my/go-containers.git
+	branch = .
 [submodule "src/cmd/vendor/github.com/pierrec/lz4/v4"]
 	path = src/cmd/vendor/github.com/pierrec/lz4/v4
 	url = https://github.com/pierrec/lz4.git

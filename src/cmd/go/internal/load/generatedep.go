@@ -6,7 +6,6 @@ package load
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
@@ -50,11 +50,11 @@ func generateDir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel)
 	if err != nil {
-		// The compiler's own "undefined" error is the honest report when the
-		// repair could not run. Name the reason rather than fail the whole
-		// build here: a package can be loaded and never compiled.
-		fmt.Fprintf(os.Stderr, "go: could not generate %s: %v\n", dir, err)
-		return dir
+		// A package whose directive did not run is a package missing whatever
+		// that directive writes. Handing it back builds something that reports
+		// an undefined symbol somewhere else, or compiles and panics when it is
+		// asked for what it never generated.
+		base.Fatalf("go: generating %s: %v", dir, err)
 	}
 	return out
 }
