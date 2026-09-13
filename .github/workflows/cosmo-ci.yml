@@ -16,7 +16,6 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
       matrix:
         build-os: [macos-latest, windows-latest]
 
@@ -96,7 +95,6 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -149,8 +147,6 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
-      # Each leg is one host's answer. A cancelled leg reports nothing about that host, so a sibling's red must not take it.
-      fail-fast: false
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -289,8 +285,6 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      # Each leg is one port's answer. A cancelled leg reports nothing about that port, so a sibling's red must not take it.
-      fail-fast: false
       matrix:
         port: [js, wasip1]
 
@@ -438,7 +432,6 @@ jobs:
     timeout-minutes: 25
     needs: publish-create
     strategy:
-      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
