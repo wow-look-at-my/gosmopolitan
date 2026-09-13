@@ -65,9 +65,14 @@ while read -r key value; do
 	# A repository can publish several modules, and a requirement names the
 	# nested one. So the module this repository declares is a prefix of the
 	# path the version files carry, not always the whole of it.
+	# `sed -i` takes a mandatory backup suffix on BSD and none on GNU, so an
+	# in-place edit spells differently on each. A temp file and a move is the
+	# one spelling both agree on.
 	for f in src/cmd/go.mod src/cmd/vendor/modules.txt; do
 		[[ -f "$f" ]] || continue
-		sed -i -E "s|(${module}(/[^[:space:]]+)?) v[0-9][^[:space:]]*|\1 $version|g" "$f"
+		tmp=$(mktemp)
+		sed -E "s|(${module}(/[^[:space:]]+)?) v[0-9][^[:space:]]*|\1 $version|g" "$f" >"$tmp"
+		mv "$tmp" "$f"
 	done
 	echo "submodulebranch: $path at $version" >&2
 done <<<"$follows"
