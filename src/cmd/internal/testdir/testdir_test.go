@@ -1059,7 +1059,14 @@ func (t test) run() error {
 		runInDir = ""
 		var out []byte
 		var err error
-		if len(flags)+len(args) == 0 && t.goGcflagsIsEmpty() && !*linkshared && goarch == runtime.GOARCH && goos == runtime.GOOS && goexp == goExperiment && godebug == goDebug {
+		plain := len(flags)+len(args) == 0 && t.goGcflagsIsEmpty() && !*linkshared && goexp == goExperiment && godebug == goDebug
+		if exe, name, berr := batchFor(t.gorootTestDir, t.goFileName()); plain && berr == nil && name != "" {
+			// The whole run corpus is one executable, built once. A cross
+			// target never reaches the path below, so without this each of
+			// these programs costs a `go run`: the go command, a compile, a
+			// link and a fresh process, per program.
+			out, err = runcmd(exe, name)
+		} else if plain && goarch == runtime.GOARCH && goos == runtime.GOOS {
 			// If we're not using special go command flags,
 			// skip all the go command machinery.
 			// This avoids any time the go command would

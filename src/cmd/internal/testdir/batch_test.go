@@ -32,10 +32,11 @@ import (
 // way it always did.
 
 // batchFor answers the dispatcher and the name this test file takes inside it.
+// The file is named the way the runner names it, relative to the corpus root.
 // An empty name means the batch does not carry the file, and the caller builds
 // it the way it always did.
-func batchFor(goroot, file string) (exe, name string, err error) {
-	theBatch.once.Do(func() { theBatch.build(goroot) })
+func batchFor(corpus, file string) (exe, name string, err error) {
+	theBatch.once.Do(func() { theBatch.build(corpus) })
 	if theBatch.err != nil {
 		return "", "", theBatch.err
 	}
@@ -116,7 +117,7 @@ func rewrite(src, id string) string {
 	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\nfunc Main() {", 1)
 }
 
-func (b *batch) build(goroot string) {
+func (b *batch) build(corpus string) {
 	dir, err := os.MkdirTemp("", "testdir-batch-")
 	if err != nil {
 		b.err = err
@@ -124,21 +125,24 @@ func (b *batch) build(goroot string) {
 	}
 	b.dir = dir
 
-	// The corpus is the same set of directories the runner walks, named by the
-	// same absolute path it hands to each test.
-	var files []string
+	// The corpus is the same set of directories the runner walks, and each file
+	// is named the way the runner names it: relative to the corpus root.
+	var rels []string
 	for _, d := range dirs {
-		found, err := filepath.Glob(filepath.Join(goroot, "test", d, "*.go"))
+		found, err := filepath.Glob(filepath.Join(corpus, d, "*.go"))
 		if err != nil {
 			b.err = err
 			return
 		}
-		files = append(files, found...)
+		for _, f := range found {
+			rels = append(rels, filepath.Join(d, filepath.Base(f)))
+		}
 	}
 
 	var programs []program
 	n := 0
-	for _, file := range files {
+	for _, rel := range rels {
+		file := filepath.Join(corpus, rel)
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			continue
@@ -158,7 +162,7 @@ func (b *batch) build(goroot string) {
 			return
 		}
 		programs = append(programs, program{ID: id})
-		b.ids[file] = id
+		b.ids[rel] = id
 		n++
 	}
 	if n == 0 {
