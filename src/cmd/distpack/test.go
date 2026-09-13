@@ -28,6 +28,9 @@ var srcRules = []testRule{
 	{name: "go/src/bytes/bytes.go"},
 	{name: "**/.DS_Store", exclude: true},
 	{name: "go/.git", exclude: true},
+	// Each vendored submodule carries one, and it points at a directory the
+	// reader's machine does not have.
+	{name: "go/src/cmd/vendor/**/.git", exclude: true},
 	{name: "go/.gitattributes", exclude: true},
 	{name: "go/.github", exclude: true},
 	{name: "go/.jj", exclude: true},

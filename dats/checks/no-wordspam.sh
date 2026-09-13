@@ -32,6 +32,71 @@ fi
 path=$1
 [ -f "$path" ] || exit 0
 new=$(cat "$path")
+tab=$(printf '\t')
+
+# skipBlanks strips leading spaces and tabs, leaving the rest in `trimmed`.
+skipBlanks() {
+	trimmed=$1
+	while :; do
+		case $trimmed in
+		" "*) trimmed=${trimmed# } ;;
+		"$tab"*) trimmed=${trimmed#"$tab"} ;;
+		*) return 0 ;;
+		esac
+	done
+}
+
+# structural reports whether a trimmed line opens a list, heading, table,
+# quote or fence rather than prose.
+structural() {
+	case $1 in
+	'|'* | '>'* | '#'* | '*'* | '+'* | '-'* | '```'*) return 0 ;;
+	esac
+	digits=${1%%[!0-9]*}
+	[ -n "$digits" ] || return 1
+	case ${1#"$digits"} in
+	.*) return 0 ;;
+	esac
+	return 1
+}
+
+# paraFlush ends a paragraph and keeps its word count when it was prose.
+paraFlush() {
+	if [ "$skip" -eq 0 ] && [ "$words" -gt "$worst" ]; then
+		worst=$words
+	fi
+	words=0
+	skip=0
+}
+
+# worstParagraph prints the longest prose paragraph of a file, in words.
+# A blank line ends a paragraph, and so does any structural line: a list
+# item, a heading, a table row, a quote or a fence. A tight list is a
+# list, not one long paragraph.
+worstParagraph() {
+	src=$1
+	worst=0
+	words=0
+	skip=0
+	while IFS= read -r text || [ -n "$text" ]; do
+		skipBlanks "$text"
+		if [ -z "$trimmed" ]; then
+			paraFlush
+			continue
+		fi
+		if structural "$trimmed"; then
+			paraFlush
+			skip=1
+		fi
+		# Word splitting counts the fields, so globbing stays off here.
+		set -f
+		set -- $text
+		words=$((words + $#))
+		set +f
+	done <"$src"
+	paraFlush
+	printf '%d\n' "$worst"
+}
 
 fail() {
 	printf 'BLOCKED (wordspam): %s\n\n' "$1" >&2
@@ -51,18 +116,7 @@ case "$path" in
 	[ "$n" -le "$MAX_MD_BYTES" ] ||
 		fail "$path would be $n bytes, over the $MAX_MD_BYTES budget. Extract or delete."
 
-	# Longest prose paragraph, in words. Tables, lists, quotes, headings
-	# and fenced blocks are not prose and do not count.
-	# A blank line ends a paragraph, and so does any structural line: a
-	# list item, a heading, a table row, a quote or a fence. A tight list
-	# is a list, not one long paragraph.
-	worst=$(awk '
-		function flush() { if (!skip && n > worst) worst = n; n = 0; skip = 0 }
-		/^[[:space:]]*$/ { flush(); next }
-		/^[[:space:]]*([|>#*+-]|[0-9]+\.|```)/ { flush(); skip = 1 }
-		{ n += NF }
-		END { flush(); print worst + 0 }
-	' "$path")
+	worst=$(worstParagraph "$path")
 	[ "$worst" -le "$MAX_PARA" ] ||
 		fail "$path has a $worst-word paragraph, over the $MAX_PARA-word cap."
 	;;
@@ -73,17 +127,38 @@ hit=$(printf '%s\n' "$new" | grep -v 'WORDSPAM-SELF' | grep -v '^banned=' |
 	grep -inE "^[[:space:]]*(//|#|::|\*|--)?[[:space:]]*.*($banned)" | head -3 || true)
 [ -z "$hit" ] || fail "changelog phrasing in $path:"$'\n'"$hit"
 
-# Longest run of adjacent comment lines. A compiler or generator
-# directive is not prose and does not count: a //sys block is the
-# declaration of a syscall, and //go:nosplit is a property of the
+# commentRun prints the longest run of adjacent comment lines. A compiler
+# or generator directive is not prose and does not count: a //sys block is
+# the declaration of a syscall, and //go:nosplit is a property of the
 # function under it. Neither breaks the run either, so prose cannot hide
 # behind one.
-runlen=$(awk '
-	/^[[:space:]]*\/\/(go:|sys[[:space:]]|sysnb[[:space:]]|export[[:space:]]|line[[:space:]]|extern[[:space:]]|nolint|cgo_)/ { next }
-	/^[[:space:]]*(\/\/|#|::)/ { if (++run > worst) worst = run; next }
-	{ run = 0 }
-	END { print worst + 0 }
-' "$path")
+commentRun() {
+	src=$1
+	worst=0
+	run=0
+	while IFS= read -r text || [ -n "$text" ]; do
+		skipBlanks "$text"
+		case $trimmed in
+		"//go:"* | "//nolint"* | "//cgo_"* | \
+			"//sys "* | "//sys$tab"* | "//sysnb "* | "//sysnb$tab"* | \
+			"//export "* | "//export$tab"* | "//line "* | "//line$tab"* | \
+			"//extern "* | "//extern$tab"*)
+			continue
+			;;
+		esac
+		case $trimmed in
+		"//"* | "#"* | "::"*)
+			run=$((run + 1))
+			[ "$run" -le "$worst" ] || worst=$run
+			continue
+			;;
+		esac
+		run=0
+	done <"$src"
+	printf '%d\n' "$worst"
+}
+
+runlen=$(commentRun "$path")
 case "$path" in
 *.md | *.txt) ;;
 *)

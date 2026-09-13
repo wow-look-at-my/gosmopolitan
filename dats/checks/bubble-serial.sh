@@ -14,6 +14,110 @@ set -uo pipefail
 root=${1:-.}
 fail=0
 
+# setFuncName puts the name a top-level `func` line declares into `fname`.
+setFuncName() {
+	case $1 in
+	"func "[A-Za-z_]*) ;;
+	*) return 0 ;;
+	esac
+	fname=${1#"func "}
+	fname=${fname%%[[(]*}
+}
+
+# serialHelpers prints each non-test func whose body names Serial().
+serialHelpers() {
+	fname=""
+	for src in "$@"; do
+		while IFS= read -r text || [ -n "$text" ]; do
+			setFuncName "$text"
+			case $text in
+			*"Serial()"*) ;;
+			*) continue ;;
+			esac
+			case $fname in
+			"" | Test*) continue ;;
+			esac
+			printf '%s\n' "$fname"
+		done <"$src"
+	done
+}
+
+# callsHelper reports whether its argument names a call to a known helper.
+callsHelper() {
+	for want in $helpers; do
+		case $1 in
+		*"$want("*) return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# helperCallers prints each non-test func that calls a known helper, which
+# is how a helper's reach grows one hop per pass.
+helperCallers() {
+	fname=""
+	for src in "$@"; do
+		while IFS= read -r text || [ -n "$text" ]; do
+			setFuncName "$text"
+			callsHelper "$text" || continue
+			case $fname in
+			"" | Test*) continue ;;
+			esac
+			printf '%s\n' "$fname"
+		done <"$src"
+	done
+}
+
+# bubblePairs prints each Test func and the bubble body it hands to
+# synctest.Test, separated by a tab.
+bubblePairs() {
+	wrap=""
+	for src in "$@"; do
+		while IFS= read -r text || [ -n "$text" ]; do
+			case $text in
+			"func Test"*"(t *testing.T)"*)
+				wrap=${text#"func "}
+				wrap=${wrap%%(*}
+				;;
+			esac
+			case $text in
+			*"synctest.Test(t, test"*) ;;
+			*) continue ;;
+			esac
+			body=${text#*"synctest.Test(t, "}
+			body=${body%%)*}
+			case $body in
+			test?*) ;;
+			*) continue ;;
+			esac
+			case $body in
+			*[!A-Za-z0-9_]*) continue ;;
+			esac
+			[ -n "$wrap" ] || continue
+			printf '%s\t%s\n' "$wrap" "$body"
+		done <"$src"
+	done
+}
+
+# funcBody prints a top-level func's source, from its `func NAME(` line to
+# the closing brace in column one.
+funcBody() {
+	open="func $1("
+	shift
+	found=0
+	for src in "$@"; do
+		while IFS= read -r text || [ -n "$text" ]; do
+			case $text in
+			"$open"*) found=1 ;;
+			esac
+			[ "$found" -eq 1 ] || continue
+			printf '%s\n' "$text"
+			[ "$text" = "}" ] || continue
+			return 0
+		done <"$src"
+	done
+}
+
 # Per directory: which non-test funcs reach Serial(), directly or through
 # another one, and which bubble bodies call one of those.
 while IFS= read -r dir; do
@@ -21,43 +125,31 @@ while IFS= read -r dir; do
 	[ -n "$files" ] || continue
 	grep -lq 'synctest\.Test(' $files 2>/dev/null || continue
 
-	helpers=$(awk '
-		/^func [A-Za-z_]/ { name = $2; sub(/[[(].*/, "", name) }
-		/Serial\(\)/      { if (name != "" && name !~ /^Test/) print name }
-	' $files | sort -u)
+	helpers=$(serialHelpers $files | sort -u)
 	[ -n "$helpers" ] || continue
 
-	for _ in 1 2 3; do
-		re=$(printf '%s|' $helpers | sed 's/|$//')
-		more=$(awk -v re="$re" '
-			/^func [A-Za-z_]/ { name = $2; sub(/[[(].*/, "", name) }
-			$0 ~ "(" re ")\\(" { if (name != "" && name !~ /^Test/) print name }
-		' $files | sort -u)
+	# Three hops of reach, which is as deep as a test helper chain goes.
+	for pass in 1 2 3; do
+		more=$(helperCallers $files | sort -u)
 		helpers=$(printf '%s\n%s\n' "$helpers" "$more" | sort -u)
 	done
-	re=$(printf '%s|' $helpers | sed 's/|$//')
 
 	# Each wrapper, the bubble body it runs, and whether it took the barrier.
 	while IFS=$'\t' read -r wrapper body; do
 		[ -n "$body" ] || continue
-		bodysrc=$(awk -v f="func $body(" 'index($0,f)==1{p=1} p{print} p&&/^}$/{exit}' $files)
-		printf '%s' "$bodysrc" | grep -qE "($re)\(" || continue
+		bodysrc=$(funcBody "$body" $files)
+		callsHelper "$bodysrc" || continue
 
-		wrapsrc=$(awk -v f="func $wrapper(" 'index($0,f)==1{p=1} p{print} p&&/^}$/{exit}' $files)
-		if ! printf '%s' "$wrapsrc" | grep -q '\.Serial()'; then
+		wrapsrc=$(funcBody "$wrapper" $files)
+		case $wrapsrc in
+		*".Serial()"*) ;;
+		*)
 			printf 'BLOCKED: %s opens a bubble that waits on the serial barrier\n' "$wrapper" >&2
 			printf '  %s reaches Serial() but %s never takes it first\n' "$body" "$wrapper" >&2
 			fail=1
-		fi
-	done < <(grep -hoE 'func (Test[A-Za-z0-9_]+)\(t \*testing\.T\) \{ synctest\.Test\(t, (test[A-Za-z0-9_]+)\)|synctest\.Test\(t, (test[A-Za-z0-9_]+)\)' $files >/dev/null 2>&1
-		awk '
-			/^func Test[A-Za-z0-9_]*\(t \*testing\.T\)/ { w = $2; sub(/\(.*/, "", w) }
-			match($0, /synctest\.Test\(t, (test[A-Za-z0-9_]+)\)/) {
-				b = substr($0, RSTART, RLENGTH)
-				sub(/.*, /, "", b); sub(/\)/, "", b)
-				if (w != "") print w "\t" b
-			}
-		' $files)
+			;;
+		esac
+	done < <(bubblePairs $files)
 done < <(find "$root/src" -type d 2>/dev/null)
 
 if [ "$fail" -ne 0 ]; then

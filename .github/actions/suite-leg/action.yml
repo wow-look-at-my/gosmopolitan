@@ -70,10 +70,10 @@ runs:
         exit $LASTEXITCODE
 
     - name: The whole test suite (run.bash)
-      # the distribution's own all-tests entry point, on every host it builds on. see docs/CI.md.
+      # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
       if: runner.os != 'Windows'
       shell: bash
-      run: cd src && ./run.bash
+      run: cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
@@ -82,4 +82,42 @@ runs:
         cd src
         .\run.bat
         exit $LASTEXITCODE
+
+    - name: What the suite spent its time on
+      # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
+      if: always() && runner.os != 'Windows'
+      uses: wow-look-at-my/actions@typescript#latest
+      with:
+        script: |
+          const logPath = `${process.env.RUNNER_TEMP}/suite.log`;
+          if (!fs.existsSync(logPath)) {
+            core.info('no suite.log; nothing to report');
+            return;
+          }
+          const rows = [];
+          for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+            // dist test prints one of these per package it ran.
+            const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
+            if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
+          }
+          if (rows.length === 0) {
+            core.info('no per-package timings found in suite.log');
+            return;
+          }
+          rows.sort((left, right) => right.secs - left.secs);
+          const total = rows.reduce((sum, row) => sum + row.secs, 0);
+          const top = rows.slice(0, 30);
+          const share = top.reduce((sum, row) => sum + row.secs, 0);
+          const lines = [
+            `### Suite timings (${process.env.RUNNER_OS})`,
+            '',
+            `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
+            `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
+            '',
+            '| seconds | package |',
+            '| ---: | --- |',
+            ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
+          ];
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          core.info(`recorded ${rows.length} package timings`);
 

@@ -38,13 +38,31 @@ cosmoBuilds() {
 	return 0
 }
 
+# lineWindow prints lines first through last of a file, each one exactly as it
+# was written.
+lineWindow() {
+	src=$1
+	first=$2
+	last=$3
+	num=0
+	while IFS= read -r text || [ -n "$text" ]; do
+		num=$((num + 1))
+		if [ "$num" -lt "$first" ]; then
+			continue
+		fi
+		if [ "$num" -gt "$last" ]; then
+			break
+		fi
+		printf '%s\n' "$text"
+	done <"$src"
+}
+
 while IFS= read -r hit; do
 	file=${hit%%:*}
 	rest=${hit#*:}
 	line=${rest%%:*}
 	cosmoBuilds "$file" || continue
-	window=$(awk -v s="$line" -v e="$((line + 6))" \
-		'NR >= s && NR <= e' "$file" 2>/dev/null)
+	window=$(lineWindow "$file" "$line" "$((line + 6))" 2>/dev/null)
 	if printf '%s' "$window" | grep -qE "$flags"; then
 		printf 'BLOCKED: runtime.GOOS decides an open flag\n  %s:%s\n' "$file" "$line" >&2
 		fail=1

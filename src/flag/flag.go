@@ -1017,8 +1017,20 @@ func (f *FlagSet) Var(value Value, name string, usage string) {
 
 	// Remember the default value as a string; it won't change.
 	flag := &Flag{name, usage, value, value.String()}
-	_, alreadythere := f.formal[name]
+	existing, alreadythere := f.formal[name]
 	if alreadythere {
+		// Several packages' tests in one binary each register their own flags
+		// into CommandLine, so a shared name is expected on that one set. Any
+		// other set keeps the panic: a repeated name there is still a bug.
+		if grouped() && f == CommandLine {
+			fan, ok := existing.Value.(*fanValue)
+			if !ok {
+				fan = &fanValue{values: []Value{existing.Value}}
+				existing.Value = fan
+			}
+			fan.add(value)
+			return
+		}
 		var msg string
 		if f.name == "" {
 			msg = f.sprintf("flag redefined: %s", name)
