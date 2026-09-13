@@ -89,7 +89,13 @@ runs:
       uses: wow-look-at-my/actions@typescript#latest
       with:
         script: |
-          const logPath = `${process.env.RUNNER_TEMP}/suite.log`;
+          const required = (name: string): string => {
+            const value = process.env[name];
+            if (!value) throw new Error(`${name} is not set; the runner provides it to every step`);
+            return value;
+          };
+          const summaryPath = required('GITHUB_STEP_SUMMARY');
+          const logPath = `${required('RUNNER_TEMP')}/suite.log`;
           if (!fs.existsSync(logPath)) {
             core.info('no suite.log; nothing to report');
             return;
@@ -109,7 +115,7 @@ runs:
           const top = rows.slice(0, 30);
           const share = top.reduce((sum, row) => sum + row.secs, 0);
           const lines = [
-            `### Suite timings (${process.env.RUNNER_OS})`,
+            `### Suite timings (${required('RUNNER_OS')})`,
             '',
             `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
             `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
@@ -118,6 +124,6 @@ runs:
             '| ---: | --- |',
             ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
           ];
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+          fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
           core.info(`recorded ${rows.length} package timings`);
 

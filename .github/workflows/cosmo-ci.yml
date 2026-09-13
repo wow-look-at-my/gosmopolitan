@@ -16,6 +16,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
+      fail-fast: false
       matrix:
         build-os: [macos-latest, windows-latest]
 
@@ -95,6 +96,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
+      fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -147,6 +149,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
+      fail-fast: false
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -285,6 +288,7 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         port: [js, wasip1]
 
@@ -350,6 +354,9 @@ jobs:
             set -o pipefail
             export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
             sh ./.github/resource-log.sh &
+            probe=$!
+            # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
+            trap 'kill "$probe"' EXIT
             GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       - name: What ${{ matrix.port }} spent its time on
@@ -358,8 +365,14 @@ jobs:
         uses: wow-look-at-my/actions@typescript#latest
         with:
           script: |
-            const logPath = `${process.env.RUNNER_TEMP}/suite.log`;
-            const port = process.env.WASM_PORT;
+            const required = (name: string): string => {
+              const value = process.env[name];
+              if (!value) throw new Error(`${name} is not set; the runner or this step's env provides it`);
+              return value;
+            };
+            const summaryPath = required('GITHUB_STEP_SUMMARY');
+            const logPath = `${required('RUNNER_TEMP')}/suite.log`;
+            const port = required('WASM_PORT');
             if (!fs.existsSync(logPath)) {
               core.info('no suite.log; nothing to report');
               return;
@@ -386,7 +399,7 @@ jobs:
               '| ---: | --- |',
               ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
             ];
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+            fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
         env:
           WASM_PORT: ${{ matrix.port }}
@@ -432,6 +445,7 @@ jobs:
     timeout-minutes: 25
     needs: publish-create
     strategy:
+      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
