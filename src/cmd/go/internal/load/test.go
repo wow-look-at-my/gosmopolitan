@@ -721,12 +721,17 @@ type testFuncs struct {
 // writes are package-qualified. The import block is the part that holds one
 // package, and this is what lets it hold more.
 type testUnit struct {
-	// ImportPath identifies the package: it is what testdeps reports and what
-	// -test.unit names. TestPath and XTestPath are what the generated file
-	// writes in its import block, which is not the same thing once a binary
-	// holds several units: two units' test variants cannot both occupy their
-	// own path, so each imports a synthetic one that cmd/go maps onto the real
-	// variant through importmap.
+	// UnitID identifies the package, and ImportPath is what testdeps reports.
+	// They differ: ImportPath is EMPTY for command-line-arguments and for a
+	// package outside a module, which is what upstream wants testdeps to see,
+	// and it cannot also name a unit. -test.unit carries the real path, so
+	// UnitID holds that and pickUnit matches on it.
+	//
+	// TestPath and XTestPath are what the generated file writes in its import
+	// block, which is not the same thing once a binary holds several units: two
+	// units' test variants cannot both occupy their own path, so each imports a
+	// synthetic one that cmd/go maps onto the real variant through importmap.
+	UnitID      string
 	ImportPath  string
 	ModulePath  string
 	TestPath    string
@@ -754,6 +759,7 @@ type testUnit struct {
 // Units answers the packages this test main imports.
 func (funcs *testFuncs) Units() []testUnit {
 	return []testUnit{{
+		UnitID:      funcs.Package.ImportPath,
 		ImportPath:  funcs.ImportPath(),
 		ModulePath:  funcs.ModulePath(),
 		TestPath:    funcs.Package.ImportPath,
@@ -968,6 +974,7 @@ import (
 // testUnit is one package's tests. A binary can hold several, and the
 // -test.unit flag names the one this process runs.
 type testUnit struct {
+	unitID      string
 	importPath  string
 	modulePath  string
 	tests       []testing.InternalTest
@@ -984,6 +991,7 @@ type testUnit struct {
 var units = []testUnit{
 {{range .Units}}
 	{
+		unitID:     {{.UnitID | printf "%q"}},
 		importPath: {{.ImportPath | printf "%q"}},
 		modulePath: {{.ModulePath | printf "%q"}},
 		tests: []testing.InternalTest{
@@ -1042,7 +1050,7 @@ func pickUnit() *testUnit {
 		os.Exit(2)
 	}
 	for idx := range units {
-		if units[idx].importPath == want {
+		if units[idx].unitID == want {
 			return &units[idx]
 		}
 	}
