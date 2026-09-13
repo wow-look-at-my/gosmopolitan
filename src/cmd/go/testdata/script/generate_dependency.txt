@@ -5,7 +5,7 @@
 
 env GOFLAGS=-mod=mod
 
-# The package declares what it produces, and the zip does not carry it.
+# The package carries a directive, and the zip does not carry what it writes.
 go mod download example.com/generated
 ! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
 
