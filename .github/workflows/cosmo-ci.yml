@@ -346,6 +346,7 @@ jobs:
           name: ${{ matrix.port }}
           run: |
             export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+            sh ./.github/resource-log.sh &
             GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test
 
 
