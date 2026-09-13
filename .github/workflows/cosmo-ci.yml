@@ -319,6 +319,12 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
+      # wasmtime enforces its cache limit only when cleanup runs, hourly by default, so inside one suite the cache grows unbounded -- see .github/wasmtime-cache.toml.
+      - name: Bound the wasmtime module cache
+        if: matrix.port == 'wasip1'
+        shell: bash
+        run: mkdir -p ~/.config/wasmtime && cp .github/wasmtime-cache.toml ~/.config/wasmtime/config.toml
+
       # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
       - name: Keep the compiled wasm modules between runs
         if: matrix.port == 'wasip1'
