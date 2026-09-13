@@ -61,7 +61,7 @@ func (fan *fanValue) Get() any {
 	if len(fan.values) == 0 {
 		return nil
 	}
-	if getter, ok := fan.values[0].(Getter); ok {
+	if getter, isGetter := fan.values[0].(Getter); isGetter {
 		return getter.Get()
 	}
 	return nil
@@ -74,6 +74,6 @@ func (fan *fanValue) IsBoolFlag() bool {
 	if len(fan.values) == 0 {
 		return false
 	}
-	boolFlag, ok := fan.values[0].(boolFlag)
-	return ok && boolFlag.IsBoolFlag()
+	asBool, isBool := fan.values[0].(boolFlag)
+	return isBool && asBool.IsBoolFlag()
 }
