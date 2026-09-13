@@ -1,4 +1,4 @@
-package submodulebranch
+package main
 
 import (
 	"errors"

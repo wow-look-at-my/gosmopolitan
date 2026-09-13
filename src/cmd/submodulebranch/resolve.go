@@ -5,7 +5,7 @@
 // `branch = .` in .gitmodules says the first half to git. It has no second
 // half: a submodule with no branch of that name makes `git submodule update
 // --remote` fail rather than fall back.
-package submodulebranch
+package main
 
 import (
 	"fmt"

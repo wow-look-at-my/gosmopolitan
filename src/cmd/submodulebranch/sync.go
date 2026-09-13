@@ -1,4 +1,4 @@
-package submodulebranch
+package main
 
 import (
 	"fmt"
@@ -48,6 +48,18 @@ func Modules(gitmodules []byte) []Module {
 	}
 	commit()
 	return mods
+}
+
+// ModulePath reads the path a go.mod declares. A submodule's directory does
+// not have to spell it, and the version files name the module rather than the
+// directory.
+func ModulePath(gomod []byte) (string, error) {
+	for _, line := range strings.Split(string(gomod), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "module "); ok {
+			return strings.TrimSpace(rest), nil
+		}
+	}
+	return "", fmt.Errorf("no module line")
 }
 
 // PseudoVersion is the version go.mod records for a commit of a module that
