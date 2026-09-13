@@ -43,7 +43,7 @@ import (
 // A program that panics or exits ends that process, so anything after it never
 // reported. Those run again, one process each, which attributes the failure to
 // the program that caused it instead of losing the rest of the corpus with it.
-func batchOutput(corpus, file string) (out []byte, ok bool, err error) {
+func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	exe, name, err := batchFor(corpus, file)
 	if err != nil || name == "" {
 		return nil, false, err
@@ -71,12 +71,12 @@ func launch(exe string, names ...string) []string {
 }
 
 // runAll runs every batched program in one process and splits what it printed.
-func (b *batch) runAll(exe string) {
-	b.ran = map[string][]byte{}
+func (bat *batch) runAll(exe string) {
+	bat.ran = map[string][]byte{}
 
-	names := make([]string, 0, len(b.ids))
-	for _, id := range b.ids {
-		names = append(names, id)
+	names := make([]string, 0, len(bat.ids))
+	for _, pkgname := range bat.ids {
+		names = append(names, pkgname)
 	}
 	sort.Strings(names)
 
@@ -85,16 +85,16 @@ func (b *batch) runAll(exe string) {
 
 	// Each program's output runs from its own marker to the next one. A marker
 	// the process never printed belongs to a program it never reached.
-	marker := []byte(b.nonce + " ")
+	marker := []byte(bat.nonce + " ")
 	for rest := out; ; {
-		i := bytes.Index(rest, marker)
-		if i < 0 {
+		start := bytes.Index(rest, marker)
+		if start < 0 {
 			break
 		}
-		rest = rest[i+len(marker):]
+		rest = rest[start+len(marker):]
 		line := rest
-		if j := bytes.IndexByte(rest, '\n'); j >= 0 {
-			line, rest = rest[:j], rest[j+1:]
+		if eol := bytes.IndexByte(rest, '\n'); eol >= 0 {
+			line, rest = rest[:eol], rest[eol+1:]
 		} else {
 			rest = nil
 		}
@@ -103,10 +103,10 @@ func (b *batch) runAll(exe string) {
 			break
 		}
 		body := rest
-		if j := bytes.Index(rest, marker); j >= 0 {
-			body = rest[:j]
+		if next := bytes.Index(rest, marker); next >= 0 {
+			body = rest[:next]
 		}
-		b.ran[name] = body
+		bat.ran[name] = body
 	}
 }
 
@@ -218,61 +218,61 @@ func eligible(src string) (string, bool) {
 }
 
 // rewrite turns one test program into a package the dispatcher can call.
-func rewrite(src, id string) string {
-	src = strings.Replace(src, "\npackage main\n", "\npackage "+id+"\n", 1)
+func rewrite(src, pkgname string) string {
+	src = strings.Replace(src, "\npackage main\n", "\npackage "+pkgname+"\n", 1)
 	return strings.Replace(src, "\nfunc main() {", "\n// Main is this test program's own main.\nfunc Main() {", 1)
 }
 
-func (b *batch) build(corpus string) {
+func (bat *batch) build(corpus string) {
 	dir, err := os.MkdirTemp("", "testdir-batch-")
 	if err != nil {
-		b.err = err
+		bat.err = err
 		return
 	}
-	b.dir = dir
+	bat.dir = dir
 
 	// The corpus is the same set of directories the runner walks, and each file
 	// is named the way the runner names it: relative to the corpus root.
 	var rels []string
-	for _, d := range dirs {
-		found, err := filepath.Glob(filepath.Join(corpus, d, "*.go"))
+	for _, sub := range dirs {
+		found, err := filepath.Glob(filepath.Join(corpus, sub, "*.go"))
 		if err != nil {
-			b.err = err
+			bat.err = err
 			return
 		}
-		for _, f := range found {
-			rels = append(rels, filepath.Join(d, filepath.Base(f)))
+		for _, path := range found {
+			rels = append(rels, filepath.Join(sub, filepath.Base(path)))
 		}
 	}
 
 	var programs []program
-	n := 0
+	count := 0
 	for _, rel := range rels {
 		file := filepath.Join(corpus, rel)
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			continue
 		}
-		src, ok := eligible(string(raw))
-		if !ok {
+		src, joins := eligible(string(raw))
+		if !joins {
 			continue
 		}
-		id := fmt.Sprintf("t%d", n)
-		pkgdir := filepath.Join(dir, id)
+		pkgname := fmt.Sprintf("prog%d", count)
+		pkgdir := filepath.Join(dir, pkgname)
 		if err := os.MkdirAll(pkgdir, 0o755); err != nil {
-			b.err = err
+			bat.err = err
 			return
 		}
-		if err := os.WriteFile(filepath.Join(pkgdir, filepath.Base(file)), []byte(rewrite(src, id)), 0o644); err != nil {
-			b.err = err
+		if err := os.WriteFile(filepath.Join(pkgdir, filepath.Base(file)), []byte(rewrite(src, pkgname)), 0o644); err != nil {
+			bat.err = err
 			return
 		}
-		programs = append(programs, program{ID: id})
-		b.ids[rel] = id
-		n++
+		programs = append(programs, program{ID: pkgname})
+		bat.ids[rel] = pkgname
+		count++
 	}
-	if n == 0 {
-		b.err = fmt.Errorf("testdir batch: no test program qualified")
+	if count == 0 {
+		bat.err = fmt.Errorf("testdir batch: no test program qualified")
 		return
 	}
 
@@ -280,7 +280,7 @@ func (b *batch) build(corpus string) {
 	// distribution's own language version.
 	gomod := fmt.Sprintf("module testdirbatch\n\ngo 1.%d\n", goversion.Version)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
-		b.err = err
+		bat.err = err
 		return
 	}
 
@@ -288,18 +288,18 @@ func (b *batch) build(corpus string) {
 	// program's output from the next is a value nothing can predict.
 	var seed [16]byte
 	if _, err := rand.Read(seed[:]); err != nil {
-		b.err = err
+		bat.err = err
 		return
 	}
-	b.nonce = "testdir-batch-" + hex.EncodeToString(seed[:])
+	bat.nonce = "testdir-batch-" + hex.EncodeToString(seed[:])
 
 	var main strings.Builder
-	if err := dispatcher.Execute(&main, dispatch{Programs: programs, Nonce: b.nonce}); err != nil {
-		b.err = err
+	if err := dispatcher.Execute(&main, dispatch{Programs: programs, Nonce: bat.nonce}); err != nil {
+		bat.err = err
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(main.String()), 0o644); err != nil {
-		b.err = err
+		bat.err = err
 		return
 	}
 
@@ -308,8 +308,8 @@ func (b *batch) build(corpus string) {
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		b.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", n, err, out)
+		bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", count, err, out)
 		return
 	}
-	b.exe = exe
+	bat.exe = exe
 }

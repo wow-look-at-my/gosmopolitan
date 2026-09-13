@@ -978,34 +978,36 @@ func (r *gitRepo) addGitlinks(ctx context.Context, rev, subdir string, archive [
 		return archive, nil
 	}
 
-	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	writer := zip.NewWriter(&buf)
 	prefix := "prefix/"
-	for _, f := range zr.File {
-		w, err := zw.CreateRaw(&f.FileHeader)
+	for _, entry := range reader.File {
+		// CreateRaw and OpenRaw copy the compressed bytes across untouched, so
+		// the entries git archive wrote keep the content they already had.
+		dst, err := writer.CreateRaw(&entry.FileHeader)
 		if err != nil {
 			return nil, err
 		}
-		rc, err := f.OpenRaw()
+		src, err := entry.OpenRaw()
 		if err != nil {
 			return nil, err
 		}
-		if _, err := io.Copy(w, rc); err != nil {
+		if _, err := io.Copy(dst, src); err != nil {
 			return nil, err
 		}
 	}
-	w, err := zw.Create(prefix + gitlinksFile)
+	dst, err := writer.Create(prefix + gitlinksFile)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := w.Write(links.Bytes()); err != nil {
+	if _, err := dst.Write(links.Bytes()); err != nil {
 		return nil, err
 	}
-	if err := zw.Close(); err != nil {
+	if err := writer.Close(); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

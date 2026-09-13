@@ -684,15 +684,15 @@ type testUnit struct {
 }
 
 // Units answers the packages this test main imports.
-func (t *testFuncs) Units() []testUnit {
+func (funcs *testFuncs) Units() []testUnit {
 	return []testUnit{{
-		ImportPath:  t.Package.ImportPath,
+		ImportPath:  funcs.Package.ImportPath,
 		Alias:       testAlias(0, false),
 		XAlias:      testAlias(0, true),
-		ImportTest:  t.ImportTest,
-		NeedTest:    t.NeedTest,
-		ImportXtest: t.ImportXtest,
-		NeedXtest:   t.NeedXtest,
+		ImportTest:  funcs.ImportTest,
+		NeedTest:    funcs.NeedTest,
+		ImportXtest: funcs.ImportXtest,
+		NeedXtest:   funcs.NeedXtest,
 	}}
 }
 
@@ -700,15 +700,15 @@ func (t *testFuncs) Units() []testUnit {
 // in one main cannot share a name, so the name carries the package's place.
 // The first keeps the name a single-package main has always used, which is
 // what the go command's own test output and its tests read.
-func testAlias(i int, external bool) string {
+func testAlias(idx int, external bool) string {
 	name := "_test"
 	if external {
 		name = "_xtest"
 	}
-	if i == 0 {
+	if idx == 0 {
 		return name
 	}
-	return fmt.Sprintf("%s%d", name, i)
+	return fmt.Sprintf("%s%d", name, idx)
 }
 
 // ImportPath returns the import path of the package being tested, if it is within GOPATH.
