@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"cmd/go/internal/cfg"
@@ -26,18 +25,9 @@ import (
 // package the compiler reads as empty, and every consumer fails on a symbol
 // that the package's source never declares.
 //
-// A directive already names what it writes, so nothing is added to it:
-//
-//	//go:generate go run example.com/cmd/gen -out parser.gen.go input.c
-//
-// When the named file is absent, the module is generated and the compiler reads
-// the generated copy. A directive naming no output, or one whose output is
-// already there, costs one directory read.
+// A package that carries a directive is generated in a sandbox, and the compiler
+// reads the tree the generator left.
 const generatePrefix = "//go:generate"
-
-// outputFlags name an output file on a directive's command line. A generator
-// that writes one spells it one of these ways.
-var outputFlags = []string{"-o", "-out", "-output", "--out", "--output"}
 
 // generateDir answers the directory to read pkgPath's package from: the copy
 // carrying its generated files, or dir unchanged.
@@ -51,8 +41,7 @@ func generateDir(dir, modroot string) string {
 	if !str.HasFilePathPrefix(dir, cfg.GOMODCACHE) {
 		return dir
 	}
-	produces := producedFiles(dir)
-	if len(produces) == 0 || allPresent(dir, produces) {
+	if !hasDirective(dir) {
 		return dir
 	}
 	rel, err := filepath.Rel(modroot, dir)
@@ -80,77 +69,39 @@ func generateDeps() bool {
 	return os.Getenv("GOGENERATEDEPS") != "off"
 }
 
-// producedFiles reads the files a package's directives claim to write.
-func producedFiles(dir string) []string {
+// hasDirective reports whether a package carries a generate directive. It reads
+// lines rather than parsing: this runs for every dependency package, ahead of
+// the build.
+func hasDirective(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return false
 	}
-	var produces []string
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
 			continue
 		}
-		produces = append(produces, scanProduces(filepath.Join(dir, e.Name()))...)
+		if fileHasDirective(filepath.Join(dir, e.Name())) {
+			return true
+		}
 	}
-	return produces
+	return false
 }
 
-// scanProduces reads the output each of one file's generate directives names.
-// It reads lines rather than parsing: this runs for every dependency package,
-// ahead of the build.
-func scanProduces(file string) []string {
+func fileHasDirective(file string) bool {
 	f, err := os.Open(file)
 	if err != nil {
-		return nil
+		return false
 	}
 	defer f.Close()
 
-	var produces []string
 	s := bufio.NewScanner(f)
 	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
-		if !strings.HasPrefix(line, generatePrefix) {
-			continue
-		}
-		if name := outputOf(strings.Fields(line)); name != "" {
-			produces = append(produces, name)
+		if strings.HasPrefix(strings.TrimSpace(s.Text()), generatePrefix) {
+			return true
 		}
 	}
-	return produces
-}
-
-// outputOf answers the file a directive's command line writes, or "" when it
-// names none. A generated file sits in the package that declares it, so a name
-// reaching out of the directory is not one of ours to write.
-func outputOf(args []string) string {
-	for i, arg := range args {
-		flag, value, joined := strings.Cut(arg, "=")
-		if !joined {
-			if i+1 >= len(args) {
-				continue
-			}
-			flag, value = arg, args[i+1]
-		}
-		if !slices.Contains(outputFlags, flag) {
-			continue
-		}
-		if value == "" || value == ".." || strings.ContainsAny(value, `/\`) {
-			return ""
-		}
-		return value
-	}
-	return ""
-}
-
-// allPresent reports whether every produced file is already there.
-func allPresent(dir string, produces []string) bool {
-	for _, name := range produces {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 // generateModule answers the package directory of a generated module tree,
