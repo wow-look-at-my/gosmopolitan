@@ -1169,11 +1169,11 @@ var windowsBadWords = []string{
 // testGroup is the binary a package's tests run out of, the packages sharing
 // it, and that package's own test copies inside it.
 type testGroup struct {
-	testMain   *load.Package
-	withTests   *load.Package
+	testMain  *load.Package
+	withTests *load.Package
 	extTests  *load.Package
-	perr    *load.Package
-	members []*load.Package
+	perr      *load.Package
+	members   []*load.Package
 
 	// digest is the generated main as it would read if this package were the
 	// only one in the binary. A test result depends on the code that runs it,
@@ -1235,6 +1235,14 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 			groups[member.Package].members = shared
 			groups[member.Package].digest = digests[member.Package.ImportPath]
 			groups[member.Package].remaining = remaining
+			// A main this batch cannot generate is the whole batch's error: it
+			// is the one binary they share. Without this the build goes on to
+			// compile the variants, and the compiler's complaint about the
+			// broken source arrives instead of the reason for it -- a wrong
+			// TestMain signature reads as "testing.Main is not a type".
+			if testMain.Error != nil && groups[member.Package].perr == nil {
+				groups[member.Package].perr = testMain
+			}
 		}
 	}
 	return groups
