@@ -1588,15 +1588,10 @@ func cmdbootstrap() {
 		xprintf("\n")
 	}
 	xprintf("Building Go toolchain3 using go_bootstrap and Go toolchain2.\n")
-	// parseToolID does give every tool an ID from its own content, but it lives
-	// in the cmd/go this build is producing. This step runs go_bootstrap, whose
-	// cmd/go is the bootstrap toolchain's and keys on the version string alone.
-	// It therefore sees nothing out of date and installs nothing, leaving
-	// toolchain1 in place: a compile whose own runtime.Version() is the
-	// bootstrap's and whose -V=full carries an empty buildID. cmd/go then
-	// refuses it on every later build, which takes out `go run` and every
-	// dependency's generate step.
-	goInstall(toolenv(), goBootstrap, append([]string{"-a"}, toolchain...)...)
+	// No -a: go_bootstrap's install does not take it. parseToolID gives every
+	// tool an ID from its own content, so toolchain2 is a new compiler to the
+	// go command and what depends on it rebuilds.
+	goInstall(toolenv(), goBootstrap, toolchain...)
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
 		copyfile(pathf("%s/compile3", tooldir), pathf("%s/compile", tooldir), writeExec)
