@@ -308,6 +308,15 @@ jobs:
         shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
+      # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
+      - name: Keep the compiled wasm modules between runs
+        if: matrix.port == 'wasip1'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/wasmtime
+          key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
+          restore-keys: wasmtime-modules-${{ matrix.port }}-
+
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
