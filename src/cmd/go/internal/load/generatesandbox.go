@@ -93,7 +93,7 @@ func bwrapArgv(writable string, argv []string) ([]string, error) {
 func seatbeltArgv(writable string, argv []string) ([]string, error) {
 	sandboxExec, err := exec.LookPath("sandbox-exec")
 	if err != nil {
-		return nil, fmt.Errorf("sandbox-exec is how a generate directive is confined on darwin, and it is not there: %w", err)
+		return nil, &sandboxUnavailableError{fmt.Errorf("sandbox-exec is how a generate directive is confined on darwin, and it is not there: %w", err)}
 	}
 	var b strings.Builder
 	b.WriteString("(version 1)(allow default)(deny file-write*)")

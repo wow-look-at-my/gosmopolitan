@@ -36,6 +36,32 @@ func TestSandboxUnavailableSeparatesHostFromModule(test *testing.T) {
 	}
 }
 
+// Each backend has to REPORT a missing program as a host fact. The predicate
+// above cannot catch a backend that forgets to say so: it only reads what it is
+// handed. darwin forgot, and a mac without sandbox-exec would have written a
+// permanent verdict against every module it touched.
+func TestEveryBackendReportsAMissingProgramAsAHostFact(test *testing.T) {
+	for _, row := range []struct {
+		name  string
+		build func(string, []string) ([]string, error)
+	}{
+		{"linux", bwrapArgv},
+		{"darwin", seatbeltArgv},
+	} {
+		test.Run(row.name, func(test *testing.T) {
+			test.Setenv("PATH", test.TempDir())
+
+			_, err := row.build(test.TempDir(), []string{"go", "generate", "./..."})
+			if err == nil {
+				test.Fatal("a backend found its program on an empty PATH")
+			}
+			if !sandboxUnavailable(err) {
+				test.Errorf("%v reads as a failure of the module, not of the host", err)
+			}
+		})
+	}
+}
+
 // The message has to name the missing program, because the reader's next move
 // is to install it.
 func TestSandboxUnavailableKeepsItsMessage(test *testing.T) {
