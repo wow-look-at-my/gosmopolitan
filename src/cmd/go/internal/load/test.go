@@ -667,6 +667,35 @@ type testFuncs struct {
 	Cover       *TestCover
 }
 
+// testUnit is one package's place in a generated test main: the package it
+// imports, and the name it imports it under.
+//
+// A test main names its tests through that alias already, so the func lists it
+// writes are package-qualified. The import block is the part that holds one
+// package, and this is what lets it hold more.
+type testUnit struct {
+	ImportPath  string
+	Alias       string
+	XAlias      string
+	ImportTest  bool
+	NeedTest    bool
+	ImportXtest bool
+	NeedXtest   bool
+}
+
+// Units answers the packages this test main imports.
+func (t *testFuncs) Units() []testUnit {
+	return []testUnit{{
+		ImportPath:  t.Package.ImportPath,
+		Alias:       "_test",
+		XAlias:      "_xtest",
+		ImportTest:  t.ImportTest,
+		NeedTest:    t.NeedTest,
+		ImportXtest: t.ImportXtest,
+		NeedXtest:   t.NeedXtest,
+	}}
+}
+
 // ImportPath returns the import path of the package being tested, if it is within GOPATH.
 // This is printed by the testing package when running benchmarks.
 func (t *testFuncs) ImportPath() string {
@@ -833,11 +862,13 @@ import (
 	"internal/coverage/cfile"
 {{end}}
 
+{{range .Units}}
 {{if .ImportTest}}
-	{{if .NeedTest}}_test{{else}}_{{end}} {{.Package.ImportPath | printf "%q"}}
+	{{if .NeedTest}}{{.Alias}}{{else}}_{{end}} {{.ImportPath | printf "%q"}}
 {{end}}
 {{if .ImportXtest}}
-	{{if .NeedXtest}}_xtest{{else}}_{{end}} {{.Package.ImportPath | printf "%s_test" | printf "%q"}}
+	{{if .NeedXtest}}{{.XAlias}}{{else}}_{{end}} {{.ImportPath | printf "%s_test" | printf "%q"}}
+{{end}}
 {{end}}
 )
 
