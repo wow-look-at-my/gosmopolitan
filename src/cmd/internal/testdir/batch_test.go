@@ -5,10 +5,15 @@
 package testdir_test
 
 import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"text/template"
@@ -31,6 +36,80 @@ import (
 // stay the test's own. Nothing is skipped: a program this cannot batch runs the
 // way it always did.
 
+// batchOutput answers what one test program printed. The whole corpus runs in
+// ONE process on the first call, because a process start costs about a second
+// on a wasm runtime and most of these programs do almost nothing.
+//
+// A program that panics or exits ends that process, so anything after it never
+// reported. Those run again, one process each, which attributes the failure to
+// the program that caused it instead of losing the rest of the corpus with it.
+func batchOutput(corpus, file string) (out []byte, ok bool, err error) {
+	exe, name, err := batchFor(corpus, file)
+	if err != nil || name == "" {
+		return nil, false, err
+	}
+	theBatch.ranOnce.Do(func() { theBatch.runAll(exe) })
+	if out, done := theBatch.ran[name]; done {
+		return out, true, nil
+	}
+	// The one process did not reach this program. Run it alone.
+	argv := launch(exe, name)
+	single, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+	return single, true, err
+}
+
+// launch answers the command that starts the dispatcher. A cross target's
+// binary does not run on this host: the distribution ships an exec wrapper per
+// port, and `go run` reaches it through the go command. This reaches it
+// directly, because the whole point here is to not spend a go command.
+func launch(exe string, names ...string) []string {
+	argv := []string{exe}
+	if goos != runtime.GOOS || goarch != runtime.GOARCH {
+		argv = append([]string{fmt.Sprintf("go_%s_%s_exec", goos, goarch)}, argv...)
+	}
+	return append(argv, names...)
+}
+
+// runAll runs every batched program in one process and splits what it printed.
+func (b *batch) runAll(exe string) {
+	b.ran = map[string][]byte{}
+
+	names := make([]string, 0, len(b.ids))
+	for _, id := range b.ids {
+		names = append(names, id)
+	}
+	sort.Strings(names)
+
+	argv := launch(exe, names...)
+	out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+
+	// Each program's output runs from its own marker to the next one. A marker
+	// the process never printed belongs to a program it never reached.
+	marker := []byte(b.nonce + " ")
+	for rest := out; ; {
+		i := bytes.Index(rest, marker)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(marker):]
+		line := rest
+		if j := bytes.IndexByte(rest, '\n'); j >= 0 {
+			line, rest = rest[:j], rest[j+1:]
+		} else {
+			rest = nil
+		}
+		name := string(line)
+		if name == "." {
+			break
+		}
+		body := rest
+		if j := bytes.Index(rest, marker); j >= 0 {
+			body = rest[:j]
+		}
+		b.ran[name] = body
+	}
+}
+
 // batchFor answers the dispatcher and the name this test file takes inside it.
 // The file is named the way the runner names it, relative to the corpus root.
 // An empty name means the batch does not carry the file, and the caller builds
@@ -48,27 +127,33 @@ var theBatch = &batch{ids: map[string]string{}}
 // program is one test program's place in the dispatcher.
 type program struct{ ID string }
 
+// dispatch is what the dispatcher template is rendered from.
+type dispatch struct {
+	Programs []program
+	Nonce    string
+}
+
+// The dispatcher runs every name it is given, in one process, and marks each
+// one's output with a nonce the build picked. A program that panics or exits
+// takes the process with it, so the caller re-runs what never reported.
 var dispatcher = template.Must(template.New("main").Parse(`package main
 
 import (
 	"fmt"
 	"os"
-{{range .}}
+{{range .Programs}}
 	{{.ID}} "testdirbatch/{{.ID}}"
 {{- end}}
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: batch <test>")
-		os.Exit(2)
-	}
-	name := os.Args[1]
-	// The program under test reads its own argument list, and the name this
-	// dispatcher took is not part of it.
+const nonce = "{{.Nonce}}"
+
+func run(name string) {
+	// The program under test reads its own argument list, and the names this
+	// dispatcher took are not part of it.
 	os.Args = os.Args[:1]
 	switch name {
-{{- range .}}
+{{- range .Programs}}
 	case "{{.ID}}":
 		{{.ID}}.Main()
 {{- end}}
@@ -77,14 +162,35 @@ func main() {
 		os.Exit(2)
 	}
 }
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: batch <test>...")
+		os.Exit(2)
+	}
+	names := os.Args[1:]
+	all := os.Args
+	for _, name := range names {
+		fmt.Printf("%s %s\n", nonce, name)
+		os.Stdout.Sync()
+		os.Args = all
+		run(name)
+	}
+	fmt.Printf("%s .\n", nonce)
+}
 `))
 
 type batch struct {
-	once sync.Once
-	dir  string
-	exe  string
-	ids  map[string]string
-	err  error
+	once  sync.Once
+	dir   string
+	exe   string
+	nonce string
+	ids   map[string]string
+	err   error
+
+	// ran holds each program's output from the one process that ran them all.
+	ranOnce sync.Once
+	ran     map[string][]byte
 }
 
 // eligible reports whether a test file can join the batch, and the source to
@@ -178,8 +284,17 @@ func (b *batch) build(corpus string) {
 		return
 	}
 
+	// A test program prints whatever it likes, so the marker separating one
+	// program's output from the next is a value nothing can predict.
+	var seed [16]byte
+	if _, err := rand.Read(seed[:]); err != nil {
+		b.err = err
+		return
+	}
+	b.nonce = "testdir-batch-" + hex.EncodeToString(seed[:])
+
 	var main strings.Builder
-	if err := dispatcher.Execute(&main, programs); err != nil {
+	if err := dispatcher.Execute(&main, dispatch{Programs: programs, Nonce: b.nonce}); err != nil {
 		b.err = err
 		return
 	}

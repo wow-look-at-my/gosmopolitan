@@ -1060,20 +1060,20 @@ func (t test) run() error {
 		var out []byte
 		var err error
 		plain := len(flags)+len(args) == 0 && t.goGcflagsIsEmpty() && !*linkshared && goexp == goExperiment && godebug == goDebug
-		if exe, name, berr := batchFor(t.gorootTestDir, t.goFileName()); plain && berr == nil && name != "" {
-			// The whole run corpus is one executable, built once. A cross
-			// target never reaches the path below, so without this each of
-			// these programs costs a `go run`: the go command, a compile, a
-			// link and a fresh process, per program.
-			out, err = runcmd(exe, name)
-		} else if plain && goarch == runtime.GOARCH && goos == runtime.GOOS {
-			// If we're not using special go command flags,
-			// skip all the go command machinery.
-			// This avoids any time the go command would
-			// spend checking whether, for example, the installed
-			// package runtime is up to date.
-			// Because we run lots of trivial test programs,
-			// the time adds up.
+		if batched, ok, berr := batchOutput(t.gorootTestDir, t.goFileName()); plain && berr == nil && ok {
+			// The whole run corpus is ONE executable that ran in ONE process.
+			// The path below wants a host target, so a cross run reached none
+			// of it and spent a `go run` on each of these programs: the go
+			// command, a compile, a link and a process, each time.
+			out = batched
+		} else if plain {
+			// The compiler and the linker, directly. The go command spends a
+			// build graph and an up-to-date check on each of these programs,
+			// and there are a thousand of them.
+			//
+			// A cross target's binary does not run on this host, so it starts
+			// through the port's own exec wrapper. The go command was reaching
+			// that wrapper too, at the price of the whole go command.
 			pkg := filepath.Join(tempDir, "pkg.a")
 			if _, err := runcmd(goTool, "tool", "compile", "-p=main", "-importcfg="+stdlibImportcfgFile(), "-o", pkg, t.goFileName()); err != nil {
 				return err
@@ -1082,7 +1082,7 @@ func (t test) run() error {
 			if err := linkFile(runcmd, exe, pkg, stdlibImportcfgFile(), nil); err != nil {
 				return err
 			}
-			out, err = runcmd(append([]string{exe}, args...)...)
+			out, err = runcmd(append(launch(exe), args...)...)
 		} else {
 			cmd := []string{goTool, "run", t.goGcflags()}
 			if *linkshared {
