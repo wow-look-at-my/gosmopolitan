@@ -7,8 +7,100 @@ package load
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+// Each package of a module is generated in its own copy of the fetched module
+// and published into the one tree builds read. The second publish must add what
+// its generator wrote and remove what it removed, and leave the first package's
+// output where it was.
+func TestPublishGeneratedKeepsEveryPackage(test *testing.T) {
+	base := test.TempDir()
+	modroot := filepath.Join(base, "mod")
+	root := filepath.Join(base, "generate")
+	// Cleanups run in reverse, so this runs before TempDir's removal, which
+	// cannot remove a read-only tree.
+	test.Cleanup(func() { makeTreeWritable(root) })
+
+	writeFiles(test, modroot, map[string]string{
+		"go.mod":        "module example.com/mod\n",
+		"one/one.go":    "package one\n",
+		"two/two.go":    "package two\n",
+		"two/stale.go":  "package two\n",
+		"shared/doc.go": "package shared\n",
+	})
+
+	for _, step := range []struct {
+		pkg   string
+		write map[string]string
+		drop  string
+	}{
+		{"one", map[string]string{"one/one.gen.go": "package one\n// one\n"}, ""},
+		{"two", map[string]string{"two/two.gen.go": "package two\n// two\n", "two/data/table.txt": "rows\n"}, "two/stale.go"},
+	} {
+		stage := filepath.Join(base, "stage-"+step.pkg)
+		if err := copyTree(modroot, stage); err != nil {
+			test.Fatal(err)
+		}
+		writeFiles(test, stage, step.write)
+		if step.drop != "" {
+			if err := os.Remove(filepath.Join(stage, step.drop)); err != nil {
+				test.Fatal(err)
+			}
+		}
+		if err := publishGenerated(modroot, stage, root); err != nil {
+			test.Fatalf("publishing %s: %v", step.pkg, err)
+		}
+		if _, err := os.Stat(stage); !errors.Is(err, fs.ErrNotExist) {
+			test.Errorf("stage for %s survived its publish: %v", step.pkg, err)
+		}
+	}
+
+	for rel, want := range map[string]string{
+		"one/one.gen.go":     "package one\n// one\n",
+		"two/two.gen.go":     "package two\n// two\n",
+		"two/data/table.txt": "rows\n",
+		"shared/doc.go":      "package shared\n",
+	} {
+		got, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			test.Errorf("%s is missing from the tree: %v", rel, err)
+			continue
+		}
+		if string(got) != want {
+			test.Errorf("%s = %q, want %q", rel, got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "two/stale.go")); !errors.Is(err, fs.ErrNotExist) {
+		test.Errorf("two/stale.go, which the generator removed, is still in the tree: %v", err)
+	}
+
+	for _, rel := range []string{".", "one", "two", "two/data"} {
+		info, err := os.Stat(filepath.Join(root, rel))
+		if err != nil {
+			test.Fatal(err)
+		}
+		if info.Mode()&0o222 != 0 {
+			test.Errorf("%s is writable after publishing: %v", rel, info.Mode())
+		}
+	}
+}
+
+func writeFiles(test *testing.T, dir string, files map[string]string) {
+	test.Helper()
+	for rel, body := range files {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+			test.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o666); err != nil {
+			test.Fatal(err)
+		}
+	}
+}
 
 // A host with no sandbox says nothing about the module being built, so the two
 // kinds of failure have to stay apart. Reading them as one let a machine
