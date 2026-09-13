@@ -485,6 +485,11 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 		const goTestDefaultTimeout = 10 * time.Minute // Default value of go test -timeout flag.
 		run = append(run, "-timeout="+(goTestDefaultTimeout*time.Duration(t.timeoutScale)).String())
 	}
+	// Each test reports its own name and duration. Without this a package is
+	// one line and one number, so a slow test inside a slow package cannot be
+	// named from the log at all: cmd/internal/testdir reported 1265.774s and
+	// nothing about which of its programs spent it.
+	run = append(run, "-v")
 	if opts.short || t.short {
 		run = append(run, "-short")
 	}

@@ -255,7 +255,7 @@ func run(ctx context.Context, cmd *base.Command, args []string) {
 	// To avoid file corruption from duplicate application of
 	// fixes (in fix mode), and duplicate reporting of diagnostics
 	// (in vet mode), we must run the tool only once for each
-	// source file. We achieve that by running on ptest (below)
+	// source file. We achieve that by running on withTests (below)
 	// instead of p.
 	//
 	// As a side benefit, this also allows analyzers to make
@@ -277,21 +277,21 @@ func run(ctx context.Context, cmd *base.Command, args []string) {
 				continue
 			}
 		}
-		_, ptest, pxtest, perr := load.TestPackagesFor(moduleLoader, ctx, pkgOpts, p, nil)
+		_, withTests, extTests, perr := load.TestPackagesFor(moduleLoader, ctx, pkgOpts, p, nil)
 		if perr != nil {
 			base.Errorf("%v", perr.Error)
 			continue
 		}
-		if len(ptest.GoFiles) == 0 && len(ptest.CgoFiles) == 0 && pxtest == nil {
+		if len(withTests.GoFiles) == 0 && len(withTests.CgoFiles) == 0 && extTests == nil {
 			base.Errorf("go: can't %s %s: no Go files in %s", cmd.Name(), p.ImportPath, p.Dir)
 			continue
 		}
-		if len(ptest.GoFiles) > 0 || len(ptest.CgoFiles) > 0 {
+		if len(withTests.GoFiles) > 0 || len(withTests.CgoFiles) > 0 {
 			// The test package includes all the files of primary package.
-			addVetAction(ptest)
+			addVetAction(withTests)
 		}
-		if pxtest != nil {
-			addVetAction(pxtest)
+		if extTests != nil {
+			addVetAction(extTests)
 		}
 	}
 	b.Do(ctx, root)

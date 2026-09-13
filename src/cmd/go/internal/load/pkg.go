@@ -3080,8 +3080,8 @@ func setPGOProfilePath(pkgs []*Package) {
 			if p.Name != "main" {
 				continue
 			}
-			pmain := p
-			file := filepath.Join(pmain.Dir, "default.pgo")
+			testMain := p
+			file := filepath.Join(testMain.Dir, "default.pgo")
 			if _, err := os.Stat(file); err != nil {
 				continue // no profile
 			}
@@ -3096,7 +3096,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					return p1
 				}
 
-				if len(pkgs) > 1 && p != pmain {
+				if len(pkgs) > 1 && p != testMain {
 					// Make a copy, then attach profile.
 					// No need to copy if there is only one root package (we can
 					// attach profile directly in-place).
@@ -3111,7 +3111,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					// we don't change them.
 					p1.Imports = slices.Clone(p.Imports)
 					p1.Internal.Imports = slices.Clone(p.Internal.Imports)
-					p1.Internal.ForMain = pmain.ImportPath
+					p1.Internal.ForMain = testMain.ImportPath
 					visited[p] = p1
 					p = p1
 				} else {
@@ -3127,7 +3127,7 @@ func setPGOProfilePath(pkgs []*Package) {
 			}
 
 			// Replace the package and imports with the PGO version.
-			split(pmain)
+			split(testMain)
 		}
 
 	default:
