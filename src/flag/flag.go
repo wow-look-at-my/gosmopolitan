@@ -1019,9 +1019,10 @@ func (f *FlagSet) Var(value Value, name string, usage string) {
 	flag := &Flag{name, usage, value, value.String()}
 	existing, alreadythere := f.formal[name]
 	if alreadythere {
-		// Several packages' tests in one binary each register their own flags,
-		// so a shared name is expected there rather than a declaration bug.
-		if grouped() {
+		// Several packages' tests in one binary each register their own flags
+		// into CommandLine, so a shared name is expected on that one set. Any
+		// other set keeps the panic: a repeated name there is still a bug.
+		if grouped() && f == CommandLine {
 			fan, ok := existing.Value.(*fanValue)
 			if !ok {
 				fan = &fanValue{values: []Value{existing.Value}}

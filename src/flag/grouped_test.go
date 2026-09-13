@@ -2,17 +2,26 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package flag
+// This file is package flag_test, not package flag: testing imports flag, so an
+// internal test file importing testing closes an import cycle.
+package flag_test
 
-import "testing"
+import (
+	. "flag"
+	"testing"
+)
 
 // markGrouped makes this process look like a binary the linker built from
-// several packages' tests, for the length of one test.
+// several packages' tests, and gives the caller a fresh CommandLine to
+// register into. Both are process-wide, so the caller runs alone.
 func markGrouped(test *testing.T) {
 	test.Helper()
-	was := groupedTestBinary
-	groupedTestBinary = "1"
-	test.Cleanup(func() { groupedTestBinary = was })
+	test.Serial()
+	test.Cleanup(MarkGrouped())
+
+	was := CommandLine
+	ResetForTesting(nil)
+	test.Cleanup(func() { CommandLine = was })
 }
 
 // Two members of one test binary declaring the same flag name is ordinary, and
@@ -21,12 +30,11 @@ func markGrouped(test *testing.T) {
 func TestASharedFlagNameReachesEveryMember(test *testing.T) {
 	markGrouped(test)
 
-	set := NewFlagSet("grouped", ContinueOnError)
 	var one, two bool
-	set.BoolVar(&one, "update", false, "first member")
-	set.BoolVar(&two, "update", false, "second member")
+	CommandLine.BoolVar(&one, "update", false, "first member")
+	CommandLine.BoolVar(&two, "update", false, "second member")
 
-	if err := set.Parse([]string{"-update"}); err != nil {
+	if err := CommandLine.Parse([]string{"-update"}); err != nil {
 		test.Fatalf("parsing -update: %v", err)
 	}
 	if !one || !two {
@@ -40,29 +48,28 @@ func TestASharedFlagNameReachesEveryMember(test *testing.T) {
 func TestASharedBoolFlagStillConsumesNoArgument(test *testing.T) {
 	markGrouped(test)
 
-	set := NewFlagSet("grouped", ContinueOnError)
 	var one, two bool
-	set.BoolVar(&one, "debug", false, "first member")
-	set.BoolVar(&two, "debug", false, "second member")
+	CommandLine.BoolVar(&one, "debug", false, "first member")
+	CommandLine.BoolVar(&two, "debug", false, "second member")
 
-	if err := set.Parse([]string{"-debug", "keep"}); err != nil {
+	if err := CommandLine.Parse([]string{"-debug", "keep"}); err != nil {
 		test.Fatalf("parsing -debug: %v", err)
 	}
-	if got := set.Args(); len(got) != 1 || got[0] != "keep" {
+	if got := CommandLine.Args(); len(got) != 1 || got[0] != "keep" {
 		test.Errorf("left %q, want [keep]: the bool flag ate its neighbour", got)
 	}
 }
 
-// Outside a grouped binary a repeated name is what it always was: two
-// declarations of one flag, which is a bug in the program.
-func TestARepeatedNameStillPanicsInAnOrdinaryBinary(test *testing.T) {
-	if grouped() {
-		test.Skip("this binary is a grouped one, so the panic is deliberately gone")
-	}
+// Only CommandLine collects several members' flags. On any other set a
+// repeated name is what it always was, grouped binary or not: two declarations
+// of one flag, which is a bug in the program.
+func TestARepeatedNameStillPanicsOnAnOrdinarySet(test *testing.T) {
+	test.Serial()
+	test.Cleanup(MarkGrouped())
 
 	defer func() {
 		if recover() == nil {
-			test.Error("redefining a flag did not panic outside a grouped binary")
+			test.Error("redefining a flag on a plain FlagSet did not panic")
 		}
 	}()
 

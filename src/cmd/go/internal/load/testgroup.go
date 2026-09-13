@@ -211,6 +211,13 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
 			member.WithTests.Error = cycleErr
 			member.WithTests.Incomplete = true
+			// The cycle is in the graph now, and cmd/go walks that graph to
+			// build actions. vetAction recurses along it until the stack ends
+			// the process. Stop here instead, with the cycle named.
+			if testMain.Error == nil {
+				testMain.Error = cycleErr
+			}
+			testMain.Incomplete = true
 		}
 	}
 
