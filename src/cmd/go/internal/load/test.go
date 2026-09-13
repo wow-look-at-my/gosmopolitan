@@ -717,6 +717,12 @@ type testUnit struct {
 	FuzzTargets []testFunc
 	Examples    []testFunc
 	TestMain    *testFunc
+
+	// Covered names the packages this unit reports coverage for, and
+	// CoverSelected is the Go expression listing them. Both belong to the unit
+	// rather than the binary: coverage answers for the package under test.
+	Covered       string
+	CoverSelected string
 }
 
 // Units answers the packages this test main imports.
@@ -735,8 +741,10 @@ func (funcs *testFuncs) Units() []testUnit {
 		Tests:       funcs.Tests,
 		Benchmarks:  funcs.Benchmarks,
 		FuzzTargets: funcs.FuzzTargets,
-		Examples:    funcs.Examples,
-		TestMain:    funcs.TestMain,
+		Examples:      funcs.Examples,
+		TestMain:      funcs.TestMain,
+		Covered:       funcs.Covered(),
+		CoverSelected: funcs.CoverSelectedPackages(),
 	}}
 }
 
@@ -941,6 +949,10 @@ type testUnit struct {
 	fuzzTargets []testing.InternalFuzzTarget
 	examples    []testing.InternalExample
 	testMain    func(*testing.Runner)
+{{if .Cover}}
+	covered       string
+	coverSelected []string
+{{end}}
 }
 
 var units = []testUnit{
@@ -969,6 +981,10 @@ var units = []testUnit{
 {{end}}
 		},
 		testMain: {{with .TestMain}}{{.Package}}.{{.Name}}{{else}}nil{{end}},
+{{if $.Cover}}
+		covered: {{.Covered | printf "%q"}},
+		coverSelected: {{printf "%s" .CoverSelected}},
+{{end}}
 	},
 {{end}}
 }
@@ -1012,8 +1028,6 @@ func pickUnit() *testUnit {
 func init() {
 {{if .Cover}}
 	testdeps.CoverMode = {{printf "%q" .Cover.Mode}}
-	testdeps.Covered = {{printf "%q" .Covered}}
-	testdeps.CoverSelectedPackages = {{printf "%s" .CoverSelectedPackages}}
 	testdeps.CoverSnapshotFunc = cfile.Snapshot
 	testdeps.CoverProcessTestDirFunc = cfile.ProcessCoverTestDir
 	testdeps.CoverMarkProfileEmittedFunc = cfile.MarkProfileEmitted
@@ -1025,6 +1039,10 @@ func main() {
 	unit := pickUnit()
 	testdeps.ModulePath = unit.modulePath
 	testdeps.ImportPath = unit.importPath
+{{if .Cover}}
+	testdeps.Covered = unit.covered
+	testdeps.CoverSelectedPackages = unit.coverSelected
+{{end}}
 	runner := testing.MainStart(testdeps.TestDeps{}, unit.tests, unit.benchmarks, unit.fuzzTargets, unit.examples)
 	if unit.testMain != nil {
 		unit.testMain(runner)
