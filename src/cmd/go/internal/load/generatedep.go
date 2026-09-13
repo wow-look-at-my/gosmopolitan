@@ -6,6 +6,7 @@ package load
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
@@ -50,11 +50,20 @@ func generateDir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel)
 	if err != nil {
-		// A package whose directive did not run is a package missing whatever
-		// that directive writes. Handing it back builds something that reports
-		// an undefined symbol somewhere else, or compiles and panics when it is
-		// asked for what it never generated.
-		base.Fatalf("go: generating %s: %v", dir, err)
+		// A directive can be unrunnable rather than broken. A module zip drops
+		// every path the go command ignores, `_codegen` among them, so a
+		// generator kept beside the package it writes is absent from what a
+		// consumer fetches. testify ships one, and ships its generated files
+		// too, so the build needs nothing from it.
+		//
+		// So this reports and hands back the fetched tree. The build then
+		// fails on the symbol a directive really was going to write, which
+		// names what is missing. Killing the build here instead takes down
+		// every consumer of a dependency whose generator was never theirs to
+		// run.
+		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
+		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
+		return dir
 	}
 	return out
 }
@@ -134,6 +143,13 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	if _, err := os.Stat(done); err == nil {
 		return filepath.Join(root, pkgrel), nil
 	}
+	// A module version is fixed bytes, so a directive that cannot run against it
+	// cannot run against it tomorrow either. Recording that answer keeps every
+	// later build from copying the tree and failing the same way.
+	failed := root + ".failed"
+	if why, err := os.ReadFile(failed); err == nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(why)))
+	}
 	if err := modfetch.RemoveAll(root); err != nil {
 		return "", err
 	}
@@ -141,6 +157,10 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 	if err := runGenerate(root, pkgrel); err != nil {
+		// A half-generated tree is worse than none: it compiles against files
+		// the generator had not finished writing.
+		modfetch.RemoveAll(root)
+		os.WriteFile(failed, []byte(err.Error()), 0o666)
 		return "", err
 	}
 	if err := os.WriteFile(done, nil, 0o666); err != nil {
@@ -238,4 +258,3 @@ func copyFile(src, dst string) error {
 	}
 	return w.Close()
 }
-
