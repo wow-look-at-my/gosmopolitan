@@ -53,8 +53,8 @@ func hostSandboxOS() string {
 // must neither record it against that module nor build past it.
 type sandboxUnavailableError struct{ err error }
 
-func (e *sandboxUnavailableError) Error() string { return e.err.Error() }
-func (e *sandboxUnavailableError) Unwrap() error { return e.err }
+func (fail *sandboxUnavailableError) Error() string { return fail.err.Error() }
+func (fail *sandboxUnavailableError) Unwrap() error { return fail.err }
 
 // sandboxUnavailable reports whether err says the host cannot confine a
 // generator. A caller asks before it kills the build over a module, and before

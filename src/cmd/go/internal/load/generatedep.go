@@ -88,11 +88,11 @@ func hasDirective(dir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
 			continue
 		}
-		if fileHasDirective(filepath.Join(dir, e.Name())) {
+		if fileHasDirective(filepath.Join(dir, ent.Name())) {
 			return true
 		}
 	}
@@ -100,15 +100,15 @@ func hasDirective(dir string) bool {
 }
 
 func fileHasDirective(file string) bool {
-	f, err := os.Open(file)
+	open, err := os.Open(file)
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer open.Close()
 
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		if strings.HasPrefix(strings.TrimSpace(s.Text()), generatePrefix) {
+	scan := bufio.NewScanner(open)
+	for scan.Scan() {
+		if strings.HasPrefix(strings.TrimSpace(scan.Text()), generatePrefix) {
 			return true
 		}
 	}
@@ -191,9 +191,9 @@ func makeTreeReadOnly(dir string) {
 		}
 		return nil
 	})
-	for i := len(dirs) - 1; i >= 0; i-- {
-		if info, err := os.Stat(dirs[i]); err == nil {
-			os.Chmod(dirs[i], info.Mode()&^0o222)
+	for idx := len(dirs) - 1; idx >= 0; idx-- {
+		if info, err := os.Stat(dirs[idx]); err == nil {
+			os.Chmod(dirs[idx], info.Mode()&^0o222)
 		}
 	}
 }
@@ -246,22 +246,22 @@ func copyTree(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	r, err := os.Open(src)
+	from, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
-	info, err := r.Stat()
+	defer from.Close()
+	info, err := from.Stat()
 	if err != nil {
 		return err
 	}
-	w, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o600)
+	into, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(w, r); err != nil {
-		w.Close()
+	if _, err := io.Copy(into, from); err != nil {
+		into.Close()
 		return err
 	}
-	return w.Close()
+	return into.Close()
 }
