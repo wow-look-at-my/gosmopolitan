@@ -29,6 +29,7 @@ func main() {
 	}
 }
 -- lang/lang.go --
+//go:generate:produces lang.gen.go
 //go:generate go run example.com/generated/gen -out lang.gen.go
 
 // Package lang declares nothing itself: Name is the generator's to write.
