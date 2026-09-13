@@ -14,24 +14,65 @@ set -eu
 
 today=${WAIVER_TODAY:-$(date -u +%Y-%m-%d)}
 rc=0
+tab=$(printf '\t')
+
+# skipBlanks strips leading spaces and tabs, leaving the rest in `trimmed`.
+skipBlanks() {
+	trimmed=$1
+	while :; do
+		case $trimmed in
+		" "*) trimmed=${trimmed# } ;;
+		"$tab"*) trimmed=${trimmed#"$tab"} ;;
+		*) return 0 ;;
+		esac
+	done
+}
+
+# waiverDate prints the first dated waiver-expires marker on a line. It
+# returns 1 when no marker carries a well-formed date.
+waiverDate() {
+	rest=$1
+	while [ "$rest" != "${rest#*waiver-expires:}" ]; do
+		rest=${rest#*waiver-expires:}
+		skipBlanks "$rest"
+		when=${trimmed%"${trimmed#??????????}"}
+		case $when in
+		[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9])
+			printf '%s' "$when"
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# dateNum turns YYYY-MM-DD into one comparable number.
+dateNum() {
+	rest=${1#*-}
+	printf '%s%s%s' "${1%%-*}" "${rest%%-*}" "${rest#*-}"
+}
 
 for f in "$@"; do
 	[ -f "$f" ] || continue
-	# awk carries the previous line, so a marker above the key counts.
-	out=$(awk -v file="$f" -v today="$today" '
-		/continue-on-error/ {
-			line = prev " " $0
-			if (match(line, /waiver-expires:[ \t]*[0-9]{4}-[0-9]{2}-[0-9]{2}/)) {
-				d = substr(line, RSTART, RLENGTH)
-				sub(/.*waiver-expires:[ \t]*/, "", d)
-				if (d < today)
-					printf "%s:%d: waiver expired on %s (today is %s)\n", file, NR, d, today
-			} else {
-				printf "%s:%d: continue-on-error with no waiver-expires date\n", file, NR
-			}
-		}
-		{ prev = $0 }
-	' "$f")
+	out=$(
+		num=0
+		prev=""
+		while IFS= read -r text || [ -n "$text" ]; do
+			num=$((num + 1))
+			case $text in
+			*continue-on-error*)
+				if when=$(waiverDate "$prev $text"); then
+					if [ "$(dateNum "$when")" -lt "$(dateNum "$today")" ]; then
+						printf '%s:%d: waiver expired on %s (today is %s)\n' "$f" "$num" "$when" "$today"
+					fi
+				else
+					printf '%s:%d: continue-on-error with no waiver-expires date\n' "$f" "$num"
+				fi
+				;;
+			esac
+			prev=$text
+		done <"$f"
+	)
 	if [ -n "$out" ]; then
 		printf '%s\n' "$out" >&2
 		rc=2

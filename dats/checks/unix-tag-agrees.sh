@@ -12,15 +12,39 @@ root=${1:-.}
 dist="$root/src/cmd/dist/build.go"
 syslist="$root/src/internal/syslist/syslist.go"
 
+# firstKey prints the first quoted lowercase-alnum token on a line, and
+# returns 1 when the line carries none.
+firstKey() {
+	rest=$1
+	while [ "$rest" != "${rest#*\"}" ]; do
+		rest=${rest#*\"}
+		word=${rest%%\"*}
+		[ "$word" != "$rest" ] || return 1
+		rest=${rest#*\"}
+		case $word in
+		"" | *[!a-z0-9]*) continue ;;
+		esac
+		printf '%s\n' "$word"
+		return 0
+	done
+	return 1
+}
+
 # Print the quoted keys of the named map literal, one per line.
 keys() {
-	awk -v want="$2" '
-		$0 ~ "^var " want " = map\\[string\\]bool\\{" { in_map = 1; next }
-		in_map && /^\}/                               { exit }
-		in_map && match($0, /"[a-z0-9]+"/) {
-			print substr($0, RSTART + 1, RLENGTH - 2)
-		}
-	' "$1" | sort
+	inmap=0
+	while IFS= read -r text || [ -n "$text" ]; do
+		if [ "$inmap" -eq 0 ]; then
+			case $text in
+			"var $2 = map[string]bool{"*) inmap=1 ;;
+			esac
+			continue
+		fi
+		case $text in
+		"}"*) break ;;
+		esac
+		firstKey "$text" || true
+	done <"$1" | sort
 }
 
 a=$(keys "$dist" unixOS)
@@ -39,7 +63,13 @@ fi
 
 printf 'BLOCKED: the two "unix" tag lists disagree\n' >&2
 diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") |
-	sed 's/^</  only in cmd\/dist:     /; s/^>/  only in syslist:      /' >&2
+	while IFS= read -r text; do
+		case $text in
+		"<"*) printf '  only in cmd/dist:     %s\n' "${text#<}" ;;
+		">"*) printf '  only in syslist:      %s\n' "${text#>}" ;;
+		*) printf '%s\n' "$text" ;;
+		esac
+	done >&2
 printf '\nA GOOS in one list and not the other means dist and cmd/go build\n' >&2
 printf 'different files for it. Add it to both.\n' >&2
 exit 2
