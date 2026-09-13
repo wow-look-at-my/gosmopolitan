@@ -31,8 +31,10 @@ import (
 
 var TestMainDeps = []string{
 	// Dependencies for testmain.
+	"fmt",
 	"os",
 	"reflect",
+	"strings",
 	"testing",
 	"testing/internal/testdeps",
 }
@@ -675,24 +677,37 @@ type testFuncs struct {
 // package, and this is what lets it hold more.
 type testUnit struct {
 	ImportPath  string
+	ModulePath  string
 	Alias       string
 	XAlias      string
 	ImportTest  bool
 	NeedTest    bool
 	ImportXtest bool
 	NeedXtest   bool
+
+	Tests       []testFunc
+	Benchmarks  []testFunc
+	FuzzTargets []testFunc
+	Examples    []testFunc
+	TestMain    *testFunc
 }
 
 // Units answers the packages this test main imports.
 func (funcs *testFuncs) Units() []testUnit {
 	return []testUnit{{
-		ImportPath:  funcs.Package.ImportPath,
+		ImportPath:  funcs.ImportPath(),
+		ModulePath:  funcs.ModulePath(),
 		Alias:       testAlias(0, false),
 		XAlias:      testAlias(0, true),
 		ImportTest:  funcs.ImportTest,
 		NeedTest:    funcs.NeedTest,
 		ImportXtest: funcs.ImportXtest,
 		NeedXtest:   funcs.NeedXtest,
+		Tests:       funcs.Tests,
+		Benchmarks:  funcs.Benchmarks,
+		FuzzTargets: funcs.FuzzTargets,
+		Examples:    funcs.Examples,
+		TestMain:    funcs.TestMain,
 	}}
 }
 
@@ -867,10 +882,10 @@ var testmainTmpl = lazytemplate.New("main", `
 package main
 
 import (
+	"fmt"
 	"os"
-{{if .TestMain}}
 	"reflect"
-{{end}}
+	"strings"
 	"testing"
 	"testing/internal/testdeps"
 {{if .Cover}}
@@ -887,28 +902,82 @@ import (
 {{end}}
 )
 
-var tests = []testing.InternalTest{
+// testUnit is one package's tests. A binary can hold several, and the
+// -test.unit flag names the one this process runs.
+type testUnit struct {
+	importPath  string
+	modulePath  string
+	tests       []testing.InternalTest
+	benchmarks  []testing.InternalBenchmark
+	fuzzTargets []testing.InternalFuzzTarget
+	examples    []testing.InternalExample
+	testMain    func(*testing.Runner)
+}
+
+var units = []testUnit{
+{{range .Units}}
+	{
+		importPath: {{.ImportPath | printf "%q"}},
+		modulePath: {{.ModulePath | printf "%q"}},
+		tests: []testing.InternalTest{
 {{range .Tests}}
-	{"{{.Name}}", {{.Package}}.{{.Name}}},
+			{"{{.Name}}", {{.Package}}.{{.Name}}},
 {{end}}
-}
-
-var benchmarks = []testing.InternalBenchmark{
+		},
+		benchmarks: []testing.InternalBenchmark{
 {{range .Benchmarks}}
-	{"{{.Name}}", {{.Package}}.{{.Name}}},
+			{"{{.Name}}", {{.Package}}.{{.Name}}},
 {{end}}
-}
-
-var fuzzTargets = []testing.InternalFuzzTarget{
+		},
+		fuzzTargets: []testing.InternalFuzzTarget{
 {{range .FuzzTargets}}
-	{"{{.Name}}", {{.Package}}.{{.Name}}},
+			{"{{.Name}}", {{.Package}}.{{.Name}}},
+{{end}}
+		},
+		examples: []testing.InternalExample{
+{{range .Examples}}
+			{"{{.Name}}", {{.Package}}.{{.Name}}, {{.Output | printf "%q"}}, {{.Unordered}}},
+{{end}}
+		},
+		testMain: {{with .TestMain}}{{.Package}}.{{.Name}}{{else}}nil{{end}},
+	},
 {{end}}
 }
 
-var examples = []testing.InternalExample{
-{{range .Examples}}
-	{"{{.Name}}", {{.Package}}.{{.Name}}, {{.Output | printf "%q"}}, {{.Unordered}}},
-{{end}}
+// unitFlag names the package whose tests this process runs. The go command
+// passes it when one binary holds more than one package.
+const unitFlag = "-test.unit="
+
+// pickUnit answers the package this process runs and takes the flag naming it
+// out of the argument list, which the testing package parses next and knows
+// nothing about.
+func pickUnit() *testUnit {
+	want := ""
+	kept := make([]string, 0, len(os.Args))
+	for _, arg := range os.Args {
+		if strings.HasPrefix(arg, unitFlag) {
+			want = arg[len(unitFlag):]
+			continue
+		}
+		kept = append(kept, arg)
+	}
+	os.Args = kept
+
+	if want == "" {
+		if len(units) == 1 {
+			return &units[0]
+		}
+		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
+		os.Exit(2)
+	}
+	for idx := range units {
+		if units[idx].importPath == want {
+			return &units[idx]
+		}
+	}
+	fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
+	os.Exit(2)
+	return nil
 }
 
 func init() {
@@ -921,18 +990,18 @@ func init() {
 	testdeps.CoverMarkProfileEmittedFunc = cfile.MarkProfileEmitted
 
 {{end}}
-	testdeps.ModulePath = {{.ModulePath | printf "%q"}}
-	testdeps.ImportPath = {{.ImportPath | printf "%q"}}
 }
 
 func main() {
-	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
-{{with .TestMain}}
-	{{.Package}}.{{.Name}}(m)
-	os.Exit(int(reflect.ValueOf(m).Elem().FieldByName("exitCode").Int()))
-{{else}}
-	os.Exit(m.Run())
-{{end}}
+	unit := pickUnit()
+	testdeps.ModulePath = unit.modulePath
+	testdeps.ImportPath = unit.importPath
+	runner := testing.MainStart(testdeps.TestDeps{}, unit.tests, unit.benchmarks, unit.fuzzTargets, unit.examples)
+	if unit.testMain != nil {
+		unit.testMain(runner)
+		os.Exit(int(reflect.ValueOf(runner).Elem().FieldByName("exitCode").Int()))
+	}
+	os.Exit(runner.Run())
 }
 
 `)
