@@ -245,14 +245,18 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	}
 	testMain.Internal.TestmainGo = &content
 
+	// Key by the package's own path, never by unit.ImportPath. That one is what
+	// the generated main prints, and it is EMPTY for command-line-arguments and
+	// for a package outside a module. The caller reads this map by the real path,
+	// so an empty key hands it no digest and the test cache aborts the build.
 	digests := make(map[string]string, len(units))
-	for _, unit := range units {
+	for idx, unit := range units {
 		digest, err := unitDigest(unit, cover)
 		if err != nil && testMain.Error == nil {
 			testMain.Error = &PackageError{Err: err}
 			testMain.Incomplete = true
 		}
-		digests[unit.ImportPath] = digest
+		digests[members[idx].Package.ImportPath] = digest
 	}
 	return testMain, digests
 }
