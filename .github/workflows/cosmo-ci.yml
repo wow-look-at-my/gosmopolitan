@@ -149,7 +149,8 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
-      fail-fast: true
+      # Each leg is one host's answer. A cancelled leg reports nothing about that host, so a sibling's red must not take it.
+      fail-fast: false
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -288,7 +289,8 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      # Each leg is one port's answer. A cancelled leg reports nothing about that port, so a sibling's red must not take it.
+      fail-fast: false
       matrix:
         port: [js, wasip1]
 
