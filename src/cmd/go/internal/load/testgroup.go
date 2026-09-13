@@ -18,8 +18,8 @@ import (
 // variants TestPackagesAndErrors already built for it.
 type TestGroupMember struct {
 	Package *Package
-	Ptest   *Package
-	Pxtest  *Package
+	WithTests   *Package
+	ExtTests  *Package
 }
 
 // TestGroupMain builds ONE main package holding the tests of several packages.
@@ -48,7 +48,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	ldflags := append(first.Internal.Ldflags, "-X", "testing.testBinary=1")
 	gccgoflags := append(first.Internal.Gccgoflags, "-Wl,--defsym,testing.gccgoTestBinary=1")
 
-	pmain := &Package{
+	testMain := &Package{
 		PackagePublic: PackagePublic{
 			Name:       "main",
 			Dir:        first.Dir,
@@ -70,42 +70,42 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		},
 	}
 	firstBuild := first.Internal.Build
-	pmain.DefaultGODEBUG = defaultGODEBUG(ld, pmain, firstBuild.Directives, firstBuild.TestDirectives, firstBuild.XTestDirectives)
+	testMain.DefaultGODEBUG = defaultGODEBUG(ld, testMain, firstBuild.Directives, firstBuild.TestDirectives, firstBuild.XTestDirectives)
 
 	deps := str.StringList(TestMainDeps)
 	if cover != nil {
 		deps = append(deps, "internal/coverage/cfile")
 	}
 	ldDeps, err := LinkerDeps(ld, first)
-	if err != nil && pmain.Error == nil {
-		pmain.Error = &PackageError{Err: err}
+	if err != nil && testMain.Error == nil {
+		testMain.Error = &PackageError{Err: err}
 	}
 	deps = append(deps, ldDeps...)
 	for _, dep := range deps {
 		imported, err := loadImport(ld, ctx, opts, pre, dep, "", nil, &stk, nil, 0)
-		if err != nil && pmain.Error == nil {
-			pmain.Error = err
-			pmain.Incomplete = true
+		if err != nil && testMain.Error == nil {
+			testMain.Error = err
+			testMain.Incomplete = true
 		}
-		pmain.Internal.Imports = append(pmain.Internal.Imports, imported)
+		testMain.Internal.Imports = append(testMain.Internal.Imports, imported)
 	}
 
 	units := make([]testUnit, 0, len(members))
 	for idx, member := range members {
 		funcs, err := loadTestFuncs(member.Package)
-		if err != nil && pmain.Error == nil {
-			pmain.setLoadPackageDataError(err, member.Package.ImportPath, &stk, nil)
+		if err != nil && testMain.Error == nil {
+			testMain.setLoadPackageDataError(err, member.Package.ImportPath, &stk, nil)
 		}
 		funcs.Cover = cover
 
-		if member.Ptest != nil && len(member.Ptest.GoFiles)+len(member.Ptest.CgoFiles) > 0 {
-			pmain.Internal.Imports = append(pmain.Internal.Imports, member.Ptest)
-			pmain.Imports = append(pmain.Imports, member.Ptest.ImportPath)
+		if member.WithTests != nil && len(member.WithTests.GoFiles)+len(member.WithTests.CgoFiles) > 0 {
+			testMain.Internal.Imports = append(testMain.Internal.Imports, member.WithTests)
+			testMain.Imports = append(testMain.Imports, member.WithTests.ImportPath)
 			funcs.ImportTest = true
 		}
-		if member.Pxtest != nil {
-			pmain.Internal.Imports = append(pmain.Internal.Imports, member.Pxtest)
-			pmain.Imports = append(pmain.Imports, member.Pxtest.ImportPath)
+		if member.ExtTests != nil {
+			testMain.Internal.Imports = append(testMain.Internal.Imports, member.ExtTests)
+			testMain.Imports = append(testMain.Imports, member.ExtTests.ImportPath)
 			funcs.ImportXtest = true
 		}
 
@@ -139,51 +139,51 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Pop()
 
 	// Only matters for go list -test output.
-	sort.Strings(pmain.Imports)
+	sort.Strings(testMain.Imports)
 	kept := 0
-	for _, path := range pmain.Imports {
-		if kept == 0 || path != pmain.Imports[kept-1] {
-			pmain.Imports[kept] = path
+	for _, path := range testMain.Imports {
+		if kept == 0 || path != testMain.Imports[kept-1] {
+			testMain.Imports[kept] = path
 			kept++
 		}
 	}
-	pmain.Imports = pmain.Imports[:kept]
-	pmain.Internal.RawImports = str.StringList(pmain.Imports)
+	testMain.Imports = testMain.Imports[:kept]
+	testMain.Internal.RawImports = str.StringList(testMain.Imports)
 
 	// Each member's own dependencies must reach its test copies, and a member
 	// the group holds is never in another member's closure, so the rewrites
 	// cannot collide.
 	for _, member := range members {
-		if cycleErr := recompileForTest(pmain, member.Package, member.Ptest, member.Pxtest); cycleErr != nil {
-			member.Ptest.Error = cycleErr
-			member.Ptest.Incomplete = true
+		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
+			member.WithTests.Error = cycleErr
+			member.WithTests.Incomplete = true
 		}
 	}
 
 	if !opts.SuppressBuildInfo {
-		pmain.setBuildInfo(ctx, ld.Fetcher(), opts.AutoVCS)
+		testMain.setBuildInfo(ctx, ld.Fetcher(), opts.AutoVCS)
 	}
 
 	if cover != nil {
-		pmain.Internal.Cover.Mode = "testmain"
+		testMain.Internal.Cover.Mode = "testmain"
 		for _, member := range members {
-			if member.Ptest == nil {
+			if member.WithTests == nil {
 				continue
 			}
-			member.Ptest.Internal.Cover.Mode = member.Package.Internal.Cover.Mode
+			member.WithTests.Internal.Cover.Mode = member.Package.Internal.Cover.Mode
 			if cover.Local {
-				member.Ptest.Internal.Cover.Mode = cover.Mode
+				member.WithTests.Internal.Cover.Mode = cover.Mode
 			}
 		}
 	}
 
 	content, err := renderTestmain(testMainData{Units: units, Cover: cover})
-	if err != nil && pmain.Error == nil {
-		pmain.Error = &PackageError{Err: err}
-		pmain.Incomplete = true
+	if err != nil && testMain.Error == nil {
+		testMain.Error = &PackageError{Err: err}
+		testMain.Incomplete = true
 	}
-	pmain.Internal.TestmainGo = &content
-	return pmain
+	testMain.Internal.TestmainGo = &content
+	return testMain
 }
 
 // GroupMembers partitions packages into the groups that may share one binary.
@@ -197,11 +197,11 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 	reaches := make([]map[string]bool, len(members))
 	for idx, member := range members {
 		var roots []*Package
-		if member.Ptest != nil {
-			roots = append(roots, member.Ptest)
+		if member.WithTests != nil {
+			roots = append(roots, member.WithTests)
 		}
-		if member.Pxtest != nil {
-			roots = append(roots, member.Pxtest)
+		if member.ExtTests != nil {
+			roots = append(roots, member.ExtTests)
 		}
 		seen := map[string]bool{}
 		for _, reached := range PackageList(roots) {

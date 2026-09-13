@@ -642,12 +642,12 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		var wg sync.WaitGroup
 		sema := semaphore.NewWeighted(int64(runtime.GOMAXPROCS(0)))
 		type testPackageSet struct {
-			p, pmain, ptest, pxtest *load.Package
+			p, testMain, withTests, extTests *load.Package
 		}
 		var testPackages []testPackageSet
 		for _, p := range pkgs {
 			if len(p.TestGoFiles)+len(p.XTestGoFiles) > 0 {
-				var pmain, ptest, pxtest *load.Package
+				var testMain, withTests, extTests *load.Package
 				if *listE {
 					sema.Acquire(ctx, 1)
 					wg.Add(1)
@@ -655,23 +655,23 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 						sema.Release(1)
 						wg.Done()
 					}
-					pmain, ptest, pxtest = load.TestPackagesAndErrors(moduleLoader, ctx, done, pkgOpts, p, nil)
+					testMain, withTests, extTests = load.TestPackagesAndErrors(moduleLoader, ctx, done, pkgOpts, p, nil)
 				} else {
 					var perr *load.Package
-					pmain, ptest, pxtest, perr = load.TestPackagesFor(moduleLoader, ctx, pkgOpts, p, nil)
+					testMain, withTests, extTests, perr = load.TestPackagesFor(moduleLoader, ctx, pkgOpts, p, nil)
 					if perr != nil {
 						base.Fatalf("go: can't load test package: %s", perr.Error)
 					}
 				}
-				testPackages = append(testPackages, testPackageSet{p, pmain, ptest, pxtest})
+				testPackages = append(testPackages, testPackageSet{p, testMain, withTests, extTests})
 			}
 		}
 		wg.Wait()
 		for _, pkgset := range testPackages {
-			p, pmain, ptest, pxtest := pkgset.p, pkgset.pmain, pkgset.ptest, pkgset.pxtest
-			if pmain != nil {
-				pkgs = append(pkgs, pmain)
-				data := *pmain.Internal.TestmainGo
+			p, testMain, withTests, extTests := pkgset.p, pkgset.testMain, pkgset.withTests, pkgset.extTests
+			if testMain != nil {
+				pkgs = append(pkgs, testMain)
+				data := *testMain.Internal.TestmainGo
 				sema.Acquire(ctx, 1)
 				wg.Add(1)
 				go func() {
@@ -682,17 +682,17 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 					if err != nil {
 						base.Fatalf("%s", err)
 					}
-					pmain.GoFiles[0] = c.OutputFile(out)
+					testMain.GoFiles[0] = c.OutputFile(out)
 					sema.Release(1)
 					wg.Done()
 				}()
 
 			}
-			if ptest != nil && ptest != p {
-				pkgs = append(pkgs, ptest)
+			if withTests != nil && withTests != p {
+				pkgs = append(pkgs, withTests)
 			}
-			if pxtest != nil {
-				pkgs = append(pkgs, pxtest)
+			if extTests != nil {
+				pkgs = append(pkgs, extTests)
 			}
 		}
 

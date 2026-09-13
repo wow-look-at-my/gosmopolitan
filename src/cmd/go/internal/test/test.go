@@ -1030,6 +1030,19 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 		}
 	}
 
+	// One binary can hold the tests of several packages, so which packages
+	// travel together is settled before any action is built.
+	var cover *load.TestCover
+	if cfg.BuildCover {
+		cover = &load.TestCover{
+			Mode:  cfg.BuildCoverMode,
+			Local: cfg.BuildCoverPkg == nil,
+			Pkgs:  testCoverPkgs,
+			Paths: cfg.BuildCoverPkg,
+		}
+	}
+	groups := groupTestPackages(moduleLoader, ctx, pkgOpts, pkgs, cover)
+
 	// Prepare build + run + print actions for all packages being tested.
 	for _, p := range pkgs {
 		reportErr := func(perr *load.Package, err error) {
@@ -1072,7 +1085,7 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 			reportSetupFailed(firstErrPkg, firstErrPkg.Error)
 			continue
 		}
-		buildTest, runTest, printTest, perr, err := builderTest(moduleLoader, b, ctx, pkgOpts, p, allImports[p], writeCoverMetaAct)
+		buildTest, runTest, printTest, perr, err := builderTest(moduleLoader, b, ctx, pkgOpts, p, allImports[p], writeCoverMetaAct, groups)
 		if err != nil {
 			reportErr(perr, err)
 			reportSetupFailed(perr, err)
@@ -1153,7 +1166,68 @@ var windowsBadWords = []string{
 	"update",
 }
 
-func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOpts load.PackageOpts, p *load.Package, imported bool, writeCoverMetaAct *work.Action) (buildAction, runAction, printAction *work.Action, perr *load.Package, err error) {
+// testGroup is the binary a package's tests run out of, the packages sharing
+// it, and that package's own test copies inside it.
+type testGroup struct {
+	testMain   *load.Package
+	withTests   *load.Package
+	extTests  *load.Package
+	perr    *load.Package
+	members []*load.Package
+
+	// ready says the binary has been set up: its directory made, its generated
+	// file written, its target named. The first member to arrive does that, and
+	// the rest share what it built.
+	ready bool
+}
+
+// groupTestPackages builds every package's test copies, decides which packages
+// may share a binary, and builds one generated main for each group.
+//
+// A package whose tests reach another package being tested cannot travel with
+// it: both would put a package at that import path in one link. So the groups
+// are a partition, never a selection. Every package still runs, and still
+// reports on its own.
+func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.PackageOpts, pkgs []*load.Package, cover *load.TestCover) map[*load.Package]*testGroup {
+	groups := make(map[*load.Package]*testGroup, len(pkgs))
+	var members []load.TestGroupMember
+	for _, pkg := range pkgs {
+		if len(pkg.TestGoFiles)+len(pkg.XTestGoFiles) == 0 {
+			continue
+		}
+		withTests, extTests, perr := load.TestVariantsFor(ld, ctx, pkgOpts, pkg, cover)
+		groups[pkg] = &testGroup{withTests: withTests, extTests: extTests, perr: perr}
+		if perr != nil {
+			continue
+		}
+		members = append(members, load.TestGroupMember{Package: pkg, WithTests: withTests, ExtTests: extTests})
+	}
+
+	batches := load.GroupMembers(members)
+	if testC || testNeedBinary() {
+		// -c and the profile flags name a binary per package, so each one
+		// travels alone.
+		batches = nil
+		for _, member := range members {
+			batches = append(batches, []load.TestGroupMember{member})
+		}
+	}
+	for _, batch := range batches {
+		name := batch[0].Package.ImportPath + ".test"
+		testMain := load.TestGroupMain(ld, ctx, pkgOpts, batch, cover, name)
+		shared := make([]*load.Package, 0, len(batch))
+		for _, member := range batch {
+			shared = append(shared, member.Package)
+		}
+		for _, member := range batch {
+			groups[member.Package].testMain = testMain
+			groups[member.Package].members = shared
+		}
+	}
+	return groups
+}
+
+func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOpts load.PackageOpts, p *load.Package, imported bool, writeCoverMetaAct *work.Action, groups map[*load.Package]*testGroup) (buildAction, runAction, printAction *work.Action, perr *load.Package, err error) {
 	if len(p.TestGoFiles)+len(p.XTestGoFiles) == 0 {
 		build := b.CompileAction(work.ModeBuild, work.ModeBuild, p)
 		run := &work.Action{
@@ -1192,61 +1266,63 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		return build, run, print, nil, nil
 	}
 
-	// Build Package structs describing:
-	//	pmain - pkg.test binary
-	//	ptest - package + test files
-	//	pxtest - package of external test files
-	var cover *load.TestCover
-	if cfg.BuildCover {
-		cover = &load.TestCover{
-			Mode:  cfg.BuildCoverMode,
-			Local: cfg.BuildCoverPkg == nil,
-			Pkgs:  testCoverPkgs,
-			Paths: cfg.BuildCoverPkg,
-		}
+	// The binary this package's tests run out of. Several packages can share
+	// one, so it is built before any of them reaches here.
+	group := groups[p]
+	if group == nil {
+		base.Fatalf("go: internal error: no test binary was built for %s", p.ImportPath)
 	}
-	pmain, ptest, pxtest, perr := load.TestPackagesFor(ld, ctx, pkgOpts, p, cover)
-	if perr != nil {
-		return nil, nil, nil, perr, perr.Error
+	if group.perr != nil {
+		return nil, nil, nil, group.perr, group.perr.Error
 	}
+	testMain, withTests, extTests := group.testMain, group.withTests, group.extTests
 
 	// If imported is true then this package is imported by some
 	// package being tested. Make building the test version of the
 	// package depend on building the non-test version, so that we
 	// only report build errors once. Issue #44624.
-	if imported && ptest != p {
-		buildTest := b.CompileAction(work.ModeBuild, work.ModeBuild, ptest)
+	if imported && withTests != p {
+		buildTest := b.CompileAction(work.ModeBuild, work.ModeBuild, withTests)
 		buildP := b.CompileAction(work.ModeBuild, work.ModeBuild, p)
 		buildTest.Deps = append(buildTest.Deps, buildP)
 	}
 
 	testBinary := testBinaryName(p)
+	groupBinary := testBinaryName(group.members[0])
 
 	// Set testdir to compile action's objdir.
 	// so that the default file path stripping applies to _testmain.go.
-	testDir := b.CompileAction(work.ModeBuild, work.ModeBuild, pmain).Objdir
-	if err := b.BackgroundShell().Mkdir(testDir); err != nil {
-		return nil, nil, nil, nil, err
-	}
+	testDir := b.CompileAction(work.ModeBuild, work.ModeBuild, testMain).Objdir
+	a := b.LinkAction(ld, work.ModeBuild, work.ModeBuild, testMain)
 
-	pmain.Dir = testDir
-	pmain.Internal.OmitDebug = !testC && !testNeedBinary()
-	if pmain.ImportPath == "runtime.test" {
-		// The runtime package needs a symbolized binary for its tests.
-		// See runtime/unsafepoint_test.go.
-		pmain.Internal.OmitDebug = false
-	}
-
-	if !cfg.BuildN {
-		// writeTestmain writes _testmain.go,
-		// using the test description gathered in t.
-		if err := os.WriteFile(testDir+"_testmain.go", *pmain.Internal.TestmainGo, 0666); err != nil {
+	// Several packages can share this binary, and the first of them to arrive
+	// here sets it up. LinkAction hands each of them the same action.
+	if !group.ready {
+		group.ready = true
+		if err := b.BackgroundShell().Mkdir(testDir); err != nil {
 			return nil, nil, nil, nil, err
 		}
-	}
 
-	a := b.LinkAction(ld, work.ModeBuild, work.ModeBuild, pmain)
-	a.Target = testDir + testBinary + cfg.ExeSuffix
+		testMain.Dir = testDir
+		testMain.Internal.OmitDebug = !testC && !testNeedBinary()
+		for _, member := range group.members {
+			if member.ImportPath == "runtime" {
+				// The runtime package needs a symbolized binary for its tests.
+				// See runtime/unsafepoint_test.go.
+				testMain.Internal.OmitDebug = false
+			}
+		}
+
+		if !cfg.BuildN {
+			// writeTestmain writes _testmain.go,
+			// using the test description gathered in t.
+			if err := os.WriteFile(testDir+"_testmain.go", *testMain.Internal.TestmainGo, 0666); err != nil {
+				return nil, nil, nil, nil, err
+			}
+		}
+
+		a.Target = testDir + groupBinary + cfg.ExeSuffix
+	}
 	if cfg.Goos == "windows" {
 		// There are many reserved words on Windows that,
 		// if used in the name of an executable, cause Windows
@@ -1305,12 +1381,12 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		if isNull {
 			runAction = buildAction
 		} else {
-			pmain.Target = target
+			testMain.Target = target
 			installAction = &work.Action{
 				Mode:    "test build",
 				Actor:   work.ActorFunc(work.BuildInstallFunc),
 				Deps:    []*work.Action{buildAction},
-				Package: pmain,
+				Package: testMain,
 				Target:  target,
 			}
 			runAction = installAction // make sure runAction != nil even if not running test
@@ -1370,11 +1446,11 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		}
 	}
 
-	if len(ptest.GoFiles)+len(ptest.CgoFiles) > 0 {
-		addTestVet(ld, b, ptest, vetRunAction, installAction)
+	if len(withTests.GoFiles)+len(withTests.CgoFiles) > 0 {
+		addTestVet(ld, b, withTests, vetRunAction, installAction)
 	}
-	if pxtest != nil {
-		addTestVet(ld, b, pxtest, vetRunAction, installAction)
+	if extTests != nil {
+		addTestVet(ld, b, extTests, vetRunAction, installAction)
 	}
 
 	if installAction != nil {
@@ -1636,7 +1712,12 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		// fresh copies of tools to test as part of the testing.
 		addToEnv = "GOCOVERDIR=" + gcd
 	}
-	args := str.StringList(execCmd, buildAction.BuiltTarget(), testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
+	// The binary can hold several packages' tests, so it is told which one this
+	// run is for. It takes the flag out of its own argument list before the
+	// testing package reads what is left, and the flag is ours rather than the
+	// caller's, so it never reaches the list that decides cacheability.
+	unitArg := "-test.unit=" + a.Package.ImportPath
+	args := str.StringList(execCmd, buildAction.BuiltTarget(), unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
 
 	if testCoverProfile != "" {
 		// Write coverage to temporary profile, for merging later.
