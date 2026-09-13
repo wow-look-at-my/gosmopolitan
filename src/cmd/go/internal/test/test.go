@@ -1585,7 +1585,7 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		// The first attempt reuses a result without running the linker at
 		// all. This one reuses it when different inputs compile alike.
 		// c.saveOutput stores the result under both IDs.
-		r.c.tryCacheWithID(b, a, testIdentity(b, buildAction, true))
+		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, true))
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -1796,27 +1796,46 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
 func (c *runCache) tryCache(b *work.Builder, a *work.Action, linkAction *work.Action) bool {
-	return c.tryCacheWithID(b, a, testIdentity(b, linkAction, false))
+	return c.tryCacheWithID(b, a, testIdentity(b, a, linkAction, false))
 }
 
-// testIdentity keys a test result on the test main's own compile plus the link
-// configuration. Never on the link: a link folds in every package it holds, so
-// that key makes one package's edit invalidate every result in the binary.
-// A compile action's ID already carries each dependency's content ID.
+// testIdentity keys a test result on the compiles of the package under test
+// plus the link configuration. Never on the link, and never on the generated
+// main: both fold in every package the binary holds, so either key makes one
+// package's edit invalidate every result in it.
 //
-// byContent identifies what the compile produced rather than what went into
-// it, so inputs that differ but compile alike still hit.
-func testIdentity(b *work.Builder, linkAction *work.Action, byContent bool) string {
-	// LinkAction leads the deps with the compile of the same package.
+// The package's own compiles are the right scope. Its test files are inputs to
+// them, and a compile action's ID already carries each dependency's content ID,
+// so they cover this package and say nothing about a sibling.
+//
+// byContent identifies what those compiles produced rather than what went into
+// them, so inputs that differ but compile alike still hit.
+func testIdentity(b *work.Builder, a *work.Action, linkAction *work.Action, byContent bool) string {
+	// LinkAction leads the deps with the compile of the generated main, and
+	// that compile imports the test variants of every package in the binary.
 	if len(linkAction.Deps) == 0 || linkAction.Deps[0].Package != linkAction.Package {
 		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
 	}
-	compileAction := linkAction.Deps[0]
-	code := compileAction.BuildActionID()
-	if byContent {
-		code = compileAction.BuildContentID()
+	tested := a.Package.ImportPath
+	var codes []string
+	for _, dep := range linkAction.Deps[0].Deps {
+		if dep.Package == nil {
+			continue
+		}
+		if path := dep.Package.ImportPath; path != tested && path != tested+"_test" {
+			continue
+		}
+		if byContent {
+			codes = append(codes, dep.BuildContentID())
+			continue
+		}
+		codes = append(codes, dep.BuildActionID())
 	}
-	return code + " " + b.LinkConfigID(linkAction.Package)
+	if len(codes) == 0 {
+		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)
+	}
+	slices.Sort(codes)
+	return strings.Join(codes, " ") + " " + b.LinkConfigID(linkAction.Package)
 }
 
 func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bool {
