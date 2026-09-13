@@ -109,7 +109,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			GoFiles:    []string{"_testmain.go"},
 			ImportPath: name,
 			Root:       first.Root,
-			Imports:    str.StringList(TestMainDeps),
+			Imports:    groupedMainDeps(len(members)),
 			Module:     first.Module,
 		},
 		Internal: PackageInternal{
@@ -126,7 +126,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	firstBuild := first.Internal.Build
 	testMain.DefaultGODEBUG = defaultGODEBUG(ld, testMain, firstBuild.Directives, firstBuild.TestDirectives, firstBuild.XTestDirectives)
 
-	deps := str.StringList(TestMainDeps)
+	deps := groupedMainDeps(len(members))
 	if cover != nil {
 		deps = append(deps, "internal/coverage/cfile")
 	}

@@ -29,14 +29,27 @@ import (
 	"cmd/go/internal/trace"
 )
 
+// TestMainDeps is what the generated main imports. Keep it to what upstream
+// carries: this list IS what `go list` reports as a test binary's imports, so
+// a package added here shows up in every one of them. A main that holds
+// several packages needs fmt as well, and asks for it through groupedMainDeps.
 var TestMainDeps = []string{
 	// Dependencies for testmain.
-	"fmt",
 	"os",
 	"reflect",
-	"strings",
 	"testing",
 	"testing/internal/testdeps",
+}
+
+// groupedMainDeps is TestMainDeps plus what a main holding several packages
+// needs on top: fmt, to name the package a caller asked for and did not find.
+func groupedMainDeps(units int) []string {
+	deps := str.StringList(TestMainDeps)
+	if units > 1 {
+		deps = append(deps, "fmt")
+		sort.Strings(deps)
+	}
+	return deps
 }
 
 type TestCover struct {
@@ -951,10 +964,11 @@ var testmainTmpl = lazytemplate.New("main", `
 package main
 
 import (
+{{if gt (len .Units) 1}}
 	"fmt"
+{{end}}
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"testing/internal/testdeps"
 {{if .Cover}}
@@ -1023,6 +1037,7 @@ var units = []testUnit{
 {{end}}
 }
 
+{{if gt (len .Units) 1}}
 // unitFlag names the package whose tests this process runs. The go command
 // passes it when one binary holds more than one package.
 const unitFlag = "-test.unit="
@@ -1034,7 +1049,9 @@ func pickUnit() *testUnit {
 	want := ""
 	kept := make([]string, 0, len(os.Args))
 	for _, arg := range os.Args {
-		if strings.HasPrefix(arg, unitFlag) {
+		// Spelled out rather than strings.HasPrefix: importing strings here
+		// would put it in every test binary's reported import list.
+		if len(arg) >= len(unitFlag) && arg[:len(unitFlag)] == unitFlag {
 			want = arg[len(unitFlag):]
 			continue
 		}
@@ -1043,9 +1060,6 @@ func pickUnit() *testUnit {
 	os.Args = kept
 
 	if want == "" {
-		if len(units) == 1 {
-			return &units[0]
-		}
 		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
 		os.Exit(2)
 	}
@@ -1058,6 +1072,13 @@ func pickUnit() *testUnit {
 	os.Exit(2)
 	return nil
 }
+{{else}}
+// pickUnit answers the only package in this binary. A binary holding one unit
+// takes no -test.unit flag, so it needs no parsing and no fmt: go list reports
+// what the generated main imports, and an import added here shows up in every
+// test binary the toolchain builds.
+func pickUnit() *testUnit { return &units[0] }
+{{end}}
 
 func init() {
 {{if .Cover}}
