@@ -280,19 +280,8 @@ jobs:
       fail-fast: true
       matrix:
         port: [js, wasip1]
-    # Actions withholds a job's log until the job ends, and this one runs for an hour.
-    defaults:
-      run:
-        shell: ls-client shell {0}
 
     steps:
-      # First, so every run step below resolves the job's shell by name.
-      - name: Stream this leg's output
-        uses: wow-look-at-my/log-streamer/.github/actions/setup@master
-        with:
-          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }} # matrix legs share GITHUB_JOB
-
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -316,6 +305,7 @@ jobs:
         # The exec wrapper's default engine, at the release upstream's wasip1 builder pins: v15 onward answers a FIFO read with ESPIPE (wasitest TestNonblock), and wazero sits 10 pages over test/wasmmemsize's ceiling.
         if: matrix.port == 'wasip1'
         timeout-minutes: 5
+        shell: bash
         run: curl -sSfL https://wasmtime.dev/install.sh | bash -s -- --version v14.0.4
 
       # wasmtime compiles each test binary's module before running it, and that compile is most of a cheap package: sort.test costs 2.53s cold against 1.05s warm.
@@ -334,13 +324,18 @@ jobs:
           path: .
 
       - name: The restored go answers
+        shell: bash
         run: ./bin/go version
 
       - name: The whole test suite (dist test)
-        # lib/wasm supplies the exec wrapper; dist test reads GOOS and GOARCH; stdbuf keeps the stream live.
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-          GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test
+        # Actions withholds this job's log for the hour it runs, so the command streams live instead.
+        uses: wow-look-at-my/log-streamer/.github/actions/stream@master
+        with:
+          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
+          name: ${{ matrix.port }}
+          run: |
+            export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test
 
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
