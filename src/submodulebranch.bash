@@ -16,6 +16,9 @@
 #
 # A remote this cannot reach leaves the checkout alone, so a build with no
 # network reads what it already has.
+#
+# Nothing here calls sed or awk. Both are banned in this tree. The shell reads
+# these files itself, which is one grammar rather than three.
 
 set -euo pipefail
 
@@ -24,6 +27,39 @@ cd "$(dirname "$0")/.."
 
 here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
 [[ "$here" == HEAD ]] && here=""
+
+# Rewrite the version that follows $module on any line of $1. The shell splits
+# each line into leading blanks, an optional "# " marker, the module path, the
+# blanks after it, the version and the rest. It puts every one of those back
+# untouched but the version, so go.mod keeps its tabs and modules.txt keeps its
+# shape.
+rewrite() {
+	local file=$1 module=$2 version=$3
+	local out line pre mark rest tok sep after ver tail
+	out=$(mktemp)
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		pre=${line%%[![:blank:]]*}
+		rest=${line#"$pre"}
+		mark=""
+		if [[ "$rest" == "# "* ]]; then
+			mark="# "
+			rest=${rest#"# "}
+		fi
+		tok=${rest%%[[:blank:]]*}
+		if [[ "$tok" == "$module" || "$tok" == "$module"/* ]]; then
+			after=${rest#"$tok"}
+			sep=${after%%[![:blank:]]*}
+			after=${after#"$sep"}
+			ver=${after%%[[:blank:]]*}
+			tail=${after#"$ver"}
+			if [[ "$ver" == v* ]]; then
+				line="$pre$mark$tok$sep$version$tail"
+			fi
+		fi
+		printf '%s\n' "$line"
+	done <"$file" >"$out"
+	mv "$out" "$file"
+}
 
 # git parses its own config, so nothing here reads .gitmodules by hand.
 follows=$(git config -f .gitmodules --get-regexp '^submodule\..*\.branch$' 2>/dev/null || true)
@@ -43,7 +79,11 @@ while read -r key value; do
 	ref=HEAD
 	if [[ -n "$here" ]]; then
 		refs=$(git ls-remote --symref "$url" HEAD "refs/heads/$here" 2>/dev/null || true)
-		default=$(awk '$1 == "ref:" && $3 == "HEAD" { sub("refs/heads/", "", $2); print $2 }' <<<"$refs")
+		default=""
+		while IFS=$'\t' read -r lhs rhs; do
+			[[ "$rhs" == HEAD && "$lhs" == "ref: refs/heads/"* ]] || continue
+			default=${lhs#ref: refs/heads/}
+		done <<<"$refs"
 		if grep -q "refs/heads/$here\$" <<<"$refs" && [[ "$default" != "$here" ]]; then
 			ref="refs/heads/$here"
 		fi
@@ -57,7 +97,14 @@ while read -r key value; do
 
 	# go.mod and vendor/modules.txt both record the version, and the go
 	# command refuses to build in vendor mode when the two disagree.
-	module=$(awk '$1 == "module" { print $2; exit }' "$path/go.mod")
+	module=""
+	while read -r mkey mval _; do
+		[[ "$mkey" == module ]] || continue
+		module=$mval
+		break
+	done <"$path/go.mod"
+	[[ -n "$module" ]] || continue
+
 	stamp=$(git -C "$path" show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
 	short=$(git -C "$path" rev-parse --short=12 HEAD)
 	version="v0.0.0-$stamp-$short"
@@ -65,14 +112,9 @@ while read -r key value; do
 	# A repository can publish several modules, and a requirement names the
 	# nested one. So the module this repository declares is a prefix of the
 	# path the version files carry, not always the whole of it.
-	# `sed -i` takes a mandatory backup suffix on BSD and none on GNU, so an
-	# in-place edit spells differently on each. A temp file and a move is the
-	# one spelling both agree on.
 	for f in src/cmd/go.mod src/cmd/vendor/modules.txt; do
 		[[ -f "$f" ]] || continue
-		tmp=$(mktemp)
-		sed -E "s|(${module}(/[^[:space:]]+)?) v[0-9][^[:space:]]*|\1 $version|g" "$f" >"$tmp"
-		mv "$tmp" "$f"
+		rewrite "$f" "$module" "$version"
 	done
 	echo "submodulebranch: $path at $version" >&2
 done <<<"$follows"
