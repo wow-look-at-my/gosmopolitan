@@ -19,8 +19,8 @@ import (
 // TestGroupMember is one package inside a shared test binary, with the test
 // variants TestPackagesAndErrors already built for it.
 type TestGroupMember struct {
-	Package *Package
-	WithTests   *Package
+	Package   *Package
+	WithTests *Package
 	ExtTests  *Package
 }
 
@@ -92,8 +92,15 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Push(ImportInfo{Pkg: "testmain"})
 
 	first := members[0].Package
-	ldflags := append(first.Internal.Ldflags, "-X", "testing.testBinary=1")
-	gccgoflags := append(first.Internal.Gccgoflags, "-Wl,--defsym,testing.gccgoTestBinary=1")
+	// Every member's init runs on every start, so two members declaring a flag
+	// of the same name both register it. That is a redefinition, and it panics
+	// before a test body runs. The flag package cannot ask testing which kind of
+	// binary this is, because testing imports flag, so the linker says.
+	ldflags := append(first.Internal.Ldflags,
+		"-X", "testing.testBinary=1",
+		"-X", "flag.groupedTestBinary=1")
+	gccgoflags := append(first.Internal.Gccgoflags,
+		"-Wl,--defsym,testing.gccgoTestBinary=1")
 
 	testMain := &Package{
 		PackagePublic: PackagePublic{
