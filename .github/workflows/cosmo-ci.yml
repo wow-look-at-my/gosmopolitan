@@ -16,7 +16,6 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
       matrix:
         build-os: [macos-latest, windows-latest]
 
@@ -29,6 +28,12 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
+
+      # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
+      - name: Install bubblewrap
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -62,6 +67,11 @@ jobs:
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
 
+      # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
+      - name: Install bubblewrap
+        shell: bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
         with:
@@ -85,7 +95,6 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -138,7 +147,6 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
-      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -277,7 +285,6 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
       matrix:
         port: [js, wasip1]
 
@@ -317,6 +324,12 @@ jobs:
           key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
           restore-keys: wasmtime-modules-${{ matrix.port }}-
 
+      # The restore ratchets: each run saves a bigger copy than it took -- see .github/trim-wasm-cache.sh.
+      - name: Drop the wasm module cache when it arrives over its cap
+        if: matrix.port == 'wasip1'
+        shell: bash
+        run: sh ./.github/trim-wasm-cache.sh
+
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
         with:
@@ -328,11 +341,55 @@ jobs:
         run: ./bin/go version
 
       - name: The whole test suite (dist test)
-        # lib/wasm supplies the exec wrapper for the port; dist test reads GOOS and GOARCH.
-        shell: bash
-        run: |
-          export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
-          GOOS=${{ matrix.port }} GOARCH=wasm go tool dist test
+        # Actions withholds this job's log for the hour it runs, so the command streams live instead.
+        uses: wow-look-at-my/log-streamer/.github/actions/stream@master
+        with:
+          stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
+          name: ${{ matrix.port }}
+          run: |
+            set -o pipefail
+            export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
+            sh ./.github/resource-log.sh &
+            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      - name: What ${{ matrix.port }} spent its time on
+        # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
+        if: always()
+        uses: wow-look-at-my/actions@typescript#latest
+        with:
+          script: |
+            const logPath = `${process.env.RUNNER_TEMP}/suite.log`;
+            const port = process.env.WASM_PORT;
+            if (!fs.existsSync(logPath)) {
+              core.info('no suite.log; nothing to report');
+              return;
+            }
+            const rows = [];
+            for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+              // dist test prints one of these per package it ran.
+              const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
+              if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
+            }
+            if (rows.length === 0) {
+              core.info('no per-package timings found in suite.log');
+              return;
+            }
+            rows.sort((left, right) => right.secs - left.secs);
+            const total = rows.reduce((sum, row) => sum + row.secs, 0);
+            const top = rows.slice(0, 40);
+            const lines = [
+              `### ${port} suite timings`,
+              '',
+              `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
+              '',
+              '| seconds | package |',
+              '| ---: | --- |',
+              ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
+            ];
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
+            core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
+        env:
+          WASM_PORT: ${{ matrix.port }}
 
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
@@ -375,7 +432,6 @@ jobs:
     timeout-minutes: 25
     needs: publish-create
     strategy:
-      fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest

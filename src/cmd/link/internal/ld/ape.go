@@ -10,8 +10,10 @@ import (
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"compress/gzip"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"internal/ape"
 	"os"
@@ -590,7 +592,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
 	if arm != nil {
 		script.WriteString(apeSelfPath)
-		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
+		script.WriteString("  t=\"/tmp/.ape-APE_LOADER_TAG" + apeUIDSuffix + "\"\n")
 		if darwinARM {
 			script.WriteString(`  if [ -d /Applications ]; then
     # macOS ARM64: use compiled Mach-O loader or compile from source
@@ -664,11 +666,16 @@ exit 1
 
 	scriptBytes := script.Bytes()
 
-	// Replace APE loader offset/size placeholders for the macOS ARM64 path
+	// Replace APE loader offset/size placeholders for the macOS ARM64 path.
+	// The tag names the loader SOURCE, not a version: the script caches what it
+	// compiles under that path, and a hand-kept version leaves a stale loader
+	// there whenever the source changes without it.
 	if arm != nil && apeLoaderSize > 0 {
+		sum := sha256.Sum256(apeLoaderGz)
 		s := string(scriptBytes)
 		s = strings.ReplaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
 		s = strings.ReplaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
+		s = strings.ReplaceAll(s, "APE_LOADER_TAG", hex.EncodeToString(sum[:8]))
 		scriptBytes = []byte(s)
 	}
 

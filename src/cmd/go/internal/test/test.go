@@ -1169,11 +1169,11 @@ var windowsBadWords = []string{
 // testGroup is the binary a package's tests run out of, the packages sharing
 // it, and that package's own test copies inside it.
 type testGroup struct {
-	testMain   *load.Package
-	withTests   *load.Package
+	testMain  *load.Package
+	withTests *load.Package
 	extTests  *load.Package
-	perr    *load.Package
-	members []*load.Package
+	perr      *load.Package
+	members   []*load.Package
 
 	// digest is the generated main as it would read if this package were the
 	// only one in the binary. A test result depends on the code that runs it,
@@ -1235,6 +1235,14 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 			groups[member.Package].members = shared
 			groups[member.Package].digest = digests[member.Package.ImportPath]
 			groups[member.Package].remaining = remaining
+			// A main this batch cannot generate is the whole batch's error: it
+			// is the one binary they share. Without this the build goes on to
+			// compile the variants, and the compiler's complaint about the
+			// broken source arrives instead of the reason for it -- a wrong
+			// TestMain signature reads as "testing.Main is not a type".
+			if testMain.Error != nil && groups[member.Package].perr == nil {
+				groups[member.Package].perr = testMain
+			}
 		}
 	}
 	return groups
@@ -1413,6 +1421,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 	} else {
 		// run test
 		rta := &runTestActor{
+			shared:            len(group.members) > 1,
 			writeCoverMetaAct: writeCoverMetaAct,
 		}
 		rta.c.unitDigest = group.digest
@@ -1502,6 +1511,11 @@ var tooManyFuzzTestsToFuzz = []byte("\ntesting: warning: -fuzz matches more than
 // runTestActor is the actor for running a test.
 type runTestActor struct {
 	c runCache
+
+	// shared reports whether this run's binary holds more than one package.
+	// Only such a binary is told which one to run, and only such a binary
+	// carries the code that takes the flag back out of its argument list.
+	shared bool
 
 	// writeCoverMetaAct points to the pseudo-action for collecting
 	// coverage meta-data files for selected -cover test runs. See the
@@ -1731,11 +1745,19 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		// fresh copies of tools to test as part of the testing.
 		addToEnv = "GOCOVERDIR=" + gcd
 	}
-	// The binary can hold several packages' tests, so it is told which one this
-	// run is for. It takes the flag out of its own argument list before the
-	// testing package reads what is left, and the flag is ours rather than the
+	// A binary holding several packages' tests is told which one this run is
+	// for. It takes the flag out of its own argument list before the testing
+	// package reads what is left, and the flag is ours rather than the
 	// caller's, so it never reaches the list that decides cacheability.
-	unitArg := "-test.unit=" + a.Package.ImportPath
+	//
+	// A binary holding ONE package carries none of that: it would import fmt
+	// to report a flag it can never need, and go list reports what the
+	// generated main imports. So the flag must not be passed there either --
+	// the testing package would reject it as unknown.
+	var unitArg []string
+	if r.shared {
+		unitArg = []string{"-test.unit=" + a.Package.ImportPath}
+	}
 	args := str.StringList(execCmd, buildAction.BuiltTarget(), unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
 
 	if testCoverProfile != "" {

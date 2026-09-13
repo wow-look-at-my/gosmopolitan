@@ -29,14 +29,27 @@ import (
 	"cmd/go/internal/trace"
 )
 
+// TestMainDeps is what the generated main imports. Keep it to what upstream
+// carries: this list IS what `go list` reports as a test binary's imports, so
+// a package added here shows up in every one of them. A main that holds
+// several packages needs fmt as well, and asks for it through groupedMainDeps.
 var TestMainDeps = []string{
 	// Dependencies for testmain.
-	"fmt",
 	"os",
 	"reflect",
-	"strings",
 	"testing",
 	"testing/internal/testdeps",
+}
+
+// groupedMainDeps is TestMainDeps plus what a main holding several packages
+// needs on top: fmt, to name the package a caller asked for and did not find.
+func groupedMainDeps(units int) []string {
+	deps := str.StringList(TestMainDeps)
+	if units > 1 {
+		deps = append(deps, "fmt")
+		sort.Strings(deps)
+	}
+	return deps
 }
 
 type TestCover struct {
@@ -721,12 +734,17 @@ type testFuncs struct {
 // writes are package-qualified. The import block is the part that holds one
 // package, and this is what lets it hold more.
 type testUnit struct {
-	// ImportPath identifies the package: it is what testdeps reports and what
-	// -test.unit names. TestPath and XTestPath are what the generated file
-	// writes in its import block, which is not the same thing once a binary
-	// holds several units: two units' test variants cannot both occupy their
-	// own path, so each imports a synthetic one that cmd/go maps onto the real
-	// variant through importmap.
+	// UnitID identifies the package, and ImportPath is what testdeps reports.
+	// They differ: ImportPath is EMPTY for command-line-arguments and for a
+	// package outside a module, which is what upstream wants testdeps to see,
+	// and it cannot also name a unit. -test.unit carries the real path, so
+	// UnitID holds that and pickUnit matches on it.
+	//
+	// TestPath and XTestPath are what the generated file writes in its import
+	// block, which is not the same thing once a binary holds several units: two
+	// units' test variants cannot both occupy their own path, so each imports a
+	// synthetic one that cmd/go maps onto the real variant through importmap.
+	UnitID      string
 	ImportPath  string
 	ModulePath  string
 	TestPath    string
@@ -754,19 +772,20 @@ type testUnit struct {
 // Units answers the packages this test main imports.
 func (funcs *testFuncs) Units() []testUnit {
 	return []testUnit{{
-		ImportPath:  funcs.ImportPath(),
-		ModulePath:  funcs.ModulePath(),
-		TestPath:    funcs.Package.ImportPath,
-		XTestPath:   funcs.Package.ImportPath + "_test",
-		Alias:       testAlias(0, false),
-		XAlias:      testAlias(0, true),
-		ImportTest:  funcs.ImportTest,
-		NeedTest:    funcs.NeedTest,
-		ImportXtest: funcs.ImportXtest,
-		NeedXtest:   funcs.NeedXtest,
-		Tests:       funcs.Tests,
-		Benchmarks:  funcs.Benchmarks,
-		FuzzTargets: funcs.FuzzTargets,
+		UnitID:        funcs.Package.ImportPath,
+		ImportPath:    funcs.ImportPath(),
+		ModulePath:    funcs.ModulePath(),
+		TestPath:      funcs.Package.ImportPath,
+		XTestPath:     funcs.Package.ImportPath + "_test",
+		Alias:         testAlias(0, false),
+		XAlias:        testAlias(0, true),
+		ImportTest:    funcs.ImportTest,
+		NeedTest:      funcs.NeedTest,
+		ImportXtest:   funcs.ImportXtest,
+		NeedXtest:     funcs.NeedXtest,
+		Tests:         funcs.Tests,
+		Benchmarks:    funcs.Benchmarks,
+		FuzzTargets:   funcs.FuzzTargets,
 		Examples:      funcs.Examples,
 		TestMain:      funcs.TestMain,
 		Covered:       funcs.Covered(),
@@ -945,10 +964,11 @@ var testmainTmpl = lazytemplate.New("main", `
 package main
 
 import (
+{{if gt (len .Units) 1}}
 	"fmt"
+{{end}}
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"testing/internal/testdeps"
 {{if .Cover}}
@@ -968,6 +988,7 @@ import (
 // testUnit is one package's tests. A binary can hold several, and the
 // -test.unit flag names the one this process runs.
 type testUnit struct {
+	unitID      string
 	importPath  string
 	modulePath  string
 	tests       []testing.InternalTest
@@ -984,6 +1005,7 @@ type testUnit struct {
 var units = []testUnit{
 {{range .Units}}
 	{
+		unitID:     {{.UnitID | printf "%q"}},
 		importPath: {{.ImportPath | printf "%q"}},
 		modulePath: {{.ModulePath | printf "%q"}},
 		tests: []testing.InternalTest{
@@ -1015,6 +1037,7 @@ var units = []testUnit{
 {{end}}
 }
 
+{{if gt (len .Units) 1}}
 // unitFlag names the package whose tests this process runs. The go command
 // passes it when one binary holds more than one package.
 const unitFlag = "-test.unit="
@@ -1026,7 +1049,9 @@ func pickUnit() *testUnit {
 	want := ""
 	kept := make([]string, 0, len(os.Args))
 	for _, arg := range os.Args {
-		if strings.HasPrefix(arg, unitFlag) {
+		// Spelled out rather than strings.HasPrefix: importing strings here
+		// would put it in every test binary's reported import list.
+		if len(arg) >= len(unitFlag) && arg[:len(unitFlag)] == unitFlag {
 			want = arg[len(unitFlag):]
 			continue
 		}
@@ -1035,14 +1060,11 @@ func pickUnit() *testUnit {
 	os.Args = kept
 
 	if want == "" {
-		if len(units) == 1 {
-			return &units[0]
-		}
 		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
 		os.Exit(2)
 	}
 	for idx := range units {
-		if units[idx].importPath == want {
+		if units[idx].unitID == want {
 			return &units[idx]
 		}
 	}
@@ -1050,6 +1072,13 @@ func pickUnit() *testUnit {
 	os.Exit(2)
 	return nil
 }
+{{else}}
+// pickUnit answers the only package in this binary. A binary holding one unit
+// takes no -test.unit flag, so it needs no parsing and no fmt: go list reports
+// what the generated main imports, and an import added here shows up in every
+// test binary the toolchain builds.
+func pickUnit() *testUnit { return &units[0] }
+{{end}}
 
 func init() {
 {{if .Cover}}

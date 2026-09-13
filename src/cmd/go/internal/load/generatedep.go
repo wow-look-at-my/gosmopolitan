@@ -6,6 +6,7 @@ package load
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -50,11 +51,21 @@ func generateDir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel)
 	if err != nil {
-		// A package whose directive did not run is a package missing whatever
-		// that directive writes. Handing it back builds something that reports
-		// an undefined symbol somewhere else, or compiles and panics when it is
-		// asked for what it never generated.
-		base.Fatalf("go: generating %s: %v", dir, err)
+		// A host that cannot confine a generator cannot generate anything, for
+		// any module. Building past that hands every consumer a package whose
+		// generated half is missing, and one of those panics when something
+		// finally asks it for what it never generated.
+		if sandboxUnavailable(err) {
+			base.Fatalf("go: generating %s: %v", dir, err)
+		}
+		// A directive can be unrunnable rather than broken. A module zip drops
+		// every path the go command ignores, `_codegen` among them, so a
+		// generator kept beside the package it writes is absent from what a
+		// consumer fetches. testify ships one, and ships its generated files
+		// too, so the build needs nothing from it.
+		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
+		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
+		return dir
 	}
 	return out
 }
@@ -77,11 +88,11 @@ func hasDirective(dir string) bool {
 	if err != nil {
 		return false
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
 			continue
 		}
-		if fileHasDirective(filepath.Join(dir, e.Name())) {
+		if fileHasDirective(filepath.Join(dir, ent.Name())) {
 			return true
 		}
 	}
@@ -89,15 +100,15 @@ func hasDirective(dir string) bool {
 }
 
 func fileHasDirective(file string) bool {
-	f, err := os.Open(file)
+	open, err := os.Open(file)
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer open.Close()
 
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		if strings.HasPrefix(strings.TrimSpace(s.Text()), generatePrefix) {
+	scan := bufio.NewScanner(open)
+	for scan.Scan() {
+		if strings.HasPrefix(strings.TrimSpace(scan.Text()), generatePrefix) {
 			return true
 		}
 	}
@@ -134,6 +145,13 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	if _, err := os.Stat(done); err == nil {
 		return filepath.Join(root, pkgrel), nil
 	}
+	// A module version is fixed bytes, so a directive that cannot run against it
+	// cannot run against it tomorrow either. Recording that answer keeps every
+	// later build from copying the tree and failing the same way.
+	failed := root + ".failed"
+	if why, err := os.ReadFile(failed); err == nil {
+		return "", fmt.Errorf("%s", strings.TrimSpace(string(why)))
+	}
 	if err := modfetch.RemoveAll(root); err != nil {
 		return "", err
 	}
@@ -141,6 +159,15 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 	if err := runGenerate(root, pkgrel); err != nil {
+		// A half-generated tree is worse than none: it compiles against files
+		// the generator had not finished writing.
+		modfetch.RemoveAll(root)
+		// Only a verdict about the module's own bytes may be recorded. A host
+		// that lacks the sandbox says nothing about this module, and writing
+		// that down makes installing the sandbox change nothing.
+		if !sandboxUnavailable(err) {
+			os.WriteFile(failed, []byte(err.Error()), 0o666)
+		}
 		return "", err
 	}
 	if err := os.WriteFile(done, nil, 0o666); err != nil {
@@ -164,9 +191,9 @@ func makeTreeReadOnly(dir string) {
 		}
 		return nil
 	})
-	for i := len(dirs) - 1; i >= 0; i-- {
-		if info, err := os.Stat(dirs[i]); err == nil {
-			os.Chmod(dirs[i], info.Mode()&^0o222)
+	for idx := len(dirs) - 1; idx >= 0; idx-- {
+		if info, err := os.Stat(dirs[idx]); err == nil {
+			os.Chmod(dirs[idx], info.Mode()&^0o222)
 		}
 	}
 }
@@ -189,12 +216,50 @@ func runGenerate(root, pkgrel string) error {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	// The output streams as it always did, and a copy of the tail rides the
+	// error. The verdict below is recorded once and replayed by every later
+	// build, so an error that is only "exit status 1" tells the build after
+	// this one nothing about why the generator stopped.
+	said := &tailWriter{limit: generateTailBytes}
+	cmd.Stdout = io.MultiWriter(os.Stderr, said)
+	cmd.Stderr = cmd.Stdout
 	// A generator is a program of this module, so it builds against the same
 	// toolchain rather than fetching another one.
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOGENERATEDEPS=off")
-	return cmd.Run()
+	err = cmd.Run()
+	if err == nil {
+		return nil
+	}
+	if tail := strings.TrimSpace(said.String()); tail != "" {
+		return fmt.Errorf("%w\n%s", err, tail)
+	}
+	return err
 }
+
+// generateTailBytes bounds what rides the error. The verdict is a file in the
+// module cache, and a generator can print a whole build log.
+const generateTailBytes = 4 << 10
+
+// tailWriter keeps the last limit bytes written to it and drops the rest. The
+// end of a generator's output is where it says what went wrong.
+type tailWriter struct {
+	limit int
+	buf   []byte
+}
+
+func (sink *tailWriter) Write(payload []byte) (int, error) {
+	wrote := len(payload)
+	if wrote > sink.limit {
+		payload = payload[wrote-sink.limit:]
+	}
+	sink.buf = append(sink.buf, payload...)
+	if over := len(sink.buf) - sink.limit; over > 0 {
+		sink.buf = sink.buf[over:]
+	}
+	return wrote, nil
+}
+
+func (sink *tailWriter) String() string { return string(sink.buf) }
 
 // copyTree copies src to dst, writable. The module cache is read-only, and a
 // generator has to write beside the source it reads.
@@ -219,23 +284,22 @@ func copyTree(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	r, err := os.Open(src)
+	from, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
-	info, err := r.Stat()
+	defer from.Close()
+	info, err := from.Stat()
 	if err != nil {
 		return err
 	}
-	w, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o600)
+	into, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(w, r); err != nil {
-		w.Close()
+	if _, err := io.Copy(into, from); err != nil {
+		into.Close()
 		return err
 	}
-	return w.Close()
+	return into.Close()
 }
-

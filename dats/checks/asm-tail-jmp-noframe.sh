@@ -12,32 +12,81 @@ set -uo pipefail
 
 root=${1:-.}
 fail=0
+tab=$(printf '\t')
 
-# One awk pass per file. A TEXT block ends at the next TEXT or at end of file.
-# The hazard needs all three: a tail JMP to a symbol, a call in the body, and
-# no NOFRAME. A call-free TEXT is a leaf, which both assemblers leave frameless.
+# skipBlanks strips leading spaces and tabs, leaving the rest in `trimmed`.
+skipBlanks() {
+	trimmed=$1
+	while :; do
+		case $trimmed in
+		" "*) trimmed=${trimmed# } ;;
+		"$tab"*) trimmed=${trimmed#"$tab"} ;;
+		*) return 0 ;;
+		esac
+	done
+}
+
+# report names the TEXT block the scan just finished, when it carries the
+# hazard: a tail JMP to a symbol, a call in the body, and no NOFRAME.
+report() {
+	[ -n "$name" ] && [ -n "$jmp" ] && [ "$hascall" -eq 1 ] && [ "$noframe" -eq 0 ] || return 0
+	printf 'BLOCKED: framed TEXT tail-jumps to %s\n  %s:%d: %s\n' "$jmp" "$file" "$line" "$name" >&2
+	bad=$((bad + 1))
+}
+
+# One pass per file. A TEXT block ends at the next TEXT or at end of file.
+# A call-free TEXT is a leaf, which both assemblers leave frameless.
 scan() {
-	awk -v file="$1" '
-	function report() {
-		if (name != "" && jmp != "" && hascall && !noframe) {
-			printf "BLOCKED: framed TEXT tail-jumps to %s\n  %s:%d: %s\n", jmp, file, line, name > "/dev/stderr"
-			bad++
-		}
-	}
-	/^TEXT[ \t]/ {
-		report()
-		name = $0
-		line = FNR
-		noframe = (name ~ /NOFRAME/)
-		hascall = 0
-		jmp = ""
-		next
-	}
-	name == "" { next }
-	/^[ \t]*(CALL|BL|DUFFCOPY|DUFFZERO)[ \t]/ { hascall = 1 }
-	/^[ \t]*(JMP|B)[ \t]+[^ \t]+\(SB\)[ \t]*$/ { jmp = $2 }
-	END { report(); exit(bad ? 2 : 0) }
-	' "$1"
+	file=$1
+	name=""
+	line=0
+	num=0
+	bad=0
+	noframe=0
+	hascall=0
+	jmp=""
+	while IFS= read -r text || [ -n "$text" ]; do
+		num=$((num + 1))
+		case $text in
+		"TEXT "* | "TEXT$tab"*)
+			report
+			name=$text
+			line=$num
+			noframe=0
+			case $name in
+			*NOFRAME*) noframe=1 ;;
+			esac
+			hascall=0
+			jmp=""
+			continue
+			;;
+		esac
+		[ -n "$name" ] || continue
+		skipBlanks "$text"
+		body=$trimmed
+		head=${body%%" "*}
+		head=${head%%"$tab"*}
+		# A bare keyword with nothing after it is neither a call nor a jump.
+		[ "$head" != "$body" ] || head=""
+		case $head in
+		CALL | BL | DUFFCOPY | DUFFZERO) hascall=1 ;;
+		esac
+		case $head in
+		JMP | B)
+			skipBlanks "${body#"$head"}"
+			target=${trimmed%%" "*}
+			target=${target%%"$tab"*}
+			# Only blanks may follow the target, or this is not a tail jump.
+			skipBlanks "${trimmed#"$target"}"
+			case $target in
+			?*"(SB)") [ -n "$trimmed" ] || jmp=$target ;;
+			esac
+			;;
+		esac
+	done <"$file"
+	report
+	[ "$bad" -eq 0 ] || return 2
+	return 0
 }
 
 while IFS= read -r f; do

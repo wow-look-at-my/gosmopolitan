@@ -19,8 +19,8 @@ import (
 // TestGroupMember is one package inside a shared test binary, with the test
 // variants TestPackagesAndErrors already built for it.
 type TestGroupMember struct {
-	Package *Package
-	WithTests   *Package
+	Package   *Package
+	WithTests *Package
 	ExtTests  *Package
 }
 
@@ -92,8 +92,15 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Push(ImportInfo{Pkg: "testmain"})
 
 	first := members[0].Package
-	ldflags := append(first.Internal.Ldflags, "-X", "testing.testBinary=1")
-	gccgoflags := append(first.Internal.Gccgoflags, "-Wl,--defsym,testing.gccgoTestBinary=1")
+	// Every member's init runs on every start, so two members declaring a flag
+	// of the same name both register it. That is a redefinition, and it panics
+	// before a test body runs. The flag package cannot ask testing which kind of
+	// binary this is, because testing imports flag, so the linker says.
+	ldflags := append(first.Internal.Ldflags,
+		"-X", "testing.testBinary=1",
+		"-X", "flag.groupedTestBinary=1")
+	gccgoflags := append(first.Internal.Gccgoflags,
+		"-Wl,--defsym,testing.gccgoTestBinary=1")
 
 	testMain := &Package{
 		PackagePublic: PackagePublic{
@@ -102,7 +109,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			GoFiles:    []string{"_testmain.go"},
 			ImportPath: name,
 			Root:       first.Root,
-			Imports:    str.StringList(TestMainDeps),
+			Imports:    groupedMainDeps(len(members)),
 			Module:     first.Module,
 		},
 		Internal: PackageInternal{
@@ -119,7 +126,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	firstBuild := first.Internal.Build
 	testMain.DefaultGODEBUG = defaultGODEBUG(ld, testMain, firstBuild.Directives, firstBuild.TestDirectives, firstBuild.XTestDirectives)
 
-	deps := str.StringList(TestMainDeps)
+	deps := groupedMainDeps(len(members))
 	if cover != nil {
 		deps = append(deps, "internal/coverage/cfile")
 	}
@@ -204,6 +211,13 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
 			member.WithTests.Error = cycleErr
 			member.WithTests.Incomplete = true
+			// The cycle is in the graph now, and cmd/go walks that graph to
+			// build actions. vetAction recurses along it until the stack ends
+			// the process. Stop here instead, with the cycle named.
+			if testMain.Error == nil {
+				testMain.Error = cycleErr
+			}
+			testMain.Incomplete = true
 		}
 	}
 
@@ -231,6 +245,10 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	}
 	testMain.Internal.TestmainGo = &content
 
+	// Key by UnitID, never by ImportPath. ImportPath is what testdeps reports,
+	// and it is EMPTY for command-line-arguments and for a package outside a
+	// module. The caller reads this map by the package's real path, so an empty
+	// key hands it no digest and the test cache aborts the build.
 	digests := make(map[string]string, len(units))
 	for _, unit := range units {
 		digest, err := unitDigest(unit, cover)
@@ -238,7 +256,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			testMain.Error = &PackageError{Err: err}
 			testMain.Incomplete = true
 		}
-		digests[unit.ImportPath] = digest
+		digests[unit.UnitID] = digest
 	}
 	return testMain, digests
 }
@@ -267,12 +285,28 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 		reaches[idx] = seen
 	}
 
+	// A package that reads the working directory as it initializes cannot share
+	// a start with anything -- see travelsAlone. Answer it once per member:
+	// it parses the test files, and the loop below asks about every pair.
+	alone := make([]bool, len(members))
+	for idx, member := range members {
+		alone[idx] = travelsAlone(member)
+	}
+
 	var groups [][]int
 	for idx, member := range members {
+		if alone[idx] {
+			groups = append(groups, []int{idx})
+			continue
+		}
 		placed := false
 		for pos, group := range groups {
 			fits := true
 			for _, other := range group {
+				if alone[other] {
+					fits = false
+					break
+				}
 				if reaches[idx][members[other].Package.ImportPath] || reaches[other][member.Package.ImportPath] {
 					fits = false
 					break

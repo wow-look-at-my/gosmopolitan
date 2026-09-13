@@ -110,6 +110,12 @@ func main() {
 	base.SetMode(mode)
 	base.Remove(
 		".git/**",
+		// A submodule's .git is a FILE holding a gitdir: pointer, and it sits
+		// under the submodule rather than at the root, so neither `.git/**` nor
+		// a root-anchored pattern reaches it. What ships is a path that names a
+		// directory the reader's machine does not have.
+		"**/.git",
+		"**/.git/**",
 		".gitattributes",
 		".github/**",
 		".gitignore",
