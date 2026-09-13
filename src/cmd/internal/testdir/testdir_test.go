@@ -1084,6 +1084,10 @@ func (t test) run() error {
 			}
 			out, err = runcmd(append(launch(exe), args...)...)
 		} else {
+			// This spends a whole go command on one program, so only a program
+			// that asks for something the compiler and the linker are not
+			// given directly reaches it. The branch above takes every plain
+			// one, which is what keeps the corpus off this path.
 			cmd := []string{goTool, "run", t.goGcflags()}
 			if *linkshared {
 				cmd = append(cmd, "-linkshared")
