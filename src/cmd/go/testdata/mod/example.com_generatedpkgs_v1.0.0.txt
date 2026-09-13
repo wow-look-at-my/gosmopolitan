@@ -1,0 +1,58 @@
+Written by hand.
+A module with several packages that each generate part of their own API. The
+zip carries the directives and the generator, and not the files the generator
+writes. The generator for package broken writes its file and then fails.
+
+-- .mod --
+module example.com/generatedpkgs
+
+go 1.16
+-- .info --
+{"Version": "v1.0.0"}
+-- go.mod --
+module example.com/generatedpkgs
+
+go 1.16
+-- gen/main.go --
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+)
+
+func main() {
+	pkg := flag.String("pkg", "", "package the file belongs to")
+	out := flag.String("out", "", "file to write")
+	fail := flag.Bool("fail", false, "fail after writing the file")
+	flag.Parse()
+	body := fmt.Sprintf("package %s\n\nfunc Name() string { return %q }\n", *pkg, *pkg)
+	if err := os.WriteFile(*out, []byte(body), 0o666); err != nil {
+		os.Exit(1)
+	}
+	if *fail {
+		fmt.Fprintln(os.Stderr, "broken on purpose")
+		os.Exit(1)
+	}
+}
+-- one/one.go --
+//go:generate go run example.com/generatedpkgs/gen -pkg one -out one.gen.go
+
+// Package one declares nothing itself: Name is the generator's to write.
+package one
+-- two/two.go --
+//go:generate go run example.com/generatedpkgs/gen -pkg two -out two.gen.go
+
+// Package two declares nothing itself: Name is the generator's to write.
+package two
+-- three/three.go --
+//go:generate go run example.com/generatedpkgs/gen -pkg three -out three.gen.go
+
+// Package three declares nothing itself: Name is the generator's to write.
+package three
+-- broken/broken.go --
+//go:generate go run example.com/generatedpkgs/gen -pkg broken -out broken.gen.go -fail
+
+// Package broken declares nothing itself, and its generator fails.
+package broken
