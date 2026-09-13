@@ -281,12 +281,28 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 		reaches[idx] = seen
 	}
 
+	// A package that reads the working directory as it initializes cannot share
+	// a start with anything -- see travelsAlone. Answer it once per member:
+	// it parses the test files, and the loop below asks about every pair.
+	alone := make([]bool, len(members))
+	for idx, member := range members {
+		alone[idx] = travelsAlone(member)
+	}
+
 	var groups [][]int
 	for idx, member := range members {
+		if alone[idx] {
+			groups = append(groups, []int{idx})
+			continue
+		}
 		placed := false
 		for pos, group := range groups {
 			fits := true
 			for _, other := range group {
+				if alone[other] {
+					fits = false
+					break
+				}
 				if reaches[idx][members[other].Package.ImportPath] || reaches[other][member.Package.ImportPath] {
 					fits = false
 					break
