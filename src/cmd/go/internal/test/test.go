@@ -1581,16 +1581,11 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	}
 
 	if r.c.buf == nil {
-		// We did not find a cached result using the link step action ID,
-		// so we ran the link step. Try again now with the link output
-		// content ID. The attempt using the action ID makes sure that
-		// if the link inputs don't change, we reuse the cached test
-		// result without even rerunning the linker. The attempt using
-		// the link output (test binary) content ID makes sure that if
-		// we have different link inputs but the same final binary,
-		// we still reuse the cached test result.
-		// c.saveOutput will store the result under both IDs.
-		r.c.tryCacheWithID(b, a, buildAction.BuildContentID())
+		// The action ID missed, so ask again by what the compile produced.
+		// The first attempt reuses a result without running the linker at
+		// all. This one reuses it when different inputs compile alike.
+		// c.saveOutput stores the result under both IDs.
+		r.c.tryCacheWithID(b, a, testIdentity(b, buildAction, true))
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -1801,7 +1796,27 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
 func (c *runCache) tryCache(b *work.Builder, a *work.Action, linkAction *work.Action) bool {
-	return c.tryCacheWithID(b, a, linkAction.BuildActionID())
+	return c.tryCacheWithID(b, a, testIdentity(b, linkAction, false))
+}
+
+// testIdentity keys a test result on the test main's own compile plus the link
+// configuration. Never on the link: a link folds in every package it holds, so
+// that key makes one package's edit invalidate every result in the binary.
+// A compile action's ID already carries each dependency's content ID.
+//
+// byContent identifies what the compile produced rather than what went into
+// it, so inputs that differ but compile alike still hit.
+func testIdentity(b *work.Builder, linkAction *work.Action, byContent bool) string {
+	// LinkAction leads the deps with the compile of the same package.
+	if len(linkAction.Deps) == 0 || linkAction.Deps[0].Package != linkAction.Package {
+		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
+	}
+	compileAction := linkAction.Deps[0]
+	code := compileAction.BuildActionID()
+	if byContent {
+		code = compileAction.BuildContentID()
+	}
+	return code + " " + b.LinkConfigID(linkAction.Package)
 }
 
 func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bool {

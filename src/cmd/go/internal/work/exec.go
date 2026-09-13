@@ -1609,6 +1609,21 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 	return h.Sum()
 }
 
+// LinkConfigID answers the half of a link's identity that the packages being
+// linked do not decide: the linker binary, its flags, the build mode and the
+// target. The packages themselves are the other half, and they are left out.
+//
+// A test result depends on the tested package's own code and on this. It does
+// not depend on what else happens to share the binary. So a cache key built
+// from this and from one package's own compile stays correct when one binary
+// holds the tests of many packages.
+func (b *Builder) LinkConfigID(pkg *load.Package) string {
+	hash := cache.NewHash("linkConfig")
+	fmt.Fprintf(hash, "buildmode %s goos %s goarch %s\n", cfg.BuildBuildmode, cfg.Goos, cfg.Goarch)
+	b.printLinkerConfig(hash, pkg)
+	return fmt.Sprintf("%x", hash.Sum())
+}
+
 // printLinkerConfig prints the linker config into the hash h,
 // as part of the computation of a linker-related action ID.
 func (b *Builder) printLinkerConfig(h io.Writer, p *load.Package) {
