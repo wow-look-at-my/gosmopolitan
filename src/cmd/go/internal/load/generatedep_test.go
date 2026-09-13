@@ -75,3 +75,42 @@ func TestSandboxUnavailableKeepsItsMessage(test *testing.T) {
 		test.Error("the cause did not survive wrapping")
 	}
 }
+
+// A generator's verdict is written once and replayed by every later build, so
+// what rides the error is all a reader ever sees. "exit status 1" on its own
+// sent a session hunting a runtime panic whose cause was printed hours before,
+// in a build nobody still had the log of.
+func TestTailWriterKeepsTheEndAndBoundsWhatItKeeps(test *testing.T) {
+	for _, row := range []struct {
+		name   string
+		limit  int
+		writes []string
+		want   string
+	}{
+		{"short output survives whole", 16, []string{"open parser.c"}, "open parser.c"},
+		{"the end wins over the start", 8, []string{"0123456789abcdef"}, "89abcdef"},
+		{"writes across calls still tail", 6, []string{"aaaa", "bbbb", "cccc"}, "bbcccc"},
+		{"nothing written reads empty", 8, nil, ""},
+	} {
+		test.Run(row.name, func(test *testing.T) {
+			sink := &tailWriter{limit: row.limit}
+			for _, payload := range row.writes {
+				num, err := sink.Write([]byte(payload))
+				if err != nil {
+					test.Fatalf("Write(%q) failed: %v", payload, err)
+				}
+				// A short count makes io.MultiWriter report a write error and
+				// take the generator's output away entirely.
+				if num != len(payload) {
+					test.Fatalf("Write(%q) = %d, want %d", payload, num, len(payload))
+				}
+			}
+			if got := sink.String(); got != row.want {
+				test.Errorf("String() = %q, want %q", got, row.want)
+			}
+			if got := len(sink.String()); got > row.limit {
+				test.Errorf("kept %d bytes, over the %d-byte limit", got, row.limit)
+			}
+		})
+	}
+}

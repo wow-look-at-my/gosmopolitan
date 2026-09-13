@@ -216,12 +216,50 @@ func runGenerate(root, pkgrel string) error {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
-	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	// The output streams as it always did, and a copy of the tail rides the
+	// error. The verdict below is recorded once and replayed by every later
+	// build, so an error that is only "exit status 1" tells the build after
+	// this one nothing about why the generator stopped.
+	said := &tailWriter{limit: generateTailBytes}
+	cmd.Stdout = io.MultiWriter(os.Stderr, said)
+	cmd.Stderr = cmd.Stdout
 	// A generator is a program of this module, so it builds against the same
 	// toolchain rather than fetching another one.
 	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOGENERATEDEPS=off")
-	return cmd.Run()
+	err = cmd.Run()
+	if err == nil {
+		return nil
+	}
+	if tail := strings.TrimSpace(said.String()); tail != "" {
+		return fmt.Errorf("%w\n%s", err, tail)
+	}
+	return err
 }
+
+// generateTailBytes bounds what rides the error. The verdict is a file in the
+// module cache, and a generator can print a whole build log.
+const generateTailBytes = 4 << 10
+
+// tailWriter keeps the last limit bytes written to it and drops the rest. The
+// end of a generator's output is where it says what went wrong.
+type tailWriter struct {
+	limit int
+	buf   []byte
+}
+
+func (sink *tailWriter) Write(payload []byte) (int, error) {
+	wrote := len(payload)
+	if wrote > sink.limit {
+		payload = payload[wrote-sink.limit:]
+	}
+	sink.buf = append(sink.buf, payload...)
+	if over := len(sink.buf) - sink.limit; over > 0 {
+		sink.buf = sink.buf[over:]
+	}
+	return wrote, nil
+}
+
+func (sink *tailWriter) String() string { return string(sink.buf) }
 
 // copyTree copies src to dst, writable. The module cache is read-only, and a
 // generator has to write beside the source it reads.
