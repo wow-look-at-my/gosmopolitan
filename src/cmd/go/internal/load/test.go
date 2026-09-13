@@ -645,11 +645,30 @@ func loadTestFuncs(ptest *Package) (*testFuncs, error) {
 	return t, err
 }
 
+// testMainData is what the generated file is rendered from. One package's tests
+// and a whole group's render through the same template: a group is several
+// units instead of one.
+type testMainData struct {
+	Units                 []testUnit
+	Cover                 *TestCover
+	Covered               string
+	CoverSelectedPackages string
+}
+
 // formatTestmain returns the content of the _testmain.go file for t.
 func formatTestmain(t *testFuncs) ([]byte, error) {
+	return renderTestmain(testMainData{
+		Units:                 t.Units(),
+		Cover:                 t.Cover,
+		Covered:               t.Covered(),
+		CoverSelectedPackages: t.CoverSelectedPackages(),
+	})
+}
+
+// renderTestmain writes the generated file for however many units it is given.
+func renderTestmain(data testMainData) ([]byte, error) {
 	var buf bytes.Buffer
-	tmpl := testmainTmpl
-	if err := tmpl.Execute(&buf, t); err != nil {
+	if err := testmainTmpl.Execute(&buf, data); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -676,8 +695,16 @@ type testFuncs struct {
 // writes are package-qualified. The import block is the part that holds one
 // package, and this is what lets it hold more.
 type testUnit struct {
+	// ImportPath identifies the package: it is what testdeps reports and what
+	// -test.unit names. TestPath and XTestPath are what the generated file
+	// writes in its import block, which is not the same thing once a binary
+	// holds several units: two units' test variants cannot both occupy their
+	// own path, so each imports a synthetic one that cmd/go maps onto the real
+	// variant through importmap.
 	ImportPath  string
 	ModulePath  string
+	TestPath    string
+	XTestPath   string
 	Alias       string
 	XAlias      string
 	ImportTest  bool
@@ -697,6 +724,8 @@ func (funcs *testFuncs) Units() []testUnit {
 	return []testUnit{{
 		ImportPath:  funcs.ImportPath(),
 		ModulePath:  funcs.ModulePath(),
+		TestPath:    funcs.Package.ImportPath,
+		XTestPath:   funcs.Package.ImportPath + "_test",
 		Alias:       testAlias(0, false),
 		XAlias:      testAlias(0, true),
 		ImportTest:  funcs.ImportTest,
@@ -894,10 +923,10 @@ import (
 
 {{range .Units}}
 {{if .ImportTest}}
-	{{if .NeedTest}}{{.Alias}}{{else}}_{{end}} {{.ImportPath | printf "%q"}}
+	{{if .NeedTest}}{{.Alias}}{{else}}_{{end}} {{.TestPath | printf "%q"}}
 {{end}}
 {{if .ImportXtest}}
-	{{if .NeedXtest}}{{.XAlias}}{{else}}_{{end}} {{.ImportPath | printf "%s_test" | printf "%q"}}
+	{{if .NeedXtest}}{{.XAlias}}{{else}}_{{end}} {{.XTestPath | printf "%q"}}
 {{end}}
 {{end}}
 )
