@@ -1588,9 +1588,13 @@ func cmdbootstrap() {
 		xprintf("\n")
 	}
 	xprintf("Building Go toolchain3 using go_bootstrap and Go toolchain2.\n")
-	// No -a: go_bootstrap's install does not take it. parseToolID gives every
-	// tool an ID from its own content, so toolchain2 is a new compiler to the
-	// go command and what depends on it rebuilds.
+	// No -a. The paragraph above says the force-install exists because a
+	// RELEASE build reports its version in place of the build ID, so the go
+	// command never sees toolchain1 become toolchain2 and nothing looks
+	// stale. That is upstream. Here parseToolID gives every tool an ID from
+	// its own content, release or not, so toolchain2 IS a new compiler as far
+	// as the go command is concerned and what depends on it rebuilds because
+	// it is genuinely out of date. -a only added the packages that were not.
 	goInstall(toolenv(), goBootstrap, toolchain...)
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
