@@ -16,6 +16,22 @@ File metadata followed (2026-09-02, the metadata wave): utimensat, truncate, fch
 
 What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` are a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. The reasoning sits in `ntEmuFchmod`.
 
+The NT suite's own red, measured on run 34732730589, is mostly ONE defect wearing many package names. A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
+
+`path/filepath` carries both readings in one file. `TestIsLocal` asks `testenv.GOOS`, the build-target constant. It appends nothing and passes. `TestLocalize` switches on `runtime.GOOS`, appends `winlocalizetests`, and fails on NUL. The durable fix is a host switch inside the package. `os/exec`'s `lp_cosmo.go` is the shape to copy. Widening a build tag is not the fix.
+
+The remainder of that red, by cause:
+
+| what the failures say | what it is |
+|---|---|
+| `got broken pipe, expected errno 232` | NT answers a closed pipe with ERROR_NO_DATA, and cosmo maps it to EPIPE |
+| `protocol not available` | sockopts NT does not serve |
+| `The system cannot find the path specified` | the path layer |
+| `unknown directive "MZqFpD='"` | a tool parses an APE's own header as source |
+| `function not implemented` | ENOSYS stubs |
+| `Mode = "-rwx------", want "-rw-------"` | NT has no unix mode bits |
+| `os` and `os/exec` at 600s | neither fails. Both hang to the timeout |
+
 Still missing on Windows: Windows/arm64 (the charter's step-one experiment ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic pre-main SIGSEGV at 0x2000c9000. so native bring-up gains urgency), file/pipe dup(2) (ENOSYS on purpose - socket dup works, and file/pipe fds still transfer. The DNS half of the 2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes `dnsconfig_unix.go`, whose tag is `!windows`. It read a resolv.conf. The trust store was the same shape of gap one layer up, and is also fixed. Every path in crypto/x509's `root_cosmo.go` is a unix. Keyboard chords, window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay documented-not-asserted).
 
 macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll via a getdents64 emulation over Apple's __getdirentries64), getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/After, context timeouts), TCP/UDP loopback sockets with deadlines, unix-domain stream (the abstract namespace is Linux-only and refused EINVAL), readv/writev (net.Buffers).
