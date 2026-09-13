@@ -7,52 +7,45 @@ package load
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // A host with no sandbox says nothing about the module being built, so the two
-// kinds of failure have to stay apart. Reading them as one is what let a
-// machine without bwrap record a permanent verdict against every module it
-// touched, which installing bwrap then could not clear.
-func TestAMissingSandboxIsNotAVerdictOnTheModule(test *testing.T) {
-	missing := &sandboxUnavailableError{errors.New("bwrap not installed")}
-	wrapped := fmt.Errorf("generating grammars/bash: %w", missing)
+// kinds of failure have to stay apart. Reading them as one let a machine
+// without bwrap record a permanent verdict against every module it touched,
+// and installing bwrap afterwards could not clear it.
+func TestSandboxUnavailableSeparatesHostFromModule(test *testing.T) {
+	noSandbox := &sandboxUnavailableError{errors.New("bwrap not installed")}
 
-	var found *sandboxUnavailableError
-	assert.True(test, errors.As(wrapped, &found), "a wrapped sandbox failure must still be recognisable")
-	assert.Equal(test, "bwrap not installed", found.Error())
-
-	generatorFailed := fmt.Errorf("exit status 1: parser.c: no such file")
-	assert.False(test, errors.As(generatorFailed, &found), "a generator's own failure is not a sandbox failure")
-}
-
-// A recorded failure is read back on every later build, so only a verdict about
-// the module's own bytes may be written down.
-func TestOnlyAModuleVerdictIsRecorded(test *testing.T) {
 	for _, row := range []struct {
-		name    string
-		err     error
-		records bool
+		name string
+		err  error
+		host bool
 	}{
-		{"the generator itself failed", errors.New("exit status 1"), true},
-		{"the host has no sandbox", &sandboxUnavailableError{errors.New("bwrap not installed")}, false},
-		{"a sandbox failure under a wrapper", fmt.Errorf("run: %w", &sandboxUnavailableError{errors.New("bwrap not installed")}), false},
+		{"the host has no sandbox", noSandbox, true},
+		{"a sandbox failure under a wrapper", fmt.Errorf("run: %w", noSandbox), true},
+		{"the generator itself failed", errors.New("exit status 1"), false},
+		{"the generator's input was missing", fmt.Errorf("open parser.c: %w", errors.New("no such file")), false},
+		{"no failure at all", nil, false},
 	} {
 		test.Run(row.name, func(test *testing.T) {
-			failed := filepath.Join(test.TempDir(), "mod.failed")
-
-			var unavailable *sandboxUnavailableError
-			if !errors.As(row.err, &unavailable) {
-				require.NoError(test, os.WriteFile(failed, []byte(row.err.Error()), 0o666))
+			if got := sandboxUnavailable(row.err); got != row.host {
+				test.Errorf("sandboxUnavailable(%v) = %v, want %v", row.err, got, row.host)
 			}
-
-			_, err := os.Stat(failed)
-			assert.Equal(test, row.records, err == nil, "whether the failure was recorded")
 		})
+	}
+}
+
+// The message has to name the missing program, because the reader's next move
+// is to install it.
+func TestSandboxUnavailableKeepsItsMessage(test *testing.T) {
+	inner := errors.New(`exec: "bwrap": executable file not found in $PATH`)
+	wrapped := &sandboxUnavailableError{inner}
+
+	if got := wrapped.Error(); got != inner.Error() {
+		test.Errorf("Error() = %q, want %q", got, inner.Error())
+	}
+	if !errors.Is(wrapped, inner) {
+		test.Error("the cause did not survive wrapping")
 	}
 }

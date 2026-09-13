@@ -5,6 +5,7 @@
 package load
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,11 +48,27 @@ func hostSandboxOS() string {
 	return runtime.GOOS
 }
 
+// sandboxUnavailableError says the host cannot confine a generator at all. It
+// is a fact about this machine, not about the module being built, so a caller
+// must neither record it against that module nor build past it.
+type sandboxUnavailableError struct{ err error }
+
+func (e *sandboxUnavailableError) Error() string { return e.err.Error() }
+func (e *sandboxUnavailableError) Unwrap() error { return e.err }
+
+// sandboxUnavailable reports whether err says the host cannot confine a
+// generator. A caller asks before it kills the build over a module, and before
+// it records a failure the module did not cause.
+func sandboxUnavailable(err error) bool {
+	var unavailable *sandboxUnavailableError
+	return errors.As(err, &unavailable)
+}
+
 // bwrapArgv confines the command with bubblewrap.
 func bwrapArgv(writable string, argv []string) ([]string, error) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
-		return nil, fmt.Errorf("bubblewrap is how a generate directive is confined on linux, and it is not installed: %w", err)
+		return nil, &sandboxUnavailableError{fmt.Errorf("bubblewrap is how a generate directive is confined on linux, and it is not installed: %w", err)}
 	}
 	out := []string{
 		bwrap,

@@ -6,6 +6,7 @@ package load
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
@@ -50,17 +52,18 @@ func generateDir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel)
 	if err != nil {
+		// A host that cannot confine a generator cannot generate anything, for
+		// any module. Building past that hands every consumer a package whose
+		// generated half is missing, and one of those panics when something
+		// finally asks it for what it never generated.
+		if sandboxUnavailable(err) {
+			base.Fatalf("go: generating %s: %v", dir, err)
+		}
 		// A directive can be unrunnable rather than broken. A module zip drops
 		// every path the go command ignores, `_codegen` among them, so a
 		// generator kept beside the package it writes is absent from what a
 		// consumer fetches. testify ships one, and ships its generated files
 		// too, so the build needs nothing from it.
-		//
-		// So this reports and hands back the fetched tree. The build then
-		// fails on the symbol a directive really was going to write, which
-		// names what is missing. Killing the build here instead takes down
-		// every consumer of a dependency whose generator was never theirs to
-		// run.
 		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
 		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
 		return dir
@@ -160,7 +163,12 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		// A half-generated tree is worse than none: it compiles against files
 		// the generator had not finished writing.
 		modfetch.RemoveAll(root)
-		os.WriteFile(failed, []byte(err.Error()), 0o666)
+		// Only a verdict about the module's own bytes may be recorded. A host
+		// that lacks the sandbox says nothing about this module, and writing
+		// that down makes installing the sandbox change nothing.
+		if !sandboxUnavailable(err) {
+			os.WriteFile(failed, []byte(err.Error()), 0o666)
+		}
 		return "", err
 	}
 	if err := os.WriteFile(done, nil, 0o666); err != nil {
