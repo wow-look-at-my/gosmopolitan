@@ -26,16 +26,18 @@ import (
 // package the compiler reads as empty, and every consumer fails on a symbol
 // that the package's source never declares.
 //
-// A package states what it generates:
+// A directive already names what it writes, so nothing is added to it:
 //
-//	//go:generate:produces parser.gen.go
 //	//go:generate go run example.com/cmd/gen -out parser.gen.go input.c
 //
-// When a named file is absent, this copies the whole module out of the read-only
-// module cache and runs the package's own directives there. The compiler then
-// reads the copy. A package that names nothing, or that already carries what it
-// names, costs one directory read.
-const producesPrefix = "//go:generate:produces"
+// When the named file is absent, the module is generated and the compiler reads
+// the generated copy. A directive naming no output, or one whose output is
+// already there, costs one directory read.
+const generatePrefix = "//go:generate"
+
+// outputFlags name an output file on a directive's command line. A generator
+// that writes one spells it one of these ways.
+var outputFlags = []string{"-o", "-out", "-output", "--out", "--output"}
 
 // generateDir answers the directory to read pkgPath's package from: the copy
 // carrying its generated files, or dir unchanged.
@@ -94,8 +96,9 @@ func producedFiles(dir string) []string {
 	return produces
 }
 
-// scanProduces reads one file's produces directives. It reads lines rather
-// than parsing: this runs for every dependency package, ahead of the build.
+// scanProduces reads the output each of one file's generate directives names.
+// It reads lines rather than parsing: this runs for every dependency package,
+// ahead of the build.
 func scanProduces(file string) []string {
 	f, err := os.Open(file)
 	if err != nil {
@@ -107,19 +110,37 @@ func scanProduces(file string) []string {
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
-		if !strings.HasPrefix(line, producesPrefix) {
+		if !strings.HasPrefix(line, generatePrefix) {
 			continue
 		}
-		for _, name := range strings.Fields(line[len(producesPrefix):]) {
-			// A produced file is a name inside the package, never a path out
-			// of it: this decides what gets written.
-			if name == "" || strings.Contains(name, "/") || strings.Contains(name, `\`) || name == ".." {
-				continue
-			}
+		if name := outputOf(strings.Fields(line)); name != "" {
 			produces = append(produces, name)
 		}
 	}
 	return produces
+}
+
+// outputOf answers the file a directive's command line writes, or "" when it
+// names none. A generated file sits in the package that declares it, so a name
+// reaching out of the directory is not one of ours to write.
+func outputOf(args []string) string {
+	for i, arg := range args {
+		flag, value, joined := strings.Cut(arg, "=")
+		if !joined {
+			if i+1 >= len(args) {
+				continue
+			}
+			flag, value = arg, args[i+1]
+		}
+		if !slices.Contains(outputFlags, flag) {
+			continue
+		}
+		if value == "" || value == ".." || strings.ContainsAny(value, `/\`) {
+			return ""
+		}
+		return value
+	}
+	return ""
 }
 
 // allPresent reports whether every produced file is already there.
