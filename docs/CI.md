@@ -12,7 +12,9 @@ A build leg builds the toolchain, asserts it, builds the APE binaries, and hands
 
 ## suite job
 
-`run.bash` on unix and `run.bat` on NT, one leg per host, over the toolchain that host's build leg handed over. It is the distribution's own all-tests entry point. It is the only test gate for the stdlib, the `cmd` packages and the `test/` corpus. Its own job, so a red suite no longer hides every downstream job behind a skipped build.
+`run.bash` on unix and `run.bat` on NT, over the toolchain that host's build leg handed over. It is the distribution's own all-tests entry point. It is the only test gate for the stdlib, the `cmd` packages and the `test/` corpus. Its own job, so a red suite no longer hides every downstream job behind a skipped build.
+
+**Parts.** Each host runs the suite as two legs side by side, `dist test -shard=0/2` and `-shard=1/2`, and `wasm-suite` does the same per port. Part 0 is the package tests: one `go test` over every package, so their grouped test binaries are built once, on one runner. Part 1 is every other registered test, `cmd/internal/testdir` included. Neither part builds a test binary the other builds. Every leg already keeps its runner's cores busy, so a second runner is what halves the wall-clock. `dats/checks/suite-shards.dats` proves the two parts' lists are the whole `-list`, once each, for every port, and that each sharded matrix runs every part.
 
 **Timeouts.** Job and step `timeout-minutes` are deliberate everywhere: a hung cosmo binary (or a wedged runner) must never burn GitHub's 6-hour default. Limits are sized ~2x (or a round number above) the slowest duration observed across recent green runs. See the values at each step.
 
