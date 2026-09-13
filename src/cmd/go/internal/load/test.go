@@ -125,13 +125,28 @@ func TestPackagesAndErrors(ld *modload.Loader, ctx context.Context, done func(),
 // dependency graph itself. Building a main here as well would rewire a second
 // graph over the same packages, so a caller that groups asks for the variants
 // alone.
+//
+// perr is the package holding the error, as TestPackagesFor answers it: a
+// variant's own, or else the first one in the dependencies of a variant that
+// is incomplete. An import that fails to load marks the importer incomplete
+// and leaves the error on the imported package.
 func TestVariantsFor(ld *modload.Loader, ctx context.Context, opts PackageOpts, p *Package, cover *TestCover) (withTests, extTests, perr *Package) {
 	_, withTests, extTests = testPackages(ld, ctx, nil, opts, p, cover, true)
-	if withTests != nil && withTests.Error != nil {
-		return withTests, extTests, withTests
-	}
-	if extTests != nil && extTests.Error != nil {
-		return withTests, extTests, extTests
+	for _, variant := range []*Package{withTests, extTests} {
+		if variant == nil {
+			continue
+		}
+		if variant.Error != nil {
+			return withTests, extTests, variant
+		}
+		if !variant.Incomplete {
+			continue
+		}
+		for _, dep := range PackageList([]*Package{variant}) {
+			if dep.Error != nil {
+				return withTests, extTests, dep
+			}
+		}
 	}
 	return withTests, extTests, nil
 }
@@ -435,7 +450,7 @@ func testPackages(ld *modload.Loader, ctx context.Context, done func(), opts Pac
 		testMain.Internal.RawImports = str.StringList(testMain.Imports)
 
 		// Replace testMain's transitive dependencies with test copies, as necessary.
-		cycleErr := recompileForTest(testMain, p, withTests, extTests)
+		cycleErr := recompileForTest(testMain, p, withTests, extTests, nil)
 		if cycleErr != nil {
 			withTests.Error = cycleErr
 			withTests.Incomplete = true
@@ -498,7 +513,7 @@ func testPackages(ld *modload.Loader, ctx context.Context, done func(), opts Pac
 // clear p.Internal.BuildInfo in the test copy to prevent link conflicts.
 // This may happen if both -coverpkg and the command line patterns include
 // multiple main packages.
-func recompileForTest(testMain, preal, withTests, extTests *Package) *PackageError {
+func recompileForTest(testMain, preal, withTests, extTests *Package, members map[*Package]bool) *PackageError {
 	// The "test copy" of preal is withTests.
 	// For each package that depends on preal, make a "test copy"
 	// that depends on withTests. And so on, up the dependency tree.
@@ -507,8 +522,10 @@ func recompileForTest(testMain, preal, withTests, extTests *Package) *PackageErr
 		if p == preal {
 			continue
 		}
-		// Copy on write.
-		didSplit := p == testMain || p == extTests || p == withTests
+		// Copy on write. members holds the test variants of every package in
+		// a shared test binary. Each is its own package's test copy already,
+		// so no other member's pass copies it again.
+		didSplit := p == testMain || p == extTests || p == withTests || members[p]
 		split := func() {
 			if didSplit {
 				return
@@ -1042,9 +1059,16 @@ var units = []testUnit{
 // passes it when one binary holds more than one package.
 const unitFlag = "-test.unit="
 
+// unitEnv carries the same choice to every process this one starts. A test
+// that runs its own binary again (os.Args[0] or os.Executable, with a -test.run
+// of its own) names no unit, and the child inherits the environment. The
+// testing package passes the same name on when it forks a test.
+const unitEnv = "GO_TEST_UNIT"
+
 // pickUnit answers the package this process runs and takes the flag naming it
 // out of the argument list, which the testing package parses next and knows
-// nothing about.
+// nothing about. Without the flag, the package is the one the process that
+// started this one ran.
 func pickUnit() *testUnit {
 	want := ""
 	kept := make([]string, 0, len(os.Args))
@@ -1060,13 +1084,21 @@ func pickUnit() *testUnit {
 	os.Args = kept
 
 	if want == "" {
+		want = os.Getenv(unitEnv)
+	}
+	if want == "" {
 		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
 		os.Exit(2)
 	}
 	for idx := range units {
-		if units[idx].unitID == want {
-			return &units[idx]
+		if units[idx].unitID != want {
+			continue
 		}
+		if err := os.Setenv(unitEnv, want); err != nil {
+			fmt.Fprintf(os.Stderr, "testing: %s: %v\n", unitEnv, err)
+			os.Exit(2)
+		}
+		return &units[idx]
 	}
 	fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
 	os.Exit(2)

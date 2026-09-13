@@ -140,6 +140,56 @@ func TestAFileThatWillNotParseKeepsItsPackageOut(test *testing.T) {
 	}
 }
 
+// net/http/cgi is the package that found this. Its tests run the test binary
+// as a CGI script, and the handler gives that process an environment built from
+// the request, so nothing tells a shared binary which member it is for.
+func TestTheRealCGITestFilesAreCaught(test *testing.T) {
+	dir := filepath.Join(testGOROOT(test), "src", "net", "http", "cgi")
+	if _, err := os.Stat(filepath.Join(dir, "host_test.go")); err != nil {
+		test.Fatalf("no net/http/cgi source to read: %v", err)
+	}
+
+	pkg := &Package{}
+	pkg.Dir = dir
+	pkg.ImportPath = "net/http/cgi"
+	pkg.TestGoFiles = []string{"host_test.go", "integration_test.go"}
+
+	if !travelsAlone(TestGroupMember{Package: pkg, WithTests: pkg}) {
+		test.Error("net/http/cgi starts its own binary as a CGI script and must travel alone")
+	}
+}
+
+func TestATestServingItsOwnBinaryOverCGITravelsAlone(test *testing.T) {
+	member := memberFor(test, `package p_test
+
+import (
+	"net/http/cgi"
+	"os"
+)
+
+var handler = &cgi.Handler{Path: os.Args[0]}
+`, "net/http/cgi", "os")
+
+	if !travelsAlone(member) {
+		test.Error("a CGI script inherits nothing that names its member")
+	}
+}
+
+// A test that imports the CGI handler without starting its own binary through
+// it keeps its place in a group.
+func TestACGITestThatStartsAnotherProgramStillTravels(test *testing.T) {
+	member := memberFor(test, `package p_test
+
+import "net/http/cgi"
+
+var handler = &cgi.Handler{Path: "/bin/true"}
+`, "net/http/cgi")
+
+	if travelsAlone(member) {
+		test.Error("this package costs a binary for no reason")
+	}
+}
+
 // The partition has to act on the answer, not merely compute it.
 func TestGroupMembersKeepsALoneMemberApart(test *testing.T) {
 	reader := memberFor(test, `package a

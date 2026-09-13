@@ -207,8 +207,16 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	// Each member's own dependencies must reach its test copies, and a member
 	// the group holds is never in another member's closure, so the rewrites
 	// cannot collide.
+	variants := make(map[*Package]bool, 2*len(members))
 	for _, member := range members {
-		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
+		for _, variant := range []*Package{member.WithTests, member.ExtTests} {
+			if variant != nil {
+				variants[variant] = true
+			}
+		}
+	}
+	for _, member := range members {
+		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests, variants); cycleErr != nil {
 			member.WithTests.Error = cycleErr
 			member.WithTests.Incomplete = true
 			// The cycle is in the graph now, and cmd/go walks that graph to
@@ -304,6 +312,14 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 			fits := true
 			for _, other := range group {
 				if alone[other] {
+					fits = false
+					break
+				}
+				// A profile is compiled into every package a binary links, the
+				// runtime included, so one binary holds one profile. Members
+				// built with different ones each link their own copy of every
+				// shared dependency.
+				if members[other].Package.Internal.PGOProfile != member.Package.Internal.PGOProfile {
 					fits = false
 					break
 				}

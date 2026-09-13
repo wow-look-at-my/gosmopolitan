@@ -1,0 +1,100 @@
+# Packages tested together share one test binary. A test that starts that
+# binary again, naming only a -test.run of its own, must land in its own
+# package's tests, and so must a test that runs the binary as a tool from
+# TestMain.
+
+go test ./a ./b ./tool
+stdout '^ok\s+example.com/grouped/a'
+stdout '^ok\s+example.com/grouped/b'
+stdout '^ok\s+example.com/grouped/tool'
+! stderr 'this binary holds'
+
+-- go.mod --
+module example.com/grouped
+
+go 1.27
+-- a/a_test.go --
+package a
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of a\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = append(os.Environ(), "GROUPED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of a") {
+		test.Fatalf("the child did not run a's tests:\n%s", out)
+	}
+}
+-- b/b_test.go --
+package b
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of b\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		test.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestChild$", "-test.v")
+	cmd.Env = append(os.Environ(), "GROUPED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of b") {
+		test.Fatalf("the child did not run b's tests:\n%s", out)
+	}
+}
+-- tool/tool_test.go --
+package tool
+
+import (
+	"os"
+	"os/exec"
+	"testing"
+)
+
+func TestMain(main *testing.M) {
+	if os.Getenv("GROUPED_IS_TOOL") != "" {
+		os.Stdout.WriteString("tool ran\n")
+		os.Exit(0)
+	}
+	os.Setenv("GROUPED_IS_TOOL", "1")
+	os.Exit(main.Run())
+}
+
+func TestTool(test *testing.T) {
+	out, err := exec.Command(os.Args[0], "some", "arguments").CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if string(out) != "tool ran\n" {
+		test.Fatalf("got %q, want the tool's output", out)
+	}
+}

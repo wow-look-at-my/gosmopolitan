@@ -2171,17 +2171,32 @@ func (t *T) runForked() ([]byte, error) {
 // message where a test result belongs.
 var startEnv = os.Environ()
 
+// unitEnv names the package a binary holding several packages' tests runs.
+// The generated main sets it once it has picked one, which is after startEnv
+// is read, so a forked child takes it from the live environment instead.
+const unitEnv = "GO_TEST_UNIT"
+
 // forkEnv returns this run's environment with the fork marker naming the test
 // the child exists to run. It REPLACES any marker already there: a subtest of a
 // forked test forks from a process that carries its parent's marker, and Getenv
 // answers with the first entry, so an appended one is never read. The child
-// then thinks it is its own parent and forks again, without end.
+// then thinks it is its own parent and forks again, without end. The package
+// this process runs replaces any the start environment named, for the same
+// reason.
 func forkEnv(env []string, name string) []string {
-	out := make([]string, 0, len(env)+1)
+	unit, hasUnit := os.LookupEnv(unitEnv)
+	out := make([]string, 0, len(env)+2)
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, forkTargetEnv+"=") {
-			out = append(out, kv)
+		if strings.HasPrefix(kv, forkTargetEnv+"=") {
+			continue
 		}
+		if hasUnit && strings.HasPrefix(kv, unitEnv+"=") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	if hasUnit {
+		out = append(out, unitEnv+"="+unit)
 	}
 	return append(out, forkTargetEnv+"="+name)
 }
