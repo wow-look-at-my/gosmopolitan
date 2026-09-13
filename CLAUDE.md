@@ -285,7 +285,7 @@ This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr
 
 The org's shared build cache is reached in process. `cmd/go` requires `github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from `cmd/go/internal/cache/shared.go`, which layers a network tier under the disk cache: disk stays authoritative. The shared tier is.
 
-`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
+`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin.
 
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
