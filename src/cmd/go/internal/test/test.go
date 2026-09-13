@@ -1175,6 +1175,15 @@ type testGroup struct {
 	perr    *load.Package
 	members []*load.Package
 
+	// digest is the generated main as it would read if this package were the
+	// only one in the binary. A test result depends on the code that runs it,
+	// and that code is generated rather than compiled from any package.
+	digest string
+
+	// remaining counts the members that have not finished running. The last
+	// one to finish removes the directory they all ran out of.
+	remaining *atomic.Int32
+
 	// ready says the binary has been set up: its directory made, its generated
 	// file written, its target named. The first member to arrive does that, and
 	// the rest share what it built.
@@ -1214,14 +1223,18 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 	}
 	for _, batch := range batches {
 		name := batch[0].Package.ImportPath + ".test"
-		testMain := load.TestGroupMain(ld, ctx, pkgOpts, batch, cover, name)
+		testMain, digests := load.TestGroupMain(ld, ctx, pkgOpts, batch, cover, name)
 		shared := make([]*load.Package, 0, len(batch))
 		for _, member := range batch {
 			shared = append(shared, member.Package)
 		}
+		remaining := new(atomic.Int32)
+		remaining.Store(int32(len(batch)))
 		for _, member := range batch {
 			groups[member.Package].testMain = testMain
 			groups[member.Package].members = shared
+			groups[member.Package].digest = digests[member.Package.ImportPath]
+			groups[member.Package].remaining = remaining
 		}
 	}
 	return groups
@@ -1402,6 +1415,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		rta := &runTestActor{
 			writeCoverMetaAct: writeCoverMetaAct,
 		}
+		rta.c.unitDigest = group.digest
 		runAction = &work.Action{
 			Mode:       "test run",
 			Actor:      rta,
@@ -1431,7 +1445,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		vetRunAction = runAction
 		cleanAction = &work.Action{
 			Mode:       "test clean",
-			Actor:      work.ActorFunc(builderCleanTest),
+			Actor:      &cleanTestActor{remaining: group.remaining},
 			Deps:       []*work.Action{runAction},
 			Package:    p,
 			IgnoreFail: true, // clean even if test failed
@@ -1508,6 +1522,11 @@ type runCache struct {
 	id1     cache.ActionID
 	id2     cache.ActionID
 	covMeta cache.ActionID // Hash of writeCoverMetaAct dependencies, for invalidating coverage profiles
+
+	// unitDigest is the generated main as it reads for this one package. The
+	// code that runs a test is generated rather than compiled from a package,
+	// so no compile action carries it and the key must name it directly.
+	unitDigest string
 }
 
 func coverProfTempFile(a *work.Action) string {
@@ -1661,7 +1680,7 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		// The first attempt reuses a result without running the linker at
 		// all. This one reuses it when different inputs compile alike.
 		// c.saveOutput stores the result under both IDs.
-		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, true))
+		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest, true))
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -1876,8 +1895,8 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 // tryCache is called just before the link attempt,
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
-func (c *runCache) tryCache(b *work.Builder, a *work.Action, linkAction *work.Action) bool {
-	return c.tryCacheWithID(b, a, testIdentity(b, a, linkAction, false))
+func (rcache *runCache) tryCache(builder *work.Builder, runAct *work.Action, linkAction *work.Action) bool {
+	return rcache.tryCacheWithID(builder, runAct, testIdentity(builder, runAct, linkAction, rcache.unitDigest, false))
 }
 
 // testIdentity keys a test result on the compiles of the package under test
@@ -1891,13 +1910,13 @@ func (c *runCache) tryCache(b *work.Builder, a *work.Action, linkAction *work.Ac
 //
 // byContent identifies what those compiles produced rather than what went into
 // them, so inputs that differ but compile alike still hit.
-func testIdentity(b *work.Builder, a *work.Action, linkAction *work.Action, byContent bool) string {
+func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string, byContent bool) string {
 	// LinkAction leads the deps with the compile of the generated main, and
 	// that compile imports the test variants of every package in the binary.
 	if len(linkAction.Deps) == 0 || linkAction.Deps[0].Package != linkAction.Package {
 		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
 	}
-	tested := a.Package.ImportPath
+	tested := runAct.Package.ImportPath
 	var codes []string
 	for _, dep := range linkAction.Deps[0].Deps {
 		if dep.Package == nil {
@@ -1915,8 +1934,11 @@ func testIdentity(b *work.Builder, a *work.Action, linkAction *work.Action, byCo
 	if len(codes) == 0 {
 		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)
 	}
+	if digest == "" {
+		base.Fatalf("go: internal error: no generated main was recorded for %s", tested)
+	}
 	slices.Sort(codes)
-	return strings.Join(codes, " ") + " " + b.LinkConfigID(linkAction.Package)
+	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
 }
 
 func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bool {
@@ -2396,9 +2418,23 @@ func coveragePercentage(out []byte) string {
 	return fmt.Sprintf("\tcoverage: %s", matches[1])
 }
 
-// builderCleanTest is the action for cleaning up after a test.
-func builderCleanTest(b *work.Builder, ctx context.Context, a *work.Action) error {
+// cleanTestActor removes the directory a test binary was built in, once every
+// package that shares the binary has run.
+//
+// Several packages can run out of one binary, and each of them gets a clean
+// action of its own. Removing the directory on the first of them to finish
+// takes the binary away from the rest, which then have nothing to execute.
+// A run can finish before an earlier one does, so the last to finish is what
+// this counts rather than the last to start.
+type cleanTestActor struct {
+	remaining *atomic.Int32
+}
+
+func (actor *cleanTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	if cfg.BuildWork {
+		return nil
+	}
+	if actor.remaining.Add(-1) != 0 {
 		return nil
 	}
 	b.Shell(a).RemoveAll(a.Objdir)

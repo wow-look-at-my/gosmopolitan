@@ -6,6 +6,8 @@ package load
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"go/build"
 	"sort"
 
@@ -34,7 +36,52 @@ type TestGroupMember struct {
 // group can only hold packages that do not reach each other. Two packages at
 // one path cannot sit in one link. The plain copy of B that another member's
 // tests import is exactly such a second copy.
-func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, members []TestGroupMember, cover *TestCover, name string) *Package {
+
+// A test result depends on the code that runs it, and that code is generated
+// here rather than compiled from any package's sources. A cache key without it
+// serves results the running binary never produced.
+//
+// The generated main's own compile cannot supply this, because it holds every
+// package in the binary. Rendering this one alone names the template and this
+// package's tests, and says nothing about a sibling.
+func unitDigest(unit testUnit, cover *TestCover) (string, error) {
+	alone := unit
+	alone.Alias = testAlias(0, false)
+	alone.XAlias = testAlias(0, true)
+	alone.Tests = realiasFuncs(unit.Tests, unit.Alias, unit.XAlias)
+	alone.Benchmarks = realiasFuncs(unit.Benchmarks, unit.Alias, unit.XAlias)
+	alone.FuzzTargets = realiasFuncs(unit.FuzzTargets, unit.Alias, unit.XAlias)
+	alone.Examples = realiasFuncs(unit.Examples, unit.Alias, unit.XAlias)
+	if unit.TestMain != nil {
+		only := realiasFuncs([]testFunc{*unit.TestMain}, unit.Alias, unit.XAlias)
+		alone.TestMain = &only[0]
+	}
+	rendered, err := renderTestmain(testMainData{Units: []testUnit{alone}, Cover: cover})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(rendered)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// realiasFuncs rewrites each function's import name as if its package were the
+// only one in the binary, so a digest does not move when a package's position
+// in the group moves.
+func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
+	out := make([]testFunc, len(funcs))
+	copy(out, funcs)
+	for idx := range out {
+		switch out[idx].Package {
+		case alias:
+			out[idx].Package = testAlias(0, false)
+		case xalias:
+			out[idx].Package = testAlias(0, true)
+		}
+	}
+	return out
+}
+
+func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, members []TestGroupMember, cover *TestCover, name string) (*Package, map[string]string) {
 	ctx, span := trace.StartSpan(ctx, "load.TestGroupMain")
 	defer span.Done()
 
@@ -183,7 +230,17 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		testMain.Incomplete = true
 	}
 	testMain.Internal.TestmainGo = &content
-	return testMain
+
+	digests := make(map[string]string, len(units))
+	for _, unit := range units {
+		digest, err := unitDigest(unit, cover)
+		if err != nil && testMain.Error == nil {
+			testMain.Error = &PackageError{Err: err}
+			testMain.Incomplete = true
+		}
+		digests[unit.ImportPath] = digest
+	}
+	return testMain, digests
 }
 
 // GroupMembers partitions packages into the groups that may share one binary.
