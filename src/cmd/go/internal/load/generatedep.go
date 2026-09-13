@@ -6,6 +6,8 @@ package load
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -115,14 +117,19 @@ func fileHasDirective(file string) bool {
 	return false
 }
 
-// generateModule answers the package directory of a generated module tree,
-// building that tree when it is not there yet.
+// generateModule answers the directory of package pkgrel in its module's
+// generated tree, generating that package into the tree when it is not there
+// yet.
 //
-// It lives in the module cache, beside the module it comes from, so it is
+// The tree lives in the module cache, beside the module it comes from, so it is
 // cached and shared exactly like every other fetched thing. It is a sibling of
 // the extracted module rather than the extracted module itself: go.sum pins the
 // bytes the proxy served, `go mod verify` hashes that tree against it, and a
 // generated file inside it would report every module as modified.
+//
+// A module has one tree, and each package the build loads from it is generated
+// into it on its own. A build that imports three packages of a module needs all
+// three generated, whichever of them it happened to load first.
 func generateModule(modroot, pkgrel string) (string, error) {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
@@ -141,44 +148,220 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	}
 	defer unlock()
 
-	done := root + ".generated"
+	// A package directory never contains '@', so no marker can collide with
+	// the directory of a package nested below the one it describes.
+	marks := filepath.Join(root+".packages", pkgrel)
+	done := filepath.Join(marks, "@generated")
 	if _, err := os.Stat(done); err == nil {
 		return filepath.Join(root, pkgrel), nil
 	}
 	// A module version is fixed bytes, so a directive that cannot run against it
 	// cannot run against it tomorrow either. Recording that answer keeps every
-	// later build from copying the tree and failing the same way.
-	failed := root + ".failed"
+	// later build from copying the tree and failing the same way. It is recorded
+	// against the package whose directive failed, so a sibling that generates
+	// cleanly is still generated.
+	failed := filepath.Join(marks, "@failed")
 	if why, err := os.ReadFile(failed); err == nil {
 		return "", fmt.Errorf("%s", strings.TrimSpace(string(why)))
 	}
-	if err := modfetch.RemoveAll(root); err != nil {
+
+	// The generator runs in a fresh copy of the fetched module, never in the
+	// tree other builds are compiling from. What it wrote reaches that tree
+	// only once it has succeeded.
+	stage := root + ".stage"
+	if err := modfetch.RemoveAll(stage); err != nil {
 		return "", err
 	}
-	if err := copyTree(modroot, root); err != nil {
+	if err := copyTree(modroot, stage); err != nil {
+		modfetch.RemoveAll(stage)
 		return "", err
 	}
-	if err := runGenerate(root, pkgrel); err != nil {
-		// A half-generated tree is worse than none: it compiles against files
-		// the generator had not finished writing.
-		modfetch.RemoveAll(root)
+	if err := runGenerate(stage, pkgrel); err != nil {
+		// A half-generated package is worse than none: it compiles against
+		// files the generator had not finished writing.
+		modfetch.RemoveAll(stage)
 		// Only a verdict about the module's own bytes may be recorded. A host
 		// that lacks the sandbox says nothing about this module, and writing
 		// that down makes installing the sandbox change nothing.
 		if !sandboxUnavailable(err) {
-			os.WriteFile(failed, []byte(err.Error()), 0o666)
+			if os.MkdirAll(marks, 0o777) == nil {
+				os.WriteFile(failed, []byte(err.Error()), 0o666)
+			}
 		}
+		return "", err
+	}
+	if err := publishGenerated(modroot, stage, root); err != nil {
+		modfetch.RemoveAll(stage)
+		return "", err
+	}
+	if err := os.MkdirAll(marks, 0o777); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(done, nil, 0o666); err != nil {
 		return "", err
 	}
-	// The module cache is read-only, and what it holds now is a build input
-	// like any other.
+	return filepath.Join(root, pkgrel), nil
+}
+
+// publishGenerated moves what a generator did in stage into root, the tree
+// builds read. The first package of a module becomes root whole. A later one
+// brings only the files its generator wrote, changed or removed relative to
+// the fetched module in modroot, so the packages already generated into root
+// keep what they have.
+func publishGenerated(modroot, stage, root string) error {
+	_, err := os.Stat(root)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err := os.Rename(stage, root); err != nil {
+			return err
+		}
+		sealTree(root)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	wrote, removed, err := generatorChanges(modroot, stage)
+	if err != nil {
+		return err
+	}
+	makeTreeWritable(root)
+	// root goes back to read-only whatever happens below: a tree left writable
+	// is one any later build can scribble on.
+	defer sealTree(root)
+	for _, rel := range wrote {
+		if err := placeFile(filepath.Join(stage, rel), filepath.Join(root, rel)); err != nil {
+			return err
+		}
+	}
+	for _, rel := range removed {
+		if err := os.Remove(filepath.Join(root, rel)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return modfetch.RemoveAll(stage)
+}
+
+// generatorChanges compares stage, a copy of modroot a generator has run in,
+// against modroot. It answers the regular files the generator wrote or changed
+// and the ones it removed, each relative to the tree's root.
+func generatorChanges(modroot, stage string) (wrote, removed []string, err error) {
+	err = filepath.WalkDir(stage, func(path string, ent fs.DirEntry, err error) error {
+		if err != nil || !ent.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(stage, path)
+		if err != nil {
+			return err
+		}
+		same, err := sameContent(path, filepath.Join(modroot, rel))
+		if err != nil {
+			return err
+		}
+		if !same {
+			wrote = append(wrote, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	err = filepath.WalkDir(modroot, func(path string, ent fs.DirEntry, err error) error {
+		if err != nil || !ent.Type().IsRegular() {
+			return err
+		}
+		rel, err := filepath.Rel(modroot, path)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(filepath.Join(stage, rel)); errors.Is(err, fs.ErrNotExist) {
+			removed = append(removed, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return wrote, removed, nil
+}
+
+// sameContent reports whether regular file path holds exactly the bytes of
+// base. A base that does not exist holds nothing path could match.
+func sameContent(path, base string) (bool, error) {
+	baseInfo, err := os.Stat(base)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	if !baseInfo.Mode().IsRegular() || info.Size() != baseInfo.Size() {
+		return false, nil
+	}
+	left, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer left.Close()
+	right, err := os.Open(base)
+	if err != nil {
+		return false, err
+	}
+	defer right.Close()
+
+	leftBuf := make([]byte, 64<<10)
+	rightBuf := make([]byte, 64<<10)
+	for {
+		num, leftErr := io.ReadFull(left, leftBuf)
+		_, rightErr := io.ReadFull(right, rightBuf[:num])
+		if rightErr != nil && num > 0 {
+			return false, rightErr
+		}
+		if !bytes.Equal(leftBuf[:num], rightBuf[:num]) {
+			return false, nil
+		}
+		if leftErr == io.EOF || leftErr == io.ErrUnexpectedEOF {
+			return true, nil
+		}
+		if leftErr != nil {
+			return false, leftErr
+		}
+	}
+}
+
+// placeFile copies src over dst by renaming a finished copy into place, so a
+// build reading dst sees either the old file or the new one and never a part.
+func placeFile(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), "@place-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+	if err := copyFile(src, tmpName); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// sealTree makes a generated tree read-only, as the rest of the module cache
+// is: what it holds is a build input like any other.
+func sealTree(root string) {
 	if !cfg.ModCacheRW {
 		makeTreeReadOnly(root)
 	}
-	return filepath.Join(root, pkgrel), nil
 }
 
 // makeTreeReadOnly drops write permission on dir and everything under it,
@@ -196,6 +379,20 @@ func makeTreeReadOnly(dir string) {
 			os.Chmod(dirs[idx], info.Mode()&^0o222)
 		}
 	}
+}
+
+// makeTreeWritable gives the owner write permission on dir and every directory
+// under it, so another package's generated files can be added to the tree.
+func makeTreeWritable(dir string) {
+	filepath.WalkDir(dir, func(path string, ent fs.DirEntry, err error) error {
+		if err != nil || !ent.IsDir() {
+			return nil
+		}
+		if info, err := os.Stat(path); err == nil {
+			os.Chmod(path, info.Mode()|0o200)
+		}
+		return nil
+	})
 }
 
 // runGenerate runs `go generate` for one package of the generated tree.
