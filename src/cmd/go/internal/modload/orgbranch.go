@@ -124,17 +124,40 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		branch = orgDefaultRev
 	}
 	return orgVersionCache.Do(orgVersionKey{branch, path}, func() (string, error) {
-		info, err := Query(ld, ctx, path, branch, "", nil)
-		if err != nil && branch != orgDefaultRev {
-			// The repository has no branch by that name, so it takes the head of
-			// its default branch instead.
-			info, err = Query(ld, ctx, path, orgDefaultRev, "", nil)
+		rev := branch
+		info, err := Query(ld, ctx, path, rev, "", nil)
+		if err != nil && rev != orgDefaultRev {
+			// Nothing of that name to query, so the default branch is next.
+			rev = orgDefaultRev
+			info, err = Query(ld, ctx, path, rev, "", nil)
 		}
-		if err != nil {
-			return "", fmt.Errorf("resolving %s from the head of %s: %w", path, branch, err)
+		if err == nil {
+			return info.Version, nil
 		}
-		return info.Version, nil
+		// A proxy resolves a revision only when it can reach the repository's
+		// refs, and the protocol has no spelling for the head of a default
+		// branch. The repository itself always can.
+		return orgRepoVersion(ld, ctx, path, branch, err)
 	})
+}
+
+// orgRepoVersion asks the repository that publishes path for the head of
+// branch, or for the head of its default branch when the repository has no
+// branch of that name. queryErr names why the query path came up short, and is
+// reported when the repository cannot answer either.
+func orgRepoVersion(ld *Loader, ctx context.Context, path, branch string, queryErr error) (string, error) {
+	repo := ld.Fetcher().Lookup(ctx, "direct", path)
+	if branch != orgDefaultRev {
+		if info, err := repo.Stat(ctx, branch); err == nil {
+			return info.Version, nil
+		}
+	}
+	// "HEAD" is how git names the branch a repository starts on.
+	info, err := repo.Latest(ctx)
+	if err != nil {
+		return "", fmt.Errorf("resolving %s from the head of %s: %w (also %v)", path, branch, err, queryErr)
+	}
+	return info.Version, nil
 }
 
 // orgResolvable reports whether the branch head of an org module can be
