@@ -90,7 +90,7 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-  # One job per host for the whole suite, so nothing downstream of a build waits on it.
+  # The whole suite per host, in parts that run side by side; nothing downstream of a build waits on it.
   suite:
     timeout-minutes: 150
     needs: [build, build-linux]
@@ -101,6 +101,9 @@ jobs:
       fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
+        # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
+        shard: [0, 1]
+        shards: [2]
 
     runs-on: ${{ matrix.suite-os }}
 
@@ -109,10 +112,14 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
+      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
+      - uses: ./.github/actions/track-submodules
 
       - uses: ./.github/actions/suite-leg
         # The NT leg reports in full; its red does not hold the branch. On the STEP, not the job: all-builds tallies jobs, and a job-level key leaves the job's own conclusion `failure`. waiver-expires: 2026-09-18
         continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
+        with:
+          shard: ${{ matrix.shard }}/${{ matrix.shards }}
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
@@ -297,6 +304,9 @@ jobs:
       fail-fast: false
       matrix:
         port: [js, wasip1]
+        # The same dist test parts as the suite job.
+        shard: [0, 1]
+        shards: [2]
 
     steps:
       - name: Checkout code
@@ -331,8 +341,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/wasmtime
-          key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-          restore-keys: wasmtime-modules-${{ matrix.port }}-
+          key: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ github.sha }}
+          restore-keys: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
@@ -349,7 +359,7 @@ jobs:
         uses: wow-look-at-my/log-streamer/.github/actions/stream@master
         with:
           stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}
+          name: ${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}
           run: |
             set -o pipefail
             export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
@@ -357,9 +367,9 @@ jobs:
             probe=$!
             # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
             trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test -shard=${{ matrix.shard }}/${{ matrix.shards }} 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
-      - name: What ${{ matrix.port }} spent its time on
+      - name: What ${{ matrix.port }} part ${{ matrix.shard }} of ${{ matrix.shards }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
@@ -402,7 +412,7 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
         env:
-          WASM_PORT: ${{ matrix.port }}
+          WASM_PORT: ${{ matrix.port }} part ${{ matrix.shard }}/${{ matrix.shards }}
 
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
@@ -471,6 +481,8 @@ jobs:
           submodules: true
       # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
       - uses: wow-look-at-my/actions@secret-server#latest
+      # The published toolchain is built here, so it carries the client's branch head rather than the gitlink's commit.
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
