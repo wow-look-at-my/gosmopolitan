@@ -20,7 +20,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         build-os: [macos-latest, windows-latest]
 
@@ -102,7 +102,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
         # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
@@ -162,7 +162,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -305,7 +305,7 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         port: [js, wasip1]
         # The same dist test parts as the suite job.
@@ -460,7 +460,7 @@ jobs:
     timeout-minutes: 25
     needs: publish-create
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - runner: ubuntu-latest
