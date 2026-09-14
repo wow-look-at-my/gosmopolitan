@@ -25,7 +25,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ -f .gitmodules ]] || exit 0
 
-here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+# An argument names the branch, for a caller holding a name this checkout does
+# not carry: an actions/checkout of a merge ref leaves HEAD detached.
+here=${1:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)}
 [[ "$here" == HEAD ]] && here=""
 
 # Rewrite the version that follows $module on any line of $1. The shell splits

@@ -19,7 +19,7 @@ require (
 require (
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
-	github.com/wow-look-at-my/go-containers v0.0.0-20260913045023-d3bbbdd0286d // indirect
+	github.com/wow-look-at-my/go-containers v0.0.0-00010101000000-000000000000 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	rsc.io/markdown v0.0.0-20240306144322-0bf8f97ee8ef // indirect
 )
