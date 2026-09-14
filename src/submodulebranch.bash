@@ -3,120 +3,60 @@
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
 
-# Move each submodule that follows this repository's branch onto that branch.
+# Move every org submodule onto the head of the branch it follows.
 #
-# A pair of repositories developed in tandem carry the same branch name. So a
-# submodule follows the branch of this repository's name when it has one, and
-# its default branch otherwise. The merge deletes the branch and both sides read
-# the default branch again, so nothing has to be repointed.
+# A pair of repositories developed in tandem carry the same branch name, so an
+# org submodule follows this repository's branch when it has one, and the branch
+# named for it in .gitmodules otherwise. Both halves are a question git already
+# knows how to ask: `git submodule update --init --remote` reads the branch to
+# follow from submodule.<name>.branch. So the only thing done here is to answer
+# the first half for git, by naming this repository's branch as the submodule's
+# branch before the update runs. A detached HEAD names no branch, and the
+# submodule keeps the one .gitmodules gives it.
 #
-# `branch = .` in .gitmodules says the first half to git. It has no second half:
-# a submodule with no branch of that name makes `git submodule update --remote`
-# fail rather than fall back.
+# Nothing writes a version down. The go.mod file and vendor/modules.txt record a
+# placeholder, and cmd/go reads the branch head of an org module by itself, so
+# neither file is rewritten here and neither moves when a dependency's branch
+# does.
 #
 # A remote this cannot reach leaves the checkout alone, so a build with no
 # network reads what it already has.
 #
-# Nothing here calls sed or awk. Both are banned in this tree. The shell reads
-# these files itself, which is one grammar rather than three.
+# The branch may be given as the first argument, for a caller whose checkout is
+# detached: a CI run knows the ref it is on, and git there does not.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 [[ -f .gitmodules ]] || exit 0
 
-# An argument names the branch, for a caller holding a name this checkout does
-# not carry: an actions/checkout of a merge ref leaves HEAD detached.
-here=${1:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)}
-[[ "$here" == HEAD ]] && here=""
+here=${1:-}
+if [[ -z "$here" ]]; then
+	here=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+	[[ "$here" == HEAD ]] && here=""
+fi
 
-# Rewrite the version that follows $module on any line of $1. The shell splits
-# each line into leading blanks, an optional "# " marker, the module path, the
-# blanks after it, the version and the rest. It puts every one of those back
-# untouched but the version, so go.mod keeps its tabs and modules.txt keeps its
-# shape.
-rewrite() {
-	local file=$1 module=$2 version=$3
-	local out line pre mark rest tok sep after ver tail
-	out=$(mktemp)
-	while IFS= read -r line || [[ -n "$line" ]]; do
-		pre=${line%%[![:blank:]]*}
-		rest=${line#"$pre"}
-		mark=""
-		if [[ "$rest" == "# "* ]]; then
-			mark="# "
-			rest=${rest#"# "}
-		fi
-		tok=${rest%%[[:blank:]]*}
-		if [[ "$tok" == "$module" || "$tok" == "$module"/* ]]; then
-			after=${rest#"$tok"}
-			sep=${after%%[![:blank:]]*}
-			after=${after#"$sep"}
-			ver=${after%%[[:blank:]]*}
-			tail=${after#"$ver"}
-			if [[ "$ver" == v* ]]; then
-				line="$pre$mark$tok$sep$version$tail"
-			fi
-		fi
-		printf '%s\n' "$line"
-	done <"$file" >"$out"
-	mv "$out" "$file"
-}
-
-# git parses its own config, so nothing here reads .gitmodules by hand.
-follows=$(git config -f .gitmodules --get-regexp '^submodule\..*\.branch$' 2>/dev/null || true)
-
-while read -r key value; do
-	[[ "$value" == "." ]] || continue
+while read -r key _; do
 	name=${key#submodule.}
-	name=${name%.branch}
+	name=${name%.path}
 
 	path=$(git config -f .gitmodules --get "submodule.$name.path")
 	url=$(git config -f .gitmodules --get "submodule.$name.url")
-	[[ -d "$path" ]] || continue
+	case "$url" in
+	*/github.com/wow-look-at-my/*) ;;
+	*) continue ;;
+	esac
 
-	# One ls-remote asks for the default branch and the matching one. A
-	# submodule without the branch, and one whose default branch IS that
-	# branch, both take the default.
-	ref=HEAD
-	if [[ -n "$here" ]]; then
-		refs=$(git ls-remote --symref "$url" HEAD "refs/heads/$here" 2>/dev/null || true)
-		default=""
-		while IFS=$'\t' read -r lhs rhs; do
-			[[ "$rhs" == HEAD && "$lhs" == "ref: refs/heads/"* ]] || continue
-			default=${lhs#ref: refs/heads/}
-		done <<<"$refs"
-		if grep -q "refs/heads/$here\$" <<<"$refs" && [[ "$default" != "$here" ]]; then
-			ref="refs/heads/$here"
-		fi
+	branch=$(git config -f .gitmodules --get "submodule.$name.branch" || true)
+	if [[ -n "$here" ]] && git ls-remote --exit-code --heads "$url" "refs/heads/$here" >/dev/null 2>&1; then
+		branch=$here
 	fi
+	[[ -n "$branch" ]] || continue
 
-	if ! git -C "$path" fetch --quiet --depth 1 "$url" "$ref" 2>/dev/null; then
+	git config "submodule.$name.branch" "$branch"
+	if git submodule update --init --remote -- "$path" 2>/dev/null; then
+		echo "submodulebranch: $path at $branch $(git -C "$path" rev-parse --short=12 HEAD)" >&2
+	else
 		echo "submodulebranch: $path stays where it is: cannot reach $url" >&2
-		continue
 	fi
-	git -C "$path" checkout --quiet --detach FETCH_HEAD
-
-	# go.mod and vendor/modules.txt both record the version, and the go
-	# command refuses to build in vendor mode when the two disagree.
-	module=""
-	while read -r mkey mval _; do
-		[[ "$mkey" == module ]] || continue
-		module=$mval
-		break
-	done <"$path/go.mod"
-	[[ -n "$module" ]] || continue
-
-	stamp=$(git -C "$path" show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-	short=$(git -C "$path" rev-parse --short=12 HEAD)
-	version="v0.0.0-$stamp-$short"
-
-	# A repository can publish several modules, and a requirement names the
-	# nested one. So the module this repository declares is a prefix of the
-	# path the version files carry, not always the whole of it.
-	for f in src/cmd/go.mod src/cmd/vendor/modules.txt; do
-		[[ -f "$f" ]] || continue
-		rewrite "$f" "$module" "$version"
-	done
-	echo "submodulebranch: $path at $version" >&2
-done <<<"$follows"
+done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
