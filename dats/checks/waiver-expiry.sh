@@ -1,12 +1,11 @@
 #!/bin/sh
-# A continue-on-error in a workflow hides a red leg. This refuses one that
-# carries no expiry date, and refuses one whose date has passed, so a
-# waiver removes itself instead of outliving the reason it was granted.
-#
-# The marker sits on the line above the key, or on the key's own line:
+# A continue-on-error hides a red leg, and a constant-false `if` hides a
+# whole job. Either needs a dated marker, on the line above the key or on
+# the key's own line, and the date has to be in the future:
 #
 #	# ... waiver-expires: 2026-09-18
 #	continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
+#	if: ${{ false }} # waiver-expires: 2026-09-21
 #
 # Usage: waiver-expiry.sh <file>...
 # Exit: 0 every waiver is dated and current, 2 one is not.
@@ -59,17 +58,27 @@ for f in "$@"; do
 		prev=""
 		while IFS= read -r text || [ -n "$text" ]; do
 			num=$((num + 1))
+			kind=""
 			case $text in
-			*continue-on-error*)
+			*continue-on-error*) kind="continue-on-error" ;;
+			*)
+				skipBlanks "$text"
+				case $trimmed in
+				"if: false" | "if: false "* | "if: \${{ false }}" | "if: \${{ false }}"*)
+					kind="a job switched off with if: false"
+					;;
+				esac
+				;;
+			esac
+			if [ -n "$kind" ]; then
 				if when=$(waiverDate "$prev $text"); then
 					if [ "$(dateNum "$when")" -lt "$(dateNum "$today")" ]; then
 						printf '%s:%d: waiver expired on %s (today is %s)\n' "$f" "$num" "$when" "$today"
 					fi
 				else
-					printf '%s:%d: continue-on-error with no waiver-expires date\n' "$f" "$num"
+					printf '%s:%d: %s with no waiver-expires date\n' "$f" "$num" "$kind"
 				fi
-				;;
-			esac
+			fi
 			prev=$text
 		done <"$f"
 	)

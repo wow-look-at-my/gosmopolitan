@@ -30,6 +30,15 @@ import (
 // Tests can override this by setting $TESTGO_TOOLCHAIN_VERSION.
 var ToolchainVersion = runtime.Version()
 
+// TestUnitSpecFile and TestUnitDigestFile name, inside a test binary's link
+// directory, what the go command hands the linker and what the linker writes
+// back: the roots of each package's tests, and a digest of the code each one
+// reaches. A package's cached test result is keyed on its digest.
+const (
+	TestUnitSpecFile   = "_testunits.txt"
+	TestUnitDigestFile = "_testunitdigest.txt"
+)
+
 // The Go toolchain.
 
 type gcToolchain struct{}
@@ -51,6 +60,17 @@ func pkgPath(a *Action) string {
 		ppath = "main"
 	}
 	return ppath
+}
+
+// replacedArchive answers the archive of the package a test variant is
+// linked in place of: the output of that package's own compile.
+func replacedArchive(a *Action) string {
+	for _, dep := range a.Deps {
+		if dep.Package == a.Package.Internal.TestVariantOf && dep.Mode == "build" {
+			return dep.built
+		}
+	}
+	return ""
 }
 
 func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg []byte, symabis string, asmhdr bool, pgoProfile string, gofiles []string) (ofile string, output []byte, err error) {
@@ -120,6 +140,19 @@ func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg
 	}
 	if symabis != "" {
 		defaultGcFlags = append(defaultGcFlags, "-symabis", symabis)
+	}
+	if p.Internal.TestInit != "" {
+		defaultGcFlags = append(defaultGcFlags, "-testinit="+p.Internal.TestInit)
+	}
+	if len(p.Internal.TestStartup) > 0 {
+		defaultGcFlags = append(defaultGcFlags, "-teststartup="+strings.Join(p.Internal.TestStartup, ","))
+	}
+	if p.Internal.TestVariantOf != nil {
+		replaced := replacedArchive(a)
+		if replaced == "" {
+			return "", nil, fmt.Errorf("%s: no compile of %s to take symbol indices from", p.ImportPath, p.Internal.TestVariantOf.ImportPath)
+		}
+		defaultGcFlags = append(defaultGcFlags, "-testvariant="+replaced)
 	}
 
 	gcflags := str.StringList(forcedGcflags, p.Internal.Gcflags)
@@ -610,6 +643,13 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	}
 	if fips140.Enabled() {
 		ldflags = append(ldflags, "-fipso", filepath.Join(root.Objdir, "fips.o"))
+	}
+	if spec := root.Package.Internal.TestUnitSpec; spec != "" && !cfg.BuildN {
+		specFile := filepath.Join(root.Objdir, TestUnitSpecFile)
+		if err := os.WriteFile(specFile, []byte(spec), 0666); err != nil {
+			return err
+		}
+		ldflags = append(ldflags, "-testunits", specFile, "-testunitdigest", filepath.Join(root.Objdir, TestUnitDigestFile))
 	}
 
 	// Store BuildID inside toolchain binaries as a unique identifier of the

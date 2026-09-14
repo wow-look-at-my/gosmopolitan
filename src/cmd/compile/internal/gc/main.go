@@ -378,6 +378,7 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 	base.Timer.Start("be", "dumpobj")
 	dumpdata()
 	base.Ctxt.NumberSyms()
+	noder.KeepReplacedIndices()
 	dumpobj()
 	if base.Flag.AsmHdr != "" {
 		dumpasmhdr()

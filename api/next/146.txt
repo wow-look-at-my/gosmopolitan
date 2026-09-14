@@ -1,0 +1,4 @@
+pkg testing, func MainStart(testDeps, []InternalTest, []InternalBenchmark, []InternalFuzzTarget, []InternalExample) *Runner #146
+pkg testing, method (*Runner) Run() int #146
+pkg testing, type M = Runner #146
+pkg testing, type Runner struct #146

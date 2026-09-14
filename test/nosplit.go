@@ -230,11 +230,6 @@ func main() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	os.Setenv("GOPATH", filepath.Join(dir, "_gopath"))
-
-	if err := ioutil.WriteFile(filepath.Join(dir, "go.mod"), []byte("module go-test-nosplit\n"), 0666); err != nil {
-		log.Panic(err)
-	}
 
 	tests = strings.Replace(tests, "\t", " ", -1)
 	tests = commentRE.ReplaceAllString(tests, "")
@@ -380,9 +375,7 @@ TestCases:
 			log.Fatal(err)
 		}
 
-		cmd := exec.Command("go", "build")
-		cmd.Dir = dir
-		output, err := cmd.CombinedOutput()
+		output, err := build(dir)
 		if err == nil {
 			nok++
 			if reject {
@@ -403,6 +396,38 @@ TestCases:
 		bug()
 		fmt.Printf("not enough test cases run\n")
 	}
+}
+
+// build builds the main package of main.go and asm.s in dir: the assembler,
+// the compiler and the linker, against the standard library
+// cmd/internal/testdir lists in STDLIB_IMPORTCFG. It answers what they
+// printed.
+func build(dir string) ([]byte, error) {
+	importcfg := os.Getenv("STDLIB_IMPORTCFG")
+	if importcfg == "" {
+		return nil, fmt.Errorf("STDLIB_IMPORTCFG is not set")
+	}
+	if err := ioutil.WriteFile(filepath.Join(dir, "go_asm.h"), nil, 0666); err != nil {
+		return nil, err
+	}
+	steps := [][]string{
+		{"tool", "asm", "-p", "main", "-I", dir, "-gensymabis", "-o", "symabis", "asm.s"},
+		{"tool", "compile", "-p", "main", "-importcfg", importcfg, "-symabis", "symabis", "-asmhdr", "go_asm.h", "-pack", "-o", "main.a", "main.go"},
+		{"tool", "asm", "-p", "main", "-I", dir, "-o", "asm.o", "asm.s"},
+		{"tool", "pack", "r", "main.a", "asm.o"},
+		{"tool", "link", "-importcfg", importcfg, "-o", "main.exe", "main.a"},
+	}
+	var all []byte
+	for _, step := range steps {
+		cmd := exec.Command("go", step...)
+		cmd.Dir = dir
+		output, err := cmd.CombinedOutput()
+		all = append(all, output...)
+		if err != nil {
+			return all, err
+		}
+	}
+	return all, nil
 }
 
 func indent(s string) string {

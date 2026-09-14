@@ -476,7 +476,7 @@ func reparsedebugvars(env string) {
 	// apply defaults for as-yet-unseen variables
 	for _, v := range dbgvars {
 		if v.atomic != nil && !seen[v.name] {
-			v.atomic.Store(0)
+			v.atomic.Store(v.def)
 		}
 	}
 }
