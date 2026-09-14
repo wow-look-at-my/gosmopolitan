@@ -141,6 +141,16 @@ go build ./...
 go run .
 stdout '^alpha-vendored$'
 
+# A replace line naming an org module records a version the same way a require
+# line does. This replacement names a commit that does not exist, so a version
+# the go command read at all would fail the build instead of printing alpha's
+# default-branch code.
+cd $WORK/replaced
+go run .
+stdout '^alpha-main$'
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+
 -- $WORK/home/gopher/.gitconfig --
 [user]
 	name = Go Gopher
@@ -266,3 +276,23 @@ github.com/wow-look-at-my/alpha
 package alpha
 
 func Name() string { return "alpha-vendored" }
+-- $WORK/replaced/go.mod --
+module example.com/replaced
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+-- $WORK/replaced/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
