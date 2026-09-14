@@ -110,6 +110,9 @@ jobs:
         shards: [2]
 
     runs-on: ${{ matrix.suite-os }}
+    env:
+      # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
+      GO_TEST_TIMEOUT_SCALE: 2
 
     steps:
       - uses: actions/checkout@v4
