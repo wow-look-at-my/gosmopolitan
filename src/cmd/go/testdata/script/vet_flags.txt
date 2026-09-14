@@ -2,6 +2,10 @@
 
 env GO111MODULE=on
 
+# The -n checks below read vet command lines, which a cached vet result
+# leaves out, so the script starts from an empty cache.
+env GOCACHE=$WORK${/}cache
+
 # Issue 35837: "go vet -<analyzer> <std package>" should use the requested
 # analyzers, not the default analyzers for 'go test'.
 go vet -n -buildtags=false runtime
@@ -20,7 +24,6 @@ stderr '-unsafeptr'
 ! stderr '-unsafeptr=false'
 
 # -unreachable is disabled during test but on during plain vet.
-# The -a makes sure the vet result is not cached, or else we won't print the command line.
 go test -n runtime
 stderr '-unreachable=false'
 

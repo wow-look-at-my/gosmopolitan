@@ -693,6 +693,12 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 			}
 		}
 
+		// A test variant linked in place of its package takes that package's
+		// symbol indices from the package's own compile.
+		if p1 := p.Internal.TestVariantOf; p1 != nil {
+			a.Deps = append(a.Deps, b.CompileAction(depMode, depMode, p1))
+		}
+
 		if p.Internal.PGOProfile != "" {
 			pgoAction := b.cacheAction("preprocess PGO profile "+p.Internal.PGOProfile, nil, func() *Action {
 				a := &Action{
@@ -1085,6 +1091,17 @@ func (b *Builder) addTransitiveLinkDeps(s *modload.Loader, a, a1 *Action, shlib 
 	haveDep := map[string]bool{}
 	if a1.Package != nil {
 		haveDep[a1.Package.ImportPath] = true
+	}
+	// A test variant linked in place of its package is imported by the test
+	// main directly. Take it first, so that the package it replaces, reached
+	// through any other import, is never linked beside it.
+	for _, a2 := range a1.Deps {
+		if a2.Package == nil || a2.Mode != "build" || a2.Package.Internal.TestVariantOf == nil {
+			continue
+		}
+		haveDep[a2.Package.ImportPath] = true
+		a.Deps = append(a.Deps, a2)
+		workq = append(workq, a2)
 	}
 	for i := 0; i < len(workq); i++ {
 		a1 := workq[i]

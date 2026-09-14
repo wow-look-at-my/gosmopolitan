@@ -84,12 +84,19 @@ type tester struct {
 
 	shardStr string          // the -shard flag, K/N
 	shardSet map[string]bool // the tests in part K; nil means every test
+
+	// oneBinaries holds the binary that every package's tests compile into,
+	// for the target and for the host, once one is written. sharedPkgs holds
+	// the packages of the shared tests that start each.
+	oneBinaries [2]oneBinary
+	sharedPkgs  [2][]string
 }
 
 // work tracks command execution for a test.
 type work struct {
 	dt    *distTest     // unique test name, etc.
 	cmd   *exec.Cmd     // must write stdout/stderr to out
+	began time.Time     // when cmd started
 	flush func()        // if non-nil, called after cmd.Run
 	start chan bool     // a true means to start, a false means to skip
 	out   bytes.Buffer  // combined stdout/stderr from cmd
@@ -426,6 +433,7 @@ type goTest struct {
 	gcflags   string // If non-empty, build with -gcflags=all=X
 	ldflags   string // If non-empty, build with -ldflags=X
 	buildmode string // If non-empty, -buildmode flag
+	pgo       string // If non-empty, -pgo flag
 
 	env []string // Environment variables to add, as KEY=VAL. KEY= unsets a variable
 
@@ -452,6 +460,15 @@ type goTest struct {
 	testFlags []string // Additional flags accepted by this test
 
 	vet string // The -vet list for go test; empty keeps go test's default
+
+	// keep, if non-empty, is where go test writes the one binary its
+	// packages' tests share (-keepbinary).
+	keep string
+
+	// shared says this test differs from the package's run only in the
+	// flags its binary starts with. It starts the binary every package's
+	// tests compile into, with those flags, and builds nothing of its own.
+	shared bool
 }
 
 // upstreamTestVet is the analyzer list upstream's go test runs, which is this
@@ -468,22 +485,26 @@ func (opts *goTest) compileOnly() bool {
 // will write its output to stdout and stderr. If stdout==stderr, bgCommand
 // ensures Writes are serialized. The caller should call flush() after Cmd exits.
 func (opts *goTest) bgCommand(t *tester, stdout, stderr io.Writer) (cmd *exec.Cmd, flush func()) {
-	build, run, pkgs, testFlags, setupCmd := opts.buildArgs(t)
-
-	// Combine the flags.
-	args := append([]string{"test"}, build...)
-	if t.compileOnly || opts.compileOnly() {
-		args = append(args, "-c", "-o", os.DevNull)
+	if opts.shared {
+		cmd = opts.sharedCommand(t)
 	} else {
-		args = append(args, run...)
-	}
-	args = append(args, pkgs...)
-	if !t.compileOnly && !opts.compileOnly() {
-		args = append(args, testFlags...)
-	}
+		build, run, pkgs, testFlags, setupCmd := opts.buildArgs(t)
 
-	cmd = exec.Command(gorootBinGo, args...)
-	setupCmd(cmd)
+		// Combine the flags.
+		args := append([]string{"test"}, build...)
+		if t.compileOnly || opts.compileOnly() {
+			args = append(args, "-c", "-o", os.DevNull)
+		} else {
+			args = append(args, run...)
+		}
+		args = append(args, pkgs...)
+		if !t.compileOnly && !opts.compileOnly() {
+			args = append(args, testFlags...)
+		}
+
+		cmd = exec.Command(gorootBinGo, args...)
+		setupCmd(cmd)
+	}
 	if t.json && opts.variant != "" && !opts.omitVariant {
 		// Rewrite Package in the JSON output to be pkg:variant. When omitVariant
 		// is true, pkg.TestName is already unambiguous, so we don't need to
@@ -521,6 +542,158 @@ func (opts *goTest) run(t *tester) error {
 	err := cmd.Run()
 	flush()
 	return err
+}
+
+// oneBinary is a test binary that the tests of several packages compile
+// into, and the packages it holds.
+type oneBinary struct {
+	file string
+	has  map[string]bool
+}
+
+// oneBinaryTest is the go test that builds the one binary of pkgs. The run of
+// every package and each shared test start what it builds, so they agree on
+// everything that shapes the binary.
+func oneBinaryTest(pkgs []string) *goTest {
+	// A binary holds one PGO profile: cmd/compile's default.pgo would give
+	// its tests a binary of their own. The profile changes how fast code
+	// runs, not what it does, and the compiler the tests run is built by
+	// make.bash.
+	return &goTest{
+		gcflags: gogcflags,
+		pgo:     "off",
+		pkgs:    pkgs,
+	}
+}
+
+// recordOneBinary notes that file holds the tests of pkgs, once go test has
+// written it.
+func (t *tester) recordOneBinary(host bool, file string, pkgs []string) {
+	if _, err := os.Stat(file); err != nil {
+		return
+	}
+	has := make(map[string]bool, len(pkgs))
+	for _, pkg := range pkgs {
+		has[pkg] = true
+	}
+	t.oneBinaries[hostIndex(host)] = oneBinary{file: file, has: has}
+}
+
+func hostIndex(host bool) int {
+	if host {
+		return 1
+	}
+	return 0
+}
+
+// sharedBinary answers the one binary holding the tests of opts's package,
+// and whether it holds any other package's. The run of every package writes
+// one. A test run without that, or of a package it does not hold, builds one
+// here for every shared test's package, once.
+func (t *tester) sharedBinary(opts *goTest, host bool) (file string, several bool) {
+	one := t.oneBinaries[hostIndex(host)]
+	if !one.has[opts.pkg] {
+		pkgs := t.sharedPkgs[hostIndex(host)]
+		name := "shared.test"
+		if host {
+			name = "shared-host.test"
+		}
+		file = filepath.Join(workdir, name)
+		build := oneBinaryTest(pkgs)
+		build.keep = file
+		build.runTests = "^$"
+		build.runOnHost = opts.runOnHost
+		if err := build.run(t); err != nil {
+			errprintf("building the test binary of %s: %v\n", strings.Join(pkgs, " "), err)
+		}
+		t.recordOneBinary(host, file, pkgs)
+		one = t.oneBinaries[hostIndex(host)]
+		if !one.has[opts.pkg] {
+			return file, len(pkgs) > 1
+		}
+	}
+	return one.file, len(one.has) > 1
+}
+
+// sharedCommand starts the binary every package's tests compile into, for
+// this test's package and with this test's flags, the way go test would
+// start it.
+func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
+	host := opts.runOnHost && (goarch != gohostarch || goos != gohostos)
+	binary, several := t.sharedBinary(opts, host)
+
+	var args []string
+	if several {
+		args = append(args, "-test.unit="+opts.pkg)
+	}
+	timeout := opts.timeout
+	if timeout == 0 {
+		timeout = 10 * time.Minute // Default value of go test -timeout flag.
+	}
+	args = append(args, "-test.paniconexit0", "-test.timeout="+(timeout*time.Duration(t.timeoutScale)).String())
+	if t.json {
+		args = append(args, "-test.v=test2json")
+	} else {
+		args = append(args, "-test.v")
+	}
+	if opts.short || t.short {
+		args = append(args, "-test.short")
+	}
+	if opts.runTests != "" {
+		args = append(args, "-test.run="+opts.runTests)
+	}
+	if opts.cpu != "" {
+		args = append(args, "-test.cpu="+opts.cpu)
+	}
+	if opts.skip != "" {
+		args = append(args, "-test.skip="+opts.skip)
+	}
+	args = append(args, opts.testFlags...)
+	if host {
+		// -target is a special flag understood by tests that can run on the host
+		args = append(args, "-target="+goos+"/"+goarch)
+	}
+
+	argv := append([]string{binary}, args...)
+	if !host && (goos != gohostos || goarch != gohostarch) {
+		// go test starts a binary for another port through the exec
+		// wrapper on PATH, and so does this.
+		if wrapper, err := exec.LookPath(fmt.Sprintf("go_%s_%s_exec", goos, goarch)); err == nil {
+			argv = append([]string{wrapper}, argv...)
+		}
+	}
+	if t.json {
+		argv = append([]string{gorootBinGo, "tool", "test2json", "-t", "-p", opts.pkg}, argv...)
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = os.Environ()
+	setDir(cmd, filepath.Join(goroot, "src", opts.pkg))
+	for _, kv := range opts.env {
+		if idx := strings.Index(kv, "="); idx < 0 {
+			unsetEnv(cmd, kv[:len(kv)-1])
+		} else {
+			setEnv(cmd, kv[:idx], kv[idx+1:])
+		}
+	}
+	if host {
+		setEnv(cmd, "GOARCH", gohostarch)
+		setEnv(cmd, "GOOS", gohostos)
+	}
+	return cmd
+}
+
+// summarize writes the line go test ends a package's run with, for a test that
+// started its binary itself.
+func (opts *goTest) summarize(t *tester, out io.Writer, cmd *exec.Cmd, elapsed time.Duration) {
+	if t.json {
+		return // test2json reports the run's end
+	}
+	result := "ok  "
+	if cmd.ProcessState == nil || !cmd.ProcessState.Success() {
+		result = "FAIL"
+	}
+	fmt.Fprintf(out, "%s\t%s\t%.3fs\n", result, opts.pkg, elapsed.Seconds())
 }
 
 // buildArgs is in internal helper for goTest that constructs the elements of
@@ -600,6 +773,12 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	if opts.buildmode != "" {
 		build = append(build, "-buildmode="+opts.buildmode)
 	}
+	if opts.pgo != "" {
+		build = append(build, "-pgo="+opts.pgo)
+	}
+	if opts.keep != "" {
+		build = append(build, "-keepbinary="+opts.keep)
+	}
 
 	pkgs = opts.packages()
 
@@ -678,7 +857,6 @@ const (
 )
 
 func (t *tester) registerStdTest(pkg string) {
-	gcflags := gogcflags
 	name := testName(pkg, "")
 	if t.runRx == nil || t.runRx.MatchString(name) == t.runRxWant {
 		stdMatches = append(stdMatches, pkg)
@@ -710,11 +888,14 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
-		return (&goTest{
-			timeout: timeoutSec,
-			gcflags: gcflags,
-			pkgs:    stdMatches,
-		}).run(t)
+		// One binary holds the tests of every package. It is kept, and the
+		// tests that differ from a package's run only in flags start it again.
+		test := oneBinaryTest(stdMatches)
+		test.timeout = timeoutSec
+		test.keep = filepath.Join(workdir, "std.test")
+		err := test.run(t)
+		t.recordOneBinary(false, test.keep, stdMatches)
+		return err
 	})
 }
 
@@ -1111,6 +1292,7 @@ func (t *tester) registerTests() {
 				timeout: 120 * time.Second,
 				cpu:     "10",
 				pkg:     "sync",
+				shared:  true,
 			})
 	}
 
@@ -1139,8 +1321,8 @@ func (t *tester) registerTests() {
 	//
 	// TODO: remove the exclusion of goexperiment simd right before dev.simd branch is merged to master.
 	if goos == "darwin" || ((goos == "linux" || goos == "windows") && (goarch == "amd64" && !strings.Contains(goexperiment, "simd"))) {
-		t.registerTest("API release note check", &goTest{variant: "check", pkg: "cmd/relnote", testFlags: []string{"-check"}})
-		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}})
+		t.registerTest("API release note check", &goTest{variant: "check", pkg: "cmd/relnote", testFlags: []string{"-check"}, shared: true})
+		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}, shared: true})
 	}
 
 	// Runtime CPU tests.
@@ -1156,8 +1338,9 @@ func (t *tester) registerTests() {
 					testFlags: []string{"-quick"},
 					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
 					// creation of first goroutines and first garbage collections in the parallel setting.
-					env: []string{"GOMAXPROCS=2"},
-					pkg: "runtime",
+					env:    []string{"GOMAXPROCS=2"},
+					pkg:    "runtime",
+					shared: true,
 				})
 		}
 	}
@@ -1193,6 +1376,9 @@ func (t *tester) registerTests() {
 					// The corpus runs as cosmo binaries through the exec
 					// wrapper on a hosted runner, past go test's 10 minutes.
 					timeout: 30 * time.Minute,
+					// Every shard starts the one test binary with its
+					// own -shard.
+					shared: true,
 				},
 			)
 		}
@@ -1258,6 +1444,13 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 			panic("empty variant")
 		}
 		name := testName(test.pkg, test.variant)
+		if test.shared {
+			host := test.runOnHost && (goarch != gohostarch || goos != gohostos)
+			pkgs := &t.sharedPkgs[hostIndex(host)]
+			if !slices.Contains(*pkgs, test.pkg) {
+				*pkgs = append(*pkgs, test.pkg)
+			}
+		}
 		t.addTest(name, heading, func(dt *distTest) error {
 			if skipFunc != nil {
 				msg, skip := skipFunc(dt)
@@ -1266,8 +1459,19 @@ func (t *tester) registerTest(heading string, test *goTest, opts ...registerTest
 					return nil
 				}
 			}
+			if test.shared && t.compileOnly {
+				// The package's own run compiles what this test would start.
+				return nil
+			}
 			w := &work{dt: dt}
 			w.cmd, w.flush = test.bgCommand(t, &w.out, &w.out)
+			if test.shared {
+				flush := w.flush
+				w.flush = func() {
+					flush()
+					test.summarize(t, &w.out, w.cmd, time.Since(w.began))
+				}
+			}
 			t.worklist = append(t.worklist, w)
 			return nil
 		})
@@ -1591,6 +1795,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				w.printSkip(t, "skipped due to earlier error")
 			} else {
 				timelog("start", w.dt.name)
+				w.began = time.Now()
 				w.err = w.cmd.Run()
 				if w.flush != nil {
 					w.flush()

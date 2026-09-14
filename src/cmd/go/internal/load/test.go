@@ -125,13 +125,28 @@ func TestPackagesAndErrors(ld *modload.Loader, ctx context.Context, done func(),
 // dependency graph itself. Building a main here as well would rewire a second
 // graph over the same packages, so a caller that groups asks for the variants
 // alone.
+//
+// perr is the package holding the error, as TestPackagesFor answers it: a
+// variant's own, or else the first one in the dependencies of a variant that
+// is incomplete. An import that fails to load marks the importer incomplete
+// and leaves the error on the imported package.
 func TestVariantsFor(ld *modload.Loader, ctx context.Context, opts PackageOpts, p *Package, cover *TestCover) (withTests, extTests, perr *Package) {
 	_, withTests, extTests = testPackages(ld, ctx, nil, opts, p, cover, true)
-	if withTests != nil && withTests.Error != nil {
-		return withTests, extTests, withTests
-	}
-	if extTests != nil && extTests.Error != nil {
-		return withTests, extTests, extTests
+	for _, variant := range []*Package{withTests, extTests} {
+		if variant == nil {
+			continue
+		}
+		if variant.Error != nil {
+			return withTests, extTests, variant
+		}
+		if !variant.Incomplete {
+			continue
+		}
+		for _, dep := range PackageList([]*Package{variant}) {
+			if dep.Error != nil {
+				return withTests, extTests, dep
+			}
+		}
 	}
 	return withTests, extTests, nil
 }
@@ -467,7 +482,7 @@ func testPackages(ld *modload.Loader, ctx context.Context, done func(), opts Pac
 			}
 		}
 
-		data, err := formatTestmain(t)
+		data, err := formatTestmain(t, testMain.DefaultGODEBUG)
 		if err != nil && testMain.Error == nil {
 			testMain.Error = &PackageError{Err: err}
 			testMain.Incomplete = true
@@ -560,6 +575,13 @@ func recompileForTest(testMain, preal, withTests, extTests *Package) *PackageErr
 		}
 	}
 
+	return testImportCycle(withTests, withTests)
+}
+
+// testImportCycle reports the shortest path by which withTests reaches
+// target, as an import cycle error. target is withTests itself once the graph
+// holds test copies, and the package without its test files otherwise.
+func testImportCycle(withTests, target *Package) *PackageError {
 	// Do search to find cycle.
 	// importerOf maps each import path to its importer nearest to p.
 	importerOf := map[*Package]*Package{}
@@ -581,7 +603,7 @@ func recompileForTest(testMain, preal, withTests, extTests *Package) *PackageErr
 	for len(q) > 0 {
 		p := q[0]
 		q = q[1:]
-		if p == withTests {
+		if p == target {
 			// The stack is supposed to be in the order x imports y imports z.
 			// We collect in the reverse order: z is imported by y is imported
 			// by x, and then we reverse it.
@@ -692,12 +714,40 @@ type testMainData struct {
 	Cover                 *TestCover
 	Covered               string
 	CoverSelectedPackages string
+
+	// Grouped says the binary is built to hold several units, and picks
+	// one by -test.unit. It stays so when only one of them is left.
+	Grouped bool
 }
 
-// formatTestmain returns the content of the _testmain.go file for t.
-func formatTestmain(t *testFuncs) ([]byte, error) {
+// RenderTestmainWithout renders the generated main of a binary holding
+// several packages' tests again, without the units of the packages in drop.
+// Those packages' tests failed to build, and the rest still run.
+func RenderTestmainWithout(testMain *Package, drop map[string]bool) ([]byte, error) {
+	data := testMain.Internal.testmainData
+	if data == nil {
+		return nil, fmt.Errorf("%s: no generated main to render again", testMain.ImportPath)
+	}
+	kept := *data
+	kept.Units = nil
+	for _, unit := range data.Units {
+		if !drop[unit.UnitID] {
+			kept.Units = append(kept.Units, unit)
+		}
+	}
+	if len(kept.Units) == 0 {
+		return nil, fmt.Errorf("no package's tests in %s built", testMain.ImportPath)
+	}
+	return renderTestmain(kept)
+}
+
+// formatTestmain returns the content of the _testmain.go file for t, in a
+// binary whose default GODEBUG is godebug.
+func formatTestmain(t *testFuncs, godebug string) ([]byte, error) {
+	units := t.Units()
+	units[0].GODEBUG = godebug
 	return renderTestmain(testMainData{
-		Units:                 t.Units(),
+		Units:                 units,
 		Cover:                 t.Cover,
 		Covered:               t.Covered(),
 		CoverSelectedPackages: t.CoverSelectedPackages(),
@@ -767,6 +817,15 @@ type testUnit struct {
 	// rather than the binary: coverage answers for the package under test.
 	Covered       string
 	CoverSelected string
+
+	// GODEBUG is the default GODEBUG of a binary holding this unit's tests
+	// alone. The binary is started with the first unit's, and applies this
+	// one's when it is started for this unit.
+	GODEBUG string
+
+	// Binary is the file name, without an executable suffix, that go test -c
+	// gives this unit's copy of the binary.
+	Binary string
 }
 
 // Units answers the packages this test main imports.
@@ -964,7 +1023,7 @@ var testmainTmpl = lazytemplate.New("main", `
 package main
 
 import (
-{{if gt (len .Units) 1}}
+{{if .Grouped}}
 	"fmt"
 {{end}}
 	"os"
@@ -996,6 +1055,8 @@ type testUnit struct {
 	fuzzTargets []testing.InternalFuzzTarget
 	examples    []testing.InternalExample
 	testMain    func(*testing.Runner)
+	godebug     string
+	binary      string
 {{if .Cover}}
 	covered       string
 	coverSelected []string
@@ -1029,6 +1090,8 @@ var units = []testUnit{
 {{end}}
 		},
 		testMain: {{with .TestMain}}{{.Package}}.{{.Name}}{{else}}nil{{end}},
+		godebug: {{.GODEBUG | printf "%q"}},
+		binary: {{.Binary | printf "%q"}},
 {{if $.Cover}}
 		covered: {{.Covered | printf "%q"}},
 		coverSelected: {{printf "%s" .CoverSelected}},
@@ -1037,10 +1100,20 @@ var units = []testUnit{
 {{end}}
 }
 
-{{if gt (len .Units) 1}}
+{{if .Grouped}}
 // unitFlag names the package whose tests this process runs. The go command
 // passes it when one binary holds more than one package.
 const unitFlag = "-test.unit="
+
+// unitEnv names the package when a test started this binary again, which
+// names only a test of its own: the process running the package's tests sets
+// it, and its children inherit it. When the caller replaced a child's
+// environment, package os adds it with unitImplicitEnv, and the child takes
+// both out again before its tests run.
+const (
+	unitEnv         = "GO_TEST_UNIT"
+	unitImplicitEnv = "GO_TEST_UNIT_IMPLICIT"
+)
 
 // pickUnit answers the package this process runs and takes the flag naming it
 // out of the argument list, which the testing package parses next and knows
@@ -1059,25 +1132,80 @@ func pickUnit() *testUnit {
 	}
 	os.Args = kept
 
+	inherited := os.Getenv(unitEnv)
+	if os.Getenv(unitImplicitEnv) == "1" {
+		os.Unsetenv(unitEnv)
+		os.Unsetenv(unitImplicitEnv)
+	}
+	// The environment can name the package of another test binary that
+	// started this one, which is not a request for anything here.
+	if want == "" && findUnit(inherited) != nil {
+		want = inherited
+	}
+	// go test -c writes this binary once per package, each copy named for
+	// its package, and a copy started by name runs that package.
+	if want == "" {
+		if unit := unitNamed(os.Args[0]); unit != nil {
+			want = unit.unitID
+		}
+	}
 	if want == "" {
 		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
 		os.Exit(2)
 	}
+	unit := findUnit(want)
+	if unit == nil {
+		fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
+		os.Exit(2)
+	}
+	testdeps.StartUnit(want, unit.godebug)
+	return unit
+}
+
+// findUnit answers the unit named id, or nil when this binary holds none.
+func findUnit(id string) *testUnit {
 	for idx := range units {
-		if units[idx].unitID == want {
+		if id != "" && units[idx].unitID == id {
 			return &units[idx]
 		}
 	}
-	fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
-	os.Exit(2)
 	return nil
+}
+
+// unitNamed answers the one unit whose test binary has the file name of
+// path, or nil when none or several do.
+func unitNamed(path string) *testUnit {
+	name := path
+	for idx := len(path) - 1; idx >= 0; idx-- {
+		if path[idx] == '/' || path[idx] == os.PathSeparator {
+			name = path[idx+1:]
+			break
+		}
+	}
+	if len(name) > len(".exe") && name[len(name)-len(".exe"):] == ".exe" {
+		name = name[:len(name)-len(".exe")]
+	}
+	var found *testUnit
+	for idx := range units {
+		if units[idx].binary != name {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = &units[idx]
+	}
+	return found
 }
 {{else}}
 // pickUnit answers the only package in this binary. A binary holding one unit
 // takes no -test.unit flag, so it needs no parsing and no fmt: go list reports
 // what the generated main imports, and an import added here shows up in every
 // test binary the toolchain builds.
-func pickUnit() *testUnit { return &units[0] }
+func pickUnit() *testUnit {
+	testdeps.StartUnit(units[0].unitID, units[0].godebug)
+	return &units[0]
+}
 {{end}}
 
 func init() {

@@ -1,0 +1,168 @@
+# Packages tested together share one test binary. A test that starts that
+# binary again, naming only a -test.run of its own, must land in its own
+# package's tests: with the environment it inherits, with one it replaced
+# entirely, and when TestMain runs the binary as a tool.
+
+go test ./a ./b ./nested ./scrubbed ./tool
+stdout '^ok\s+example.com/grouped/a'
+stdout '^ok\s+example.com/grouped/b'
+stdout '^ok\s+example.com/grouped/nested'
+stdout '^ok\s+example.com/grouped/scrubbed'
+stdout '^ok\s+example.com/grouped/tool'
+! stderr 'this binary holds'
+
+-- go.mod --
+module example.com/grouped
+
+go 1.27
+-- a/a_test.go --
+package a
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of a\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = append(os.Environ(), "GROUPED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of a") {
+		test.Fatalf("the child did not run a's tests:\n%s", out)
+	}
+}
+-- b/b_test.go --
+package b
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of b\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		test.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestChild$", "-test.v")
+	cmd.Env = append(os.Environ(), "GROUPED_CHILD=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of b") {
+		test.Fatalf("the child did not run b's tests:\n%s", out)
+	}
+}
+-- nested/nested_test.go --
+package nested
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+// The grandchild is started with a rebuilt argument list and an environment
+// that names no unit, so the only thing left that says which package's tests
+// to run is the name of the binary it was started as.
+func TestChild(test *testing.T) {
+	switch os.Getenv("GROUPED_DEPTH") {
+	case "1":
+		cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+		cmd.Env = []string{"GROUPED_DEPTH=2", "GO_TEST_UNIT="}
+		out, err := cmd.CombinedOutput()
+		os.Stdout.Write(out)
+		if err != nil {
+			test.Fatalf("%v\n%s", err, out)
+		}
+	case "2":
+		os.Stdout.WriteString("grandchild of nested\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = []string{"GROUPED_DEPTH=1"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "grandchild of nested") {
+		test.Fatalf("the grandchild did not run nested's tests:\n%s", out)
+	}
+}
+-- scrubbed/scrubbed_test.go --
+package scrubbed
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of scrubbed\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = []string{"GROUPED_CHILD=1"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of scrubbed") {
+		test.Fatalf("the child did not run scrubbed's tests:\n%s", out)
+	}
+}
+-- tool/tool_test.go --
+package tool
+
+import (
+	"os"
+	"os/exec"
+	"testing"
+)
+
+func TestMain(main *testing.M) {
+	if os.Getenv("GROUPED_IS_TOOL") != "" {
+		os.Stdout.WriteString("tool ran\n")
+		os.Exit(0)
+	}
+	os.Setenv("GROUPED_IS_TOOL", "1")
+	os.Exit(main.Run())
+}
+
+func TestTool(test *testing.T) {
+	out, err := exec.Command(os.Args[0], "some", "arguments").CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if string(out) != "tool ran\n" {
+		test.Fatalf("got %q, want the tool's output", out)
+	}
+}

@@ -4,16 +4,16 @@
 # when the tool hasn't been cached previously.
 env GOCACHE=$WORK${/}cache
 
-# Even when the tool hasn't been previously cached but was built and
-# saved to the cache in the invocation of 'go tool -n' we should return
-# its cached location.
+# The go command keeps no executable cache: 'go tool -n' builds the tool and
+# prints where it put it, the build's own directory, never the cache.
 go tool -n foo
-stdout $GOCACHE
+stdout '[/\\]exe[/\\]foo'$GOEXE'$'
+! stdout $GOCACHE
 
-# And of course we should also return the cached location on subsequent
-# runs.
+# A later run builds from the cached package and prints its own location.
 go tool -n foo
-stdout $GOCACHE
+stdout '[/\\]exe[/\\]foo'$GOEXE'$'
+! stdout $GOCACHE
 
 -- go.mod --
 module example.com/foo
