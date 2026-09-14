@@ -2154,6 +2154,17 @@ func (ctxt *Link) hostlink() {
 				return machoRewriteUuid(ctxt, exef, exem, outexe)
 			})
 	}
+	if ctxt.IsDarwin() {
+		requests, err := segprotRequests(flagExtldflags)
+		if err != nil {
+			Exitf("%s: -extldflags: %v", os.Args[0], err)
+		}
+		if len(requests) > 0 {
+			if err := machoApplySegprot(*flagOutfile, requests); err != nil {
+				Exitf("%s: applying -segprot: %v", os.Args[0], err)
+			}
+		}
+	}
 	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)

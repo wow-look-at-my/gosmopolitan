@@ -4,7 +4,10 @@
 
 package load
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // member wraps a package as a group member whose tests are the package itself.
 func member(path, profile string) TestGroupMember {
@@ -81,6 +84,30 @@ func TestGroupMembersKeepsStartupGODEBUGApart(test *testing.T) {
 			if other.Package.ImportPath == "b" || group[0].Package.ImportPath == "b" {
 				test.Errorf("%s shares a binary with %s", other.Package.ImportPath, group[0].Package.ImportPath)
 			}
+		}
+	}
+}
+
+// The linker keeps only the last -extldflags, so a host linker flag the go
+// command adds joins the one the user gave instead of replacing it.
+func TestWithExtldflagJoinsTheLastValue(test *testing.T) {
+	cases := []struct {
+		in, want []string
+	}{
+		{nil, []string{"-extldflags=-X"}},
+		{[]string{"-s"}, []string{"-s", "-extldflags=-X"}},
+		{[]string{"-extldflags=-static"}, []string{"-extldflags=-static -X"}},
+		{[]string{"-extldflags", "-static"}, []string{"-extldflags", "-static -X"}},
+		{[]string{"-extldflags=-a", "--extldflags=-b"}, []string{"-extldflags=-a", "--extldflags=-b -X"}},
+	}
+	for _, tcase := range cases {
+		in := slices.Clone(tcase.in)
+		got := withExtldflag(tcase.in, "-X")
+		if !slices.Equal(got, tcase.want) {
+			test.Errorf("withExtldflag(%q) = %q, want %q", tcase.in, got, tcase.want)
+		}
+		if !slices.Equal(tcase.in, in) {
+			test.Errorf("withExtldflag changed its argument to %q", tcase.in)
 		}
 	}
 }

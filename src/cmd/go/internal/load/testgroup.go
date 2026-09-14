@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"cmd/go/internal/cfg"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
@@ -102,6 +103,30 @@ func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	return out
 }
 
+// darwinTextSegprot is the host linker flag that gives a shared test binary's
+// __TEXT segment the protections the internal linker gives it, rwx at most
+// and r-x to start, so a test reading them sees one answer whichever linker
+// the group needed.
+const darwinTextSegprot = "-Wl,-segprot,__TEXT,rwx,rx"
+
+// withExtldflag adds one host linker flag to ldflags. The linker keeps only
+// the last -extldflags, so the flag joins the value ldflags already carry.
+func withExtldflag(ldflags []string, flag string) []string {
+	out := slices.Clone(ldflags)
+	for idx := len(out) - 1; idx >= 0; idx-- {
+		arg := out[idx]
+		if (arg == "-extldflags" || arg == "--extldflags") && idx+1 < len(out) {
+			out[idx+1] += " " + flag
+			return out
+		}
+		if strings.HasPrefix(arg, "-extldflags=") || strings.HasPrefix(arg, "--extldflags=") {
+			out[idx] += " " + flag
+			return out
+		}
+	}
+	return append(out, "-extldflags="+flag)
+}
+
 func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, members []TestGroupMember, cover *TestCover, name string) (*Package, map[string]string) {
 	ctx, span := trace.StartSpan(ctx, "load.TestGroupMain")
 	defer span.Done()
@@ -113,7 +138,10 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Push(ImportInfo{Pkg: "testmain"})
 
 	first := members[0].Package
-	ldflags := append(first.Internal.Ldflags, "-X", "testing.testBinary=1")
+	ldflags := append(slices.Clip(first.Internal.Ldflags), "-X", "testing.testBinary=1")
+	if len(members) > 1 && cfg.Goos == "darwin" {
+		ldflags = withExtldflag(ldflags, darwinTextSegprot)
+	}
 	gccgoflags := append(first.Internal.Gccgoflags,
 		"-Wl,--defsym,testing.gccgoTestBinary=1")
 
