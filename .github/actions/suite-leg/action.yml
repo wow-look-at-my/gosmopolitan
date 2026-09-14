@@ -78,7 +78,11 @@ runs:
       shell: bash
       env:
         SUITE_SHARD: ${{ inputs.shard }}
-      run: cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
+      run: |
+        sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
+        probe=$!
+        trap 'kill "$probe"' EXIT
+        cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
