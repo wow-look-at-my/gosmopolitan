@@ -6,8 +6,6 @@ package gocmd
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -23,14 +21,20 @@ import (
 // environment names none. A go command line exits the process itself, so
 // Run returns from it only for "go help".
 func Run(argv []string) int {
+	return RunAs(argv, nil)
+}
+
+// RunAs is Run for a host binary that reaches the go command by a command
+// line of its own, goCommand, which the go command uses to start itself
+// again. A nil goCommand is this executable.
+func RunAs(argv []string, goCommand []string) int {
 	if code, ran := selftool.Dispatch(argv); ran {
 		return code
 	}
 	if exe, err := os.Executable(); err == nil {
 		base.SetSelf(exe, selftool.Names())
-		// A host binary of another name reaches the go command as "<self> go".
-		if name := strings.TrimSuffix(filepath.Base(exe), ".exe"); name != "go" {
-			base.SetGoCommand([]string{exe, "go"})
+		if len(goCommand) > 0 {
+			base.SetGoCommand(goCommand)
 		}
 		if goroot := os.Getenv("GOROOT"); (goroot == "" || goroot == exe) && embedded.Available() {
 			cfg.UseEmbeddedStd(exe)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -184,8 +185,23 @@ func (b *Builder) toolID(name string) string {
 				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
 			}
 		}
+		// vet and fix are one binary here, so their content IDs agree and a
+		// fix run would read vet's cached output. The tool's name tells them
+		// apart, and it is a name rather than a path so the key travels.
+		if name == "vet" {
+			id = toolWord(path) + " " + id
+		}
 		return id
 	})
+}
+
+// toolWord answers the name a tool command line runs: the word after "tool"
+// for a linked tool, else the program's base name without its suffix.
+func toolWord(cmdline []string) string {
+	if len(cmdline) >= 3 && cmdline[len(cmdline)-2] == "tool" {
+		return cmdline[len(cmdline)-1]
+	}
+	return strings.TrimSuffix(filepath.Base(cmdline[len(cmdline)-1]), cfg.ToolExeSuffix())
 }
 
 // parseToolID computes the tool ID from one line of "-V=full" output printed
