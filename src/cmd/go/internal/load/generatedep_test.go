@@ -78,15 +78,39 @@ func TestPublishGeneratedKeepsEveryPackage(test *testing.T) {
 		test.Errorf("two/stale.go, which the generator removed, is still in the tree: %v", err)
 	}
 
+	sealed := readOnlyDirWriteBits(test)
 	for _, rel := range []string{".", "one", "two", "two/data"} {
 		info, err := os.Stat(filepath.Join(root, rel))
 		if err != nil {
 			test.Fatal(err)
 		}
-		if info.Mode()&0o222 != 0 {
+		if info.Mode()&0o222 != sealed {
 			test.Errorf("%s is writable after publishing: %v", rel, info.Mode())
 		}
 	}
+}
+
+// readOnlyDirWriteBits answers the write bits a directory reports on this
+// platform once os.Chmod has made it read-only. That is none wherever files
+// carry permissions. wasip1 has no permission model: its Chmod changes nothing
+// and its Stat reports every directory as 0700.
+func readOnlyDirWriteBits(test *testing.T) fs.FileMode {
+	test.Helper()
+	probe := filepath.Join(test.TempDir(), "probe")
+	if err := os.Mkdir(probe, 0o777); err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Chmod(probe, 0o555); err != nil {
+		test.Fatal(err)
+	}
+	info, err := os.Stat(probe)
+	if err != nil {
+		test.Fatal(err)
+	}
+	if err := os.Chmod(probe, 0o755); err != nil {
+		test.Fatal(err)
+	}
+	return info.Mode() & 0o222
 }
 
 func writeFiles(test *testing.T, dir string, files map[string]string) {
