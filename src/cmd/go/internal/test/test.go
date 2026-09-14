@@ -165,6 +165,13 @@ In addition to the build flags, the flags handled by 'go test' itself are:
 	    See 'go doc test2json' for the encoding details.
 	    Also emits build output in JSON. See 'go help buildjson'.
 
+	-keepbinary file
+	    Save a copy of the one test binary that the named packages'
+	    tests share to the named file. The tests still run (unless -c
+	    is specified). Started with -test.unit=importpath, the binary
+	    runs the tests of that package. It is an error if the packages'
+	    tests need more than one binary.
+
 	-o file
 	    Save a copy of the test binary to the named file.
 	    The test still runs (unless -c is specified).
@@ -562,6 +569,7 @@ var (
 	testJSON         bool                              // -json flag
 	testList         string                            // -list flag
 	testO            string                            // -o flag
+	testKeepBinary   string                            // -keepbinary flag
 	testOutputDir    outputdirFlag                     // -outputdir flag
 	testShuffle      shuffleFlag                       // -shuffle flag
 	testTimeout      time.Duration                     // -timeout flag
@@ -1184,10 +1192,19 @@ type testGroup struct {
 	// one to finish removes the directory they all ran out of.
 	remaining *atomic.Int32
 
+	// binary is what the members of one binary share.
+	binary *sharedBinary
+}
+
+// sharedBinary is the state of one binary that its members' actions share.
+type sharedBinary struct {
 	// ready says the binary has been set up: its directory made, its generated
 	// file written, its target named. The first member to arrive does that, and
 	// the rest share what it built.
 	ready bool
+
+	// keep is the action writing the binary to the -keepbinary file.
+	keep *work.Action
 }
 
 // groupTestPackages builds every package's test copies, decides which packages
@@ -1224,18 +1241,13 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 			WithTests: withTests,
 			ExtTests:  extTests,
 			GODEBUG:   load.TestGODEBUG(ld, pkg),
+			Binary:    testBinaryName(pkg),
 		})
 	}
 
 	batches := load.GroupMembers(members)
-	if testNeedBinary() || testC && !(testO != "" && base.IsNull(testO)) {
-		// -c and the profile flags write a binary per package, named for it,
-		// so each one travels alone. -c -o /dev/null writes nothing: it
-		// compiles, and every package compiles into the one binary.
-		batches = nil
-		for _, member := range members {
-			batches = append(batches, []load.TestGroupMember{member})
-		}
+	if testKeepBinary != "" && len(batches) > 1 {
+		base.Fatalf("go: -keepbinary %s names one file, and these packages' tests need %d binaries", testKeepBinary, len(batches))
 	}
 	for _, batch := range batches {
 		name := batch[0].Package.ImportPath + ".test"
@@ -1246,11 +1258,13 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 		}
 		remaining := new(atomic.Int32)
 		remaining.Store(int32(len(batch)))
+		binary := new(sharedBinary)
 		for _, member := range batch {
 			groups[member.Package].testMain = testMain
 			groups[member.Package].members = shared
 			groups[member.Package].digest = digests[member.Package.ImportPath]
 			groups[member.Package].remaining = remaining
+			groups[member.Package].binary = binary
 			// A main this batch cannot generate is the whole batch's error: it
 			// is the one binary they share. Without this the build goes on to
 			// compile the variants, and the compiler's complaint about the
@@ -1334,8 +1348,8 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 
 	// Several packages can share this binary, and the first of them to arrive
 	// here sets it up. LinkAction hands each of them the same action.
-	if !group.ready {
-		group.ready = true
+	if !group.binary.ready {
+		group.binary.ready = true
 		if err := b.BackgroundShell().Mkdir(testDir); err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -1384,7 +1398,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		// If maintaining the list of bad words is too onerous,
 		// we could just do this always on Windows.
 		for _, bad := range windowsBadWords {
-			if strings.Contains(testBinary, bad) {
+			if strings.Contains(groupBinary, bad) {
 				a.Target = testDir + "test.test" + cfg.ExeSuffix
 				break
 			}
@@ -1418,16 +1432,41 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		if isNull {
 			runAction = buildAction
 		} else {
-			testMain.Target = target
+			// Each package gets its own copy of the one link, named for it.
+			// A binary holding one package is linked for its target, which
+			// lets an up-to-date target skip the link.
+			actor := work.ActorFunc(copyTestBinary)
+			if len(group.members) == 1 {
+				testMain.Target = target
+				actor = work.ActorFunc(work.BuildInstallFunc)
+			}
 			installAction = &work.Action{
 				Mode:    "test build",
-				Actor:   work.ActorFunc(work.BuildInstallFunc),
+				Actor:   actor,
 				Deps:    []*work.Action{buildAction},
 				Package: testMain,
 				Target:  target,
 			}
 			runAction = installAction // make sure runAction != nil even if not running test
 		}
+	}
+	var keepAction *work.Action
+	if testKeepBinary != "" {
+		// Every package names the same file: the one binary they share.
+		target := testKeepBinary
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(base.Cwd(), target)
+		}
+		if group.binary.keep == nil {
+			group.binary.keep = &work.Action{
+				Mode:    "test build",
+				Actor:   work.ActorFunc(copyTestBinary),
+				Deps:    []*work.Action{buildAction},
+				Package: testMain,
+				Target:  target,
+			}
+		}
+		keepAction = group.binary.keep
 	}
 
 	var vetRunAction *work.Action
@@ -1466,11 +1505,16 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 				writeCoverMetaAct.Deps = append(writeCoverMetaAct.Deps, compileAction)
 			}
 		}
+		// A run writes its test log and coverage output to its objdir. The
+		// runs of a shared binary go at once, so each has its own.
 		runAction.Objdir = testDir
+		if len(group.members) > 1 {
+			runAction.Objdir = b.NewObjdir()
+		}
 		vetRunAction = runAction
 		cleanAction = &work.Action{
 			Mode:       "test clean",
-			Actor:      &cleanTestActor{remaining: group.remaining},
+			Actor:      &cleanTestActor{remaining: group.remaining, runDir: runAction.Objdir},
 			Deps:       []*work.Action{runAction},
 			Package:    p,
 			IgnoreFail: true, // clean even if test failed
@@ -1499,6 +1543,17 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		if cleanAction != nil {
 			cleanAction.Deps = append(cleanAction.Deps, installAction)
 		}
+	}
+	if keepAction != nil {
+		// The copy is taken before the binary's directory is removed, and
+		// printing the result waits for it.
+		if cleanAction != nil {
+			cleanAction.Deps = append(cleanAction.Deps, keepAction)
+		}
+		if installAction != nil {
+			installAction.Deps = append(installAction.Deps, keepAction)
+		}
+		printAction.Deps = append(printAction.Deps, keepAction)
 	}
 
 	return buildAction, runAction, printAction, nil, nil
@@ -1721,6 +1776,9 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		return nil
 	}
 
+	if err := sh.Mkdir(a.Objdir); err != nil {
+		return err
+	}
 	execCmd := work.FindExecCmd()
 	testlogArg := []string{}
 	if !r.c.disableCache && len(execCmd) == 0 {
@@ -2466,16 +2524,37 @@ func coveragePercentage(out []byte) string {
 // this counts rather than the last to start.
 type cleanTestActor struct {
 	remaining *atomic.Int32
+	runDir    string // the run's own objdir, removed as the run ends
 }
 
 func (actor *cleanTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	if cfg.BuildWork {
 		return nil
 	}
+	if actor.runDir != a.Objdir {
+		b.Shell(a).RemoveAll(actor.runDir)
+	}
 	if actor.remaining.Add(-1) != 0 {
 		return nil
 	}
 	b.Shell(a).RemoveAll(a.Objdir)
+	return nil
+}
+
+// copyTestBinary writes a copy of the linked test binary to a.Target. Several
+// packages' copies come from one link, so the link's own output stays in place
+// for the tests that run from it.
+func copyTestBinary(b *work.Builder, ctx context.Context, a *work.Action) error {
+	if err := work.AllowInstall(a); err != nil {
+		return err
+	}
+	sh := b.Shell(a)
+	if err := sh.Mkdir(filepath.Dir(a.Target)); err != nil {
+		return err
+	}
+	if err := sh.CopyFile(a.Target, a.Deps[0].BuiltTarget(), 0777, false); err != nil {
+		return fmt.Errorf("go %s %s: %v", cfg.CmdName, a.Package.ImportPath, err)
+	}
 	return nil
 }
 

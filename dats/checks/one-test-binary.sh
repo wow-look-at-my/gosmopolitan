@@ -6,6 +6,8 @@
 # that binary started with -test.unit. A second link means a package got a
 # binary of its own, and the whole run pays its compile and link again.
 # go test -n prints the commands without running them, so this costs a load.
+# -c -o /dev/null links without running: a cached test result would otherwise
+# spare its binary the link, and the count would read what the cache held.
 #
 # The packages and flags are the ones dist test's short mode uses: the
 # patterns less vendored code, which has no tests of ours to run, and
@@ -30,7 +32,7 @@ while IFS= read -r pkg; do
 	esac
 done <<<"$listed"
 
-plan=$(GOOS=$goos GOARCH=$goarch go test -short -pgo=off -n "${pkgs[@]}" 2>&1)
+plan=$(GOOS=$goos GOARCH=$goarch go test -c -o /dev/null -pgo=off -n "${pkgs[@]}" 2>&1)
 status=$?
 if [ "$status" -ne 0 ]; then
 	printf '%s\n' "$plan" >&2

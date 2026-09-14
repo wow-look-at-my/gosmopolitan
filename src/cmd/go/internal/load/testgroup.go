@@ -28,6 +28,10 @@ type TestGroupMember struct {
 	// GODEBUG is the default GODEBUG this package's test binary would get
 	// on its own, from the main module and the package's //go:debug lines.
 	GODEBUG string
+
+	// Binary is the file name, without an executable suffix, of this
+	// package's copy of the binary under go test -c.
+	Binary string
 }
 
 // TestGODEBUG answers the default GODEBUG of the test binary of pkg alone.
@@ -206,6 +210,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		unit.ImportTest = funcs.ImportTest
 		unit.ImportXtest = funcs.ImportXtest
 		unit.GODEBUG = member.GODEBUG
+		unit.Binary = member.Binary
 		units = append(units, unit)
 	}
 	stk.Pop()
@@ -222,22 +227,10 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	testMain.Imports = testMain.Imports[:kept]
 	testMain.Internal.RawImports = str.StringList(testMain.Imports)
 
+	// A package's tests compile the same way whether their binary holds one
+	// package or many, so a result cached from one serves the other.
 	for _, member := range members {
-		if len(members) > 1 {
-			shareMember(member)
-			continue
-		}
-		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
-			member.WithTests.Error = cycleErr
-			member.WithTests.Incomplete = true
-			// The cycle is in the graph now, and cmd/go walks that graph to
-			// build actions. vetAction recurses along it until the stack ends
-			// the process. Stop here instead, with the cycle named.
-			if testMain.Error == nil {
-				testMain.Error = cycleErr
-			}
-			testMain.Incomplete = true
-		}
+		shareMember(member)
 	}
 
 	if !opts.SuppressBuildInfo {
@@ -253,6 +246,14 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			member.WithTests.Internal.Cover.Mode = member.Package.Internal.Cover.Mode
 			if cover.Local {
 				member.WithTests.Internal.Cover.Mode = cover.Mode
+			}
+			// The variant is linked in place of the package and keeps its
+			// symbols, so both are instrumented alike. Every package that
+			// imports it then inlines instrumented code, as it would
+			// compiled against the variant. A run reports coverage only of
+			// the packages it selects, so another package's run is unchanged.
+			if member.WithTests.Internal.TestVariantOf != nil {
+				member.Package.Internal.Cover.Mode = member.WithTests.Internal.Cover.Mode
 			}
 		}
 	}

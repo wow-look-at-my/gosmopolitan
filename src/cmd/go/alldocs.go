@@ -1720,6 +1720,13 @@
 //	    See 'go doc test2json' for the encoding details.
 //	    Also emits build output in JSON. See 'go help buildjson'.
 //
+//	-keepbinary file
+//	    Save a copy of the one test binary that the named packages'
+//	    tests share to the named file. The tests still run (unless -c
+//	    is specified). Started with -test.unit=importpath, the binary
+//	    runs the tests of that package. It is an error if the packages'
+//	    tests need more than one binary.
+//
 //	-o file
 //	    Save a copy of the test binary to the named file.
 //	    The test still runs (unless -c is specified).

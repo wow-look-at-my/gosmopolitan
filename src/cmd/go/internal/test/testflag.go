@@ -35,6 +35,7 @@ func init() {
 	cf := CmdTest.Flag
 	cf.BoolVar(&testC, "c", false, "")
 	cf.StringVar(&testO, "o", "", "")
+	cf.StringVar(&testKeepBinary, "keepbinary", "", "")
 	work.AddCoverFlags(CmdTest, &testCoverProfile)
 	cf.Var((*base.StringsFlag)(&work.ExecCmd), "exec", "")
 	cf.BoolVar(&testJSON, "json", false, "")

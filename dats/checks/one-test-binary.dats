@@ -17,5 +17,5 @@ tests:
 	  exit: 0
 
 	- desc: the checker refuses two test binaries
-	  cmd: export PATH="$PWD/bin:$PATH"; GOFLAGS="-c -o=$TMPDIR" dats/checks/one-test-binary.sh cosmo amd64 errors strings; test $? -eq 1
+	  cmd: export PATH="$PWD/bin:$PATH"; checker="$PWD/dats/checks/one-test-binary.sh"; dir=$(mktemp -d); mkdir -p "$dir/a" "$dir/b"; printf 'module two\n\ngo 1.27\n' >"$dir/go.mod"; printf 'package a\n\nimport "testing"\n\nfunc TestA(t *testing.T) {}\n' >"$dir/a/a_test.go"; printf '//go:debug updatemaxprocs=0\n\npackage b\n\nimport "testing"\n\nfunc TestB(t *testing.T) {}\n' >"$dir/b/b_test.go"; cd "$dir" && "$checker" cosmo amd64 ./...; test $? -eq 1
 	  exit: 0

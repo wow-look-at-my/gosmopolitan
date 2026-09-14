@@ -482,7 +482,7 @@ func testPackages(ld *modload.Loader, ctx context.Context, done func(), opts Pac
 			}
 		}
 
-		data, err := formatTestmain(t)
+		data, err := formatTestmain(t, testMain.DefaultGODEBUG)
 		if err != nil && testMain.Error == nil {
 			testMain.Error = &PackageError{Err: err}
 			testMain.Incomplete = true
@@ -716,10 +716,13 @@ type testMainData struct {
 	CoverSelectedPackages string
 }
 
-// formatTestmain returns the content of the _testmain.go file for t.
-func formatTestmain(t *testFuncs) ([]byte, error) {
+// formatTestmain returns the content of the _testmain.go file for t, in a
+// binary whose default GODEBUG is godebug.
+func formatTestmain(t *testFuncs, godebug string) ([]byte, error) {
+	units := t.Units()
+	units[0].GODEBUG = godebug
 	return renderTestmain(testMainData{
-		Units:                 t.Units(),
+		Units:                 units,
 		Cover:                 t.Cover,
 		Covered:               t.Covered(),
 		CoverSelectedPackages: t.CoverSelectedPackages(),
@@ -794,6 +797,10 @@ type testUnit struct {
 	// alone. The binary is started with the first unit's, and applies this
 	// one's when it is started for this unit.
 	GODEBUG string
+
+	// Binary is the file name, without an executable suffix, that go test -c
+	// gives this unit's copy of the binary.
+	Binary string
 }
 
 // Units answers the packages this test main imports.
@@ -1024,6 +1031,7 @@ type testUnit struct {
 	examples    []testing.InternalExample
 	testMain    func(*testing.Runner)
 	godebug     string
+	binary      string
 {{if .Cover}}
 	covered       string
 	coverSelected []string
@@ -1058,6 +1066,7 @@ var units = []testUnit{
 		},
 		testMain: {{with .TestMain}}{{.Package}}.{{.Name}}{{else}}nil{{end}},
 		godebug: {{.GODEBUG | printf "%q"}},
+		binary: {{.Binary | printf "%q"}},
 {{if $.Cover}}
 		covered: {{.Covered | printf "%q"}},
 		coverSelected: {{printf "%s" .CoverSelected}},
@@ -1103,14 +1112,21 @@ func pickUnit() *testUnit {
 		os.Unsetenv(unitEnv)
 		os.Unsetenv(unitImplicitEnv)
 	}
-	if want == "" {
-		// The environment can name the package of another test binary
-		// that started this one, which is not a request for anything here.
-		if findUnit(inherited) == nil {
-			fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
-			os.Exit(2)
-		}
+	// The environment can name the package of another test binary that
+	// started this one, which is not a request for anything here.
+	if want == "" && findUnit(inherited) != nil {
 		want = inherited
+	}
+	// go test -c writes this binary once per package, each copy named for
+	// its package, and a copy started by name runs that package.
+	if want == "" {
+		if unit := unitNamed(os.Args[0]); unit != nil {
+			want = unit.unitID
+		}
+	}
+	if want == "" {
+		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
+		os.Exit(2)
 	}
 	unit := findUnit(want)
 	if unit == nil {
@@ -1130,12 +1146,41 @@ func findUnit(id string) *testUnit {
 	}
 	return nil
 }
+
+// unitNamed answers the one unit whose test binary has the file name of
+// path, or nil when none or several do.
+func unitNamed(path string) *testUnit {
+	name := path
+	for idx := len(path) - 1; idx >= 0; idx-- {
+		if path[idx] == '/' || path[idx] == os.PathSeparator {
+			name = path[idx+1:]
+			break
+		}
+	}
+	if len(name) > len(".exe") && name[len(name)-len(".exe"):] == ".exe" {
+		name = name[:len(name)-len(".exe")]
+	}
+	var found *testUnit
+	for idx := range units {
+		if units[idx].binary != name {
+			continue
+		}
+		if found != nil {
+			return nil
+		}
+		found = &units[idx]
+	}
+	return found
+}
 {{else}}
 // pickUnit answers the only package in this binary. A binary holding one unit
 // takes no -test.unit flag, so it needs no parsing and no fmt: go list reports
 // what the generated main imports, and an import added here shows up in every
 // test binary the toolchain builds.
-func pickUnit() *testUnit { return &units[0] }
+func pickUnit() *testUnit {
+	testdeps.StartUnit(units[0].unitID, units[0].godebug)
+	return &units[0]
+}
 {{end}}
 
 func init() {
