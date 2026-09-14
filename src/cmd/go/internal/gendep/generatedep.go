@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -448,11 +449,11 @@ func makeTreeWritable(dir string) {
 // stays reachable, because a generator that fetches its own inputs is the case
 // this exists for.
 func runGenerate(root, pkgrel string) error {
-	goCmd, err := os.Executable()
+	goCmd, err := base.GoCommand()
 	if err != nil {
 		return err
 	}
-	argv, err := sandboxArgv(root, goCmd, "generate", "./"+filepath.ToSlash(pkgrel))
+	argv, err := sandboxArgv(root, append(slices.Clone(goCmd), "generate", "./"+filepath.ToSlash(pkgrel))...)
 	if err != nil {
 		return err
 	}

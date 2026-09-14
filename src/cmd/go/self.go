@@ -6,6 +6,8 @@ package gocmd
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -26,6 +28,10 @@ func Run(argv []string) int {
 	}
 	if exe, err := os.Executable(); err == nil {
 		base.SetSelf(exe, selftool.Names())
+		// A host binary of another name reaches the go command as "<self> go".
+		if name := strings.TrimSuffix(filepath.Base(exe), ".exe"); name != "go" {
+			base.SetGoCommand([]string{exe, "go"})
+		}
 		if goroot := os.Getenv("GOROOT"); (goroot == "" || goroot == exe) && embedded.Available() {
 			cfg.UseEmbeddedStd(exe)
 		}

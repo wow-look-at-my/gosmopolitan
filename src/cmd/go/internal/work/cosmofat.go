@@ -304,8 +304,8 @@ func cosmoFatParallel() bool {
 // the primary build can now fail (and base.Fatalf exits) while the
 // sibling is still running - without this the child would be orphaned
 // and its scratch directory leaked.
-func (s *cosmoSibling) setup() string {
-	goCmd, err := os.Executable()
+func (s *cosmoSibling) setup() []string {
+	goCmd, err := base.GoCommand()
 	if err != nil {
 		base.Fatalf("go: cosmo %s: cannot find go command: %v", s.what, err)
 	}
@@ -419,7 +419,7 @@ func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 			base.Fatalf("go: cosmo fat build: %v", err)
 		}
 	}
-	cmd := exec.Command(goCmd, s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)
+	cmd := exec.Command(goCmd[0], append(slices.Clone(goCmd[1:]), s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)...)
 	cmd.Env = append(os.Environ(), "GOARCH="+s.arch, "GOCOSMOFAT_INNER=1")
 	s.launch(cmd)
 	return s
@@ -524,7 +524,7 @@ func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	goCmd := s.setup()
 	s.traceOn(ctx) // after setup: the sibling's trace lives in its scratch dir
 
-	cmd := exec.Command(goCmd, s.traceArgs(os.Args[1:])...)
+	cmd := exec.Command(goCmd[0], append(slices.Clone(goCmd[1:]), s.traceArgs(os.Args[1:])...)...)
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+s.arch,
