@@ -1,0 +1,28 @@
+# A dependency's generator runs on this machine, so it is built for this
+# machine. A build that targets another platform still gets the package
+# generated, rather than a generator the host cannot execute.
+
+env GOFLAGS=-mod=mod
+[GOOS:windows] env GOOS=linux
+[!GOOS:windows] env GOOS=windows
+
+go mod download example.com/generated
+! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+
+go build ./...
+! stderr 'exec format error'
+exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+! exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0.packages/lang/@failed
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generated v1.0.0
+-- use.go --
+package use
+
+import "example.com/generated/lang"
+
+var Name = lang.Name()

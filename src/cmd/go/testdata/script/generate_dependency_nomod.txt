@@ -1,0 +1,32 @@
+# A dependency that predates modules carries no go.mod, so its package is
+# outside any main module until the go command gives it one. Its directives
+# still run, and the tree they write carries no go.mod the module did not.
+#
+# The module cache sits inside the consumer's own module here, so the nearest
+# go.mod above the dependency is the consumer's and not the dependency's.
+
+env GOFLAGS=-mod=mod
+env GOMODCACHE=$WORK/gopath/src/modcache
+
+go mod download example.com/generatednomod
+! exists $GOMODCACHE/example.com/generatednomod@v1.0.0/go.mod
+
+go build .
+! stderr 'outside main module'
+! stderr 'go.mod file not found'
+exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0/lang/lang.gen.go
+! exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0/go.mod
+! exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0.packages/lang/@failed
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generatednomod v1.0.0
+-- use.go --
+package use
+
+import "example.com/generatednomod/lang"
+
+var Name = lang.Name()
