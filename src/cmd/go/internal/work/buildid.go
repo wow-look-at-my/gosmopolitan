@@ -446,23 +446,48 @@ var (
 	stdlibRecompiledIncOnce = sync.OnceFunc(stdlibRecompiled.Inc)
 )
 
-// testRunAction returns the run action for a test given the link action
-// for the test binary, if the only (non-test-barrier) action that depend
-// on the link action is the run action.
-func testRunAction(a *Action) *Action {
-	if len(a.triggers) != 1 || a.triggers[0].Mode != "test barrier" {
-		return nil
-	}
-	var runAction *Action
-	for _, t := range a.triggers[0].triggers {
-		if t.Mode == "test run" {
-			if runAction != nil {
-				return nil
+// testRunActions returns the run actions of the tests a link action's binary
+// holds, if running them is all the binary is needed for. Each run reaches
+// the link through a test barrier of its own.
+func testRunActions(a *Action) []*Action {
+	var runs []*Action
+	for _, barrier := range a.triggers {
+		if barrier.Mode != "test barrier" {
+			return nil
+		}
+		var runAction *Action
+		for _, t := range barrier.triggers {
+			if t.Mode == "test run" {
+				if runAction != nil {
+					return nil
+				}
+				runAction = t
 			}
-			runAction = t
+		}
+		if runAction == nil || runAction.TryCache == nil {
+			return nil
+		}
+		runs = append(runs, runAction)
+	}
+	return runs
+}
+
+// testResultsCached reports whether every test a link action's binary holds
+// has a cached result, which makes the link unnecessary. Each run is asked
+// even after one misses: asking is what records the key a run's result is
+// saved under, and a run never asked here is found by no later build.
+func testResultsCached(b *Builder, a *Action) bool {
+	runs := testRunActions(a)
+	if len(runs) == 0 {
+		return false
+	}
+	cached := true
+	for _, ra := range runs {
+		if !ra.TryCache(b, ra, a) {
+			cached = false
 		}
 	}
-	return runAction
+	return cached
 }
 
 // useCache tries to satisfy the action a, which has action ID actionHash,
@@ -591,11 +616,11 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	// we only cache executables produced for 'go run' (and soon, for 'go tool').
 	//
 	// Special case for linking a test binary: if the only thing we
-	// want the binary for is to run the test, and the test result is cached,
+	// want the binary for is to run its tests, and every test result is cached,
 	// then to avoid the link step, report the link as up-to-date.
 	// We avoid the nested build ID problem in the previous special case
 	// by recording the test results in the cache under the action ID half.
-	if ra := testRunAction(a); ra != nil && ra.TryCache != nil && ra.TryCache(b, ra, a) {
+	if testResultsCached(b, a) {
 		// Best effort attempt to display output from the compile and link steps.
 		// If it doesn't work, it doesn't work: reusing the test result is more
 		// important than reprinting diagnostic information.

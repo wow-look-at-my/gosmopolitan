@@ -255,6 +255,11 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"goversion=" + gover.Local(),
 		"CMDGO_TEST_RUN_MAIN=true",
 		"HGRCPATH=",
+		// Git reads no configuration of the machine's: a credential helper
+		// set there (macOS git's system config names osxkeychain) is handed
+		// every credential a script stores, and the keychain prompts for it.
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
 		"GOTOOLCHAIN=auto",
 		"newline=\n",
 	}

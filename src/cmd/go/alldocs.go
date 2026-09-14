@@ -1685,9 +1685,10 @@
 // -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
 // -run, -short, -skip, -timeout and -v.
 // If a run of go test has any test or non-test flags outside this set,
-// the result is not cached. In this toolchain -count never leaves that set:
-// a positive count selects one run either way, so the flag is dropped before
-// the cache is consulted. Nothing on the command line turns the cache off on
+// the result is not cached. The -count flag is accepted and has no effect:
+// it is not passed to the test binary, it is not part of the cache key, and
+// it does not decide whether a result is recorded or replayed.
+// Nothing on the command line turns the cache off on
 // purpose, because a cached result that is wrong is a defect to repair.
 // Tests that open files or that consult environment variables only match
 // future runs in which those files and environment variables are unchanged.
@@ -1702,7 +1703,8 @@
 //
 //	-args
 //	    Pass the remainder of the command line (everything after -args)
-//	    to the test binary, uninterpreted and unchanged.
+//	    to the test binary, uninterpreted and unchanged, except that a
+//	    -test.count there is dropped like -count.
 //	    Because this flag consumes the remainder of the command line,
 //	    the package list (if present) must appear before this flag.
 //
@@ -1719,6 +1721,13 @@
 //	    Convert test output to JSON suitable for automated processing.
 //	    See 'go doc test2json' for the encoding details.
 //	    Also emits build output in JSON. See 'go help buildjson'.
+//
+//	-keepbinary file
+//	    Save a copy of the one test binary that the named packages'
+//	    tests share to the named file. The tests still run (unless -c
+//	    is specified). Started with -test.unit=importpath, the binary
+//	    runs the tests of that package. It is an error if the packages'
+//	    tests need more than one binary.
 //
 //	-o file
 //	    Save a copy of the test binary to the named file.
@@ -3400,12 +3409,13 @@
 //	    (for example, -benchtime 100x).
 //
 //	-count n
-//	    Run each test, benchmark, and fuzz seed n times, where n is 0 or 1.
-//	    0 builds the test binary and runs nothing. Any positive n runs
-//	    everything once: this toolchain does not repeat a test, because a
-//	    test that passes only sometimes is broken and the fix belongs in
-//	    the test. A negative n is an error. -count never affects the test
-//	    cache. -count does not apply to fuzz tests matched by -fuzz.
+//	    Accepted and ignored. Every test, benchmark, and fuzz seed runs
+//	    once, whatever n is: this toolchain does not repeat a test,
+//	    because a test that passes only sometimes is broken and the fix
+//	    belongs in the test. go test does not pass -count to the test
+//	    binary, it is not part of the test cache key, and it does not
+//	    decide whether a result is recorded or replayed. A negative n is
+//	    an error.
 //
 //	-cover
 //	    Enable coverage analysis.
@@ -3632,9 +3642,8 @@
 // When 'go test' runs in package list mode, 'go test' caches successful
 // package test results to avoid unnecessary repeated running of tests.
 // Nothing on the command line turns that cache off on purpose. -count in
-// particular does not: a positive count selects one run, so the flag is
-// dropped before the cache is consulted. A cached result that is wrong is a
-// defect to repair rather than to bypass.
+// particular does not: go test drops it before the cache is consulted. A
+// cached result that is wrong is a defect to repair rather than to bypass.
 //
 // To keep an argument for a test binary from being interpreted as a
 // known flag or a package name, use -args (see 'go help test') which

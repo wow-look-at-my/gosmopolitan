@@ -21,20 +21,16 @@ import (
 	"internal/goversion"
 )
 
-// The run corpus is a few hundred standalone programs, and the runner built
-// one executable per program: a compile, a link and a process for each. On a
-// cross target it was worse, because the fast path below wants a host target
-// and a cross run therefore spent a whole `go run` per program.
-//
-// Every one of those programs is `package main` with `func main`, so they
-// differ only in a name. This compiles them ONCE, as one package each under a
-// generated dispatcher, and each test then runs that one executable with its
-// own name as the argument. The corpus costs one build instead of hundreds,
-// and on a wasm target the runtime compiles one module instead of hundreds.
+// The run corpus is a few hundred standalone programs, each `package main`
+// with `func main`, so they differ only in a name. This compiles them ONCE, as
+// one package each under a generated dispatcher, and each test then runs that
+// one executable with its own name as the argument. The corpus costs one
+// build instead of hundreds, and on a wasm target the runtime compiles one
+// module instead of hundreds.
 //
 // A test still gets its own process, so an exit status, a panic and a deadlock
-// stay the test's own. Nothing is skipped: a program this cannot batch runs the
-// way it always did.
+// stay the test's own. Nothing is skipped: a program this cannot batch is
+// built on its own.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
 // ONE process on the first call, because a process start costs about a second
@@ -58,10 +54,9 @@ func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	return single, true, err
 }
 
-// launch answers the command that starts the dispatcher. A cross target's
-// binary does not run on this host: the distribution ships an exec wrapper per
-// port, and `go run` reaches it through the go command. This reaches it
-// directly, because the whole point here is to not spend a go command.
+// launch answers the command that starts a program built here. A cross
+// target's binary does not run on this host, so it starts through the exec
+// wrapper the distribution ships for the port.
 func launch(exe string, names ...string) []string {
 	argv := []string{exe}
 	if goos != runtime.GOOS || goarch != runtime.GOARCH {
@@ -113,7 +108,7 @@ func (bat *batch) runAll(exe string) {
 // batchFor answers the dispatcher and the name this test file takes inside it.
 // The file is named the way the runner names it, relative to the corpus root.
 // An empty name means the batch does not carry the file, and the caller builds
-// it the way it always did.
+// it on its own.
 func batchFor(corpus, file string) (exe, name string, err error) {
 	theBatch.once.Do(func() { theBatch.build(corpus) })
 	if theBatch.err != nil {
@@ -304,10 +299,13 @@ func (bat *batch) build(corpus string) {
 	}
 
 	exe := filepath.Join(dir, "batch.exe")
-	cmd := exec.Command(goTool, "build", "-o", exe, ".")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	bld := &builder{work: dir, run: func(env []string, args ...string) ([]byte, error) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), env...)
+		return cmd.CombinedOutput()
+	}}
+	if out, err := bld.buildModule(dir, "testdirbatch", fmt.Sprintf("1.%d", goversion.Version), exe); err != nil {
 		bat.err = fmt.Errorf("testdir batch: building %d programs: %v\n%s", count, err, out)
 		return
 	}

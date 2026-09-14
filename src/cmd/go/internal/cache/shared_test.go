@@ -193,6 +193,29 @@ func TestSharedCache_SecondBuildGetsOutputOverTheNetwork(t *testing.T) {
 	}
 }
 
+// The exit closes the shared tier of a process that never ran a build, and a
+// build closes the whole cache first. The tier closes once either way, and an
+// upload made before the first close still lands.
+func TestSharedCache_ExitAndBuildBothClose(t *testing.T) {
+	f, srv := newFakeCacheServer(t)
+	configureShared(t, srv)
+
+	c := openShared(t, t.TempDir()).(*SharedCache)
+	if _, _, err := c.Put(testActionID("close-twice"), bytes.NewReader([]byte("body"))); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := c.closeRemote(); err != nil {
+		t.Fatalf("closeRemote: %v", err)
+	}
+	if f.stored() != 1 {
+		t.Fatalf("stored %d objects after the tier closed, want 1", f.stored())
+	}
+	closeShared(t, c)
+	if err := c.closeRemote(); err != nil {
+		t.Fatalf("closeRemote after Close: %v", err)
+	}
+}
+
 // Every cache entry is one plain file. The cache once made an entry the build
 // was going to run a DIRECTORY holding a named file instead, which a restore
 // off the wire could not reproduce: the wire carries bytes and no name.
