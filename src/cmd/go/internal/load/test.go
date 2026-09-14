@@ -789,6 +789,11 @@ type testUnit struct {
 	// rather than the binary: coverage answers for the package under test.
 	Covered       string
 	CoverSelected string
+
+	// GODEBUG is the default GODEBUG of a binary holding this unit's tests
+	// alone. The binary is started with the first unit's, and applies this
+	// one's when it is started for this unit.
+	GODEBUG string
 }
 
 // Units answers the packages this test main imports.
@@ -1018,6 +1023,7 @@ type testUnit struct {
 	fuzzTargets []testing.InternalFuzzTarget
 	examples    []testing.InternalExample
 	testMain    func(*testing.Runner)
+	godebug     string
 {{if .Cover}}
 	covered       string
 	coverSelected []string
@@ -1051,6 +1057,7 @@ var units = []testUnit{
 {{end}}
 		},
 		testMain: {{with .TestMain}}{{.Package}}.{{.Name}}{{else}}nil{{end}},
+		godebug: {{.GODEBUG | printf "%q"}},
 {{if $.Cover}}
 		covered: {{.Covered | printf "%q"}},
 		coverSelected: {{printf "%s" .CoverSelected}},
@@ -1110,7 +1117,7 @@ func pickUnit() *testUnit {
 		fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
 		os.Exit(2)
 	}
-	testdeps.StartUnit(want)
+	testdeps.StartUnit(want, unit.godebug)
 	return unit
 }
 

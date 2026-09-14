@@ -48,22 +48,38 @@ func TestGroupMembersKeepsProfilesApart(test *testing.T) {
 	}
 }
 
-// The linker writes one default GODEBUG into a binary, and a package's
-// //go:debug lines decide its own.
-func TestGroupMembersKeepsGODEBUGApart(test *testing.T) {
+// A binary applies a package's default GODEBUG when it is started for that
+// package, so a setting the program can change as it runs does not split
+// packages apart.
+func TestGroupMembersShareAcrossChangeableGODEBUG(test *testing.T) {
 	plain := member("a", "")
 	panicnil := member("b", "")
-	panicnil.GODEBUG = "panicnil=1"
+	panicnil.GODEBUG = "panicnil=1,httplaxcontentlength=1"
 	same := member("c", "")
 
 	groups := GroupMembers([]TestGroupMember{plain, panicnil, same})
+	if len(groups) != 1 || len(groups[0]) != 3 {
+		test.Fatalf("got %d groups, want one holding all 3", len(groups))
+	}
+}
+
+// A setting read only as the program starts keeps the value the binary
+// started with, so a package that needs another value gets its own binary.
+func TestGroupMembersKeepsStartupGODEBUGApart(test *testing.T) {
+	plain := member("a", "")
+	maxprocs := member("b", "")
+	maxprocs.GODEBUG = "panicnil=1,updatemaxprocs=0"
+	same := member("c", "")
+	same.GODEBUG = "panicnil=1"
+
+	groups := GroupMembers([]TestGroupMember{plain, maxprocs, same})
 	if len(groups) != 2 {
 		test.Fatalf("got %d groups, want 2: b alone, a and c together", len(groups))
 	}
 	for _, group := range groups {
 		for _, other := range group[1:] {
-			if other.GODEBUG != group[0].GODEBUG {
-				test.Errorf("%s (%q) shares a binary with %s (%q)", other.Package.ImportPath, other.GODEBUG, group[0].Package.ImportPath, group[0].GODEBUG)
+			if other.Package.ImportPath == "b" || group[0].Package.ImportPath == "b" {
+				test.Errorf("%s shares a binary with %s", other.Package.ImportPath, group[0].Package.ImportPath)
 			}
 		}
 	}

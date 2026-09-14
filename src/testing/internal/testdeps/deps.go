@@ -65,17 +65,19 @@ var ImportPath string
 
 // StartUnit prepares a binary holding several packages' tests to run the
 // tests of package unit: it names the package to every copy of this binary
-// the tests start, and runs the initialization unit's _test.go files deferred
-// until now.
+// the tests start, makes godebug the default GODEBUG, which is the one a
+// binary of unit's tests alone would carry, and then initializes unit and what
+// its tests need.
 //
 // The environment carries the name, so a copy started through another program
 // (nohup, a shell, a bisect driver) still finds it. Package os adds it to the
 // environment of a copy started directly with one the caller replaced.
-func StartUnit(unit string) {
+func StartUnit(unit, godebug string) {
 	testlog.SetUnit(unit)
 	if err := os.Setenv(testlog.UnitEnv, unit); err != nil {
 		panic("testing: " + err.Error())
 	}
+	setDefaultGODEBUG(godebug)
 	runTestInit(unit)
 }
 
@@ -83,6 +85,11 @@ func StartUnit(unit string) {
 //
 //go:linkname runTestInit
 func runTestInit(unit string)
+
+// setDefaultGODEBUG is provided by package runtime.
+//
+//go:linkname setDefaultGODEBUG
+func setDefaultGODEBUG(def string)
 
 func (TestDeps) ImportPath() string {
 	return ImportPath

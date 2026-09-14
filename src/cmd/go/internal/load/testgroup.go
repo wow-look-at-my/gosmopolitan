@@ -9,7 +9,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"go/build"
+	"internal/godebugs"
 	"sort"
+	"strings"
 
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
@@ -24,8 +26,7 @@ type TestGroupMember struct {
 	ExtTests  *Package
 
 	// GODEBUG is the default GODEBUG this package's test binary would get
-	// on its own: the linker writes one per binary, from the main module and
-	// the package's //go:debug lines.
+	// on its own, from the main module and the package's //go:debug lines.
 	GODEBUG string
 }
 
@@ -204,6 +205,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		unit.TestMain = funcs.TestMain
 		unit.ImportTest = funcs.ImportTest
 		unit.ImportXtest = funcs.ImportXtest
+		unit.GODEBUG = member.GODEBUG
 		units = append(units, unit)
 	}
 	stk.Pop()
@@ -279,15 +281,16 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 }
 
 // GroupMembers partitions packages into the binaries their tests share: one
-// per PGO profile and default GODEBUG. A profile is compiled into every
-// package a binary links, the runtime included, and the linker writes one
-// default GODEBUG into it, so one binary holds one of each. Every package
-// still runs, and every one still reports on its own.
+// per PGO profile and per value of the GODEBUG settings a program reads only
+// as it starts. A profile is compiled into every package a binary links, the
+// runtime included. A binary applies the rest of a package's default GODEBUG
+// when it is started for that package. Every package still runs, and every one
+// still reports on its own.
 func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 	var out [][]TestGroupMember
 	byBinary := map[[2]string]int{}
 	for _, member := range members {
-		key := [2]string{member.Package.Internal.PGOProfile, member.GODEBUG}
+		key := [2]string{member.Package.Internal.PGOProfile, startupGODEBUG(member.GODEBUG)}
 		pos, found := byBinary[key]
 		if !found {
 			pos = len(out)
@@ -297,6 +300,21 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 		out[pos] = append(out[pos], member)
 	}
 	return out
+}
+
+// startupGODEBUG answers the part of a default GODEBUG that only the start of
+// the program reads: the settings internal/godebugs marks immutable. Changing
+// the default later, when a binary is started for one of its packages, reaches
+// every other setting.
+func startupGODEBUG(godebug string) string {
+	var kept []string
+	for _, setting := range strings.Split(godebug, ",") {
+		name, _, _ := strings.Cut(setting, "=")
+		if info := godebugs.Lookup(name); info != nil && info.Immutable {
+			kept = append(kept, setting)
+		}
+	}
+	return strings.Join(kept, ",")
 }
 
 // shareMember prepares one package of a binary holding several packages'
