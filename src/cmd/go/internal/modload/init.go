@@ -394,6 +394,12 @@ func (ld *Loader) Reset() {
 }
 
 func (ld *Loader) setState(new *Loader) (old *Loader) {
+	// A go.mod summary holds the requirements as the branch an org module
+	// follows resolved them, and that branch belongs to the main module. The
+	// main module can change under a loader, so the summaries are dropped with
+	// the rest of the state rather than carried across it.
+	dropModFileSummaries()
+
 	old = &Loader{
 		initialized:     ld.initialized,
 		ForceUseModules: ld.ForceUseModules,

@@ -93,9 +93,11 @@ if not exist cmd\vendor\github.com\wow-look-at-my\go-s3-server\go.mod (
 
 rem A submodule follows this repository's branch, so a build reads the branch a
 rem change is on rather than a commit somebody wrote down once. The update is
-rem git submodule update --init --remote, which submodulebranch.bat points at
-rem the branch to follow. A remote it cannot reach leaves the checkout alone.
-if not "%GOSUBMODULEBRANCH%"=="off" call submodulebranch.bat
+rem git submodule update --init --remote, run by submodulebranch.bash, which
+rem names the branch to follow. A remote it cannot reach leaves the checkout
+rem alone. Git's own bash runs it here, so both platforms take one path.
+where bash >nul 2>nul
+if not errorlevel 1 if not "%GOSUBMODULEBRANCH%"=="off" bash "%~dp0submodulebranch.bash"
 set GOROOT=%GOROOT_TEMP%
 set GOROOT_TEMP=
 
