@@ -1,21 +1,22 @@
 # A pin freezes this repository against one commit of another, so an org
-# dependency carries no version and every org submodule tracks a branch.
-# The guard reads the committed shape, before a build stamps a version in.
+# dependency carries no version and every org submodule follows a branch.
+# The guard reads the committed shape, and cmd/go resolves the placeholder to
+# the branch head at load time (cmd/go/internal/orgmod).
 tests:
 	- desc: no org dependency in the tree carries a frozen version
 	  cmd: dats/checks/org-unpinned.sh .gitmodules src/cmd/go.mod src/cmd/go.sum src/cmd/vendor/modules.txt .github/workflows/*.yml .github/actions/*/action.yml
 	  exit: 0
 
-	- desc: the guard refuses an org submodule that tracks no branch
+	- desc: the guard refuses an org submodule that names no branch
 	  cmd: |
 		printf '[submodule "dep"]\n\tpath = dep\n\turl = https://github.com/wow-look-at-my/dep.git\n' > "$TMPDIR/frozen.gitmodules"
 		rc=0; dats/checks/org-unpinned.sh "$TMPDIR/frozen.gitmodules" || rc=$?
 		test "$rc" -eq 2
 	  exit: 0
 
-	- desc: the guard accepts an org submodule that declares branch = .
+	- desc: the guard accepts an org submodule that names a branch
 	  cmd: |
-		printf '[submodule "dep"]\n\tpath = dep\n\turl = https://github.com/wow-look-at-my/dep.git\n\tbranch = .\n' > "$TMPDIR/tracked.gitmodules"
+		printf '[submodule "dep"]\n\tpath = dep\n\turl = https://github.com/wow-look-at-my/dep.git\n\tbranch = master\n' > "$TMPDIR/tracked.gitmodules"
 		dats/checks/org-unpinned.sh "$TMPDIR/tracked.gitmodules"
 	  exit: 0
 
@@ -39,10 +40,16 @@ tests:
 		test "$rc" -eq 2
 	  exit: 0
 
-	- desc: the guard accepts the zero pseudo-version
+	- desc: the guard accepts the v0 placeholder
 	  cmd: |
-		printf 'github.com/wow-look-at-my/dep v0.0.0-00010101000000-000000000000 // indirect\n' > "$TMPDIR/zero.mod"
+		printf 'github.com/wow-look-at-my/dep v0.0.0 // indirect\n' > "$TMPDIR/zero.mod"
 		dats/checks/org-unpinned.sh "$TMPDIR/zero.mod"
+	  exit: 0
+
+	- desc: the guard accepts the placeholder for a /v2 path
+	  cmd: |
+		printf 'github.com/wow-look-at-my/dep/v2 v2.0.0 // indirect\n' > "$TMPDIR/v2.mod"
+		dats/checks/org-unpinned.sh "$TMPDIR/v2.mod"
 	  exit: 0
 
 	- desc: a third-party module keeps its version
