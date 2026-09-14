@@ -44,12 +44,18 @@ const orgDefaultRev = "HEAD"
 // single invocation runs git at most once for the main module.
 var orgBranchCache par.Cache[string, string] // module root dir → branch ("" if none)
 
+// orgVersionKey identifies one resolution: the module path, whose major version
+// the pseudo-version must carry, and the branch it was resolved against, since
+// a loader can be re-rooted onto a different main module within an invocation.
+type orgVersionKey struct {
+	branch string
+	path   string
+}
+
 // orgVersionCache memoizes the resolved version of an org module, the way
-// @latest lookups are cached. The key is the module path because the resolved
-// pseudo-version must carry the module's own major version; every module in a
-// repository still resolves through one repository object, and so through one
-// ls-remote.
-var orgVersionCache par.ErrCache[string, string] // module path → version
+// @latest lookups are cached. Every module in a repository still resolves
+// through one repository object, and so through one ls-remote.
+var orgVersionCache par.ErrCache[orgVersionKey, string] // branch, module path → version
 
 // orgBranch returns the branch that org modules follow in this invocation, or
 // "" when the main module has no checked-out branch.
@@ -113,19 +119,19 @@ func gitCheckedOutBranch(dir string) string {
 // of the head of the branch it follows. The version token on any require line
 // naming path is neither read nor consulted.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
-	return orgVersionCache.Do(path, func() (string, error) {
-		rev := orgBranch(ld)
-		if rev == "" {
-			rev = orgDefaultRev
-		}
-		info, err := Query(ld, ctx, path, rev, "", nil)
-		if err != nil && rev != orgDefaultRev {
+	branch := orgBranch(ld)
+	if branch == "" {
+		branch = orgDefaultRev
+	}
+	return orgVersionCache.Do(orgVersionKey{branch, path}, func() (string, error) {
+		info, err := Query(ld, ctx, path, branch, "", nil)
+		if err != nil && branch != orgDefaultRev {
 			// The repository has no branch by that name, so it takes the head of
 			// its default branch instead.
 			info, err = Query(ld, ctx, path, orgDefaultRev, "", nil)
 		}
 		if err != nil {
-			return "", fmt.Errorf("resolving %s from the head of %s: %w", path, rev, err)
+			return "", fmt.Errorf("resolving %s from the head of %s: %w", path, branch, err)
 		}
 		return info.Version, nil
 	})

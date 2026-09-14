@@ -749,7 +749,9 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		if mf := ld.MainModules.ModFile(m); mf != nil {
 			summary, err := summaryFromModFile(m, ld.MainModules.modFiles[m])
 			if err != nil {
-				return nil, err
+				// summaryFromModFile returns a usable summary with a
+				// TooNewError, and its callers read retractions from it.
+				return summary, err
 			}
 			return resolveOrgSummary(ld, summary)
 		}
@@ -765,7 +767,8 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		}
 		summary, err := summaryFromModFile(m, f)
 		if err != nil {
-			return nil, err
+			// Keep the summary, for the reason above.
+			return summary, err
 		}
 		// An org module's requirement is the head of the branch it follows, not
 		// the placeholder its go.mod file records. Resolving here keeps the
@@ -825,7 +828,17 @@ func summaryFromModFile(m module.Version, f *modfile.File) (*modFileSummary, err
 	return summary, nil
 }
 
-var rawGoModSummaryCache par.ErrCache[module.Version, *modFileSummary]
+// rawGoModSummaryCache memoizes the summary of each module version's go.mod.
+//
+// The summary is a pointer to the cache so that a loader can drop every entry
+// at once: a summary holds the version that an org module's requirements
+// resolved to, and that resolution belongs to the branch the main module is on.
+var rawGoModSummaryCache = new(par.ErrCache[module.Version, *modFileSummary])
+
+// dropModFileSummaries forgets every cached go.mod summary.
+func dropModFileSummaries() {
+	rawGoModSummaryCache = new(par.ErrCache[module.Version, *modFileSummary])
+}
 
 // rawGoModData returns the content of the go.mod file for module m, ignoring
 // all replacements that may apply to m.
