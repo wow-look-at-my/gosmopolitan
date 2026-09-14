@@ -78,7 +78,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := VetTool
-	VetTool = tool
+	VetTool = []string{tool}
 	defer func() { VetTool = old }()
 
 	b := &Builder{}
