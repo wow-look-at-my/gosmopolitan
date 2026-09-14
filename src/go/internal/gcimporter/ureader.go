@@ -22,6 +22,10 @@ type pkgReader struct {
 	ctxt    *types.Context
 	imports map[string]*types.Package // previously imported packages, indexed by path
 
+	// importOwn, when set, imports a package from its own export data, and
+	// is called before an object of that package is declared from a copy.
+	importOwn func(path string)
+
 	// lazily initialized arrays corresponding to the unified IR
 	// PosBase, Pkg, and Type sections, respectively.
 	posBases []string // position bases (i.e., file names)
@@ -48,7 +52,7 @@ func (pr *pkgReader) later(fn func()) {
 
 // readUnifiedPackage reads a package description from the given
 // unified IR export data decoder.
-func readUnifiedPackage(fset *token.FileSet, ctxt *types.Context, imports map[string]*types.Package, input pkgbits.PkgDecoder) *types.Package {
+func readUnifiedPackage(fset *token.FileSet, ctxt *types.Context, imports map[string]*types.Package, input pkgbits.PkgDecoder, importOwn func(path string)) *types.Package {
 	pr := pkgReader{
 		PkgDecoder: input,
 
@@ -57,8 +61,9 @@ func readUnifiedPackage(fset *token.FileSet, ctxt *types.Context, imports map[st
 			files: make(map[string]*fileInfo),
 		},
 
-		ctxt:    ctxt,
-		imports: imports,
+		ctxt:      ctxt,
+		imports:   imports,
+		importOwn: importOwn,
 
 		posBases: make([]string, input.NumElems(pkgbits.SectionPosBase)),
 		pkgs:     make([]*types.Package, input.NumElems(pkgbits.SectionPkg)),
@@ -501,6 +506,14 @@ func (pr *pkgReader) objIdx(idx pkgbits.Index) (*types.Package, string) {
 	// Ignore generic methods promoted to global scope.
 	if strings.Contains(objName, ".") {
 		return objPkg, objName
+	}
+
+	// Export data carries copies of the objects of other packages it refers
+	// to. When that package's own export data is at hand, declare from it,
+	// before any copy: a package under test is linked with its _test.go
+	// files, and the copies other packages carry lack what those files add.
+	if pr.importOwn != nil && objPkg.Path() != pr.PkgPath() && !objPkg.Complete() {
+		pr.importOwn(objPkg.Path())
 	}
 
 	if objPkg.Scope().Lookup(objName) == nil {
