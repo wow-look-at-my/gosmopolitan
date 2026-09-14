@@ -25,6 +25,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
+	"cmd/go/internal/orgmod"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
 	"cmd/internal/par"
@@ -630,7 +631,15 @@ func readGoSum(dst map[module.Version][]string, file string, data []byte) {
 // The entry's hash must be generated with a known hash algorithm.
 // mod.Version may have a "/go.mod" suffix to distinguish sums for
 // .mod and .zip files.
+//
+// An org module has no sum: cmd/go neither reads nor writes go.sum for one,
+// and the git commit the module resolves to is the integrity check. HaveSum
+// reports true for such a module so that no caller concludes its sum is
+// missing, and so that a stale line left in go.sum is never consulted.
 func HaveSum(f *Fetcher, mod module.Version) bool {
+	if orgmod.IsOrg(mod.Path) {
+		return true
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	inited, err := f.initGoSum()
@@ -664,7 +673,12 @@ func HaveSum(f *Fetcher, mod module.Version) bool {
 // The entry's hash must be generated with a known hash algorithm.
 // mod.Version may have a "/go.mod" suffix to distinguish sums for
 // .mod and .zip files.
+//
+// An org module has no sum, so RecordedSum always reports false for one.
 func (f *Fetcher) RecordedSum(mod module.Version) (sum string, ok bool) {
+	if orgmod.IsOrg(mod.Path) {
+		return "", false
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	inited, err := f.initGoSum()
@@ -755,7 +769,14 @@ func checkGoMod(f *Fetcher, path, version string, data []byte) error {
 //
 // mod.Version may have the additional suffix "/go.mod" to request the checksum
 // for the module's go.mod file only.
+//
+// An org module has no checksum: the git commit it resolves to is the
+// integrity check, so there is nothing to verify and nothing to record.
 func checkModSum(f *Fetcher, mod module.Version, h string) error {
+	if orgmod.IsOrg(mod.Path) {
+		return nil
+	}
+
 	// We lock goSum when manipulating it,
 	// but we arrange to release the lock when calling checkSumDB,
 	// so that parallel calls to checkModHash can execute parallel calls
@@ -1011,6 +1032,12 @@ func tidyGoSum(f *Fetcher, data []byte, keep map[module.Version]bool) []byte {
 
 	var buf bytes.Buffer
 	for _, m := range mods {
+		// An org module has no sum, so go.sum never grows a line for one, and a
+		// line a previous command or a previous go command left behind is
+		// dropped here.
+		if orgmod.IsOrg(m.Path) {
+			continue
+		}
 		list := f.sumState.m[m]
 		sort.Strings(list)
 		str.Uniq(&list)

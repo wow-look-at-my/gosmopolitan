@@ -20,6 +20,7 @@ import (
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
+	"cmd/go/internal/orgmod"
 	"cmd/go/internal/trace"
 	"cmd/internal/par"
 
@@ -477,7 +478,12 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 
 	i.require = make(map[module.Version]requireMeta, len(modFile.Require))
 	for _, r := range modFile.Require {
-		i.require[r.Mod] = requireMeta{indirect: r.Indirect}
+		// An org module's version token is inert: the module resolves to a branch
+		// head whatever the line says. Indexing the placeholder means a go.mod
+		// file that records some other token is not considered out of date, so a
+		// repository that recorded a version before this rule existed builds
+		// without being edited first.
+		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
 	}
 
 	i.replace = toReplaceMap(modFile.Replace)
@@ -741,7 +747,11 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		// contents of the modfile when doing the load, don't read from disk and instead
 		// recompute a summary using the updated contents of the modfile.
 		if mf := ld.MainModules.ModFile(m); mf != nil {
-			return summaryFromModFile(m, ld.MainModules.modFiles[m])
+			summary, err := summaryFromModFile(m, ld.MainModules.modFiles[m])
+			if err != nil {
+				return nil, err
+			}
+			return resolveOrgSummary(ld, summary)
 		}
 	}
 	return rawGoModSummaryCache.Do(m, func() (*modFileSummary, error) {
@@ -753,7 +763,14 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		if err != nil {
 			return nil, module.VersionError(m, fmt.Errorf("parsing %s: %v", base.ShortPath(name), err))
 		}
-		return summaryFromModFile(m, f)
+		summary, err := summaryFromModFile(m, f)
+		if err != nil {
+			return nil, err
+		}
+		// An org module's requirement is the head of the branch it follows, not
+		// the placeholder its go.mod file records. Resolving here keeps the
+		// module graph, and therefore MVS, on the same commit as the root list.
+		return resolveOrgSummary(ld, summary)
 	})
 }
 
