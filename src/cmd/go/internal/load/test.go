@@ -1091,25 +1091,36 @@ func pickUnit() *testUnit {
 	}
 	os.Args = kept
 
-	if want == "" {
-		want = os.Getenv(unitEnv)
-	}
+	inherited := os.Getenv(unitEnv)
 	if os.Getenv(unitImplicitEnv) == "1" {
 		os.Unsetenv(unitEnv)
 		os.Unsetenv(unitImplicitEnv)
 	}
 	if want == "" {
-		fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
+		// The environment can name the package of another test binary
+		// that started this one, which is not a request for anything here.
+		if findUnit(inherited) == nil {
+			fmt.Fprintf(os.Stderr, "testing: this binary holds %d packages: name one with %s<import path>\n", len(units), unitFlag)
+			os.Exit(2)
+		}
+		want = inherited
+	}
+	unit := findUnit(want)
+	if unit == nil {
+		fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
 		os.Exit(2)
 	}
+	testdeps.StartUnit(want)
+	return unit
+}
+
+// findUnit answers the unit named id, or nil when this binary holds none.
+func findUnit(id string) *testUnit {
 	for idx := range units {
-		if units[idx].unitID == want {
-			testdeps.StartUnit(want)
+		if id != "" && units[idx].unitID == id {
 			return &units[idx]
 		}
 	}
-	fmt.Fprintf(os.Stderr, "testing: this binary holds no tests for %q\n", want)
-	os.Exit(2)
 	return nil
 }
 {{else}}

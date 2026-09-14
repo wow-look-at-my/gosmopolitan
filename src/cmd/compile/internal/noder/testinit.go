@@ -13,19 +13,32 @@ import (
 	"cmd/internal/src"
 )
 
-// PlainImports holds, under -testinit, the packages that the package's
-// non-test files import. Only those are initialized before the package: its
-// test files are initialized later, when the tests of the -testinit package
-// run.
+// PlainImports holds the imports initialized before the package, when that is
+// not all of them. Under -testinit it is what the package's non-test files
+// import: its test files are initialized later, when the tests of the
+// -testinit package run. Under -teststartup it is the listed imports: a test
+// main holding several packages' tests initializes each of those packages
+// when its tests run.
 var PlainImports map[string]bool
 
 // importsTested reports, under -testinit, whether an external test package
 // imports the package under test.
 var importsTested bool
 
-// recordPlainImports fills PlainImports and importsTested from the parsed
-// files.
+// recordPlainImports fills PlainImports and importsTested from the flags and
+// the parsed files.
 func recordPlainImports(filenames []string, noders []*noder) {
+	if base.Flag.TestStartup != "" {
+		PlainImports = make(map[string]bool)
+		for _, path := range strings.Split(base.Flag.TestStartup, ",") {
+			resolved, err := resolveImportPath(path)
+			if err != nil {
+				base.Fatalf("-teststartup: %v", err)
+			}
+			PlainImports[resolved] = true
+		}
+		return
+	}
 	if base.Flag.TestInit == "" {
 		return
 	}

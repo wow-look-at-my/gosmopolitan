@@ -135,6 +135,9 @@ func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg
 	if p.Internal.TestInit != "" {
 		defaultGcFlags = append(defaultGcFlags, "-testinit="+p.Internal.TestInit)
 	}
+	if len(p.Internal.TestStartup) > 0 {
+		defaultGcFlags = append(defaultGcFlags, "-teststartup="+strings.Join(p.Internal.TestStartup, ","))
+	}
 	if p.Internal.TestVariantOf != nil {
 		replaced := replacedArchive(a)
 		if replaced == "" {

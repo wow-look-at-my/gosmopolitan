@@ -214,19 +214,18 @@ func (f *shuffleFlag) Set(value string) error {
 }
 
 // normalizeCount settles what -count means here. A negative count names no run
-// at all and is fatal. Zero still reaches the test binary, which builds and runs
-// nothing. Every other value runs the tests exactly once, so the flag is dropped
-// rather than forwarded: it selects no behavior, and an argument the go command
-// does not recognize is what turns the test cache off. A repeat is not a repair.
-// A test that passes only sometimes is broken, and the fix belongs in the test.
+// at all and is fatal. A count of one is what the test binary does anyway, so
+// it is dropped rather than forwarded: it selects no behavior, and an argument
+// the go command does not recognize is what turns the test cache off. Every
+// other count reaches the test binary, wherever it was set.
 //
 // explicitArgs holds the flags already destined for the test binary, and
-// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both.
+// fromGOFLAGS the ones GOFLAGS would add. A count of one is removed from both.
 func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string {
 	if testCount < 0 {
 		base.Fatalf("go: -count must not be negative")
 	}
-	if testCount == 0 {
+	if testCount != 1 {
 		return explicitArgs
 	}
 	delete(fromGOFLAGS, "count")

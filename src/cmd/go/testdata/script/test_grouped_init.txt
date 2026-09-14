@@ -1,12 +1,17 @@
 # Packages tested together share one test binary, even when one package's
 # tests import another. What a package's _test.go files initialize belongs
 # to that package's run: it runs in that package's directory, after the
-# package itself, and never in another package's run.
+# package itself, and never in another package's run. A package that only
+# its own tests reach is initialized in its own run and in no other, so two
+# commands can declare one flag name with two types.
 
-go test -x ./reader ./other ./lib
+go test -x ./reader ./other ./lib ./solo ./cmd/one ./cmd/two
 stdout '^ok\s+example.com/grouped/reader'
 stdout '^ok\s+example.com/grouped/other'
 stdout '^ok\s+example.com/grouped/lib'
+stdout '^ok\s+example.com/grouped/solo'
+stdout '^ok\s+example.com/grouped/cmd/one'
+stdout '^ok\s+example.com/grouped/cmd/two'
 stderr -count=1 'link -o'
 
 -- go.mod --
@@ -57,6 +62,7 @@ func TestData(test *testing.T) {
 package other
 
 import (
+	"os"
 	"testing"
 
 	"example.com/grouped/lib"
@@ -69,6 +75,65 @@ func TestOther(test *testing.T) {
 	}
 	if lib.TestFileRan {
 		test.Fatal("lib's test file initialized in other's run")
+	}
+	if ran := os.Getenv("GROUPED_SOLO"); ran != "" {
+		test.Fatalf("solo initialized in other's run: GROUPED_SOLO=%q", ran)
+	}
+}
+-- solo/solo.go --
+package solo
+
+import "os"
+
+// Nothing but solo's own tests imports solo.
+func init() { os.Setenv("GROUPED_SOLO", "ran") }
+-- solo/solo_test.go --
+package solo
+
+import (
+	"os"
+	"testing"
+)
+
+func TestSolo(test *testing.T) {
+	if ran := os.Getenv("GROUPED_SOLO"); ran != "ran" {
+		test.Fatalf("solo did not initialize in its own run: GROUPED_SOLO=%q", ran)
+	}
+}
+-- cmd/one/main.go --
+package main
+
+import "flag"
+
+var mode = flag.String("mode", "one", "a string")
+
+func main() {}
+-- cmd/one/main_test.go --
+package main
+
+import "testing"
+
+func TestMode(test *testing.T) {
+	if *mode != "one" {
+		test.Fatalf("mode = %q", *mode)
+	}
+}
+-- cmd/two/main.go --
+package main
+
+import "flag"
+
+var mode = flag.Bool("mode", true, "a bool")
+
+func main() {}
+-- cmd/two/main_test.go --
+package main
+
+import "testing"
+
+func TestMode(test *testing.T) {
+	if !*mode {
+		test.Fatal("mode = false")
 	}
 }
 -- lib/lib.go --

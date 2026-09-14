@@ -337,6 +337,9 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	if p.Internal.TestInit != "" {
 		fmt.Fprintf(h, "testinit %q\n", p.Internal.TestInit)
 	}
+	if len(p.Internal.TestStartup) > 0 {
+		fmt.Fprintf(h, "teststartup %q\n", p.Internal.TestStartup)
+	}
 	if p.Internal.TestVariantOf != nil {
 		// The replaced package's own compile is a dependency, so its content
 		// is hashed with the others below; this says what it is used for.

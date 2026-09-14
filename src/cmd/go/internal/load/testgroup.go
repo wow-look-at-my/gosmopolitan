@@ -107,13 +107,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Push(ImportInfo{Pkg: "testmain"})
 
 	first := members[0].Package
-	// Every member's init runs on every start, so two members declaring a flag
-	// of the same name both register it. That is a redefinition, and it panics
-	// before a test body runs. The flag package cannot ask testing which kind of
-	// binary this is, because testing imports flag, so the linker says.
-	ldflags := append(first.Internal.Ldflags,
-		"-X", "testing.testBinary=1",
-		"-X", "flag.groupedTestBinary=1")
+	ldflags := append(first.Internal.Ldflags, "-X", "testing.testBinary=1")
 	gccgoflags := append(first.Internal.Gccgoflags,
 		"-Wl,--defsym,testing.gccgoTestBinary=1")
 
@@ -144,6 +138,13 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	deps := groupedMainDeps(len(members))
 	if cover != nil {
 		deps = append(deps, "internal/coverage/cfile")
+	}
+	// Program startup initializes what the generated main itself runs on.
+	// Each member, and whatever only members import, is initialized when
+	// the binary is started for that member's tests, the way a binary of
+	// its own would be.
+	if len(members) > 1 {
+		testMain.Internal.TestStartup = str.StringList(deps)
 	}
 	ldDeps, err := LinkerDeps(ld, first)
 	if err != nil && testMain.Error == nil {

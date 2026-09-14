@@ -28,7 +28,8 @@ func MakeTask() {
 	var fns []*obj.LSym  // functions to call for package initialization
 
 	// Find imported packages with init tasks. Under -testinit, a package
-	// only its test files import is initialized with the tests.
+	// only its test files import is initialized with the tests, and under
+	// -teststartup every import it does not list is.
 	var testDeps []*obj.LSym
 	for _, pkg := range typecheck.Target.Imports {
 		n, ok := pkg.Lookup(".inittask").Def.(*ir.Name)
