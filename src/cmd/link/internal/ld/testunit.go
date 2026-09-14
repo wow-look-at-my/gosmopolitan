@@ -64,8 +64,8 @@ func readTestUnits(path string) (barriers []string, units []testUnitRoots, err e
 		if text == "" {
 			continue
 		}
-		verb, arg, ok := strings.Cut(text, " ")
-		if !ok {
+		verb, arg, split := strings.Cut(text, " ")
+		if !split {
 			return nil, nil, fmt.Errorf("%s:%d: no argument for %q", path, line, verb)
 		}
 		switch verb {
@@ -147,13 +147,13 @@ func testUnitDigests(ctxt *Link) {
 	}
 
 	ids := make([]string, 0, len(digests))
-	for id := range digests {
-		ids = append(ids, id)
+	for name := range digests {
+		ids = append(ids, name)
 	}
 	sort.Strings(ids)
 	var out strings.Builder
-	for _, id := range ids {
-		fmt.Fprintf(&out, "%s %s\n", id, digests[id])
+	for _, name := range ids {
+		fmt.Fprintf(&out, "%s %s\n", name, digests[name])
 	}
 	if err := os.WriteFile(*flagTestUnitDigest, []byte(out.String()), 0666); err != nil {
 		Exitf("writing -testunitdigest: %v", err)

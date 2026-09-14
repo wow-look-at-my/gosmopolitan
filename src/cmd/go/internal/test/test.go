@@ -2146,15 +2146,15 @@ var reachCache struct {
 func testUnitReach(linkAction *work.Action) map[string]string {
 	reachCache.mu.Lock()
 	defer reachCache.mu.Unlock()
-	if found, ok := reachCache.byDir[linkAction.Objdir]; ok {
+	if found, known := reachCache.byDir[linkAction.Objdir]; known {
 		return found
 	}
 	digests := map[string]string{}
 	data, err := os.ReadFile(filepath.Join(linkAction.Objdir, work.TestUnitDigestFile))
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
-			unit, digest, ok := strings.Cut(line, " ")
-			if ok {
+			unit, digest, split := strings.Cut(line, " ")
+			if split {
 				digests[unit] = digest
 			}
 		}

@@ -34,24 +34,24 @@ var testUnitBarriers = []string{"main.units", "go:testinittasks", "runtime.testi
 func testUnitRoots(unit testUnit) []string {
 	prefix := objabi.PathToPrefix(unit.UnitID) + "."
 	xprefix := objabi.PathToPrefix(unit.UnitID+"_test") + "."
-	symbol := func(fn testFunc) string {
-		if fn.Package == unit.XAlias {
-			return xprefix + fn.Name
+	symbol := func(entry testFunc) string {
+		if entry.Package == unit.XAlias {
+			return xprefix + entry.Name
 		}
-		return prefix + fn.Name
+		return prefix + entry.Name
 	}
 	roots := []string{prefix + ".inittask.test", prefix + ".inittask.xtest"}
-	for _, fn := range unit.Tests {
-		roots = append(roots, symbol(fn))
+	for _, entry := range unit.Tests {
+		roots = append(roots, symbol(entry))
 	}
-	for _, fn := range unit.Benchmarks {
-		roots = append(roots, symbol(fn))
+	for _, entry := range unit.Benchmarks {
+		roots = append(roots, symbol(entry))
 	}
-	for _, fn := range unit.FuzzTargets {
-		roots = append(roots, symbol(fn))
+	for _, entry := range unit.FuzzTargets {
+		roots = append(roots, symbol(entry))
 	}
-	for _, fn := range unit.Examples {
-		roots = append(roots, symbol(fn))
+	for _, entry := range unit.Examples {
+		roots = append(roots, symbol(entry))
 	}
 	if unit.TestMain != nil {
 		roots = append(roots, symbol(*unit.TestMain))
