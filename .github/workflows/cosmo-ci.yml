@@ -109,6 +109,8 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
+      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
+      - uses: ./.github/actions/track-submodules
 
       - uses: ./.github/actions/suite-leg
         # The NT leg reports in full; its red does not hold the branch. On the STEP, not the job: all-builds tallies jobs, and a job-level key leaves the job's own conclusion `failure`. waiver-expires: 2026-09-18
@@ -471,6 +473,8 @@ jobs:
           submodules: true
       # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
       - uses: wow-look-at-my/actions@secret-server#latest
+      # The published toolchain is built here, so it carries the client's branch head rather than the gitlink's commit.
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
