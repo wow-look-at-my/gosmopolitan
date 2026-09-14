@@ -361,6 +361,9 @@ func (a *Action) trimpath() string {
 func asmArgs(a *Action, p *load.Package) []any {
 	// Add -I pkg/GOOS_GOARCH so #include "textflag.h" works in .s files.
 	inc := filepath.Join(cfg.GOROOT, "pkg", "include")
+	if cfg.EmbeddedStd {
+		inc = cfg.EmbeddedIncludeDir()
+	}
 	pkgpath := pkgPath(a)
 	args := []any{cfg.BuildToolexec, base.ToolCmd("asm"), "-p", pkgpath, "-trimpath", a.trimpath(), "-I", a.Objdir, "-I", inc, "-D", "GOOS_" + cfg.Goos, "-D", "GOARCH_" + cfg.Goarch, forcedAsmflags, p.Internal.Asmflags}
 	if p.ImportPath == "runtime" && cfg.Goarch == "386" {

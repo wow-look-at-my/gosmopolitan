@@ -7,6 +7,7 @@
 package work
 
 import (
+	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/str"
 	"cmd/internal/cov/covcmd"
@@ -24,7 +25,7 @@ import (
 func (b *Builder) CovData(a *Action, cmdargs ...any) ([]byte, error) {
 	cmdline := str.StringList(cmdargs...)
 	args := append([]string{}, cfg.BuildToolexec...)
-	args = append(args, filepath.Join(cfg.GOROOTbin, "go"), "tool", "covdata")
+	args = append(args, base.ToolCmd("covdata")...)
 	args = append(args, cmdline...)
 	return b.Shell(a).runOut(a.Objdir, nil, args)
 }

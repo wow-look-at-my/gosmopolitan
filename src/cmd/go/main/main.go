@@ -13,16 +13,8 @@ import (
 	"os"
 
 	gocmd "cmd/go"
-	"cmd/go/internal/base"
-	"cmd/go/internal/selftool"
 )
 
 func main() {
-	if code, ran := selftool.Dispatch(os.Args); ran {
-		os.Exit(code)
-	}
-	if exe, err := os.Executable(); err == nil {
-		base.SetSelf(exe, selftool.Names())
-	}
-	gocmd.Main()
+	os.Exit(gocmd.Run(os.Args))
 }

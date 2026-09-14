@@ -24,6 +24,9 @@ import (
 // register on their own set at init, so a flag two of them share is defined
 // once per set instead of twice on flag.CommandLine.
 func Enter(tool string, args []string, fset *flag.FlagSet) {
+	// A host without procfs resolves the executable from os.Args[0], once;
+	// resolve it while os.Args[0] still names the file.
+	os.Executable()
 	os.Args = append([]string{tool}, args...)
 	if fset == nil {
 		fset = flag.NewFlagSet(tool, flag.ExitOnError)
