@@ -36,11 +36,23 @@ func RunAs(argv []string, goCommand []string) int {
 		if len(goCommand) > 0 {
 			base.SetGoCommand(goCommand)
 		}
-		if goroot := os.Getenv("GOROOT"); (goroot == "" || goroot == exe) && embedded.Available() {
+		if gorootNamesSelf(os.Getenv("GOROOT"), exe) && embedded.Available() {
 			cfg.UseEmbeddedStd(exe)
 		}
 	}
 	os.Args = argv
 	Main()
 	return base.GetExitStatus()
+}
+
+// gorootNamesSelf reports that goroot leaves the standard library to this
+// executable: it is unset, or it names a file rather than a tree. A parent
+// names this program by the path it started it under, and a child sees its
+// own path, which is a link to or a copy of the same binary on some hosts.
+func gorootNamesSelf(goroot, exe string) bool {
+	if goroot == "" || goroot == exe {
+		return true
+	}
+	fi, err := os.Stat(goroot)
+	return err == nil && !fi.IsDir()
 }

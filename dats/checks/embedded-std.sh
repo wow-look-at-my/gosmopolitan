@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # embedded-std.sh -- the embedded standard library end to end: go tool
 # embedstd writes the blob, a cosmo go command links it in, and with no
-# GOROOT that command lists std from its manifest, builds a program byte
-# for byte as the source tree does, links it the same way twice, vets and
-# tests it, and refuses to test std. Run from the repository root with the
-# toolchain built.
+# GOROOT that command lists std from its manifest, takes a GOROOT naming
+# itself through a link or a copy, builds a program byte for byte as the
+# source tree does, links it the same way twice, vets and tests it, and
+# refuses to test std. Run from the repository root with the toolchain
+# built.
 set -euo pipefail
 
 root=$PWD
@@ -53,6 +54,15 @@ echo "== the manifest lists what the source tree lists"
 GOOS=cosmo go list -deps std | sort >"$work/source-std.txt"
 embedded list std | sort >"$work/embedded-std.txt"
 diff "$work/source-std.txt" "$work/embedded-std.txt"
+
+echo "== GOROOT may name the go command by another path"
+mkdir -p "$work/link" "$work/copy"
+ln -s "$work/go.com" "$work/link/go"
+cp "$work/go.com" "$work/copy/go"
+(cd "$work/hello" && GOROOT="$work/go.com" GOCACHE="$work/cache" /bin/sh "$work/link/go" list std | sort >"$work/linked-std.txt")
+diff "$work/source-std.txt" "$work/linked-std.txt"
+(cd "$work/hello" && GOROOT="$work/go.com" GOCACHE="$work/cache" /bin/sh "$work/copy/go" list std | sort >"$work/copied-std.txt")
+diff "$work/source-std.txt" "$work/copied-std.txt"
 
 echo "== a build with no GOROOT compiles only the program"
 embedded build -x -trimpath -ldflags=-buildid= -o "$work/embedded/hello.com" . 2>"$work/build.log"
