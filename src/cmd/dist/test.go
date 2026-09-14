@@ -370,6 +370,7 @@ type goTest struct {
 	gcflags   string // If non-empty, build with -gcflags=all=X
 	ldflags   string // If non-empty, build with -ldflags=X
 	buildmode string // If non-empty, -buildmode flag
+	pgo       string // If non-empty, -pgo flag
 
 	env []string // Environment variables to add, as KEY=VAL. KEY= unsets a variable
 
@@ -544,6 +545,9 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	if opts.buildmode != "" {
 		build = append(build, "-buildmode="+opts.buildmode)
 	}
+	if opts.pgo != "" {
+		build = append(build, "-pgo="+opts.pgo)
+	}
 
 	pkgs = opts.packages()
 
@@ -650,9 +654,14 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
+		// One binary holds the tests of every package, and a binary holds one
+		// PGO profile: cmd/compile's default.pgo would give its tests a binary
+		// of their own. The profile changes how fast code runs, not what it
+		// does, and the compiler the tests run is built by make.bash.
 		return (&goTest{
 			timeout: timeoutSec,
 			gcflags: gcflags,
+			pgo:     "off",
 			pkgs:    stdMatches,
 		}).run(t)
 	})

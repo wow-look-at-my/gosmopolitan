@@ -1,11 +1,12 @@
 # Packages tested together share one test binary. A test that starts that
 # binary again, naming only a -test.run of its own, must land in its own
-# package's tests, and so must a test that runs the binary as a tool from
-# TestMain.
+# package's tests: with the environment it inherits, with one it replaced
+# entirely, and when TestMain runs the binary as a tool.
 
-go test ./a ./b ./tool
+go test ./a ./b ./scrubbed ./tool
 stdout '^ok\s+example.com/grouped/a'
 stdout '^ok\s+example.com/grouped/b'
+stdout '^ok\s+example.com/grouped/scrubbed'
 stdout '^ok\s+example.com/grouped/tool'
 ! stderr 'this binary holds'
 
@@ -69,6 +70,33 @@ func TestParent(test *testing.T) {
 	}
 	if !strings.Contains(string(out), "child of b") {
 		test.Fatalf("the child did not run b's tests:\n%s", out)
+	}
+}
+-- scrubbed/scrubbed_test.go --
+package scrubbed
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+func TestChild(test *testing.T) {
+	if os.Getenv("GROUPED_CHILD") != "" {
+		os.Stdout.WriteString("child of scrubbed\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = []string{"GROUPED_CHILD=1"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "child of scrubbed") {
+		test.Fatalf("the child did not run scrubbed's tests:\n%s", out)
 	}
 }
 -- tool/tool_test.go --

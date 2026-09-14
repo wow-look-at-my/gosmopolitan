@@ -53,6 +53,17 @@ func pkgPath(a *Action) string {
 	return ppath
 }
 
+// replacedArchive answers the archive of the package a test variant is
+// linked in place of: the output of that package's own compile.
+func replacedArchive(a *Action) string {
+	for _, dep := range a.Deps {
+		if dep.Package == a.Package.Internal.TestVariantOf && dep.Mode == "build" {
+			return dep.built
+		}
+	}
+	return ""
+}
+
 func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg []byte, symabis string, asmhdr bool, pgoProfile string, gofiles []string) (ofile string, output []byte, err error) {
 	p := a.Package
 	sh := b.Shell(a)
@@ -120,6 +131,16 @@ func (gcToolchain) gc(b *Builder, a *Action, archive string, importcfg, embedcfg
 	}
 	if symabis != "" {
 		defaultGcFlags = append(defaultGcFlags, "-symabis", symabis)
+	}
+	if p.Internal.TestInit != "" {
+		defaultGcFlags = append(defaultGcFlags, "-testinit="+p.Internal.TestInit)
+	}
+	if p.Internal.TestVariantOf != nil {
+		replaced := replacedArchive(a)
+		if replaced == "" {
+			return "", nil, fmt.Errorf("%s: no compile of %s to take symbol indices from", p.ImportPath, p.Internal.TestVariantOf.ImportPath)
+		}
+		defaultGcFlags = append(defaultGcFlags, "-testvariant="+replaced)
 	}
 
 	gcflags := str.StringList(forcedGcflags, p.Internal.Gcflags)

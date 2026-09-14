@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "unsafe" // for go:linkname
 )
 
 // Cover indicates whether coverage is enabled.
@@ -61,6 +62,27 @@ func (TestDeps) WriteProfileTo(name string, w io.Writer, debug int) error {
 
 // ImportPath is the import path of the testing binary, set by the generated main function.
 var ImportPath string
+
+// StartUnit prepares a binary holding several packages' tests to run the
+// tests of package unit: it names the package to every copy of this binary
+// the tests start, and runs the initialization unit's _test.go files deferred
+// until now.
+//
+// The environment carries the name, so a copy started through another program
+// (nohup, a shell, a bisect driver) still finds it. Package os adds it to the
+// environment of a copy started directly with one the caller replaced.
+func StartUnit(unit string) {
+	testlog.SetUnit(unit)
+	if err := os.Setenv(testlog.UnitEnv, unit); err != nil {
+		panic("testing: " + err.Error())
+	}
+	runTestInit(unit)
+}
+
+// runTestInit is provided by package runtime.
+//
+//go:linkname runTestInit
+func runTestInit(unit string)
 
 func (TestDeps) ImportPath() string {
 	return ImportPath

@@ -22,6 +22,21 @@ type TestGroupMember struct {
 	Package   *Package
 	WithTests *Package
 	ExtTests  *Package
+
+	// GODEBUG is the default GODEBUG this package's test binary would get
+	// on its own: the linker writes one per binary, from the main module and
+	// the package's //go:debug lines.
+	GODEBUG string
+}
+
+// TestGODEBUG answers the default GODEBUG of the test binary of pkg alone.
+func TestGODEBUG(ld *modload.Loader, pkg *Package) string {
+	main := &Package{
+		PackagePublic: PackagePublic{Name: "main", Module: pkg.Module},
+		Internal:      PackageInternal{Build: &build.Package{Name: "main"}},
+	}
+	pkgBuild := pkg.Internal.Build
+	return defaultGODEBUG(ld, main, pkgBuild.Directives, pkgBuild.TestDirectives, pkgBuild.XTestDirectives)
 }
 
 // TestGroupMain builds ONE main package holding the tests of several packages.
@@ -204,19 +219,12 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	testMain.Imports = testMain.Imports[:kept]
 	testMain.Internal.RawImports = str.StringList(testMain.Imports)
 
-	// Each member's own dependencies must reach its test copies, and a member
-	// the group holds is never in another member's closure, so the rewrites
-	// cannot collide.
-	variants := make(map[*Package]bool, 2*len(members))
 	for _, member := range members {
-		for _, variant := range []*Package{member.WithTests, member.ExtTests} {
-			if variant != nil {
-				variants[variant] = true
-			}
+		if len(members) > 1 {
+			shareMember(member)
+			continue
 		}
-	}
-	for _, member := range members {
-		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests, variants); cycleErr != nil {
+		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
 			member.WithTests.Error = cycleErr
 			member.WithTests.Incomplete = true
 			// The cycle is in the graph now, and cmd/go walks that graph to
@@ -269,85 +277,56 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	return testMain, digests
 }
 
-// GroupMembers partitions packages into the groups that may share one binary.
-//
-// A member's test variant occupies the import path of the package it tests. So
-// two members may travel together only when neither one's tests reach the
-// other: reaching it would put a second package at that same path in the same
-// link. Every package still runs, and every one still reports on its own. What
-// changes is how many binaries the whole set costs.
+// GroupMembers partitions packages into the binaries their tests share: one
+// per PGO profile and default GODEBUG. A profile is compiled into every
+// package a binary links, the runtime included, and the linker writes one
+// default GODEBUG into it, so one binary holds one of each. Every package
+// still runs, and every one still reports on its own.
 func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
-	reaches := make([]map[string]bool, len(members))
-	for idx, member := range members {
-		var roots []*Package
-		if member.WithTests != nil {
-			roots = append(roots, member.WithTests)
+	var out [][]TestGroupMember
+	byBinary := map[[2]string]int{}
+	for _, member := range members {
+		key := [2]string{member.Package.Internal.PGOProfile, member.GODEBUG}
+		pos, found := byBinary[key]
+		if !found {
+			pos = len(out)
+			byBinary[key] = pos
+			out = append(out, nil)
 		}
-		if member.ExtTests != nil {
-			roots = append(roots, member.ExtTests)
-		}
-		seen := map[string]bool{}
-		for _, reached := range PackageList(roots) {
-			seen[reached.ImportPath] = true
-		}
-		reaches[idx] = seen
-	}
-
-	// A package that reads the working directory as it initializes cannot share
-	// a start with anything -- see travelsAlone. Answer it once per member:
-	// it parses the test files, and the loop below asks about every pair.
-	alone := make([]bool, len(members))
-	for idx, member := range members {
-		alone[idx] = travelsAlone(member)
-	}
-
-	var groups [][]int
-	for idx, member := range members {
-		if alone[idx] {
-			groups = append(groups, []int{idx})
-			continue
-		}
-		placed := false
-		for pos, group := range groups {
-			fits := true
-			for _, other := range group {
-				if alone[other] {
-					fits = false
-					break
-				}
-				// A profile is compiled into every package a binary links, the
-				// runtime included, so one binary holds one profile. Members
-				// built with different ones each link their own copy of every
-				// shared dependency.
-				if members[other].Package.Internal.PGOProfile != member.Package.Internal.PGOProfile {
-					fits = false
-					break
-				}
-				if reaches[idx][members[other].Package.ImportPath] || reaches[other][member.Package.ImportPath] {
-					fits = false
-					break
-				}
-			}
-			if fits {
-				groups[pos] = append(group, idx)
-				placed = true
-				break
-			}
-		}
-		if !placed {
-			groups = append(groups, []int{idx})
-		}
-	}
-
-	out := make([][]TestGroupMember, 0, len(groups))
-	for _, group := range groups {
-		batch := make([]TestGroupMember, 0, len(group))
-		for _, idx := range group {
-			batch = append(batch, members[idx])
-		}
-		out = append(out, batch)
+		out[pos] = append(out[pos], member)
 	}
 	return out
+}
+
+// shareMember prepares one package of a binary holding several packages'
+// tests. Nothing is recompiled against its test variants. The variant with
+// the package's own test files is linked in place of the package, and keeps
+// the symbol indices every other package refers to it by (-testvariant).
+// Both variants defer what their _test.go files initialize until the tests
+// of this package run (-testinit), so neither touches another package's run.
+func shareMember(member TestGroupMember) {
+	pkg := member.Package
+	if withTests := member.WithTests; withTests != nil && withTests != pkg {
+		withTests.Internal.TestInit = pkg.ImportPath
+		// Only a package something else can import is replaced. A command
+		// is never imported, and neither is a package whose only Go files
+		// are tests.
+		if pkg.Name != "main" && pkg.Error == nil && len(pkg.GoFiles)+len(pkg.CgoFiles) > 0 {
+			withTests.Internal.TestVariantOf = pkg
+		}
+	}
+	if member.ExtTests != nil {
+		member.ExtTests.Internal.TestInit = pkg.ImportPath
+	}
+}
+
+// TestCycle reports the import cycle a package's internal test files would
+// close, if they import a package that imports the package itself.
+func TestCycle(pkg, withTests *Package) *PackageError {
+	if withTests == nil || withTests == pkg {
+		return nil
+	}
+	return testImportCycle(withTests, pkg)
 }
 
 // aliasFor answers the import name a test function is reached through once its

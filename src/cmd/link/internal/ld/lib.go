@@ -3050,7 +3050,11 @@ func dfs(lib *sym.Library, mark map[*sym.Library]markKind, order *[]*sym.Library
 		return
 	}
 	if mark[lib] == visiting {
-		panic("found import cycle while visiting " + lib.Pkg)
+		// A test binary holding several packages' tests links each package
+		// compiled with its _test.go files, and those files import what they
+		// like: testing's import regexp, regexp's import testing. The order
+		// only lays out text, so the edge closing the cycle is dropped.
+		return
 	}
 	mark[lib] = visiting
 	for _, i := range lib.Imports {

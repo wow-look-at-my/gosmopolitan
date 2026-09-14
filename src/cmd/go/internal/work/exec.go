@@ -334,6 +334,14 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	if p.Internal.ForceLibrary {
 		fmt.Fprintf(h, "forcelibrary\n")
 	}
+	if p.Internal.TestInit != "" {
+		fmt.Fprintf(h, "testinit %q\n", p.Internal.TestInit)
+	}
+	if p.Internal.TestVariantOf != nil {
+		// The replaced package's own compile is a dependency, so its content
+		// is hashed with the others below; this says what it is used for.
+		fmt.Fprintf(h, "testvariant %q\n", p.Internal.TestVariantOf.ImportPath)
+	}
 	if len(p.CgoFiles)+len(p.SwigFiles)+len(p.SwigCXXFiles) > 0 {
 		fmt.Fprintf(h, "cgo %q\n", b.toolID("cgo"))
 		cppflags, cflags, cxxflags, fflags, ldflags, _ := b.CFlags(p)

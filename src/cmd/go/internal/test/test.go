@@ -1205,17 +1205,33 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 			continue
 		}
 		withTests, extTests, perr := load.TestVariantsFor(ld, ctx, pkgOpts, pkg, cover)
+		if perr == nil {
+			// An import cycle through the package's own test files is its
+			// error alone. Found here, it keeps the package out of the binary
+			// the others share.
+			if cycleErr := load.TestCycle(pkg, withTests); cycleErr != nil {
+				withTests.Error = cycleErr
+				withTests.Incomplete = true
+				perr = withTests
+			}
+		}
 		groups[pkg] = &testGroup{withTests: withTests, extTests: extTests, perr: perr}
 		if perr != nil {
 			continue
 		}
-		members = append(members, load.TestGroupMember{Package: pkg, WithTests: withTests, ExtTests: extTests})
+		members = append(members, load.TestGroupMember{
+			Package:   pkg,
+			WithTests: withTests,
+			ExtTests:  extTests,
+			GODEBUG:   load.TestGODEBUG(ld, pkg),
+		})
 	}
 
 	batches := load.GroupMembers(members)
-	if testC || testNeedBinary() {
-		// -c and the profile flags name a binary per package, so each one
-		// travels alone.
+	if testNeedBinary() || testC && !(testO != "" && base.IsNull(testO)) {
+		// -c and the profile flags write a binary per package, named for it,
+		// so each one travels alone. -c -o /dev/null writes nothing: it
+		// compiles, and every package compiles into the one binary.
 		batches = nil
 		for _, member := range members {
 			batches = append(batches, []load.TestGroupMember{member})

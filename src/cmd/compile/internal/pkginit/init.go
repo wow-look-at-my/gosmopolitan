@@ -27,7 +27,9 @@ func MakeTask() {
 	var deps []*obj.LSym // initTask records for packages the current package depends on
 	var fns []*obj.LSym  // functions to call for package initialization
 
-	// Find imported packages with init tasks.
+	// Find imported packages with init tasks. Under -testinit, a package
+	// only its test files import is initialized with the tests.
+	var testDeps []*obj.LSym
 	for _, pkg := range typecheck.Target.Imports {
 		n, ok := pkg.Lookup(".inittask").Def.(*ir.Name)
 		if !ok {
@@ -35,6 +37,10 @@ func MakeTask() {
 		}
 		if n.Op() != ir.ONAME || n.Class != ir.PEXTERN {
 			base.Fatalf("bad inittask: %v", n)
+		}
+		testDeps = append(testDeps, n.Linksym())
+		if noder.PlainImports != nil && !noder.PlainImports[pkg.Path] {
+			continue
 		}
 		deps = append(deps, n.Linksym())
 	}
@@ -85,16 +91,42 @@ func MakeTask() {
 		}
 	}
 
-	// Record user init functions.
-	for _, fn := range typecheck.Target.Inits {
-		if fn.Sym().Name == "init" {
+	// One schedule serves both lists: a _test.go variable may be initialized
+	// from a variable of the package, and copying it statically needs the
+	// plan made for that variable.
+	sched := &staticinit.Schedule{
+		Plans: make(map[ir.Node]*staticinit.Plan),
+		Temps: make(map[ir.Node]*ir.Name),
+	}
+	fns = initFuncs(sched, typecheck.Target.Inits)
+
+	var lsym *obj.LSym
+	if len(deps) != 0 || len(fns) != 0 || types.LocalPkg.Path == "main" || types.LocalPkg.Path == "runtime" {
+		// Make an .inittask structure.
+		sym := typecheck.Lookup(".inittask")
+		task := ir.NewNameAt(base.Pos, sym, types.Types[types.TUINT8]) // fake type
+		task.Class = ir.PEXTERN
+		sym.Def = task
+		lsym = task.Linksym()
+		writeTask(lsym, deps, fns)
+	}
+
+	if base.Flag.TestInit != "" {
+		makeTestTask(lsym, testDeps, initFuncs(sched, typecheck.Target.TestInits))
+	}
+}
+
+// initFuncs answers the functions of a list of init functions that have
+// anything to run. A synthetic function initializing package-scope variables
+// first has its static assignments turned into data.
+func initFuncs(s *staticinit.Schedule, list []*ir.Func) []*obj.LSym {
+	var fns []*obj.LSym
+	for _, fn := range list {
+		if fn.IsPackageInit() {
 			// Synthetic init function for initialization of package-scope
 			// variables. We can use staticinit to optimize away static
 			// assignments.
-			s := staticinit.Schedule{
-				Plans: make(map[ir.Node]*staticinit.Plan),
-				Temps: make(map[ir.Node]*ir.Name),
-			}
+			s.Out = nil
 			for _, n := range fn.Body {
 				s.StaticInit(n)
 			}
@@ -116,17 +148,12 @@ func MakeTask() {
 		}
 		fns = append(fns, fn.Nname.Linksym())
 	}
+	return fns
+}
 
-	if len(deps) == 0 && len(fns) == 0 && types.LocalPkg.Path != "main" && types.LocalPkg.Path != "runtime" {
-		return // nothing to initialize
-	}
-
-	// Make an .inittask structure.
-	sym := typecheck.Lookup(".inittask")
-	task := ir.NewNameAt(base.Pos, sym, types.Types[types.TUINT8]) // fake type
-	task.Class = ir.PEXTERN
-	sym.Def = task
-	lsym := task.Linksym()
+// writeTask fills an initialization record. See runtime/proc.go:initTask
+// for its layout.
+func writeTask(lsym *obj.LSym, deps, fns []*obj.LSym) {
 	ot := 0
 	ot = objw.Uint32(lsym, ot, 0) // state: not initialized yet
 	ot = objw.Uint32(lsym, ot, uint32(len(fns)))
@@ -143,4 +170,21 @@ func MakeTask() {
 	// An initTask has pointers, but none into the Go heap.
 	// It's not quite read only, the state field must be modifiable.
 	objw.Global(lsym, int32(ot), obj.NOPTR)
+}
+
+// makeTestTask writes the initialization record the tests of the -testinit
+// package run before they start: the init functions of _test.go files, after
+// every package this one imports and after this package itself. The package
+// under test names it "<path>..inittask.test", its external test package
+// "<path>..inittask.xtest"; the linker lists each package's records for the
+// runtime, which runs them for the package whose tests the binary runs.
+func makeTestTask(own *obj.LSym, deps, fns []*obj.LSym) {
+	if own != nil {
+		deps = append(deps, own)
+	}
+	name := "..inittask.test"
+	if base.Ctxt.Pkgpath != base.Flag.TestInit {
+		name = "..inittask.xtest"
+	}
+	writeTask(base.Ctxt.Lookup(objabi.PathToPrefix(base.Flag.TestInit)+name), deps, fns)
 }

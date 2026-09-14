@@ -397,6 +397,7 @@ func Main(arch *sys.Arch, theArch Arch) {
 
 	bench.Start("inittasks")
 	ctxt.inittasks()
+	ctxt.testInittasks()
 
 	bench.Start("deadcode")
 	deadcode(ctxt)

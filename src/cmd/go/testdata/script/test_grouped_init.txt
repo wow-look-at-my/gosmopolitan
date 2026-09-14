@@ -1,0 +1,90 @@
+# Packages tested together share one test binary, even when one package's
+# tests import another. What a package's _test.go files initialize belongs
+# to that package's run: it runs in that package's directory, after the
+# package itself, and never in another package's run.
+
+go test -x ./reader ./other ./lib
+stdout '^ok\s+example.com/grouped/reader'
+stdout '^ok\s+example.com/grouped/other'
+stdout '^ok\s+example.com/grouped/lib'
+stderr -count=1 'link -o'
+
+-- go.mod --
+module example.com/grouped
+
+go 1.27
+-- reader/testdata/data.txt --
+reader's own data
+-- reader/reader.go --
+package reader
+
+var Ready string
+
+func init() { Ready = "reader" }
+-- reader/reader_test.go --
+package reader
+
+import (
+	"os"
+	"testing"
+)
+
+// data reads a file relative to this package's directory as the package
+// initializes: every other package's run would fail on it.
+var data = mustRead("testdata/data.txt")
+
+func mustRead(name string) string {
+	body, err := os.ReadFile(name)
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
+}
+
+// seen is what the package's own initialization had done when the test file's
+// initialization ran.
+var seen = Ready
+
+func TestData(test *testing.T) {
+	if data != "reader's own data\n" {
+		test.Fatalf("data = %q", data)
+	}
+	if seen != "reader" {
+		test.Fatalf("the test file initialized before the package: seen %q", seen)
+	}
+}
+-- other/other_test.go --
+package other
+
+import (
+	"testing"
+
+	"example.com/grouped/lib"
+	"example.com/grouped/reader"
+)
+
+func TestOther(test *testing.T) {
+	if reader.Ready != "reader" {
+		test.Fatalf("reader.Ready = %q", reader.Ready)
+	}
+	if lib.TestFileRan {
+		test.Fatal("lib's test file initialized in other's run")
+	}
+}
+-- lib/lib.go --
+package lib
+
+// TestFileRan is set by lib's own test file as it initializes.
+var TestFileRan bool
+-- lib/lib_test.go --
+package lib
+
+import "testing"
+
+func init() { TestFileRan = true }
+
+func TestLib(test *testing.T) {
+	if !TestFileRan {
+		test.Fatal("lib's test file did not initialize in lib's run")
+	}
+}

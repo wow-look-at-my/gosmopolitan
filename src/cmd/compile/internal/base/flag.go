@@ -123,6 +123,8 @@ type CmdFlags struct {
 	Spectre            string       "help:\"enable spectre mitigations in `list` (all, index, ret)\""
 	Std                bool         "help:\"compiling standard library\""
 	SymABIs            string       "help:\"read symbol ABIs from `file`\""
+	TestInit           string       "help:\"defer initialization declared in _test.go files until the tests of `package` run\""
+	TestVariant        string       "help:\"link in place of the package in `archive`: keep its symbol indices and fingerprint\""
 	TraceProfile       string       "help:\"write an execution trace to `file`\""
 	TrimPath           string       "help:\"remove `prefix` from recorded source file paths\""
 	WB                 bool         "help:\"enable write barrier\"" // TODO: remove

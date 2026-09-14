@@ -271,7 +271,7 @@ func FindProcess(pid int) (*Process, error) {
 // If there is an error, it will be of type [*PathError].
 func StartProcess(name string, argv []string, attr *ProcAttr) (*Process, error) {
 	testlog.Open(name)
-	return startProcess(name, argv, attr)
+	return startProcess(name, argv, withTestUnit(name, attr))
 }
 
 // Release releases any resources associated with the [Process] p,

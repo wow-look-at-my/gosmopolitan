@@ -241,6 +241,8 @@ type PackageInternal struct {
 	OrigImportPath    string              // original import path before adding '_test' suffix
 	PGOProfile        string              // path to PGO profile
 	ForMain           string              // the main package if this package is built specifically for it
+	TestInit          string              // the package whose tests run this package's _test.go initialization (-testinit)
+	TestVariantOf     *Package            // the package this test variant is linked in place of (-testvariant)
 
 	Asmflags   []string // -asmflags for this package
 	Gcflags    []string // -gcflags for this package
