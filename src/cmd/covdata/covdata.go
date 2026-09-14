@@ -243,4 +243,5 @@ func Main(args []string) int {
 	}
 	dbgtrace(1, "leaving main")
 	Exit(st)
+	return st
 }

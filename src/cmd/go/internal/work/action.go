@@ -788,7 +788,7 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 	// by the install action during (*Builder).installAction.
 	buildAction := a
 	switch buildAction.Mode {
-	case "build", "built-in package", "gccgo stdlib":
+	case "build", "built-in package", "gccgo stdlib", "embedded std":
 		// ok
 	case "build-install":
 		buildAction = a.Deps[0]
@@ -1115,7 +1115,7 @@ func (b *Builder) addTransitiveLinkDeps(s *modload.Loader, a, a1 *Action, shlib 
 		a1 := workq[i]
 		for _, a2 := range a1.Deps {
 			// TODO(rsc): Find a better discriminator than the Mode strings, once the dust settles.
-			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build") || haveDep[a2.Package.ImportPath] {
+			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build" && a2.Mode != "embedded std") || haveDep[a2.Package.ImportPath] {
 				continue
 			}
 			haveDep[a2.Package.ImportPath] = true

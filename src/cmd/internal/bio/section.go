@@ -26,9 +26,9 @@ func OpenAny(name string) (*Reader, error) {
 	if !embedded.IsSelf(name) {
 		return Open(name)
 	}
-	f, offset, size, err := embedded.Open(name)
+	file, offset, size, err := embedded.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	return OpenSection(f, offset, size), nil
+	return OpenSection(file, offset, size), nil
 }

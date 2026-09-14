@@ -10,7 +10,6 @@ import (
 	"internal/buildcfg"
 	"internal/exportdata"
 	"internal/pkgbits"
-	"os"
 	pathpkg "path"
 	"runtime"
 	"strings"

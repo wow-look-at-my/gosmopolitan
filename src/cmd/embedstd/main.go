@@ -7,14 +7,12 @@
 // cosmo/arm64, the assembly headers under pkg/include, and a manifest per
 // target naming each package, its imports and its build ID. The linker's
 // -apeappend flag puts the blob past an APE's load span, and
-// internal/cosmo/embedded reads it back.
+// internal/cosmo/embedded reads it back. The go command running it, from
+// its GOROOT source tree, is the one whose archives are embedded.
 //
 // Usage:
 //
 //	go tool embedstd [-V] -o blob
-//
-// The go command that runs it is the one whose archives are embedded, from
-// its GOROOT source tree.
 package embedstd
 
 import (
@@ -26,8 +24,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
+	"strings"
 
 	"cmd/internal/objabi"
 	"internal/cosmo/embedded"
@@ -96,7 +94,7 @@ func Main(args []string) int {
 		}
 		writer.Add(embedded.ManifestEntry(name), data)
 	}
-	include := filepath.Join(runtime.GOROOT(), "pkg", "include")
+	include := filepath.Join(gorootOf(goCmd), "pkg", "include")
 	headers, err := os.ReadDir(include)
 	if err != nil {
 		log.Fatalf("reading the assembly headers: %v", err)
@@ -118,11 +116,22 @@ func Main(args []string) int {
 	return 0
 }
 
+// gorootOf answers the GOROOT the go command reads its source from.
+func gorootOf(goCmd string) string {
+	out, err := exec.Command(goCmd, "env", "GOROOT").Output()
+	if err != nil {
+		log.Fatalf("asking the go command for GOROOT: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
 func listStd(goCmd, goos, goarch string) []listed {
 	cmd := exec.Command(goCmd, "list", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=", "CGO_ENABLED=0")
+	// -trimpath, so a program built with it against these archives is the
+	// program the source tree builds with it; the tree's path is not in them.
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

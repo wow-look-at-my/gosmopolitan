@@ -304,18 +304,18 @@ type Writer struct {
 }
 
 // Add appends one entry.
-func (w *Writer) Add(name string, content []byte) {
-	w.entries = append(w.entries, Entry{Name: name, Offset: int64(w.data.Len()), Size: int64(len(content))})
-	w.data.Write(content)
+func (writer *Writer) Add(name string, content []byte) {
+	writer.entries = append(writer.entries, Entry{Name: name, Offset: int64(writer.data.Len()), Size: int64(len(content))})
+	writer.data.Write(content)
 	// Keep every entry 8-aligned so a reader may map it directly.
-	for w.data.Len()%8 != 0 {
-		w.data.WriteByte(0)
+	for writer.data.Len()%8 != 0 {
+		writer.data.WriteByte(0)
 	}
 }
 
 // WriteTo writes the blob: magic, index length, index, then the entries.
-func (w *Writer) WriteTo(out io.Writer) (int64, error) {
-	index, err := json.Marshal(w.entries)
+func (writer *Writer) WriteTo(out io.Writer) (int64, error) {
+	index, err := json.Marshal(writer.entries)
 	if err != nil {
 		return 0, err
 	}
@@ -323,10 +323,10 @@ func (w *Writer) WriteTo(out io.Writer) (int64, error) {
 		index = append(index, ' ')
 	}
 	head := int64(16 + len(index))
-	for idx := range w.entries {
-		w.entries[idx].Offset += head
+	for idx := range writer.entries {
+		writer.entries[idx].Offset += head
 	}
-	index, err = json.Marshal(w.entries)
+	index, err = json.Marshal(writer.entries)
 	if err != nil {
 		return 0, err
 	}
@@ -339,7 +339,7 @@ func (w *Writer) WriteTo(out io.Writer) (int64, error) {
 	binary.LittleEndian.PutUint64(size[:], uint64(len(index)))
 	buf.Write(size[:])
 	buf.Write(index)
-	buf.Write(w.data.Bytes())
+	buf.Write(writer.data.Bytes())
 	written, err := out.Write(buf.Bytes())
 	return int64(written), err
 }

@@ -7,6 +7,7 @@
 package work
 
 import (
+	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/str"
 	"cmd/internal/cov/covcmd"

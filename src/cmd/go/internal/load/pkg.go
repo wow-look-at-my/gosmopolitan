@@ -957,14 +957,23 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 			// manifest entry is the package.
 			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
 				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					// The manifest holds resolved imports; a source file spells a
+					// vendored one without the vendor/ prefix, and the loader
+					// resolves it again.
+					imports := make([]string, len(pkg.Imports))
+					for idx, imp := range pkg.Imports {
+						imports[idx] = strings.TrimPrefix(imp, "vendor/")
+					}
 					data.p = &build.Package{
 						Dir:        r.dir,
 						ImportPath: r.path,
 						Name:       pkg.Name,
-						Imports:    pkg.Imports,
+						Imports:    imports,
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
 					goto Happy
 				}
 			}

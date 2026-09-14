@@ -26,8 +26,9 @@ func main() {
 	if exe, err := os.Executable(); err == nil {
 		base.SetSelf(exe, selftool.Names())
 		// A GOROOT tree in the environment is built from source; without
-		// one, the standard library this binary carries is the GOROOT.
-		if os.Getenv("GOROOT") == "" && embedded.Available() {
+		// one, the standard library this binary carries is the GOROOT. A
+		// child go command inherits this executable as its GOROOT.
+		if goroot := os.Getenv("GOROOT"); (goroot == "" || goroot == exe) && embedded.Available() {
 			cfg.UseEmbeddedStd(exe)
 		}
 	}
