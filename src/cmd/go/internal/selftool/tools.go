@@ -10,7 +10,9 @@ import (
 	"cmd/asm"
 	"cmd/cgo"
 	"cmd/compile"
+	"cmd/covdata"
 	"cmd/cover"
+	"cmd/embedstd"
 	"cmd/fix"
 	"cmd/link"
 	"cmd/preprofile"
@@ -23,7 +25,9 @@ var tools = map[string]func([]string) int{
 	"asm":        asm.Main,
 	"cgo":        cgo.Main,
 	"compile":    compile.Main,
+	"covdata":    covdata.Main,
 	"cover":      cover.Main,
+	"embedstd":   embedstd.Main,
 	"fix":        fix.Main,
 	"link":       link.Main,
 	"preprofile": preprofile.Main,

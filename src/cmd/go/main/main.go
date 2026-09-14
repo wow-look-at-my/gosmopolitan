@@ -14,7 +14,9 @@ import (
 
 	gocmd "cmd/go"
 	"cmd/go/internal/base"
+	"cmd/go/internal/cfg"
 	"cmd/go/internal/selftool"
+	"internal/cosmo/embedded"
 )
 
 func main() {
@@ -23,6 +25,11 @@ func main() {
 	}
 	if exe, err := os.Executable(); err == nil {
 		base.SetSelf(exe, selftool.Names())
+		// A GOROOT tree in the environment is built from source; without
+		// one, the standard library this binary carries is the GOROOT.
+		if os.Getenv("GOROOT") == "" && embedded.Available() {
+			cfg.UseEmbeddedStd(exe)
+		}
 	}
 	gocmd.Main()
 }

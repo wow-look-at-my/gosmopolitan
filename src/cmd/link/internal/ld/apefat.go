@@ -6,8 +6,10 @@ package ld
 
 import (
 	"cmd/internal/sys"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"internal/cosmo/embedded"
 	"os"
 	"strings"
 )
@@ -96,6 +98,32 @@ func apeFatMerge(spec, outfile string) {
 	if tail != nil {
 		appendAPEFileTail(outfile, tailOff, tail)
 	}
+	if *flagApeAppend != "" {
+		appendAPEBlob(outfile, *flagApeAppend)
+	}
+}
+
+// appendAPEBlob appends the file at blobPath past everything the APE loads
+// or reads, 8-aligned, and closes the file with the trailer that
+// internal/cosmo/embedded reads to find it. Nothing maps the blob at run
+// time, and the APE keeps it through staging and an in-place exec on NT,
+// because both copy the file whole.
+func appendAPEBlob(outfile, blobPath string) {
+	blob, err := os.ReadFile(blobPath)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	if len(blob) == 0 {
+		Exitf("-apeappend: %s is empty", blobPath)
+	}
+	info, err := os.Stat(outfile)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	blobOff := (uint64(info.Size()) + 7) &^ uint64(7)
+	appendAPEFileTail(outfile, blobOff, blob)
+	trailer := embedded.EncodeTrailer(int64(blobOff), int64(len(blob)), sha256.Sum256(blob))
+	appendAPEFileTail(outfile, blobOff+uint64(len(blob)), trailer)
 }
 
 // apeCompactDebugTail builds the compact debug tail for the payloads (in

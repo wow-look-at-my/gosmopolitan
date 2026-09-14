@@ -1414,7 +1414,7 @@ var (
 	binExesIncludedInDistpack = []string{"cmd/go/main", "cmd/gofmt"}
 
 	// Keep in sync with the filter in cmd/distpack/pack.go.
-	linkedTools = []string{"asm", "cgo", "compile", "cover", "fix", "link", "preprofile", "vet"}
+	linkedTools = []string{"asm", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "preprofile", "vet"}
 
 	// Only the binaries distpack ships are installed. The tools are packages
 	// of bin/go now, so there is nothing more to install for them.

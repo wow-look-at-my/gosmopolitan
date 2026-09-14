@@ -953,6 +953,21 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					modroot = gorootSrcCmd
 				}
 			}
+			// An embedded standard package has no directory to read: its
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
+				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					data.p = &build.Package{
+						Dir:        r.dir,
+						ImportPath: r.path,
+						Name:       pkg.Name,
+						Imports:    pkg.Imports,
+						Goroot:     true,
+						Root:       cfg.GOROOT,
+					}
+					goto Happy
+				}
+			}
 			// A dependency that generates part of its own API ships a package
 			// the compiler reads as empty. Read the generated copy instead.
 			if dir := generateDir(r.dir, modroot); dir != r.dir {

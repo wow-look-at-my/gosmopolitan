@@ -730,6 +730,11 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 				a.Actor = nil
 				return a
 			}
+
+			// An embedded standard library is compiled already.
+			if cfg.EmbeddedStd {
+				return b.embeddedStdAction(a, p)
+			}
 		}
 
 		// Determine the covmeta file name.
@@ -913,6 +918,9 @@ func (b *Builder) cgoAction(p *load.Package, objdir string, deps []*Action, hasC
 // If the caller may be causing p to be installed, it is up to the caller
 // to make sure that the install depends on (runs after) vet.
 func (b *Builder) VetAction(s *modload.Loader, mode, depMode BuildMode, needFix bool, p *load.Package) *Action {
+	if cfg.EmbeddedStd && p.Standard {
+		base.Fatalf("go: %s: the standard library is embedded in this go command as compiled archives and cannot be vetted; vet it from a GOROOT source tree", p.ImportPath)
+	}
 	a := b.vetAction(s, mode, depMode, p)
 	a.VetxOnly = false
 	a.needFix = needFix

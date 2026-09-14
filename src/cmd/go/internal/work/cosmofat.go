@@ -228,6 +228,11 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	if set, explicit := cosmoPlatformSpec(); explicit {
 		args = append(args, "-apeplatforms="+set.String())
 	}
+	// GOCOSMOAPPEND names a standard library blob, written by go tool
+	// embedstd, that the merged APE carries past its load span.
+	if blob := os.Getenv("GOCOSMOAPPEND"); blob != "" {
+		args = append(args, "-apeappend="+blob)
+	}
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
 		if mode := cosmoDebugMode(); mode != "full" {

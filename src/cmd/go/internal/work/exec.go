@@ -1333,7 +1333,9 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 			vcfg.ImportMap[p1.ImportPath] = p1.ImportPath
 		}
 		if a1.built != "" {
-			vcfg.PackageFile[p1.ImportPath] = a1.built
+			// The vet tool reads its imports as files, so an archive inside
+			// this binary goes to it through the build cache.
+			vcfg.PackageFile[p1.ImportPath] = b.fileForOutsideReader(p1, a1.built)
 		}
 		if p1.Standard {
 			vcfg.Standard[p1.ImportPath] = true
