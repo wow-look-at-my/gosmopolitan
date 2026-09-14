@@ -5,17 +5,14 @@
 // Package orgmod describes the modules that cmd/go resolves from a branch head
 // instead of from the version token recorded in a go.mod file.
 //
-// A module under Prefix has no version of its own. Every require line naming
+// A module under Prefix has no version of its own: every require line naming
 // one carries a placeholder, and the go command replaces that placeholder in
-// memory with the pseudo-version of the head of a branch: the main module's
-// checked-out branch when the dependency's repository has a branch of that
-// name, and the dependency's default branch otherwise.
-//
-// The version a require line carries is therefore inert, which is why the
-// token can be edited by hand, by a released toolchain, or by a formatter
-// without changing the build. A repository publishes a set of modules and
-// pins them to one another; resolving at a repository rather than at a module
-// keeps that set on one commit, where a version tree cannot.
+// memory with the pseudo-version of the head of a branch. The version a require
+// line carries is therefore inert, which is why the token can be edited by
+// hand, by a released toolchain, or by a formatter without changing the build.
+// A repository publishes a set of modules and pins them to one another;
+// resolving at a repository rather than at a module keeps that set on one
+// commit, where a version tree cannot.
 package orgmod
 
 import (

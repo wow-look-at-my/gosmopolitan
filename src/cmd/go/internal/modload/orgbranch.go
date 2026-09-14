@@ -29,11 +29,9 @@ import (
 // follow and so takes the default branch.
 //
 // The resolved version lands in the root list and in every loaded go.mod
-// summary, so the module graph, the build list and the module cache all see it
-// and MVS can compare it against the requirements of other modules. The files
-// on disk keep the placeholder: a writer emits the placeholder (see
-// orgmod.Placeholder), so a repository can be edited, formatted or tidied
-// without recording a commit that freezes one repository against another.
+// summary, so the module graph, the build list and the module cache all see it,
+// and the files on disk keep the placeholder. A build from a branch head is
+// still attributable, through go list -m and go version -m.
 
 // orgDefaultRev is the revision that names a repository's default branch.
 // git resolves HEAD at the remote to the head of the default branch, so one

@@ -2,12 +2,10 @@
 # org-unpinned.sh FILE... -- refuse a frozen version of an org dependency.
 #
 # 1. A submodule under github.com/wow-look-at-my names a branch to follow,
-#    which src/submodulebranch.bash hands to
-#    `git submodule update --init --remote`.
-# 2. A line naming an org module carries no dated version. go.mod,
+#    which src/submodulebranch.bash hands to `git submodule update --remote`.
+# 2. A line naming an org module carries no dated version: go.mod,
 #    vendor/modules.txt and go.sum hold the placeholder `vN.0.0` for the
-#    path's major (v0.0.0, or v2.0.0 for a /v2 path), and cmd/go resolves it
-#    to the branch head in memory. See cmd/go/internal/orgmod.
+#    path's major, and cmd/go resolves it to the branch head in memory.
 # 3. A step that `uses:` an org action takes a branch, never a tag or a sha.
 #
 # Exit: 0 nothing is pinned, 2 something is.

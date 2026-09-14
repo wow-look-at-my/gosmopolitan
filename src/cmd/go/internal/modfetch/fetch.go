@@ -770,8 +770,7 @@ func checkGoMod(f *Fetcher, path, version string, data []byte) error {
 // mod.Version may have the additional suffix "/go.mod" to request the checksum
 // for the module's go.mod file only.
 //
-// An org module has no checksum: the git commit it resolves to is the
-// integrity check, so there is nothing to verify and nothing to record.
+// An org module has no checksum to verify or record: its commit is the check.
 func checkModSum(f *Fetcher, mod module.Version, h string) error {
 	if orgmod.IsOrg(mod.Path) {
 		return nil
