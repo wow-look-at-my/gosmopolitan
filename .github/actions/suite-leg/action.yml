@@ -73,7 +73,11 @@ runs:
       # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
       if: runner.os != 'Windows'
       shell: bash
-      run: cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
+      run: |
+        sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
+        probe=$!
+        trap 'kill "$probe"' EXIT
+        cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
