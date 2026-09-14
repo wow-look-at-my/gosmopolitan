@@ -15,23 +15,9 @@ import (
 // the host. Apple's are far bigger than the Linux ones this package
 // exposes - struct statfs is 2168 bytes against 120, and struct utsname
 // 1280 against 390 - and too big to build inside the nosplit syscall
-// emulation. So the Apple-layout buffer is allocated here, where
-// allocation is legal, and converted on the way back. A Linux host takes
-// the generated wrapper unchanged.
-
-func Statfs(path string, buf *Statfs_t) (err error) {
-	if cosmo.Darwin() {
-		return darwinStatfsPath(path, buf)
-	}
-	return statfs(path, buf)
-}
-
-func Fstatfs(fd int, buf *Statfs_t) (err error) {
-	if cosmo.Darwin() {
-		return darwinStatfsFd(fd, buf)
-	}
-	return fstatfs(fd, buf)
-}
+// emulation. So the Apple-layout buffer is allocated in this package,
+// where allocation is legal, and converted on the way back. A Linux host
+// takes the generated wrapper unchanged.
 
 func Uname(buf *Utsname) (err error) {
 	if cosmo.Darwin() {
@@ -40,35 +26,62 @@ func Uname(buf *Utsname) (err error) {
 	return uname(buf)
 }
 
-// The size argument is not decoration. Both emulations refuse a buffer
-// smaller than the Apple struct - arm64 in Go, amd64 with a compare
-// ahead of the raw XNU call - so a caller that reached SYS_STATFS with a
-// Linux Statfs_t is refused instead of overrun.
+// darwinStatfsSize is the size of Apple's struct statfs. Both emulations
+// refuse a buffer smaller than this - arm64 in Go, amd64 with a compare
+// ahead of the raw XNU call - so a statfs that reaches either of them
+// with a Linux Statfs_t is refused instead of overrun.
+const darwinStatfsSize = unsafe.Sizeof(cosmo.DarwinStatfs{})
 
-func darwinStatfsPath(path string, buf *Statfs_t) (err error) {
-	p, err := BytePtrFromString(path)
-	if err != nil {
-		return err
-	}
-	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_STATFS, uintptr(unsafe.Pointer(p)),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
-	}
-	darwinStatfsToLinux(buf, &ast)
-	return nil
+// darwinLinuxStatfs reports whether a Syscall or Syscall6 is a statfs or
+// fstatfs made with a Linux Statfs_t, the shape every caller of the raw
+// syscall uses: this package's own Statfs and Fstatfs, and
+// golang.org/x/sys/unix, which issues Syscall(SYS_STATFS, path, buf, 0)
+// itself. The Linux syscall takes two arguments, so a3 is zero there.
+// darwinStatfsInto passes the Apple buffer's size in a3, which is how its
+// own call gets through to the emulation.
+//
+//go:nosplit
+func darwinLinuxStatfs(trap, a3 uintptr) bool {
+	return cosmo.Darwin() && (trap == SYS_STATFS || trap == SYS_FSTATFS) && a3 < darwinStatfsSize
 }
 
-func darwinStatfsFd(fd int, buf *Statfs_t) (err error) {
+// darwinStatfsLinux serves a statfs or fstatfs for a Linux Statfs_t on a
+// macOS host. Syscall and Syscall6 call it before entersyscall, where
+// the Apple buffer can still be allocated.
+//
+// The caller's buffer and path may live on the caller's stack, and
+// darwinStatfsInto can grow that stack. So both are turned into pointers
+// here, in a nosplit function, before anything can move them: the stack
+// copier adjusts a pointer and leaves a uintptr pointing at the old copy.
+// An fstatfs descriptor stays a uintptr, because a small integer in a
+// pointer slot is an invalid pointer to the stack copier.
+//
+//go:nosplit
+func darwinStatfsLinux(trap, a1, a2 uintptr) (r1, r2 uintptr, err Errno) {
+	buf := (*Statfs_t)(unsafe.Pointer(a2))
+	if trap == SYS_STATFS {
+		return darwinStatfsInto(trap, 0, unsafe.Pointer(a1), buf)
+	}
+	return darwinStatfsInto(trap, a1, nil, buf)
+}
+
+// darwinStatfsInto runs statfs (path set) or fstatfs (fd) into an Apple
+// struct statfs and converts the result into buf.
+func darwinStatfsInto(trap, fd uintptr, path unsafe.Pointer, buf *Statfs_t) (r1, r2 uintptr, err Errno) {
+	if buf == nil {
+		return ^uintptr(0), 0, EFAULT
+	}
 	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_FSTATFS, uintptr(fd),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
+	if path != nil {
+		r1, r2, err = Syscall(trap, uintptr(path), uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	} else {
+		r1, r2, err = Syscall(trap, fd, uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	}
+	if err != 0 {
+		return r1, r2, err
 	}
 	darwinStatfsToLinux(buf, &ast)
-	return nil
+	return r1, r2, 0
 }
 
 // Apple mount flags (sys/mount.h) and the Linux statfs f_flags bits
