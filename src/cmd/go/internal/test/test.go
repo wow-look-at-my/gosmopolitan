@@ -1373,6 +1373,34 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		}
 
 		a.Target = testDir + groupBinary + cfg.ExeSuffix
+
+		if len(group.members) > 1 {
+			// A package whose tests fail to compile leaves the binary: its
+			// run reports the failure, and every other package still runs.
+			// The generated main is compiled again without it, and the link
+			// takes the package itself where it took the package's tests.
+			compile := a.Deps[0]
+			units := make(map[*work.Action]string)
+			for _, member := range group.members {
+				for _, variant := range testVariantCompiles(b, groups[member]) {
+					units[variant] = member.ImportPath
+				}
+			}
+			// The compile looks its result up in the cache in an action of
+			// its own, which hashes the source, so that one renders it.
+			steps := []*work.Action{compile}
+			for _, dep := range compile.Deps {
+				if dep.Package == testMain {
+					steps = append(steps, dep)
+				}
+			}
+			for _, step := range steps {
+				step.IgnoreFail = true
+				step.Actor = &testmainCompileActor{inner: step.Actor, testMain: testMain, units: units, file: testDir + "_testmain.go"}
+			}
+			a.IgnoreFail = true
+			a.Actor = &testLinkActor{inner: a.Actor}
+		}
 	}
 	if cfg.Goos == "windows" {
 		// There are many reserved words on Windows that,
@@ -1447,6 +1475,9 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 				Package: testMain,
 				Target:  target,
 			}
+			// The binary links even when this package's tests do not
+			// compile, and then this package gets no copy of it.
+			installAction.Deps = append(installAction.Deps, testVariantCompiles(b, group)...)
 			runAction = installAction // make sure runAction != nil even if not running test
 		}
 	}
@@ -1478,6 +1509,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		rta := &runTestActor{
 			shared:            len(group.members) > 1,
 			writeCoverMetaAct: writeCoverMetaAct,
+			variants:          testVariantCompiles(b, group),
 		}
 		rta.c.unitDigest = group.digest
 		runAction = &work.Action{
@@ -1594,6 +1626,11 @@ type runTestActor struct {
 	// more details.
 	writeCoverMetaAct *work.Action
 
+	// variants are the compiles of the package's test packages. When one
+	// fails, the shared binary is linked without the package, and its run
+	// reports the build failure.
+	variants []*work.Action
+
 	// sequencing of json start messages, to preserve test order
 	prev <-chan struct{} // wait to start until prev is closed
 	next chan<- struct{} // close next once the next test can start.
@@ -1704,6 +1741,11 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// Release next test to start (test2json.NewConverter writes the start event).
 	close(r.next)
 
+	for _, variant := range r.variants {
+		if a.Failed == nil && variant.Failed != nil {
+			a.Failed = variant.Failed
+		}
+	}
 	if a.Failed != nil {
 		// We were unable to build the binary.
 		if json != nil && a.Failed.Package != nil {
@@ -2539,6 +2581,100 @@ func (actor *cleanTestActor) Act(b *work.Builder, ctx context.Context, a *work.A
 	}
 	b.Shell(a).RemoveAll(a.Objdir)
 	return nil
+}
+
+// testVariantCompiles answers the compiles of a package's test packages that
+// the generated main imports: the package with its _test.go files, and its
+// external test package.
+func testVariantCompiles(b *work.Builder, group *testGroup) []*work.Action {
+	var compiles []*work.Action
+	if withTests := group.withTests; withTests != nil && len(withTests.GoFiles)+len(withTests.CgoFiles) > 0 {
+		compiles = append(compiles, b.CompileAction(work.ModeBuild, work.ModeBuild, withTests))
+	}
+	if group.extTests != nil {
+		compiles = append(compiles, b.CompileAction(work.ModeBuild, work.ModeBuild, group.extTests))
+	}
+	return compiles
+}
+
+// testmainCompileActor runs a step of compiling the generated main of a binary
+// holding several packages' tests. When the tests of some of them failed to
+// compile, the main is rendered and compiled without their units, and the rest
+// still link and run. Any other failed import fails it as it would any compile.
+type testmainCompileActor struct {
+	inner    work.Actor
+	testMain *load.Package
+	units    map[*work.Action]string // a member's test package compile, to its unit
+	file     string                  // the generated main's source
+}
+
+func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
+	drop := make(map[string]bool)
+	for _, dep := range a.Deps {
+		if dep.Failed == nil || dep.Package == nil {
+			continue // an action of no package only orders the ones that build
+		}
+		unit, isMember := actor.units[dep]
+		if !isMember {
+			return nil // a.Failed stays, as the failed import left it
+		}
+		drop[unit] = true
+	}
+	if len(drop) > 0 {
+		content, err := load.RenderTestmainWithout(actor.testMain, drop)
+		if err != nil {
+			return nil // every package's tests failed: nothing is left to link
+		}
+		if !cfg.BuildN {
+			if err := os.WriteFile(actor.file, content, 0666); err != nil {
+				return err
+			}
+		}
+	}
+	a.Failed = nil
+	return actor.inner.Act(b, ctx, a)
+}
+
+// testLinkActor links a binary holding several packages' tests. A package
+// whose tests failed to compile is linked as itself, in the place its tests
+// held, and a test package that failed is left out.
+type testLinkActor struct {
+	inner work.Actor
+}
+
+func (actor *testLinkActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
+	if a.Deps[0].Failed != nil {
+		return nil // the generated main did not compile
+	}
+	seen := make(map[*work.Action]bool)
+	kept := make([]*work.Action, 0, len(a.Deps))
+	keep := func(dep *work.Action) {
+		if !seen[dep] {
+			seen[dep] = true
+			kept = append(kept, dep)
+		}
+	}
+	for _, dep := range a.Deps {
+		if dep.Failed == nil {
+			keep(dep)
+			continue
+		}
+		if dep.Package == nil {
+			continue // an action of no package only orders the ones that build
+		}
+		replaced := dep.Package.Internal.TestVariantOf
+		if replaced == nil {
+			continue
+		}
+		for _, dep2 := range dep.Deps {
+			if dep2.Package == replaced && dep2.Mode == "build" && dep2.Failed == nil {
+				keep(dep2)
+			}
+		}
+	}
+	a.Deps = kept
+	a.Failed = nil
+	return actor.inner.Act(b, ctx, a)
 }
 
 // copyTestBinary writes a copy of the linked test binary to a.Target. Several

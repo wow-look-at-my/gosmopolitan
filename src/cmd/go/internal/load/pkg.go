@@ -244,6 +244,7 @@ type PackageInternal struct {
 	TestInit          string              // the package whose tests run this package's _test.go initialization (-testinit)
 	TestVariantOf     *Package            // the package this test variant is linked in place of (-testvariant)
 	TestStartup       []string            // the only imports initialized before this test main; the rest wait for their tests (-teststartup)
+	testmainData      *testMainData       // what TestmainGo was rendered from, for a binary holding several packages' tests
 
 	Asmflags   []string // -asmflags for this package
 	Gcflags    []string // -gcflags for this package

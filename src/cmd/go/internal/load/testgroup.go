@@ -258,12 +258,14 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		}
 	}
 
-	content, err := renderTestmain(testMainData{Units: units, Cover: cover})
+	data := &testMainData{Units: units, Cover: cover, Grouped: len(units) > 1}
+	content, err := renderTestmain(*data)
 	if err != nil && testMain.Error == nil {
 		testMain.Error = &PackageError{Err: err}
 		testMain.Incomplete = true
 	}
 	testMain.Internal.TestmainGo = &content
+	testMain.Internal.testmainData = data
 
 	// Key by UnitID, never by ImportPath. ImportPath is what testdeps reports,
 	// and it is EMPTY for command-line-arguments and for a package outside a

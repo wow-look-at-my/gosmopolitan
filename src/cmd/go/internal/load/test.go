@@ -714,6 +714,31 @@ type testMainData struct {
 	Cover                 *TestCover
 	Covered               string
 	CoverSelectedPackages string
+
+	// Grouped says the binary is built to hold several units, and picks
+	// one by -test.unit. It stays so when only one of them is left.
+	Grouped bool
+}
+
+// RenderTestmainWithout renders the generated main of a binary holding
+// several packages' tests again, without the units of the packages in drop.
+// Those packages' tests failed to build, and the rest still run.
+func RenderTestmainWithout(testMain *Package, drop map[string]bool) ([]byte, error) {
+	data := testMain.Internal.testmainData
+	if data == nil {
+		return nil, fmt.Errorf("%s: no generated main to render again", testMain.ImportPath)
+	}
+	kept := *data
+	kept.Units = nil
+	for _, unit := range data.Units {
+		if !drop[unit.UnitID] {
+			kept.Units = append(kept.Units, unit)
+		}
+	}
+	if len(kept.Units) == 0 {
+		return nil, fmt.Errorf("no package's tests in %s built", testMain.ImportPath)
+	}
+	return renderTestmain(kept)
 }
 
 // formatTestmain returns the content of the _testmain.go file for t, in a
@@ -998,7 +1023,7 @@ var testmainTmpl = lazytemplate.New("main", `
 package main
 
 import (
-{{if gt (len .Units) 1}}
+{{if .Grouped}}
 	"fmt"
 {{end}}
 	"os"
@@ -1075,7 +1100,7 @@ var units = []testUnit{
 {{end}}
 }
 
-{{if gt (len .Units) 1}}
+{{if .Grouped}}
 // unitFlag names the package whose tests this process runs. The go command
 // passes it when one binary holds more than one package.
 const unitFlag = "-test.unit="
