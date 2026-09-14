@@ -741,8 +741,9 @@ func runInstall(pkg string, ch chan struct{}) {
 
 	// ispkg predicts whether the package should be linked as a binary, based
 	// on the name. There should be no "main" packages in vendor, since
-	// 'go mod vendor' will only copy imported packages there.
-	ispkg := !strings.HasPrefix(pkg, "cmd/") || strings.Contains(pkg, "/internal/") || strings.Contains(pkg, "/vendor/")
+	// 'go mod vendor' will only copy imported packages there. cmd/go is the
+	// go command as a library; cmd/go/main is the binary.
+	ispkg := pkg != "cmd/go/main" && (pkg == "cmd/go" || !strings.HasPrefix(pkg, "cmd/") || strings.Contains(pkg, "/internal/") || strings.Contains(pkg, "/vendor/"))
 
 	// Start final link command line.
 	// Note: code below knows that link.p[targ] is the target.
@@ -760,7 +761,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	} else {
 		// Go command.
 		elem := name
-		if elem == "go" {
+		if pkg == "cmd/go/main" {
 			elem = "go_bootstrap"
 		}
 		link = []string{pathf("%s/link", tooldir)}
@@ -999,7 +1000,7 @@ func runInstall(pkg string, ch chan struct{}) {
 	// For packages containing assembly, this writes go_asm.h, which
 	// the assembly files will need.
 	pkgName := pkg
-	if strings.HasPrefix(pkg, "cmd/") && strings.Count(pkg, "/") == 1 {
+	if !ispkg {
 		pkgName = "main"
 	}
 	b := pathf("%s/_go_.a", workdir)
@@ -1157,7 +1158,7 @@ func shouldbuild(file, pkg string) bool {
 		if code == "package documentation" {
 			return false
 		}
-		if code == "package main" && pkg != "cmd/go" && pkg != "cmd/cgo" {
+		if code == "package main" && pkg != "cmd/go/main" {
 			return false
 		}
 		if !strings.HasPrefix(p, "//") {
@@ -1404,20 +1405,40 @@ func toolenv() []string {
 }
 
 var (
-	toolchain = []string{"cmd/asm", "cmd/cgo", "cmd/compile", "cmd/link", "cmd/preprofile"}
+	// The toolchain is one binary: the go command links the compiler, linker,
+	// assembler, cgo, cover, vet, fix and preprofile, and bin/go is where it
+	// installs. linkedTools names the pkg/tool entries that point at it.
+	toolchain = []string{"cmd/go/main"}
 
 	// Keep in sync with binExes in cmd/distpack/pack.go.
-	binExesIncludedInDistpack = []string{"cmd/go", "cmd/gofmt"}
+	binExesIncludedInDistpack = []string{"cmd/go/main", "cmd/gofmt"}
 
 	// Keep in sync with the filter in cmd/distpack/pack.go.
-	toolsIncludedInDistpack = []string{"cmd/asm", "cmd/cgo", "cmd/compile", "cmd/cover", "cmd/fix", "cmd/link", "cmd/preprofile", "cmd/vet"}
+	linkedTools = []string{"asm", "cgo", "compile", "covdata", "cover", "embedstd", "fix", "link", "preprofile", "vet"}
 
-	// We could install all tools in "cmd", but is unnecessary because we will
-	// remove them in distpack, so instead install the tools that will actually
-	// be included in distpack, which is a superset of toolchain. Not installing
-	// the tools will help us test what happens when the tools aren't present.
-	toolsToInstall = slices.Concat(binExesIncludedInDistpack, toolsIncludedInDistpack)
+	// Only the binaries distpack ships are installed. The tools are packages
+	// of bin/go now, so there is nothing more to install for them.
+	toolsToInstall = binExesIncludedInDistpack
 )
+
+// linkTools points every pkg/tool/<host>/<name> that bin/go links at bin/go,
+// so a caller that starts a tool by its path, or a go command carrying no
+// tools such as go_bootstrap, runs the one in bin/go. A symlink where the
+// host has them, a copy on Windows.
+func linkTools() {
+	goBin := pathf("%s/bin/go%s", goroot, exe)
+	for _, name := range linkedTools {
+		dst := pathf("%s/%s%s", tooldir, name, exe)
+		xremove(dst)
+		if gohostos == "windows" {
+			copyfile(dst, goBin, writeExec)
+			continue
+		}
+		if err := os.Symlink("../../../bin/go", dst); err != nil {
+			fatalf("linking %s to bin/go: %v", dst, err)
+		}
+	}
+}
 
 // The bootstrap command runs a build from scratch,
 // stopping at having installed the go_bootstrap command.
@@ -1522,7 +1543,7 @@ func cmdbootstrap() {
 	xprintf("Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.\n")
 	install("runtime")     // dependency not visible in sources; also sets up textflag.h
 	install("time/tzdata") // no dependency in sources; creates generated file
-	install("cmd/go")
+	install("cmd/go/main")
 	if vflag > 0 {
 		xprintf("\n")
 	}
@@ -1562,6 +1583,7 @@ func cmdbootstrap() {
 	os.Setenv("GOEXPERIMENT", goexperiment)
 	// No need to enable PGO for toolchain2.
 	goInstall(toolenv(), goBootstrap, append([]string{"-pgo=off"}, toolchain...)...)
+	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
 		copyfile(pathf("%s/compile2", tooldir), pathf("%s/compile", tooldir), writeExec)
@@ -1596,6 +1618,7 @@ func cmdbootstrap() {
 	// as the go command is concerned and what depends on it rebuilds because
 	// it is genuinely out of date. -a only added the packages that were not.
 	goInstall(toolenv(), goBootstrap, toolchain...)
+	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
 		copyfile(pathf("%s/compile3", tooldir), pathf("%s/compile", tooldir), writeExec)
@@ -1631,6 +1654,7 @@ func cmdbootstrap() {
 		}
 		xprintf("Building commands for host, %s/%s.\n", goos, goarch)
 		goInstall(toolenv(), goBootstrap, toolsToInstall...)
+		linkTools()
 		checkNotStale(toolenv(), goBootstrap, toolsToInstall...)
 		checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
 
@@ -1655,9 +1679,11 @@ func cmdbootstrap() {
 	// The two drivers must agree on every action ID, or bin/go writes entries
 	// go_bootstrap cannot use. The checkNotStale calls below assert exactly
 	// that: go_bootstrap must find nothing stale in what bin/go just installed.
-	goInstall(toolenv(), goBootstrap, "cmd/go")
+	goInstall(toolenv(), goBootstrap, "cmd/go/main")
+	linkTools()
 	goInstall(nil, gorootBinGo, "std")
 	goInstall(toolenv(), gorootBinGo, toolsToInstall...)
+	linkTools()
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
 	checkNotStale(toolenv(), goBootstrap, toolsToInstall...)

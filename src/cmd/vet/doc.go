@@ -80,4 +80,4 @@ Core flags:
 	-json
 	  	emit analysis diagnostics (and errors) in JSON format
 */
-package main
+package vet

@@ -10,7 +10,6 @@ import (
 	"internal/buildcfg"
 	"internal/exportdata"
 	"internal/pkgbits"
-	"os"
 	pathpkg "path"
 	"runtime"
 	"strings"
@@ -58,23 +57,23 @@ func islocalname(name string) bool {
 		strings.HasPrefix(name, "../") || name == ".."
 }
 
-func openPackage(path string) (*os.File, error) {
+func openPackage(path string) (*bio.Reader, error) {
 	if islocalname(path) {
 		if base.Flag.NoLocalImports {
 			return nil, errors.New("local imports disallowed")
 		}
 
 		if base.Flag.Cfg.PackageFile != nil {
-			return os.Open(base.Flag.Cfg.PackageFile[path])
+			return bio.OpenAny(base.Flag.Cfg.PackageFile[path])
 		}
 
 		// try .a before .o.  important for building libraries:
 		// if there is an array.o in the array.a library,
 		// want to find all of array.a, not just array.o.
-		if file, err := os.Open(fmt.Sprintf("%s.a", path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s.a", path)); err == nil {
 			return file, nil
 		}
-		if file, err := os.Open(fmt.Sprintf("%s.o", path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s.o", path)); err == nil {
 			return file, nil
 		}
 		return nil, errors.New("file not found")
@@ -88,14 +87,14 @@ func openPackage(path string) (*os.File, error) {
 	}
 
 	if base.Flag.Cfg.PackageFile != nil {
-		return os.Open(base.Flag.Cfg.PackageFile[path])
+		return bio.OpenAny(base.Flag.Cfg.PackageFile[path])
 	}
 
 	for _, dir := range base.Flag.Cfg.ImportDirs {
-		if file, err := os.Open(fmt.Sprintf("%s/%s.a", dir, path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s/%s.a", dir, path)); err == nil {
 			return file, nil
 		}
-		if file, err := os.Open(fmt.Sprintf("%s/%s.o", dir, path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s/%s.o", dir, path)); err == nil {
 			return file, nil
 		}
 	}
@@ -112,10 +111,10 @@ func openPackage(path string) (*os.File, error) {
 			suffix = "_asan"
 		}
 
-		if file, err := os.Open(fmt.Sprintf("%s/pkg/%s_%s%s/%s.a", buildcfg.GOROOT, buildcfg.GOOS, buildcfg.GOARCH, suffix, path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s/pkg/%s_%s%s/%s.a", buildcfg.GOROOT, buildcfg.GOOS, buildcfg.GOARCH, suffix, path)); err == nil {
 			return file, nil
 		}
-		if file, err := os.Open(fmt.Sprintf("%s/pkg/%s_%s%s/%s.o", buildcfg.GOROOT, buildcfg.GOOS, buildcfg.GOARCH, suffix, path)); err == nil {
+		if file, err := bio.Open(fmt.Sprintf("%s/pkg/%s_%s%s/%s.o", buildcfg.GOROOT, buildcfg.GOOS, buildcfg.GOARCH, suffix, path)); err == nil {
 			return file, nil
 		}
 	}
@@ -216,7 +215,7 @@ func readImportFile(path string, target *ir.Package, env *types2.Context, packag
 	}
 
 	if base.Debug.Export != 0 {
-		fmt.Printf("importing %s (%s)\n", path, f.Name())
+		fmt.Printf("importing %s (%s)\n", path, f.File().Name())
 	}
 
 	pr := pkgbits.NewPkgDecoder(pkg1.Path, data)
@@ -230,8 +229,7 @@ func readImportFile(path string, target *ir.Package, env *types2.Context, packag
 }
 
 // readExportData returns the contents of GC-created unified export data.
-func readExportData(f *os.File) (data string, err error) {
-	r := bio.NewReader(f)
+func readExportData(r *bio.Reader) (data string, err error) {
 
 	sz, err := exportdata.FindPackageDefinition(r.Reader)
 	if err != nil {

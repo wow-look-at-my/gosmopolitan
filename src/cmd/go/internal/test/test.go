@@ -741,7 +741,7 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 	work.BuildInit(moduleLoader)
 	work.VetFlags = testVet.flags
 	work.VetExplicit = testVet.explicit
-	work.VetTool = base.Tool("vet")
+	work.VetTool = base.ToolCmd("vet")
 
 	pkgOpts := load.PackageOpts{ModResolveTests: true}
 	pkgs = load.PackagesAndErrors(moduleLoader, ctx, pkgOpts, pkgArgs)

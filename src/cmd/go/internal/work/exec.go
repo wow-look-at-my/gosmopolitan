@@ -855,7 +855,7 @@ func (b *Builder) build(ctx context.Context, a *Action) (err error) {
 			sfiles = nil
 		}
 
-		outGo, outObj, err := b.processCgoOutputs(a, runCgoPr, base.Tool("cgo"), objdir)
+		outGo, outObj, err := b.processCgoOutputs(a, runCgoPr, base.ToolCmd("cgo"), objdir)
 
 		if err != nil {
 			return err
@@ -1333,7 +1333,9 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 			vcfg.ImportMap[p1.ImportPath] = p1.ImportPath
 		}
 		if a1.built != "" {
-			vcfg.PackageFile[p1.ImportPath] = a1.built
+			// The vet tool reads its imports as files, so an archive inside
+			// this binary goes to it through the build cache.
+			vcfg.PackageFile[p1.ImportPath] = fileForOutsideReader(p1, a1.built)
 		}
 		if p1.Standard {
 			vcfg.Standard[p1.ImportPath] = true
@@ -1341,10 +1343,11 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 	}
 }
 
-// VetTool is the path to the effective vet or fix tool binary.
-// The user may specify a non-default value using -{vet,fix}tool.
-// The caller is expected to set it (if needed) before executing any vet actions.
-var VetTool string
+// VetTool is the command line that starts the effective vet or fix tool,
+// before the tool's own arguments. The user may specify a non-default value
+// using -{vet,fix}tool. The caller is expected to set it (if needed) before
+// executing any vet actions.
+var VetTool []string
 
 // VetFlags are the default flags to pass to vet.
 // The caller is expected to set them before executing any vet actions.
@@ -1415,7 +1418,7 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 	// it functions as a consistent early-warning system for
 	// changes to analyzers (as opposed to changes in the target
 	// packages, which is the purpose of this logic).
-	if a.Package.Goroot && !VetExplicit && VetTool == base.Tool("vet") {
+	if a.Package.Goroot && !VetExplicit && slices.Equal(VetTool, base.ToolCmd("vet")) {
 		// Turn off -unsafeptr checks.
 		// There's too much unsafe.Pointer code
 		// that vet doesn't like in low-level packages
@@ -1525,7 +1528,7 @@ cachemiss:
 
 	p := a.Package
 	tool := VetTool
-	if tool == "" {
+	if len(tool) == 0 {
 		panic("VetTool unset")
 	}
 
@@ -2164,12 +2167,12 @@ func (b *Builder) cover(a *Action, infiles, outfiles []string, varName string, m
 	if err := b.writeCoverPkgInputs(a, pkgcfg, covoutputs, outfiles); err != nil {
 		return nil, err
 	}
-	args := []string{base.Tool("cover"),
+	args := append(base.ToolCmd("cover"),
 		"-pkgcfg", pkgcfg,
 		"-mode", mode,
 		"-var", varName,
 		"-outfilelist", covoutputs,
-	}
+	)
 	args = append(args, infiles...)
 	if err := b.Shell(a).run(a.Objdir, "", nil,
 		cfg.BuildToolexec, args); err != nil {
@@ -3006,7 +3009,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 		cgofiles = append(cgofiles, outGo...)
 	}
 
-	cgoExe := base.Tool("cgo")
+	cgoExe := base.ToolCmd("cgo")
 	cgofiles = mkAbsFiles(p.Dir, cgofiles)
 
 	cgoCPPFLAGS, cgoCFLAGS, cgoCXXFLAGS, cgoFFLAGS, cgoLDFLAGS, err := b.CFlags(p)
@@ -3168,7 +3171,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 	return nil
 }
 
-func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, cgoExe, objdir string) (outGo, outObj []string, err error) {
+func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, cgoExe []string, objdir string) (outGo, outObj []string, err error) {
 	outGo = slices.Clip(runCgoProvider.goFiles)
 
 	// TODO(matloob): Pretty much the only thing this function is doing is
@@ -3330,7 +3333,7 @@ func flagsNotCompatibleWithInternalLinking(sourceList []string, flagListList [][
 // dynamically imported by the object files outObj.
 // dynOutGo, if not empty, is a new Go file to build as part of the package.
 // dynOutObj, if not empty, is a new file to add to the generated archive.
-func (b *Builder) dynimport(a *Action, objdir, importGo, cgoExe string, cflags, cgoLDFLAGS, outObj []string) (dynOutGo, dynOutObj string, err error) {
+func (b *Builder) dynimport(a *Action, objdir, importGo string, cgoExe, cflags, cgoLDFLAGS, outObj []string) (dynOutGo, dynOutObj string, err error) {
 	p := a.Package
 	sh := b.Shell(a)
 

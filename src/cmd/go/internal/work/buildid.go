@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func contentID(buildID string) string {
 // tool IDs do not make it impossible.)
 func (b *Builder) toolID(name string) string {
 	return b.toolIDCache.Do(name, func() string {
-		path := base.Tool(name)
+		path := base.ToolCmd(name)
 		desc := "go tool " + name
 
 		// Special case: -{vet,fix}tool overrides usual cmd/{vet,fix}
@@ -154,7 +155,7 @@ func (b *Builder) toolID(name string) string {
 		// (We use only "vet" terminology in the action graph.)
 		if name == "vet" {
 			path = VetTool
-			desc = VetTool
+			desc = strings.Join(VetTool, " ")
 		}
 
 		cmdline := str.StringList(cfg.BuildToolexec, path, "-V=full")
@@ -170,7 +171,7 @@ func (b *Builder) toolID(name string) string {
 		}
 
 		line := stdout.String()
-		id, ok := parseToolID(name, path == VetTool, line)
+		id, ok := parseToolID(name, name == "vet", line)
 		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
@@ -179,13 +180,28 @@ func (b *Builder) toolID(name string) string {
 		// empty tool ID is one every such binary shares, and a build cache
 		// then serves objects across incompatible compilers. Hash the file.
 		if id == "" {
-			id = b.fileHash(path)
+			id = b.fileHash(path[0])
 			if id == "" {
 				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
 			}
 		}
+		// vet and fix are one binary here, so their content IDs agree and a
+		// fix run would read vet's cached output. The tool's name tells them
+		// apart, and it is a name rather than a path so the key travels.
+		if name == "vet" {
+			id = toolWord(path) + " " + id
+		}
 		return id
 	})
+}
+
+// toolWord answers the name a tool command line runs: the word after "tool"
+// for a linked tool, else the program's base name without its suffix.
+func toolWord(cmdline []string) string {
+	if len(cmdline) >= 3 && cmdline[len(cmdline)-2] == "tool" {
+		return cmdline[len(cmdline)-1]
+	}
+	return strings.TrimSuffix(filepath.Base(cmdline[len(cmdline)-1]), cfg.ToolExeSuffix())
 }
 
 // parseToolID computes the tool ID from one line of "-V=full" output printed

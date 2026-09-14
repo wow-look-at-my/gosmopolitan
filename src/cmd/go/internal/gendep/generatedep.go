@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package load
+package gendep
 
 import (
 	"bufio"
@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -36,12 +37,12 @@ import (
 // reads the tree the generator left.
 const generatePrefix = "//go:generate"
 
-// generateDir answers the directory to read pkgPath's package from: the copy
-// carrying its generated files, or dir unchanged.
+// Dir answers the directory to read a package from: the copy carrying its
+// generated files, or dir unchanged.
 //
 // Only a dependency is ever generated. The main module's own tree is the
 // developer's to run `go generate` in, and GOROOT is not ours to write to.
-func generateDir(dir, modroot string) string {
+func Dir(dir, modroot string) string {
 	if !generateDeps() || modroot == "" || dir == "" {
 		return dir
 	}
@@ -448,11 +449,11 @@ func makeTreeWritable(dir string) {
 // stays reachable, because a generator that fetches its own inputs is the case
 // this exists for.
 func runGenerate(root, pkgrel string) error {
-	goCmd, err := os.Executable()
+	goCmd, err := base.GoCommand()
 	if err != nil {
 		return err
 	}
-	argv, err := sandboxArgv(root, goCmd, "generate", "./"+filepath.ToSlash(pkgrel))
+	argv, err := sandboxArgv(root, append(slices.Clone(goCmd), "generate", "./"+filepath.ToSlash(pkgrel))...)
 	if err != nil {
 		return err
 	}

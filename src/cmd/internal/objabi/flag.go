@@ -18,6 +18,23 @@ import (
 	"strings"
 )
 
+// Enter starts a tool's Main: this process is named tool, its command line is
+// args, and fset, or a fresh set when nil, is what the flag package's
+// top-level functions act on from here. Tools linked into one binary each
+// register on their own set at init, so a flag two of them share is defined
+// once per set instead of twice on flag.CommandLine.
+func Enter(tool string, args []string, fset *flag.FlagSet) {
+	// A host without procfs resolves the executable from os.Args[0], once;
+	// resolve it while os.Args[0] still names the file.
+	os.Executable()
+	os.Args = append([]string{tool}, args...)
+	if fset == nil {
+		fset = flag.NewFlagSet(tool, flag.ExitOnError)
+	}
+	flag.CommandLine = fset
+	fset.Usage = func() { flag.Usage() }
+}
+
 func Flagcount(name, usage string, val *int) {
 	flag.Var((*count)(val), name, usage)
 }
