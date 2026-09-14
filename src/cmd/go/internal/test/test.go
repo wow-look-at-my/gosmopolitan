@@ -148,7 +148,8 @@ In addition to the build flags, the flags handled by 'go test' itself are:
 
 	-args
 	    Pass the remainder of the command line (everything after -args)
-	    to the test binary, uninterpreted and unchanged.
+	    to the test binary, uninterpreted and unchanged, except that a
+	    -test.count there is dropped like -count.
 	    Because this flag consumes the remainder of the command line,
 	    the package list (if present) must appear before this flag.
 
@@ -229,12 +230,13 @@ control the execution of any test:
 	    (for example, -benchtime 100x).
 
 	-count n
-	    Run each test, benchmark, and fuzz seed n times, where n is 0 or 1.
-	    0 builds the test binary and runs nothing. Any positive n runs
-	    everything once: this toolchain does not repeat a test, because a
-	    test that passes only sometimes is broken and the fix belongs in
-	    the test. A negative n is an error. -count never affects the test
-	    cache. -count does not apply to fuzz tests matched by -fuzz.
+	    Accepted and ignored. Every test, benchmark, and fuzz seed runs
+	    once, whatever n is: this toolchain does not repeat a test,
+	    because a test that passes only sometimes is broken and the fix
+	    belongs in the test. go test does not pass -count to the test
+	    binary, it is not part of the test cache key, and it does not
+	    decide whether a result is recorded or replayed. A negative n is
+	    an error.
 
 	-cover
 	    Enable coverage analysis.
@@ -461,9 +463,8 @@ on either side of -v.
 When 'go test' runs in package list mode, 'go test' caches successful
 package test results to avoid unnecessary repeated running of tests.
 Nothing on the command line turns that cache off on purpose. -count in
-particular does not: a positive count selects one run, so the flag is
-dropped before the cache is consulted. A cached result that is wrong is a
-defect to repair rather than to bypass.
+particular does not: go test drops it before the cache is consulted. A
+cached result that is wrong is a defect to repair rather than to bypass.
 
 To keep an argument for a test binary from being interpreted as a
 known flag or a package name, use -args (see 'go help test') which

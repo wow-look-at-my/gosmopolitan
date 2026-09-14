@@ -220,7 +220,10 @@ func (f *shuffleFlag) Set(value string) error {
 // whether a result is recorded or replayed.
 //
 // explicitArgs holds the flags already destined for the test binary, and
-// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both.
+// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both,
+// including a -test.count written after -args, in either the -test.count=n or
+// the -test.count n form. Arguments after a -- terminator are positional to
+// the test binary and are kept as they are.
 func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string {
 	if testCount < 0 {
 		base.Fatalf("go: -count must not be negative")
@@ -228,11 +231,20 @@ func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string
 	delete(fromGOFLAGS, "count")
 	delete(fromGOFLAGS, "test.count")
 	kept := explicitArgs[:0]
-	for _, arg := range explicitArgs {
-		if strings.HasPrefix(arg, "-test.count=") {
+	for idx := 0; idx < len(explicitArgs); idx++ {
+		arg := explicitArgs[idx]
+		if arg == "--" {
+			kept = append(kept, explicitArgs[idx:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !strings.HasPrefix(arg, "-") || name != "test.count" {
+			kept = append(kept, arg)
 			continue
 		}
-		kept = append(kept, arg)
+		if !hasValue {
+			idx++ // the count's value is the next argument
+		}
 	}
 	return kept
 }
