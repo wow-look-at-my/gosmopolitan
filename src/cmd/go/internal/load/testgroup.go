@@ -18,7 +18,61 @@ import (
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
+	"cmd/internal/objabi"
 )
+
+// testUnitBarriers name the symbols a walk of the binary must not follow when
+// it asks what one package's tests reach. Each of them names every package in
+// the binary, so a walk through one reaches them all and its content moves
+// whenever any of them does.
+var testUnitBarriers = []string{"main.units", "go:testinittasks", "runtime.testinittasks"}
+
+// testUnitRoots names the symbols one package's tests start from: the
+// initialization its test files deferred, and every function the generated
+// main can call for it. The linker walks these to decide what code the
+// package's tests reach, which is what its cached result is keyed on.
+func testUnitRoots(unit testUnit) []string {
+	prefix := objabi.PathToPrefix(unit.UnitID) + "."
+	xprefix := objabi.PathToPrefix(unit.UnitID+"_test") + "."
+	symbol := func(fn testFunc) string {
+		if fn.Package == unit.XAlias {
+			return xprefix + fn.Name
+		}
+		return prefix + fn.Name
+	}
+	roots := []string{prefix + ".inittask.test", prefix + ".inittask.xtest"}
+	for _, fn := range unit.Tests {
+		roots = append(roots, symbol(fn))
+	}
+	for _, fn := range unit.Benchmarks {
+		roots = append(roots, symbol(fn))
+	}
+	for _, fn := range unit.FuzzTargets {
+		roots = append(roots, symbol(fn))
+	}
+	for _, fn := range unit.Examples {
+		roots = append(roots, symbol(fn))
+	}
+	if unit.TestMain != nil {
+		roots = append(roots, symbol(*unit.TestMain))
+	}
+	return roots
+}
+
+// testUnitSpec writes what the linker's -testunits flag reads.
+func testUnitSpec(units []testUnit) string {
+	var spec strings.Builder
+	for _, name := range testUnitBarriers {
+		spec.WriteString("barrier " + name + "\n")
+	}
+	for _, unit := range units {
+		spec.WriteString("unit " + unit.UnitID + "\n")
+		for _, root := range testUnitRoots(unit) {
+			spec.WriteString("root " + root + "\n")
+		}
+	}
+	return spec.String()
+}
 
 // TestGroupMember is one package inside a shared test binary, with the test
 // variants TestPackagesAndErrors already built for it.
@@ -299,6 +353,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	}
 	testMain.Internal.TestmainGo = &content
 	testMain.Internal.testmainData = data
+	testMain.Internal.TestUnitSpec = testUnitSpec(units)
 
 	// Key by UnitID, never by ImportPath. ImportPath is what testdeps reports,
 	// and it is EMPTY for command-line-arguments and for a package outside a

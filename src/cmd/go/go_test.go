@@ -2312,11 +2312,12 @@ func TestTestCache(t *testing.T) {
 	tg.grepStderrNot(`t1\.test.*-test.short`, "incorrectly reran t1_test")
 	tg.grepStdout(`ok  \tt/t1\t\(cached\)`, "did not cache t/t1")
 
-	// t2 imports p1 and must be rebuilt. Its result is keyed on the code of
-	// every package its tests import, and p1's code changed, so it reruns.
+	// t2 imports p1 and must be rebuilt, but its tests never reach p1.X, so
+	// the code they run is what it was and the result still comes from the
+	// cache.
 	tg.grepStderr(`([\\/]compile|gccgo).*t2_test.go`, "did not recompile t2")
-	tg.grepStderr(`t2\.test.*-test.short`, "did not rerun t2_test")
-	tg.grepStdoutNot(`ok  \tt/t2\t\(cached\)`, "reported cached t2_test result")
+	tg.grepStderrNot(`t2\.test.*-test.short`, "incorrectly reran t2_test")
+	tg.grepStdout(`ok  \tt/t2\t\(cached\)`, "did not cache t/t2")
 
 	// t3 imports p1, and changing X changes what t3's tests do.
 	tg.grepStderr(`([\\/]compile|gccgo).*t3_test.go`, "did not recompile t3")
@@ -2325,10 +2326,11 @@ func TestTestCache(t *testing.T) {
 	tg.grepStdout(`t3_test.go:6: 2`, "t3_test did not see the new p1.X")
 
 	// t4 imports p2, which did not change, so t4 is not recompiled. p2
-	// imports p1, whose code changed, so t4 reruns.
+	// imports p1 for its initialization alone, and t4's tests do not reach
+	// p1.X either, so t4 keeps its cached result.
 	tg.grepStderrNot(`([\\/]compile|gccgo).*t4_test.go`, "incorrectly recompiled t4")
-	tg.grepStderr(`t4\.test.*-test.short`, "did not rerun t4_test")
-	tg.grepStdoutNot(`ok  \tt/t4\t\(cached\)`, "reported cached t4_test result")
+	tg.grepStderrNot(`t4\.test.*-test.short`, "incorrectly reran t4_test")
+	tg.grepStdout(`ok  \tt/t4\t\(cached\)`, "did not cache t/t4")
 }
 
 func TestTestSkipVetAfterFailedBuild(t *testing.T) {

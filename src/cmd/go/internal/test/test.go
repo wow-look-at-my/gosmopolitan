@@ -1804,10 +1804,15 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		return nil
 	}
 
-	if r.c.buf == nil {
+	if r.c.buf == nil && !r.c.disableCache && r.c.id1 == (cache.ActionID{}) {
 		// A link that did not consult the test results first, such as one
 		// whose target was already up to date, left this run unasked.
 		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest))
+	}
+	if r.c.buf == nil && !r.c.disableCache {
+		if id := testReachIdentity(b, a, buildAction, r.c.unitDigest); id != "" {
+			r.c.tryCacheWithID(b, a, id)
+		}
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -2113,6 +2118,52 @@ func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.A
 	}
 	slices.Sort(codes)
 	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+}
+
+// testReachIdentity keys a test result on the code the package's tests reach,
+// which the linker reports for each package in the binary. It is asked after
+// the link, when the key over the compiles has already missed: a dependency
+// can compile differently and still leave what these tests run untouched, and
+// upstream got that precision from hashing a binary holding one package.
+//
+// It answers "" when the link did not run, which leaves the result keyed on
+// the compiles alone.
+func testReachIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string) string {
+	reach := testUnitReach(linkAction)[runAct.Package.ImportPath]
+	if reach == "" || digest == "" {
+		return ""
+	}
+	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+}
+
+var reachCache struct {
+	mu    sync.Mutex
+	byDir map[string]map[string]string
+}
+
+// testUnitReach reads the digests the link wrote, one per package in the
+// binary. A missing file is a link that did not run, and answers no digests.
+func testUnitReach(linkAction *work.Action) map[string]string {
+	reachCache.mu.Lock()
+	defer reachCache.mu.Unlock()
+	if found, ok := reachCache.byDir[linkAction.Objdir]; ok {
+		return found
+	}
+	digests := map[string]string{}
+	data, err := os.ReadFile(filepath.Join(linkAction.Objdir, work.TestUnitDigestFile))
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			unit, digest, ok := strings.Cut(line, " ")
+			if ok {
+				digests[unit] = digest
+			}
+		}
+	}
+	if reachCache.byDir == nil {
+		reachCache.byDir = map[string]map[string]string{}
+	}
+	reachCache.byDir[linkAction.Objdir] = digests
+	return digests
 }
 
 func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bool {

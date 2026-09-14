@@ -3,9 +3,10 @@
 # package's tests: with the environment it inherits, with one it replaced
 # entirely, and when TestMain runs the binary as a tool.
 
-go test ./a ./b ./scrubbed ./tool
+go test ./a ./b ./nested ./scrubbed ./tool
 stdout '^ok\s+example.com/grouped/a'
 stdout '^ok\s+example.com/grouped/b'
+stdout '^ok\s+example.com/grouped/nested'
 stdout '^ok\s+example.com/grouped/scrubbed'
 stdout '^ok\s+example.com/grouped/tool'
 ! stderr 'this binary holds'
@@ -70,6 +71,45 @@ func TestParent(test *testing.T) {
 	}
 	if !strings.Contains(string(out), "child of b") {
 		test.Fatalf("the child did not run b's tests:\n%s", out)
+	}
+}
+-- nested/nested_test.go --
+package nested
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+// The grandchild is started with a rebuilt argument list and an environment
+// that names no unit, so the only thing left that says which package's tests
+// to run is the name of the binary it was started as.
+func TestChild(test *testing.T) {
+	switch os.Getenv("GROUPED_DEPTH") {
+	case "1":
+		cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+		cmd.Env = []string{"GROUPED_DEPTH=2", "GO_TEST_UNIT="}
+		out, err := cmd.CombinedOutput()
+		os.Stdout.Write(out)
+		if err != nil {
+			test.Fatalf("%v\n%s", err, out)
+		}
+	case "2":
+		os.Stdout.WriteString("grandchild of nested\n")
+	}
+}
+
+func TestParent(test *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestChild$", "-test.v")
+	cmd.Env = []string{"GROUPED_DEPTH=1"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		test.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "grandchild of nested") {
+		test.Fatalf("the grandchild did not run nested's tests:\n%s", out)
 	}
 }
 -- scrubbed/scrubbed_test.go --

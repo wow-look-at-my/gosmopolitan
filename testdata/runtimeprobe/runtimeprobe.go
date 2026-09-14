@@ -752,7 +752,6 @@ func checkPreempt() {
 	var spun atomic.Uint64
 	var wg sync.WaitGroup
 	n := runtime.GOMAXPROCS(0)
-	t0 := time.Now()
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(seed uint64) {
@@ -767,6 +766,7 @@ func checkPreempt() {
 	// Let the spinners occupy every P; the sleep also forces main off
 	// its P so wake-up itself needs a preemption.
 	time.Sleep(100 * time.Millisecond)
+	t0 := time.Now()
 	runtime.GC()
 	d := time.Since(t0)
 	stop.Store(1)

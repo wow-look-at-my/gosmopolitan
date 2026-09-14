@@ -78,6 +78,10 @@ var (
 	flagFipso        = flag.String("fipso", "", "write fips module to `file`")
 
 	flagInstallSuffix = flag.String("installsuffix", "", "set package directory `suffix`")
+
+	flagTestUnits      = flag.String("testunits", "", "read the test roots of each package in this binary from `file`")
+	flagTestUnitDigest = flag.String("testunitdigest", "", "write a digest of the code each -testunits package reaches to `file`")
+
 	flagDumpDep       = flag.Bool("dumpdep", false, "dump symbol dependency graph")
 	flagRace          = flag.Bool("race", false, "enable race detector")
 	flagMsan          = flag.Bool("msan", false, "enable MSan interface")
@@ -398,6 +402,9 @@ func Main(arch *sys.Arch, theArch Arch) {
 	bench.Start("inittasks")
 	ctxt.inittasks()
 	ctxt.testInittasks()
+
+	bench.Start("testunitdigest")
+	testUnitDigests(ctxt)
 
 	bench.Start("deadcode")
 	deadcode(ctxt)

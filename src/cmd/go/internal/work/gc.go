@@ -30,6 +30,15 @@ import (
 // Tests can override this by setting $TESTGO_TOOLCHAIN_VERSION.
 var ToolchainVersion = runtime.Version()
 
+// TestUnitSpecFile and TestUnitDigestFile name, inside a test binary's link
+// directory, what the go command hands the linker and what the linker writes
+// back: the roots of each package's tests, and a digest of the code each one
+// reaches. A package's cached test result is keyed on its digest.
+const (
+	TestUnitSpecFile   = "_testunits.txt"
+	TestUnitDigestFile = "_testunitdigest.txt"
+)
+
 // The Go toolchain.
 
 type gcToolchain struct{}
@@ -634,6 +643,13 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	}
 	if fips140.Enabled() {
 		ldflags = append(ldflags, "-fipso", filepath.Join(root.Objdir, "fips.o"))
+	}
+	if spec := root.Package.Internal.TestUnitSpec; spec != "" && !cfg.BuildN {
+		specFile := filepath.Join(root.Objdir, TestUnitSpecFile)
+		if err := os.WriteFile(specFile, []byte(spec), 0666); err != nil {
+			return err
+		}
+		ldflags = append(ldflags, "-testunits", specFile, "-testunitdigest", filepath.Join(root.Objdir, TestUnitDigestFile))
 	}
 
 	// Store BuildID inside toolchain binaries as a unique identifier of the
