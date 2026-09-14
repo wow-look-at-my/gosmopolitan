@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main_test
+package cover_test
 
 import (
 	"bufio"
@@ -58,8 +58,7 @@ func TestMain(m *testing.M) {
 			// installed tool, so that the go command's invocations of
 			// cover produce coverage for the configuration in which
 			// the test was built.
-			os.Args = os.Args[1:]
-			cmdcover.Main()
+			os.Exit(cmdcover.Main(os.Args[2:]))
 		} else {
 			cmd := exec.Command(os.Args[1], os.Args[2:]...)
 			cmd.Stdout = os.Stdout
@@ -72,11 +71,9 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("CMDCOVER_TEST_RUN_MAIN") != "" {
 		// When CMDCOVER_TEST_RUN_MAIN is set, we're reusing the test
-		// binary as cmd/cover. In this case we run the main func exported
-		// via export_test.go, and exit; CMDCOVER_TEST_RUN_MAIN is set below
-		// for actual test invocations.
-		cmdcover.Main()
-		os.Exit(0)
+		// binary as cmd/cover. In this case we run Main and exit;
+		// CMDCOVER_TEST_RUN_MAIN is set below for actual test invocations.
+		os.Exit(cmdcover.Main(os.Args[1:]))
 	}
 	flag.Parse()
 	topTmpdir, err := os.MkdirTemp("", "cmd-cover-test-")

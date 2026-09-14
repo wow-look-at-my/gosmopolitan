@@ -36,6 +36,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -953,9 +954,33 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					modroot = gorootSrcCmd
 				}
 			}
+			// An embedded standard package has no directory to read: its
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
+				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					// The manifest holds resolved imports; a source file spells a
+					// vendored one without the vendor/ prefix, and the loader
+					// resolves it again.
+					imports := make([]string, len(pkg.Imports))
+					for idx, imp := range pkg.Imports {
+						imports[idx] = strings.TrimPrefix(imp, "vendor/")
+					}
+					data.p = &build.Package{
+						Dir:        r.dir,
+						ImportPath: r.path,
+						Name:       pkg.Name,
+						Imports:    imports,
+						Goroot:     true,
+						Root:       cfg.GOROOT,
+					}
+					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
+					goto Happy
+				}
+			}
 			// A dependency that generates part of its own API ships a package
 			// the compiler reads as empty. Read the generated copy instead.
-			if dir := generateDir(r.dir, modroot); dir != r.dir {
+			if dir := gendep.Dir(r.dir, modroot); dir != r.dir {
 				r.dir = dir
 				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
 				goto Happy
@@ -1733,7 +1758,7 @@ func InstallTargetDir(p *Package) TargetDir {
 	}
 	if p.Goroot && strings.HasPrefix(p.ImportPath, "cmd/") && p.Name == "main" {
 		switch p.ImportPath {
-		case "cmd/go", "cmd/gofmt":
+		case "cmd/go/main", "cmd/gofmt":
 			return ToBin
 		}
 		return ToTool
@@ -1795,6 +1820,10 @@ func (p *Package) exeFromFiles() string {
 func (p *Package) DefaultExecName() string {
 	if p.Internal.CmdlineFiles {
 		return p.exeFromFiles()
+	}
+	// The go command's main package sits under cmd/go, whose name is a keyword.
+	if p.Goroot && p.ImportPath == "cmd/go/main" {
+		return "go"
 	}
 	return p.exeFromImportPath()
 }

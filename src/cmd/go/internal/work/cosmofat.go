@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -227,6 +228,11 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	if set, explicit := cosmoPlatformSpec(); explicit {
 		args = append(args, "-apeplatforms="+set.String())
 	}
+	// GOCOSMOAPPEND names a standard library blob, written by go tool
+	// embedstd, that the merged APE carries past its load span.
+	if blob := os.Getenv("GOCOSMOAPPEND"); blob != "" {
+		args = append(args, "-apeappend="+blob)
+	}
 	if cosmoStripEnabled() && !ldflagsSpecifyStrip(p.Internal.Ldflags) {
 		args = append(args, "-apestrip", "-apedbg")
 		if mode := cosmoDebugMode(); mode != "full" {
@@ -298,8 +304,8 @@ func cosmoFatParallel() bool {
 // the primary build can now fail (and base.Fatalf exits) while the
 // sibling is still running - without this the child would be orphaned
 // and its scratch directory leaked.
-func (s *cosmoSibling) setup() string {
-	goCmd, err := os.Executable()
+func (s *cosmoSibling) setup() []string {
+	goCmd, err := base.GoCommand()
 	if err != nil {
 		base.Fatalf("go: cosmo %s: cannot find go command: %v", s.what, err)
 	}
@@ -413,7 +419,7 @@ func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 			base.Fatalf("go: cosmo fat build: %v", err)
 		}
 	}
-	cmd := exec.Command(goCmd, s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)
+	cmd := exec.Command(goCmd[0], append(slices.Clone(goCmd[1:]), s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)...)
 	cmd.Env = append(os.Environ(), "GOARCH="+s.arch, "GOCOSMOFAT_INNER=1")
 	s.launch(cmd)
 	return s
@@ -455,7 +461,7 @@ func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 		return
 	}
 
-	link := base.Tool("link")
+	link := base.ToolCmd("link")
 	for _, p := range regular {
 		target := p.Target
 		var sibling string
@@ -475,16 +481,16 @@ func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 // The merge is a command this build issues, so -n and -x show it like every
 // other one. Under -n it is only shown: the payloads it reads were printed
 // rather than written, so running it would open a target that does not exist.
-func cosmoMerge(lane trace.Lane, link string, p *load.Package, target, sibling, what string) {
+func cosmoMerge(lane trace.Lane, link []string, p *load.Package, target, sibling, what string) {
 	args := cosmoMergeArgs(p, sibling)
 	if cfg.BuildN || cfg.BuildX {
-		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(append([]string{link}, args...)))
+		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(slices.Concat(link, args)))
 	}
 	if cfg.BuildN {
 		return
 	}
 	start := time.Now()
-	merge := exec.Command(link, args...)
+	merge := exec.Command(link[0], slices.Concat(link[1:], args)...)
 	merge.Stdout = os.Stdout
 	merge.Stderr = os.Stderr
 	err := merge.Run()
@@ -518,7 +524,7 @@ func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	goCmd := s.setup()
 	s.traceOn(ctx) // after setup: the sibling's trace lives in its scratch dir
 
-	cmd := exec.Command(goCmd, s.traceArgs(os.Args[1:])...)
+	cmd := exec.Command(goCmd[0], append(slices.Clone(goCmd[1:]), s.traceArgs(os.Args[1:])...)...)
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+s.arch,
@@ -548,7 +554,7 @@ func cosmoFattenInstall(ctx context.Context, s *cosmoSibling, mains []*load.Pack
 	}
 	lane := cosmoMergeLane(ctx)
 
-	link := base.Tool("link")
+	link := base.ToolCmd("link")
 	for _, p := range mains {
 		target := p.Target
 		var sibling string

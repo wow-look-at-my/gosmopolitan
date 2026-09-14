@@ -78,7 +78,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := VetTool
-	VetTool = tool
+	VetTool = []string{tool}
 	defer func() { VetTool = old }()
 
 	b := &Builder{}
@@ -86,8 +86,10 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	if got == "" {
 		t.Fatal("toolID is empty for a tool that prints no build ID")
 	}
-	if want := b.fileHash(tool); got != want {
-		t.Errorf("toolID = %q, want the file hash %q", got, want)
+	// A vet tool's ID carries its name ahead of the content, since vet and fix
+	// can be one binary.
+	if want := "fakevet " + b.fileHash(tool); got != want {
+		t.Errorf("toolID = %q, want the tool name and file hash %q", got, want)
 	}
 }
 

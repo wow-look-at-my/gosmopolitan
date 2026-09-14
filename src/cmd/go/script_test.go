@@ -7,7 +7,7 @@
 
 //go:generate go test cmd/go -v -run=TestScript/README --fixreadme
 
-package main_test
+package gocmd_test
 
 import (
 	"bufio"

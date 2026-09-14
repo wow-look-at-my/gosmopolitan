@@ -124,6 +124,19 @@ func (m *Match) MatchPackages() {
 		have["runtime/cgo"] = true // ignore during walk
 	}
 
+	// An embedded standard library lists itself; it holds no commands.
+	if cfg.EmbeddedStd && (m.pattern == "std" || m.pattern == "cmd") {
+		if m.pattern == "std" {
+			for _, pkg := range cfg.EmbeddedManifest().Packages {
+				if !have[pkg.ImportPath] && match(pkg.ImportPath) {
+					have[pkg.ImportPath] = true
+					m.Pkgs = append(m.Pkgs, pkg.ImportPath)
+				}
+			}
+		}
+		return
+	}
+
 	for _, src := range cfg.BuildContext.SrcDirs() {
 		if (m.pattern == "std" || m.pattern == "cmd") && src != cfg.GOROOTsrc {
 			continue

@@ -528,7 +528,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 		return err
 	}
 
-	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.Tool("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
+	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
 		return err
 	}
 
@@ -730,6 +730,11 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 				a.Actor = nil
 				return a
 			}
+
+			// An embedded standard library is compiled already.
+			if cfg.EmbeddedStd {
+				return b.embeddedStdAction(a, p)
+			}
 		}
 
 		// Determine the covmeta file name.
@@ -783,7 +788,7 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 	// by the install action during (*Builder).installAction.
 	buildAction := a
 	switch buildAction.Mode {
-	case "build", "built-in package", "gccgo stdlib":
+	case "build", "built-in package", "gccgo stdlib", "embedded std":
 		// ok
 	case "build-install":
 		buildAction = a.Deps[0]
@@ -913,6 +918,9 @@ func (b *Builder) cgoAction(p *load.Package, objdir string, deps []*Action, hasC
 // If the caller may be causing p to be installed, it is up to the caller
 // to make sure that the install depends on (runs after) vet.
 func (b *Builder) VetAction(s *modload.Loader, mode, depMode BuildMode, needFix bool, p *load.Package) *Action {
+	if cfg.EmbeddedStd && p.Standard {
+		base.Fatalf("go: %s: the standard library is embedded in this go command as compiled archives and cannot be vetted; vet it from a GOROOT source tree", p.ImportPath)
+	}
 	a := b.vetAction(s, mode, depMode, p)
 	a.VetxOnly = false
 	a.needFix = needFix
@@ -1107,7 +1115,7 @@ func (b *Builder) addTransitiveLinkDeps(s *modload.Loader, a, a1 *Action, shlib 
 		a1 := workq[i]
 		for _, a2 := range a1.Deps {
 			// TODO(rsc): Find a better discriminator than the Mode strings, once the dust settles.
-			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build") || haveDep[a2.Package.ImportPath] {
+			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build" && a2.Mode != "embedded std") || haveDep[a2.Package.ImportPath] {
 				continue
 			}
 			haveDep[a2.Package.ImportPath] = true
