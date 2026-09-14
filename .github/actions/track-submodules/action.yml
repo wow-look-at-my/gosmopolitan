@@ -1,0 +1,7 @@
+name: Track submodules
+description: Move every org submodule onto its branch head, because a checkout restores the gitlink a commit froze.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: sh ./.github/track-submodules.sh "${{ github.ref_name }}"
