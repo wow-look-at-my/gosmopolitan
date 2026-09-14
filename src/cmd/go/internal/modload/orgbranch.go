@@ -172,10 +172,15 @@ func orgResolvable() bool {
 }
 
 // resolveOrgRequire returns m with the head of the branch it resolves to, or m
-// itself when m is not an org module or this invocation cannot resolve one.
-// The token m carries is not read.
+// itself when m is not an org module, this invocation cannot resolve one, or
+// the main module replaces m with a directory. The token m carries is not read.
 func resolveOrgRequire(ld *Loader, ctx context.Context, m module.Version) (module.Version, error) {
 	if !orgmod.IsOrg(m.Path) || !orgResolvable() {
+		return m, nil
+	}
+	if resolvedToDirectory(ld, m) {
+		// A filesystem replacement is the source of truth for this module: its
+		// require line was already carrying nothing the build reads.
 		return m, nil
 	}
 	version, err := orgVersion(ld, ctx, m.Path)
@@ -184,6 +189,16 @@ func resolveOrgRequire(ld *Loader, ctx context.Context, m module.Version) (modul
 	}
 	m.Version = version
 	return m, nil
+}
+
+// resolvedToDirectory reports whether the main module replaces m with a version
+// that is a directory rather than a module version.
+func resolvedToDirectory(ld *Loader, m module.Version) bool {
+	if ld.MainModules == nil {
+		return false
+	}
+	repl := Replacement(ld, m)
+	return repl.Path != "" && repl.Version == ""
 }
 
 // resolveOrgRequires returns mods with every org module resolved. It returns

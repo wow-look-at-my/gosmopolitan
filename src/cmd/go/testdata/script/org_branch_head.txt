@@ -151,6 +151,15 @@ stdout '^alpha-main$'
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
 
+# A replacement pointing at a directory is the source of truth for that module,
+# so nothing is resolved for it and its require line's token is not read either.
+# The version named here does not exist, so a build that read it would fail.
+cd $WORK/dirreplace
+go run .
+stdout '^alpha-from-directory$'
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> \./alpha$'
+
 -- $WORK/home/gopher/.gitconfig --
 [user]
 	name = Go Gopher
@@ -296,3 +305,31 @@ import (
 func main() {
 	fmt.Println(alpha.Name())
 }
+-- $WORK/dirreplace/go.mod --
+module example.com/dirreplaced
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+
+replace github.com/wow-look-at-my/alpha => ./alpha
+-- $WORK/dirreplace/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/dirreplace/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/dirreplace/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-from-directory" }
