@@ -2,16 +2,12 @@
 # one-test-binary.sh GOOS GOARCH PATTERN... -- refuse a go test run over
 # several packages that links more than one test binary.
 #
-# Every package's tests go into ONE binary per port, and each package's run is
-# that binary started with -test.unit. A second link means a package got a
-# binary of its own, and the whole run pays its compile and link again.
-# go test -n prints the commands without running them, so this costs a load.
-# -c -o /dev/null links without running: a cached test result would otherwise
-# spare its binary the link, and the count would read what the cache held.
+# Every package's tests go into ONE binary per port, run with -test.unit per
+# package. go test -n prints the plan without running it. -c -o /dev/null
+# keeps a cached test result from sparing its binary the link.
 #
-# The packages and flags are the ones dist test's short mode uses: the
-# patterns less vendored code, which has no tests of ours to run, and
-# -pgo=off, because a binary holds one PGO profile.
+# The packages and flags are dist test's short mode ones: the patterns less
+# vendored code, and -pgo=off, because a binary holds one PGO profile.
 
 set -uo pipefail
 
