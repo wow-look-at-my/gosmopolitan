@@ -12,7 +12,11 @@
 //
 // Usage:
 //
-//	go tool embedstd [-V] -o blob
+//	go tool embedstd [-V] [-go word]... -o blob
+//
+// The go command that builds the archives is this executable, or the command
+// line the -go flags spell one word at a time, for a program that links the
+// go command under a subcommand of its own.
 package embedstd
 
 import (
@@ -34,6 +38,16 @@ import (
 var flagSet = flag.NewFlagSet("embedstd", flag.ExitOnError)
 
 var output = flagSet.String("o", "", "write the blob to `file`")
+
+// goWords is the go command line, a word per -go flag; empty is this executable.
+var goWords []string
+
+func init() {
+	flagSet.Func("go", "a `word` of the go command line that builds std; repeat for each word", func(word string) error {
+		goWords = append(goWords, word)
+		return nil
+	})
+}
 
 // targets are the standard libraries one APE carries.
 var targets = []struct{ goos, goarch string }{
@@ -59,7 +73,7 @@ func Main(args []string) int {
 	log.SetFlags(0)
 	log.SetPrefix("embedstd: ")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] -o blob\n")
+		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] [-go word]... -o blob\n")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -67,9 +81,13 @@ func Main(args []string) int {
 	if *output == "" || flag.NArg() != 0 {
 		flag.Usage()
 	}
-	goCmd, err := os.Executable()
-	if err != nil {
-		log.Fatal(err)
+	goCmd := goWords
+	if len(goCmd) == 0 {
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatal(err)
+		}
+		goCmd = []string{exe}
 	}
 	var writer embedded.Writer
 	for _, target := range targets {
@@ -116,9 +134,14 @@ func Main(args []string) int {
 	return 0
 }
 
+// goCommand starts the go command with args after its own words.
+func goCommand(goCmd []string, args ...string) *exec.Cmd {
+	return exec.Command(goCmd[0], append(append([]string{}, goCmd[1:]...), args...)...)
+}
+
 // gorootOf answers the GOROOT the go command reads its source from.
-func gorootOf(goCmd string) string {
-	out, err := exec.Command(goCmd, "env", "GOROOT").Output()
+func gorootOf(goCmd []string) string {
+	out, err := goCommand(goCmd, "env", "GOROOT").Output()
 	if err != nil {
 		log.Fatalf("asking the go command for GOROOT: %v", err)
 	}
@@ -127,8 +150,8 @@ func gorootOf(goCmd string) string {
 
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
-func listStd(goCmd, goos, goarch string) []listed {
-	cmd := exec.Command(goCmd, "list", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
+func listStd(goCmd []string, goos, goarch string) []listed {
+	cmd := goCommand(goCmd, "list", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
 	// -trimpath, so a program built with it against these archives is the
 	// program the source tree builds with it; the tree's path is not in them.
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
