@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -421,8 +422,16 @@ func runGenerate(root, pkgrel string) error {
 	cmd.Stdout = io.MultiWriter(os.Stderr, said)
 	cmd.Stderr = cmd.Stdout
 	// A generator is a program of this module, so it builds against the same
-	// toolchain rather than fetching another one.
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOGENERATEDEPS=off")
+	// toolchain rather than fetching another one. It runs on this machine, so
+	// `go generate` and every go command a directive starts target this
+	// machine, whatever the build targets. Every target reads the one
+	// generated tree, and the host is the one platform that tree is for.
+	cmd.Env = append(os.Environ(),
+		"GOTOOLCHAIN=local",
+		"GOGENERATEDEPS=off",
+		"GOOS="+runtime.GOOS,
+		"GOARCH="+runtime.GOARCH,
+	)
 	err = cmd.Run()
 	if err == nil {
 		return nil
