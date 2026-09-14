@@ -29,6 +29,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
+      - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
       - name: Install bubblewrap
@@ -67,6 +68,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
+      - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
       - name: Install bubblewrap
