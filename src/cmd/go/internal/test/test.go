@@ -131,8 +131,10 @@ restricted set of 'cacheable' test flags, defined as -benchtime,
 -run, -short, -skip, -timeout and -v.
 If a run of go test has any test or non-test flags outside this set,
 the result is not cached. In this toolchain -count never leaves that set:
-a positive count selects one run either way, so the flag is dropped before
-the cache is consulted. Nothing on the command line turns the cache off on
+a count other than one reaches the test binary when it runs, and it is not
+part of the cache key, so a recorded result answers any positive count. A
+run that repeats the tests records no result of its own.
+Nothing on the command line turns the cache off on
 purpose, because a cached result that is wrong is a defect to repair.
 Tests that open files or that consult environment variables only match
 future runs in which those files and environment variables are unchanged.
@@ -2186,7 +2188,8 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 			// Note that this list is documented above,
 			// so if you add to this list, update the docs too.
 			cacheArgs = append(cacheArgs, arg)
-		case "-test.coverprofile",
+		case "-test.count",
+			"-test.coverprofile",
 			"-test.outputdir":
 			// These are cacheable and do not invalidate the cache when they change.
 			// Note that this list is documented above,
@@ -2513,6 +2516,12 @@ func coverProfileAndInputKey(testID, testInputsID, covMetaID cache.ActionID) cac
 
 func (c *runCache) saveOutput(a *work.Action) {
 	if c.id1 == (cache.ActionID{}) && c.id2 == (cache.ActionID{}) {
+		return
+	}
+	// A result is recorded only from a single run of the tests. A -count
+	// that repeats them is answered by such a result when one exists, and
+	// otherwise runs every time and records nothing.
+	if testCount > 1 {
 		return
 	}
 

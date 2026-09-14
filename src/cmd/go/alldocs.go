@@ -1686,8 +1686,10 @@
 // -run, -short, -skip, -timeout and -v.
 // If a run of go test has any test or non-test flags outside this set,
 // the result is not cached. In this toolchain -count never leaves that set:
-// a positive count selects one run either way, so the flag is dropped before
-// the cache is consulted. Nothing on the command line turns the cache off on
+// a count other than one reaches the test binary when it runs, and it is not
+// part of the cache key, so a recorded result answers any positive count. A
+// run that repeats the tests records no result of its own.
+// Nothing on the command line turns the cache off on
 // purpose, because a cached result that is wrong is a defect to repair.
 // Tests that open files or that consult environment variables only match
 // future runs in which those files and environment variables are unchanged.
