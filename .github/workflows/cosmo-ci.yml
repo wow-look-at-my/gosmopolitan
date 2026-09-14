@@ -415,10 +415,9 @@ jobs:
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
-    # A needed job that is switched off reports `skipped`, which the default success() refuses; this still refuses a failure or a cancellation.
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     timeout-minutes: 10
-    needs: [build, build-linux, suite, cosmo-checks, test, wasm, wasm-suite]
+    # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
+    needs: [build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
