@@ -101,12 +101,12 @@ func TestWithExtldflagJoinsTheLastValue(test *testing.T) {
 		{[]string{"-extldflags=-a", "--extldflags=-b"}, []string{"-extldflags=-a", "--extldflags=-b -X"}},
 	}
 	for _, tcase := range cases {
-		in := slices.Clone(tcase.in)
+		before := slices.Clone(tcase.in)
 		got := withExtldflag(tcase.in, "-X")
 		if !slices.Equal(got, tcase.want) {
 			test.Errorf("withExtldflag(%q) = %q, want %q", tcase.in, got, tcase.want)
 		}
-		if !slices.Equal(tcase.in, in) {
+		if !slices.Equal(tcase.in, before) {
 			test.Errorf("withExtldflag changed its argument to %q", tcase.in)
 		}
 	}

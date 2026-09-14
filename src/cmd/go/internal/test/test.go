@@ -1803,11 +1803,9 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	}
 
 	if r.c.buf == nil {
-		// The action ID missed, so ask again by what the compile produced.
-		// The first attempt reuses a result without running the linker at
-		// all. This one reuses it when different inputs compile alike.
-		// c.saveOutput stores the result under both IDs.
-		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest, true))
+		// A link that did not consult the test results first, such as one
+		// whose target was already up to date, left this run unasked.
+		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest))
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -2058,40 +2056,52 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
 func (rcache *runCache) tryCache(builder *work.Builder, runAct *work.Action, linkAction *work.Action) bool {
-	return rcache.tryCacheWithID(builder, runAct, testIdentity(builder, runAct, linkAction, rcache.unitDigest, false))
+	return rcache.tryCacheWithID(builder, runAct, testIdentity(builder, runAct, linkAction, rcache.unitDigest))
 }
 
 // testIdentity keys a test result on the compiles of the package under test
-// plus the link configuration. Never on the link, and never on the generated
-// main: both fold in every package the binary holds, so either key makes one
-// package's edit invalidate every result in it.
+// and of every package those compiles import, directly or not, plus the link
+// configuration. Never on the link, and never on the generated main: both fold
+// in every package the binary holds, so either key makes one package's edit
+// invalidate every result in it.
 //
-// The package's own compiles are the right scope. Its test files are inputs to
-// them, and a compile action's ID already carries each dependency's content ID,
-// so they cover this package and say nothing about a sibling.
+// The code the package's tests reach is the right scope. A dependency's
+// implementation runs in those tests even when its export data, and so the
+// compile of the package under test, does not change; a sibling that nothing
+// here imports does not run at all.
 //
-// byContent identifies what those compiles produced rather than what went into
-// them, so inputs that differ but compile alike still hit.
-func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string, byContent bool) string {
+// Each compile is identified by what it produced rather than what went into
+// it, so inputs that differ but compile alike still hit. Every compile a link
+// waits on has finished by the time the link asks.
+func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string) string {
 	// LinkAction leads the deps with the compile of the generated main, and
 	// that compile imports the test variants of every package in the binary.
 	if len(linkAction.Deps) == 0 || linkAction.Deps[0].Package != linkAction.Package {
 		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
 	}
 	tested := runAct.Package.ImportPath
+	seen := map[*work.Action]bool{}
 	var codes []string
+	var visit func(compile *work.Action)
+	visit = func(compile *work.Action) {
+		if seen[compile] {
+			return
+		}
+		seen[compile] = true
+		codes = append(codes, compile.Package.ImportPath+"="+compile.BuildContentID())
+		for _, dep := range compile.Deps {
+			if dep.Package != nil && dep.Mode == "build" {
+				visit(dep)
+			}
+		}
+	}
 	for _, dep := range linkAction.Deps[0].Deps {
-		if dep.Package == nil {
+		if dep.Package == nil || dep.Mode != "build" {
 			continue
 		}
-		if path := dep.Package.ImportPath; path != tested && path != tested+"_test" {
-			continue
+		if path := dep.Package.ImportPath; path == tested || path == tested+"_test" {
+			visit(dep)
 		}
-		if byContent {
-			codes = append(codes, dep.BuildContentID())
-			continue
-		}
-		codes = append(codes, dep.BuildActionID())
 	}
 	if len(codes) == 0 {
 		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)

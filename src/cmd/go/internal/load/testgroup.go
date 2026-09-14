@@ -103,10 +103,11 @@ func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	return out
 }
 
-// darwinTextSegprot is the host linker flag that gives a shared test binary's
-// __TEXT segment the protections the internal linker gives it, rwx at most
-// and r-x to start, so a test reading them sees one answer whichever linker
-// the group needed.
+// darwinTextSegprot is the host linker flag that gives a test binary's __TEXT
+// segment the protections the internal linker gives it, rwx at most and r-x
+// to start, so a test reading them sees one answer whichever linker its
+// binary needed. Every test binary carries it, so a package's link settings,
+// and the key of its cached results, do not depend on what shares its binary.
 const darwinTextSegprot = "-Wl,-segprot,__TEXT,rwx,rx"
 
 // withExtldflag adds one host linker flag to ldflags. The linker keeps only
@@ -139,7 +140,7 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 
 	first := members[0].Package
 	ldflags := append(slices.Clip(first.Internal.Ldflags), "-X", "testing.testBinary=1")
-	if len(members) > 1 && cfg.Goos == "darwin" {
+	if cfg.Goos == "darwin" {
 		ldflags = withExtldflag(ldflags, darwinTextSegprot)
 	}
 	gccgoflags := append(first.Internal.Gccgoflags,
