@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"go/build"
 	"internal/godebugs"
+	"slices"
 	"sort"
 	"strings"
 
@@ -232,6 +233,9 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	for _, member := range members {
 		shareMember(member)
 	}
+	if profile := first.Internal.PGOProfile; profile != "" {
+		attachProfile(testMain, profile, first.ImportPath)
+	}
 
 	if !opts.SuppressBuildInfo {
 		testMain.setBuildInfo(ctx, ld.Fetcher(), opts.AutoVCS)
@@ -303,6 +307,50 @@ func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
 		out[pos] = append(out[pos], member)
 	}
 	return out
+}
+
+// attachProfile compiles every package in testMain's binary with the PGO
+// profile its members share, the way a main package's own dependencies are.
+// A package only the tests import was loaded without one, so it gets a copy
+// that carries the profile, and each importer is pointed at the copy.
+func attachProfile(testMain *Package, profile, forTest string) {
+	copies := map[*Package]*Package{}
+	for _, pkg := range PackageList([]*Package{testMain}) {
+		if pkg != testMain && pkg.Internal.PGOProfile == "" {
+			pkgCopy := new(Package)
+			*pkgCopy = *pkg
+			pkgCopy.ForTest = forTest
+			pkgCopy.Target = ""
+			pkgCopy.Internal.BuildInfo = nil
+			pkgCopy.Internal.PGOProfile = profile
+			copies[pkg] = pkgCopy
+		}
+	}
+	if len(copies) == 0 {
+		return
+	}
+	rewire := func(pkg *Package) {
+		imports := slices.Clone(pkg.Internal.Imports)
+		changed := false
+		for idx, imp := range imports {
+			if pkgCopy := copies[imp]; pkgCopy != nil {
+				imports[idx] = pkgCopy
+				changed = true
+			}
+		}
+		if changed {
+			pkg.Internal.Imports = imports
+		}
+	}
+	// A package without the profile may be in other binaries too, so only
+	// its copy is rewired.
+	for _, pkg := range PackageList([]*Package{testMain}) {
+		if pkgCopy := copies[pkg]; pkgCopy != nil {
+			rewire(pkgCopy)
+			continue
+		}
+		rewire(pkg)
+	}
 }
 
 // startupGODEBUG answers the part of a default GODEBUG that only the start of

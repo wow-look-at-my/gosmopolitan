@@ -1871,10 +1871,34 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// generated main imports. So the flag must not be passed there either --
 	// the testing package would reject it as unknown.
 	var unitArg []string
+	binary := buildAction.BuiltTarget()
 	if r.shared {
 		unitArg = []string{"-test.unit=" + a.Package.ImportPath}
+		// The package's tests run from a file named for the package, as
+		// they would from a binary of their own: a test reads its own
+		// executable's name, and so does what it starts. A hard link is
+		// that name for the one binary, in this run's own directory.
+		name := testBinaryName(a.Package)
+		if cfg.Goos == "windows" {
+			for _, bad := range windowsBadWords {
+				if strings.Contains(name, bad) {
+					name = "test.test" // see the link target's name in builderTest
+					break
+				}
+			}
+		}
+		named := a.Objdir + name + cfg.ExeSuffix
+		if cfg.BuildN || cfg.BuildX {
+			sh.ShowCmd("", "ln %s %s", binary, named)
+		}
+		if !cfg.BuildN {
+			if err := os.Link(binary, named); err != nil {
+				return err
+			}
+		}
+		binary = named
 	}
-	args := str.StringList(execCmd, buildAction.BuiltTarget(), unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
+	args := str.StringList(execCmd, binary, unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
 
 	if testCoverProfile != "" {
 		// Write coverage to temporary profile, for merging later.
