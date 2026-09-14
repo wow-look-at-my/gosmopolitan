@@ -82,8 +82,12 @@ var tryGoBuild = sync.OnceValue(func() error {
 	if len(out) == 0 {
 		return fmt.Errorf("%v: no tool reported", cmd)
 	}
+	// A go command that links its tools prints "<go> tool compile": the
+	// executable is the first word of the command line.
 	if _, err := exec.LookPath(string(out)); err != nil {
-		return err
+		if _, firstErr := exec.LookPath(strings.Fields(string(out))[0]); firstErr != nil {
+			return err
+		}
 	}
 
 	if platform.MustLinkExternal(runtime.GOOS, runtime.GOARCH, false) {
