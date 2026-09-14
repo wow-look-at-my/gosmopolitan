@@ -22,6 +22,9 @@ import (
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
 	"cmd/go/internal/str"
+
+	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
 // A module zip carries no generated file, and a submodule's contents are not
@@ -177,6 +180,11 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		modfetch.RemoveAll(stage)
 		return "", err
 	}
+	synthesized, err := giveGoMod(stage, rel)
+	if err != nil {
+		modfetch.RemoveAll(stage)
+		return "", err
+	}
 	if err := runGenerate(stage, pkgrel); err != nil {
 		// A half-generated package is worse than none: it compiles against
 		// files the generator had not finished writing.
@@ -191,6 +199,14 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		}
 		return "", err
 	}
+	// The tree carries what the module and its generators wrote, so the go.mod
+	// written to make the stage a main module does not reach it.
+	if synthesized {
+		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
+			modfetch.RemoveAll(stage)
+			return "", err
+		}
+	}
 	if err := publishGenerated(modroot, stage, root); err != nil {
 		modfetch.RemoveAll(stage)
 		return "", err
@@ -202,6 +218,34 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(root, pkgrel), nil
+}
+
+// giveGoMod writes stage a go.mod when the fetched module carries none, and
+// reports whether it did. Without one, `go generate` in stage takes whatever
+// go.mod lies above the module cache, or none, as the main module. modrel is
+// the module's directory under the module cache: escaped path '@' version.
+func giveGoMod(stage, modrel string) (bool, error) {
+	gomod := filepath.Join(stage, "go.mod")
+	_, err := os.Stat(gomod)
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	escaped, _, found := strings.Cut(filepath.ToSlash(modrel), "@")
+	if !found {
+		return false, fmt.Errorf("%s names no module version", modrel)
+	}
+	modPath, err := module.UnescapePath(escaped)
+	if err != nil {
+		return false, err
+	}
+	body := "module " + modfile.AutoQuote(modPath) + "\n"
+	if err := os.WriteFile(gomod, []byte(body), 0o666); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // publishGenerated moves what a generator did in stage into root, the tree
