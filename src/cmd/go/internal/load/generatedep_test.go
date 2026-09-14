@@ -87,6 +87,9 @@ func TestPublishGeneratedKeepsEveryPackage(test *testing.T) {
 		if info.Mode()&0o222 != sealed {
 			test.Errorf("%s is writable after publishing: %v", rel, info.Mode())
 		}
+		if sealed != 0 && !info.IsDir() {
+			test.Errorf("%s is not a directory after publishing: %v", rel, info.Mode())
+		}
 	}
 }
 

@@ -47,6 +47,9 @@ func cmdtest() {
 	flag.BoolVar(&t.msan, "msan", false, "run in memory sanitizer builder mode")
 	flag.BoolVar(&t.asan, "asan", false, "run in address sanitizer builder mode")
 	flag.BoolVar(&t.json, "json", false, "report test results in JSON")
+	flag.StringVar(&t.shardStr, "shard", "",
+		"run part K of N, written K/N. Part 0 is the package tests; the other parts divide the rest. "+
+			"With -list, list only that part.")
 
 	xflagparse(-1) // any number of args
 
@@ -78,6 +81,9 @@ type tester struct {
 	timeoutScale int // a non-negative integer factor to scale test timeout by; defaults to 1
 
 	worklist []*work
+
+	shardStr string          // the -shard flag, K/N
+	shardSet map[string]bool // the tests in part K; nil means every test
 
 	// oneBinaries holds the binary that every package's tests compile into,
 	// for the target and for the host, once one is written. sharedPkgs holds
@@ -148,6 +154,14 @@ func (t *tester) run() {
 
 	t.runNames = flag.Args()
 
+	shardIdx, shardCount := -1, 0
+	if t.shardStr != "" {
+		if len(t.runNames) > 0 {
+			fatalf("the -shard flag divides the whole suite and is mutually exclusive with test name arguments")
+		}
+		shardIdx, shardCount = parseShard(t.shardStr)
+	}
+
 	// Set GOTRACEBACK to system if the user didn't set a level explicitly.
 	// Since we're running tests for Go, we want as much detail as possible
 	// if something goes wrong.
@@ -202,9 +216,14 @@ func (t *tester) run() {
 	}
 
 	t.registerTests()
+	if shardCount > 0 {
+		t.shardSet = t.shardTests(shardIdx, shardCount)
+	}
 	if t.listMode {
 		for _, tt := range t.tests {
-			fmt.Println(tt.name)
+			if t.shardSet == nil || t.shardSet[tt.name] {
+				fmt.Println(tt.name)
+			}
 		}
 		return
 	}
@@ -322,7 +341,44 @@ func (t *tester) routeCacheNotices() {
 	})
 }
 
+// parseShard reads a -shard value, K/N, into its part and its part count.
+func parseShard(spec string) (idx, count int) {
+	before, after, found := strings.Cut(spec, "/")
+	idx, idxErr := strconv.Atoi(before)
+	count, countErr := strconv.Atoi(after)
+	if !found || idxErr != nil || countErr != nil || count < 1 || idx < 0 || idx >= count {
+		fatalf("invalid -shard %q: want K/N with 0 <= K < N", spec)
+	}
+	return idx, count
+}
+
+// shardTests divides the registered tests into count parts and returns the
+// names in part idx. The package tests all go to part 0: they run as one go
+// test invocation, which builds their shared test binaries once, so splitting
+// them would build those binaries again in every part. Each other test goes
+// to parts 1 through count-1 in turn, in registration order. Every test lands
+// in exactly one part, so the parts together are the whole suite, whatever
+// gets registered.
+func (t *tester) shardTests(idx, count int) map[string]bool {
+	set := make(map[string]bool)
+	rest := 0
+	for _, each := range t.tests {
+		part := 0
+		if count > 1 && each.heading != stdTestHeading && each.heading != raceBenchHeading {
+			part = 1 + rest%(count-1)
+			rest++
+		}
+		if part == idx {
+			set[each.name] = true
+		}
+	}
+	return set
+}
+
 func (t *tester) shouldRunTest(name string) bool {
+	if t.shardSet != nil && !t.shardSet[name] {
+		return false
+	}
 	if t.runRx != nil {
 		return t.runRx.MatchString(name) == t.runRxWant
 	}
@@ -795,8 +851,12 @@ var (
 	benchMatches []string
 )
 
+const (
+	stdTestHeading   = "Testing packages."           // known to addTest for a safety check
+	raceBenchHeading = "Running benchmarks briefly." // known to addTest for a safety check
+)
+
 func (t *tester) registerStdTest(pkg string) {
-	const stdTestHeading = "Testing packages." // known to addTest for a safety check
 	name := testName(pkg, "")
 	if t.runRx == nil || t.runRx.MatchString(name) == t.runRxWant {
 		stdMatches = append(stdMatches, pkg)
@@ -840,7 +900,6 @@ func (t *tester) registerStdTest(pkg string) {
 }
 
 func (t *tester) registerRaceBenchTest(pkg string) {
-	const raceBenchHeading = "Running benchmarks briefly." // known to addTest for a safety check
 	name := testName(pkg, "racebench")
 	if t.runRx == nil || t.runRx.MatchString(name) == t.runRxWant {
 		benchMatches = append(benchMatches, pkg)
