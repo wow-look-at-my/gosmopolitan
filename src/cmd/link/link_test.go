@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package link
 
 import (
 	"bufio"
@@ -46,9 +46,7 @@ func TestMain(m *testing.M) {
 		if strings.TrimSuffix(filepath.Base(os.Args[1]), ".exe") == "link" {
 			// Running as a -toolexec linker, and the tool is cmd/link.
 			// Substitute this test binary for the linker.
-			os.Args = os.Args[1:]
-			main()
-			os.Exit(0)
+			os.Exit(Main(os.Args[2:]))
 		}
 		// Running some other tool.
 		cmd := exec.Command(os.Args[1], os.Args[2:]...)
@@ -64,8 +62,7 @@ func TestMain(m *testing.M) {
 	// Are we being asked to run as the linker (without toolexec)?
 	// If so then kick off main.
 	if os.Getenv("LINK_TEST_EXEC_LINKER") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	if testExe, err := os.Executable(); err == nil {

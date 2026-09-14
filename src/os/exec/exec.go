@@ -742,7 +742,7 @@ func (c *Cmd) Start() error {
 		return err
 	}
 
-	c.Process, err = os.StartProcess(lp, c.argv(), &os.ProcAttr{
+	c.Process, err = startProcess(lp, c.argv(), &os.ProcAttr{
 		Dir:   c.Dir,
 		Files: childFiles,
 		Env:   env,

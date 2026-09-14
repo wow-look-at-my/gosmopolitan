@@ -14,8 +14,31 @@ import (
 	"cmd/internal/par"
 )
 
-// Tool returns the path to the named builtin tool (for example, "vet").
-// If the tool cannot be found, Tool exits the process.
+// self is this executable when it links build tools, and selfTools names
+// them. A linked tool runs as "<self> tool <name>" instead of a file under
+// build.ToolDir.
+var (
+	self      string
+	selfTools = map[string]struct{}{}
+)
+
+// SetSelf records that exe, this executable, links the named tools.
+func SetSelf(exe string, tools []string) {
+	self = exe
+	for _, name := range tools {
+		selfTools[name] = struct{}{}
+	}
+}
+
+// Linked reports whether this executable links the named tool.
+func Linked(toolName string) bool {
+	_, found := selfTools[toolName]
+	return found
+}
+
+// Tool returns the path to the named builtin tool (for example, "vet"): this
+// executable for a linked tool. If the tool cannot be found, Tool exits the
+// process.
 func Tool(toolName string) string {
 	toolPath, err := ToolPath(toolName)
 	if err != nil && len(cfg.BuildToolexec) == 0 {
@@ -27,11 +50,25 @@ func Tool(toolName string) string {
 	return toolPath
 }
 
+// ToolCmd returns the command line that starts the named builtin tool, before
+// the tool's own arguments: "<self> tool <name>" for a linked tool, the tool's
+// path otherwise. If the tool cannot be found, ToolCmd exits the process.
+func ToolCmd(toolName string) []string {
+	if Linked(toolName) {
+		return []string{self, "tool", toolName}
+	}
+	return []string{Tool(toolName)}
+}
+
 // ToolPath returns the path at which we expect to find the named tool
 // (for example, "vet"), and the error (if any) from statting that path.
+// A linked tool is this executable and is never stat'ed.
 func ToolPath(toolName string) (string, error) {
 	if !ValidToolName(toolName) {
 		return "", fmt.Errorf("bad tool name: %q", toolName)
+	}
+	if Linked(toolName) {
+		return self, nil
 	}
 	toolPath := filepath.Join(build.ToolDir, toolName) + cfg.ToolExeSuffix()
 	err := toolStatCache.Do(toolPath, func() error {

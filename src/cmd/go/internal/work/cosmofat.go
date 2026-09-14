@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -455,7 +456,7 @@ func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 		return
 	}
 
-	link := base.Tool("link")
+	link := base.ToolCmd("link")
 	for _, p := range regular {
 		target := p.Target
 		var sibling string
@@ -475,16 +476,16 @@ func cosmoFatten(ctx context.Context, s *cosmoSibling, mains []*load.Package) {
 // The merge is a command this build issues, so -n and -x show it like every
 // other one. Under -n it is only shown: the payloads it reads were printed
 // rather than written, so running it would open a target that does not exist.
-func cosmoMerge(lane trace.Lane, link string, p *load.Package, target, sibling, what string) {
+func cosmoMerge(lane trace.Lane, link []string, p *load.Package, target, sibling, what string) {
 	args := cosmoMergeArgs(p, sibling)
 	if cfg.BuildN || cfg.BuildX {
-		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(append([]string{link}, args...)))
+		fmt.Fprintf(os.Stderr, "%s\n", joinUnambiguously(slices.Concat(link, args)))
 	}
 	if cfg.BuildN {
 		return
 	}
 	start := time.Now()
-	merge := exec.Command(link, args...)
+	merge := exec.Command(link[0], slices.Concat(link[1:], args)...)
 	merge.Stdout = os.Stdout
 	merge.Stderr = os.Stderr
 	err := merge.Run()
@@ -548,7 +549,7 @@ func cosmoFattenInstall(ctx context.Context, s *cosmoSibling, mains []*load.Pack
 	}
 	lane := cosmoMergeLane(ctx)
 
-	link := base.Tool("link")
+	link := base.ToolCmd("link")
 	for _, p := range mains {
 		target := p.Target
 		var sibling string

@@ -1733,7 +1733,7 @@ func InstallTargetDir(p *Package) TargetDir {
 	}
 	if p.Goroot && strings.HasPrefix(p.ImportPath, "cmd/") && p.Name == "main" {
 		switch p.ImportPath {
-		case "cmd/go", "cmd/gofmt":
+		case "cmd/go/main", "cmd/gofmt":
 			return ToBin
 		}
 		return ToTool
@@ -1795,6 +1795,10 @@ func (p *Package) exeFromFiles() string {
 func (p *Package) DefaultExecName() string {
 	if p.Internal.CmdlineFiles {
 		return p.exeFromFiles()
+	}
+	// The go command's main package sits under cmd/go, whose name is a keyword.
+	if p.Goroot && p.ImportPath == "cmd/go/main" {
+		return "go"
 	}
 	return p.exeFromImportPath()
 }

@@ -146,7 +146,7 @@ func contentID(buildID string) string {
 // tool IDs do not make it impossible.)
 func (b *Builder) toolID(name string) string {
 	return b.toolIDCache.Do(name, func() string {
-		path := base.Tool(name)
+		path := base.ToolCmd(name)
 		desc := "go tool " + name
 
 		// Special case: -{vet,fix}tool overrides usual cmd/{vet,fix}
@@ -154,7 +154,7 @@ func (b *Builder) toolID(name string) string {
 		// (We use only "vet" terminology in the action graph.)
 		if name == "vet" {
 			path = VetTool
-			desc = VetTool
+			desc = strings.Join(VetTool, " ")
 		}
 
 		cmdline := str.StringList(cfg.BuildToolexec, path, "-V=full")
@@ -170,7 +170,7 @@ func (b *Builder) toolID(name string) string {
 		}
 
 		line := stdout.String()
-		id, ok := parseToolID(name, path == VetTool, line)
+		id, ok := parseToolID(name, name == "vet", line)
 		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
@@ -179,7 +179,7 @@ func (b *Builder) toolID(name string) string {
 		// empty tool ID is one every such binary shares, and a build cache
 		// then serves objects across incompatible compilers. Hash the file.
 		if id == "" {
-			id = b.fileHash(path)
+			id = b.fileHash(path[0])
 			if id == "" {
 				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
 			}

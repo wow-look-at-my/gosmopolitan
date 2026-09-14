@@ -180,6 +180,7 @@ func (t *tester) run() {
 			goInstall(toolenv(), gorootBinGo, toolchain...)
 			goInstall(toolenv(), gorootBinGo, toolchain...)
 			goInstall(toolenv(), gorootBinGo, toolsToInstall...)
+			linkTools()
 		}
 	}
 
