@@ -36,7 +36,7 @@ github.com/pierrec/lz4/v4/internal/xxh32
 # github.com/wow-look-at-my/go-containers v0.0.0-00010101000000-000000000000
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-containers/set
-# github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-20260913232707-d630605b297f
+# github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0-00010101000000-000000000000
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-s3-server/cacheclient
 # golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97
