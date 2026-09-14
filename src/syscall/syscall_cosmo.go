@@ -66,6 +66,9 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
 		return r1, r2, Errno(errno)
 	}
+	if darwinLinuxStatfs(trap, a3) {
+		return darwinStatfsLinux(trap, a1, a2)
+	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, 0, 0, 0)
 	runtime_exitsyscall()
@@ -81,6 +84,9 @@ func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) 
 		var errno uintptr
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
 		return r1, r2, Errno(errno)
+	}
+	if darwinLinuxStatfs(trap, a3) {
+		return darwinStatfsLinux(trap, a1, a2)
 	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
@@ -379,13 +385,13 @@ func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int,
 
 //sys	sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
 
-// statfs, fstatfs and uname fill a struct the host defines, and macOS
-// defines a much larger one. The exported wrappers live in
-// bigbuf_cosmo.go, which converts on a macOS host and calls
-// straight through everywhere else.
+// statfs and fstatfs fill a struct the host defines, and macOS defines
+// a much larger one. Syscall converts it on a macOS host
+// (bigbuf_cosmo.go), so these wrappers and every other caller of the raw
+// syscall get a Linux Statfs_t on every host.
 //
-//sys	fstatfs(fd int, buf *Statfs_t) (err error)
-//sys	statfs(path string, buf *Statfs_t) (err error)
+//sys	Fstatfs(fd int, buf *Statfs_t) (err error)
+//sys	Statfs(path string, buf *Statfs_t) (err error)
 
 // Constants
 const (
