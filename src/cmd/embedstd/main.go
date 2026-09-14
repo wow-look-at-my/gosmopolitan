@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 
+	"cmd/internal/buildid"
 	"cmd/internal/objabi"
 	"internal/cosmo/embedded"
 )
@@ -101,6 +102,7 @@ func Main(args []string) int {
 				if err != nil {
 					log.Fatalf("%s: %v", pkg.ImportPath, err)
 				}
+				archive, entry.BuildID = canonicalArchive(pkg, archive)
 				entry.Archive = embedded.StdArchive(name, pkg.ImportPath)
 				writer.Add(entry.Archive, archive)
 			}
@@ -174,4 +176,53 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 		packages = append(packages, pkg)
 	}
 	return packages
+}
+
+// canonicalArchive answers the archive with a build ID derived from its own
+// bytes, and that ID. The go command stamps an archive with an ID that hashes
+// the compiler binary, so two compilers of one source stamp two IDs into the
+// same object code. A blob built by each compiler in turn must converge, so
+// the ID the blob carries names the content alone.
+func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
+	id, err := buildid.ReadFile(pkg.Export)
+	if err != nil {
+		log.Fatalf("%s: reading the archive's build ID: %v", pkg.ImportPath, err)
+	}
+	if id == "" {
+		return archive, pkg.BuildID
+	}
+	matches, hash, err := buildid.FindAndHash(bytes.NewReader(archive), id, 0)
+	if err != nil {
+		log.Fatalf("%s: hashing the archive: %v", pkg.ImportPath, err)
+	}
+	canonical := contentID(id, hash)
+	if err := buildid.Rewrite(sliceWriterAt(archive), matches, canonical); err != nil {
+		log.Fatalf("%s: rewriting the archive's build ID: %v", pkg.ImportPath, err)
+	}
+	return archive, canonical
+}
+
+// contentID spells hash in the shape of id: the same number of parts, each of
+// the same length, so the rewrite fits the bytes it replaces.
+func contentID(id string, hash [32]byte) string {
+	word := buildid.HashToString(hash)
+	parts := strings.Split(id, "/")
+	for idx, part := range parts {
+		fill := word
+		for len(fill) < len(part) {
+			fill += word
+		}
+		parts[idx] = fill[:len(part)]
+	}
+	return strings.Join(parts, "/")
+}
+
+// sliceWriterAt writes into a byte slice in place.
+type sliceWriterAt []byte
+
+func (buf sliceWriterAt) WriteAt(data []byte, off int64) (int, error) {
+	if off < 0 || off+int64(len(data)) > int64(len(buf)) {
+		return 0, fmt.Errorf("write of %d bytes at %d is outside %d bytes", len(data), off, len(buf))
+	}
+	return copy(buf[off:], data), nil
 }
