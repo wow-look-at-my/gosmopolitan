@@ -20,6 +20,8 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 | 1 | `src/runtime/sys_cosmo_arm64.s` (`mincore` darwin) | Answered -1 always, so the page-size probe in `sysauxv` read every size as unsupported and `physPageSize` fell back to 256K. Fixed on this branch, unconfirmed: `osArchInit` resolves Apple's mincore through dlsym. |
 | 2 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (`*at` family) | `linkat`, `symlinkat`, `fchmodat`, `fchownat` and `utimensat` answer ENOSYS on macOS-Intel. The BSD numbers are in `syscall/zsysnum_darwin_amd64.go`, but each needs its `AT_*` flags translated - Linux `AT_SYMLINK_NOFOLLOW` is 0x100 against Apple's 0x20 - and the amd64 dispatch is assembly with no room for a table. |
 | 3 | `internal/poll/sendfile_unix.go` | Carried no cosmo build tag, so `io.Copy` from a file to a socket never reached the syscall on any cosmo host. Fixed on this branch, unconfirmed: `net` and `internal/poll` carry the tag, `ntEmuSendfile` serves NT, and the runtimeprobe `sendfile` check is now hard on Windows. |
+| 4 | `src/syscall/bigbuf_cosmo.go` (`uname` on macOS) | golang.org/x/sys/unix.Uname issues `RawSyscall(SYS_UNAME)` with a Linux `Utsname`, and the emulation answers EINVAL: it accepts only the Apple buffer `syscall.Uname` allocates. Statfs has the conversion in `Syscall`; `RawSyscall` cannot allocate, because a forked child runs it. |
+| 5 | `src/syscall/bigbuf_cosmo.go` (statfs on macOS-Intel) | `cosmo.Darwin()` is set only on the arm64 XNU path, so on macOS-Intel the statfs conversion never runs and the amd64 size guard answers EINVAL to every statfs and fstatfs. |
 
 ## 3. Unverified paths
 
