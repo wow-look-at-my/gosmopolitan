@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"cmd/go/internal/base"
 	goCfg "cmd/go/internal/cfg"
 
 	"github.com/wow-look-at-my/go-s3-server/cacheclient"
@@ -51,6 +52,9 @@ type SharedCache struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	remoteOnce sync.Once
+	remoteErr  error
 }
 
 // sharedModule holds the main module's path for cache provenance.
@@ -143,6 +147,12 @@ func newSharedCache(disk *DiskCache) Cache {
 	// disk before the build asks for them, so the ask is a local read.
 	remote.OnBatchEntries = c.populate
 	liveShared.Store(c)
+	// Every go process shares the index's disk copy through IndexDir, and
+	// one that exits holding its lock makes the next wait for it. A command
+	// that never runs a build still opens the cache, and a failing one
+	// exits through base.Exit without returning, so the exit closes the
+	// shared tier whatever else did.
+	base.AtExit(func() { c.closeRemote() })
 	return c
 }
 
@@ -269,10 +279,19 @@ func (c *SharedCache) offer(id ActionID, outputID OutputID) {
 // trims, so an upload never loses the file it is reading.
 func (c *SharedCache) Close() error {
 	c.closeOnce.Do(func() {
-		c.closeErr = errors.Join(c.remote.Close(), c.DiskCache.Close())
+		c.closeErr = errors.Join(c.closeRemote(), c.DiskCache.Close())
 		c.reportTiers()
 	})
 	return c.closeErr
+}
+
+// closeRemote closes the shared tier once: it drains the uploads and gives up
+// the index's lock. The disk cache stays open.
+func (c *SharedCache) closeRemote() error {
+	c.remoteOnce.Do(func() {
+		c.remoteErr = c.remote.Close()
+	})
+	return c.remoteErr
 }
 
 // reportTiers names what each tier answered and what it moved. Close drains
