@@ -153,6 +153,35 @@ jobs:
         shell: bash
         run: ./bin/go version
 
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # apeld-reproducible.dats rebuilds the committed APE loaders with these; the tarball is pinned by digest so they cannot drift with a zig release.
+      - name: Install the toolchain that builds the APE loaders
+        shell: bash
+        env:
+          ZIG_VERSION: 0.16.0
+          ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lld-18 llvm-18
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
+          echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
+
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 45
@@ -215,6 +244,19 @@ jobs:
         run: |
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
+
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
 
       # apetest on every origin, then the subsets. The deadlines are in the suite.
       - name: The APE binaries run on this host (dats)
