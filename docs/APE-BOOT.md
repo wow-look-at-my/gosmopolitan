@@ -39,6 +39,8 @@ From then on `execve` of any APE on that machine starts it directly. No shell ru
 
 Measured: an entry registered with `F` still boots the payload after its interpreter file is deleted. `/tmp`, the program's directory and `/usr/local/lib` were all mounted read-only in a private mount namespace for that run.
 
+Measured on a writable host with no loader installed. The first run leaves nothing at all under `/tmp`. The entry it registered names a path that the same run then deleted. An unprivileged run of the same program keeps its unpacked loader and registers no entry.
+
 The register file lives in procfs, not on the disk, so a read-only disk does not stop it. Root does. The registration is best effort: a run that cannot take it says nothing and goes through the search instead.
 
 An image that must start APEs with nothing writable bakes the registration in at build time. That is one entry for the whole machine, not a file per program.
@@ -54,6 +56,8 @@ ${APE_LOADERDIR:-/tmp/.ape-ld-1-<uid>}/apeld-<os>-<arch>-<tag>
 The tag is the first four bytes of the loader's own SHA-256. A toolchain that ships a different loader therefore unpacks to a path of its own.
 
 This is not the staged copy it replaces. The loader is 816 bytes on linux/amd64, against the program's megabytes. It is the same file for every APE of that architecture. One unpack serves the whole machine for good. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
+
+A run that both unpacked the loader and registered it deletes the file at once. `F` already handed the kernel the descriptor. The program then starts with nothing on the disk to show for it. The unpacked file therefore survives only where registration is not available, which means an unprivileged run. `APE_NOBINFMT` in the environment marks a pass that took this path. A second pass reads it and execs the loader by name instead, which stops a loop.
 
 `APE_LOADERDIR` moves that directory. It exists for the case `/tmp` cannot serve. A **noexec** mount takes the loader fine, and execve then refuses it. Nothing validates the value, because `mkdir` and `dd` already fail loudly.
 

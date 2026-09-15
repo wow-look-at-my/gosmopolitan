@@ -174,9 +174,24 @@ func TestShellRegistersTheLoaderWithTheKernel(t *testing.T) {
 		`the entry must carry F, and the magic's quote must stay octal inside DOUBLE quotes so it is not read as a boot header`)
 	assert.Contains(t, header, `> /proc/sys/fs/binfmt_misc/register; } 2>/dev/null`,
 		"the redirect belongs inside the group: a shell reports a redirect it cannot open on its own stderr")
-	assert.Contains(t, header, `[ -e /proc/sys/fs/binfmt_misc/APE ] && return 0`,
-		"an entry already registered must be left alone")
+	assert.Contains(t, header, `[ -e /proc/sys/fs/binfmt_misc/APE ] && return 1`,
+		"an entry already registered must be left alone, and must not read as this run's own work")
 	assert.Contains(t, header, `apereg "$u"`, "the unpacked loader must be registered too")
+}
+
+// A run that unpacked the loader AND registered it leaves nothing behind. F
+// opened the interpreter at registration, so the kernel holds it after the
+// file goes. APE_NOBINFMT breaks the loop a kernel that hands the file back
+// to a shell would otherwise make.
+func TestShellDeletesTheLoaderItRegistered(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `if apereg "$u" && [ -n "$w" ] && [ -z "${APE_NOBINFMT:-}" ]; then`,
+		"the delete must need this run's own registration and its own unpack")
+	assert.Contains(t, header, `rm -f "$u" 2>/dev/null; APE_NOBINFMT=1; export APE_NOBINFMT`,
+		"the file goes, and the marker stops a second pass from trying again")
+	assert.Contains(t, header, `apepath; exec "$o" "$@"`,
+		"with the entry in place the kernel starts the APE itself")
 }
 
 // A host with nowhere to unpack and no loader must say which loader it wants

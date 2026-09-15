@@ -348,24 +348,39 @@ var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
 // one. Both guards are a stat, so an unprivileged run costs two of them and
 // no subprocess, and falls through to the search above.
 //
+// It succeeds only when THIS run registered the entry. A caller reads that
+// as permission to delete the file it registered.
+//
 // The magic is DOUBLE-quoted, because the cosmo ape loader decodes every
 // `printf '` in the first 8192 bytes as a boot header and this is not one.
 // The redirect sits inside a group: a shell reports one it cannot open on
 // its own stderr.
-const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 0
-  [ -w /proc/sys/fs/binfmt_misc/register ] || return 0
-  { printf ":APE:M::MZqFpD=\047::$1:F" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null; return 0; }
+const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 1
+  [ -w /proc/sys/fs/binfmt_misc/register ] || return 1
+  { printf ":APE:M::MZqFpD=\047::$1:F" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null
+  [ -e /proc/sys/fs/binfmt_misc/APE ]; }
 `
 
 // apeLoaderTmpl unpacks the loader the APE embeds, for a host the search
 // found nothing on.
+//
+// A run that both unpacked the loader and registered it deletes the file at
+// once. The kernel holds the descriptor F opened, so the program starts with
+// nothing left on disk. APE_NOBINFMT breaks the loop a kernel that hands the
+// file back to a shell would otherwise make.
 var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
 	`  u={{.Dir}}/$l-{{.Tag}}
+  w=
   if [ ! -x "$u" ]; then
     (umask 077; mkdir -p "${u%/*}") 2>/dev/null || { echo "APE: no $l on this host, and nowhere to unpack the embedded one: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
     dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u.$$" && [ -s "$u.$$" ] && chmod 755 "$u.$$" && mv -f "$u.$$" "$u" || { rm -f "$u.$$"; echo "APE: cannot unpack $l with {{.Unpackers}}: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
+    w=1
   fi
-  apereg "$u"; apepath; exec "$u" "$o" "$@"
+  if apereg "$u" && [ -n "$w" ] && [ -z "${APE_NOBINFMT:-}" ]; then
+    rm -f "$u" 2>/dev/null; APE_NOBINFMT=1; export APE_NOBINFMT
+    apepath; exec "$o" "$@"
+  fi
+  apepath; exec "$u" "$o" "$@"
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
