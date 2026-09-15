@@ -666,6 +666,9 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 			ldflags = append(ldflags, "-X=cmd/internal/objabi.buildID="+root.buildID)
 		}
 	}
+	if ids := linkedToolIDs(root); ids != "" {
+		ldflags = append(ldflags, "-X=cmd/internal/objabi.toolIDs="+ids)
+	}
 
 	// Store default GODEBUG in binaries.
 	if root.Package.DefaultGODEBUG != "" {

@@ -50,6 +50,17 @@ embedded() {
 	(cd "$work/hello" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" "$@")
 }
 
+echo "== a linked tool's ID names the tool, not the binary carrying it"
+GOOS=cosmo GOCOSMOAPPEND="$work/std.blob" go build -trimpath -ldflags=-buildid=other -o "$work/go-again.com" cmd/go/main
+if cmp -s "$work/go.com" "$work/go-again.com"; then
+	echo "a different -buildid produced the same binary" >&2
+	exit 1
+fi
+/bin/sh "$work/go.com" tool compile -V=full >"$work/compile-id.txt"
+/bin/sh "$work/go-again.com" tool compile -V=full >"$work/compile-id-again.txt"
+grep -q "buildID=." "$work/compile-id.txt"
+diff "$work/compile-id.txt" "$work/compile-id-again.txt"
+
 echo "== the manifest lists what the source tree lists"
 GOOS=cosmo go list -deps std | sort >"$work/source-std.txt"
 embedded list std | sort >"$work/embedded-std.txt"
