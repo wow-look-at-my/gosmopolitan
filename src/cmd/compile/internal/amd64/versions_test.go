@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"go/build"
+	"internal/ape"
 	"internal/testenv"
 	"io"
 	"math"
@@ -96,6 +97,36 @@ func TestGoAMD64v1(t *testing.T) {
 	}
 }
 
+// apeLoadSegments reports the PT_LOAD headers of the ELF an APE boots, or nil
+// for any other file. A section offset cannot locate a byte of an APE: the
+// payload carries no section table, and debug/elf answers from the debug
+// sidecar, whose offsets are its own. A payload program header holds an
+// absolute offset into the APE, which is what the copy below counts.
+func apeLoadSegments(t *testing.T, name string) []*elf.Prog {
+	if !ape.IsAPE(name) {
+		return nil
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	e, err := elf.NewFile(io.NewSectionReader(f, ape.HeaderSize, 1<<62))
+	if err != nil {
+		t.Fatalf("%s carries no ELF payload: %v", name, err)
+	}
+	var loads []*elf.Prog
+	for _, p := range e.Progs {
+		if p.Type == elf.PT_LOAD {
+			loads = append(loads, p)
+		}
+	}
+	if len(loads) == 0 {
+		t.Fatalf("%s: the payload has no PT_LOAD segment", name)
+	}
+	return loads
+}
+
 // Clobber copies the binary src to dst, replacing all the instructions in opcodes with
 // faulting instructions.
 func clobber(t *testing.T, src string, dst *os.File, opcodes map[string]bool) {
@@ -171,7 +202,15 @@ func clobber(t *testing.T, src string, dst *os.File, opcodes map[string]bool) {
 
 	// Figure out where in the binary the edits must be done.
 	physicalEdits := map[uint64]bool{}
-	if e, err := elf.Open(src); err == nil {
+	if loads := apeLoadSegments(t, src); loads != nil {
+		for _, p := range loads {
+			for a := range virtualEdits {
+				if a >= p.Vaddr && a < p.Vaddr+p.Filesz {
+					physicalEdits[p.Off+(a-p.Vaddr)] = true
+				}
+			}
+		}
+	} else if e, err := elf.Open(src); err == nil {
 		for _, sec := range e.Sections {
 			vaddr := sec.Addr
 			paddr := sec.Offset
