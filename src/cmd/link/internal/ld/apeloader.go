@@ -51,8 +51,7 @@ const (
 
 // apeLoaderFor returns the loader that boots p, or nil for a platform that
 // needs none. windows/amd64 needs none: the file is a valid PE and the OS
-// maps the payload straight from it. darwin/amd64 has none, and stages a
-// copy instead.
+// maps the payload straight from it.
 func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 	switch p {
 	case cosmoape.LinuxAMD64:

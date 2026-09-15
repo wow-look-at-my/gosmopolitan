@@ -3,7 +3,6 @@ package apetest
 import (
 	"bytes"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,19 +69,16 @@ func TestShellPrintfOctalOnly(t *testing.T) {
 	assert.False(t, badEscapes.Match(printfContent), "printf must use octal escapes only, not \\n, \\t, etc.")
 }
 
-func TestShellDdStatement(t *testing.T) {
-	// The dd statement relocates the Mach-O header, so it exists only when
-	// the header does. See skipWithoutMacho.
-	skipWithoutMacho(t)
+// Every dd in the script reads bytes out of the APE. None writes any back:
+// an assimilation dd names an output file and passes conv=notrunc, and the
+// APE is never rewritten, in place or in a copy.
+func TestShellDdOnlyReads(t *testing.T) {
 	header := first8K(t)
 
-	// Spec: dd if="$o" of="$o" bs=... skip=... count=... conv=notrunc
-	ddPattern := regexp.MustCompile(`dd\s+if=.*of=.*bs=(\d+)\s+skip=(\d+)\s+count=(\d+).*conv=notrunc`)
-	match := ddPattern.FindSubmatch(header)
-	require.NotNil(t, match, "must contain dd statement for Mach-O relocation")
-
-	// bs should be 8 (standard)
-	assert.Equal(t, "8", string(match[1]), "dd bs should be 8")
+	assert.False(t, bytes.Contains(header, []byte("conv=notrunc")),
+		"conv=notrunc means a dd that writes a header over a file")
+	assert.False(t, regexp.MustCompile(`dd\s+if=\S+\s+of=`).Match(header),
+		"no dd in the script may name an output file")
 }
 
 func TestShellArchDetection(t *testing.T) {
@@ -167,28 +163,13 @@ func TestShellNamesTheMissingLoader(t *testing.T) {
 	assert.Regexp(t, `no \$l on this host`, header, "the refusal must name the loader")
 }
 
-// darwin/amd64 has no embedded loader, so it stages a copy. A host that
-// carries an apeld-darwin-amd64 of its own must still be used first: that
-// is the only way an APE claiming this platform starts on a read-only
-// filesystem.
-func TestShellSearchesBeforeItStages(t *testing.T) {
-	skipWithoutMacho(t)
+// Nothing in the script copies the program, on any host. A copy needs a
+// writable filesystem, and every platform now boots through a loader that
+// reads the APE where it lies.
+func TestShellNeverCopiesTheProgram(t *testing.T) {
 	header := string(first8K(t))
 
-	search := strings.Index(header, "l=apeld-darwin-amd64")
-	require.GreaterOrEqual(t, search, 0, "the staging branch must search for a darwin/amd64 loader")
-	stage := strings.Index(header, `cp "$o" "$p.$$"`)
-	require.GreaterOrEqual(t, stage, 0, "darwin/amd64 must still stage a copy when no loader answers")
-	assert.Less(t, search, stage, "the search must come before the copy")
-}
-
-// The copy darwin/amd64 stages is keyed by the identity of the file it came
-// from, so a rebuilt binary never runs what an earlier build left staged.
-func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
-	skipWithoutMacho(t)
-	header := string(first8K(t))
-
-	assert.Contains(t, header, `stat -L -f %d.%i.%Fm.%z "$o"`, "BSD stat, -L so a symlink keys on its target: device, inode, mtime, size")
-	assert.Contains(t, header, `stat -L -c %d.%i.%.9Y.%s "$o"`, "GNU stat spells the same fields differently")
-	assert.Contains(t, header, `cksum <"$o"`, "a host without stat falls back to the contents")
+	for _, s := range []string{`cp "$o"`, `stat -L`, `cksum <"$o"`} {
+		assert.NotContains(t, header, s, "%s belongs to staging a copy, which no host does", s)
+	}
 }

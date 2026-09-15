@@ -15,16 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// skipWhereNoLoaderBoots skips a test on the hosts that boot an APE some
-// other way. Windows maps the PE header. darwin/amd64 has no loader and
-// stages a copy to put the Mach-O header at offset 0.
+// skipWhereNoLoaderBoots skips a test on the one host that boots an APE
+// some other way: Windows maps the payload through the PE header.
 func skipWhereNoLoaderBoots(t *testing.T) {
 	t.Helper()
-	switch {
-	case runtime.GOOS == "windows":
+	if runtime.GOOS == "windows" {
 		t.Skip("the NT personality boots the APE through its PE header")
-	case runtime.GOOS == "darwin" && runtime.GOARCH == "amd64":
-		t.Skip("darwin/amd64 has no native loader and stages a copy")
 	}
 }
 
@@ -54,8 +50,8 @@ func residentLoader(t *testing.T) string {
 	return ""
 }
 
-// apeRunBaseDir is where darwin/amd64 stages its copy. Every other host
-// must leave this directory alone.
+// apeRunBaseDir is the directory a staged copy of the program would land
+// in. Nothing writes there, and TestNoCopyOfTheProgramIsMade says so.
 func apeRunBaseDir(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("/tmp/.ape-run-1-%d", os.Getuid())
@@ -195,29 +191,23 @@ func TestAResidentLoaderNeedsNothingWritable(t *testing.T) {
 		"the run through the resident loader must produce the same output")
 }
 
-// A rebuilt binary must not run what an earlier build left staged. Only
-// darwin/amd64 stages at all, and its key reads the mtime to the
-// nanosecond because a build loop rewrites in place inside one second.
-func TestStagedCopyFollowsASameSecondRewrite(t *testing.T) {
-	if runtime.GOOS != "darwin" || runtime.GOARCH != "amd64" {
-		t.Skip("only darwin/amd64 stages a copy")
-	}
+// A rebuilt binary runs its own bytes. Staging keyed a copy by the file's
+// identity to get this right, and got it wrong whenever a build loop
+// rewrote in place inside one second. A loader reads the file every time,
+// so the question does not arise.
+func TestARebuiltBinaryRunsItsOwnBytes(t *testing.T) {
+	skipWhereNoLoaderBoots(t)
+	bin := copyAPE(t)
+
+	first := runAPE(t, bin, nil, "10", "5")
+	require.Equal(t, "fizzbuzz", first)
+
+	// Rewritten in place, at the same size, inside the same second: the
+	// case a staged copy keyed wrong.
 	data, err := os.ReadFile(binPath(t))
 	require.NoError(t, err)
-
-	bin := filepath.Join(t.TempDir(), "fizzbuzz.com")
 	require.NoError(t, os.WriteFile(bin, data, 0o755))
 
-	before := entrySet(t, apeRunBaseDir(t))
-	first := runAPE(t, bin, nil, "10", "5")
-	require.Len(t, newEntries(before, entrySet(t, apeRunBaseDir(t))), 1, "the first run stages one copy")
-
-	// Rewrite in place, same bytes and same size, immediately: only the
-	// mtime moves, and on a one-second clock it would not move at all.
-	require.NoError(t, os.WriteFile(bin, data, 0o755))
-	second := runAPE(t, bin, nil, "10", "5")
-
-	assert.Equal(t, first, second, "the rewritten binary still runs")
-	assert.Len(t, newEntries(before, entrySet(t, apeRunBaseDir(t))), 2,
-		"the rewrite must key to a copy of its own, not to the one already staged")
+	assert.Equal(t, first, runAPE(t, bin, nil, "10", "5"),
+		"the run after an in-place rewrite must still be this file's")
 }

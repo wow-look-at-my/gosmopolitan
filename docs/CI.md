@@ -34,7 +34,7 @@ Checks whose answer does not depend on the host. Each runs once, on the linux to
 
 **Build platform-subset APE binaries** (in the build job's APE step)**.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
-- `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. What it drops is the macOS Intel claim. This is the set consumers ask for, and every one of its three platforms must still boot the binary.
+- `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. It names the default set explicitly. Every one of its three platforms must still boot the binary.
 - `amd` - linux/amd64, windows/amd64. One payload: the arm64 image, its boot header and its sidecar are gone, which is where the size actually drops.
 
 Cross-compiles, so every build leg builds them with the fat binary, and the test legs run the ubuntu-origin ones. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.

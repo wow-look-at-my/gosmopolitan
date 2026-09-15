@@ -52,20 +52,10 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 On macOS nothing changes. The loader maps the payload itself, and `os.Executable()` resolves `argv[0]`.
 
-## darwin/amd64 still stages a copy
+## Nothing copies the program
 
-That platform has no loader yet. It is also absent from `cosmoape.Default()`. Its syscall and signal surfaces are implemented. No Intel-mac runner exists. Nothing there has ever been executed.
+No host stages a copy of the binary, and no host writes a header into one. `cosmoape`'s platform table is exactly the set that starts without doing either.
 
-XNU reads the Mach-O header at offset 0. A build that selects this platform therefore copies itself to
+darwin/amd64 is absent from that table. Intel macs are out of support. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. A copy was that platform's only route.
 
-```
-${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/<basename>
-```
-
-It then moves the header into place on the copy with `dd`. The APE itself is still never written.
-
-TMPDIR and HOME are not read. Both are caller-supplied, and neither can be trusted. TMPDIR can be unset, empty, or point at something unwritable. A container run as a bare numeric UID still gets `HOME="/"`. `/tmp` is world-writable on virtually every host this binary runs on.
-
-The file identity is `device.inode.mtime.size`. `stat -L -f %d.%i.%Fm.%z` reads it on BSD, and `stat -L -c %d.%i.%.9Y.%s` reads it on GNU. `cksum` over the contents stands in where neither exists.
-
-The mtime is read to the nanosecond. A build loop rewrites the file in place inside one second, at the same size. Seconds alone therefore key that rebuild to the copy already staged.
+TMPDIR and HOME are not read anywhere in the script. Both are caller-supplied, and neither can be trusted. TMPDIR can be unset, empty, or point at something unwritable. A container run as a bare numeric UID still gets `HOME="/"`.

@@ -123,7 +123,9 @@ func TestApeLoaderRegionsFitTheHeader(t *testing.T) {
 	if len(loaders) != len(apeLoaderSums) {
 		t.Fatalf("got %d loaders for every platform that has one, want %d", len(loaders), len(apeLoaderSums))
 	}
-	end := apeMachoOffset
+	// The script runs from apeScriptOffset, so the first loader must start
+	// past where it can reach.
+	end := apeScriptOffset
 	for _, l := range loaders {
 		if l.offset < end {
 			t.Errorf("%s starts at %#x, inside the region that ends at %#x", l.name, l.offset, end)

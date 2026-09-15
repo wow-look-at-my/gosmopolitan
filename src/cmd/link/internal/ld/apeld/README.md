@@ -11,7 +11,7 @@ Upstream is [wow-look-at-my/ape-research](https://github.com/wow-look-at-my/ape-
 
 windows/amd64 has no loader. The APE is a valid PE and the OS maps the payload straight from the file, read-only path or not.
 
-darwin/amd64 has no loader either. It is not in `cosmoape.Default()`, and it still boots through a staged copy.
+darwin/amd64 is not a platform this toolchain emits. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. The only route for that platform was a copy of the whole program.
 
 ## Rebuilding
 
