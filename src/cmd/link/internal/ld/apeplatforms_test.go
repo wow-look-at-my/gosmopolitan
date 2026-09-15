@@ -71,9 +71,9 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 	return data
 }
 
-// bootHeaderMachines decodes every printf boot header in the loader's
-// 8192-byte scan window and returns its ELF machine type, the way
-// ape-m1.c's scan does.
+// bootHeaderMachines decodes every printf boot header in the 8192-byte
+// scan window and returns its ELF machine type, the way the cosmo `ape`
+// loader's own scan does.
 func bootHeaderMachines(t *testing.T, bin []byte) []uint16 {
 	t.Helper()
 	head := bin

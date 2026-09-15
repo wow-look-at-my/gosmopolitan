@@ -157,14 +157,14 @@ func TestSlimMachO(t *testing.T) {
 	gotHeader := len(bin) > machoOffset+4 && le32(bin[machoOffset:machoOffset+4]) == machoMagic64
 	assert.Equal(t, want, gotHeader, "Mach-O header at %#x", machoOffset)
 
-	// conv=notrunc is what distinguishes the assimilation dd from the one
-	// the macOS ARM64 branch uses to extract the loader source.
+	// conv=notrunc is what distinguishes the assimilation dd from the ones
+	// that read an embedded loader out of the file.
 	gotDD := bytes.Contains(slimHead(t), []byte("conv=notrunc"))
 	assert.Equal(t, want, gotDD, "dd assimilation statement in the bootstrap script")
 }
 
-// TestSlimApeLoader checks the gzipped APE loader source, which only
-// darwin/arm64 compiles and runs.
+// TestSlimApeLoader checks the gzipped darwin loader, which only
+// darwin/arm64 boots through.
 func TestSlimApeLoader(t *testing.T) {
 	sel := slimPlatforms(t)
 	bin := slimBinary(t)
@@ -172,7 +172,7 @@ func TestSlimApeLoader(t *testing.T) {
 
 	want := sel["darwin/arm64"]
 	got := len(bin) > loaderOffset+2 && bin[loaderOffset] == 0x1f && bin[loaderOffset+1] == 0x8b
-	assert.Equal(t, want, got, "gzipped APE loader source at %#x", loaderOffset)
+	assert.Equal(t, want, got, "gzipped darwin loader at %#x", loaderOffset)
 }
 
 // TestSlimPEHeader checks that the NT boot header is real only when

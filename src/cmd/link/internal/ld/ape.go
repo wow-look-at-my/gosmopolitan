@@ -1486,4 +1486,3 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 		header[0x202] = 0xC3 // ret
 	}
 }
-
