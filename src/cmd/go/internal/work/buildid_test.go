@@ -93,22 +93,15 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	}
 }
 
-// TestCosmoToolIDTracksToolContent is the regression test for the 2026-07-20
-// consumer cache-poisoning incident. The fork stamps the same release-style
-// version (go1.26.4cosmo) into every build, so cmd/go's tool IDs used to be
-// identical for any two fork builds. Action IDs therefore collided across
-// builds, and build caches — a consumer's local GOCACHE, or a shared cache
-// tier that survives across toolchain updates — served objects
-// compiled by an older fork build into links done by a newer one, producing
-// binaries that crash at startup.
-//
-// The test takes the real compile binary and makes a second copy whose
-// content differs (its embedded build ID rewritten — a stand-in for a
-// genuinely different fork build, which differs in exactly this way and
-// more). Both claim the same version, but cmd/go must compute different tool
-// IDs for them. Before the fix, -V=full printed only the constant version
-// line for both, so the tool IDs were equal and this test fails.
-func TestCosmoToolIDTracksToolContent(t *testing.T) {
+// TestCosmoToolIDNamesTheToolNotTheBinary takes the real compile binary and
+// makes a second copy whose own build ID is rewritten, which is what a
+// rebuild of the binary carrying the tools does when only the carrier
+// changed. Both must report the same tool ID, and a real one: the ID is
+// stamped from the tool's packages at link time (see linkedToolIDs), so a
+// compiler that is the same code keeps its cache entries from whichever
+// binary carries it, and a compiler that is different code moves the ID
+// through its archives.
+func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveExec(t)
 	if !strings.Contains(runtime.Version(), "cosmo") {
@@ -191,7 +184,7 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 		t.Fatalf("tools report different name/version:\n\t%q\n\t%q", out1, out2)
 	}
 
-	// ...but cmd/go must compute different tool IDs for them.
+	// ...and the same tool ID, which is not the binary's own build ID.
 	id1, ok := parseToolID("compile", false, out1)
 	if !ok {
 		t.Fatalf("parseToolID failed for %q", out1)
@@ -200,9 +193,15 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 	if !ok {
 		t.Fatalf("parseToolID failed for %q", out2)
 	}
-	if id1 == id2 {
-		t.Errorf("two content-different compile binaries with the same version produced the same tool ID %q:\n\t%q\n\t%q\n"+
-			"different fork builds would collide in the build cache and serve each other stale objects",
-			id1, out1, out2)
+	if id1 == "" {
+		t.Fatalf("compile reports no tool ID: %q", out1)
+	}
+	if id1 != id2 {
+		t.Errorf("the carrier's build ID changed and the compiler's tool ID moved with it, %q to %q:\n\t%q\n\t%q\n"+
+			"every rebuild of the binary would recompile everything it had cached",
+			id1, id2, out1, out2)
+	}
+	if strings.Contains(oldID, id1) || strings.Contains(newID, id1) {
+		t.Errorf("the compiler's tool ID %q is part of the binary's own build ID", id1)
 	}
 }

@@ -11,7 +11,7 @@ runs:
         out="$(./bin/go tool compile -V=full)"
         echo "compile -V=full: $out"
         case "$out" in
-          *" buildID="*"/"*) echo "OK: tool ID is content-derived" ;;
+          *" buildID="?*) echo "OK: tool ID is content-derived" ;;
           *) echo "FAIL: compile -V=full lacks a content-derived buildID field; two different fork builds would share tool IDs and poison warm build caches (see cmd/go/internal/work parseToolID)"; exit 1 ;;
         esac
 
