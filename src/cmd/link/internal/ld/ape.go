@@ -334,13 +334,32 @@ func writeLoaderSearch(script *bytes.Buffer, name string) {
 var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
 	`  l={{.Name}}
   for c in "${APE_LOADER:-}" "${o%/*}/.$l" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
-    [ -x "$c" ] && { apepath; exec "$c" "$o" "$@"; }
+    [ -x "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
   done
   for n in $l apeld ape; do
     c=$(command -v "$n" 2>/dev/null) || continue
-    [ -n "$c" ] && { apepath; exec "$c" "$o" "$@"; }
+    [ -n "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
   done
 `))
+
+// apeRegisterFn hands the loader to the kernel, so execve starts an APE
+// directly: no shell, no search, nothing read off the disk to find it. The
+// F flag opens the interpreter AT REGISTRATION and keeps the descriptor, so
+// a read-only image with no loader file on it still starts an APE.
+//
+// Both guards are a stat, so an unprivileged run costs two of them and no
+// subprocess. It needs root and it changes the machine, so it is best
+// effort, and the search above runs when it does not land. It also assumes
+// binfmt_misc is already mounted, which every stock init does. The magic is
+// written with a
+// DOUBLE-quoted printf, because the cosmo ape loader decodes every
+// `printf '` in the first 8192 bytes as a boot header and this is not one.
+// The redirect sits inside a group: a shell reports a redirect it cannot
+// open on its own stderr.
+const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 0
+  [ -w /proc/sys/fs/binfmt_misc/register ] || return 0
+  { printf ":APE:M::MZqFpD=\047::$1:F" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null; return 0; }
+`
 
 // apeLoaderTmpl unpacks the loader the APE embeds, for a host the search
 // found nothing on.
@@ -350,7 +369,7 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
     (umask 077; mkdir -p "${u%/*}") 2>/dev/null || { echo "APE: no $l on this host, and nowhere to unpack the embedded one: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
     dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u.$$" && [ -s "$u.$$" ] && chmod 755 "$u.$$" && mv -f "$u.$$" "$u" || { rm -f "$u.$$"; echo "APE: cannot unpack $l with {{.Unpackers}}: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
   fi
-  apepath; exec "$u" "$o" "$@"
+  apereg "$u"; apepath; exec "$u" "$o" "$@"
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
@@ -481,6 +500,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// runs its own tools under. net/http/cgi hands a child PATH=/wibble and
 	// reads it back, so an appended /usr/bin is a wrong answer.
 	script.WriteString("apepath() { if [ -n \"$apeS\" ]; then PATH=$apeP; export PATH; else unset PATH; fi; }\n")
+	script.WriteString(apeRegisterFn)
 
 	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")

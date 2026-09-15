@@ -153,6 +153,23 @@ func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 	assert.True(t, tag.MatchString(header), "the unpack path must be per-user and carry the loader's content tag")
 }
 
+// Registering the loader with the kernel is what lets an APE start with
+// nothing writable and no loader file: F makes the kernel hold the
+// interpreter by descriptor, so the path it was registered under stops
+// mattering. Without F the entry names a path that a read-only host may
+// not have.
+func TestShellRegistersTheLoaderWithTheKernel(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `printf ":APE:M::MZqFpD=\047::$1:F"`,
+		`the entry must carry F, and the magic's quote must stay octal inside DOUBLE quotes so it is not read as a boot header`)
+	assert.Contains(t, header, `> /proc/sys/fs/binfmt_misc/register; } 2>/dev/null`,
+		"the redirect belongs inside the group: a shell reports a redirect it cannot open on its own stderr")
+	assert.Contains(t, header, `[ -e /proc/sys/fs/binfmt_misc/APE ] && return 0`,
+		"an entry already registered must be left alone")
+	assert.Contains(t, header, `apereg "$u"`, "the unpacked loader must be registered too")
+}
+
 // A host with nowhere to unpack and no loader must say which loader it wants
 // and how to supply it. Silence there reads as a broken binary.
 func TestShellNamesTheMissingLoader(t *testing.T) {

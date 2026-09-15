@@ -24,6 +24,24 @@ sudo install -D -m755 "$(go env GOROOT)/src/cmd/link/internal/ld/apeld/bin/$l" "
 
 Do that once on an image, and every APE that image ever runs starts without writing.
 
+## Handing the loader to the kernel
+
+Once the script has a loader it registers it with `binfmt_misc`, under the APE magic, with the `F` flag:
+
+```
+:APE:M::MZqFpD='::<loader>:F
+```
+
+From then on `execve` of any APE on that machine starts it directly. No shell runs. Nothing is searched for. Nothing is read off the disk to find the loader. `os/exec`, a build system and a test harness all start an APE like any other program.
+
+`F` is what makes this work on a read-only image. The kernel opens the interpreter at registration and keeps the descriptor. The loader then needs no path at all.
+
+Measured: an entry registered with `F` still boots the payload after its interpreter file is deleted. `/tmp`, the program's directory and `/usr/local/lib` were all mounted read-only in a private mount namespace for that run.
+
+The register file lives in procfs, not on the disk, so a read-only disk does not stop it. Root does. The registration is best effort: a run that cannot take it says nothing and goes through the search instead.
+
+An image that must start APEs with nothing writable bakes the registration in at build time. That is one entry for the whole machine, not a file per program.
+
 ## Unpacking the embedded loader
 
 A host that has none of them unpacks the loader the APE carries:
