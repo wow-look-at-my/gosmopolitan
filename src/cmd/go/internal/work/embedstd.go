@@ -31,7 +31,11 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 	act.built = act.Target
 	act.buildID = pkg.BuildID
 	if builder.NeedExport {
+		// No build runs for this action, so the listing's answer is filled
+		// in here, where a compile's cache hit would fill it.
 		act.built = embeddedStdFile(p.ImportPath, pkg)
+		p.Export = act.built
+		p.BuildID = act.buildID
 	}
 	return act
 }
