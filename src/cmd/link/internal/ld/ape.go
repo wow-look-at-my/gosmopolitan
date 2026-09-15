@@ -345,11 +345,9 @@ var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
 // apeRegisterFn hands the loader to the kernel, so execve starts an APE
 // directly. F opens the interpreter AT REGISTRATION and keeps the
 // descriptor, so a read-only image with no loader file on it still starts
-// one. Both guards are a stat, so an unprivileged run costs two of them and
-// no subprocess, and falls through to the search above.
-//
-// It succeeds only when THIS run registered the entry. A caller reads that
-// as permission to delete the file it registered.
+// one. Both guards are a stat, so an unprivileged run falls through to the
+// search above for free. It succeeds only when THIS run registered the
+// entry, which a caller reads as permission to delete that file.
 //
 // The magic is DOUBLE-quoted, because the cosmo ape loader decodes every
 // `printf '` in the first 8192 bytes as a boot header and this is not one.
