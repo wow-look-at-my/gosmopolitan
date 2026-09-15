@@ -129,11 +129,20 @@ func TestShellNeverWritesToItself(t *testing.T) {
 func TestShellFindsAResidentLoaderFirst(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `for c in "${APE_LOADER:-}" "${o%/*}/.$l" /usr/local/lib/ape/$l /usr/lib/ape/$l; do`,
-		"APE_LOADER, a sibling of the binary, and the two system directories are searched before PATH")
+	assert.Contains(t, header, `for c in "${APE_LOADER:-}" /usr/local/lib/ape/$l /usr/lib/ape/$l; do`,
+		"APE_LOADER and the two system directories are searched before PATH")
 	assert.Contains(t, header, `for n in $l apeld ape; do`,
 		"the PATH search ends at `ape`, the cosmo loader, which boots the file too")
 	assert.Contains(t, header, `exec "$c" "$o" "$@"`, "the loader is handed the APE's own path")
+}
+
+// An APE is one file. Nothing beside it is searched, because a loader
+// shipped next to the binary is a second thing to carry, which is the
+// property an APE exists to avoid.
+func TestShellLooksForNoSidecar(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.NotContains(t, header, `${o%/*}/.`, "no candidate may sit beside the binary")
 }
 
 // The embedded loader is the answer for a host that carries none. It is

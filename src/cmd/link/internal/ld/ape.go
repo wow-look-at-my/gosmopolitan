@@ -321,10 +321,10 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 // read-only filesystem enough to start the program.
 //
 // The absolute candidates come first, because each `command -v` costs a
-// PATH walk. APE_LOADER names one outright. The dot-prefixed sibling lets
-// a distributor ship the loader next to the binary on a read-only medium.
-// `ape` is last: the cosmo loader of that name boots the file too, and it
-// is what a host with cosmopolitan installed already has.
+// PATH walk. APE_LOADER names one outright. Nothing looks beside the
+// binary: an APE is one file, and a loader shipped next to it would be a
+// second thing to carry. `ape` is last: the cosmo loader of that name
+// boots the file too, and a host with cosmopolitan installed has it.
 func writeLoaderSearch(script *bytes.Buffer, name string) {
 	if err := apeSearchTmpl.Execute(script, struct{ Name string }{name}); err != nil {
 		Exitf("APE: rendering the loader search: %v", err)
@@ -333,7 +333,7 @@ func writeLoaderSearch(script *bytes.Buffer, name string) {
 
 var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
 	`  l={{.Name}}
-  for c in "${APE_LOADER:-}" "${o%/*}/.$l" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
+  for c in "${APE_LOADER:-}" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
     [ -x "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
   done
   for n in $l apeld ape; do

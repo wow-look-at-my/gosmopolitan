@@ -11,9 +11,10 @@ The loaders live in `src/cmd/link/internal/ld/apeld`. That directory's README sa
 The bootstrap script takes the first of these it can execute. It writes nothing to get there.
 
 1. `$APE_LOADER`.
-2. `.apeld-<os>-<arch>` beside the binary. That is how a distributor ships one on read-only media.
-3. `/usr/local/lib/ape/apeld-<os>-<arch>`, then `/usr/lib/ape/apeld-<os>-<arch>`.
-4. `apeld-<os>-<arch>`, `apeld`, then `ape` on `PATH`. `ape` is the cosmo loader. It reads the boot ELF headers the script still carries as `printf` statements. That is the only reason those statements are still there.
+2. `/usr/local/lib/ape/apeld-<os>-<arch>`, then `/usr/lib/ape/apeld-<os>-<arch>`.
+3. `apeld-<os>-<arch>`, `apeld`, then `ape` on `PATH`. `ape` is the cosmo loader. It reads the boot ELF headers the script still carries as `printf` statements. That is the only reason those statements are still there.
+
+Nothing looks beside the binary. An APE is one file. A loader shipped next to it is a second thing to carry, which is the property an APE exists to avoid.
 
 A host that has any of these needs nothing writable at all. The toolchain carries the same binaries, so installing one is a copy:
 
@@ -66,7 +67,9 @@ APE: no apeld-linux-amd64 on this host, and nowhere to unpack the embedded one: 
 
 ## What it costs the program
 
-`os.Executable()` on Linux reads `/memfd:<name>`, because the loader execs a memfd. `argv[0]` is the path the caller used. A program that re-execs itself by `os.Executable()` must read `argv[0]` instead.
+On Linux `/proc/self/exe` reads `/memfd:<name>`, because the loader execs a memfd. That is the anonymous file's name, not a path. `os.Executable` recognises it and resolves `argv[0]` instead, which the loader sets to the APE's own path. A program that re-execs itself, or reads its own file, gets an openable path.
+
+Anything that reads `/proc/self/exe` directly still sees the memfd name. The same goes for `/proc/self/maps`.
 
 On macOS nothing changes. The loader maps the payload itself, and `os.Executable()` resolves `argv[0]`.
 
