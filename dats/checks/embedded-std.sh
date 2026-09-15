@@ -97,6 +97,10 @@ embedded vet .
 embedded test .
 embedded mod tidy
 
+echo "== a listing hands an outside reader a standard package's export data as a file"
+export_file=$(embedded list -export -f '{{.Export}}' fmt)
+test -s "$export_file"
+
 echo "== std itself is refused"
 if embedded test fmt 2>"$work/refuse.log"; then
 	echo "testing an embedded std package was accepted" >&2
