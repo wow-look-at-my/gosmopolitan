@@ -21,5 +21,8 @@ del env.bat
 :: binary through go_%GOOS%_%GOARCH%_exec.bat. misc\cosmo goes on PATH.
 set PATH=%CD%\..\misc\cosmo;%PATH%
 
+set GOOS=%GOHOSTOS%
+set GOARCH=%GOHOSTARCH%
+
 set GOPATH=c:\nonexist-gopath
 ..\bin\go tool dist test %* || exit /b 1
