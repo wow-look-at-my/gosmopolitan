@@ -22,8 +22,15 @@ done
 # cannot merge __DATA_CONST into __DATA, and each segment costs a 16K page.
 # libSystem.tbd comes from zig's bundled darwin libc stubs. The ad-hoc
 # signature's identifier is the output basename, so the name is fixed.
-ZIGLIB=$($ZIG env 2>/dev/null | grep '"lib_dir"' | sed 's/.*: "\(.*\)".*/\1/')
-[ -n "$ZIGLIB" ] || ZIGLIB=$(dirname "$(command -v "$ZIG")")/lib
+# `zig env` prints ZON (.lib_dir = "...") from 0.16 and JSON ("lib_dir": "...")
+# before it. Read both, and fail loudly rather than guess: a wrong -L makes
+# ld64.lld report every libSystem symbol as undefined, which reads as a
+# source problem.
+ZIGLIB=${ZIGLIB:-$($ZIG env 2>/dev/null | sed -n 's/^[[:space:]]*[.",]*lib_dir[",]*[[:space:]]*[:=][[:space:]]*"\(.*\)".*/\1/p' | head -1)}
+[ -n "$ZIGLIB" ] && [ -d "$ZIGLIB/libc/darwin" ] || {
+	echo "build.sh: cannot find zig's darwin libc stubs under lib_dir ('$ZIGLIB'); set ZIGLIB" >&2
+	exit 1
+}
 $ZIG cc -target aarch64-macos $COMMON -c -o bin/apeld-darwin.o darwin/apeld.c
 ${LLD:-ld64.lld} -arch arm64 -platform_version macos 12.0 12.0 -L"$ZIGLIB/libc/darwin" -lSystem \
 	-dead_strip -S -x -no_uuid -no_function_starts -no_data_const -fixup_chains \
