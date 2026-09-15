@@ -468,13 +468,14 @@ func runGenerate(root, pkgrel string) error {
 	cmd.Stderr = cmd.Stdout
 	// A generator is a program of this module, so it builds against the same
 	// toolchain rather than fetching another one. It runs on this machine, so
-	// `go generate` and every go command a directive starts target this
-	// machine, whatever the build targets. Every target reads the one
-	// generated tree, and the host is the one platform that tree is for.
+	// `go generate` and every go command a directive starts build an APE,
+	// which runs here whatever the build targets and is the only target a go
+	// command carrying its standard library can build. Every target reads
+	// that single generated tree.
 	cmd.Env = append(os.Environ(),
 		"GOTOOLCHAIN=local",
 		"GOGENERATEDEPS=off",
-		"GOOS="+runtime.GOOS,
+		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
 	)
 	err = cmd.Run()
