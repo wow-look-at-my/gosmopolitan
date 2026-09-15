@@ -1,6 +1,6 @@
-# A dependency's generator runs on this machine, so it is built for this
-# machine. A build that targets another platform still gets the package
-# generated, rather than a generator the host cannot execute.
+# A dependency's generator runs on this machine, so it is built as an APE.
+# A build that targets another platform still gets the package generated,
+# rather than a generator the host cannot execute.
 
 env GOFLAGS=-mod=mod
 [GOOS:windows] env GOOS=linux
