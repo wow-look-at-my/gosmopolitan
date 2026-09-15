@@ -92,9 +92,10 @@ echo "== two links of the same inputs are one file"
 embedded build -trimpath -ldflags=-buildid= -o "$work/again/hello.com" .
 cmp "$work/embedded/hello.com" "$work/again/hello.com"
 
-echo "== vet and test run through it"
+echo "== vet, test and tidy run through it"
 embedded vet .
 embedded test .
+embedded mod tidy
 
 echo "== std itself is refused"
 if embedded test fmt 2>"$work/refuse.log"; then
