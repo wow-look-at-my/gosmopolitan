@@ -372,19 +372,28 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 	if l.gzip {
 		data.Unpackers = "dd and gzip"
 	}
+	writeLoaderSearch(script, l.name)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the loader boot script: %v", err)
 	}
 }
 
-// apeLoaderTmpl is the shell writeLoaderBoot renders.
+// writeLoaderSearch emits the search for a loader the host already has. It
+// reads candidates and execs one. It writes nothing, which is what makes a
+// read-only filesystem enough to start the program.
 //
 // The absolute candidates come first, because each `command -v` costs a
 // PATH walk. APE_LOADER names one outright. The dot-prefixed sibling lets
 // a distributor ship the loader next to the binary on a read-only medium.
 // `ape` is last: the cosmo loader of that name boots the file too, and it
 // is what a host with cosmopolitan installed already has.
-var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
+func writeLoaderSearch(script *bytes.Buffer, name string) {
+	if err := apeSearchTmpl.Execute(script, struct{ Name string }{name}); err != nil {
+		Exitf("APE: rendering the loader search: %v", err)
+	}
+}
+
+var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
 	`  l={{.Name}}
   for c in "${APE_LOADER:-}" "${o%/*}/.$l" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
     [ -x "$c" ] && { apepath; exec "$c" "$o" "$@"; }
@@ -393,7 +402,12 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
     c=$(command -v "$n" 2>/dev/null) || continue
     [ -n "$c" ] && { apepath; exec "$c" "$o" "$@"; }
   done
-  u={{.Dir}}/$l-{{.Tag}}
+`))
+
+// apeLoaderTmpl unpacks the loader the APE embeds, for a host the search
+// found nothing on.
+var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
+	`  u={{.Dir}}/$l-{{.Tag}}
   if [ ! -x "$u" ]; then
     (umask 077; mkdir -p "${u%/*}") 2>/dev/null || { echo "APE: no $l on this host, and nowhere to unpack the embedded one: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
     dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u.$$" && [ -s "$u.$$" ] && chmod 755 "$u.$$" && mv -f "$u.$$" "$u" || { rm -f "$u.$$"; echo "APE: cannot unpack $l with {{.Unpackers}}: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
@@ -401,11 +415,13 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
   apepath; exec "$u" "$o" "$@"
 `))
 
-// writeMachoStagedCopy emits the darwin/amd64 branch, the one host with no
-// native loader. XNU reads the Mach-O header at offset 0, so a copy is
-// made and the header is moved into place on the COPY. The APE itself is
-// never touched: writing the header into the running file needs it
-// writable and breaks its checksum.
+// writeMachoStagedCopy emits the darwin/amd64 branch, the one host this
+// toolchain embeds no loader for. A host that carries an
+// apeld-darwin-amd64 of its own is still used first, and writes nothing.
+// Failing that, XNU reads the Mach-O header at offset 0, so a copy is made
+// and the header is moved into place on the COPY. The APE itself is never
+// touched: writing the header into the running file needs it writable and
+// breaks its checksum.
 //
 // The copy is keyed on the source's device, inode, size and mtime to the
 // NANOSECOND. Seconds are not enough: a rebuild in place, inside one
@@ -425,6 +441,7 @@ func writeMachoStagedCopy(script *bytes.Buffer, machoOffset, machoSize int) {
 		Skip:      machoOffset / ddBlockSize,
 		Count:     (machoSize + ddBlockSize - 1) / ddBlockSize,
 	}
+	writeLoaderSearch(script, "apeld-darwin-amd64")
 	if err := apeStageTmpl.Execute(script, data); err != nil {
 		Exitf("APE: rendering the staging script: %v", err)
 	}

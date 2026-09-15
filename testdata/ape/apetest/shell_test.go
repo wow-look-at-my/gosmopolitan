@@ -3,6 +3,7 @@ package apetest
 import (
 	"bytes"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -164,6 +165,21 @@ func TestShellNamesTheMissingLoader(t *testing.T) {
 	assert.Contains(t, header, `install it on PATH, or point APE_LOADER at it`,
 		"the refusal must name the fix")
 	assert.Regexp(t, `no \$l on this host`, header, "the refusal must name the loader")
+}
+
+// darwin/amd64 has no embedded loader, so it stages a copy. A host that
+// carries an apeld-darwin-amd64 of its own must still be used first: that
+// is the only way an APE claiming this platform starts on a read-only
+// filesystem.
+func TestShellSearchesBeforeItStages(t *testing.T) {
+	skipWithoutMacho(t)
+	header := string(first8K(t))
+
+	search := strings.Index(header, "l=apeld-darwin-amd64")
+	require.GreaterOrEqual(t, search, 0, "the staging branch must search for a darwin/amd64 loader")
+	stage := strings.Index(header, `cp "$o" "$p.$$"`)
+	require.GreaterOrEqual(t, stage, 0, "darwin/amd64 must still stage a copy when no loader answers")
+	assert.Less(t, search, stage, "the search must come before the copy")
 }
 
 // The copy darwin/amd64 stages is keyed by the identity of the file it came
