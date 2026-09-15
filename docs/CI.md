@@ -49,6 +49,8 @@ It runs in short mode. `dist test` reads `GO_BUILDER_NAME`. A nameless builder g
 
 It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist env` reports, so every go command it starts agrees with it, and it prepends `misc/cosmo` to PATH. The test binaries are APEs, and `execve` refuses one without a `binfmt_misc` entry, so cmd/go runs each through `go_cosmo_<arch>_exec`. The cosmo port keeps its own extra coverage in `dats/checks/cosmo-tests.dats`.
 
+Some tests exec a binary they built themselves, past that wrapper. Every Linux leg therefore runs a step named "Let the kernel exec an APE directly". That step registers the `binfmt_misc` entry against the committed loader in the checkout. The `F` flag pre-opens the loader. The entry then keeps working after the checkout moves. The emitted shell script registers this same entry, and `docs/APE-BOOT.md` describes it.
+
 One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
 
 ## test job
