@@ -354,9 +354,12 @@ const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 
 // apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can
 // exec it, for a host the search found nothing on. It leaves nothing behind.
 //
-// The file is unlinked while a descriptor still holds it, and the exec names
-// that descriptor. /dev/fd works on linux and on darwin. A tmpfs directory
-// keeps the bytes in RAM, so on linux no disk is touched at all.
+// -u tells the loader to unlink its own file as its first act, so the copy is
+// gone before the program starts. The loader does it rather than this script,
+// because a script cannot delete anything after it execs. Unlinking first and
+// exec'ing through /dev/fd is a linux-only trick: XNU answers that with
+// EACCES. A tmpfs directory keeps the bytes in RAM as well, so on linux no
+// disk is touched at all.
 //
 // Root also hands the loader to binfmt_misc on the way past. F pins the
 // interpreter at registration, so every later run on that machine skips this
@@ -366,16 +369,14 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
     [ -d "$d" ] && [ -w "$d" ] || continue
     u=$d/.ape-$l-{{.Tag}}.$$
     dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
-    { [ -s "$u" ] && chmod 700 "$u" && [ -r "$u" ]; } || { rm -f "$u"; continue; }
-    exec 3<"$u" || { rm -f "$u"; continue; }
+    { [ -s "$u" ] && chmod 700 "$u" && [ -x "$u" ]; } || { rm -f "$u"; continue; }
     if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
       rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT
       apepath; exec "$o" "$@"
     fi
-    rm -f "$u"
-    apepath; exec /dev/fd/3 "$o" "$@"
+    apepath; exec "$u" -u "$o" "$@"
   done
-  echo "APE: no $l on this host, and nowhere in memory to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
+  echo "APE: no $l on this host, and nowhere to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
   exit 121
 `))
 

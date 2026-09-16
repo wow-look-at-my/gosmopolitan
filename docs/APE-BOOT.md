@@ -63,9 +63,15 @@ ${APE_LOADERDIR:-/dev/shm /tmp}
 
 `/dev/shm` is tmpfs, so those bytes live in RAM and reach no disk at all. `/tmp` follows, for a host that has no `/dev/shm`. Every darwin host is one of those. `APE_LOADERDIR` replaces the list, and it may name more than one directory.
 
-**The file is unlinked before the exec.** A descriptor still holds it. The exec names that descriptor through `/dev/fd`. So nothing is left for anybody to find. On linux nothing was written to a disk in the first place. The name carries the PID. The mode is 700. No run can therefore read or collide with another's.
+**The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink `argv[0]` as its first act. The loader has to do this. A script cannot delete anything after it execs.
 
-The loader is 816 bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
+So nothing is left for anybody to find. On linux nothing was written to a disk in the first place. The name carries the PID. The mode is 700. No run can therefore read or collide with another's.
+
+A loader somebody installed is called without `-u` and stays where it is. That is why the flag rides argv. An environment variable reaches the payload. A nested run can then delete the installed copy.
+
+Unlinking the file first and exec'ing it through `/dev/fd` works on linux and is shorter. XNU answers that with `EACCES`. It is therefore not available on darwin, and both platforms take the same path instead.
+
+The loader is 892 bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
 
 Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path entirely. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
 

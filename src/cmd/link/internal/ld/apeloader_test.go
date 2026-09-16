@@ -20,9 +20,9 @@ import (
 // verbatim, and nothing on the host checks it, so this is the only place
 // that can.
 var apeLoaderSums = map[string]string{
-	"apeld-linux-amd64":  "7f1e83f8f0157a414f2076a096d045a5267696c33a5d2e2306b65a3477b93076",
-	"apeld-linux-arm64":  "64a2cb7bc3165a44069bf2eac4a13c441cb4eef2cc7776df082bd01d55596b14",
-	"apeld-darwin-arm64": "b07b2773cd2fe8f6da651c44691a0776e0299dac042d06442fb0ed26d76627ce",
+	"apeld-linux-amd64":  "c798912fd52d374d5f35ae2f86ce5082ffd11b163891a36d4c402777bfc6723a",
+	"apeld-linux-arm64":  "13779a091333025b829d944fd12d74be47a3864540013f881390353507dcd0c3",
+	"apeld-darwin-arm64": "2d4b7228fac8d4c5132adaccf554e55adedc39727fc0b690f68ad72d13532bfd",
 }
 
 // apeLoaderBins is the embedded loader for each platform that has one.

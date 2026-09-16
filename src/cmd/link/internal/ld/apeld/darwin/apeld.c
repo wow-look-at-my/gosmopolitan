@@ -310,7 +310,23 @@ __attribute__((noreturn)) static void enter(long *sp, const char *path, uint64_t
 }
 
 int main(int argc, char **argv, char **envp) {
-	if (argc < 2) die("usage: apeld PROG.com [args...]");
+	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
+
+	// -u removes this loader's own file before anything else. A caller that
+	// unpacked a throwaway copy passes it, so an APE leaves no second file on
+	// the host. It is argv and not an environment variable on purpose: an
+	// environment variable reaches the payload, and a nested run could then
+	// delete a loader somebody installed.
+	//
+	// This host has no tmpfs, so that copy is on a disk. Removing it here is
+	// what keeps the disk as it was. A caller cannot instead unlink the file
+	// and exec it through /dev/fd: XNU answers that with EACCES, where linux
+	// allows it.
+	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
+		unlink(argv[0]);
+		argv++;
+		argc--;
+	}
 	const char *path = argv[1];
 	int fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) die("cannot open program");

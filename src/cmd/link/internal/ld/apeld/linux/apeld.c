@@ -27,7 +27,8 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	return r;
 }
 enum { SYS_write = 1, SYS_pread = 17, SYS_pwrite = 18, SYS_sendfile = 40,
-	SYS_exit = 60, SYS_openat = 257, SYS_memfd_create = 319, SYS_execveat = 322 };
+	SYS_exit = 60, SYS_openat = 257, SYS_memfd_create = 319, SYS_execveat = 322,
+	SYS_unlinkat = 263 };
 #elif defined(__aarch64__)
 #define EM_HOST 183
 static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
@@ -45,7 +46,8 @@ static inline i64 sc6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
 	return x0;
 }
 enum { SYS_write = 64, SYS_pread = 67, SYS_pwrite = 68, SYS_sendfile = 71,
-	SYS_exit = 93, SYS_openat = 56, SYS_memfd_create = 279, SYS_execveat = 281 };
+	SYS_exit = 93, SYS_openat = 56, SYS_memfd_create = 279, SYS_execveat = 281,
+	SYS_unlinkat = 35 };
 #else
 #error "unsupported arch"
 #endif
@@ -77,8 +79,19 @@ __attribute__((noreturn)) static void die(const char *msg) {
 }
 
 __attribute__((noreturn, used)) static void run(i64 argc, char **argv) {
-	if (argc < 2) die("usage: apeld PROG.com [args...]");
+	if (argc < 2) die("usage: apeld [-u] PROG.com [args...]");
 	char **envp = argv + argc + 1;
+
+	// -u removes this loader's own file before anything else. A caller that
+	// unpacked a throwaway copy passes it, so an APE leaves no second file on
+	// the host. It is argv and not an environment variable on purpose: an
+	// environment variable reaches the payload, and a nested run could then
+	// delete a loader somebody installed.
+	if (argc > 2 && argv[1][0] == '-' && argv[1][1] == 'u' && argv[1][2] == 0) {
+		sc3(SYS_unlinkat, AT_FDCWD, argv[0], 0);
+		argv++;
+		argc--;
+	}
 	const char *path = argv[1];
 
 	i64 fd = sc4(SYS_openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);

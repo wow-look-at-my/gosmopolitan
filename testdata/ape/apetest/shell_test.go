@@ -158,12 +158,13 @@ func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp}; do`,
 		"RAM comes first, so a host with no loader writes to no disk")
 
-	// The whole point: the file is gone before the program starts, and the
-	// exec names the descriptor that still holds it. An APE leaves nothing.
-	assert.Contains(t, header, `exec 3<"$u"`, "must hold the loader open before unlinking it")
-	assert.Contains(t, header, `rm -f "$u"`, "must unlink the loader it wrote")
-	assert.Contains(t, header, `exec /dev/fd/3 "$o" "$@"`,
-		"must exec the loader through its descriptor, which works on linux and darwin")
+	// The whole point: the copy is gone before the program starts. -u makes the
+	// loader unlink its own file, because a script cannot delete anything after
+	// it execs. An APE therefore leaves nothing.
+	assert.Contains(t, header, `exec "$u" -u "$o" "$@"`,
+		"must ask the loader to remove its own throwaway copy")
+	assert.NotContains(t, header, `/dev/fd/`,
+		"exec through /dev/fd is linux-only: XNU answers it with EACCES")
 
 	tag := regexp.MustCompile(`u=\$d/\.ape-\$l-[0-9a-f]{8}\.\$\$`)
 	assert.True(t, tag.MatchString(header),
