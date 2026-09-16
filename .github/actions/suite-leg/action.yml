@@ -47,6 +47,19 @@ runs:
       shell: bash
       run: ./bin/go version
 
+    # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+    - name: Let the kernel exec an APE directly
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+        l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+        test -x "$l"
+        sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+        printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+        cat /proc/sys/fs/binfmt_misc/APE
+
     # The suite says what a bare "exit status 2" from run.bat means.
     - name: A cosmo binary built here runs here (dats)
       if: runner.os != 'Windows'

@@ -238,27 +238,38 @@ func checkCompactAssimilatedView(t *testing.T, bin, boot []byte, machine elf.Mac
 	assert.NotZero(t, text.Offset, "%v: compact .text must point into the file", machine)
 }
 
-// TestFatApeLoaderEmbedded verifies the gzipped APE loader source for macOS
-// ARM64 is embedded at the offset the bootstrap script extracts it from.
+// TestFatApeLoaderEmbedded reads each loader back out of the file the way
+// the bootstrap script does, at the offset the script names, and checks
+// that it is the native executable that host needs. A region that unpacked
+// to anything else would leave a host with no way to start the program,
+// and the failure would land there rather than here.
 func TestFatApeLoaderEmbedded(t *testing.T) {
 	head := first8K(t)
-	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+)`)
-	m := re.FindSubmatch(head)
-	require.NotNil(t, m, "bootstrap script must extract the APE loader with real offsets")
-
-	skip, err := strconv.Atoi(string(m[1]))
-	require.NoError(t, err)
-	count, err := strconv.Atoi(string(m[2]))
-	require.NoError(t, err)
+	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
+	ms := re.FindAllSubmatch(head, -1)
+	require.NotEmpty(t, ms, "the bootstrap script must read its loaders out with real offsets")
 
 	bin := loadBinary(t)
-	require.LessOrEqual(t, skip+count, len(bin), "loader region must be inside the file")
+	for _, m := range ms {
+		skip, err := strconv.Atoi(string(m[1]))
+		require.NoError(t, err)
+		count, err := strconv.Atoi(string(m[2]))
+		require.NoError(t, err)
+		require.LessOrEqual(t, skip+count, len(bin), "the loader region must be inside the file")
 
-	gz, err := gzip.NewReader(bytes.NewReader(bin[skip : skip+count]))
-	require.NoError(t, err, "loader region must be valid gzip")
-	src, err := io.ReadAll(gz)
-	require.NoError(t, err, "loader source must decompress")
-	assert.Contains(t, string(src), "ApeLoader", "decompressed source must be the APE loader")
+		loader := bin[skip : skip+count]
+		if len(m[3]) == 0 {
+			// Read straight out of the file: a static ELF, the Linux loader.
+			assert.Equal(t, []byte("\x7fELF"), loader[:4], "the loader at %#x must be an ELF", skip)
+			continue
+		}
+		gz, err := gzip.NewReader(bytes.NewReader(loader))
+		require.NoError(t, err, "the loader region at %#x must be valid gzip", skip)
+		src, err := io.ReadAll(gz)
+		require.NoError(t, err, "the loader at %#x must decompress", skip)
+		// MH_MAGIC_64, little endian: the darwin loader.
+		assert.Equal(t, []byte{0xcf, 0xfa, 0xed, 0xfe}, src[:4], "the loader at %#x must be a 64-bit Mach-O", skip)
+	}
 }
 
 // TestFatPayloadsAbovePageZero pins each payload above the 4 GB page zero
