@@ -153,6 +153,35 @@ jobs:
         shell: bash
         run: ./bin/go version
 
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # apeld-reproducible.dats rebuilds the committed APE loaders with these; the tarball is pinned by digest so they cannot drift with a zig release.
+      - name: Install the toolchain that builds the APE loaders
+        shell: bash
+        env:
+          ZIG_VERSION: 0.16.0
+          ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lld-18 llvm-18
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
+          echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
+
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 45
@@ -216,13 +245,34 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # apetest on every origin, then the subsets. The deadlines are in the suite.
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # apetest per origin then the subsets, and the read-only boot. readonly-boot is unix-only: NTFS ignores the mode bit it relies on, and nt.dats carries that claim for NT.
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
         timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/test/apetest.dats
+          tests: dats/test/apetest.dats dats/test/readonly-boot.dats
+
+      # The container shape is built from mount namespaces, so it is linux only.
+      - name: An APE runs in a read-only container (dats)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/test/readonly-boot-container.dats
 
       # The dats action runs a suite inside WSL on NT, which tests Linux. These suites are about NT itself, which has no sandbox backend.
       - name: Download dats
@@ -240,7 +290,7 @@ jobs:
           DATS_BIN: ${{ steps.dats.outputs.path }}
         run: |
           Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
-          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test
+          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
