@@ -6,13 +6,14 @@
 # One case per invocation:
 #   resident  a loader is installed read-only, and the APE runs
 #   ram       no loader at all, so the embedded one goes to tmpfs and runs
+#   container the shape docker --read-only leaves, where only the bind mount takes an executable
 #   refuse    nothing is writable and no loader exists, so it must exit 121
 #
 # The APE goes through /bin/sh on purpose. A binfmt_misc entry on the host
 # would otherwise take the exec, and this has to reach the boot script.
 set -u
 
-case=${1:?usage: readonly-boot.sh resident|ram|refuse}
+case=${1:?usage: readonly-boot.sh resident|ram|container|refuse}
 ape=${2:?usage: readonly-boot.sh <case> <ape>}
 
 # A mode bit means nothing to root, so root gets the same directories as
@@ -104,6 +105,33 @@ if [ "$case" = resident ]; then
 		exit 1
 	fi
 	echo "read-only boot through a resident loader: fizzbuzz"
+	exit 0
+fi
+
+if [ "$case" = container ]; then
+	# The shape `docker run --read-only` leaves: /dev/shm is writable and
+	# noexec, /tmp is gone, and the program arrives on a bind mount. The
+	# program's own directory is the only candidate left.
+	command -v unshare >/dev/null 2>&1 || { echo "unshare is needed to build the container shape" >&2; exit 1; }
+	chmod 777 "$work/prog" 2>/dev/null
+	# The work directory is bound outside /tmp first. /tmp becomes an unusable
+	# tmpfs next, and a mount over /tmp would otherwise hide the program.
+	out=$(unshare -m sh -c "
+		mkdir -p /mnt/ro-boot && mount -o bind '$work' /mnt/ro-boot || exit 2
+		mount -t tmpfs -o ro none /tmp || exit 2
+		mount -t tmpfs -o rw,nosuid,nodev,noexec none /dev/shm || exit 2
+		PATH=/mnt/ro-boot/nowrite APE_LOADER= /bin/sh /mnt/ro-boot/prog/prog.com $*" 2>&1)
+	code=$?
+	if [ "$code" -ne 0 ] || [ "$out" != fizzbuzz ]; then
+		echo "the container shape must still run: exit $code, output '$out'" >&2
+		exit 1
+	fi
+	left=$(find "$work/prog" -name '.ape-*' | wc -l)
+	if [ "$left" != 0 ]; then
+		echo "the run left $left loader files beside the program" >&2
+		exit 1
+	fi
+	echo "read-only container, noexec /dev/shm: fizzbuzz, and nothing left"
 	exit 0
 fi
 

@@ -58,10 +58,14 @@ An image that must start APEs with nothing writable bakes the registration in at
 A host that has none of them puts the loader the APE carries into the first of these it can write:
 
 ```
-${APE_LOADERDIR:-/dev/shm /tmp}
+${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}
 ```
 
-`/dev/shm` is tmpfs, so those bytes live in RAM and reach no disk at all. `/tmp` follows, for a host that has no `/dev/shm`. Every darwin host is one of those. `APE_LOADERDIR` replaces the list, and it may name more than one directory.
+`/dev/shm` is tmpfs, so those bytes live in RAM and reach no disk at all. `/tmp` follows, for a host that has no `/dev/shm`. Every darwin host is one of those. The program's own directory is last, for a read-only container that leaves nothing else: docker mounts `/dev/shm` **noexec**, and `--read-only` closes `/tmp`. `APE_LOADERDIR` replaces the list, and it may name more than one directory.
+
+That last candidate is not a sidecar. `-u` unlinks the file before the program starts. Nothing is distributed. Nothing is left.
+
+A container with nothing writable at all reaches none of them. `memfd` is immune to both `noexec` and a read-only mount, and the loader uses it for the payload. No POSIX shell can create one. So the loader itself still has to start from somewhere. Register the `binfmt_misc` entry on the host. The kernel then starts the APE with no file anywhere.
 
 **The loader removes its own copy before the program starts.** The script execs it as `apeld -u <ape>`. `-u` makes it unlink `argv[0]` as its first act. The loader has to do this. A script cannot delete anything after it execs.
 

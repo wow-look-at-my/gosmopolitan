@@ -155,8 +155,8 @@ func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 	require.True(t, unpack.MatchString(header), "must read the embedded loader out of itself with dd")
 	assert.Contains(t, header, `[ -s "$u" ]`, "an empty unpack must not be exec'd as a loader")
 
-	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp}; do`,
-		"RAM comes first, so a host with no loader writes to no disk")
+	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}; do`,
+		"RAM comes first, and the program's own directory is the last resort a read-only container leaves")
 
 	// The whole point: the copy is gone before the program starts. -u makes the
 	// loader unlink its own file, because a script cannot delete anything after

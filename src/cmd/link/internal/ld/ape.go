@@ -263,18 +263,17 @@ func printfBlob(blob []byte) string {
 	return b.String()
 }
 
-// apeLoaderDirs is where a host that carries no native loader puts the one
-// the APE embeds, in order. /dev/shm is tmpfs, so those bytes live in RAM
-// and never reach a disk. /tmp follows for a host that has no /dev/shm,
-// which is every darwin host. APE_LOADERDIR replaces the list outright, for
-// a host where neither serves.
+// apeLoaderDirs is where a host that carries no native loader puts the one the
+// APE embeds, in order. /dev/shm is tmpfs, so those bytes stay in RAM. /tmp
+// follows, for a host without one, which is every darwin host. "${o%/*}" is
+// the APE's own directory, last: docker mounts /dev/shm noexec and --read-only
+// closes /tmp, so a bind-mounted program may be all that takes an executable.
 //
-// Whichever one takes it, the file is unlinked before the exec, so nothing
-// is left for anybody to find. The APE carries no second file, and running
-// it leaves the host exactly as it was.
-// It is deliberately unquoted: the shell splits it into the directories to
-// try, and APE_LOADERDIR can therefore name more than one.
-const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp}`
+// None of them is a sidecar. -u unlinks the file before the program starts.
+//
+// Unquoted on purpose: the shell splits it, so APE_LOADERDIR may name several
+// directories, and it replaces the list rather than adding to it.
+const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
 
 // writeLoaderBoot emits the shell that hands the APE at "$o" to a native
 // loader. The loader reads the file and boots the payload from memory, so
