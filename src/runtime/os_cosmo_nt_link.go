@@ -12,14 +12,9 @@ import (
 )
 
 // Symbolic links, descriptor duplication and the read-only attribute on
-// an NT host. See os_cosmo_nt_sys.go for the ntEmu* conventions.
-//
-// A symlink here is an NT symbolic link: a reparse point carrying the
-// name-surrogate bit. NT distinguishes file and directory links at
-// creation and a link of the wrong kind does not open, so symlinkat
-// reads the target's kind as it exists now. A junction (mount point)
-// carries the same bit and reads back as a symlink too, which is what
-// upstream's windows port answers.
+// an NT host. See os_cosmo_nt_sys.go for the ntEmu* conventions. A
+// symlink here is a reparse point carrying the name-surrogate bit, which
+// a junction carries too, so both read back as symlinks.
 
 const (
 	ntSysDup2      = 33
@@ -119,11 +114,10 @@ func ntSymlinkTargetIsDir(wlink, wtarget []uint16) bool {
 // flipped, because NT resolves it against the link's directory the way
 // Linux does. ntReadlinkW undoes exactly this translation.
 //
-// CreateSymbolicLinkW refuses an unprivileged process unless developer
-// mode is on, which ALLOW_UNPRIVILEGED_CREATE asks for. A host older
-// than that flag answers ERROR_INVALID_PARAMETER and gets the call
-// again without it. The call returns a BOOLEAN, so only the low byte
-// of the result is the answer.
+// ALLOW_UNPRIVILEGED_CREATE lets a developer-mode host create the link
+// without a privilege; a host older than the flag answers
+// ERROR_INVALID_PARAMETER and gets the call again without it. The call
+// returns a BOOLEAN: only the low byte of the result is the answer.
 func ntEmuSymlinkat(oldp *byte, newdirfd int32, newp *byte) (r1, r2, errno uintptr) {
 	if ntCreateSymbolicLinkWFn == 0 {
 		return ntFail3(ntENOSYS)
