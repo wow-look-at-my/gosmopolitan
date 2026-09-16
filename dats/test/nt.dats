@@ -9,3 +9,12 @@ tests:
 	- desc: the Linux- and Windows-origin fizzbuzz boot and answer
 	  cmd: pwsh -NoProfile -File dats/test/nt-boot.ps1
 	  exit: 0
+
+	# This host needs no loader: the APE is a PE, and the OS maps the payload
+	# out of it. readonly-boot.dats makes the same claim for linux and darwin.
+	- desc: a read-only host still runs the program
+	  cmd: pwsh -NoProfile -File dats/test/readonly-boot.ps1
+	  exit: 0
+	  outputs:
+		stdout:
+			- "read-only NT boot: fizzbuzz"
