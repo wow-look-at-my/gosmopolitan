@@ -1,12 +1,17 @@
 package apetest
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +27,44 @@ func skipWhereNoLoaderBoots(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the NT personality boots the APE through its PE header")
 	}
+}
+
+// embeddedLoader writes this host's loader out of the APE and returns its
+// path. The script reads the same region with dd, at the offset it names. The
+// darwin loader is the gzipped one, and the linux loader is not, which is what
+// tells them apart in a fat file.
+//
+// The name is the loader's own, because a darwin ad-hoc signature names the
+// file it signed.
+func embeddedLoader(t *testing.T) string {
+	t.Helper()
+	head := first8K(t)
+	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
+	bin := loadBinary(t)
+	for _, m := range re.FindAllSubmatch(head, -1) {
+		gzipped := len(m[3]) != 0
+		if gzipped != (runtime.GOOS == "darwin") {
+			continue
+		}
+		skip, err := strconv.Atoi(string(m[1]))
+		require.NoError(t, err)
+		count, err := strconv.Atoi(string(m[2]))
+		require.NoError(t, err)
+		require.LessOrEqual(t, skip+count, len(bin), "the loader region must be inside the file")
+
+		raw := bin[skip : skip+count]
+		if gzipped {
+			gz, err := gzip.NewReader(bytes.NewReader(raw))
+			require.NoError(t, err)
+			raw, err = io.ReadAll(gz)
+			require.NoError(t, err)
+		}
+		path := filepath.Join(t.TempDir(), fmt.Sprintf("apeld-%s-%s", runtime.GOOS, runtime.GOARCH))
+		require.NoError(t, os.WriteFile(path, raw, 0o755))
+		return path
+	}
+	t.Fatalf("the bootstrap script carries no loader for %s/%s", runtime.GOOS, runtime.GOARCH)
+	return ""
 }
 
 // residentLoader returns the loader this host already carries, or "". The
@@ -60,6 +103,14 @@ func apeRunBaseDir(t *testing.T) string {
 // runAPE runs bin with env appended to the caller's environment.
 func runAPE(t *testing.T, bin string, env []string, args ...string) string {
 	t.Helper()
+	out, err := runAPEErr(t, bin, env, args...)
+	require.NoError(t, err, "output: %s", out)
+	return out
+}
+
+// runAPEErr is runAPE for a case that expects the run to fail.
+func runAPEErr(t *testing.T, bin string, env []string, args ...string) (string, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -69,8 +120,11 @@ func runAPE(t *testing.T, bin string, env []string, args ...string) string {
 	var out, errOut strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
-	require.NoError(t, cmd.Run(), "stderr: %s", errOut.String())
-	return strings.TrimSpace(out.String())
+	err := cmd.Run()
+	if err != nil {
+		return strings.TrimSpace(errOut.String()), err
+	}
+	return strings.TrimSpace(out.String()), nil
 }
 
 // entrySet snapshots the paths directly under dir. Callers diff a
@@ -137,10 +191,10 @@ func TestNoCopyOfTheProgramIsMade(t *testing.T) {
 		"a loader boot must stage nothing under the run directory")
 }
 
-// The loader is unpacked once per host, not once per program: it is the
-// same file for every APE of this architecture, and its name is its own
-// content hash. A second run must find it and leave it alone.
-func TestTheLoaderIsUnpackedOnceAndReused(t *testing.T) {
+// The unpacked loader does not survive its own run. The script passes -u, so
+// the loader unlinks its own file before the payload starts. An APE is one
+// file, and running it must not leave a second one on the host.
+func TestTheUnpackedLoaderDoesNotSurvive(t *testing.T) {
 	skipWhereNoLoaderBoots(t)
 	if p := residentLoader(t); p != "" {
 		t.Skipf("%s boots the APE, so nothing is unpacked", p)
@@ -148,20 +202,21 @@ func TestTheLoaderIsUnpackedOnceAndReused(t *testing.T) {
 	dir := t.TempDir()
 	bin := copyAPE(t)
 
-	runAPE(t, bin, []string{"APE_LOADERDIR=" + dir}, "10", "5")
-	unpacked := newEntries(nil, entrySet(t, dir))
-	require.Len(t, unpacked, 1, "the first run unpacks one loader")
-	first, err := os.Stat(unpacked[0])
-	require.NoError(t, err)
+	// An empty directory proves nothing on its own: a host whose kernel starts
+	// the APE by itself never reaches the unpack at all. So first require that
+	// taking the unpack away breaks the run. That is what says this host needs
+	// it, and that the check below is about the loader deleting itself.
+	if _, err := runAPEErr(t, bin, []string{"APE_LOADERDIR=/proc/ape-loaderdir-that-cannot-exist"}, "10", "5"); err == nil {
+		t.Skip("this host starts the APE without the unpack path")
+	}
 
-	// A second program, so only the loader can be what is reused.
-	other := copyAPE(t)
-	runAPE(t, other, []string{"APE_LOADERDIR=" + dir}, "10", "5")
-
-	assert.Len(t, newEntries(nil, entrySet(t, dir)), 1, "no second loader")
-	after, err := os.Stat(unpacked[0])
-	require.NoError(t, err)
-	assert.Equal(t, first.ModTime(), after.ModTime(), "the loader was not written again")
+	// Twice, because a run that reused a leftover would pass the first check
+	// by never unpacking again.
+	for i := range 2 {
+		runAPE(t, bin, []string{"APE_LOADERDIR=" + dir}, "10", "5")
+		assert.Empty(t, newEntries(nil, entrySet(t, dir)),
+			"run %d left a loader behind in the unpack directory", i+1)
+	}
 }
 
 // The property this whole design exists for: with a loader the host already
@@ -174,11 +229,7 @@ func TestAResidentLoaderNeedsNothingWritable(t *testing.T) {
 
 	loader := residentLoader(t)
 	if loader == "" {
-		dir := t.TempDir()
-		runAPE(t, bin, []string{"APE_LOADERDIR=" + dir}, "10", "5")
-		unpacked := newEntries(nil, entrySet(t, dir))
-		require.Len(t, unpacked, 1, "the first run unpacks one loader to point the second at")
-		loader = unpacked[0]
+		loader = embeddedLoader(t)
 	}
 
 	// mkdir under /proc fails on every Linux and every macOS this runs on,
