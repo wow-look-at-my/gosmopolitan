@@ -258,13 +258,13 @@ jobs:
           printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
           cat /proc/sys/fs/binfmt_misc/APE
 
-      # apetest on every origin, then the subsets. The deadlines are in the suite.
+      # apetest per origin then the subsets, and the read-only boot. readonly-boot is unix-only: NTFS ignores the mode bit it relies on, and nt.dats carries that claim for NT.
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
         timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/test/apetest.dats
+          tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
       # The dats action runs a suite inside WSL on NT, which tests Linux. These suites are about NT itself, which has no sandbox backend.
       - name: Download dats
@@ -282,7 +282,7 @@ jobs:
           DATS_BIN: ${{ steps.dats.outputs.path }}
         run: |
           Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
-          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test
+          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".

@@ -70,7 +70,9 @@ The fizzbuzz NT boot check (`dats/test/nt.dats`, over `dats/test/nt-boot.ps1`) s
 
 The cases restate the contract in `apetest/fizzbuzz_test.go`. `fizzbuzz.com <a> <b>` prints `fizzbuzz(a+b)` and a newline, and exits 0. `TestFizzbuzz_15` sends 10 and 5 and wants "fizzbuzz". `TestNumber_13` sends 7 and 6 and wants "13", which proves the values reach the program through the `GetCommandLineW` parse rather than a constant.
 
-Each origin runs a throwaway copy, because an APE self-assimilates on a unix host and the downloaded artifact must stay pristine.
+Each origin runs a throwaway copy. The artifact is shared with later steps. A copy keeps one step's run from being the reason another step sees a changed file.
+
+**Read-only boot.** Every leg proves an APE starts where nothing is writable. `dats/test/readonly-boot.dats` covers linux and darwin. `dats/test/nt.dats` covers NT through `readonly-boot.ps1`. Each case makes the program's directory read-only, along with the unpack directory and the loader's. It then writes a canary file there and requires that write to fail. A case that finds a writable directory fails, rather than reporting a pass it did not earn. On unix a resident loader must run the program, and a host with no loader at all must exit `121` and name the fix. NT needs no loader, so its case only has to run the program.
 
 **Test binary built on \<OS\> steps.** Each test step runs `go test` under an in-step process-group killer (see `with-deadline.sh`): runner-side step timeouts have been observed not. One wedged process even survived a process-group SIGKILL, i.e. it was stuck in an uninterruptible kernel state). The killer abandons such a corpse so the step still ends, and `go test`'s output goes through a file (`cat`'ed afterwards) so no abandoned descendant.
 
