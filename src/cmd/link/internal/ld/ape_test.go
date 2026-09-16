@@ -95,20 +95,24 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 
 // The loader directories are tried in order, and RAM comes first. A tmpfs
 // directory keeps the bytes off every disk, which is the whole reason a host
-// with no loader still writes nothing anybody can find. A caller that has
-// neither directory replaces the list with APE_LOADERDIR.
+// with no loader still writes nothing anybody can find. The APE's own
+// directory is last, for a read-only container that leaves nothing else. A
+// caller that has none of them replaces the list with APE_LOADERDIR.
 func TestApeLoaderDirsPreferRAM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	got := runAndCapture(t, "sh", "-c", `for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
-	if want := "/dev/shm\n/tmp\n"; got != want {
+	// o is the APE's own path in the boot script, so the last candidate is its
+	// directory. The script sets it before it reaches this list.
+	list := `o=/opt/app/prog.com; for d in ` + apeLoaderDirs + `; do printf '%s\n' "$d"; done`
+	got := runAndCapture(t, "sh", "-c", list)
+	if want := "/dev/shm\n/tmp\n/opt/app\n"; got != want {
 		t.Errorf("default loader directories = %q, want %q", got, want)
 	}
 
-	got = runAndCapture(t, "sh", "-c", `APE_LOADERDIR=/somewhere; for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
+	got = runAndCapture(t, "sh", "-c", `o=/opt/app/prog.com APE_LOADERDIR=/somewhere; for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
 	if want := "/somewhere\n"; got != want {
 		t.Errorf("APE_LOADERDIR must replace the list, got %q, want %q", got, want)
 	}
