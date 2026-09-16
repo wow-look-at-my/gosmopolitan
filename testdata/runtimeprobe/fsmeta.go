@@ -20,8 +20,10 @@ import (
 // can be a hard assertion everywhere it runs:
 //
 //   - fsmeta covers what every host serves, Windows included.
-//   - fsmetaunix covers what NT has no counterpart for (unix ownership
-//     and permission bits, symlinks, FIFOs).
+//   - fslinks covers symlinks and the owner's write bit, which every
+//     host serves too.
+//   - fsmetaunix covers what NT has no counterpart for (unix ownership,
+//     the other permission bits, FIFOs).
 //   - sysinfo covers statfs/uname/rlimit/priority/credentials, which
 //     upstream's own windows port does not expose either.
 //
@@ -167,9 +169,107 @@ func checkFsMeta() {
 	s.finish("sync/truncate/chtimes/link/fchdir")
 }
 
+// checkFsLinks covers what the NT port serves of symlinks and the
+// permission bits, as a hard assertion on every host: a symlink to a
+// file and to a directory reads back, lstat and ReadDir name it as a
+// link while stat follows it, removing it leaves the target, and a
+// file without its owner's write bit reads that way and still deletes.
+func checkFsLinks() {
+	s := &softStep{name: "fslinks"}
+
+	dir, err := os.MkdirTemp("", "rp-fslinks")
+	if err != nil {
+		fail("fslinks", "mkdtemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "f")
+	if err := os.WriteFile(path, []byte("target"), 0o644); err != nil {
+		fail("fslinks", "write: %v", err)
+		return
+	}
+	sub := filepath.Join(dir, "d")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		fail("fslinks", "mkdir: %v", err)
+		return
+	}
+
+	// An absolute link to the file, and a relative link to the directory.
+	sym := filepath.Join(dir, "sym")
+	if s.do("Symlink", os.Symlink(path, sym)) {
+		if got, err := os.Readlink(sym); s.do("Readlink", err) && got != path {
+			s.do("Readlink", fmt.Errorf("target %q, want %q", got, path))
+		}
+		if fi, err := os.Lstat(sym); s.do("Lstat", err) && fi.Mode()&os.ModeSymlink == 0 {
+			s.do("Lstat mode", fmt.Errorf("mode %v, want a symlink", fi.Mode()))
+		}
+		if fi, err := os.Stat(sym); s.do("Stat", err) && fi.Mode()&os.ModeSymlink != 0 {
+			s.do("Stat mode", fmt.Errorf("mode %v, want the target's", fi.Mode()))
+		}
+		if got, err := os.ReadFile(sym); s.do("ReadFile", err) && string(got) != "target" {
+			s.do("ReadFile", fmt.Errorf("read %q through the link, want %q", got, "target"))
+		}
+	}
+	dsym := filepath.Join(dir, "dsym")
+	if s.do("Symlink dir", os.Symlink("d", dsym)) {
+		if got, err := os.Readlink(dsym); s.do("Readlink dir", err) && got != "d" {
+			s.do("Readlink dir", fmt.Errorf("target %q, want %q", got, "d"))
+		}
+		if _, err := os.ReadDir(dsym); err != nil {
+			s.do("ReadDir through the link", err)
+		}
+	}
+	if entries, err := os.ReadDir(dir); s.do("ReadDir", err) {
+		links := 0
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink != 0 {
+				links++
+			}
+		}
+		if links != 2 {
+			s.do("ReadDir types", fmt.Errorf("%d entries typed as links, want 2", links))
+		}
+	}
+	if s.do("Remove link", os.Remove(sym)) {
+		if _, err := os.Stat(path); err != nil {
+			s.do("Remove link kept the target", err)
+		}
+	}
+	if s.do("Remove dir link", os.Remove(dsym)) {
+		if _, err := os.Stat(sub); err != nil {
+			s.do("Remove dir link kept the directory", err)
+		}
+	}
+
+	// The owner's write bit is the one every host carries. It reads
+	// back, and a file without it still deletes: on unix that was always
+	// the directory's call, and on NT unlink clears the attribute.
+	if s.do("Chmod 0444", os.Chmod(path, 0o444)) {
+		if fi, err := os.Stat(path); s.do("Stat 0444", err) && fi.Mode().Perm()&0o200 != 0 {
+			s.do("Chmod 0444 mode", fmt.Errorf("mode %v still has the owner's write bit", fi.Mode().Perm()))
+		}
+		if s.do("Chmod 0644", os.Chmod(path, 0o644)) {
+			if fi, err := os.Stat(path); s.do("Stat 0644", err) && fi.Mode().Perm()&0o200 == 0 {
+				s.do("Chmod 0644 mode", fmt.Errorf("mode %v lost the owner's write bit", fi.Mode().Perm()))
+			}
+		}
+		s.do("Chmod 0444 again", os.Chmod(path, 0o444))
+	}
+	if s.do("Chmod dir 0555", os.Chmod(sub, 0o555)) {
+		if fi, err := os.Stat(sub); s.do("Stat dir 0555", err) && fi.Mode().Perm()&0o200 != 0 {
+			s.do("Chmod dir 0555 mode", fmt.Errorf("mode %v still has the owner's write bit", fi.Mode().Perm()))
+		}
+		s.do("Chmod dir 0755", os.Chmod(sub, 0o755))
+	}
+	s.do("Remove read-only", os.Remove(path))
+
+	s.finish("symlink/readlink/lstat/readdir/chmod/remove")
+}
+
 // checkFsMetaUnix covers the metadata syscalls NT has no counterpart
-// for: unix ownership and permission bits, symlinks, and FIFOs. It
-// reports rather than fails on a Windows host.
+// for: the full unix permission bits, ownership, and FIFOs. It reports
+// rather than fails on a Windows host.
 func checkFsMetaUnix() {
 	s := &softStep{name: "fsmetaunix", soft: cosmoHostOS() == "windows"}
 
@@ -205,15 +305,6 @@ func checkFsMetaUnix() {
 	// privilege and still proves the call reaches the kernel.
 	s.do("Chown", os.Chown(path, -1, -1))
 
-	// symlinkat. The NT port resolves no symlinks at all, which is why
-	// this sits here rather than in checkFsMeta.
-	sym := filepath.Join(dir, "sym")
-	if s.do("Symlink", os.Symlink(path, sym)) {
-		if got, err := os.Readlink(sym); err == nil && got != path {
-			s.do("Readlink", fmt.Errorf("target %q, want %q", got, path))
-		}
-	}
-
 	// mknodat. Apple has no directory-relative mknod, so the darwin
 	// emulation serves this only for AT_FDCWD - which is what Mkfifo
 	// passes.
@@ -224,7 +315,7 @@ func checkFsMetaUnix() {
 		}
 	}
 
-	s.finish("chmod/chown/symlink/mkfifo")
+	s.finish("chmod/chown/mkfifo")
 }
 
 // checkVolume covers statfs, fstatfs and uname. Every host serves all
