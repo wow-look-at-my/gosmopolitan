@@ -4,16 +4,22 @@
 # load-bearing outside this repo: keep it working.
 
 # Unset: the three supported platforms, NOT every row of the token table.
-# linux/arm64 and darwin/amd64 remain selectable but a default build does
-# not claim them - nothing verifies either, and darwin/amd64's runtime
-# bring-up is incomplete.
+# linux/arm64 stays selectable, and a default build does not claim it,
+# because nothing verifies it.
 go env GOCOSMOPLATFORMS
 stdout '^linux/amd64,darwin/arm64,windows/amd64$'
 
-# Both dropped platforms are still accepted when asked for by name.
-env GOCOSMOPLATFORMS=darwin/amd64,linux/arm64
+# linux/arm64 is accepted when asked for by name.
+env GOCOSMOPLATFORMS=linux/arm64,linux/amd64
 go env GOCOSMOPLATFORMS
-stdout '^linux/arm64,darwin/amd64$'
+stdout '^linux/amd64,linux/arm64$'
+env GOCOSMOPLATFORMS=
+
+# darwin/amd64 is refused by name. Intel macs are out of support, and an
+# APE cannot carry a Mach-O header at offset 0 for XNU to read.
+env GOCOSMOPLATFORMS=darwin/amd64
+! go env GOCOSMOPLATFORMS
+stderr 'unknown platform "darwin/amd64"'
 env GOCOSMOPLATFORMS=
 
 # Set: the effective selection, in canonical order, not the raw string.
