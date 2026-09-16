@@ -822,7 +822,7 @@ func ntFiletimeToTimespec(lo, hi uint32) ntLinuxTimespec {
 //     bit and path-based lookups (exec.LookPath) gate on 0111.
 //   - ctime is filled from the CreationTime (NT has no status-change
 //     time; BY_HANDLE_FILE_INFORMATION has no ChangeTime field).
-func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation) {
+func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation, executable bool) {
 	*dst = ntLinuxStat{}
 	dst.dev = uint64(info.VolumeSerialNumber)
 	dst.ino = uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow)
@@ -831,7 +831,10 @@ func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation) {
 		nlink = 1
 	}
 	dst.nlink = uint64(nlink)
-	dst.mode = _NT_S_IFREG | 0o755
+	dst.mode = _NT_S_IFREG | 0o644
+	if executable {
+		dst.mode |= 0o111
+	}
 	if info.FileAttributes&_NT_FILE_ATTRIBUTE_DIRECTORY != 0 {
 		dst.mode = _NT_S_IFDIR | 0o755
 	}
@@ -874,8 +877,36 @@ func ntFstatHandle(h uintptr, dst *ntLinuxStat) uintptr {
 		}
 		return ntErrno(werr)
 	}
-	ntStatFromInfo(dst, &info)
+	executable := false
+	if name, eno := ntHandlePathW(h); eno == 0 {
+		executable = ntIsExecutableName(name)
+	}
+	ntStatFromInfo(dst, &info, executable)
 	return 0
+}
+
+// ntIsExecutableName reports whether w, an NT path, ends in an extension
+// Windows executes. That is the execute bit a stat reports on NT.
+func ntIsExecutableName(w []uint16) bool {
+	n := len(w)
+	for n > 0 && w[n-1] == 0 {
+		n--
+	}
+	if n < 4 || w[n-4] != '.' {
+		return false
+	}
+	var ext [3]byte
+	for i, c := range w[n-3 : n] {
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c > 0x7f {
+			return false
+		}
+		ext[i] = byte(c)
+	}
+	return ext == [3]byte{'e', 'x', 'e'} || ext == [3]byte{'c', 'o', 'm'} ||
+		ext == [3]byte{'b', 'a', 't'} || ext == [3]byte{'c', 'm', 'd'}
 }
 
 // ntStatW opens w for attributes only and stats it. With follow unset

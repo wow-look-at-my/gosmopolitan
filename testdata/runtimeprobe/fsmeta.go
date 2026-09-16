@@ -195,6 +195,17 @@ func checkFsLinks() {
 		return
 	}
 
+	// A plain file has no execute bit, and a name Windows executes has one.
+	if fi, err := os.Stat(path); s.do("Stat plain", err) && fi.Mode().Perm()&0o111 != 0 {
+		s.do("Stat plain mode", fmt.Errorf("mode %v has an execute bit", fi.Mode().Perm()))
+	}
+	tool := filepath.Join(dir, "t.exe")
+	if s.do("Write t.exe", os.WriteFile(tool, []byte("MZ"), 0o755)) {
+		if fi, err := os.Stat(tool); s.do("Stat t.exe", err) && fi.Mode().Perm()&0o111 == 0 {
+			s.do("Stat t.exe mode", fmt.Errorf("mode %v has no execute bit", fi.Mode().Perm()))
+		}
+	}
+
 	// An absolute link to the file, and a relative link to the directory.
 	sym := filepath.Join(dir, "sym")
 	if s.do("Symlink", os.Symlink(path, sym)) {
