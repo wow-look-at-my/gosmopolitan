@@ -263,21 +263,18 @@ func printfBlob(blob []byte) string {
 	return b.String()
 }
 
-// apeLoaderDir is where a host that carries no native loader unpacks the
-// one the APE embeds. The loader is the same few hundred bytes for every
-// APE of that architecture, so one unpack serves the whole machine and the
-// tag keys it to the loader's own content. APE_LOADERDIR overrides it for
-// the same reason APE_RUNDIR exists.
-var apeLoaderDir = "${APE_LOADERDIR:-/tmp/.ape-ld-1" + apeUIDSuffix + "}"
-
-// apeUIDSuffix is a shell command substitution for the running user's
-// numeric uid, read with `id -u` -- a syscall, not an environment
-// variable, so it holds even when the caller has configured nothing at
-// all. "shared" is the fallback for the one host where even `id` itself
-// fails; every real run keeps its own subdirectory as usual, and this one
-// case degrades to the pre-uid-scoping behavior rather than failing to
-// stage at all.
-const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
+// apeLoaderDirs is where a host that carries no native loader puts the one
+// the APE embeds, in order. /dev/shm is tmpfs, so those bytes live in RAM
+// and never reach a disk. /tmp follows for a host that has no /dev/shm,
+// which is every darwin host. APE_LOADERDIR replaces the list outright, for
+// a host where neither serves.
+//
+// Whichever one takes it, the file is unlinked before the exec, so nothing
+// is left for anybody to find. The APE carries no second file, and running
+// it leaves the host exactly as it was.
+// It is deliberately unquoted: the shell splits it into the directories to
+// try, and APE_LOADERDIR can therefore name more than one.
+const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp}`
 
 // writeLoaderBoot emits the shell that hands the APE at "$o" to a native
 // loader. The loader reads the file and boots the payload from memory, so
@@ -291,24 +288,19 @@ const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 // unpacks to a path of its own.
 func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 	data := struct {
-		Name      string
-		Dir       string
-		Tag       string
-		Offset    int
-		Length    int
-		Gzip      bool
-		Unpackers string
+		Name   string
+		Dirs   string
+		Tag    string
+		Offset int
+		Length int
+		Gzip   bool
 	}{
-		Name:      l.name,
-		Dir:       apeLoaderDir,
-		Tag:       l.tag,
-		Offset:    l.offset,
-		Length:    len(l.blob),
-		Gzip:      l.gzip,
-		Unpackers: "dd",
-	}
-	if l.gzip {
-		data.Unpackers = "dd and gzip"
+		Name:   l.name,
+		Dirs:   apeLoaderDirs,
+		Tag:    l.tag,
+		Offset: l.offset,
+		Length: len(l.blob),
+		Gzip:   l.gzip,
 	}
 	writeLoaderSearch(script, l.name)
 	if err := apeLoaderTmpl.Execute(script, data); err != nil {
@@ -359,26 +351,32 @@ const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 
   [ -e /proc/sys/fs/binfmt_misc/APE ]; }
 `
 
-// apeLoaderTmpl unpacks the loader the APE embeds, for a host the search
-// found nothing on.
+// apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can
+// exec it, for a host the search found nothing on. It leaves nothing behind.
 //
-// A run that both unpacked the loader and registered it deletes the file at
-// once. The kernel holds the descriptor F opened, so the program starts with
-// nothing left on disk. APE_NOBINFMT breaks the loop a kernel that hands the
-// file back to a shell would otherwise make.
+// The file is unlinked while a descriptor still holds it, and the exec names
+// that descriptor. /dev/fd works on linux and on darwin. A tmpfs directory
+// keeps the bytes in RAM, so on linux no disk is touched at all.
+//
+// Root also hands the loader to binfmt_misc on the way past. F pins the
+// interpreter at registration, so every later run on that machine skips this
+// whole path. APE_NOBINFMT stops a second pass from trying again.
 var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
-	`  u={{.Dir}}/$l-{{.Tag}}
-  w=
-  if [ ! -x "$u" ]; then
-    (umask 077; mkdir -p "${u%/*}") 2>/dev/null || { echo "APE: no $l on this host, and nowhere to unpack the embedded one: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
-    dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u.$$" && [ -s "$u.$$" ] && chmod 755 "$u.$$" && mv -f "$u.$$" "$u" || { rm -f "$u.$$"; echo "APE: cannot unpack $l with {{.Unpackers}}: install it on PATH, or point APE_LOADER at it" >&2; exit 121; }
-    w=1
-  fi
-  if apereg "$u" && [ -n "$w" ] && [ -z "${APE_NOBINFMT:-}" ]; then
-    rm -f "$u" 2>/dev/null; APE_NOBINFMT=1; export APE_NOBINFMT
-    apepath; exec "$o" "$@"
-  fi
-  apepath; exec "$u" "$o" "$@"
+	`  for d in {{.Dirs}}; do
+    [ -d "$d" ] && [ -w "$d" ] || continue
+    u=$d/.ape-$l-{{.Tag}}.$$
+    dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
+    { [ -s "$u" ] && chmod 700 "$u" && [ -r "$u" ]; } || { rm -f "$u"; continue; }
+    exec 3<"$u" || { rm -f "$u"; continue; }
+    if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
+      rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT
+      apepath; exec "$o" "$@"
+    fi
+    rm -f "$u"
+    apepath; exec /dev/fd/3 "$o" "$@"
+  done
+  echo "APE: no $l on this host, and nowhere in memory to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
+  exit 121
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots

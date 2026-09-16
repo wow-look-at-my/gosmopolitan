@@ -93,19 +93,24 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// different staging directories -- the property a real per-user HOME used
-// to give this path for free, and that apeUIDSuffix now provides without
-// reading HOME at all: id -u is a syscall, not a caller-supplied value.
-func TestApeUIDSuffixSeparatesUsers(t *testing.T) {
+// The loader directories are tried in order, and RAM comes first. A tmpfs
+// directory keeps the bytes off every disk, which is the whole reason a host
+// with no loader still writes nothing anybody can find. A caller that has
+// neither directory replaces the list with APE_LOADERDIR.
+func TestApeLoaderDirsPreferRAM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	a := runAndCapture(t, "sh", "-c", `printf %s "`+apeUIDSuffix+`"`)
-	b := runAndCapture(t, "sh", "-c", `HOME=/somewhere-else printf %s "`+apeUIDSuffix+`"`)
-	if a != b {
-		t.Errorf("apeUIDSuffix changed with HOME (%q vs %q); it must depend only on the real uid", a, b)
+	got := runAndCapture(t, "sh", "-c", `for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
+	if want := "/dev/shm\n/tmp\n"; got != want {
+		t.Errorf("default loader directories = %q, want %q", got, want)
+	}
+
+	got = runAndCapture(t, "sh", "-c", `APE_LOADERDIR=/somewhere; for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
+	if want := "/somewhere\n"; got != want {
+		t.Errorf("APE_LOADERDIR must replace the list, got %q, want %q", got, want)
 	}
 }
 

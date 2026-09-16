@@ -2,7 +2,13 @@
 
 The kernel cannot exec an APE as it stands. The file starts with `MZqFpD='`. That is neither an ELF header nor a Mach-O one. Windows is the exception. There the file is a valid PE, and the OS maps the payload straight from it, read-only path or not.
 
-Everywhere else the shell runs, and it hands the file to a native loader. The loader opens the APE where it lies. It finds the payload for this machine on a 64 KiB boundary. Then it boots that payload from memory. The APE is never copied and never modified. A read-only path therefore starts the program like any other path. That covers a sandbox mount, a package directory, a CI cache and a read-only root.
+Everywhere else the shell runs, and it hands the file to a native loader. The loader opens the APE where it lies. It finds the payload for this machine on a 64 KiB boundary. Then it boots that payload from memory. The APE is never copied and never modified.
+
+**A zero-write start needs a loader the host already reaches.** Putting one there takes root, one time. Either root installs the loader file, or root registers the `binfmt_misc` entry. Read the rest of this page with that in mind. A read-only path starts the program only on a machine where one of those is already done.
+
+The privilege buys the machine its loader. It is not what runs the program. `memfd_create` and `execveat` need no privilege at all. Neither does the loader once it runs.
+
+An ordinary user on a machine with neither still starts the program. That run unpacks the loader. The file then stays. So an unprepared host offers one small file or a refusal. It never offers a silent zero-write start.
 
 The loaders live in `src/cmd/link/internal/ld/apeld`. That directory's README says what each one does. They come from [ape-research](https://github.com/wow-look-at-my/ape-research), whose `LOG.txt` carries the measurements.
 
@@ -47,23 +53,25 @@ The register file lives in procfs, not on the disk, so a read-only disk does not
 
 An image that must start APEs with nothing writable bakes the registration in at build time. That is one entry for the whole machine, not a file per program.
 
-## Unpacking the embedded loader
+## The embedded loader, in RAM
 
-A host that has none of them unpacks the loader the APE carries:
+A host that has none of them puts the loader the APE carries into the first of these it can write:
 
 ```
-${APE_LOADERDIR:-/tmp/.ape-ld-1-<uid>}/apeld-<os>-<arch>-<tag>
+${APE_LOADERDIR:-/dev/shm /tmp}
 ```
 
-The tag is the first four bytes of the loader's own SHA-256. A toolchain that ships a different loader therefore unpacks to a path of its own.
+`/dev/shm` is tmpfs, so those bytes live in RAM and reach no disk at all. `/tmp` follows, for a host that has no `/dev/shm`. Every darwin host is one of those. `APE_LOADERDIR` replaces the list, and it may name more than one directory.
 
-This is not the staged copy it replaces. The loader is 816 bytes on linux/amd64, against the program's megabytes. It is the same file for every APE of that architecture. One unpack serves the whole machine for good. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
+**The file is unlinked before the exec.** A descriptor still holds it. The exec names that descriptor through `/dev/fd`. So nothing is left for anybody to find. On linux nothing was written to a disk in the first place. The name carries the PID. The mode is 700. No run can therefore read or collide with another's.
 
-A run that both unpacked the loader and registered it deletes the file at once. `F` already handed the kernel the descriptor. The program then starts with nothing on the disk to show for it. The unpacked file therefore survives only where registration is not available, which means an unprivileged run. `APE_NOBINFMT` in the environment marks a pass that took this path. A second pass reads it and execs the loader by name instead, which stops a loop.
+The loader is 816 bytes on linux/amd64, against the program's megabytes. `dd` reads it out of the APE. The darwin loader is gzipped. It goes through `gzip -dc` as well.
 
-`APE_LOADERDIR` moves that directory. It exists for the case `/tmp` cannot serve. A **noexec** mount takes the loader fine, and execve then refuses it. Nothing validates the value, because `mkdir` and `dd` already fail loudly.
+Root also hands the loader to `binfmt_misc` on the way past, before the unlink. Every later run on that machine then skips this path entirely. `APE_NOBINFMT` marks a pass that took it, so a kernel that hands the file back to a shell cannot make a loop.
 
-`<uid>` is `id -u`. That is a syscall, not an environment variable. It stands in for the per-user isolation a real HOME can otherwise give this path.
+A **noexec** directory takes the loader fine, and execve then refuses it. The loop treats that like any other failure and tries the next directory.
+
+A host where no directory in the list can be written refuses. It names the loader it wants and how to supply one.
 
 A host with no loader and nowhere to put one refuses to start. It names the loader it wants:
 

@@ -5,13 +5,14 @@
 #
 # One case per invocation:
 #   resident  a loader is installed read-only, and the APE runs
+#   ram       no loader at all, so the embedded one goes to tmpfs and runs
 #   refuse    nothing is writable and no loader exists, so it must exit 121
 #
 # The APE goes through /bin/sh on purpose. A binfmt_misc entry on the host
 # would otherwise take the exec, and this has to reach the boot script.
 set -u
 
-case=${1:?usage: readonly-boot.sh resident|refuse}
+case=${1:?usage: readonly-boot.sh resident|ram|refuse}
 ape=${2:?usage: readonly-boot.sh <case> <ape>}
 
 # A mode bit means nothing to root, so root gets the same directories as
@@ -103,6 +104,27 @@ if [ "$case" = resident ]; then
 		exit 1
 	fi
 	echo "read-only boot through a resident loader: fizzbuzz"
+	exit 0
+fi
+
+if [ "$case" = ram ]; then
+	# Nothing resident, and the program's own directory read-only. The script
+	# falls through to its own embedded loader, which goes to tmpfs. Nothing
+	# reaches a disk, and nothing is left for anybody to find.
+	before=$(find /dev/shm -maxdepth 1 -name '.ape-*' 2>/dev/null | wc -l)
+	out=$(PATH="$work/nowrite" APE_LOADER='' \
+		/bin/sh "$work/prog/prog.com" "$@" 2>&1)
+	code=$?
+	if [ "$code" -ne 0 ] || [ "$out" != fizzbuzz ]; then
+		echo "the embedded loader must run from RAM: exit $code, output '$out'" >&2
+		exit 1
+	fi
+	after=$(find /dev/shm -maxdepth 1 -name '.ape-*' 2>/dev/null | wc -l)
+	if [ "$before" != "$after" ]; then
+		echo "the run left a loader behind in /dev/shm: $before before, $after after" >&2
+		exit 1
+	fi
+	echo "read-only program directory, loader from RAM: fizzbuzz, and nothing left"
 	exit 0
 fi
 

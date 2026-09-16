@@ -153,13 +153,21 @@ func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 
 	unpack := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null`)
 	require.True(t, unpack.MatchString(header), "must read the embedded loader out of itself with dd")
-	assert.Contains(t, header, `mv -f "$u.$$" "$u"`,
-		"must publish the loader atomically, so a concurrent first run cannot exec a half-written one")
-	assert.Contains(t, header, `[ -s "$u.$$" ]`, "an empty unpack must not be published as a loader")
-	assert.Contains(t, header, `exec "$u" "$o" "$@"`, "must exec the unpacked loader against the APE in place")
+	assert.Contains(t, header, `[ -s "$u" ]`, "an empty unpack must not be exec'd as a loader")
 
-	tag := regexp.MustCompile(`u=\$\{APE_LOADERDIR:-/tmp/\.ape-ld-1-\$\(id -u [^)]*\)[^}]*\}/\$l-[0-9a-f]{8}`)
-	assert.True(t, tag.MatchString(header), "the unpack path must be per-user and carry the loader's content tag")
+	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp}; do`,
+		"RAM comes first, so a host with no loader writes to no disk")
+
+	// The whole point: the file is gone before the program starts, and the
+	// exec names the descriptor that still holds it. An APE leaves nothing.
+	assert.Contains(t, header, `exec 3<"$u"`, "must hold the loader open before unlinking it")
+	assert.Contains(t, header, `rm -f "$u"`, "must unlink the loader it wrote")
+	assert.Contains(t, header, `exec /dev/fd/3 "$o" "$@"`,
+		"must exec the loader through its descriptor, which works on linux and darwin")
+
+	tag := regexp.MustCompile(`u=\$d/\.ape-\$l-[0-9a-f]{8}\.\$\$`)
+	assert.True(t, tag.MatchString(header),
+		"the path must carry the loader's content tag and the PID, so no two runs collide")
 }
 
 // Registering the loader with the kernel is what lets an APE start with
@@ -186,9 +194,9 @@ func TestShellRegistersTheLoaderWithTheKernel(t *testing.T) {
 func TestShellDeletesTheLoaderItRegistered(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `if apereg "$u" && [ -n "$w" ] && [ -z "${APE_NOBINFMT:-}" ]; then`,
-		"the delete must need this run's own registration and its own unpack")
-	assert.Contains(t, header, `rm -f "$u" 2>/dev/null; APE_NOBINFMT=1; export APE_NOBINFMT`,
+	assert.Contains(t, header, `if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then`,
+		"registration is tried once, and only when this pass has not already taken it")
+	assert.Contains(t, header, `rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT`,
 		"the file goes, and the marker stops a second pass from trying again")
 	assert.Contains(t, header, `apepath; exec "$o" "$@"`,
 		"with the entry in place the kernel starts the APE itself")
