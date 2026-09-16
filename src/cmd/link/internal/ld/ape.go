@@ -351,19 +351,16 @@ const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 
   [ -e /proc/sys/fs/binfmt_misc/APE ]; }
 `
 
-// apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can
-// exec it, for a host the search found nothing on. It leaves nothing behind.
+// apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can exec
+// it, for a host the search found nothing on. It leaves nothing behind.
 //
-// -u tells the loader to unlink its own file as its first act, so the copy is
-// gone before the program starts. The loader does it rather than this script,
-// because a script cannot delete anything after it execs. Unlinking first and
-// exec'ing through /dev/fd is a linux-only trick: XNU answers that with
-// EACCES. A tmpfs directory keeps the bytes in RAM as well, so on linux no
-// disk is touched at all.
+// -u has the loader unlink its own file first, because a script cannot delete
+// anything after it execs. Unlinking first and exec'ing through /dev/fd would
+// be shorter, and XNU answers that with EACCES. A tmpfs directory also keeps
+// the bytes in RAM, so on linux no disk is touched.
 //
-// Root also hands the loader to binfmt_misc on the way past. F pins the
-// interpreter at registration, so every later run on that machine skips this
-// whole path. APE_NOBINFMT stops a second pass from trying again.
+// Root hands the loader to binfmt_misc on the way past, so every later run on
+// that machine skips this path. APE_NOBINFMT stops a second pass retrying.
 var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
 	`  for d in {{.Dirs}}; do
     [ -d "$d" ] && [ -w "$d" ] || continue
