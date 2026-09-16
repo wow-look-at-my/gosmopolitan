@@ -23,15 +23,6 @@ tests:
 		stdout:
 			- "loader from RAM: fizzbuzz, and nothing left"
 
-	# The shape `docker run --read-only` leaves. /dev/shm is writable and noexec
-	# there, and /tmp is gone, so the bind mount is the only candidate left.
-	- desc: a read-only container with a bind-mounted program runs it
-	  cmd: dats/test/readonly-boot.sh container binaries/ape-binary-Linux/fizzbuzz.com
-	  exit: 0
-	  outputs:
-		stdout:
-			- "read-only container, noexec /dev/shm: fizzbuzz, and nothing left"
-
 	- desc: a read-only host with no loader and no RAM refuses, and names the fix
 	  cmd: dats/test/readonly-boot.sh refuse binaries/ape-binary-Linux/fizzbuzz.com
 	  exit: 0

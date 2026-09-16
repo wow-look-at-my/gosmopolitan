@@ -1,16 +1,15 @@
 #!/bin/sh
-# Boots an APE with every path it could write to made read-only, on linux and
-# on darwin. The loader reads the APE where it lies, so a read-only host is
-# enough. This is what says so.
+# Boots an APE with every writable path made read-only, on linux and darwin.
+# The loader reads the APE where it lies, so a read-only host is enough.
 #
 # One case per invocation:
 #   resident  a loader is installed read-only, and the APE runs
 #   ram       no loader at all, so the embedded one goes to tmpfs and runs
-#   container the shape docker --read-only leaves, where only the bind mount takes an executable
+#   container the docker --read-only shape, where only the bind mount execs
 #   refuse    nothing is writable and no loader exists, so it must exit 121
 #
-# The APE goes through /bin/sh on purpose. A binfmt_misc entry on the host
-# would otherwise take the exec, and this has to reach the boot script.
+# The APE goes through /bin/sh on purpose. A binfmt_misc entry would otherwise
+# take the exec, and this has to reach the boot script.
 set -u
 
 case=${1:?usage: readonly-boot.sh resident|ram|container|refuse}
@@ -113,22 +112,22 @@ if [ "$case" = container ]; then
 	# noexec, /tmp is gone, and the program arrives on a bind mount. The
 	# program's own directory is the only candidate left.
 	command -v unshare >/dev/null 2>&1 || { echo "unshare is needed to build the container shape" >&2; exit 1; }
-	chmod 777 "$work/prog" 2>/dev/null
-	# The work directory is bound outside /tmp first. /tmp becomes an unusable
-	# tmpfs next, and a mount over /tmp would otherwise hide the program.
-	out=$(unshare -m sh -c "
-		mkdir -p /mnt/ro-boot && mount -o bind '$work' /mnt/ro-boot || exit 2
-		mount -t tmpfs -o ro none /tmp || exit 2
-		mount -t tmpfs -o rw,nosuid,nodev,noexec none /dev/shm || exit 2
-		PATH=/mnt/ro-boot/nowrite APE_LOADER= /bin/sh /mnt/ro-boot/prog/prog.com $*" 2>&1)
-	code=$?
-	if [ "$code" -ne 0 ] || [ "$out" != fizzbuzz ]; then
-		echo "the container shape must still run: exit $code, output '$out'" >&2
+	if ! { [ -d /opt ] && [ -d /dev/shm ]; }; then
+		echo "/opt and /dev/shm have to exist to build the shape" >&2
 		exit 1
 	fi
-	left=$(find "$work/prog" -name '.ape-*' | wc -l)
-	if [ "$left" != 0 ]; then
-		echo "the run left $left loader files beside the program" >&2
+	# -r maps this user to root inside, which is what buys the mounts with no
+	# sudo. readonly-boot-container.sh builds the shape and runs the program.
+	out=$(unshare -rm sh dats/test/readonly-boot-container.sh "$ape" "$@" 2>&1)
+	code=$?
+	case $code in
+	2) echo "the container shape could not be built: '$out'" >&2; exit 1 ;;
+	3) echo "/tmp stayed writable, so this case proves nothing" >&2; exit 1 ;;
+	4) echo "/dev/shm is not writable, so the noexec claim proves nothing" >&2; exit 1 ;;
+	6) echo "the run left a loader beside the program" >&2; exit 1 ;;
+	esac
+	if [ "$code" -ne 0 ] || [ "$out" != fizzbuzz ]; then
+		echo "the container shape must still run: exit $code, output '$out'" >&2
 		exit 1
 	fi
 	echo "read-only container, noexec /dev/shm: fizzbuzz, and nothing left"

@@ -266,6 +266,14 @@ jobs:
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
+      # The container shape is built from mount namespaces, so it is linux only.
+      - name: An APE runs in a read-only container (dats)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/test/readonly-boot-container.dats
+
       # The dats action runs a suite inside WSL on NT, which tests Linux. These suites are about NT itself, which has no sandbox backend.
       - name: Download dats
         if: matrix.test-os == 'windows-latest'
