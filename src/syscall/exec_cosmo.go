@@ -113,7 +113,7 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 
 	// An APE cannot be exec'd directly, so prepare its /bin/sh form now,
 	// while allocation is still legal. The child retries with it when
-	// execve answers ENOEXEC. See exec_cosmo_ape.go.
+	// execve answers ENOEXEC. See exec_ape.go.
 	shArgv := apeShellArgv(argv0, argv)
 
 	// About to call fork.
