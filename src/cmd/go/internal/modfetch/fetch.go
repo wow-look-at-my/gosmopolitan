@@ -91,7 +91,7 @@ func (f *Fetcher) Unzip(ctx context.Context, mod module.Version, zipfile string)
 			return "", err
 		}
 
-		return unzip(ctx, mod, zipfile)
+		return unzip(ctx, mod, zipfile, nil)
 	})
 }
 
@@ -107,6 +107,12 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 		return "", err
 	}
 
+	// The cache server's copy is the module completed, and is what every
+	// build reads once one has completed it. See complete.go.
+	if entry, ok := f.cachedComplete(mod); ok {
+		return f.unzipComplete(ctx, mod, entry)
+	}
+
 	// To avoid cluttering the cache with extraneous files,
 	// DownloadZip uses the same lockfile as Download.
 	// Invoke DownloadZip before locking the file.
@@ -115,10 +121,63 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 		return "", err
 	}
 
-	return unzip(ctx, mod, zipfile)
+	return unzip(ctx, mod, zipfile, func(dir string) error {
+		proxySum, err := recordedZipHash(ctx, mod)
+		if err != nil {
+			return err
+		}
+		_, err = f.completeModule(ctx, mod, dir, proxySum)
+		return err
+	})
 }
 
-func unzip(ctx context.Context, mod module.Version, zipfile string) (dir string, err error) {
+// unzipComplete extracts the complete zip the cache served for mod, and
+// records the checksums the entry names as the download would have.
+func (f *Fetcher) unzipComplete(ctx context.Context, mod module.Version, entry *completeEntry) (string, error) {
+	zipfile, err := CachePath(ctx, mod, "complete.zip")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(zipfile), 0o777); err != nil {
+		return "", err
+	}
+	if err := lockedfile.Write(zipfile, bytes.NewReader(entry.zip), 0o666); err != nil {
+		return "", err
+	}
+	defer os.Remove(zipfile)
+	if err := writeSumFile(ctx, mod, "ziphash", entry.proxySum); err != nil {
+		return "", err
+	}
+	if err := writeSumFile(ctx, mod, "complete", entry.fullSum); err != nil {
+		return "", err
+	}
+	if cfg.CmdName != "mod download" {
+		fmt.Fprintf(os.Stderr, "go: fetching %s %s from the cache\n", mod.Path, mod.Version)
+	}
+	return unzip(ctx, mod, zipfile, nil)
+}
+
+// recordedZipHash reads the checksum DownloadZip recorded for mod's zip.
+func recordedZipHash(ctx context.Context, mod module.Version) (string, error) {
+	ziphash, err := CachePath(ctx, mod, "ziphash")
+	if err != nil {
+		return "", err
+	}
+	data, err := lockedfile.Read(ziphash)
+	if err != nil {
+		return "", err
+	}
+	sum := string(bytes.TrimSpace(data))
+	if !isValidSum([]byte(sum)) {
+		return "", fmt.Errorf("%s@%s: unexpected ziphash %q", mod.Path, mod.Version, sum)
+	}
+	return sum, nil
+}
+
+// unzip extracts zipfile as mod's directory. complete, when given, runs over
+// the extracted tree before the directory is published, and what it adds is
+// part of the module from then on.
+func unzip(ctx context.Context, mod module.Version, zipfile string, complete func(dir string) error) (dir string, err error) {
 	unlock, err := lockVersion(ctx, mod)
 	if err != nil {
 		return "", err
