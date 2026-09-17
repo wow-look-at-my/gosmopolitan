@@ -76,30 +76,21 @@ func decodeOverlay(body []byte) (*overlayEntry, error) {
 // completeDir completes the module extracted at dir: it adds the files the
 // module's own generators write, from the cache when the cache holds them and
 // by running the generators when it does not.
-//
-// GOGENERATEDEPS=off reads the base zip and nothing else. GOGENERATEDEPS=verify
-// skips the hit, so the job completes every module itself and the guarded store
-// below holds its answer against what another machine stored. That is how a
-// generator whose output is not deterministic is caught, rather than silently
-// giving two machines two different modules under one version.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
-	mode := gendep.Mode()
-	if mode == "off" {
+	if !gendep.Enabled() {
 		return nil
 	}
 	key := overlayKey(mod, recordedZipHash(ctx, mod))
-	if mode != "verify" {
-		if body, _, err := cache.GetBytes(cache.Default(), key); err == nil {
-			entry, err := decodeOverlay(body)
-			if err != nil {
-				base.Fatalf("go: %s@%s: %v", mod.Path, mod.Version, err)
-			}
-			if err := applyOverlay(mod, dir, entry.zip); err != nil {
-				return err
-			}
-			overlayDebugf("modfetch: %s@%s: took %d bytes of overlay from the cache", mod.Path, mod.Version, len(entry.zip))
-			return recordComplete(ctx, mod, dir)
+	if body, _, err := cache.GetBytes(cache.Default(), key); err == nil {
+		entry, err := decodeOverlay(body)
+		if err != nil {
+			base.Fatalf("go: %s@%s: %v", mod.Path, mod.Version, err)
 		}
+		if err := applyOverlay(mod, dir, entry.zip); err != nil {
+			return err
+		}
+		overlayDebugf("modfetch: %s@%s: took %d bytes of overlay from the cache", mod.Path, mod.Version, len(entry.zip))
+		return recordComplete(ctx, mod, dir)
 	}
 
 	added, err := gendep.Complete(dir, mod.Path)

@@ -28,7 +28,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -36,7 +35,6 @@ import (
 	"syscall"
 
 	"cmd/go/internal/base"
-	"cmd/go/internal/cfg"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -44,32 +42,36 @@ import (
 
 const generatePrefix = "//go:generate"
 
-// Enabled reports whether a dependency may generate. The environment turns it
-// off for a build that must read exactly what it fetched.
+// Enabled reports whether a dependency may generate.
+//
+// GOGENERATEDEPS=off is what the generators themselves run under: a directive
+// that starts a go command must not complete its own module again. It is the
+// only setting, and it does not change what a build produces, only whether the
+// generators run at all.
+//
+// A bootstrap cmd/go links the BOOTSTRAP toolchain's internal/cfg, which knows
+// nothing of this variable and panics on the name. So it is read from the
+// environment rather than through cfg.
 func Enabled() bool {
 	return os.Getenv("GOGENERATEDEPS") != "off"
 }
 
 // Complete runs the generate directives of the module extracted at modroot,
 // with the module's path mod, and adds the files they wrote into modroot. It
-// answers the added files, relative to modroot and sorted, or nothing when the
-// module carries no directive this host can run.
+// answers the added files, in slash form relative to modroot and sorted, or
+// nothing when the module carries no directive at all.
 //
 // A directive that fails says something about the module: its result is no
 // added file, reported once, and the module builds from the zip's tree. A host
-// that cannot confine a generator, or cannot start one the go command built,
-// says nothing about the module and stops the build: building past it hands
-// every consumer a package whose generated half is missing.
+// that cannot confine a generator, cannot start one the go command built, or
+// lacks a program a directive names, says nothing about the module and stops
+// the build: building past it hands every consumer a package whose generated
+// half is missing.
 func Complete(modroot, mod string) ([]string, error) {
 	if !Enabled() {
 		return nil, nil
 	}
-	runnable, skip := moduleDirectives(modroot)
-	if runnable == 0 {
-		// Every directive names a program this host cannot start. That is the
-		// author's own workflow, run before the module was published, and the
-		// zip carries what it wrote. klauspost/compress ships a stringer
-		// directive and the file stringer produced.
+	if moduleDirectives(modroot) == 0 {
 		return nil, nil
 	}
 	stage := modroot + ".generate"
@@ -87,15 +89,15 @@ func Complete(modroot, mod string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := runGenerate(stage, skip); err != nil {
+	if err := runGenerate(stage); err != nil {
 		if hostCannotGenerate(err) {
 			return nil, err
 		}
-		// A directive can be unrunnable rather than broken. A module zip drops
-		// every path the go command ignores, `_codegen` among them, so a
-		// generator kept beside the package it writes is absent from what a
-		// consumer fetches. testify ships one, and ships its generated files
-		// too, so the build needs nothing from it.
+		// A module zip drops every path the go command ignores, `_codegen`
+		// among them, so a generator kept beside the package it writes is
+		// absent from what a consumer fetches. testify ships one, and ships
+		// its generated files too, so the build needs nothing from it. The
+		// module's own bytes decide this, so every machine reaches it.
 		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", modroot, err)
 		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", modroot)
 		return nil, nil
@@ -110,7 +112,8 @@ func Complete(modroot, mod string) ([]string, error) {
 		return nil, err
 	}
 	for _, rel := range added {
-		if err := copyFile(filepath.Join(stage, rel), filepath.Join(modroot, rel)); err != nil {
+		from := filepath.Join(stage, filepath.FromSlash(rel))
+		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
 			return nil, err
 		}
 	}
@@ -132,7 +135,7 @@ func additions(modroot, stage string) ([]string, error) {
 		}
 		_, err = os.Lstat(filepath.Join(modroot, rel))
 		if errors.Is(err, fs.ErrNotExist) {
-			added = append(added, rel)
+			added = append(added, filepath.ToSlash(rel))
 			return nil
 		}
 		return err
@@ -144,10 +147,9 @@ func additions(modroot, stage string) ([]string, error) {
 	return added, nil
 }
 
-// moduleDirectives reads the generate directives of every package under
-// modroot, as directives does for one: the count this host can run, and a
-// -skip expression naming the others.
-func moduleDirectives(modroot string) (runnable int, skip string) {
+// moduleDirectives counts the generate directives of every package under
+// modroot.
+func moduleDirectives(modroot string) int {
 	var files []string
 	filepath.WalkDir(modroot, func(path string, ent fs.DirEntry, err error) error {
 		if err != nil {
@@ -170,23 +172,21 @@ func moduleDirectives(modroot string) (runnable int, skip string) {
 	return directives(files)
 }
 
-// directives reads the generate directives of the given Go files and sorts
-// them by whether this host can start their program: the count of those it
-// can, and a -skip expression naming the others. A directive whose program is
-// not on PATH is one the module's author runs, not one a consumer can. It reads
-// lines rather than parsing: this runs for every dependency, ahead of the build.
+// directives counts the generate directives in the given Go files. It reads
+// lines rather than parsing: this runs for every dependency, ahead of the
+// build.
 //
-// A -command alias is resolved within its file, as `go generate` resolves it.
-// A program given as a path, or through an environment variable, is left to
-// `go generate` to resolve, and counts as runnable.
-func directives(files []string) (runnable int, skip string) {
-	var unrunnable []string
+// Which directives a module has is decided by the module's own bytes and by
+// nothing else. A count that also asked what this machine has installed would
+// make one module version mean two different things, and both would be stored
+// under the one key the whole fleet reads.
+func directives(files []string) int {
+	count := 0
 	for _, file := range files {
 		open, err := os.Open(file)
 		if err != nil {
 			continue
 		}
-		aliases := map[string]string{}
 		scan := bufio.NewScanner(open)
 		scan.Buffer(nil, 1<<20)
 		for scan.Scan() {
@@ -195,56 +195,36 @@ func directives(files []string) (runnable int, skip string) {
 				continue
 			}
 			words := strings.Fields(line[len(generatePrefix):])
-			if len(words) == 0 {
+			if len(words) == 0 || words[0] == "-command" {
 				continue
 			}
-			if words[0] == "-command" {
-				if len(words) >= 3 {
-					aliases[words[1]] = words[2]
-				}
-				continue
-			}
-			prog := words[0]
-			if alias, ok := aliases[prog]; ok {
-				prog = alias
-			}
-			if programRunnable(prog) {
-				runnable++
-				continue
-			}
-			unrunnable = append(unrunnable, line)
+			count++
 		}
 		open.Close()
 	}
-	if len(unrunnable) == 0 {
-		return runnable, ""
-	}
-	quoted := make([]string, len(unrunnable))
-	for idx, line := range unrunnable {
-		quoted[idx] = regexp.QuoteMeta(line)
-	}
-	return runnable, "^(?:" + strings.Join(quoted, "|") + ")$"
-}
-
-// programRunnable reports whether `go generate` could start prog here: the go
-// command itself, a path, a word an environment variable expands, or a name
-// found beside this go command or on PATH.
-func programRunnable(prog string) bool {
-	if prog == "go" || strings.HasPrefix(prog, "$") || strings.ContainsAny(prog, `/\`) {
-		return true
-	}
-	if _, err := exec.LookPath(filepath.Join(cfg.GOROOTbin, prog)); err == nil {
-		return true
-	}
-	_, err := exec.LookPath(prog)
-	return err == nil
+	return count
 }
 
 // hostCannotGenerate reports whether err is a fact about this host rather than
-// about the module: the sandbox is missing, or a generator the go command
-// built would not start.
+// about the module: the sandbox is missing, a generator the go command built
+// would not start, or a program a directive names is not installed.
 func hostCannotGenerate(err error) bool {
-	return sandboxUnavailable(err) || startFailed(err)
+	return sandboxUnavailable(err) || startFailed(err) || programMissing(err)
+}
+
+// programMissing reports whether err says a directive named a program this
+// machine does not have.
+//
+// That is the environment's own gap, not the module's. Skipping the directive
+// would hand this build a module that the same version elsewhere does not
+// match, so the build stops and names what to install instead.
+func programMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	said := err.Error()
+	return strings.Contains(said, "executable file not found") ||
+		strings.Contains(said, exec.ErrNotFound.Error())
 }
 
 // startFailed reports whether err says the host refused to start a program the
@@ -284,17 +264,17 @@ func giveGoMod(stage, mod string) (bool, error) {
 // without anybody reading it first. So it runs confined: it may write the tree
 // it generates and the caches a go command needs, and nothing else. The network
 // stays reachable, because a generator that fetches its own inputs is the case
-// this exists for. skip names the directives this host cannot start, in the
-// -skip form.
-func runGenerate(root, skip string) error {
+// this exists for.
+//
+// Every directive runs. There is no -skip: what a module generates is the
+// module's own business, and a machine that cannot run one of its directives is
+// a machine to fix.
+func runGenerate(root string) error {
 	goCmd, err := base.GoCommand()
 	if err != nil {
 		return err
 	}
 	args := append(slices.Clone(goCmd), "generate")
-	if skip != "" {
-		args = append(args, "-skip="+skip)
-	}
 	argv, err := sandboxArgv(root, append(args, "./...")...)
 	if err != nil {
 		return err
