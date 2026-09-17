@@ -164,6 +164,7 @@ func restoreGenerated(modroot, stage, modrel, pkgrel string) (bool, error) {
 		modfetch.RemoveAll(stage)
 		return false, err
 	}
+	cacheDebugf("gendep: %s/%s: restored %d bytes from the build cache", modrel, pkgrel, len(archive))
 	return true, nil
 }
 
@@ -173,5 +174,18 @@ func storeGenerated(modroot, stage, modrel, pkgrel string) error {
 	if err != nil {
 		return err
 	}
-	return cache.PutBytes(cache.Default(), generatedKey(modrel, pkgrel), archive)
+	if err := cache.PutBytes(cache.Default(), generatedKey(modrel, pkgrel), archive); err != nil {
+		return err
+	}
+	cacheDebugf("gendep: %s/%s: stored %d bytes in the build cache", modrel, pkgrel, len(archive))
+	return nil
+}
+
+// cacheDebugf reports what the cache did for a generated tree, under the same
+// variable that makes the build cache report itself.
+func cacheDebugf(format string, args ...any) {
+	if os.Getenv(cache.CacheDebugEnv) == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
 }
