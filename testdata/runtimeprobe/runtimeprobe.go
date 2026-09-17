@@ -150,6 +150,7 @@ func main() {
 	timed("volume", checkVolume)
 	timed("sysinfo", checkSysInfo)
 	timed("flock", checkFlock)
+	timed("pipeclose", checkPipeClose)
 	timed("durable", checkDurable)
 	timed("rusage", checkRusage)
 	timed("ioctl", checkIoctl)
