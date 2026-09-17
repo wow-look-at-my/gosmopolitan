@@ -232,6 +232,13 @@ func generateModule(modroot, pkgrel, skip string) (string, error) {
 	// tree other builds are compiling from. What it wrote reaches that tree
 	// only once it has succeeded.
 	stage := root + ".stage"
+	// The build cache may already hold what the generator writes, from an
+	// earlier build here or on another machine sharing the cache.
+	if restored, err := restoreGenerated(modroot, stage, rel, pkgrel); err != nil {
+		return "", err
+	} else if restored {
+		return publishPackage(modroot, stage, root, marks, done, pkgrel)
+	}
 	if err := modfetch.RemoveAll(stage); err != nil {
 		return "", err
 	}
@@ -267,6 +274,16 @@ func generateModule(modroot, pkgrel, skip string) (string, error) {
 			return "", err
 		}
 	}
+	if err := storeGenerated(modroot, stage, rel, pkgrel); err != nil {
+		modfetch.RemoveAll(stage)
+		return "", err
+	}
+	return publishPackage(modroot, stage, root, marks, done, pkgrel)
+}
+
+// publishPackage moves the staged package into the tree builds read and marks
+// it generated.
+func publishPackage(modroot, stage, root, marks, done, pkgrel string) (string, error) {
 	if err := publishGenerated(modroot, stage, root); err != nil {
 		modfetch.RemoveAll(stage)
 		return "", err
