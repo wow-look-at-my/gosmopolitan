@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"syscall"
 	"testing"
 )
 
@@ -240,6 +241,31 @@ func TestSandboxUnavailableSeparatesHostFromModule(test *testing.T) {
 		test.Run(row.name, func(test *testing.T) {
 			if got := sandboxUnavailable(row.err); got != row.host {
 				test.Errorf("sandboxUnavailable(%v) = %v, want %v", row.err, got, row.host)
+			}
+		})
+	}
+}
+
+// A generator the host could not start is a fact about the host, like a
+// missing sandbox, and stays apart from a generator that ran and failed. A go
+// command that could not start the APEs it built recorded a verdict against
+// every module it touched, and the toolchain built from those verdicts
+// differed from one built where the generators ran.
+func TestAGeneratorTheHostCannotStartIsAHostFact(test *testing.T) {
+	for _, row := range []struct {
+		name string
+		err  error
+		host bool
+	}{
+		{"the host refused to start the generator", fmt.Errorf("exit status 1\nfork/exec /tmp/go-build1/b001/exe/gen: %w", syscall.ENOEXEC), true},
+		{"the refusal rides a wrapped exit status", fmt.Errorf("running %q: %w", "go", errors.New("exit status 1\ngen.go: fork/exec ./gen: exec format error")), true},
+		{"the host has no sandbox", &sandboxUnavailableError{errors.New("bwrap not installed")}, true},
+		{"the generator itself failed", errors.New("exit status 1\nopen parser.c: no such file or directory"), false},
+		{"no failure at all", nil, false},
+	} {
+		test.Run(row.name, func(test *testing.T) {
+			if got := hostCannotGenerate(row.err); got != row.host {
+				test.Errorf("hostCannotGenerate(%v) = %v, want %v", row.err, got, row.host)
 			}
 		})
 	}
