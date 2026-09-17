@@ -35,8 +35,9 @@ import (
 
 // overlayVersion names the entry format. A change to what the entry holds, or
 // to how a module is completed, is a new version, and every module is completed
-// again under it.
-const overlayVersion = "overlay v1"
+// again under it. A build that completes a module differently but reads the
+// entries an older one stored serves that older answer to the whole fleet.
+const overlayVersion = "overlay v3"
 
 // overlayKey is the cache key of the overlay of mod whose base zip has checksum
 // baseSum. An org module has no checksum: its pseudo-version names its commit.

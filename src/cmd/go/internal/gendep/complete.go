@@ -61,17 +61,22 @@ func Enabled() bool {
 // answers the added files, in slash form relative to modroot and sorted, or
 // nothing when the module carries no directive at all.
 //
-// A directive that fails says something about the module: its result is no
-// added file, reported once, and the module builds from the zip's tree. A host
-// that cannot confine a generator, cannot start one the go command built, or
-// lacks a program a directive names, says nothing about the module and stops
+// Each package that carries a directive generates on its own, in path order, so
+// one package's broken directive costs that package alone. What a failed run
+// wrote is deleted: a half-generated package compiles against files its
+// generator never finished, which is worse than the empty package the zip
+// carried. Every other package keeps what it wrote.
+//
+// A host that cannot confine a generator, cannot start one the go command built,
+// or lacks a program a directive names, says nothing about the module and stops
 // the build: building past it hands every consumer a package whose generated
 // half is missing.
 func Complete(modroot, mod string) ([]string, error) {
 	if !Enabled() {
 		return nil, nil
 	}
-	if moduleDirectives(modroot) == 0 {
+	pkgs := generatingPackages(modroot)
+	if len(pkgs) == 0 {
 		return nil, nil
 	}
 	stage := modroot + ".generate"
@@ -89,18 +94,37 @@ func Complete(modroot, mod string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := runGenerate(stage); err != nil {
-		if hostCannotGenerate(err) {
+	kept, err := additions(modroot, stage)
+	if err != nil {
+		return nil, err
+	}
+	for _, pkg := range pkgs {
+		runErr := runGenerate(stage, pkg)
+		grown, err := additions(modroot, stage)
+		if err != nil {
 			return nil, err
+		}
+		if runErr == nil {
+			kept = grown
+			continue
+		}
+		if hostCannotGenerate(runErr) {
+			return nil, runErr
 		}
 		// A module zip drops every path the go command ignores, `_codegen`
 		// among them, so a generator kept beside the package it writes is
 		// absent from what a consumer fetches. testify ships one, and ships
-		// its generated files too, so the build needs nothing from it. The
-		// module's own bytes decide this, so every machine reaches it.
-		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", modroot, err)
-		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", modroot)
-		return nil, nil
+		// its generated files too, so the build needs nothing from it.
+		//
+		// The module's own bytes decide which package fails, so every machine
+		// reaches the same tree.
+		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, runErr)
+		fmt.Fprintf(os.Stderr, "go: %s keeps what its other packages generated\n", mod)
+		for _, rel := range appeared(grown, kept) {
+			if err := os.Remove(filepath.Join(stage, filepath.FromSlash(rel))); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -147,29 +171,67 @@ func additions(modroot, stage string) ([]string, error) {
 	return added, nil
 }
 
-// moduleDirectives counts the generate directives of every package under
-// modroot.
-func moduleDirectives(modroot string) int {
-	var files []string
+// appeared answers the entries of grown that kept does not have. Both are
+// sorted.
+func appeared(grown, kept []string) []string {
+	had := make(map[string]bool, len(kept))
+	for _, rel := range kept {
+		had[rel] = true
+	}
+	var out []string
+	for _, rel := range grown {
+		if !had[rel] {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// generatingPackages answers the directories under modroot that carry a
+// generate directive, each relative to modroot in slash form and sorted. The
+// order is the module's own, so every machine generates in the same order.
+//
+// A nested module is skipped. It is its own module, with its own zip, and
+// `go generate` in this one never reaches it.
+func generatingPackages(modroot string) []string {
+	var pkgs []string
 	filepath.WalkDir(modroot, func(path string, ent fs.DirEntry, err error) error {
+		if err != nil || !ent.IsDir() {
+			return err
+		}
+		if path != modroot {
+			// The go command's own rules: a directory it never matches with a
+			// package pattern is one `go generate` cannot be pointed at either.
+			name := ent.Name()
+			if name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
+				return fs.SkipDir
+			}
+			if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+				return fs.SkipDir
+			}
+		}
+		var files []string
+		entries, err := os.ReadDir(path)
 		if err != nil {
 			return nil
 		}
-		if ent.IsDir() {
-			// A nested module is its own module, with its own zip.
-			if path != modroot {
-				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
-					return fs.SkipDir
-				}
+		for _, ent := range entries {
+			if !ent.IsDir() && strings.HasSuffix(ent.Name(), ".go") {
+				files = append(files, filepath.Join(path, ent.Name()))
 			}
+		}
+		if directives(files) == 0 {
 			return nil
 		}
-		if strings.HasSuffix(ent.Name(), ".go") {
-			files = append(files, path)
+		rel, err := filepath.Rel(modroot, path)
+		if err != nil {
+			return nil
 		}
+		pkgs = append(pkgs, filepath.ToSlash(rel))
 		return nil
 	})
-	return directives(files)
+	sort.Strings(pkgs)
+	return pkgs
 }
 
 // directives counts the generate directives in the given Go files. It reads
@@ -258,7 +320,8 @@ func giveGoMod(stage, mod string) (bool, error) {
 	return true, nil
 }
 
-// runGenerate runs `go generate ./...` in root, the staged copy of a module.
+// runGenerate runs `go generate` for one package of root, the staged copy of a
+// module.
 //
 // A directive is a command a dependency's author wrote, and a build runs it
 // without anybody reading it first. So it runs confined: it may write the tree
@@ -269,13 +332,17 @@ func giveGoMod(stage, mod string) (bool, error) {
 // Every directive runs. There is no -skip: what a module generates is the
 // module's own business, and a machine that cannot run one of its directives is
 // a machine to fix.
-func runGenerate(root string) error {
+func runGenerate(root, pkg string) error {
 	goCmd, err := base.GoCommand()
 	if err != nil {
 		return err
 	}
 	args := append(slices.Clone(goCmd), "generate")
-	argv, err := sandboxArgv(root, append(args, "./...")...)
+	pattern := "."
+	if pkg != "." {
+		pattern = "./" + pkg
+	}
+	argv, err := sandboxArgv(root, append(args, pattern)...)
 	if err != nil {
 		return err
 	}

@@ -103,21 +103,41 @@ func TestDirectivesCountsGenerateLines(test *testing.T) {
 	}
 }
 
-// A nested module is its own module with its own zip, so its directives are
-// not this module's. Every ordinary subdirectory is.
-func TestModuleDirectivesSkipsNestedModules(test *testing.T) {
+// A nested module is its own module with its own zip, so its packages are not
+// this module's to generate. Every ordinary subdirectory is, and the order is
+// the module's own so that every machine generates in the same one.
+func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
 	modroot := writeTree(test, test.TempDir(), map[string]string{
 		"go.mod":           "module example.com/m\n",
 		"a.go":             "package m\n\n//go:generate go run ./gen\n",
 		"sub/b.go":         "package sub\n\n//go:generate go run ./gen\n",
+		"quiet/e.go":       "package quiet\n",
 		"nested/go.mod":    "module example.com/m/nested\n",
 		"nested/c.go":      "package nested\n\n//go:generate go run ./gen\n",
 		"nested/deep/d.go": "package deep\n\n//go:generate go run ./gen\n",
 		"sub/notes.txt":    "//go:generate go run ./gen\n",
 	})
 
-	if got := moduleDirectives(modroot); got != 2 {
-		test.Errorf("moduleDirectives = %d, want 2: the root and sub, not the nested module", got)
+	got := generatingPackages(modroot)
+	want := []string{".", "sub"}
+	if !slices.Equal(got, want) {
+		test.Errorf("generatingPackages = %v, want %v", got, want)
+	}
+}
+
+// A run that failed contributes nothing, so what appeared during it has to be
+// separable from what the runs before it left.
+func TestAppearedNamesOnlyTheNewFiles(test *testing.T) {
+	kept := []string{"one/one.gen.go", "two/two.gen.go"}
+	grown := []string{"broken/broken.gen.go", "one/one.gen.go", "two/two.gen.go"}
+
+	got := appeared(grown, kept)
+	want := []string{"broken/broken.gen.go"}
+	if !slices.Equal(got, want) {
+		test.Errorf("appeared = %v, want %v", got, want)
+	}
+	if got := appeared(kept, kept); len(got) != 0 {
+		test.Errorf("appeared with nothing new = %v, want none", got)
 	}
 }
 

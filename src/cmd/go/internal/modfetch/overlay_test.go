@@ -86,7 +86,7 @@ func TestDecodeOverlayRejectsMalformedHeaders(test *testing.T) {
 		body string
 	}{
 		{"no header line at all", overlayVersion + " " + validSum('c')},
-		{"another version of the entry", "overlay v2 " + validSum('c') + "\n"},
+		{"another version of the entry", "overlay v0 " + validSum('c') + "\n"},
 		{"the checksum is missing", overlayVersion + "\n"},
 		{"a field follows the checksum", overlayVersion + " " + validSum('c') + " extra\n"},
 		{"the checksum is not an h1 sum", overlayVersion + " h1:short\n"},
