@@ -14,7 +14,6 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -49,15 +48,25 @@ func TestVMInfo(t *testing.T) {
 	if got, want := offset, uint64(0); got != want {
 		t.Errorf("got %x, want %x", got, want)
 	}
-	// The mapping names the running binary, which is not this package's
-	// name: std and cmd share one test binary in this fork, and it wears
-	// the name of whichever package go test built it under.
+	// The mapping must name the running binary, and a name is not how to
+	// ask: std and cmd share one test binary here, which go test hard
+	// links as <package>.test once per package it runs. Every one of those
+	// names is this process's image, and the mapping can report any of
+	// them.
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Base(exe); !strings.HasSuffix(filename, want) {
-		t.Errorf("got %s, want %s", filename, want)
+	running, err := os.Stat(exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := os.Stat(filename)
+	if err != nil {
+		t.Fatalf("the mapping names %s: %v", filename, err)
+	}
+	if !os.SameFile(running, mapped) {
+		t.Errorf("got %s, want %s or another name for it", filename, exe)
 	}
 	addr := uint64(abi.FuncPCABIInternal(TestVMInfo))
 	if addr < lo || addr > hi {
