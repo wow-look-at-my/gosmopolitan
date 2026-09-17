@@ -2392,7 +2392,25 @@ var testlogMagic = []byte("# test log\n") // known to testing/internal/testdeps/
 // test log.
 func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error) {
 	testlog = bytes.TrimPrefix(testlog, testlogMagic)
-	h := cache.NewHash("testInputs")
+	sum := cache.NewHash("testInputs")
+	// Under gocachetest every hashed line is also printed, so two runs whose
+	// input IDs differ can be diffed down to the environment variable or file
+	// that moved.
+	var h io.Writer = sum
+	var lines bytes.Buffer
+	if cache.DebugTest {
+		h = io.MultiWriter(sum, &lines)
+		defer func() {
+			seen := make(map[string]struct{})
+			for line := range strings.Lines(lines.String()) {
+				if _, dup := seen[line]; dup {
+					continue
+				}
+				seen[line] = struct{}{}
+				fmt.Fprintf(os.Stderr, "testcache: %s: input %s", a.Package.ImportPath, line)
+			}
+		}()
+	}
 	// The runtime always looks at GODEBUG, without telling us in the testlog.
 	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
 	pwd := a.Package.Dir
@@ -2444,8 +2462,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			fmt.Fprintf(h, "open %s %x\n", name, fh)
 		}
 	}
-	sum := h.Sum()
-	return sum, nil
+	return sum.Sum(), nil
 }
 
 // isRunScratch reports whether name is scratch space this run created, which is
