@@ -800,6 +800,11 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	}
 	if len(matches) == 0 {
 		// Assume the user specified -buildid= to override what we were going to choose.
+		// A package carrying no build ID cannot be validated on a hit, so
+		// only a linked binary is still cached.
+		if a.Mode == "link" {
+			return b.cacheOutput(a, target)
+		}
 		return nil
 	}
 
@@ -821,24 +826,33 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	// action in a build of this toolchain's own binaries, and useCache reads
 	// a stored one back through the same lookup as a package.
 	if a.Mode == "build" || a.Mode == "link" {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			outputID, _, err := c.Put(a.actionID, r)
-			r.Close()
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
-			}
-			if b.NeedExport {
-				if err != nil {
-					return err
-				}
-				a.Package.Export = c.OutputFile(outputID)
-				a.Package.BuildID = a.buildID
-			}
+		return b.cacheOutput(a, target)
+	}
+	return nil
+}
+
+// cacheOutput stores the file a build or link action wrote under the
+// action's ID.
+func (b *Builder) cacheOutput(a *Action, target string) error {
+	c := a.cache()
+	r, err := os.Open(target)
+	if err != nil {
+		return nil
+	}
+	if a.output == nil {
+		panic("internal error: a.output not set")
+	}
+	outputID, _, err := c.Put(a.actionID, r)
+	r.Close()
+	if err == nil && cfg.BuildX {
+		b.Shell(a).ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
+	}
+	if b.NeedExport {
+		if err != nil {
+			return err
 		}
+		a.Package.Export = c.OutputFile(outputID)
+		a.Package.BuildID = a.buildID
 	}
 	return nil
 }
