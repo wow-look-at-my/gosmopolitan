@@ -11,6 +11,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# The shared cache's look-ahead pool fetches the objects stored beside each hit ahead of the build (go-s3-server docs/look-ahead.md).
+env:
+  GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
+
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
