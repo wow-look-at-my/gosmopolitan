@@ -31,11 +31,16 @@ runs:
           'C:\hostedtoolcache\windows\Python',
           'C:\hostedtoolcache\windows\node'
         )
-        # Every tree goes at once, each to its own rd.
-        $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel { cmd /c rd /s /q "$_" } -ThrottleLimit 16
+        # rd walks a tree one entry at a time, which is what takes so long here. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space, which is all the suite wants; what it leaves behind is a shell of empty directories, and nothing reads these paths again.
+        $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
+        New-Item -ItemType Directory -Force -Path $empty | Out-Null
+        $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel {
+          try { robocopy $using:empty $_ /MIR /MT:64 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
+        } -ThrottleLimit 16
         $after = (Get-PSDrive C).Free
         $gb = 1GB
         Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ($after/$gb), ($before/$gb))
+        exit 0
 
     - name: Take the toolchain its build leg built
       uses: wow-look-at-my/actions@cache-download#latest
@@ -46,6 +51,21 @@ runs:
     - name: The restored go answers
       shell: bash
       run: ./bin/go version
+
+    # dist test links one APE per test package, and Defender reads back every one of them as it lands. The suite writes thousands of files, so the scan is the slowest thing on this host.
+    - name: Keep Defender off the suite's own files (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $paths = @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP, (& ./bin/go env GOCACHE)) | Where-Object { $_ }
+        foreach ($p in $paths) {
+          try {
+            Add-MpPreference -ExclusionPath $p -ErrorAction Stop
+            Write-Host "excluded $p"
+          } catch {
+            Write-Host "::warning::Defender still scans $p, so this suite runs slower: $_"
+          }
+        }
 
     # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
     - name: Let the kernel exec an APE directly
@@ -104,12 +124,12 @@ runs:
         SUITE_SHARD: ${{ inputs.shard }}
       run: |
         cd src
-        .\run.bat "-shard=$env:SUITE_SHARD"
+        .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
         exit $LASTEXITCODE
 
     - name: What the suite spent its time on
       # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
-      if: always() && runner.os != 'Windows'
+      if: always()
       uses: wow-look-at-my/actions@typescript#latest
       env:
         SUITE_SHARD: ${{ inputs.shard }}
