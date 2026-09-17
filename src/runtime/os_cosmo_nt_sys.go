@@ -144,6 +144,7 @@ const (
 	ntENAMETOOLONG = 36
 	ntENOSYS       = 38
 	ntENOTEMPTY    = 39
+	ntECANCELED    = 125
 	ntELOOP        = 40
 )
 
@@ -266,6 +267,8 @@ func ntErrno(werr uintptr) uintptr {
 		return ntEINVAL
 	case _NT_ERROR_BROKEN_PIPE, 232: // BROKEN_PIPE, NO_DATA
 		return ntEPIPE
+	case 995: // OPERATION_ABORTED: CancelIoEx ended a blocked transfer
+		return ntECANCELED
 	case 112: // DISK_FULL
 		return ntENOSPC
 	case 4: // TOO_MANY_OPEN_FILES

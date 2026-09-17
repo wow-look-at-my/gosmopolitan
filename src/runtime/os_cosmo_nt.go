@@ -122,6 +122,7 @@ var (
 
 	// Chunk B (os/exec; all kernel32, present since forever).
 	ntCreatePipeFn          uintptr
+	ntCancelIoExFn          uintptr
 	ntDuplicateHandleFn     uintptr
 	ntCreateProcessWFn      uintptr
 	ntWaitForSingleObjectFn uintptr
@@ -241,6 +242,7 @@ var (
 	ntNameSetConsoleOutCP   = []byte("SetConsoleOutputCP\x00")
 	ntNameSetConsoleCP      = []byte("SetConsoleCP\x00")
 	ntNameCreatePipe        = []byte("CreatePipe\x00")
+	ntNameCancelIoEx        = []byte("CancelIoEx\x00")
 	ntNameDuplicateHandle   = []byte("DuplicateHandle\x00")
 	ntNameCreateProcessW    = []byte("CreateProcessW\x00")
 	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
@@ -560,6 +562,7 @@ func ntResolve() {
 
 	// Chunk B: os/exec (all kernel32).
 	ntCreatePipeFn = k32sym(&ntNameCreatePipe[0])
+	ntCancelIoExFn = k32sym(&ntNameCancelIoEx[0])
 	ntDuplicateHandleFn = k32sym(&ntNameDuplicateHandle[0])
 	ntCreateProcessWFn = k32sym(&ntNameCreateProcessW[0])
 	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
