@@ -71,12 +71,8 @@ func Enabled() bool {
 // or lacks a program a directive names, says nothing about the module and stops
 // the build: building past it hands every consumer a package whose generated
 // half is missing.
-func Complete(modroot, mod string) ([]string, error) {
-	if !Enabled() {
-		return nil, nil
-	}
-	pkgs := generatingPackages(modroot)
-	if len(pkgs) == 0 {
+func Complete(modroot, mod string, pkgs []string) ([]string, error) {
+	if !Enabled() || len(pkgs) == 0 {
 		return nil, nil
 	}
 	stage := modroot + ".generate"
@@ -187,13 +183,17 @@ func appeared(grown, kept []string) []string {
 	return out
 }
 
-// generatingPackages answers the directories under modroot that carry a
-// generate directive, each relative to modroot in slash form and sorted. The
-// order is the module's own, so every machine generates in the same order.
+// Packages answers the directories under modroot that carry a generate
+// directive, each relative to modroot in slash form and sorted. The order is the
+// module's own, so every machine generates in the same order.
+//
+// An empty answer means the module needs nothing, and a caller asks before it
+// reaches for anything else: a module with no directive costs a build only this
+// scan.
 //
 // A nested module is skipped. It is its own module, with its own zip, and
 // `go generate` in this one never reaches it.
-func generatingPackages(modroot string) []string {
+func Packages(modroot string) []string {
 	var pkgs []string
 	filepath.WalkDir(modroot, func(path string, ent fs.DirEntry, err error) error {
 		if err != nil || !ent.IsDir() {

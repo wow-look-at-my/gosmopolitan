@@ -118,10 +118,10 @@ func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
 		"sub/notes.txt":    "//go:generate go run ./gen\n",
 	})
 
-	got := generatingPackages(modroot)
+	got := Packages(modroot)
 	want := []string{".", "sub"}
 	if !slices.Equal(got, want) {
-		test.Errorf("generatingPackages = %v, want %v", got, want)
+		test.Errorf("Packages = %v, want %v", got, want)
 	}
 }
 

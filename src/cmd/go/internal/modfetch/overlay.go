@@ -81,6 +81,13 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 	if !gendep.Enabled() {
 		return nil
 	}
+	// A module that carries no directive completes to itself. Asking this first
+	// keeps the build cache out of the fetch of every such module, and `go mod
+	// download` needs no build cache to fetch one.
+	pkgs := gendep.Packages(dir)
+	if len(pkgs) == 0 {
+		return nil
+	}
 	key := overlayKey(mod, recordedZipHash(ctx, mod))
 	if body, _, err := cache.GetBytes(cache.Default(), key); err == nil {
 		entry, err := decodeOverlay(body)
@@ -94,7 +101,7 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 		return recordComplete(ctx, mod, dir)
 	}
 
-	added, err := gendep.Complete(dir, mod.Path)
+	added, err := gendep.Complete(dir, mod.Path, pkgs)
 	if err != nil {
 		return fmt.Errorf("generating %s@%s: %w", mod.Path, mod.Version, err)
 	}
