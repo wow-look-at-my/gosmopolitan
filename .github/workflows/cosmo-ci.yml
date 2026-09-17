@@ -268,7 +268,7 @@ jobs:
         timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/test/apetest.dats dats/test/readonly-boot.dats
+          tests: dats/test/apetest.dats dats/test/ape-identical.dats dats/test/readonly-boot.dats
 
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
