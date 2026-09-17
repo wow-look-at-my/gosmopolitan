@@ -59,6 +59,12 @@ type Builder struct {
 	exec      sync.Mutex
 	readySema chan bool
 	ready     actionQueue
+	// A cache check starts no process and mostly waits on the shared tier,
+	// so it runs on its own pool, far wider than -p: the tier coalesces the
+	// lookups in flight into one request, and -p lookups make -p-key
+	// requests.
+	readyCacheSema chan bool
+	readyCache     actionQueue
 
 	id             sync.Mutex
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
