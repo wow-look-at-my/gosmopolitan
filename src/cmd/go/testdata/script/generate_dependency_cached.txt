@@ -1,0 +1,38 @@
+# What a dependency's generator writes is kept in the build cache, so a module
+# cache that has no generated tree yet takes it from there instead of running
+# the generator again. The shared tier of the build cache is what hands one
+# machine's run to every other.
+
+env GOFLAGS=-mod=mod
+# -x reaches the generate directives through GOFLAGS, so a generator that runs
+# names itself on stderr.
+env GOFLAGS=$GOFLAGS' -x'
+
+# The first build leaves the generated tree in the build cache, whether it
+# ran the generator or found an earlier run's tree there already.
+go build ./...
+exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# A module cache with no generated tree, and the same build cache.
+env GOMODCACHE=$WORK/mod2
+go mod download example.com/generated
+! exists $WORK/mod2/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# The tree is restored from the build cache: nothing ran the generator.
+go build ./...
+! stderr 'gen -out lang.gen.go'
+exists $WORK/mod2/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+cmp $WORK/mod2/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generated v1.0.0
+-- use.go --
+package use
+
+import "example.com/generated/lang"
+
+var Name = lang.Name()
