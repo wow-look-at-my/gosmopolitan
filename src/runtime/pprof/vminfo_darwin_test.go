@@ -14,6 +14,7 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,8 +49,15 @@ func TestVMInfo(t *testing.T) {
 	if got, want := offset, uint64(0); got != want {
 		t.Errorf("got %x, want %x", got, want)
 	}
-	if !strings.HasSuffix(filename, "pprof.test") {
-		t.Errorf("got %s, want pprof.test", filename)
+	// The mapping names the running binary, which is not this package's
+	// name: std and cmd share one test binary in this fork, and it wears
+	// the name of whichever package go test built it under.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Base(exe); !strings.HasSuffix(filename, want) {
+		t.Errorf("got %s, want %s", filename, want)
 	}
 	addr := uint64(abi.FuncPCABIInternal(TestVMInfo))
 	if addr < lo || addr > hi {
