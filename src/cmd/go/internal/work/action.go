@@ -65,6 +65,13 @@ type Builder struct {
 	// requests.
 	readyCacheSema chan bool
 	readyCache     actionQueue
+	// Cache checks go to their pool in waves. A check becomes runnable when
+	// its last dependency finishes, and dependencies finish one at a time,
+	// so checks released as they come reach the tier alone and each makes a
+	// request of its own. Held until every check in flight has answered,
+	// they reach it together, and one request carries the whole wave.
+	cacheWave     []*Action
+	cacheInFlight int
 
 	id             sync.Mutex
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
