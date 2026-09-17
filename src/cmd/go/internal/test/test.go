@@ -2461,17 +2461,26 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 // after that file changed. A test whose reads genuinely cannot be pinned down,
 // such as one that reads /proc, now misses instead. A miss costs a run. A
 // wrong hit costs the trust that makes the cache worth having at all.
+//
+// The name is compared as spelled and as resolved. A path that is gone cannot
+// be resolved, and a temporary directory that is a symlink (macOS spells it
+// /tmp and /var/folders, both of which resolve under /private) would otherwise
+// only ever match on the spelling the caller happened to use.
 func isRunScratch(name string) bool {
-	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	tmp := os.TempDir()
+	if search.InDir(name, tmp) != "" {
+		return true
+	}
+	realTmp, err := filepath.EvalSymlinks(tmp)
 	if err != nil {
-		tmp = os.TempDir()
+		realTmp = tmp
 	}
 	real, err := filepath.EvalSymlinks(name)
 	if err != nil {
 		// The path is gone, so only its own directory prefix can answer.
 		real = name
 	}
-	return search.InDir(real, tmp) != ""
+	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
 }
 
 func hashGetenv(name string) cache.ActionID {
