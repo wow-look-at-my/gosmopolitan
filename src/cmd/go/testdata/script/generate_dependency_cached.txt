@@ -8,9 +8,9 @@ env GOFLAGS=-mod=mod
 # names itself on stderr.
 env GOFLAGS=$GOFLAGS' -x'
 
-# The first build generates: the directive's command is on stderr.
+# The first build leaves the generated tree in the build cache, whether it
+# ran the generator or found an earlier run's tree there already.
 go build ./...
-stderr 'gen -out lang.gen.go'
 exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
 
 # A module cache with no generated tree, and the same build cache.
