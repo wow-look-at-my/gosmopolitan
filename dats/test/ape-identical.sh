@@ -24,6 +24,9 @@ sum() {
 	fi
 }
 
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
 rc=0
 for f in $files; do
 	missing=
@@ -50,6 +53,12 @@ for f in $files; do
 		echo "  sizes: $a $(wc -c <"$pa" | tr -d ' ') bytes, $b $(wc -c <"$pb" | tr -d ' ') bytes" >&2
 		echo "  $a: $(sum "$pa")" >&2
 		echo "  $b: $(sum "$pb")" >&2
+		# A string one binary holds and the other does not names the cause. A
+		# host's own checkout path is the usual one, and -trimpath is its fix.
+		echo "  strings in one and not the other, first 20 (< $a, > $b):" >&2
+		diff "$(strings -n 8 "$pa" | sort -u > "$tmp/l"; echo "$tmp/l")" \
+			"$(strings -n 8 "$pb" | sort -u > "$tmp/r"; echo "$tmp/r")" |
+			grep '^[<>]' | head -20 | sed 's/^/    /' >&2
 		rc=1
 	done
 done
