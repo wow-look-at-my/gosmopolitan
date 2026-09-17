@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -65,11 +66,12 @@ func Dir(dir, modroot string) string {
 	}
 	out, err := generateModule(modroot, rel, skip)
 	if err != nil {
-		// A host that cannot confine a generator cannot generate anything, for
-		// any module. Building past that hands every consumer a package whose
-		// generated half is missing, and one of those panics when something
-		// finally asks it for what it never generated.
-		if sandboxUnavailable(err) {
+		// A host that cannot confine a generator, or cannot start one it built,
+		// cannot generate anything, for any module. Building past that hands
+		// every consumer a package whose generated half is missing, and one of
+		// those panics when something finally asks it for what it never
+		// generated.
+		if hostCannotGenerate(err) {
 			base.Fatalf("go: generating %s: %v", dir, err)
 		}
 		// A directive can be unrunnable rather than broken. A module zip drops
@@ -247,9 +249,10 @@ func generateModule(modroot, pkgrel, skip string) (string, error) {
 		// files the generator had not finished writing.
 		modfetch.RemoveAll(stage)
 		// Only a verdict about the module's own bytes may be recorded. A host
-		// that lacks the sandbox says nothing about this module, and writing
-		// that down makes installing the sandbox change nothing.
-		if !sandboxUnavailable(err) {
+		// that lacks the sandbox, or could not start the generator, says
+		// nothing about this module, and writing that down makes repairing the
+		// host change nothing.
+		if !hostCannotGenerate(err) {
 			if os.MkdirAll(marks, 0o777) == nil {
 				os.WriteFile(failed, []byte(err.Error()), 0o666)
 			}
@@ -275,6 +278,22 @@ func generateModule(modroot, pkgrel, skip string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(root, pkgrel), nil
+}
+
+// hostCannotGenerate reports whether err is a fact about this host rather than
+// about the module: the sandbox is missing, or a generator the go command
+// built would not start.
+func hostCannotGenerate(err error) bool {
+	return sandboxUnavailable(err) || startFailed(err)
+}
+
+// startFailed reports whether err says the host refused to start a program the
+// generator built. The sandboxed go command prints the exec failure and exits,
+// so what reaches this process is its exit status with that line in the tail.
+// A host whose kernel cannot start an APE without help produces exactly this
+// for every generator, and says nothing about any of their modules.
+func startFailed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), syscall.ENOEXEC.Error())
 }
 
 // giveGoMod writes stage a go.mod when the fetched module carries none, and
