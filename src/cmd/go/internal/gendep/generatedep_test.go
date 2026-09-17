@@ -11,7 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
+
+	"cmd/go/internal/cfg"
 )
 
 // Each package of a module is generated in its own copy of the fetched module
@@ -321,5 +324,28 @@ func TestTailWriterKeepsTheEndAndBoundsWhatItKeeps(test *testing.T) {
 				test.Errorf("kept %d bytes, over the %d-byte limit", got, row.limit)
 			}
 		})
+	}
+}
+
+// A generated tree belongs to the go command that wrote it. Its root names
+// that go command with a single path element below the generate cache, so a
+// binary linking another go command reads a tree of its own.
+func TestGeneratedTreeBelongsToTheGoCommand(test *testing.T) {
+	cache := test.TempDir()
+	was := cfg.GOMODCACHE
+	cfg.GOMODCACHE = cache
+	test.Cleanup(func() { cfg.GOMODCACHE = was })
+
+	key := goCommandKey()
+	if key == "" {
+		test.Fatal("goCommandKey() is empty, so every go command would share one tree")
+	}
+	if strings.ContainsRune(key, filepath.Separator) {
+		test.Fatalf("goCommandKey() = %q spans directories", key)
+	}
+	modrel := filepath.Join("example.com", "mod@v1.0.0")
+	want := filepath.Join(cache, "cache", "generate", key, modrel)
+	if got := generateRoot(modrel); got != want {
+		test.Errorf("generateRoot(%q) = %q, want %q", modrel, got, want)
 	}
 }
