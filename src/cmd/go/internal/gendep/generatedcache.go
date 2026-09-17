@@ -5,7 +5,7 @@
 package gendep
 
 import (
-	"archive/tar"
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -32,10 +32,11 @@ import (
 // and the trees they leave are only ever compared within one host: every job
 // that must agree byte for byte with another already generates on its own.
 
-// removedListName is the archive member that lists removed files, one relative
-// path per line. No file of a module carries the name: a module path never
-// holds an at sign, which is what keeps it apart from the generated marks too.
-const removedListName = "@removed"
+// The archive is a sequence of records, each a header line of the form
+// "<kind> <size> <mode> <path>\n" followed by size bytes: kind "file" for a
+// file the generator wrote or changed, "removed" (size 0) for one it removed.
+// A path never holds a newline, so the line is unambiguous. archive/tar is
+// not used because it reaches os/user, which the bootstrap go command may not.
 
 // generatedKey is the cache key of the generated delta for package pkgrel of
 // the module version at modrel (the module's path in the module cache).
@@ -52,105 +53,85 @@ func packGenerated(modroot, stage string) ([]byte, error) {
 		return nil, err
 	}
 	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
 	for _, rel := range wrote {
 		path := filepath.Join(stage, rel)
 		info, err := os.Stat(path)
 		if err != nil {
 			return nil, err
 		}
-		hdr := &tar.Header{
-			Typeflag: tar.TypeReg,
-			Name:     filepath.ToSlash(rel),
-			Mode:     int64(info.Mode().Perm()),
-			Size:     info.Size(),
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, err
-		}
+		fmt.Fprintf(&buf, "file %d %o %s\n", info.Size(), info.Mode().Perm(), filepath.ToSlash(rel))
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, err
 		}
-		_, err = io.Copy(tw, f)
+		n, err := io.Copy(&buf, f)
 		f.Close()
 		if err != nil {
 			return nil, err
 		}
-	}
-	if len(removed) > 0 {
-		var list strings.Builder
-		for _, rel := range removed {
-			list.WriteString(filepath.ToSlash(rel))
-			list.WriteByte('\n')
-		}
-		hdr := &tar.Header{
-			Typeflag: tar.TypeReg,
-			Name:     removedListName,
-			Mode:     0o644,
-			Size:     int64(list.Len()),
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, err
-		}
-		if _, err := io.WriteString(tw, list.String()); err != nil {
-			return nil, err
+		if n != info.Size() {
+			return nil, fmt.Errorf("gendep: %s changed while being archived", path)
 		}
 	}
-	if err := tw.Close(); err != nil {
-		return nil, err
+	for _, rel := range removed {
+		fmt.Fprintf(&buf, "removed 0 0 %s\n", filepath.ToSlash(rel))
 	}
 	return buf.Bytes(), nil
 }
 
 // unpackGenerated applies an archive packGenerated wrote onto stage, a fresh
-// copy of the fetched module. A member naming a path outside stage is refused.
+// copy of the fetched module. A record naming a path outside stage is refused.
 func unpackGenerated(stage string, archive []byte) error {
-	tr := tar.NewReader(bytes.NewReader(archive))
+	r := bufio.NewReader(bytes.NewReader(archive))
 	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
+		line, err := r.ReadString('\n')
+		if err == io.EOF && line == "" {
 			return nil
 		}
 		if err != nil {
+			return fmt.Errorf("gendep: cached generated tree is truncated")
+		}
+		var kind, mode string
+		var size int64
+		rest := strings.TrimSuffix(line, "\n")
+		fields := strings.SplitN(rest, " ", 4)
+		if len(fields) != 4 {
+			return fmt.Errorf("gendep: cached generated tree has a malformed record %q", rest)
+		}
+		kind, mode = fields[0], fields[2]
+		if _, err := fmt.Sscanf(fields[1], "%d", &size); err != nil || size < 0 {
+			return fmt.Errorf("gendep: cached generated tree has a malformed record %q", rest)
+		}
+		dst, err := stagePath(stage, fields[3])
+		if err != nil {
 			return err
 		}
-		if hdr.Name == removedListName {
-			list, err := io.ReadAll(tr)
+		switch kind {
+		case "removed":
+			if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		case "file":
+			var perm uint32
+			if _, err := fmt.Sscanf(mode, "%o", &perm); err != nil {
+				return fmt.Errorf("gendep: cached generated tree has a malformed record %q", rest)
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+				return err
+			}
+			f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(perm)|0o200)
 			if err != nil {
 				return err
 			}
-			for _, rel := range strings.Split(strings.TrimSpace(string(list)), "\n") {
-				if rel == "" {
-					continue
-				}
-				dst, err := stagePath(stage, rel)
-				if err != nil {
-					return err
-				}
-				if err := os.Remove(dst); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return err
-				}
+			_, err = io.CopyN(f, r, size)
+			if closeErr := f.Close(); err == nil {
+				err = closeErr
 			}
-			continue
-		}
-		dst, err := stagePath(stage, hdr.Name)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fs.FileMode(hdr.Mode)|0o200)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(f, tr)
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return err
+			if err != nil {
+				return fmt.Errorf("gendep: cached generated tree is truncated at %s", fields[3])
+			}
+		default:
+			return fmt.Errorf("gendep: cached generated tree has a record of kind %q", kind)
 		}
 	}
 }
