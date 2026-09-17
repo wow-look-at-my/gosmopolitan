@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cmd/go/internal/base"
@@ -180,11 +181,28 @@ func (b *Builder) RunnableTarget(a *Action) (string, error) {
 		return "", err
 	}
 	exe := dir + name
-	if err := sh.CopyFile(exe, built, 0o777, true); err != nil {
+	// One shared test binary runs several units, and each unit resolves this
+	// same path, hardlinks it into its own directory, and starts it. A plain
+	// copy truncates the file first, so a unit can link and start a binary
+	// that another unit is still writing. A partly written binary carries a
+	// broken signature, and macOS answers that with SIGKILL. The copy lands
+	// on a private name and renames over the destination instead. A rename
+	// is atomic, so a link finds one whole binary or the other, and a unit
+	// already running keeps the file it started from.
+	tmp := fmt.Sprintf("%s.tmp%d.%d", exe, os.Getpid(), runnableSeq.Add(1))
+	if err := sh.CopyFile(tmp, built, 0o777, true); err != nil {
+		return "", err
+	}
+	if err := robustio.Rename(tmp, exe); err != nil {
+		os.Remove(tmp)
 		return "", err
 	}
 	return exe, nil
 }
+
+// runnableSeq names the private file each RunnableTarget copy writes before it
+// renames that file into place. Two calls can share one destination.
+var runnableSeq atomic.Uint64
 
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action
