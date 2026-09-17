@@ -1130,6 +1130,20 @@ var errNoModules = errors.New("not using modules")
 // Using the go command lets build.Import and build.Context.Import find code
 // in Go modules. In the long term we want tools to use go/packages (currently golang.org/x/tools/go/packages),
 // which will also use the go command.
+// goCommand answers the go command importGo runs: the one under GOROOT's bin
+// when GOROOT holds one, else the one on PATH. A go command that carries its
+// standard library has no bin directory and puts itself on PATH for the
+// programs it starts, so a generator built and run by it lists packages
+// through the same go command whether or not a toolchain was installed into
+// GOROOT beside it.
+func (ctxt *Context) goCommand() (string, error) {
+	goCmd := filepath.Join(ctxt.GOROOT, "bin", "go")
+	if _, err := exec.LookPath(goCmd); err == nil {
+		return goCmd, nil
+	}
+	return exec.LookPath("go")
+}
+
 // Invoking the go command here is not very efficient in that it computes information
 // about the requested package and all dependencies and then only reports about the requested package.
 // Then we reinvoke it for every dependency. But this is still better than not working at all.
@@ -1230,7 +1244,10 @@ func (ctxt *Context) importGo(p *Package, path, srcDir string, mode ImportMode) 
 		}
 	}
 
-	goCmd := filepath.Join(ctxt.GOROOT, "bin", "go")
+	goCmd, err := ctxt.goCommand()
+	if err != nil {
+		return fmt.Errorf("go/build: go list %s: %v", path, err)
+	}
 	cmd := exec.Command(goCmd, "list", "-e", "-compiler="+ctxt.Compiler, "-tags="+strings.Join(ctxt.BuildTags, ","), "-installsuffix="+ctxt.InstallSuffix, "-f={{.Dir}}\n{{.ImportPath}}\n{{.Root}}\n{{.Goroot}}\n{{if .Error}}{{.Error}}{{end}}\n", "--", path)
 
 	if ctxt.Dir != "" {

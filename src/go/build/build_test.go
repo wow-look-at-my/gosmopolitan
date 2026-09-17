@@ -834,6 +834,40 @@ func TestDirectives(t *testing.T) {
 		`[{"//go:xtest1" "testdata/directives/c_test.go:1:1"} {"//go:xtest2" "testdata/directives/d_test.go:1:1"} {"//go:xtest3" "testdata/directives/d_test.go:2:1"}]`)
 }
 
+// A GOROOT with a go command under bin names the one importGo runs. A GOROOT
+// without one, which is what a go command carrying its standard library
+// answers, hands importGo the go command on PATH instead of a path that does
+// not exist.
+func TestGoCommandFallsBackToPATH(t *testing.T) {
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	onPath := t.TempDir()
+	pathGo := filepath.Join(onPath, "go"+exe)
+	if err := os.WriteFile(pathGo, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+
+	bare := &Context{GOROOT: t.TempDir()}
+	if got, err := bare.goCommand(); err != nil || got != pathGo {
+		t.Errorf("a GOROOT without bin/go: goCommand() = %q, %v; want %q", got, err, pathGo)
+	}
+
+	installed := &Context{GOROOT: t.TempDir()}
+	gorootGo := filepath.Join(installed.GOROOT, "bin", "go"+exe)
+	if err := os.MkdirAll(filepath.Dir(gorootGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gorootGo, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := installed.goCommand(); err != nil || got != filepath.Join(installed.GOROOT, "bin", "go") {
+		t.Errorf("a GOROOT with bin/go: goCommand() = %q, %v; want its own", got, err)
+	}
+}
+
 // TestContextImportGoWithUseAllFiles ensures that when Context.UseAllFiles is set,
 // that the Go command is not invoked
 func TestContextImportGoWithUseAllFiles(t *testing.T) {
