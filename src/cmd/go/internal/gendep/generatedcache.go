@@ -182,9 +182,10 @@ func storeGenerated(modroot, stage, modrel, pkgrel string) error {
 }
 
 // cacheDebugf reports what the cache did for a generated tree, under the same
-// variable that makes the build cache report itself.
+// variable that makes the build cache report itself. The name is spelled here
+// because the shared tier that declares it is not part of go_bootstrap.
 func cacheDebugf(format string, args ...any) {
-	if os.Getenv(cache.CacheDebugEnv) == "" {
+	if os.Getenv("GOCACHEDEBUG") == "" {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "go: "+format+"\n", args...)
