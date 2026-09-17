@@ -113,23 +113,44 @@ func ntFilePosUnlock(fd int32) {
 // The caller allocated pathW beforehand; nothing allocates under the
 // lock.
 func ntFDAlloc(handle uintptr, kind ntFDKind, flags int32, cloexec bool, pathW []uint16) int32 {
+	return ntFDAllocEntry(ntFDEntry{
+		handle:  handle,
+		kind:    kind,
+		flags:   flags,
+		cloexec: cloexec,
+		pathW:   pathW,
+	})
+}
+
+// ntFDAllocEntry is ntFDAlloc for a fully formed entry, which is what a
+// duplicate of an existing slot is.
+func ntFDAllocEntry(entry ntFDEntry) int32 {
 	lock(&ntFDLock)
 	for fd := int32(0); fd < ntFDMax; fd++ {
 		e := &ntFDTable[fd]
 		if e.kind == ntFDFree {
-			*e = ntFDEntry{
-				handle:  handle,
-				kind:    kind,
-				flags:   flags,
-				cloexec: cloexec,
-				pathW:   pathW,
-			}
+			*e = entry
 			unlock(&ntFDLock)
 			return fd
 		}
 	}
 	unlock(&ntFDLock)
 	return -24 // EMFILE
+}
+
+// ntFDReplace installs entry in slot fd, free or not, and hands back
+// what the slot held for the caller to close outside the lock. The
+// swap is one step under the lock, which is what makes dup2 atomic
+// against another opener claiming the slot.
+func ntFDReplace(fd int32, entry ntFDEntry) (handle uintptr, kind ntFDKind, hadOld bool) {
+	lock(&ntFDLock)
+	e := &ntFDTable[fd]
+	if e.kind != ntFDFree {
+		handle, kind, hadOld = e.handle, e.kind, true
+	}
+	*e = entry
+	unlock(&ntFDLock)
+	return handle, kind, hadOld
 }
 
 // ntFDLookup returns a copy of the fd's entry.
