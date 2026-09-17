@@ -98,6 +98,9 @@ var (
 	ntGetSystemTimeAsFileTimeFn      uintptr
 	ntGetFinalPathNameByHandleWFn    uintptr
 	ntCreateHardLinkWFn              uintptr
+	ntSetFileAttributesWFn           uintptr
+	ntCreateSymbolicLinkWFn          uintptr
+	ntDeviceIoControlFn              uintptr
 	ntGetFileInformationByHandleFn   uintptr
 	ntGetFileInformationByHandleExFn uintptr
 	ntDeleteFileWFn                  uintptr
@@ -216,6 +219,9 @@ var (
 	ntNameGetSysTimeAsFt    = []byte("GetSystemTimeAsFileTime\x00")
 	ntNameGetFinalPathW     = []byte("GetFinalPathNameByHandleW\x00")
 	ntNameCreateHardLinkW   = []byte("CreateHardLinkW\x00")
+	ntNameSetFileAttrsW     = []byte("SetFileAttributesW\x00")
+	ntNameCreateSymlinkW    = []byte("CreateSymbolicLinkW\x00")
+	ntNameDeviceIoControl   = []byte("DeviceIoControl\x00")
 	ntNameGetFileInfoByH    = []byte("GetFileInformationByHandle\x00")
 	ntNameGetFileInfoByHEx  = []byte("GetFileInformationByHandleEx\x00")
 	ntNameDeleteFileW       = []byte("DeleteFileW\x00")
@@ -628,6 +634,10 @@ func ntResolve() {
 	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
 	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
 	ntCreateHardLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateHardLinkW[0])), 0, 0, 0, 0)
+	// Symlinks, readlink and the read-only attribute (os_cosmo_nt_link.go).
+	ntSetFileAttributesWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileAttrsW[0])), 0, 0, 0, 0)
+	ntCreateSymbolicLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateSymlinkW[0])), 0, 0, 0, 0)
+	ntDeviceIoControlFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameDeviceIoControl[0])), 0, 0, 0, 0)
 	// flock(2) (ntEmuFlock). Same stance as the four above.
 	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
 	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
