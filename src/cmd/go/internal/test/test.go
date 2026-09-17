@@ -1876,7 +1876,10 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// generated main imports. So the flag must not be passed there either --
 	// the testing package would reject it as unknown.
 	var unitArg []string
-	binary := buildAction.BuiltTarget()
+	binary, err := b.RunnableTarget(buildAction)
+	if err != nil {
+		return err
+	}
 	if r.shared {
 		unitArg = []string{"-test.unit=" + a.Package.ImportPath}
 		// The package's tests run from a file named for the package, as

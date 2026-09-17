@@ -817,13 +817,10 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 		return err
 	}
 
-	// Cache package builds, and cache executable builds if
-	// executable caching was requested. Executables are not
-	// cached by default because they are not reused
-	// nearly as often as individual packages, and they're
-	// much larger, so the cache-footprint-to-utility ratio
-	// of executables is much lower for executables.
-	if a.Mode == "build" {
+	// Cache package builds and linked binaries alike. A link is the longest
+	// action in a build of this toolchain's own binaries, and useCache reads
+	// a stored one back through the same lookup as a package.
+	if a.Mode == "build" || a.Mode == "link" {
 		r, err := os.Open(target)
 		if err == nil {
 			if a.output == nil {
