@@ -237,15 +237,6 @@ func toolBuildID(name string) string {
 	return buildID
 }
 
-// ToolContentID answers the content ID of the tool called name: the ID
-// stamped for its own packages when this binary links it, else the content
-// half of the binary's build ID, else "" for a binary the linker stamped
-// nothing on.
-func ToolContentID(name string) string {
-	id := toolBuildID(name)
-	return id[strings.LastIndex(id, "/")+1:]
-}
-
 type versionFlag struct{}
 
 func (versionFlag) IsBoolFlag() bool { return true }

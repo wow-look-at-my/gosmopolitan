@@ -25,7 +25,6 @@ import (
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
 	"cmd/go/internal/str"
-	"cmd/internal/objabi"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -189,16 +188,15 @@ func generateDeps() bool {
 // bytes the proxy served, `go mod verify` hashes that tree against it, and a
 // generated file inside it would report every module as modified.
 //
-// A module has one tree per go command, and each package the build loads from
-// it is generated into it on its own. A build that imports three packages of a
-// module needs all three generated, whichever of them it happened to load
-// first.
+// A module has one tree, and each package the build loads from it is generated
+// into it on its own. A build that imports three packages of a module needs all
+// three generated, whichever of them it happened to load first.
 func generateModule(modroot, pkgrel, skip string) (string, error) {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
 		return "", err
 	}
-	root := generateRoot(rel)
+	root := filepath.Join(cfg.GOMODCACHE, "cache", "generate", rel)
 	if err := os.MkdirAll(filepath.Dir(root), 0o777); err != nil {
 		return "", err
 	}
@@ -277,29 +275,6 @@ func generateModule(modroot, pkgrel, skip string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(root, pkgrel), nil
-}
-
-// generateRoot is the generated tree of the module at modrel, the module's
-// directory under the module cache, for this go command.
-//
-// What a generator writes follows the go command that runs it: which
-// directives it can start, how it confines them, and the standard library the
-// generator itself is built and run against (x/text writes tables for the
-// unicode version of the runtime it runs on). A tree another go command
-// generated, or gave up on, says nothing about what this one would write, so
-// each go command reads and writes a tree of its own.
-func generateRoot(modrel string) string {
-	return filepath.Join(cfg.GOMODCACHE, "cache", "generate", goCommandKey(), modrel)
-}
-
-// goCommandKey names this go command's code as a path element: the content
-// ID of its packages, which two binaries linking the same go command share,
-// else the toolchain version for a binary the linker stamped no ID on.
-func goCommandKey() string {
-	if id := objabi.ToolContentID("go"); id != "" {
-		return id
-	}
-	return strings.ReplaceAll(runtime.Version(), string(filepath.Separator), "_")
 }
 
 // giveGoMod writes stage a go.mod when the fetched module carries none, and
