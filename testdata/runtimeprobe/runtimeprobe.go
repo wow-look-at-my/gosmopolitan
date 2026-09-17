@@ -744,38 +744,50 @@ func checkSegvRecover() {
 
 // checkPreempt proves asynchronous preemption: saturate every P with
 // call-free spin loops (their only loop-body operation is an inlined
-// atomic load, which is not a preemption point), then require a full
-// GC cycle - stop-the-world included - to complete promptly. Without
-// working preemption signals the GC hangs until the loops' iteration
-// bound drains (tens of seconds), turning this into a duration
-// failure rather than a probe hang.
+// atomic load, which is not a preemption point), then run a full GC
+// cycle - stop-the-world included - and require the loops to still be
+// running when it returns. Without preemption the GC cannot stop a
+// spinning P at all. The loops then drain their iteration bound first,
+// either because the GC waits for them, or because main never gets a P
+// to request the GC on.
+//
+// The verdict is that survivor count, never the GC's wall time: an
+// oversubscribed host stretches both the GC and the drain, so a
+// duration threshold reports load rather than preemption.
 func checkPreempt() {
 	var stop atomic.Uint32
 	var spun atomic.Uint64
+	var spinning atomic.Int32
 	var wg sync.WaitGroup
 	n := runtime.GOMAXPROCS(0)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
+		spinning.Add(1)
 		go func(seed uint64) {
 			defer wg.Done()
 			x := seed
 			for i := uint64(0); i < 20e9 && stop.Load() == 0; i++ {
 				x = x*2862933555777941757 + 3037000493
 			}
+			spinning.Add(-1)
 			spun.Add(x)
 		}(uint64(i + 1))
 	}
+	launched := time.Now()
 	// Let the spinners occupy every P; the sleep also forces main off
 	// its P so wake-up itself needs a preemption.
 	time.Sleep(100 * time.Millisecond)
 	t0 := time.Now()
 	runtime.GC()
 	d := time.Since(t0)
+	live := spinning.Load()
 	stop.Store(1)
 	wg.Wait()
 	sink = spun.Load()
-	if d > 10*time.Second {
-		fail("preempt", "GC took %v with %d spinning goroutines", d, n)
+	if live == 0 {
+		// Two shapes reach here, and both are the same defect: the GC
+		// waited out the drain, or main never got a P to ask for one.
+		fail("preempt", "all %d spin loops drained before the GC returned (%v after launch)", n, time.Since(launched))
 		return
 	}
 	ok("preempt", d)
