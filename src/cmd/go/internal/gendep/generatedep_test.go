@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -126,6 +127,95 @@ func writeFiles(test *testing.T, dir string, files map[string]string) {
 		if err := os.WriteFile(path, []byte(body), 0o666); err != nil {
 			test.Fatal(err)
 		}
+	}
+}
+
+// A directive names a program, and a consumer's host has the go command and
+// whatever PATH carries. klauspost/compress directs stringer at a package and
+// ships the file stringer wrote; a host without stringer reported that
+// package as failing to generate, on every build, twice. So a directive whose
+// program this host cannot start is skipped, and a package with nothing left
+// to run is not generated at all.
+func TestDirectivesSkipAProgramTheHostCannotStart(test *testing.T) {
+	bin := test.TempDir()
+	test.Setenv("PATH", bin)
+	onPath := filepath.Join(bin, "present")
+	if err := os.WriteFile(onPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		test.Fatal(err)
+	}
+
+	for _, row := range []struct {
+		name     string
+		files    map[string]string
+		runnable int
+		skipped  []string
+		kept     []string
+	}{
+		{
+			name: "the author's tool beside a go run",
+			files: map[string]string{
+				"a.go": "package a\n//go:generate stringer -type=T\n//go:generate go run ./gen\n",
+			},
+			runnable: 1,
+			skipped:  []string{"//go:generate stringer -type=T"},
+			kept:     []string{"//go:generate go run ./gen"},
+		},
+		{
+			name: "nothing this host can start",
+			files: map[string]string{
+				"a.go": "package a\n//go:generate stringer -type=T\n",
+				"b.go": "package a\n\t//go:generate\tmockgen -source=b.go\n",
+			},
+			runnable: 0,
+			skipped:  []string{"//go:generate stringer -type=T", "//go:generate\tmockgen -source=b.go"},
+		},
+		{
+			name: "an alias resolves to what it names",
+			files: map[string]string{
+				"a.go": "package a\n//go:generate -command gen go run ./gen\n//go:generate -command str stringer\n//go:generate gen x\n//go:generate str -type=T\n",
+			},
+			runnable: 1,
+			skipped:  []string{"//go:generate str -type=T"},
+			kept:     []string{"//go:generate gen x"},
+		},
+		{
+			name: "a path, a variable and a name on PATH are left to go generate",
+			files: map[string]string{
+				"a.go": "package a\n//go:generate ./tool/gen\n//go:generate $GOPATH/bin/gen\n//go:generate present -x\n",
+			},
+			runnable: 3,
+		},
+	} {
+		test.Run(row.name, func(test *testing.T) {
+			dir := test.TempDir()
+			writeFiles(test, dir, row.files)
+
+			runnable, skip := directives(dir)
+
+			if runnable != row.runnable {
+				test.Errorf("runnable = %d, want %d", runnable, row.runnable)
+			}
+			if len(row.skipped) == 0 {
+				if skip != "" {
+					test.Errorf("skip = %q, want none", skip)
+				}
+				return
+			}
+			re, err := regexp.Compile(skip)
+			if err != nil {
+				test.Fatalf("skip %q: %v", skip, err)
+			}
+			for _, line := range row.skipped {
+				if !re.MatchString(line) {
+					test.Errorf("skip %q does not match %q", skip, line)
+				}
+			}
+			for _, line := range row.kept {
+				if re.MatchString(line) {
+					test.Errorf("skip %q matches %q, which this host can run", skip, line)
+				}
+			}
+		})
 	}
 }
 
