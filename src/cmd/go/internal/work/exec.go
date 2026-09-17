@@ -74,9 +74,23 @@ func actionList(root *Action) []*Action {
 
 // Do runs the action graph rooted at root.
 // cacheCheckWorkers is how many cache checks run at once. A check starts no
-// process, so the count is not a load on the machine; it is how much of a
-// wave reaches the shared tier in one go.
+// process, so the count is not a load on the machine; it is how many keys
+// reach the shared tier's coalescer together.
 const cacheCheckWorkers = 256
+
+// fullyCached reports whether a is a build action whose cache check found
+// every output it needs, so that running it starts no process.
+func fullyCached(a *Action) bool {
+	if a.Mode != "build" {
+		return false
+	}
+	for _, dep := range a.Deps {
+		if pr, ok := dep.Provider.(*checkCacheProvider); ok {
+			return pr.need == 0
+		}
+	}
+	return false
+}
 
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
@@ -129,29 +143,19 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	b.readyCacheSema = make(chan bool, len(all))
 
 	// enqueue makes a runnable action available to the pool that runs its
-	// kind. A cache check joins the wave instead, which releaseWave hands to
-	// the cache pool whole. b.exec must be held.
+	// kind. A cache check goes to the cache pool, and so does a build whose
+	// check found everything: it starts no compiler, and the checks of the
+	// packages importing it wait on it. Behind -p real compiles in the build
+	// pool, those checks reached the shared tier one at a time. b.exec must
+	// be held.
 	enqueue := func(a *Action) {
-		if a.Mode == "build check cache" {
-			b.cacheWave = append(b.cacheWave, a)
+		if a.Mode == "build check cache" || fullyCached(a) {
+			b.readyCache.push(a)
+			b.readyCacheSema <- true
 			return
 		}
 		b.ready.push(a)
 		b.readySema <- true
-	}
-
-	// releaseWave hands the waiting cache checks to their pool, once no
-	// check is in flight. b.exec must be held.
-	releaseWave := func() {
-		if b.cacheInFlight != 0 {
-			return
-		}
-		for _, a := range b.cacheWave {
-			b.readyCache.push(a)
-			b.readyCacheSema <- true
-		}
-		b.cacheInFlight += len(b.cacheWave)
-		b.cacheWave = b.cacheWave[:0]
 	}
 
 	// Initialize per-action execution state.
@@ -164,7 +168,6 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 			enqueue(a)
 		}
 	}
-	releaseWave()
 
 	// Handle runs a single action and takes care of triggering
 	// any actions that are runnable as a result.
@@ -206,11 +209,6 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 		// shared work state are serialized through b.exec.
 		b.exec.Lock()
 		defer b.exec.Unlock()
-
-		if a.Mode == "build check cache" {
-			b.cacheInFlight--
-		}
-		defer releaseWave()
 
 		if err != nil {
 			if b.AllowErrors && a.Package != nil {
