@@ -14,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
@@ -49,14 +51,19 @@ func Dir(dir, modroot string) string {
 	if !str.HasFilePathPrefix(dir, cfg.GOMODCACHE) {
 		return dir
 	}
-	if !hasDirective(dir) {
+	runnable, skip := directives(dir)
+	if runnable == 0 {
+		// Every directive names a program this host cannot start. That is the
+		// author's own workflow, run before the module was published, and the
+		// zip carries what it wrote. klauspost/compress ships a stringer
+		// directive and the file stringer produced.
 		return dir
 	}
 	rel, err := filepath.Rel(modroot, dir)
 	if err != nil {
 		return dir
 	}
-	out, err := generateModule(modroot, rel)
+	out, err := generateModule(modroot, rel, skip)
 	if err != nil {
 		// A host that cannot confine a generator cannot generate anything, for
 		// any module. Building past that hands every consumer a package whose
@@ -69,12 +76,96 @@ func Dir(dir, modroot string) string {
 		// every path the go command ignores, `_codegen` among them, so a
 		// generator kept beside the package it writes is absent from what a
 		// consumer fetches. testify ships one, and ships its generated files
-		// too, so the build needs nothing from it.
-		fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
-		fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
+		// too, so the build needs nothing from it. The module loader and the
+		// package loader both ask, so the report goes out once.
+		if _, said := reported.LoadOrStore(dir, true); !said {
+			fmt.Fprintf(os.Stderr, "go: generating %s: %v\n", dir, err)
+			fmt.Fprintf(os.Stderr, "go: %s builds from the tree the module zip carried\n", dir)
+		}
 		return dir
 	}
 	return out
+}
+
+// reported holds the directories whose failed generation this process has
+// reported.
+var reported sync.Map
+
+// directives reads a package's generate directives and sorts them by whether
+// this host can start their program: the count of those it can, and a -skip
+// expression naming the others. A directive whose program is not on PATH is
+// one the module's author runs, not one a consumer can. It reads lines rather
+// than parsing: this runs for every dependency package, ahead of the build.
+//
+// A -command alias is resolved within its file, as `go generate` resolves it.
+// A program given as a path, or through an environment variable, is left to
+// `go generate` to resolve, and counts as runnable.
+func directives(dir string) (runnable int, skip string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, ""
+	}
+	var unrunnable []string
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
+			continue
+		}
+		open, err := os.Open(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			continue
+		}
+		aliases := map[string]string{}
+		scan := bufio.NewScanner(open)
+		scan.Buffer(nil, 1<<20)
+		for scan.Scan() {
+			line := strings.TrimSpace(scan.Text())
+			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
+				continue
+			}
+			words := strings.Fields(line[len(generatePrefix):])
+			if len(words) == 0 {
+				continue
+			}
+			if words[0] == "-command" {
+				if len(words) >= 3 {
+					aliases[words[1]] = words[2]
+				}
+				continue
+			}
+			prog := words[0]
+			if alias, ok := aliases[prog]; ok {
+				prog = alias
+			}
+			if programRunnable(prog) {
+				runnable++
+				continue
+			}
+			unrunnable = append(unrunnable, line)
+		}
+		open.Close()
+	}
+	if len(unrunnable) == 0 {
+		return runnable, ""
+	}
+	quoted := make([]string, len(unrunnable))
+	for idx, line := range unrunnable {
+		quoted[idx] = regexp.QuoteMeta(line)
+	}
+	return runnable, "^(?:" + strings.Join(quoted, "|") + ")$"
+}
+
+// programRunnable reports whether `go generate` could start prog here: the go
+// command itself, a path, a word an environment variable expands, or a name
+// found beside this go command or on PATH.
+func programRunnable(prog string) bool {
+	if prog == "go" || strings.HasPrefix(prog, "$") || strings.ContainsAny(prog, `/\`) {
+		return true
+	}
+	if _, err := exec.LookPath(filepath.Join(cfg.GOROOTbin, prog)); err == nil {
+		return true
+	}
+	_, err := exec.LookPath(prog)
+	return err == nil
 }
 
 // generateDeps reports whether a dependency may generate. The environment
@@ -85,41 +176,6 @@ func Dir(dir, modroot string) string {
 // known before reading it that way.
 func generateDeps() bool {
 	return os.Getenv("GOGENERATEDEPS") != "off"
-}
-
-// hasDirective reports whether a package carries a generate directive. It reads
-// lines rather than parsing: this runs for every dependency package, ahead of
-// the build.
-func hasDirective(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, ent := range entries {
-		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
-			continue
-		}
-		if fileHasDirective(filepath.Join(dir, ent.Name())) {
-			return true
-		}
-	}
-	return false
-}
-
-func fileHasDirective(file string) bool {
-	open, err := os.Open(file)
-	if err != nil {
-		return false
-	}
-	defer open.Close()
-
-	scan := bufio.NewScanner(open)
-	for scan.Scan() {
-		if strings.HasPrefix(strings.TrimSpace(scan.Text()), generatePrefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // generateModule answers the directory of package pkgrel in its module's
@@ -135,7 +191,7 @@ func fileHasDirective(file string) bool {
 // A module has one tree, and each package the build loads from it is generated
 // into it on its own. A build that imports three packages of a module needs all
 // three generated, whichever of them it happened to load first.
-func generateModule(modroot, pkgrel string) (string, error) {
+func generateModule(modroot, pkgrel, skip string) (string, error) {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
 		return "", err
@@ -186,7 +242,7 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		modfetch.RemoveAll(stage)
 		return "", err
 	}
-	if err := runGenerate(stage, pkgrel); err != nil {
+	if err := runGenerate(stage, pkgrel, skip); err != nil {
 		// A half-generated package is worse than none: it compiles against
 		// files the generator had not finished writing.
 		modfetch.RemoveAll(stage)
@@ -447,13 +503,18 @@ func makeTreeWritable(dir string) {
 // without anybody reading it first. So it runs confined: it may write the tree
 // it generates and the caches a go command needs, and nothing else. The network
 // stays reachable, because a generator that fetches its own inputs is the case
-// this exists for.
-func runGenerate(root, pkgrel string) error {
+// this exists for. skip names the directives this host cannot start, in the
+// -skip form.
+func runGenerate(root, pkgrel, skip string) error {
 	goCmd, err := base.GoCommand()
 	if err != nil {
 		return err
 	}
-	argv, err := sandboxArgv(root, append(slices.Clone(goCmd), "generate", "./"+filepath.ToSlash(pkgrel))...)
+	args := append(slices.Clone(goCmd), "generate")
+	if skip != "" {
+		args = append(args, "-skip="+skip)
+	}
+	argv, err := sandboxArgv(root, append(args, "./"+filepath.ToSlash(pkgrel))...)
 	if err != nil {
 		return err
 	}
