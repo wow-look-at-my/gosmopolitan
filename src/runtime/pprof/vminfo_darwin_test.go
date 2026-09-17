@@ -48,25 +48,27 @@ func TestVMInfo(t *testing.T) {
 	if got, want := offset, uint64(0); got != want {
 		t.Errorf("got %x, want %x", got, want)
 	}
-	// The mapping must name the running binary, and a name is not how to
-	// ask: std and cmd share one test binary here, which go test hard
-	// links as <package>.test once per package it runs. Every one of those
-	// names is this process's image, and the mapping can report any of
-	// them.
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	running, err := os.Stat(exe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mapped, err := os.Stat(filename)
-	if err != nil {
-		t.Fatalf("the mapping names %s: %v", filename, err)
-	}
-	if !os.SameFile(running, mapped) {
-		t.Errorf("got %s, want %s or another name for it", filename, exe)
+	// The mapping must name this process's image. Which NAME it reports is
+	// not fixed here: std and cmd share one test binary, which go test hard
+	// links as <package>.test once per package it runs, so the mapping can
+	// report any of those links - and go test removes a link once that
+	// package is done, which leaves the name of a file that no longer
+	// exists. So require the name, and require it to be the running binary
+	// whenever it still resolves.
+	if filename == "" {
+		t.Error("the mapping names no file")
+	} else if mapped, err := os.Stat(filename); err == nil {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		running, err := os.Stat(exe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(running, mapped) {
+			t.Errorf("got %s, want %s or another name for it", filename, exe)
+		}
 	}
 	addr := uint64(abi.FuncPCABIInternal(TestVMInfo))
 	if addr < lo || addr > hi {
