@@ -39,7 +39,11 @@ type verifyTest struct {
 	dnsName       string
 	systemSkip    bool
 	systemLax     bool
-	keyUsages     []ExtKeyUsage
+	// darwinSkip names why the macOS trust store no longer accepts this
+	// chain: the platform verifier answers from Apple's revocation and
+	// policy data, which the pinned verify date does not turn back.
+	darwinSkip string
+	keyUsages  []ExtKeyUsage
 
 	errorCallback  func(*testing.T, error)
 	expectedChains [][]string
@@ -215,6 +219,7 @@ var verifyTests = []verifyTest{
 		roots:         []string{globalSignRoot},
 		currentTime:   1524771953,
 		dnsName:       "udctest.ads.vt.edu",
+		darwinSkip:    "Apple lists the Trusted Root CA SHA256 G2 intermediate as revoked",
 
 		expectedChains: [][]string{
 			{
@@ -236,7 +241,8 @@ var verifyTests = []verifyTest{
 		dnsName:       "tm.cn",
 
 		// CryptoAPI can find alternative validation paths.
-		systemLax: true,
+		systemLax:  true,
+		darwinSkip: "Apple's policy rejects the *.tm.cn leaf as not standards compliant",
 
 		expectedChains: [][]string{
 			{
@@ -558,6 +564,9 @@ func TestSystemVerify(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if test.systemSkip {
 				t.SkipNow()
+			}
+			if test.darwinSkip != "" && runtime.GOOS == "darwin" {
+				t.Skip(test.darwinSkip)
 			}
 			testVerify(t, test, true)
 		})
