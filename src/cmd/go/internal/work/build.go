@@ -541,7 +541,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 			// diagnostics would print every error twice. Exiting runs
 			// the AtExit hook that kills it.
 			base.ExitIfErrors()
-			cosmoFatten(ctx, sib, pkgsMain(pkgs))
+			cosmoFatten(ctx, b, sib, pkgsMain(pkgs))
 			return
 		}
 		if len(pkgs) > 1 {
@@ -560,7 +560,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		}
 		b.Do(ctx, a)
 		base.ExitIfErrors() // see the -o directory branch above
-		cosmoFatten(ctx, sib, []*load.Package{p})
+		cosmoFatten(ctx, b, sib, []*load.Package{p})
 		return
 	}
 
@@ -853,7 +853,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 	b.Do(ctx, a)
 	base.ExitIfErrors()
 
-	cosmoFattenInstall(ctx, sib, cosmoMains)
+	cosmoFattenInstall(ctx, b, sib, cosmoMains)
 
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,

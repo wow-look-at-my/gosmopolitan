@@ -38,13 +38,17 @@ type verifyTest struct {
 	currentTime   int64
 	dnsName       string
 	systemSkip    bool
+	systemLax     bool
+	// darwinSkip names why the macOS trust store no longer accepts this
+	// chain: the platform verifier answers from Apple's revocation and
+	// policy data, which the pinned verify date does not turn back.
+	darwinSkip string
 	// systemSkipHosts names the hosts whose platform verifier cannot
 	// judge this fixture. The fixtures are real certificates pinned to a
 	// currentTime in the past, and a verifier that applies today's trust
 	// policy instead answers about the world rather than about this
 	// package. TestGoVerify still covers the fixture on every host.
 	systemSkipHosts []string
-	systemLax       bool
 	keyUsages       []ExtKeyUsage
 
 	errorCallback  func(*testing.T, error)
@@ -221,6 +225,7 @@ var verifyTests = []verifyTest{
 		roots:         []string{globalSignRoot},
 		currentTime:   1524771953,
 		dnsName:       "udctest.ads.vt.edu",
+		darwinSkip:    "Apple lists the Trusted Root CA SHA256 G2 intermediate as revoked",
 
 		// Apple's Security framework rejects this chain: "Trusted Root CA
 		// SHA256 G2" certificate is revoked.
@@ -246,7 +251,8 @@ var verifyTests = []verifyTest{
 		dnsName:       "tm.cn",
 
 		// CryptoAPI can find alternative validation paths.
-		systemLax: true,
+		systemLax:  true,
+		darwinSkip: "Apple's policy rejects the *.tm.cn leaf as not standards compliant",
 
 		// Apple's Security framework rejects this leaf: "*.tm.cn"
 		// certificate is not standards compliant.
@@ -572,6 +578,9 @@ func TestSystemVerify(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if test.systemSkip || slices.Contains(test.systemSkipHosts, runtime.GOOS) {
 				t.SkipNow()
+			}
+			if test.darwinSkip != "" && runtime.GOOS == "darwin" {
+				t.Skip(test.darwinSkip)
 			}
 			testVerify(t, test, true)
 		})
