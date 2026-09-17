@@ -2413,6 +2413,9 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 	}
 	// The runtime always looks at GODEBUG, without telling us in the testlog.
 	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
+	if cache.DebugTest {
+		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
+	}
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
