@@ -64,6 +64,7 @@ func Dir(dir, modroot string) string {
 	if err != nil {
 		return dir
 	}
+	cacheDebugf("gendep: %s: %d runnable directives", dir, runnable)
 	out, err := generateModule(modroot, rel, skip)
 	if err != nil {
 		// A host that cannot confine a generator, or cannot start one it built,
