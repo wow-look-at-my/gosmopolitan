@@ -199,6 +199,11 @@ func (b *Builder) RunnableTarget(a *Action) (string, error) {
 	if err := sh.CopyFile(tmp, built, 0o777, true); err != nil {
 		return "", err
 	}
+	if cfg.BuildN {
+		// The copy printed itself and wrote nothing, so there is no file to
+		// give the shared name to.
+		return exe, nil
+	}
 	err := os.Link(tmp, exe)
 	os.Remove(tmp)
 	if err != nil && !os.IsExist(err) {
