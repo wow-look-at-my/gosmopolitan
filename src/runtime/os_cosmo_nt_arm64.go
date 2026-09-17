@@ -6,6 +6,14 @@
 
 package runtime
 
+import _ "unsafe" // for go:linkname
+
+// poll_runtime_cancelIO has no NT host to end a transfer on: there is no
+// arm64 payload for windows.
+//
+//go:linkname poll_runtime_cancelIO internal/poll.runtime_cancelIO
+func poll_runtime_cancelIO(fd uintptr) {}
+
 // iswindows reports whether the host is Windows NT.
 //
 // It is constant false on arm64. The APE carries no Windows/arm64 boot

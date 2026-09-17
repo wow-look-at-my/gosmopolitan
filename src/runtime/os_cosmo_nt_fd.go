@@ -189,6 +189,25 @@ func ntFDRelease(fd int32) (handle uintptr, kind ntFDKind, ok bool) {
 	return handle, kind, true
 }
 
+// poll_runtime_cancelIO ends the reads and writes other threads have
+// blocked on fd, on an NT host. A pipe or console end there is a
+// synchronous handle nothing polls, so a close has to abort the transfer
+// itself before the last reference can let the handle go. The aborted
+// transfer answers OPERATION_ABORTED, which reads as ECANCELED. Every
+// other host, and every other kind of fd, needs nothing here.
+//
+//go:linkname poll_runtime_cancelIO internal/poll.runtime_cancelIO
+func poll_runtime_cancelIO(fd uintptr) {
+	if !iswindows() {
+		return
+	}
+	e, ok := ntFDLookup(int32(fd))
+	if !ok || (e.kind != ntFDPipe && e.kind != ntFDStdio) {
+		return
+	}
+	ntcall(ntCancelIoExFn, e.handle, 0, 0, 0, 0, 0)
+}
+
 // ntFDSetSockFam records the Linux address family of a socket fd.
 func ntFDSetSockFam(fd int32, fam uint16) {
 	if fd < 0 || fd >= ntFDMax {
