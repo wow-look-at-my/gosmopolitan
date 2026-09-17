@@ -242,9 +242,13 @@ func bootstrapBuildTools() {
 	defer os.Setenv("GOBIN", os.Getenv("GOBIN"))
 	os.Setenv("GOBIN", "")
 
-	os.Setenv("GOOS", "")
+	// The bootstrap tools run on this machine, so they are built for it by
+	// name: a bootstrap go command of this fork answers an empty GOOS with
+	// cosmo, and an install for a target other than the host lands under
+	// bin/<goos>_<goarch>/ where nothing below looks.
+	os.Setenv("GOOS", gohostos)
 	os.Setenv("GOHOSTOS", "")
-	os.Setenv("GOARCH", "")
+	os.Setenv("GOARCH", gohostarch)
 	os.Setenv("GOHOSTARCH", "")
 
 	// Run Go bootstrap to build binaries.
