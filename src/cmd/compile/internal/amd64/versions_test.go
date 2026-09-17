@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -202,35 +203,36 @@ func clobber(t *testing.T, src string, dst *os.File, opcodes map[string]bool) {
 
 	// Figure out where in the binary the edits must be done.
 	physicalEdits := map[uint64]bool{}
-	if loads := apeLoadSegments(t, src); loads != nil {
-		for _, p := range loads {
-			for a := range virtualEdits {
-				if a >= p.Vaddr && a < p.Vaddr+p.Filesz {
-					physicalEdits[p.Off+(a-p.Vaddr)] = true
-				}
+	// homes counts the mappings each virtual address got, so a mismatch
+	// below can say which addresses went wrong and how.
+	homes := map[uint64]int{}
+	place := func(vaddr, off, size uint64) {
+		for a := range virtualEdits {
+			if a >= vaddr && a < vaddr+size {
+				physicalEdits[off+(a-vaddr)] = true
+				homes[a]++
 			}
 		}
+	}
+	if loads := apeLoadSegments(t, src); loads != nil {
+		for _, p := range loads {
+			place(p.Vaddr, p.Off, p.Filesz)
+		}
 	} else if e, err := elf.Open(src); err == nil {
-		for _, sec := range e.Sections {
-			vaddr := sec.Addr
-			paddr := sec.Offset
-			size := sec.Size
-			for a := range virtualEdits {
-				if a >= vaddr && a < vaddr+size {
-					physicalEdits[paddr+(a-vaddr)] = true
-				}
+		// PT_LOAD, not the section table: a section that occupies no
+		// address space still reports Addr 0, and every text address
+		// below its size then maps into it as well. The debug sections
+		// of a large test binary reach past the first instruction this
+		// clobbers, which makes that second mapping real.
+		for _, p := range e.Progs {
+			if p.Type != elf.PT_LOAD {
+				continue
 			}
+			place(p.Vaddr, p.Off, p.Filesz)
 		}
 	} else if m, err2 := macho.Open(src); err2 == nil {
 		for _, sec := range m.Sections {
-			vaddr := sec.Addr
-			paddr := uint64(sec.Offset)
-			size := sec.Size
-			for a := range virtualEdits {
-				if a >= vaddr && a < vaddr+size {
-					physicalEdits[paddr+(a-vaddr)] = true
-				}
-			}
+			place(sec.Addr, uint64(sec.Offset), sec.Size)
 		}
 	} else {
 		t.Log(err)
@@ -238,7 +240,19 @@ func clobber(t *testing.T, src string, dst *os.File, opcodes map[string]bool) {
 		t.Fatal("executable format not elf or macho")
 	}
 	if len(virtualEdits) != len(physicalEdits) {
-		t.Fatal("couldn't find an instruction in text sections")
+		var nowhere, twice []uint64
+		for a := range virtualEdits {
+			switch {
+			case homes[a] == 0:
+				nowhere = append(nowhere, a)
+			case homes[a] > 1:
+				twice = append(twice, a)
+			}
+		}
+		slices.Sort(nowhere)
+		slices.Sort(twice)
+		t.Fatalf("%d instruction bytes reached %d file offsets: %d in no segment (%x), %d in several (%x)",
+			len(virtualEdits), len(physicalEdits), len(nowhere), nowhere[:min(len(nowhere), 8)], len(twice), twice[:min(len(twice), 8)])
 	}
 
 	// Copy source to destination, making edits along the way.
