@@ -723,57 +723,6 @@ func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uint
 	return 0, 0, 0
 }
 
-// ntEmuDup implements dup(2) for SOCKET-kind fds via DuplicateHandle,
-// the call upstream Go's poll.DupCloseOnExec makes on windows. An
-// msafd socket is a real kernel file handle, and a same-process
-// duplicate names the same socket object with an independent handle
-// lifetime, which is dup(2)'s contract. net.FileConn is what needs it:
-// F_DUPFD_CLOEXEC is ENOSYS from ntFcntl, so it falls back to plain
-// dup. MSDN's warning against DuplicateHandle on sockets concerns
-// non-IFS layered providers, which msafd and afunix are not.
-//
-// A non-socket kind stays ENOSYS on purpose: nothing in std needs a
-// file or pipe dup on NT, and a visible gap beats an untested path.
-func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
-	e, ok := ntFDLookup(fd)
-	if !ok {
-		return ntFail3(ntEBADF)
-	}
-	if e.kind != ntFDSocket {
-		return ntFail3(ntENOSYS)
-	}
-	var nh uintptr
-	r, werr := ntcallE(ntDuplicateHandleFn,
-		_NT_CURRENT_PROCESS, e.handle, _NT_CURRENT_PROCESS,
-		uintptr(unsafe.Pointer(&nh)),
-		0, // dwDesiredAccess (ignored with SAME_ACCESS)
-		0, // bInheritHandle = FALSE
-		_NT_DUPLICATE_SAME_ACCESS)
-	if r == 0 {
-		return ntFail3(ntErrno(werr))
-	}
-	// The duplicate shares every socket property (nonblocking mode
-	// included - FIONBIO is socket-object state) but starts with
-	// CLOEXEC clear, per POSIX. Copy the recorded socket identity so
-	// name queries on the dup answer like the original.
-	nfd := ntFDAlloc(nh, ntFDSocket, e.flags, false, nil)
-	if nfd < 0 {
-		ntcall(ntWSACloseSocketFn, nh, 0, 0, 0, 0, 0)
-		return ntFail3(uintptr(-nfd))
-	}
-	ntFDSetSockFam(nfd, e.sockFam)
-	if e.sockPair {
-		ntFDSetSockPair(nfd)
-	}
-	if e.unixBound != "" {
-		ntFDSetUnixName(nfd, e.unixBound, true)
-	}
-	if e.unixPeer != "" {
-		ntFDSetUnixName(nfd, e.unixPeer, false)
-	}
-	return uintptr(nfd), 0, 0
-}
-
 // ntEmuBind records the Linux-spelling AF_UNIX name on the fd entry,
 // which is what ntEmuGetsockname reports back. An afunix socket file
 // is a reparse point and is NOT auto-deleted on close: unlink(2)

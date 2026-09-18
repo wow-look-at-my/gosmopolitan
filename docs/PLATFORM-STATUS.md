@@ -14,7 +14,9 @@ Signals: VEH-based sigpanic (SIGSEGV recover works), self-signals (kill/tkill wi
 
 File metadata followed (2026-09-02, the metadata wave): utimensat, truncate, fchdir and linkat over SetFileTime, SetEndOfFile, GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The runtimeprobe fsmeta check is a hard assertion on this host too.
 
-What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` are a documented no-op after an existence check, and `fchown`/`fchownat` have no unix ownership to change. The reasoning sits in `ntEmuFchmod`.
+Symlinks and the read-only attribute followed (2026-09-16, `os_cosmo_nt_link.go`). A symlink is created over CreateSymbolicLinkW. Readlink reads the substitute name through FSCTL_GET_REPARSE_POINT. Lstat and getdents64 report a name-surrogate reparse point as a link. Every fd kind duplicates over DuplicateHandle, through dup, dup2 and dup3. Unlink clears FILE_ATTRIBUTE_READONLY before DeleteFileW and takes a directory symlink. Chmod carries the owner's write bit as that attribute, and stat reports it as 0555 against 0755. The temp directory is answered in the /c/ spelling Getwd and Executable use, so a path built under it compares equal to one read back.
+
+What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` carry one bit, and `fchown`/`fchownat` have no unix ownership to change.
 
 The NT suite's own red, measured on run 34732730589, is mostly ONE defect wearing many package names. A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
 
@@ -32,7 +34,7 @@ The remainder of that red, by cause:
 | `Mode = "-rwx------", want "-rw-------"` | NT has no unix mode bits |
 | `os` and `os/exec` at 600s | neither fails. Both hang to the timeout |
 
-Still missing on Windows: Windows/arm64 (the charter's step-one experiment ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic pre-main SIGSEGV at 0x2000c9000. so native bring-up gains urgency), file/pipe dup(2) (ENOSYS on purpose - socket dup works, and file/pipe fds still transfer. The DNS half of the 2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes `dnsconfig_unix.go`, whose tag is `!windows`. It read a resolv.conf. The trust store was the same shape of gap one layer up, and is also fixed. Every path in crypto/x509's `root_cosmo.go` is a unix. Keyboard chords, window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay documented-not-asserted).
+Still missing on Windows: Windows/arm64 (the charter's step-one experiment ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic pre-main SIGSEGV at 0x2000c9000. so native bring-up gains urgency). The DNS half of the 2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes `dnsconfig_unix.go`, whose tag is `!windows`. It read a resolv.conf. The trust store was the same shape of gap one layer up, and is also fixed. Every path in crypto/x509's `root_cosmo.go` is a unix. Keyboard chords, window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay documented-not-asserted).
 
 macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll via a getdents64 emulation over Apple's __getdirentries64), getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/After, context timeouts), TCP/UDP loopback sockets with deadlines, unix-domain stream (the abstract namespace is Linux-only and refused EINVAL), readv/writev (net.Buffers).
 
@@ -56,13 +58,14 @@ Locking, durability and the terminal followed (2026-09-06): flock, fdatasync, sy
 
 Runtimeprobe checks: flock, durable, rusage, ioctl, termios, volume. The ubuntu leg's unit tests pin the termios translation, but no CI runner has a terminal, so its round trip has never run against a live driver - untested, not unbuilt.
 
-The remaining known macOS gaps are AllThreadsSyscall (Linux-only rt-signal machinery, unused by the stdlib on cosmo) and the Intel-mac runtime bring-up below.
+The remaining known macOS gap is AllThreadsSyscall (Linux-only rt-signal machinery, unused by the stdlib on cosmo).
 
 **Variadic libc calls must pass their variadic arguments on the STACK (2026-07-26).** arm64-apple diverges from AAPCS64 here even when argument registers are free, so. `fcntl(fd, F_SETFD, FD_CLOEXEC)` through the fixed-argument trampoline set close-on-exec from stack garbage, leaving descriptors unprotected perhaps a third of the time. That put os/exec's child status pipe into the child and deadlocked any parent whose child did not exit promptly - the long-standing "flaky" macOS fdpass. The same defect explains the F_DUPFD_CLOEXEC EINVAL and O_CREAT modes taken from garbage. Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for any variadic libc function (fcntl, open/openat with a mode, ioctl). Never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
-macOS Intel status: the dd-assimilated Mach-O is structurally correct as of 2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO, host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link unit tests and apetest). The syscall surface closed on 2026-09-02: the metadata table, the XNU carry-flag error convention, Apple-to-Linux errno numbering, the kqueue/kevent netpoller and hw.ncpu.
+
+macOS Intel status: not a platform this toolchain emits. `cosmoape`'s table drops darwin/amd64, so the linker writes no Mach-O header and `GOCOSMOPLATFORMS=darwin/amd64` is refused. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. Starting on that host needs a copy of the whole program in a writable place, and every platform here starts without writing anything. The runtime's amd64 XNU surface stays in the tree and stays untested. Bringing the platform back means answering the offset-0 problem, not just adding a table row.
 
 Signal installation closed the same day. `darwinSigaction` translates the Linux `sigactiont` and issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its `sa_tramp`. The `syscall` package's own `rt_sigaction` emulation (`internal/runtime/syscall/cosmo`) carries its own trampoline. `darwinSigprocmask` translates `how` and bridges the sigset width (8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread creation joined the closed list via bsdthread_create, and parking via a polled wait since XNU has no futex.
 
 Signal delivery is closed too: `sigctxt` dispatches on the host and reads XNU's `user_ucontext64`, whose mcontext sits behind a pointer at offset 48. Apple's SIGFPE `si_code` values are remapped to Linux's for sigpanic.
 
-There is still no Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands and is verified on real hardware.
+No Intel-mac CI runner exists. Nothing there has ever executed. Do not claim macOS Intel "works".

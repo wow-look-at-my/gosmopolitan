@@ -221,6 +221,22 @@ func AddVersionFlag() {
 
 var buildID string // filled in by linker
 
+// toolIDs is filled in by the go command when it links tools into one
+// binary: "name=id" pairs, comma separated, where each id is derived from
+// that tool's own packages rather than from the binary that carries them.
+var toolIDs string
+
+// toolBuildID answers the build ID the tool called name reports: its own
+// entry in toolIDs, else the binary's.
+func toolBuildID(name string) string {
+	for _, pair := range strings.Split(toolIDs, ",") {
+		if tool, id, ok := strings.Cut(pair, "="); ok && tool == name {
+			return id
+		}
+	}
+	return buildID
+}
+
 type versionFlag struct{}
 
 func (versionFlag) IsBoolFlag() bool { return true }
@@ -255,7 +271,7 @@ func (versionFlag) Set(s string) error {
 	// serve objects compiled by one fork build into another.
 	if s == "full" {
 		if strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo") {
-			p += " buildID=" + buildID
+			p += " buildID=" + toolBuildID(name)
 		}
 	}
 
