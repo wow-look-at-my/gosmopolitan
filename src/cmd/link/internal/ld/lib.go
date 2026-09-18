@@ -1082,7 +1082,7 @@ func loadobjfile(ctxt *Link, lib *sym.Library) {
 	if ctxt.Debugvlog > 1 {
 		ctxt.Logf("ldobj: %s (%s)\n", lib.File, pkg)
 	}
-	f, err := bio.Open(lib.File)
+	f, err := bio.OpenAny(lib.File)
 	if err != nil {
 		Exitf("cannot open file %s: %v", lib.File, err)
 	}

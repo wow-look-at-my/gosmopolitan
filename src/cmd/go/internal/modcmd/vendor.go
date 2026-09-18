@@ -25,6 +25,7 @@ import (
 	"cmd/go/internal/imports"
 	"cmd/go/internal/load"
 	"cmd/go/internal/modload"
+	"cmd/go/internal/orgmod"
 	"cmd/go/internal/str"
 
 	"golang.org/x/mod/module"
@@ -106,7 +107,9 @@ func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO st
 
 	modpkgs := make(map[module.Version][]string)
 	for _, pkg := range pkgs {
-		m := ld.PackageModule(pkg)
+		// modules.txt records the placeholder for an org module, the same token
+		// its go.mod file carries, so that the two files agree.
+		m := orgmod.PlaceholderModule(ld.PackageModule(pkg))
 		if m.Path == "" || ld.MainModules.Contains(m.Path) {
 			continue
 		}
@@ -125,7 +128,7 @@ func RunVendor(ld *modload.Loader, ctx context.Context, vendorE bool, vendorO st
 		for _, m := range ld.MainModules.Versions() {
 			if modFile := ld.MainModules.ModFile(m); modFile != nil {
 				for _, r := range modFile.Require {
-					isExplicit[r.Mod] = true
+					isExplicit[orgmod.PlaceholderModule(r.Mod)] = true
 				}
 			}
 

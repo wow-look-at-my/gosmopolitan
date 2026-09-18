@@ -638,6 +638,9 @@ var depsRules = `
 	hash/maphash, container/heap, go/constant, go/parser, internal/buildcfg, internal/goversion, internal/types/errors
 	< go/types;
 
+	FMT, encoding/json, crypto/sha256, encoding/binary
+	< internal/cosmo/embedded;
+
 	DEBUG, go/build, go/types, text/scanner, crypto/sha256
 	< internal/pkgbits, internal/exportdata
 	< go/internal/gcimporter, go/internal/gccgoimporter, go/internal/srcimporter

@@ -59,4 +59,4 @@ run through a simplified C preprocessor that implements #include,
 
 For more information, see https://golang.org/doc/asm.
 */
-package main
+package asm

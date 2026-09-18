@@ -1,0 +1,41 @@
+Written by hand.
+A module whose generated file imports a package nothing in the fetched tree
+imports. The zip carries the directive and the generator, and not the file
+the generator writes.
+
+-- .mod --
+module example.com/generatedimport
+
+go 1.16
+-- .info --
+{"Version": "v1.0.0"}
+-- go.mod --
+module example.com/generatedimport
+
+go 1.16
+-- gen/main.go --
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	out := flag.String("out", "", "file to write")
+	flag.Parse()
+	body := "package lang\n\nimport \"example.com/generatedimport/word\"\n\nfunc Name() string { return word.Generated }\n"
+	if err := os.WriteFile(*out, []byte(body), 0o666); err != nil {
+		os.Exit(1)
+	}
+}
+-- lang/lang.go --
+//go:generate go run example.com/generatedimport/gen -out lang.gen.go
+
+// Package lang declares nothing itself: Name is the generator's to write.
+package lang
+-- word/word.go --
+// Package word is imported by the generated file alone.
+package word
+
+const Generated = "generated"

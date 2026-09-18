@@ -124,6 +124,7 @@ import (
 	"cmd/go/internal/search"
 	"cmd/go/internal/str"
 	"cmd/internal/par"
+	"internal/cosmo/embedded"
 
 	"golang.org/x/mod/module"
 )
@@ -1882,6 +1883,14 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 
 	if cfg.BuildContext.Compiler == "gccgo" && pkg.inStd {
 		// We can't scan standard packages for gccgo.
+	} else if std := embeddedStdPackage(pkg); std != nil {
+		// A standard package of a go command carrying its standard library
+		// is a compiled archive with no directory; the manifest holds its
+		// imports, as resolved vendor paths a source file spells without the
+		// prefix, and its tests are not in the binary.
+		for _, imp := range std.Imports {
+			imports = append(imports, strings.TrimPrefix(imp, "vendor/"))
+		}
 	} else {
 		var err error
 		imports, testImports, err = scanDir(modroot, pkg.dir, pld.Tags)
@@ -1907,6 +1916,15 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 	pkg.testImports = testImports
 
 	pld.applyPkgFlags(ld, ctx, pkg, pkgImportsLoaded)
+}
+
+// embeddedStdPackage answers pkg's entry in the embedded standard library,
+// or nil when pkg is not a standard package of a go command carrying one.
+func embeddedStdPackage(pkg *loadPkg) *embedded.Package {
+	if !cfg.EmbeddedStd || !pkg.inStd {
+		return nil
+	}
+	return cfg.EmbeddedStdPackage(pkg.path)
 }
 
 // pkgTest locates the test of pkg, creating it if needed, and updates its state
@@ -1987,7 +2005,11 @@ func (pld *packageLoader) stdVendor(ld *Loader, parentPath, path string) string 
 		// pattern, they are not part of the std *module*, and do not affect
 		// 'go mod tidy' and similar module commands when working within std.)
 		vendorPath := pathpkg.Join("vendor", path)
-		if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
+		if cfg.EmbeddedStd {
+			if cfg.EmbeddedStdPackage(vendorPath) != nil {
+				return vendorPath
+			}
+		} else if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
 			return vendorPath
 		}
 	}
