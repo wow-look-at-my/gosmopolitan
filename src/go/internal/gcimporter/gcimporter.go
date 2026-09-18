@@ -78,7 +78,34 @@ func Import(fset *token.FileSet, packages map[string]*types.Package, path, srcDi
 	s := string(data)
 
 	input := pkgbits.NewPkgDecoder(id, s)
-	pkg = readUnifiedPackage(fset, nil, packages, input)
+	pkg = readUnifiedPackage(fset, nil, packages, input, ownImporter(fset, packages, srcDir, lookup, &err))
 
 	return
+}
+
+// ownImporter answers the function a reader calls to declare a package's
+// objects from that package's own export data, before any copy of them in
+// the export data being read. It only reads what lookup provides, so it
+// never searches for export data; a package lookup does not know is
+// declared from the copies, as it always was. An error reading export data
+// lookup does provide is stored in *failed.
+func ownImporter(fset *token.FileSet, packages map[string]*types.Package, srcDir string, lookup func(path string) (io.ReadCloser, error), failed *error) func(string) {
+	if lookup == nil {
+		return nil
+	}
+	tried := map[string]bool{}
+	return func(path string) {
+		if tried[path] || path == "unsafe" {
+			return
+		}
+		tried[path] = true
+		file, err := lookup(path)
+		if err != nil || file == nil {
+			return // not provided: the copies are all there is
+		}
+		file.Close()
+		if _, err := Import(fset, packages, path, srcDir, lookup); err != nil && *failed == nil {
+			*failed = err
+		}
+	}
 }

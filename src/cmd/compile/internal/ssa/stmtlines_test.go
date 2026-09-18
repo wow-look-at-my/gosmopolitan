@@ -80,7 +80,9 @@ func TestStmtLines(t *testing.T) {
 
 	// Build cmd/go forcing DWARF enabled, as a large test case.
 	dir := t.TempDir()
-	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-ldflags=-w=0", "-o", dir+"/test.exe", "cmd/go").CombinedOutput()
+	// The bootstrap variant is the go command alone, without the build tools it
+	// links otherwise, which keeps this the size of program upstream tests.
+	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-tags=cmd_go_bootstrap", "-ldflags=-w=0", "-o", dir+"/test.exe", "cmd/go/main").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}

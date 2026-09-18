@@ -27,10 +27,10 @@ type Info struct {
 // (Otherwise the test in this package will fail.)
 var All = []Info{
 	{Name: "allowmultiplevcs", Package: "cmd/go"},
-	{Name: "containermaxprocs", Package: "runtime", Changed: 25, Old: "0"},
+	{Name: "containermaxprocs", Package: "runtime", Changed: 25, Old: "0", Immutable: true},
 	{Name: "cryptocustomrand", Package: "crypto", Changed: 26, Old: "1"},
 	{Name: "dataindependenttiming", Package: "crypto/subtle", Opaque: true},
-	{Name: "decoratemappings", Package: "runtime", Opaque: true, Changed: 25, Old: "0"},
+	{Name: "decoratemappings", Package: "runtime", Opaque: true, Changed: 25, Old: "0", Immutable: true},
 	{Name: "embedfollowsymlinks", Package: "cmd/go"},
 	{Name: "execerrdot", Package: "os/exec"},
 	{Name: "fips140", Package: "crypto/fips140", Opaque: true, Immutable: true},
@@ -69,7 +69,7 @@ var All = []Info{
 	// IncNonDefault uses a sync.Once, which involves sync.Mutex, and is not safe from a signal handler.
 	// (Tracebacks are generated in signal-handlers.)
 	{Name: "tracebacklabels", Package: "runtime", Changed: 27, Old: "0", Opaque: true},
-	{Name: "updatemaxprocs", Package: "runtime", Changed: 25, Old: "0"},
+	{Name: "updatemaxprocs", Package: "runtime", Changed: 25, Old: "0", Immutable: true},
 	{Name: "urlmaxqueryparams", Package: "net/url", Changed: 24, Old: "0"},
 	{Name: "urlstrictcolons", Package: "net/url", Changed: 26, Old: "0"},
 	{Name: "winreadlinkvolume", Package: "os", Changed: 23, Old: "0"},

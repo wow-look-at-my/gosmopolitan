@@ -21,6 +21,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/mvs"
+	"cmd/go/internal/orgmod"
 	"cmd/internal/par"
 
 	"golang.org/x/mod/module"
@@ -162,7 +163,7 @@ func (rs *Requirements) String() string {
 // initVendor initializes rs.graph from the given list of vendored module
 // dependencies, overriding the graph that would normally be loaded from module
 // requirements.
-func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
+func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList []module.Version) {
 	rs.graphOnce.Do(func() {
 		roots := ld.MainModules.Versions()
 		if ld.inWorkspaceMode() {
@@ -184,6 +185,12 @@ func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
 			// Just to be sure, we'll double-check that here.
 			inconsistent := false
 			for _, m := range vendorList {
+				if orgmod.IsOrg(m.Path) {
+					// An org module records a placeholder version in both go.mod
+					// and modules.txt, and resolves to a branch head, so the two
+					// are not compared.
+					continue
+				}
 				if v, ok := rs.rootSelected(ld, m.Path); !ok || v != m.Version {
 					base.Errorf("go: vendored module %v should be required explicitly in go.mod", m)
 					inconsistent = true
@@ -210,7 +217,10 @@ func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
 			vendorMod := module.Version{Path: "vendor/modules.txt", Version: ""}
 			if ld.inWorkspaceMode() {
 				for _, m := range ld.MainModules.Versions() {
-					reqs, _ := rootsFromModFile(ld, m, ld.MainModules.ModFile(m), omitToolchainRoot)
+					reqs, _, err := rootsFromModFile(ld, ctx, m, ld.MainModules.ModFile(m), omitToolchainRoot)
+					if err != nil {
+						base.Fatal(err)
+					}
 					mg.g.Require(m, append(reqs, vendorMod))
 				}
 				mg.g.Require(vendorMod, vendorList)

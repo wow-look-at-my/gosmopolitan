@@ -9,7 +9,7 @@
 // Usage:
 //
 //	go tool preprofile [-V] [-o output] -i input
-package main
+package preprofile
 
 import (
 	"bufio"
@@ -28,9 +28,13 @@ func usage() {
 	os.Exit(2)
 }
 
+// flagSet is preprofile's command line, one set of its own so preprofile can
+// be linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("preprofile", flag.ExitOnError)
+
 var (
-	output = flag.String("o", "", "output file path")
-	input  = flag.String("i", "", "input pprof file path")
+	output = flagSet.String("o", "", "output file path")
+	input  = flagSet.String("i", "", "input pprof file path")
 )
 
 func preprocess(profileFile string, outputFile string) error {
@@ -65,7 +69,11 @@ func preprocess(profileFile string, outputFile string) error {
 	return nil
 }
 
-func main() {
+// Main runs preprofile with args, the command line after the program name,
+// and answers its exit status. A failure exits the process from inside
+// preprofile, as it always has.
+func Main(args []string) int {
+	objabi.Enter("preprofile", args, flagSet)
 	objabi.AddVersionFlag()
 
 	log.SetFlags(0)
@@ -84,4 +92,5 @@ func main() {
 	if err := preprocess(*input, *output); err != nil {
 		log.Fatal(err)
 	}
+	return 0
 }

@@ -241,6 +241,11 @@ type PackageInternal struct {
 	OrigImportPath    string              // original import path before adding '_test' suffix
 	PGOProfile        string              // path to PGO profile
 	ForMain           string              // the main package if this package is built specifically for it
+	TestInit          string              // the package whose tests run this package's _test.go initialization (-testinit)
+	TestVariantOf     *Package            // the package this test variant is linked in place of (-testvariant)
+	TestStartup       []string            // the only imports initialized before this test main; the rest wait for their tests (-teststartup)
+	TestUnitSpec      string              // the roots of each package's tests in this test binary (-testunits)
+	testmainData      *testMainData       // what TestmainGo was rendered from, for a binary holding several packages' tests
 
 	Asmflags   []string // -asmflags for this package
 	Gcflags    []string // -gcflags for this package
@@ -948,12 +953,29 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					modroot = gorootSrcCmd
 				}
 			}
-			// A dependency that generates part of its own API ships a package
-			// the compiler reads as empty. Read the generated copy instead.
-			if dir := generateDir(r.dir, modroot); dir != r.dir {
-				r.dir = dir
-				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
-				goto Happy
+			// An embedded standard package has no directory to read: its
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
+				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					// The manifest holds resolved imports; a source file spells a
+					// vendored one without the vendor/ prefix, and the loader
+					// resolves it again.
+					imports := make([]string, len(pkg.Imports))
+					for idx, imp := range pkg.Imports {
+						imports[idx] = strings.TrimPrefix(imp, "vendor/")
+					}
+					data.p = &build.Package{
+						Dir:        r.dir,
+						ImportPath: r.path,
+						Name:       pkg.Name,
+						Imports:    imports,
+						Goroot:     true,
+						Root:       cfg.GOROOT,
+					}
+					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
+					goto Happy
+				}
 			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {
@@ -1728,7 +1750,7 @@ func InstallTargetDir(p *Package) TargetDir {
 	}
 	if p.Goroot && strings.HasPrefix(p.ImportPath, "cmd/") && p.Name == "main" {
 		switch p.ImportPath {
-		case "cmd/go", "cmd/gofmt":
+		case "cmd/go/main", "cmd/gofmt":
 			return ToBin
 		}
 		return ToTool
@@ -1790,6 +1812,10 @@ func (p *Package) exeFromFiles() string {
 func (p *Package) DefaultExecName() string {
 	if p.Internal.CmdlineFiles {
 		return p.exeFromFiles()
+	}
+	// The go command's main package sits under cmd/go, whose name is a keyword.
+	if p.Goroot && p.ImportPath == "cmd/go/main" {
+		return "go"
 	}
 	return p.exeFromImportPath()
 }

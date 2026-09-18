@@ -26,15 +26,3 @@ func ResetForTesting(usage func()) {
 	CommandLine.Usage = commandLineUsage
 	Usage = usage
 }
-
-// Grouped reports whether the linker marked this binary as one it built from
-// several packages' tests.
-func Grouped() bool { return grouped() }
-
-// MarkGrouped makes this process look like a grouped test binary, and hands
-// back the undo.
-func MarkGrouped() func() {
-	was := groupedTestBinary
-	groupedTestBinary = "1"
-	return func() { groupedTestBinary = was }
-}

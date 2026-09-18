@@ -15,6 +15,11 @@ type Package struct {
 	// Init functions, listed in source order.
 	Inits []*Func
 
+	// TestInits are the init functions of _test.go files under -testinit,
+	// listed in source order. They run when the tests run, not when the
+	// package is initialized.
+	TestInits []*Func
+
 	// Funcs contains all (instantiated) functions, methods, and
 	// function literals to be compiled.
 	Funcs []*Func
