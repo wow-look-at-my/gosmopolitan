@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -63,7 +64,8 @@ func runAddr2Line(t *testing.T, dbgExePath, addr string) (funcname, path, lineno
 	pathAndLineNo := f[1]
 	f = strings.Split(pathAndLineNo, ":")
 	if runtime.GOOS == "windows" && len(f) == 3 {
-		// Reattach drive letter.
+		// Reattach drive letter. The path came from the host's own
+		// filesystem, so the host decides whether it carries one.
 		f = []string{f[0] + ":" + f[1], f[2]}
 	}
 	if len(f) != 2 {
@@ -74,7 +76,7 @@ func runAddr2Line(t *testing.T, dbgExePath, addr string) (funcname, path, lineno
 
 const symName = "cmd/addr2line.TestAddr2Line"
 
-func testAddr2Line(t *testing.T, dbgExePath, addr string) {
+func testAddr2Line(t *testing.T, dbgExePath, addr string, wantLine int) {
 	funcName, srcPath, srcLineNo := runAddr2Line(t, dbgExePath, addr)
 	if symName != funcName {
 		t.Fatalf("expected function name %v; got %v", symName, funcName)
@@ -93,13 +95,18 @@ func testAddr2Line(t *testing.T, dbgExePath, addr string) {
 	if !os.SameFile(fi1, fi2) {
 		t.Fatalf("addr2line_test.go and %s are not same file", srcPath)
 	}
-	if want := "102"; srcLineNo != want {
+	if want := strconv.Itoa(wantLine); srcLineNo != want {
 		t.Fatalf("line number = %v; want %s", srcLineNo, want)
 	}
 }
 
-// This is line 101. The test depends on that.
+// The entry PC of TestAddr2Line carries its declaration line, and the first
+// statement of the body reads that line from the source. Upstream writes the
+// number down in a comment instead, which any edit above here makes wrong.
 func TestAddr2Line(t *testing.T) {
+	_, _, bodyLine, _ := runtime.Caller(0)
+	declLine := bodyLine - 1
+
 	testenv.MustHaveGoBuild(t)
 
 	tmpDir := t.TempDir()
@@ -114,6 +121,6 @@ func TestAddr2Line(t *testing.T) {
 
 	syms := loadSyms(t, exepath)
 
-	testAddr2Line(t, exepath, syms[symName])
-	testAddr2Line(t, exepath, "0x"+syms[symName])
+	testAddr2Line(t, exepath, syms[symName], declLine)
+	testAddr2Line(t, exepath, "0x"+syms[symName], declLine)
 }

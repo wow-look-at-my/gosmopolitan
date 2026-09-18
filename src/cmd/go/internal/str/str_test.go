@@ -7,7 +7,7 @@ package str
 import (
 	"os"
 	"path/filepath"
-	"runtime"
+	"internal/testenv"
 	"strings"
 	"testing"
 )
@@ -105,7 +105,7 @@ func TestTrimFilePathPrefixSlash(t *testing.T) {
 }
 
 func TestTrimFilePathPrefixWindows(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skipf("test requires Windows file paths")
 	}
 	type testCase struct {

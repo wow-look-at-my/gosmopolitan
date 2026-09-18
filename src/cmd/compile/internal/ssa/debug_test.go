@@ -92,6 +92,7 @@ var optimizedLibs = (!strings.Contains(gogcflags, "-N") && !strings.Contains(gog
 // (for Delve)
 // go test debug_test.go -args -u -d
 func TestNexting(t *testing.T) {
+	t.Serial()
 	testenv.SkipFlaky(t, 37404)
 
 	skipReasons := "" // Many possible skip reasons, list all that apply

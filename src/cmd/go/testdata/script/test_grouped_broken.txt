@@ -1,0 +1,54 @@
+# A package whose tests do not compile fails alone. The binary the packages
+# share is linked once, without that package's tests, and every other package
+# still runs, one of them importing the broken package itself.
+
+! go test -x ./good ./broken ./user
+stdout '^ok\s+example.com/broken/good'
+stdout '^ok\s+example.com/broken/user'
+stdout '^FAIL\s+example.com/broken/broken \[build failed\]'
+stderr 'undefined: missing'
+stderr -count=1 'link -o'
+
+# -c writes a copy for each package whose tests compile, and none for the
+# package whose tests do not.
+! go test -c -o $WORK/bin/ ./good ./broken ./user
+exists $WORK/bin/good.test$GOEXE
+exists $WORK/bin/user.test$GOEXE
+! exists $WORK/bin/broken.test$GOEXE
+
+-- go.mod --
+module example.com/broken
+
+go 1.27
+-- good/good_test.go --
+package good
+
+import "testing"
+
+func TestGood(test *testing.T) {}
+-- broken/broken.go --
+package broken
+
+func Value() int { return 42 }
+-- broken/broken_test.go --
+package broken
+
+import "testing"
+
+func TestBroken(test *testing.T) {
+	_ = missing
+}
+-- user/user_test.go --
+package user
+
+import (
+	"testing"
+
+	"example.com/broken/broken"
+)
+
+func TestUser(test *testing.T) {
+	if broken.Value() != 42 {
+		test.Fatal("broken.Value() != 42")
+	}
+}

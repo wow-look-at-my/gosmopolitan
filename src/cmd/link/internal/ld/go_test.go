@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"testing"
 
 	"cmd/internal/objabi"
@@ -77,7 +76,7 @@ func TestDedupLibrariesOpenBSD(t *testing.T) {
 
 func TestDedupLibrariesOpenBSDLink(t *testing.T) {
 	// The behavior we're checking for is of interest only on OpenBSD.
-	if runtime.GOOS != "openbsd" {
+	if testenv.GOOS != "openbsd" {
 		t.Skip("test only useful on openbsd")
 	}
 

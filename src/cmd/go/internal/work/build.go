@@ -67,8 +67,6 @@ and test commands:
 		Any files named on the command line are interpreted after
 		changing directories.
 		If used, this flag must be the first one in the command line.
-	-a
-		force rebuilding of packages that are already up-to-date.
 	-n
 		print the commands but do not run them.
 	-p n
@@ -312,7 +310,8 @@ const (
 func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	base.AddBuildFlagsNX(&cmd.Flag)
 	base.AddChdirFlag(&cmd.Flag)
-	cmd.Flag.BoolVar(&cfg.BuildA, "a", false, "")
+	// There is no -a. Forcing a rebuild of everything discards a correct cache
+	// on purpose, and the build ID already rebuilds whatever actually changed.
 	cmd.Flag.IntVar(&cfg.BuildP, "p", cfg.BuildP, "")
 	if mask&OmitVFlag == 0 {
 		cmd.Flag.BoolVar(&cfg.BuildV, "v", false, "")
@@ -535,14 +534,14 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 			}
 			// Start the sibling-architecture build alongside this one;
 			// the two share no ordering constraint (see cosmoSibling).
-			sib := cosmoFatStart(true)
+			sib := cosmoFatStart(ctx, true)
 			b.Do(ctx, a)
 			// Exit before fattening if the primary build failed: the
 			// sibling is failing on the same source, and replaying its
 			// diagnostics would print every error twice. Exiting runs
 			// the AtExit hook that kills it.
 			base.ExitIfErrors()
-			cosmoFatten(sib, pkgsMain(pkgs))
+			cosmoFatten(ctx, b, sib, pkgsMain(pkgs))
 			return
 		}
 		if len(pkgs) > 1 {
@@ -557,11 +556,11 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		a := b.AutoAction(moduleLoader, ModeInstall, depMode, p)
 		var sib *cosmoSibling
 		if p.Name == "main" {
-			sib = cosmoFatStart(false)
+			sib = cosmoFatStart(ctx, false)
 		}
 		b.Do(ctx, a)
 		base.ExitIfErrors() // see the -o directory branch above
-		cosmoFatten(sib, []*load.Package{p})
+		cosmoFatten(ctx, b, sib, []*load.Package{p})
 		return
 	}
 
@@ -849,12 +848,12 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 			cosmoMains = append(cosmoMains, p)
 		}
 	}
-	sib := cosmoFatStartInstall(len(cosmoMains) > 0)
+	sib := cosmoFatStartInstall(ctx, len(cosmoMains) > 0)
 
 	b.Do(ctx, a)
 	base.ExitIfErrors()
 
-	cosmoFattenInstall(sib, cosmoMains)
+	cosmoFattenInstall(ctx, b, sib, cosmoMains)
 
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,

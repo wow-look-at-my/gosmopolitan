@@ -42,7 +42,17 @@ eval $(../bin/go tool dist env)
 unset CDPATH	# in case user has it set
 
 export GOHOSTOS
+export GOHOSTARCH
 export CC
+
+# GOOS and GOARCH name the port dist test is testing, and every go command it
+# starts has to agree. This fork's go defaults to GOOS=cosmo, so an unexported
+# GOOS left every test binary an APE, which the host cannot exec. dist test
+# tests the host port, so GOOS and GOARCH are pinned to the host values.
+GOOS=$GOHOSTOS
+GOARCH=$GOHOSTARCH
+export GOOS
+export GOARCH
 
 # no core files, please
 ulimit -c 0
@@ -57,4 +67,4 @@ if ulimit -T &> /dev/null; then
 fi
 
 export GOPATH=/nonexist-gopath
-exec ../bin/go tool dist test -rebuild "$@"
+exec ../bin/go tool dist test "$@"

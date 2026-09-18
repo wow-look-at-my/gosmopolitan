@@ -13,6 +13,8 @@
 // QEMU user mode 7.2 added pidfd_open, but CLONE_PIDFD was not added until
 // 8.0.
 
+//go:build linux && !cosmo
+
 package os
 
 import (

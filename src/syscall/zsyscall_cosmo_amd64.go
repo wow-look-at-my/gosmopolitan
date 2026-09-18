@@ -306,14 +306,6 @@ func getgroups(n int, list *_Gid_t) (nn int, err error) {
 	return
 }
 
-func setgroups(n int, list *_Gid_t) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETGROUPS, uintptr(n), uintptr(unsafe.Pointer(list)), 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 func Getpriority(which int, who int) (prio int, err error) {
 	r0, _, e1 := Syscall(SYS_GETPRIORITY, uintptr(which), uintptr(who), 0)
 	prio = int(r0)
@@ -587,22 +579,6 @@ func Seek(fd int, offset int64, whence int) (off int64, err error) {
 	return
 }
 
-func Setfsgid(gid int) (err error) {
-	_, _, e1 := Syscall(SYS_SETFSGID, uintptr(gid), 0, 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setfsuid(uid int) (err error) {
-	_, _, e1 := Syscall(SYS_SETFSUID, uintptr(uid), 0, 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
 func Setpgid(pid int, pgid int) (err error) {
 	_, _, e1 := RawSyscall(SYS_SETPGID, uintptr(pid), uintptr(pgid), 0)
 	if e1 != 0 {
@@ -614,54 +590,6 @@ func Setpgid(pid int, pgid int) (err error) {
 func Setsid() (pid int, err error) {
 	r0, _, e1 := RawSyscall(SYS_SETSID, 0, 0, 0)
 	pid = int(r0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setuid(uid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETUID, uintptr(uid), 0, 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setgid(gid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETGID, uintptr(gid), 0, 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setreuid(ruid int, euid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETREUID, uintptr(ruid), uintptr(euid), 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setregid(rgid int, egid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETREGID, uintptr(rgid), uintptr(egid), 0)
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setresuid(ruid int, euid int, suid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETRESUID, uintptr(ruid), uintptr(euid), uintptr(suid))
-	if e1 != 0 {
-		err = errnoErr(e1)
-	}
-	return
-}
-
-func Setresgid(rgid int, egid int, sgid int) (err error) {
-	_, _, e1 := RawSyscall(SYS_SETRESGID, uintptr(rgid), uintptr(egid), uintptr(sgid))
 	if e1 != 0 {
 		err = errnoErr(e1)
 	}
@@ -692,14 +620,13 @@ func Umask(mask int) (oldmask int) {
 	return
 }
 
-func Uname(buf *Utsname) (err error) {
+func uname(buf *Utsname) (err error) {
 	_, _, e1 := RawSyscall(SYS_UNAME, uintptr(unsafe.Pointer(buf)), 0, 0)
 	if e1 != 0 {
 		err = errnoErr(e1)
 	}
 	return
 }
-
 
 func munmap(addr uintptr, length uintptr) (err error) {
 	_, _, e1 := Syscall(SYS_MUNMAP, uintptr(addr), uintptr(length), 0)
@@ -743,7 +670,6 @@ func fcntl(fd int, cmd int, arg int) (val int, err error) {
 	}
 	return
 }
-
 
 func bind(s int, addr unsafe.Pointer, addrlen _Socklen) (err error) {
 	_, _, e1 := Syscall(SYS_BIND, uintptr(s), uintptr(addr), uintptr(addrlen))
@@ -888,6 +814,9 @@ func getrlimit(resource int, rlim *Rlimit) (err error) {
 	return
 }
 
+// golang.org/x/sys linknames prlimit; do not remove or change the type signature.
+//
+//go:linkname prlimit
 func prlimit(pid int, resource int, newlimit *Rlimit, old *Rlimit) (err error) {
 	_, _, e1 := RawSyscall6(SYS_PRLIMIT64, uintptr(pid), uintptr(resource), uintptr(unsafe.Pointer(newlimit)), uintptr(unsafe.Pointer(old)), 0, 0)
 	if e1 != 0 {

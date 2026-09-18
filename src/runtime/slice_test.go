@@ -338,6 +338,7 @@ func f() int {
 }
 
 func TestSideEffectOrder(t *testing.T) {
+	t.Serial()
 	x = make([]int, 0, 10)
 	x = append(x, 1, f())
 	if x[0] != 1 || x[1] != 2 {
@@ -515,6 +516,7 @@ func byteSlice(n int) []byte {
 	return r
 }
 func TestAppendByteInLoop(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")
@@ -576,6 +578,7 @@ func ptrSlice(n int, p *[]*byte) {
 	*p = r
 }
 func TestAppendPtrInLoop(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")
@@ -645,6 +648,7 @@ func byteCapSlice(n int) ([]byte, int) {
 	return r, cap(r)
 }
 func TestAppendByteCapInLoop(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	testenv.SkipIfOptimizationOff(t)
 	if race.Enabled {
 		t.Skip("skipping in -race mode")
@@ -761,6 +765,7 @@ func TestMoveToHeapEarly(t *testing.T) {
 }
 
 func TestMoveToHeapCap(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte
@@ -782,6 +787,7 @@ func runit(f func()) {
 }
 
 func TestMoveToHeapClosure1(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte
@@ -799,6 +805,7 @@ func TestMoveToHeapClosure1(t *testing.T) {
 	sinkSlice = r
 }
 func TestMoveToHeapClosure2(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte

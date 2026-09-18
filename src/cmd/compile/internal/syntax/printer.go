@@ -671,6 +671,9 @@ func (p *printer) printRawNode(n Node) {
 
 	case *VarDecl:
 		if n.Group == nil {
+			if n.Readonly {
+				p.print(_Name, "readonly", blank)
+			}
 			p.print(_Var, blank)
 		}
 		p.printNameList(n.NameList)
@@ -701,6 +704,9 @@ func (p *printer) printRawNode(n Node) {
 		}
 
 	case *printGroup:
+		if n.Readonly {
+			p.print(_Name, "readonly", blank)
+		}
 		p.print(n.Tok, blank, _Lparen)
 		if len(n.Decls) > 0 {
 			p.print(newline, indent)
@@ -738,6 +744,12 @@ func (p *printer) printFields(fields []*Field, tags []*BasicLit, i, j int) {
 		}
 		p.print(blank)
 		p.printNode(fields[i].Type)
+	}
+	// The default rides the field that parsed it, which is the last of a
+	// group sharing one type -- the only place "= expr" can appear.
+	if d := fields[j-1].Default; d != nil {
+		p.print(blank, _Assign, blank)
+		p.printNode(d)
 	}
 	if i < len(tags) && tags[i] != nil {
 		p.print(blank)
@@ -822,8 +834,9 @@ func groupFor(d Decl) (token, *Group) {
 
 type printGroup struct {
 	node
-	Tok   token
-	Decls []Decl
+	Tok      token
+	Readonly bool // a "readonly var" group
+	Decls    []Decl
 }
 
 func (p *printer) printDecl(list []Decl) {
@@ -851,6 +864,9 @@ func (p *printer) printDecl(list []Decl) {
 	var pg printGroup
 	// *pg.Comments() = *group.Comments()
 	pg.Tok = tok
+	if v, ok := list[0].(*VarDecl); ok {
+		pg.Readonly = v.Readonly
+	}
 	pg.Decls = list
 	p.printNode(&pg)
 }

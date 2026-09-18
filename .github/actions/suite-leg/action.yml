@@ -1,0 +1,189 @@
+name: Suite leg
+description: The distribution's own all-tests entry point for one host, over a toolchain another job built.
+inputs:
+  shard:
+    description: The part of dist test this leg runs, K/N (dist test -shard).
+    required: true
+runs:
+  using: composite
+  steps:
+
+    # dist test links one APE per test package. The image leaves too little room on C: for that.
+    - name: Make room for the suite (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $before = (Get-PSDrive C).Free
+        $junk = @(
+          'C:\Android',
+          'C:\Program Files (x86)\Android',
+          'C:\Program Files\Microsoft SDKs\Android',
+          'C:\Program Files\Google\Chrome',
+          'C:\Program Files\Mozilla Firefox',
+          'C:\Program Files\MongoDB',
+          'C:\Program Files\PostgreSQL',
+          'C:\Program Files\Unity',
+          'C:\Miniconda',
+          'C:\Julia',
+          'C:\hostedtoolcache\windows\CodeQL',
+          'C:\hostedtoolcache\windows\Ruby',
+          'C:\hostedtoolcache\windows\PyPy',
+          'C:\hostedtoolcache\windows\Python',
+          'C:\hostedtoolcache\windows\node'
+        )
+        # rd walks a tree one entry at a time, which is what takes so long here. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space, which is all the suite wants; what it leaves behind is a shell of empty directories, and nothing reads these paths again.
+        $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
+        New-Item -ItemType Directory -Force -Path $empty | Out-Null
+        $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel {
+          try { robocopy $using:empty $_ /MIR /MT:64 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
+        } -ThrottleLimit 16
+        $after = (Get-PSDrive C).Free
+        $gb = 1GB
+        Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ($after/$gb), ($before/$gb))
+        exit 0
+
+    - name: Take the toolchain its build leg built
+      uses: wow-look-at-my/actions@cache-download#latest
+      with:
+        name: toolchain-${{ runner.os }}
+        path: .
+
+    - name: The restored go answers
+      shell: bash
+      run: ./bin/go version
+
+    # dist test links one APE per test package, and Defender reads back every one of them as it lands. The suite writes thousands of files, so the scan is the slowest thing on this host. A runner is a throwaway VM running this repo's own code, so it has nothing to defend. Linux and darwin run the same suite with no scanner at all.
+    - name: Turn Defender off (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $off = @{
+          DisableRealtimeMonitoring        = $true
+          DisableBehaviorMonitoring        = $true
+          DisableIOAVProtection            = $true
+          DisableScriptScanning            = $true
+          DisableArchiveScanning           = $true
+          DisableIntrusionPreventionSystem = $true
+          DisableBlockAtFirstSeen          = $true
+        }
+        # One call per setting: a setting Tamper Protection refuses must not take the rest with it.
+        foreach ($k in $off.Keys) {
+          try { Set-MpPreference -ErrorAction Stop @{ $k = $off[$k] }; Write-Host "Defender: $k" }
+          catch { Write-Host "::warning::Defender kept $k, so this suite runs slower: $_" }
+        }
+        try { Set-MpPreference -ErrorAction Stop -MAPSReporting 0 -SubmitSamplesConsent 2 }
+        catch { Write-Host "::warning::Defender still reports to MAPS: $_" }
+        # For whatever survived the settings above: skip every path, then stop the service itself.
+        try { Add-MpPreference -ErrorAction Stop -ExclusionPath 'C:\'; Write-Host "Defender: C:\ excluded" }
+        catch { Write-Host "::warning::Defender still scans C:\ : $_" }
+        try { Stop-Service -Name WinDefend -Force -ErrorAction Stop; Write-Host "Defender: service stopped" }
+        catch { Write-Host "::warning::WinDefend kept running: $_" }
+        Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, BehaviorMonitorEnabled | Format-List
+        exit 0
+
+    # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+    - name: Let the kernel exec an APE directly
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+        l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+        test -x "$l"
+        sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+        printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+        cat /proc/sys/fs/binfmt_misc/APE
+
+    # The suite says what a bare "exit status 2" from run.bat means.
+    - name: A cosmo binary built here runs here (dats)
+      if: runner.os != 'Windows'
+      uses: wow-look-at-my/dats@master
+      with:
+        tests: dats/host
+
+    # The dats action runs a suite inside WSL on NT, which tests Linux. The host suites run on NT itself, which has no sandbox backend.
+    - name: Download dats
+      if: runner.os == 'Windows'
+      id: dats
+      uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+      with:
+        project: dats
+
+    - name: A cosmo binary built here runs here (dats, on NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        DATS_BIN: ${{ steps.dats.outputs.path }}
+      run: |
+        Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
+        & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
+        exit $LASTEXITCODE
+
+    - name: The whole test suite (run.bash)
+      # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        SUITE_SHARD: ${{ inputs.shard }}
+      run: |
+        sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
+        probe=$!
+        trap 'kill "$probe"' EXIT
+        cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+    - name: The whole test suite (run.bat)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        SUITE_SHARD: ${{ inputs.shard }}
+      run: |
+        cd src
+        .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
+        exit $LASTEXITCODE
+
+    - name: What the suite spent its time on
+      # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
+      if: always()
+      uses: wow-look-at-my/actions@typescript#latest
+      env:
+        SUITE_SHARD: ${{ inputs.shard }}
+      with:
+        script: |
+          const required = (name: string): string => {
+            const value = process.env[name];
+            if (!value) throw new Error(`${name} is not set; the runner or this step's env provides it`);
+            return value;
+          };
+          const summaryPath = required('GITHUB_STEP_SUMMARY');
+          const logPath = `${required('RUNNER_TEMP')}/suite.log`;
+          if (!fs.existsSync(logPath)) {
+            core.info('no suite.log; nothing to report');
+            return;
+          }
+          const rows = [];
+          for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+            // dist test prints one of these per package it ran.
+            const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
+            if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
+          }
+          if (rows.length === 0) {
+            core.info('no per-package timings found in suite.log');
+            return;
+          }
+          rows.sort((left, right) => right.secs - left.secs);
+          const total = rows.reduce((sum, row) => sum + row.secs, 0);
+          const top = rows.slice(0, 30);
+          const share = top.reduce((sum, row) => sum + row.secs, 0);
+          const lines = [
+            `### Suite timings (${required('RUNNER_OS')}, part ${required('SUITE_SHARD')})`,
+            '',
+            `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
+            `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
+            '',
+            '| seconds | package |',
+            '| ---: | --- |',
+            ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
+          ];
+          fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
+          core.info(`recorded ${rows.length} package timings`);
+

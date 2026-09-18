@@ -54,11 +54,25 @@ func initDefaultCache() Cache {
 		base.Fatalf("failed to initialize build cache at %s: %s\n", dir, err)
 	}
 
-	if cfg.GOCACHEPROG != "" {
-		return startCacheProg(cfg.GOCACHEPROG, diskCache)
+	if err := validateCIShared(); err != nil {
+		base.Fatalf("%v", err)
 	}
 
-	return diskCache
+	return chooseCache(diskCache)
+}
+
+// chooseCache layers the shared tier over disk, and that is the whole choice.
+// GOCACHEPROG is gone: the shared cache client is linked into cmd/go and
+// speaks HTTP directly, so there is no subprocess protocol left to name a
+// program for. The program boundary cost a fork, a pipe, and a materialized
+// copy of every hit, because GOCACHEPROG answers with a path rather than
+// bytes -- the in-process client hands the compiler the bytes and stores them
+// itself.
+func chooseCache(disk *DiskCache) Cache {
+	if shared := newSharedCache(disk); shared != nil {
+		return shared
+	}
+	return disk
 }
 
 var (

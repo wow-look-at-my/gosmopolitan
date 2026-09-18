@@ -5,6 +5,7 @@
 package codehost
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -925,7 +926,7 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	// text file line endings. Setting -c core.autocrlf=input means only
 	// translate files on the way into the repo, not on the way out (archive).
 	// The -c core.eol=lf should be unnecessary but set it anyway.
-	archive, err := r.runGit(ctx, "git", "-c", "core.autocrlf=input", "-c", "core.eol=lf", "archive", "--format=zip", "--prefix=prefix/", "--end-of-options", info.Name, args)
+	archive, err := r.runGit(ctx, "git", "-c", "core.autocrlf=input", "-c", "core.eol=lf", "archive", "--format=zip", "--prefix="+archivePrefix, "--end-of-options", info.Name, args)
 	if err != nil {
 		if bytes.Contains(err.(*RunError).Stderr, []byte("did not match any files")) {
 			return nil, fs.ErrNotExist
@@ -933,7 +934,120 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 		return nil, err
 	}
 
+	archive, err = r.addGitlinks(ctx, info.Name, subdir, archive)
+	if err != nil {
+		return nil, err
+	}
 	return io.NopCloser(bytes.NewReader(archive)), nil
+}
+
+const (
+	// gitlinksFile is where a zip records the commit each submodule points at.
+	gitlinksFile = ".gitlinks"
+
+	// archivePrefix is the top-level directory git archive writes, which the
+	// caller strips back off to get the module's own paths.
+	archivePrefix = "prefix/"
+)
+
+// addGitlinks writes the submodule commits into the archive.
+//
+// A tree records a submodule as a gitlink: a path and the commit it points at.
+// `git archive` writes an empty directory for one and drops the commit, so a
+// fetched module names which submodules exist and not which commit each one is.
+// .gitmodules survives on its own, because it is a tracked file.
+//
+// Each line is a commit and a path, the shape `git ls-tree` prints them in.
+func (r *gitRepo) addGitlinks(ctx context.Context, rev, subdir string, archive []byte) ([]byte, error) {
+	dir := strings.Trim(subdir, "/")
+	cmdline := []any{"git", "ls-tree", "-r", "--full-tree", "-z", rev}
+	if dir != "" {
+		cmdline = append(cmdline, dir)
+	}
+	out, err := r.runGit(ctx, cmdline...)
+	if err != nil {
+		return nil, err
+	}
+	links := gitlinkLines(out, dir)
+	if len(links) == 0 {
+		return archive, nil
+	}
+	return appendZipFile(archive, gitlinksPath(dir), links)
+}
+
+// gitlinksPath is where the record goes inside the archive: beside the module's
+// own files, under git archive's prefix and the module's directory. The strip
+// that turns this archive into a module zip drops anything outside that
+// directory, so a record written anywhere else reaches nobody.
+func gitlinksPath(dir string) string {
+	if dir == "" {
+		return archivePrefix + gitlinksFile
+	}
+	return archivePrefix + dir + "/" + gitlinksFile
+}
+
+// gitlinkLines turns `git ls-tree -z` output into the body of a gitlinks file:
+// one commit and path per line, each path relative to dir, the directory the
+// module itself lives in. A gitlink outside that directory belongs to another
+// module and is left out.
+func gitlinkLines(out []byte, dir string) []byte {
+	base := ""
+	if dir != "" {
+		base = dir + "/"
+	}
+	var links bytes.Buffer
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, split := strings.Cut(entry, "\t")
+		if !split {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 3 || fields[0] != "160000" {
+			continue
+		}
+		rest, under := strings.CutPrefix(path, base)
+		if !under {
+			continue
+		}
+		fmt.Fprintf(&links, "%s %s\n", fields[2], rest)
+	}
+	return links.Bytes()
+}
+
+// appendZipFile returns archive with one more entry, name holding body. The
+// entries already there are copied raw, so the bytes git archive compressed
+// cross untouched and the ziphash of everything but the new entry holds.
+func appendZipFile(archive []byte, name string, body []byte) ([]byte, error) {
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+	for _, entry := range reader.File {
+		dst, err := writer.CreateRaw(&entry.FileHeader)
+		if err != nil {
+			return nil, err
+		}
+		src, err := entry.OpenRaw()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := io.Copy(dst, src); err != nil {
+			return nil, err
+		}
+	}
+	dst, err := writer.Create(name)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := dst.Write(body); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // ensureGitAttributes makes sure export-subst and export-ignore features are

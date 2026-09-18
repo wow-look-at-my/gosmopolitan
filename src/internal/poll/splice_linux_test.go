@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// See export_linux_test.go: the cosmo port has no splice and no pipe pool.
+//
+//go:build linux && !cosmo
+
 package poll_test
 
 import (

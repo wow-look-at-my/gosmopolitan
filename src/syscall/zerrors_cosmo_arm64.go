@@ -10,11 +10,11 @@
 package syscall
 
 const (
-	AF_INET      = 0x2
-	AF_INET6     = 0xa
-	AF_LOCAL     = 0x1
-	AF_UNIX      = 0x1
-	AF_UNSPEC    = 0x0
+	AF_INET   = 0x2
+	AF_INET6  = 0xa
+	AF_LOCAL  = 0x1
+	AF_UNIX   = 0x1
+	AF_UNSPEC = 0x0
 
 	DT_BLK     = 0x6
 	DT_CHR     = 0x2
@@ -91,14 +91,19 @@ const (
 	O_EXCL      = 0x80
 	O_LARGEFILE = 0x0
 	O_NDELAY    = 0x800
-	O_NOCTTY    = 0x100
-	O_NOFOLLOW  = 0x8000
-	O_NONBLOCK  = 0x800
-	O_RDONLY    = 0x0
-	O_RDWR      = 0x2
-	O_SYNC      = 0x101000
-	O_TRUNC     = 0x200
-	O_WRONLY    = 0x1
+	// O_NOATIME is 0x40000 on both Linux architectures, so it needs no
+	// arm64 spelling of its own. A package whose _linux file names it (go-fuse
+	// does) does not compile for cosmo without it.
+	O_NOATIME  = 0x40000
+	O_NOCTTY   = 0x100
+	O_NOFOLLOW = 0x8000
+	O_NONBLOCK = 0x800
+	O_RDONLY   = 0x0
+	O_RDWR     = 0x2
+	O_RSYNC    = 0x101000
+	O_SYNC     = 0x101000
+	O_TRUNC    = 0x200
+	O_WRONLY   = 0x1
 
 	RLIMIT_AS     = 0x9
 	RLIMIT_CORE   = 0x4
@@ -172,6 +177,9 @@ const (
 	TCP_KEEPCNT   = 0x6
 	TCP_KEEPIDLE  = 0x4
 	TCP_KEEPINTVL = 0x5
+
+	// TCP connection statistics, read with getsockopt
+	TCP_INFO = 0xb
 
 	// Memory mapping flags
 	PROT_EXEC  = 0x4

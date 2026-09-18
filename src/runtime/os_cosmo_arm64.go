@@ -187,15 +187,13 @@ const _RTLD_DEFAULT = ^uintptr(1)
 // binaries is v10). Returns 0 if dlsym is unavailable or the lookup fails.
 // name must be a NUL-terminated C string.
 //
-// This is how the runtime obtains host functions the Syslib does not
-// export (getpid and friends). The alternative - extending the embedded
-// ape-m1.c Syslib struct and bumping SYSLIB_VERSION - was rejected: the
-// compiled loader is cached at ${TMPDIR:-$HOME}/.ape-1.10 keyed only by
-// the APE loader version string, and any existing Mach-O there (including
-// one compiled from an upstream cosmopolitan binary's embedded source) is
-// reused as-is, so a stale v10 loader would silently satisfy the cache and
-// the new fields would never reliably exist. dlsym works with every v6+
-// loader in the wild, cached or fresh.
+// This is how the runtime obtains a host function the Syslib does not
+// export. Never extend the embedded ape-m1.c Syslib struct and bump
+// SYSLIB_VERSION instead: the compiled loader is cached keyed only by
+// the APE loader version string, so any existing Mach-O there is reused
+// as is, a stale loader silently satisfies the cache, and the new
+// fields would never reliably exist. dlsym works with every v6+ loader
+// in the wild, cached or fresh.
 func cosmoDlsym(name *byte) uintptr {
 	lib := __syslib
 	if lib == nil || lib.version < 6 || lib.dlsym == 0 {
@@ -230,6 +228,9 @@ var (
 	dlsymNameReadlinkat = []byte("readlinkat\x00")
 	dlsymNameReadv      = []byte("readv\x00")
 	dlsymNameWritev     = []byte("writev\x00")
+	dlsymNamePread      = []byte("pread\x00")
+	dlsymNamePwrite     = []byte("pwrite\x00")
+	dlsymNameLseek      = []byte("lseek\x00")
 	// Apple's raw directory-read syscall wrapper (what readdir uses
 	// internally). Exported from libSystem; the C symbol is
 	// __getdirentries64 (dlsym takes the name without the Mach-O
@@ -263,6 +264,49 @@ var (
 	dlsymNameExecve  = []byte("execve\x00")
 	dlsymNameWait4   = []byte("wait4\x00")
 	dlsymNameKill    = []byte("kill\x00")
+
+	// File and metadata layer. arm64 has only the 64-bit-inode ABI, so
+	// stat/statfs entries carry no $INODE64 suffix the way the x86_64
+	// ones do.
+	dlsymNameFsync     = []byte("fsync\x00")
+	dlsymNameFtruncate = []byte("ftruncate\x00")
+	dlsymNameTruncate  = []byte("truncate\x00")
+	dlsymNameFchmod    = []byte("fchmod\x00")
+	dlsymNameFchmodat  = []byte("fchmodat\x00")
+	dlsymNameFchown    = []byte("fchown\x00")
+	dlsymNameFchownat  = []byte("fchownat\x00")
+	dlsymNameFchdir    = []byte("fchdir\x00")
+	dlsymNameLinkat    = []byte("linkat\x00")
+	dlsymNameSymlinkat = []byte("symlinkat\x00")
+	dlsymNameMknod     = []byte("mknod\x00")
+	dlsymNameUtimensat = []byte("utimensat\x00")
+	dlsymNameFlock     = []byte("flock\x00")
+	dlsymNameFdatasync = []byte("fdatasync\x00")
+	dlsymNameSync      = []byte("sync\x00")
+	dlsymNameIoctl     = []byte("ioctl\x00")
+	dlsymNameMincore   = []byte("mincore\x00")
+	dlsymNameMadvise   = []byte("madvise\x00")
+	dlsymNameSysctl    = []byte("sysctl\x00")
+	dlsymNameStatfs    = []byte("statfs\x00")
+	dlsymNameFstatfs   = []byte("fstatfs\x00")
+	dlsymNameSendfile  = []byte("sendfile\x00")
+
+	dlsymNameChroot       = []byte("chroot\x00")
+	dlsymNameSetuid       = []byte("setuid\x00")
+	dlsymNameSetgid       = []byte("setgid\x00")
+	dlsymNameSetreuid     = []byte("setreuid\x00")
+	dlsymNameSetregid     = []byte("setregid\x00")
+	dlsymNameGetpgid      = []byte("getpgid\x00")
+	dlsymNameGetgroups    = []byte("getgroups\x00")
+	dlsymNameSetgroups    = []byte("setgroups\x00")
+	dlsymNameGetpriority  = []byte("getpriority\x00")
+	dlsymNameSetpriority  = []byte("setpriority\x00")
+	dlsymNameGetrlimit    = []byte("getrlimit\x00")
+	dlsymNameSetrlimit    = []byte("setrlimit\x00")
+	dlsymNameUname        = []byte("uname\x00")
+	dlsymNameClockNsec    = []byte("clock_gettime_nsec_np\x00")
+	dlsymNameGetrusage    = []byte("getrusage\x00")
+	dlsymNameGettimeofday = []byte("gettimeofday\x00")
 )
 
 // cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2)
@@ -291,6 +335,52 @@ var cosmoDarwinErrorFn uintptr
 // the runtime's own fcntl on darwin. Zero when unresolved.
 var cosmoDarwinFcntlFn uintptr
 
+// cosmoDarwinClockNsecFn is Apple's clock_gettime_nsec_np, resolved at
+// startup and read by nanotime1's darwin branch. The Syslib exports only
+// clock_gettime, whose Apple resolution is a MICROSECOND: a caller that
+// times its own work reads one instant many times, and a timing-jitter
+// entropy source degenerates on that. Zero when unresolved, which that
+// branch reports by falling back to clock_gettime.
+var cosmoDarwinClockNsecFn uintptr
+
+// cosmoDarwinMincoreFn is Apple libc mincore, resolved at startup and
+// read by ·mincore's darwin branch in sys_cosmo_arm64.s. Zero when
+// unresolved, which that branch reports as a failure rather than
+// answering for a page it never asked about.
+var cosmoDarwinMincoreFn uintptr
+
+// cosmoDarwinMadviseFn is Apple libc madvise, resolved at startup and
+// read by ·madvise's darwin branch in sys_cosmo_arm64.s. Zero when
+// unresolved, which that branch reports as a failure: sysUnused reads
+// one and falls back, where a fake success left the pages held.
+var cosmoDarwinMadviseFn uintptr
+
+// cosmoDarwinKillFn is Apple libc kill, resolved at startup and read by
+// darwinRaiseproc. The Syslib exports raise, and POSIX raise in a
+// threaded program signals the CALLING thread, so the crash relay in
+// sighandler sent SIGQUIT back to the thread that already held it.
+var cosmoDarwinKillFn uintptr
+
+// cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved
+// at startup. The Syslib exports sysctlbyname only, and the routing
+// table has no name to ask for: net.route is reached by number alone.
+// Zero when unresolved, which CosmoDarwinSysctl reports as a failure.
+var cosmoDarwinSysctlFn uintptr
+
+// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB. It
+// returns the libc return value, 0 or -1; the caller reads oldlen for
+// how much was written. Six plain integer arguments, so the ordinary
+// call works: sysctl is not variadic.
+func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldlen *uintptr, newp unsafe.Pointer, newlen uintptr) int32 {
+	if cosmoDarwinSysctlFn == 0 {
+		return -1
+	}
+	return int32(cosmoLibcCall6(cosmoDarwinSysctlFn,
+		uintptr(unsafe.Pointer(mib)), uintptr(miblen),
+		uintptr(old), uintptr(unsafe.Pointer(oldlen)),
+		uintptr(newp), newlen))
+}
+
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -312,6 +402,11 @@ func osArchInit() {
 	cosmoDarwinKqueueFn = cosmoDlsym(&dlsymNameKqueue[0])
 	cosmoDarwinKeventFn = cosmoDlsym(&dlsymNameKevent[0])
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
+	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
+	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinSysctlFn = cosmoDlsym(&dlsymNameSysctl[0])
+	cosmoDarwinKillFn = cosmoDlsym(&dlsymNameKill[0])
+	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
@@ -333,6 +428,9 @@ func osArchInit() {
 		Readlinkat:    cosmoDlsym(&dlsymNameReadlinkat[0]),
 		Readv:         cosmoDlsym(&dlsymNameReadv[0]),
 		Writev:        cosmoDlsym(&dlsymNameWritev[0]),
+		Pread:         cosmoDlsym(&dlsymNamePread[0]),
+		Pwrite:        cosmoDlsym(&dlsymNamePwrite[0]),
+		Lseek:         cosmoDlsym(&dlsymNameLseek[0]),
 		Getdirentries: cosmoDlsym(&dlsymNameGetdirentries[0]),
 		Error:         cosmoDarwinErrorFn,
 		Socket:        cosmoDlsym(&dlsymNameSocket[0]),
@@ -357,9 +455,45 @@ func osArchInit() {
 		Execve:        cosmoDlsym(&dlsymNameExecve[0]),
 		Wait4:         cosmoDlsym(&dlsymNameWait4[0]),
 		Kill:          cosmoDlsym(&dlsymNameKill[0]),
-		PthreadSelf:   __syslib.pthread_self,
-		Getentropy:    cosmoSyslibGetentropy(),
-		Close:         __syslib.close,
+
+		Fsync:     cosmoDlsym(&dlsymNameFsync[0]),
+		Ftruncate: cosmoDlsym(&dlsymNameFtruncate[0]),
+		Truncate:  cosmoDlsym(&dlsymNameTruncate[0]),
+		Fchmod:    cosmoDlsym(&dlsymNameFchmod[0]),
+		Fchmodat:  cosmoDlsym(&dlsymNameFchmodat[0]),
+		Fchown:    cosmoDlsym(&dlsymNameFchown[0]),
+		Fchownat:  cosmoDlsym(&dlsymNameFchownat[0]),
+		Fchdir:    cosmoDlsym(&dlsymNameFchdir[0]),
+		Linkat:    cosmoDlsym(&dlsymNameLinkat[0]),
+		Symlinkat: cosmoDlsym(&dlsymNameSymlinkat[0]),
+		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
+		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
+		Flock:     cosmoDlsym(&dlsymNameFlock[0]),
+		Fdatasync: cosmoDlsym(&dlsymNameFdatasync[0]),
+		Sync:      cosmoDlsym(&dlsymNameSync[0]),
+		Ioctl:     cosmoDlsym(&dlsymNameIoctl[0]),
+		Statfs:    cosmoDlsym(&dlsymNameStatfs[0]),
+		Fstatfs:   cosmoDlsym(&dlsymNameFstatfs[0]),
+		Sendfile:  cosmoDlsym(&dlsymNameSendfile[0]),
+
+		Chroot:       cosmoDlsym(&dlsymNameChroot[0]),
+		Setuid:       cosmoDlsym(&dlsymNameSetuid[0]),
+		Setgid:       cosmoDlsym(&dlsymNameSetgid[0]),
+		Setreuid:     cosmoDlsym(&dlsymNameSetreuid[0]),
+		Setregid:     cosmoDlsym(&dlsymNameSetregid[0]),
+		Getpgid:      cosmoDlsym(&dlsymNameGetpgid[0]),
+		Getgroups:    cosmoDlsym(&dlsymNameGetgroups[0]),
+		Setgroups:    cosmoDlsym(&dlsymNameSetgroups[0]),
+		Getpriority:  cosmoDlsym(&dlsymNameGetpriority[0]),
+		Setpriority:  cosmoDlsym(&dlsymNameSetpriority[0]),
+		Getrlimit:    cosmoDlsym(&dlsymNameGetrlimit[0]),
+		Setrlimit:    cosmoDlsym(&dlsymNameSetrlimit[0]),
+		Uname:        cosmoDlsym(&dlsymNameUname[0]),
+		Getrusage:    cosmoDlsym(&dlsymNameGetrusage[0]),
+		Gettimeofday: cosmoDlsym(&dlsymNameGettimeofday[0]),
+		PthreadSelf:  __syslib.pthread_self,
+		Getentropy:   cosmoSyslibGetentropy(),
+		Close:        __syslib.close,
 	})
 }
 
@@ -500,6 +634,24 @@ func darwinSignalM(mp *m, sig int) {
 	cosmoLibcCall6(lib.pthread_kill, uintptr(mp.procid), uintptr(asig), 0, 0, 0, 0)
 }
 
+// darwinRaiseproc sends sig (a LINUX signal number) to the whole process,
+// which is what sighandler's crash relay needs: the kernel then picks a
+// thread that has not blocked it, and each M in turn dumps its own stack.
+// raiseproc's darwin branch in sys_cosmo_arm64.s jumps here.
+//
+// Falling back to raise would signal this thread, which already holds the
+// signal, so the relay would stop at one M.
+//
+//go:nosplit
+func darwinRaiseproc(sig uint32) {
+	asig := cosmoSigL2A(sig)
+	if asig == 0 || cosmoDarwinKillFn == 0 || cosmoDarwinGetpidFn == 0 {
+		return
+	}
+	pid := cosmoLibcCall6(cosmoDarwinGetpidFn, 0, 0, 0, 0, 0, 0)
+	cosmoLibcCall6(cosmoDarwinKillFn, uintptr(pid), uintptr(asig), 0, 0, 0, 0)
+}
+
 // cosmoDarwinKqueueSupported reports whether the darwin netpoller can
 // reach Apple libc's kqueue/kevent on this host.
 func cosmoDarwinKqueueSupported() bool {
@@ -591,4 +743,54 @@ func cosmoDarwinNumCPU() int32 {
 		return 0
 	}
 	return int32(n)
+}
+
+var sysctlKernHostname = []byte("kern.hostname\x00")
+
+// cosmoDarwinHostname reads kern.hostname, which is where macOS keeps
+// the machine's name and where a native darwin build's os.Hostname reads
+// it. Answers "" when the key cannot be read, which the caller reports
+// rather than papers over.
+func cosmoDarwinHostname() string {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return ""
+	}
+	var buf [512]byte // MAXHOSTNAMELEN is 256; a DNS name fits twice over
+	sz := uintptr(len(buf))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(&sysctlKernHostname[0])),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	if r != 0 || sz == 0 {
+		return ""
+	}
+	n := int(sz)
+	if n > len(buf) {
+		return ""
+	}
+	// sysctl counts the NUL it wrote; the string must not.
+	for n > 0 && buf[n-1] == 0 {
+		n--
+	}
+	return string(buf[:n])
+}
+
+// cosmoDarwinSysctlEnabled reads a boolean hw.optional sysctl. name must
+// be NUL-terminated. An absent key, an older Syslib, or any other failure
+// answers false, which reports the feature as absent.
+func cosmoDarwinSysctlEnabled(name *byte) bool {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return false
+	}
+	var v int32
+	sz := uintptr(unsafe.Sizeof(v))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&v)),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	return r == 0 && v != 0
 }

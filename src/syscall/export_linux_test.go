@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// export_cosmo_test.go carries the cosmo spelling of these, and the fork
+// resolves a _linux filename for cosmo too, so this one has to stand aside.
+//go:build linux && !cosmo
+
 package syscall
 
 import (

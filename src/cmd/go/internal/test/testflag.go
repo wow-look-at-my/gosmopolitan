@@ -35,6 +35,7 @@ func init() {
 	cf := CmdTest.Flag
 	cf.BoolVar(&testC, "c", false, "")
 	cf.StringVar(&testO, "o", "", "")
+	cf.StringVar(&testKeepBinary, "keepbinary", "", "")
 	work.AddCoverFlags(CmdTest, &testCoverProfile)
 	cf.Var((*base.StringsFlag)(&work.ExecCmd), "exec", "")
 	cf.BoolVar(&testJSON, "json", false, "")
@@ -50,7 +51,7 @@ func init() {
 	cf.String("benchtime", "", "")
 	cf.StringVar(&testBlockProfile, "blockprofile", "", "")
 	cf.String("blockprofilerate", "", "")
-	cf.Int("count", 0, "")
+	cf.IntVar(&testCount, "count", 0, "")
 	cf.String("cpu", "", "")
 	cf.StringVar(&testCPUProfile, "cpuprofile", "", "")
 	cf.BoolVar(&testFailFast, "failfast", false, "")
@@ -213,6 +214,41 @@ func (f *shuffleFlag) Set(value string) error {
 	return nil
 }
 
+// normalizeCount makes -count a no-op. go test accepts it, from the command
+// line and from GOFLAGS, and a negative count is still an invalid value. It
+// never reaches the test binary, never enters the cache key and never decides
+// whether a result is recorded or replayed.
+//
+// explicitArgs holds the flags already destined for the test binary, and
+// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both,
+// including a -test.count written after -args, in either the -test.count=n or
+// the -test.count n form. Arguments after a -- terminator are positional to
+// the test binary and are kept as they are.
+func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string {
+	if testCount < 0 {
+		base.Fatalf("go: -count must not be negative")
+	}
+	delete(fromGOFLAGS, "count")
+	delete(fromGOFLAGS, "test.count")
+	kept := explicitArgs[:0]
+	for idx := 0; idx < len(explicitArgs); idx++ {
+		arg := explicitArgs[idx]
+		if arg == "--" {
+			kept = append(kept, explicitArgs[idx:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !strings.HasPrefix(arg, "-") || name != "test.count" {
+			kept = append(kept, arg)
+			continue
+		}
+		if !hasValue {
+			idx++ // the count's value is the next argument
+		}
+	}
+	return kept
+}
+
 // testFlags processes the command line, grabbing -x and -c, rewriting known flags
 // to have "test" before them, and reading the command line for the test binary.
 // Unfortunately for us, we need to do our own flag processing because go test
@@ -361,6 +397,8 @@ func testFlags(args []string) (packageNames, passToTest []string) {
 			cfg.BuildJSON = true
 		}
 	}
+
+	explicitArgs = normalizeCount(explicitArgs, addFromGOFLAGS)
 
 	// Inject flags from GOFLAGS before the explicit command-line arguments.
 	// (They must appear before the flag terminator or first non-flag argument.)

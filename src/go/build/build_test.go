@@ -47,17 +47,21 @@ func TestMatch(t *testing.T) {
 		}
 	}
 
-	match(runtime.GOOS+","+runtime.GOARCH, map[string]bool{runtime.GOOS: true, runtime.GOARCH: true})
-	match(runtime.GOOS+","+runtime.GOARCH+",!foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
+	// The context's own GOOS and GOARCH, not the host's: a cosmo binary
+	// runs on three hosts, and what this context matches is the port it
+	// was built for.
+	goos, goarch := ctxt.GOOS, ctxt.GOARCH
+	match(goos+","+goarch, map[string]bool{goos: true, goarch: true})
+	match(goos+","+goarch+",!foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	nomatch(goos+","+goarch+",foo", map[string]bool{goos: true, goarch: true, "foo": true})
 
 	what = "modified"
 	ctxt.BuildTags = []string{"foo"}
-	match(runtime.GOOS+","+runtime.GOARCH, map[string]bool{runtime.GOOS: true, runtime.GOARCH: true})
-	match(runtime.GOOS+","+runtime.GOARCH+",foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",!foo", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "foo": true})
-	match(runtime.GOOS+","+runtime.GOARCH+",!bar", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "bar": true})
-	nomatch(runtime.GOOS+","+runtime.GOARCH+",bar", map[string]bool{runtime.GOOS: true, runtime.GOARCH: true, "bar": true})
+	match(goos+","+goarch, map[string]bool{goos: true, goarch: true})
+	match(goos+","+goarch+",foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	nomatch(goos+","+goarch+",!foo", map[string]bool{goos: true, goarch: true, "foo": true})
+	match(goos+","+goarch+",!bar", map[string]bool{goos: true, goarch: true, "bar": true})
+	nomatch(goos+","+goarch+",bar", map[string]bool{goos: true, goarch: true, "bar": true})
 }
 
 func TestDotSlashImport(t *testing.T) {
@@ -515,6 +519,7 @@ func TestImportDirNotExist(t *testing.T) {
 		{"Import(local, FindOnly)", "./doesnotexist", filepath.Join(ctxt.GOROOT, "src/go/build"), FindOnly},
 	}
 
+	t.Serial() // os.Setenv is process-wide.
 	defer os.Setenv("GO111MODULE", os.Getenv("GO111MODULE"))
 
 	for _, GO111MODULE := range []string{"off", "on"} {
@@ -812,7 +817,7 @@ func TestDirectives(t *testing.T) {
 	}
 
 	check := func(name string, list []Directive, want string) {
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			want = strings.ReplaceAll(want, "testdata/directives/", `testdata\\directives\\`)
 		}
 		t.Helper()
@@ -827,6 +832,49 @@ func TestDirectives(t *testing.T) {
 		`[{"//go:test1" "testdata/directives/a_test.go:1:1"} {"//go:test2" "testdata/directives/b_test.go:1:1"}]`)
 	check("XTestDirectives", p.XTestDirectives,
 		`[{"//go:xtest1" "testdata/directives/c_test.go:1:1"} {"//go:xtest2" "testdata/directives/d_test.go:1:1"} {"//go:xtest3" "testdata/directives/d_test.go:2:1"}]`)
+}
+
+// A GOROOT with a go command under bin names the one importGo runs. A GOROOT
+// without one, which is what a go command carrying its standard library
+// answers, hands importGo the go command that started this program, as that
+// go command named itself in the environment. A go found on PATH is never an
+// answer: with neither, importGo fails rather than run a shell's go against
+// this toolchain's GOROOT.
+func TestGoCommandNeverComesFromPATH(t *testing.T) {
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	onPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "go"+exe), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+	t.Setenv(goCommandEnv, "")
+
+	bare := &Context{GOROOT: t.TempDir()}
+	if got, err := bare.goCommand(); err == nil {
+		t.Errorf("a GOROOT without bin/go and no %s: goCommand() = %q, want an error", goCommandEnv, got)
+	}
+
+	t.Setenv(goCommandEnv, "/opt/pipeline/go-toolchain\ngo")
+	want := []string{"/opt/pipeline/go-toolchain", "go"}
+	if got, err := bare.goCommand(); err != nil || !slices.Equal(got, want) {
+		t.Errorf("a GOROOT without bin/go: goCommand() = %q, %v; want %q", got, err, want)
+	}
+
+	installed := &Context{GOROOT: t.TempDir()}
+	gorootGo := filepath.Join(installed.GOROOT, "bin", "go"+exe)
+	if err := os.MkdirAll(filepath.Dir(gorootGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gorootGo, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{filepath.Join(installed.GOROOT, "bin", "go")}
+	if got, err := installed.goCommand(); err != nil || !slices.Equal(got, want) {
+		t.Errorf("a GOROOT with bin/go: goCommand() = %q, %v; want %q", got, err, want)
+	}
 }
 
 // TestContextImportGoWithUseAllFiles ensures that when Context.UseAllFiles is set,

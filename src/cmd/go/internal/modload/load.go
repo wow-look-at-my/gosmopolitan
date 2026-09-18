@@ -124,6 +124,7 @@ import (
 	"cmd/go/internal/search"
 	"cmd/go/internal/str"
 	"cmd/internal/par"
+	"internal/cosmo/embedded"
 
 	"golang.org/x/mod/module"
 )
@@ -1882,6 +1883,14 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 
 	if cfg.BuildContext.Compiler == "gccgo" && pkg.inStd {
 		// We can't scan standard packages for gccgo.
+	} else if std := embeddedStdPackage(pkg); std != nil {
+		// A standard package of a go command carrying its standard library
+		// is a compiled archive with no directory; the manifest holds its
+		// imports, as resolved vendor paths a source file spells without the
+		// prefix, and its tests are not in the binary.
+		for _, imp := range std.Imports {
+			imports = append(imports, strings.TrimPrefix(imp, "vendor/"))
+		}
 	} else {
 		var err error
 		imports, testImports, err = scanDir(modroot, pkg.dir, pld.Tags)
@@ -1907,6 +1916,15 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 	pkg.testImports = testImports
 
 	pld.applyPkgFlags(ld, ctx, pkg, pkgImportsLoaded)
+}
+
+// embeddedStdPackage answers pkg's entry in the embedded standard library,
+// or nil when pkg is not a standard package of a go command carrying one.
+func embeddedStdPackage(pkg *loadPkg) *embedded.Package {
+	if !cfg.EmbeddedStd || !pkg.inStd {
+		return nil
+	}
+	return cfg.EmbeddedStdPackage(pkg.path)
 }
 
 // pkgTest locates the test of pkg, creating it if needed, and updates its state
@@ -1987,7 +2005,11 @@ func (pld *packageLoader) stdVendor(ld *Loader, parentPath, path string) string 
 		// pattern, they are not part of the std *module*, and do not affect
 		// 'go mod tidy' and similar module commands when working within std.)
 		vendorPath := pathpkg.Join("vendor", path)
-		if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
+		if cfg.EmbeddedStd {
+			if cfg.EmbeddedStdPackage(vendorPath) != nil {
+				return vendorPath
+			}
+		} else if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
 			return vendorPath
 		}
 	}
@@ -2041,30 +2063,9 @@ func checkMultiplePathsUncached(ld *Loader, pld *packageLoader, mods []module.Ve
 		if prev, ok := firstPath[src]; !ok {
 			firstPath[src] = mod.Path
 		} else if prev != mod.Path {
-			// A fork replaced onto the path it forked keeps its own path too,
-			// so the same source answers to both -- a vanity path and the
-			// repository it now lives in. That is the whole shape of a fork
-			// consumed through replace, and it is stated in a go.mod rather
-			// than stumbled into, so it is not the accident this reports.
-			if isDeliberateReplacement(ld, mod) {
-				continue
-			}
 			pld.error(fmt.Errorf("%s@%s used for two different module paths (%s and %s)", src.Path, src.Version, prev, mod.Path))
 		}
 	}
-}
-
-// isDeliberateReplacement reports whether mod reaches its source through a
-// replace directive, rather than by being required under its own path.
-//
-// checkMultiplePaths exists to catch one module accidentally answering to two
-// import paths -- the usual cause being a repository that renamed itself and
-// left both names in a build. A fork consumed through replace looks identical
-// from there and is not the same thing: it answers to the path it forked AND
-// to the repository it now lives in, on purpose, said out loud in a go.mod.
-// Only the accident is worth an error.
-func isDeliberateReplacement(ld *Loader, mod module.Version) bool {
-	return Replacement(ld, mod) != (module.Version{})
 }
 
 // checkTidyCompatibility emits an error if any package would be loaded from a

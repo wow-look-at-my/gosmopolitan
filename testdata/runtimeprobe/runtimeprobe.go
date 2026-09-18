@@ -1,11 +1,12 @@
 // Runtimeprobe exercises the runtime and os-package surface that must
 // work on every APE host today: file I/O, directory listing
 // (os.ReadDir/filepath.WalkDir, i.e. getdents64), process identity,
-// CPU count, the monotonic clock, timers (time.Sleep/Ticker/After and
+// the boot auxv every host has to publish, CPU count, the monotonic
+// clock, timers (time.Sleep/Ticker/After and
 // context timeouts, which need a working netpoller), TCP/UDP loopback
 // sockets with deadlines, socketpair (raw fds and net.FileConn),
 // sendmsg/recvmsg and SCM_RIGHTS fd passing to a child process,
-// readv/writev + net.Buffers,
+// readv/writev + net.Buffers, EOF on a dead child's stdout pipe,
 // os.Executable, argv/env, working-directory
 // syscalls, exec.LookPath/exec.Command name resolution over the
 // host-format PATH (';'-separated drive-letter entries with PATHEXT
@@ -93,6 +94,11 @@ func main() {
 		// exec completed, then exit.
 		execStressChild()
 		return
+	case "pipeecho":
+		// Child mode for checkPipeEOF: write one marker line and exit,
+		// so the exit is what closes the stdout pipe.
+		pipeEOFChild()
+		return
 	case "ctrlwait":
 		// Child mode for checkCtrlBreak: await a group-targeted SIGQUIT.
 		ctrlwaitChild()
@@ -120,17 +126,39 @@ func main() {
 	timed("monotonic", checkMonotonic)
 	timed("timers", checkTimers)
 	timed("sockets", checkSockets)
+	timed("dns", checkDNS)
+	timed("tls", checkTLS)
 	timed("sockpair", checkSockpair)
 	timed("sendmsg", checkSendmsg)
 	timed("netbuffers", checkNetBuffers)
 	timed("cloexec", checkCloexec)
+	timed("execstdin", checkExecStdin)
 	timed("hostos", checkHostOS)
+	timed("auxv", checkAuxv)
+	timed("procauxv", checkProcAuxv)
+	timed("hwcap", checkHWCAP)
 	timed("fdpath", checkFdPath)
 	timed("peercred", checkPeercred)
 	timed("dupfile", checkDupFile)
 	timed("executable", checkExecutable)
 	timed("files", checkFiles)
+	timed("seekreadat", checkSeekReadAt)
 	timed("readdir", checkReadDir)
+	timed("fsmeta", checkFsMeta)
+	timed("fslinks", checkFsLinks)
+	timed("fsmetaunix", checkFsMetaUnix)
+	timed("volume", checkVolume)
+	timed("sysinfo", checkSysInfo)
+	timed("flock", checkFlock)
+	timed("pipeclose", checkPipeClose)
+	timed("durable", checkDurable)
+	timed("rusage", checkRusage)
+	timed("ioctl", checkIoctl)
+	timed("termios", checkTermios)
+	timed("pty", checkPty)
+	timed("mmap", checkMmap)
+	timed("sendfile", checkSendfile)
+	timed("nanosleep", checkNanosleep)
 	// Exec and signal checks run at the END on purpose, in that order.
 	// Exec: if a forked child ever wedges (a nondeterministic macOS CI
 	// incident produced kernel-stuck processes), every other check has
@@ -145,6 +173,10 @@ func main() {
 	// Deliberately adjacent to the other exec checks: this one is the
 	// deterministic version of the wedge they hit by chance.
 	timed("execstress", checkExecStress)
+	// Same family, other end of the exec: execstress watches the status
+	// pipe the parent reads before Start returns, this one watches the
+	// stdout pipe the parent reads inside Wait.
+	timed("pipeeof", checkPipeEOF)
 	timed("segvrecover", checkSegvRecover)
 	timed("signalnotify", checkSignalNotify)
 	timed("preempt", checkPreempt)
@@ -475,13 +507,17 @@ func checkSockets() {
 	// local name; this is the regression canary for unnamed-vs-abstract
 	// confusion in the sockaddr parse. (Windows's stack reports unnamed
 	// as "@"; net's own unixsock tests encode that.)
-	udir, err := os.MkdirTemp("", "runtimeprobe-unix")
+	udir, err := shortSockDir("rp-unix")
 	if err != nil {
 		fail("unixsock", "MkdirTemp: %v", err)
 		return
 	}
 	defer os.RemoveAll(udir)
-	spath := filepath.Join(udir, "probe.sock")
+	spath := filepath.Join(udir, "p")
+	if len(spath) >= sunPathMax {
+		fail("unixsock", "socket path is %d bytes, over the %d sun_path holds: %s", len(spath), sunPathMax, spath)
+		return
+	}
 	uln, err := net.Listen("unix", spath)
 	if err != nil {
 		fail("unixsock", "listen: %v", err)
@@ -522,8 +558,8 @@ func checkSockets() {
 	switch {
 	case uln.Addr().String() != spath:
 		fail("unixsock", "listener addr %q, want %q", uln.Addr(), spath)
-	case !laOK || la.Name != "":
-		fail("unixsock", "dialed local addr %#v, want empty name", usock.LocalAddr())
+	case !laOK || !isUnnamedSockName(la.Name):
+		fail("unixsock", "dialed local addr %#v, want an unnamed one", usock.LocalAddr())
 	case !raOK || ra.Name != spath:
 		fail("unixsock", "dialed remote addr %#v, want name %q", usock.RemoteAddr(), spath)
 	default:
@@ -708,38 +744,50 @@ func checkSegvRecover() {
 
 // checkPreempt proves asynchronous preemption: saturate every P with
 // call-free spin loops (their only loop-body operation is an inlined
-// atomic load, which is not a preemption point), then require a full
-// GC cycle - stop-the-world included - to complete promptly. Without
-// working preemption signals the GC hangs until the loops' iteration
-// bound drains (tens of seconds), turning this into a duration
-// failure rather than a probe hang.
+// atomic load, which is not a preemption point), then run a full GC
+// cycle - stop-the-world included - and require the loops to still be
+// running when it returns. Without preemption the GC cannot stop a
+// spinning P at all. The loops then drain their iteration bound first,
+// either because the GC waits for them, or because main never gets a P
+// to request the GC on.
+//
+// The verdict is that survivor count, never the GC's wall time: an
+// oversubscribed host stretches both the GC and the drain, so a
+// duration threshold reports load rather than preemption.
 func checkPreempt() {
 	var stop atomic.Uint32
 	var spun atomic.Uint64
+	var spinning atomic.Int32
 	var wg sync.WaitGroup
 	n := runtime.GOMAXPROCS(0)
-	t0 := time.Now()
 	for i := 0; i < n; i++ {
 		wg.Add(1)
+		spinning.Add(1)
 		go func(seed uint64) {
 			defer wg.Done()
 			x := seed
 			for i := uint64(0); i < 20e9 && stop.Load() == 0; i++ {
 				x = x*2862933555777941757 + 3037000493
 			}
+			spinning.Add(-1)
 			spun.Add(x)
 		}(uint64(i + 1))
 	}
+	launched := time.Now()
 	// Let the spinners occupy every P; the sleep also forces main off
 	// its P so wake-up itself needs a preemption.
 	time.Sleep(100 * time.Millisecond)
+	t0 := time.Now()
 	runtime.GC()
 	d := time.Since(t0)
+	live := spinning.Load()
 	stop.Store(1)
 	wg.Wait()
 	sink = spun.Load()
-	if d > 10*time.Second {
-		fail("preempt", "GC took %v with %d spinning goroutines", d, n)
+	if live == 0 {
+		// Two shapes reach here, and both are the same defect: the GC
+		// waited out the drain, or main never got a P to ask for one.
+		fail("preempt", "all %d spin loops drained before the GC returned (%v after launch)", n, time.Since(launched))
 		return
 	}
 	ok("preempt", d)
@@ -836,6 +884,70 @@ func checkFiles() {
 	} else {
 		ok("rmdir")
 	}
+}
+
+// checkSeekReadAt exercises os.File.Seek (all three whence values) and
+// os.File.ReadAt (mid-file offsets, and past-EOF returning io.EOF) on
+// the shipped os.File API. This is the regression canary for the darwin
+// pread/pwrite/lseek emulation: before it, macOS returned ENOSYS
+// ("function not implemented") for both Seek and ReadAt while Linux and
+// Windows dispatched them natively. It runs on every APE host via the
+// apetest suite.
+func checkSeekReadAt() {
+	dir, err := os.MkdirTemp("", "runtimeprobe-seek")
+	if err != nil {
+		fail("seekreadat", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	name := filepath.Join(dir, "seek.bin")
+	// 36 bytes, indices 0..35.
+	data := []byte("0123456789abcdefghijklmnopqrstuvwxyz")
+	if err := os.WriteFile(name, data, 0o644); err != nil {
+		fail("seekreadat", "WriteFile: %v", err)
+		return
+	}
+	f, err := os.Open(name)
+	if err != nil {
+		fail("seekreadat", "Open: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// Seek from start.
+	if off, err := f.Seek(10, io.SeekStart); err != nil || off != 10 {
+		fail("seekreadat", "Seek(10, Start) = %d, %v; want 10, nil", off, err)
+		return
+	}
+	// Seek relative to current (10 + 5 = 15).
+	if off, err := f.Seek(5, io.SeekCurrent); err != nil || off != 15 {
+		fail("seekreadat", "Seek(5, Current) = %d, %v; want 15, nil", off, err)
+		return
+	}
+	// Seek relative to end (36 - 3 = 33).
+	if off, err := f.Seek(-3, io.SeekEnd); err != nil || off != 33 {
+		fail("seekreadat", "Seek(-3, End) = %d, %v; want 33, nil", off, err)
+		return
+	}
+	ok("seekreadat", "seek")
+
+	// ReadAt mid-file: indices 2..6 are "23456".
+	buf := make([]byte, 5)
+	if n, err := f.ReadAt(buf, 2); err != nil || n != 5 || string(buf) != "23456" {
+		fail("seekreadat", "ReadAt(2) = %d, %v, %q; want 5, nil, \"23456\"", n, err, buf)
+		return
+	}
+	// ReadAt past EOF must return io.EOF.
+	if n, err := f.ReadAt(buf, int64(len(data))+1); err != io.EOF || n != 0 {
+		fail("seekreadat", "ReadAt(past EOF) = %d, %v; want 0, io.EOF", n, err)
+		return
+	}
+	// ReadAt exactly at EOF must return io.EOF with zero bytes.
+	if n, err := f.ReadAt(buf, int64(len(data))); err != io.EOF || n != 0 {
+		fail("seekreadat", "ReadAt(at EOF) = %d, %v; want 0, io.EOF", n, err)
+		return
+	}
+	ok("seekreadat", "readat")
 }
 
 // checkReadDir exercises directory listing - the getdents64 syscall on

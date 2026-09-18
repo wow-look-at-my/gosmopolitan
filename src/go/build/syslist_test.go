@@ -5,13 +5,15 @@
 package build
 
 import (
-	"runtime"
 	"testing"
 )
 
+// The port these files are selected for, not the host running the test.
+// A cosmo binary runs on three hosts, and goodOSArchFile answers about
+// Default, which is the port.
 var (
-	thisOS    = runtime.GOOS
-	thisArch  = runtime.GOARCH
+	thisOS    = Default.GOOS
+	thisArch  = Default.GOARCH
 	otherOS   = anotherOS()
 	otherArch = anotherArch()
 )

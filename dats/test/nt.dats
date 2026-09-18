@@ -1,0 +1,20 @@
+# The NT host: the APE binaries the build legs made boot here and answer,
+# and the runner offers AF_UNIX, which the cosmo unix socket layer needs.
+# Runs in the test job on windows, over the binaries it downloaded.
+tests:
+	- desc: AF_UNIX binds on this runner, natively and through .NET
+	  cmd: pwsh -NoProfile -File dats/test/af-unix.ps1
+	  exit: 0
+
+	- desc: the Linux- and Windows-origin fizzbuzz boot and answer
+	  cmd: pwsh -NoProfile -File dats/test/nt-boot.ps1
+	  exit: 0
+
+	# This host needs no loader: the APE is a PE, and the OS maps the payload
+	# out of it. readonly-boot.dats makes the same claim for linux and darwin.
+	- desc: a read-only host still runs the program
+	  cmd: pwsh -NoProfile -File dats/test/readonly-boot.ps1
+	  exit: 0
+	  outputs:
+		stdout:
+			- "read-only NT boot: fizzbuzz"

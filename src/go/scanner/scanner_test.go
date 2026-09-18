@@ -15,6 +15,10 @@ import (
 	"testing"
 )
 
+// fset is shared by every test here, so each AddFile passes a negative base
+// and lets the set pick the current one under its own lock. Reading fset.Base
+// first and passing that back is a race between two tests: the base moves in
+// between, and AddFile panics on the stale one.
 var fset = token.NewFileSet()
 
 const /* class */ (
@@ -235,7 +239,7 @@ func TestScan(t *testing.T) {
 
 	// verify scan
 	var s Scanner
-	s.Init(fset.AddFile("", fset.Base(), len(source)), source, eh, ScanComments|dontInsertSemis)
+	s.Init(fset.AddFile("", -1, len(source)), source, eh, ScanComments|dontInsertSemis)
 
 	// set up expected position
 	epos := token.Position{
@@ -343,7 +347,7 @@ func checkSemi(t *testing.T, input, want string, mode Mode) {
 		want = strings.ReplaceAll(want, "COMMENT", "")  // if sole token
 	}
 
-	file := fset.AddFile("TestSemis", fset.Base(), len(input))
+	file := fset.AddFile("TestSemis", -1, len(input))
 	var scan Scanner
 	scan.Init(file, []byte(input), nil, mode)
 	var tokens []string
@@ -576,7 +580,7 @@ func testSegments(t *testing.T, segments []segment, filename string) {
 
 	// verify scan
 	var S Scanner
-	file := fset.AddFile(filename, fset.Base(), len(src))
+	file := fset.AddFile(filename, -1, len(src))
 	S.Init(file, []byte(src), func(pos token.Position, msg string) { t.Error(&Error{pos, msg}) }, dontInsertSemis)
 	for _, s := range segments {
 		p, _, lit := S.Scan()
@@ -615,7 +619,7 @@ func TestInvalidLineDirectives(t *testing.T) {
 	// verify scan
 	var S Scanner
 	var s segment // current segment
-	file := fset.AddFile(filepath.Join("dir", "TestInvalidLineDirectives"), fset.Base(), len(src))
+	file := fset.AddFile(filepath.Join("dir", "TestInvalidLineDirectives"), -1, len(src))
 	S.Init(file, []byte(src), func(pos token.Position, msg string) {
 		if msg != s.filename {
 			t.Errorf("got error %q; want %q", msg, s.filename)
@@ -639,7 +643,7 @@ func TestInit(t *testing.T) {
 
 	// 1st init
 	src1 := "if true { }"
-	f1 := fset.AddFile("src1", fset.Base(), len(src1))
+	f1 := fset.AddFile("src1", -1, len(src1))
 	s.Init(f1, []byte(src1), nil, dontInsertSemis)
 	if f1.Size() != len(src1) {
 		t.Errorf("bad file size: got %d, expected %d", f1.Size(), len(src1))
@@ -653,7 +657,7 @@ func TestInit(t *testing.T) {
 
 	// 2nd init
 	src2 := "go true { ]"
-	f2 := fset.AddFile("src2", fset.Base(), len(src2))
+	f2 := fset.AddFile("src2", -1, len(src2))
 	s.Init(f2, []byte(src2), nil, dontInsertSemis)
 	if f2.Size() != len(src2) {
 		t.Errorf("bad file size: got %d, expected %d", f2.Size(), len(src2))
@@ -682,7 +686,7 @@ func TestStdErrorHandler(t *testing.T) {
 	eh := func(pos token.Position, msg string) { list.Add(pos, msg) }
 
 	var s Scanner
-	s.Init(fset.AddFile("File1", fset.Base(), len(src)), []byte(src), eh, dontInsertSemis)
+	s.Init(fset.AddFile("File1", -1, len(src)), []byte(src), eh, dontInsertSemis)
 	for {
 		if _, tok, _ := s.Scan(); tok == token.EOF {
 			break
@@ -725,7 +729,7 @@ func checkError(t *testing.T, src string, tok token.Token, pos int, lit, err str
 		h.msg = msg
 		h.pos = pos
 	}
-	s.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), eh, ScanComments|dontInsertSemis)
+	s.Init(fset.AddFile("", -1, len(src)), []byte(src), eh, ScanComments|dontInsertSemis)
 	_, tok0, lit0 := s.Scan()
 	if tok0 != tok {
 		t.Errorf("%q: got %s, expected %s", src, tok0, tok)
@@ -836,7 +840,7 @@ func TestUTF16(t *testing.T) {
 			got = append(got, fmt.Sprintf("#%d: %s", posn.Offset, msg))
 		}
 		var sc Scanner
-		sc.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), eh, 0)
+		sc.Init(fset.AddFile("", -1, len(src)), []byte(src), eh, 0)
 		sc.Scan()
 
 		// We expect two errors:
@@ -873,7 +877,7 @@ func TestIssue10213(t *testing.T) {
 		}
 	`
 	var s Scanner
-	s.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), nil, 0)
+	s.Init(fset.AddFile("", -1, len(src)), []byte(src), nil, 0)
 	for {
 		pos, tok, lit := s.Scan()
 		class := tokenclass(tok)
@@ -890,7 +894,7 @@ func TestIssue28112(t *testing.T) {
 	const src = "... .. 0.. .." // make sure to have stand-alone ".." immediately before EOF to test EOF behavior
 	tokens := []token.Token{token.ELLIPSIS, token.PERIOD, token.PERIOD, token.FLOAT, token.PERIOD, token.PERIOD, token.PERIOD, token.EOF}
 	var s Scanner
-	s.Init(fset.AddFile("", fset.Base(), len(src)), []byte(src), nil, 0)
+	s.Init(fset.AddFile("", -1, len(src)), []byte(src), nil, 0)
 	for _, want := range tokens {
 		pos, got, lit := s.Scan()
 		if got != want {
@@ -906,7 +910,7 @@ func TestIssue28112(t *testing.T) {
 func BenchmarkScan(b *testing.B) {
 	b.StopTimer()
 	fset := token.NewFileSet()
-	file := fset.AddFile("", fset.Base(), len(source))
+	file := fset.AddFile("", -1, len(source))
 	var s Scanner
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
@@ -937,7 +941,7 @@ func BenchmarkScanFiles(b *testing.B) {
 				b.Fatal(err)
 			}
 			fset := token.NewFileSet()
-			file := fset.AddFile(filename, fset.Base(), len(src))
+			file := fset.AddFile(filename, -1, len(src))
 			b.SetBytes(int64(len(src)))
 			var s Scanner
 			b.StartTimer()
@@ -1110,7 +1114,7 @@ func TestNumbers(t *testing.T) {
 	} {
 		var s Scanner
 		var err string
-		s.Init(fset.AddFile("", fset.Base(), len(test.src)), []byte(test.src), func(_ token.Position, msg string) {
+		s.Init(fset.AddFile("", -1, len(test.src)), []byte(test.src), func(_ token.Position, msg string) {
 			if err == "" {
 				err = msg
 			}
@@ -1369,7 +1373,7 @@ func TestShebang(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.src[:min(20, len(test.src))], func(t *testing.T) {
 			fset := token.NewFileSet()
-			file := fset.AddFile("", fset.Base(), len(test.src))
+			file := fset.AddFile("", -1, len(test.src))
 			var s Scanner
 			s.Init(file, []byte(test.src), nil, 0)
 
@@ -1394,7 +1398,7 @@ func TestShebangWithBOM(t *testing.T) {
 	// Test that BOM followed by shebang works correctly.
 	src := "\ufeff#!/usr/bin/env go run\npackage main"
 	fset := token.NewFileSet()
-	file := fset.AddFile("", fset.Base(), len(src))
+	file := fset.AddFile("", -1, len(src))
 	var s Scanner
 	s.Init(file, []byte(src), nil, 0)
 

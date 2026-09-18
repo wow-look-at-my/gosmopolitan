@@ -35,3 +35,9 @@ func CosmoTimevalX2L(sec int64, usec int32) (int64, int64) {
 	l := cosmoTimevalX2L(&xnuTimeval{tv_sec: sec, tv_usec: usec})
 	return l.tv_sec, l.tv_usec
 }
+
+// Export for futex_cosmo_test.go: one step of the darwin futex wait.
+
+func DarwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (uint32, bool) {
+	return darwinFutexDelay(sleep, leftNsec, timed)
+}

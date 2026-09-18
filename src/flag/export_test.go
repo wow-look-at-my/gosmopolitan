@@ -13,6 +13,10 @@ import (
 
 var DefaultUsage = Usage
 
+// A caller replaces the process-wide CommandLine set, so it calls
+// t.Serial() first. Otherwise a parallel test reads a flag set that
+// this one is part way through building.
+//
 // ResetForTesting clears all flag state and sets the usage function as directed.
 // After calling ResetForTesting, parse errors in flag handling will not
 // exit the program.

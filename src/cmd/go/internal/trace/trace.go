@@ -11,6 +11,7 @@ import (
 	"internal/trace/traceviewer/format"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -103,6 +104,44 @@ type Span struct {
 	tid   uint64
 	start time.Time
 	end   time.Time
+
+	// args is the detail the viewer shows when the slice is selected. A
+	// caller adds to it while the span runs, because most of what makes a
+	// span identifiable -- a cache outcome, a byte count, an exit status --
+	// is only known once the work is done. Chrome merges the args on the
+	// begin and end events of a pair, so these ride the end event.
+	mu   sync.Mutex
+	args map[string]any
+}
+
+// SetArg records one detail on the span. It is safe to call from any
+// goroutine while the span runs, and on a nil span, which is what StartSpan
+// returns when tracing is off.
+func (s *Span) SetArg(key string, value any) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.args == nil {
+		s.args = make(map[string]any)
+	}
+	s.args[key] = value
+}
+
+// SetArgs records several details at once.
+func (s *Span) SetArgs(args map[string]any) {
+	if s == nil || len(args) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.args == nil {
+		s.args = make(map[string]any, len(args))
+	}
+	for k, v := range args {
+		s.args[k] = v
+	}
 }
 
 func (s *Span) Done() {
@@ -110,12 +149,20 @@ func (s *Span) Done() {
 		return
 	}
 	s.end = time.Now()
-	s.t.writeEvent(&format.Event{
+	s.mu.Lock()
+	args := s.args
+	s.args = nil
+	s.mu.Unlock()
+	ev := &format.Event{
 		Name:  s.name,
 		Time:  float64(s.end.UnixNano()) / float64(time.Microsecond),
 		TID:   s.tid,
 		Phase: phaseDurationEnd,
-	})
+	}
+	if len(args) > 0 {
+		ev.Arg = args
+	}
+	s.t.writeEvent(ev)
 }
 
 type tracer struct {

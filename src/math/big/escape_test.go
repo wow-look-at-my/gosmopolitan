@@ -28,6 +28,7 @@ func TestEscape(t *testing.T) {
 }
 
 func TestMulAlloc(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	r := rand.New(rand.NewSource(1234))
 	sizes := []int{karatsubaThreshold / 2, karatsubaThreshold}
 	for _, size := range sizes {
@@ -41,6 +42,7 @@ func TestMulAlloc(t *testing.T) {
 }
 
 func TestSqrAlloc(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	r := rand.New(rand.NewSource(1234))
 	sizes := []int{basicSqrThreshold / 2, basicSqrThreshold, karatsubaSqrThreshold}
 	for _, size := range sizes {

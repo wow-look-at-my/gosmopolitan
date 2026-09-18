@@ -2129,6 +2129,8 @@ func hammerCompareAndSwapUintptr32Method(uaddr *uint32, count int) {
 }
 
 func TestHammer32(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	const p = 4
 	n := 100000
 	if testing.Short() {
@@ -2396,6 +2398,8 @@ func hammerCompareAndSwapUintptr64Method(uaddr *uint64, count int) {
 }
 
 func TestHammer64(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	const p = 4
 	n := 100000
 	if testing.Short() {
@@ -2648,6 +2652,8 @@ func hammerStoreLoadPointerMethod(t *testing.T, paddr unsafe.Pointer) {
 }
 
 func TestHammerStoreLoad(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	tests := []func(*testing.T, unsafe.Pointer){
 		hammerStoreLoadInt32, hammerStoreLoadUint32,
 		hammerStoreLoadUintptr, hammerStoreLoadPointer,
@@ -2685,6 +2691,8 @@ func TestHammerStoreLoad(t *testing.T) {
 }
 
 func TestStoreLoadSeqCst32(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		t.Skipf("Skipping test on %v processor machine", runtime.NumCPU())
 	}
@@ -2727,6 +2735,8 @@ func TestStoreLoadSeqCst32(t *testing.T) {
 }
 
 func TestStoreLoadSeqCst64(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		t.Skipf("Skipping test on %v processor machine", runtime.NumCPU())
 	}
@@ -2769,6 +2779,8 @@ func TestStoreLoadSeqCst64(t *testing.T) {
 }
 
 func TestStoreLoadRelAcq32(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		t.Skipf("Skipping test on %v processor machine", runtime.NumCPU())
 	}
@@ -2815,6 +2827,8 @@ func TestStoreLoadRelAcq32(t *testing.T) {
 }
 
 func TestStoreLoadRelAcq64(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.NumCPU() == 1 {
 		t.Skipf("Skipping test on %v processor machine", runtime.NumCPU())
 	}

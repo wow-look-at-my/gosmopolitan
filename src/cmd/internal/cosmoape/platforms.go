@@ -30,10 +30,13 @@ func (p Platform) String() string { return p.OS + "/" + p.Arch }
 // all lists every platform this toolchain can emit boot support for, in
 // canonical order. Set is a bitmask over these indices, so the order is
 // also the order platforms are reported in.
+// darwin/amd64 is absent on purpose. Intel macs are out of support here.
+// An APE starts on every platform in this table without writing anything,
+// and that platform had no way to: XNU reads the Mach-O header at offset 0,
+// which an APE cannot carry there, and no loader exists for it.
 var all = [...]Platform{
 	{"linux", "amd64"},
 	{"linux", "arm64"},
-	{"darwin", "amd64"},
 	{"darwin", "arm64"},
 	{"windows", "amd64"},
 }
@@ -42,16 +45,34 @@ var all = [...]Platform{
 var (
 	LinuxAMD64   = all[0]
 	LinuxARM64   = all[1]
-	DarwinAMD64  = all[2]
-	DarwinARM64  = all[3]
-	WindowsAMD64 = all[4]
+	DarwinARM64  = all[2]
+	WindowsAMD64 = all[3]
 )
 
 // Set is a set of platforms.
 type Set uint
 
-// Default is the set an unrestricted build covers: every platform.
-func Default() Set { return Set(1<<len(all)) - 1 }
+// Default is the set a build covers when GOCOSMOPLATFORMS is unset. It is
+// deliberately NOT every platform in all: it is the three this fork stands
+// behind, and linux/arm64 stays selectable rather than promised.
+//
+// linux/arm64 is omitted because a default build should not claim a host
+// nothing verifies. Naming it in GOCOSMOPLATFORMS still selects it. This
+// changes what silence means, not what is reachable.
+func Default() Set {
+	return 1<<indexOf(LinuxAMD64) | 1<<indexOf(DarwinARM64) | 1<<indexOf(WindowsAMD64)
+}
+
+// indexOf returns p's bit position, panicking on a platform not in all so a
+// typo in Default cannot silently produce an empty set.
+func indexOf(p Platform) uint {
+	for i, q := range all {
+		if q == p {
+			return uint(i)
+		}
+	}
+	panic("cosmoape: platform not in table: " + p.String())
+}
 
 // Names returns the accepted platform tokens, for diagnostics.
 func Names() string {

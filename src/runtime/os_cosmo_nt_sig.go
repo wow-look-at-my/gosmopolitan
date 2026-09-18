@@ -2,58 +2,22 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && amd64
+//go:build cosmo
 
-// Windows NT signals (wave 2 chunk D1): vectored exception handling
-// feeding the fork's linux-shaped sigpanic, self-directed signal
-// delivery through the real signal trampoline, and the encoded
-// signal-death exit status.
+// Windows NT signals: vectored exception handling feeding the fork's
+// linux-shaped sigpanic, self-directed delivery through the real signal
+// trampoline, and the encoded signal-death exit status.
 //
-// Design (full record in DEBUGGING.md "Wave 2 chunk D1"):
-//
-//   - Hardware faults: a vectored exception handler (ntExceptionTramp,
-//     first position) ported from upstream signal_windows.go. Faults
-//     with a Go-text PC and a known exception code are translated to
-//     LINUX signal numbers; panic-class signals (SEGV/BUS/FPE, per the
-//     fork's linux sigtable) record sig/sigcode0/sigcode1/sigpc on the
-//     g and rewrite the saved CONTEXT so the faulting goroutine calls
-//     sigpanic0 on resume - recover() then works exactly as on Linux.
-//     Throw-class codes (breakpoint/illegal instruction), throwsplit
-//     contexts, and runtime.abort crash via ntWinthrow. Everything
-//     else returns EXCEPTION_CONTINUE_SEARCH; a last vectored CONTINUE
-//     handler prints the crash report for exceptions nothing handled.
-//
-//   - Signal deaths exit with 0xC0DE0000|signo (ExitProcess), the
-//     fork-private encoding chunk B's wait4 already decodes into a
-//     Linux "killed by signal" status. runtime.raise/raiseproc on NT
-//     jump straight to that exit (they are only called on paths that
-//     expect the process to die: dieFromSignal, raisebadsignal).
-//
-//   - Self-directed signals (kill/tkill/tgkill with the caller as
-//     target): the runtime records sigaction state itself (ntSigActs -
-//     there is no kernel-side sigaction on NT) and ntKillSelf performs
-//     the kernel's decision tree: ignored/default-ignored signals are
-//     dropped, uncatchable/default-terminate signals exit encoded, and
-//     signals with the Go handler installed are DELIVERED by running
-//     the real trampoline (sigtramp -> sigtrampgo -> sighandler) on
-//     the calling thread's gsignal stack with a synthesized
-//     linux-format siginfo/ucontext - os/signal's Notify pipeline
-//     observes them exactly as on Linux, and unwatched fatal signals
-//     die through the ordinary dieFromSignal path.
-//
-//   - Signals aimed at a spawned child terminate it with the encoded
-//     status via the stored process handle (TerminateProcess); the
-//     parent's wait4 then reports "killed by signal N". kill(-pgid)
-//     reaches a child spawned as its own group leader
-//     (CREATE_NEW_PROCESS_GROUP) via GenerateConsoleCtrlEvent for
-//     SIGINT/SIGQUIT, degrading to leader TerminateProcess for other
-//     signals (wave 3 item 4). Unknown pids/pgids are ESRCH.
+// NT has no kernel-side sigaction, so the runtime records the
+// disposition itself in ntSigActs and ntKillSelf runs the kernel's
+// decision tree over it. Signals aimed at a spawned child go through
+// os_cosmo_nt_kill.go instead.
 
 package runtime
 
 import (
-	"internal/abi"
 	"internal/goarch"
+	"internal/abi"
 	"internal/runtime/sys"
 	"unsafe"
 )
@@ -68,40 +32,6 @@ type ntExceptionRecord struct {
 	exceptionAddress     uintptr
 	numberParameters     uint32
 	exceptionInformation [15]uintptr // 8-aligned; implicit 4-byte pad before
-}
-
-// ntM128A is the win64 M128A (16 bytes).
-type ntM128A struct {
-	low  uint64
-	high uint64
-}
-
-// ntContext is the FULL CONTEXT (x64) layout, 1232 (0x4D0) bytes.
-// Offsets match upstream
-// internal/runtime/syscall/windows/defs_windows_amd64.go (Rip = 0xF8).
-// The VEH handlers only touch fields up to rip on OS-allocated
-// records, but ntPreemptM (chunk D2) allocates its own buffer for
-// GetThreadContext, which requires the complete struct - and a
-// 16-byte-aligned base, which Go's 8-byte struct alignment does not
-// give; ntPreemptM over-allocates and rounds, upstream's idiom.
-type ntContext struct {
-	p1home, p2home, p3home, p4home, p5home, p6home uint64
-	contextFlags                                   uint32
-	mxcsr                                          uint32
-	segCs, segDs, segEs, segFs, segGs, segSs       uint16
-	eflags                                         uint32
-	dr0, dr1, dr2, dr3, dr6, dr7                   uint64
-	rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi         uint64
-	r8, r9, r10, r11, r12, r13, r14, r15           uint64
-	rip                                            uint64
-	fltsave                                        [512]byte // XSAVE_FORMAT (legacy FP area)
-	vectorRegister                                 [26]ntM128A
-	vectorControl                                  uint64
-	debugControl                                   uint64
-	lastBranchToRip                                uint64
-	lastBranchFromRip                              uint64
-	lastExceptionToRip                             uint64
-	lastExceptionFromRip                           uint64
 }
 
 // ntExceptionPointers is EXCEPTION_POINTERS.
@@ -131,36 +61,45 @@ const (
 	_NT_SEM_NOOPENFILEERRORBOX    = 0x8000
 	_NT_WER_FAULT_REPORTING_NO_UI = 0x0020
 
-	// Fork-private signal-death exit status base (DEBUGGING.md chunk
-	// B wait-status protocol): a process that dies of signal N exits
-	// with 0xC0DE0000|N, which wait4 decodes into the Linux "killed
-	// by signal N" status. Must match ntExitEncoded's asm.
+	// Fork-private signal-death exit status base: a process that dies
+	// of signal N exits with 0xC0DE0000|N, which wait4 decodes into
+	// the Linux "killed by signal N" status. Must match
+	// ntExitEncoded's asm. raise and raiseproc jump straight to that
+	// exit, because their only callers - dieFromSignal, raisebadsignal
+	// - already expect the process to die.
 	_NT_SIGDEATH_BASE = 0xC0DE0000
 )
 
-// TEB stack-bounds policy: a deliberately WIDE NT_TIB window covering
-// the whole user address space, installed on the boot thread
-// (ntInitSignals) and on every CreateThread thread after its stack
-// pivot (tstart_cosmo_nt). Rationale + wine evidence in DEBUGGING.md
-// "Wave 2 chunk D1": Go code runs on heap-allocated stacks that move
-// (user goroutines) or are Go-allocated (g0s), so no per-thread real
-// range can cover every RSP the exception dispatch and
-// continue/unwind validity checks will see; a wide window makes every
-// live stack "within system stack limits", which removes the need for
-// upstream's sigresume workaround (signal_windows.go:174-192) - the
-// modified CONTEXT can resume straight onto the faulting goroutine
-// stack. Go stacks have no guard pages, so the kernel's guard-based
-// stack growth machinery never consults these fields; the only
-// remaining consumers are exception dispatch/continue and foreign SEH
-// frame validation, all of which the wide window satisfies.
+// The NT_TIB stack window is deliberately WIDE, covering the whole
+// user address space. It is installed on the boot thread and on every
+// CreateThread thread after its stack pivot. Go runs on stacks that
+// move or are Go-allocated, so no real per-thread range can cover
+// every RSP that exception dispatch and the continue and unwind
+// validity checks will see. A wide window makes every live stack
+// "within system stack limits", which is what removes the need for
+// upstream's sigresume workaround: the modified CONTEXT can resume
+// straight onto the faulting goroutine stack. Go stacks have no guard
+// pages, so the kernel's stack-growth machinery never reads these
+// fields, and the remaining consumers are satisfied.
 const (
 	_NT_TEB_WIDE_BASE  = 0x00007FFFFFFF0000 // highest user-mode address (exclusive-ish)
 	_NT_TEB_WIDE_LIMIT = 0x10000            // above the NULL-guard region
 )
 
-// Implemented in sys_cosmo_nt_amd64.s.
+// Implemented in sys_cosmo_nt_<goarch>.s.
 func ntSetTEBStackBounds(hi, lo uintptr)
 func ntGetTEBStackBounds() (hi, lo uintptr)
+
+// ntExceptionTramp is the first-position vectored exception handler,
+// ported from upstream signal_windows.go. A fault with a Go-text PC
+// and a known exception code becomes a LINUX signal number. A
+// panic-class signal records sig, sigcode0, sigcode1 and sigpc on the
+// g and rewrites the saved CONTEXT so the faulting goroutine calls
+// sigpanic0 on resume, which is what makes recover() work as on Linux.
+// A throw-class code, a throwsplit context and runtime.abort crash via
+// ntWinthrow. Anything else returns EXCEPTION_CONTINUE_SEARCH, and a
+// last vectored CONTINUE handler prints the report for what nothing
+// handled.
 func ntExceptionTramp()
 func ntFirstVCHTramp()
 func ntLastVCHTramp()
@@ -174,7 +113,7 @@ func ntExitEncoded(sig uint32)
 func ntSignalTramp(fn, sig uintptr, info, ctx unsafe.Pointer, sp uintptr)
 
 // Callback kinds passed by the registration thunks (asm) to
-// ntSigtrampGo. Values are shared with sys_cosmo_nt_amd64.s via
+// ntSigtrampGo. Values are shared with sys_cosmo_nt_<goarch>.s via
 // go_asm.h.
 const (
 	ntCallbackVEH = iota
@@ -185,10 +124,14 @@ const (
 // ntInitSignals registers the exception machinery at NT boot: error
 // dialogs off (CI must never hang on a WER popup), the vectored
 // exception handler in first position, the first/last vectored
-// continue handlers (upstream initExceptionHandler's amd64 shape), and
+// continue handlers (upstream initExceptionHandler's shape), and
 // the wide TEB stack window for the boot thread (created threads get
 // theirs in tstart_cosmo_nt).
 func ntInitSignals() {
+	// Publish g where the exception trampolines find it. A no-op on
+	// amd64, where rt0's TLS setup already wrote the same TEB slot.
+	ntSetTEBg()
+
 	em := ntcall(ntGetErrorModeFn, 0, 0, 0, 0, 0, 0)
 	ntcall(ntSetErrorModeFn, em|_NT_SEM_FAILCRITICALERRORS|_NT_SEM_NOGPFAULTERRORBOX|_NT_SEM_NOOPENFILEERRORBOX, 0, 0, 0, 0, 0)
 	if ntWerGetFlagsFn != 0 && ntWerSetFlagsFn != 0 {
@@ -248,7 +191,7 @@ func ntExcToLinuxSig(code uint32) (sig uint32, code0 uintptr) {
 //
 //go:nosplit
 func ntIsGoException(info *ntExceptionRecord, r *ntContext) bool {
-	pc := uintptr(r.rip)
+	pc := r.getPC()
 	if pc < firstmoduledata.text || firstmoduledata.etext < pc {
 		return false
 	}
@@ -257,12 +200,17 @@ func ntIsGoException(info *ntExceptionRecord, r *ntContext) bool {
 }
 
 // ntIsAbort reports whether the context describes a fault raised by
-// runtime.abort (INT3). On NT the reported RIP is one byte AFTER the
-// INT3, unlike unix hosts (upstream isAbort, signal_windows.go:58-66).
+// runtime.abort. On amd64 NT reports the RIP one byte AFTER the INT3,
+// unlike unix hosts; on arm64 the reported PC is the faulting
+// instruction itself (upstream isAbort, signal_windows.go).
 //
 //go:nosplit
 func ntIsAbort(r *ntContext) bool {
-	return isAbortPC(uintptr(r.rip) - 1)
+	pc := r.getPC()
+	if goarch.IsAmd64 == 1 {
+		pc--
+	}
+	return isAbortPC(pc)
 }
 
 // ntSigtrampGo is called (via the asm thunks) from the NT exception
@@ -271,6 +219,9 @@ func ntIsAbort(r *ntContext) bool {
 //
 //go:nosplit
 func ntSigtrampGo(ep *ntExceptionPointers, kind int32) int32 {
+	// g was established by the asm thunk: on amd64 from TLS (gs:0x28),
+	// on arm64 from the faulting CONTEXT's x28 when the PC is in Go
+	// text and from the TEB slot (this thread's g0) otherwise.
 	gp := getg()
 	if gp == nil {
 		// Exception on a thread that never ran Go code (none exist
@@ -339,20 +290,19 @@ func ntExceptionHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 	if info.exceptionCode == _NT_EXCEPTION_ACCESS_VIOLATION || info.exceptionCode == _NT_EXCEPTION_IN_PAGE_ERROR {
 		gp.sigcode1 = info.exceptionInformation[1]
 	}
-	gp.sigpc = uintptr(r.rip)
+	gp.sigpc = r.getPC()
 
 	// Make it look like the faulting code called sigpanic0. Only push
-	// the return frame if RIP != 0 (a call through a nil func should
-	// trace as a call to sigpanic from the CALLER) and RIP is not the
-	// asyncPreempt entry (issue #35773: a preemption injected between
-	// the fault and the handler must not be double-framed) - upstream
-	// signal_windows.go:227-245.
-	if r.rip != 0 && uintptr(r.rip) != abi.FuncPCABI0(asyncPreempt) {
-		sp := uintptr(r.rsp) - goarch.PtrSize
-		r.rsp = uint64(sp)
-		*(*uintptr)(unsafe.Pointer(sp)) = gp.sigpc
+	// the return frame if the PC is nonzero (a call through a nil func
+	// should trace as a call to sigpanic from the CALLER) and is not
+	// the asyncPreempt entry (issue #35773: a preemption injected
+	// between the fault and the handler must not be double-framed) -
+	// upstream signal_windows.go:227-245.
+	if pc := r.getPC(); pc != 0 && pc != abi.FuncPCABI0(asyncPreempt) {
+		r.pushCall(abi.FuncPCABI0(sigpanic0), gp.sigpc)
+	} else {
+		r.setPC(abi.FuncPCABI0(sigpanic0))
 	}
-	r.rip = uint64(abi.FuncPCABI0(sigpanic0))
 	return _NT_EXCEPTION_CONTINUE_EXECUTION
 }
 
@@ -372,11 +322,19 @@ func ntFirstContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 
 }
 
 // ntLastContinueHandler is reached when nothing handled the exception
-// (upstream lastcontinuehandler; the DLL/archive and arm64 special
-// cases do not apply to an APE). Print the crash and die.
+// (upstream lastcontinuehandler; the DLL/archive case does not apply to
+// an APE). Print the crash and die.
 //
 //go:nosplit
 func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
+	// arm64 MSVC-built DLLs (the APE loads kernel32, ws2_32, iphlpapi,
+	// bcryptprimitives) probe CPU features at load time by trapping
+	// illegal instructions under SEH. VEH runs before SEH, so an
+	// illegal instruction from non-Go code is that probe: pass it on.
+	if goarch.IsArm64 == 1 && info.exceptionCode == _NT_EXCEPTION_ILLEGAL_INSTRUCTION &&
+		(r.getPC() < firstmoduledata.text || firstmoduledata.etext < r.getPC()) {
+		return _NT_EXCEPTION_CONTINUE_SEARCH
+	}
 	ntWinthrow(info, r, gp)
 	return 0 // not reached
 }
@@ -393,7 +351,10 @@ func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 	g0 := getg()
 
-	if panicking.Load() != 0 { // traceback already printed
+	// One line past the print machinery first: a fault inside the
+	// report below would otherwise leave nothing.
+	ntWinthrowLine(info, r, gp, panicking.Load() != 0)
+	if panicking.Load() != 0 {
 		exit(2)
 	}
 	panicking.Store(1)
@@ -409,15 +370,15 @@ func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 	if sig != 0 && sig < uint32(len(sigtable)) {
 		print(sigtable[sig].name, "\n")
 	}
-	print("Exception ", hex(uintptr(info.exceptionCode)), " ", hex(info.exceptionInformation[0]), " ", hex(info.exceptionInformation[1]), " ", hex(uintptr(r.rip)), "\n")
-	print("PC=", hex(uintptr(r.rip)), "\n\n")
+	print("Exception ", hex(uintptr(info.exceptionCode)), " ", hex(info.exceptionInformation[0]), " ", hex(info.exceptionInformation[1]), " ", hex(r.getPC()), "\n")
+	print("PC=", hex(r.getPC()), "\n\n")
 
 	g0.m.throwing = throwTypeRuntime
 	g0.m.caughtsig.set(gp)
 
 	level, _, _ := gotraceback()
 	if level > 0 {
-		tracebacktrap(uintptr(r.rip), uintptr(r.rsp), 0, gp)
+		tracebacktrap(r.getPC(), r.getSP(), r.getLR(), gp)
 		tracebackothers(gp)
 		ntDumpregs(r)
 	}
@@ -429,34 +390,6 @@ func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 		sig = _SIGKILL
 	}
 	ntExitEncoded(sig)
-}
-
-// ntDumpregs prints the CONTEXT registers (upstream dumpregs,
-// signal_windows_amd64.go).
-//
-//go:nosplit
-func ntDumpregs(r *ntContext) {
-	print("rax     ", hex(r.rax), "\n")
-	print("rbx     ", hex(r.rbx), "\n")
-	print("rcx     ", hex(r.rcx), "\n")
-	print("rdx     ", hex(r.rdx), "\n")
-	print("rdi     ", hex(r.rdi), "\n")
-	print("rsi     ", hex(r.rsi), "\n")
-	print("rbp     ", hex(r.rbp), "\n")
-	print("rsp     ", hex(r.rsp), "\n")
-	print("r8      ", hex(r.r8), "\n")
-	print("r9      ", hex(r.r9), "\n")
-	print("r10     ", hex(r.r10), "\n")
-	print("r11     ", hex(r.r11), "\n")
-	print("r12     ", hex(r.r12), "\n")
-	print("r13     ", hex(r.r13), "\n")
-	print("r14     ", hex(r.r14), "\n")
-	print("r15     ", hex(r.r15), "\n")
-	print("rip     ", hex(r.rip), "\n")
-	print("rflags  ", hex(uint64(r.eflags)), "\n")
-	print("cs      ", hex(uint64(r.segCs)), "\n")
-	print("fs      ", hex(uint64(r.segFs)), "\n")
-	print("gs      ", hex(uint64(r.segGs)), "\n")
 }
 
 // ---- sigaction recording ----
@@ -488,6 +421,91 @@ func ntSigaction(sig uint32, new, old *sigactiont) int32 {
 	return 0
 }
 
+// ---- signal mask ----
+
+// ntSigMask is the blocked-signal set, and ntSigPending the signals a
+// send found blocked. NT has no kernel signal mask, so a mask this
+// file does not keep is a mask that blocks nothing, and a critical
+// section that had masked every signal could still be reentered.
+//
+// Recording it here is the whole implementation, for the same reason
+// ntSigActs is: the only sender that reaches a thread on this host is
+// the process itself (ntKillSelf), so a set this file consults is a set
+// that decides delivery. Unsynchronized like ntSigActs, and for the same
+// reason - a thread's own mask is written only by that thread.
+var (
+	ntSigMask    sigset
+	ntSigPending sigset
+)
+
+//go:nosplit
+func ntSigsetHas(mask *sigset, sig uint32) bool {
+	if sig == 0 || sig >= _NSIG {
+		return false
+	}
+	return mask[(sig-1)/32]&(1<<((sig-1)&31)) != 0
+}
+
+// ntSigprocmask is the NT leg of sigprocmask (os_cosmo.go). It applies
+// the change and then delivers whatever the change unblocked, which is
+// what the kernel does at the end of its own sigprocmask.
+//
+//go:nosplit
+func ntSigprocmask(how int32, new, old *sigset) {
+	if old != nil {
+		*old = ntSigMask
+	}
+	if new == nil {
+		return
+	}
+	switch how {
+	case _SIG_BLOCK:
+		ntSigMask[0] |= new[0]
+		ntSigMask[1] |= new[1]
+	case _SIG_UNBLOCK:
+		ntSigMask[0] &^= new[0]
+		ntSigMask[1] &^= new[1]
+	case _SIG_SETMASK:
+		ntSigMask = *new
+	default:
+		return
+	}
+	// SIGKILL and SIGSTOP cannot be blocked on Linux either.
+	sigdelset(&ntSigMask, _SIGKILL)
+	sigdelset(&ntSigMask, _SIGSTOP)
+	ntFlushPendingSignals()
+}
+
+// ntFlushPendingSignals delivers signals that arrived while they were
+// blocked and are not blocked any more.
+//
+// Only from a user goroutine: delivery runs a handler on the gsignal
+// stack, and the boot and signal-handling paths that call sigprocmask on
+// g0 must not re-enter it. A signal stays pending until the next
+// unblock from ordinary Go code, which is where every caller that can
+// receive one already is.
+//
+//go:nosplit
+func ntFlushPendingSignals() {
+	gp := getg()
+	if gp == nil || gp.m == nil || gp == gp.m.g0 || gp == gp.m.gsignal {
+		return
+	}
+	for sig := uint32(1); sig < _NSIG; sig++ {
+		if !ntSigsetHas(&ntSigPending, sig) || ntSigsetHas(&ntSigMask, sig) {
+			continue
+		}
+		sigdelset(&ntSigPending, int(sig))
+		// The decision tree runs again rather than the handler being
+		// called directly: SIG_IGN may have been installed while the
+		// signal waited, and a default-terminate signal must still
+		// terminate. ntKillSelf may grow the stack, which is why the
+		// guard above has to come first - it is only ever reached from a
+		// user goroutine.
+		ntKillSelf(sig)
+	}
+}
+
 // ---- kill / tkill / tgkill emulation ----
 
 // ntSigDefaultIgnored reports whether SIG_DFL for sig discards it
@@ -504,138 +522,18 @@ func ntSigDefaultIgnored(sig uint32) bool {
 	return false
 }
 
-// GenerateConsoleCtrlEvent ctrl-type ids (winbase.h).
-const (
-	_NT_CTRL_C_EVENT     = 0
-	_NT_CTRL_BREAK_EVENT = 1
-)
-
-// ntEmuKill implements kill(2) (dispatcher case, os_cosmo_nt_sys.go).
-// pid == self delivers on the calling thread; a pid from the chunk-B
-// spawn table terminates that child with the encoded status;
-// pid < -1 addresses a process GROUP we created (wave 3 item 4,
-// ntEmuKillGroup below). Anything else is ESRCH: unrelated processes
-// are not addressable (we only hold handles for our own children),
-// and pid == 0 (the caller's own group) and pid == -1 (broadcast)
-// have no NT projection - this process is not a group we created, so
-// both keep the pre-wave-3 ESRCH.
-func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
-	if sig < 0 || sig >= _NSIG {
-		return ntFail3(ntEINVAL)
-	}
-	self := int32(uint32(ntcall(ntGetCurrentProcessIdFn, 0, 0, 0, 0, 0, 0)))
-	if pid == self {
-		if eno := ntKillSelf(uint32(sig)); eno != 0 {
-			return ntFail3(eno)
-		}
-		return 0, 0, 0
-	}
-	if pid < -1 {
-		return ntEmuKillGroup(uint32(-pid), sig)
-	}
-	if pid <= 0 {
-		return ntFail3(ntESRCH)
-	}
-	h, ok := ntProcFind(uint32(pid))
-	if !ok {
-		return ntFail3(ntESRCH)
-	}
-	if sig == 0 {
-		return 0, 0, 0 // existence probe
-	}
-	// Terminate the child with the fork's encoded signal status;
-	// chunk B's wait4 decodes it into "killed by signal sig". Best
-	// effort: TerminateProcess on an already-exited child fails, and
-	// Linux kill on a zombie succeeds, so the result is not
-	// surfaced. The handle stays in the table - wait4 still reaps.
-	ntcall(ntTerminateProcessFn, h, _NT_SIGDEATH_BASE|uintptr(uint32(sig)), 0, 0, 0, 0)
-	return 0, 0, 0
-}
-
-// ntEmuKillGroup implements kill(-pgid, sig): signal a whole process
-// group. Only groups WE created are addressable - pgid must be the
-// pid of a spawned child launched with CREATE_NEW_PROCESS_GROUP
-// (SysProcAttr{Setpgid: true} through ntForkExec/ntSpawn); everything
-// else is ESRCH, mirroring the own-children-only rule of the
-// positive-pid arm.
-//
-//   - SIGQUIT -> GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pgid):
-//     THE reliably deliverable group-targeted console event (upstream
-//     Go's own TestCtrlBreak uses exactly this pairing). In a cosmo
-//     child the injected handler maps CTRL_BREAK back to SIGQUIT,
-//     completing the Linux-shaped round trip.
-//   - SIGINT -> GenerateConsoleCtrlEvent(CTRL_C_EVENT, pgid),
-//     best-effort: NT creates CREATE_NEW_PROCESS_GROUP children with
-//     Ctrl-C DISABLED until they opt back in (SetConsoleCtrlHandler
-//     (NULL, FALSE)), so delivery to a child that never re-enabled it
-//     silently no-ops. Upstream windows Go has the identical hole;
-//     callers wanting a reliable group chord send SIGQUIT.
-//   - sig 0 -> existence probe.
-//   - any other sig -> TerminateProcess(leader, encoded status): no
-//     NT API delivers arbitrary signals group-wide, so group-kill
-//     degrades to leader-kill - the leader is the group's one member
-//     we know of (documented in DEBUGGING.md wave 3 item 4). Same
-//     best-effort result discipline as the positive arm (a dead
-//     leader is the Linux kill-a-zombie success).
-//
-// A GenerateConsoleCtrlEvent failure (e.g. no console attached)
-// surfaces as the mapped errno from the trampoline-captured last
-// error.
-func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
-	h, ok := ntProcFindGroup(pgid)
-	if !ok {
-		return ntFail3(ntESRCH)
-	}
-	switch sig {
-	case 0:
-		return 0, 0, 0 // existence probe
-	case _SIGINT, _SIGQUIT:
-		ev := uintptr(_NT_CTRL_BREAK_EVENT)
-		if sig == _SIGINT {
-			ev = _NT_CTRL_C_EVENT
-		}
-		if r, werr := ntcallE(ntGenerateConsoleCtrlEventFn, ev, uintptr(pgid), 0, 0, 0, 0, 0); r == 0 {
-			return ntFail3(ntErrno(werr))
-		}
-		return 0, 0, 0
-	}
-	ntcall(ntTerminateProcessFn, h, _NT_SIGDEATH_BASE|uintptr(uint32(sig)), 0, 0, 0, 0)
-	return 0, 0, 0
-}
-
-// ntEmuTkill implements tkill(2). Only the calling thread is
-// addressable in chunk D1: cross-thread delivery needs the
-// SuspendThread machinery (chunk D2's preemptM), and every
-// process-level observable (os/signal, signal deaths) is
-// thread-agnostic anyway. The runtime's own signalM stays gated off
-// on NT, so nothing in-tree sends cross-thread.
-func ntEmuTkill(tid, sig int32) (r1, r2, errno uintptr) {
-	if sig < 0 || sig >= _NSIG {
-		return ntFail3(ntEINVAL)
-	}
-	cur := int32(uint32(ntcall(ntGetCurrentThreadIdFn, 0, 0, 0, 0, 0, 0)))
-	if tid != cur {
-		return ntFail3(ntESRCH)
-	}
-	if eno := ntKillSelf(uint32(sig)); eno != 0 {
-		return ntFail3(eno)
-	}
-	return 0, 0, 0
-}
-
-// ntEmuTgkill implements tgkill(2): tgid must be this process.
-func ntEmuTgkill(tgid, tid, sig int32) (r1, r2, errno uintptr) {
-	self := int32(uint32(ntcall(ntGetCurrentProcessIdFn, 0, 0, 0, 0, 0, 0)))
-	if tgid != self {
-		return ntFail3(ntESRCH)
-	}
-	return ntEmuTkill(tid, sig)
-}
-
 // ntKillSelf performs the kernel's delivery decision for a
 // self-directed signal, on the calling thread. Returns a Linux errno
 // (0 on success). Runs as ordinary Go in the syscall-emulation
 // context (user goroutine).
+//
+// An ignored or default-ignored signal drops. An uncatchable or
+// default-terminate one exits encoded. One carrying the Go handler is
+// DELIVERED by running the real trampoline - sigtramp, sigtrampgo,
+// sighandler - on this thread's gsignal stack, over a synthesized
+// linux-format siginfo and ucontext. So os/signal's Notify pipeline
+// observes it exactly as on Linux, and an unwatched fatal signal dies
+// through the ordinary dieFromSignal path.
 func ntKillSelf(sig uint32) uintptr {
 	if sig == 0 {
 		return 0
@@ -649,6 +547,12 @@ func ntKillSelf(sig uint32) uintptr {
 	}
 	handler := ntSigActs[sig].sa_handler
 	if handler == _SIG_IGN {
+		return 0
+	}
+	// A blocked signal is neither delivered nor discarded: it waits.
+	// SIGKILL is already gone above, and nothing else outranks the mask.
+	if ntSigsetHas(&ntSigMask, sig) {
+		sigaddset(&ntSigPending, int(sig))
 		return 0
 	}
 	if handler == _SIG_DFL {
@@ -675,15 +579,13 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	info.si_signo = int32(sig)
 	info.si_code = _SI_TKILL // user-space send: sigFromUser() == true
 
-	// Synthesized context. Only rip/rsp are consulted on the paths a
-	// user-sent signal can take (the fatal-signal report, and
+	// Synthesized context. Only the PC and SP are consulted on the
+	// paths a user-sent signal can take (the fatal-signal report, and
 	// doSigPreempt's safe-point probe for SIGURG - which always
 	// refuses a "runtime." PC, so no context rewriting can happen on
 	// this dead context; it is discarded when the handler returns).
 	var uc ucontext
-	regs := (*sigcontext)(unsafe.Pointer(&uc.uc_mcontext))
-	regs.rip = uint64(sys.GetCallerPC())
-	regs.rsp = uint64(sys.GetCallerSP())
+	ntSetSyntheticPCSP(&uc, sys.GetCallerPC(), sys.GetCallerSP())
 
 	// Deliver on the gsignal stack, where the Linux kernel would
 	// deliver (minitSignalStack installs gsignal as the alt stack on
@@ -691,4 +593,54 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	// ordinary path. The stack is otherwise unused on NT and the
 	// delivery is synchronous, so borrowing it is safe.
 	ntSignalTramp(handler, uintptr(sig), unsafe.Pointer(&info), unsafe.Pointer(&uc), gp.m.gsignal.stack.hi)
+}
+
+// ntWinthrowLine writes one line about the exception with ntwrite1
+// alone: code, PC, the access kind and address, SP, the g the thread
+// carries, and whether a panic was already under way.
+//
+//go:nosplit
+func ntWinthrowLine(info *ntExceptionRecord, r *ntContext, gp *g, nested bool) {
+	var line [200]byte
+	n := copy(line[:], "runtime: NT exception 0x")
+	n = ntHexInto(line[:], n, uintptr(info.exceptionCode))
+	n += copy(line[n:], " pc=0x")
+	n = ntHexInto(line[:], n, r.getPC())
+	n += copy(line[n:], " kind=")
+	n = ntHexInto(line[:], n, info.exceptionInformation[0])
+	n += copy(line[n:], " addr=0x")
+	n = ntHexInto(line[:], n, info.exceptionInformation[1])
+	n += copy(line[n:], " sp=0x")
+	n = ntHexInto(line[:], n, r.getSP())
+	n += copy(line[n:], " g=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(gp)))
+	n += copy(line[n:], " tebg=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(getg())))
+	if nested {
+		n += copy(line[n:], " while panicking")
+	}
+	line[n] = 0x0a
+	n++
+	ntwrite1(2, unsafe.Pointer(&line[0]), int32(n))
+}
+
+// ntHexInto writes v in hex at line[n:] and returns the new length.
+//
+//go:nosplit
+func ntHexInto(line []byte, n int, v uintptr) int {
+	started := false
+	for shift := 60; shift >= 0; shift -= 4 {
+		d := byte(v>>uint(shift)) & 0xf
+		if d == 0 && !started && shift != 0 {
+			continue
+		}
+		started = true
+		if d < 10 {
+			line[n] = '0' + d
+		} else {
+			line[n] = 'a' + d - 10
+		}
+		n++
+	}
+	return n
 }

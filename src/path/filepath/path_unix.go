@@ -18,12 +18,7 @@ func HasPrefix(p, prefix string) bool {
 	return strings.HasPrefix(p, prefix)
 }
 
-func splitList(path string) []string {
-	if path == "" {
-		return []string{}
-	}
-	return strings.Split(path, string(ListSeparator))
-}
+// splitList lives per platform: cosmo answers it from the host.
 
 func abs(path string) (string, error) {
 	return unixAbs(path)

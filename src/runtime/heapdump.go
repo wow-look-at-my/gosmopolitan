@@ -428,12 +428,18 @@ func dumpgs() {
 			// Dump goroutine if it's _Grunning only during a syscall. This is safe
 			// because the goroutine will just park without mutating its stack, since
 			// the world is stopped.
+			//
+			// The break is not upstream's. Without it the fallthrough throws on
+			// the very state the lines above declare safe, so the dump is
+			// followed by a fatal error. exitsyscall leaves this window open:
+			// it sets _Grunning and clears syscallsp in that order.
 			if gp.syscallsp != 0 {
 				dumpgoroutine(gp)
+				break
 			}
 			fallthrough
 		default:
-			print("runtime: unexpected G.status ", hex(status), "\n")
+			print("runtime: unexpected G.status ", hex(status), " syscallsp ", hex(gp.syscallsp), "\n")
 			throw("dumpgs in STW - bad status")
 		case _Gdead, _Gdeadextra:
 			// ok

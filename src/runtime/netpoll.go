@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
@@ -237,7 +238,7 @@ func netpollGenericInit() {
 }
 
 func netpollinited() bool {
-	if GOOS == "js" && wasmThreadsEnabled {
+	if goos.IsJs == 1 && wasmThreadsEnabled {
 		// GOWASM=threads: there is nothing to poll on js (see
 		// netpoll_fake.go), and the fake netpoll's instant return would
 		// make findRunnable's poller path spin: an idle M would loop
@@ -367,7 +368,7 @@ func poll_runtime_pollWait(pd *pollDesc, mode int) int {
 	// As for now only Solaris, illumos, AIX and wasip1 use level-triggered
 	// IO unconditionally; cosmo does when running on a macOS host
 	// (netpollLevelTriggered, set by its runtime poller selection).
-	if GOOS == "solaris" || GOOS == "illumos" || GOOS == "aix" || GOOS == "wasip1" || netpollLevelTriggered {
+	if goos.IsSolaris == 1 || goos.IsIllumos == 1 || goos.IsAix == 1 || goos.IsWasip1 == 1 || netpollLevelTriggered {
 		netpollarm(pd, mode)
 	}
 	for !netpollblock(pd, int32(mode), false) {

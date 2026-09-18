@@ -55,6 +55,8 @@ func TestGcDeepNesting(t *testing.T) {
 }
 
 func TestGcMapIndirection(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer debug.SetGCPercent(debug.SetGCPercent(1))
 	runtime.GC()
 	type T struct {
@@ -145,8 +147,11 @@ func TestGcLastTime(t *testing.T) {
 var hugeSink any
 
 func TestHugeGCInfo(t *testing.T) {
+	t.Serial(
 	// The test ensures that compiler can chew these huge types even on weakest machines.
 	// The types are not allocated at runtime.
+	)
+
 	if hugeSink != nil {
 		// 400MB on 32 bots, 4TB on 64-bits.
 		const n = (400 << 20) + (unsafe.Sizeof(uintptr(0))-4)<<40
@@ -360,6 +365,8 @@ func BenchmarkAllocation(b *testing.B) {
 }
 
 func TestPrintGC(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("Skipping in short mode")
 	}
@@ -578,6 +585,8 @@ func BenchmarkReadMemStatsLatency(b *testing.B) {
 }
 
 func TestUserForcedGC(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Test that runtime.GC() triggers a GC even if GOGC=off.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 
@@ -776,7 +785,9 @@ func TestMemoryLimit(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("want at least 4 CPUs for this test")
 	}
-	got := runTestProg(t, "testprog", "GCMemoryLimit")
+	// The subprogram asserts that it starts with no memory limit. An unset
+	// GOMEMLIMIT takes the cgroup's limit, so ask for no limit explicitly.
+	got := runTestProg(t, "testprog", "GCMemoryLimit", "GOMEMLIMIT=off")
 	want := "OK\n"
 	if got != want {
 		t.Fatalf("expected %q, but got %q", want, got)
@@ -790,7 +801,7 @@ func TestMemoryLimitNoGCPercent(t *testing.T) {
 	if runtime.NumCPU() < 4 {
 		t.Skip("want at least 4 CPUs for this test")
 	}
-	got := runTestProg(t, "testprog", "GCMemoryLimitNoGCPercent")
+	got := runTestProg(t, "testprog", "GCMemoryLimitNoGCPercent", "GOMEMLIMIT=off")
 	want := "OK\n"
 	if got != want {
 		t.Fatalf("expected %q, but got %q", want, got)
@@ -802,6 +813,8 @@ func TestMyGenericFunc(t *testing.T) {
 }
 
 func TestWeakToStrongMarkTermination(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	testenv.MustHaveParallelism(t)
 
 	type T struct {

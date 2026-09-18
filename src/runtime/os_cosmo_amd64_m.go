@@ -37,18 +37,14 @@ type mOS struct {
 	threadLock mutex
 
 	// preemptExtLock synchronizes ntPreemptM with entry into and exit
-	// from external (win64) code on this thread. This protects
-	// against races between ntPreemptM calling SuspendThread and
-	// external code on this thread calling ExitProcess. If these
-	// happen concurrently, it's possible for ExitProcess to acquire
-	// the loader lock and then get suspended: the process deadlocks.
-	//
-	// 0 means this M is not being preempted or in external code.
-	// Entering external code CASes this from 0 to 1. If this fails,
-	// a preemption is in progress, so the thread must wait for the
-	// preemption. ntPreemptM also CASes this from 0 to 1. If this
-	// fails, the preemption fails (as it would if the PC weren't in
-	// Go code). Upstream os_windows.go's field, verbatim semantics.
+	// from external (win64) code on this thread, so ExitProcess cannot
+	// take the loader lock and then be suspended, which deadlocks the
+	// process. 0 means this M is neither being preempted nor in
+	// external code. Entering external code CASes 0 to 1, and a failed
+	// CAS means a preemption is in progress, so the thread waits.
+	// ntPreemptM CASes the same way, and its failure fails the
+	// preemption, as it would for a PC outside Go code. Upstream
+	// os_windows.go's field, with verbatim semantics.
 	preemptExtLock uint32
 
 	// ntLastError is this thread's GetLastError value, captured by

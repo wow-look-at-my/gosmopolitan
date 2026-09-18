@@ -8,7 +8,7 @@
 //	Emit correct line number annotations.
 //	Make gc understand the annotations.
 
-package main
+package cgo
 
 import (
 	"flag"
@@ -256,36 +256,44 @@ var cPrefix string
 
 var fset = token.NewFileSet()
 
-var dynobj = flag.String("dynimport", "", "if non-empty, print dynamic import data for that file")
-var dynout = flag.String("dynout", "", "write -dynimport output to this file")
-var dynpackage = flag.String("dynpackage", "main", "set Go package for -dynimport output")
-var dynlinker = flag.Bool("dynlinker", false, "record dynamic linker information in -dynimport mode")
+// flagSet is cgo's command line, one set of its own so cgo can be linked
+// beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("cgo", flag.ExitOnError)
+
+var dynobj = flagSet.String("dynimport", "", "if non-empty, print dynamic import data for that file")
+var dynout = flagSet.String("dynout", "", "write -dynimport output to this file")
+var dynpackage = flagSet.String("dynpackage", "main", "set Go package for -dynimport output")
+var dynlinker = flagSet.Bool("dynlinker", false, "record dynamic linker information in -dynimport mode")
 
 // This flag is for bootstrapping a new Go implementation,
 // to generate Go types that match the data layout and
 // constant values used in the host's C libraries and system calls.
-var godefs = flag.Bool("godefs", false, "for bootstrap: write Go definitions for C file to standard output")
+var godefs = flagSet.Bool("godefs", false, "for bootstrap: write Go definitions for C file to standard output")
 
-var srcDir = flag.String("srcdir", "", "source directory")
-var objDir = flag.String("objdir", "", "object directory")
-var importPath = flag.String("importpath", "", "import path of package being built (for comments in generated files)")
-var exportHeader = flag.String("exportheader", "", "where to write export header if any exported functions")
+var srcDir = flagSet.String("srcdir", "", "source directory")
+var objDir = flagSet.String("objdir", "", "object directory")
+var importPath = flagSet.String("importpath", "", "import path of package being built (for comments in generated files)")
+var exportHeader = flagSet.String("exportheader", "", "where to write export header if any exported functions")
 
-var ldflags = flag.String("ldflags", "", "flags to pass to C linker")
+var ldflags = flagSet.String("ldflags", "", "flags to pass to C linker")
 
-var gccgo = flag.Bool("gccgo", false, "generate files for use with gccgo")
-var gccgoprefix = flag.String("gccgoprefix", "", "-fgo-prefix option used with gccgo")
-var gccgopkgpath = flag.String("gccgopkgpath", "", "-fgo-pkgpath option used with gccgo")
+var gccgo = flagSet.Bool("gccgo", false, "generate files for use with gccgo")
+var gccgoprefix = flagSet.String("gccgoprefix", "", "-fgo-prefix option used with gccgo")
+var gccgopkgpath = flagSet.String("gccgopkgpath", "", "-fgo-pkgpath option used with gccgo")
 var gccgoMangler func(string) string
-var gccgoDefineCgoIncomplete = flag.Bool("gccgo_define_cgoincomplete", false, "define cgo.Incomplete for older gccgo/GoLLVM")
-var importRuntimeCgo = flag.Bool("import_runtime_cgo", true, "import runtime/cgo in generated code")
-var importSyscall = flag.Bool("import_syscall", true, "import syscall in generated code")
-var trimpath = flag.String("trimpath", "", "applies supplied rewrites or trims prefixes to recorded source file paths")
+var gccgoDefineCgoIncomplete = flagSet.Bool("gccgo_define_cgoincomplete", false, "define cgo.Incomplete for older gccgo/GoLLVM")
+var importRuntimeCgo = flagSet.Bool("import_runtime_cgo", true, "import runtime/cgo in generated code")
+var importSyscall = flagSet.Bool("import_syscall", true, "import syscall in generated code")
+var trimpath = flagSet.String("trimpath", "", "applies supplied rewrites or trims prefixes to recorded source file paths")
 
 var goarch, goos, gomips, gomips64 string
 var gccBaseCmd []string
 
-func main() {
+// Main runs cgo with argv, the command line after the program name, and
+// answers its exit status. A failure exits the process from inside cgo, as it
+// always has.
+func Main(argv []string) int {
+	objabi.Enter("cgo", argv, flagSet)
 	counter.Open()
 	objabi.AddVersionFlag() // -V
 	objabi.Flagparse(usage)
@@ -310,7 +318,7 @@ func main() {
 		// specialized knowledge gcc has about where to look for imported
 		// symbols and which ones to use.
 		dynimport(*dynobj)
-		return
+		return 0
 	}
 
 	if *godefs {
@@ -501,6 +509,7 @@ func main() {
 	if nerrors > 0 {
 		os.Exit(2)
 	}
+	return 0
 }
 
 // newPackage returns a new Package that will invoke

@@ -33,6 +33,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/runtime/atomic"
 	_ "unsafe" // for go:linkname
 )
@@ -80,7 +81,7 @@ var sigNoteUsed bool
 // the host is XNU, so osArchInit decides at startup; constant false
 // everywhere else.
 func usesSigNote() bool {
-	return GOOS == "darwin" || GOOS == "ios" || sigNoteUsed
+	return goos.IsDarwin == 1 || goos.IsIos == 1 || sigNoteUsed
 }
 
 // sigsend delivers a signal from sighandler to the internal signal delivery queue.

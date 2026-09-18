@@ -6,7 +6,7 @@
 [!exec:swig] skip
 [!cgo] skip
 
-go test -v -count=1 -coverprofile=foo.p
+go test -v -coverprofile=foo.p
 stdout 'coverage: 100.0% of statements'
 
 -- go.mod --

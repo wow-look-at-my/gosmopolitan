@@ -396,6 +396,16 @@ func Remove(name string) error {
 }
 
 func tempDir() string {
+	// A cosmo binary takes this file on every host, and runtime.GOOS names the
+	// host it booted on. NT sets TMP or TEMP and never TMPDIR, so the unix
+	// default hands back /tmp, a path that host does not have. Every
+	// t.TempDir on the windows leg then built under it.
+	//
+	// This is the order GetTempPath documents, which is what os.TempDir
+	// answers on a real windows build.
+	if runtime.GOOS == "windows" {
+		return ntTempDir(Getenv)
+	}
 	dir := Getenv("TMPDIR")
 	if dir == "" {
 		if runtime.GOOS == "android" {
@@ -405,6 +415,51 @@ func tempDir() string {
 		}
 	}
 	return dir
+}
+
+// ntTempDir answers TempDir on an NT host, in the order GetTempPath documents,
+// which is what a real windows build returns. getenv is a parameter so a test
+// can run this on the host it is already on.
+func ntTempDir(getenv func(string) string) string {
+	for _, key := range [...]string{"TMP", "TEMP", "USERPROFILE"} {
+		if dir := getenv(key); dir != "" {
+			return ntLinuxPath(dir)
+		}
+	}
+	return "/c/Windows/Temp"
+}
+
+// ntLinuxPath spells an NT path the way the runtime answers one on an NT
+// host: a drive letter becomes the lowercase /c/ form and every backslash
+// a slash, with one trailing slash trimmed except at the drive root. That
+// is the spelling Getwd and Executable use, so a path built under the
+// temp directory compares equal to one read back from the working
+// directory, and filepath, which is unix-shaped in a cosmo binary, sees
+// an absolute path.
+func ntLinuxPath(p string) string {
+	buf := make([]byte, 0, len(p)+2)
+	if len(p) >= 2 && p[1] == ':' && ntIsDriveLetter(p[0]) {
+		buf = append(buf, '/', p[0]|0x20)
+		p = p[2:]
+		if p == "" || p == `\` || p == "/" {
+			return string(buf)
+		}
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c == '\\' {
+			c = '/'
+		}
+		buf = append(buf, c)
+	}
+	if n := len(buf); n > 1 && buf[n-1] == '/' {
+		buf = buf[:n-1]
+	}
+	return string(buf)
+}
+
+func ntIsDriveLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // Link creates newname as a hard link to the oldname file.

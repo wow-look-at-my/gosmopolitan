@@ -39,7 +39,11 @@ type state struct {
 	ntab map[string]*ir.Name
 }
 
-func mkstate() *state {
+// mkstate takes the process to itself: every caller looks names up in the
+// shared local package, and Pkg.Lookup writes that package's symbol map.
+// Two of these tests running at once is a concurrent map write.
+func mkstate(t *testing.T) *state {
+	t.Serial()
 	return &state{
 		ntab: make(map[string]*ir.Name),
 	}
@@ -93,7 +97,7 @@ func (s *state) nms(name string) *ir.Name {
 func TestClassifyIntegerCompare(t *testing.T) {
 
 	// (n < 10 || n > 100) && (n >= 12 || n <= 99 || n != 101)
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nmi64("n")
 	nlt10 := bin(nn, ir.OLT, liti(10))         // n < 10
 	ngt100 := bin(nn, ir.OGT, liti(100))       // n > 100
@@ -115,7 +119,7 @@ func TestClassifyIntegerCompare(t *testing.T) {
 func TestClassifyStringCompare(t *testing.T) {
 
 	// s != "foo" && s < "ooblek" && s > "plarkish"
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nms("s")
 	snefoo := bin(nn, ir.ONE, lits("foo"))     // s != "foo"
 	sltoob := bin(nn, ir.OLT, lits("ooblek"))  // s < "ooblek"
@@ -133,7 +137,7 @@ func TestClassifyStringCompare(t *testing.T) {
 func TestClassifyIntegerArith(t *testing.T) {
 	// n+1 ^ n-3 * n/2 + n<<9 + n>>2 - n&^7
 
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nmi64("n")
 	np1 := bin(nn, ir.OADD, liti(1))     // n+1
 	nm3 := bin(nn, ir.OSUB, liti(3))     // n-3
@@ -157,7 +161,7 @@ func TestClassifyIntegerArith(t *testing.T) {
 
 func TestClassifyAssortedShifts(t *testing.T) {
 
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nmi64("n")
 	badcases := []ir.Node{
 		bin(liti(3), ir.OLSH, nn), // 3<<n
@@ -174,7 +178,7 @@ func TestClassifyAssortedShifts(t *testing.T) {
 
 func TestClassifyFloat(t *testing.T) {
 	// float32(n) + float32(10)
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nm("n", types.Types[types.TUINT32])
 	f1 := conv(nn, types.Types[types.TFLOAT32])
 	f2 := conv(liti(10), types.Types[types.TFLOAT32])
@@ -189,7 +193,7 @@ func TestClassifyFloat(t *testing.T) {
 
 func TestMultipleNamesAllUsed(t *testing.T) {
 	// n != 101 && m < 2
-	s := mkstate()
+	s := mkstate(t)
 	nn := s.nmi64("n")
 	nm := s.nmi64("m")
 	nne101 := bin(nn, ir.ONE, liti(101)) // n != 101

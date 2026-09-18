@@ -145,34 +145,29 @@ func TestSlimPayloads(t *testing.T) {
 	require.NotEmpty(t, payloads, "APE must carry at least one payload")
 }
 
-// TestSlimMachO checks the macOS x86-64 assimilation pieces: the Mach-O
-// header at machoOffset and the dd statement that copies it over the file's
-// start, both present only for darwin/amd64.
-func TestSlimMachO(t *testing.T) {
+// TestSlimLoaders checks that each selection embeds exactly the loaders its
+// platforms boot through. A loader kept for a deselected platform is dead
+// weight; one dropped for a selected platform is a host that cannot start.
+func TestSlimLoaders(t *testing.T) {
 	sel := slimPlatforms(t)
 	bin := slimBinary(t)
-	want := sel["darwin/amd64"]
 
-	const machoMagic64 = 0xFEEDFACF
-	gotHeader := len(bin) > machoOffset+4 && le32(bin[machoOffset:machoOffset+4]) == machoMagic64
-	assert.Equal(t, want, gotHeader, "Mach-O header at %#x", machoOffset)
-
-	// conv=notrunc is what distinguishes the assimilation dd from the one
-	// the macOS ARM64 branch uses to extract the loader source.
-	gotDD := bytes.Contains(slimHead(t), []byte("conv=notrunc"))
-	assert.Equal(t, want, gotDD, "dd assimilation statement in the bootstrap script")
-}
-
-// TestSlimApeLoader checks the gzipped APE loader source, which only
-// darwin/arm64 compiles and runs.
-func TestSlimApeLoader(t *testing.T) {
-	sel := slimPlatforms(t)
-	bin := slimBinary(t)
-	const loaderOffset = 0x8000
-
-	want := sel["darwin/arm64"]
-	got := len(bin) > loaderOffset+2 && bin[loaderOffset] == 0x1f && bin[loaderOffset+1] == 0x8b
-	assert.Equal(t, want, got, "gzipped APE loader source at %#x", loaderOffset)
+	// The Linux loaders sit raw; the darwin one is gzipped, because it does
+	// not fit the header at its own size.
+	for _, tc := range []struct {
+		platform string
+		offset   int
+		magic    []byte
+	}{
+		{"linux/amd64", 0x2800, []byte("\x7fELF")},
+		{"linux/arm64", 0x2c00, []byte("\x7fELF")},
+		{"darwin/arm64", 0x8000, []byte{0x1f, 0x8b}},
+	} {
+		want := sel[tc.platform]
+		got := len(bin) > tc.offset+len(tc.magic) &&
+			bytes.Equal(bin[tc.offset:tc.offset+len(tc.magic)], tc.magic)
+		assert.Equal(t, want, got, "%s loader at %#x", tc.platform, tc.offset)
+	}
 }
 
 // TestSlimPEHeader checks that the NT boot header is real only when

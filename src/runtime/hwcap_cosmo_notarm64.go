@@ -1,0 +1,12 @@
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build cosmo && !arm64
+
+package runtime
+
+// AT_HWCAP is an arm64 question. An x86 program asks the CPU itself with
+// CPUID, which every host this runs on allows.
+func fixAuxv() {
+}

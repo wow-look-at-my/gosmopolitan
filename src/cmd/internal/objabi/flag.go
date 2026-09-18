@@ -18,6 +18,23 @@ import (
 	"strings"
 )
 
+// Enter starts a tool's Main: this process is named tool, its command line is
+// args, and fset, or a fresh set when nil, is what the flag package's
+// top-level functions act on from here. Tools linked into one binary each
+// register on their own set at init, so a flag two of them share is defined
+// once per set instead of twice on flag.CommandLine.
+func Enter(tool string, args []string, fset *flag.FlagSet) {
+	// A host without procfs resolves the executable from os.Args[0], once;
+	// resolve it while os.Args[0] still names the file.
+	os.Executable()
+	os.Args = append([]string{tool}, args...)
+	if fset == nil {
+		fset = flag.NewFlagSet(tool, flag.ExitOnError)
+	}
+	flag.CommandLine = fset
+	fset.Usage = func() { flag.Usage() }
+}
+
 func Flagcount(name, usage string, val *int) {
 	flag.Var((*count)(val), name, usage)
 }
@@ -204,6 +221,22 @@ func AddVersionFlag() {
 
 var buildID string // filled in by linker
 
+// toolIDs is filled in by the go command when it links tools into one
+// binary: "name=id" pairs, comma separated, where each id is derived from
+// that tool's own packages rather than from the binary that carries them.
+var toolIDs string
+
+// toolBuildID answers the build ID the tool called name reports: its own
+// entry in toolIDs, else the binary's.
+func toolBuildID(name string) string {
+	for _, pair := range strings.Split(toolIDs, ",") {
+		if tool, id, ok := strings.Cut(pair, "="); ok && tool == name {
+			return id
+		}
+	}
+	return buildID
+}
+
 type versionFlag struct{}
 
 func (versionFlag) IsBoolFlag() bool { return true }
@@ -234,11 +267,11 @@ func (versionFlag) Set(s string) error {
 	// version line alone cannot distinguish two different builds of the
 	// toolchain. Include the build ID for those too, so that cmd/go's
 	// tool IDs (and hence action IDs) change whenever the tools do and
-	// build caches — GOCACHE and any shared GOCACHEPROG tier — can never
+	// build caches — GOCACHE and any shared tier under it — can never
 	// serve objects compiled by one fork build into another.
 	if s == "full" {
 		if strings.Contains(buildcfg.Version, "devel") || strings.Contains(buildcfg.Version, "cosmo") {
-			p += " buildID=" + buildID
+			p += " buildID=" + toolBuildID(name)
 		}
 	}
 

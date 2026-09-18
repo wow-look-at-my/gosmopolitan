@@ -1509,7 +1509,16 @@ func setMemoryLimit(in int64) (out int64) {
 
 func readGOMEMLIMIT() int64 {
 	p := gogetenv("GOMEMLIMIT")
-	if p == "" || p == "off" {
+	if p == "" {
+		// Unset: take the container's memory limit, so the heap stays
+		// under the cgroup ceiling instead of growing until the kernel
+		// OOM-kills the process. GOMEMLIMIT=off opts out.
+		if limit, ok := cgroupMemoryLimit(); ok {
+			return limit
+		}
+		return math.MaxInt64
+	}
+	if p == "off" {
 		return math.MaxInt64
 	}
 	n, ok := parseByteCount(p)

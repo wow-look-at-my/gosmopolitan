@@ -20,6 +20,7 @@ import (
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
+	"cmd/go/internal/orgmod"
 	"cmd/go/internal/trace"
 	"cmd/internal/par"
 
@@ -153,8 +154,13 @@ func (ld *Loader) CheckAllowed(ctx context.Context, m module.Version) error {
 var ErrDisallowed = errors.New("disallowed module version")
 
 // CheckExclusions returns an error equivalent to ErrDisallowed if module m is
-// excluded by the main module's go.mod file.
+// excluded by the main module's go.mod file, or by the go.mod file of a
+// module queried by PackagesAndErrorsOutsideModule (see
+// Loader.SetOutsideModuleExclude).
 func (ld *Loader) CheckExclusions(ctx context.Context, m module.Version) error {
+	if ld.outsideModuleExclude[m] {
+		return module.VersionError(m, errExcluded)
+	}
 	for _, mainModule := range ld.MainModules.Versions() {
 		if index := ld.MainModules.Index(mainModule); index != nil && index.exclude[m] {
 			return module.VersionError(m, errExcluded)
@@ -329,6 +335,24 @@ func CheckDeprecation(ld *Loader, ctx context.Context, m module.Version) (deprec
 	return summary.deprecated, nil
 }
 
+// SetOutsideModuleReplace records the replace directives of a module loaded
+// by PackagesAndErrorsOutsideModule (as in 'go install pkg@version'), so that
+// Replacement honors them even though that module is never a main module.
+func (ld *Loader) SetOutsideModuleReplace(replace []*modfile.Replace) {
+	ld.outsideModuleReplace = toReplaceMap(replace)
+}
+
+// SetOutsideModuleExclude records the exclude directives of a module loaded
+// by PackagesAndErrorsOutsideModule (as in 'go install pkg@version'), so that
+// CheckExclusions and goModSummary honor them even though that module is
+// never a main module.
+func (ld *Loader) SetOutsideModuleExclude(exclude []*modfile.Exclude) {
+	ld.outsideModuleExclude = make(map[module.Version]bool, len(exclude))
+	for _, x := range exclude {
+		ld.outsideModuleExclude[x.Mod] = true
+	}
+}
+
 func replacement(mod module.Version, replace map[module.Version]module.Version) (fromVersion string, to module.Version, ok bool) {
 	if r, ok := replace[mod]; ok {
 		return mod.Version, r, true
@@ -350,6 +374,9 @@ func Replacement(ld *Loader, mod module.Version) module.Version {
 // replacementFrom returns the replacement for mod, if any, the modroot of the replacement if it appeared in a go.mod,
 // and the source of the replacement. The replacement is relative to the go.work or go.mod file it appears in.
 func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot string, fromFile string) {
+	if _, r, ok := replacement(mod, ld.outsideModuleReplace); ok {
+		return r, "", ""
+	}
 	foundFrom, found, foundModRoot := "", module.Version{}, ""
 	if ld.MainModules == nil {
 		return module.Version{}, "", ""
@@ -372,6 +399,17 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 				found, foundModRoot = r, modRoot
 			}
 		}
+	}
+	// A replace line naming an org module records a version the same way a
+	// require line does: the token is not read, and the replacement is the head
+	// of the branch the target follows. replacementFrom is reached from the
+	// context-free mvs.Reqs interface, as rawGoModData is.
+	if found.Version != "" && orgmod.IsOrg(found.Path) && orgResolvable() {
+		version, err := orgVersion(ld, context.TODO(), found.Path)
+		if err != nil {
+			base.Fatal(err)
+		}
+		found.Version = version
 	}
 	return found, foundModRoot, modFilePath(foundModRoot)
 }
@@ -451,7 +489,12 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 
 	i.require = make(map[module.Version]requireMeta, len(modFile.Require))
 	for _, r := range modFile.Require {
-		i.require[r.Mod] = requireMeta{indirect: r.Indirect}
+		// An org module's version token is inert: the module resolves to a branch
+		// head whatever the line says. Indexing the placeholder means a go.mod
+		// file that records some other token is not considered out of date, so a
+		// repository that recorded a version before this rule existed builds
+		// without being edited first.
+		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
 	}
 
 	i.replace = toReplaceMap(modFile.Replace)
@@ -642,31 +685,41 @@ func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 	}
 
 	for _, mainModule := range ld.MainModules.Versions() {
-		if index := ld.MainModules.Index(mainModule); index != nil && len(index.exclude) > 0 {
-			// Drop any requirements on excluded versions.
-			// Don't modify the cached summary though, since we might need the raw
-			// summary separately.
-			haveExcludedReqs := false
-			for _, r := range summary.require {
-				if index.exclude[r] {
-					haveExcludedReqs = true
-					break
-				}
-			}
-			if haveExcludedReqs {
-				s := new(modFileSummary)
-				*s = *summary
-				s.require = make([]module.Version, 0, len(summary.require))
-				for _, r := range summary.require {
-					if !index.exclude[r] {
-						s.require = append(s.require, r)
-					}
-				}
-				summary = s
-			}
+		if index := ld.MainModules.Index(mainModule); index != nil {
+			summary = dropExcludedRequire(summary, index.exclude)
 		}
 	}
+	summary = dropExcludedRequire(summary, ld.outsideModuleExclude)
 	return summary, nil
+}
+
+// dropExcludedRequire returns a summary with any requirement on a version in
+// exclude removed, without modifying the cached summary (the raw summary may
+// still be needed separately). It returns summary unchanged if exclude names
+// none of summary's requirements.
+func dropExcludedRequire(summary *modFileSummary, exclude map[module.Version]bool) *modFileSummary {
+	if len(exclude) == 0 {
+		return summary
+	}
+	haveExcludedReqs := false
+	for _, r := range summary.require {
+		if exclude[r] {
+			haveExcludedReqs = true
+			break
+		}
+	}
+	if !haveExcludedReqs {
+		return summary
+	}
+	s := new(modFileSummary)
+	*s = *summary
+	s.require = make([]module.Version, 0, len(summary.require))
+	for _, r := range summary.require {
+		if !exclude[r] {
+			s.require = append(s.require, r)
+		}
+	}
+	return s
 }
 
 // rawGoModSummary returns a new summary of the go.mod file for module m,
@@ -705,7 +758,13 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		// contents of the modfile when doing the load, don't read from disk and instead
 		// recompute a summary using the updated contents of the modfile.
 		if mf := ld.MainModules.ModFile(m); mf != nil {
-			return summaryFromModFile(m, ld.MainModules.modFiles[m])
+			summary, err := summaryFromModFile(m, ld.MainModules.modFiles[m])
+			if err != nil {
+				// summaryFromModFile returns a usable summary with a
+				// TooNewError, and its callers read retractions from it.
+				return summary, err
+			}
+			return resolveOrgSummary(ld, summary)
 		}
 	}
 	return rawGoModSummaryCache.Do(m, func() (*modFileSummary, error) {
@@ -717,7 +776,15 @@ func rawGoModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 		if err != nil {
 			return nil, module.VersionError(m, fmt.Errorf("parsing %s: %v", base.ShortPath(name), err))
 		}
-		return summaryFromModFile(m, f)
+		summary, err := summaryFromModFile(m, f)
+		if err != nil {
+			// Keep the summary, for the reason above.
+			return summary, err
+		}
+		// An org module's requirement is the head of the branch it follows, not
+		// the placeholder its go.mod file records. Resolving here keeps the
+		// module graph, and therefore MVS, on the same commit as the root list.
+		return resolveOrgSummary(ld, summary)
 	})
 }
 
@@ -772,7 +839,17 @@ func summaryFromModFile(m module.Version, f *modfile.File) (*modFileSummary, err
 	return summary, nil
 }
 
-var rawGoModSummaryCache par.ErrCache[module.Version, *modFileSummary]
+// rawGoModSummaryCache memoizes the summary of each module version's go.mod.
+//
+// The summary is a pointer to the cache so that a loader can drop every entry
+// at once: a summary holds the version that an org module's requirements
+// resolved to, and that resolution belongs to the branch the main module is on.
+var rawGoModSummaryCache = new(par.ErrCache[module.Version, *modFileSummary])
+
+// dropModFileSummaries forgets every cached go.mod summary.
+func dropModFileSummaries() {
+	rawGoModSummaryCache = new(par.ErrCache[module.Version, *modFileSummary])
+}
 
 // rawGoModData returns the content of the go.mod file for module m, ignoring
 // all replacements that may apply to m.

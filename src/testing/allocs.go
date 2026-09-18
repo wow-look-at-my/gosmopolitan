@@ -5,8 +5,44 @@
 package testing
 
 import (
+	"os"
 	"runtime"
+	"strings"
 )
+
+// allocsFork asks the calling test for a process of its own. AllocsPerRun
+// panics with it when other tests share this process, and tRunner recovers it
+// and forks, so the measurement re-runs alone in the child. AllocsPerRun takes
+// no *T, so this panic is how it reaches the test that called it.
+//
+// Anywhere the panic does not reach tRunner - a recover in the caller, or a
+// goroutine that is not a test - it prints this message, and the advice is the
+// same.
+type allocsFork struct{}
+
+func (allocsFork) Error() string {
+	return "testing: AllocsPerRun measures the whole process, and tests are parallel by default in this fork; call t.Fork or t.Serial first"
+}
+
+// allocsIndependent reports whether the caller already has this process to
+// itself. A serial test stops every other one, and a caller with no parallel
+// test in flight - a benchmark, a root test - shares the process with nothing.
+//
+// A forked child runs ONE test, and the tests in flight with it are its own
+// ancestors: a parent stays counted while it waits for the subtest it started.
+// The marker names the target, so the number of elements in that name is how
+// many the child may see. Anything above it is a sibling, whose allocations
+// would land in the measurement.
+func allocsIndependent() bool {
+	if serialExclusive.Load() {
+		return true
+	}
+	inFlight := parallelStart.Load() - parallelStop.Load()
+	if target := os.Getenv(forkTargetEnv); target != "" {
+		return inFlight <= int64(strings.Count(target, "/"))+1
+	}
+	return inFlight == 0
+}
 
 // AllocsPerRun returns the average number of allocations during calls to f.
 // Although the return value has type float64, it will always be an integral value.
@@ -17,9 +53,19 @@ import (
 //
 // AllocsPerRun sets [runtime.GOMAXPROCS] to 1 during its measurement and will restore
 // it before returning.
+//
+// The count and the GOMAXPROCS change are process-wide, and tests are parallel
+// by default, so a caller that shares this process with other tests gets one of
+// its own: AllocsPerRun forks the test the way [T.Fork] does, and the child
+// re-runs that test alone from the top. A test that already called [T.Fork] or
+// [T.Serial] measures here.
+//
+// The subtests of a forked test share that child with each other, so one of
+// them measuring counts another's allocations. Such a subtest gets a child of
+// its own, because the fork marker names one test rather than a process.
 func AllocsPerRun(runs int, f func()) (avg float64) {
-	if parallelStart.Load() != parallelStop.Load() {
-		panic("testing: AllocsPerRun called during parallel test")
+	if !allocsIndependent() {
+		panic(allocsFork{})
 	}
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 

@@ -17,6 +17,7 @@ const (
 	linkatTrap     uintptr = syscall.SYS_LINKAT
 	symlinkatTrap  uintptr = syscall.SYS_SYMLINKAT
 	renameatTrap   uintptr = syscall.SYS_RENAMEAT
+	fchmodatTrap   uintptr = syscall.SYS_FCHMODAT
 )
 
 const (

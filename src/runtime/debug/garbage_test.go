@@ -14,6 +14,8 @@ import (
 )
 
 func TestReadGCStats(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer SetGCPercent(SetGCPercent(-1))
 
 	var stats GCStats
@@ -91,9 +93,11 @@ func TestReadGCStats(t *testing.T) {
 var big []byte
 
 func TestFreeOSMemory(t *testing.T) {
+	t.Serial(
 	// Tests FreeOSMemory by making big susceptible to collection
 	// and checking that at least that much memory is returned to
 	// the OS after.
+	)
 
 	const bigBytes = 32 << 20
 	big = make([]byte, bigBytes)
@@ -156,6 +160,8 @@ var (
 )
 
 func TestSetGCPercent(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	testenv.SkipFlaky(t, 20076)
 
 	// Test that the variable is being set and returned correctly.

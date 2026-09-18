@@ -111,8 +111,6 @@
 //		Any files named on the command line are interpreted after
 //		changing directories.
 //		If used, this flag must be the first one in the command line.
-//	-a
-//		force rebuilding of packages that are already up-to-date.
 //	-n
 //		print the commands but do not run them.
 //	-p n
@@ -1687,12 +1685,17 @@
 // -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
 // -run, -short, -skip, -timeout and -v.
 // If a run of go test has any test or non-test flags outside this set,
-// the result is not cached. To disable test caching, use any test flag
-// or argument other than the cacheable flags. The idiomatic way to disable
-// test caching explicitly is to use -count=1. Tests that open files within
-// the package's module or that consult environment variables only
-// match future runs in which the files and environment variables are
-// unchanged. A cached test result is treated as executing in no time
+// the result is not cached. The -count flag is accepted and has no effect:
+// it is not passed to the test binary, it is not part of the cache key, and
+// it does not decide whether a result is recorded or replayed.
+// Nothing on the command line turns the cache off on
+// purpose, because a cached result that is wrong is a defect to repair.
+// Tests that open files or that consult environment variables only match
+// future runs in which those files and environment variables are unchanged.
+// A file counts wherever it sits, inside the module and outside it alike,
+// because a file the test read is an input to the test. The one exception is
+// the temporary directory, which holds nothing carried over from an earlier
+// run. A cached test result is treated as executing in no time
 // at all, so a successful package test result will be cached and
 // reused regardless of -timeout setting.
 //
@@ -1700,7 +1703,8 @@
 //
 //	-args
 //	    Pass the remainder of the command line (everything after -args)
-//	    to the test binary, uninterpreted and unchanged.
+//	    to the test binary, uninterpreted and unchanged, except that a
+//	    -test.count there is dropped like -count.
 //	    Because this flag consumes the remainder of the command line,
 //	    the package list (if present) must appear before this flag.
 //
@@ -1717,6 +1721,13 @@
 //	    Convert test output to JSON suitable for automated processing.
 //	    See 'go doc test2json' for the encoding details.
 //	    Also emits build output in JSON. See 'go help buildjson'.
+//
+//	-keepbinary file
+//	    Save a copy of the one test binary that the named packages'
+//	    tests share to the named file. The tests still run (unless -c
+//	    is specified). Started with -test.unit=importpath, the binary
+//	    runs the tests of that package. It is an error if the packages'
+//	    tests need more than one binary.
 //
 //	-o file
 //	    Save a copy of the test binary to the named file.
@@ -2375,9 +2386,7 @@
 // should not be necessary in typical use. However, the build cache
 // does not detect changes to C libraries imported with cgo.
 // If you have made changes to the C libraries on your system, you
-// will need to clean the cache explicitly or else use the -a build flag
-// (see 'go help build') to force rebuilding of packages that
-// depend on the updated C libraries.
+// will need to clean the cache explicitly.
 //
 // The go command also caches successful package test results.
 // See 'go help test' for details. Running 'go clean -testcache' removes
@@ -2404,9 +2413,14 @@
 // GODEBUG=gocachetest=1 causes the go command to print details of its
 // decisions about whether to reuse a cached test result.
 //
-// The GOCACHEPROG environment variable can be used to provide an
-// externally managed build cache. For details see:
-// "go doc cmd/go/internal/cacheprog".
+// The go command can put a shared, network-backed tier under the local
+// cache. GO_BUILDCACHE_CONFIG holds that tier's configuration, as
+// base64-encoded JSON; with the variable unset, the build uses the local
+// cache alone. The go command asks the shared tier only after a local miss,
+// and it stores what the tier returns in the local cache before the build
+// uses it. A tier that cannot be reached leaves the build on the local cache
+// and says so on stderr. Set GOCACHEDEBUG to any non-empty value to also see
+// the tier's routine per-request reporting.
 //
 // # Environment variables
 //
@@ -2441,10 +2455,6 @@
 //	GOCACHE
 //		The directory where the go command will store cached
 //		information for reuse in future builds. Must be an absolute path.
-//	GOCACHEPROG
-//		A command (with optional space-separated flags) that implements an
-//		external go command build cache.
-//		See 'go doc cmd/go/internal/cacheprog'.
 //	GODEBUG
 //		Enable various debugging facilities for programs built with Go,
 //		including the go command. Cannot be set using 'go env -w'.
@@ -3399,10 +3409,13 @@
 //	    (for example, -benchtime 100x).
 //
 //	-count n
-//	    Run each test, benchmark, and fuzz seed n times (default 1).
-//	    If -cpu is set, run n times for each GOMAXPROCS value.
-//	    Examples are always run once. -count does not apply to
-//	    fuzz tests matched by -fuzz.
+//	    Accepted and ignored. Every test, benchmark, and fuzz seed runs
+//	    once, whatever n is: this toolchain does not repeat a test,
+//	    because a test that passes only sometimes is broken and the fix
+//	    belongs in the test. go test does not pass -count to the test
+//	    binary, it is not part of the test cache key, and it does not
+//	    decide whether a result is recorded or replayed. A negative n is
+//	    an error.
 //
 //	-cover
 //	    Enable coverage analysis.
@@ -3627,10 +3640,10 @@
 // on either side of -v.
 //
 // When 'go test' runs in package list mode, 'go test' caches successful
-// package test results to avoid unnecessary repeated running of tests. To
-// disable test caching, use any test flag or argument other than the
-// cacheable flags. The idiomatic way to disable test caching explicitly
-// is to use -count=1.
+// package test results to avoid unnecessary repeated running of tests.
+// Nothing on the command line turns that cache off on purpose. -count in
+// particular does not: go test drops it before the cache is consulted. A
+// cached result that is wrong is a defect to repair rather than to bypass.
 //
 // To keep an argument for a test binary from being interpreted as a
 // known flag or a package name, use -args (see 'go help test') which
@@ -3793,4 +3806,4 @@
 //
 // The 'go env -w' command (see 'go help env') can be used to set the GOVCS
 // variable for future go command invocations.
-package main
+package gocmd

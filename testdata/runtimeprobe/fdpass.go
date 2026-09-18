@@ -56,7 +56,21 @@ func checkFdpass() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	spath := filepath.Join(dir, "fdpass.sock")
+
+	// The socket needs a SHORT path of its own. sun_path is 104 bytes
+	// on XNU, and a sandbox hands out a temp directory deeper than that
+	// by itself, so bind answers EINVAL before the check starts.
+	sockDir, err := shortSockDir("rp-fp")
+	if err != nil {
+		fail("fdpass", "MkdirTemp for the socket: %v", err)
+		return
+	}
+	defer os.RemoveAll(sockDir)
+	spath := filepath.Join(sockDir, "s")
+	if len(spath) >= sunPathMax {
+		fail("fdpass", "socket path is %d bytes, over the %d sun_path holds: %s", len(spath), sunPathMax, spath)
+		return
+	}
 	l, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		fail("fdpass", "listener socket: %v", err)

@@ -2,21 +2,36 @@
 # If it does, reproducible builds will not work very well.
 [short] skip
 [GOOS:aix] env CGO_ENABLED=0  # go.dev/issue/56896
+# Every build gets a cache of its own. GOMAXPROCS is not part of an action
+# ID, so sharing one cache would answer the later builds from the first and
+# the comparison would hold no matter what the scheduler did.
 env GOMAXPROCS=16
-go build -a -o http16.o net/http
+env GOCACHE=$WORK/c16
+mkdir $GOCACHE
+go build -o http16.o net/http
 env GOMAXPROCS=17
-go build -a -o http17.o net/http
+env GOCACHE=$WORK/c17
+mkdir $GOCACHE
+go build -o http17.o net/http
 cmp -q http16.o http17.o
 env GOMAXPROCS=18
-go build -a -o http18.o net/http
+env GOCACHE=$WORK/c18
+mkdir $GOCACHE
+go build -o http18.o net/http
 cmp -q http16.o http18.o
 
 # Check that goroutine scheduling does not affect linker output.
 env GOMAXPROCS=16
-go build -a -o gofmt16.exe cmd/gofmt
+env GOCACHE=$WORK/g16
+mkdir $GOCACHE
+go build -o gofmt16.exe cmd/gofmt
 env GOMAXPROCS=17
-go build -a -o gofmt17.exe cmd/gofmt
+env GOCACHE=$WORK/g17
+mkdir $GOCACHE
+go build -o gofmt17.exe cmd/gofmt
 cmp -q gofmt16.exe gofmt17.exe
 env GOMAXPROCS=18
-go build -a -o gofmt18.exe cmd/gofmt
+env GOCACHE=$WORK/g18
+mkdir $GOCACHE
+go build -o gofmt18.exe cmd/gofmt
 cmp -q gofmt16.exe gofmt18.exe

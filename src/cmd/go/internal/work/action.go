@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cmd/go/internal/base"
@@ -59,6 +60,12 @@ type Builder struct {
 	exec      sync.Mutex
 	readySema chan bool
 	ready     actionQueue
+	// A cache check starts no process and mostly waits on the shared tier,
+	// so it runs on its own pool, far wider than -p: the tier coalesces the
+	// lookups in flight into one request, and -p lookups make -p-key
+	// requests.
+	readyCacheSema chan bool
+	readyCache     actionQueue
 
 	id             sync.Mutex
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
@@ -99,15 +106,12 @@ type Action struct {
 
 	TryCache func(*Builder, *Action, *Action) bool // callback for cache bypass
 
-	CacheExecutable bool // Whether to cache executables produced by link steps
-
 	// Generated files, directories.
-	Objdir           string         // directory for intermediate objects
-	Target           string         // goal of the action: the created package or executable
-	built            string         // the actual created package or executable
-	cachedExecutable string         // the cached executable, if CacheExecutable was set
-	actionID         cache.ActionID // cache ID of action input
-	buildID          string         // build ID of action output
+	Objdir   string         // directory for intermediate objects
+	Target   string         // goal of the action: the created package or executable
+	built    string         // the actual created package or executable
+	actionID cache.ActionID // cache ID of action input
+	buildID  string         // build ID of action output
 
 	VetxOnly   bool       // Mode=="vet": only being called to supply info about dependencies
 	needVet    bool       // Mode=="build": need to fill in vet config
@@ -126,6 +130,7 @@ type Action struct {
 	json         *actionJSON       // action graph information
 	nonGoOverlay map[string]string // map from non-.go source files to copied files in objdir. Nil if no overlay is used.
 	traceSpan    *trace.Span
+	traceLane    trace.Lane // the row this action's work is recorded on
 }
 
 // BuildActionID returns the action ID section of a's build ID.
@@ -141,9 +146,75 @@ func (a *Action) BuildID() string { return a.buildID }
 // from Target when the result was cached.
 func (a *Action) BuiltTarget() string { return a.built }
 
-// CachedExecutable returns the cached executable, if CacheExecutable
-// was set and the executable could be cached, and "" otherwise.
-func (a *Action) CachedExecutable() string { return a.cachedExecutable }
+// RunnableTarget returns a path the operating system will exec, for a caller
+// that is about to run what this action built.
+//
+// A cache hit sets built to the cache file, and a cache entry is one plain
+// 0666 file: mode is not a property of the bytes, so the cache does not carry
+// one. Running that path is "fork/exec ...-d: permission denied", and on
+// Windows exec refuses it for a second reason, an extension PATHEXT does not
+// list. So the copy lands in the action's own directory, with the package's
+// name, which is also what keeps argv[0] off a.out.
+//
+// A freshly linked binary is already executable and is returned as it stands.
+func (b *Builder) RunnableTarget(a *Action) (string, error) {
+	built := a.BuiltTarget()
+	if info, err := os.Stat(built); err == nil && info.Mode()&0o111 != 0 {
+		return built, nil
+	}
+	name := "a.out"
+	if p := a.Package; p != nil {
+		if name = p.Internal.ExeName; name == "" {
+			name = p.DefaultExecName()
+		}
+	}
+	name += cfg.ExeSuffix
+	dir := a.Objdir
+	if dir == "" {
+		dir = b.WorkDir + string(filepath.Separator)
+	}
+	// A cache hit skips the work that would have made this directory, so it is
+	// not there to copy into. On windows that read as "The system cannot find
+	// the path specified" against b001, an objdir the build never had to make.
+	sh := b.Shell(a)
+	if err := sh.Mkdir(dir); err != nil {
+		return "", err
+	}
+	exe := dir + name
+	// One shared test binary runs several units, and every unit resolves this
+	// same path, hardlinks it into its own directory, and starts it. So this
+	// file is written once and never replaced. A copy straight onto the path
+	// truncates it, and a unit that links during the truncation starts a
+	// partly written binary, which macOS answers with SIGKILL. Replacing the
+	// path instead, by a rename, takes the name away from a unit that is
+	// about to link it.
+	//
+	// The copy lands on a private name, and a hard link gives it the shared
+	// name. The link fails when another unit already made that name, and that
+	// unit's file is the same binary, so this one uses it.
+	if info, err := os.Stat(exe); err == nil && info.Mode()&0o111 != 0 {
+		return exe, nil
+	}
+	tmp := fmt.Sprintf("%s.tmp%d.%d", exe, os.Getpid(), runnableSeq.Add(1))
+	if err := sh.CopyFile(tmp, built, 0o777, true); err != nil {
+		return "", err
+	}
+	if cfg.BuildN {
+		// The copy printed itself and wrote nothing, so there is no file to
+		// give the shared name to.
+		return exe, nil
+	}
+	err := os.Link(tmp, exe)
+	os.Remove(tmp)
+	if err != nil && !os.IsExist(err) {
+		return "", err
+	}
+	return exe, nil
+}
+
+// runnableSeq names the private file each RunnableTarget copy writes before it
+// links that file to the shared name. Two calls can share one destination.
+var runnableSeq atomic.Uint64
 
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action
@@ -493,7 +564,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 		return err
 	}
 
-	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.Tool("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
+	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
 		return err
 	}
 
@@ -513,7 +584,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 			return fmt.Errorf("error opening target for caching: %w", err)
 		}
 
-		c := cache.Default()
+		c := a.cache()
 		outputID, _, err := c.Put(a.actionID, r)
 		r.Close()
 		if err != nil {
@@ -658,6 +729,12 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 			}
 		}
 
+		// A test variant linked in place of its package takes that package's
+		// symbol indices from the package's own compile.
+		if p1 := p.Internal.TestVariantOf; p1 != nil {
+			a.Deps = append(a.Deps, b.CompileAction(depMode, depMode, p1))
+		}
+
 		if p.Internal.PGOProfile != "" {
 			pgoAction := b.cacheAction("preprocess PGO profile "+p.Internal.PGOProfile, nil, func() *Action {
 				a := &Action{
@@ -688,6 +765,11 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 				a.Target = p.Target
 				a.Actor = nil
 				return a
+			}
+
+			// An embedded standard library is compiled already.
+			if cfg.EmbeddedStd {
+				return b.embeddedStdAction(a, p)
 			}
 		}
 
@@ -742,7 +824,7 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 	// by the install action during (*Builder).installAction.
 	buildAction := a
 	switch buildAction.Mode {
-	case "build", "built-in package", "gccgo stdlib":
+	case "build", "built-in package", "gccgo stdlib", "embedded std":
 		// ok
 	case "build-install":
 		buildAction = a.Deps[0]
@@ -872,6 +954,9 @@ func (b *Builder) cgoAction(p *load.Package, objdir string, deps []*Action, hasC
 // If the caller may be causing p to be installed, it is up to the caller
 // to make sure that the install depends on (runs after) vet.
 func (b *Builder) VetAction(s *modload.Loader, mode, depMode BuildMode, needFix bool, p *load.Package) *Action {
+	if cfg.EmbeddedStd && p.Standard {
+		base.Fatalf("go: %s: the standard library is embedded in this go command as compiled archives and cannot be vetted; vet it from a GOROOT source tree", p.ImportPath)
+	}
 	a := b.vetAction(s, mode, depMode, p)
 	a.VetxOnly = false
 	a.needFix = needFix
@@ -1051,11 +1136,22 @@ func (b *Builder) addTransitiveLinkDeps(s *modload.Loader, a, a1 *Action, shlib 
 	if a1.Package != nil {
 		haveDep[a1.Package.ImportPath] = true
 	}
+	// A test variant linked in place of its package is imported by the test
+	// main directly. Take it first, so that the package it replaces, reached
+	// through any other import, is never linked beside it.
+	for _, a2 := range a1.Deps {
+		if a2.Package == nil || a2.Mode != "build" || a2.Package.Internal.TestVariantOf == nil {
+			continue
+		}
+		haveDep[a2.Package.ImportPath] = true
+		a.Deps = append(a.Deps, a2)
+		workq = append(workq, a2)
+	}
 	for i := 0; i < len(workq); i++ {
 		a1 := workq[i]
 		for _, a2 := range a1.Deps {
 			// TODO(rsc): Find a better discriminator than the Mode strings, once the dust settles.
-			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build") || haveDep[a2.Package.ImportPath] {
+			if a2.Package == nil || (a2.Mode != "build-install" && a2.Mode != "build" && a2.Mode != "embedded std") || haveDep[a2.Package.ImportPath] {
 				continue
 			}
 			haveDep[a2.Package.ImportPath] = true

@@ -201,6 +201,7 @@ var (
 )
 
 func TestMakeAllocs(t *testing.T) {
+	t.Serial()
 	errorf := t.Errorf
 	if race.Enabled || msan.Enabled || asan.Enabled || testenv.OptimizationOff() {
 		errorf = t.Logf

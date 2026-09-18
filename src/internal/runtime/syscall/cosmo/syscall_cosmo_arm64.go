@@ -37,7 +37,7 @@ type DarwinFns struct {
 	Fcntl   uintptr
 	// Dup backs SYS_DUP for internal/poll's dupCloseOnExecOld -
 	// net.FileConn's fallback when the F_DUPFD_CLOEXEC fcntl path
-	// errors (see the wave-3 item-1 CI followup in DEBUGGING.md).
+	// errors.
 	Dup        uintptr
 	Mkdirat    uintptr
 	Unlinkat   uintptr
@@ -57,7 +57,14 @@ type DarwinFns struct {
 	// offset like Linux getdents64 (so lseek/dup semantics carry over),
 	// which is what makes a stateless emulation possible.
 	Getdirentries uintptr
-	Error         uintptr // int *__error(void): Apple's errno location
+	// Pread/Pwrite/Lseek back SYS_PREAD64/SYS_PWRITE64/SYS_LSEEK
+	// (os.File.ReadAt/WriteAt/Seek). Fixed-arity libc entries whose
+	// argument layouts and whence values are identical on Linux and
+	// Apple, so they pass straight through darwinCall.
+	Pread  uintptr
+	Pwrite uintptr
+	Lseek  uintptr
+	Error  uintptr // int *__error(void): Apple's errno location
 
 	// Socket layer (socket_cosmo_arm64.go).
 	Socket      uintptr
@@ -86,6 +93,50 @@ type DarwinFns struct {
 	Wait4   uintptr
 	Kill    uintptr
 
+	// File and metadata layer (file_cosmo_arm64.go).
+	Fsync     uintptr
+	Ftruncate uintptr
+	Truncate  uintptr
+	Fchmod    uintptr
+	Fchmodat  uintptr
+	Fchown    uintptr
+	Fchownat  uintptr
+	Fchdir    uintptr
+	Linkat    uintptr
+	Symlinkat uintptr
+	Mknod     uintptr
+	Utimensat uintptr
+	// Flock backs SYS_FLOCK. Apple's flock(2) is BSD's, which is where
+	// Linux took the LOCK_* values from, so operation passes through.
+	Flock uintptr
+	// Fdatasync may be absent; darwinFdatasync falls back to Fsync.
+	Fdatasync uintptr
+	Sync      uintptr
+	// Ioctl is VARIADIC: it must be called through
+	// darwinCallVariadic1, never darwinCall.
+	Ioctl    uintptr
+	Statfs   uintptr
+	Fstatfs  uintptr
+	Sendfile uintptr
+
+	// Credential, priority and resource-limit layer
+	// (proc_cosmo_arm64.go).
+	Chroot       uintptr
+	Setuid       uintptr
+	Setgid       uintptr
+	Setreuid     uintptr
+	Setregid     uintptr
+	Getpgid      uintptr
+	Getgroups    uintptr
+	Setgroups    uintptr
+	Getpriority  uintptr
+	Setpriority  uintptr
+	Getrlimit    uintptr
+	Setrlimit    uintptr
+	Uname        uintptr
+	Getrusage    uintptr
+	Gettimeofday uintptr
+
 	// Taken directly from the Syslib table.
 	PthreadSelf uintptr
 	Getentropy  uintptr // Syslib v5+; sysret-wrapped (-errno on failure)
@@ -112,27 +163,62 @@ func SetDarwinFns(f *DarwinFns) {
 // Linux arm64 syscall numbers emulated only by the slow path. The shared
 // fast-path numbers live in defs_cosmo_arm64.go.
 const (
-	sysGETCWD     = 17
-	sysDUP        = 23
-	sysMKDIRAT    = 34
-	sysUNLINKAT   = 35
-	sysRENAMEAT   = 38
-	sysFACCESSAT  = 48
-	sysCHDIR      = 49
-	sysGETDENTS64 = 61
-	sysREADV      = 65
-	sysWRITEV     = 66
-	sysREADLINKAT = 78
-	sysNEWFSTATAT = 79
-	sysFSTAT      = 80
-	sysUMASK      = 166
-	sysGETPPID    = 173
-	sysGETUID     = 174
-	sysGETEUID    = 175
-	sysGETGID     = 176
-	sysGETEGID    = 177
-	sysRENAMEAT2  = 276
-	sysGETRANDOM  = 278
+	sysGETCWD       = 17
+	sysDUP          = 23
+	sysIOCTL        = 29
+	sysFLOCK        = 32
+	sysMKNODAT      = 33
+	sysMKDIRAT      = 34
+	sysUNLINKAT     = 35
+	sysSYMLINKAT    = 36
+	sysLINKAT       = 37
+	sysRENAMEAT     = 38
+	sysSTATFS       = 43
+	sysFSTATFS      = 44
+	sysTRUNCATE     = 45
+	sysFTRUNCATE    = 46
+	sysFACCESSAT    = 48
+	sysCHDIR        = 49
+	sysFCHDIR       = 50
+	sysCHROOT       = 51
+	sysFCHMOD       = 52
+	sysFCHMODAT     = 53
+	sysFCHOWNAT     = 54
+	sysFCHOWN       = 55
+	sysGETDENTS64   = 61
+	sysLSEEK        = 62
+	sysREADV        = 65
+	sysWRITEV       = 66
+	sysPWRITE64     = 68
+	sysSENDFILE     = 71
+	sysREADLINKAT   = 78
+	sysNEWFSTATAT   = 79
+	sysFSTAT        = 80
+	sysSYNC         = 81
+	sysFSYNC        = 82
+	sysFDATASYNC    = 83
+	sysUTIMENSAT    = 88
+	sysSETPRIORITY  = 140
+	sysGETPRIORITY  = 141
+	sysSETREGID     = 143
+	sysSETGID       = 144
+	sysSETREUID     = 145
+	sysSETUID       = 146
+	sysGETPGID      = 155
+	sysGETGROUPS    = 158
+	sysSETGROUPS    = 159
+	sysUNAME        = 160
+	sysGETRUSAGE    = 165
+	sysUMASK        = 166
+	sysGETTIMEOFDAY = 169
+	sysGETPPID      = 173
+	sysGETUID       = 174
+	sysGETEUID      = 175
+	sysGETGID       = 176
+	sysGETEGID      = 177
+	sysPRLIMIT64    = 261
+	sysRENAMEAT2    = 276
+	sysGETRANDOM    = 278
 )
 
 // Errno values (Linux numbering) produced by the emulation itself.
@@ -310,12 +396,11 @@ func darwinCallNoError(fn uintptr) (r1, r2, errno uintptr) {
 // called from Syscall6's darwin path, so it must keep exactly Syscall6's
 // signature.
 //
-// The dispatch spine and every syscall a forked child can reach (the
-// id family, umask, fcntl, chdir) are nosplit so that path never grows
-// the stack; the linker verifies the bound. The stat family, getcwd
-// and getrandom are deliberately NOT nosplit - they are never invoked
-// between fork and exec, and their Apple stat buffers would blow the
-// nosplit budget.
+// The dispatch spine and every syscall a forked child can reach are
+// nosplit, so that path never grows the stack, and the linker verifies
+// the bound. The stat family, getcwd and getrandom are deliberately NOT
+// nosplit: nothing invokes them between fork and exec, and their Apple
+// stat buffers would blow the budget.
 //
 //go:nosplit
 func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintptr) {
@@ -381,6 +466,15 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinCall(darwinFns.Readv, a1, a2, a3, 0, 0, 0)
 	case sysWRITEV:
 		return darwinCall(darwinFns.Writev, a1, a2, a3, 0, 0, 0)
+	case sysLSEEK:
+		// lseek(fd, offset, whence): SEEK_SET/CUR/END are 0/1/2 on both
+		// systems. Returns the new offset.
+		return darwinCall(darwinFns.Lseek, a1, a2, a3, 0, 0, 0)
+	case SYS_PREAD64:
+		// pread(fd, buf, count, offset): fixed arity, identical layout.
+		return darwinCall(darwinFns.Pread, a1, a2, a3, a4, 0, 0)
+	case sysPWRITE64:
+		return darwinCall(darwinFns.Pwrite, a1, a2, a3, a4, 0, 0)
 	case sysREADLINKAT:
 		return darwinCall(darwinFns.Readlinkat, darwinXlatDirfd(a1), a2, a3, a4, 0, 0)
 	case sysNEWFSTATAT:
@@ -393,6 +487,94 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		return darwinFcntl(a1, a2, a3)
 	case sysGETRANDOM:
 		return darwinGetrandom(a1, a2)
+
+	// File and metadata syscalls whose Apple entries take the same
+	// arguments and give the same meaning to every value.
+	case sysFSYNC:
+		return darwinCall(darwinFns.Fsync, a1, 0, 0, 0, 0, 0)
+	case sysFTRUNCATE:
+		return darwinCall(darwinFns.Ftruncate, a1, a2, 0, 0, 0, 0)
+	case sysTRUNCATE:
+		return darwinCall(darwinFns.Truncate, a1, a2, 0, 0, 0, 0)
+	case sysFCHMOD:
+		return darwinCall(darwinFns.Fchmod, a1, a2, 0, 0, 0, 0)
+	case sysFCHMODAT:
+		// The Linux syscall takes no flags, so a4 is this port's own
+		// argument and only os.Root's chmod sends one. Apple's entry
+		// does take flags, and the numbers differ.
+		aflags := uintptr(0)
+		if a4&^uintptr(linuxAT_SYMLINK_NOFOLLOW) != 0 {
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		if a4&linuxAT_SYMLINK_NOFOLLOW != 0 {
+			aflags = appleAT_SYMLINK_NOFOLLOW
+		}
+		return darwinCall(darwinFns.Fchmodat, darwinXlatDirfd(a1), a2, a3, aflags, 0, 0)
+	case sysFCHOWN:
+		return darwinCall(darwinFns.Fchown, a1, a2, a3, 0, 0, 0)
+	case sysFCHOWNAT:
+		return darwinFchownat(a1, a2, a3, a4, a5)
+	case sysFCHDIR:
+		return darwinCall(darwinFns.Fchdir, a1, 0, 0, 0, 0, 0)
+	case sysIOCTL:
+		return darwinIoctl(a1, a2, a3)
+	case sysSYNC:
+		return darwinSync()
+	case sysFDATASYNC:
+		return darwinFdatasync(a1)
+	case sysGETRUSAGE:
+		return darwinGetrusage(a1, a2)
+	case sysGETTIMEOFDAY:
+		return darwinGettimeofday(a1, a2)
+	case sysFLOCK:
+		// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+		// Linux took them from BSD, which is what Apple still ships.
+		// Linux's own LOCK_MAND extension has no Apple counterpart and
+		// reaches libc as an unknown operation, which answers EINVAL.
+		return darwinCall(darwinFns.Flock, a1, a2, 0, 0, 0, 0)
+	case sysLINKAT:
+		return darwinLinkat(a1, a2, a3, a4, a5)
+	case sysSYMLINKAT:
+		// symlinkat(target, newdirfd, linkpath): the target is a plain
+		// string, so only the second argument is a descriptor.
+		return darwinCall(darwinFns.Symlinkat, a1, darwinXlatDirfd(a2), a3, 0, 0, 0)
+	case sysMKNODAT:
+		return darwinMknodat(a1, a2, a3, a4)
+	case sysUTIMENSAT:
+		return darwinUtimensat(a1, a2, a3, a4)
+	case sysSENDFILE:
+		return darwinSendfile(a1, a2, a3, a4)
+	case sysSTATFS:
+		return darwinStatfs(darwinFns.Statfs, a1, a2, a3)
+	case sysFSTATFS:
+		return darwinStatfs(darwinFns.Fstatfs, a1, a2, a3)
+	case sysUNAME:
+		return darwinUname(a1, a2)
+
+	// Credentials, priority and resource limits.
+	case sysCHROOT:
+		return darwinCall(darwinFns.Chroot, a1, 0, 0, 0, 0, 0)
+	case sysSETUID:
+		return darwinCall(darwinFns.Setuid, a1, 0, 0, 0, 0, 0)
+	case sysSETGID:
+		return darwinCall(darwinFns.Setgid, a1, 0, 0, 0, 0, 0)
+	case sysSETREUID:
+		return darwinCall(darwinFns.Setreuid, a1, a2, 0, 0, 0, 0)
+	case sysSETREGID:
+		return darwinCall(darwinFns.Setregid, a1, a2, 0, 0, 0, 0)
+	case sysGETPGID:
+		return darwinCall(darwinFns.Getpgid, a1, 0, 0, 0, 0, 0)
+	case sysGETGROUPS:
+		// gid_t is a 32-bit unsigned integer on both systems.
+		return darwinCall(darwinFns.Getgroups, a1, a2, 0, 0, 0, 0)
+	case sysSETGROUPS:
+		return darwinCall(darwinFns.Setgroups, a1, a2, 0, 0, 0, 0)
+	case sysGETPRIORITY:
+		return darwinGetpriority(a1, a2)
+	case sysSETPRIORITY:
+		return darwinCall(darwinFns.Setpriority, a1, a2, a3, 0, 0, 0)
+	case sysPRLIMIT64:
+		return darwinPrlimit(a1, a2, a3, a4)
 
 	case sysSOCKET:
 		return darwinSocket(a1, a2, a3)
@@ -562,49 +744,32 @@ func darwinFstat(fd, statbuf uintptr) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// Dirent record header sizes for the getdents64 emulation. The fixed
-// fields before d_name:
+// Dirent header sizes for the getdents64 emulation, the fixed fields
+// before d_name:
 //
-//	Apple __getdirentries64 record     Linux dirent64 record
-//	 0  d_ino     uint64                0  d_ino    uint64
-//	 8  d_seekoff uint64                8  d_off    int64
-//	16  d_reclen  uint16               16  d_reclen uint16
-//	18  d_namlen  uint16               18  d_type   uint8
-//	20  d_type    uint8                19  d_name   [] (NUL-terminated)
-//	21  d_name    [] (NUL-terminated)
+//	Apple  0 d_ino u64, 8 d_seekoff u64, 16 d_reclen u16,
+//	       18 d_namlen u16, 20 d_type u8, 21 d_name
+//	Linux  0 d_ino u64, 8 d_off i64,     16 d_reclen u16,
+//	       18 d_type u8, 19 d_name
 //
-// d_ino/d_reclen line up; d_seekoff is the next-entry seek cookie, the
-// same role Linux gives d_off. The d_type VALUES are identical on both
-// systems (shared BSD lineage, DT_* = S_IFMT>>12): DT_UNKNOWN 0,
-// DT_FIFO 1, DT_CHR 2, DT_DIR 4, DT_BLK 6, DT_REG 8, DT_LNK 10,
-// DT_SOCK 12, DT_WHT 14 - verified against Linux include/dirent.h and
-// Apple bsd/sys/dirent.h, so d_type passes through untranslated.
+// d_ino and d_reclen line up, and d_seekoff is the cookie Linux calls
+// d_off. The d_type VALUES are identical - shared BSD lineage, DT_* =
+// S_IFMT>>12 - so d_type passes through untranslated.
 const (
 	appleDirentHdrLen = 21
 	linuxDirentHdrLen = 19
 )
 
 // darwinGetdents64 emulates the Linux getdents64 syscall with Apple's
-// __getdirentries64 (the raw fd-offset-based directory read behind
-// libc readdir; resolved via dlsym - xnu's own userspace tests link it,
-// it is exported from libSystem). Apple fills the caller's buffer with
-// Apple-layout records, which are then rewritten IN PLACE into Linux
-// dirent64 records.
-//
-// The in-place rewrite is safe front to back: for any name length the
-// Linux record is never longer than the Apple record (19- vs 21-byte
-// header, both padded to 8), so the write cursor can never pass the
-// read cursor; the header fields are copied into locals before the
-// destination header is stored, and the name copy runs low-to-high
-// with dst+19 <= src+21. This also means every rewritten record fits
-// where its source stood - no partial-record truncation is possible.
-//
-// Quirk (xnu bsd/sys/dirent_private.h): when bufsize >= 1024, the
-// kernel reserves the FINAL 4 bytes of the buffer for a flags word
-// (GETDIRENTRIES64_EOF) and fills at most bufsize-4 bytes of records.
-// Returning slightly fewer bytes per call than Linux would is fine;
-// the flags word lands beyond the returned length, where callers
-// (syscall.ParseDirent, os) never look.
+// __getdirentries64, the raw fd-offset directory read behind libc
+// readdir. Apple fills the caller's buffer with Apple-layout records,
+// which are rewritten IN PLACE into Linux dirent64 records. That is
+// safe front to back: for any name length the Linux record is never
+// longer than the Apple one, so the write cursor never passes the read
+// cursor and no record can be truncated. Quirk: at bufsize >= 1024 the
+// kernel reserves the FINAL 4 bytes for a flags word and fills at most
+// bufsize-4. Returning slightly fewer bytes per call than Linux is
+// fine, since that word lands beyond the returned length.
 //
 //go:nosplit
 func darwinGetdents64(fd, buf, count uintptr) (r1, r2, errno uintptr) {
@@ -674,6 +839,16 @@ const (
 	linuxF_DUPFD_CLOEXEC = 1030
 	appleF_DUPFD_CLOEXEC = 67
 
+	// Record locks. Both systems number these three consecutively and
+	// both take a struct flock, but the numbers and the record's field
+	// order differ. See DarwinFlock.
+	linuxF_GETLK  = 5
+	linuxF_SETLK  = 6
+	linuxF_SETLKW = 7
+	appleF_GETLK  = 7
+	appleF_SETLK  = 8
+	appleF_SETLKW = 9
+
 	// F_GETPATH resolves an fd to its path. Apple-only: it is passed
 	// through under Apple's own number because Linux has no counterpart
 	// to translate from, and 50 is not a Linux fcntl command (Linux uses
@@ -727,6 +902,14 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 		if arg == 0 {
 			return ^uintptr(0), 0, darwinEFAULT
 		}
+	case linuxF_GETLK, linuxF_SETLK, linuxF_SETLKW:
+		// arg is a DarwinFlock the syscall package built, the same
+		// caller-owned-buffer contract F_GETPATH has. Only the command
+		// number is this function's to translate.
+		if arg == 0 {
+			return ^uintptr(0), 0, darwinEFAULT
+		}
+		cmd += appleF_GETLK - linuxF_GETLK
 	default:
 		// Locking, owner and lease commands have incompatible
 		// argument structures; refuse rather than corrupt.

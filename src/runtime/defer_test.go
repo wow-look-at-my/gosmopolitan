@@ -76,6 +76,7 @@ var list []int
 // Make sure that conditional open-coded defers are activated correctly and run in
 // the correct order.
 func TestConditionalDefers(t *testing.T) {
+	t.Serial()
 	list = make([]int, 0, 10)
 
 	defer func() {
@@ -202,6 +203,7 @@ func sideeffect2(in containsBigStruct) containsBigStruct {
 
 // Test that nonSSAable arguments to defer are handled correctly and only evaluated once.
 func TestNonSSAableArgs(t *testing.T) {
+	t.Serial()
 	globint1 = 0
 	globint2 = 0
 	globint3 = 0

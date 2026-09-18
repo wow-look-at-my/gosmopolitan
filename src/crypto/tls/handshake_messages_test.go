@@ -17,26 +17,31 @@ import (
 	"time"
 )
 
-var tests = []handshakeMessage{
-	&clientHelloMsg{},
-	&serverHelloMsg{},
-	&finishedMsg{},
+// testMessages returns one message of each kind, fresh. Every test here
+// unmarshals into the messages it gets, so two tests sharing a set would
+// unmarshal into the same struct at the same time.
+func testMessages() []handshakeMessage {
+	return []handshakeMessage{
+		&clientHelloMsg{},
+		&serverHelloMsg{},
+		&finishedMsg{},
 
-	&certificateMsg{},
-	&certificateRequestMsg{},
-	&certificateVerifyMsg{
-		hasSignatureAlgorithm: true,
-	},
-	&certificateStatusMsg{},
-	&clientKeyExchangeMsg{},
-	&newSessionTicketMsg{},
-	&encryptedExtensionsMsg{},
-	&endOfEarlyDataMsg{},
-	&keyUpdateMsg{},
-	&newSessionTicketMsgTLS13{},
-	&certificateRequestMsgTLS13{},
-	&certificateMsgTLS13{},
-	&SessionState{},
+		&certificateMsg{},
+		&certificateRequestMsg{},
+		&certificateVerifyMsg{
+			hasSignatureAlgorithm: true,
+		},
+		&certificateStatusMsg{},
+		&clientKeyExchangeMsg{},
+		&newSessionTicketMsg{},
+		&encryptedExtensionsMsg{},
+		&endOfEarlyDataMsg{},
+		&keyUpdateMsg{},
+		&newSessionTicketMsgTLS13{},
+		&certificateRequestMsgTLS13{},
+		&certificateMsgTLS13{},
+		&SessionState{},
+	}
 }
 
 func mustMarshal(t *testing.T, msg handshakeMessage) []byte {
@@ -51,7 +56,7 @@ func mustMarshal(t *testing.T, msg handshakeMessage) []byte {
 func TestMarshalUnmarshal(t *testing.T) {
 	rand := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	for i, m := range tests {
+	for i, m := range testMessages() {
 		ty := reflect.ValueOf(m).Type()
 		t.Run(ty.String(), func(t *testing.T) {
 			n := 100
@@ -121,7 +126,7 @@ func TestMarshalUnmarshal(t *testing.T) {
 
 func TestFuzz(t *testing.T) {
 	rand := rand.New(rand.NewSource(0))
-	for _, m := range tests {
+	for _, m := range testMessages() {
 		for j := 0; j < 1000; j++ {
 			len := rand.Intn(1000)
 			bytes := randomBytes(len, rand)

@@ -12,6 +12,7 @@ import (
 	"cmd/internal/pkgpattern"
 	"fmt"
 	"go/build"
+	"internal/vendorlist"
 	"io/fs"
 	"os"
 	"path"
@@ -123,6 +124,19 @@ func (m *Match) MatchPackages() {
 		have["runtime/cgo"] = true // ignore during walk
 	}
 
+	// An embedded standard library lists itself; it holds no commands.
+	if cfg.EmbeddedStd && (m.pattern == "std" || m.pattern == "cmd") {
+		if m.pattern == "std" {
+			for _, pkg := range cfg.EmbeddedManifest().Packages {
+				if !have[pkg.ImportPath] && match(pkg.ImportPath) {
+					have[pkg.ImportPath] = true
+					m.Pkgs = append(m.Pkgs, pkg.ImportPath)
+				}
+			}
+		}
+		return
+	}
+
 	for _, src := range cfg.BuildContext.SrcDirs() {
 		if (m.pattern == "std" || m.pattern == "cmd") && src != cfg.GOROOTsrc {
 			continue
@@ -174,9 +188,26 @@ func (m *Match) MatchPackages() {
 				return filepath.SkipDir
 			}
 
+			// A vendor tree here holds whole repositories, checked out as
+			// submodules, so it carries packages the distribution never
+			// vendored and whose imports do not resolve. modules.txt names
+			// the ones that are part of the build.
+			if !vendorlist.Vendors(path) {
+				return nil
+			}
+
 			if have[name] {
 				return nil
 			}
+
+			// A vendor tree here holds whole repositories, checked out as
+			// submodules, so it carries packages the distribution never
+			// vendored and whose imports do not resolve. modules.txt names
+			// the ones that are part of the build.
+			if !vendorlist.Vendors(path) {
+				return nil
+			}
+
 			have[name] = true
 			if !match(name) {
 				return nil

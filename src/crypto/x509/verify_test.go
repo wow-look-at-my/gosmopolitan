@@ -39,7 +39,17 @@ type verifyTest struct {
 	dnsName       string
 	systemSkip    bool
 	systemLax     bool
-	keyUsages     []ExtKeyUsage
+	// darwinSkip names why the macOS trust store no longer accepts this
+	// chain: the platform verifier answers from Apple's revocation and
+	// policy data, which the pinned verify date does not turn back.
+	darwinSkip string
+	// systemSkipHosts names the hosts whose platform verifier cannot
+	// judge this fixture. The fixtures are real certificates pinned to a
+	// currentTime in the past, and a verifier that applies today's trust
+	// policy instead answers about the world rather than about this
+	// package. TestGoVerify still covers the fixture on every host.
+	systemSkipHosts []string
+	keyUsages       []ExtKeyUsage
 
 	errorCallback  func(*testing.T, error)
 	expectedChains [][]string
@@ -51,11 +61,11 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "www.google.com",
 
 		expectedChains: [][]string{
-			{"www.google.com", "GTS CA 1C3", "GTS Root R1"},
+			{"www.google.com", "WR2", "GTS Root R1"},
 		},
 	},
 	{
@@ -63,11 +73,11 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "www.google.com.",
 
 		expectedChains: [][]string{
-			{"www.google.com", "GTS CA 1C3", "GTS Root R1"},
+			{"www.google.com", "WR2", "GTS Root R1"},
 		},
 	},
 	{
@@ -75,11 +85,11 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "WwW.GooGLE.coM",
 
 		expectedChains: [][]string{
-			{"www.google.com", "GTS CA 1C3", "GTS Root R1"},
+			{"www.google.com", "WR2", "GTS Root R1"},
 		},
 	},
 	{
@@ -87,7 +97,7 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "www.example.com",
 
 		errorCallback: expectHostnameError("certificate is valid for"),
@@ -117,7 +127,7 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "1.2.3.4",
 
 		errorCallback: expectHostnameError("doesn't contain any IP SANs"),
@@ -136,7 +146,7 @@ var verifyTests = []verifyTest{
 		name:        "MissingIntermediate",
 		leaf:        googleLeaf,
 		roots:       []string{gtsRoot},
-		currentTime: 1677615892,
+		currentTime: 1789351727,
 		dnsName:     "www.google.com",
 
 		// Skip when using systemVerify, since Windows
@@ -149,11 +159,11 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeaf,
 		intermediates: []string{gtsRoot, gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "www.google.com",
 
 		expectedChains: [][]string{
-			{"www.google.com", "GTS CA 1C3", "GTS Root R1"},
+			{"www.google.com", "WR2", "GTS Root R1"},
 		},
 		// CAPI doesn't build the chain with the duplicated GeoTrust
 		// entry so the results don't match.
@@ -164,7 +174,7 @@ var verifyTests = []verifyTest{
 		leaf:          googleLeafWithInvalidHash,
 		intermediates: []string{gtsIntermediate},
 		roots:         []string{gtsRoot},
-		currentTime:   1677615892,
+		currentTime:   1789351727,
 		dnsName:       "www.google.com",
 
 		// The specific error message may not occur when using system
@@ -215,6 +225,11 @@ var verifyTests = []verifyTest{
 		roots:         []string{globalSignRoot},
 		currentTime:   1524771953,
 		dnsName:       "udctest.ads.vt.edu",
+		darwinSkip:    "Apple lists the Trusted Root CA SHA256 G2 intermediate as revoked",
+
+		// Apple's Security framework rejects this chain: "Trusted Root CA
+		// SHA256 G2" certificate is revoked.
+		systemSkipHosts: []string{"darwin", "ios"},
 
 		expectedChains: [][]string{
 			{
@@ -236,7 +251,12 @@ var verifyTests = []verifyTest{
 		dnsName:       "tm.cn",
 
 		// CryptoAPI can find alternative validation paths.
-		systemLax: true,
+		systemLax:  true,
+		darwinSkip: "Apple's policy rejects the *.tm.cn leaf as not standards compliant",
+
+		// Apple's Security framework rejects this leaf: "*.tm.cn"
+		// certificate is not standards compliant.
+		systemSkipHosts: []string{"darwin", "ios"},
 
 		expectedChains: [][]string{
 			{
@@ -546,14 +566,21 @@ func TestGoVerify(t *testing.T) {
 }
 
 func TestSystemVerify(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	// The question is whether this BUILD carries a systemVerify, which is
+	// what the code under test branches on. runtime.GOOS names the host,
+	// and a cosmo binary on an NT host answers "windows" to it while
+	// compiling the pool-based verifier that knows no platform root.
+	if !hasPlatformVerifier {
 		t.Skipf("skipping verify test using system APIs on %q", runtime.GOOS)
 	}
 
 	for _, test := range verifyTests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.systemSkip {
+			if test.systemSkip || slices.Contains(test.systemSkipHosts, runtime.GOOS) {
 				t.SkipNow()
+			}
+			if test.darwinSkip != "" && runtime.GOOS == "darwin" {
+				t.Skip(test.darwinSkip)
 			}
 			testVerify(t, test, true)
 		})
@@ -600,36 +627,33 @@ func generatePEMCertWithRepeatSAN(currentTime int64, count int, san string) stri
 }
 
 const gtsIntermediate = `-----BEGIN CERTIFICATE-----
-MIIFljCCA36gAwIBAgINAgO8U1lrNMcY9QFQZjANBgkqhkiG9w0BAQsFADBHMQsw
-CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
-MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMjAwODEzMDAwMDQyWhcNMjcwOTMwMDAw
-MDQyWjBGMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp
-Y2VzIExMQzETMBEGA1UEAxMKR1RTIENBIDFDMzCCASIwDQYJKoZIhvcNAQEBBQAD
-ggEPADCCAQoCggEBAPWI3+dijB43+DdCkH9sh9D7ZYIl/ejLa6T/belaI+KZ9hzp
-kgOZE3wJCor6QtZeViSqejOEH9Hpabu5dOxXTGZok3c3VVP+ORBNtzS7XyV3NzsX
-lOo85Z3VvMO0Q+sup0fvsEQRY9i0QYXdQTBIkxu/t/bgRQIh4JZCF8/ZK2VWNAcm
-BA2o/X3KLu/qSHw3TT8An4Pf73WELnlXXPxXbhqW//yMmqaZviXZf5YsBvcRKgKA
-gOtjGDxQSYflispfGStZloEAoPtR28p3CwvJlk/vcEnHXG0g/Zm0tOLKLnf9LdwL
-tmsTDIwZKxeWmLnwi/agJ7u2441Rj72ux5uxiZ0CAwEAAaOCAYAwggF8MA4GA1Ud
-DwEB/wQEAwIBhjAdBgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwEgYDVR0T
-AQH/BAgwBgEB/wIBADAdBgNVHQ4EFgQUinR/r4XN7pXNPZzQ4kYU83E1HScwHwYD
-VR0jBBgwFoAU5K8rJnEaK0gnhS9SZizv8IkTcT4waAYIKwYBBQUHAQEEXDBaMCYG
-CCsGAQUFBzABhhpodHRwOi8vb2NzcC5wa2kuZ29vZy9ndHNyMTAwBggrBgEFBQcw
-AoYkaHR0cDovL3BraS5nb29nL3JlcG8vY2VydHMvZ3RzcjEuZGVyMDQGA1UdHwQt
-MCswKaAnoCWGI2h0dHA6Ly9jcmwucGtpLmdvb2cvZ3RzcjEvZ3RzcjEuY3JsMFcG
-A1UdIARQME4wOAYKKwYBBAHWeQIFAzAqMCgGCCsGAQUFBwIBFhxodHRwczovL3Br
-aS5nb29nL3JlcG9zaXRvcnkvMAgGBmeBDAECATAIBgZngQwBAgIwDQYJKoZIhvcN
-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
+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
 -----END CERTIFICATE-----`
 
 const gtsRoot = `-----BEGIN CERTIFICATE-----
@@ -665,69 +689,57 @@ bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
 -----END CERTIFICATE-----`
 
 const googleLeaf = `-----BEGIN CERTIFICATE-----
-MIIFUjCCBDqgAwIBAgIQERmRWTzVoz0SMeozw2RM3DANBgkqhkiG9w0BAQsFADBG
-MQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExM
-QzETMBEGA1UEAxMKR1RTIENBIDFDMzAeFw0yMzAxMDIwODE5MTlaFw0yMzAzMjcw
-ODE5MThaMBkxFzAVBgNVBAMTDnd3dy5nb29nbGUuY29tMIIBIjANBgkqhkiG9w0B
-AQEFAAOCAQ8AMIIBCgKCAQEAq30odrKMT54TJikMKL8S+lwoCMT5geP0u9pWjk6a
-wdB6i3kO+UE4ijCAmhbcZKeKaLnGJ38weZNwB1ayabCYyX7hDiC/nRcZU49LX5+o
-55kDVaNn14YKkg2kCeX25HDxSwaOsNAIXKPTqiQL5LPvc4Twhl8HY51hhNWQrTEr
-N775eYbixEULvyVLq5BLbCOpPo8n0/MTjQ32ku1jQq3GIYMJC/Rf2VW5doF6t9zs
-KleflAN8OdKp0ME9OHg0T1P3yyb67T7n0SpisHbeG06AmQcKJF9g/9VPJtRf4l1Q
-WRPDC+6JUqzXCxAGmIRGZ7TNMxPMBW/7DRX6w8oLKVNb0wIDAQABo4ICZzCCAmMw
-DgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQC
-MAAwHQYDVR0OBBYEFBnboj3lf9+Xat4oEgo6ZtIMr8ZuMB8GA1UdIwQYMBaAFIp0
-f6+Fze6VzT2c0OJGFPNxNR0nMGoGCCsGAQUFBwEBBF4wXDAnBggrBgEFBQcwAYYb
-aHR0cDovL29jc3AucGtpLmdvb2cvZ3RzMWMzMDEGCCsGAQUFBzAChiVodHRwOi8v
-cGtpLmdvb2cvcmVwby9jZXJ0cy9ndHMxYzMuZGVyMBkGA1UdEQQSMBCCDnd3dy5n
-b29nbGUuY29tMCEGA1UdIAQaMBgwCAYGZ4EMAQIBMAwGCisGAQQB1nkCBQMwPAYD
-VR0fBDUwMzAxoC+gLYYraHR0cDovL2NybHMucGtpLmdvb2cvZ3RzMWMzL1FPdkow
-TjFzVDJBLmNybDCCAQQGCisGAQQB1nkCBAIEgfUEgfIA8AB2AHoyjFTYty22IOo4
-4FIe6YQWcDIThU070ivBOlejUutSAAABhXHHOiUAAAQDAEcwRQIgBUkikUIXdo+S
-3T8PP0/cvokhUlumRE3GRWGL4WRMLpcCIQDY+bwK384mZxyXGZ5lwNRTAPNzT8Fx
-1+//nbaGK3BQMAB2AOg+0No+9QY1MudXKLyJa8kD08vREWvs62nhd31tBr1uAAAB
-hXHHOfQAAAQDAEcwRQIgLoVydNfMFKV9IoZR+M0UuJ2zOqbxIRum7Sn9RMPOBGMC
-IQD1/BgzCSDTvYvco6kpB6ifKSbg5gcb5KTnYxQYwRW14TANBgkqhkiG9w0BAQsF
-AAOCAQEA2bQQu30e3OFu0bmvQHmcqYvXBu6tF6e5b5b+hj4O+Rn7BXTTmaYX3M6p
-MsfRH4YVJJMB/dc3PROR2VtnKFC6gAZX+RKM6nXnZhIlOdmQnonS1ecOL19PliUd
-VXbwKjXqAO0Ljd9y9oXaXnyPyHmUJNI5YXAcxE+XXiOZhcZuMYyWmoEKJQ/XlSga
-zWfTn1IcKhA3IC7A1n/5bkkWD1Xi1mdWFQ6DQDMp//667zz7pKOgFMlB93aPDjvI
-c78zEqNswn6xGKXpWF5xVwdFcsx9HKhJ6UAi2bQ/KQ1yb7LPUOR6wXXWrG1cLnNP
-i8eNLnKL9PXQ+5SwJFCzfEhcIZuhzg==
+MIIEMjCCAxqgAwIBAgIQUkvcWj00f1gSQHGaLyYhajANBgkqhkiG9w0BAQsFADA7
+MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZpY2VzMQww
+CgYDVQQDEwNXUjIwHhcNMjYwODEwMDgzOTQ5WhcNMjYxMTAyMDgzOTQ4WjAZMRcw
+FQYDVQQDEw53d3cuZ29vZ2xlLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IA
+BHFCBgPlIJ09m2GYxJKIJQrbBIldDXzUnUNiY2hQ/Y/sDxMsMkjg13xYvmo2kJE7
+Ivj3Q1lwJaJ0TPwkoqdlgdOjggIdMIICGTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0l
+BAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQU/J8OowMnfjPJ
+dHv+qlRwzbfwq8YwHwYDVR0jBBgwFoAU3hse7XkV1D43JMMhu+w0OW1CsjAwNQYI
+KwYBBQUHAQEEKTAnMCUGCCsGAQUFBzAChhlodHRwOi8vaS5wa2kuZ29vZy93cjIu
+Y3J0MBkGA1UdEQQSMBCCDnd3dy5nb29nbGUuY29tMBMGA1UdIAQMMAowCAYGZ4EM
+AQIBMDYGA1UdHwQvMC0wK6ApoCeGJWh0dHA6Ly9jLnBraS5nb29nL3dyMi85VVZi
+TjB3NUU2WS5jcmwwggEDBgorBgEEAdZ5AgQCBIH0BIHxAO8AdQDXbX0Q0af1d8LH
+6V/XAL/5gskzWmXh0LMBcxfAyMVpdwAAAZ/rCvETAAAEAwBGMEQCIHdeVOEwHt5e
+nZjddxfc4F6rTdQ/GrXOplX3kqU4q7i9AiB4fJgYAphY9MPCUIE1gCBZ0wHPm3cR
+4LE45NTm8C+IOwB2AJROQ4f67MHvgfMZJCaoGGUBx9NfOAIBP3JnfVU3LhnYAAAB
+n+sK8SIAAAQDAEcwRQIgZAqiaPEX/xqsReFd1M20+6XLfVps49hMpWCFfE3sQ+4C
+IQCIaP2cSoK+3jqcb1tV6CF6hEF92qMZeciaU5pvsRhWoTANBgkqhkiG9w0BAQsF
+AAOCAQEAUC+eE1aVrJHHvEcX0ZXhTdS3Kal6Z8oI6zJFoTSymZY3EAnTvgG0hCCQ
+mlL+RSS0H2UtvnpMIuttvVjJN1AaJUUKV/Cu5ur+hJMLT1pMO1Kv0J+uwlmgzjWJ
+ZcY+isUMb1SiuJl62vdzA6kN03iQLWKa/D0UlNURJcdSTzWPg741NOcIMiVzJTVC
+8MAEHUpzikHFQPmiRcwFklmPk9xV7Sx7NlF2BKjSZX9bTwpOhIwKHBQNOFOTuWRJ
+hZi9Vr5WFHXBHPLIHpDqsfBTuBXnOkmYtqLFkHkNH0DxPcAfFAhnLpqSOdEhee5s
+iz/xWaz/xHNo7HJllHoVBomBhirakQ==
 -----END CERTIFICATE-----`
 
 // googleLeafWithInvalidHash is the same as googleLeaf, but the signature
 // algorithm in the certificate contains a nonsense OID.
 const googleLeafWithInvalidHash = `-----BEGIN CERTIFICATE-----
-MIIFUjCCBDqgAwIBAgIQERmRWTzVoz0SMeozw2RM3DANBgkqhkiG9w0BAQ4FADBG
-MQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExM
-QzETMBEGA1UEAxMKR1RTIENBIDFDMzAeFw0yMzAxMDIwODE5MTlaFw0yMzAzMjcw
-ODE5MThaMBkxFzAVBgNVBAMTDnd3dy5nb29nbGUuY29tMIIBIjANBgkqhkiG9w0B
-AQEFAAOCAQ8AMIIBCgKCAQEAq30odrKMT54TJikMKL8S+lwoCMT5geP0u9pWjk6a
-wdB6i3kO+UE4ijCAmhbcZKeKaLnGJ38weZNwB1ayabCYyX7hDiC/nRcZU49LX5+o
-55kDVaNn14YKkg2kCeX25HDxSwaOsNAIXKPTqiQL5LPvc4Twhl8HY51hhNWQrTEr
-N775eYbixEULvyVLq5BLbCOpPo8n0/MTjQ32ku1jQq3GIYMJC/Rf2VW5doF6t9zs
-KleflAN8OdKp0ME9OHg0T1P3yyb67T7n0SpisHbeG06AmQcKJF9g/9VPJtRf4l1Q
-WRPDC+6JUqzXCxAGmIRGZ7TNMxPMBW/7DRX6w8oLKVNb0wIDAQABo4ICZzCCAmMw
-DgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAwGA1UdEwEB/wQC
-MAAwHQYDVR0OBBYEFBnboj3lf9+Xat4oEgo6ZtIMr8ZuMB8GA1UdIwQYMBaAFIp0
-f6+Fze6VzT2c0OJGFPNxNR0nMGoGCCsGAQUFBwEBBF4wXDAnBggrBgEFBQcwAYYb
-aHR0cDovL29jc3AucGtpLmdvb2cvZ3RzMWMzMDEGCCsGAQUFBzAChiVodHRwOi8v
-cGtpLmdvb2cvcmVwby9jZXJ0cy9ndHMxYzMuZGVyMBkGA1UdEQQSMBCCDnd3dy5n
-b29nbGUuY29tMCEGA1UdIAQaMBgwCAYGZ4EMAQIBMAwGCisGAQQB1nkCBQMwPAYD
-VR0fBDUwMzAxoC+gLYYraHR0cDovL2NybHMucGtpLmdvb2cvZ3RzMWMzL1FPdkow
-TjFzVDJBLmNybDCCAQQGCisGAQQB1nkCBAIEgfUEgfIA8AB2AHoyjFTYty22IOo4
-4FIe6YQWcDIThU070ivBOlejUutSAAABhXHHOiUAAAQDAEcwRQIgBUkikUIXdo+S
-3T8PP0/cvokhUlumRE3GRWGL4WRMLpcCIQDY+bwK384mZxyXGZ5lwNRTAPNzT8Fx
-1+//nbaGK3BQMAB2AOg+0No+9QY1MudXKLyJa8kD08vREWvs62nhd31tBr1uAAAB
-hXHHOfQAAAQDAEcwRQIgLoVydNfMFKV9IoZR+M0UuJ2zOqbxIRum7Sn9RMPOBGMC
-IQD1/BgzCSDTvYvco6kpB6ifKSbg5gcb5KTnYxQYwRW14TANBgkqhkiG9w0BAQ4F
-AAOCAQEA2bQQu30e3OFu0bmvQHmcqYvXBu6tF6e5b5b+hj4O+Rn7BXTTmaYX3M6p
-MsfRH4YVJJMB/dc3PROR2VtnKFC6gAZX+RKM6nXnZhIlOdmQnonS1ecOL19PliUd
-VXbwKjXqAO0Ljd9y9oXaXnyPyHmUJNI5YXAcxE+XXiOZhcZuMYyWmoEKJQ/XlSga
-zWfTn1IcKhA3IC7A1n/5bkkWD1Xi1mdWFQ6DQDMp//667zz7pKOgFMlB93aPDjvI
-c78zEqNswn6xGKXpWF5xVwdFcsx9HKhJ6UAi2bQ/KQ1yb7LPUOR6wXXWrG1cLnNP
-i8eNLnKL9PXQ+5SwJFCzfEhcIZuhzg==
+MIIEMjCCAxqgAwIBAgIQUkvcWj00f1gSQHGaLyYhajANBgkqhkiG9w0BAQ4FADA7
+MQswCQYDVQQGEwJVUzEeMBwGA1UEChMVR29vZ2xlIFRydXN0IFNlcnZpY2VzMQww
+CgYDVQQDEwNXUjIwHhcNMjYwODEwMDgzOTQ5WhcNMjYxMTAyMDgzOTQ4WjAZMRcw
+FQYDVQQDEw53d3cuZ29vZ2xlLmNvbTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IA
+BHFCBgPlIJ09m2GYxJKIJQrbBIldDXzUnUNiY2hQ/Y/sDxMsMkjg13xYvmo2kJE7
+Ivj3Q1lwJaJ0TPwkoqdlgdOjggIdMIICGTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0l
+BAwwCgYIKwYBBQUHAwEwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQU/J8OowMnfjPJ
+dHv+qlRwzbfwq8YwHwYDVR0jBBgwFoAU3hse7XkV1D43JMMhu+w0OW1CsjAwNQYI
+KwYBBQUHAQEEKTAnMCUGCCsGAQUFBzAChhlodHRwOi8vaS5wa2kuZ29vZy93cjIu
+Y3J0MBkGA1UdEQQSMBCCDnd3dy5nb29nbGUuY29tMBMGA1UdIAQMMAowCAYGZ4EM
+AQIBMDYGA1UdHwQvMC0wK6ApoCeGJWh0dHA6Ly9jLnBraS5nb29nL3dyMi85VVZi
+TjB3NUU2WS5jcmwwggEDBgorBgEEAdZ5AgQCBIH0BIHxAO8AdQDXbX0Q0af1d8LH
+6V/XAL/5gskzWmXh0LMBcxfAyMVpdwAAAZ/rCvETAAAEAwBGMEQCIHdeVOEwHt5e
+nZjddxfc4F6rTdQ/GrXOplX3kqU4q7i9AiB4fJgYAphY9MPCUIE1gCBZ0wHPm3cR
+4LE45NTm8C+IOwB2AJROQ4f67MHvgfMZJCaoGGUBx9NfOAIBP3JnfVU3LhnYAAAB
+n+sK8SIAAAQDAEcwRQIgZAqiaPEX/xqsReFd1M20+6XLfVps49hMpWCFfE3sQ+4C
+IQCIaP2cSoK+3jqcb1tV6CF6hEF92qMZeciaU5pvsRhWoTANBgkqhkiG9w0BAQ4F
+AAOCAQEAUC+eE1aVrJHHvEcX0ZXhTdS3Kal6Z8oI6zJFoTSymZY3EAnTvgG0hCCQ
+mlL+RSS0H2UtvnpMIuttvVjJN1AaJUUKV/Cu5ur+hJMLT1pMO1Kv0J+uwlmgzjWJ
+ZcY+isUMb1SiuJl62vdzA6kN03iQLWKa/D0UlNURJcdSTzWPg741NOcIMiVzJTVC
+8MAEHUpzikHFQPmiRcwFklmPk9xV7Sx7NlF2BKjSZX9bTwpOhIwKHBQNOFOTuWRJ
+hZi9Vr5WFHXBHPLIHpDqsfBTuBXnOkmYtqLFkHkNH0DxPcAfFAhnLpqSOdEhee5s
+iz/xWaz/xHNo7HJllHoVBomBhirakQ==
 -----END CERTIFICATE-----`
 
 const smimeLeaf = `-----BEGIN CERTIFICATE-----
@@ -1648,12 +1660,13 @@ func TestSystemRootsError(t *testing.T) {
 		t.Skip("Windows and darwin do not use (or support) systemRoots")
 	}
 
+	t.Serial()
 	defer func(oldSystemRoots *CertPool) { systemRoots = oldSystemRoots }(systemRootsPool())
 
 	opts := VerifyOptions{
 		Intermediates: NewCertPool(),
 		DNSName:       "www.google.com",
-		CurrentTime:   time.Unix(1677615892, 0),
+		CurrentTime:   time.Unix(1789351727, 0),
 	}
 
 	if ok := opts.Intermediates.AppendCertsFromPEM([]byte(gtsIntermediate)); !ok {
@@ -1700,8 +1713,10 @@ func macosMajorVersion(t *testing.T) (int, error) {
 }
 
 func TestIssue51759(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("only affects darwin")
+	// The bug is in Apple's own verifier, which only a build that binds
+	// it can reach. A cosmo binary on macOS is not such a build.
+	if runtime.GOOS != "darwin" || !hasPlatformVerifier {
+		t.Skip("only affects a darwin build with the platform verifier")
 	}
 
 	testenv.MustHaveExecPath(t, "sw_vers")

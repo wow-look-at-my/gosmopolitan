@@ -502,6 +502,9 @@ var readers = []struct {
 }
 
 func testScan(t *testing.T, f func(string) io.Reader, scan func(r io.Reader, a ...any) (int, error)) {
+	// Every table entry scans into one of the package-level values
+	// above, which every other scan test also uses as its destination.
+	t.Serial()
 	for _, test := range scanTests {
 		r := f(test.text)
 		n, err := scan(r, test.in)
@@ -546,6 +549,7 @@ func TestScanln(t *testing.T) {
 }
 
 func TestScanf(t *testing.T) {
+	t.Serial()
 	for _, test := range scanfTests {
 		n, err := Sscanf(test.text, test.format, test.in)
 		if err != nil {
@@ -577,6 +581,7 @@ func TestScanf(t *testing.T) {
 func TestScanOverflow(t *testing.T) {
 	// different machines and different types report errors with different strings.
 	re := regexp.MustCompile("overflow|too large|out of range|not representable")
+	t.Serial()
 	for _, test := range overflowTests {
 		_, err := Sscan(test.text, test.in)
 		if err == nil {
@@ -640,6 +645,7 @@ func TestInf(t *testing.T) {
 }
 
 func testScanfMulti(t *testing.T, f func(string) io.Reader) {
+	t.Serial()
 	sliceType := reflect.TypeOf(make([]any, 1))
 	for _, test := range multiTests {
 		r := f(test.text)
@@ -861,6 +867,7 @@ var eofTests = []struct {
 }
 
 func TestEOFAllTypes(t *testing.T) {
+	t.Serial()
 	for i, test := range eofTests {
 		if _, err := Sscanf("", test.format, test.v); err != io.EOF {
 			t.Errorf("#%d: %s %T not eof on empty string: %s", i, test.format, test.v, err)

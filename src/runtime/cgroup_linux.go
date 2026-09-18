@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build linux && !cosmo
+
 package runtime
 
 import (
@@ -25,9 +27,9 @@ import (
 // 2. If the process is migrated to another cgroup while it is running it will
 // not notice, as we only check which cgroup we are in once at startup.
 var (
-	// We can't allocate during early initialization when we need to find
-	// the cgroup. Simply use a fixed global as a scratch parsing buffer.
-	cgroupScratch [cgroup.ScratchSize]byte
+	// The scratch parsing buffer is cgroupScratch, in cgroupmem.go: this
+	// file and the memory limit both parse the cgroup files before the
+	// heap is usable, and one buffer serves both.
 
 	cgroupOK  bool
 	cgroupCPU cgroup.CPU

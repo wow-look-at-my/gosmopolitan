@@ -347,6 +347,8 @@ func allocBytes(f func()) uint64 {
 // does not cause deep recursion and in turn allocate too much memory.
 // Test case for issue 3807.
 func TestMulUnbalanced(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	stk := getStack()
 	defer stk.free()
 

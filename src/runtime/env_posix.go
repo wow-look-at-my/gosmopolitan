@@ -4,7 +4,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"unsafe"
+	"internal/goos"
+)
 
 func gogetenv(key string) string {
 	env := environ()
@@ -22,7 +25,7 @@ func gogetenv(key string) string {
 // envKeyEqual reports whether a == b, with ASCII-only case insensitivity
 // on Windows. The two strings must have the same length.
 func envKeyEqual(a, b string) bool {
-	if GOOS == "windows" { // case insensitive
+	if goos.IsWindows == 1 { // case insensitive
 		for i := 0; i < len(a); i++ {
 			ca, cb := a[i], b[i]
 			if ca == cb || lowerASCII(ca) == lowerASCII(cb) {

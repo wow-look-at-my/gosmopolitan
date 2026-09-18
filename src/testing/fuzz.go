@@ -487,7 +487,8 @@ func runFuzzTests(deps testDeps, fuzzTests []InternalFuzzTarget, deadline time.T
 
 	for _, procs := range cpuList {
 		runtime.GOMAXPROCS(procs)
-		for i := uint(0); i < *count; i++ {
+		// runCount, not *count: a positive count runs each seed once.
+		for i := uint(0); i < runCount(); i++ {
 			if shouldFailFast() {
 				break
 			}

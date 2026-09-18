@@ -74,7 +74,10 @@ func TestMain(m *testing.M) {
 	flag.Parse()
 
 	pid := os.Getpid()
-	if os.Getenv("GO_EXEC_TEST_PID") == "" {
+	// A test that calls t.Setenv or t.Chdir re-runs itself in a child process,
+	// and that child inherits GO_EXEC_TEST_PID. It is not a helper. A helper
+	// always carries the command to impersonate as its first argument.
+	if os.Getenv("GO_EXEC_TEST_PID") == "" || flag.NArg() == 0 {
 		os.Setenv("GO_EXEC_TEST_PID", strconv.Itoa(pid))
 
 		if runtime.GOOS == "windows" {
@@ -614,6 +617,7 @@ func TestStdinCloseRace(t *testing.T) {
 
 // Issue 5071
 func TestPipeLookPathLeak(t *testing.T) {
+	t.Serial() // The descriptor census counts every fd in the process.
 	if runtime.GOOS == "windows" {
 		t.Skip("we don't currently suppore counting open handles on windows")
 	}

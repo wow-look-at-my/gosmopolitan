@@ -20,10 +20,10 @@ import (
 	"slices"
 )
 
-const (
-	Separator     = os.PathSeparator
-	ListSeparator = os.PathListSeparator
-)
+const Separator = os.PathSeparator
+
+// ListSeparator is declared per platform: cosmo answers it from the host at
+// startup, so there it is a variable rather than a constant.
 
 // Clean returns the shortest path name equivalent to path
 // by purely lexical processing. It applies the following rules

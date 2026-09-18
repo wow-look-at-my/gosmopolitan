@@ -2,6 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// The tag mirrors pidfd_linux.go, which cosmo does not build.
+//go:build linux && !cosmo
+
 package os_test
 
 import (
@@ -94,6 +97,10 @@ func TestStartProcessWithPidfd(t *testing.T) {
 
 // Issue #69284
 func TestPidfdLeak(t *testing.T) {
+	// The check is on the descriptor NUMBERS the process hands out, which
+	// every other test that opens a file moves.
+	t.Serial()
+
 	exe := testenv.Executable(t)
 
 	// Find the next 10 descriptors.

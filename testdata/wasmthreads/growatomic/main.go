@@ -5,7 +5,7 @@
 // growatomic is the GOWASM=threads cross-thread grow-observation gate:
 // it forces the exact shape of the nondeterministic worker crash at
 // runtime.newMarkBits (engine-level stale ATOMIC bounds checks - see
-// cmd/internal/obj/wasm's writeGrowEpochGuard and DEBUGGING.md).
+// cmd/internal/obj/wasm's writeGrowEpochGuard).
 //
 // Shape: hammer goroutines are pinned to their own worker Ms
 // (wasmThreadsRunOnNewM) and NEVER allocate or block - pure atomic

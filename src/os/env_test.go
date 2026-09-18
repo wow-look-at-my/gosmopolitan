@@ -87,7 +87,11 @@ func BenchmarkExpand(b *testing.B) {
 	})
 }
 
+// The environment is process-wide, so every test below that reads all of it
+// or writes any of it takes the process. Without that, one test's Setenv
+// lands between another's Environ and its LookupEnv.
 func TestConsistentEnviron(t *testing.T) {
+	t.Serial()
 	e0 := Environ()
 	for i := 0; i < 10; i++ {
 		e1 := Environ()
@@ -98,6 +102,7 @@ func TestConsistentEnviron(t *testing.T) {
 }
 
 func TestUnsetenv(t *testing.T) {
+	t.Serial()
 	const testKey = "GO_TEST_UNSETENV"
 	set := func() bool {
 		prefix := testKey + "="
@@ -123,6 +128,7 @@ func TestUnsetenv(t *testing.T) {
 }
 
 func TestClearenv(t *testing.T) {
+	t.Serial()
 	const testKey = "GO_TEST_CLEARENV"
 	const testValue = "1"
 
@@ -151,6 +157,7 @@ func TestClearenv(t *testing.T) {
 }
 
 func TestLookupEnv(t *testing.T) {
+	t.Serial()
 	const smallpox = "SMALLPOX"      // No one has smallpox.
 	value, ok := LookupEnv(smallpox) // Should not exist.
 	if ok || value != "" {
@@ -171,7 +178,7 @@ func TestLookupEnv(t *testing.T) {
 // Check that they are properly reported by LookupEnv and can be set by SetEnv.
 // See https://golang.org/issue/49886.
 func TestEnvironConsistency(t *testing.T) {
-	t.Parallel()
+	t.Serial()
 
 	for _, kv := range Environ() {
 		i := strings.Index(kv, "=")

@@ -296,7 +296,8 @@ func TestCompareAndSwap_NonExistingKey(t *testing.T) {
 	}
 }
 
-func TestMapRangeNoAllocations(t *testing.T) { // Issue 62404
+func TestMapRangeNoAllocations(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process. // Issue 62404
 	testenv.SkipIfOptimizationOff(t)
 	var m sync.Map
 	allocs := testing.AllocsPerRun(10, func() {
@@ -357,6 +358,7 @@ func TestConcurrentClear(t *testing.T) {
 }
 
 func TestMapClearOneAllocation(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	testenv.SkipIfOptimizationOff(t)
 	var m sync.Map
 	allocs := testing.AllocsPerRun(10, func() {

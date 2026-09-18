@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"unsafe"
 )
 
@@ -59,7 +60,7 @@ const _sunosMAP_NORESERVE = 0x40
 
 func sysReserveOS(v unsafe.Pointer, n uintptr, _ string) unsafe.Pointer {
 	flags := int32(_MAP_ANON | _MAP_PRIVATE)
-	if GOOS == "solaris" || GOOS == "illumos" {
+	if goos.IsSolaris == 1 || goos.IsIllumos == 1 {
 		// Be explicit that we don't want to reserve swap space
 		// for PROT_NONE anonymous mappings. This avoids an issue
 		// wherein large mappings can cause fork to fail.
@@ -77,7 +78,7 @@ const _ENOMEM = 12
 
 func sysMapOS(v unsafe.Pointer, n uintptr, _ string) {
 	p, err := mmap(v, n, _PROT_READ|_PROT_WRITE, _MAP_ANON|_MAP_FIXED|_MAP_PRIVATE, -1, 0)
-	if err == _ENOMEM || ((GOOS == "solaris" || GOOS == "illumos") && err == _sunosEAGAIN) {
+	if err == _ENOMEM || ((goos.IsSolaris == 1 || goos.IsIllumos == 1) && err == _sunosEAGAIN) {
 		throw("runtime: out of memory")
 	}
 	if p != v || err != 0 {

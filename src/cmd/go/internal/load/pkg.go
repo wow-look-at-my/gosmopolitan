@@ -241,6 +241,11 @@ type PackageInternal struct {
 	OrigImportPath    string              // original import path before adding '_test' suffix
 	PGOProfile        string              // path to PGO profile
 	ForMain           string              // the main package if this package is built specifically for it
+	TestInit          string              // the package whose tests run this package's _test.go initialization (-testinit)
+	TestVariantOf     *Package            // the package this test variant is linked in place of (-testvariant)
+	TestStartup       []string            // the only imports initialized before this test main; the rest wait for their tests (-teststartup)
+	TestUnitSpec      string              // the roots of each package's tests in this test binary (-testunits)
+	testmainData      *testMainData       // what TestmainGo was rendered from, for a binary holding several packages' tests
 
 	Asmflags   []string // -asmflags for this package
 	Gcflags    []string // -gcflags for this package
@@ -946,6 +951,30 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 				gorootSrcCmd := filepath.Join(cfg.GOROOTsrc, "cmd")
 				if str.HasFilePathPrefix(r.dir, gorootSrcCmd) {
 					modroot = gorootSrcCmd
+				}
+			}
+			// An embedded standard package has no directory to read: its
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
+				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					// The manifest holds resolved imports; a source file spells a
+					// vendored one without the vendor/ prefix, and the loader
+					// resolves it again.
+					imports := make([]string, len(pkg.Imports))
+					for idx, imp := range pkg.Imports {
+						imports[idx] = strings.TrimPrefix(imp, "vendor/")
+					}
+					data.p = &build.Package{
+						Dir:        r.dir,
+						ImportPath: r.path,
+						Name:       pkg.Name,
+						Imports:    imports,
+						Goroot:     true,
+						Root:       cfg.GOROOT,
+					}
+					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
+					goto Happy
 				}
 			}
 			if modroot != "" {
@@ -1721,7 +1750,7 @@ func InstallTargetDir(p *Package) TargetDir {
 	}
 	if p.Goroot && strings.HasPrefix(p.ImportPath, "cmd/") && p.Name == "main" {
 		switch p.ImportPath {
-		case "cmd/go", "cmd/gofmt":
+		case "cmd/go/main", "cmd/gofmt":
 			return ToBin
 		}
 		return ToTool
@@ -1783,6 +1812,10 @@ func (p *Package) exeFromFiles() string {
 func (p *Package) DefaultExecName() string {
 	if p.Internal.CmdlineFiles {
 		return p.exeFromFiles()
+	}
+	// The go command's main package sits under cmd/go, whose name is a keyword.
+	if p.Goroot && p.ImportPath == "cmd/go/main" {
+		return "go"
 	}
 	return p.exeFromImportPath()
 }
@@ -3073,8 +3106,8 @@ func setPGOProfilePath(pkgs []*Package) {
 			if p.Name != "main" {
 				continue
 			}
-			pmain := p
-			file := filepath.Join(pmain.Dir, "default.pgo")
+			testMain := p
+			file := filepath.Join(testMain.Dir, "default.pgo")
 			if _, err := os.Stat(file); err != nil {
 				continue // no profile
 			}
@@ -3089,7 +3122,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					return p1
 				}
 
-				if len(pkgs) > 1 && p != pmain {
+				if len(pkgs) > 1 && p != testMain {
 					// Make a copy, then attach profile.
 					// No need to copy if there is only one root package (we can
 					// attach profile directly in-place).
@@ -3104,7 +3137,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					// we don't change them.
 					p1.Imports = slices.Clone(p.Imports)
 					p1.Internal.Imports = slices.Clone(p.Internal.Imports)
-					p1.Internal.ForMain = pmain.ImportPath
+					p1.Internal.ForMain = testMain.ImportPath
 					visited[p] = p1
 					p = p1
 				} else {
@@ -3120,7 +3153,7 @@ func setPGOProfilePath(pkgs []*Package) {
 			}
 
 			// Replace the package and imports with the PGO version.
-			split(pmain)
+			split(testMain)
 		}
 
 	default:
@@ -3382,9 +3415,8 @@ func GoFilesPackage(ld *modload.Loader, ctx context.Context, opts PackageOpts, g
 // ambiguity. All arguments must have the same version suffix (not just a suffix
 // that resolves to the same version). They must refer to packages in the same
 // module, which must not be std or cmd. That module is not considered the main
-// module, but its go.mod file (if it has one) must not contain directives that
-// would cause it to be interpreted differently if it were the main module
-// (replace, exclude).
+// module, but its own replace and exclude directives (if it has any) are still
+// honored, via Loader.SetOutsideModuleReplace and SetOutsideModuleExclude.
 func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opts PackageOpts, args []string) ([]*Package, error) {
 	if !ld.ForceUseModules {
 		panic("modload.ForceUseModules must be true")
@@ -3428,9 +3460,8 @@ func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opt
 	}
 	patterns = search.CleanPatterns(patterns)
 
-	// Query the module providing the first argument, load its go.mod file, and
-	// check that it doesn't contain directives that would cause it to be
-	// interpreted differently if it were the main module.
+	// Query the module providing the first argument and load its go.mod file
+	// so a malformed one is caught before the build proceeds.
 	//
 	// If multiple modules match the first argument, accept the longest match
 	// (first result). It's possible this module won't provide packages named by
@@ -3462,16 +3493,8 @@ func PackagesAndErrorsOutsideModule(ld *modload.Loader, ctx context.Context, opt
 	if err != nil {
 		return nil, fmt.Errorf("%s (in %s): %w", args[0], rootMod, err)
 	}
-	directiveFmt := "%s (in %s):\n" +
-		"\tThe go.mod file for the module providing named packages contains one or\n" +
-		"\tmore %s directives. It must not contain directives that would cause\n" +
-		"\tit to be interpreted differently than if it were the main module."
-	if len(f.Replace) > 0 {
-		return nil, fmt.Errorf(directiveFmt, args[0], rootMod, "replace")
-	}
-	if len(f.Exclude) > 0 {
-		return nil, fmt.Errorf(directiveFmt, args[0], rootMod, "exclude")
-	}
+	ld.SetOutsideModuleReplace(f.Replace)
+	ld.SetOutsideModuleExclude(f.Exclude)
 
 	// Since we are in NoRoot mode, the build list initially contains only
 	// the dummy command-line-arguments module. Add a requirement on the

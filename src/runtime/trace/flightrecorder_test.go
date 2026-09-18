@@ -19,6 +19,7 @@ import (
 )
 
 func TestFlightRecorderDoubleStart(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
 	if err := fr.Start(); err != nil {
 		t.Fatalf("unexpected error on Start: %v", err)
@@ -30,6 +31,7 @@ func TestFlightRecorderDoubleStart(t *testing.T) {
 }
 
 func TestFlightRecorderEnabled(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
 
 	if fr.Enabled() {
@@ -48,6 +50,7 @@ func TestFlightRecorderEnabled(t *testing.T) {
 }
 
 func TestFlightRecorderWriteToDisabled(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	var buf bytes.Buffer
 
 	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
@@ -64,6 +67,7 @@ func TestFlightRecorderWriteToDisabled(t *testing.T) {
 }
 
 func TestFlightRecorderConcurrentWriteTo(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
 	if err := fr.Start(); err != nil {
 		t.Fatalf("unexpected error on Start: %v", err)
@@ -124,12 +128,14 @@ func TestFlightRecorderConcurrentWriteTo(t *testing.T) {
 }
 
 func TestFlightRecorder(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	testFlightRecorder(t, trace.NewFlightRecorder(trace.FlightRecorderConfig{}), func(snapshot func()) {
 		snapshot()
 	})
 }
 
 func TestFlightRecorderStartStop(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	fr := trace.NewFlightRecorder(trace.FlightRecorderConfig{})
 	for i := 0; i < 5; i++ {
 		testFlightRecorder(t, fr, func(snapshot func()) {
@@ -139,6 +145,7 @@ func TestFlightRecorderStartStop(t *testing.T) {
 }
 
 func TestFlightRecorderLog(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	tr := testFlightRecorder(t, trace.NewFlightRecorder(trace.FlightRecorderConfig{}), func(snapshot func()) {
 		trace.Log(context.Background(), "message", "hello")
 		snapshot()
@@ -171,6 +178,7 @@ func TestFlightRecorderLog(t *testing.T) {
 }
 
 func TestFlightRecorderGenerationCount(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	test := func(t *testing.T, fr *trace.FlightRecorder) {
 		tr := testFlightRecorder(t, fr, func(snapshot func()) {
 			// Sleep to let a few generations pass.
@@ -298,6 +306,7 @@ func testReader(t *testing.T, tb []byte, exp *testtrace.Expectation) {
 }
 
 func TestTraceAndFlightRecorder(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	var tBuf, frBuf bytes.Buffer
 	if err := trace.Start(&tBuf); err != nil {
 		t.Errorf("unable to start execution tracer: %s", err)

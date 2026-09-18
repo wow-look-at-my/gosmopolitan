@@ -66,6 +66,9 @@ func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
 		return r1, r2, Errno(errno)
 	}
+	if darwinLinuxStatfs(trap, a3) {
+		return darwinStatfsLinux(trap, a1, a2)
+	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, 0, 0, 0)
 	runtime_exitsyscall()
@@ -81,6 +84,9 @@ func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) 
 		var errno uintptr
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
 		return r1, r2, Errno(errno)
+	}
+	if darwinLinuxStatfs(trap, a3) {
+		return darwinStatfsLinux(trap, a1, a2)
 	}
 	runtime_entersyscall()
 	r1, r2, err = RawSyscall6(trap, a1, a2, a3, a4, a5, a6)
@@ -143,6 +149,17 @@ func Faccessat(dirfd int, path string, mode uint32, flags int) (err error) {
 //sys	fchmodat(dirfd int, path string, mode uint32) (err error)
 
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
+	// The Linux fchmodat syscall takes no flags, so a request not to
+	// follow the symlink cannot be honored - and applying the mode to
+	// the link target instead is not what the caller asked for. Report
+	// it, exactly as glibc and the linux port do. macOS could honor the
+	// flag, but one APE answering the same call differently per host is
+	// worse than answering it consistently.
+	if flags&^(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
+		return EINVAL
+	} else if flags&(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
+		return EOPNOTSUPP
+	}
 	return fchmodat(dirfd, path, mode)
 }
 
@@ -156,18 +173,34 @@ func Mkdir(path string, mode uint32) (err error) {
 	return Mkdirat(_AT_FDCWD, path, mode)
 }
 
+func Mkfifo(path string, mode uint32) (err error) {
+	return Mknod(path, mode|S_IFIFO, 0)
+}
+
 func Mknod(path string, mode uint32, dev int) (err error) {
 	return Mknodat(_AT_FDCWD, path, mode, dev)
 }
 
 func Open(path string, mode int, perm uint32) (fd int, err error) {
-	return openat(_AT_FDCWD, path, mode|O_LARGEFILE, perm)
+	// Openat serves /proc/self/auxv itself and adds O_LARGEFILE,
+	// so Open keeps no logic of its own.
+	return Openat(_AT_FDCWD, path, mode, perm)
 }
 
 //sys	openat(dirfd int, path string, flags int, mode uint32) (fd int, err error)
 
 func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) {
-	return openat(dirfd, path, flags|O_LARGEFILE, mode)
+	// The path is absolute, so dirfd cannot change which file it names.
+	if fd, err, ok := openProcSelfAuxv(path, flags); ok {
+		return fd, err
+	}
+	fd, err = openat(dirfd, path, flags|O_LARGEFILE, mode)
+	if err != nil && path == procSelfAuxv {
+		// Only a Linux host owns this file; elsewhere the APE answers
+		// it. See openAuxv.
+		return openAuxv(flags)
+	}
+	return fd, err
 }
 
 func Pipe(p []int) error {
@@ -176,7 +209,23 @@ func Pipe(p []int) error {
 
 //sysnb pipe2(p *[2]_C_int, flags int) (err error)
 
+// Pipe2 holds the fork lock across the pipe creation: on a darwin host pipe2
+// is pipe + fcntl, so a fork between the two inherits the ends without
+// close-on-exec and a child's stdout pipe never reaches EOF. Darwin's own
+// Pipe2 does the same.
 func Pipe2(p []int, flags int) error {
+	ForkLock.RLock()
+	defer ForkLock.RUnlock()
+	return pipe2Unlocked(p, flags)
+}
+
+// forkExecPipe runs under the fork write lock, so it must not take the read
+// lock Pipe2 takes.
+func forkExecPipe(p []int) error {
+	return pipe2Unlocked(p, O_CLOEXEC)
+}
+
+func pipe2Unlocked(p []int, flags int) error {
 	if len(p) != 2 {
 		return EINVAL
 	}
@@ -278,18 +327,6 @@ func Getgroups() (gids []int, err error) {
 	return
 }
 
-func Setgroups(gids []int) (err error) {
-	if len(gids) == 0 {
-		return setgroups(0, nil)
-	}
-
-	a := make([]_Gid_t, len(gids))
-	for i, v := range gids {
-		a[i] = _Gid_t(v)
-	}
-	return setgroups(len(a), &a[0])
-}
-
 type WaitStatus uint32
 
 func (w WaitStatus) Exited() bool { return w&0x7f == 0 }
@@ -347,6 +384,12 @@ func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int,
 //sys	Renameat(olddirfd int, oldpath string, newdirfd int, newpath string) (err error)
 
 //sys	sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
+
+// statfs and fstatfs fill a struct the host defines, and macOS defines
+// a much larger one. Syscall converts it on a macOS host
+// (bigbuf_cosmo.go), so these wrappers and every other caller of the raw
+// syscall get a Linux Statfs_t on every host.
+//
 //sys	Fstatfs(fd int, buf *Statfs_t) (err error)
 //sys	Statfs(path string, buf *Statfs_t) (err error)
 
@@ -356,6 +399,7 @@ const (
 	_AT_REMOVEDIR        = 0x200
 	_AT_SYMLINK_NOFOLLOW = 0x100
 	_AT_EACCESS          = 0x200
+	_AT_EMPTY_PATH       = 0x1000
 )
 
 //sys	fstat(fd int, stat *Stat_t) (err error)
@@ -372,7 +416,6 @@ func Lchown(path string, uid int, gid int) (err error) {
 }
 
 //sys	getgroups(n int, list *_Gid_t) (nn int, err error)
-//sys	setgroups(n int, list *_Gid_t) (err error)
 //sys	utimes(path string, times *[2]Timeval) (err error)
 //sys	futimesat(dirfd int, path string, times *[2]Timeval) (err error)
 //sys	Getpriority(which int, who int) (prio int, err error)
@@ -428,20 +471,12 @@ func Dup2(oldfd int, newfd int) (err error) {
 //sys	Pread(fd int, p []byte, offset int64) (n int, err error)
 //sys	Pwrite(fd int, p []byte, offset int64) (n int, err error)
 //sys	Seek(fd int, offset int64, whence int) (off int64, err error) = SYS_LSEEK
-//sys	Setfsgid(gid int) (err error)
-//sys	Setfsuid(uid int) (err error)
 //sys	Setpgid(pid int, pgid int) (err error)
 //sys	Setsid() (pid int, err error)
-//sys	Setuid(uid int) (err error)
-//sys	Setgid(gid int) (err error)
-//sys	Setreuid(ruid int, euid int) (err error)
-//sys	Setregid(rgid int, egid int) (err error)
-//sys	Setresuid(ruid int, euid int, suid int) (err error)
-//sys	Setresgid(rgid int, egid int, sgid int) (err error)
 //sys	Sync()
 //sys	Truncate(path string, length int64) (err error)
 //sys	Umask(mask int) (oldmask int)
-//sys	Uname(buf *Utsname) (err error)
+//sys	uname(buf *Utsname) (err error)
 //sys	Write(fd int, p []byte) (n int, err error)
 //sys	munmap(addr uintptr, length uintptr) (err error)
 //sys	mmap(addr uintptr, length uintptr, prot int, flags int, fd int, offset int64) (xaddr uintptr, err error)

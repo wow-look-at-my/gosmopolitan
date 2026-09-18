@@ -30,6 +30,11 @@ func TestAllImplementations(t *testing.T, pkg string, f func(t *testing.T)) {
 		return
 	}
 
+	// The selection is process-wide: it decides which implementation every
+	// caller in the process gets, this test's own subtests and every other
+	// test alike. So this test holds the process while it changes it.
+	t.Serial()
+
 	t.Cleanup(func() { impl.Reset(pkg) })
 
 	for _, name := range impls {

@@ -221,7 +221,7 @@ func (tp typePointers) nextFast() (typePointers, uintptr) {
 	} else {
 		i = sys.TrailingZeros32(uint32(tp.mask))
 	}
-	if GOARCH == "amd64" {
+	if goarch.IsAmd64 == 1 {
 		// BTCQ
 		tp.mask ^= uintptr(1) << (i & (ptrBits - 1))
 	} else {
@@ -1365,7 +1365,7 @@ func findObject(p, refBase, refOff uintptr) (base uintptr, s *mspan, objIndex ui
 	// If s is nil, the virtual address has never been part of the heap.
 	// This pointer may be to some mmap'd region, so we allow it.
 	if s == nil {
-		if (GOARCH == "amd64" || GOARCH == "arm64") && p == clobberdeadPtr && debug.invalidptr != 0 {
+		if (goarch.IsAmd64 == 1 || goarch.IsArm64 == 1) && p == clobberdeadPtr && debug.invalidptr != 0 {
 			// Crash if clobberdeadPtr is seen. Only on AMD64 and ARM64 for now,
 			// as they are the only platform where compiler's clobberdead mode is
 			// implemented. On these platforms clobberdeadPtr cannot be a valid address.

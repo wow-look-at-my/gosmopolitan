@@ -7,7 +7,7 @@
 package syscall
 
 import (
-	"runtime"
+	"internal/goos"
 	"sync/atomic"
 )
 
@@ -29,9 +29,11 @@ var origRlimitNofile atomic.Pointer[Rlimit]
 // Code that really wants Go to leave the limit alone can set the hard limit,
 // which Go of course has no choice but to respect.
 func init() {
-	// Skip rlimit adjustment on cosmo - the syscall layer doesn't fully support
-	// darwin ARM64 yet (uses raw SVC which causes SIGSYS on macOS).
-	if runtime.GOOS == "cosmo" {
+	// Skip rlimit adjustment on the cosmo PORT. runtime.GOOS names the
+	// host there, so it never answers "cosmo"; goos.IsCosmo does.
+	// The syscall layer does not fully support darwin ARM64 yet: it uses
+	// a raw SVC, which is a SIGSYS on macOS.
+	if goos.IsCosmo == 1 {
 		return
 	}
 	var lim Rlimit

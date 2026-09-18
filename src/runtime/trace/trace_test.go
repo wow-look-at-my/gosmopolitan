@@ -19,6 +19,7 @@ var dumpTraces = flag.Bool("dump-traces", false, "dump traces to a file, even on
 // more comprehensive end-to-end tests.
 
 func TestTraceStartStop(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	if IsEnabled() {
 		t.Skip("skipping because -test.trace is set")
 	}
@@ -38,6 +39,7 @@ func TestTraceStartStop(t *testing.T) {
 }
 
 func TestTraceDoubleStart(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	if IsEnabled() {
 		t.Skip("skipping because -test.trace is set")
 	}

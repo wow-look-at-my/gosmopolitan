@@ -38,6 +38,8 @@ var bootstrapDirs = []string{
 	"cmd/cgo",
 	"cmd/compile",
 	"cmd/compile/internal/...",
+	"cmd/go/internal/selftool",
+	"cmd/go/main",
 	"cmd/internal/archive",
 	"cmd/internal/bio",
 	"cmd/internal/codesign",
@@ -71,6 +73,8 @@ var bootstrapDirs = []string{
 	"go/constant",
 	"go/version",
 	"internal/abi",
+	"internal/ape",
+	"internal/cosmo/embedded",
 	"internal/coverage",
 	"cmd/internal/cov/covcmd",
 	"internal/bisect",
@@ -102,6 +106,10 @@ var bootstrapDirs = []string{
 	"math/bits",
 	"sort",
 }
+
+// bootstrapTools are the tools the bootstrap binary links; keep in sync with
+// cmd/go/internal/selftool/tools_bootstrap.go.
+var bootstrapTools = []string{"asm", "cgo", "compile", "link"}
 
 // File prefixes that are ignored by go/build anyway, and cause
 // problems with editor generated temporary files (#18931).
@@ -234,9 +242,13 @@ func bootstrapBuildTools() {
 	defer os.Setenv("GOBIN", os.Getenv("GOBIN"))
 	os.Setenv("GOBIN", "")
 
-	os.Setenv("GOOS", "")
+	// The bootstrap tools run on this machine, so they are built for it by
+	// name: a bootstrap go command of this fork answers an empty GOOS with
+	// cosmo, and an install for a target other than the host lands under
+	// bin/<goos>_<goarch>/ where nothing below looks.
+	os.Setenv("GOOS", gohostos)
 	os.Setenv("GOHOSTOS", "")
-	os.Setenv("GOARCH", "")
+	os.Setenv("GOARCH", gohostarch)
 	os.Setenv("GOHOSTARCH", "")
 
 	// Run Go bootstrap to build binaries.
@@ -257,15 +269,11 @@ func bootstrapBuildTools() {
 	cmd = append(cmd, "bootstrap/cmd/...")
 	run(base, ShowOutput|CheckExit, cmd...)
 
-	// Copy binaries into tool binary directory.
-	for _, name := range bootstrapDirs {
-		if !strings.HasPrefix(name, "cmd/") {
-			continue
-		}
-		name = name[len("cmd/"):]
-		if !strings.Contains(name, "/") {
-			copyfile(pathf("%s/%s%s", tooldir, name, exe), pathf("%s/bin/%s%s", workspace, name, exe), writeExec)
-		}
+	// The one binary built, cmd/go/main under the compiler_bootstrap tag,
+	// runs as each tool it links under that tool's name. Copy it into the
+	// tool binary directory once per name.
+	for _, name := range bootstrapTools {
+		copyfile(pathf("%s/%s%s", tooldir, name, exe), pathf("%s/bin/main%s", workspace, exe), writeExec)
 	}
 
 	if vflag > 0 {

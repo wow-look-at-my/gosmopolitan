@@ -27,6 +27,7 @@ import (
 var testMemStatsCount int
 
 func TestMemStats(t *testing.T) {
+	t.Serial()
 	testMemStatsCount++
 
 	// Make sure there's at least one forced GC.
@@ -140,6 +141,7 @@ func TestMemStats(t *testing.T) {
 }
 
 func TestStringConcatenationAllocs(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	n := testing.AllocsPerRun(1e3, func() {
 		b := make([]byte, 10)
 		for i := 0; i < 10; i++ {
@@ -333,6 +335,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		// makes these tests convenient).
 
 		t.Run("allocs-baseline", func(t *testing.T) {
+			t.Serial() // AllocsPerRun measures the whole process.
 			// Baseline result without any explicit free.
 			allocs := testing.AllocsPerRun(100, func() {
 				for range 100 {
@@ -348,6 +351,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		})
 
 		t.Run("allocs-with-free", func(t *testing.T) {
+			t.Serial() // AllocsPerRun measures the whole process.
 			// Same allocations, but now using explicit free so that
 			// no allocs get reported. (Again, not the desired long-term behavior).
 			if SizeSpecializedMallocEnabled && !noscan {
@@ -370,6 +374,7 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 		})
 
 		t.Run("free-multiple", func(t *testing.T) {
+			t.Serial() // AllocsPerRun measures the whole process.
 			// Multiple allocations outstanding before explicitly freeing,
 			// but still within the limit of our smallest free list size
 			// so that no allocs are reported. (Again, not long-term behavior).
@@ -595,6 +600,8 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 }
 
 func TestPageCacheLeak(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(1))
 	leaked := PageCachePagesLeaked()
 	if leaked != 0 {
@@ -630,8 +637,11 @@ type acLink struct {
 var arenaCollisionSink []*acLink
 
 func TestArenaCollision(t *testing.T) {
+	t.Serial(
 	// Test that mheap.sysAlloc handles collisions with other
 	// memory mappings.
+	)
+
 	if os.Getenv("TEST_ARENA_COLLISION") != "1" {
 		cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t), "-test.run=^TestArenaCollision$", "-test.v"))
 		cmd.Env = append(cmd.Env, "TEST_ARENA_COLLISION=1")

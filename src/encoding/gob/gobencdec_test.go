@@ -799,8 +799,11 @@ func TestNetIP(t *testing.T) {
 }
 
 func TestIgnoreDepthLimit(t *testing.T) {
+	t.Serial(
 	// We don't test the actual depth limit because it requires building an
 	// extremely large message, which takes quite a while.
+	)
+
 	oldNestingDepth := maxIgnoreNestingDepth
 	maxIgnoreNestingDepth = 100
 	defer func() { maxIgnoreNestingDepth = oldNestingDepth }()

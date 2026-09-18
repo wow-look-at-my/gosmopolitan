@@ -30,6 +30,7 @@ var g T
 var sink any
 
 func TestIssue15854(t *testing.T) {
+	t.Serial()
 	for i := 0; i < 10000; i++ {
 		if g.x[0] != 0 {
 			t.Fatalf("g.x[0] clobbered with %x\n", g.x[0])
@@ -45,6 +46,7 @@ func TestIssue15854(t *testing.T) {
 	}
 }
 func TestIssue15854b(t *testing.T) {
+	t.Serial()
 	const N = 10000
 	a := make([]T, N)
 	for i := 0; i < N; i++ {
@@ -94,7 +96,7 @@ func Mod32(x uint32) uint32 {
 // getting racefuncenter/racefuncexit instrumentation when instantiated in
 // other packages with optimizations disabled.
 func TestIssue77597(t *testing.T) {
-	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH) {
 		t.Skipf("race detector not supported on %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	testenv.MustHaveGoBuild(t)

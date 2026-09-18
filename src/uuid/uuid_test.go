@@ -53,6 +53,7 @@ func variant(u uuid.UUID) byte {
 }
 
 func TestNewV7Millis(t *testing.T) {
+	t.Serial() // NewV7 advances a package-level clock every caller shares
 	// Verify the unix_ts_ms field of a UUIDv7 is set correctly.
 	check := func(t *testing.T) {
 		t.Helper()
@@ -63,6 +64,10 @@ func TestNewV7Millis(t *testing.T) {
 			t.Errorf("at %v, NewV7() = %v; millis = %x, want %x", time.Now(), u, got, want)
 		}
 	}
+	// A bubble's clock starts at one fixed instant, so a bubble that ran before
+	// this one asked for the same millisecond. Without the reset the first UUID
+	// here takes the monotonic bump instead of the bubble's own time.
+	uuid.ResetV7ForTesting()
 	synctest.Test(t, func(t *testing.T) {
 		check(t)
 		time.Sleep(1 * time.Hour)
@@ -80,8 +85,10 @@ func TestNewV7Millis(t *testing.T) {
 }
 
 func TestNewV7Collision(t *testing.T) {
+	t.Serial() // NewV7 advances a package-level clock every caller shares
 	// Verify UUIDv7s generated at the same instant do not collide and
 	// are monotonically increasing.
+	uuid.ResetV7ForTesting()
 	synctest.Test(t, func(t *testing.T) {
 		last := uuid.NewV7()
 		for range 3 {

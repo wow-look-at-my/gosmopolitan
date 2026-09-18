@@ -398,6 +398,7 @@ func TestUpdateResolvConf(t *testing.T) {
 
 	r := Resolver{PreferGo: true, Dial: fakeDNSServerSuccessful.DialContext}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -611,6 +612,7 @@ func TestGoLookupIPWithResolverConfig(t *testing.T) {
 	}}
 	r := Resolver{PreferGo: true, Dial: fake.DialContext}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -663,6 +665,7 @@ func TestGoLookupIPOrderFallbackToFile(t *testing.T) {
 	r := Resolver{PreferGo: true, Dial: fake.DialContext}
 
 	// Add a config that simulates no dns servers being available.
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -673,6 +676,7 @@ func TestGoLookupIPOrderFallbackToFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Redirect host file lookups.
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	hostsFilePath = "testdata/hosts"
 
@@ -710,6 +714,7 @@ func TestErrorForOriginalNameWhenSearching(t *testing.T) {
 
 	const fqdn = "doesnotexist.domain"
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -764,6 +769,7 @@ func TestErrorForOriginalNameWhenSearching(t *testing.T) {
 func TestIgnoreLameReferrals(t *testing.T) {
 	defer dnsWaitGroup.Wait()
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1065,6 +1071,7 @@ func TestIgnoreDNSForgeries(t *testing.T) {
 func TestRetryTimeout(t *testing.T) {
 	defer dnsWaitGroup.Wait()
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1123,6 +1130,7 @@ func TestRotate(t *testing.T) {
 func testRotate(t *testing.T, rotate bool, nameservers, wantServers []string) {
 	defer dnsWaitGroup.Wait()
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1190,6 +1198,7 @@ func mockTXTResponse(q dnsmessage.Message) dnsmessage.Message {
 func TestStrictErrorsLookupIP(t *testing.T) {
 	defer dnsWaitGroup.Wait()
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1446,6 +1455,7 @@ func TestStrictErrorsLookupIP(t *testing.T) {
 func TestStrictErrorsLookupTXT(t *testing.T) {
 	defer dnsWaitGroup.Wait()
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -1808,6 +1818,7 @@ func TestSingleRequestLookup(t *testing.T) {
 	}}
 	r := Resolver{PreferGo: true, Dial: fake.DialContext}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -2134,6 +2145,7 @@ func TestCVE202133195(t *testing.T) {
 	DefaultResolver = &r
 	defer func() { DefaultResolver = originalDefault }()
 	// Redirect host file lookups.
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	hostsFilePath = "testdata/hosts"
 
@@ -2366,6 +2378,7 @@ func TestRootNS(t *testing.T) {
 }
 
 func TestGoLookupIPCNAMEOrderHostsAliasesFilesOnlyMode(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	hostsFilePath = "testdata/aliases"
 	mode := hostLookupFiles
@@ -2376,6 +2389,7 @@ func TestGoLookupIPCNAMEOrderHostsAliasesFilesOnlyMode(t *testing.T) {
 }
 
 func TestGoLookupIPCNAMEOrderHostsAliasesFilesDNSMode(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	hostsFilePath = "testdata/aliases"
 	mode := hostLookupFilesDNS
@@ -2393,6 +2407,7 @@ var goLookupIPCNAMEOrderDNSFilesModeTests = []struct {
 }
 
 func TestGoLookupIPCNAMEOrderHostsAliasesDNSFilesMode(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	hostsFilePath = "testdata/aliases"
 	mode := hostLookupDNSFiles
@@ -2680,6 +2695,7 @@ func TestDNSTrustAD(t *testing.T) {
 
 	r := &Resolver{PreferGo: true, Dial: fake.DialContext}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -2713,6 +2729,7 @@ func TestDNSConfigNoReload(t *testing.T) {
 		return fakeDNSServerSuccessful.DialContext(ctx, network, address)
 	}}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -2739,12 +2756,14 @@ func TestDNSConfigNoReload(t *testing.T) {
 }
 
 func TestLookupOrderFilesNoSuchHost(t *testing.T) {
+	t.Serial()
 	defer func(orig string) { hostsFilePath = orig }(hostsFilePath)
 	if runtime.GOOS != "openbsd" {
 		defer setSystemNSS(getSystemNSS(), 0)
 		setSystemNSS(nssStr(t, "hosts: files"), time.Hour)
 	}
 
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)
@@ -2859,6 +2878,7 @@ func TestExtendedRCode(t *testing.T) {
 // This test makes sure that we always re-check the resolv.conf no matter
 // the elapsed time in case the default nameservers are used.
 func TestEmptyResolvConfReplacedWithConfHaingNameservers(t *testing.T) {
+	t.Serial()
 	conf, err := newResolvConfTest()
 	if err != nil {
 		t.Fatal(err)

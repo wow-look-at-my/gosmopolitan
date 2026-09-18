@@ -343,76 +343,76 @@ const (
 )
 
 const (
-	IFA_UNSPEC          = 0x0
-	IFA_ADDRESS         = 0x1
-	IFA_LOCAL           = 0x2
-	IFA_LABEL           = 0x3
-	IFA_BROADCAST       = 0x4
-	IFA_ANYCAST         = 0x5
-	IFA_CACHEINFO       = 0x6
-	IFA_MULTICAST       = 0x7
-	IFLA_UNSPEC         = 0x0
-	IFLA_ADDRESS        = 0x1
-	IFLA_BROADCAST      = 0x2
-	IFLA_IFNAME         = 0x3
-	IFLA_MTU            = 0x4
-	IFLA_LINK           = 0x5
-	IFLA_QDISC          = 0x6
-	IFLA_STATS          = 0x7
-	IFLA_COST           = 0x8
-	IFLA_PRIORITY       = 0x9
-	IFLA_MASTER         = 0xa
-	IFLA_WIRELESS       = 0xb
-	IFLA_PROTINFO       = 0xc
-	IFLA_TXQLEN         = 0xd
-	IFLA_MAP            = 0xe
-	IFLA_WEIGHT         = 0xf
-	IFLA_OPERSTATE      = 0x10
-	IFLA_LINKMODE       = 0x11
-	RT_SCOPE_UNIVERSE   = 0x0
-	RT_SCOPE_SITE       = 0xc8
-	RT_SCOPE_LINK       = 0xfd
-	RT_SCOPE_HOST       = 0xfe
-	RT_SCOPE_NOWHERE    = 0xff
-	RT_TABLE_UNSPEC     = 0x0
-	RT_TABLE_DEFAULT    = 0xfd
-	RT_TABLE_MAIN       = 0xfe
-	RT_TABLE_LOCAL      = 0xff
-	RT_TABLE_MAX        = 0xffffffff
-	RTA_UNSPEC          = 0x0
-	RTA_DST             = 0x1
-	RTA_SRC             = 0x2
-	RTA_IIF             = 0x3
-	RTA_OIF             = 0x4
-	RTA_GATEWAY         = 0x5
-	RTA_PRIORITY        = 0x6
-	RTA_PREFSRC         = 0x7
-	RTA_METRICS         = 0x8
-	RTA_MULTIPATH       = 0x9
-	RTA_FLOW            = 0xb
-	RTA_CACHEINFO       = 0xc
-	RTA_TABLE           = 0xf
-	RTN_UNSPEC          = 0x0
-	RTN_UNICAST         = 0x1
-	RTN_LOCAL           = 0x2
-	RTN_BROADCAST       = 0x3
-	RTN_ANYCAST         = 0x4
-	RTN_MULTICAST       = 0x5
-	RTN_BLACKHOLE       = 0x6
-	RTN_UNREACHABLE     = 0x7
-	RTN_PROHIBIT        = 0x8
-	RTN_THROW           = 0x9
-	RTN_NAT             = 0xa
-	RTN_XRESOLVE        = 0xb
-	SizeofNlMsghdr      = 0x10
-	SizeofNlMsgerr      = 0x14
-	SizeofRtGenmsg      = 0x1
-	SizeofNlAttr        = 0x4
-	SizeofRtAttr        = 0x4
-	SizeofIfInfomsg     = 0x10
-	SizeofIfAddrmsg     = 0x8
-	SizeofRtMsg         = 0xc
-	SizeofRtNexthop     = 0x8
+	IFA_UNSPEC        = 0x0
+	IFA_ADDRESS       = 0x1
+	IFA_LOCAL         = 0x2
+	IFA_LABEL         = 0x3
+	IFA_BROADCAST     = 0x4
+	IFA_ANYCAST       = 0x5
+	IFA_CACHEINFO     = 0x6
+	IFA_MULTICAST     = 0x7
+	IFLA_UNSPEC       = 0x0
+	IFLA_ADDRESS      = 0x1
+	IFLA_BROADCAST    = 0x2
+	IFLA_IFNAME       = 0x3
+	IFLA_MTU          = 0x4
+	IFLA_LINK         = 0x5
+	IFLA_QDISC        = 0x6
+	IFLA_STATS        = 0x7
+	IFLA_COST         = 0x8
+	IFLA_PRIORITY     = 0x9
+	IFLA_MASTER       = 0xa
+	IFLA_WIRELESS     = 0xb
+	IFLA_PROTINFO     = 0xc
+	IFLA_TXQLEN       = 0xd
+	IFLA_MAP          = 0xe
+	IFLA_WEIGHT       = 0xf
+	IFLA_OPERSTATE    = 0x10
+	IFLA_LINKMODE     = 0x11
+	RT_SCOPE_UNIVERSE = 0x0
+	RT_SCOPE_SITE     = 0xc8
+	RT_SCOPE_LINK     = 0xfd
+	RT_SCOPE_HOST     = 0xfe
+	RT_SCOPE_NOWHERE  = 0xff
+	RT_TABLE_UNSPEC   = 0x0
+	RT_TABLE_DEFAULT  = 0xfd
+	RT_TABLE_MAIN     = 0xfe
+	RT_TABLE_LOCAL    = 0xff
+	RT_TABLE_MAX      = 0xffffffff
+	RTA_UNSPEC        = 0x0
+	RTA_DST           = 0x1
+	RTA_SRC           = 0x2
+	RTA_IIF           = 0x3
+	RTA_OIF           = 0x4
+	RTA_GATEWAY       = 0x5
+	RTA_PRIORITY      = 0x6
+	RTA_PREFSRC       = 0x7
+	RTA_METRICS       = 0x8
+	RTA_MULTIPATH     = 0x9
+	RTA_FLOW          = 0xb
+	RTA_CACHEINFO     = 0xc
+	RTA_TABLE         = 0xf
+	RTN_UNSPEC        = 0x0
+	RTN_UNICAST       = 0x1
+	RTN_LOCAL         = 0x2
+	RTN_BROADCAST     = 0x3
+	RTN_ANYCAST       = 0x4
+	RTN_MULTICAST     = 0x5
+	RTN_BLACKHOLE     = 0x6
+	RTN_UNREACHABLE   = 0x7
+	RTN_PROHIBIT      = 0x8
+	RTN_THROW         = 0x9
+	RTN_NAT           = 0xa
+	RTN_XRESOLVE      = 0xb
+	SizeofNlMsghdr    = 0x10
+	SizeofNlMsgerr    = 0x14
+	SizeofRtGenmsg    = 0x1
+	SizeofNlAttr      = 0x4
+	SizeofRtAttr      = 0x4
+	SizeofIfInfomsg   = 0x10
+	SizeofIfAddrmsg   = 0x8
+	SizeofRtMsg       = 0xc
+	SizeofRtNexthop   = 0x8
 )
 
 type NlMsghdr struct {
@@ -491,41 +491,54 @@ type SockFprog struct {
 	Filter    *SockFilter
 }
 
+// The names below are the linux port's (ztypes_linux_arm64.go); every Linux
+// architecture agrees on each value except IFLA_MAX.
+const (
+	SizeofInotifyEvent = 0x10
+	SizeofSockFilter   = 0x8
+	SizeofSockFprog    = 0x10
+
+	IFLA_LINKINFO   = 0x12
+	IFLA_NET_NS_PID = 0x13
+	IFLA_IFALIAS    = 0x14
+	IFLA_MAX        = 0x24
+
+	RT_TABLE_COMPAT = 0xfc
+
+	RTNLGRP_NONE        = 0x0
+	RTNLGRP_LINK        = 0x1
+	RTNLGRP_NOTIFY      = 0x2
+	RTNLGRP_NEIGH       = 0x3
+	RTNLGRP_TC          = 0x4
+	RTNLGRP_IPV4_IFADDR = 0x5
+	RTNLGRP_IPV4_MROUTE = 0x6
+	RTNLGRP_IPV4_ROUTE  = 0x7
+	RTNLGRP_IPV4_RULE   = 0x8
+	RTNLGRP_IPV6_IFADDR = 0x9
+	RTNLGRP_IPV6_MROUTE = 0xa
+	RTNLGRP_IPV6_ROUTE  = 0xb
+	RTNLGRP_IPV6_IFINFO = 0xc
+	RTNLGRP_IPV6_PREFIX = 0x12
+	RTNLGRP_IPV6_RULE   = 0x13
+	RTNLGRP_ND_USEROPT  = 0x14
+)
+
 type InotifyEvent struct {
 	Wd     int32
 	Mask   uint32
 	Cookie uint32
 	Len    uint32
+	Name   [0]uint8
 }
 
+// This is struct user_pt_regs, the arm64 layout, as ztypes_linux_arm64.go
+// declares it. The kernel writes PTRACE_GETREGSET into this buffer, so the
+// shape must be the one the HOST architecture defines.
 type PtraceRegs struct {
-	R15      uint64
-	R14      uint64
-	R13      uint64
-	R12      uint64
-	Rbp      uint64
-	Rbx      uint64
-	R11      uint64
-	R10      uint64
-	R9       uint64
-	R8       uint64
-	Rax      uint64
-	Rcx      uint64
-	Rdx      uint64
-	Rsi      uint64
-	Rdi      uint64
-	Orig_rax uint64
-	Rip      uint64
-	Cs       uint64
-	Eflags   uint64
-	Rsp      uint64
-	Ss       uint64
-	Fs_base  uint64
-	Gs_base  uint64
-	Ds       uint64
-	Es       uint64
-	Fs       uint64
-	Gs       uint64
+	Regs   [31]uint64
+	Sp     uint64
+	Pc     uint64
+	Pstate uint64
 }
 
 type FdSet struct {
@@ -607,13 +620,17 @@ const RNDGETENTCNT = 0x80045200
 
 const PERF_IOC_FLAG_GROUP = 0x1
 
+// Termios is the linux port's shape (ztypes_linux_arm64.go): Cc holds 32
+// slots although the kernel fills 19, so Ispeed and Ospeed sit where a
+// program written for linux expects them.
 type Termios struct {
 	Iflag     uint32
 	Oflag     uint32
 	Cflag     uint32
 	Lflag     uint32
 	Line      uint8
-	Cc        [19]uint8
+	Cc        [32]uint8
+	Pad_cgo_0 [3]byte
 	Ispeed    uint32
 	Ospeed    uint32
 }
@@ -626,11 +643,105 @@ type Winsize struct {
 }
 
 const (
-	IUCLC  = 0x200
-	OLCUC  = 0x2
-	TCGETS = 0x5401
-	TCSETS = 0x5402
-	XCASE  = 0x4
+	VINTR    = 0x0
+	VQUIT    = 0x1
+	VERASE   = 0x2
+	VKILL    = 0x3
+	VEOF     = 0x4
+	VTIME    = 0x5
+	VMIN     = 0x6
+	VSWTC    = 0x7
+	VSTART   = 0x8
+	VSTOP    = 0x9
+	VSUSP    = 0xa
+	VEOL     = 0xb
+	VREPRINT = 0xc
+	VDISCARD = 0xd
+	VWERASE  = 0xe
+	VLNEXT   = 0xf
+	VEOL2    = 0x10
+	IGNBRK   = 0x1
+	BRKINT   = 0x2
+	IGNPAR   = 0x4
+	PARMRK   = 0x8
+	INPCK    = 0x10
+	ISTRIP   = 0x20
+	INLCR    = 0x40
+	IGNCR    = 0x80
+	ICRNL    = 0x100
+	IUCLC    = 0x200
+	IXON     = 0x400
+	IXANY    = 0x800
+	IXOFF    = 0x1000
+	IMAXBEL  = 0x2000
+	IUTF8    = 0x4000
+	OPOST    = 0x1
+	OLCUC    = 0x2
+	ONLCR    = 0x4
+	OCRNL    = 0x8
+	ONOCR    = 0x10
+	ONLRET   = 0x20
+	OFILL    = 0x40
+	OFDEL    = 0x80
+	B0       = 0x0
+	B50      = 0x1
+	B75      = 0x2
+	B110     = 0x3
+	B134     = 0x4
+	B150     = 0x5
+	B200     = 0x6
+	B300     = 0x7
+	B600     = 0x8
+	B1200    = 0x9
+	B1800    = 0xa
+	B2400    = 0xb
+	B4800    = 0xc
+	B9600    = 0xd
+	B19200   = 0xe
+	B38400   = 0xf
+	CSIZE    = 0x30
+	CS5      = 0x0
+	CS6      = 0x10
+	CS7      = 0x20
+	CS8      = 0x30
+	CSTOPB   = 0x40
+	CREAD    = 0x80
+	PARENB   = 0x100
+	PARODD   = 0x200
+	HUPCL    = 0x400
+	CLOCAL   = 0x800
+	B57600   = 0x1001
+	B115200  = 0x1002
+	B230400  = 0x1003
+	B460800  = 0x1004
+	B500000  = 0x1005
+	B576000  = 0x1006
+	B921600  = 0x1007
+	B1000000 = 0x1008
+	B1152000 = 0x1009
+	B1500000 = 0x100a
+	B2000000 = 0x100b
+	B2500000 = 0x100c
+	B3000000 = 0x100d
+	B3500000 = 0x100e
+	B4000000 = 0x100f
+	ISIG     = 0x1
+	ICANON   = 0x2
+	XCASE    = 0x4
+	ECHO     = 0x8
+	ECHOE    = 0x10
+	ECHOK    = 0x20
+	ECHONL   = 0x40
+	NOFLSH   = 0x80
+	TOSTOP   = 0x100
+	ECHOCTL  = 0x200
+	ECHOPRT  = 0x400
+	ECHOKE   = 0x800
+	FLUSHO   = 0x1000
+	PENDIN   = 0x4000
+	IEXTEN   = 0x8000
+	TCGETS   = 0x5401
+	TCSETS   = 0x5402
 )
 
 type Taskstats struct {

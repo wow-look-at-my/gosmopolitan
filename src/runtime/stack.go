@@ -828,7 +828,7 @@ func adjustctxt(gp *g, adjinfo *adjustinfo) {
 	}
 	oldfp := gp.sched.bp
 	adjustpointer(adjinfo, unsafe.Pointer(&gp.sched.bp))
-	if GOARCH == "arm64" {
+	if goarch.IsArm64 == 1 {
 		// On ARM64, the frame pointer is saved one word *below* the SP,
 		// which is not copied or adjusted in any frame. Do it explicitly
 		// here.

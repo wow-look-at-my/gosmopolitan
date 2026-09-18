@@ -4,7 +4,11 @@ stdout '"Action":"output","Package":"p","Output":"M1"}'
 stdout '"Action":"output","Package":"p","Test":"Test","Output":"=== RUN   Test\\n","OutputType":"frame"}'
 stdout '"Action":"output","Package":"p","Test":"Test","Output":"T1"}'
 stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"=== RUN   Test/Sub1\\n","OutputType":"frame"}'
-stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"Sub1    x_test.go:19: SubLog1\\n"}'
+# A direct print and a t.Log reach the JSON stream as one event or as two,
+# depending on whether the test was interrupted between them, which this fork's
+# parallel tests make a race. Both outputs carry Sub1's name either way.
+stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"Sub1'
+stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"(Sub1)?    x_test.go:19: SubLog1\\n"}'
 stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"Sub2"}'
 stdout '"Action":"output","Package":"p","Test":"Test/Sub1","Output":"--- PASS: Test/Sub1 \([\d.]+s\)\\n","OutputType":"frame"}'
 stdout '"Action":"pass","Package":"p","Test":"Test/Sub1","Elapsed"'

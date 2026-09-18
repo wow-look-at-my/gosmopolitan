@@ -2,85 +2,33 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo && amd64
+//go:build cosmo
 
-// Windows NT async preemption and console control (wave 2 chunk D2).
+// Windows NT async preemption and console control.
 //
-// Async preemption is upstream os_windows.go's preemptM ported to the
-// NT function-table idiom: suspend the target M's thread
-// (SuspendThread), wait for the suspension to complete
-// (GetThreadContext - SuspendThread alone only queues it), and if the
-// interrupted PC/SP is an async-safe point of a goroutine that wants
-// preemption, rewrite the saved CONTEXT so the thread calls
-// asyncPreempt on resume (SP-=8, [SP]=resume PC, RIP=asyncPreempt -
-// the same fake-CALL shape the VEH uses for sigpanic0). Three locks
-// keep this sound, all with upstream's exact semantics:
-//
-//   - mp.preemptExtLock (CAS): ntPreemptM vs external code on the
-//     target thread. Foreign calls that can block or take the loader
-//     lock (the ntcallSE/ntcallSE10 bracket) hold it, so a preemption
-//     attempt against a thread in win64 code fails fast instead of
-//     suspending a thread that might be mid-ExitProcess.
-//   - mp.threadLock: guards mp.thread (the per-M duplicated thread
-//     handle) between ntPreemptM's DuplicateHandle and
-//     minit/unminit's install/close.
-//   - ntSuspendLock: serializes ALL SuspendThread callers -
-//     SuspendThread is asynchronous, so two threads suspending each
-//     other would deadlock - held until GetThreadContext confirms the
-//     suspension. ntExit takes it FOREVER before ExitProcess, so no
-//     suspension can be mid-flight while the process dies (the
-//     suspender-killed-mid-suspend wedge, upstream exit()).
-//
-// The scheduler reaches this machinery through the fork's shared
-// signalM (os_cosmo.go): preemptM (signal_unix.go) CASes
-// mp.signalPending and calls signalM(mp, sigPreempt), whose NT leg
-// calls ntPreemptM - which therefore also clears signalPending after
-// acking preemptGen (the unix ack protocol doSigPreempt performs on
-// signal-delivery hosts; without the clear the wrapper's CAS gate
-// would stay shut and preemption would fire exactly once).
-//
-// Console control: SetConsoleCtrlHandler's callback runs on a thread
-// INJECTED by Windows - no g, no TLS, no Go. The asm handler
-// (ntCtrlTramp, sys_cosmo_nt_amd64.s) only sets a bit in ntCtrlMask,
-// SetEvents ntCtrlEvent, and returns 1 (CTRL_C -> SIGINT, CTRL_BREAK
-// -> SIGQUIT) or blocks forever (CLOSE -> SIGHUP, LOGOFF/SHUTDOWN ->
-// SIGTERM - Windows kills the process the moment such a handler
-// returns; blocking gives Go handlers the OS's grace window to clean
-// up, upstream ctrlHandler's block()). The BREAK -> SIGQUIT and
-// CLOSE -> SIGHUP legs deliberately diverge from upstream Go's
-// windows mapping (BREAK -> SIGINT, CLOSE -> SIGTERM) for unix
-// parity: Ctrl-Break is the SIGQUIT chord - on a wedged process an
-// unwatched SIGQUIT produces the goroutine dump - and closing the
-// console window is a hangup (DEBUGGING.md wave 3 item 4). A
-// dedicated relay M - created via newm at boot, parked in
-// WaitForSingleObject on its g0 - picks the event up and feeds
-// ntKillSelf(sig), which consults ntSigActs and either drops
-// (SIG_IGN), dies with the encoded status (SIG_DFL - matching the
-// Linux default action for SIGINT/SIGHUP/SIGTERM), or delivers
-// through the D1 trampoline into sigtrampgo -> sighandler ->
-// sigsend/os signal (unwatched SIGQUIT: goroutine dump + encoded
-// death, the fork sigtable's _SigThrow - Linux parity).
+// The scheduler reaches this through the fork's shared signalM
+// (os_cosmo.go): preemptM CASes mp.signalPending and calls
+// signalM(mp, sigPreempt), whose NT leg is ntPreemptM.
 
 package runtime
 
 import (
 	"internal/abi"
-	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
 
-const (
-	// CONTEXT_AMD64 | CONTEXT_CONTROL: capture SegSs/Rsp/SegCs/Rip/
-	// EFlags only. asyncPreempt saves everything else itself, so the
-	// suspended thread's other registers stay untouched.
-	_NT_CONTEXT_CONTROL = 0x100001
+// _NT_CURRENT_THREAD is the GetCurrentThread() pseudo-handle (-2).
+// The CONTEXT flag word that goes with it is architecture-dependent:
+// _NT_CONTEXT_CONTROL, in os_cosmo_nt_ctx_<goarch>.go.
+const _NT_CURRENT_THREAD = ^uintptr(1)
 
-	_NT_CURRENT_THREAD = ^uintptr(1) // GetCurrentThread() pseudo-handle (-2)
-)
-
-// ntSuspendLock protects simultaneous SuspendThread operations from
-// suspending each other (see the file comment).
+// ntSuspendLock serializes ALL SuspendThread callers: SuspendThread is
+// asynchronous, so two threads suspending each other would deadlock. A
+// caller holds it until GetThreadContext confirms the suspension.
+// ntExit takes it FOREVER before ExitProcess, so no suspension can be
+// in flight while the process dies - the suspender-killed-mid-suspend
+// wedge upstream's os_windows.go exit() also guards.
 var ntSuspendLock mutex
 
 // ntExiting is set when the process is exiting (under ntSuspendLock).
@@ -142,15 +90,26 @@ func ntGFromSP(mp *m, sp uintptr) *g {
 
 // ntPreemptAck acknowledges a preemption attempt: bump preemptGen
 // (the requesting P spins on it) and reopen preemptM's signalPending
-// CAS gate - the unix ack order doSigPreempt uses.
+// CAS gate - the unix ack order doSigPreempt uses. Both halves are
+// required: without the clear the CAS gate stays shut and preemption
+// fires exactly once.
 func ntPreemptAck(mp *m) {
 	mp.preemptGen.Add(1)
 	mp.signalPending.Store(0)
 }
 
 // ntPreemptM sends an async-preemption request to mp: upstream
-// os_windows.go preemptM, on the NT function table. Every path acks
-// (ntPreemptAck) so the requester never spins forever.
+// os_windows.go preemptM, on the NT function table. It suspends the
+// target thread, waits for the suspension with GetThreadContext -
+// SuspendThread alone only queues it - and, at an async-safe point,
+// rewrites the saved CONTEXT so the thread calls asyncPreempt on
+// resume. Every path acks, so the requester never spins forever.
+//
+// Three locks keep this sound, with upstream's exact semantics.
+// mp.preemptExtLock fails a preemption fast against a thread in win64
+// code, which might be mid-ExitProcess. mp.threadLock guards mp.thread
+// between the DuplicateHandle here and minit/unminit. ntSuspendLock is
+// documented on its own declaration.
 func ntPreemptM(mp *m) {
 	if mp == getg().m {
 		throw("self-preempt")
@@ -220,19 +179,15 @@ func ntPreemptM(mp *m) {
 	unlock(&ntSuspendLock)
 
 	// Does it want a preemption and is it safe to preempt?
-	gp := ntGFromSP(mp, uintptr(c.rsp))
+	gp := ntGFromSP(mp, c.getSP())
 	if gp != nil && wantAsyncPreempt(gp) {
-		if ok, resumePC := isAsyncSafePoint(gp, uintptr(c.rip), uintptr(c.rsp), 0); ok {
-			// Inject a call to asyncPreempt: the same fake-CALL
-			// arrangement upstream PushCall performs - push the
-			// (possibly adjusted) resume PC, point RIP at the
-			// asyncPreempt entry. The stack write is a plain store
-			// from this thread; the target is suspended and goroutine
-			// stacks are ordinary memory.
-			sp := uintptr(c.rsp) - goarch.PtrSize
-			*(*uintptr)(unsafe.Pointer(sp)) = resumePC
-			c.rsp = uint64(sp)
-			c.rip = uint64(abi.FuncPCABI0(asyncPreempt))
+		if ok, resumePC := isAsyncSafePoint(gp, c.getPC(), c.getSP(), c.getLR()); ok {
+			// Inject a call to asyncPreempt: the fake-CALL
+			// arrangement upstream PushCall performs. The stack write
+			// inside pushCall is a plain store from this thread; the
+			// target is suspended and goroutine stacks are ordinary
+			// memory.
+			c.pushCall(abi.FuncPCABI0(asyncPreempt), resumePC)
 			ntcall(ntSetThreadContextFn, thread, uintptr(unsafe.Pointer(c)), 0, 0, 0, 0)
 		}
 	}
@@ -246,8 +201,8 @@ func ntPreemptM(mp *m) {
 	ntcall(ntCloseHandleFn, thread, 0, 0, 0, 0, 0)
 }
 
-// ntExit is the NT leg of runtime.exit (tail-jumped from the exit asm
-// in sys_cosmo_amd64.s). Disallow thread suspension for preemption
+// ntExit is the NT leg of runtime.exit (tail-jumped from the amd64
+// exit asm). Disallow thread suspension for preemption
 // before dying: otherwise ExitProcess and SuspendThread can race -
 // SuspendThread queues a suspension request for this thread,
 // ExitProcess kills the suspending thread, and then this thread
@@ -255,6 +210,7 @@ func ntPreemptM(mp *m) {
 //
 //go:nosplit
 func ntExit(code int32) {
+	ntBootCode("ntExit", uintptr(uint32(code)))
 	lock(&ntSuspendLock)
 	atomic.Store(&ntExiting, 1)
 	ntcall(ntExitProcessFn, uintptr(uint32(code)), 0, 0, 0, 0, 0)
@@ -287,8 +243,17 @@ var ntCtrlEvent uintptr
 var ntCtrlMask uint32
 
 // ntCtrlTramp is the SetConsoleCtrlHandler callback (asm,
-// sys_cosmo_nt_amd64.s): Go-free, since it runs on an injected
-// foreign thread.
+// sys_cosmo_nt_<goarch>.s): Go-free, since it runs on a thread
+// Windows INJECTS - no g, no TLS. It sets a bit in ntCtrlMask, signals
+// ntCtrlEvent, and then either returns 1 (CTRL_C, CTRL_BREAK) or
+// blocks forever (CLOSE, LOGOFF, SHUTDOWN). Windows kills the process
+// the moment such a handler returns, so blocking is what gives Go
+// handlers the OS grace window, as upstream ctrlHandler's block() does.
+//
+// BREAK maps to SIGQUIT and CLOSE to SIGHUP, which diverges from
+// upstream windows (SIGINT, SIGTERM) for unix parity: Ctrl-Break is
+// the SIGQUIT chord, whose unwatched action dumps goroutines on a
+// wedged process, and closing the console window is a hangup.
 func ntCtrlTramp()
 
 // ntInitConsoleCtrl wires console-control events into os/signal:
@@ -320,6 +285,14 @@ func ntInitConsoleCtrl() {
 // events (SIGHUP, SIGTERM), so a coalesced wakeup dies for the
 // blocked-handler event only after the interactive chords ran.
 func ntCtrlRelay() {
+	// A system M, like sysmon and the template thread: checkdead must
+	// not count it as a thread that can run goroutines, or a deadlocked
+	// program on NT waits forever instead of reporting one.
+	lock(&sched.lock)
+	sched.nmsys++
+	checkdead()
+	unlock(&sched.lock)
+
 	for {
 		ntcall(ntWaitForSingleObjectFn, ntCtrlEvent, _NT_INFINITE, 0, 0, 0, 0)
 		for {

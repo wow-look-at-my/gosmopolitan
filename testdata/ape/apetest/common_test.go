@@ -1,7 +1,6 @@
 package apetest
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -48,10 +47,6 @@ func first8K(t *testing.T) []byte {
 		return bin
 	}
 	return bin[:8192]
-}
-
-func findInHeader(t *testing.T, needle []byte) int {
-	return bytes.Index(first8K(t), needle)
 }
 
 func le16(b []byte) uint16 { return uint16(b[0]) | uint16(b[1])<<8 }

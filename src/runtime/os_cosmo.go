@@ -42,6 +42,10 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 		ntFutexsleep(addr, val, ns)
 		return
 	}
+	if isdarwin() {
+		darwinFutexsleep(addr, val, ns)
+		return
+	}
 	if ns < 0 {
 		futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, nil, nil, 0)
 		return
@@ -52,14 +56,87 @@ func futexsleep(addr *uint32, val uint32, ns int64) {
 	futex(unsafe.Pointer(addr), _FUTEX_WAIT_PRIVATE, val, &ts, nil, 0)
 }
 
+// darwinFutexsleep is FUTEX_WAIT built out of a timed sleep, for XNU
+// hosts. XNU has no futex, and the primitives closest to one are not in
+// this tree's syscall table, so their numbers would have to be guessed
+// - and a wrong syscall number does not fail, it calls a different
+// syscall. A real sleep IS available, so the wait polls the word with a
+// backoff. The futex contract permits that: a sleeper may wake
+// spuriously, and the only hard requirement is that it stops once *addr
+// leaves val, which it observes on its own - so darwinFutexwakeup has
+// nothing to do. Only cosmo/amd64 reaches this; arm64 parks on the
+// Syslib's pthread condition variables, which amd64 has no dlsym for.
+//
+//go:nosplit
+func darwinFutexsleep(addr *uint32, val uint32, ns int64) {
+	const (
+		minSleepUsec = 20
+		maxSleepUsec = 5000
+	)
+	var deadline int64
+	if ns >= 0 {
+		deadline = nanotime() + ns
+	}
+	sleep := uint32(minSleepUsec)
+	for atomic.Load(addr) == val {
+		var left int64
+		if ns >= 0 {
+			left = deadline - nanotime()
+		}
+		d, expired := darwinFutexDelay(sleep, left, ns >= 0)
+		if expired {
+			return
+		}
+		usleep(d)
+		if sleep < maxSleepUsec {
+			sleep *= 2
+		}
+	}
+}
+
+// darwinFutexDelay decides one iteration of darwinFutexsleep's wait: how
+// long to sleep in microseconds, and whether the deadline has already
+// passed. leftNsec is the time remaining and is read only when timed.
+//
+// Split out because it is the only arithmetic here that can be wrong in
+// a way the host cannot show us - the poll loop around it needs a macOS
+// host, this does not.
+//
+//go:nosplit
+func darwinFutexDelay(sleep uint32, leftNsec int64, timed bool) (usec uint32, expired bool) {
+	if !timed {
+		return sleep, false
+	}
+	if leftNsec <= 0 {
+		return 0, true
+	}
+	// Never overshoot the caller's deadline, and never round a nonzero
+	// remainder down to a no-op sleep that would spin the CPU.
+	if int64(sleep)*1000 > leftNsec {
+		d := uint32(leftNsec / 1000)
+		if d == 0 {
+			d = 1
+		}
+		return d, false
+	}
+	return sleep, false
+}
+
 // If any procs are sleeping on addr, wake up at most cnt.
 //
 //go:nosplit
 func futexwakeup(addr *uint32, cnt uint32) {
 	if iswindows() {
-		// Every caller passes cnt==1 (see the wave-1 design in
-		// DEBUGGING.md), so WakeByAddressSingle suffices.
+		// Every caller passes cnt==1, so WakeByAddressSingle suffices.
 		ntFutexwakeup(addr)
+		return
+	}
+	if isdarwin() {
+		// Nothing to signal. A darwin waiter polls the word
+		// (darwinFutexsleep), so the store this caller already made is
+		// what ends its wait. This branch must stay: without it the asm
+		// stub's ENOSYS reaches the crash poke below on the first
+		// contended unlock on a macOS-Intel host.
 		return
 	}
 	ret := futex(unsafe.Pointer(addr), _FUTEX_WAKE_PRIVATE, cnt, nil, nil, 0)
@@ -272,8 +349,21 @@ func sysauxv(auxv []uintptr) (pairs int) {
 }
 
 func osinit() {
+	// Before anything else: GOOS names the host on this port, and the
+	// entry stub has already recorded which one that is.
+	setGOOS()
 	osArchInit()
+	ntBoot("osArchInit done")
+	// After osArchInit: the NT probe needs the resolved import table.
+	setGOARCH()
+	ntBoot("setGOARCH done")
+	// A macOS host's AT_HWCAP needs fixing up before internal/cpu reads
+	// it in cpuinit. This runs here rather than in sysargs because it
+	// asks the host, and the host is only safe to ask once osArchInit
+	// ran.
+	fixAuxv()
 	numCPUStartup = getCPUCount()
+	ntBoot("osinit done")
 }
 
 var urandom_dev = []byte("/dev/urandom\x00")
@@ -395,12 +485,24 @@ func rtsigprocmask(how int32, new, old *sigset, size int32)
 //go:nosplit
 //go:nowritebarrierrec
 func sigprocmask(how int32, new, old *sigset) {
-	if isdarwin() && GOARCH == "arm64" {
+	if isdarwin() {
 		// Apple `how` values, sigset width and signal numbering all
-		// differ; darwinSigprocmask (signal_cosmo_xnu.go) translates.
-		// amd64 stays on its raw-XNU asm branch until the Intel-mac
-		// runtime bring-up.
+		// differ, and darwinSigprocmask translates all three. Both
+		// arches come here: arm64 reaches Apple through the Syslib and
+		// amd64 through the raw sigprocmask syscall. Never route an
+		// arch to rtsigprocmask's darwin branch instead - it translates
+		// `how` and passes the 8-byte Linux mask through untouched, so
+		// every mask it sets names the wrong signals.
 		darwinSigprocmask(how, new, old)
+		return
+	}
+	if iswindows() {
+		// NT has no kernel signal mask. The runtime keeps its own and
+		// the self-delivery path consults it (os_cosmo_nt_sig.go). This
+		// branch must stay: a mask nothing records blocks nothing, so a
+		// critical section that had masked every signal could still be
+		// reentered by one.
+		ntSigprocmask(how, new, old)
 		return
 	}
 	rtsigprocmask(how, new, old, int32(unsafe.Sizeof(*new)))
@@ -429,7 +531,7 @@ func setsig(i uint32, fn uintptr) {
 	var sa sigactiont
 	sa.sa_flags = _SA_SIGINFO | _SA_ONSTACK | _SA_RESTORER | _SA_RESTART
 	sigfillset(&sa.sa_mask)
-	if GOARCH == "386" || GOARCH == "amd64" {
+	if goarch.Is386 == 1 || goarch.IsAmd64 == 1 {
 		sa.sa_restorer = abi.FuncPCABI0(sigreturn__sigaction)
 	}
 	if fn == abi.FuncPCABIInternal(sighandler) {
@@ -474,7 +576,7 @@ func setSignalstackSP(s *stackt, sp uintptr) {
 // signal_cosmo_arm64.go (darwin SIGTRAP correction).
 
 // sysSigaction calls the rt_sigaction system call (Linux hosts) or the
-// Apple sigaction translation layer (XNU hosts, arm64).
+// Apple sigaction translation layer (XNU hosts).
 //
 //go:nosplit
 func sysSigaction(sig uint32, new, old *sigactiont) {
@@ -484,7 +586,13 @@ func sysSigaction(sig uint32, new, old *sigactiont) {
 		// handler state itself and self-directed delivery consults
 		// the record (ntSigActs/ntKillSelf, os_cosmo_nt_sig.go).
 		ret = ntSigaction(sig, new, old)
-	} else if isdarwin() && GOARCH == "arm64" {
+	} else if isdarwin() {
+		// Both arches come here: arm64 through the Syslib, amd64
+		// through raw __sigaction with its own trampoline, over the
+		// same struct translation. Never route an arch to
+		// rt_sigaction's darwin branch instead - it reports success
+		// WITHOUT INSTALLING ANYTHING, so every handler the runtime
+		// believes it set is absent.
 		ret = darwinSigaction(sig, new, old)
 	} else {
 		ret = rt_sigaction(uintptr(sig), new, old, unsafe.Sizeof(sigactiont{}.sa_mask))
@@ -505,7 +613,7 @@ func rt_sigaction(sig uintptr, new, old *sigactiont, size uintptr) int32
 
 //go:nosplit
 func fixSigactionForCgo(new *sigactiont) {
-	if GOARCH == "386" && new != nil {
+	if goarch.Is386 == 1 && new != nil {
 		new.sa_flags &^= _SA_RESTORER
 		new.sa_restorer = 0
 	}
@@ -668,7 +776,7 @@ func runPerThreadSyscall() {
 
 	args := perThreadSyscall
 	r1, r2, errno := cosmo.Syscall6(args.trap, args.a1, args.a2, args.a3, args.a4, args.a5, args.a6)
-	if GOARCH == "ppc64" || GOARCH == "ppc64le" {
+	if goarch.IsPpc64 == 1 || goarch.IsPpc64le == 1 {
 		r2 = 0
 	}
 	if errno != 0 || r1 != args.r1 || r2 != args.r2 {
@@ -678,6 +786,87 @@ func runPerThreadSyscall() {
 	}
 
 	gp.m.needPerThreadSyscall.Store(0)
+}
+
+// syscall_runtime_doAllThreadsSyscall executes a system call on every M.
+// It is the linux port's driver over the cosmo syscall entry and rests
+// on the same three properties os_linux.go documents.
+//
+// On a darwin or NT host the call runs on the calling thread alone. XNU
+// keeps credentials per process, so one call is the process-wide change
+// the caller asked for, and neither host can deliver sigPerThreadSyscall
+// to another thread - darwinSignalM drops the realtime range and NT has
+// no cross-thread signal - so the wait below would never end there.
+//
+//go:linkname syscall_runtime_doAllThreadsSyscall syscall.runtime_doAllThreadsSyscall
+//go:uintptrescapes
+func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, err uintptr) {
+	if isdarwin() || iswindows() {
+		return cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	}
+
+	// STW so user goroutines see an atomic change to thread state.
+	stw := stopTheWorld(stwAllThreadsSyscall)
+
+	// allocmLock prevents new Ms while this runs, and serializes callers.
+	allocmLock.lock()
+	acquirem()
+
+	r1, r2, errno := cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
+	if errno != 0 {
+		releasem(getg().m)
+		allocmLock.unlock()
+		startTheWorld(stw)
+		return r1, r2, errno
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{
+		trap: trap,
+		a1:   a1,
+		a2:   a2,
+		a3:   a3,
+		a4:   a4,
+		a5:   a5,
+		a6:   a6,
+		r1:   r1,
+		r2:   r2,
+	}
+
+	// Wait for every thread to set procid before any signal goes out, so
+	// no thread runs the call twice (once itself, once in a child it
+	// cloned after inheriting the state).
+	for mp := allm; mp != nil; mp = mp.alllink {
+		for atomic.Load64(&mp.procid) == 0 {
+			osyield()
+		}
+	}
+
+	gp := getg()
+	tid := gp.m.procid
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if atomic.Load64(&mp.procid) == tid {
+			continue
+		}
+		mp.needPerThreadSyscall.Store(1)
+		signalM(mp, sigPerThreadSyscall)
+	}
+
+	for mp := allm; mp != nil; mp = mp.alllink {
+		if mp.procid == tid {
+			continue
+		}
+		for mp.needPerThreadSyscall.Load() != 0 {
+			osyield()
+		}
+	}
+
+	perThreadSyscall = perThreadSyscallArgs{}
+
+	releasem(getg().m)
+	allocmLock.unlock()
+	startTheWorld(stw)
+
+	return r1, r2, errno
 }
 
 // futex is implemented in assembly
@@ -691,7 +880,7 @@ func futex(addr unsafe.Pointer, op int32, val uint32, ts, addr2 *timespec, val3 
 // Go-allocated stacks. (The NT CreateThread path also pivots onto the
 // Go-allocated g0 stack, so it keeps the Linux bookkeeping.)
 func cosmoStacksAreSystemAllocated() bool {
-	return GOARCH == "arm64" && isdarwin()
+	return goarch.IsArm64 == 1 && isdarwin()
 }
 
 // cosmoHostIsWindows reports whether the cosmo binary is running on a

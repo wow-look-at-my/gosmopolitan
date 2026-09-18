@@ -205,7 +205,7 @@ func suspendG(gp *g) suspendGState {
 			gp.preemptStop = true
 			gp.preempt = true
 			gp.stackguard0 = stackPreempt
-			if GOARCH == "wasm" {
+			if goarch.IsWasm == 1 {
 				// Wasm has no async preemption; the compiler-inserted
 				// loop backedge checks compare sp against stackguard1,
 				// so they must be armed too or a call-free loop on
@@ -437,7 +437,7 @@ func isAsyncSafePoint(gp *g, pc, sp, lr uintptr) (bool, uintptr) {
 		// Not Go code.
 		return false, 0
 	}
-	if (GOARCH == "mips" || GOARCH == "mipsle" || GOARCH == "mips64" || GOARCH == "mips64le") && lr == pc+8 && funcspdelta(f, pc) == 0 {
+	if (goarch.IsMips == 1 || goarch.IsMipsle == 1 || goarch.IsMips64 == 1 || goarch.IsMips64le == 1) && lr == pc+8 && funcspdelta(f, pc) == 0 {
 		// We probably stopped at a half-executed CALL instruction,
 		// where the LR is updated but the PC has not. If we preempt
 		// here we'll see a seemingly self-recursive call, which is in

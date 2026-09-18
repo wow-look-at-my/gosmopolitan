@@ -137,6 +137,8 @@ func TestTickerConcurrentStress(t *testing.T) {
 }
 
 func TestAfterFuncStarvation(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Start two goroutines ping-ponging on a channel send.
 	// At any given time, at least one of these goroutines is runnable:
 	// if the channel buffer is full, the receiver is runnable,
@@ -503,6 +505,8 @@ func TestTimerStopStress(t *testing.T) {
 }
 
 func TestSleepZeroDeadlock(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Sleep(0) used to hang, the sequence of events was as follows.
 	// Sleep(0) sets G's status to Gwaiting, but then immediately returns leaving the status.
 	// Then the goroutine calls e.g. new and falls down into the scheduler due to pending GC.

@@ -4,6 +4,8 @@
 
 // Netlink sockets and messages
 
+//go:build linux && !cosmo
+
 package syscall
 
 import (

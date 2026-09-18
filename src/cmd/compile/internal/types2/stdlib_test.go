@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"go/build"
 	"internal/testenv"
+	"internal/vendorlist"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -284,6 +285,9 @@ func testTestDir(t *testing.T, path string, ignore ...string) {
 }
 
 func TestStdTest(t *testing.T) {
+	// Shares stdLibImporter, whose package map and the scopes behind it are
+	// one copy. A second test importing the same package races both.
+	t.Serial()
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -302,6 +306,7 @@ func TestStdTest(t *testing.T) {
 }
 
 func TestStdFixed(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -346,6 +351,7 @@ func TestStdFixed(t *testing.T) {
 }
 
 func TestStdKen(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	testTestDir(t, filepath.Join(testenv.GOROOT(t), "test", "ken"))
@@ -433,6 +439,7 @@ func typecheckFiles(path string, filenames []string, importer Importer) (*Packag
 }
 
 // pkgFilenames returns the list of package filenames for the given directory.
+
 func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 	ctxt := build.Default
 	ctxt.CgoEnabled = false
@@ -444,6 +451,12 @@ func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 		return nil, err
 	}
 	if excluded[pkg.ImportPath] {
+		return nil, nil
+	}
+	// src/cmd/vendor holds whole repositories, checked out as submodules,
+	// so it carries packages the distribution never vendored and cannot
+	// type-check. modules.txt names the ones that are part of the build.
+	if !vendorlist.Vendors(pkg.Dir) {
 		return nil, nil
 	}
 	if slices.Contains(strings.Split(pkg.ImportPath, "/"), "_asm") {

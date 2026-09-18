@@ -1130,6 +1130,27 @@ var errNoModules = errors.New("not using modules")
 // Using the go command lets build.Import and build.Context.Import find code
 // in Go modules. In the long term we want tools to use go/packages (currently golang.org/x/tools/go/packages),
 // which will also use the go command.
+// goCommandEnv names the go command that started this program, one argv
+// word per line. A go command that carries its standard library has no bin
+// directory under GOROOT, and it sets this for the programs it runs.
+const goCommandEnv = "GOCOMMAND"
+
+// goCommand answers the argv prefix of the go command importGo runs: the one
+// under GOROOT's bin when GOROOT holds one, else the one that started this
+// program. Never one found on PATH: a program this toolchain built lists
+// packages through this toolchain, not through whichever go a shell has
+// first.
+func (ctxt *Context) goCommand() ([]string, error) {
+	goCmd := filepath.Join(ctxt.GOROOT, "bin", "go")
+	if _, err := exec.LookPath(goCmd); err == nil {
+		return []string{goCmd}, nil
+	}
+	if argv := os.Getenv(goCommandEnv); argv != "" {
+		return strings.Split(argv, "\n"), nil
+	}
+	return nil, fmt.Errorf("GOROOT %s holds no go command and %s is unset", ctxt.GOROOT, goCommandEnv)
+}
+
 // Invoking the go command here is not very efficient in that it computes information
 // about the requested package and all dependencies and then only reports about the requested package.
 // Then we reinvoke it for every dependency. But this is still better than not working at all.
@@ -1230,8 +1251,12 @@ func (ctxt *Context) importGo(p *Package, path, srcDir string, mode ImportMode) 
 		}
 	}
 
-	goCmd := filepath.Join(ctxt.GOROOT, "bin", "go")
-	cmd := exec.Command(goCmd, "list", "-e", "-compiler="+ctxt.Compiler, "-tags="+strings.Join(ctxt.BuildTags, ","), "-installsuffix="+ctxt.InstallSuffix, "-f={{.Dir}}\n{{.ImportPath}}\n{{.Root}}\n{{.Goroot}}\n{{if .Error}}{{.Error}}{{end}}\n", "--", path)
+	goCmd, err := ctxt.goCommand()
+	if err != nil {
+		return fmt.Errorf("go/build: go list %s: %v", path, err)
+	}
+	args := append(goCmd[1:], "list", "-e", "-compiler="+ctxt.Compiler, "-tags="+strings.Join(ctxt.BuildTags, ","), "-installsuffix="+ctxt.InstallSuffix, "-f={{.Dir}}\n{{.ImportPath}}\n{{.Root}}\n{{.Goroot}}\n{{if .Error}}{{.Error}}{{end}}\n", "--", path)
+	cmd := exec.Command(goCmd[0], args...)
 
 	if ctxt.Dir != "" {
 		cmd.Dir = ctxt.Dir
@@ -1940,6 +1965,7 @@ func (ctxt *Context) eval(x constraint.Expr, allTags map[string]bool) bool {
 //	solaris (if GOOS = illumos)
 //	darwin (if GOOS = ios)
 //	unix (if this is a Unix GOOS)
+//	linux (if GOOS = cosmo)
 //	boringcrypto (if GOEXPERIMENT=boringcrypto is enabled)
 //	tag (if tag is listed in ctxt.BuildTags, ctxt.ToolTags, or ctxt.ReleaseTags)
 //
@@ -1957,6 +1983,9 @@ func (ctxt *Context) matchTag(name string, allTags map[string]bool) bool {
 		return true
 	}
 	if ctxt.GOOS == "android" && name == "linux" {
+		return true
+	}
+	if ctxt.GOOS == "cosmo" && name == "linux" {
 		return true
 	}
 	if ctxt.GOOS == "illumos" && name == "solaris" {

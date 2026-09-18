@@ -101,6 +101,7 @@ type (
 		NameList []*Name
 		Type     Expr // nil means no type
 		Values   Expr // nil means no values
+		Readonly bool // "readonly var": only the declaring package may assign
 		decl
 	}
 
@@ -299,6 +300,11 @@ type (
 	Field struct {
 		Name *Name // nil means anonymous field/parameter (structs/parameters), or embedded element (interfaces)
 		Type Expr  // field names declared in a list share the same Type (identical pointers)
+		// Default is the expression after "=" on a parameter, and nil on every
+		// other field. A call may omit the argument for such a parameter, and
+		// the compiler passes this expression in its place. Parameters sharing
+		// one Type each carry their own Default.
+		Default Expr
 		node
 	}
 

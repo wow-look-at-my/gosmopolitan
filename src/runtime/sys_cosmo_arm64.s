@@ -23,6 +23,8 @@
 // is 8. Passing the Linux value 1 to Apple clock_gettime asks for an
 // undefined clockid and fails with EINVAL.
 #define CLOCK_MONOTONIC_APPLE 6
+// clock_gettime_nsec_np's clockid: monotonic since boot, not slewed.
+#define CLOCK_UPTIME_RAW_APPLE 8
 
 // Host OS indicators (must match os_cosmo_arm64.go)
 #define HOSTXNU 8
@@ -548,20 +550,10 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	SVC
 	RET
 raiseproc_darwin:
-	// Use raise() which sends signal to current process; translate the
-	// Linux signal number to Apple's (see raise_darwin).
-	MOVD	runtime·__syslib(SB), R9
-	MOVD	160(R9), R12
-	MOVW	sig+0(FP), R0
-	CMPW	$65, R0
-	BHS	raiseproc_darwin_call
-	MOVD	$runtime·cosmoSigL2ATab(SB), R9
-	MOVBU	(R9)(R0), R0
-raiseproc_darwin_call:
-	SUB	$16, RSP
-	BL	(R12)
-	ADD	$16, RSP
-	RET
+	// kill(getpid(), sig) through Apple libc, not the Syslib raise: raise
+	// signals the calling thread. Same signature, so the FP slot carries
+	// over.
+	JMP	runtime·darwinRaiseproc(SB)
 
 TEXT ·getpid(SB),NOSPLIT,$0-8
 	CHECK_DARWIN(getpid_darwin)
@@ -640,6 +632,17 @@ setitimerLinux_darwin:
 	MOVD	R0, (R0)
 	RET
 
+// runtime·sigreturn__sigaction is the sa_restorer trampoline the x86
+// rt_sigaction ABI requires. arm64 has no sa_restorer, so setsig never
+// takes its address here - but os_cosmo.go declares the function for
+// both arches, and a declaration with no definition is a hole the
+// linker only notices once something references it. It crashes rather
+// than returning, because reaching it means the caller found that hole.
+TEXT runtime·sigreturn__sigaction(SB),NOSPLIT,$0
+	MOVD	$0xfa, R0
+	MOVD	R0, (R0)
+	RET
+
 TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	CHECK_DARWIN(mincore_darwin)
 	// Linux path
@@ -651,7 +654,28 @@ TEXT runtime·mincore(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 mincore_darwin:
-	// macOS ARM64: mincore not in Syslib, return -1 (ENOSYS)
+	// The Syslib has no mincore entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym like getpid above. The old
+	// stub returned -1 unconditionally, and its one caller
+	// (sysauxv's page-size probe, os_cosmo.go) reads a failure as "try
+	// the next size" - so every probe failed and physPageSize fell back
+	// to 256K. The APE loader supplies an auxv on macOS, so that probe
+	// is not reached today; a wrong page size is not a thing to leave
+	// lying behind a branch that might be.
+	MOVD	runtime·cosmoDarwinMincoreFn(SB), R12
+	CBZ	R12, mincore_darwin_none
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	MOVD	dst+16(FP), R2
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc mincore returns 0 or -1 with errno; the Linux
+	// syscall returns 0 or a negative errno. The caller only tests
+	// against zero, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+mincore_darwin_none:
 	MOVW	$-1, R0
 	MOVW	R0, ret+24(FP)
 	RET
@@ -753,12 +777,25 @@ nanotime_noswitch:
 	B	nanotime_finish
 
 nanotime_darwin:
-	// macOS path: call Syslib clock_gettime with the APPLE monotonic
-	// clockid. Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC
-	// semantics most closely: monotonic since boot and NTP-slewed (it
-	// pauses during deep sleep on macOS, which Linux's also may).
-	// Upstream darwin Go uses clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-	// via libc, but Syslib only exports clock_gettime.
+	// Apple's clock_gettime resolves to a MICROSECOND, so a caller that
+	// times its own work reads the same instant many times over. A
+	// timing-jitter entropy source degenerates on that, and crypto's
+	// repetition-count health test fails. clock_gettime_nsec_np is what
+	// upstream darwin Go calls and it answers in nanoseconds, so take it
+	// when osArchInit resolved it.
+	MOVD	runtime·cosmoDarwinClockNsecFn(SB), R12
+	CBZ	R12, nanotime_darwin_ts
+	MOVW	$CLOCK_UPTIME_RAW_APPLE, R0
+	BL	(R12)
+	CBZ	R0, nanotime_darwin_ts	// 0 is its only failure report
+	MOVD	R0, R5			// whole reading, in nanoseconds
+	MOVD	ZR, R3			// no seconds to scale
+	B	nanotime_have
+
+nanotime_darwin_ts:
+	// Fallback: Syslib clock_gettime with the APPLE monotonic clockid.
+	// Apple CLOCK_MONOTONIC (6) matches Linux CLOCK_MONOTONIC semantics
+	// most closely: monotonic since boot and NTP-slewed.
 	// Zero the result slots first so that even a double failure below
 	// yields 0 rather than uninitialized stack memory.
 	MOVD	ZR, 0(RSP)
@@ -782,6 +819,7 @@ nanotime_finish:
 	MOVD	0(RSP), R3	// sec
 	MOVD	8(RSP), R5	// nsec
 
+nanotime_have:
 	MOVD	R20, RSP	// restore SP
 	MOVD	16(RSP), R1
 	MOVD	R1, m_vdsoSP(R21)
@@ -1073,9 +1111,39 @@ TEXT runtime·madvise(SB),NOSPLIT,$0-28
 	MOVW	R0, ret+24(FP)
 	RET
 madvise_darwin:
-	// macOS ARM64: madvise not in Syslib, return 0 (success)
-	// The Go runtime handles madvise failures gracefully
-	MOVW	$0, ret+24(FP)
+	// The Syslib has no madvise entry, but libSystem exports one and
+	// osArchInit resolves it through dlsym, like mincore below. The old
+	// stub answered 0 without advising anything, so MADV_DONTNEED and
+	// MADV_FREE never reached the kernel and the heap kept every page it
+	// had ever touched.
+	MOVD	runtime·cosmoDarwinMadviseFn(SB), R12
+	CBZ	R12, madvise_darwin_none
+	// The advice numbers agree only up to MADV_DONTNEED (4). Linux
+	// MADV_FREE is 8, which Apple numbers 5 and spends on
+	// MADV_FREE_REUSE instead, so a forward would advise the wrong
+	// thing. Anything else is Linux-only (MADV_HUGEPAGE and friends)
+	// and fails rather than naming an unrelated Apple advice.
+	MOVW	flags+16(FP), R2
+	CMPW	$8, R2			// Linux MADV_FREE
+	BNE	madvise_darwin_range
+	MOVW	$5, R2			// Apple MADV_FREE
+	B	madvise_darwin_call
+madvise_darwin_range:
+	CMPW	$4, R2			// 0..4 are the same on both
+	BHI	madvise_darwin_none
+madvise_darwin_call:
+	MOVD	addr+0(FP), R0
+	MOVD	n+8(FP), R1
+	SUB	$16, RSP
+	BL	(R12)
+	ADD	$16, RSP
+	// Apple's libc madvise returns 0 or -1 with errno. Every caller here
+	// tests against zero only, so -1 carries the failure faithfully.
+	MOVW	R0, ret+24(FP)
+	RET
+madvise_darwin_none:
+	MOVW	$-1, R0
+	MOVW	R0, ret+24(FP)
 	RET
 
 // int64 futex(int32 *uaddr, int32 op, int32 val,
@@ -1094,11 +1162,13 @@ TEXT runtime·futex(SB),NOSPLIT,$0
 	MOVW	R0, ret+40(FP)
 	RET
 futex_darwin:
-	// macOS: futex not available, use dispatch_semaphore
-	// This is a simplified implementation for basic cases
-	// For now, return ENOSYS to indicate not supported
-	// The Go runtime will need alternative synchronization
-	MOVW	$-38, R0	// ENOSYS
+	// Unreachable. cosmo/arm64 builds lock_sema.go, so an M parks on the
+	// Syslib's pthread condition variables, and futexsleep/futexwakeup
+	// (os_cosmo.go) branch on isdarwin() before they reach here. A crash
+	// poke rather than an errno: a caller that enters this assembly
+	// directly has found a hole, and an ENOSYS would let it pass.
+	MOVD	$0xf9, R0
+	MOVD	R0, (R0)
 	MOVW	R0, ret+40(FP)
 	RET
 
@@ -1448,46 +1518,7 @@ TEXT runtime·cosmo_xlat_errno_r0(SB),NOSPLIT|NOFRAME,$0
 errno_xlat_done:
 	RET
 
-// Apple errno -> Linux errno, indexed by the Apple value (0..106).
-// Both names given as Apple/Linux where they differ:
-//   1..10  identity (EPERM..ECHILD)
-//  11 EDEADLK             -> 35    12..34 identity (ENOMEM..ERANGE)
-//  35 EAGAIN/EWOULDBLOCK  -> 11    36 EINPROGRESS -> 115   37 EALREADY -> 114
-//  38 ENOTSOCK  -> 88   39 EDESTADDRREQ -> 89   40 EMSGSIZE -> 90
-//  41 EPROTOTYPE -> 91  42 ENOPROTOOPT -> 92    43 EPROTONOSUPPORT -> 93
-//  44 ESOCKTNOSUPPORT -> 94  45 ENOTSUP -> 95 (EOPNOTSUPP)
-//  46 EPFNOSUPPORT -> 96  47 EAFNOSUPPORT -> 97  48 EADDRINUSE -> 98
-//  49 EADDRNOTAVAIL -> 99  50 ENETDOWN -> 100    51 ENETUNREACH -> 101
-//  52 ENETRESET -> 102  53 ECONNABORTED -> 103   54 ECONNRESET -> 104
-//  55 ENOBUFS -> 105    56 EISCONN -> 106        57 ENOTCONN -> 107
-//  58 ESHUTDOWN -> 108  59 ETOOMANYREFS -> 109   60 ETIMEDOUT -> 110
-//  61 ECONNREFUSED -> 111  62 ELOOP -> 40        63 ENAMETOOLONG -> 36
-//  64 EHOSTDOWN -> 112  65 EHOSTUNREACH -> 113   66 ENOTEMPTY -> 39
-//  67 EPROCLIM -> 11 (EAGAIN; Linux reports process limits as EAGAIN)
-//  68 EUSERS -> 87      69 EDQUOT -> 122         70 ESTALE -> 116
-//  71 EREMOTE -> 66     72..76 E*RPC*/EPROG* -> 5 (EIO; no Linux analog)
-//  77 ENOLCK -> 37      78 ENOSYS -> 38          79 EFTYPE -> 22 (EINVAL)
-//  80 EAUTH -> 13 (EACCES)  81 ENEEDAUTH -> 13   82 EPWROFF -> 5 (EIO)
-//  83 EDEVERR -> 5      84 EOVERFLOW -> 75       85 EBADEXEC -> 8 (ENOEXEC)
-//  86 EBADARCH -> 8     87 ESHLIBVERS -> 8       88 EBADMACHO -> 8
-//  89 ECANCELED -> 125  90 EIDRM -> 43           91 ENOMSG -> 42
-//  92 EILSEQ -> 84      93 ENOATTR -> 61 (ENODATA)  94 EBADMSG -> 74
-//  95 EMULTIHOP -> 72   96 ENODATA -> 61         97 ENOLINK -> 67
-//  98 ENOSR -> 63       99 ENOSTR -> 60          100 EPROTO -> 71
-// 101 ETIME -> 62      102 EOPNOTSUPP -> 95      103 ENOPOLICY -> 22
-// 104 ENOTRECOVERABLE -> 131  105 EOWNERDEAD -> 130  106 EQFULL -> 22
-DATA runtime·cosmo_errno_xlat_tab+0(SB)/8, $0x0706050403020100
-DATA runtime·cosmo_errno_xlat_tab+8(SB)/8, $0x0f0e0d0c230a0908
-DATA runtime·cosmo_errno_xlat_tab+16(SB)/8, $0x1716151413121110
-DATA runtime·cosmo_errno_xlat_tab+24(SB)/8, $0x1f1e1d1c1b1a1918
-DATA runtime·cosmo_errno_xlat_tab+32(SB)/8, $0x595872730b222120
-DATA runtime·cosmo_errno_xlat_tab+40(SB)/8, $0x61605f5e5d5c5b5a
-DATA runtime·cosmo_errno_xlat_tab+48(SB)/8, $0x6968676665646362
-DATA runtime·cosmo_errno_xlat_tab+56(SB)/8, $0x24286f6e6d6c6b6a
-DATA runtime·cosmo_errno_xlat_tab+64(SB)/8, $0x42747a570b277170
-DATA runtime·cosmo_errno_xlat_tab+72(SB)/8, $0x1626250505050505
-DATA runtime·cosmo_errno_xlat_tab+80(SB)/8, $0x0808084b05050d0d
-DATA runtime·cosmo_errno_xlat_tab+88(SB)/8, $0x484a3d542a2b7d08
-DATA runtime·cosmo_errno_xlat_tab+96(SB)/8, $0x165f3e473c3f433d
-DATA runtime·cosmo_errno_xlat_tab+104(SB)/8, $0x0000000000168283
-GLOBL runtime·cosmo_errno_xlat_tab(SB), RODATA|NOPTR, $112
+// The table itself is in sys_cosmo_errno.s, which carries no build-tag
+// architecture: amd64's raw-XNU return path translates against the same
+// 112 bytes, and two copies would drift the first time an entry was
+// corrected.

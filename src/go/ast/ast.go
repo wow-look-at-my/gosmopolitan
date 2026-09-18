@@ -202,6 +202,7 @@ type Field struct {
 	Doc     *CommentGroup // associated documentation; or nil
 	Names   []*Ident      // field/method/(type) parameter names; or nil
 	Type    Expr          // field/method/parameter type; or nil
+	Default Expr          // parameter default ("= expr"); or nil
 	Tag     *BasicLit     // field tag; or nil
 	Comment *CommentGroup // line comments; or nil
 }
@@ -219,6 +220,9 @@ func (f *Field) Pos() token.Pos {
 func (f *Field) End() token.Pos {
 	if f.Tag != nil {
 		return f.Tag.End()
+	}
+	if f.Default != nil {
+		return f.Default.End()
 	}
 	if f.Type != nil {
 		return f.Type.End()
@@ -993,12 +997,13 @@ type (
 	//	token.VAR     *ValueSpec
 	//
 	GenDecl struct {
-		Doc    *CommentGroup // associated documentation; or nil
-		TokPos token.Pos     // position of Tok
-		Tok    token.Token   // IMPORT, CONST, TYPE, or VAR
-		Lparen token.Pos     // position of '(', if any
-		Specs  []Spec
-		Rparen token.Pos // position of ')', if any
+		Doc      *CommentGroup // associated documentation; or nil
+		Readonly token.Pos     // position of "readonly" before a VAR, if any
+		TokPos   token.Pos     // position of Tok
+		Tok      token.Token   // IMPORT, CONST, TYPE, or VAR
+		Lparen   token.Pos     // position of '(', if any
+		Specs    []Spec
+		Rparen   token.Pos // position of ')', if any
 	}
 
 	// A FuncDecl node represents a function declaration.
@@ -1013,8 +1018,13 @@ type (
 
 // Pos and End implementations for declaration nodes.
 
-func (d *BadDecl) Pos() token.Pos  { return d.From }
-func (d *GenDecl) Pos() token.Pos  { return d.TokPos }
+func (d *BadDecl) Pos() token.Pos { return d.From }
+func (d *GenDecl) Pos() token.Pos {
+	if d.Readonly.IsValid() {
+		return d.Readonly
+	}
+	return d.TokPos
+}
 func (d *FuncDecl) Pos() token.Pos { return d.Type.Pos() }
 
 func (d *BadDecl) End() token.Pos { return d.To }

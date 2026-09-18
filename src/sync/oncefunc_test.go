@@ -18,6 +18,7 @@ import (
 // We assume that the Once.Do tests have already covered parallelism.
 
 func TestOnceFunc(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	calls := 0
 	of := func() { calls++ }
 	f := sync.OnceFunc(of)
@@ -37,6 +38,7 @@ func TestOnceFunc(t *testing.T) {
 }
 
 func TestOnceValue(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	calls := 0
 	of := func() int {
 		calls++
@@ -63,6 +65,7 @@ func TestOnceValue(t *testing.T) {
 }
 
 func TestOnceValues(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	calls := 0
 	of := func() (int, int) {
 		calls++

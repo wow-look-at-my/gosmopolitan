@@ -4,6 +4,8 @@
 
 // Socket control messages
 
+//go:build linux && !cosmo
+
 package syscall
 
 import "unsafe"

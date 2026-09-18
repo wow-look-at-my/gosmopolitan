@@ -1895,7 +1895,8 @@ func TestTLSServerWithoutTLSConn(t *testing.T) {
 
 func TestServeTLS(t *testing.T) {
 	CondSkipHTTP2(t)
-	// Not parallel: uses global test hooks.
+	// Every other test reaches the global test hooks this sets.
+	t.Serial()
 	defer afterTest(t)
 	defer SetTestHookServerServe(nil)
 
@@ -2063,7 +2064,8 @@ func TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(t *testing.T) {
 
 func testAutomaticHTTP2_ListenAndServe(t *testing.T, tlsConf *tls.Config) {
 	CondSkipHTTP2(t)
-	// Not parallel: uses global test hooks.
+	// Every other test reaches the global test hooks this sets.
+	t.Serial()
 	defer afterTest(t)
 	defer SetTestHookServerServe(nil)
 	var ok bool

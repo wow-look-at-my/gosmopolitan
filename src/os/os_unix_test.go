@@ -231,9 +231,10 @@ func TestMkdirStickyUmask(t *testing.T) {
 	if runtime.GOOS == "wasip1" {
 		t.Skip("file permissions not supported on " + runtime.GOOS)
 	}
-	// Issue #69788: This test temporarily changes the umask for testing purposes,
-	// so it shouldn't be run in parallel with other test cases
-	// to avoid other tests (e.g., TestCopyFS) creating files with an unintended umask.
+	// Issue #69788: this test changes the umask, which every other test that
+	// creates a file or a directory reads. Without the barrier those files get
+	// an unintended mode.
+	t.Serial()
 
 	const umask = 0077
 	dir := t.TempDir()
@@ -363,6 +364,42 @@ func TestSplitPath(t *testing.T) {
 	} {
 		if dir, base := SplitPath(tt.path); dir != tt.wantDir || base != tt.wantBase {
 			t.Errorf("splitPath(%q) = %q, %q, want %q, %q", tt.path, dir, base, tt.wantDir, tt.wantBase)
+		}
+	}
+}
+
+// A cosmo binary takes file_unix.go on every host it boots on, and NT names
+// its temp directory in TMP or TEMP and sets no TMPDIR. The unix default
+// answered /tmp there, a path that host does not have, so every t.TempDir on
+// the windows leg built under it and its cleanup reported "open /tmp: is a
+// directory".
+//
+// The order is the one GetTempPath documents, which is what os.TempDir
+// answers on a real windows build.
+//
+// The answer is in the /c/ spelling Getwd and Executable use on that host,
+// so a path built under it compares equal to one read back from the
+// working directory and filepath sees an absolute path.
+func TestNTTempDirReadsTheVariablesNTSets(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"tmp wins", map[string]string{"TMP": `C:\a`, "TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/a"},
+		{"temp is next", map[string]string{"TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/b"},
+		{"then the profile", map[string]string{"USERPROFILE": `C:\c`}, "/c/c"},
+		{"an empty value is unset", map[string]string{"TMP": "", "TEMP": `C:\b`}, "/c/b"},
+		{"nothing set", nil, "/c/Windows/Temp"},
+		// The one that mattered: TMPDIR is a unix name and NT sets none.
+		{"tmpdir does not count", map[string]string{"TMPDIR": "/tmp"}, "/c/Windows/Temp"},
+		{"a trailing backslash goes", map[string]string{"TMP": `D:\Users\RUNNER~1\AppData\Local\Temp\`}, "/d/Users/RUNNER~1/AppData/Local/Temp"},
+		{"the drive root keeps its slash", map[string]string{"TMP": `C:\`}, "/c"},
+		{"an already /c/ spelling is kept", map[string]string{"TMP": "/c/tmp"}, "/c/tmp"},
+	} {
+		if got := NTTempDir(func(k string) string { return tt.env[k] }); got != tt.want {
+			t.Errorf("%s: NTTempDir = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

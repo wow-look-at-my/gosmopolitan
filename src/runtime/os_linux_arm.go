@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/cpu"
 	"unsafe"
 )
@@ -20,7 +21,7 @@ func checkgoarm() {
 	// On Android, /proc/self/auxv might be unreadable and hwcap won't
 	// reflect the CPU capabilities. Assume that every Android arm device
 	// has the necessary floating point hardware available.
-	if GOOS == "android" {
+	if goos.IsAndroid == 1 {
 		return
 	}
 	if cpu.HWCap&_HWCAP_VFP == 0 && goarmsoftfp == 0 {

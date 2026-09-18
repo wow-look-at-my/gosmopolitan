@@ -17,6 +17,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"internal/testenv"
+	"internal/vendorlist"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -181,7 +182,10 @@ func firstComment(filename string) string {
 
 	var first string
 	var s scanner.Scanner
-	s.Init(fset.AddFile("", fset.Base(), n), src[:n], nil /* ignore errors */, scanner.ScanComments)
+	// A negative base makes AddFile take the current base itself. Reading
+	// fset.Base() here instead races: tests share one FileSet and run beside
+	// each other, so the base can advance between the read and the add.
+	s.Init(fset.AddFile("", -1, n), src[:n], nil /* ignore errors */, scanner.ScanComments)
 	for {
 		_, tok, lit := s.Scan()
 		switch tok {
@@ -285,6 +289,10 @@ func testTestDir(t *testing.T, path string, ignore ...string) {
 }
 
 func TestStdTest(t *testing.T) {
+	// Shares stdLibImporter, and a source importer holds the packages it is
+	// part way through. A second test importing the same package reads that
+	// as an import cycle, or races the objects going into its scope.
+	t.Serial()
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -303,6 +311,7 @@ func TestStdTest(t *testing.T) {
 }
 
 func TestStdFixed(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	if testing.Short() && testenv.Builder() == "" {
@@ -348,6 +357,7 @@ func TestStdFixed(t *testing.T) {
 }
 
 func TestStdKen(t *testing.T) {
+	t.Serial() // Shares stdLibImporter. See TestStdTest.
 	testenv.MustHaveGoBuild(t)
 
 	testTestDir(t, filepath.Join(testenv.GOROOT(t), "test", "ken"))
@@ -435,6 +445,7 @@ func typecheckFiles(path string, filenames []string, importer Importer) (*Packag
 }
 
 // pkgFilenames returns the list of package filenames for the given directory.
+
 func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 	ctxt := build.Default
 	ctxt.CgoEnabled = false
@@ -446,6 +457,12 @@ func pkgFilenames(dir string, includeTest bool) ([]string, error) {
 		return nil, err
 	}
 	if excluded[pkg.ImportPath] {
+		return nil, nil
+	}
+	// src/cmd/vendor holds whole repositories, checked out as submodules,
+	// so it carries packages the distribution never vendored and cannot
+	// type-check. modules.txt names the ones that are part of the build.
+	if !vendorlist.Vendors(pkg.Dir) {
 		return nil, nil
 	}
 	if slices.Contains(strings.Split(pkg.ImportPath, "/"), "_asm") {

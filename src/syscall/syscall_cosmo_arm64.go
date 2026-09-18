@@ -102,33 +102,40 @@ func (sa *SockaddrUnix) sockaddr() (unsafe.Pointer, _Socklen, error) {
 
 func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 	switch rsa.Addr.Family {
+	case AF_NETLINK:
+		pp := (*RawSockaddrNetlink)(unsafe.Pointer(rsa))
+		sa := new(SockaddrNetlink)
+		sa.Family = pp.Family
+		sa.Pad = pp.Pad
+		sa.Pid = pp.Pid
+		sa.Groups = pp.Groups
+		return sa, nil
+
+	case AF_PACKET:
+		pp := (*RawSockaddrLinklayer)(unsafe.Pointer(rsa))
+		sa := new(SockaddrLinklayer)
+		sa.Protocol = pp.Protocol
+		sa.Ifindex = int(pp.Ifindex)
+		sa.Hatype = pp.Hatype
+		sa.Pkttype = pp.Pkttype
+		sa.Halen = pp.Halen
+		sa.Addr = pp.Addr
+		return sa, nil
+
 	case AF_UNIX:
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
-			// A leading NUL is either an unnamed socket or a Linux
-			// abstract-namespace name. Every caller passes a pre-zeroed
-			// buffer, so an unnamed socket - the kernel wrote only the
-			// 2-byte family: unbound or socketpair descriptors on Linux
-			// hosts, and every unnamed socket surfaced by the darwin
-			// emulation on macOS hosts - leaves the path all zero,
-			// while a real abstract name has at least one nonzero
-			// byte. Report unnamed as an empty name like the BSD ports
-			// do instead of inventing an abstract "@" name; cosmo is
-			// deliberately absent from the android/linux/windows GOOS
-			// lists in net's tests that expect "@".
-			named := false
-			for _, b := range pp.Path {
-				if b != 0 {
-					named = true
-					break
-				}
+			// A leading NUL means the abstract namespace, which only
+			// Linux has. There the leading NUL becomes '@' whatever
+			// follows it, so an autobound socket reads as "@": that is
+			// the convention every Linux program uses, and what the
+			// host's own ports report. A macOS or Windows host has no
+			// abstract namespace, so the same bytes are an unnamed
+			// socket and the name stays empty.
+			if !cosmoHostIsLinux() {
+				return sa, nil
 			}
-			if !named {
-				return sa, nil // unnamed: Name stays ""
-			}
-			// Abstract name: rewrite the leading NUL as '@' for
-			// textual display (the standard convention).
 			pp.Path[0] = '@'
 		}
 		// Assume the path ends at the first NUL. Not the full Linux

@@ -1474,6 +1474,7 @@ func TestIllformedUTF16FileName(t *testing.T) {
 }
 
 func TestUTF16Alloc(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	allowsPerRun := func(want int, f func()) {
 		t.Helper()
 		got := int(testing.AllocsPerRun(5, f))

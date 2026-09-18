@@ -60,6 +60,8 @@ func TestSignal(t *testing.T) {
 }
 
 func TestStress(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	dur := 3 * time.Second
 	if testing.Short() {
 		dur = 100 * time.Millisecond

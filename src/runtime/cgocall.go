@@ -85,6 +85,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/goarch"
 	"internal/goexperiment"
@@ -132,7 +133,7 @@ var ncgocall uint64 // number of cgo calls in total for dead m
 //go:linkname cgocall
 //go:nosplit
 func cgocall(fn, arg unsafe.Pointer) int32 {
-	if !iscgo && GOOS != "solaris" && GOOS != "illumos" && GOOS != "windows" {
+	if !iscgo && goos.IsSolaris != 1 && goos.IsIllumos != 1 && goos.IsWindows != 1 {
 		throw("cgocall unavailable")
 	}
 

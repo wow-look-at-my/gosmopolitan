@@ -13,6 +13,10 @@ var certFiles = []string{
 
 var certDirectories = []string{}
 
+// platformVerifier is false: systemVerify below answers nothing, so the
+// roots must come off disk. See root.go.
+const platformVerifier = false
+
 func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate, err error) {
 	return nil, nil
 }

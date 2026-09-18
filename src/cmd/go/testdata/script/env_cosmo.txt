@@ -3,9 +3,24 @@
 # the platform selection from one that ignores it, so the probe is
 # load-bearing outside this repo: keep it working.
 
-# Unset: every platform the toolchain can emit boot support for.
+# Unset: the three supported platforms, NOT every row of the token table.
+# linux/arm64 stays selectable, and a default build does not claim it,
+# because nothing verifies it.
 go env GOCOSMOPLATFORMS
-stdout '^linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64$'
+stdout '^linux/amd64,darwin/arm64,windows/amd64$'
+
+# linux/arm64 is accepted when asked for by name.
+env GOCOSMOPLATFORMS=linux/arm64,linux/amd64
+go env GOCOSMOPLATFORMS
+stdout '^linux/amd64,linux/arm64$'
+env GOCOSMOPLATFORMS=
+
+# darwin/amd64 is refused by name. Intel macs are out of support, and an
+# APE cannot carry a Mach-O header at offset 0 for XNU to read.
+env GOCOSMOPLATFORMS=darwin/amd64
+! go env GOCOSMOPLATFORMS
+stderr 'unknown platform "darwin/amd64"'
+env GOCOSMOPLATFORMS=
 
 # Set: the effective selection, in canonical order, not the raw string.
 env GOCOSMOPLATFORMS=windows/amd64,linux/amd64
@@ -46,3 +61,18 @@ stdout GOCOSMODEBUG=
 stdout GOCOSMOFAT=
 stdout GOCOSMOPLATFORMS=
 stdout GOCOSMOSTRIP=
+
+# What go env REPORTS for GOCOSMOPLATFORMS must not become what the next
+# reader SEES. cmd/go copies each reported value into its own environment so
+# the tools it invokes agree with it, and the other knobs survive that
+# because their effective values parse back to themselves. This one's does
+# not: every platform is what "unset" reports, and a selection of every
+# platform is a choice. Publish it and GOCOSMOFAT=0 stops working, because
+# the build believes the caller asked for both architectures.
+env GOCOSMOPLATFORMS=
+env GOCOSMOFAT=0
+env GOOS=cosmo
+env GOARCH=amd64
+go env GOCOSMOFAT
+stdout '^off$'
+! stderr 'conflicts with GOCOSMOPLATFORMS'

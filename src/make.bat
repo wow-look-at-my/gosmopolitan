@@ -82,6 +82,22 @@ if not exist "%GOROOT_BOOTSTRAP%\bin\go.exe" (
 	echo Set GOROOT_BOOTSTRAP to a working Go tree ^>= Go %bootgo%.
 	exit /b 1
 )
+rem cmd/go requires packages that live under src/cmd/vendor as git submodules, so
+rem a clone made without them fails much later with "no required module provides
+rem package", which reads as a missing dependency and sends the reader to go get.
+if not exist cmd\vendor\github.com\wow-look-at-my\go-s3-server\go.mod (
+	echo ERROR: src/cmd/vendor submodules are not checked out.
+	echo Run: git submodule update --init --recursive
+	exit /b 1
+)
+
+rem A submodule follows this repository's branch, so a build reads the branch a
+rem change is on rather than a commit somebody wrote down once. The update is
+rem git submodule update --init --remote, run by submodulebranch.bash, which
+rem names the branch to follow. A remote it cannot reach leaves the checkout
+rem alone. Git's own bash runs it here, so both platforms take one path.
+where bash >nul 2>nul
+if not errorlevel 1 if not "%GOSUBMODULEBRANCH%"=="off" bash "%~dp0submodulebranch.bash"
 set GOROOT=%GOROOT_TEMP%
 set GOROOT_TEMP=
 
@@ -112,7 +128,11 @@ if x%1==x--dist-tool (
 :: Run dist bootstrap to complete make.bash.
 :: Bootstrap installs a proper cmd/dist, built with the new toolchain.
 :: Throw ours, built with the bootstrap toolchain, away after bootstrap.
-.\cmd\dist\dist.exe bootstrap -a %* || exit /b 1
+::
+:: No -a, for the reason make.bash gives: tool IDs here are content-derived,
+:: so the build cache cannot serve an object from a different compiler, and -a
+:: only stops the cache being used at all.
+.\cmd\dist\dist.exe bootstrap %* || exit /b 1
 del .\cmd\dist\dist.exe
 goto :eof
 

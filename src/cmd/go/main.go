@@ -4,7 +4,7 @@
 
 //go:generate go test cmd/go -v -run=^TestDocsUpToDate$ -fixdocs
 
-package main
+package gocmd
 
 import (
 	"context"
@@ -95,7 +95,9 @@ var _ = go11tag
 
 var counterErrorsGOPATHEntryRelative = counter.New("go/errors:gopath-entry-relative")
 
-func main() {
+// Main runs the go command over os.Args. It returns only for "go help";
+// every other command exits the process with its status.
+func Main() {
 	log.SetFlags(0)
 	telemetry.MaybeChild() // Run in child mode if this is the telemetry sidecar child process.
 	cmdIsGoTelemetryOff := cmdIsGoTelemetryOff()
@@ -129,7 +131,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "go: cannot find GOROOT directory: 'go' binary is trimmed and GOROOT is not set\n")
 		os.Exit(2)
 	}
-	if fi, err := os.Stat(cfg.GOROOT); err != nil || !fi.IsDir() {
+	if fi, err := os.Stat(cfg.GOROOT); !cfg.EmbeddedStd && (err != nil || !fi.IsDir()) {
 		fmt.Fprintf(os.Stderr, "go: cannot find GOROOT directory: %v\n", cfg.GOROOT)
 		os.Exit(2)
 	}
@@ -304,6 +306,9 @@ func invoke(cmd *base.Command, args []string) {
 	cfg.OrigEnv = toolchain.FilterEnv(os.Environ())
 	cfg.CmdEnv = envcmd.MkEnv()
 	for _, env := range cfg.CmdEnv {
+		if !work.EnvSelfPublishable(env.Name) {
+			continue
+		}
 		if os.Getenv(env.Name) != env.Value {
 			os.Setenv(env.Name, env.Value)
 		}
@@ -359,6 +364,12 @@ func maybeStartTrace(pctx context.Context) context.Context {
 	if err != nil {
 		base.Fatalf("failed to start trace: %v", err)
 	}
+	// Name the row the command itself runs on. Everything that is not a
+	// build worker -- flag parsing, package loading, module resolution, the
+	// APE merge at the end -- lands here, and an unnamed row leaves the
+	// reader guessing which of the numbers is the main thread.
+	trace.NameProcess(ctx, "go "+strings.Join(os.Args[1:], " "))
+	trace.LaneOf(ctx).Name("go command", 0)
 	base.AtExit(func() {
 		if err := close(); err != nil {
 			base.Fatalf("failed to stop trace: %v", err)

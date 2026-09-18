@@ -110,6 +110,12 @@ func main() {
 	base.SetMode(mode)
 	base.Remove(
 		".git/**",
+		// A submodule's .git is a FILE holding a gitdir: pointer, and it sits
+		// under the submodule rather than at the root, so neither `.git/**` nor
+		// a root-anchored pattern reaches it. What ships is a path that names a
+		// directory the reader's machine does not have.
+		"**/.git",
+		"**/.git/**",
 		".gitattributes",
 		".github/**",
 		".gitignore",
@@ -232,11 +238,10 @@ func main() {
 
 	writeTgz(distpack(version+".src.tar.gz"), srcArch)
 
-	if goos == "windows" {
-		writeZip(distpack(version+"."+goos+"-"+goarch+".zip"), zipArch)
-	} else {
-		writeTgz(distpack(version+"."+goos+"-"+goarch+".tar.gz"), zipArch)
-	}
+	// Upstream writes a .zip here for windows, which go.dev serves. This fork
+	// publishes to buildhost, which stores the one archive and serves any
+	// format from it, so windows takes the same gzipped tar as every host.
+	writeTgz(distpack(version+"."+goosDashGoarch+".tar.gz"), zipArch)
 
 	writeZip(distpack(modVers+".zip"), modArch)
 	writeFile(distpack(modVers+".mod"),
@@ -377,11 +382,31 @@ func writeTgz(name string, a *Archive) {
 	}
 
 	for _, f = range a.Files {
-		h := check(tar.FileInfoHeader(f.Info(), ""))
+		// os.Readlink is the authoritative symlink test: it succeeds only
+		// for a real symlink, unlike trusting a walked FileInfo's mode bits.
+		// SetMode strips ModeSymlink from the mode, and even when the mode
+		// bit survives, tar.FileInfoHeader keys off it but cannot see the
+		// link's own contents, so the header must be fixed up by hand.
+		link := f.Linkname
+		if target, err := os.Readlink(f.Src); err == nil {
+			link = target
+		}
+		h := check(tar.FileInfoHeader(f.Info(), link))
+		if f.Mode&fs.ModeSymlink != 0 || link != "" {
+			h.Typeflag = tar.TypeSymlink
+			h.Size = 0
+			h.Linkname = link
+		}
 		mkdirAll(path.Dir(f.Name))
 		h.Name = f.Name
 		if err := tw.WriteHeader(h); err != nil {
 			panic(err)
+		}
+		// A symlink entry carries its target in h.Linkname, not a data
+		// body. Opening f.Src would follow the link and copy the target
+		// file's own content, overflowing the header's zero size.
+		if f.Mode&fs.ModeSymlink != 0 || link != "" {
+			continue
 		}
 		r := check(os.Open(f.Src))
 		check(io.Copy(tw, r))
@@ -420,10 +445,28 @@ func writeZip(name string, a *Archive) {
 		h := check(zip.FileInfoHeader(f.Info()))
 		h.Name = f.Name
 		h.Method = zip.Deflate
-		w := check(zw.CreateHeader(h))
-		r := check(os.Open(f.Src))
-		check(io.Copy(w, r))
-		check1(r.Close())
+		// The symlink target was recorded at walk time in f.Linkname;
+		// re-verify with os.Readlink, the authoritative symlink test that
+		// succeeds only for a real symlink, unlike the walked FileInfo's
+		// mode bits that SetMode may have stripped.
+		// A zip symlink entry's content is the link target text, not the
+		// target file: os.Open follows the link and reads the wrong data.
+		link := f.Linkname
+		isSymlink := link != ""
+		if target, err := os.Readlink(f.Src); err == nil {
+			link, isSymlink = target, true
+		}
+		if isSymlink {
+			h.UncompressedSize64 = uint64(len(link))
+			h.UncompressedSize = uint32(len(link))
+			w := check(zw.CreateHeader(h))
+			check(io.WriteString(w, link))
+		} else {
+			w := check(zw.CreateHeader(h))
+			r := check(os.Open(f.Src))
+			check(io.Copy(w, r))
+			check1(r.Close())
+		}
 	}
 	f.Name = ""
 	check1(zw.Close())

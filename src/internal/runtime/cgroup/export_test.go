@@ -28,6 +28,7 @@ var ContainsCPU = containsCPU
 
 var ParseV1Number = parseV1Number
 var ParseV2Limit = parseV2Limit
+var ParseMemoryLimit = parseMemoryLimit
 
 var ParseCPUCgroup = parseCPUCgroup
 var ParseCPUMount = parseCPUMount

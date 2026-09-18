@@ -206,6 +206,7 @@ func TestEmptyPrintCreatesLine(t *testing.T) {
 }
 
 func TestDiscard(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process, so no other test may run
 	l := New(io.Discard, "", 0)
 	s := strings.Repeat("a", 102400)
 	c := testing.AllocsPerRun(100, func() { l.Printf("%s", s) })

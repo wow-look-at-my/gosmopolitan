@@ -1530,7 +1530,7 @@ func TestUnmarshal(t *testing.T) {
 }
 
 func TestUnmarshalMarshal(t *testing.T) {
-	initBig()
+	jsonBig := bigJSON()
 	var v any
 	if err := Unmarshal(jsonBig, &v); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)

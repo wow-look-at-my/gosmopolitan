@@ -205,8 +205,27 @@ darwin_clock_gettime_xlated:
 	MOVD	24(R10), R12		// syslib.clock_gettime
 	B	darwin_call
 darwin_sigaction:
+	// syslib.sigaction takes Apple's LIBC struct sigaction, an Apple
+	// signal number and Apple flag values, so nothing rt_sigaction was
+	// handed can be forwarded to it. The translation is in Go
+	// (sigaction_cosmo_arm64.go), which cannot reach the Syslib table
+	// itself - hence the function pointer as the first argument.
+	//
+	// A real CALL, for the reason the slow-path dispatch above gives.
 	MOVD	272(R10), R12		// syslib.sigaction
-	B	darwin_call
+	MOVD	R12, 8(RSP)
+	MOVD	R0, 16(RSP)
+	MOVD	R1, 24(RSP)
+	MOVD	R2, 32(RSP)
+	MOVD	R3, 40(RSP)
+	CALL	·darwinSigactionSyslib(SB)
+	MOVD	48(RSP), R0
+	MOVD	56(RSP), R1
+	MOVD	64(RSP), R2
+	MOVD	R0, r1+56(FP)
+	MOVD	R1, r2+64(FP)
+	MOVD	R2, errno+72(FP)
+	RET
 darwin_sigaltstack:
 	MOVD	296(R10), R12		// syslib.sigaltstack
 	B	darwin_call

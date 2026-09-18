@@ -71,6 +71,76 @@ func TestParseV1Number(t *testing.T) {
 	}
 }
 
+func TestParseMemoryLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+		want     uint64
+		wantOK   bool
+		wantErr  bool
+	}{
+		{
+			name:     "v2-limit",
+			contents: "1073741824\n",
+			want:     1073741824,
+			wantOK:   true,
+		},
+		{
+			name:     "v2-no-limit",
+			contents: "max\n",
+		},
+		{
+			name:     "v1-no-limit-4k-pages",
+			contents: "9223372036854771712\n",
+		},
+		{
+			name:     "v1-no-limit-16k-pages",
+			contents: "9223372036854759424\n",
+		},
+		{
+			name:     "zero",
+			contents: "0\n",
+			wantOK:   true,
+		},
+		{
+			name:     "missing-newline",
+			contents: "1073741824",
+			wantErr:  true,
+		},
+		{
+			name:     "not-a-number",
+			contents: "123max\n",
+			wantErr:  true,
+		},
+		{
+			name:     "negative",
+			contents: "-1\n",
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := cgroup.ParseMemoryLimit([]byte(tc.contents))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseMemoryLimit got err nil want non-nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseMemoryLimit got err %v want nil", err)
+			}
+			if ok != tc.wantOK {
+				t.Fatalf("parseMemoryLimit got ok %v want %v", ok, tc.wantOK)
+			}
+			if ok && got != tc.want {
+				t.Errorf("parseMemoryLimit got %d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseV2Limit(t *testing.T) {
 	tests := []struct {
 		name     string

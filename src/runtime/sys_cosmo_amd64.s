@@ -81,6 +81,27 @@
 #define XNU_mmap		0x20000c5	// BSD 197
 #define XNU_sigreturn		0x20000b8	// BSD 184
 
+// Thread creation. Numbers from syscall/zsysnum_darwin_amd64.go; the ABI
+// around them is Go's own pre-1.12 darwin port (sys_darwin_amd64.s), which
+// created threads exactly this way before Go moved to libc.
+#define XNU_bsdthread_create	0x2000168	// BSD 360
+#define XNU_bsdthread_terminate	0x2000169	// BSD 361
+#define XNU_bsdthread_register	0x200016e	// BSD 366
+#define XNU_pthread_kill	0x2000148	// BSD 328 __pthread_kill
+
+// Mach traps (class 0x1000000), numbered by osfmk/mach/syscall_sw.h.
+#define MACH_thread_self	0x100001b	// thread_self_trap 27
+#define MACH_swtch_pri		0x100003b	// swtch_pri 59
+
+// PTHREAD_START_CUSTOM: the caller supplies the stack, which is the only
+// mode that makes sense for a runtime that already allocated a g0 stack.
+#define PTHREAD_START_CUSTOM	0x01000000
+
+// thread_fast_set_cthread_self, a machdep call (class 0x3000000), is how
+// x86-64 XNU sets a thread's GS base. The kernel stores the value it is
+// given as the base, unchanged (machine_thread_set_tsd_base).
+#define XNU_set_cthread_self	0x3000003
+
 // Helper macro: check if we're on macOS and jump to label if so
 // Clobbers AX
 #define CHECK_DARWIN(label) \
@@ -140,8 +161,14 @@ TEXT runtime·exitThread(SB),NOSPLIT,$0-8
 	INT	$3
 	JMP	0(PC)
 exitThread_darwin:
-	MOVL	$0, DI
-	MOVL	$XNU_exit, AX
+	// bsdthread_terminate(stackaddr, freesize, port, sem) ends THIS
+	// thread; XNU exit would end the process. The runtime owns the
+	// stack, so nothing is freed and no port or semaphore is signaled.
+	MOVQ	$0, DI
+	MOVQ	$0, SI
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+	MOVL	$XNU_bsdthread_terminate, AX
 	SYSCALL
 	INT	$3
 	JMP	0(PC)
@@ -157,6 +184,7 @@ exitThread_nt:
 	INT	$3	// not reached
 
 TEXT runtime·open(SB),NOSPLIT,$0-20
+	CHECK_WINDOWS(open_nt)
 	CHECK_DARWIN(open_darwin)
 	// Linux path - use openat
 	MOVL	$AT_FDCWD, DI
@@ -171,20 +199,32 @@ TEXT runtime·open(SB),NOSPLIT,$0-20
 	MOVL	AX, ret+16(FP)
 	RET
 open_darwin:
-	// macOS path - use open directly
+	// macOS path - use open directly. XNU sets the carry flag on
+	// failure and returns a positive errno; the Linux -4096 test this
+	// used to apply read ENOENT (2) as a successful open on fd 2.
 	MOVQ	name+0(FP), DI
 	MOVL	mode+8(FP), SI
 	MOVL	perm+12(FP), DX
 	MOVL	$XNU_open, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	open_darwin_ok
-	MOVL	$-1, AX
-open_darwin_ok:
+	JCS	open_darwin_err
 	MOVL	AX, ret+16(FP)
+	RET
+open_darwin_err:
+	MOVL	$-1, ret+16(FP)
+	RET
+open_nt:
+	// The runtime opens no file on an NT host: both callers in
+	// os_cosmo.go (the /proc/self/auxv fallback and urandom) return
+	// before they reach here. The syscall package's own open is served
+	// by the emulation instead. So this answers a failure rather than
+	// running the Linux SYSCALL below it, which comes back as an NT
+	// status that the -4096 errno test reads as a valid fd.
+	MOVL	$-1, ret+16(FP)
 	RET
 
 TEXT runtime·closefd(SB),NOSPLIT,$0-12
+	CHECK_WINDOWS(closefd_nt)
 	CHECK_DARWIN(closefd_darwin)
 	// Linux path
 	MOVL	fd+0(FP), DI
@@ -199,14 +239,23 @@ closefd_darwin:
 	MOVL	fd+0(FP), DI
 	MOVL	$XNU_close, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	closefd_darwin_ok
-	MOVL	$-1, AX
-closefd_darwin_ok:
+	JCS	closefd_darwin_err
 	MOVL	AX, ret+8(FP)
 	RET
+closefd_darwin_err:
+	MOVL	$-1, ret+8(FP)
+	RET
+closefd_nt:
+	// Nothing the runtime opened can be closed here: see open_nt.
+	MOVL	$-1, ret+8(FP)
+	RET
 
-TEXT runtime·write1(SB),NOSPLIT,$0-28
+// NOFRAME is load-bearing here, because write1_nt tail-jumps. The amd64
+// assembler gives a frame pointer to any TEXT that is not NOFRAME and makes a
+// call, and write1_darwin_err calls cosmo_xlat_errno_ax. A RET pops that
+// PUSHQ BP. A JMP does not, so the trampoline reads its arguments one slot low
+// and returns through the caller's saved BP, which is a stack address.
+TEXT runtime·write1(SB),NOSPLIT|NOFRAME,$0-28
 	CHECK_WINDOWS(write1_nt)
 	CHECK_DARWIN(write1_darwin)
 	// Linux path
@@ -218,11 +267,20 @@ TEXT runtime·write1(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 write1_darwin:
+	// Callers read a negative result as -errno, so a failure must not
+	// come back as XNU's positive Apple errno - that reads as a short
+	// write of that many bytes.
 	MOVQ	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$XNU_write, AX
 	SYSCALL
+	JCS	write1_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+write1_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 write1_nt:
@@ -232,6 +290,7 @@ write1_nt:
 	JMP	runtime·ntwrite1tramp(SB)
 
 TEXT runtime·read(SB),NOSPLIT,$0-28
+	CHECK_WINDOWS(read_nt)
 	CHECK_DARWIN(read_darwin)
 	// Linux path
 	MOVL	fd+0(FP), DI
@@ -242,12 +301,25 @@ TEXT runtime·read(SB),NOSPLIT,$0-28
 	MOVL	AX, ret+24(FP)
 	RET
 read_darwin:
+	// -errno on failure, like write1_darwin above.
 	MOVL	fd+0(FP), DI
 	MOVQ	p+8(FP), SI
 	MOVL	n+16(FP), DX
 	MOVL	$XNU_read, AX
 	SYSCALL
+	JCS	read_darwin_err
 	MOVL	AX, ret+24(FP)
+	RET
+read_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
+	MOVL	AX, ret+24(FP)
+	RET
+read_nt:
+	// open_nt hands out no descriptor, so every fd that arrives here is
+	// somebody else's. -EBADF, the way a caller of read expects, rather
+	// than the NT status the Linux SYSCALL above returns.
+	MOVL	$-9, ret+24(FP)	// -EBADF
 	RET
 
 // func pipe2(flags int32) (r, w int32, errno int32)
@@ -265,19 +337,20 @@ pipe2_darwin:
 	// pipe() returns r in AX, w in DX
 	MOVL	$XNU_pipe, AX
 	SYSCALL
-	// On macOS, pipe() returns fds in AX (read) and DX (write) on success
-	// On error, returns -1 in AX
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	pipe2_darwin_ok
+	// On success pipe() returns the read fd in AX and the write fd in
+	// DX. On failure the carry flag is set and AX holds a positive
+	// Apple errno, which the old -4096 test accepted as a pair of fds.
+	JCS	pipe2_darwin_err
+	MOVL	AX, r+8(FP)
+	MOVL	DX, w+12(FP)
+	MOVL	$0, errno+16(FP)
+	RET
+pipe2_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
 	MOVL	$-1, r+8(FP)
 	MOVL	$-1, w+12(FP)
 	NEGQ	AX
 	MOVL	AX, errno+16(FP)
-	RET
-pipe2_darwin_ok:
-	MOVL	AX, r+8(FP)
-	MOVL	DX, w+12(FP)
-	MOVL	$0, errno+16(FP)
 	RET
 
 TEXT runtime·usleep(SB),NOSPLIT,$24
@@ -369,13 +442,23 @@ TEXT runtime·raise(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 raise_darwin:
-	// macOS: use kill(getpid(), sig)
+	// kill(getpid(), sig, posix=1) with the APPLE signal number. A
+	// signal with no Apple number is dropped: the table answers 0, and
+	// kill(pid, 0) is an existence probe.
+	MOVL	sig+0(FP), SI
+	CMPL	SI, $65
+	JAE	raise_darwin_drop
+	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
+	MOVBLZX	(R11)(SI*1), SI
+	CMPL	SI, $0
+	JEQ	raise_darwin_drop
 	MOVL	$XNU_getpid, AX
 	SYSCALL
 	MOVL	AX, DI		// pid
-	MOVL	sig+0(FP), SI	// sig
+	MOVL	$1, DX		// posix
 	MOVL	$XNU_kill, AX
 	SYSCALL
+raise_darwin_drop:
 	RET
 raise_nt:
 	// NT (chunk D1): raise is only called on paths that expect the
@@ -398,12 +481,21 @@ TEXT runtime·raiseproc(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 raiseproc_darwin:
+	// Same translation as raise_darwin.
+	MOVL	sig+0(FP), SI
+	CMPL	SI, $65
+	JAE	raiseproc_darwin_drop
+	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
+	MOVBLZX	(R11)(SI*1), SI
+	CMPL	SI, $0
+	JEQ	raiseproc_darwin_drop
 	MOVL	$XNU_getpid, AX
 	SYSCALL
 	MOVL	AX, DI		// pid
-	MOVL	sig+0(FP), SI	// sig
+	MOVL	$1, DX		// posix
 	MOVL	$XNU_kill, AX
 	SYSCALL
+raiseproc_darwin_drop:
 	RET
 raiseproc_nt:
 	// NT (chunk D1): same as raise_nt - a process-directed fatal
@@ -435,11 +527,20 @@ TEXT ·tgkill(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 tgkill_darwin:
-	// macOS: use kill instead (tgid is pid)
-	MOVQ	tgid+0(FP), DI	// pid
-	MOVQ	sig+16(FP), SI	// sig
-	MOVL	$XNU_kill, AX
+	// __pthread_kill(thread_port, sig): tid is the mach port m.procid
+	// holds (minitProcid), sig becomes the APPLE number. A signal with
+	// no Apple number is dropped.
+	MOVQ	sig+16(FP), SI
+	CMPQ	SI, $65
+	JAE	tgkill_darwin_drop
+	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
+	MOVBLZX	(R11)(SI*1), SI
+	CMPL	SI, $0
+	JEQ	tgkill_darwin_drop
+	MOVQ	tid+8(FP), DI	// mach port
+	MOVL	$XNU_pthread_kill, AX
 	SYSCALL
+tgkill_darwin_drop:
 	RET
 tgkill_nt:
 	// NT wave 1: signal sends are dropped (signalM is also gated in
@@ -479,6 +580,12 @@ mincore_darwin:
 	MOVQ	dst+16(FP), DX
 	MOVL	$XNU_mincore, AX
 	SYSCALL
+	JCS	mincore_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+mincore_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -580,26 +687,21 @@ TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0-28
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 rtsigprocmask_darwin:
-	// macOS sigprocmask doesn't have size parameter.
-	// The `how` values also differ: Linux SIG_BLOCK/UNBLOCK/SETMASK
-	// are 0/1/2, Apple's are 1/2/3. Passing Linux values raw meant
-	// SIG_BLOCK arrived as the invalid 0 (EINVAL -> deliberate crash
-	// below) and SETMASK arrived as Apple SIG_UNBLOCK. Translate by
-	// adding 1. (The 8-byte Linux sigset vs 4-byte Apple sigset
-	// mismatch remains - macOS signal handling is still stubbed and
-	// tracked for the signal-translation wave.)
-	MOVL	how+0(FP), DI
-	INCL	DI
-	MOVQ	new+8(FP), SI
-	MOVQ	old+16(FP), DX
-	MOVL	$XNU_sigprocmask, AX
-	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
-	MOVL	$0xf1, 0xf1  // crash
+	// Unreachable: sigprocmask routes darwin hosts through
+	// darwinSigprocmask (signal_cosmo_xnu_amd64.go), which translates
+	// the mask as well as `how`. This branch translated `how` alone and
+	// handed the kernel the 8-byte Linux mask untouched, so every mask
+	// it set named the wrong signals.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf3, 0xf3
 	RET
 rtsigprocmask_nt:
-	RET
+	// Unreachable: sigprocmask routes NT hosts through ntSigprocmask,
+	// which keeps the mask the self-delivery path consults. This used to
+	// return success while blocking nothing, so a critical section that
+	// had just masked every signal could still be reentered by one.
+	MOVL	$0xf5, 0xf5
 
 TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	CHECK_WINDOWS(rt_sigaction_nt)
@@ -614,21 +716,30 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0-36
 	MOVL	AX, ret+32(FP)
 	RET
 rt_sigaction_darwin:
-	// macOS sigaction has different structure
-	// For now, return success without calling sigaction
-	// TODO: Implement proper sigaction translation layer
+	// Unreachable: sysSigaction routes darwin hosts through
+	// darwinSigaction (signal_cosmo_xnu_amd64.go), which translates the
+	// struct and issues __sigaction with a real trampoline. This used to
+	// return success without installing anything, so every handler the
+	// runtime thought it had set was absent.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf3, 0xf3
 	MOVL	$0, ret+32(FP)
 	RET
 rt_sigaction_nt:
-	// NT wave 1: no signal machinery; return success so
-	// sysSigaction's "sigaction failed" throw stays quiet (the same
-	// benign lie the darwin stub above tells).
-	MOVL	$0, ret+32(FP)
-	RET
+	// Unreachable: sysSigaction routes NT hosts through ntSigaction
+	// (os_cosmo_nt_sig.go), which records the handler the self-delivery
+	// path then consults. This used to return success without recording
+	// anything, which is the same lie the darwin stub above told.
+	//
+	// Crash rather than lie if a new caller reaches the asm directly.
+	MOVL	$0xf4, 0xf4
 
 TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
-	MOVQ	fn+0(FP),    AX
 	MOVL	sig+8(FP),   DI
+	CHECK_DARWIN(sigfwd_darwin)
+sigfwd_call:
+	MOVQ	fn+0(FP),    AX
 	MOVQ	info+16(FP), SI
 	MOVQ	ctx+24(FP),  DX
 	MOVQ	SP, BX		// callee-saved
@@ -636,6 +747,16 @@ TEXT runtime·sigfwd(SB),NOSPLIT,$0-32
 	CALL	AX
 	MOVQ	BX, SP
 	RET
+sigfwd_darwin:
+	// A forwarded handler is foreign code that expects the host's ABI.
+	// info and ctx are Apple-native already, so hand it the APPLE signal
+	// number too. An unmapped number cannot get here: no handler could
+	// have been installed for it.
+	CMPL	DI, $65
+	JAE	sigfwd_call
+	MOVQ	$runtime·cosmoSigL2ATab(SB), R11
+	MOVBLZX	(R11)(DI*1), DI
+	JMP	sigfwd_call
 
 // Called using C ABI.
 TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME|NOFRAME,$0
@@ -665,6 +786,51 @@ TEXT runtime·sigtramp(SB),NOSPLIT|TOPFRAME|NOFRAME,$0
 // Used instead of sigtramp in programs that use cgo.
 TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
 	JMP	runtime·sigtramp(SB)
+
+// cosmoXnuSigtramp is the sa_tramp of a raw __sigaction
+// (signal_cosmo_xnu_amd64.go). The KERNEL enters it, not Go, with the
+// register state sendsig (XNU bsd/dev/i386/unix_signal.c) builds:
+//
+//	DI  handler (ignored - sigtrampgo dispatches by signal)
+//	SI  infostyle, which sigreturn needs back
+//	DX  sig, APPLE numbering
+//	CX  info
+//	R8  ctx
+//	R9  token, which sigreturn needs back
+//
+// sigreturn(uctx, infostyle, token): the kernel refuses a call whose
+// token does not match the one it handed out.
+//
+// arm64 needs none of this: Apple libc supplies its own trampoline
+// there, and the Syslib hands it the already-installed handler. A raw
+// caller owns both ends - entering the handler and calling sigreturn
+// when it comes back.
+//
+// The signal number becomes the Linux one before Go sees it; SIGEMT and
+// SIGINFO have no Linux number and skip the handler. The reshuffle lands
+// on the (sig, info, ctx) contract runtime·sigtramp already implements,
+// so the C-to-Go transition is not written twice.
+TEXT runtime·cosmoXnuSigtramp(SB),NOSPLIT,$32
+	MOVQ	R9, 8(SP)		// token
+	MOVQ	R8, 16(SP)		// ctx
+	MOVL	SI, 24(SP)		// infostyle
+	MOVL	DX, DX			// sig is an int: drop the upper half
+	CMPL	DX, $32
+	JAE	cosmoXnuSigtramp_ret	// out of table: no Linux meaning
+	MOVQ	$runtime·cosmoSigA2LTab(SB), R11
+	MOVBLZX	(R11)(DX*1), DI		// sig, Linux numbering
+	CMPL	DI, $0
+	JEQ	cosmoXnuSigtramp_ret	// SIGEMT/SIGINFO: no Linux number
+	MOVQ	CX, SI			// info
+	MOVQ	R8, DX			// ctx
+	CALL	runtime·sigtramp(SB)
+cosmoXnuSigtramp_ret:
+	MOVQ	16(SP), DI		// ctx
+	MOVL	24(SP), SI		// infostyle
+	MOVQ	8(SP), DX		// token
+	MOVL	$XNU_sigreturn, AX
+	SYSCALL
+	INT	$3			// sigreturn does not return
 
 TEXT runtime·sigreturn__sigaction(SB),NOSPLIT,$0
 	CHECK_DARWIN(sigreturn_darwin)
@@ -721,16 +887,16 @@ mmap_darwin_no_anon:
 
 	MOVL	$XNU_mmap, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	mmap_darwin_ok
-	NOTQ	AX
-	INCQ	AX
-	MOVQ	$0, p+32(FP)
-	MOVQ	AX, err+40(FP)
-	RET
-mmap_darwin_ok:
+	// The carry flag decides. A failed mmap used to come back as a
+	// mapping at address ENOMEM (12), which every caller then wrote to.
+	JCS	mmap_darwin_err
 	MOVQ	AX, p+32(FP)
 	MOVQ	$0, err+40(FP)
+	RET
+mmap_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	$0, p+32(FP)
+	MOVQ	AX, err+40(FP)
 	RET
 
 // func munmap(addr unsafe.Pointer, n uintptr)
@@ -750,8 +916,7 @@ munmap_darwin:
 	MOVQ	n+8(FP), SI
 	MOVL	$XNU_munmap, AX
 	SYSCALL
-	CMPQ	AX, $0xfffffffffffff001
-	JLS	2(PC)
+	JCC	2(PC)
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 
@@ -817,6 +982,12 @@ madvise_darwin:
 	MOVL	flags+16(FP), DX
 	MOVL	$XNU_madvise, AX
 	SYSCALL
+	JCS	madvise_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+madvise_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -913,15 +1084,116 @@ nog2:
 	SYSCALL
 	JMP	-3(PC)	// keep exiting
 
+// XNU has no clone. It has bsdthread_create, which is what Go's own
+// darwin port used until it moved to libc in Go 1.12, and the ABI below
+// is that port's (go1.8 runtime/sys_darwin_amd64.s).
+//
+// bsdthread_create(fn, arg, stack, pthread, flags). The kernel relays
+// arg1 into DX and arg2 into CX in the new thread, so only TWO values
+// reach the child. gp is therefore not passed: newosproc always passes
+// mp.g0, and cosmoBsdthreadStart derives it from the m, exactly as Go
+// did. newosproc0 passes a nil m and the stub skips the g setup, which
+// is the nog2 case on the Linux side.
+//
+// The stub must be registered before the first create; osArchInit does
+// that (os_cosmo_amd64.go), and an unregistered create fails rather than
+// starting a thread at an address the kernel does not know.
 clone_darwin:
-	// macOS doesn't have clone, return error
-	// Thread creation on macOS should use pthread_create
-	// which requires cgo or a different approach
-	MOVL	$-38, AX	// ENOSYS
+	MOVQ	fn+32(FP), DI		// relayed to the child in DX
+	MOVQ	mp+16(FP), SI		// relayed to the child in CX
+	MOVQ	stk+8(FP), DX
+	MOVQ	$0, R10			// pthread: none, we own the stack
+	MOVQ	$PTHREAD_START_CUSTOM, R8
+	MOVQ	$0, R9
+	MOVL	$XNU_bsdthread_create, AX
+	SYSCALL
+	JCS	clone_darwin_err
+	MOVL	$0, ret+40(FP)
+	RET
+clone_darwin_err:
+	// newosproc reads a negative return as -errno and retries EAGAIN, so
+	// the Apple number has to become the Linux one before the sign flip.
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+40(FP)
 	RET
 
-TEXT runtime·sigaltstack(SB),NOSPLIT,$0
+// cosmoBsdthreadStart is where the kernel enters a thread made by
+// bsdthread_create. It is not called; it is jumped to with a register
+// state the kernel chooses:
+//
+//	DI  pthread (unused - we passed none)
+//	SI  mach port for this thread
+//	DX  arg1 of the create call, our fn
+//	CX  arg2 of the create call, our m
+//	R8  stack top
+//	R9  flags
+//
+// SP arrives 128 bytes below the stack top, so the first move is to take
+// the stack the caller actually allocated.
+TEXT runtime·cosmoBsdthreadStart(SB),NOSPLIT,$0
+	MOVQ	R8, SP
+	CMPQ	CX, $0
+	JEQ	bsdthread_start_nog
+
+	// settls takes &m.tls[0] in DI and points the GS base 0x28 below it,
+	// so gs:0x28 addresses m.tls[0] - the same slot g lives in on Linux.
+	PUSHQ	DX
+	PUSHQ	CX
+	PUSHQ	SI
+	LEAQ	m_tls(CX), DI
+	CALL	runtime·settls(SB)
+	POPQ	SI
+	POPQ	CX
+	POPQ	DX
+
+	MOVQ	SI, m_procid(CX)	// the mach port is this thread's id
+	MOVQ	m_g0(CX), AX
+	MOVQ	CX, g_m(AX)
+	get_tls(BX)
+	MOVQ	AX, g(BX)
+	MOVQ	AX, R14			// g register, for ABIInternal callees
+	CALL	runtime·stackcheck(SB)
+
+bsdthread_start_nog:
+	CALL	DX			// fn, an ABI0 entry (mstart)
+
+	// fn is not supposed to return. If it does, end this thread rather
+	// than the process: every other thread is still running.
+	MOVQ	$0, DI			// stack to free: none, the runtime owns it
+	MOVQ	$0, SI
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+	MOVL	$XNU_bsdthread_terminate, AX
+	SYSCALL
+	MOVL	$0xf2, 0xf2		// crash: bsdthread_terminate returned
+	RET
+
+// func cosmoBsdthreadRegister() int32
+//
+// Tells the kernel which address to enter new threads at. Must run once,
+// before any bsdthread_create. Returns 0, or a LINUX errno.
+TEXT runtime·cosmoBsdthreadRegister(SB),NOSPLIT,$0-4
+	MOVQ	$runtime·cosmoBsdthreadStart(SB), DI
+	MOVQ	$0, SI			// no workqueue thread entry
+	MOVQ	$0, DX
+	MOVQ	$0, R10
+	MOVQ	$0, R8
+	MOVQ	$0, R9
+	MOVL	$XNU_bsdthread_register, AX
+	SYSCALL
+	JCS	bsdthread_register_err
+	MOVL	$0, ret+0(FP)
+	RET
+bsdthread_register_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVL	AX, ret+0(FP)
+	RET
+
+// sigaltstack itself is a Go dispatcher (signal_cosmo_xnu_amd64.go):
+// XNU hosts go to darwinSigaltstack, which translates the struct and
+// the flags.
+TEXT runtime·sigaltstackLinux(SB),NOSPLIT,$0
 	// NT: no signal machinery in wave 1; fake success BEFORE the
 	// crash-on-failure check below.
 	CHECK_WINDOWS(sigaltstack_nt)
@@ -936,11 +1208,10 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$0
 	MOVL	$0xf1, 0xf1  // crash
 	RET
 sigaltstack_darwin:
-	MOVQ	new+0(FP), DI
-	MOVQ	old+8(FP), SI
-	MOVL	$XNU_sigaltstack, AX
-	SYSCALL
-	// Don't crash on error, sigaltstack may fail on macOS
+	// Unreachable: the Linux stackt handed raw to XNU has its size and
+	// flags swapped. Crash rather than lie if a new caller reaches the
+	// asm directly.
+	MOVL	$0xf3, 0xf3
 	RET
 sigaltstack_nt:
 	RET
@@ -971,9 +1242,31 @@ TEXT runtime·settls(SB),NOSPLIT,$32
 settls_nt:
 	RET
 settls_darwin:
-	// macOS x86_64 TLS is handled differently
-	// Use thread_fast_set_cthread_self which is a Mach trap
-	// For now, just return success - TLS may need different handling
+	// DI is &m.tls[0]. The kernel installs the value as the GS base
+	// unchanged, so pass &m.tls[0]-0x28 and gs:0x28 addresses the slot.
+	SUBQ	$0x28, DI
+	MOVL	$XNU_set_cthread_self, AX
+	SYSCALL
+	RET
+
+// func cosmoMachThreadSelf() uint32
+//
+// thread_self_trap: this thread's mach port name, which __pthread_kill
+// takes. A mach trap returns its result in AX with no carry flag.
+TEXT runtime·cosmoMachThreadSelf(SB),NOSPLIT,$0-4
+	MOVL	$MACH_thread_self, AX
+	SYSCALL
+	MOVL	AX, ret+0(FP)
+	RET
+
+// func cosmoXlatErrno(e uint32) uint32
+//
+// Go-callable wrapper over cosmo_xlat_errno_ax, so a test can pin the
+// table.
+TEXT runtime·cosmoXlatErrno(SB),NOSPLIT,$0-12
+	MOVL	e+0(FP), AX
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVL	AX, ret+8(FP)
 	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
@@ -984,8 +1277,11 @@ TEXT runtime·osyield(SB),NOSPLIT,$0
 	SYSCALL
 	RET
 osyield_darwin:
-	// macOS: sched_yield is BSD syscall 331
-	// Just return, no exact equivalent
+	// swtch_pri(0), the mach trap Apple libc's sched_yield issues. BSD
+	// 331 is __disable_threadsignal, not a yield.
+	MOVL	$0, DI
+	MOVL	$MACH_swtch_pri, AX
+	SYSCALL
 	RET
 osyield_nt:
 	// Sleep(0) yields to any ready thread. Direct win64 call;
@@ -1033,6 +1329,12 @@ access_darwin:
 	MOVL	mode+8(FP), SI
 	MOVL	$0x2000021, AX	// XNU access
 	SYSCALL
+	JCS	access_darwin_err
+	MOVL	AX, ret+16(FP)
+	RET
+access_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -1053,6 +1355,14 @@ connect_darwin:
 	MOVL	len+16(FP), DX
 	MOVL	$XNU_connect, AX
 	SYSCALL
+	JCS	connect_darwin_err
+	MOVL	AX, ret+24(FP)
+	RET
+connect_darwin_err:
+	// The caller compares against -EINPROGRESS, so the Apple number
+	// has to become the Linux one before the sign flip.
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+24(FP)
 	RET
 
@@ -1073,6 +1383,12 @@ socket_darwin:
 	MOVL	prot+8(FP), DX
 	MOVL	$XNU_socket, AX
 	SYSCALL
+	JCS	socket_darwin_err
+	MOVL	AX, ret+16(FP)
+	RET
+socket_darwin_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	NEGQ	AX
 	MOVL	AX, ret+16(FP)
 	RET
 
@@ -1092,4 +1408,132 @@ TEXT runtime·sbrk0(SB),NOSPLIT,$0-8
 sbrk0_darwin:
 	// macOS doesn't have brk, return 0
 	MOVQ	$0, ret+0(FP)
+	RET
+
+// func cosmoXnuSyscall6(num, a1, a2, a3, a4, a5, a6 uintptr) (r1 uintptr, errno int32)
+//
+// A raw XNU syscall by BSD number (caller supplies the 0x2000000 class
+// prefix), for the darwin calls that have no Linux number to dispatch on
+// - kqueue and kevent. errno is 0 on success and a LINUX errno on
+// failure; r1 is meaningless unless errno is 0.
+//
+// Refuses to issue anything on a non-XNU host: this is the one entry
+// here a caller reaches by naming an Apple syscall directly, so a
+// mis-gated caller must get ENOSYS rather than run BSD number 362 as
+// whatever Linux calls 362.
+TEXT runtime·cosmoXnuSyscall6(SB),NOSPLIT,$0-68
+	MOVL	runtime·__hostos(SB), R11
+	CMPL	R11, $HOSTXNU
+	JNE	cosmoXnuSyscall6_enosys
+	MOVQ	a1+8(FP), DI
+	MOVQ	a2+16(FP), SI
+	MOVQ	a3+24(FP), DX
+	MOVQ	a4+32(FP), R10
+	MOVQ	a5+40(FP), R8
+	MOVQ	a6+48(FP), R9
+	MOVQ	num+0(FP), AX
+	SYSCALL
+	JCS	cosmoXnuSyscall6_err
+	MOVQ	AX, r1+56(FP)
+	MOVL	$0, errno+64(FP)
+	RET
+cosmoXnuSyscall6_err:
+	CALL	runtime·cosmo_xlat_errno_ax(SB)
+	MOVQ	$0, r1+56(FP)
+	MOVL	AX, errno+64(FP)
+	RET
+cosmoXnuSyscall6_enosys:
+	MOVQ	$0, r1+56(FP)
+	MOVL	$38, errno+64(FP)	// ENOSYS
+	RET
+
+// runtime·cosmo_xlat_errno_ax translates a positive Apple errno in AX into
+// the corresponding positive Linux errno in AX. A value above 106 passes
+// through unchanged. Leaf; clobbers only R11, so any darwin return path can
+// CALL it.
+//
+// XNU reports failure by setting the carry flag and returning a POSITIVE
+// APPLE errno, while Go compares against LINUX values (Errno, EAGAIN, and
+// the rest). The first 34 agree; the BSD range diverges. The table is
+// runtime·cosmo_errno_xlat_tab in sys_cosmo_errno.s, shared with arm64's
+// cosmo_xlat_errno_r0 - same 112 bytes, one copy.
+//
+// internal/runtime/syscall/cosmo reaches this from its own assembly, which
+// is what the linkname push in os_cosmo_amd64.go is for.
+TEXT runtime·cosmo_xlat_errno_ax(SB),NOSPLIT|NOFRAME,$0
+	CMPQ	AX, $107
+	JAE	errno_xlat_done
+	MOVQ	$runtime·cosmo_errno_xlat_tab(SB), R11
+	MOVBLZX	(R11)(AX*1), AX
+errno_xlat_done:
+	RET
+
+// runtime·cosmo_xlat_oflags_dx translates Linux open(2) flags in DX into
+// Apple flags in DX. Leaf; clobbers only R11, so any darwin open path can
+// CALL it. arm64's counterpart is cosmo_xlat_oflags_r2.
+//
+// The bit POSITIONS are the amd64 kernel's, which are not arm64's: this
+// port's arm64 userspace follows the asm-generic numbers, where
+// O_DIRECTORY and O_NOFOLLOW sit four bits lower. So the two tables cannot
+// be shared, and reading either one for the other host mistakes
+// O_DIRECTORY for O_DIRECT.
+//
+// Bit-by-bit mapping (Linux value as zerrors_cosmo_amd64.go defines it ->
+// Apple value):
+//   0x3      access mode          -> unchanged (same encoding)
+//   0x40     O_CREAT              -> 0x200
+//   0x80     O_EXCL               -> 0x800
+//   0x100    O_NOCTTY             -> 0x20000
+//   0x200    O_TRUNC              -> 0x400
+//   0x400    O_APPEND             -> 0x8
+//   0x800    O_NONBLOCK           -> 0x4
+//   0x1000   O_DSYNC              -> 0x400000
+//   0x2000   O_ASYNC              -> 0x40
+//   0x10000  O_DIRECTORY          -> 0x100000
+//   0x20000  O_NOFOLLOW           -> 0x100
+//   0x80000  O_CLOEXEC            -> 0x1000000
+//   0x100000 __O_SYNC (O_SYNC hi) -> 0x80
+// Stripped (no Apple equivalent; dropping beats passing a bit Apple reads
+// as an unrelated flag): 0x4000 O_DIRECT, 0x40000 O_NOATIME, 0x200000
+// O_PATH (degrades to a plain read-only open), 0x400000 __O_TMPFILE.
+// O_LARGEFILE is 0 on amd64 and needs no entry.
+TEXT runtime·cosmo_xlat_oflags_dx(SB),NOSPLIT|NOFRAME,$0
+	MOVQ	DX, R11
+	ANDQ	$0x3, DX		// access mode
+	BTQ	$6, R11
+	JNC	2(PC)
+	ORQ	$0x200, DX		// O_CREAT
+	BTQ	$7, R11
+	JNC	2(PC)
+	ORQ	$0x800, DX		// O_EXCL
+	BTQ	$8, R11
+	JNC	2(PC)
+	ORQ	$0x20000, DX		// O_NOCTTY
+	BTQ	$9, R11
+	JNC	2(PC)
+	ORQ	$0x400, DX		// O_TRUNC
+	BTQ	$10, R11
+	JNC	2(PC)
+	ORQ	$0x8, DX		// O_APPEND
+	BTQ	$11, R11
+	JNC	2(PC)
+	ORQ	$0x4, DX		// O_NONBLOCK
+	BTQ	$12, R11
+	JNC	2(PC)
+	ORQ	$0x400000, DX		// O_DSYNC
+	BTQ	$13, R11
+	JNC	2(PC)
+	ORQ	$0x40, DX		// O_ASYNC
+	BTQ	$16, R11
+	JNC	2(PC)
+	ORQ	$0x100000, DX		// O_DIRECTORY
+	BTQ	$17, R11
+	JNC	2(PC)
+	ORQ	$0x100, DX		// O_NOFOLLOW
+	BTQ	$19, R11
+	JNC	2(PC)
+	ORQ	$0x1000000, DX		// O_CLOEXEC
+	BTQ	$20, R11
+	JNC	2(PC)
+	ORQ	$0x80, DX		// O_SYNC
 	RET

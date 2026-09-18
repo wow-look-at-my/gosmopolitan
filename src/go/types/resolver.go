@@ -380,6 +380,7 @@ func (check *Checker) collectObjects() {
 				// declare all variables
 				for i, name := range d.spec.Names {
 					obj := newVar(PackageVar, name.Pos(), pkg, name.Name, nil)
+					obj.readonly = d.readonly
 					lhs[i] = obj
 
 					di := d1

@@ -9,6 +9,8 @@
 // Note that sometimes we use a lowercase //sys name and
 // wrap it in our own nicer implementation.
 
+//go:build linux && !cosmo
+
 package syscall
 
 import (

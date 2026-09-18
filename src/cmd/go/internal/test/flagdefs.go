@@ -72,6 +72,7 @@ var passAnalyzersToVet = map[string]bool{
 	"stdversion":       true,
 	"stringintconv":    true,
 	"structtag":        true,
+	"testglobals":      true,
 	"testinggoroutine": true,
 	"tests":            true,
 	"timeformat":       true,

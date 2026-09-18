@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/bytealg"
 	"internal/goarch"
@@ -188,7 +189,7 @@ func (u *unwinder) initAt(pc0, sp0, lr0 uintptr, gp *g, flags unwindFlags) {
 	// arm < 7. See internal/runtime/atomic/sys_linux_arm.s.
 	//
 	// Start in the caller's frame.
-	if GOARCH == "arm" && goarm < 7 && GOOS == "linux" && frame.pc&0xffff0000 == 0xffff0000 {
+	if goarch.IsArm == 1 && goarm < 7 && goos.IsLinux == 1 && frame.pc&0xffff0000 == 0xffff0000 {
 		// Note that the calls are simple BL without pushing the return
 		// address, so we use LR directly.
 		//

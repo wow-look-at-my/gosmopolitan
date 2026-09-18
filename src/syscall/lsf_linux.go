@@ -4,6 +4,8 @@
 
 // Linux socket filter
 
+//go:build linux && !cosmo
+
 package syscall
 
 import (

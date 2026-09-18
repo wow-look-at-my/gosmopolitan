@@ -150,7 +150,11 @@ func (d Dir) Mode() (string, time.Time) {
 // due to bugs in the current platform.
 //
 // TODO(rfindley): move to a more appropriate file.
-const DisabledOnPlatform = false ||
+//
+// Fork-local: a var, not a const. runtime.GOOS and runtime.GOARCH are
+// variables on cosmo, because one APE runs on several hosts. Restore
+// the const on the next re-vendor and this file stops compiling.
+var DisabledOnPlatform = false ||
 	// The following platforms could potentially be supported in the future:
 	runtime.GOOS == "openbsd" || // #60614
 	runtime.GOOS == "solaris" || // #60968 #60970

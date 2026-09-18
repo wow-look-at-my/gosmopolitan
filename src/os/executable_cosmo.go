@@ -6,7 +6,10 @@
 
 package os
 
-import "internal/stringslite"
+import (
+	"internal/stringslite"
+	"sync"
+)
 
 // Cosmopolitan binaries run on several host operating systems. On Linux
 // hosts /proc/self/exe gives the answer directly. On hosts without
@@ -19,14 +22,39 @@ import "internal/stringslite"
 // errWd will be checked later, if we need to use initWd
 var initWd, errWd = Getwd()
 
+// The resolved path is remembered. The search below reaches the file
+// through the filesystem, so it stops answering once the program deletes
+// its own binary - which a running program may do, and which the kernel
+// answers on Linux and Apple answers from the arguments it passed. The
+// path a process was started from does not change, so one resolution
+// serves every later call.
+var exeOnce struct {
+	sync.Once
+	path string
+	err  error
+}
+
 func executable() (string, error) {
 	if path, err := Readlink("/proc/self/exe"); err == nil {
-		// When the executable has been deleted then Readlink returns a
-		// path appended with " (deleted)".
-		return stringslite.TrimSuffix(path, " (deleted)"), nil
+		// Readlink appends " (deleted)" for a file nothing links to.
+		path = stringslite.TrimSuffix(path, " (deleted)")
+		// An APE boots through a loader that execs a memfd, so on Linux
+		// the link reads "/memfd:<name>". That is the anonymous file's
+		// name, not a path: nothing opens it, and a program that re-execs
+		// itself by it fails. The loader passes the APE's own path as
+		// argv[0], which is the answer, so resolve that instead.
+		if !stringslite.HasPrefix(path, "/memfd:") {
+			return path, nil
+		}
 	}
 
-	// No usable procfs on this host: resolve Args[0] instead.
+	// No usable procfs on this host, or a memfd behind it: resolve Args[0]
+	// instead, once.
+	exeOnce.Do(func() { exeOnce.path, exeOnce.err = resolveArgv0() })
+	return exeOnce.path, exeOnce.err
+}
+
+func resolveArgv0() (string, error) {
 	var exePath string
 	if len(Args) == 0 || Args[0] == "" {
 		return "", ErrNotExist
@@ -100,7 +128,7 @@ func splitPathList(pathList string) []string {
 	}
 	n := 1
 	for i := 0; i < len(pathList); i++ {
-		if pathList[i] == PathListSeparator {
+		if rune(pathList[i]) == PathListSeparator {
 			n++
 		}
 	}
@@ -108,7 +136,7 @@ func splitPathList(pathList string) []string {
 	a := make([]string, n)
 	na := 0
 	for i := 0; i+1 <= len(pathList) && na+1 < n; i++ {
-		if pathList[i] == PathListSeparator {
+		if rune(pathList[i]) == PathListSeparator {
 			a[na] = pathList[start:i]
 			na++
 			start = i + 1

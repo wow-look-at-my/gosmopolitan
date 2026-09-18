@@ -1,0 +1,51 @@
+Written by hand.
+A module that generates part of its own API. The zip carries the directives
+and the generator, and not the file the generator writes.
+
+The generator also writes over kept.go, which the zip DOES carry. The zip's
+bytes win: what the module's authors published is the module.
+
+-- .mod --
+module example.com/generated
+
+go 1.16
+-- .info --
+{"Version": "v1.0.0"}
+-- go.mod --
+module example.com/generated
+
+go 1.16
+-- gen/main.go --
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	out := flag.String("out", "", "file to write")
+	over := flag.String("over", "", "file the module already ships, written anyway")
+	flag.Parse()
+	body := "package lang\n\nfunc Name() string { return \"generated\" }\n"
+	if err := os.WriteFile(*out, []byte(body), 0o666); err != nil {
+		os.Exit(1)
+	}
+	if *over == "" {
+		return
+	}
+	stale := "package lang\n\n// the generator wrote this\nconst Kept = \"the generator wrote this\"\n"
+	if err := os.WriteFile(*over, []byte(stale), 0o666); err != nil {
+		os.Exit(1)
+	}
+}
+-- lang/lang.go --
+//go:generate go run example.com/generated/gen -out lang.gen.go -over kept.go
+
+// Package lang declares nothing itself: Name is the generator's to write.
+package lang
+-- lang/kept.go --
+package lang
+
+// the module published this
+const Kept = "the module published this"

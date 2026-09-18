@@ -648,6 +648,27 @@ func (sh *Shell) runOut(dir string, env []string, cmdargs ...any) ([]byte, error
 	cmd.Env = append(cmd.Env, env...)
 	start := time.Now()
 	err = cmd.Run()
+	// Every compile, assemble, link, pack and cgo invocation the build makes
+	// arrives here, and it is the only place that knows both the command and
+	// the action it ran for. So this is where a trace gets the answer to
+	// "which tool spent that second, and on whose behalf".
+	if lane := a.lane(); lane.Enabled() {
+		args := a.traceArgs()
+		args["tool"] = filepath.Base(cmdline[0])
+		args["cmd"] = joinUnambiguously(cmdline)
+		if dir != "." {
+			args["cwd"] = dir
+		}
+		if ps := cmd.ProcessState; ps != nil {
+			args["user_ms"] = ps.UserTime().Milliseconds()
+			args["sys_ms"] = ps.SystemTime().Milliseconds()
+			args["exit"] = ps.ExitCode()
+		}
+		if err != nil {
+			args["error"] = err.Error()
+		}
+		lane.Since("exec "+filepath.Base(cmdline[0]), "exec", start, args)
+	}
 	if a != nil && a.json != nil {
 		aj := a.json
 		aj.Cmd = append(aj.Cmd, joinUnambiguously(cmdline))

@@ -15,6 +15,8 @@ import (
 )
 
 func TestRandomScheduling(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Scheduler is most consistent with GOMAXPROCS=1.
 	// Use that to make the test most likely to fail.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))

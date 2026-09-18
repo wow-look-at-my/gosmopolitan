@@ -739,7 +739,9 @@ func runBenchmarks(importPath string, matchString func(pat, str string) (bool, e
 // processBench runs bench b for the configured CPU counts and prints the results.
 func (s *benchState) processBench(b *B) {
 	for i, procs := range cpuList {
-		for j := uint(0); j < *count; j++ {
+		// runCount, not *count: a positive count measures once. Gather several
+		// samples with a tool that runs the benchmark binary again.
+		for j := uint(0); j < runCount(); j++ {
 			runtime.GOMAXPROCS(procs)
 			benchName := benchmarkName(b.name, procs)
 

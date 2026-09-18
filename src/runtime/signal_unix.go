@@ -8,6 +8,8 @@ package runtime
 
 import (
 	"internal/abi"
+	"internal/goarch"
+	"internal/goos"
 	"internal/goexperiment"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
@@ -163,7 +165,7 @@ func sigInstallGoHandler(sig uint32) bool {
 		}
 	}
 
-	if (GOOS == "linux" || GOOS == "android") && !iscgo && sig == sigPerThreadSyscall {
+	if hostIsLinux() && !iscgo && sig == sigPerThreadSyscall {
 		// sigPerThreadSyscall is the same signal used by glibc for
 		// per-thread syscalls on Linux. We use it for the same purpose
 		// in non-cgo binaries.
@@ -353,7 +355,7 @@ func doSigPreempt(gp *g, ctxt *sigctxt) {
 	gp.m.preemptGen.Add(1)
 	gp.m.signalPending.Store(0)
 
-	if GOOS == "darwin" || GOOS == "ios" {
+	if hostIsDarwin() {
 		pendingPreemptSignals.Add(-1)
 	}
 }
@@ -369,12 +371,12 @@ const preemptMSupported = true
 func preemptM(mp *m) {
 	// On Darwin, don't try to preempt threads during exec.
 	// Issue #41702.
-	if GOOS == "darwin" || GOOS == "ios" {
+	if hostIsDarwin() {
 		execLock.rlock()
 	}
 
 	if mp.signalPending.CompareAndSwap(0, 1) {
-		if GOOS == "darwin" || GOOS == "ios" {
+		if hostIsDarwin() {
 			pendingPreemptSignals.Add(1)
 		}
 
@@ -386,7 +388,7 @@ func preemptM(mp *m) {
 		signalM(mp, sigPreempt)
 	}
 
-	if GOOS == "darwin" || GOOS == "ios" {
+	if hostIsDarwin() {
 		execLock.runlock()
 	}
 }
@@ -397,7 +399,7 @@ func preemptM(mp *m) {
 //
 //go:nosplit
 func sigFetchG(c *sigctxt) *g {
-	switch GOARCH {
+	switch goarch.GOARCH {
 	case "arm", "arm64", "loong64", "ppc64", "ppc64le", "riscv64", "s390x":
 		if !iscgo && inVDSOPage(c.sigpc()) {
 			// When using cgo, we save the g on TLS and load it from there
@@ -453,7 +455,7 @@ func sigtrampgo(sig uint32, info *siginfo, ctx unsafe.Pointer) {
 			// no non-Go signal handler for sigPreempt.
 			// The default behavior for sigPreempt is to ignore
 			// the signal, so badsignal will be a no-op anyway.
-			if GOOS == "darwin" || GOOS == "ios" {
+			if hostIsDarwin() {
 				pendingPreemptSignals.Add(-1)
 			}
 			return
@@ -679,7 +681,7 @@ func sighandler(sig uint32, info *siginfo, ctxt unsafe.Pointer, gp *g) {
 		return
 	}
 
-	if (GOOS == "linux" || GOOS == "android") && sig == sigPerThreadSyscall {
+	if hostIsLinux() && sig == sigPerThreadSyscall {
 		// sigPerThreadSyscall is the same signal used by glibc for
 		// per-thread syscalls on Linux. We use it for the same purpose
 		// in non-cgo binaries. Since this signal is not _SigNotify,
@@ -1039,7 +1041,7 @@ func raisebadsignal(sig uint32, c *sigctxt) {
 	//
 	// On FreeBSD, the libthr sigaction code prevents
 	// this from working so we fall through to raise.
-	if GOOS != "freebsd" && (isarchive || islibrary) && handler == _SIG_DFL && !c.sigFromUser() {
+	if goos.IsFreebsd != 1 && (isarchive || islibrary) && handler == _SIG_DFL && !c.sigFromUser() {
 		return
 	}
 
@@ -1195,7 +1197,7 @@ func sigfwdgo(sig uint32, info *siginfo, ctx unsafe.Pointer) bool {
 	// This function and its caller sigtrampgo assumes SIGPIPE is delivered on the
 	// originating thread. This property does not hold on macOS (golang.org/issue/33384),
 	// so we have no choice but to ignore SIGPIPE.
-	if (GOOS == "darwin" || GOOS == "ios") && sig == _SIGPIPE {
+	if hostIsDarwin() && sig == _SIGPIPE {
 		return true
 	}
 
@@ -1262,7 +1264,7 @@ var sigsetAllExiting = func() sigset {
 	// Apply GOOS-specific overrides here, rather than in osinit,
 	// because osinit may be called before sigsetAllExiting is
 	// initialized (#51913).
-	if GOOS == "linux" && iscgo {
+	if hostIsLinux() && iscgo {
 		// #42494 glibc and musl reserve some signals for
 		// internal use and require they not be blocked by
 		// the rest of a normal C runtime. When the go runtime

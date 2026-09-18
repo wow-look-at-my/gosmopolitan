@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build linux
+
 // Package cgrouptest provides best-effort helpers for running tests inside a
 // cgroup.
 package cgrouptest
@@ -40,6 +42,23 @@ func (c *CgroupV2) SetCPUMax(quota, period int64) error {
 	}
 	buf := fmt.Sprintf("%s %d", q, period)
 	return os.WriteFile(c.CPUMaxPath(), []byte(buf), 0)
+}
+
+// Path to memory.max.
+func (c *CgroupV2) MemoryMaxPath() string {
+	return filepath.Join(c.path, "memory.max")
+}
+
+// Set memory.max. Pass -1 to disable the limit.
+//
+// This fails unless the parent cgroup delegates the memory controller, so
+// callers should skip rather than fail on an error.
+func (c *CgroupV2) SetMemoryMax(limit int64) error {
+	v := "max"
+	if limit >= 0 {
+		v = strconv.FormatInt(limit, 10)
+	}
+	return os.WriteFile(c.MemoryMaxPath(), []byte(v), 0)
 }
 
 // InCgroupV2 creates a new v2 cgroup, migrates the current process into it,

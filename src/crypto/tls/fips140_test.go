@@ -277,6 +277,7 @@ func fipsHandshake(t *testing.T, clientConfig, serverConfig *Config) (clientErr,
 }
 
 func TestFIPSServerSignatureAndHash(t *testing.T) {
+	t.Serial()
 	defer func() {
 		testingOnlySupportedSignatureAlgorithms = nil
 	}()

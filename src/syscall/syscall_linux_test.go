@@ -2,6 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+// Netlink, AllThreadsSyscall and the mount flags are Linux kernel surface
+// cosmo does not expose.
+//go:build linux && !cosmo
+
 package syscall_test
 
 import (
@@ -661,6 +665,7 @@ func TestPrlimitSelf(t *testing.T) {
 }
 
 func TestPrlimitOtherProcess(t *testing.T) {
+	t.Serial()
 	origLimit := syscall.OrigRlimitNofile()
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 
@@ -704,6 +709,7 @@ const magicRlimitValue = 42
 // prlimit to change its NOFILE limit, and have that updated limit be
 // seen by children. See issue #66797.
 func TestPrlimitFileLimit(t *testing.T) {
+	t.Serial()
 	switch os.Getenv("GO_WANT_HELPER_PROCESS") {
 	case "prlimit1":
 		testPrlimitFileLimitHelper1(t)
@@ -724,6 +730,16 @@ func TestPrlimitFileLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	max := lim.Max
+
+	// The soft limit drops to 43 below, and it is the whole process that
+	// carries it. TestOpenFileLimit opens 1200 files and fails on whatever
+	// order leaves it running after this test.
+	orig := lim
+	defer func() {
+		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &orig); err != nil {
+			t.Errorf("restoring RLIMIT_NOFILE: %v", err)
+		}
+	}()
 
 	lim = syscall.Rlimit{
 		Cur: magicRlimitValue + 1,

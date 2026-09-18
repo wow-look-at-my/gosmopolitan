@@ -47,6 +47,7 @@ func testCreate(t *testing.T, dir string) {
 	// Now check it.
 	ar = openArchive(name, os.O_RDONLY, []string{helloFile.name})
 	var buf strings.Builder
+	t.Serial()
 	stdout = &buf
 	verbose = true
 	defer func() {
@@ -91,6 +92,7 @@ func TestTableOfContents(t *testing.T) {
 
 	// Now print it.
 	var buf strings.Builder
+	t.Serial()
 	stdout = &buf
 	verbose = true
 	defer func() {
@@ -462,10 +464,12 @@ type FakeFile struct {
 	offset   int
 }
 
-// Reset prepares a FakeFile for reuse.
+// Reset returns a fresh reader over f's contents. Tests run in parallel and
+// each addFile call reads to the end, so a shared cursor reads short.
 func (f *FakeFile) Reset() *FakeFile {
-	f.offset = 0
-	return f
+	c := *f
+	c.offset = 0
+	return &c
 }
 
 // FileLike methods.

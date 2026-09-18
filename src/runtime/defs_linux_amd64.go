@@ -1,6 +1,8 @@
 // created by cgo -cdefs and then converted to Go
 // cgo -cdefs defs_linux.go defs1_linux.go
 
+//go:build linux && !cosmo
+
 package runtime
 
 import "unsafe"

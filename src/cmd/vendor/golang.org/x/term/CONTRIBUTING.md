@@ -14,13 +14,10 @@ When [filing an issue](https://golang.org/issue/new), make sure to answer these 
 4.  What did you expect to see?
 5.  What did you see instead?
 
-General questions should go to the [golang-nuts mailing list](https://groups.google.com/group/golang-nuts) instead of the issue tracker.
-The gophers there will answer or ask you to file an issue if you've tripped over a bug.
+General questions must go to the [golang-nuts mailing list](https://groups.google.com/group/golang-nuts) instead of the issue tracker. The gophers there will answer or ask you to file an issue if you have tripped over a bug.
 
 ## Contributing code
 
-Please read the [Contribution Guidelines](https://golang.org/doc/contribute.html)
-before sending patches.
+Please read the [Contribution Guidelines](https://golang.org/doc/contribute.html) before sending patches.
 
-Unless otherwise noted, the Go source files are distributed under
-the BSD-style license found in the LICENSE file.
+Unless otherwise noted. The Go source files are distributed under the BSD-style license found in the LICENSE file.

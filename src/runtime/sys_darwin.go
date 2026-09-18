@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/runtime/atomic"
 	"unsafe"
@@ -167,7 +168,7 @@ func pthread_kill_trampoline()
 //
 //go:nosplit
 func osinit_hack() {
-	if GOOS == "darwin" { // not ios
+	if goos.IsDarwin == 1 { // not ios
 		libcCall(unsafe.Pointer(abi.FuncPCABI0(osinit_hack_trampoline)), nil)
 	}
 	return

@@ -13,6 +13,7 @@ import (
 )
 
 func TestStartRegionLongString(t *testing.T) {
+	t.Serial() // The execution tracer and the flight recorder are one per process.
 	// Regression test: a region name longer than the trace region
 	// allocator's block size (~64KB) used to crash with
 	// "traceRegion: alloc too large" because traceStringTable.put

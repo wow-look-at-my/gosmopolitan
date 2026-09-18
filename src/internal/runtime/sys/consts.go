@@ -9,10 +9,11 @@ import (
 	"internal/goos"
 )
 
-// AIX and OpenBSD require a larger stack for syscalls.
+// AIX and OpenBSD require a larger stack for syscalls. So does cosmo,
+// whose darwin-host syscall emulation is a nosplit chain over dlsym'd libc.
 // The race build also needs more stack. See issue 54291.
 // This arithmetic must match that in cmd/internal/objabi/stack.go:stackGuardMultiplier.
-const StackGuardMultiplier = 1 + goos.IsAix + goos.IsOpenbsd + isRace
+const StackGuardMultiplier = 1 + goos.IsAix + goos.IsOpenbsd + goos.IsCosmo + isRace
 
 // DefaultPhysPageSize is the default physical page size.
 const DefaultPhysPageSize = goarch.DefaultPhysPageSize

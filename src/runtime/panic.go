@@ -7,6 +7,7 @@ package runtime
 import (
 	"internal/abi"
 	"internal/goarch"
+	"internal/goos"
 	"internal/runtime/atomic"
 	"internal/runtime/sys"
 	"unsafe"
@@ -1676,7 +1677,7 @@ func canpanic() bool {
 		releasem(mp)
 		return false
 	}
-	if GOOS == "windows" && mp.libcallsp != 0 {
+	if goos.IsWindows == 1 && mp.libcallsp != 0 {
 		releasem(mp)
 		return false
 	}

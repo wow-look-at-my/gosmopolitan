@@ -6,10 +6,17 @@ package linux_test
 
 import (
 	"internal/runtime/syscall/linux"
+	"runtime"
 	"testing"
 )
 
 func TestEpollctlErrorSign(t *testing.T) {
+	// EpollCtl issues the syscall instruction itself, so it needs a Linux
+	// kernel under it. The cosmo port builds this package for a binary
+	// that runs on three hosts, and runtime.GOOS names the one it got.
+	if runtime.GOOS != "linux" {
+		t.Skipf("epoll is a Linux kernel interface; this host is %s", runtime.GOOS)
+	}
 	v := linux.EpollCtl(-1, 1, -1, &linux.EpollEvent{})
 
 	const EBADF = 0x09

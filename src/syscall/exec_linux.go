@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build cosmo || linux
+//go:build linux && !cosmo
 
 package syscall
 
@@ -255,6 +255,7 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 		c                         uintptr
 		rlim                      *Rlimit
 		lim                       Rlimit
+		shArgv                    []*byte
 	)
 	pidfd = -1
 
@@ -294,6 +295,11 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 		fd[i] = int(ufd)
 	}
 	nextfd++
+
+	// An APE cannot be exec'd directly, so prepare its /bin/sh form now,
+	// while allocation is still legal. The child retries with it when
+	// execve answers ENOEXEC. See exec_ape.go.
+	shArgv = apeShellArgv(argv0, argv)
 
 	// Allocate another pipe for parent to child communication for
 	// synchronizing writing of User ID/Group ID mappings.
@@ -674,6 +680,15 @@ func forkAndExecInChild1(argv0 *byte, argv, envv []*byte, chroot, dir *byte, att
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
+	if err1 == ENOEXEC {
+		// The kernel refused the image. An APE is a shell script, so
+		// hand it to the shell that reads its header. This is what
+		// execvp(3) does with any ENOEXEC file.
+		_, _, err1 = RawSyscall(SYS_EXECVE,
+			uintptr(unsafe.Pointer(&apeShellPath[0])),
+			uintptr(unsafe.Pointer(&shArgv[0])),
+			uintptr(unsafe.Pointer(&envv[0])))
+	}
 
 childerror:
 	// send error code on pipe

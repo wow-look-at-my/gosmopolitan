@@ -32,6 +32,8 @@ func squares(n int) Seq2[int, int64] {
 }
 
 func TestPull(t *testing.T) {
+	// Counts the process's goroutines, so no other test may run beside it.
+	t.Serial()
 	for end := 0; end <= 3; end++ {
 		t.Run(fmt.Sprint(end), func(t *testing.T) {
 			ng := stableNumGoroutine()
@@ -74,6 +76,8 @@ func TestPull(t *testing.T) {
 }
 
 func TestPull2(t *testing.T) {
+	// Counts the process's goroutines, so no other test may run beside it.
+	t.Serial()
 	for end := 0; end <= 3; end++ {
 		t.Run(fmt.Sprint(end), func(t *testing.T) {
 			ng := stableNumGoroutine()
@@ -149,6 +153,7 @@ func stableNumGoroutine() int {
 }
 
 func TestPullDoubleNext(t *testing.T) {
+	t.Serial()
 	next, _ := Pull(doDoubleNext())
 	nextSlot = next
 	next()
@@ -171,6 +176,7 @@ func doDoubleNext() Seq[int] {
 }
 
 func TestPullDoubleNext2(t *testing.T) {
+	t.Serial()
 	next, _ := Pull2(doDoubleNext2())
 	nextSlot2 = next
 	next()
@@ -193,6 +199,7 @@ func doDoubleNext2() Seq2[int, int] {
 }
 
 func TestPullDoubleYield(t *testing.T) {
+	t.Serial()
 	next, stop := Pull(storeYield())
 	next()
 	if yieldSlot == nil {
@@ -222,6 +229,7 @@ func storeYield() Seq[int] {
 var yieldSlot func(int) bool
 
 func TestPullDoubleYield2(t *testing.T) {
+	t.Serial()
 	next, stop := Pull2(storeYield2())
 	next()
 	if yieldSlot2 == nil {

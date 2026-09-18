@@ -27,6 +27,7 @@ func (o *testTypeName) Type() *Type   { return nil }
 // printed in fmtTypeID as well, so package-local names use Pkg.Prefix
 // (import path) instead of Pkg.Name. Regression test for that mistake.
 func TestFormatInterfaceUnexportedMethodUsesGoModeForSignature(t *testing.T) {
+	t.Serial()
 	oldLocal := LocalPkg
 	oldPtr, oldReg, oldMax := PtrSize, RegSize, MaxWidth
 	t.Cleanup(func() {

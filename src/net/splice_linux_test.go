@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux
+// pollSplice belongs to splice_linux.go, which the cosmo port replaces with a
+// stub, so this file carries the same constraint as the code it tests.
+//
+//go:build linux && !cosmo
 
 package net
 

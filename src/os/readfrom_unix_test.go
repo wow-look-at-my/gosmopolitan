@@ -2,7 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build freebsd || linux || solaris
+// cosmo takes zero_copy_stub.go, so it has no copy_file_range path to test.
+//go:build (freebsd || linux || solaris) && !cosmo
 
 package os_test
 

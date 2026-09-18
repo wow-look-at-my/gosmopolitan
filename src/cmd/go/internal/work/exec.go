@@ -73,6 +73,25 @@ func actionList(root *Action) []*Action {
 }
 
 // Do runs the action graph rooted at root.
+// cacheCheckWorkers is how many cache checks run at once. A check starts no
+// process, so the count is not a load on the machine; it is how many keys
+// reach the shared tier's coalescer together.
+const cacheCheckWorkers = 256
+
+// fullyCached reports whether a is a build action whose cache check found
+// every output it needs, so that running it starts no process.
+func fullyCached(a *Action) bool {
+	if a.Mode != "build" {
+		return false
+	}
+	for _, dep := range a.Deps {
+		if pr, ok := dep.Provider.(*checkCacheProvider); ok {
+			return pr.need == 0
+		}
+	}
+	return false
+}
+
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
 	defer span.Done()
@@ -121,6 +140,23 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	writeActionGraph()
 
 	b.readySema = make(chan bool, len(all))
+	b.readyCacheSema = make(chan bool, len(all))
+
+	// enqueue makes a runnable action available to the pool that runs its
+	// kind. A cache check goes to the cache pool, and so does a build whose
+	// check found everything: it starts no compiler, and the checks of the
+	// packages importing it wait on it. Behind -p real compiles in the build
+	// pool, those checks reached the shared tier one at a time. b.exec must
+	// be held.
+	enqueue := func(a *Action) {
+		if a.Mode == "build check cache" || fullyCached(a) {
+			b.readyCache.push(a)
+			b.readyCacheSema <- true
+			return
+		}
+		b.ready.push(a)
+		b.readySema <- true
+	}
 
 	// Initialize per-action execution state.
 	for _, a := range all {
@@ -129,8 +165,7 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 		}
 		a.pending = len(a.Deps)
 		if a.pending == 0 {
-			b.ready.push(a)
-			b.readySema <- true
+			enqueue(a)
 		}
 	}
 
@@ -148,12 +183,22 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				desc += " " + a.Package.Desc()
 			}
 			desc += ")"
-			ctx, span := trace.StartSpan(ctx, desc)
+			// The lane is set before the actor runs, because everything the
+			// actor reaches -- the cache handle, the subprocesses it starts --
+			// records onto it and has no context to find it through.
+			a.traceLane = trace.LaneOf(ctx)
+			ctx, span := trace.StartSpanArgs(ctx, desc, a.traceArgs())
 			a.traceSpan = span
 			for _, d := range a.Deps {
 				trace.Flow(ctx, d.traceSpan, a.traceSpan)
 			}
 			err = a.Actor.Act(b, ctx, a)
+			// The action ID and build ID are computed by the actor, so the
+			// attribution is only complete once it has run.
+			span.SetArgs(a.traceArgs())
+			if err != nil {
+				span.SetArg("error", err.Error())
+			}
 			span.Done()
 		}
 		if a.json != nil {
@@ -204,13 +249,13 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				}
 			}
 			if a0.pending--; a0.pending == 0 {
-				b.ready.push(a0)
-				b.readySema <- true
+				enqueue(a0)
 			}
 		}
 
 		if a == root {
 			close(b.readySema)
+			close(b.readyCacheSema)
 		}
 	}
 
@@ -224,29 +269,42 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	if cfg.BuildN {
 		par = 1
 	}
-	for i := 0; i < par; i++ {
-		wg.Add(1)
-		go func() {
-			ctx := trace.StartGoroutine(ctx)
-			defer wg.Done()
-			for {
-				select {
-				case _, ok := <-b.readySema:
-					if !ok {
-						return
-					}
-					// Receiving a value from b.readySema entitles
-					// us to take from the ready queue.
-					b.exec.Lock()
-					a := b.ready.pop()
-					b.exec.Unlock()
-					handle(ctx, a)
-				case <-base.Interrupted:
-					base.SetExitStatus(1)
+	trace.NameProcess(ctx, "go build")
+	worker := func(name string, i int, sema chan bool, queue *actionQueue) {
+		defer wg.Done()
+		// A named row reads as the worker that owns it. Unnamed, a
+		// parallel build is a wall of numbers in the viewer, and which
+		// number a worker got is an accident of scheduling.
+		ctx := trace.StartNamedGoroutine(ctx, fmt.Sprintf("%s %d", name, i), i)
+		for {
+			select {
+			case _, ok := <-sema:
+				if !ok {
 					return
 				}
+				// Receiving a value from the semaphore entitles us to take
+				// from its queue.
+				b.exec.Lock()
+				a := queue.pop()
+				b.exec.Unlock()
+				handle(ctx, a)
+			case <-base.Interrupted:
+				base.SetExitStatus(1)
+				return
 			}
-		}()
+		}
+	}
+	for i := 0; i < par; i++ {
+		wg.Add(1)
+		go worker("build worker", i, b.readySema, &b.ready)
+	}
+	cachePar := cacheCheckWorkers
+	if cfg.BuildN {
+		cachePar = 1
+	}
+	for i := 0; i < cachePar; i++ {
+		wg.Add(1)
+		go worker("cache worker", par+i, b.readyCacheSema, &b.readyCache)
 	}
 
 	wg.Wait()
@@ -262,6 +320,12 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
+	// Hashing every input of a package is not free, and it is work no other
+	// step in the build attributes to itself.
+	if a.lane().Enabled() {
+		defer func(start time.Time) { a.traceStep("hash action id", start, nil) }(time.Now())
+	}
+
 	p := a.Package
 	h := cache.NewHash("build " + p.ImportPath)
 
@@ -313,6 +377,17 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	}
 	if p.Internal.ForceLibrary {
 		fmt.Fprintf(h, "forcelibrary\n")
+	}
+	if p.Internal.TestInit != "" {
+		fmt.Fprintf(h, "testinit %q\n", p.Internal.TestInit)
+	}
+	if len(p.Internal.TestStartup) > 0 {
+		fmt.Fprintf(h, "teststartup %q\n", p.Internal.TestStartup)
+	}
+	if p.Internal.TestVariantOf != nil {
+		// The replaced package's own compile is a dependency, so its content
+		// is hashed with the others below; this says what it is used for.
+		fmt.Fprintf(h, "testvariant %q\n", p.Internal.TestVariantOf.ImportPath)
 	}
 	if len(p.CgoFiles)+len(p.SwigFiles)+len(p.SwigCXXFiles) > 0 {
 		fmt.Fprintf(h, "cgo %q\n", b.toolID("cgo"))
@@ -528,6 +603,7 @@ const (
 // of the buildAction.
 func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName string) (_ *checkCacheProvider, err error) {
 	p := buildAction.Package
+	buildAction.adoptLane(a) // every lookup below is keyed by buildAction
 	sh := b.Shell(a)
 
 	bit := func(x uint32, b bool) uint32 {
@@ -628,7 +704,7 @@ func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName str
 	// Load cached coverage meta-data file fragment, but only if we're
 	// skipping the main build (cachedBuild==true).
 	if cachedBuild && need&needCovMetaFile != 0 {
-		if err := b.loadCachedObjdirFile(buildAction, cache.Default(), covMetaFileName); err == nil {
+		if err := b.loadCachedObjdirFile(buildAction, buildAction.cache(), covMetaFileName); err == nil {
 			need &^= needCovMetaFile
 		}
 	}
@@ -647,6 +723,7 @@ func (b *Builder) checkCacheForBuild(a, buildAction *Action, covMetaFileName str
 }
 
 func (b *Builder) runCover(a, buildAction *Action, objdir string, gofiles, cgofiles []string) (*coverProvider, error) {
+	buildAction.adoptLane(a) // the objdir files below are cached under buildAction
 	p := a.Package
 	sh := b.Shell(a)
 
@@ -723,7 +800,7 @@ func (b *Builder) runCover(a, buildAction *Action, objdir string, gofiles, cgofi
 			gofiles = append([]string{newoutfiles[0]}, gofiles...)
 		}
 		if ca, ok := a.Actor.(*coverActor); ok && ca.covMetaFileName != "" {
-			b.cacheObjdirFile(buildAction, cache.Default(), ca.covMetaFileName)
+			b.cacheObjdirFile(buildAction, buildAction.cache(), ca.covMetaFileName)
 		}
 	}
 	return &coverProvider{gofiles, cgofiles}, nil
@@ -822,7 +899,7 @@ func (b *Builder) build(ctx context.Context, a *Action) (err error) {
 			sfiles = nil
 		}
 
-		outGo, outObj, err := b.processCgoOutputs(a, runCgoPr, base.Tool("cgo"), objdir)
+		outGo, outObj, err := b.processCgoOutputs(a, runCgoPr, base.ToolCmd("cgo"), objdir)
 
 		if err != nil {
 			return err
@@ -1110,17 +1187,17 @@ func (b *Builder) loadCachedObjdirFile(a *Action, c cache.Cache, name string) er
 }
 
 func (b *Builder) cacheCgoHdr(a *Action) {
-	c := cache.Default()
+	c := a.cache()
 	b.cacheObjdirFile(a, c, "_cgo_install.h")
 }
 
 func (b *Builder) loadCachedCgoHdr(a *Action) error {
-	c := cache.Default()
+	c := a.cache()
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
-	c := cache.Default()
+	c := a.cache()
 	var buf bytes.Buffer
 	for _, file := range srcfiles {
 		if !strings.HasPrefix(file, a.Objdir) {
@@ -1141,7 +1218,7 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
-	c := cache.Default()
+	c := a.cache()
 	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
@@ -1165,7 +1242,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 }
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
-	c := cache.Default()
+	c := a.cache()
 	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
@@ -1300,7 +1377,9 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 			vcfg.ImportMap[p1.ImportPath] = p1.ImportPath
 		}
 		if a1.built != "" {
-			vcfg.PackageFile[p1.ImportPath] = a1.built
+			// The vet tool reads its imports as files, so an archive inside
+			// this binary goes to it through the build cache.
+			vcfg.PackageFile[p1.ImportPath] = fileForOutsideReader(p1, a1.built)
 		}
 		if p1.Standard {
 			vcfg.Standard[p1.ImportPath] = true
@@ -1308,10 +1387,11 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 	}
 }
 
-// VetTool is the path to the effective vet or fix tool binary.
-// The user may specify a non-default value using -{vet,fix}tool.
-// The caller is expected to set it (if needed) before executing any vet actions.
-var VetTool string
+// VetTool is the command line that starts the effective vet or fix tool,
+// before the tool's own arguments. The user may specify a non-default value
+// using -{vet,fix}tool. The caller is expected to set it (if needed) before
+// executing any vet actions.
+var VetTool []string
 
 // VetFlags are the default flags to pass to vet.
 // The caller is expected to set them before executing any vet actions.
@@ -1382,7 +1462,7 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 	// it functions as a consistent early-warning system for
 	// changes to analyzers (as opposed to changes in the target
 	// packages, which is the purpose of this logic).
-	if a.Package.Goroot && !VetExplicit && VetTool == base.Tool("vet") {
+	if a.Package.Goroot && !VetExplicit && slices.Equal(VetTool, base.ToolCmd("vet")) {
 		// Turn off -unsafeptr checks.
 		// There's too much unsafe.Pointer code
 		// that vet doesn't like in low-level packages
@@ -1425,9 +1505,10 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 		fixArchiveKey = cache.Subkey(id, "fix.zip") // for .fix.zip file
 	)
 
-	// Check the cache; -a forces a rebuild.
-	if !cfg.BuildA {
-		c := cache.Default()
+	// Check the cache. The block is bare rather than dedented because
+	// goto cachemiss below may not jump over the declarations it guards.
+	{
+		c := a.cache()
 
 		// There may be multiple artifacts in the cache.
 		// We need to retrieve them all, or none:
@@ -1491,7 +1572,7 @@ cachemiss:
 
 	p := a.Package
 	tool := VetTool
-	if tool == "" {
+	if len(tool) == 0 {
 		panic("VetTool unset")
 	}
 
@@ -1506,7 +1587,7 @@ cachemiss:
 	if f, err := os.Open(vcfg.VetxOutput); err == nil {
 		defer f.Close() // ignore error
 		a.built = vcfg.VetxOutput
-		cache.Default().Put(id, f) // ignore error
+		a.cache().Put(id, f) // ignore error
 	}
 
 	// Save fix archive (if any).
@@ -1514,7 +1595,7 @@ cachemiss:
 		if f, err := os.Open(vcfg.FixArchive); err == nil {
 			defer f.Close() // ignore error
 			a.FixArchive = vcfg.FixArchive
-			cache.Default().Put(fixArchiveKey, f) // ignore error
+			a.cache().Put(fixArchiveKey, f) // ignore error
 		}
 	}
 
@@ -1524,8 +1605,8 @@ cachemiss:
 		if err := VetHandleStdout(f); err != nil {
 			return err
 		}
-		f.Seek(0, io.SeekStart)           // ignore error
-		cache.Default().Put(stdoutKey, f) // ignore error
+		f.Seek(0, io.SeekStart)     // ignore error
+		a.cache().Put(stdoutKey, f) // ignore error
 	}
 
 	return nil
@@ -1584,6 +1665,21 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 	}
 
 	return h.Sum()
+}
+
+// LinkConfigID answers the half of a link's identity that the packages being
+// linked do not decide: the linker binary, its flags, the build mode and the
+// target. The packages themselves are the other half, and they are left out.
+//
+// A test result depends on the tested package's own code and on this. It does
+// not depend on what else happens to share the binary. So a cache key built
+// from this and from one package's own compile stays correct when one binary
+// holds the tests of many packages.
+func (b *Builder) LinkConfigID(pkg *load.Package) string {
+	hash := cache.NewHash("linkConfig")
+	fmt.Fprintf(hash, "buildmode %s goos %s goarch %s\n", cfg.BuildBuildmode, cfg.Goos, cfg.Goarch)
+	b.printLinkerConfig(hash, pkg)
+	return fmt.Sprintf("%x", hash.Sum())
 }
 
 // printLinkerConfig prints the linker config into the hash h,
@@ -2115,12 +2211,12 @@ func (b *Builder) cover(a *Action, infiles, outfiles []string, varName string, m
 	if err := b.writeCoverPkgInputs(a, pkgcfg, covoutputs, outfiles); err != nil {
 		return nil, err
 	}
-	args := []string{base.Tool("cover"),
+	args := append(base.ToolCmd("cover"),
 		"-pkgcfg", pkgcfg,
 		"-mode", mode,
 		"-var", varName,
 		"-outfilelist", covoutputs,
-	}
+	)
 	args = append(args, infiles...)
 	if err := b.Shell(a).run(a.Objdir, "", nil,
 		cfg.BuildToolexec, args); err != nil {
@@ -2957,7 +3053,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 		cgofiles = append(cgofiles, outGo...)
 	}
 
-	cgoExe := base.Tool("cgo")
+	cgoExe := base.ToolCmd("cgo")
 	cgofiles = mkAbsFiles(p.Dir, cgofiles)
 
 	cgoCPPFLAGS, cgoCFLAGS, cgoCXXFLAGS, cgoFFLAGS, cgoLDFLAGS, err := b.CFlags(p)
@@ -3119,7 +3215,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 	return nil
 }
 
-func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, cgoExe, objdir string) (outGo, outObj []string, err error) {
+func (b *Builder) processCgoOutputs(a *Action, runCgoProvider *runCgoProvider, cgoExe []string, objdir string) (outGo, outObj []string, err error) {
 	outGo = slices.Clip(runCgoProvider.goFiles)
 
 	// TODO(matloob): Pretty much the only thing this function is doing is
@@ -3281,7 +3377,7 @@ func flagsNotCompatibleWithInternalLinking(sourceList []string, flagListList [][
 // dynamically imported by the object files outObj.
 // dynOutGo, if not empty, is a new Go file to build as part of the package.
 // dynOutObj, if not empty, is a new file to add to the generated archive.
-func (b *Builder) dynimport(a *Action, objdir, importGo, cgoExe string, cflags, cgoLDFLAGS, outObj []string) (dynOutGo, dynOutObj string, err error) {
+func (b *Builder) dynimport(a *Action, objdir, importGo string, cgoExe, cflags, cgoLDFLAGS, outObj []string) (dynOutGo, dynOutObj string, err error) {
 	p := a.Package
 	sh := b.Shell(a)
 

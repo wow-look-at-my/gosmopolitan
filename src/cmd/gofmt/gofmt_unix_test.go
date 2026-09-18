@@ -18,6 +18,7 @@ func TestPermissions(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test when running as root")
 	}
+	t.Serial()
 
 	dir := t.TempDir()
 	fn := filepath.Join(dir, "perm.go")

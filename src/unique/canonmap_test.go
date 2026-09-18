@@ -14,18 +14,21 @@ import (
 )
 
 func TestCanonMap(t *testing.T) {
+	t.Serial() // This test asks a GC to clear the map, and another test's live handles keep entries in it.
 	testCanonMap(t, func() *canonMap[string] {
 		return newCanonMap[string]()
 	})
 }
 
 func TestCanonMapBadHash(t *testing.T) {
+	t.Serial() // This test asks a GC to clear the map, and another test's live handles keep entries in it.
 	testCanonMap(t, func() *canonMap[string] {
 		return newBadCanonMap[string]()
 	})
 }
 
 func TestCanonMapTruncHash(t *testing.T) {
+	t.Serial() // This test asks a GC to clear the map, and another test's live handles keep entries in it.
 	testCanonMap(t, func() *canonMap[string] {
 		// Stub out the good hash function with a different terrible one
 		// (truncated hash). Everything should still work as expected.

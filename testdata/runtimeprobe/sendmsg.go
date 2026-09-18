@@ -58,12 +58,16 @@ func remainingIovecs(off int, parts ...[]byte) ([2]syscall.Iovec, int) {
 // the accept side polls a nonblocking listener with a deadline so no
 // error path can deadlock the probe.
 func unixSyscallPair(name string) (a, c int, cleanup func(), errDetail string) {
-	dir, err := os.MkdirTemp("", "runtimeprobe-msg")
+	dir, err := shortSockDir("rp-msg")
 	if err != nil {
 		return 0, 0, nil, fmt.Sprintf("MkdirTemp: %v", err)
 	}
 	rmdir := func() { os.RemoveAll(dir) }
-	spath := filepath.Join(dir, name+".sock")
+	spath := filepath.Join(dir, name)
+	if len(spath) >= sunPathMax {
+		rmdir()
+		return 0, 0, nil, fmt.Sprintf("socket path is %d bytes, over the %d sun_path holds: %s", len(spath), sunPathMax, spath)
+	}
 
 	l, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {

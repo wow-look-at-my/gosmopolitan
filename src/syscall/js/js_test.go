@@ -91,6 +91,7 @@ func growStack(n int64) {
 }
 
 func TestWasmExport(t *testing.T) {
+	t.Serial()
 	testExportCalled = false
 	a := int32(123)
 	b := int64(456)
@@ -654,6 +655,7 @@ var allocTests = []struct {
 
 // TestCallAllocations ensures the correct allocation profile for Value.Call
 func TestCallAllocations(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	for _, test := range allocTests {
 		args := make([]any, test.argLen)
 
@@ -670,6 +672,7 @@ func TestCallAllocations(t *testing.T) {
 
 // TestInvokeAllocations ensures the correct allocation profile for Value.Invoke
 func TestInvokeAllocations(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	for _, test := range allocTests {
 		args := make([]any, test.argLen)
 
@@ -687,6 +690,7 @@ func TestInvokeAllocations(t *testing.T) {
 
 // TestNewAllocations ensures the correct allocation profile for Value.New
 func TestNewAllocations(t *testing.T) {
+	t.Serial() // AllocsPerRun measures the whole process.
 	arrayConstructor := js.Global().Get("Array")
 
 	for _, test := range allocTests {

@@ -2,7 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build linux
+// This tests root_linux.go, which is linux && !cosmo, and it mounts over
+// the certificate paths to do it. cosmo has no Mount, no Unmount and no
+// CLONE_NEW* to reach for, so under that tag the file does not compile.
+//go:build linux && !cosmo
 
 package x509
 

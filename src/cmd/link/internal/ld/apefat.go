@@ -6,8 +6,10 @@ package ld
 
 import (
 	"cmd/internal/sys"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"internal/cosmo/embedded"
 	"os"
 	"strings"
 )
@@ -16,18 +18,14 @@ import (
 // GOOS=cosmo binaries (at most one per architecture; each either an APE
 // produced by this linker or a raw ELF) into a single APE at outfile,
 // skipping normal linking entirely. Two inputs give a fat APE; one input
-// re-emits a single-architecture APE, which is how a build restricted to
-// one architecture still gets the stripping, sidecars and platform-filtered
-// header a fat build gets.
+// re-emits a single-architecture APE, so a build restricted to one
+// architecture still gets a fat build's stripping, sidecars and header.
 //
-// With -apedbg, each input's pristine ELF image (symbol table and DWARF
-// intact) is first written to a debug sidecar beside outfile; with
-// -apestrip, each embedded payload is then reduced to the file span its
-// program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. -apedbgmode selects how much debug info the
-// sidecars (and, for compact, the output itself) carry; see apedebug.go.
-// The policy for when cmd/go passes these flags lives in
-// cmd/go/internal/work.cosmoMergeArgs.
+// With -apedbg each input's pristine ELF goes to a sidecar beside
+// outfile; with -apestrip each payload is then cut to the span its
+// program headers reference. -apedbgmode selects how much the sidecars
+// carry (apedebug.go); work.cosmoMergeArgs decides when cmd/go passes
+// these flags.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
@@ -100,6 +98,32 @@ func apeFatMerge(spec, outfile string) {
 	if tail != nil {
 		appendAPEFileTail(outfile, tailOff, tail)
 	}
+	if *flagApeAppend != "" {
+		appendAPEBlob(outfile, *flagApeAppend)
+	}
+}
+
+// appendAPEBlob appends the file at blobPath past everything the APE loads
+// or reads, 8-aligned, and closes the file with the trailer that
+// internal/cosmo/embedded reads to find it. Nothing maps the blob at run
+// time, and the APE keeps it through staging and an in-place exec on NT,
+// because both copy the file whole.
+func appendAPEBlob(outfile, blobPath string) {
+	blob, err := os.ReadFile(blobPath)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	if len(blob) == 0 {
+		Exitf("-apeappend: %s is empty", blobPath)
+	}
+	info, err := os.Stat(outfile)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	blobOff := (uint64(info.Size()) + 7) &^ uint64(7)
+	appendAPEFileTail(outfile, blobOff, blob)
+	trailer := embedded.EncodeTrailer(int64(blobOff), int64(len(blob)), sha256.Sum256(blob))
+	appendAPEFileTail(outfile, blobOff+uint64(len(blob)), trailer)
 }
 
 // apeCompactDebugTail builds the compact debug tail for the payloads (in

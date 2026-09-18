@@ -26,9 +26,11 @@ stderr 'Printf format %d'
 stdout 'ok\s+m/vetfail/p2'
 
 # Check there's no diagnosis of a bad build constraint in vetxonly mode.
-# Use -a so that we need to recompute the vet-specific export data for
-# vetfail/p1.
-go test -a m/vetfail/p2
+# A cache of its own makes the vet-specific export data for vetfail/p1 be
+# recomputed here rather than answered from the run above.
+env GOCACHE=$WORK/vetcache
+mkdir $GOCACHE
+go test m/vetfail/p2
 ! stderr 'invalid.*constraint'
 
 -- go.mod --

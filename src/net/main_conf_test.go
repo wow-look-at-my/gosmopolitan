@@ -10,7 +10,11 @@ import (
 	"testing"
 )
 
+// The resolver choice lives on the process-wide conf that systemConf
+// returns, so forceGoDNS and forceCgoDNS below reach every other test.
+// A caller of any of the three takes the serial barrier first.
 func allResolvers(t *testing.T, f func(t *testing.T)) {
+	t.Serial()
 	t.Run("default resolver", f)
 	t.Run("forced go resolver", func(t *testing.T) {
 		// On plan9 the forceGoDNS might not force the go resolver, currently
@@ -56,6 +60,7 @@ func forceCgoDNS() func() {
 }
 
 func TestForceCgoDNS(t *testing.T) {
+	t.Serial()
 	if !cgoAvailable {
 		t.Skip("cgo resolver not available")
 	}
@@ -74,6 +79,7 @@ func TestForceCgoDNS(t *testing.T) {
 }
 
 func TestForceGoDNS(t *testing.T) {
+	t.Serial()
 	var resolver *Resolver
 	if runtime.GOOS == "plan9" {
 		resolver = &Resolver{

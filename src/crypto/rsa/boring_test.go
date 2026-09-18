@@ -93,6 +93,8 @@ func TestBoringGenerateKey(t *testing.T) {
 }
 
 func TestBoringFinalizers(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.GOOS == "nacl" || runtime.GOOS == "js" {
 		// Times out on nacl and js/wasm (without BoringCrypto)
 		// but not clear why - probably consuming rand.Reader too quickly
