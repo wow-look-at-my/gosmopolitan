@@ -23,6 +23,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -131,6 +134,7 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	added = keepable(modroot, stage, mod, added)
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
@@ -138,6 +142,140 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 		}
 	}
 	return added, nil
+}
+
+// keepable answers the added files that may join the module, and reports each
+// one it leaves out.
+//
+// A generator also writes a file the module's authors leave out on purpose,
+// whose declarations the published source already makes another way. Adding it
+// declares those names twice and the package stops compiling. The module as
+// published decides, exactly as it does for a file both trees hold.
+//
+// A build constraint is not read here, so a name two files declare under
+// constraints that never hold together drops the generated file too.
+func keepable(modroot, stage, mod string, added []string) []string {
+	kept := make([]string, 0, len(added))
+	for _, rel := range added {
+		name, other := clash(modroot, stage, rel)
+		if name == "" {
+			kept = append(kept, rel)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "go: %s: %s and %s both declare %s: keeping what the module published\n",
+			mod, rel, other, name)
+	}
+	return kept
+}
+
+// clash answers the package-scope name that the added file rel declares a second
+// time, and the module's own file in that directory which already declares it.
+// Both are empty when the file adds only new names.
+func clash(modroot, stage, rel string) (name, other string) {
+	if filepath.Ext(rel) != ".go" {
+		return "", ""
+	}
+	pkg, names := declared(filepath.Join(stage, filepath.FromSlash(rel)))
+	if pkg == "" || len(names) == 0 {
+		return "", ""
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+
+	dir := filepath.Dir(filepath.Join(modroot, filepath.FromSlash(rel)))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", ""
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
+			continue
+		}
+		// A file of the same directory declaring another package is another
+		// package: an external test package sits beside the one it tests.
+		published, held := declared(filepath.Join(dir, ent.Name()))
+		if published != pkg {
+			continue
+		}
+		for _, name := range sorted {
+			if held[name] {
+				return name, ent.Name()
+			}
+		}
+	}
+	return "", ""
+}
+
+// declared answers the package a Go file belongs to and the package-scope names
+// it declares. A file it cannot parse answers nothing.
+//
+// A method is named for its receiver, because methods collide only on the same
+// type. Several init functions in one package are legal, so init is not a name.
+func declared(path string) (string, map[string]bool) {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return "", nil
+	}
+	names := make(map[string]bool)
+	for _, decl := range file.Decls {
+		switch decl := decl.(type) {
+		case *ast.FuncDecl:
+			name := decl.Name.Name
+			if decl.Recv != nil {
+				recv := receiverName(decl.Recv)
+				if recv == "" {
+					continue
+				}
+				name = recv + "." + name
+			} else if name == "init" {
+				continue
+			}
+			names[name] = true
+		case *ast.GenDecl:
+			if decl.Tok == token.IMPORT {
+				continue
+			}
+			for _, spec := range decl.Specs {
+				switch spec := spec.(type) {
+				case *ast.TypeSpec:
+					names[spec.Name.Name] = true
+				case *ast.ValueSpec:
+					for _, ident := range spec.Names {
+						names[ident.Name] = true
+					}
+				}
+			}
+		}
+	}
+	// The blank identifier declares nothing, and a package may hold many.
+	delete(names, "_")
+	return file.Name.Name, names
+}
+
+// receiverName answers the type name a method is declared on, through a pointer
+// and through type parameters alike. It is empty for a receiver this does not
+// recognize.
+func receiverName(recv *ast.FieldList) string {
+	if len(recv.List) == 0 {
+		return ""
+	}
+	expr := recv.List[0].Type
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	switch indexed := expr.(type) {
+	case *ast.IndexExpr:
+		expr = indexed.X
+	case *ast.IndexListExpr:
+		expr = indexed.X
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
 }
 
 // additions answers the regular files under stage that modroot does not have,
