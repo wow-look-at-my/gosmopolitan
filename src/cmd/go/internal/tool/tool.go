@@ -97,8 +97,7 @@ func runTool(ctx context.Context, cmd *base.Command, args []string) {
 	}
 	toolName := args[0]
 
-	toolPath, err := base.ToolPath(toolName)
-	if err != nil {
+	if _, err := base.ToolPath(toolName); err != nil {
 		if toolName == "dist" && len(args) > 1 && args[1] == "list" {
 			// cmd/distpack removes the 'dist' tool from the toolchain to save space,
 			// since it is normally only used for building the toolchain in the first
@@ -140,7 +139,7 @@ func runTool(ctx context.Context, cmd *base.Command, args []string) {
 		counter.Inc("go/subcommand:tool-" + toolName)
 	}
 
-	runBuiltTool(toolName, nil, append([]string{toolPath}, args[1:]...))
+	runBuiltTool(toolName, nil, slices.Concat(base.ToolCmd(toolName), args[1:]))
 }
 
 // listTools prints a list of the available tools in the tools directory.

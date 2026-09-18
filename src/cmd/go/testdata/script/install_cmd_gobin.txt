@@ -2,9 +2,10 @@
 # Verifies golang.org/issue/32674.
 env GOBIN=gobin
 mkdir gobin
-go list -f '{{.Target}}' cmd/go
+go list -f '{{.Target}}' cmd/go/main
 stdout $GOROOT${/}bin${/}go$GOEXE
 
-# Check that tools are installed to $GOTOOLDIR, not $GOBIN.
-go list -f '{{.Target}}' cmd/compile
-stdout $GOROOT${/}pkg${/}tool${/}${GOOS}_${GOARCH}${/}compile$GOEXE
+# A build tool is a package the go command links, with no target of its own;
+# its name under $GOTOOLDIR is a link to the go command.
+go list -f '{{.Name}} [{{.Target}}]' cmd/compile
+stdout '^compile \[\]$'

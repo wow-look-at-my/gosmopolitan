@@ -4,7 +4,7 @@
 
 //go:generate go test cmd/go -v -run=^TestDocsUpToDate$ -fixdocs
 
-package main
+package gocmd
 
 import (
 	"context"
@@ -95,7 +95,9 @@ var _ = go11tag
 
 var counterErrorsGOPATHEntryRelative = counter.New("go/errors:gopath-entry-relative")
 
-func main() {
+// Main runs the go command over os.Args. It returns only for "go help";
+// every other command exits the process with its status.
+func Main() {
 	log.SetFlags(0)
 	telemetry.MaybeChild() // Run in child mode if this is the telemetry sidecar child process.
 	cmdIsGoTelemetryOff := cmdIsGoTelemetryOff()
@@ -129,7 +131,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "go: cannot find GOROOT directory: 'go' binary is trimmed and GOROOT is not set\n")
 		os.Exit(2)
 	}
-	if fi, err := os.Stat(cfg.GOROOT); err != nil || !fi.IsDir() {
+	if fi, err := os.Stat(cfg.GOROOT); !cfg.EmbeddedStd && (err != nil || !fi.IsDir()) {
 		fmt.Fprintf(os.Stderr, "go: cannot find GOROOT directory: %v\n", cfg.GOROOT)
 		os.Exit(2)
 	}

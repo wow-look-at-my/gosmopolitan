@@ -3806,4 +3806,4 @@
 //
 // The 'go env -w' command (see 'go help env') can be used to set the GOVCS
 // variable for future go command invocations.
-package main
+package gocmd

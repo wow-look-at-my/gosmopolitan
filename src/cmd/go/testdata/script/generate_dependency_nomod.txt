@@ -9,14 +9,15 @@ env GOFLAGS=-mod=mod
 env GOMODCACHE=$WORK/gopath/src/modcache
 
 go mod download example.com/generatednomod
+exists $GOMODCACHE/example.com/generatednomod@v1.0.0/lang/lang.gen.go
+
+# The go.mod the generators needed was the stage's, and the completed module
+# carries only what the zip carried plus what they added.
 ! exists $GOMODCACHE/example.com/generatednomod@v1.0.0/go.mod
 
 go build .
 ! stderr 'outside main module'
 ! stderr 'go.mod file not found'
-exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0/lang/lang.gen.go
-! exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0/go.mod
-! exists $GOMODCACHE/cache/generate/example.com/generatednomod@v1.0.0.packages/lang/@failed
 
 -- go.mod --
 module example.com/consumer
