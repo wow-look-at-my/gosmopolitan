@@ -92,7 +92,7 @@ stderr '^go: ./x@v1.0.0: argument must be a package path, not a relative path$'
 ! go install example.com/cmd/a@v1.0.0 $GOPATH/src/x@v1.0.0
 stderr '^go: '$WORK'[/\\]gopath/src/x@v1.0.0: argument must be a package path, not an absolute path$'
 ! go install example.com/cmd/a@v1.0.0 cmd/...@v1.0.0
-stderr '^package cmd/go not provided by module example.com/cmd@v1.0.0$'
+stderr '^package cmd/go/main not provided by module example.com/cmd@v1.0.0$'
 
 # 'go install pkg@version' should accept multiple arguments but report an error
 # if the version suffixes are different, even if they refer to the same version.

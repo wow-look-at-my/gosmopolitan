@@ -131,4 +131,4 @@ Flags:
 	-w
 		Omit the DWARF symbol table.
 */
-package main
+package link

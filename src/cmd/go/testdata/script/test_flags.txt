@@ -44,28 +44,48 @@ exists ./cover.out
 
 # Test flags from GOFLAGS should be forwarded to the test binary,
 # with the 'test.' prefix in the GOFLAGS entry...
+# -count is accepted there and never reaches the test binary.
 env GOFLAGS='-test.timeout=24h0m0s -count=2'
 go test -v -x ./x
 stdout 'timeout: 24h0m0s$'
-stderr '-test.count=2'
+stderr '-test\.timeout=24h0m0s'
+! stderr 'test\.count'
 
-# ...or without.
-env GOFLAGS='-timeout=24h0m0s -count=2'
+# ...or without. A different -count is not part of the cache key.
+env GOFLAGS='-timeout=24h0m0s -count=3'
 go test -v -x ./x
 stdout 'timeout: 24h0m0s$'
-stderr '-test.count=2'
+stdout '\(cached\)'
+! stderr 'test\.count'
 
 # Arguments from the command line should override GOFLAGS...
 go test -v -x -timeout=25h0m0s ./x
 stdout 'timeout: 25h0m0s$'
-stderr '-test.count=2'
+stderr '-test\.timeout=25h0m0s'
+! stderr 'test\.count'
 
 # ...even if they use a different flag name.
 go test -v -x -test.timeout=26h0m0s ./x
 stdout 'timeout: 26h0m0s$'
 stderr '-test\.timeout=26h0m0s'
 ! stderr 'timeout=24h0m0s'
-stderr '-test.count=2'
+! stderr 'test\.count'
+
+# A count of zero is ignored too: the tests still run, and the binary
+# never sees it, not even when it is written after -args.
+env GOFLAGS=
+go test -v -x -count=0 -timeout=27h0m0s ./x
+stdout 'timeout: 27h0m0s$'
+stderr '-test\.timeout=27h0m0s'
+! stderr 'test\.count'
+go test -v -x -timeout=28h0m0s ./x -args -test.count 0
+stdout 'timeout: 28h0m0s$'
+stderr '-test\.timeout=28h0m0s'
+! stderr 'test\.count'
+
+# A negative count is still an invalid value.
+! go test -count=-1 ./x
+stderr '^go: -count must not be negative$'
 
 # Invalid flags should be reported exactly once.
 ! go test -covermode=walrus ./x
