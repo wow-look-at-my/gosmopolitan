@@ -145,38 +145,44 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		branch = orgDefaultRev
 	}
 	return orgVersionCache.Do(orgVersionKey{branch, path}, func() (string, error) {
-		rev := branch
-		info, err := Query(ld, ctx, path, rev, "", nil)
-		if err != nil && rev != orgDefaultRev {
-			// Nothing of that name to query, so the default branch is next.
-			rev = orgDefaultRev
-			info, err = Query(ld, ctx, path, rev, "", nil)
+		version, err := orgBranchVersion(ld, ctx, path, branch)
+		if err == nil || branch == orgDefaultRev {
+			return version, err
 		}
-		if err == nil {
-			return info.Version, nil
-		}
-		// A proxy resolves a revision only when it can reach the repository's
-		// refs, and the protocol has no spelling for the head of a default
-		// branch. The repository itself always can.
-		return orgRepoVersion(ld, ctx, path, branch, err)
+		// Nothing answers for that branch, so the default branch is next.
+		return orgBranchVersion(ld, ctx, path, orgDefaultRev)
 	})
 }
 
-// orgRepoVersion asks the repository that publishes path for the head of
-// branch, or for the head of its default branch when the repository has no
-// branch of that name. queryErr names why the query path came up short, and is
-// reported when the repository cannot answer either.
-func orgRepoVersion(ld *Loader, ctx context.Context, path, branch string, queryErr error) (string, error) {
+// orgBranchVersion returns the head of one branch of the repository that
+// publishes path.
+//
+// The repository is asked before the proxy for a named branch. Query reads a
+// version-shaped revision as a version query: a branch named v1 resolves to the
+// newest v1 tag, or to the default branch where there is none, and never to the
+// branch. Stat resolves a revision and has no such reading.
+func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (string, error) {
 	repo := ld.Fetcher().Lookup(ctx, "direct", path)
 	if branch != orgDefaultRev {
 		if info, err := repo.Stat(ctx, branch); err == nil {
 			return info.Version, nil
 		}
+		// A proxy reaches a module whose repository this invocation cannot.
+		info, err := Query(ld, ctx, path, branch, "", nil)
+		if err != nil {
+			return "", err
+		}
+		return info.Version, nil
 	}
-	// "HEAD" is how git names the branch a repository starts on.
-	info, err := repo.Latest(ctx)
+	// "HEAD" is how git names the branch a repository starts on. The protocol a
+	// proxy speaks has no spelling for it, so the repository answers first here
+	// as well.
+	if info, err := repo.Latest(ctx); err == nil {
+		return info.Version, nil
+	}
+	info, err := Query(ld, ctx, path, orgDefaultRev, "", nil)
 	if err != nil {
-		return "", fmt.Errorf("resolving %s from the head of %s: %w (also %v)", path, branch, err, queryErr)
+		return "", fmt.Errorf("resolving %s from the head of its default branch: %w", path, err)
 	}
 	return info.Version, nil
 }
