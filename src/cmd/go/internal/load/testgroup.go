@@ -9,12 +9,70 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"go/build"
+	"internal/godebugs"
+	"slices"
 	"sort"
+	"strings"
 
+	"cmd/go/internal/cfg"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
+	"cmd/internal/objabi"
 )
+
+// testUnitBarriers name the symbols a walk of the binary must not follow when
+// it asks what one package's tests reach. Each of them names every package in
+// the binary, so a walk through one reaches them all and its content moves
+// whenever any of them does.
+var testUnitBarriers = []string{"main.units", "go:testinittasks", "runtime.testinittasks"}
+
+// testUnitRoots names the symbols one package's tests start from: the
+// initialization its test files deferred, and every function the generated
+// main can call for it. The linker walks these to decide what code the
+// package's tests reach, which is what its cached result is keyed on.
+func testUnitRoots(unit testUnit) []string {
+	prefix := objabi.PathToPrefix(unit.UnitID) + "."
+	xprefix := objabi.PathToPrefix(unit.UnitID+"_test") + "."
+	symbol := func(entry testFunc) string {
+		if entry.Package == unit.XAlias {
+			return xprefix + entry.Name
+		}
+		return prefix + entry.Name
+	}
+	roots := []string{prefix + ".inittask.test", prefix + ".inittask.xtest"}
+	for _, entry := range unit.Tests {
+		roots = append(roots, symbol(entry))
+	}
+	for _, entry := range unit.Benchmarks {
+		roots = append(roots, symbol(entry))
+	}
+	for _, entry := range unit.FuzzTargets {
+		roots = append(roots, symbol(entry))
+	}
+	for _, entry := range unit.Examples {
+		roots = append(roots, symbol(entry))
+	}
+	if unit.TestMain != nil {
+		roots = append(roots, symbol(*unit.TestMain))
+	}
+	return roots
+}
+
+// testUnitSpec writes what the linker's -testunits flag reads.
+func testUnitSpec(units []testUnit) string {
+	var spec strings.Builder
+	for _, name := range testUnitBarriers {
+		spec.WriteString("barrier " + name + "\n")
+	}
+	for _, unit := range units {
+		spec.WriteString("unit " + unit.UnitID + "\n")
+		for _, root := range testUnitRoots(unit) {
+			spec.WriteString("root " + root + "\n")
+		}
+	}
+	return spec.String()
+}
 
 // TestGroupMember is one package inside a shared test binary, with the test
 // variants TestPackagesAndErrors already built for it.
@@ -22,6 +80,24 @@ type TestGroupMember struct {
 	Package   *Package
 	WithTests *Package
 	ExtTests  *Package
+
+	// GODEBUG is the default GODEBUG this package's test binary would get
+	// on its own, from the main module and the package's //go:debug lines.
+	GODEBUG string
+
+	// Binary is the file name, without an executable suffix, of this
+	// package's copy of the binary under go test -c.
+	Binary string
+}
+
+// TestGODEBUG answers the default GODEBUG of the test binary of pkg alone.
+func TestGODEBUG(ld *modload.Loader, pkg *Package) string {
+	main := &Package{
+		PackagePublic: PackagePublic{Name: "main", Module: pkg.Module},
+		Internal:      PackageInternal{Build: &build.Package{Name: "main"}},
+	}
+	pkgBuild := pkg.Internal.Build
+	return defaultGODEBUG(ld, main, pkgBuild.Directives, pkgBuild.TestDirectives, pkgBuild.XTestDirectives)
 }
 
 // TestGroupMain builds ONE main package holding the tests of several packages.
@@ -81,6 +157,31 @@ func realiasFuncs(funcs []testFunc, alias, xalias string) []testFunc {
 	return out
 }
 
+// darwinTextSegprot is the host linker flag that gives a test binary's __TEXT
+// segment the protections the internal linker gives it, rwx at most and r-x
+// to start, so a test reading them sees one answer whichever linker its
+// binary needed. Every test binary carries it, so a package's link settings,
+// and the key of its cached results, do not depend on what shares its binary.
+const darwinTextSegprot = "-Wl,-segprot,__TEXT,rwx,rx"
+
+// withExtldflag adds one host linker flag to ldflags. The linker keeps only
+// the last -extldflags, so the flag joins the value ldflags already carry.
+func withExtldflag(ldflags []string, flag string) []string {
+	out := slices.Clone(ldflags)
+	for idx := len(out) - 1; idx >= 0; idx-- {
+		arg := out[idx]
+		if (arg == "-extldflags" || arg == "--extldflags") && idx+1 < len(out) {
+			out[idx+1] += " " + flag
+			return out
+		}
+		if strings.HasPrefix(arg, "-extldflags=") || strings.HasPrefix(arg, "--extldflags=") {
+			out[idx] += " " + flag
+			return out
+		}
+	}
+	return append(out, "-extldflags="+flag)
+}
+
 func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, members []TestGroupMember, cover *TestCover, name string) (*Package, map[string]string) {
 	ctx, span := trace.StartSpan(ctx, "load.TestGroupMain")
 	defer span.Done()
@@ -92,13 +193,10 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	stk.Push(ImportInfo{Pkg: "testmain"})
 
 	first := members[0].Package
-	// Every member's init runs on every start, so two members declaring a flag
-	// of the same name both register it. That is a redefinition, and it panics
-	// before a test body runs. The flag package cannot ask testing which kind of
-	// binary this is, because testing imports flag, so the linker says.
-	ldflags := append(first.Internal.Ldflags,
-		"-X", "testing.testBinary=1",
-		"-X", "flag.groupedTestBinary=1")
+	ldflags := append(slices.Clip(first.Internal.Ldflags), "-X", "testing.testBinary=1")
+	if cfg.Goos == "darwin" {
+		ldflags = withExtldflag(ldflags, darwinTextSegprot)
+	}
 	gccgoflags := append(first.Internal.Gccgoflags,
 		"-Wl,--defsym,testing.gccgoTestBinary=1")
 
@@ -129,6 +227,13 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	deps := groupedMainDeps(len(members))
 	if cover != nil {
 		deps = append(deps, "internal/coverage/cfile")
+	}
+	// Program startup initializes what the generated main itself runs on.
+	// Each member, and whatever only members import, is initialized when
+	// the binary is started for that member's tests, the way a binary of
+	// its own would be.
+	if len(members) > 1 {
+		testMain.Internal.TestStartup = str.StringList(deps)
 	}
 	ldDeps, err := LinkerDeps(ld, first)
 	if err != nil && testMain.Error == nil {
@@ -188,6 +293,8 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 		unit.TestMain = funcs.TestMain
 		unit.ImportTest = funcs.ImportTest
 		unit.ImportXtest = funcs.ImportXtest
+		unit.GODEBUG = member.GODEBUG
+		unit.Binary = member.Binary
 		units = append(units, unit)
 	}
 	stk.Pop()
@@ -204,21 +311,13 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	testMain.Imports = testMain.Imports[:kept]
 	testMain.Internal.RawImports = str.StringList(testMain.Imports)
 
-	// Each member's own dependencies must reach its test copies, and a member
-	// the group holds is never in another member's closure, so the rewrites
-	// cannot collide.
+	// A package's tests compile the same way whether their binary holds one
+	// package or many, so a result cached from one serves the other.
 	for _, member := range members {
-		if cycleErr := recompileForTest(testMain, member.Package, member.WithTests, member.ExtTests); cycleErr != nil {
-			member.WithTests.Error = cycleErr
-			member.WithTests.Incomplete = true
-			// The cycle is in the graph now, and cmd/go walks that graph to
-			// build actions. vetAction recurses along it until the stack ends
-			// the process. Stop here instead, with the cycle named.
-			if testMain.Error == nil {
-				testMain.Error = cycleErr
-			}
-			testMain.Incomplete = true
-		}
+		shareMember(member)
+	}
+	if profile := first.Internal.PGOProfile; profile != "" {
+		attachProfile(testMain, profile, first.ImportPath)
 	}
 
 	if !opts.SuppressBuildInfo {
@@ -235,15 +334,26 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 			if cover.Local {
 				member.WithTests.Internal.Cover.Mode = cover.Mode
 			}
+			// The variant is linked in place of the package and keeps its
+			// symbols, so both are instrumented alike. Every package that
+			// imports it then inlines instrumented code, as it would
+			// compiled against the variant. A run reports coverage only of
+			// the packages it selects, so another package's run is unchanged.
+			if member.WithTests.Internal.TestVariantOf != nil {
+				member.Package.Internal.Cover.Mode = member.WithTests.Internal.Cover.Mode
+			}
 		}
 	}
 
-	content, err := renderTestmain(testMainData{Units: units, Cover: cover})
+	data := &testMainData{Units: units, Cover: cover, Grouped: len(units) > 1}
+	content, err := renderTestmain(*data)
 	if err != nil && testMain.Error == nil {
 		testMain.Error = &PackageError{Err: err}
 		testMain.Incomplete = true
 	}
 	testMain.Internal.TestmainGo = &content
+	testMain.Internal.testmainData = data
+	testMain.Internal.TestUnitSpec = testUnitSpec(units)
 
 	// Key by UnitID, never by ImportPath. ImportPath is what testdeps reports,
 	// and it is EMPTY for command-line-arguments and for a package outside a
@@ -261,77 +371,116 @@ func TestGroupMain(ld *modload.Loader, ctx context.Context, opts PackageOpts, me
 	return testMain, digests
 }
 
-// GroupMembers partitions packages into the groups that may share one binary.
-//
-// A member's test variant occupies the import path of the package it tests. So
-// two members may travel together only when neither one's tests reach the
-// other: reaching it would put a second package at that same path in the same
-// link. Every package still runs, and every one still reports on its own. What
-// changes is how many binaries the whole set costs.
+// GroupMembers partitions packages into the binaries their tests share: one
+// per PGO profile and per value of the GODEBUG settings a program reads only
+// as it starts. A profile is compiled into every package a binary links, the
+// runtime included. A binary applies the rest of a package's default GODEBUG
+// when it is started for that package. Every package still runs, and every one
+// still reports on its own.
 func GroupMembers(members []TestGroupMember) [][]TestGroupMember {
-	reaches := make([]map[string]bool, len(members))
-	for idx, member := range members {
-		var roots []*Package
-		if member.WithTests != nil {
-			roots = append(roots, member.WithTests)
+	var out [][]TestGroupMember
+	byBinary := map[[2]string]int{}
+	for _, member := range members {
+		key := [2]string{member.Package.Internal.PGOProfile, startupGODEBUG(member.GODEBUG)}
+		pos, found := byBinary[key]
+		if !found {
+			pos = len(out)
+			byBinary[key] = pos
+			out = append(out, nil)
 		}
-		if member.ExtTests != nil {
-			roots = append(roots, member.ExtTests)
-		}
-		seen := map[string]bool{}
-		for _, reached := range PackageList(roots) {
-			seen[reached.ImportPath] = true
-		}
-		reaches[idx] = seen
-	}
-
-	// A package that reads the working directory as it initializes cannot share
-	// a start with anything -- see travelsAlone. Answer it once per member:
-	// it parses the test files, and the loop below asks about every pair.
-	alone := make([]bool, len(members))
-	for idx, member := range members {
-		alone[idx] = travelsAlone(member)
-	}
-
-	var groups [][]int
-	for idx, member := range members {
-		if alone[idx] {
-			groups = append(groups, []int{idx})
-			continue
-		}
-		placed := false
-		for pos, group := range groups {
-			fits := true
-			for _, other := range group {
-				if alone[other] {
-					fits = false
-					break
-				}
-				if reaches[idx][members[other].Package.ImportPath] || reaches[other][member.Package.ImportPath] {
-					fits = false
-					break
-				}
-			}
-			if fits {
-				groups[pos] = append(group, idx)
-				placed = true
-				break
-			}
-		}
-		if !placed {
-			groups = append(groups, []int{idx})
-		}
-	}
-
-	out := make([][]TestGroupMember, 0, len(groups))
-	for _, group := range groups {
-		batch := make([]TestGroupMember, 0, len(group))
-		for _, idx := range group {
-			batch = append(batch, members[idx])
-		}
-		out = append(out, batch)
+		out[pos] = append(out[pos], member)
 	}
 	return out
+}
+
+// attachProfile compiles every package in testMain's binary with the PGO
+// profile its members share, the way a main package's own dependencies are.
+// A package only the tests import was loaded without one, so it gets a copy
+// that carries the profile, and each importer is pointed at the copy.
+func attachProfile(testMain *Package, profile, forTest string) {
+	copies := map[*Package]*Package{}
+	for _, pkg := range PackageList([]*Package{testMain}) {
+		if pkg != testMain && pkg.Internal.PGOProfile == "" {
+			pkgCopy := new(Package)
+			*pkgCopy = *pkg
+			pkgCopy.ForTest = forTest
+			pkgCopy.Target = ""
+			pkgCopy.Internal.BuildInfo = nil
+			pkgCopy.Internal.PGOProfile = profile
+			copies[pkg] = pkgCopy
+		}
+	}
+	if len(copies) == 0 {
+		return
+	}
+	rewire := func(pkg *Package) {
+		imports := slices.Clone(pkg.Internal.Imports)
+		changed := false
+		for idx, imp := range imports {
+			if pkgCopy := copies[imp]; pkgCopy != nil {
+				imports[idx] = pkgCopy
+				changed = true
+			}
+		}
+		if changed {
+			pkg.Internal.Imports = imports
+		}
+	}
+	// A package without the profile may be in other binaries too, so only
+	// its copy is rewired.
+	for _, pkg := range PackageList([]*Package{testMain}) {
+		if pkgCopy := copies[pkg]; pkgCopy != nil {
+			rewire(pkgCopy)
+			continue
+		}
+		rewire(pkg)
+	}
+}
+
+// startupGODEBUG answers the part of a default GODEBUG that only the start of
+// the program reads: the settings internal/godebugs marks immutable. Changing
+// the default later, when a binary is started for one of its packages, reaches
+// every other setting.
+func startupGODEBUG(godebug string) string {
+	var kept []string
+	for _, setting := range strings.Split(godebug, ",") {
+		name, _, _ := strings.Cut(setting, "=")
+		if info := godebugs.Lookup(name); info != nil && info.Immutable {
+			kept = append(kept, setting)
+		}
+	}
+	return strings.Join(kept, ",")
+}
+
+// shareMember prepares one package of a binary holding several packages'
+// tests. Nothing is recompiled against its test variants. The variant with
+// the package's own test files is linked in place of the package, and keeps
+// the symbol indices every other package refers to it by (-testvariant).
+// Both variants defer what their _test.go files initialize until the tests
+// of this package run (-testinit), so neither touches another package's run.
+func shareMember(member TestGroupMember) {
+	pkg := member.Package
+	if withTests := member.WithTests; withTests != nil && withTests != pkg {
+		withTests.Internal.TestInit = pkg.ImportPath
+		// Only a package something else can import is replaced. A command
+		// is never imported, and neither is a package whose only Go files
+		// are tests.
+		if pkg.Name != "main" && pkg.Error == nil && len(pkg.GoFiles)+len(pkg.CgoFiles) > 0 {
+			withTests.Internal.TestVariantOf = pkg
+		}
+	}
+	if member.ExtTests != nil {
+		member.ExtTests.Internal.TestInit = pkg.ImportPath
+	}
+}
+
+// TestCycle reports the import cycle a package's internal test files would
+// close, if they import a package that imports the package itself.
+func TestCycle(pkg, withTests *Package) *PackageError {
+	if withTests == nil || withTests == pkg {
+		return nil
+	}
+	return testImportCycle(withTests, pkg)
 }
 
 // aliasFor answers the import name a test function is reached through once its

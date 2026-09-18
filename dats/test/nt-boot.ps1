@@ -6,7 +6,7 @@ $cases = @(
   @{ Args = @('7', '6');  Want = "13`n" }
 )
 foreach ($origin in @('Linux', 'Windows')) {
-  # Throwaway copy: keeps the downloaded artifact pristine (APE binaries self-assimilate on unix hosts).
+  # Throwaway copy: later steps read the same artifact, so no run of it here can be why they see a changed file.
   $src = "binaries/ape-binary-$origin/fizzbuzz.com"
   $copy = Join-Path $env:RUNNER_TEMP "fizzbuzz-$origin.com"
   Copy-Item $src $copy
@@ -24,5 +24,3 @@ foreach ($origin in @('Linux', 'Windows')) {
   }
 }
 if ($failed) { exit 1 } else { exit 0 }
-
-      # Prefetched separately so a stalled module download can't masquerade as a hung test step.

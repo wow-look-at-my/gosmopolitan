@@ -73,6 +73,7 @@ func LoadPackage(filenames []string) {
 	}
 	base.Timer.AddEvent(int64(lines), "lines")
 
+	recordPlainImports(filenames, noders)
 	unified(m, noders)
 }
 

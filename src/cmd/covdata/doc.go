@@ -77,4 +77,4 @@ specifics on usage of a given mode):
 	<human readable output>
 	$
 */
-package main
+package covdata

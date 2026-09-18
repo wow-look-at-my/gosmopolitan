@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main_test
+package gocmd_test
 
 import (
 	"bytes"
@@ -2300,37 +2300,37 @@ func TestTestCache(t *testing.T) {
 	// p2 should have been rebuilt.
 	tg.grepStderr(`([\\/]compile|gccgo).*p2.go`, "did not recompile p2")
 
-	// t1 does not import anything, should not have been rebuilt.
+	// The four packages share one test binary, named for the first of them,
+	// so the change links that binary once.
+	if n := tg.grepCountBoth(`([\\/]link|gccgo) `); n != 1 {
+		t.Errorf("ran the linker %d times, want once", n)
+	}
+	tg.grepStderr(`([\\/]link|gccgo).*t1\.test`, "did not relink the shared test binary")
+
+	// t1 does not import anything, should not have been rebuilt or rerun.
 	tg.grepStderrNot(`([\\/]compile|gccgo).*t1_test.go`, "incorrectly recompiled t1")
-	tg.grepStderrNot(`([\\/]link|gccgo).*t1_test`, "incorrectly relinked t1_test")
+	tg.grepStderrNot(`t1\.test.*-test.short`, "incorrectly reran t1_test")
 	tg.grepStdout(`ok  \tt/t1\t\(cached\)`, "did not cache t/t1")
 
-	// t2 imports p1 and must be rebuilt and relinked,
-	// but the change should not have any effect on the test binary,
-	// so the test should not have been rerun.
+	// t2 imports p1 and must be rebuilt, but its tests never reach p1.X, so
+	// the code they run is what it was and the result still comes from the
+	// cache.
 	tg.grepStderr(`([\\/]compile|gccgo).*t2_test.go`, "did not recompile t2")
-	tg.grepStderr(`([\\/]link|gccgo).*t2\.test`, "did not relink t2_test")
-	// This check does not currently work with gccgo, as garbage
-	// collection of unused variables is not turned on by default.
-	if runtime.Compiler != "gccgo" {
-		tg.grepStdout(`ok  \tt/t2\t\(cached\)`, "did not cache t/t2")
-	}
+	tg.grepStderrNot(`t2\.test.*-test.short`, "incorrectly reran t2_test")
+	tg.grepStdout(`ok  \tt/t2\t\(cached\)`, "did not cache t/t2")
 
-	// t3 imports p1, and changing X changes t3's test binary.
+	// t3 imports p1, and changing X changes what t3's tests do.
 	tg.grepStderr(`([\\/]compile|gccgo).*t3_test.go`, "did not recompile t3")
-	tg.grepStderr(`([\\/]link|gccgo).*t3\.test`, "did not relink t3_test")
 	tg.grepStderr(`t3\.test.*-test.short`, "did not rerun t3_test")
 	tg.grepStdoutNot(`ok  \tt/t3\t\(cached\)`, "reported cached t3_test result")
+	tg.grepStdout(`t3_test.go:6: 2`, "t3_test did not see the new p1.X")
 
-	// t4 imports p2, but p2 did not change, so t4 should be relinked, not recompiled,
-	// and not rerun.
+	// t4 imports p2, which did not change, so t4 is not recompiled. p2
+	// imports p1 for its initialization alone, and t4's tests do not reach
+	// p1.X either, so t4 keeps its cached result.
 	tg.grepStderrNot(`([\\/]compile|gccgo).*t4_test.go`, "incorrectly recompiled t4")
-	tg.grepStderr(`([\\/]link|gccgo).*t4\.test`, "did not relink t4_test")
-	// This check does not currently work with gccgo, as garbage
-	// collection of unused variables is not turned on by default.
-	if runtime.Compiler != "gccgo" {
-		tg.grepStdout(`ok  \tt/t4\t\(cached\)`, "did not cache t/t4")
-	}
+	tg.grepStderrNot(`t4\.test.*-test.short`, "incorrectly reran t4_test")
+	tg.grepStdout(`ok  \tt/t4\t\(cached\)`, "did not cache t/t4")
 }
 
 func TestTestSkipVetAfterFailedBuild(t *testing.T) {

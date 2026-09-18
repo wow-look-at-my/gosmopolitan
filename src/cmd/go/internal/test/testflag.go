@@ -35,6 +35,7 @@ func init() {
 	cf := CmdTest.Flag
 	cf.BoolVar(&testC, "c", false, "")
 	cf.StringVar(&testO, "o", "", "")
+	cf.StringVar(&testKeepBinary, "keepbinary", "", "")
 	work.AddCoverFlags(CmdTest, &testCoverProfile)
 	cf.Var((*base.StringsFlag)(&work.ExecCmd), "exec", "")
 	cf.BoolVar(&testJSON, "json", false, "")
@@ -213,30 +214,37 @@ func (f *shuffleFlag) Set(value string) error {
 	return nil
 }
 
-// normalizeCount settles what -count means here. A negative count names no run
-// at all and is fatal. Zero still reaches the test binary, which builds and runs
-// nothing. Every other value runs the tests exactly once, so the flag is dropped
-// rather than forwarded: it selects no behavior, and an argument the go command
-// does not recognize is what turns the test cache off. A repeat is not a repair.
-// A test that passes only sometimes is broken, and the fix belongs in the test.
+// normalizeCount makes -count a no-op. go test accepts it, from the command
+// line and from GOFLAGS, and a negative count is still an invalid value. It
+// never reaches the test binary, never enters the cache key and never decides
+// whether a result is recorded or replayed.
 //
 // explicitArgs holds the flags already destined for the test binary, and
-// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both.
+// fromGOFLAGS the ones GOFLAGS would add. The count is removed from both,
+// including a -test.count written after -args, in either the -test.count=n or
+// the -test.count n form. Arguments after a -- terminator are positional to
+// the test binary and are kept as they are.
 func normalizeCount(explicitArgs []string, fromGOFLAGS map[string]bool) []string {
 	if testCount < 0 {
 		base.Fatalf("go: -count must not be negative")
 	}
-	if testCount == 0 {
-		return explicitArgs
-	}
 	delete(fromGOFLAGS, "count")
 	delete(fromGOFLAGS, "test.count")
 	kept := explicitArgs[:0]
-	for _, arg := range explicitArgs {
-		if strings.HasPrefix(arg, "-test.count=") {
+	for idx := 0; idx < len(explicitArgs); idx++ {
+		arg := explicitArgs[idx]
+		if arg == "--" {
+			kept = append(kept, explicitArgs[idx:]...)
+			break
+		}
+		name, _, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-"), "=")
+		if !strings.HasPrefix(arg, "-") || name != "test.count" {
+			kept = append(kept, arg)
 			continue
 		}
-		kept = append(kept, arg)
+		if !hasValue {
+			idx++ // the count's value is the next argument
+		}
 	}
 	return kept
 }

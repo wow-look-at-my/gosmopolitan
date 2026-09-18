@@ -27,6 +27,8 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows the same cosmo amd64 image boots through the APE's PE header, so there is no second build inside it. What each host supports today, and what it does not: `docs/PLATFORM-STATUS.md`.
 
+Starting the file writes nothing. Linux and macOS hand it to a small native loader. That loader boots the payload from memory, so a read-only path runs it like any other. `docs/APE-BOOT.md` covers where the loader comes from.
+
 Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
 
 Ship release APEs zstd-compressed. The two architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.

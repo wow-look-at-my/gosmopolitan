@@ -69,19 +69,16 @@ func TestShellPrintfOctalOnly(t *testing.T) {
 	assert.False(t, badEscapes.Match(printfContent), "printf must use octal escapes only, not \\n, \\t, etc.")
 }
 
-func TestShellDdStatement(t *testing.T) {
-	// The dd statement relocates the Mach-O header, so it exists only when
-	// the header does. See skipWithoutMacho.
-	skipWithoutMacho(t)
+// Every dd in the script reads bytes out of the APE. None writes any back:
+// an assimilation dd names an output file and passes conv=notrunc, and the
+// APE is never rewritten, in place or in a copy.
+func TestShellDdOnlyReads(t *testing.T) {
 	header := first8K(t)
 
-	// Spec: dd if="$o" of="$o" bs=... skip=... count=... conv=notrunc
-	ddPattern := regexp.MustCompile(`dd\s+if=.*of=.*bs=(\d+)\s+skip=(\d+)\s+count=(\d+).*conv=notrunc`)
-	match := ddPattern.FindSubmatch(header)
-	require.NotNil(t, match, "must contain dd statement for Mach-O relocation")
-
-	// bs should be 8 (standard)
-	assert.Equal(t, "8", string(match[1]), "dd bs should be 8")
+	assert.False(t, bytes.Contains(header, []byte("conv=notrunc")),
+		"conv=notrunc means a dd that writes a header over a file")
+	assert.False(t, regexp.MustCompile(`dd\s+if=\S+\s+of=`).Match(header),
+		"no dd in the script may name an output file")
 }
 
 func TestShellArchDetection(t *testing.T) {
@@ -115,60 +112,114 @@ func TestShellVariableAssignment(t *testing.T) {
 	assert.Equal(t, byte('\''), bin[7])
 }
 
-// The kernel cannot exec an APE as it stands, so something must write a real
-// header over its first bytes. The script writes them into a copy it stages,
-// never into the file it is running: that file is often read-only, its
-// checksum is what a consumer verifies, and a fat APE stops being fat the
-// moment one platform's header lands on it.
+// The kernel cannot exec an APE as it stands. A native loader reads the file
+// where it lies and boots the payload from memory, so nothing has to write a
+// header over the running binary: that file is often read-only, its checksum
+// is what a consumer verifies, and a fat APE stops being fat the moment one
+// platform's header lands on it.
 func TestShellNeverWritesToItself(t *testing.T) {
 	header := first8K(t)
 
-	assert.NotContains(t, string(header), `exec 7<> "$o"`, "the ELF header must go to the staged copy, not to $o")
-	assert.NotContains(t, string(header), `of="$o"`, "the Mach-O header must go to the staged copy, not to $o")
+	assert.NotContains(t, string(header), `exec 7<> "$o"`, "no boot header may be written into $o")
+	assert.NotContains(t, string(header), `of="$o"`, "no Mach-O header may be written into $o")
 }
 
-func TestShellStagesACopyAndExecsIt(t *testing.T) {
+// A loader the host already carries is what makes a read-only filesystem
+// work: every candidate below is read, never written.
+func TestShellFindsAResidentLoaderFirst(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `cp "$o" "$p.$$"`, "must copy itself before correcting the header")
-	assert.Contains(t, header, `mv -f "$p.$$" "$p"`, "must publish the copy atomically, so a concurrent first run cannot read a half-written one")
-	assert.Contains(t, header, `exec "$p" "$@"`, "must exec the staged copy")
-	assert.Contains(t, header, `if [ ! -x "$p" ]; then`, "must reuse an already staged copy")
+	assert.Contains(t, header, `for c in "${APE_LOADER:-}" /usr/local/lib/ape/$l /usr/lib/ape/$l; do`,
+		"APE_LOADER and the two system directories are searched before PATH")
+	assert.Contains(t, header, `for n in $l apeld ape; do`,
+		"the PATH search ends at `ape`, the cosmo loader, which boots the file too")
+	assert.Contains(t, header, `exec "$c" "$o" "$@"`, "the loader is handed the APE's own path")
 }
 
-// The copy is keyed by the identity of the file it came from, so a rebuilt
-// binary never runs its predecessor's copy.
-func TestShellKeysTheCopyByFileIdentity(t *testing.T) {
+// An APE is one file. Nothing beside it is searched, because a loader
+// shipped next to the binary is a second thing to carry, which is the
+// property an APE exists to avoid.
+func TestShellLooksForNoSidecar(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `stat -L -c %d.%i.%.9Y.%s "$o"`, "GNU stat, -L so a symlink keys on its target: device, inode, mtime to the nanosecond, size")
-	assert.Contains(t, header, `stat -L -f %d.%i.%Fm.%z "$o"`, "BSD stat spells the same fields differently")
-	assert.Contains(t, header, `cksum <"$o"`, "a host without stat falls back to the contents")
+	assert.NotContains(t, header, `${o%/*}/.`, "no candidate may sit beside the binary")
 }
 
-// Binding the copy over the APE's own path gives the program back the path
-// its caller used. The mount lives in a namespace of its own, so the owner of
-// the file can still delete, move or overwrite it while it runs.
-func TestShellBindsTheCopyInAPrivateNamespace(t *testing.T) {
+// The embedded loader is the answer for a host that carries none. It is
+// unpacked once and keyed on its own content hash, so a toolchain change
+// never reuses what an earlier one left behind.
+func TestShellUnpacksTheEmbeddedLoader(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `exec "$u" -m "$s" -c `, "the bind must happen in a mount namespace of its own")
-	assert.Contains(t, header, `u=$(command -v unshare 2>/dev/null); m=$(command -v mount 2>/dev/null); s=$(command -v sh 2>/dev/null)`,
-		"every tool is resolved before the caller's PATH comes back, because that PATH may name none of them")
-	assert.Contains(t, header, `"$n" --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"`,
-		"a mount that does not take must fall through to the staged copy, not fail the run")
-	assert.Contains(t, header, `if [ -f "$c/.bind" ]; then`,
-		"the bind runs only where staging proved it works")
+	unpack := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null`)
+	require.True(t, unpack.MatchString(header), "must read the embedded loader out of itself with dd")
+	assert.Contains(t, header, `[ -s "$u" ]`, "an empty unpack must not be exec'd as a loader")
+
+	assert.Contains(t, header, `for d in ${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}; do`,
+		"RAM comes first, and the program's own directory is the last resort a read-only container leaves")
+
+	// The whole point: the copy is gone before the program starts. -u makes the
+	// loader unlink its own file, because a script cannot delete anything after
+	// it execs. An APE therefore leaves nothing.
+	assert.Contains(t, header, `exec "$u" -u "$o" "$@"`,
+		"must ask the loader to remove its own throwaway copy")
+	assert.NotContains(t, header, `/dev/fd/`,
+		"exec through /dev/fd is linux-only: XNU answers it with EACCES")
+
+	tag := regexp.MustCompile(`u=\$d/\.ape-\$l-[0-9a-f]{8}\.\$\$`)
+	assert.True(t, tag.MatchString(header),
+		"the path must carry the loader's content tag and the PID, so no two runs collide")
 }
 
-// Both host tweaks are best effort. They need root, and a host that refuses
-// them runs the program anyway, with nothing on stderr.
-func TestShellRegistersTheAPEMagicQuietly(t *testing.T) {
+// Registering the loader with the kernel is what lets an APE start with
+// nothing writable and no loader file: F makes the kernel hold the
+// interpreter by descriptor, so the path it was registered under stops
+// mattering. Without F the entry names a path that a read-only host may
+// not have.
+func TestShellRegistersTheLoaderWithTheKernel(t *testing.T) {
 	header := string(first8K(t))
 
-	assert.Contains(t, header, `if [ "$(id -u 2>/dev/null)" = 0 ]; then`, "neither tweak is tried without root")
-	assert.Contains(t, header, `printf ":APE:M::MZqFpD=\047::/bin/sh:"`,
-		`the magic is the APE magic, printf turns \047 into the quote, and the double quotes keep this out of the loader's printf scan`)
+	assert.Contains(t, header, `printf ":APE:M::MZqFpD=\047::$1:F"`,
+		`the entry must carry F, and the magic's quote must stay octal inside DOUBLE quotes so it is not read as a boot header`)
 	assert.Contains(t, header, `> /proc/sys/fs/binfmt_misc/register; } 2>/dev/null`,
 		"the redirect belongs inside the group: a shell reports a redirect it cannot open on its own stderr")
+	assert.Contains(t, header, `[ -e /proc/sys/fs/binfmt_misc/APE ] && return 1`,
+		"an entry already registered must be left alone, and must not read as this run's own work")
+	assert.Contains(t, header, `apereg "$u"`, "the unpacked loader must be registered too")
+}
+
+// A run that unpacked the loader AND registered it leaves nothing behind. F
+// opened the interpreter at registration, so the kernel holds it after the
+// file goes. APE_NOBINFMT breaks the loop a kernel that hands the file back
+// to a shell would otherwise make.
+func TestShellDeletesTheLoaderItRegistered(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then`,
+		"registration is tried once, and only when this pass has not already taken it")
+	assert.Contains(t, header, `rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT`,
+		"the file goes, and the marker stops a second pass from trying again")
+	assert.Contains(t, header, `apepath; exec "$o" "$@"`,
+		"with the entry in place the kernel starts the APE itself")
+}
+
+// A host with nowhere to unpack and no loader must say which loader it wants
+// and how to supply it. Silence there reads as a broken binary.
+func TestShellNamesTheMissingLoader(t *testing.T) {
+	header := string(first8K(t))
+
+	assert.Contains(t, header, `install it on PATH, or point APE_LOADER at it`,
+		"the refusal must name the fix")
+	assert.Regexp(t, `no \$l on this host`, header, "the refusal must name the loader")
+}
+
+// Nothing in the script copies the program, on any host. A copy needs a
+// writable filesystem, and every platform now boots through a loader that
+// reads the APE where it lies.
+func TestShellNeverCopiesTheProgram(t *testing.T) {
+	header := string(first8K(t))
+
+	for _, s := range []string{`cp "$o"`, `stat -L`, `cksum <"$o"`} {
+		assert.NotContains(t, header, s, "%s belongs to staging a copy, which no host does", s)
+	}
 }

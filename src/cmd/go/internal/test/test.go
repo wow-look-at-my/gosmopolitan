@@ -130,9 +130,10 @@ restricted set of 'cacheable' test flags, defined as -benchtime,
 -coverprofile, -cpu, -failfast, -fullpath, -list, -outputdir, -parallel,
 -run, -short, -skip, -timeout and -v.
 If a run of go test has any test or non-test flags outside this set,
-the result is not cached. In this toolchain -count never leaves that set:
-a positive count selects one run either way, so the flag is dropped before
-the cache is consulted. Nothing on the command line turns the cache off on
+the result is not cached. The -count flag is accepted and has no effect:
+it is not passed to the test binary, it is not part of the cache key, and
+it does not decide whether a result is recorded or replayed.
+Nothing on the command line turns the cache off on
 purpose, because a cached result that is wrong is a defect to repair.
 Tests that open files or that consult environment variables only match
 future runs in which those files and environment variables are unchanged.
@@ -147,7 +148,8 @@ In addition to the build flags, the flags handled by 'go test' itself are:
 
 	-args
 	    Pass the remainder of the command line (everything after -args)
-	    to the test binary, uninterpreted and unchanged.
+	    to the test binary, uninterpreted and unchanged, except that a
+	    -test.count there is dropped like -count.
 	    Because this flag consumes the remainder of the command line,
 	    the package list (if present) must appear before this flag.
 
@@ -164,6 +166,13 @@ In addition to the build flags, the flags handled by 'go test' itself are:
 	    Convert test output to JSON suitable for automated processing.
 	    See 'go doc test2json' for the encoding details.
 	    Also emits build output in JSON. See 'go help buildjson'.
+
+	-keepbinary file
+	    Save a copy of the one test binary that the named packages'
+	    tests share to the named file. The tests still run (unless -c
+	    is specified). Started with -test.unit=importpath, the binary
+	    runs the tests of that package. It is an error if the packages'
+	    tests need more than one binary.
 
 	-o file
 	    Save a copy of the test binary to the named file.
@@ -221,12 +230,13 @@ control the execution of any test:
 	    (for example, -benchtime 100x).
 
 	-count n
-	    Run each test, benchmark, and fuzz seed n times, where n is 0 or 1.
-	    0 builds the test binary and runs nothing. Any positive n runs
-	    everything once: this toolchain does not repeat a test, because a
-	    test that passes only sometimes is broken and the fix belongs in
-	    the test. A negative n is an error. -count never affects the test
-	    cache. -count does not apply to fuzz tests matched by -fuzz.
+	    Accepted and ignored. Every test, benchmark, and fuzz seed runs
+	    once, whatever n is: this toolchain does not repeat a test,
+	    because a test that passes only sometimes is broken and the fix
+	    belongs in the test. go test does not pass -count to the test
+	    binary, it is not part of the test cache key, and it does not
+	    decide whether a result is recorded or replayed. A negative n is
+	    an error.
 
 	-cover
 	    Enable coverage analysis.
@@ -453,9 +463,8 @@ on either side of -v.
 When 'go test' runs in package list mode, 'go test' caches successful
 package test results to avoid unnecessary repeated running of tests.
 Nothing on the command line turns that cache off on purpose. -count in
-particular does not: a positive count selects one run, so the flag is
-dropped before the cache is consulted. A cached result that is wrong is a
-defect to repair rather than to bypass.
+particular does not: go test drops it before the cache is consulted. A
+cached result that is wrong is a defect to repair rather than to bypass.
 
 To keep an argument for a test binary from being interpreted as a
 known flag or a package name, use -args (see 'go help test') which
@@ -562,6 +571,7 @@ var (
 	testJSON         bool                              // -json flag
 	testList         string                            // -list flag
 	testO            string                            // -o flag
+	testKeepBinary   string                            // -keepbinary flag
 	testOutputDir    outputdirFlag                     // -outputdir flag
 	testShuffle      shuffleFlag                       // -shuffle flag
 	testTimeout      time.Duration                     // -timeout flag
@@ -731,7 +741,7 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 	work.BuildInit(moduleLoader)
 	work.VetFlags = testVet.flags
 	work.VetExplicit = testVet.explicit
-	work.VetTool = base.Tool("vet")
+	work.VetTool = base.ToolCmd("vet")
 
 	pkgOpts := load.PackageOpts{ModResolveTests: true}
 	pkgs = load.PackagesAndErrors(moduleLoader, ctx, pkgOpts, pkgArgs)
@@ -1184,10 +1194,19 @@ type testGroup struct {
 	// one to finish removes the directory they all ran out of.
 	remaining *atomic.Int32
 
+	// binary is what the members of one binary share.
+	binary *sharedBinary
+}
+
+// sharedBinary is the state of one binary that its members' actions share.
+type sharedBinary struct {
 	// ready says the binary has been set up: its directory made, its generated
 	// file written, its target named. The first member to arrive does that, and
 	// the rest share what it built.
 	ready bool
+
+	// keep is the action writing the binary to the -keepbinary file.
+	keep *work.Action
 }
 
 // groupTestPackages builds every package's test copies, decides which packages
@@ -1205,21 +1224,32 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 			continue
 		}
 		withTests, extTests, perr := load.TestVariantsFor(ld, ctx, pkgOpts, pkg, cover)
+		if perr == nil {
+			// An import cycle through the package's own test files is its
+			// error alone. Found here, it keeps the package out of the binary
+			// the others share.
+			if cycleErr := load.TestCycle(pkg, withTests); cycleErr != nil {
+				withTests.Error = cycleErr
+				withTests.Incomplete = true
+				perr = withTests
+			}
+		}
 		groups[pkg] = &testGroup{withTests: withTests, extTests: extTests, perr: perr}
 		if perr != nil {
 			continue
 		}
-		members = append(members, load.TestGroupMember{Package: pkg, WithTests: withTests, ExtTests: extTests})
+		members = append(members, load.TestGroupMember{
+			Package:   pkg,
+			WithTests: withTests,
+			ExtTests:  extTests,
+			GODEBUG:   load.TestGODEBUG(ld, pkg),
+			Binary:    testBinaryName(pkg),
+		})
 	}
 
 	batches := load.GroupMembers(members)
-	if testC || testNeedBinary() {
-		// -c and the profile flags name a binary per package, so each one
-		// travels alone.
-		batches = nil
-		for _, member := range members {
-			batches = append(batches, []load.TestGroupMember{member})
-		}
+	if testKeepBinary != "" && len(batches) > 1 {
+		base.Fatalf("go: -keepbinary %s names one file, and these packages' tests need %d binaries", testKeepBinary, len(batches))
 	}
 	for _, batch := range batches {
 		name := batch[0].Package.ImportPath + ".test"
@@ -1230,11 +1260,13 @@ func groupTestPackages(ld *modload.Loader, ctx context.Context, pkgOpts load.Pac
 		}
 		remaining := new(atomic.Int32)
 		remaining.Store(int32(len(batch)))
+		binary := new(sharedBinary)
 		for _, member := range batch {
 			groups[member.Package].testMain = testMain
 			groups[member.Package].members = shared
 			groups[member.Package].digest = digests[member.Package.ImportPath]
 			groups[member.Package].remaining = remaining
+			groups[member.Package].binary = binary
 			// A main this batch cannot generate is the whole batch's error: it
 			// is the one binary they share. Without this the build goes on to
 			// compile the variants, and the compiler's complaint about the
@@ -1318,8 +1350,8 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 
 	// Several packages can share this binary, and the first of them to arrive
 	// here sets it up. LinkAction hands each of them the same action.
-	if !group.ready {
-		group.ready = true
+	if !group.binary.ready {
+		group.binary.ready = true
 		if err := b.BackgroundShell().Mkdir(testDir); err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -1343,6 +1375,34 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		}
 
 		a.Target = testDir + groupBinary + cfg.ExeSuffix
+
+		if len(group.members) > 1 {
+			// A package whose tests fail to compile leaves the binary: its
+			// run reports the failure, and every other package still runs.
+			// The generated main is compiled again without it, and the link
+			// takes the package itself where it took the package's tests.
+			compile := a.Deps[0]
+			units := make(map[*work.Action]string)
+			for _, member := range group.members {
+				for _, variant := range testVariantCompiles(b, groups[member]) {
+					units[variant] = member.ImportPath
+				}
+			}
+			// The compile looks its result up in the cache in an action of
+			// its own, which hashes the source, so that one renders it.
+			steps := []*work.Action{compile}
+			for _, dep := range compile.Deps {
+				if dep.Package == testMain {
+					steps = append(steps, dep)
+				}
+			}
+			for _, step := range steps {
+				step.IgnoreFail = true
+				step.Actor = &testmainCompileActor{inner: step.Actor, testMain: testMain, units: units, file: testDir + "_testmain.go"}
+			}
+			a.IgnoreFail = true
+			a.Actor = &testLinkActor{inner: a.Actor}
+		}
 	}
 	if cfg.Goos == "windows" {
 		// There are many reserved words on Windows that,
@@ -1368,7 +1428,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		// If maintaining the list of bad words is too onerous,
 		// we could just do this always on Windows.
 		for _, bad := range windowsBadWords {
-			if strings.Contains(testBinary, bad) {
+			if strings.Contains(groupBinary, bad) {
 				a.Target = testDir + "test.test" + cfg.ExeSuffix
 				break
 			}
@@ -1402,16 +1462,44 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		if isNull {
 			runAction = buildAction
 		} else {
-			testMain.Target = target
+			// Each package gets its own copy of the one link, named for it.
+			// A binary holding one package is linked for its target, which
+			// lets an up-to-date target skip the link.
+			actor := work.ActorFunc(copyTestBinary)
+			if len(group.members) == 1 {
+				testMain.Target = target
+				actor = work.ActorFunc(work.BuildInstallFunc)
+			}
 			installAction = &work.Action{
 				Mode:    "test build",
-				Actor:   work.ActorFunc(work.BuildInstallFunc),
+				Actor:   actor,
 				Deps:    []*work.Action{buildAction},
 				Package: testMain,
 				Target:  target,
 			}
+			// The binary links even when this package's tests do not
+			// compile, and then this package gets no copy of it.
+			installAction.Deps = append(installAction.Deps, testVariantCompiles(b, group)...)
 			runAction = installAction // make sure runAction != nil even if not running test
 		}
+	}
+	var keepAction *work.Action
+	if testKeepBinary != "" {
+		// Every package names the same file: the one binary they share.
+		target := testKeepBinary
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(base.Cwd(), target)
+		}
+		if group.binary.keep == nil {
+			group.binary.keep = &work.Action{
+				Mode:    "test build",
+				Actor:   work.ActorFunc(copyTestBinary),
+				Deps:    []*work.Action{buildAction},
+				Package: testMain,
+				Target:  target,
+			}
+		}
+		keepAction = group.binary.keep
 	}
 
 	var vetRunAction *work.Action
@@ -1423,6 +1511,7 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		rta := &runTestActor{
 			shared:            len(group.members) > 1,
 			writeCoverMetaAct: writeCoverMetaAct,
+			variants:          testVariantCompiles(b, group),
 		}
 		rta.c.unitDigest = group.digest
 		runAction = &work.Action{
@@ -1450,11 +1539,16 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 				writeCoverMetaAct.Deps = append(writeCoverMetaAct.Deps, compileAction)
 			}
 		}
+		// A run writes its test log and coverage output to its objdir. The
+		// runs of a shared binary go at once, so each has its own.
 		runAction.Objdir = testDir
+		if len(group.members) > 1 {
+			runAction.Objdir = b.NewObjdir()
+		}
 		vetRunAction = runAction
 		cleanAction = &work.Action{
 			Mode:       "test clean",
-			Actor:      &cleanTestActor{remaining: group.remaining},
+			Actor:      &cleanTestActor{remaining: group.remaining, runDir: runAction.Objdir},
 			Deps:       []*work.Action{runAction},
 			Package:    p,
 			IgnoreFail: true, // clean even if test failed
@@ -1483,6 +1577,17 @@ func builderTest(ld *modload.Loader, b *work.Builder, ctx context.Context, pkgOp
 		if cleanAction != nil {
 			cleanAction.Deps = append(cleanAction.Deps, installAction)
 		}
+	}
+	if keepAction != nil {
+		// The copy is taken before the binary's directory is removed, and
+		// printing the result waits for it.
+		if cleanAction != nil {
+			cleanAction.Deps = append(cleanAction.Deps, keepAction)
+		}
+		if installAction != nil {
+			installAction.Deps = append(installAction.Deps, keepAction)
+		}
+		printAction.Deps = append(printAction.Deps, keepAction)
 	}
 
 	return buildAction, runAction, printAction, nil, nil
@@ -1522,6 +1627,11 @@ type runTestActor struct {
 	// comment in runTest at the definition of writeCoverMetaAct for
 	// more details.
 	writeCoverMetaAct *work.Action
+
+	// variants are the compiles of the package's test packages. When one
+	// fails, the shared binary is linked without the package, and its run
+	// reports the build failure.
+	variants []*work.Action
 
 	// sequencing of json start messages, to preserve test order
 	prev <-chan struct{} // wait to start until prev is closed
@@ -1633,6 +1743,11 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// Release next test to start (test2json.NewConverter writes the start event).
 	close(r.next)
 
+	for _, variant := range r.variants {
+		if a.Failed == nil && variant.Failed != nil {
+			a.Failed = variant.Failed
+		}
+	}
 	if a.Failed != nil {
 		// We were unable to build the binary.
 		if json != nil && a.Failed.Package != nil {
@@ -1689,12 +1804,15 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		return nil
 	}
 
-	if r.c.buf == nil {
-		// The action ID missed, so ask again by what the compile produced.
-		// The first attempt reuses a result without running the linker at
-		// all. This one reuses it when different inputs compile alike.
-		// c.saveOutput stores the result under both IDs.
-		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest, true))
+	if r.c.buf == nil && !r.c.disableCache && r.c.id1 == (cache.ActionID{}) {
+		// A link that did not consult the test results first, such as one
+		// whose target was already up to date, left this run unasked.
+		r.c.tryCacheWithID(b, a, testIdentity(b, a, buildAction, r.c.unitDigest))
+	}
+	if r.c.buf == nil && !r.c.disableCache {
+		if id := testReachIdentity(b, a, buildAction, r.c.unitDigest); id != "" {
+			r.c.tryCacheWithID(b, a, id)
+		}
 	}
 	if r.c.buf != nil {
 		if stdout != &buf {
@@ -1705,6 +1823,9 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 		return nil
 	}
 
+	if err := sh.Mkdir(a.Objdir); err != nil {
+		return err
+	}
 	execCmd := work.FindExecCmd()
 	testlogArg := []string{}
 	if !r.c.disableCache && len(execCmd) == 0 {
@@ -1755,10 +1876,37 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// generated main imports. So the flag must not be passed there either --
 	// the testing package would reject it as unknown.
 	var unitArg []string
+	binary, err := b.RunnableTarget(buildAction)
+	if err != nil {
+		return err
+	}
 	if r.shared {
 		unitArg = []string{"-test.unit=" + a.Package.ImportPath}
+		// The package's tests run from a file named for the package, as
+		// they would from a binary of their own: a test reads its own
+		// executable's name, and so does what it starts. A hard link is
+		// that name for the one binary, in this run's own directory.
+		name := testBinaryName(a.Package)
+		if cfg.Goos == "windows" {
+			for _, bad := range windowsBadWords {
+				if strings.Contains(name, bad) {
+					name = "test.test" // see the link target's name in builderTest
+					break
+				}
+			}
+		}
+		named := a.Objdir + name + cfg.ExeSuffix
+		if cfg.BuildN || cfg.BuildX {
+			sh.ShowCmd("", "ln %s %s", binary, named)
+		}
+		if !cfg.BuildN {
+			if err := os.Link(binary, named); err != nil {
+				return err
+			}
+		}
+		binary = named
 	}
-	args := str.StringList(execCmd, buildAction.BuiltTarget(), unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
+	args := str.StringList(execCmd, binary, unitArg, testlogArg, panicArg, fuzzArg, coverdirArg, testArgs)
 
 	if testCoverProfile != "" {
 		// Write coverage to temporary profile, for merging later.
@@ -1918,40 +2066,52 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 // to see if the test result is cached and therefore the link is unneeded.
 // It reports whether the result can be satisfied from cache.
 func (rcache *runCache) tryCache(builder *work.Builder, runAct *work.Action, linkAction *work.Action) bool {
-	return rcache.tryCacheWithID(builder, runAct, testIdentity(builder, runAct, linkAction, rcache.unitDigest, false))
+	return rcache.tryCacheWithID(builder, runAct, testIdentity(builder, runAct, linkAction, rcache.unitDigest))
 }
 
 // testIdentity keys a test result on the compiles of the package under test
-// plus the link configuration. Never on the link, and never on the generated
-// main: both fold in every package the binary holds, so either key makes one
-// package's edit invalidate every result in it.
+// and of every package those compiles import, directly or not, plus the link
+// configuration. Never on the link, and never on the generated main: both fold
+// in every package the binary holds, so either key makes one package's edit
+// invalidate every result in it.
 //
-// The package's own compiles are the right scope. Its test files are inputs to
-// them, and a compile action's ID already carries each dependency's content ID,
-// so they cover this package and say nothing about a sibling.
+// The code the package's tests reach is the right scope. A dependency's
+// implementation runs in those tests even when its export data, and so the
+// compile of the package under test, does not change; a sibling that nothing
+// here imports does not run at all.
 //
-// byContent identifies what those compiles produced rather than what went into
-// them, so inputs that differ but compile alike still hit.
-func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string, byContent bool) string {
+// Each compile is identified by what it produced rather than what went into
+// it, so inputs that differ but compile alike still hit. Every compile a link
+// waits on has finished by the time the link asks.
+func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string) string {
 	// LinkAction leads the deps with the compile of the generated main, and
 	// that compile imports the test variants of every package in the binary.
 	if len(linkAction.Deps) == 0 || linkAction.Deps[0].Package != linkAction.Package {
 		base.Fatalf("go: internal error: link action for %s does not lead with its own compile", linkAction.Package.ImportPath)
 	}
 	tested := runAct.Package.ImportPath
+	seen := map[*work.Action]bool{}
 	var codes []string
+	var visit func(compile *work.Action)
+	visit = func(compile *work.Action) {
+		if seen[compile] {
+			return
+		}
+		seen[compile] = true
+		codes = append(codes, compile.Package.ImportPath+"="+compile.BuildContentID())
+		for _, dep := range compile.Deps {
+			if dep.Package != nil && dep.Mode == "build" {
+				visit(dep)
+			}
+		}
+	}
 	for _, dep := range linkAction.Deps[0].Deps {
-		if dep.Package == nil {
+		if dep.Package == nil || dep.Mode != "build" {
 			continue
 		}
-		if path := dep.Package.ImportPath; path != tested && path != tested+"_test" {
-			continue
+		if path := dep.Package.ImportPath; path == tested || path == tested+"_test" {
+			visit(dep)
 		}
-		if byContent {
-			codes = append(codes, dep.BuildContentID())
-			continue
-		}
-		codes = append(codes, dep.BuildActionID())
 	}
 	if len(codes) == 0 {
 		base.Fatalf("go: internal error: test main for %s imports no test variant of it", tested)
@@ -1961,6 +2121,52 @@ func testIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.A
 	}
 	slices.Sort(codes)
 	return strings.Join(codes, " ") + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+}
+
+// testReachIdentity keys a test result on the code the package's tests reach,
+// which the linker reports for each package in the binary. It is asked after
+// the link, when the key over the compiles has already missed: a dependency
+// can compile differently and still leave what these tests run untouched, and
+// upstream got that precision from hashing a binary holding one package.
+//
+// It answers "" when the link did not run, which leaves the result keyed on
+// the compiles alone.
+func testReachIdentity(builder *work.Builder, runAct *work.Action, linkAction *work.Action, digest string) string {
+	reach := testUnitReach(linkAction)[runAct.Package.ImportPath]
+	if reach == "" || digest == "" {
+		return ""
+	}
+	return "reach " + reach + " main " + digest + " " + builder.LinkConfigID(linkAction.Package)
+}
+
+var reachCache struct {
+	mu    sync.Mutex
+	byDir map[string]map[string]string
+}
+
+// testUnitReach reads the digests the link wrote, one per package in the
+// binary. A missing file is a link that did not run, and answers no digests.
+func testUnitReach(linkAction *work.Action) map[string]string {
+	reachCache.mu.Lock()
+	defer reachCache.mu.Unlock()
+	if found, known := reachCache.byDir[linkAction.Objdir]; known {
+		return found
+	}
+	digests := map[string]string{}
+	data, err := os.ReadFile(filepath.Join(linkAction.Objdir, work.TestUnitDigestFile))
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			unit, digest, split := strings.Cut(line, " ")
+			if split {
+				digests[unit] = digest
+			}
+		}
+	}
+	if reachCache.byDir == nil {
+		reachCache.byDir = map[string]map[string]string{}
+	}
+	reachCache.byDir[linkAction.Objdir] = digests
+	return digests
 }
 
 func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bool {
@@ -2189,9 +2395,30 @@ var testlogMagic = []byte("# test log\n") // known to testing/internal/testdeps/
 // test log.
 func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error) {
 	testlog = bytes.TrimPrefix(testlog, testlogMagic)
-	h := cache.NewHash("testInputs")
+	sum := cache.NewHash("testInputs")
+	// Under gocachetest every hashed line is also printed, so two runs whose
+	// input IDs differ can be diffed down to the environment variable or file
+	// that moved.
+	var h io.Writer = sum
+	var lines bytes.Buffer
+	if cache.DebugTest {
+		h = io.MultiWriter(sum, &lines)
+		defer func() {
+			seen := make(map[string]struct{})
+			for line := range strings.Lines(lines.String()) {
+				if _, dup := seen[line]; dup {
+					continue
+				}
+				seen[line] = struct{}{}
+				fmt.Fprintf(os.Stderr, "testcache: %s: input %s", a.Package.ImportPath, line)
+			}
+		}()
+	}
 	// The runtime always looks at GODEBUG, without telling us in the testlog.
 	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
+	if cache.DebugTest {
+		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
+	}
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
@@ -2215,6 +2442,9 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
+			if isRunScratch(name) {
+				break
+			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
 		case "stat":
 			if !filepath.IsAbs(name) {
@@ -2241,8 +2471,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			fmt.Fprintf(h, "open %s %x\n", name, fh)
 		}
 	}
-	sum := h.Sum()
-	return sum, nil
+	return sum.Sum(), nil
 }
 
 // isRunScratch reports whether name is scratch space this run created, which is
@@ -2258,17 +2487,26 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 // after that file changed. A test whose reads genuinely cannot be pinned down,
 // such as one that reads /proc, now misses instead. A miss costs a run. A
 // wrong hit costs the trust that makes the cache worth having at all.
+//
+// The name is compared as spelled and as resolved. A path that is gone cannot
+// be resolved, and a temporary directory that is a symlink (macOS spells it
+// /tmp and /var/folders, both of which resolve under /private) would otherwise
+// only ever match on the spelling the caller happened to use.
 func isRunScratch(name string) bool {
-	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	tmp := os.TempDir()
+	if search.InDir(name, tmp) != "" {
+		return true
+	}
+	realTmp, err := filepath.EvalSymlinks(tmp)
 	if err != nil {
-		tmp = os.TempDir()
+		realTmp = tmp
 	}
 	real, err := filepath.EvalSymlinks(name)
 	if err != nil {
 		// The path is gone, so only its own directory prefix can answer.
 		real = name
 	}
-	return search.InDir(real, tmp) != ""
+	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
 }
 
 func hashGetenv(name string) cache.ActionID {
@@ -2450,16 +2688,131 @@ func coveragePercentage(out []byte) string {
 // this counts rather than the last to start.
 type cleanTestActor struct {
 	remaining *atomic.Int32
+	runDir    string // the run's own objdir, removed as the run ends
 }
 
 func (actor *cleanTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
 	if cfg.BuildWork {
 		return nil
 	}
+	if actor.runDir != a.Objdir {
+		b.Shell(a).RemoveAll(actor.runDir)
+	}
 	if actor.remaining.Add(-1) != 0 {
 		return nil
 	}
 	b.Shell(a).RemoveAll(a.Objdir)
+	return nil
+}
+
+// testVariantCompiles answers the compiles of a package's test packages that
+// the generated main imports: the package with its _test.go files, and its
+// external test package.
+func testVariantCompiles(b *work.Builder, group *testGroup) []*work.Action {
+	var compiles []*work.Action
+	if withTests := group.withTests; withTests != nil && len(withTests.GoFiles)+len(withTests.CgoFiles) > 0 {
+		compiles = append(compiles, b.CompileAction(work.ModeBuild, work.ModeBuild, withTests))
+	}
+	if group.extTests != nil {
+		compiles = append(compiles, b.CompileAction(work.ModeBuild, work.ModeBuild, group.extTests))
+	}
+	return compiles
+}
+
+// testmainCompileActor runs a step of compiling the generated main of a binary
+// holding several packages' tests. When the tests of some of them failed to
+// compile, the main is rendered and compiled without their units, and the rest
+// still link and run. Any other failed import fails it as it would any compile.
+type testmainCompileActor struct {
+	inner    work.Actor
+	testMain *load.Package
+	units    map[*work.Action]string // a member's test package compile, to its unit
+	file     string                  // the generated main's source
+}
+
+func (actor *testmainCompileActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
+	drop := make(map[string]bool)
+	for _, dep := range a.Deps {
+		if dep.Failed == nil || dep.Package == nil {
+			continue // an action of no package only orders the ones that build
+		}
+		unit, isMember := actor.units[dep]
+		if !isMember {
+			return nil // a.Failed stays, as the failed import left it
+		}
+		drop[unit] = true
+	}
+	if len(drop) > 0 {
+		content, err := load.RenderTestmainWithout(actor.testMain, drop)
+		if err != nil {
+			return nil // every package's tests failed: nothing is left to link
+		}
+		if !cfg.BuildN {
+			if err := os.WriteFile(actor.file, content, 0666); err != nil {
+				return err
+			}
+		}
+	}
+	a.Failed = nil
+	return actor.inner.Act(b, ctx, a)
+}
+
+// testLinkActor links a binary holding several packages' tests. A package
+// whose tests failed to compile is linked as itself, in the place its tests
+// held, and a test package that failed is left out.
+type testLinkActor struct {
+	inner work.Actor
+}
+
+func (actor *testLinkActor) Act(b *work.Builder, ctx context.Context, a *work.Action) error {
+	if a.Deps[0].Failed != nil {
+		return nil // the generated main did not compile
+	}
+	seen := make(map[*work.Action]bool)
+	kept := make([]*work.Action, 0, len(a.Deps))
+	keep := func(dep *work.Action) {
+		if !seen[dep] {
+			seen[dep] = true
+			kept = append(kept, dep)
+		}
+	}
+	for _, dep := range a.Deps {
+		if dep.Failed == nil {
+			keep(dep)
+			continue
+		}
+		if dep.Package == nil {
+			continue // an action of no package only orders the ones that build
+		}
+		replaced := dep.Package.Internal.TestVariantOf
+		if replaced == nil {
+			continue
+		}
+		for _, dep2 := range dep.Deps {
+			if dep2.Package == replaced && dep2.Mode == "build" && dep2.Failed == nil {
+				keep(dep2)
+			}
+		}
+	}
+	a.Deps = kept
+	a.Failed = nil
+	return actor.inner.Act(b, ctx, a)
+}
+
+// copyTestBinary writes a copy of the linked test binary to a.Target. Several
+// packages' copies come from one link, so the link's own output stays in place
+// for the tests that run from it.
+func copyTestBinary(b *work.Builder, ctx context.Context, a *work.Action) error {
+	if err := work.AllowInstall(a); err != nil {
+		return err
+	}
+	sh := b.Shell(a)
+	if err := sh.Mkdir(filepath.Dir(a.Target)); err != nil {
+		return err
+	}
+	if err := sh.CopyFile(a.Target, a.Deps[0].BuiltTarget(), 0777, false); err != nil {
+		return fmt.Errorf("go %s %s: %v", cfg.CmdName, a.Package.ImportPath, err)
+	}
 	return nil
 }
 

@@ -58,7 +58,7 @@ func mkzdefaultcc(dir, file string) {
 
 	var buf strings.Builder
 	writeHeader(&buf)
-	fmt.Fprintf(&buf, "package main\n")
+	fmt.Fprintf(&buf, "package cgo\n")
 	fmt.Fprintln(&buf)
 	fmt.Fprintf(&buf, "const defaultPkgConfig = `%s`\n", defaultpkgconfig)
 	buf.WriteString(defaultCCFunc("defaultCC", defaultcc))
