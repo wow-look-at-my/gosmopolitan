@@ -36,12 +36,20 @@ var exeOnce struct {
 
 func executable() (string, error) {
 	if path, err := Readlink("/proc/self/exe"); err == nil {
-		// When the executable has been deleted then Readlink returns a
-		// path appended with " (deleted)".
-		return stringslite.TrimSuffix(path, " (deleted)"), nil
+		// Readlink appends " (deleted)" for a file nothing links to.
+		path = stringslite.TrimSuffix(path, " (deleted)")
+		// An APE boots through a loader that execs a memfd, so on Linux
+		// the link reads "/memfd:<name>". That is the anonymous file's
+		// name, not a path: nothing opens it, and a program that re-execs
+		// itself by it fails. The loader passes the APE's own path as
+		// argv[0], which is the answer, so resolve that instead.
+		if !stringslite.HasPrefix(path, "/memfd:") {
+			return path, nil
+		}
 	}
 
-	// No usable procfs on this host: resolve Args[0] instead, once.
+	// No usable procfs on this host, or a memfd behind it: resolve Args[0]
+	// instead, once.
 	exeOnce.Do(func() { exeOnce.path, exeOnce.err = resolveArgv0() })
 	return exeOnce.path, exeOnce.err
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -184,8 +185,23 @@ func (b *Builder) toolID(name string) string {
 				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
 			}
 		}
+		// vet and fix are one binary here, so their content IDs agree and a
+		// fix run would read vet's cached output. The tool's name tells them
+		// apart, and it is a name rather than a path so the key travels.
+		if name == "vet" {
+			id = toolWord(path) + " " + id
+		}
 		return id
 	})
+}
+
+// toolWord answers the name a tool command line runs: the word after "tool"
+// for a linked tool, else the program's base name without its suffix.
+func toolWord(cmdline []string) string {
+	if len(cmdline) >= 3 && cmdline[len(cmdline)-2] == "tool" {
+		return cmdline[len(cmdline)-1]
+	}
+	return strings.TrimSuffix(filepath.Base(cmdline[len(cmdline)-1]), cfg.ToolExeSuffix())
 }
 
 // parseToolID computes the tool ID from one line of "-V=full" output printed
@@ -784,6 +800,11 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	}
 	if len(matches) == 0 {
 		// Assume the user specified -buildid= to override what we were going to choose.
+		// A package carrying no build ID cannot be validated on a hit, so
+		// only a linked binary is still cached.
+		if a.Mode == "link" {
+			return b.cacheOutput(a, target)
+		}
 		return nil
 	}
 
@@ -801,31 +822,37 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 		return err
 	}
 
-	// Cache package builds, and cache executable builds if
-	// executable caching was requested. Executables are not
-	// cached by default because they are not reused
-	// nearly as often as individual packages, and they're
-	// much larger, so the cache-footprint-to-utility ratio
-	// of executables is much lower for executables.
-	if a.Mode == "build" {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			outputID, _, err := c.Put(a.actionID, r)
-			r.Close()
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
-			}
-			if b.NeedExport {
-				if err != nil {
-					return err
-				}
-				a.Package.Export = c.OutputFile(outputID)
-				a.Package.BuildID = a.buildID
-			}
+	// Cache package builds and linked binaries alike. A link is the longest
+	// action in a build of this toolchain's own binaries, and useCache reads
+	// a stored one back through the same lookup as a package.
+	if a.Mode == "build" || a.Mode == "link" {
+		return b.cacheOutput(a, target)
+	}
+	return nil
+}
+
+// cacheOutput stores the file a build or link action wrote under the
+// action's ID.
+func (b *Builder) cacheOutput(a *Action, target string) error {
+	c := a.cache()
+	r, err := os.Open(target)
+	if err != nil {
+		return nil
+	}
+	if a.output == nil {
+		panic("internal error: a.output not set")
+	}
+	outputID, _, err := c.Put(a.actionID, r)
+	r.Close()
+	if err == nil && cfg.BuildX {
+		b.Shell(a).ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
+	}
+	if b.NeedExport {
+		if err != nil {
+			return err
 		}
+		a.Package.Export = c.OutputFile(outputID)
+		a.Package.BuildID = a.buildID
 	}
 	return nil
 }

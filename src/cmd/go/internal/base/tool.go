@@ -30,6 +30,29 @@ func SetSelf(exe string, tools []string) {
 	}
 }
 
+// goCommand is the argv prefix that starts this go command again, when a
+// binary of another name links it and reaches it as "<self> go".
+var goCommand []string
+
+// SetGoCommand records the argv prefix that starts this go command again.
+func SetGoCommand(argv []string) {
+	goCommand = argv
+}
+
+// GoCommand answers the argv prefix that starts this go command again: the
+// recorded prefix, or this executable alone.
+func GoCommand() ([]string, error) {
+	if len(goCommand) > 0 {
+		return goCommand, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return []string{exe}, nil
+}
+
+
 // Linked reports whether this executable links the named tool.
 func Linked(toolName string) bool {
 	_, found := selfTools[toolName]

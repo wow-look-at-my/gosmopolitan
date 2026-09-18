@@ -505,13 +505,13 @@ func TestAPEFatMergeCompact(t *testing.T) {
 	if !bytes.Equal(neutralized[amdOff:], fatFull[amdOff:]) {
 		t.Errorf("compact payload spans differ from the default merge beyond the patched ELF header fields")
 	}
-	// Head: everything outside the script window (PE header before it,
-	// Mach-O header and APE loader after it) is unchanged; only the
-	// printf-encoded boot headers inside the script differ.
+	// Head: everything outside the script window (the PE header before it,
+	// the embedded loaders after it) is unchanged; only the printf-encoded
+	// boot headers inside the script differ.
 	if !bytes.Equal(neutralized[:apeScriptOffset], fatFull[:apeScriptOffset]) {
 		t.Errorf("compact APE head differs before the script region")
 	}
-	if !bytes.Equal(neutralized[apeMachoOffset:amdOff], fatFull[apeMachoOffset:amdOff]) {
+	if !bytes.Equal(neutralized[apeLdLinuxAMD64Offset:amdOff], fatFull[apeLdLinuxAMD64Offset:amdOff]) {
 		t.Errorf("compact APE head differs after the script region")
 	}
 
