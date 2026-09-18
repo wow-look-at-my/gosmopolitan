@@ -56,6 +56,7 @@ recheck:
 		ctxt:     ctxt,
 		packages: make(map[string]*types2.Package),
 	}
+	importTestedFirst(&importer)
 	conf := types2.Config{
 		Context:            ctxt,
 		GoVersion:          base.Flag.Lang,

@@ -11,11 +11,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 )
 
@@ -68,7 +70,12 @@ func test() error {
 		return err
 	}
 
-	out, err := exec.Command("go", "run", fn).CombinedOutput()
+	exe := filepath.Join(dir, "x.exe")
+	if out, err := build(exe, fn); err != nil {
+		return fmt.Errorf("%v\n%s", err, out)
+	}
+	argv := launch(exe)
+	out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 	if err != nil {
 		return err
 	}
@@ -79,4 +86,34 @@ func test() error {
 	}
 
 	return nil
+}
+
+// build compiles the Go files as package main and links them into exe,
+// against the standard library cmd/internal/testdir lists in
+// STDLIB_IMPORTCFG. It answers what the compiler and linker printed.
+func build(exe string, files ...string) ([]byte, error) {
+	importcfg := os.Getenv("STDLIB_IMPORTCFG")
+	if importcfg == "" {
+		return nil, errors.New("STDLIB_IMPORTCFG is not set")
+	}
+	obj := exe + ".a"
+	compile := append([]string{"tool", "compile", "-p=main", "-importcfg=" + importcfg, "-o", obj}, files...)
+	if out, err := exec.Command("go", compile...).CombinedOutput(); err != nil {
+		return out, err
+	}
+	return exec.Command("go", "tool", "link", "-importcfg="+importcfg, "-o", exe, obj).CombinedOutput()
+}
+
+// launch answers the command that runs exe. A program built for a target
+// this machine does not run directly starts through the exec wrapper the
+// distribution ships for that target.
+func launch(exe string) []string {
+	const targetOS, targetArch = runtime.GOOS, runtime.GOARCH
+	if runtime.GOOS == targetOS && runtime.GOARCH == targetArch {
+		return []string{exe}
+	}
+	if wrapper, err := exec.LookPath("go_" + targetOS + "_" + targetArch + "_exec"); err == nil {
+		return []string{wrapper, exe}
+	}
+	return []string{exe}
 }

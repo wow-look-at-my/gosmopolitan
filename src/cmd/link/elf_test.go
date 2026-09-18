@@ -4,7 +4,7 @@
 
 //go:build dragonfly || freebsd || linux || netbsd || openbsd || solaris
 
-package main
+package link
 
 import (
 	"cmd/internal/buildid"

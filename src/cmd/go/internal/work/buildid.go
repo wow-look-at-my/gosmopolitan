@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -146,7 +147,7 @@ func contentID(buildID string) string {
 // tool IDs do not make it impossible.)
 func (b *Builder) toolID(name string) string {
 	return b.toolIDCache.Do(name, func() string {
-		path := base.Tool(name)
+		path := base.ToolCmd(name)
 		desc := "go tool " + name
 
 		// Special case: -{vet,fix}tool overrides usual cmd/{vet,fix}
@@ -154,7 +155,7 @@ func (b *Builder) toolID(name string) string {
 		// (We use only "vet" terminology in the action graph.)
 		if name == "vet" {
 			path = VetTool
-			desc = VetTool
+			desc = strings.Join(VetTool, " ")
 		}
 
 		cmdline := str.StringList(cfg.BuildToolexec, path, "-V=full")
@@ -170,7 +171,7 @@ func (b *Builder) toolID(name string) string {
 		}
 
 		line := stdout.String()
-		id, ok := parseToolID(name, path == VetTool, line)
+		id, ok := parseToolID(name, name == "vet", line)
 		if !ok {
 			base.Fatalf("go: parsing buildID from %s -V=full: unexpected output:\n\t%s", desc, line)
 		}
@@ -179,13 +180,28 @@ func (b *Builder) toolID(name string) string {
 		// empty tool ID is one every such binary shares, and a build cache
 		// then serves objects across incompatible compilers. Hash the file.
 		if id == "" {
-			id = b.fileHash(path)
+			id = b.fileHash(path[0])
 			if id == "" {
 				base.Fatalf("go: %s prints no build ID and cannot be hashed", desc)
 			}
 		}
+		// vet and fix are one binary here, so their content IDs agree and a
+		// fix run would read vet's cached output. The tool's name tells them
+		// apart, and it is a name rather than a path so the key travels.
+		if name == "vet" {
+			id = toolWord(path) + " " + id
+		}
 		return id
 	})
+}
+
+// toolWord answers the name a tool command line runs: the word after "tool"
+// for a linked tool, else the program's base name without its suffix.
+func toolWord(cmdline []string) string {
+	if len(cmdline) >= 3 && cmdline[len(cmdline)-2] == "tool" {
+		return cmdline[len(cmdline)-1]
+	}
+	return strings.TrimSuffix(filepath.Base(cmdline[len(cmdline)-1]), cfg.ToolExeSuffix())
 }
 
 // parseToolID computes the tool ID from one line of "-V=full" output printed
@@ -446,23 +462,48 @@ var (
 	stdlibRecompiledIncOnce = sync.OnceFunc(stdlibRecompiled.Inc)
 )
 
-// testRunAction returns the run action for a test given the link action
-// for the test binary, if the only (non-test-barrier) action that depend
-// on the link action is the run action.
-func testRunAction(a *Action) *Action {
-	if len(a.triggers) != 1 || a.triggers[0].Mode != "test barrier" {
-		return nil
-	}
-	var runAction *Action
-	for _, t := range a.triggers[0].triggers {
-		if t.Mode == "test run" {
-			if runAction != nil {
-				return nil
+// testRunActions returns the run actions of the tests a link action's binary
+// holds, if running them is all the binary is needed for. Each run reaches
+// the link through a test barrier of its own.
+func testRunActions(a *Action) []*Action {
+	var runs []*Action
+	for _, barrier := range a.triggers {
+		if barrier.Mode != "test barrier" {
+			return nil
+		}
+		var runAction *Action
+		for _, t := range barrier.triggers {
+			if t.Mode == "test run" {
+				if runAction != nil {
+					return nil
+				}
+				runAction = t
 			}
-			runAction = t
+		}
+		if runAction == nil || runAction.TryCache == nil {
+			return nil
+		}
+		runs = append(runs, runAction)
+	}
+	return runs
+}
+
+// testResultsCached reports whether every test a link action's binary holds
+// has a cached result, which makes the link unnecessary. Each run is asked
+// even after one misses: asking is what records the key a run's result is
+// saved under, and a run never asked here is found by no later build.
+func testResultsCached(b *Builder, a *Action) bool {
+	runs := testRunActions(a)
+	if len(runs) == 0 {
+		return false
+	}
+	cached := true
+	for _, ra := range runs {
+		if !ra.TryCache(b, ra, a) {
+			cached = false
 		}
 	}
-	return runAction
+	return cached
 }
 
 // useCache tries to satisfy the action a, which has action ID actionHash,
@@ -591,11 +632,11 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	// we only cache executables produced for 'go run' (and soon, for 'go tool').
 	//
 	// Special case for linking a test binary: if the only thing we
-	// want the binary for is to run the test, and the test result is cached,
+	// want the binary for is to run its tests, and every test result is cached,
 	// then to avoid the link step, report the link as up-to-date.
 	// We avoid the nested build ID problem in the previous special case
 	// by recording the test results in the cache under the action ID half.
-	if ra := testRunAction(a); ra != nil && ra.TryCache != nil && ra.TryCache(b, ra, a) {
+	if testResultsCached(b, a) {
 		// Best effort attempt to display output from the compile and link steps.
 		// If it doesn't work, it doesn't work: reusing the test result is more
 		// important than reprinting diagnostic information.
@@ -759,6 +800,11 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	}
 	if len(matches) == 0 {
 		// Assume the user specified -buildid= to override what we were going to choose.
+		// A package carrying no build ID cannot be validated on a hit, so
+		// only a linked binary is still cached.
+		if a.Mode == "link" {
+			return b.cacheOutput(a, target)
+		}
 		return nil
 	}
 
@@ -776,31 +822,37 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 		return err
 	}
 
-	// Cache package builds, and cache executable builds if
-	// executable caching was requested. Executables are not
-	// cached by default because they are not reused
-	// nearly as often as individual packages, and they're
-	// much larger, so the cache-footprint-to-utility ratio
-	// of executables is much lower for executables.
-	if a.Mode == "build" {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			outputID, _, err := c.Put(a.actionID, r)
-			r.Close()
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
-			}
-			if b.NeedExport {
-				if err != nil {
-					return err
-				}
-				a.Package.Export = c.OutputFile(outputID)
-				a.Package.BuildID = a.buildID
-			}
+	// Cache package builds and linked binaries alike. A link is the longest
+	// action in a build of this toolchain's own binaries, and useCache reads
+	// a stored one back through the same lookup as a package.
+	if a.Mode == "build" || a.Mode == "link" {
+		return b.cacheOutput(a, target)
+	}
+	return nil
+}
+
+// cacheOutput stores the file a build or link action wrote under the
+// action's ID.
+func (b *Builder) cacheOutput(a *Action, target string) error {
+	c := a.cache()
+	r, err := os.Open(target)
+	if err != nil {
+		return nil
+	}
+	if a.output == nil {
+		panic("internal error: a.output not set")
+	}
+	outputID, _, err := c.Put(a.actionID, r)
+	r.Close()
+	if err == nil && cfg.BuildX {
+		b.Shell(a).ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
+	}
+	if b.NeedExport {
+		if err != nil {
+			return err
 		}
+		a.Package.Export = c.OutputFile(outputID)
+		a.Package.BuildID = a.buildID
 	}
 	return nil
 }

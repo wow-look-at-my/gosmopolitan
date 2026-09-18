@@ -159,7 +159,7 @@ func TestLargeTextSectionSplitting(t *testing.T) {
 	// is arbitrary; we just need something sufficiently large that uses
 	// external linking.
 	exe := filepath.Join(dir, "go.exe")
-	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, "-ldflags=-linkmode=external -debugtextsize=1048576", "cmd/go").CombinedOutput()
+	out, err := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", exe, "-ldflags=-linkmode=external -debugtextsize=1048576", "cmd/go/main").CombinedOutput()
 	if err != nil {
 		t.Fatalf("build failure: %s\n%s\n", err, string(out))
 	}

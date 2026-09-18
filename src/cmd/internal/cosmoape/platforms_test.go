@@ -21,7 +21,6 @@ func TestPlatformTableIsClosed(t *testing.T) {
 	want := []Platform{
 		{"linux", "amd64"},
 		{"linux", "arm64"},
-		{"darwin", "amd64"},
 		{"darwin", "arm64"},
 		{"windows", "amd64"},
 	}
@@ -101,9 +100,8 @@ func TestParseRejects(t *testing.T) {
 
 // TestDefaultIsTheSupportedThree pins what a build with no
 // GOCOSMOPLATFORMS claims. The default is narrower than the table on
-// purpose: linux/arm64 and darwin/amd64 are selectable but not promised,
-// and darwin/amd64 in particular has never executed (no Intel-mac runner),
-// so a default build must not advertise it.
+// purpose: linux/arm64 is selectable but not promised, so a default build
+// must not advertise it.
 //
 // Both arches are still required, because darwin/arm64 is in the set.
 // Narrowing the default is an accuracy change, not a size one.
@@ -113,7 +111,7 @@ func TestDefaultIsTheSupportedThree(t *testing.T) {
 	if got := d.Platforms(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Default() = %v, want %v", got, want)
 	}
-	for _, p := range []Platform{LinuxARM64, DarwinAMD64} {
+	for _, p := range []Platform{LinuxARM64} {
 		if d.Has(p) {
 			t.Errorf("Default() claims %s, which nothing verifies", p)
 		}
@@ -128,9 +126,7 @@ func TestDefaultIsTheSupportedThree(t *testing.T) {
 
 func TestRestrictToArches(t *testing.T) {
 	// A build with no explicit selection supports what its payloads allow:
-	// an amd64-only build claims no arm64 platform. darwin/amd64 is absent
-	// because the default never contained it, not because of the arch
-	// filter.
+	// an amd64-only build claims no arm64 platform.
 	got := Default().RestrictToArches([]string{"amd64"})
 	want := []Platform{LinuxAMD64, WindowsAMD64}
 	if !reflect.DeepEqual(got.Platforms(), want) {

@@ -61,8 +61,8 @@ stdout -count=2 'BenchmarkTwo'
 stdout -count=2 'BenchmarkThree'
 
 
-# -count asks for a repeat, and this toolchain runs the tests once whatever it
-# says. The shuffled order is the same order the count-free run above produces.
+# go test ignores -count, so the tests run once. The shuffled order is the
+# same order the count-free run above produces.
 go test -v -shuffle=43 -count=4 foo_test.go
 stdout '^-test.shuffle 43'
 stdout '(?s)TestThree(.*)TestTwo(.*)TestOne'
