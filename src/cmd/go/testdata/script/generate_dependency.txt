@@ -5,24 +5,33 @@
 
 env GOFLAGS=-mod=mod
 
-# The package carries a directive, and the zip does not carry what it writes.
+# The zip does not carry what the directive writes, so the fetch runs it. The
+# extracted module is the module completed: the zip's files and the ones its own
+# generators added.
 go mod download example.com/generated
-! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
 
-# The build reads the generated copy rather than the empty package.
+# The build reads the completed module rather than the empty package.
 go build ./...
 
-# The generated tree is in the module cache, beside the module it comes from,
-# rather than inside it: go.sum pins the bytes the proxy served, and a generated
-# file in that tree would report every module as modified.
-exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
-! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+# The directory's own checksum is recorded when it is completed, and that is
+# what go mod verify holds it to. It is not the zip's checksum, and nothing is
+# excluded from either of them.
+exists $GOPATH/pkg/mod/cache/download/example.com/generated/@v/v1.0.0.complete
 go mod verify
 
-# GOGENERATEDEPS=off reads exactly what was fetched, so the symbol is undefined.
+# A file the zip carries keeps the zip's bytes, whatever the generator wrote
+# over it. What the module's authors published is the module.
+grep 'the module published this' $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/kept.go
+
+# GOGENERATEDEPS=off reads exactly what the zip carried, so the symbol is
+# undefined. It governs the fetch, so it needs a module cache that has not
+# already completed this module.
 env GOGENERATEDEPS=off
+env GOMODCACHE=$WORK/mod-off
 ! go build ./...
 stderr 'undefined: lang\.Name'
+! exists $WORK/mod-off/example.com/generated@v1.0.0/lang/lang.gen.go
 
 -- go.mod --
 module example.com/consumer
