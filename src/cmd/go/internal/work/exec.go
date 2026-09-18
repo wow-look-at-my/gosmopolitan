@@ -73,6 +73,25 @@ func actionList(root *Action) []*Action {
 }
 
 // Do runs the action graph rooted at root.
+// cacheCheckWorkers is how many cache checks run at once. A check starts no
+// process, so the count is not a load on the machine; it is how many keys
+// reach the shared tier's coalescer together.
+const cacheCheckWorkers = 256
+
+// fullyCached reports whether a is a build action whose cache check found
+// every output it needs, so that running it starts no process.
+func fullyCached(a *Action) bool {
+	if a.Mode != "build" {
+		return false
+	}
+	for _, dep := range a.Deps {
+		if pr, ok := dep.Provider.(*checkCacheProvider); ok {
+			return pr.need == 0
+		}
+	}
+	return false
+}
+
 func (b *Builder) Do(ctx context.Context, root *Action) {
 	ctx, span := trace.StartSpan(ctx, "exec.Builder.Do ("+root.Mode+" "+root.Target+")")
 	defer span.Done()
@@ -121,6 +140,23 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	writeActionGraph()
 
 	b.readySema = make(chan bool, len(all))
+	b.readyCacheSema = make(chan bool, len(all))
+
+	// enqueue makes a runnable action available to the pool that runs its
+	// kind. A cache check goes to the cache pool, and so does a build whose
+	// check found everything: it starts no compiler, and the checks of the
+	// packages importing it wait on it. Behind -p real compiles in the build
+	// pool, those checks reached the shared tier one at a time. b.exec must
+	// be held.
+	enqueue := func(a *Action) {
+		if a.Mode == "build check cache" || fullyCached(a) {
+			b.readyCache.push(a)
+			b.readyCacheSema <- true
+			return
+		}
+		b.ready.push(a)
+		b.readySema <- true
+	}
 
 	// Initialize per-action execution state.
 	for _, a := range all {
@@ -129,8 +165,7 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 		}
 		a.pending = len(a.Deps)
 		if a.pending == 0 {
-			b.ready.push(a)
-			b.readySema <- true
+			enqueue(a)
 		}
 	}
 
@@ -214,13 +249,13 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 				}
 			}
 			if a0.pending--; a0.pending == 0 {
-				b.ready.push(a0)
-				b.readySema <- true
+				enqueue(a0)
 			}
 		}
 
 		if a == root {
 			close(b.readySema)
+			close(b.readyCacheSema)
 		}
 	}
 
@@ -235,32 +270,41 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 		par = 1
 	}
 	trace.NameProcess(ctx, "go build")
-	for i := 0; i < par; i++ {
-		wg.Add(1)
-		go func() {
-			// A named row reads as the worker that owns it. Unnamed, a
-			// parallel build is a wall of numbers in the viewer, and which
-			// number a worker got is an accident of scheduling.
-			ctx := trace.StartNamedGoroutine(ctx, fmt.Sprintf("build worker %d", i), i)
-			defer wg.Done()
-			for {
-				select {
-				case _, ok := <-b.readySema:
-					if !ok {
-						return
-					}
-					// Receiving a value from b.readySema entitles
-					// us to take from the ready queue.
-					b.exec.Lock()
-					a := b.ready.pop()
-					b.exec.Unlock()
-					handle(ctx, a)
-				case <-base.Interrupted:
-					base.SetExitStatus(1)
+	worker := func(name string, i int, sema chan bool, queue *actionQueue) {
+		defer wg.Done()
+		// A named row reads as the worker that owns it. Unnamed, a
+		// parallel build is a wall of numbers in the viewer, and which
+		// number a worker got is an accident of scheduling.
+		ctx := trace.StartNamedGoroutine(ctx, fmt.Sprintf("%s %d", name, i), i)
+		for {
+			select {
+			case _, ok := <-sema:
+				if !ok {
 					return
 				}
+				// Receiving a value from the semaphore entitles us to take
+				// from its queue.
+				b.exec.Lock()
+				a := queue.pop()
+				b.exec.Unlock()
+				handle(ctx, a)
+			case <-base.Interrupted:
+				base.SetExitStatus(1)
+				return
 			}
-		}()
+		}
+	}
+	for i := 0; i < par; i++ {
+		wg.Add(1)
+		go worker("build worker", i, b.readySema, &b.ready)
+	}
+	cachePar := cacheCheckWorkers
+	if cfg.BuildN {
+		cachePar = 1
+	}
+	for i := 0; i < cachePar; i++ {
+		wg.Add(1)
+		go worker("cache worker", par+i, b.readyCacheSema, &b.readyCache)
 	}
 
 	wg.Wait()

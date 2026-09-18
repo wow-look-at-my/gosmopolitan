@@ -1609,7 +1609,7 @@ func cmdbootstrap() {
 	if vflag > 0 {
 		xprintf("\n")
 	}
-	xprintf("Building Go toolchain3 using go_bootstrap and Go toolchain2.\n")
+	xprintf("Building Go toolchain3 using bin/go and Go toolchain2.\n")
 	// No -a. The paragraph above says the force-install exists because a
 	// RELEASE build reports its version in place of the build ID, so the go
 	// command never sees toolchain1 become toolchain2 and nothing looks
@@ -1617,7 +1617,11 @@ func cmdbootstrap() {
 	// its own content, release or not, so toolchain2 IS a new compiler as far
 	// as the go command is concerned and what depends on it rebuilds because
 	// it is genuinely out of date. -a only added the packages that were not.
-	goInstall(toolenv(), goBootstrap, toolchain...)
+	//
+	// toolchain2 is bin/go, and bin/go carries the shared cache client that
+	// go_bootstrap cannot. Under it, toolchain3 fetches what another run of
+	// the same sources published instead of compiling cmd/go a third time.
+	goInstall(toolenv(), gorootBinGo, toolchain...)
 	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")

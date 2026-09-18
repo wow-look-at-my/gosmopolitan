@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cmd/go/internal/base"
@@ -59,6 +60,12 @@ type Builder struct {
 	exec      sync.Mutex
 	readySema chan bool
 	ready     actionQueue
+	// A cache check starts no process and mostly waits on the shared tier,
+	// so it runs on its own pool, far wider than -p: the tier coalesces the
+	// lookups in flight into one request, and -p lookups make -p-key
+	// requests.
+	readyCacheSema chan bool
+	readyCache     actionQueue
 
 	id             sync.Mutex
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
@@ -174,11 +181,40 @@ func (b *Builder) RunnableTarget(a *Action) (string, error) {
 		return "", err
 	}
 	exe := dir + name
-	if err := sh.CopyFile(exe, built, 0o777, true); err != nil {
+	// One shared test binary runs several units, and every unit resolves this
+	// same path, hardlinks it into its own directory, and starts it. So this
+	// file is written once and never replaced. A copy straight onto the path
+	// truncates it, and a unit that links during the truncation starts a
+	// partly written binary, which macOS answers with SIGKILL. Replacing the
+	// path instead, by a rename, takes the name away from a unit that is
+	// about to link it.
+	//
+	// The copy lands on a private name, and a hard link gives it the shared
+	// name. The link fails when another unit already made that name, and that
+	// unit's file is the same binary, so this one uses it.
+	if info, err := os.Stat(exe); err == nil && info.Mode()&0o111 != 0 {
+		return exe, nil
+	}
+	tmp := fmt.Sprintf("%s.tmp%d.%d", exe, os.Getpid(), runnableSeq.Add(1))
+	if err := sh.CopyFile(tmp, built, 0o777, true); err != nil {
+		return "", err
+	}
+	if cfg.BuildN {
+		// The copy printed itself and wrote nothing, so there is no file to
+		// give the shared name to.
+		return exe, nil
+	}
+	err := os.Link(tmp, exe)
+	os.Remove(tmp)
+	if err != nil && !os.IsExist(err) {
 		return "", err
 	}
 	return exe, nil
 }
+
+// runnableSeq names the private file each RunnableTarget copy writes before it
+// links that file to the shared name. Two calls can share one destination.
+var runnableSeq atomic.Uint64
 
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action

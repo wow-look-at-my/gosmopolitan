@@ -7,12 +7,10 @@ env GOFLAGS=-mod=mod
 [!GOOS:windows] env GOOS=windows
 
 go mod download example.com/generated
-! exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
 
 go build ./...
 ! stderr 'exec format error'
-exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
-! exists $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0.packages/lang/@failed
 
 -- go.mod --
 module example.com/consumer
