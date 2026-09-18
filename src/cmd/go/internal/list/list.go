@@ -739,7 +739,9 @@ func runList(ctx context.Context, cmd *base.Command, args []string) {
 		a := &work.Action{}
 		// TODO: Use pkgsFilter?
 		for _, p := range pkgs {
-			if len(p.GoFiles)+len(p.CgoFiles) > 0 {
+			// An embedded standard package lists no files and still has an
+			// archive to hand out.
+			if len(p.GoFiles)+len(p.CgoFiles) > 0 || (cfg.EmbeddedStd && p.Standard) {
 				a.Deps = append(a.Deps, b.AutoAction(moduleLoader, work.ModeInstall, work.ModeInstall, p))
 			}
 		}

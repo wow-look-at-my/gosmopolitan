@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package covdata
 
 // This file contains functions and apis to support the "go tool
 // covdata" sub-commands that relate to dumping text format summaries

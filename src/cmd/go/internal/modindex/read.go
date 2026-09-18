@@ -680,6 +680,9 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 // for the goroot and compiler using the module index if possible,
 // and otherwise falling back to internal/goroot.IsStandardPackage
 func IsStandardPackage(goroot_, compiler, path string) bool {
+	if cfg.EmbeddedStd {
+		return cfg.EmbeddedStdPackage(path) != nil
+	}
 	if !enabled || compiler != "gc" {
 		return goroot.IsStandardPackage(fsys.ReadDir, goroot_, compiler, path)
 	}

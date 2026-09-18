@@ -12,7 +12,9 @@ A build leg builds the toolchain, asserts it, builds the APE binaries, and hands
 
 ## suite job
 
-`run.bash` on unix and `run.bat` on NT, one leg per host, over the toolchain that host's build leg handed over. It is the distribution's own all-tests entry point. It is the only test gate for the stdlib, the `cmd` packages and the `test/` corpus. Its own job, so a red suite no longer hides every downstream job behind a skipped build.
+`run.bash` on unix and `run.bat` on NT, over the toolchain that host's build leg handed over. It is the distribution's own all-tests entry point. It is the only test gate for the stdlib, the `cmd` packages and the `test/` corpus. Its own job, so a red suite no longer hides every downstream job behind a skipped build.
+
+**Parts.** Each host runs the suite as two legs side by side: `dist test -shard=0/2` and `-shard=1/2`. `wasm-suite` does the same per port. Part 0 is the package tests. They run as one `go test` over every package. Their grouped test binaries are built once, on one runner. Part 1 is every other registered test, `cmd/internal/testdir` included. Neither part builds a test binary the other builds. One leg already keeps all of its runner's cores busy. A second runner is what cuts the wall-clock. `dats/checks/suite-shards.dats` proves that the two parts together are the whole `-list` for every port, with each test in one part. It also proves that each sharded matrix runs every part.
 
 **Timeouts.** Job and step `timeout-minutes` are deliberate everywhere: a hung cosmo binary (or a wedged runner) must never burn GitHub's 6-hour default. Limits are sized ~2x (or a round number above) the slowest duration observed across recent green runs. See the values at each step.
 
@@ -32,7 +34,7 @@ Checks whose answer does not depend on the host. Each runs once, on the linux to
 
 **Build platform-subset APE binaries** (in the build job's APE step)**.** `GOCOSMOPLATFORMS` restricts which hosts the APE boots on. Two subsets, both executed on every test leg (see the test job):
 
-- `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. What it drops is the macOS Intel claim. This is the set consumers ask for, and every one of its three platforms must still boot the binary.
+- `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. It names the default set explicitly. Every one of its three platforms must still boot the binary.
 - `amd` - linux/amd64, windows/amd64. One payload: the arm64 image, its boot header and its sidecar are gone, which is where the size actually drops.
 
 Cross-compiles, so every build leg builds them with the fat binary, and the test legs run the ubuntu-origin ones. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.
@@ -46,6 +48,8 @@ It runs on every build leg, not one. Upstream runs the same suite on each builde
 It runs in short mode. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set, which is what upstream's ordinary builders run.
 
 It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist env` reports, so every go command it starts agrees with it, and it prepends `misc/cosmo` to PATH. The test binaries are APEs, and `execve` refuses one without a `binfmt_misc` entry, so cmd/go runs each through `go_cosmo_<arch>_exec`. The cosmo port keeps its own extra coverage in `dats/checks/cosmo-tests.dats`.
+
+Some tests exec a binary they built themselves, past that wrapper. Every Linux leg therefore runs a step named "Let the kernel exec an APE directly". That step registers the `binfmt_misc` entry against the committed loader in the checkout. The `F` flag pre-opens the loader. The entry then keeps working after the checkout moves. The emitted shell script registers this same entry, and `docs/APE-BOOT.md` describes it.
 
 One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
 
@@ -66,7 +70,9 @@ The fizzbuzz NT boot check (`dats/test/nt.dats`, over `dats/test/nt-boot.ps1`) s
 
 The cases restate the contract in `apetest/fizzbuzz_test.go`. `fizzbuzz.com <a> <b>` prints `fizzbuzz(a+b)` and a newline, and exits 0. `TestFizzbuzz_15` sends 10 and 5 and wants "fizzbuzz". `TestNumber_13` sends 7 and 6 and wants "13", which proves the values reach the program through the `GetCommandLineW` parse rather than a constant.
 
-Each origin runs a throwaway copy, because an APE self-assimilates on a unix host and the downloaded artifact must stay pristine.
+Each origin runs a throwaway copy. The artifact is shared with later steps. A copy keeps one step's run from being the reason another step sees a changed file.
+
+**Read-only boot.** Every leg proves an APE starts where nothing is writable. `dats/test/readonly-boot.dats` covers linux and darwin. `dats/test/nt.dats` covers NT through `readonly-boot.ps1`. Each case makes the program's directory read-only, along with the unpack directory and the loader's. It then writes a canary file there and requires that write to fail. A case that finds a writable directory fails, rather than reporting a pass it did not earn. On unix a resident loader must run the program, and a host with no loader at all must exit `121` and name the fix. NT needs no loader, so its case only has to run the program.
 
 **Test binary built on \<OS\> steps.** Each test step runs `go test` under an in-step process-group killer (see `with-deadline.sh`): runner-side step timeouts have been observed not. One wedged process even survived a process-group SIGKILL, i.e. it was stuck in an uninterruptible kernel state). The killer abandons such a corpse so the step still ends, and `go test`'s output goes through a file (`cat`'ed afterwards) so no abandoned descendant.
 

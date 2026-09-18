@@ -36,9 +36,9 @@ if [ "$status" -ne 0 ]; then
 	exit 2
 fi
 
-links=$(printf '%s\n' "$plan" | grep -c '/link -o ')
+links=$(printf '%s\n' "$plan" | grep -c -E '(/link| tool link) -o ')
 if [ "$links" -ne 1 ]; then
-	printf '%s\n' "$plan" | grep '/link -o ' >&2
+	printf '%s\n' "$plan" | grep -E '(/link| tool link) -o ' >&2
 	echo "go test $* for $goos/$goarch links $links test binaries, want 1" >&2
 	exit 1
 fi

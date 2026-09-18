@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main_test
+package covdata_test
 
 import (
 	cmdcovdata "cmd/covdata"
@@ -35,8 +35,7 @@ func TestMain(m *testing.M) {
 	// via export_test.go, and exit; CMDCOVDATA_TEST_RUN_MAIN is set below
 	// for actual test invocations.
 	if os.Getenv("CMDCOVDATA_TEST_RUN_MAIN") != "" {
-		cmdcovdata.Main()
-		os.Exit(0)
+		os.Exit(cmdcovdata.Main(os.Args[1:]))
 	}
 	flag.Parse()
 	topTmpdir, err := os.MkdirTemp("", "cmd-covdata-test-")

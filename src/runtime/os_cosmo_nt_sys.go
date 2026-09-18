@@ -144,6 +144,7 @@ const (
 	ntENAMETOOLONG = 36
 	ntENOSYS       = 38
 	ntENOTEMPTY    = 39
+	ntECANCELED    = 125
 	ntELOOP        = 40
 )
 
@@ -212,6 +213,7 @@ const (
 	_NT_S_IFCHR  = 0x2000
 	_NT_S_IFDIR  = 0x4000
 	_NT_S_IFREG  = 0x8000
+	_NT_S_IFLNK  = 0xA000
 	_NT_S_IFSOCK = 0xC000
 
 	_NT_DT_DIR = 4
@@ -265,6 +267,8 @@ func ntErrno(werr uintptr) uintptr {
 		return ntEINVAL
 	case _NT_ERROR_BROKEN_PIPE, 232: // BROKEN_PIPE, NO_DATA
 		return ntEPIPE
+	case 995: // OPERATION_ABORTED: CancelIoEx ended a blocked transfer
+		return ntECANCELED
 	case 112: // DISK_FULL
 		return ntENOSPC
 	case 4: // TOO_MANY_OPEN_FILES
@@ -285,6 +289,10 @@ func ntErrno(werr uintptr) uintptr {
 		return ntELOOP
 	case 193: // BAD_EXE_FORMAT (CreateProcessW on a non-executable)
 		return ntENOEXEC
+	case _NT_ERROR_PRIVILEGE_NOT_HELD: // CreateSymbolicLinkW without the right
+		return ntEPERM
+	case _NT_ERROR_NOT_A_REPARSE_POINT: // readlink of an ordinary file
+		return ntEINVAL
 	}
 	return ntEIO
 }
@@ -321,9 +329,10 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuOpenat(int32(a1), (*byte)(unsafe.Pointer(a2)), int32(a3), uint32(a4))
 	case ntSysClose:
 		return ntEmuClose(int32(a1))
-	case ntSysStat, ntSysLstat:
-		// No symlink support this wave: lstat == stat.
-		return ntEmuStat((*byte)(unsafe.Pointer(a1)), (*ntLinuxStat)(unsafe.Pointer(a2)))
+	case ntSysStat:
+		return ntEmuStat((*byte)(unsafe.Pointer(a1)), (*ntLinuxStat)(unsafe.Pointer(a2)), true)
+	case ntSysLstat:
+		return ntEmuStat((*byte)(unsafe.Pointer(a1)), (*ntLinuxStat)(unsafe.Pointer(a2)), false)
 	case ntSysFstat:
 		return ntEmuFstat(int32(a1), (*ntLinuxStat)(unsafe.Pointer(a2)))
 	case ntSysNewfstatat:
@@ -344,6 +353,8 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuRenameat(int32(a1), (*byte)(unsafe.Pointer(a2)), int32(a3), (*byte)(unsafe.Pointer(a4)))
 	case ntSysReadlinkat:
 		return ntEmuReadlinkat(int32(a1), (*byte)(unsafe.Pointer(a2)), unsafe.Pointer(a3), a4)
+	case ntSysSymlinkat:
+		return ntEmuSymlinkat((*byte)(unsafe.Pointer(a1)), int32(a2), (*byte)(unsafe.Pointer(a3)))
 	case ntSysFaccessat:
 		return ntEmuFaccessat(int32(a1), (*byte)(unsafe.Pointer(a2)), uint32(a3))
 	case ntSysChdir:
@@ -389,9 +400,9 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysFstatfs:
 		return ntEmuFstatfs(int32(a1), (*ntLinuxStatfs)(unsafe.Pointer(a2)))
 	case ntSysFchmod:
-		return ntEmuFchmod(int32(a1))
+		return ntEmuFchmod(int32(a1), uint32(a2))
 	case ntSysFchmodat:
-		return ntEmuFchmodat(int32(a1), (*byte)(unsafe.Pointer(a2)))
+		return ntEmuFchmodat(int32(a1), (*byte)(unsafe.Pointer(a2)), uint32(a3))
 	case ntSysFcntl:
 		ret, eno := ntFcntl(int32(a1), int32(a2), int32(a3))
 		if eno != 0 {
@@ -438,9 +449,11 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysSocketpair:
 		return ntEmuSocketpair(int32(a1), int32(a2), int32(a3), (*[2]int32)(unsafe.Pointer(a4)))
 	case ntSysDup:
-		// Socket-kind fds only this wave (net.FileConn's dup
-		// fallback); files/pipes stay ENOSYS. See ntEmuDup.
 		return ntEmuDup(int32(a1))
+	case ntSysDup2:
+		return ntEmuDup2(int32(a1), int32(a2))
+	case ntSysDup3:
+		return ntEmuDup3(int32(a1), int32(a2), int32(a3))
 
 	case ntSysGetpid, ntSysGetpgrp:
 		// getpgrp: no process groups on NT; report the pid, which is
@@ -805,13 +818,14 @@ func ntFiletimeToTimespec(lo, hi uint32) ntLinuxTimespec {
 // information. Decisions (documented once, here):
 //   - dev/ino come from VolumeSerialNumber and the NTFS FileIndex, so
 //     os.SameFile works across path spellings (/tmp vs /c/...).
-//   - Modes are synthetic: directories 0755, files 0755 (0555 when
-//     the READONLY attribute is set). Everything stays "executable"
-//     because NT has no x bit and path-based lookups (exec.LookPath)
-//     gate on 0111.
+//   - Modes are synthetic: 0755, or 0555 when the READONLY attribute
+//     is set, for files and directories alike; a symlink is 0777. The
+//     owner's write bit is the one real bit (ntChmodW carries it the
+//     other way). Everything stays "executable" because NT has no x
+//     bit and path-based lookups (exec.LookPath) gate on 0111.
 //   - ctime is filled from the CreationTime (NT has no status-change
 //     time; BY_HANDLE_FILE_INFORMATION has no ChangeTime field).
-func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation) {
+func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation, executable bool) {
 	*dst = ntLinuxStat{}
 	dst.dev = uint64(info.VolumeSerialNumber)
 	dst.ino = uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow)
@@ -820,13 +834,15 @@ func ntStatFromInfo(dst *ntLinuxStat, info *ntByHandleFileInformation) {
 		nlink = 1
 	}
 	dst.nlink = uint64(nlink)
-	switch {
-	case info.FileAttributes&_NT_FILE_ATTRIBUTE_DIRECTORY != 0:
+	dst.mode = _NT_S_IFREG | 0o644
+	if executable {
+		dst.mode |= 0o111
+	}
+	if info.FileAttributes&_NT_FILE_ATTRIBUTE_DIRECTORY != 0 {
 		dst.mode = _NT_S_IFDIR | 0o755
-	case info.FileAttributes&_NT_FILE_ATTRIBUTE_READONLY != 0:
-		dst.mode = _NT_S_IFREG | 0o555
-	default:
-		dst.mode = _NT_S_IFREG | 0o755
+	}
+	if info.FileAttributes&_NT_FILE_ATTRIBUTE_READONLY != 0 {
+		dst.mode &^= 0o222
 	}
 	if dst.mode&_NT_S_IFDIR == 0 {
 		dst.size = int64(info.FileSizeHigh)<<32 | int64(info.FileSizeLow)
@@ -864,24 +880,62 @@ func ntFstatHandle(h uintptr, dst *ntLinuxStat) uintptr {
 		}
 		return ntErrno(werr)
 	}
-	ntStatFromInfo(dst, &info)
+	executable := false
+	if name, eno := ntHandlePathW(h); eno == 0 {
+		executable = ntIsExecutableName(name)
+	}
+	ntStatFromInfo(dst, &info, executable)
 	return 0
 }
 
-// ntStatW opens w for attributes only and stats it.
-func ntStatW(w []uint16, dst *ntLinuxStat) uintptr {
+// ntIsExecutableName reports whether w, an NT path, ends in an extension
+// Windows executes. That is the execute bit a stat reports on NT.
+func ntIsExecutableName(w []uint16) bool {
+	n := len(w)
+	for n > 0 && w[n-1] == 0 {
+		n--
+	}
+	if n < 4 || w[n-4] != '.' {
+		return false
+	}
+	var ext [3]byte
+	for i, c := range w[n-3 : n] {
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c > 0x7f {
+			return false
+		}
+		ext[i] = byte(c)
+	}
+	return ext == [3]byte{'e', 'x', 'e'} || ext == [3]byte{'c', 'o', 'm'} ||
+		ext == [3]byte{'b', 'a', 't'} || ext == [3]byte{'c', 'm', 'd'}
+}
+
+// ntStatW opens w for attributes only and stats it. With follow unset
+// a symlink is opened as itself (lstat) and reported as one, size 0.
+func ntStatW(w []uint16, dst *ntLinuxStat, follow bool) uintptr {
+	flags := uintptr(_NT_FILE_FLAG_BACKUP_SEMANTICS)
+	if !follow {
+		flags |= _NT_FILE_FLAG_OPEN_REPARSE_POINT
+	}
 	h, werr := ntcallE(ntCreateFileWFn, uintptr(unsafe.Pointer(&w[0])), _NT_FILE_READ_ATTRIBUTES,
-		_NT_FILE_SHARE_ALL, 0, _NT_OPEN_EXISTING, _NT_FILE_FLAG_BACKUP_SEMANTICS, 0)
+		_NT_FILE_SHARE_ALL, 0, _NT_OPEN_EXISTING, flags, 0)
 	KeepAlive(w)
 	if h == _NT_INVALID_HANDLE_VALUE {
 		return ntErrno(werr)
 	}
 	eno := ntFstatHandle(h, dst)
+	if eno == 0 && !follow && ntHandleIsNameSurrogate(h) {
+		dst.mode = _NT_S_IFLNK | 0o777
+		dst.size = 0
+		dst.blocks = 0
+	}
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	return eno
 }
 
-func ntEmuStat(cpath *byte, dst *ntLinuxStat) (r1, r2, errno uintptr) {
+func ntEmuStat(cpath *byte, dst *ntLinuxStat, follow bool) (r1, r2, errno uintptr) {
 	if dst == nil {
 		return ntFail3(ntEINVAL)
 	}
@@ -889,7 +943,7 @@ func ntEmuStat(cpath *byte, dst *ntLinuxStat) (r1, r2, errno uintptr) {
 	if w == nil {
 		return ntFail3(ntENOENT)
 	}
-	if eno := ntStatW(w, dst); eno != 0 {
+	if eno := ntStatW(w, dst, follow); eno != 0 {
 		return ntFail3(eno)
 	}
 	return 0, 0, 0
@@ -928,13 +982,11 @@ func ntEmuFstatat(dirfd int32, cpath *byte, dst *ntLinuxStat, flags int32) (r1, 
 	if flags&_NT_AT_EMPTY_PATH != 0 && path == "" {
 		return ntEmuFstat(dirfd, dst)
 	}
-	// AT_SYMLINK_NOFOLLOW is accepted and ignored: no symlink support
-	// this wave, lstat == stat.
 	w, eno := ntAtPathW(dirfd, path)
 	if eno != 0 {
 		return ntFail3(eno)
 	}
-	if eno := ntStatW(w, dst); eno != 0 {
+	if eno := ntStatW(w, dst, flags&_NT_AT_SYMLINK_NOFOLLOW == 0); eno != 0 {
 		return ntFail3(eno)
 	}
 	return 0, 0, 0
@@ -1325,6 +1377,22 @@ func ntEmuUnlinkat(dirfd int32, cpath *byte, flags int32) (r1, r2, errno uintptr
 		fn = ntRemoveDirectoryWFn
 	}
 	r, werr := ntcallE(fn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
+	if r == 0 && werr == _NT_ERROR_ACCESS_DENIED {
+		// NT refuses to delete a read-only file, and a directory symlink
+		// is a directory to DeleteFileW. Linux lets unlink take both.
+		attrs, _ := ntcallE(ntGetFileAttributesWFn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
+		switch {
+		case uint32(attrs) == _NT_INVALID_FILE_ATTRIBUTES:
+		case flags&_NT_AT_REMOVEDIR == 0 && uint32(attrs)&(_NT_FILE_ATTRIBUTE_DIRECTORY|_NT_FILE_ATTRIBUTE_REPARSE_POINT) ==
+			_NT_FILE_ATTRIBUTE_DIRECTORY|_NT_FILE_ATTRIBUTE_REPARSE_POINT:
+			r, werr = ntcallE(ntRemoveDirectoryWFn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
+		case ntClearReadonly(w):
+			r, werr = ntcallE(fn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
+			if r == 0 && ntSetFileAttributesWFn != 0 {
+				ntcallE(ntSetFileAttributesWFn, uintptr(unsafe.Pointer(&w[0])), attrs, 0, 0, 0, 0, 0)
+			}
+		}
+	}
 	KeepAlive(w)
 	if r == 0 {
 		return ntFail3(ntErrno(werr))
@@ -1371,54 +1439,70 @@ func ntEmuFaccessat(dirfd int32, cpath *byte, mode uint32) (r1, r2, errno uintpt
 	return 0, 0, 0
 }
 
-// chmod is accepted and discarded (after an existence/validity
-// check): NT has no unix permission bits, and mapping mode&0200 onto
-// the READONLY attribute would make later unlinks fail in surprising
-// places. Documented no-op, matching stat's synthetic modes.
-func ntEmuFchmod(fd int32) (r1, r2, errno uintptr) {
-	if _, ok := ntFDLookup(fd); !ok {
+// chmod carries the owner's write bit as the READONLY attribute
+// (ntChmodW) and discards the rest, which stat synthesizes anyway. A
+// pipe, console or socket has no attribute to carry it, and Linux
+// accepts a chmod on those too.
+func ntEmuFchmod(fd int32, mode uint32) (r1, r2, errno uintptr) {
+	e, ok := ntFDLookup(fd)
+	if !ok {
 		return ntFail3(ntEBADF)
+	}
+	if e.kind != ntFDFile && e.kind != ntFDDir {
+		return 0, 0, 0
+	}
+	w, eno := ntHandlePathW(e.handle)
+	if eno != 0 {
+		return ntFail3(eno)
+	}
+	if eno := ntChmodW(w, mode); eno != 0 {
+		return ntFail3(eno)
 	}
 	return 0, 0, 0
 }
 
-func ntEmuFchmodat(dirfd int32, cpath *byte) (r1, r2, errno uintptr) {
+func ntEmuFchmodat(dirfd int32, cpath *byte, mode uint32) (r1, r2, errno uintptr) {
 	w, eno := ntAtPathW(dirfd, ntCPath(cpath))
 	if eno != 0 {
 		return ntFail3(eno)
 	}
-	attrs, werr := ntcallE(ntGetFileAttributesWFn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
-	KeepAlive(w)
-	if uint32(attrs) == _NT_INVALID_FILE_ATTRIBUTES {
-		return ntFail3(ntErrno(werr))
+	if eno := ntChmodW(w, mode); eno != 0 {
+		return ntFail3(eno)
 	}
 	return 0, 0, 0
 }
 
 // ---- readlink (os.Executable) ----
 
-// ntEmuReadlinkat supports exactly one link: /proc/self/exe, which
-// os/executable_cosmo.go reads first on every host. It answers with
-// GetModuleFileNameW in /c/-form, so os.Executable works without any
-// os-package changes. Everything else is EINVAL - the Linux errno for
-// "not a symlink" - because this wave has no symlink support.
+// ntEmuReadlinkat answers /proc/self/exe, which os/executable_cosmo.go
+// reads first on every host, with GetModuleFileNameW in /c/-form, so
+// os.Executable works without any os-package changes. Every other path
+// is read as a symlink (ntReadlinkW).
 func ntEmuReadlinkat(dirfd int32, cpath *byte, buf unsafe.Pointer, bufsiz uintptr) (r1, r2, errno uintptr) {
 	path := ntCPath(cpath)
-	if path != "/proc/self/exe" {
-		return ntFail3(ntEINVAL)
-	}
 	if buf == nil || bufsiz == 0 {
 		return ntFail3(ntEINVAL)
 	}
-	wbuf := make([]uint16, 4096)
-	n := ntcall(ntGetModuleFileNameWFn, 0, uintptr(unsafe.Pointer(&wbuf[0])), uintptr(len(wbuf)), 0, 0, 0)
-	if n == 0 || n >= uintptr(len(wbuf)) {
-		return ntFail3(ntEIO)
+	var s string
+	if path == "/proc/self/exe" {
+		wbuf := make([]uint16, 4096)
+		n := ntcall(ntGetModuleFileNameWFn, 0, uintptr(unsafe.Pointer(&wbuf[0])), uintptr(len(wbuf)), 0, 0, 0)
+		if n == 0 || n >= uintptr(len(wbuf)) {
+			return ntFail3(ntEIO)
+		}
+		// The OS reports the mapped module path; APE self-assimilation
+		// does not apply on NT (the PE header maps directly), so this is
+		// the real on-disk binary.
+		s = ntPathToLinux(wbuf[:n])
+	} else {
+		w, eno := ntAtPathW(dirfd, path)
+		if eno != 0 {
+			return ntFail3(eno)
+		}
+		if s, eno = ntReadlinkW(w); eno != 0 {
+			return ntFail3(eno)
+		}
 	}
-	// The OS reports the mapped module path; APE self-assimilation
-	// does not apply on NT (the PE header maps directly), so this is
-	// the real on-disk binary.
-	s := ntPathToLinux(wbuf[:n])
 	cnt := uintptr(len(s))
 	if cnt > bufsiz {
 		cnt = bufsiz // silent truncation, readlink(2) semantics
@@ -1470,12 +1554,14 @@ func ntEmuGetcwd(buf unsafe.Pointer, size uintptr) (r1, r2, errno uintptr) {
 // ---- getdents64 ----
 
 // FILE_ID_BOTH_DIR_INFO field offsets (x64): NextEntryOffset 0,
-// FileAttributes 56, FileNameLength 60 (bytes), FileId 96, FileName
-// 104. Verified against ntifs.h; records are 8-aligned.
+// FileAttributes 56, FileNameLength 60 (bytes), EaSize 64 (the reparse
+// tag when the entry is a reparse point), FileId 96, FileName 104.
+// Verified against ntifs.h; records are 8-aligned.
 const (
 	ntFIBDNextOff  = 0
 	ntFIBDAttrs    = 56
 	ntFIBDNameLen  = 60
+	ntFIBDEaSize   = 64
 	ntFIBDFileId   = 96
 	ntFIBDFileName = 104
 )
@@ -1564,13 +1650,17 @@ func ntParseDirInfo(tmp []byte, dst []ntDirEnt) []ntDirEnt {
 		next := *(*uint32)(unsafe.Add(rec, ntFIBDNextOff))
 		attrs := *(*uint32)(unsafe.Add(rec, ntFIBDAttrs))
 		nameLen := uintptr(*(*uint32)(unsafe.Add(rec, ntFIBDNameLen))) // bytes
+		tag := *(*uint32)(unsafe.Add(rec, ntFIBDEaSize))
 		fileID := *(*uint64)(unsafe.Add(rec, ntFIBDFileId))
 		if off+ntFIBDFileName+nameLen > uintptr(len(tmp)) {
 			break // malformed; refuse to guess
 		}
 		name := ntUTF16ToString(unsafe.Slice((*uint16)(unsafe.Add(rec, ntFIBDFileName)), nameLen/2))
 		typ := byte(_NT_DT_REG)
-		if attrs&_NT_FILE_ATTRIBUTE_DIRECTORY != 0 {
+		switch {
+		case ntIsNameSurrogate(attrs, tag):
+			typ = _NT_DT_LNK
+		case attrs&_NT_FILE_ATTRIBUTE_DIRECTORY != 0:
 			typ = _NT_DT_DIR
 		}
 		if fileID == 0 {

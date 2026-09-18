@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package compile
 
 import (
 	"cmd/compile/internal/amd64"
@@ -19,6 +19,7 @@ import (
 	"cmd/compile/internal/ssagen"
 	"cmd/compile/internal/wasm"
 	"cmd/compile/internal/x86"
+	"cmd/internal/objabi"
 	"fmt"
 	"internal/buildcfg"
 	"log"
@@ -42,18 +43,24 @@ var archInits = map[string]func(*ssagen.ArchInfo){
 	"wasm":     wasm.Init,
 }
 
-func main() {
+// Main runs the compiler with args, the command line after the program name,
+// and answers its exit status. A failure exits the process from inside the
+// compiler, as it always has.
+func Main(args []string) int {
+	objabi.Enter("compile", args, nil)
+
 	// disable timestamps for reproducible output
 	log.SetFlags(0)
 	log.SetPrefix("compile: ")
 
 	buildcfg.Check()
-	archInit, ok := archInits[buildcfg.GOARCH]
-	if !ok {
+	archInit, found := archInits[buildcfg.GOARCH]
+	if !found {
 		fmt.Fprintf(os.Stderr, "compile: unknown architecture %q\n", buildcfg.GOARCH)
 		os.Exit(2)
 	}
 
 	gc.Main(archInit)
 	base.Exit(0)
+	return 0
 }
