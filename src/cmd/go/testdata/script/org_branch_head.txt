@@ -48,6 +48,15 @@ exec git add -A
 exec git commit -m 'alpha feature'
 exec git checkout main
 
+# A branch a go.mod line can name, which no main module here is ever on.
+exec git checkout -b v1 main
+cp $WORK${/}alpha-v1${/}alpha.go alpha.go
+env GIT_AUTHOR_DATE=2026-01-04T05:06:07Z
+env GIT_COMMITTER_DATE=2026-01-04T05:06:07Z
+exec git add -A
+exec git commit -m 'alpha v1'
+exec git checkout main
+
 # The beta repository has no feature branch, so it always follows its default.
 cd $WORK/beta
 exec git init
@@ -151,6 +160,35 @@ stdout '^alpha-main$'
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
 
+# A line names a branch to send one module somewhere other than where the rest
+# of them go. None of these main modules is on a branch at all, so the named
+# branch is the only thing that reaches alpha's v1 head.
+cd $WORK/named
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+go run .
+stdout '^alpha-v1$'
+
+# The go-toolchain spellings that carried this before are read as well.
+cd $WORK/legacyname
+go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/beta
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+
+# A replacement supplies the version that reaches the build, so the name goes on
+# the replace line. The require line's own comment names no branch.
+cd $WORK/namedreplace
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+go run .
+stdout '^alpha-v1$'
+
+# A named branch never falls back to the default branch: a name that stopped
+# resolving is reported rather than absorbed.
+cd $WORK/namedgone
+! go list -m github.com/wow-look-at-my/alpha
+stderr 'names branch gone-with-the-merge for github.com/wow-look-at-my/alpha'
+
 # A replacement pointing at a directory is the source of truth for that module,
 # so nothing is resolved for it and its require line's token is not read either.
 # The version named here does not exist, so a build that read it would fail.
@@ -188,6 +226,88 @@ func Name() string { return "alpha-feature" }
 package sub
 
 func Name() string { return "sub-feature" }
+-- $WORK/alpha-v1/alpha.go --
+package alpha
+
+func Name() string { return "alpha-v1" }
+-- $WORK/named/go.mod --
+module example.com/named
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0 // branch=v1
+-- $WORK/named/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/legacyname/go.mod --
+module example.com/legacyname
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0 // go-toolchain:auto-branch=v1
+	github.com/wow-look-at-my/beta v0.0.0 // indirect; go-toolchain:auto-branch
+)
+-- $WORK/legacyname/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), beta.Name())
+}
+-- $WORK/namedreplace/go.mod --
+module example.com/namedreplace
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0 // branch=v1
+-- $WORK/namedreplace/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/namedgone/go.mod --
+module example.com/namedgone
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0 // branch=gone-with-the-merge
+-- $WORK/namedgone/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
 -- $WORK/beta/go.mod --
 module github.com/wow-look-at-my/beta
 

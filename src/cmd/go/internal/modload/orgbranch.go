@@ -50,6 +50,23 @@ type orgVersionKey struct {
 	path   string
 }
 
+// orgNamedBranch returns the branch the main module's go.mod names for the org
+// module at path, or "" when no line names one. A name reaches every use of that
+// module path, since the module graph carries one version of a path.
+func orgNamedBranch(ld *Loader, path string) string {
+	if ld.MainModules == nil {
+		return ""
+	}
+	for _, v := range ld.MainModules.Versions() {
+		if index := ld.MainModules.Index(v); index != nil {
+			if branch := index.orgBranch[path]; branch != "" {
+				return branch
+			}
+		}
+	}
+	return ""
+}
+
 // orgVersionCache memoizes the resolved version of an org module, the way
 // @latest lookups are cached. Every module in a repository still resolves
 // through one repository object, and so through one ls-remote.
@@ -117,6 +134,11 @@ func gitCheckedOutBranch(dir string) string {
 // of the head of the branch it follows. The version token on any require line
 // naming path is neither read nor consulted.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
+	if named := orgNamedBranch(ld, path); named != "" {
+		return orgVersionCache.Do(orgVersionKey{named, path}, func() (string, error) {
+			return orgNamedVersion(ld, ctx, path, named)
+		})
+	}
 	branch := orgBranch(ld)
 	if branch == "" {
 		branch = orgDefaultRev
@@ -137,6 +159,25 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		// branch. The repository itself always can.
 		return orgRepoVersion(ld, ctx, path, branch, err)
 	})
+}
+
+// orgNamedVersion returns the head of the branch the main module's go.mod names
+// for path.
+//
+// A named branch never falls back to the default branch. A name that stopped
+// resolving fails the build, which is what a merged pull request does to the
+// branch it was opened from.
+func orgNamedVersion(ld *Loader, ctx context.Context, path, branch string) (string, error) {
+	if info, err := Query(ld, ctx, path, branch, "", nil); err == nil {
+		return info.Version, nil
+	}
+	// A proxy answers for a revision only when it can reach the repository's
+	// refs. The repository itself always can.
+	info, err := ld.Fetcher().Lookup(ctx, "direct", path).Stat(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("go.mod names branch %s for %s: %w", branch, path, err)
+	}
+	return info.Version, nil
 }
 
 // orgRepoVersion asks the repository that publishes path for the head of
