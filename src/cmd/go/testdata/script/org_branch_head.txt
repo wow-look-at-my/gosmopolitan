@@ -183,11 +183,14 @@ stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 go run .
 stdout '^alpha-v1$'
 
-# A named branch never falls back to the default branch: a name that stopped
-# resolving is reported rather than absorbed.
+# A name the dependency has no branch for takes the default branch, the same as
+# the branch this repository is on does. The merge that closes a pull request
+# deletes the branch it was opened from, and the pin follows the code there.
 cd $WORK/namedgone
-! go list -m github.com/wow-look-at-my/alpha
-stderr 'names branch gone-with-the-merge for github.com/wow-look-at-my/alpha'
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+go run .
+stdout '^alpha-main$'
 
 # A replacement pointing at a directory is the source of truth for that module,
 # so nothing is resolved for it and its require line's token is not read either.
