@@ -1374,6 +1374,36 @@ func timelog(op, name string) {
 	fmt.Fprintf(timeLogFile, "%s %+.1fs %s %s\n", t.Format(time.UnixDate), t.Sub(timeLogStart).Seconds(), op, name)
 }
 
+var (
+	phaseName string
+	phaseAt   time.Time
+)
+
+// reportStep prints one step of the build or the suite and what it cost. A
+// suite's own `ok pkg 1.23s` times the RUN of a test binary, never the build
+// of one. These lines split a leg's wall time between compiling and testing.
+func reportStep(kind, name string, elapsed time.Duration) {
+	fmt.Printf("dist %s %.3fs %s\n", kind, elapsed.Seconds(), name)
+}
+
+// startPhase names the phase of the build now running and reports what the
+// phase before it cost. One phase runs until the next begins.
+func startPhase(name string) {
+	endPhase()
+	timelog("build", name)
+	phaseName = name
+	phaseAt = time.Now()
+}
+
+// endPhase closes the phase now running, for the last one of a build.
+func endPhase() {
+	if phaseName == "" {
+		return
+	}
+	reportStep("build", phaseName, time.Since(phaseAt))
+	phaseName = ""
+}
+
 // toolenv returns the environment to use when building commands in cmd.
 //
 // This is a function instead of a variable because the exact toolenv depends
@@ -1429,6 +1459,7 @@ var (
 func cmdbootstrap() {
 	timelog("start", "dist bootstrap")
 	defer timelog("end", "dist bootstrap")
+	defer endPhase()
 
 	// No -a. It cleaned the tree and forced every phase to recompile what the
 	// build cache already held, which is the whole cost of a second build and
@@ -1498,7 +1529,7 @@ func cmdbootstrap() {
 
 	setup()
 
-	timelog("build", "toolchain1")
+	startPhase("toolchain1")
 	checkCC()
 	bootstrapBuildTools()
 
@@ -1518,7 +1549,7 @@ func cmdbootstrap() {
 	os.Setenv("GOARCH", goarch)
 	os.Setenv("GOOS", goos)
 
-	timelog("build", "go_bootstrap")
+	startPhase("go_bootstrap")
 	xprintf("Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.\n")
 	install("runtime")     // dependency not visible in sources; also sets up textflag.h
 	install("time/tzdata") // no dependency in sources; creates generated file
@@ -1552,7 +1583,7 @@ func cmdbootstrap() {
 	//
 	//	toolchain2 = mk(new toolchain, toolchain1, go_bootstrap)
 	//
-	timelog("build", "toolchain2")
+	startPhase("toolchain2")
 	if vflag > 0 {
 		xprintf("\n")
 	}
@@ -1583,7 +1614,7 @@ func cmdbootstrap() {
 	//
 	//	toolchain3 = mk(new toolchain, toolchain2, go_bootstrap)
 	//
-	timelog("build", "toolchain3")
+	startPhase("toolchain3")
 	if vflag > 0 {
 		xprintf("\n")
 	}
@@ -1616,7 +1647,7 @@ func cmdbootstrap() {
 
 	if goos == oldgoos && goarch == oldgoarch {
 		// Common case - not setting up for cross-compilation.
-		timelog("build", "toolchain")
+		startPhase("toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
@@ -1625,7 +1656,7 @@ func cmdbootstrap() {
 		// GOOS/GOARCH does not match GOHOSTOS/GOHOSTARCH.
 		// Finish GOHOSTOS/GOHOSTARCH installation and then
 		// run GOOS/GOARCH installation.
-		timelog("build", "host toolchain")
+		startPhase("host toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
@@ -1634,7 +1665,7 @@ func cmdbootstrap() {
 		checkNotStale(toolenv(), goBootstrap, toolsToInstall...)
 		checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
 
-		timelog("build", "target toolchain")
+		startPhase("target toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
