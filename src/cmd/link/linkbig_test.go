@@ -6,7 +6,7 @@
 // successfully linked even when there are very large text
 // sections present.
 
-package main
+package link
 
 import (
 	"bytes"

@@ -741,7 +741,7 @@ func runTest(ctx context.Context, cmd *base.Command, args []string) {
 	work.BuildInit(moduleLoader)
 	work.VetFlags = testVet.flags
 	work.VetExplicit = testVet.explicit
-	work.VetTool = base.Tool("vet")
+	work.VetTool = base.ToolCmd("vet")
 
 	pkgOpts := load.PackageOpts{ModResolveTests: true}
 	pkgs = load.PackagesAndErrors(moduleLoader, ctx, pkgOpts, pkgArgs)
@@ -1876,7 +1876,10 @@ func (r *runTestActor) Act(b *work.Builder, ctx context.Context, a *work.Action)
 	// generated main imports. So the flag must not be passed there either --
 	// the testing package would reject it as unknown.
 	var unitArg []string
-	binary := buildAction.BuiltTarget()
+	binary, err := b.RunnableTarget(buildAction)
+	if err != nil {
+		return err
+	}
 	if r.shared {
 		unitArg = []string{"-test.unit=" + a.Package.ImportPath}
 		// The package's tests run from a file named for the package, as
@@ -2392,9 +2395,30 @@ var testlogMagic = []byte("# test log\n") // known to testing/internal/testdeps/
 // test log.
 func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error) {
 	testlog = bytes.TrimPrefix(testlog, testlogMagic)
-	h := cache.NewHash("testInputs")
+	sum := cache.NewHash("testInputs")
+	// Under gocachetest every hashed line is also printed, so two runs whose
+	// input IDs differ can be diffed down to the environment variable or file
+	// that moved.
+	var h io.Writer = sum
+	var lines bytes.Buffer
+	if cache.DebugTest {
+		h = io.MultiWriter(sum, &lines)
+		defer func() {
+			seen := make(map[string]struct{})
+			for line := range strings.Lines(lines.String()) {
+				if _, dup := seen[line]; dup {
+					continue
+				}
+				seen[line] = struct{}{}
+				fmt.Fprintf(os.Stderr, "testcache: %s: input %s", a.Package.ImportPath, line)
+			}
+		}()
+	}
 	// The runtime always looks at GODEBUG, without telling us in the testlog.
 	fmt.Fprintf(h, "env GODEBUG %x\n", hashGetenv("GODEBUG"))
+	if cache.DebugTest {
+		fmt.Fprintf(os.Stderr, "testcache: %s: GODEBUG=%q\n", a.Package.ImportPath, os.Getenv("GODEBUG"))
+	}
 	pwd := a.Package.Dir
 	for _, line := range bytes.Split(testlog, []byte("\n")) {
 		if len(line) == 0 {
@@ -2418,6 +2442,9 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			fmt.Fprintf(h, "env %s %x\n", name, hashGetenv(name))
 		case "chdir":
 			pwd = name // always absolute
+			if isRunScratch(name) {
+				break
+			}
 			fmt.Fprintf(h, "chdir %s %x\n", name, hashStat(name))
 		case "stat":
 			if !filepath.IsAbs(name) {
@@ -2444,8 +2471,7 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 			fmt.Fprintf(h, "open %s %x\n", name, fh)
 		}
 	}
-	sum := h.Sum()
-	return sum, nil
+	return sum.Sum(), nil
 }
 
 // isRunScratch reports whether name is scratch space this run created, which is
@@ -2461,17 +2487,26 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 // after that file changed. A test whose reads genuinely cannot be pinned down,
 // such as one that reads /proc, now misses instead. A miss costs a run. A
 // wrong hit costs the trust that makes the cache worth having at all.
+//
+// The name is compared as spelled and as resolved. A path that is gone cannot
+// be resolved, and a temporary directory that is a symlink (macOS spells it
+// /tmp and /var/folders, both of which resolve under /private) would otherwise
+// only ever match on the spelling the caller happened to use.
 func isRunScratch(name string) bool {
-	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	tmp := os.TempDir()
+	if search.InDir(name, tmp) != "" {
+		return true
+	}
+	realTmp, err := filepath.EvalSymlinks(tmp)
 	if err != nil {
-		tmp = os.TempDir()
+		realTmp = tmp
 	}
 	real, err := filepath.EvalSymlinks(name)
 	if err != nil {
 		// The path is gone, so only its own directory prefix can answer.
 		real = name
 	}
-	return search.InDir(real, tmp) != ""
+	return search.InDir(real, realTmp) != "" || search.InDir(name, realTmp) != ""
 }
 
 func hashGetenv(name string) cache.ActionID {

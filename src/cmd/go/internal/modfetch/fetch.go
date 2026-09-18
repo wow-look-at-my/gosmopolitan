@@ -91,7 +91,7 @@ func (f *Fetcher) Unzip(ctx context.Context, mod module.Version, zipfile string)
 			return "", err
 		}
 
-		return unzip(ctx, mod, zipfile)
+		return unzip(ctx, mod, zipfile, nil)
 	})
 }
 
@@ -115,10 +115,19 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 		return "", err
 	}
 
-	return unzip(ctx, mod, zipfile)
+	// A module is two zips. The BASE zip is the one above: what the proxy
+	// served, pinned by go.sum. The OVERLAY zip holds the files the module's
+	// own generators add to it, and it is the one the cache server keeps. See
+	// overlay.go.
+	return unzip(ctx, mod, zipfile, func(dir string) error {
+		return f.completeDir(ctx, mod, dir)
+	})
 }
 
-func unzip(ctx context.Context, mod module.Version, zipfile string) (dir string, err error) {
+// unzip extracts zipfile as mod's directory. complete, when given, runs over
+// the extracted tree before the directory is published, and what it adds is
+// part of the module from then on.
+func unzip(ctx context.Context, mod module.Version, zipfile string, complete func(dir string) error) (dir string, err error) {
 	unlock, err := lockVersion(ctx, mod)
 	if err != nil {
 		return "", err
@@ -184,6 +193,17 @@ func unzip(ctx context.Context, mod module.Version, zipfile string) (dir string,
 			os.Remove(partialPath)
 		}
 		return "", err
+	}
+	// The module is completed while it is still marked partial, so no other
+	// process reads a directory that has the base files and not the generated
+	// ones.
+	if complete != nil {
+		if err := complete(dir); err != nil {
+			if rmErr := RemoveAll(dir); rmErr == nil {
+				os.Remove(partialPath)
+			}
+			return "", err
+		}
 	}
 	if err := os.Remove(partialPath); err != nil {
 		return "", err

@@ -6,6 +6,7 @@ package load
 
 import (
 	"bytes"
+	"cmd/go/internal/cfg"
 	"context"
 	"errors"
 	"fmt"
@@ -64,6 +65,10 @@ type TestCover struct {
 // their dependencies have errors.
 // Only test packages without errors are returned.
 func TestPackagesFor(ld *modload.Loader, ctx context.Context, opts PackageOpts, p *Package, cover *TestCover) (testMain, withTests, extTests, perr *Package) {
+	if cfg.EmbeddedStd && p.Standard {
+		p.Error = &PackageError{Err: fmt.Errorf("%s: the standard library is embedded in this go command as compiled archives and cannot be tested; test it from a GOROOT source tree", p.ImportPath)}
+		return nil, nil, nil, p
+	}
 	testMain, withTests, extTests = TestPackagesAndErrors(ld, ctx, nil, opts, p, cover)
 	for _, p1 := range []*Package{withTests, extTests, testMain} {
 		if p1 == nil {
