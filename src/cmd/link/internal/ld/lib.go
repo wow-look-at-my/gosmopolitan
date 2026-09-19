@@ -2267,6 +2267,9 @@ int main() { return 0; }
 
 	outPath := filepath.Join(*flagTmpdir, "loadcfg_test.exe")
 	flags := hostlinkArchArgs(arch)
+	// The real link carries these, and -flto moves where ld puts the
+	// directory. A probe without them answers for a different link.
+	flags = append(flags, trimLinkerArgv(append(ldflag, flagExtldflags...))...)
 	flags = append(flags, "-o", outPath, src)
 	cmd := exec.Command(linker, flags...)
 	cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
@@ -2282,15 +2285,30 @@ int main() { return 0; }
 
 	switch oh := f.OptionalHeader.(type) {
 	case *pe.OptionalHeader64:
-		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
-			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
-		}
+		return peLoadConfigIsSound(oh.DataDirectory[:], oh.SizeOfImage)
 	case *pe.OptionalHeader32:
-		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
-			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
-		}
+		return peLoadConfigIsSound(oh.DataDirectory[:], oh.SizeOfImage)
 	}
 	return false
+}
+
+// peLoadConfigIsSound reports whether the load config directory names a
+// structure that lies inside the image.
+//
+// An address alone is not enough. Under -flto, GNU ld writes this directory
+// an address past the end of the image and a size of zero. Windows 10 and
+// later read the directory before they start an image, so it answers that
+// one with ERROR_BAD_EXE_FORMAT and the program never runs.
+func peLoadConfigIsSound(dirs []pe.DataDirectory, imageSize uint32) bool {
+	idx := int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)
+	if idx >= len(dirs) {
+		return false
+	}
+	dir := dirs[idx]
+	if dir.VirtualAddress == 0 || dir.Size == 0 {
+		return false
+	}
+	return uint64(dir.VirtualAddress)+uint64(dir.Size) <= uint64(imageSize)
 }
 
 // trimLinkerArgv returns a new copy of argv that does not include flags
