@@ -527,9 +527,28 @@ func (check *Checker) typeDecl(obj *TypeName, tdecl *syntax.TypeDecl) {
 			// wrong, so it says nothing about the enum.
 			if under := named.Underlying(); under != Typ[Invalid] && !isInteger(under) {
 				check.errorf(tdecl.Type, InvalidEnum, "invalid enum type: %s is not an integer type", under)
+				return
 			}
+			check.enumStringMethod(named, obj, tdecl)
 		}).describef(obj, "enum underlying(%s)", obj.Name())
 	}
+}
+
+// enumStringMethod declares String on an enum type, so the method set carries
+// it and a value satisfies fmt.Stringer. The body is generated in the back end
+// from the constants of this type; only the declaration belongs here.
+func (check *Checker) enumStringMethod(named *Named, obj *TypeName, tdecl *syntax.TypeDecl) {
+	// spec: "Declaring String on an enumerated type explicitly is an error:
+	// the two declarations would name one method."
+	for idx := 0; idx < named.NumMethods(); idx++ {
+		if method := named.Method(idx); method.Name() == "String" {
+			check.errorf(method.Pos(), InvalidEnum, "String is declared for enum type %s, which already has one", obj.Name())
+			return
+		}
+	}
+	recv := NewVar(tdecl.Pos(), check.pkg, "", named)
+	res := NewTuple(NewVar(tdecl.Pos(), check.pkg, "", Typ[String]))
+	named.AddMethod(NewFunc(tdecl.Pos(), check.pkg, "String", NewSignatureType(recv, nil, nil, nil, res, false)))
 }
 
 func (check *Checker) collectTypeParams(dst **TypeParamList, list []*syntax.Field) {
