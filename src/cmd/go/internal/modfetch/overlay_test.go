@@ -7,6 +7,7 @@ package modfetch
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"cmd/go/internal/gendep"
 
 	"golang.org/x/mod/module"
 )
@@ -234,5 +237,40 @@ func TestOverlayKeyNamesWhatItCompletes(test *testing.T) {
 	slices.Sort(keys)
 	if len(slices.Compact(keys)) != len(others) {
 		test.Errorf("two of the %d differing inputs share a key", len(others))
+	}
+}
+
+func TestCompleteDirLeavesASupersededModuleAlone(test *testing.T) {
+	// Superseded is package level, and this is the only test that writes it.
+	test.Serial()
+
+	dir := test.TempDir()
+	pkg := filepath.Join(dir, "imports")
+	if err := os.MkdirAll(pkg, 0o777); err != nil {
+		test.Fatal(err)
+	}
+	// The directive names a program no host has, so completing this module
+	// reports a failure. Skipping it is what this test reads.
+	source := "//go:generate a-program-no-host-has\n\npackage imports\n"
+	if err := os.WriteFile(filepath.Join(pkg, "imports.go"), []byte(source), 0o666); err != nil {
+		test.Fatal(err)
+	}
+	if len(gendep.Packages(dir)) == 0 {
+		test.Fatal("the directory carries no directive, so this would pass without the skip")
+	}
+
+	mod := module.Version{Path: "golang.org/x/tools", Version: "v0.11.0"}
+	var asked []module.Version
+	Superseded = func(other module.Version) bool {
+		asked = append(asked, other)
+		return true
+	}
+	test.Cleanup(func() { Superseded = nil })
+
+	if err := (&Fetcher{}).completeDir(context.Background(), mod, dir); err != nil {
+		test.Fatalf("completing a superseded module: %v", err)
+	}
+	if !slices.Equal(asked, []module.Version{mod}) {
+		test.Errorf("asked about %v, want the one module being fetched", asked)
 	}
 }
