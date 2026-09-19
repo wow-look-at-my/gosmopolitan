@@ -62,16 +62,28 @@ Read it against C++ one piece at a time. `enum` moves to where a Go type declara
 A member carries no string in the common case. Its display text is its own identifier. Write a tag where the identifier cannot be the text:
 
 ```go
-type Method enum uint8 {
-	Get  `GET`
-	Post `POST`
-}
-
 type Errno enum int32 {
-	NotFound = 404 `not found`
-	Conflict = 409 `conflict`
+	EPERM   = 1  `operation not permitted`
+	ENOENT  = 2  `no such file or directory`
+	ESRCH   = 3  `no such process`
+	EINTR   = 4  `interrupted system call`
+	EIO     = 5  `input/output error`
+	ENXIO   = 6  `no such device or address`
+	E2BIG   = 7  `argument list too long`
+	ENOEXEC = 8  `exec format error`
+	EBADF   = 9  `bad file descriptor`
+	ECHILD  = 10 `no child processes`
+	EAGAIN  = 11 `resource temporarily unavailable`
+	ENOMEM  = 12 `out of memory`
+	EACCES  = 13 `permission denied`
 }
 ```
+
+Each column does a job the others cannot. The kernel ABI pins the value. POSIX pins the identifier, which is terse on purpose. The text is the part a person reads, and nothing derives it from `ENXIO`.
+
+A tag equal to its own identifier is not worth writing. `New`, `Active` and `Idle` carry none. `ENXIO` carries one.
+
+This is what `syscall` does by hand today. `Errno.Error` reads a per-GOOS `errors = [...]string{...}` table, written apart from the `const` block, indexed by number, and kept in step by nobody. `zerrors_linux_amd64.go` is that shape at the length of a small book.
 
 The tag is the part that retires `stringer`. It is backquoted, and a struct field tag is the reason. Go already spells "trailing string literal that is metadata rather than value" that way. A reader who knows `json:"name"` therefore reads this without being told. An interpreted string sits where C++ puts the value, so `New "new"` on a `uint8` enum reads as an assignment of the wrong type. The `=` takes the value. The tag takes the text. Neither can be read as the other.
 
