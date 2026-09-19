@@ -212,6 +212,12 @@ func directives(files []string) int {
 			}
 			count++
 		}
+		// A line past the buffer ends the read, and the directives under it go
+		// uncounted. A count short by one is a module that completes without
+		// the file that directive writes.
+		if err := scan.Err(); err != nil {
+			base.Fatalf("go: reading %s: %v", file, err)
+		}
 		open.Close()
 	}
 	return count
@@ -253,6 +259,11 @@ func generatorNotShipped(stage, pkg string) string {
 				open.Close()
 				return gone
 			}
+		}
+		// A read that stopped short hides the rest of the directives, and a
+		// dropped path among them then reads as a package with none.
+		if err := scan.Err(); err != nil {
+			base.Fatalf("go: reading %s: %v", filepath.Join(dir, ent.Name()), err)
 		}
 		open.Close()
 	}

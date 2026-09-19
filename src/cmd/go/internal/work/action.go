@@ -501,6 +501,11 @@ func readpkglist(s *modload.Loader, shlibpath string) (pkgs []*load.Package) {
 			t := scanner.Text()
 			pkgs = append(pkgs, load.LoadPackageWithFlags(s, t, base.Cwd(), &stk, nil, 0))
 		}
+		// A note holding a line longer than the scanner takes ends the loop
+		// early, and the shared library then links against a short package list.
+		if err := scanner.Err(); err != nil {
+			base.Fatalf("reading package list from %s: %v", shlibpath, err)
+		}
 	}
 	return
 }

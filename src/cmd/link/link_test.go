@@ -627,6 +627,11 @@ func TestIssue34788Android386TLSSequence(t *testing.T) {
 			t.Errorf("objdump output contains unexpected R_TLS_LE reloc: %s", line)
 		}
 	}
+	// Output left unread is output left unchecked, which passes this test for
+	// the wrong reason.
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading objdump output: %v", err)
+	}
 }
 
 const testStrictDupGoSrc = `

@@ -51,6 +51,11 @@ func osCPUInfoName() string {
 			cpuMHz = value
 		}
 	}
+	// The buffer holds one CPU's entry, so a line longer than the scanner's
+	// own limit ends the loop with the name still unread.
+	if scanner.Err() != nil {
+		return ""
+	}
 
 	if modelName == "" {
 		return ""
