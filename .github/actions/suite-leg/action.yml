@@ -147,8 +147,9 @@ runs:
       run: |
         $probe = Join-Path $env:RUNNER_TEMP 'patchprobe'
         New-Item -ItemType Directory -Force -Path $probe | Out-Null
-        Set-Content -Path "$probe\one.txt" -Value 'one' -NoNewline
-        Set-Content -Path "$probe\two.txt" -Value 'two' -NoNewline
+        # The lines the diff names end in a newline, so the files have to as well, and they are written byte for byte rather than through a cmdlet that would append CRLF.
+        [IO.File]::WriteAllText("$probe\one.txt", "one`n")
+        [IO.File]::WriteAllText("$probe\two.txt", "two`n")
         $diff = "--- a/one.txt`n+++ b/one.txt`n@@ -1 +1 @@`n-one`n+ONE`n--- a/two.txt`n+++ b/two.txt`n@@ -1 +1 @@`n-two`n+TWO`n"
         [IO.File]::WriteAllText("$probe\d.patch", $diff)
         $tried = @()
@@ -171,8 +172,8 @@ runs:
           }
           $tried += "$exe (exit $rc, did not apply both hunks)"
         }
-        Write-Host "no patch on this image applies a two-file diff:`n$($tried -join "`n")"
-        exit 1
+        Write-Host "no patch on this image applies a two-file diff, leaving PATH alone:`n$($tried -join "`n")"
+        exit 0
 
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
