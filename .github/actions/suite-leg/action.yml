@@ -131,6 +131,40 @@ runs:
         trap 'kill "$probe"' EXIT
         cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
+    # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
+    - name: A patch that applies a multi-file diff (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $probe = Join-Path $env:RUNNER_TEMP 'patchprobe'
+        New-Item -ItemType Directory -Force -Path $probe | Out-Null
+        Set-Content -Path "$probe\one.txt" -Value 'one' -NoNewline
+        Set-Content -Path "$probe\two.txt" -Value 'two' -NoNewline
+        $diff = "--- a/one.txt`n+++ b/one.txt`n@@ -1 +1 @@`n-one`n+ONE`n--- a/two.txt`n+++ b/two.txt`n@@ -1 +1 @@`n-two`n+TWO`n"
+        [IO.File]::WriteAllText("$probe\d.patch", $diff)
+        $tried = @()
+        foreach ($dir in @("$env:ProgramFiles\Git\usr\bin", 'C:\msys64\usr\bin', 'C:\Strawberry\c\bin')) {
+          $exe = Join-Path $dir 'patch.exe'
+          if (-not (Test-Path $exe)) { $tried += "$exe (absent)"; continue }
+          Copy-Item "$probe\one.txt" "$probe\one.bak"; Copy-Item "$probe\two.txt" "$probe\two.bak"
+          & $exe -p1 -i "$probe\d.patch" -d $probe *>$null
+          $rc = $LASTEXITCODE
+          $ok = ($rc -eq 0) -and ((Get-Content "$probe\one.txt") -eq 'ONE') -and ((Get-Content "$probe\two.txt") -eq 'TWO')
+          Move-Item -Force "$probe\one.bak" "$probe\one.txt"; Move-Item -Force "$probe\two.bak" "$probe\two.txt"
+          if ($ok) {
+            Write-Host "patch that applies a two-file diff: $exe"
+            $bin = Join-Path $env:RUNNER_TEMP 'patchbin'
+            New-Item -ItemType Directory -Force -Path $bin | Out-Null
+            Copy-Item $exe $bin -Force
+            Get-ChildItem $dir -Filter '*.dll' | Where-Object { $_.Name -match '^(msys|cyg)' } | ForEach-Object { Copy-Item $_.FullName $bin -Force }
+            $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            exit 0
+          }
+          $tried += "$exe (exit $rc, did not apply both hunks)"
+        }
+        Write-Host "no patch on this image applies a two-file diff:`n$($tried -join "`n")"
+        exit 1
+
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
       shell: pwsh
