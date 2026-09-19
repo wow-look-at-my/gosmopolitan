@@ -12,9 +12,10 @@ import (
 	"cmd/go/internal/modinfo"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-const workDir = "/tmp/go-build123"
+const testWorkDir = "/tmp/go-build123"
 
 // gorootPackage returns a GOROOT package rooted at dir, with cgo when the
 // caller asks for it.
@@ -28,31 +29,32 @@ func gorootPackage(dir string, cgo bool) *load.Package {
 	return pkg
 }
 
-// A cgo package writes its own directory into the Go file cgo generates, so
-// two GOROOTs must not share one cache entry for it.
+// cgo writes this package's own directory into the Go file it generates, so
+// two GOROOTs at different paths must not share one cache entry for it.
+// Sharing one is what handed cmd/vet a path holding no file.
 func TestOriginKeyCgoGorootSeparatesTrees(t *testing.T) {
-	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true), false, workDir)
-	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/crypto/x", true), false, workDir)
+	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true), false, testWorkDir)
+	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/crypto/x", true), false, testWorkDir)
 
-	assert.NotEqual(t, here, there, "two GOROOTs share a cgo key")
+	require.NotEqual(t, there, here, "two GOROOTs share one cgo key")
 	assert.Contains(t, here, "/home/user/gosmopolitan/src/crypto/x")
 }
 
 // Every other GOROOT package has its directory rewritten out of the output,
-// so the key leaves GOROOT alone and the trees share their entries.
+// so the key leaves GOROOT alone and the two trees share their entries.
 func TestOriginKeyPlainGorootSharesTrees(t *testing.T) {
-	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/fmt", false), false, workDir)
-	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/fmt", false), false, workDir)
+	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/fmt", false), false, testWorkDir)
+	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/fmt", false), false, testWorkDir)
 
-	assert.Equal(t, here, there)
+	assert.Equal(t, there, here, "GOROOT reached the key")
 	assert.Empty(t, here)
 }
 
 // -trimpath takes the directory out of the output, cgo included.
 func TestOriginKeyTrimpathDropsTheDirectory(t *testing.T) {
-	key := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true), true, workDir)
+	key := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true), true, testWorkDir)
 
-	assert.Empty(t, key)
+	assert.Empty(t, key, "key names something under -trimpath")
 }
 
 // A module built under -trimpath reports its path and version instead.
@@ -61,30 +63,29 @@ func TestOriginKeyTrimpathNamesTheModule(t *testing.T) {
 	pkg.Goroot = false
 	pkg.Module = &modinfo.ModulePublic{Path: "example.com/dep", Version: "v1.2.3"}
 
-	key := packageOriginKey(pkg, true, workDir)
-
-	assert.Equal(t, "module example.com/dep@v1.2.3\n", key)
+	assert.Equal(t, "module example.com/dep@v1.2.3\n", packageOriginKey(pkg, true, testWorkDir))
 }
 
-// A package outside GOROOT keeps naming its directory, and one inside the
-// build's own work directory names nothing.
+// A package outside GOROOT keeps naming its directory. One inside the build's
+// own work directory names nothing, because that path is rewritten too.
 func TestOriginKeyOutsideGoroot(t *testing.T) {
 	outside := gorootPackage("/home/user/project/pkg", false)
 	outside.Goroot = false
-	inside := gorootPackage(workDir+"/b001", false)
+	inside := gorootPackage(testWorkDir+"/b001", false)
 	inside.Goroot = false
 
-	assert.Equal(t, "dir /home/user/project/pkg\n", packageOriginKey(outside, false, workDir))
-	assert.Empty(t, packageOriginKey(inside, false, workDir))
+	assert.Equal(t, "dir /home/user/project/pkg\n", packageOriginKey(outside, false, testWorkDir))
+	assert.Empty(t, packageOriginKey(inside, false, testWorkDir), "the work directory reached the key")
 }
 
-// The key ends in a newline whenever it names anything, so the lines around
-// it in the action ID stay separate.
+// A key that names anything ends a line, so it stays separate from the lines
+// written around it in the action ID.
 func TestOriginKeyLinesTerminate(t *testing.T) {
-	for _, key := range []string{
-		packageOriginKey(gorootPackage("/src/crypto/x", true), false, workDir),
-		packageOriginKey(gorootPackage("/elsewhere/pkg", false), false, workDir),
-	} {
+	keys := []string{
+		packageOriginKey(gorootPackage("/src/crypto/x", true), false, testWorkDir),
+		packageOriginKey(gorootPackage("/elsewhere/pkg", false), false, testWorkDir),
+	}
+	for _, key := range keys {
 		if key == "" {
 			continue
 		}
