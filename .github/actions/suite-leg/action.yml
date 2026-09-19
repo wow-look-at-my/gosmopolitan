@@ -52,6 +52,25 @@ runs:
       shell: bash
       run: ./bin/go version
 
+    # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+    - name: Put the mingw runtime where the loader always looks (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $sys = Join-Path $env:SystemRoot 'System32'
+        $copied = @()
+        foreach ($dll in @('libwinpthread-1.dll', 'libgcc_s_seh-1.dll', 'libstdc++-6.dll')) {
+          $src = Join-Path 'C:\mingw64\bin' $dll
+          if (-not (Test-Path $src)) { continue }
+          try { Copy-Item $src (Join-Path $sys $dll) -Force; $copied += $dll }
+          catch { Write-Host "could not copy ${dll}: $($_.Exception.Message)" }
+        }
+        if ($copied.Count -eq 0) {
+          Write-Host 'no mingw runtime went to the system directory; a test that narrows PATH will say so'
+        } else {
+          Write-Host "in ${sys}: $($copied -join ', ')"
+        }
+
     # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
     - name: Let the kernel exec an APE directly
       if: runner.os == 'Linux'
@@ -101,6 +120,41 @@ runs:
         probe=$!
         trap 'kill "$probe"' EXIT
         cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+    # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
+    - name: A patch that applies a multi-file diff (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $probe = Join-Path $env:RUNNER_TEMP 'patchprobe'
+        New-Item -ItemType Directory -Force -Path $probe | Out-Null
+        # The lines the diff names end in a newline, so the files have to as well, and they are written byte for byte rather than through a cmdlet that would append CRLF.
+        [IO.File]::WriteAllText("$probe\one.txt", "one`n")
+        [IO.File]::WriteAllText("$probe\two.txt", "two`n")
+        $diff = "--- a/one.txt`n+++ b/one.txt`n@@ -1 +1 @@`n-one`n+ONE`n--- a/two.txt`n+++ b/two.txt`n@@ -1 +1 @@`n-two`n+TWO`n"
+        [IO.File]::WriteAllText("$probe\d.patch", $diff)
+        $tried = @()
+        foreach ($dir in @("$env:ProgramFiles\Git\usr\bin", 'C:\msys64\usr\bin', 'C:\Strawberry\c\bin')) {
+          $exe = Join-Path $dir 'patch.exe'
+          if (-not (Test-Path $exe)) { $tried += "$exe (absent)"; continue }
+          Copy-Item "$probe\one.txt" "$probe\one.bak"; Copy-Item "$probe\two.txt" "$probe\two.bak"
+          & $exe -p1 -i "$probe\d.patch" -d $probe *>$null
+          $rc = $LASTEXITCODE
+          $ok = ($rc -eq 0) -and ((Get-Content "$probe\one.txt") -eq 'ONE') -and ((Get-Content "$probe\two.txt") -eq 'TWO')
+          Move-Item -Force "$probe\one.bak" "$probe\one.txt"; Move-Item -Force "$probe\two.bak" "$probe\two.txt"
+          if ($ok) {
+            Write-Host "patch that applies a two-file diff: $exe"
+            $bin = Join-Path $env:RUNNER_TEMP 'patchbin'
+            New-Item -ItemType Directory -Force -Path $bin | Out-Null
+            Copy-Item $exe $bin -Force
+            Get-ChildItem $dir -Filter '*.dll' | Where-Object { $_.Name -match '^(msys|cyg)' } | ForEach-Object { Copy-Item $_.FullName $bin -Force }
+            $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            exit 0
+          }
+          $tried += "$exe (exit $rc, did not apply both hunks)"
+        }
+        Write-Host "no patch on this image applies a two-file diff, leaving PATH alone:`n$($tried -join "`n")"
+        exit 0
 
     - name: The whole test suite (run.bat)
       if: runner.os == 'Windows'
