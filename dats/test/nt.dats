@@ -10,6 +10,13 @@ tests:
 	  cmd: pwsh -NoProfile -File dats/test/nt-boot.ps1
 	  exit: 0
 
+	# What a stripped PATH does to a program this fork never built. The suite
+	# leg's largest red is children that die under one, so the answer says
+	# whether the host or the binary decides it.
+	- desc: a system binary starts from a copy on this host
+	  cmd: pwsh -NoProfile -File dats/test/nt-strippedpath.ps1
+	  exit: 0
+
 	# This host needs no loader: the APE is a PE, and the OS maps the payload
 	# out of it. readonly-boot.dats makes the same claim for linux and darwin.
 	- desc: a read-only host still runs the program
