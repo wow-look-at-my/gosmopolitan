@@ -1,7 +1,5 @@
-# Check that commands in cmd are install to $GOROOT/bin, not $GOBIN.
+# Check that commands in cmd install to $GOROOT/bin.
 # Verifies golang.org/issue/32674.
-env GOBIN=gobin
-mkdir gobin
 go list -f '{{.Target}}' cmd/go/main
 stdout $GOROOT${/}bin${/}go$GOEXE
 

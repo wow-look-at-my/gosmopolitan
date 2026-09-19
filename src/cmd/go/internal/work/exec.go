@@ -1576,7 +1576,7 @@ cachemiss:
 		panic("VetTool unset")
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, env, cfg.BuildToolexec, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, env, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
 		return err
 	}
 
@@ -2218,8 +2218,7 @@ func (b *Builder) cover(a *Action, infiles, outfiles []string, varName string, m
 		"-outfilelist", covoutputs,
 	)
 	args = append(args, infiles...)
-	if err := b.Shell(a).run(a.Objdir, "", nil,
-		cfg.BuildToolexec, args); err != nil {
+	if err := b.Shell(a).run(a.Objdir, "", nil, args); err != nil {
 		return nil, err
 	}
 	return outfiles, nil
@@ -3198,7 +3197,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 		cgoflags = append(cgoflags, "-trimpath", strings.Join(trimpath, ";"))
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cfg.BuildToolexec, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
 		return err
 	}
 
@@ -3447,7 +3446,7 @@ func (b *Builder) dynimport(a *Action, objdir, importGo string, cgoExe, cflags, 
 	if p.Standard && p.ImportPath == "runtime/cgo" {
 		cgoflags = []string{"-dynlinker"} // record path to dynamic linker
 	}
-	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cfg.BuildToolexec, cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
+	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
 	if err != nil {
 		return "", "", err
 	}

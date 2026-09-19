@@ -197,12 +197,6 @@ and test commands:
 		Instead of absolute file system paths, the recorded file names
 		will begin either a module path@version (when using modules),
 		or a plain import path (when using the standard library, or GOPATH).
-	-toolexec 'cmd args'
-		a program to use to invoke toolchain programs like vet and asm.
-		For example, instead of running asm, the go command will run
-		'cmd args /path/to/asm <arguments for asm>'.
-		The TOOLEXEC_IMPORTPATH environment variable will be set,
-		matching 'go list -f {{.ImportPath}}' for the package being built.
 
 The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 space-separated list of arguments to pass to an underlying tool
@@ -350,7 +344,6 @@ func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	cmd.Flag.StringVar(&cfg.BuildPkgdir, "pkgdir", "", "")
 	cmd.Flag.BoolVar(&cfg.BuildRace, "race", false, "")
 	cmd.Flag.Var((*tagsFlag)(&cfg.BuildContext.BuildTags), "tags", "")
-	cmd.Flag.Var((*base.StringsFlag)(&cfg.BuildToolexec), "toolexec", "")
 	cmd.Flag.BoolVar(&cfg.BuildTrimpath, "trimpath", false, "")
 	cmd.Flag.BoolVar(&cfg.BuildWork, "work", false, "")
 
@@ -580,10 +573,9 @@ var CmdInstall = &base.Command{
 	Long: `
 Install compiles and installs the packages named by the import paths.
 
-Executables are installed in the directory named by the GOBIN environment
-variable, which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH
+Executables are installed in $GOPATH/bin, or $HOME/go/bin if the GOPATH
 environment variable is not set. Executables in $GOROOT
-are installed in $GOROOT/bin or $GOTOOLDIR instead of $GOBIN.
+are installed in $GOROOT/bin or $GOTOOLDIR instead.
 Cross compiled binaries are installed in $GOOS_$GOARCH subdirectories
 of the above.
 
@@ -765,10 +757,6 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 	ctx, span := trace.StartSpan(ctx, "InstallPackages "+strings.Join(patterns, " "))
 	defer span.Done()
 
-	if cfg.GOBIN != "" && !filepath.IsAbs(cfg.GOBIN) {
-		base.Fatalf("cannot install, GOBIN must be an absolute path")
-	}
-
 	pkgs = omitTestOnly(pkgsFilter(pkgs))
 	for _, p := range pkgs {
 		if p.Target == "" {
@@ -785,10 +773,8 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 				// rebuilt and used directly from the build cache.
 				// A few targets (notably those using cgo) still do need to be installed
 				// in case the user's environment lacks a C compiler.
-			case p.Internal.GobinSubdir:
-				base.Errorf("go: cannot install cross-compiled binaries when GOBIN is set")
 			case p.Internal.CmdlineFiles:
-				base.Errorf("go: no install location for .go files listed on command line (GOBIN not set)")
+				base.Errorf("go: no install location for .go files listed on command line")
 			case p.ConflictDir != "":
 				base.Errorf("go: no install location for %s: hidden by %s", p.Dir, p.ConflictDir)
 			default:
@@ -869,7 +855,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 		// If it exists and is an executable file, remove it.
 		targ := pkgs[0].DefaultExecName()
 		targ += cfg.ExeSuffix
-		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe $GOBIN is the current directory
+		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe the install dir is the current directory
 			fi, err := os.Stat(targ)
 			if err == nil {
 				m := fi.Mode()

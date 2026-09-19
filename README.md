@@ -60,7 +60,7 @@ go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 
 All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-The shipped `go.env` defaults `GOTOOLCHAIN=local`. The fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides. Releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 

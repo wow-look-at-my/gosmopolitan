@@ -346,7 +346,6 @@ func runGenerate(root, pkg string) error {
 	// command carrying its standard library can build. Every target reads
 	// that single completed module.
 	cmd.Env = append(os.Environ(),
-		"GOTOOLCHAIN=local",
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
 	)

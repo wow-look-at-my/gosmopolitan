@@ -241,12 +241,6 @@
 //		Instead of absolute file system paths, the recorded file names
 //		will begin either a module path@version (when using modules),
 //		or a plain import path (when using the standard library, or GOPATH).
-//	-toolexec 'cmd args'
-//		a program to use to invoke toolchain programs like vet and asm.
-//		For example, instead of running asm, the go command will run
-//		'cmd args /path/to/asm <arguments for asm>'.
-//		The TOOLEXEC_IMPORTPATH environment variable will be set,
-//		matching 'go list -f {{.ImportPath}}' for the package being built.
 //
 // The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 // space-separated list of arguments to pass to an underlying tool
@@ -524,7 +518,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go fix are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go vet.
@@ -771,10 +765,9 @@
 //
 // Install compiles and installs the packages named by the import paths.
 //
-// Executables are installed in the directory named by the GOBIN environment
-// variable, which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH
+// Executables are installed in $GOPATH/bin, or $HOME/go/bin if the GOPATH
 // environment variable is not set. Executables in $GOROOT
-// are installed in $GOROOT/bin or $GOTOOLDIR instead of $GOBIN.
+// are installed in $GOROOT/bin or $GOTOOLDIR instead.
 // Cross compiled binaries are installed in $GOOS_$GOARCH subdirectories
 // of the above.
 //
@@ -1845,7 +1838,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go vet are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go fix.
@@ -2450,8 +2443,6 @@
 //	GOAUTH
 //		Controls authentication for go-import and HTTPS module mirror interactions.
 //		See 'go help goauth'.
-//	GOBIN
-//		The directory where 'go install' will install a command.
 //	GOCACHE
 //		The directory where the go command will store cached
 //		information for reuse in future builds. Must be an absolute path.
@@ -2502,8 +2493,6 @@
 //		Overrides the platform-specific temporary directory such as "/tmp".
 //		The go command and testing package will write temporary source files,
 //		packages, and binaries here.
-//	GOTOOLCHAIN
-//		Controls which Go toolchain is used. See https://go.dev/doc/toolchain.
 //	GOVCS
 //		Lists version control commands that may be used with matching servers.
 //		See 'go help vcs'.
@@ -2794,8 +2783,8 @@
 // # GOPATH environment variable
 //
 // The GOPATH environment variable is used to change the default
-// location to store the module cache and installed binaries, if
-// not overridden by GOMODCACHE and GOBIN respectively.
+// location to store the module cache and installed binaries.
+// GOMODCACHE overrides the module cache location.
 //
 // Most users don't need to explicitly set GOPATH.
 // If the environment variable is unset, GOPATH defaults
@@ -2809,7 +2798,7 @@
 // as the directory to store the module cache instead.
 //
 // Executables installed using 'go install' are placed in the
-// directory specified by GOPATH/bin or, if GOBIN is set, by GOBIN.
+// directory specified by GOPATH/bin.
 //
 // # GOPATH mode
 //
@@ -2851,9 +2840,7 @@
 // command with source in DIR/src/foo/quux is installed into
 // DIR/bin/quux, not DIR/bin/foo/quux. The "foo/" prefix is stripped
 // so that you can add DIR/bin to your PATH to get at the
-// installed commands. If the GOBIN environment variable is
-// set, commands are installed to the directory it names instead
-// of DIR/bin. GOBIN must be an absolute path.
+// installed commands.
 //
 // Here's an example directory layout:
 //

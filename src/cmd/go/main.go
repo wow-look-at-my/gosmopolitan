@@ -99,6 +99,7 @@ var counterErrorsGOPATHEntryRelative = counter.New("go/errors:gopath-entry-relat
 // every other command exits the process with its status.
 func Main() {
 	log.SetFlags(0)
+	cfg.UnsetRemovedEnv()
 	telemetry.MaybeChild() // Run in child mode if this is the telemetry sidecar child process.
 	cmdIsGoTelemetryOff := cmdIsGoTelemetryOff()
 	if !cmdIsGoTelemetryOff {

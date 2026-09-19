@@ -1,9 +1,8 @@
 [short] skip
 
 # Install an echo command because Windows doesn't have it.
-env GOBIN=$WORK/tmp/bin
 go install echo.go
-env PATH=$GOBIN${:}$PATH
+env PATH=$GOPATH/bin${:}$PATH
 
 # Test go generate handles a simple command
 go generate ./generate/simple.go
