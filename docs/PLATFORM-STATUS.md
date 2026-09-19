@@ -28,6 +28,8 @@ Some readings of the failure are measured and wrong. Env lookup on NT is case-in
 
 The host refuses nothing. `dats/test/nt-strippedpath.ps1` copies a system binary the way os/exec's TestCommand copies its own, starts it from that copy, and asserts the exit code. The runner answers 0 under a dot PATH and under an empty one. So a stripped PATH stops no program there by itself. The binary decides it. The same check copies the gofmt beside the upstream go the workflow installs, and asks it the same question. It copies gofmt because a go command outside its own tree cannot find GOROOT. Such a go command fails whatever the PATH holds, which measures the copy. The gofmt binary carries the same kernel32-only import shape. It reads its arguments and needs no tree.
 
+Defender is not it either. common-checks turns real-time monitoring off ahead of every job, and the NT legs report it off. The same shard still answers STATUS_DLL_NOT_FOUND. The runner image also excludes both drives from scanning before any step of ours runs, so a scan on write was never in the path.
+
 The os/exec package is upstream on this host, and a diff against go1.27.0 says so. Its startProcess is a passthrough to os.StartProcess wherever the build is not cosmo. Its addCriticalEnv differs only when the parent itself carries no SYSTEMROOT. The runner carries one. So a child here gets the same environment upstream gives it.
 
 The runner starts a fork-built APE under the same shapes. The runtimeprobe program copies itself, strips its environment, and starts the copy. Its minimalenv probes pass on NT in each origin's apetest run. So a binary this fork produces does start there from a copy, with no PATH. What fails is the native windows PE the linker writes.
