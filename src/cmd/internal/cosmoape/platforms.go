@@ -30,10 +30,13 @@ func (p Platform) String() string { return p.OS + "/" + p.Arch }
 // all lists every platform this toolchain can emit boot support for, in
 // canonical order. Set is a bitmask over these indices, so the order is
 // also the order platforms are reported in.
+// darwin/amd64 is absent on purpose. Intel macs are out of support here.
+// An APE starts on every platform in this table without writing anything,
+// and that platform had no way to: XNU reads the Mach-O header at offset 0,
+// which an APE cannot carry there, and no loader exists for it.
 var all = [...]Platform{
 	{"linux", "amd64"},
 	{"linux", "arm64"},
-	{"darwin", "amd64"},
 	{"darwin", "arm64"},
 	{"windows", "amd64"},
 }
@@ -42,9 +45,8 @@ var all = [...]Platform{
 var (
 	LinuxAMD64   = all[0]
 	LinuxARM64   = all[1]
-	DarwinAMD64  = all[2]
-	DarwinARM64  = all[3]
-	WindowsAMD64 = all[4]
+	DarwinARM64  = all[2]
+	WindowsAMD64 = all[3]
 )
 
 // Set is a set of platforms.
@@ -52,16 +54,11 @@ type Set uint
 
 // Default is the set a build covers when GOCOSMOPLATFORMS is unset. It is
 // deliberately NOT every platform in all: it is the three this fork stands
-// behind, and the other two stay selectable rather than promised.
+// behind, and linux/arm64 stays selectable rather than promised.
 //
-// linux/arm64 and darwin/amd64 are omitted because a default build should
-// not claim a host nothing verifies. darwin/amd64 is the sharper case: its
-// syscall and signal surfaces are implemented, but there is no Intel-mac
-// runner, so nothing there has ever been executed. An APE that advertised
-// it would announce a platform on which it has never run.
-//
-// Naming a platform in GOCOSMOPLATFORMS still selects it. This changes what
-// silence means, not what is reachable.
+// linux/arm64 is omitted because a default build should not claim a host
+// nothing verifies. Naming it in GOCOSMOPLATFORMS still selects it. This
+// changes what silence means, not what is reachable.
 func Default() Set {
 	return 1<<indexOf(LinuxAMD64) | 1<<indexOf(DarwinARM64) | 1<<indexOf(WindowsAMD64)
 }

@@ -6,6 +6,7 @@ package syscall_test
 
 import (
 	"internal/runtime/syscall/cosmo"
+	"os"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -116,6 +117,81 @@ func TestDarwinMntFlagsToLinux(t *testing.T) {
 		if got := darwinMntFlagsToLinux(tc.apple); got != tc.linux {
 			t.Errorf("%s: got %#x, want %#x", tc.name, got, tc.linux)
 		}
+	}
+}
+
+// TestRawStatfsLinuxBuffer issues statfs and fstatfs the way
+// golang.org/x/sys/unix does: straight through Syscall and Syscall6, with
+// a Linux Statfs_t and nothing in a3. On a macOS host that buffer is not
+// the shape Apple's statfs fills, so this is the call the conversion in
+// Syscall exists for. A disk-pressure check that reads free space
+// through x/sys sees these numbers or an error.
+func TestRawStatfsLinuxBuffer(t *testing.T) {
+	dir := t.TempDir()
+	path, err := syscall.BytePtrFromString(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var viaPath Statfs_t
+	if _, _, e := syscall.Syscall(syscall.SYS_STATFS, uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&viaPath)), 0); e != 0 {
+		t.Fatalf("Syscall(SYS_STATFS) with a Linux Statfs_t: %v", e)
+	}
+	checkStatfs(t, "SYS_STATFS", &viaPath)
+
+	var viaPath6 Statfs_t
+	if _, _, e := syscall.Syscall6(syscall.SYS_STATFS, uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&viaPath6)), 0, 0, 0, 0); e != 0 {
+		t.Fatalf("Syscall6(SYS_STATFS) with a Linux Statfs_t: %v", e)
+	}
+	checkStatfs(t, "SYS_STATFS via Syscall6", &viaPath6)
+
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dirFile.Close()
+	var viaFd Statfs_t
+	if _, _, e := syscall.Syscall(syscall.SYS_FSTATFS, dirFile.Fd(), uintptr(unsafe.Pointer(&viaFd)), 0); e != 0 {
+		t.Fatalf("Syscall(SYS_FSTATFS) with a Linux Statfs_t: %v", e)
+	}
+	checkStatfs(t, "SYS_FSTATFS", &viaFd)
+
+	// One filesystem, asked by path and by descriptor: its identity and
+	// its size agree. Free counts move under other writers, so they are
+	// left out.
+	if viaFd.Fsid != viaPath.Fsid || viaFd.Bsize != viaPath.Bsize || viaFd.Blocks != viaPath.Blocks {
+		t.Errorf("fstatfs fsid=%v bsize=%d blocks=%d, statfs fsid=%v bsize=%d blocks=%d: the same filesystem",
+			viaFd.Fsid, viaFd.Bsize, viaFd.Blocks, viaPath.Fsid, viaPath.Bsize, viaPath.Blocks)
+	}
+
+	var exported Statfs_t
+	if err := syscall.Statfs(dir, &exported); err != nil {
+		t.Fatalf("Statfs: %v", err)
+	}
+	if exported.Fsid != viaPath.Fsid || exported.Blocks != viaPath.Blocks {
+		t.Errorf("Statfs fsid=%v blocks=%d, raw statfs fsid=%v blocks=%d: the same filesystem",
+			exported.Fsid, exported.Blocks, viaPath.Fsid, viaPath.Blocks)
+	}
+
+	missing, err := syscall.BytePtrFromString(dir + "/missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var none Statfs_t
+	if _, _, e := syscall.Syscall(syscall.SYS_STATFS, uintptr(unsafe.Pointer(missing)), uintptr(unsafe.Pointer(&none)), 0); e != syscall.ENOENT {
+		t.Errorf("statfs of a missing path: errno %v, want ENOENT", e)
+	}
+}
+
+func checkStatfs(t *testing.T, what string, st *Statfs_t) {
+	t.Helper()
+	if st.Bsize <= 0 || st.Blocks == 0 {
+		t.Errorf("%s: bsize %d blocks %d, want both positive", what, st.Bsize, st.Blocks)
+	}
+	// Available is a subset of free, which is a subset of the whole. A
+	// record copied from the wrong offsets breaks the ordering.
+	if st.Bfree > st.Blocks || st.Bavail > st.Bfree {
+		t.Errorf("%s: blocks %d bfree %d bavail %d, want bavail <= bfree <= blocks", what, st.Blocks, st.Bfree, st.Bavail)
 	}
 }
 

@@ -2,7 +2,7 @@
 
 Exec wrappers that let `go test` run GOOS=cosmo test binaries directly on a Linux or macOS host.
 
-When GOOS differs from the host, cmd/go looks for a program named `go_${GOOS}_${GOARCH}_exec` on `$PATH` and uses it to run every test binary (see `FindExecCmd` in cmd/go/internal/work/build.go). The wrappers here know how to start an Actually Portable Executable: an already-assimilated binary (host ELF or Mach-O) is executed directly, while a pristine APE is launched.
+When GOOS differs from the host, cmd/go looks for a program named `go_${GOOS}_${GOARCH}_exec` on `$PATH` and uses it to run every test binary (see `FindExecCmd` in cmd/go/internal/work/build.go). The wrappers here know how to start an Actually Portable Executable. A binary already in the host's native format (ELF or Mach-O) is executed directly. An APE goes through `/bin/sh`, which runs its boot script.
 
 ## Usage
 

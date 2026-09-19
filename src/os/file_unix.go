@@ -423,10 +423,43 @@ func tempDir() string {
 func ntTempDir(getenv func(string) string) string {
 	for _, key := range [...]string{"TMP", "TEMP", "USERPROFILE"} {
 		if dir := getenv(key); dir != "" {
-			return dir
+			return ntLinuxPath(dir)
 		}
 	}
-	return `C:\Windows\Temp`
+	return "/c/Windows/Temp"
+}
+
+// ntLinuxPath spells an NT path the way the runtime answers one on an NT
+// host: a drive letter becomes the lowercase /c/ form and every backslash
+// a slash, with one trailing slash trimmed except at the drive root. That
+// is the spelling Getwd and Executable use, so a path built under the
+// temp directory compares equal to one read back from the working
+// directory, and filepath, which is unix-shaped in a cosmo binary, sees
+// an absolute path.
+func ntLinuxPath(p string) string {
+	buf := make([]byte, 0, len(p)+2)
+	if len(p) >= 2 && p[1] == ':' && ntIsDriveLetter(p[0]) {
+		buf = append(buf, '/', p[0]|0x20)
+		p = p[2:]
+		if p == "" || p == `\` || p == "/" {
+			return string(buf)
+		}
+	}
+	for i := 0; i < len(p); i++ {
+		c := p[i]
+		if c == '\\' {
+			c = '/'
+		}
+		buf = append(buf, c)
+	}
+	if n := len(buf); n > 1 && buf[n-1] == '/' {
+		buf = buf[:n-1]
+	}
+	return string(buf)
+}
+
+func ntIsDriveLetter(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // Link creates newname as a hard link to the oldname file.

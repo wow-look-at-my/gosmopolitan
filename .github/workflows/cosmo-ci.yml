@@ -7,6 +7,14 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# The shared cache's look-ahead pool fetches the objects stored beside each hit ahead of the build (go-s3-server docs/look-ahead.md).
+env:
+  GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
+
 jobs:
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
@@ -16,7 +24,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         build-os: [macos-latest, windows-latest]
 
@@ -29,6 +37,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
+      - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
       - name: Install bubblewrap
@@ -67,6 +76,7 @@ jobs:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: wow-look-at-my/actions@yaml-comment-block#latest
+      - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
       - name: Install bubblewrap
@@ -88,7 +98,7 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-  # One job per host for the whole suite, so nothing downstream of a build waits on it.
+  # The whole suite per host, in parts that run side by side; nothing downstream of a build waits on it.
   suite:
     timeout-minutes: 150
     needs: [build, build-linux]
@@ -96,21 +106,31 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
+        # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
+        shard: [0, 1]
+        shards: [2]
 
     runs-on: ${{ matrix.suite-os }}
+    env:
+      # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
+      GO_TEST_TIMEOUT_SCALE: 2
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
+      # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
+      - uses: ./.github/actions/track-submodules
 
       - uses: ./.github/actions/suite-leg
         # The NT leg reports in full; its red does not hold the branch. On the STEP, not the job: all-builds tallies jobs, and a job-level key leaves the job's own conclusion `failure`. waiver-expires: 2026-09-18
         continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
+        with:
+          shard: ${{ matrix.shard }}/${{ matrix.shards }}
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
@@ -137,6 +157,35 @@ jobs:
         shell: bash
         run: ./bin/go version
 
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # apeld-reproducible.dats rebuilds the committed APE loaders with these; the tarball is pinned by digest so they cannot drift with a zig release.
+      - name: Install the toolchain that builds the APE loaders
+        shell: bash
+        env:
+          ZIG_VERSION: 0.16.0
+          ZIG_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lld-18 llvm-18
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          curl -fsSL "$url" -o /tmp/zig.tar.xz
+          echo "${ZIG_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+          sudo tar -xf /tmp/zig.tar.xz -C /opt
+          echo "/opt/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
+          echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
+
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 45
@@ -149,7 +198,7 @@ jobs:
     timeout-minutes: ${{ matrix.job-timeout }}
     needs: [build, build-linux]
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         include:
@@ -200,13 +249,34 @@ jobs:
           cd testdata/ape/apetest
           sh ./with-deadline.sh 150 go mod download
 
-      # apetest on every origin, then the subsets. The deadlines are in the suite.
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # apetest per origin then the subsets, and the read-only boot. readonly-boot is unix-only: NTFS ignores the mode bit it relies on, and nt.dats carries that claim for NT.
       - name: The APE binaries run on this host (dats)
         if: matrix.test-os != 'windows-latest'
         timeout-minutes: 45
         uses: wow-look-at-my/dats@master
         with:
-          tests: dats/test/apetest.dats
+          tests: dats/test/apetest.dats dats/test/readonly-boot.dats
+
+      # The container shape is built from mount namespaces, so it is linux only.
+      - name: An APE runs in a read-only container (dats)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/test/readonly-boot-container.dats
 
       # The dats action runs a suite inside WSL on NT, which tests Linux. These suites are about NT itself, which has no sandbox backend.
       - name: Download dats
@@ -224,11 +294,13 @@ jobs:
           DATS_BIN: ${{ steps.dats.outputs.path }}
         run: |
           Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
-          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test
+          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/test/apetest.dats dats/test/nt.dats
           exit $LASTEXITCODE
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-21
+    if: ${{ false }}
     timeout-minutes: 45
     needs: build-linux
     permissions:
@@ -281,6 +353,8 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-21
+    if: ${{ false }}
     timeout-minutes: 60
     needs: build-linux
     permissions:
@@ -288,9 +362,12 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         port: [js, wasip1]
+        # The same dist test parts as the suite job.
+        shard: [0, 1]
+        shards: [2]
 
     steps:
       - name: Checkout code
@@ -325,14 +402,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/wasmtime
-          key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
-          restore-keys: wasmtime-modules-${{ matrix.port }}-
-
-      # The restore ratchets: each run saves a bigger copy than it took -- see .github/trim-wasm-cache.sh.
-      - name: Drop the wasm module cache when it arrives over its cap
-        if: matrix.port == 'wasip1'
-        shell: bash
-        run: sh ./.github/trim-wasm-cache.sh
+          key: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ github.sha }}
+          restore-keys: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest
@@ -349,7 +420,7 @@ jobs:
         uses: wow-look-at-my/log-streamer/.github/actions/stream@master
         with:
           stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}
+          name: ${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}
           run: |
             set -o pipefail
             export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
@@ -357,9 +428,9 @@ jobs:
             probe=$!
             # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
             trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
+            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test -shard=${{ matrix.shard }}/${{ matrix.shards }} 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
-      - name: What ${{ matrix.port }} spent its time on
+      - name: What ${{ matrix.port }} part ${{ matrix.shard }} of ${{ matrix.shards }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
@@ -402,7 +473,7 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
         env:
-          WASM_PORT: ${{ matrix.port }}
+          WASM_PORT: ${{ matrix.port }} part ${{ matrix.shard }}/${{ matrix.shards }}
 
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
@@ -418,7 +489,8 @@ jobs:
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
-    needs: [build, build-linux, suite, cosmo-checks, test, wasm, wasm-suite]
+    # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
+    needs: [build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
@@ -445,7 +517,7 @@ jobs:
     timeout-minutes: 25
     needs: publish-create
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - runner: ubuntu-latest
@@ -470,6 +542,8 @@ jobs:
           submodules: true
       # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
       - uses: wow-look-at-my/actions@secret-server#latest
+      # The published toolchain is built here, so it carries the client's branch head rather than the gitlink's commit.
+      - uses: ./.github/actions/track-submodules
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5

@@ -1082,7 +1082,7 @@ func loadobjfile(ctxt *Link, lib *sym.Library) {
 	if ctxt.Debugvlog > 1 {
 		ctxt.Logf("ldobj: %s (%s)\n", lib.File, pkg)
 	}
-	f, err := bio.Open(lib.File)
+	f, err := bio.OpenAny(lib.File)
 	if err != nil {
 		Exitf("cannot open file %s: %v", lib.File, err)
 	}
@@ -2154,6 +2154,17 @@ func (ctxt *Link) hostlink() {
 				return machoRewriteUuid(ctxt, exef, exem, outexe)
 			})
 	}
+	if ctxt.IsDarwin() {
+		requests, err := segprotRequests(flagExtldflags)
+		if err != nil {
+			Exitf("%s: -extldflags: %v", os.Args[0], err)
+		}
+		if len(requests) > 0 {
+			if err := machoApplySegprot(*flagOutfile, requests); err != nil {
+				Exitf("%s: applying -segprot: %v", os.Args[0], err)
+			}
+		}
+	}
 	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)
@@ -3050,7 +3061,11 @@ func dfs(lib *sym.Library, mark map[*sym.Library]markKind, order *[]*sym.Library
 		return
 	}
 	if mark[lib] == visiting {
-		panic("found import cycle while visiting " + lib.Pkg)
+		// A test binary holding several packages' tests links each package
+		// compiled with its _test.go files, and those files import what they
+		// like: testing's import regexp, regexp's import testing. The order
+		// only lays out text, so the edge closing the cycle is dropped.
+		return
 	}
 	mark[lib] = visiting
 	for _, i := range lib.Imports {
