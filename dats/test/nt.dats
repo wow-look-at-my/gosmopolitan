@@ -16,6 +16,10 @@ tests:
 	- desc: a system binary starts from a copy on this host
 	  cmd: pwsh -NoProfile -File dats/test/nt-strippedpath.ps1
 	  exit: 0
+	  outputs:
+		stdout:
+			- "system binary from a copy, PATH=dot: exit 0"
+			- "system binary from a copy, PATH=empty: exit 0"
 
 	# This host needs no loader: the APE is a PE, and the OS maps the payload
 	# out of it. readonly-boot.dats makes the same claim for linux and darwin.
