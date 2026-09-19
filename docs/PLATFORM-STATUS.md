@@ -18,7 +18,7 @@ Symlinks and the read-only attribute followed (2026-09-16, `os_cosmo_nt_link.go`
 
 What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` carry one bit, and `fchown`/`fchownat` have no unix ownership to change.
 
-The NT suite's red is measured again on run 35408440298. That is the last run the expired waiver covered. The second shard is clean. The first shard fails `cmd/go`, `cmd/go/internal/work`, `os/exec`, `net/http/cgi`, `internal/syscall/windows`, `cmd/cgo/internal/testgodefs` and `cmd/cgo/internal/swig`.
+The NT suite carries its red in the first shard. The second shard is clean. Most of that red is a single class, which the rest of this section describes. A native windows PE this toolchain links dies when a parent starts it with a cut-down environment. `cmd/cgo/internal/swig` fails apart from that class, over the host's own LTO.
 
 The largest group is one failure mode. A child process exits `0xc0000135`, which is STATUS_DLL_NOT_FOUND. It prints nothing at all. `autocgo` shows it cleanly. `go env CGO_ENABLED` answers `1`. The script then sets `PATH=$GOROOT/bin`, and the same command dies. `gotoolchain_issue66175`, `mod_doc_path` and `net/http/cgi`'s TestEnvOverride strip the environment the same way.
 
