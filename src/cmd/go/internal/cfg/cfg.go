@@ -381,7 +381,7 @@ func initEnvCache() {
 	if file, _, _ := EnvFile(); file != "" {
 		readEnvFile(file, "user")
 	}
-	goroot := findGOROOT(envCache.m["GOROOT"])
+	goroot := findGOROOT()
 	if goroot != "" {
 		readEnvFile(filepath.Join(goroot, "go.env"), "GOROOT")
 	}
@@ -450,6 +450,13 @@ func readEnvFile(file string, source string) {
 // This ensures that CanGetenv is accurate, so that
 // 'go env -w' stays in sync with what Getenv can retrieve.
 func Getenv(key string) string {
+	if key == "GOROOT" {
+		// The environment does not decide which tree this go command uses.
+		// initEnvCache stores the derived one under this key; answering
+		// from there keeps every caller on it. See findGOROOT.
+		envCache.once.Do(initEnvCache)
+		return envCache.m["GOROOT"]
+	}
 	if slices.Contains(RemovedEnv, key) {
 		// A removed key has no value, ever. Answering "" rather than panicking
 		// keeps the callers that ask about one (toolchain.Select asks about
@@ -586,22 +593,19 @@ func envOr(key, def string) string {
 // x/tools/cmd/godoc/goroot.go.
 // Try to keep them in sync for now.
 
-// findGOROOT returns the GOROOT value, using either an explicitly
-// provided environment variable, a GOROOT that contains the current
+// findGOROOT returns the GOROOT value: a GOROOT that contains the current
 // os.Executable value, or else the GOROOT that the binary was built
 // with from runtime.GOROOT().
 //
 // There is a copy of this code in x/tools/cmd/godoc/goroot.go.
-func findGOROOT(env string) string {
-	if env == "" {
-		// Not using Getenv because findGOROOT is called
-		// to find the GOROOT/go.env file. initEnvCache
-		// has passed in the setting from the user go/env file.
-		env = os.Getenv("GOROOT")
-	}
-	if env != "" {
-		return filepath.Clean(env)
-	}
+// GOROOT names the tree holding the compiler, the linker and the standard
+// library, so a value from outside points this go command at another
+// toolchain's. findGOROOT therefore reads neither the environment nor the
+// go/env file, and derives the tree from this executable instead. Every
+// install has the go command inside its own GOROOT: bin/go, bin/GOOS_GOARCH/go
+// for a cross-compiled one, and pkg/tool/GOOS_GOARCH/go_bootstrap during
+// make.bash, which the two joins below cover.
+func findGOROOT() string {
 	def := ""
 	if r := runtime.GOROOT(); r != "" {
 		def = filepath.Clean(r)

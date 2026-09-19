@@ -100,6 +100,15 @@ var counterErrorsGOPATHEntryRelative = counter.New("go/errors:gopath-entry-relat
 func Main() {
 	log.SetFlags(0)
 	cfg.UnsetRemovedEnv()
+	// The compiler and the assembler read GOROOT from their environment
+	// (internal/buildcfg), and they inherit this one. Replace whatever was
+	// set with the tree this go command derived, so a value from outside
+	// reaches no tool. See findGOROOT.
+	if cfg.GOROOT != "" {
+		os.Setenv("GOROOT", cfg.GOROOT)
+	} else {
+		os.Unsetenv("GOROOT")
+	}
 	telemetry.MaybeChild() // Run in child mode if this is the telemetry sidecar child process.
 	cmdIsGoTelemetryOff := cmdIsGoTelemetryOff()
 	if !cmdIsGoTelemetryOff {
