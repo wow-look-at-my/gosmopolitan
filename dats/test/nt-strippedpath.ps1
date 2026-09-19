@@ -17,6 +17,32 @@ $system = Join-Path $env:SystemRoot 'System32\whoami.exe'
 $copy = Join-Path $dir 'whoami.exe'
 Copy-Item $system $copy -Force
 
+# An upstream Go binary, copied the same way. A Go binary for windows imports
+# kernel32 and nothing else, which is the shape the suite's own children have.
+# This says whether a stripped PATH stops every such binary or only ours.
+$upstream = (Get-Command go -ErrorAction SilentlyContinue).Source
+if ($upstream) {
+  $goCopy = Join-Path $dir 'upstream-go.exe'
+  Copy-Item $upstream $goCopy -Force
+  foreach ($name in @('inherited', 'dot', 'empty')) {
+    $value = switch ($name) { 'inherited' { $env:PATH } 'dot' { '.' } 'empty' { '' } }
+    $saved = $env:PATH
+    $env:PATH = $value
+    try {
+      $proc = Start-Process -FilePath $goCopy -ArgumentList 'version' -Wait -PassThru -NoNewWindow `
+        -RedirectStandardOutput (Join-Path $dir "go-$name.txt")
+      $code = $proc.ExitCode
+    } catch {
+      $code = "start failed: $($_.Exception.Message)"
+    } finally {
+      $env:PATH = $saved
+    }
+    Write-Host "upstream go from a copy, PATH=${name}: exit $code"
+  }
+} else {
+  Write-Host "upstream go from a copy: not on this host"
+}
+
 $failed = $false
 foreach ($case in @(
   @{ Name = 'inherited'; Path = $env:PATH; Assert = $true },

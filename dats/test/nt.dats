@@ -20,6 +20,8 @@ tests:
 		stdout:
 			- "system binary from a copy, PATH=dot: exit 0"
 			- "system binary from a copy, PATH=empty: exit 0"
+			- "upstream go from a copy, PATH=dot: exit 0"
+			- "upstream go from a copy, PATH=empty: exit 0"
 
 	# This host needs no loader: the APE is a PE, and the OS maps the payload
 	# out of it. readonly-boot.dats makes the same claim for linux and darwin.
