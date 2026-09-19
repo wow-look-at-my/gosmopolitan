@@ -359,21 +359,18 @@ func EnvFile() (string, bool, error) {
 }
 
 // RemovedEnv names the configuration keys this toolchain refuses to honor.
-// GOBIN sends installed binaries somewhere other than the toolchain's own
-// bin directory. GOTOOLCHAIN hands the build to a different go command.
-// Either one defeats what this toolchain guarantees about the binaries it
-// produces, so the go command drops both from its own environment, from the
-// environment of every process it starts, and from the go/env file.
-// UnsetRemovedEnv does the process environment. initEnvCache does the file.
+// GOBIN sent installed binaries somewhere other than the toolchain's own bin
+// directory. GOTOOLCHAIN handed the build to a different go command.
+//
+// The go command reads neither. Getenv answers "" for both, KnownEnv omits
+// them so 'go env -w' rejects them like any other name it does not know, and
+// initEnvCache drops them from the go/env file.
+//
+// It does not touch the process environment. A name the go command ignores
+// must reach a program the same way an unknown name does, because a build
+// tool has no business editing what the program under `go run` or `go test`
+// sees.
 var RemovedEnv = []string{"GOBIN", "GOTOOLCHAIN"}
-
-// UnsetRemovedEnv removes the keys in RemovedEnv from the process
-// environment. Call it before anything reads the environment.
-func UnsetRemovedEnv() {
-	for _, name := range RemovedEnv {
-		os.Unsetenv(name)
-	}
-}
 
 func initEnvCache() {
 	envCache.m = make(map[string]string)

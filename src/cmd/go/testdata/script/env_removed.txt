@@ -25,18 +25,23 @@ go env -json
 ! stdout '"GOBIN"'
 ! stdout '"GOTOOLCHAIN"'
 
-# A value in the environment does not come back, and does not reach a child
-# process: the go command drops both before it runs anything.
+# A value in the environment does not come back. The go command ignores it
+# whatever it says.
 env GOBIN=$WORK/bin
 env GOTOOLCHAIN=path
+env UNKNOWNVAR=carried
 go env GOBIN
 ! stdout .
 go env GOTOOLCHAIN
 ! stdout .
 
+# It still reaches a child process. A name this go command ignores travels the
+# way an unknown name travels, because a build tool does not edit what the
+# program under 'go run' sees.
 go run printenv.go
-! stdout 'GOBIN='
-! stdout 'GOTOOLCHAIN='
+stdout 'GOBIN='
+stdout 'GOTOOLCHAIN=path'
+stdout 'UNKNOWNVAR=carried'
 
 # An env file left behind by another toolchain does not set one either.
 env GOBIN=
@@ -63,9 +68,13 @@ import (
 	"strings"
 )
 
+// UNKNOWNVAR is the control. The go command knows nothing about it, so
+// whatever reaches this program under that name is what a removed name must
+// reach it as too.
 func main() {
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "GOBIN=") || strings.HasPrefix(kv, "GOTOOLCHAIN=") {
+		if strings.HasPrefix(kv, "GOBIN=") || strings.HasPrefix(kv, "GOTOOLCHAIN=") ||
+			strings.HasPrefix(kv, "UNKNOWNVAR=") {
 			fmt.Println(kv)
 		}
 	}
