@@ -1,6 +1,6 @@
 # CI internals (cosmo-ci.yml)
 
-Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `yaml-comment-block` guard caps a workflow file at 1 comment line in a row). See CLAUDE.md's "CI" section for the job overview. This file covers the per-step rationale that overview does not.
+Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `yaml-comment-block` guard caps a workflow file at 1 comment line in a row). This file covers the per-step rationale. The workflow itself names the jobs.
 
 ## Every job that builds: `submodules: true`
 
@@ -59,7 +59,7 @@ Some tests exec a binary they built themselves, past that wrapper. Every Linux l
 
 Each second the run prints one line: how many packages have finished, the percentage, then the tests that ended during that second, slowest first. The line is cut to the terminal width, or to 120 columns when nothing reports one. The run ends with a table of the slowest tests, which is how a slow test inside a slow package gets named.
 
-One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
+One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. Every vendor path here is a git submodule that carries its upstream's whole repository. Only `go mod vendor` or a per-package repository produces the pruned tree that test assumes, and this tree uses neither.
 
 ## test job
 
@@ -109,7 +109,7 @@ Regression-gates the fork's WebAssembly ports (`GOOS=js` and `GOOS=wasip1`). Eve
 
 ## publish jobs
 
-Publishes an installable toolchain distribution to buildhost (pazer.build) on every push, once build+test are green. See CLAUDE.md's "Toolchain Distribution" and docs/INSTALL.md for the consumer side. Auth is a GitHub Actions OIDC token (audience `https://pazer.build`). The buildhost project auto-provisions on the first authenticated push. Every branch gets its own rolling latest (`?branch=<name>`).
+Publishes an installable toolchain distribution to buildhost (pazer.build) on every push, once build+test are green. docs/INSTALL.md covers the consumer side. Auth is a GitHub Actions OIDC token (audience `https://pazer.build`). The buildhost project auto-provisions on the first authenticated push. Every branch gets its own rolling latest (`?branch=<name>`).
 
 Publishing is three jobs so each platform's tarball is built ON that platform (distpack packages what a HOST build produced, so `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails with "distpack: stat bin/darwin_arm64/go: no such file or directory" - there is no cross-package shortcut):
 
@@ -118,8 +118,6 @@ Publishing is three jobs so each platform's tarball is built ON that platform (d
 - `publish-finish` - publish that release once every platform is in.
 
 ## Guard suites, test programs and the wasm job
-
-Moved here from CLAUDE.md, which keeps the one-line index entry.
 
 `dats/source/goos-not-syscall-flags.dats` refuses a `runtime.GOOS` predicate that decides an open flag. `runtime.GOOS` names the HOST, and a syscall flag belongs to the build target. Such a branch must read `internal/goos.IsWindows`. `os/removeall_at.go` shipped that mistake and cost every `t.TempDir` cleanup on the windows leg. The guard skips a file whose build constraint leaves cosmo out. One that flags code cosmo never compiles trains the reader to skim it.
 
