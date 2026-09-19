@@ -7,6 +7,9 @@ func TestDeliberateFailure(tst *testing.T) {
 	tst.Errorf("got %d, want %d", 3, 4)
 }
 
-func TestDeliberatePanic(tst *testing.T) {
-	tst.Logf("panic context that must survive")
+func TestDeliberateFatalInSubtest(tst *testing.T) {
+	tst.Run("inner", func(sub *testing.T) {
+		sub.Logf("subtest context that must survive")
+		sub.Fatalf("inner exploded")
+	})
 }
