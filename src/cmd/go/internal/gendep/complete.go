@@ -23,10 +23,15 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"internal/syslist"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -131,6 +136,10 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	added, err = withoutRedeclarations(modroot, stage, mod, added)
+	if err != nil {
+		return nil, err
+	}
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
@@ -138,6 +147,164 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 		}
 	}
 	return added, nil
+}
+
+// withoutRedeclarations drops an added Go file that declares a package-level
+// name the module's own files in that directory already declare.
+//
+// A generator writes the file a module ships without, which is what completing
+// one is for. It can also write a file the module never compiles against: a
+// precomputed table beside the one the module builds at run time, say, where
+// the author ships the second and keeps the generator for the first. Adding
+// that file redeclares the name and the package stops compiling, for this
+// module and for every consumer of it, on a tree the zip alone builds.
+//
+// So the module's own bytes win here too, the way they win in additions: what
+// the authors published compiles, and an addition that contradicts it is not
+// an addition. Only a file with no build constraint is compared, because two
+// files the compiler never sees together may declare whatever they like.
+func withoutRedeclarations(modroot, stage, mod string, added []string) ([]string, error) {
+	kept := added[:0:0]
+	for _, rel := range added {
+		if filepath.Ext(rel) != ".go" {
+			kept = append(kept, rel)
+			continue
+		}
+		names, constrained, err := declaredNames(filepath.Join(stage, filepath.FromSlash(rel)))
+		if err != nil || constrained || len(names) == 0 {
+			if err != nil {
+				return nil, err
+			}
+			kept = append(kept, rel)
+			continue
+		}
+		clash, where, err := firstClash(modroot, path.Dir(rel), names)
+		if err != nil {
+			return nil, err
+		}
+		if clash == "" {
+			kept = append(kept, rel)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "go: %s: %s declares %s, which the module already declares in %s\n", mod, rel, clash, where)
+		fmt.Fprintf(os.Stderr, "go: %s keeps its own file and drops the generated one\n", mod)
+	}
+	return kept, nil
+}
+
+// firstClash answers the first name of names that a module file in dir already
+// declares, and the file declaring it. dir is relative to modroot, in slash
+// form. A constrained file is skipped, as in withoutRedeclarations.
+func firstClash(modroot, dir string, names map[string]bool) (string, string, error) {
+	full := modroot
+	if dir != "." {
+		full = filepath.Join(modroot, filepath.FromSlash(dir))
+	}
+	entries, err := os.ReadDir(full)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || filepath.Ext(ent.Name()) != ".go" {
+			continue
+		}
+		mine, constrained, err := declaredNames(filepath.Join(full, ent.Name()))
+		if err != nil {
+			return "", "", err
+		}
+		if constrained {
+			continue
+		}
+		for name := range mine {
+			if names[name] {
+				return name, path.Join(dir, ent.Name()), nil
+			}
+		}
+	}
+	return "", "", nil
+}
+
+// declaredNames answers the package-level names a Go file declares, and whether
+// the file carries a build constraint. The blank identifier and init are left
+// out: neither collides with anything.
+//
+// A parse error answers nothing rather than failing. A file the compiler will
+// reject anyway is not this check's to report.
+func declaredNames(path string) (map[string]bool, bool, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	if constrainedSource(src) || constrainedName(filepath.Base(path)) {
+		return nil, true, nil
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, false, nil
+	}
+	names := make(map[string]bool)
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			if d.Recv != nil || d.Name.Name == "_" || d.Name.Name == "init" {
+				continue
+			}
+			names[d.Name.Name] = true
+		case *ast.GenDecl:
+			for _, spec := range d.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if s.Name.Name != "_" {
+						names[s.Name.Name] = true
+					}
+				case *ast.ValueSpec:
+					for _, id := range s.Names {
+						if id.Name != "_" {
+							names[id.Name] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	return names, false, nil
+}
+
+// constrainedSource reports whether the file carries a build constraint, which
+// is above the package clause and nowhere else.
+func constrainedSource(src []byte) bool {
+	for line := range strings.SplitSeq(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "package ") {
+			return false
+		}
+		if strings.HasPrefix(trimmed, "//go:build") || strings.HasPrefix(trimmed, "// +build") {
+			return true
+		}
+	}
+	return false
+}
+
+// constrainedName reports whether the file's name constrains it, by the go
+// command's own rule: a platform suffix counts only after an underscore.
+func constrainedName(name string) bool {
+	name = strings.TrimSuffix(name, ".go")
+	cut := strings.Index(name, "_")
+	if cut < 0 {
+		return false
+	}
+	parts := strings.Split(name[cut:], "_")
+	if n := len(parts); n > 0 && parts[n-1] == "test" {
+		parts = parts[:n-1]
+	}
+	n := len(parts)
+	if n >= 2 && syslist.KnownOS[parts[n-2]] && syslist.KnownArch[parts[n-1]] {
+		return true
+	}
+	return n >= 1 && (syslist.KnownOS[parts[n-1]] || syslist.KnownArch[parts[n-1]])
 }
 
 // additions answers the regular files under stage that modroot does not have,
