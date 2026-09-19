@@ -73,7 +73,7 @@ env GOROOT=./b
 go env -changed
 ! stdout 'GOTOOLCHAIN=''?local''?'
 
-[GOOS:windows] env LocalAppData=C:\
+[GOOS:windows] env XDG_CACHE_HOME=C:\
 [GOOS:windows] env GOCACHE=C:\go-build
 [GOOS:windows] go env -changed
 [GOOS:windows] ! stdout 'GOCACHE'

@@ -20,6 +20,8 @@ What Windows cannot serve, all of it absent from upstream's own windows port as 
 
 The NT suite's own red, measured on run 34732730589, is mostly ONE defect wearing many package names. A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
 
+One such host switch is gone rather than fixed: `os.UserCacheDir` answers `$XDG_CACHE_HOME`, else `$HOME/.cache`, on every host. Upstream picks `$HOME/Library/Caches` on darwin, `%LocalAppData%` on NT and `$home/lib/cache` on plan9, which gives one binary a different cache on each machine it runs on. `go env GOCACHE` follows it, so the build cache lands in `~/.cache/go-build` everywhere.
+
 `path/filepath` carries both readings in one file. `TestIsLocal` asks `testenv.GOOS`, the build-target constant. It appends nothing and passes. `TestLocalize` switches on `runtime.GOOS`, appends `winlocalizetests`, and fails on NUL. The durable fix is a host switch inside the package. `os/exec`'s `lp_cosmo.go` is the shape to copy. Widening a build tag is not the fix.
 
 The remainder of that red, by cause:
