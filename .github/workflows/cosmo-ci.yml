@@ -36,7 +36,7 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: wow-look-at-my/actions@yaml-comment-block#latest
+      # The YAML lint reads this repo's files, and build-linux runs it once for that reason.
       - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
