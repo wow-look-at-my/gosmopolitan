@@ -16,6 +16,8 @@ require (
 	golang.org/x/tools v0.45.1-0.20260730185712-faf6fa7c2f89
 )
 
+tool golang.org/x/tools/cmd/stringer
+
 require (
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
