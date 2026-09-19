@@ -97,7 +97,7 @@ golang.org/x/text/language
 golang.org/x/text/transform
 golang.org/x/text/unicode/norm
 # golang.org/x/tools v0.0.0 => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0
-## explicit; go 1.25.0
+## explicit; go 1.26.0
 golang.org/x/tools/cmd/bisect
 golang.org/x/tools/cover
 golang.org/x/tools/go/analysis
@@ -127,9 +127,11 @@ golang.org/x/tools/go/analysis/passes/lostcancel
 golang.org/x/tools/go/analysis/passes/modernize
 golang.org/x/tools/go/analysis/passes/nilfunc
 golang.org/x/tools/go/analysis/passes/printf
+golang.org/x/tools/go/analysis/passes/scannererr
 golang.org/x/tools/go/analysis/passes/shift
 golang.org/x/tools/go/analysis/passes/sigchanyzer
 golang.org/x/tools/go/analysis/passes/slog
+golang.org/x/tools/go/analysis/passes/sqlrowserr
 golang.org/x/tools/go/analysis/passes/stdmethods
 golang.org/x/tools/go/analysis/passes/stdversion
 golang.org/x/tools/go/analysis/passes/stringintconv
@@ -151,6 +153,7 @@ golang.org/x/tools/go/ast/inspector
 golang.org/x/tools/go/cfg
 golang.org/x/tools/go/types/objectpath
 golang.org/x/tools/go/types/typeutil
+golang.org/x/tools/internal/aliases
 golang.org/x/tools/internal/analysis/analyzerutil
 golang.org/x/tools/internal/analysis/driverutil
 golang.org/x/tools/internal/analysis/typeindex
@@ -161,9 +164,11 @@ golang.org/x/tools/internal/diff
 golang.org/x/tools/internal/diff/lcs
 golang.org/x/tools/internal/facts
 golang.org/x/tools/internal/fmtstr
-golang.org/x/tools/internal/goplsexport
+golang.org/x/tools/internal/gcimporter
 golang.org/x/tools/internal/moreiters
+golang.org/x/tools/internal/moremaps
 golang.org/x/tools/internal/packagepath
+golang.org/x/tools/internal/pkgbits
 golang.org/x/tools/internal/refactor
 golang.org/x/tools/internal/refactor/inline
 golang.org/x/tools/internal/stdlib

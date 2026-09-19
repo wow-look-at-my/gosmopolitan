@@ -283,13 +283,14 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 `GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
-**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. The paths below are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
 | vendor path | repository |
 |---|---|
 | `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
+| `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
 Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
