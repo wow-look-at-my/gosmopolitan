@@ -83,6 +83,23 @@ func itoa(buf []byte, val uint64) []byte {
 	return buf[i:]
 }
 
+// enumString answers String for a value of an enum type that matches no
+// constant of that type. The compiler generates the matches and calls this for
+// everything else, so the answer reads like the conversion that produced the
+// value: Pill(7).
+func enumString(name string, val int64) string {
+	var buf [24]byte
+	digits := uint64(val)
+	sign := ""
+	if val < 0 {
+		sign = "-"
+		// Negating in uint64 also answers for the most negative value,
+		// which has no positive counterpart to negate.
+		digits = -digits
+	}
+	return name + "(" + sign + string(itoa(buf[:], digits)) + ")"
+}
+
 // An errorString represents a runtime error described by a single string.
 type errorString string
 

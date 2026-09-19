@@ -82,6 +82,7 @@ func concatbytes(*[32]byte, []string) []byte
 
 func cmpstring(string, string) int
 func intstring(*[4]byte, int64) string
+func enumString(string, int64) string
 func slicebytetostring(buf *[32]byte, ptr *byte, n int) string
 func slicebytetostringtmp(ptr *byte, n int) string
 func slicerunetostring(*[32]byte, []rune) string

@@ -18,6 +18,11 @@ require (
 
 tool golang.org/x/tools/cmd/stringer
 
+// The org's x/tools. It declares the upstream module path, which is what makes
+// this legal: a replacement's declared path is checked against the path being
+// replaced, not against where it is fetched from.
+replace golang.org/x/tools => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0-20260912193235-5a3c03065002
+
 require (
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
