@@ -3201,7 +3201,12 @@ func (ctxt *Link) isMSVC() bool {
 func (ctxt *Link) isLLD() bool {
 	extld := ctxt.extld()
 	name, args := extld[0], extld[1:]
-	args = append(args, trimLinkerArgv(flagExtldflags)...)
+	// Which linker runs is decided by the flags the link is given, and cgo
+	// contributes them as much as -extldflags does. A -fuse-ld reaching the
+	// link through CGO_LDFLAGS alone left this reporting the default linker
+	// while the link ran another, and the two then disagree about what that
+	// linker accepts.
+	args = append(args, trimLinkerArgv(append(append([]string(nil), ldflag...), flagExtldflags...))...)
 	args = append(args, "-Wl,--version")
 	cmd := exec.Command(name, args...)
 	if out, err := cmd.CombinedOutput(); err == nil {
