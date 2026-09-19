@@ -63,23 +63,28 @@ A member carries no string in the common case. Its display text is its own ident
 
 ```go
 type Errno enum int32 {
-	EPERM   = 1  `operation not permitted`
-	ENOENT  = 2  `no such file or directory`
-	ESRCH   = 3  `no such process`
-	EINTR   = 4  `interrupted system call`
-	EIO     = 5  `input/output error`
-	ENXIO   = 6  `no such device or address`
-	E2BIG   = 7  `argument list too long`
-	ENOEXEC = 8  `exec format error`
-	EBADF   = 9  `bad file descriptor`
-	ECHILD  = 10 `no child processes`
-	EAGAIN  = 11 `resource temporarily unavailable`
-	ENOMEM  = 12 `out of memory`
-	EACCES  = 13 `permission denied`
+	EPERM = 1 `operation not permitted`
+	ENOENT    `no such file or directory`
+	ESRCH     `no such process`
+	EINTR     `interrupted system call`
+	EIO       `input/output error`
+	ENXIO     `no such device or address`
+	E2BIG     `argument list too long`
+	ENOEXEC   `exec format error`
+	EBADF     `bad file descriptor`
+	ECHILD    `no child processes`
+	EAGAIN    `resource temporarily unavailable`
+	ENOMEM    `out of memory`
+	EACCES    `permission denied`
+
+	EDEADLK = 35 `resource deadlock avoided`
+	ENAMETOOLONG `file name too long`
 }
 ```
 
 Each column does a job the others cannot. The kernel ABI pins the value. POSIX pins the identifier, which is terse on purpose. The text is the part a person reads, and nothing derives it from `ENXIO`.
+
+A value appears only where the sequence breaks. Two of them carry the whole block. `EPERM` needs one because errno starts at one rather than zero. `EDEADLK` needs one because Linux skips the number before it. Every other member counts up from the member above. Writing a number on each line is the churn `iota` exists to avoid, and an enum avoids it without `iota`.
 
 A tag equal to its own identifier is not worth writing. `New`, `Active` and `Idle` carry none. `ENXIO` carries one.
 
