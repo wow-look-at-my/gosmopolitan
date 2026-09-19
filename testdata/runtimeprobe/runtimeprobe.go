@@ -168,6 +168,7 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("minimalenv", checkMinimalEnv)
 	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
 	// Deliberately adjacent to the other exec checks: this one is the
@@ -684,6 +685,108 @@ func checkExec() {
 		fail("execchild", "child output %q, want child-ok prefix", out)
 	default:
 		ok("execchild")
+	}
+}
+
+// loaderEnvKeys names the variables a Windows image loader reads to start
+// a process. Upstream go.dev/issue/25210 is the record of what their
+// absence does: the child dies at load time with STATUS_DLL_NOT_FOUND,
+// which is exit status 0xc0000135, and it prints nothing.
+var loaderEnvKeys = []string{"SystemRoot", "windir", "ComSpec", "PATHEXT"}
+
+// envKeyIs reports whether entry is a binding of key. An NT host folds
+// case in an environment lookup, so the comparison folds too.
+func envKeyIs(entry, key string) bool {
+	name, _, found := strings.Cut(entry, "=")
+	return found && strings.EqualFold(name, key)
+}
+
+// envWithout answers this process's environment less the named keys.
+func envWithout(keys ...string) []string {
+	var kept []string
+	for _, entry := range os.Environ() {
+		drop := false
+		for _, key := range keys {
+			if envKeyIs(entry, key) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+// envOnly answers the bindings of the named keys, in this process's
+// environment, and nothing else.
+func envOnly(keys ...string) []string {
+	var kept []string
+	for _, entry := range os.Environ() {
+		for _, key := range keys {
+			if envKeyIs(entry, key) {
+				kept = append(kept, entry)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+// checkMinimalEnv starts this binary again under environments that a test
+// harness builds, and asserts the child still runs.
+//
+// A suite strips the environment often. cmd/go's script tests replace PATH
+// outright, and net/http/cgi hands its child the loader keys plus a PATH of
+// its own. A binary that needs any other variable to START fails every one
+// of those tests, several packages deep, and the failure names no variable.
+//
+// The cases separate the two readings of such a failure. `nopath` keeps the
+// loader keys and drops PATH. `loader` keeps the loader keys alone. A child
+// that runs under `nopath` and dies under `loader` needs something the
+// second case dropped. A child that dies under both needs PATH itself,
+// which an APE must not: what it imports comes from the system directory on
+// every host.
+func checkMinimalEnv() {
+	cases := []struct {
+		name string
+		env  []string
+	}{
+		{"full", os.Environ()},
+		{"nopath", envWithout("PATH")},
+		{"loader", envOnly(loaderEnvKeys...)},
+	}
+	for _, probe := range cases {
+		cmd, direct, bad := selfCommand("minimalenv", "1")
+		if bad {
+			return
+		}
+		cmd.Env = append(probe.env, "RUNTIMEPROBE_CHILD=1")
+		var stdout, stderrBuf strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderrBuf
+		if err := cmd.Start(); err != nil {
+			fail("minimalenv", "%s: start self (direct=%v): %v", probe.name, direct, err)
+			continue
+		}
+		waitErr, completed := waitBounded("minimalenv", cmd)
+		if !completed {
+			return
+		}
+		out := stdout.String()
+		switch {
+		case waitErr != nil:
+			detail := ""
+			if stderrBuf.Len() > 0 {
+				detail = fmt.Sprintf(" (stderr: %q)", stderrBuf.String())
+			}
+			fail("minimalenv", "%s: run self under %d vars: %v%s", probe.name, len(probe.env), waitErr, detail)
+		case !strings.HasPrefix(out, "child-ok"):
+			fail("minimalenv", "%s: child output %q, want child-ok prefix", probe.name, out)
+		default:
+			ok("minimalenv/" + probe.name)
+		}
 	}
 }
 
