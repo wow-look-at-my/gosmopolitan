@@ -45,20 +45,6 @@ import (
 
 const generatePrefix = "//go:generate"
 
-// Enabled reports whether a dependency may generate.
-//
-// GOGENERATEDEPS=off is what the generators themselves run under: a directive
-// that starts a go command must not complete its own module again. It is the
-// only setting, and it does not change what a build produces, only whether the
-// generators run at all.
-//
-// A bootstrap cmd/go links the BOOTSTRAP toolchain's internal/cfg, which knows
-// nothing of this variable and panics on the name. So it is read from the
-// environment rather than through cfg.
-func Enabled() bool {
-	return os.Getenv("GOGENERATEDEPS") != "off"
-}
-
 // Complete runs the generate directives of the module extracted at modroot,
 // with the module's path mod, and adds the files they wrote into modroot. It
 // answers the added files, in slash form relative to modroot and sorted, or
@@ -75,7 +61,7 @@ func Enabled() bool {
 // the build: building past it hands every consumer a package whose generated
 // half is missing.
 func Complete(modroot, mod string, pkgs []string) ([]string, error) {
-	if !Enabled() || len(pkgs) == 0 {
+	if len(pkgs) == 0 {
 		return nil, nil
 	}
 	stage := modroot + ".generate"
@@ -499,7 +485,6 @@ func runGenerate(root, pkg string) error {
 	// that single completed module.
 	cmd.Env = append(os.Environ(),
 		"GOTOOLCHAIN=local",
-		"GOGENERATEDEPS=off",
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
 	)
