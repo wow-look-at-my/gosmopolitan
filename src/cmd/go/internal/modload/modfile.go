@@ -97,6 +97,9 @@ type modFileIndex struct {
 	replace      map[module.Version]module.Version
 	exclude      map[module.Version]bool
 	ignore       []string
+	// orgBranch maps an org module path to the branch its line names, for the
+	// lines that name one (cmd/go/internal/orgmod).
+	orgBranch map[string]string
 }
 
 type requireMeta struct {
@@ -463,6 +466,35 @@ func toReplaceMap(replacements []*modfile.Replace) map[module.Version]module.Ver
 	return replaceMap
 }
 
+// suffixComments returns the comments written after the code on line, which is
+// where a go.mod line records what it has to say about itself.
+func suffixComments(line *modfile.Line) []string {
+	if line == nil {
+		return nil
+	}
+	var tokens []string
+	for _, c := range line.Comment().Suffix {
+		tokens = append(tokens, c.Token)
+	}
+	return tokens
+}
+
+// addOrgBranch records that path's line names branch. Two lines naming
+// different branches for one module have no answer, since a module path resolves
+// to one version.
+func (i *modFileIndex) addOrgBranch(path, branch string) {
+	if !orgmod.IsOrg(path) {
+		return
+	}
+	if i.orgBranch == nil {
+		i.orgBranch = make(map[string]string)
+	}
+	if prev, dup := i.orgBranch[path]; dup && prev != branch {
+		base.Fatalf("go: conflicting branches named for %s: %s and %s", path, prev, branch)
+	}
+	i.orgBranch[path] = branch
+}
+
 // indexModFile rebuilds the index of modFile.
 // If modFile has been changed since it was first read,
 // modFile.Cleanup must be called before indexModFile.
@@ -495,6 +527,20 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 		// repository that recorded a version before this rule existed builds
 		// without being edited first.
 		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
+		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
+			i.addOrgBranch(r.Mod.Path, branch)
+		}
+	}
+
+	// A replacement supplies the version that reaches the build, so a fork
+	// consumed through one names its branch there rather than on the require.
+	for _, r := range modFile.Replace {
+		if r.New.Version == "" {
+			continue
+		}
+		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
+			i.addOrgBranch(r.New.Path, branch)
+		}
 	}
 
 	i.replace = toReplaceMap(modFile.Replace)
