@@ -16,11 +16,15 @@ A file the base zip carries keeps the base zip's bytes, whatever a generator wri
 
 There is one entry per module version. The key is:
 
-    hash("modzip", "overlay v1", path, version, baseSum)
+    hash("modzip", overlayVersion, path, version, baseSum)
 
 `baseSum` is the `h1` checksum `go.sum` recorded for the base zip. A module fetched straight from its repository has no such checksum. Its pseudo-version names the commit instead.
 
-The body is a header line `overlay v1 <sum>` followed by a zip of the added files. Each file is named as the module's own zip names it. `<sum>` is the `h1` over those files.
+The body is a header line `<overlayVersion> <sum>` followed by a zip of the added files. Each file is named as the module's own zip names it. `<sum>` is the `h1` over those files.
+
+`overlayVersion` is a constant in `modfetch/overlay.go`. Read the current value there rather than from a copy of it. A change to what the entry holds is a new version. So is a change to how a module is completed. The change carries the bump.
+
+Without the bump one key holds answers that disagree. A machine holding the older entry applies it and runs no generator. A machine that misses generates the other body. It then dies on the store guard below, which names a file and blames the generator.
 
 An empty overlay is stored too. It is what says the module needs nothing. It is also what lets the next build skip generation entirely.
 
