@@ -70,10 +70,16 @@ func TestParseToolID(t *testing.T) {
 // ID it used to get made every such binary share cache entries.
 func TestToolIDHashesUnstampedTool(t *testing.T) {
 	t.Serial() // VetTool is a package variable.
-	testenv.MustHaveExecPath(t, "sh")
 	dir := t.TempDir()
 	tool := filepath.Join(dir, "fakevet")
 	body := "#!/bin/sh\necho 'fakevet version go1.27.0-cosmo buildID='\n"
+	if runtime.GOOS == "windows" {
+		// NT runs neither a shebang nor an extensionless file.
+		tool += ".bat"
+		body = "@echo fakevet version go1.27.0-cosmo buildID=\r\n"
+	} else {
+		testenv.MustHaveExecPath(t, "sh")
+	}
 	if err := os.WriteFile(tool, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
