@@ -54,9 +54,12 @@ while read -r key _; do
 	[[ -n "$branch" ]] || continue
 
 	git config "submodule.$name.branch" "$branch"
-	if git submodule update --init --remote -- "$path" 2>/dev/null; then
+	# git says why it could not update, and a build that keeps the gitlink
+	# instead of the branch head is a build compiling a version nobody chose.
+	if said=$(git submodule update --init --remote -- "$path" 2>&1); then
 		echo "submodulebranch: $path at $branch $(git -C "$path" rev-parse --short=12 HEAD)" >&2
 	else
-		echo "submodulebranch: $path stays where it is: cannot reach $url" >&2
+		echo "submodulebranch: $path stays where it is: $url answered:" >&2
+		echo "$said" >&2
 	fi
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
