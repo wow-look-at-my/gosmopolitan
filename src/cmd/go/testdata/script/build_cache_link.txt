@@ -10,16 +10,20 @@ go build -o $devnull -x main.go
 stderr '(compile|gccgo)( |\.exe).*main\.go'
 stderr '(link|gccgo)( |\.exe)'
 
-# ... and then the linker again ...
+# ... and a second build finds both in the cache ...
 go build -o $devnull -x main.go
 ! stderr '(compile|gccgo)( |\.exe).*main\.go'
-stderr '(link|gccgo)( |\.exe)'
+! stderr '(link|gccgo)( |\.exe)'
 
-# ... but the output binary can serve as a cache.
-go build -o main$GOEXE -x main.go
-stderr '(link|gccgo)( |\.exe)'
+# ... a named output is copied out of the cache ...
 go build -o main$GOEXE -x main.go
 ! stderr '(link|gccgo)( |\.exe)'
+stderr 'cp .*main'
+
+# ... and an output that is up to date is left alone.
+go build -o main$GOEXE -x main.go
+! stderr '(link|gccgo)( |\.exe)'
+! stderr 'cp .*main'
 
 -- main.go --
 package main

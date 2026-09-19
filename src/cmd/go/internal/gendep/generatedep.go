@@ -12,10 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
-	"slices"
 	"strings"
 
 	"cmd/go/internal/base"
@@ -23,9 +20,6 @@ import (
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
 	"cmd/go/internal/str"
-
-	"golang.org/x/mod/modfile"
-	"golang.org/x/mod/module"
 )
 
 // A module zip carries no generated file, and a submodule's contents are not
@@ -33,9 +27,10 @@ import (
 // package the compiler reads as empty, and every consumer fails on a symbol
 // that the package's source never declares.
 //
-// A package that carries a directive is generated in a sandbox, and the compiler
-// reads the tree the generator left.
-const generatePrefix = "//go:generate"
+// Complete, in complete.go, runs a module's directives over the whole module
+// when the module is fetched. Dir is the loader's path for a package that
+// reaches it without its module completed: that one package is generated in a
+// sandbox, and the compiler reads the tree the generator left.
 
 // Dir answers the directory to read a package from: the copy carrying its
 // generated files, or dir unchanged.
@@ -219,34 +214,6 @@ func generateModule(modroot, pkgrel string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(root, pkgrel), nil
-}
-
-// giveGoMod writes stage a go.mod when the fetched module carries none, and
-// reports whether it did. Without one, `go generate` in stage takes whatever
-// go.mod lies above the module cache, or none, as the main module. modrel is
-// the module's directory under the module cache: escaped path '@' version.
-func giveGoMod(stage, modrel string) (bool, error) {
-	gomod := filepath.Join(stage, "go.mod")
-	_, err := os.Stat(gomod)
-	if err == nil {
-		return false, nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return false, err
-	}
-	escaped, _, found := strings.Cut(filepath.ToSlash(modrel), "@")
-	if !found {
-		return false, fmt.Errorf("%s names no module version", modrel)
-	}
-	modPath, err := module.UnescapePath(escaped)
-	if err != nil {
-		return false, err
-	}
-	body := "module " + modfile.AutoQuote(modPath) + "\n"
-	if err := os.WriteFile(gomod, []byte(body), 0o666); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // publishGenerated moves what a generator did in stage into root, the tree
@@ -439,118 +406,4 @@ func makeTreeWritable(dir string) {
 		}
 		return nil
 	})
-}
-
-// runGenerate runs `go generate` for one package of the generated tree.
-//
-// A directive is a command a dependency's author wrote, and a build runs it
-// without anybody reading it first. So it runs confined: it may write the tree
-// it generates and the caches a go command needs, and nothing else. The network
-// stays reachable, because a generator that fetches its own inputs is the case
-// this exists for.
-func runGenerate(root, pkgrel string) error {
-	goCmd, err := base.GoCommand()
-	if err != nil {
-		return err
-	}
-	argv, err := sandboxArgv(root, append(slices.Clone(goCmd), "generate", "./"+filepath.ToSlash(pkgrel))...)
-	if err != nil {
-		return err
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = root
-	// The output streams as it always did, and a copy of the tail rides the
-	// error. The verdict below is recorded once and replayed by every later
-	// build, so an error that is only "exit status 1" tells the build after
-	// this one nothing about why the generator stopped.
-	said := &tailWriter{limit: generateTailBytes}
-	cmd.Stdout = io.MultiWriter(os.Stderr, said)
-	cmd.Stderr = cmd.Stdout
-	// A generator is a program of this module, so it builds against the same
-	// toolchain rather than fetching another one. It runs on this machine, so
-	// `go generate` and every go command a directive starts target this
-	// machine, whatever the build targets. Every target reads the one
-	// generated tree, and the host is the one platform that tree is for.
-	cmd.Env = append(os.Environ(),
-		"GOTOOLCHAIN=local",
-		"GOGENERATEDEPS=off",
-		"GOOS="+runtime.GOOS,
-		"GOARCH="+runtime.GOARCH,
-	)
-	err = cmd.Run()
-	if err == nil {
-		return nil
-	}
-	if tail := strings.TrimSpace(said.String()); tail != "" {
-		return fmt.Errorf("%w\n%s", err, tail)
-	}
-	return err
-}
-
-// generateTailBytes bounds what rides the error. The verdict is a file in the
-// module cache, and a generator can print a whole build log.
-const generateTailBytes = 4 << 10
-
-// tailWriter keeps the last limit bytes written to it and drops the rest. The
-// end of a generator's output is where it says what went wrong.
-type tailWriter struct {
-	limit int
-	buf   []byte
-}
-
-func (sink *tailWriter) Write(payload []byte) (int, error) {
-	wrote := len(payload)
-	if wrote > sink.limit {
-		payload = payload[wrote-sink.limit:]
-	}
-	sink.buf = append(sink.buf, payload...)
-	if over := len(sink.buf) - sink.limit; over > 0 {
-		sink.buf = sink.buf[over:]
-	}
-	return wrote, nil
-}
-
-func (sink *tailWriter) String() string { return string(sink.buf) }
-
-// copyTree copies src to dst, writable. The module cache is read-only, and a
-// generator has to write beside the source it reads.
-func copyTree(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o777)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		return copyFile(path, target)
-	})
-}
-
-func copyFile(src, dst string) error {
-	from, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer from.Close()
-	info, err := from.Stat()
-	if err != nil {
-		return err
-	}
-	into, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(into, from); err != nil {
-		into.Close()
-		return err
-	}
-	return into.Close()
 }
