@@ -52,6 +52,7 @@ func GoCommand() ([]string, error) {
 	return []string{exe}, nil
 }
 
+
 // Linked reports whether this executable links the named tool.
 func Linked(toolName string) bool {
 	_, found := selfTools[toolName]
