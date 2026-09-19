@@ -5,6 +5,7 @@
 package exec_test
 
 import (
+	"context"
 	"debug/pe"
 	"encoding/binary"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestStrippedPathStartsAChild starts this test binary again with PATH cut
@@ -62,14 +64,19 @@ func TestStrippedPathStartsAChild(t *testing.T) {
 			{"system32", append(os.Environ(), "PATH="+system)},
 			{"dot", append(os.Environ(), "PATH=.")},
 			{"empty", append(os.Environ(), "PATH=")},
-			// What TestRunAtLowIntegrity and net/http/cgi hand a child.
-			{"bare", []string{"SystemRoot=" + os.Getenv("SystemRoot")}},
-			{"nothing", []string{}},
+			// An environment with nothing else in it belongs to two other
+			// tests. internal/syscall/windows TestRunAtLowIntegrity and
+			// net/http/cgi TestEnvOverride each hand a child one. A helper
+			// started that way here never returns, because it finds none of
+			// what the test harness around it reads.
 		} {
-			cmd := exec.Command(image.path, "printpath")
+			// A child that hangs must not eat the whole package deadline.
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			cmd := exec.CommandContext(ctx, image.path, "printpath")
 			cmd.Dir = root
 			cmd.Env = value.env
 			out, err := cmd.CombinedOutput()
+			cancel()
 			if err != nil {
 				t.Errorf("%s under env %s: %v\n%s", image.what, value.what, err, out)
 				continue
