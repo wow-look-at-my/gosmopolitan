@@ -601,6 +601,13 @@ func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) 
 		fail(name, "os.Executable: %v", err)
 		return nil, false, true
 	}
+	return commandForExe(name, exe, childMode)
+}
+
+// commandForExe is selfCommand over an explicit path, so a caller can run
+// a COPY of this binary rather than the original. What decides how to
+// launch it is what that file starts with, which a copy carries too.
+func commandForExe(name, exe, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	f, err := os.Open(exe)
 	if err != nil {
 		fail(name, "open %q: %v", exe, err)
@@ -749,19 +756,51 @@ func envOnly(keys ...string) []string {
 // which an APE must not: what it imports comes from the system directory on
 // every host.
 func checkMinimalEnv() {
+	// A copy in another directory, started with a relative PATH, is what
+	// os/exec's own TestCommand does, and what fails there. The cases below
+	// separate the copy from the directory and from the PATH.
+	dir, err := os.MkdirTemp("", "rp-minimalenv")
+	if err != nil {
+		fail("minimalenv", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	exe, err := os.Executable()
+	if err != nil {
+		fail("minimalenv", "os.Executable: %v", err)
+		return
+	}
+	copied := filepath.Join(dir, "copy"+filepath.Ext(exe))
+	if _, bad := copySelf("minimalenv", copied, os.Getenv("OS") == "Windows_NT"); bad {
+		return
+	}
+	dotPath := append(envOnly(loaderEnvKeys...), "PATH=.")
 	cases := []struct {
 		name string
+		exe  string
+		dir  string
 		env  []string
 	}{
-		{"full", os.Environ()},
-		{"nopath", envWithout("PATH")},
-		{"loader", envOnly(loaderEnvKeys...)},
+		{"full", "", "", os.Environ()},
+		{"nopath", "", "", envWithout("PATH")},
+		{"loader", "", "", envOnly(loaderEnvKeys...)},
+		{"copy", copied, "", os.Environ()},
+		{"copydir", copied, dir, os.Environ()},
+		{"copydot", copied, dir, dotPath},
+		{"selfdot", "", dir, dotPath},
 	}
 	for _, probe := range cases {
-		cmd, direct, bad := selfCommand("minimalenv", "1")
+		var cmd *exec.Cmd
+		var direct, bad bool
+		if probe.exe == "" {
+			cmd, direct, bad = selfCommand("minimalenv", "1")
+		} else {
+			cmd, direct, bad = commandForExe("minimalenv", probe.exe, "1")
+		}
 		if bad {
 			return
 		}
+		cmd.Dir = probe.dir
 		cmd.Env = append(probe.env, "RUNTIMEPROBE_CHILD=1")
 		var stdout, stderrBuf strings.Builder
 		cmd.Stdout = &stdout
