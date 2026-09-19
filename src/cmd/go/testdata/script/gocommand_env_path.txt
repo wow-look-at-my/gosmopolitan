@@ -1,0 +1,63 @@
+# GOCOMMAND names the go command that a program reaches go/build through when
+# GOROOT holds no bin/go. The go command writes the variable itself, and writes
+# a path to its own executable, so a value that a PATH search would have to
+# resolve did not come from this toolchain. go/build refuses such a value
+# instead of running whichever go a shell has first, which is the lookup that
+# naming the command was meant to avoid.
+
+[short] skip 'builds and runs a program'
+
+mkdir $WORK/fakeroot/src
+
+# A go of someone else's on PATH, which must not run.
+chmod 0777 fakebin/go
+env PATH=$WORK/gopath/src/fakebin${:}$PATH
+
+env FAKEGOROOT=$WORK/fakeroot
+env SRCDIR=$WORK/gopath/src
+env MARKER=$WORK/ran
+
+# The go command writes GOCOMMAND itself for the programs it starts, so the
+# program is built here and started from this script instead, the way a shell
+# starts it with an environment of its own.
+exec $GOROOT/bin/go build -o $WORK/gocommand$GOEXE gocommand.go
+env GOCOMMAND=go
+exec $WORK/gocommand$GOEXE
+stdout 'is not an absolute path'
+stdout 'refused without running the command'
+! exists $WORK/ran
+
+-- go.mod --
+module gocommand
+
+go 1.27
+-- fakebin/go --
+#!/bin/sh
+echo ran > "$MARKER"
+exit 0
+-- gocommand.go --
+package main
+
+import (
+	"fmt"
+	"go/build"
+	"os"
+)
+
+func main() {
+	ctxt := build.Default
+	ctxt.GOROOT = os.Getenv("FAKEGOROOT")
+
+	_, err := ctxt.Import("example.com/absent", os.Getenv("SRCDIR"), 0)
+	if err == nil {
+		fmt.Println("BAD: Import succeeded")
+		os.Exit(1)
+	}
+	fmt.Println("import error:", err)
+
+	if _, statErr := os.Stat(os.Getenv("MARKER")); statErr == nil {
+		fmt.Println("BAD: GOCOMMAND was executed")
+		os.Exit(1)
+	}
+	fmt.Println("refused without running the command")
+}

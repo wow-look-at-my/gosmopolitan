@@ -1145,10 +1145,32 @@ func (ctxt *Context) goCommand() ([]string, error) {
 	if _, err := exec.LookPath(goCmd); err == nil {
 		return []string{goCmd}, nil
 	}
-	if argv := os.Getenv(goCommandEnv); argv != "" {
-		return strings.Split(argv, "\n"), nil
+	if env := os.Getenv(goCommandEnv); env != "" {
+		argv := strings.Split(env, "\n")
+		if err := checkGoCommand(argv[0]); err != nil {
+			return nil, fmt.Errorf("%s %v", goCommandEnv, err)
+		}
+		return argv, nil
 	}
 	return nil, fmt.Errorf("GOROOT %s holds no go command and %s is unset", ctxt.GOROOT, goCommandEnv)
+}
+
+// checkGoCommand reports whether name, the first word of goCommandEnv, is a
+// command this program may start. The go command writes the variable itself,
+// and writes a path to its own executable, so a name that a PATH search would
+// have to resolve is not one this toolchain wrote: running it would hand the
+// lookup to whichever go a shell has first, which is the very thing naming
+// the command was meant to avoid. The path itself is not checked any further:
+// a caller who can name an absolute file can already run it without this
+// variable.
+func checkGoCommand(name string) error {
+	if name == "" {
+		return errors.New("names no command")
+	}
+	if !filepath.IsAbs(name) {
+		return fmt.Errorf("names %q, which is not an absolute path", name)
+	}
+	return nil
 }
 
 // Invoking the go command here is not very efficient in that it computes information

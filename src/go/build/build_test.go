@@ -852,15 +852,22 @@ func TestGoCommandNeverComesFromPATH(t *testing.T) {
 	t.Setenv("PATH", onPath)
 	t.Setenv(goCommandEnv, "")
 
-	bare := &Context{GOROOT: t.TempDir()}
-	if got, err := bare.goCommand(); err == nil {
+	bareCtxt := &Context{GOROOT: t.TempDir()}
+	if got, err := bareCtxt.goCommand(); err == nil {
 		t.Errorf("a GOROOT without bin/go and no %s: goCommand() = %q, want an error", goCommandEnv, got)
 	}
 
 	t.Setenv(goCommandEnv, "/opt/pipeline/go-toolchain\ngo")
 	want := []string{"/opt/pipeline/go-toolchain", "go"}
-	if got, err := bare.goCommand(); err != nil || !slices.Equal(got, want) {
+	if got, err := bareCtxt.goCommand(); err != nil || !slices.Equal(got, want) {
 		t.Errorf("a GOROOT without bin/go: goCommand() = %q, %v; want %q", got, err, want)
+	}
+
+	for _, bare := range []string{"go", "go" + exe, "./go", "bin/go"} {
+		t.Setenv(goCommandEnv, bare)
+		if got, err := bareCtxt.goCommand(); err == nil {
+			t.Errorf("%s=%q: goCommand() = %q, want an error: a bare name comes from PATH", goCommandEnv, bare, got)
+		}
 	}
 
 	installed := &Context{GOROOT: t.TempDir()}
