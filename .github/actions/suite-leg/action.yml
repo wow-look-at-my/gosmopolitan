@@ -52,14 +52,24 @@ runs:
       shell: bash
       run: ./bin/go version
 
-    # This image's gcc links libwinpthread as a DLL that lives only in C:\mingw64\bin, so a test binary carrying any cgo package finds it through PATH alone. Tests that narrow PATH, or hand a child an environment without one, then get 0xc0000135 from the loader before any of their code runs. Linking it into the binary is what makes the binary carry what it needs.
-    - name: Link the mingw runtime into what cgo builds (NT)
+    # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+    - name: Put the mingw runtime where the loader always looks (NT)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        $flags = '-static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic'
-        "CGO_LDFLAGS=$flags" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        Write-Host "CGO_LDFLAGS=$flags"
+        $sys = Join-Path $env:SystemRoot 'System32'
+        $copied = @()
+        foreach ($dll in @('libwinpthread-1.dll', 'libgcc_s_seh-1.dll', 'libstdc++-6.dll')) {
+          $src = Join-Path 'C:\mingw64\bin' $dll
+          if (-not (Test-Path $src)) { continue }
+          try { Copy-Item $src (Join-Path $sys $dll) -Force; $copied += $dll }
+          catch { Write-Host "could not copy ${dll}: $($_.Exception.Message)" }
+        }
+        if ($copied.Count -eq 0) {
+          Write-Host 'no mingw runtime went to the system directory; a test that narrows PATH will say so'
+        } else {
+          Write-Host "in ${sys}: $($copied -join ', ')"
+        }
 
     # dist test links one APE per test package, and Defender reads back every one of them as it lands. The suite writes thousands of files, so the scan is the slowest thing on this host. A runner is a throwaway VM running this repo's own code, so it has nothing to defend. Linux and darwin run the same suite with no scanner at all.
     - name: Turn Defender off (NT)
