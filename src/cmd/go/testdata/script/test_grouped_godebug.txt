@@ -5,14 +5,14 @@
 go test -x ./nilpanic ./plain
 stdout '^ok\s+example.com/godebug/nilpanic'
 stdout '^ok\s+example.com/godebug/plain'
-stderr -count=1 'link -o'
+stderr -count=1 'link(\.exe)?"? -o'
 
 # A setting only the start of the program reads keeps packages apart.
 go test ./plain ./maxprocs
 stdout '^ok\s+example.com/godebug/plain'
 stdout '^ok\s+example.com/godebug/maxprocs'
 go test -n -c -o $devnull ./plain ./maxprocs
-stderr -count=2 'link -o'
+stderr -count=2 'link(\.exe)?"? -o'
 
 -- go.mod --
 module example.com/godebug
