@@ -9,7 +9,9 @@
 # it.
 #
 # A probe, not a check: it asserts nothing and never fails the build.
-# SIGTERM ends it at once, its sleep included.
+# SIGTERM ends it at once, its sleep included. Whoever reads the suite's
+# output waits for every process holding that pipe, and an orphaned sleep
+# is one of them.
 
 nap=
 trap 'if [ -n "$nap" ]; then kill "$nap"; fi; exit 0' TERM
