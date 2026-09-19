@@ -183,17 +183,17 @@ func main() {
 		}
 		have := lines(src)
 		var out []string
-		at := 0
+		pos := 0
 
 		for idx < len(patch) && strings.HasPrefix(patch[idx], "@@ -") {
 			start, left := hunkHead(patch[idx])
 			idx++
-			for at < start-1 {
-				if at >= len(have) {
+			for pos < start-1 {
+				if pos >= len(have) {
 					fail("%s: a hunk starts past the end of the file", name)
 				}
-				out = append(out, have[at])
-				at++
+				out = append(out, have[pos])
+				pos++
 			}
 			for idx < len(patch) {
 				line := patch[idx]
@@ -205,13 +205,13 @@ func main() {
 				}
 				switch line[0] {
 				case ' ', '-':
-					if at >= len(have) || have[at] != line[1:] {
-						fail("%s: line %d does not match the patch", name, at+1)
+					if pos >= len(have) || have[pos] != line[1:] {
+						fail("%s: line %d does not match the patch", name, pos+1)
 					}
 					if line[0] == ' ' {
-						out = append(out, have[at])
+						out = append(out, have[pos])
 					}
-					at++
+					pos++
 					left--
 				case '+':
 					out = append(out, line[1:])
@@ -229,7 +229,7 @@ func main() {
 				fail("%s: a hunk ended with %d source lines unread", name, left)
 			}
 		}
-		out = append(out, have[at:]...)
+		out = append(out, have[pos:]...)
 		if err := os.WriteFile(name, []byte(strings.Join(out, "")), 0666); err != nil {
 			fail("%v", err)
 		}
