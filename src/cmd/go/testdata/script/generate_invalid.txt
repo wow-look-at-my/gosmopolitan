@@ -1,9 +1,8 @@
 [short] skip
 
 # Install an echo command because Windows doesn't have it.
-env BIN=$GOPATH/bin
 go install echo.go
-env PATH=$BIN${:}$PATH
+env PATH=$GOPATH/bin${:}$PATH
 
 # Test go generate for directory with no go files
 ! go generate ./nogo

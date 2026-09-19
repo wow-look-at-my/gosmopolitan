@@ -6,7 +6,6 @@
 [GOOS:plan9] skip
 [!exec:fossil] skip
 [short] skip
-env BIN=$WORK/gopath/bin
 env oldpath=$PATH
 env HOME=$WORK
 env USER=gopher
@@ -18,9 +17,9 @@ cd repo/a
 
 # If there's no local repository, there's no VCS info.
 go install
-go version -m $BIN/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
 ! stdout vcs.revision
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 
 # If there is a repository, but it can't be used for some reason,
 # there should be an error. It should hint about -buildvcs=false.
@@ -32,7 +31,7 @@ chmod 0755 $WORK/fakebin/fossil
 cd a
 ! go install
 stderr '^error obtaining VCS status: exit status 1\n\tUse -buildvcs=false to disable VCS stamping.$'
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 cd ..
 env PATH=$oldpath
 rm $fslckout
@@ -43,36 +42,36 @@ exec fossil add a README
 exec fossil commit -m 'initial commit'
 cd a
 go install
-go version -m $BIN/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
 stdout '^\tbuild\tvcs=fossil\n'
 stdout '^\tbuild\tvcs.revision='
 stdout '^\tbuild\tvcs.time='
 stdout '^\tbuild\tvcs.modified=false$'
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 
 # Building with -buildvcs=false suppresses the info.
 go install -buildvcs=false
-go version -m $BIN/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
 ! stdout vcs.revision
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 
 # An untracked file is shown as modified, even if it isn't part of the build.
 cp ../../outside/empty.txt .
 go install
-go version -m $BIN/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
 stdout '^\tbuild\tvcs=fossil\n'
 stdout '^\tbuild\tvcs.modified=true$'
 rm empty.txt
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 
 # An edited file is shown as modified, even if it isn't part of the build.
 cp ../../outside/empty.txt ../README
 go install
-go version -m $BIN/a$GOEXE
+go version -m $GOPATH/bin/a$GOEXE
 stdout '^\tbuild\tvcs=fossil\n'
 stdout '^\tbuild\tvcs.modified=true$'
 exec fossil revert ../README
-rm $BIN/a$GOEXE
+rm $GOPATH/bin/a$GOEXE
 
 -- $WORK/fakebin/fossil --
 #!/bin/sh

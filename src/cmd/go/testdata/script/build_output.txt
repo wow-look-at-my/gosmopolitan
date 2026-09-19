@@ -4,7 +4,6 @@
 [!GOOS:windows] env NONEXE='.exe'
 [GOOS:windows] env NONEXE=''
 
-env BIN=$GOPATH/bin
 go install m/isarchive &
 
 go build x.go
@@ -54,7 +53,7 @@ wait # for isarchive
 
 go build -o p.a p.go
 exists p.a
-exec $BIN/isarchive p.a
+exec $GOPATH/bin/isarchive p.a
 
 go build cmd/gofmt
 exists -exec gofmt$GOEXE
@@ -73,7 +72,7 @@ go build sync/atomic
 
 go build -o myatomic.a sync/atomic
 exists myatomic.a
-exec $BIN/isarchive myatomic.a
+exec $GOPATH/bin/isarchive myatomic.a
 ! exists atomic
 ! exists atomic.a
 ! exists atomic.exe
