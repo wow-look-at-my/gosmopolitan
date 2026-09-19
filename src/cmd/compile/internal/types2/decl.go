@@ -10,6 +10,7 @@ import (
 	"go/constant"
 	. "internal/types/errors"
 	"slices"
+	"strconv"
 )
 
 func (check *Checker) declare(scope *Scope, id *syntax.Name, obj Object, pos syntax.Pos) {
@@ -364,6 +365,8 @@ func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited boo
 	if text != nil && isValid(obj.typ) {
 		if named := asNamed(obj.typ); named == nil || !named.enum {
 			check.errorf(text, InvalidEnum, "name text on %s, which is not an enum type", obj.typ)
+		} else if str, err := strconv.Unquote(text.Value); err == nil {
+			obj.text = str
 		}
 	}
 }

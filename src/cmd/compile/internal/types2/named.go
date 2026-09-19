@@ -381,6 +381,11 @@ func (t *Named) Obj() *TypeName {
 	return t.inst.orig.obj
 }
 
+// IsEnum reports whether t was declared with "enum", so its String method
+// prints the name text of the constant a value equals. The compiler asks this
+// to decide which types need that method built.
+func (t *Named) IsEnum() bool { return t.enum }
+
 // Origin returns the generic type from which the named type t is
 // instantiated. If t is not an instantiated type, the result is t.
 func (t *Named) Origin() *Named {
