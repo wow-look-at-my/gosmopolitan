@@ -42,7 +42,13 @@ Everything above rests on one property. A module version means the same bytes on
 
 ## No setting
 
-There is no setting. Every fetch completes the module it fetched, and no environment variable changes that.
+There is no setting. Every fetch completes the module it fetched. No environment variable changes that. None is read.
+
+A generator is a program. So the go command a directive starts fetches the generator's own dependencies, and it completes those too. That is the same work one level down. It ends where the dependency graph ends.
+
+A module version is completed one time. `unzip` holds that version's lock file across the completion. A second go command waits for the first one.
+
+Nothing here is a knob to turn off. A build that skipped the generators will compile a different package from the same module version. That is the one thing this mechanism exists to prevent.
 
 ## Sandboxing
 
