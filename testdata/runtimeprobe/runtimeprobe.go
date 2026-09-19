@@ -169,6 +169,7 @@ func main() {
 	// that still prints before that crash.
 	timed("exec", checkExec)
 	timed("minimalenv", checkMinimalEnv)
+	timed("spawnchdir", checkSpawnAfterChdir)
 	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
 	// Deliberately adjacent to the other exec checks: this one is the
@@ -826,6 +827,91 @@ func checkMinimalEnv() {
 		default:
 			ok("minimalenv/" + probe.name)
 		}
+	}
+}
+
+// checkSpawnAfterChdir starts a copy of this binary from a process that
+// has changed ITS OWN working directory and ITS OWN PATH first.
+//
+// That is the one thing os/exec's TestCommand does that checkMinimalEnv
+// does not. The cases there pass on an NT runner, copy and dot PATH
+// included, while every TestCommand case that starts a program exits
+// 0xc0000135. What is left between them is the state of the parent: the
+// test calls t.Chdir and t.Setenv, and both reach this process rather
+// than the child's ProcAttr.
+func checkSpawnAfterChdir() {
+	root, err := os.MkdirTemp("", "rp-chdir")
+	if err != nil {
+		fail("spawnchdir", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(root)
+	inner := filepath.Join(root, "p1")
+	if err := os.Mkdir(inner, 0o777); err != nil {
+		fail("spawnchdir", "Mkdir: %v", err)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fail("spawnchdir", "os.Executable: %v", err)
+		return
+	}
+	copied := filepath.Join(inner, "copy"+filepath.Ext(exe))
+	if _, bad := copySelf("spawnchdir", copied, os.Getenv("OS") == "Windows_NT"); bad {
+		return
+	}
+
+	wasDir, err := os.Getwd()
+	if err != nil {
+		fail("spawnchdir", "Getwd: %v", err)
+		return
+	}
+	wasPath, hadPath := os.LookupEnv("PATH")
+	if err := os.Chdir(root); err != nil {
+		fail("spawnchdir", "Chdir %q: %v", root, err)
+		return
+	}
+	defer os.Chdir(wasDir)
+	if err := os.Setenv("PATH", "."); err != nil {
+		fail("spawnchdir", "Setenv PATH: %v", err)
+		return
+	}
+	defer func() {
+		if hadPath {
+			os.Setenv("PATH", wasPath)
+			return
+		}
+		os.Unsetenv("PATH")
+	}()
+
+	cmd, direct, bad := commandForExe("spawnchdir", copied, "1")
+	if bad {
+		return
+	}
+	cmd.Dir = inner
+	var stdout, stderrBuf strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Start(); err != nil {
+		fail("spawnchdir", "start (direct=%v): %v", direct, err)
+		return
+	}
+	waitErr, completed := waitBounded("spawnchdir", cmd)
+	if !completed {
+		return
+	}
+	out := stdout.String()
+	switch {
+	case waitErr != nil:
+		detail := ""
+		if stderrBuf.Len() > 0 {
+			detail = fmt.Sprintf(" (stderr: %q)", stderrBuf.String())
+		}
+		fail("spawnchdir", "run the copy: %v%s", waitErr, detail)
+	case !strings.HasPrefix(out, "child-ok"):
+		fail("spawnchdir", "child output %q, want child-ok prefix", out)
+	default:
+		ok("spawnchdir")
 	}
 }
 
