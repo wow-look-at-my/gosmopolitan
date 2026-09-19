@@ -12,7 +12,7 @@ stdout '^ok\s+example.com/grouped/lib'
 stdout '^ok\s+example.com/grouped/solo'
 stdout '^ok\s+example.com/grouped/cmd/one'
 stdout '^ok\s+example.com/grouped/cmd/two'
-stderr -count=1 'link'$GOEXE' -o'
+stderr -count=1 'link(\.exe)?"? -o'
 
 -- go.mod --
 module example.com/grouped
