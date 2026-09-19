@@ -57,34 +57,47 @@ func TestLinkUnderLTO(t *testing.T) {
 	write("go.mod", "module ltoprobe\n\ngo 1.27\n")
 	write("main.go", ltoProbeSource)
 
+	// The plain build is the control. Both take the same source and the same
+	// toolchain, so every header field that differs is one -flto moved, and
+	// the bad one is among them.
 	const cflags = "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
-	exe := filepath.Join(dir, "ltoprobe.exe")
-	build := exec.Command(testenv.GoToolPath(t), "build", "-o", exe, ".")
-	build.Dir = dir
-	build.Env = append(os.Environ(),
-		"CGO_CFLAGS="+cflags,
-		"CGO_CXXFLAGS="+cflags,
-		"CGO_LDFLAGS="+cflags)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building under -flto: %v\n%s", err, out)
-	}
-	describeLTOImage(t, exe)
+	for _, build := range []struct {
+		what  string
+		flags string
+	}{
+		{"plain", ""},
+		{"lto", cflags},
+	} {
+		exe := filepath.Join(dir, build.what+".exe")
+		cmd := exec.Command(testenv.GoToolPath(t), "build", "-o", exe, ".")
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"CGO_CFLAGS="+build.flags,
+			"CGO_CXXFLAGS="+build.flags,
+			"CGO_LDFLAGS="+build.flags)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("building %s: %v\n%s", build.what, err, out)
+			continue
+		}
+		describeLTOImage(t, build.what, exe)
 
-	run := exec.Command(exe)
-	run.Dir = dir
-	out, err := run.CombinedOutput()
-	if err != nil {
-		t.Fatalf("starting the -flto build: %v\n%s", err, out)
-	}
-	if got := strings.TrimSpace(string(out)); got != "OK" {
-		t.Errorf("the -flto build printed %q, want OK", got)
+		run := exec.Command(exe)
+		run.Dir = dir
+		out, err := run.CombinedOutput()
+		if err != nil {
+			t.Errorf("starting %s: %v\n%s", build.what, err, out)
+			continue
+		}
+		if got := strings.TrimSpace(string(out)); got != "OK" {
+			t.Errorf("%s printed %q, want OK", build.what, got)
+		}
 	}
 }
 
 // describeLTOImage logs the header fields NT reads before it starts an image.
 // A file gcc left as LTO bytecode, or one it truncated, fails here rather
 // than at the start, which is the difference worth seeing.
-func describeLTOImage(t *testing.T, path string) {
+func describeLTOImage(t *testing.T, what, path string) {
 	t.Helper()
 	info, err := os.Stat(path)
 	if err != nil {
@@ -95,28 +108,35 @@ func describeLTOImage(t *testing.T, path string) {
 		file.Read(head)
 		file.Close()
 	}
-	t.Logf("image %s: %d bytes, first bytes %x", path, info.Size(), head)
+	t.Logf("%s: %d bytes, first bytes %x", what, info.Size(), head)
 
 	file, err := pe.Open(path)
 	if err != nil {
-		t.Errorf("the image is not a PE: %v", err)
+		t.Errorf("%s is not a PE: %v", what, err)
 		return
 	}
 	defer file.Close()
-	t.Logf("machine %#x, %d sections, characteristics %#x",
-		file.FileHeader.Machine, file.FileHeader.NumberOfSections, file.FileHeader.Characteristics)
+	t.Logf("%s: machine %#x, %d sections, characteristics %#x",
+		what, file.FileHeader.Machine, file.FileHeader.NumberOfSections, file.FileHeader.Characteristics)
 	switch opt := file.OptionalHeader.(type) {
 	case *pe.OptionalHeader64:
-		t.Logf("pe64: subsystem %d, entry %#x, imagesize %#x, headersize %#x, dllcharacteristics %#x",
-			opt.Subsystem, opt.AddressOfEntryPoint, opt.SizeOfImage, opt.SizeOfHeaders, opt.DllCharacteristics)
+		t.Logf("%s: pe64 subsystem %d, entry %#x, base %#x, imagesize %#x, headersize %#x, align %#x/%#x, dllcharacteristics %#x, stack %#x/%#x",
+			what, opt.Subsystem, opt.AddressOfEntryPoint, opt.ImageBase, opt.SizeOfImage, opt.SizeOfHeaders,
+			opt.SectionAlignment, opt.FileAlignment, opt.DllCharacteristics,
+			opt.SizeOfStackReserve, opt.SizeOfStackCommit)
+		for idx, dir := range opt.DataDirectory {
+			if dir.VirtualAddress != 0 || dir.Size != 0 {
+				t.Logf("%s: datadir %2d vaddr %#x size %#x", what, idx, dir.VirtualAddress, dir.Size)
+			}
+		}
 	case *pe.OptionalHeader32:
-		t.Logf("pe32: subsystem %d, entry %#x, imagesize %#x, headersize %#x, dllcharacteristics %#x",
-			opt.Subsystem, opt.AddressOfEntryPoint, opt.SizeOfImage, opt.SizeOfHeaders, opt.DllCharacteristics)
+		t.Logf("%s: pe32 subsystem %d, entry %#x, imagesize %#x, headersize %#x, dllcharacteristics %#x",
+			what, opt.Subsystem, opt.AddressOfEntryPoint, opt.SizeOfImage, opt.SizeOfHeaders, opt.DllCharacteristics)
 	default:
-		t.Logf("no optional header")
+		t.Logf("%s: no optional header", what)
 	}
 	for _, sec := range file.Sections {
-		t.Logf("section %-10s vaddr %#x vsize %#x raw %#x at %#x",
-			sec.Name, sec.VirtualAddress, sec.VirtualSize, sec.Size, sec.Offset)
+		t.Logf(what+" section %-18s vaddr %#x vsize %#x raw %#x at %#x flags %#x",
+			sec.Name, sec.VirtualAddress, sec.VirtualSize, sec.Size, sec.Offset, sec.Characteristics)
 	}
 }
