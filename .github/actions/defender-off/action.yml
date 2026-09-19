@@ -24,10 +24,13 @@ runs:
         }
 
         Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop
+
+        # Splatted: "-$switch $true" reads the name as a positional value and takes nothing.
         foreach ($switch in @('DisableBehaviorMonitoring', 'DisableIOAVProtection',
                               'DisableScriptScanning', 'DisableArchiveScanning',
                               'DisableScanningNetworkFiles')) {
-          try { Set-MpPreference -$switch $true -ErrorAction Stop }
+          $one = @{$switch = $true}
+          try { Set-MpPreference @one -ErrorAction Stop }
           catch { Write-Host "$switch not taken: $($_.Exception.Message)" }
         }
 
