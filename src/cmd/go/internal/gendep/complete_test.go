@@ -125,22 +125,6 @@ func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
 	}
 }
 
-// A run that failed contributes nothing, so what appeared during it has to be
-// separable from what the runs before it left.
-func TestAppearedNamesOnlyTheNewFiles(test *testing.T) {
-	kept := []string{"one/one.gen.go", "two/two.gen.go"}
-	grown := []string{"broken/broken.gen.go", "one/one.gen.go", "two/two.gen.go"}
-
-	got := appeared(grown, kept)
-	want := []string{"broken/broken.gen.go"}
-	if !slices.Equal(got, want) {
-		test.Errorf("appeared = %v, want %v", got, want)
-	}
-	if got := appeared(kept, kept); len(got) != 0 {
-		test.Errorf("appeared with nothing new = %v, want none", got)
-	}
-}
-
 // A missing program is this host's own gap, not the module's. Skipping the
 // directive would hand this build a module that the same version elsewhere does
 // not match, so the build stops instead.

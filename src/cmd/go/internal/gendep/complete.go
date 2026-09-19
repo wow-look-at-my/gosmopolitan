@@ -47,16 +47,11 @@ const generatePrefix = "//go:generate"
 // answers the added files, in slash form relative to modroot and sorted, or
 // nothing when the module carries no directive at all.
 //
-// Each package that carries a directive generates on its own, in path order, so
-// one package's broken directive costs that package alone. What a failed run
-// wrote is deleted: a half-generated package compiles against files its
-// generator never finished, which is worse than the empty package the zip
-// carried. Every other package keeps what it wrote.
-//
-// A host that cannot confine a generator, cannot start one the go command built,
-// or lacks a program a directive names, says nothing about the module and stops
-// the build: building past it hands every consumer a package whose generated
-// half is missing.
+// Each package that carries a directive generates on its own, in path order. A
+// directive that fails stops the build, whatever failed it. The module asked for
+// that file, so a build that continues without it is compiling a module nobody
+// wrote. What it reports is the symbol the missing file defines, named at the
+// first line that uses it, which is nowhere near the generator that never ran.
 func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	if len(pkgs) == 0 {
 		return nil, nil
@@ -76,37 +71,17 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	kept, err := additions(modroot, stage)
-	if err != nil {
-		return nil, err
-	}
 	for _, pkg := range pkgs {
-		runErr := runGenerate(stage, pkg)
-		grown, err := additions(modroot, stage)
-		if err != nil {
-			return nil, err
-		}
-		if runErr == nil {
-			kept = grown
+		err := runGenerate(stage, pkg)
+		if err == nil {
 			continue
 		}
-		if hostCannotGenerate(runErr) {
-			return nil, runErr
+		// Both stop the build. They send the reader to different places: one
+		// names a machine to fix, the other a module.
+		if hostCannotGenerate(err) {
+			return nil, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
 		}
-		// A module zip drops every path the go command ignores, `_codegen`
-		// among them, so a generator kept beside the package it writes is
-		// absent from what a consumer fetches. testify ships one, and ships
-		// its generated files too, so the build needs nothing from it.
-		//
-		// The module's own bytes decide which package fails, so every machine
-		// reaches the same tree.
-		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, runErr)
-		fmt.Fprintf(os.Stderr, "go: %s keeps what its other packages generated\n", mod)
-		for _, rel := range appeared(grown, kept) {
-			if err := os.Remove(filepath.Join(stage, filepath.FromSlash(rel))); err != nil {
-				return nil, err
-			}
-		}
+		return nil, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -151,22 +126,6 @@ func additions(modroot, stage string) ([]string, error) {
 	}
 	sort.Strings(added)
 	return added, nil
-}
-
-// appeared answers the entries of grown that kept does not have. Both are
-// sorted.
-func appeared(grown, kept []string) []string {
-	had := make(map[string]bool, len(kept))
-	for _, rel := range kept {
-		had[rel] = true
-	}
-	var out []string
-	for _, rel := range grown {
-		if !had[rel] {
-			out = append(out, rel)
-		}
-	}
-	return out
 }
 
 // Packages answers the directories under modroot that carry a generate
