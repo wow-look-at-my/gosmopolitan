@@ -109,6 +109,24 @@ Publishing is three jobs so each platform's tarball is built ON that platform (d
 - `publish-upload` - per-platform build + upload, straight to buildhost.
 - `publish-finish` - publish that release once every platform is in.
 
+## Guard suites, test programs and the wasm job
+
+Moved here from CLAUDE.md, which keeps the one-line index entry.
+
+`dats/checks/goos-not-syscall-flags.dats` refuses a `runtime.GOOS` predicate that decides an open flag. `runtime.GOOS` names the HOST, and a syscall flag belongs to the build target. Such a branch must read `internal/goos.IsWindows`. `os/removeall_at.go` shipped that mistake and cost every `t.TempDir` cleanup on the windows leg. The guard skips a file whose build constraint leaves cosmo out. One that flags code cosmo never compiles trains the reader to skim it.
+
+More suites in `cosmo-checks` gate properties nothing else measures. `dats/checks/unix-tag-agrees.dats` compares `cmd/dist`'s `unixOS` against `internal/syslist.UnixOS`. dist builds against the bootstrap toolchain and cannot import that package, so it copies the list. A GOOS in one copy and not the other makes the builders disagree about which files a package holds. `dats/checks/no-wordspam.dats` caps markdown size, paragraph length and comment runs. It refuses changelog phrasing by name. `dats/checks/emitted-binaries.dats` builds a program, a thin build, a test binary and both wasm ports. It reads the first bytes of each. A host ELF, Mach-O or PE leaving a build means a port went missing.
+
+`runtime.GOOS` and `runtime.GOARCH` are `readonly var`, so only package runtime may assign them (docs/READONLY-VARS.md). Both name the HOST, read at startup. One APE boots on every supported kernel. A payload can run on a machine of another architecture. The cost is that `const x = runtime.GOARCH == "amd64"` is a compile error against a variable. Third-party code writes it (`golang.org/x/crypto/chacha20`), so `crypto/tls`'s bogo suite cannot build its dependency. Only the compiler can serve both readings. It folds the build value in a constant context (`types2/dynconst.go`). A plain read still loads the variable.
+
+`dats/checks/waiver-expiry.dats` refuses a `continue-on-error` that carries no `waiver-expires:` date. It also refuses one whose date has passed. The NT suite leg holds one. It runs and reports in full. It does not hold the branch while the port's own gaps fail packages there.
+
+`dats/checks/build-std.dats` is the uprev guardrail: `GOOS=cosmo go build std` for amd64 and arm64, and the x/sys, modernc libc and sqlite consumers against it. The execution suite compiles only what fizzbuzz and runtimeprobe import, which measured `84 of 358` std packages under cosmo. So an upstream re-partition of a package can pass the execution suite untouched. Run it locally before proposing an uprev. It is what turns a clean merge into a verified one.
+
+Each build's artifact ships `fizzbuzz.com` for basic execution. It also ships `runtimeprobe.com` (testdata/runtimeprobe), a multi-file module built through its directory: file I/O and directory listing. Its `nanosleep` check asserts on the elapsed CLOCK rather than on the error. A syscall that returns success without sleeping passes an error-only check. The apetest suite runs both against every origin binary, through the FIZZBUZZ_BIN and RUNTIMEPROBE_BIN env vars. The macos-latest runner is what executes the darwin (Syslib) code paths.
+
+The `wasm` job is ubuntu-only, because wasm output is host-independent. It regression-gates the fork's WebAssembly ports. It builds the toolchain, builds std for js/wasm and wasip1/wasm, and runs the smoke programs. A `wasm-suite` matrix job runs `go tool dist test` for each port, js under node and wasip1 under wasmtime. That is the gate the other ports get.
+
 Nothing is handed between the jobs: each leg builds its own tarball on its own runner and uploads it directly, so no GitHub artifact. A failed leg means `publish-finish` never runs and the release stays a draft, which buildhost records as INTENT and never serves as latest - so.
 
 **Create buildhost release.** No version input: buildhost auto-increments the project version. `git_branch`/`git_commit` default to the pushed branch and sha inside the action. Every branch keeps its own rolling latest and branch pushes never.
