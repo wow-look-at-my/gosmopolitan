@@ -2,11 +2,7 @@
 [!exec:pkg-config] skip 'test requires pkg-config tool'
 
 ! go list -export .
-<<<<<<< HEAD
-stderr '^# example\n# \[pkg-config .*\]\n(.*\n)*(Package .* not found|could not find package .*|Can''t find .*\.pc in any of .*)'
-=======
 stderr '^# example\n# \[pkg-config .*\]\n(.*\n)*(Package .* not found)|(could not find package .*)|(Can.t find .*\.pc in any of)'
->>>>>>> origin/master
 
 -- go.mod --
 module example

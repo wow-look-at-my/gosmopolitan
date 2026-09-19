@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,22 +52,11 @@ func run(t *testing.T, dir string, lto bool, args ...string) {
 		if strings.Contains(testenv.Builder(), "clang") {
 			extraLDFlags += " -fuse-ld=lld"
 		}
-		cflags := "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
-		ldflags := cflags + extraLDFlags
-		// Neither linker here can finish an LTO link: ld writes an image the
-		// kernel refuses, and lld drops the director callbacks swig generates.
-		// A fat object carries ordinary code beside the bitcode, and -fno-lto
-		// is what tells the link to take that code. The compile still runs
-		// under LTO, which is what this test asks cgo about, and upstream
-		// already answers the same defect by choosing another linker.
-		if runtime.GOOS == "windows" {
-			cflags += " -ffat-lto-objects"
-			ldflags = "-fno-lto -Wno-unknown-warning-option" + extraLDFlags
-		}
+		const cflags = "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
 		cmd.Env = append(cmd.Environ(),
 			"CGO_CFLAGS="+cflags,
 			"CGO_CXXFLAGS="+cflags,
-			"CGO_LDFLAGS="+ldflags)
+			"CGO_LDFLAGS="+cflags+extraLDFlags)
 	}
 	out, err := cmd.CombinedOutput()
 	if string(out) != "OK\n" {

@@ -1,10 +1,6 @@
 go test -cover -n ./...
 [!GOOS:windows] stderr $GOROOT'/bin/go tool covdata'
-<<<<<<< HEAD
-[GOOS:windows] stderr '\\\\bin\\\\go'$GOEXE'" tool covdata'
-=======
 [GOOS:windows] stderr '\\\\bin\\\\go(\.exe)?" tool covdata'
->>>>>>> origin/master
 
 -- go.mod --
 module example.com/m

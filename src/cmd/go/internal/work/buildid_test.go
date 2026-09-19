@@ -7,13 +7,11 @@ package work
 import (
 	"internal/testenv"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
-	"cmd/go/internal/cfg"
 	"cmd/internal/buildid"
 )
 
@@ -72,19 +70,6 @@ func TestParseToolID(t *testing.T) {
 // ID it used to get made every such binary share cache entries.
 func TestToolIDHashesUnstampedTool(t *testing.T) {
 	t.Serial() // VetTool is a package variable.
-<<<<<<< HEAD
-	testenv.MustHaveGoBuild(t)
-	testenv.MustHaveExec(t)
-	dir := t.TempDir()
-
-	// A compiled program rather than a shell script: NT runs no shebang, so a
-	// script stands in for a tool on one host and not on the others. The name
-	// carries the host's tool suffix, which is what toolWord trims back off.
-	src := filepath.Join(dir, "fakevet.go")
-	body := "package main\n\nimport \"fmt\"\n\n" +
-		"func main() { fmt.Println(\"fakevet version go1.27.0-cosmo buildID=\") }\n"
-	if err := os.WriteFile(src, []byte(body), 0o666); err != nil {
-=======
 	dir := t.TempDir()
 	tool := filepath.Join(dir, "fakevet")
 	body := "#!/bin/sh\necho 'fakevet version go1.27.0-cosmo buildID='\n"
@@ -96,15 +81,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 		testenv.MustHaveExecPath(t, "sh")
 	}
 	if err := os.WriteFile(tool, []byte(body), 0o755); err != nil {
->>>>>>> origin/master
 		t.Fatal(err)
-	}
-	tool := filepath.Join(dir, "fakevet"+cfg.ToolExeSuffix())
-	build := exec.Command(testenv.GoToolPath(t), "build", "-o", tool, src)
-	build.Dir = dir
-	build.Env = append(os.Environ(), "GOOS="+runtime.GOOS, "GOARCH="+runtime.GOARCH)
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("building the stand-in tool: %v\n%s", err, out)
 	}
 	old := VetTool
 	VetTool = []string{tool}
@@ -137,17 +114,11 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		t.Skipf("test exercises the cosmo fork's tool ID scheme; running under %s", runtime.Version())
 	}
 
-<<<<<<< HEAD
-	// The tool is a file, so its name carries the host's suffix, and a copy
-	// needs that suffix as well to be a program the host will start.
-	exe := cfg.ToolExeSuffix()
-=======
 	// NT names the tool with an extension, and it runs nothing without one.
 	exe := ""
 	if runtime.GOOS == "windows" {
 		exe = ".exe"
 	}
->>>>>>> origin/master
 	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile"+exe)
 	data, err := os.ReadFile(src)
 	if err != nil {

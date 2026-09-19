@@ -38,10 +38,6 @@ jobs:
       # The org's gates, and the scanner it turns off. It carries yaml-comment-block, so this file names that one no more.
       - uses: wow-look-at-my/actions@common-checks#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-<<<<<<< HEAD
-      # The YAML lint reads this repo's files, and build-linux runs it once for that reason.
-=======
->>>>>>> origin/master
       - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
@@ -111,11 +107,7 @@ jobs:
       id-token: write
       contents: read
     strategy:
-<<<<<<< HEAD
-      # Every leg reports. One leg's red says nothing about what the other five found, and cancelling them costs the run its answer for each.
-=======
       # Every leg runs to the end and reports. One host's red says nothing about the other five, and a suite exists to name everything that is broken at once.
->>>>>>> origin/master
       fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]

@@ -18,28 +18,16 @@ env HOME=$WORK/home
 go env GOCACHE
 stdout $WORK'/gocache$'
 
-<<<<<<< HEAD
-# Without GOCACHE, we should prefer XDG_CACHE_HOME over HOME.
-# UserCacheDir joins the path, so the separator is the host's own.
-env GOCACHE=
-go env GOCACHE
-stdout $WORK${/}xdg${/}'go-build$'
-=======
 # Without GOCACHE, we should prefer XDG_CACHE_HOME over HOME. This answer is
 # built rather than echoed, so it carries the host's own separator.
 env GOCACHE=
 go env GOCACHE
 stdout $WORK'[\\/]xdg[\\/]go-build$'
->>>>>>> origin/master
 
 # With only HOME set, we should use $HOME/.cache.
 env XDG_CACHE_HOME=
 go env GOCACHE
-<<<<<<< HEAD
-stdout $WORK${/}home${/}'\.cache'${/}'go-build$'
-=======
 stdout $WORK'[\\/]home[\\/]\.cache[\\/]go-build$'
->>>>>>> origin/master
 
 # With no guidance from the environment, we must disable the cache, but that
 # should not cause commands that do not write to the cache to fail. The two
