@@ -123,7 +123,10 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		t.Skipf("test exercises the cosmo fork's tool ID scheme; running under %s", runtime.Version())
 	}
 
-	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile")
+	// The tool is a file, so its name carries the host's suffix, and a copy
+	// needs that suffix as well to be a program the host will start.
+	exe := cfg.ToolExeSuffix()
+	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile"+exe)
 	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
@@ -131,8 +134,8 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	// Two copies in separate directories so both run as plain "compile"
 	// (tools print their argv[0] basename in the -V=full line).
 	dir := t.TempDir()
-	tool1 := filepath.Join(dir, "build1", "compile")
-	tool2 := filepath.Join(dir, "build2", "compile")
+	tool1 := filepath.Join(dir, "build1", "compile"+exe)
+	tool2 := filepath.Join(dir, "build2", "compile"+exe)
 	for _, name := range []string{tool1, tool2} {
 		if err := os.MkdirAll(filepath.Dir(name), 0o777); err != nil {
 			t.Fatal(err)
