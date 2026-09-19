@@ -52,6 +52,15 @@ runs:
       shell: bash
       run: ./bin/go version
 
+    # This image's gcc links libwinpthread as a DLL that lives only in C:\mingw64\bin, so a test binary carrying any cgo package finds it through PATH alone. Tests that narrow PATH, or hand a child an environment without one, then get 0xc0000135 from the loader before any of their code runs. Linking it into the binary is what makes the binary carry what it needs.
+    - name: Link the mingw runtime into what cgo builds (NT)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $flags = '-static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic'
+        "CGO_LDFLAGS=$flags" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        Write-Host "CGO_LDFLAGS=$flags"
+
     # dist test links one APE per test package, and Defender reads back every one of them as it lands. The suite writes thousands of files, so the scan is the slowest thing on this host. A runner is a throwaway VM running this repo's own code, so it has nothing to defend. Linux and darwin run the same suite with no scanner at all.
     - name: Turn Defender off (NT)
       if: runner.os == 'Windows'
