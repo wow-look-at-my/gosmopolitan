@@ -713,11 +713,10 @@ func (gcToolchain) ld(b *Builder, root *Action, targetPath, importcfg, mainpkg s
 	}
 
 	env := cfgChangedEnv
-	// When -trimpath is used, GOROOT is cleared
+	// cfgChangedEnv already names the tree. Clear it for -trimpath, which
+	// keeps the linker from recording a GOROOT in the binary.
 	if cfg.BuildTrimpath {
 		env = append(env, "GOROOT=")
-	} else {
-		env = append(env, "GOROOT="+cfg.GOROOT)
 	}
 	return b.Shell(root).run(dir, root.Package.ImportPath, env, base.ToolCmd("link"), "-o", targetPath, "-importcfg", importcfg, ldflags, mainpkg)
 }
