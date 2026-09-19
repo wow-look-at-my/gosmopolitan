@@ -20,27 +20,39 @@ Copy-Item $system $copy -Force
 # An upstream Go binary, copied the same way. A Go binary for windows imports
 # kernel32 and nothing else, which is the shape the suite's own children have.
 # This says whether a stripped PATH stops every such binary or only ours.
-$upstream = (Get-Command go -ErrorAction SilentlyContinue).Source
+#
+# gofmt, not go: a go command outside its own tree exits 2 with "cannot find
+# GOROOT directory" whatever the PATH holds, which measures the copy and not
+# the host. gofmt reads its arguments and needs no tree.
+$goPath = (Get-Command go -ErrorAction SilentlyContinue).Source
+$upstream = $null
+if ($goPath) {
+  $candidate = Join-Path (Split-Path -Parent $goPath) 'gofmt.exe'
+  if (Test-Path $candidate) { $upstream = $candidate }
+}
 if ($upstream) {
-  $goCopy = Join-Path $dir 'upstream-go.exe'
-  Copy-Item $upstream $goCopy -Force
+  $fmtCopy = Join-Path $dir 'upstream-gofmt.exe'
+  Copy-Item $upstream $fmtCopy -Force
+  # An empty directory to list: gofmt writes nothing and exits 0.
+  $empty = Join-Path $dir 'nothing'
+  New-Item -ItemType Directory -Force -Path $empty | Out-Null
   foreach ($name in @('inherited', 'dot', 'empty')) {
     $value = switch ($name) { 'inherited' { $env:PATH } 'dot' { '.' } 'empty' { '' } }
     $saved = $env:PATH
     $env:PATH = $value
     try {
-      $proc = Start-Process -FilePath $goCopy -ArgumentList 'version' -Wait -PassThru -NoNewWindow `
-        -RedirectStandardOutput (Join-Path $dir "go-$name.txt")
+      $proc = Start-Process -FilePath $fmtCopy -ArgumentList '-l', $empty -Wait -PassThru -NoNewWindow `
+        -RedirectStandardOutput (Join-Path $dir "gofmt-$name.txt")
       $code = $proc.ExitCode
     } catch {
       $code = "start failed: $($_.Exception.Message)"
     } finally {
       $env:PATH = $saved
     }
-    Write-Host "upstream go from a copy, PATH=${name}: exit $code"
+    Write-Host "upstream gofmt from a copy, PATH=${name}: exit $code"
   }
 } else {
-  Write-Host "upstream go from a copy: not on this host"
+  Write-Host "upstream gofmt from a copy: not on this host"
 }
 
 $failed = $false
