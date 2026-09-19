@@ -15,3 +15,16 @@
 [submodule "src/cmd/vendor/github.com/pierrec/lz4/v4"]
 	path = src/cmd/vendor/github.com/pierrec/lz4/v4
 	url = https://github.com/pierrec/lz4.git
+[submodule "src/cmd/vendor/github.com/stretchr/testify"]
+	path = src/cmd/vendor/github.com/stretchr/testify
+	url = https://github.com/stretchr/testify.git
+[submodule "src/cmd/vendor/github.com/davecgh/go-spew"]
+	path = src/cmd/vendor/github.com/davecgh/go-spew
+	url = https://github.com/davecgh/go-spew.git
+[submodule "src/cmd/vendor/github.com/pmezard/go-difflib"]
+	path = src/cmd/vendor/github.com/pmezard/go-difflib
+	url = https://github.com/pmezard/go-difflib.git
+[submodule "src/cmd/vendor/gopkg.in/yaml.v3"]
+	path = src/cmd/vendor/gopkg.in/yaml.v3
+	url = https://github.com/go-yaml/yaml.git
+	branch = v3
