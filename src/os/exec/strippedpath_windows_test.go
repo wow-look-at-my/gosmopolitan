@@ -23,8 +23,9 @@ import (
 // this binary and runs the copy under exactly those two values.
 //
 // The host answers this for a program the fork did not build. A copy of a
-// system binary, and a copy of an upstream gofmt, both start under all three
-// values (dats/test/nt-strippedpath.ps1). So a failure here is this binary.
+// system binary, and a copy of an upstream gofmt, both start under every one
+// of those values (dats/test/nt-strippedpath.ps1). So a failure here belongs
+// to this binary.
 //
 // The log names every DLL the image imports and the flags the loader reads,
 // because the loader reports only a number when it cannot resolve one.
@@ -47,24 +48,33 @@ func TestStrippedPathStartsAChild(t *testing.T) {
 		{"self", self},
 		{"copy", copied},
 	} {
+		// os/exec keeps the last of a repeated name, so a PATH appended to
+		// the inherited block wins.
+		system := filepath.Join(os.Getenv("SystemRoot"), "System32")
 		for _, value := range []struct {
 			what string
-			path string
+			env  []string
 		}{
-			{"inherited", os.Getenv("PATH")},
-			{"dot", "."},
-			{"empty", ""},
+			{"inherited", os.Environ()},
+			// The system directory alone. If this starts the image and a dot
+			// does not, the missing DLL is a system one the loader declines
+			// to find in System32 by itself.
+			{"system32", append(os.Environ(), "PATH="+system)},
+			{"dot", append(os.Environ(), "PATH=.")},
+			{"empty", append(os.Environ(), "PATH=")},
+			// What TestRunAtLowIntegrity and net/http/cgi hand a child.
+			{"bare", []string{"SystemRoot=" + os.Getenv("SystemRoot")}},
+			{"nothing", []string{}},
 		} {
 			cmd := exec.Command(image.path, "printpath")
 			cmd.Dir = root
-			// os/exec keeps the last of a repeated name, so this wins.
-			cmd.Env = append(os.Environ(), "PATH="+value.path)
+			cmd.Env = value.env
 			out, err := cmd.CombinedOutput()
 			if err != nil {
-				t.Errorf("%s under PATH=%s: %v\n%s", image.what, value.what, err, out)
+				t.Errorf("%s under env %s: %v\n%s", image.what, value.what, err, out)
 				continue
 			}
-			t.Logf("%s under PATH=%s: ok, %q", image.what, value.what, strings.TrimSpace(string(out)))
+			t.Logf("%s under env %s: ok, %q", image.what, value.what, strings.TrimSpace(string(out)))
 		}
 	}
 }
