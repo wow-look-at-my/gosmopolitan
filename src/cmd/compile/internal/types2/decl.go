@@ -507,6 +507,19 @@ func (check *Checker) typeDecl(obj *TypeName, tdecl *syntax.TypeDecl) {
 		check.error(tdecl.Type, MisplacedTypeParam, "cannot use a type parameter as RHS in type declaration")
 		named.fromRHS = Typ[Invalid]
 	}
+
+	// spec: "Its underlying type must be an integer type." The check waits for
+	// the underlying type, which a declaration may reach only later.
+	if tdecl.Enum {
+		named.enum = true
+		check.later(func() {
+			// An already-invalid underlying type was reported where it went
+			// wrong, so it says nothing about the enum.
+			if under := named.Underlying(); under != Typ[Invalid] && !isInteger(under) {
+				check.errorf(tdecl.Type, InvalidEnum, "invalid enum type: %s is not an integer type", under)
+			}
+		}).describef(obj, "enum underlying(%s)", obj.Name())
+	}
 }
 
 func (check *Checker) collectTypeParams(dst **TypeParamList, list []*syntax.Field) {

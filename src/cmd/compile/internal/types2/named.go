@@ -108,6 +108,8 @@ type Named struct {
 
 	allowNilRHS bool // may be true from creation via [NewNamed] until [Named.SetUnderlying]
 
+	enum bool // declared with "enum": its constants print by name
+
 	inst *instance // information for instantiated types; nil otherwise
 
 	mu         sync.Mutex     // guards all fields below
