@@ -135,20 +135,19 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	return added, nil
 }
 
-// withoutRedeclarations drops an added Go file that declares a package-level
-// name the module's own files in that directory already declare.
+// withoutRedeclarations answers the additions that can be copied in, given
+// what the module's own unconstrained files in each directory declare.
 //
-// A generator writes the file a module ships without, which is what completing
-// one is for. It can also write a file the module never compiles against: a
-// precomputed table beside the one the module builds at run time, say, where
-// the author ships the second and keeps the generator for the first. Adding
-// that file redeclares the name and the package stops compiling, for this
-// module and for every consumer of it, on a tree the zip alone builds.
+// A generator can write a file the module never compiles against: a
+// precomputed table beside the one the module builds at run time, where the
+// author ships the second and keeps the generator for the first. Adding it
+// redeclares the name, and the package stops compiling for every consumer.
 //
-// So the module's own bytes win here too, the way they win in additions: what
-// the authors published compiles, and an addition that contradicts it is not
-// an addition. Only a file with no build constraint is compared, because two
-// files the compiler never sees together may declare whatever they like.
+// An addition whose every name the module already declares carries nothing
+// the package lacks, so dropping it costs nothing. One that also carries a
+// name the module lacks has no such resolution: copying it breaks the
+// compile, and dropping it takes away the declaration a consumer came for.
+// That one fails the completion.
 func withoutRedeclarations(modroot, stage, mod string, added []string) ([]string, error) {
 	kept := added[:0:0]
 	for _, rel := range added {
@@ -157,60 +156,94 @@ func withoutRedeclarations(modroot, stage, mod string, added []string) ([]string
 			continue
 		}
 		names, constrained, err := declaredNames(filepath.Join(stage, filepath.FromSlash(rel)))
-		if err != nil || constrained || len(names) == 0 {
-			if err != nil {
-				return nil, err
-			}
-			kept = append(kept, rel)
-			continue
-		}
-		clash, where, err := firstClash(modroot, path.Dir(rel), names)
 		if err != nil {
 			return nil, err
 		}
-		if clash == "" {
+		if constrained || len(names) == 0 {
 			kept = append(kept, rel)
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "go: %s: %s declares %s, which the module already declares in %s\n", mod, rel, clash, where)
-		fmt.Fprintf(os.Stderr, "go: %s keeps its own file and drops the generated one\n", mod)
+		clashes, where, err := clashingNames(modroot, path.Dir(rel), names)
+		if err != nil {
+			return nil, err
+		}
+		if len(clashes) == 0 {
+			kept = append(kept, rel)
+			continue
+		}
+		if own := soleName(names, clashes); own != "" {
+			return nil, fmt.Errorf("%s: %s redeclares %s, which the module declares in %s, and declares %s, which the module does not"+
+				"\n\tthe generated file cannot be added and cannot be dropped without losing %s",
+				mod, rel, clashes[0], where[clashes[0]], own, own)
+		}
+		fmt.Fprintf(os.Stderr, "go: %s: %s declares %s, which the module already declares in %s\n", mod, rel, clashes[0], where[clashes[0]])
+		fmt.Fprintf(os.Stderr, "go: %s keeps its own file and drops the generated one, which declares nothing else\n", mod)
 	}
 	return kept, nil
 }
 
-// firstClash answers the first name of names that a module file in dir already
-// declares, and the file declaring it. dir is relative to modroot, in slash
-// form. A constrained file is skipped, as in withoutRedeclarations.
-func firstClash(modroot, dir string, names map[string]bool) (string, string, error) {
+// soleName answers the lowest name of names that clashes does not hold, or the
+// empty string when clashes holds every one. The lowest, so one tree produces
+// one message.
+func soleName(names map[string]bool, clashes []string) string {
+	collided := make(map[string]bool, len(clashes))
+	for _, name := range clashes {
+		collided[name] = true
+	}
+	own := ""
+	for name := range names {
+		if collided[name] {
+			continue
+		}
+		if own == "" || name < own {
+			own = name
+		}
+	}
+	return own
+}
+
+// clashingNames answers the names of names that a module file in dir already
+// declares, sorted, and the file declaring each. dir is relative to modroot, in
+// slash form. A constrained file is skipped, as in withoutRedeclarations.
+func clashingNames(modroot, dir string, names map[string]bool) ([]string, map[string]string, error) {
 	full := modroot
 	if dir != "." {
 		full = filepath.Join(modroot, filepath.FromSlash(dir))
 	}
 	entries, err := os.ReadDir(full)
 	if errors.Is(err, fs.ErrNotExist) {
-		return "", "", nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return "", "", err
+		return nil, nil, err
 	}
+	where := make(map[string]string)
 	for _, ent := range entries {
 		if ent.IsDir() || filepath.Ext(ent.Name()) != ".go" {
 			continue
 		}
 		mine, constrained, err := declaredNames(filepath.Join(full, ent.Name()))
 		if err != nil {
-			return "", "", err
+			return nil, nil, err
 		}
 		if constrained {
 			continue
 		}
 		for name := range mine {
-			if names[name] {
-				return name, path.Join(dir, ent.Name()), nil
+			if names[name] && where[name] == "" {
+				where[name] = path.Join(dir, ent.Name())
 			}
 		}
 	}
-	return "", "", nil
+	if len(where) == 0 {
+		return nil, nil, nil
+	}
+	clashes := make([]string, 0, len(where))
+	for name := range where {
+		clashes = append(clashes, name)
+	}
+	sort.Strings(clashes)
+	return clashes, where, nil
 }
 
 // declaredNames answers the package-level names a Go file declares, and whether

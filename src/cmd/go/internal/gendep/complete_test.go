@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -193,6 +194,29 @@ func TestARedeclaringAdditionIsDropped(test *testing.T) {
 	}
 	if len(kept) != 0 {
 		test.Errorf("kept %v, want the module's own file to win", kept)
+	}
+}
+
+// Dropping the file would take Name with it, and Name is what a consumer of
+// this module came for. Neither answer is correct, so the completion fails
+// rather than hand anybody a package that is missing a declaration.
+func TestAnAdditionThatAlsoCarriesItsOwnNameFails(test *testing.T) {
+	modroot := writeTree(test, test.TempDir(), map[string]string{
+		"pkg/shipped.go": "package pkg\n\nvar Table = 1\n",
+	})
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"pkg/shipped.go":   "package pkg\n\nvar Table = 1\n",
+		"pkg/generated.go": "package pkg\n\nvar Table = 2\n\nconst Name = \"x\"\n",
+	})
+
+	_, err := withoutRedeclarations(modroot, stage, "example.com/m", []string{"pkg/generated.go"})
+	if err == nil {
+		test.Fatal("withoutRedeclarations answered no error, want the completion to fail")
+	}
+	for _, want := range []string{"Table", "Name", "pkg/generated.go", "pkg/shipped.go"} {
+		if !strings.Contains(err.Error(), want) {
+			test.Errorf("error %q does not name %s", err, want)
+		}
 	}
 }
 
