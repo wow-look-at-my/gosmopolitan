@@ -2,12 +2,12 @@
 
 [!race] skip
 
-env GOBIN=$WORK/bin
+env BIN=$GOPATH/bin
 go install m/mtime m/sametime
 
 go tool -n cgo
 cp stdout cgopath.txt
-exec $GOBIN/mtime cgopath.txt # get the mtime of the file whose name is in cgopath.txt
+exec $BIN/mtime cgopath.txt # get the mtime of the file whose name is in cgopath.txt
 cp stdout cgotime_before.txt
 
  # For this test, we don't actually care whether 'go test -race -i' succeeds.
@@ -15,9 +15,9 @@ cp stdout cgotime_before.txt
  # We only care that it does not overwrite cmd/cgo regardless.
 ? go test -race -i runtime/race
 
-exec $GOBIN/mtime cgopath.txt # get the mtime of the file whose name is in cgopath.txt
+exec $BIN/mtime cgopath.txt # get the mtime of the file whose name is in cgopath.txt
 cp stdout cgotime_after.txt
-exec $GOBIN/sametime cgotime_before.txt cgotime_after.txt
+exec $BIN/sametime cgotime_before.txt cgotime_after.txt
 
 -- go.mod --
 module m

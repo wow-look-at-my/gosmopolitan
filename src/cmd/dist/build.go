@@ -248,11 +248,9 @@ func xinit() {
 	os.Setenv("GOROOT", goroot)
 	os.Setenv("GOFIPS140", gofips140)
 
-	// Set GOBIN to GOROOT/bin. The meaning of GOBIN has drifted over time
-	// (see https://go.dev/issue/3269, https://go.dev/cl/183058,
-	// https://go.dev/issue/31576). Since we want binaries installed by 'dist' to
-	// always go to GOROOT/bin anyway.
-	os.Setenv("GOBIN", gorootBin)
+	// GOBIN is removed, so there is nothing to set and nothing to clear:
+	// a command package in GOROOT installs to GOROOT/bin on its own.
+	// See RemovedEnv in cmd/go/internal/cfg.
 
 	// Make the environment more predictable.
 	os.Setenv("LANG", "C")
@@ -508,7 +506,7 @@ func isJJRepo() bool {
  * Initial tree setup.
  */
 
-// The old tools that no longer live in $GOBIN or $GOROOT/bin.
+// Tool names this build removes from $GOROOT/bin.
 var oldtool = []string{
 	"5a", "5c", "5g", "5l",
 	"6a", "6c", "6g", "6l",
@@ -1279,7 +1277,6 @@ func cmdenv() {
 
 	xprintf(format, "GO111MODULE", "")
 	xprintf(format, "GOARCH", goarch)
-	xprintf(format, "GOBIN", gorootBin)
 	xprintf(format, "GODEBUG", os.Getenv("GODEBUG"))
 	xprintf(format, "GOENV", "off")
 	xprintf(format, "GOFLAGS", "")

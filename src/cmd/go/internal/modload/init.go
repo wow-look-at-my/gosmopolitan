@@ -337,9 +337,6 @@ func ModFile(ld *Loader) *modfile.File {
 
 func BinDir(ld *Loader) string {
 	Init(ld)
-	if cfg.GOBIN != "" {
-		return cfg.GOBIN
-	}
 	if gopath == "" {
 		return ""
 	}

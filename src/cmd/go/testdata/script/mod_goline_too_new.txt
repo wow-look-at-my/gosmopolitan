@@ -1,7 +1,6 @@
 # Go should refuse to build code that is too new according to go.mod.
 
 # go.mod too new
-env GOTOOLCHAIN=local
 ! go build .
 stderr '^go: go.mod requires go >= 1.99999 \(running go 1\..+\)$'
 

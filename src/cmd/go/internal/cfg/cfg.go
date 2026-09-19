@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -358,6 +359,23 @@ func EnvFile() (string, bool, error) {
 	return filepath.Join(dir, "go/env"), false, nil
 }
 
+// RemovedEnv names the configuration keys this toolchain refuses to honor.
+// GOBIN sends installed binaries somewhere other than the toolchain's own
+// bin directory. GOTOOLCHAIN hands the build to a different go command.
+// Either one defeats what this toolchain guarantees about the binaries it
+// produces, so the go command drops both from its own environment, from the
+// environment of every process it starts, and from the go/env file.
+// UnsetRemovedEnv does the process environment. initEnvCache does the file.
+var RemovedEnv = []string{"GOBIN", "GOTOOLCHAIN"}
+
+// UnsetRemovedEnv removes the keys in RemovedEnv from the process
+// environment. Call it before anything reads the environment.
+func UnsetRemovedEnv() {
+	for _, name := range RemovedEnv {
+		os.Unsetenv(name)
+	}
+}
+
 func initEnvCache() {
 	envCache.m = make(map[string]string)
 	envCache.goroot = make(map[string]string)
@@ -374,6 +392,13 @@ func initEnvCache() {
 	// It makes no sense for GOROOT/go.env to specify
 	// a different GOROOT.
 	envCache.m["GOROOT"] = goroot
+
+	// An env file written by an older go command can still carry a removed
+	// key. Drop it.
+	for _, name := range RemovedEnv {
+		delete(envCache.m, name)
+		delete(envCache.goroot, name)
+	}
 }
 
 func readEnvFile(file string, source string) {
@@ -426,6 +451,12 @@ func readEnvFile(file string, source string) {
 // This ensures that CanGetenv is accurate, so that
 // 'go env -w' stays in sync with what Getenv can retrieve.
 func Getenv(key string) string {
+	if slices.Contains(RemovedEnv, key) {
+		// A removed key has no value, ever. Answering "" rather than panicking
+		// keeps the callers that ask about one (toolchain.Select asks about
+		// GOTOOLCHAIN) on their own already-correct empty-value path.
+		return ""
+	}
 	if !CanGetenv(key) {
 		switch key {
 		case "CGO_TEST_ALLOW", "CGO_TEST_DISALLOW", "CGO_test_ALLOW", "CGO_test_DISALLOW":
@@ -460,7 +491,6 @@ var (
 	GOROOTpkg string
 	GOROOTsrc string
 
-	GOBIN, GOBINChanged           = EnvOrAndChanged("GOBIN", "")
 	GOMODCACHE, GOMODCACHEChanged = EnvOrAndChanged("GOMODCACHE", gopathDir("pkg/mod"))
 
 	// Used in envcmd.MkEnv and build ID computations.

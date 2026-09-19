@@ -580,10 +580,9 @@ var CmdInstall = &base.Command{
 	Long: `
 Install compiles and installs the packages named by the import paths.
 
-Executables are installed in the directory named by the GOBIN environment
-variable, which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH
+Executables are installed in $GOPATH/bin, or $HOME/go/bin if the GOPATH
 environment variable is not set. Executables in $GOROOT
-are installed in $GOROOT/bin or $GOTOOLDIR instead of $GOBIN.
+are installed in $GOROOT/bin or $GOTOOLDIR instead.
 Cross compiled binaries are installed in $GOOS_$GOARCH subdirectories
 of the above.
 
@@ -765,10 +764,6 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 	ctx, span := trace.StartSpan(ctx, "InstallPackages "+strings.Join(patterns, " "))
 	defer span.Done()
 
-	if cfg.GOBIN != "" && !filepath.IsAbs(cfg.GOBIN) {
-		base.Fatalf("cannot install, GOBIN must be an absolute path")
-	}
-
 	pkgs = omitTestOnly(pkgsFilter(pkgs))
 	for _, p := range pkgs {
 		if p.Target == "" {
@@ -785,10 +780,8 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 				// rebuilt and used directly from the build cache.
 				// A few targets (notably those using cgo) still do need to be installed
 				// in case the user's environment lacks a C compiler.
-			case p.Internal.GobinSubdir:
-				base.Errorf("go: cannot install cross-compiled binaries when GOBIN is set")
 			case p.Internal.CmdlineFiles:
-				base.Errorf("go: no install location for .go files listed on command line (GOBIN not set)")
+				base.Errorf("go: no install location for .go files listed on command line")
 			case p.ConflictDir != "":
 				base.Errorf("go: no install location for %s: hidden by %s", p.Dir, p.ConflictDir)
 			default:
@@ -869,7 +862,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 		// If it exists and is an executable file, remove it.
 		targ := pkgs[0].DefaultExecName()
 		targ += cfg.ExeSuffix
-		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe $GOBIN is the current directory
+		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe the install dir is the current directory
 			fi, err := os.Stat(targ)
 			if err == nil {
 				m := fi.Mode()
