@@ -2,7 +2,13 @@
 
 `GOOS=cosmo` matches the `linux` build tag (`src/go/build/build.go`, `matchTag`), the way `android` does. That is what lets most of std compile for cosmo unchanged. An upstream file guarded `//go:build linux` therefore compiles for cosmo too. `golang.org/x/net/quic` holds files of that shape which reach socket constants the cosmo `syscall` package leaves undefined: `IP_RECVTOS`, `IPV6_RECVPKTINFO`, `IPV6_PKTINFO`, `IPV6_RECVTCLASS`, `IP_PKTINFO` and `IPV6_TCLASS`.
 
-quic is not optional here. `net/http` imports it through `x/net/http3`.
+## What this does and does not break
+
+A cosmo APE still builds and runs, `net/http` included. Nothing in std imports quic: `net/http` reaches HTTP/3 through an `h3Transport` that a caller supplies, and `x/net/http3` imports `net/http` rather than the reverse. A program therefore never compiles quic.
+
+`go build std` does compile it, because the `std` pattern covers the whole vendor tree. That is the red check.
+
+The packages cannot be dropped from the vendor tree either. `net/http`'s external tests import `x/net/http3` and `x/net/quic`, and `net/http` carries a `//go:linkname` into `x/net/internal/http3_test`. Removing them takes those tests with them.
 
 The fork answers by sending cosmo to `udp_other.go`, the portable path that reaches none of those constants. These build tags carry that:
 
