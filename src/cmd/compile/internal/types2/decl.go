@@ -149,7 +149,7 @@ func (check *Checker) objDecl(obj Object) {
 	switch obj := obj.(type) {
 	case *Const:
 		check.decl = d // new package-level const decl
-		check.constDecl(obj, d.vtyp, d.init, d.inherited)
+		check.constDecl(obj, d.vtyp, d.init, d.inherited, d.text)
 	case *Var:
 		check.decl = d // new package-level var decl
 		check.varDecl(obj, d.lhs, d.vtyp, d.init)
@@ -308,7 +308,7 @@ func firstInSrc(path []Object) int {
 	return fst
 }
 
-func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited bool) {
+func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited bool, text *syntax.BasicLit) {
 	assert(obj.typ == nil)
 
 	// use the correct value of iota and errpos
@@ -356,6 +356,16 @@ func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited boo
 		check.expr(nil, &x, init)
 	}
 	check.initConst(obj, &x)
+
+	// spec: "It is a compile-time error for a name text to appear on a
+	// constant whose type is not an enumerated type." The type is settled by
+	// initConst above, so this reads it rather than the declaration.
+	// A type that is already invalid was reported where it went wrong.
+	if text != nil && isValid(obj.typ) {
+		if named := asNamed(obj.typ); named == nil || !named.enum {
+			check.errorf(text, InvalidEnum, "name text on %s, which is not an enum type", obj.typ)
+		}
+	}
 }
 
 func (check *Checker) varDecl(obj *Var, lhs []*Var, typ, init syntax.Expr) {
@@ -757,6 +767,11 @@ func (check *Checker) declStmt(list []syntax.Decl) {
 				inherited = false
 			}
 
+			// spec: the name text names a single constant.
+			if s.Text != nil && len(s.NameList) > 1 {
+				check.error(s.Text, InvalidEnum, "name text on a declaration of more than one constant")
+			}
+
 			// declare all constants
 			lhs := make([]*Const, len(s.NameList))
 			values := syntax.UnpackListExpr(last.Values)
@@ -769,7 +784,7 @@ func (check *Checker) declStmt(list []syntax.Decl) {
 					init = values[i]
 				}
 
-				check.constDecl(obj, last.Type, init, inherited)
+				check.constDecl(obj, last.Type, init, inherited, s.Text)
 			}
 
 			// Constants must always have init values.

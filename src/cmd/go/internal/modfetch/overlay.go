@@ -74,6 +74,24 @@ func decodeOverlay(body []byte) (*overlayEntry, error) {
 	return &overlayEntry{sum: fields[2], zip: body[nl+1:]}, nil
 }
 
+// InstallTargets are the package paths of a `go install pkg@version`, set
+// before anything is fetched. See completingSelf.
+var InstallTargets []string
+
+// completingSelf reports whether mod provides a package this command is
+// installing. Completing such a module cannot terminate: completing
+// golang.org/x/tools runs the stringer directive it carries, and stringer is
+// the program being installed from it. The generator lives in the module that
+// needs it, so there is no order in which the module is ready first.
+func completingSelf(mod module.Version) bool {
+	for _, target := range InstallTargets {
+		if target == mod.Path || strings.HasPrefix(target, mod.Path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // completeDir completes the module extracted at dir: it adds the files the
 // module's own generators write, from the cache when the cache holds them and
 // by running the generators when it does not.
@@ -83,6 +101,13 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 	// download` needs no build cache to fetch one.
 	pkgs := gendep.Packages(dir)
 	if len(pkgs) == 0 {
+		return nil
+	}
+	// The one module that cannot complete. Said out loud, because the package
+	// installed from it is built from the zip alone: whatever its own
+	// generators would have added is missing.
+	if completingSelf(mod) {
+		fmt.Fprintf(os.Stderr, "go: %s@%s provides the program being installed, so its own generators do not run\n", mod.Path, mod.Version)
 		return nil
 	}
 	key := overlayKey(mod, recordedZipHash(ctx, mod))
