@@ -132,29 +132,53 @@ runs:
             return;
           }
           const rows = [];
+          const steps = [];
           for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
-            // dist test prints one of these per package it ran.
+            // dist test prints one of these per package it ran, timing the run alone.
             const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
             if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
+            // dist prints one of these per step, timing the compile with the run.
+            const step = /^dist (test|build) ([0-9.]+)s (.+)$/.exec(line);
+            if (step) steps.push({ kind: step[1], secs: Number(step[2]), name: step[3] });
           }
-          if (rows.length === 0) {
-            core.info('no per-package timings found in suite.log');
+          if (rows.length === 0 && steps.length === 0) {
+            core.info('no timings found in suite.log');
             return;
           }
           rows.sort((left, right) => right.secs - left.secs);
-          const total = rows.reduce((sum, row) => sum + row.secs, 0);
+          steps.sort((left, right) => right.secs - left.secs);
+          const add = (list) => list.reduce((sum, row) => sum + row.secs, 0);
+          const total = add(rows);
           const top = rows.slice(0, 30);
-          const share = top.reduce((sum, row) => sum + row.secs, 0);
-          const lines = [
-            `### Suite timings (${required('RUNNER_OS')}, part ${required('SUITE_SHARD')})`,
-            '',
-            `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
-            `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
-            '',
-            '| seconds | package |',
-            '| ---: | --- |',
-            ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
-          ];
+          const share = add(top);
+          const lines = [`### Suite timings (${required('RUNNER_OS')}, part ${required('SUITE_SHARD')})`, ''];
+          if (rows.length > 0) {
+            lines.push(
+              `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
+              `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
+              '',
+              '| seconds | package |',
+              '| ---: | --- |',
+              ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
+              '',
+            );
+          }
+          if (steps.length > 0) {
+            const built = add(steps.filter((step) => step.kind === 'build'));
+            const ran = add(steps.filter((step) => step.kind === 'test'));
+            const topSteps = steps.slice(0, 30);
+            lines.push(
+              `### Where the leg's time went`,
+              '',
+              `${steps.length} steps, ${(built + ran).toFixed(1)}s of step time.`,
+              `${built.toFixed(1)}s built a test binary and ran nothing.`,
+              `The remaining ${ran.toFixed(1)}s held ${total.toFixed(1)}s of package runs, so ${Math.max(ran - total, 0).toFixed(1)}s compiled and started them.`,
+              '',
+              '| seconds | kind | step |',
+              '| ---: | --- | --- |',
+              ...topSteps.map((step) => `| ${step.secs.toFixed(2)} | ${step.kind} | \`${step.name}\` |`),
+            );
+          }
           fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
-          core.info(`recorded ${rows.length} package timings`);
+          core.info(`recorded ${rows.length} package timings and ${steps.length} steps`);
 

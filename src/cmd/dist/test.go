@@ -94,14 +94,15 @@ type tester struct {
 
 // work tracks command execution for a test.
 type work struct {
-	dt    *distTest     // unique test name, etc.
-	cmd   *exec.Cmd     // must write stdout/stderr to out
-	began time.Time     // when cmd started
-	flush func()        // if non-nil, called after cmd.Run
-	start chan bool     // a true means to start, a false means to skip
-	out   bytes.Buffer  // combined stdout/stderr from cmd
-	err   error         // work result
-	end   chan struct{} // a value means cmd ended (or was skipped)
+	dt      *distTest     // unique test name, etc.
+	cmd     *exec.Cmd     // must write stdout/stderr to out
+	began   time.Time     // when cmd started
+	elapsed time.Duration // what cmd cost, build of its test binary included
+	flush   func()        // if non-nil, called after cmd.Run
+	start   chan bool     // a true means to start, a false means to skip
+	out     bytes.Buffer  // combined stdout/stderr from cmd
+	err     error         // work result
+	end     chan struct{} // a value means cmd ended (or was skipped)
 }
 
 // printSkip prints a skip message for all of work.
@@ -619,7 +620,14 @@ func (t *tester) sharedBinary(opts *goTest, host bool) (file string, several boo
 		build.keep = file
 		build.runTests = "^$"
 		build.runOnHost = opts.runOnHost
-		if err := build.run(t); err != nil {
+		// The one binary is the largest compile the suite does, and it runs no
+		// test, so nothing else in the output accounts for what it cost.
+		started := time.Now()
+		err := build.run(t)
+		if !t.json {
+			reportStep("build", name, time.Since(started))
+		}
+		if err != nil {
 			errprintf("building the test binary of %s: %v\n", strings.Join(pkgs, " "), err)
 		}
 		t.recordOneBinary(host, file, pkgs)
@@ -909,7 +917,13 @@ func (t *tester) registerStdTest(pkg string) {
 		test := oneBinaryTest(stdMatches, goos)
 		test.timeout = timeoutSec
 		test.keep = filepath.Join(workdir, "std.test")
+		// One step builds and runs every package here, so its own line is the
+		// only thing that accounts for the compile.
+		started := time.Now()
 		err := test.run(t)
+		if !t.json {
+			reportStep("test", "std.test", time.Since(started))
+		}
 		t.recordOneBinary(false, test.keep, stdMatches)
 		return err
 	})
@@ -928,6 +942,12 @@ func (t *tester) registerRaceBenchTest(pkg string) {
 		timelog("start", dt.name)
 		defer timelog("end", dt.name)
 		ranGoBench = true
+		started := time.Now()
+		defer func() {
+			if !t.json {
+				reportStep("test", "racebench", time.Since(started))
+			}
+		}()
 		return (&goTest{
 			variant: "racebench",
 			// Include the variant even though there's no overlap in test names.
@@ -1333,11 +1353,8 @@ func (t *tester) registerTests() {
 	// To help developers avoid trybot-only failures, we try to run on typical developer machines
 	// which is darwin,linux,windows/amd64 and darwin/arm64.
 	//
-	// The same logic applies to the release notes that correspond to each api/next file.
-	//
 	// TODO: remove the exclusion of goexperiment simd right before dev.simd branch is merged to master.
 	if goos == "darwin" || ((goos == "linux" || goos == "windows") && (goarch == "amd64" && !strings.Contains(goexperiment, "simd"))) {
-		t.registerTest("API release note check", &goTest{variant: "check", pkg: "cmd/relnote", testFlags: []string{"-check"}, shared: true})
 		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}, shared: true})
 	}
 
@@ -1813,6 +1830,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				timelog("start", w.dt.name)
 				w.began = time.Now()
 				w.err = w.cmd.Run()
+				w.elapsed = time.Since(w.began)
 				if w.flush != nil {
 					w.flush()
 				}
@@ -1875,6 +1893,9 @@ func (t *tester) runPending(nextTest *distTest) {
 		ended++
 		<-w.end
 		os.Stdout.Write(w.out.Bytes())
+		if w.elapsed > 0 && !t.json {
+			reportStep("test", dt.name, w.elapsed)
+		}
 		// We no longer need the output, so drop the buffer.
 		w.out = bytes.Buffer{}
 		if w.err != nil {
