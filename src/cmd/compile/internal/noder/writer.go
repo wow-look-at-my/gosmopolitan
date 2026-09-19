@@ -1198,9 +1198,10 @@ func (w *writer) funcExt(obj *types2.Func) {
 			// that here.
 			w.p.errorf(decl, "go:uintptrkeepalive requires go:nosplit")
 		}
-	} else if !w.p.enumStrings[obj] {
+	} else {
 		if base.Flag.Complete || decl.Name.Value == "init" {
 			// Linknamed functions are allowed to have no body. Hopefully
+			// the linkname target has a body.
 			// Wasmimport functions are also allowed to have no body.
 			if _, ok := w.p.linknames[obj]; !ok && wi == nil {
 				w.p.errorf(decl, "missing function body")
@@ -2887,14 +2888,6 @@ func (c *declCollector) Visit(n syntax.Node) syntax.Visitor {
 		}
 
 		pw.typDecls[obj] = d
-
-		// An enum type's String method has no source, so nothing above put a
-		// declaration in funDecls for it. Give it one anchored at the type, so
-		// the method rides the export data like every other method, and record
-		// it as body-less: the back end builds that body from the constants.
-		if n.Enum {
-			pw.declareEnumString(obj, n)
-		}
 
 		// TODO(mdempsky): Omit? Not strictly necessary; only matters for
 		// type declarations within function literals within parameterized
