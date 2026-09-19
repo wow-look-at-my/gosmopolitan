@@ -13,15 +13,19 @@ require (
 	golang.org/x/sys v0.45.0
 	golang.org/x/telemetry v0.0.0-20260519152614-eab6ae52b5e2
 	golang.org/x/term v0.43.0
-	golang.org/x/tools v0.45.1-0.20260730185712-faf6fa7c2f89
+	golang.org/x/tools v0.0.0
 )
 
 tool golang.org/x/tools/cmd/stringer
 
 // The org's x/tools. It declares the upstream module path, which is what makes
 // this legal: a replacement's declared path is checked against the path being
-// replaced, not against where it is fetched from.
-replace golang.org/x/tools => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0-20260912193235-5a3c03065002
+// replaced, not against where it is fetched from. Both sides carry a version:
+// vendor/modules.txt keys a replacement by the module version it annotates, and
+// a wildcard has no version to match that key. The left one is inert, because
+// nothing fetches a module that is replaced, and the right one is the org
+// placeholder that resolves to a branch head.
+replace golang.org/x/tools v0.0.0 => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0
 
 require (
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect
