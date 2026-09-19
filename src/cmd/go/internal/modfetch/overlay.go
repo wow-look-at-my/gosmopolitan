@@ -123,9 +123,16 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 		return recordComplete(ctx, mod, dir)
 	}
 
-	added, err := gendep.Complete(dir, mod.Path, pkgs)
+	added, partial, err := gendep.Complete(dir, mod.Path, pkgs)
 	if err != nil {
 		return fmt.Errorf("generating %s@%s: %w", mod.Path, mod.Version, err)
+	}
+	// A partial answer is a fact about this machine's installed programs. The
+	// key names neither, so storing one would serve it to every machine that
+	// asks, including the machines that can produce the whole answer.
+	if partial {
+		overlayDebugf("modfetch: %s@%s: completed without a program this host lacks, so nothing is stored", mod.Path, mod.Version)
+		return recordComplete(ctx, mod, dir)
 	}
 	overlay, err := packOverlay(mod, dir, added)
 	if err != nil {

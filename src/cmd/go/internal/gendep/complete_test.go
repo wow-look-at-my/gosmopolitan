@@ -152,9 +152,10 @@ func TestGeneratorNotShippedNamesOnlyTheDroppedPath(test *testing.T) {
 	}
 }
 
-// A missing program is this host's own gap, not the module's. Skipping the
-// directive would hand this build a module that the same version elsewhere does
-// not match, so the build stops instead.
+// A missing program is this host's own gap, not the module's, so the directive
+// is skipped and the answer marked partial. A generator that ran and failed is
+// the module's own defect and reads differently, because that one stops the
+// build.
 func TestProgramMissingSeparatesTheHostFromTheModule(test *testing.T) {
 	missing := &exec.Error{Name: "stringer", Err: exec.ErrNotFound}
 	cases := []struct {

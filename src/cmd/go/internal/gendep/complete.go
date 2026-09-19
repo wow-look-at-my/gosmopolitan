@@ -49,28 +49,33 @@ const generatePrefix = "//go:generate"
 // nothing when the module carries no directive at all.
 //
 // Each package that carries a directive generates on its own, in path order. A
-// directive that fails stops the build, whatever failed it. The module asked for
-// that file, so a build that continues without it is compiling a module nobody
-// wrote. What it reports is the symbol the missing file defines, named at the
-// first line that uses it, which is nowhere near the generator that never ran.
-func Complete(modroot, mod string, pkgs []string) ([]string, error) {
+// directive that fails stops the build. The module asked for that file, so a
+// build that continues without it is compiling a module nobody wrote. What it
+// reports is the symbol the missing file defines, named at the first line that
+// uses it, which is nowhere near the generator that never ran.
+//
+// A directive naming a program this machine lacks is the exception, and the
+// answer is partial when one is skipped. A partial answer belongs to this
+// machine rather than to the module, so a caller keeps it out of any store the
+// fleet reads.
+func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
 	if len(pkgs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	stage := modroot + ".generate"
 	if err := removeAll(stage); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer removeAll(stage)
 	// The generator runs in a fresh copy of the fetched module, never in the
 	// tree other builds are compiling from. What it wrote reaches that tree
 	// only once it has succeeded.
 	if err := copyTree(modroot, stage); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	synthesized, err := giveGoMod(stage, mod)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, pkg := range pkgs {
 		if gone := generatorNotShipped(stage, pkg); gone != "" {
@@ -81,29 +86,39 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 		if err == nil {
 			continue
 		}
-		// Both stop the build. They send the reader to different places: one
-		// names a machine to fix, the other a module.
-		if hostCannotGenerate(err) {
-			return nil, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
+		// A program this machine lacks says nothing about the module, and the
+		// modules that name stringer or yy ship what those write. So the
+		// directive is skipped and the answer is marked partial, which keeps it
+		// out of the cache the fleet reads. A machine that has the program
+		// stores the whole answer.
+		if programMissing(err) {
+			fmt.Fprintf(os.Stderr, "go: %s in %s: %v\n", mod, pkg, err)
+			partial = true
+			continue
 		}
-		return nil, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
+		// Nothing generates on a host with no sandbox, or one that cannot start
+		// what the go command built. Both name a machine to fix.
+		if hostCannotGenerate(err) {
+			return nil, false, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
+		}
+		return nil, false, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	added, err := additions(modroot, stage)
+	added, err = additions(modroot, stage)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return added, nil
+	return added, partial, nil
 }
 
 // additions answers the regular files under stage that modroot does not have,
@@ -314,9 +329,12 @@ func hostCannotGenerate(err error) bool {
 // programMissing reports whether err says a directive named a program this
 // machine does not have.
 //
-// That is the environment's own gap, not the module's. Skipping the directive
-// would hand this build a module that the same version elsewhere does not
-// match, so the build stops and names what to install instead.
+// That is the environment's own gap, not the module's, and the set of programs
+// a dependency tree names has no bound: stringer and yy arrive through
+// modernc.org and x/tools without either naming them to anybody. Each of those
+// modules ships what its directives write, so a consumer needs none of them.
+// The directive is skipped and the answer is marked partial, which keeps a
+// machine's installed programs out of what the fleet reads.
 func programMissing(err error) bool {
 	if err == nil {
 		return false
