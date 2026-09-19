@@ -1547,13 +1547,20 @@ func TestResponseFile(t *testing.T) {
 	cmd.Dir = tmpdir
 
 	// Add enough arguments to push cmd/link into creating a response file.
+	//
+	// Each argument costs its own length plus the separator, and the whole
+	// string rides in one environment variable, which NT caps at 32767
+	// characters. Dividing by the argument alone asks for half again as much
+	// as the limit, and the exec of the go command then fails there before
+	// the linker sees any of it. Ask for a little over the limit instead.
+	const arg = "-g"
 	var sb strings.Builder
 	sb.WriteString(`'-ldflags=all="-extldflags=`)
-	for i := 0; i < sys.ExecArgLengthLimit/len("-g"); i++ {
+	for i := 0; i < sys.ExecArgLengthLimit/(len(arg)+1)+64; i++ {
 		if i > 0 {
 			sb.WriteString(" ")
 		}
-		sb.WriteString("-g")
+		sb.WriteString(arg)
 	}
 	sb.WriteString(`"'`)
 	cmd = testenv.CleanCmdEnv(cmd)
