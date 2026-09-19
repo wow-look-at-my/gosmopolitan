@@ -28,6 +28,7 @@ import (
 	"cmd/go/internal/load"
 	"cmd/go/internal/modindex"
 	"cmd/go/internal/modload"
+	"cmd/go/internal/selftool"
 	"cmd/go/internal/str"
 	"cmd/go/internal/work"
 )
@@ -139,7 +140,31 @@ func runTool(ctx context.Context, cmd *base.Command, args []string) {
 		counter.Inc("go/subcommand:tool-" + toolName)
 	}
 
-	runBuiltTool(toolName, nil, slices.Concat(base.ToolCmd(toolName), args[1:]))
+	cmdline := slices.Concat(base.ToolCmd(toolName), args[1:])
+	if runSelfTool(toolName, cmdline, args[1:]) {
+		return
+	}
+	runBuiltTool(toolName, nil, cmdline)
+}
+
+// runSelfTool runs a tool this binary links, in this process, and records its
+// exit status. cmdline is the command line that would have started the tool
+// as a separate program, which -n prints and which a trace names, so the two
+// paths report the same command either way. It reports whether the tool ran.
+func runSelfTool(toolName string, cmdline, args []string) bool {
+	if !base.Linked(toolName) {
+		return false
+	}
+	if toolN {
+		fmt.Println(strings.Join(cmdline, " "))
+		return true
+	}
+	code, ran := selftool.Run(toolName, args)
+	if !ran {
+		return false
+	}
+	base.SetExitStatus(code)
+	return true
 }
 
 // listTools prints a list of the available tools in the tools directory.

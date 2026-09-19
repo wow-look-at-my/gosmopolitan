@@ -43,10 +43,10 @@ func TestMain(m *testing.M) {
 	// the correct tool or this executable itself (for the linker).
 	// Running as toolexec wrapper.
 	if os.Getenv("LINK_TEST_TOOLEXEC") != "" {
-		if strings.TrimSuffix(filepath.Base(os.Args[1]), ".exe") == "link" {
+		if name, args := toolexecTool(os.Args[1:]); name == "link" {
 			// Running as a -toolexec linker, and the tool is cmd/link.
 			// Substitute this test binary for the linker.
-			os.Exit(Main(os.Args[2:]))
+			os.Exit(Main(args))
 		}
 		// Running some other tool.
 		cmd := exec.Command(os.Args[1], os.Args[2:]...)
@@ -73,6 +73,17 @@ func TestMain(m *testing.M) {
 	// Not running as a -toolexec wrapper or as a linker executable.
 	// Just run the tests.
 	os.Exit(m.Run())
+}
+
+// toolexecTool names the tool a -toolexec command line asks for, and the
+// arguments meant for it. The go command names a tool by its path, and names
+// a tool linked into the go command itself as "<go> tool <name>", so the base
+// name of the first word is the tool only in the first case.
+func toolexecTool(argv []string) (name string, args []string) {
+	if len(argv) >= 3 && argv[1] == "tool" {
+		return argv[2], argv[3:]
+	}
+	return strings.TrimSuffix(filepath.Base(argv[0]), ".exe"), argv[1:]
 }
 
 // testLinker is the path of the test executable being run.
