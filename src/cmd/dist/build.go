@@ -1451,8 +1451,10 @@ func goInstaller() string {
 	if gohostos != "windows" {
 		return gorootBinGo
 	}
+	// gorootBinGo carries no suffix, and only exec resolves one. A copy reads
+	// the file, so it needs the name the file actually has.
 	dst := pathf("%s/go-installer%s", workdir, exe)
-	copyfile(dst, gorootBinGo, writeExec)
+	copyfile(dst, pathf("%s/bin/go%s", goroot, exe), writeExec)
 	return dst
 }
 
