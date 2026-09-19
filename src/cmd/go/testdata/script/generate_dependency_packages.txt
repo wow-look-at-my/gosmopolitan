@@ -1,35 +1,27 @@
 # A module is completed whole, so a build that imports several of its packages
 # needs no second pass, whichever of them it happened to load first.
 #
-# One package of this module has a directive that fails on purpose. `go generate`
-# abandons that package and carries on with the rest, so the module still arrives
-# with every other package's generated file.
+# One package of this module has a directive that fails on purpose. A module
+# whose generator failed is incomplete, and handing it over breaks the build
+# later at an undefined symbol. So the fetch fails and names the package whose
+# generator failed.
 
 env GOFLAGS=-mod=mod
 
-# The fetch completes the module. Whether the generators ran here or their
-# overlay came from the build cache, the module that arrives is the same, so
-# what the fetch PRINTS is not what this asserts.
-go mod download example.com/generatedpkgs
+! go mod download example.com/generatedpkgs
+stderr 'generating example.com/generatedpkgs'
+stderr 'in broken'
+stderr 'broken on purpose'
 
-exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/one/one.gen.go
-exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/two/two.gen.go
-exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/three/three.gen.go
-
-# The broken package generated nothing, and nothing it half-wrote reached the
-# module either.
+# Nothing the failed run wrote reaches the module directory, and no overlay
+# records the module as complete.
 ! exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/broken/broken.gen.go
 ! exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0.generate
 
-# Every other package builds, and the directory matches the checksum recorded
-# when it was completed.
-go build ./both
-go build ./usethree
-go mod verify
-
-# The package whose generator failed is the only one missing its symbol.
-! go build ./usebroken
-stderr 'undefined: broken\.Name'
+# A build that needs the module reports the same failure, rather than a missing
+# symbol from a package nobody generated.
+! go build ./both
+stderr 'broken on purpose'
 
 -- go.mod --
 module example.com/consumer
