@@ -122,14 +122,9 @@ func contentID(buildID string) string {
 // package archives look stale and are rebuilt (with the fixed compiler).
 // This suggests using a content hash of the tool binary, as stored in the build ID.
 //
-// Unfortunately, we can't just open the tool binary, because the tool might be
-// invoked via a wrapper program specified by -toolexec and we don't know
-// what the wrapper program does. In particular, we want "-toolexec toolstash"
-// to continue working: it does no good if "-toolexec toolstash" is executing a
-// stashed copy of the compiler but the go command is acting as if it will run
-// the standard copy of the compiler. The solution is to ask the tool binary to tell
-// us its own build ID using the "-V=full" flag now supported by all tools.
-// Then we know we're getting the build ID of the compiler that will actually run
+// We ask the tool binary to tell us its own build ID using the "-V=full" flag
+// supported by all tools, rather than opening the binary ourselves. Then we
+// know we're getting the build ID of the compiler that will actually run
 // during the build. (How does the compiler binary know its own content hash?
 // We store it there using updateBuildID after the standard link step.)
 //
@@ -158,7 +153,7 @@ func (b *Builder) toolID(name string) string {
 			desc = strings.Join(VetTool, " ")
 		}
 
-		cmdline := str.StringList(cfg.BuildToolexec, path, "-V=full")
+		cmdline := str.StringList(path, "-V=full")
 		cmd := exec.Command(cmdline[0], cmdline[1:]...)
 		var stdout, stderr strings.Builder
 		cmd.Stdout = &stdout
@@ -253,7 +248,7 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 //
 // For these tools we have no -V=full option to dump the build ID,
 // but we can run the tool with -v -### to reliably get the compiler proper
-// and hash that. That will work in the presence of -toolexec.
+// and hash that.
 //
 // In order to get reproducible builds for released compilers, we
 // detect a released compiler by the absence of "experimental" in the
@@ -278,7 +273,7 @@ func (b *Builder) gccToolID(name, language string) (id, exe string, err error) {
 	// Invoke the driver with -### to see the subcommands and the
 	// version strings. Use -x to set the language. Pretend to
 	// compile an empty file on standard input.
-	cmdline := str.StringList(cfg.BuildToolexec, name, "-###", "-x", language, "-c", "-")
+	cmdline := str.StringList(name, "-###", "-x", language, "-c", "-")
 	cmd := exec.Command(cmdline[0], cmdline[1:]...)
 	// Force untranslated output so that we see the string "version".
 	cmd.Env = append(os.Environ(), "LC_ALL=C")

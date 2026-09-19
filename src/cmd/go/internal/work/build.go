@@ -197,12 +197,6 @@ and test commands:
 		Instead of absolute file system paths, the recorded file names
 		will begin either a module path@version (when using modules),
 		or a plain import path (when using the standard library, or GOPATH).
-	-toolexec 'cmd args'
-		a program to use to invoke toolchain programs like vet and asm.
-		For example, instead of running asm, the go command will run
-		'cmd args /path/to/asm <arguments for asm>'.
-		The TOOLEXEC_IMPORTPATH environment variable will be set,
-		matching 'go list -f {{.ImportPath}}' for the package being built.
 
 The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 space-separated list of arguments to pass to an underlying tool
@@ -350,7 +344,6 @@ func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	cmd.Flag.StringVar(&cfg.BuildPkgdir, "pkgdir", "", "")
 	cmd.Flag.BoolVar(&cfg.BuildRace, "race", false, "")
 	cmd.Flag.Var((*tagsFlag)(&cfg.BuildContext.BuildTags), "tags", "")
-	cmd.Flag.Var((*base.StringsFlag)(&cfg.BuildToolexec), "toolexec", "")
 	cmd.Flag.BoolVar(&cfg.BuildTrimpath, "trimpath", false, "")
 	cmd.Flag.BoolVar(&cfg.BuildWork, "work", false, "")
 

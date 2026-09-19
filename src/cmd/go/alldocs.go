@@ -241,12 +241,6 @@
 //		Instead of absolute file system paths, the recorded file names
 //		will begin either a module path@version (when using modules),
 //		or a plain import path (when using the standard library, or GOPATH).
-//	-toolexec 'cmd args'
-//		a program to use to invoke toolchain programs like vet and asm.
-//		For example, instead of running asm, the go command will run
-//		'cmd args /path/to/asm <arguments for asm>'.
-//		The TOOLEXEC_IMPORTPATH environment variable will be set,
-//		matching 'go list -f {{.ImportPath}}' for the package being built.
 //
 // The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 // space-separated list of arguments to pass to an underlying tool
@@ -524,7 +518,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go fix are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go vet.
@@ -1844,7 +1838,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go vet are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go fix.
