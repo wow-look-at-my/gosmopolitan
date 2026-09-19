@@ -1470,6 +1470,24 @@ func linkTools() {
 	}
 }
 
+// goInstaller returns the go command to drive an install that writes bin/go
+// itself. Windows refuses to write an executable image a live process uses,
+// and every tool this go command starts is another bin/go process, so the
+// destination stays in use for the whole build. A copy carries the same tools
+// and leaves bin/go referenced by nobody. It is made fresh on each call, so
+// the driver is always the go command bin/go currently holds. GOROOT comes
+// from the environment, so the copy still finds this tree.
+//
+// Every host takes the copy. One path that every build leg runs beats a
+// second one that only NT ever reaches.
+func goInstaller() string {
+	// gorootBinGo carries no suffix, and only exec resolves one. A copy reads
+	// the file, so it needs the name the file actually has.
+	dst := pathf("%s/go-installer%s", workdir, exe)
+	copyfile(dst, pathf("%s/bin/go%s", goroot, exe), writeExec)
+	return dst
+}
+
 // The bootstrap command runs a build from scratch,
 // stopping at having installed the go_bootstrap command.
 //
@@ -1652,7 +1670,7 @@ func cmdbootstrap() {
 	// toolchain2 is bin/go, and bin/go carries the shared cache client that
 	// go_bootstrap cannot. Under it, toolchain3 fetches what another run of
 	// the same sources published instead of compiling cmd/go a third time.
-	goInstall(toolenv(), gorootBinGo, toolchain...)
+	goInstall(toolenv(), goInstaller(), toolchain...)
 	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
@@ -1717,7 +1735,7 @@ func cmdbootstrap() {
 	goInstall(toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
 	goInstall(nil, gorootBinGo, "std")
-	goInstall(toolenv(), gorootBinGo, toolsToInstall...)
+	goInstall(toolenv(), goInstaller(), toolsToInstall...)
 	linkTools()
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")

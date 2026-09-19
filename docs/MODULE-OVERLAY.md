@@ -40,11 +40,15 @@ Everything above rests on one property. A module version means the same bytes on
 
 **The store is guarded.** An entry already under the key must hold the same files. If it does not, the build stops and names the file that differs. That catches a generator whose output is not deterministic. It runs on every build that generates.
 
-## The one setting
+## No setting
 
-`GOGENERATEDEPS=off` reads the base zip and nothing else. It runs no generator and writes no overlay. It is what the generators themselves run under. A directive that starts a go command must not complete its own module again.
+There is no setting. Every fetch completes the module it fetched. No environment variable changes that. None is read.
 
-No setting changes what a build produces.
+A generator is a program. So the go command a directive starts fetches the generator's own dependencies, and it completes those too. That is the same work one level down. It ends where the dependency graph ends.
+
+A module version is completed one time. `unzip` holds that version's lock file across the completion. A second go command waits for the first one.
+
+Nothing here is a knob to turn off. A build that skipped the generators will compile a different package from the same module version. That is the one thing this mechanism exists to prevent.
 
 ## Sandboxing
 

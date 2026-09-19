@@ -553,19 +553,30 @@ type oneBinary struct {
 	has  map[string]bool
 }
 
-// oneBinaryTest is the go test that builds the one binary of pkgs. The run of
-// every package and each shared test start what it builds, so they agree on
-// everything that shapes the binary.
-func oneBinaryTest(pkgs []string) *goTest {
+// oneBinaryTest is the go test that builds the one binary of pkgs for target.
+// The run of every package and each shared test start what it builds, so they
+// agree on everything that shapes the binary.
+func oneBinaryTest(pkgs []string, target string) *goTest {
 	// A binary holds one PGO profile: cmd/compile's default.pgo would give
 	// its tests a binary of their own. The profile changes how fast code
 	// runs, not what it does, and the compiler the tests run is built by
 	// make.bash.
-	return &goTest{
+	test := &goTest{
 		gcflags: gogcflags,
 		pgo:     "off",
 		pkgs:    pkgs,
 	}
+	if target == "windows" {
+		// Holding every package's tests puts a cgo package in here, so the
+		// link goes through gcc, and gcc names libwinpthread-1.dll. That DLL
+		// sits in mingw's own directory, which only PATH reaches. The suite
+		// starts this binary again under PATH set to a dot, to nothing, and
+		// under a bare environment, and NT answers STATUS_DLL_NOT_FOUND each
+		// time. A static mingw runtime leaves kernel32 and the CRT API sets,
+		// which the loader finds without PATH.
+		test.ldflags = "-extldflags=-static"
+	}
+	return test
 }
 
 // recordOneBinary notes that file holds the tests of pkgs, once go test has
@@ -601,7 +612,11 @@ func (t *tester) sharedBinary(opts *goTest, host bool) (file string, several boo
 			name = "shared-host.test"
 		}
 		file = filepath.Join(workdir, name)
-		build := oneBinaryTest(pkgs)
+		target := goos
+		if host {
+			target = gohostos
+		}
+		build := oneBinaryTest(pkgs, target)
 		build.keep = file
 		build.runTests = "^$"
 		build.runOnHost = opts.runOnHost
@@ -899,7 +914,7 @@ func (t *tester) registerStdTest(pkg string) {
 		}
 		// One binary holds the tests of every package. It is kept, and the
 		// tests that differ from a package's run only in flags start it again.
-		test := oneBinaryTest(stdMatches)
+		test := oneBinaryTest(stdMatches, goos)
 		test.timeout = timeoutSec
 		test.keep = filepath.Join(workdir, "std.test")
 		// One step builds and runs every package here, so its own line is the
