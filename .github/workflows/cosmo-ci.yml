@@ -41,10 +41,7 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
-      - name: Install bubblewrap
-        if: runner.os == 'Linux'
-        shell: bash
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -80,9 +77,7 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
-      - name: Install bubblewrap
-        shell: bash
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -128,6 +123,8 @@ jobs:
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
       - uses: ./.github/actions/track-submodules
+      # run.bash reaches the same sandboxed generate directives the build leg does.
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - uses: ./.github/actions/suite-leg
         with:
