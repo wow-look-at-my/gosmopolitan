@@ -71,11 +71,17 @@ func TestGoDefs(t *testing.T) {
 		// see go.dev/issue/52063
 		hasGeneratedByComment := false
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+<<<<<<< HEAD
 			// objabi.Enter gives every tool the name it was asked for as its
 			// argv[0] ("cgo"), whichever way the tool was reached, and the
 			// comment carries that name. A host suffix belongs to the file
 			// and never reaches this line.
 			const cgoExe = "cgo"
+=======
+			// The go command links cgo in, so cgo names itself rather than a
+			// file on disk. The name carries no .exe suffix on any host.
+			cgoExe := "cgo"
+>>>>>>> origin/master
 			if !strings.HasPrefix(line, "// "+cgoExe+" -godefs") {
 				continue
 			}

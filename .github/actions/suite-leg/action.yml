@@ -52,6 +52,7 @@ runs:
       shell: bash
       run: ./bin/go version
 
+<<<<<<< HEAD
     # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
     - name: Put the mingw runtime where the loader always looks (NT)
       if: runner.os == 'Windows'
@@ -100,6 +101,8 @@ runs:
         Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, BehaviorMonitorEnabled | Format-List
         exit 0
 
+=======
+>>>>>>> origin/master
     # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
     - name: Let the kernel exec an APE directly
       if: runner.os == 'Linux'

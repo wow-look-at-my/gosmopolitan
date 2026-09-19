@@ -72,6 +72,7 @@ func TestParseToolID(t *testing.T) {
 // ID it used to get made every such binary share cache entries.
 func TestToolIDHashesUnstampedTool(t *testing.T) {
 	t.Serial() // VetTool is a package variable.
+<<<<<<< HEAD
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveExec(t)
 	dir := t.TempDir()
@@ -83,6 +84,19 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	body := "package main\n\nimport \"fmt\"\n\n" +
 		"func main() { fmt.Println(\"fakevet version go1.27.0-cosmo buildID=\") }\n"
 	if err := os.WriteFile(src, []byte(body), 0o666); err != nil {
+=======
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "fakevet")
+	body := "#!/bin/sh\necho 'fakevet version go1.27.0-cosmo buildID='\n"
+	if runtime.GOOS == "windows" {
+		// NT runs neither a shebang nor an extensionless file.
+		tool += ".bat"
+		body = "@echo fakevet version go1.27.0-cosmo buildID=\r\n"
+	} else {
+		testenv.MustHaveExecPath(t, "sh")
+	}
+	if err := os.WriteFile(tool, []byte(body), 0o755); err != nil {
+>>>>>>> origin/master
 		t.Fatal(err)
 	}
 	tool := filepath.Join(dir, "fakevet"+cfg.ToolExeSuffix())
@@ -103,7 +117,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	}
 	// A vet tool's ID carries its name ahead of the content, since vet and fix
 	// can be one binary.
-	if want := "fakevet " + b.fileHash(tool); got != want {
+	if want := filepath.Base(tool) + " " + b.fileHash(tool); got != want {
 		t.Errorf("toolID = %q, want the tool name and file hash %q", got, want)
 	}
 }
@@ -123,9 +137,17 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		t.Skipf("test exercises the cosmo fork's tool ID scheme; running under %s", runtime.Version())
 	}
 
+<<<<<<< HEAD
 	// The tool is a file, so its name carries the host's suffix, and a copy
 	// needs that suffix as well to be a program the host will start.
 	exe := cfg.ToolExeSuffix()
+=======
+	// NT names the tool with an extension, and it runs nothing without one.
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+>>>>>>> origin/master
 	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile"+exe)
 	data, err := os.ReadFile(src)
 	if err != nil {
