@@ -18,7 +18,13 @@ Symlinks and the read-only attribute followed (2026-09-16, `os_cosmo_nt_link.go`
 
 What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` carry one bit, and `fchown`/`fchownat` have no unix ownership to change.
 
-The NT suite's own red, measured on run 34732730589, is mostly ONE defect wearing many package names. A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
+The NT suite's red is measured again on run 35408440298. That is the last run the expired waiver covered. The second shard is clean. The first shard fails `cmd/go`, `cmd/go/internal/work`, `os/exec`, `net/http/cgi`, `internal/syscall/windows`, `cmd/cgo/internal/testgodefs` and `cmd/cgo/internal/swig`.
+
+The largest group is one failure mode. A child process exits `0xc0000135`, which is STATUS_DLL_NOT_FOUND. It prints nothing at all. `autocgo` shows it cleanly. `go env CGO_ENABLED` answers `1`. The script then sets `PATH=$GOROOT/bin`, and the same command dies. `gotoolchain_issue66175`, `mod_doc_path` and `net/http/cgi`'s TestEnvOverride strip the environment the same way.
+
+Some readings of that are measured and wrong. Env lookup on NT is case-insensitive, so the all-caps `SYSTEMROOT` key the cmd/go script harness copies does reach the child. The toolchain binaries import `kernel32.dll` and nothing else, so no C toolchain DLL is missing from the stripped PATH. A cosmo APE carries `GetProcAddress` and `LoadLibraryA`, both from that one DLL. `ntCrash` writes to stderr before it faults. The failing child writes nothing, so the runtime's own boot guards did not fire.
+
+Wine runs a cosmo APE as an NT host. It reproduces none of this. A child starts there under an empty environment. It starts under a PATH holding no Windows directory. The remaining work needs the windows-latest runner. A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
 
 One such host switch is gone rather than fixed: `os.UserCacheDir` answers `$XDG_CACHE_HOME`, else `$HOME/.cache`, on every host. Upstream picks `$HOME/Library/Caches` on darwin, `%LocalAppData%` on NT and `$home/lib/cache` on plan9, which gives one binary a different cache on each machine it runs on. `go env GOCACHE` follows it, so the build cache lands in `~/.cache/go-build` everywhere.
 
