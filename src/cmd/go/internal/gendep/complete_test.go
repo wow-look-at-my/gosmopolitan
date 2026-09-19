@@ -74,6 +74,69 @@ func TestAdditionsKeepsTheModulesOwnBytes(test *testing.T) {
 	}
 }
 
+// A generator can write a file the module's authors leave out because the
+// published source already declares those names another way. Adding it breaks
+// the package for every consumer, so the published source wins.
+func TestKeepableDropsAGeneratedRedeclaration(test *testing.T) {
+	modroot := writeTree(test, test.TempDir(), map[string]string{
+		"parser/transition_table.go": "package parser\n\nvar Table = GenerateTransitionTable()\n",
+	})
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"parser/transition_table.go": "package parser\n\nvar Table = GenerateTransitionTable()\n",
+		"parser/table.go":            "package parser\n\nvar Table = TransitionTable{}\n",
+		"parser/names.go":            "package parser\n\nvar ActionNames = []string{}\n",
+	})
+
+	got := keepable(modroot, stage, "example.com/m", []string{"parser/names.go", "parser/table.go"})
+	want := []string{"parser/names.go"}
+	if !slices.Equal(got, want) {
+		test.Errorf("keepable = %q, want %q", got, want)
+	}
+
+	name, other := clash(modroot, stage, "parser/table.go")
+	if name != "Table" || other != "transition_table.go" {
+		test.Errorf("clash = (%q, %q), want (\"Table\", \"transition_table.go\")", name, other)
+	}
+}
+
+// Completing a module is the point, so a generated file that only adds names
+// joins it. A name is package-scope: a local one, a method of another type and
+// an import all belong to their own file.
+func TestKeepableKeepsWhatCompletesThePackage(test *testing.T) {
+	modroot := writeTree(test, test.TempDir(), map[string]string{
+		"api.go": "package m\n\nimport \"fmt\"\n\ntype Kind int\n\nfunc (k Kind) String() string { table := fmt.Sprint(k); return table }\n",
+	})
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"api.go": "package m\n\nimport \"fmt\"\n\ntype Kind int\n\nfunc (k Kind) String() string { table := fmt.Sprint(k); return table }\n",
+		"kind_string.go": "package m\n\nimport \"fmt\"\n\ntype Other int\n\n" +
+			"func (o Other) String() string { return fmt.Sprint(int(o)) }\n\nvar table = []string{}\n",
+	})
+
+	got := keepable(modroot, stage, "example.com/m", []string{"kind_string.go"})
+	want := []string{"kind_string.go"}
+	if !slices.Equal(got, want) {
+		test.Errorf("keepable = %q, want %q: nothing in it is declared twice", got, want)
+	}
+}
+
+// An external test package sits beside the package it tests, and the two share
+// no scope. Neither do several init functions, which every package may hold.
+func TestClashReadsOnlyTheSamePackage(test *testing.T) {
+	modroot := writeTree(test, test.TempDir(), map[string]string{
+		"api.go":      "package m\n\nfunc init() {}\n\nvar Fixture = 1\n",
+		"api_test.go": "package m_test\n\nvar Generated = 1\n",
+	})
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"api.go":      "package m\n\nfunc init() {}\n\nvar Fixture = 1\n",
+		"api_test.go": "package m_test\n\nvar Generated = 1\n",
+		"gen.go":      "package m\n\nfunc init() {}\n\nvar Generated = 2\n",
+	})
+
+	if name, other := clash(modroot, stage, "gen.go"); name != "" {
+		test.Errorf("clash = (%q, %q), want none: %s declares that name for another package", name, other, other)
+	}
+}
+
 // A directive is a line the module carries. An alias line declares a name for
 // later lines and generates nothing itself, so it is not one.
 func TestDirectivesCountsGenerateLines(test *testing.T) {
