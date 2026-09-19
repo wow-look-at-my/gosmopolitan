@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -50,6 +49,16 @@ func TestGoDefs(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// cgo names itself in the comment from its own argv[0], so the name to
+	// expect is the tool's own. runtime.GOOS answers for the host here, and a
+	// toolchain that targets another port keeps its tools under that port's
+	// name, where the suffix a host would add is not part of it.
+	toolPath, err := exec.Command(testenv.GoToolPath(t), "tool", "-n", "cgo").Output()
+	if err != nil {
+		t.Fatalf("go tool -n cgo: %v", err)
+	}
+	cgoExe := filepath.Base(strings.TrimSpace(string(toolPath)))
+
 	for _, fp := range filePrefixes {
 		cmd := exec.Command(testenv.GoToolPath(t), "tool", "cgo",
 			"-godefs",
@@ -72,10 +81,6 @@ func TestGoDefs(t *testing.T) {
 		// see go.dev/issue/52063
 		hasGeneratedByComment := false
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			cgoExe := "cgo"
-			if runtime.GOOS == "windows" {
-				cgoExe = "cgo.exe"
-			}
 			if !strings.HasPrefix(line, "// "+cgoExe+" -godefs") {
 				continue
 			}
