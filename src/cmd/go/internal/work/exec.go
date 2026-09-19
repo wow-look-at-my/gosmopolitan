@@ -3765,7 +3765,8 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 
 	// If we're not approaching 32KB of args, just pass args normally.
 	// (use 30KB instead to be conservative; not sure how accounting is done)
-	if !useResponseFile(cmd.Path, argLen) {
+	prog, toolArgs := responseFileTool(cmd.Args)
+	if !useResponseFile(prog, argLen) {
 		return
 	}
 
@@ -3775,7 +3776,7 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 	}
 	cleanup = func() { os.Remove(tf.Name()) }
 	var buf bytes.Buffer
-	for _, arg := range cmd.Args[1:] {
+	for _, arg := range cmd.Args[toolArgs:] {
 		fmt.Fprintf(&buf, "%s\n", encodeArg(arg))
 	}
 	if _, err := tf.Write(buf.Bytes()); err != nil {
@@ -3787,15 +3788,26 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 		cleanup()
 		log.Fatalf("error writing long arguments to response file: %v", err)
 	}
-	cmd.Args = []string{cmd.Args[0], "@" + tf.Name()}
+	cmd.Args = append(cmd.Args[:toolArgs:toolArgs], "@"+tf.Name())
 	return cleanup
 }
 
-func useResponseFile(path string, argLen int) bool {
+// responseFileTool reports which tool a command line runs, and where that
+// tool's own arguments start. A tool linked into the go command runs as
+// "<go> tool <name>", so the program name is the go command and the first
+// two arguments select the tool. Every other command line names its program
+// directly and its arguments follow it.
+func responseFileTool(args []string) (prog string, toolArgs int) {
+	if len(args) >= 3 && args[1] == "tool" && base.Linked(args[2]) {
+		return args[2], 3
+	}
+	return strings.TrimSuffix(filepath.Base(args[0]), ".exe"), 1
+}
+
+func useResponseFile(prog string, argLen int) bool {
 	// Unless the program uses objabi.Flagparse, which understands
 	// response files, don't use response files.
 	// TODO: Note that other toolchains like CC are missing here for now.
-	prog := strings.TrimSuffix(filepath.Base(path), ".exe")
 	switch prog {
 	case "compile", "link", "cgo", "asm", "cover", "pack":
 	default:
