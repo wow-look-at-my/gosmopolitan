@@ -3,7 +3,7 @@
 # started by its name runs its own package's tests.
 
 go test -x -c -o $WORK/bin/ ./alpha ./beta
-stderr -count=1 'link -o'
+stderr -count=1 'link'$GOEXE' -o'
 exists $WORK/bin/alpha.test$GOEXE
 exists $WORK/bin/beta.test$GOEXE
 exec $WORK/bin/alpha.test$GOEXE -test.v
@@ -19,7 +19,7 @@ stdout '^--- PASS: TestBeta'
 go test -x -keepbinary=$WORK/all.test$GOEXE ./alpha ./beta
 stdout '^ok\s+example.com/copies/alpha'
 stdout '^ok\s+example.com/copies/beta'
-stderr -count=1 'link -o'
+stderr -count=1 'link'$GOEXE' -o'
 exec $WORK/all.test$GOEXE -test.unit=example.com/copies/beta -test.v
 stdout '^--- PASS: TestBeta'
 ! stdout TestAlpha
