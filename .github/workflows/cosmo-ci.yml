@@ -35,9 +35,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ./.github/actions/defender-off
+      # The org's gates, and the scanner it turns off. It carries yaml-comment-block, so this file names that one no more.
+      - uses: wow-look-at-my/actions@common-checks#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: wow-look-at-my/actions@yaml-comment-block#latest
       - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
@@ -75,8 +75,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - uses: wow-look-at-my/actions@common-checks#latest
       - uses: wow-look-at-my/actions@secret-server#latest
-      - uses: wow-look-at-my/actions@yaml-comment-block#latest
       - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
@@ -123,7 +123,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ./.github/actions/defender-off
+      - uses: wow-look-at-my/actions@common-checks#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
       - uses: ./.github/actions/track-submodules
@@ -217,7 +217,7 @@ jobs:
         with:
           submodules: true
 
-      - uses: ./.github/actions/defender-off
+      - uses: wow-look-at-my/actions@common-checks#latest
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -543,7 +543,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: ./.github/actions/defender-off
+      - uses: wow-look-at-my/actions@common-checks#latest
       # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
       - uses: wow-look-at-my/actions@secret-server#latest
       # The published toolchain is built here, so it carries the client's branch head rather than the gitlink's commit.
