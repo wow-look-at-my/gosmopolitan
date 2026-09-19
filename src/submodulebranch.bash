@@ -60,6 +60,14 @@ while read -r key _; do
 	[[ -n "$branch" ]] || continue
 
 	git config "submodule.$name.branch" "$branch"
+	# A checkout clones a submodule shallow, against a refspec holding the one
+	# commit the gitlink names, so every other branch is absent and the update
+	# below cannot resolve one. This asks for the branch by name.
+	git submodule update --init -- "$path" >/dev/null 2>&1 || true
+	if [[ -d "$path/.git" || -f "$path/.git" ]]; then
+		git -C "$path" fetch --depth 1 origin \
+			"+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
+	fi
 	# git says why it could not update, and a build that keeps the gitlink
 	# instead of the branch head is a build compiling a version nobody chose.
 	if said=$(git submodule update --init --remote -- "$path" 2>&1); then
