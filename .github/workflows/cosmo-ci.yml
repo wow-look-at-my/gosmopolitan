@@ -16,6 +16,20 @@ env:
   GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
 
 jobs:
+  # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
+  source-checks:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@common-checks#latest
+
+      - name: The source suites
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/source
+
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
@@ -491,7 +505,7 @@ jobs:
   publish-create:
     timeout-minutes: 10
     # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
-    needs: [build, build-linux, suite, cosmo-checks, test]
+    needs: [source-checks, build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates
