@@ -2165,6 +2165,11 @@ func (ctxt *Link) hostlink() {
 			}
 		}
 	}
+	if ctxt.HeadType == objabi.Hwindows {
+		if err := peClearUnusableLoadConfig(*flagOutfile); err != nil {
+			Exitf("%s: %v", os.Args[0], err)
+		}
+	}
 	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)

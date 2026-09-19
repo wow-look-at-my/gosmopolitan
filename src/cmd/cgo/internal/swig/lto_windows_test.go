@@ -124,6 +124,13 @@ func describeLTOImage(t *testing.T, what, path string) {
 			what, opt.Subsystem, opt.AddressOfEntryPoint, opt.ImageBase, opt.SizeOfImage, opt.SizeOfHeaders,
 			opt.SectionAlignment, opt.FileAlignment, opt.DllCharacteristics,
 			opt.SizeOfStackReserve, opt.SizeOfStackCommit)
+		// cmd/link drops the declared OS version to 6.1 when it cannot trust
+		// the external linker with the load config directory. Windows reads
+		// that directory only from version 10 up, so this says whether the
+		// fallback fired.
+		t.Logf("%s: os version %d.%d, subsystem version %d.%d",
+			what, opt.MajorOperatingSystemVersion, opt.MinorOperatingSystemVersion,
+			opt.MajorSubsystemVersion, opt.MinorSubsystemVersion)
 		for idx, dir := range opt.DataDirectory {
 			if dir.VirtualAddress != 0 || dir.Size != 0 {
 				t.Logf("%s: datadir %2d vaddr %#x size %#x", what, idx, dir.VirtualAddress, dir.Size)
