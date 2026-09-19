@@ -106,7 +106,8 @@ jobs:
       id-token: write
       contents: read
     strategy:
-      fail-fast: true
+      # Every leg reports. One leg's red says nothing about what the other five found, and cancelling them costs the run its answer for each.
+      fail-fast: false
       matrix:
         suite-os: [ubuntu-latest, macos-latest, windows-latest]
         # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
