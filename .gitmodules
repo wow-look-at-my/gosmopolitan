@@ -15,3 +15,7 @@
 [submodule "src/cmd/vendor/github.com/pierrec/lz4/v4"]
 	path = src/cmd/vendor/github.com/pierrec/lz4/v4
 	url = https://github.com/pierrec/lz4.git
+[submodule "src/cmd/vendor/golang.org/x/tools"]
+	path = src/cmd/vendor/golang.org/x/tools
+	url = https://github.com/wow-look-at-my/gosmopolitan_tools.git
+	branch = master
