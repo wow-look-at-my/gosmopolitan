@@ -56,5 +56,5 @@ go1.27's `cmd/link` rejects a reference from one std package's assembly to anoth
 - `GOOS=cosmo go build std` for amd64 and arm64.
 - `go build std` for js/wasm and wasip1/wasm, each also under `GOWASM=threads`.
 - `go test -short go/build cmd/internal/moddeps`.
-- A fat APE of `testdata/fizzbuzz` and of `testdata/runtimeprobe`, both with their `.dbg` and `.aarch64.elf` sidecars, executed on linux/amd64.
+- A fat APE of `testdata/fizzbuzz` and of `testdata/runtimeprobe`, both with their `.dbg` sidecar, executed on linux/amd64.
 - The full `testdata/ape/apetest` suite against both binaries.

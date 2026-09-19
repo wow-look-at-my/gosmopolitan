@@ -81,6 +81,12 @@ func apeFatMerge(spec, outfile string) {
 	}
 	if *flagApeDbg {
 		for _, p := range payloads {
+			// Only the amd64 image gets a sidecar. An arm64 one is an ELF
+			// that the host running the build cannot execute, and it sits
+			// next to the APE under a name that invites the attempt.
+			if p.arch == sys.ARM64 {
+				continue
+			}
 			writeAPEDebugSidecar(outfile, p)
 		}
 	}
@@ -184,15 +190,10 @@ func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
 	}
 }
 
-// apeDebugSidecarName returns the debug sidecar path for a payload of the
-// given architecture next to the APE at outfile. The names follow the
-// Cosmopolitan cosmocc convention, which cosmo libc's FindDebugBinary
-// probes at crash time by appending each extension to the executable name:
-// <outfile>.dbg for the amd64 image, <outfile>.aarch64.elf for arm64.
-func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
-	if arch == sys.ARM64 {
-		return outfile + ".aarch64.elf"
-	}
+// apeDebugSidecarName returns the debug sidecar path next to the APE at
+// outfile, named by the cosmocc convention of the executable name plus an
+// extension. Only the amd64 image gets one.
+func apeDebugSidecarName(outfile string) string {
 	return outfile + ".dbg"
 }
 
@@ -204,7 +205,7 @@ func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
 // reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
 // table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
-	name := apeDebugSidecarName(outfile, p.arch)
+	name := apeDebugSidecarName(outfile)
 	img := p.elf
 	if *flagApeDbgMode != "full" {
 		slim, err := slimELFDebug(img)

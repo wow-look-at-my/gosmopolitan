@@ -429,9 +429,8 @@ func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 // of each main package in mains) with the assembled APE, merging in the
 // sibling-architecture binary produced by s (when there is one) using the
 // linker's -apefat mode. By default the assembly also strips each embedded
-// payload to its loadable span and writes unstripped per-architecture debug
-// sidecars (<target>.dbg, <target>.aarch64.elf) next to the output; see
-// cosmoMergeArgs.
+// payload to its loadable span and writes the amd64 image's unstripped debug
+// sidecar (<target>.dbg) next to the output; see cosmoMergeArgs.
 func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
 		return

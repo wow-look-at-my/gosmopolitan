@@ -10,12 +10,12 @@ APE binaries are single executables that run natively on multiple operating syst
 
 ```bash
 # Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
-# GOARCH is ignored for the output. The APE ships stripped; full debug
-# info lands in two sidecar ELFs next to it (program.com.dbg for amd64,
-# program.com.aarch64.elf for arm64), the cosmocc convention.
+# GOARCH is ignored for the output. The APE ships stripped; the amd64
+# image's debug info lands in one sidecar ELF next to it
+# (program.com.dbg), the cosmocc convention. The arm64 image gets none.
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE + sidecars in the install directory
+# go install produces the same fat APE + sidecar in the install directory
 GOOS=cosmo go install ./cmd/program
 
 # Keep full debug info embedded in the APE instead (no sidecars)
