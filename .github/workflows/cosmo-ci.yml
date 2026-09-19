@@ -127,8 +127,6 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       - uses: ./.github/actions/suite-leg
-        # The NT leg reports in full; its red does not hold the branch. On the STEP, not the job: all-builds tallies jobs, and a job-level key leaves the job's own conclusion `failure`. waiver-expires: 2026-09-18
-        continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
         with:
           shard: ${{ matrix.shard }}/${{ matrix.shards }}
 

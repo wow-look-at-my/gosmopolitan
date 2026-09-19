@@ -119,7 +119,7 @@ More suites in `cosmo-checks` gate properties nothing else measures. `dats/check
 
 `runtime.GOOS` and `runtime.GOARCH` are `readonly var`, so only package runtime may assign them (docs/READONLY-VARS.md). Both name the HOST, read at startup. One APE boots on every supported kernel. A payload can run on a machine of another architecture. The cost is that `const x = runtime.GOARCH == "amd64"` is a compile error against a variable. Third-party code writes it (`golang.org/x/crypto/chacha20`), so `crypto/tls`'s bogo suite cannot build its dependency. Only the compiler can serve both readings. It folds the build value in a constant context (`types2/dynconst.go`). A plain read still loads the variable.
 
-`dats/checks/waiver-expiry.dats` refuses a `continue-on-error` that carries no `waiver-expires:` date. It also refuses one whose date has passed. The NT suite leg holds one. It runs and reports in full. It does not hold the branch while the port's own gaps fail packages there.
+`dats/checks/waiver-expiry.dats` refuses a `continue-on-error` that carries no `waiver-expires:` date. It also refuses one whose date has passed. No workflow step holds one now. The NT suite leg held the last one. That waiver expired, so the NT leg's red holds the branch. docs/PLATFORM-STATUS.md measures what fails there.
 
 `dats/checks/build-std.dats` is the uprev guardrail: `GOOS=cosmo go build std` for amd64 and arm64, and the x/sys, modernc libc and sqlite consumers against it. The execution suite compiles only what fizzbuzz and runtimeprobe import, which measured `84 of 358` std packages under cosmo. So an upstream re-partition of a package can pass the execution suite untouched. Run it locally before proposing an uprev. It is what turns a clean merge into a verified one.
 
