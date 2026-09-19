@@ -37,16 +37,25 @@ tests:
 	  exit: 0
 
 	# os/exec's own tests copy their test binary and run the copy against a
-	# PATH they narrowed to nothing. A host binary carries what it needs, so
-	# the copy must run with no PATH at all. When it does not, the loader
-	# names what it wanted, and every package whose tests spawn a child that
-	# way fails together.
-	- desc: a copy of a host binary runs with an empty PATH
+	# PATH they narrowed to nothing, and this fork links several packages'
+	# tests into one binary, so a package with no cgo of its own still rides
+	# in a binary that carries cgo. The probe is built the same way: for the
+	# host, with cgo in it. A binary that reaches its C runtime only through
+	# PATH dies at load once a test takes PATH away, and the loader names
+	# what it wanted here instead of the suite reporting a bare status
+	# against every package that spawns a child that way.
+	- desc: a copy of a host cgo binary runs with an empty PATH
 	  cmd: |
+		set -e
 		export GOCACHE="$TMPDIR/gocache" PATH="$PWD/bin:$PATH"
+		export GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) CGO_ENABLED=1
 		exe=$(go env GOEXE)
-		go build -o "$TMPDIR/probe$exe" ./testdata/argvecho/main.go
+		printf 'package main\n\nimport "C"\nimport "fmt"\n\nfunc main() { fmt.Println("carried") }\n' > "$TMPDIR/probe.go"
+		go build -o "$TMPDIR/probe$exe" "$TMPDIR/probe.go"
 		cp "$TMPDIR/probe$exe" "$TMPDIR/copy$exe"
 		cd "$TMPDIR"
 		PATH= "./copy$exe"
+	  outputs:
+		stdout:
+			- "carried"
 	  exit: 0
