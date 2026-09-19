@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,16 +51,14 @@ func run(t *testing.T, dir string, lto bool, args ...string) {
 		extraLDFlags := ""
 		if strings.Contains(testenv.Builder(), "clang") {
 			extraLDFlags += " -fuse-ld=lld"
+		} else if _, err := exec.LookPath("ld.lld"); err == nil {
+			// The default linker mishandles LTO on more hosts than the ones
+			// named for clang. NT's writes an image the kernel refuses ("%1 is
+			// not a valid Win32 application"), and the answer is the same one:
+			// link with lld, on a host that turns out to have it.
+			extraLDFlags += " -fuse-ld=lld"
 		}
-		cflags := "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
-		// The same problem the lld line above answers, on a host that has no
-		// lld to reach for: NT's ld writes an image the kernel refuses ("%1 is
-		// not a valid Win32 application") when every object it reads holds
-		// nothing but bitcode. A fat object carries ordinary code beside the
-		// bitcode, so a linker that does no LTO still has something to link.
-		if runtime.GOOS == "windows" {
-			cflags += " -ffat-lto-objects"
-		}
+		const cflags = "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
 		cmd.Env = append(cmd.Environ(),
 			"CGO_CFLAGS="+cflags,
 			"CGO_CXXFLAGS="+cflags,
