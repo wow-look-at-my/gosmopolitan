@@ -94,7 +94,7 @@ func TestToolIDHashesUnstampedTool(t *testing.T) {
 	}
 	// A vet tool's ID carries its name ahead of the content, since vet and fix
 	// can be one binary.
-	if want := "fakevet " + b.fileHash(tool); got != want {
+	if want := filepath.Base(tool) + " " + b.fileHash(tool); got != want {
 		t.Errorf("toolID = %q, want the tool name and file hash %q", got, want)
 	}
 }
@@ -114,7 +114,12 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		t.Skipf("test exercises the cosmo fork's tool ID scheme; running under %s", runtime.Version())
 	}
 
-	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile")
+	// NT names the tool with an extension, and it runs nothing without one.
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile"+exe)
 	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
@@ -122,8 +127,8 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	// Two copies in separate directories so both run as plain "compile"
 	// (tools print their argv[0] basename in the -V=full line).
 	dir := t.TempDir()
-	tool1 := filepath.Join(dir, "build1", "compile")
-	tool2 := filepath.Join(dir, "build2", "compile")
+	tool1 := filepath.Join(dir, "build1", "compile"+exe)
+	tool2 := filepath.Join(dir, "build2", "compile"+exe)
 	for _, name := range []string{tool1, tool2} {
 		if err := os.MkdirAll(filepath.Dir(name), 0o777); err != nil {
 			t.Fatal(err)
