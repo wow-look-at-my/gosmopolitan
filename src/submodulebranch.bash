@@ -48,8 +48,14 @@ while read -r key _; do
 	esac
 
 	branch=$(git config -f .gitmodules --get "submodule.$name.branch" || true)
-	if [[ -n "$here" ]] && git ls-remote --exit-code --heads "$url" "refs/heads/$here" >/dev/null 2>&1; then
-		branch=$here
+	if [[ -n "$here" ]]; then
+		# A probe that cannot reach the remote answers the same as one that
+		# reached it and found no such branch, so it says which happened.
+		if said=$(git ls-remote --exit-code --heads "$url" "refs/heads/$here" 2>&1); then
+			branch=$here
+		elif [[ -n "$said" ]]; then
+			echo "submodulebranch: $path cannot ask $url for $here: $said" >&2
+		fi
 	fi
 	[[ -n "$branch" ]] || continue
 
