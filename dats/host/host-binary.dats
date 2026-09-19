@@ -35,3 +35,18 @@ tests:
 	- desc: a test binary runs with no arguments, lists, and runs one test
 	  cmd: export GOCACHE="$TMPDIR/gocache" PATH="$PWD/bin:$PATH"; GOOS=cosmo go test -c -o "$TMPDIR/strings.test" strings && "$TMPDIR/strings.test" >/dev/null && "$TMPDIR/strings.test" -test.list=. | grep -q TestLastIndexByte && "$TMPDIR/strings.test" -test.run=TestLastIndexByte -test.v | grep -q '^PASS'
 	  exit: 0
+
+	# os/exec's own tests copy their test binary and run the copy against a
+	# PATH they narrowed to nothing. A host binary carries what it needs, so
+	# the copy must run with no PATH at all. When it does not, the loader
+	# names what it wanted, and every package whose tests spawn a child that
+	# way fails together.
+	- desc: a copy of a host binary runs with an empty PATH
+	  cmd: |
+		export GOCACHE="$TMPDIR/gocache" PATH="$PWD/bin:$PATH"
+		exe=$(go env GOEXE)
+		go build -o "$TMPDIR/probe$exe" ./testdata/argvecho/main.go
+		cp "$TMPDIR/probe$exe" "$TMPDIR/copy$exe"
+		cd "$TMPDIR"
+		PATH= "./copy$exe"
+	  exit: 0
