@@ -78,9 +78,6 @@ func decodeOverlay(body []byte) (*overlayEntry, error) {
 // module's own generators write, from the cache when the cache holds them and
 // by running the generators when it does not.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
-	if !gendep.Enabled() {
-		return nil
-	}
 	// A module that carries no directive completes to itself. Asking this first
 	// keeps the build cache out of the fetch of every such module, and `go mod
 	// download` needs no build cache to fetch one.

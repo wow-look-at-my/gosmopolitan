@@ -52,35 +52,6 @@ runs:
       shell: bash
       run: ./bin/go version
 
-    # dist test links one APE per test package, and Defender reads back every one of them as it lands. The suite writes thousands of files, so the scan is the slowest thing on this host. A runner is a throwaway VM running this repo's own code, so it has nothing to defend. Linux and darwin run the same suite with no scanner at all.
-    - name: Turn Defender off (NT)
-      if: runner.os == 'Windows'
-      shell: pwsh
-      run: |
-        $off = @{
-          DisableRealtimeMonitoring        = $true
-          DisableBehaviorMonitoring        = $true
-          DisableIOAVProtection            = $true
-          DisableScriptScanning            = $true
-          DisableArchiveScanning           = $true
-          DisableIntrusionPreventionSystem = $true
-          DisableBlockAtFirstSeen          = $true
-        }
-        # One call per setting: a setting Tamper Protection refuses must not take the rest with it.
-        foreach ($k in $off.Keys) {
-          try { Set-MpPreference -ErrorAction Stop @{ $k = $off[$k] }; Write-Host "Defender: $k" }
-          catch { Write-Host "::warning::Defender kept $k, so this suite runs slower: $_" }
-        }
-        try { Set-MpPreference -ErrorAction Stop -MAPSReporting 0 -SubmitSamplesConsent 2 }
-        catch { Write-Host "::warning::Defender still reports to MAPS: $_" }
-        # For whatever survived the settings above: skip every path, then stop the service itself.
-        try { Add-MpPreference -ErrorAction Stop -ExclusionPath 'C:\'; Write-Host "Defender: C:\ excluded" }
-        catch { Write-Host "::warning::Defender still scans C:\ : $_" }
-        try { Stop-Service -Name WinDefend -Force -ErrorAction Stop; Write-Host "Defender: service stopped" }
-        catch { Write-Host "::warning::WinDefend kept running: $_" }
-        Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled, BehaviorMonitorEnabled | Format-List
-        exit 0
-
     # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
     - name: Let the kernel exec an APE directly
       if: runner.os == 'Linux'
