@@ -327,7 +327,7 @@ gopls parses with the `go/*` packages of the toolchain that builds it. It must t
 
 ## Enum types
 
-`type T enum int` marks a named integer type whose constants print by name, which is what retires `stringer` here. A constant of such a type carries an optional trailing string literal as its display text. The type checker declares `String() string` on the type and rejects an explicit one. The body is not generated yet, so a program declaring an enum type-checks and then fails at link. The proposal that supersedes this shape, with scoped members and exhaustive switches, and what the current shape does not buy: docs/ENUM-DESIGN.md.
+docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped members, backquoted tags, exhaustive switches, checked conversion. What the compiler carries is a partial front end for an earlier shape. `type T enum int` marks a named integer type. A constant of that type takes a trailing string literal as its display text. types2 declares `String() string` on the type. No body is generated, so a program declaring an enum type-checks and then fails at link.
 
 ## Loop-aware inlining (all targets)
 

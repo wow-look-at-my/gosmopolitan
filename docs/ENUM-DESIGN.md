@@ -1,53 +1,17 @@
 # Enum types
 
-A proposal, derived from C++'s `enum class` and cut down to what Go can carry. Nothing here is implemented. The branch that carries this doc has a smaller, earlier shape in the compiler. The last section describes it.
+An enum type is a named integer type that states its own members. The type checker knows the whole set. That is what lets it print a value, refuse a switch that misses a member, and refuse a value from outside the set.
 
-## What Go has now
-
-```go
-type ConnState int
-
-const (
-	StateNew ConnState = iota
-	StateActive
-	StateIdle
-	StateClosed
-)
-
-//go:generate stringer -type=ConnState
-```
-
-Each defect below is a reason `stringer` exists.
-
-The type and its values are separate declarations that nothing ties together. A constant added to the block is a member. A constant of the same type declared in another file is also a member. Nothing states the set.
-
-The names live in package scope. So every one of them is hand-prefixed with the type name. The prefix is the programmer paying for a scope the language did not give.
-
-Printing needs a generator, a committed generated file, and a build step that regenerates it. That step is the reason this document exists.
-
-A `switch` over the type is unchecked. A member added today falls through every switch written yesterday, in silence.
-
-## What C++ has
-
-```cpp
-enum class ConnState : uint8_t {
-    New = 0,
-    Active,
-    Idle,
-    Closed,
-};
-```
-
-Members are scoped to the type, so `ConnState::New` needs no prefix. The underlying type is explicit. The type and its members are one declaration. The set is therefore stated. C++ does not fix printing. Its exhaustiveness check is a warning under `-Wswitch` rather than a rule.
-
-## Proposed syntax
+## Declaration
 
 ```go
-type ConnState enum uint8 {
-	New
-	Active
-	Idle
-	Closed
+type Phase enum uint8 {
+	Queued
+	Building
+	Testing
+	Publishing
+	Done
+	Failed
 }
 ```
 
@@ -57,80 +21,78 @@ EnumType   = "enum" Type "{" { EnumMember ";" } "}" .
 EnumMember = identifier [ "=" Expression ] [ raw_string_lit ] .
 ```
 
-Read it against C++ one piece at a time. `enum` moves to where a Go type declaration puts its type. `class` disappears, because Go has no unscoped variant to distinguish it from. `: uint8_t` becomes the ordinary type that follows. The member list is a Go block, so members are newline-terminated and the lexer inserts the semicolons.
+`enum` sits where a type declaration puts its type. The type that follows is the underlying type. It is an integer type, and anything else is a compile error. The member list is a Go block, so members are newline-terminated and the lexer inserts the semicolons.
 
-A member carries no string in the common case. Its display text is its own identifier. Write a tag where the identifier cannot be the text:
+A member declares its value with `=` and its display text with a backquoted tag. Both are optional. A member carrying neither, as every member above does, takes the value after the member before it and prints its own identifier.
+
+## Values
+
+A member with no `=` is one more than the member before it. The first member of a block is zero. An explicit value sets that member, and the count continues from it.
+
+Write values where an outside authority pins them. The kernel ABI pins an errno. A wire protocol pins an opcode. A file format pins a tag byte. Inserting a member into such a block must not renumber the members under it, so each one names its own value:
 
 ```go
 type Errno enum int32 {
-	EPERM = 1 `operation not permitted`
-	ENOENT    `no such file or directory`
-	ESRCH     `no such process`
-	EINTR     `interrupted system call`
-	EIO       `input/output error`
-	ENXIO     `no such device or address`
-	E2BIG     `argument list too long`
-	ENOEXEC   `exec format error`
-	EBADF     `bad file descriptor`
-	ECHILD    `no child processes`
-	EAGAIN    `resource temporarily unavailable`
-	ENOMEM    `out of memory`
-	EACCES    `permission denied`
-
-	EDEADLK = 35 `resource deadlock avoided`
-	ENAMETOOLONG `file name too long`
+	EPERM   = 1  `operation not permitted`
+	ENOENT  = 2  `no such file or directory`
+	ESRCH   = 3  `no such process`
+	EINTR   = 4  `interrupted system call`
+	EIO     = 5  `input/output error`
+	ENXIO   = 6  `no such device or address`
+	E2BIG   = 7  `argument list too long`
+	ENOEXEC = 8  `exec format error`
+	EBADF   = 9  `bad file descriptor`
+	ECHILD  = 10 `no child processes`
+	EAGAIN  = 11 `resource temporarily unavailable`
+	ENOMEM  = 12 `out of memory`
+	EACCES  = 13 `permission denied`
 }
 ```
 
-Each column does a job the others cannot. The kernel ABI pins the value. POSIX pins the identifier, which is terse on purpose. The text is the part a person reads, and nothing derives it from `ENXIO`.
+Omit values where nothing outside the program reads them. `Phase` above names no value, because which integer stands for `Testing` is the compiler's business. A member inserted into that block renumbers the members under it and changes nothing a program can observe.
 
-A value appears only where the sequence breaks. Two of them carry the whole block. `EPERM` needs one because errno starts at one rather than zero. `EDEADLK` needs one because Linux skips the number before it. Every other member counts up from the member above. Writing a number on each line is the churn `iota` exists to avoid, and an enum avoids it without `iota`.
+## Tags
 
-A tag equal to its own identifier is not worth writing. `New`, `Active` and `Idle` carry none. `ENXIO` carries one.
+A tag is the text `String` returns for that member. It is a raw string literal, backquoted, which is how Go spells a trailing string literal that is metadata rather than value. A reader who knows `json:"name"` reads this the same way. An interpreted string sits where the value goes, so `Idle "idle"` on an integer enum reads as an assignment of the wrong type.
 
-This is what `syscall` does by hand today. `Errno.Error` reads a per-GOOS `errors = [...]string{...}` table, written apart from the `const` block, indexed by number, and kept in step by nobody. `zerrors_linux_amd64.go` is that shape at the length of a small book.
+Write a tag where the identifier cannot be the text. `ENXIO` needs one. POSIX pins that identifier and keeps it terse on purpose. Nothing derives `no such device or address` from it.
 
-The tag is the part that retires `stringer`. It is backquoted, and a struct field tag is the reason. Go already spells "trailing string literal that is metadata rather than value" that way. A reader who knows `json:"name"` therefore reads this without being told. An interpreted string sits where C++ puts the value, so `New "new"` on a `uint8` enum reads as an assignment of the wrong type. The `=` takes the value. The tag takes the text. Neither can be read as the other.
+Omit the tag where the identifier is already the word a person wants to read. `Queued` needs none.
 
-## Semantics
+## Members are scoped to the type
 
-**The underlying type is an integer type.** Anything else is a compile error.
+A member is reached through its type, as `Phase.Queued`. No member is declared in package scope, so no member carries the type name as a hand-written prefix.
 
-**Members are scoped to the type.** Write `ConnState.New`, never a package-scope `StateNew`. A member and a method cannot share a name, so `ConnState.New` and a method expression stay distinguishable. The hand-written prefix on every enum member disappears.
+A member and a method cannot share a name. So `Phase.Queued` and a method expression stay distinguishable.
 
-**Values increase by themselves.** A member with no `=` is one more than the member before it. The first member is zero. An explicit value resets the count. So `iota` is not needed and not used.
+## The String method
 
-**Every enum type has a `String() string` method**, declared implicitly. It returns the member's tag, or the member's identifier where the declaration carries no tag. For a value equal to no member it returns the type name and the value, `ConnState(7)`. Declaring `String` explicitly is an error, because both declarations name one method.
+Every enum type has a `String() string` method, declared implicitly. It returns the member's tag, or the member's identifier where the member carries no tag. For a value equal to no member it returns the type name and the value, `Phase(7)`.
 
-**A `switch` on an enum is exhaustive, or it carries a `default`.** A missing member is a compile error, not a warning. C++ declined to make this a rule. It is what makes a closed set worth writing down: adding a member turns every switch that ignores it red.
+Where members share a value, the member declared first supplies the result.
 
-**An enum does not compare against untyped constants.** `state == 3` does not compile. `state == ConnState.Idle` does. A named integer type in Go accepts an untyped constant on either side. An enum that accepts one is a closed set in name only.
+Declaring `String` on an enum type explicitly is a compile error, because both declarations name one method.
 
-**Conversion from the underlying type is checked.** A constant conversion out of range, `ConnState(7)`, is a compile error. A runtime conversion answers with the comma-ok form:
+## Switches are exhaustive
+
+A `switch` on an enum value names every member of that type, or it carries a `default`. A missing member is a compile error.
+
+This is what a stated set buys. Adding a member turns red every switch that ignores it.
+
+## Untyped constants do not compare
+
+`state == 3` does not compile. `state == Phase.Idle` does.
+
+A named integer type in Go accepts an untyped constant on either side. An enum accepting one is a stated set in name only.
+
+## Conversion is checked
+
+A constant conversion names a member, or it is a compile error. `Phase(7)` does not compile.
+
+A conversion of a runtime value answers with the comma-ok form:
 
 ```go
-state, ok := ConnState(n)
+phase, ok := Phase(n)
 ```
 
-Every value is otherwise one cast away from being garbage. The `ConnState(7)` that `String` prints then stops being a diagnostic and becomes a routine result.
-
-## What this costs
-
-The parser gains one production. types2 gains a scope per enum type and the walk that assigns values. It also gains an error for a non-integer underlying type, an error for a non-exhaustive switch, and an error for an untyped comparison. The back end gains one generated method body per enum type. That body is a switch over the members, with a call to `runtime.enumString` for every other value.
-
-The exhaustiveness rule is the expensive one. It runs over every switch statement rather than every declaration. It also has to decide what covers means for a switch that falls through, and for one whose cases are not all constants.
-
-## What is in the tree today
-
-An earlier, smaller shape, which this proposal supersedes:
-
-```go
-type ConnState enum uint8
-
-const (
-	StateNew ConnState = iota "new"
-	StateIdle                 "idle"
-)
-```
-
-`enum` goes after the type name, with no member block. The members stay an ordinary `const` block with `iota`. Each constant optionally carries its text. It buys the `String` method and nothing else. Members stay in package scope. `iota` stays. Nothing states the set, and `switch` stays unchecked. It was the smallest change that retires `stringer`. It is not a good enum. The parser work it did is reusable rather than final.
+A value reaching an enum type has therefore passed through a check. The `Phase(7)` that `String` prints is a diagnostic for memory that went wrong, rather than an ordinary result.
