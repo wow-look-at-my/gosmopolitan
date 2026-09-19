@@ -325,6 +325,10 @@ Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost 
 
 gopls parses with the `go/*` packages of the toolchain that builds it. It must therefore be built by THIS one. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
 
+## Enum types
+
+`type T enum int` marks a named integer type whose constants print by name, which is what retires `stringer` here. A constant of such a type carries an optional trailing string literal as its display text. The type checker declares `String() string` on the type and rejects an explicit one. The body is not generated yet, so a program declaring an enum type-checks and then fails at link. The proposal that supersedes this shape, with scoped members and exhaustive switches, and what the current shape does not buy: docs/ENUM-DESIGN.md.
+
 ## Loop-aware inlining (all targets)
 
 Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget as one on a cold. This fork adds the static frequency estimate every other production compiler has (`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed: docs/LOOP-INLINING.md.
