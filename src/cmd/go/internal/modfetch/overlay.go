@@ -92,10 +92,21 @@ func completingSelf(mod module.Version) bool {
 	return false
 }
 
+// Superseded reports whether a replacement stands in for mod. modload sets it,
+// because the replace directives belong to the main module and this package
+// reads none of them.
+var Superseded func(mod module.Version) bool
+
 // completeDir completes the module extracted at dir: it adds the files the
 // module's own generators write, from the cache when the cache holds them and
 // by running the generators when it does not.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
+	// A replaced module is fetched for what its go.mod says. The build compiles
+	// the replacement instead, so nothing here reads what these generators write.
+	if Superseded != nil && Superseded(mod) {
+		overlayDebugf("modfetch: %s@%s: a replacement stands in for it, so its generators do not run", mod.Path, mod.Version)
+		return nil
+	}
 	// A module that carries no directive completes to itself. Asking this first
 	// keeps the build cache out of the fetch of every such module, and `go mod
 	// download` needs no build cache to fetch one.
