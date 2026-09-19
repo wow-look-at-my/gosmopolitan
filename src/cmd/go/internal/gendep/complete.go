@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"cmd/go/internal/base"
 
@@ -72,6 +73,10 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 		return nil, err
 	}
 	for _, pkg := range pkgs {
+		if gone := generatorNotShipped(stage, pkg); gone != "" {
+			fmt.Fprintf(os.Stderr, "go: %s in %s names %s, which its module zip does not carry\n", mod, pkg, gone)
+			continue
+		}
 		err := runGenerate(stage, pkg)
 		if err == nil {
 			continue
@@ -210,6 +215,82 @@ func directives(files []string) int {
 		open.Close()
 	}
 	return count
+}
+
+// generatorNotShipped answers the path a directive of pkg names that the module
+// does not carry, or "" when every path it names is present.
+//
+// The go command drops a directory whose name opens with an underscore from a
+// module zip, so a generator kept beside the package it writes reaches no
+// consumer. testify ships one at _codegen. Running the directive is impossible
+// for anyone who fetched the module, so the module ships what that directive
+// writes as well, and a consumer needs nothing from it.
+//
+// This asks what the module carries rather than what a run did. A directive
+// that CAN run and fails is the module's own defect, and it stops the build.
+func generatorNotShipped(stage, pkg string) string {
+	dir := filepath.Join(stage, filepath.FromSlash(pkg))
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, ent := range names {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
+			continue
+		}
+		open, err := os.Open(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			continue
+		}
+		scan := bufio.NewScanner(open)
+		scan.Buffer(nil, 1<<20)
+		for scan.Scan() {
+			line := strings.TrimSpace(scan.Text())
+			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
+				continue
+			}
+			if gone := missingDroppedPath(stage, dir, line); gone != "" {
+				open.Close()
+				return gone
+			}
+		}
+		open.Close()
+	}
+	return ""
+}
+
+// missingDroppedPath answers the first path in line that names an
+// underscore-prefixed segment and is absent from the tree, or "".
+//
+// The path can sit inside a quoted shell program, so this reads runs of path
+// characters rather than shell words.
+func missingDroppedPath(stage, dir, line string) string {
+	for _, word := range strings.FieldsFunc(line, func(r rune) bool {
+		return !strings.ContainsRune("./_-", r) && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if !droppedFromZip(word) {
+			continue
+		}
+		at := filepath.Join(dir, filepath.FromSlash(word))
+		if !filepath.IsLocal(word) {
+			at = filepath.Join(stage, filepath.FromSlash(strings.TrimPrefix(word, "../")))
+		}
+		if _, err := os.Lstat(at); errors.Is(err, fs.ErrNotExist) {
+			return word
+		}
+	}
+	return ""
+}
+
+// droppedFromZip reports whether path names a segment the go command leaves out
+// of a module zip.
+func droppedFromZip(path string) bool {
+	for seg := range strings.SplitSeq(path, "/") {
+		if len(seg) > 1 && seg[0] == '_' {
+			return true
+		}
+	}
+	return false
 }
 
 // hostCannotGenerate reports whether err is a fact about this host rather than

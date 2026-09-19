@@ -125,6 +125,33 @@ func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
 	}
 }
 
+// A module zip leaves out a directory whose name opens with an underscore, so a
+// directive naming one cannot run for anybody who fetched the module. Such a
+// module ships what the directive writes. Every other directive is the module's
+// own, and a failure in one stops the build.
+func TestGeneratorNotShippedNamesOnlyTheDroppedPath(test *testing.T) {
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"go.mod":           "module example.com/m\n",
+		"assert/gen.go":    "package assert\n\n//go:generate sh -c \"go run ../_codegen/main.go -out x.go\"\n",
+		"rules/gen.go":     "package rules\n\n//go:generate go run example.com/m/cmd/rulegen -out y.go\n",
+		"cmd/rulegen/m.go": "package main\n",
+		"local/gen.go":     "package local\n\n//go:generate go run ./_tool\n",
+		"local/_tool/m.go": "package main\n",
+	})
+
+	if got := generatorNotShipped(stage, "assert"); got != "../_codegen/main.go" {
+		test.Errorf("generatorNotShipped(assert) = %q, want the dropped path", got)
+	}
+	// The generator is an ordinary package of the module, so it rode the zip.
+	if got := generatorNotShipped(stage, "rules"); got != "" {
+		test.Errorf("generatorNotShipped(rules) = %q, want none", got)
+	}
+	// An underscore path the module does carry is runnable, whatever its name.
+	if got := generatorNotShipped(stage, "local"); got != "" {
+		test.Errorf("generatorNotShipped(local) = %q, want none", got)
+	}
+}
+
 // A missing program is this host's own gap, not the module's. Skipping the
 // directive would hand this build a module that the same version elsewhere does
 // not match, so the build stops instead.
