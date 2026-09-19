@@ -1447,10 +1447,10 @@ func linkTools() {
 // and leaves bin/go referenced by nobody. It is made fresh on each call, so
 // the driver is always the go command bin/go currently holds. GOROOT comes
 // from the environment, so the copy still finds this tree.
+//
+// Every host takes the copy. One path that every build leg runs beats a
+// second one that only NT ever reaches.
 func goInstaller() string {
-	if gohostos != "windows" {
-		return gorootBinGo
-	}
 	// gorootBinGo carries no suffix, and only exec resolves one. A copy reads
 	// the file, so it needs the name the file actually has.
 	dst := pathf("%s/go-installer%s", workdir, exe)
