@@ -24,7 +24,57 @@
 [submodule "src/cmd/vendor/github.com/pmezard/go-difflib"]
 	path = src/cmd/vendor/github.com/pmezard/go-difflib
 	url = https://github.com/pmezard/go-difflib.git
-[submodule "src/cmd/vendor/gopkg.in/yaml.v3"]
-	path = src/cmd/vendor/gopkg.in/yaml.v3
-	url = https://github.com/go-yaml/yaml.git
-	branch = v3
+[submodule "src/cmd/vendor/go.yaml.in/yaml/v3"]
+	path = src/cmd/vendor/go.yaml.in/yaml/v3
+	url = https://github.com/yaml/go-yaml.git
+[submodule "src/vendor/golang.org/x/crypto"]
+	path = src/vendor/golang.org/x/crypto
+	url = https://github.com/golang/crypto.git
+[submodule "src/vendor/golang.org/x/net"]
+	path = src/vendor/golang.org/x/net
+	url = https://github.com/golang/net.git
+[submodule "src/vendor/golang.org/x/sys"]
+	path = src/vendor/golang.org/x/sys
+	url = https://github.com/golang/sys.git
+[submodule "src/vendor/golang.org/x/text"]
+	path = src/vendor/golang.org/x/text
+	url = https://github.com/golang/text.git
+[submodule "src/cmd/vendor/github.com/google/pprof"]
+	path = src/cmd/vendor/github.com/google/pprof
+	url = https://github.com/google/pprof.git
+[submodule "src/cmd/vendor/github.com/ianlancetaylor/demangle"]
+	path = src/cmd/vendor/github.com/ianlancetaylor/demangle
+	url = https://github.com/ianlancetaylor/demangle.git
+[submodule "src/cmd/vendor/github.com/klauspost/compress"]
+	path = src/cmd/vendor/github.com/klauspost/compress
+	url = https://github.com/klauspost/compress.git
+[submodule "src/cmd/vendor/golang.org/x/arch"]
+	path = src/cmd/vendor/golang.org/x/arch
+	url = https://github.com/golang/arch.git
+[submodule "src/cmd/vendor/golang.org/x/build"]
+	path = src/cmd/vendor/golang.org/x/build
+	url = https://github.com/golang/build.git
+[submodule "src/cmd/vendor/golang.org/x/mod"]
+	path = src/cmd/vendor/golang.org/x/mod
+	url = https://github.com/golang/mod.git
+[submodule "src/cmd/vendor/golang.org/x/sync"]
+	path = src/cmd/vendor/golang.org/x/sync
+	url = https://github.com/golang/sync.git
+[submodule "src/cmd/vendor/golang.org/x/sys"]
+	path = src/cmd/vendor/golang.org/x/sys
+	url = https://github.com/golang/sys.git
+[submodule "src/cmd/vendor/golang.org/x/telemetry"]
+	path = src/cmd/vendor/golang.org/x/telemetry
+	url = https://github.com/golang/telemetry.git
+[submodule "src/cmd/vendor/golang.org/x/term"]
+	path = src/cmd/vendor/golang.org/x/term
+	url = https://github.com/golang/term.git
+[submodule "src/cmd/vendor/golang.org/x/text"]
+	path = src/cmd/vendor/golang.org/x/text
+	url = https://github.com/golang/text.git
+[submodule "src/cmd/vendor/golang.org/x/tools"]
+	path = src/cmd/vendor/golang.org/x/tools
+	url = https://github.com/golang/tools.git
+[submodule "src/cmd/vendor/rsc.io/markdown"]
+	path = src/cmd/vendor/rsc.io/markdown
+	url = https://github.com/rsc/markdown.git
