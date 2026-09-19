@@ -51,12 +51,6 @@ func run(t *testing.T, dir string, lto bool, args ...string) {
 		extraLDFlags := ""
 		if strings.Contains(testenv.Builder(), "clang") {
 			extraLDFlags += " -fuse-ld=lld"
-		} else if _, err := exec.LookPath("ld.lld"); err == nil {
-			// The default linker mishandles LTO on more hosts than the ones
-			// named for clang. NT's writes an image the kernel refuses ("%1 is
-			// not a valid Win32 application"), and the answer is the same one:
-			// link with lld, on a host that turns out to have it.
-			extraLDFlags += " -fuse-ld=lld"
 		}
 		const cflags = "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
 		cmd.Env = append(cmd.Environ(),
