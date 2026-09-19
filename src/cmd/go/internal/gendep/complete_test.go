@@ -239,17 +239,18 @@ func TestAnAdditionTheModuleLacksIsKept(test *testing.T) {
 	}
 }
 
-// Two files the compiler never reads together may declare the same name, so a
-// constrained file on either side is no collision.
+// Two files the compiler never reads together may declare the same name. That
+// needs a constraint on BOTH sides: an unconstrained file is compiled for every
+// target, so it meets a constrained one on that one's own targets.
 func TestAConstrainedFileIsNotACollision(test *testing.T) {
-	const shipped = "//go:build windows\n\npackage pkg\n\nvar Table = 1\n"
 	cases := []struct {
 		why   string
 		mine  map[string]string
 		added string
 	}{
-		{"a build line constrains the module's file", map[string]string{"pkg/shipped.go": shipped}, "pkg/table.go"},
-		{"a name suffix constrains it", map[string]string{"pkg/table_windows.go": "package pkg\n\nvar Table = 1\n"}, "pkg/table.go"},
+		{"build lines put them on separate targets", map[string]string{"pkg/shipped.go": "//go:build windows\n\npackage pkg\n\nvar Table = 1\n"}, "pkg/table_linux.go"},
+		{"name suffixes do", map[string]string{"pkg/table_windows.go": "package pkg\n\nvar Table = 1\n"}, "pkg/table_linux.go"},
+		{"a pkg_test file shares no scope with pkg", map[string]string{"pkg/export_test.go": "package pkg_test\n\nvar Table = 1\n"}, "pkg/table.go"},
 	}
 	for _, tcase := range cases {
 		modroot := writeTree(test, test.TempDir(), tcase.mine)
@@ -265,6 +266,35 @@ func TestAConstrainedFileIsNotACollision(test *testing.T) {
 		}
 		if len(kept) != 1 {
 			test.Errorf("kept %v where %s, want the addition kept", kept, tcase.why)
+		}
+	}
+}
+
+// An unconstrained addition is compiled everywhere, so it redeclares the name
+// on the targets the module's own constrained file covers. Skipping the
+// comparison there added the file and broke the package on those targets.
+func TestAnUnconstrainedAdditionMeetsAConstrainedFile(test *testing.T) {
+	cases := []struct {
+		why  string
+		mine map[string]string
+	}{
+		{"a build line constrains the module's file", map[string]string{"pkg/shipped.go": "//go:build windows\n\npackage pkg\n\nvar Table = 1\n"}},
+		{"a name suffix constrains it", map[string]string{"pkg/table_windows.go": "package pkg\n\nvar Table = 1\n"}},
+	}
+	for _, tcase := range cases {
+		modroot := writeTree(test, test.TempDir(), tcase.mine)
+		staged := map[string]string{"pkg/table.go": "package pkg\n\nvar Table = 2\n"}
+		for rel, body := range tcase.mine {
+			staged[rel] = body
+		}
+		stage := writeTree(test, test.TempDir(), staged)
+
+		kept, err := withoutRedeclarations(modroot, stage, "example.com/m", []string{"pkg/table.go"})
+		if err != nil {
+			test.Fatal(err)
+		}
+		if len(kept) != 0 {
+			test.Errorf("kept %v where %s, want the collision seen", kept, tcase.why)
 		}
 	}
 }

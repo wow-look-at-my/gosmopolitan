@@ -155,15 +155,15 @@ func withoutRedeclarations(modroot, stage, mod string, added []string) ([]string
 			kept = append(kept, rel)
 			continue
 		}
-		names, constrained, err := declaredNames(filepath.Join(stage, filepath.FromSlash(rel)))
+		names, pkg, constrained, err := declaredNames(filepath.Join(stage, filepath.FromSlash(rel)))
 		if err != nil {
 			return nil, err
 		}
-		if constrained || len(names) == 0 {
+		if len(names) == 0 {
 			kept = append(kept, rel)
 			continue
 		}
-		clashes, where, err := clashingNames(modroot, path.Dir(rel), names)
+		clashes, where, err := clashingNames(modroot, path.Dir(rel), names, pkg, constrained)
 		if err != nil {
 			return nil, err
 		}
@@ -203,9 +203,16 @@ func soleName(names map[string]bool, clashes []string) string {
 }
 
 // clashingNames answers the names of names that a module file in dir already
-// declares, sorted, and the file declaring each. dir is relative to modroot, in
-// slash form. A constrained file is skipped, as in withoutRedeclarations.
-func clashingNames(modroot, dir string, names map[string]bool) ([]string, map[string]string, error) {
+// declares in package pkg, sorted, and the file declaring each. dir is relative
+// to modroot, in slash form. constrained says whether the file that declares
+// names carries a build constraint.
+//
+// A pair is compared unless both sides are constrained. An unconstrained file
+// is compiled for every target, so it meets a constrained one on that one's own
+// targets and the two collide there. Two constrained files are taken as
+// disjoint, which they need not be: proving it asks for the whole constraint
+// grammar, and the pair that is not disjoint fails the compile as before.
+func clashingNames(modroot, dir string, names map[string]bool, pkg string, constrained bool) ([]string, map[string]string, error) {
 	full := modroot
 	if dir != "." {
 		full = filepath.Join(modroot, filepath.FromSlash(dir))
@@ -222,11 +229,11 @@ func clashingNames(modroot, dir string, names map[string]bool) ([]string, map[st
 		if ent.IsDir() || filepath.Ext(ent.Name()) != ".go" {
 			continue
 		}
-		mine, constrained, err := declaredNames(filepath.Join(full, ent.Name()))
+		mine, minePkg, mineConstrained, err := declaredNames(filepath.Join(full, ent.Name()))
 		if err != nil {
 			return nil, nil, err
 		}
-		if constrained {
+		if minePkg != pkg || (constrained && mineConstrained) {
 			continue
 		}
 		for name := range mine {
@@ -246,24 +253,26 @@ func clashingNames(modroot, dir string, names map[string]bool) ([]string, map[st
 	return clashes, where, nil
 }
 
-// declaredNames answers the package-level names a Go file declares, and whether
-// the file carries a build constraint. The blank identifier and init are left
-// out: neither collides with anything.
+// declaredNames answers the package-level names a Go file declares, the package
+// it declares them in, and whether the file carries a build constraint. The
+// blank identifier and init are left out: neither collides with anything.
+//
+// The package name is answered because one directory holds two of them: a test
+// file in pkg_test shares no scope with pkg, so a name in both is no collision.
 //
 // A parse error answers nothing rather than failing. A file the compiler will
 // reject anyway is not this check's to report.
-func declaredNames(path string) (map[string]bool, bool, error) {
+func declaredNames(path string) (map[string]bool, string, bool, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
-	if constrainedSource(src) || constrainedName(filepath.Base(path)) {
-		return nil, true, nil
-	}
+	constrained := constrainedSource(src) || constrainedName(filepath.Base(path))
 	file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, false, nil
+		return nil, "", constrained, nil
 	}
+	pkg := file.Name.Name
 	names := make(map[string]bool)
 	for _, decl := range file.Decls {
 		switch d := decl.(type) {
@@ -289,7 +298,7 @@ func declaredNames(path string) (map[string]bool, bool, error) {
 			}
 		}
 	}
-	return names, false, nil
+	return names, pkg, constrained, nil
 }
 
 // constrainedSource reports whether the file carries a build constraint, which
