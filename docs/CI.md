@@ -55,6 +55,10 @@ It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist e
 
 Some tests exec a binary they built themselves, past that wrapper. Every Linux leg therefore runs a step named "Let the kernel exec an APE directly". That step registers the `binfmt_misc` entry against the committed loader in the checkout. The `F` flag pre-opens the loader. The entry then keeps working after the checkout moves. The emitted shell script registers this same entry, and `docs/APE-BOOT.md` describes it.
 
+**What the suite prints.** `dist test` runs every test binary through test2json and renders the events itself. A passing test costs no line. A failing test's output reaches the log whole, so no run needs `-v` to be diagnosed. A binary that dies without reporting a result still gets its output flushed, because that output is the reason it died.
+
+Each second the run prints one line: how many packages have finished, the percentage, then the tests that ended during that second, slowest first. The line is cut to the terminal width, or to 120 columns when nothing reports one. The run ends with a table of the slowest tests, which is how a slow test inside a slow package gets named.
+
 One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
 
 ## test job
