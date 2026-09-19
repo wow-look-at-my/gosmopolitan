@@ -1,6 +1,6 @@
 # Uprevving the fork to go1.27.0
 
-This is the record of the go1.26.5 -> go1.27.0 merge. CLAUDE.md's "Uprevving to a new upstream Go release" section is the procedure. This file is the detail a minor-version bump needs and a patch bump does not.
+This is the record of the go1.26.5 -> go1.27.0 merge. This file is the detail a minor-version bump needs and a patch bump does not.
 
 ## Why a minor bump conflicts and a patch bump does not
 
