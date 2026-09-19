@@ -63,24 +63,179 @@ cmp go.mod.orig go.mod
 cmp go.sum.orig go.sum
 
 # Save the result from running tidy.
-[exec:patch] cp go.mod.orig go.mod
-[exec:patch] cp go.sum.orig go.sum
-[exec:patch] go mod tidy
-[exec:patch] cp go.mod go.mod.tidyResult
-[exec:patch] cp go.sum go.sum.tidyResult
+cp go.mod.orig go.mod
+cp go.sum.orig go.sum
+go mod tidy
+cp go.mod go.mod.tidyResult
+cp go.sum go.sum.tidyResult
 
 # Compare output of -diff to running tidy.
-# Apply the patch from -diff
-[exec:patch] cp go.mod.orig go.mod
-[exec:patch] cp go.sum.orig go.sum
-[exec:patch] ! go mod tidy -diff
-[exec:patch] cp stdout diff.patch
-[exec:patch] exec patch -p1 -i diff.patch
-[exec:patch] go mod tidy -diff
-[exec:patch] ! stdout .
-[exec:patch] cmp go.mod go.mod.tidyResult
-[exec:patch] cmp go.sum go.sum.tidyResult
+# ./applypatch applies the patch, not the host's own patch command. Every
+# host runs this check that way, and a patch command that aborts on the
+# go.sum hunk cannot decide whether the check runs at all.
+cp go.mod.orig go.mod
+cp go.sum.orig go.sum
+! go mod tidy -diff
+cp stdout diff.patch
+go run ./applypatch -p=1 diff.patch
+go mod tidy -diff
+! stdout .
+cmp go.mod go.mod.tidyResult
+cmp go.sum go.sum.tidyResult
 
+
+-- applypatch/main.go --
+// Applies a unified diff, so that no host patch command decides whether
+// the check around it runs.
+package main
+
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+var strip = flag.Int("p", 1, "leading path components to drop from a file name")
+
+func fail(format string, arg ...any) {
+	fmt.Fprintf(os.Stderr, "applypatch: "+format+"\n", arg...)
+	os.Exit(1)
+}
+
+// stripName drops the leading components -p asks for.
+func stripName(name string) string {
+	part := strings.Split(filepath.ToSlash(name), "/")
+	if len(part) <= *strip {
+		fail("name %q has no component left after -p=%d", name, *strip)
+	}
+	return filepath.Join(part[*strip:]...)
+}
+
+// lines splits src after each newline. The final line keeps the ending it
+// has, so a file that ends without one round-trips.
+func lines(src []byte) []string {
+	var out []string
+	for len(src) > 0 {
+		end := bytes.IndexByte(src, '\n')
+		if end < 0 {
+			out = append(out, string(src))
+			break
+		}
+		out = append(out, string(src[:end+1]))
+		src = src[end+1:]
+	}
+	return out
+}
+
+func atoi(text string) int {
+	num, err := strconv.Atoi(text)
+	if err != nil {
+		fail("bad number %q", text)
+	}
+	return num
+}
+
+// hunkHead reads the source start and the source count from a hunk header.
+func hunkHead(line string) (start, count int) {
+	body := strings.TrimPrefix(line, "@@ -")
+	end := strings.IndexByte(body, ' ')
+	if end < 0 {
+		fail("bad hunk header %q", line)
+	}
+	span := body[:end]
+	count = 1
+	if comma := strings.IndexByte(span, ','); comma >= 0 {
+		count = atoi(span[comma+1:])
+		span = span[:comma]
+	}
+	return atoi(span), count
+}
+
+func main() {
+	flag.Parse()
+	if flag.NArg() != 1 {
+		fail("usage: applypatch [-p=N] patchfile")
+	}
+	raw, err := os.ReadFile(flag.Arg(0))
+	if err != nil {
+		fail("%v", err)
+	}
+	patch := lines(raw)
+
+	for idx := 0; idx < len(patch); {
+		if !strings.HasPrefix(patch[idx], "--- ") {
+			idx++
+			continue
+		}
+		if idx+1 >= len(patch) || !strings.HasPrefix(patch[idx+1], "+++ ") {
+			fail("a --- line carries no +++ line")
+		}
+		name := stripName(strings.TrimRight(strings.TrimPrefix(patch[idx+1], "+++ "), "\r\n"))
+		idx += 2
+
+		src, err := os.ReadFile(name)
+		if err != nil {
+			fail("%v", err)
+		}
+		have := lines(src)
+		var out []string
+		at := 0
+
+		for idx < len(patch) && strings.HasPrefix(patch[idx], "@@ -") {
+			start, left := hunkHead(patch[idx])
+			idx++
+			for at < start-1 {
+				if at >= len(have) {
+					fail("%s: a hunk starts past the end of the file", name)
+				}
+				out = append(out, have[at])
+				at++
+			}
+			for idx < len(patch) {
+				line := patch[idx]
+				if line == "" || line == "\n" {
+					break
+				}
+				if left == 0 && line[0] != '+' && line[0] != '\\' {
+					break
+				}
+				switch line[0] {
+				case ' ', '-':
+					if at >= len(have) || have[at] != line[1:] {
+						fail("%s: line %d does not match the patch", name, at+1)
+					}
+					if line[0] == ' ' {
+						out = append(out, have[at])
+					}
+					at++
+					left--
+				case '+':
+					out = append(out, line[1:])
+				case '\\':
+					// The line above it carries no ending of its own.
+					if len(out) > 0 {
+						out[len(out)-1] = strings.TrimRight(out[len(out)-1], "\r\n")
+					}
+				default:
+					fail("%s: unexpected patch line %q", name, line)
+				}
+				idx++
+			}
+			if left != 0 {
+				fail("%s: a hunk ended with %d source lines unread", name, left)
+			}
+		}
+		out = append(out, have[at:]...)
+		if err := os.WriteFile(name, []byte(strings.Join(out, "")), 0666); err != nil {
+			fail("%v", err)
+		}
+		fmt.Println("patched", name)
+	}
+}
 
 -- main.go --
 package main
