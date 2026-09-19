@@ -2358,9 +2358,9 @@ not an enumerated type.
 
 <pre>
 const (
-	Placebo   Pill = iota // prints as "Placebo"
-	Aspirin                "aspirin"
-	Ibuprofen              "ibuprofen"
+	StateNew    ConnState = iota // prints as "StateNew"
+	StateActive                   "active"
+	StateIdle                     "idle"
 )
 </pre>
 
@@ -2570,16 +2570,16 @@ two declarations would name one method.
 </p>
 
 <pre>
-type Pill enum int
+type ConnState enum uint8
 
 const (
-	Placebo Pill = iota
-	Aspirin       "aspirin"
+	StateNew ConnState = iota
+	StateIdle                "idle"
 )
 
-Placebo.String()  // "Placebo"
-Aspirin.String()  // "aspirin"
-Pill(7).String()  // "Pill(7)"
+StateNew.String()    // "StateNew"
+StateIdle.String()   // "idle"
+ConnState(7).String()  // "ConnState(7)"
 </pre>
 
 <pre>

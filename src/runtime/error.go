@@ -86,7 +86,7 @@ func itoa(buf []byte, val uint64) []byte {
 // enumString answers String for a value of an enum type that matches no
 // constant of that type. The compiler generates the matches and calls this for
 // everything else, so the answer reads like the conversion that produced the
-// value: Pill(7).
+// value: ConnState(7).
 func enumString(name string, val int64) string {
 	var buf [24]byte
 	digits := uint64(val)
