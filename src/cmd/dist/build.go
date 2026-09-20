@@ -2082,7 +2082,7 @@ func cmdstamp() {
 		rest = after
 	}
 	writefile(version+"\n"+rest, file, 0)
-	goInstall(toolenv(), goInstaller(), toolsToInstall...)
+	stampInstall()
 	linkTools()
 
 	// The stamp is the whole point of this command, so a binary that kept the
@@ -2092,6 +2092,30 @@ func cmdstamp() {
 		fatalf("stamp: bin/go reports %q, want %q", strings.Join(out, " "), version)
 	}
 	xprintf("Stamped %s.\n", version)
+}
+
+// stampInstall reinstalls the binaries a stamp relinks, and holds the install
+// to exactly that. A stamp moves the linker flags and nothing a compile reads,
+// so every compiled package is one the build already wrote and the cache
+// answers for. -v names each package the go command builds, so a name here
+// other than a link target means this install is a second build of the
+// toolchain, which is the cost the stamp exists to stay under.
+func stampInstall() {
+	cmd := []string{goInstaller(), "install"}
+	if noOpt {
+		cmd = append(cmd, "-tags=noopt")
+	}
+	cmd = appendCompilerFlags(cmd)
+	cmd = append(cmd, "-v")
+	// ShowOutput streams instead of returning, so the output is printed below.
+	out := runEnv(workdir, CheckExit, toolenv(), append(cmd, toolsToInstall...)...)
+	xprintf("%s", out)
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || strings.ContainsAny(line, " \t") || slices.Contains(toolsToInstall, line) {
+			continue
+		}
+		fatalf("stamp: %s was compiled, so this is a second build of the toolchain, not a relink", line)
+	}
 }
 
 // cmdlist lists all supported platforms.

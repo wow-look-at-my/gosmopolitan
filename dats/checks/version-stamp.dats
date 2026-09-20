@@ -21,6 +21,8 @@ tests:
 		# The version the tree was BUILT with. A stamp leaves this one alone: it
 		# is what the object header and each tool's -V line carry.
 		built="$("$root"/pkg/tool/*/compile -V | cut -d' ' -f3)"
+		# A stamp that compiles anything but its link targets fails in dist, so
+		# this call is also where a stamp that turned into a second build lands.
 		go tool dist stamp "$was.rstamptest"
 		test "$(go env GOVERSION)" = "$was.rstamptest"
 		test "$(go tool dist version)" = "$was.rstamptest"
