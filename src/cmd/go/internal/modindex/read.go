@@ -682,9 +682,8 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 func IsStandardPackage(goroot_, compiler, path string) bool {
 	// The blob answers first and the tree answers for the rest: cmd is a
 	// distribution's own and no blob carries it, so a GOROOT of this same
-	// toolchain is what a program importing the go command reads. A tree
-	// answers for every package it holds, the standard ones included.
-	if cfg.EmbeddedStd && !cfg.EmbeddedStdTree {
+	// toolchain is what a program importing the go command reads.
+	if cfg.EmbeddedStd {
 		if cfg.EmbeddedStdPackage(path) != nil {
 			return true
 		}

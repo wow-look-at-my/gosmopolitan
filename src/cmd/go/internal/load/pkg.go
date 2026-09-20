@@ -953,10 +953,8 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 				}
 			}
 			// An embedded standard package has no directory to read: its
-			// manifest entry is the package. A tree of this same toolchain
-			// does have one, and a reader that type checks from source needs
-			// the file list only the tree carries.
-			if cfg.EmbeddedStd && !cfg.EmbeddedStdTree && modroot == cfg.GOROOTsrc {
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
 				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
 					// The manifest holds resolved imports; a source file spells a
 					// vendored one without the vendor/ prefix, and the loader
