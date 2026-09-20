@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"cmd/go/internal/trace"
+
+	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
 // plainOnly is a bare Cache, which is every cache there is: one Put, one Get,
@@ -27,7 +29,7 @@ func TestTracedIsIdentityWithoutALane(t *testing.T) {
 // The disk cache reports its own tier, which is what lets a trace tell a hit
 // served off local disk from one fetched over the network.
 func TestDiskCacheReportsItsTier(t *testing.T) {
-	c, err := Open(t.TempDir())
+	c, err := cachedisk.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,12 +37,12 @@ func TestDiskCacheReportsItsTier(t *testing.T) {
 	if _, _, err := c.Put(id, bytes.NewReader([]byte("hello"))); err != nil {
 		t.Fatal(err)
 	}
-	entry, tier, err := c.getTiered(id)
+	entry, tier, err := c.GetTiered(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tier != tierDisk {
-		t.Errorf("tier = %q, want %q", tier, tierDisk)
+	if tier != cachedisk.TierDisk {
+		t.Errorf("tier = %q, want %q", tier, cachedisk.TierDisk)
 	}
 	if entry.Size != 5 {
 		t.Errorf("entry.Size = %d, want 5", entry.Size)

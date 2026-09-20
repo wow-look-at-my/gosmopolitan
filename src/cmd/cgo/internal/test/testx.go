@@ -631,8 +631,11 @@ func ditCallback() uint8 {
 var callbackInInitVar int
 
 func init() {
-	C.callbackInInitC()
+	// The C call spawns a thread that calls straight back into Go, and
+	// nothing orders that callback after a statement below it. So the
+	// variable the callback reads is set before the thread can exist.
 	callbackInInitVar = 123
+	C.callbackInInitC()
 }
 
 var callbackInInitChan = make(chan int)
