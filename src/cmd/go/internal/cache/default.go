@@ -34,6 +34,14 @@ See go.dev to learn more about Go.
 // initDefaultCache does the work of finding the default cache
 // the first time Default is called.
 func initDefaultCache() Cache {
+	// A build's first go command opens the cache. Every go command it starts
+	// asks that one instead, so the directory has a single writer: one index,
+	// one trim, one connection to the store. A child opens nothing here, not
+	// even the directory.
+	if child := dialBroker(); child != nil {
+		return child
+	}
+
 	dir, _, err := DefaultDir()
 	if err != nil {
 		base.Fatalf("build cache is required, but could not be located: %v", err)
@@ -58,7 +66,10 @@ func initDefaultCache() Cache {
 		base.Fatalf("%v", err)
 	}
 
-	return chooseCache(diskCache)
+	owner := chooseCache(diskCache)
+	// This process opened the cache, so it serves it to the ones it starts.
+	startBroker(owner, dir)
+	return owner
 }
 
 // chooseCache layers the shared tier over disk, and that is the whole choice.
