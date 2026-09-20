@@ -1,9 +1,6 @@
-# A dependency that predates modules carries no go.mod, so its package is
-# outside any main module until the go command gives it one. Its directives
-# still run, and the tree they write carries no go.mod the module did not.
-#
-# The module is the org's. A module with no go.mod has nowhere to write the
-# opt-in line, so an org module is the only one that reaches this path.
+# A dependency that predates modules carries no go.mod. The opt-in line lives
+# in a module's own go.mod, so such a module has nowhere to write one and its
+# directives do not run. The fetch says which line it wanted.
 #
 # The module cache sits inside the consumer's own module here, so the nearest
 # go.mod above the dependency is the consumer's and not the dependency's.
@@ -11,26 +8,27 @@
 env GOFLAGS=-mod=mod
 env GOMODCACHE=$WORK/gopath/src/modcache
 
-go mod download github.com/wow-look-at-my/generatednomod
-exists $GOMODCACHE/github.com/wow-look-at-my/generatednomod@v1.0.0/lang/lang.gen.go
+go mod download example.com/generatednomod
+stderr 'example.com/generatednomod@v1.0.0 is outside github.com/wow-look-at-my/'
+! exists $GOMODCACHE/example.com/generatednomod@v1.0.0/lang/lang.gen.go
 
-# The go.mod the generators needed was the stage's, and the completed module
-# carries only what the zip carried plus what they added.
-! exists $GOMODCACHE/github.com/wow-look-at-my/generatednomod@v1.0.0/go.mod
+# Nothing synthesized a go.mod for it either: the module directory holds what
+# the zip carried and nothing else.
+! exists $GOMODCACHE/example.com/generatednomod@v1.0.0/go.mod
 
-go build .
-! stderr 'outside main module'
-! stderr 'go.mod file not found'
+# The package is what the zip published, which declares nothing.
+! go build .
+stderr 'lang.Name'
 
 -- go.mod --
 module example.com/consumer
 
 go 1.16
 
-require github.com/wow-look-at-my/generatednomod v1.0.0
+require example.com/generatednomod v1.0.0
 -- use.go --
 package use
 
-import "github.com/wow-look-at-my/generatednomod/lang"
+import "example.com/generatednomod/lang"
 
 var Name = lang.Name()
