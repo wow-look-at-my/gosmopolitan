@@ -1,0 +1,21 @@
+cmd/go: a cached result that cannot answer for its tool output is a miss
+
+A compile, a link and a vet each store what the tool printed under a second
+cache key, beside the result itself. A local cache writes both keys in one
+process, so the result's presence has always implied the output's. A store
+that resolves each key on its own can answer the result and not the output.
+
+The build then reused the result and printed nothing. `go build
+-ldflags=-dumpdep` produced an empty stream, `go build
+-gcflags=-d=dumpinlcallsitescores=1` dumped nothing, and `go vet` exited 0
+with no diagnostics for packages whose testdata declares them. cmd/vet,
+cmd/link/internal/ld and cmd/compile/internal/inline/inlheur each assert on
+that output, and each failed on the windows leg with the text simply absent.
+
+useCache now asks for the tool output before it commits a hit that would
+print one, and vet's cache-hit transaction takes its stdout key the way it
+takes the facts and the fix archive: every vet run stores that key, empty or
+not, so a key the store cannot answer is a miss rather than a run that
+reports nothing.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
