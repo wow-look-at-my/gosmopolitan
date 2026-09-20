@@ -971,6 +971,15 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+					// A tree of this same toolchain holds the sources, and a
+					// reader that type checks from source has nothing without
+					// their names. The build reads the archive either way:
+					// embeddedStdAction answers from the manifest and never
+					// from these files.
+					if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+						data.p.GoFiles = tree.GoFiles
+						data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+					}
 					// The module loader looked for a directory; the manifest is the answer.
 					r.err = nil
 					goto Happy
