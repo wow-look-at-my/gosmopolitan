@@ -34,15 +34,9 @@ var allowedPackagePrefixes = []string{
 	"github.com/wow-look-at-my/go-containers",
 	"github.com/pierrec/lz4",
 
-<<<<<<< HEAD
-	// Fork-local: the cache client's broker shares one store connection
-	// across processes over go-ipc, which rides shared memory. go-shm and
-	// go-mmap are what go-ipc itself requires.
-=======
 	// Fork-local: the cache's broker serves one build's directory to every
 	// process below it over shared memory. go-shm and go-mmap are what
 	// go-ipc maps that memory with.
->>>>>>> origin/master
 	"github.com/wow-look-at-my/go-ipc",
 	"github.com/wow-look-at-my/go-shm",
 	"github.com/wow-look-at-my/go-mmap",
