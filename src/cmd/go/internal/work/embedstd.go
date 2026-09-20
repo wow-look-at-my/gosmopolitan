@@ -25,11 +25,22 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 	if pkg == nil {
 		base.Fatalf("go: %s: this go command embeds no such standard package for %s/%s", p.ImportPath, cfg.Goos, cfg.Goarch)
 	}
+	return builder.finishEmbeddedStdAction(act, p, pkg)
+}
+
+// finishEmbeddedStdAction fills act in from pkg, the package's entry in the
+// embedded manifest.
+func (builder *Builder) finishEmbeddedStdAction(act *Action, p *load.Package, pkg *embedded.Package) *Action {
 	act.Mode = "embedded std"
 	act.Actor = nil
+	act.buildID = pkg.BuildID
+	if pkg.Archive == "" {
+		// A standard package holding only test files compiles no archive,
+		// so the action answers no target and the listing no export file.
+		return act
+	}
 	act.Target = cfg.EmbeddedStdArchive(p.ImportPath)
 	act.built = act.Target
-	act.buildID = pkg.BuildID
 	if builder.NeedExport {
 		// No build runs for this action, so the listing's answer is filled
 		// in here, where a compile's cache hit would fill it.
@@ -70,7 +81,7 @@ func fileForOutsideReader(p *load.Package, built string) string {
 		return built
 	}
 	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
-	if pkg == nil {
+	if pkg == nil || pkg.Archive == "" {
 		return built
 	}
 	return embeddedStdFile(p.ImportPath, pkg)
