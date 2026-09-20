@@ -6,13 +6,15 @@ env GOCACHE=$WORK${/}cache
 
 # The go command keeps no executable cache: 'go tool -n' builds the tool and
 # prints where it put it, the build's own directory, never the cache.
+# A cold run links into the action's exe directory; a warm one names the
+# action directory itself. Both sit under the build's own work directory.
 go tool -n foo
-stdout '[/\\]exe[/\\]foo'$GOEXE'$'
+stdout 'go-build[0-9]+[/\\].*foo'$GOEXE'$'
 ! stdout $GOCACHE
 
 # A later run builds from the cached package and prints its own location.
 go tool -n foo
-stdout '[/\\]exe[/\\]foo'$GOEXE'$'
+stdout 'go-build[0-9]+[/\\].*foo'$GOEXE'$'
 ! stdout $GOCACHE
 
 -- go.mod --

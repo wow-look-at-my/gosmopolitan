@@ -16,6 +16,20 @@ env:
   GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
 
 jobs:
+  # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
+  source-checks:
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wow-look-at-my/actions@common-checks#latest
+
+      - name: The source suites
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/source
+
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
     # make.bash plus the APE builds; the suite is its own job.
@@ -41,10 +55,7 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       # Linux confines a dependency's generate directive with it; macOS uses seatbelt and needs nothing.
-      - name: Install bubblewrap
-        if: runner.os == 'Linux'
-        shell: bash
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -80,9 +91,7 @@ jobs:
       - uses: ./.github/actions/track-submodules
 
       # cmd/go confines a dependency's generate directive with it, and fails the build when it is absent.
-      - name: Install bubblewrap
-        shell: bash
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq bubblewrap
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - name: Setup Go bootstrap toolchain
         uses: actions/setup-go@v5
@@ -128,6 +137,8 @@ jobs:
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
       - uses: ./.github/actions/track-submodules
+      # run.bash reaches the same sandboxed generate directives the build leg does.
+      - uses: wow-look-at-my/actions@bubblewrap#latest
 
       - uses: ./.github/actions/suite-leg
         with:
@@ -496,7 +507,7 @@ jobs:
   publish-create:
     timeout-minutes: 10
     # Switching the wasm legs back on goes with putting them back here: a needed job reporting `skipped` skips this one.
-    needs: [build, build-linux, suite, cosmo-checks, test]
+    needs: [source-checks, build, build-linux, suite, cosmo-checks, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mint the OIDC token buildhost authenticates

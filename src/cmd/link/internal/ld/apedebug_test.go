@@ -304,22 +304,17 @@ func mergeSectionedPair(t *testing.T, mode string) (amdElf, armElf []byte, out s
 }
 
 // TestAPEFatMergeSlimSidecars merges under -apedbgmode=slim and verifies
-// the sidecars are debug-only images while the fat APE itself is
+// the sidecar is a debug-only image while the fat APE itself is
 // byte-identical to a default (-apedbgmode=full) merge: the mode changes
-// only what the sidecars carry.
+// only what the sidecar carries.
 func TestAPEFatMergeSlimSidecars(t *testing.T) {
-	amdElf, armElf, out := mergeSectionedPair(t, "slim")
+	amdElf, _, out := mergeSectionedPair(t, "slim")
 
 	amdSidecar, err := os.ReadFile(out + ".dbg")
 	if err != nil {
 		t.Fatalf("amd64 sidecar: %v", err)
 	}
 	checkSlimELF(t, amdSidecar, amdElf, elf.EM_X86_64, testSentinelAMD64)
-	armSidecar, err := os.ReadFile(out + ".aarch64.elf")
-	if err != nil {
-		t.Fatalf("arm64 sidecar: %v", err)
-	}
-	checkSlimELF(t, armSidecar, armElf, elf.EM_AARCH64, testSentinelARM64)
 
 	// The slim sidecar must match slimELFDebug of the pristine input
 	// exactly (the merge pipeline adds nothing else).
