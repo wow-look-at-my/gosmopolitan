@@ -563,6 +563,14 @@ jobs:
         shell: bash
         run: ./bin/go version
 
+      # The release version lands on the finished binary, so the build legs keep building the committed one and stay cacheable. Every leg of a run stamps the same string.
+      - name: Stamp the release version into the toolchain
+        timeout-minutes: 10
+        shell: bash
+        run: ./bin/go tool dist stamp "$(./bin/go env GOVERSION).r${{ github.run_number }}"
+        env:
+          GOROOT: ${{ github.workspace }}
+
       - name: Build distribution archive
         # Writes the official-style go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack, on every platform -- see docs/CI.md "publish jobs".
         timeout-minutes: 10

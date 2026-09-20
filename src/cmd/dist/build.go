@@ -2042,6 +2042,58 @@ func cmdversion() {
 	xprintf("%s\n", findgoversion())
 }
 
+// cmdstamp gives a built toolchain a new version. It rewrites $GOROOT/VERSION
+// and relinks the installed binaries with the same string, so only the link
+// steps run again and the compile steps stay as the build left them.
+//
+// A release is SELECTED by this version: distpack names the tarball and the
+// toolchain module for $GOROOT/VERSION, and a go command switching to that
+// toolchain fatals when the binary it execs reports a different
+// runtime.Version(). The version that the object header and each tool's -V
+// line carry stays the one the tree was built with, and no build reads those
+// across toolchains: cmd/go keys a fork tool on its content ID.
+func cmdstamp() {
+	xflagparse(1)
+	if flag.NArg() != 1 {
+		flag.Usage()
+	}
+	version := flag.Arg(0)
+	if !strings.HasPrefix(version, "go") {
+		fatalf("stamp: %q is not a Go version: it must start with \"go\"", version)
+	}
+	// gorootBinGo carries no suffix, and only exec resolves one.
+	if _, err := os.Stat(pathf("%s/bin/go%s", goroot, exe)); err != nil {
+		fatalf("stamp: %v\nBuild the toolchain before you stamp it.", err)
+	}
+
+	// appendCompilerFlags passes these on the command line, which replaces the
+	// -ldflags toolenv puts in GOFLAGS whole, so carry that -w here as well.
+	ldflags := "-X runtime.buildVersion=" + version
+	if isRelease || os.Getenv("GO_BUILDER_NAME") != "" {
+		ldflags = "-w " + ldflags
+	}
+	goldflags = strings.TrimSpace(goldflags + " " + ldflags)
+
+	// The first line is the version. The lines under it are metadata distpack
+	// reads, the release time among them, so the rewrite keeps them.
+	file := pathf("%s/VERSION", goroot)
+	rest := ""
+	if _, after, found := strings.Cut(readfile(file), "\n"); found {
+		rest = after
+	}
+	writefile(version+"\n"+rest, file, 0)
+	goInstall(toolenv(), goInstaller(), toolsToInstall...)
+	linkTools()
+
+	// The stamp is the whole point of this command, so a binary that kept the
+	// old version fails here instead of shipping.
+	out := strings.Fields(run(goroot, CheckExit, gorootBinGo, "version"))
+	if len(out) < 3 || out[2] != version {
+		fatalf("stamp: bin/go reports %q, want %q", strings.Join(out, " "), version)
+	}
+	xprintf("Stamped %s.\n", version)
+}
+
 // cmdlist lists all supported platforms.
 func cmdlist() {
 	jsonFlag := flag.Bool("json", false, "produce JSON output")
