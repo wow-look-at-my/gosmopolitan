@@ -39,13 +39,30 @@ type Entry = cachedisk.Entry
 // here.
 var DebugTest = false
 
-var gocachetest = godebug.New("gocachetest")
+// The directory lives in a module outside this tree, which reads GODEBUG out
+// of the environment. The registry these settings belong to is here, and a
+// setting read through it feeds a runtime/metrics counter. So the go command
+// reads all three and hands the answers down.
+var (
+	gocachetest   = godebug.New("gocachetest")
+	gocacheverify = godebug.New("gocacheverify")
+	gocachehash   = godebug.New("gocachehash")
+)
 
 func init() {
-	if gocachetest.Value() == "1" {
+	DebugTest = gocachetest.Value() == "1"
+	if DebugTest {
 		gocachetest.IncNonDefault()
-		DebugTest = true
 	}
+	verify := gocacheverify.Value() == "1"
+	if verify {
+		gocacheverify.IncNonDefault()
+	}
+	hash := gocachehash.Value() == "1"
+	if hash {
+		gocachehash.IncNonDefault()
+	}
+	cachedisk.SetSwitches(verify, hash, DebugTest)
 }
 
 // GetFile looks up an action and answers the file holding its output.

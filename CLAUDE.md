@@ -283,7 +283,7 @@ This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr
 
 The cache lives in `github.com/wow-look-at-my/go-s3-server/cacheclient`. It holds the directory on disk. It holds the store under that directory. It holds the broker that gives one build a single owner for both. `cmd/go/internal/cache` names those types for the go command. It adds the action hash and the mapped read. It adds nothing else, and no second cache belongs here.
 
-One build has one owner. The first go command opens the directory and serves it over a unix socket to every command it starts. A child holds no directory, no key index and no connection. It asks the owner, then opens the file the owner names. So the trim has one writer, which is what makes `Cache.Close`'s cross-process invariant enforceable.
+One build has one owner. The first go command opens the directory and serves it over shared memory (go-ipc) to every command it starts. A child holds no directory, no key index and no connection. It asks the owner, then opens the file the owner names. So the trim has one writer, which is what makes `Cache.Close`'s cross-process invariant enforceable.
 
 `GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the store and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
@@ -293,6 +293,9 @@ One build has one owner. The first go command opens the directory and serves it 
 |---|---|
 | `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-ipc` | the broker's shared-memory transport |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-shm` | go-ipc's named segments |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-mmap` | go-shm's mapping |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 | `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 

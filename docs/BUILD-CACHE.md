@@ -15,8 +15,9 @@ The cache is `github.com/wow-look-at-my/go-s3-server/cacheclient`, a submodule u
 | `disk.go` | those names again, for a consumer that holds the whole client |
 | `web.go`, `webget.go`, `webput.go` | the store and its wire protocol |
 | `storetier.go` | the store under the directory, and which one answered |
-| `brokerserve.go` | the owner's socket |
-| `brokercache.go` | the cache a child holds, which is the socket |
+| `brokerowner.go` | the owner: the hello queue, and a channel per child |
+| `brokerchild.go` | the cache a child holds, which is its channel to the owner |
+| `brokerwire.go` | the record each request and each reply is |
 | `brokerflight.go` | one lookup and one store per action, however many ask |
 | `opencache.go` | `OpenCache`, which decides owner or child |
 
@@ -37,7 +38,7 @@ A change to how the cache behaves goes in `cacheclient` and rides its branch. Se
 
 A build is not one process. A test suite starts thousands of go commands a minute. A cache each of them opens for itself charges each of them separately. Each pays an index write, a trim, a connection to the store, and an exit held open to drain its own uploads. Measured, that is about 0.75 s in any process with something to upload.
 
-The first go command opens the directory. It puts the store under it and serves both over a unix socket in the cache directory. `serveBroker` names that socket in `GO_BUILDCACHE_BROKER`, so every process it starts finds it.
+The first go command opens the directory. It puts the store under it and serves both over shared memory, through `github.com/wow-look-at-my/go-ipc`. `serveBroker` creates a hello queue and names it in `GO_BUILDCACHE_BROKER`, so every process it starts finds it. A child creates a duplex channel of its own and names that channel on the hello queue. The owner then opens it. The channel exists before the owner hears of it, so the open never races the create.
 
 A child holds a `brokerCache`. It has no `DiskCache`, no key index, and no connection to the store. It asks for an action and gets back the identity of a file the owner has already written. It then opens that file. The layout is the owner's, and the child computes the same name from the same directory.
 
@@ -45,14 +46,14 @@ That leaves one writer for the directory. So the trim has a single owner. The in
 
 The environment decides the shape:
 
-- `GO_BUILDCACHE_BROKER` names a live owner's socket. A process that finds it set, and answering a ping, is a child. A process that finds it unset becomes the owner. A socket file outlives the process that made it. So the ping is what decides, never the file.
+- `GO_BUILDCACHE_BROKER` names a live owner's hello queue. A process that finds it set becomes a child, once the owner answers with the directory it writes into. A process that finds it unset becomes the owner. A name outlives the process that made it. So the owner's reply is what decides, never the name.
 - `GO_BUILDCACHE_BROKER_OFF` makes every process open the cache for itself, which is what a bisect of a broker-shaped problem wants.
 
 A test binary and a `go run` program are started with the environment the go command was started with. They do not get the go command's own environment. So `initDefaultCache` appends `cacheclient.BrokerEnviron()` to `cfg.OrigEnv`. A child started without those entries opens the directory for itself, which is the whole thing this exists to stop.
 
 ## Nothing spins
 
-Every wait is a park. A child's request blocks in a socket read. A second asker for an action already in flight blocks on `close(chan)`. Nothing polls, and no wait has a sleep in it.
+Every wait is a park. A send into a ring with room makes no system call at all. A side with nothing to read parks on a kernel wait rather than looking again. A second asker for an action already in flight blocks on `close(chan)`. Nothing polls, and no wait has a sleep in it.
 
 `brokerflight.go` is the dedup, for both directions:
 
@@ -61,9 +62,11 @@ Every wait is a park. A child's request blocks in a socket read. A second asker 
 
 The key leaves the map before the channel closes. The next ask therefore starts a flight of its own, rather than reading a result that is already spent.
 
-## The socket carries no bodies
+## The channel carries no bodies
 
-The protocol is HTTP/1.1 over a unix socket. An answer is headers alone: `Cache-Output-Id`, `Cache-Size`, `Cache-Mtime`, and `Cache-Tier`. The bytes are already in the cache directory, under the name the output ID gives them, and both processes can open that directory. A put names its body by path for the same reason. The owner reads that path before it answers. The child may therefore exit the moment `Put` returns.
+A request is a record: a correlation ID, the action ID, and a path for a put. A reply is the same ID, the output ID, the size, the mtime and the tier. The bytes are already in the cache directory, under the name the output ID gives them, and both processes can open that directory. A put names its body by path for the same reason. The owner reads that path before it answers. The child may therefore exit the moment `Put` returns.
+
+A build compiles in parallel, so its replies come back in whatever order the owner finishes. The correlation ID is what puts each reply back in the hand of the caller waiting for it.
 
 A caller holding an open file names that file. One holding anything else spills to a temporary file first. The bytes have to reach another process. A path is what this protocol carries.
 
@@ -73,7 +76,7 @@ A caller holding an open file names that file. One holding anything else spills 
 
 The look-ahead pool has somewhere to put what it fetches, which is what turns it on. `OnBatchEntries` writes an object to disk before the build asks for it. The ask is then a local read.
 
-A hit served over the network reads exactly like one off local disk unless the cache says otherwise. That is the most useful thing a cache trace can say. So `Tiered` reports it. `DiskCache` answers `disk`. `storeTier` answers whichever tier served the body. `brokerCache` answers what the owner reported over `Cache-Tier`. `cmd/go/internal/cache/trace.go` records it on the build's trace lane, one slice per lookup and per store.
+A hit served over the network reads exactly like one off local disk unless the cache says otherwise. That is the most useful thing a cache trace can say. So `Tiered` reports it. `DiskCache` answers `disk`. `storeTier` answers whichever tier served the body. `brokerCache` answers the tier the owner named in its reply. `cmd/go/internal/cache/trace.go` records it on the build's trace lane, one slice per lookup and per store.
 
 ## Configuration
 
