@@ -178,6 +178,39 @@ func TestProgramMissingSeparatesTheHostFromTheModule(test *testing.T) {
 	}
 }
 
+// An org module's generators are this fleet's own, so they run. A stranger's
+// run only where the module asked for it in its own go.mod, and the marker is
+// the whole comment.
+func TestAllowedRunsTheOrgAndWhoeverAsked(test *testing.T) {
+	cases := []struct {
+		why   string
+		mod   string
+		gomod string
+		want  bool
+	}{
+		{"an org module", OrgPrefix + "go-s3-server", "module " + OrgPrefix + "go-s3-server\n", true},
+		{"a package of one", OrgPrefix + "go-containers/set", "module " + OrgPrefix + "go-containers/set\n", true},
+		{"a stranger that says nothing", "example.com/m", "module example.com/m\n", false},
+		{"a stranger that asked", "example.com/m", "module example.com/m\n\n" + OptIn + "\n", true},
+		{"an indented ask", "example.com/m", "module example.com/m\n\t" + OptIn + "\t\n", true},
+		{"a go.mod that only mentions it", "example.com/m", "// this module does not use " + OptIn + " yet\nmodule example.com/m\n", false},
+		{"a name that opens with the org's", "github.com/wow-look-at-my-not/m", "module github.com/wow-look-at-my-not/m\n", false},
+	}
+	for _, tcase := range cases {
+		modroot := writeTree(test, test.TempDir(), map[string]string{"go.mod": tcase.gomod})
+		if got := Allowed(modroot, tcase.mod); got != tcase.want {
+			test.Errorf("Allowed where %s = %v, want %v", tcase.why, got, tcase.want)
+		}
+	}
+
+	// A module published before modules carries no go.mod, so it carries no
+	// opt-in either.
+	bare := writeTree(test, test.TempDir(), map[string]string{"api.go": "package m\n"})
+	if Allowed(bare, "example.com/m") {
+		test.Error("Allowed for a module with no go.mod = true, want false: nothing in it asked")
+	}
+}
+
 // A generator can write a name the module already declares under another file
 // name, which is github.com/charmbracelet/x/ansi: it ships a table it builds at
 // run time, and its generator writes a precomputed one beside it. Both declare
