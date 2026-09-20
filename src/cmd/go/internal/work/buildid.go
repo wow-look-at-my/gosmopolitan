@@ -666,7 +666,14 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 						showStdout(b, c, a1, "link-stdout") // link output
 					}
 				default:
-					showStdout(b, c, a, "stdout") // compile output
+					// updateBuildID stores this entry for every build it
+					// finishes, empty or not, so one that will not come back is
+					// one the cache lost. Reusing the object without it hands
+					// back a compile whose diagnostics are gone, which reads as
+					// a package that had none. Take the miss and compile.
+					if err := showStdout(b, c, a, "stdout"); err != nil { // compile output
+						return false
+					}
 				}
 			}
 			a.built = file
