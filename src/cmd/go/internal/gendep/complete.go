@@ -117,12 +117,6 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if drop := superseded(modroot, stage, added); len(drop) > 0 {
-		fmt.Fprintf(os.Stderr, "go: %s declares what %v generated, so the module's own files stand\n", mod, drop)
-		added = slices.DeleteFunc(added, func(rel string) bool {
-			return slices.Contains(drop, rel)
-		})
-	}
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
