@@ -98,4 +98,9 @@ func main() {
 		fmt.Fprintf(stdout, "%s\n%s:%d\n", name, file, line)
 	}
 	stdout.Flush()
+	// A read error ends the loop exactly as the end of the input does, so
+	// without this a truncated request list reads as a complete one.
+	if err := stdin.Err(); err != nil {
+		log.Fatalf("reading standard input: %v", err)
+	}
 }

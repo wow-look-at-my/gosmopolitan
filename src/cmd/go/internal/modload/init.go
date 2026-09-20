@@ -337,9 +337,6 @@ func ModFile(ld *Loader) *modfile.File {
 
 func BinDir(ld *Loader) string {
 	Init(ld)
-	if cfg.GOBIN != "" {
-		return cfg.GOBIN
-	}
 	if gopath == "" {
 		return ""
 	}
@@ -1184,7 +1181,9 @@ func errWorkTooOld(gomod string, wf *modfile.WorkFile, goVers string) error {
 		// even when it doesn't list any version.
 		verb = "implicitly requires"
 	}
-	return fmt.Errorf("module %s listed in go.work file requires go >= %s, but go.work %s go %s; to download and use go %s:\n\tgo work use",
+	// No toolchain download: GOTOOLCHAIN is removed (RemovedEnv in
+	// cmd/go/internal/cfg), so the suggestion is to raise the go.work line.
+	return fmt.Errorf("module %s listed in go.work file requires go >= %s, but go.work %s go %s; to use go %s:\n\tgo work use",
 		base.ShortPath(filepath.Dir(gomod)), goVers, verb, gover.FromGoWork(wf), goVers)
 }
 
@@ -1471,6 +1470,15 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 				mainModules.tools[t.Path] = true
 			}
 		}
+	}
+
+	// The fetch of a module asks whether a replacement stands in for it, and the
+	// replace directives are read here.
+	modfetch.Superseded = func(mod module.Version) bool {
+		if ld.MainModules == nil {
+			return false
+		}
+		return Replacement(ld, mod).Path != ""
 	}
 
 	return mainModules

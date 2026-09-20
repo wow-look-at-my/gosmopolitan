@@ -1,10 +1,14 @@
 # CI internals (cosmo-ci.yml)
 
-Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `yaml-comment-block` guard caps a workflow file at 1 comment line in a row). See CLAUDE.md's "CI" section for the job overview. This file covers the per-step rationale that overview does not.
+Depth behind the comments trimmed from `.github/workflows/cosmo-ci.yml` (the `yaml-comment-block` guard caps a workflow file at 1 comment line in a row). This file covers the per-step rationale. The workflow itself names the jobs.
 
-## Every job: `submodules: true`
+## Every job that builds: `submodules: true`
 
-`cmd/go` links the org's shared build cache client in. The three packages that needs live under `src/cmd/vendor` as **git submodules** rather than copied. `src/cmd` builds in vendor mode, so those paths must hold real files at build time: a checkout without them leaves three empty directories and. Every `actions/checkout` in this workflow therefore passes `submodules: true`, publish jobs included — they check the tree out to package it, and a GOROOT missing `cmd/go`. The same applies to a developer's clone: use `--recurse-submodules`, or `git submodule update --init` afterwards.
+`cmd/go` links the org's shared build cache client in. The three packages that needs live under `src/cmd/vendor` as **git submodules** rather than copied. `src/cmd` builds in vendor mode, so those paths must hold real files at build time: a checkout without them leaves three empty directories and. Every `actions/checkout` in this workflow therefore passes `submodules: true`, publish jobs included — they check the tree out to package it, and a GOROOT missing `cmd/go`. The one exception is `source-checks`, which reads tracked files and starts no build. The same applies to a developer's clone: use `--recurse-submodules`, or `git submodule update --init` afterwards.
+
+## source-checks job
+
+Every guard that reads this tree and nothing else. It waits on no build, so a capped paragraph or a frozen pin is named within the minute rather than after the linux toolchain lands. `dats/source` holds those suites and `dats/checks` holds the ones that need a built toolchain. A new suite belongs to whichever directory its commands need.
 
 ## build job
 
@@ -37,7 +41,7 @@ Checks whose answer does not depend on the host. Each runs once, on the linux to
 - `tri` - linux/amd64, darwin/arm64, windows/amd64. Still needs both payloads. It is the same size as the fat build. It names the default set explicitly. Every one of its three platforms must still boot the binary.
 - `amd` - linux/amd64, windows/amd64. One payload: the arm64 image, its boot header and its sidecar are gone, which is where the size actually drops.
 
-Cross-compiles, so every build leg builds them with the fat binary, and the test legs run the ubuntu-origin ones. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build still writes a sidecar per payload it carries, and that the amd-only pair has no `.aarch64.elf`.
+Cross-compiles, so every build leg builds them with the fat binary, and the test legs run the ubuntu-origin ones. `apetest`'s `TestSlimSidecarsExist` (same `APE_REQUIRE_SIDECARS=1` gate, run once per subset with `SLIM_BIN`/`SLIM_PLATFORMS` set) asserts a restricted build writes the `.dbg` sidecar when it carries the amd64 payload. No build writes an `.aarch64.elf`.
 
 **GOOS=cosmo package tests (dats).** `dats/checks/cosmo-tests.dats`, run through the org's `wow-look-at-my/dats@master` action. Three commands, each `GOOS=cosmo`-only code executed on this host via the `misc/cosmo` exec wrappers - the test binary is a thin cosmo APE that. The cosmo syscall shim package covers the darwin sendmsg/recvmsg cmsg repack, the signal and wait-status translation tables, and the epoll layout. The runtime commands cover the Apple itimerval ABI pins and the timeval translation behind the darwin SIGPROF setitimer dispatch. The `syscall` command covers the macOS statfs/utsname struct conversions - which live in package `syscall` because the Apple buffers are far past the emulation's nosplit. The runtime command also pins the iphlpapi FIXED_INFO offsets `os_cosmo_nt_dns.go` walks, where a wrong offset reads plausible garbage rather than failing. Two of the three name the tests they cover rather than running the whole package. A name list is a test-selection decision: it. Observed ~75s warm.
 
@@ -51,7 +55,11 @@ It tests the cosmo port. `run.bash` exports the `GOOS` and `GOARCH` that `dist e
 
 Some tests exec a binary they built themselves, past that wrapper. Every Linux leg therefore runs a step named "Let the kernel exec an APE directly". That step registers the `binfmt_misc` entry against the committed loader in the checkout. The `F` flag pre-opens the loader. The entry then keeps working after the checkout moves. The emitted shell script registers this same entry, and `docs/APE-BOOT.md` describes it.
 
-One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. See CLAUDE.md's vendoring section for why a pruned vendor tree is not available here.
+**What the suite prints.** `dist test` runs every test binary through test2json and renders the events itself. A passing test costs no line. A failing test's output reaches the log whole, so no run needs `-v` to be diagnosed. A binary that dies without reporting a result still gets its output flushed, because that output is the reason it died.
+
+Each second the run prints one line: how many packages have finished, the percentage, then the tests that ended during that second, slowest first. The line is cut to the terminal width, or to 120 columns when nothing reports one. The run ends with a table of the slowest tests, which is how a slow test inside a slow package gets named.
+
+One failure is known and structural: cmd/go's `list_symlink_issue35941` walks `src/cmd/vendor` on disk and cannot resolve the whole-repo submodules' own commands. Every vendor path here is a git submodule that carries its upstream's whole repository. Only `go mod vendor` or a per-package repository produces the pruned tree that test assumes, and this tree uses neither.
 
 ## test job
 
@@ -101,7 +109,7 @@ Regression-gates the fork's WebAssembly ports (`GOOS=js` and `GOOS=wasip1`). Eve
 
 ## publish jobs
 
-Publishes an installable toolchain distribution to buildhost (pazer.build) on every push, once build+test are green. See CLAUDE.md's "Toolchain Distribution" and docs/INSTALL.md for the consumer side. Auth is a GitHub Actions OIDC token (audience `https://pazer.build`). The buildhost project auto-provisions on the first authenticated push. Every branch gets its own rolling latest (`?branch=<name>`).
+Publishes an installable toolchain distribution to buildhost (pazer.build) on every push, once build+test are green. docs/INSTALL.md covers the consumer side. Auth is a GitHub Actions OIDC token (audience `https://pazer.build`). The buildhost project auto-provisions on the first authenticated push. Every branch gets its own rolling latest (`?branch=<name>`).
 
 Publishing is three jobs so each platform's tarball is built ON that platform (distpack packages what a HOST build produced, so `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails with "distpack: stat bin/darwin_arm64/go: no such file or directory" - there is no cross-package shortcut):
 
@@ -111,15 +119,13 @@ Publishing is three jobs so each platform's tarball is built ON that platform (d
 
 ## Guard suites, test programs and the wasm job
 
-Moved here from CLAUDE.md, which keeps the one-line index entry.
+`dats/source/goos-not-syscall-flags.dats` refuses a `runtime.GOOS` predicate that decides an open flag. `runtime.GOOS` names the HOST, and a syscall flag belongs to the build target. Such a branch must read `internal/goos.IsWindows`. `os/removeall_at.go` shipped that mistake and cost every `t.TempDir` cleanup on the windows leg. The guard skips a file whose build constraint leaves cosmo out. One that flags code cosmo never compiles trains the reader to skim it.
 
-`dats/checks/goos-not-syscall-flags.dats` refuses a `runtime.GOOS` predicate that decides an open flag. `runtime.GOOS` names the HOST, and a syscall flag belongs to the build target. Such a branch must read `internal/goos.IsWindows`. `os/removeall_at.go` shipped that mistake and cost every `t.TempDir` cleanup on the windows leg. The guard skips a file whose build constraint leaves cosmo out. One that flags code cosmo never compiles trains the reader to skim it.
-
-More suites in `cosmo-checks` gate properties nothing else measures. `dats/checks/unix-tag-agrees.dats` compares `cmd/dist`'s `unixOS` against `internal/syslist.UnixOS`. dist builds against the bootstrap toolchain and cannot import that package, so it copies the list. A GOOS in one copy and not the other makes the builders disagree about which files a package holds. `dats/checks/no-wordspam.dats` caps markdown size, paragraph length and comment runs. It refuses changelog phrasing by name. `dats/checks/emitted-binaries.dats` builds a program, a thin build, a test binary and both wasm ports. It reads the first bytes of each. A host ELF, Mach-O or PE leaving a build means a port went missing.
+More suites gate properties nothing else measures. `dats/source/unix-tag-agrees.dats` compares `cmd/dist`'s `unixOS` against `internal/syslist.UnixOS`. dist builds against the bootstrap toolchain and cannot import that package, so it copies the list. A GOOS in one copy and not the other makes the builders disagree about which files a package holds. `dats/source/no-wordspam.dats` caps markdown size, paragraph length and comment runs. It refuses changelog phrasing by name. `dats/checks/emitted-binaries.dats` builds a program, a thin build, a test binary and both wasm ports. It reads the first bytes of each. A host ELF, Mach-O or PE leaving a build means a port went missing.
 
 `runtime.GOOS` and `runtime.GOARCH` are `readonly var`, so only package runtime may assign them (docs/READONLY-VARS.md). Both name the HOST, read at startup. One APE boots on every supported kernel. A payload can run on a machine of another architecture. The cost is that `const x = runtime.GOARCH == "amd64"` is a compile error against a variable. Third-party code writes it (`golang.org/x/crypto/chacha20`), so `crypto/tls`'s bogo suite cannot build its dependency. Only the compiler can serve both readings. It folds the build value in a constant context (`types2/dynconst.go`). A plain read still loads the variable.
 
-`dats/checks/waiver-expiry.dats` refuses a `continue-on-error` that carries no `waiver-expires:` date. It also refuses one whose date has passed. No workflow step holds one now. The NT suite leg held the last one. That waiver expired, so the NT leg's red holds the branch. docs/PLATFORM-STATUS.md measures what fails there.
+`dats/source/waiver-expiry.dats` refuses a `continue-on-error` that carries no `waiver-expires:` date. It also refuses one whose date has passed. No workflow step holds one now. The NT suite leg held the last one. That waiver expired, so the NT leg's red holds the branch. docs/PLATFORM-STATUS.md measures what fails there.
 
 `dats/checks/build-std.dats` is the uprev guardrail: `GOOS=cosmo go build std` for amd64 and arm64, and the x/sys, modernc libc and sqlite consumers against it. The execution suite compiles only what fizzbuzz and runtimeprobe import, which measured `84 of 358` std packages under cosmo. So an upstream re-partition of a package can pass the execution suite untouched. Run it locally before proposing an uprev. It is what turns a clean merge into a verified one.
 

@@ -654,6 +654,9 @@ func (p *printer) printRawNode(n Node) {
 		if n.Values != nil {
 			p.print(blank, _Assign, blank, n.Values)
 		}
+		if n.Text != nil {
+			p.print(blank, n.Text)
+		}
 
 	case *TypeDecl:
 		if n.Group == nil {
@@ -666,6 +669,9 @@ func (p *printer) printRawNode(n Node) {
 		p.print(blank)
 		if n.Alias {
 			p.print(_Assign, blank)
+		}
+		if n.Enum {
+			p.print(_Name, "enum", blank)
 		}
 		p.print(n.Type)
 

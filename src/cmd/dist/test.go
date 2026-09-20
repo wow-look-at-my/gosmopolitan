@@ -80,6 +80,11 @@ type tester struct {
 	testNames    map[string]bool
 	timeoutScale int // a non-negative integer factor to scale test timeout by; defaults to 1
 
+	// timings collects every test's duration, which names the slow test
+	// inside a slow package. progress writes that while the run continues.
+	timings  testTimings
+	progress *testProgress
+
 	worklist []*work
 
 	shardStr string          // the -shard flag, K/N
@@ -257,6 +262,19 @@ func (t *tester) run() {
 	}
 
 	var anyIncluded, someExcluded bool
+	selected := 0
+	for _, dt := range t.tests {
+		if t.shouldRunTest(dt.name) {
+			selected++
+		}
+	}
+	if !t.json {
+		// A reader watching the run wants to know how far it has come and
+		// which test is spending the time.
+		t.progress = newTestProgress(os.Stdout, &t.timings, selected)
+		t.progress.start()
+	}
+
 	for _, dt := range t.tests {
 		if !t.shouldRunTest(dt.name) {
 			someExcluded = true
@@ -277,7 +295,12 @@ func (t *tester) run() {
 	t.runPending(nil)
 	timelog("end", "dist test")
 
+	if t.progress != nil {
+		t.progress.finish()
+	}
+
 	if !t.json {
+		t.timings.report(os.Stdout, 25)
 		if t.failed {
 			fmt.Println("\nFAILED")
 		} else if !anyIncluded {
@@ -528,9 +551,15 @@ func (opts *goTest) bgCommand(t *tester, stdout, stderr io.Writer) (cmd *exec.Cm
 		f := &testJSONFilter{w: stdout, variant: opts.variant}
 		cmd.Stdout = f
 		flush = f.Flush
-	} else {
+	} else if t.json {
 		cmd.Stdout = stdout
 		flush = func() {}
+	} else {
+		// The command reports events. A reader wants the failures and the
+		// durations out of them, not a line for every subtest.
+		rep := newTestReport(stdout, &t.timings, t.markPkgDone)
+		cmd.Stdout = rep
+		flush = rep.Flush
 	}
 	cmd.Stderr = stderr
 
@@ -647,11 +676,9 @@ func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
 		timeout = 10 * time.Minute // Default value of go test -timeout flag.
 	}
 	args = append(args, "-test.paniconexit0", "-test.timeout="+(timeout*time.Duration(t.timeoutScale)).String())
-	if t.json {
-		args = append(args, "-test.v=test2json")
-	} else {
-		args = append(args, "-test.v")
-	}
+	// A per-test duration exists only in verbose output, and test2json is the
+	// form both readers of this stream take.
+	args = append(args, "-test.v=test2json")
 	if opts.short || t.short {
 		args = append(args, "-test.short")
 	}
@@ -678,9 +705,7 @@ func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
 			argv = append([]string{wrapper}, argv...)
 		}
 	}
-	if t.json {
-		argv = append([]string{gorootBinGo, "tool", "test2json", "-t", "-p", opts.pkg}, argv...)
-	}
+	argv = append([]string{gorootBinGo, "tool", "test2json", "-t", "-p", opts.pkg}, argv...)
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = os.Environ()
@@ -730,11 +755,6 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 		const goTestDefaultTimeout = 10 * time.Minute // Default value of go test -timeout flag.
 		run = append(run, "-timeout="+(goTestDefaultTimeout*time.Duration(t.timeoutScale)).String())
 	}
-	// Each test reports its own name and duration. Without this a package is
-	// one line and one number, so a slow test inside a slow package cannot be
-	// named from the log at all: cmd/internal/testdir reported 1265.774s and
-	// nothing about which of its programs spent it.
-	run = append(run, "-v")
 	if opts.short || t.short {
 		run = append(run, "-short")
 	}
@@ -773,9 +793,9 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 		// A build flag, so a compile-only test (go test -c) vets with it too.
 		build = append(build, "-vet="+opts.vet)
 	}
-	if t.json {
-		run = append(run, "-json")
-	}
+	// The events carry each test's duration, and a reader of this log needs
+	// the failures out of them. testReport writes those and drops the rest.
+	run = append(run, "-json")
 
 	if opts.gcflags != "" {
 		build = append(build, "-gcflags=all="+opts.gcflags)
@@ -1785,6 +1805,14 @@ func (t *tester) registerCgoTests(heading string) {
 				cgoTest("auto-pie", "testnocgo", "auto", "pie")
 			}
 		}
+	}
+}
+
+// markPkgDone counts one package toward the run's progress. The commands run
+// in parallel, and testProgress holds the lock.
+func (t *tester) markPkgDone(pkg string) {
+	if t.progress != nil {
+		t.progress.markDone(pkg)
 	}
 }
 
