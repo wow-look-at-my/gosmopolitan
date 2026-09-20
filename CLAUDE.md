@@ -83,17 +83,10 @@ GOCOSMOSTRIP=0 GOOS=cosmo go build -o program.com main.go
 
 # Debug-info tier (GOCOSMODEBUG; unset/full = pristine runnable sidecars,
 # today's default). slim: debug-only sidecars, ~-68%, same names, not
-# runnable - gdb/delve consume them unchanged, full fidelity. min: slim's
-# sidecar shape PLUS less DWARF generated in the first place (no location
-# lists, no inline records - injected gcflags, ~-38% below slim):
-# breakpoints and file:line backtraces stay exact, but argument/local
-# VALUES in debuggers are garbage or <optimized out> - "backtraces yes,
-# variables no". compact: slim sidecars PLUS line-level debug info
-# appended to the APE past the load span (never mapped; ~+38% APE size) -
-# gdb gets file:line backtraces from the assimilated .com alone, no
-# sidecar present. Invalid values fail any cosmo build. GOCOSMOSTRIP=0
-# or -ldflags -s/-w suppress sidecars (nothing to shape; min's
-# compile-time DWARF trim still applies). See docs/APE-BUILD.md.
+# runnable - gdb/delve consume them unchanged, full fidelity. Invalid
+# values fail any cosmo build. GOCOSMOSTRIP=0 or -ldflags -s/-w suppress
+# sidecars (nothing to shape; min's compile-time DWARF trim still
+# applies). See docs/APE-BUILD.md.
 GOCOSMODEBUG=slim GOOS=cosmo go build -o program.com main.go
 GOCOSMODEBUG=min GOOS=cosmo go build -o program.com main.go
 GOCOSMODEBUG=compact GOOS=cosmo go build -o program.com main.go
@@ -107,27 +100,19 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 # Restrict which hosts the APE boots on. Tokens: linux/amd64, linux/arm64,
 # darwin/amd64, darwin/arm64, windows/amd64 (which boots the AMD64 payload
-# through the PE header - there is no windows payload). UNSET selects the
-# three supported platforms, linux/amd64 + darwin/arm64 + windows/amd64, not
-# all five: linux/arm64 and darwin/amd64 stay selectable but a default build
-# does not claim them, because nothing verifies either: there is no runner
-# for linux/arm64 or darwin/amd64. An unknown token, an
+# through the PE header - there is no windows payload). An unknown token, an
 # empty list, or a platform whose payload is missing fails the build; a
-# selection that needs one architecture skips the sibling build entirely and
-# is still stripped and given its sidecar. NOT a size win by itself: the APE
-# header is a fixed 64K, so only dropping an ARCHITECTURE changes the size
-# (-47% for amd64-only), and the default needs both payloads and weighs
-# exactly what the fat APE does. What a subset buys is an accurate claim and
-# a host refused by name. `go env GOCOSMOPLATFORMS` reports
-# the effective selection, which is how a consumer detects support for it.
-# Depth, including the per-platform payload/header table:
+# selection that needs a single architecture skips the sibling build
+# entirely and is still stripped and given its sidecar. What a subset buys
+# is an accurate claim and a host refused by name. `go env GOCOSMOPLATFORMS`
+# reports the effective selection, which is how a consumer detects support
+# for it. Depth, including the per-platform payload/header table:
 # docs/APE-BUILD.md.
 GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o program.com main.go
 
-# The same selection at the linker, over already-built payloads (one or two)
 go tool link -apefat amd64.com,arm64.com -apeplatforms linux/amd64,darwin/arm64 -o program.com -apestrip -apedbg
 
-# Merge two single-arch cosmo binaries into one fat APE by hand
+# Merge single-arch cosmo binaries into a single fat APE by hand
 # (-apestrip -apedbg is what go build passes by default; omit them for a
 # full-payload merge)
 go tool link -apefat amd64.com,arm64.com -o program.com -apestrip -apedbg
@@ -151,7 +136,7 @@ Per-platform runtime status, and what is still missing on each: docs/PLATFORM-ST
 
 ### Compiler Pipeline (`src/cmd/compile/`)
 
-The compiler has 7 phases:
+The compiler has phases:
 1. **Parsing** (`internal/syntax`) - lexer, parser, syntax tree
 2. **Type checking** (`internal/types2`) - type analysis
 3. **IR construction** (`internal/ir`, `internal/noder`) - convert to compiler AST
@@ -201,7 +186,7 @@ go tool compile -bench=out.txt file.go
 - **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/`. TMPDIR and HOME are not read. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does. cmd/go takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
-- **An arm64 APE on macOS needs AT_HWCAP. It takes two fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".- **`/proc/self/auxv` is served by the APE off a Linux host.** A library written for Linux reads the auxiliary vector out of that file rather. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback and its SIGILL.- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19). Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked 40-B `_func` records with presence-bitmap pcdata/funcdata arrays, prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B InlTree records. Consequence: upstream debug/gosym-based tools cannot parse fork binaries. The fork's own debug/gosym, objdump, nm, and addr2line are updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and readers must move in lockstep: `cmd/link/internal/ld/pcln.go` + `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <-> `debug/gosym`.
+- **An arm64 APE on macOS needs AT_HWCAP. It takes fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair. But it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".- **`/proc/self/auxv` is served by the APE off a Linux host.** A library written for Linux reads the auxiliary vector out of that file rather. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback. Its SIGILL.- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19). Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked 40-B `_func` records with presence-bitmap pcdata/funcdata arrays, prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B InlTree records. Consequence: upstream debug/gosym-based tools cannot parse fork binaries. The fork's own debug/gosym, objdump, nm, and addr2line are updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and readers must move in lockstep: `cmd/link/internal/ld/pcln.go` + `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <-> `debug/gosym`.
 
 ## Local Verify Loop
 
@@ -294,7 +279,7 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
-**A cmd/go change that needs a new client API rides the client's own branch.** Both repositories carry the branch name, and that name is what the submodule follows. The merge on each side returns both to their default branches. The gitlink a checkout restores decides nothing. It is the fallback for a build that cannot reach the remote.
+**A cmd/go change that needs a new client API rides the client's own branch.** Both repositories carry the branch name. And that name is what the submodule follows. The merge on each side returns both to their default branches. The gitlink a checkout restores decides nothing. It is the fallback for a build that cannot reach the remote.
 
 That subtree carries packages the build never imports. One upstream test fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in GOPATH mode, which walks. A pruned vendor tree is what upstream's test assumes, and only `go mod vendor` or per-package repositories produce one. The check stays red while whole-repo.
 
@@ -307,7 +292,7 @@ curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linu
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. A publish leg builds nothing: it downloads the `toolchain-<os>` artifact its build leg uploaded and runs `go tool distpack` over it. Every release reports the committed VERSION, `go1.27.0-cosmo`; releases are told apart by the buildhost version, and the tool-ID namespace by each tool's content ID. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. A publish leg builds nothing: it downloads the `toolchain-<os>` artifact its build leg uploaded and runs `go tool distpack` over it. Every release reports the committed VERSION, `go1.27.0-cosmo`. Releases are told apart by the buildhost version. The tool-ID namespace by each tool's content ID. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 
@@ -345,7 +330,7 @@ When a stdlib package fails to build for `GOOS=cosmo`, follow these steps:
 
 ### 1. Identify Build Constraint Types
 
-Go uses two types of build constraints:
+Go uses types of build constraints:
 - **`//go:build` directives** - Add `cosmo` to the constraint (e.g., `//go:build cosmo || linux || ...`)
 - **Filename suffixes** - Files like `foo_linux.go` only build for Linux. Create `foo_cosmo.go` with equivalent functionality.
 

@@ -3,20 +3,18 @@
 Every push whose build+test jobs are green publishes installable toolchain tarballs to buildhost (pazer.build) as project `gosmopolitan`, for **linux/amd64, darwin/arm64 and windows/amd64**.
 
 ```bash
-# Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0-cosmo.r<N> linux/amd64
+go version
 
 # macOS, Apple Silicon
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0-cosmo.r<N> darwin/arm64
+go version
 
-# Windows, x86-64 (any tar that reads gzip: bsdtar in System32, or git-bash)
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" -o go.tar.gz
 tar -xzf go.tar.gz
-go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
+go\bin\go version
 ```
 
 The tarball extracts to `go/` (official distribution layout. GOROOT is derived from the binary location, no need to set it).
@@ -37,11 +35,11 @@ One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select b
 
 ## The version an installed toolchain reports
 
-Every release reports the committed VERSION, `go1.27.0-cosmo`, and the tarball is named for it. Releases are told apart by the buildhost version, which `?v=N` selects and which the publish jobs never write into the tree.
+Every release reports the committed VERSION, `go1.27.0-cosmo`. And the tarball is named for it. Releases are told apart by the buildhost version, which `?v=N` selects and which the publish jobs never write into the tree.
 
 Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`, so cmd/go keys the build cache on the tool's content rather than on what version it claims to be. Two toolchains built from different sources get different tool IDs whatever their VERSION says, and two built from the same source are the same toolchain.
 
-Local source builds keep the static version and need no stamp: since 2026-07-20 tool IDs are content-derived (see CLAUDE.md's Fork Gotchas), so a hand-rebuilt toolchain self-invalidates stale.
+Local source builds keep the static version and need no stamp: since 2026-07-20 tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
 
 ## Consumer gotchas
 
