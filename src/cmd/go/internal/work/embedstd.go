@@ -20,10 +20,15 @@ import (
 // action has nothing to run and answers the archive's name and the build ID
 // recorded for it. A reader outside this process, which a -export listing
 // serves, gets the archive as a build cache file instead.
+// A package this binary carries no archive of answers nil and compiles here
+// like any other, rather than claiming an archive that is not in it.
 func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action {
-	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
-	if pkg == nil {
+	if cfg.EmbeddedStdPackage(p.ImportPath) == nil {
 		base.Fatalf("go: %s: this go command embeds no such standard package for %s/%s", p.ImportPath, cfg.Goos, cfg.Goarch)
+	}
+	pkg := cfg.EmbeddedStdArchived(p.ImportPath)
+	if pkg == nil {
+		return nil
 	}
 	act.Mode = "embedded std"
 	act.Actor = nil
@@ -69,7 +74,7 @@ func fileForOutsideReader(p *load.Package, built string) string {
 	if !cfg.EmbeddedStd || !embedded.IsSelf(built) {
 		return built
 	}
-	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
+	pkg := cfg.EmbeddedStdArchived(p.ImportPath)
 	if pkg == nil {
 		return built
 	}

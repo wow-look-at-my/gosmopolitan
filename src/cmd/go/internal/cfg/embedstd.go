@@ -93,6 +93,18 @@ func EmbeddedStdPackage(path string) *embedded.Package {
 	return manifestPkgs[path]
 }
 
+// EmbeddedStdArchived answers the embedded standard package at path when this
+// binary carries its archive, or nil. A standard package whose Go files are
+// all tests compiles to no archive, so the manifest names it and the blob
+// holds nothing for it. crypto/internal/fips140test is one.
+func EmbeddedStdArchived(path string) *embedded.Package {
+	pkg := EmbeddedStdPackage(path)
+	if pkg == nil || pkg.Archive == "" {
+		return nil
+	}
+	return pkg
+}
+
 // EmbeddedStdArchive names the archive of the embedded standard package at
 // path, in the form the compiler, linker and assembler open in process.
 func EmbeddedStdArchive(path string) string {

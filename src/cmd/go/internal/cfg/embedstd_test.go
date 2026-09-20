@@ -8,7 +8,39 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"internal/cosmo/embedded"
 )
+
+// A standard package whose Go files are all tests compiles to no archive, so
+// embedstd writes its manifest entry with no archive name and adds nothing to
+// the blob. crypto/internal/fips140test is one. Asking that entry for an
+// archive reads the empty name out of the blob and kills the build, so it
+// answers as a package this binary does not carry.
+func TestEmbeddedStdArchivedSkipsAPackageWithNoArchive(t *testing.T) {
+	t.Serial()
+	manifestOnce.Do(func() {})
+	manifestPkgs = map[string]*embedded.Package{
+		"crypto/internal/fips140test": {ImportPath: "crypto/internal/fips140test"},
+		"crypto/sha3":                 {ImportPath: "crypto/sha3", Archive: "std/cosmo_amd64/crypto/sha3.a"},
+	}
+	t.Cleanup(func() { manifestPkgs = nil })
+
+	if pkg := EmbeddedStdArchived("crypto/internal/fips140test"); pkg != nil {
+		t.Errorf("a test-only package answers %+v, want nil", pkg)
+	}
+	if pkg := EmbeddedStdArchived("crypto/sha3"); pkg == nil {
+		t.Error("a package the blob carries answers nil")
+	}
+	if pkg := EmbeddedStdArchived("example.com/nothing"); pkg != nil {
+		t.Errorf("a package the manifest never names answers %+v, want nil", pkg)
+	}
+	// The manifest still names it: the package is standard, and only its
+	// archive is absent.
+	if pkg := EmbeddedStdPackage("crypto/internal/fips140test"); pkg == nil {
+		t.Error("the manifest no longer names a test-only standard package")
+	}
+}
 
 // A go command that embeds its standard library carries one target set and no
 // other. The message names the GOOS and GOARCH that asked for another, so the
