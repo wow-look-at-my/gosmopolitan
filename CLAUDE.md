@@ -279,11 +279,13 @@ This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr
 - **Timeline attribution.** Ready-for-review, auto-merge, and merge events show the bot as the *actor* even when the repository owner initiated them by applying the label. Judge intent by the PR's `labeled` timeline events (who applied `auto-pr-merge`), not by the executor of the follow-on events. Symmetrically, the bot re-enforces state it was told to arm: reverting it (e.g. flipping the PR back to draft) is counter-flipped within seconds — a durable change needs the owner to.
 - **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only merges when its head SHA carries a green `all-builds` commit status — posted.). Do not name any CI job `all-builds`: an org guard fails workflows that define one, because the status context is reserved for the aggregator.
 
-## Shared build cache: the client is linked into `cmd/go`
+## Shared build cache: the cache IS `cacheclient`
 
-The org's shared build cache is reached in process. `cmd/go` requires `github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from `cmd/go/internal/cache/shared.go`, which layers a network tier under the disk cache: disk stays authoritative. The shared tier is.
+The cache lives in `github.com/wow-look-at-my/go-s3-server/cacheclient`. It holds the directory on disk. It holds the store under that directory. It holds the broker that gives one build a single owner for both. `cmd/go/internal/cache` names those types for the go command. It adds the action hash and the mapped read. It adds nothing else, and no second cache belongs here.
 
-`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
+One build has one owner. The first go command opens the directory and serves it over a unix socket to every command it starts. A child holds no directory, no key index and no connection. It asks the owner, then opens the file the owner names. So the trim has one writer, which is what makes `Cache.Close`'s cross-process invariant enforceable.
+
+`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the store and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. The paths below are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 

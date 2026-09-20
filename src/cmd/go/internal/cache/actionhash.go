@@ -14,15 +14,19 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
-var debugHash = false // set when GODEBUG=gocachehash=1
+// The go command describes each action it is about to run, and the hash of
+// that description is the key it stores the result under. What a key means is
+// the go command's, so it is computed here rather than in the cache.
 
 // HashSize is the number of bytes in a hash.
-const HashSize = 32
+const HashSize = cachedisk.HashSize
 
-// A Hash provides access to the canonical hash function used to index the cache.
-// The current implementation uses salted SHA256, but clients must not assume this.
+// A Hash builds a cache key out of the pieces of an action's description. The
+// implementation is salted SHA256, and a caller must not depend on that.
 type Hash struct {
 	h    hash.Hash
 	name string        // for debugging
@@ -66,13 +70,11 @@ func Subkey(parent ActionID, desc string) ActionID {
 	h.Write([]byte(desc))
 	var out ActionID
 	h.Sum(out[:0])
-	if debugHash {
+	if cachedisk.HashDebug() {
 		fmt.Fprintf(os.Stderr, "HASH subkey %x %q = %x\n", parent, desc, out)
 	}
-	if verify {
-		hashDebug.Lock()
-		hashDebug.m[out] = fmt.Sprintf("subkey %x %q", parent, desc)
-		hashDebug.Unlock()
+	if cachedisk.Verifying() {
+		cachedisk.RecordHash(out, fmt.Sprintf("subkey %x %q", parent, desc))
 	}
 	return out
 }
@@ -81,11 +83,11 @@ func Subkey(parent ActionID, desc string) ActionID {
 // The caller is expected to Write data to it and then call Sum.
 func NewHash(name string) *Hash {
 	h := &Hash{h: sha256.New(), name: name}
-	if debugHash {
+	if cachedisk.HashDebug() {
 		fmt.Fprintf(os.Stderr, "HASH[%s]\n", h.name)
 	}
 	h.Write(hashSalt)
-	if verify {
+	if cachedisk.Verifying() {
 		h.buf = new(bytes.Buffer)
 	}
 	return h
@@ -93,7 +95,7 @@ func NewHash(name string) *Hash {
 
 // Write writes data to the running hash.
 func (h *Hash) Write(b []byte) (int, error) {
-	if debugHash {
+	if cachedisk.HashDebug() {
 		fmt.Fprintf(os.Stderr, "HASH[%s]: %q\n", h.name, b)
 	}
 	if h.buf != nil {
@@ -102,39 +104,19 @@ func (h *Hash) Write(b []byte) (int, error) {
 	return h.h.Write(b)
 }
 
-// Sum returns the hash of the data written previously.
+// Sum answers the hash of everything written so far.
 func (h *Hash) Sum() [HashSize]byte {
 	var out [HashSize]byte
 	h.h.Sum(out[:0])
-	if debugHash {
+	if cachedisk.HashDebug() {
 		fmt.Fprintf(os.Stderr, "HASH[%s]: %x\n", h.name, out)
 	}
 	if h.buf != nil {
-		hashDebug.Lock()
-		if hashDebug.m == nil {
-			hashDebug.m = make(map[[HashSize]byte]string)
-		}
-		hashDebug.m[out] = h.buf.String()
-		hashDebug.Unlock()
+		// The cache keeps this, so a mismatch it finds later can be reported
+		// as what should have been there rather than as two opaque ids.
+		cachedisk.RecordHash(out, h.buf.String())
 	}
 	return out
-}
-
-// In GODEBUG=gocacheverify=1 mode,
-// hashDebug holds the input to every computed hash ID,
-// so that we can work backward from the ID involved in a
-// cache entry mismatch to a description of what should be there.
-var hashDebug struct {
-	sync.Mutex
-	m map[[HashSize]byte]string
-}
-
-// reverseHash returns the input used to compute the hash id.
-func reverseHash(id [HashSize]byte) string {
-	hashDebug.Lock()
-	s := hashDebug.m[id]
-	hashDebug.Unlock()
-	return s
 }
 
 var hashFileCache struct {
@@ -160,7 +142,7 @@ func FileHash(file string) ([HashSize]byte, error) {
 	h := sha256.New()
 	f, err := os.Open(file)
 	if err != nil {
-		if debugHash {
+		if cachedisk.HashDebug() {
 			fmt.Fprintf(os.Stderr, "HASH %s: %v\n", file, err)
 		}
 		return [HashSize]byte{}, err
@@ -168,13 +150,13 @@ func FileHash(file string) ([HashSize]byte, error) {
 	_, err = io.Copy(h, f)
 	f.Close()
 	if err != nil {
-		if debugHash {
+		if cachedisk.HashDebug() {
 			fmt.Fprintf(os.Stderr, "HASH %s: %v\n", file, err)
 		}
 		return [HashSize]byte{}, err
 	}
 	h.Sum(out[:0])
-	if debugHash {
+	if cachedisk.HashDebug() {
 		fmt.Fprintf(os.Stderr, "HASH %s: %x\n", file, out)
 	}
 
