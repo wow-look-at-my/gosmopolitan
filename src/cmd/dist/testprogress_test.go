@@ -34,12 +34,42 @@ func TestProgressLineSingleSlowTest(t *testing.T) {
 	}
 }
 
-// A second with nothing finished still reports how far the run has come.
-func TestProgressLineWithNothingFinished(t *testing.T) {
-	got := progressLine(2, 10, nil, 120)
-	const want = "[2/10 20%] "
-	if got != want {
-		t.Errorf("line = %q, want %q", got, want)
+// A tick that finished no test has no name to report, so it writes nothing.
+// The counter moved, and a line carrying it alone is what this drops.
+func TestProgressQuietTickWritesNothing(t *testing.T) {
+	var timings testTimings
+	var out strings.Builder
+	pro := newTestProgress(&out, &timings, 10)
+	pro.markDone("one")
+	pro.markDone("two")
+	pro.emit()
+	if out.String() != "" {
+		t.Errorf("a tick with no finished test wrote %q, want nothing", out.String())
+	}
+}
+
+// A tick that finished tests writes one line, naming them slowest first after
+// the counter.
+func TestProgressBusyTickWritesLine(t *testing.T) {
+	t.Setenv("COLUMNS", "120")
+	var timings testTimings
+	timings.add("pkg", "faster", 0.2)
+	timings.add("pkg", "slowish", 0.3)
+	var out strings.Builder
+	pro := newTestProgress(&out, &timings, 8)
+	pro.markDone("one")
+	pro.markDone("two")
+	pro.markDone("three")
+	pro.markDone("four")
+	pro.emit()
+	const want = "[4/8 50%] 0.3s slowish, 0.2s faster\n"
+	if out.String() != want {
+		t.Errorf("line = %q, want %q", out.String(), want)
+	}
+	// The drain emptied the buffer, so a tick with nothing new writes nothing.
+	pro.emit()
+	if out.String() != want {
+		t.Errorf("a second tick wrote %q, want %q", out.String(), want)
 	}
 }
 
@@ -62,11 +92,15 @@ func TestProgressLineEllipsizes(t *testing.T) {
 	}
 }
 
-func TestProgressLineZeroTotal(t *testing.T) {
-	got := progressLine(0, 0, nil, 120)
-	const want = "[0/0 0%] "
-	if got != want {
-		t.Errorf("line = %q, want %q", got, want)
+// A run that has not learned its total writes nothing either, rather than a
+// counter over zero.
+func TestProgressZeroTotalWritesNothing(t *testing.T) {
+	var timings testTimings
+	var out strings.Builder
+	pro := newTestProgress(&out, &timings, 0)
+	pro.emit()
+	if out.String() != "" {
+		t.Errorf("a tick with no finished test wrote %q, want nothing", out.String())
 	}
 }
 
