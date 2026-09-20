@@ -182,12 +182,7 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 	// listing stops at the first of them without it. crypto/internal/
 	// fips140test is one. They compile to no archive, so they carry none
 	// here either, and the blob is the same either way.
-	// cmd/go rides along with std: a binary carrying its own standard library
-	// answers no outside GOROOT, so a program that imports the go command as a
-	// library reads it from here or from nowhere. go-toolchain is that program,
-	// and its self-hosted build compiles itself with a binary this tool wrote.
-	// -deps brings what cmd/go needs and nothing else of cmd.
-	cmd := goCommand(goCmd, "list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std", "cmd/go")
+	cmd := goCommand(goCmd, "list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
 	// -trimpath, so a program built with it against these archives is the
 	// program the source tree builds with it; the tree's path is not in them.
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
