@@ -21,11 +21,13 @@ const fallbackWidth = 120
 // progressPeriod is how often a progress line appears.
 const progressPeriod = time.Second
 
-// testProgress writes one line each second. The line carries how far the run
-// has come and which tests ended during that second, slowest first.
+// testProgress writes one line each second in which a test finished. The line
+// carries how far the run has come and which tests ended during that second,
+// slowest first.
 //
-// This names a slow test while the run is still going, which is what a
-// reader wanted from verbose output.
+// A second that finished nothing writes no line, because the counter alone
+// names no test. This names a slow test while the run is still going, which is
+// what a reader wanted from verbose output.
 type testProgress struct {
 	dst     io.Writer
 	timings *testTimings
@@ -87,8 +89,13 @@ func (pro *testProgress) counts() (done, total int) {
 }
 
 func (pro *testProgress) emit() {
-	done, total := pro.counts()
+	// The drain is what says whether this second finished anything, and it
+	// empties the buffer on the way out, so a quiet tick passes nothing on.
 	recent := pro.timings.drainRecent()
+	if len(recent) == 0 {
+		return
+	}
+	done, total := pro.counts()
 	fmt.Fprintln(pro.dst, progressLine(done, total, recent, lineWidth()))
 }
 
