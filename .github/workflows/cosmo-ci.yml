@@ -493,16 +493,6 @@ jobs:
           WASM_PORT: ${{ matrix.port }} part ${{ matrix.shard }}/${{ matrix.shards }}
 
 
-  # The hand-offs live in the actions cache. Delete them once every consumer has run.
-  cache-cleanup:
-    needs: [test, suite, cosmo-checks, wasm, wasm-suite, publish-upload]
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - uses: wow-look-at-my/actions@cache-cleanup#latest
-
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
   publish-create:
     timeout-minutes: 10
