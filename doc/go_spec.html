@@ -2341,10 +2341,27 @@ right.
 
 <pre class="ebnf">
 ConstDecl      = "const" ( ConstSpec | "(" { ConstSpec ";" } ")" ) .
-ConstSpec      = IdentifierList [ [ Type ] "=" ExpressionList ] .
+ConstSpec      = IdentifierList [ [ Type ] "=" ExpressionList ] [ string_lit ] .
 
 IdentifierList = identifier { "," identifier } .
 ExpressionList = Expression { "," Expression } .
+</pre>
+
+<p>
+The optional string literal is the constant's <i>name text</i>. It supplies the
+text an <a href="#Type_declarations">enumerated type</a> prints for that
+constant, in place of the identifier. A constant declaration that binds more
+than one identifier may not carry one, since the text names a single constant.
+It is a compile-time error for a name text to appear on a constant whose type is
+not an enumerated type.
+</p>
+
+<pre>
+const (
+	StateNew    ConnState = iota // prints as "StateNew"
+	StateActive                   "active"
+	StateIdle                     "idle"
+)
 </pre>
 
 <p>
@@ -2517,7 +2534,7 @@ and binds an identifier, the <i>type name</i>, to it.
 </p>
 
 <pre class="ebnf">
-TypeDef = identifier [ TypeParameters ] Type .
+TypeDef = identifier [ TypeParameters ] [ "enum" ] Type .
 </pre>
 
 <p>
@@ -2525,6 +2542,45 @@ The new type is called a <i>defined type</i>.
 It is <a href="#Type_identity">different</a> from any other type,
 including the type it is created from.
 </p>
+
+<h4 id="Enumerated_types">Enumerated types</h4>
+
+<p>
+A type definition whose identifier is followed by <code>enum</code> declares an
+<i>enumerated type</i>. Its underlying type must be an
+<a href="#Numeric_types">integer type</a>. The word <code>enum</code> is not a
+<a href="#Keywords">keyword</a>: it reads as a type name wherever no type
+follows it, so <code>type Set enum</code> declares <code>Set</code> to be the
+type named <code>enum</code>.
+</p>
+
+<p>
+An enumerated type has a method <code>String() string</code>, declared
+implicitly. For a value equal to a constant of that type declared in the same
+package, it returns that constant's
+<a href="#Constant_declarations">name text</a>, or the constant's identifier
+where the declaration supplies no name text. Where two such constants have equal
+values, the one declared first supplies the result. For every other value it
+returns the type's name followed by the value in parentheses.
+</p>
+
+<p>
+Declaring <code>String</code> on an enumerated type explicitly is an error: the
+two declarations would name one method.
+</p>
+
+<pre>
+type ConnState enum uint8
+
+const (
+	StateNew ConnState = iota
+	StateIdle                "idle"
+)
+
+StateNew.String()    // "StateNew"
+StateIdle.String()   // "idle"
+ConnState(7).String()  // "ConnState(7)"
+</pre>
 
 <pre>
 type (

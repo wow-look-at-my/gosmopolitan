@@ -1472,6 +1472,15 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 		}
 	}
 
+	// The fetch of a module asks whether a replacement stands in for it, and the
+	// replace directives are read here.
+	modfetch.Superseded = func(mod module.Version) bool {
+		if ld.MainModules == nil {
+			return false
+		}
+		return Replacement(ld, mod).Path != ""
+	}
+
 	return mainModules
 }
 

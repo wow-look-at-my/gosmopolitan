@@ -74,7 +74,8 @@
 	url = https://github.com/golang/text.git
 [submodule "src/cmd/vendor/golang.org/x/tools"]
 	path = src/cmd/vendor/golang.org/x/tools
-	url = https://github.com/golang/tools.git
+	url = https://github.com/wow-look-at-my/gosmopolitan_tools.git
+	branch = master
 [submodule "src/cmd/vendor/rsc.io/markdown"]
 	path = src/cmd/vendor/rsc.io/markdown
 	url = https://github.com/rsc/markdown.git
