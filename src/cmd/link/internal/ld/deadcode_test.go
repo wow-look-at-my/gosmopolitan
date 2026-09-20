@@ -8,9 +8,7 @@ import (
 	"bytes"
 	"internal/testenv"
 	"path/filepath"
-	"strconv"
 	"testing"
-	"time"
 )
 
 func TestDeadcode(t *testing.T) {
@@ -18,13 +16,6 @@ func TestDeadcode(t *testing.T) {
 	t.Parallel()
 
 	tmpdir := t.TempDir()
-
-	// Every assertion below reads the linker's own -dumpdep output. cmd/go
-	// replays a cached link's diagnostics as best effort only, so a replay
-	// that fails leaves the build green and silent and fails every pattern
-	// here. The linker ignores an -X for a symbol it does not have, so this
-	// nonce only makes the link action new, and the linker runs for real.
-	nonce := "-X=cmd/link/internal/ld.deadcodeTestNonce=" + strconv.FormatInt(time.Now().UnixNano(), 36)
 
 	tests := []struct {
 		src      string
@@ -47,7 +38,7 @@ func TestDeadcode(t *testing.T) {
 			t.Parallel()
 			src := filepath.Join("testdata", "deadcode", test.src+".go")
 			exe := filepath.Join(tmpdir, test.src+".exe")
-			cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-ldflags=-dumpdep "+nonce, "-o", exe, src)
+			cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-ldflags=-dumpdep", "-o", exe, src)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%v: %v:\n%s", cmd.Args, err, out)
