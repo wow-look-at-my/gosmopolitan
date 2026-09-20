@@ -234,12 +234,15 @@ func newerToolchain(need string, list []string) (string, error) {
 }
 
 // HasAuto reports whether the GOTOOLCHAIN setting allows "auto" upgrades.
+// GOTOOLCHAIN is removed, so cfg.Getenv answers "" and this is always false.
+// See RemovedEnv in cmd/go/internal/cfg.
 func HasAuto() bool {
 	env := cfg.Getenv("GOTOOLCHAIN")
 	return env == "auto" || strings.HasSuffix(env, "+auto")
 }
 
 // HasPath reports whether the GOTOOLCHAIN setting allows "path" upgrades.
+// Always false, for the same reason as HasAuto.
 func HasPath() bool {
 	env := cfg.Getenv("GOTOOLCHAIN")
 	return env == "path" || strings.HasSuffix(env, "+path")

@@ -1,0 +1,81 @@
+# GOBIN and GOTOOLCHAIN are removed. Neither is a go command variable, so
+# 'go env' does not report one and 'go env -w' refuses to store one.
+
+go env GOBIN
+! stdout .
+go env GOTOOLCHAIN
+! stdout .
+
+! go env -w GOBIN=$WORK/bin
+stderr 'unknown go command variable GOBIN'
+! go env -w GOTOOLCHAIN=path
+stderr 'unknown go command variable GOTOOLCHAIN'
+
+! go env -u GOBIN
+stderr 'unknown go command variable GOBIN'
+! go env -u GOTOOLCHAIN
+stderr 'unknown go command variable GOTOOLCHAIN'
+
+# Neither appears in the full listing.
+go env
+! stdout '(set )?GOBIN='
+! stdout '(set )?GOTOOLCHAIN='
+
+go env -json
+! stdout '"GOBIN"'
+! stdout '"GOTOOLCHAIN"'
+
+# A value in the environment does not come back. The go command ignores it
+# whatever it says.
+env GOBIN=$WORK/bin
+env GOTOOLCHAIN=path
+env UNKNOWNVAR=carried
+go env GOBIN
+! stdout .
+go env GOTOOLCHAIN
+! stdout .
+
+# It still reaches a child process. A name this go command ignores travels the
+# way an unknown name travels, because a build tool does not edit what the
+# program under 'go run' sees.
+go run printenv.go
+stdout 'GOBIN='
+stdout 'GOTOOLCHAIN=path'
+stdout 'UNKNOWNVAR=carried'
+
+# An env file left behind by another toolchain does not set one either.
+env GOBIN=
+env GOTOOLCHAIN=
+env GOENV=$WORK/goenv
+go env GOBIN
+! stdout .
+go env GOTOOLCHAIN
+! stdout .
+
+-- $WORK/goenv --
+GOBIN=/tmp/gobin
+GOTOOLCHAIN=go1.21.0
+-- go.mod --
+module printenv
+
+go 1.16
+-- printenv.go --
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// UNKNOWNVAR is the control. The go command knows nothing about it, so
+// whatever reaches this program under that name is what a removed name must
+// reach it as too.
+func main() {
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GOBIN=") || strings.HasPrefix(kv, "GOTOOLCHAIN=") ||
+			strings.HasPrefix(kv, "UNKNOWNVAR=") {
+			fmt.Println(kv)
+		}
+	}
+}

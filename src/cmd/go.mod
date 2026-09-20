@@ -5,6 +5,7 @@ go 1.27
 require (
 	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
 	github.com/klauspost/compress v1.19.0
+	github.com/stretchr/testify v1.12.1
 	github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0
 	golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97
 	golang.org/x/build v0.0.0-20260522210304-d55d0041b921
@@ -26,9 +27,12 @@ require (
 replace golang.org/x/tools v0.0.0 => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0
 
 require (
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/wow-look-at-my/go-containers v0.0.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	rsc.io/markdown v0.0.0-20240306144322-0bf8f97ee8ef // indirect
 )

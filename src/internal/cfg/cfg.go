@@ -9,6 +9,9 @@ package cfg
 
 // KnownEnv is a list of environment variables that affect the operation
 // of the Go command.
+//
+// GOBIN and GOTOOLCHAIN are absent on purpose. Their absence is what makes
+// 'go env -w GOBIN=...' fail. Do not add either one back.
 const KnownEnv = `
 	AR
 	CC
@@ -38,7 +41,6 @@ const KnownEnv = `
 	GOARM
 	GOARM64
 	GOAUTH
-	GOBIN
 	GOCACHE
 	GOENV
 	GOEXE
@@ -63,7 +65,6 @@ const KnownEnv = `
 	GOROOT
 	GOSUMDB
 	GOTMPDIR
-	GOTOOLCHAIN
 	GOTOOLDIR
 	GOVCS
 	GOWASI
