@@ -569,7 +569,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 		return err
 	}
 
-	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
+	if err := sh.run(".", p.input, nil, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
 		return err
 	}
 

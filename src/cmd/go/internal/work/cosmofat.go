@@ -429,9 +429,8 @@ func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 // of each main package in mains) with the assembled APE, merging in the
 // sibling-architecture binary produced by s (when there is one) using the
 // linker's -apefat mode. By default the assembly also strips each embedded
-// payload to its loadable span and writes unstripped per-architecture debug
-// sidecars (<target>.dbg, <target>.aarch64.elf) next to the output; see
-// cosmoMergeArgs.
+// payload to its loadable span and writes the amd64 image's unstripped debug
+// sidecar (<target>.dbg) next to the output; see cosmoMergeArgs.
 func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
 		return
@@ -524,8 +523,7 @@ func cosmoMerge(b *Builder, lane trace.Lane, link []string, p *load.Package, tar
 // resolution stays identical while the cross-compiled result lands in
 // $GOPATH/bin/$GOOS_$GOARCH/ (always a subdirectory - cosmo cannot be
 // the platform the go tool itself runs on). GOMODCACHE keeps pointing
-// at the real module cache so nothing is re-downloaded, and GOBIN is
-// cleared because go install refuses cross-compilation with GOBIN set.
+// at the real module cache so nothing is re-downloaded.
 func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	if !cosmoFatEnabled() || !hasMains {
 		return nil
@@ -543,7 +541,6 @@ func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 		"GOCOSMOFAT_INNER=1",
 		"GOPATH="+s.tmp,
 		"GOMODCACHE="+cfg.GOMODCACHE,
-		"GOBIN=",
 	)
 	s.launch(cmd)
 	return s

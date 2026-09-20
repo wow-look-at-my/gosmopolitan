@@ -46,6 +46,12 @@ var commands = map[string]func(){
 func main() {
 	os.Setenv("TERM", "dumb") // disable escape codes in clang errors
 
+	// This toolchain refuses both (RemovedEnv in cmd/go/internal/cfg), and
+	// dist starts the bootstrap go command, which is a different toolchain
+	// and does still honor them. Drop them here so it cannot see them.
+	os.Unsetenv("GOBIN")
+	os.Unsetenv("GOTOOLCHAIN")
+
 	// provide -check-armv6k first, before checking for $GOROOT so that
 	// it is possible to run this check without having $GOROOT available.
 	if len(os.Args) > 1 && os.Args[1] == "-check-armv6k" {
