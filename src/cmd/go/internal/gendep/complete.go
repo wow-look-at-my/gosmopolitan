@@ -376,10 +376,17 @@ func wroteNowhere(stage, pkg string, err error) string {
 			continue
 		}
 		path, _, ok := strings.Cut(after, ": "+syscall.ENOENT.Error())
-		if !ok || path == "" || !filepath.IsLocal(path) {
+		if path == "" || !ok {
 			continue
 		}
+		// The directive runs with the package as its directory, and a path of
+		// its own leads out of the module as readily as into a directory the
+		// zip drops. Neither reaches a consumer, so both read the same way.
 		at := filepath.Join(stage, filepath.FromSlash(pkg), filepath.FromSlash(path))
+		within, err := filepath.Rel(stage, at)
+		if err != nil || !filepath.IsLocal(within) {
+			return path
+		}
 		if _, err := os.Lstat(filepath.Dir(at)); errors.Is(err, fs.ErrNotExist) {
 			return path
 		}

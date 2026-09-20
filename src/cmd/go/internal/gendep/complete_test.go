@@ -194,6 +194,8 @@ func TestWroteNowhereSeparatesTheZipsShapeFromADefect(test *testing.T) {
 		`2026/09/20 16:52:50 failed to write to "fallback/bundle.go": open fallback/bundle.go: no such file or directory`
 	const nssRoots = "exit status 1\n" +
 		`2026/09/20 16:52:50 failed to write to "nss/roots.go": open nss/roots.go: no such file or directory`
+	const idna = "exit status 1\n" +
+		"Copying exported files failed: open ../../net/idna/idna.go: no such file or directory"
 	cases := []struct {
 		why  string
 		err  error
@@ -203,6 +205,7 @@ func TestWroteNowhereSeparatesTheZipsShapeFromADefect(test *testing.T) {
 		{"a directive writes into a submodule's directory", errors.New(x509roots), "fallback/bundle.go"},
 		{"the build reports that failure around its own", fmt.Errorf("generating x509roots: %w", errors.New(x509roots)), "fallback/bundle.go"},
 		{"the directory it writes to is right there", errors.New(nssRoots), ""},
+		{"a path of its own leads out of the module", errors.New(idna), "../../net/idna/idna.go"},
 		{"a generator ran and failed", errors.New("exit status 1"), ""},
 		{"a directive names a program this machine lacks", &exec.Error{Name: "stringer", Err: exec.ErrNotFound}, ""},
 	}
