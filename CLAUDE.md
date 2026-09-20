@@ -307,7 +307,7 @@ curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linu
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0-cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. A publish leg builds nothing: it downloads the `toolchain-<os>` artifact its build leg uploaded and runs `go tool distpack` over it. Every release reports the committed VERSION, `go1.27.0-cosmo`; releases are told apart by the buildhost version, and the tool-ID namespace by each tool's content ID. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 

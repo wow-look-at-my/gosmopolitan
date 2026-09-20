@@ -28,18 +28,18 @@ Every slot uploads a `.tar.gz`, windows included. A GOROOT is a directory tree, 
 Three jobs in cosmo-ci.yml, because distpack packages what a HOST build produced -- there is no cross-package shortcut, and `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails outright with `distpack: stat bin/darwin_arm64/go: no such file or directory`:
 
 - `publish-create` opens ONE buildhost release, so every platform lands in the same version.
-- `publish-upload` is a matrix over ubuntu-latest/linux/amd64, macos-latest/darwin/arm64 and windows-latest/windows/amd64. Each leg stamps VERSION, runs `make.bash -distpack` (`make.bat -distpack` on windows, through the multicmd action) on its own runner (output `pkg/distpack/go<base>.r<run_number>.<goos>-<goarch>.tar.gz`, e.g. `go1.27.0-cosmo.r75.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight to buildhost.
+- `publish-upload` is a matrix over ubuntu-latest/linux/amd64, macos-latest/darwin/arm64 and windows-latest/windows/amd64. Each leg takes the `toolchain-<os>` artifact its build leg uploaded, runs `./bin/go tool distpack` over it (output `pkg/distpack/go<VERSION>.<goos>-<goarch>.tar.gz`, e.g. `go1.27.0-cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight to buildhost.
 - `publish-finish` publishes the release once every leg is in.
 
 Nothing is handed between the jobs, so no GitHub Actions artifact storage is involved. A failed leg means `publish-finish` never runs and the release stays a DRAFT, which buildhost records as intent and never serves as latest -- a. Every step authenticates with a GitHub Actions OIDC token (audience `https://pazer.build`) through buildhost's own composite actions (`buildhost-create-release` / `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as `wow-look-at-my/buildhost/.github/actions/<name>@master`).
 
 One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select between them and neither platform can be served the other's bytes.
 
-## The version stamp
+## The version an installed toolchain reports
 
-The publish stamps VERSION with a unique per-release suffix (`go<base>.r<run_number>`). The committed VERSION stays `go1.27.0-cosmo`. Every leg of one run stamps the SAME string, so the platforms of a release cannot disagree about which toolchain they are.
+Every release reports the committed VERSION, `go1.27.0-cosmo`, and the tarball is named for it. Releases are told apart by the buildhost version, which `?v=N` selects and which the publish jobs never write into the tree.
 
-The stamp exists because the fork identifies as a RELEASE Go version, so cmd/go derives tool IDs (hence action IDs) from the version string alone. Two releases sharing one string share a build-cache namespace, and the org's shared build cache then links objects from different releases into one binary. A monotonic suffix per publish keeps each release's cache namespace disjoint.
+Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`, so cmd/go keys the build cache on the tool's content rather than on what version it claims to be. Two toolchains built from different sources get different tool IDs whatever their VERSION says, and two built from the same source are the same toolchain.
 
 Local source builds keep the static version and need no stamp: since 2026-07-20 tool IDs are content-derived (see CLAUDE.md's Fork Gotchas), so a hand-rebuilt toolchain self-invalidates stale.
 

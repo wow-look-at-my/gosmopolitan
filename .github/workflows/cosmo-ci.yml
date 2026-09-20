@@ -495,7 +495,7 @@ jobs:
 
   # The hand-offs live in the actions cache. Delete them once every consumer has run.
   cache-cleanup:
-    needs: [test, suite, cosmo-checks, wasm, wasm-suite]
+    needs: [test, suite, cosmo-checks, wasm, wasm-suite, publish-upload]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -530,8 +530,8 @@ jobs:
           project: gosmopolitan
 
   publish-upload:
-    # macOS make.bash runs ~4m30s at its slowest observed and windows make.bat ~3m15s; distpack adds seconds.
-    timeout-minutes: 25
+    # Packaging only: the toolchain this archives is the one its build leg produced.
+    timeout-minutes: 15
     needs: publish-create
     strategy:
       fail-fast: true
@@ -558,33 +558,30 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@common-checks#latest
-      # make.bash fails a CI run with no shared cache configured; this step exports GO_BUILDCACHE_CONFIG.
+      # distpack compiles cmd/distpack on demand, and a CI build with no shared cache configured fails outright.
       - uses: wow-look-at-my/actions@secret-server#latest
-      # The published toolchain is built here, so it carries the client's branch head rather than the gitlink's commit.
+      # The src archive ships this tree, so the submodules under it carry their branch heads here too.
       - uses: ./.github/actions/track-submodules
 
-      - name: Setup Go bootstrap toolchain
-        uses: actions/setup-go@v5
+      - name: Take the toolchain its build leg built
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          go-version: '1.24'
-          cache: false
+          name: toolchain-${{ runner.os }}
+          path: .
 
-      - name: Stamp unique per-release version
-        # see docs/CI.md "publish jobs" -- avoids collisions in the shared build cache namespace.
+      - name: The restored go answers
         shell: bash
-        run: |
-          printf '%s.r%s\n' "$(head -n1 VERSION)" '${{ github.run_number }}' > VERSION
-          echo "VERSION stamped: $(cat VERSION)"
+        run: ./bin/go version
 
       - name: Build distribution archive
         # Writes the official-style go<VERSION>.<goos>-<goarch>.tar.gz to pkg/distpack, on every platform -- see docs/CI.md "publish jobs".
-        timeout-minutes: 15
-        uses: wow-look-at-my/actions/multicmd@master
-        with:
-          unix: cd src && ./make.bash -distpack
-          windows: cd src && .\make.bat -distpack
+        timeout-minutes: 10
+        shell: bash
+        run: ./bin/go tool distpack
         env:
-          GOROOT_BOOTSTRAP: ${{ env.GOROOT }}
+          GOROOT: ${{ github.workspace }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
 
       # Publish flow: buildhost's own composite actions -- see docs/CI.md "publish jobs".
       - name: Locate distribution tarball
