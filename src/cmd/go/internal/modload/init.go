@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
@@ -1389,6 +1390,11 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 			base.Errorf("go: module %s appears multiple times in workspace", m.Path)
 		}
 		mainModulePaths[m.Path] = true
+	}
+	if len(ms) > 0 {
+		// The shared cache labels each request with the module being built. The
+		// cache opens before this, so it learns the path here instead.
+		cache.SetSharedModule(ms[0].Path)
 	}
 	replacedByWorkFile := make(map[string]bool)
 	replacements := make(map[module.Version]module.Version)
