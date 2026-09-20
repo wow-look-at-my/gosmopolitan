@@ -972,13 +972,10 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Root:       cfg.GOROOT,
 					}
 					// A listing names the source files; a build reads the
-					// archive. A reader that type checks from source, which
-					// go/packages does for a dependency, has nothing without
-					// these names, and a tree of this same toolchain holds
-					// them. Nothing else may see them: a build that finds
-					// source under a standard package compiles it, and the
-					// target it writes is the archive's name inside this
-					// binary, which no host can open.
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
 					if cfg.CmdName == "list" {
 						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
 							data.p.GoFiles = tree.GoFiles
