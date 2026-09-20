@@ -147,6 +147,8 @@ jobs:
         with:
           submodules: true
       - uses: wow-look-at-my/actions@secret-server#latest
+      # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
+      - uses: ./.github/actions/track-submodules
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest

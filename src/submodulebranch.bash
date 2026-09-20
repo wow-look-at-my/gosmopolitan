@@ -48,15 +48,32 @@ while read -r key _; do
 	esac
 
 	branch=$(git config -f .gitmodules --get "submodule.$name.branch" || true)
-	if [[ -n "$here" ]] && git ls-remote --exit-code --heads "$url" "refs/heads/$here" >/dev/null 2>&1; then
-		branch=$here
+	if [[ -n "$here" ]]; then
+		# A probe that cannot reach the remote answers the same as one that
+		# reached it and found no such branch, so it says which happened.
+		if said=$(git ls-remote --exit-code --heads "$url" "refs/heads/$here" 2>&1); then
+			branch=$here
+		elif [[ -n "$said" ]]; then
+			echo "submodulebranch: $path cannot ask $url for $here: $said" >&2
+		fi
 	fi
 	[[ -n "$branch" ]] || continue
 
 	git config "submodule.$name.branch" "$branch"
-	if git submodule update --init --remote -- "$path" 2>/dev/null; then
+	# A checkout clones a submodule shallow, against a refspec holding the one
+	# commit the gitlink names, so every other branch is absent and the update
+	# below cannot resolve one. This asks for the branch by name.
+	git submodule update --init -- "$path" >/dev/null 2>&1 || true
+	if [[ -d "$path/.git" || -f "$path/.git" ]]; then
+		git -C "$path" fetch --depth 1 origin \
+			"+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || true
+	fi
+	# git says why it could not update, and a build that keeps the gitlink
+	# instead of the branch head is a build compiling a version nobody chose.
+	if said=$(git submodule update --init --remote -- "$path" 2>&1); then
 		echo "submodulebranch: $path at $branch $(git -C "$path" rev-parse --short=12 HEAD)" >&2
 	else
-		echo "submodulebranch: $path stays where it is: cannot reach $url" >&2
+		echo "submodulebranch: $path stays where it is: $url answered:" >&2
+		echo "$said" >&2
 	fi
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)
