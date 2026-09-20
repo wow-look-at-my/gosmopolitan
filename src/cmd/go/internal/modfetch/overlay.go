@@ -37,7 +37,7 @@ import (
 // to how a module is completed, is a new version, and every module is completed
 // again under it. A build that completes a module differently but reads the
 // entries an older one stored serves that older answer to the whole fleet.
-const overlayVersion = "overlay v4"
+const overlayVersion = "overlay v5"
 
 // overlayKey is the cache key of the overlay of mod whose base zip has checksum
 // baseSum. An org module has no checksum: its pseudo-version names its commit.
