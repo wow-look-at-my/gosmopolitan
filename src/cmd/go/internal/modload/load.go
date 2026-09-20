@@ -1921,7 +1921,7 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 // embeddedStdPackage answers pkg's entry in the embedded standard library,
 // or nil when pkg is not a standard package of a go command carrying one.
 func embeddedStdPackage(pkg *loadPkg) *embedded.Package {
-	if !cfg.EmbeddedStd || cfg.EmbeddedStdTree || !pkg.inStd {
+	if !cfg.EmbeddedStd || !pkg.inStd {
 		return nil
 	}
 	return cfg.EmbeddedStdPackage(pkg.path)
