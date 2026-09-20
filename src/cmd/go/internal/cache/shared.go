@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,10 @@ import (
 // OutputFile answers for a shared hit exactly as it does for a local one.
 type SharedCache struct {
 	*DiskCache
-	remote *cacheclient.WebBackend
+	// remote is the store as this process reaches it: over the network when
+	// this process is the first of the build, and over the broker's socket
+	// when a process above it got there first.
+	remote cacheclient.Backend
 
 	// What each tier answered, and what it moved. The remote's own totals
 	// cover the wire; these two cover the disk, which nothing else counts.
@@ -132,7 +136,10 @@ func newSharedCache(disk *DiskCache) Cache {
 	// The client writes diagnostics nowhere until a consumer says otherwise,
 	// and cmd/go's stderr is where a build's warnings already go.
 	cacheclient.SetLogger(goLogger{})
-	remote, err := cacheclient.NewWebBackend(cfg)
+	// The first go command of a build dials the store and serves every process
+	// it starts. Those ask it over a socket, so one process holds the key index
+	// and one holds the connection pool.
+	remote, err := cacheclient.NewBackend(cfg)
 	if err != nil || remote == nil {
 		// A shared cache that cannot be reached is a slower build, not a
 		// broken one. Say so once; do not fail the build over it.
@@ -141,11 +148,18 @@ func newSharedCache(disk *DiskCache) Cache {
 		}
 		return nil
 	}
+	// A test binary and a `go run` program are started with OrigEnv, the
+	// environment this command itself was started with, rather than with this
+	// process's own. The socket has to be in that one, or every go command
+	// those programs run dials the store and loads an index of its own.
+	if addr := cacheclient.BrokerAddr(); addr != "" {
+		goCfg.OrigEnv = append(slices.Clip(goCfg.OrigEnv), cacheclient.BrokerEnv+"="+addr)
+	}
 	c := &SharedCache{DiskCache: disk, remote: remote}
 	// Without this the look-ahead pool has nowhere to put what it fetches, and
 	// the client turns it off. This is the whole mechanism: objects land on
 	// disk before the build asks for them, so the ask is a local read.
-	remote.OnBatchEntries = c.populate
+	remote.SetBatchSink(c.populate)
 	liveShared.Store(c)
 	// Every go process shares the index's disk copy through IndexDir, and
 	// one that exits holding its lock makes the next wait for it. A command
