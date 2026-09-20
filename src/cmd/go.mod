@@ -13,8 +13,17 @@ require (
 	golang.org/x/sys v0.45.0
 	golang.org/x/telemetry v0.0.0-20260519152614-eab6ae52b5e2
 	golang.org/x/term v0.43.0
-	golang.org/x/tools v0.45.1-0.20260730185712-faf6fa7c2f89
+	golang.org/x/tools v0.0.0
 )
+
+// The org's x/tools, which is also what the vendor tree's submodule holds. The
+// fork declares the upstream module path, and a replacement is checked against
+// the path being replaced rather than where it is fetched from, so the remap is
+// legal. Both sides carry a version: vendor/modules.txt keys a replacement by
+// the module version it annotates, and a wildcard has no version to match that
+// key. The left one is inert, because nothing fetches a module that is
+// replaced, and the right one is the org placeholder for a branch head.
+replace golang.org/x/tools v0.0.0 => github.com/wow-look-at-my/gosmopolitan_tools v0.0.0
 
 require (
 	github.com/ianlancetaylor/demangle v0.0.0-20250417193237-f615e6bd150b // indirect

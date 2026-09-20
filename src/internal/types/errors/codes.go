@@ -1482,4 +1482,9 @@ const (
 	// errors. The solution is to rebuild the application with a
 	// newer Go release.
 	TooNew
+
+	// InvalidEnum occurs when a type is defined with enum over an
+	// underlying type that is not an integer type, or when a constant
+	// carries name text and its type is not an enum type.
+	InvalidEnum
 )

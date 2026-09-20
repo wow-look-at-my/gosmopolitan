@@ -1385,6 +1385,32 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 			vcfg.Standard[p1.ImportPath] = true
 		}
 	}
+	addEmbeddedStdVetFiles(vcfg)
+}
+
+// addEmbeddedStdVetFiles gives vet an archive for each embedded standard
+// package it has none for.
+//
+// A go command carrying its standard library compiles nothing for one, so no
+// action reports a built file and the loop above records none. Nothing vets a
+// package with no source either, so no vetx file names it. The vet tool then
+// has neither the types nor the facts for an import every program makes, and
+// reports the package it cannot import rather than anything about the code.
+func addEmbeddedStdVetFiles(vcfg *vetConfig) {
+	if !cfg.EmbeddedStd {
+		return
+	}
+	for _, path := range vcfg.ImportMap {
+		if vcfg.PackageFile[path] != "" {
+			continue
+		}
+		pkg := cfg.EmbeddedStdPackage(path)
+		if pkg == nil {
+			continue
+		}
+		vcfg.PackageFile[path] = embeddedStdFile(path, pkg)
+		vcfg.Standard[path] = true
+	}
 }
 
 // VetTool is the command line that starts the effective vet or fix tool,
