@@ -39,12 +39,12 @@ runs:
         # rd walks a tree one entry at a time, which is what takes so long here. robocopy mirrors an empty directory over each tree with many threads instead. This frees the space, which is all the suite wants; what it leaves behind is a shell of empty directories, and nothing reads these paths again.
         $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
         New-Item -ItemType Directory -Force -Path $empty | Out-Null
-        # The trees mirror concurrently, so this step costs the slowest one rather than the sum. That makes the per-tree seconds the number worth having: a tree that frees little and takes minutes is one to stop deleting.
+        # An unlink is an MFT update, and those serialize per volume. 16 trees at /MT:64 put a thousand threads on one lock to do work the disk does one entry at a time, so the threads spent their time contending rather than deleting. Four trees at a time, eight threads each, is past the point where more helps.
         $timings = $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel {
           $clock = [Diagnostics.Stopwatch]::StartNew()
-          try { robocopy $using:empty $_ /MIR /MT:64 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
+          try { robocopy $using:empty $_ /MIR /MT:8 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
           [pscustomobject]@{ Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1); Tree = $_ }
-        } -ThrottleLimit 16
+        } -ThrottleLimit 4
         $timings | Sort-Object Seconds -Descending | Format-Table -AutoSize | Out-String | Write-Host
         $after = (Get-PSDrive C).Free
         Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ($after/$gb), ($before/$gb))
