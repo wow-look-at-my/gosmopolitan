@@ -21,6 +21,12 @@ import (
 // the executable itself.
 var EmbeddedStd bool
 
+// EmbeddedStdTree reports that GOROOT is a tree of this same toolchain rather
+// than this executable. The tree holds the sources of every standard package,
+// so the listing answers from it and a reader that type checks from source
+// gets what it asks for. The blob still answers when there is no tree.
+var EmbeddedStdTree bool
+
 // UseEmbeddedStd puts the go command in embedded mode, with exe, this
 // executable, as its GOROOT.
 //
@@ -34,6 +40,7 @@ var EmbeddedStd bool
 func UseEmbeddedStd(exe string) {
 	EmbeddedStd = true
 	if tree := sameToolchainTree(os.Getenv("GOROOT")); tree != "" {
+		EmbeddedStdTree = true
 		SetGOROOT(tree, false)
 		return
 	}

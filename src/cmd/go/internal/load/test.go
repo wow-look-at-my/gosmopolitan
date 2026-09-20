@@ -65,7 +65,7 @@ type TestCover struct {
 // their dependencies have errors.
 // Only test packages without errors are returned.
 func TestPackagesFor(ld *modload.Loader, ctx context.Context, opts PackageOpts, p *Package, cover *TestCover) (testMain, withTests, extTests, perr *Package) {
-	if cfg.EmbeddedStd && p.Standard {
+	if cfg.EmbeddedStd && !cfg.EmbeddedStdTree && p.Standard {
 		p.Error = &PackageError{Err: fmt.Errorf("%s: the standard library is embedded in this go command as compiled archives and cannot be tested; test it from a GOROOT source tree", p.ImportPath)}
 		return nil, nil, nil, p
 	}
