@@ -21,9 +21,17 @@ A file the zip carries keeps the zip's bytes, whatever a generator wrote over it
 
 A directive that fails stops the build and names the package. Some failures belong to this machine rather than to the module. A directive naming a program that is not installed is skipped. A host with no sandbox backend fails with a message that says so.
 
+## A completion that breaks the module is discarded
+
+A generator can write a file under a name the module does not carry, declaring what a published file already declares. `github.com/charmbracelet/x/ansi` does: its `parser` package ships `transition_table.go` with `var Table`, and `gen.go` writes `table.go` with another. A module completed that way compiles for nobody.
+
+So the packages the added Go files joined are built before those files are copied into the module cache, in the staged tree restored to the published bytes. A build that fails is repeated over the published tree alone. A package that fails both ways is not one the completion broke, and it keeps its added files: a host that cannot build at all reads the same way. A package that built before and not after loses the addition, and the module stays exactly as its zip published it. The rejection and what it broke go to stderr.
+
+`keepCompletion` in `cmd/go/internal/gendep/verify.go` is the rule. Which directive wrote which file is not part of it: what a generator emits is knowable only by running it.
+
 ## The overlay cache
 
-The files the generators add are stored in the build cache as the module's overlay. The key is the module path, its version and its base zip's checksum. A module cache that has never fetched the module takes the files from there instead of running anything. An answer that skipped a directive for a missing program is marked partial and is never stored. Such an answer describes this machine, not the module.
+The files the generators add are stored in the build cache as the module's overlay. The key is the module path, its version and its base zip's checksum, under `overlayVersion`. That constant names how a module is completed. A change to the completion rule is a new version, which puts every entry an older rule stored out of reach and completes every module again. A module cache that has never fetched the module takes the files from there instead of running anything. An answer that skipped a directive for a missing program is marked partial and is never stored. Such an answer describes this machine, not the module.
 
 A second run that produces different files for one key stops the build and names the file that differs.
 

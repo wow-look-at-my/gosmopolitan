@@ -10,12 +10,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"cmd/go/internal/cache"
 	"cmd/go/internal/gendep"
 
 	"golang.org/x/mod/module"
@@ -237,6 +239,27 @@ func TestOverlayKeyNamesWhatItCompletes(test *testing.T) {
 	slices.Sort(keys)
 	if len(slices.Compact(keys)) != len(others) {
 		test.Errorf("two of the %d differing inputs share a key", len(others))
+	}
+}
+
+// The version names how a module is completed, so every entry an earlier rule
+// stored is out of reach: its key is another key, and its body is refused if
+// anything hands it over anyway.
+func TestOverlayVersionRetiresTheEntriesBeforeIt(test *testing.T) {
+	mod := module.Version{Path: "example.com/m", Version: "v1.2.3"}
+	base := validSum('a')
+	for _, was := range []string{"overlay v3", "overlay v4"} {
+		if was == overlayVersion {
+			test.Fatalf("%q is the version in force, so it retires nothing", was)
+		}
+		hashed := cache.NewHash("modzip")
+		fmt.Fprintf(hashed, "%s\n%s\n%s\n%s\n", was, mod.Path, mod.Version, base)
+		if hashed.Sum() == overlayKey(mod, base) {
+			test.Errorf("an entry stored under %q is read back under the key in force", was)
+		}
+		if _, err := decodeOverlay([]byte(was + " " + base + "\n")); err == nil {
+			test.Errorf("an entry bodied as %q was decoded as one of this version", was)
+		}
 	}
 }
 
