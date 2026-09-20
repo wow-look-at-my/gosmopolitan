@@ -246,6 +246,8 @@ Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.
 
 **An org dependency is never pinned to a version.** Not in `go.mod`. Not in a gitlink. Not in `vendor/modules.txt`. A pin freezes one repository against a commit of another and calls the result reproducible. What it reproduces is a build nobody can fix from here. The cache client's pin is what broke `cmd/go`: `shared.go` named counters the pinned commit did not carry. `go_bootstrap install cmd/go` then failed, and no toolchain built. An org module records a placeholder version instead, `vN.0.0` for the major version of its path. The go command resolves that placeholder in memory, to the head of a branch. It takes this repository's branch when the dependency has one. It takes the dependency's default branch otherwise. A detached HEAD, or a main module with no git repository, takes the default branch too. Every `wow-look-at-my` submodule follows a branch the same way. `submodulebranch.bash` names that branch, then runs `git submodule update --init --remote`. make.bash, make.bat and CI all call it, and `branch = master` in `.gitmodules` is the fallback. A third-party dependency keeps its version.
 
+**A dependency's generators run only for this org.** `cmd/go` completes a fetched module by running its `//go:generate` directives (`cmd/go/internal/gendep`). A directive is a command its author wrote. This machine runs it unread. A module under `github.com/wow-look-at-my/` completes that way, because that author is this fleet. Every other module runs nothing. It asks with a whole-line `//go:gendep` comment in its own `go.mod`. A skip is named on stderr, not left to surface later as an undeclared symbol. Depth: docs/GENDEP.md.
+
 **A failure is fixed, never concealed.** There is no transient failure. A test that passes on the second run is broken on the first, and re-running it is not a repair. So `-count=1` is a no-op here, and clearing a cache is never the answer to a wrong result. A cache that serves a wrong answer has a key missing an input. Name that input and put it in the key. Never retry, never re-run, never widen a timeout, never mark a check flaky, never delete state to move past it. Find what is actually wrong and repair it.
 
 **`awk` and `sed` are not permitted.** Neither in a script, a workflow step, nor a one-off command. Each carries its own grammar, and that grammar edits what you did not ask it to. `sed -i` takes a mandatory backup suffix on BSD and none on GNU. One invocation cannot mean the same thing on both runners. `awk` rebuilds the whole line out of `OFS` as soon as you assign to a field. So a version rewrite stripped the leading tab from two `go.mod` require lines, and nothing failed. The shell reads a line and puts back every part of it untouched. Use it, or use the file's own tool.
@@ -279,11 +281,13 @@ This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr
 - **Timeline attribution.** Ready-for-review, auto-merge, and merge events show the bot as the *actor* even when the repository owner initiated them by applying the label. Judge intent by the PR's `labeled` timeline events (who applied `auto-pr-merge`), not by the executor of the follow-on events. Symmetrically, the bot re-enforces state it was told to arm: reverting it (e.g. flipping the PR back to draft) is counter-flipped within seconds — a durable change needs the owner to.
 - **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only merges when its head SHA carries a green `all-builds` commit status — posted.). Do not name any CI job `all-builds`: an org guard fails workflows that define one, because the status context is reserved for the aggregator.
 
-## Shared build cache: the client is linked into `cmd/go`
+## Shared build cache: the cache IS `cacheclient`
 
-The org's shared build cache is reached in process. `cmd/go` requires `github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from `cmd/go/internal/cache/shared.go`, which layers a network tier under the disk cache: disk stays authoritative. The shared tier is.
+The cache lives in `github.com/wow-look-at-my/go-s3-server/cacheclient`. It holds the directory on disk. It holds the store under that directory. It holds the broker that gives one build a single owner for both. `cmd/go/internal/cache` names those types for the go command. It adds the action hash and the mapped read. It adds nothing else, and no second cache belongs here.
 
-`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
+One build has one owner. The first go command opens the directory and serves it over shared memory (go-ipc) to every command it starts. A child holds no directory, no key index and no connection. It asks the owner, then opens the file the owner names. So the trim has one writer, which is what makes `Cache.Close`'s cross-process invariant enforceable.
+
+`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the store and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
 **No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. The paths below are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
@@ -291,6 +295,9 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 |---|---|
 | `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-ipc` | the broker's shared-memory transport |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-shm` | go-ipc's named segments |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-mmap` | go-shm's mapping |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 | `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
