@@ -20,6 +20,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/load"
+	"cmd/go/internal/modfetch"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/search"
 	"cmd/go/internal/trace"
@@ -895,6 +896,15 @@ func installOutsideModule(ld *modload.Loader, ctx context.Context, args []string
 	modload.Init(ld)
 	BuildInit(ld)
 
+	patterns := make([]string, len(args))
+	for i, arg := range args {
+		patterns[i] = arg[:strings.Index(arg, "@")]
+	}
+	// Named before the load below fetches anything, because the fetch is what
+	// completes a module, and the module providing these packages is the one
+	// that cannot complete. See modfetch.completingSelf.
+	modfetch.InstallTargets = patterns
+
 	// Load packages. Ignore non-main packages.
 	// Print a warning if an argument contains "..." and matches no main packages.
 	// PackagesAndErrors already prints warnings for patterns that don't match any
@@ -907,10 +917,6 @@ func installOutsideModule(ld *modload.Loader, ctx context.Context, args []string
 		base.Fatal(err)
 	}
 	load.CheckPackageErrors(pkgs)
-	patterns := make([]string, len(args))
-	for i, arg := range args {
-		patterns[i] = arg[:strings.Index(arg, "@")]
-	}
 
 	// Build and install the packages.
 	InstallPackages(ld, ctx, patterns, pkgs)

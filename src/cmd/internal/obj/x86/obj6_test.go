@@ -72,6 +72,10 @@ func parseTestData(t *testing.T) *ParsedTestData {
 		}
 		marker++
 	}
+	// A case left unread is a case left untested, which reads as a pass.
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading test data: %v", err)
+	}
 	r.input = "TEXT ·foo(SB),$0\n" + strings.Join(input_insns, "\n") + "\n"
 	return r
 }

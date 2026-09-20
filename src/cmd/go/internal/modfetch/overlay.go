@@ -37,7 +37,7 @@ import (
 // to how a module is completed, is a new version, and every module is completed
 // again under it. A build that completes a module differently but reads the
 // entries an older one stored serves that older answer to the whole fleet.
-const overlayVersion = "overlay v3"
+const overlayVersion = "overlay v4"
 
 // overlayKey is the cache key of the overlay of mod whose base zip has checksum
 // baseSum. An org module has no checksum: its pseudo-version names its commit.
@@ -74,15 +74,51 @@ func decodeOverlay(body []byte) (*overlayEntry, error) {
 	return &overlayEntry{sum: fields[2], zip: body[nl+1:]}, nil
 }
 
+// InstallTargets are the package paths of a `go install pkg@version`, set
+// before anything is fetched. See completingSelf.
+var InstallTargets []string
+
+// completingSelf reports whether mod provides a package this command is
+// installing. Completing such a module cannot terminate: completing
+// golang.org/x/tools runs the stringer directive it carries, and stringer is
+// the program being installed from it. The generator lives in the module that
+// needs it, so there is no order in which the module is ready first.
+func completingSelf(mod module.Version) bool {
+	for _, target := range InstallTargets {
+		if target == mod.Path || strings.HasPrefix(target, mod.Path+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// Superseded reports whether a replacement stands in for mod. modload sets it,
+// because the replace directives belong to the main module and this package
+// reads none of them.
+var Superseded func(mod module.Version) bool
+
 // completeDir completes the module extracted at dir: it adds the files the
 // module's own generators write, from the cache when the cache holds them and
 // by running the generators when it does not.
 func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir string) error {
+	// A replaced module is fetched for what its go.mod says. The build compiles
+	// the replacement instead, so nothing here reads what these generators write.
+	if Superseded != nil && Superseded(mod) {
+		overlayDebugf("modfetch: %s@%s: a replacement stands in for it, so its generators do not run", mod.Path, mod.Version)
+		return nil
+	}
 	// A module that carries no directive completes to itself. Asking this first
 	// keeps the build cache out of the fetch of every such module, and `go mod
 	// download` needs no build cache to fetch one.
 	pkgs := gendep.Packages(dir)
 	if len(pkgs) == 0 {
+		return nil
+	}
+	// The one module that cannot complete. Said out loud, because the package
+	// installed from it is built from the zip alone: whatever its own
+	// generators would have added is missing.
+	if completingSelf(mod) {
+		fmt.Fprintf(os.Stderr, "go: %s@%s provides the program being installed, so its own generators do not run\n", mod.Path, mod.Version)
 		return nil
 	}
 	key := overlayKey(mod, recordedZipHash(ctx, mod))
@@ -98,9 +134,16 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 		return recordComplete(ctx, mod, dir)
 	}
 
-	added, err := gendep.Complete(dir, mod.Path, pkgs)
+	added, partial, err := gendep.Complete(dir, mod.Path, pkgs)
 	if err != nil {
 		return fmt.Errorf("generating %s@%s: %w", mod.Path, mod.Version, err)
+	}
+	// A partial answer is a fact about this machine's installed programs. The
+	// key names neither, so storing one would serve it to every machine that
+	// asks, including the machines that can produce the whole answer.
+	if partial {
+		overlayDebugf("modfetch: %s@%s: completed without a program this host lacks, so nothing is stored", mod.Path, mod.Version)
+		return recordComplete(ctx, mod, dir)
 	}
 	overlay, err := packOverlay(mod, dir, added)
 	if err != nil {

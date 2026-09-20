@@ -285,13 +285,14 @@ The org's shared build cache is reached in process. `cmd/go` requires `github.co
 
 `GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the tier and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
-**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. The paths below are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
 | vendor path | repository |
 |---|---|
 | `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
+| `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
 Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
@@ -325,6 +326,10 @@ Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost 
 ## Editor tooling (gopls)
 
 gopls parses with the `go/*` packages of the toolchain that builds it. It must therefore be built by THIS one. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
+
+## Enum types
+
+docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped members, backquoted tags, exhaustive switches, checked conversion. What the compiler carries is a partial front end for an earlier shape. `type T enum int` marks a named integer type. A constant of that type takes a trailing string literal as its display text. types2 declares `String() string` on the type. No body is generated, so a program declaring an enum type-checks and then fails at link.
 
 ## Loop-aware inlining (all targets)
 

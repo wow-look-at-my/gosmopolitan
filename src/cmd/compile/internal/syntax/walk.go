@@ -83,6 +83,9 @@ func (w walker) node(n Node) {
 		if n.Values != nil {
 			w.node(n.Values)
 		}
+		if n.Text != nil {
+			w.node(n.Text)
+		}
 
 	case *TypeDecl:
 		w.node(n.Name)
