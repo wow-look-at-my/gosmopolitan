@@ -34,10 +34,12 @@ tests:
 	  cmd: export PATH="$PWD/bin:$PATH" GOROOT="$PWD"; go tool dist stamp 1.27.0
 	  exit: 2
 
-	# A stamp relinks what the build installed. A tree that moved under those
-	# binaries has no relink to do -- the install would build the toolchain a
-	# second time, which is the cost the stamp exists to stay under.
-	- desc: dist stamp refuses a tree that moved under the built binaries
+	# -ldflags reaches the link action ID alone, so a stamp never invalidates a
+	# compile the build cache already holds. What DOES compile is a package the
+	# cache could not serve, or one whose source moved after the build, and the
+	# stamp names every one of them rather than absorbing it into a quiet
+	# publish. A moved tree is the case this can produce on demand.
+	- desc: dist stamp names the package it had to compile
 	  cmd: |
 		set -eu
 		src="$PWD"
@@ -52,4 +54,8 @@ tests:
 		printf '\n// the tree moves under the binaries\n' >> "$root/src/cmd/go/internal/version/version.go"
 		go tool dist stamp "$(go env GOVERSION).rmoved"
 	  timeout: 10m
-	  exit: 2
+	  exit: 0
+	  outputs:
+		stdout:
+			- "the build cache did not answer"
+			- cmd/go/internal/version

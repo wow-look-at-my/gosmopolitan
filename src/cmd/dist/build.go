@@ -2044,7 +2044,8 @@ func cmdversion() {
 
 // cmdstamp gives a built toolchain a new version. It rewrites $GOROOT/VERSION
 // and relinks the installed binaries with the same string, so only the link
-// steps run again and the compile steps stay as the build left them.
+// steps run again and the compile steps stay as the build left them. See
+// stampInstall for why the compile steps cannot run again.
 //
 // A release is SELECTED by this version: distpack names the tarball and the
 // toolchain module for $GOROOT/VERSION, and a go command switching to that
@@ -2065,13 +2066,6 @@ func cmdstamp() {
 	if _, err := os.Stat(pathf("%s/bin/go%s", goroot, exe)); err != nil {
 		fatalf("stamp: %v\nBuild the toolchain before you stamp it.", err)
 	}
-
-	// A stamp moves the linker flags and nothing a compile reads, so the
-	// install below relinks and takes every package from the build cache. That
-	// holds only while the installed binaries are the ones this tree builds: a
-	// tree that moved under them fails here, rather than quietly turning the
-	// stamp into a second build of the toolchain.
-	checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
 
 	// appendCompilerFlags passes these on the command line, which replaces the
 	// -ldflags toolenv puts in GOFLAGS whole, so carry that -w here as well.
@@ -2102,11 +2096,15 @@ func cmdstamp() {
 }
 
 // stampInstall reinstalls the binaries a stamp relinks, and names what the
-// install had to compile. The stale check above is what keeps a stamp from
-// building the toolchain a second time; a package compiled here is one the
-// shared cache lost or could not serve, and re-doing it is the only way to
-// link. Naming them is how a cache that stops answering shows up as something
-// other than a slow publish.
+// install had to compile.
+//
+// A stamp cannot turn into a second build of the toolchain. cmd/go hashes
+// -ldflags into the LINK action ID alone (linkActionID), and a compile action
+// ID reads none of it, so moving the version leaves every compile already in
+// the cache valid. A package compiled here is one the cache lost or could not
+// serve, or one whose source moved after the build; re-doing it is the only
+// way to link. Naming them is how either shows up as something other than a
+// slow publish.
 func stampInstall() {
 	cmd := []string{goInstaller(), "install"}
 	if noOpt {
