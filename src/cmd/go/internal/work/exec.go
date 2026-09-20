@@ -1557,9 +1557,9 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 		// We need to retrieve them all, or none:
 		// the effect must be transactional.
 		var (
-			vetxFile   string                           // name of cached .vetx file
-			fixArchive string                           // name of cached .fix.zip file
-			stdout     io.Reader = bytes.NewReader(nil) // cached stdout stream
+			vetxFile   string    // name of cached .vetx file
+			fixArchive string    // name of cached .fix.zip file
+			stdout     io.Reader // cached stdout stream
 		)
 
 		// Obtain location of cached .vetx file.
@@ -1577,15 +1577,19 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 			fixArchive = file
 		}
 
-		// Copy cached .stdout file to stdout.
-		if file, _, err := cache.GetFile(c, stdoutKey); err == nil {
-			f, err := os.Open(file)
-			if err != nil {
-				goto cachemiss
-			}
-			defer f.Close() // ignore error (can't fail)
-			stdout = f
+		// Obtain the cached .stdout file. Every run stores one, empty or not,
+		// so a key this store cannot answer is a miss rather than a run that
+		// reports nothing.
+		stdoutFile, _, err := cache.GetFile(c, stdoutKey)
+		if err != nil {
+			goto cachemiss
 		}
+		cached, err := os.Open(stdoutFile)
+		if err != nil {
+			goto cachemiss
+		}
+		defer cached.Close() // ignore error (can't fail)
+		stdout = cached
 
 		// Cache hit: commit transaction.
 		a.built = vetxFile
@@ -1642,15 +1646,19 @@ cachemiss:
 		}
 	}
 
-	// Save stdout.
-	if f, err := os.Open(vcfg.Stdout); err == nil {
-		defer f.Close() // ignore error
-		if err := VetHandleStdout(f); err != nil {
-			return err
-		}
-		f.Seek(0, io.SeekStart)     // ignore error
-		a.cache().Put(stdoutKey, f) // ignore error
+	// Save stdout. A run that wrote none stores an empty entry, so the key
+	// answers for every run and its absence means the store lost it.
+	f, openErr := os.Open(vcfg.Stdout)
+	if openErr != nil {
+		cache.PutBytes(a.cache(), stdoutKey, nil) // ignore error
+		return nil
 	}
+	defer f.Close() // ignore error
+	if err := VetHandleStdout(f); err != nil {
+		return err
+	}
+	f.Seek(0, io.SeekStart)     // ignore error
+	a.cache().Put(stdoutKey, f) // ignore error
 
 	return nil
 }
