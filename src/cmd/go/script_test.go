@@ -260,7 +260,6 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		// every credential a script stores, and the keychain prompts for it.
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + os.DevNull,
-		"GOTOOLCHAIN=auto",
 		"newline=\n",
 	}
 

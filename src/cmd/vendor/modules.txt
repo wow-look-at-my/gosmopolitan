@@ -1,3 +1,6 @@
+# github.com/davecgh/go-spew v1.1.1
+## explicit
+github.com/davecgh/go-spew/spew
 # github.com/google/pprof v0.0.0-20260507013755-92041b743c96
 ## explicit; go 1.24.0
 github.com/google/pprof/driver
@@ -33,12 +36,23 @@ github.com/pierrec/lz4/v4/internal/lz4block
 github.com/pierrec/lz4/v4/internal/lz4errors
 github.com/pierrec/lz4/v4/internal/lz4stream
 github.com/pierrec/lz4/v4/internal/xxh32
+# github.com/pmezard/go-difflib v1.0.0
+## explicit
+github.com/pmezard/go-difflib/difflib
+# github.com/stretchr/testify v1.12.1
+## explicit; go 1.17
+github.com/stretchr/testify/assert
+github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/require
 # github.com/wow-look-at-my/go-containers v0.0.0
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-containers/set
 # github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-s3-server/cacheclient
+# go.yaml.in/yaml/v3 v3.0.5
+## explicit; go 1.16
+go.yaml.in/yaml/v3
 # golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97
 ## explicit; go 1.25.0
 golang.org/x/arch/arm/armasm

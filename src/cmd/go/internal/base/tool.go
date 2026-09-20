@@ -64,7 +64,7 @@ func Linked(toolName string) bool {
 // process.
 func Tool(toolName string) string {
 	toolPath, err := ToolPath(toolName)
-	if err != nil && len(cfg.BuildToolexec) == 0 {
+	if err != nil {
 		// Give a nice message if there is no tool with that name.
 		fmt.Fprintf(os.Stderr, "go: no such tool %q\n", toolName)
 		SetExitStatus(2)

@@ -38,6 +38,16 @@ var cfgChangedEnv []string
 
 func makeCfgChangedEnv() []string {
 	var env []string
+	// The compiler and the assembler read GOROOT through internal/buildcfg,
+	// and they take it from their environment. Naming the tree this go
+	// command derived keeps a value from outside out of them: this entry
+	// comes after the inherited one, and os/exec keeps the last. See
+	// findGOROOT. The go command does not set GOROOT for a program that
+	// `go run` or `go test` starts, so that a dependency on the variable
+	// shows itself there.
+	if cfg.GOROOT != "" {
+		env = append(env, "GOROOT="+cfg.GOROOT)
+	}
 	if cfg.Getenv("GOOS") != cfg.Goos {
 		env = append(env, "GOOS="+cfg.Goos)
 	}

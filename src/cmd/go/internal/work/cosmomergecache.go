@@ -23,7 +23,7 @@ import (
 
 // cosmoMergeSidecars names the sidecars a merge may write beside its output,
 // by the cache subkey each is stored under.
-var cosmoMergeSidecars = []string{".dbg", ".aarch64.elf"}
+var cosmoMergeSidecars = []string{".dbg"}
 
 // cosmoMergeID computes the cache key of a merge: the linker's ID, the
 // payloads' content, the blob's content and the remaining flags. A payload
