@@ -200,6 +200,11 @@ func clobber(t *testing.T, src string, dst *os.File, opcodes map[string]bool) {
 			virtualEdits[addr+uint64(i)] = true
 		}
 	}
+	// An instruction left unread is an instruction left unclobbered, and the
+	// test then reports that nothing newer than the baseline was used.
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading disassembly: %v", err)
+	}
 
 	// Figure out where in the binary the edits must be done.
 	physicalEdits := map[uint64]bool{}

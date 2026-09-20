@@ -171,7 +171,6 @@ func main() {
 	ape := filepath.Join(dir, "prog.com")
 	build(ape, "GOOS=cosmo", "GOARCH=amd64")
 	checkDebugSectionCodec(t, ape+".dbg", elf.COMPRESS_ZSTD)
-	checkDebugSectionCodec(t, ape+".aarch64.elf", elf.COMPRESS_ZSTD)
 
 	host := filepath.Join(dir, "prog.linux")
 	build(host, "GOOS=linux", "GOARCH=amd64")

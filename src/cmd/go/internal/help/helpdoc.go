@@ -398,8 +398,8 @@ var HelpGopath = &base.Command{
 	Short:     "GOPATH environment variable",
 	Long: `
 The GOPATH environment variable is used to change the default
-location to store the module cache and installed binaries, if
-not overridden by GOMODCACHE and GOBIN respectively.
+location to store the module cache and installed binaries.
+GOMODCACHE overrides the module cache location.
 
 Most users don't need to explicitly set GOPATH.
 If the environment variable is unset, GOPATH defaults
@@ -413,7 +413,7 @@ GOPATH/pkg/mod. If GOMODCACHE is set, it will be used
 as the directory to store the module cache instead.
 
 Executables installed using 'go install' are placed in the
-directory specified by GOPATH/bin or, if GOBIN is set, by GOBIN.
+directory specified by GOPATH/bin.
 
 GOPATH mode
 
@@ -455,9 +455,7 @@ the final element, not the entire path. That is, the
 command with source in DIR/src/foo/quux is installed into
 DIR/bin/quux, not DIR/bin/foo/quux. The "foo/" prefix is stripped
 so that you can add DIR/bin to your PATH to get at the
-installed commands. If the GOBIN environment variable is
-set, commands are installed to the directory it names instead
-of DIR/bin. GOBIN must be an absolute path.
+installed commands.
 
 Here's an example directory layout:
 
@@ -568,8 +566,6 @@ General-purpose environment variables:
 	GOAUTH
 		Controls authentication for go-import and HTTPS module mirror interactions.
 		See 'go help goauth'.
-	GOBIN
-		The directory where 'go install' will install a command.
 	GOCACHE
 		The directory where the go command will store cached
 		information for reuse in future builds. Must be an absolute path.
@@ -620,8 +616,6 @@ General-purpose environment variables:
 		Overrides the platform-specific temporary directory such as "/tmp".
 		The go command and testing package will write temporary source files,
 		packages, and binaries here.
-	GOTOOLCHAIN
-		Controls which Go toolchain is used. See https://go.dev/doc/toolchain.
 	GOVCS
 		Lists version control commands that may be used with matching servers.
 		See 'go help vcs'.

@@ -967,6 +967,11 @@ func readFuncLines(file string, start, end uint) (*ssa.FuncLines, error) {
 		}
 		ln++
 	}
+	// A read that stopped short leaves a listing missing its tail, which reads
+	// as a shorter function rather than as a failure to read one.
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 	return &ssa.FuncLines{Filename: file, StartLineno: start, Lines: lines}, nil
 }
 

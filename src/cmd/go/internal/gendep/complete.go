@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode"
 
 	"cmd/go/internal/base"
 
@@ -47,75 +48,69 @@ const generatePrefix = "//go:generate"
 // answers the added files, in slash form relative to modroot and sorted, or
 // nothing when the module carries no directive at all.
 //
-// Each package that carries a directive generates on its own, in path order, so
-// one package's broken directive costs that package alone. What a failed run
-// wrote is deleted: a half-generated package compiles against files its
-// generator never finished, which is worse than the empty package the zip
-// carried. Every other package keeps what it wrote.
+// Each package that carries a directive generates on its own, in path order. A
+// directive that fails stops the build. The module asked for that file, so a
+// build that continues without it is compiling a module nobody wrote. What it
+// reports is the symbol the missing file defines, named at the first line that
+// uses it, which is nowhere near the generator that never ran.
 //
-// A host that cannot confine a generator, cannot start one the go command built,
-// or lacks a program a directive names, says nothing about the module and stops
-// the build: building past it hands every consumer a package whose generated
-// half is missing.
-func Complete(modroot, mod string, pkgs []string) ([]string, error) {
+// A directive naming a program this machine lacks is the exception, and the
+// answer is partial when one is skipped. A partial answer belongs to this
+// machine rather than to the module, so a caller keeps it out of any store the
+// fleet reads.
+func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
 	if len(pkgs) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	stage := modroot + ".generate"
 	if err := removeAll(stage); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer removeAll(stage)
 	// The generator runs in a fresh copy of the fetched module, never in the
 	// tree other builds are compiling from. What it wrote reaches that tree
 	// only once it has succeeded.
 	if err := copyTree(modroot, stage); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	synthesized, err := giveGoMod(stage, mod)
 	if err != nil {
-		return nil, err
-	}
-	kept, err := additions(modroot, stage)
-	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, pkg := range pkgs {
-		runErr := runGenerate(stage, pkg)
-		grown, err := additions(modroot, stage)
-		if err != nil {
-			return nil, err
-		}
-		if runErr == nil {
-			kept = grown
+		if gone := generatorNotShipped(stage, pkg); gone != "" {
+			fmt.Fprintf(os.Stderr, "go: %s in %s names %s, which its module zip does not carry\n", mod, pkg, gone)
 			continue
 		}
-		if hostCannotGenerate(runErr) {
-			return nil, runErr
+		err := runGenerate(stage, pkg)
+		if err == nil {
+			continue
 		}
-		// A module zip drops every path the go command ignores, `_codegen`
-		// among them, so a generator kept beside the package it writes is
-		// absent from what a consumer fetches. testify ships one, and ships
-		// its generated files too, so the build needs nothing from it.
-		//
-		// The module's own bytes decide which package fails, so every machine
-		// reaches the same tree.
-		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, runErr)
-		fmt.Fprintf(os.Stderr, "go: %s keeps what its other packages generated\n", mod)
-		for _, rel := range appeared(grown, kept) {
-			if err := os.Remove(filepath.Join(stage, filepath.FromSlash(rel))); err != nil {
-				return nil, err
-			}
+		// A program this machine lacks says nothing about the module, and the
+		// modules that name stringer or yy ship what those write. So the
+		// directive is skipped and the answer is marked partial, which keeps it
+		// out of the cache the fleet reads. A machine that has the program
+		// stores the whole answer.
+		if programMissing(err) {
+			fmt.Fprintf(os.Stderr, "go: %s in %s: %v\n", mod, pkg, err)
+			partial = true
+			continue
 		}
+		// Nothing generates on a host with no sandbox, or one that cannot start
+		// what the go command built. Both name a machine to fix.
+		if hostCannotGenerate(err) {
+			return nil, false, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
+		}
+		return nil, false, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	added, err := additions(modroot, stage)
+	added, err = additions(modroot, stage)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if drop := superseded(modroot, stage, added); len(drop) > 0 {
 		fmt.Fprintf(os.Stderr, "go: %s declares what %v generated, so the module's own files stand\n", mod, drop)
@@ -126,10 +121,10 @@ func Complete(modroot, mod string, pkgs []string) ([]string, error) {
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return added, nil
+	return added, partial, nil
 }
 
 // additions answers the regular files under stage that modroot does not have,
@@ -157,22 +152,6 @@ func additions(modroot, stage string) ([]string, error) {
 	}
 	sort.Strings(added)
 	return added, nil
-}
-
-// appeared answers the entries of grown that kept does not have. Both are
-// sorted.
-func appeared(grown, kept []string) []string {
-	had := make(map[string]bool, len(kept))
-	for _, rel := range kept {
-		had[rel] = true
-	}
-	var out []string
-	for _, rel := range grown {
-		if !had[rel] {
-			out = append(out, rel)
-		}
-	}
-	return out
 }
 
 // Packages answers the directories under modroot that carry a generate
@@ -254,9 +233,96 @@ func directives(files []string) int {
 			}
 			count++
 		}
+		// A line past the buffer ends the read, and the directives under it go
+		// uncounted. A count short by one is a module that completes without
+		// the file that directive writes.
+		if err := scan.Err(); err != nil {
+			base.Fatalf("go: reading %s: %v", file, err)
+		}
 		open.Close()
 	}
 	return count
+}
+
+// generatorNotShipped answers the path a directive of pkg names that the module
+// does not carry, or "" when every path it names is present.
+//
+// The go command drops a directory whose name opens with an underscore from a
+// module zip, so a generator kept beside the package it writes reaches no
+// consumer. testify ships one at _codegen. Running the directive is impossible
+// for anyone who fetched the module, so the module ships what that directive
+// writes as well, and a consumer needs nothing from it.
+//
+// This asks what the module carries rather than what a run did. A directive
+// that CAN run and fails is the module's own defect, and it stops the build.
+func generatorNotShipped(stage, pkg string) string {
+	dir := filepath.Join(stage, filepath.FromSlash(pkg))
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, ent := range names {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
+			continue
+		}
+		open, err := os.Open(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			continue
+		}
+		scan := bufio.NewScanner(open)
+		scan.Buffer(nil, 1<<20)
+		for scan.Scan() {
+			line := strings.TrimSpace(scan.Text())
+			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
+				continue
+			}
+			if gone := missingDroppedPath(stage, dir, line); gone != "" {
+				open.Close()
+				return gone
+			}
+		}
+		// A read that stopped short hides the rest of the directives, and a
+		// dropped path among them then reads as a package with none.
+		if err := scan.Err(); err != nil {
+			base.Fatalf("go: reading %s: %v", filepath.Join(dir, ent.Name()), err)
+		}
+		open.Close()
+	}
+	return ""
+}
+
+// missingDroppedPath answers the first path in line that names an
+// underscore-prefixed segment and is absent from the tree, or "".
+//
+// The path can sit inside a quoted shell program, so this reads runs of path
+// characters rather than shell words.
+func missingDroppedPath(stage, dir, line string) string {
+	for _, word := range strings.FieldsFunc(line, func(r rune) bool {
+		return !strings.ContainsRune("./_-", r) && !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if !droppedFromZip(word) {
+			continue
+		}
+		at := filepath.Join(dir, filepath.FromSlash(word))
+		if !filepath.IsLocal(word) {
+			at = filepath.Join(stage, filepath.FromSlash(strings.TrimPrefix(word, "../")))
+		}
+		if _, err := os.Lstat(at); errors.Is(err, fs.ErrNotExist) {
+			return word
+		}
+	}
+	return ""
+}
+
+// droppedFromZip reports whether path names a segment the go command leaves out
+// of a module zip.
+func droppedFromZip(path string) bool {
+	for seg := range strings.SplitSeq(path, "/") {
+		if len(seg) > 1 && seg[0] == '_' {
+			return true
+		}
+	}
+	return false
 }
 
 // hostCannotGenerate reports whether err is a fact about this host rather than
@@ -269,9 +335,12 @@ func hostCannotGenerate(err error) bool {
 // programMissing reports whether err says a directive named a program this
 // machine does not have.
 //
-// That is the environment's own gap, not the module's. Skipping the directive
-// would hand this build a module that the same version elsewhere does not
-// match, so the build stops and names what to install instead.
+// That is the environment's own gap, not the module's, and the set of programs
+// a dependency tree names has no bound: stringer and yy arrive through
+// modernc.org and x/tools without either naming them to anybody. Each of those
+// modules ships what its directives write, so a consumer needs none of them.
+// The directive is skipped and the answer is marked partial, which keeps a
+// machine's installed programs out of what the fleet reads.
 func programMissing(err error) bool {
 	if err == nil {
 		return false
@@ -352,7 +421,6 @@ func runGenerate(root, pkg string) error {
 	// command carrying its standard library can build. Every target reads
 	// that single completed module.
 	cmd.Env = append(os.Environ(),
-		"GOTOOLCHAIN=local",
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
 	)

@@ -18,9 +18,8 @@ import (
 // tools: argv names a linked tool, by the program's base name or as
 // "tool <name>", and Run answers that tool's exit status; otherwise argv is a
 // go command line, the linked tools start as "<self> tool <name>", and a
-// standard library carried in this executable is the GOROOT when the
-// environment names none. A go command line exits the process itself, so
-// Run returns from it only for "go help".
+// standard library carried in this executable is the GOROOT. A go command
+// line exits the process itself, so Run returns from it only for "go help".
 func Run(argv []string) int {
 	return RunAs(argv, nil)
 }
@@ -37,7 +36,11 @@ func RunAs(argv []string, goCommand []string) int {
 		if len(goCommand) > 0 {
 			base.SetGoCommand(goCommand)
 		}
-		if gorootNamesSelf(os.Getenv("GOROOT"), exe) && embedded.Available() {
+		// A carried standard library is the one this command builds
+		// against. The environment does not select between it and a tree:
+		// that is what made a GOROOT from outside able to replace the
+		// standard library of a binary that ships its own.
+		if embedded.Available() {
 			cfg.UseEmbeddedStd(exe)
 		}
 		publishGoCommand()
@@ -62,16 +65,4 @@ func publishGoCommand() {
 		return
 	}
 	os.Setenv(goCommandEnv, strings.Join(argv, "\n"))
-}
-
-// gorootNamesSelf reports that goroot leaves the standard library to this
-// executable: it is unset, or it names a file rather than a tree. A parent
-// names this program by the path it started it under, and a child sees its
-// own path, which is a link to or a copy of the same binary on some hosts.
-func gorootNamesSelf(goroot, exe string) bool {
-	if goroot == "" || goroot == exe {
-		return true
-	}
-	fi, err := os.Stat(goroot)
-	return err == nil && !fi.IsDir()
 }

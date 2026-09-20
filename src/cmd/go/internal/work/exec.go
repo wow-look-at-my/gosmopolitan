@@ -318,6 +318,49 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	writeActionGraph()
 }
 
+// packageOriginKey returns the action-ID lines naming where a package was
+// built from. A compiled object can embed that directory, so a tree at
+// another path must not reuse an entry keyed without it.
+func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
+	if trimpath {
+		// With -trimpath a package from the module cache reports the module
+		// path and version in place of the directory.
+		if pkg.Module != nil {
+			return fmt.Sprintf("module %s@%s\n", pkg.Module.Path, pkg.Module.Version)
+		}
+		return ""
+	}
+
+	if pkg.Goroot {
+		// The Go compiler always hides the exact value of $GOROOT when it
+		// builds something in GOROOT. The C compiler does not, so ccompile
+		// passes -ffile-prefix-map for a GOROOT package, which rewrites the
+		// path as though -trimpath were set. Neither leaves a directory in
+		// the output, so GOROOT itself stays out of the key.
+		//
+		// cgo is the exception, and this cache is shared between machines.
+		// cgo writes a //line naming this directory into the Go file it
+		// generates (go.dev/issue/36072), so that output belongs to one
+		// GOROOT. A tree at another path that reused it handed cmd/vet a
+		// path holding no file, and the cgocall pass answered "can't parse
+		// raw cgo file".
+		if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+			return fmt.Sprintf("cgo dir %s\n", pkg.Dir)
+		}
+		return ""
+	}
+
+	if strings.HasPrefix(pkg.Dir, workDir) {
+		// workDir is always either trimmed or rewritten to the literal
+		// string "/tmp/go-build".
+		return ""
+	}
+
+	// No rewrite rule applies, so the object file can name the absolute
+	// directory holding the package.
+	return fmt.Sprintf("dir %s\n", pkg.Dir)
+}
+
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	// Hashing every input of a package is not free, and it is work no other
@@ -338,33 +381,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 	// Include information about the origin of the package that
 	// may be embedded in the debug info for the object file.
-	if cfg.BuildTrimpath {
-		// When -trimpath is used with a package built from the module cache,
-		// its debug information refers to the module path and version
-		// instead of the directory.
-		if p.Module != nil {
-			fmt.Fprintf(h, "module %s@%s\n", p.Module.Path, p.Module.Version)
-		}
-	} else if p.Goroot {
-		// The Go compiler always hides the exact value of $GOROOT
-		// when building things in GOROOT.
-		//
-		// The C compiler does not, but for packages in GOROOT we rewrite the path
-		// as though -trimpath were set. This used to be so that we did not invalidate
-		// the build cache (and especially precompiled archive files) when changing
-		// GOROOT_FINAL, but we no longer ship precompiled archive files as of Go 1.20
-		// (https://go.dev/issue/47257) and no longer support GOROOT_FINAL
-		// (https://go.dev/issue/62047).
-		// TODO(bcmills): Figure out whether this behavior is still useful.
-		//
-		// b.WorkDir is always either trimmed or rewritten to
-		// the literal string "/tmp/go-build".
-	} else if !strings.HasPrefix(p.Dir, b.WorkDir) {
-		// -trimpath is not set and no other rewrite rules apply,
-		// so the object file may refer to the absolute directory
-		// containing the package.
-		fmt.Fprintf(h, "dir %s\n", p.Dir)
-	}
+	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath, b.WorkDir))
 
 	if p.Module != nil {
 		fmt.Fprintf(h, "go %s\n", p.Module.GoVersion)
@@ -1385,6 +1402,32 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 			vcfg.Standard[p1.ImportPath] = true
 		}
 	}
+	addEmbeddedStdVetFiles(vcfg)
+}
+
+// addEmbeddedStdVetFiles gives vet an archive for each embedded standard
+// package it has none for.
+//
+// A go command carrying its standard library compiles nothing for one, so no
+// action reports a built file and the loop above records none. Nothing vets a
+// package with no source either, so no vetx file names it. The vet tool then
+// has neither the types nor the facts for an import every program makes, and
+// reports the package it cannot import rather than anything about the code.
+func addEmbeddedStdVetFiles(vcfg *vetConfig) {
+	if !cfg.EmbeddedStd {
+		return
+	}
+	for _, path := range vcfg.ImportMap {
+		if vcfg.PackageFile[path] != "" {
+			continue
+		}
+		pkg := cfg.EmbeddedStdPackage(path)
+		if pkg == nil {
+			continue
+		}
+		vcfg.PackageFile[path] = embeddedStdFile(path, pkg)
+		vcfg.Standard[path] = true
+	}
 }
 
 // VetTool is the command line that starts the effective vet or fix tool,
@@ -1576,7 +1619,7 @@ cachemiss:
 		panic("VetTool unset")
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, env, cfg.BuildToolexec, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, env, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
 		return err
 	}
 
@@ -2218,8 +2261,7 @@ func (b *Builder) cover(a *Action, infiles, outfiles []string, varName string, m
 		"-outfilelist", covoutputs,
 	)
 	args = append(args, infiles...)
-	if err := b.Shell(a).run(a.Objdir, "", nil,
-		cfg.BuildToolexec, args); err != nil {
+	if err := b.Shell(a).run(a.Objdir, "", nil, args); err != nil {
 		return nil, err
 	}
 	return outfiles, nil
@@ -3198,7 +3240,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 		cgoflags = append(cgoflags, "-trimpath", strings.Join(trimpath, ";"))
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cfg.BuildToolexec, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
 		return err
 	}
 
@@ -3447,7 +3489,7 @@ func (b *Builder) dynimport(a *Action, objdir, importGo string, cgoExe, cflags, 
 	if p.Standard && p.ImportPath == "runtime/cgo" {
 		cgoflags = []string{"-dynlinker"} // record path to dynamic linker
 	}
-	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cfg.BuildToolexec, cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
+	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
 	if err != nil {
 		return "", "", err
 	}

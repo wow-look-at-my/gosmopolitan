@@ -29,38 +29,34 @@ func assertSidecarELF(t *testing.T, path string, machine elf.Machine) {
 	assert.Equal(t, machine, f.Machine, "%s machine type", path)
 }
 
-// TestFatSidecarsExist requires the debug sidecars a default fat build must
-// write next to FIZZBUZZ_BIN and RUNTIMEPROBE_BIN.
+// TestFatSidecarsExist requires the debug sidecar a default fat build must
+// write next to FIZZBUZZ_BIN and RUNTIMEPROBE_BIN, and requires that the
+// arm64 image leaves nothing beside it.
 func TestFatSidecarsExist(t *testing.T) {
 	requireSidecarChecks(t)
 	for _, bin := range []string{binPath(t), os.Getenv("RUNTIMEPROBE_BIN")} {
 		require.NotEmpty(t, bin, "RUNTIMEPROBE_BIN must be set alongside FIZZBUZZ_BIN")
 		assertSidecarELF(t, bin+".dbg", elf.EM_X86_64)
-		assertSidecarELF(t, bin+".aarch64.elf", elf.EM_AARCH64)
+		_, err := os.Stat(bin + ".aarch64.elf")
+		assert.True(t, os.IsNotExist(err), "%s.aarch64.elf must not exist: the arm64 image gets no sidecar", bin)
 	}
 }
 
-// TestSlimSidecarsExist requires a platform-subset build to write exactly the
-// sidecars matching its selection: a restricted build is still stripped and
-// still writes one sidecar per payload it carries, so a deselected
-// architecture must have no sidecar file at all.
+// TestSlimSidecarsExist requires a platform-subset build to write the amd64
+// sidecar when it carries that payload and nothing when it does not. An
+// arm64-only build writes no sidecar at all.
 func TestSlimSidecarsExist(t *testing.T) {
 	requireSidecarChecks(t)
 	sel := slimPlatforms(t)
 	bin := slimPath(t)
 
-	wantAMD64 := slimWantsArch(sel, "amd64")
-	wantARM64 := slimWantsArch(sel, "arm64")
-
-	if wantAMD64 {
+	if slimWantsArch(sel, "amd64") {
 		assertSidecarELF(t, bin+".dbg", elf.EM_X86_64)
 	} else if _, err := os.Stat(bin + ".dbg"); err == nil {
 		t.Errorf("%s.dbg exists but amd64 was not selected (%v)", bin, sel)
 	}
 
-	if wantARM64 {
-		assertSidecarELF(t, bin+".aarch64.elf", elf.EM_AARCH64)
-	} else if _, err := os.Stat(bin + ".aarch64.elf"); err == nil {
-		t.Errorf("%s.aarch64.elf exists but arm64 was not selected (%v)", bin, sel)
+	if _, err := os.Stat(bin + ".aarch64.elf"); err == nil {
+		t.Errorf("%s.aarch64.elf exists: the arm64 image gets no sidecar", bin)
 	}
 }

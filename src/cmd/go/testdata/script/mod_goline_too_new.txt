@@ -1,14 +1,13 @@
 # Go should refuse to build code that is too new according to go.mod.
 
 # go.mod too new
-env GOTOOLCHAIN=local
 ! go build .
 stderr '^go: go.mod requires go >= 1.99999 \(running go 1\..+\)$'
 
 # go.mod referenced from go.work too new
 cp go.work.old go.work
 ! go build .
-stderr '^go: module . listed in go.work file requires go >= 1.99999, but go.work lists go 1.10; to download and use go 1.99999:\n\tgo work use$'
+stderr '^go: module . listed in go.work file requires go >= 1.99999, but go.work lists go 1.10; to use go 1.99999:\n\tgo work use$'
 
 ! go work sync
 stderr '^go: cannot load module . listed in go.work file: go.mod requires go >= 1.99999 \(running go 1\..+\)$'

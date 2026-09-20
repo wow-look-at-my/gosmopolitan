@@ -192,8 +192,8 @@ func TestELFHasDataSegment(t *testing.T) {
 // TestELFPayloadStripped verifies the stripped-payload contract: the
 // embedded payload is cut at its loadable span and carries no section
 // table of its own. In the default and slim modes the ELF header's
-// section fields are zeroed (debug info lives in the .dbg/.aarch64.elf
-// sidecars); a GOCOSMODEBUG=compact build instead points them at the
+// section fields are zeroed (debug info lives in the .dbg
+// sidecar); a GOCOSMODEBUG=compact build instead points them at the
 // compact debug view appended past the load span, so that the assimilated
 // binary is debugger-readable on its own - the view's placement is
 // validated here, its contents in TestFatPayloadsStripped.
