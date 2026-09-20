@@ -35,11 +35,15 @@ tests:
 	  exit: 2
 
 	# -ldflags reaches the link action ID alone, so a stamp never invalidates a
-	# compile the build cache already holds. What DOES compile is a package the
-	# cache could not serve, or one whose source moved after the build, and the
-	# stamp names every one of them rather than absorbing it into a quiet
-	# publish. A moved tree is the case this can produce on demand.
-	- desc: dist stamp names the package it had to compile
+	# compile the build cache already holds, and a tree that moved after the
+	# build costs the one package that moved. The stamp still lands.
+	#
+	# Whether that package COMPILES here is not this suite's to say: the cache
+	# is shared and writable, so the first run of this case publishes the
+	# edited package and every later run reads it back as a hit. stampInstall
+	# names what it compiles for the log, and only a private cache could assert
+	# on it.
+	- desc: dist stamp lands on a tree that moved under the built binaries
 	  cmd: |
 		set -eu
 		src="$PWD"
@@ -52,10 +56,9 @@ tests:
 		cp -a "$src/VERSION" "$src/go.env" "$root/"
 		export GOROOT="$root" PATH="$root/bin:$PATH"
 		printf '\n// the tree moves under the binaries\n' >> "$root/src/cmd/go/internal/version/version.go"
-		go tool dist stamp "$(go env GOVERSION).rmoved"
+		was="$(go env GOVERSION)"
+		go tool dist stamp "$was.rmoved"
+		test "$(go env GOVERSION)" = "$was.rmoved"
+		test "$(go tool dist version)" = "$was.rmoved"
 	  timeout: 10m
 	  exit: 0
-	  outputs:
-		stdout:
-			- "the build cache did not answer"
-			- cmd/go/internal/version
