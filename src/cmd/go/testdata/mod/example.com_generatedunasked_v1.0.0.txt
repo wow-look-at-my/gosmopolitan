@@ -1,14 +1,18 @@
 Written by hand.
-A module that generates part of its own API and carries no go.mod, the way
-golang.org/x/text did before it had one. The zip holds only the source.
-
-The opt-in line lives in a module's own go.mod. This module has none, so it
-has nowhere to write one.
+A module outside the org that carries a generate directive and never asks for
+it to run: its go.mod holds no //go:gendep line. It compiles as the zip
+published it, which is a package that declares nothing.
 
 -- .mod --
-module example.com/generatednomod
+module example.com/generatedunasked
+
+go 1.16
 -- .info --
 {"Version": "v1.0.0"}
+-- go.mod --
+module example.com/generatedunasked
+
+go 1.16
 -- gen/main.go --
 package main
 
@@ -26,7 +30,7 @@ func main() {
 	}
 }
 -- lang/lang.go --
-//go:generate go run example.com/generatednomod/gen -out lang.gen.go
+//go:generate go run example.com/generatedunasked/gen -out lang.gen.go
 
 // Package lang declares nothing itself: Name is the generator's to write.
 package lang
