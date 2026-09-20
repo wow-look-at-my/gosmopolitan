@@ -178,6 +178,41 @@ func TestProgramMissingSeparatesTheHostFromTheModule(test *testing.T) {
 	}
 }
 
+// A directive that writes into a submodule's directory reports an absent path,
+// because the parent's zip carries no submodule. x/crypto's x509roots is the
+// module this came from: it writes fallback/bundle.go, and fallback is a
+// module of its own.
+//
+// The staged tree decides, not the message. A path whose parent is there names
+// a defect of the module, and that stops the build.
+func TestWroteNowhereSeparatesTheZipsShapeFromADefect(test *testing.T) {
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"x509roots/gen_fallback_bundle.go": "package main\n",
+		"x509roots/nss/nss.go":             "package nss\n",
+	})
+	const x509roots = "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "fallback/bundle.go": open fallback/bundle.go: no such file or directory`
+	const nssRoots = "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "nss/roots.go": open nss/roots.go: no such file or directory`
+	cases := []struct {
+		why  string
+		err  error
+		want string
+	}{
+		{"no error at all", nil, ""},
+		{"a directive writes into a submodule's directory", errors.New(x509roots), "fallback/bundle.go"},
+		{"the build reports that failure around its own", fmt.Errorf("generating x509roots: %w", errors.New(x509roots)), "fallback/bundle.go"},
+		{"the directory it writes to is right there", errors.New(nssRoots), ""},
+		{"a generator ran and failed", errors.New("exit status 1"), ""},
+		{"a directive names a program this machine lacks", &exec.Error{Name: "stringer", Err: exec.ErrNotFound}, ""},
+	}
+	for _, tcase := range cases {
+		if got := wroteNowhere(stage, "x509roots", tcase.err); got != tcase.want {
+			test.Errorf("wroteNowhere where %s = %q, want %q", tcase.why, got, tcase.want)
+		}
+	}
+}
+
 // A generator can write a name the module already declares under another file
 // name, which is github.com/charmbracelet/x/ansi: it ships a table it builds at
 // run time, and its generator writes a precomputed one beside it. Both declare

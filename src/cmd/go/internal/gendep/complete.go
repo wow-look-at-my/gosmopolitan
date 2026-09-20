@@ -54,10 +54,11 @@ const generatePrefix = "//go:generate"
 // reports is the symbol the missing file defines, named at the first line that
 // uses it, which is nowhere near the generator that never ran.
 //
-// A directive naming a program this machine lacks is the exception, and the
-// answer is partial when one is skipped. A partial answer belongs to this
-// machine rather than to the module, so a caller keeps it out of any store the
-// fleet reads.
+// Two directives are the exception, and the answer is partial when either is
+// skipped. One names a program this machine lacks. The other writes into a
+// submodule's directory, which no zip of the parent carries. A partial answer
+// is short a file the module's own repository has, so a caller keeps it out of
+// any store the fleet reads.
 func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
 	if len(pkgs) == 0 {
 		return nil, false, nil
@@ -93,6 +94,18 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 		// stores the whole answer.
 		if programMissing(err) {
 			fmt.Fprintf(os.Stderr, "go: %s in %s: %v\n", mod, pkg, err)
+			partial = true
+			continue
+		}
+		// A submodule's contents are not in the parent's zip, so a directive
+		// that writes into one names a directory this copy cannot hold.
+		// x/crypto's x509roots writes fallback/bundle.go, and fallback is a
+		// submodule. Its own module carries that file, so a consumer of the
+		// parent wants nothing from the run. The answer is marked partial,
+		// which keeps a tree short of that file out of the cache the fleet
+		// reads, and the module and the path are named on the way past.
+		if gone := wroteNowhere(stage, pkg, err); gone != "" {
+			fmt.Fprintf(os.Stderr, "go: %s in %s writes %s, and its module zip carries no directory above it\n", mod, pkg, gone)
 			partial = true
 			continue
 		}
@@ -342,6 +355,36 @@ func programMissing(err error) bool {
 	said := err.Error()
 	return strings.Contains(said, "executable file not found") ||
 		strings.Contains(said, exec.ErrNotFound.Error())
+}
+
+// wroteNowhere answers the path a failed generator could not open because a
+// directory above it is absent from the staged copy, or "". The go command
+// leaves a submodule's whole directory out of the parent's zip, so a directive
+// that writes into one reports exactly this, on every machine, for every
+// consumer of that module version.
+//
+// The generator's own message supplies the candidate and the staged tree
+// decides. A path whose parent is there names something else, and a module's
+// own defect stops the build.
+func wroteNowhere(stage, pkg string, err error) string {
+	if err == nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(err.Error(), "\n") {
+		_, after, found := strings.Cut(line, "open ")
+		if !found {
+			continue
+		}
+		path, _, ok := strings.Cut(after, ": "+syscall.ENOENT.Error())
+		if !ok || path == "" || !filepath.IsLocal(path) {
+			continue
+		}
+		at := filepath.Join(stage, filepath.FromSlash(pkg), filepath.FromSlash(path))
+		if _, err := os.Lstat(filepath.Dir(at)); errors.Is(err, fs.ErrNotExist) {
+			return path
+		}
+	}
+	return ""
 }
 
 // startFailed reports whether err says the host refused to start a program the
