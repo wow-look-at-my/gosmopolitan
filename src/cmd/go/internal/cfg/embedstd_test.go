@@ -6,11 +6,57 @@ package cfg
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"internal/cosmo/embedded"
 )
+
+// An outside GOROOT answers for what no blob carries, but only when it holds
+// the same toolchain this binary is. A tree of another version would put its
+// sources under this binary's archives, which is the reason the environment
+// was ignored outright before.
+func TestSameToolchainTreeTakesOnlyItsOwnVersion(test *testing.T) {
+	tree := func(version string) string {
+		root := test.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "src", "cmd"), 0o777); err != nil {
+			test.Fatal(err)
+		}
+		if version != "" {
+			if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte(version), 0o666); err != nil {
+				test.Fatal(err)
+			}
+		}
+		return root
+	}
+
+	mine := tree(runtime.Version() + "\ntime 2026-01-01T00:00:00Z\n")
+	if got := sameToolchainTree(mine); got != mine {
+		test.Errorf("a tree of this version answers %q, want %q", got, mine)
+	}
+	if got := sameToolchainTree(tree("go1.26.9-cosmo\n")); got != "" {
+		test.Errorf("a tree of another version answers %q, want none", got)
+	}
+	if got := sameToolchainTree(tree("")); got != "" {
+		test.Errorf("a tree naming no version answers %q, want none", got)
+	}
+	if got := sameToolchainTree(""); got != "" {
+		test.Errorf("an unset GOROOT answers %q, want none", got)
+	}
+
+	// A binary's own path names no tree, and that is what GOROOT holds when
+	// nothing else does.
+	exe := filepath.Join(test.TempDir(), "go-toolchain")
+	if err := os.WriteFile(exe, []byte("an executable"), 0o777); err != nil {
+		test.Fatal(err)
+	}
+	if got := sameToolchainTree(exe); got != "" {
+		test.Errorf("an executable answers %q, want none", got)
+	}
+}
 
 // A standard package whose Go files are all tests compiles to no archive, so
 // embedstd writes its manifest entry with no archive name and adds nothing to
