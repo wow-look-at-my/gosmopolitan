@@ -2066,6 +2066,13 @@ func cmdstamp() {
 		fatalf("stamp: %v\nBuild the toolchain before you stamp it.", err)
 	}
 
+	// A stamp moves the linker flags and nothing a compile reads, so the
+	// install below relinks and takes every package from the build cache. That
+	// holds only while the installed binaries are the ones this tree builds: a
+	// tree that moved under them fails here, rather than quietly turning the
+	// stamp into a second build of the toolchain.
+	checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
+
 	// appendCompilerFlags passes these on the command line, which replaces the
 	// -ldflags toolenv puts in GOFLAGS whole, so carry that -w here as well.
 	ldflags := "-X runtime.buildVersion=" + version
@@ -2094,12 +2101,12 @@ func cmdstamp() {
 	xprintf("Stamped %s.\n", version)
 }
 
-// stampInstall reinstalls the binaries a stamp relinks, and holds the install
-// to exactly that. A stamp moves the linker flags and nothing a compile reads,
-// so every compiled package is one the build already wrote and the cache
-// answers for. -v names each package the go command builds, so a name here
-// other than a link target means this install is a second build of the
-// toolchain, which is the cost the stamp exists to stay under.
+// stampInstall reinstalls the binaries a stamp relinks, and names what the
+// install had to compile. The stale check above is what keeps a stamp from
+// building the toolchain a second time; a package compiled here is one the
+// shared cache lost or could not serve, and re-doing it is the only way to
+// link. Naming them is how a cache that stops answering shows up as something
+// other than a slow publish.
 func stampInstall() {
 	cmd := []string{goInstaller(), "install"}
 	if noOpt {
@@ -2110,11 +2117,16 @@ func stampInstall() {
 	// ShowOutput streams instead of returning, so the output is printed below.
 	out := runEnv(workdir, CheckExit, toolenv(), append(cmd, toolsToInstall...)...)
 	xprintf("%s", out)
+	var compiled []string
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" || strings.ContainsAny(line, " \t") || slices.Contains(toolsToInstall, line) {
 			continue
 		}
-		fatalf("stamp: %s was compiled, so this is a second build of the toolchain, not a relink", line)
+		compiled = append(compiled, line)
+	}
+	if len(compiled) > 0 {
+		xprintf("stamp: the build cache did not answer for %d package(s), which this compiled: %s\n",
+			len(compiled), strings.Join(compiled, " "))
 	}
 }
 

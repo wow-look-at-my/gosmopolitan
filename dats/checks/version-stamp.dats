@@ -21,8 +21,6 @@ tests:
 		# The version the tree was BUILT with. A stamp leaves this one alone: it
 		# is what the object header and each tool's -V line carry.
 		built="$("$root"/pkg/tool/*/compile -V | cut -d' ' -f3)"
-		# A stamp that compiles anything but its link targets fails in dist, so
-		# this call is also where a stamp that turned into a second build lands.
 		go tool dist stamp "$was.rstamptest"
 		test "$(go env GOVERSION)" = "$was.rstamptest"
 		test "$(go tool dist version)" = "$was.rstamptest"
@@ -34,4 +32,24 @@ tests:
 
 	- desc: dist stamp refuses a version that is not one
 	  cmd: export PATH="$PWD/bin:$PATH" GOROOT="$PWD"; go tool dist stamp 1.27.0
+	  exit: 2
+
+	# A stamp relinks what the build installed. A tree that moved under those
+	# binaries has no relink to do -- the install would build the toolchain a
+	# second time, which is the cost the stamp exists to stay under.
+	- desc: dist stamp refuses a tree that moved under the built binaries
+	  cmd: |
+		set -eu
+		src="$PWD"
+		tmp="$(mktemp -d)"
+		trap 'rm -rf "$tmp"' EXIT
+		root="$tmp/goroot"
+		mkdir -p "$root/pkg"
+		cp -a "$src/bin" "$src/src" "$src/lib" "$src/api" "$root/"
+		cp -a "$src/pkg/tool" "$src/pkg/include" "$root/pkg/"
+		cp -a "$src/VERSION" "$src/go.env" "$root/"
+		export GOROOT="$root" PATH="$root/bin:$PATH"
+		printf '\n// the tree moves under the binaries\n' >> "$root/src/cmd/go/internal/version/version.go"
+		go tool dist stamp "$(go env GOVERSION).rmoved"
+	  timeout: 10m
 	  exit: 2
