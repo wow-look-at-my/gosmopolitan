@@ -112,6 +112,7 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	if err != nil {
 		return nil, false, err
 	}
+	added = withoutRedeclarations(modroot, stage, mod, added)
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {
