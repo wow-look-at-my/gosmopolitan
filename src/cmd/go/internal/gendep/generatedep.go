@@ -108,10 +108,16 @@ func fileHasDirective(file string) bool {
 	defer open.Close()
 
 	scan := bufio.NewScanner(open)
+	scan.Buffer(nil, 1<<20)
 	for scan.Scan() {
 		if strings.HasPrefix(strings.TrimSpace(scan.Text()), generatePrefix) {
 			return true
 		}
+	}
+	// A line past the buffer ends the read, and a directive under it goes
+	// unseen. That package then builds from a tree nothing generated.
+	if err := scan.Err(); err != nil {
+		base.Fatalf("go: reading %s: %v", file, err)
 	}
 	return false
 }
