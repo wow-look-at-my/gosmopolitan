@@ -1489,6 +1489,11 @@ func cmdbootstrap() {
 			"Use the -force flag to build anyway.\n", goos, goarch)
 	}
 
+	// The build reads src/cmd/vendor below, so the submodules holding it are
+	// answered for here, before anything compiles.
+	checkVendorSubmodules()
+	trackSubmoduleBranches()
+
 	// Set GOPATH to an internal directory. We shouldn't actually
 	// need to store files here, since the toolchain won't
 	// depend on modules outside of vendor directories, but if
