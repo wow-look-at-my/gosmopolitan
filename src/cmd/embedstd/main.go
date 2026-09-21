@@ -206,7 +206,11 @@ func gorootOf(goCmd []string) string {
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
 func listStd(goCmd []string, goos, goarch string) []listed {
-	cmd := goCommand(goCmd, "list", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
+	// -e: a handful of standard packages hold nothing but tests, and the
+	// listing stops at the first of them without it. crypto/internal/
+	// fips140test is one. They compile to no archive, so they carry none
+	// here either, and the blob is the same either way.
+	cmd := goCommand(goCmd, "list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
 	// -trimpath, so a program built with it against these archives is the
 	// program the source tree builds with it; the tree's path is not in them.
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")

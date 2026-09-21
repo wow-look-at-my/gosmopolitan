@@ -1421,7 +1421,9 @@ func addEmbeddedStdVetFiles(vcfg *vetConfig) {
 		if vcfg.PackageFile[path] != "" {
 			continue
 		}
-		pkg := cfg.EmbeddedStdPackage(path)
+		// unsafe and builtin declare no archive, and neither does a package of
+		// cmd. vet reads a file for what has one and the tree for the rest.
+		pkg := cfg.EmbeddedStdArchived(path)
 		if pkg == nil {
 			continue
 		}
