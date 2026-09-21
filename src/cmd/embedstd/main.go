@@ -114,17 +114,8 @@ func Main(args []string) int {
 		}
 		writer.Add(embedded.ManifestEntry(name), data)
 	}
-	include := filepath.Join(gorootOf(goCmd), "pkg", "include")
-	headers, err := os.ReadDir(include)
-	if err != nil {
-		log.Fatalf("reading the assembly headers: %v", err)
-	}
-	for _, header := range headers {
-		data, err := os.ReadFile(filepath.Join(include, header.Name()))
-		if err != nil {
-			log.Fatal(err)
-		}
-		writer.Add(embedded.IncludeDir+"/"+header.Name(), data)
+	for _, header := range includeHeaders(gorootOf(goCmd)) {
+		writer.Add(embedded.IncludeDir+"/"+header.name, header.data)
 	}
 	var blob bytes.Buffer
 	if _, err := writer.WriteTo(&blob); err != nil {
@@ -139,6 +130,68 @@ func Main(args []string) int {
 // goCommand starts the go command with args after its own words.
 func goCommand(goCmd []string, args ...string) *exec.Cmd {
 	return exec.Command(goCmd[0], append(append([]string{}, goCmd[1:]...), args...)...)
+}
+
+// header is one assembly header, under the name the blob files it by.
+type header struct {
+	name string
+	data []byte
+}
+
+// includeHeaders answers the assembly headers of a GOROOT, in name order.
+// A GOROOT that names a file is a go command carrying its standard library
+// inside that file, and the headers come out of the blob it carries; a
+// GOROOT that names a directory is a source tree, which keeps them under
+// pkg/include.
+func includeHeaders(goroot string) []header {
+	info, err := os.Stat(goroot)
+	if err != nil {
+		log.Fatalf("reading the assembly headers: %v", err)
+	}
+	if !info.IsDir() {
+		return embeddedHeaders(goroot)
+	}
+	return treeHeaders(filepath.Join(goroot, "pkg", "include"))
+}
+
+// treeHeaders reads the headers out of a source tree's include directory.
+func treeHeaders(include string) []header {
+	entries, err := os.ReadDir(include)
+	if err != nil {
+		log.Fatalf("reading the assembly headers: %v", err)
+	}
+	headers := make([]header, 0, len(entries))
+	for _, entry := range entries {
+		data, err := os.ReadFile(filepath.Join(include, entry.Name()))
+		if err != nil {
+			log.Fatal(err)
+		}
+		headers = append(headers, header{name: entry.Name(), data: data})
+	}
+	return headers
+}
+
+// embeddedHeaders reads the headers out of the blob the binary at exe
+// carries.
+func embeddedHeaders(exe string) []header {
+	blob, err := embedded.OpenFile(exe)
+	if err != nil {
+		log.Fatalf("reading the assembly headers from %s: %v", exe, err)
+	}
+	prefix := embedded.IncludeDir + "/"
+	names := blob.Entries(prefix)
+	if len(names) == 0 {
+		log.Fatalf("%s carries no assembly headers", exe)
+	}
+	headers := make([]header, 0, len(names))
+	for _, name := range names {
+		data, err := blob.ReadFile(name)
+		if err != nil {
+			log.Fatal(err)
+		}
+		headers = append(headers, header{name: strings.TrimPrefix(name, prefix), data: data})
+	}
+	return headers
 }
 
 // gorootOf answers the GOROOT the go command reads its source from.
