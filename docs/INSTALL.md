@@ -23,13 +23,17 @@ Every slot uploads a `.tar.gz`, windows included. A GOROOT is a directory tree, 
 
 ## How the publish works
 
-jobs in cosmo-ci.yml, because distpack packages what a HOST build produced -- there is no cross-package shortcut. And `GOOS=darwin GOARCH=arm64 ./make.bash -distpack` fails outright with `distpack: stat bin/darwin_arm64/go: no such file or directory`:
+Packaging and uploading are separate, because they have different requirements.
+
+Packaging runs in the build leg, on the host that produced the toolchain. `dist stamp` relinks `bin/go` and then execs it to check the version took, and distpack ships that host's own `pkg/tool/$GOOS_$GOARCH`. Neither step has a cross-host form: `GOOS=darwin GOARCH=arm64 ./bin/go tool distpack` on a linux tree fails with `distpack: stat bin/darwin_arm64/go: no such file or directory`. The leg hands its `go<VERSION>.<goos>-<goarch>.tar.gz` over as `distpack-<goos>-<goarch>`, after it hands the unstamped toolchain over, so the suites take the tree the build left.
+
+Uploading is generic work, so every publish job runs on ubuntu-latest:
 
 - `publish-create` opens ONE buildhost release, so every platform lands in the same version.
-- `publish-upload` is a matrix over ubuntu-latest/linux/amd64, macos-latest/darwin/arm64 and windows-latest/windows/amd64. Each leg takes the `toolchain-<os>` artifact its build leg uploaded, runs `./bin/go tool distpack` over it (output `pkg/distpack/go<VERSION>.<goos>-<goarch>.tar.gz`, e.g. `go1.27.0-cosmo.linux-amd64.tar.gz`, ~64 MiB) and uploads it straight to buildhost.
+- `publish-upload` is a matrix over linux/amd64 and darwin/arm64. Each leg takes its `distpack-<goos>-<goarch>` archive and uploads it to buildhost. No mac or windows runner is acquired here.
 - `publish-finish` publishes the release once every leg is in.
 
-Nothing is handed between the jobs, so no GitHub Actions artifact storage is involved. A failed leg means `publish-finish` never runs and the release stays a DRAFT, which buildhost records as intent and never serves as latest -- a. Every step authenticates with a GitHub Actions OIDC token (audience `https://pazer.build`) through buildhost's own composite actions (`buildhost-create-release` / `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as `wow-look-at-my/buildhost/.github/actions/<name>@master`).
+The archives travel through the org cache, so no GitHub Actions artifact storage is involved. A failed leg means `publish-finish` never runs and the release stays a DRAFT, which buildhost records as intent and never serves as latest -- a. Every step authenticates with a GitHub Actions OIDC token (audience `https://pazer.build`) through buildhost's own composite actions (`buildhost-create-release` / `buildhost-upload-artifact` / `buildhost-publish-release`, referenced as `wow-look-at-my/buildhost/.github/actions/<name>@master`).
 
 One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select between them and neither platform can be served the other's bytes.
 
