@@ -763,8 +763,6 @@ jobs:
       id-token: write
       contents: read
       artifact-metadata: write
-    env:
-      LEG_ARCH: ${{ matrix.goos == 'darwin' && 'arm64' || 'amd64' }}
 
     steps:
       - name: Take the archive its build leg packaged
@@ -778,7 +776,7 @@ jobs:
         id: tarball
         uses: wow-look-at-my/actions@typescript#latest
         env:
-          DIST_SUFFIX: ${{ matrix.goos }}-${{ env.LEG_ARCH }}
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
         with:
           script: |
             const distDir = 'distpack';
@@ -800,7 +798,7 @@ jobs:
           project: gosmopolitan
           version: ${{ needs.publish-create.outputs.version }}
           os: ${{ matrix.goos }}
-          arch: ${{ env.LEG_ARCH }}
+          arch: ${{ matrix.goarch }}
           kind: archive
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
@@ -808,7 +806,7 @@ jobs:
       - name: Log uploaded artifact
         shell: bash
         run: |
-          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ env.LEG_ARCH }})"
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
 
   publish-finish:
     timeout-minutes: 10
