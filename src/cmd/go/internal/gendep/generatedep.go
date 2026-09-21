@@ -52,6 +52,13 @@ func Dir(dir, modroot string) string {
 	if str.HasFilePathPrefix(dir, generateRoot()) {
 		return dir
 	}
+	// The fetch completes a module where it stands, and Dir is for a package
+	// that reaches the loader without that having happened. A completed module
+	// already carries what its directives wrote, so generating a copy of it
+	// would run those directives a second time.
+	if completed(modroot) {
+		return dir
+	}
 	// A directive is a command the dependency's author wrote, and running it
 	// here reads it to nobody first. The org's own modules are this fleet's,
 	// and every other module asks with the OptIn line in its own go.mod. The
@@ -154,6 +161,26 @@ func fileHasDirective(file string) bool {
 // generateRoot answers the directory every generated tree sits under.
 func generateRoot() string {
 	return filepath.Join(cfg.GOMODCACHE, "cache", "generate")
+}
+
+// completed reports whether the fetch already completed the module at modroot.
+// modfetch records a checksum for the completed directory beside the module's
+// own downloads, and that file is the one answer both paths read.
+//
+// The name under the module cache is the escaped path the fetch wrote, so this
+// reads it as it stands rather than escaping one of its own.
+func completed(modroot string) bool {
+	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
+	if err != nil {
+		return false
+	}
+	escaped, version, found := strings.Cut(filepath.ToSlash(rel), "@")
+	if !found {
+		return false
+	}
+	marker := filepath.Join(cfg.GOMODCACHE, "cache", "download", filepath.FromSlash(escaped), "@v", version+".complete")
+	_, err = os.Stat(marker)
+	return err == nil
 }
 
 // modPath answers the module path of the extracted module at modroot. It
