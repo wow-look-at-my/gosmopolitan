@@ -33,10 +33,14 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 func (builder *Builder) finishEmbeddedStdAction(act *Action, p *load.Package, pkg *embedded.Package) *Action {
 	act.Mode = "embedded std"
 	act.Actor = nil
+<<<<<<< HEAD
 	act.buildID = pkg.BuildID
 	if pkg.Archive == "" {
 		// A standard package holding only test files compiles no archive,
 		// so the action answers no target and the listing no export file.
+=======
+	if !servesArchive(pkg) {
+>>>>>>> origin/master
 		return act
 	}
 	act.Target = cfg.EmbeddedStdArchive(p.ImportPath)
@@ -81,8 +85,21 @@ func fileForOutsideReader(p *load.Package, built string) string {
 		return built
 	}
 	pkg := cfg.EmbeddedStdPackage(p.ImportPath)
+<<<<<<< HEAD
 	if pkg == nil || pkg.Archive == "" {
+=======
+	if !servesArchive(pkg) {
+>>>>>>> origin/master
 		return built
 	}
 	return embeddedStdFile(p.ImportPath, pkg)
+}
+
+// servesArchive reports that the manifest entry carries a compiled archive to
+// read. A standard package of test files alone, crypto/internal/fips140test
+// among them, compiles to none, and embedstd records the entry with an empty
+// archive name. Asking the blob for that name finds no entry and stops the go
+// command, which is how `go list std` died under a binary carrying one.
+func servesArchive(pkg *embedded.Package) bool {
+	return pkg != nil && pkg.Archive != ""
 }

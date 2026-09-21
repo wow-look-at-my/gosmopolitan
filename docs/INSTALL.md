@@ -35,9 +35,13 @@ One release holds many artifacts, keyed `{os}/{arch}`, so `os=`/`arch=` select b
 
 ## The version an installed toolchain reports
 
-Every release reports the committed VERSION, `go1.27.0-cosmo`. And the tarball is named for it. Releases are told apart by the buildhost version, which `?v=N` selects and which the publish jobs never write into the tree.
+Every release reports the committed VERSION, `go1.27.0-cosmo`. The tarball is named for it. The buildhost version is what tells releases apart. `?v=N` selects it, and the publish jobs never write it into the tree.
 
+<<<<<<< HEAD
 Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content rather than on what version it claims to. Be. toolchains built from different sources get different tool IDs whatever their VERSION says. And two built from the same source are the same toolchain.
+=======
+Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content, not on the version it claims. A toolchain built from another source gets another tool ID, whatever its VERSION says. One built from the same source is the same toolchain.
+>>>>>>> origin/master
 
 Local source builds keep the static version and need no stamp: tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
 
