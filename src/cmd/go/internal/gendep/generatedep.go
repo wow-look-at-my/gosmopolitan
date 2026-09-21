@@ -19,6 +19,8 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/str"
+
+	"golang.org/x/mod/module"
 )
 
 // A module zip carries no generated file, and a submodule's contents are not
@@ -41,6 +43,20 @@ func Dir(dir, modroot string) string {
 		return dir
 	}
 	if !str.HasFilePathPrefix(dir, cfg.GOMODCACHE) {
+		return dir
+	}
+	// A generated tree lives under GOMODCACHE, so the build loads its packages
+	// through here as well. They carry the directives the generator ran, and
+	// generating them again nests one tree inside the last until the path is
+	// too long for the host.
+	if str.HasFilePathPrefix(dir, generateRoot()) {
+		return dir
+	}
+	// A directive is a command the dependency's author wrote, and running it
+	// here reads it to nobody first. The org's own modules are this fleet's,
+	// and every other module asks with the OptIn line in its own go.mod. The
+	// fetch path applies the same gate, so both answer one module the same way.
+	if !Allowed(modroot, modPath(modroot)) {
 		return dir
 	}
 	if !hasDirective(dir) {
@@ -135,12 +151,36 @@ func fileHasDirective(file string) bool {
 // A module has one tree, and each package the build loads from it is generated
 // into it on its own. A build that imports three packages of a module needs all
 // three generated, whichever of them it happened to load first.
+// generateRoot answers the directory every generated tree sits under.
+func generateRoot() string {
+	return filepath.Join(cfg.GOMODCACHE, "cache", "generate")
+}
+
+// modPath answers the module path of the extracted module at modroot. It
+// answers "" for a directory the module cache does not name that way, and
+// Allowed then reads the go.mod alone, which grants nothing on its own.
+func modPath(modroot string) string {
+	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
+	if err != nil {
+		return ""
+	}
+	escaped, _, found := strings.Cut(filepath.ToSlash(rel), "@")
+	if !found {
+		return ""
+	}
+	path, err := module.UnescapePath(escaped)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
 func generateModule(modroot, pkgrel string) (string, error) {
 	rel, err := filepath.Rel(cfg.GOMODCACHE, modroot)
 	if err != nil {
 		return "", err
 	}
-	root := filepath.Join(cfg.GOMODCACHE, "cache", "generate", rel)
+	root := filepath.Join(generateRoot(), rel)
 	if err := os.MkdirAll(filepath.Dir(root), 0o777); err != nil {
 		return "", err
 	}
