@@ -7,7 +7,9 @@
 package os
 
 import (
+	"internal/filepathlite"
 	"internal/stringslite"
+	"runtime"
 	"sync"
 )
 
@@ -59,9 +61,11 @@ func resolveArgv0() (string, error) {
 	if len(Args) == 0 || Args[0] == "" {
 		return "", ErrNotExist
 	}
-	if IsPathSeparator(Args[0][0]) {
-		// Args[0] is an absolute path, so it is the executable.
-		// Note that we only need to worry about Unix paths here.
+	if filepathlite.IsAbs(Args[0]) {
+		// An NT host hands this APE a drive letter, and the leading byte of
+		// "D:\\a\\x.exe" is no separator. IsAbs follows the host, so it sees
+		// the volume. Prepending the working directory to such a name builds
+		// a path carrying a colon, which NT refuses as an invalid argument.
 		exePath = Args[0]
 	} else {
 		for i := 1; i < len(Args[0]); i++ {
@@ -87,7 +91,7 @@ func resolveArgv0() (string, error) {
 		if len(dir) == 0 {
 			dir = "."
 		}
-		if !IsPathSeparator(dir[0]) {
+		if !filepathlite.IsAbs(dir) {
 			if errWd != nil {
 				return "", errWd
 			}
@@ -120,15 +124,29 @@ func isExecutable(path string) error {
 	return nil
 }
 
+// pathListSeparator answers the byte that parts this host's PATH. NT parts
+// it with a semicolon, and a colon there cuts every entry off its own drive
+// letter.
+func pathListSeparator() rune {
+	if runtime.CosmoHostOS() == "windows" {
+		return ';'
+	}
+	return PathListSeparator
+}
+
 // splitPathList splits a path list.
 // This is based on genSplit from strings/strings.go
 func splitPathList(pathList string) []string {
+	return splitPathListSep(pathList, pathListSeparator())
+}
+
+func splitPathListSep(pathList string, sep rune) []string {
 	if pathList == "" {
 		return nil
 	}
 	n := 1
 	for i := 0; i < len(pathList); i++ {
-		if rune(pathList[i]) == PathListSeparator {
+		if rune(pathList[i]) == sep {
 			n++
 		}
 	}
@@ -136,7 +154,7 @@ func splitPathList(pathList string) []string {
 	a := make([]string, n)
 	na := 0
 	for i := 0; i+1 <= len(pathList) && na+1 < n; i++ {
-		if rune(pathList[i]) == PathListSeparator {
+		if rune(pathList[i]) == sep {
 			a[na] = pathList[start:i]
 			na++
 			start = i + 1

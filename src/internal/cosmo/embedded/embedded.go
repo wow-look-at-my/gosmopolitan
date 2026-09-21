@@ -103,7 +103,10 @@ func load() (*blob, error) {
 	once.Do(func() {
 		exe, err := os.Executable()
 		if err != nil {
-			loadErr = err
+			// Every archive in this binary is reached through this name, so a
+			// bare error here reaches the reader as one unexplained failure
+			// per import.
+			loadErr = fmt.Errorf("naming this executable, which carries the standard library: %w", err)
 			return
 		}
 		loaded, loadErr = openBlob(exe)
