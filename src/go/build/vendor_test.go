@@ -39,6 +39,13 @@ var allowedPackagePrefixes = []string{
 	"github.com/wow-look-at-my/go-mmap",
 	"github.com/pierrec/lz4",
 
+	// Fork-local: the cache's broker serves one build's directory to every
+	// process below it over shared memory. go-shm and go-mmap are what
+	// go-ipc maps that memory with.
+	"github.com/wow-look-at-my/go-ipc",
+	"github.com/wow-look-at-my/go-shm",
+	"github.com/wow-look-at-my/go-mmap",
+
 	// Fork-local: every cmd test writes its assertions with testify. The
 	// three below are what testify itself requires.
 	"github.com/stretchr/testify",
