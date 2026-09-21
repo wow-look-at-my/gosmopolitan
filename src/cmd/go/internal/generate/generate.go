@@ -486,52 +486,11 @@ func (g *Generator) setShorthand(words []string) {
 	g.commands[command] = slices.Clip(words[2:])
 }
 
-// selfGenerateCommand answers the command line that runs name out of this
-// executable: the argv prefix that starts this go command again for "go",
-// that prefix followed by "tool <name>" for a tool this executable links.
-// A name that is neither answers a nil command line, which leaves the word
-// for the operating system to resolve.
-func selfGenerateCommand(name string) ([]string, error) {
-	if name != "go" && !base.Linked(name) {
-		return nil, nil
-	}
-	argv, err := base.GoCommand()
-	if err != nil {
-		return nil, err
-	}
-	argv = slices.Clip(argv)
-	if name == "go" {
-		return argv, nil
-	}
-	return append(argv, "tool", name), nil
-}
-
 // exec runs the command specified by the argument. The first word is
 // the command name itself.
 func (g *Generator) exec(words []string) {
 	path := words[0]
 	args := words[1:]
-<<<<<<< HEAD
-	argv0 := words[0]
-	if path != "" && !strings.Contains(path, string(os.PathSeparator)) {
-		if cfg.EmbeddedStd {
-			// GOROOT is this executable, so GOROOT/bin holds nothing to
-			// look up and the go command a directive names is this one.
-			self, err := selfGenerateCommand(path)
-			if err != nil {
-				g.errorf("running %q: %s", words[0], err)
-			}
-			if len(self) > 0 {
-				path = self[0]
-				argv0 = self[0]
-				args = append(slices.Clip(self[1:]), args...)
-			}
-		} else if gorootBinPath, err := pathcache.LookPath(filepath.Join(cfg.GOROOTbin, path)); err == nil {
-			// If a generator says '//go:generate go run <blah>' it almost
-			// certainly intends to use the same 'go' as 'go generate' itself.
-			// Prefer to resolve the binary from GOROOT/bin, and for consistency
-			// prefer to resolve any other commands there too.
-=======
 	switch {
 	case cfg.EmbeddedStd && path == "go":
 		// GOROOT names this executable rather than a tree, so GOROOT/bin holds
@@ -552,16 +511,11 @@ func (g *Generator) exec(words []string) {
 		// prefer to resolve any other commands there too.
 		gorootBinPath, err := pathcache.LookPath(filepath.Join(cfg.GOROOTbin, path))
 		if err == nil {
->>>>>>> origin/master
 			path = gorootBinPath
 		}
 	}
 	cmd := exec.Command(path, args...)
-<<<<<<< HEAD
-	cmd.Args[0] = argv0
-=======
-	cmd.Args[0] = words[0] // Overwrite with the original in case it was rewritten above.
->>>>>>> origin/master
+	cmd.Args[0] = words[0]
 
 	// Standard in and out of generator should be the usual.
 	cmd.Stdout = os.Stdout
