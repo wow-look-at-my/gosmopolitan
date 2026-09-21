@@ -124,6 +124,11 @@ func isExecutable(path string) error {
 	if !mode.IsRegular() {
 		return ErrPermission
 	}
+	// NT keeps no such bit, so what cosmo reports for one is a guess. Reading
+	// it there refuses the running program its own path.
+	if runtime.CosmoHostOS() == "windows" {
+		return nil
+	}
 	if (mode & 0111) == 0 {
 		return ErrPermission
 	}
