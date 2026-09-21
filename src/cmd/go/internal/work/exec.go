@@ -1587,6 +1587,13 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 			}
 			defer f.Close() // ignore error (can't fail)
 			stdout = f
+		} else {
+			// Every run stores this entry, empty or not, so one that will not
+			// open is one the cache lost and not a tool that found nothing to
+			// say. Reading it is part of the transaction above: a hit that
+			// commits without it reports a clean package, and the findings the
+			// run did make are gone with no sign that they ever existed.
+			goto cachemiss
 		}
 
 		// Cache hit: commit transaction.
@@ -1644,7 +1651,9 @@ cachemiss:
 		}
 	}
 
-	// Save stdout.
+	// Save stdout. A tool that found nothing to say writes no file, and the
+	// entry goes in empty for it, so a later load can tell that apart from an
+	// entry the cache lost and refuse a hit it cannot reproduce whole.
 	if f, err := os.Open(vcfg.Stdout); err == nil {
 		defer f.Close() // ignore error
 		if err := VetHandleStdout(f); err != nil {
@@ -1652,6 +1661,8 @@ cachemiss:
 		}
 		f.Seek(0, io.SeekStart)     // ignore error
 		a.cache().Put(stdoutKey, f) // ignore error
+	} else {
+		cache.PutBytes(a.cache(), stdoutKey, nil) // ignore error
 	}
 
 	return nil
