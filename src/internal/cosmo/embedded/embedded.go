@@ -103,7 +103,10 @@ func load() (*blob, error) {
 	once.Do(func() {
 		exe, err := os.Executable()
 		if err != nil {
-			loadErr = err
+			// Every archive in this binary is reached through this name, so a
+			// bare error here reaches the reader as one unexplained failure
+			// per import.
+			loadErr = fmt.Errorf("naming this executable, which carries the standard library: %w", err)
 			return
 		}
 		loaded, loadErr = openBlob(exe)
@@ -115,7 +118,10 @@ func load() (*blob, error) {
 func openBlob(exe string) (*blob, error) {
 	file, err := os.Open(exe)
 	if err != nil {
-		return nil, err
+		// Named, because this is the one path every embedded archive is read
+		// through. A bare errno here reads as one unexplained import failure
+		// per package, and says neither the file nor the step that wanted it.
+		return nil, fmt.Errorf("opening %s, which carries the standard library: %w", exe, err)
 	}
 	defer file.Close()
 	trailer, err := ReadTrailer(file)
@@ -226,7 +232,7 @@ func Open(name string) (file *os.File, offset, size int64, err error) {
 	}
 	file, err = os.Open(exe)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, fmt.Errorf("opening %s to read embedded %s: %w", exe, Name(name), err)
 	}
 	return file, offset, size, nil
 }
