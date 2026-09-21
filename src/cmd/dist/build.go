@@ -2042,6 +2042,92 @@ func cmdversion() {
 	xprintf("%s\n", findgoversion())
 }
 
+// cmdstamp gives a built toolchain a new version. It rewrites $GOROOT/VERSION
+// and relinks the installed binaries with the same string, so only the link
+// steps run again and the compile steps stay as the build left them. See
+// stampInstall for why the compile steps cannot run again.
+//
+// A release is SELECTED by this version: distpack names the tarball and the
+// toolchain module for $GOROOT/VERSION, and a go command switching to that
+// toolchain fatals when the binary it execs reports a different
+// runtime.Version(). The version that the object header and each tool's -V
+// line carry stays the one the tree was built with, and no build reads those
+// across toolchains: cmd/go keys a fork tool on its content ID.
+func cmdstamp() {
+	xflagparse(1)
+	if flag.NArg() != 1 {
+		flag.Usage()
+	}
+	version := flag.Arg(0)
+	if !strings.HasPrefix(version, "go") {
+		fatalf("stamp: %q is not a Go version: it must start with \"go\"", version)
+	}
+	// gorootBinGo carries no suffix, and only exec resolves one.
+	if _, err := os.Stat(pathf("%s/bin/go%s", goroot, exe)); err != nil {
+		fatalf("stamp: %v\nBuild the toolchain before you stamp it.", err)
+	}
+
+	// appendCompilerFlags passes these on the command line, which replaces the
+	// -ldflags toolenv puts in GOFLAGS whole, so carry that -w here as well.
+	ldflags := "-X runtime.buildVersion=" + version
+	if isRelease || os.Getenv("GO_BUILDER_NAME") != "" {
+		ldflags = "-w " + ldflags
+	}
+	goldflags = strings.TrimSpace(goldflags + " " + ldflags)
+
+	// The first line is the version. The lines under it are metadata distpack
+	// reads, the release time among them, so the rewrite keeps them.
+	file := pathf("%s/VERSION", goroot)
+	rest := ""
+	if _, after, found := strings.Cut(readfile(file), "\n"); found {
+		rest = after
+	}
+	writefile(version+"\n"+rest, file, 0)
+	stampInstall()
+	linkTools()
+
+	// The stamp is the whole point of this command, so a binary that kept the
+	// old version fails here instead of shipping.
+	out := strings.Fields(run(goroot, CheckExit, gorootBinGo, "version"))
+	if len(out) < 3 || out[2] != version {
+		fatalf("stamp: bin/go reports %q, want %q", strings.Join(out, " "), version)
+	}
+	xprintf("Stamped %s.\n", version)
+}
+
+// stampInstall reinstalls the binaries a stamp relinks, and names what the
+// install had to compile.
+//
+// A stamp cannot turn into a second build of the toolchain. cmd/go hashes
+// -ldflags into the LINK action ID alone (linkActionID), and a compile action
+// ID reads none of it, so moving the version leaves every compile already in
+// the cache valid. A package compiled here is one the cache lost or could not
+// serve, or one whose source moved after the build; re-doing it is the only
+// way to link. Naming them is how either shows up as something other than a
+// slow publish.
+func stampInstall() {
+	cmd := []string{goInstaller(), "install"}
+	if noOpt {
+		cmd = append(cmd, "-tags=noopt")
+	}
+	cmd = appendCompilerFlags(cmd)
+	cmd = append(cmd, "-v")
+	// ShowOutput streams instead of returning, so the output is printed below.
+	out := runEnv(workdir, CheckExit, toolenv(), append(cmd, toolsToInstall...)...)
+	xprintf("%s", out)
+	var compiled []string
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || strings.ContainsAny(line, " \t") || slices.Contains(toolsToInstall, line) {
+			continue
+		}
+		compiled = append(compiled, line)
+	}
+	if len(compiled) > 0 {
+		xprintf("stamp: the build cache did not answer for %d package(s), which this compiled: %s\n",
+			len(compiled), strings.Join(compiled, " "))
+	}
+}
+
 // cmdlist lists all supported platforms.
 func cmdlist() {
 	jsonFlag := flag.Bool("json", false, "produce JSON output")
