@@ -366,13 +366,17 @@ func isGoGenerate(buf []byte) bool {
 // single go:generate command.
 func (g *Generator) setEnv() {
 	env := []string{
-		"GOROOT=" + cfg.GOROOT,
 		"GOARCH=" + cfg.BuildContext.GOARCH,
 		"GOOS=" + cfg.BuildContext.GOOS,
 		"GOFILE=" + g.file,
 		"GOLINE=" + strconv.Itoa(g.lineNum),
 		"GOPACKAGE=" + g.pkg,
 		"DOLLAR=" + "$",
+	}
+	// GOROOT names this executable in embedded mode, and a program that reads
+	// it expects a tree. Saying nothing lets each child find its own.
+	if !cfg.EmbeddedStd {
+		env = append(env, "GOROOT="+cfg.GOROOT)
 	}
 	env = base.AppendPATH(env)
 	env = base.AppendPWD(env, g.dir)
@@ -486,7 +490,21 @@ func (g *Generator) setShorthand(words []string) {
 // the command name itself.
 func (g *Generator) exec(words []string) {
 	path := words[0]
-	if path != "" && !strings.Contains(path, string(os.PathSeparator)) {
+	args := words[1:]
+	switch {
+	case cfg.EmbeddedStd && path == "go":
+		// GOROOT names this executable rather than a tree, so GOROOT/bin holds
+		// nothing and the lookup below leaves the bare word for PATH to
+		// resolve. A stock go command found that way reads GOROOT out of the
+		// environment, finds a file where a directory belongs, and refuses to
+		// start. A directive asking for "go" means the go command running it,
+		// which answers to its own name as an argument.
+		goCmd, err := base.GoCommand()
+		if err != nil {
+			g.errorf("%s", err)
+		}
+		path, args = goCmd[0], append(slices.Clip(goCmd[1:]), args...)
+	case path != "" && !strings.Contains(path, string(os.PathSeparator)):
 		// If a generator says '//go:generate go run <blah>' it almost certainly
 		// intends to use the same 'go' as 'go generate' itself.
 		// Prefer to resolve the binary from GOROOT/bin, and for consistency
@@ -496,7 +514,7 @@ func (g *Generator) exec(words []string) {
 			path = gorootBinPath
 		}
 	}
-	cmd := exec.Command(path, words[1:]...)
+	cmd := exec.Command(path, args...)
 	cmd.Args[0] = words[0] // Overwrite with the original in case it was rewritten above.
 
 	// Standard in and out of generator should be the usual.
