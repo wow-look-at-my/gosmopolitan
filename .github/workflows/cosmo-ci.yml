@@ -314,9 +314,16 @@ jobs:
         env:
           SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
         run: |
-          cd src
-          .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
-          exit $LASTEXITCODE
+          # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
+          $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
+          try {
+            cd src
+            .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
+            $status = $LASTEXITCODE
+          } finally {
+            Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+          }
+          exit $status
 
       - name: What the suite spent its time on
         # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.

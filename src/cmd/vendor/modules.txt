@@ -48,17 +48,17 @@ github.com/stretchr/testify/require
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-containers/set
 # github.com/wow-look-at-my/go-ipc v0.0.0
-## explicit; go 1.24
+## explicit; go 1.24.7
 github.com/wow-look-at-my/go-ipc
 # github.com/wow-look-at-my/go-mmap v0.0.0
-## explicit; go 1.24
+## explicit; go 1.24.0
 github.com/wow-look-at-my/go-mmap
 # github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0
 ## explicit; go 1.26
 github.com/wow-look-at-my/go-s3-server/cacheclient
 github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk
 # github.com/wow-look-at-my/go-shm v0.0.0
-## explicit; go 1.24
+## explicit; go 1.24.7
 github.com/wow-look-at-my/go-shm
 # go.yaml.in/yaml/v3 v3.0.5
 ## explicit; go 1.16
