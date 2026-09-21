@@ -40,15 +40,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-<<<<<<< HEAD
         build-os: [macos-latest, windows-latest]
         # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-09-28
         exclude:
           - build-os: windows-latest
-=======
-        # NT is off: it is the longest leg by far. Put windows-latest back to build it again. waiver-expires: 2026-09-28
-        build-os: [macos-latest]
->>>>>>> origin/claude/ci-dedup
 
     runs-on: ${{ matrix.build-os }}
 
@@ -440,20 +435,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-<<<<<<< HEAD
         test-os: [ubuntu-latest, macos-latest, windows-latest]
         # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
         exclude:
           - test-os: windows-latest
-=======
-        # NT is off: it is the longest leg by far. Put windows-latest back, with its 40 minute timeout, to run it again. waiver-expires: 2026-09-28
-        test-os: [ubuntu-latest, macos-latest]
-        include:
-          - test-os: ubuntu-latest
-            job-timeout: 25
-          - test-os: macos-latest
-            job-timeout: 25
->>>>>>> origin/claude/ci-dedup
 
     runs-on: ${{ matrix.test-os }}
 
@@ -483,7 +468,6 @@ jobs:
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
 
-<<<<<<< HEAD
       # Only an NT leg produces this origin, and only NT's own apetest case reads it.
       - name: Download the windows-origin APE binaries
         if: matrix.test-os == 'windows-latest'
@@ -492,8 +476,6 @@ jobs:
           name: ape-binary-Windows
           path: binaries/ape-binary-Windows
 
-=======
->>>>>>> origin/claude/ci-dedup
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
         timeout-minutes: 3
@@ -763,24 +745,12 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-<<<<<<< HEAD
         goos: [linux, darwin, windows]
         # NT is the longest leg by far, so no windows archive ships. Drop this exclude to ship one again. waiver-expires: 2026-09-28
         exclude:
           - goos: windows
     # The host has to be the target: distpack archives the toolchain its own build leg produced. An include that named the runner would come back past the exclude above, so both follow from goos here.
     runs-on: ${{ matrix.goos == 'darwin' && 'macos-latest' || matrix.goos == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
-=======
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - runner: macos-latest
-            goos: darwin
-            goarch: arm64
-          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-09-28
-    runs-on: ${{ matrix.runner }}
->>>>>>> origin/claude/ci-dedup
     permissions:
       id-token: write
       contents: read
@@ -825,11 +795,7 @@ jobs:
         env:
           GOROOT: ${{ github.workspace }}
           GOOS: ${{ matrix.goos }}
-<<<<<<< HEAD
           GOARCH: ${{ env.LEG_ARCH }}
-=======
-          GOARCH: ${{ matrix.goarch }}
->>>>>>> origin/claude/ci-dedup
 
       # Publish flow: buildhost's own composite actions -- see docs/CI.md "publish jobs".
       - name: Locate distribution tarball
