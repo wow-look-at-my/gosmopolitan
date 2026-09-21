@@ -6,6 +6,9 @@ package cfg
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -20,9 +23,42 @@ var EmbeddedStd bool
 
 // UseEmbeddedStd puts the go command in embedded mode, with exe, this
 // executable, as its GOROOT.
+//
+// A tree of the SAME toolchain is the GOROOT instead, when the environment
+// names one. The blob stays authoritative: every standard package still
+// compiles to the archive this binary carries, because that is what the
+// compile action reads. What the tree adds is the rest of the distribution,
+// cmd among it, which no blob carries and which a program importing the go
+// command needs. A tree of another toolchain is refused, so an outside GOROOT
+// can still not put other sources under this binary's archives.
 func UseEmbeddedStd(exe string) {
 	EmbeddedStd = true
+	if tree := sameToolchainTree(os.Getenv("GOROOT")); tree != "" {
+		SetGOROOT(tree, false)
+		return
+	}
 	SetGOROOT(exe, false)
+}
+
+// sameToolchainTree answers goroot when it holds a distribution of the
+// version this binary is, or "". The VERSION file's first line names it, the
+// same line the distribution stamps into the binary.
+func sameToolchainTree(goroot string) string {
+	if goroot == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(goroot, "VERSION"))
+	if err != nil {
+		return ""
+	}
+	name, _, _ := strings.Cut(string(raw), "\n")
+	if strings.TrimSpace(name) != runtime.Version() {
+		return ""
+	}
+	if info, err := os.Stat(filepath.Join(goroot, "src", "cmd")); err != nil || !info.IsDir() {
+		return ""
+	}
+	return goroot
 }
 
 // StdTarget names the standard library this build reads, as the blob
@@ -91,6 +127,18 @@ func embeddedTargets() []string {
 func EmbeddedStdPackage(path string) *embedded.Package {
 	EmbeddedManifest()
 	return manifestPkgs[path]
+}
+
+// EmbeddedStdArchived answers the embedded standard package at path when this
+// binary carries its archive, or nil. A standard package whose Go files are
+// all tests compiles to no archive, so the manifest names it and the blob
+// holds nothing for it. crypto/internal/fips140test is one.
+func EmbeddedStdArchived(path string) *embedded.Package {
+	pkg := EmbeddedStdPackage(path)
+	if pkg == nil || pkg.Archive == "" {
+		return nil
+	}
+	return pkg
 }
 
 // EmbeddedStdArchive names the archive of the embedded standard package at
