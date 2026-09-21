@@ -127,13 +127,9 @@ func Main(args []string) int {
 	return 0
 }
 
-// addHeaders puts the assembly headers of the go command into the blob.
-//
-// A go command that carries its own standard library has no GOROOT directory:
-// GOROOT names the executable, and pkg/include is an entry of the blob that
-// executable carries. This tool runs inside that executable, so its own blob
-// is where those headers come from. A go command with a GOROOT on disk keeps
-// reading the directory.
+// addHeaders puts the assembly headers in the blob. A GOROOT tree keeps them
+// under pkg/include; a go command carrying its own standard library carries
+// them too, and answers from the blob it was built with.
 func addHeaders(writer *embedded.Writer, goCmd []string) error {
 	include := filepath.Join(gorootOf(goCmd), "pkg", "include")
 	headers, err := os.ReadDir(include)
