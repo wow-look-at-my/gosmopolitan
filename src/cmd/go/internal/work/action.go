@@ -772,9 +772,12 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 				return a
 			}
 
-			// An embedded standard library is compiled already.
+			// An embedded standard library is compiled already, except for a
+			// package this binary carries no archive of.
 			if cfg.EmbeddedStd {
-				return b.embeddedStdAction(a, p)
+				if embedded := b.embeddedStdAction(a, p); embedded != nil {
+					return embedded
+				}
 			}
 		}
 

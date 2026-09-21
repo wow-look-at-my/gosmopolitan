@@ -36,10 +36,10 @@ func RunAs(argv []string, goCommand []string) int {
 		if len(goCommand) > 0 {
 			base.SetGoCommand(goCommand)
 		}
-		// A carried standard library is the one this command builds
-		// against. The environment does not select between it and a tree:
-		// that is what made a GOROOT from outside able to replace the
-		// standard library of a binary that ships its own.
+		// A carried standard library is the one this command builds against,
+		// whatever GOROOT names: an outside tree cannot put its own sources
+		// under this binary's archives. A tree of the same toolchain still
+		// answers for what no blob carries, cmd among it.
 		if embedded.Available() {
 			cfg.UseEmbeddedStd(exe)
 		}

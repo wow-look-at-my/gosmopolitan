@@ -78,14 +78,29 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	if err != nil {
 		return nil, false, err
 	}
+	// What a failed run wrote goes back out. A half-generated package compiles
+	// against files its generator never finished, which is worse than the
+	// package the zip carried.
+	kept, err := additions(modroot, stage)
+	if err != nil {
+		return nil, false, err
+	}
 	for _, pkg := range pkgs {
 		if gone := generatorNotShipped(stage, pkg); gone != "" {
 			fmt.Fprintf(os.Stderr, "go: %s in %s names %s, which its module zip does not carry\n", mod, pkg, gone)
 			continue
 		}
 		err := runGenerate(stage, pkg)
+		grown, addErr := additions(modroot, stage)
+		if addErr != nil {
+			return nil, false, addErr
+		}
 		if err == nil {
+			kept = grown
 			continue
+		}
+		if dropErr := dropAppeared(stage, grown, kept); dropErr != nil {
+			return nil, false, dropErr
 		}
 		// A program this machine lacks says nothing about the module, and the
 		// modules that name stringer or yy ship what those write. So the
@@ -114,7 +129,20 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 		if hostCannotGenerate(err) {
 			return nil, false, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
 		}
-		return nil, false, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
+		// What is left is a generator of the module that ran and failed. A
+		// module ships what its directives write, so the tree the zip carries
+		// is what its authors published, and the run is a refresh of it.
+		// x/text's own generators read the Unicode tables off the network and
+		// write into x/net, so no consumer completes that module, and every
+		// build whose graph reaches it stopped here.
+		//
+		// The failure is named and the answer is partial, which keeps the tree
+		// out of the cache the fleet reads. A module that truly owed the file
+		// fails the build right after, at the symbol it never declared, with
+		// this line above it.
+		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, err)
+		fmt.Fprintf(os.Stderr, "go: %s keeps what its own zip carries for %s\n", mod, pkg)
+		partial = true
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -132,6 +160,24 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 		}
 	}
 	return added, partial, nil
+}
+
+// dropAppeared removes from stage the files grown holds and kept does not.
+// Both are sorted, and both name files relative to the stage root.
+func dropAppeared(stage string, grown, kept []string) error {
+	had := make(map[string]bool, len(kept))
+	for _, rel := range kept {
+		had[rel] = true
+	}
+	for _, rel := range grown {
+		if had[rel] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(stage, filepath.FromSlash(rel))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // additions answers the regular files under stage that modroot does not have,
