@@ -98,6 +98,21 @@ runs:
         name: toolchain-${{ runner.os }}
         path: ${{ runner.temp }}/toolchain
 
+    # distpack archives the whole GOROOT and has no catch-all exclude, so a stray APE here ships in the release.
+    - name: Clear the APE binaries out of GOROOT
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The names .gitignore already claims at the root, staged to the hand-off above.
+        rm -f -- *.com *.com.dbg *.com.aarch64.elf
+        set -- *.com *.com.dbg *.com.aarch64.elf
+        for f in "$@"; do
+          if [ -e "$f" ]; then
+            echo "$f survived: distpack would ship it" >&2
+            exit 1
+          fi
+        done
+
     # Packaging runs after the hand-off above, so every downstream job takes the unstamped tree.
     - name: Stamp the release version into the toolchain
       # dist stamp relinks bin/go and then execs it, so only the host that built a toolchain can stamp it. Every leg of a run stamps the same string.
