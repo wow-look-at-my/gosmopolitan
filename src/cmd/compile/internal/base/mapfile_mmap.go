@@ -22,7 +22,7 @@ import (
 func MapFile(f *os.File, offset, length int64) (string, error) {
 	// POSIX mmap: "The implementation may require that off is a
 	// multiple of the page size."
-	x := offset & int64(os.Getpagesize()-1)
+	x := offset & (mapOffsetGrain() - 1)
 	offset -= x
 	length += x
 
