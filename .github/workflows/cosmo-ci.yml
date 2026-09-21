@@ -40,11 +40,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        build-os: [macos-latest, windows-latest]
+        # NT is off: it is the longest leg by far. Put windows-latest back to build it again. waiver-expires: 2026-09-28
+        build-os: [macos-latest]
 
     runs-on: ${{ matrix.build-os }}
-    # NT reports red for reasons that are not the change under test; drop this line to gate on it again. waiver-expires: 2026-09-27
-    continue-on-error: ${{ matrix.build-os == 'windows-latest' }}
 
     steps:
       # src/cmd/vendor holds three submodules; without them cmd/go cannot build.
@@ -121,14 +120,13 @@ jobs:
       # Every leg runs to the end and reports. One host's red says nothing about the other five, and a suite exists to name everything that is broken at once.
       fail-fast: false
       matrix:
-        suite-os: [ubuntu-latest, macos-latest, windows-latest]
+        # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-09-28
+        suite-os: [ubuntu-latest, macos-latest]
         # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
         shard: [0, 1]
         shards: [2]
 
     runs-on: ${{ matrix.suite-os }}
-    # NT reports red for reasons that are not the change under test; drop this line to gate on it again. waiver-expires: 2026-09-27
-    continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
     env:
       # cmd/go's script suite runs in full now that the linked tools resolve, and the darwin runner needs the longer package deadline.
       GO_TEST_TIMEOUT_SCALE: 2
@@ -218,18 +216,15 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        # NT is off: it is the longest leg by far. Put windows-latest back, with its 40 minute timeout, to run it again. waiver-expires: 2026-09-28
+        test-os: [ubuntu-latest, macos-latest]
         include:
           - test-os: ubuntu-latest
             job-timeout: 25
           - test-os: macos-latest
             job-timeout: 25
-          - test-os: windows-latest
-            job-timeout: 40
 
     runs-on: ${{ matrix.test-os }}
-    # NT reports red for reasons that are not the change under test; drop this line to gate on it again. waiver-expires: 2026-09-27
-    continue-on-error: ${{ matrix.test-os == 'windows-latest' }}
 
     steps:
       - name: Checkout code (for Go tests)
@@ -256,12 +251,6 @@ jobs:
         with:
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
-
-      - name: Download the windows-origin APE binaries
-        uses: wow-look-at-my/actions@cache-download#latest
-        with:
-          name: ape-binary-Windows
-          path: binaries/ape-binary-Windows
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
@@ -539,12 +528,8 @@ jobs:
           - runner: macos-latest
             goos: darwin
             goarch: arm64
-          - runner: windows-latest
-            goos: windows
-            goarch: amd64
+          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-09-28
     runs-on: ${{ matrix.runner }}
-    # NT reports red for reasons that are not the change under test; drop this line to gate on it again. waiver-expires: 2026-09-27
-    continue-on-error: ${{ matrix.runner == 'windows-latest' }}
     permissions:
       id-token: write
       contents: read
