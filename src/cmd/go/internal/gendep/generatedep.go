@@ -18,7 +18,6 @@ import (
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/lockedfile"
-	"cmd/go/internal/modfetch"
 	"cmd/go/internal/str"
 )
 
@@ -169,22 +168,22 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	// tree other builds are compiling from. What it wrote reaches that tree
 	// only once it has succeeded.
 	stage := root + ".stage"
-	if err := modfetch.RemoveAll(stage); err != nil {
+	if err := removeAll(stage); err != nil {
 		return "", err
 	}
 	if err := copyTree(modroot, stage); err != nil {
-		modfetch.RemoveAll(stage)
+		removeAll(stage)
 		return "", err
 	}
 	synthesized, err := giveGoMod(stage, rel)
 	if err != nil {
-		modfetch.RemoveAll(stage)
+		removeAll(stage)
 		return "", err
 	}
 	if err := runGenerate(stage, pkgrel); err != nil {
 		// A half-generated package is worse than none: it compiles against
 		// files the generator had not finished writing.
-		modfetch.RemoveAll(stage)
+		removeAll(stage)
 		// Only a verdict about the module's own bytes may be recorded. A host
 		// that lacks the sandbox says nothing about this module, and writing
 		// that down makes installing the sandbox change nothing.
@@ -199,12 +198,12 @@ func generateModule(modroot, pkgrel string) (string, error) {
 	// written to make the stage a main module does not reach it.
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
-			modfetch.RemoveAll(stage)
+			removeAll(stage)
 			return "", err
 		}
 	}
 	if err := publishGenerated(modroot, stage, root); err != nil {
-		modfetch.RemoveAll(stage)
+		removeAll(stage)
 		return "", err
 	}
 	if err := os.MkdirAll(marks, 0o777); err != nil {
@@ -252,7 +251,7 @@ func publishGenerated(modroot, stage, root string) error {
 			return err
 		}
 	}
-	return modfetch.RemoveAll(stage)
+	return removeAll(stage)
 }
 
 // generatorChanges compares stage, a copy of modroot a generator has run in,
