@@ -114,8 +114,8 @@ func Main(args []string) int {
 		}
 		writer.Add(embedded.ManifestEntry(name), data)
 	}
-	for _, header := range includeHeaders(gorootOf(goCmd)) {
-		writer.Add(embedded.IncludeDir+"/"+header.name, header.data)
+	if err := addHeaders(&writer, goCmd); err != nil {
+		log.Fatalf("reading the assembly headers: %v", err)
 	}
 	var blob bytes.Buffer
 	if _, err := writer.WriteTo(&blob); err != nil {
@@ -127,71 +127,43 @@ func Main(args []string) int {
 	return 0
 }
 
+// addHeaders puts the assembly headers of the go command into the blob.
+//
+// A go command that carries its own standard library has no GOROOT directory:
+// GOROOT names the executable, and pkg/include is an entry of the blob that
+// executable carries. This tool runs inside that executable, so its own blob
+// is where those headers come from. A go command with a GOROOT on disk keeps
+// reading the directory.
+func addHeaders(writer *embedded.Writer, goCmd []string) error {
+	include := filepath.Join(gorootOf(goCmd), "pkg", "include")
+	headers, err := os.ReadDir(include)
+	if err == nil {
+		for _, header := range headers {
+			data, err := os.ReadFile(filepath.Join(include, header.Name()))
+			if err != nil {
+				return err
+			}
+			writer.Add(embedded.IncludeDir+"/"+header.Name(), data)
+		}
+		return nil
+	}
+	carried, listErr := embedded.Entries(embedded.IncludeDir + "/")
+	if listErr != nil || len(carried) == 0 {
+		return err
+	}
+	for _, name := range carried {
+		data, readErr := embedded.ReadFile(name)
+		if readErr != nil {
+			return readErr
+		}
+		writer.Add(name, data)
+	}
+	return nil
+}
+
 // goCommand starts the go command with args after its own words.
 func goCommand(goCmd []string, args ...string) *exec.Cmd {
 	return exec.Command(goCmd[0], append(append([]string{}, goCmd[1:]...), args...)...)
-}
-
-// header is one assembly header, under the name the blob files it by.
-type header struct {
-	name string
-	data []byte
-}
-
-// includeHeaders answers the assembly headers of a GOROOT, in name order.
-// A GOROOT that names a file is a go command carrying its standard library
-// inside that file, and the headers come out of the blob it carries; a
-// GOROOT that names a directory is a source tree, which keeps them under
-// pkg/include.
-func includeHeaders(goroot string) []header {
-	info, err := os.Stat(goroot)
-	if err != nil {
-		log.Fatalf("reading the assembly headers: %v", err)
-	}
-	if !info.IsDir() {
-		return embeddedHeaders(goroot)
-	}
-	return treeHeaders(filepath.Join(goroot, "pkg", "include"))
-}
-
-// treeHeaders reads the headers out of a source tree's include directory.
-func treeHeaders(include string) []header {
-	entries, err := os.ReadDir(include)
-	if err != nil {
-		log.Fatalf("reading the assembly headers: %v", err)
-	}
-	headers := make([]header, 0, len(entries))
-	for _, entry := range entries {
-		data, err := os.ReadFile(filepath.Join(include, entry.Name()))
-		if err != nil {
-			log.Fatal(err)
-		}
-		headers = append(headers, header{name: entry.Name(), data: data})
-	}
-	return headers
-}
-
-// embeddedHeaders reads the headers out of the blob the binary at exe
-// carries.
-func embeddedHeaders(exe string) []header {
-	blob, err := embedded.OpenFile(exe)
-	if err != nil {
-		log.Fatalf("reading the assembly headers from %s: %v", exe, err)
-	}
-	prefix := embedded.IncludeDir + "/"
-	names := blob.Entries(prefix)
-	if len(names) == 0 {
-		log.Fatalf("%s carries no assembly headers", exe)
-	}
-	headers := make([]header, 0, len(names))
-	for _, name := range names {
-		data, err := blob.ReadFile(name)
-		if err != nil {
-			log.Fatal(err)
-		}
-		headers = append(headers, header{name: strings.TrimPrefix(name, prefix), data: data})
-	}
-	return headers
 }
 
 // gorootOf answers the GOROOT the go command reads its source from.
@@ -206,7 +178,11 @@ func gorootOf(goCmd []string) string {
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
 func listStd(goCmd []string, goos, goarch string) []listed {
-	cmd := goCommand(goCmd, "list", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
+	// -e: a handful of standard packages hold nothing but tests, and the
+	// listing stops at the first of them without it. crypto/internal/
+	// fips140test is one. They compile to no archive, so they carry none
+	// here either, and the blob is the same either way.
+	cmd := goCommand(goCmd, "list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
 	// -trimpath, so a program built with it against these archives is the
 	// program the source tree builds with it; the tree's path is not in them.
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
