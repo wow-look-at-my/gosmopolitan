@@ -122,9 +122,9 @@ runs:
         GOROOT: ${{ github.workspace }}
 
     - name: Build distribution archive
-      # No GOOS or GOARCH: distpack targets the host, which is the platform this leg built.
+      # GOOS and GOARCH name the host: this fork's defaultGOOS is cosmo, so distpack left to itself packages a target no leg builds.
       shell: bash
-      run: ./bin/go tool distpack
+      run: GOOS="$(./bin/go env GOHOSTOS)" GOARCH="$(./bin/go env GOHOSTARCH)" ./bin/go tool distpack
       env:
         GOROOT: ${{ github.workspace }}
 
