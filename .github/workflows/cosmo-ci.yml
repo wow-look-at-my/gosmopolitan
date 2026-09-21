@@ -40,8 +40,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back to build it again. waiver-expires: 2026-09-28
-        build-os: [macos-latest]
+        build-os: [macos-latest, windows-latest]
+        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-09-28
+        exclude:
+          - build-os: windows-latest
 
     runs-on: ${{ matrix.build-os }}
 
@@ -125,6 +127,9 @@ jobs:
         # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
         shard: [0, 1]
         shards: [2]
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        exclude:
+          - suite-os: windows-latest
 
     runs-on: ${{ matrix.suite-os }}
     env:
@@ -132,6 +137,49 @@ jobs:
       GO_TEST_TIMEOUT_SCALE: 2
 
     steps:
+      # dist test links one APE per test package and the image leaves too little room on C: for that. It runs beside the checkout and the submodules, which want no room, rather than in front of them.
+      - name: Make room for the suite (NT)
+        id: make-room
+        if: runner.os == 'Windows'
+        background: true
+        shell: pwsh
+        run: |
+          $gb = 1GB
+          # Which drive has room decides whether this does anything: the workspace and RUNNER_TEMP are both on D:, and only the caches under the profile sit on C:.
+          Get-PSDrive -PSProvider FileSystem | Where-Object { $null -ne $_.Free } | ForEach-Object {
+            Write-Host ("before: {0}: {1:N1} GB free of {2:N1} GB" -f $_.Name, ($_.Free/$gb), (($_.Free + $_.Used)/$gb))
+          }
+          $before = (Get-PSDrive C).Free
+          $junk = @(
+            'C:\Android',
+            'C:\Program Files (x86)\Android',
+            'C:\Program Files\Microsoft SDKs\Android',
+            'C:\Program Files\Google\Chrome',
+            'C:\Program Files\Mozilla Firefox',
+            'C:\Program Files\MongoDB',
+            'C:\Program Files\PostgreSQL',
+            'C:\Program Files\Unity',
+            'C:\Miniconda',
+            'C:\Julia',
+            'C:\hostedtoolcache\windows\CodeQL',
+            'C:\hostedtoolcache\windows\Ruby',
+            'C:\hostedtoolcache\windows\PyPy',
+            'C:\hostedtoolcache\windows\Python',
+            'C:\hostedtoolcache\windows\node'
+          )
+          # rd walks a tree one entry at a time. robocopy mirrors an empty directory over each tree with many threads instead, which frees the space and leaves a shell of empty directories nothing reads again.
+          $empty = Join-Path $env:RUNNER_TEMP 'empty-for-mirror'
+          New-Item -ItemType Directory -Force -Path $empty | Out-Null
+          # An unlink is an MFT update and those serialize per volume, so four trees at eight threads is past the point where more helps.
+          $timings = $junk | Where-Object { Test-Path $_ } | ForEach-Object -Parallel {
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            try { robocopy $using:empty $_ /MIR /MT:8 /R:0 /W:0 /NFL /NDL /NJH /NJS /NC /NS /NP *>$null } catch { }
+            [pscustomobject]@{ Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1); Tree = $_ }
+          } -ThrottleLimit 4
+          $timings | Sort-Object Seconds -Descending | Format-Table -AutoSize | Out-String | Write-Host
+          Write-Host ("C: free {0:N1} GB, was {1:N1} GB" -f ((Get-PSDrive C).Free/$gb), ($before/$gb))
+          exit 0
+
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -142,9 +190,186 @@ jobs:
       # run.bash reaches the same sandboxed generate directives the build leg does.
       - uses: wow-look-at-my/actions@bubblewrap#latest
 
-      - uses: ./.github/actions/suite-leg
+      # The suite is what wants the room, so the deletion is joined here. wait-all takes no if, and a host that backgrounded nothing passes straight through.
+      - name: Wait for the room the suite needs
+        wait-all:
+
+      - name: Take the toolchain its build leg built
+        uses: wow-look-at-my/actions@cache-download#latest
         with:
-          shard: ${{ matrix.shard }}/${{ matrix.shards }}
+          name: toolchain-${{ runner.os }}
+          path: .
+
+      - name: The restored go answers
+        shell: bash
+        run: ./bin/go version
+
+      # This image's gcc links libwinpthread as a DLL that lives in C:\mingw64\bin and nowhere else, so a binary carrying any cgo package reaches it through PATH alone and dies at load with 0xc0000135 once a test narrows PATH or hands a child an environment without one. The loader reads the system directory whatever the environment says, so a copy there is found by every binary, and the stdlib archives the suite links against were built before this step runs.
+      - name: Put the mingw runtime where the loader always looks (NT)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sys = Join-Path $env:SystemRoot 'System32'
+          $copied = @()
+          foreach ($dll in @('libwinpthread-1.dll', 'libgcc_s_seh-1.dll', 'libstdc++-6.dll')) {
+            $src = Join-Path 'C:\mingw64\bin' $dll
+            if (-not (Test-Path $src)) { continue }
+            try { Copy-Item $src (Join-Path $sys $dll) -Force; $copied += $dll }
+            catch { Write-Host "could not copy ${dll}: $($_.Exception.Message)" }
+          }
+          if ($copied.Count -eq 0) {
+            Write-Host 'no mingw runtime went to the system directory; a test that narrows PATH will say so'
+          } else {
+            Write-Host "in ${sys}: $($copied -join ', ')"
+          }
+
+      # An APE starts through its loader, and execve of one reaches the loader only through this entry. F pre-opens it, so the path stops mattering.
+      - name: Let the kernel exec an APE directly
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in x86_64) a=amd64 ;; aarch64) a=arm64 ;; *) echo "no loader for $(uname -m)" >&2; exit 1 ;; esac
+          l="$PWD/src/cmd/link/internal/ld/apeld/bin/apeld-linux-$a"
+          test -x "$l"
+          sudo mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          printf ':APE:M::MZqFpD=\x27::%s:F' "$l" | sudo tee /proc/sys/fs/binfmt_misc/register >/dev/null
+          cat /proc/sys/fs/binfmt_misc/APE
+
+      # The suite says what a bare "exit status 2" from run.bat means.
+      - name: A cosmo binary built here runs here (dats)
+        if: runner.os != 'Windows'
+        uses: wow-look-at-my/dats@master
+        with:
+          tests: dats/host
+
+      # The dats action runs a suite inside WSL on NT, which tests Linux. The host suites run on NT itself, which has no sandbox backend.
+      - name: Download dats
+        if: runner.os == 'Windows'
+        id: dats
+        uses: wow-look-at-my/buildhost/.github/actions/buildhost-download@master
+        with:
+          project: dats
+
+      - name: A cosmo binary built here runs here (dats, on NT)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DATS_BIN: ${{ steps.dats.outputs.path }}
+        run: |
+          Copy-Item $env:DATS_BIN "$env:RUNNER_TEMP\dats.exe"
+          & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
+          exit $LASTEXITCODE
+
+      - name: The whole test suite (run.bash)
+        # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
+        run: |
+          sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
+          probe=$!
+          trap 'kill "$probe"' EXIT
+          cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
+
+      # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
+      - name: A patch that applies a multi-file diff (NT)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP 'patchprobe'
+          New-Item -ItemType Directory -Force -Path $probe | Out-Null
+          # The lines the diff names end in a newline, so the files have to as well, and they are written byte for byte rather than through a cmdlet that would append CRLF.
+          [IO.File]::WriteAllText("$probe\one.txt", "one`n")
+          [IO.File]::WriteAllText("$probe\two.txt", "two`n")
+          $diff = "--- a/one.txt`n+++ b/one.txt`n@@ -1 +1 @@`n-one`n+ONE`n--- a/two.txt`n+++ b/two.txt`n@@ -1 +1 @@`n-two`n+TWO`n"
+          [IO.File]::WriteAllText("$probe\d.patch", $diff)
+          $tried = @()
+          foreach ($dir in @("$env:ProgramFiles\Git\usr\bin", 'C:\msys64\usr\bin', 'C:\Strawberry\c\bin')) {
+            $exe = Join-Path $dir 'patch.exe'
+            if (-not (Test-Path $exe)) { $tried += "$exe (absent)"; continue }
+            Copy-Item "$probe\one.txt" "$probe\one.bak"; Copy-Item "$probe\two.txt" "$probe\two.bak"
+            & $exe -p1 -i "$probe\d.patch" -d $probe *>$null
+            $rc = $LASTEXITCODE
+            $ok = ($rc -eq 0) -and ((Get-Content "$probe\one.txt") -eq 'ONE') -and ((Get-Content "$probe\two.txt") -eq 'TWO')
+            Move-Item -Force "$probe\one.bak" "$probe\one.txt"; Move-Item -Force "$probe\two.bak" "$probe\two.txt"
+            if ($ok) {
+              Write-Host "patch that applies a two-file diff: $exe"
+              $bin = Join-Path $env:RUNNER_TEMP 'patchbin'
+              New-Item -ItemType Directory -Force -Path $bin | Out-Null
+              Copy-Item $exe $bin -Force
+              Get-ChildItem $dir -Filter '*.dll' | Where-Object { $_.Name -match '^(msys|cyg)' } | ForEach-Object { Copy-Item $_.FullName $bin -Force }
+              $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              exit 0
+            }
+            $tried += "$exe (exit $rc, did not apply both hunks)"
+          }
+          Write-Host "no patch on this image applies a two-file diff, leaving PATH alone:`n$($tried -join "`n")"
+          exit 0
+
+      - name: The whole test suite (run.bat)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
+        run: |
+          # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
+          $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
+          try {
+            cd src
+            .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
+            $status = $LASTEXITCODE
+          } finally {
+            Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
+          }
+          exit $status
+
+      - name: What the suite spent its time on
+        # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
+        if: always()
+        uses: wow-look-at-my/actions@typescript#latest
+        env:
+          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
+        with:
+          script: |
+            const required = (name: string): string => {
+              const value = process.env[name];
+              if (!value) throw new Error(`${name} is not set; the runner or this step's env provides it`);
+              return value;
+            };
+            const summaryPath = required('GITHUB_STEP_SUMMARY');
+            const logPath = `${required('RUNNER_TEMP')}/suite.log`;
+            if (!fs.existsSync(logPath)) {
+              core.info('no suite.log; nothing to report');
+              return;
+            }
+            const rows = [];
+            for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+              // dist test prints one of these per package it ran.
+              const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
+              if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });
+            }
+            if (rows.length === 0) {
+              core.info('no per-package timings found in suite.log');
+              return;
+            }
+            rows.sort((left, right) => right.secs - left.secs);
+            const total = rows.reduce((sum, row) => sum + row.secs, 0);
+            const top = rows.slice(0, 30);
+            const share = top.reduce((sum, row) => sum + row.secs, 0);
+            const lines = [
+              `### Suite timings (${required('RUNNER_OS')}, part ${required('SUITE_SHARD')})`,
+              '',
+              `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
+              `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
+              '',
+              '| seconds | package |',
+              '| ---: | --- |',
+              ...top.map((row) => `| ${row.secs.toFixed(2)} | \`${row.pkg}\` |`),
+            ];
+            fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
+            core.info(`recorded ${rows.length} package timings`);
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
@@ -211,18 +436,16 @@ jobs:
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
-    timeout-minutes: ${{ matrix.job-timeout }}
+    # NT links more and links it slower, so it gets 40 minutes where the others get 25.
+    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && 40 || 25 }}
     needs: [build, build-linux]
     strategy:
       fail-fast: true
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back, with its 40 minute timeout, to run it again. waiver-expires: 2026-09-28
-        test-os: [ubuntu-latest, macos-latest]
-        include:
-          - test-os: ubuntu-latest
-            job-timeout: 25
-          - test-os: macos-latest
-            job-timeout: 25
+        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        exclude:
+          - test-os: windows-latest
 
     runs-on: ${{ matrix.test-os }}
 
@@ -251,6 +474,14 @@ jobs:
         with:
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
+
+      # Only an NT leg produces this origin, and only NT's own apetest case reads it.
+      - name: Download the windows-origin APE binaries
+        if: matrix.test-os == 'windows-latest'
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-Windows
+          path: binaries/ape-binary-Windows
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
@@ -521,19 +752,18 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - runner: macos-latest
-            goos: darwin
-            goarch: arm64
-          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-09-28
-    runs-on: ${{ matrix.runner }}
+        goos: [linux, darwin, windows]
+        # NT is the longest leg by far, so no windows archive ships. Drop this exclude to ship one again. waiver-expires: 2026-09-28
+        exclude:
+          - goos: windows
+    # The host has to be the target: distpack archives the toolchain its own build leg produced. An include that named the runner would come back past the exclude above, so both follow from goos here.
+    runs-on: ${{ matrix.goos == 'darwin' && 'macos-latest' || matrix.goos == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
       artifact-metadata: write
+    env:
+      LEG_ARCH: ${{ matrix.goos == 'darwin' && 'arm64' || 'amd64' }}
 
     steps:
       - name: Checkout code
@@ -572,14 +802,14 @@ jobs:
         env:
           GOROOT: ${{ github.workspace }}
           GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: ${{ env.LEG_ARCH }}
 
       # Publish flow: buildhost's own composite actions -- see docs/CI.md "publish jobs".
       - name: Locate distribution tarball
         id: tarball
         uses: wow-look-at-my/actions@typescript#latest
         env:
-          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ env.LEG_ARCH }}
         with:
           script: |
             // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.<goos>-<goarch>.tar.gz)
@@ -603,7 +833,7 @@ jobs:
           project: gosmopolitan
           version: ${{ needs.publish-create.outputs.version }}
           os: ${{ matrix.goos }}
-          arch: ${{ matrix.goarch }}
+          arch: ${{ env.LEG_ARCH }}
           kind: archive
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
@@ -611,7 +841,7 @@ jobs:
       - name: Log uploaded artifact
         shell: bash
         run: |
-          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ env.LEG_ARCH }})"
 
   publish-finish:
     timeout-minutes: 10
