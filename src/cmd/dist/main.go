@@ -22,6 +22,7 @@ clean                   deletes all built files
 env [-p]                print environment (-p: include $PATH)
 install [dir]           install individual directory
 list [-json] [-broken]  list all supported platforms
+stamp <version>         give the built toolchain a new version
 test [-h]               run Go test(s)
 version                 print Go version
 
@@ -38,6 +39,7 @@ var commands = map[string]func(){
 	"env":       cmdenv,
 	"install":   cmdinstall,
 	"list":      cmdlist,
+	"stamp":     cmdstamp,
 	"test":      cmdtest,
 	"version":   cmdversion,
 }
