@@ -40,8 +40,10 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back to build it again. waiver-expires: 2026-09-28
-        build-os: [macos-latest]
+        build-os: [macos-latest, windows-latest]
+        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-09-28
+        exclude:
+          - build-os: windows-latest
 
     runs-on: ${{ matrix.build-os }}
 
@@ -120,11 +122,13 @@ jobs:
       # Every leg runs to the end and reports. One host's red says nothing about the other five, and a suite exists to name everything that is broken at once.
       fail-fast: false
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-09-28
-        suite-os: [ubuntu-latest, macos-latest]
+        suite-os: [ubuntu-latest, macos-latest, windows-latest]
         # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
         shard: [0, 1]
         shards: [2]
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        exclude:
+          - suite-os: windows-latest
 
     runs-on: ${{ matrix.suite-os }}
     env:
@@ -211,18 +215,16 @@ jobs:
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
-    timeout-minutes: ${{ matrix.job-timeout }}
+    # NT links more and links it slower, so it gets 40 minutes where the others get 25.
+    timeout-minutes: ${{ matrix.test-os == 'windows-latest' && 40 || 25 }}
     needs: [build, build-linux]
     strategy:
       fail-fast: true
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back, with its 40 minute timeout, to run it again. waiver-expires: 2026-09-28
-        test-os: [ubuntu-latest, macos-latest]
-        include:
-          - test-os: ubuntu-latest
-            job-timeout: 25
-          - test-os: macos-latest
-            job-timeout: 25
+        test-os: [ubuntu-latest, macos-latest, windows-latest]
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        exclude:
+          - test-os: windows-latest
 
     runs-on: ${{ matrix.test-os }}
 
@@ -251,6 +253,14 @@ jobs:
         with:
           name: ape-binary-macOS
           path: binaries/ape-binary-macOS
+
+      # Only an NT leg produces this origin, and only NT's own apetest case reads it.
+      - name: Download the windows-origin APE binaries
+        if: matrix.test-os == 'windows-latest'
+        uses: wow-look-at-my/actions@cache-download#latest
+        with:
+          name: ape-binary-Windows
+          path: binaries/ape-binary-Windows
 
       # Prefetched separately so a stalled module download can't masquerade as a hung test step.
       - name: Download apetest modules
@@ -521,19 +531,18 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        include:
-          - runner: ubuntu-latest
-            goos: linux
-            goarch: amd64
-          - runner: macos-latest
-            goos: darwin
-            goarch: arm64
-          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-09-28
-    runs-on: ${{ matrix.runner }}
+        goos: [linux, darwin, windows]
+        # NT is the longest leg by far, so no windows archive ships. Drop this exclude to ship one again. waiver-expires: 2026-09-28
+        exclude:
+          - goos: windows
+    # The host has to be the target: distpack archives the toolchain its own build leg produced. An include that named the runner would come back past the exclude above, so both follow from goos here.
+    runs-on: ${{ matrix.goos == 'darwin' && 'macos-latest' || matrix.goos == 'windows' && 'windows-latest' || 'ubuntu-latest' }}
     permissions:
       id-token: write
       contents: read
       artifact-metadata: write
+    env:
+      LEG_ARCH: ${{ matrix.goos == 'darwin' && 'arm64' || 'amd64' }}
 
     steps:
       - name: Checkout code
@@ -572,14 +581,14 @@ jobs:
         env:
           GOROOT: ${{ github.workspace }}
           GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          GOARCH: ${{ env.LEG_ARCH }}
 
       # Publish flow: buildhost's own composite actions -- see docs/CI.md "publish jobs".
       - name: Locate distribution tarball
         id: tarball
         uses: wow-look-at-my/actions@typescript#latest
         env:
-          DIST_SUFFIX: ${{ matrix.goos }}-${{ matrix.goarch }}
+          DIST_SUFFIX: ${{ matrix.goos }}-${{ env.LEG_ARCH }}
         with:
           script: |
             // buildhost-upload-artifact takes an exact file path -- resolve the versioned distpack tarball name (go<VERSION>.<goos>-<goarch>.tar.gz)
@@ -603,7 +612,7 @@ jobs:
           project: gosmopolitan
           version: ${{ needs.publish-create.outputs.version }}
           os: ${{ matrix.goos }}
-          arch: ${{ matrix.goarch }}
+          arch: ${{ env.LEG_ARCH }}
           kind: archive
           path: ${{ steps.tarball.outputs.path }}
           filename: ${{ steps.tarball.outputs.name }}
@@ -611,7 +620,7 @@ jobs:
       - name: Log uploaded artifact
         shell: bash
         run: |
-          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ matrix.goarch }})"
+          echo "::notice::uploaded ${{ steps.tarball.outputs.name }} to gosmopolitan v${{ needs.publish-create.outputs.version }} (${{ matrix.goos }}/${{ env.LEG_ARCH }})"
 
   publish-finish:
     timeout-minutes: 10
