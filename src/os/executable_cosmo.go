@@ -87,10 +87,12 @@ func resolveArgv0() (string, error) {
 		}
 	}
 	if exePath != "" {
-		if err := isExecutable(exePath); err != nil {
-			return "", err
+		for _, named := range spellings(exePath) {
+			if err := isExecutable(named); err == nil {
+				return named, nil
+			}
 		}
-		return exePath, nil
+		return "", ErrNotExist
 	}
 	// Search for executable in $PATH.
 	for _, dir := range splitPathList(Getenv("PATH")) {
@@ -103,15 +105,25 @@ func resolveArgv0() (string, error) {
 			}
 			dir = initWd + string(PathSeparator) + dir
 		}
-		exePath = dir + string(PathSeparator) + Args[0]
-		switch isExecutable(exePath) {
-		case nil:
-			return exePath, nil
-		case ErrPermission:
-			return "", ErrPermission
+		for _, named := range spellings(dir + string(PathSeparator) + Args[0]) {
+			switch isExecutable(named) {
+			case nil:
+				return named, nil
+			case ErrPermission:
+				return "", ErrPermission
+			}
 		}
 	}
 	return "", ErrNotExist
+}
+
+// spellings answers the file names a command started as path can have. NT
+// looks a command up by its .exe name, and argv carries the name without it.
+func spellings(path string) []string {
+	if runtime.CosmoHostOS() != "windows" || stringslite.HasSuffix(path, ".exe") {
+		return []string{path}
+	}
+	return []string{path, path + ".exe"}
 }
 
 // isExecutable returns an error if a given file is not an executable.
