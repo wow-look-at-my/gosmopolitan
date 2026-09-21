@@ -37,16 +37,22 @@ var exeOnce struct {
 }
 
 func executable() (string, error) {
-	if path, err := Readlink("/proc/self/exe"); err == nil {
-		// Readlink appends " (deleted)" for a file nothing links to.
-		path = stringslite.TrimSuffix(path, " (deleted)")
-		// An APE boots through a loader that execs a memfd, so on Linux
-		// the link reads "/memfd:<name>". That is the anonymous file's
-		// name, not a path: nothing opens it, and a program that re-execs
-		// itself by it fails. The loader passes the APE's own path as
-		// argv[0], which is the answer, so resolve that instead.
-		if !stringslite.HasPrefix(path, "/memfd:") {
-			return path, nil
+	// Only a Linux host answers this link with a path. Cosmopolitan serves
+	// parts of procfs on the other hosts, so a success here is no proof the
+	// answer names a file, and trusting one hands back a name that opens
+	// nothing.
+	if runtime.CosmoHostOS() == "linux" {
+		if path, err := Readlink("/proc/self/exe"); err == nil {
+			// Readlink appends " (deleted)" for a file nothing links to.
+			path = stringslite.TrimSuffix(path, " (deleted)")
+			// An APE boots through a loader that execs a memfd, so on Linux
+			// the link reads "/memfd:<name>". That is the anonymous file's
+			// name, not a path: nothing opens it, and a program that re-execs
+			// itself by it fails. The loader passes the APE's own path as
+			// argv[0], which is the answer, so resolve that instead.
+			if !stringslite.HasPrefix(path, "/memfd:") {
+				return path, nil
+			}
 		}
 	}
 
