@@ -972,6 +972,17 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+					// A listing names the source files; a build reads the
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
+					if cfg.CmdName == "list" {
+						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+							data.p.GoFiles = tree.GoFiles
+							data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+						}
+					}
 					// The module loader looked for a directory; the manifest is the answer.
 					r.err = nil
 					goto Happy
