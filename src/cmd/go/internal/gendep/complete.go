@@ -518,9 +518,14 @@ func runGenerate(root, pkg string) error {
 	// which runs here whatever the build targets and is the only target a go
 	// command carrying its standard library can build. Every target reads
 	// that single completed module.
+	// This generate writes the module itself. The child loads that module's
+	// packages out of the module cache, which is where Dir hands a package its
+	// generated copy instead. Left on, the directive would write that copy and
+	// the module this call is completing would keep none of it.
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
+		"GOGENERATEDEPS=off",
 	)
 	err = cmd.Run()
 	if err == nil {
