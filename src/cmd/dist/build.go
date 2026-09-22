@@ -1672,11 +1672,7 @@ func cmdbootstrap() {
 	// toolchain2 is bin/go, and bin/go carries the shared cache client that
 	// go_bootstrap cannot. Under it, toolchain3 fetches what another run of
 	// the same sources published instead of compiling cmd/go a third time.
-<<<<<<< HEAD
-	goInstall(toolenv(), gorootBinGo, toolchain...)
-=======
 	goInstall(toolenv(), goInstaller(), toolchain...)
->>>>>>> origin/master
 	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
