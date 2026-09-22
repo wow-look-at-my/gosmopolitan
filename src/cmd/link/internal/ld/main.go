@@ -76,7 +76,7 @@ var (
 	flagApeFat       = Flags.String("apefat", "", "assemble GOOS=cosmo binaries (`amd64[,arm64]`) into one APE and exit")
 	flagApePlatforms = Flags.String("apeplatforms", "", "restrict APE boot support to `platforms` (comma-separated os/arch; default: every platform the payloads allow)")
 	flagApeStrip     = Flags.Bool("apestrip", false, "with -apefat, embed only each input's loadable span (drop symbol table, DWARF, section headers)")
-	flagApeDbg       = Flags.Bool("apedbg", false, "with -apefat, write each input's unstripped ELF image beside the output (.dbg, .aarch64.elf)")
+	flagApeDbg       = Flags.Bool("apedbg", false, "with -apefat, write the amd64 input's unstripped ELF image beside the output (.dbg)")
 	flagApeDbgMode   = Flags.String("apedbgmode", "full", "with -apefat -apedbg, debug info `mode`: full (pristine sidecar ELFs), slim (debug-only sidecars), or compact (slim sidecars plus in-binary compact debug info)")
 	flagApeAppend    = Flags.String("apeappend", "", "with -apefat, append the embedded standard library `blob` past the load span, with its trailer")
 	flagPluginPath   = Flags.String("pluginpath", "", "full path name for plugin")

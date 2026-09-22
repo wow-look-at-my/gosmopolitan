@@ -37,9 +37,13 @@ func Import(packages map[string]*types2.Package, path, srcDir string, lookup fun
 		if pkg = packages[id]; pkg != nil && pkg.Complete() {
 			return
 		}
+		// The sibling branch names the file it could not open. This one
+		// hands back whatever the caller's lookup said, so a lookup that
+		// answers a bare os.ErrInvalid reaches types2 as the two words
+		// "invalid argument", with nothing to take them to.
 		f, err := lookup(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("the lookup for %s: %w", path, err)
 		}
 		rc = f
 	} else {

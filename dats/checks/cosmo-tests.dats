@@ -19,7 +19,7 @@ tests:
 	# surface, while these are the Apple-struct conversions and the auxv shim
 	# the emulation can host-test.
 	- desc: the syscall package's Apple conversions and the auxv shim
-	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes|TestOpenAuxv' syscall
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes|TestOpenAuxv|TestCosmoIPOptionValues|TestCosmoIPOptionLevels' syscall
 	  outputs:
 		stdout:
 			- "ok  \tsyscall"

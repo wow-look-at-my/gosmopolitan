@@ -4,7 +4,6 @@
 [GOEXPERIMENT:boringcrypto] skip
 
 env GOROOT=./a
-env GOTOOLCHAIN=local
 env GOSUMDB=nodefault
 env GOPROXY=nodefault
 env GO111MODULE=auto
@@ -15,9 +14,8 @@ env GOFIPS140=latest
 env GCCGO=nodefault
 
 go env -changed
-# linux output like GOTOOLCHAIN='local'
-# windows output like GOTOOLCHAIN=local
-stdout 'GOTOOLCHAIN=''?local''?'
+# linux output like GOSUMDB='nodefault'
+# windows output like GOSUMDB=nodefault
 stdout 'GOSUMDB=''?nodefault''?'
 stdout 'GOPROXY=''?nodefault''?'
 stdout 'GO111MODULE=''?auto''?'
@@ -28,7 +26,6 @@ stdout 'GOFIPS140=''?latest''?'
 stdout 'GCCGO=''?nodefault''?'
 
 go env -changed -json
-stdout '"GOTOOLCHAIN": "local"'
 stdout '"GOSUMDB": "nodefault"'
 stdout '"GOPROXY": "nodefault"'
 stdout '"GO111MODULE": "auto"'
@@ -69,11 +66,12 @@ env GOPROXY=s2
 go env -changed GOPROXY
 stdout 'GOPROXY=''?s2''?'
 
+# A value that matches the one in GOROOT/go.env is not a change.
 env GOROOT=./b
 go env -changed
-! stdout 'GOTOOLCHAIN=''?local''?'
+! stdout 'GOAMD64=''?v3''?'
 
-[GOOS:windows] env LocalAppData=C:\
+[GOOS:windows] env XDG_CACHE_HOME=C:\
 [GOOS:windows] env GOCACHE=C:\go-build
 [GOOS:windows] go env -changed
 [GOOS:windows] ! stdout 'GOCACHE'
@@ -84,4 +82,4 @@ GOAMD64=v1
 GOFIPS140=off
 
 --  b/go.env --
-GOTOOLCHAIN=local
+GOAMD64=v3

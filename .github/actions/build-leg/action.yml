@@ -48,19 +48,20 @@ runs:
       shell: bash
       run: |
         export PATH="$PWD/bin:$PATH"
-        GOOS=cosmo go build -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
+        # -trimpath: without it each host's checkout path rides in the binary, and no two hosts can build the same bytes.
+        GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
         # The probe is a multi-file package, so build its module directory.
-        (cd testdata/runtimeprobe && GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
+        (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
         echo "=== APE Header ==="
         head -c 200 fizzbuzz.com
         echo ""
         echo "=== File info ==="
         file fizzbuzz.com runtimeprobe.com 2>/dev/null || true
         # The platform subsets, tri and amd -- see docs/CI.md "build job" for what each drops.
-        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
-        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
-        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
+        GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o fizzbuzz-tri.com testdata/fizzbuzz/fizzbuzz.go
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,darwin/arm64,windows/amd64 GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-tri.com" .)
+        GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o fizzbuzz-amd.com testdata/fizzbuzz/fizzbuzz.go
+        (cd testdata/runtimeprobe && GOCOSMOPLATFORMS=linux/amd64,windows/amd64 GOOS=cosmo GOARCH=amd64 go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe-amd.com" .)
         echo "=== sizes ==="
         ls -l fizzbuzz.com fizzbuzz-tri.com fizzbuzz-amd.com
         export GOOS="$(go env GOHOSTOS)" GOARCH="$(go env GOHOSTARCH)"
@@ -96,3 +97,57 @@ runs:
       with:
         name: toolchain-${{ runner.os }}
         path: ${{ runner.temp }}/toolchain
+
+    # distpack archives the whole GOROOT and has no catch-all exclude, so a stray APE here ships in the release.
+    - name: Clear the APE binaries out of GOROOT
+      shell: bash
+      run: |
+        set -euo pipefail
+        # The names .gitignore already claims at the root, staged to the hand-off above.
+        rm -f -- *.com *.com.dbg *.com.aarch64.elf
+        set -- *.com *.com.dbg *.com.aarch64.elf
+        for f in "$@"; do
+          if [ -e "$f" ]; then
+            echo "$f survived: distpack would ship it" >&2
+            exit 1
+          fi
+        done
+
+    # Packaging runs after the hand-off above, so every downstream job takes the unstamped tree.
+    - name: Stamp the release version into the toolchain
+      # dist stamp relinks bin/go and then execs it, so only the host that built a toolchain can stamp it. Every leg of a run stamps the same string.
+      shell: bash
+      run: ./bin/go tool dist stamp "$(./bin/go env GOVERSION).r${{ github.run_number }}"
+      env:
+        GOROOT: ${{ github.workspace }}
+
+    - name: Build distribution archive
+      # GOOS and GOARCH name the host: this fork's defaultGOOS is cosmo, so distpack left to itself packages a target no leg builds.
+      shell: bash
+      run: GOOS="$(./bin/go env GOHOSTOS)" GOARCH="$(./bin/go env GOHOSTARCH)" ./bin/go tool distpack
+      env:
+        GOROOT: ${{ github.workspace }}
+
+    - name: Stage the distribution archive
+      id: distpack
+      shell: bash
+      run: |
+        set -euo pipefail
+        target="$(./bin/go env GOHOSTOS)-$(./bin/go env GOHOSTARCH)"
+        mkdir -p "$RUNNER_TEMP/distpack"
+        # The src archive distpack also writes carries no binaries, and no release slot takes it.
+        set -- pkg/distpack/go*."$target".tar.gz
+        if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+          echo "want exactly one pkg/distpack/go*.$target.tar.gz, found: $*" >&2
+          ls -l pkg/distpack >&2
+          exit 1
+        fi
+        cp "$1" "$RUNNER_TEMP/distpack/"
+        echo "target=$target" >> "$GITHUB_OUTPUT"
+        ls -l "$RUNNER_TEMP/distpack"
+
+    - name: Hand the distribution archive over
+      uses: wow-look-at-my/actions@cache-upload#latest
+      with:
+        name: distpack-${{ steps.distpack.outputs.target }}
+        path: ${{ runner.temp }}/distpack

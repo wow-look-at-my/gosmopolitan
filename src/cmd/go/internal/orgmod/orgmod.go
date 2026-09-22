@@ -51,6 +51,33 @@ func Placeholder(path string) string {
 	return major + ".0.0"
 }
 
+// Branch returns the branch named in a go.mod line's suffix comments, or "" when
+// they name none. A line names a branch to send one module somewhere other than
+// where the rest of them go: the main module's own branch, and the dependency's
+// default branch after that.
+//
+// The marker is read from the line the version lives on, so a fork consumed
+// through a replace carries it on the replace line.
+//
+//	require github.com/wow-look-at-my/foo v0.0.0 // branch=v1
+//	require github.com/wow-look-at-my/bar v0.0.0 // indirect; branch=v1
+//
+// The two go-toolchain spellings that carried this before are read as well, so
+// a go.mod file that records one resolves the way it always did.
+func Branch(comments []string) string {
+	for _, c := range comments {
+		for _, field := range strings.Split(strings.TrimPrefix(strings.TrimSpace(c), "//"), ";") {
+			field = strings.TrimSpace(field)
+			field = strings.TrimPrefix(field, "go-toolchain:auto-")
+			field = strings.TrimPrefix(field, "go-toolchain:")
+			if name, ok := strings.CutPrefix(field, "branch="); ok && name != "" {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
 // PlaceholderModule returns m with the version a version file records for an
 // org module, and returns m unchanged for every other module. It is how a
 // writer asks the question, so that go.mod and vendor/modules.txt name the

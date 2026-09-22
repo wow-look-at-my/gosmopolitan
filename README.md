@@ -10,12 +10,12 @@ APE binaries are single executables that run natively on multiple operating syst
 
 ```bash
 # Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
-# GOARCH is ignored for the output. The APE ships stripped; full debug
-# info lands in two sidecar ELFs next to it (program.com.dbg for amd64,
-# program.com.aarch64.elf for arm64), the cosmocc convention.
+# GOARCH is ignored for the output. The APE ships stripped; the amd64
+# image's debug info lands in one sidecar ELF next to it
+# (program.com.dbg), the cosmocc convention. The arm64 image gets none.
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE + sidecars in the install directory
+# go install produces the same fat APE + sidecar in the install directory
 GOOS=cosmo go install ./cmd/program
 
 # Keep full debug info embedded in the APE instead (no sidecars)
@@ -60,7 +60,7 @@ go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 
 All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-The shipped `go.env` defaults `GOTOOLCHAIN=local`. The fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides. Releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 
