@@ -20,7 +20,6 @@
 package gendep
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -273,23 +272,21 @@ func directives(files []string) int {
 		if err != nil {
 			continue
 		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
+		err = eachLine(open, func(line string) bool {
+			line = strings.TrimSpace(line)
 			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
+				return true
 			}
 			words := strings.Fields(line[len(generatePrefix):])
 			if len(words) == 0 || words[0] == "-command" {
-				continue
+				return true
 			}
 			count++
-		}
-		// A line past the buffer ends the read, and the directives under it go
-		// uncounted. A count short by one is a module that completes without
-		// the file that directive writes.
-		if err := scan.Err(); err != nil {
+			return true
+		})
+		// A read that stops short leaves the directives under the break
+		// uncounted.
+		if err != nil {
 			base.Fatalf("go: reading %s: %v", file, err)
 		}
 		open.Close()
@@ -322,24 +319,24 @@ func generatorNotShipped(stage, pkg string) string {
 		if err != nil {
 			continue
 		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
+		gone := ""
+		err = eachLine(open, func(line string) bool {
+			line = strings.TrimSpace(line)
 			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
+				return true
 			}
-			if gone := missingDroppedPath(stage, dir, line); gone != "" {
-				open.Close()
-				return gone
-			}
-		}
-		// A read that stopped short hides the rest of the directives, and a
+			gone = missingDroppedPath(stage, dir, line)
+			return gone == ""
+		})
+		// A read that stops short hides the rest of the directives, and a
 		// dropped path among them then reads as a package with none.
-		if err := scan.Err(); err != nil {
+		if err != nil {
 			base.Fatalf("go: reading %s: %v", filepath.Join(dir, ent.Name()), err)
 		}
 		open.Close()
+		if gone != "" {
+			return gone
+		}
 	}
 	return ""
 }

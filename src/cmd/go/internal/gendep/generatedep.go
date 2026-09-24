@@ -5,7 +5,6 @@
 package gendep
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -130,19 +129,17 @@ func fileHasDirective(file string) bool {
 	}
 	defer open.Close()
 
-	scan := bufio.NewScanner(open)
-	scan.Buffer(nil, 1<<20)
-	for scan.Scan() {
-		if strings.HasPrefix(strings.TrimSpace(scan.Text()), generatePrefix) {
-			return true
-		}
-	}
-	// A line past the buffer ends the read, and a directive under it goes
-	// unseen. That package then builds from a tree nothing generated.
-	if err := scan.Err(); err != nil {
+	found := false
+	err = eachLine(open, func(line string) bool {
+		found = strings.HasPrefix(strings.TrimSpace(line), generatePrefix)
+		return !found
+	})
+	// A read that stops short leaves a directive under the break unseen. That
+	// package then builds from a tree nothing generated.
+	if err != nil {
 		base.Fatalf("go: reading %s: %v", file, err)
 	}
-	return false
+	return found
 }
 
 // generateModule answers the directory of package pkgrel in its module's
