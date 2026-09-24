@@ -116,6 +116,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -2298,6 +2299,12 @@ func (pld *packageLoader) checkTidyCompatibility(ld *Loader, ctx context.Context
 // may see these legacy imports. We drop them so that the module
 // search does not look for modules to try to satisfy them.
 func scanDir(modroot string, dir string, tags map[string]bool) (imports_, testImports []string, err error) {
+	// A generated file can import a package nothing in the fetched module names,
+	// so the graph reads the generated copy, the same one the build compiles.
+	if gen := gendep.Dir(dir, modroot); gen != dir {
+		imports_, testImports, err = imports.ScanDir(gen, tags)
+		goto Happy
+	}
 	if ip, mierr := modindex.GetPackage(modroot, dir); mierr == nil {
 		imports_, testImports, err = ip.ScanDir(tags)
 		goto Happy
