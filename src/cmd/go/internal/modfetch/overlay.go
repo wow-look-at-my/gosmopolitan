@@ -114,6 +114,14 @@ func (f *Fetcher) completeDir(ctx context.Context, mod module.Version, dir strin
 	if len(pkgs) == 0 {
 		return nil
 	}
+	// A module outside the org runs nothing until it asks. Said out loud,
+	// because it compiles as its zip published it: whatever its generators
+	// would have added is missing, and the compiler names that at the first
+	// symbol nobody declared rather than here.
+	if !gendep.Allowed(dir, mod.Path) {
+		fmt.Fprintf(os.Stderr, "go: %s@%s is outside %s and its go.mod carries no %s line, so its generators do not run\n", mod.Path, mod.Version, gendep.OrgPrefix, gendep.OptIn)
+		return nil
+	}
 	// The one module that cannot complete. Said out loud, because the package
 	// installed from it is built from the zip alone: whatever its own
 	// generators would have added is missing.
