@@ -238,12 +238,6 @@ func bootstrapBuildTools() {
 	defer os.Setenv("GOPATH", os.Getenv("GOPATH"))
 	os.Setenv("GOPATH", workspace)
 
-<<<<<<< HEAD
-	defer os.Setenv("GOBIN", os.Getenv("GOBIN"))
-	os.Setenv("GOBIN", "")
-
-=======
->>>>>>> origin/master
 	// The bootstrap tools run on this machine, so they are built for it by
 	// name: a bootstrap go command of this fork answers an empty GOOS with
 	// cosmo, and an install for a target other than the host lands under
