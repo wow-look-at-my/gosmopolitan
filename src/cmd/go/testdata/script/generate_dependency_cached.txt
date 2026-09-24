@@ -1,13 +1,21 @@
+<<<<<<< HEAD
 # What a dependency's generator writes is kept in the build cache, so a module
 # cache that has no generated tree yet takes it from there instead of running
 # the generator again. The shared tier of the build cache is what hands one
 # machine's run to every other.
+=======
+# The files a dependency's generators add are kept in the build cache as the
+# module's overlay, so a module cache that has never fetched it takes them from
+# there instead of running the generator again. The shared tier of the build
+# cache is what hands one machine's run to every other.
+>>>>>>> origin/master
 
 env GOFLAGS=-mod=mod
 # -x reaches the generate directives through GOFLAGS, so a generator that runs
 # names itself on stderr.
 env GOFLAGS=$GOFLAGS' -x'
 
+<<<<<<< HEAD
 # The first build leaves the generated tree in the build cache, whether it
 # ran the generator or found an earlier run's tree there already.
 go build ./...
@@ -23,6 +31,25 @@ go build ./...
 ! stderr 'gen -out lang.gen.go'
 exists $WORK/mod2/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
 cmp $WORK/mod2/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go $GOPATH/pkg/mod/cache/generate/example.com/generated@v1.0.0/lang/lang.gen.go
+=======
+# The first build leaves the overlay in the build cache, whether it ran the
+# generator or found an earlier run's overlay there already.
+go build ./...
+exists $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# A module cache that has never seen this module, and the same build cache.
+env GOMODCACHE=$WORK/mod2
+! exists $WORK/mod2/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# The overlay is applied from the build cache: nothing ran the generator.
+go build ./...
+! stderr 'gen -out lang.gen.go'
+exists $WORK/mod2/example.com/generated@v1.0.0/lang/lang.gen.go
+cmp $WORK/mod2/example.com/generated@v1.0.0/lang/lang.gen.go $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/lang.gen.go
+
+# A file the zip carries is not in the overlay, and it still reads as the zip's.
+grep 'the module published this' $WORK/mod2/example.com/generated@v1.0.0/lang/kept.go
+>>>>>>> origin/master
 
 -- go.mod --
 module example.com/consumer

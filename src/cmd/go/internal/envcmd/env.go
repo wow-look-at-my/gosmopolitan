@@ -129,7 +129,6 @@ func MkEnv() []cfg.EnvVar {
 		{Name: "GOTELEMETRY", Value: telemetry.Mode()},
 		{Name: "GOTELEMETRYDIR", Value: telemetry.Dir()},
 		{Name: "GOTMPDIR", Value: cfg.Getenv("GOTMPDIR")},
-		{Name: "GOTOOLCHAIN"},
 		{Name: "GOTOOLDIR", Value: build.ToolDir},
 		{Name: "GOVCS", Value: cfg.GOVCS},
 		{Name: "GOVERSION", Value: runtime.Version()},
@@ -147,8 +146,6 @@ func MkEnv() []cfg.EnvVar {
 			}
 		case "GOCACHE":
 			env[i].Value, env[i].Changed, _ = cache.DefaultDir()
-		case "GOTOOLCHAIN":
-			env[i].Value, env[i].Changed = cfg.EnvOrAndChanged("GOTOOLCHAIN", "")
 		case "GODEBUG":
 			env[i].Changed = env[i].Value != ""
 		}
@@ -223,30 +220,9 @@ func ExtraEnvVars(ld *modload.Loader) []cfg.EnvVar {
 	if cfg.Getenv("GOWORK") == "off" {
 		gowork = "off"
 	}
-	gobin := cfg.GOBIN
-	if gobin == "" && cfg.ModulesEnabled {
-		gobin = modload.BinDir(ld)
-	} else if gobin == "" {
-		// Best effort guess of where the binary will be installed.
-		// go.dev/issue/23439
-		gopaths := filepath.SplitList(cfg.BuildContext.GOPATH)
-		wd, err := os.Getwd()
-		if err == nil && len(gopaths) > 0 {
-			gopath := gopaths[0]
-			for _, p := range gopaths {
-				if strings.HasPrefix(wd, p) {
-					gopath = p
-					break
-				}
-			}
-			gobin = filepath.Join(gopath, "bin")
-		}
-	}
-
 	return []cfg.EnvVar{
 		{Name: "GOMOD", Value: gomod},
 		{Name: "GOWORK", Value: gowork},
-		{Name: "GOBIN", Value: gobin, Changed: cfg.GOBINChanged},
 	}
 }
 

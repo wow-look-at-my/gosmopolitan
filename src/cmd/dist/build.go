@@ -248,11 +248,9 @@ func xinit() {
 	os.Setenv("GOROOT", goroot)
 	os.Setenv("GOFIPS140", gofips140)
 
-	// Set GOBIN to GOROOT/bin. The meaning of GOBIN has drifted over time
-	// (see https://go.dev/issue/3269, https://go.dev/cl/183058,
-	// https://go.dev/issue/31576). Since we want binaries installed by 'dist' to
-	// always go to GOROOT/bin anyway.
-	os.Setenv("GOBIN", gorootBin)
+	// GOBIN is removed, so there is nothing to set and nothing to clear:
+	// a command package in GOROOT installs to GOROOT/bin on its own.
+	// See RemovedEnv in cmd/go/internal/cfg.
 
 	// Make the environment more predictable.
 	os.Setenv("LANG", "C")
@@ -508,7 +506,7 @@ func isJJRepo() bool {
  * Initial tree setup.
  */
 
-// The old tools that no longer live in $GOBIN or $GOROOT/bin.
+// Tool names this build removes from $GOROOT/bin.
 var oldtool = []string{
 	"5a", "5c", "5g", "5l",
 	"6a", "6c", "6g", "6l",
@@ -1279,7 +1277,6 @@ func cmdenv() {
 
 	xprintf(format, "GO111MODULE", "")
 	xprintf(format, "GOARCH", goarch)
-	xprintf(format, "GOBIN", gorootBin)
 	xprintf(format, "GODEBUG", os.Getenv("GODEBUG"))
 	xprintf(format, "GOENV", "off")
 	xprintf(format, "GOFLAGS", "")
@@ -1375,6 +1372,36 @@ func timelog(op, name string) {
 	fmt.Fprintf(timeLogFile, "%s %+.1fs %s %s\n", t.Format(time.UnixDate), t.Sub(timeLogStart).Seconds(), op, name)
 }
 
+var (
+	phaseName string
+	phaseAt   time.Time
+)
+
+// reportStep prints one step of the build or the suite and what it cost. A
+// suite's own `ok pkg 1.23s` times the RUN of a test binary, never the build
+// of one. These lines split a leg's wall time between compiling and testing.
+func reportStep(kind, name string, elapsed time.Duration) {
+	fmt.Printf("dist %s %.3fs %s\n", kind, elapsed.Seconds(), name)
+}
+
+// startPhase names the phase of the build now running and reports what the
+// phase before it cost. One phase runs until the next begins.
+func startPhase(name string) {
+	endPhase()
+	timelog("build", name)
+	phaseName = name
+	phaseAt = time.Now()
+}
+
+// endPhase closes the phase now running, for the last one of a build.
+func endPhase() {
+	if phaseName == "" {
+		return
+	}
+	reportStep("build", phaseName, time.Since(phaseAt))
+	phaseName = ""
+}
+
 // toolenv returns the environment to use when building commands in cmd.
 //
 // This is a function instead of a variable because the exact toolenv depends
@@ -1440,6 +1467,24 @@ func linkTools() {
 	}
 }
 
+// goInstaller returns the go command to drive an install that writes bin/go
+// itself. Windows refuses to write an executable image a live process uses,
+// and every tool this go command starts is another bin/go process, so the
+// destination stays in use for the whole build. A copy carries the same tools
+// and leaves bin/go referenced by nobody. It is made fresh on each call, so
+// the driver is always the go command bin/go currently holds. GOROOT comes
+// from the environment, so the copy still finds this tree.
+//
+// Every host takes the copy. One path that every build leg runs beats a
+// second one that only NT ever reaches.
+func goInstaller() string {
+	// gorootBinGo carries no suffix, and only exec resolves one. A copy reads
+	// the file, so it needs the name the file actually has.
+	dst := pathf("%s/go-installer%s", workdir, exe)
+	copyfile(dst, pathf("%s/bin/go%s", goroot, exe), writeExec)
+	return dst
+}
+
 // The bootstrap command runs a build from scratch,
 // stopping at having installed the go_bootstrap command.
 //
@@ -1450,6 +1495,7 @@ func linkTools() {
 func cmdbootstrap() {
 	timelog("start", "dist bootstrap")
 	defer timelog("end", "dist bootstrap")
+	defer endPhase()
 
 	// No -a. It cleaned the tree and forced every phase to recompile what the
 	// build cache already held, which is the whole cost of a second build and
@@ -1473,6 +1519,11 @@ func cmdbootstrap() {
 		fatalf("build stopped because the port %s/%s is marked as broken\n\n"+
 			"Use the -force flag to build anyway.\n", goos, goarch)
 	}
+
+	// The build reads src/cmd/vendor below, so the submodules holding it are
+	// answered for here, before anything compiles.
+	checkVendorSubmodules()
+	trackSubmoduleBranches()
 
 	// Set GOPATH to an internal directory. We shouldn't actually
 	// need to store files here, since the toolchain won't
@@ -1519,7 +1570,7 @@ func cmdbootstrap() {
 
 	setup()
 
-	timelog("build", "toolchain1")
+	startPhase("toolchain1")
 	checkCC()
 	bootstrapBuildTools()
 
@@ -1539,7 +1590,7 @@ func cmdbootstrap() {
 	os.Setenv("GOARCH", goarch)
 	os.Setenv("GOOS", goos)
 
-	timelog("build", "go_bootstrap")
+	startPhase("go_bootstrap")
 	xprintf("Building Go bootstrap cmd/go (go_bootstrap) using Go toolchain1.\n")
 	install("runtime")     // dependency not visible in sources; also sets up textflag.h
 	install("time/tzdata") // no dependency in sources; creates generated file
@@ -1573,7 +1624,7 @@ func cmdbootstrap() {
 	//
 	//	toolchain2 = mk(new toolchain, toolchain1, go_bootstrap)
 	//
-	timelog("build", "toolchain2")
+	startPhase("toolchain2")
 	if vflag > 0 {
 		xprintf("\n")
 	}
@@ -1605,7 +1656,7 @@ func cmdbootstrap() {
 	//
 	//	toolchain3 = mk(new toolchain, toolchain2, go_bootstrap)
 	//
-	timelog("build", "toolchain3")
+	startPhase("toolchain3")
 	if vflag > 0 {
 		xprintf("\n")
 	}
@@ -1621,7 +1672,11 @@ func cmdbootstrap() {
 	// toolchain2 is bin/go, and bin/go carries the shared cache client that
 	// go_bootstrap cannot. Under it, toolchain3 fetches what another run of
 	// the same sources published instead of compiling cmd/go a third time.
+<<<<<<< HEAD
 	goInstall(toolenv(), gorootBinGo, toolchain...)
+=======
+	goInstall(toolenv(), goInstaller(), toolchain...)
+>>>>>>> origin/master
 	linkTools()
 	if debug {
 		run("", ShowOutput|CheckExit, pathf("%s/compile", tooldir), "-V=full")
@@ -1643,7 +1698,7 @@ func cmdbootstrap() {
 
 	if goos == oldgoos && goarch == oldgoarch {
 		// Common case - not setting up for cross-compilation.
-		timelog("build", "toolchain")
+		startPhase("toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
@@ -1652,7 +1707,7 @@ func cmdbootstrap() {
 		// GOOS/GOARCH does not match GOHOSTOS/GOHOSTARCH.
 		// Finish GOHOSTOS/GOHOSTARCH installation and then
 		// run GOOS/GOARCH installation.
-		timelog("build", "host toolchain")
+		startPhase("host toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
@@ -1662,7 +1717,7 @@ func cmdbootstrap() {
 		checkNotStale(toolenv(), goBootstrap, toolsToInstall...)
 		checkNotStale(toolenv(), gorootBinGo, toolsToInstall...)
 
-		timelog("build", "target toolchain")
+		startPhase("target toolchain")
 		if vflag > 0 {
 			xprintf("\n")
 		}
@@ -1686,7 +1741,7 @@ func cmdbootstrap() {
 	goInstall(toolenv(), goBootstrap, "cmd/go/main")
 	linkTools()
 	goInstall(nil, gorootBinGo, "std")
-	goInstall(toolenv(), gorootBinGo, toolsToInstall...)
+	goInstall(toolenv(), goInstaller(), toolsToInstall...)
 	linkTools()
 	checkNotStale(toolenv(), goBootstrap, toolchain...)
 	checkNotStale(nil, goBootstrap, "std")
@@ -2025,6 +2080,92 @@ func banner() {
 func cmdversion() {
 	xflagparse(0)
 	xprintf("%s\n", findgoversion())
+}
+
+// cmdstamp gives a built toolchain a new version. It rewrites $GOROOT/VERSION
+// and relinks the installed binaries with the same string, so only the link
+// steps run again and the compile steps stay as the build left them. See
+// stampInstall for why the compile steps cannot run again.
+//
+// A release is SELECTED by this version: distpack names the tarball and the
+// toolchain module for $GOROOT/VERSION, and a go command switching to that
+// toolchain fatals when the binary it execs reports a different
+// runtime.Version(). The version that the object header and each tool's -V
+// line carry stays the one the tree was built with, and no build reads those
+// across toolchains: cmd/go keys a fork tool on its content ID.
+func cmdstamp() {
+	xflagparse(1)
+	if flag.NArg() != 1 {
+		flag.Usage()
+	}
+	version := flag.Arg(0)
+	if !strings.HasPrefix(version, "go") {
+		fatalf("stamp: %q is not a Go version: it must start with \"go\"", version)
+	}
+	// gorootBinGo carries no suffix, and only exec resolves one.
+	if _, err := os.Stat(pathf("%s/bin/go%s", goroot, exe)); err != nil {
+		fatalf("stamp: %v\nBuild the toolchain before you stamp it.", err)
+	}
+
+	// appendCompilerFlags passes these on the command line, which replaces the
+	// -ldflags toolenv puts in GOFLAGS whole, so carry that -w here as well.
+	ldflags := "-X runtime.buildVersion=" + version
+	if isRelease || os.Getenv("GO_BUILDER_NAME") != "" {
+		ldflags = "-w " + ldflags
+	}
+	goldflags = strings.TrimSpace(goldflags + " " + ldflags)
+
+	// The first line is the version. The lines under it are metadata distpack
+	// reads, the release time among them, so the rewrite keeps them.
+	file := pathf("%s/VERSION", goroot)
+	rest := ""
+	if _, after, found := strings.Cut(readfile(file), "\n"); found {
+		rest = after
+	}
+	writefile(version+"\n"+rest, file, 0)
+	stampInstall()
+	linkTools()
+
+	// The stamp is the whole point of this command, so a binary that kept the
+	// old version fails here instead of shipping.
+	out := strings.Fields(run(goroot, CheckExit, gorootBinGo, "version"))
+	if len(out) < 3 || out[2] != version {
+		fatalf("stamp: bin/go reports %q, want %q", strings.Join(out, " "), version)
+	}
+	xprintf("Stamped %s.\n", version)
+}
+
+// stampInstall reinstalls the binaries a stamp relinks, and names what the
+// install had to compile.
+//
+// A stamp cannot turn into a second build of the toolchain. cmd/go hashes
+// -ldflags into the LINK action ID alone (linkActionID), and a compile action
+// ID reads none of it, so moving the version leaves every compile already in
+// the cache valid. A package compiled here is one the cache lost or could not
+// serve, or one whose source moved after the build; re-doing it is the only
+// way to link. Naming them is how either shows up as something other than a
+// slow publish.
+func stampInstall() {
+	cmd := []string{goInstaller(), "install"}
+	if noOpt {
+		cmd = append(cmd, "-tags=noopt")
+	}
+	cmd = appendCompilerFlags(cmd)
+	cmd = append(cmd, "-v")
+	// ShowOutput streams instead of returning, so the output is printed below.
+	out := runEnv(workdir, CheckExit, toolenv(), append(cmd, toolsToInstall...)...)
+	xprintf("%s", out)
+	var compiled []string
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" || strings.ContainsAny(line, " \t") || slices.Contains(toolsToInstall, line) {
+			continue
+		}
+		compiled = append(compiled, line)
+	}
+	if len(compiled) > 0 {
+		xprintf("stamp: the build cache did not answer for %d package(s), which this compiled: %s\n",
+			len(compiled), strings.Join(compiled, " "))
+	}
 }
 
 // cmdlist lists all supported platforms.

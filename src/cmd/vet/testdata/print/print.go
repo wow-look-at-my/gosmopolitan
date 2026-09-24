@@ -97,7 +97,7 @@ func PrintfTests() {
 	fmt.Printf("%s", stringerarrayv)
 	fmt.Printf("%v", notstringerarrayv)
 	fmt.Printf("%T", notstringerarrayv)
-	fmt.Printf("%d", new(fmt.Formatter))
+	fmt.Printf("%d", new(fmt.Formatter)) // ERROR "Printf format %d has arg new\(fmt.Formatter\) of wrong type \*fmt.Formatter"
 	fmt.Printf("%*%", 2)               // Ridiculous but allowed.
 	fmt.Printf("%s", interface{}(nil)) // Nothing useful we can say.
 
@@ -183,8 +183,8 @@ func PrintfTests() {
 	f.Wrapf2(0, "%#s", "hello")           // ERROR "Wrapf2 format %#s has unrecognized flag #"
 	fmt.Printf("%#s", FormatterVal(true)) // correct (the type is responsible for formatting)
 	Printf("d%", 2)                       // ERROR "Printf format % is missing verb at end of string"
-	Printf("%d", percentDV)
-	Printf("%d", &percentDV)
+	Printf("%d", percentDV)  // ERROR "Printf format %d has arg percentDV of wrong type .*print.percentDStruct"
+	Printf("%d", &percentDV) // ERROR "Printf format %d has arg &percentDV of wrong type \*.*print.percentDStruct"
 	Printf("%d", notPercentDV)  // ERROR "Printf format %d has arg notPercentDV of wrong type .*print.notPercentDStruct"
 	Printf("%d", &notPercentDV) // ERROR "Printf format %d has arg &notPercentDV of wrong type \*.*print.notPercentDStruct"
 	Printf("%p", &notPercentDV) // Works regardless: we print it as a pointer.

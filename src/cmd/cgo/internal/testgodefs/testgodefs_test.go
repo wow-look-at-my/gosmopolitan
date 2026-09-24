@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,10 +71,9 @@ func TestGoDefs(t *testing.T) {
 		// see go.dev/issue/52063
 		hasGeneratedByComment := false
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			// The go command links cgo in, so cgo names itself rather than a
+			// file on disk. The name carries no .exe suffix on any host.
 			cgoExe := "cgo"
-			if runtime.GOOS == "windows" {
-				cgoExe = "cgo.exe"
-			}
 			if !strings.HasPrefix(line, "// "+cgoExe+" -godefs") {
 				continue
 			}

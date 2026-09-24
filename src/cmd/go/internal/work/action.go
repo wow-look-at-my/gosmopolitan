@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cmd/go/internal/base"
@@ -180,11 +181,40 @@ func (b *Builder) RunnableTarget(a *Action) (string, error) {
 		return "", err
 	}
 	exe := dir + name
-	if err := sh.CopyFile(exe, built, 0o777, true); err != nil {
+	// One shared test binary runs several units, and every unit resolves this
+	// same path, hardlinks it into its own directory, and starts it. So this
+	// file is written once and never replaced. A copy straight onto the path
+	// truncates it, and a unit that links during the truncation starts a
+	// partly written binary, which macOS answers with SIGKILL. Replacing the
+	// path instead, by a rename, takes the name away from a unit that is
+	// about to link it.
+	//
+	// The copy lands on a private name, and a hard link gives it the shared
+	// name. The link fails when another unit already made that name, and that
+	// unit's file is the same binary, so this one uses it.
+	if info, err := os.Stat(exe); err == nil && info.Mode()&0o111 != 0 {
+		return exe, nil
+	}
+	tmp := fmt.Sprintf("%s.tmp%d.%d", exe, os.Getpid(), runnableSeq.Add(1))
+	if err := sh.CopyFile(tmp, built, 0o777, true); err != nil {
+		return "", err
+	}
+	if cfg.BuildN {
+		// The copy printed itself and wrote nothing, so there is no file to
+		// give the shared name to.
+		return exe, nil
+	}
+	err := os.Link(tmp, exe)
+	os.Remove(tmp)
+	if err != nil && !os.IsExist(err) {
 		return "", err
 	}
 	return exe, nil
 }
+
+// runnableSeq names the private file each RunnableTarget copy writes before it
+// links that file to the shared name. Two calls can share one destination.
+var runnableSeq atomic.Uint64
 
 // An actionQueue is a priority queue of actions.
 type actionQueue []*Action
@@ -471,6 +501,11 @@ func readpkglist(s *modload.Loader, shlibpath string) (pkgs []*load.Package) {
 			t := scanner.Text()
 			pkgs = append(pkgs, load.LoadPackageWithFlags(s, t, base.Cwd(), &stk, nil, 0))
 		}
+		// A note holding a line longer than the scanner takes ends the loop
+		// early, and the shared library then links against a short package list.
+		if err := scanner.Err(); err != nil {
+			base.Fatalf("reading package list from %s: %v", shlibpath, err)
+		}
 	}
 	return
 }
@@ -534,7 +569,7 @@ func (p *pgoActor) Act(b *Builder, ctx context.Context, a *Action) error {
 		return err
 	}
 
-	if err := sh.run(".", p.input, nil, cfg.BuildToolexec, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
+	if err := sh.run(".", p.input, nil, base.ToolCmd("preprofile"), "-o", a.Target, "-i", p.input); err != nil {
 		return err
 	}
 
@@ -737,9 +772,12 @@ func (b *Builder) CompileAction(mode, depMode BuildMode, p *load.Package) *Actio
 				return a
 			}
 
-			// An embedded standard library is compiled already.
+			// An embedded standard library is compiled already, except for a
+			// package this binary carries no archive of.
 			if cfg.EmbeddedStd {
-				return b.embeddedStdAction(a, p)
+				if embedded := b.embeddedStdAction(a, p); embedded != nil {
+					return embedded
+				}
 			}
 		}
 

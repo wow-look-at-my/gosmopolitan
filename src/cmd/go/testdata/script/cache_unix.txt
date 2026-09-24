@@ -2,12 +2,8 @@ env GO111MODULE=off
 
 # Integration test for cache directory calculation (cmd/go/internal/cache).
 
-# GOHOSTOS, not GOOS: go env GOCACHE comes from os.UserCacheDir, which
-# picks its layout from the host rather than from the port.
-[GOHOSTOS:windows] skip 'windows does not use XDG_CACHE_HOME'
-[GOHOSTOS:darwin]  skip 'darwin does not use XDG_CACHE_HOME'
-[GOHOSTOS:ios]     skip 'ios does not use XDG_CACHE_HOME'
-[GOHOSTOS:plan9]   skip 'plan9 does not use XDG_CACHE_HOME'
+# go env GOCACHE comes from os.UserCacheDir, which reads XDG_CACHE_HOME and
+# then HOME on every host, so this runs everywhere.
 
 mkdir $WORK/gocache
 mkdir $WORK/xdg
@@ -22,18 +18,22 @@ env HOME=$WORK/home
 go env GOCACHE
 stdout $WORK'/gocache$'
 
-# Without GOCACHE, we should prefer XDG_CACHE_HOME over HOME.
+# Without GOCACHE, we should prefer XDG_CACHE_HOME over HOME. This answer is
+# built rather than echoed, so it carries the host's own separator.
 env GOCACHE=
 go env GOCACHE
-stdout $WORK'/xdg/go-build$$'
+stdout $WORK'[\\/]xdg[\\/]go-build$'
 
 # With only HOME set, we should use $HOME/.cache.
 env XDG_CACHE_HOME=
 go env GOCACHE
-stdout $WORK'/home/.cache/go-build$'
+stdout $WORK'[\\/]home[\\/]\.cache[\\/]go-build$'
 
 # With no guidance from the environment, we must disable the cache, but that
-# should not cause commands that do not write to the cache to fail.
+# should not cause commands that do not write to the cache to fail. The two
+# fallbacks a host can offer for HOME go with it.
 env HOME=
+env USERPROFILE=
+env home=
 go env GOCACHE
 stdout 'off'

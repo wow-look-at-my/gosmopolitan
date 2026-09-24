@@ -225,11 +225,10 @@ func bootstrapBuildTools() {
 
 	// Set up environment for invoking Go bootstrap toolchains go command.
 	// GOROOT points at Go bootstrap GOROOT,
-	// GOPATH points at our bootstrap workspace,
-	// GOBIN is empty, so that binaries are installed to GOPATH/bin,
-	// and GOOS, GOHOSTOS, GOARCH, and GOHOSTOS are empty,
+	// GOPATH points at our bootstrap workspace, so binaries are installed to
+	// GOPATH/bin, and GOOS, GOHOSTOS, GOARCH, and GOHOSTOS are empty,
 	// so that Go bootstrap toolchain builds whatever kind of binary it knows how to build.
-	// Restore GOROOT, GOPATH, and GOBIN when done.
+	// Restore GOROOT and GOPATH when done.
 	// Don't bother with GOOS, GOHOSTOS, GOARCH, and GOHOSTARCH,
 	// because setup will take care of those when bootstrapBuildTools returns.
 
@@ -239,9 +238,12 @@ func bootstrapBuildTools() {
 	defer os.Setenv("GOPATH", os.Getenv("GOPATH"))
 	os.Setenv("GOPATH", workspace)
 
+<<<<<<< HEAD
 	defer os.Setenv("GOBIN", os.Getenv("GOBIN"))
 	os.Setenv("GOBIN", "")
 
+=======
+>>>>>>> origin/master
 	// The bootstrap tools run on this machine, so they are built for it by
 	// name: a bootstrap go command of this fork answers an empty GOOS with
 	// cosmo, and an install for a target other than the host lands under

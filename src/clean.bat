@@ -16,6 +16,6 @@ if not exist %GOTOOLDIR%\dist.exe (
     exit /b 1
 )
 
-"%GOBIN%\go" clean -i std
-"%GOBIN%\go" tool dist clean
-"%GOBIN%\go" clean -i cmd
+"%GOROOT%\bin\go" clean -i std
+"%GOROOT%\bin\go" tool dist clean
+"%GOROOT%\bin\go" clean -i cmd

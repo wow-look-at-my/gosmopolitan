@@ -64,7 +64,7 @@ For details of a specific checker such as 'printf', see 'go tool vet help printf
 For more about specifying packages, see 'go help packages'.
 
 The build flags supported by go vet are those that control package resolution
-and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+and execution, such as -C, -n, -x, -v, and -tags.
 For more about these flags, see 'go help build'.
 
 See also: go fmt, go fix.
@@ -96,7 +96,7 @@ For details of a specific fixer such as 'hostport', see 'go tool fix help hostpo
 For more about specifying packages, see 'go help packages'.
 
 The build flags supported by go fix are those that control package resolution
-and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+and execution, such as -C, -n, -x, -v, and -tags.
 For more about these flags, see 'go help build'.
 
 See also: go fmt, go vet.
