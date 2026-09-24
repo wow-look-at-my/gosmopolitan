@@ -38,6 +38,7 @@ func toMyNode(node *LFNode) *MyNode {
 var global any
 
 func TestLFStack(t *testing.T) {
+	t.Serial()
 	stack := new(uint64)
 	global = stack // force heap allocation
 

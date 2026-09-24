@@ -234,9 +234,16 @@ func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 // caller passed would clear them. The read also fails first, with the
 // right errno, when the descriptor is not a terminal.
 //
+<<<<<<< HEAD
 // Deliberately not nosplit, because the 72-byte Apple struct is too much
 // for the dispatch spine's budget. Nothing calls this between fork and
 // exec: Setctty and Foreground use the job-control requests above.
+=======
+// Nosplit, and so is everything it calls: the spine reaches this after
+// entersyscall, where a stack growth is fatal.
+//
+//go:nosplit
+>>>>>>> origin/master
 func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Ioctl == 0 {
 		return ^uintptr(0), 0, darwinENOSYS

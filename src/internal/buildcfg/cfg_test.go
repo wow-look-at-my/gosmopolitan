@@ -10,6 +10,7 @@ import (
 )
 
 func TestConfigFlags(t *testing.T) {
+	t.Serial()
 	os.Setenv("GOAMD64", "v1")
 	if goamd64() != 1 {
 		t.Errorf("Wrong parsing of GOAMD64=v1")
@@ -79,6 +80,7 @@ func TestConfigFlags(t *testing.T) {
 }
 
 func TestGowasm(t *testing.T) {
+	t.Serial()
 	os.Setenv("GOWASM", "")
 	if f := gowasm(); f.TailCall {
 		t.Errorf("Wrong parsing of GOWASM=: tailcall enabled")
@@ -119,6 +121,7 @@ func TestGowasm(t *testing.T) {
 }
 
 func TestGowasi(t *testing.T) {
+	t.Serial()
 	os.Setenv("GOWASI", "")
 	if f := gowasi(); f.WasmEdgeSock {
 		t.Errorf("Wrong parsing of GOWASI=: wasmedgesock enabled")
@@ -163,6 +166,7 @@ func TestGoarm64FeaturesSupports(t *testing.T) {
 }
 
 func TestGogoarchTags(t *testing.T) {
+	t.Serial()
 	old_goarch := GOARCH
 	old_goarm64 := GOARM64
 

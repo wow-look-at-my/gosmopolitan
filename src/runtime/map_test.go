@@ -124,6 +124,7 @@ func TestMapOperatorAssignment(t *testing.T) {
 var sinkAppend bool
 
 func TestMapAppendAssignment(t *testing.T) {
+	t.Serial()
 	m := make(map[int][]int, 0)
 
 	m[0] = nil

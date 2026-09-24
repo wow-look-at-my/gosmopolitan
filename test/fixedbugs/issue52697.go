@@ -4,7 +4,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !386 && !amd64p32 && !arm && !mips && !mipsle
+// Under preemptible loops (the wasm default) range walks an array by
+// index, so the unused copy of xs is dead and no frame is too large.
+//go:build !386 && !amd64p32 && !arm && !mips && !mipsle && !wasm
 
 package main
 

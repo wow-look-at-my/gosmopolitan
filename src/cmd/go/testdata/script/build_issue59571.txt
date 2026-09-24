@@ -1,8 +1,17 @@
 # Regression test for https://go.dev/issue/59571
 # Build should be reproducible, even with aliased generic types.
 
-go build -a -o 1.a
-go build -a -o 2.a
+# Each build gets its own cache, so the second one is a real compile rather
+# than a hit on the first. Without that the comparison passes for free and
+# the regression this test exists for goes unnoticed.
+env GOCACHE=$WORK/cache1
+mkdir $GOCACHE
+go build -o 1.a
+
+env GOCACHE=$WORK/cache2
+mkdir $GOCACHE
+go build -o 2.a
+
 cmp -q 1.a 2.a
 
 -- go.mod --

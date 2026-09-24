@@ -6,8 +6,10 @@ package ld
 
 import (
 	"cmd/internal/sys"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"internal/cosmo/embedded"
 	"os"
 	"strings"
 )
@@ -79,6 +81,12 @@ func apeFatMerge(spec, outfile string) {
 	}
 	if *flagApeDbg {
 		for _, p := range payloads {
+			// Only the amd64 image gets a sidecar. An arm64 one is an ELF
+			// that the host running the build cannot execute, and it sits
+			// next to the APE under a name that invites the attempt.
+			if p.arch == sys.ARM64 {
+				continue
+			}
 			writeAPEDebugSidecar(outfile, p)
 		}
 	}
@@ -96,6 +104,32 @@ func apeFatMerge(spec, outfile string) {
 	if tail != nil {
 		appendAPEFileTail(outfile, tailOff, tail)
 	}
+	if *flagApeAppend != "" {
+		appendAPEBlob(outfile, *flagApeAppend)
+	}
+}
+
+// appendAPEBlob appends the file at blobPath past everything the APE loads
+// or reads, 8-aligned, and closes the file with the trailer that
+// internal/cosmo/embedded reads to find it. Nothing maps the blob at run
+// time, and the APE keeps it through staging and an in-place exec on NT,
+// because both copy the file whole.
+func appendAPEBlob(outfile, blobPath string) {
+	blob, err := os.ReadFile(blobPath)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	if len(blob) == 0 {
+		Exitf("-apeappend: %s is empty", blobPath)
+	}
+	info, err := os.Stat(outfile)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	blobOff := (uint64(info.Size()) + 7) &^ uint64(7)
+	appendAPEFileTail(outfile, blobOff, blob)
+	trailer := embedded.EncodeTrailer(int64(blobOff), int64(len(blob)), sha256.Sum256(blob))
+	appendAPEFileTail(outfile, blobOff+uint64(len(blob)), trailer)
 }
 
 // apeCompactDebugTail builds the compact debug tail for the payloads (in
@@ -156,15 +190,10 @@ func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
 	}
 }
 
-// apeDebugSidecarName returns the debug sidecar path for a payload of the
-// given architecture next to the APE at outfile. The names follow the
-// Cosmopolitan cosmocc convention, which cosmo libc's FindDebugBinary
-// probes at crash time by appending each extension to the executable name:
-// <outfile>.dbg for the amd64 image, <outfile>.aarch64.elf for arm64.
-func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
-	if arch == sys.ARM64 {
-		return outfile + ".aarch64.elf"
-	}
+// apeDebugSidecarName returns the debug sidecar path next to the APE at
+// outfile, named by the cosmocc convention of the executable name plus an
+// extension. Only the amd64 image gets one.
+func apeDebugSidecarName(outfile string) string {
 	return outfile + ".dbg"
 }
 
@@ -176,7 +205,7 @@ func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
 // reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
 // table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
-	name := apeDebugSidecarName(outfile, p.arch)
+	name := apeDebugSidecarName(outfile)
 	img := p.elf
 	if *flagApeDbgMode != "full" {
 		slim, err := slimELFDebug(img)

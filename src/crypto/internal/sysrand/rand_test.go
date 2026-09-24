@@ -92,6 +92,7 @@ func TestNoUrandomFallback(t *testing.T) {
 }
 
 func TestReadError(t *testing.T) {
+	t.Serial()
 	if testing.Short() {
 		t.Skip("skipping test in short mode")
 	}

@@ -258,6 +258,10 @@ func TestSlicing(t *testing.T) {
 }
 
 func TestArchIEEE(t *testing.T) {
+	// archInitIEEE replaces a package-level table that every other test in this
+	// package reads through MakeTable, and it rebuilds that table entry by
+	// entry. A reader beside it sees a half-built one and computes a wrong CRC.
+	t.Serial()
 	if !archAvailableIEEE() {
 		t.Skip("Arch-specific IEEE not available.")
 	}
@@ -269,6 +273,10 @@ func TestArchIEEE(t *testing.T) {
 }
 
 func TestArchCastagnoli(t *testing.T) {
+	// Same as TestArchIEEE: archInitCastagnoli rebuilds the two SSE4.2 tables
+	// in place, and TestGolden reads them. That race is what produced a
+	// Castagnoli sum that was wrong, and differently wrong on each run.
+	t.Serial()
 	if !archAvailableCastagnoli() {
 		t.Skip("Arch-specific Castagnoli not available.")
 	}

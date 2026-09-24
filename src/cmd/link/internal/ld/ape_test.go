@@ -6,21 +6,15 @@ package ld
 
 import (
 	"bytes"
-	"cmd/internal/cosmoape"
-	"debug/macho"
 	"debug/pe"
 	"encoding/binary"
-	"fmt"
 	"internal/testenv"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"slices"
 	"sort"
-	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -99,62 +93,28 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 	}
 }
 
-// TestApeRunDirIgnoresEveryEnvironmentVariable runs apeRunDir through a real
-// POSIX shell with TMPDIR, HOME, and the caller's whole environment cleared,
-// and again with both set to hostile-looking values, and checks the
-// resolved path is identical either way: /tmp, suffixed with the real
-// uid. Earlier revisions read ${TMPDIR:-${HOME:-/tmp}}, which is exactly
-// the shape that broke: a container run as a numeric --user UID with no
-// /etc/passwd entry gets a non-empty HOME anyway, set by the runtime
-// itself to "/" (confirmed directly against Docker), and `${VAR:-x}` only
-// falls through on an unset or empty VAR, so "/" won -- staging then tried
-// to mkdir under the filesystem root. Reading no environment variable at
-// all removes that whole failure class instead of special-casing the one
-// value that was observed to break it.
-func TestApeRunDirIgnoresEveryEnvironmentVariable(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no POSIX sh on windows")
-	}
-	testenv.MustHaveExecPath(t, "sh")
-	testenv.MustHaveExecPath(t, "id")
-
-	uid := strings.TrimSpace(runAndCapture(t, "id", "-u"))
-	want := "/tmp/.ape-run-1-" + uid
-
-	envs := [][]string{
-		{"PATH=" + os.Getenv("PATH")},
-		{"PATH=" + os.Getenv("PATH"), "HOME=/", "TMPDIR="},
-		{"PATH=" + os.Getenv("PATH"), "HOME=/root", "TMPDIR=/elsewhere"},
-	}
-	for i, env := range envs {
-		t.Run(fmt.Sprintf("env_%d", i), func(t *testing.T) {
-			cmd := exec.Command("sh", "-c", `printf %s "`+apeRunDir+`"`)
-			cmd.Env = env
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("sh -c failed: %v\n%s", err, out)
-			}
-			if got := string(out); got != want {
-				t.Errorf("apeRunDir resolved to %q, want %q", got, want)
-			}
-		})
-	}
-}
-
-// TestApeUIDSuffixSeparatesUsers confirms two different uids resolve to two
-// different staging directories -- the property a real per-user HOME used
-// to give this path for free, and that apeUIDSuffix now provides without
-// reading HOME at all: id -u is a syscall, not a caller-supplied value.
-func TestApeUIDSuffixSeparatesUsers(t *testing.T) {
+// The loader directories are tried in order, and RAM comes first. A tmpfs
+// directory keeps the bytes off every disk, which is the whole reason a host
+// with no loader still writes nothing anybody can find. The APE's own
+// directory is last, for a read-only container that leaves nothing else. A
+// caller that has none of them replaces the list with APE_LOADERDIR.
+func TestApeLoaderDirsPreferRAM(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no POSIX sh on windows")
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	a := runAndCapture(t, "sh", "-c", `printf %s "`+apeUIDSuffix+`"`)
-	b := runAndCapture(t, "sh", "-c", `HOME=/somewhere-else printf %s "`+apeUIDSuffix+`"`)
-	if a != b {
-		t.Errorf("apeUIDSuffix changed with HOME (%q vs %q); it must depend only on the real uid", a, b)
+	// o is the APE's own path in the boot script, so the last candidate is its
+	// directory. The script sets it before it reaches this list.
+	list := `o=/opt/app/prog.com; for d in ` + apeLoaderDirs + `; do printf '%s\n' "$d"; done`
+	got := runAndCapture(t, "sh", "-c", list)
+	if want := "/dev/shm\n/tmp\n/opt/app\n"; got != want {
+		t.Errorf("default loader directories = %q, want %q", got, want)
+	}
+
+	got = runAndCapture(t, "sh", "-c", `o=/opt/app/prog.com APE_LOADERDIR=/somewhere; for d in `+apeLoaderDirs+`; do printf '%s\n' "$d"; done`)
+	if want := "/somewhere\n"; got != want {
+		t.Errorf("APE_LOADERDIR must replace the list, got %q, want %q", got, want)
 	}
 }
 
@@ -287,6 +247,7 @@ func testELFPhdrs() []testProgHeader {
 
 const testELFEntry = 0x100001200
 
+<<<<<<< HEAD
 // machoLoadCommands walks hdr's load commands, checking that the declared
 // ncmds and sizeofcmds are consistent with the bytes actually present, and
 // returns the raw commands. Any padding after the commands must be at most
@@ -698,6 +659,8 @@ func TestAPEFileMachoTransform(t *testing.T) {
 	}
 }
 
+=======
+>>>>>>> origin/master
 // buildTestNTELF returns a synthetic amd64 payload with the NT import
 // blob (runtime.ntidata) and IAT (runtime.ntiat) placed in its RW load
 // exactly as apePrepareNTBoot would leave them after patching, plus the

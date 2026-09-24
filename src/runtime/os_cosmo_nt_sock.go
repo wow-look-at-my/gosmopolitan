@@ -723,6 +723,7 @@ func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uint
 	return 0, 0, 0
 }
 
+<<<<<<< HEAD
 // ntEmuDup implements dup(2) for SOCKET-kind fds via DuplicateHandle,
 // the call upstream Go's poll.DupCloseOnExec makes on windows. An
 // msafd socket is a real kernel file handle, and a same-process
@@ -774,6 +775,8 @@ func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 	return uintptr(nfd), 0, 0
 }
 
+=======
+>>>>>>> origin/master
 // ntEmuBind records the Linux-spelling AF_UNIX name on the fd entry,
 // which is what ntEmuGetsockname reports back. An afunix socket file
 // is a reparse point and is NOT auto-deleted on close: unlink(2)

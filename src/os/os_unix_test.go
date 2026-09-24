@@ -368,6 +368,42 @@ func TestSplitPath(t *testing.T) {
 	}
 }
 
+// A cosmo binary takes file_unix.go on every host it boots on, and NT names
+// its temp directory in TMP or TEMP and sets no TMPDIR. The unix default
+// answered /tmp there, a path that host does not have, so every t.TempDir on
+// the windows leg built under it and its cleanup reported "open /tmp: is a
+// directory".
+//
+// The order is the one GetTempPath documents, which is what os.TempDir
+// answers on a real windows build.
+//
+// The answer is in the /c/ spelling Getwd and Executable use on that host,
+// so a path built under it compares equal to one read back from the
+// working directory and filepath sees an absolute path.
+func TestNTTempDirReadsTheVariablesNTSets(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"tmp wins", map[string]string{"TMP": `C:\a`, "TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/a"},
+		{"temp is next", map[string]string{"TEMP": `C:\b`, "USERPROFILE": `C:\c`}, "/c/b"},
+		{"then the profile", map[string]string{"USERPROFILE": `C:\c`}, "/c/c"},
+		{"an empty value is unset", map[string]string{"TMP": "", "TEMP": `C:\b`}, "/c/b"},
+		{"nothing set", nil, "/c/Windows/Temp"},
+		// The one that mattered: TMPDIR is a unix name and NT sets none.
+		{"tmpdir does not count", map[string]string{"TMPDIR": "/tmp"}, "/c/Windows/Temp"},
+		{"a trailing backslash goes", map[string]string{"TMP": `D:\Users\RUNNER~1\AppData\Local\Temp\`}, "/d/Users/RUNNER~1/AppData/Local/Temp"},
+		{"the drive root keeps its slash", map[string]string{"TMP": `C:\`}, "/c"},
+		{"an already /c/ spelling is kept", map[string]string{"TMP": "/c/tmp"}, "/c/tmp"},
+	} {
+		if got := NTTempDir(func(k string) string { return tt.env[k] }); got != tt.want {
+			t.Errorf("%s: NTTempDir = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 // Test that copying to files opened with O_APPEND works and
 // the copy_file_range syscall isn't used on Linux.
 //

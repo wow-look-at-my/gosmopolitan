@@ -460,6 +460,23 @@ func (p *parser) fileOrNil() *File {
 			}
 
 		default:
+			// "readonly" is a keyword only here, where a declaration must
+			// start, so a variable of that name stays legal everywhere else.
+			if p.tok == _Name && p.lit == "readonly" {
+				p.next()
+				if p.tok != _Var {
+					p.syntaxError("readonly must precede var")
+					p.advance(_Import, _Const, _Type, _Var, _Func)
+					continue
+				}
+				p.next()
+				first := len(f.DeclList)
+				f.DeclList = p.appendGroup(f.DeclList, p.varDecl)
+				for _, d := range f.DeclList[first:] {
+					d.(*VarDecl).Readonly = true
+				}
+				break
+			}
 			if p.tok == _Lbrace && len(f.DeclList) > 0 && isEmptyFuncDecl(f.DeclList[len(f.DeclList)-1]) {
 				// opening { of function declaration on next line
 				p.syntaxError("unexpected semicolon or newline before {")
@@ -582,7 +599,7 @@ func (p *parser) importDecl(group *Group) Decl {
 	return d
 }
 
-// ConstSpec = IdentifierList [ [ Type ] "=" ExpressionList ] .
+// ConstSpec = IdentifierList [ [ Type ] "=" ExpressionList ] [ string_lit ] .
 func (p *parser) constDecl(group *Group) Decl {
 	if trace {
 		defer p.trace("constDecl")()
@@ -595,10 +612,16 @@ func (p *parser) constDecl(group *Group) Decl {
 
 	d.NameList = p.nameList(p.name())
 	if p.tok != _EOF && p.tok != _Semi && p.tok != _Rparen {
-		d.Type = p.typeOrNil()
-		if p.gotAssign() {
-			d.Values = p.exprList()
+		// A string literal here is the constant's printed name, the way a
+		// literal after a struct field is its tag. No type starts with one,
+		// and a constant's own value follows "=", so neither is in reach.
+		if p.tok != _Literal {
+			d.Type = p.typeOrNil()
+			if p.gotAssign() {
+				d.Values = p.exprList()
+			}
 		}
+		d.Text = p.oliteral()
 	}
 
 	return d
@@ -677,6 +700,13 @@ func (p *parser) typeDecl(group *Group) Decl {
 	} else {
 		d.Alias = p.gotAssign()
 		d.Type = p.typeOrNil()
+		// "enum" is a type name everywhere else, so it only modifies this
+		// declaration when a second type follows it. `type Set enum` still
+		// declares Set as the type named enum, because a ";" comes next.
+		if name, ok := d.Type.(*Name); ok && !d.Alias && name.Value == "enum" && p.tok != _Semi && p.tok != _Rparen && p.tok != _EOF {
+			d.Enum = true
+			d.Type = p.typeOrNil()
+		}
 	}
 
 	if d.Type == nil {

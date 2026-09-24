@@ -285,6 +285,14 @@ func ntInitConsoleCtrl() {
 // events (SIGHUP, SIGTERM), so a coalesced wakeup dies for the
 // blocked-handler event only after the interactive chords ran.
 func ntCtrlRelay() {
+	// A system M, like sysmon and the template thread: checkdead must
+	// not count it as a thread that can run goroutines, or a deadlocked
+	// program on NT waits forever instead of reporting one.
+	lock(&sched.lock)
+	sched.nmsys++
+	checkdead()
+	unlock(&sched.lock)
+
 	for {
 		ntcall(ntWaitForSingleObjectFn, ntCtrlEvent, _NT_INFINITE, 0, 0, 0, 0)
 		for {

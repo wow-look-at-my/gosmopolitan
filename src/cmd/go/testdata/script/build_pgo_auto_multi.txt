@@ -1,6 +1,6 @@
 # Test go build -pgo=auto flag with multiple main packages.
 
-go install -a -n -pgo=auto ./a ./b ./nopgo
+go install -n -pgo=auto ./a ./b ./nopgo
 
 # a/default.pgo and b/default.pgo are both preprocessed
 stderr 'preprofile.*-i.*a(/|\\\\)default\.pgo'
@@ -35,7 +35,7 @@ stderr 'path\\ttest/b\\n.*build\\t-pgo=.*b(/|\\\\)default\.pgo'
 ! stderr 'path\\ttest/nopgo\\n.*build\\t-pgo='
 
 # go test works the same way
-go test -a -n -pgo=auto ./a ./b ./nopgo
+go test -n -pgo=auto ./a ./b ./nopgo
 stderr -count=1 'compile.*-pgoprofile=.*a(/|\\\\)a_test\.go'
 stderr -count=1 'compile.*-pgoprofile=.*b(/|\\\\)b_test\.go'
 stderr -count=2 'compile.*-pgoprofile=.*dep(/|\\\\)dep\.go'

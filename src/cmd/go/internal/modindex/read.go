@@ -680,6 +680,18 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 // for the goroot and compiler using the module index if possible,
 // and otherwise falling back to internal/goroot.IsStandardPackage
 func IsStandardPackage(goroot_, compiler, path string) bool {
+	// The blob answers first and the tree answers for the rest: cmd is a
+	// distribution's own and no blob carries it, so a GOROOT of this same
+	// toolchain is what a program importing the go command reads.
+	if cfg.EmbeddedStd {
+		if cfg.EmbeddedStdPackage(path) != nil {
+			return true
+		}
+		tree, err := fsys.IsDir(filepath.Join(goroot_, "src"))
+		if goroot_ == "" || err != nil || !tree {
+			return false
+		}
+	}
 	if !enabled || compiler != "gc" {
 		return goroot.IsStandardPackage(fsys.ReadDir, goroot_, compiler, path)
 	}

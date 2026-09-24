@@ -18,6 +18,7 @@ MAX_COMMENT=${WORDSPAM_MAX_COMMENT:-12}
 MAX_MD_BYTES=${WORDSPAM_MAX_MD_BYTES:-40000}
 
 if [ "$#" -eq 0 ]; then
+<<<<<<< HEAD
 	echo "usage: ${0##*/} FILE..." >&2
 	exit 2
 fi
@@ -27,6 +28,17 @@ if [ "$#" -gt 1 ]; then
 		"$0" "$f" || rc=1
 	done
 	exit "$rc"
+=======
+echo "usage: ${0##*/} FILE..." >&2
+exit 2
+fi
+if [ "$#" -gt 1 ]; then
+rc=0
+for f in "$@"; do
+"$0" "$f" || rc=1
+done
+exit "$rc"
+>>>>>>> origin/master
 fi
 
 path=$1
@@ -34,10 +46,17 @@ path=$1
 new=$(cat "$path")
 
 fail() {
+<<<<<<< HEAD
 	printf 'BLOCKED (wordspam): %s\n\n' "$1" >&2
 	printf 'Cut it, do not relocate it. Prose about what changed and why belongs\n' >&2
 	printf 'in the commit message. A file carries current truth only.\n' >&2
 	exit 2
+=======
+printf 'BLOCKED (wordspam): %s\n\n' "$1" >&2
+printf 'Cut it, do not relocate it. Prose about what changed and why belongs\n' >&2
+printf 'in the commit message. A file carries current truth only.\n' >&2
+exit 2
+>>>>>>> origin/master
 }
 
 # Phrases that only ever introduce a changelog. Ordinary English stays out
@@ -47,6 +66,7 @@ banned='was: |(it|this|that|which|there|one|they) used to |used to be |previousl
 
 case "$path" in
 *.md)
+<<<<<<< HEAD
 	n=$(printf '%s' "$new" | wc -c)
 	[ "$n" -le "$MAX_MD_BYTES" ] ||
 		fail "$path would be $n bytes, over the $MAX_MD_BYTES budget. Extract or delete."
@@ -66,11 +86,36 @@ case "$path" in
 	[ "$worst" -le "$MAX_PARA" ] ||
 		fail "$path has a $worst-word paragraph, over the $MAX_PARA-word cap."
 	;;
+=======
+n=$(printf '%s' "$new" | wc -c)
+[ "$n" -le "$MAX_MD_BYTES" ] ||
+fail "$path would be $n bytes, over the $MAX_MD_BYTES budget. Extract or delete."
+
+# Longest prose paragraph, in words. Tables, lists, quotes, headings
+# and fenced blocks are not prose and do not count.
+# A blank line ends a paragraph, and so does any structural line: a
+# list item, a heading, a table row, a quote or a fence. A tight list
+# is a list, not one long paragraph.
+worst=$(awk '
+function flush() { if (!skip && n > worst) worst = n; n = 0; skip = 0 }
+/^[[:space:]]*$/ { flush(); next }
+/^[[:space:]]*([|>#*+-]|[0-9]+\.|```)/ { flush(); skip = 1 }
+{ n += NF }
+END { flush(); print worst + 0 }
+' "$path")
+[ "$worst" -le "$MAX_PARA" ] ||
+fail "$path has a $worst-word paragraph, over the $MAX_PARA-word cap."
+;;
+>>>>>>> origin/master
 esac
 
 # WORDSPAM-SELF: the line defining the pattern matches it, so it is skipped.
 hit=$(printf '%s\n' "$new" | grep -v 'WORDSPAM-SELF' | grep -v '^banned=' |
+<<<<<<< HEAD
 	grep -inE "^[[:space:]]*(//|#|::|\*|--)?[[:space:]]*.*($banned)" | head -3 || true)
+=======
+grep -inE "^[[:space:]]*(//|#|::|\*|--)?[[:space:]]*.*($banned)" | head -3 || true)
+>>>>>>> origin/master
 [ -z "$hit" ] || fail "changelog phrasing in $path:"$'\n'"$hit"
 
 # Longest run of adjacent comment lines. A compiler or generator
@@ -79,17 +124,30 @@ hit=$(printf '%s\n' "$new" | grep -v 'WORDSPAM-SELF' | grep -v '^banned=' |
 # function under it. Neither breaks the run either, so prose cannot hide
 # behind one.
 runlen=$(awk '
+<<<<<<< HEAD
 	/^[[:space:]]*\/\/(go:|sys[[:space:]]|sysnb[[:space:]]|export[[:space:]]|line[[:space:]]|extern[[:space:]]|nolint|cgo_)/ { next }
 	/^[[:space:]]*(\/\/|#|::)/ { if (++run > worst) worst = run; next }
 	{ run = 0 }
 	END { print worst + 0 }
+=======
+/^[[:space:]]*\/\/(go:|sys[[:space:]]|sysnb[[:space:]]|export[[:space:]]|line[[:space:]]|extern[[:space:]]|nolint|cgo_)/ { next }
+/^[[:space:]]*(\/\/|#|::)/ { if (++run > worst) worst = run; next }
+{ run = 0 }
+END { print worst + 0 }
+>>>>>>> origin/master
 ' "$path")
 case "$path" in
 *.md | *.txt) ;;
 *)
+<<<<<<< HEAD
 	[ "$runlen" -le "$MAX_COMMENT" ] ||
 		fail "$path has a $runlen-line comment block, over the $MAX_COMMENT-line cap."
 	;;
+=======
+[ "$runlen" -le "$MAX_COMMENT" ] ||
+fail "$path has a $runlen-line comment block, over the $MAX_COMMENT-line cap."
+;;
+>>>>>>> origin/master
 esac
 
 exit 0

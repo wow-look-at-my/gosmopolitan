@@ -10,29 +10,19 @@ import (
 	"unsafe"
 )
 
-// These variables are used by the register assignment
-// algorithm in this file.
+// abiRegs is the register budget the assignment algorithm below works to.
+// It travels as a value from funcLayout through every assign* method, and
+// it is part of the layout cache key, so two callers with different budgets
+// never see each other's layouts.
 //
-// They should be modified with care (no other reflect code
-// may be executing) and are generally only modified
-// when testing this package.
-//
-// They should never be set higher than their internal/abi
-// constant counterparts, because the system relies on a
-// structure that is at least large enough to hold the
-// registers the system supports.
-//
-// Currently they're set to zero because using the actual
-// constants will break every part of the toolchain that
-// uses reflect to call functions (e.g. go test, or anything
-// that uses text/template). The values that are currently
-// commented out there should be the actual values once
-// we're ready to use the register ABI everywhere.
-var (
-	intArgRegs   = abi.IntArgRegs
-	floatArgRegs = abi.FloatArgRegs
-	floatRegSize = uintptr(abi.EffectiveFloatRegSize)
-)
+// A budget must never exceed its internal/abi constant counterpart. The
+// register save area is sized from those constants, and an assignment that
+// numbers more registers than the area holds writes past the end of it.
+type abiRegs struct {
+	ints      int     // integer argument registers
+	floats    int     // floating-point argument registers
+	floatSize uintptr // widest value one float register carries
+}
 
 // abiStep represents an ABI "instruction." Each instruction
 // describes one part of how to translate between a Go value
@@ -87,6 +77,11 @@ type abiSeq struct {
 
 	stackBytes   uintptr // stack space used
 	iregs, fregs int     // registers used
+
+	// regs is how many of each there are to use. The zero value assigns
+	// everything to the stack, which is what a caller that wants no
+	// register ABI asks for.
+	regs abiRegs
 }
 
 func (a *abiSeq) dump() {
@@ -265,7 +260,7 @@ func (a *abiSeq) assignIntN(offset, size uintptr, n int, ptrMap uint8) bool {
 	if ptrMap != 0 && size != goarch.PtrSize {
 		panic("non-empty pointer map passed for non-pointer-size values")
 	}
-	if a.iregs+n > intArgRegs {
+	if a.iregs+n > a.regs.ints {
 		return false
 	}
 	for i := 0; i < n; i++ {
@@ -294,7 +289,7 @@ func (a *abiSeq) assignFloatN(offset, size uintptr, n int) bool {
 	if n < 0 {
 		panic("invalid n")
 	}
-	if a.fregs+n > floatArgRegs || floatRegSize < size {
+	if a.fregs+n > a.regs.floats || a.regs.floatSize < size {
 		return false
 	}
 	for i := 0; i < n; i++ {
@@ -367,15 +362,15 @@ func (a *abiDesc) dump() {
 	println("retOffset", a.retOffset)
 	println("spill", a.spill)
 	print("inRegPtrs:")
-	dumpPtrBitMap(a.inRegPtrs)
+	dumpPtrBitMap(a.inRegPtrs, a.call.regs.ints)
 	println()
 	print("outRegPtrs:")
-	dumpPtrBitMap(a.outRegPtrs)
+	dumpPtrBitMap(a.outRegPtrs, a.ret.regs.ints)
 	println()
 }
 
-func dumpPtrBitMap(b abi.IntArgRegBitmap) {
-	for i := 0; i < intArgRegs; i++ {
+func dumpPtrBitMap(b abi.IntArgRegBitmap, n int) {
+	for i := 0; i < n; i++ {
 		x := 0
 		if b.Get(i) {
 			x = 1
@@ -384,7 +379,7 @@ func dumpPtrBitMap(b abi.IntArgRegBitmap) {
 	}
 }
 
-func newAbiDesc(t *funcType, rcvr *abi.Type) abiDesc {
+func newAbiDesc(t *funcType, rcvr *abi.Type, regs abiRegs) abiDesc {
 	// We need to add space for this argument to
 	// the frame so that it can spill args into it.
 	//
@@ -403,7 +398,7 @@ func newAbiDesc(t *funcType, rcvr *abi.Type) abiDesc {
 	inRegPtrs := abi.IntArgRegBitmap{}
 
 	// Compute abiSeq for input parameters.
-	var in abiSeq
+	in := abiSeq{regs: regs}
 	if rcvr != nil {
 		stkStep, isPtr := in.addRcvr(rcvr)
 		if stkStep != nil {
@@ -442,7 +437,7 @@ func newAbiDesc(t *funcType, rcvr *abi.Type) abiDesc {
 	outRegPtrs := abi.IntArgRegBitmap{}
 
 	// Compute abiSeq for output parameters.
-	var out abiSeq
+	out := abiSeq{regs: regs}
 	// Stack-assigned return values do not share
 	// space with arguments like they do with registers,
 	// so we need to inject a stack offset here.

@@ -116,6 +116,7 @@ func TestCPUProfileMultithreaded(t *testing.T) {
 }
 
 func TestCPUProfileMultithreadMagnitude(t *testing.T) {
+	t.Serial()
 	if runtime.GOOS != "linux" {
 		t.Skip("issue 35057 is only confirmed on Linux")
 	}
@@ -2180,6 +2181,7 @@ var emptyCallStackTestRun int64
 
 // Issue 18836.
 func TestEmptyCallStack(t *testing.T) {
+	t.Serial()
 	name := fmt.Sprintf("test18836_%d", emptyCallStackTestRun)
 	emptyCallStackTestRun++
 

@@ -1,0 +1,2 @@
+pkg go/types, method (*Const) NameText() string #210
+pkg go/types, method (*Named) IsEnum() bool #210

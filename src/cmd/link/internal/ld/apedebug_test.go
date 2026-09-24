@@ -304,22 +304,17 @@ func mergeSectionedPair(t *testing.T, mode string) (amdElf, armElf []byte, out s
 }
 
 // TestAPEFatMergeSlimSidecars merges under -apedbgmode=slim and verifies
-// the sidecars are debug-only images while the fat APE itself is
+// the sidecar is a debug-only image while the fat APE itself is
 // byte-identical to a default (-apedbgmode=full) merge: the mode changes
-// only what the sidecars carry.
+// only what the sidecar carries.
 func TestAPEFatMergeSlimSidecars(t *testing.T) {
-	amdElf, armElf, out := mergeSectionedPair(t, "slim")
+	amdElf, _, out := mergeSectionedPair(t, "slim")
 
 	amdSidecar, err := os.ReadFile(out + ".dbg")
 	if err != nil {
 		t.Fatalf("amd64 sidecar: %v", err)
 	}
 	checkSlimELF(t, amdSidecar, amdElf, elf.EM_X86_64, testSentinelAMD64)
-	armSidecar, err := os.ReadFile(out + ".aarch64.elf")
-	if err != nil {
-		t.Fatalf("arm64 sidecar: %v", err)
-	}
-	checkSlimELF(t, armSidecar, armElf, elf.EM_AARCH64, testSentinelARM64)
 
 	// The slim sidecar must match slimELFDebug of the pristine input
 	// exactly (the merge pipeline adds nothing else).
@@ -505,13 +500,13 @@ func TestAPEFatMergeCompact(t *testing.T) {
 	if !bytes.Equal(neutralized[amdOff:], fatFull[amdOff:]) {
 		t.Errorf("compact payload spans differ from the default merge beyond the patched ELF header fields")
 	}
-	// Head: everything outside the script window (PE header before it,
-	// Mach-O header and APE loader after it) is unchanged; only the
-	// printf-encoded boot headers inside the script differ.
+	// Head: everything outside the script window (the PE header before it,
+	// the embedded loaders after it) is unchanged; only the printf-encoded
+	// boot headers inside the script differ.
 	if !bytes.Equal(neutralized[:apeScriptOffset], fatFull[:apeScriptOffset]) {
 		t.Errorf("compact APE head differs before the script region")
 	}
-	if !bytes.Equal(neutralized[apeMachoOffset:amdOff], fatFull[apeMachoOffset:amdOff]) {
+	if !bytes.Equal(neutralized[apeLdLinuxAMD64Offset:amdOff], fatFull[apeLdLinuxAMD64Offset:amdOff]) {
 		t.Errorf("compact APE head differs after the script region")
 	}
 

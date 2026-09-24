@@ -8,6 +8,7 @@ package syscall_test
 
 import (
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -41,6 +42,17 @@ func setDummyEnv(tb testing.TB, envList []env) {
 
 func setupEnvCleanup(tb testing.TB) {
 	tb.Helper()
+	// The environment is process-wide, and the cleanup below wipes it with
+	// Clearenv before restoring it. Top level tests here run in parallel, so
+	// that window is visible to every other test in this package: TestSetpgid
+	// reached exec.LookPath("cat") inside it and failed with "executable file
+	// not found in $PATH".
+	//
+	// Serial is on *testing.T, and a benchmark has none, so ask rather than
+	// require.
+	if s, ok := tb.(interface{ Serial() }); ok {
+		s.Serial()
+	}
 	originalEnv := map[string]string{}
 	for _, env := range syscall.Environ() {
 		fields := strings.SplitN(env, "=", 2)
@@ -141,5 +153,28 @@ func BenchmarkClearenv(b *testing.B) {
 				syscall.Clearenv()
 			}
 		})
+	}
+}
+
+// An NT host names environment variables without regard to case, and the
+// APE reads the block as NT wrote it, so a lookup under another spelling
+// of the case still finds the variable there.
+func TestGetenvFoldsCaseOnNT(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skipf("case folding is NT's rule; this host is %s", runtime.GOOS)
+	}
+	setupEnvCleanup(t)
+	if err := syscall.Setenv("GoFoldProbe", "probed"); err != nil {
+		t.Fatal(err)
+	}
+	got, found := syscall.Getenv("GOFOLDPROBE")
+	if !found || got != "probed" {
+		t.Fatalf("Getenv under another case = %q, %v; want the value set", got, found)
+	}
+	if err := syscall.Unsetenv("gofoldprobe"); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := syscall.Getenv("GoFoldProbe"); found {
+		t.Fatal("Unsetenv under another case left the variable set")
 	}
 }

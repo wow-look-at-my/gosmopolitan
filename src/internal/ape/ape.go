@@ -13,7 +13,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+<<<<<<< HEAD
 	"runtime"
+=======
+>>>>>>> origin/master
 	"strings"
 )
 
@@ -91,6 +94,7 @@ func u64(b []byte) uint64 {
 }
 
 // sidecars are the unstripped ELF images the linker writes beside a fat
+<<<<<<< HEAD
 // APE, in the order to prefer them. A default build strips the APE
 // itself, so these hold the section headers, the symbol table and the
 // DWARF.
@@ -106,6 +110,13 @@ func hostFirst() []string {
 	}
 	return []string{".dbg", ".aarch64.elf"}
 }
+=======
+// APE. A default build strips the APE itself, so these hold the section
+// headers, the symbol table and the DWARF. The linker writes one, for the
+// amd64 image: an arm64 sidecar is an ELF the build host usually cannot
+// run, sitting beside the APE under a name that invites the attempt.
+var sidecars = []string{".dbg"}
+>>>>>>> origin/master
 
 // Sidecar returns the file to read an APE's ELF structure from, or ""
 // when name is not an APE or nothing is beside it.

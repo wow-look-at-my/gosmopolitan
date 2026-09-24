@@ -1082,7 +1082,7 @@ func loadobjfile(ctxt *Link, lib *sym.Library) {
 	if ctxt.Debugvlog > 1 {
 		ctxt.Logf("ldobj: %s (%s)\n", lib.File, pkg)
 	}
-	f, err := bio.Open(lib.File)
+	f, err := bio.OpenAny(lib.File)
 	if err != nil {
 		Exitf("cannot open file %s: %v", lib.File, err)
 	}
@@ -2154,6 +2154,22 @@ func (ctxt *Link) hostlink() {
 				return machoRewriteUuid(ctxt, exef, exem, outexe)
 			})
 	}
+	if ctxt.IsDarwin() {
+		requests, err := segprotRequests(flagExtldflags)
+		if err != nil {
+			Exitf("%s: -extldflags: %v", os.Args[0], err)
+		}
+		if len(requests) > 0 {
+			if err := machoApplySegprot(*flagOutfile, requests); err != nil {
+				Exitf("%s: applying -segprot: %v", os.Args[0], err)
+			}
+		}
+	}
+	if ctxt.HeadType == objabi.Hwindows {
+		if err := peClearUnusableLoadConfig(*flagOutfile); err != nil {
+			Exitf("%s: %v", os.Args[0], err)
+		}
+	}
 	hostlinkfips(ctxt, *flagOutfile, *flagFipso)
 	if ctxt.NeedCodeSign() {
 		err := machoCodeSign(ctxt, *flagOutfile)
@@ -2256,6 +2272,9 @@ int main() { return 0; }
 
 	outPath := filepath.Join(*flagTmpdir, "loadcfg_test.exe")
 	flags := hostlinkArchArgs(arch)
+	// The real link carries these, and -flto moves where ld puts the
+	// directory. A probe without them answers for a different link.
+	flags = append(flags, trimLinkerArgv(append(ldflag, flagExtldflags...))...)
 	flags = append(flags, "-o", outPath, src)
 	cmd := exec.Command(linker, flags...)
 	cmd.Env = append([]string{"LC_ALL=C"}, os.Environ()...)
@@ -2271,15 +2290,30 @@ int main() { return 0; }
 
 	switch oh := f.OptionalHeader.(type) {
 	case *pe.OptionalHeader64:
-		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
-			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
-		}
+		return peLoadConfigIsSound(oh.DataDirectory[:], oh.SizeOfImage)
 	case *pe.OptionalHeader32:
-		if int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) < len(oh.DataDirectory) {
-			return oh.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress != 0
-		}
+		return peLoadConfigIsSound(oh.DataDirectory[:], oh.SizeOfImage)
 	}
 	return false
+}
+
+// peLoadConfigIsSound reports whether the load config directory names a
+// structure that lies inside the image.
+//
+// An address alone is not enough. Under -flto, GNU ld writes this directory
+// an address past the end of the image and a size of zero. Windows 10 and
+// later read the directory before they start an image, so it answers that
+// one with ERROR_BAD_EXE_FORMAT and the program never runs.
+func peLoadConfigIsSound(dirs []pe.DataDirectory, imageSize uint32) bool {
+	idx := int(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)
+	if idx >= len(dirs) {
+		return false
+	}
+	dir := dirs[idx]
+	if dir.VirtualAddress == 0 || dir.Size == 0 {
+		return false
+	}
+	return uint64(dir.VirtualAddress)+uint64(dir.Size) <= uint64(imageSize)
 }
 
 // trimLinkerArgv returns a new copy of argv that does not include flags
@@ -3050,7 +3084,11 @@ func dfs(lib *sym.Library, mark map[*sym.Library]markKind, order *[]*sym.Library
 		return
 	}
 	if mark[lib] == visiting {
-		panic("found import cycle while visiting " + lib.Pkg)
+		// A test binary holding several packages' tests links each package
+		// compiled with its _test.go files, and those files import what they
+		// like: testing's import regexp, regexp's import testing. The order
+		// only lays out text, so the edge closing the cycle is dropped.
+		return
 	}
 	mark[lib] = visiting
 	for _, i := range lib.Imports {
@@ -3186,7 +3224,12 @@ func (ctxt *Link) isMSVC() bool {
 func (ctxt *Link) isLLD() bool {
 	extld := ctxt.extld()
 	name, args := extld[0], extld[1:]
-	args = append(args, trimLinkerArgv(flagExtldflags)...)
+	// Which linker runs is decided by the flags the link is given, and cgo
+	// contributes them as much as -extldflags does. A -fuse-ld reaching the
+	// link through CGO_LDFLAGS alone left this reporting the default linker
+	// while the link ran another, and the two then disagree about what that
+	// linker accepts.
+	args = append(args, trimLinkerArgv(append(append([]string(nil), ldflag...), flagExtldflags...))...)
 	args = append(args, "-Wl,--version")
 	cmd := exec.Command(name, args...)
 	if out, err := cmd.CombinedOutput(); err == nil {

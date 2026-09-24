@@ -11,6 +11,10 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 | 1 | `src/runtime/sys_cosmo_amd64.s` (`rt_sigaction` NT branch) | Answered success on NT with no signal machinery behind it. Fixed on this branch, unconfirmed: `sysSigaction` routes NT to `ntSigaction`, which records the handler, so the asm branch is unreachable and crashes rather than lies. |
 | 2 | `src/runtime/sys_cosmo_amd64.s` (`rtsigprocmask_nt`) | Answered success on NT while blocking nothing, so a critical section that had masked every signal could still be reentered by one. Fixed on this branch, unconfirmed: the runtime keeps its own mask (`ntSigMask`), a blocked signal waits pending, and an unblock delivers what waited. |
 | 3 | `src/runtime/sys_cosmo_arm64.s` (`madvise` darwin) | Answered 0 without advising anything, so `MADV_DONTNEED` and `MADV_FREE` never reached the kernel and the heap kept every page it had touched. Fixed on this branch, unconfirmed: `osArchInit` resolves Apple's madvise through dlsym, and the advice number is translated - the two systems agree only up to 4. |
+<<<<<<< HEAD
+=======
+| 4 | `src/net/interface_cosmo.go` (the interface table, on an NT host) | Linux reads netlink and Darwin reads the AF_ROUTE sysctl; NT wants `GetAdaptersAddresses`, which is not built. `interfacesServedHere` reports NT as unserved and the four `net` interface tests skip there, so nothing claims the machine has no interfaces. `NetlinkRIB` answers EAFNOSUPPORT on that host rather than an empty table. |
+>>>>>>> origin/master
 
 ## 2. ENOSYS stubs
 
@@ -19,6 +23,11 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 | 1 | `src/runtime/sys_cosmo_arm64.s` (`mincore` darwin) | Answered -1 always, so the page-size probe in `sysauxv` read every size as unsupported and `physPageSize` fell back to 256K. Fixed on this branch, unconfirmed: `osArchInit` resolves Apple's mincore through dlsym. |
 | 2 | `src/internal/runtime/syscall/cosmo/asm_cosmo_amd64.s` (`*at` family) | `linkat`, `symlinkat`, `fchmodat`, `fchownat` and `utimensat` answer ENOSYS on macOS-Intel. The BSD numbers are in `syscall/zsysnum_darwin_amd64.go`, but each needs its `AT_*` flags translated - Linux `AT_SYMLINK_NOFOLLOW` is 0x100 against Apple's 0x20 - and the amd64 dispatch is assembly with no room for a table. |
 | 3 | `internal/poll/sendfile_unix.go` | Carried no cosmo build tag, so `io.Copy` from a file to a socket never reached the syscall on any cosmo host. Fixed on this branch, unconfirmed: `net` and `internal/poll` carry the tag, `ntEmuSendfile` serves NT, and the runtimeprobe `sendfile` check is now hard on Windows. |
+<<<<<<< HEAD
+=======
+| 4 | `src/syscall/bigbuf_cosmo.go` (`uname` on macOS) | golang.org/x/sys/unix.Uname issues `RawSyscall(SYS_UNAME)` with a Linux `Utsname`, and the emulation answers EINVAL: it accepts only the Apple buffer `syscall.Uname` allocates. Statfs has the conversion in `Syscall`; `RawSyscall` cannot allocate, because a forked child runs it. |
+| 5 | `src/syscall/bigbuf_cosmo.go` (statfs on macOS-Intel) | `cosmo.Darwin()` is set only on the arm64 XNU path, so on macOS-Intel the statfs conversion never runs and the amd64 size guard answers EINVAL to every statfs and fstatfs. |
+>>>>>>> origin/master
 
 ## 3. Unverified paths
 

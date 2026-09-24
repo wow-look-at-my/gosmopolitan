@@ -1,18 +1,19 @@
+# -count=2 asks for a repeat, and this toolchain runs everything once anyway.
 go test -cpu=1 -run=X/Y -bench=X/Y -count=2 -v testregexp
 
 # Test the following:
 
-# TestX is run, twice
-stdout -count=2 '^=== RUN   TestX$'
-stdout -count=2 '^    x_test.go:6: LOG: X running$'
+# TestX is run, once
+stdout -count=1 '^=== RUN   TestX$'
+stdout -count=1 '^    x_test.go:6: LOG: X running$'
 
-# TestX/Y is run, twice
-stdout -count=2 '^=== RUN   TestX/Y$'
-stdout -count=2 '^    x_test.go:8: LOG: Y running$'
+# TestX/Y is run, once
+stdout -count=1 '^=== RUN   TestX/Y$'
+stdout -count=1 '^    x_test.go:8: LOG: Y running$'
 
-# TestXX is run, twice
-stdout -count=2 '^=== RUN   TestXX$'
-stdout -count=2 '^    z_test.go:10: LOG: XX running'
+# TestXX is run, once
+stdout -count=1 '^=== RUN   TestXX$'
+stdout -count=1 '^    z_test.go:10: LOG: XX running'
 
 # TestZ is not run
 ! stdout '^=== RUN   TestZ$'
@@ -28,12 +29,11 @@ stdout -count=1 '^    z_test.go:18: LOG: XX running N=1$'
 ! stdout  '^    z_test.go:18: LOG: XX running N=\d\d+'
 ! stdout 'BenchmarkXX\s+\d+'
 
-# BenchmarkX/Y is run in full twice due to -count=2.
-# "Run in full" means that it runs for approximately the default benchtime,
-# but may cap out at N=1e9.
+# BenchmarkX/Y is run in full once. "Run in full" means that it runs for
+# approximately the default benchtime, but may cap out at N=1e9.
 # We don't actually care what the final iteration count is, but it should be
 # a large number, and the last iteration count prints right before the results.
-stdout -count=2 '^    x_test.go:15: LOG: Y running N=[1-9]\d{4,}\nBenchmarkX/Y\s+\d+'
+stdout -count=1 '^    x_test.go:15: LOG: Y running N=[1-9]\d{4,}\nBenchmarkX/Y\s+\d+'
 
 -- go.mod --
 module testregexp

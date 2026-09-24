@@ -220,6 +220,7 @@ func TestGroupCleanupUserNamespace(t *testing.T) {
 // Test for https://go.dev/issue/19661: unshare fails because systemd
 // has forced / to be shared
 func TestUnshareMountNameSpace(t *testing.T) {
+	t.Serial()
 	const mountNotSupported = "mount is not supported: " // Output prefix indicating a test skip.
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		dir := flag.Args()[0]
@@ -553,6 +554,7 @@ func testPidFD(t *testing.T, userns bool) error {
 }
 
 func TestPidFD(t *testing.T) {
+	t.Serial()
 	if err := testPidFD(t, false); err != nil {
 		t.Fatal("can't start a process:", err)
 	}
@@ -615,10 +617,12 @@ func getCaps() (caps, error) {
 }
 
 func TestAmbientCaps(t *testing.T) {
+	t.Serial()
 	testAmbientCaps(t, false)
 }
 
 func TestAmbientCapsUserns(t *testing.T) {
+	t.Serial()
 	b, err := os.ReadFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
 	if err == nil && strings.TrimSpace(string(b)) == "1" {
 		t.Skip("AppArmor restriction for unprivileged user namespaces is enabled")

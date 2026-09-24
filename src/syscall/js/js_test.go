@@ -91,6 +91,7 @@ func growStack(n int64) {
 }
 
 func TestWasmExport(t *testing.T) {
+	t.Serial()
 	testExportCalled = false
 	a := int32(123)
 	b := int64(456)

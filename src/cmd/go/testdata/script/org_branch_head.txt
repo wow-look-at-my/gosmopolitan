@@ -1,0 +1,458 @@
+# An org module (github.com/wow-look-at-my/...) has no version of its own: the
+# token on its require line is inert, and the go command resolves it in memory
+# to the pseudo-version of the head of a branch. The main module's checked-out
+# branch wins when the dependency's repository has a branch of that name, and
+# the dependency's default branch is used otherwise -- including when the main
+# module's HEAD is detached or is not a git repository at all.
+#
+# The prefix is hardcoded in cmd/go, so the fixture stands in for github.com
+# with a url.<base>.insteadOf rewrite rather than a proxy. Nothing here reaches
+# the network.
+
+[short] skip 'constructs local git repositories'
+[!git] skip
+
+env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
+env HOME=$WORK${/}home${/}gopher
+env GIT_ALLOW_PROTOCOL=file
+env GOPRIVATE=github.com/wow-look-at-my
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/beta.insteadOf' 'https://github.com/wow-look-at-my/beta'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/beta.insteadOf' 'https://github.com/wow-look-at-my/beta'
+exec git config --global --show-origin user.name
+stdout 'Go Gopher'
+
+env GIT_AUTHOR_NAME='Go Gopher'
+env GIT_AUTHOR_EMAIL='gopher@golang.org'
+env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+# The alpha repository publishes two modules, so a multi-module repository can
+# be watched landing on one commit. The feature branch is a different commit
+# with a different timestamp, so which head was read is visible in the version.
+cd $WORK/alpha
+exec git init
+env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-01-02T03:04:05Z
+exec git add -A
+exec git commit -m 'alpha main'
+exec git branch -m main
+
+exec git checkout -b feature
+cp $WORK${/}alpha-feature${/}alpha.go alpha.go
+cp $WORK${/}alpha-feature${/}sub${/}sub.go sub${/}sub.go
+env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
+exec git add -A
+exec git commit -m 'alpha feature'
+exec git checkout main
+
+# A branch a go.mod line can name, which no main module here is ever on.
+exec git checkout -b v1 main
+cp $WORK${/}alpha-v1${/}alpha.go alpha.go
+env GIT_AUTHOR_DATE=2026-01-04T05:06:07Z
+env GIT_COMMITTER_DATE=2026-01-04T05:06:07Z
+exec git add -A
+exec git commit -m 'alpha v1'
+exec git checkout main
+
+# The beta repository has no feature branch, so it always follows its default.
+cd $WORK/beta
+exec git init
+env GIT_AUTHOR_DATE=2026-02-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-02-02T03:04:05Z
+exec git add -A
+exec git commit -m 'beta main'
+exec git branch -m main
+
+cd $WORK/m
+exec git init
+exec git add -A
+exec git commit -m 'consumer'
+exec git branch -m feature
+
+# A matching branch wins over the dependency's default branch, and the two
+# modules of one repository resolve to one commit: the pseudo-versions of alpha
+# and alpha/sub name the same commit, c7abde595c23.
+go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/alpha/sub github.com/wow-look-at-my/beta
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-c7abde595c23$'
+stdout '^github.com/wow-look-at-my/alpha/sub v0\.0\.0-20260103040506-c7abde595c23$'
+stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+
+# The code the resolved versions describe is the code at the branch heads.
+go run .
+stdout '^alpha-feature sub-feature beta-main$'
+
+# A binary records the commit each dependency was built from, so a build from a
+# branch head is still attributable to an exact commit.
+go build -o $WORK${/}m${/}prog .
+go version -m $WORK${/}m${/}prog
+stdout 'dep\tgithub.com/wow-look-at-my/alpha\tv0\.0\.0-20260103040506-c7abde595c23\th1:'
+stdout 'dep\tgithub.com/wow-look-at-my/alpha/sub\tv0\.0\.0-20260103040506-c7abde595c23\th1:'
+stdout 'dep\tgithub.com/wow-look-at-my/beta\tv0\.0\.0-20260202030405-6dedeb498b02\th1:'
+
+# A dependency without a branch of that name takes its default branch, and so
+# does every dependency when the main module has no branch to offer.
+exec git checkout -b only-here
+go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/beta
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+
+exec git checkout --detach
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+
+# A main module that git does not track has no branch to follow either.
+cd $WORK/plain
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+
+# go get writes the placeholder for an org module, never the version it
+# resolved the module to.
+go get github.com/wow-look-at-my/beta
+grep 'github.com/wow-look-at-my/beta v0\.0\.0' go.mod
+! grep 'github.com/wow-look-at-my/beta v0\.0\.0-' go.mod
+! exists go.sum
+
+# go mod tidy writes the placeholder, not the resolved version, and needs no
+# go.sum entry for an org module. A second tidy leaves go.mod byte-identical.
+cd $WORK/m
+go mod tidy
+
+grep 'github.com/wow-look-at-my/alpha v0\.0\.0' go.mod
+grep 'github.com/wow-look-at-my/alpha/sub v0\.0\.0' go.mod
+grep 'github.com/wow-look-at-my/beta v0\.0\.0' go.mod
+! exists go.sum
+
+cp go.mod $WORK/m.go.mod
+go mod tidy
+cmp go.mod $WORK/m.go.mod
+
+# A token recorded before this rule existed, and a go.sum line left for it, are
+# accepted and then cleaned up rather than being a flag day. This module is not
+# in a git repository, so the old token resolves to alpha's default branch.
+cd $WORK/old
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+go build ./...
+
+go mod tidy
+grep 'github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
+! grep 'wow-look-at-my' go.sum
+
+# Vendor mode reads the placeholder from both files and, with no branch to
+# query, leaves it alone.
+cd $WORK/vendor
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0$'
+go build ./...
+go run .
+stdout '^alpha-vendored$'
+
+# A replace line naming an org module records a version the same way a require
+# line does. This replacement names a commit that does not exist, so a version
+# the go command read at all would fail the build instead of printing alpha's
+# default-branch code.
+cd $WORK/replaced
+go run .
+stdout '^alpha-main$'
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+
+# A line names a branch to send one module somewhere other than where the rest
+# of them go. None of these main modules is on a branch at all, so the named
+# branch is the only thing that reaches alpha's v1 head.
+cd $WORK/named
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+go run .
+stdout '^alpha-v1$'
+
+# The go-toolchain spellings that carried this before are read as well.
+cd $WORK/legacyname
+go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/beta
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+
+# A replacement supplies the version that reaches the build, so the name goes on
+# the replace line. The require line's own comment names no branch.
+cd $WORK/namedreplace
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+go run .
+stdout '^alpha-v1$'
+
+# A name the dependency has no branch for takes the default branch, the same as
+# the branch this repository is on does. The merge that closes a pull request
+# deletes the branch it was opened from, and the pin follows the code there.
+cd $WORK/namedgone
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+go run .
+stdout '^alpha-main$'
+
+# A replacement pointing at a directory is the source of truth for that module,
+# so nothing is resolved for it and its require line's token is not read either.
+# The version named here does not exist, so a build that read it would fail.
+cd $WORK/dirreplace
+go run .
+stdout '^alpha-from-directory$'
+go list -m github.com/wow-look-at-my/alpha
+stdout '=> \./alpha$'
+
+-- $WORK/home/gopher/.gitconfig --
+[user]
+	name = Go Gopher
+	email = gopher@golang.org
+-- $WORK/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-main" }
+-- $WORK/alpha/sub/go.mod --
+module github.com/wow-look-at-my/alpha/sub
+
+go 1.21
+-- $WORK/alpha/sub/sub.go --
+package sub
+
+func Name() string { return "sub-main" }
+-- $WORK/alpha-feature/alpha.go --
+package alpha
+
+func Name() string { return "alpha-feature" }
+-- $WORK/alpha-feature/sub/sub.go --
+package sub
+
+func Name() string { return "sub-feature" }
+-- $WORK/alpha-v1/alpha.go --
+package alpha
+
+func Name() string { return "alpha-v1" }
+-- $WORK/named/go.mod --
+module example.com/named
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0 // branch=v1
+-- $WORK/named/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/legacyname/go.mod --
+module example.com/legacyname
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0 // go-toolchain:auto-branch=v1
+	github.com/wow-look-at-my/beta v0.0.0 // indirect; go-toolchain:auto-branch
+)
+-- $WORK/legacyname/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), beta.Name())
+}
+-- $WORK/namedreplace/go.mod --
+module example.com/namedreplace
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0 // branch=v1
+-- $WORK/namedreplace/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/namedgone/go.mod --
+module example.com/namedgone
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0 // branch=gone-with-the-merge
+-- $WORK/namedgone/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/beta/go.mod --
+module github.com/wow-look-at-my/beta
+
+go 1.21
+-- $WORK/beta/beta.go --
+package beta
+
+func Name() string { return "beta-main" }
+-- $WORK/m/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0
+	github.com/wow-look-at-my/alpha/sub v0.0.0
+	github.com/wow-look-at-my/beta v0.0.0
+)
+-- $WORK/m/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/alpha/sub"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), sub.Name(), beta.Name())
+}
+-- $WORK/plain/go.mod --
+module example.com/plain
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/plain/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/old/go.mod --
+module example.com/old
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+-- $WORK/old/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/old/go.sum --
+github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa h1:G7mAYYxgmS0lVkHyy2hEOLQCFB0DlQFTMLWggykrydX=
+github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa/go.mod h1:G7mAYYxgmS0lVkHyy2hEOLQCFB0DlQFTMLWggykrydX=
+-- $WORK/vendor/go.mod --
+module example.com/vendored
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/vendor/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/vendor/vendor/modules.txt --
+# github.com/wow-look-at-my/alpha v0.0.0
+## explicit; go 1.21
+github.com/wow-look-at-my/alpha
+-- $WORK/vendor/vendor/github.com/wow-look-at-my/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-vendored" }
+-- $WORK/replaced/go.mod --
+module example.com/replaced
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+-- $WORK/replaced/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/dirreplace/go.mod --
+module example.com/dirreplaced
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+
+replace github.com/wow-look-at-my/alpha => ./alpha
+-- $WORK/dirreplace/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/dirreplace/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/dirreplace/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-from-directory" }

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin || dragonfly || freebsd || netbsd || openbsd
+//go:build cosmo || darwin || dragonfly || freebsd || netbsd || openbsd
 
 package net
 
@@ -14,7 +14,7 @@ import (
 // If the ifindex is zero, interfaceTable returns mappings of all
 // network interfaces. Otherwise it returns a mapping of a specific
 // interface.
-func interfaceTable(ifindex int) ([]Interface, error) {
+func bsdInterfaceTable(ifindex int) ([]Interface, error) {
 	msgs, err := interfaceMessages(ifindex)
 	if err != nil {
 		return nil, err
@@ -33,7 +33,7 @@ func interfaceTable(ifindex int) ([]Interface, error) {
 			}
 			ift[n].Index = m.Index
 			ift[n].Name = m.Name
-			ift[n].Flags = linkFlags(m.Flags)
+			ift[n].Flags = bsdLinkFlags(m.Flags)
 			if sa, ok := m.Addrs[syscall.RTAX_IFP].(*routebsd.LinkAddr); ok && len(sa.Addr) > 0 {
 				ift[n].HardwareAddr = make([]byte, len(sa.Addr))
 				copy(ift[n].HardwareAddr, sa.Addr)
@@ -48,7 +48,7 @@ func interfaceTable(ifindex int) ([]Interface, error) {
 	return ift[:n], nil
 }
 
-func linkFlags(rawFlags int) Flags {
+func bsdLinkFlags(rawFlags int) Flags {
 	var f Flags
 	if rawFlags&syscall.IFF_UP != 0 {
 		f |= FlagUp
@@ -65,7 +65,7 @@ func linkFlags(rawFlags int) Flags {
 	if rawFlags&syscall.IFF_POINTOPOINT != 0 {
 		f |= FlagPointToPoint
 	}
-	if rawFlags&syscall.IFF_MULTICAST != 0 {
+	if rawFlags&bsdIffMulticast != 0 {
 		f |= FlagMulticast
 	}
 	return f
@@ -74,7 +74,7 @@ func linkFlags(rawFlags int) Flags {
 // If the ifi is nil, interfaceAddrTable returns addresses for all
 // network interfaces. Otherwise it returns addresses for a specific
 // interface.
-func interfaceAddrTable(ifi *Interface) ([]Addr, error) {
+func bsdInterfaceAddrTable(ifi *Interface) ([]Addr, error) {
 	index := 0
 	if ifi != nil {
 		index = ifi.Index

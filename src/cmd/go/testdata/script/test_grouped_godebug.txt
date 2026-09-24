@@ -1,0 +1,71 @@
+# Packages whose default GODEBUG differs still share one test binary. The
+# binary makes each package's default the one in effect when it is started
+# for that package, before the package initializes.
+
+go test -x ./nilpanic ./plain
+stdout '^ok\s+example.com/godebug/nilpanic'
+stdout '^ok\s+example.com/godebug/plain'
+stderr -count=1 'link(\.exe)?"? -o'
+
+# A setting only the start of the program reads keeps packages apart.
+go test ./plain ./maxprocs
+stdout '^ok\s+example.com/godebug/plain'
+stdout '^ok\s+example.com/godebug/maxprocs'
+go test -n -c -o $devnull ./plain ./maxprocs
+stderr -count=2 'link(\.exe)?"? -o'
+
+-- go.mod --
+module example.com/godebug
+
+go 1.27
+-- nilpanic/nilpanic_test.go --
+//go:debug panicnil=1
+
+package nilpanic
+
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+var atInit = os.Getenv("GODEBUG")
+
+func TestPanicNil(test *testing.T) {
+	defer func() {
+		if got := recover(); got != nil {
+			test.Fatalf("recover() = %v, want nil under panicnil=1", got)
+		}
+	}()
+	panic(nil)
+}
+
+func TestNotInEnvironment(test *testing.T) {
+	if strings.Contains(atInit, "panicnil") {
+		test.Fatalf("GODEBUG=%q: the default went into the environment", atInit)
+	}
+}
+-- plain/plain_test.go --
+package plain
+
+import (
+	"runtime"
+	"testing"
+)
+
+func TestPanicNil(test *testing.T) {
+	defer func() {
+		if _, ok := recover().(*runtime.PanicNilError); !ok {
+			test.Fatal("recover() is not a *runtime.PanicNilError: panicnil=1 reached this package")
+		}
+	}()
+	panic(nil)
+}
+-- maxprocs/maxprocs_test.go --
+//go:debug updatemaxprocs=0
+
+package maxprocs
+
+import "testing"
+
+func TestNothing(test *testing.T) {}

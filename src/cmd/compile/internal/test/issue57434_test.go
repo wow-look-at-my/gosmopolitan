@@ -25,6 +25,7 @@ func (o *Object) Update() *Object {
 }
 
 func TestAutotmpLoopDepth(t *testing.T) {
+	t.Serial()
 	f := func() {
 		for i := 0; i < 10; i++ {
 			var obj Object

@@ -22,6 +22,7 @@ import (
 
 // Test that unalgined access to memhash32 doesn't cause a problem.
 func TestMemHash32AlignAccess(t *testing.T) {
+	t.Serial()
 	type Key struct {
 		_ [1]byte
 		k [4]byte
@@ -50,6 +51,7 @@ func TestMemHash32Equality(t *testing.T) {
 
 // Test that unalgined access to memhash64 doesn't cause a problem.
 func TestMemHash64AlignAccess(t *testing.T) {
+	t.Serial()
 	type Key struct {
 		_ [1]byte
 		k [8]byte

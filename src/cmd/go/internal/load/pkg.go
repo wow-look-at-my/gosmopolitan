@@ -36,6 +36,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -233,7 +234,6 @@ type PackageInternal struct {
 	FuzzInstrument    bool                // package should be instrumented for fuzzing
 	Cover             CoverSetup          // coverage mode and other setup info of -cover is being applied to this package
 	OmitDebug         bool                // tell linker not to write debug information
-	GobinSubdir       bool                // install target would be subdir of GOBIN
 	InternalImportOk  bool                // this package may be imported even though it is internal
 	BuildInfo         *debug.BuildInfo    // add this info to package main
 	TestmainGo        *[]byte             // content for _testmain.go
@@ -241,6 +241,11 @@ type PackageInternal struct {
 	OrigImportPath    string              // original import path before adding '_test' suffix
 	PGOProfile        string              // path to PGO profile
 	ForMain           string              // the main package if this package is built specifically for it
+	TestInit          string              // the package whose tests run this package's _test.go initialization (-testinit)
+	TestVariantOf     *Package            // the package this test variant is linked in place of (-testvariant)
+	TestStartup       []string            // the only imports initialized before this test main; the rest wait for their tests (-teststartup)
+	TestUnitSpec      string              // the roots of each package's tests in this test binary (-testunits)
+	testmainData      *testMainData       // what TestmainGo was rendered from, for a binary holding several packages' tests
 
 	Asmflags   []string // -asmflags for this package
 	Gcflags    []string // -gcflags for this package
@@ -948,6 +953,48 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					modroot = gorootSrcCmd
 				}
 			}
+			// An embedded standard package has no directory to read: its
+			// manifest entry is the package.
+			if cfg.EmbeddedStd && modroot == cfg.GOROOTsrc {
+				if pkg := cfg.EmbeddedStdPackage(r.path); pkg != nil {
+					// The manifest holds resolved imports; a source file spells a
+					// vendored one without the vendor/ prefix, and the loader
+					// resolves it again.
+					imports := make([]string, len(pkg.Imports))
+					for idx, imp := range pkg.Imports {
+						imports[idx] = strings.TrimPrefix(imp, "vendor/")
+					}
+					data.p = &build.Package{
+						Dir:        r.dir,
+						ImportPath: r.path,
+						Name:       pkg.Name,
+						Imports:    imports,
+						Goroot:     true,
+						Root:       cfg.GOROOT,
+					}
+					// A listing names the source files; a build reads the
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
+					if cfg.CmdName == "list" {
+						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+							data.p.GoFiles = tree.GoFiles
+							data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+						}
+					}
+					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
+					goto Happy
+				}
+			}
+			// A dependency that generates part of its own API ships a package
+			// the compiler reads as empty. Read the generated copy instead.
+			if dir := gendep.Dir(r.dir, modroot); dir != r.dir {
+				r.dir = dir
+				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
+				goto Happy
+			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {
 					data.p, data.err = rp.Import(cfg.BuildContext, buildMode)
@@ -1004,12 +1051,8 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 
 		// Set data.p.BinDir in cases where go/build.Context.Import
 		// may give us a path we don't want.
-		if !data.p.Goroot {
-			if cfg.GOBIN != "" {
-				data.p.BinDir = cfg.GOBIN
-			} else if cfg.ModulesEnabled {
-				data.p.BinDir = modload.BinDir(ld)
-			}
+		if !data.p.Goroot && cfg.ModulesEnabled {
+			data.p.BinDir = modload.BinDir(ld)
 		}
 
 		if !cfg.ModulesEnabled && data.err == nil &&
@@ -1721,7 +1764,7 @@ func InstallTargetDir(p *Package) TargetDir {
 	}
 	if p.Goroot && strings.HasPrefix(p.ImportPath, "cmd/") && p.Name == "main" {
 		switch p.ImportPath {
-		case "cmd/go", "cmd/gofmt":
+		case "cmd/go/main", "cmd/gofmt":
 			return ToBin
 		}
 		return ToTool
@@ -1783,6 +1826,10 @@ func (p *Package) exeFromFiles() string {
 func (p *Package) DefaultExecName() string {
 	if p.Internal.CmdlineFiles {
 		return p.exeFromFiles()
+	}
+	// The go command's main package sits under cmd/go, whose name is a keyword.
+	if p.Goroot && p.ImportPath == "cmd/go/main" {
+		return "go"
 	}
 	return p.exeFromImportPath()
 }
@@ -1876,13 +1923,8 @@ func (p *Package) load(ld *modload.Loader, ctx context.Context, opts PackageOpts
 			p.Internal.Build.BinDir = modload.BinDir(ld)
 		}
 		if p.Internal.Build.BinDir != "" {
-			// Install to GOBIN or bin of GOPATH entry.
+			// Install to bin of the GOPATH entry.
 			p.Target = filepath.Join(p.Internal.Build.BinDir, elem)
-			if !p.Goroot && strings.Contains(elem, string(filepath.Separator)) && cfg.GOBIN != "" {
-				// Do not create $GOBIN/goos_goarch/elem.
-				p.Target = ""
-				p.Internal.GobinSubdir = true
-			}
 		}
 		if InstallTargetDir(p) == ToTool {
 			// This is for 'go tool'.
@@ -3073,8 +3115,8 @@ func setPGOProfilePath(pkgs []*Package) {
 			if p.Name != "main" {
 				continue
 			}
-			pmain := p
-			file := filepath.Join(pmain.Dir, "default.pgo")
+			testMain := p
+			file := filepath.Join(testMain.Dir, "default.pgo")
 			if _, err := os.Stat(file); err != nil {
 				continue // no profile
 			}
@@ -3089,7 +3131,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					return p1
 				}
 
-				if len(pkgs) > 1 && p != pmain {
+				if len(pkgs) > 1 && p != testMain {
 					// Make a copy, then attach profile.
 					// No need to copy if there is only one root package (we can
 					// attach profile directly in-place).
@@ -3104,7 +3146,7 @@ func setPGOProfilePath(pkgs []*Package) {
 					// we don't change them.
 					p1.Imports = slices.Clone(p.Imports)
 					p1.Internal.Imports = slices.Clone(p.Internal.Imports)
-					p1.Internal.ForMain = pmain.ImportPath
+					p1.Internal.ForMain = testMain.ImportPath
 					visited[p] = p1
 					p = p1
 				} else {
@@ -3120,7 +3162,7 @@ func setPGOProfilePath(pkgs []*Package) {
 			}
 
 			// Replace the package and imports with the PGO version.
-			split(pmain)
+			split(testMain)
 		}
 
 	default:
@@ -3354,9 +3396,7 @@ func GoFilesPackage(ld *modload.Loader, ctx context.Context, opts PackageOpts, g
 	if pkg.Name == "main" {
 		exe := pkg.DefaultExecName() + cfg.ExeSuffix
 
-		if cfg.GOBIN != "" {
-			pkg.Target = filepath.Join(cfg.GOBIN, exe)
-		} else if cfg.ModulesEnabled {
+		if cfg.ModulesEnabled {
 			pkg.Target = filepath.Join(modload.BinDir(ld), exe)
 		}
 	}

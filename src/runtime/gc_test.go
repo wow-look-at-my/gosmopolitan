@@ -147,8 +147,11 @@ func TestGcLastTime(t *testing.T) {
 var hugeSink any
 
 func TestHugeGCInfo(t *testing.T) {
+	t.Serial(
 	// The test ensures that compiler can chew these huge types even on weakest machines.
 	// The types are not allocated at runtime.
+	)
+
 	if hugeSink != nil {
 		// 400MB on 32 bots, 4TB on 64-bits.
 		const n = (400 << 20) + (unsafe.Sizeof(uintptr(0))-4)<<40

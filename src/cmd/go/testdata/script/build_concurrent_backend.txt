@@ -6,5 +6,7 @@
 env GOEXPERIMENT=none
 
 env GOMAXPROCS=4
-go build -n -x -a fmt
+env GOCACHE=$WORK/gocache
+mkdir $GOCACHE
+go build -n -x fmt
 stderr ' -c=4 '

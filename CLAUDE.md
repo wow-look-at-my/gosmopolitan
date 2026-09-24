@@ -62,11 +62,15 @@ go test std
 
 To run tests under GOOS=cosmo on a Linux/macOS host, `export PATH="$GOROOT/misc/cosmo:$PATH"` so cmd/go finds the `go_cosmo_*_exec` wrappers (see `misc/cosmo/README.md`). Then plain `GOOS=cosmo go test <pkg>` works.
 
+<<<<<<< HEAD
 **Top-level tests are parallel by default in this fork** (`src/testing`): each starts as if it had called `t.Parallel()`, which is a no-op there. A SUBTEST is not, and runs inside the `t.Run` call that starts it, so a parent's later statements and its deferred calls come after it. That is the order upstream promises and the order test code relies on. A subtest asks for parallelism with `t.Parallel()`. Two methods opt a top-level test out. `t.Serial(reason string = "")` stops every other test and runs the caller alone in this process. `t.Fork()` runs the caller in a child process instead, alone, and takes the child's exit status as the verdict. A test wants that when the shared state is process-global, because the child gets its own copy. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these.
 
 `Serial`'s reason carries a default, so `t.Serial()` still compiles and runs - and warns, as it does when the reason is under 48 characters or an echo of the test's own name or file. It warns again when the reason is over 98% the same as another one in the same test binary. One sentence pasted across a file is how a package stops being parallel, one defensible-looking call at a time.
 
 Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+=======
+**Top-level tests can run parallel by default in this fork** (`src/testing`). The switch is `parallelByDefault`. It is OFF until every CI leg is green with it on. When it is on, each starts as if it had called `t.Parallel()`, which is a no-op there. A SUBTEST is not, and runs inside the `t.Run` call that starts it, so a parent's later statements and its deferred calls come after it. That is the order upstream promises and the order test code relies on. A subtest asks for parallelism with `t.Parallel()`. Two methods opt a top-level test out. `t.Serial()` stops every other test and runs the caller alone in this process.`t.Fork()` runs the caller in a child process instead, alone, and. `t.Setenv` and `t.Chdir` fork rather than take the barrier: neither is a reason to stop the suite. A test failing only under this fork's `go test` is almost always one of these. Depth: docs/TESTING-PARALLEL.md - both methods, when to pick which, and the fork's mechanics.
+>>>>>>> origin/master
 
 ## Building Cosmopolitan Binaries
 
@@ -200,9 +204,15 @@ go tool compile -bench=out.txt file.go
 
 ## Fork Gotchas
 
+- **The cosmo arm64 image is ET_EXEC at 4 TiB**, not cosmopolitan's own 0x800000000. Upstream Go is PIE on darwin, so a normal Go binary there has no fixed address to collide with. This one does, and MAP_FIXED replaces whatever it lands on. At 34 GB a large image reaches the arenas macOS's default malloc zone reserves. An allocation carved from one then lands in this image's read-only rodata. That is a protection fault nothing handles, and it hangs the process. The macOS loader also reads the range first. A PROT_NONE reservation is what MAP_FIXED is for, and accessible memory there is fatal and named. `TestFatPayloadsAbovePageZero` pins the payloads above the loader's page zero. PIE ends the whole question and is the durable fix. It needs a relocation pass in `ape-m1.c`.
 - **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses (like `testdata/ape/apetest`) must be run with an upstream Go so the test binary itself is executable on the host.
+<<<<<<< HEAD
 - **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${TMPDIR:-${HOME:-/tmp}}/.ape-run-1/<file identity>/`. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does, and cmd/go takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
+=======
+- **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/`. TMPDIR and HOME are not read. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
+- **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does. cmd/go takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
+>>>>>>> origin/master
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
 - **An arm64 APE on macOS needs AT_HWCAP. It takes two fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair, but it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".- **`/proc/self/auxv` is served by the APE off a Linux host.** A library written for Linux reads the auxiliary vector out of that file rather. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback and its SIGILL.- **The pclntab format has diverged from upstream** (size pass 3b, 2026-07-19). Compact layout under magic `abi.CosmoPCLnTabMagic` (0xffffffc1): repacked 40-B `_func` records with presence-bitmap pcdata/funcdata arrays, prefix-split funcnametab, dir-split filetab, packed pctab pairs, 13-B InlTree records. Consequence: upstream debug/gosym-based tools cannot parse fork binaries. The fork's own debug/gosym, objdump, nm, and addr2line are updated. DWARF sidecars are unaffected, so gdb/delve work. Writer and readers must move in lockstep: `cmd/link/internal/ld/pcln.go` + `cmd/internal/obj/pcln.go` <-> `runtime/symtab.go`/`symtabinl.go` <-> `debug/gosym`.
 
@@ -241,25 +251,49 @@ Then sweep the version string (`grep -rn goX.Y '<old>cosmo'` across CLAUDE.md, R
 
 Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.md.
 
+**A test is never skipped.** Not with `-run`. Not with `t.Skip`. Not with a build tag. Not by dropping a port. A package that reports success in a second because its tests never ran is worse than a red one. It reports green for work nobody did. js/wasm does this to the whole `cmd/*` family, because the port has no process spawning. That is a gap to close. It is not a result to keep.
+
+**A slow suite is never made fast by running less of it.** Every port is fast, or it gets made fast. No tier of platforms is allowed to be slow. Fix what makes each test expensive instead. `cmd/internal/testdir` runs its whole corpus in 221.3s, against 1265.8s for the same corpus one program at a time. Its run programs compile into one executable and run in one process.
+
+**A dependency is never vendored.** Its source does not belong in this tree. A vendor directory writes each version down a second time in `modules.txt`. The gitlink writes it a third time. The go command then refuses to build when the three disagree. That duplication is what broke `cmd/go`. `src/cmd` still builds in vendor mode today. Removing that is task work. It is not a licence to add anything to the vendor tree.
+
+**An org dependency is never pinned to a version.** Not in `go.mod`. Not in a gitlink. Not in `vendor/modules.txt`. A pin freezes one repository against a commit of another and calls the result reproducible. What it reproduces is a build nobody can fix from here. The cache client's pin is what broke `cmd/go`: `shared.go` named counters the pinned commit did not carry. `go_bootstrap install cmd/go` then failed, and no toolchain built. An org module records a placeholder version instead, `vN.0.0` for the major version of its path. The go command resolves that placeholder in memory, to the head of a branch. It takes this repository's branch when the dependency has one. It takes the dependency's default branch otherwise. A detached HEAD, or a main module with no git repository, takes the default branch too. Every `wow-look-at-my` submodule follows a branch the same way. `submodulebranch.bash` names that branch, then runs `git submodule update --init --remote`. make.bash, make.bat and CI all call it, and `branch = master` in `.gitmodules` is the fallback. A third-party dependency keeps its version.
+
+**A dependency's generators run only for this org.** `cmd/go` completes a fetched module by running its `//go:generate` directives (`cmd/go/internal/gendep`). A directive is a command its author wrote. This machine runs it unread. A module under `github.com/wow-look-at-my/` completes that way, because that author is this fleet. Every other module runs nothing. It asks with a whole-line `//go:gendep` comment in its own `go.mod`. A skip is named on stderr, not left to surface later as an undeclared symbol. Depth: docs/GENDEP.md.
+
+**A failure is fixed, never concealed.** There is no transient failure. A test that passes on the second run is broken on the first, and re-running it is not a repair. So `-count=1` is a no-op here, and clearing a cache is never the answer to a wrong result. A cache that serves a wrong answer has a key missing an input. Name that input and put it in the key. Never retry, never re-run, never widen a timeout, never mark a check flaky, never delete state to move past it. Find what is actually wrong and repair it.
+
+**`awk` and `sed` are not permitted.** Neither in a script, a workflow step, nor a one-off command. Each carries its own grammar, and that grammar edits what you did not ask it to. `sed -i` takes a mandatory backup suffix on BSD and none on GNU. One invocation cannot mean the same thing on both runners. `awk` rebuilds the whole line out of `OFS` as soon as you assign to a field. So a version rewrite stripped the leading tab from two `go.mod` require lines, and nothing failed. The shell reads a line and puts back every part of it untouched. Use it, or use the file's own tool.
+
+**A name is a word, not a letter.** Every identifier is at least 3 characters. There is no carve-out for a loop counter: write `idx`, `row`, `col` or `num`. This binds every line this fork adds. Do not rename upstream's receivers in a file you are not otherwise rewriting. That diff hides the change it travels with.
+
+**A module zip carries `.gitmodules` and every gitlink.** `git archive` writes an empty directory for a submodule. It drops the commit that submodule points at. A fetched module then names which submodules exist and not which commit each one is. A gitlink is a content address the author already chose. Keep it.
+
 The GitHub Actions workflow (`.github/workflows/cosmo-ci.yml`) builds the toolchain on Linux, macOS, and Windows and tests that APE binaries built on any platform run correctly. The single `test` job is a 3-OS matrix (ubuntu/macos/windows). Every leg runs the full apetest suite against all 3 origin binaries. The windows-latest leg additionally runs two windows-only steps before the shared apetest steps: a never-failing AF_UNIX capability diagnostic (attributes any unixsock failure to runner. `fizzbuzz.com 10 5` prints `fizzbuzz\n`, exit 0). Its apetest steps - fizzbuzz battery AND runtimeprobe execution, via direct CreateProcess - keep the longer per-step timeouts the old dedicated windows job used, carried as.
 
 CI builds one fat APE per platform. No GOARCH pin. The output contains cosmo amd64 and cosmo arm64 payloads, stripped by default, with apetest's `TestFatSidecarsExist` asserting the `.dbg`/`.aarch64.elf` sidecars exist on every build. The artifact ships the bare binaries, so apetest's TestDebugSidecars skips on the test runners). Structural format tests run everywhere. The full execution suite (fizzbuzz + runtimeprobe) runs on all three test runners.
 
+<<<<<<< HEAD
 **Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs `go tool dist test -rebuild`. That is the distribution's own all-tests entry point and the only test gate here: the stdlib and `cmd` packages, the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches none of the last two. It replaced a set of steps that each named the tests it wanted, which made green a statement about the name lists rather than. Never reintroduce a `-run` list here: a test nobody names never runs. Upstream runs the same suite per builder. A port is a host. This fork runs it on each of the three. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set. It tests the cosmo port. `run.bash` and `run.bat` export the `GOOS` and `GOARCH` that `dist env` reports. They also prepend `misc/cosmo` to PATH. The test binaries are APEs. `execve` refuses an APE without a binfmt_misc entry. cmd/go runs a cross-GOOS test binary through `go_cosmo_<arch>_exec`. Known red: cmd/go's `list_symlink_issue35941`, over the whole-repo vendor submodules.
+=======
+**Every build leg runs `src/run.bash`** (`run.bat` on windows), which execs `go tool dist test`. There is no `-rebuild` and no `-a`: both existed to force `go install -a` over the whole toolchain, which threw away a correct cache on every run. That is the distribution's own all-tests entry point and the only test gate here: the stdlib and `cmd` packages, the `test/` corpus through `cmd/internal/testdir`. A plain `go test` reaches none of the last two. It replaced a set of steps that each named the tests it wanted, which made green a statement about the name lists rather than. Never reintroduce a `-run` list here: a test nobody names never runs. Upstream runs the same suite per builder. A port is a host. This fork runs it on each of the three. `dist test` reads `GO_BUILDER_NAME`. A nameless builder gets the short set. It tests the cosmo port. `run.bash` and `run.bat` export the `GOOS` and `GOARCH` that `dist env` reports. They also prepend `misc/cosmo` to PATH. The test binaries are APEs. `execve` refuses an APE without a binfmt_misc entry. cmd/go runs a cross-GOOS test binary through `go_cosmo_<arch>_exec`. Known red: cmd/go's `list_symlink_issue35941`, over the whole-repo vendor submodules.
+>>>>>>> origin/master
 
-The ubuntu leg keeps `dats/cosmo-tests.dats`, which runs the GOOS=cosmo package tests through the misc/cosmo wrappers: internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the runtime's Apple itimerval ABI pins. Those name lists live in the suite, where an engineer can run them, rather than in a workflow step. Every build leg additionally asserts, right after make.bash, a content-derived `buildID=` in `compile -V=full`. That is the cross-build cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas.
+**Every step dist runs names itself and what it cost.** `dist build <secs> <name>` and `dist test <secs> <name>`, one line each, on stdout. A suite's own `ok pkg 1.23s` times the RUN of a test binary, never the build of one. The one binary every package's tests compile into runs no test at all. Without these lines the largest compile in a leg answers to nothing. `make.bash` gets the same line for each toolchain phase. The suite-leg summary totals them into the step summary, which is how a leg that overran its budget names what overran.
 
+<<<<<<< HEAD
 Three more ubuntu-only suites gate properties nothing else measures. `dats/no-wordspam.dats` caps markdown size, paragraph length and comment runs, and refuses changelog phrasing by name. `dats/goos-readonly.dats` refuses any assignment to `runtime.GOOS` or `runtime.GOARCH` outside `setGOOS`/`setGOARCH`, which the compiler cannot do because both are variables here. `dats/emitted-binaries.dats` builds a program, a thin build, a test binary and both wasm ports, and reads the first bytes of each: a host ELF, Mach-O or PE leaving a build means a port went missing.
 
 Both name the HOST, read at startup: one APE boots on three kernels, and a payload can run on a machine of another architecture. The cost is that `const x = runtime.GOARCH == "amd64"` is a compile error against a variable, and third-party code writes it (`golang.org/x/crypto/chacha20`), so `crypto/tls`'s bogo suite cannot build its dependency. Only the compiler can serve both readings — folding the build value in a constant context while a plain read still loads the variable — and it does not yet.
 
 The ubuntu build leg also carries the uprev guardrail `GOOS=cosmo go build std` for amd64 and arm64 (2026-07-26). The execution suite compiles only what fizzbuzz and runtimeprobe import — 84 of the 358 std packages under cosmo — so an upstream re-partition of a. Run it locally before proposing an uprev — it is what turns a clean merge into a verified one.
+=======
+The `cosmo-checks` job keeps `dats/checks/cosmo-tests.dats`, which runs the GOOS=cosmo package tests through the misc/cosmo wrappers: internal/runtime/syscall/cosmo (darwin sendmsg/recvmsg cmsg repack, signal translation tables, epoll layout), the runtime's Apple itimerval ABI pins. Those name lists live in the suite, where an engineer can run them, rather than in a workflow step. Every build leg additionally asserts, right after make.bash, a content-derived `buildID=` in `compile -V=full`. That is the cross-build cache-poisoning guard — see the tool-build-ID bullet in Fork Gotchas.
+>>>>>>> origin/master
 
-Two test programs ship in each build's artifact: `fizzbuzz.com` (basic execution) and `runtimeprobe.com` (testdata/runtimeprobe - a multi-file module, built via its directory: file I/O, directory listing. Its `nanosleep` check asserts on the elapsed CLOCK, not on the error: a syscall that returns success without sleeping passes an error-only check, which. The apetest suite runs both against all three origin binaries via the FIZZBUZZ_BIN and RUNTIMEPROBE_BIN env vars. The macos-latest runner is what actually executes the darwin (Syslib) code paths.
+Guard suites, the test programs and the wasm job: docs/CI.md, section "Guard suites, test programs and the wasm job".
 
-A third job (`wasm`, ubuntu-only - wasm output is host-independent) regression-gates the fork's WebAssembly ports: it builds the toolchain, builds std for js/wasm and wasip1/wasm, runs the stdlib packages the.
-
-Three more jobs (`publish-create`, `publish-upload`, `publish-finish`. They need build+test) publish an installable toolchain tarball to buildhost on every push, one leg per platform - see Toolchain Distribution below.
+The `publish-create`, `publish-upload` and `publish-finish` jobs publish an installable toolchain tarball to buildhost on every push, one leg per platform. They need every other job green: build, cosmo-checks, test, wasm and wasm-suite. Depth: Toolchain Distribution below.
 
 ## Repository automation (pr-minder bot)
 
@@ -272,23 +306,29 @@ This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr
 - **Timeline attribution.** Ready-for-review, auto-merge, and merge events show the bot as the *actor* even when the repository owner initiated them by applying the label. Judge intent by the PR's `labeled` timeline events (who applied `auto-pr-merge`), not by the executor of the follow-on events. Symmetrically, the bot re-enforces state it was told to arm: reverting it (e.g. flipping the PR back to draft) is counter-flipped within seconds — a durable change needs the owner to.
 - **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only merges when its head SHA carries a green `all-builds` commit status — posted.). Do not name any CI job `all-builds`: an org guard fails workflows that define one, because the status context is reserved for the aggregator.
 
-## Shared build cache: the client is linked into `cmd/go`
+## Shared build cache: the cache IS `cacheclient`
 
-The org's shared build cache is reached in process. `cmd/go` requires `github.com/wow-look-at-my/go-s3-server/cacheclient` and calls it from `cmd/go/internal/cache/shared.go`, which layers a network tier under the disk cache: disk stays authoritative. The shared tier is.
+The cache lives in `github.com/wow-look-at-my/go-s3-server/cacheclient`. It holds the directory on disk. It holds the store under that directory. It holds the broker that gives one build a single owner for both. `cmd/go/internal/cache` names those types for the go command. It adds the action hash and the mapped read. It adds nothing else, and no second cache belongs here.
 
-**`GOCACHEPROG` is deleted** — the variable, the protocol, and `cmd/go/internal/cacheprog`. `chooseCache` (`cache/default.go`) picks the shared tier over disk, or disk alone. Nothing forks a cache program, and a leftover `GOCACHEPROG` in the environment names nothing. The subprocess was the cost, not the feature: it answered with a PATH rather than bytes, so a program storing bodies in packs had.
+One build has one owner. The first go command opens the directory and serves it over shared memory (go-ipc) to every command it starts. A child holds no directory, no key index and no connection. It asks the owner, then opens the file the owner names. So the trim has one writer, which is what makes `Cache.Close`'s cross-process invariant enforceable.
 
-`GO_BUILDCACHE_CONFIG` configures the tier (`cacheclient.ConfigFromEnv`). Unset. The build stays on disk. A run with `CI` set and no shared cache fails outright, because an unconfigured CI run decides whether every other CI run recompiles. `GOCACHEDEBUG` restores the client's per-request diagnostics during `shared.go`'s quiet window.
+`GOCACHEPROG` is deleted. `GO_BUILDCACHE_CONFIG` configures the store and an unconfigured CI run fails outright. An entry is bytes under a key of source and compiler, and there is no executable cache. The client is a submodule that tracks this repository's branch, never a pin. Depth: docs/BUILD-CACHE.md.
 
-**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. Those three paths are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
+**No dependency source is copied into this tree.** `src/cmd` builds in vendor mode. The require needs its packages under `src/cmd/vendor/`. The paths below are **git submodules**, not copied files, so this repo stores a commit pointer and the source keeps its own history and.
 
 | vendor path | repository |
 |---|---|
 | `src/cmd/vendor/github.com/wow-look-at-my/go-s3-server` | the cache client |
 | `src/cmd/vendor/github.com/wow-look-at-my/go-containers` | its `set` package |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-ipc` | the broker's shared-memory transport |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-shm` | go-ipc's named segments |
+| `src/cmd/vendor/github.com/wow-look-at-my/go-mmap` | go-shm's mapping |
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
+| `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
-Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. To move the client, check the submodule out at the commit you want and update the matching version in `src/cmd/go.mod`. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
+
+**A cmd/go change that needs a new client API rides the client's own branch.** Both repositories carry the branch name, and that name is what the submodule follows. The merge on each side returns both to their default branches. The gitlink a checkout restores decides nothing. It is the fallback for a build that cannot reach the remote.
 
 That subtree carries packages the build never imports. One upstream test fails over them: cmd/go's `list_symlink_issue35941` runs `go list all` in GOPATH mode, which walks. A pruned vendor tree is what upstream's test assumes, and only `go mod vendor` or per-package repositories produce one. The check stays red while whole-repo.
 
@@ -301,7 +341,7 @@ curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linu
 export PATH="$PWD/go/bin:$PATH"
 ```
 
-Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
+Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost stores one blob per os/arch, and it serves `&fmt=zip` and the. So distpack drops upstream's windows-only `.zip`. The publish-only VERSION stamp (`go<base>.r<run_number>`) keeps each release's cmd/go tool-ID namespace disjoint. The committed VERSION stays `go1.27.0-cosmo`. macOS Intel and linux/arm64 build from source. Depth — the three-job publish flow, the draft-on-failure guarantee, `GOTOOLCHAIN`, pinning with `?v=N`, and the rest of the consumer gotchas: docs/INSTALL.md.
 
 ## Updating vendored golang.org/x modules in src/ (Dependabot is disabled here)
 
@@ -314,6 +354,14 @@ Every slot uploads a `.tar.gz`, windows included: a GOROOT is a tree, buildhost 
 5. Rebuild, then run the affected stdlib tests: `GOOS=linux go test net/http net crypto/tls cmd/internal/moddeps`.
 
 `src/README.vendor` is the upstream authority on vendoring in std/cmd.
+
+## Editor tooling (gopls)
+
+gopls parses with the `go/*` packages of the toolchain that builds it. It must therefore be built by THIS one. A stock gopls reads a parameter default as a syntax error. The matching x/tools fork is **wow-look-at-my/gosmopolitan_tools**, which carries the export-data, SSA, inliner and signature changes defaults need. Build it host-side: `GOOS=linux GOARCH=amd64 go build ./gopls`. Depth, including the table of what breaks without each change: docs/GOPLS.md.
+
+## Enum types
+
+docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped members, backquoted tags, exhaustive switches, checked conversion. What the compiler carries is a partial front end for an earlier shape. `type T enum int` marks a named integer type. A constant of that type takes a trailing string literal as its display text. types2 declares `String() string` on the type. No body is generated, so a program declaring an enum type-checks and then fails at link.
 
 ## Loop-aware inlining (all targets)
 
@@ -374,7 +422,11 @@ For filename-based constraints, create new files rather than modifying the build
 
 ## Debugging ARM64 Cosmo
 
+<<<<<<< HEAD
 Record what a debugging round establishes where the code it governs is: an invariant next to the code that holds it, a gap in docs/STUBS-INVENTORY.md, a platform fact in docs/PLATFORM-STATUS.md. Do not keep a session journal in the tree. Git holds what you tried, and a file only carries current truth.
+=======
+Record what a debugging round establishes where the code it governs is. An invariant goes next to the code that holds it. A gap goes in docs/STUBS-INVENTORY.md. A platform fact goes in docs/PLATFORM-STATUS.md. Do not keep a session journal in the tree. Git holds what you tried. A file only carries current truth.
+>>>>>>> origin/master
 
 ## APE Binary Reference
 

@@ -20,6 +20,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/load"
+	"cmd/go/internal/modfetch"
 	"cmd/go/internal/modload"
 	"cmd/go/internal/search"
 	"cmd/go/internal/trace"
@@ -67,8 +68,6 @@ and test commands:
 		Any files named on the command line are interpreted after
 		changing directories.
 		If used, this flag must be the first one in the command line.
-	-a
-		force rebuilding of packages that are already up-to-date.
 	-n
 		print the commands but do not run them.
 	-p n
@@ -199,12 +198,6 @@ and test commands:
 		Instead of absolute file system paths, the recorded file names
 		will begin either a module path@version (when using modules),
 		or a plain import path (when using the standard library, or GOPATH).
-	-toolexec 'cmd args'
-		a program to use to invoke toolchain programs like vet and asm.
-		For example, instead of running asm, the go command will run
-		'cmd args /path/to/asm <arguments for asm>'.
-		The TOOLEXEC_IMPORTPATH environment variable will be set,
-		matching 'go list -f {{.ImportPath}}' for the package being built.
 
 The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 space-separated list of arguments to pass to an underlying tool
@@ -312,7 +305,8 @@ const (
 func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	base.AddBuildFlagsNX(&cmd.Flag)
 	base.AddChdirFlag(&cmd.Flag)
-	cmd.Flag.BoolVar(&cfg.BuildA, "a", false, "")
+	// There is no -a. Forcing a rebuild of everything discards a correct cache
+	// on purpose, and the build ID already rebuilds whatever actually changed.
 	cmd.Flag.IntVar(&cfg.BuildP, "p", cfg.BuildP, "")
 	if mask&OmitVFlag == 0 {
 		cmd.Flag.BoolVar(&cfg.BuildV, "v", false, "")
@@ -351,7 +345,6 @@ func AddBuildFlags(cmd *base.Command, mask BuildFlagMask) {
 	cmd.Flag.StringVar(&cfg.BuildPkgdir, "pkgdir", "", "")
 	cmd.Flag.BoolVar(&cfg.BuildRace, "race", false, "")
 	cmd.Flag.Var((*tagsFlag)(&cfg.BuildContext.BuildTags), "tags", "")
-	cmd.Flag.Var((*base.StringsFlag)(&cfg.BuildToolexec), "toolexec", "")
 	cmd.Flag.BoolVar(&cfg.BuildTrimpath, "trimpath", false, "")
 	cmd.Flag.BoolVar(&cfg.BuildWork, "work", false, "")
 
@@ -542,7 +535,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 			// diagnostics would print every error twice. Exiting runs
 			// the AtExit hook that kills it.
 			base.ExitIfErrors()
-			cosmoFatten(ctx, sib, pkgsMain(pkgs))
+			cosmoFatten(ctx, b, sib, pkgsMain(pkgs))
 			return
 		}
 		if len(pkgs) > 1 {
@@ -561,7 +554,7 @@ func runBuild(ctx context.Context, cmd *base.Command, args []string) {
 		}
 		b.Do(ctx, a)
 		base.ExitIfErrors() // see the -o directory branch above
-		cosmoFatten(ctx, sib, []*load.Package{p})
+		cosmoFatten(ctx, b, sib, []*load.Package{p})
 		return
 	}
 
@@ -581,10 +574,9 @@ var CmdInstall = &base.Command{
 	Long: `
 Install compiles and installs the packages named by the import paths.
 
-Executables are installed in the directory named by the GOBIN environment
-variable, which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH
+Executables are installed in $GOPATH/bin, or $HOME/go/bin if the GOPATH
 environment variable is not set. Executables in $GOROOT
-are installed in $GOROOT/bin or $GOTOOLDIR instead of $GOBIN.
+are installed in $GOROOT/bin or $GOTOOLDIR instead.
 Cross compiled binaries are installed in $GOOS_$GOARCH subdirectories
 of the above.
 
@@ -766,10 +758,6 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 	ctx, span := trace.StartSpan(ctx, "InstallPackages "+strings.Join(patterns, " "))
 	defer span.Done()
 
-	if cfg.GOBIN != "" && !filepath.IsAbs(cfg.GOBIN) {
-		base.Fatalf("cannot install, GOBIN must be an absolute path")
-	}
-
 	pkgs = omitTestOnly(pkgsFilter(pkgs))
 	for _, p := range pkgs {
 		if p.Target == "" {
@@ -786,10 +774,8 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 				// rebuilt and used directly from the build cache.
 				// A few targets (notably those using cgo) still do need to be installed
 				// in case the user's environment lacks a C compiler.
-			case p.Internal.GobinSubdir:
-				base.Errorf("go: cannot install cross-compiled binaries when GOBIN is set")
 			case p.Internal.CmdlineFiles:
-				base.Errorf("go: no install location for .go files listed on command line (GOBIN not set)")
+				base.Errorf("go: no install location for .go files listed on command line")
 			case p.ConflictDir != "":
 				base.Errorf("go: no install location for %s: hidden by %s", p.Dir, p.ConflictDir)
 			default:
@@ -854,7 +840,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 	b.Do(ctx, a)
 	base.ExitIfErrors()
 
-	cosmoFattenInstall(ctx, sib, cosmoMains)
+	cosmoFattenInstall(ctx, b, sib, cosmoMains)
 
 	// Success. If this command is 'go install' with no arguments
 	// and the current directory (the implicit argument) is a command,
@@ -870,7 +856,7 @@ func InstallPackages(ld *modload.Loader, ctx context.Context, patterns []string,
 		// If it exists and is an executable file, remove it.
 		targ := pkgs[0].DefaultExecName()
 		targ += cfg.ExeSuffix
-		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe $GOBIN is the current directory
+		if filepath.Join(pkgs[0].Dir, targ) != pkgs[0].Target { // maybe the install dir is the current directory
 			fi, err := os.Stat(targ)
 			if err == nil {
 				m := fi.Mode()
@@ -896,6 +882,15 @@ func installOutsideModule(ld *modload.Loader, ctx context.Context, args []string
 	modload.Init(ld)
 	BuildInit(ld)
 
+	patterns := make([]string, len(args))
+	for i, arg := range args {
+		patterns[i] = arg[:strings.Index(arg, "@")]
+	}
+	// Named before the load below fetches anything, because the fetch is what
+	// completes a module, and the module providing these packages is the one
+	// that cannot complete. See modfetch.completingSelf.
+	modfetch.InstallTargets = patterns
+
 	// Load packages. Ignore non-main packages.
 	// Print a warning if an argument contains "..." and matches no main packages.
 	// PackagesAndErrors already prints warnings for patterns that don't match any
@@ -908,10 +903,6 @@ func installOutsideModule(ld *modload.Loader, ctx context.Context, args []string
 		base.Fatal(err)
 	}
 	load.CheckPackageErrors(pkgs)
-	patterns := make([]string, len(args))
-	for i, arg := range args {
-		patterns[i] = arg[:strings.Index(arg, "@")]
-	}
 
 	// Build and install the packages.
 	InstallPackages(ld, ctx, patterns, pkgs)

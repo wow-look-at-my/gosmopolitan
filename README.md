@@ -10,12 +10,12 @@ APE binaries are single executables that run natively on multiple operating syst
 
 ```bash
 # Fat APE (default): cosmo amd64 + cosmo arm64 payloads in one binary.
-# GOARCH is ignored for the output. The APE ships stripped; full debug
-# info lands in two sidecar ELFs next to it (program.com.dbg for amd64,
-# program.com.aarch64.elf for arm64), the cosmocc convention.
+# GOARCH is ignored for the output. The APE ships stripped; the amd64
+# image's debug info lands in one sidecar ELF next to it
+# (program.com.dbg), the cosmocc convention. The arm64 image gets none.
 GOOS=cosmo go build -o program.com main.go
 
-# go install produces the same fat APE + sidecars in the install directory
+# go install produces the same fat APE + sidecar in the install directory
 GOOS=cosmo go install ./cmd/program
 
 # Keep full debug info embedded in the APE instead (no sidecars)
@@ -27,6 +27,11 @@ GOCOSMOFAT=0 GOOS=cosmo GOARCH=amd64 go build -o program.com main.go
 
 The resulting `.com` file runs natively on Linux, macOS, and Windows. On Windows the same cosmo amd64 image boots through the APE's PE header, so there is no second build inside it. What each host supports today, and what it does not: `docs/PLATFORM-STATUS.md`.
 
+<<<<<<< HEAD
+=======
+Starting the file writes nothing. Linux and macOS hand it to a small native loader. That loader boots the payload from memory, so a read-only path runs it like any other. `docs/APE-BOOT.md` covers where the loader comes from.
+
+>>>>>>> origin/master
 Debug with the sidecars: `gdb program.com.dbg`, or `symbol-file` against the running APE. Runtime tracebacks and pprof need no sidecar.
 
 Ship release APEs zstd-compressed. The two architecture payloads are highly redundant, so a stdlib-heavy 12.3 MB webserver APE goes over the wire at 3.6 MB.
@@ -39,26 +44,26 @@ CI publishes installable toolchain tarballs to [buildhost](https://pazer.build) 
 # Linux, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0cosmo.r<N> linux/amd64
+go version   # go version go1.27.0-cosmo.r<N> linux/amd64
 ```
 
 ```bash
 # macOS, Apple Silicon
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=darwin&arch=arm64" | tar -xz
 export PATH="$PWD/go/bin:$PATH"
-go version   # go version go1.27.0cosmo.r<N> darwin/arm64
+go version   # go version go1.27.0-cosmo.r<N> darwin/arm64
 ```
 
 ```bash
 # Windows, x86-64
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=windows&arch=amd64" -o go.tar.gz
 tar -xzf go.tar.gz
-go\bin\go version   # go version go1.27.0cosmo.r<N> windows/amd64
+go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 ```
 
 All three tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-The shipped `go.env` defaults `GOTOOLCHAIN=local`. The fork always runs itself - no env var needed (an explicit `GOTOOLCHAIN` setting still overrides. Releases published before 2026-07-20 shipped `auto` and still need `GOTOOLCHAIN=local`). Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 

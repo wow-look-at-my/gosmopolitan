@@ -23,6 +23,13 @@ func addMaxRSS(w io.Writer) {
 		rssToBytes = 1
 	case "illumos", "solaris":
 		rssToBytes = uintptr(syscall.Getpagesize())
+	case "windows":
+		// A cosmo binary on an NT host. runtime.GOOS names the host, and
+		// this file's unix build tag admits cosmo, so the switch meets a
+		// name it was never written for. NT serves no getrusage, so the
+		// profile goes out without the MaxRSS line, which is what the
+		// windows build does.
+		return
 	default:
 		panic("unsupported OS")
 	}

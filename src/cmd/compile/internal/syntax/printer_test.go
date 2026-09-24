@@ -56,6 +56,19 @@ var stringTests = [][2]string{
 	dup("package p"),
 	dup("package p; type _ int; type T1 = struct{}; type ( _ *struct{}; T2 = float32 )"),
 
+	// enum type declarations, and the constant names they print by
+	dup("package p; type ConnState enum int"),
+	dup("package p; type ConnState enum uint8"),
+	// "enum" stays an ordinary type name where no type follows it
+	dup("package p; type Set enum"),
+	dup("package p; type Set = enum"),
+	dup("package p; const StateIdle ConnState = iota \"idle\""),
+	dup("package p; const ( StateNew ConnState = iota \"new\"; StateIdle \"idle\" )"),
+	// a constant keeps its own name when no literal names it
+	dup("package p; const ( StateNew ConnState = iota; StateIdle )"),
+	// the value is still the value: a string constant is not a name
+	dup("package p; const Greeting = \"hello\""),
+
 	// generic type declarations (given type separated with blank from LHS)
 	dup("package p; type _[T any] struct{}"),
 	dup("package p; type _[A, B, C interface{m()}] struct{}"),

@@ -731,8 +731,23 @@ func (w *writer) param(param *types2.Var) {
 		deflt := param.Default()
 		w.Bool(deflt != nil)
 		if deflt != nil {
-			w.Value(deflt)
+			w.paramDefault(deflt)
 		}
+	}
+}
+
+// paramDefault writes one default: a bool that says whether it is a struct
+// literal, then the constant, or the fields as name and default pairs.
+func (w *writer) paramDefault(d *types2.ParamDefault) {
+	w.Bool(d.Const == nil)
+	if d.Const != nil {
+		w.Value(d.Const)
+		return
+	}
+	w.Len(len(d.Fields))
+	for _, f := range d.Fields {
+		w.String(f.Name)
+		w.paramDefault(f.Value)
 	}
 }
 
@@ -956,6 +971,9 @@ func (w *writer) doObj(wext *writer, obj types2.Object) pkgbits.CodeObj {
 	case *types2.Var:
 		w.pos(obj)
 		w.typ(obj.Type())
+		if w.Version().Has(pkgbits.ReadonlyVars) {
+			w.Bool(obj.Readonly())
+		}
 		wext.varExt(obj)
 		return pkgbits.ObjVar
 	}
@@ -1183,7 +1201,7 @@ func (w *writer) funcExt(obj *types2.Func) {
 	} else {
 		if base.Flag.Complete || decl.Name.Value == "init" {
 			// Linknamed functions are allowed to have no body. Hopefully
-			// the linkname target has a body. See issue 23311.
+			// the linkname target has a body.
 			// Wasmimport functions are also allowed to have no body.
 			if _, ok := w.p.linknames[obj]; !ok && wi == nil {
 				w.p.errorf(decl, "missing function body")
@@ -2600,7 +2618,10 @@ func (w *writer) structElems(typ *types2.Struct, valuesOnly bool, elems []syntax
 		kv := elem.(*syntax.KeyValueExpr)
 		w.pos(kv.Key) // use position of Key rather than of elem (which has position of ':')
 		// TODO(gri): rather than doing this lookup again, perhaps the index should be recorded by types2
-		fld, index, _ := types2.LookupFieldOrMethod(typ, false, w.p.curpkg, kv.Key.(*syntax.Name).Value)
+		// The lookup runs as the field's own package: a filled parameter
+		// default names unexported fields of a type from another package.
+		key := kv.Key.(*syntax.Name)
+		fld, index, _ := types2.LookupFieldOrMethod(typ, false, w.p.info.Uses[key].Pkg(), key.Value)
 		if n := len(index); n > 1 {
 			// embedded field
 			w.Int(-n)

@@ -338,6 +338,7 @@ func f() int {
 }
 
 func TestSideEffectOrder(t *testing.T) {
+	t.Serial()
 	x = make([]int, 0, 10)
 	x = append(x, 1, f())
 	if x[0] != 1 || x[1] != 2 {
@@ -764,6 +765,7 @@ func TestMoveToHeapEarly(t *testing.T) {
 }
 
 func TestMoveToHeapCap(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte
@@ -785,6 +787,7 @@ func runit(f func()) {
 }
 
 func TestMoveToHeapClosure1(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte
@@ -802,6 +805,7 @@ func TestMoveToHeapClosure1(t *testing.T) {
 	sinkSlice = r
 }
 func TestMoveToHeapClosure2(t *testing.T) {
+	t.Serial()
 	var c int
 	r := func() []byte {
 		var s []byte

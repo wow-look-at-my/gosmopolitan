@@ -57,6 +57,12 @@ func (inst *GccgoInstallation) InitFromDriver(gccgoPath string, args ...string) 
 		}
 	}
 
+	// A read that stopped short leaves the target triple or a library path
+	// unset, and the search paths built from them then name nothing.
+	if err = scanner.Err(); err != nil {
+		return
+	}
+
 	argv = append([]string{"-dumpversion"}, args...)
 	stdout, err := exec.Command(gccgoPath, argv...).Output()
 	if err != nil {

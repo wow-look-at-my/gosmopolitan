@@ -325,6 +325,17 @@ type Info struct {
 	// Version strings begin with “go”, like “go1.21”, and
 	// are suitable for use with the [go/version] package.
 	FileVersions map[*ast.File]string
+
+	// ParamDefaults maps a call that omits an argument for a parameter
+	// carrying a default to the arguments the checker supplied in their
+	// place, one per omitted parameter and in parameter order. Only a call
+	// that omitted at least one argument appears.
+	//
+	// The synthesized arguments are not part of the file: the checker leaves
+	// [ast.CallExpr.Args] as the source wrote it, so a printer reproduces the
+	// call the user typed. Each one carries the position of the call it fills
+	// and has an entry in Types. Depth: docs/OPTIONAL-PARAMS.md.
+	ParamDefaults map[*ast.CallExpr][]ast.Expr
 }
 
 func (info *Info) recordTypes() bool {

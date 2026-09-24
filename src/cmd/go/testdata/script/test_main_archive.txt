@@ -5,7 +5,6 @@ env GO111MODULE=off
 
 [short] skip
 
-env GOBIN=$WORK/bin
 go test main_test
 go install main_test
 

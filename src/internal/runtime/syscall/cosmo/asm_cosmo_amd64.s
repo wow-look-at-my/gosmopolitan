@@ -56,6 +56,10 @@
 #define SYS_linkat		265
 #define SYS_symlinkat		266
 #define SYS_fchmodat		268
+// Linux retired _sysctl, so nothing on a Linux host reaches this number.
+// The darwin path takes it as the way to Apple's sysctl, which is what
+// serves the values uname reports.
+#define SYS__sysctl		156
 
 #define LINUX_AT_FDCWD			-100
 #define LINUX_AT_SYMLINK_NOFOLLOW	0x100
@@ -112,6 +116,7 @@
 #define XNU_ftruncate		0x20000c9	// BSD 201
 #define XNU_sendfile		0x2000151	// BSD 337
 #define XNU_statfs64		0x2000159	// BSD 345
+#define XNU___sysctl		0x20000ca	// BSD 202
 #define XNU_fstatfs64		0x200015a	// BSD 346
 
 // The classic path-based calls the *at family is served with when its
@@ -301,6 +306,8 @@ syscall6_darwin:
 	JEQ	darwin_linkat
 	CMPQ	R11, $SYS_symlinkat
 	JEQ	darwin_symlinkat
+	CMPQ	R11, $SYS__sysctl
+	JEQ	darwin_sysctl
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
@@ -626,6 +633,13 @@ darwin_statfs:
 	CMPQ	DX, $APPLE_STATFS_SIZE
 	JB	darwin_einval
 	MOVL	$XNU_statfs64, AX
+	JMP	darwin_syscall
+
+// sysctl takes six arguments and passes them straight through: the MIB
+// array and its length, the output buffer and its size pointer, and the
+// input buffer and its length. Nothing here inspects them.
+darwin_sysctl:
+	MOVL	$XNU___sysctl, AX
 	JMP	darwin_syscall
 
 darwin_fstatfs:

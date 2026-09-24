@@ -3245,3 +3245,107 @@ var (
 		t.Errorf("found %d instances of L, want 2", l)
 	}
 }
+
+// TestReadonlyVar checks that a "readonly var" is assignable in its own
+// package and refused, by name, from another.
+func TestReadonlyVar(t *testing.T) {
+	imports := make(testImporter)
+	conf := Config{Importer: imports}
+	fset := token.NewFileSet()
+
+	a := mustParse(fset, `package a
+readonly var Host string = "unknown"
+func Set(s string) { Host = s; p := &Host; *p = s }
+`)
+	apkg, err := conf.Check("a", fset, []*ast.File{a}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports["a"] = apkg
+	if v := apkg.Scope().Lookup("Host").(*Var); !v.Readonly() {
+		t.Fatal("a.Host is not readonly")
+	}
+
+	b := mustParse(fset, `package b
+import "a"
+var _ = a.Host
+func f() { a.Host = "x" }
+func g() { _ = &a.Host }
+`)
+	_, err = conf.Check("b", fset, []*ast.File{b}, nil)
+	if err == nil {
+		t.Fatal("package b assigned to a.Host")
+	}
+	want := "cannot assign to a.Host: it is readonly outside package a"
+	if got := err.Error(); !strings.Contains(got, want) {
+		t.Errorf("error %q does not name the readonly var; want %q", got, want)
+	}
+}
+
+// TestParamDefaultsKeepSource checks the two halves of the contract on a call
+// that omits an argument for a defaulted parameter: the call keeps the
+// arguments the source wrote, and Info reports the ones the checker supplied.
+func TestParamDefaultsKeepSource(t *testing.T) {
+	fset := token.NewFileSet()
+	f := mustParse(fset, `package p
+
+func g(name string = "world", n int = 3, b bool = true) string { return name }
+
+func full() string { return g("a", 1, false) }
+
+func partial() string { return g("a") }
+
+func none() string { return g() }
+`)
+
+	info := &Info{
+		Types:         make(map[ast.Expr]TypeAndValue),
+		ParamDefaults: make(map[*ast.CallExpr][]ast.Expr),
+	}
+	check := NewChecker(&Config{}, fset, NewPackage("p", "p"), info)
+	if err := check.Files([]*ast.File{f}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The written arguments per function, in declaration order.
+	wantArgs := map[string]int{"full": 3, "partial": 1, "none": 0}
+	// The values the checker supplied for what each call left out.
+	wantFilled := map[string][]string{
+		"full":    nil,
+		"partial": {"3", "true"},
+		"none":    {`"world"`, "3", "true"},
+	}
+
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name == "g" {
+			continue
+		}
+		var call *ast.CallExpr
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if c, ok := n.(*ast.CallExpr); ok {
+				call = c
+			}
+			return call == nil
+		})
+		if call == nil {
+			t.Fatalf("%s: no call found", fn.Name.Name)
+		}
+		if got := len(call.Args); got != wantArgs[fn.Name.Name] {
+			t.Errorf("%s: call has %d arguments, want %d: the checker must not rewrite the call", fn.Name.Name, got, wantArgs[fn.Name.Name])
+		}
+		var got []string
+		for _, arg := range info.ParamDefaults[call] {
+			got = append(got, ExprString(arg))
+			if _, ok := info.Types[arg]; !ok {
+				t.Errorf("%s: supplied argument %s has no entry in Types", fn.Name.Name, ExprString(arg))
+			}
+			if arg.Pos() != call.Pos() {
+				t.Errorf("%s: supplied argument %s is at %v, want the call position %v", fn.Name.Name, ExprString(arg), arg.Pos(), call.Pos())
+			}
+		}
+		if !slices.Equal(got, wantFilled[fn.Name.Name]) {
+			t.Errorf("%s: ParamDefaults = %v, want %v", fn.Name.Name, got, wantFilled[fn.Name.Name])
+		}
+	}
+}

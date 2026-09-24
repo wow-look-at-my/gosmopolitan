@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -22,7 +23,7 @@ import (
 var (
 	GOROOT    = os.Getenv("GOROOT") // cached for efficiency
 	GOARCH    = envOr("GOARCH", defaultGOARCH)
-	GOOS      = envOr("GOOS", defaultGOOS)
+	GOOS      = envOr("GOOS", portDefaultGOOS())
 	GO386     = envOr("GO386", DefaultGO386)
 	GOAMD64   = goamd64()
 	GOARM     = goarm()
@@ -541,4 +542,16 @@ func gogoarchTags() []string {
 		return list
 	}
 	return nil
+}
+
+// portDefaultGOOS is the GOOS a build targets when the environment names
+// none. On a host a cosmo binary boots on, that is defaultGOOS. A binary
+// on another port (js, wasip1) can neither build for cosmo nor run it, so
+// it targets its own port, as an upstream toolchain would.
+func portDefaultGOOS() string {
+	switch runtime.GOOS {
+	case "cosmo", "darwin", "linux", "windows":
+		return defaultGOOS
+	}
+	return runtime.GOOS
 }

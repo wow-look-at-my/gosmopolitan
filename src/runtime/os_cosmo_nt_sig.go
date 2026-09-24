@@ -351,7 +351,10 @@ func ntLastContinueHandler(info *ntExceptionRecord, r *ntContext, gp *g) int32 {
 func ntWinthrow(info *ntExceptionRecord, r *ntContext, gp *g) {
 	g0 := getg()
 
-	if panicking.Load() != 0 { // traceback already printed
+	// One line past the print machinery first: a fault inside the
+	// report below would otherwise leave nothing.
+	ntWinthrowLine(info, r, gp, panicking.Load() != 0)
+	if panicking.Load() != 0 {
 		exit(2)
 	}
 	panicking.Store(1)
@@ -590,4 +593,54 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	// ordinary path. The stack is otherwise unused on NT and the
 	// delivery is synchronous, so borrowing it is safe.
 	ntSignalTramp(handler, uintptr(sig), unsafe.Pointer(&info), unsafe.Pointer(&uc), gp.m.gsignal.stack.hi)
+}
+
+// ntWinthrowLine writes one line about the exception with ntwrite1
+// alone: code, PC, the access kind and address, SP, the g the thread
+// carries, and whether a panic was already under way.
+//
+//go:nosplit
+func ntWinthrowLine(info *ntExceptionRecord, r *ntContext, gp *g, nested bool) {
+	var line [200]byte
+	n := copy(line[:], "runtime: NT exception 0x")
+	n = ntHexInto(line[:], n, uintptr(info.exceptionCode))
+	n += copy(line[n:], " pc=0x")
+	n = ntHexInto(line[:], n, r.getPC())
+	n += copy(line[n:], " kind=")
+	n = ntHexInto(line[:], n, info.exceptionInformation[0])
+	n += copy(line[n:], " addr=0x")
+	n = ntHexInto(line[:], n, info.exceptionInformation[1])
+	n += copy(line[n:], " sp=0x")
+	n = ntHexInto(line[:], n, r.getSP())
+	n += copy(line[n:], " g=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(gp)))
+	n += copy(line[n:], " tebg=0x")
+	n = ntHexInto(line[:], n, uintptr(unsafe.Pointer(getg())))
+	if nested {
+		n += copy(line[n:], " while panicking")
+	}
+	line[n] = 0x0a
+	n++
+	ntwrite1(2, unsafe.Pointer(&line[0]), int32(n))
+}
+
+// ntHexInto writes v in hex at line[n:] and returns the new length.
+//
+//go:nosplit
+func ntHexInto(line []byte, n int, v uintptr) int {
+	started := false
+	for shift := 60; shift >= 0; shift -= 4 {
+		d := byte(v>>uint(shift)) & 0xf
+		if d == 0 && !started && shift != 0 {
+			continue
+		}
+		started = true
+		if d < 10 {
+			line[n] = '0' + d
+		} else {
+			line[n] = 'a' + d - 10
+		}
+		n++
+	}
+	return n
 }

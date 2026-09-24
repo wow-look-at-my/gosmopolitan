@@ -4,7 +4,7 @@
 
 //go:build boringcrypto
 
-package main_test
+package gocmd_test
 
 import "testing"
 

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main_test
+package cover_test
 
 import (
 	"bufio"
@@ -49,34 +49,11 @@ var debug = flag.Bool("debug", false, "keep tmpdir files for debugging")
 // itself as a cmd/cover executable; compare to similar usage in
 // the cmd/go tests.
 func TestMain(m *testing.M) {
-	if os.Getenv("CMDCOVER_TOOLEXEC") != "" {
-		// When CMDCOVER_TOOLEXEC is set, the test binary is also
-		// running as a -toolexec wrapper.
-		tool := strings.TrimSuffix(filepath.Base(os.Args[1]), ".exe")
-		if tool == "cover" {
-			// Inject this test binary as cmd/cover in place of the
-			// installed tool, so that the go command's invocations of
-			// cover produce coverage for the configuration in which
-			// the test was built.
-			os.Args = os.Args[1:]
-			cmdcover.Main()
-		} else {
-			cmd := exec.Command(os.Args[1], os.Args[2:]...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				os.Exit(1)
-			}
-		}
-		os.Exit(0)
-	}
 	if os.Getenv("CMDCOVER_TEST_RUN_MAIN") != "" {
 		// When CMDCOVER_TEST_RUN_MAIN is set, we're reusing the test
-		// binary as cmd/cover. In this case we run the main func exported
-		// via export_test.go, and exit; CMDCOVER_TEST_RUN_MAIN is set below
-		// for actual test invocations.
-		cmdcover.Main()
-		os.Exit(0)
+		// binary as cmd/cover. In this case we run Main and exit;
+		// CMDCOVER_TEST_RUN_MAIN is set below for actual test invocations.
+		os.Exit(cmdcover.Main(os.Args[1:]))
 	}
 	flag.Parse()
 	topTmpdir, err := os.MkdirTemp("", "cmd-cover-test-")
@@ -107,24 +84,15 @@ func tempDir(t *testing.T) string {
 	return dir
 }
 
-// TestCoverWithToolExec runs a set of subtests that all make use of a
-// "-toolexec" wrapper program to invoke the cover test executable
-// itself via "go test -cover".
-func TestCoverWithToolExec(t *testing.T) {
-	toolexecArg := "-toolexec=" + testcover(t)
-
-	t.Run("CoverHTML", func(t *testing.T) {
-		testCoverHTML(t, toolexecArg)
-	})
-	t.Run("HtmlUnformatted", func(t *testing.T) {
-		testHtmlUnformatted(t, toolexecArg)
-	})
-	t.Run("FuncWithDuplicateLines", func(t *testing.T) {
-		testFuncWithDuplicateLines(t, toolexecArg)
-	})
-	t.Run("MissingTrailingNewlineIssue58370", func(t *testing.T) {
-		testMissingTrailingNewlineIssue58370(t, toolexecArg)
-	})
+// TestCoverThroughGoTest runs a set of subtests that reach cmd/cover through
+// "go test -cover", and so through the INSTALLED cover tool: substituting one
+// is what -toolexec did, and that flag is removed. Install cmd/cover before
+// running these tests to exercise a change to this package here.
+func TestCoverThroughGoTest(t *testing.T) {
+	t.Run("CoverHTML", testCoverHTML)
+	t.Run("HtmlUnformatted", testHtmlUnformatted)
+	t.Run("FuncWithDuplicateLines", testFuncWithDuplicateLines)
+	t.Run("MissingTrailingNewlineIssue58370", testMissingTrailingNewlineIssue58370)
 }
 
 // Execute this command sequence:
@@ -353,7 +321,7 @@ func TestCoverFunc(t *testing.T) {
 
 // Check that cover produces correct HTML.
 // Issue #25767.
-func testCoverHTML(t *testing.T, toolexecArg string) {
+func testCoverHTML(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	dir := tempDir(t)
 
@@ -361,7 +329,7 @@ func testCoverHTML(t *testing.T, toolexecArg string) {
 
 	// go test -coverprofile testdata/html/html.cov cmd/cover/testdata/html
 	htmlProfile := filepath.Join(dir, "html.cov")
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-coverprofile", htmlProfile, "cmd/cover/testdata/html")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", "-coverprofile", htmlProfile, "cmd/cover/testdata/html")
 	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
 	run(cmd, t)
 	// testcover -html testdata/html/html.cov -o testdata/html/html.html
@@ -422,7 +390,7 @@ func testCoverHTML(t *testing.T, toolexecArg string) {
 
 // Test HTML processing with a source file not run through gofmt.
 // Issue #27350.
-func testHtmlUnformatted(t *testing.T, toolexecArg string) {
+func testHtmlUnformatted(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	dir := tempDir(t)
 
@@ -463,7 +431,7 @@ lab:
 	}
 
 	// go test -covermode=count -coverprofile TMPDIR/htmlunformatted.cov
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", "-test.v", toolexecArg, "-covermode=count", "-coverprofile", htmlUProfile)
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", "-test.v", "-covermode=count", "-coverprofile", htmlUProfile)
 	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
 	cmd.Dir = htmlUDir
 	run(cmd, t)
@@ -513,7 +481,7 @@ func TestLineDup(t *testing.T) {
 
 // Test -func with duplicate //line directives with different numbers
 // of statements.
-func testFuncWithDuplicateLines(t *testing.T, toolexecArg string) {
+func testFuncWithDuplicateLines(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	dir := tempDir(t)
 
@@ -539,7 +507,7 @@ func testFuncWithDuplicateLines(t *testing.T, toolexecArg string) {
 	}
 
 	// go test -cover -covermode count -coverprofile TMPDIR/linedup.out
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-cover", "-covermode", "count", "-coverprofile", lineDupProfile)
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", "-cover", "-covermode", "count", "-coverprofile", lineDupProfile)
 	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
 	cmd.Dir = lineDupDir
 	run(cmd, t)
@@ -574,7 +542,7 @@ func runExpectingError(c *exec.Cmd, t *testing.T) string {
 
 // Test instrumentation of package that ends before an expected
 // trailing newline following package clause. Issue #58370.
-func testMissingTrailingNewlineIssue58370(t *testing.T, toolexecArg string) {
+func testMissingTrailingNewlineIssue58370(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	dir := tempDir(t)
 
@@ -605,7 +573,7 @@ func TestCoverage(t *testing.T) { }
 	}
 
 	// go test -covermode atomic
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-covermode", "atomic")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", "-covermode", "atomic")
 	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
 	cmd.Dir = noeolDir
 	run(cmd, t)

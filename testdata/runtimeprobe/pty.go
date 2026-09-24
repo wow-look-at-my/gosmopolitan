@@ -7,6 +7,10 @@ package main
 import (
 	"fmt"
 	"os"
+<<<<<<< HEAD
+=======
+	"strings"
+>>>>>>> origin/master
 	"syscall"
 	"unsafe"
 )
@@ -17,6 +21,16 @@ const (
 	linuxECHO   = 0x8
 	linuxVMIN   = 6
 	linuxVTIME  = 5
+<<<<<<< HEAD
+=======
+
+	// XNU's own three, for the slave side. Apple numbers these, so they
+	// reach the host ioctl unchanged: cosmo translates the Linux
+	// requests it knows and passes anything else through.
+	xnuTIOCPTYUNLK  = 0x20007452
+	xnuTIOCPTYGNAME = 0x40807453
+	xnuTIOCPTYGRANT = 0x20007454
+>>>>>>> origin/master
 )
 
 // checkPty puts a real terminal into raw mode and reads the settings
@@ -37,11 +51,32 @@ func checkPty() {
 	}
 	defer m.Close()
 
+<<<<<<< HEAD
 	var before linuxTermios
 	if !s.do("TCGETS", syscall.Ioctl(int(m.Fd()), linuxTCGETS,
 		uintptr(unsafe.Pointer(&before)))) {
 		s.finish("")
 		return
+=======
+	// Which end of the pair answers termios is the host's decision.
+	// Linux answers on both ends of /dev/ptmx. XNU answers on the
+	// slave alone, and the master reports ENOTTY.
+	tty := m
+	var before linuxTermios
+	if syscall.Ioctl(int(m.Fd()), linuxTCGETS, uintptr(unsafe.Pointer(&before))) != nil {
+		slave, err := ptySlave(m)
+		if !s.do("open the pty slave", err) {
+			s.finish("")
+			return
+		}
+		defer slave.Close()
+		tty = slave
+		if !s.do("TCGETS", syscall.Ioctl(int(tty.Fd()), linuxTCGETS,
+			uintptr(unsafe.Pointer(&before)))) {
+			s.finish("")
+			return
+		}
+>>>>>>> origin/master
 	}
 	if before.Cflag == 0 && before.Lflag == 0 {
 		s.do("TCGETS values", fmt.Errorf("all-zero termios from a real pty"))
@@ -57,14 +92,22 @@ func checkPty() {
 	raw.Lflag &^= linuxICANON | linuxECHO
 	raw.Cc[linuxVMIN] = 1
 	raw.Cc[linuxVTIME] = 0
+<<<<<<< HEAD
 	if !s.do("TCSETS", syscall.Ioctl(int(m.Fd()), linuxTCSETS,
+=======
+	if !s.do("TCSETS", syscall.Ioctl(int(tty.Fd()), linuxTCSETS,
+>>>>>>> origin/master
 		uintptr(unsafe.Pointer(&raw)))) {
 		s.finish("")
 		return
 	}
 
 	var after linuxTermios
+<<<<<<< HEAD
 	if !s.do("TCGETS after set", syscall.Ioctl(int(m.Fd()), linuxTCGETS,
+=======
+	if !s.do("TCGETS after set", syscall.Ioctl(int(tty.Fd()), linuxTCGETS,
+>>>>>>> origin/master
 		uintptr(unsafe.Pointer(&after)))) {
 		s.finish("")
 		return
@@ -86,8 +129,42 @@ func checkPty() {
 	}
 
 	// Put it back, so a failure here is the emulation and not the pty.
+<<<<<<< HEAD
 	s.do("TCSETS restore", syscall.Ioctl(int(m.Fd()), linuxTCSETS,
+=======
+	s.do("TCSETS restore", syscall.Ioctl(int(tty.Fd()), linuxTCSETS,
+>>>>>>> origin/master
 		uintptr(unsafe.Pointer(&before))))
 
 	s.finish(fmt.Sprintf("raw mode on a real pty: lflag %#x -> %#x", before.Lflag, after.Lflag))
 }
+<<<<<<< HEAD
+=======
+
+// ptySlave opens the slave end of the pair m holds, the way XNU names
+// it: grant, unlock, then read the name out of a 128-byte buffer. The
+// three carry Apple's own request numbers, which DarwinXlatIoctl names
+// and returns unchanged. An unlisted request answers ENOSYS instead, so
+// this only works because that table lists these three.
+func ptySlave(m *os.File) (*os.File, error) {
+	fd := int(m.Fd())
+	if err := syscall.Ioctl(fd, xnuTIOCPTYGRANT, 0); err != nil {
+		return nil, fmt.Errorf("TIOCPTYGRANT: %w", err)
+	}
+	if err := syscall.Ioctl(fd, xnuTIOCPTYUNLK, 0); err != nil {
+		return nil, fmt.Errorf("TIOCPTYUNLK: %w", err)
+	}
+	var buf [128]byte
+	if err := syscall.Ioctl(fd, xnuTIOCPTYGNAME, uintptr(unsafe.Pointer(&buf[0]))); err != nil {
+		return nil, fmt.Errorf("TIOCPTYGNAME: %w", err)
+	}
+	name := string(buf[:])
+	if i := strings.IndexByte(name, 0); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" {
+		return nil, fmt.Errorf("TIOCPTYGNAME answered an empty name")
+	}
+	return os.OpenFile(name, os.O_RDWR|syscall.O_NOCTTY, 0)
+}
+>>>>>>> origin/master

@@ -448,9 +448,11 @@ func TestCommonHeaders(t *testing.T) {
 }
 
 func TestIssue46363(t *testing.T) {
+	t.Serial(
 	// Regression test for data race reported in issue 46363:
 	// ReadMIMEHeader reads commonHeader before commonHeader has been initialized.
 	// Run this test with the race detector enabled to catch the reported data race.
+	)
 
 	// Reset commonHeaderOnce, so that commonHeader will have to be initialized
 	commonHeaderOnce = sync.Once{}

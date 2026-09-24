@@ -25,8 +25,11 @@ func main() {
 	checkLinkOutput("0x00", "cannot open file nonexistent.o")
 	checkLinkOutput("0xYZ", "-B argument contains invalid hex digit")
 
+	// The linker sizes -B for the target. Under cosmo runtime.GOOS names the
+	// host, and a constant context folds the build value instead.
+	const goos = runtime.GOOS
 	maxLen := 32
-	if runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
+	if goos == "darwin" || goos == "ios" {
 		maxLen = 16
 	}
 	checkLinkOutput("0x"+strings.Repeat("00", maxLen), "cannot open file nonexistent.o")

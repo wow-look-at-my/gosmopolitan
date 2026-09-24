@@ -6405,6 +6405,12 @@ func testTransportResponseBodyWritableOnProtocolSwitch(t *testing.T, mode testMo
 		io.WriteString(conn, "HTTP/1.1 101 Switching Protocols Hi\r\nConnection: upgRADe\r\nUpgrade: foo\r\n\r\nSome buffered data\n")
 		bs := bufio.NewScanner(conn)
 		bs.Scan()
+		// A failed read echoes an empty line, and the client then waits on a
+		// reply this handler believes it sent.
+		if err := bs.Err(); err != nil {
+			t.Errorf("reading from the upgraded conn: %v", err)
+			return
+		}
 		fmt.Fprintf(conn, "%s\n", strings.ToUpper(bs.Text()))
 		<-done
 	}))

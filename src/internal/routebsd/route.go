@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build darwin || dragonfly || freebsd || netbsd || openbsd
+//go:build cosmo || darwin || dragonfly || freebsd || netbsd || openbsd
 
 // Package routebsd supports reading interface addresses on BSD systems.
 // This is a very stripped down version of x/net/route,

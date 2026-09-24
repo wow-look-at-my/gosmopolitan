@@ -31,6 +31,16 @@ func hasWaitingReaders(rw *sync.RWMutex) bool
 // Avoid the serialization by ensuring that ForkLock is locked
 // at the first fork and unlocked when there are no more forks.
 func acquireForkLock() {
+	if !forkPipeIsAtomic() {
+		// The overlap below is only safe when the status pipe is born
+		// close-on-exec. Where the flag goes on in a second call, a
+		// fork inside that window hands the write end to another
+		// child, which keeps it past its own exec, and this parent
+		// then reads a pipe nothing will close.
+		ForkLock.Lock()
+		return
+	}
+
 	forkingLock.Lock()
 	defer forkingLock.Unlock()
 
@@ -76,6 +86,11 @@ func acquireForkLock() {
 // releaseForkLock releases the conceptual write lock on ForkLock
 // acquired by acquireForkLock.
 func releaseForkLock() {
+	if !forkPipeIsAtomic() {
+		ForkLock.Unlock()
+		return
+	}
+
 	forkingLock.Lock()
 	defer forkingLock.Unlock()
 

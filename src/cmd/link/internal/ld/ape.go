@@ -9,8 +9,6 @@ import (
 	"cmd/internal/cosmoape"
 	"cmd/internal/objabi"
 	"cmd/internal/sys"
-	"compress/gzip"
-	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"internal/ape"
@@ -36,12 +34,6 @@ const (
 	apeHeaderSize   = ape.HeaderSize
 	apeScriptOffset = 0x800
 
-	// What follows the script, and so how much room the script has: it runs
-	// from apeScriptOffset up to the Mach-O header, and the gzipped macOS
-	// ARM64 loader source sits after that.
-	apeMachoOffset     = 0x2000
-	apeLoaderSrcOffset = 0x8000
-
 	// ELF constants
 	elfMagic        = "\x7fELF"
 	elfClass64      = 2
@@ -50,48 +42,6 @@ const (
 	elfTypeExec     = 2
 	elfMachineAMD64 = 0x3E
 	elfMachineARM64 = 0xB7
-
-	// Mach-O constants
-	machoMagic64       = 0xFEEDFACF
-	machoCPUTypeX64    = 0x01000007
-	machoCPUSubtypeX64 = 0x80000003
-	machoFileTypeExec  = 0x2
-	machoFlagNoUndefs  = 0x1
-	machoFlagPIE       = 0x200000
-
-	// Load commands
-	machoLCSegment64  = 0x19
-	machoLCUnixThread = 0x5
-	machoLCMain       = 0x80000028
-
-	// x86_THREAD_STATE64 register file: rax rbx rcx rdx rdi rsi rbp rsp
-	// r8-r15 rip rflags cs fs gs. XNU's load_threadstack validates that
-	// (count+2)*4 bytes exactly consume cmdsize-8, so the emitted state
-	// must be exactly this many quadwords - no more, no less.
-	machoThreadStateRegs   = 21
-	machoThreadStateFlavor = 4                           // x86_THREAD_STATE64
-	machoUnixThreadCmdSize = 16 + machoThreadStateRegs*8 // cmd+cmdsize+flavor+count + registers = 184
-
-	// machoHostXNU is the host-OS indicator handed to the entry point in
-	// CL when the kernel loads the dd-assimilated Mach-O directly. It
-	// must match _HOSTXNU in runtime/os_cosmo_amd64.go; rt0_cosmo_amd64.s
-	// reads it to route syscalls through Apple's ABI instead of issuing
-	// raw Linux syscalls (which die with SIGSYS on macOS).
-	machoHostXNU = 8
-
-	// Segment protection
-	machoProtRead  = 0x1
-	machoProtWrite = 0x2
-	machoProtExec  = 0x4
-
-	// machoSegmentCmdSize is the size of an LC_SEGMENT_64 with no sections.
-	machoSegmentCmdSize = 72
-
-	// machoPageSize is the page size of x86-64 XNU. The kernel's
-	// load_segment rejects (LOAD_BADMACHO) any segment whose file offset
-	// or vm address is not page-aligned, and maps vm ranges in whole
-	// pages, so segment vm sizes are rounded up to this.
-	machoPageSize = 0x1000
 )
 
 // convertToAPE converts an ELF binary to Actually Portable Executable format.
@@ -313,11 +263,13 @@ func printfBlob(blob []byte) string {
 	return b.String()
 }
 
-// apeRunDir is where the bootstrap script stages the runnable copy it makes
-// of itself. The trailing number is the staging layout's version: a binary
-// built by an older linker keeps its own directory rather than reading one
-// written to a different shape.
+// apeLoaderDirs is where a host that carries no native loader puts the one the
+// APE embeds, in order. /dev/shm is tmpfs, so those bytes stay in RAM. /tmp
+// follows, for a host without one, which is every darwin host. "${o%/*}" is
+// the APE's own directory, last: docker mounts /dev/shm noexec and --read-only
+// closes /tmp, so a bind-mounted program may be all that takes an executable.
 //
+<<<<<<< HEAD
 // Fixed at /tmp, and no environment variable is read to find it. TMPDIR
 // and HOME are caller-supplied: either can be unset, unwritable, or not
 // per-user at all, and a container run by numeric UID gets HOME="/" from
@@ -350,30 +302,51 @@ const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
 // argv[0] is the copy, under the original's basename.
 func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
 	const ddBlockSize = 8
+=======
+// None of them is a sidecar. -u unlinks the file before the program starts.
+//
+// Unquoted on purpose: the shell splits it, so APE_LOADERDIR may name several
+// directories, and it replaces the list rather than adding to it.
+const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
+
+// writeLoaderBoot emits the shell that hands the APE at "$o" to a native
+// loader. The loader reads the file and boots the payload from memory, so
+// the APE is never copied and never modified, and a read-only filesystem
+// stops being a reason the binary cannot start.
+//
+// A loader already on the host runs as it stands and writes nothing. A
+// host that carries none unpacks the one the APE embeds, once: it is a few
+// hundred bytes, it is the same for every APE of that architecture, and
+// the tag in its name is its own content hash, so a rebuilt loader always
+// unpacks to a path of its own.
+func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
+>>>>>>> origin/master
 	data := struct {
-		RunDir    string
-		Boot      string
-		Macho     bool
-		BlockSize int
-		Skip      int
-		Count     int
+		Name   string
+		Dirs   string
+		Tag    string
+		Offset int
+		Length int
+		Gzip   bool
 	}{
-		RunDir:    apeRunDir,
-		Boot:      printfBlob(boot),
-		Macho:     machoSize > 0,
-		BlockSize: ddBlockSize,
-		Skip:      machoOffset / ddBlockSize,
-		Count:     (machoSize + ddBlockSize - 1) / ddBlockSize,
+		Name:   l.name,
+		Dirs:   apeLoaderDirs,
+		Tag:    l.tag,
+		Offset: l.offset,
+		Length: len(l.blob),
+		Gzip:   l.gzip,
 	}
-	if err := apeStageTmpl.Execute(script, data); err != nil {
-		Exitf("APE: rendering the staging script: %v", err)
+	writeLoaderSearch(script, l.name)
+	if err := apeLoaderTmpl.Execute(script, data); err != nil {
+		Exitf("APE: rendering the loader boot script: %v", err)
 	}
 }
 
-// apeStageTmpl is the shell writeStagedCopy renders. The Mach-O block runs
-// after the ELF one because a host that carries both is macOS, where the
-// Mach-O header is the one that counts.
+// writeLoaderSearch emits the search for a loader the host already has. It
+// reads candidates and execs one. It writes nothing, which is what makes a
+// read-only filesystem enough to start the program.
 //
+<<<<<<< HEAD
 // The binfmt_misc line quotes its magic with DOUBLE
 // quotes on purpose: the macOS ARM64 loader decodes every `printf '` in
 // the first 8K as a boot header, and TestFatBootHeaders holds that count
@@ -412,6 +385,71 @@ var apeStageTmpl = template.Must(template.New("apestage").Parse(
     fi
   fi
   apepath; exec "$p" "$@"
+=======
+// The absolute candidates come first, because each `command -v` costs a
+// PATH walk. APE_LOADER names one outright. Nothing looks beside the
+// binary: an APE is one file, and a loader shipped next to it would be a
+// second thing to carry. `ape` is last: the cosmo loader of that name
+// boots the file too, and a host with cosmopolitan installed has it.
+func writeLoaderSearch(script *bytes.Buffer, name string) {
+	if err := apeSearchTmpl.Execute(script, struct{ Name string }{name}); err != nil {
+		Exitf("APE: rendering the loader search: %v", err)
+	}
+}
+
+var apeSearchTmpl = template.Must(template.New("apesearch").Parse(
+	`  l={{.Name}}
+  for c in "${APE_LOADER:-}" /usr/local/lib/ape/$l /usr/lib/ape/$l; do
+    [ -x "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
+  done
+  for n in $l apeld ape; do
+    c=$(command -v "$n" 2>/dev/null) || continue
+    [ -n "$c" ] && { apereg "$c"; apepath; exec "$c" "$o" "$@"; }
+  done
+`))
+
+// apeRegisterFn hands the loader to the kernel, so execve starts an APE
+// directly. F opens the interpreter AT REGISTRATION and keeps the
+// descriptor, so a read-only image with no loader file on it still starts
+// one. Both guards are a stat, so an unprivileged run falls through to the
+// search above for free. It succeeds only when THIS run registered the
+// entry, which a caller reads as permission to delete that file.
+//
+// The magic is DOUBLE-quoted, because the cosmo ape loader decodes every
+// `printf '` in the first 8192 bytes as a boot header and this is not one.
+// The redirect sits inside a group: a shell reports one it cannot open on
+// its own stderr.
+const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 1
+  [ -w /proc/sys/fs/binfmt_misc/register ] || return 1
+  { printf ":APE:M::MZqFpD=\047::$1:F" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null
+  [ -e /proc/sys/fs/binfmt_misc/APE ]; }
+`
+
+// apeLoaderTmpl puts the loader the APE embeds somewhere the kernel can exec
+// it, for a host the search found nothing on. It leaves nothing behind.
+//
+// -u has the loader unlink its own file first, because a script cannot delete
+// anything after it execs. Unlinking first and exec'ing through /dev/fd would
+// be shorter, and XNU answers that with EACCES. A tmpfs directory also keeps
+// the bytes in RAM, so on linux no disk is touched.
+//
+// Root hands the loader to binfmt_misc on the way past, so every later run on
+// that machine skips this path. APE_NOBINFMT stops a second pass retrying.
+var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
+	`  for d in {{.Dirs}}; do
+    [ -d "$d" ] && [ -w "$d" ] || continue
+    u=$d/.ape-$l-{{.Tag}}.$$
+    dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
+    { [ -s "$u" ] && chmod 700 "$u" && [ -x "$u" ]; } || { rm -f "$u"; continue; }
+    if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
+      rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT
+      apepath; exec "$o" "$@"
+    fi
+    apepath; exec "$u" -u "$o" "$@"
+  done
+  echo "APE: no $l on this host, and nowhere to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
+  exit 121
+>>>>>>> origin/master
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
@@ -449,7 +487,6 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 
 	plat := apePlatforms(payloads)
 	linuxAMD := plat.Has(cosmoape.LinuxAMD64)
-	darwinAMD := plat.Has(cosmoape.DarwinAMD64)
 	windowsAMD := plat.Has(cosmoape.WindowsAMD64)
 	linuxARM := plat.Has(cosmoape.LinuxARM64)
 	darwinARM := plat.Has(cosmoape.DarwinARM64)
@@ -468,31 +505,17 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 		armBoot = makeEmbeddedElfHeader(arm.elf, arm.offset, sys.ARM64)
 	}
 
-	// Create Mach-O header for macOS x86-64
-	var machoHeader []byte
-	var machoOffset, machoSize int
-	if darwinAMD {
-		machoHeader = makeMachoHeader(amd.elf, amd.offset, amd.entry())
-		// Place Mach-O header at a specific location in the APE header.
-		// It will be copied backward by the dd command.
-		//
-		// 8KB in, not 4KB: the bootstrap script runs from 0x800 up to here,
-		// and it grew when it stopped writing headers into the file it runs.
-		machoOffset = apeMachoOffset
-		machoSize = len(machoHeader)
-	}
-
-	// Load gzipped APE loader source for macOS ARM64
-	var apeLoaderGz []byte
-	var apeLoaderOffset, apeLoaderSize int
-	if darwinARM {
-		apeLoaderGz = getApeLoaderSource()
-		if len(apeLoaderGz) > 0 {
-			// Place gzipped loader at offset 0x8000 (32KB into header).
-			// This leaves room for the script.
-			apeLoaderOffset = apeLoaderSrcOffset
-			apeLoaderSize = len(apeLoaderGz)
+	// The native loaders the selected platforms boot through, and an index
+	// from platform to loader for the branches that emit the shell.
+	loaders := apeLoadersFor(plat)
+	loaderFor := func(p cosmoape.Platform) *apeLoader {
+		for _, l := range loaders {
+			if l.name == "apeld-"+p.OS+"-"+p.Arch {
+				return l
+			}
 		}
+		Exitf("APE: %s is selected and has no loader", p)
+		return nil
 	}
 
 	// The header is one file that is both a DOS/PE image, whose e_lfanew
@@ -557,13 +580,25 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// runs its own tools under. net/http/cgi hands a child PATH=/wibble and
 	// reads it back, so an appended /usr/bin is a wrong answer.
 	script.WriteString("apepath() { if [ -n \"$apeS\" ]; then PATH=$apeP; export PATH; else unset PATH; fi; }\n")
+<<<<<<< HEAD
+=======
+	script.WriteString(apeRegisterFn)
+>>>>>>> origin/master
 
 	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
 
+	// Each arch branch splits on the host OS first, then hands the file to
+	// that platform's native loader. A /Applications directory is what
+	// tells macOS from Linux.
+	unsupported := func(indent string) {
+		fmt.Fprintf(&script, "%s%s; exit 1\n", indent, apeUnsupportedEcho(plat))
+	}
+
 	// --- x86-64 hosts ---
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
 	switch {
+<<<<<<< HEAD
 	case linuxAMD || darwinAMD:
 		script.WriteString(apeSelfPath)
 		if !linuxAMD {
@@ -578,16 +613,24 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		}
 		writeStagedCopy(&script, amdBoot, machoOffset, machoSize)
+=======
+	case linuxAMD:
+		script.WriteString(apeSelfPath)
+		// Intel macs are out of support, so this arch means Linux.
+		fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
+		writeLoaderBoot(&script, loaderFor(cosmoape.LinuxAMD64))
+>>>>>>> origin/master
 	case amd == nil:
 		script.WriteString("  echo 'APE: x86_64 cannot run ARM64 binary' >&2\n")
 		script.WriteString("  exit 1\n")
 	default:
-		fmt.Fprintf(&script, "  %s\n  exit 1\n", apeUnsupportedEcho(plat))
+		unsupported("  ")
 	}
 	script.WriteString("fi\n")
 
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
+<<<<<<< HEAD
 	if arm != nil {
 		script.WriteString(apeSelfPath)
 		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
@@ -623,23 +666,29 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
   [ -x "$t" ] && { apepath; exec "$t" "$o" "$@"; }
 `)
 			writeStagedCopy(&script, armBoot, 0, 0)
+=======
+	switch {
+	case linuxARM || darwinARM:
+		script.WriteString(apeSelfPath)
+		script.WriteString("  if [ -d /Applications ]; then\n")
+		if darwinARM {
+			writeLoaderBoot(&script, loaderFor(cosmoape.DarwinARM64))
+>>>>>>> origin/master
 		} else {
-			// The printf below is unreachable shell on purpose: the macOS
-			// APE loader locates the aarch64 boot header by decoding every
-			// printf in the file's first 8192 bytes, and it is the only
-			// reader of this one once Linux ARM64 is deselected.
-			fmt.Fprintf(&script, "  %s\n  exit 1\n", apeUnsupportedEcho(plat))
-			script.WriteString("  printf '")
-			writePrintfBlob(&script, armBoot)
-			script.WriteString("' >&7\n")
+			unsupported("    ")
 		}
-	} else {
-		// Note for this branch: it cannot work on current macOS even via
-		// Rosetta. The assimilated Mach-O fails codesign's strict
-		// validation (verified on macOS 15.7: "main executable failed
-		// strict validation"), and Apple Silicon SIGKILLs unsigned
-		// executables. Native ARM64 macOS execution requires an arm64
-		// payload (fat APE) via the compiled APE loader path.
+		script.WriteString("  else\n")
+		if linuxARM {
+			writeLoaderBoot(&script, loaderFor(cosmoape.LinuxARM64))
+		} else {
+			unsupported("    ")
+		}
+		script.WriteString("  fi\n")
+	case arm == nil:
+		// An amd64 payload cannot run natively here, and Rosetta does not
+		// close the gap: the assimilated Mach-O fails codesign's strict
+		// validation, and Apple Silicon SIGKILLs an unsigned executable.
+		// An arm64 payload is the only answer.
 		script.WriteString(`  if [ -d /Applications ]; then
     echo 'APE: this amd64-only binary cannot run natively on ARM64 macOS.' >&2
     echo 'APE: rebuild with ARM64 (fat APE) support to run on Apple Silicon.' >&2
@@ -648,6 +697,8 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
   echo 'APE: ARM64 Linux cannot run x86_64 binary' >&2
   exit 1
 `)
+	default:
+		unsupported("  ")
 	}
 	script.WriteString("fi\n")
 
@@ -662,44 +713,45 @@ esac
 exit 1
 `)
 
-	scriptBytes := script.Bytes()
-
-	// Replace APE loader offset/size placeholders for the macOS ARM64 path
-	if arm != nil && apeLoaderSize > 0 {
-		s := string(scriptBytes)
-		s = strings.ReplaceAll(s, "APE_LOADER_OFFSET", fmt.Sprintf("%d", apeLoaderOffset))
-		s = strings.ReplaceAll(s, "APE_LOADER_SIZE", fmt.Sprintf("%d", apeLoaderSize))
-		scriptBytes = []byte(s)
+	// Boot ELF headers, for a loader the host already has rather than for
+	// this script. The cosmo loader installed as `ape` locates the payload
+	// by octal-decoding every printf in the file's first 8192 bytes, and
+	// the search above is happy to exec it. These lines sit after the exit
+	// because nothing in this script runs them.
+	if len(amdBoot) > 0 {
+		script.WriteString("printf '")
+		writePrintfBlob(&script, amdBoot)
+		script.WriteString("' >&7\n")
 	}
+	if len(armBoot) > 0 {
+		script.WriteString("printf '")
+		writePrintfBlob(&script, armBoot)
+		script.WriteString("' >&7\n")
+	}
+
+	scriptBytes := script.Bytes()
 
 	// Place script after the PE headers.
 	scriptOffset := apeScriptOffset
 	if len(scriptBytes) > apeHeaderSize-scriptOffset {
 		Exitf("APE shell script too large: %d bytes", len(scriptBytes))
 	}
-	// The Mach-O header and APE loader are copied over the header after the
-	// script; if the script has grown into their regions they would silently
-	// clobber its tail, leaving a binary that parses as a broken shell script.
-	if machoSize > 0 && scriptOffset+len(scriptBytes) > machoOffset {
-		Exitf("APE shell script (%d bytes at %#x) overlaps Mach-O header at %#x", len(scriptBytes), scriptOffset, machoOffset)
+	// The loaders are copied over the header after the script; if the
+	// script has grown into their regions they would silently clobber its
+	// tail, leaving a binary that parses as a broken shell script.
+	for _, l := range loaders {
+		if scriptOffset+len(scriptBytes) > l.offset {
+			Exitf("APE shell script (%d bytes at %#x) overlaps the %s loader at %#x", len(scriptBytes), scriptOffset, l.name, l.offset)
+		}
 	}
-	if apeLoaderSize > 0 && scriptOffset+len(scriptBytes) > apeLoaderOffset {
-		Exitf("APE shell script (%d bytes at %#x) overlaps APE loader at %#x", len(scriptBytes), scriptOffset, apeLoaderOffset)
-	}
-	// The APE loader scans only the first 8192 bytes for printf statements;
-	// every boot header must decode from within that window.
+	// The cosmo ape loader scans only the first 8192 bytes for printf
+	// statements; every boot header must decode from within that window.
 	if scriptOffset+len(scriptBytes) > 8192 {
 		Exitf("APE shell script ends at %#x, beyond the loader's 8192-byte scan window", scriptOffset+len(scriptBytes))
 	}
 	copy(header[scriptOffset:], scriptBytes)
 
-	// Embed gzipped APE loader source for macOS ARM64
-	if apeLoaderSize > 0 {
-		if apeLoaderOffset+apeLoaderSize > apeHeaderSize {
-			Exitf("APE loader too large to embed: %d bytes at offset %d", apeLoaderSize, apeLoaderOffset)
-		}
-		copy(header[apeLoaderOffset:], apeLoaderGz)
-	}
+	placeApeLoaders(header, loaders)
 
 	// === PE Header at offset 0x80 ===
 	// The polyglot's MZ magic and e_lfanew presume a PE image header
@@ -729,20 +781,6 @@ exit 1
 		writePEHeader(header, sys.AMD64)
 	}
 
-	// === Mach-O header for macOS x86-64 ===
-	// The header region runs from machoOffset up to the APE loader source
-	// (or the end of the APE header); growing past it would silently
-	// clobber the loader, so fail loudly instead.
-	if machoSize > 0 {
-		if machoOffset+machoSize > apeHeaderSize {
-			Exitf("APE Mach-O header (%d bytes at %#x) exceeds the %d-byte APE header", machoSize, machoOffset, apeHeaderSize)
-		}
-		if apeLoaderSize > 0 && machoOffset+machoSize > apeLoaderOffset {
-			Exitf("APE Mach-O header (%d bytes at %#x) overlaps the APE loader at %#x", machoSize, machoOffset, apeLoaderOffset)
-		}
-		copy(header[machoOffset:], machoHeader)
-	}
-
 	// Ensure there's a newline before the script (required for heredoc terminator)
 	// The __APE__ at the start of the script must be at the beginning of a line
 	if scriptOffset > 0 {
@@ -753,12 +791,8 @@ exit 1
 	// Start after the script ends, but skip embedded data regions
 	scriptEnd := scriptOffset + len(scriptBytes)
 	for i := scriptEnd; i < apeHeaderSize; i++ {
-		// Don't overwrite the Mach-O header with newlines
-		if machoSize > 0 && i >= machoOffset && i < machoOffset+machoSize {
-			continue
-		}
-		// Don't overwrite the APE loader data with newlines
-		if apeLoaderSize > 0 && i >= apeLoaderOffset && i < apeLoaderOffset+apeLoaderSize {
+		// Don't overwrite an embedded loader with newlines
+		if inApeLoader(loaders, i) {
 			continue
 		}
 		if header[i] == 0 {
@@ -841,6 +875,7 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 	return hdr
 }
 
+<<<<<<< HEAD
 // machoSegment describes one LC_SEGMENT_64 load command.
 type machoSegment struct {
 	name     string
@@ -1059,6 +1094,8 @@ func writeMachoUnixThread(buf *bytes.Buffer, entry uint64) {
 	}
 }
 
+=======
+>>>>>>> origin/master
 // Real PE header parameters for the cosmo amd64 image (writePECosmoAMD64).
 const (
 	// peCosmoImageBase is the cosmo/amd64 link base (amd64/obj.go sets
@@ -1468,29 +1505,4 @@ func writePEHeader(header []byte, arch sys.ArchFamily) {
 		header[0x201] = 0xC0
 		header[0x202] = 0xC3 // ret
 	}
-}
-
-//go:embed ape-m1.c.gz
-var apeM1SourceGz []byte
-
-// getApeLoaderSource returns the gzipped APE loader C source for macOS ARM64.
-// The copy embedded in the toolchain (ape-m1.c.gz) is used unless the
-// APE_LOADER_SOURCE environment variable points at an alternative ape-m1.c.
-func getApeLoaderSource() []byte {
-	if path := os.Getenv("APE_LOADER_SOURCE"); path != "" {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			Exitf("APE_LOADER_SOURCE: %v", err)
-		}
-		var buf bytes.Buffer
-		gz := gzip.NewWriter(&buf)
-		if _, err := gz.Write(data); err != nil {
-			Exitf("compressing APE loader source: %v", err)
-		}
-		if err := gz.Close(); err != nil {
-			Exitf("compressing APE loader source: %v", err)
-		}
-		return buf.Bytes()
-	}
-	return apeM1SourceGz
 }

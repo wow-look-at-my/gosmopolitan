@@ -817,7 +817,7 @@ func TestDirectives(t *testing.T) {
 	}
 
 	check := func(name string, list []Directive, want string) {
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			want = strings.ReplaceAll(want, "testdata/directives/", `testdata\\directives\\`)
 		}
 		t.Helper()
@@ -832,6 +832,49 @@ func TestDirectives(t *testing.T) {
 		`[{"//go:test1" "testdata/directives/a_test.go:1:1"} {"//go:test2" "testdata/directives/b_test.go:1:1"}]`)
 	check("XTestDirectives", p.XTestDirectives,
 		`[{"//go:xtest1" "testdata/directives/c_test.go:1:1"} {"//go:xtest2" "testdata/directives/d_test.go:1:1"} {"//go:xtest3" "testdata/directives/d_test.go:2:1"}]`)
+}
+
+// A GOROOT with a go command under bin names the one importGo runs. A GOROOT
+// without one, which is what a go command carrying its standard library
+// answers, hands importGo the go command that started this program, as that
+// go command named itself in the environment. A go found on PATH is never an
+// answer: with neither, importGo fails rather than run a shell's go against
+// this toolchain's GOROOT.
+func TestGoCommandNeverComesFromPATH(t *testing.T) {
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	onPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "go"+exe), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+	t.Setenv(goCommandEnv, "")
+
+	bare := &Context{GOROOT: t.TempDir()}
+	if got, err := bare.goCommand(); err == nil {
+		t.Errorf("a GOROOT without bin/go and no %s: goCommand() = %q, want an error", goCommandEnv, got)
+	}
+
+	t.Setenv(goCommandEnv, "/opt/pipeline/go-toolchain\ngo")
+	want := []string{"/opt/pipeline/go-toolchain", "go"}
+	if got, err := bare.goCommand(); err != nil || !slices.Equal(got, want) {
+		t.Errorf("a GOROOT without bin/go: goCommand() = %q, %v; want %q", got, err, want)
+	}
+
+	installed := &Context{GOROOT: t.TempDir()}
+	gorootGo := filepath.Join(installed.GOROOT, "bin", "go"+exe)
+	if err := os.MkdirAll(filepath.Dir(gorootGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gorootGo, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want = []string{filepath.Join(installed.GOROOT, "bin", "go")}
+	if got, err := installed.goCommand(); err != nil || !slices.Equal(got, want) {
+		t.Errorf("a GOROOT with bin/go: goCommand() = %q, %v; want %q", got, err, want)
+	}
 }
 
 // TestContextImportGoWithUseAllFiles ensures that when Context.UseAllFiles is set,

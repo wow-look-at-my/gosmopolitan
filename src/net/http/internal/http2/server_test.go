@@ -1218,6 +1218,12 @@ func (l *filterListener) Accept() (net.Conn, error) {
 }
 
 func TestServer_MaxQueuedControlFrames(t *testing.T) {
+	// DisableGoroutineTracking in the body asks for the serial barrier, and the
+	// barrier is a process-wide wait. Asking from inside the bubble parks a
+	// bubble goroutine on a condition no bubble goroutine can signal, which
+	// synctest reports as a deadlock. Serial is idempotent, so the inner ask
+	// still runs and costs nothing.
+	t.Serial()
 	synctest.Test(t, testServer_MaxQueuedControlFrames)
 }
 func testServer_MaxQueuedControlFrames(t *testing.T) {

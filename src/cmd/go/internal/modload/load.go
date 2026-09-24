@@ -116,6 +116,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -124,6 +125,7 @@ import (
 	"cmd/go/internal/search"
 	"cmd/go/internal/str"
 	"cmd/internal/par"
+	"internal/cosmo/embedded"
 
 	"golang.org/x/mod/module"
 )
@@ -1882,6 +1884,14 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 
 	if cfg.BuildContext.Compiler == "gccgo" && pkg.inStd {
 		// We can't scan standard packages for gccgo.
+	} else if std := embeddedStdPackage(pkg); std != nil {
+		// A standard package of a go command carrying its standard library
+		// is a compiled archive with no directory; the manifest holds its
+		// imports, as resolved vendor paths a source file spells without the
+		// prefix, and its tests are not in the binary.
+		for _, imp := range std.Imports {
+			imports = append(imports, strings.TrimPrefix(imp, "vendor/"))
+		}
 	} else {
 		var err error
 		imports, testImports, err = scanDir(modroot, pkg.dir, pld.Tags)
@@ -1907,6 +1917,15 @@ func (pld *packageLoader) load(ld *Loader, ctx context.Context, pkg *loadPkg) {
 	pkg.testImports = testImports
 
 	pld.applyPkgFlags(ld, ctx, pkg, pkgImportsLoaded)
+}
+
+// embeddedStdPackage answers pkg's entry in the embedded standard library,
+// or nil when pkg is not a standard package of a go command carrying one.
+func embeddedStdPackage(pkg *loadPkg) *embedded.Package {
+	if !cfg.EmbeddedStd || !pkg.inStd {
+		return nil
+	}
+	return cfg.EmbeddedStdPackage(pkg.path)
 }
 
 // pkgTest locates the test of pkg, creating it if needed, and updates its state
@@ -1987,7 +2006,11 @@ func (pld *packageLoader) stdVendor(ld *Loader, parentPath, path string) string 
 		// pattern, they are not part of the std *module*, and do not affect
 		// 'go mod tidy' and similar module commands when working within std.)
 		vendorPath := pathpkg.Join("vendor", path)
-		if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
+		if cfg.EmbeddedStd {
+			if cfg.EmbeddedStdPackage(vendorPath) != nil {
+				return vendorPath
+			}
+		} else if _, err := os.Stat(filepath.Join(cfg.GOROOTsrc, filepath.FromSlash(vendorPath))); err == nil {
 			return vendorPath
 		}
 	}
@@ -2276,6 +2299,12 @@ func (pld *packageLoader) checkTidyCompatibility(ld *Loader, ctx context.Context
 // may see these legacy imports. We drop them so that the module
 // search does not look for modules to try to satisfy them.
 func scanDir(modroot string, dir string, tags map[string]bool) (imports_, testImports []string, err error) {
+	// A generated file can import a package nothing in the fetched module names,
+	// so the graph reads the generated copy, the same one the build compiles.
+	if gen := gendep.Dir(dir, modroot); gen != dir {
+		imports_, testImports, err = imports.ScanDir(gen, tags)
+		goto Happy
+	}
 	if ip, mierr := modindex.GetPackage(modroot, dir); mierr == nil {
 		imports_, testImports, err = ip.ScanDir(tags)
 		goto Happy

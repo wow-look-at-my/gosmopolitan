@@ -31,6 +31,13 @@ func time_runtimeNow() (sec int64, nsec int32, mono int64) {
 
 //go:linkname crypto_internal_fips140deps_time_monoTime crypto/internal/fips140deps/time.monoTime
 func crypto_internal_fips140deps_time_monoTime() (mono int64) {
+	// The caller measures tens of nanoseconds. Its unit and epoch are
+	// unspecified, so a host with a finer counter than nanotime answers
+	// with that instead - which is what upstream's windows build does
+	// with QueryPerformanceCounter.
+	if ticks, ok := highPrecisionTicks(); ok {
+		return ticks
+	}
 	_, _, mono = time_now()
 	return mono
 }

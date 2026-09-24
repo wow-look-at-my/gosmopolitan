@@ -314,6 +314,16 @@ const (
 	appleTIOCGWINSZ = 0x40087468
 	appleTIOCSWINSZ = 0x80087467
 	appleTIOCNOTTY  = 0x20007471
+
+	// The pty grant/unlock/name trio has no Linux spelling to translate
+	// FROM. Linux grants through libc, unlocks with TIOCSPTLCK and asks
+	// TIOCGPTN for a NUMBER, naming the slave /dev/pts/N; Apple answers
+	// TIOCPTYGNAME with a NAME, /dev/ttysNNN. A number cannot carry that,
+	// so a caller that wants a slave on a Darwin host asks for Apple's
+	// request and gets it unchanged.
+	appleTIOCPTYGRANT = 0x20007454
+	appleTIOCPTYUNLK  = 0x20007452
+	appleTIOCPTYGNAME = 0x40807453
 )
 
 // The termios requests. These are kept apart from the table above
@@ -369,6 +379,12 @@ func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 		return appleTIOCSWINSZ, true
 	case linuxTIOCNOTTY:
 		return appleTIOCNOTTY, true
+	case appleTIOCPTYGRANT, appleTIOCPTYUNLK, appleTIOCPTYGNAME:
+		// Already Apple's, and named here so the pass-through is a
+		// decision rather than a hole: an unlisted request still answers
+		// ENOSYS. No Linux number collides -- these carry BSD's own
+		// direction bits and sizes.
+		return req, true
 	}
 	return 0, false
 }

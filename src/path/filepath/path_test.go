@@ -128,7 +128,7 @@ var wincleantests = []PathTest{
 
 func TestClean(t *testing.T) {
 	tests := cleantests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		for i := range tests {
 			tests[i].result = filepath.FromSlash(tests[i].result)
 		}
@@ -227,7 +227,7 @@ var plan9islocaltests = []IsLocalTest{
 
 func TestIsLocal(t *testing.T) {
 	tests := islocaltests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tests = append(tests, winislocaltests...)
 	}
 	if runtime.GOOS == "plan9" {
@@ -365,7 +365,7 @@ var winsplitlisttests = []SplitListTest{
 
 func TestSplitList(t *testing.T) {
 	tests := splitlisttests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tests = append(tests, winsplitlisttests...)
 	}
 	for _, test := range tests {
@@ -403,7 +403,7 @@ var winsplittests = []SplitTest{
 func TestSplit(t *testing.T) {
 	var splittests []SplitTest
 	splittests = unixsplittests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		splittests = append(splittests, winsplittests...)
 	}
 	for _, test := range splittests {
@@ -484,7 +484,8 @@ var winjointests = []JoinTest{
 }
 
 func TestJoin(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	t.Serial()
+	if testenv.GOOS == "windows" {
 		jointests = append(jointests, winjointests...)
 	} else {
 		jointests = append(jointests, nonwinjointests...)
@@ -653,7 +654,7 @@ func testWalk(t *testing.T, walk func(string, fs.WalkDirFunc) error, errVisit in
 		// and only on some file systems (AFS, FAT).  To avoid errors during
 		// all.bash on those file systems, skip during go test -short.
 		// Chmod is not supported on wasip1.
-		if runtime.GOOS == "windows" || runtime.GOOS == "wasip1" {
+		if testenv.GOOS == "windows" || testenv.GOOS == "wasip1" {
 			t.Skip("skipping on " + runtime.GOOS)
 		}
 		if os.Getuid() == 0 {
@@ -994,7 +995,7 @@ var winbasetests = []PathTest{
 
 func TestBase(t *testing.T) {
 	tests := basetests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		// make unix tests work on windows
 		for i := range tests {
 			tests[i].result = filepath.Clean(tests[i].result)
@@ -1042,7 +1043,7 @@ var windirtests = []PathTest{
 
 func TestDir(t *testing.T) {
 	tests := dirtests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		// make unix tests work on windows
 		for i := range tests {
 			tests[i].result = filepath.Clean(tests[i].result)
@@ -1101,7 +1102,7 @@ var winisabstests = []IsAbsTest{
 
 func TestIsAbs(t *testing.T) {
 	var tests []IsAbsTest
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tests = append(tests, winisabstests...)
 		// All non-windows tests should fail, because they have no volume letter.
 		for _, test := range isabstests {
@@ -1233,7 +1234,7 @@ func TestEvalSymlinks(t *testing.T) {
 		testEvalSymlinksAfterChdir(t, path, ".", ".")
 
 		// test EvalSymlinks("C:.") on Windows
-		if runtime.GOOS == "windows" {
+		if testenv.GOOS == "windows" {
 			volDot := filepath.VolumeName(tmpDir) + "."
 			testEvalSymlinksAfterChdir(t, path, volDot, volDot)
 		}
@@ -1404,7 +1405,7 @@ func TestAbs(t *testing.T) {
 	// Make sure the global absTests slice is not
 	// modified by multiple invocations of TestAbs.
 	tests := absTests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		vol := filepath.VolumeName(root)
 		var extra []string
 		for _, path := range absTests {
@@ -1537,7 +1538,7 @@ var winreltests = []RelTests{
 
 func TestRel(t *testing.T) {
 	tests := append([]RelTests{}, reltests...)
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		for i := range tests {
 			tests[i].want = filepath.FromSlash(tests[i].want)
 		}
@@ -1623,7 +1624,7 @@ var volumenametests = []VolumeNameTest{
 }
 
 func TestVolumeName(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		return
 	}
 	for _, v := range volumenametests {
@@ -1634,7 +1635,7 @@ func TestVolumeName(t *testing.T) {
 }
 
 func TestDriveLetterInEvalSymlinks(t *testing.T) {
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		return
 	}
 	wd, _ := os.Getwd()
@@ -1913,7 +1914,7 @@ func TestEvalSymlinksTooManyLinks(t *testing.T) {
 
 func BenchmarkIsLocal(b *testing.B) {
 	tests := islocaltests
-	if runtime.GOOS == "windows" {
+	if testenv.GOOS == "windows" {
 		tests = append(tests, winislocaltests...)
 	}
 	if runtime.GOOS == "plan9" {

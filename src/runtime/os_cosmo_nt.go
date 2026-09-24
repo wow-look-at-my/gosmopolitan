@@ -61,6 +61,19 @@ var (
 	ntSetFilePointerExFn uintptr
 	ntSetEndOfFileFn     uintptr
 	ntFlushFileBuffersFn uintptr
+	// QueryPerformanceCounter. nanotime reads KUSER_SHARED_DATA, which
+	// moves once a timer tick, so a caller measuring tens of
+	// nanoseconds needs this instead.
+	ntQueryPerfCounterFn uintptr
+	// The section API behind mmap (os_cosmo_nt_mmap.go). Optional: a
+	// zero answers ENOSYS where it is called.
+	ntCreateFileMappingWFn uintptr
+	ntMapViewOfFileFn      uintptr
+	ntUnmapViewOfFileFn    uintptr
+	ntFlushViewOfFileFn    uintptr
+	ntVirtualQueryFn       uintptr
+	ntVirtualLockFn        uintptr
+	ntVirtualUnlockFn      uintptr
 	// The flock(2) pair. Optional like the metadata wave's: a zero
 	// pointer answers ENOSYS where flock is called rather than
 	// crashing the boot.
@@ -85,6 +98,9 @@ var (
 	ntGetSystemTimeAsFileTimeFn      uintptr
 	ntGetFinalPathNameByHandleWFn    uintptr
 	ntCreateHardLinkWFn              uintptr
+	ntSetFileAttributesWFn           uintptr
+	ntCreateSymbolicLinkWFn          uintptr
+	ntDeviceIoControlFn              uintptr
 	ntGetFileInformationByHandleFn   uintptr
 	ntGetFileInformationByHandleExFn uintptr
 	ntDeleteFileWFn                  uintptr
@@ -106,6 +122,7 @@ var (
 
 	// Chunk B (os/exec; all kernel32, present since forever).
 	ntCreatePipeFn          uintptr
+	ntCancelIoExFn          uintptr
 	ntDuplicateHandleFn     uintptr
 	ntCreateProcessWFn      uintptr
 	ntWaitForSingleObjectFn uintptr
@@ -182,6 +199,14 @@ var (
 	ntNameSetFilePointerEx  = []byte("SetFilePointerEx\x00")
 	ntNameSetEndOfFile      = []byte("SetEndOfFile\x00")
 	ntNameFlushFileBuffers  = []byte("FlushFileBuffers\x00")
+	ntNameQueryPerfCounter  = []byte("QueryPerformanceCounter\x00")
+	ntNameCreateFileMapping = []byte("CreateFileMappingW\x00")
+	ntNameMapViewOfFile     = []byte("MapViewOfFile\x00")
+	ntNameUnmapViewOfFile   = []byte("UnmapViewOfFile\x00")
+	ntNameFlushViewOfFile   = []byte("FlushViewOfFile\x00")
+	ntNameVirtualQuery      = []byte("VirtualQuery\x00")
+	ntNameVirtualLock       = []byte("VirtualLock\x00")
+	ntNameVirtualUnlock     = []byte("VirtualUnlock\x00")
 	ntNameRtlGetVersion     = []byte("RtlGetVersion\x00")
 	ntNameGetComputerNameW  = []byte("GetComputerNameW\x00")
 	ntNameLockFileEx        = []byte("LockFileEx\x00")
@@ -195,6 +220,9 @@ var (
 	ntNameGetSysTimeAsFt    = []byte("GetSystemTimeAsFileTime\x00")
 	ntNameGetFinalPathW     = []byte("GetFinalPathNameByHandleW\x00")
 	ntNameCreateHardLinkW   = []byte("CreateHardLinkW\x00")
+	ntNameSetFileAttrsW     = []byte("SetFileAttributesW\x00")
+	ntNameCreateSymlinkW    = []byte("CreateSymbolicLinkW\x00")
+	ntNameDeviceIoControl   = []byte("DeviceIoControl\x00")
 	ntNameGetFileInfoByH    = []byte("GetFileInformationByHandle\x00")
 	ntNameGetFileInfoByHEx  = []byte("GetFileInformationByHandleEx\x00")
 	ntNameDeleteFileW       = []byte("DeleteFileW\x00")
@@ -214,6 +242,7 @@ var (
 	ntNameSetConsoleOutCP   = []byte("SetConsoleOutputCP\x00")
 	ntNameSetConsoleCP      = []byte("SetConsoleCP\x00")
 	ntNameCreatePipe        = []byte("CreatePipe\x00")
+	ntNameCancelIoEx        = []byte("CancelIoEx\x00")
 	ntNameDuplicateHandle   = []byte("DuplicateHandle\x00")
 	ntNameCreateProcessW    = []byte("CreateProcessW\x00")
 	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
@@ -360,6 +389,38 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
+<<<<<<< HEAD
+=======
+// ntHighPrecisionTicks reads QueryPerformanceCounter, and reports
+// whether it answered. nanotime reads KUSER_SHARED_DATA's
+// InterruptTime, which moves once a timer tick - about 15ms - so a
+// caller measuring tens of nanoseconds gets a run of identical values
+// from it. The SP 800-90B jitter entropy source is one, and it fails
+// its startup health test on a clock that never changes.
+func ntHighPrecisionTicks() (int64, bool) {
+	if !iswindows() || ntQueryPerfCounterFn == 0 {
+		return 0, false
+	}
+	var ticks int64
+	if ntcall7(ntQueryPerfCounterFn, uintptr(unsafe.Pointer(&ticks)), 0, 0, 0, 0, 0, 0) == 0 {
+		return 0, false
+	}
+	return ticks, true
+}
+
+// ntcallSEcheck refuses a blocking call made under a runtime lock. An
+// exitsyscall that does not win a P back calls stopm, which throws
+// "stopm holding locks" - a rare crash, far from the lock that caused
+// it. This names the caller instead, on every such call.
+//
+//go:nosplit
+func ntcallSEcheck() {
+	if getg().m.locks != 0 {
+		throw("ntcallSE: runtime lock held across a blocking win64 call")
+	}
+}
+
+>>>>>>> origin/master
 // ntcallSE ("syscall-state, with error") is ntcallE bracketed by
 // entersyscall and exitsyscall, for a Win32 call that can block
 // indefinitely, so sysmon can retake the P while the thread parks in
@@ -373,6 +434,7 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
+	ntcallSEcheck()
 	entersyscall()
 	osPreemptExtEnter(getg().m)
 	r = ntcall7(fn, a1, a2, a3, a4, a5, a6, a7)
@@ -388,6 +450,7 @@ func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 //
 //go:nosplit
 func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
+	ntcallSEcheck()
 	entersyscall()
 	osPreemptExtEnter(getg().m)
 	r = ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
@@ -473,6 +536,14 @@ func ntResolve() {
 	ntSetFilePointerExFn = k32sym(&ntNameSetFilePointerEx[0])
 	ntSetEndOfFileFn = k32sym(&ntNameSetEndOfFile[0])
 	ntFlushFileBuffersFn = k32sym(&ntNameFlushFileBuffers[0])
+	ntQueryPerfCounterFn = k32sym(&ntNameQueryPerfCounter[0])
+	ntCreateFileMappingWFn = k32sym(&ntNameCreateFileMapping[0])
+	ntMapViewOfFileFn = k32sym(&ntNameMapViewOfFile[0])
+	ntUnmapViewOfFileFn = k32sym(&ntNameUnmapViewOfFile[0])
+	ntFlushViewOfFileFn = k32sym(&ntNameFlushViewOfFile[0])
+	ntVirtualQueryFn = k32sym(&ntNameVirtualQuery[0])
+	ntVirtualLockFn = k32sym(&ntNameVirtualLock[0])
+	ntVirtualUnlockFn = k32sym(&ntNameVirtualUnlock[0])
 	ntGetFileInformationByHandleFn = k32sym(&ntNameGetFileInfoByH[0])
 	ntGetFileInformationByHandleExFn = k32sym(&ntNameGetFileInfoByHEx[0])
 	ntDeleteFileWFn = k32sym(&ntNameDeleteFileW[0])
@@ -494,6 +565,7 @@ func ntResolve() {
 
 	// Chunk B: os/exec (all kernel32).
 	ntCreatePipeFn = k32sym(&ntNameCreatePipe[0])
+	ntCancelIoExFn = k32sym(&ntNameCancelIoEx[0])
 	ntDuplicateHandleFn = k32sym(&ntNameDuplicateHandle[0])
 	ntCreateProcessWFn = k32sym(&ntNameCreateProcessW[0])
 	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
@@ -568,6 +640,10 @@ func ntResolve() {
 	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
 	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
 	ntCreateHardLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateHardLinkW[0])), 0, 0, 0, 0)
+	// Symlinks, readlink and the read-only attribute (os_cosmo_nt_link.go).
+	ntSetFileAttributesWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileAttrsW[0])), 0, 0, 0, 0)
+	ntCreateSymbolicLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateSymlinkW[0])), 0, 0, 0, 0)
+	ntDeviceIoControlFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameDeviceIoControl[0])), 0, 0, 0, 0)
 	// flock(2) (ntEmuFlock). Same stance as the four above.
 	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
 	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
