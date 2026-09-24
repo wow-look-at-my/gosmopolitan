@@ -36,6 +36,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -971,6 +972,7 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+<<<<<<< HEAD
 					// A tree of this same toolchain holds the sources, and a
 					// reader that type checks from source has nothing without
 					// their names. The build reads the archive either way:
@@ -979,11 +981,30 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
 						data.p.GoFiles = tree.GoFiles
 						data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+=======
+					// A listing names the source files; a build reads the
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
+					if cfg.CmdName == "list" {
+						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+							data.p.GoFiles = tree.GoFiles
+							data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+						}
+>>>>>>> origin/master
 					}
 					// The module loader looked for a directory; the manifest is the answer.
 					r.err = nil
 					goto Happy
 				}
+			}
+			// A dependency that generates part of its own API ships a package
+			// the compiler reads as empty. Read the generated copy instead.
+			if dir := gendep.Dir(r.dir, modroot); dir != r.dir {
+				r.dir = dir
+				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
+				goto Happy
 			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {
