@@ -9,13 +9,8 @@
 // Cosmo binaries and the whole unix-shaped standard library speak
 // Linux-style paths. Every emulated file syscall funnels its paths
 // through exactly one function pair defined here: ntPathW forward, and
-<<<<<<< HEAD
-// ntPathToLinux back. Symlinks are unsupported, so readlink is EINVAL
-// - Linux's own errno for "not a symlink" - and lstat is stat.
-=======
 // ntPathToLinux back. A symlink's body takes the same pair
 // (os_cosmo_nt_link.go).
->>>>>>> origin/master
 
 package runtime
 

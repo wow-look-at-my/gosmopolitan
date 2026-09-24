@@ -156,10 +156,7 @@ func main() {
 	timed("ioctl", checkIoctl)
 	timed("termios", checkTermios)
 	timed("pty", checkPty)
-<<<<<<< HEAD
-=======
 	timed("mmap", checkMmap)
->>>>>>> origin/master
 	timed("sendfile", checkSendfile)
 	timed("nanosleep", checkNanosleep)
 	// Exec and signal checks run at the END on purpose, in that order.

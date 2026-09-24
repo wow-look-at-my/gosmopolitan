@@ -361,8 +361,6 @@ var cosmoDarwinMadviseFn uintptr
 // sighandler sent SIGQUIT back to the thread that already held it.
 var cosmoDarwinKillFn uintptr
 
-<<<<<<< HEAD
-=======
 // cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved
 // at startup. The Syslib exports sysctlbyname only, and the routing
 // table has no name to ask for: net.route is reached by number alone.
@@ -383,7 +381,6 @@ func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldle
 		uintptr(newp), newlen))
 }
 
->>>>>>> origin/master
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
 // the system stack, before any user code and before the first fork, so
@@ -407,10 +404,7 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
-<<<<<<< HEAD
-=======
 	cosmoDarwinSysctlFn = cosmoDlsym(&dlsymNameSysctl[0])
->>>>>>> origin/master
 	cosmoDarwinKillFn = cosmoDlsym(&dlsymNameKill[0])
 	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{

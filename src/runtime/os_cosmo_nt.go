@@ -389,8 +389,6 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
-<<<<<<< HEAD
-=======
 // ntHighPrecisionTicks reads QueryPerformanceCounter, and reports
 // whether it answered. nanotime reads KUSER_SHARED_DATA's
 // InterruptTime, which moves once a timer tick - about 15ms - so a
@@ -420,7 +418,6 @@ func ntcallSEcheck() {
 	}
 }
 
->>>>>>> origin/master
 // ntcallSE ("syscall-state, with error") is ntcallE bracketed by
 // entersyscall and exitsyscall, for a Win32 call that can block
 // indefinitely, so sysmon can retake the P while the thread parks in

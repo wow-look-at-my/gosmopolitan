@@ -2059,18 +2059,8 @@ func (t *T) Fork() {
 			return
 		}
 		// A test BELOW the target forks normally: it gets its own child, which
-<<<<<<< HEAD
-		// is what a subtest asks Fork for.
-		if !strings.HasPrefix(t.Name(), target+"/") {
-			// Anything else is a test the child was never selected to run, so
-			// forking it starts a peer rather than a descendant and the two
-			// spawn each other. The windows leg reached "cannot allocate
-			// memory" that way, through archive/tar's two forking tests. The
-			// barrier gives this one what a child would, without the process.
-=======
 		// is what a subtest asks Fork for. A peer takes the barrier instead.
 		if t.forkPeerOfTarget() {
->>>>>>> origin/master
 			t.Serial()
 			return
 		}
@@ -2517,39 +2507,28 @@ func canFork() bool {
 }
 
 func (t *T) checkParallel() {
-<<<<<<< HEAD
-	// Setenv and Chdir change the process, so the test needs isolation from
-	// every other test. A child is the cheaper way to buy it, because it leaves
-	// the suite running. A host that cannot start one still has the barrier,
-	// which buys the same isolation by stopping every other test.
-.<<<<<<< claude/serial-reason-validation-3a7xe4
-	//
-	// Inside a child there is no second fork to take, and the child's own
-	// subtests are parallel like any other run, so the barrier is what
-	// isolates the caller from them. Without it a test whose subtests each set
-	// an environment variable would have them overwrite each other.
-	if canFork() && os.Getenv(forkTargetEnv) == "" {
-		t.Fork()
-		return
-	}
-	t.serialize()
-.=======
-	t.Fork()
-.>>>>>>> claude/session-lock-feature-hxi7mp
-=======
 	// Setenv and Chdir change the process, so a test that runs beside others
 	// needs isolation from every one of them. A child is the cheaper way to
 	// buy it, because it leaves the suite running. A host that cannot start
 	// one still has the barrier, which buys the same isolation by stopping
 	// every other test. A test with no parallel ancestor already has the
 	// process to itself.
+	//
+	// Inside a child there is no second fork to take, and the child's own
+	// subtests can run in parallel like any other run, so the barrier is what
+	// isolates the caller from them. Without it a test whose subtests each set
+	// an environment variable would have them overwrite each other.
 	for c := &t.common; c != nil; c = c.parent {
-		if c.isParallel {
+		if !c.isParallel {
+			continue
+		}
+		if canFork() && os.Getenv(forkTargetEnv) == "" {
 			t.Fork()
 			return
 		}
+		t.serialize()
+		return
 	}
->>>>>>> origin/master
 }
 
 // Setenv calls os.Setenv(key, value) and uses Cleanup to

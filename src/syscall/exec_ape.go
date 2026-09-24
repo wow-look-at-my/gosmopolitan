@@ -2,15 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-<<<<<<< HEAD
-//go:build cosmo || darwin
-
-package syscall
-
-// apeShellPath is the interpreter, as a NUL-terminated C string.
-var apeShellPath = [...]byte{'/', 'b', 'i', 'n', '/', 's', 'h', 0}
-
-=======
 //go:build cosmo || darwin || linux
 
 package syscall
@@ -42,7 +33,6 @@ func execAPEFallback(argv0 *byte, argv, envv []*byte, err error) error {
 	return e
 }
 
->>>>>>> origin/master
 // apeShellArgv builds the /bin/sh form of a command: the interpreter,
 // then the script, then the caller's own arguments. argv is the
 // NUL-terminated argv execve takes, so argv[1:] carries the arguments

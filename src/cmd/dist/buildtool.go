@@ -74,10 +74,7 @@ var bootstrapDirs = []string{
 	"go/version",
 	"internal/abi",
 	"internal/ape",
-<<<<<<< HEAD
-=======
 	"internal/cosmo/embedded",
->>>>>>> origin/master
 	"internal/coverage",
 	"cmd/internal/cov/covcmd",
 	"internal/bisect",

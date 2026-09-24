@@ -14,15 +14,6 @@ import "internal/goarch"
 //
 // A variable here rather than a constant. One APE boots on Linux, macOS
 // and Windows, so the answer is the HOST, which the entry stub records
-<<<<<<< HEAD
-// before any Go code runs. Everything that switches on GOOS to match
-// platform semantics - os.Root's trailing-slash rules, path handling,
-// os/exec - then gets the kernel it is actually talking to.
-//
-// setGOOS runs in osinit, ahead of every package init, so no Go code can
-// observe the placeholder.
-var GOOS string = "cosmo"
-=======
 // before any Go code runs. Everything that switches on GOOS - os.Root,
 // path handling, os/exec - then gets the kernel it is talking to.
 //
@@ -30,7 +21,6 @@ var GOOS string = "cosmo"
 // observe the placeholder. "readonly" makes it a compile error for any
 // other package to assign it; only setGOOS writes it.
 readonly var GOOS string = "cosmo"
->>>>>>> origin/master
 
 func setGOOS() {
 	if s := CosmoHostOS(); s != "unknown" {
@@ -46,11 +36,7 @@ func setGOOS() {
 // `const x = runtime.GOARCH == "amd64"` still compiles - the type checker
 // folds the build value where a constant is required. See
 // cmd/compile/internal/types2/dynconst.go.
-<<<<<<< HEAD
-var GOARCH string = goarch.GOARCH
-=======
 readonly var GOARCH string = goarch.GOARCH
->>>>>>> origin/master
 
 func setGOARCH() {
 	if s := cosmoHostArch(); s != "" {

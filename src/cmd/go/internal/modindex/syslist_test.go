@@ -11,15 +11,9 @@ import (
 	"testing"
 )
 
-<<<<<<< HEAD
-// The context under test answers for the PORT, so the names it accepts are
-// the port's. runtime.GOOS names the host a cosmo binary is running on,
-// which is a different question and a different answer.
-=======
 // The port these files are selected for, not the host running the test:
 // goodOSArchFile answers about build.Default, and runtime.GOOS names the
 // host a cosmo binary runs on.
->>>>>>> origin/master
 var (
 	thisOS    = build.Default.GOOS
 	thisArch  = build.Default.GOARCH

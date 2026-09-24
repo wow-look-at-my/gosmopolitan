@@ -12,14 +12,6 @@ import "unsafe"
 // serves them through raw XNU statfs64/fstatfs64, with the same
 // buffer-size guard the arm64 path applies.
 //
-<<<<<<< HEAD
-// uname is not, and cannot be. XNU has no uname syscall - it is a libc
-// function over sysctl - and the amd64 path dispatches by NUMBER, so
-// there is nothing to dispatch to. arm64 escapes this only by resolving
-// Apple's libc uname through dlsym, which amd64 has no Syslib for.
-// ENOSYS is the honest answer: synthesizing a plausible utsname from
-// sysctl values would invent a system's identity rather than read it.
-=======
 // uname takes a different route on each architecture. XNU has no uname
 // syscall, so arm64 resolves Apple's libc uname by name through dlsym.
 // The Syslib that dlsym comes from is built by the ARM64 APE loader, so
@@ -27,7 +19,6 @@ import "unsafe"
 // reach is sysctl, and sysctl is where Apple's own uname reads every
 // field it returns. Asking those MIBs reads the system's identity from
 // the same place libc reads it.
->>>>>>> origin/master
 
 // The sysctl MIBs Apple's uname reads, from XNU's sys/sysctl.h: the two
 // top-level namespaces, then the leaf under each.

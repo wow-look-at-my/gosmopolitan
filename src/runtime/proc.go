@@ -2550,14 +2550,10 @@ found:
 	checkdead()
 	unlock(&sched.lock)
 
-<<<<<<< HEAD
-	if goos.IsDarwin == 1 || goos.IsIos == 1 {
-=======
 	// hostIsDarwin, not goos.IsDarwin: preemptM counts under the same
 	// predicate, and a cosmo binary on a Mac has to balance what it
 	// counted. The compile-time form is 0 for cosmo.
 	if hostIsDarwin() {
->>>>>>> origin/master
 		// Make sure pendingPreemptSignals is correct when an M exits.
 		// For #41702.
 		if mp.signalPending.Load() != 0 {
@@ -6032,9 +6028,6 @@ func syscall_runtime_BeforeExec() {
 
 	// On Darwin, wait for all pending preemption signals to
 	// be received. See issue #41702.
-<<<<<<< HEAD
-	if goos.IsDarwin == 1 || goos.IsIos == 1 {
-=======
 	//
 	// hostIsDarwin, not goos.IsDarwin: the kernel decides what a
 	// SIGURG still in flight does to the exec'd image, so the wait
@@ -6043,7 +6036,6 @@ func syscall_runtime_BeforeExec() {
 	// execs past them, and the new image dies with SIGILL under load.
 	// syscall's TestExec is what showed it.
 	if hostIsDarwin() {
->>>>>>> origin/master
 		for pendingPreemptSignals.Load() > 0 {
 			osyield()
 		}

@@ -666,11 +666,7 @@ func TestPrlimitSelf(t *testing.T) {
 }
 
 func TestPrlimitOtherProcess(t *testing.T) {
-<<<<<<< HEAD
 	t.Serial("the saved original fd limit is a package global that every file open here consults")
-=======
-	t.Serial()
->>>>>>> origin/master
 	origLimit := syscall.OrigRlimitNofile()
 	origRlimitNofile := syscall.GetInternalOrigRlimitNofile()
 

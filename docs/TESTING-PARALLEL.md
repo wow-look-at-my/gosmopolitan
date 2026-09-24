@@ -16,7 +16,7 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
-<<<<<<< HEAD
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone, and the package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
 
 ### The reason argument
 
@@ -48,11 +48,6 @@ The similarity rule is the reason the others are worth having. One pasted senten
 Mechanics: reasons are compared normalized - lowercased, with runs of non-alphanumerics collapsed - so case and punctuation do not make one reason look like two. The score is Levenshtein distance over the length of the longer reason. The registry is per test binary. The bound is therefore a statement about one package. A call site registers once, so a `Serial` in a loop or in a table-driven subtest never reports itself as its own duplicate.
 
 Implementation: `src/testing/serialreason.go`. Its tests are in `src/testing/serialreason_test.go`.
-=======
-A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone, and the package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
-
-Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
->>>>>>> origin/master
 
 ## t.Fork
 

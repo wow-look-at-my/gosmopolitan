@@ -7,13 +7,9 @@
 package os
 
 import (
-<<<<<<< HEAD
-	"internal/stringslite"
-=======
 	"internal/filepathlite"
 	"internal/stringslite"
 	"runtime"
->>>>>>> origin/master
 	"sync"
 )
 
@@ -60,12 +56,8 @@ func executable() (string, error) {
 		}
 	}
 
-<<<<<<< HEAD
-	// No usable procfs on this host: resolve Args[0] instead, once.
-=======
 	// No usable procfs on this host, or a memfd behind it: resolve Args[0]
 	// instead, once.
->>>>>>> origin/master
 	exeOnce.Do(func() { exeOnce.path, exeOnce.err = resolveArgv0() })
 	return exeOnce.path, exeOnce.err
 }

@@ -269,40 +269,6 @@ func printfBlob(blob []byte) string {
 // the APE's own directory, last: docker mounts /dev/shm noexec and --read-only
 // closes /tmp, so a bind-mounted program may be all that takes an executable.
 //
-<<<<<<< HEAD
-// Fixed at /tmp, and no environment variable is read to find it. TMPDIR
-// and HOME are caller-supplied: either can be unset, unwritable, or not
-// per-user at all, and a container run by numeric UID gets HOME="/" from
-// the runtime itself. /tmp is world-writable on virtually every host.
-//
-// apeUIDSuffix stands in for the per-user isolation a real HOME would
-// give, keeping one user's staged copies out of another user's path.
-var apeRunDir = "/tmp/.ape-run-1" + apeUIDSuffix
-
-// apeUIDSuffix is a shell command substitution for the running user's
-// numeric uid, read with `id -u` -- a syscall, not an environment
-// variable, so it holds even when the caller has configured nothing at
-// all. "shared" is the fallback for the one host where even `id` itself
-// fails; every real run keeps its own subdirectory as usual, and this one
-// case degrades to the pre-uid-scoping behavior rather than failing to
-// stage at all.
-const apeUIDSuffix = `-$(id -u 2>/dev/null || echo shared)`
-
-// writeStagedCopy emits the shell that gives the host a runnable copy of
-// the APE at "$p". It never touches the APE itself: the kernel refuses
-// the DOS/shell magic, and writing the real header into the running file
-// needs it writable and breaks its checksum, so the COPY is corrected.
-// The copy is keyed by the source's device, inode, size and mtime to the
-// NANOSECOND, or a checksum where stat is missing: a rebuild within one
-// second, in place and at one size, would run the previous binary's copy.
-// Staging also registers the magic with binfmt_misc and records whether
-// the host can bind-mount; both fail silently. With that mark, and only
-// as root, the run binds the copy over the APE's own path in a PRIVATE
-// mount namespace, so argv[0] and /proc/self/exe stay put. Without it
-// argv[0] is the copy, under the original's basename.
-func writeStagedCopy(script *bytes.Buffer, boot []byte, machoOffset, machoSize int) {
-	const ddBlockSize = 8
-=======
 // None of them is a sidecar. -u unlinks the file before the program starts.
 //
 // Unquoted on purpose: the shell splits it, so APE_LOADERDIR may name several
@@ -320,7 +286,6 @@ const apeLoaderDirs = `${APE_LOADERDIR:-/dev/shm /tmp "${o%/*}"}`
 // the tag in its name is its own content hash, so a rebuilt loader always
 // unpacks to a path of its own.
 func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
->>>>>>> origin/master
 	data := struct {
 		Name   string
 		Dirs   string
@@ -346,46 +311,6 @@ func writeLoaderBoot(script *bytes.Buffer, l *apeLoader) {
 // reads candidates and execs one. It writes nothing, which is what makes a
 // read-only filesystem enough to start the program.
 //
-<<<<<<< HEAD
-// The binfmt_misc line quotes its magic with DOUBLE
-// quotes on purpose: the macOS ARM64 loader decodes every `printf '` in
-// the first 8K as a boot header, and TestFatBootHeaders holds that count
-// at two. The shell leaves \047 alone inside double quotes.
-var apeStageTmpl = template.Must(template.New("apestage").Parse(
-	`  k=$(stat -c %d.%i.%.9Y.%s "$o" 2>/dev/null || stat -f %d.%i.%Fm.%z "$o" 2>/dev/null || cksum <"$o" | tr -d ' ')
-  c="{{.RunDir}}/$k"
-  p="$c/${0##*/}"
-  if [ ! -x "$p" ]; then
-    (umask 077; mkdir -p "$c") || { echo "APE: cannot create $c" >&2; exit 121; }
-    cp "$o" "$p.$$" || { echo "APE: cannot stage $p" >&2; exit 121; }
-{{- if .Boot}}
-    exec 7<> "$p.$$" || { echo "APE: cannot stage $p" >&2; exit 121; }
-    printf '{{.Boot}}' >&7
-    exec 7<&-
-{{- end}}
-{{- if .Macho}}
-    if [ -d /Applications ]; then
-      dd if="$p.$$" of="$p.$$" bs={{.BlockSize}} skip={{.Skip}} count={{.Count}} conv=notrunc 2>/dev/null || { echo 'APE: Mach-O relocation failed' >&2; exit 121; }
-    fi
-{{- end}}
-    chmod 755 "$p.$$" && mv -f "$p.$$" "$p" || { rm -f "$p.$$"; echo "APE: cannot stage $p" >&2; exit 121; }
-    if [ "$(id -u 2>/dev/null)" = 0 ]; then
-      [ -w /proc/sys/fs/binfmt_misc/register ] || mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null
-      [ -e /proc/sys/fs/binfmt_misc/APE ] || { printf ":APE:M::MZqFpD=\047::/bin/sh:" > /proc/sys/fs/binfmt_misc/register; } 2>/dev/null
-      unshare -m true 2>/dev/null && : > "$c/.bind"
-    fi
-  fi
-  if [ -f "$c/.bind" ]; then
-    u=$(command -v unshare 2>/dev/null); m=$(command -v mount 2>/dev/null); s=$(command -v sh 2>/dev/null)
-    if [ -n "$u" ] && [ -n "$m" ] && [ -n "$s" ]; then
-      # Every tool here is resolved BEFORE the caller's PATH comes back,
-      # because that PATH may name none of them.
-      apepath
-      exec "$u" -m "$s" -c 'b="$0"; a="$1"; n="$2"; shift 2; "$n" --bind "$b" "$a" 2>/dev/null && exec "$a" "$@"; exec "$b" "$@"' "$p" "$o" "$m" "$@"
-    fi
-  fi
-  apepath; exec "$p" "$@"
-=======
 // The absolute candidates come first, because each `command -v` costs a
 // PATH walk. APE_LOADER names one outright. Nothing looks beside the
 // binary: an APE is one file, and a loader shipped next to it would be a
@@ -449,7 +374,6 @@ var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
   done
   echo "APE: no $l on this host, and nowhere to put the embedded one: install it on PATH, or point APE_LOADER at it" >&2
   exit 121
->>>>>>> origin/master
 `))
 
 // makeAPEHeaderForPayloads creates the 64K APE polyglot header that boots
@@ -580,10 +504,7 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// runs its own tools under. net/http/cgi hands a child PATH=/wibble and
 	// reads it back, so an appended /usr/bin is a wrong answer.
 	script.WriteString("apepath() { if [ -n \"$apeS\" ]; then PATH=$apeP; export PATH; else unset PATH; fi; }\n")
-<<<<<<< HEAD
-=======
 	script.WriteString(apeRegisterFn)
->>>>>>> origin/master
 
 	// Architecture dispatch
 	script.WriteString("m=$(uname -m 2>/dev/null) || m=x86_64\n")
@@ -598,28 +519,11 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 	// --- x86-64 hosts ---
 	script.WriteString("if [ \"$m\" = x86_64 ] || [ \"$m\" = amd64 ]; then\n")
 	switch {
-<<<<<<< HEAD
-	case linuxAMD || darwinAMD:
-		script.WriteString(apeSelfPath)
-		if !linuxAMD {
-			// Without a boot ELF header there is nothing to assimilate
-			// into, and re-execing would spin on this script forever.
-			fmt.Fprintf(&script, "  [ -d /Applications ] || { %s; exit 1; }\n", apeUnsupportedEcho(plat))
-		}
-		if !darwinAMD {
-			// Refuse macOS before staging a copy: the printf writes an ELF
-			// header, and with no Mach-O header to put over it the copy
-			// would not run there anyway.
-			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
-		}
-		writeStagedCopy(&script, amdBoot, machoOffset, machoSize)
-=======
 	case linuxAMD:
 		script.WriteString(apeSelfPath)
 		// Intel macs are out of support, so this arch means Linux.
 		fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
 		writeLoaderBoot(&script, loaderFor(cosmoape.LinuxAMD64))
->>>>>>> origin/master
 	case amd == nil:
 		script.WriteString("  echo 'APE: x86_64 cannot run ARM64 binary' >&2\n")
 		script.WriteString("  exit 1\n")
@@ -630,50 +534,12 @@ func makeAPEHeaderForPayloads(payloads []*apePayload) []byte {
 
 	// --- ARM64 hosts ---
 	script.WriteString("if [ \"$m\" = aarch64 ] || [ \"$m\" = arm64 ]; then\n")
-<<<<<<< HEAD
-	if arm != nil {
-		script.WriteString(apeSelfPath)
-		script.WriteString("  t=\"/tmp/.ape-1.10" + apeUIDSuffix + "\"\n")
-		if darwinARM {
-			script.WriteString(`  if [ -d /Applications ]; then
-    # macOS ARM64: use compiled Mach-O loader or compile from source
-    # Don't use existing loader if it might be ELF (from Linux)
-    if [ -x "$t" ] && file "$t" 2>/dev/null | grep -q "Mach-O"; then
-      apepath; exec "$t" "$o" "$@"
-    fi
-    # Compile APE loader from embedded source
-    if ! type cc >/dev/null 2>&1; then
-      echo "$0: please run: xcode-select --install" >&2
-      exit 1
-    fi
-    mkdir -p "${t%/*}" || exit
-    dd if="$o" bs=1 skip=APE_LOADER_OFFSET count=APE_LOADER_SIZE 2>/dev/null | gzip -dc >"$t.c.$$" || exit
-    mv -f "$t.c.$$" "$t.c" || exit
-    cc -w -O -o "$t.$$" "$t.c" || exit
-    mv -f "$t.$$" "$t" || exit
-    apepath; exec "$t" "$o" "$@"
-  fi
-`)
-		}
-		if linuxARM && !darwinARM {
-			// Same trap as the amd64 branch: an ELF header on a macOS host
-			// leaves something that runs nowhere.
-			fmt.Fprintf(&script, "  [ -d /Applications ] && { %s; exit 1; }\n", apeUnsupportedEcho(plat))
-		}
-		if linuxARM {
-			script.WriteString(`  # Linux ARM64: an installed loader runs the file as it stands
-  a=$(command -v ape 2>/dev/null); [ -n "$a" ] && { apepath; exec "$a" "$o" "$@"; }
-  [ -x "$t" ] && { apepath; exec "$t" "$o" "$@"; }
-`)
-			writeStagedCopy(&script, armBoot, 0, 0)
-=======
 	switch {
 	case linuxARM || darwinARM:
 		script.WriteString(apeSelfPath)
 		script.WriteString("  if [ -d /Applications ]; then\n")
 		if darwinARM {
 			writeLoaderBoot(&script, loaderFor(cosmoape.DarwinARM64))
->>>>>>> origin/master
 		} else {
 			unsupported("    ")
 		}
@@ -875,227 +741,6 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 	return hdr
 }
 
-<<<<<<< HEAD
-// machoSegment describes one LC_SEGMENT_64 load command.
-type machoSegment struct {
-	name     string
-	vmaddr   uint64
-	vmsize   uint64
-	fileoff  uint64 // absolute offset in the APE file
-	filesize uint64
-	prot     uint32 // used for both initprot and maxprot
-}
-
-// machoSegmentsFromELF derives the Mach-O segment table from the payload's
-// PT_LOAD program headers. elfData's p_offset values are still
-// payload-relative when this runs (shiftPOffsets rewrites them to absolute
-// file offsets at write-out), so file offsets are computed as
-// elfOffset + p_offset, matching the bytes of the final APE file.
-//
-// The first (executable) load is extended downward to file offset 0 so that
-// it also maps the APE polyglot header - and, after the dd transform, the
-// Mach-O header itself. XNU's parse_machfile rejects (LOAD_BADMACHO) any
-// executable in which no R+X segment maps the start of the file
-// (found_header_segment); extending the text segment mirrors what
-// Cosmopolitan's ape.S Mach-O header does.
-func machoSegmentsFromELF(elfData []byte, elfOffset uint64) []machoSegment {
-	elfPhoff := binary.LittleEndian.Uint64(elfData[32:40])
-	elfPhentsize := binary.LittleEndian.Uint16(elfData[54:56])
-	elfPhnum := binary.LittleEndian.Uint16(elfData[56:58])
-
-	var segs []machoSegment
-	for i := uint16(0); i < elfPhnum; i++ {
-		phdr := elfData[elfPhoff+uint64(i)*uint64(elfPhentsize):]
-		if binary.LittleEndian.Uint32(phdr[0:4]) != 1 { // PT_LOAD
-			continue
-		}
-		flags := binary.LittleEndian.Uint32(phdr[4:8])
-		off := binary.LittleEndian.Uint64(phdr[8:16])
-		vaddr := binary.LittleEndian.Uint64(phdr[16:24])
-		filesz := binary.LittleEndian.Uint64(phdr[32:40])
-		memsz := binary.LittleEndian.Uint64(phdr[40:48])
-		if memsz < filesz {
-			Exitf("APE Mach-O: PT_LOAD %d has p_memsz %#x < p_filesz %#x", i, memsz, filesz)
-		}
-		var prot uint32
-		if flags&0x4 != 0 { // PF_R
-			prot |= machoProtRead
-		}
-		if flags&0x2 != 0 { // PF_W
-			prot |= machoProtWrite
-		}
-		if flags&0x1 != 0 { // PF_X
-			prot |= machoProtExec
-		}
-		// Segment names are advisory; pick conventional ones per class.
-		name := "__RODATA"
-		switch {
-		case prot&machoProtExec != 0:
-			name = "__TEXT"
-		case prot&machoProtWrite != 0:
-			name = "__DATA"
-		}
-		segs = append(segs, machoSegment{
-			name:   name,
-			vmaddr: vaddr,
-			// Rounding p_memsz up to whole pages preserves the BSS:
-			// XNU zero-fills [filesize, vmsize) of a segment, so a
-			// data segment with p_memsz > p_filesz gets its zero
-			// pages from the kernel, like ELF.
-			vmsize:   (memsz + machoPageSize - 1) &^ (machoPageSize - 1),
-			fileoff:  elfOffset + off,
-			filesize: filesz,
-			prot:     prot,
-		})
-	}
-	if len(segs) == 0 {
-		Exitf("APE Mach-O: ELF payload has no PT_LOAD segments")
-	}
-
-	// Extend the first load down to file offset 0 (see function comment).
-	first := &segs[0]
-	if first.prot&(machoProtRead|machoProtExec) != machoProtRead|machoProtExec {
-		Exitf("APE Mach-O: first PT_LOAD is not readable+executable (prot %#x); cannot map the file header", first.prot)
-	}
-	ext := first.fileoff
-	if first.vmaddr <= ext {
-		Exitf("APE Mach-O: first PT_LOAD vmaddr %#x is too low to extend the segment to file offset 0", first.vmaddr)
-	}
-	first.fileoff = 0
-	first.filesize += ext
-	first.vmaddr -= ext
-	first.vmsize += ext
-
-	// XNU's load_segment refuses to map anything whose file offset or vm
-	// address is not page-aligned, and overlapping vm ranges would fail
-	// vm_map_enter at load time. Go's ELF layout guarantees both (loads
-	// are page-rounded and laid out consecutively), so a violation means
-	// the layout changed and this code needs revisiting.
-	for i := range segs {
-		s := &segs[i]
-		if s.fileoff%machoPageSize != 0 || s.vmaddr%machoPageSize != 0 {
-			Exitf("APE Mach-O: segment %s (fileoff %#x, vmaddr %#x) is not page-aligned", s.name, s.fileoff, s.vmaddr)
-		}
-		if s.filesize > s.vmsize {
-			Exitf("APE Mach-O: segment %s filesize %#x exceeds vmsize %#x", s.name, s.filesize, s.vmsize)
-		}
-		if i > 0 {
-			prev := &segs[i-1]
-			if s.vmaddr < prev.vmaddr+prev.vmsize {
-				Exitf("APE Mach-O: segment %s (vmaddr %#x) overlaps %s (ends %#x) after page rounding", s.name, s.vmaddr, prev.name, prev.vmaddr+prev.vmsize)
-			}
-		}
-	}
-	return segs
-}
-
-// makeMachoHeader creates the Mach-O executable header for macOS x86-64.
-//
-// The bootstrap script dd-copies this header, which sits at 0x2000 in the
-// APE header, over the start of a COPY of the file. Its load commands
-// point at the embedded amd64 ELF image, and XNU loads it with no dyld
-// (LC_UNIXTHREAD, not LC_MAIN), so they must pass parse_machfile and
-// load_segment on their own: __PAGEZERO covers [0, lowest mapped address)
-// with no access; one LC_SEGMENT_64 per PT_LOAD carries initprot and
-// maxprot from p_flags and a vmsize covering p_memsz, at the ELF's own
-// addresses; the text segment reaches down to file offset 0, so an R+X
-// segment maps the header, which the kernel demands; and LC_UNIXTHREAD
-// holds the ELF entry in rip and the XNU host indicator in rcx.
-func makeMachoHeader(elfData []byte, elfOffset uint64, elfEntry uint64) []byte {
-	segs := machoSegmentsFromELF(elfData, elfOffset)
-
-	// XNU only accepts an entry point that falls inside a segment mapped
-	// readable+executable (parse_machfile's validentry check).
-	validEntry := false
-	for _, s := range segs {
-		if elfEntry >= s.vmaddr && elfEntry < s.vmaddr+s.vmsize &&
-			s.prot&(machoProtRead|machoProtExec) == machoProtRead|machoProtExec {
-			validEntry = true
-		}
-	}
-	if !validEntry {
-		Exitf("APE Mach-O: entry point %#x is not inside a readable+executable segment", elfEntry)
-	}
-
-	ncmds := 1 + len(segs) + 1 // __PAGEZERO + loads + LC_UNIXTHREAD
-	sizeofcmds := machoSegmentCmdSize*(1+len(segs)) + machoUnixThreadCmdSize
-
-	var buf bytes.Buffer
-
-	// Mach-O header (32 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(machoMagic64))       // magic
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUTypeX64))    // cputype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoCPUSubtypeX64)) // cpusubtype
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFileTypeExec))  // filetype
-	binary.Write(&buf, binary.LittleEndian, uint32(ncmds))              // ncmds
-	binary.Write(&buf, binary.LittleEndian, uint32(sizeofcmds))         // sizeofcmds
-	binary.Write(&buf, binary.LittleEndian, uint32(machoFlagNoUndefs))  // flags
-	binary.Write(&buf, binary.LittleEndian, uint32(0))                  // reserved
-
-	// __PAGEZERO: MH_EXECUTE images must not map anything below the page
-	// zero region; XNU raises the vm map's minimum offset to its end.
-	// vmaddr 0, filesize 0, prot 0/0 is the shape load_segment treats as
-	// page zero.
-	writeMachoSegment(&buf, machoSegment{name: "__PAGEZERO", vmsize: segs[0].vmaddr})
-
-	for _, s := range segs {
-		writeMachoSegment(&buf, s)
-	}
-
-	writeMachoUnixThread(&buf, elfEntry)
-
-	if buf.Len() != 32+sizeofcmds {
-		Exitf("APE Mach-O: internal error: wrote %d header bytes, want %d", buf.Len(), 32+sizeofcmds)
-	}
-	// The bootstrap script dd-copies the header in 8-byte blocks and
-	// derives the block count from this buffer's length; pad to a block
-	// boundary so the copy covers exactly the emitted header.
-	for buf.Len()%8 != 0 {
-		buf.WriteByte(0)
-	}
-
-	return buf.Bytes()
-}
-
-// writeMachoSegment emits one LC_SEGMENT_64 load command (no sections).
-func writeMachoSegment(buf *bytes.Buffer, s machoSegment) {
-	binary.Write(buf, binary.LittleEndian, uint32(machoLCSegment64))    // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(machoSegmentCmdSize)) // cmdsize
-	var name [16]byte
-	copy(name[:], s.name)
-	buf.Write(name[:]) // segname
-	binary.Write(buf, binary.LittleEndian, s.vmaddr)
-	binary.Write(buf, binary.LittleEndian, s.vmsize)
-	binary.Write(buf, binary.LittleEndian, s.fileoff)
-	binary.Write(buf, binary.LittleEndian, s.filesize)
-	binary.Write(buf, binary.LittleEndian, s.prot)    // maxprot
-	binary.Write(buf, binary.LittleEndian, s.prot)    // initprot
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // nsects
-	binary.Write(buf, binary.LittleEndian, uint32(0)) // flags
-}
-
-// writeMachoUnixThread emits the LC_UNIXTHREAD load command that starts the
-// kernel-loaded Mach-O at entry. The register file is exactly the 21
-// quadwords of x86_THREAD_STATE64 (count is expressed in 32-bit words, so
-// 42), matching the declared cmdsize byte for byte. rsp is left zero, which
-// makes XNU allocate a default stack; rcx carries the host-OS indicator so
-// rt0_cosmo_amd64.s (which reads CL) knows it is running on XNU.
-func writeMachoUnixThread(buf *bytes.Buffer, entry uint64) {
-	binary.Write(buf, binary.LittleEndian, uint32(machoLCUnixThread))      // cmd
-	binary.Write(buf, binary.LittleEndian, uint32(machoUnixThreadCmdSize)) // cmdsize
-	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateFlavor)) // flavor (x86_THREAD_STATE64)
-	binary.Write(buf, binary.LittleEndian, uint32(machoThreadStateRegs*2)) // count (32-bit words)
-
-	var regs [machoThreadStateRegs]uint64
-	regs[2] = machoHostXNU // rcx: host OS for rt0 (CL = 8 means XNU)
-	regs[16] = entry       // rip
-	for _, r := range regs {
-		binary.Write(buf, binary.LittleEndian, r)
-	}
-}
-
-=======
->>>>>>> origin/master
 // Real PE header parameters for the cosmo amd64 image (writePECosmoAMD64).
 const (
 	// peCosmoImageBase is the cosmo/amd64 link base (amd64/obj.go sets

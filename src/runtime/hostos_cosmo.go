@@ -35,22 +35,14 @@ func CosmoHostOS() string {
 // hostIsDarwin reports whether the kernel under this program is Apple's.
 // The runtime asks it where a branch is about the kernel rather than the
 // port. Every other port answers from its port, in hostos_notcosmo.go.
-<<<<<<< HEAD
-=======
 // Nosplit: sigfwdgo asks before the handler is on the signal goroutine.
 //
 //go:nosplit
->>>>>>> origin/master
 func hostIsDarwin() bool { return isdarwin() }
 
 // hostIsLinux reports whether the kernel under this program is Linux.
 // Signal 33 carries the per-thread syscall there and nowhere else, so
 // the handler has to follow the kernel rather than the port.
-<<<<<<< HEAD
-func hostIsLinux() bool { return __hostos == _HOSTLINUX }
-
-// hostIsWindows reports whether the kernel under this program is NT.
-=======
 //
 //go:nosplit
 func hostIsLinux() bool { return __hostos == _HOSTLINUX }
@@ -58,7 +50,6 @@ func hostIsLinux() bool { return __hostos == _HOSTLINUX }
 // hostIsWindows reports whether the kernel under this program is NT.
 //
 //go:nosplit
->>>>>>> origin/master
 func hostIsWindows() bool { return iswindows() }
 
 // CosmoHostname returns the host's name, or "" when this host keeps it

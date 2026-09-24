@@ -130,8 +130,6 @@ func cosmoDarwinNumCPU() int32 {
 	return int32(out)
 }
 
-<<<<<<< HEAD
-=======
 // cosmoDarwinSysctlCall issues Apple's sysctl with a numeric MIB, the
 // same raw __sysctl the two readers above use. amd64 has no Syslib, so
 // there is nothing to dlsym and the syscall is the only route. Returns
@@ -147,7 +145,6 @@ func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldle
 	return 0
 }
 
->>>>>>> origin/master
 // cosmoDarwinHostname reads kern.hostname through the same raw __sysctl,
 // with the numeric MIB. That is where macOS keeps the machine's name and
 // where a native darwin build's os.Hostname reads it. Answers "" when

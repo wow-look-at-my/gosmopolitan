@@ -90,11 +90,7 @@ func testPGOIntendedInlining(t *testing.T, dir string, profFile string) {
 	// Build the test with the profile. Use a smaller threshold to test.
 	// TODO: maybe adjust the test to work with default threshold.
 	// loopinline=0 leaves the budget to the profile alone. This fork also
-<<<<<<< HEAD
 	// raises it by loop nesting at the call site, which inlines A here -
-=======
-	// raises it by loop nesting at the call site, which inlines A here —
->>>>>>> origin/master
 	// a function the profile is meant to leave out at cost 309. That
 	// interaction is loop inlining's to cover (docs/LOOP-INLINING.md);
 	// this test is about what the profile decides.
@@ -353,11 +349,7 @@ func TestPGOHash(t *testing.T) {
 	pprof := filepath.Join(dir, profFile)
 	// build with -trimpath so the source location (thus the hash)
 	// does not depend on the temporary directory path.
-<<<<<<< HEAD
-	// loopinline=0 for the reason TestPGOIntendedInlining states: the
-=======
 	// loopinline=0 for the reason testPGOIntendedInlining states: the
->>>>>>> origin/master
 	// budget under test is the profile's.
 	gcflag0 := fmt.Sprintf("-pgoprofile=%s -trimpath %s=>%s -d=pgoinlinebudget=160,pgoinlinecdfthreshold=90,pgodebug=1,loopinline=0", pprof, dir, pkg)
 

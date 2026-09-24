@@ -7,14 +7,10 @@
 package pprof
 
 import (
-<<<<<<< HEAD
-	"errors"
-=======
 	"encoding/binary"
 	"errors"
 	"internal/ape"
 	"io"
->>>>>>> origin/master
 	"os"
 	"runtime"
 	_ "unsafe" // for go:linkname
@@ -44,11 +40,6 @@ func (b *profileBuilder) readMapping() {
 	b.addMapping(start, end, 0, exe, buildID)
 }
 
-<<<<<<< HEAD
-// readMainModuleMapping reports the main module's text range. buildID
-// stays empty: no host answers it the same way, and a wrong one names
-// the wrong binary.
-=======
 // readMainModuleMapping reports where the main module is mapped. buildID
 // stays empty: no host answers it the same way, and a wrong one names
 // the wrong binary.
@@ -58,7 +49,6 @@ func (b *profileBuilder) readMapping() {
 // slide, so naming text instead reports a slide of the distance from the
 // image base to text and moves every symbol by it. The two differ here
 // by the header page.
->>>>>>> origin/master
 func readMainModuleMapping() (start, end uint64, exe, buildID string, err error) {
 	text, etext := pprof_mainModuleText()
 	if text == 0 || etext <= text {
@@ -68,9 +58,6 @@ func readMainModuleMapping() (start, end uint64, exe, buildID string, err error)
 	if err != nil {
 		return 0, 0, "", "", err
 	}
-<<<<<<< HEAD
-	return uint64(text), uint64(etext), exe, "", nil
-=======
 	start = uint64(text)
 	if base, ok := imageBase(exe, start); ok {
 		start = base
@@ -148,5 +135,4 @@ func imageBaseOf(name string, text uint64) (uint64, bool) {
 		return vaddr &^ 4095, true
 	}
 	return 0, false
->>>>>>> origin/master
 }
