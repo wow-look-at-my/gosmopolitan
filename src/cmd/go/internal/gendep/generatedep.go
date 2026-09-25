@@ -19,7 +19,6 @@ import (
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/str"
 
-	"github.com/wow-look-at-my/go-mmap"
 	"golang.org/x/mod/module"
 )
 
@@ -125,7 +124,7 @@ func hasDirective(dir string) bool {
 
 func fileHasDirective(file string) bool {
 	found := false
-	err := mmap.FileLines(file, func(line []byte) bool {
+	err := fileLines(file, func(line []byte) bool {
 		found = bytes.HasPrefix(bytes.TrimSpace(line), []byte(generatePrefix))
 		return !found
 	})

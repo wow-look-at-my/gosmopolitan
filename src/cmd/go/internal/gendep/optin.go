@@ -12,8 +12,6 @@ import (
 	"strings"
 
 	"cmd/go/internal/base"
-
-	"github.com/wow-look-at-my/go-mmap"
 )
 
 // OrgPrefix names the module path prefix of this org. A module under it is
@@ -48,7 +46,7 @@ func Allowed(modroot, mod string) bool {
 func optedIn(modroot string) bool {
 	gomod := filepath.Join(modroot, "go.mod")
 	found := false
-	err := mmap.FileLines(gomod, func(line []byte) bool {
+	err := fileLines(gomod, func(line []byte) bool {
 		found = bytes.HasPrefix(bytes.TrimSpace(line), []byte(OptIn)) && isOptIn(string(line))
 		return !found
 	})

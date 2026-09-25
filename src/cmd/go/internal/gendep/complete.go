@@ -36,7 +36,6 @@ import (
 
 	"cmd/go/internal/base"
 
-	"github.com/wow-look-at-my/go-mmap"
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 )
@@ -269,7 +268,7 @@ func Packages(modroot string) []string {
 func directives(files []string) int {
 	count := 0
 	for _, file := range files {
-		err := mmap.FileLines(file, func(line []byte) bool {
+		err := fileLines(file, func(line []byte) bool {
 			directive, ok := directiveLine(line)
 			if !ok {
 				return true
@@ -316,7 +315,7 @@ func generatorNotShipped(stage, pkg string) string {
 		}
 		file := filepath.Join(dir, ent.Name())
 		gone := ""
-		err := mmap.FileLines(file, func(line []byte) bool {
+		err := fileLines(file, func(line []byte) bool {
 			directive, ok := directiveLine(line)
 			if !ok {
 				return true
