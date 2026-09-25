@@ -5,8 +5,9 @@
 package gendep
 
 import (
-	"bufio"
-	"os"
+	"bytes"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -44,24 +45,34 @@ func Allowed(modroot, mod string) bool {
 // module that carries no go.mod carries no opt-in either.
 func optedIn(modroot string) bool {
 	gomod := filepath.Join(modroot, "go.mod")
-	open, err := os.Open(gomod)
-	if err != nil {
+	found := false
+	err := fileLines(gomod, func(line []byte) bool {
+		found = bytes.HasPrefix(bytes.TrimSpace(line), []byte(OptIn)) && isOptIn(string(line))
+		return !found
+	})
+	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	}
-	defer open.Close()
-	scan := bufio.NewScanner(open)
-	scan.Buffer(nil, 1<<20)
-	for scan.Scan() {
-		if isOptIn(scan.Text()) {
-			return true
-		}
-	}
-	// A read that stopped short hides the rest of the file, and an opt-in under
+	// A read that stops short hides the rest of the file, and an opt-in under
 	// the break then reads as a module that never asked.
-	if err := scan.Err(); err != nil {
+	if err != nil {
 		base.Fatalf("go: reading %s: %v", gomod, err)
 	}
-	return false
+	return found
+}
+
+// directiveLine answers line without its surrounding space, as a string, when
+// it is a generate directive. The mapped line is copied only then.
+func directiveLine(line []byte) (string, bool) {
+	line = bytes.TrimSpace(line)
+	if !bytes.HasPrefix(line, []byte(generatePrefix)) {
+		return "", false
+	}
+	rest := line[len(generatePrefix):]
+	if len(rest) == 0 || (rest[0] != ' ' && rest[0] != '\t') {
+		return "", false
+	}
+	return string(line), true
 }
 
 // isOptIn reports whether line is the opt-in comment. The marker is the whole
