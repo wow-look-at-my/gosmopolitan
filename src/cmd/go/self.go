@@ -32,28 +32,12 @@ func RunAs(argv []string, goCommand []string) int {
 	if code, ran := selftool.Dispatch(argv); ran {
 		return code
 	}
-<<<<<<< HEAD
-	if exe, err := os.Executable(); err == nil {
-		base.SetSelf(exe, selftool.Names())
-		if len(goCommand) > 0 {
-			base.SetGoCommand(goCommand)
-		}
-		// A carried standard library is the one this command builds against,
-		// whatever GOROOT names: an outside tree cannot put its own sources
-		// under this binary's archives. A tree of the same toolchain still
-		// answers for what no blob carries, cmd among it.
-		if embedded.Available() {
-			cfg.UseEmbeddedStd(exe)
-		}
-		publishGoCommand()
-=======
 	exe, err := os.Executable()
 	if err != nil {
 		// Silence here costs the tools and the standard library at once, and
 		// the reader meets that later as "no such tool".
 		fmt.Fprintf(os.Stderr, "go: this binary cannot name its own file, so it reaches neither the tools nor the standard library it carries: %v\n", err)
 		return 2
->>>>>>> origin/master
 	}
 	base.SetSelf(exe, selftool.Names())
 	if len(goCommand) > 0 {
