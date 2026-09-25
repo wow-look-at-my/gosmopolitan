@@ -577,7 +577,7 @@ jobs:
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-27
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-28
     if: ${{ false }}
     timeout-minutes: 45
     needs: build-linux
@@ -631,7 +631,7 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-27
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-28
     if: ${{ false }}
     timeout-minutes: 60
     needs: build-linux

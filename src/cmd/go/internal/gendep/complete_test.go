@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -103,7 +104,26 @@ func TestDirectivesCountsGenerateLines(test *testing.T) {
 	}
 }
 
-// A nested module is its own module with its own zip, so its packages are not
+// go-pgquery carries test data on a line of several megabytes. A scan that
+// stops on a long line fails every build that fetches that module.
+func TestScansReadPastALongLine(test *testing.T) {
+	long := "var data = \"" + strings.Repeat("x", 3<<20) + "\"\n"
+	dir := writeTree(test, test.TempDir(), map[string]string{
+		"data.go": "package m\n\n" + long + "//go:generate go run ./gen\n",
+		"go.mod":  "module example.com/m\n\n" + "// " + strings.Repeat("y", 3<<20) + "\n" + OptIn + "\n",
+	})
+
+	if got := directives([]string{filepath.Join(dir, "data.go")}); got != 1 {
+		test.Errorf("directives = %d, want 1: the directive sits under the long line", got)
+	}
+	if !fileHasDirective(filepath.Join(dir, "data.go")) {
+		test.Error("fileHasDirective = false, want true: the directive sits under the long line")
+	}
+	if !optedIn(dir) {
+		test.Error("optedIn = false, want true: the opt-in sits under the long line")
+	}
+}
+
 // this module's to generate. Every ordinary subdirectory is, and the order is
 // the module's own so that every machine generates in the same one.
 func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
