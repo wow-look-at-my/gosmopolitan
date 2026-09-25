@@ -357,15 +357,13 @@ const apeRegisterFn = `apereg() { [ -e /proc/sys/fs/binfmt_misc/APE ] && return 
 // anything after it execs. Unlinking first and exec'ing through /dev/fd would
 // be shorter, and XNU answers that with EACCES. A tmpfs directory also keeps
 // the bytes in RAM, so on linux no disk is touched.
-//
-// Root hands the loader to binfmt_misc on the way past, so every later run on
-// that machine skips this path. APE_NOBINFMT stops a second pass retrying.
 var apeLoaderTmpl = template.Must(template.New("apeloader").Parse(
 	`  for d in {{.Dirs}}; do
     [ -d "$d" ] && [ -w "$d" ] || continue
     u=$d/.ape-$l-{{.Tag}}.$$
     dd if="$o" bs=1 skip={{.Offset}} count={{.Length}} 2>/dev/null {{if .Gzip}}| gzip -dc {{end}}>"$u" 2>/dev/null || { rm -f "$u"; continue; }
     { [ -s "$u" ] && chmod 700 "$u" && [ -x "$u" ]; } || { rm -f "$u"; continue; }
+    "$u" >/dev/null 2>&1; [ $? -eq 127 ] || { rm -f "$u"; continue; }
     if [ -z "${APE_NOBINFMT:-}" ] && apereg "$u"; then
       rm -f "$u"; APE_NOBINFMT=1; export APE_NOBINFMT
       apepath; exec "$o" "$@"
