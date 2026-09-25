@@ -20,7 +20,6 @@
 package gendep
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -277,30 +276,26 @@ func Packages(modroot string) []string {
 func directives(files []string) int {
 	count := 0
 	for _, file := range files {
-		open, err := os.Open(file)
-		if err != nil {
-			continue
-		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
-			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
+		err := fileLines(file, func(line []byte) bool {
+			directive, ok := directiveLine(line)
+			if !ok {
+				return true
 			}
-			words := strings.Fields(line[len(generatePrefix):])
+			words := strings.Fields(directive[len(generatePrefix):])
 			if len(words) == 0 || words[0] == "-command" {
-				continue
+				return true
 			}
 			count++
+			return true
+		})
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
 		}
-		// A line past the buffer ends the read, and the directives under it go
-		// uncounted. A count short by one is a module that completes without
-		// the file that directive writes.
-		if err := scan.Err(); err != nil {
+		// A read that stops short leaves the directives under the break
+		// uncounted.
+		if err != nil {
 			base.Fatalf("go: reading %s: %v", file, err)
 		}
-		open.Close()
 	}
 	return count
 }
@@ -326,28 +321,27 @@ func generatorNotShipped(stage, pkg string) string {
 		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
 			continue
 		}
-		open, err := os.Open(filepath.Join(dir, ent.Name()))
-		if err != nil {
+		file := filepath.Join(dir, ent.Name())
+		gone := ""
+		err := fileLines(file, func(line []byte) bool {
+			directive, ok := directiveLine(line)
+			if !ok {
+				return true
+			}
+			gone = missingDroppedPath(stage, dir, directive)
+			return gone == ""
+		})
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
-			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
-			}
-			if gone := missingDroppedPath(stage, dir, line); gone != "" {
-				open.Close()
-				return gone
-			}
-		}
-		// A read that stopped short hides the rest of the directives, and a
+		// A read that stops short hides the rest of the directives, and a
 		// dropped path among them then reads as a package with none.
-		if err := scan.Err(); err != nil {
-			base.Fatalf("go: reading %s: %v", filepath.Join(dir, ent.Name()), err)
+		if err != nil {
+			base.Fatalf("go: reading %s: %v", file, err)
 		}
-		open.Close()
+		if gone != "" {
+			return gone
+		}
 	}
 	return ""
 }
