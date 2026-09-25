@@ -19,6 +19,7 @@ import (
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/str"
 
+	"github.com/wow-look-at-my/go-mmap"
 	"golang.org/x/mod/module"
 )
 
@@ -123,17 +124,14 @@ func hasDirective(dir string) bool {
 }
 
 func fileHasDirective(file string) bool {
-	open, err := os.Open(file)
-	if err != nil {
-		return false
-	}
-	defer open.Close()
-
 	found := false
-	err = eachLine(open, func(line string) bool {
-		found = strings.HasPrefix(strings.TrimSpace(line), generatePrefix)
+	err := mmap.FileLines(file, func(line []byte) bool {
+		found = bytes.HasPrefix(bytes.TrimSpace(line), []byte(generatePrefix))
 		return !found
 	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
 	// A read that stops short leaves a directive under the break unseen. That
 	// package then builds from a tree nothing generated.
 	if err != nil {

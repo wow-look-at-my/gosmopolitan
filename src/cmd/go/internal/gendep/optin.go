@@ -5,13 +5,15 @@
 package gendep
 
 import (
-	"bufio"
-	"io"
-	"os"
+	"bytes"
+	"errors"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
 	"cmd/go/internal/base"
+
+	"github.com/wow-look-at-my/go-mmap"
 )
 
 // OrgPrefix names the module path prefix of this org. A module under it is
@@ -45,16 +47,14 @@ func Allowed(modroot, mod string) bool {
 // module that carries no go.mod carries no opt-in either.
 func optedIn(modroot string) bool {
 	gomod := filepath.Join(modroot, "go.mod")
-	open, err := os.Open(gomod)
-	if err != nil {
-		return false
-	}
-	defer open.Close()
 	found := false
-	err = eachLine(open, func(line string) bool {
-		found = isOptIn(line)
+	err := mmap.FileLines(gomod, func(line []byte) bool {
+		found = bytes.HasPrefix(bytes.TrimSpace(line), []byte(OptIn)) && isOptIn(string(line))
 		return !found
 	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
 	// A read that stops short hides the rest of the file, and an opt-in under
 	// the break then reads as a module that never asked.
 	if err != nil {
@@ -63,24 +63,18 @@ func optedIn(modroot string) bool {
 	return found
 }
 
-// eachLine calls visit with each line of reader, without its line ending. It
-// stops when visit answers false. A line has no length limit: a dependency can
-// carry test data on a single line of many megabytes, and a scan of that
-// module must not fail on it.
-func eachLine(reader io.Reader, visit func(line string) bool) error {
-	buf := bufio.NewReader(reader)
-	for {
-		line, err := buf.ReadString('\n')
-		if line != "" && !visit(strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")) {
-			return nil
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+// directiveLine answers line without its surrounding space, as a string, when
+// it is a generate directive. The mapped line is copied only then.
+func directiveLine(line []byte) (string, bool) {
+	line = bytes.TrimSpace(line)
+	if !bytes.HasPrefix(line, []byte(generatePrefix)) {
+		return "", false
 	}
+	rest := line[len(generatePrefix):]
+	if len(rest) == 0 || (rest[0] != ' ' && rest[0] != '\t') {
+		return "", false
+	}
+	return string(line), true
 }
 
 // isOptIn reports whether line is the opt-in comment. The marker is the whole
