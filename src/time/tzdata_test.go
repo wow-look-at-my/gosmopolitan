@@ -17,6 +17,7 @@ var zones = []string{
 }
 
 func TestEmbeddedTZData(t *testing.T) {
+	t.Serial("disabling the platform sources changes where every LoadLocation in this process reads from")
 	undo := time.DisablePlatformSources()
 	defer undo()
 

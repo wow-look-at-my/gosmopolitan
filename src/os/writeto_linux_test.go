@@ -109,6 +109,7 @@ func newSendFileTest(t *testing.T, proto string, size int64) (net.Conn, *File, n
 }
 
 func hookSendFile(t *testing.T) *sendFileHook {
+	t.Serial("the poll hook this installs is one variable, so a concurrent caller records into its own")
 	h := new(sendFileHook)
 	orig := poll.TestHookDidSendFile
 	t.Cleanup(func() {

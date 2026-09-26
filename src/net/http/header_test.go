@@ -217,7 +217,7 @@ func BenchmarkHeaderWriteSubset(b *testing.B) {
 }
 
 func TestHeaderWriteSubsetAllocs(t *testing.T) {
-	t.Serial() // AllocsPerRun measures the whole process.
+	t.Serial("writing a header subset has an allocation budget measured across the entire process")
 	if testing.Short() {
 		t.Skip("skipping alloc test in short mode")
 	}

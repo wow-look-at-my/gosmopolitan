@@ -308,6 +308,7 @@ func newSpliceFileTest(t *testing.T, proto string, size int64) (*File, net.Conn,
 }
 
 func hookCopyFileRange(t *testing.T) (hook *copyFileHook, name string) {
+	t.Serial("the copy_file_range pointer this swaps is shared, so a neighbour records descriptors into it")
 	name = "hookCopyFileRange"
 
 	hook = new(copyFileHook)
@@ -326,6 +327,7 @@ func hookCopyFileRange(t *testing.T) (hook *copyFileHook, name string) {
 }
 
 func hookSpliceFile(t *testing.T) *spliceFileHook {
+	t.Serial("this replaces a function variable in internal/poll, and the next caller to install one wins")
 	h := new(spliceFileHook)
 	h.install()
 	t.Cleanup(h.uninstall)
