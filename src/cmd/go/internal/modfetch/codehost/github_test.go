@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"internal/testenv"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -247,16 +248,8 @@ func TestGitHubArchiveConversion(t *testing.T) {
 	for _, format := range []string{"tar.gz", "zip"} {
 		t.Run(format, func(t *testing.T) {
 			served := archiveOf(t, dir, format, hash)
-			var archive []byte
-			var when time.Time
-			var commit string
-			var err error
 			// No hash goes in, so the commit must come from the archive.
-			if format == "zip" {
-				archive, when, commit, err = githubZipToArchive(served, "")
-			} else {
-				archive, when, commit, err = githubTarToArchive(bytes.NewReader(served), "")
-			}
+			entries, when, commit, err := parseArchive(served, "."+format, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -266,8 +259,16 @@ func TestGitHubArchiveConversion(t *testing.T) {
 			if !when.Equal(commitTime) {
 				t.Errorf("commit time = %v, want %v", when, commitTime)
 			}
-			if got := zipEntries(t, archive); !reflect.DeepEqual(got, want) {
-				t.Errorf("converted archive differs from git archive:\ngot  %q\nwant %q", got, want)
+			got := make(map[string]string)
+			for _, entry := range entries {
+				body := string(entry.data)
+				if entry.mode&os.ModeSymlink != 0 {
+					body = "symlink:" + body
+				}
+				got[archivePrefix+entry.name] = body
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("parsed archive differs from git archive:\ngot  %q\nwant %q", got, want)
 			}
 		})
 	}
@@ -679,14 +680,39 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			}
 
 			for _, subdir := range []string{"", "sub"} {
-				zipRC, err := repo.ReadZip(ctx, "v1.0.0", subdir, MaxZipFile)
-				if err != nil {
-					t.Fatal(err)
-				}
-				data, err := io.ReadAll(zipRC)
-				zipRC.Close()
-				if err != nil {
-					t.Fatal(err)
+				var got map[string]string
+				if test.wantGit {
+					zipRC, err := repo.ReadZip(ctx, "v1.0.0", subdir, MaxZipFile)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(zipRC)
+					zipRC.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					got = zipEntries(t, data)
+				} else {
+					// A commit from an archive is never made into a zip.
+					if _, err := repo.ReadZip(ctx, "v1.0.0", subdir, MaxZipFile); !errors.Is(err, errors.ErrUnsupported) {
+						t.Errorf("ReadZip(%q) err = %v, want errors.ErrUnsupported", subdir, err)
+					}
+					files, err := git.ReadFiles(ctx, "v1.0.0", subdir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got = make(map[string]string)
+					for _, file := range files {
+						name := archivePrefix + file.Name
+						if subdir != "" {
+							name = archivePrefix + subdir + "/" + file.Name
+						}
+						body := string(file.Data)
+						if file.Mode&os.ModeSymlink != 0 {
+							body = "symlink:" + body
+						}
+						got[name] = body
+					}
 				}
 				wantHere := want
 				if subdir != "" {
@@ -697,12 +723,28 @@ func TestGitHubArchiveFallback(t *testing.T) {
 						}
 					}
 				}
-				if got := zipEntries(t, data); !reflect.DeepEqual(got, wantHere) {
-					t.Errorf("ReadZip(%q) differs from git archive:\ngot  %q\nwant %q", subdir, got, wantHere)
+				if !reflect.DeepEqual(got, wantHere) {
+					t.Errorf("files of %q differ from git archive:\ngot  %q\nwant %q", subdir, got, wantHere)
 				}
 			}
-			if _, err := repo.ReadZip(ctx, "v1.0.0", "nowhere", MaxZipFile); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("ReadZip(nowhere) err = %v, want fs.ErrNotExist", err)
+			if !test.wantGit {
+				if _, err := git.ReadFiles(ctx, "v1.0.0", "nowhere"); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("ReadFiles(nowhere) err = %v, want fs.ErrNotExist", err)
+				}
+				// Only the archive as served is on disk. A zip is there only when GitHub served one.
+				_, tarErr := os.Stat(git.githubArchivePath(hash, ".tar.gz"))
+				err := filepath.WalkDir(git.dir, func(name string, entry fs.DirEntry, err error) error {
+					if err != nil || !strings.HasSuffix(name, ".zip") {
+						return err
+					}
+					if tarErr == nil || name != git.githubArchivePath(hash, ".zip") {
+						t.Errorf("found a zip: %s", name)
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			fake.mu.Lock()

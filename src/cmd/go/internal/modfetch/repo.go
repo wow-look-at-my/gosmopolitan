@@ -6,6 +6,7 @@ package modfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,6 +21,7 @@ import (
 	"cmd/internal/par"
 
 	"golang.org/x/mod/module"
+	modzip "golang.org/x/mod/zip"
 )
 
 const traceRepo = false // trace all repo actions, for debugging
@@ -396,6 +398,28 @@ func (l *loggingRepo) Zip(ctx context.Context, dst io.Writer, version string) er
 	}
 	defer logCall("Repo[%s]: Zip(%s, %q)", l.r.ModulePath(), dstName, version)()
 	return l.r.Zip(ctx, dst, version)
+}
+
+func (l *loggingRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
+	defer logCall("Repo[%s]: Files(%q)", l.r.ModulePath(), version)()
+	if repo, ok := l.r.(filesRepo); ok {
+		return repo.Files(ctx, version)
+	}
+	return nil, "", errors.ErrUnsupported
+}
+
+func (l *loggingRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if repo, ok := l.r.(githubCommitRepo); ok {
+		return repo.GitHubCommit(ctx, version)
+	}
+	return "", errors.ErrUnsupported
+}
+
+// A filesRepo serves the files of a module version with no zip, and the
+// github.com commit that holds them. Files fails with errors.ErrUnsupported
+// when the repository serves only a zip.
+type filesRepo interface {
+	Files(ctx context.Context, version string) ([]modzip.File, string, error)
 }
 
 // errRepo is a Repo that returns the same error for all operations.

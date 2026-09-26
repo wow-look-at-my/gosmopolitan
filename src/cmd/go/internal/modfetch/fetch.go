@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
+	"cmd/go/internal/modfetch/codehost"
 	"cmd/go/internal/orgmod"
 	"cmd/go/internal/str"
 	"cmd/go/internal/trace"
@@ -114,6 +116,10 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 	if err != nil {
 		return "", err
 	}
+	if zipfile == "" {
+		// DownloadZip already wrote the source files to dir.
+		return DownloadDir(ctx, mod)
+	}
 
 	// A module is two zips. The BASE zip is the one above: what the proxy
 	// served, pinned by go.sum. The OVERLAY zip holds the files the module's
@@ -137,6 +143,14 @@ func unzip(ctx context.Context, mod module.Version, zipfile string, complete fun
 	ctx, span := trace.StartSpan(ctx, "unzip "+zipfile)
 	defer span.Done()
 
+	return populateDir(ctx, mod, func(dir string) error {
+		return modzip.Unzip(dir, mod, zipfile)
+	}, complete)
+}
+
+// populateDir makes mod's directory with write, then runs complete over it.
+// The caller holds the version lock.
+func populateDir(ctx context.Context, mod module.Version, write func(dir string) error, complete func(dir string) error) (dir string, err error) {
 	// Check whether the directory was populated while we were waiting on the lock.
 	dir, dirErr := DownloadDir(ctx, mod)
 	if dirErr == nil {
@@ -187,7 +201,7 @@ func unzip(ctx context.Context, mod module.Version, zipfile string, complete fun
 	if err := os.WriteFile(partialPath, nil, 0o666); err != nil {
 		return "", err
 	}
-	if err := modzip.Unzip(dir, mod, zipfile); err != nil {
+	if err := write(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "-> %s\n", err)
 		if rmErr := RemoveAll(dir); rmErr == nil {
 			os.Remove(partialPath)
@@ -219,6 +233,8 @@ var downloadZipCache par.ErrCache[module.Version, string]
 
 // DownloadZip downloads the specific module version to the
 // local zip cache and returns the name of the zip file.
+// A module read from a GitHub archive has no zip. For it, DownloadZip writes
+// the source files to $GOMODCACHE/<module>@<version> and returns "".
 func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err error) {
 	// The par.Cache here avoids duplicate work.
 	return downloadZipCache.Do(mod, func() (string, error) {
@@ -228,13 +244,18 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 		}
 		ziphashfile := zipfile + "hash"
 
-		// Return early if the zip and ziphash files exist.
-		if _, err := os.Stat(zipfile); err == nil {
-			if _, err := os.Stat(ziphashfile); err == nil {
+		// Return early if the ziphash exists with the zip, or, for a module
+		// written from a GitHub archive, with a complete directory.
+		if _, err := os.Stat(ziphashfile); err == nil {
+			have := zipfile
+			if _, err := os.Stat(zipfile); err != nil {
+				have = ""
+			}
+			if have != "" || fromArchive(ctx, mod) {
 				if !HaveSum(f, mod) {
 					f.checkMod(ctx, mod)
 				}
-				return zipfile, nil
+				return have, nil
 			}
 		}
 
@@ -259,14 +280,14 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 		}
 		defer unlock()
 
-		if err := f.downloadZip(ctx, mod, zipfile); err != nil {
-			return "", err
-		}
-		return zipfile, nil
+		return f.downloadZip(ctx, mod, zipfile)
 	})
 }
 
-func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile string) (err error) {
+// downloadZip returns zipfile. For a module read from a GitHub archive, it
+// writes the source files to $GOMODCACHE/<module>@<version> itself, makes no
+// zip, and returns "".
+func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile string) (_ string, err error) {
 	ctx, span := trace.StartSpan(ctx, "modfetch.downloadZip "+zipfile)
 	defer span.Done()
 
@@ -281,12 +302,15 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		ziphashExists = true
 	}
 	if zipExists && ziphashExists {
-		return nil
+		return zipfile, nil
+	}
+	if ziphashExists && fromArchive(ctx, mod) {
+		return "", nil
 	}
 
 	// Create parent directories.
 	if err := os.MkdirAll(filepath.Dir(zipfile), 0o777); err != nil {
-		return err
+		return "", err
 	}
 
 	// Clean up any remaining tempfiles from previous runs.
@@ -302,7 +326,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// If the zip file exists, the ziphash file must have been deleted
 	// or lost after a file system crash. Re-hash the zip without downloading.
 	if zipExists {
-		return hashZip(f, mod, zipfile, ziphashfile)
+		return zipfile, hashZip(f, mod, zipfile, ziphashfile)
 	}
 
 	// From here to the os.Rename call below is functionally almost equivalent to
@@ -310,23 +334,41 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// contents of the file (by hashing it) before we commit it. Because the file
 	// is zip-compressed, we need an actual file — or at least an io.ReaderAt — to
 	// validate it: we can't just tee the stream as we write it.
-	file, err := tempFile(ctx, filepath.Dir(zipfile), filepath.Base(zipfile), 0o666)
-	if err != nil {
-		return err
-	}
+	// The file is made only when a source serves a zip.
+	var file *os.File
 	defer func() {
-		if err != nil {
+		if err != nil && file != nil {
 			file.Close()
 			os.Remove(file.Name())
 		}
 	}()
 
+	var files []modzip.File
+	var commit string
+	fromFiles := false
+	var zipRepo Repo
 	var unrecoverableErr error
 	err = TryProxies(func(proxy string) error {
 		if unrecoverableErr != nil {
 			return unrecoverableErr
 		}
 		repo := f.Lookup(ctx, proxy, mod.Path)
+		if direct, ok := repo.(filesRepo); ok {
+			got, gotCommit, err := direct.Files(ctx, mod.Version)
+			if !errors.Is(err, errors.ErrUnsupported) {
+				files, commit, fromFiles = got, gotCommit, err == nil
+				return err
+			}
+		}
+		zipRepo = repo
+		if file == nil {
+			var err error
+			file, err = tempFile(ctx, filepath.Dir(zipfile), filepath.Base(zipfile), 0o666)
+			if err != nil {
+				unrecoverableErr = err
+				return err
+			}
+		}
 		err := repo.Zip(ctx, file, mod.Version)
 		if err != nil {
 			// Zip may have partially written to f before failing.
@@ -345,7 +387,14 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		return err
 	})
 	if err != nil {
-		return err
+		return "", err
+	}
+	if fromFiles {
+		if file != nil {
+			file.Close()
+			os.Remove(file.Name())
+		}
+		return "", f.writeFiles(ctx, mod, files, commit, ziphashfile)
 	}
 
 	// Double-check that the paths within the zip file are well-formed.
@@ -353,33 +402,192 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// TODO(bcmills): There is a similar check within the Unzip function. Can we eliminate one?
 	fi, err := file.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 	z, err := zip.NewReader(file, fi.Size())
 	if err != nil {
-		return err
+		return "", err
 	}
 	prefix := mod.Path + "@" + mod.Version + "/"
 	for _, zf := range z.File {
 		if !strings.HasPrefix(zf.Name, prefix) {
-			return fmt.Errorf("zip for %s has unexpected file %s", prefix[:len(prefix)-1], zf.Name)
+			return "", fmt.Errorf("zip for %s has unexpected file %s", prefix[:len(prefix)-1], zf.Name)
 		}
 	}
 
 	if err := file.Close(); err != nil {
-		return err
+		return "", err
 	}
 
-	// Hash the zip file and check the sum before renaming to the final location.
-	if err := hashZip(f, mod, file.Name(), ziphashfile); err != nil {
-		return err
+	// Check the sum before renaming to the final location. A zip that git made
+	// from a github.com commit is identified by the commit and is not hashed.
+	sum, err := f.commitSum(mod, githubCommit(ctx, zipRepo, mod.Version), func() (string, error) {
+		return dirhash.HashZip(file.Name(), dirhash.DefaultHash)
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := checkModSum(f, mod, sum); err != nil {
+		return "", err
+	}
+	if err := writeZiphash(ziphashfile, sum); err != nil {
+		return "", err
 	}
 	if err := os.Rename(file.Name(), zipfile); err != nil {
-		return err
+		return "", err
 	}
 
 	// TODO(bcmills): Should we make the .zip and .ziphash files read-only to discourage tampering?
 
+	return zipfile, nil
+}
+
+// writeFiles writes the source files of mod to $GOMODCACHE/<module>@<version>,
+// as Unzip writes a zip's entries, and records their hash in ziphashfile.
+// No zip is made. The caller holds the version lock.
+func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []modzip.File, commit, ziphashfile string) error {
+	valid, err := checkModuleFiles(mod, files)
+	if err != nil {
+		return err
+	}
+	hash, err := f.commitSum(mod, commit, func() (string, error) { return moduleFilesSum(mod, valid) })
+	if err != nil {
+		return err
+	}
+	if err := checkModSum(f, mod, hash); err != nil {
+		return err
+	}
+
+	_, err = populateDir(ctx, mod, func(dir string) error {
+		return writeModuleFiles(dir, valid)
+	}, func(dir string) error {
+		return f.completeDir(ctx, mod, dir)
+	})
+	if err != nil {
+		return err
+	}
+	// The marker goes before the ziphash, so a ziphash with no zip always
+	// has it.
+	marker, err := CachePath(ctx, mod, "archive")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(marker, []byte(commit+"\n"), 0o666); err != nil {
+		return err
+	}
+	return writeZiphash(ziphashfile, hash)
+}
+
+// fromArchive reports whether mod was written from a GitHub archive and has a
+// complete directory. Only such a module has no zip. Any other module that
+// lost its zip must fetch it again.
+func fromArchive(ctx context.Context, mod module.Version) bool {
+	marker, err := CachePath(ctx, mod, "archive")
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(marker); err != nil {
+		return false
+	}
+	_, dirErr := DownloadDir(ctx, mod)
+	return dirErr == nil
+}
+
+// checkModuleFiles applies the checks a module zip gets to files. It returns
+// the files that belong in the module, in order.
+func checkModuleFiles(mod module.Version, files []modzip.File) ([]modzip.File, error) {
+	if err := module.Check(mod.Path, mod.Version); err != nil {
+		return nil, err
+	}
+	checked, err := modzip.CheckFiles(files)
+	if err != nil {
+		return nil, err
+	}
+	var valid []modzip.File
+	for _, file := range files {
+		if slices.Contains(checked.Valid, file.Path()) {
+			valid = append(valid, file)
+		}
+	}
+	return valid, nil
+}
+
+// moduleFilesSum answers the h1 sum of files, the same sum HashZip gives for a
+// module zip of them. It hashes the files where they are. It makes no zip.
+func moduleFilesSum(mod module.Version, files []modzip.File) (string, error) {
+	prefix := mod.Path + "@" + mod.Version + "/"
+	byName := make(map[string]modzip.File, len(files))
+	names := make([]string, 0, len(files))
+	for _, file := range files {
+		byName[prefix+file.Path()] = file
+		names = append(names, prefix+file.Path())
+	}
+	return dirhash.DefaultHash(names, func(name string) (io.ReadCloser, error) {
+		return byName[name].Open()
+	})
+}
+
+// A githubCommitRepo serves the versions of a github.com repository. The
+// commit of a version identifies its files.
+type githubCommitRepo interface {
+	GitHubCommit(ctx context.Context, version string) (string, error)
+}
+
+// githubCommit answers the commit repo holds version at, or "" when repo is not
+// a github.com repository.
+func githubCommit(ctx context.Context, repo Repo, version string) string {
+	direct, ok := repo.(githubCommitRepo)
+	if !ok {
+		return ""
+	}
+	commit, err := direct.GitHubCommit(ctx, version)
+	if err != nil || len(commit) != 40 || !codehost.AllHex(commit) {
+		return ""
+	}
+	return commit
+}
+
+// commitSum answers the sum to record for mod when commit identifies it: the
+// git sum, with nothing hashed. A go.sum that records an h1 sum for mod gets
+// the h1 sum from hash, so it can be checked.
+func (f *Fetcher) commitSum(mod module.Version, commit string, hash func() (string, error)) (string, error) {
+	if commit == "" || f.recordsH1(mod) {
+		return hash()
+	}
+	return gitSumPrefix + commit, nil
+}
+
+// writeModuleFiles writes each file under dir, read-only, as Unzip does.
+func writeModuleFiles(dir string, files []modzip.File) error {
+	if entries, _ := os.ReadDir(dir); len(entries) > 0 {
+		return fmt.Errorf("target directory %v exists and is not empty", dir)
+	}
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	for _, file := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(file.Path()))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+			return err
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
+		if err != nil {
+			src.Close()
+			return err
+		}
+		_, err = io.Copy(out, src)
+		src.Close()
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -396,6 +604,11 @@ func hashZip(f *Fetcher, mod module.Version, zipfile, ziphashfile string) (err e
 	if err := checkModSum(f, mod, hash); err != nil {
 		return err
 	}
+	return writeZiphash(ziphashfile, hash)
+}
+
+// writeZiphash records hash in ziphashfile, overwriting that file if it exists.
+func writeZiphash(ziphashfile, hash string) (err error) {
 	hf, err := lockedfile.Create(ziphashfile)
 	if err != nil {
 		return err
@@ -668,7 +881,7 @@ func HaveSum(f *Fetcher, mod module.Version) bool {
 	}
 	for _, goSums := range f.sumState.w {
 		for _, h := range goSums[mod] {
-			if !strings.HasPrefix(h, "h1:") {
+			if !knownSum(h) {
 				continue
 			}
 			if !f.sumState.status[modSum{mod, h}].dirty {
@@ -677,7 +890,7 @@ func HaveSum(f *Fetcher, mod module.Version) bool {
 		}
 	}
 	for _, h := range f.sumState.m[mod] {
-		if !strings.HasPrefix(h, "h1:") {
+		if !knownSum(h) {
 			continue
 		}
 		if !f.sumState.status[modSum{mod, h}].dirty {
@@ -702,35 +915,41 @@ func (f *Fetcher) RecordedSum(mod module.Version) (sum string, ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	inited, err := f.initGoSum()
-	foundSum := ""
 	if err != nil || !inited {
 		return "", false
 	}
+	// An h1 sum wins over a git sum, because every go command can check it.
+	foundH1, foundGit := "", ""
+	consider := func(h string) bool {
+		if !knownSum(h) || f.sumState.status[modSum{mod, h}].dirty {
+			return true
+		}
+		found := &foundH1
+		if IsGitSum(h) {
+			found = &foundGit
+		}
+		if *found != "" && *found != h { // conflicting sums exist
+			return false
+		}
+		*found = h
+		return true
+	}
 	for _, goSums := range f.sumState.w {
 		for _, h := range goSums[mod] {
-			if !strings.HasPrefix(h, "h1:") {
-				continue
-			}
-			if !f.sumState.status[modSum{mod, h}].dirty {
-				if foundSum != "" && foundSum != h { // conflicting sums exist
-					return "", false
-				}
-				foundSum = h
+			if !consider(h) {
+				return "", false
 			}
 		}
 	}
 	for _, h := range f.sumState.m[mod] {
-		if !strings.HasPrefix(h, "h1:") {
-			continue
-		}
-		if !f.sumState.status[modSum{mod, h}].dirty {
-			if foundSum != "" && foundSum != h { // conflicting sums exist
-				return "", false
-			}
-			foundSum = h
+		if !consider(h) {
+			return "", false
 		}
 	}
-	return foundSum, true
+	if foundH1 != "" {
+		return foundH1, true
+	}
+	return foundGit, true
 }
 
 // checkMod checks the given module's checksum and Go version.
@@ -758,7 +977,7 @@ func (f *Fetcher) checkMod(ctx context.Context, mod module.Version) {
 		return
 	}
 	h := string(data)
-	if !strings.HasPrefix(h, "h1:") {
+	if !knownSum(h) {
 		base.Fatalf("verifying %v", module.VersionError(mod, fmt.Errorf("unexpected ziphash: %q", h)))
 	}
 
@@ -775,14 +994,16 @@ func goModSum(data []byte) (string, error) {
 }
 
 // checkGoMod checks the given module's go.mod checksum;
-// data is the go.mod content.
-func checkGoMod(f *Fetcher, path, version string, data []byte) error {
-	h, err := goModSum(data)
+// data is the go.mod content. commit, when set, is the github.com commit the
+// go.mod came from, which identifies it without a hash.
+func checkGoMod(f *Fetcher, path, version, commit string, data []byte) error {
+	mod := module.Version{Path: path, Version: version + "/go.mod"}
+	h, err := f.commitSum(mod, commit, func() (string, error) { return goModSum(data) })
 	if err != nil {
 		return &module.ModuleError{Path: path, Version: version, Err: fmt.Errorf("verifying go.mod: %v", err)}
 	}
 
-	return checkModSum(f, module.Version{Path: path, Version: version + "/go.mod"}, h)
+	return checkModSum(f, mod, h)
 }
 
 // checkModSum checks that the recorded checksum for mod is h.
@@ -821,8 +1042,8 @@ func checkModSum(f *Fetcher, mod module.Version, h string) error {
 	}
 
 	// Not listed, so we want to add them.
-	// Consult checksum database if appropriate.
-	if useSumDB(mod) {
+	// Consult checksum database if appropriate. It knows no git sums.
+	if useSumDB(mod) && !IsGitSum(h) {
 		// Calls base.Fatalf if mismatch detected.
 		if err := checkSumDB(mod, h); err != nil {
 			return err
@@ -853,7 +1074,7 @@ func haveModSumLocked(f *Fetcher, mod module.Version, h string) bool {
 		if h == vh {
 			return true
 		}
-		if strings.HasPrefix(vh, "h1:") {
+		if knownSum(vh) && sameSumKind(h, vh) {
 			base.Fatalf("verifying %s@%s: checksum mismatch\n\tdownloaded: %v\n\t%s:     %v"+goSumMismatch, mod.Path, mod.Version, h, sumFileName, vh)
 		}
 	}
@@ -865,7 +1086,7 @@ func haveModSumLocked(f *Fetcher, mod module.Version, h string) bool {
 		for _, vh := range goSums[mod] {
 			if h == vh {
 				foundMatch = true
-			} else if strings.HasPrefix(vh, "h1:") {
+			} else if knownSum(vh) && sameSumKind(h, vh) {
 				base.Fatalf("verifying %s@%s: checksum mismatch\n\tdownloaded: %v\n\t%s:     %v"+goSumMismatch, mod.Path, mod.Version, h, goSumFile, vh)
 			}
 		}
@@ -879,7 +1100,7 @@ func addModSumLocked(f *Fetcher, mod module.Version, h string) {
 	if haveModSumLocked(f, mod, h) {
 		return
 	}
-	if len(f.sumState.m[mod]) > 0 {
+	if slices.ContainsFunc(f.sumState.m[mod], func(vh string) bool { return !knownSum(vh) }) {
 		fmt.Fprintf(os.Stderr, "warning: verifying %s@%s: unknown hashes in go.sum: %v; adding %v"+hashVersionMismatch, mod.Path, mod.Version, strings.Join(f.sumState.m[mod], ", "), h)
 	}
 	f.sumState.m[mod] = append(f.sumState.m[mod], h)
@@ -945,12 +1166,64 @@ func isValidSum(data []byte) bool {
 	if bytes.IndexByte(data, '\000') >= 0 {
 		return false
 	}
+	if IsGitSum(string(data)) {
+		return true
+	}
 
 	if len(data) != len("h1:")+base64.StdEncoding.EncodedLen(sha256.Size) {
 		return false
 	}
 
 	return true
+}
+
+// gitSumPrefix starts a git sum: the commit a GitHub archive holds, as
+// "git:<40 hex digits>". GitHub is trusted to serve that commit, so the commit
+// alone identifies the files and nothing hashes them.
+const gitSumPrefix = "git:"
+
+// IsGitSum reports whether h is a git sum.
+func IsGitSum(h string) bool {
+	hash, ok := strings.CutPrefix(h, gitSumPrefix)
+	return ok && len(hash) == 40 && codehost.AllHex(hash)
+}
+
+// knownSum reports whether h is a checksum this go command can check: an h1
+// sum, as every go command writes, or a git sum.
+func knownSum(h string) bool {
+	return strings.HasPrefix(h, "h1:") || IsGitSum(h)
+}
+
+// sameSumKind reports whether a and b are sums of one kind, so that a
+// difference between them is a mismatch. An h1 sum and a git sum of one module
+// never contradict each other.
+func sameSumKind(a, b string) bool {
+	return IsGitSum(a) == IsGitSum(b)
+}
+
+// recordsH1 reports whether a go.sum records an h1 sum for mod. A module read
+// from a GitHub archive is then checked against it, so a go.sum that another go
+// command wrote keeps working.
+func (f *Fetcher) recordsH1(mod module.Version) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inited, err := f.initGoSum()
+	if err != nil || !inited {
+		return false
+	}
+	for _, h := range f.sumState.m[mod] {
+		if strings.HasPrefix(h, "h1:") {
+			return true
+		}
+	}
+	for _, goSums := range f.sumState.w {
+		for _, h := range goSums[mod] {
+			if strings.HasPrefix(h, "h1:") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var ErrGoSumDirty = errors.New("updates to go.sum needed, disabled by -mod=readonly")

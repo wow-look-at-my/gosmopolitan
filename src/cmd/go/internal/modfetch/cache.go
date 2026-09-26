@@ -32,6 +32,7 @@ import (
 
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
+	modzip "golang.org/x/mod/zip"
 )
 
 func cacheDir(ctx context.Context, path string) (string, error) {
@@ -320,8 +321,15 @@ func (r *cachingRepo) GoMod(ctx context.Context, version string) ([]byte, error)
 
 		text, err = r.repo(ctx).GoMod(ctx, version)
 		if err == nil {
-			if err := checkGoMod(r.fetcher, r.path, version, text); err != nil {
+			commit := githubCommit(ctx, r.repo(ctx), version)
+			if err := checkGoMod(r.fetcher, r.path, version, commit, text); err != nil {
 				return text, err
+			}
+			// The commit goes first: a .mod without it is only hashed again.
+			if commit != "" {
+				if err := writeDiskGoModCommit(ctx, r.path, version, commit); err != nil && !isErrReadOnlyFS(err) {
+					fmt.Fprintf(os.Stderr, "go: writing go.mod cache: %v\n", err)
+				}
 			}
 			if err := writeDiskGoMod(ctx, file, text); err != nil && !isErrReadOnlyFS(err) {
 				fmt.Fprintf(os.Stderr, "go: writing go.mod cache: %v\n", err)
@@ -340,6 +348,26 @@ func (r *cachingRepo) Zip(ctx context.Context, dst io.Writer, version string) er
 		return ErrToolchain
 	}
 	return r.repo(ctx).Zip(ctx, dst, version)
+}
+
+func (r *cachingRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
+	if gover.IsToolchain(r.path) {
+		return nil, "", ErrToolchain
+	}
+	if repo, ok := r.repo(ctx).(filesRepo); ok {
+		return repo.Files(ctx, version)
+	}
+	return nil, "", errors.ErrUnsupported
+}
+
+func (r *cachingRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if gover.IsToolchain(r.path) {
+		return "", ErrToolchain
+	}
+	if repo, ok := r.repo(ctx).(githubCommitRepo); ok {
+		return repo.GitHubCommit(ctx, version)
+	}
+	return "", errors.ErrUnsupported
 }
 
 // InfoFile is like Lookup(ctx, path).Stat(version) but also returns the name of the file
@@ -581,12 +609,35 @@ func (f *Fetcher) readDiskGoMod(ctx context.Context, path, rev string) (file str
 	}
 
 	if err == nil {
-		if err := checkGoMod(f, path, rev, data); err != nil {
+		if err := checkGoMod(f, path, rev, readDiskGoModCommit(ctx, path, rev), data); err != nil {
 			return "", nil, err
 		}
 	}
 
 	return file, data, err
+}
+
+// writeDiskGoModCommit records the github.com commit a cached go.mod came from,
+// next to it as <version>.commit.
+func writeDiskGoModCommit(ctx context.Context, path, rev, commit string) error {
+	file, err := CachePath(ctx, module.Version{Path: path, Version: rev}, "commit")
+	if err != nil {
+		return err
+	}
+	return writeDiskCache(ctx, file, []byte(commit+"\n"))
+}
+
+// readDiskGoModCommit answers the commit writeDiskGoModCommit recorded, or "".
+func readDiskGoModCommit(ctx context.Context, path, rev string) string {
+	_, data, err := readDiskCache(ctx, path, rev, "commit")
+	if err != nil {
+		return ""
+	}
+	commit := strings.TrimSpace(string(data))
+	if len(commit) != 40 || !codehost.AllHex(commit) {
+		return ""
+	}
+	return commit
 }
 
 // readDiskCache is the generic "read from a cache file" implementation.

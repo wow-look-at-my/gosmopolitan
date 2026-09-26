@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-// githubTarToArchive converts a git archive tar.gz. Its pax global header
+// parseTarGzArchive reads a git archive tar.gz. Its pax global header
 // names the commit, and every entry carries the commit time.
-func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, string, error) {
+func parseTarGzArchive(src io.Reader, hash string) ([]archiveEntry, time.Time, string, error) {
 	unzipped, err := gzip.NewReader(src)
 	if err != nil {
 		return nil, time.Time{}, "", err
