@@ -13,25 +13,27 @@ import (
 	"time"
 )
 
-// githubTarToArchive converts a git archive tar.gz. Every entry carries the
-// commit time.
-func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
+// githubTarToArchive converts a git archive tar.gz. Its pax global header
+// names the commit, and every entry carries the commit time.
+func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, string, error) {
 	unzipped, err := gzip.NewReader(src)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, "", err
 	}
 	defer unzipped.Close()
 	reader := tar.NewReader(unzipped)
-	builder := newArchiveBuilder(hash)
+	builder := newArchiveBuilder()
+	embedded := ""
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return nil, time.Time{}, err
+			return nil, time.Time{}, "", err
 		}
 		if header.Typeflag == tar.TypeXGlobalHeader {
+			embedded = header.PAXRecords["comment"]
 			continue
 		}
 		var content io.Reader = reader
@@ -40,8 +42,8 @@ func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
 			content = strings.NewReader(header.Linkname)
 		}
 		if err := builder.add(header.Name, mode, header.ModTime, content); err != nil {
-			return nil, time.Time{}, err
+			return nil, time.Time{}, "", err
 		}
 	}
-	return builder.finish()
+	return builder.finish(embedded, hash)
 }

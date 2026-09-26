@@ -83,14 +83,18 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	}
 	defer unlock()
 
+	github, onGitHub := githubRemote(r.remote)
 	if _, err := os.Stat(filepath.Join(r.dir, "objects")); err != nil {
 		repoSha256Hash := false
-		if refs, lrErr := r.loadRefs(ctx); lrErr == nil {
-			// Check any ref's hash, it doesn't matter which; they won't be mixed
-			// between sha1 and sha256 for the moment.
-			for _, refHash := range refs {
-				repoSha256Hash = len(refHash) == (256 / 4)
-				break
+		// GitHub hosts no SHA-256 repositories, so its remotes skip ls-remote.
+		if !onGitHub {
+			if refs, lrErr := r.loadRefs(ctx); lrErr == nil {
+				// Check any ref's hash, it doesn't matter which; they won't be mixed
+				// between sha1 and sha256 for the moment.
+				for _, refHash := range refs {
+					repoSha256Hash = len(refHash) == (256 / 4)
+					break
+				}
 			}
 		}
 		gitSupportsSHA256, gitVersErr := gitSupportsSHA256()
@@ -140,7 +144,7 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	r.sha256Hashes = r.checkConfigSHA256(ctx)
 	r.remoteURL = r.remote
 	r.remote = "origin"
-	if github, ok := parseGitHubRemote(r.remoteURL); ok {
+	if onGitHub {
 		r.github = &github
 	}
 	return r, nil
@@ -452,7 +456,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 			return info, nil
 		}
 		if when, err := r.githubArchiveTime(rev); err == nil {
-			return r.githubRevInfo(ctx, rev, rev, when), nil
+			return r.githubRevInfo(ctx, rev, rev, when, nil), nil
 		}
 		didStatLocal = true
 	}
@@ -462,6 +466,22 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	r.localTagsOnce.Do(func() { r.loadLocalTags(ctx) })
 	if _, ok := r.localTags.Load(rev); ok {
 		return r.statLocal(ctx, rev, "refs/tags/"+rev)
+	}
+
+	// A version tag on github.com comes from its archive, which names the
+	// commit. Only a missing archive needs ls-remote and the git path.
+	triedTagArchive := false
+	if r.github != nil && isTagName(rev) {
+		unlock, err := r.mu.Lock()
+		if err != nil {
+			return nil, err
+		}
+		info, err := r.statGitHubTag(ctx, rev)
+		unlock()
+		if err == nil {
+			return info, nil
+		}
+		triedTagArchive = true
 	}
 
 	// Maybe rev is the name of a tag or branch on the remote server.
@@ -564,7 +584,9 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	// and we don't want those commits masquerading as being real
 	// pseudo-versions in the main repo.
 	if r.fetchLevel <= fetchSome && ref != "" && hash != "" {
-		if info, err := r.statGitHub(ctx, rev, ref, hash); err == nil {
+		if triedTagArchive {
+			// The archives of this tag already failed.
+		} else if info, err := r.statGitHub(ctx, rev, ref, hash); err == nil {
 			if ref == "HEAD" {
 				// The git fetch below records no Ref for HEAD. Match it.
 				ref = hash

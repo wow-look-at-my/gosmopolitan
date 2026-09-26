@@ -6,6 +6,7 @@ package codehost
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
 	"internal/testenv"
 	"io"
@@ -245,14 +246,19 @@ func TestGitHubArchiveConversion(t *testing.T) {
 			served := archiveOf(t, dir, format, hash)
 			var archive []byte
 			var when time.Time
+			var commit string
 			var err error
+			// No hash goes in, so the commit must come from the archive.
 			if format == "zip" {
-				archive, when, err = githubZipToArchive(served, hash)
+				archive, when, commit, err = githubZipToArchive(served, "")
 			} else {
-				archive, when, err = githubTarToArchive(bytes.NewReader(served), hash)
+				archive, when, commit, err = githubTarToArchive(bytes.NewReader(served), "")
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if commit != hash {
+				t.Errorf("commit = %q, want %s", commit, hash)
 			}
 			if !when.Equal(commitTime) {
 				t.Errorf("commit time = %v, want %v", when, commitTime)
@@ -358,6 +364,26 @@ func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via,
 	w.Write(served)
 }
 
+// fakeGitHubRepo opens the local bare repository at dir as if it were
+// github.com/owner/repo.
+func fakeGitHubRepo(t *testing.T, ctx context.Context, dir string) *gitRepo {
+	t.Helper()
+	remote := "file://" + filepath.ToSlash(dir)
+	previous := githubRemote
+	githubRemote = func(name string) (githubRepo, bool) {
+		if name == remote {
+			return githubRepo{"owner", "repo"}, true
+		}
+		return previous(name)
+	}
+	t.Cleanup(func() { githubRemote = previous })
+	repo, err := newGitRepo(ctx, remote, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repo.(*gitRepo)
+}
+
 func TestGitHubArchiveFallback(t *testing.T) {
 	testenv.MustHaveExecPath(t, "git")
 	source, hash := makeSourceRepo(t, sourceFilesWithLink())
@@ -446,12 +472,8 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			remote := filepath.Join(t.TempDir(), "remote.git")
 			gitIn(t, source, "clone", "-q", "--bare", source, remote)
 			ctx := testContext(t)
-			repo, err := newGitRepo(ctx, "file://"+filepath.ToSlash(remote), false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			git := repo.(*gitRepo)
-			git.github = &githubRepo{"owner", "repo"}
+			git := fakeGitHubRepo(t, ctx, remote)
+			repo := Repo(git)
 
 			info, err := repo.Stat(ctx, "v1.0.0")
 			if err != nil {
@@ -464,6 +486,9 @@ func TestGitHubArchiveFallback(t *testing.T) {
 				t.Errorf("Stat origin = %+v, want refs/tags/v1.0.0 at %s", info.Origin, hash)
 			}
 
+			if ranLsRemote := git.refs != nil; ranLsRemote != test.wantGit {
+				t.Errorf("ls-remote ran: %v, want %v", ranLsRemote, test.wantGit)
+			}
 			_, statErr := git.runGit(ctx, "git", "cat-file", "-e", hash+"^{commit}")
 			if hasCommit := statErr == nil; hasCommit != test.wantGit {
 				t.Errorf("git fetched the commit: %v, want %v", hasCommit, test.wantGit)
@@ -515,11 +540,7 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			}
 
 			// A new process finds the kept archive and fetches nothing.
-			again, err := newGitRepo(ctx, "file://"+filepath.ToSlash(remote), false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			again.(*gitRepo).github = &githubRepo{"owner", "repo"}
+			again := fakeGitHubRepo(t, ctx, remote)
 			if _, err := again.Stat(ctx, hash); err != nil {
 				t.Fatal(err)
 			}
@@ -555,11 +576,7 @@ func TestGitHubRecentTagWithoutHistory(t *testing.T) {
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	gitIn(t, source, "clone", "-q", "--bare", source, remote)
 	ctx := testContext(t)
-	repo, err := newGitRepo(ctx, "file://"+filepath.ToSlash(remote), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo.(*gitRepo).github = &githubRepo{"owner", "repo"}
+	repo := fakeGitHubRepo(t, ctx, remote)
 
 	info, err := repo.Stat(ctx, "master")
 	if err != nil {
