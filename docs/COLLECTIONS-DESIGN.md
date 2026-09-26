@@ -104,7 +104,7 @@ An `init` that holds only contributions becomes empty. The compiler already remo
 | 1. Blank import | Still the way to choose. A read collection with no contributor fails the build. See "What go-toolchain does". |
 | 2. Order | Stable, documented as meaningless. Priority is an element field. |
 | 3. Duplicates | Not detected. Keyed collections are deferred. See "Deferred". |
-| 4. Mutable global state | Immutable data, no lock. For test isolation, an API takes the slice as a parameter that defaults to the collection (docs/OPTIONAL-PARAMS.md): `func Decode(r io.Reader, loaders []Loader = Loaders)`. |
+| 4. Mutable global state | A contribution compiles only at the top level of `init()`. No other code can add to the collection, so no reader needs a lock and every read after `init` sees the same list. For test isolation, an API takes the slice as a parameter that defaults to the collection (docs/OPTIONAL-PARAMS.md): `func Decode(r io.Reader, loaders []Loader = Loaders)`. |
 | 5. Init ordering | Complete before any `init` runs. |
 | 6. Dead code | If nothing reads the collection, the linker drops it and every contribution. |
 | 7. Visibility | Contributions are in export data. go-toolchain prints them. |
