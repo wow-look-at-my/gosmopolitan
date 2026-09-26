@@ -152,6 +152,14 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	if err != nil {
 		return nil, false, err
 	}
+	keep, why, err := keepCompletion(modroot, stage, mod, added, buildPackages)
+	if err != nil {
+		return nil, false, err
+	}
+	if !keep {
+		fmt.Fprintf(os.Stderr, "go: %s: what its generators added stops it compiling, so it stays as published: %s\n", mod, why)
+		return nil, partial, nil
+	}
 	for _, rel := range added {
 		from := filepath.Join(stage, filepath.FromSlash(rel))
 		if err := copyFile(from, filepath.Join(modroot, filepath.FromSlash(rel))); err != nil {

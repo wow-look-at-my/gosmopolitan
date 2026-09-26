@@ -258,14 +258,60 @@ func Entries(prefix string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return entryNames(blob, prefix), nil
+}
+
+// entryNames lists the names of from that carry the prefix, sorted.
+func entryNames(from *blob, prefix string) []string {
 	var names []string
-	for name := range blob.entries {
+	for name := range from.entries {
 		if strings.HasPrefix(name, prefix) {
 			names = append(names, name)
 		}
 	}
 	sortStrings(names)
-	return names, nil
+	return names
+}
+
+// File is the blob a named file carries, for a tool that reads a binary
+// other than the one it runs as.
+type File struct {
+	blob *blob
+}
+
+// OpenFile answers the blob the file at path carries.
+func OpenFile(path string) (*File, error) {
+	found, err := openBlob(path)
+	if err != nil {
+		return nil, err
+	}
+	return &File{blob: found}, nil
+}
+
+// Entries lists every entry name of the file with the given prefix, in
+// index order of name.
+func (file *File) Entries(prefix string) []string {
+	return entryNames(file.blob, prefix)
+}
+
+// ReadFile answers the whole entry of the file named by name, with or
+// without the prefix.
+func (file *File) ReadFile(name string) ([]byte, error) {
+	name = Name(name)
+	entry, found := file.blob.entries[name]
+	if !found {
+		return nil, fmt.Errorf("%s: no embedded entry %q", file.blob.exe, name)
+	}
+	source, err := os.Open(file.blob.exe)
+	if err != nil {
+		return nil, err
+	}
+	defer source.Close()
+	data := make([]byte, entry.Size)
+	if _, err := source.ReadAt(data, file.blob.trailer.Offset+entry.Offset); err != nil {
+		return nil, fmt.Errorf("reading embedded %s: %w", name, err)
+	}
+	return data, nil
 }
 
 // ReadManifest answers the manifest of a target.
@@ -321,23 +367,9 @@ func (writer *Writer) Add(name string, content []byte) {
 
 // WriteTo writes the blob: magic, index length, index, then the entries.
 func (writer *Writer) WriteTo(out io.Writer) (int64, error) {
-	index, err := json.Marshal(writer.entries)
+	index, err := writer.index()
 	if err != nil {
 		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
-	}
-	head := int64(16 + len(index))
-	for idx := range writer.entries {
-		writer.entries[idx].Offset += head
-	}
-	index, err = json.Marshal(writer.entries)
-	if err != nil {
-		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
 	}
 	var buf bytes.Buffer
 	buf.WriteString(blobMagic)
@@ -348,6 +380,31 @@ func (writer *Writer) WriteTo(out io.Writer) (int64, error) {
 	buf.Write(writer.data.Bytes())
 	written, err := out.Write(buf.Bytes())
 	return int64(written), err
+}
+
+// index encodes the entry index, each offset counted from the blob's first
+// byte. An offset is the index's own length plus where the entry sits in
+// the data after it, and writing a larger offset can lengthen the index, so
+// the length is raised until it holds the offsets it produces.
+func (writer *Writer) index() ([]byte, error) {
+	placed := make([]Entry, len(writer.entries))
+	for head := int64(16); ; {
+		copy(placed, writer.entries)
+		for idx := range placed {
+			placed[idx].Offset += head
+		}
+		index, err := json.Marshal(placed)
+		if err != nil {
+			return nil, err
+		}
+		for len(index)%8 != 0 {
+			index = append(index, ' ')
+		}
+		if int64(16+len(index)) == head {
+			return index, nil
+		}
+		head = int64(16 + len(index))
+	}
 }
 
 // sortStrings sorts in place without pulling sort into every tool that

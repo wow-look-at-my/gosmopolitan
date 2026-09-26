@@ -515,7 +515,7 @@ func (g *Generator) exec(words []string) {
 		}
 	}
 	cmd := exec.Command(path, args...)
-	cmd.Args[0] = words[0] // Overwrite with the original in case it was rewritten above.
+	cmd.Args[0] = words[0]
 
 	// Standard in and out of generator should be the usual.
 	cmd.Stdout = os.Stdout

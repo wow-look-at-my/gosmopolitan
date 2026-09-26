@@ -66,6 +66,52 @@ func TestBlobRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOpenFileEntries reads the headers of a blob out of a named file, the
+// way a tool reads them from a go command other than itself.
+func TestOpenFileEntries(t *testing.T) {
+	var writer Writer
+	writer.Add("std/cosmo_amd64/fmt.a", []byte("archive of fmt"))
+	writer.Add(IncludeDir+"/textflag.h", []byte("#define NOSPLIT 4\n"))
+	writer.Add(IncludeDir+"/funcdata.h", []byte("#define FUNCDATA_ArgsPointerMaps 0\n"))
+	var blob bytes.Buffer
+	if _, err := writer.WriteTo(&blob); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "gocmd")
+	lead := []byte("the go command's own bytes")
+	file := append(append([]byte(nil), lead...), blob.Bytes()...)
+	file = append(file, EncodeTrailer(int64(len(lead)), int64(blob.Len()), sha256.Sum256(blob.Bytes()))...)
+	if err := os.WriteFile(path, file, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	opened, err := OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := opened.Entries(IncludeDir + "/")
+	want := []string{IncludeDir + "/funcdata.h", IncludeDir + "/textflag.h"}
+	if len(names) != len(want) {
+		t.Fatalf("the include prefix lists %v, not %v", names, want)
+	}
+	for idx := range want {
+		if names[idx] != want[idx] {
+			t.Fatalf("the include prefix lists %v, not %v", names, want)
+		}
+	}
+	data, err := opened.ReadFile(IncludeDir + "/textflag.h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "#define NOSPLIT 4\n" {
+		t.Fatalf("read %q for the header", data)
+	}
+	if _, err := opened.ReadFile(IncludeDir + "/absent.h"); err == nil {
+		t.Fatal("an entry the blob does not carry read without error")
+	}
+}
+
 // TestNoTrailer reports a plain file as carrying nothing.
 func TestNoTrailer(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plain")

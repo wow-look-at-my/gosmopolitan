@@ -1,6 +1,6 @@
 # Toolchain Distribution
 
-Every push whose build+test jobs are green publishes installable toolchain tarballs to buildhost (pazer.build) as project `gosmopolitan`, for **linux/amd64, darwin/arm64 and windows/amd64**.
+Every push whose build+test jobs are green publishes installable toolchain tarballs to buildhost (pazer.build) as project `gosmopolitan`, for **linux/amd64, darwin/arm64. And windows/amd64**.
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
@@ -43,12 +43,12 @@ Every release reports the committed VERSION, `go1.27.0-cosmo`. The tarball is na
 
 Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content, not on the version it claims. A toolchain built from another source gets another tool ID, whatever its VERSION says. One built from the same source is the same toolchain.
 
-Local source builds keep the static version and need no stamp: since 2026-07-20 tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
+Local source builds keep the static version and need no stamp: tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
 
 ## Consumer gotchas
 
 - **`GOBIN` and `GOTOOLCHAIN` are removed.** Neither is a go command variable here. `go env` reports neither. `go env -w` refuses both with `unknown go command variable`. The go command drops both from its own environment and from every process it starts. So a value in the environment reaches nothing. A `go/env` file written by another toolchain reaches nothing either. `go install` therefore always lands in `$GOPATH/bin`, or in `$GOROOT/bin` for a command in GOROOT. This fork always runs itself. A consumer go.mod that names a newer `go` or `toolchain` fails with `go.mod requires go >= X`. Upstream downloads an official toolchain there and loses cosmo. Depth: `RemovedEnv` in `src/cmd/go/internal/cfg/cfg.go`.
-- **The suffix comes after a dash. That makes the fork Go 1.27.0.** `gover.Parse` rejects a patch release with a trailing word. So the older `go1.27.0cosmo` spelling was no valid version anywhere. `go/version.IsValid(runtime.Version())` was false. cmd/go fell back to the development version `1.27` and refused a go.mod that requires `go 1.27.0` or newer. `go1.27.0-cosmo` is the custom-toolchain syntax every parser already strips. The fork now satisfies those directives and identifies as the release 1.27.0. The release stamp `go1.27.0-cosmo.r<N>` parses the same way. This is what lets gopls build against the fork: its own go.mod requires `go 1.27.0`. Depth: docs/GOPLS.md.
+- **The suffix comes after a dash. That makes the fork Go 1.27.0.** `gover.Parse` rejects a patch release with a trailing word. So the older `go1.27.0cosmo` spelling was no valid version anywhere. `go/version.IsValid(runtime.Version())` was false. cmd/go fell back to the development. Version `1.27` and refused a go.mod that requires `go 1.27.0` or newer. `go1.27.0-cosmo` is the custom-toolchain syntax every parser already strips. The fork now satisfies those directives and identifies as the release 1.27.0. The release stamp `go1.27.0-cosmo.r<N>` parses the same way. This is what lets gopls build against the fork: its own go.mod requires `go 1.27.0`. Depth: docs/GOPLS.md.
 - **The fork self-identifies as the dev version `1.27`**, because `go1.27.0cosmo` does not parse as a release version. A directive up to `go 1.27` is therefore satisfied. `go 1.27.0` is not.
 - **That unparseable version has a price, and it reaches shipped binaries.** `gover.Parse` rejects a patch release with a trailing word, so `go/version.IsValid(runtime.Version())` is FALSE. Spelling VERSION `go1.27.0-cosmo` can fix it, because `go/version` cuts at the first `-`. It can also make the fork parse as the RELEASE 1.27.0 and start satisfying the `go 1.27.0`+ directives the paragraph above says it refuses, which. Both spellings are defensible. Pick one deliberately rather than as a side effect.
 - **Pin GOOS on host-side builds.** The fork defaults `GOOS=cosmo` (see Fork Gotchas). Any host-run `go build`/`go install`/`go test` needs `GOOS=linux GOARCH=amd64` (or `darwin`/`arm64`).

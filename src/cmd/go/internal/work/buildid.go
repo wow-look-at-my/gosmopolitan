@@ -656,7 +656,7 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			a.Target = "DO NOT USE - using cache"
 			return true
 		}
-		if buildID, err := buildid.ReadFile(file); err == nil {
+		if buildID, err := buildid.ReadFile(file); err == nil && (!printOutput || cachedDiagnostics(c, a)) {
 			if printOutput {
 				switch a.Mode {
 				case "link":
@@ -717,6 +717,31 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 	// Begin saving output for later writing to cache.
 	a.output = []byte{}
 	return false
+}
+
+// cachedDiagnostics reports that the tool output stored beside act's result
+// is there to be replayed, so a build that reuses the result prints what the
+// tool printed. A compile stores its output under its own action ID, and a
+// link stores its output under the action ID of the main package it links.
+//
+// The result and its output are two keys, which a store answering each one
+// on its own can hold one of. An action whose mode stores no output has
+// nothing to answer for and reports true.
+func cachedDiagnostics(c cache.Cache, act *Action) bool {
+	switch act.Mode {
+	case "build":
+		_, _, err := cache.GetBytes(c, cache.Subkey(act.actionID, "stdout"))
+		return err == nil
+	case "link":
+		for _, dep := range act.Deps {
+			if dep.Package == nil || dep.Package.Name != "main" {
+				continue
+			}
+			_, _, err := cache.GetBytes(c, cache.Subkey(dep.actionID, "link-stdout"))
+			return err == nil
+		}
+	}
+	return true
 }
 
 func showStdout(b *Builder, c cache.Cache, a *Action, key string) error {
