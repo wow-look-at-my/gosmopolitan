@@ -4,10 +4,14 @@ A module download tries each source in this order. The first one that works wins
 
 1. The module proxy (`GOPROXY`, `https://proxy.golang.org` by default).
 2. `https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
-3. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
-4. A shallow `git fetch` of the commit, then the full history only when a command needs it.
+3. The same tar.gz through `https://proxy.pazer.ai/?url=https://codeload.github.com/<owner>/<repo>/tar.gz/<ref>`.
+4. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
+5. The same zip through `https://proxy.pazer.ai/?url=https://codeload.github.com/<owner>/<repo>/zip/<ref>`.
+6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
 
-The archives are used only when the proxy is skipped or misses. That happens under `GOPRIVATE`, `GONOPROXY`, `GOPROXY=direct`, or a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+The proxy gets the codeload.github.com URL because github.com answers an archive request with a redirect. The proxy passes that redirect back with an IP address as its target, and a hop to an IP address is refused. A proxy request may not redirect at all.
+
+The archives are used only when the module proxy is skipped or misses. That happens under `GOPRIVATE`, `GONOPROXY`, `GOPROXY=direct`, or a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
 ## Which URLs
 
@@ -17,7 +21,7 @@ The archives are used only when the proxy is skipped or misses. That happens und
 | `refs/heads/master` | `archive/refs/heads/master.tar.gz` |
 | `HEAD` | `archive/<commit hash>.tar.gz` |
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two, or other than `proxy.pazer.ai` for a proxy request. The embedded commit ID is checked on every archive, whichever source served it.
 
 A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
 

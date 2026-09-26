@@ -442,10 +442,12 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			name:         "github.com tar.gz first",
 			wantRequests: []string{githubTar, codeloadTar},
 		},
+		// web.Get asks again with GOAUTH credentials after a 4xx, so a
+		// missing archive is requested twice.
 		{
 			name:         "proxy tar.gz when github.com has none",
 			status:       missing("github.tar.gz"),
-			wantRequests: []string{githubTar, proxyTar},
+			wantRequests: []string{githubTar, githubTar, proxyTar},
 		},
 		{
 			name:         "proxy tar.gz when the github.com one is of another commit",
@@ -455,17 +457,17 @@ func TestGitHubArchiveFallback(t *testing.T) {
 		{
 			name:         "github.com zip when there is no tar.gz",
 			status:       missing("github.tar.gz", "proxy.tar.gz"),
-			wantRequests: []string{githubTar, proxyTar, githubZip, codeloadZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, codeloadZip},
 		},
 		{
 			name:         "proxy zip after every other archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip"),
-			wantRequests: []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, githubZip, proxyZip},
 		},
 		{
 			name:         "git when there is no archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
-			wantRequests: []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, githubZip, proxyZip, proxyZip},
 			wantGit:      true,
 		},
 		{
