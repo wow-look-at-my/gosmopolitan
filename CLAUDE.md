@@ -338,6 +338,10 @@ gopls parses with the `go/*` packages of the toolchain that builds it. It must t
 
 docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped members, backquoted tags, exhaustive switches, checked conversion. What the compiler carries is a partial front end for an earlier shape. `type T enum int` marks a named integer type. A constant of that type takes a trailing string literal as its display text. types2 declares `String() string` on the type. No body is generated, so a program declaring an enum type-checks and then fails at link.
 
+## Link-time collections
+
+docs/COLLECTIONS-DESIGN.md -- design only, not implemented: `collect var` slices the linker fills from `init()` contributions, replacing self-registration.
+
 ## Loop-aware inlining (all targets)
 
 Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget as one on a cold. This fork adds the static frequency estimate every other production compiler has (`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed: docs/LOOP-INLINING.md.
