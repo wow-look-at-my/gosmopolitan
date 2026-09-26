@@ -4,12 +4,12 @@ A module download tries each source in this order. The first one that works wins
 
 1. The module proxy (`GOPROXY`, `https://proxy.golang.org` by default).
 2. `https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
-3. The same tar.gz through `https://proxy.pazer.ai/?url=https://codeload.github.com/<owner>/<repo>/tar.gz/<ref>`.
+3. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
 4. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
-5. The same zip through `https://proxy.pazer.ai/?url=https://codeload.github.com/<owner>/<repo>/zip/<ref>`.
+5. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
 6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
 
-The proxy gets the codeload.github.com URL because github.com answers an archive request with a redirect. The proxy passes that redirect back with an IP address as its target, and a hop to an IP address is refused. A proxy request may not redirect at all.
+A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
 The archives are used only when the module proxy is skipped or misses. That happens under `GOPRIVATE`, `GONOPROXY`, `GOPROXY=direct`, or a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 

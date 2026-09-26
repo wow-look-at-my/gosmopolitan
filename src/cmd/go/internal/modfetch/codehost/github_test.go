@@ -62,21 +62,21 @@ func TestGitHubArchiveSources(t *testing.T) {
 	}{
 		{"refs/heads/master", []string{
 			"https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.tar.gz",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/refs/heads/master"),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.tar.gz"),
 			"https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.zip",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/refs/heads/master"),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.zip"),
 		}},
 		{"refs/tags/sub/v1.2.3", []string{
 			"https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.tar.gz",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/refs/tags/sub/v1.2.3"),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.tar.gz"),
 			"https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.zip",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/refs/tags/sub/v1.2.3"),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.zip"),
 		}},
 		{"HEAD", []string{
 			"https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".tar.gz",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/" + hash),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".tar.gz"),
 			"https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".zip",
-			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/" + hash),
+			proxied("https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".zip"),
 		}},
 	}
 	for _, test := range cases {
@@ -346,17 +346,10 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	switch req.Host {
 	case "github.com":
-		rest, found := strings.CutPrefix(req.URL.Path, "/owner/repo/archive/")
+		format, name, found := archivePath(req.URL.Path)
 		if !found {
 			http.NotFound(w, req)
 			return
-		}
-		format := "zip"
-		name, isTar := strings.CutSuffix(rest, ".tar.gz")
-		if isTar {
-			format = "tar.gz"
-		} else {
-			name = strings.TrimSuffix(rest, ".zip")
 		}
 		if code := f.status["github."+format]; code != 0 {
 			http.Error(w, "no archive", code)
@@ -366,17 +359,21 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	case "proxy.pazer.ai":
 		inner, err := url.Parse(req.URL.Query().Get("url"))
-		if err != nil || inner.Host != "codeload.github.com" {
+		if err != nil || inner.Host != "github.com" {
 			http.Error(w, "bad url", http.StatusBadRequest)
 			return
 		}
-		format, name := codeloadPath(inner.Path)
+		format, name, found := archivePath(inner.Path)
+		if !found {
+			http.NotFound(w, req)
+			return
+		}
 		if code := f.status["proxy."+format]; code != 0 {
 			http.Error(w, "no archive", code)
 			return
 		}
 		if f.proxyRedirects {
-			http.Redirect(w, req, "https://140.82.112.10"+inner.Path, http.StatusFound)
+			http.Redirect(w, req, "https://140.82.112.10/owner/repo/"+format+"/"+name, http.StatusFound)
 			return
 		}
 		f.serveArchive(w, req, "proxy", format, name)
@@ -385,6 +382,21 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		format, name := codeloadPath(req.URL.Path)
 		f.serveArchive(w, req, "github", format, name)
 	}
+}
+
+// archivePath splits "/owner/repo/archive/<name>.<format>".
+func archivePath(urlPath string) (format, name string, found bool) {
+	rest, found := strings.CutPrefix(urlPath, "/owner/repo/archive/")
+	if !found {
+		return "", "", false
+	}
+	if name, isTar := strings.CutSuffix(rest, ".tar.gz"); isTar {
+		return "tar.gz", name, true
+	}
+	if name, isZip := strings.CutSuffix(rest, ".zip"); isZip {
+		return "zip", name, true
+	}
+	return "", "", false
 }
 
 // codeloadPath splits "/owner/repo/<format>/<name>".
@@ -416,10 +428,10 @@ func TestGitHubArchiveFallback(t *testing.T) {
 	const (
 		githubTar   = "github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz"
 		codeloadTar = "codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0"
-		proxyTar    = "proxy.pazer.ai?url=https://codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0"
+		proxyTar    = "proxy.pazer.ai?url=https://github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz"
 		githubZip   = "github.com/owner/repo/archive/refs/tags/v1.0.0.zip"
 		codeloadZip = "codeload.github.com/owner/repo/zip/refs/tags/v1.0.0"
-		proxyZip    = "proxy.pazer.ai?url=https://codeload.github.com/owner/repo/zip/refs/tags/v1.0.0"
+		proxyZip    = "proxy.pazer.ai?url=https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip"
 	)
 	missing := func(sources ...string) map[string]int {
 		status := make(map[string]int)

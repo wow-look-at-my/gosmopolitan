@@ -73,20 +73,17 @@ type archiveSource struct {
 }
 
 // archiveSources lists where to get the archive of hash, in the order to try:
-// github.com, then the proxy, for the tar.gz and then for the zip.
-//
-// The proxy passes a redirect through with an IP address as its target, so
-// it gets codeload.github.com, the host that github.com redirects to. The
-// proxy request itself may not redirect at all.
+// the github.com archive URL, then that same URL through the proxy, for the
+// tar.gz and then for the zip. A proxy request may not leave the proxy host,
+// so a redirect that the proxy passes back is refused.
 func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
 	name := refPath(ref, hash)
 	var sources []archiveSource
 	for _, ext := range []string{".tar.gz", ".zip"} {
-		direct := "https://github.com/" + g.owner + "/" + g.name + "/archive/" + name + ext
-		codeload := "https://codeload.github.com/" + g.owner + "/" + g.name + "/" + strings.TrimPrefix(ext, ".") + "/" + name
+		archive := "https://github.com/" + g.owner + "/" + g.name + "/archive/" + name + ext
 		sources = append(sources,
-			archiveSource{url: direct, ext: ext, allowHost: githubHost},
-			archiveSource{url: "https://" + proxyHost + "/?url=" + url.QueryEscape(codeload), ext: ext, allowHost: isProxyHost},
+			archiveSource{url: archive, ext: ext, allowHost: githubHost},
+			archiveSource{url: "https://" + proxyHost + "/?url=" + url.QueryEscape(archive), ext: ext, allowHost: isProxyHost},
 		)
 	}
 	return sources
