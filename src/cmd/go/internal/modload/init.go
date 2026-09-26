@@ -2082,10 +2082,15 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 	index := ld.MainModules.GetSingleIndexOrNil(ld)
 	dirty := index.modFileIsDirty(modFile) || len(opts.DropTools) > 0 || len(opts.AddTools) > 0
 	if dirty && cfg.BuildMod != "mod" {
-		// If we're about to fail due to -mod=readonly,
-		// prefer to report a dirty go.mod over a dirty go.sum
-		return errGoModDirty
+		toolsChanged := len(opts.DropTools) > 0 || len(opts.AddTools) > 0
+		if toolsChanged || !orgSyncCommit(ld, index, modFile) {
+			// If we're about to fail due to -mod=readonly,
+			// prefer to report a dirty go.mod over a dirty go.sum
+			return errGoModDirty
+		}
 	}
+	// Under orgSyncing, only sums that orgSyncAllows admitted can be new.
+	sumReadonly := mustHaveCompleteRequirements(ld) && !orgSyncing(ld)
 
 	if !dirty && cfg.CmdName != "mod tidy" {
 		// The go.mod file has the same semantic content that it had before
@@ -2093,7 +2098,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// Don't write go.mod, but write go.sum in case we added or trimmed sums.
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
-			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld)); err != nil {
+			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly); err != nil {
 				return err
 			}
 		}
@@ -2116,7 +2121,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
 			if err == nil {
-				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld))
+				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly)
 			}
 		}
 	}()
