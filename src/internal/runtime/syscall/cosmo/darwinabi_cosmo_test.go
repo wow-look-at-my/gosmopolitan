@@ -500,7 +500,7 @@ func TestLinuxFlockMatchesFlock_t(t *testing.T) {
 		t.Errorf("sizeof(LinuxFlock) = %d, sizeof(syscall.Flock_t) = %d, want 32", a, b)
 	}
 	for _, f := range []struct {
-		name     string
+		name      string
 		got, want uintptr
 	}{
 		{"Type", unsafe.Offsetof(lf.Type), unsafe.Offsetof(sf.Type)},
