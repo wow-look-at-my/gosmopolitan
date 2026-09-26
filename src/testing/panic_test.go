@@ -181,6 +181,7 @@ func TestPanicHelper(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
 		return
 	}
+	t.Serial("this and the subtests below write to one output, and the caller compares that output line by line")
 	t.Log(t.Name())
 	t.Output().Write([]byte(t.Name()))
 	if t.Name() == *testPanicTest {

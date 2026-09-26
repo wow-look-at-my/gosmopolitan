@@ -47,7 +47,7 @@ func TestCosmoPlatformSpec(t *testing.T) {
 // the sibling build (that is the slimming) and still assemble (so the
 // output is stripped and gets its sidecar, like the fat build it replaces).
 func TestCosmoSiblingAndAssemble(t *testing.T) {
-	t.Serial() // cfg.Goos and cfg.Goarch are package globals.
+	t.Serial("cfg.Goos and cfg.Goarch are package globals that decide what any concurrent build would target")
 	restore := func(goos, goarch string) func() {
 		return func() { cfg.Goos, cfg.Goarch = goos, goarch }
 	}

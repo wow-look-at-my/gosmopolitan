@@ -68,7 +68,7 @@ func TestSubtestsRunInsideRun(t *T) {
 // TestForkWithSerialIsSerial: Serial is how a forked test asks for the process
 // to itself as well, and it still means that inside the child.
 func TestForkWithSerialIsSerial(t *T) {
-	t.Serial()
+	t.Serial("this checks that an exclusive barrier hold survives into a child process, so nothing else may hold it")
 	t.Fork()
 
 	if !serialExclusive.Load() {
@@ -207,9 +207,9 @@ func TestForkReportsTheChildsFailure(t *T) {
 }
 
 // TestSetenvForks: Setenv changes the process, and a child is how the test gets
-// one of its own. The barrier would give the same isolation and stop the suite
-// to do it, so the test asserts the variable is set AND that nothing was
-// stopped.
+// one of its own, so the suite in the ORIGINAL process keeps running. Inside
+// that child the caller does hold the barrier, because the child's own
+// subtests are parallel and would otherwise overwrite the same variable.
 func TestSetenvForks(t *T) {
 	if !canFork() {
 		t.Skip("this run cannot fork, so Setenv takes the barrier")
@@ -217,8 +217,8 @@ func TestSetenvForks(t *T) {
 	t.Parallel() // A parallel test shares the process, which is what makes Setenv fork.
 	t.Setenv("GO_TEST_SETENV_FORKS", "yes")
 
-	if serialExclusive.Load() {
-		t.Error("Setenv took the serial barrier; it must fork and leave the suite running")
+	if !serialExclusive.Load() {
+		t.Error("the child does not hold the barrier; its own subtests can race on this variable")
 	}
 	if got := os.Getenv(forkTargetEnv); got != t.Name() {
 		t.Fatalf("%s = %q, want %q: Setenv did not fork", forkTargetEnv, got, t.Name())
@@ -240,8 +240,8 @@ func TestChdirForks(t *T) {
 	}
 	t.Chdir(t.TempDir())
 
-	if serialExclusive.Load() {
-		t.Error("Chdir took the serial barrier; it must fork and leave the suite running")
+	if !serialExclusive.Load() {
+		t.Error("the child does not hold the barrier; its own subtests can race on the directory")
 	}
 	if got := os.Getenv(forkTargetEnv); got != t.Name() {
 		t.Fatalf("%s = %q, want %q: Chdir did not fork", forkTargetEnv, got, t.Name())
@@ -373,7 +373,7 @@ func TestAllocsPerRunForks(t *T) {
 // to itself, so the measurement happens right here. A fork would run the rest
 // of this test in a child, where the marker is set.
 func TestAllocsPerRunUnderSerialDoesNotFork(t *T) {
-	t.Serial()
+	t.Serial("a measurement taken while the barrier is held must not fork, which only holding it here proves")
 
 	AllocsPerRun(1, func() {})
 	if got := os.Getenv(forkTargetEnv); got != "" {
