@@ -52,6 +52,7 @@ runs:
         GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
         # The probe is a multi-file package, so build its module directory.
         (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
+        (cd testdata/sqliteprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .)
         echo "=== APE Header ==="
         head -c 200 fizzbuzz.com
         echo ""
@@ -72,7 +73,7 @@ runs:
 
     - name: Stage the APE binaries for the test job
       shell: bash
-      run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
+      run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com sqliteprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
 
     - name: Hand the APE binaries to the test job
       uses: wow-look-at-my/actions@cache-upload#latest
