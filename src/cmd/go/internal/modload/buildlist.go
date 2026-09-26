@@ -1131,7 +1131,7 @@ func updatePrunedRoots(ld *Loader, ctx context.Context, direct map[string]bool, 
 			// We've added or upgraded one or more roots, so load the full module
 			// graph so that we can update those roots to be consistent with other
 			// requirements.
-			if mustHaveCompleteRequirements(ld) {
+			if mustHaveCompleteRequirements(ld) && !orgSyncing(ld) {
 				// Our changes to the roots may have moved dependencies into or out of
 				// the graph-pruning horizon, which could in turn change the selected
 				// versions of other modules. (For pruned modules adding or removing an

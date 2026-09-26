@@ -1,0 +1,222 @@
+# An org module follows a branch head, so its next commit can require a module
+# that the main module's go.mod and go.sum do not list yet. The org vetted that
+# requirement, so a build without an explicit -mod flag records it: the
+# indirect require line at the declared version, and go.sum lines verified
+# against the checksum database. Nothing else relaxes -mod=readonly.
+
+[short] skip 'constructs local git repositories'
+[!git] skip
+
+env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
+env HOME=$WORK${/}home${/}gopher
+env GIT_ALLOW_PROTOCOL=file
+env GOPRIVATE=github.com/wow-look-at-my
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+
+env GIT_AUTHOR_NAME='Go Gopher'
+env GIT_AUTHOR_EMAIL='gopher@golang.org'
+env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+cd $WORK/alpha
+exec git init
+env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-01-02T03:04:05Z
+exec git add -A
+exec git commit -m 'alpha on quote v1.5.1'
+exec git branch -m main
+
+# The consumer lists alpha and nothing alpha needs, and has no go.sum. A plain
+# build records alpha's requirements and succeeds.
+cd $WORK/m
+go build ./...
+! stderr 'updates to go.mod needed'
+! stderr 'missing go.sum entry'
+grep '^	rsc.io/quote v1.5.1 // indirect$' go.mod
+grep '^	rsc.io/sampler v1.3.0 // indirect$' go.mod
+grep '^	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect$' go.mod
+grep '^rsc.io/quote v1.5.1 h1:' go.sum
+grep '^rsc.io/quote v1.5.1/go.mod h1:' go.sum
+! grep 'wow-look-at-my' go.sum
+
+# The recorded files are complete, so the next build writes nothing.
+cp go.mod $WORK/m.go.mod
+cp go.sum $WORK/m.go.sum
+go build ./...
+cmp go.mod $WORK/m.go.mod
+cmp go.sum $WORK/m.go.sum
+
+# The next alpha commit raises its quote requirement. The next build follows it.
+cd $WORK/alpha
+cp $WORK${/}alpha-next${/}go.mod go.mod
+env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
+exec git commit -am 'alpha on quote v1.5.2'
+
+cd $WORK/m
+go build ./...
+grep '^	rsc.io/quote v1.5.2 // indirect$' go.mod
+! grep 'rsc.io/quote v1.5.1' go.mod
+grep '^rsc.io/quote v1.5.2 h1:' go.sum
+
+# go mod tidy keeps every line the build recorded. It also adds what the tests
+# of dependencies need, which a build never loads.
+go mod tidy
+grep '^	rsc.io/quote v1.5.2 // indirect$' go.mod
+grep '^	rsc.io/sampler v1.3.0 // indirect$' go.mod
+grep '^	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect$' go.mod
+
+# An explicit -mod=readonly keeps its upstream meaning.
+cd $WORK/strict
+! go build -mod=readonly ./...
+stderr 'missing go.sum entry|updates to go.mod needed'
+! grep 'rsc.io/quote' go.mod
+
+# A module that no org module declares is not recorded. A missing import still
+# fails the way it does upstream.
+cd $WORK/direct
+! go build ./...
+stderr 'no required module provides package rsc.io/fortune'
+! grep 'rsc.io/fortune' go.mod
+
+# The main module's own higher requirement wins, and needs no change.
+cd $WORK/higher
+go mod tidy
+cp go.mod $WORK/higher.go.mod
+go build ./...
+cmp go.mod $WORK/higher.go.mod
+
+# A go.sum line that disagrees with the module still fails verification.
+cd $WORK/tampered
+! go build ./...
+stderr 'checksum mismatch'
+
+-- $WORK/home/gopher/.gitconfig --
+[user]
+	name = Go Gopher
+	email = gopher@golang.org
+-- $WORK/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+
+require (
+	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect
+	rsc.io/quote v1.5.1
+	rsc.io/sampler v1.3.0 // indirect
+)
+-- $WORK/alpha/alpha.go --
+package alpha
+
+import "rsc.io/quote"
+
+func Name() string { return quote.Hello() }
+-- $WORK/alpha-next/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+
+require (
+	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect
+	rsc.io/quote v1.5.2
+	rsc.io/sampler v1.3.0 // indirect
+)
+-- $WORK/m/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/m/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() { fmt.Println(alpha.Name()) }
+-- $WORK/strict/go.mod --
+module example.com/strict
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/strict/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() { fmt.Println(alpha.Name()) }
+-- $WORK/direct/go.mod --
+module example.com/direct
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/direct/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"rsc.io/fortune"
+)
+
+func main() { fmt.Println(alpha.Name(), fortune.Fortune()) }
+-- $WORK/higher/go.mod --
+module example.com/higher
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0
+	rsc.io/quote v1.5.2
+)
+
+require (
+	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect
+	rsc.io/sampler v1.3.0 // indirect
+)
+-- $WORK/higher/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"rsc.io/quote"
+)
+
+func main() { fmt.Println(alpha.Name(), quote.Go()) }
+-- $WORK/tampered/go.mod --
+module example.com/tampered
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+
+require (
+	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect
+	rsc.io/quote v1.5.1 // indirect
+	rsc.io/sampler v1.3.0 // indirect
+)
+-- $WORK/tampered/go.sum --
+rsc.io/quote v1.5.1 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+-- $WORK/tampered/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() { fmt.Println(alpha.Name()) }
