@@ -1,8 +1,9 @@
 # A CI build (GITHUB_ACTIONS=true, and no coding agent in the environment or
-# among the ancestor processes) builds the version go.mod records for each org
-# module. It looks up no branch head and writes nothing, so a commit that lands
-# in the middle of a run reaches no job of it. A placeholder has no version to
-# build, so it is an error there.
+# among the ancestor processes) follows branch heads like every other build.
+# The first go command of a run that resolves an org module on a branch locks
+# that head in the run lock store. Every later go command of the same run and
+# attempt builds the locked version, so a commit that lands in the middle of a
+# run reaches no job of it. This script points the store at a directory.
 #
 # The go command cannot make a CI build under an agent, and a script cannot
 # prove that no agent started it. So this script runs only where no agent is an
@@ -35,6 +36,18 @@ env CODEX_SANDBOX_NETWORK_DISABLED=
 env GEMINI_CLI=
 env OPENCODE=
 
+# The run every CI build below belongs to, and the store its locks live in.
+env GITHUB_REPOSITORY=wow-look-at-my/consumer
+env GITHUB_RUN_ID=4242
+env GITHUB_RUN_ATTEMPT=1
+[!GOOS:windows] env LOCKS=file://$WORK/locks
+[GOOS:windows]  env LOCKS=file:///$WORK/locks
+[!GOOS:windows] env UNTOUCHED=file://$WORK/untouched
+[GOOS:windows]  env UNTOUCHED=file:///$WORK/untouched
+[!GOOS:windows] env BLOCKED=file://$WORK/blocked/locks
+[GOOS:windows]  env BLOCKED=file:///$WORK/blocked/locks
+env GOSMOPOLITAN_RUN_LOCK_STORE=$LOCKS
+
 cd $WORK/alpha
 exec git init
 env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
@@ -52,12 +65,15 @@ exec git add -A
 exec git commit -m 'beta main'
 exec git branch -m main
 
-# Outside CI a plain build records each branch head in go.mod.
+# The first CI build of the run resolves each head, locks it, and records it in
+# go.mod as any build does. A placeholder is no error.
 cd $WORK/m
-go build ./...
+env GITHUB_ACTIONS=true
+go run .
+stdout '^alpha-main beta-main$'
 grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$' go.mod
 grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-[0-9a-f]+$' go.mod
-cp go.mod $WORK/m.go.mod
+exists $WORK/locks
 
 # alpha moves while the run is under way.
 cd $WORK/alpha
@@ -66,57 +82,67 @@ env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
 env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
 exec git commit -am 'alpha next'
 
-# A CI build uses the recorded version, not the new head, and writes nothing.
-# beta's go.mod records the placeholder for alpha, and the version the main
-# module records takes its place.
-cd $WORK/m
-env GITHUB_ACTIONS=true
+# Another job of the same run, in its own checkout, builds the locked version
+# and not the new head.
+cd $WORK/m2
 go run .
 stdout '^alpha-main beta-main$'
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$'
-go build -o $WORK${/}m${/}prog .
-go version -m $WORK${/}m${/}prog
+go build -o $WORK${/}m2${/}prog .
+go version -m $WORK${/}m2${/}prog
 stdout 'dep\tgithub.com/wow-look-at-my/alpha\tv0\.0\.0-20260102030405-[0-9a-f]+\th1:'
-go mod tidy
-cmp go.mod $WORK/m.go.mod
 
-# A coding agent does not make a CI build, whatever GITHUB_ACTIONS says: the
-# build follows the head and records it.
-env CLAUDECODE=1
+# A replace line takes the locked version too.
+cd $WORK/replace
+go run .
+stdout '^alpha-main$'
+
+# Outside CI the build follows the new head and never opens the store.
+cd $WORK/m
+env GITHUB_ACTIONS=
+env GOSMOPOLITAN_RUN_LOCK_STORE=$UNTOUCHED
 go run .
 stdout '^alpha-next beta-main$'
 grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
-env CLAUDECODE=
+! exists $WORK/untouched
 
-# The next CI build uses the version that run recorded.
+# A coding agent does not make a CI build, whatever GITHUB_ACTIONS says.
+cd $WORK/m2
+env GITHUB_ACTIONS=true
+env CLAUDECODE=1
 go run .
 stdout '^alpha-next beta-main$'
+! exists $WORK/untouched
+env CLAUDECODE=
 
-# A placeholder names no version, so a CI build refuses it by name and leaves
-# go.mod as it is.
+# A new attempt of the run locks the heads again.
+env GOSMOPOLITAN_RUN_LOCK_STORE=$LOCKS
+env GITHUB_RUN_ATTEMPT=2
+cd $WORK/fresh
+go run .
+stdout '^alpha-next beta-main$'
+env GITHUB_RUN_ATTEMPT=1
+
+# A store the build cannot use fails the build. The error names the store and
+# the module, and nothing stands in for the lock.
 cd $WORK/placeholder
 cp go.mod $WORK/placeholder.go.mod
+env GOSMOPOLITAN_RUN_LOCK_STORE=$BLOCKED
 ! go build ./...
-stderr 'github.com/wow-look-at-my/alpha: go.mod records the placeholder v0\.0\.0, and a CI build uses the version go.mod records; run any go command outside CI to record the head of its branch'
+stderr 'github.com/wow-look-at-my/alpha@HEAD: run lock store file:.*blocked/locks: '
 cmp go.mod $WORK/placeholder.go.mod
 
-# A replace line is the same.
-cd $WORK/placeholderreplace
+# A CI build that names no run has no lock to read, and fails the same way.
+env GOSMOPOLITAN_RUN_LOCK_STORE=$LOCKS
+env GITHUB_RUN_ID=
 ! go build ./...
-stderr 'github.com/wow-look-at-my/alpha: go.mod records the placeholder v0\.0\.0, and a CI build uses the version go.mod records'
+stderr 'github.com/wow-look-at-my/alpha@HEAD: a CI build locks org modules per run, and GITHUB_RUN_ID is not set'
+env GITHUB_RUN_ID=4242
 
-# Outside CI the same module records the head, and CI then builds it.
-cd $WORK/placeholder
-env GITHUB_ACTIONS=
-go build ./...
-grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
-env GITHUB_ACTIONS=true
-go run .
-stdout '^alpha-next$'
-
-# Vendor mode resolves nothing, so a CI build of a vendored placeholder builds.
+# Vendor mode resolves nothing, so it never opens the store.
 cd $WORK/vendor
+env GOSMOPOLITAN_RUN_LOCK_STORE=$BLOCKED
 go run .
 stdout '^alpha-vendored$'
 
@@ -124,6 +150,8 @@ stdout '^alpha-vendored$'
 [user]
 	name = Go Gopher
 	email = gopher@golang.org
+-- $WORK/blocked --
+a regular file, so no directory can sit under it
 -- $WORK/alpha/go.mod --
 module github.com/wow-look-at-my/alpha
 
@@ -170,13 +198,59 @@ import (
 func main() {
 	fmt.Println(alpha.Name(), beta.Name())
 }
--- $WORK/placeholder/go.mod --
-module example.com/placeholder
+-- $WORK/m2/go.mod --
+module example.com/consumer
 
 go 1.21
 
-require github.com/wow-look-at-my/alpha v0.0.0
--- $WORK/placeholder/main.go --
+require (
+	github.com/wow-look-at-my/alpha v0.0.0
+	github.com/wow-look-at-my/beta v0.0.0
+)
+-- $WORK/m2/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), beta.Name())
+}
+-- $WORK/fresh/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0
+	github.com/wow-look-at-my/beta v0.0.0
+)
+-- $WORK/fresh/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), beta.Name())
+}
+-- $WORK/replace/go.mod --
+module example.com/replace
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20260102030405-0f69f837cebe
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/replace/main.go --
 package main
 
 import (
@@ -188,15 +262,13 @@ import (
 func main() {
 	fmt.Println(alpha.Name())
 }
--- $WORK/placeholderreplace/go.mod --
-module example.com/placeholderreplace
+-- $WORK/placeholder/go.mod --
+module example.com/placeholder
 
 go 1.21
 
-require github.com/wow-look-at-my/alpha v0.0.0-20260102030405-0f69f837cebe
-
-replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0
--- $WORK/placeholderreplace/main.go --
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/placeholder/main.go --
 package main
 
 import (
