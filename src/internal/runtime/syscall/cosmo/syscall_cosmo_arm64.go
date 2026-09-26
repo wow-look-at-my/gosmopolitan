@@ -903,13 +903,7 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 			return ^uintptr(0), 0, darwinEFAULT
 		}
 	case linuxF_GETLK, linuxF_SETLK, linuxF_SETLKW:
-		// arg is a DarwinFlock the syscall package built, the same
-		// caller-owned-buffer contract F_GETPATH has. Only the command
-		// number is this function's to translate.
-		if arg == 0 {
-			return ^uintptr(0), 0, darwinEFAULT
-		}
-		cmd += appleF_GETLK - linuxF_GETLK
+		return darwinFcntlLock(fd, cmd+appleF_GETLK-linuxF_GETLK, arg)
 	default:
 		// Locking, owner and lease commands have incompatible
 		// argument structures; refuse rather than corrupt.
@@ -917,6 +911,37 @@ func darwinFcntl(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
 	}
 	// fcntl is variadic: arg MUST travel on the stack on arm64-apple.
 	return darwinCallVariadic1(darwinFns.Fcntl, fd, cmd, arg)
+}
+
+// darwinFcntlLock runs a record-lock command, cmd already in Apple's
+// numbering. arg is the caller's LinuxFlock; Apple is handed a DarwinFlock
+// built from it, and F_GETLK's answer is written back in Linux's shape.
+//
+//go:nosplit
+func darwinFcntlLock(fd, cmd, arg uintptr) (r1, r2, errno uintptr) {
+	if arg == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	lk := (*LinuxFlock)(unsafe.Pointer(arg))
+	t, ok := DarwinLockType(lk.Type)
+	if !ok {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	af := DarwinFlock{Start: lk.Start, Len: lk.Len, Pid: lk.Pid, Type: t, Whence: lk.Whence}
+	r1, r2, errno = darwinCallVariadic1(darwinFns.Fcntl, fd, cmd, uintptr(unsafe.Pointer(&af)))
+	if errno != 0 || cmd != appleF_GETLK {
+		return r1, r2, errno
+	}
+	t, ok = LinuxLockType(af.Type)
+	if !ok {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	lk.Type = t
+	lk.Whence = af.Whence
+	lk.Start = af.Start
+	lk.Len = af.Len
+	lk.Pid = af.Pid
+	return r1, r2, errno
 }
 
 // darwinGetrandom emulates getrandom(2) with the Syslib's getentropy,

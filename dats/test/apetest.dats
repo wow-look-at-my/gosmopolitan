@@ -4,11 +4,11 @@
 # kills the process group at its deadline, which a runner timeout cannot.
 tests:
 	- desc: the Linux-origin binaries pass apetest here
-	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Linux/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./...
+	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Linux/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-Linux/sqliteprobe.com" sh ./with-deadline.sh 540 go test -v ./...
 	  exit: 0
 
 	- desc: the macOS-origin binaries pass apetest here
-	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-macOS/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./...
+	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-macOS/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/runtimeprobe.com" SQLITEPROBE_BIN="$PWD/../../../binaries/ape-binary-macOS/sqliteprobe.com" sh ./with-deadline.sh 540 go test -v ./...
 	  exit: 0
 
 #	- desc: the Windows-origin binaries pass apetest here
