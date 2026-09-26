@@ -21,3 +21,13 @@ A command with no explicit `-mod` flag records that requirement and continues. T
 - Modules that no org module declares follow the upstream rules exactly.
 
 The script test `src/cmd/go/testdata/script/org_declared_sync.txt` covers each case.
+
+## One resolution per CI run
+
+Each go command resolves an org module to its branch head by itself. A CI run starts many of them, across many jobs. A commit that lands during the run then reaches some jobs and not others, and their outputs differ.
+
+`GOORGPIN` fixes the versions for the whole run. It holds whitespace-separated `path=version` entries. The first job of the run resolves each org module once and passes the list to every other job. A listed module skips the branch head and uses the pinned version. The logic is in `src/cmd/go/internal/modload/orgpin.go`.
+
+Only CI may pin. A pin anywhere else can hold an org module at an old commit to dodge a new one. The go command honors `GOORGPIN` only when `GITHUB_ACTIONS` is `true`, no coding agent marker is set, and no ancestor process is a coding agent. Anywhere else a set `GOORGPIN` is an error. A malformed entry is an error too. The agent roster mirrors `github.com/wow-look-at-my/is-this-an-agent`.
+
+`src/cmd/go/internal/modload/orgpin_test.go` covers the rules. The script test `src/cmd/go/testdata/script/org_pin.txt` covers the refusals.
