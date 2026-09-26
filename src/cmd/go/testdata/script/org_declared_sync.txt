@@ -60,10 +60,12 @@ grep '^	rsc.io/quote v1.5.2 // indirect$' go.mod
 ! grep 'rsc.io/quote v1.5.1' go.mod
 grep '^rsc.io/quote v1.5.2 h1:' go.sum
 
-# go mod tidy agrees with what the build recorded.
-cp go.mod $WORK/m2.go.mod
+# go mod tidy keeps every line the build recorded. It also adds what the tests
+# of dependencies need, which a build never loads.
 go mod tidy
-cmp go.mod $WORK/m2.go.mod
+grep '^	rsc.io/quote v1.5.2 // indirect$' go.mod
+grep '^	rsc.io/sampler v1.3.0 // indirect$' go.mod
+grep '^	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect$' go.mod
 
 # An explicit -mod=readonly keeps its upstream meaning.
 cd $WORK/strict
