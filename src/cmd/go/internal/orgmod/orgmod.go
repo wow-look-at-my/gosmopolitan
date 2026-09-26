@@ -5,10 +5,10 @@
 // Package orgmod describes the modules that cmd/go moves to a branch head.
 //
 // A module under Prefix follows a branch. Its require line records the version
-// of that branch's head as last seen. A CI job (see CIBuild) builds that
-// recorded version as it stands, so every job of one run builds the same
-// commit. Every other go command resolves the branch head again and writes the
-// new version to the line when the head moved.
+// of that branch's head as last seen. Each go command resolves the branch head
+// again and writes the new version to the line when the head moved. A CI build
+// (see CIBuild) takes the head its run locked (see Version), so every job of
+// one run builds the same commit.
 // A repository publishes a set of modules and pins them to one another;
 // resolving at a repository rather than at a module keeps that set on one
 // commit, where a version tree cannot.
@@ -47,12 +47,6 @@ func Placeholder(path string) string {
 		return "v0.0.0"
 	}
 	return major + ".0.0"
-}
-
-// IsPlaceholder reports whether m is an org module whose version is a
-// placeholder: the one Placeholder returns for its path, or v0.0.0.
-func IsPlaceholder(m module.Version) bool {
-	return IsOrg(m.Path) && (m.Version == "v0.0.0" || m.Version == Placeholder(m.Path))
 }
 
 // Branch returns the branch named in a go.mod line's suffix comments, or "" when

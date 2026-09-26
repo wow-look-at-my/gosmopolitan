@@ -404,21 +404,15 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 		}
 	}
 	// A replace line naming an org module records a version the same way a
-	// require line does. A CI build uses it, and every other command uses the
-	// head of the branch the target follows. replacementFrom is reached from the
-	// context-free mvs.Reqs interface, as rawGoModData is.
+	// require line does, and the build uses the head of the branch the target
+	// follows. replacementFrom is reached from the context-free mvs.Reqs
+	// interface, as rawGoModData is.
 	if found.Version != "" && orgmod.IsOrg(found.Path) && orgResolvable() {
-		if orgmod.CIBuild() {
-			if err := orgCheckRecorded(found); err != nil {
-				base.Fatal(err)
-			}
-		} else {
-			version, err := orgVersion(ld, context.TODO(), found.Path)
-			if err != nil {
-				base.Fatal(err)
-			}
-			found.Version = version
+		version, err := orgVersion(ld, context.TODO(), found.Path)
+		if err != nil {
+			base.Fatal(err)
 		}
+		found.Version = version
 	}
 	return found, foundModRoot, modFilePath(foundModRoot)
 }

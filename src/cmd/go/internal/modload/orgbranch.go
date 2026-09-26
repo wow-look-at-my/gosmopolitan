@@ -14,7 +14,6 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cfg"
-	"cmd/go/internal/gover"
 	"cmd/go/internal/orgmod"
 	"cmd/internal/par"
 
@@ -28,11 +27,11 @@ import (
 // detached HEAD, or a main module that git does not track, has no branch to
 // follow and so takes the default branch.
 //
-// go.mod records the version of that head. A CI job builds the recorded version
-// as it stands, so a commit that lands in the middle of a run reaches no job of
-// it. Every other go command resolves the head again, builds it, and writes it
-// to go.mod when it moved. A readonly command writes that change too, unless an
-// explicit -mod flag keeps the upstream meaning (see orgSyncing).
+// Each go command resolves the head again, builds it, and writes it to go.mod
+// when it moved. A readonly command writes that change too, unless an explicit
+// -mod flag keeps the upstream meaning (see orgSyncing). A CI build takes the
+// head its run locked instead (see orgmod.Version), so every job of one run
+// builds the same commit.
 //
 // The resolved version lands in the root list and in every loaded go.mod
 // summary, so the module graph, the build list and the module cache all see it.
@@ -135,7 +134,7 @@ func gitCheckedOutBranch(dir string) string {
 }
 
 // orgVersion returns the pseudo-version of the head of the branch the org
-// module at path follows. It never runs in a CI build.
+// module at path follows. In a CI build it is the head the run locked.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 	// A name in go.mod replaces the branch this invocation would follow, and is
 	// resolved the same way after that. A branch nothing answers for therefore
@@ -148,12 +147,15 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 		branch = orgDefaultRev
 	}
 	return orgVersionCache.Do(orgVersionKey{branch, path}, func() (string, error) {
-		version, err := orgBranchVersion(ld, ctx, path, branch)
-		if err == nil || branch == orgDefaultRev {
-			return version, err
+		resolve := func() (string, error) {
+			version, err := orgBranchVersion(ld, ctx, path, branch)
+			if err == nil || branch == orgDefaultRev {
+				return version, err
+			}
+			// Nothing answers for that branch, so the default branch is next.
+			return orgBranchVersion(ld, ctx, path, orgDefaultRev)
 		}
-		// Nothing answers for that branch, so the default branch is next.
-		return orgBranchVersion(ld, ctx, path, orgDefaultRev)
+		return orgmod.Version(ctx, orgmod.CIBuild(), orgmod.CurrentRunLock, path, branch, resolve)
 	})
 }
 
@@ -202,25 +204,10 @@ func orgResolvable() bool {
 	return cfg.BuildMod != "vendor"
 }
 
-// orgFollowsBranch reports whether this invocation moves org modules to their
-// branch heads. A CI build keeps the versions go.mod records instead.
-func orgFollowsBranch() bool {
-	return orgResolvable() && !orgmod.CIBuild()
-}
-
-// orgCheckRecorded returns an error when m is an org module that records no
-// version, which a CI build has no way to build.
-func orgCheckRecorded(m module.Version) error {
-	if !orgmod.IsPlaceholder(m) {
-		return nil
-	}
-	return fmt.Errorf("%s: go.mod records the placeholder %s, and a CI build uses the version go.mod records; run any go command outside CI to record the head of its branch", m.Path, m.Version)
-}
-
 // resolveOrgRequire returns the version of m this invocation builds: the head
-// of its branch outside CI, and the recorded version in a CI build. It returns
-// m itself when m is not an org module, when vendoring resolves nothing, or when
-// the main module replaces m with a directory.
+// of its branch, as the run locked it in a CI build. It returns m itself when m
+// is not an org module, when vendoring resolves nothing, or when the main
+// module replaces m with a directory.
 func resolveOrgRequire(ld *Loader, ctx context.Context, m module.Version) (module.Version, error) {
 	if !orgmod.IsOrg(m.Path) || !orgResolvable() {
 		return m, nil
@@ -229,9 +216,6 @@ func resolveOrgRequire(ld *Loader, ctx context.Context, m module.Version) (modul
 		// A filesystem replacement is the source of truth for this module: its
 		// require line was already carrying nothing the build reads.
 		return m, nil
-	}
-	if orgmod.CIBuild() {
-		return m, orgCheckRecorded(m)
 	}
 	version, err := orgVersion(ld, ctx, m.Path)
 	if err != nil {
@@ -273,63 +257,14 @@ func resolveOrgRequires(ld *Loader, ctx context.Context, mods []module.Version) 
 	return out, nil
 }
 
-// orgRecordedVersions returns the version the main modules' go.mod files record
-// for each org module, by path. A placeholder records nothing. Where workspace
-// modules disagree, the highest version wins, as it does in the module graph.
-func orgRecordedVersions(ld *Loader) map[string]string {
-	recorded := map[string]string{}
-	if ld.MainModules == nil {
-		return recorded
-	}
-	for _, mainModule := range ld.MainModules.Versions() {
-		modFile := ld.MainModules.ModFile(mainModule)
-		if modFile == nil {
-			continue
-		}
-		for _, req := range modFile.Require {
-			if !orgmod.IsOrg(req.Mod.Path) || orgmod.IsPlaceholder(req.Mod) {
-				continue
-			}
-			if old, found := recorded[req.Mod.Path]; !found || gover.ModCompare(req.Mod.Path, old, req.Mod.Version) < 0 {
-				recorded[req.Mod.Path] = req.Mod.Version
-			}
-		}
-	}
-	return recorded
-}
-
-// pinOrgRequires returns reqs with each org module at the version recorded for
-// its path. An org module recorded nowhere keeps a real version. It loses a
-// placeholder, because that names no version at all.
-func pinOrgRequires(reqs []module.Version, recorded map[string]string) []module.Version {
-	out := make([]module.Version, 0, len(reqs))
-	for _, req := range reqs {
-		if orgmod.IsOrg(req.Path) {
-			if version, found := recorded[req.Path]; found {
-				req.Version = version
-			} else if orgmod.IsPlaceholder(req) {
-				continue
-			}
-		}
-		out = append(out, req)
-	}
-	return out
-}
-
 // resolveOrgSummary returns summary with the version of every org module in its
-// requirements replaced by the version this invocation builds. Outside CI that
-// is the head of the branch it follows. A CI build takes the version the main
-// module records instead, so a dependency's go.mod cannot move it.
+// requirements replaced by the version this invocation builds.
 //
 // rawGoModSummary is reached through the context-free mvs.Reqs interface, so
 // there is no caller context to pass down here. rawGoModData reads the go.mod
 // file itself the same way.
 func resolveOrgSummary(ld *Loader, summary *modFileSummary) (*modFileSummary, error) {
 	if summary == nil || len(summary.require) == 0 {
-		return summary, nil
-	}
-	if orgResolvable() && orgmod.CIBuild() {
-		summary.require = pinOrgRequires(summary.require, orgRecordedVersions(ld))
 		return summary, nil
 	}
 	reqs, err := resolveOrgRequires(ld, context.TODO(), summary.require)
@@ -344,7 +279,7 @@ func resolveOrgSummary(ld *Loader, summary *modFileSummary) (*modFileSummary, er
 // modFile resolves to onto its replace line. The line keeps its comments. The
 // require lines need no such step, because their roots are already resolved.
 func recordOrgReplacements(ld *Loader, ctx context.Context, modFile *modfile.File) error {
-	if !orgFollowsBranch() {
+	if !orgResolvable() {
 		return nil
 	}
 	var stale []modfile.Replace

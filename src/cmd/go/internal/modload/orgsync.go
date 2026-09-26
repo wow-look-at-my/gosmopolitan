@@ -16,7 +16,7 @@ import (
 	"golang.org/x/mod/module"
 )
 
-// Outside CI an org module moves to its branch head, so a run can record a new
+// An org module moves to its branch head, so a run can record a new
 // version for it, and its new commit can require a new module. The org already
 // vetted both, so a readonly command writes them without a prompt when they
 // are the whole change. Any other change still fails as -mod=readonly does
@@ -87,9 +87,9 @@ func orgSyncAllows(ld *Loader, m module.Version) bool {
 }
 
 // orgMoved reports whether a line for old may become a line for moved because
-// an org module moved to its branch head. A CI build moves nothing.
+// an org module moved to its branch head.
 func orgMoved(old, moved module.Version) bool {
-	return orgFollowsBranch() && orgmod.IsOrg(old.Path) && old.Path == moved.Path &&
+	return orgResolvable() && orgmod.IsOrg(old.Path) && old.Path == moved.Path &&
 		old.Version != "" && moved.Version != ""
 }
 
@@ -133,7 +133,7 @@ func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 			kept[r.Mod] = true
 			continue
 		}
-		if orgmod.IsOrg(r.Mod.Path) && orgFollowsBranch() && (r.Indirect || oldPaths[r.Mod.Path]) {
+		if orgmod.IsOrg(r.Mod.Path) && orgResolvable() && (r.Indirect || oldPaths[r.Mod.Path]) {
 			// The version is the branch head this run resolved.
 			raised[r.Mod.Path] = true
 			continue
