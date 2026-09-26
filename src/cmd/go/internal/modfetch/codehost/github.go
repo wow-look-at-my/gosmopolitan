@@ -314,7 +314,6 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 	return err
 }
 
-<<<<<<< HEAD
 // githubArchivePath is where the archive of hash is kept, byte for byte as
 // GitHub served it, under ext (".tar.gz" or ".zip"). hash+".time" holds the
 // commit time and is written last, so it marks a complete archive.
@@ -381,11 +380,6 @@ func parseArchive(raw []byte, ext, hash string) ([]archiveEntry, time.Time, stri
 		return parseZipArchive(raw, hash)
 	}
 	return parseTarGzArchive(bytes.NewReader(raw), hash)
-=======
-// githubArchivePath is where a converted archive of hash is kept.
-func (r *gitRepo) githubArchivePath(hash string) string {
-	return filepath.Join(r.dir, "github", hash+".zip")
->>>>>>> origin/master
 }
 
 // statGitHub describes hash from an archive of ref, from the first source
@@ -401,20 +395,12 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 
 	var errs []error
 	for _, source := range r.github.archiveSources(ref, hash) {
-<<<<<<< HEAD
 		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash)
-=======
-		archive, when, _, err := r.downloadGitHub(ctx, source, hash)
->>>>>>> origin/master
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-<<<<<<< HEAD
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
-=======
-		if err := writeFileAtomic(r.githubArchivePath(hash), archive); err != nil {
->>>>>>> origin/master
 			return nil, err
 		}
 		return r.githubRevInfo(ctx, version, hash, when, nil), nil
@@ -448,24 +434,12 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, erro
 
 	var errs []error
 	for _, source := range r.github.archiveSources("refs/tags/"+tag, "") {
-<<<<<<< HEAD
 		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "")
-=======
-		archive, when, hash, err := r.downloadGitHub(ctx, source, "")
->>>>>>> origin/master
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-<<<<<<< HEAD
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
-=======
-		if len(hash) != 40 || !AllHex(hash) {
-			errs = append(errs, fmt.Errorf("%s: archive names no commit", source.url))
-			continue
-		}
-		if err := writeFileAtomic(r.githubArchivePath(hash), archive); err != nil {
->>>>>>> origin/master
 			return nil, err
 		}
 		if err := writeFileAtomic(r.githubTagPath(tag), []byte(hash+"\n")); err != nil {
@@ -482,7 +456,6 @@ func (r *gitRepo) githubTagInfo(ctx context.Context, tag, hash string, when time
 	return info
 }
 
-<<<<<<< HEAD
 // downloadGitHub fetches one archive and parses it. It returns the bytes as
 // served, the entries, the commit time and the commit. hash is the commit when
 // the archive does not name one.
@@ -509,57 +482,15 @@ func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash
 	var commit string
 	if err == nil {
 		entries, when, commit, err = parseArchive(raw, source.ext, hash)
-=======
-// downloadGitHub fetches one archive and converts it to the zip git archive
-// writes. It returns the zip, the commit time and the commit. hash is the
-// commit when the archive does not name one.
-func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string) ([]byte, time.Time, string, error) {
-	u, err := url.Parse(source.url)
-	if err != nil {
-		return nil, time.Time{}, "", err
-	}
-	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
-	if err != nil {
-		return nil, time.Time{}, "", err
-	}
-	defer resp.Body.Close()
-	if err := resp.Err(); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	body := &io.LimitedReader{R: resp.Body, N: MaxZipFile + 1}
-	var archive []byte
-	var when time.Time
-	var commit string
-	if source.ext == ".zip" {
-		data, readErr := io.ReadAll(body)
-		if readErr != nil {
-			return nil, time.Time{}, "", fmt.Errorf("reading %s: %w", u.Redacted(), readErr)
-		}
-		if body.N <= 0 {
-			return nil, time.Time{}, "", fmt.Errorf("%s: archive too large", u.Redacted())
-		}
-		archive, when, commit, err = githubZipToArchive(data, hash)
-	} else {
-		archive, when, commit, err = githubTarToArchive(body, hash)
-		if err == nil && body.N <= 0 {
-			err = fmt.Errorf("archive too large")
-		}
->>>>>>> origin/master
 	}
 	if err != nil {
 		err = fmt.Errorf("%s: %w", u.Redacted(), err)
 		if xLog, ok := cfg.BuildXWriter(ctx); ok {
 			fmt.Fprintf(xLog, "# github archive: %v\n", err)
 		}
-<<<<<<< HEAD
 		return nil, nil, time.Time{}, "", err
 	}
 	return raw, entries, when, commit, nil
-=======
-		return nil, time.Time{}, "", err
-	}
-	return archive, when, commit, nil
->>>>>>> origin/master
 }
 
 // githubRevInfo builds what statLocal would return for hash. tags lists the
@@ -601,7 +532,6 @@ func (r *gitRepo) githubArchiveTime(hash string) (time.Time, error) {
 	if r.github == nil {
 		return time.Time{}, fs.ErrNotExist
 	}
-<<<<<<< HEAD
 	data, err := os.ReadFile(r.githubArchivePath(hash, ".time"))
 	if err != nil {
 		return time.Time{}, err
@@ -642,56 +572,10 @@ func readGitHubFile(entries []archiveEntry, file string) ([]byte, error) {
 		if entry.name == name {
 			return entry.data, nil
 		}
-=======
-	data, err := os.ReadFile(r.githubArchivePath(hash))
-	if err != nil {
-		return time.Time{}, err
-	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return time.Time{}, err
-	}
-	return parseArchiveComment(reader.Comment, hash)
-}
-
-// githubArchive returns the kept archive of hash, or fs.ErrNotExist.
-func (r *gitRepo) githubArchive(hash string) (*zip.Reader, []byte, error) {
-	if r.github == nil {
-		return nil, nil, fs.ErrNotExist
-	}
-	data, err := os.ReadFile(r.githubArchivePath(hash))
-	if err != nil {
-		return nil, nil, err
-	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := parseArchiveComment(reader.Comment, hash); err != nil {
-		return nil, nil, err
-	}
-	return reader, data, nil
-}
-
-// readGitHubFile does for a kept archive what git cat-file blob does.
-func readGitHubFile(reader *zip.Reader, file string) ([]byte, error) {
-	name := archivePrefix + path.Clean(file)
-	for _, entry := range reader.File {
-		if entry.Name != name {
-			continue
-		}
-		open, err := entry.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer open.Close()
-		return io.ReadAll(open)
->>>>>>> origin/master
 	}
 	return nil, fs.ErrNotExist
 }
 
-<<<<<<< HEAD
 // subdirFiles returns the entries under subdir as module files, named from
 // subdir. It fails with fs.ErrNotExist when there are none, as git archive
 // does for a pathspec that matches nothing.
@@ -731,38 +615,6 @@ func entriesZip(files []ModuleFile, subdir string) ([]byte, error) {
 		if _, err := dst.Write(file.Data); err != nil {
 			return nil, err
 		}
-=======
-// subdirArchive does for a kept archive what a git archive pathspec does: it
-// keeps the entries under subdir, and fails with fs.ErrNotExist when none is.
-func subdirArchive(reader *zip.Reader, data []byte, subdir string) ([]byte, error) {
-	dir := strings.Trim(subdir, "/")
-	if dir == "" {
-		return data, nil
-	}
-	under := archivePrefix + dir + "/"
-	var buf bytes.Buffer
-	writer := zip.NewWriter(&buf)
-	kept := 0
-	for _, entry := range reader.File {
-		if !strings.HasPrefix(entry.Name, under) {
-			continue
-		}
-		kept++
-		dst, err := writer.CreateRaw(&entry.FileHeader)
-		if err != nil {
-			return nil, err
-		}
-		src, err := entry.OpenRaw()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := io.Copy(dst, src); err != nil {
-			return nil, err
-		}
-	}
-	if kept == 0 {
-		return nil, fs.ErrNotExist
->>>>>>> origin/master
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
@@ -770,7 +622,6 @@ func subdirArchive(reader *zip.Reader, data []byte, subdir string) ([]byte, erro
 	return buf.Bytes(), nil
 }
 
-<<<<<<< HEAD
 // An archiveBuilder collects the entries of a GitHub archive: files and
 // symlinks only, each named without the one top-level directory.
 type archiveBuilder struct {
@@ -781,22 +632,6 @@ type archiveBuilder struct {
 
 func newArchiveBuilder() *archiveBuilder {
 	return &archiveBuilder{}
-=======
-// An archiveBuilder turns the entries of a GitHub archive into the zip that
-// ReadZip returns: one "prefix/" directory, files and symlinks only.
-type archiveBuilder struct {
-	top    string
-	when   time.Time
-	buf    bytes.Buffer
-	writer *zip.Writer
-	files  int
-}
-
-func newArchiveBuilder() *archiveBuilder {
-	builder := &archiveBuilder{}
-	builder.writer = zip.NewWriter(&builder.buf)
-	return builder
->>>>>>> origin/master
 }
 
 // add records one entry. name is the path inside the archive, with its top
@@ -831,7 +666,6 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 	if err != nil {
 		return err
 	}
-<<<<<<< HEAD
 	b.entries = append(b.entries, archiveEntry{name: rest, mode: mode, data: data})
 	return nil
 }
@@ -839,24 +673,6 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 // finish returns the entries, the commit time and the commit. embedded is the
 // commit the archive names. hash stands in when the archive names none.
 func (b *archiveBuilder) finish(embedded, hash string) ([]archiveEntry, time.Time, string, error) {
-=======
-	header := &zip.FileHeader{Name: archivePrefix + rest, Method: zip.Deflate, Modified: mtime}
-	header.SetMode(mode)
-	dst, err := b.writer.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	if _, err := dst.Write(data); err != nil {
-		return err
-	}
-	b.files++
-	return nil
-}
-
-// finish returns the zip, the commit time and the commit. embedded is the
-// commit the archive names. hash stands in when the archive names none.
-func (b *archiveBuilder) finish(embedded, hash string) ([]byte, time.Time, string, error) {
->>>>>>> origin/master
 	commit := hash
 	if len(embedded) == 40 && AllHex(embedded) {
 		commit = embedded
@@ -864,7 +680,6 @@ func (b *archiveBuilder) finish(embedded, hash string) ([]byte, time.Time, strin
 	if commit == "" {
 		return nil, time.Time{}, "", errors.New("archive names no commit")
 	}
-<<<<<<< HEAD
 	if len(b.entries) == 0 {
 		return nil, time.Time{}, "", errors.New("archive holds no files")
 	}
@@ -874,23 +689,6 @@ func (b *archiveBuilder) finish(embedded, hash string) ([]byte, time.Time, strin
 // parseZipArchive reads a git archive zip. Its comment names the commit,
 // and every entry carries the commit time.
 func parseZipArchive(data []byte, hash string) ([]archiveEntry, time.Time, string, error) {
-=======
-	if b.files == 0 {
-		return nil, time.Time{}, "", errors.New("archive holds no files")
-	}
-	if err := b.writer.SetComment(commit + " " + strconv.FormatInt(b.when.Unix(), 10)); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	if err := b.writer.Close(); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	return b.buf.Bytes(), b.when, commit, nil
-}
-
-// githubZipToArchive converts a git archive zip. Its comment names the
-// commit, and every entry carries the commit time.
-func githubZipToArchive(data []byte, hash string) ([]byte, time.Time, string, error) {
->>>>>>> origin/master
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, time.Time{}, "", err
@@ -910,22 +708,6 @@ func githubZipToArchive(data []byte, hash string) ([]byte, time.Time, string, er
 	return builder.finish(reader.Comment, hash)
 }
 
-<<<<<<< HEAD
-=======
-// parseArchiveComment reads the "<hash> <unix time>" comment of a kept archive.
-func parseArchiveComment(comment, hash string) (time.Time, error) {
-	id, sec, found := strings.Cut(comment, " ")
-	if !found || id != hash {
-		return time.Time{}, fmt.Errorf("kept archive is not of %s", hash)
-	}
-	unix, err := strconv.ParseInt(sec, 10, 64)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("kept archive of %s has bad time %q", hash, sec)
-	}
-	return time.Unix(unix, 0).UTC(), nil
-}
-
->>>>>>> origin/master
 // writeFileAtomic writes data under a temporary name and renames it into
 // place, so a concurrent reader never sees half an archive.
 func writeFileAtomic(name string, data []byte) error {
