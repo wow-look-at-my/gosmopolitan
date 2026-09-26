@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 )
 
 // Interceptor is used to change the host, and maybe the client,
@@ -46,6 +47,17 @@ func DisableTestHooks() {
 	}
 	TestHooksEnabled = false
 	testInterceptors = nil
+}
+
+// AddTestHooks installs more interceptors next to any already enabled. The
+// returned function restores the previous set.
+func AddTestHooks(more []Interceptor) (restore func()) {
+	wasEnabled, previous := TestHooksEnabled, testInterceptors
+	testInterceptors = append(slices.Clip(previous), more...)
+	TestHooksEnabled = true
+	return func() {
+		TestHooksEnabled, testInterceptors = wasEnabled, previous
+	}
 }
 
 var (
