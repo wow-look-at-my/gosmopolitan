@@ -427,29 +427,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 // as Unzip writes a zip's entries, and records their hash in ziphashfile.
 // No zip is made. The caller holds the version lock.
 func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []modzip.File, ziphashfile string) error {
-	if err := module.Check(mod.Path, mod.Version); err != nil {
-		return err
-	}
-	checked, err := modzip.CheckFiles(files)
-	if err != nil {
-		return err
-	}
-	valid := make(map[string]modzip.File, len(checked.Valid))
-	for _, file := range files {
-		if slices.Contains(checked.Valid, file.Path()) {
-			valid[file.Path()] = file
-		}
-	}
-
-	// The hash is the one HashZip gives for the module zip of these files.
-	prefix := mod.Path + "@" + mod.Version + "/"
-	var names []string
-	for name := range valid {
-		names = append(names, prefix+name)
-	}
-	hash, err := dirhash.DefaultHash(names, func(name string) (io.ReadCloser, error) {
-		return valid[strings.TrimPrefix(name, prefix)].Open()
-	})
+	valid, hash, err := checkModuleFiles(mod, files)
 	if err != nil {
 		return err
 	}
@@ -468,16 +446,47 @@ func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []mo
 	return writeZiphash(ziphashfile, hash)
 }
 
+// checkModuleFiles applies the checks a module zip gets to files. It returns
+// the files that belong in the module, in order, and the h1 hash that
+// HashZip gives for a zip of them.
+func checkModuleFiles(mod module.Version, files []modzip.File) ([]modzip.File, string, error) {
+	if err := module.Check(mod.Path, mod.Version); err != nil {
+		return nil, "", err
+	}
+	checked, err := modzip.CheckFiles(files)
+	if err != nil {
+		return nil, "", err
+	}
+	var valid []modzip.File
+	byName := make(map[string]modzip.File)
+	prefix := mod.Path + "@" + mod.Version + "/"
+	var names []string
+	for _, file := range files {
+		if slices.Contains(checked.Valid, file.Path()) {
+			valid = append(valid, file)
+			byName[prefix+file.Path()] = file
+			names = append(names, prefix+file.Path())
+		}
+	}
+	hash, err := dirhash.DefaultHash(names, func(name string) (io.ReadCloser, error) {
+		return byName[name].Open()
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return valid, hash, nil
+}
+
 // writeModuleFiles writes each file under dir, read-only, as Unzip does.
-func writeModuleFiles(dir string, files map[string]modzip.File) error {
+func writeModuleFiles(dir string, files []modzip.File) error {
 	if entries, _ := os.ReadDir(dir); len(entries) > 0 {
 		return fmt.Errorf("target directory %v exists and is not empty", dir)
 	}
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
 	}
-	for name, file := range files {
-		dst := filepath.Join(dir, filepath.FromSlash(name))
+	for _, file := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(file.Path()))
 		if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
 			return err
 		}

@@ -49,6 +49,6 @@ The archive is used as GitHub serves it. It omits the commit of each submodule a
 
 ## What is kept
 
-The archive is stored as GitHub served it, as `<vcs work dir>/github/<hash>.tar.gz` or `<hash>.zip`. Nothing converts it. `<hash>.time` holds the commit time and is written last, so it marks a complete archive. The archive is parsed in memory once per process. The module-cache zip is built straight from those files. It is the only zip made. `Stat`, `ReadFile` and the module zip all read from it, so a download needs no git objects at all. `RecentTag` still needs history. When a plausible tag exists, it runs the full git fetch.
+The archive is stored as GitHub served it, as `<vcs work dir>/github/<hash>.tar.gz` or `<hash>.zip`. Nothing converts it. `<hash>.time` holds the commit time and is written last, so it marks a complete archive. The archive is parsed in memory once per process. The module's files go from there straight into `$GOMODCACHE/<module>@<version>/`. Their `h1:` hash, the go.sum records, goes into `.ziphash`. No zip is made at any step, in the module cache or as a temporary file. `Stat` and `ReadFile` read the same parsed archive. As a result, a download needs no git objects at all. `RecentTag` still needs history. When a plausible tag exists, it runs the full git fetch.
 
 `go get -x` prints each archive and API request, and why a source failed.
