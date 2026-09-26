@@ -94,7 +94,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool) (*Response, error) {
+func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool, credentialURL string) (*Response, error) {
 	start := time.Now()
 
 	if url.Scheme == "file" {
@@ -147,7 +147,9 @@ func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool) (*
 		if allowHost != nil {
 			client = hostPinnedHTTPClient(client, allowHost)
 		}
-		if url.Scheme == "https" {
+		if url.Scheme == "https" && credentialURL != "" {
+			auth.AddCredentialsFor(client, req, credentialURL)
+		} else if url.Scheme == "https" {
 			// Use initial GOAUTH credentials.
 			auth.AddCredentials(client, req, nil, "")
 		}
@@ -172,7 +174,7 @@ func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool) (*
 		// (e.g. a valid <meta name="go-import"> tag),
 		// retry the request with credentials obtained by invoking GOAUTH
 		// with the request URL.
-		if url.Scheme == "https" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
+		if url.Scheme == "https" && credentialURL == "" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
 			// Close the body of the previous response since we
 			// are discarding it and creating a new one.
 			res.Body.Close()

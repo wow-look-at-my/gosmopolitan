@@ -7,6 +7,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,12 +71,20 @@ const proxyHost = "proxy.pazer.ai"
 
 func isProxyHost(host string) bool { return host == proxyHost }
 
-// An archiveSource is one place to download an archive from, and the hosts
-// the request may touch on the way.
+// An archiveSource is one place to download from, and the hosts the request
+// may touch on the way. credentialFor names the URL whose GOAUTH credential
+// the request carries, when that is not url itself.
 type archiveSource struct {
-	url       string
-	ext       string
-	allowHost func(string) bool
+	url           string
+	ext           string
+	allowHost     func(string) bool
+	credentialFor string
+}
+
+// viaProxy returns the source that fetches target through the proxy, with
+// target's own credential, which the proxy forwards.
+func viaProxy(target, ext string) archiveSource {
+	return archiveSource{url: "https://" + proxyHost + "/?url=" + url.QueryEscape(target), ext: ext, allowHost: isProxyHost, credentialFor: target}
 }
 
 // archiveSources lists where to get the archive of hash, in the order to try:
@@ -89,7 +98,7 @@ func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
 		archive := "https://github.com/" + g.owner + "/" + g.name + "/archive/" + name + ext
 		sources = append(sources,
 			archiveSource{url: archive, ext: ext, allowHost: githubHost},
-			archiveSource{url: "https://" + proxyHost + "/?url=" + url.QueryEscape(archive), ext: ext, allowHost: isProxyHost},
+			viaProxy(archive, ext),
 		)
 	}
 	return sources
@@ -106,6 +115,203 @@ func refPath(ref, hash string) string {
 		segments[idx] = url.PathEscape(seg)
 	}
 	return strings.Join(segments, "/")
+}
+
+func isAPIHost(host string) bool { return host == "api.github.com" }
+
+// maxAPIResponse bounds one page of an api.github.com list. A longer body
+// fails to decode, so the caller falls back to ls-remote.
+const maxAPIResponse = 16 << 20
+
+// gsmHost is github-state-mirror, a cache of the GitHub API that the owner
+// of this fork runs. It answers only a request that carries a GitHub token.
+const gsmHost = "github-state-mirror.pazer.io"
+
+func isGSMHost(host string) bool { return host == gsmHost }
+
+// githubRefs returns what ls-remote would list, over plain HTTP. The first
+// source that answers wins: the info/refs advertisement from github.com,
+// direct and then through the proxy; then the REST API, from
+// github-state-mirror, api.github.com, and api.github.com through the proxy.
+func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
+	infoRefs := "https://github.com/" + r.github.owner + "/" + r.github.name + ".git/info/refs?service=git-upload-pack"
+	var errs []error
+	for _, source := range []archiveSource{
+		{url: infoRefs, allowHost: githubHost},
+		viaProxy(infoRefs, ""),
+	} {
+		refs, err := r.githubInfoRefs(source)
+		if err == nil {
+			return refs, nil
+		}
+		errs = append(errs, err)
+	}
+	refs, err := r.githubAPIRefs(ctx)
+	if err == nil {
+		return refs, nil
+	}
+	errs = append(errs, err)
+	err = errors.Join(errs...)
+	if xLog, ok := cfg.BuildXWriter(ctx); ok {
+		fmt.Fprintf(xLog, "# github refs: %v\n", err)
+	}
+	return nil, err
+}
+
+// githubInfoRefs reads the ref advertisement git itself fetches first.
+func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error) {
+	u, err := url.Parse(source.url)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := resp.Err(); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponse))
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", u.Redacted(), err)
+	}
+	refs, err := parseRefAdvertisement(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", u.Redacted(), err)
+	}
+	return refs, nil
+}
+
+// parseRefAdvertisement reads a smart-HTTP upload-pack advertisement: pkt-lines
+// of "<hash> <ref>", the first with capabilities after a NUL. It keeps what
+// loadRefs keeps, HEAD, heads and tags, with each annotated tag peeled.
+func parseRefAdvertisement(data []byte) (map[string]string, error) {
+	all := make(map[string]string)
+	sawService := false
+	for len(data) > 0 {
+		if len(data) < 4 {
+			return nil, errors.New("truncated pkt-line")
+		}
+		size, err := strconv.ParseUint(string(data[:4]), 16, 16)
+		if err != nil {
+			return nil, fmt.Errorf("bad pkt-line length %q", data[:4])
+		}
+		if size == 0 {
+			data = data[4:]
+			continue
+		}
+		if size < 4 || int(size) > len(data) {
+			return nil, fmt.Errorf("bad pkt-line length %d", size)
+		}
+		line := strings.TrimSuffix(string(data[4:size]), "\n")
+		data = data[size:]
+		if strings.HasPrefix(line, "# service=") {
+			sawService = true
+			continue
+		}
+		line, _, _ = strings.Cut(line, "\x00")
+		hash, ref, found := strings.Cut(line, " ")
+		if !found || len(hash) != 40 || !AllHex(hash) {
+			return nil, fmt.Errorf("bad ref line %q", line)
+		}
+		all[ref] = hash
+	}
+	if !sawService {
+		return nil, errors.New("not a git upload-pack advertisement")
+	}
+	refs := make(map[string]string)
+	for ref, hash := range all {
+		if ref == "HEAD" || strings.HasPrefix(ref, "refs/heads/") || strings.HasPrefix(ref, "refs/tags/") {
+			refs[ref] = hash
+		}
+	}
+	for ref, hash := range refs {
+		if name, peeled := strings.CutSuffix(ref, "^{}"); peeled {
+			refs[name] = hash
+			delete(refs, ref)
+		}
+	}
+	return refs, nil
+}
+
+// githubAPIRefs lists every tag and branch at its commit, and HEAD at the
+// default branch, from the REST API.
+func (r *gitRepo) githubAPIRefs(ctx context.Context) (map[string]string, error) {
+	type named struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	refs := make(map[string]string)
+	for _, kind := range []string{"tags", "branches"} {
+		prefix := "refs/tags/"
+		if kind == "branches" {
+			prefix = "refs/heads/"
+		}
+		for page := 1; ; page++ {
+			var list []named
+			if err := r.githubAPI(ctx, "/"+kind+"?per_page=100&page="+strconv.Itoa(page), &list); err != nil {
+				return nil, err
+			}
+			for _, item := range list {
+				refs[prefix+item.Name] = item.Commit.SHA
+			}
+			if len(list) < 100 {
+				break
+			}
+		}
+	}
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := r.githubAPI(ctx, "", &repo); err != nil {
+		return nil, err
+	}
+	if hash, found := refs["refs/heads/"+repo.DefaultBranch]; found {
+		refs["HEAD"] = hash
+	}
+	return refs, nil
+}
+
+// githubAPI decodes the JSON at /repos/<owner>/<repo><suffix>, from
+// github-state-mirror, api.github.com, then api.github.com through the proxy.
+func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
+	route := "/repos/" + r.github.owner + "/" + r.github.name + suffix
+	direct := "https://api.github.com" + route
+	sources := []archiveSource{
+		// The mirror wants the same GitHub token api.github.com takes.
+		{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct},
+		{url: direct, allowHost: isAPIHost},
+		viaProxy(direct, ""),
+	}
+	var errs []error
+	for _, source := range sources {
+		u, err := url.Parse(source.url)
+		if err != nil {
+			return err
+		}
+		resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		err = resp.Err()
+		if err == nil {
+			err = json.NewDecoder(io.LimitReader(resp.Body, maxAPIResponse)).Decode(out)
+		}
+		resp.Body.Close()
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", u.Redacted(), err))
+	}
+	err := errors.Join(errs...)
+	if xLog, ok := cfg.BuildXWriter(ctx); ok {
+		fmt.Fprintf(xLog, "# github api: %v\n", err)
+	}
+	return err
 }
 
 // githubArchivePath is where a converted archive of hash is kept.
@@ -199,7 +405,7 @@ func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash
 	if err != nil {
 		return nil, time.Time{}, "", err
 	}
-	resp, err := web.GetPinned(u, source.allowHost)
+	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
 	if err != nil {
 		return nil, time.Time{}, "", err
 	}

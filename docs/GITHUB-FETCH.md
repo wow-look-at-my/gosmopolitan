@@ -15,13 +15,25 @@ The archives are used only when the module proxy is skipped or misses. That happ
 
 ## Which URLs
 
-| Ref from `git ls-remote` | Archive path |
+| Ref | Archive path |
 |---|---|
 | `refs/tags/v1.2.3` | `archive/refs/tags/v1.2.3.tar.gz` |
 | `refs/heads/master` | `archive/refs/heads/master.tar.gz` |
 | `HEAD` | `archive/<commit hash>.tar.gz` |
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two, or other than `proxy.pazer.ai` for a proxy request.
+## Tags, branches and commits without git
+
+A version tag such as `v1.2.3` needs no ref list. Its archive is fetched first. The commit comes out of the archive: the tar.gz pax `comment` record, or the zip comment.
+
+Everything else reads the ref list from the GitHub API, not `git ls-remote`:
+
+- `https://api.github.com/repos/<owner>/<repo>/tags?per_page=100&page=N` for each tag and its commit.
+- `.../branches?per_page=100&page=N` for each branch.
+- `https://api.github.com/repos/<owner>/<repo>` for `default_branch`, which is `HEAD`.
+
+Each request goes direct, then through proxy.pazer.ai. Without a token, api.github.com allows requests an hour, and a GOAUTH or netrc credential for api.github.com raises that. `git ls-remote` runs only when the API fails from both.
+
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach api.github.com, and a proxy request only proxy.pazer.ai.
 
 A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
 
@@ -31,4 +43,4 @@ The archive is used as GitHub serves it. It omits the commit of each submodule a
 
 The converted archive is stored as `<vcs work dir>/github/<hash>.zip`. Its comment holds the hash and the commit time. `Stat`, `ReadFile` and `ReadZip` all read from it, so a download needs no git objects at all. `RecentTag` still needs history. When a plausible tag exists, it runs the full git fetch.
 
-`go get -x` prints each archive request and why a source failed.
+`go get -x` prints each archive and API request, and why a source failed.

@@ -265,6 +265,12 @@ func (r *gitRepo) loadRefs(ctx context.Context) (map[string]string, error) {
 		return nil, nil
 	}
 	r.refsOnce.Do(func() {
+		if r.github != nil {
+			if refs, err := r.githubRefs(ctx); err == nil {
+				r.refs = refs
+				return
+			}
+		}
 		// The git protocol sends all known refs and ls-remote filters them on the client side,
 		// so we might as well record both heads and tags in one shot.
 		// Most of the time we only care about tags but sometimes we care about heads too.

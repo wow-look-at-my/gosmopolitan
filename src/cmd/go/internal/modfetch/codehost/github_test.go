@@ -7,7 +7,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"internal/testenv"
 	"io"
 	"net/http"
@@ -18,6 +20,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -279,19 +282,69 @@ type fakeGitHub struct {
 	// proxyRedirects makes the proxy pass the codeload redirect through.
 	proxyRedirects bool
 
-	mu       sync.Mutex
-	requests []string
+	// infoRefsStatus fails every info/refs request, direct or proxied.
+	infoRefsStatus int
+	// apiStatus fails every direct api.github.com request with this code.
+	apiStatus int
+
+	mu sync.Mutex
+	// requests records archive traffic, and refRequests the ref listings: info/refs, github-state-mirror and the API.
+	requests    []string
+	refRequests []string
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	record := req.Host + req.URL.Path
+	target := req.URL
 	if req.Host == "proxy.pazer.ai" {
 		record = req.Host + "?url=" + req.URL.Query().Get("url")
+		inner, err := url.Parse(req.URL.Query().Get("url"))
+		if err != nil {
+			http.Error(w, "bad url", http.StatusBadRequest)
+			return
+		}
+		target = inner
+	} else {
+		target = &url.URL{Host: req.Host, Path: req.URL.Path, RawQuery: req.URL.RawQuery}
 	}
+	isInfoRefs := target.Host == "github.com" && strings.HasSuffix(target.Path, "/info/refs")
+	isAPI := target.Host == "api.github.com" || req.Host == gsmHost
 	f.mu.Lock()
-	f.requests = append(f.requests, record)
+	if isAPI || isInfoRefs {
+		f.refRequests = append(f.refRequests, record)
+	} else {
+		f.requests = append(f.requests, record)
+	}
 	f.mu.Unlock()
 
+	if req.Host == gsmHost {
+		http.Error(w, "unauthorized: missing Authorization header", http.StatusUnauthorized)
+		return
+	}
+	if isInfoRefs {
+		if f.infoRefsStatus != 0 {
+			http.Error(w, "no refs", f.infoRefsStatus)
+			return
+		}
+		cmd := exec.Command("git", "upload-pack", "--advertise-refs", f.dir)
+		refs, err := cmd.Output()
+		if err != nil {
+			panic(err)
+		}
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		service := "# service=git-upload-pack\n"
+		fmt.Fprintf(w, "%04x%s0000", len(service)+4, service)
+		w.Write(refs)
+		return
+	}
+	if isAPI {
+		if req.Host != "proxy.pazer.ai" && f.apiStatus != 0 {
+			http.Error(w, "rate limited", f.apiStatus)
+			return
+		}
+		f.serveAPI(w, req, target)
+		return
+	}
 	switch req.Host {
 	case "github.com":
 		format, name, found := archivePath(req.URL.Path)
@@ -332,6 +385,57 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// serveAPI answers the api.github.com requests that githubRefs makes, from
+// the refs of the source repository.
+func (f *fakeGitHub) serveAPI(w http.ResponseWriter, req *http.Request, apiURL *url.URL) {
+	type named struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	list := func(prefix string) []named {
+		cmd := exec.Command("git", "for-each-ref", "--format=%(refname:strip=2) %(if)%(*objectname)%(then)%(*objectname)%(else)%(objectname)%(end)", prefix)
+		cmd.Dir = f.dir
+		out, err := cmd.Output()
+		if err != nil {
+			panic(err)
+		}
+		items := []named{}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			name, sha, found := strings.Cut(line, " ")
+			if !found {
+				continue
+			}
+			item := named{Name: name}
+			item.Commit.SHA = sha
+			items = append(items, item)
+		}
+		return items
+	}
+	var body any
+	page := apiURL.Query().Get("page")
+	switch apiURL.Path {
+	case "/repos/owner/repo":
+		body = map[string]string{"default_branch": "master"}
+	case "/repos/owner/repo/tags":
+		body = []named{}
+		if page == "1" {
+			body = list("refs/tags")
+		}
+	case "/repos/owner/repo/branches":
+		body = []named{}
+		if page == "1" {
+			body = list("refs/heads")
+		}
+	default:
+		http.NotFound(w, req)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
+}
+
 // archivePath splits "/owner/repo/archive/<name>.<format>".
 func archivePath(urlPath string) (format, name string, found bool) {
 	rest, found := strings.CutPrefix(urlPath, "/owner/repo/archive/")
@@ -362,6 +466,83 @@ func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via,
 		return
 	}
 	w.Write(served)
+}
+
+// serveFakeGitHub routes every host the fetcher can reach to fake, and a few
+// it must never reach, so a request to those shows up in fake.requests.
+func serveFakeGitHub(t *testing.T, fake *fakeGitHub) {
+	server := httptest.NewTLSServer(fake)
+	t.Cleanup(server.Close)
+	var hooks []intercept.Interceptor
+	for _, host := range []string{"github.com", "codeload.github.com", "api.github.com", gsmHost, "proxy.pazer.ai", "evil.example", "140.82.112.10"} {
+		hooks = append(hooks, intercept.Interceptor{Scheme: "https", FromHost: host, ToHost: server.Listener.Addr().String(), Client: server.Client()})
+	}
+	t.Cleanup(intercept.AddTestHooks(hooks))
+}
+
+// TestGitHubRefsOverHTTP resolves tags, branches and HEAD with no git remote
+// behind the repository, so every answer has to come over plain HTTP.
+func TestGitHubRefsOverHTTP(t *testing.T) {
+	source, tagged := makeSourceRepo(t, sourceFiles)
+	gitIn(t, source, "tag", "-a", "-m", "annotated", "v1.1.0")
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "after the tag")
+	head := gitIn(t, source, "rev-parse", "HEAD")
+
+	cases := []struct {
+		name           string
+		infoRefsStatus int
+		apiStatus      int
+		// wantFrom is where the refs came from: a prefix of the request that served them.
+		wantFrom string
+	}{
+		{name: "info/refs", wantFrom: "github.com/owner/repo.git/info/refs"},
+		{name: "api", infoRefsStatus: http.StatusForbidden, wantFrom: "api.github.com/repos/owner/repo"},
+		{name: "api through the proxy", infoRefsStatus: http.StatusForbidden, apiStatus: http.StatusForbidden, wantFrom: "proxy.pazer.ai?url=https://api.github.com/"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com", infoRefsStatus: test.infoRefsStatus, apiStatus: test.apiStatus}
+			serveFakeGitHub(t, fake)
+			ctx := testContext(t)
+			repo := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+			tags, err := repo.Tags(ctx, "v")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []Tag{{"v1.0.0", tagged}, {"v1.1.0", tagged}}; !reflect.DeepEqual(tags.List, want) {
+				t.Errorf("Tags = %v, want %v", tags.List, want)
+			}
+			latest, err := repo.Latest(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if latest.Name != head || latest.Origin.Ref != "HEAD" {
+				t.Errorf("Latest = %s at %q, want %s at HEAD", latest.Name, latest.Origin.Ref, head)
+			}
+			master, err := repo.Stat(ctx, "master")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if master.Name != head || master.Origin.Ref != "refs/heads/master" {
+				t.Errorf("Stat(master) = %s at %q, want %s at refs/heads/master", master.Name, master.Origin.Ref, head)
+			}
+
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			// Refs load once, so the last ref request is the one that answered.
+			last := fake.refRequests[len(fake.refRequests)-1]
+			if !strings.HasPrefix(last, test.wantFrom) {
+				t.Errorf("refs came from %s, want %s\nall: %q", last, test.wantFrom, fake.refRequests)
+			}
+			// github-state-mirror comes before api.github.com whenever the API runs.
+			usedAPI := test.infoRefsStatus != 0
+			sawGSM := slices.ContainsFunc(fake.refRequests, func(request string) bool { return strings.HasPrefix(request, gsmHost) })
+			if sawGSM != usedAPI {
+				t.Errorf("asked github-state-mirror: %v, want %v\nall: %q", sawGSM, usedAPI, fake.refRequests)
+			}
+		})
+	}
 }
 
 // fakeGitHubRepo opens the local bare repository at dir as if it were
@@ -417,8 +598,9 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			name:         "github.com tar.gz first",
 			wantRequests: []string{githubTar, codeloadTar},
 		},
-		// web.Get asks again with GOAUTH credentials after a 4xx, so a
-		// missing archive is requested twice.
+		// web.Get asks github.com again with GOAUTH credentials after a 4xx.
+		// A proxied request carries its credential from the start, so it
+		// is sent once.
 		{
 			name:         "proxy tar.gz when github.com has none",
 			status:       missing("github.tar.gz"),
@@ -427,17 +609,17 @@ func TestGitHubArchiveFallback(t *testing.T) {
 		{
 			name:         "github.com zip when there is no tar.gz",
 			status:       missing("github.tar.gz", "proxy.tar.gz"),
-			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, codeloadZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, codeloadZip},
 		},
 		{
 			name:         "proxy zip after every other archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip"),
-			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, githubZip, proxyZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
 		},
 		{
 			name:         "git when there is no archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
-			wantRequests: []string{githubTar, githubTar, proxyTar, proxyTar, githubZip, githubZip, proxyZip, proxyZip},
+			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
 			wantGit:      true,
 		},
 		{
@@ -460,13 +642,7 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			if fake.redirectTo == "" {
 				fake.redirectTo = "codeload.github.com"
 			}
-			server := httptest.NewTLSServer(fake)
-			defer server.Close()
-			var hooks []intercept.Interceptor
-			for _, host := range []string{"github.com", "codeload.github.com", "proxy.pazer.ai", "evil.example", "140.82.112.10"} {
-				hooks = append(hooks, intercept.Interceptor{Scheme: "https", FromHost: host, ToHost: server.Listener.Addr().String(), Client: server.Client()})
-			}
-			defer intercept.AddTestHooks(hooks)()
+			serveFakeGitHub(t, fake)
 
 			// Each case gets its own remote, so it gets its own work directory.
 			remote := filepath.Join(t.TempDir(), "remote.git")
@@ -565,13 +741,7 @@ func TestGitHubRecentTagWithoutHistory(t *testing.T) {
 	head := gitIn(t, source, "rev-parse", "HEAD")
 
 	fake := &fakeGitHub{dir: source, redirectTo: "codeload.github.com"}
-	server := httptest.NewTLSServer(fake)
-	defer server.Close()
-	var hooks []intercept.Interceptor
-	for _, host := range []string{"github.com", "codeload.github.com"} {
-		hooks = append(hooks, intercept.Interceptor{Scheme: "https", FromHost: host, ToHost: server.Listener.Addr().String(), Client: server.Client()})
-	}
-	defer intercept.AddTestHooks(hooks)()
+	serveFakeGitHub(t, fake)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	gitIn(t, source, "clone", "-q", "--bare", source, remote)
