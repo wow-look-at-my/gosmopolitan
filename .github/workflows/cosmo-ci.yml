@@ -512,6 +512,9 @@ jobs:
         with:
           tests: dats/test/apetest.dats dats/test/readonly-boot.dats
 
+      # The container suite runs the boot script under busybox as well as dash.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get install -y busybox-static
       # The container shape is built from mount namespaces, so it is linux only.
       - name: An APE runs in a read-only container (dats)
         if: runner.os == 'Linux'

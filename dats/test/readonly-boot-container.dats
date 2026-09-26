@@ -12,3 +12,12 @@ tests:
 	  outputs:
 		stdout:
 			- "read-only container, noexec /dev/shm: fizzbuzz, and nothing left"
+	# busybox answers [ -x ] from the mode bits for root, so a noexec /dev/shm
+	# passes it. A docker build runs busybox as root, and that is where the
+	# boot script's exec used to fail.
+	- desc: busybox as root skips a noexec /dev/shm and runs the program
+	  cmd: RO_BOOT_SH='busybox sh' dats/test/readonly-boot.sh container binaries/ape-binary-Linux/fizzbuzz.com
+	  exit: 0
+	  outputs:
+		stdout:
+			- "read-only container, noexec /dev/shm: fizzbuzz, and nothing left"
