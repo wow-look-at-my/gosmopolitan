@@ -69,7 +69,7 @@ collect var Loaders []Loader
 
 // image/png/png.go
 func init() {
-	image.Loaders += pngLoader{}
+	image.Loaders = append(image.Loaders, pngLoader{})
 }
 
 // consumer
@@ -81,21 +81,21 @@ for _, ldr := range image.Loaders {
 ### Rules
 
 - **`collect var` declares a collection.** `collect` is a contextual keyword, like `readonly` (docs/READONLY-VARS.md). It is a keyword only where a top-level declaration starts, and only before `var`. The type must be a slice.
-- **A contribution is `X += value`. It is legal only in `init()`.** It must be an unconditional statement at the top level of an `init` body. It is a compile error inside an `if`, a loop, a closure, or any other function: `image.Loaders: contribute only at the top level of init`.
-- **The value must be statically initializable.** This is the test `staticinit` already applies to `var x = T{...}`. `image.Loaders += newLoader()` is a compile error. Expensive state goes behind `sync.OnceValue` inside the methods.
+- **A contribution is `X = append(X, value)`, with the same `X` on both sides. It is legal only in `init()`.** This is ordinary Go syntax. Go has no operator overloading. This feature does not add any. It must be an unconditional statement at the top level of an `init` body. It is a compile error inside an `if`, a loop, a closure, or any other function: `image.Loaders: contribute only at the top level of init`.
+- **The value must be statically initializable.** This is the test `staticinit` already applies to `var x = T{...}`. `image.Loaders = append(image.Loaders, newLoader())` is a compile error. Expensive state goes behind `sync.OnceValue` inside the methods.
 - **Each contribution is type-checked against the element type.** The `var _ Loader = ...` line is no longer needed.
 - **The collection is readonly everywhere, the declaring package included.** The backing array is in rodata. An assignment to the variable, an assignment to an element, and an `append` onto it are compile errors. This is stricter than `readonly var`, where slice elements stay writable.
 - **Order is stable and meaningless.** The linker sorts by package path, then by source position. The documentation states that this order is not a priority. A consumer that needs priority puts a priority field in the element and sorts on it.
 
-### The lift, and why it is acceptable
+### Open: lift or real append
 
-The statement is written in `init`, but the compiler lifts it into a link-time section. It does not execute when `init` runs. One consequence is visible: `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included.
+A contribution can execute as a real append, or the compiler can lift it into data. The choice is open.
 
-Go already works this way. The spec says `var x = T{...}` is initialized by package initialization. The compiler emits data instead.
+**Real append.** The statement executes in `init`, as written. The init-only rule already fixes the list once `init` ends. The order is the same package-path order. The cost is problem 5: code that reads the list in another package's `init` can see part of it.
 
-The alternative is a real append at run time. It keeps the syntax literal. It also brings back problems 2, 4 and 5.
+**Lift.** The compiler turns the statement into data in a link-time section. It does not execute when `init` runs. So `image.Loaders` is complete when any `init` reads it, the declaring package's own `init` included. Go already does this for `var x = T{...}`: the spec says package initialization sets it. The compiler emits data. An `init` that holds only contributions becomes empty, and the compiler already removes an empty `init`.
 
-An `init` that holds only contributions becomes empty. The compiler already removes an empty `init`.
+Both ways, the compiler sees every contribution, so the build-time checks under "What go-toolchain does" work either way.
 
 ### How each problem is handled
 
@@ -147,7 +147,7 @@ The alternative is a reflection call that returns every linked type that impleme
 5. **Generics.** An uninstantiated generic type has no type descriptor. A generic loader is found only when some other code happened to instantiate it.
 6. **It hides the dependency.** Nothing in `png.go` says the type is registered. A method rename silently removes it from the set, with no error.
 
-It also does not fix problem 1. A type is in the binary only if its package is imported. As a result, the blank import stays. It removes one line per implementation, the `+=`, and in exchange the author can no longer control what is in the set.
+It also does not fix problem 1. A type is in the binary only if its package is imported. As a result, the blank import stays. It removes one line per implementation, the `append`, and in exchange the author can no longer control what is in the set.
 
 A variant with an explicit opt-in marks the type instead:
 
@@ -155,13 +155,14 @@ A variant with an explicit opt-in marks the type instead:
 type pngLoader struct{ image.Registered } // embedding is the opt-in
 ```
 
-The collection will then be every linked type that embeds the marker. It is opt-in and visible. It moves the `+=` into the struct definition and keeps points 2 and 3. The `+=` in `init` is preferred.
+The collection will then be every linked type that embeds the marker. It is opt-in and visible. It moves the `append` into the struct definition and keeps points 2 and 3. The `append` in `init` is preferred.
 
 ## Decisions recorded
 
 | Question | Decision |
 |---|---|
-| Where a contribution is written | In `init()`, as `X += value`. The compiler lifts it into data. |
+| Where a contribution is written | In `init()`, as `X = append(X, value)`. No operator overloading. |
+| Lift or real append | Open. |
 | Slice order | Stable by package path and source position. Meaningless by contract. |
 | First-version scope | Slice collections only. |
 | Tooling | Automatic, through go-toolchain only. No user-facing flag. |
