@@ -1119,7 +1119,6 @@ func loadModFile(ld *Loader, ctx context.Context, opts *PackageOpts) (*Requireme
 			modFiles = append(modFiles, ld.MainModules.ModFile(m))
 			modRoots = append(modRoots, ld.MainModules.ModRoot(m))
 		}
-		alignOrgVendor(modFiles)
 		checkVendorConsistency(ld, indexes, modFiles, modRoots)
 		rs.initVendor(ld, ctx, vendorList)
 	}
@@ -1562,8 +1561,9 @@ func rootsFromModFile(ld *Loader, ctx context.Context, m module.Version, modFile
 			continue
 		}
 
-		// An org root is the head of the branch the module follows, or the
-		// recorded version in a CI build.
+		// An org module has no version of its own: the token on the require line
+		// is a placeholder, and the root is the head of the branch the module
+		// follows.
 		root := r.Mod
 		root, err = resolveOrgRequire(ld, ctx, root)
 		if err != nil {
@@ -1968,9 +1968,10 @@ func UpdateGoModFromReqs(ld *Loader, ctx context.Context, opts WriteOpts) (befor
 			toolchain = m.Version
 			continue
 		}
-		// An org root is the branch head outside CI, so this records it.
+		// A go.mod file records the placeholder for an org module, never the
+		// branch head the build list resolved it to.
 		list = append(list, &modfile.Require{
-			Mod:      m,
+			Mod:      orgmod.PlaceholderModule(m),
 			Indirect: !ld.requirements.direct[m.Path],
 		})
 	}
@@ -2037,10 +2038,6 @@ func UpdateGoModFromReqs(ld *Loader, ctx context.Context, opts WriteOpts) (befor
 
 	for _, path := range opts.DropTools {
 		modFile.DropTool(path)
-	}
-
-	if err := recordOrgReplacements(ld, ctx, modFile); err != nil {
-		return nil, nil, nil, err
 	}
 
 	// Update require blocks.
