@@ -693,7 +693,7 @@ func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 	actual := resolveReplacement(ld, m)
 	if mustHaveSums(ld) && actual.Version != "" {
 		key := module.Version{Path: actual.Path, Version: actual.Version + "/go.mod"}
-		if !modfetch.HaveSum(ld.Fetcher(), key) {
+		if !modfetch.HaveSum(ld.Fetcher(), key) && !orgSyncAllows(ld, key) {
 			suggestion := fmt.Sprintf(" for go.mod file; to add it:\n\tgo mod download %s", m.Path)
 			return nil, module.VersionError(actual, &sumMissingError{suggestion: suggestion})
 		}

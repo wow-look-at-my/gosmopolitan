@@ -30,8 +30,13 @@ var allowedPackagePrefixes = []string{
 	// Fork-local: cmd/go talks to the org's shared build cache in process
 	// (see cmd/go/internal/cache/shared.go). lz4 is the cache's wire framing
 	// and go-containers/set is the client's own dependency.
+	// The client's broker reaches its children over go-ipc, which builds its
+	// queue on go-shm, which maps the segment with go-mmap.
 	"github.com/wow-look-at-my/go-s3-server/cacheclient",
 	"github.com/wow-look-at-my/go-containers",
+	"github.com/wow-look-at-my/go-ipc",
+	"github.com/wow-look-at-my/go-shm",
+	"github.com/wow-look-at-my/go-mmap",
 	"github.com/pierrec/lz4",
 
 	// Fork-local: the cache's broker serves one build's directory to every
