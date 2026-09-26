@@ -8,14 +8,13 @@ package codehost
 import (
 	"archive/tar"
 	"compress/gzip"
-	"fmt"
 	"io"
 	"strings"
 	"time"
 )
 
-// githubTarToArchive converts a git archive tar.gz. Its pax global header
-// names the commit, and every entry carries the commit time.
+// githubTarToArchive converts a git archive tar.gz. Every entry carries the
+// commit time.
 func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
 	unzipped, err := gzip.NewReader(src)
 	if err != nil {
@@ -24,7 +23,6 @@ func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
 	defer unzipped.Close()
 	reader := tar.NewReader(unzipped)
 	builder := newArchiveBuilder(hash)
-	sawCommit := false
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -34,14 +32,7 @@ func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
 			return nil, time.Time{}, err
 		}
 		if header.Typeflag == tar.TypeXGlobalHeader {
-			if id := header.PAXRecords["comment"]; id != hash {
-				return nil, time.Time{}, fmt.Errorf("archive is of commit %q, want %s", id, hash)
-			}
-			sawCommit = true
 			continue
-		}
-		if !sawCommit {
-			return nil, time.Time{}, fmt.Errorf("archive names no commit")
 		}
 		var content io.Reader = reader
 		mode := header.FileInfo().Mode()

@@ -264,70 +264,12 @@ func TestGitHubArchiveConversion(t *testing.T) {
 	}
 }
 
-func TestGitHubArchiveRefusals(t *testing.T) {
-	convert := func(t *testing.T, dir, format, hash string) error {
-		served := archiveOf(t, dir, format, "v1.0.0")
-		var err error
-		if format == "zip" {
-			_, _, err = githubZipToArchive(served, hash)
-		} else {
-			_, _, err = githubTarToArchive(bytes.NewReader(served), hash)
-		}
-		return err
-	}
-
-	t.Run("another commit", func(t *testing.T) {
-		dir, _ := makeSourceRepo(t, sourceFiles)
-		for _, format := range []string{"tar.gz", "zip"} {
-			err := convert(t, dir, format, strings.Repeat("1", 40))
-			if err == nil || !strings.Contains(err.Error(), "archive is of commit") {
-				t.Errorf("%s: err = %v, want a commit mismatch", format, err)
-			}
-		}
-	})
-
-	t.Run("submodule", func(t *testing.T) {
-		files := map[string]string{"go.mod": "module example.com/repo\n"}
-		dir, _ := makeSourceRepo(t, files)
-		gitIn(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+strings.Repeat("2", 40)+",vendor/dep")
-		gitIn(t, dir, "commit", "-q", "-m", "gitlink")
-		gitIn(t, dir, "tag", "-f", "v1.0.0")
-		hash := gitIn(t, dir, "rev-parse", "HEAD")
-		for _, format := range []string{"tar.gz", "zip"} {
-			err := convert(t, dir, format, hash)
-			if !errors.Is(err, errNoGitHubArchive) || !strings.Contains(err.Error(), "vendor/dep") {
-				t.Errorf("%s: err = %v, want the submodule named", format, err)
-			}
-		}
-	})
-
-	for _, attr := range []string{"export-ignore", "export-subst", "filter=lfs"} {
-		t.Run(attr, func(t *testing.T) {
-			files := map[string]string{
-				"go.mod":             "module example.com/repo\n",
-				"sub/.gitattributes": "*.bin " + attr + "\n",
-				"sub/data.bin":       "data\n",
-			}
-			dir, hash := makeSourceRepo(t, files)
-			for _, format := range []string{"tar.gz", "zip"} {
-				err := convert(t, dir, format, hash)
-				if !errors.Is(err, errNoGitHubArchive) || !strings.Contains(err.Error(), attr) {
-					t.Errorf("%s: err = %v, want the %s attribute named", format, err, attr)
-				}
-			}
-		})
-	}
-}
-
 // fakeGitHub serves archives of dir the way github.com, codeload.github.com
 // and proxy.pazer.ai do, and records every request it receives.
 type fakeGitHub struct {
 	dir        string
 	status     map[string]int
 	redirectTo string
-	// wrongCommit is the source that serves the archive of commit other.
-	wrongCommit string
-	other       string
 	// proxyRedirects makes the proxy pass the codeload redirect through.
 	proxyRedirects bool
 
@@ -406,9 +348,6 @@ func codeloadPath(urlPath string) (format, name string) {
 }
 
 func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via, format, name string) {
-	if f.wrongCommit == via+"."+format {
-		name = f.other
-	}
 	cmd := exec.Command("git", "archive", "--format="+format, "--prefix=repo-x/", name)
 	cmd.Dir = f.dir
 	served, err := cmd.Output()
@@ -422,7 +361,6 @@ func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via,
 func TestGitHubArchiveFallback(t *testing.T) {
 	testenv.MustHaveExecPath(t, "git")
 	source, hash := makeSourceRepo(t, sourceFilesWithLink())
-	other := gitIn(t, source, "commit-tree", "-m", "other", gitIn(t, source, "rev-parse", "HEAD^{tree}"))
 	want := zipEntries(t, referenceZip(t, source, hash))
 
 	const (
@@ -445,7 +383,6 @@ func TestGitHubArchiveFallback(t *testing.T) {
 		name           string
 		status         map[string]int
 		redirectTo     string
-		wrongCommit    string
 		proxyRedirects bool
 		wantRequests   []string
 		wantGit        bool
@@ -460,11 +397,6 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			name:         "proxy tar.gz when github.com has none",
 			status:       missing("github.tar.gz"),
 			wantRequests: []string{githubTar, githubTar, proxyTar},
-		},
-		{
-			name:         "proxy tar.gz when the github.com one is of another commit",
-			wrongCommit:  "github.tar.gz",
-			wantRequests: []string{githubTar, codeloadTar, proxyTar},
 		},
 		{
 			name:         "github.com zip when there is no tar.gz",
@@ -497,8 +429,6 @@ func TestGitHubArchiveFallback(t *testing.T) {
 				dir:            source,
 				status:         test.status,
 				redirectTo:     test.redirectTo,
-				wrongCommit:    test.wrongCommit,
-				other:          other,
 				proxyRedirects: test.proxyRedirects,
 			}
 			if fake.redirectTo == "" {

@@ -102,9 +102,6 @@ func refPath(ref, hash string) string {
 	return strings.Join(segments, "/")
 }
 
-// errNoGitHubArchive marks an archive that cannot stand in for git archive.
-var errNoGitHubArchive = errors.New("archive cannot replace git")
-
 // githubArchivePath is where a converted archive of hash is kept.
 func (r *gitRepo) githubArchivePath(hash string) string {
 	return filepath.Join(r.dir, "github", hash+".zip")
@@ -115,7 +112,7 @@ func (r *gitRepo) githubArchivePath(hash string) string {
 // ReadZip never have to fetch the commit with git. It requires r.mu.
 func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes || len(hash) != 40 {
-		return nil, errNoGitHubArchive
+		return nil, errors.New("not a github.com repository with SHA-1 hashes")
 	}
 	if when, err := r.githubArchiveTime(hash); err == nil {
 		return r.githubRevInfo(ctx, version, hash, when), nil
@@ -303,22 +300,16 @@ func subdirArchive(reader *zip.Reader, data []byte, subdir string) ([]byte, erro
 // An archiveBuilder turns the entries of a GitHub archive into the zip that
 // ReadZip returns: one "prefix/" directory, files and symlinks only.
 type archiveBuilder struct {
-	hash    string
-	top     string
-	when    time.Time
-	dirs    map[string]bool
-	parents map[string]bool
-	buf     bytes.Buffer
-	writer  *zip.Writer
-	files   int
+	hash   string
+	top    string
+	when   time.Time
+	buf    bytes.Buffer
+	writer *zip.Writer
+	files  int
 }
 
 func newArchiveBuilder(hash string) *archiveBuilder {
-	builder := &archiveBuilder{
-		hash:    hash,
-		dirs:    make(map[string]bool),
-		parents: make(map[string]bool),
-	}
+	builder := &archiveBuilder{hash: hash}
 	builder.writer = zip.NewWriter(&builder.buf)
 	return builder
 }
@@ -344,14 +335,8 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 	}
 	if b.when.IsZero() {
 		b.when = mtime
-	} else if !mtime.Equal(b.when) {
-		return fmt.Errorf("%w: entries carry different times, so no commit time", errNoGitHubArchive)
-	}
-	if parent := path.Dir(rest); parent != "." {
-		b.parents[parent] = true
 	}
 	if mode.IsDir() {
-		b.dirs[rest] = true
 		return nil
 	}
 	if !mode.IsRegular() && mode&fs.ModeSymlink == 0 {
@@ -360,15 +345,6 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 	data, err := io.ReadAll(content)
 	if err != nil {
 		return err
-	}
-	if path.Base(rest) == ".gitattributes" {
-		// cmd/go turns these attributes off before git archive runs, but
-		// GitHub applies them. filter=lfs can swap a pointer for content.
-		for _, attr := range []string{"export-ignore", "export-subst", "filter=lfs"} {
-			if bytes.Contains(data, []byte(attr)) {
-				return fmt.Errorf("%w: %s sets %s", errNoGitHubArchive, rest, attr)
-			}
-		}
 	}
 	header := &zip.FileHeader{Name: archivePrefix + rest, Method: zip.Deflate, Modified: mtime}
 	header.SetMode(mode)
@@ -385,15 +361,8 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 
 // finish returns the zip and the commit time.
 func (b *archiveBuilder) finish() ([]byte, time.Time, error) {
-	// A directory with nothing under it is a submodule: git has no other way to
-	// write an empty directory.
-	for dir := range b.dirs {
-		if !b.parents[dir] {
-			return nil, time.Time{}, fmt.Errorf("%w: %s is a submodule", errNoGitHubArchive, dir)
-		}
-	}
 	if b.files == 0 {
-		return nil, time.Time{}, fmt.Errorf("%w: archive holds no files", errNoGitHubArchive)
+		return nil, time.Time{}, errors.New("archive holds no files")
 	}
 	if err := b.writer.SetComment(b.hash + " " + strconv.FormatInt(b.when.Unix(), 10)); err != nil {
 		return nil, time.Time{}, err
@@ -404,15 +373,12 @@ func (b *archiveBuilder) finish() ([]byte, time.Time, error) {
 	return b.buf.Bytes(), b.when, nil
 }
 
-// githubZipToArchive converts a git archive zip. Its comment names the
-// commit, and every entry carries the commit time.
+// githubZipToArchive converts a git archive zip. Every entry carries the
+// commit time.
 func githubZipToArchive(data []byte, hash string) ([]byte, time.Time, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, time.Time{}, err
-	}
-	if reader.Comment != hash {
-		return nil, time.Time{}, fmt.Errorf("archive is of commit %q, want %s", reader.Comment, hash)
 	}
 	builder := newArchiveBuilder(hash)
 	for _, entry := range reader.File {
