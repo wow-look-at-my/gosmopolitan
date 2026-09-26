@@ -188,10 +188,13 @@ type gitRepo struct {
 	// github is set when the remote is on github.com. A commit then comes
 	// from a github.com archive first, and from git only when that fails.
 	github *githubRepo
+<<<<<<< HEAD
 	// githubFiles holds each parsed archive by commit, so an archive is
 	// decompressed once per process.
 	githubMu    sync.Mutex
 	githubFiles map[string][]archiveEntry
+=======
+>>>>>>> origin/master
 
 	gitDirOnce sync.Once
 	gitDirErr  error
@@ -821,8 +824,13 @@ func (r *gitRepo) ReadFile(ctx context.Context, rev, file string, maxSize int64)
 	if err != nil {
 		return nil, err
 	}
+<<<<<<< HEAD
 	if entries, err := r.githubEntries(info.Name); err == nil {
 		return readGitHubFile(entries, file)
+=======
+	if reader, _, err := r.githubArchive(info.Name); err == nil {
+		return readGitHubFile(reader, file)
+>>>>>>> origin/master
 	}
 	out, err := r.runGit(ctx, "git", "cat-file", "--end-of-options", "blob", info.Name+":"+file)
 	if err != nil {
@@ -838,7 +846,11 @@ func (r *gitRepo) RecentTag(ctx context.Context, rev, prefix string, allowed fun
 	}
 	rev = info.Name // expand hash prefixes
 
+<<<<<<< HEAD
 	if _, err := r.githubArchiveTime(rev); err == nil {
+=======
+	if _, _, err := r.githubArchive(rev); err == nil {
+>>>>>>> origin/master
 		// The commit came from an archive, so git has no history to walk.
 		// With no plausible tag the answer is "" and git is not needed.
 		tags, err := r.Tags(ctx, prefix+"v")
@@ -1036,12 +1048,18 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	if err != nil {
 		return nil, err
 	}
+<<<<<<< HEAD
 	if entries, err := r.githubEntries(info.Name); err == nil {
 		files, err := subdirFiles(entries, subdir)
 		if err != nil {
 			return nil, err
 		}
 		archive, err := entriesZip(files, subdir)
+=======
+	if reader, data, err := r.githubArchive(info.Name); err == nil {
+		// The archive has no submodule, so there are no gitlinks to add.
+		archive, err := subdirArchive(reader, data, subdir)
+>>>>>>> origin/master
 		if err != nil {
 			return nil, err
 		}

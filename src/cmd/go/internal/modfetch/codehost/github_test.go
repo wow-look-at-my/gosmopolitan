@@ -247,8 +247,21 @@ func TestGitHubArchiveConversion(t *testing.T) {
 	for _, format := range []string{"tar.gz", "zip"} {
 		t.Run(format, func(t *testing.T) {
 			served := archiveOf(t, dir, format, hash)
+<<<<<<< HEAD
 			// No hash goes in, so the commit must come from the archive.
 			entries, when, commit, err := parseArchive(served, "."+format, "")
+=======
+			var archive []byte
+			var when time.Time
+			var commit string
+			var err error
+			// No hash goes in, so the commit must come from the archive.
+			if format == "zip" {
+				archive, when, commit, err = githubZipToArchive(served, "")
+			} else {
+				archive, when, commit, err = githubTarToArchive(bytes.NewReader(served), "")
+			}
+>>>>>>> origin/master
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -258,6 +271,7 @@ func TestGitHubArchiveConversion(t *testing.T) {
 			if !when.Equal(commitTime) {
 				t.Errorf("commit time = %v, want %v", when, commitTime)
 			}
+<<<<<<< HEAD
 			got := make(map[string]string)
 			for _, entry := range entries {
 				body := string(entry.data)
@@ -268,6 +282,10 @@ func TestGitHubArchiveConversion(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Errorf("parsed archive differs from git archive:\ngot  %q\nwant %q", got, want)
+=======
+			if got := zipEntries(t, archive); !reflect.DeepEqual(got, want) {
+				t.Errorf("converted archive differs from git archive:\ngot  %q\nwant %q", got, want)
+>>>>>>> origin/master
 			}
 		})
 	}
