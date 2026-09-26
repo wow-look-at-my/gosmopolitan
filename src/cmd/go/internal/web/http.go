@@ -64,6 +64,25 @@ func securityPreservingHTTPClient(original *http.Client) *http.Client {
 	return c
 }
 
+// hostPinnedHTTPClient returns a client like original that refuses a redirect
+// to a host allowHost does not accept. The check runs before the test
+// interceptor rewrites the host, so it sees the host the server named.
+func hostPinnedHTTPClient(original *http.Client, allowHost func(string) bool) *http.Client {
+	c := new(http.Client)
+	*c = *original
+	next := original.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !allowHost(req.URL.Hostname()) {
+			return fmt.Errorf("redirected from %s to disallowed host %s", via[len(via)-1].URL.Redacted(), req.URL.Redacted())
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		return checkRedirect(req, via)
+	}
+	return c
+}
+
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	// Go's http.DefaultClient allows 10 redirects before returning an error.
 	// Mimic that behavior here.
@@ -75,7 +94,7 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
+func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool) (*Response, error) {
 	start := time.Now()
 
 	if url.Scheme == "file" {
@@ -124,6 +143,9 @@ func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
 			client = securityPreservingHTTPClient(t.Client)
 		} else {
 			client = securityPreservingDefaultClient
+		}
+		if allowHost != nil {
+			client = hostPinnedHTTPClient(client, allowHost)
 		}
 		if url.Scheme == "https" {
 			// Use initial GOAUTH credentials.

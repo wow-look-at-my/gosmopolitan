@@ -140,6 +140,9 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	r.sha256Hashes = r.checkConfigSHA256(ctx)
 	r.remoteURL = r.remote
 	r.remote = "origin"
+	if github, ok := parseGitHubRemote(r.remoteURL); ok {
+		r.github = &github
+	}
 	return r, nil
 }
 
@@ -149,6 +152,10 @@ type gitRepo struct {
 	remote, remoteURL string
 	local             bool // local only lookups; no remote fetches
 	dir               string
+
+	// github is set when the remote is on github.com. A commit then comes
+	// from a github.com archive first, and from git only when that fails.
+	github *githubRepo
 
 	// Repo uses the SHA256 for hashes, so expect the hashes to be 256/4 == 64-bytes in hex.
 	sha256Hashes bool
@@ -444,6 +451,9 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 		if info, err := r.statLocal(ctx, rev, rev); err == nil {
 			return info, nil
 		}
+		if when, err := r.githubArchiveTime(rev); err == nil {
+			return r.githubRevInfo(ctx, rev, rev, when), nil
+		}
 		didStatLocal = true
 	}
 
@@ -554,6 +564,13 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	// and we don't want those commits masquerading as being real
 	// pseudo-versions in the main repo.
 	if r.fetchLevel <= fetchSome && ref != "" && hash != "" {
+		if info, err := r.statGitHub(ctx, rev, ref, hash); err == nil {
+			if ref == "HEAD" {
+				// The git fetch below records no Ref for HEAD. Match it.
+				ref = hash
+			}
+			return info, nil
+		}
 		r.fetchLevel = fetchSome
 		var refspec string
 		if ref == "HEAD" {
@@ -734,6 +751,9 @@ func (r *gitRepo) ReadFile(ctx context.Context, rev, file string, maxSize int64)
 	if err != nil {
 		return nil, err
 	}
+	if reader, _, err := r.githubArchive(info.Name); err == nil {
+		return readGitHubFile(reader, file)
+	}
 	out, err := r.runGit(ctx, "git", "cat-file", "--end-of-options", "blob", info.Name+":"+file)
 	if err != nil {
 		return nil, fs.ErrNotExist
@@ -747,6 +767,27 @@ func (r *gitRepo) RecentTag(ctx context.Context, rev, prefix string, allowed fun
 		return "", err
 	}
 	rev = info.Name // expand hash prefixes
+
+	if _, _, err := r.githubArchive(rev); err == nil {
+		// The commit came from an archive, so git has no history to walk.
+		// With no plausible tag the answer is "" and git is not needed.
+		tags, err := r.Tags(ctx, prefix+"v")
+		if err != nil {
+			return "", err
+		}
+		if len(tags.List) == 0 {
+			return "", nil
+		}
+		unlock, err := r.mu.Lock()
+		if err != nil {
+			return "", err
+		}
+		err = r.fetchRefsLocked(ctx)
+		unlock()
+		if err != nil {
+			return "", err
+		}
+	}
 
 	// describe sets tag and err using 'git for-each-ref' and reports whether the
 	// result is definitive.
@@ -909,6 +950,14 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	info, err := r.Stat(ctx, rev) // download rev into local git repo
 	if err != nil {
 		return nil, err
+	}
+	if reader, data, err := r.githubArchive(info.Name); err == nil {
+		// The archive has no submodule, so there are no gitlinks to add.
+		archive, err := subdirArchive(reader, data, subdir)
+		if err != nil {
+			return nil, err
+		}
+		return io.NopCloser(bytes.NewReader(archive)), nil
 	}
 
 	unlock, err := r.mu.Lock()

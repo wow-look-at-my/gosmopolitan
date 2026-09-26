@@ -16,7 +16,7 @@ import (
 	urlpkg "net/url"
 )
 
-func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
+func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool) (*Response, error) {
 	return nil, errors.New("no http in bootstrap go command")
 }
 
