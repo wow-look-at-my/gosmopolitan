@@ -244,14 +244,14 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 		}
 		ziphashfile := zipfile + "hash"
 
-		// Return early if the ziphash exists with the zip or with a
-		// complete directory.
+		// Return early if the ziphash exists with the zip, or, for a module
+		// written from a GitHub archive, with a complete directory.
 		if _, err := os.Stat(ziphashfile); err == nil {
 			have := zipfile
 			if _, err := os.Stat(zipfile); err != nil {
 				have = ""
 			}
-			if _, dirErr := DownloadDir(ctx, mod); have != "" || dirErr == nil {
+			if have != "" || fromArchive(ctx, mod) {
 				if !HaveSum(f, mod) {
 					f.checkMod(ctx, mod)
 				}
@@ -304,7 +304,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	if zipExists && ziphashExists {
 		return zipfile, nil
 	}
-	if _, dirErr := DownloadDir(ctx, mod); ziphashExists && dirErr == nil {
+	if ziphashExists && fromArchive(ctx, mod) {
 		return "", nil
 	}
 
@@ -466,7 +466,31 @@ func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []mo
 	if err != nil {
 		return err
 	}
+	// The marker goes before the ziphash, so a ziphash with no zip always
+	// has it.
+	marker, err := CachePath(ctx, mod, "archive")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(marker, []byte(commit+"\n"), 0o666); err != nil {
+		return err
+	}
 	return writeZiphash(ziphashfile, hash)
+}
+
+// fromArchive reports whether mod was written from a GitHub archive and has a
+// complete directory. Only such a module has no zip. Any other module that
+// lost its zip must fetch it again.
+func fromArchive(ctx context.Context, mod module.Version) bool {
+	marker, err := CachePath(ctx, mod, "archive")
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(marker); err != nil {
+		return false
+	}
+	_, dirErr := DownloadDir(ctx, mod)
+	return dirErr == nil
 }
 
 // checkModuleFiles applies the checks a module zip gets to files. It returns
