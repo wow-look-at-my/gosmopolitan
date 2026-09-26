@@ -7,7 +7,7 @@ tests:
 	- desc: every org module script test passes, CI cases included
 	  cmd: |
 		set -eu -o pipefail
-		export GOCACHE="$TMPDIR/gocache" PATH="$PWD/bin:$PATH"
+		export GOCACHE="$(mktemp -d)" PATH="$PWD/bin:$PATH"
 		cd src/cmd/go
 		go test -run 'TestScript/org_' -v . 2>&1 | grep -E '^(--- |ok|FAIL)'
 	  outputs:
