@@ -9,7 +9,7 @@ tests:
 		set -eu -o pipefail
 		export GOCACHE="$(mktemp -d)" PATH="$PWD/bin:$PATH"
 		cd src/cmd/go
-		go test -run 'TestScript/org_' -v . 2>&1 | grep -E '^(--- |ok|FAIL)'
+		go test -run 'TestScript/org_' -v . 2>&1 | grep -E -e '--- (PASS|FAIL|SKIP)' -e 'script_test.go:[0-9]+: (FAIL|SKIP)' -e '^(ok|FAIL)' -e '[Ee]rror|not found|panic:'
 	  outputs:
 		stdout:
 			- "--- PASS: TestScript/org_ci_build"
