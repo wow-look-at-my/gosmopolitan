@@ -550,8 +550,8 @@ type ModuleFile struct {
 	Data []byte
 }
 
-// A FileReader serves a revision's files directly. The module zip is then
-// built from them, and it is the only zip.
+// A FileReader serves a revision's files directly. The files go straight into
+// the module cache, and no zip is made of them.
 type FileReader interface {
 	ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error)
 }
@@ -594,32 +594,6 @@ func subdirFiles(entries []archiveEntry, subdir string) ([]ModuleFile, error) {
 		return nil, fs.ErrNotExist
 	}
 	return files, nil
-}
-
-// entriesZip writes files as the zip ReadZip returns, under archivePrefix.
-func entriesZip(files []ModuleFile, subdir string) ([]byte, error) {
-	dir := strings.Trim(subdir, "/")
-	var buf bytes.Buffer
-	writer := zip.NewWriter(&buf)
-	for _, file := range files {
-		name := archivePrefix + file.Name
-		if dir != "" {
-			name = archivePrefix + dir + "/" + file.Name
-		}
-		header := &zip.FileHeader{Name: name, Method: zip.Deflate}
-		header.SetMode(file.Mode)
-		dst, err := writer.CreateHeader(header)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := dst.Write(file.Data); err != nil {
-			return nil, err
-		}
-	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // An archiveBuilder collects the entries of a GitHub archive: files and

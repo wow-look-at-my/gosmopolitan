@@ -32,6 +32,7 @@ import (
 
 	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
+	modzip "golang.org/x/mod/zip"
 )
 
 func cacheDir(ctx context.Context, path string) (string, error) {
@@ -340,6 +341,16 @@ func (r *cachingRepo) Zip(ctx context.Context, dst io.Writer, version string) er
 		return ErrToolchain
 	}
 	return r.repo(ctx).Zip(ctx, dst, version)
+}
+
+func (r *cachingRepo) Files(ctx context.Context, version string) ([]modzip.File, error) {
+	if gover.IsToolchain(r.path) {
+		return nil, ErrToolchain
+	}
+	if repo, ok := r.repo(ctx).(filesRepo); ok {
+		return repo.Files(ctx, version)
+	}
+	return nil, errors.ErrUnsupported
 }
 
 // InfoFile is like Lookup(ctx, path).Stat(version) but also returns the name of the file

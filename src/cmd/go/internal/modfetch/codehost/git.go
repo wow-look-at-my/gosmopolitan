@@ -1012,8 +1012,7 @@ func (r *gitRepo) DescendsFrom(ctx context.Context, rev, tag string) (bool, erro
 }
 
 // ReadFiles returns the files of rev under subdir straight from a kept
-// GitHub archive, so the module zip is the only zip built. It fails with
-// errors.ErrUnsupported when no archive holds rev.
+// GitHub archive. It fails with errors.ErrUnsupported when no archive holds rev.
 func (r *gitRepo) ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error) {
 	info, err := r.Stat(ctx, rev)
 	if err != nil {
@@ -1036,16 +1035,9 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	if err != nil {
 		return nil, err
 	}
-	if entries, err := r.githubEntries(info.Name); err == nil {
-		files, err := subdirFiles(entries, subdir)
-		if err != nil {
-			return nil, err
-		}
-		archive, err := entriesZip(files, subdir)
-		if err != nil {
-			return nil, err
-		}
-		return io.NopCloser(bytes.NewReader(archive)), nil
+	if _, err := r.githubEntries(info.Name); err == nil {
+		// A commit from an archive is never turned into a zip. Use ReadFiles.
+		return nil, errors.ErrUnsupported
 	}
 
 	unlock, err := r.mu.Lock()

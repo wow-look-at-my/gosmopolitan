@@ -1068,9 +1068,11 @@ func (r *codeRepo) retractedVersions(ctx context.Context) (func(string) bool, er
 	}, nil
 }
 
-func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error {
+// moduleRev finds the revision and subdirectory that hold version, and
+// refuses a module whose go.mod needs a newer Go.
+func (r *codeRepo) moduleRev(ctx context.Context, version string) (rev, subdir string, err error) {
 	if version != module.CanonicalVersion(version) {
-		return fmt.Errorf("version %s is not canonical", version)
+		return "", "", fmt.Errorf("version %s is not canonical", version)
 	}
 
 	if module.IsPseudoVersion(version) {
@@ -1080,32 +1082,63 @@ func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error
 		// a bogus file for an invalid version.
 		_, err := r.Stat(ctx, version)
 		if err != nil {
-			return err
+			return "", "", err
 		}
 	}
 
-	rev, subdir, _, err := r.findDir(ctx, version)
+	rev, subdir, _, err = r.findDir(ctx, version)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	if gomod, err := r.code.ReadFile(ctx, rev, filepath.Join(subdir, "go.mod"), codehost.MaxGoMod); err == nil {
 		goVers := gover.GoModLookup(gomod, "go")
 		if gover.Compare(goVers, gover.Local()) > 0 {
-			return &gover.TooNewError{What: r.ModulePath() + "@" + version, GoVersion: goVers}
+			return "", "", &gover.TooNewError{What: r.ModulePath() + "@" + version, GoVersion: goVers}
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return "", "", err
 	}
+	return rev, subdir, nil
+}
 
-	if reader, ok := r.code.(codehost.FileReader); ok {
-		moduleFiles, err := reader.ReadFiles(ctx, rev, subdir)
+// Files returns the files of version straight from the code host, with no
+// zip. It fails with errors.ErrUnsupported when the code host serves only a
+// zip.
+func (r *codeRepo) Files(ctx context.Context, version string) ([]modzip.File, error) {
+	reader, ok := r.code.(codehost.FileReader)
+	if !ok {
+		return nil, errors.ErrUnsupported
+	}
+	rev, subdir, err := r.moduleRev(ctx, version)
+	if err != nil {
+		return nil, err
+	}
+	moduleFiles, err := reader.ReadFiles(ctx, rev, subdir)
+	if err != nil {
+		return nil, err
+	}
+	var files []modzip.File
+	haveLICENSE := false
+	for _, file := range moduleFiles {
+		files = append(files, dataFile{name: file.Name, data: file.Data, mode: file.Mode})
+		if file.Name == "LICENSE" {
+			haveLICENSE = true
+		}
+	}
+	if !haveLICENSE && strings.Trim(subdir, "/") != "" {
+		data, err := r.code.ReadFile(ctx, rev, "LICENSE", codehost.MaxLICENSE)
 		if err == nil {
-			return r.zipFromFiles(ctx, dst, version, rev, subdir, moduleFiles)
+			files = append(files, dataFile{name: "LICENSE", data: data})
 		}
-		if !errors.Is(err, errors.ErrUnsupported) {
-			return err
-		}
+	}
+	return files, nil
+}
+
+func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error {
+	rev, subdir, err := r.moduleRev(ctx, version)
+	if err != nil {
+		return err
 	}
 
 	dl, err := r.code.ReadZip(ctx, rev, subdir, codehost.MaxZipFile)
@@ -1184,25 +1217,6 @@ func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error
 		}
 	}
 
-	return modzip.Create(dst, module.Version{Path: r.modPath, Version: version}, files)
-}
-
-// zipFromFiles writes the module zip from files a FileReader returned.
-func (r *codeRepo) zipFromFiles(ctx context.Context, dst io.Writer, version, rev, subdir string, moduleFiles []codehost.ModuleFile) error {
-	var files []modzip.File
-	haveLICENSE := false
-	for _, file := range moduleFiles {
-		files = append(files, dataFile{name: file.Name, data: file.Data, mode: file.Mode})
-		if file.Name == "LICENSE" {
-			haveLICENSE = true
-		}
-	}
-	if !haveLICENSE && strings.Trim(subdir, "/") != "" {
-		data, err := r.code.ReadFile(ctx, rev, "LICENSE", codehost.MaxLICENSE)
-		if err == nil {
-			files = append(files, dataFile{name: "LICENSE", data: data})
-		}
-	}
 	return modzip.Create(dst, module.Version{Path: r.modPath, Version: version}, files)
 }
 

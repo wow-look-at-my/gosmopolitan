@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +115,10 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 	if err != nil {
 		return "", err
 	}
+	if zipfile == "" {
+		// DownloadZip already wrote the source files to dir.
+		return DownloadDir(ctx, mod)
+	}
 
 	// A module is two zips. The BASE zip is the one above: what the proxy
 	// served, pinned by go.sum. The OVERLAY zip holds the files the module's
@@ -137,6 +142,14 @@ func unzip(ctx context.Context, mod module.Version, zipfile string, complete fun
 	ctx, span := trace.StartSpan(ctx, "unzip "+zipfile)
 	defer span.Done()
 
+	return populateDir(ctx, mod, func(dir string) error {
+		return modzip.Unzip(dir, mod, zipfile)
+	}, complete)
+}
+
+// populateDir makes mod's directory with write, then runs complete over it.
+// The caller holds the version lock.
+func populateDir(ctx context.Context, mod module.Version, write func(dir string) error, complete func(dir string) error) (dir string, err error) {
 	// Check whether the directory was populated while we were waiting on the lock.
 	dir, dirErr := DownloadDir(ctx, mod)
 	if dirErr == nil {
@@ -187,7 +200,7 @@ func unzip(ctx context.Context, mod module.Version, zipfile string, complete fun
 	if err := os.WriteFile(partialPath, nil, 0o666); err != nil {
 		return "", err
 	}
-	if err := modzip.Unzip(dir, mod, zipfile); err != nil {
+	if err := write(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "-> %s\n", err)
 		if rmErr := RemoveAll(dir); rmErr == nil {
 			os.Remove(partialPath)
@@ -219,6 +232,8 @@ var downloadZipCache par.ErrCache[module.Version, string]
 
 // DownloadZip downloads the specific module version to the
 // local zip cache and returns the name of the zip file.
+// A module read from a GitHub archive has no zip. For it, DownloadZip writes
+// the source files to $GOMODCACHE/<module>@<version> and returns "".
 func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err error) {
 	// The par.Cache here avoids duplicate work.
 	return downloadZipCache.Do(mod, func() (string, error) {
@@ -228,13 +243,18 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 		}
 		ziphashfile := zipfile + "hash"
 
-		// Return early if the zip and ziphash files exist.
-		if _, err := os.Stat(zipfile); err == nil {
-			if _, err := os.Stat(ziphashfile); err == nil {
+		// Return early if the ziphash exists with the zip or with a
+		// complete directory.
+		if _, err := os.Stat(ziphashfile); err == nil {
+			have := zipfile
+			if _, err := os.Stat(zipfile); err != nil {
+				have = ""
+			}
+			if _, dirErr := DownloadDir(ctx, mod); have != "" || dirErr == nil {
 				if !HaveSum(f, mod) {
 					f.checkMod(ctx, mod)
 				}
-				return zipfile, nil
+				return have, nil
 			}
 		}
 
@@ -259,14 +279,14 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 		}
 		defer unlock()
 
-		if err := f.downloadZip(ctx, mod, zipfile); err != nil {
-			return "", err
-		}
-		return zipfile, nil
+		return f.downloadZip(ctx, mod, zipfile)
 	})
 }
 
-func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile string) (err error) {
+// downloadZip returns zipfile. For a module read from a GitHub archive, it
+// writes the source files to $GOMODCACHE/<module>@<version> itself, makes no
+// zip, and returns "".
+func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile string) (_ string, err error) {
 	ctx, span := trace.StartSpan(ctx, "modfetch.downloadZip "+zipfile)
 	defer span.Done()
 
@@ -281,12 +301,15 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		ziphashExists = true
 	}
 	if zipExists && ziphashExists {
-		return nil
+		return zipfile, nil
+	}
+	if _, dirErr := DownloadDir(ctx, mod); ziphashExists && dirErr == nil {
+		return "", nil
 	}
 
 	// Create parent directories.
 	if err := os.MkdirAll(filepath.Dir(zipfile), 0o777); err != nil {
-		return err
+		return "", err
 	}
 
 	// Clean up any remaining tempfiles from previous runs.
@@ -302,7 +325,7 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// If the zip file exists, the ziphash file must have been deleted
 	// or lost after a file system crash. Re-hash the zip without downloading.
 	if zipExists {
-		return hashZip(f, mod, zipfile, ziphashfile)
+		return zipfile, hashZip(f, mod, zipfile, ziphashfile)
 	}
 
 	// From here to the os.Rename call below is functionally almost equivalent to
@@ -310,23 +333,37 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// contents of the file (by hashing it) before we commit it. Because the file
 	// is zip-compressed, we need an actual file — or at least an io.ReaderAt — to
 	// validate it: we can't just tee the stream as we write it.
-	file, err := tempFile(ctx, filepath.Dir(zipfile), filepath.Base(zipfile), 0o666)
-	if err != nil {
-		return err
-	}
+	// The file is made only when a source serves a zip.
+	var file *os.File
 	defer func() {
-		if err != nil {
+		if err != nil && file != nil {
 			file.Close()
 			os.Remove(file.Name())
 		}
 	}()
 
+	var files []modzip.File
 	var unrecoverableErr error
 	err = TryProxies(func(proxy string) error {
 		if unrecoverableErr != nil {
 			return unrecoverableErr
 		}
 		repo := f.Lookup(ctx, proxy, mod.Path)
+		if direct, ok := repo.(filesRepo); ok {
+			got, err := direct.Files(ctx, mod.Version)
+			if !errors.Is(err, errors.ErrUnsupported) {
+				files = got
+				return err
+			}
+		}
+		if file == nil {
+			var err error
+			file, err = tempFile(ctx, filepath.Dir(zipfile), filepath.Base(zipfile), 0o666)
+			if err != nil {
+				unrecoverableErr = err
+				return err
+			}
+		}
 		err := repo.Zip(ctx, file, mod.Version)
 		if err != nil {
 			// Zip may have partially written to f before failing.
@@ -345,7 +382,10 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		return err
 	})
 	if err != nil {
-		return err
+		return "", err
+	}
+	if file == nil {
+		return "", f.writeFiles(ctx, mod, files, ziphashfile)
 	}
 
 	// Double-check that the paths within the zip file are well-formed.
@@ -353,33 +393,112 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	// TODO(bcmills): There is a similar check within the Unzip function. Can we eliminate one?
 	fi, err := file.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 	z, err := zip.NewReader(file, fi.Size())
 	if err != nil {
-		return err
+		return "", err
 	}
 	prefix := mod.Path + "@" + mod.Version + "/"
 	for _, zf := range z.File {
 		if !strings.HasPrefix(zf.Name, prefix) {
-			return fmt.Errorf("zip for %s has unexpected file %s", prefix[:len(prefix)-1], zf.Name)
+			return "", fmt.Errorf("zip for %s has unexpected file %s", prefix[:len(prefix)-1], zf.Name)
 		}
 	}
 
 	if err := file.Close(); err != nil {
-		return err
+		return "", err
 	}
 
 	// Hash the zip file and check the sum before renaming to the final location.
 	if err := hashZip(f, mod, file.Name(), ziphashfile); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Rename(file.Name(), zipfile); err != nil {
-		return err
+		return "", err
 	}
 
 	// TODO(bcmills): Should we make the .zip and .ziphash files read-only to discourage tampering?
 
+	return zipfile, nil
+}
+
+// writeFiles writes the source files of mod to $GOMODCACHE/<module>@<version>,
+// as Unzip writes a zip's entries, and records their hash in ziphashfile.
+// No zip is made. The caller holds the version lock.
+func (f *Fetcher) writeFiles(ctx context.Context, mod module.Version, files []modzip.File, ziphashfile string) error {
+	if err := module.Check(mod.Path, mod.Version); err != nil {
+		return err
+	}
+	checked, err := modzip.CheckFiles(files)
+	if err != nil {
+		return err
+	}
+	valid := make(map[string]modzip.File, len(checked.Valid))
+	for _, file := range files {
+		if slices.Contains(checked.Valid, file.Path()) {
+			valid[file.Path()] = file
+		}
+	}
+
+	// The hash is the one HashZip gives for the module zip of these files.
+	prefix := mod.Path + "@" + mod.Version + "/"
+	var names []string
+	for name := range valid {
+		names = append(names, prefix+name)
+	}
+	hash, err := dirhash.DefaultHash(names, func(name string) (io.ReadCloser, error) {
+		return valid[strings.TrimPrefix(name, prefix)].Open()
+	})
+	if err != nil {
+		return err
+	}
+	if err := checkModSum(f, mod, hash); err != nil {
+		return err
+	}
+
+	_, err = populateDir(ctx, mod, func(dir string) error {
+		return writeModuleFiles(dir, valid)
+	}, func(dir string) error {
+		return f.completeDir(ctx, mod, dir)
+	})
+	if err != nil {
+		return err
+	}
+	return writeZiphash(ziphashfile, hash)
+}
+
+// writeModuleFiles writes each file under dir, read-only, as Unzip does.
+func writeModuleFiles(dir string, files map[string]modzip.File) error {
+	if entries, _ := os.ReadDir(dir); len(entries) > 0 {
+		return fmt.Errorf("target directory %v exists and is not empty", dir)
+	}
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	for name, file := range files {
+		dst := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o777); err != nil {
+			return err
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
+		if err != nil {
+			src.Close()
+			return err
+		}
+		_, err = io.Copy(out, src)
+		src.Close()
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -396,6 +515,11 @@ func hashZip(f *Fetcher, mod module.Version, zipfile, ziphashfile string) (err e
 	if err := checkModSum(f, mod, hash); err != nil {
 		return err
 	}
+	return writeZiphash(ziphashfile, hash)
+}
+
+// writeZiphash records hash in ziphashfile, overwriting that file if it exists.
+func writeZiphash(ziphashfile, hash string) (err error) {
 	hf, err := lockedfile.Create(ziphashfile)
 	if err != nil {
 		return err
