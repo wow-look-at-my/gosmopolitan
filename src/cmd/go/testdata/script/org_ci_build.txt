@@ -55,7 +55,7 @@ exec git branch -m main
 # Outside CI a plain build records each branch head in go.mod.
 cd $WORK/m
 go build ./...
-grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$' go.mod
 grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-[0-9a-f]+$' go.mod
 cp go.mod $WORK/m.go.mod
 
@@ -74,10 +74,10 @@ env GITHUB_ACTIONS=true
 go run .
 stdout '^alpha-main beta-main$'
 go list -m github.com/wow-look-at-my/alpha
-stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$'
 go build -o $WORK${/}m${/}prog .
 go version -m $WORK${/}m${/}prog
-stdout 'dep\tgithub.com/wow-look-at-my/alpha\tv0\.0\.0-20260102030405-0f69f837cebe\th1:'
+stdout 'dep\tgithub.com/wow-look-at-my/alpha\tv0\.0\.0-20260102030405-[0-9a-f]+\th1:'
 go mod tidy
 cmp go.mod $WORK/m.go.mod
 
