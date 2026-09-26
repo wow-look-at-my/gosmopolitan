@@ -16,14 +16,15 @@ import (
 	"golang.org/x/mod/module"
 )
 
-// An org module follows a branch head, so a new commit can require a new
-// module in the middle of a run. The org already vetted that requirement, so
-// a readonly command records it without a prompt when it is the whole change.
-// Any other change still fails as -mod=readonly does upstream.
-// See docs/ORG-DEPS.md.
+// Outside CI an org module moves to its branch head, so a run can record a new
+// version for it, and its new commit can require a new module. The org already
+// vetted both, so a readonly command writes them without a prompt when they
+// are the whole change. Any other change still fails as -mod=readonly does
+// upstream. See docs/ORG-DEPS.md.
 
-// orgSyncing reports whether this invocation may record what org modules
-// declare. An explicit -mod flag keeps its upstream meaning.
+// orgSyncing reports whether this invocation may record org module versions
+// and what org modules declare. An explicit -mod flag keeps its upstream
+// meaning.
 func orgSyncing(ld *Loader) bool {
 	return cfg.BuildMod == "readonly" && !cfg.BuildModExplicit &&
 		ld.HasModRoot() && !ld.inWorkspaceMode() && orgResolvable()
@@ -85,8 +86,16 @@ func orgSyncAllows(ld *Loader, m module.Version) bool {
 	return version != "" && orgDeclared(ld, m.Path) == version
 }
 
-// orgOnlyChange reports whether modFile differs from i only by indirect
-// requirements that org modules declare, each added or raised to that version.
+// orgMoved reports whether a line for old may become a line for moved because
+// an org module moved to its branch head. A CI build moves nothing.
+func orgMoved(old, moved module.Version) bool {
+	return orgFollowsBranch() && orgmod.IsOrg(old.Path) && old.Path == moved.Path &&
+		old.Version != "" && moved.Version != ""
+}
+
+// orgOnlyChange reports whether modFile differs from i only by what org
+// modules explain: an org module moved to its branch head, and an indirect
+// requirement an org module declares, added or raised to that version.
 func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 	if i == nil || i.dataNeedsFix || modFile.Module == nil || modFile.Module.Mod != i.module {
 		return false
@@ -103,7 +112,7 @@ func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 		return false
 	}
 	for _, r := range modFile.Replace {
-		if r.New != i.replace[r.Old] {
+		if old := i.replace[r.Old]; r.New != old && !orgMoved(old, r.New) {
 			return false
 		}
 	}
@@ -113,6 +122,10 @@ func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 		}
 	}
 
+	oldPaths := map[string]bool{}
+	for mod := range i.require {
+		oldPaths[mod.Path] = true
+	}
 	kept := map[module.Version]bool{}
 	raised := map[string]bool{}
 	for _, r := range modFile.Require {
@@ -120,12 +133,17 @@ func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 			kept[r.Mod] = true
 			continue
 		}
+		if orgmod.IsOrg(r.Mod.Path) && orgFollowsBranch() && (r.Indirect || oldPaths[r.Mod.Path]) {
+			// The version is the branch head this run resolved.
+			raised[r.Mod.Path] = true
+			continue
+		}
 		if !r.Indirect || orgmod.IsOrg(r.Mod.Path) || orgDeclared(ld, r.Mod.Path) != r.Mod.Version {
 			return false
 		}
 		raised[r.Mod.Path] = true
 	}
-	// A line may leave only when a line at the declared version replaces it.
+	// A line may leave only when a line at the new version replaces it.
 	for m := range i.require {
 		if !kept[m] && !raised[m.Path] {
 			return false
