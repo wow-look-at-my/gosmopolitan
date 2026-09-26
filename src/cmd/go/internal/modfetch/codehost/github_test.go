@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,18 +52,50 @@ func TestParseGitHubRemote(t *testing.T) {
 	}
 }
 
-func TestGitHubArchiveURL(t *testing.T) {
+func TestGitHubArchiveSources(t *testing.T) {
 	const hash = "0123456789abcdef0123456789abcdef01234567"
 	repo := githubRepo{"wow-look-at-my", "slopfix"}
-	cases := []struct{ ref, ext, want string }{
-		{"refs/heads/master", ".tar.gz", "https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.tar.gz"},
-		{"refs/tags/v1.2.3", ".zip", "https://github.com/wow-look-at-my/slopfix/archive/refs/tags/v1.2.3.zip"},
-		{"refs/tags/sub/v1.2.3", ".tar.gz", "https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.tar.gz"},
-		{"HEAD", ".tar.gz", "https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".tar.gz"},
+	proxied := func(inner string) string { return "https://proxy.pazer.ai/?url=" + url.QueryEscape(inner) }
+	cases := []struct {
+		ref  string
+		want []string
+	}{
+		{"refs/heads/master", []string{
+			"https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.tar.gz",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/refs/heads/master"),
+			"https://github.com/wow-look-at-my/slopfix/archive/refs/heads/master.zip",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/refs/heads/master"),
+		}},
+		{"refs/tags/sub/v1.2.3", []string{
+			"https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.tar.gz",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/refs/tags/sub/v1.2.3"),
+			"https://github.com/wow-look-at-my/slopfix/archive/refs/tags/sub/v1.2.3.zip",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/refs/tags/sub/v1.2.3"),
+		}},
+		{"HEAD", []string{
+			"https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".tar.gz",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/tar.gz/" + hash),
+			"https://github.com/wow-look-at-my/slopfix/archive/" + hash + ".zip",
+			proxied("https://codeload.github.com/wow-look-at-my/slopfix/zip/" + hash),
+		}},
 	}
 	for _, test := range cases {
-		if got := repo.archiveURL(test.ref, hash, test.ext); got != test.want {
-			t.Errorf("archiveURL(%q, %q) = %q, want %q", test.ref, test.ext, got, test.want)
+		var got []string
+		for _, source := range repo.archiveSources(test.ref, hash) {
+			got = append(got, source.url)
+			host := "github.com"
+			if strings.HasPrefix(source.url, "https://proxy.pazer.ai/") {
+				host = "proxy.pazer.ai"
+			}
+			for _, other := range []string{"github.com", "codeload.github.com", "proxy.pazer.ai", "evil.example"} {
+				wantAllowed := other == host || (host == "github.com" && other == "codeload.github.com")
+				if source.allowHost(other) != wantAllowed {
+					t.Errorf("%s: allowHost(%q) = %v, want %v", source.url, other, !wantAllowed, wantAllowed)
+				}
+			}
+		}
+		if !reflect.DeepEqual(got, test.want) {
+			t.Errorf("archiveSources(%q):\ngot  %q\nwant %q", test.ref, got, test.want)
 		}
 	}
 }
@@ -286,56 +319,90 @@ func TestGitHubArchiveRefusals(t *testing.T) {
 	}
 }
 
-// fakeGitHub serves archives of dir the way github.com and
-// codeload.github.com do, and records every request it receives.
+// fakeGitHub serves archives of dir the way github.com, codeload.github.com
+// and proxy.pazer.ai do, and records every request it receives.
 type fakeGitHub struct {
 	dir        string
 	status     map[string]int
 	redirectTo string
-	rewrite    func(ext string, served []byte) []byte
+	// wrongCommit is the source that serves the archive of commit other.
+	wrongCommit string
+	other       string
+	// proxyRedirects makes the proxy pass the codeload redirect through.
+	proxyRedirects bool
 
 	mu       sync.Mutex
 	requests []string
 }
 
 func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	record := req.Host + req.URL.Path
+	if req.Host == "proxy.pazer.ai" {
+		record = req.Host + "?url=" + req.URL.Query().Get("url")
+	}
 	f.mu.Lock()
-	f.requests = append(f.requests, req.Host+req.URL.Path)
+	f.requests = append(f.requests, record)
 	f.mu.Unlock()
 
-	if req.Host == "github.com" {
+	switch req.Host {
+	case "github.com":
 		rest, found := strings.CutPrefix(req.URL.Path, "/owner/repo/archive/")
 		if !found {
 			http.NotFound(w, req)
 			return
 		}
-		ext := ".zip"
+		format := "zip"
 		name, isTar := strings.CutSuffix(rest, ".tar.gz")
 		if isTar {
-			ext = ".tar.gz"
+			format = "tar.gz"
 		} else {
 			name = strings.TrimSuffix(rest, ".zip")
 		}
-		if code := f.status[ext]; code != 0 {
+		if code := f.status["github."+format]; code != 0 {
 			http.Error(w, "no archive", code)
 			return
 		}
-		http.Redirect(w, req, "https://"+f.redirectTo+"/owner/repo/"+strings.TrimPrefix(ext, ".")+"/"+name, http.StatusFound)
-		return
-	}
+		http.Redirect(w, req, "https://"+f.redirectTo+"/owner/repo/"+format+"/"+name, http.StatusFound)
 
-	rest := strings.TrimPrefix(req.URL.Path, "/owner/repo/")
-	format, name, _ := strings.Cut(rest, "/")
-	ext := "." + format
+	case "proxy.pazer.ai":
+		inner, err := url.Parse(req.URL.Query().Get("url"))
+		if err != nil || inner.Host != "codeload.github.com" {
+			http.Error(w, "bad url", http.StatusBadRequest)
+			return
+		}
+		format, name := codeloadPath(inner.Path)
+		if code := f.status["proxy."+format]; code != 0 {
+			http.Error(w, "no archive", code)
+			return
+		}
+		if f.proxyRedirects {
+			http.Redirect(w, req, "https://140.82.112.10"+inner.Path, http.StatusFound)
+			return
+		}
+		f.serveArchive(w, req, "proxy", format, name)
+
+	default:
+		format, name := codeloadPath(req.URL.Path)
+		f.serveArchive(w, req, "github", format, name)
+	}
+}
+
+// codeloadPath splits "/owner/repo/<format>/<name>".
+func codeloadPath(urlPath string) (format, name string) {
+	format, name, _ = strings.Cut(strings.TrimPrefix(urlPath, "/owner/repo/"), "/")
+	return format, name
+}
+
+func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via, format, name string) {
+	if f.wrongCommit == via+"."+format {
+		name = f.other
+	}
 	cmd := exec.Command("git", "archive", "--format="+format, "--prefix=repo-x/", name)
 	cmd.Dir = f.dir
 	served, err := cmd.Output()
 	if err != nil {
 		http.NotFound(w, req)
 		return
-	}
-	if f.rewrite != nil {
-		served = f.rewrite(ext, served)
 	}
 	w.Write(served)
 }
@@ -346,84 +413,87 @@ func TestGitHubArchiveFallback(t *testing.T) {
 	other := gitIn(t, source, "commit-tree", "-m", "other", gitIn(t, source, "rev-parse", "HEAD^{tree}"))
 	want := zipEntries(t, referenceZip(t, source, hash))
 
+	const (
+		githubTar   = "github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz"
+		codeloadTar = "codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0"
+		proxyTar    = "proxy.pazer.ai?url=https://codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0"
+		githubZip   = "github.com/owner/repo/archive/refs/tags/v1.0.0.zip"
+		codeloadZip = "codeload.github.com/owner/repo/zip/refs/tags/v1.0.0"
+		proxyZip    = "proxy.pazer.ai?url=https://codeload.github.com/owner/repo/zip/refs/tags/v1.0.0"
+	)
+	missing := func(sources ...string) map[string]int {
+		status := make(map[string]int)
+		for _, source := range sources {
+			status[source] = http.StatusNotFound
+		}
+		return status
+	}
+
 	cases := []struct {
-		name         string
-		status       map[string]int
-		redirectTo   string
-		wrongCommit  string // extension served as the archive of another commit
-		wantRequests []string
-		wantGit      bool
+		name           string
+		status         map[string]int
+		redirectTo     string
+		wrongCommit    string
+		proxyRedirects bool
+		wantRequests   []string
+		wantGit        bool
 	}{
 		{
-			name: "tar.gz first",
-			wantRequests: []string{
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz",
-				"codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0",
-			},
+			name:         "github.com tar.gz first",
+			wantRequests: []string{githubTar, codeloadTar},
 		},
 		{
-			name:   "zip when there is no tar.gz",
-			status: map[string]int{".tar.gz": http.StatusNotFound},
-			wantRequests: []string{
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz",
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
-				"codeload.github.com/owner/repo/zip/refs/tags/v1.0.0",
-			},
+			name:         "proxy tar.gz when github.com has none",
+			status:       missing("github.tar.gz"),
+			wantRequests: []string{githubTar, proxyTar},
 		},
 		{
-			name:        "zip when the tar.gz is of another commit",
-			wrongCommit: ".tar.gz",
-			wantRequests: []string{
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz",
-				"codeload.github.com/owner/repo/tar.gz/refs/tags/v1.0.0",
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
-				"codeload.github.com/owner/repo/zip/refs/tags/v1.0.0",
-			},
+			name:         "proxy tar.gz when the github.com one is of another commit",
+			wrongCommit:  "github.tar.gz",
+			wantRequests: []string{githubTar, codeloadTar, proxyTar},
 		},
 		{
-			name:   "git when there is no archive",
-			status: map[string]int{".tar.gz": http.StatusNotFound, ".zip": http.StatusNotFound},
-			wantRequests: []string{
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz",
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
-			},
-			wantGit: true,
+			name:         "github.com zip when there is no tar.gz",
+			status:       missing("github.tar.gz", "proxy.tar.gz"),
+			wantRequests: []string{githubTar, proxyTar, githubZip, codeloadZip},
 		},
 		{
-			name:       "git when github.com redirects off GitHub",
-			redirectTo: "evil.example",
-			wantRequests: []string{
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.tar.gz",
-				"github.com/owner/repo/archive/refs/tags/v1.0.0.zip",
-			},
-			wantGit: true,
+			name:         "proxy zip after every other archive",
+			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip"),
+			wantRequests: []string{githubTar, proxyTar, githubZip, proxyZip},
+		},
+		{
+			name:         "git when there is no archive",
+			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
+			wantRequests: []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantGit:      true,
+		},
+		{
+			name:           "git when every redirect leaves GitHub",
+			redirectTo:     "evil.example",
+			proxyRedirects: true,
+			wantRequests:   []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantGit:        true,
 		},
 	}
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			fake := &fakeGitHub{dir: source, status: test.status, redirectTo: test.redirectTo}
+			fake := &fakeGitHub{
+				dir:            source,
+				status:         test.status,
+				redirectTo:     test.redirectTo,
+				wrongCommit:    test.wrongCommit,
+				other:          other,
+				proxyRedirects: test.proxyRedirects,
+			}
 			if fake.redirectTo == "" {
 				fake.redirectTo = "codeload.github.com"
-			}
-			if test.wrongCommit != "" {
-				fake.rewrite = func(ext string, served []byte) []byte {
-					if ext != test.wrongCommit {
-						return served
-					}
-					cmd := exec.Command("git", "archive", "--format="+strings.TrimPrefix(ext, "."), "--prefix=repo-x/", other)
-					cmd.Dir = source
-					out, err := cmd.Output()
-					if err != nil {
-						panic(err)
-					}
-					return out
-				}
 			}
 			server := httptest.NewTLSServer(fake)
 			defer server.Close()
 			var hooks []intercept.Interceptor
-			for _, host := range []string{"github.com", "codeload.github.com", "evil.example"} {
+			for _, host := range []string{"github.com", "codeload.github.com", "proxy.pazer.ai", "evil.example", "140.82.112.10"} {
 				hooks = append(hooks, intercept.Interceptor{Scheme: "https", FromHost: host, ToHost: server.Listener.Addr().String(), Client: server.Client()})
 			}
 			defer intercept.AddTestHooks(hooks)()

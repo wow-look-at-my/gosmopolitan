@@ -4,10 +4,8 @@
 package codehost
 
 import (
-	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -61,18 +59,50 @@ func githubHost(host string) bool {
 	return host == "github.com" || host == "codeload.github.com"
 }
 
-// archiveURL returns the github.com URL of the archive of hash. A branch or a
-// tag uses its ref name. HEAD has no ref path, so it uses the hash.
-func (g githubRepo) archiveURL(ref, hash, ext string) string {
-	name := hash
-	if strings.HasPrefix(ref, "refs/heads/") || strings.HasPrefix(ref, "refs/tags/") {
-		segments := strings.Split(ref, "/")
-		for idx, seg := range segments {
-			segments[idx] = url.PathEscape(seg)
-		}
-		name = strings.Join(segments, "/")
+// proxyHost is a fetch proxy that the owner of this fork runs. It reaches GitHub when a direct request cannot.
+const proxyHost = "proxy.pazer.ai"
+
+func isProxyHost(host string) bool { return host == proxyHost }
+
+// An archiveSource is one place to download an archive from, and the hosts
+// the request may touch on the way.
+type archiveSource struct {
+	url       string
+	ext       string
+	allowHost func(string) bool
+}
+
+// archiveSources lists where to get the archive of hash, in the order to try:
+// github.com, then the proxy, for the tar.gz and then for the zip.
+//
+// The proxy passes a redirect through with an IP address as its target, so
+// it gets codeload.github.com, the host that github.com redirects to. The
+// proxy request itself may not redirect at all.
+func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
+	name := refPath(ref, hash)
+	var sources []archiveSource
+	for _, ext := range []string{".tar.gz", ".zip"} {
+		direct := "https://github.com/" + g.owner + "/" + g.name + "/archive/" + name + ext
+		codeload := "https://codeload.github.com/" + g.owner + "/" + g.name + "/" + strings.TrimPrefix(ext, ".") + "/" + name
+		sources = append(sources,
+			archiveSource{url: direct, ext: ext, allowHost: githubHost},
+			archiveSource{url: "https://" + proxyHost + "/?url=" + url.QueryEscape(codeload), ext: ext, allowHost: isProxyHost},
+		)
 	}
-	return "https://github.com/" + g.owner + "/" + g.name + "/archive/" + name + ext
+	return sources
+}
+
+// refPath names hash in an archive URL. A branch or a tag uses its ref name.
+// HEAD has no ref path, so it uses the hash.
+func refPath(ref, hash string) string {
+	if !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/tags/") {
+		return hash
+	}
+	segments := strings.Split(ref, "/")
+	for idx, seg := range segments {
+		segments[idx] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
 }
 
 // errNoGitHubArchive marks an archive that cannot stand in for git archive.
@@ -83,8 +113,8 @@ func (r *gitRepo) githubArchivePath(hash string) string {
 	return filepath.Join(r.dir, "github", hash+".zip")
 }
 
-// statGitHub describes hash from an archive that github.com serves for ref.
-// It tries the tar.gz, then the zip. Either is kept on disk, so ReadFile and
+// statGitHub describes hash from an archive of ref, from the first source
+// in archiveSources that works. The archive is kept on disk, so ReadFile and
 // ReadZip never have to fetch the commit with git. It requires r.mu.
 func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes || len(hash) != 40 {
@@ -95,8 +125,8 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 	}
 
 	var errs []error
-	for _, ext := range []string{".tar.gz", ".zip"} {
-		archive, when, err := r.downloadGitHub(ctx, r.github.archiveURL(ref, hash, ext), ext, hash)
+	for _, source := range r.github.archiveSources(ref, hash) {
+		archive, when, err := r.downloadGitHub(ctx, source, hash)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -111,12 +141,13 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 
 // downloadGitHub fetches one archive and converts it to the zip git archive
 // writes. It returns the zip and the commit time.
-func (r *gitRepo) downloadGitHub(ctx context.Context, rawURL, ext, hash string) ([]byte, time.Time, error) {
-	u, err := url.Parse(rawURL)
+func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string) ([]byte, time.Time, error) {
+	u, err := url.Parse(source.url)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	resp, err := web.GetPinned(u, githubHost)
+	ext := source.ext
+	resp, err := web.GetPinned(u, source.allowHost)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -374,47 +405,6 @@ func (b *archiveBuilder) finish() ([]byte, time.Time, error) {
 		return nil, time.Time{}, err
 	}
 	return b.buf.Bytes(), b.when, nil
-}
-
-// githubTarToArchive converts a git archive tar.gz. Its pax global header
-// names the commit, and every entry carries the commit time.
-func githubTarToArchive(src io.Reader, hash string) ([]byte, time.Time, error) {
-	unzipped, err := gzip.NewReader(src)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	defer unzipped.Close()
-	reader := tar.NewReader(unzipped)
-	builder := newArchiveBuilder(hash)
-	sawCommit := false
-	for {
-		header, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, time.Time{}, err
-		}
-		if header.Typeflag == tar.TypeXGlobalHeader {
-			if id := header.PAXRecords["comment"]; id != hash {
-				return nil, time.Time{}, fmt.Errorf("archive is of commit %q, want %s", id, hash)
-			}
-			sawCommit = true
-			continue
-		}
-		if !sawCommit {
-			return nil, time.Time{}, fmt.Errorf("archive names no commit")
-		}
-		var content io.Reader = reader
-		mode := header.FileInfo().Mode()
-		if header.Typeflag == tar.TypeSymlink {
-			content = strings.NewReader(header.Linkname)
-		}
-		if err := builder.add(header.Name, mode, header.ModTime, content); err != nil {
-			return nil, time.Time{}, err
-		}
-	}
-	return builder.finish()
 }
 
 // githubZipToArchive converts a git archive zip. Its comment names the
