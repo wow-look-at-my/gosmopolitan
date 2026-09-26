@@ -1098,6 +1098,16 @@ func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error
 		return err
 	}
 
+	if reader, ok := r.code.(codehost.FileReader); ok {
+		moduleFiles, err := reader.ReadFiles(ctx, rev, subdir)
+		if err == nil {
+			return r.zipFromFiles(ctx, dst, version, rev, subdir, moduleFiles)
+		}
+		if !errors.Is(err, errors.ErrUnsupported) {
+			return err
+		}
+	}
+
 	dl, err := r.code.ReadZip(ctx, rev, subdir, codehost.MaxZipFile)
 	if err != nil {
 		return err
@@ -1177,6 +1187,25 @@ func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error
 	return modzip.Create(dst, module.Version{Path: r.modPath, Version: version}, files)
 }
 
+// zipFromFiles writes the module zip from files a FileReader returned.
+func (r *codeRepo) zipFromFiles(ctx context.Context, dst io.Writer, version, rev, subdir string, moduleFiles []codehost.ModuleFile) error {
+	var files []modzip.File
+	haveLICENSE := false
+	for _, file := range moduleFiles {
+		files = append(files, dataFile{name: file.Name, data: file.Data, mode: file.Mode})
+		if file.Name == "LICENSE" {
+			haveLICENSE = true
+		}
+	}
+	if !haveLICENSE && strings.Trim(subdir, "/") != "" {
+		data, err := r.code.ReadFile(ctx, rev, "LICENSE", codehost.MaxLICENSE)
+		if err == nil {
+			files = append(files, dataFile{name: "LICENSE", data: data})
+		}
+	}
+	return modzip.Create(dst, module.Version{Path: r.modPath, Version: version}, files)
+}
+
 type zipFile struct {
 	name string
 	f    *zip.File
@@ -1189,6 +1218,7 @@ func (f zipFile) Open() (io.ReadCloser, error) { return f.f.Open() }
 type dataFile struct {
 	name string
 	data []byte
+	mode fs.FileMode // zero means a regular 0644 file
 }
 
 func (f dataFile) Path() string                { return f.name }
@@ -1201,9 +1231,14 @@ type dataFileInfo struct {
 	f dataFile
 }
 
-func (fi dataFileInfo) Name() string       { return path.Base(fi.f.name) }
-func (fi dataFileInfo) Size() int64        { return int64(len(fi.f.data)) }
-func (fi dataFileInfo) Mode() fs.FileMode  { return 0644 }
+func (fi dataFileInfo) Name() string { return path.Base(fi.f.name) }
+func (fi dataFileInfo) Size() int64  { return int64(len(fi.f.data)) }
+func (fi dataFileInfo) Mode() fs.FileMode {
+	if fi.f.mode != 0 {
+		return fi.f.mode
+	}
+	return 0644
+}
 func (fi dataFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi dataFileInfo) IsDir() bool        { return false }
 func (fi dataFileInfo) Sys() any           { return nil }
