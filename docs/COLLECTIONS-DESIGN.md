@@ -43,19 +43,20 @@ The standard library does this in `image.RegisterFormat`, `database/sql.Register
 3. **A duplicate is fatal or silent.** `database/sql` panics with `sql: Register called twice for driver`. The panic happens in `init`, before `main`, and nothing can recover it. `image` appends the duplicate silently. Neither is caught at build time, although the build knows every registrant.
 4. **The registry is mutable global state.** Every registry writes its own mutex, `atomic.Value`, copy-on-append, lookup, duplicate check and sorted listing. All of that protects data that never changes after startup. A test cannot get an isolated registry. A program cannot have two.
 5. **Init ordering is fragile.** The registry must exist before a registrant's `init` runs. That holds only because the registrant imports the registry package. Code that reads the registry in its own `init` sees a partial list, depending on where it sits in the order.
-6. **Every registrant costs at startup.** Each `init` runs on every start, `--help` included. Allocations and tables built in `init` cost time whether the format is used or not. APE startup time matters here.
-7. **The linker cannot drop an unused loader.** An `init` always runs. So everything it references stays in the binary, even when nothing calls `image.Decode`.
-8. **No tool can see the set.** Nothing at build time can answer "which loaders are in this program". The answer exists only at run time.
-9. **The interface check is by hand.** Authors write `var _ Loader = (*pngLoader)(nil)` to get it. The register call accepts whatever its parameter type accepts. `gob.Register` takes `any`.
+6. **The linker cannot drop an unused loader.** An `init` always runs. So everything it references stays in the binary, even when nothing calls `image.Decode`.
+7. **No tool can see the set.** Nothing at build time can answer "which loaders are in this program". The answer exists only at run time.
+8. **The interface check is by hand.** Authors write `var _ Loader = (*pngLoader)(nil)` to get it. The register call accepts whatever its parameter type accepts. `gob.Register` takes `any`.
 
-The root cause of all nine: a static fact ("these loaders are in this program") is computed at run time, by side effects, in an order nobody chose.
+Startup time is not on this list. A registration call is cheap. It matters only with thousands of registrants.
+
+The root cause of all eight: a static fact ("these loaders are in this program") is computed at run time, by side effects, in an order nobody chose.
 
 ## Prior art
 
 | System | Mechanism | What to keep, what to avoid |
 |---|---|---|
-| C++ static registrars | The constructor of a global object inserts into a registry at startup | Works. A function-local static registry handles cross-TU order. The costs are the ones Go's `init()` pattern has: code runs at startup, and the registry is mutable. A static library drops an object file that nothing references, which is a linker defect. Collections fix the Go equivalent: a read of the collection keeps every contribution. |
-| Rust `linkme::distributed_slice`, `inventory` | Each crate puts elements in a linker section. The linker concatenates them into one slice. | Keep. No run-time cost, immutable. Order is link order, which is the weak point. |
+| C++ static registrars | The constructor of a global object inserts into a registry at startup | Works. A function-local static registry handles cross-TU order. The costs are the ones Go's `init()` pattern has: any code can insert at any time, so a reader must lock and can see a different list on each read. The list is complete only after every constructor has run. A static library drops an object file that nothing references, which is a linker defect. Collections fix the Go equivalent: a read of the collection keeps every contribution. |
+| Rust `linkme::distributed_slice`, `inventory` | Each crate puts elements in a linker section. The linker concatenates them into one slice. | Keep. The slice is immutable, complete before any code runs, and known at build time. Order is link order, which is the weak point. |
 | Linux kernel initcalls | Linker sections, grouped by level | The same idea, with priority as explicit levels. |
 | Java `ServiceLoader` | Everything on the classpath is loaded | Avoid. Present is not the same as chosen. Reflective, at run time. |
 | Go's own linker | Assembles typelinks and itablinks. Orders init tasks (`cmd/link/internal/ld/inittask.go`). | The machinery exists. This feature gives it to user code. |
@@ -92,7 +93,7 @@ The statement is written in `init`, but the compiler lifts it into a link-time s
 
 Go already works this way. The spec says `var x = T{...}` is initialized by package initialization. The compiler emits data instead.
 
-The alternative is a real append at run time. It keeps the syntax literal. It also brings back problems 2, 4, 5 and 6.
+The alternative is a real append at run time. It keeps the syntax literal. It also brings back problems 2, 4 and 5.
 
 An `init` that holds only contributions becomes empty. The compiler already removes an empty `init`.
 
@@ -105,10 +106,9 @@ An `init` that holds only contributions becomes empty. The compiler already remo
 | 3. Duplicates | Not detected. Keyed collections are deferred. See "Deferred". |
 | 4. Mutable global state | Immutable data, no lock. For test isolation, an API takes the slice as a parameter that defaults to the collection (docs/OPTIONAL-PARAMS.md): `func Decode(r io.Reader, loaders []Loader = Loaders)`. |
 | 5. Init ordering | Complete before any `init` runs. |
-| 6. Startup cost | Nothing runs. |
-| 7. Dead code | If nothing reads the collection, the linker drops it and every contribution. |
-| 8. Visibility | Contributions are in export data. go-toolchain prints them. |
-| 9. Interface check | Each contribution is type-checked. |
+| 6. Dead code | If nothing reads the collection, the linker drops it and every contribution. |
+| 7. Visibility | Contributions are in export data. go-toolchain prints them. |
+| 8. Interface check | Each contribution is type-checked. |
 
 ### Linker mechanics
 
