@@ -25,15 +25,23 @@ The archives are used only when the module proxy is skipped or misses. That happ
 
 A version tag such as `v1.2.3` needs no ref list. Its archive is fetched first. The commit comes out of the archive: the tar.gz pax `comment` record, or the zip comment.
 
-Everything else reads the ref list from the GitHub API, not `git ls-remote`:
+Everything else needs the ref list. It comes over plain HTTP, from the first source that answers:
 
-- `https://api.github.com/repos/<owner>/<repo>/tags?per_page=100&page=N` for each tag and its commit.
-- `.../branches?per_page=100&page=N` for each branch.
-- `https://api.github.com/repos/<owner>/<repo>` for `default_branch`, which is `HEAD`.
+1. `https://github.com/<owner>/<repo>.git/info/refs?service=git-upload-pack`. This is the advertisement git itself reads first: every branch and tag at its commit, annotated tags peeled, and `HEAD`. One request, no rate limit.
+2. The same URL through proxy.pazer.ai.
+3. The REST API on github-state-mirror.pazer.io. The mirror answers only a request with a GitHub token.
+4. The REST API on api.github.com, then through proxy.pazer.ai. Without a token it allows few requests an hour.
+5. `git ls-remote`.
 
-Each request goes direct, then through proxy.pazer.ai. Without a token, api.github.com allows requests an hour, and a GOAUTH or netrc credential for api.github.com raises that. `git ls-remote` runs only when the API fails from both.
+The REST steps read `/repos/<owner>/<repo>/tags` and `/branches` page by page, and `/repos/<owner>/<repo>` for `default_branch`, which is `HEAD`.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach api.github.com, and a proxy request only proxy.pazer.ai.
+A request through proxy.pazer.ai carries the GOAUTH credential of the github.com URL it wraps, and the proxy forwards it. A request to github-state-mirror carries the credential for api.github.com. A netrc entry for api.github.com therefore covers the mirror, the API and the proxied API.
+
+## No git until git is the only option
+
+A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
+
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
 
 A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
 

@@ -84,70 +84,98 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	defer unlock()
 
 	github, onGitHub := githubRemote(r.remote)
-	if _, err := os.Stat(filepath.Join(r.dir, "objects")); err != nil {
-		repoSha256Hash := false
-		// GitHub hosts no SHA-256 repositories, so its remotes skip ls-remote.
-		if !onGitHub {
-			if refs, lrErr := r.loadRefs(ctx); lrErr == nil {
-				// Check any ref's hash, it doesn't matter which; they won't be mixed
-				// between sha1 and sha256 for the moment.
-				for _, refHash := range refs {
-					repoSha256Hash = len(refHash) == (256 / 4)
-					break
-				}
-			}
-		}
-		gitSupportsSHA256, gitVersErr := gitSupportsSHA256()
-		if gitVersErr != nil {
-			return nil, fmt.Errorf("unable to resolve git version: %w", gitVersErr)
-		}
-		objFormatFlag := []string{}
-		// If git is sufficiently recent to support sha256,
-		// always initialize with an explicit object-format.
-		if repoSha256Hash {
-			// We always set --object-format=sha256 if the repo
-			// we're cloning uses sha256 hashes because if the git
-			// version is too old, it'll fail either way, so we
-			// might as well give it one last chance.
-			objFormatFlag = []string{"--object-format=sha256"}
-		} else if gitSupportsSHA256 {
-			objFormatFlag = []string{"--object-format=sha1"}
-		}
-		if _, err := Run(ctx, r.dir, "git", "init", "--bare", objFormatFlag); err != nil {
-			os.RemoveAll(r.dir)
-			return nil, err
-		}
-		// We could just say git fetch https://whatever later,
-		// but this lets us say git fetch origin instead, which
-		// is a little nicer. More importantly, using a named remote
-		// avoids a problem with Git LFS. See golang.org/issue/25605.
-		if _, err := r.runGit(ctx, "git", "remote", "add", "origin", "--", r.remote); err != nil {
-			os.RemoveAll(r.dir)
-			return nil, err
-		}
-		if runtime.GOOS == "windows" {
-			// Git for Windows by default does not support paths longer than
-			// MAX_PATH (260 characters) because that may interfere with navigation
-			// in some Windows programs. However, cmd/go should be able to handle
-			// long paths just fine, and we expect people to use 'go clean' to
-			// manipulate the module cache, so it should be harmless to set here,
-			// and in some cases may be necessary in order to download modules with
-			// long branch names.
-			//
-			// See https://github.com/git-for-windows/git/wiki/Git-cannot-create-a-file-or-directory-with-a-long-path.
-			if _, err := r.runGit(ctx, "git", "config", "core.longpaths", "true"); err != nil {
-				os.RemoveAll(r.dir)
-				return nil, err
-			}
-		}
+	r.remoteURL = r.remote
+	if onGitHub {
+		// A github.com download runs no git. The bare repository is made
+		// the first time a git command needs it (runGit).
+		r.github = &github
+		r.remote = "origin"
+		return r, nil
+	}
+	if err := r.initGitDir(ctx, true); err != nil {
+		os.RemoveAll(r.dir)
+		return nil, err
 	}
 	r.sha256Hashes = r.checkConfigSHA256(ctx)
-	r.remoteURL = r.remote
 	r.remote = "origin"
-	if onGitHub {
-		r.github = &github
-	}
 	return r, nil
+}
+
+// initGitDir makes r.dir a bare repository with r.remoteURL as origin, if it
+// is not one yet. detectSHA256 asks the remote for its hash format first, with
+// ls-remote on r.remote, which must still be the URL.
+func (r *gitRepo) initGitDir(ctx context.Context, detectSHA256 bool) error {
+	if _, err := os.Stat(filepath.Join(r.dir, "objects")); err == nil {
+		return nil
+	}
+	repoSha256Hash := false
+	if detectSHA256 {
+		if refs, lrErr := r.loadRefs(ctx); lrErr == nil {
+			// Check any ref's hash, it doesn't matter which; they won't be mixed
+			// between sha1 and sha256 for the moment.
+			for _, refHash := range refs {
+				repoSha256Hash = len(refHash) == (256 / 4)
+				break
+			}
+		}
+	}
+	gitSupportsSHA256, gitVersErr := gitSupportsSHA256()
+	if gitVersErr != nil {
+		return fmt.Errorf("unable to resolve git version: %w", gitVersErr)
+	}
+	objFormatFlag := []string{}
+	// If git is sufficiently recent to support sha256,
+	// always initialize with an explicit object-format.
+	if repoSha256Hash {
+		// We always set --object-format=sha256 if the repo
+		// we're cloning uses sha256 hashes because if the git
+		// version is too old, it'll fail either way, so we
+		// might as well give it one last chance.
+		objFormatFlag = []string{"--object-format=sha256"}
+	} else if gitSupportsSHA256 {
+		objFormatFlag = []string{"--object-format=sha1"}
+	}
+	gitDir := []string{"GIT_DIR=" + r.dir}
+	if _, err := Run(ctx, r.dir, "git", "init", "--bare", objFormatFlag); err != nil {
+		return err
+	}
+	// We could just say git fetch https://whatever later,
+	// but this lets us say git fetch origin instead, which
+	// is a little nicer. More importantly, using a named remote
+	// avoids a problem with Git LFS. See golang.org/issue/25605.
+	remoteAdd := RunArgs{cmdline: []any{"git", "remote", "add", "origin", "--", r.remoteURL}, dir: r.dir, env: gitDir}
+	if _, err := RunWithArgs(ctx, remoteAdd); err != nil {
+		// Another go command can make the same repository at the same time.
+		if runErr, ok := err.(*RunError); !ok || !bytes.Contains(runErr.Stderr, []byte("already exists")) {
+			return err
+		}
+	}
+	if runtime.GOOS == "windows" {
+		// Git for Windows by default does not support paths longer than
+		// MAX_PATH (260 characters) because that may interfere with navigation
+		// in some Windows programs. However, cmd/go should be able to handle
+		// long paths just fine, and we expect people to use 'go clean' to
+		// manipulate the module cache, so it should be harmless to set here,
+		// and in some cases may be necessary in order to download modules with
+		// long branch names.
+		//
+		// See https://github.com/git-for-windows/git/wiki/Git-cannot-create-a-file-or-directory-with-a-long-path.
+		longPaths := RunArgs{cmdline: []any{"git", "config", "core.longpaths", "true"}, dir: r.dir, env: gitDir}
+		if _, err := RunWithArgs(ctx, longPaths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gitDirReady reports whether r.dir holds a git repository to consult. Only a
+// github.com repository can lack one, until its first git command.
+func (r *gitRepo) gitDirReady() bool {
+	if r.github == nil {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(r.dir, "objects"))
+	return err == nil
 }
 
 type gitRepo struct {
@@ -160,6 +188,9 @@ type gitRepo struct {
 	// github is set when the remote is on github.com. A commit then comes
 	// from a github.com archive first, and from git only when that fails.
 	github *githubRepo
+
+	gitDirOnce sync.Once
+	gitDirErr  error
 
 	// Repo uses the SHA256 for hashes, so expect the hashes to be 256/4 == 64-bytes in hex.
 	sha256Hashes bool
@@ -457,21 +488,28 @@ const minHashDigits = 7
 func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err error) {
 	// Fast path: maybe rev is a hash we already have locally.
 	didStatLocal := false
+	// A github.com repository that git never ran for has nothing local to
+	// consult, so its lookups skip git rather than make an empty repository.
+	haveGitDir := r.gitDirReady()
 	if len(rev) >= minHashDigits && len(rev) <= r.hexHashLen() && AllHex(rev) {
-		if info, err := r.statLocal(ctx, rev, rev); err == nil {
-			return info, nil
-		}
 		if when, err := r.githubArchiveTime(rev); err == nil {
 			return r.githubRevInfo(ctx, rev, rev, when, nil), nil
+		}
+		if haveGitDir {
+			if info, err := r.statLocal(ctx, rev, rev); err == nil {
+				return info, nil
+			}
 		}
 		didStatLocal = true
 	}
 
 	// Maybe rev is a tag we already have locally.
 	// (Note that we're excluding branches, which can be stale.)
-	r.localTagsOnce.Do(func() { r.loadLocalTags(ctx) })
-	if _, ok := r.localTags.Load(rev); ok {
-		return r.statLocal(ctx, rev, "refs/tags/"+rev)
+	if haveGitDir {
+		r.localTagsOnce.Do(func() { r.loadLocalTags(ctx) })
+		if _, ok := r.localTags.Load(rev); ok {
+			return r.statLocal(ctx, rev, "refs/tags/"+rev)
+		}
 	}
 
 	// A version tag on github.com comes from its archive, which names the
@@ -561,7 +599,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	// but we've since done fetches that pulled down the hash we need
 	// (or already have the hash we need, just without its tag).
 	// Either way, try a local stat before falling back to network I/O.
-	if !didStatLocal {
+	if !didStatLocal && haveGitDir {
 		if info, err := r.statLocal(ctx, rev, hash); err == nil {
 			tag, fromTag := strings.CutPrefix(ref, "refs/tags/")
 			if fromTag && !slices.Contains(info.Tags, tag) {
@@ -1168,6 +1206,12 @@ func ensureGitAttributes(repoDir string) (err error) {
 }
 
 func (r *gitRepo) runGit(ctx context.Context, cmdline ...any) ([]byte, error) {
+	if r.github != nil {
+		r.gitDirOnce.Do(func() { r.gitDirErr = r.initGitDir(ctx, false) })
+		if r.gitDirErr != nil {
+			return nil, r.gitDirErr
+		}
+	}
 	args := RunArgs{cmdline: cmdline, dir: r.dir, local: r.local}
 	if !r.local {
 		// Manually supply GIT_DIR so Git works with safe.bareRepository=explicit set.

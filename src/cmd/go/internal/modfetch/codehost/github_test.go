@@ -662,12 +662,12 @@ func TestGitHubArchiveFallback(t *testing.T) {
 				t.Errorf("Stat origin = %+v, want refs/tags/v1.0.0 at %s", info.Origin, hash)
 			}
 
-			if ranLsRemote := git.refs != nil; ranLsRemote != test.wantGit {
-				t.Errorf("ls-remote ran: %v, want %v", ranLsRemote, test.wantGit)
+			if loadedRefs := git.refs != nil; loadedRefs != test.wantGit {
+				t.Errorf("listed refs: %v, want %v", loadedRefs, test.wantGit)
 			}
-			_, statErr := git.runGit(ctx, "git", "cat-file", "-e", hash+"^{commit}")
-			if hasCommit := statErr == nil; hasCommit != test.wantGit {
-				t.Errorf("git fetched the commit: %v, want %v", hasCommit, test.wantGit)
+			// No git ran unless every archive failed. gitDirReady runs none.
+			if madeGitDir := git.gitDirReady(); madeGitDir != test.wantGit {
+				t.Errorf("made a git repository: %v, want %v", madeGitDir, test.wantGit)
 			}
 
 			gomod, err := repo.ReadFile(ctx, "v1.0.0", "go.mod", MaxGoMod)
@@ -728,6 +728,9 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			fake.mu.Unlock()
 			if len(extra) != 0 {
 				t.Errorf("the kept archive was downloaded again: %q", extra)
+			}
+			if again.gitDirReady() {
+				t.Errorf("serving from archives made a git repository")
 			}
 		})
 	}
