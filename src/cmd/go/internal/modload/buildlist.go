@@ -186,9 +186,9 @@ func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList [
 			inconsistent := false
 			for _, m := range vendorList {
 				if orgmod.IsOrg(m.Path) {
-					// An org module records a placeholder version in both go.mod
-					// and modules.txt, and resolves to a branch head, so the two
-					// are not compared.
+					// modules.txt records the placeholder for an org module,
+					// and go.mod records a branch head, so the two are not
+					// compared.
 					continue
 				}
 				if v, ok := rs.rootSelected(ld, m.Path); !ok || v != m.Version {

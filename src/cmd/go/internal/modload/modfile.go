@@ -404,15 +404,21 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 		}
 	}
 	// A replace line naming an org module records a version the same way a
-	// require line does: the token is not read, and the replacement is the head
-	// of the branch the target follows. replacementFrom is reached from the
+	// require line does. A CI build uses it, and every other command uses the
+	// head of the branch the target follows. replacementFrom is reached from the
 	// context-free mvs.Reqs interface, as rawGoModData is.
 	if found.Version != "" && orgmod.IsOrg(found.Path) && orgResolvable() {
-		version, err := orgVersion(ld, context.TODO(), found.Path)
-		if err != nil {
-			base.Fatal(err)
+		if orgmod.CIBuild() {
+			if err := orgCheckRecorded(found); err != nil {
+				base.Fatal(err)
+			}
+		} else {
+			version, err := orgVersion(ld, context.TODO(), found.Path)
+			if err != nil {
+				base.Fatal(err)
+			}
+			found.Version = version
 		}
-		found.Version = version
 	}
 	return found, foundModRoot, modFilePath(foundModRoot)
 }
@@ -521,12 +527,7 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 
 	i.require = make(map[module.Version]requireMeta, len(modFile.Require))
 	for _, r := range modFile.Require {
-		// An org module's version token is inert: the module resolves to a branch
-		// head whatever the line says. Indexing the placeholder means a go.mod
-		// file that records some other token is not considered out of date, so a
-		// repository that recorded a version before this rule existed builds
-		// without being edited first.
-		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
+		i.require[r.Mod] = requireMeta{indirect: r.Indirect}
 		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
 			i.addOrgBranch(r.Mod.Path, branch)
 		}

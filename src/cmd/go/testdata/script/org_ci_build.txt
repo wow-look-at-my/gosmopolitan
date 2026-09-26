@@ -1,0 +1,236 @@
+# A CI build (GITHUB_ACTIONS=true, and no coding agent in the environment or
+# among the ancestor processes) builds the version go.mod records for each org
+# module. It looks up no branch head and writes nothing, so a commit that lands
+# in the middle of a run reaches no job of it. A placeholder has no version to
+# build, so it is an error there.
+#
+# The go command cannot make a CI build under an agent, and a script cannot
+# prove that no agent started it. So this script runs only where no agent is an
+# ancestor of the test. org_branch_head.txt covers the builds outside CI.
+
+[short] skip 'constructs local git repositories'
+[!git] skip
+[agent] skip 'a coding agent is an ancestor of this test, so the go command never makes a CI build'
+
+env GIT_CONFIG_GLOBAL=$WORK${/}home${/}gopher${/}.gitconfig
+env HOME=$WORK${/}home${/}gopher
+env GIT_ALLOW_PROTOCOL=file
+env GOPRIVATE=github.com/wow-look-at-my
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/alpha.insteadOf' 'https://github.com/wow-look-at-my/alpha'
+[!GOOS:windows] exec git config --global 'url.file://'$WORK'/beta.insteadOf' 'https://github.com/wow-look-at-my/beta'
+[GOOS:windows]  exec git config --global 'url.file:///'$WORK'/beta.insteadOf' 'https://github.com/wow-look-at-my/beta'
+
+env GIT_AUTHOR_NAME='Go Gopher'
+env GIT_AUTHOR_EMAIL='gopher@golang.org'
+env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
+env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
+
+# The script engine passes none of these through, and this says so.
+env GITHUB_ACTIONS=
+env CLAUDECODE=
+env GROK_AGENT=
+env CODEX_SANDBOX=
+env CODEX_SANDBOX_NETWORK_DISABLED=
+env GEMINI_CLI=
+env OPENCODE=
+
+cd $WORK/alpha
+exec git init
+env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-01-02T03:04:05Z
+exec git add -A
+exec git commit -m 'alpha main'
+exec git branch -m main
+
+# beta imports alpha, and its own go.mod records the placeholder for it.
+cd $WORK/beta
+exec git init
+env GIT_AUTHOR_DATE=2026-02-02T03:04:05Z
+env GIT_COMMITTER_DATE=2026-02-02T03:04:05Z
+exec git add -A
+exec git commit -m 'beta main'
+exec git branch -m main
+
+# Outside CI a plain build records each branch head in go.mod.
+cd $WORK/m
+go build ./...
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-[0-9a-f]+$' go.mod
+cp go.mod $WORK/m.go.mod
+
+# alpha moves while the run is under way.
+cd $WORK/alpha
+cp $WORK${/}alpha-next${/}alpha.go alpha.go
+env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-01-03T04:05:06Z
+exec git commit -am 'alpha next'
+
+# A CI build uses the recorded version, not the new head, and writes nothing.
+# beta's go.mod records the placeholder for alpha, and the version the main
+# module records takes its place.
+cd $WORK/m
+env GITHUB_ACTIONS=true
+go run .
+stdout '^alpha-main beta-main$'
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+go build -o $WORK${/}m${/}prog .
+go version -m $WORK${/}m${/}prog
+stdout 'dep\tgithub.com/wow-look-at-my/alpha\tv0\.0\.0-20260102030405-0f69f837cebe\th1:'
+go mod tidy
+cmp go.mod $WORK/m.go.mod
+
+# A coding agent does not make a CI build, whatever GITHUB_ACTIONS says: the
+# build follows the head and records it.
+env CLAUDECODE=1
+go run .
+stdout '^alpha-next beta-main$'
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
+env CLAUDECODE=
+
+# The next CI build uses the version that run recorded.
+go run .
+stdout '^alpha-next beta-main$'
+
+# A placeholder names no version, so a CI build refuses it by name and leaves
+# go.mod as it is.
+cd $WORK/placeholder
+cp go.mod $WORK/placeholder.go.mod
+! go build ./...
+stderr 'github.com/wow-look-at-my/alpha: go.mod records the placeholder v0\.0\.0, and a CI build uses the version go.mod records; run any go command outside CI to record the head of its branch'
+cmp go.mod $WORK/placeholder.go.mod
+
+# A replace line is the same.
+cd $WORK/placeholderreplace
+! go build ./...
+stderr 'github.com/wow-look-at-my/alpha: go.mod records the placeholder v0\.0\.0, and a CI build uses the version go.mod records'
+
+# Outside CI the same module records the head, and CI then builds it.
+cd $WORK/placeholder
+env GITHUB_ACTIONS=
+go build ./...
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
+env GITHUB_ACTIONS=true
+go run .
+stdout '^alpha-next$'
+
+# Vendor mode resolves nothing, so a CI build of a vendored placeholder builds.
+cd $WORK/vendor
+go run .
+stdout '^alpha-vendored$'
+
+-- $WORK/home/gopher/.gitconfig --
+[user]
+	name = Go Gopher
+	email = gopher@golang.org
+-- $WORK/alpha/go.mod --
+module github.com/wow-look-at-my/alpha
+
+go 1.21
+-- $WORK/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-main" }
+-- $WORK/alpha-next/alpha.go --
+package alpha
+
+func Name() string { return "alpha-next" }
+-- $WORK/beta/go.mod --
+module github.com/wow-look-at-my/beta
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/beta/beta.go --
+package beta
+
+import _ "github.com/wow-look-at-my/alpha"
+
+func Name() string { return "beta-main" }
+-- $WORK/m/go.mod --
+module example.com/consumer
+
+go 1.21
+
+require (
+	github.com/wow-look-at-my/alpha v0.0.0
+	github.com/wow-look-at-my/beta v0.0.0
+)
+-- $WORK/m/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+	"github.com/wow-look-at-my/beta"
+)
+
+func main() {
+	fmt.Println(alpha.Name(), beta.Name())
+}
+-- $WORK/placeholder/go.mod --
+module example.com/placeholder
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/placeholder/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/placeholderreplace/go.mod --
+module example.com/placeholderreplace
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20260102030405-0f69f837cebe
+
+replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/placeholderreplace/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/vendor/go.mod --
+module example.com/vendored
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/vendor/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/vendor/vendor/modules.txt --
+# github.com/wow-look-at-my/alpha v0.0.0
+## explicit; go 1.21
+github.com/wow-look-at-my/alpha
+-- $WORK/vendor/vendor/github.com/wow-look-at-my/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-vendored" }

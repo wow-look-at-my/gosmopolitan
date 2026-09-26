@@ -1,9 +1,10 @@
-# An org module (github.com/wow-look-at-my/...) has no version of its own: the
-# token on its require line is inert, and the go command resolves it in memory
-# to the pseudo-version of the head of a branch. The main module's checked-out
-# branch wins when the dependency's repository has a branch of that name, and
-# the dependency's default branch is used otherwise -- including when the main
-# module's HEAD is detached or is not a git repository at all.
+# An org module (github.com/wow-look-at-my/...) follows the head of a branch.
+# Outside CI every go command resolves that head and writes its pseudo-version
+# to go.mod when the recorded version differs, a placeholder included. The main
+# module's checked-out branch wins when the dependency's repository has a branch
+# of that name, and the dependency's default branch is used otherwise --
+# including when the main module's HEAD is detached or is not a git repository
+# at all. org_ci_build.txt covers the CI build, which uses the recorded version.
 #
 # The prefix is hardcoded in cmd/go, so the fixture stands in for github.com
 # with a url.<base>.insteadOf rewrite rather than a proxy. Nothing here reaches
@@ -79,6 +80,25 @@ go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/alpha/sub g
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-c7abde595c23$'
 stdout '^github.com/wow-look-at-my/alpha/sub v0\.0\.0-20260103040506-c7abde595c23$'
 stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+! stderr .
+
+# That same readonly command recorded each version in place of the placeholder,
+# with no message and no go.sum line.
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-c7abde595c23$' go.mod
+grep '^	github.com/wow-look-at-my/alpha/sub v0\.0\.0-20260103040506-c7abde595c23$' go.mod
+grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$' go.mod
+! grep 'v0\.0\.0$' go.mod
+! exists go.sum
+
+# An explicit -mod=readonly keeps its upstream meaning: a head that moved is an
+# update go.mod needs, and the command does not write it.
+exec git checkout -b only-here
+cp go.mod $WORK/m.feature.go.mod
+! go list -mod=readonly -m github.com/wow-look-at-my/alpha
+stderr 'updates to go.mod needed'
+cmp go.mod $WORK/m.feature.go.mod
+exec git checkout feature
+exec git branch -D only-here
 
 # The code the resolved versions describe is the code at the branch heads.
 go run .
@@ -108,78 +128,121 @@ cd $WORK/plain
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
 
-# go get writes the placeholder for an org module, never the version it
-# resolved the module to.
+# go get records the version it resolved the org module to.
 go get github.com/wow-look-at-my/beta
-grep 'github.com/wow-look-at-my/beta v0\.0\.0' go.mod
-! grep 'github.com/wow-look-at-my/beta v0\.0\.0-' go.mod
+grep 'github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02( // indirect)?$' go.mod
+! grep 'v0\.0\.0$' go.mod
 ! exists go.sum
 
-# go mod tidy writes the placeholder, not the resolved version, and needs no
-# go.sum entry for an org module. A second tidy leaves go.mod byte-identical.
+# go mod tidy records the resolved versions too, and needs no go.sum entry for
+# an org module. The main module's HEAD is detached now, so alpha is back on
+# its default branch. A second tidy leaves go.mod byte-identical.
 cd $WORK/m
 go mod tidy
 
-grep 'github.com/wow-look-at-my/alpha v0\.0\.0' go.mod
-grep 'github.com/wow-look-at-my/alpha/sub v0\.0\.0' go.mod
-grep 'github.com/wow-look-at-my/beta v0\.0\.0' go.mod
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+grep '^	github.com/wow-look-at-my/alpha/sub v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$' go.mod
 ! exists go.sum
 
 cp go.mod $WORK/m.go.mod
 go mod tidy
 cmp go.mod $WORK/m.go.mod
 
-# A token recorded before this rule existed, and a go.sum line left for it, are
-# accepted and then cleaned up rather than being a flag day. This module is not
-# in a git repository, so the old token resolves to alpha's default branch.
+# When a branch moves, the next plain build moves go.mod with it, silently.
+cd $WORK/beta
+cp $WORK${/}beta-next${/}beta.go beta.go
+env GIT_AUTHOR_DATE=2026-02-03T04:05:06Z
+env GIT_COMMITTER_DATE=2026-02-03T04:05:06Z
+exec git commit -am 'beta next'
+
+cd $WORK/m
+go build -o $WORK${/}m${/}prog .
+stderr '^go: downloading github.com/wow-look-at-my/beta v0\.0\.0-20260203040506-[0-9a-f]+$'
+! stderr 'go\.mod'
+grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260203040506-[0-9a-f]+$' go.mod
+! grep 'beta v0\.0\.0-20260202030405-6dedeb498b02' go.mod
+go version -m $WORK${/}m${/}prog
+stdout 'dep\tgithub.com/wow-look-at-my/beta\tv0\.0\.0-20260203040506-[0-9a-f]+\th1:'
+go run .
+stdout '^alpha-main sub-main beta-next$'
+
+# The recorded files now match the heads, so the next build writes nothing.
+cp go.mod $WORK/m.go.mod
+go build ./...
+cmp go.mod $WORK/m.go.mod
+
+# A version recorded long ago, and a go.sum line left for it, are moved and
+# cleaned up rather than being a flag day. This module is not in a git
+# repository, so it moves to alpha's default branch.
 cd $WORK/old
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
 go build ./...
 
 go mod tidy
-grep 'github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
 ! grep 'wow-look-at-my' go.sum
 
-# Vendor mode reads the placeholder from both files and, with no branch to
-# query, leaves it alone.
+# Vendor mode resolves nothing, so it reads the recorded version, the
+# placeholder included, and writes nothing.
 cd $WORK/vendor
+cp go.mod $WORK/vendor.go.mod
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0$'
 go build ./...
 go run .
 stdout '^alpha-vendored$'
+cmp go.mod $WORK/vendor.go.mod
+
+# go.mod records a real version while modules.txt keeps the placeholder, the
+# way go mod vendor leaves them. The two are not compared.
+cd $WORK/vendorpinned
+cp go.mod $WORK/vendorpinned.go.mod
+go list -m github.com/wow-look-at-my/alpha
+stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20250101000000-aaaaaaaaaaaa$'
+go run .
+stdout '^alpha-vendored$'
+cmp go.mod $WORK/vendorpinned.go.mod
 
 # A replace line naming an org module records a version the same way a require
-# line does. This replacement names a commit that does not exist, so a version
-# the go command read at all would fail the build instead of printing alpha's
-# default-branch code.
+# line does. This replacement names a commit that does not exist, so a build
+# that used it would fail instead of printing alpha's default-branch code.
 cd $WORK/replaced
 go run .
 stdout '^alpha-main$'
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$'
+grep '^replace github.com/wow-look-at-my/alpha => github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
 
 # A line names a branch to send one module somewhere other than where the rest
 # of them go. None of these main modules is on a branch at all, so the named
-# branch is the only thing that reaches alpha's v1 head.
+# branch is the only thing that reaches alpha's v1 head. The name stays on the
+# line the new version is written to.
 cd $WORK/named
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+ // branch=v1$' go.mod
 go run .
 stdout '^alpha-v1$'
 
-# The go-toolchain spellings that carried this before are read as well.
+# The go-toolchain spellings that carried this before are read as well, and
+# they stay on their lines too.
 cd $WORK/legacyname
 go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/beta
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
-stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
+stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260203040506-[0-9a-f]+$'
+grep 'github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+ // go-toolchain:auto-branch=v1$' go.mod
+grep 'github.com/wow-look-at-my/beta v0\.0\.0-20260203040506-[0-9a-f]+ // indirect; go-toolchain:auto-branch$' go.mod
 
 # A replacement supplies the version that reaches the build, so the name goes on
 # the replace line. The require line's own comment names no branch.
 cd $WORK/namedreplace
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
+grep '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+ // branch=v1$' go.mod
 go run .
 stdout '^alpha-v1$'
 
@@ -196,10 +259,23 @@ stdout '^alpha-main$'
 # so nothing is resolved for it and its require line's token is not read either.
 # The version named here does not exist, so a build that read it would fail.
 cd $WORK/dirreplace
+cp go.mod $WORK/dirreplace.go.mod
 go run .
 stdout '^alpha-from-directory$'
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> \./alpha$'
+cmp go.mod $WORK/dirreplace.go.mod
+
+# GITHUB_ACTIONS alone does not make a CI build. With an agent marker set, the
+# build still follows the head and records it, and so does a placeholder.
+cd $WORK/agentci
+env GITHUB_ACTIONS=true
+env CLAUDECODE=1
+go run .
+stdout '^alpha-main$'
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$' go.mod
+env GITHUB_ACTIONS=
+env CLAUDECODE=
 
 -- $WORK/home/gopher/.gitconfig --
 [user]
@@ -229,6 +305,54 @@ func Name() string { return "alpha-feature" }
 package sub
 
 func Name() string { return "sub-feature" }
+-- $WORK/agentci/go.mod --
+module example.com/agentci
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0
+-- $WORK/agentci/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/beta-next/beta.go --
+package beta
+
+func Name() string { return "beta-next" }
+-- $WORK/vendorpinned/go.mod --
+module example.com/vendorpinned
+
+go 1.21
+
+require github.com/wow-look-at-my/alpha v0.0.0-20250101000000-aaaaaaaaaaaa
+-- $WORK/vendorpinned/main.go --
+package main
+
+import (
+	"fmt"
+
+	"github.com/wow-look-at-my/alpha"
+)
+
+func main() {
+	fmt.Println(alpha.Name())
+}
+-- $WORK/vendorpinned/vendor/modules.txt --
+# github.com/wow-look-at-my/alpha v0.0.0
+## explicit; go 1.21
+github.com/wow-look-at-my/alpha
+-- $WORK/vendorpinned/vendor/github.com/wow-look-at-my/alpha/alpha.go --
+package alpha
+
+func Name() string { return "alpha-vendored" }
 -- $WORK/alpha-v1/alpha.go --
 package alpha
 
