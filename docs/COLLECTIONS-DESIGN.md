@@ -54,7 +54,7 @@ The root cause of all nine: a static fact ("these loaders are in this program") 
 
 | System | Mechanism | What to keep, what to avoid |
 |---|---|---|
-| C++ static registrars | Constructors of global objects | Avoid. Dynamic initialization order across translation units is unspecified, so the registry must be a function-local static. A static library drops an unreferenced object file, hence `--whole-archive`. |
+| C++ static registrars | The constructor of a global object inserts into a registry at startup | Works. A function-local static registry handles cross-TU order. The costs are the ones Go's `init()` pattern has: code runs at startup, and the registry is mutable. A static library drops an object file that nothing references, which is a linker defect. Collections fix the Go equivalent: a read of the collection keeps every contribution. |
 | Rust `linkme::distributed_slice`, `inventory` | Each crate puts elements in a linker section. The linker concatenates them into one slice. | Keep. No run-time cost, immutable. Order is link order, which is the weak point. |
 | Linux kernel initcalls | Linker sections, grouped by level | The same idea, with priority as explicit levels. |
 | Java `ServiceLoader` | Everything on the classpath is loaded | Avoid. Present is not the same as chosen. Reflective, at run time. |
