@@ -134,6 +134,9 @@ func gitCheckedOutBranch(dir string) string {
 // of the head of the branch it follows. The version token on any require line
 // naming path is neither read nor consulted.
 func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
+	if version, ok, err := orgPinned(path); err != nil || ok {
+		return version, err
+	}
 	// A name in go.mod replaces the branch this invocation would follow, and is
 	// resolved the same way after that. A branch nothing answers for therefore
 	// takes the default branch.
