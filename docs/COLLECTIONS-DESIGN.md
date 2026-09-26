@@ -54,7 +54,7 @@ The root cause of all nine: a static fact ("these loaders are in this program") 
 
 | System | Mechanism | What to keep, what to avoid |
 |---|---|---|
-| C++ static registrars | Constructors of global objects | Avoid. Static init order fiasco. A static library drops an unreferenced object file, hence `--whole-archive`. |
+| C++ static registrars | Constructors of global objects | Avoid. Dynamic initialization order across translation units is unspecified, so the registry must be a function-local static. A static library drops an unreferenced object file, hence `--whole-archive`. |
 | Rust `linkme::distributed_slice`, `inventory` | Each crate puts elements in a linker section. The linker concatenates them into one slice. | Keep. No run-time cost, immutable. Order is link order, which is the weak point. |
 | Linux kernel initcalls | Linker sections, grouped by level | The same idea, with priority as explicit levels. |
 | Java `ServiceLoader` | Everything on the classpath is loaded | Avoid. Present is not the same as chosen. Reflective, at run time. |
