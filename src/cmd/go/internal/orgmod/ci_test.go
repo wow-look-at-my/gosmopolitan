@@ -14,7 +14,7 @@ func envOf(vars map[string]string) func(string) string {
 }
 
 func TestCIBuild(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tcase := range []struct {
 		name     string
 		env      map[string]string
 		ancestor string
@@ -30,23 +30,23 @@ func TestCIBuild(t *testing.T) {
 		{"agent ancestor", map[string]string{"GITHUB_ACTIONS": "true"}, "claude", false},
 		{"agent ancestor outside CI", map[string]string{}, "codex", false},
 	} {
-		anc := func() string { return tc.ancestor }
-		if got := ciBuild(envOf(tc.env), anc); got != tc.want {
-			t.Errorf("%s: ciBuild = %v, want %v", tc.name, got, tc.want)
+		ancestor := func() string { return tcase.ancestor }
+		if got := ciBuild(envOf(tcase.env), ancestor); got != tcase.want {
+			t.Errorf("%s: ciBuild = %v, want %v", tcase.name, got, tcase.want)
 		}
 	}
 }
 
 func TestProcParentReadsThisProcess(t *testing.T) {
-	comm, ppid, ok := procParent(os.Getpid())
+	comm, ppid, found := procParent(os.Getpid())
 	if _, err := os.Stat("/proc/self/stat"); err != nil {
 		// A host with no /proc must read as a host with no agent.
-		if ok {
+		if found {
 			t.Errorf("procParent(self) with no /proc = %q, %d; want no answer", comm, ppid)
 		}
 		return
 	}
-	if !ok || comm == "" || ppid != os.Getppid() {
+	if !found || comm == ""|| ppid != os.Getppid() {
 		t.Errorf("procParent(self) = %q, %d; want a name and parent %d", comm, ppid, os.Getppid())
 	}
 }

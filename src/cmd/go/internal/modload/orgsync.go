@@ -123,8 +123,8 @@ func orgOnlyChange(ld *Loader, i *modFileIndex, modFile *modfile.File) bool {
 	}
 
 	oldPaths := map[string]bool{}
-	for m := range i.require {
-		oldPaths[m.Path] = true
+	for mod := range i.require {
+		oldPaths[mod.Path] = true
 	}
 	kept := map[module.Version]bool{}
 	raised := map[string]bool{}

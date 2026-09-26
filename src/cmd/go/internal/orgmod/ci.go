@@ -50,8 +50,8 @@ var (
 func AgentAncestor() string {
 	pid := os.Getppid()
 	for depth := 0; pid > 1 && depth < 64; depth++ {
-		comm, ppid, ok := procParent(pid)
-		if !ok {
+		comm, ppid, found := procParent(pid)
+		if !found {
 			return ""
 		}
 		for _, prefix := range agentProcPrefixes {
@@ -65,7 +65,7 @@ func AgentAncestor() string {
 }
 
 // procParent reads the command name and parent pid of pid from /proc.
-func procParent(pid int) (comm string, ppid int, ok bool) {
+func procParent(pid int) (comm string, ppid int, found bool) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		return "", 0, false

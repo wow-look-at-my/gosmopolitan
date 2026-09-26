@@ -290,7 +290,7 @@ func orgRecordedVersions(ld *Loader) map[string]string {
 			if !orgmod.IsOrg(req.Mod.Path) || orgmod.IsPlaceholder(req.Mod) {
 				continue
 			}
-			if old, ok := recorded[req.Mod.Path]; !ok || gover.ModCompare(req.Mod.Path, old, req.Mod.Version) < 0 {
+			if old, found := recorded[req.Mod.Path]; !found || gover.ModCompare(req.Mod.Path, old, req.Mod.Version) < 0 {
 				recorded[req.Mod.Path] = req.Mod.Version
 			}
 		}
@@ -305,7 +305,7 @@ func pinOrgRequires(reqs []module.Version, recorded map[string]string) []module.
 	out := make([]module.Version, 0, len(reqs))
 	for _, req := range reqs {
 		if orgmod.IsOrg(req.Path) {
-			if version, ok := recorded[req.Path]; ok {
+			if version, found := recorded[req.Path]; found {
 				req.Version = version
 			} else if orgmod.IsPlaceholder(req) {
 				continue
@@ -386,14 +386,14 @@ func alignOrgVendor(modFiles []*modfile.File) {
 		}
 	}
 	align := func(mod module.Version) module.Version {
-		if version, ok := recorded[mod.Path]; ok && mod.Version != "" {
+		if version, found := recorded[mod.Path]; found && mod.Version != "" {
 			mod.Version = version
 		}
 		return mod
 	}
 	for idx, mod := range vendorList {
 		vendorList[idx] = align(mod)
-		if _, ok := recorded[mod.Path]; ok {
+		if _, found := recorded[mod.Path]; found {
 			vendorVersion[mod.Path] = vendorList[idx].Version
 		}
 	}
