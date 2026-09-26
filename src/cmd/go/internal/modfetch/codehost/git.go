@@ -1011,6 +1011,11 @@ func (r *gitRepo) DescendsFrom(ctx context.Context, rev, tag string) (bool, erro
 	return false, err
 }
 
+// IsGitHub reports whether the remote is a github.com repository.
+func (r *gitRepo) IsGitHub() bool {
+	return r.github != nil
+}
+
 // ReadFiles returns the files of rev under subdir straight from a kept
 // GitHub archive. It fails with errors.ErrUnsupported when no archive holds rev.
 func (r *gitRepo) ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error) {

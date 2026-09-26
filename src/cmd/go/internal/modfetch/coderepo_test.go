@@ -660,12 +660,19 @@ func TestCodeRepo(t *testing.T) {
 				// A module from a GitHub archive has files and no zip. It must
 				// hold the same files, with the same sum, as the zip would.
 				if direct, ok := repo.(filesRepo); ok && (tt.zip != nil || tt.zipErr != "" || needHash) {
-					files, err := direct.Files(ctx, tt.version)
+					files, commit, err := direct.Files(ctx, tt.version)
 					if !errors.Is(err, errors.ErrUnsupported) {
 						var valid []modzip.File
 						var sum string
+						mod := module.Version{Path: tt.path, Version: tt.version}
 						if err == nil {
-							valid, sum, err = checkModuleFiles(module.Version{Path: tt.path, Version: tt.version}, files)
+							valid, err = checkModuleFiles(mod, files)
+						}
+						if err == nil {
+							sum, err = moduleFilesSum(mod, valid)
+						}
+						if err == nil && !IsGitSum(gitSumPrefix+commit) {
+							t.Errorf("repo.Files(%q): commit %q is not a commit hash", tt.version, commit)
 						}
 						if err != nil {
 							if tt.zipErr != "" {

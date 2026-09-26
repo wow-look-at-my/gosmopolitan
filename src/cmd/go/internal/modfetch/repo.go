@@ -400,18 +400,26 @@ func (l *loggingRepo) Zip(ctx context.Context, dst io.Writer, version string) er
 	return l.r.Zip(ctx, dst, version)
 }
 
-func (l *loggingRepo) Files(ctx context.Context, version string) ([]modzip.File, error) {
+func (l *loggingRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
 	defer logCall("Repo[%s]: Files(%q)", l.r.ModulePath(), version)()
 	if repo, ok := l.r.(filesRepo); ok {
 		return repo.Files(ctx, version)
 	}
-	return nil, errors.ErrUnsupported
+	return nil, "", errors.ErrUnsupported
 }
 
-// A filesRepo serves the files of a module version with no zip. Files fails
-// with errors.ErrUnsupported when the repository serves only a zip.
+func (l *loggingRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if repo, ok := l.r.(githubCommitRepo); ok {
+		return repo.GitHubCommit(ctx, version)
+	}
+	return "", errors.ErrUnsupported
+}
+
+// A filesRepo serves the files of a module version with no zip, and the
+// github.com commit that holds them. Files fails with errors.ErrUnsupported
+// when the repository serves only a zip.
 type filesRepo interface {
-	Files(ctx context.Context, version string) ([]modzip.File, error)
+	Files(ctx context.Context, version string) ([]modzip.File, string, error)
 }
 
 // errRepo is a Repo that returns the same error for all operations.

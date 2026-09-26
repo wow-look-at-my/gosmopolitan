@@ -1105,18 +1105,22 @@ func (r *codeRepo) moduleRev(ctx context.Context, version string) (rev, subdir s
 // Files returns the files of version straight from the code host, with no
 // zip. It fails with errors.ErrUnsupported when the code host serves only a
 // zip.
-func (r *codeRepo) Files(ctx context.Context, version string) ([]modzip.File, error) {
+func (r *codeRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
 	reader, ok := r.code.(codehost.FileReader)
 	if !ok {
-		return nil, errors.ErrUnsupported
+		return nil, "", errors.ErrUnsupported
 	}
 	rev, subdir, err := r.moduleRev(ctx, version)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	moduleFiles, err := reader.ReadFiles(ctx, rev, subdir)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+	info, err := r.code.Stat(ctx, rev)
+	if err != nil {
+		return nil, "", err
 	}
 	var files []modzip.File
 	haveLICENSE := false
@@ -1132,7 +1136,24 @@ func (r *codeRepo) Files(ctx context.Context, version string) ([]modzip.File, er
 			files = append(files, dataFile{name: "LICENSE", data: data})
 		}
 	}
-	return files, nil
+	return files, info.Name, nil
+}
+
+// GitHubCommit answers the commit that holds version, when the repository is on
+// github.com. It fails with errors.ErrUnsupported otherwise.
+func (r *codeRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if host, ok := r.code.(interface{ IsGitHub() bool }); !ok || !host.IsGitHub() {
+		return "", errors.ErrUnsupported
+	}
+	rev, _, _, err := r.findDir(ctx, version)
+	if err != nil {
+		return "", err
+	}
+	info, err := r.code.Stat(ctx, rev)
+	if err != nil {
+		return "", err
+	}
+	return info.Name, nil
 }
 
 func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error {
