@@ -66,13 +66,22 @@ exec git commit -m 'beta main'
 exec git branch -m main
 
 # The first CI build of the run resolves each head and locks it. go.mod keeps
+<<<<<<< HEAD
 # its placeholders, as it does in any build. A placeholder is no error.
+=======
+# the placeholder.
+>>>>>>> origin/master
 cd $WORK/m
+cp go.mod $WORK/m.go.mod
 env GITHUB_ACTIONS=true
 go run .
 stdout '^alpha-main beta-main$'
+<<<<<<< HEAD
 grep '^	github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
 grep '^	github.com/wow-look-at-my/beta v0\.0\.0$' go.mod
+=======
+cmp go.mod $WORK/m.go.mod
+>>>>>>> origin/master
 exists $WORK/locks
 
 # alpha moves while the run is under way.
@@ -104,7 +113,11 @@ env GITHUB_ACTIONS=
 env GOSMOPOLITAN_RUN_LOCK_STORE=$UNTOUCHED
 go run .
 stdout '^alpha-next beta-main$'
+<<<<<<< HEAD
 grep '^	github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
+=======
+cmp go.mod $WORK/m.go.mod
+>>>>>>> origin/master
 ! exists $WORK/untouched
 
 # A coding agent does not make a CI build, whatever GITHUB_ACTIONS says.
