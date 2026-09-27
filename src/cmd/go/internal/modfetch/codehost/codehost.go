@@ -123,6 +123,9 @@ type Origin struct {
 	// since the set of available tags is dervied from .hgtags files in those branches,
 	// and the RepoSum is used for all module versions, available and not,
 	RepoSum string `json:",omitempty"`
+
+	// Gitlinks records the commit each submodule at Hash points at, one "commit.
+	Gitlinks string `json:",omitempty"`
 }
 
 // A Tags describes the available tags in a code repository.
