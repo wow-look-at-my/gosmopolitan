@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -28,6 +29,9 @@ import (
 // RunLockEnv names the environment variable that names the store as a URL. A
 // file URL names a directory. Unset, the store is DefaultRunLockStore.
 const RunLockEnv = "GOSMOPOLITAN_RUN_LOCK_STORE"
+
+// RunEnv names the run as owner/repo/run-id/attempt.
+const RunEnv = "GOSMOPOLITAN_RUN"
 
 // DefaultRunLockStore is the buildhost server that holds the run locks.
 const DefaultRunLockStore = "https://pazer.build"
@@ -127,13 +131,22 @@ func openRunLock(getenv func(string) string) (runLock, error) {
 		ID:         getenv("GITHUB_RUN_ID"),
 		Attempt:    getenv("GITHUB_RUN_ATTEMPT"),
 	}
+	if run.ID == "" || run.Attempt == "" {
+		if raw := getenv(RunEnv); raw != "" {
+			parts := strings.Split(raw, "/")
+			if len(parts) != 4 || slices.Contains(parts, "") {
+				return runLock{}, fmt.Errorf("%s=%q: want owner/repo/run-id/attempt", RunEnv, raw)
+			}
+			run = Run{Repository: parts[0] + "/" + parts[1], ID: parts[2], Attempt: parts[3]}
+		}
+	}
 	for _, v := range []struct{ name, val string }{
 		{"GITHUB_REPOSITORY", run.Repository},
 		{"GITHUB_RUN_ID", run.ID},
 		{"GITHUB_RUN_ATTEMPT", run.Attempt},
 	} {
 		if v.val == "" {
-			return runLock{}, fmt.Errorf("a CI build locks org modules per run, and %s is not set", v.name)
+			return runLock{}, fmt.Errorf("a CI build locks org modules per run, and neither %s nor %s is set", v.name, RunEnv)
 		}
 	}
 	raw := getenv(RunLockEnv)
