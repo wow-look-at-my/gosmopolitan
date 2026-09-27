@@ -24,22 +24,19 @@ import (
 // cache entries from whichever binary carries it. Builds of the same tool by
 // different compilers converge once their archives do.
 func linkedToolIDs(root *Action) string {
-	contentIDs := map[string]string{}
 	var tools []*Action
 	seen := map[*Action]bool{}
-	var walk func(a *Action)
-	walk = func(a *Action) {
-		if seen[a] {
+	var walk func(act *Action)
+	walk = func(act *Action) {
+		if seen[act] {
 			return
 		}
-		seen[a] = true
-		if a.Mode == "build" && a.Package != nil && a.buildID != "" {
-			contentIDs[a.Package.ImportPath] = contentID(a.buildID)
-			if isToolPackage(a.Package.ImportPath) && a.Package.Goroot {
-				tools = append(tools, a)
-			}
+		seen[act] = true
+		if act.Mode == "build" && act.Package != nil && act.buildID != "" &&
+			isToolPackage(act.Package.ImportPath) && act.Package.Goroot {
+			tools = append(tools, act)
 		}
-		for _, dep := range a.Deps {
+		for _, dep := range act.Deps {
 			walk(dep)
 		}
 	}
@@ -51,13 +48,15 @@ func linkedToolIDs(root *Action) string {
 	var pairs []string
 	for _, tool := range tools {
 		h := sha256.New()
-		fmt.Fprintf(h, "%s %s\n", tool.Package.ImportPath, contentIDs[tool.Package.ImportPath])
-		deps := append([]string(nil), tool.Package.Deps...)
+		fmt.Fprintf(h, "%s %s\n", tool.Package.ImportPath, contentID(tool.buildID))
+		ids := packageContentIDs(tool)
+		deps := make([]string, 0, len(ids))
+		for dep := range ids {
+			deps = append(deps, dep)
+		}
 		sort.Strings(deps)
 		for _, dep := range deps {
-			if id, ok := contentIDs[dep]; ok {
-				fmt.Fprintf(h, "%s %s\n", dep, id)
-			}
+			fmt.Fprintf(h, "%s %s\n", dep, ids[dep])
 		}
 		var sum [32]byte
 		copy(sum[:], h.Sum(nil))
@@ -66,6 +65,31 @@ func linkedToolIDs(root *Action) string {
 	}
 	sort.Strings(pairs)
 	return strings.Join(pairs, ",")
+}
+
+// packageContentIDs answers the content ID of each package the tool's action
+// graph compiles or reads, by import path, without the tool's own package.
+// It reads the action graph, because go build leaves Package.Deps empty. Only
+// go list fills that field.
+func packageContentIDs(tool *Action) map[string]string {
+	ids := map[string]string{}
+	seen := map[*Action]bool{tool: true}
+	var walk func(act *Action)
+	walk = func(act *Action) {
+		for _, dep := range act.Deps {
+			if seen[dep] {
+				continue
+			}
+			seen[dep] = true
+			if (dep.Mode == "build" || dep.Mode == "embedded std") && dep.Package != nil && dep.buildID != "" {
+				ids[dep.Package.ImportPath] = contentID(dep.buildID)
+			}
+			walk(dep)
+		}
+	}
+	walk(tool)
+	delete(ids, tool.Package.ImportPath)
+	return ids
 }
 
 // isToolPackage reports whether path names a tool: cmd/<name> and nothing
