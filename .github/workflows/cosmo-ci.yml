@@ -103,9 +103,9 @@ jobs:
 
       - uses: ./.github/actions/build-leg
 
-  # The whole suite per host, in parts that run side by side; nothing downstream of a build waits on it.
+  # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
-    timeout-minutes: 150
+    timeout-minutes: 300
     needs: [build, build-linux]
     permissions:
       id-token: write
@@ -116,9 +116,6 @@ jobs:
       matrix:
         # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-09-28
         suite-os: [ubuntu-latest, macos-latest]
-        # dist test -shard: part 0 is the package tests, built once as one go test; part 1 is every other test. dats/checks/suite-shards.dats holds both lists whole.
-        shard: [0, 1]
-        shards: [2]
         # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
         exclude:
           - suite-os: windows-latest
@@ -257,13 +254,11 @@ jobs:
         # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
         if: runner.os != 'Windows'
         shell: bash
-        env:
-          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
         run: |
           sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
           probe=$!
           trap 'kill "$probe"' EXIT
-          cd src && ./run.bash "-shard=$SUITE_SHARD" 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
       # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
       - name: A patch that applies a multi-file diff (NT)
@@ -303,14 +298,12 @@ jobs:
       - name: The whole test suite (run.bat)
         if: runner.os == 'Windows'
         shell: pwsh
-        env:
-          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
         run: |
           # -NoNewWindow gives the probe this step's console, so its lines stream here as the suite runs.
           $probe = Start-Process pwsh -ArgumentList '-NoProfile', '-File', "$env:GITHUB_WORKSPACE/.github/resource-log.ps1" -NoNewWindow -PassThru
           try {
             cd src
-            .\run.bat "-shard=$env:SUITE_SHARD" 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
+            .\run.bat 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/suite.log"
             $status = $LASTEXITCODE
           } finally {
             Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue
@@ -321,8 +314,6 @@ jobs:
         # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
-        env:
-          SUITE_SHARD: ${{ matrix.shard }}/${{ matrix.shards }}
         with:
           script: |
             const required = (name: string): string => {
@@ -351,7 +342,7 @@ jobs:
             const top = rows.slice(0, 30);
             const share = top.reduce((sum, row) => sum + row.secs, 0);
             const lines = [
-              `### Suite timings (${required('RUNNER_OS')}, part ${required('SUITE_SHARD')})`,
+              `### Suite timings (${required('RUNNER_OS')})`,
               '',
               `${rows.length} packages, ${total.toFixed(1)}s of package time.`,
               `The 30 slowest are ${share.toFixed(1)}s of that (${((share / total) * 100).toFixed(0)}%).`,
@@ -592,7 +583,7 @@ jobs:
   wasm-suite:
     # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-28
     if: ${{ false }}
-    timeout-minutes: 60
+    timeout-minutes: 120
     needs: build-linux
     permissions:
       id-token: write
@@ -602,9 +593,6 @@ jobs:
       fail-fast: true
       matrix:
         port: [js, wasip1]
-        # The same dist test parts as the suite job.
-        shard: [0, 1]
-        shards: [2]
 
     steps:
       - name: Checkout code
@@ -639,8 +627,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/wasmtime
-          key: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-${{ github.sha }}
-          restore-keys: wasmtime-modules-${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}-
+          key: wasmtime-modules-${{ matrix.port }}-${{ github.sha }}
+          restore-keys: wasmtime-modules-${{ matrix.port }}-
 
 
       - name: Take the toolchain build-linux built
@@ -658,7 +646,7 @@ jobs:
         uses: wow-look-at-my/log-streamer/.github/actions/stream@master
         with:
           stream-key: ${{ secrets.LOG_STREAMER_STREAM_KEY }}
-          name: ${{ matrix.port }}-${{ matrix.shard }}of${{ matrix.shards }}
+          name: ${{ matrix.port }}
           run: |
             set -o pipefail
             export PATH="$PWD/bin:$PWD/lib/wasm:$HOME/.wasmtime/bin:$PATH"
@@ -666,9 +654,9 @@ jobs:
             probe=$!
             # the stream client reads until every holder of its pipe exits, so the probe goes when this script does.
             trap 'kill "$probe"' EXIT
-            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test -shard=${{ matrix.shard }}/${{ matrix.shards }} 2>&1 | tee "$RUNNER_TEMP/suite.log"
+            GOOS=${{ matrix.port }} GOARCH=wasm stdbuf -oL -eL go tool dist test 2>&1 | tee "$RUNNER_TEMP/suite.log"
 
-      - name: What ${{ matrix.port }} part ${{ matrix.shard }} of ${{ matrix.shards }} spent its time on
+      - name: What ${{ matrix.port }} spent its time on
         # the per-package times are how the js and wasip1 ports get compared, and how a leg that overruns its budget names what overran.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
@@ -711,7 +699,7 @@ jobs:
             fs.appendFileSync(summaryPath, lines.join('\n') + '\n');
             core.info(`${port}: recorded ${rows.length} package timings, ${total.toFixed(1)}s total`);
         env:
-          WASM_PORT: ${{ matrix.port }} part ${{ matrix.shard }}/${{ matrix.shards }}
+          WASM_PORT: ${{ matrix.port }}
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
