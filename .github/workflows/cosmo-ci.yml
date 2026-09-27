@@ -7,14 +7,6 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-# The shared cache's look-ahead pool fetches the objects stored beside each hit ahead of the build (go-s3-server docs/look-ahead.md).
-env:
-  GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
-
 jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
