@@ -44,6 +44,31 @@ func TestLinkedToolIDsFollowTheToolsPackages(t *testing.T) {
 	}
 }
 
+// A build leaves Package.Deps empty. The ID must still follow a dependency
+// through the action graph, or a changed linker keeps its old ID.
+func TestLinkedToolIDsFollowActionDepsWithoutPackageDeps(t *testing.T) {
+	graph := func(ldID string) *Action {
+		pkg := func(path string) *load.Package {
+			pkgObj := &load.Package{}
+			pkgObj.ImportPath = path
+			pkgObj.Goroot = true
+			return pkgObj
+		}
+		ldAct := &Action{Mode: "build", Package: pkg("cmd/link/internal/ld"), buildID: "a1/" + ldID}
+		link := &Action{Mode: "build", Package: pkg("cmd/link"), buildID: "a2/c2", Deps: []*Action{ldAct}}
+		main := &Action{Mode: "build", Package: pkg("example.com/tool"), buildID: "a3/m1", Deps: []*Action{link}}
+		main.Package.Goroot = false
+		return &Action{Mode: "link", Package: main.Package, Deps: []*Action{main}}
+	}
+	first := linkedToolIDs(graph("l1"))
+	if !strings.HasPrefix(first, "link=") {
+		t.Fatalf("linkedToolIDs = %q, want a link entry", first)
+	}
+	if moved := linkedToolIDs(graph("l2")); moved == first {
+		t.Errorf("cmd/link/internal/ld changed and the link ID stayed %q", first)
+	}
+}
+
 // A binary that links no tool stamps nothing.
 func TestLinkedToolIDsAbsentWithoutTools(t *testing.T) {
 	p := &load.Package{}
