@@ -17,24 +17,10 @@ import (
 	"cmd/go/internal/orgmod"
 	"cmd/internal/par"
 
-	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 )
 
-// An org module (see cmd/go/internal/orgmod) follows the head of a branch: the
-// main module's checked-out branch when the dependency's repository has a
-// branch of that name, and the dependency's default branch otherwise. A
-// detached HEAD, or a main module that git does not track, has no branch to
-// follow and so takes the default branch.
-//
-// Each go command resolves the head again, builds it, and writes it to go.mod
-// when it moved. A readonly command writes that change too, unless an explicit
-// -mod flag keeps the upstream meaning (see orgSyncing). A CI build takes the
-// head its run locked instead (see orgmod.Version), so every job of one run
-// builds the same commit.
-//
-// The resolved version lands in the root list and in every loaded go.mod
-// summary, so the module graph, the build list and the module cache all see it.
+// An org module (see cmd/go/internal/orgmod) carries no version of its own. go.mod keeps the placeholder.
 
 // orgDefaultRev is the revision that names a repository's default branch.
 // git resolves HEAD at the remote to the head of the default branch, so one
@@ -192,14 +178,8 @@ func orgBranchVersion(ld *Loader, ctx context.Context, path, branch string) (str
 	return info.Version, nil
 }
 
-// orgResolvable reports whether the version of an org module is looked up at
-// all in this invocation.
-//
-// Vendoring supplies every package from the vendor directory and the go
-// command refuses to query the network in that mode. The recorded version, a
-// placeholder included, is therefore the version vendored builds use, which is
-// what lets a repository carry the placeholder in both its go.mod file and its
-// modules.txt.
+// orgResolvable reports whether the branch head of an org module can be
+// resolved in this invocation. Vendor mode resolves nothing, so it builds the placeholder.
 func orgResolvable() bool {
 	return cfg.BuildMod != "vendor"
 }
@@ -273,75 +253,4 @@ func resolveOrgSummary(ld *Loader, summary *modFileSummary) (*modFileSummary, er
 	}
 	summary.require = reqs
 	return summary, nil
-}
-
-// recordOrgReplacements writes the branch head that each org replacement in
-// modFile resolves to onto its replace line. The line keeps its comments. The
-// require lines need no such step, because their roots are already resolved.
-func recordOrgReplacements(ld *Loader, ctx context.Context, modFile *modfile.File) error {
-	if !orgResolvable() {
-		return nil
-	}
-	var stale []modfile.Replace
-	for _, rep := range modFile.Replace {
-		if rep.New.Version == "" || !orgmod.IsOrg(rep.New.Path) {
-			continue
-		}
-		version, err := orgVersion(ld, ctx, rep.New.Path)
-		if err != nil {
-			return err
-		}
-		if version != rep.New.Version {
-			moved := *rep
-			moved.New.Version = version
-			stale = append(stale, moved)
-		}
-	}
-	for _, rep := range stale {
-		if err := modFile.AddReplace(rep.Old.Path, rep.Old.Version, rep.New.Path, rep.New.Version); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// alignOrgVendor gives each vendored org module the version go.mod records.
-// modules.txt records the placeholder for an org module, so the version the
-// build list carries for it comes from go.mod. Call it after readVendorList.
-func alignOrgVendor(modFiles []*modfile.File) {
-	recorded := map[string]string{}
-	for _, modFile := range modFiles {
-		if modFile == nil {
-			continue
-		}
-		for _, req := range modFile.Require {
-			if orgmod.IsOrg(req.Mod.Path) {
-				recorded[req.Mod.Path] = req.Mod.Version
-			}
-		}
-	}
-	align := func(mod module.Version) module.Version {
-		if version, found := recorded[mod.Path]; found && mod.Version != "" {
-			mod.Version = version
-		}
-		return mod
-	}
-	for idx, mod := range vendorList {
-		vendorList[idx] = align(mod)
-		if _, found := recorded[mod.Path]; found {
-			vendorVersion[mod.Path] = vendorList[idx].Version
-		}
-	}
-	for pkg, mod := range vendorPkgModule {
-		vendorPkgModule[pkg] = align(mod)
-	}
-	for mod, meta := range vendorMeta {
-		if moved := align(mod); moved != mod {
-			delete(vendorMeta, mod)
-			vendorMeta[moved] = meta
-			if meta.GoVersion != "" {
-				rawGoVersion.Store(moved, meta.GoVersion)
-			}
-		}
-	}
 }
