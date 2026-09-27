@@ -69,6 +69,17 @@ func TestLinkedToolIDsFollowActionDepsWithoutPackageDeps(t *testing.T) {
 	}
 }
 
+// ld stamps the linked tool IDs into the binary. A link whose stamp changes
+// must not reuse the cached binary that carries the one.
+func TestLinkActionIDCoversLinkedToolIDs(t *testing.T) {
+	var builder Builder
+	builder.toolIDCache.Do("link", func() string { return "linktool" })
+	first := builder.linkActionID(toolGraph("m1", "s1"))
+	if moved := builder.linkActionID(toolGraph("m1", "s2")); moved == first {
+		t.Errorf("a linked tool changed and the link action ID stayed %x", first)
+	}
+}
+
 // A binary that links no tool stamps nothing.
 func TestLinkedToolIDsAbsentWithoutTools(t *testing.T) {
 	p := &load.Package{}
