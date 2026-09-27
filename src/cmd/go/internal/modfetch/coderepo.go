@@ -1068,9 +1068,11 @@ func (r *codeRepo) retractedVersions(ctx context.Context) (func(string) bool, er
 	}, nil
 }
 
-func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error {
+// moduleRev finds the revision and subdirectory that hold version, and
+// refuses a module whose go.mod needs a newer Go.
+func (r *codeRepo) moduleRev(ctx context.Context, version string) (rev, subdir string, err error) {
 	if version != module.CanonicalVersion(version) {
-		return fmt.Errorf("version %s is not canonical", version)
+		return "", "", fmt.Errorf("version %s is not canonical", version)
 	}
 
 	if module.IsPseudoVersion(version) {
@@ -1080,21 +1082,83 @@ func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error
 		// a bogus file for an invalid version.
 		_, err := r.Stat(ctx, version)
 		if err != nil {
-			return err
+			return "", "", err
 		}
 	}
 
-	rev, subdir, _, err := r.findDir(ctx, version)
+	rev, subdir, _, err = r.findDir(ctx, version)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 
 	if gomod, err := r.code.ReadFile(ctx, rev, filepath.Join(subdir, "go.mod"), codehost.MaxGoMod); err == nil {
 		goVers := gover.GoModLookup(gomod, "go")
 		if gover.Compare(goVers, gover.Local()) > 0 {
-			return &gover.TooNewError{What: r.ModulePath() + "@" + version, GoVersion: goVers}
+			return "", "", &gover.TooNewError{What: r.ModulePath() + "@" + version, GoVersion: goVers}
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", "", err
+	}
+	return rev, subdir, nil
+}
+
+// Files returns the files of version straight from the code host, with no
+// zip. It fails with errors.ErrUnsupported when the code host serves only a
+// zip.
+func (r *codeRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
+	reader, ok := r.code.(codehost.FileReader)
+	if !ok {
+		return nil, "", errors.ErrUnsupported
+	}
+	rev, subdir, err := r.moduleRev(ctx, version)
+	if err != nil {
+		return nil, "", err
+	}
+	moduleFiles, err := reader.ReadFiles(ctx, rev, subdir)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := r.code.Stat(ctx, rev)
+	if err != nil {
+		return nil, "", err
+	}
+	var files []modzip.File
+	haveLICENSE := false
+	for _, file := range moduleFiles {
+		files = append(files, dataFile{name: file.Name, data: file.Data, mode: file.Mode})
+		if file.Name == "LICENSE" {
+			haveLICENSE = true
+		}
+	}
+	if !haveLICENSE && strings.Trim(subdir, "/") != "" {
+		data, err := r.code.ReadFile(ctx, rev, "LICENSE", codehost.MaxLICENSE)
+		if err == nil {
+			files = append(files, dataFile{name: "LICENSE", data: data})
+		}
+	}
+	return files, info.Name, nil
+}
+
+// GitHubCommit answers the commit that holds version, when the repository is on
+// github.com. It fails with errors.ErrUnsupported otherwise.
+func (r *codeRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if host, ok := r.code.(interface{ IsGitHub() bool }); !ok || !host.IsGitHub() {
+		return "", errors.ErrUnsupported
+	}
+	rev, _, _, err := r.findDir(ctx, version)
+	if err != nil {
+		return "", err
+	}
+	info, err := r.code.Stat(ctx, rev)
+	if err != nil {
+		return "", err
+	}
+	return info.Name, nil
+}
+
+func (r *codeRepo) Zip(ctx context.Context, dst io.Writer, version string) error {
+	rev, subdir, err := r.moduleRev(ctx, version)
+	if err != nil {
 		return err
 	}
 
@@ -1189,6 +1253,7 @@ func (f zipFile) Open() (io.ReadCloser, error) { return f.f.Open() }
 type dataFile struct {
 	name string
 	data []byte
+	mode fs.FileMode // zero means a regular 0644 file
 }
 
 func (f dataFile) Path() string                { return f.name }
@@ -1201,9 +1266,14 @@ type dataFileInfo struct {
 	f dataFile
 }
 
-func (fi dataFileInfo) Name() string       { return path.Base(fi.f.name) }
-func (fi dataFileInfo) Size() int64        { return int64(len(fi.f.data)) }
-func (fi dataFileInfo) Mode() fs.FileMode  { return 0644 }
+func (fi dataFileInfo) Name() string { return path.Base(fi.f.name) }
+func (fi dataFileInfo) Size() int64  { return int64(len(fi.f.data)) }
+func (fi dataFileInfo) Mode() fs.FileMode {
+	if fi.f.mode != 0 {
+		return fi.f.mode
+	}
+	return 0644
+}
 func (fi dataFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi dataFileInfo) IsDir() bool        { return false }
 func (fi dataFileInfo) Sys() any           { return nil }

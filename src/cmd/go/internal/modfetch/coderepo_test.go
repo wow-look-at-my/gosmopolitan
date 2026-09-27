@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"hash"
 	"internal/testenv"
@@ -25,7 +26,9 @@ import (
 	"cmd/go/internal/modfetch/codehost"
 	"cmd/go/internal/vcweb/vcstest"
 
+	"golang.org/x/mod/module"
 	"golang.org/x/mod/sumdb/dirhash"
+	modzip "golang.org/x/mod/zip"
 )
 
 func TestMain(m *testing.M) {
@@ -654,6 +657,47 @@ func TestCodeRepo(t *testing.T) {
 				}
 
 				needHash := !testing.Short() && (tt.zipFileHash != "" || tt.zipSum != "")
+				// A module from a GitHub archive has files and no zip. It must
+				// hold the same files, with the same sum, as the zip would.
+				if direct, ok := repo.(filesRepo); ok && (tt.zip != nil || tt.zipErr != "" || needHash) {
+					files, commit, err := direct.Files(ctx, tt.version)
+					if !errors.Is(err, errors.ErrUnsupported) {
+						var valid []modzip.File
+						var sum string
+						mod := module.Version{Path: tt.path, Version: tt.version}
+						if err == nil {
+							valid, err = checkModuleFiles(mod, files)
+						}
+						if err == nil {
+							sum, err = moduleFilesSum(mod, valid)
+						}
+						if err == nil && !IsGitSum(gitSumPrefix+commit) {
+							t.Errorf("repo.Files(%q): commit %q is not a commit hash", tt.version, commit)
+						}
+						if err != nil {
+							if tt.zipErr != "" {
+								return
+							}
+							t.Fatalf("repo.Files(%q): %v", tt.version, err)
+						}
+						if tt.zipErr != "" {
+							t.Errorf("repo.Files(%q): success, want error %q", tt.version, tt.zipErr)
+						}
+						if tt.zip != nil {
+							var names []string
+							for _, file := range valid {
+								names = append(names, file.Path())
+							}
+							if !reflect.DeepEqual(names, tt.zip) {
+								t.Fatalf("files = %v\nwant %v\n", names, tt.zip)
+							}
+						}
+						if needHash && sum != tt.zipSum {
+							t.Errorf("repo.Files(%q): sum %q, want %q", tt.version, sum, tt.zipSum)
+						}
+						return
+					}
+				}
 				if tt.zip != nil || tt.zipErr != "" || needHash {
 					f, err := os.CreateTemp(tmpdir, tt.version+".zip.")
 					if err != nil {
