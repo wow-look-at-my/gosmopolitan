@@ -84,6 +84,9 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	defer unlock()
 
 	github, onGitHub := githubRemote(r.remote)
+	if onGitHub && gitRewrites(r.remote) {
+		onGitHub = false
+	}
 	r.remoteURL = r.remote
 	if onGitHub {
 		// A github.com download runs no git. The bare repository is made

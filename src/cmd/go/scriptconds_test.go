@@ -6,6 +6,7 @@ package gocmd_test
 
 import (
 	"cmd/go/internal/cfg"
+	"cmd/go/internal/orgmod"
 	"cmd/internal/script"
 	"cmd/internal/script/scripttest"
 	"errors"
@@ -45,6 +46,7 @@ func scriptConditions(t *testing.T) map[string]script.Cond {
 	add("git-sha256", script.OnceCondition("the local 'git' version is recent enough to support sha256 object/commit hashes", gitSupportsSHA256))
 	add("trimpath", script.OnceCondition("test binary was built with -trimpath", isTrimpath))
 	add("default-cgo", lazyBool("when CGO_ENABLED=1|0 was set in make.bash", defaultCgo))
+	add("agent", lazyBool("a coding agent is an ancestor of this test, so the go command never makes a CI build", func() bool { return orgmod.AgentAncestor() != "" }))
 
 	return conds
 }

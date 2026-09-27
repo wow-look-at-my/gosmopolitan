@@ -183,9 +183,8 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 	for _, modFile := range modFiles {
 		for _, r := range modFile.Require {
 			if orgmod.IsOrg(r.Mod.Path) {
-				// An org module carries a placeholder version in go.mod and
-				// resolves to a branch head, so its version cannot agree with
-				// the version a modules.txt file records for it and the two are
+				// modules.txt records the placeholder for an org module, and
+				// go.mod records the branch head it last saw, so the two are
 				// not compared.
 				continue
 			}
