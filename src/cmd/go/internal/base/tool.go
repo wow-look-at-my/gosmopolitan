@@ -30,6 +30,12 @@ func SetSelf(exe string, tools []string) {
 	}
 }
 
+// ResetSelf forgets every linked tool, which undoes SetSelf.
+func ResetSelf() {
+	self = ""
+	selfTools = map[string]struct{}{}
+}
+
 // goCommand is the argv prefix that starts this go command again, when a
 // binary of another name links it and reaches it as "<self> go".
 var goCommand []string
