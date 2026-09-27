@@ -28,9 +28,9 @@ env GIT_AUTHOR_EMAIL='gopher@golang.org'
 env GIT_COMMITTER_NAME=$GIT_AUTHOR_NAME
 env GIT_COMMITTER_EMAIL=$GIT_AUTHOR_EMAIL
 
-# The alpha repository publishes modules, so a multi-module repository can be
-# watched landing on one commit. The feature branch is a different commit with
-# a different timestamp, so which head was read is visible in the version.
+# The alpha repository publishes two modules, so a multi-module repository can
+# be watched landing on one commit. The feature branch is a different commit
+# with a different timestamp, so which head was read is visible in the version.
 cd $WORK/alpha
 exec git init
 env GIT_AUTHOR_DATE=2026-01-02T03:04:05Z
@@ -72,10 +72,9 @@ exec git add -A
 exec git commit -m 'consumer'
 exec git branch -m feature
 
-# A matching branch wins over the dependency's default branch, and both modules
-# of one repository resolve to one commit: the pseudo-versions of alpha and
-# alpha/sub name the same commit, c7abde595c23.
-cp go.mod $WORK/m.placeholder.go.mod
+# A matching branch wins over the dependency's default branch, and the two
+# modules of one repository resolve to one commit: the pseudo-versions of alpha
+# and alpha/sub name the same commit, c7abde595c23.
 go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/alpha/sub github.com/wow-look-at-my/beta
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-c7abde595c23$'
 stdout '^github.com/wow-look-at-my/alpha/sub v0\.0\.0-20260103040506-c7abde595c23$'
@@ -151,11 +150,6 @@ go build ./...
 go run .
 stdout '^alpha-vendored$'
 
-# A replace line naming an org module records the placeholder the same way a
-# require line does. This replacement names a commit that does not exist, so a
-# build that used it would fail instead of printing alpha's default-branch code.
-=======
-
 # A replace line naming an org module records a version the same way a require
 # line does. This replacement names a commit that does not exist, so a version
 # the go command read at all would fail the build instead of printing alpha's
@@ -170,7 +164,6 @@ stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-0f69f837cebe$
 # of them go. None of these main modules is on a branch at all, so the named
 # branch is the only thing that reaches alpha's v1 head.
 cd $WORK/named
-cp go.mod $WORK/named.go.mod
 go list -m github.com/wow-look-at-my/alpha
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 go run .
@@ -178,7 +171,6 @@ stdout '^alpha-v1$'
 
 # The go-toolchain spellings that carried this before are read as well.
 cd $WORK/legacyname
-cp go.mod $WORK/legacyname.go.mod
 go list -m github.com/wow-look-at-my/alpha github.com/wow-look-at-my/beta
 stdout '^github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
@@ -186,7 +178,6 @@ stdout '^github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-6dedeb498b02$'
 # A replacement supplies the version that reaches the build, so the name goes on
 # the replace line. The require line's own comment names no branch.
 cd $WORK/namedreplace
-cp go.mod $WORK/namedreplace.go.mod
 go list -m github.com/wow-look-at-my/alpha
 stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 go run .
