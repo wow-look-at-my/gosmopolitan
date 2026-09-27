@@ -375,6 +375,8 @@ The available conditions are:
 	goos.GOOS == <suffix>
 [abscc]
 	default $CC path is absolute and exists
+[agent]
+	a coding agent is an ancestor of this test, so the go command never makes a CI build
 [asan]
 	GOOS/GOARCH supports -asan
 [buildmode:*]
