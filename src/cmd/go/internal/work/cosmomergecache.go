@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
 	"cmd/internal/buildid"
 )
@@ -33,6 +34,17 @@ func cosmoMergeID(b *Builder, args []string, target, sibling string) (cache.Acti
 	h := cache.NewHash("cosmo merge")
 	fmt.Fprintf(h, "cosmo merge v1\n")
 	fmt.Fprintf(h, "link %s\n", b.toolID("link"))
+	// A linked linker's stamped ID can stay put when its code changes, and a hit
+	// then serves an APE header another linker wrote. The executable is that
+	// linker.
+	if base.Linked("link") {
+		exe := base.ToolCmd("link")[0]
+		sum := b.fileHash(exe)
+		if sum == "" {
+			return cache.ActionID{}, fmt.Errorf("hashing the linker %s for the merge key", exe)
+		}
+		fmt.Fprintf(h, "linker %s\n", sum)
+	}
 	primary, err := cosmoPayloadID(target)
 	if err != nil {
 		return cache.ActionID{}, err
