@@ -137,7 +137,7 @@ cmp go.mod $WORK/placeholder.go.mod
 env GOSMOPOLITAN_RUN_LOCK_STORE=$LOCKS
 env GITHUB_RUN_ID=
 ! go build ./...
-stderr 'github.com/wow-look-at-my/alpha@HEAD: a CI build locks org modules per run, and GITHUB_RUN_ID is not set'
+stderr 'github.com/wow-look-at-my/alpha@HEAD: a CI build locks org modules per run, and neither GITHUB_RUN_ID nor GOSMOPOLITAN_RUN is set'
 env GITHUB_RUN_ID=4242
 
 # Vendor mode resolves nothing, so it never opens the store.
