@@ -182,13 +182,25 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 	// listing stops at the first of them without it. crypto/internal/
 	// fips140test is one. They compile to no archive, so they carry none
 	// here either, and the blob is the same either way.
-	cmd := goCommand(goCmd, "list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std")
-	// -trimpath, so a program built with it against these archives is the
-	// program the source tree builds with it; the tree's path is not in them.
+	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std"}
+	var progress *fileLines
+	if os.Getenv(progressEnv) == "1" {
+		// -x echoes each tool command, and a command line names the files it reads. It is not in any cache key.
+		args = append([]string{"list", "-x"}, args[1:]...)
+		progress = &fileLines{target: goos + "/" + goarch, out: os.Stderr}
+	}
+	cmd := goCommand(goCmd, args...)
+	// -trimpath, so a program built with it against these archives.
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
 	cmd.Stderr = os.Stderr
+	if progress != nil {
+		cmd.Stderr = progress
+	}
 	out, err := cmd.Output()
 	if err != nil {
+		if progress != nil {
+			os.Stderr.Write(progress.all.Bytes())
+		}
 		log.Fatalf("listing std for %s/%s: %v", goos, goarch, err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(out))
