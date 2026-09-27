@@ -11,6 +11,7 @@ on:
 env:
   GO_TOOLCHAIN_CACHE_LOOKAHEAD: "16"
 
+
 jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
