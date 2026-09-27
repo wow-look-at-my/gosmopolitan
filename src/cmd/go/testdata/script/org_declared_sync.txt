@@ -27,12 +27,14 @@ exec git add -A
 exec git commit -m 'alpha on quote v1.5.1'
 exec git branch -m main
 
-# The consumer lists alpha and nothing alpha needs, and has no go.sum. A plain
-# build records alpha's requirements and succeeds.
+# The consumer lists alpha at the placeholder and nothing alpha needs, and has
+# no go.sum. A plain build records alpha's branch head and alpha's
+# requirements, and succeeds.
 cd $WORK/m
 go build ./...
 ! stderr 'updates to go.mod needed'
 ! stderr 'missing go.sum entry'
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$' go.mod
 grep '^	rsc.io/quote v1.5.1 // indirect$' go.mod
 grep '^	rsc.io/sampler v1.3.0 // indirect$' go.mod
 grep '^	golang.org/x/text v0.0.0-20170915032832-14c0d48ead0c // indirect$' go.mod
@@ -47,7 +49,8 @@ go build ./...
 cmp go.mod $WORK/m.go.mod
 cmp go.sum $WORK/m.go.sum
 
-# The next alpha commit raises its quote requirement. The next build follows it.
+# The next alpha commit raises its quote requirement. The next build follows it,
+# and records alpha's new head and the raised requirement in one write.
 cd $WORK/alpha
 cp $WORK${/}alpha-next${/}go.mod go.mod
 env GIT_AUTHOR_DATE=2026-01-03T04:05:06Z
@@ -56,6 +59,8 @@ exec git commit -am 'alpha on quote v1.5.2'
 
 cd $WORK/m
 go build ./...
+! stderr 'updates to go.mod needed'
+grep '^require github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
 grep '^	rsc.io/quote v1.5.2 // indirect$' go.mod
 ! grep 'rsc.io/quote v1.5.1' go.mod
 grep '^rsc.io/quote v1.5.2 h1:' go.sum
