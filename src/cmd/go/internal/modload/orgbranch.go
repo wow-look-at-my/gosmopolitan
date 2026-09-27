@@ -275,9 +275,17 @@ func resolveOrgSummary(ld *Loader, summary *modFileSummary) (*modFileSummary, er
 	return summary, nil
 }
 
-// recordOrgReplacements writes the branch head that each org replacement in
-// modFile resolves to onto its replace line. The line keeps its comments. The
-// require lines need no such step, because their roots are already resolved.
+// recordedOrgModule returns the requirement go.mod records for m: the
+// placeholder for an org module.
+func recordedOrgModule(ld *Loader, m module.Version) module.Version {
+	if !orgmod.IsOrg(m.Path) || !orgResolvable() || resolvedToDirectory(ld, m) {
+		return m
+	}
+	return orgmod.PlaceholderModule(m)
+}
+
+// recordOrgReplacements writes the placeholder onto each org replace line in
+// modFile, for the reason recordedOrgModule gives. The line keeps its comments.
 func recordOrgReplacements(ld *Loader, ctx context.Context, modFile *modfile.File) error {
 	if !orgResolvable() {
 		return nil
@@ -287,11 +295,7 @@ func recordOrgReplacements(ld *Loader, ctx context.Context, modFile *modfile.Fil
 		if rep.New.Version == "" || !orgmod.IsOrg(rep.New.Path) {
 			continue
 		}
-		version, err := orgVersion(ld, ctx, rep.New.Path)
-		if err != nil {
-			return err
-		}
-		if version != rep.New.Version {
+		if version := orgmod.Placeholder(rep.New.Path); version != rep.New.Version {
 			moved := *rep
 			moved.New.Version = version
 			stale = append(stale, moved)

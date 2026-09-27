@@ -65,14 +65,14 @@ exec git add -A
 exec git commit -m 'beta main'
 exec git branch -m main
 
-# The first CI build of the run resolves each head, locks it, and records it in
-# go.mod as any build does. A placeholder is no error.
+# The first CI build of the run resolves each head and locks it. go.mod keeps
+# its placeholders, as it does in any build. A placeholder is no error.
 cd $WORK/m
 env GITHUB_ACTIONS=true
 go run .
 stdout '^alpha-main beta-main$'
-grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260102030405-[0-9a-f]+$' go.mod
-grep '^	github.com/wow-look-at-my/beta v0\.0\.0-20260202030405-[0-9a-f]+$' go.mod
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
+grep '^	github.com/wow-look-at-my/beta v0\.0\.0$' go.mod
 exists $WORK/locks
 
 # alpha moves while the run is under way.
@@ -104,7 +104,7 @@ env GITHUB_ACTIONS=
 env GOSMOPOLITAN_RUN_LOCK_STORE=$UNTOUCHED
 go run .
 stdout '^alpha-next beta-main$'
-grep '^	github.com/wow-look-at-my/alpha v0\.0\.0-20260103040506-[0-9a-f]+$' go.mod
+grep '^	github.com/wow-look-at-my/alpha v0\.0\.0$' go.mod
 ! exists $WORK/untouched
 
 # A coding agent does not make a CI build, whatever GITHUB_ACTIONS says.

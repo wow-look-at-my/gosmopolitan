@@ -1968,7 +1968,7 @@ func UpdateGoModFromReqs(ld *Loader, ctx context.Context, opts WriteOpts) (befor
 			toolchain = m.Version
 			continue
 		}
-		// An org root is the branch head outside CI, so this records it.
+		m = recordedOrgModule(ld, m)
 		list = append(list, &modfile.Require{
 			Mod:      m,
 			Indirect: !ld.requirements.direct[m.Path],
