@@ -15,6 +15,7 @@ A CI build is a go command with `GITHUB_ACTIONS=true`, no coding agent marker in
 A CI build follows the same heads as any other build. The version `go.mod` records is not what CI builds: the run lock is.
 
 - A run is one attempt of one workflow run: `GITHUB_REPOSITORY`, `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT`. A lock is an org module on a branch, inside a run.
+- `GOSMOPOLITAN_RUN` names the run as `owner/repo/run-id/attempt` when `GITHUB_RUN_ID` or `GITHUB_RUN_ATTEMPT` is blank. A caller that blanks those for its children sets it, so a test binary never reads a per-run value and its result stays cacheable. A malformed value is an error.
 - The first go command of the run that resolves a lock claims the head it found. Every later go command of the run, in any job on any machine, builds the claimed version instead of the head. A commit that lands in the middle of a run therefore reaches no job of it. A re-run is a new attempt, so it claims the heads again.
 - The claim is a create-if-absent. Of racing claims one wins, and every build takes the winner's version.
 - Inside one go command the resolved version stays cached, so a command asks the store once per lock.
