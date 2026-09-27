@@ -260,6 +260,31 @@ func TestOpenRunLock(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "ftp://example.com/locks") {
 		t.Errorf("openRunLock with an ftp URL = %v; want an error that names it", err)
 	}
+
+	// A caller that blanks the GITHUB_RUN variables names the run in RunEnv.
+	blanked := map[string]string{
+		"GITHUB_REPOSITORY":  "",
+		"GITHUB_RUN_ID":      "",
+		"GITHUB_RUN_ATTEMPT": "",
+		RunLockEnv:           "file://" + dir,
+	}
+	blanked[RunEnv] = testRun.Repository + "/" + testRun.ID + "/" + testRun.Attempt
+	lock, err = openRunLock(envOf(blanked))
+	if err != nil || lock.run != testRun {
+		t.Errorf("openRunLock from %s = %v, %v; want run %v", RunEnv, lock.run, err, testRun)
+	}
+	for _, bad := range []string{"wow-look-at-my/consumer/4242", "consumer/4242/1", "a/b//1", "a/b/c/d/e"} {
+		blanked[RunEnv] = bad
+		_, err = openRunLock(envOf(blanked))
+		if err == nil || !strings.Contains(err.Error(), RunEnv) {
+			t.Errorf("openRunLock with %s=%q = %v; want an error that names %s", RunEnv, bad, err, RunEnv)
+		}
+	}
+	delete(blanked, RunEnv)
+	_, err = openRunLock(envOf(blanked))
+	if err == nil || !strings.Contains(err.Error(), RunEnv) {
+		t.Errorf("openRunLock with no run at all = %v; want an error that names %s too", err, RunEnv)
+	}
 }
 
 func TestFileStoreClaimsRace(t *testing.T) {
