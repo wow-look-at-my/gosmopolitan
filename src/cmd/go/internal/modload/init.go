@@ -1966,12 +1966,8 @@ func UpdateGoModFromReqs(ld *Loader, ctx context.Context, opts WriteOpts) (befor
 			toolchain = m.Version
 			continue
 		}
-<<<<<<< HEAD
-		m = recordedOrgModule(ld, m)
-=======
 		// A go.mod file records the placeholder for an org module, never the
 		// branch head the build list resolved it to.
->>>>>>> origin/master
 		list = append(list, &modfile.Require{
 			Mod:      orgmod.PlaceholderModule(m),
 			Indirect: !ld.requirements.direct[m.Path],
