@@ -1720,6 +1720,11 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 		}
 	}
 
+	// ld stamps these IDs into the binary, so they are an input of the link.
+	if ids := linkedToolIDs(a); ids != "" {
+		fmt.Fprintf(h, "linkedtools %s\n", ids)
+	}
+
 	return h.Sum()
 }
 
