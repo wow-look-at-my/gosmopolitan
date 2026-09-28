@@ -105,6 +105,40 @@ func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
 	return sources
 }
 
+// route names source in the line that reports a download.
+func (source archiveSource) route() string {
+	route := archiveRoute(source.ext)
+	if source.credentialFor != "" {
+		route += " via " + proxyHost
+	}
+	return route
+}
+
+// name is the host and the format of source, as "github.com tar.gz".
+func (source archiveSource) name() string {
+	host := "github.com"
+	if source.credentialFor != "" {
+		host = proxyHost
+	}
+	return host + " " + strings.TrimPrefix(source.ext, ".")
+}
+
+// archiveRoute names an archive by its extension, as "tar.gz archive".
+func archiveRoute(ext string) string {
+	return strings.TrimPrefix(ext, ".") + " archive"
+}
+
+// keptArchiveRoute names the kept archive of hash that no fetch in this
+// process wrote.
+func (r *gitRepo) keptArchiveRoute(hash string) string {
+	for _, ext := range []string{".tar.gz", ".zip"} {
+		if _, err := os.Stat(r.githubArchivePath(hash, ext)); err == nil {
+			return archiveRoute(ext)
+		}
+	}
+	return "archive"
+}
+
 // refPath names hash in an archive URL. A branch or a tag uses its ref name.
 // HEAD has no ref path, so it uses the hash.
 func refPath(ref, hash string) string {
@@ -385,8 +419,9 @@ func parseArchive(raw []byte, ext, hash string) ([]archiveEntry, time.Time, stri
 
 // statGitHub describes hash from an archive of ref, from the first source
 // in archiveSources that works. The archive is kept on disk, so ReadFile and
-// ReadZip never have to fetch the commit with git. It requires r.mu.
-func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*RevInfo, error) {
+// ReadZip never have to fetch the commit with git. rec gets the route and the
+// transfers. It requires r.mu.
+func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec *Fetch) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes || len(hash) != 40 {
 		return nil, errors.New("not a github.com repository with SHA-1 hashes")
 	}
@@ -396,32 +431,19 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 
 	var errs []error
 	for _, source := range r.github.archiveSources(ref, hash) {
-		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash)
+		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash, rec)
 		if err != nil {
 			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
 			continue
 		}
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
 			return nil, err
 		}
-		r.logGitHubRoute("%s archive", strings.TrimPrefix(source.ext, "."))
+		rec.SetRoute(source.route())
 		return r.githubRevInfo(ctx, version, hash, when, nil), nil
 	}
-	err := errors.Join(errs...)
-	// Which route served a module decides how long the build takes, so the
-	// log says it rather than leaving a reader to infer it from an absent
-	// git directory. A fall back to git is the slow one, and names why.
-	r.logGitHubRoute("git, because no archive served it: %v", err)
-	return nil, err
-}
-
-// logGitHubRoute names the route a fetch took, on the stream that carries
-// "go: downloading".
-func (r *gitRepo) logGitHubRoute(format string, args ...any) {
-	if r.github == nil {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "go: github.com/%s/%s: %s\n", r.github.owner, r.github.name, fmt.Sprintf(format, args...))
+	return nil, errors.Join(errs...)
 }
 
 // isTagName reports whether rev names a version tag, such as v1.2.3 or
@@ -436,8 +458,9 @@ func (r *gitRepo) githubTagPath(tag string) string {
 }
 
 // statGitHubTag describes tag from its archive alone. The archive names its
-// commit, so ls-remote does not run. It requires r.mu.
-func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, error) {
+// commit, so ls-remote does not run. rec gets the route and the transfers.
+// It requires r.mu.
+func (r *gitRepo) statGitHubTag(ctx context.Context, tag string, rec *Fetch) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes {
 		return nil, errors.New("not a github.com repository with SHA-1 hashes")
 	}
@@ -450,9 +473,10 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, erro
 
 	var errs []error
 	for _, source := range r.github.archiveSources("refs/tags/"+tag, "") {
-		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "")
+		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "", rec)
 		if err != nil {
 			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
 			continue
 		}
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
@@ -461,6 +485,7 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, erro
 		if err := writeFileAtomic(r.githubTagPath(tag), []byte(hash+"\n")); err != nil {
 			return nil, err
 		}
+		rec.SetRoute(source.route())
 		return r.githubTagInfo(ctx, tag, hash, when), nil
 	}
 	return nil, errors.Join(errs...)
@@ -474,12 +499,13 @@ func (r *gitRepo) githubTagInfo(ctx context.Context, tag, hash string, when time
 
 // downloadGitHub fetches one archive and parses it. It returns the bytes as
 // served, the entries, the commit time and the commit. hash is the commit when
-// the archive does not name one.
-func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string) ([]byte, []archiveEntry, time.Time, string, error) {
+// the archive does not name one. rec gets the transfer, when it received data.
+func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string, rec *Fetch) ([]byte, []archiveEntry, time.Time, string, error) {
 	u, err := url.Parse(source.url)
 	if err != nil {
 		return nil, nil, time.Time{}, "", err
 	}
+	start := time.Now()
 	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
 	if err != nil {
 		return nil, nil, time.Time{}, "", err
@@ -490,6 +516,7 @@ func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash
 	}
 	body := &io.LimitedReader{R: resp.Body, N: MaxZipFile + 1}
 	raw, err := io.ReadAll(body)
+	rec.AddTransfer(start, int64(len(raw)), time.Since(start))
 	if err == nil && body.N <= 0 {
 		err = errors.New("archive too large")
 	}

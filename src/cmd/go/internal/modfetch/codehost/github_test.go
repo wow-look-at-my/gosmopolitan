@@ -594,10 +594,14 @@ func TestGitHubArchiveFallback(t *testing.T) {
 		proxyRedirects bool
 		wantRequests   []string
 		wantGit        bool
+		// wantRoute is the route the download reports.
+		wantRoute       string
+		wantRoutePrefix string
 	}{
 		{
 			name:         "github.com tar.gz first",
 			wantRequests: []string{githubTar, codeloadTar},
+			wantRoute:    "tar.gz archive",
 		},
 		// web.Get asks github.com again with GOAUTH credentials after a 4xx.
 		// A proxied request carries its credential from the start, so it
@@ -606,29 +610,40 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			name:         "proxy tar.gz when github.com has none",
 			status:       missing("github.tar.gz"),
 			wantRequests: []string{githubTar, githubTar, proxyTar},
+			wantRoute:    "tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 404 Not Found",
+		},
+		{
+			name:         "proxy tar.gz when github.com refuses",
+			status:       map[string]int{"github.tar.gz": http.StatusForbidden},
+			wantRequests: []string{githubTar, githubTar, proxyTar},
+			wantRoute:    "tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden",
 		},
 		{
 			name:         "github.com zip when there is no tar.gz",
 			status:       missing("github.tar.gz", "proxy.tar.gz"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, codeloadZip},
+			wantRoute:    "zip archive, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found",
 		},
 		{
 			name:         "proxy zip after every other archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
+			wantRoute:    "zip archive via proxy.pazer.ai, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found",
 		},
 		{
 			name:         "git when there is no archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
 			wantGit:      true,
+			wantRoute:    "git, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found; proxy.pazer.ai zip: 404 Not Found",
 		},
 		{
-			name:           "git when every redirect leaves GitHub",
-			redirectTo:     "evil.example",
-			proxyRedirects: true,
-			wantRequests:   []string{githubTar, proxyTar, githubZip, proxyZip},
-			wantGit:        true,
+			name:            "git when every redirect leaves GitHub",
+			redirectTo:      "evil.example",
+			proxyRedirects:  true,
+			wantRequests:    []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantGit:         true,
+			wantRoutePrefix: "git, because github.com tar.gz: ",
 		},
 	}
 
@@ -679,7 +694,10 @@ func TestGitHubArchiveFallback(t *testing.T) {
 				t.Errorf("ReadFile(missing.go) err = %v, want fs.ErrNotExist", err)
 			}
 
+			// Modules at one commit: only the first download reports the bytes of the fetch.
+			reports := map[string]*Fetch{"": new(Fetch), "sub": new(Fetch)}
 			for _, subdir := range []string{"", "sub"} {
+				ctx := WithFetch(ctx, reports[subdir])
 				var got map[string]string
 				if test.wantGit {
 					zipRC, err := repo.ReadZip(ctx, "v1.0.0", subdir, MaxZipFile)
@@ -727,6 +745,17 @@ func TestGitHubArchiveFallback(t *testing.T) {
 					t.Errorf("files of %q differ from git archive:\ngot  %q\nwant %q", subdir, got, wantHere)
 				}
 			}
+			route, size, transfer, _ := reports[""].Stats()
+			routeOK := route == test.wantRoute
+			if test.wantRoutePrefix != "" {
+				routeOK = strings.HasPrefix(route, test.wantRoutePrefix) && strings.Count(route, "; ") == 3
+			}
+			if !routeOK || size <= 0 || transfer <= 0 {
+				t.Errorf("first download reports %q, %d bytes in %v, want %q%s and the bytes of the fetch", route, size, transfer, test.wantRoute, test.wantRoutePrefix)
+			}
+			if again, againSize, _, _ := reports["sub"].Stats(); again != route || againSize != 0 {
+				t.Errorf("second download reports %q, %d bytes, want %q and no bytes", again, againSize, route)
+			}
 			if !test.wantGit {
 				if _, err := git.ReadFiles(ctx, "v1.0.0", "nowhere"); !errors.Is(err, os.ErrNotExist) {
 					t.Errorf("ReadFiles(nowhere) err = %v, want fs.ErrNotExist", err)
@@ -764,6 +793,13 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			}
 			if gomod, err := again.ReadFile(ctx, hash, "go.mod", MaxGoMod); err != nil || string(gomod) != sourceFiles["go.mod"] {
 				t.Errorf("ReadFile from the kept archive = %q, %v", gomod, err)
+			}
+			kept := new(Fetch)
+			if _, err := again.ReadFiles(WithFetch(ctx, kept), hash, ""); err != nil {
+				t.Fatal(err)
+			}
+			if keptRoute, keptSize, _, _ := kept.Stats(); !strings.HasSuffix(keptRoute, " archive") || strings.Contains(keptRoute, " via ") || keptSize != 0 {
+				t.Errorf("download from the kept archive reports %q, %d bytes, want an archive and no bytes", keptRoute, keptSize)
 			}
 			fake.mu.Lock()
 			extra := fake.requests[len(test.wantRequests):]
