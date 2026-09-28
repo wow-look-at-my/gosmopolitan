@@ -594,8 +594,9 @@ func TestGitHubArchiveFallback(t *testing.T) {
 		proxyRedirects bool
 		wantRequests   []string
 		wantGit        bool
-		// wantRoute prefixes the route the download reports.
-		wantRoute string
+		// wantRoute is the route the download reports.
+		wantRoute       string
+		wantRoutePrefix string
 	}{
 		{
 			name:         "github.com tar.gz first",
@@ -609,34 +610,40 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			name:         "proxy tar.gz when github.com has none",
 			status:       missing("github.tar.gz"),
 			wantRequests: []string{githubTar, githubTar, proxyTar},
-			wantRoute:    "tar.gz archive via proxy.pazer.ai",
+			wantRoute:    "tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 404 Not Found",
+		},
+		{
+			name:         "proxy tar.gz when github.com refuses",
+			status:       map[string]int{"github.tar.gz": http.StatusForbidden},
+			wantRequests: []string{githubTar, githubTar, proxyTar},
+			wantRoute:    "tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden",
 		},
 		{
 			name:         "github.com zip when there is no tar.gz",
 			status:       missing("github.tar.gz", "proxy.tar.gz"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, codeloadZip},
-			wantRoute:    "zip archive",
+			wantRoute:    "zip archive, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found",
 		},
 		{
 			name:         "proxy zip after every other archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
-			wantRoute:    "zip archive via proxy.pazer.ai",
+			wantRoute:    "zip archive via proxy.pazer.ai, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found",
 		},
 		{
 			name:         "git when there is no archive",
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
 			wantGit:      true,
-			wantRoute:    "git, because no archive served it: ",
+			wantRoute:    "git, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found; proxy.pazer.ai zip: 404 Not Found",
 		},
 		{
-			name:           "git when every redirect leaves GitHub",
-			redirectTo:     "evil.example",
-			proxyRedirects: true,
-			wantRequests:   []string{githubTar, proxyTar, githubZip, proxyZip},
-			wantGit:        true,
-			wantRoute:      "git, because no archive served it: ",
+			name:            "git when every redirect leaves GitHub",
+			redirectTo:      "evil.example",
+			proxyRedirects:  true,
+			wantRequests:    []string{githubTar, proxyTar, githubZip, proxyZip},
+			wantGit:         true,
+			wantRoutePrefix: "git, because github.com tar.gz: ",
 		},
 	}
 
@@ -739,8 +746,12 @@ func TestGitHubArchiveFallback(t *testing.T) {
 				}
 			}
 			route, size, transfer, _ := reports[""].Stats()
-			if !strings.HasPrefix(route, test.wantRoute) || size <= 0 || transfer <= 0 {
-				t.Errorf("first download reports %q, %d bytes in %v, want %q and the bytes of the fetch", route, size, transfer, test.wantRoute)
+			routeOK := route == test.wantRoute
+			if test.wantRoutePrefix != "" {
+				routeOK = strings.HasPrefix(route, test.wantRoutePrefix) && strings.Count(route, "; ") == 3
+			}
+			if !routeOK || size <= 0 || transfer <= 0 {
+				t.Errorf("first download reports %q, %d bytes in %v, want %q%s and the bytes of the fetch", route, size, transfer, test.wantRoute, test.wantRoutePrefix)
 			}
 			if again, againSize, _, _ := reports["sub"].Stats(); again != route || againSize != 0 {
 				t.Errorf("second download reports %q, %d bytes, want %q and no bytes", again, againSize, route)

@@ -5,10 +5,16 @@ package codehost
 
 import (
 	"context"
+	"errors"
 	"io/fs"
+	"net/url"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
+
+	"cmd/go/internal/web"
 )
 
 // A Fetch records the route that served one module version, and the bytes and
@@ -16,9 +22,37 @@ import (
 type Fetch struct {
 	mu       sync.Mutex
 	route    string
+	failures []string
 	bytes    int64
 	transfer time.Duration
 	first    time.Time
+}
+
+// AddFailure records that source was tried before the route and failed.
+func (rec *Fetch) AddFailure(source string, err error) {
+	if rec == nil {
+		return
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	rec.failures = append(rec.failures, source+": "+ShortError(err))
+}
+
+// ShortError is err as its HTTP status, or else as its first line without
+// the URL that failed.
+func ShortError(err error) string {
+	var httpErr *web.HTTPError
+	if errors.As(err, &httpErr) && httpErr.Status != "" {
+		return httpErr.Status
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	} else if inner := errors.Unwrap(err); inner != nil {
+		err = inner
+	}
+	text, _, _ := strings.Cut(err.Error(), "\n")
+	return text
 }
 
 type fetchKey struct{}
@@ -59,21 +93,35 @@ func (rec *Fetch) AddTransfer(start time.Time, size int64, took time.Duration) {
 	}
 }
 
-// Stats returns the route, the bytes received, the wall time of the
-// transfers, and when the earliest transfer began.
+// Stats returns the route with the failures before it, the bytes received,
+// the wall time of the transfers, and when the earliest transfer began.
 func (rec *Fetch) Stats() (route string, size int64, transfer time.Duration, first time.Time) {
 	if rec == nil {
 		return "", 0, 0, time.Time{}
 	}
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	return rec.route, rec.bytes, rec.transfer, rec.first
+	route = rec.route
+	if route != "" && len(rec.failures) > 0 {
+		route += ", because " + strings.Join(rec.failures, "; ")
+	}
+	return route, rec.bytes, rec.transfer, rec.first
 }
 
-// add moves the transfers of from into rec.
-func (rec *Fetch) add(from *Fetch) {
-	_, size, took, first := from.Stats()
-	rec.AddTransfer(first, size, took)
+// take copies the route and the failures of from into rec. With transfers
+// set, it moves the transfers too.
+func (rec *Fetch) take(from *Fetch, transfers bool) {
+	from.mu.Lock()
+	route, failures := from.route, slices.Clone(from.failures)
+	size, took, first := from.bytes, from.transfer, from.first
+	from.mu.Unlock()
+	rec.mu.Lock()
+	rec.route = route
+	rec.failures = append(rec.failures, failures...)
+	rec.mu.Unlock()
+	if transfers {
+		rec.AddTransfer(first, size, took)
+	}
 }
 
 // A keptFetch holds a commit's fetch until the module's download claims it,
@@ -108,12 +156,8 @@ func (r *gitRepo) claimFetch(ctx context.Context, hash, fallback string) {
 		dst.SetRoute(fallback)
 		return
 	}
-	route, _, _, _ := kept.rec.Stats()
-	dst.SetRoute(route)
-	if !kept.claimed {
-		kept.claimed = true
-		dst.add(kept.rec)
-	}
+	dst.take(kept.rec, !kept.claimed)
+	kept.claimed = true
 }
 
 // objectBytes is the size of the git object store. Its growth over a git

@@ -6,6 +6,7 @@ package modfetch
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -64,6 +65,18 @@ func moduleName(mod module.Version) string {
 		vers = vers[:dot] + " (" + goos + "/" + goarch + ")"
 	}
 	return vers
+}
+
+// proxyName is the host of a GOPROXY entry that is a module proxy.
+func proxyName(proxy string) (string, bool) {
+	parsed, err := url.Parse(proxy)
+	if err != nil || parsed.Scheme == "" {
+		return "", false
+	}
+	if parsed.Host == "" {
+		return proxy, true
+	}
+	return parsed.Host, true
 }
 
 // fetchLine formats the report of one download.

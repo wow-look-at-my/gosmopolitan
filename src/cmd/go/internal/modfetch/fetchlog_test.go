@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"cmd/go/internal/modfetch/codehost"
+	"cmd/go/internal/web"
 	"cmd/go/internal/web/intercept"
 
 	"golang.org/x/mod/module"
@@ -136,6 +137,28 @@ func TestFetchReportPrintsOnce(t *testing.T) {
 	early.finish(nil)
 	if lines := reportLines(buf); len(lines) != 1 || !strings.Contains(lines[0], ", 1.0 kB in 3.00s (333 B/s), 3.") {
 		t.Fatalf("early transfer printed %q, want 3s of transfer in the total", lines)
+	}
+}
+
+func TestFetchReportNamesEarlierFailures(t *testing.T) {
+	buf := captureFetchLog(t)
+	report := newFetchReport(module.Version{Path: "example.com/m", Version: "v1.0.0"})
+	report.rec.AddFailure("proxy.golang.org", &module.ModuleError{Path: "example.com/m", Err: &web.HTTPError{Status: "404 Not Found", StatusCode: 404}})
+	report.rec.AddFailure("github.com tar.gz", fmt.Errorf("https://github.com/o/n/archive/x.tar.gz: %w", errors.New("archive holds no files")))
+	report.rec.SetRoute("zip archive")
+	report.rec.AddTransfer(time.Now(), 1000, time.Second)
+	report.finish(nil)
+	want := "go: downloading example.com/m v1.0.0: zip archive, because proxy.golang.org: 404 Not Found; github.com tar.gz: archive holds no files, 1.0 kB in 1.00s (1.0 kB/s), "
+	if lines := reportLines(buf); len(lines) != 1 || !strings.HasPrefix(lines[0], want) {
+		t.Fatalf("report printed %q, want one line starting %q", lines, want)
+	}
+	if name, isProxy := proxyName("https://proxy.golang.org"); !isProxy || name != "proxy.golang.org" {
+		t.Errorf("proxyName(https://proxy.golang.org) = %q, %v", name, isProxy)
+	}
+	for _, entry := range []string{"direct", "noproxy", "off"} {
+		if _, isProxy := proxyName(entry); isProxy {
+			t.Errorf("proxyName(%q) reports a module proxy", entry)
+		}
 	}
 }
 

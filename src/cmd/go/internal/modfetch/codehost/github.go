@@ -114,6 +114,15 @@ func (source archiveSource) route() string {
 	return route
 }
 
+// name is the host and the format of source, as "github.com tar.gz".
+func (source archiveSource) name() string {
+	host := "github.com"
+	if source.credentialFor != "" {
+		host = proxyHost
+	}
+	return host + " " + strings.TrimPrefix(source.ext, ".")
+}
+
 // archiveRoute names an archive by its extension, as "tar.gz archive".
 func archiveRoute(ext string) string {
 	return strings.TrimPrefix(ext, ".") + " archive"
@@ -425,6 +434,7 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash, rec)
 		if err != nil {
 			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
 			continue
 		}
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
@@ -433,14 +443,7 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 		rec.SetRoute(source.route())
 		return r.githubRevInfo(ctx, version, hash, when, nil), nil
 	}
-	err := errors.Join(errs...)
-	rec.SetRoute(gitFallbackRoute(err))
-	return nil, err
-}
-
-// gitFallbackRoute names the git route, with why no archive served the commit.
-func gitFallbackRoute(err error) string {
-	return fmt.Sprintf("git, because no archive served it: %v", err)
+	return nil, errors.Join(errs...)
 }
 
 // isTagName reports whether rev names a version tag, such as v1.2.3 or
@@ -473,6 +476,7 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string, rec *Fetch) (*R
 		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "", rec)
 		if err != nil {
 			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
 			continue
 		}
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
@@ -484,9 +488,7 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string, rec *Fetch) (*R
 		rec.SetRoute(source.route())
 		return r.githubTagInfo(ctx, tag, hash, when), nil
 	}
-	err := errors.Join(errs...)
-	rec.SetRoute(gitFallbackRoute(err))
-	return nil, err
+	return nil, errors.Join(errs...)
 }
 
 func (r *gitRepo) githubTagInfo(ctx context.Context, tag, hash string, when time.Time) *RevInfo {

@@ -389,6 +389,9 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		}
 		err := repo.Zip(ctx, file, mod.Version)
 		if err != nil {
+			if name, isProxy := proxyName(proxy); isProxy {
+				codehost.FetchFrom(ctx).AddFailure(name, err)
+			}
 			// Zip may have partially written to f before failing.
 			// (Perhaps the server crashed while sending the file?)
 			// Since we allow fallback on error in some cases, we need to fix up the
