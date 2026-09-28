@@ -649,10 +649,6 @@ func TestImportVendorParentFailure(t *testing.T) {
 func TestImportPackageOutsideModule(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
-	// Disable module fetching for this test so that 'go list' fails quickly
-	// without trying to find the latest version of a module.
-	t.Setenv("GOPROXY", "off")
-
 	// Create a GOPATH in a temporary directory. We don't use testdata
 	// because it's in GOROOT, which interferes with the module heuristic.
 	gopath := t.TempDir()
@@ -721,7 +717,6 @@ func TestMissingImportErrorRepetition(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GO111MODULE", "on")
-	t.Setenv("GOPROXY", "off")
 	t.Setenv("GONOPROXY", "none")
 
 	ctxt := Default

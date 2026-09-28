@@ -1,45 +1,45 @@
 env GO111MODULE=on
-env sumdb=$GOSUMDB
-env proxy=$GOPROXY
-env GOPROXY GONOPROXY GOSUMDB GONOSUMDB
+env sumdb=$TESTGO_GOSUMDB
+env proxy=$TESTGO_GOPROXY
+env TESTGO_GOPROXY GONOPROXY TESTGO_GOSUMDB GONOSUMDB
 
 # rejected proxy fails verification
 cp go.mod.orig go.mod
 rm go.sum
-env GOPROXY=$proxy/sumdb-503
+env TESTGO_GOPROXY=$proxy/sumdb-503
 ! go get rsc.io/quote
 stderr 503
 
 # fetch through working proxy is OK
 cp go.mod.orig go.mod
 rm go.sum
-env GOPROXY=$proxy
+env TESTGO_GOPROXY=$proxy
 go get rsc.io/quote
 
 # repeated fetch works entirely from cache, does not consult sumdb
 cp go.mod.orig go.mod
 rm go.sum
-env GOPROXY=$proxy/sumdb-503
+env TESTGO_GOPROXY=$proxy/sumdb-503
 go get rsc.io/quote
 rm go.sum
 
 # fetch specific module can work without proxy, using cache or go.sum
 cp go.mod.orig go.mod
 rm go.sum
-env GOPROXY=off
+env TESTGO_GOPROXY=off
 go get rsc.io/quote@v1.5.2 # using cache
 rm $GOPATH/pkg/mod/cache/download/sumdb/localhost.localdev/sumdb/lookup/rsc.io/quote@v1.5.2
 go get rsc.io/quote@v1.5.2 # using go.sum
 
 # fetch fails once we lose access to both cache and go.sum
 rm go.sum
-env GOPROXY=$proxy/sumdb-504
+env TESTGO_GOPROXY=$proxy/sumdb-504
 ! go get rsc.io/quote@v1.5.2
 stderr 504
 
 # GOINSECURE does not bypass checksum lookup
 env GOINSECURE=rsc.io
-env GOPROXY=$proxy/sumdb-504
+env TESTGO_GOPROXY=$proxy/sumdb-504
 ! go get rsc.io/quote@v1.5.2
 stderr 504
 
