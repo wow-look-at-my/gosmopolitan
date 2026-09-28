@@ -7,8 +7,6 @@
 [!GOOS:darwin] [!GOOS:windows] [!GOOS:linux] skip
 [!GOARCH:amd64] [!GOARCH:arm64] skip
 
-env GOPROXY=proxy.golang.org
-env GOSUMDB=sum.golang.org
 env GOTOOLCHAIN=go1.20.1
 
 	# Avoid resolving a "go1.20.1" from the user's real $PATH.

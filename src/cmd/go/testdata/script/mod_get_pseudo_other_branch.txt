@@ -1,6 +1,6 @@
 env GO111MODULE=on
-env GOPROXY=direct
-env GOSUMDB=off
+env TESTGO_GOPROXY=direct
+env TESTGO_GOSUMDB=off
 
 # Testing that a pseudo-version is based on the semantically-latest
 # tag that appears in any commit that is a (transitive) parent of the commit

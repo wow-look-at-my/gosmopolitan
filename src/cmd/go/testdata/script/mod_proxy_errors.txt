@@ -1,8 +1,8 @@
 [short] skip
 
 env GO111MODULE=on
-env GOSUMDB=off
-env GOPROXY=direct
+env TESTGO_GOSUMDB=off
+env TESTGO_GOPROXY=direct
 
 # Server responses should be truncated to some reasonable number of lines.
 # (For now, exactly eight.)

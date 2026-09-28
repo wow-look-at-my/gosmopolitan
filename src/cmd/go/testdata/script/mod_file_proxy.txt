@@ -6,17 +6,17 @@ env GOPATH=$WORK/gopath1
 cd $WORK/x
 go mod edit -fmt
 go list -mod=readonly
-env GOPROXY=file:///nonexist
+env TESTGO_GOPROXY=file:///nonexist
 go list
 grep v1.5.1 $GOPATH/pkg/mod/cache/download/rsc.io/quote/@v/list
 
 # Use download cache as file:/// proxy.
 env GOPATH=$WORK/gopath2
-[GOOS:windows] env GOPROXY=file:///C:/nonexist
-[!GOOS:windows] env GOPROXY=file:///nonexist
+[GOOS:windows] env TESTGO_GOPROXY=file:///C:/nonexist
+[!GOOS:windows] env TESTGO_GOPROXY=file:///nonexist
 ! go list
-[GOOS:windows] env GOPROXY=file:///$WORK/gopath1/pkg/mod/cache/download
-[!GOOS:windows] env GOPROXY=file://$WORK/gopath1/pkg/mod/cache/download
+[GOOS:windows] env TESTGO_GOPROXY=file:///$WORK/gopath1/pkg/mod/cache/download
+[!GOOS:windows] env TESTGO_GOPROXY=file://$WORK/gopath1/pkg/mod/cache/download
 go list
 grep v1.5.1 $GOPATH/pkg/mod/cache/download/rsc.io/quote/@v/list
 
