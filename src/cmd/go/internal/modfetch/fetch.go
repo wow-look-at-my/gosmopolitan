@@ -123,8 +123,8 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 		return dir, err
 	}
 
-	// A module is zips. The BASE zip is the one above: what the proxy
-	// served, pinned by go.sum.
+	// The BASE zip above is pinned by go.sum. An OVERLAY zip, which
+	// overlay.go keeps, holds what the module's generators add.
 	dir, err = unzip(ctx, mod, zipfile, func(dir string) error {
 		return f.completeDir(ctx, mod, dir)
 	})
@@ -241,8 +241,8 @@ type zipResult struct {
 var downloadZipCache par.ErrCache[module.Version, zipResult]
 
 // DownloadZip downloads the specific module version to the local zip cache
-// and returns the name of the zip file. A module read from a GitHub archive
-// has no zip.
+// and returns the name of the zip file. For a module read from a GitHub
+// archive, it writes the files to $GOMODCACHE/<module>@<version> and returns "".
 func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err error) {
 	zipfile, report, err := f.downloadZipReport(ctx, mod)
 	if err == nil {

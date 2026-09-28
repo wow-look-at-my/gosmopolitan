@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// A Fetch records how one module version reached this machine: the route that
-// served it.
+// A Fetch records the route that served one module version, and the bytes and
+// time summed over each attempt that received data.
 type Fetch struct {
 	mu       sync.Mutex
 	route    string
@@ -76,7 +76,8 @@ func (rec *Fetch) add(from *Fetch) {
 	rec.AddTransfer(first, size, took)
 }
 
-// A keptFetch is the record of a commit that this process fetched.
+// A keptFetch holds a commit's fetch until the module's download claims it,
+// because Stat can fetch a commit before the download begins.
 type keptFetch struct {
 	rec     *Fetch
 	claimed bool
