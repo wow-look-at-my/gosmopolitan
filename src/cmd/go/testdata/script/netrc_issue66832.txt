@@ -4,8 +4,8 @@
 [!GOOS:windows] skip
 [short] skip
 
-env GOPROXY=direct
-env GOSUMDB=off
+env TESTGO_GOPROXY=direct
+env TESTGO_GOSUMDB=off
 mkdir $WORK\home
 env USERPROFILE=$WORK\home
 

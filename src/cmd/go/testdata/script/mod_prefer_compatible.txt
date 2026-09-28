@@ -3,7 +3,7 @@
 # +incompatible ones, even if offered by a proxy.
 
 env GO111MODULE=on
-env GOSUMDB=off
+env TESTGO_GOSUMDB=off
 
 # vcs-test.golang.org/git/prefercompatible.git v2.0.0+incompatible exists,
 # and should be resolved if we ask for it explicitly.
@@ -34,7 +34,7 @@ stderr '^go: vcs-test.golang.org/git/prefercompatible.git@patch: can''t query ve
 
 [short] stop
 [!git] stop
-env GOPROXY=direct
+env TESTGO_GOPROXY=direct
 
 go list -versions -m vcs-test.golang.org/git/prefercompatible.git
 stdout '^vcs-test.golang.org/git/prefercompatible.git v1\.5\.1 v1\.5\.2' # and possibly others

@@ -107,6 +107,14 @@ func TestMain(m *testing.M) {
 		cfg.SetGOROOT(cfg.GOROOT, true)
 		gover.TestVersion = os.Getenv("TESTGO_VERSION")
 		toolchain.TestVersionSwitch = os.Getenv("TESTGO_VERSION_SWITCH")
+		// The go command has no GOPROXY or GOSUMDB. Only this test binary can
+		// point it at the local test proxy and checksum database.
+		if v := os.Getenv("TESTGO_GOPROXY"); v != "" {
+			cfg.GOPROXY = v
+		}
+		if v := os.Getenv("TESTGO_GOSUMDB"); v != "" {
+			cfg.GOSUMDB = v
+		}
 		if v := os.Getenv("TESTGO_TOOLCHAIN_VERSION"); v != "" {
 			work.ToolchainVersion = v
 		}
