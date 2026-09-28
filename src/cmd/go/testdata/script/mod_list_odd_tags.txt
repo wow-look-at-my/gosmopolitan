@@ -1,7 +1,7 @@
 [short] skip
 [!git] skip
 
-env GOPROXY=direct
+env TESTGO_GOPROXY=direct
 
 go list -m vcs-test.golang.org/git/odd-tags.git@latest
 stdout -count=1 '^.'

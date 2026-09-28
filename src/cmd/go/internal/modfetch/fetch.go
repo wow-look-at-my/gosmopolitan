@@ -1430,8 +1430,8 @@ When the go command downloads a module zip file or go.mod file into the
 module cache, it computes a cryptographic hash and compares it with a known
 value to verify the file hasn't changed since it was first downloaded. Known
 hashes are stored in a file in the module root directory named go.sum. Hashes
-may also be downloaded from the checksum database depending on the values of
-GOSUMDB, GOPRIVATE, and GONOSUMDB.
+may also be downloaded from the checksum database at sum.golang.org depending
+on the values of GOPRIVATE and GONOSUMDB.
 
 For details, see https://go.dev/ref/mod#authenticating.
 `,
@@ -1441,10 +1441,10 @@ var HelpPrivate = &base.Command{
 	UsageLine: "private",
 	Short:     "configuration for downloading non-public code",
 	Long: `
-The go command defaults to downloading modules from the public Go module
-mirror at proxy.golang.org. It also defaults to validating downloaded modules,
-regardless of source, against the public Go checksum database at sum.golang.org.
-These defaults work well for publicly available source code.
+The go command downloads modules from the public Go module mirror at
+proxy.golang.org. It validates downloaded modules, regardless of source,
+against the public Go checksum database at sum.golang.org. This toolchain
+has no GOPROXY or GOSUMDB to replace either service.
 
 The GOPRIVATE environment variable controls which modules the go command
 considers to be private (not available publicly) and should therefore not use
@@ -1462,13 +1462,6 @@ For fine-grained control over module download and validation, the GONOPROXY
 and GONOSUMDB environment variables accept the same kind of glob list
 and override GOPRIVATE for the specific decision of whether to use the proxy
 and checksum database, respectively.
-
-For example, if a company ran a module proxy serving private modules,
-users would configure go using:
-
-	GOPRIVATE=*.corp.example.com
-	GOPROXY=proxy.example.com
-	GONOPROXY=none
 
 The GOPRIVATE variable is also used to define the "public" and "private"
 patterns for the GOVCS variable; see 'go help vcs'. For that usage,

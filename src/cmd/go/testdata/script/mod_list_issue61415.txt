@@ -1,7 +1,7 @@
 [short] skip 'generates a vcstest git repo'
 [!git] skip
 
-env GOPROXY=direct
+env TESTGO_GOPROXY=direct
 
 # Control case: fetching a nested module at a tag that exists should
 # emit Origin metadata for that tag and commit, and the origin should

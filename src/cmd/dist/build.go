@@ -1283,7 +1283,6 @@ func cmdenv() {
 	xprintf(format, "GOHOSTARCH", gohostarch)
 	xprintf(format, "GOHOSTOS", gohostos)
 	xprintf(format, "GOOS", goos)
-	xprintf(format, "GOPROXY", os.Getenv("GOPROXY"))
 	xprintf(format, "GOROOT", goroot)
 	xprintf(format, "GOTMPDIR", os.Getenv("GOTMPDIR"))
 	xprintf(format, "GOTOOLDIR", tooldir)
@@ -1531,12 +1530,6 @@ func cmdbootstrap() {
 	// GOPATH points somewhere else (e.g., to GOROOT), the
 	// go tool may complain.
 	os.Setenv("GOPATH", pathf("%s/pkg/obj/gopath", goroot))
-
-	// Set GOPROXY=off to avoid downloading modules to the modcache in
-	// the GOPATH set above to be inside GOROOT. The modcache is read
-	// only so if we downloaded to the modcache, we'd create readonly
-	// files in GOROOT, which is undesirable. See #67463)
-	os.Setenv("GOPROXY", "off")
 
 	// Use a build cache separate from the default user one.
 	// Also one that will be wiped out during startup, so that

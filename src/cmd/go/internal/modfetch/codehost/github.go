@@ -404,9 +404,24 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
 			return nil, err
 		}
+		r.logGitHubRoute("%s archive", strings.TrimPrefix(source.ext, "."))
 		return r.githubRevInfo(ctx, version, hash, when, nil), nil
 	}
-	return nil, errors.Join(errs...)
+	err := errors.Join(errs...)
+	// Which route served a module decides how long the build takes, so the
+	// log says it rather than leaving a reader to infer it from an absent
+	// git directory. A fall back to git is the slow one, and names why.
+	r.logGitHubRoute("git, because no archive served it: %v", err)
+	return nil, err
+}
+
+// logGitHubRoute names the route a fetch took, on the stream that carries
+// "go: downloading".
+func (r *gitRepo) logGitHubRoute(format string, args ...any) {
+	if r.github == nil {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "go: github.com/%s/%s: %s\n", r.github.owner, r.github.name, fmt.Sprintf(format, args...))
 }
 
 // isTagName reports whether rev names a version tag, such as v1.2.3 or

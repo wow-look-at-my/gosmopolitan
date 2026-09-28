@@ -2,7 +2,7 @@
 
 A module download tries each source in this order. The first one that works wins.
 
-1. The module proxy (`GOPROXY`, `https://proxy.golang.org` by default).
+1. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
 2. `https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
 3. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
 4. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
@@ -11,7 +11,7 @@ A module download tries each source in this order. The first one that works wins
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-The archives are used only when the module proxy is skipped or misses. That happens under `GOPRIVATE`, `GONOPROXY`, `GOPROXY=direct`, or a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+The archives are used only when the module proxy is skipped or misses. That happens under `GOPRIVATE` or `GONOPROXY`, or on a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
 ## Which URLs
 
