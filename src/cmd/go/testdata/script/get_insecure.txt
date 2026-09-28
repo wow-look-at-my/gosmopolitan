@@ -10,7 +10,7 @@ env GOPATH=$WORK/m/gp
 mkdir $WORK/m
 cp module_file $WORK/m/go.mod
 cd $WORK/m
-env GOPROXY=${GOPROXY},direct
+env TESTGO_GOPROXY=${TESTGO_GOPROXY},direct
 
 # Modules: Try go get of HTTP-only repo (should fail).
 ! go get -d vcs-test.golang.org/insecure/go/insecure@6fecd21

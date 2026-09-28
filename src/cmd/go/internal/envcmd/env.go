@@ -123,9 +123,7 @@ func MkEnv() []cfg.EnvVar {
 
 		{Name: "GOPATH", Value: cfg.BuildContext.GOPATH, Changed: cfg.GOPATHChanged},
 		{Name: "GOPRIVATE", Value: cfg.GOPRIVATE},
-		{Name: "GOPROXY", Value: cfg.GOPROXY, Changed: cfg.GOPROXYChanged},
 		{Name: "GOROOT", Value: cfg.GOROOT},
-		{Name: "GOSUMDB", Value: cfg.GOSUMDB, Changed: cfg.GOSUMDBChanged},
 		{Name: "GOTELEMETRY", Value: telemetry.Mode()},
 		{Name: "GOTELEMETRYDIR", Value: telemetry.Dir()},
 		{Name: "GOTMPDIR", Value: cfg.Getenv("GOTMPDIR")},
