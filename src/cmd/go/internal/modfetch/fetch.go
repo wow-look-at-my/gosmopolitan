@@ -112,22 +112,24 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 	// To avoid cluttering the cache with extraneous files,
 	// DownloadZip uses the same lockfile as Download.
 	// Invoke DownloadZip before locking the file.
-	zipfile, err := f.DownloadZip(ctx, mod)
+	zipfile, report, err := f.downloadZipReport(ctx, mod)
 	if err != nil {
 		return "", err
 	}
 	if zipfile == "" {
 		// DownloadZip already wrote the source files to dir.
-		return DownloadDir(ctx, mod)
+		dir, err = DownloadDir(ctx, mod)
+		report.finish(err)
+		return dir, err
 	}
 
-	// A module is two zips. The BASE zip is the one above: what the proxy
-	// served, pinned by go.sum. The OVERLAY zip holds the files the module's
-	// own generators add to it, and it is the one the cache server keeps. See
-	// overlay.go.
-	return unzip(ctx, mod, zipfile, func(dir string) error {
+	// A module is zips. The BASE zip is the one above: what the proxy
+	// served, pinned by go.sum.
+	dir, err = unzip(ctx, mod, zipfile, func(dir string) error {
 		return f.completeDir(ctx, mod, dir)
 	})
+	report.finish(err)
+	return dir, err
 }
 
 // unzip extracts zipfile as mod's directory. complete, when given, runs over
@@ -229,18 +231,34 @@ func populateDir(ctx context.Context, mod module.Version, write func(dir string)
 	return dir, nil
 }
 
-var downloadZipCache par.ErrCache[module.Version, string]
+// A zipResult is what DownloadZip found or made, and the report of the fetch
+// that made it.
+type zipResult struct {
+	zipfile string
+	report  *fetchReport
+}
 
-// DownloadZip downloads the specific module version to the
-// local zip cache and returns the name of the zip file.
-// A module read from a GitHub archive has no zip. For it, DownloadZip writes
-// the source files to $GOMODCACHE/<module>@<version> and returns "".
+var downloadZipCache par.ErrCache[module.Version, zipResult]
+
+// DownloadZip downloads the specific module version to the local zip cache
+// and returns the name of the zip file. A module read from a GitHub archive
+// has no zip.
 func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err error) {
+	zipfile, report, err := f.downloadZipReport(ctx, mod)
+	if err == nil {
+		report.finish(nil)
+	}
+	return zipfile, err
+}
+
+// downloadZipReport is DownloadZip. The report it returns prints once the
+// caller has the module's directory. It prints a failure itself.
+func (f *Fetcher) downloadZipReport(ctx context.Context, mod module.Version) (string, *fetchReport, error) {
 	// The par.Cache here avoids duplicate work.
-	return downloadZipCache.Do(mod, func() (string, error) {
+	res, err := downloadZipCache.Do(mod, func() (zipResult, error) {
 		zipfile, err := CachePath(ctx, mod, "zip")
 		if err != nil {
-			return "", err
+			return zipResult{}, err
 		}
 		ziphashfile := zipfile + "hash"
 
@@ -255,33 +273,31 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 				if !HaveSum(f, mod) {
 					f.checkMod(ctx, mod)
 				}
-				return have, nil
+				return zipResult{zipfile: have}, nil
 			}
 		}
 
 		// The zip or ziphash file does not exist. Acquire the lock and create them.
+		var report *fetchReport
 		if cfg.CmdName != "mod download" {
-			vers := mod.Version
-			if mod.Path == "golang.org/toolchain" {
-				// Shorten v0.0.1-go1.13.1.darwin-amd64 to go1.13.1.darwin-amd64
-				_, vers, _ = strings.Cut(vers, "-")
-				if i := strings.LastIndex(vers, "."); i >= 0 {
-					goos, goarch, _ := strings.Cut(vers[i+1:], "-")
-					vers = vers[:i] + " (" + goos + "/" + goarch + ")"
-				}
-				fmt.Fprintf(os.Stderr, "go: downloading %s\n", vers)
-			} else {
-				fmt.Fprintf(os.Stderr, "go: downloading %s %s\n", mod.Path, vers)
-			}
+			report = newFetchReport(mod)
+			ctx = codehost.WithFetch(ctx, report.rec)
 		}
 		unlock, err := lockVersion(ctx, mod)
 		if err != nil {
-			return "", err
+			report.finish(err)
+			return zipResult{}, err
 		}
 		defer unlock()
 
-		return f.downloadZip(ctx, mod, zipfile)
+		zipfile, err = f.downloadZip(ctx, mod, zipfile)
+		if err != nil {
+			report.finish(err)
+			return zipResult{}, err
+		}
+		return zipResult{zipfile: zipfile, report: report}, nil
 	})
+	return res.zipfile, res.report, err
 }
 
 // downloadZip returns zipfile. For a module read from a GitHub archive, it
@@ -348,10 +364,12 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	fromFiles := false
 	var zipRepo Repo
 	var unrecoverableErr error
+	var servedBy string
 	err = TryProxies(func(proxy string) error {
 		if unrecoverableErr != nil {
 			return unrecoverableErr
 		}
+		servedBy = proxy
 		repo := f.Lookup(ctx, proxy, mod.Path)
 		if direct, ok := repo.(filesRepo); ok {
 			got, gotCommit, err := direct.Files(ctx, mod.Version)
@@ -388,6 +406,11 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	})
 	if err != nil {
 		return "", err
+	}
+	// A source with no finer name for itself is named by its GOPROXY entry.
+	rec := codehost.FetchFrom(ctx)
+	if route, _, _, _ := rec.Stats(); route == "" {
+		rec.SetRoute(servedBy)
 	}
 	if fromFiles {
 		if file != nil {

@@ -195,6 +195,10 @@ type gitRepo struct {
 	githubMu    sync.Mutex
 	githubFiles map[string][]archiveEntry
 
+	// fetched holds, by commit, how this process fetched each commit.
+	fetchMu sync.Mutex
+	fetched map[string]*keptFetch
+
 	gitDirOnce sync.Once
 	gitDirErr  error
 
@@ -492,6 +496,30 @@ const minHashDigits = 7
 // stat stats the given rev in the local repository,
 // or else it fetches more info from the remote repository and tries again.
 func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err error) {
+	// rec is how this stat fetched rev. The download of the module claims it later, by commit.
+	rec := new(Fetch)
+	var gitStart time.Time
+	var gitBefore int64
+	startGit := func() {
+		if gitStart.IsZero() {
+			gitStart = time.Now()
+			gitBefore = r.objectBytes()
+		}
+		if route, _, _, _ := rec.Stats(); route == "" {
+			rec.SetRoute("git")
+		}
+	}
+	defer func() {
+		if !gitStart.IsZero() {
+			rec.AddTransfer(gitStart, r.objectBytes()-gitBefore, time.Since(gitStart))
+		}
+		if err == nil && info != nil {
+			if route, _, _, _ := rec.Stats(); route != "" {
+				r.keepFetch(info.Name, rec)
+			}
+		}
+	}()
+
 	// Fast path: maybe rev is a hash we already have locally.
 	didStatLocal := false
 	// A github.com repository that git never ran for has nothing local to
@@ -526,7 +554,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 		if err != nil {
 			return nil, err
 		}
-		info, err := r.statGitHubTag(ctx, rev)
+		info, err := r.statGitHubTag(ctx, rev, rec)
 		unlock()
 		if err == nil {
 			return info, nil
@@ -636,7 +664,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	if r.fetchLevel <= fetchSome && ref != "" && hash != "" {
 		if triedTagArchive {
 			// The archives of this tag already failed.
-		} else if info, err := r.statGitHub(ctx, rev, ref, hash); err == nil {
+		} else if info, err := r.statGitHub(ctx, rev, ref, hash, rec); err == nil {
 			if ref == "HEAD" {
 				// The git fetch below records no Ref for HEAD. Match it.
 				ref = hash
@@ -661,6 +689,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 			refspec = ref + ":" + ref
 		}
 
+		startGit()
 		release, err := base.AcquireNet()
 		if err != nil {
 			return nil, err
@@ -682,6 +711,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 
 	// Last resort.
 	// Fetch all heads and tags and hope the hash we want is in the history.
+	startGit()
 	if err := r.fetchRefsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -1033,6 +1063,7 @@ func (r *gitRepo) ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFi
 	if err != nil {
 		return nil, errors.ErrUnsupported
 	}
+	r.claimFetch(ctx, info.Name, r.keptArchiveRoute(info.Name))
 	return subdirFiles(entries, subdir)
 }
 
@@ -1050,6 +1081,7 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 		// A commit from an archive is never turned into a zip. Use ReadFiles.
 		return nil, errors.ErrUnsupported
 	}
+	r.claimFetch(ctx, info.Name, "git")
 
 	unlock, err := r.mu.Lock()
 	if err != nil {

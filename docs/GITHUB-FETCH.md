@@ -56,3 +56,11 @@ The module's files go from the parsed archive straight into `$GOMODCACHE/<module
 The sum is `git:<commit>`, for the module and for its go.mod. GitHub is trusted to serve that commit, so nothing hashes the files and the checksum database is not asked. The git fallback records the same sum. A go.sum that already has an `h1:` line gets the `h1:` sum computed and checked. The sum goes into `.ziphash`. A cached go.mod keeps its commit in `<version>.commit`.
 
 `go get -x` prints each archive and API request, and why a source failed.
+
+Each fetched module gets one line when it is complete, for every route:
+
+```
+go: downloading github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99: tar.gz archive, 1.2 MB in 0.40s (3.0 MB/s), 0.62s total
+```
+
+The route is the module proxy, a `tar.gz` or `zip` archive (direct or `via proxy.pazer.ai`), or `git` with the reason every archive failed. The size is the bytes of every attempt that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing. The code is `cmd/go/internal/modfetch/fetchlog.go`.
