@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"cmd/go/internal/cfg"
 	"cmd/go/internal/modfetch/codehost"
 	"cmd/go/internal/web"
 	"cmd/go/internal/web/intercept"
@@ -209,6 +210,18 @@ func TestFetchReportThroughProxy(t *testing.T) {
 	}
 }
 
+// useModCache gives the test its own writable module cache, so t.TempDir can
+// remove what the download extracts.
+func useModCache(t *testing.T) {
+	previousDir, previousRW := cfg.GOMODCACHE, cfg.ModCacheRW
+	cfg.GOMODCACHE = filepath.Join(t.TempDir(), "modcache")
+	cfg.ModCacheRW = true
+	t.Cleanup(func() { cfg.GOMODCACHE, cfg.ModCacheRW = previousDir, previousRW })
+	if err := os.Mkdir(cfg.GOMODCACHE, 0o777); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // fakeArchiveHost serves a git repository as github.com serves
 // github.com/owner/repo: its ref advertisement and its archives.
 type fakeArchiveHost struct {
@@ -245,6 +258,7 @@ func (host fakeArchiveHost) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 func TestDownloadReportsOneLine(t *testing.T) {
 	testenv.MustHaveExecPath(t, "git")
 	buf := captureFetchLog(t)
+	useModCache(t)
 
 	source := t.TempDir()
 	runGit := func(args ...string) {
