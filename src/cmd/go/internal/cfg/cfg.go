@@ -360,9 +360,11 @@ func EnvFile() (string, bool, error) {
 
 // RemovedEnv names the configuration keys this toolchain refuses to honor.
 // GOBIN sent installed binaries somewhere other than the toolchain's own bin
-// directory. GOTOOLCHAIN handed the build to a different go command.
+// directory. GOTOOLCHAIN handed the build to a different go command. GOPROXY
+// and GOSUMDB replaced the module mirror and the checksum database. The go
+// command now always uses DefaultGOPROXY and DefaultGOSUMDB.
 //
-// The go command reads neither. Getenv answers "" for both, KnownEnv omits
+// The go command reads none of them. Getenv answers "" for each, KnownEnv omits
 // them so 'go env -w' rejects them like any other name it does not know, and
 // initEnvCache drops them from the go/env file.
 //
@@ -370,7 +372,14 @@ func EnvFile() (string, bool, error) {
 // must reach a program the same way an unknown name does, because a build
 // tool has no business editing what the program under `go run` or `go test`
 // sees.
-var RemovedEnv = []string{"GOBIN", "GOTOOLCHAIN"}
+var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
+
+// DefaultGOPROXY and DefaultGOSUMDB are the module mirror and the checksum
+// database. They are the values upstream's go.env sets.
+const (
+	DefaultGOPROXY = "https://proxy.golang.org,direct"
+	DefaultGOSUMDB = "sum.golang.org"
+)
 
 func initEnvCache() {
 	envCache.m = make(map[string]string)
@@ -509,8 +518,9 @@ var (
 	GOWASI, goWASIChanged       = EnvOrAndChanged("GOWASI", fmt.Sprint(buildcfg.GOWASI))
 
 	GOFIPS140, GOFIPS140Changed = EnvOrAndChanged("GOFIPS140", buildcfg.DefaultGOFIPS140)
-	GOPROXY, GOPROXYChanged     = EnvOrAndChanged("GOPROXY", "")
-	GOSUMDB, GOSUMDBChanged     = EnvOrAndChanged("GOSUMDB", "")
+	// Only the cmd/go test binary assigns these. See RemovedEnv.
+	GOPROXY                     = DefaultGOPROXY
+	GOSUMDB                     = DefaultGOSUMDB
 	GOPRIVATE                   = Getenv("GOPRIVATE")
 	GONOPROXY, GONOPROXYChanged = EnvOrAndChanged("GONOPROXY", GOPRIVATE)
 	GONOSUMDB, GONOSUMDBChanged = EnvOrAndChanged("GONOSUMDB", GOPRIVATE)

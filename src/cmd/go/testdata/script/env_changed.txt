@@ -4,8 +4,7 @@
 [GOEXPERIMENT:boringcrypto] skip
 
 env GOROOT=./a
-env GOSUMDB=nodefault
-env GOPROXY=nodefault
+env GONOSUMDB=nodefault
 env GO111MODULE=auto
 env CGO_CFLAGS=nodefault
 env CGO_CPPFLAGS=nodefault
@@ -14,10 +13,9 @@ env GOFIPS140=latest
 env GCCGO=nodefault
 
 go env -changed
-# linux output like GOSUMDB='nodefault'
-# windows output like GOSUMDB=nodefault
-stdout 'GOSUMDB=''?nodefault''?'
-stdout 'GOPROXY=''?nodefault''?'
+# linux output like GONOSUMDB='nodefault'
+# windows output like GONOSUMDB=nodefault
+stdout 'GONOSUMDB=''?nodefault''?'
 stdout 'GO111MODULE=''?auto''?'
 stdout 'CGO_CFLAGS=''?nodefault''?'
 stdout 'CGO_CPPFLAGS=''?nodefault''?'
@@ -26,8 +24,7 @@ stdout 'GOFIPS140=''?latest''?'
 stdout 'GCCGO=''?nodefault''?'
 
 go env -changed -json
-stdout '"GOSUMDB": "nodefault"'
-stdout '"GOPROXY": "nodefault"'
+stdout '"GONOSUMDB": "nodefault"'
 stdout '"GO111MODULE": "auto"'
 stdout '"CGO_CFLAGS": "nodefault"'
 stdout '"CGO_CPPFLAGS": "nodefault"'
@@ -59,12 +56,12 @@ env GOAMD64=v3
 go env -changed
 stdout 'GOAMD64=''?v3''?'
 
-env GOPROXY=s
-go env -changed GOPROXY
-! stdout 'GOPROXY'
-env GOPROXY=s2
-go env -changed GOPROXY
-stdout 'GOPROXY=''?s2''?'
+env GONOSUMDB=s
+go env -changed GONOSUMDB
+! stdout 'GONOSUMDB'
+env GONOSUMDB=s2
+go env -changed GONOSUMDB
+stdout 'GONOSUMDB=''?s2''?'
 
 # A value that matches the one in GOROOT/go.env is not a change.
 env GOROOT=./b
@@ -77,7 +74,7 @@ go env -changed
 [GOOS:windows] ! stdout 'GOCACHE'
 
 --  a/go.env --
-GOPROXY=s
+GONOSUMDB=s
 GOAMD64=v1
 GOFIPS140=off
 

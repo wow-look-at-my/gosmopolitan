@@ -429,6 +429,8 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 		return p.versionError(version, err)
 	}
 	path := "@v/" + encVer + ".zip"
+	rec := codehost.FetchFrom(ctx)
+	start := time.Now()
 	body, redactedURL, err := p.getBody(ctx, path)
 	if err != nil {
 		return p.versionError(version, err)
@@ -436,7 +438,9 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 	defer body.Close()
 
 	lr := &io.LimitedReader{R: body, N: codehost.MaxZipFile + 1}
-	if _, err := io.Copy(dst, lr); err != nil {
+	copied, err := io.Copy(dst, lr)
+	rec.AddTransfer(start, copied, time.Since(start))
+	if err != nil {
 		// net/http doesn't add context to Body read errors, so add it here.
 		// (See https://go.dev/issue/52727.)
 		err = &url.Error{Op: "read", URL: redactedURL, Err: err}
@@ -445,6 +449,7 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 	if lr.N <= 0 {
 		return p.versionError(version, fmt.Errorf("downloaded zip file too large"))
 	}
+	rec.SetRoute("module proxy " + p.redactedBase)
 	return nil
 }
 
