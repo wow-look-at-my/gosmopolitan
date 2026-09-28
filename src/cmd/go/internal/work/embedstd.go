@@ -6,8 +6,10 @@ package work
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
@@ -52,13 +54,49 @@ func (builder *Builder) embeddedStdAction(act *Action, p *load.Package) *Action 
 	return act
 }
 
+// buildIDActionBytes decodes the ACTION field of a build id -- the part
+// before the slash -- which cmd/go writes as the leading bytes of the action
+// id that produced the object, base64.RawURLEncoding'd. It answers nil when
+// the build id carries no decodable action.
+func buildIDActionBytes(buildID string) []byte {
+	action, _, ok := strings.Cut(buildID, "/")
+	if !ok {
+		return nil
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(action)
+	if err != nil {
+		return nil
+	}
+	return raw
+}
+
+// embeddedStdKey answers the cache key for an embedded std archive, with the
+// archive's OWN action bytes at the front.
+//
+// A shared cache certifies an entry by checking the object's build id against
+// the key it arrived under, so a key that is a plain content hash can never
+// match an archive compiled in another build, and every embedded std package
+// is refused on write and scored corrupt on read. Leading with the archive's
+// action makes that check pass for the same reason it passes for a compile
+// output: the key names the action the object came from. The rest of the key
+// stays the content hash, so two archives never share one.
+func embeddedStdKey(content [cache.HashSize]byte, buildID string) [cache.HashSize]byte {
+	action := buildIDActionBytes(buildID)
+	if len(action) == 0 || len(action) >= cache.HashSize {
+		return content
+	}
+	key := content
+	copy(key[:len(action)], action)
+	return key
+}
+
 // embeddedStdFile answers a file holding the embedded archive of a
 // standard package, written into the build cache the first time a process
 // that cannot read this binary asks for it.
 func embeddedStdFile(importPath string, pkg *embedded.Package) string {
 	hash := cache.NewHash("embedded std archive")
 	fmt.Fprintf(hash, "%s %s %s\n", cfg.StdTarget(), importPath, pkg.BuildID)
-	key := hash.Sum()
+	key := embeddedStdKey(hash.Sum(), pkg.BuildID)
 	store := cache.Default()
 	if file, _, err := cache.GetFile(store, key); err == nil {
 		return file
