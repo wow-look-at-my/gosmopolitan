@@ -195,7 +195,8 @@ type lookupCacheKey struct {
 //
 // The distinguished proxy "direct" indicates that the path should be fetched
 // from its origin, and "noproxy" indicates that the patch should be fetched
-// directly only if GONOPROXY matches the given path.
+// directly only if GONOPROXY matches the given path. "github" fetches a
+// github.com path from its origin and refuses every other path.
 //
 // For the distinguished proxy "off", Lookup always returns a Repo that returns
 // a non-nil error for every method call.
@@ -270,6 +271,11 @@ func lookup(fetcher_ *Fetcher, ctx context.Context, proxy, path string) (r Repo,
 	}
 
 	switch proxy {
+	case "github":
+		if !strings.HasPrefix(path, "github.com/") {
+			return nil, errNotGitHub
+		}
+		return lookupDirect(ctx, path)
 	case "off":
 		return errRepo{path, errProxyOff}, nil
 	case "direct":
@@ -296,6 +302,7 @@ var (
 	errProxyOff       = notExistErrorf("module lookup disabled by GOPROXY=off")
 	errNoproxy  error = notExistErrorf("disabled by GOPRIVATE/GONOPROXY")
 	errUseProxy error = notExistErrorf("path does not match GOPRIVATE/GONOPROXY")
+	errNotGitHub error = notExistErrorf("path is not on github.com")
 )
 
 func lookupDirect(ctx context.Context, path string) (Repo, error) {
