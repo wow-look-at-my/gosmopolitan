@@ -373,6 +373,14 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		repo := f.Lookup(ctx, proxy, mod.Path)
 		if direct, ok := repo.(filesRepo); ok {
 			got, gotCommit, err := direct.Files(ctx, mod.Version)
+			if err == nil && proxy == "github" {
+				// A proxy can still serve the h1 sum go.sum records.
+				if err = f.checkRecordedH1(mod, got); err != nil {
+					rec := codehost.FetchFrom(ctx)
+					rec.SetRoute("")
+					rec.AddFailure("github.com archive", err)
+				}
+			}
 			if !errors.Is(err, errors.ErrUnsupported) {
 				files, commit, fromFiles = got, gotCommit, err == nil
 				return err
@@ -1250,6 +1258,33 @@ func (f *Fetcher) recordsH1(mod module.Version) bool {
 		}
 	}
 	return false
+}
+
+// checkRecordedH1 fails when go.sum records an h1 sum for mod that files do
+// not hash to. It does not stop the build, as haveModSumLocked does.
+func (f *Fetcher) checkRecordedH1(mod module.Version, files []modzip.File) error {
+	if !f.recordsH1(mod) {
+		return nil
+	}
+	valid, err := checkModuleFiles(mod, files)
+	if err != nil {
+		return err
+	}
+	hash, err := moduleFilesSum(mod, valid)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.Contains(f.sumState.m[mod], hash) {
+		return nil
+	}
+	for _, goSums := range f.sumState.w {
+		if slices.Contains(goSums[mod], hash) {
+			return nil
+		}
+	}
+	return fmt.Errorf("h1 sum %s is not the one go.sum records", hash)
 }
 
 var ErrGoSumDirty = errors.New("updates to go.sum needed, disabled by -mod=readonly")

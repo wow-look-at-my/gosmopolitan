@@ -33,7 +33,7 @@ jobs:
       fail-fast: true
       matrix:
         build-os: [macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-09-28
+        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-10-13
         exclude:
           - build-os: windows-latest
 
@@ -114,9 +114,9 @@ jobs:
       # Every leg runs to the end and reports. One host's red says nothing about the other five, and a suite exists to name everything that is broken at once.
       fail-fast: false
       matrix:
-        # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-09-28
+        # NT is off: it is the longest leg by far. Put windows-latest back to run it again. waiver-expires: 2026-10-13
         suite-os: [ubuntu-latest, macos-latest]
-        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
         exclude:
           - suite-os: windows-latest
 
@@ -462,7 +462,7 @@ jobs:
       fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-09-28
+        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
         exclude:
           - test-os: windows-latest
 
@@ -563,7 +563,7 @@ jobs:
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-28
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
     timeout-minutes: 45
     needs: build-linux
@@ -617,7 +617,7 @@ jobs:
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
-    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-09-28
+    # Off while the wasip1 suite recompiles its modules and starves the queue; flip the condition back to re-enable. waiver-expires: 2026-10-13
     if: ${{ false }}
     timeout-minutes: 120
     needs: build-linux
@@ -777,7 +777,7 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
-          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-09-28
+          # NT is off, so a release carries no windows archive. Put the entry back to ship one. waiver-expires: 2026-10-13
     permissions:
       id-token: write
       contents: read
