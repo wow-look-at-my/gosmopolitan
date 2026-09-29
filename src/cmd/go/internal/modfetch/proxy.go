@@ -14,6 +14,7 @@ import (
 	"net/url"
 	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,11 @@ type proxySpec struct {
 
 func proxyList() ([]proxySpec, error) {
 	proxyOnce.Do(func() {
+		// A github.com module comes from its GitHub archive before the module
+		// mirror. Any failure there moves on to the mirror.
+		if cfg.GOPROXY == cfg.DefaultGOPROXY {
+			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "github", fallBackOnError: true})
+		}
 		if cfg.GONOPROXY != "" && cfg.GOPROXY != "direct" {
 			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "noproxy"})
 		}
@@ -114,11 +120,11 @@ func proxyList() ([]proxySpec, error) {
 			})
 		}
 
-		if len(proxyOnce.list) == 0 ||
-			len(proxyOnce.list) == 1 && proxyOnce.list[0].url == "noproxy" {
-			// There were no proxies, other than the implicit "noproxy" added when
-			// GONOPROXY is set. This can happen if GOPROXY is a non-empty string
-			// like "," or " ".
+		configured := slices.ContainsFunc(proxyOnce.list, func(spec proxySpec) bool {
+			return spec.url != "github" && spec.url != "noproxy"
+		})
+		if !configured {
+			// There were no proxies, other than the implicit "github" and "noproxy" entries.
 			proxyOnce.err = fmt.Errorf("GOPROXY list is not the empty string, but contains no entries")
 		}
 	})
@@ -159,14 +165,21 @@ func TryProxies(f func(proxy string) error) error {
 	)
 	var bestErr error
 	bestErrRank := notExistRank
+	triedGitHub := false
 	for _, proxy := range proxies {
+		if proxy.url == "direct" && triedGitHub {
+			// The "github" entry already fetched this module directly.
+			continue
+		}
 		err := f(proxy.url)
 		if err == nil {
 			return nil
 		}
 		isNotExistErr := errors.Is(err, fs.ErrNotExist)
+		fromGitHub := proxy.url == "github" && err != errNotGitHub && err != errNoproxy
+		triedGitHub = triedGitHub || fromGitHub
 
-		if proxy.url == "direct" || (proxy.url == "noproxy" && err != errUseProxy) {
+		if proxy.url == "direct" || fromGitHub || (proxy.url == "noproxy" && err != errUseProxy) {
 			bestErr = err
 			bestErrRank = directRank
 		} else if bestErrRank <= proxyRank && !isNotExistErr {
