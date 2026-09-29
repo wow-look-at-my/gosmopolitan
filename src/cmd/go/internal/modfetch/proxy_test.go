@@ -6,14 +6,34 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
+
+	"cmd/go/internal/cfg"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/mod/module"
 	modzip "golang.org/x/mod/zip"
 )
+
+// useProxies makes proxyList parse goproxy, with no GONOPROXY, for the rest of t.
+// It edits package state, so t runs alone.
+func useProxies(t *testing.T, goproxy string) {
+	t.Serial()
+	oldProxy, oldNoProxy := cfg.GOPROXY, cfg.GONOPROXY
+	reset := func() {
+		proxyOnce.Once = sync.Once{}
+		proxyOnce.list, proxyOnce.err = nil, nil
+	}
+	cfg.GOPROXY, cfg.GONOPROXY = goproxy, ""
+	reset()
+	t.Cleanup(func() {
+		cfg.GOPROXY, cfg.GONOPROXY = oldProxy, oldNoProxy
+		reset()
+	})
+}
 
 // tryOrder answers the entries TryProxies hands to a function that fails each
 // with fail(entry).
@@ -28,44 +48,29 @@ func tryOrder(t *testing.T, fail func(string) error) []string {
 }
 
 func TestTryProxiesGitHubFirst(t *testing.T) {
+	useProxies(t, cfg.DefaultGOPROXY)
 	outage := errors.New("github.com: connection reset")
-	order := tryOrder(t, func(proxy string) error {
-		switch proxy {
-		case "github":
+	fail := func(proxy string) error {
+		if proxy == "github" {
 			return outage
-		case "noproxy":
-			return errUseProxy
 		}
 		return notExistErrorf("404 Not Found")
-	})
-	require.NotEmpty(t, order)
-	assert.Equal(t, "github", order[0], "the archive route must come before every proxy")
-	assert.Contains(t, order, "https://proxy.golang.org", "a failed archive route must fall back to the proxy")
-	assert.NotContains(t, order, "direct", "direct must not fetch a module the github entry already tried")
-
-	err := TryProxies(func(proxy string) error {
-		switch proxy {
-		case "github":
-			return outage
-		case "noproxy":
-			return errUseProxy
-		}
-		return notExistErrorf("404 Not Found")
-	})
-	assert.ErrorIs(t, err, outage, "the direct error from github.com must outrank a proxy 404")
+	}
+	assert.Equal(t, []string{"github", "https://proxy.golang.org"}, tryOrder(t, fail),
+		"the archive route must come first, fall back to the proxy, and not run a second time as direct")
+	assert.ErrorIs(t, TryProxies(fail), outage, "the error from github.com must outrank a proxy 404")
 }
 
 func TestTryProxiesNotGitHubReachesDirect(t *testing.T) {
+	useProxies(t, cfg.DefaultGOPROXY)
 	order := tryOrder(t, func(proxy string) error {
-		switch proxy {
-		case "github":
+		if proxy == "github" {
 			return errNotGitHub
-		case "noproxy":
-			return errUseProxy
 		}
 		return notExistErrorf("404 Not Found")
 	})
-	assert.Equal(t, "direct", order[len(order)-1], "a path off github.com must still reach direct")
+	assert.Equal(t, []string{"github", "https://proxy.golang.org", "direct"}, order,
+		"a path off github.com must still reach direct")
 }
 
 func TestLookupGitHubRefusesOtherHosts(t *testing.T) {
