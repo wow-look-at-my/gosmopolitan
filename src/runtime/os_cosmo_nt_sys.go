@@ -92,6 +92,8 @@ const (
 	ntSysFchdir     = 81
 	ntSysFchmod     = 91
 	ntSysUmask      = 95
+	ntSysGettimeofday = 96
+	ntSysGetrusage  = 98
 	ntSysGetuid     = 102
 	ntSysGetgid     = 104
 	ntSysGeteuid    = 107
@@ -417,6 +419,10 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuSendfile(int32(a1), int32(a2), (*int64)(unsafe.Pointer(a3)), a4)
 	case ntSysWait4:
 		return ntEmuWait4(int32(a1), (*int32)(unsafe.Pointer(a2)), int32(a3), (*ntLinuxRusage)(unsafe.Pointer(a4)))
+	case ntSysGetrusage:
+		return ntEmuGetrusage(int32(a1), (*ntLinuxRusage)(unsafe.Pointer(a2)))
+	case ntSysGettimeofday:
+		return ntEmuGettimeofday((*ntLinuxTimeval)(unsafe.Pointer(a1)))
 
 	case ntSysSocket:
 		return ntEmuSocket(int32(a1), int32(a2), int32(a3))

@@ -603,14 +603,8 @@ General-purpose environment variables:
 		of module path prefixes that should always be fetched directly
 		or that should not be compared against the checksum database.
 		See https://go.dev/ref/mod#private-modules.
-	GOPROXY
-		URL of Go module proxy. See https://go.dev/ref/mod#environment-variables
-		and https://go.dev/ref/mod#module-proxy for details.
 	GOROOT
 		The root of the go tree.
-	GOSUMDB
-		The name of checksum database to use and optionally its public key and
-		URL. See https://go.dev/ref/mod#authenticating.
 	GOTMPDIR
 		Temporary directory used by the go command and testing package.
 		Overrides the platform-specific temporary directory such as "/tmp".

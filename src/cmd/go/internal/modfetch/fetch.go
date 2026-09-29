@@ -112,22 +112,24 @@ func (f *Fetcher) download(ctx context.Context, mod module.Version) (dir string,
 	// To avoid cluttering the cache with extraneous files,
 	// DownloadZip uses the same lockfile as Download.
 	// Invoke DownloadZip before locking the file.
-	zipfile, err := f.DownloadZip(ctx, mod)
+	zipfile, report, err := f.downloadZipReport(ctx, mod)
 	if err != nil {
 		return "", err
 	}
 	if zipfile == "" {
 		// DownloadZip already wrote the source files to dir.
-		return DownloadDir(ctx, mod)
+		dir, err = DownloadDir(ctx, mod)
+		report.finish(err)
+		return dir, err
 	}
 
-	// A module is two zips. The BASE zip is the one above: what the proxy
-	// served, pinned by go.sum. The OVERLAY zip holds the files the module's
-	// own generators add to it, and it is the one the cache server keeps. See
-	// overlay.go.
-	return unzip(ctx, mod, zipfile, func(dir string) error {
+	// The BASE zip above is pinned by go.sum. An OVERLAY zip, which
+	// overlay.go keeps, holds what the module's generators add.
+	dir, err = unzip(ctx, mod, zipfile, func(dir string) error {
 		return f.completeDir(ctx, mod, dir)
 	})
+	report.finish(err)
+	return dir, err
 }
 
 // unzip extracts zipfile as mod's directory. complete, when given, runs over
@@ -229,18 +231,34 @@ func populateDir(ctx context.Context, mod module.Version, write func(dir string)
 	return dir, nil
 }
 
-var downloadZipCache par.ErrCache[module.Version, string]
+// A zipResult is what DownloadZip found or made, and the report of the fetch
+// that made it.
+type zipResult struct {
+	zipfile string
+	report  *fetchReport
+}
 
-// DownloadZip downloads the specific module version to the
-// local zip cache and returns the name of the zip file.
-// A module read from a GitHub archive has no zip. For it, DownloadZip writes
-// the source files to $GOMODCACHE/<module>@<version> and returns "".
+var downloadZipCache par.ErrCache[module.Version, zipResult]
+
+// DownloadZip downloads the specific module version to the local zip cache
+// and returns the name of the zip file. For a module read from a GitHub
+// archive, it writes the files to $GOMODCACHE/<module>@<version> and returns "".
 func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile string, err error) {
+	zipfile, report, err := f.downloadZipReport(ctx, mod)
+	if err == nil {
+		report.finish(nil)
+	}
+	return zipfile, err
+}
+
+// downloadZipReport is DownloadZip. The report it returns prints once the
+// caller has the module's directory. It prints a failure itself.
+func (f *Fetcher) downloadZipReport(ctx context.Context, mod module.Version) (string, *fetchReport, error) {
 	// The par.Cache here avoids duplicate work.
-	return downloadZipCache.Do(mod, func() (string, error) {
+	res, err := downloadZipCache.Do(mod, func() (zipResult, error) {
 		zipfile, err := CachePath(ctx, mod, "zip")
 		if err != nil {
-			return "", err
+			return zipResult{}, err
 		}
 		ziphashfile := zipfile + "hash"
 
@@ -255,33 +273,31 @@ func (f *Fetcher) DownloadZip(ctx context.Context, mod module.Version) (zipfile 
 				if !HaveSum(f, mod) {
 					f.checkMod(ctx, mod)
 				}
-				return have, nil
+				return zipResult{zipfile: have}, nil
 			}
 		}
 
 		// The zip or ziphash file does not exist. Acquire the lock and create them.
+		var report *fetchReport
 		if cfg.CmdName != "mod download" {
-			vers := mod.Version
-			if mod.Path == "golang.org/toolchain" {
-				// Shorten v0.0.1-go1.13.1.darwin-amd64 to go1.13.1.darwin-amd64
-				_, vers, _ = strings.Cut(vers, "-")
-				if i := strings.LastIndex(vers, "."); i >= 0 {
-					goos, goarch, _ := strings.Cut(vers[i+1:], "-")
-					vers = vers[:i] + " (" + goos + "/" + goarch + ")"
-				}
-				fmt.Fprintf(os.Stderr, "go: downloading %s\n", vers)
-			} else {
-				fmt.Fprintf(os.Stderr, "go: downloading %s %s\n", mod.Path, vers)
-			}
+			report = newFetchReport(mod)
+			ctx = codehost.WithFetch(ctx, report.rec)
 		}
 		unlock, err := lockVersion(ctx, mod)
 		if err != nil {
-			return "", err
+			report.finish(err)
+			return zipResult{}, err
 		}
 		defer unlock()
 
-		return f.downloadZip(ctx, mod, zipfile)
+		zipfile, err = f.downloadZip(ctx, mod, zipfile)
+		if err != nil {
+			report.finish(err)
+			return zipResult{}, err
+		}
+		return zipResult{zipfile: zipfile, report: report}, nil
 	})
+	return res.zipfile, res.report, err
 }
 
 // downloadZip returns zipfile. For a module read from a GitHub archive, it
@@ -348,13 +364,23 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	fromFiles := false
 	var zipRepo Repo
 	var unrecoverableErr error
+	var servedBy string
 	err = TryProxies(func(proxy string) error {
 		if unrecoverableErr != nil {
 			return unrecoverableErr
 		}
+		servedBy = proxy
 		repo := f.Lookup(ctx, proxy, mod.Path)
 		if direct, ok := repo.(filesRepo); ok {
 			got, gotCommit, err := direct.Files(ctx, mod.Version)
+			if err == nil && proxy == "github" {
+				// A proxy can still serve the h1 sum go.sum records.
+				if err = f.checkRecordedH1(mod, got); err != nil {
+					rec := codehost.FetchFrom(ctx)
+					rec.SetRoute("")
+					rec.AddFailure("github.com archive", err)
+				}
+			}
 			if !errors.Is(err, errors.ErrUnsupported) {
 				files, commit, fromFiles = got, gotCommit, err == nil
 				return err
@@ -371,6 +397,9 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 		}
 		err := repo.Zip(ctx, file, mod.Version)
 		if err != nil {
+			if name, isProxy := proxyName(proxy); isProxy {
+				codehost.FetchFrom(ctx).AddFailure(name, err)
+			}
 			// Zip may have partially written to f before failing.
 			// (Perhaps the server crashed while sending the file?)
 			// Since we allow fallback on error in some cases, we need to fix up the
@@ -388,6 +417,11 @@ func (f *Fetcher) downloadZip(ctx context.Context, mod module.Version, zipfile s
 	})
 	if err != nil {
 		return "", err
+	}
+	// A source with no finer name for itself is named by its GOPROXY entry.
+	rec := codehost.FetchFrom(ctx)
+	if route, _, _, _ := rec.Stats(); route == "" {
+		rec.SetRoute(servedBy)
 	}
 	if fromFiles {
 		if file != nil {
@@ -1226,6 +1260,33 @@ func (f *Fetcher) recordsH1(mod module.Version) bool {
 	return false
 }
 
+// checkRecordedH1 fails when go.sum records an h1 sum for mod that files do
+// not hash to. It does not stop the build, as haveModSumLocked does.
+func (f *Fetcher) checkRecordedH1(mod module.Version, files []modzip.File) error {
+	if !f.recordsH1(mod) {
+		return nil
+	}
+	valid, err := checkModuleFiles(mod, files)
+	if err != nil {
+		return err
+	}
+	hash, err := moduleFilesSum(mod, valid)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if slices.Contains(f.sumState.m[mod], hash) {
+		return nil
+	}
+	for _, goSums := range f.sumState.w {
+		if slices.Contains(goSums[mod], hash) {
+			return nil
+		}
+	}
+	return fmt.Errorf("h1 sum %s is not the one go.sum records", hash)
+}
+
 var ErrGoSumDirty = errors.New("updates to go.sum needed, disabled by -mod=readonly")
 
 // WriteGoSum writes the go.sum file if it needs to be updated.
@@ -1430,8 +1491,8 @@ When the go command downloads a module zip file or go.mod file into the
 module cache, it computes a cryptographic hash and compares it with a known
 value to verify the file hasn't changed since it was first downloaded. Known
 hashes are stored in a file in the module root directory named go.sum. Hashes
-may also be downloaded from the checksum database depending on the values of
-GOSUMDB, GOPRIVATE, and GONOSUMDB.
+may also be downloaded from the checksum database at sum.golang.org depending
+on the values of GOPRIVATE and GONOSUMDB.
 
 For details, see https://go.dev/ref/mod#authenticating.
 `,
@@ -1441,10 +1502,10 @@ var HelpPrivate = &base.Command{
 	UsageLine: "private",
 	Short:     "configuration for downloading non-public code",
 	Long: `
-The go command defaults to downloading modules from the public Go module
-mirror at proxy.golang.org. It also defaults to validating downloaded modules,
-regardless of source, against the public Go checksum database at sum.golang.org.
-These defaults work well for publicly available source code.
+The go command downloads modules from the public Go module mirror at
+proxy.golang.org. It validates downloaded modules, regardless of source,
+against the public Go checksum database at sum.golang.org. This toolchain
+has no GOPROXY or GOSUMDB to replace either service.
 
 The GOPRIVATE environment variable controls which modules the go command
 considers to be private (not available publicly) and should therefore not use
@@ -1462,13 +1523,6 @@ For fine-grained control over module download and validation, the GONOPROXY
 and GONOSUMDB environment variables accept the same kind of glob list
 and override GOPRIVATE for the specific decision of whether to use the proxy
 and checksum database, respectively.
-
-For example, if a company ran a module proxy serving private modules,
-users would configure go using:
-
-	GOPRIVATE=*.corp.example.com
-	GOPROXY=proxy.example.com
-	GONOPROXY=none
 
 The GOPRIVATE variable is also used to define the "public" and "private"
 patterns for the GOVCS variable; see 'go help vcs'. For that usage,

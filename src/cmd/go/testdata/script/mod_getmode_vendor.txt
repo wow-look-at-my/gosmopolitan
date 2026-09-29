@@ -3,7 +3,7 @@ env GO111MODULE=on
 go get rsc.io/quote@v1.5.1
 go mod vendor
 env GOPATH=$WORK/empty
-env GOPROXY=file:///nonexist
+env TESTGO_GOPROXY=file:///nonexist
 
 go list -mod=vendor
 go list -mod=vendor -f '{{with .Module}}{{.Path}} {{.Version}}{{end}} {{.Dir}}' all

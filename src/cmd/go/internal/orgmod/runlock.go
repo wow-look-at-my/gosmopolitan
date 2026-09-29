@@ -71,7 +71,11 @@ type RunLockStore interface {
 // the store fails.
 func Version(ctx context.Context, ci bool, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
 	if !ci {
-		return resolve()
+		version, err := resolve()
+		if err == nil {
+			logVersion(path, branch, version, "the branch head, this build resolving it for itself")
+		}
+		return version, err
 	}
 	store, run, err := open()
 	if err != nil {
@@ -91,6 +95,7 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	if err != nil {
 		return "", fail(err)
 	}
+	origin := "the version this run locked earlier"
 	if !found {
 		head, err := resolve()
 		if err != nil {
@@ -100,11 +105,24 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 		if err != nil {
 			return "", fail(err)
 		}
+		origin = "the branch head, locked here for the rest of this run"
+		if version != head {
+			origin = "the branch head a racing command of this run locked first"
+		}
 	}
 	if version == "" {
 		return "", fail(errors.New("the store holds an empty version"))
 	}
+	logVersion(key.Module, key.Branch, version, origin)
 	return version, nil
+}
+
+// logVersion names the version an org module built at, and which of the three
+// ways chose it. A build silently picking a commit per dependency leaves the
+// tree it compiled unknowable from its own output, and these versions move on
+// their own: a branch head is whatever the branch pointed at that minute.
+func logVersion(path, branch, version, origin string) {
+	fmt.Fprintf(os.Stderr, "go: %s@%s: building %s -- %s\n", path, branch, version, origin)
 }
 
 // OpenRunLock returns the store and the run of this process. It reads the

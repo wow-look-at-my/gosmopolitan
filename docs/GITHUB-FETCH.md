@@ -1,17 +1,19 @@
 # Direct fetches from github.com
 
-A module download tries each source in this order. The first one that works wins.
+A github.com module download tries each source in this order. The first one that works wins.
 
-1. The module proxy (`GOPROXY`, `https://proxy.golang.org` by default).
-2. `https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
-3. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
-4. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
-5. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
-6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
+1. `https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
+2. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
+3. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
+4. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
+5. A shallow `git fetch` of the commit, then the full history only when a command needs it.
+6. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-The archives are used only when the module proxy is skipped or misses. That happens under `GOPRIVATE`, `GONOPROXY`, `GOPROXY=direct`, or a 404/410 from the proxy. The code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+The first five are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+
+An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead, and the log names the archive as the failed source.
 
 ## Which URLs
 
@@ -56,3 +58,11 @@ The module's files go from the parsed archive straight into `$GOMODCACHE/<module
 The sum is `git:<commit>`, for the module and for its go.mod. GitHub is trusted to serve that commit, so nothing hashes the files and the checksum database is not asked. The git fallback records the same sum. A go.sum that already has an `h1:` line gets the `h1:` sum computed and checked. The sum goes into `.ziphash`. A cached go.mod keeps its commit in `<version>.commit`.
 
 `go get -x` prints each archive and API request, and why a source failed.
+
+Each fetched module gets one line when it is complete, for every route:
+
+```
+go: downloading github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99: tar.gz archive, 1.2 MB in 0.40s (3.0 MB/s), 0.62s total
+```
+
+The route is the module proxy, a `tar.gz` or `zip` archive (direct or `via proxy.pazer.ai`), or `git`. When an earlier source failed, `because` follows the route and names each one with its HTTP status or error, as in `tar.gz archive via proxy.pazer.ai, because github.com tar.gz: 403 Forbidden`. The size is the bytes of every attempt that received data. The git size is the growth of the object store. The total adds the part of a transfer that `Stat` ran before the download began. A module already in the module cache prints nothing. The code is `cmd/go/internal/modfetch/fetchlog.go`.

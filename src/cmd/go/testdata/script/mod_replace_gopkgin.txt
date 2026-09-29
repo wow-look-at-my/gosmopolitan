@@ -9,8 +9,8 @@ skip 'skipping test that depends on an unreliable third-party server; see https:
 [!git] skip
 
 env GO111MODULE=on
-env GOPROXY=direct
-env GOSUMDB=off
+env TESTGO_GOPROXY=direct
+env TESTGO_GOSUMDB=off
 env GOFLAGS=-mod=mod
 
 # Replacing gopkg.in/[…].vN with a repository with a root go.mod file
