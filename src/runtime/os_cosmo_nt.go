@@ -128,6 +128,8 @@ var (
 	ntWaitForSingleObjectFn uintptr
 	ntGetExitCodeProcessFn  uintptr
 	ntGetProcessTimesFn     uintptr
+	ntGetThreadTimesFn      uintptr
+	ntGetProcessMemInfoFn   uintptr
 
 	// Chunk D (signals/VEH/preemption; all kernel32, present since
 	// forever except the optional WER pair).
@@ -248,6 +250,8 @@ var (
 	ntNameWaitForSingleObj  = []byte("WaitForSingleObject\x00")
 	ntNameGetExitCodeProc   = []byte("GetExitCodeProcess\x00")
 	ntNameGetProcessTimes   = []byte("GetProcessTimes\x00")
+	ntNameGetThreadTimes    = []byte("GetThreadTimes\x00")
+	ntNameGetProcessMemInfo = []byte("K32GetProcessMemoryInfo\x00")
 	ntNameAddVEH            = []byte("AddVectoredExceptionHandler\x00")
 	ntNameAddVCH            = []byte("AddVectoredContinueHandler\x00")
 	ntNameSetErrorMode      = []byte("SetErrorMode\x00")
@@ -568,6 +572,8 @@ func ntResolve() {
 	ntWaitForSingleObjectFn = k32sym(&ntNameWaitForSingleObj[0])
 	ntGetExitCodeProcessFn = k32sym(&ntNameGetExitCodeProc[0])
 	ntGetProcessTimesFn = k32sym(&ntNameGetProcessTimes[0])
+	ntGetThreadTimesFn = k32sym(&ntNameGetThreadTimes[0])
+	ntGetProcessMemInfoFn = k32sym(&ntNameGetProcessMemInfo[0])
 
 	// Chunk D: signals/VEH/preemption (all kernel32; the WER pair is
 	// optional - wine lacks it - and preventErrorDialogs degrades).
