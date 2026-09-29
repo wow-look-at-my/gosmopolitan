@@ -61,8 +61,11 @@ type proxySpec struct {
 
 func proxyList() ([]proxySpec, error) {
 	proxyOnce.Do(func() {
-		// A github.com module comes from its GitHub archive before any proxy. Any failure there moves on to the proxy.
-		proxyOnce.list = append(proxyOnce.list, proxySpec{url: "github", fallBackOnError: true})
+		// A github.com module comes from its GitHub archive before the module
+		// mirror. Any failure there moves on to the mirror.
+		if cfg.GOPROXY == cfg.DefaultGOPROXY {
+			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "github", fallBackOnError: true})
+		}
 		if cfg.GONOPROXY != "" && cfg.GOPROXY != "direct" {
 			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "noproxy"})
 		}
