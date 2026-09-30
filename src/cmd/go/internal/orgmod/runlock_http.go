@@ -23,9 +23,10 @@ import (
 // GitHub Actions OIDC token, so no workflow adds a secret. The server keys each
 // lock by the repository, run and attempt that the token names.
 type httpStore struct {
-	base   string
-	getenv func(string) string
-	client *http.Client
+	base       string
+	getenv     func(string) string
+	client     *http.Client
+	retryDelay func(retry int) time.Duration
 }
 
 func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) {
@@ -35,7 +36,8 @@ func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) 
 	return &httpStore{
 		base:   strings.TrimSuffix(u.String(), "/"),
 		getenv: getenv,
-		client: &http.Client{Timeout: time.Minute},
+		client:     &http.Client{Timeout: time.Minute},
+		retryDelay: httpStoreRetryDelay,
 	}, nil
 }
 
@@ -90,7 +92,7 @@ func (s *httpStore) Claim(ctx context.Context, key RunLockKey, version string) (
 const httpStoreAttempts = 4
 
 // httpStoreRetryDelay is the wait before the given retry, counting from 1.
-var httpStoreRetryDelay = func(retry int) time.Duration { return time.Duration(retry) * 2 * time.Second }
+func httpStoreRetryDelay(retry int) time.Duration { return time.Duration(retry) * 2 * time.Second }
 
 // A transportError is a request that got no answer: the connection, the TLS
 // handshake or the read failed.
@@ -113,7 +115,7 @@ func (s *httpStore) do(ctx context.Context, method, path string, body []byte, an
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("no answer in %d attempts: %w", attempt, err)
-		case <-time.After(httpStoreRetryDelay(attempt)):
+		case <-time.After(s.retryDelay(attempt)):
 		}
 	}
 }

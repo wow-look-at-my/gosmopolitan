@@ -436,10 +436,6 @@ func TestHTTPStore(t *testing.T) {
 // A request that gets no answer is sent again, and one that gets an answer,
 // even a refusal, is not.
 func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
-	saved := httpStoreRetryDelay
-	httpStoreRetryDelay = func(int) time.Duration { return 0 }
-	defer func() { httpStoreRetryDelay = saved }()
-
 	var mu sync.Mutex
 	var drops, hits int
 	var status int
@@ -485,6 +481,7 @@ func TestHTTPStoreRetriesOnlyUnansweredRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lock.store.(*httpStore).retryDelay = func(int) time.Duration { return 0 }
 	key := RunLockKey{lock.run, alphaPath, "main"}
 	var calls int
 
