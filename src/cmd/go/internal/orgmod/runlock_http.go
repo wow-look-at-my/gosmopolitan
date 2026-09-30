@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -26,7 +27,7 @@ type httpStore struct {
 	base       string
 	getenv     func(string) string
 	client     *http.Client
-	retryDelay func(retry int) time.Duration
+	retryEvery time.Duration
 }
 
 func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) {
@@ -34,10 +35,10 @@ func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) 
 		return nil, errors.New("the job has no GitHub Actions OIDC token to present; grant the workflow the permission id-token: write")
 	}
 	return &httpStore{
-		base:   strings.TrimSuffix(u.String(), "/"),
-		getenv: getenv,
+		base:       strings.TrimSuffix(u.String(), "/"),
+		getenv:     getenv,
 		client:     &http.Client{Timeout: time.Minute},
-		retryDelay: httpStoreRetryDelay,
+		retryEvery: 2 * time.Second,
 	}, nil
 }
 
@@ -86,36 +87,31 @@ func (s *httpStore) Claim(ctx context.Context, key RunLockKey, version string) (
 	return answer.Value, nil
 }
 
-// httpStoreAttempts bounds the requests do sends for one call. Only a request
-// that got no answer is sent again: Lookup reads, and Claim returns the version
-// the store holds whether or not this claim set it, so a repeat changes nothing.
-const httpStoreAttempts = 4
-
-// httpStoreRetryDelay is the wait before the given retry, counting from 1.
-func httpStoreRetryDelay(retry int) time.Duration { return time.Duration(retry) * 2 * time.Second }
-
-// A transportError is a request that got no answer: the connection, the TLS
-// handshake or the read failed.
+// transportError is a failure of the path to a server, not an answer from it.
 type transportError struct{ err error }
 
 func (e transportError) Error() string { return e.err.Error() }
 func (e transportError) Unwrap() error { return e.err }
 
-// do sends the request until it gets an answer or has sent it
-// httpStoreAttempts times, and decodes the answer.
+func transient(status int) bool {
+	return status >= 500 || status == http.StatusTooManyRequests
+}
+
+// do sends the request until the store answers, and decodes the answer. Both
+// requests are safe to repeat, so a transport failure is tried again on a fixed
+// cadence and named on stderr each time. Any other failure is final.
 func (s *httpStore) do(ctx context.Context, method, path string, body []byte, answer any) error {
-	for attempt := 1; ; attempt++ {
+	for {
 		err := s.once(ctx, method, path, body, answer)
-		if _, ok := errors.AsType[transportError](err); !ok {
+		var te transportError
+		if !errors.As(err, &te) || ctx.Err() != nil {
 			return err
 		}
-		if attempt == httpStoreAttempts {
-			return fmt.Errorf("no answer in %d attempts: %w", attempt, err)
-		}
+		fmt.Fprintf(os.Stderr, "go: run lock store %s: %v; trying again in %v\n", s.base, err, s.retryEvery)
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("no answer in %d attempts: %w", attempt, err)
-		case <-time.After(s.retryDelay(attempt)):
+			return err
+		case <-time.After(s.retryEvery):
 		}
 	}
 }
@@ -144,7 +140,11 @@ func (s *httpStore) once(ctx context.Context, method, path string, body []byte, 
 		return transportError{err}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		err := fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		if transient(resp.StatusCode) {
+			return transportError{err}
+		}
+		return err
 	}
 	if err := json.Unmarshal(data, answer); err != nil {
 		return fmt.Errorf("%s %s: %v", method, path, err)
@@ -166,15 +166,19 @@ func (s *httpStore) oidcToken(ctx context.Context) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+s.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"))
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", transportError{fmt.Errorf("requesting an OIDC token: %w", err)}
+		return "", transportError{fmt.Errorf("requesting an OIDC token: %v", err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {
-		return "", fmt.Errorf("requesting an OIDC token: %v", err)
+		return "", transportError{fmt.Errorf("requesting an OIDC token: %v", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("requesting an OIDC token: %s", resp.Status)
+		err := fmt.Errorf("requesting an OIDC token: %s", resp.Status)
+		if transient(resp.StatusCode) {
+			return "", transportError{err}
+		}
+		return "", err
 	}
 	var answer struct {
 		Value string `json:"value"`
