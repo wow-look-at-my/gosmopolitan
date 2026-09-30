@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -23,9 +24,10 @@ import (
 // GitHub Actions OIDC token, so no workflow adds a secret. The server keys each
 // lock by the repository, run and attempt that the token names.
 type httpStore struct {
-	base   string
-	getenv func(string) string
-	client *http.Client
+	base       string
+	getenv     func(string) string
+	client     *http.Client
+	retryEvery time.Duration
 }
 
 func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) {
@@ -33,9 +35,10 @@ func newHTTPStore(u *url.URL, getenv func(string) string) (RunLockStore, error) 
 		return nil, errors.New("the job has no GitHub Actions OIDC token to present; grant the workflow the permission id-token: write")
 	}
 	return &httpStore{
-		base:   strings.TrimSuffix(u.String(), "/"),
-		getenv: getenv,
-		client: &http.Client{Timeout: time.Minute},
+		base:       strings.TrimSuffix(u.String(), "/"),
+		getenv:     getenv,
+		client:     &http.Client{Timeout: time.Minute},
+		retryEvery: 2 * time.Second,
 	}, nil
 }
 
@@ -84,8 +87,37 @@ func (s *httpStore) Claim(ctx context.Context, key RunLockKey, version string) (
 	return answer.Value, nil
 }
 
-// do sends one request with a fresh OIDC token and decodes the answer.
+// transportError is a failure of the path to a server, not an answer from it.
+type transportError struct{ err error }
+
+func (e transportError) Error() string { return e.err.Error() }
+func (e transportError) Unwrap() error { return e.err }
+
+func transient(status int) bool {
+	return status >= 500 || status == http.StatusTooManyRequests
+}
+
+// do sends the request until the store answers, and decodes the answer. Both
+// requests are safe to repeat, so a transport failure is tried again on a fixed
+// cadence and named on stderr each time. Any other failure is final.
 func (s *httpStore) do(ctx context.Context, method, path string, body []byte, answer any) error {
+	for {
+		err := s.once(ctx, method, path, body, answer)
+		var te transportError
+		if !errors.As(err, &te) || ctx.Err() != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "go: run lock store %s: %v; trying again in %v\n", s.base, err, s.retryEvery)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(s.retryEvery):
+		}
+	}
+}
+
+// once sends one request with a fresh OIDC token and decodes the answer.
+func (s *httpStore) once(ctx context.Context, method, path string, body []byte, answer any) error {
 	token, err := s.oidcToken(ctx)
 	if err != nil {
 		return err
@@ -100,15 +132,19 @@ func (s *httpStore) do(ctx context.Context, method, path string, body []byte, an
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return transportError{err}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {
-		return err
+		return transportError{err}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		err := fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		if transient(resp.StatusCode) {
+			return transportError{err}
+		}
+		return err
 	}
 	if err := json.Unmarshal(data, answer); err != nil {
 		return fmt.Errorf("%s %s: %v", method, path, err)
@@ -130,15 +166,19 @@ func (s *httpStore) oidcToken(ctx context.Context) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+s.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN"))
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("requesting an OIDC token: %v", err)
+		return "", transportError{fmt.Errorf("requesting an OIDC token: %v", err)}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 	if err != nil {
-		return "", fmt.Errorf("requesting an OIDC token: %v", err)
+		return "", transportError{fmt.Errorf("requesting an OIDC token: %v", err)}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("requesting an OIDC token: %s", resp.Status)
+		err := fmt.Errorf("requesting an OIDC token: %s", resp.Status)
+		if transient(resp.StatusCode) {
+			return "", transportError{err}
+		}
+		return "", err
 	}
 	var answer struct {
 		Value string `json:"value"`
