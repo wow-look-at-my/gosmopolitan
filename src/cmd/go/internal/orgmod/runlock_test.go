@@ -435,7 +435,7 @@ func TestHTTPStore(t *testing.T) {
 
 func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	var mu sync.Mutex
-	var tokenHits, lockHits int
+	var tokenHits, getHits, postHits int
 	var locked string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -449,17 +449,22 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]string{"value": "oidc-jwt"})
 			return
 		}
-		lockHits++
-		switch lockHits {
-		case 1:
-			conn, _, err := w.(http.Hijacker).Hijack()
-			if err == nil {
-				conn.Close()
+		// net/http resends a GET on a dropped connection by itself, and never a POST.
+		if r.Method == http.MethodPost {
+			postHits++
+			if postHits == 1 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+				return
 			}
-			return
-		case 2:
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
+		} else {
+			getHits++
+			if getHits == 1 {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		if r.URL.Query().Get("run_id") == "denied" {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -499,18 +504,21 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	if err != nil || got != headA {
 		t.Fatalf("LockedVersion over a 502, a reset and a 503 = %q, %v; want %q", got, err, headA)
 	}
-	if tokenHits != lockHits+1 {
-		t.Errorf("%d token requests for %d lock requests; want one more token request", tokenHits, lockHits)
+	if getHits != 2 || postHits != 2 {
+		t.Errorf("%d lookups and %d claims reached the store; want 2 of each", getHits, postHits)
+	}
+	if tokenHits != getHits+postHits+1 {
+		t.Errorf("%d token requests for %d store requests; want the 502 asked again", tokenHits, getHits+postHits)
 	}
 
 	denied := lock.run
 	denied.ID = "denied"
-	before := lockHits
-	_, err = lock.store.Lookup(context.Background(), RunLockKey{denied, alphaPath, "main"})
+	before := getHits
+	_, _, err = lock.store.Lookup(context.Background(), RunLockKey{denied, alphaPath, "main"})
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Errorf("Lookup refused by the store = %v; want the 403", err)
 	}
-	if lockHits != before+1 {
-		t.Errorf("a 403 was sent %d times; want once", lockHits-before)
+	if getHits != before+1 {
+		t.Errorf("a 403 was sent %d times; want once", getHits-before)
 	}
 }
