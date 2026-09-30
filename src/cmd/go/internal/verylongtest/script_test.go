@@ -26,7 +26,8 @@ func TestScript(t *testing.T) {
 
 	engine, env := scripttest.NewEngine(t, nil)
 	modcache := filepath.Join(t.TempDir(), "modcache")
-	env = append(env, "GOMODCACHE="+modcache)
+	// The go command writes the checksum database's tree head under GOPATH.
+	env = append(env, "GOPATH="+filepath.Join(t.TempDir(), "gopath"), "GOMODCACHE="+modcache)
 	// Remove write only permissions on GOMODCACHE so we can clear its files.
 	t.Cleanup(func() {
 		filepath.WalkDir(modcache, func(path string, info fs.DirEntry, err error) error {
