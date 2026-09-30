@@ -7,6 +7,7 @@ package ld
 import (
 	"cmd/internal/sys"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/binary"
 	"fmt"
 	"internal/cosmo/embedded"
@@ -198,15 +199,15 @@ func apeDebugSidecarName(outfile string) string {
 }
 
 // writeAPEDebugSidecar writes payload p's debug sidecar for its
-// architecture. In the default -apedbgmode=full it is p's ELF image exactly
-// as its linker produced it (p_offset values payload-relative, symbol table
+// architecture. In the default -apedbgmode=full it is p's ELF image as its
+// linker produced it, with the OS ABI cleared (p_offset values payload-relative, symbol table
 // and DWARF intact): a complete standalone ELF executable, directly
 // loadable by debuggers. In slim and compact modes the image is first
 // reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
 // table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
 	name := apeDebugSidecarName(outfile)
-	img := p.elf
+	img := append([]byte(nil), p.elf...)
 	if *flagApeDbgMode != "full" {
 		slim, err := slimELFDebug(img)
 		if err != nil {
@@ -214,6 +215,8 @@ func writeAPEDebugSidecar(outfile string, p *apePayload) {
 		}
 		img = slim
 	}
+	// No APE loader reads the sidecar, so the APE's FreeBSD OS ABI does not apply to it.
+	img[elf.EI_OSABI] = byte(elf.ELFOSABI_NONE)
 	if err := os.WriteFile(name, img, 0755); err != nil {
 		Exitf("-apedbg: %v", err)
 	}
