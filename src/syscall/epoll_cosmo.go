@@ -12,24 +12,13 @@ import (
 	"unsafe"
 )
 
-// epoll on a macOS host. XNU has no epoll, and kqueue cannot watch a
-// terminal there, so this package keeps each epoll instance itself and its
-// wait runs select, which can. The descriptor an instance answers to is
-// the read end of a pipe the instance owns: close releases it like any
-// other descriptor, and a byte on the write end wakes a wait so that it
-// sees an epoll_ctl made while it sleeps. A Linux host takes the syscalls
-// unchanged.
-//
-// Syscall and Syscall6 serve these calls before entersyscall, and
-// RawSyscall6 serves the ones made through it, because the emulation
-// allocates. Only the select it waits in runs in syscall state.
-//
-// Level-triggered interest is emulated, with EPOLLONESHOT. EPOLLET and
-// EPOLLEXCLUSIVE are refused with EINVAL: select reports levels, and a
-// wait that reported edges from them would be wrong without saying so. A
-// wait with a signal mask is refused with ENOSYS, because select cannot
-// swap the mask atomically. Select takes descriptors below FD_SETSIZE
-// (1024) on macOS, and fails with EINVAL above it.
+// epoll on a macOS host, kept here and waited on with select, since kqueue
+// cannot watch a terminal there. An instance's descriptor is the read end
+// of a pipe it owns; a byte on the write end wakes a wait to see a new
+// epoll_ctl. The emulation allocates, so Syscall, Syscall6 and RawSyscall6
+// serve it before entersyscall. Level-triggered interest and EPOLLONESHOT
+// are emulated. EPOLLET and EPOLLEXCLUSIVE get EINVAL, a signal mask gets
+// ENOSYS, and a descriptor at or above FD_SETSIZE (1024) gets EINVAL.
 
 //go:linkname runtime_nanotime runtime.nanotime
 func runtime_nanotime() int64
