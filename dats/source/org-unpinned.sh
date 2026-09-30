@@ -117,6 +117,11 @@ for path in "$@"; do
 			fi
 			continue
 		fi
+		# A third-party module replaced by an org module keeps its own version on the left of =>.
+		left=${text%%=>*}
+		if [ "$left" != "$text" ] && [ "${left#*wow-look-at-my/}" = "$left" ]; then
+			text=${text#*=>}
+		fi
 		if version=$(pinnedVersion "$text"); then
 			report "$(printf '%s:%d: org module pinned to %s' "$path" "$num" "$version")"
 		fi
