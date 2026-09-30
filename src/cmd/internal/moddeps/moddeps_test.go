@@ -216,7 +216,12 @@ func TestAllDependencies(t *testing.T) {
 			}
 			// TODO(golang.org/issue/43440): Check anything else influenced by dependency versions.
 
-			diff, err := testenv.Command(t, "diff", "--recursive", "--unified", r.Dir, m.Dir).CombinedOutput()
+			// Each vendored module is a whole-repository submodule, and go mod vendor writes a pruned copy.
+			diff, err := testenv.Command(t, "diff", "--recursive", "--unified", "--exclude=vendor", r.Dir, m.Dir).CombinedOutput()
+			if err == nil && len(diff) == 0 {
+				diff, err = testenv.Command(t, "diff", "--unified",
+					filepath.Join(r.Dir, "vendor", "modules.txt"), filepath.Join(m.Dir, "vendor", "modules.txt")).CombinedOutput()
+			}
 			if err != nil || len(diff) != 0 {
 				t.Errorf(`Module %s in %s is not tidy (-want +got):
 
@@ -245,10 +250,10 @@ func packagePattern(modulePath string) string {
 // copy without also modifying the original GOROOT.
 //
 // It copies the entire tree as is, with the exception of the GOROOT/.git
-// directory, which is skipped, and the GOROOT/{bin,pkg} directories,
-// which are symlinked. This is done for speed, since a GOROOT tree is
-// functional without being in a Git repository, and bin and pkg are
-// deemed safe to share for the purpose of the TestAllDependencies test.
+// directory, which is skipped, and the GOROOT/pkg directory, which is
+// symlinked. This is done for speed, since a GOROOT tree is functional
+// without being in a Git repository, and pkg is deemed safe to share for
+// the purpose of the TestAllDependencies test.
 func makeGOROOTCopy(t *testing.T) string {
 	t.Helper()
 
@@ -267,8 +272,9 @@ func makeGOROOTCopy(t *testing.T) string {
 		}
 		dst := filepath.Join(gorootCopyDir, rel)
 
-		if info.IsDir() && (src == filepath.Join(testenv.GOROOT(t), "bin") ||
-			src == filepath.Join(testenv.GOROOT(t), "pkg")) {
+		// bin is copied. The go command finds its GOROOT from its own
+		// executable, and os.Executable resolves a symlink.
+		if info.IsDir() && src == filepath.Join(testenv.GOROOT(t), "pkg") {
 			// If the OS supports symlinks, use them instead
 			// of copying the bin and pkg directories.
 			if err := os.Symlink(src, dst); err == nil {
