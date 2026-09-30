@@ -7,7 +7,8 @@ mkdir $WORK/new/bin
 # (using make.bash or similar). We can't make assumptions about what
 # options it may have been built with, such as -trimpath or not.
 # Instead, we build a fresh copy of the binary with known settings.
-go build -o $WORK/new/bin/go$GOEXE cmd/go/main &
+# -pgo=off lets the build reuse the packages this test run already compiled.
+go build -pgo=off -o $WORK/new/bin/go$GOEXE cmd/go/main &
 go build -trimpath -o $WORK/bin/check$GOEXE check.go &
 wait
 
