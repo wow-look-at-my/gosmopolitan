@@ -76,3 +76,6 @@
 	path = src/cmd/vendor/github.com/wow-look-at-my/go-mmap
 	url = https://github.com/wow-look-at-my/go-mmap.git
 	branch = master
+[submodule "src/cmd/vendor/github.com/google/go-cmp"]
+	path = src/cmd/vendor/github.com/google/go-cmp
+	url = https://github.com/google/go-cmp.git
