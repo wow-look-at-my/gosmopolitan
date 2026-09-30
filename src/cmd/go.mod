@@ -4,16 +4,16 @@ go 1.27
 
 require (
 	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
-	github.com/klauspost/compress v1.19.0
+	github.com/klauspost/compress v1.20.0
 	github.com/stretchr/testify v1.12.1
 	github.com/wow-look-at-my/go-mmap v0.0.0
 	github.com/wow-look-at-my/go-s3-server/cacheclient v0.0.0
 	golang.org/x/arch v0.27.1-0.20260521044007-9c1a596a2c97
 	golang.org/x/build v0.0.0-20260522210304-d55d0041b921
-	golang.org/x/mod v0.36.1-0.20260813213634-8569e2639ca1
-	golang.org/x/sync v0.20.0
-	golang.org/x/sys v0.45.0
-	golang.org/x/telemetry v0.0.0-20260519152614-eab6ae52b5e2
+	golang.org/x/mod v0.41.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
+	golang.org/x/telemetry v0.0.0-20260908163034-4bcc4b2ee518
 	golang.org/x/term v0.43.0
 	golang.org/x/tools v0.0.0
 )
