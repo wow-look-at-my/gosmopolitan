@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -429,5 +430,95 @@ func TestHTTPStore(t *testing.T) {
 	_, err = LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "v1"}, resolveTo(headB, &calls))
 	if err == nil || !strings.Contains(err.Error(), "OIDC token") || !strings.Contains(err.Error(), srv.URL) {
 		t.Errorf("LockedVersion with no OIDC token = %v; want an error that names the token and the store", err)
+	}
+}
+
+func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
+	var mu sync.Mutex
+	var tokenHits, getHits, postHits int
+	var locked string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.URL.Path == "/token" {
+			tokenHits++
+			if tokenHits == 1 {
+				http.Error(w, "bad gateway", http.StatusBadGateway)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]string{"value": "oidc-jwt"})
+			return
+		}
+		// net/http resends a GET on a dropped connection by itself, and never a POST.
+		if r.Method == http.MethodPost {
+			postHits++
+			if postHits == 1 {
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					conn.Close()
+				}
+				return
+			}
+		} else {
+			getHits++
+			if getHits == 1 {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		if r.URL.Query().Get("run_id") == "denied" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		answer := runLockBody{}
+		if r.Method == http.MethodPost {
+			var body runLockBody
+			json.NewDecoder(r.Body).Decode(&body)
+			if locked == "" {
+				locked = body.Value
+			}
+			answer.Found = true
+		}
+		answer.Value = locked
+		answer.Found = answer.Found || locked != ""
+		json.NewEncoder(w).Encode(answer)
+	}))
+	defer srv.Close()
+
+	env := map[string]string{
+		"GITHUB_REPOSITORY":              testRun.Repository,
+		"GITHUB_RUN_ID":                  testRun.ID,
+		"GITHUB_RUN_ATTEMPT":             testRun.Attempt,
+		RunLockEnv:                       srv.URL,
+		"ACTIONS_ID_TOKEN_REQUEST_URL":   srv.URL + "/token",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-token",
+	}
+	lock, err := openRunLock(envOf(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock.store.(*httpStore).retryEvery = time.Millisecond
+
+	var calls int
+	got, err := LockedVersion(context.Background(), lock.store, RunLockKey{lock.run, alphaPath, "main"}, resolveTo(headA, &calls))
+	if err != nil || got != headA {
+		t.Fatalf("LockedVersion over a 502, a reset and a 503 = %q, %v; want %q", got, err, headA)
+	}
+	if getHits != 2 || postHits != 2 {
+		t.Errorf("%d lookups and %d claims reached the store; want 2 of each", getHits, postHits)
+	}
+	if tokenHits != getHits+postHits+1 {
+		t.Errorf("%d token requests for %d store requests; want the 502 asked again", tokenHits, getHits+postHits)
+	}
+
+	denied := lock.run
+	denied.ID = "denied"
+	before := getHits
+	_, _, err = lock.store.Lookup(context.Background(), RunLockKey{denied, alphaPath, "main"})
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Errorf("Lookup refused by the store = %v; want the 403", err)
+	}
+	if getHits != before+1 {
+		t.Errorf("a 403 was sent %d times; want once", getHits-before)
 	}
 }
