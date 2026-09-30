@@ -26,7 +26,8 @@ A CI build follows the same heads as any other build, and writes the same placeh
 - The first go command of the run that resolves a lock claims the head it found. Every later go command of the run, in any job on any machine, builds the claimed version instead of the head. A commit that lands in the middle of a run therefore reaches no job of it. A re-run is a new attempt, so it claims the heads again.
 - The claim is a create-if-absent. Of racing claims one wins, and every build takes the winner's version.
 - Inside one go command the resolved version stays cached, so a command asks the store once per lock.
-- A store that fails or refuses, or a CI build that names no run, fails the command. The error names the store and the module. Nothing stands in for the lock.
+- A store that refuses, or a CI build that names no run, fails the command. The error names the store and the module. Nothing stands in for the lock.
+- A dropped connection, a 5xx or a 429 is the path to the store, not its answer. The command asks again on a fixed cadence until the store answers, and names each failure on stderr.
 - Outside CI nothing reads or writes the store.
 
 The code is `src/cmd/go/internal/orgmod/runlock.go`.
