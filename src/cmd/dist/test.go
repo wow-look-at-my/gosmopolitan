@@ -292,6 +292,19 @@ func (t *tester) run() {
 
 	if !t.json {
 		t.timings.report(os.Stdout, 25)
+		if len(t.runNames) == 0 {
+			var tags []string
+			if t.race {
+				tags = []string{"-tags=race"}
+			}
+			cov, err := measureCoverage(gorootBinGo, tags)
+			if err != nil {
+				t.failed = true
+				log.Printf("Failed measuring test coverage: %v", err)
+			} else {
+				fmt.Printf("\n%s", cov.format())
+			}
+		}
 		if t.failed {
 			fmt.Println("\nFAILED")
 		} else if !anyIncluded {
