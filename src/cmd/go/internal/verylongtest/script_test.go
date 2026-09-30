@@ -28,6 +28,8 @@ func TestScript(t *testing.T) {
 	modcache := filepath.Join(t.TempDir(), "modcache")
 	// The go command writes the checksum database's tree head under GOPATH.
 	env = append(env, "GOPATH="+filepath.Join(t.TempDir(), "gopath"), "GOMODCACHE="+modcache)
+	// As in cmd/go's TestMain: a script that starts from an empty GOCACHE expects a cold cache.
+	env = append(env, "GO_BUILDCACHE_CONFIG=", "CI=")
 	// Remove write only permissions on GOMODCACHE so we can clear its files.
 	t.Cleanup(func() {
 		filepath.WalkDir(modcache, func(path string, info fs.DirEntry, err error) error {
