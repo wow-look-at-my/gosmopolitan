@@ -217,8 +217,15 @@ func TestAllDependencies(t *testing.T) {
 			// TODO(golang.org/issue/43440): Check anything else influenced by dependency versions.
 
 			// Each vendored module is a whole-repository submodule, and go mod vendor writes a pruned copy.
+			// modules.txt holds what go mod vendor decided.
 			diff, err := testenv.Command(t, "diff", "--recursive", "--unified", "--exclude=vendor", r.Dir, m.Dir).CombinedOutput()
-			if err == nil && len(diff) == 0 {
+			_, gotErr := os.Stat(filepath.Join(r.Dir, "vendor"))
+			_, wantErr := os.Stat(filepath.Join(m.Dir, "vendor"))
+			switch {
+			case err != nil || len(diff) != 0:
+			case (gotErr == nil) != (wantErr == nil):
+				diff = fmt.Appendf(nil, "vendor directory: want present=%v, got present=%v\n", wantErr == nil, gotErr == nil)
+			case wantErr == nil:
 				diff, err = testenv.Command(t, "diff", "--unified",
 					filepath.Join(r.Dir, "vendor", "modules.txt"), filepath.Join(m.Dir, "vendor", "modules.txt")).CombinedOutput()
 			}
