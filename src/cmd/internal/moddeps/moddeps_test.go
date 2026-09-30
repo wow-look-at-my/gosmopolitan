@@ -127,9 +127,8 @@ func TestAllDependencies(t *testing.T) {
 
 	// We're going to check the standard modules for tidiness, so we need a usable
 	// GOMODCACHE. If the default directory doesn't exist, use a temporary
-	// directory instead. (That can occur, for example, when running under
-	// run.bash with GO_TEST_SHORT=0: run.bash sets GOPATH=/nonexist-gopath, and
-	// GO_TEST_SHORT=0 causes it to run this portion of the test.)
+	// directory instead. (That occurs under run.bash, which sets
+	// GOPATH=/nonexist-gopath.)
 	var modcacheEnv []string
 	{
 		out, err := testenv.Command(t, goBin, "env", "GOMODCACHE").Output()
