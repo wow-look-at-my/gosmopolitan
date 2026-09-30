@@ -2307,6 +2307,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		}
 		return false
 	}
+	inputList := data
 	testInputsID, err := computeTestInputsID(a, data)
 	if err != nil {
 		return false
@@ -2375,6 +2376,13 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		return false
 	}
 	j += i + len("ok  \t") + 1
+
+	// The next run asks the first identity before it links. A shared store can
+	// hold only the second one, so a hit there is written under the first too.
+	if testID == c.id2 && c.id1 != (cache.ActionID{}) && c.id1 != testID && testCoverProfile == "" && c.covMeta == (cache.ActionID{}) {
+		cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(inputList))
+		cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
+	}
 
 	// Committed to printing.
 	c.buf = new(bytes.Buffer)
