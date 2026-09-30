@@ -11,11 +11,11 @@ import (
 
 func TestIsVendoredThirdParty(t *testing.T) {
 	cases := map[string]bool{
-		"vendor/golang.org/x/text/transform":                          true,
-		"cmd/vendor/golang.org/x/tools/go/cfg":                        true,
-		"cmd/vendor/github.com/google/pprof/driver":                   true,
+		"vendor/golang.org/x/text/transform":                            true,
+		"cmd/vendor/golang.org/x/tools/go/cfg":                          true,
+		"cmd/vendor/github.com/google/pprof/driver":                     true,
 		"cmd/vendor/github.com/wow-look-at-my/go-s3-server/cacheclient": false,
-		"vendor/github.com/wow-look-at-my/example":                    false,
+		"vendor/github.com/wow-look-at-my/example":                      false,
 		"net/http":                        false,
 		"cmd/go":                          false,
 		"example.com/vendor/golang.org/x": false,
