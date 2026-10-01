@@ -560,13 +560,25 @@ func (opts *goTest) bgCommand(t *tester, stdout, stderr io.Writer) (cmd *exec.Cm
 	} else {
 		// The command reports events. A reader wants the failures and the
 		// durations out of them, not a line for every subtest.
-		rep := newTestReport(stdout, &t.timings, t.markPkgDone)
-		cmd.Stdout = rep
-		flush = rep.Flush
+		cmd.Stdout, cmd.Stderr, flush = t.reportTo(stdout, stderr)
+		return cmd, flush
 	}
 	cmd.Stderr = stderr
 
 	return cmd, flush
+}
+
+// reportTo answers the writers of a command whose stdout carries test events,
+// and the flush to call once it exits. The report and stderr can share one
+// writer.
+func (t *tester) reportTo(stdout, stderr io.Writer) (out, errOut io.Writer, flush func()) {
+	if stdout == stderr {
+		// Not the bare buffer: its ReadFrom on stderr cuts off what the report writes.
+		stdout = &lockedWriter{w: stdout}
+		stderr = stdout
+	}
+	rep := newTestReport(stdout, &t.timings, t.markPkgDone)
+	return rep, stderr, rep.Flush
 }
 
 // run runs a go test and returns an error if it does not succeed.
