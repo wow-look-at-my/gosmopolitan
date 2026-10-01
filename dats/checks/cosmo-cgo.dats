@@ -61,6 +61,36 @@ tests:
 			- "<probe_add>:"
 			- ret
 
+	# On NT libcosmo starts at WinMain, and the NT loader fills libcosmo's import tables.
+	- desc: the PE header of a cgo APE enters at WinMain and names libcosmo's imports
+	  cmd: |
+		set -euo pipefail
+		export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"
+		out="$(mktemp -d)"
+		cd testdata/cgoprobe
+		GOCOSMOFAT=0 GOARCH=amd64 go build -o "$out/amd64.com" .
+		dd if="$out/amd64.com" of="$out/amd64.elf" bs=65536 skip=1 status=none
+		x86_64-linux-cosmo-objdump -p "$out/amd64.com" > "$out/pe.txt"
+		grep -E 'DLL Name|CreateThread|GetProcAddress|LoadLibraryA' "$out/pe.txt"
+		while read -r field value rest; do
+			if [ "$field" = AddressOfEntryPoint ]; then entry="$value"; fi
+			if [ "$field" = ImageBase ]; then base="$value"; fi
+		done < "$out/pe.txt"
+		while read -r value kind name; do
+			if [ "$name" = WinMain ]; then winmain="$value"; fi
+		done < <(x86_64-linux-cosmo-nm "$out/amd64.elf")
+		echo "entry $entry base $base WinMain $winmain"
+		if [ $((16#$entry + 16#$base)) -eq $((16#$winmain)) ]; then echo "entry is WinMain"; fi
+	  timeout: 10m
+	  exit: 0
+	  outputs:
+		stdout:
+			- "DLL Name: kernel32.dll"
+			- CreateThread
+			- GetProcAddress
+			- LoadLibraryA
+			- entry is WinMain
+
 	# cosmo satisfies the linux tag, so a Linux-only cgo file in std reaches cosmocc.
 	- desc: std builds for cosmo on amd64 and arm64 with cgo on
 	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; GOOS=cosmo GOARCH=amd64 go build std && GOOS=cosmo GOARCH=arm64 go build std
