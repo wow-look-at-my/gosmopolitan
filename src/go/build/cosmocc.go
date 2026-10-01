@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// cosmoImpliedTag reports whether a cosmo build always sets the tag. netgo
+// and osusergo keep net and os/user in pure Go when cgo is on.
+func cosmoImpliedTag(name string) bool {
+	return name == "netgo" || name == "osusergo"
+}
+
 // cosmoCompilerFound reports whether the C compiler of a cosmo target is on PATH.
 // It follows cmd/go: CC wins, then CC_FOR_cosmo_<arch>, then the cosmocc driver.
 func cosmoCompilerFound(goarch string) bool {
