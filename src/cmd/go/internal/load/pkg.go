@@ -36,6 +36,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -453,6 +454,24 @@ func (p *Package) copyBuild(opts PackageOpts, pp *build.Package) {
 	p.TestEmbedPatterns = pp.TestEmbedPatterns
 	p.XTestEmbedPatterns = pp.XTestEmbedPatterns
 	p.Internal.OrigImportPath = pp.ImportPath
+	if p.Goroot && isVendoredThirdParty(p.ImportPath) {
+		// The vendor tree holds whole repositories, so it carries test files that `go mod vendor` leaves out.
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.TestGoFiles...)
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.XTestGoFiles...)
+		p.TestGoFiles, p.XTestGoFiles = nil, nil
+		p.TestImports, p.XTestImports = nil, nil
+		p.TestEmbedPatterns, p.XTestEmbedPatterns = nil, nil
+	}
+}
+
+// isVendoredThirdParty reports whether importPath names a package in the
+// vendor tree of std or cmd that no wow-look-at-my module provides.
+func isVendoredThirdParty(importPath string) bool {
+	rest, ok := strings.CutPrefix(importPath, "vendor/")
+	if !ok {
+		rest, ok = strings.CutPrefix(importPath, "cmd/vendor/")
+	}
+	return ok && !strings.HasPrefix(rest, "github.com/wow-look-at-my/")
 }
 
 // A PackageError describes an error loading information about a package.
@@ -971,10 +990,28 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+					// A listing names the source files; a build reads the
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
+					if cfg.CmdName == "list" {
+						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+							data.p.GoFiles = tree.GoFiles
+							data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+						}
+					}
 					// The module loader looked for a directory; the manifest is the answer.
 					r.err = nil
 					goto Happy
 				}
+			}
+			// A dependency that generates part of its own API ships a package
+			// the compiler reads as empty. Read the generated copy instead.
+			if dir := gendep.Dir(r.dir, modroot); dir != r.dir {
+				r.dir = dir
+				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
+				goto Happy
 			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {

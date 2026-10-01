@@ -336,17 +336,8 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 		// builds something in GOROOT. The C compiler does not, so ccompile
 		// passes -ffile-prefix-map for a GOROOT package, which rewrites the
 		// path as though -trimpath were set. Neither leaves a directory in
-		// the output, so GOROOT itself stays out of the key.
-		//
-		// cgo is the exception, and this cache is shared between machines.
-		// cgo writes a //line naming this directory into the Go file it
-		// generates (go.dev/issue/36072), so that output belongs to one
-		// GOROOT. A tree at another path that reused it handed cmd/vet a
-		// path holding no file, and the cgocall pass answered "can't parse
-		// raw cgo file".
-		if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
-			return fmt.Sprintf("cgo dir %s\n", pkg.Dir)
-		}
+		// the output, so GOROOT itself stays out of the key. The cgo files
+		// kept for vet are the exception: see objdirKey.
 		return ""
 	}
 
@@ -1183,12 +1174,12 @@ func (b *Builder) cacheObjdirFile(a *Action, c cache.Cache, name string) error {
 		return err
 	}
 	defer f.Close()
-	_, _, err = c.Put(cache.Subkey(a.actionID, name), f)
+	_, _, err = c.Put(cache.Subkey(objdirKey(a), name), f)
 	return err
 }
 
 func (b *Builder) findCachedObjdirFile(a *Action, c cache.Cache, name string) (string, error) {
-	file, _, err := cache.GetFile(c, cache.Subkey(a.actionID, name))
+	file, _, err := cache.GetFile(c, cache.Subkey(objdirKey(a), name))
 	if err != nil {
 		return "", fmt.Errorf("loading cached file %s: %w", name, err)
 	}
@@ -1213,6 +1204,16 @@ func (b *Builder) loadCachedCgoHdr(a *Action) error {
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
+// objdirKey returns the key for the files a keeps from its object directory.
+func objdirKey(a *Action) cache.ActionID {
+	pkg := a.Package
+	// cgo writes the package directory into a //line, and vet opens that path.
+	if pkg != nil && pkg.Goroot && !cfg.BuildTrimpath && len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return cache.Subkey(a.actionID, "cgo dir "+pkg.Dir)
+	}
+	return a.actionID
+}
+
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 	c := a.cache()
 	var buf bytes.Buffer
@@ -1231,12 +1232,12 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 			return
 		}
 	}
-	cache.PutBytes(c, cache.Subkey(a.actionID, "srcfiles"), buf.Bytes())
+	cache.PutBytes(c, cache.Subkey(objdirKey(a), "srcfiles"), buf.Bytes())
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1260,7 +1261,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1421,7 +1422,9 @@ func addEmbeddedStdVetFiles(vcfg *vetConfig) {
 		if vcfg.PackageFile[path] != "" {
 			continue
 		}
-		pkg := cfg.EmbeddedStdPackage(path)
+		// unsafe and builtin declare no archive, and neither does a package of
+		// cmd. vet reads a file for what has one and the tree for the rest.
+		pkg := cfg.EmbeddedStdArchived(path)
 		if pkg == nil {
 			continue
 		}
@@ -1585,6 +1588,13 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 			}
 			defer f.Close() // ignore error (can't fail)
 			stdout = f
+		} else {
+			// Every run stores this entry, empty or not, so one that will not
+			// open is one the cache lost and not a tool that found nothing to
+			// say. Reading it is part of the transaction above: a hit that
+			// commits without it reports a clean package, and the findings the
+			// run did make are gone with no sign that they ever existed.
+			goto cachemiss
 		}
 
 		// Cache hit: commit transaction.
@@ -1642,7 +1652,9 @@ cachemiss:
 		}
 	}
 
-	// Save stdout.
+	// Save stdout. A tool that found nothing to say writes no file, and the
+	// entry goes in empty for it, so a later load can tell that apart from an
+	// entry the cache lost and refuse a hit it cannot reproduce whole.
 	if f, err := os.Open(vcfg.Stdout); err == nil {
 		defer f.Close() // ignore error
 		if err := VetHandleStdout(f); err != nil {
@@ -1650,6 +1662,8 @@ cachemiss:
 		}
 		f.Seek(0, io.SeekStart)     // ignore error
 		a.cache().Put(stdoutKey, f) // ignore error
+	} else {
+		cache.PutBytes(a.cache(), stdoutKey, nil) // ignore error
 	}
 
 	return nil
@@ -1705,6 +1719,11 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 				fmt.Fprintf(h, "packageshlib %s=%s\n", p1.ImportPath, contentID(b.buildID(p1.Shlib)))
 			}
 		}
+	}
+
+	// ld stamps these IDs into the binary, so they are an input of the link.
+	if ids := linkedToolIDs(a); ids != "" {
+		fmt.Fprintf(h, "linkedtools %s\n", ids)
 	}
 
 	return h.Sum()

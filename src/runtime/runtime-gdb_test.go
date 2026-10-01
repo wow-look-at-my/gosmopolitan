@@ -103,13 +103,10 @@ func checkGdbPython(t *testing.T) {
 //
 // A cosmo build emits a STRIPPED APE and puts the debug info in a sidecar ELF
 // beside it. gdb reads the APE without complaint and finds nothing in it: no
-// runtime.main, no main.* types, no .debug_gdb_scripts. The sidecar carries all
-// three, and the host runs it directly, so it is what these tests must debug.
-//
-// The OS ABI is not the problem, whatever it looks like. A cosmo ELF declares
-// ELFOSABI_FREEBSD because the APE spec requires it, and gdb answers that with
-// "A handler for the OS ABI "FreeBSD" is not built into this configuration",
-// then carries on and resolves symbols normally.
+// runtime.main, no main.* types, no .debug_gdb_scripts. The sidecar carries
+// each of them, and the host runs it directly, so these tests debug it. The
+// sidecar declares no OS ABI, because a gdb with no FreeBSD handler truncates
+// the high half of each address in a FreeBSD ELF.
 func gdbTarget(dir, name string) string {
 	bin := filepath.Join(dir, name)
 	if dbg := bin + ".dbg"; fileExists(dbg) {

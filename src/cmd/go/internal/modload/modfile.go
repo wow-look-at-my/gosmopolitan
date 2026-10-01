@@ -405,8 +405,7 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 	}
 	// A replace line naming an org module records a version the same way a
 	// require line does: the token is not read, and the replacement is the head
-	// of the branch the target follows. replacementFrom is reached from the
-	// context-free mvs.Reqs interface, as rawGoModData is.
+	// of the branch the target follows. It is reached from the context-free mvs.Reqs interface.
 	if found.Version != "" && orgmod.IsOrg(found.Path) && orgResolvable() {
 		version, err := orgVersion(ld, context.TODO(), found.Path)
 		if err != nil {
@@ -521,11 +520,7 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 
 	i.require = make(map[module.Version]requireMeta, len(modFile.Require))
 	for _, r := range modFile.Require {
-		// An org module's version token is inert: the module resolves to a branch
-		// head whatever the line says. Indexing the placeholder means a go.mod
-		// file that records some other token is not considered out of date, so a
-		// repository that recorded a version before this rule existed builds
-		// without being edited first.
+		// Index the placeholder, so a go.mod file with another org token is not out of date.
 		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
 		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
 			i.addOrgBranch(r.Mod.Path, branch)
@@ -693,7 +688,7 @@ func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 	actual := resolveReplacement(ld, m)
 	if mustHaveSums(ld) && actual.Version != "" {
 		key := module.Version{Path: actual.Path, Version: actual.Version + "/go.mod"}
-		if !modfetch.HaveSum(ld.Fetcher(), key) {
+		if !modfetch.HaveSum(ld.Fetcher(), key) && !orgSyncAllows(ld, key) {
 			suggestion := fmt.Sprintf(" for go.mod file; to add it:\n\tgo mod download %s", m.Path)
 			return nil, module.VersionError(actual, &sumMissingError{suggestion: suggestion})
 		}

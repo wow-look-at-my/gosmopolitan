@@ -186,9 +186,7 @@ func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList [
 			inconsistent := false
 			for _, m := range vendorList {
 				if orgmod.IsOrg(m.Path) {
-					// An org module records a placeholder version in both go.mod
-					// and modules.txt, and resolves to a branch head, so the two
-					// are not compared.
+					// go.mod and modules.txt both record the placeholder, so the versions are not compared.
 					continue
 				}
 				if v, ok := rs.rootSelected(ld, m.Path); !ok || v != m.Version {
@@ -1131,7 +1129,7 @@ func updatePrunedRoots(ld *Loader, ctx context.Context, direct map[string]bool, 
 			// We've added or upgraded one or more roots, so load the full module
 			// graph so that we can update those roots to be consistent with other
 			// requirements.
-			if mustHaveCompleteRequirements(ld) {
+			if mustHaveCompleteRequirements(ld) && !orgSyncing(ld) {
 				// Our changes to the roots may have moved dependencies into or out of
 				// the graph-pruning horizon, which could in turn change the selected
 				// versions of other modules. (For pruned modules adding or removing an

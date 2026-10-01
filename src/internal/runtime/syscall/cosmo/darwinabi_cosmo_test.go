@@ -6,6 +6,9 @@ package cosmo_test
 
 import (
 	"internal/runtime/syscall/cosmo"
+	"io"
+	"os"
+	"syscall"
 	"testing"
 	"unsafe"
 )
@@ -487,5 +490,59 @@ func TestDarwinFlock(t *testing.T) {
 	}
 	if _, ok := cosmo.LinuxLockType(0); ok {
 		t.Error("Apple lock type 0 accepted; Apple numbers its types from one")
+	}
+}
+
+func TestLinuxFlockMatchesFlock_t(t *testing.T) {
+	var lf cosmo.LinuxFlock
+	var sf syscall.Flock_t
+	if a, b := unsafe.Sizeof(lf), unsafe.Sizeof(sf); a != b || a != 32 {
+		t.Errorf("sizeof(LinuxFlock) = %d, sizeof(syscall.Flock_t) = %d, want 32", a, b)
+	}
+	for _, f := range []struct {
+		name      string
+		got, want uintptr
+	}{
+		{"Type", unsafe.Offsetof(lf.Type), unsafe.Offsetof(sf.Type)},
+		{"Whence", unsafe.Offsetof(lf.Whence), unsafe.Offsetof(sf.Whence)},
+		{"Start", unsafe.Offsetof(lf.Start), unsafe.Offsetof(sf.Start)},
+		{"Len", unsafe.Offsetof(lf.Len), unsafe.Offsetof(sf.Len)},
+		{"Pid", unsafe.Offsetof(lf.Pid), unsafe.Offsetof(sf.Pid)},
+	} {
+		if f.got != f.want {
+			t.Errorf("offsetof(LinuxFlock.%s) = %d, syscall.Flock_t has it at %d", f.name, f.got, f.want)
+		}
+	}
+}
+
+// TestRawFcntlLock takes a record lock through the bare SYS_FCNTL call with
+// a Linux-shaped record, the way a libc translated from C (modernc.org/libc,
+// under SQLite) does, rather than through syscall.FcntlFlock.
+func TestRawFcntlLock(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "flock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fd := f.Fd()
+
+	lk := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart, Start: 0, Len: 0}
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETLK, uintptr(unsafe.Pointer(&lk))); errno != 0 {
+		t.Fatalf("fcntl(F_SETLK, F_WRLCK) = %v", errno)
+	}
+
+	// A process never conflicts with its own lock, so F_GETLK reports the
+	// range free - in Linux's numbering, which only a translated answer has.
+	q := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart, Start: 0, Len: 0}
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETLK, uintptr(unsafe.Pointer(&q))); errno != 0 {
+		t.Fatalf("fcntl(F_GETLK) = %v", errno)
+	}
+	if q.Type != syscall.F_UNLCK {
+		t.Errorf("F_GETLK Type = %d, want F_UNLCK (%d)", q.Type, syscall.F_UNLCK)
+	}
+
+	un := syscall.Flock_t{Type: syscall.F_UNLCK, Whence: io.SeekStart, Start: 0, Len: 0}
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETLK, uintptr(unsafe.Pointer(&un))); errno != 0 {
+		t.Fatalf("fcntl(F_SETLK, F_UNLCK) = %v", errno)
 	}
 }

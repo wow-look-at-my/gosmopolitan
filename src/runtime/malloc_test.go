@@ -13,6 +13,7 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	. "runtime"
@@ -856,7 +857,17 @@ func BenchmarkGoroutineIdle(b *testing.B) {
 func TestMkmalloc(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	testenv.MustHaveExternalNetwork(t) // To download the golang.org/x/tools dependency.
-	output, err := exec.Command("go", "-C", "_mkmalloc", "test").CombinedOutput()
+	cmd := exec.Command("go", "-C", "_mkmalloc", "test")
+	modcache, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env GOMODCACHE: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(modcache))); err != nil {
+		// The download needs a writable GOPATH: the go command keeps the checksum database's tree head there.
+		gopath := t.TempDir()
+		cmd.Env = append(os.Environ(), "GOPATH="+gopath, "GOMODCACHE="+filepath.Join(gopath, "pkg", "mod"), "GOFLAGS=-modcacherw")
+	}
+	output, err := cmd.CombinedOutput()
 	t.Logf("test output:\n%s", output)
 	if err != nil {
 		t.Errorf("_mkmalloc tests failed: %v", err)

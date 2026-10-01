@@ -65,7 +65,6 @@ type tester struct {
 	failed      bool
 	keepGoing   bool
 	compileOnly bool // just try to compile all tests, but no need to run
-	short       bool
 	cgoEnabled  bool
 	asmflags    string
 	json        bool
@@ -99,14 +98,15 @@ type tester struct {
 
 // work tracks command execution for a test.
 type work struct {
-	dt    *distTest     // unique test name, etc.
-	cmd   *exec.Cmd     // must write stdout/stderr to out
-	began time.Time     // when cmd started
-	flush func()        // if non-nil, called after cmd.Run
-	start chan bool     // a true means to start, a false means to skip
-	out   bytes.Buffer  // combined stdout/stderr from cmd
-	err   error         // work result
-	end   chan struct{} // a value means cmd ended (or was skipped)
+	dt      *distTest     // unique test name, etc.
+	cmd     *exec.Cmd     // must write stdout/stderr to out
+	began   time.Time     // when cmd started
+	elapsed time.Duration // what cmd cost, build of its test binary included
+	flush   func()        // if non-nil, called after cmd.Run
+	start   chan bool     // a true means to start, a false means to skip
+	out     bytes.Buffer  // combined stdout/stderr from cmd
+	err     error         // work result
+	end     chan struct{} // a value means cmd ended (or was skipped)
 }
 
 // printSkip prints a skip message for all of work.
@@ -131,15 +131,6 @@ func (t *tester) run() {
 
 	os.Setenv("PATH", fmt.Sprintf("%s%c%s", gorootBin, os.PathListSeparator, os.Getenv("PATH")))
 	t.routeCacheNotices()
-
-	t.short = true
-	if v := os.Getenv("GO_TEST_SHORT"); v != "" {
-		short, err := strconv.ParseBool(v)
-		if err != nil {
-			fatalf("invalid GO_TEST_SHORT %q: %v", v, err)
-		}
-		t.short = short
-	}
 
 	cmd := exec.Command(gorootBinGo, "env", "CGO_ENABLED")
 	cmd.Stderr = new(bytes.Buffer)
@@ -301,6 +292,19 @@ func (t *tester) run() {
 
 	if !t.json {
 		t.timings.report(os.Stdout, 25)
+		if len(t.runNames) == 0 {
+			var tags []string
+			if t.race {
+				tags = []string{"-tags=race"}
+			}
+			cov, err := measureCoverage(gorootBinGo, tags)
+			if err != nil {
+				t.failed = true
+				log.Printf("Failed measuring test coverage: %v", err)
+			} else {
+				fmt.Printf("\n%s", cov.format())
+			}
+		}
 		if t.failed {
 			fmt.Println("\nFAILED")
 		} else if !anyIncluded {
@@ -446,7 +450,6 @@ func testName(pkg, variant string) string {
 // combine configuration from goTest and tester flags.
 type goTest struct {
 	timeout  time.Duration // If non-zero, override timeout
-	short    bool          // If true, force -short
 	tags     []string      // Build tags
 	race     bool          // Force -race
 	bench    bool          // Run benchmarks (briefly), not tests.
@@ -648,7 +651,14 @@ func (t *tester) sharedBinary(opts *goTest, host bool) (file string, several boo
 		build.keep = file
 		build.runTests = "^$"
 		build.runOnHost = opts.runOnHost
-		if err := build.run(t); err != nil {
+		// The one binary is the largest compile the suite does, and it runs no
+		// test, so nothing else in the output accounts for what it cost.
+		started := time.Now()
+		err := build.run(t)
+		if !t.json {
+			reportStep("build", name, time.Since(started))
+		}
+		if err != nil {
 			errprintf("building the test binary of %s: %v\n", strings.Join(pkgs, " "), err)
 		}
 		t.recordOneBinary(host, file, pkgs)
@@ -679,9 +689,6 @@ func (opts *goTest) sharedCommand(t *tester) *exec.Cmd {
 	// A per-test duration exists only in verbose output, and test2json is the
 	// form both readers of this stream take.
 	args = append(args, "-test.v=test2json")
-	if opts.short || t.short {
-		args = append(args, "-test.short")
-	}
 	if opts.runTests != "" {
 		args = append(args, "-test.run="+opts.runTests)
 	}
@@ -754,9 +761,6 @@ func (opts *goTest) buildArgs(t *tester) (build, run, pkgs, testFlags []string, 
 	} else if t.timeoutScale != 1 {
 		const goTestDefaultTimeout = 10 * time.Minute // Default value of go test -timeout flag.
 		run = append(run, "-timeout="+(goTestDefaultTimeout*time.Duration(t.timeoutScale)).String())
-	}
-	if opts.short || t.short {
-		run = append(run, "-short")
 	}
 	var tags []string
 	if noOpt {
@@ -929,7 +933,13 @@ func (t *tester) registerStdTest(pkg string) {
 		test := oneBinaryTest(stdMatches, goos)
 		test.timeout = timeoutSec
 		test.keep = filepath.Join(workdir, "std.test")
+		// One step builds and runs every package here, so its own line is the
+		// only thing that accounts for the compile.
+		started := time.Now()
 		err := test.run(t)
+		if !t.json {
+			reportStep("test", "std.test", time.Since(started))
+		}
 		t.recordOneBinary(false, test.keep, stdMatches)
 		return err
 	})
@@ -948,6 +958,12 @@ func (t *tester) registerRaceBenchTest(pkg string) {
 		timelog("start", dt.name)
 		defer timelog("end", dt.name)
 		ranGoBench = true
+		started := time.Now()
+		defer func() {
+			if !t.json {
+				reportStep("test", "racebench", time.Since(started))
+			}
+		}()
 		return (&goTest{
 			variant: "racebench",
 			// Include the variant even though there's no overlap in test names.
@@ -1019,15 +1035,9 @@ func (t *tester) registerTests() {
 			if registerStdTestSpecially[pkg] {
 				continue
 			}
-			if t.short && (strings.HasPrefix(pkg, "vendor/") || strings.HasPrefix(pkg, "cmd/vendor/")) {
-				// Vendored code has no tests, and we don't care too much about vet errors
-				// since we can't modify the code, so skip the tests in short mode.
-				// We still let the longtest builders vet them.
-				continue
-			}
 			t.registerStdTest(pkg)
 		}
-		if t.race && !t.short {
+		if t.race {
 			for _, pkg := range pkgs {
 				if t.packageHasBenchmarks(pkg) {
 					t.registerRaceBenchTest(pkg)
@@ -1076,19 +1086,11 @@ func (t *tester) registerTests() {
 			pkg:     "crypto/...",
 		})
 
-		// Test that earlier FIPS snapshots build.
-		// In long mode, test that they work too.
+		// Test that earlier FIPS snapshots work.
 		for _, version := range fipsVersions() {
-			suffix := " # (build and vet only)"
-			run := "^$" // only ensure they compile
-			if !t.short {
-				suffix = ""
-				run = ""
-			}
-			t.registerTest("GOFIPS140="+version+" go test crypto/..."+suffix, &goTest{
+			t.registerTest("GOFIPS140="+version+" go test crypto/...", &goTest{
 				variant:  "gofips140-" + version,
 				pkg:      "crypto/...",
-				runTests: run,
 				env:      []string{"GOFIPS140=" + version, "GOMODCACHE=" + filepath.Join(workdir, "fips-"+version)},
 				// A snapshot is upstream's frozen module. Nobody can add a
 				// t.Serial to its tests, so it is vetted with upstream's list.
@@ -1146,15 +1148,12 @@ func (t *tester) registerTests() {
 			})
 	}
 
-	// GC debug mode tests. We only run these in long-test mode
-	// (with GO_TEST_SHORT=0) because this is just testing a
-	// non-critical debug setting.
-	if !t.compileOnly && !t.short {
+	// GC debug mode tests.
+	if !t.compileOnly {
 		t.registerTest("GODEBUG=gcstoptheworld=2 archive/zip",
 			&goTest{
 				variant: "gcstoptheworld2",
 				timeout: 300 * time.Second,
-				short:   true,
 				env:     []string{"GODEBUG=gcstoptheworld=2"},
 				pkg:     "archive/zip",
 			})
@@ -1162,7 +1161,6 @@ func (t *tester) registerTests() {
 			&goTest{
 				variant: "gccheckmark",
 				timeout: 300 * time.Second,
-				short:   true,
 				env:     []string{"GODEBUG=gccheckmark=1"},
 				pkg:     "runtime",
 			})
@@ -1171,24 +1169,17 @@ func (t *tester) registerTests() {
 	// Spectre mitigation smoke test.
 	if goos == "linux" && goarch == "amd64" && !(gogcflags == "-spectre=all" && t.asmflags == "all=-spectre=all") {
 		// Pick a bunch of packages known to have some assembly.
-		pkgs := []string{"internal/runtime/...", "reflect", "crypto/..."}
-		if !t.short {
-			pkgs = append(pkgs, "runtime")
-		}
+		pkgs := []string{"internal/runtime/...", "reflect", "crypto/...", "runtime"}
 		t.registerTest("spectre",
 			&goTest{
 				variant: "spectre",
-				short:   true,
 				env:     []string{"GOFLAGS=-gcflags=all=-spectre=all -asmflags=all=-spectre=all"},
 				pkgs:    pkgs,
 			})
 	}
 
-	// morestack tests. We only run these in long-test mode
-	// (with GO_TEST_SHORT=0) because the runtime test is
-	// already quite long and mayMoreStackMove makes it about
-	// twice as slow.
-	if !t.compileOnly && !t.short {
+	// morestack tests.
+	if !t.compileOnly {
 		// hooks is the set of maymorestack hooks to test with.
 		hooks := []string{"mayMoreStackPreempt", "mayMoreStackMove"}
 		// hookPkgs is the set of package patterns to apply
@@ -1219,7 +1210,6 @@ func (t *tester) registerTests() {
 				&goTest{
 					variant: hook,
 					timeout: 600 * time.Second,
-					short:   true,
 					env:     []string{"GOFLAGS=" + goFlags},
 					pkgs:    []string{"runtime", "reflect", "sync"},
 				})
@@ -1353,25 +1343,20 @@ func (t *tester) registerTests() {
 	// To help developers avoid trybot-only failures, we try to run on typical developer machines
 	// which is darwin,linux,windows/amd64 and darwin/arm64.
 	//
-	// The same logic applies to the release notes that correspond to each api/next file.
-	//
 	// TODO: remove the exclusion of goexperiment simd right before dev.simd branch is merged to master.
 	if goos == "darwin" || ((goos == "linux" || goos == "windows") && (goarch == "amd64" && !strings.Contains(goexperiment, "simd"))) {
-		t.registerTest("API release note check", &goTest{variant: "check", pkg: "cmd/relnote", testFlags: []string{"-check"}, shared: true})
 		t.registerTest("API check", &goTest{variant: "check", pkg: "cmd/api", timeout: 5 * time.Minute, testFlags: []string{"-check"}, shared: true})
 	}
 
 	// Runtime CPU tests.
 	if !t.compileOnly && t.hasParallelism() {
 		for i := 1; i <= 4; i *= 2 {
-			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d -quick", i),
+			t.registerTest(fmt.Sprintf("GOMAXPROCS=2 runtime -cpu=%d", i),
 				&goTest{
-					variant:   "cpu" + strconv.Itoa(i),
-					timeout:   300 * time.Second,
-					cpu:       strconv.Itoa(i),
-					gcflags:   gogcflags,
-					short:     true,
-					testFlags: []string{"-quick"},
+					variant: "cpu" + strconv.Itoa(i),
+					timeout: 300 * time.Second,
+					cpu:     strconv.Itoa(i),
+					gcflags: gogcflags,
 					// We set GOMAXPROCS=2 in addition to -cpu=1,2,4 in order to test runtime bootstrap code,
 					// creation of first goroutines and first garbage collections in the parallel setting.
 					env:    []string{"GOMAXPROCS=2"},
@@ -1841,6 +1826,7 @@ func (t *tester) runPending(nextTest *distTest) {
 				timelog("start", w.dt.name)
 				w.began = time.Now()
 				w.err = w.cmd.Run()
+				w.elapsed = time.Since(w.began)
 				if w.flush != nil {
 					w.flush()
 				}
@@ -1903,6 +1889,9 @@ func (t *tester) runPending(nextTest *distTest) {
 		ended++
 		<-w.end
 		os.Stdout.Write(w.out.Bytes())
+		if w.elapsed > 0 && !t.json {
+			reportStep("test", dt.name, w.elapsed)
+		}
 		// We no longer need the output, so drop the buffer.
 		w.out = bytes.Buffer{}
 		if w.err != nil {

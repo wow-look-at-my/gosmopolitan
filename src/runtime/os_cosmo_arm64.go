@@ -469,6 +469,7 @@ func osArchInit() {
 		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
 		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
 		Flock:     cosmoDlsym(&dlsymNameFlock[0]),
+		Madvise:   cosmoDlsym(&dlsymNameMadvise[0]),
 		Fdatasync: cosmoDlsym(&dlsymNameFdatasync[0]),
 		Sync:      cosmoDlsym(&dlsymNameSync[0]),
 		Ioctl:     cosmoDlsym(&dlsymNameIoctl[0]),

@@ -2,26 +2,31 @@
 # needs no second pass, whichever of them it happened to load first.
 #
 # One package of this module has a directive that fails on purpose. A module
-# whose generator failed is incomplete, and handing it over breaks the build
-# later at an undefined symbol. So the fetch fails and names the package whose
-# generator failed.
+# ships what its directives write, so the zip is what its authors published and
+# the run is a refresh of it. The failure is named and the fetch keeps going.
 
 env GOFLAGS=-mod=mod
 
-! go mod download example.com/generatedpkgs
+go mod download example.com/generatedpkgs
 stderr 'generating example.com/generatedpkgs'
 stderr 'in broken'
 stderr 'broken on purpose'
+stderr 'keeps what its own zip carries'
 
-# Nothing the failed run wrote reaches the module directory, and no overlay
-# records the module as complete.
+# Nothing the failed run wrote reaches the module directory, and the answer is
+# partial, so no overlay records the module as complete.
 ! exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/broken/broken.gen.go
 ! exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0.generate
 
-# A build that needs the module reports the same failure, rather than a missing
-# symbol from a package nobody generated.
-! go build ./both
-stderr 'broken on purpose'
+# The packages whose generators ran keep what those wrote.
+exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/one/one.gen.go
+exists $GOPATH/pkg/mod/example.com/generatedpkgs@v1.0.0/two/two.gen.go
+
+# A build of those packages compiles. A build that needs the package nobody
+# generated fails at the symbol it never declared.
+go build ./both
+! go build ./usebroken
+stderr 'broken'
 
 -- go.mod --
 module example.com/consumer

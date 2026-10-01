@@ -6,11 +6,15 @@ the generator writes.
 -- .mod --
 module example.com/generatedimport
 
+//go:gendep
+
 go 1.16
 -- .info --
 {"Version": "v1.0.0"}
 -- go.mod --
 module example.com/generatedimport
+
+//go:gendep
 
 go 1.16
 -- gen/main.go --

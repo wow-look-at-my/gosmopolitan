@@ -200,6 +200,8 @@ func (c *dbClient) initBase() {
 	// See https://golang.org/design/25530-sumdb#proxying-a-checksum-database.
 	err := TryProxies(func(proxy string) error {
 		switch proxy {
+		case "github":
+			return errNotGitHub
 		case "noproxy":
 			return errUseProxy
 		case "direct", "off":

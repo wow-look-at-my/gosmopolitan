@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -103,7 +104,26 @@ func TestDirectivesCountsGenerateLines(test *testing.T) {
 	}
 }
 
-// A nested module is its own module with its own zip, so its packages are not
+// go-pgquery carries test data on a line of several megabytes. A scan that
+// stops on a long line fails every build that fetches that module.
+func TestScansReadPastALongLine(test *testing.T) {
+	long := "var data = \"" + strings.Repeat("x", 3<<20) + "\"\n"
+	dir := writeTree(test, test.TempDir(), map[string]string{
+		"data.go": "package m\n\n" + long + "//go:generate go run ./gen\n",
+		"go.mod":  "module example.com/m\n\n" + "// " + strings.Repeat("y", 3<<20) + "\n" + OptIn + "\n",
+	})
+
+	if got := directives([]string{filepath.Join(dir, "data.go")}); got != 1 {
+		test.Errorf("directives = %d, want 1: the directive sits under the long line", got)
+	}
+	if !fileHasDirective(filepath.Join(dir, "data.go")) {
+		test.Error("fileHasDirective = false, want true: the directive sits under the long line")
+	}
+	if !optedIn(dir) {
+		test.Error("optedIn = false, want true: the opt-in sits under the long line")
+	}
+}
+
 // this module's to generate. Every ordinary subdirectory is, and the order is
 // the module's own so that every machine generates in the same one.
 func TestGeneratingPackagesSkipsNestedModules(test *testing.T) {
@@ -175,6 +195,77 @@ func TestProgramMissingSeparatesTheHostFromTheModule(test *testing.T) {
 		if got := hostCannotGenerate(tcase.err); got != tcase.want {
 			test.Errorf("hostCannotGenerate where %s = %v, want %v", tcase.why, got, tcase.want)
 		}
+	}
+}
+
+// A directive that writes into a submodule's directory reports an absent path,
+// because the parent's zip carries no submodule. x/crypto's x509roots is the
+// module this came from: it writes fallback/bundle.go, and fallback is a
+// module of its own.
+//
+// The staged tree decides, not the message. A path whose parent is there names
+// a defect of the module, and that stops the build.
+func TestWroteNowhereSeparatesTheZipsShapeFromADefect(test *testing.T) {
+	stage := writeTree(test, test.TempDir(), map[string]string{
+		"x509roots/gen_fallback_bundle.go": "package main\n",
+		"x509roots/nss/nss.go":             "package nss\n",
+	})
+	const x509roots = "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "fallback/bundle.go": open fallback/bundle.go: no such file or directory`
+	const nssRoots = "exit status 1\n" +
+		`2026/09/20 16:52:50 failed to write to "nss/roots.go": open nss/roots.go: no such file or directory`
+	const idna = "exit status 1\n" +
+		"Copying exported files failed: open ../../net/idna/idna.go: no such file or directory"
+	cases := []struct {
+		why  string
+		err  error
+		want string
+	}{
+		{"no error at all", nil, ""},
+		{"a directive writes into a submodule's directory", errors.New(x509roots), "fallback/bundle.go"},
+		{"the build reports that failure around its own", fmt.Errorf("generating x509roots: %w", errors.New(x509roots)), "fallback/bundle.go"},
+		{"the directory it writes to is right there", errors.New(nssRoots), ""},
+		{"a path of its own leads out of the module", errors.New(idna), "../../net/idna/idna.go"},
+		{"a generator ran and failed", errors.New("exit status 1"), ""},
+		{"a directive names a program this machine lacks", &exec.Error{Name: "stringer", Err: exec.ErrNotFound}, ""},
+	}
+	for _, tcase := range cases {
+		if got := wroteNowhere(stage, "x509roots", tcase.err); got != tcase.want {
+			test.Errorf("wroteNowhere where %s = %q, want %q", tcase.why, got, tcase.want)
+		}
+	}
+}
+
+// An org module's generators are this fleet's own, so they run. A stranger's
+// run only where the module asked for it in its own go.mod, and the marker is
+// the whole comment.
+func TestAllowedRunsTheOrgAndWhoeverAsked(test *testing.T) {
+	cases := []struct {
+		why   string
+		mod   string
+		gomod string
+		want  bool
+	}{
+		{"an org module", OrgPrefix + "go-s3-server", "module " + OrgPrefix + "go-s3-server\n", true},
+		{"a package of one", OrgPrefix + "go-containers/set", "module " + OrgPrefix + "go-containers/set\n", true},
+		{"a stranger that says nothing", "example.com/m", "module example.com/m\n", false},
+		{"a stranger that asked", "example.com/m", "module example.com/m\n\n" + OptIn + "\n", true},
+		{"an indented ask", "example.com/m", "module example.com/m\n\t" + OptIn + "\t\n", true},
+		{"a go.mod that only mentions it", "example.com/m", "// this module does not use " + OptIn + " yet\nmodule example.com/m\n", false},
+		{"a name that opens with the org's", "github.com/wow-look-at-my-not/m", "module github.com/wow-look-at-my-not/m\n", false},
+	}
+	for _, tcase := range cases {
+		modroot := writeTree(test, test.TempDir(), map[string]string{"go.mod": tcase.gomod})
+		if got := Allowed(modroot, tcase.mod); got != tcase.want {
+			test.Errorf("Allowed where %s = %v, want %v", tcase.why, got, tcase.want)
+		}
+	}
+
+	// A module published before modules carries no go.mod, so it carries no
+	// opt-in either.
+	bare := writeTree(test, test.TempDir(), map[string]string{"api.go": "package m\n"})
+	if Allowed(bare, "example.com/m") {
+		test.Error("Allowed for a module with no go.mod = true, want false: nothing in it asked")
 	}
 }
 

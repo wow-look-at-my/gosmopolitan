@@ -20,7 +20,6 @@
 package gendep
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -54,10 +53,11 @@ const generatePrefix = "//go:generate"
 // reports is the symbol the missing file defines, named at the first line that
 // uses it, which is nowhere near the generator that never ran.
 //
-// A directive naming a program this machine lacks is the exception, and the
-// answer is partial when one is skipped. A partial answer belongs to this
-// machine rather than to the module, so a caller keeps it out of any store the
-// fleet reads.
+// Two directives are the exception, and the answer is partial when either is
+// skipped. One names a program this machine lacks. The other writes into a
+// submodule's directory, which no zip of the parent carries. A partial answer
+// is short a file the module's own repository has, so a caller keeps it out of
+// any store the fleet reads.
 func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
 	if len(pkgs) == 0 {
 		return nil, false, nil
@@ -77,14 +77,29 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	if err != nil {
 		return nil, false, err
 	}
+	// What a failed run wrote goes back out. A half-generated package compiles
+	// against files its generator never finished, which is worse than the
+	// package the zip carried.
+	kept, err := additions(modroot, stage)
+	if err != nil {
+		return nil, false, err
+	}
 	for _, pkg := range pkgs {
 		if gone := generatorNotShipped(stage, pkg); gone != "" {
 			fmt.Fprintf(os.Stderr, "go: %s in %s names %s, which its module zip does not carry\n", mod, pkg, gone)
 			continue
 		}
 		err := runGenerate(stage, pkg)
+		grown, addErr := additions(modroot, stage)
+		if addErr != nil {
+			return nil, false, addErr
+		}
 		if err == nil {
+			kept = grown
 			continue
+		}
+		if dropErr := dropAppeared(stage, grown, kept); dropErr != nil {
+			return nil, false, dropErr
 		}
 		// A program this machine lacks says nothing about the module, and the
 		// modules that name stringer or yy ship what those write. So the
@@ -96,12 +111,37 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 			partial = true
 			continue
 		}
+		// A submodule's contents are not in the parent's zip, so a directive
+		// that writes into one names a directory this copy cannot hold.
+		// x/crypto's x509roots writes fallback/bundle.go, and fallback is a
+		// submodule. Its own module carries that file, so a consumer of the
+		// parent wants nothing from the run. The answer is marked partial,
+		// which keeps a tree short of that file out of the cache the fleet
+		// reads, and the module and the path are named on the way past.
+		if gone := wroteNowhere(stage, pkg, err); gone != "" {
+			fmt.Fprintf(os.Stderr, "go: %s in %s writes %s, and its module zip carries no directory above it\n", mod, pkg, gone)
+			partial = true
+			continue
+		}
 		// Nothing generates on a host with no sandbox, or one that cannot start
 		// what the go command built. Both name a machine to fix.
 		if hostCannotGenerate(err) {
 			return nil, false, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
 		}
-		return nil, false, fmt.Errorf("generating %s in %s: %w", mod, pkg, err)
+		// What is left is a generator of the module that ran and failed. A
+		// module ships what its directives write, so the tree the zip carries
+		// is what its authors published, and the run is a refresh of it.
+		// x/text's own generators read the Unicode tables off the network and
+		// write into x/net, so no consumer completes that module, and every
+		// build whose graph reaches it stopped here.
+		//
+		// The failure is named and the answer is partial, which keeps the tree
+		// out of the cache the fleet reads. A module that truly owed the file
+		// fails the build right after, at the symbol it never declared, with
+		// this line above it.
+		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, err)
+		fmt.Fprintf(os.Stderr, "go: %s keeps what its own zip carries for %s\n", mod, pkg)
+		partial = true
 	}
 	if synthesized {
 		if err := os.Remove(filepath.Join(stage, "go.mod")); err != nil {
@@ -120,6 +160,24 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 		}
 	}
 	return added, partial, nil
+}
+
+// dropAppeared removes from stage the files grown holds and kept does not.
+// Both are sorted, and both name files relative to the stage root.
+func dropAppeared(stage string, grown, kept []string) error {
+	had := make(map[string]bool, len(kept))
+	for _, rel := range kept {
+		had[rel] = true
+	}
+	for _, rel := range grown {
+		if had[rel] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(stage, filepath.FromSlash(rel))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // additions answers the regular files under stage that modroot does not have,
@@ -211,30 +269,26 @@ func Packages(modroot string) []string {
 func directives(files []string) int {
 	count := 0
 	for _, file := range files {
-		open, err := os.Open(file)
-		if err != nil {
-			continue
-		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
-			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
+		err := fileLines(file, func(line []byte) bool {
+			directive, ok := directiveLine(line)
+			if !ok {
+				return true
 			}
-			words := strings.Fields(line[len(generatePrefix):])
+			words := strings.Fields(directive[len(generatePrefix):])
 			if len(words) == 0 || words[0] == "-command" {
-				continue
+				return true
 			}
 			count++
+			return true
+		})
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
 		}
-		// A line past the buffer ends the read, and the directives under it go
-		// uncounted. A count short by one is a module that completes without
-		// the file that directive writes.
-		if err := scan.Err(); err != nil {
+		// A read that stops short leaves the directives under the break
+		// uncounted.
+		if err != nil {
 			base.Fatalf("go: reading %s: %v", file, err)
 		}
-		open.Close()
 	}
 	return count
 }
@@ -260,28 +314,27 @@ func generatorNotShipped(stage, pkg string) string {
 		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".go") {
 			continue
 		}
-		open, err := os.Open(filepath.Join(dir, ent.Name()))
-		if err != nil {
+		file := filepath.Join(dir, ent.Name())
+		gone := ""
+		err := fileLines(file, func(line []byte) bool {
+			directive, ok := directiveLine(line)
+			if !ok {
+				return true
+			}
+			gone = missingDroppedPath(stage, dir, directive)
+			return gone == ""
+		})
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		scan := bufio.NewScanner(open)
-		scan.Buffer(nil, 1<<20)
-		for scan.Scan() {
-			line := strings.TrimSpace(scan.Text())
-			if !strings.HasPrefix(line, generatePrefix+" ") && !strings.HasPrefix(line, generatePrefix+"\t") {
-				continue
-			}
-			if gone := missingDroppedPath(stage, dir, line); gone != "" {
-				open.Close()
-				return gone
-			}
-		}
-		// A read that stopped short hides the rest of the directives, and a
+		// A read that stops short hides the rest of the directives, and a
 		// dropped path among them then reads as a package with none.
-		if err := scan.Err(); err != nil {
-			base.Fatalf("go: reading %s: %v", filepath.Join(dir, ent.Name()), err)
+		if err != nil {
+			base.Fatalf("go: reading %s: %v", file, err)
 		}
-		open.Close()
+		if gone != "" {
+			return gone
+		}
 	}
 	return ""
 }
@@ -343,6 +396,43 @@ func programMissing(err error) bool {
 	said := err.Error()
 	return strings.Contains(said, "executable file not found") ||
 		strings.Contains(said, exec.ErrNotFound.Error())
+}
+
+// wroteNowhere answers the path a failed generator could not open because a
+// directory above it is absent from the staged copy, or "". The go command
+// leaves a submodule's whole directory out of the parent's zip, so a directive
+// that writes into one reports exactly this, on every machine, for every
+// consumer of that module version.
+//
+// The generator's own message supplies the candidate and the staged tree
+// decides. A path whose parent is there names something else, and a module's
+// own defect stops the build.
+func wroteNowhere(stage, pkg string, err error) string {
+	if err == nil {
+		return ""
+	}
+	for line := range strings.SplitSeq(err.Error(), "\n") {
+		_, after, found := strings.Cut(line, "open ")
+		if !found {
+			continue
+		}
+		path, _, ok := strings.Cut(after, ": "+syscall.ENOENT.Error())
+		if path == "" || !ok {
+			continue
+		}
+		// The directive runs with the package as its directory, and a path of
+		// its own leads out of the module as readily as into a directory the
+		// zip drops. Neither reaches a consumer, so both read the same way.
+		at := filepath.Join(stage, filepath.FromSlash(pkg), filepath.FromSlash(path))
+		within, err := filepath.Rel(stage, at)
+		if err != nil || !filepath.IsLocal(within) {
+			return path
+		}
+		if _, err := os.Lstat(filepath.Dir(at)); errors.Is(err, fs.ErrNotExist) {
+			return path
+		}
+	}
+	return ""
 }
 
 // startFailed reports whether err says the host refused to start a program the
@@ -415,9 +505,14 @@ func runGenerate(root, pkg string) error {
 	// which runs here whatever the build targets and is the only target a go
 	// command carrying its standard library can build. Every target reads
 	// that single completed module.
+	// This generate writes the module itself. The child loads that module's
+	// packages out of the module cache, which is where Dir hands a package its
+	// generated copy instead. Left on, the directive would write that copy and
+	// the module this call is completing would keep none of it.
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
+		"GOGENERATEDEPS=off",
 	)
 	err = cmd.Run()
 	if err == nil {

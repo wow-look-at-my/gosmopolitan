@@ -1,0 +1,36 @@
+Written by hand.
+A module outside the org that carries a generate directive and never asks for
+it to run: its go.mod holds no //go:gendep line. It compiles as the zip
+published it, which is a package that declares nothing.
+
+-- .mod --
+module example.com/generatedunasked
+
+go 1.16
+-- .info --
+{"Version": "v1.0.0"}
+-- go.mod --
+module example.com/generatedunasked
+
+go 1.16
+-- gen/main.go --
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	out := flag.String("out", "", "file to write")
+	flag.Parse()
+	body := "package lang\n\nfunc Name() string { return \"generated\" }\n"
+	if err := os.WriteFile(*out, []byte(body), 0o666); err != nil {
+		os.Exit(1)
+	}
+}
+-- lang/lang.go --
+//go:generate go run example.com/generatedunasked/gen -out lang.gen.go
+
+// Package lang declares nothing itself: Name is the generator's to write.
+package lang

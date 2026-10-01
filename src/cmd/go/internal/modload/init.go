@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
@@ -1390,6 +1391,11 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 		}
 		mainModulePaths[m.Path] = true
 	}
+	if len(ms) > 0 {
+		// The shared cache labels each request with the module being built. The
+		// cache opens before this, so it learns the path here instead.
+		cache.SetSharedModule(ms[0].Path)
+	}
 	replacedByWorkFile := make(map[string]bool)
 	replacements := make(map[module.Version]module.Version)
 	for _, r := range workFileReplaces {
@@ -1555,9 +1561,7 @@ func rootsFromModFile(ld *Loader, ctx context.Context, m module.Version, modFile
 			continue
 		}
 
-		// An org module has no version of its own: the token on the require line
-		// is a placeholder, and the root is the head of the branch the module
-		// follows.
+		// The token is a placeholder. The root is the branch head, or the head the run locked in CI.
 		root := r.Mod
 		root, err = resolveOrgRequire(ld, ctx, root)
 		if err != nil {
@@ -2076,10 +2080,15 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 	index := ld.MainModules.GetSingleIndexOrNil(ld)
 	dirty := index.modFileIsDirty(modFile) || len(opts.DropTools) > 0 || len(opts.AddTools) > 0
 	if dirty && cfg.BuildMod != "mod" {
-		// If we're about to fail due to -mod=readonly,
-		// prefer to report a dirty go.mod over a dirty go.sum
-		return errGoModDirty
+		toolsChanged := len(opts.DropTools) > 0 || len(opts.AddTools) > 0
+		if toolsChanged || !orgSyncCommit(ld, index, modFile) {
+			// If we're about to fail due to -mod=readonly,
+			// prefer to report a dirty go.mod over a dirty go.sum
+			return errGoModDirty
+		}
 	}
+	// Under orgSyncing, only sums that orgSyncAllows admitted can be new.
+	sumReadonly := mustHaveCompleteRequirements(ld) && !orgSyncing(ld)
 
 	if !dirty && cfg.CmdName != "mod tidy" {
 		// The go.mod file has the same semantic content that it had before
@@ -2087,7 +2096,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// Don't write go.mod, but write go.sum in case we added or trimmed sums.
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
-			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld)); err != nil {
+			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly); err != nil {
 				return err
 			}
 		}
@@ -2110,7 +2119,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
 			if err == nil {
-				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld))
+				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly)
 			}
 		}
 	}()
