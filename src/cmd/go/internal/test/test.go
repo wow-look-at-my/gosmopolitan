@@ -2307,6 +2307,7 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		}
 		return false
 	}
+	inputList := data
 	testInputsID, err := computeTestInputsID(a, data)
 	if err != nil {
 		return false
@@ -2320,9 +2321,11 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 	data, entry, err = cache.GetBytes(cache.Default(), testAndInputKey(testID, testInputsID))
 
 	// Merge cached cover profile data to cover profile.
+	var cpData string
 	if testCoverProfile != "" {
 		// Specifically ignore entry as it will be the same as above.
-		cpData, _, err := cache.GetFile(cache.Default(), coverProfileAndInputKey(testID, testInputsID, c.covMeta))
+		var err error
+		cpData, _, err = cache.GetFile(cache.Default(), coverProfileAndInputKey(testID, testInputsID, c.covMeta))
 		if err != nil {
 			if cache.DebugTest {
 				fmt.Fprintf(os.Stderr, "testcache: %s: cached cover profile missing: %v\n", a.Package.ImportPath, err)
@@ -2375,6 +2378,23 @@ func (c *runCache) tryCacheWithID(b *work.Builder, a *work.Action, id string) bo
 		return false
 	}
 	j += i + len("ok  \t") + 1
+
+	// The next run asks the first identity before it links. A shared store can
+	// hold only the second one, so a hit there is written under the first too.
+	if testID == c.id2 && c.id1 != (cache.ActionID{}) && c.id1 != testID {
+		var profile []byte
+		var readErr error
+		if cpData != "" {
+			profile, readErr = os.ReadFile(cpData)
+		}
+		if readErr == nil {
+			cache.PutNoVerify(cache.Default(), c.id1, bytes.NewReader(inputList))
+			cache.PutNoVerify(cache.Default(), testAndInputKey(c.id1, testInputsID), bytes.NewReader(data))
+			if testCoverProfile != "" || c.covMeta != (cache.ActionID{}) {
+				cache.PutNoVerify(cache.Default(), coverProfileAndInputKey(c.id1, testInputsID, c.covMeta), bytes.NewReader(profile))
+			}
+		}
+	}
 
 	// Committed to printing.
 	c.buf = new(bytes.Buffer)
