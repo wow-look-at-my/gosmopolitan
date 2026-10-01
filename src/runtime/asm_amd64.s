@@ -190,18 +190,15 @@ nocpuinfo:
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
-#ifdef GOOS_cosmo
-	// On NT libcosmo never started, so C cannot run. osinit stops the program with a message.
-	CMPL	runtime·__hostos(SB), $2	// _HOSTWINDOWS
-	JEQ	needtls
-#endif
 	// arg 1: g0, already in DI
 	MOVQ	$setg_gcc<>(SB), SI // arg 2: setg_gcc
 	MOVQ	$0, DX	// arg 3, 4: not used when using platform's TLS
 	MOVQ	$0, CX
 #ifdef GOOS_cosmo
 	// x_cgo_init copies the host OS from libcosmo and installs this thread's GS.
+	// On NT it fills ntiat from libcosmo's import address table.
 	MOVQ	$runtime·__hostos(SB), DX	// arg 3: &__hostos
+	MOVQ	$runtime·ntiat(SB), CX	// arg 4: &ntiat
 #endif
 #ifdef GOOS_android
 	MOVQ	$runtime·tls_g(SB), DX 	// arg 3: &tls_g

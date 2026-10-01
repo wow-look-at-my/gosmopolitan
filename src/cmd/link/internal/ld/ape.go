@@ -72,8 +72,11 @@ type apePayload struct {
 // relative file offsets (every PT_LOAD has vaddr - p_offset ==
 // peCosmoImageBase; see apePayloadLoads).
 type apePEInfo struct {
-	entryRVA   uint32 // _rt0_cosmo_nt, the PE AddressOfEntryPoint
-	importsRVA uint32 // runtime.ntidata, the import directory table
+	entryRVA    uint32 // the PE AddressOfEntryPoint
+	importsRVA  uint32 // the import directory table
+	importsSize uint32 // the import directory table, its zero descriptor included
+	iatRVA      uint32
+	iatSize     uint32
 }
 
 // payloadFromELF validates elf and wraps it as an APE payload.
@@ -844,18 +847,14 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 			Exitf("APE NT boot: %s is %d bytes, want %d (layout contract with rt0_cosmo_nt_amd64.s)", name, ldr.SymSize(s), wantSize)
 		}
 		v := uint64(ldr.SymValue(s))
-		if ctxt.LinkMode == LinkExternal {
-			// The external linker placed the symbol, so read its address from the image.
-			linked, found := cosmoLinkedSymbol(p.elf, name)
-			if !found {
-				Exitf("APE NT boot: symbol %s is not in the externally linked image", name)
-			}
-			v = linked
-		}
 		if v < base || v-base >= 1<<32 {
 			Exitf("APE NT boot: %s at %#x is outside the PE image (base %#x)", name, v, base)
 		}
 		return v
+	}
+	if ctxt.LinkMode == LinkExternal {
+		p.pe = cosmoNTBoot(p.elf, base)
+		return
 	}
 	entry := sym("_rt0_cosmo_nt", -1)
 	idata := sym("runtime.ntidata", ntidataSize)
@@ -894,8 +893,9 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 	binary.LittleEndian.PutUint64(blob[ntidataILT+8:], uint64(idataRVA)+ntidataHintLoadLib) // ILT[1]
 
 	p.pe = &apePEInfo{
-		entryRVA:   uint32(entry - base),
-		importsRVA: idataRVA,
+		entryRVA:    uint32(entry - base),
+		importsRVA:  idataRVA,
+		importsSize: peCosmoImportsSize,
 	}
 }
 
@@ -984,8 +984,19 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 	if t := sects[0]; info.entryRVA < t.rva || info.entryRVA >= t.rva+t.vsz {
 		Exitf("APE PE: entry RVA %#x is outside .text [%#x, %#x)", info.entryRVA, t.rva, t.rva+t.vsz)
 	}
-	if d := sects[2]; info.importsRVA < d.rva || info.importsRVA+peCosmoImportsSize > d.rva+d.vsz {
-		Exitf("APE PE: import directory RVA %#x is outside .data [%#x, %#x)", info.importsRVA, d.rva, d.rva+d.vsz)
+	within := func(rva, size uint32) bool {
+		for _, sect := range sects[1:] {
+			if rva >= sect.rva && rva+size <= sect.rva+sect.vsz {
+				return true
+			}
+		}
+		return false
+	}
+	if !within(info.importsRVA, info.importsSize) {
+		Exitf("APE PE: import directory [%#x, %#x) is outside .rodata and .data", info.importsRVA, info.importsRVA+info.importsSize)
+	}
+	if d := sects[2]; info.iatSize != 0 && (info.iatRVA < d.rva || info.iatRVA+info.iatSize > d.rva+d.vsz) {
+		Exitf("APE PE: import address table [%#x, %#x) is outside .data", info.iatRVA, info.iatRVA+info.iatSize)
 	}
 
 	peStart := 0x80
@@ -1041,10 +1052,11 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)   // SizeOfHeapCommit
 	binary.LittleEndian.PutUint32(header[optStart+104:], 0)       // LoaderFlags
 	binary.LittleEndian.PutUint32(header[optStart+108:], 16)      // NumberOfRvaAndSizes
-	// Data directories: only [1] (imports) is populated.
 	dirStart := optStart + 112
 	binary.LittleEndian.PutUint32(header[dirStart+8:], info.importsRVA)
-	binary.LittleEndian.PutUint32(header[dirStart+12:], peCosmoImportsSize)
+	binary.LittleEndian.PutUint32(header[dirStart+12:], info.importsSize)
+	binary.LittleEndian.PutUint32(header[dirStart+96:], info.iatRVA)
+	binary.LittleEndian.PutUint32(header[dirStart+100:], info.iatSize)
 
 	// Section table (ends at 0x208, within the [0x80, 0x7FF) budget the
 	// shell script at apeScriptOffset leaves for the PE header chain).

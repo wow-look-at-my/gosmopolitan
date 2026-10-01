@@ -287,11 +287,8 @@ func sysargs(argc int32, argv **byte) {
 		return
 	}
 	if iswindows() {
-		// The NT boot stub always fabricates a complete auxv
-		// (AT_PAGESZ at minimum), so this point should be
-		// unreachable; guard anyway because both fallbacks below
-		// are Linux syscall paths (open /proc/self/auxv, and an
-		// mmap+mincore page-size probe).
+		// The NT boot stub fabricates an auxv, and libcosmo's WinMain, which starts a cgo program, passes none.
+		physPageSize = 0x1000
 		return
 	}
 	// Fall back to /proc/self/auxv.
@@ -354,11 +351,6 @@ func osinit() {
 	setGOOS()
 	osArchInit()
 	ntBoot("osArchInit done")
-	// NT enters at _rt0_cosmo_nt, so libcosmo never starts and C code cannot run.
-	if iscgo && iswindows() {
-		print("runtime: a cgo program cannot run on a Windows host yet: libcosmo is not started there\n")
-		exit(2)
-	}
 	// After osArchInit: the NT probe needs the resolved import table.
 	setGOARCH()
 	ntBoot("setGOARCH done")

@@ -7,7 +7,9 @@ export PATH="/opt/cosmocc/bin:$PATH"   # cosmocc 4.0.2 is the tested release
 GOOS=cosmo go build -o prog.com .      # cgo is on, both payloads carry C
 ```
 
-`dats/checks/cosmo-cgo.dats` is the proof. It builds `testdata/cgoprobe` fat, runs it on a linux/amd64 host, and runs its arm64 payload under qemu-aarch64 through cosmocc's `ape-aarch64.elf` loader. The probe covers a plain call, printf, errno and a Go callback. It also calls Go from a thread that C started, and runs many goroutines in and out of C under GC.
+`dats/checks/cosmo-cgo.dats` is the proof on the build host. It builds `testdata/cgoprobe` fat, runs it on a linux/amd64 host, and runs its arm64 payload under qemu-aarch64 through cosmocc's `ape-aarch64.elf` loader. The probe covers a plain call, printf, errno and a Go callback. It also calls Go from a thread that C started, and runs many goroutines in and out of C under GC.
+
+The Linux build leg also builds the probe and hands it to the test job. `TestCgoProbe` in `testdata/ape/apetest` runs it on each test host: ubuntu amd64, macOS arm64 and Windows amd64. It asserts every check and the host's own architecture.
 
 ## Compilers
 
@@ -33,6 +35,16 @@ cgo forces an external link (`internal/platform.MustLinkExternal`). `cmd/link` r
 - The entry is libcosmo's `_start`. It starts the C runtime, then calls `main`, which is Go's `rt0_go`.
 - `-Wl,--wrap=pthread_create` sends every thread through `runtime/cgo`'s wrapper.
 
+## NT
+
+The PE header of a cgo image differs from a pure-Go one in fields (`cosmoNTBoot` in `cosmolink.go`). A pure-Go image keeps `_rt0_cosmo_nt` and `runtime.ntidata`.
+
+- AddressOfEntryPoint is libcosmo's `WinMain`. The script pulls it in with `EXTERN(WinMain)`. WinMain starts libcosmo on NT and calls `main`, as `_start` does on Unix.
+- The import directory is libcosmo's. Each `__imp_` object carries its own `.idata.ro.*` descriptor, lookup and name sections and a `.piro.data.sort.iat.*` slot. The script bounds them with `ape_idata_idt`, `ape_idata_idtend`, `ape_idata_iat` and `ape_idata_iatend`, and writes the zero descriptor itself. Its relocations are RVAs against `0x400000`, the amd64 cgo base.
+- `x_cgo_init` copies `__imp_GetProcAddress` and `__imp_LoadLibraryA` into `runtime.ntiat`. The Go NT layer resolves everything else through those two, as on the pure-Go path.
+- WinMain passes `main` no auxv, so `sysargs` takes a 4 KiB page on NT. `startupRand` stays empty and `randinit` reads `ProcessPrng`.
+- Threads come from libcosmo's `pthread_create`, which calls `CreateThread`.
+
 ## Thread state
 
 libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc_cosmo.c`).
@@ -41,6 +53,7 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 |---|---|---|---|
 | amd64 Linux | `%fs:0` | `gs:0x28` | GS base 0x28 below a `__thread` slot pair |
 | amd64 XNU | `gs:0x30` | `gs:0x28` | the same pair, slot 1 holds the TIB |
+| amd64 NT | a TEB TLS slot | `gs:0x28` | nothing: it is the TEB's ArbitraryUserPointer |
 | arm64 | `x28` | `TPIDR_EL0` + `tls_g` | `TPIDR_EL0` = the thread's `x28` |
 
 - `x_cgo_init` binds the main thread and copies `__hostos` and `__syslib` from libcosmo, because the APE boot hands them to libcosmo's `_start`.
@@ -52,7 +65,7 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 
 The NT and macOS rows are also in `docs/STUBS-INVENTORY.md`.
 
-- NT: the PE entry is Go's `_rt0_cosmo_nt`, so libcosmo never starts. A cgo program stops in `osinit` with a message.
-- macOS: nothing has run there. The arm64 path writes `TPIDR_EL0`. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
+- Wine cannot run any cosmocc program, cgo or not: libcosmo's startup retries one fixed `MapViewOfFileEx` forever there. The windows test leg is the NT proof.
+- macOS Intel: nothing has run there. The amd64 path writes the GS base with `thread_fast_set_cthread_self`.
 - C's buffered stdio is not flushed when Go exits. That matches upstream cgo: C code calls `fflush`.
 - Only `-buildmode=exe`. No internal link, c-archive, c-shared or plugin.

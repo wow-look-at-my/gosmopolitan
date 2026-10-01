@@ -115,6 +115,40 @@ func cosmoFixedTLS(target *Target) bool {
 	return target.HeadType == objabi.Hcosmo && target.IsAMD64()
 }
 
+// cosmoNTBoot returns the PE entry and import tables of a cgo amd64 image.
+// libcosmo starts at WinMain on NT. WinMain calls main, which is rt0_go, as
+// _start does on Unix. The import tables are libcosmo's, which the linker
+// script bounds with the ape_idata symbols.
+func cosmoNTBoot(image []byte, base uint64) *apePEInfo {
+	rva := func(name string) uint32 {
+		value, found := cosmoLinkedSymbol(image, name)
+		if !found {
+			Exitf("APE NT boot: symbol %s is not in the externally linked image", name)
+		}
+		if value < base || value-base >= 1<<32 {
+			Exitf("APE NT boot: %s at %#x is outside the PE image (base %#x)", name, value, base)
+		}
+		return uint32(value - base)
+	}
+	info := &apePEInfo{
+		entryRVA:   rva("WinMain"),
+		importsRVA: rva("ape_idata_idt"),
+		iatRVA:     rva("ape_idata_iat"),
+	}
+	info.importsSize = rva("ape_idata_idtend") - info.importsRVA
+	info.iatSize = rva("ape_idata_iatend") - info.iatRVA
+	if info.importsSize < 40 || info.importsSize%20 != 0 {
+		Exitf("APE NT boot: the import directory is %d bytes, want a whole number of 20-byte descriptors after kernel32's", info.importsSize)
+	}
+	if info.iatSize == 0 {
+		Exitf("APE NT boot: the image has no import address table")
+	}
+	loads := apePayloadLoads(image)
+	apeVaddrFileOff(loads, base+uint64(info.importsRVA), uint64(info.importsSize), "ape_idata_idt")
+	apeVaddrFileOff(loads, base+uint64(info.iatRVA), uint64(info.iatSize), "ape_idata_iat")
+	return info
+}
+
 // cosmoLinkedSymbol returns the value of a symbol in a linked ELF image. The
 // external linker chooses every address, so the loader's values are stale.
 func cosmoLinkedSymbol(image []byte, name string) (uint64, bool) {

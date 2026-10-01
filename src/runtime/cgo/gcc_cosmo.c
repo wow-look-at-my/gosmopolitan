@@ -3,7 +3,8 @@
 //go:build cosmo
 
 // Go's thread state on a cosmo thread. libcosmo owns the C thread pointer:
-// %fs (Linux) or gs:0x30 (XNU) on amd64, and x28 on arm64.
+// %fs (Linux), gs:0x30 (XNU) or a TEB TLS slot (NT) on amd64. It is x28 on
+// arm64.
 
 #include <errno.h>
 #include <pthread.h>
@@ -25,6 +26,10 @@ extern struct Syslib *__syslib;
 #define GO_HOST_XNU 8
 
 #if defined(__x86_64__)
+
+// libcosmo's import address table slots, which the NT loader fills.
+extern void *__imp_GetProcAddress;
+extern void *__imp_LoadLibraryA;
 
 static __thread uintptr_t cosmo_go_tls[2];
 
@@ -54,9 +59,24 @@ cosmo_bind_go_tls(void)
 {
 	uintptr_t tib;
 
+	// On NT gs:0x28 is the TEB's ArbitraryUserPointer, which is already per thread.
+	if (__hostos & COSMO_HOST_WINDOWS) {
+		return;
+	}
 	__asm__ volatile("mov %%gs:0x30,%0" : "=r"(tib));
 	cosmo_go_tls[1] = tib;
 	cosmo_set_gs(&cosmo_go_tls[0]);
+}
+
+// cosmo_host_slots fills the runtime's ntiat. The Go runtime finds every NT
+// function through GetProcAddress and LoadLibraryA.
+static void
+cosmo_host_slots(void **slots)
+{
+	if (__hostos & COSMO_HOST_WINDOWS) {
+		slots[0] = __imp_GetProcAddress;
+		slots[1] = __imp_LoadLibraryA;
+	}
 }
 
 #elif defined(__aarch64__)
@@ -69,14 +89,21 @@ cosmo_bind_go_tls(void)
 	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tib));
 }
 
+// cosmo_host_slots fills the runtime's __syslib, which macOS calls go through.
+static void
+cosmo_host_slots(void **slots)
+{
+	*slots = __syslib;
+}
+
 #else
 #error "unsupported cosmo architecture"
 #endif
 
 // cosmo_inittls is x_cgo_inittls. rt0_go passes the Go runtime's __hostos and
-// __syslib, because the APE boot handed them to libcosmo's _start, not to Go.
+// its host slots, because the APE boot handed the host to libcosmo, not to Go.
 static void
-cosmo_inittls(void **hostos, void **syslib)
+cosmo_inittls(void **hostos, void **slots)
 {
 	int32_t *goHostos = (int32_t *)hostos;
 
@@ -90,9 +117,7 @@ cosmo_inittls(void **hostos, void **syslib)
 		fprintf(stderr, "runtime/cgo: libcosmo reports host %#x, which the Go runtime does not support\n", __hostos);
 		abort();
 	}
-	if (syslib != NULL) {
-		*syslib = __syslib;
-	}
+	cosmo_host_slots(slots);
 	cosmo_bind_go_tls();
 }
 

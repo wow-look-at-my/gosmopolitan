@@ -27,8 +27,10 @@ func cosmoLinkerScript(arch sys.ArchFamily) string {
 // cosmoLdsAMD64 makes PT_LOADs: RX text, R rodata, RW data. Each has vaddr -
 // offset equal to the base, which the PE header needs (ape.go). Go text
 // comes before _ereal. libcosmo rewrites TLS instructions between _ereal and
-// __privileged_start at startup, and Go code must stay out of it.
+// __privileged_start at startup, and Go code must stay out of it. WinMain is
+// the PE entry, and the ape_idata symbols bound the import tables.
 const cosmoLdsAMD64 = `ENTRY(_start)
+EXTERN(WinMain)
 PHDRS {
   text PT_LOAD FILEHDR PHDRS FLAGS(5);
   rodata PT_LOAD FLAGS(4);
@@ -94,6 +96,12 @@ SECTIONS {
     BYTE(10);
     BYTE(10);
     KEEP(*(.idata.ro));
+    /* The PE import directory: one descriptor per DLL, then a zero descriptor. */
+    . = ALIGN(4);
+    ape_idata_idt = .;
+    KEEP(*(SORT_BY_NAME(.idata.ro.idt.2.*)))
+    LONG(0); LONG(0); LONG(0); LONG(0); LONG(0);
+    ape_idata_idtend = .;
     KEEP(*(SORT_BY_NAME(.idata.ro.*)))
     KEEP(*(.initroprologue))
     KEEP(*(SORT_BY_NAME(.initro.*)))
@@ -129,7 +137,11 @@ SECTIONS {
   .go.module : { KEEP(*(.go.module)) } :data
   .noptrdata : { KEEP(*(.noptrdata)) } :data
   .data : {
+    /* The PE import address table, which the NT loader fills. */
+    . = ALIGN(8);
+    ape_idata_iat = .;
     KEEP(*(SORT_BY_NAME(.piro.data.sort.iat.*)))
+    ape_idata_iatend = .;
     KEEP(*(.dataprologue))
     *(.data .data.*)
     *(.gnu_extab)
@@ -224,6 +236,7 @@ ape_stack_vaddr = DEFINED(ape_stack_vaddr) ? ape_stack_vaddr : 0x700000000000;
 ape_stack_memsz = DEFINED(ape_stack_memsz) ? ape_stack_memsz : 4 * 1024 * 1024;
 __eh_frame_hdr_start = __eh_frame_hdr_end_actual > __eh_frame_hdr_start_actual ? __eh_frame_hdr_start_actual : 0;
 __eh_frame_hdr_end = __eh_frame_hdr_end_actual > __eh_frame_hdr_start_actual ? __eh_frame_hdr_end_actual : 0;
+v_ntsubsystem = 3;
 `
 
 // cosmoLdsARM64 follows aarch64.lds, with Go's sections named and the base moved.
