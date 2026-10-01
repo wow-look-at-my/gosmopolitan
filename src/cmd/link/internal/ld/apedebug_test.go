@@ -322,7 +322,7 @@ func TestAPEFatMergeSlimSidecars(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(amdSidecar, wantAmd) {
+	if !bytes.Equal(amdSidecar, withoutOSABI(wantAmd)) {
 		t.Errorf("amd64 sidecar differs from slimELFDebug of the input image")
 	}
 
@@ -348,13 +348,12 @@ func TestAPEFatMergeSlimSidecars(t *testing.T) {
 		t.Errorf("slim-mode fat APE differs from full-mode fat APE (mode must only affect sidecars)")
 	}
 
-	// And the full-mode sidecar is still the pristine byte copy.
 	fullSidecar, err := os.ReadFile(outFull + ".dbg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(fullSidecar, amdElf) {
-		t.Errorf("full-mode sidecar is not byte-identical to the original ELF")
+	if !bytes.Equal(fullSidecar, withoutOSABI(amdElf)) {
+		t.Errorf("full-mode sidecar is not the original ELF with the OS ABI cleared")
 	}
 }
 

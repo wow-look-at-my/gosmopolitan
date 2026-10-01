@@ -109,6 +109,8 @@ type DarwinFns struct {
 	// Flock backs SYS_FLOCK. Apple's flock(2) is BSD's, which is where
 	// Linux took the LOCK_* values from, so operation passes through.
 	Flock uintptr
+	// Madvise backs SYS_MADVISE; see darwinMadvise for the advice values.
+	Madvise uintptr
 	// Fdatasync may be absent; darwinFdatasync falls back to Fsync.
 	Fdatasync uintptr
 	Sync      uintptr
@@ -198,6 +200,7 @@ const (
 	sysFSYNC        = 82
 	sysFDATASYNC    = 83
 	sysUTIMENSAT    = 88
+	sysMADVISE      = 233
 	sysSETPRIORITY  = 140
 	sysGETPRIORITY  = 141
 	sysSETREGID     = 143
@@ -532,6 +535,8 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 		// Linux's own LOCK_MAND extension has no Apple counterpart and
 		// reaches libc as an unknown operation, which answers EINVAL.
 		return darwinCall(darwinFns.Flock, a1, a2, 0, 0, 0, 0)
+	case sysMADVISE:
+		return darwinMadvise(a1, a2, a3)
 	case sysLINKAT:
 		return darwinLinkat(a1, a2, a3, a4, a5)
 	case sysSYMLINKAT:
@@ -639,6 +644,29 @@ func syscall6SlowDarwin(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uint
 	// Not emulated. Return ENOSYS so the failure is visible rather than
 	// pretending the call succeeded.
 	return ^uintptr(0), 0, darwinENOSYS
+}
+
+// Linux madvise advice values that differ from Apple's. NORMAL, RANDOM,
+// SEQUENTIAL, WILLNEED and DONTNEED are 0..4 on both systems.
+const (
+	linuxMADV_FREE = 8
+	appleMADV_FREE = 5
+)
+
+// darwinMadvise runs madvise with the advice in Apple's numbering. Advice
+// Apple has no counterpart for is refused with EINVAL, which is what Linux
+// answers for advice it does not know.
+//
+//go:nosplit
+func darwinMadvise(addr, length, advice uintptr) (r1, r2, errno uintptr) {
+	switch {
+	case advice <= 4:
+	case advice == linuxMADV_FREE:
+		advice = appleMADV_FREE
+	default:
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	return darwinCall(darwinFns.Madvise, addr, length, advice, 0, 0, 0)
 }
 
 // darwinGetcwd emulates the Linux getcwd syscall, which returns the

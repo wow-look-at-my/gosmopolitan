@@ -21,8 +21,8 @@ golang.org/x/net/internal/quic/quicwire
 golang.org/x/net/lif
 golang.org/x/net/nettest
 golang.org/x/net/quic
-# golang.org/x/sys v0.45.0
-## explicit; go 1.25.0
+# golang.org/x/sys v0.48.0
+## explicit; go 1.26.0
 golang.org/x/sys/cpu
 # golang.org/x/text v0.37.0
 ## explicit; go 1.25.0
