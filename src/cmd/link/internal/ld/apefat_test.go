@@ -151,6 +151,14 @@ func checkSidecarELF(t *testing.T, path string, machine elf.Machine) {
 	}
 }
 
+// withoutOSABI returns a copy of img, an ELF image, with no OS ABI: the
+// form of img that a debug sidecar holds.
+func withoutOSABI(img []byte) []byte {
+	out := append([]byte(nil), img...)
+	out[elf.EI_OSABI] = byte(elf.ELFOSABI_NONE)
+	return out
+}
+
 func TestAPEDebugSidecarName(t *testing.T) {
 	if got := apeDebugSidecarName("app.com"); got != "app.com.dbg" {
 		t.Errorf("sidecar name = %q, want app.com.dbg", got)
@@ -159,7 +167,7 @@ func TestAPEDebugSidecarName(t *testing.T) {
 
 // TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF
 // (arm64) under -apestrip -apedbg and verifies: the amd64 sidecar copies
-// that linker's ELF byte for byte, the arm64 image gets no sidecar, and the
+// that linker's ELF with the OS ABI cleared, the arm64 image gets no sidecar, and the
 // fat APE embeds only each payload's loadable span with the section header
 // fields zeroed - no symtab or debug bytes survive in the output.
 func TestAPEFatMergeStripAndSidecars(t *testing.T) {
@@ -177,8 +185,11 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	if err != nil {
 		t.Fatalf("amd64 sidecar: %v", err)
 	}
-	if !bytes.Equal(amdSidecar, amdElf) {
-		t.Errorf("amd64 sidecar is not byte-identical to the original ELF (thin-APE extraction must round-trip)")
+	if !bytes.Equal(amdSidecar, withoutOSABI(amdElf)) {
+		t.Errorf("amd64 sidecar is not the original ELF with the OS ABI cleared (thin-APE extraction must round-trip)")
+	}
+	if amdElf[elf.EI_OSABI] != elfOSABIFreeBSD {
+		t.Fatalf("test input OS ABI = %d, want FreeBSD", amdElf[elf.EI_OSABI])
 	}
 	if _, err := os.Stat(out + ".aarch64.elf"); err == nil {
 		t.Errorf("%s.aarch64.elf exists: the arm64 image gets no sidecar", out)

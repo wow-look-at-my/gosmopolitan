@@ -310,7 +310,7 @@ jobs:
           }
           exit $status
 
-      - name: What the suite spent its time on
+      - name: Test coverage, and what the suite spent its time on
         # runs on a red suite too: the slow packages are most worth seeing when it failed. A missing log is a no-op, never a second failure.
         if: always()
         uses: wow-look-at-my/actions@typescript#latest
@@ -327,8 +327,21 @@ jobs:
               core.info('no suite.log; nothing to report');
               return;
             }
+            const logLines = fs.readFileSync(logPath, 'utf-8').split(/\r?\n/);
+            // dist test ends with this block, ahead of its verdict line.
+            const coverageAt = logLines.indexOf('##### Test coverage');
+            if (coverageAt < 0) {
+              core.error('suite.log has no "##### Test coverage" block; dist test stopped before it measured coverage');
+            } else {
+              const block = [`### Test coverage (${required('RUNNER_OS')})`];
+              for (const line of logLines.slice(coverageAt + 1)) {
+                if (/^(FAILED|ALL TESTS PASSED|NO TESTS TO RUN)/.test(line)) break;
+                block.push(line);
+              }
+              fs.appendFileSync(summaryPath, block.join('\n').trimEnd() + '\n\n');
+            }
             const rows = [];
-            for (const line of fs.readFileSync(logPath, 'utf-8').split('\n')) {
+            for (const line of logLines) {
               // dist test prints one of these per package it ran.
               const hit = /^ok\s+(\S+)\s+([0-9.]+)s/.exec(line);
               if (hit) rows.push({ pkg: hit[1], secs: Number(hit[2]) });

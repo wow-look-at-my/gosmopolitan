@@ -10,6 +10,7 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,7 +37,10 @@ func FetchModule(t *testing.T, module, version string) string {
 		}
 	}
 	if !modcacheOk {
-		t.Setenv("GOMODCACHE", t.TempDir())
+		// A temporary GOMODCACHE is not enough: the go command writes the checksum database's tree head under GOPATH.
+		gopath := t.TempDir()
+		t.Setenv("GOPATH", gopath)
+		t.Setenv("GOMODCACHE", filepath.Join(gopath, "pkg", "mod"))
 		// Allow t.TempDir() to clean up subdirectories.
 		t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
 	}
