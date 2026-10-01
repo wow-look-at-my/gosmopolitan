@@ -60,3 +60,29 @@ TEXT _rt0_arm64_cosmo_lib(SB),NOSPLIT,$0
 	MOVW	R3, runtime·__hostos(SB)
 	MOVD	R15, runtime·__syslib(SB)
 	JMP	_rt0_arm64_lib(SB)
+
+// cosmoHostSlots is what x_cgo_init writes for a cgo program: the Syslib,
+// then the offsets from TPIDRRO_EL0 of the Apple TSD slots that hold g and
+// libcosmo's thread pointer. Both offsets stay 0 off XNU.
+GLOBL runtime·cosmoHostSlots(SB), NOPTR, $24
+
+// cosmoMainTP is libcosmo's thread pointer on the main thread, which main
+// saves before rt0_go reuses R28.
+GLOBL runtime·cosmoMainTP(SB), NOPTR, $8
+
+// cosmoCTP loads libcosmo's thread pointer into R28 before a call into C. It
+// clobbers R10. XNU writes TPIDR_EL0 at every context switch, so there the
+// pointer lives in an Apple TSD slot.
+TEXT runtime·cosmoCTP(SB),NOSPLIT|NOFRAME,$0
+	MOVBU	runtime·iscgo(SB), R10
+	CBZ	R10, done
+	MOVD	runtime·cosmoHostSlots+16(SB), R10
+	CBNZ	R10, apple
+	WORD	$0xd53bd05c	// MRS TPIDR_EL0, R28
+	RET
+apple:
+	WORD	$0xd53bd07c	// MRS TPIDRRO_EL0, R28
+	AND	$~7, g
+	MOVD	(g)(R10), g
+done:
+	RET

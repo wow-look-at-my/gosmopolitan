@@ -54,11 +54,13 @@ libcosmo owns the C thread pointer. Go keeps `g` apart from it (`runtime/cgo/gcc
 | amd64 Linux | `%fs:0` | `gs:0x28` | GS base 0x28 below a `__thread` slot pair |
 | amd64 XNU | `gs:0x30` | `gs:0x28` | the same pair, slot 1 holds the TIB |
 | amd64 NT | a TEB TLS slot | `gs:0x28` | nothing: it is the TEB's ArbitraryUserPointer |
-| arm64 | `x28` | `TPIDR_EL0` + `tls_g` | `TPIDR_EL0` = the thread's `x28` |
+| arm64 Linux | `x28` | `TPIDR_EL0` + `tls_g` | `TPIDR_EL0` = the thread's `x28` |
+| arm64 XNU | `x28` | an Apple TSD slot off `TPIDRRO_EL0` | a second TSD slot holds the thread's `x28` |
 
 - `x_cgo_init` binds the main thread and copies `__hostos` and `__syslib` from libcosmo, because the APE boot hands them to libcosmo's `_start`.
 - The pthread_create wrapper binds every other thread before its start routine runs. A thread that C starts therefore reads a nil `g`, and `needm` gives it an M.
-- arm64 `asmcgocall` loads `x28` from `TPIDR_EL0` before it calls C and restores `g` after. `main` saves libcosmo's `x28` in `TPIDR_EL0` before `rt0_go` reuses R28.
+- arm64 `asmcgocall` loads `x28` through `runtime.cosmoCTP` before it calls C and restores `g` after. `main` saves libcosmo's `x28` in `cosmoMainTP` before `rt0_go` reuses R28, and the call to `x_cgo_init` uses it.
+- XNU writes `TPIDR_EL0` at every context switch: it carries the CPU number. So on macOS `x_cgo_init` makes Apple pthread keys through the Syslib's `dlsym`, as upstream's darwin `tlsinit` does. It stores their offsets in `cosmoHostSlots`, which `load_g`, `save_g` and `cosmoCTP` read.
 - `runtime/cgo` leaves out its mmap and sigaction hooks on cosmo, as the runtime already does.
 
 ## Not done

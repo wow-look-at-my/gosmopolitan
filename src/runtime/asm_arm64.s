@@ -11,9 +11,9 @@
 
 #ifdef GOOS_cosmo
 // COSMO_C_TP loads libcosmo's thread pointer into R28 before a call into C.
-// cosmo C code reads its TLS through x28, which Go uses for g. runtime/cgo
-// keeps each thread's pointer in TPIDR_EL0. It clobbers R10. The WORD is MRS TPIDR_EL0, R28.
-#define COSMO_C_TP MOVBU runtime·iscgo(SB), R10; CBZ R10, 2(PC); WORD $0xd53bd05c
+// cosmo C code reads its TLS through x28, which Go uses for g. It clobbers
+// R10 and LR, and every use sits right before a BL.
+#define COSMO_C_TP BL runtime·cosmoCTP(SB)
 #else
 #define COSMO_C_TP
 #endif
@@ -33,8 +33,7 @@ TEXT _rt0_arm64(SB),NOSPLIT,$0
 TEXT main(SB),NOSPLIT,$0
 #ifdef GOOS_cosmo
 	// libcosmo's _start set x28 to its thread pointer, and rt0_go reuses R28 for g.
-	// TPIDR_EL0 keeps the thread pointer for the calls into C.
-	WORD	$0xd51bd05c	// MSR R28, TPIDR_EL0
+	MOVD	g, runtime·cosmoMainTP(SB)
 #endif
 	JMP	runtime·rt0_go(SB)
 
@@ -145,7 +144,7 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 #else
 #ifdef GOOS_cosmo
 	MOVD	$runtime·__hostos(SB), R2	// arg 2: &__hostos, which x_cgo_init fills
-	MOVD	$runtime·__syslib(SB), R3	// arg 3: &__syslib, which x_cgo_init fills
+	MOVD	$runtime·cosmoHostSlots(SB), R3	// arg 3: the host slots, which x_cgo_init fills
 #else
 	MOVD	$0, R2		        // arg 2: not used when using platform's TLS
 #endif
@@ -153,11 +152,15 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 	MOVD	$setg_gcc<>(SB), R1	// arg 1: setg
 	MOVD	g, R0			// arg 0: G
 	SUB	$16, RSP		// reserve 16 bytes for sp-8 where fp may be saved.
-	COSMO_C_TP
+#ifdef GOOS_cosmo
+	MOVD	runtime·cosmoMainTP(SB), g	// no thread slot exists before x_cgo_init
+#endif
 	BL	(R12)
 	ADD	$16, RSP
 #ifdef GOOS_cosmo
 	MOVD	$runtime·g0(SB), g	// the call ran with R28 holding libcosmo's thread pointer
+	MOVD	runtime·cosmoHostSlots(SB), R0
+	MOVD	R0, runtime·__syslib(SB)
 #endif
 
 nocgo:

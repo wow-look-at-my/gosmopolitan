@@ -81,19 +81,91 @@ cosmo_host_slots(void **slots)
 
 #elif defined(__aarch64__)
 
+// The head of the APE loader's Syslib (ape-m1.c), through dlsym.
+struct cosmo_syslib {
+	int32_t magic;
+	int32_t version;
+	void *before_stack_min[22];
+	int32_t stack_min;
+	int32_t attr_size;
+	void *before_dlopen[23];
+	void *dlopen;
+	void *(*dlsym)(void *, const char *);
+};
+
+// cosmo_host is the runtime's cosmoHostSlots: the Syslib.
+static uintptr_t *cosmo_host;
+
+// XNU writes TPIDR_EL0 at every context switch. TPIDRRO_EL0 is the thread's
+// Apple TSD array, which the runtime reads instead.
+static uintptr_t *
+cosmo_tsd(void)
+{
+	uintptr_t tsd;
+
+	__asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tsd));
+	return (uintptr_t *)(tsd & ~(uintptr_t)7);
+}
+
+// cosmo_tsd_slot allocates an Apple TSD key and returns its offset from
+// TPIDRRO_EL0, as runtime.tlsinit does on darwin.
+static uintptr_t
+cosmo_tsd_slot(void)
+{
+	struct cosmo_syslib *lib = (struct cosmo_syslib *)__syslib;
+	void *rtld_default = (void *)-2;
+	int (*key_create)(unsigned long *, void (*)(void *));
+	int (*set_specific)(unsigned long, const void *);
+	unsigned long key;
+	uintptr_t *tsd;
+	const uintptr_t magic = 0xc476c475c47957;
+	int idx;
+
+	if (lib == NULL || lib->version < 6 || lib->dlsym == NULL) {
+		fprintf(stderr, "runtime/cgo: the APE loader's Syslib has no dlsym\n");
+		abort();
+	}
+	key_create = lib->dlsym(rtld_default, "pthread_key_create");
+	set_specific = lib->dlsym(rtld_default, "pthread_setspecific");
+	if (key_create == NULL || set_specific == NULL || key_create(&key, NULL) != 0) {
+		fprintf(stderr, "runtime/cgo: cannot create an Apple pthread key\n");
+		abort();
+	}
+	set_specific(key, (const void *)magic);
+	tsd = cosmo_tsd();
+	for (idx = 0; idx < 768; idx++) {
+		if (tsd[idx] == magic) {
+			set_specific(key, NULL);
+			return idx * sizeof(uintptr_t);
+		}
+	}
+	fprintf(stderr, "runtime/cgo: the Apple pthread key is not in the thread's TSD\n");
+	abort();
+}
+
 static void
 cosmo_bind_go_tls(void)
 {
 	register uintptr_t tib __asm__("x28");
 
+	if (__hostos & COSMO_HOST_XNU) {
+		*(uintptr_t *)((char *)cosmo_tsd() + cosmo_host[2]) = tib;
+		return;
+	}
 	__asm__ volatile("msr tpidr_el0, %0" : : "r"(tib));
 }
 
-// cosmo_host_slots fills the runtime's __syslib, which macOS calls go through.
+// cosmo_host_slots fills the runtime's cosmoHostSlots. macOS calls go
+// through the Syslib.
 static void
 cosmo_host_slots(void **slots)
 {
-	*slots = __syslib;
+	cosmo_host = (uintptr_t *)slots;
+	cosmo_host[0] = (uintptr_t)__syslib;
+	if (__hostos & COSMO_HOST_XNU) {
+		cosmo_host[1] = cosmo_tsd_slot();
+		cosmo_host[2] = cosmo_tsd_slot();
+	}
 }
 
 #else
