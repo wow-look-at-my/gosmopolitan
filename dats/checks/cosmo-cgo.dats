@@ -61,6 +61,12 @@ tests:
 			- "<probe_add>:"
 			- ret
 
+	# cosmo satisfies the linux tag, so a Linux-only cgo file in std reaches cosmocc.
+	- desc: std builds for cosmo on amd64 and arm64 with cgo on
+	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; GOOS=cosmo GOARCH=amd64 go build std && GOOS=cosmo GOARCH=arm64 go build std
+	  timeout: 15m
+	  exit: 0
+
 	- desc: without cosmocc on PATH, cgo is off by default
 	  cmd: env PATH="$PWD/bin:/usr/bin:/bin" go env CGO_ENABLED
 	  exit: 0
