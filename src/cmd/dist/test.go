@@ -940,21 +940,50 @@ func (t *tester) registerStdTest(pkg string) {
 				timeoutSec = 0
 			}
 		}
-		// One binary holds the tests of every package. It is kept, and the
-		// tests that differ from a package's run only in flags start it again.
-		test := oneBinaryTest(stdMatches, goos)
+		// cmd/go runs last and alone, because its scripts each build with -p and fill the machine.
+		rest, alone := withoutCmdGo(stdMatches)
+
+		// One binary holds the tests of every package, is kept, and starts again for the tests that differ from a package's run only in flags.
+		test := oneBinaryTest(rest, goos)
 		test.timeout = timeoutSec
 		test.keep = filepath.Join(workdir, "std.test")
-		// One step builds and runs every package here, so its own line is the
-		// only thing that accounts for the compile.
-		started := time.Now()
-		err := test.run(t)
-		if !t.json {
-			reportStep("test", "std.test", time.Since(started))
+		// One step builds and runs every package here, so its own line is the only thing that accounts for the compile.
+		var err error
+		if len(rest) > 0 {
+			started := time.Now()
+			err = test.run(t)
+			if !t.json {
+				reportStep("test", "std.test", time.Since(started))
+			}
+			t.recordOneBinary(false, test.keep, rest)
 		}
-		t.recordOneBinary(false, test.keep, stdMatches)
+
+		if alone {
+			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
+			cmdGo.timeout = timeoutSec
+			started := time.Now()
+			errCmdGo := cmdGo.run(t)
+			if !t.json {
+				reportStep("test", "cmd-go.test", time.Since(started))
+			}
+			if err == nil {
+				err = errCmdGo
+			}
+		}
 		return err
 	})
+}
+
+// withoutCmdGo answers pkgs without cmd/go, and whether cmd/go was there.
+func withoutCmdGo(pkgs []string) (rest []string, alone bool) {
+	for _, pkg := range pkgs {
+		if pkg == "cmd/go" {
+			alone = true
+			continue
+		}
+		rest = append(rest, pkg)
+	}
+	return rest, alone
 }
 
 func (t *tester) registerRaceBenchTest(pkg string) {
