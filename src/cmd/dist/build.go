@@ -642,10 +642,11 @@ func mustLinkExternal(goos, goarch string, cgoEnabled bool) bool {
 		switch goos {
 		case "android":
 			return true
+		case "cosmo":
+			// The internal linker cannot carry libcosmo.
+			return true
 		case "dragonfly":
-			// It seems that on Dragonfly thread local storage is
-			// set up by the dynamic linker, so internal cgo linking
-			// doesn't work. Test case is "go test runtime/cgo".
+			// It seems that on Dragonfly thread local storage is set up by the dynamic linker.
 			return true
 		}
 	}
