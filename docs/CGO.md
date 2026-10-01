@@ -37,7 +37,7 @@ cgo forces an external link (`internal/platform.MustLinkExternal`). `cmd/link` r
 
 ## NT
 
-The PE header of a cgo image differs from a pure-Go one in fields (`cosmoNTBoot` in `cosmolink.go`). A pure-Go image keeps `_rt0_cosmo_nt` and `runtime.ntidata`.
+The PE header of a cgo image takes its entry and its imports from libcosmo (`cosmoNTBoot` in `cosmolink.go`). A pure-Go image keeps `_rt0_cosmo_nt` and `runtime.ntidata`.
 
 - AddressOfEntryPoint is libcosmo's `WinMain`. The script pulls it in with `EXTERN(WinMain)`. WinMain starts libcosmo on NT and calls `main`, as `_start` does on Unix.
 - The import directory is libcosmo's. Each `__imp_` object carries its own `.idata.ro.*` descriptor, lookup and name sections and a `.piro.data.sort.iat.*` slot. The script bounds them with `ape_idata_idt`, `ape_idata_idtend`, `ape_idata_iat` and `ape_idata_iatend`, and writes the zero descriptor itself. Its relocations are RVAs against `0x400000`, the amd64 cgo base.

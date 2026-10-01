@@ -143,7 +143,7 @@ The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64 ima
 
 Per-platform runtime status, and what is still missing on each: docs/PLATFORM-STATUS.md. What is still stubbed or unverified: docs/STUBS-INVENTORY.md.
 
-- docs/CGO.md -- cgo on cosmo: per-arch cosmocc compilers, the libcosmo link, shared thread state, gaps.
+- docs/CGO.md -- cgo on cosmo: per-arch cosmocc compilers, the libcosmo link, the NT entry, shared thread state, gaps.
 
 **Nothing has ever executed on macOS Intel.** There is no Intel-mac runner, so do not claim that port works. It is absent from the default GOCOSMOPLATFORMS set for that reason.
 
