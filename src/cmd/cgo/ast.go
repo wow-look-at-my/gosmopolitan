@@ -4,7 +4,7 @@
 
 // Parse input AST and prepare Prog structure.
 
-package main
+package cgo
 
 import (
 	"fmt"

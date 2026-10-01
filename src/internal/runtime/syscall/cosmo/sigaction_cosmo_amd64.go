@@ -11,25 +11,18 @@ import (
 	"unsafe"
 )
 
-// rt_sigaction emulation for macOS-Intel hosts.
-//
-// XNU has no rt_sigaction. There is no Syslib here either, so this
-// issues the raw __sigaction syscall, which takes the KERNEL struct
-// sigaction. That is a different interface, not the Linux one renamed:
-//
-//   - The signal numbers differ for the BSD-heritage signals, so both
-//     the signal argument and every bit of the mask are remapped
-//     (sigaction_cosmo.go).
-//   - The kernel struct carries an sa_tramp field the Linux struct does
-//     not, and a real handler cannot be installed without one. The
-//     kernel enters that trampoline instead of the handler and expects
-//     it to call sigreturn afterwards.
-//
-// The runtime installs its own handlers through
-// runtime.darwinSigaction, which does the same translation over the
-// same numbers. It cannot be shared: this package must not import the
-// runtime, and its trampoline dispatches through runtime.sigtramp,
-// which is right for the runtime's handlers and wrong for a caller's.
+// rt_sigaction emulation for macOS-Intel hosts. XNU has no
+// rt_sigaction and there is no Syslib here, so this issues the raw
+// __sigaction syscall, which takes the KERNEL struct sigaction - a
+// DIFFERENT interface, not the Linux one renamed. The signal numbers
+// differ for the BSD-heritage signals, so the argument and every bit of
+// the mask are remapped. The kernel struct also carries an sa_tramp
+// field the Linux struct does not, without which no real handler can be
+// installed: the kernel enters that trampoline rather than the handler,
+// and expects it to call sigreturn.
+// runtime.darwinSigaction does the same translation for the runtime's
+// own handlers and cannot be shared: this package must not import the
+// runtime, and that trampoline dispatches through runtime.sigtramp.
 
 // Errno value (Linux numbering) produced by this emulation itself.
 const darwinEINVAL = 22

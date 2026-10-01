@@ -7,3 +7,7 @@
 package os
 
 var SplitPath = splitPath
+
+// NTTempDir is tempDir's NT branch, which a cosmo binary reaches when it boots
+// on a windows host. Exported so the test runs on the host it is already on.
+var NTTempDir = ntTempDir

@@ -56,14 +56,14 @@ Test:
 		{
 			// Basic driver supporting none of the optional driver interfaces.
 			name:      "basic",
-			connector: &basicConnector{name: fakeDBName},
+			connector: &basicConnector{name: fakeDBName(t)},
 		},
 		{
 			// Default test driver. Supports some but not all features.
 			// This is the "default" because this is the only driver we used
 			// before adding testDatabase.
 			name:      "default",
-			connector: &fakeConnector{name: fakeDBName},
+			connector: &fakeConnector{name: fakeDBName(t)},
 			features: []string{
 				"ConnBeginTx",
 				"NamedValue",
@@ -72,7 +72,7 @@ Test:
 		},
 		{
 			name:      "scancols",
-			connector: &rowsColumnScannerConnector{name: fakeDBName},
+			connector: &rowsColumnScannerConnector{name: fakeDBName(t)},
 			features: []string{
 				"ConnBeginTx",
 				"NamedValue",
@@ -130,16 +130,20 @@ func init() {
 	}
 }
 
-const fakeDBName = "foo"
+// fakeDBName is the fake driver's database for one test. The driver keys its
+// databases by this name, and every test wipes the one it opens and creates
+// its own tables in it. So two tests running at the same time need a name
+// each, or one wipes the tables the other is reading.
+func fakeDBName(t testing.TB) string { return "foo/" + t.Name() }
 
 var chrisBirthday = time.Unix(123456789, 0)
 
 func newTestDB(t testing.TB, name string) *DB {
-	return newTestDBConnector(t, &fakeConnector{name: fakeDBName}, name)
+	return newTestDBConnector(t, &fakeConnector{name: fakeDBName(t)}, name)
 }
 
 func newTestDBConnector(t testing.TB, fc *fakeConnector, name string) *DB {
-	fc.name = fakeDBName
+	fc.name = fakeDBName(t)
 	db := OpenDB(fc)
 	if _, err := db.Exec("WIPE"); err != nil {
 		t.Fatalf("exec wipe: %v", err)
@@ -253,7 +257,7 @@ func TestOpenDB(t *testing.T) {
 	synctest.Test(t, testOpenDB)
 }
 func testOpenDB(t *testing.T) {
-	db := OpenDB(dsnConnector{dsn: fakeDBName, driver: fdriver})
+	db := OpenDB(dsnConnector{dsn: fakeDBName(t), driver: fdriver})
 	defer db.Close()
 	if db.Driver() != fdriver {
 		t.Fatalf("OpenDB should return the driver of the Connector")
@@ -261,10 +265,11 @@ func testOpenDB(t *testing.T) {
 }
 
 func TestDriverPanic(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	synctest.Test(t, testDriverPanic)
 }
 func testDriverPanic(t *testing.T) {
-	db, err := Open("test", fakeDBName)
+	db, err := Open("test", fakeDBName(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -1527,7 +1532,7 @@ func TestTxErrBadConn(t *testing.T) {
 	synctest.Test(t, testTxErrBadConn)
 }
 func testTxErrBadConn(t *testing.T) {
-	db, err := Open("test", fakeDBName+";badConn")
+	db, err := Open("test", fakeDBName(t)+";badConn")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -2102,6 +2107,7 @@ func setRowsCloseHook(fn func(*Rows, *error)) {
 
 // Test issue 6651
 func TestIssue6651(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testIssue6651)
 }
 func testIssue6651(t *testing.T, db *DB) {
@@ -2359,6 +2365,7 @@ func testQueryRowNilScanDest(t *testing.T, db *DB) {
 }
 
 func TestIssue4902(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testIssue4902)
 }
 func testIssue4902(t *testing.T, db *DB) {
@@ -2448,6 +2455,7 @@ func testMaxIdleConns(t *testing.T, db *DB) {
 }
 
 func TestMaxOpenConns(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testMaxOpenConns)
 }
 func testMaxOpenConns(t *testing.T, db *DB) {
@@ -2566,6 +2574,7 @@ func testMaxOpenConns(t *testing.T, db *DB) {
 // Issue 9453: tests that SetMaxOpenConns can be lowered at runtime
 // and affects the subsequent release of connections.
 func TestMaxOpenConnsOnBusy(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testMaxOpenConnsOnBusy)
 }
 func testMaxOpenConnsOnBusy(t *testing.T, db *DB) {
@@ -2621,6 +2630,7 @@ func testMaxOpenConnsOnBusy(t *testing.T, db *DB) {
 // Issue 10886: tests that all connection attempts return when more than
 // DB.maxOpen connections are in flight and the first DB.maxOpen fail.
 func TestPendingConnsAfterErr(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	synctest.Test(t, testPendingConnsAfterErr)
 }
 func testPendingConnsAfterErr(t *testing.T) {
@@ -2630,7 +2640,7 @@ func testPendingConnsAfterErr(t *testing.T) {
 	)
 
 	// No queries will be run.
-	db, err := Open("test", fakeDBName)
+	db, err := Open("test", fakeDBName(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -2753,6 +2763,7 @@ func testStats(t *testing.T, db *DB) {
 }
 
 func TestConnMaxLifetime(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testConnMaxLifetime)
 }
 func testConnMaxLifetime(t *testing.T, db *DB) {
@@ -2837,6 +2848,7 @@ func testConnMaxLifetime(t *testing.T, db *DB) {
 
 // golang.org/issue/5323
 func TestStmtCloseDeps(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testStmtCloseDeps)
 }
 func testStmtCloseDeps(t *testing.T, db *DB) {
@@ -2933,6 +2945,7 @@ func testStmtCloseDeps(t *testing.T, db *DB) {
 
 // golang.org/issue/5046
 func TestCloseConnBeforeStmts(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testCloseConnBeforeStmts)
 }
 func testCloseConnBeforeStmts(t *testing.T, db *DB) {
@@ -2990,6 +3003,7 @@ func testCloseConnBeforeStmts(t *testing.T, db *DB) {
 // golang.org/issue/5283: don't release the Rows' connection in Close
 // before calling Stmt.Close.
 func TestRowsCloseOrder(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testRowsCloseOrder)
 }
 func testRowsCloseOrder(t *testing.T, db *DB) {
@@ -3072,6 +3086,7 @@ func testRowsCloseError(t *testing.T, db *DB) {
 }
 
 func TestStmtCloseOrder(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testStmtCloseOrder)
 }
 func testStmtCloseOrder(t *testing.T, db *DB) {
@@ -3230,6 +3245,7 @@ func testManyErrBadConn(t *testing.T) {
 
 // Issue 34775: Ensure that a Tx cannot commit after a rollback.
 func TestTxCannotCommitAfterRollback(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testTxCannotCommitAfterRollback)
 }
 func testTxCannotCommitAfterRollback(t *testing.T, db *DB) {
@@ -3989,6 +4005,7 @@ func doConcurrentTest(t testing.TB, ct concurrentTest) {
 }
 
 func TestIssue6081(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testIssue6081)
 }
 func testIssue6081(t *testing.T, db *DB) {
@@ -4144,6 +4161,7 @@ func testIssue20160(t *testing.T, db *DB) {
 //
 // See https://golang.org/cl/35550 .
 func TestIssue18719(t *testing.T) {
+	t.Serial() // This test installs a process-wide hook that every connection reads.
 	testDatabase(t, testIssue18719, requireFeature("BeginTx"))
 }
 func testIssue18719(t *testing.T, db *DB) {
@@ -4242,6 +4260,7 @@ func TestConcurrency(t *testing.T) {
 }
 
 func TestConnectionLeak(t *testing.T) {
+	t.Serial() // This test reads the fake driver's process-wide counters, or installs a hook every connection reads.
 	testDatabase(t, testConnectionLeak)
 }
 func testConnectionLeak(t *testing.T, db *DB) {

@@ -106,13 +106,11 @@ func Check(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var nextFiles []string
-	if v := runtime.Version(); strings.Contains(v, "devel") || strings.Contains(v, "beta") {
-		next, err := filepath.Glob(filepath.Join(testenv.GOROOT(t), "api/next/*.txt"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		nextFiles = next
+	// This fork's API additions stay in api/next across its releases, so
+	// the check reads them whatever version the toolchain reports.
+	nextFiles, err := filepath.Glob(filepath.Join(testenv.GOROOT(t), "api/next/*.txt"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	for _, c := range contexts {

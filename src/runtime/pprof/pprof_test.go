@@ -100,6 +100,8 @@ func TestCPUProfile(t *testing.T) {
 }
 
 func TestCPUProfileMultithreaded(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
 	matches := matchAndAvoidStacks(stackContains, []string{"runtime/pprof.cpuHog1", "runtime/pprof.cpuHog2"}, avoidFunctions())
 	testCPUProfile(t, matches, func(dur time.Duration) {
@@ -114,6 +116,7 @@ func TestCPUProfileMultithreaded(t *testing.T) {
 }
 
 func TestCPUProfileMultithreadMagnitude(t *testing.T) {
+	t.Serial()
 	if runtime.GOOS != "linux" {
 		t.Skip("issue 35057 is only confirmed on Linux")
 	}
@@ -421,6 +424,10 @@ func parseProfile(t *testing.T, valBytes []byte, f func(uintptr, []*profile.Loca
 // testCPUProfile runs f under the CPU profiler, checking for some conditions specified by need,
 // as interpreted by matches, and returns the parsed profile.
 func testCPUProfile(t *testing.T, matches profileMatchFunc, f func(dur time.Duration)) *profile.Profile {
+	// The CPU profiler is one per process, and it also measures every other
+	// test running beside this one.
+	t.Serial()
+
 	switch runtime.GOOS {
 	case "darwin":
 		out, err := testenv.Command(t, "uname", "-a").CombinedOutput()
@@ -665,6 +672,7 @@ func TestCPUProfileWithFork(t *testing.T) {
 // If it did, it would see inconsistent state and would either record an incorrect stack
 // or crash because the stack was malformed.
 func TestGoroutineSwitch(t *testing.T) {
+	t.Serial() // The CPU profiler is one per process.
 	if runtime.Compiler == "gccgo" {
 		t.Skip("not applicable for gccgo")
 	}
@@ -1404,6 +1412,8 @@ func func3(c chan int) { <-c }
 func func4(c chan int) { <-c }
 
 func TestGoroutineCounts(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Setting GOMAXPROCS to 1 ensures we can force all goroutines to the
 	// desired blocking point.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
@@ -2172,6 +2182,7 @@ var emptyCallStackTestRun int64
 
 // Issue 18836.
 func TestEmptyCallStack(t *testing.T) {
+	t.Serial()
 	name := fmt.Sprintf("test18836_%d", emptyCallStackTestRun)
 	emptyCallStackTestRun++
 
@@ -2305,6 +2316,8 @@ func TestGoroutineProfileLabelRace(t *testing.T) {
 // TestLabelSystemstack makes sure CPU profiler samples of goroutines running
 // on systemstack include the correct pprof labels. See issue #48577
 func TestLabelSystemstack(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.GOARCH == "wasm" {
 		t.Skip("wasm CPU profiling samples only at loop backedges of the running user goroutine; code on the system stack is never observed")
 	}
@@ -2431,6 +2444,7 @@ func parallelLabelHog(ctx context.Context, dur time.Duration, gogc int) {
 // Check that there is no deadlock when the program receives SIGPROF while in
 // 64bit atomics' critical section. Used to happen on mips{,le}. See #20146.
 func TestAtomicLoadStore64(t *testing.T) {
+	t.Serial() // The CPU profiler is one per process.
 	f, err := os.CreateTemp("", "profatomic")
 	if err != nil {
 		t.Fatalf("TempFile: %v", err)
@@ -2458,6 +2472,7 @@ func TestAtomicLoadStore64(t *testing.T) {
 }
 
 func TestTracebackAll(t *testing.T) {
+	t.Serial() // The CPU profiler is one per process.
 	// With gccgo, if a profiling signal arrives at the wrong time
 	// during traceback, it may crash or hang. See issue #29448.
 	f, err := os.CreateTemp("", "proftraceback")

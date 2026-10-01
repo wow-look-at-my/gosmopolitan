@@ -1081,6 +1081,10 @@ func TestParseDurationRoundTrip(t *testing.T) {
 
 // golang.org/issue/4622
 func TestLocationRace(t *testing.T) {
+	// time.Local is process-wide, and this resets it to whatever the
+	// environment says until the restore at the end.
+	t.Serial()
+
 	ResetLocalOnceForTest() // reset the Once to trigger the race
 
 	c := make(chan string, 1)

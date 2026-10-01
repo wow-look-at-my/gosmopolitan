@@ -235,6 +235,9 @@ func testInlineStack(t *testing.T, file, function string, wantStacks [][]int) {
 			gotStmts = nil
 		}
 	}
+	if err := dump.Err(); err != nil {
+		t.Fatalf("reading the dump: %v", err)
+	}
 	if len(gotStmts) > 0 {
 		gotStacks = append(gotStacks, gotStmts)
 		gotStmts = nil
@@ -273,6 +276,9 @@ func testDebugLines(t *testing.T, gcflags, file, function string, wantStmts []in
 			}
 			gotStmts = append(gotStmts, int(stmt))
 		}
+	}
+	if err := dump.Err(); err != nil {
+		t.Fatalf("reading the dump: %v", err)
 	}
 	if ignoreRepeats { // remove repeats from gotStmts
 		newGotStmts := []int{gotStmts[0]}

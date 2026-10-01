@@ -23,12 +23,14 @@ import (
 	"sync"
 
 	"cmd/go/internal/base"
+	"cmd/go/internal/cache"
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/lockedfile"
 	"cmd/go/internal/modfetch"
+	"cmd/go/internal/orgmod"
 	"cmd/go/internal/search"
 
 	"golang.org/x/mod/modfile"
@@ -89,7 +91,11 @@ func EnterWorkspace(ld *Loader, ctx context.Context) (exit func(), err error) {
 
 	// Update the content of the previous main module, and recompute the requirements.
 	*ld.MainModules.ModFile(mm) = *updatedmodfile
-	ld.requirements = requirementsFromModFiles(ld, ctx, ld.MainModules.workFile, slices.Collect(maps.Values(ld.MainModules.modFiles)), nil)
+	rs, err := requirementsFromModFiles(ld, ctx, ld.MainModules.workFile, slices.Collect(maps.Values(ld.MainModules.modFiles)), nil)
+	if err != nil {
+		return nil, err
+	}
+	ld.requirements = rs
 
 	return func() {
 		ld.setState(oldstate)
@@ -332,9 +338,6 @@ func ModFile(ld *Loader) *modfile.File {
 
 func BinDir(ld *Loader) string {
 	Init(ld)
-	if cfg.GOBIN != "" {
-		return cfg.GOBIN
-	}
 	if gopath == "" {
 		return ""
 	}
@@ -389,6 +392,12 @@ func (ld *Loader) Reset() {
 }
 
 func (ld *Loader) setState(new *Loader) (old *Loader) {
+	// A go.mod summary holds the requirements as the branch an org module
+	// follows resolved them, and that branch belongs to the main module. The
+	// main module can change under a loader, so the summaries are dropped with
+	// the rest of the state rather than carried across it.
+	dropModFileSummaries()
+
 	old = &Loader{
 		initialized:     ld.initialized,
 		ForceUseModules: ld.ForceUseModules,
@@ -1022,7 +1031,7 @@ func loadModFile(ld *Loader, ctx context.Context, opts *PackageOpts) (*Requireme
 			// For issue 56536: Some users may have GOFLAGS=-mod=vendor set.
 			// Make sure it behaves as though the fake module is vendored
 			// with no dependencies.
-			ld.requirements.initVendor(ld, nil)
+			ld.requirements.initVendor(ld, ctx, nil)
 		}
 		return ld.requirements, nil
 	}
@@ -1094,7 +1103,10 @@ func loadModFile(ld *Loader, ctx context.Context, opts *PackageOpts) (*Requireme
 
 	ld.MainModules = makeMainModules(ld, mainModules, ld.modRoots, modFiles, indices, workFile)
 	setDefaultBuildMod(ld) // possibly enable automatic vendoring
-	rs := requirementsFromModFiles(ld, ctx, workFile, modFiles, opts)
+	rs, err := requirementsFromModFiles(ld, ctx, workFile, modFiles, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	if cfg.BuildMod == "vendor" {
 		readVendorList(VendorDir(ld))
@@ -1108,7 +1120,7 @@ func loadModFile(ld *Loader, ctx context.Context, opts *PackageOpts) (*Requireme
 			modRoots = append(modRoots, ld.MainModules.ModRoot(m))
 		}
 		checkVendorConsistency(ld, indexes, modFiles, modRoots)
-		rs.initVendor(ld, vendorList)
+		rs.initVendor(ld, ctx, vendorList)
 	}
 
 	if ld.inWorkspaceMode() {
@@ -1170,7 +1182,9 @@ func errWorkTooOld(gomod string, wf *modfile.WorkFile, goVers string) error {
 		// even when it doesn't list any version.
 		verb = "implicitly requires"
 	}
-	return fmt.Errorf("module %s listed in go.work file requires go >= %s, but go.work %s go %s; to download and use go %s:\n\tgo work use",
+	// No toolchain download: GOTOOLCHAIN is removed (RemovedEnv in
+	// cmd/go/internal/cfg), so the suggestion is to raise the go.work line.
+	return fmt.Errorf("module %s listed in go.work file requires go >= %s, but go.work %s go %s; to use go %s:\n\tgo work use",
 		base.ShortPath(filepath.Dir(gomod)), goVers, verb, gover.FromGoWork(wf), goVers)
 }
 
@@ -1221,8 +1235,11 @@ func CreateModFile(ld *Loader, ctx context.Context, modPath string) {
 	ld.MainModules = makeMainModules(ld, []module.Version{modFile.Module.Mod}, []string{modRoot}, []*modfile.File{modFile}, []*modFileIndex{nil}, nil)
 	addGoStmt(modFile, modFile.Module.Mod, gover.Local()) // Add the go directive before converted module requirements.
 
-	rs := requirementsFromModFiles(ld, ctx, nil, []*modfile.File{modFile}, nil)
-	rs, err := updateRoots(ld, ctx, rs.direct, rs, nil, nil, false)
+	rs, err := requirementsFromModFiles(ld, ctx, nil, []*modfile.File{modFile}, nil)
+	if err != nil {
+		base.Fatal(err)
+	}
+	rs, err = updateRoots(ld, ctx, rs.direct, rs, nil, nil, false)
 	if err != nil {
 		base.Fatal(err)
 	}
@@ -1374,6 +1391,11 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 		}
 		mainModulePaths[m.Path] = true
 	}
+	if len(ms) > 0 {
+		// The shared cache labels each request with the module being built. The
+		// cache opens before this, so it learns the path here instead.
+		cache.SetSharedModule(ms[0].Path)
+	}
 	replacedByWorkFile := make(map[string]bool)
 	replacements := make(map[module.Version]module.Version)
 	for _, r := range workFileReplaces {
@@ -1456,12 +1478,21 @@ func makeMainModules(ld *Loader, ms []module.Version, rootDirs []string, modFile
 		}
 	}
 
+	// The fetch of a module asks whether a replacement stands in for it, and the
+	// replace directives are read here.
+	modfetch.Superseded = func(mod module.Version) bool {
+		if ld.MainModules == nil {
+			return false
+		}
+		return Replacement(ld, mod).Path != ""
+	}
+
 	return mainModules
 }
 
 // requirementsFromModFiles returns the set of non-excluded requirements from
 // the global modFile.
-func requirementsFromModFiles(ld *Loader, ctx context.Context, workFile *modfile.WorkFile, modFiles []*modfile.File, opts *PackageOpts) *Requirements {
+func requirementsFromModFiles(ld *Loader, ctx context.Context, workFile *modfile.WorkFile, modFiles []*modfile.File, opts *PackageOpts) (*Requirements, error) {
 	var roots []module.Version
 	direct := map[string]bool{}
 	var pruning modPruning
@@ -1482,12 +1513,16 @@ func requirementsFromModFiles(ld *Loader, ctx context.Context, workFile *modfile
 			panic(fmt.Errorf("requirementsFromModFiles called with %v modfiles outside workspace mode", len(modFiles)))
 		}
 		modFile := modFiles[0]
-		roots, direct = rootsFromModFile(ld, ld.MainModules.mustGetSingleMainModule(ld), modFile, withToolchainRoot)
+		var err error
+		roots, direct, err = rootsFromModFile(ld, ctx, ld.MainModules.mustGetSingleMainModule(ld), modFile, withToolchainRoot)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	gover.ModSort(roots)
 	rs := newRequirements(ld, pruning, roots, direct)
-	return rs
+	return rs, nil
 }
 
 type addToolchainRoot bool
@@ -1509,7 +1544,7 @@ func directRequirements(modFiles []*modfile.File) map[string]bool {
 	return direct
 }
 
-func rootsFromModFile(ld *Loader, m module.Version, modFile *modfile.File, addToolchainRoot addToolchainRoot) (roots []module.Version, direct map[string]bool) {
+func rootsFromModFile(ld *Loader, ctx context.Context, m module.Version, modFile *modfile.File, addToolchainRoot addToolchainRoot) (roots []module.Version, direct map[string]bool, err error) {
 	direct = make(map[string]bool)
 	padding := 2 // Add padding for the toolchain and go version, added upon return.
 	if !addToolchainRoot {
@@ -1526,9 +1561,16 @@ func rootsFromModFile(ld *Loader, m module.Version, modFile *modfile.File, addTo
 			continue
 		}
 
-		roots = append(roots, r.Mod)
+		// The token is a placeholder. The root is the branch head, or the head the run locked in CI.
+		root := r.Mod
+		root, err = resolveOrgRequire(ld, ctx, root)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		roots = append(roots, root)
 		if !r.Indirect {
-			direct[r.Mod.Path] = true
+			direct[root.Path] = true
 		}
 	}
 	goVersion := gover.FromGoMod(modFile)
@@ -1537,7 +1579,7 @@ func rootsFromModFile(ld *Loader, m module.Version, modFile *modfile.File, addTo
 		toolchain = modFile.Toolchain.Name
 	}
 	roots = appendGoAndToolchainRoots(roots, goVersion, toolchain, direct)
-	return roots, direct
+	return roots, direct, nil
 }
 
 func appendGoAndToolchainRoots(roots []module.Version, goVersion, toolchain string, direct map[string]bool) []module.Version {
@@ -1924,8 +1966,10 @@ func UpdateGoModFromReqs(ld *Loader, ctx context.Context, opts WriteOpts) (befor
 			toolchain = m.Version
 			continue
 		}
+		// A go.mod file records the placeholder for an org module, never the
+		// branch head the build list resolved it to.
 		list = append(list, &modfile.Require{
-			Mod:      m,
+			Mod:      orgmod.PlaceholderModule(m),
 			Indirect: !ld.requirements.direct[m.Path],
 		})
 	}
@@ -2036,10 +2080,15 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 	index := ld.MainModules.GetSingleIndexOrNil(ld)
 	dirty := index.modFileIsDirty(modFile) || len(opts.DropTools) > 0 || len(opts.AddTools) > 0
 	if dirty && cfg.BuildMod != "mod" {
-		// If we're about to fail due to -mod=readonly,
-		// prefer to report a dirty go.mod over a dirty go.sum
-		return errGoModDirty
+		toolsChanged := len(opts.DropTools) > 0 || len(opts.AddTools) > 0
+		if toolsChanged || !orgSyncCommit(ld, index, modFile) {
+			// If we're about to fail due to -mod=readonly,
+			// prefer to report a dirty go.mod over a dirty go.sum
+			return errGoModDirty
+		}
 	}
+	// Under orgSyncing, only sums that orgSyncAllows admitted can be new.
+	sumReadonly := mustHaveCompleteRequirements(ld) && !orgSyncing(ld)
 
 	if !dirty && cfg.CmdName != "mod tidy" {
 		// The go.mod file has the same semantic content that it had before
@@ -2047,7 +2096,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// Don't write go.mod, but write go.sum in case we added or trimmed sums.
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
-			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld)); err != nil {
+			if err := ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly); err != nil {
 				return err
 			}
 		}
@@ -2070,7 +2119,7 @@ func commitRequirements(ld *Loader, ctx context.Context, opts WriteOpts) (err er
 		// 'go mod init' shouldn't write go.sum, since it will be incomplete.
 		if cfg.CmdName != "mod init" {
 			if err == nil {
-				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), mustHaveCompleteRequirements(ld))
+				err = ld.Fetcher().WriteGoSum(ctx, keepSums(ld, ctx, ld.pkgLoader, ld.requirements, addBuildListZipSums), sumReadonly)
 			}
 		}
 	}()
@@ -2213,6 +2262,16 @@ func keepSums(ld *Loader, ctx context.Context, pld *packageLoader, rs *Requireme
 				}
 				keep[r] = true
 			}
+		}
+	}
+
+	// An org module has no checksum: the commit it resolves to is the integrity
+	// check. Keeping nothing for it means no line is written to go.sum, and,
+	// because go mod tidy marks every unkept line dirty, a stale line that is
+	// already there is dropped.
+	for m := range keep {
+		if orgmod.IsOrg(m.Path) {
+			delete(keep, m)
 		}
 	}
 

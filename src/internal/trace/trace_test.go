@@ -448,7 +448,11 @@ func TestTraceStacks(t *testing.T) {
 					{"main.main.func11", 0},
 				}},
 			}...)
-			if runtime.GOOS == "darwin" {
+			// The extra frame is the darwin PORT's libc trampoline, so
+			// this asks what syscall package was compiled in rather than
+			// what kernel is underneath. A cosmo binary on macOS has the
+			// cosmo one and reaches read without it.
+			if testenv.GOOS == "darwin" {
 				want[len(want)-1].frames = append([]frame{{"syscall.syscall", 0}}, want[len(want)-1].frames...)
 			}
 		}

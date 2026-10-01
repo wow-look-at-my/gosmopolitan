@@ -75,6 +75,7 @@ var writeTests = []WriteTest{
 }
 
 func TestWriter(t *testing.T) {
+	t.Serial() // writeTests is a package variable this test fills in and clears.
 	largeData := make([]byte, 1<<17)
 	if _, err := rand.Read(largeData); err != nil {
 		t.Fatal("rand.Read failed:", err)
@@ -263,6 +264,7 @@ func TestWriterTime(t *testing.T) {
 }
 
 func TestWriterOffset(t *testing.T) {
+	t.Serial() // writeTests is a package variable this test fills in and clears.
 	largeData := make([]byte, 1<<17)
 	if _, err := rand.Read(largeData); err != nil {
 		t.Fatal("rand.Read failed:", err)

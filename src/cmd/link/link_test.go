@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package link
 
 import (
 	"bufio"
@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,41 +31,14 @@ import (
 	"cmd/internal/sys"
 )
 
-// TestMain allows this test binary to run as a -toolexec wrapper for
-// the 'go' command. If LINK_TEST_TOOLEXEC is set, TestMain runs the
-// binary as if it were cmd/link, and otherwise runs the requested
-// tool as a subprocess.
-//
-// This allows the test to verify the behavior of the current contents of the
-// cmd/link package even if the installed cmd/link binary is stale.
+// TestMain allows this test binary to run as cmd/link itself, which is what
+// [linkCmd] starts. A test that links through the go command gets the
+// INSTALLED linker instead: substituting one is what -toolexec did, and that
+// flag is removed. Install cmd/link before running these tests to exercise a
+// change to this package through the go command.
 func TestMain(m *testing.M) {
-	// Are we running as a toolexec wrapper? If so then run either
-	// the correct tool or this executable itself (for the linker).
-	// Running as toolexec wrapper.
-	if os.Getenv("LINK_TEST_TOOLEXEC") != "" {
-		if strings.TrimSuffix(filepath.Base(os.Args[1]), ".exe") == "link" {
-			// Running as a -toolexec linker, and the tool is cmd/link.
-			// Substitute this test binary for the linker.
-			os.Args = os.Args[1:]
-			main()
-			os.Exit(0)
-		}
-		// Running some other tool.
-		cmd := exec.Command(os.Args[1], os.Args[2:]...)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
-	// Are we being asked to run as the linker (without toolexec)?
-	// If so then kick off main.
 	if os.Getenv("LINK_TEST_EXEC_LINKER") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	if testExe, err := os.Executable(); err == nil {
@@ -74,8 +46,6 @@ func TestMain(m *testing.M) {
 		testLinker = testExe
 	}
 
-	// Not running as a -toolexec wrapper or as a linker executable.
-	// Just run the tests.
 	os.Exit(m.Run())
 }
 
@@ -83,29 +53,22 @@ func TestMain(m *testing.M) {
 // This is used by [TestScript].
 var testLinker string
 
-// goCmd returns a [*exec.Cmd] that runs the go tool using
-// the current linker sources rather than the installed linker.
-// The first element of the args parameter should be the go subcommand
+// goCmd returns a [*exec.Cmd] that runs the go tool, and so the installed
+// linker. The first element of the args parameter should be the go subcommand
 // to run, such as "build" or "run". It must be a subcommand that
 // takes the go command's build flags.
 func goCmd(t *testing.T, args ...string) *exec.Cmd {
-	goArgs := []string{args[0], "-toolexec", testenv.Executable(t)}
-	args = append(goArgs, args[1:]...)
 	cmd := testenv.Command(t, testenv.GoToolPath(t), args...)
-	cmd = testenv.CleanCmdEnv(cmd)
-	cmd.Env = append(cmd.Env, "LINK_TEST_TOOLEXEC=1")
-	return cmd
+	return testenv.CleanCmdEnv(cmd)
 }
 
 // linkCmd returns a [*exec.Cmd] that runs the linker built from
 // the current sources. This is like "go tool link", but runs the
 // current linker rather than the installed one.
 func linkCmd(t *testing.T, args ...string) *exec.Cmd {
-	// Set up the arguments that TestMain looks for.
-	args = append([]string{"link"}, args...)
 	cmd := testenv.Command(t, testenv.Executable(t), args...)
 	cmd = testenv.CleanCmdEnv(cmd)
-	cmd.Env = append(cmd.Env, "LINK_TEST_TOOLEXEC=1")
+	cmd.Env = append(cmd.Env, "LINK_TEST_EXEC_LINKER=1")
 	return cmd
 }
 
@@ -162,7 +125,7 @@ func main() {}
 	cmd.Dir = tmpdir
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+		if testenv.GOOS == "android" && testenv.GOARCH == "arm64" {
 			testenv.SkipFlaky(t, 58806)
 		}
 		t.Fatalf("failed to link main.o: %v, output: %s\n", err, out)
@@ -218,7 +181,7 @@ func TestIssue28429(t *testing.T) {
 	cmd.Dir = tmpdir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+		if testenv.GOOS == "android" && testenv.GOARCH == "arm64" {
 			testenv.SkipFlaky(t, 58806)
 		}
 		t.Fatalf("linker failed: %v, output %s", err, out)
@@ -366,7 +329,7 @@ func TestBuildForTvOS(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
 	// Only run this on darwin, where we can cross build for tvOS.
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		t.Skip("skipping on non-darwin platform")
 	}
 	if testing.Short() && testenv.Builder() == "" {
@@ -453,7 +416,7 @@ func main() { }
 
 func TestMachOBuildVersion(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		t.Skip("skip on non-Mach-O platforms")
 	}
 	t.Parallel()
@@ -508,7 +471,7 @@ func TestMachOBuildVersion(t *testing.T) {
 
 func TestMachOUUID(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		t.Skip("this is only for darwin")
 	}
 
@@ -594,8 +557,8 @@ func TestIssue34788Android386TLSSequence(t *testing.T) {
 	// This is a cross-compilation test, so it doesn't make
 	// sense to run it on every GOOS/GOARCH combination. Limit
 	// the test to amd64 + darwin/linux.
-	if runtime.GOARCH != "amd64" ||
-		(runtime.GOOS != "darwin" && runtime.GOOS != "linux") {
+	if testenv.GOARCH != "amd64" ||
+		(testenv.GOOS != "darwin" && testenv.GOOS != "linux") {
 		t.Skip("skipping on non-{linux,darwin}/amd64 platform")
 	}
 
@@ -630,6 +593,11 @@ func TestIssue34788Android386TLSSequence(t *testing.T) {
 		if strings.Contains(line, "R_TLS_LE") {
 			t.Errorf("objdump output contains unexpected R_TLS_LE reloc: %s", line)
 		}
+	}
+	// Output left unread is output left unchecked, which passes this test for
+	// the wrong reason.
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading objdump output: %v", err)
 	}
 }
 
@@ -769,8 +737,8 @@ DATA	·alignPcFnAddr(SB)/8,$·alignPc(SB)
 // TestFuncAlign verifies that the address of a function can be aligned
 // with a specific value on arm64 and loong64.
 func TestFuncAlign(t *testing.T) {
-	testFuncAlignAsmSrc := testFuncAlignAsmSources[runtime.GOARCH]
-	if len(testFuncAlignAsmSrc) == 0 || runtime.GOOS != "linux" {
+	testFuncAlignAsmSrc := testFuncAlignAsmSources[testenv.GOARCH]
+	if len(testFuncAlignAsmSrc) == 0 || testenv.GOOS != "linux" {
 		t.Skip("skipping on non-linux/{arm64,loong64} platform")
 	}
 	testenv.MustHaveGoBuild(t)
@@ -920,19 +888,19 @@ func TestTrampoline(t *testing.T) {
 	// threshold for trampoline generation, and essentially all cross-package
 	// calls will use trampolines.
 	buildmodes := []string{"default"}
-	switch runtime.GOARCH {
+	switch testenv.GOARCH {
 	case "arm", "arm64", "loong64":
 	case "ppc64le", "ppc64":
-		switch runtime.GOOS {
+		switch testenv.GOOS {
 		case "aix":
 		case "linux":
 			// Trampolines are generated differently when internal linking PIE, test them too.
 			buildmodes = append(buildmodes, "pie")
 		default:
-			t.Skipf("trampoline insertion is not implemented on %s-%s", runtime.GOARCH, runtime.GOOS)
+			t.Skipf("trampoline insertion is not implemented on %s-%s", testenv.GOARCH, testenv.GOOS)
 		}
 	default:
-		t.Skipf("trampoline insertion is not implemented on %s", runtime.GOARCH)
+		t.Skipf("trampoline insertion is not implemented on %s", testenv.GOARCH)
 	}
 
 	testenv.MustHaveGoBuild(t)
@@ -991,13 +959,13 @@ func TestTrampolineCgo(t *testing.T) {
 	// threshold for trampoline generation, and essentially all cross-package
 	// calls will use trampolines.
 	buildmodes := []string{"default"}
-	switch runtime.GOARCH {
+	switch testenv.GOARCH {
 	case "arm", "arm64", "loong64":
 	case "ppc64le", "ppc64":
 		// Trampolines are generated differently when internal linking PIE, test them too.
 		buildmodes = append(buildmodes, "pie")
 	default:
-		t.Skipf("trampoline insertion is not implemented on %s", runtime.GOARCH)
+		t.Skipf("trampoline insertion is not implemented on %s", testenv.GOARCH)
 	}
 
 	testenv.MustHaveGoBuild(t)
@@ -1092,7 +1060,7 @@ func TestIndexMismatch(t *testing.T) {
 	t.Log(cmd)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		if runtime.GOOS == "android" && runtime.GOARCH == "arm64" {
+		if testenv.GOOS == "android" && testenv.GOARCH == "arm64" {
 			testenv.SkipFlaky(t, 58806)
 		}
 		t.Errorf("linking failed: %v\n%s", err, out)
@@ -1121,7 +1089,7 @@ func TestPErsrcBinutils(t *testing.T) {
 	// Test that PE rsrc section is handled correctly (issue 39658).
 	testenv.MustHaveGoBuild(t)
 
-	if (runtime.GOARCH != "386" && runtime.GOARCH != "amd64") || runtime.GOOS != "windows" {
+	if (testenv.GOARCH != "386" && testenv.GOARCH != "amd64") || testenv.GOOS != "windows" {
 		// This test is limited to amd64 and 386, because binutils is limited as such
 		t.Skipf("this is only for windows/amd64 and windows/386")
 	}
@@ -1154,7 +1122,7 @@ func TestPErsrcLLVM(t *testing.T) {
 	// Test that PE rsrc section is handled correctly (issue 39658).
 	testenv.MustHaveGoBuild(t)
 
-	if runtime.GOOS != "windows" {
+	if testenv.GOOS != "windows" {
 		t.Skipf("this is a windows-only test")
 	}
 
@@ -1275,7 +1243,7 @@ func main() {
 func TestIssue42396(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 
-	if !platform.RaceDetectorSupported(runtime.GOOS, runtime.GOARCH) {
+	if !platform.RaceDetectorSupported(testenv.GOOS, testenv.GOARCH) {
 		t.Skip("no race detector support")
 	}
 
@@ -1539,20 +1507,25 @@ func TestResponseFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// We don't use goCmd here, as -toolexec doesn't use response files.
-	// This test is more for the go command than the linker anyhow.
-
+	// This test is more for the go command than the linker.
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", "output", "x.go")
 	cmd.Dir = tmpdir
 
 	// Add enough arguments to push cmd/link into creating a response file.
+	//
+	// Each argument costs its own length plus the separator, and the whole
+	// string rides in one environment variable, which NT caps at 32767
+	// characters. Dividing by the argument alone asks for half again as much
+	// as the limit, and the exec of the go command then fails there before
+	// the linker sees any of it. Ask for a little over the limit instead.
+	const arg = "-g"
 	var sb strings.Builder
 	sb.WriteString(`'-ldflags=all="-extldflags=`)
-	for i := 0; i < sys.ExecArgLengthLimit/len("-g"); i++ {
+	for i := 0; i < sys.ExecArgLengthLimit/(len(arg)+1)+64; i++ {
 		if i > 0 {
 			sb.WriteString(" ")
 		}
-		sb.WriteString("-g")
+		sb.WriteString(arg)
 	}
 	sb.WriteString(`"'`)
 	cmd = testenv.CleanCmdEnv(cmd)
@@ -1570,7 +1543,7 @@ func TestResponseFile(t *testing.T) {
 func TestDynimportVar(t *testing.T) {
 	// Test that we can access dynamically imported variables.
 	// Currently darwin only.
-	if runtime.GOOS != "darwin" {
+	if testenv.GOOS != "darwin" {
 		t.Skip("skip on non-darwin platform")
 	}
 
@@ -2476,7 +2449,7 @@ func TestTypePlacement(t *testing.T) {
 	// currently put in the .text section, whereas the global
 	// variable will be in the .data section. We must ignore
 	// the offset. This would change if using external linking.
-	if runtime.GOOS == "aix" {
+	if testenv.GOOS == "aix" {
 		offset = 0
 	}
 

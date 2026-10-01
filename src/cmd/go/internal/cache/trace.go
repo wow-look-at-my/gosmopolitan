@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"cmd/go/internal/trace"
+
+	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
 // Tracing the cache.
@@ -29,20 +31,6 @@ import (
 // for the lane it is running on: Traced returns a Cache that records onto that
 // lane and is otherwise the cache it was handed.
 
-// tiered is implemented by a Cache whose Get can report which tier answered.
-// Without it a hit served over the network is indistinguishable from one
-// served off the local disk, which is the single most useful thing a cache
-// trace can say.
-type tiered interface {
-	getTiered(id ActionID) (entry Entry, tier string, err error)
-}
-
-// Tier names, as they appear in a trace.
-const (
-	tierDisk   = "disk"
-	tierShared = "shared"
-)
-
 // Traced returns c recording every operation onto lane. It returns c
 // unchanged when the lane records nothing, so an untraced build pays one
 // comparison and no indirection.
@@ -50,15 +38,7 @@ func Traced(c Cache, lane trace.Lane) Cache {
 	if c == nil || !lane.Enabled() {
 		return c
 	}
-	traced := &tracedCache{Cache: c, lane: lane}
-	// The wrapper must answer the ExecutableCache assertion exactly when the
-	// cache under it does. A wrapper that always carries the method makes the
-	// assertion succeed over a cache that cannot store an executable; one that
-	// never carries it turns executable caching off for every traced build.
-	if exec, ok := c.(ExecutableCache); ok {
-		return &tracedExecutableCache{tracedCache: traced, exec: exec}
-	}
-	return traced
+	return &tracedCache{Cache: c, lane: lane}
 }
 
 type tracedCache struct {
@@ -66,20 +46,15 @@ type tracedCache struct {
 	lane trace.Lane
 }
 
-type tracedExecutableCache struct {
-	*tracedCache
-	exec ExecutableCache
-}
-
 func (c *tracedCache) Get(id ActionID) (Entry, error) {
 	start := time.Now()
 	var (
 		entry Entry
 		err   error
-		tier  = tierDisk
+		tier  = cachedisk.TierDisk
 	)
-	if t, ok := c.Cache.(tiered); ok {
-		entry, tier, err = t.getTiered(id)
+	if reporter, ok := c.Cache.(cachedisk.Tiered); ok {
+		entry, tier, err = reporter.GetTiered(id)
 	} else {
 		entry, err = c.Cache.Get(id)
 	}
@@ -107,15 +82,6 @@ func (c *tracedCache) Put(id ActionID, file io.ReadSeeker) (OutputID, int64, err
 	return out, size, err
 }
 
-func (c *tracedExecutableCache) PutExecutable(id ActionID, name string, file io.ReadSeeker) (OutputID, int64, error) {
-	start := time.Now()
-	out, size, err := c.exec.PutExecutable(id, name, file)
-	args := putArgs(id, out, size, err)
-	args["name"] = name
-	c.lane.Since("cache put executable", "cache", start, args)
-	return out, size, err
-}
-
 func putArgs(id ActionID, out OutputID, size int64, err error) map[string]any {
 	args := map[string]any{
 		"action": hex.EncodeToString(id[:]),
@@ -129,10 +95,4 @@ func putArgs(id ActionID, out OutputID, size int64, err error) map[string]any {
 		args["output"] = hex.EncodeToString(out[:])
 	}
 	return args
-}
-
-// getTiered answers for the disk cache, which is the only tier it has.
-func (c *DiskCache) getTiered(id ActionID) (Entry, string, error) {
-	entry, err := c.Get(id)
-	return entry, tierDisk, err
 }

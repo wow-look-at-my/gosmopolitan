@@ -8,9 +8,80 @@ package types2
 
 import (
 	"cmd/compile/internal/syntax"
+	"go/constant"
 	. "internal/types/errors"
+	"strconv"
 	"strings"
 )
+
+// fillParamDefaults appends an argument for each trailing parameter the call
+// omitted, and answers nil when any of them has no default. The arguments are
+// ordinary syntax, so everything after this point sees a full call. Depth:
+// docs/OPTIONAL-PARAMS.md.
+func (check *Checker) fillParamDefaults(call *syntax.CallExpr, args []*operand, params *Tuple, nargs, npars int) []*operand {
+	for i := nargs; i < npars; i++ {
+		if params.vars[i].deflt == nil {
+			return nil
+		}
+	}
+	// The call site is where the value is spelled, so that is where it points.
+	pos := call.Pos()
+	for i := nargs; i < npars; i++ {
+		par := params.vars[i]
+		arg := defaultLiteral(par.deflt, pos)
+		call.ArgList = append(call.ArgList, arg)
+		x := new(operand)
+		check.defaultArg(x, arg, par)
+		args = append(args, x)
+	}
+	return args
+}
+
+// defaultArg type-checks a filled argument. A default is written in the
+// declaring package, so a struct literal in it may name unexported fields,
+// and its type is elided. The check runs as that package, under the
+// parameter's type.
+func (check *Checker) defaultArg(x *operand, arg syntax.Expr, par *Var) {
+	pkg, filling := check.pkg, check.fillingDefault
+	check.pkg, check.fillingDefault = par.pkg, true
+	defer func() { check.pkg, check.fillingDefault = pkg, filling }()
+	check.rawExpr(nil, x, arg, par.typ, false)
+	check.exclude(x, 1<<novalue|1<<builtin|1<<typexpr)
+	check.singleValue(x)
+}
+
+// defaultLiteral spells a default as the source a caller would have written.
+// A struct literal is spelled without its type; the call fills it under the
+// parameter's type. paramDefault refused every value with no spelling.
+func defaultLiteral(d *ParamDefault, pos syntax.Pos) syntax.Expr {
+	if d.Const == nil {
+		lit := &syntax.CompositeLit{NKeys: len(d.Fields)}
+		lit.SetPos(pos)
+		for _, f := range d.Fields {
+			kv := &syntax.KeyValueExpr{Key: syntax.NewName(pos, f.Name), Value: defaultLiteral(f.Value, pos)}
+			kv.SetPos(pos)
+			lit.ElemList = append(lit.ElemList, kv)
+		}
+		return lit
+	}
+	v := d.Const
+	switch v.Kind() {
+	case constant.Bool:
+		if constant.BoolVal(v) {
+			return syntax.NewName(pos, "true")
+		}
+		return syntax.NewName(pos, "false")
+	case constant.String:
+		lit := &syntax.BasicLit{Value: strconv.Quote(constant.StringVal(v)), Kind: syntax.StringLit}
+		lit.SetPos(pos)
+		return lit
+	case constant.Int:
+		lit := &syntax.BasicLit{Value: v.ExactString(), Kind: syntax.IntLit}
+		lit.SetPos(pos)
+		return lit
+	}
+	return nil
+}
 
 // funcInst type-checks a function instantiation.
 // The incoming x must be a generic function.
@@ -528,6 +599,15 @@ func (check *Checker) arguments(call *syntax.CallExpr, sig *Signature, targs []T
 		// standard_func(a, b, c)
 	}
 
+	// A call omits a suffix of the parameter list when every parameter in that
+	// suffix carries a default.
+	if !ddd && !sig.variadic && nargs < npars && sigParams != nil {
+		if filled := check.fillParamDefaults(call, args, sigParams, nargs, npars); filled != nil {
+			args = filled
+			nargs = len(args)
+		}
+	}
+
 	// check argument count
 	if nargs != npars {
 		var at poser = call
@@ -763,9 +843,20 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 				x.typ_ = exp.typ
 			case *Var:
 				x.mode_ = variable
+				// A readonly var is a value in every package but its own; a
+				// qualified name is never in its own.
+				if exp.readonly {
+					x.mode_ = value
+				}
 				x.typ_ = exp.typ
 				if pkg.cgo && strings.HasPrefix(exp.name, "_Cvar_") {
 					x.typ_ = x.typ().(*Pointer).base
+				}
+				if check.inConstExpr {
+					if v, ok := dynamicConstVal(exp); ok {
+						x.mode_ = constant_
+						x.val = v
+					}
 				}
 			case *Func:
 				x.mode_ = funcMode

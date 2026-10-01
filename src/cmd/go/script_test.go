@@ -7,7 +7,7 @@
 
 //go:generate go test cmd/go -v -run=TestScript/README --fixreadme
 
-package main_test
+package gocmd_test
 
 import (
 	"bufio"
@@ -235,7 +235,7 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"GOEXPERIMENT=" + os.Getenv("GOEXPERIMENT"),
 		"GOOS=" + runtime.GOOS,
 		"TESTGO_GOHOSTOS=" + goHostOS,
-		"GOPROXY=" + proxyURL,
+		"TESTGO_GOPROXY=" + proxyURL,
 		"GOPRIVATE=",
 		"GOROOT=" + testGOROOT,
 		"GOTRACEBACK=system",
@@ -246,7 +246,7 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"TESTGO_VCSTEST_TLS_HOST=" + httpsURL.Host,
 		"TESTGO_VCSTEST_CERT=" + srvCertFile,
 		"TESTGONETWORK=panic", // cleared by the [net] condition
-		"GOSUMDB=" + testSumDBVerifierKey,
+		"TESTGO_GOSUMDB=" + testSumDBVerifierKey,
 		"TESTGO_SUMDB=" + testSumDBName,
 		"GONOPROXY=",
 		"GONOSUMDB=",
@@ -255,7 +255,11 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"goversion=" + gover.Local(),
 		"CMDGO_TEST_RUN_MAIN=true",
 		"HGRCPATH=",
-		"GOTOOLCHAIN=auto",
+		// Git reads no configuration of the machine's: a credential helper
+		// set there (macOS git's system config names osxkeychain) is handed
+		// every credential a script stores, and the keychain prompts for it.
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + os.DevNull,
 		"newline=\n",
 	}
 
@@ -415,7 +419,9 @@ func checkCounters(t *testing.T, telemetryDir string) {
 //
 // disabledOnPlatform indicates whether telemetry is disabled
 // due to bugs in the current platform.
-const disabledOnPlatform = false ||
+// A var, not a const: runtime.GOOS is a variable on cosmo, because one
+// APE runs on several hosts.
+var disabledOnPlatform = false ||
 	// The following platforms could potentially be supported in the future:
 	runtime.GOOS == "openbsd" || // #60614
 	runtime.GOOS == "solaris" || // #60968 #60970

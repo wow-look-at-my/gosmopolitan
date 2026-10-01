@@ -7,6 +7,7 @@ package ld
 import (
 	"bytes"
 	"encoding/binary"
+	"internal/testenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,9 +71,9 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 	return data
 }
 
-// bootHeaderMachines decodes every printf boot header in the loader's
-// 8192-byte scan window and returns its ELF machine type, the way
-// ape-m1.c's scan does.
+// bootHeaderMachines decodes every printf boot header in the 8192-byte
+// scan window and returns its ELF machine type, the way the cosmo `ape`
+// loader's own scan does.
 func bootHeaderMachines(t *testing.T, bin []byte) []uint16 {
 	t.Helper()
 	head := bin
@@ -173,35 +174,37 @@ func catchExitf(t *testing.T, fn func()) string {
 // longer honors, and a piece dropped for a selected one is a host that dies
 // with no diagnosable symptom.
 func TestAPEPlatformsHeaderPieces(t *testing.T) {
-	const machoMagic = 0xFEEDFACF
 	tests := []struct {
 		spec                        string
 		amd, arm                    bool
-		wantMacho, wantLoader       bool
+		wantLoader                  bool
 		wantAMDBoot, wantARMBoot    bool
 		wantWindowsShell            bool
 		wantUnsupportedHostGuardMsg bool
 	}{
 		{
-			spec: "linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64",
+			// Every platform there is. An x86-64 mac is still turned
+			// away, because Intel macs are out of support.
+			spec: "linux/amd64,linux/arm64,darwin/arm64,windows/amd64",
 			amd:  true, arm: true,
-			wantMacho: true, wantLoader: true,
-			wantAMDBoot: true, wantARMBoot: true,
-			wantWindowsShell: true,
-		},
-		{
-			// The owner's set: both payloads, but no macOS Intel.
-			spec: "linux/amd64,darwin/arm64,windows/amd64",
-			amd:  true, arm: true,
-			wantMacho: false, wantLoader: true,
+			wantLoader:  true,
 			wantAMDBoot: true, wantARMBoot: true,
 			wantWindowsShell:            true,
 			wantUnsupportedHostGuardMsg: true,
 		},
 		{
-			spec:      "linux/amd64,windows/amd64",
-			amd:       true,
-			wantMacho: false, wantLoader: false,
+			// The default set: both payloads, no linux/arm64.
+			spec: "linux/amd64,darwin/arm64,windows/amd64",
+			amd:  true, arm: true,
+			wantLoader:  true,
+			wantAMDBoot: true, wantARMBoot: true,
+			wantWindowsShell:            true,
+			wantUnsupportedHostGuardMsg: true,
+		},
+		{
+			spec:        "linux/amd64,windows/amd64",
+			amd:         true,
+			wantLoader:  false,
 			wantAMDBoot: true, wantARMBoot: false,
 			wantWindowsShell:            true,
 			wantUnsupportedHostGuardMsg: true,
@@ -243,17 +246,17 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 				t.Errorf("arm64 boot header present = %v, want %v", got, tt.wantARMBoot)
 			}
 
-			gotMacho := binary.LittleEndian.Uint32(bin[apeMachoOffset:]) == machoMagic
-			if gotMacho != tt.wantMacho {
-				t.Errorf("Mach-O header present = %v, want %v", gotMacho, tt.wantMacho)
+			// Nothing copies the program any more, on any platform.
+			if bytes.Contains(head, []byte("conv=notrunc")) {
+				t.Error("the script carries an assimilation dd; nothing may rewrite a copy of the file")
 			}
-			if gotDD := bytes.Contains(head, []byte("conv=notrunc")); gotDD != tt.wantMacho {
-				t.Errorf("Mach-O dd statement present = %v, want %v", gotDD, tt.wantMacho)
+			if bytes.Contains(head, []byte(`cp "$o"`)) {
+				t.Error("the script copies the program; a loader reads it where it lies")
 			}
 
-			gotLoader := bin[0x8000] == 0x1f && bin[0x8001] == 0x8b
+			gotLoader := bin[apeLdDarwinARM64Offset] == 0x1f && bin[apeLdDarwinARM64Offset+1] == 0x8b
 			if gotLoader != tt.wantLoader {
-				t.Errorf("gzipped APE loader present = %v, want %v", gotLoader, tt.wantLoader)
+				t.Errorf("gzipped darwin loader present = %v, want %v", gotLoader, tt.wantLoader)
 			}
 
 			if got := bytes.Contains(head, []byte("exec cmd //c")); got != tt.wantWindowsShell {
@@ -321,23 +324,15 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	if boots := bootHeaderMachines(t, amdOnly); contains(boots, elfMachineARM64) {
 		t.Error("amd64-only input produced an arm64 boot header")
 	}
-	if amdOnly[apeLoaderSrcOffset] == 0x1f && amdOnly[apeLoaderSrcOffset+1] == 0x8b {
-		t.Error("amd64-only input embedded the macOS ARM64 loader source")
+	// The only darwin platform is darwin/arm64, which this input cannot
+	// serve, so an amd64-only build claims linux/amd64 and windows/amd64
+	// and carries no darwin loader at all.
+	if amdOnly[apeLdDarwinARM64Offset] == 0x1f && amdOnly[apeLdDarwinARM64Offset+1] == 0x8b {
+		t.Error("amd64-only input embedded the darwin loader")
 	}
-	// No Mach-O header either. The only darwin platform in the default set
-	// is darwin/arm64, which this input cannot serve, so an amd64-only
-	// build claims linux/amd64 and windows/amd64 and carries no Mach-O
-	// boot path at all. A build that wants Intel-mac boot asks for it:
-	// GOCOSMOPLATFORMS=darwin/amd64, covered below.
-	if binary.LittleEndian.Uint32(amdOnly[apeMachoOffset:]) == 0xFEEDFACF {
-		t.Error("amd64-only input emitted a Mach-O header for a darwin platform it does not claim")
-	}
-
-	// Asking for darwin/amd64 brings it back, so the header is driven by
-	// the selection rather than by the payload's architecture.
-	intelMac := assembleTest(t, cosmoape.DarwinAMD64.String(), true, false)
-	if binary.LittleEndian.Uint32(intelMac[apeMachoOffset:]) != 0xFEEDFACF {
-		t.Error("GOCOSMOPLATFORMS=darwin/amd64 produced no Mach-O header")
+	// It carries the linux/amd64 one, because it claims that platform.
+	if !bytes.Equal(amdOnly[apeLdLinuxAMD64Offset:apeLdLinuxAMD64Offset+4], []byte("\x7fELF")) {
+		t.Error("amd64-only input embedded no linux/amd64 loader for the platform it claims")
 	}
 }
 
@@ -345,6 +340,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 // ends the link. Each of these would otherwise ship a binary that claims a
 // platform it cannot boot, or carries a payload nothing boots.
 func TestAPEPlatformsRejects(t *testing.T) {
+	testenv.MustHaveExec(t)
 	tests := []struct {
 		name     string
 		spec     string

@@ -100,7 +100,7 @@ func (p *abiDesc) assignArg(t *_type) {
 		// size are passed by reference.
 		panic("compileCallback: argument size is larger than uintptr")
 	}
-	if k := t.Kind(); GOARCH != "386" && (k == abi.Float32 || k == abi.Float64) {
+	if k := t.Kind(); goarch.Is386 != 1 && (k == abi.Float32 || k == abi.Float64) {
 		// In fastcall, floating-point arguments in
 		// the first four positions are passed in
 		// floating-point registers, which we don't
@@ -235,7 +235,7 @@ func callbackasm()
 // hence 8 bytes.
 func callbackasmAddr(i int) uintptr {
 	var entrySize int
-	switch GOARCH {
+	switch goarch.GOARCH {
 	default:
 		panic("unsupported architecture")
 	case "386", "amd64":
@@ -259,7 +259,7 @@ const callbackMaxFrame = 64 * goarch.PtrSize
 //
 //go:linkname compileCallback syscall.compileCallback
 func compileCallback(fn eface, cdecl bool) (code uintptr) {
-	if GOARCH != "386" {
+	if goarch.Is386 != 1 {
 		// cdecl is only meaningful on 386.
 		cdecl = false
 	}

@@ -116,6 +116,14 @@ func verifyMod(ld *modload.Loader, ctx context.Context, mod module.Version) []er
 	}
 	h := string(bytes.TrimSpace(data))
 
+	if modfetch.IsGitSum(h) {
+		// A git sum names the github.com commit the files came from. That
+		// commit is the check, so the directory is not hashed against it.
+		if dirErr != nil && !errors.Is(dirErr, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("%s %s: %v", mod.Path, mod.Version, dirErr))
+		}
+		return errs
+	}
 	if zipErr != nil && errors.Is(zipErr, fs.ErrNotExist) {
 		// ok
 	} else {
@@ -136,7 +144,15 @@ func verifyMod(ld *modload.Loader, ctx context.Context, mod module.Version) []er
 			errs = append(errs, fmt.Errorf("%s %s: %v", mod.Path, mod.Version, err))
 			return errs
 		}
-		if hD != h {
+		// The extracted directory is the module completed: the zip's files and
+		// the ones its own generators added. Its checksum is recorded when it
+		// is completed, and it is not the zip's. A module with no recorded
+		// checksum was never completed, so the zip's own answers for it.
+		want := h
+		if complete := modfetch.CompleteSum(ctx, mod); complete != "" {
+			want = complete
+		}
+		if hD != want {
 			errs = append(errs, fmt.Errorf("%s %s: dir has been modified (%v)", mod.Path, mod.Version, dir))
 		}
 	}

@@ -120,7 +120,7 @@ func TestFatPayloads(t *testing.T) {
 // its program headers reference. In the default and slim modes nothing
 // follows the last payload and the payloads carry no section fields, so
 // no symbol table or DWARF bytes remain anywhere in the shipped APE (they
-// live in the .dbg / .aarch64.elf sidecars instead). A GOCOSMODEBUG=compact
+// live in the .dbg sidecar instead). A GOCOSMODEBUG=compact
 // build appends per-architecture compact debug views past the last
 // payload, referenced by each payload's - and each boot header's -
 // section fields, making the assimilated binary debugger-readable on its
@@ -238,25 +238,59 @@ func checkCompactAssimilatedView(t *testing.T, bin, boot []byte, machine elf.Mac
 	assert.NotZero(t, text.Offset, "%v: compact .text must point into the file", machine)
 }
 
-// TestFatApeLoaderEmbedded verifies the gzipped APE loader source for macOS
-// ARM64 is embedded at the offset the bootstrap script extracts it from.
+// TestFatApeLoaderEmbedded reads each loader back out of the file the way
+// the bootstrap script does, at the offset the script names, and checks
+// that it is the native executable that host needs. A region that unpacked
+// to anything else would leave a host with no way to start the program,
+// and the failure would land there rather than here.
 func TestFatApeLoaderEmbedded(t *testing.T) {
 	head := first8K(t)
-	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+)`)
-	m := re.FindSubmatch(head)
-	require.NotNil(t, m, "bootstrap script must extract the APE loader with real offsets")
-
-	skip, err := strconv.Atoi(string(m[1]))
-	require.NoError(t, err)
-	count, err := strconv.Atoi(string(m[2]))
-	require.NoError(t, err)
+	re := regexp.MustCompile(`dd if="\$o" bs=1 skip=(\d+) count=(\d+) 2>/dev/null (\| gzip -dc )?>`)
+	ms := re.FindAllSubmatch(head, -1)
+	require.NotEmpty(t, ms, "the bootstrap script must read its loaders out with real offsets")
 
 	bin := loadBinary(t)
-	require.LessOrEqual(t, skip+count, len(bin), "loader region must be inside the file")
+	for _, m := range ms {
+		skip, err := strconv.Atoi(string(m[1]))
+		require.NoError(t, err)
+		count, err := strconv.Atoi(string(m[2]))
+		require.NoError(t, err)
+		require.LessOrEqual(t, skip+count, len(bin), "the loader region must be inside the file")
 
-	gz, err := gzip.NewReader(bytes.NewReader(bin[skip : skip+count]))
-	require.NoError(t, err, "loader region must be valid gzip")
-	src, err := io.ReadAll(gz)
-	require.NoError(t, err, "loader source must decompress")
-	assert.Contains(t, string(src), "ApeLoader", "decompressed source must be the APE loader")
+		loader := bin[skip : skip+count]
+		if len(m[3]) == 0 {
+			// Read straight out of the file: a static ELF, the Linux loader.
+			assert.Equal(t, []byte("\x7fELF"), loader[:4], "the loader at %#x must be an ELF", skip)
+			continue
+		}
+		gz, err := gzip.NewReader(bytes.NewReader(loader))
+		require.NoError(t, err, "the loader region at %#x must be valid gzip", skip)
+		src, err := io.ReadAll(gz)
+		require.NoError(t, err, "the loader at %#x must decompress", skip)
+		// MH_MAGIC_64, little endian: the darwin loader.
+		assert.Equal(t, []byte{0xcf, 0xfa, 0xed, 0xfe}, src[:4], "the loader at %#x must be a 64-bit Mach-O", skip)
+	}
+}
+
+// TestFatPayloadsAbovePageZero pins each payload above the 4 GB page zero
+// the macOS APE loader occupies. An image linked into it runs nowhere there.
+func TestFatPayloadsAbovePageZero(t *testing.T) {
+	bin := loadBinary(t)
+	const pageZeroEnd = 0x100000000
+	const mallocZone, mallocZoneEnd = 0x400000000, 0x1000000000
+	for _, machine := range []elf.Machine{elf.EM_X86_64, elf.EM_AARCH64} {
+		hdr := bootHeaderByMachine(t, machine)
+		require.NotNil(t, hdr, "missing boot header for %v", machine)
+		phoff := le64(hdr[32:])
+		phentsize := uint64(le16(hdr[54:]))
+		phnum := uint64(le16(hdr[56:]))
+		for i := uint64(0); i < phnum; i++ {
+			ph := bin[phoff+i*phentsize:]
+			if le32(ph[0:]) != uint32(elf.PT_LOAD) {
+				continue
+			}
+			lo := le64(ph[16:])
+			assert.GreaterOrEqual(t, lo, uint64(pageZeroEnd), "%v: PT_LOAD at 0x%x lies in the loader's page zero", machine, lo)
+		}
+	}
 }

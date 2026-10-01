@@ -9,6 +9,8 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -68,7 +70,50 @@ func describeRoots(n int) string {
 	case n < 0:
 		return "SystemCertPool failed"
 	case n == 0:
-		return "EMPTY: no roots loaded"
+		// An empty pool is a question about the host's filesystem, and
+		// the answer is one directory listing away. Name what is there,
+		// so a red leg says which path this host publishes instead of
+		// only that the scan found nothing.
+		return "EMPTY: no roots loaded; " + describeCertPaths()
 	}
 	return fmt.Sprintf("%d loaded", n)
+}
+
+// certCandidates are the bundles crypto/x509 scans for, plus the two
+// macOS keeps its own copy at.
+var certCandidates = []string{
+	"/etc/ssl/certs/ca-certificates.crt",
+	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/etc/ssl/ca-bundle.pem",
+	"/etc/pki/tls/cacert.pem",
+	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+	"/etc/ssl/cert.pem",
+	"/private/etc/ssl/cert.pem",
+	"/System/Library/OpenSSL/certs/cert.pem",
+	"/etc/ssl/certs",
+	"/etc/pki/tls/certs",
+}
+
+func describeCertPaths() string {
+	var found []string
+	for _, p := range certCandidates {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if fi.IsDir() {
+			ents, err := os.ReadDir(p)
+			if err != nil {
+				found = append(found, fmt.Sprintf("%s dir unreadable: %v", p, err))
+				continue
+			}
+			found = append(found, fmt.Sprintf("%s dir %d entries", p, len(ents)))
+			continue
+		}
+		found = append(found, fmt.Sprintf("%s %d bytes", p, fi.Size()))
+	}
+	if len(found) == 0 {
+		return "no candidate bundle exists on this host"
+	}
+	return "candidates: " + strings.Join(found, ", ")
 }

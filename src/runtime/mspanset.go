@@ -151,7 +151,7 @@ func (b *spanSet) pop() *mspan {
 	var head, tail uint32
 	var backoff uint32
 	// TODO: tweak backoff parameters on other architectures.
-	if GOARCH == "arm64" {
+	if goarch.IsArm64 == 1 {
 		backoff = 128
 	}
 claimLoop:

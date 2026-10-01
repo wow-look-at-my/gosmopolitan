@@ -27,7 +27,7 @@ func main() {
 	}
 	defer os.RemoveAll(dir)
 
-	args := []string{"go", "build"}
+	args := []string{"go", "tool", "compile", "-p=p", "-o", filepath.Join(dir, "p.a")}
 	write := func(prefix string, i int, data string) {
 		filename := filepath.Join(dir, fmt.Sprintf("%s%d.go", prefix, i))
 		if err := os.WriteFile(filename, []byte(data), 0o644); err != nil {

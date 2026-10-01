@@ -7,7 +7,6 @@ package reflect
 import (
 	"internal/abi"
 	"internal/goarch"
-	"sync"
 	"unsafe"
 )
 
@@ -29,13 +28,16 @@ var CallGC = &callGC
 // Bitmaps like stack, gc, inReg, and outReg are expanded such that each bit
 // takes up one byte, so that writing out test cases is a little clearer.
 // If ptrs is false, gc will be nil.
-func FuncLayout(t Type, rcvr Type) (frametype Type, argSize, retOffset uintptr, stack, gc, inReg, outReg []byte, ptrs bool) {
+// The layout is computed under a budget of intRegs integer and floatRegs
+// float registers, each float register floatRegSize bytes wide.
+func FuncLayout(t Type, rcvr Type, intRegs int = abi.IntArgRegs, floatRegs int = abi.FloatArgRegs, floatRegSize uintptr = abi.EffectiveFloatRegSize) (frametype Type, argSize, retOffset uintptr, stack, gc, inReg, outReg []byte, ptrs bool) {
+	regs := abiRegs{ints: intRegs, floats: floatRegs, floatSize: floatRegSize}
 	var ft *abi.Type
 	var abid abiDesc
 	if rcvr != nil {
-		ft, _, abid = funcLayout((*funcType)(unsafe.Pointer(t.common())), rcvr.common())
+		ft, _, abid = funcLayout((*funcType)(unsafe.Pointer(t.common())), rcvr.common(), regs)
 	} else {
-		ft, _, abid = funcLayout((*funcType)(unsafe.Pointer(t.(*rtype))), nil)
+		ft, _, abid = funcLayout((*funcType)(unsafe.Pointer(t.(*rtype))), nil, regs)
 	}
 	// Extract size information.
 	argSize = abid.stackCallArgsSize
@@ -54,7 +56,7 @@ func FuncLayout(t Type, rcvr Type) (frametype Type, argSize, retOffset uintptr, 
 		}
 		return 0
 	}
-	for i := 0; i < intArgRegs; i++ {
+	for i := 0; i < intRegs; i++ {
 		inReg = append(inReg, bool2byte(abid.inRegPtrs.Get(i)))
 		outReg = append(outReg, bool2byte(abid.outRegPtrs.Get(i)))
 	}
@@ -136,21 +138,6 @@ func ResolveReflectName(s string) {
 
 type Buffer struct {
 	buf []byte
-}
-
-func clearLayoutCache() {
-	layoutCache = sync.Map{}
-}
-
-func SetArgRegs(ints, floats int, floatSize uintptr) (oldInts, oldFloats int, oldFloatSize uintptr) {
-	oldInts = intArgRegs
-	oldFloats = floatArgRegs
-	oldFloatSize = floatRegSize
-	intArgRegs = ints
-	floatArgRegs = floats
-	floatRegSize = floatSize
-	clearLayoutCache()
-	return
 }
 
 var MethodValueCallCodePtr = methodValueCallCodePtr

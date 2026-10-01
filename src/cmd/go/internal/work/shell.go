@@ -636,15 +636,6 @@ func (sh *Shell) runOut(dir string, env []string, cmdargs ...any) ([]byte, error
 	}
 	cmd.Env = cmd.Environ() // Pre-allocate with correct PWD.
 
-	// Add the TOOLEXEC_IMPORTPATH environment variable for -toolexec tools.
-	// It doesn't really matter if -toolexec isn't being used.
-	// Note that a.Package.Desc is not really an import path,
-	// but this is consistent with 'go list -f {{.ImportPath}}'.
-	// Plus, it is useful to uniquely identify packages in 'go list -json'.
-	if a != nil && a.Package != nil {
-		cmd.Env = append(cmd.Env, "TOOLEXEC_IMPORTPATH="+a.Package.Desc())
-	}
-
 	cmd.Env = append(cmd.Env, env...)
 	start := time.Now()
 	err = cmd.Run()

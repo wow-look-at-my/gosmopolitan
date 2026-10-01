@@ -7,12 +7,23 @@ package net
 import (
 	"bytes"
 	"reflect"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
 )
 
+// The abstract namespace and its autobind are a Linux kernel feature.
+// One APE meets macOS and NT as well, and both refuse an abstract name
+// rather than inventing a path for it.
+func needAbstractNamespace(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the abstract unix namespace is linux-only; this host is " + runtime.GOOS)
+	}
+}
+
 func TestUnixgramAutobind(t *testing.T) {
+	needAbstractNamespace(t)
 	laddr := &UnixAddr{Name: "", Net: "unixgram"}
 	c1, err := ListenUnixgram("unixgram", laddr)
 	if err != nil {
@@ -41,6 +52,7 @@ func TestUnixgramAutobind(t *testing.T) {
 }
 
 func TestUnixAutobindClose(t *testing.T) {
+	needAbstractNamespace(t)
 	laddr := &UnixAddr{Name: "", Net: "unix"}
 	ln, err := ListenUnix("unix", laddr)
 	if err != nil {
@@ -50,6 +62,7 @@ func TestUnixAutobindClose(t *testing.T) {
 }
 
 func TestUnixAbstractLongNameNulStart(t *testing.T) {
+	needAbstractNamespace(t)
 	// Create an abstract socket name that starts with a null byte ("\x00")
 	// whose length is the maximum of RawSockaddrUnix Path len
 	paddedAddr := make([]byte, len(syscall.RawSockaddrUnix{}.Path))
@@ -67,6 +80,7 @@ func TestUnixAbstractLongNameNulStart(t *testing.T) {
 }
 
 func TestUnixgramLinuxAbstractLongName(t *testing.T) {
+	needAbstractNamespace(t)
 	if !testableNetwork("unixgram") {
 		t.Skip("abstract unix socket long name test")
 	}

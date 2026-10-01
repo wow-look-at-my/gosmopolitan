@@ -13,6 +13,7 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	. "runtime"
@@ -27,6 +28,7 @@ import (
 var testMemStatsCount int
 
 func TestMemStats(t *testing.T) {
+	t.Serial()
 	testMemStatsCount++
 
 	// Make sure there's at least one forced GC.
@@ -599,6 +601,8 @@ func testFreegc[T comparable](noscan bool) func(*testing.T) {
 }
 
 func TestPageCacheLeak(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(1))
 	leaked := PageCachePagesLeaked()
 	if leaked != 0 {
@@ -634,8 +638,11 @@ type acLink struct {
 var arenaCollisionSink []*acLink
 
 func TestArenaCollision(t *testing.T) {
+	t.Serial(
 	// Test that mheap.sysAlloc handles collisions with other
 	// memory mappings.
+	)
+
 	if os.Getenv("TEST_ARENA_COLLISION") != "1" {
 		cmd := testenv.CleanCmdEnv(exec.Command(testenv.Executable(t), "-test.run=^TestArenaCollision$", "-test.v"))
 		cmd.Env = append(cmd.Env, "TEST_ARENA_COLLISION=1")
@@ -850,7 +857,17 @@ func BenchmarkGoroutineIdle(b *testing.B) {
 func TestMkmalloc(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	testenv.MustHaveExternalNetwork(t) // To download the golang.org/x/tools dependency.
-	output, err := exec.Command("go", "-C", "_mkmalloc", "test").CombinedOutput()
+	cmd := exec.Command("go", "-C", "_mkmalloc", "test")
+	modcache, err := exec.Command("go", "env", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatalf("go env GOMODCACHE: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(modcache))); err != nil {
+		// The download needs a writable GOPATH: the go command keeps the checksum database's tree head there.
+		gopath := t.TempDir()
+		cmd.Env = append(os.Environ(), "GOPATH="+gopath, "GOMODCACHE="+filepath.Join(gopath, "pkg", "mod"), "GOFLAGS=-modcacherw")
+	}
+	output, err := cmd.CombinedOutput()
 	t.Logf("test output:\n%s", output)
 	if err != nil {
 		t.Errorf("_mkmalloc tests failed: %v", err)

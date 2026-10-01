@@ -27,7 +27,10 @@
 
 package runtime
 
-import "unsafe"
+import (
+	"unsafe"
+	"internal/goarch"
+)
 
 const (
 	sign32 = 1 << (32 - 1)
@@ -223,13 +226,13 @@ func _div64by32(a uint64, b uint32, r *uint32) (q uint32)
 
 //go:nosplit
 func dodiv(n, d uint64) (q, r uint64) {
-	if GOARCH == "arm" {
+	if goarch.IsArm == 1 {
 		// arm doesn't have a division instruction, so
 		// slowdodiv is the best that we can do.
 		return slowdodiv(n, d)
 	}
 
-	if GOARCH == "mips" || GOARCH == "mipsle" {
+	if goarch.IsMips == 1 || goarch.IsMipsle == 1 {
 		// No _div64by32 on mips and using only _mul64by32 doesn't bring much benefit
 		return slowdodiv(n, d)
 	}

@@ -13,10 +13,12 @@
 //
 // but a longer version can be run using
 //
-//	go run rangegen.go long
+//	go list -export -f '{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}' std >importcfg
+//	STDLIB_IMPORTCFG=$PWD/importcfg go run rangegen.go long
 //
 // In that second form, rangegen takes care of compiling
-// and running the code it generates, in batches.
+// and running the code it generates, in batches, against
+// the standard library STDLIB_IMPORTCFG lists.
 // That form takes 10-20 minutes to run.
 
 package main
@@ -28,6 +30,7 @@ import (
 	"math/bits"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -56,9 +59,9 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		out, err := exec.Command("go", "run", "tmp.go").CombinedOutput()
+		out, err := buildAndRun("tmp.go")
 		if err != nil {
-			log.Fatalf("go run tmp.go: %v\n%s", err, out)
+			log.Fatalf("tmp.go: %v\n%s", err, out)
 		}
 		print(".")
 		if force {
@@ -347,4 +350,44 @@ func main() {
 }
 `
 	fmt.Printf("%s\n", code)
+}
+
+// buildAndRun compiles and links file as package main, against the standard
+// library STDLIB_IMPORTCFG lists, and runs it. It answers what the compiler,
+// the linker and the program printed.
+func buildAndRun(file string) ([]byte, error) {
+	importcfg := os.Getenv("STDLIB_IMPORTCFG")
+	if importcfg == "" {
+		return nil, fmt.Errorf("STDLIB_IMPORTCFG is not set")
+	}
+	obj := strings.TrimSuffix(file, ".go") + ".a"
+	exe := strings.TrimSuffix(file, ".go") + ".exe"
+	steps := [][]string{
+		{"go", "tool", "compile", "-p=main", "-importcfg=" + importcfg, "-o", obj, file},
+		{"go", "tool", "link", "-importcfg=" + importcfg, "-o", exe, obj},
+		launch("./" + exe),
+	}
+	var all []byte
+	for _, step := range steps {
+		out, err := exec.Command(step[0], step[1:]...).CombinedOutput()
+		all = append(all, out...)
+		if err != nil {
+			return all, err
+		}
+	}
+	return all, nil
+}
+
+// launch answers the command that runs exe. A program built for a target
+// this machine does not run directly starts through the exec wrapper the
+// distribution ships for that target.
+func launch(exe string) []string {
+	const targetOS, targetArch = runtime.GOOS, runtime.GOARCH
+	if runtime.GOOS == targetOS && runtime.GOARCH == targetArch {
+		return []string{exe}
+	}
+	if wrapper, err := exec.LookPath("go_" + targetOS + "_" + targetArch + "_exec"); err == nil {
+		return []string{wrapper, exe}
+	}
+	return []string{exe}
 }

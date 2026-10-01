@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package vet
 
 // TODO(adonovan): replace this test by a script test
 // in cmd/go/testdata/script/vet_suite.txt like we do
@@ -28,8 +28,7 @@ import (
 // GO_VETTEST_IS_VET is set, and runs the tests otherwise.
 func TestMain(m *testing.M) {
 	if os.Getenv("GO_VETTEST_IS_VET") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	// Set for subprocesses to inherit.

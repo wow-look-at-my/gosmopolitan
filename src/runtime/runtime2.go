@@ -1524,7 +1524,7 @@ var (
 )
 
 // Must agree with internal/buildcfg.FramePointerEnabled.
-const framepointer_enabled = GOARCH == "amd64" || GOARCH == "arm64"
+const framepointer_enabled = goarch.IsAmd64 == 1 || goarch.IsArm64 == 1
 
 // getcallerfp returns the frame pointer of the caller of the caller
 // of this function.

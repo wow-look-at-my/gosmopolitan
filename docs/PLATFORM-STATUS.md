@@ -1,207 +1,91 @@
 # Per-platform runtime status (GOOS=cosmo)
 
-Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the
-LookPath fix - CI-verified by the full 47-check runtimeprobe gauntlet
-on windows-latest, against
-binaries built on all three platforms): stdout/stderr (console CP_UTF8+VT),
-os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory,
-CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU; every
-user-level syscall routes through an NT emulation dispatcher (Linux
-numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go)
-covering process identity, ProcessPrng entropy, the whole file I/O
-family with an fd table and a documented Linux<->Win32 path translation
-(/tmp -> GetTempPathW, /c/... <-> C:\..., /dev/null -> NUL), getdents64
-emulation (os.ReadDir/WalkDir/RemoveAll), working-directory round-trip,
-os.Executable, and timers; os/exec (pipe2 over CreatePipe - blocking,
-non-pollable on purpose - a posix_spawn-style CreateProcessW path with
-upstream-ported quoting and env block, and wait4 packing the Linux
-wait-status protocol: exit = code<<8, NTSTATUS crashes and encoded
-signal deaths 0xC0DE0000|sig decode as Linux termination signals),
-including exec.LookPath/exec.Command name resolution against the
-HOST-format PATH (2026-07-20, src/os/exec/lp_cosmo.go: runtime host
-switch; on NT a lp_windows.go port - ';' split, PATHEXT/.exe probing,
-ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT
-blocks spell "Path" while cosmo's os.Getenv stays exact-case - plus
-an extensionless-APE last resort; unix hosts keep verbatim lp_unix
-behavior - see DEBUGGING.md 2026-07-20 NT LookPath section);
-sockets over classic synchronous winsock (non-overlapped WSASocketW,
-FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR
-is swallowed for AF_UNIX because msafd accepts it and afunix.sys then
-refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with
-a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock
-design; the wake channel is a connected loopback TCP pair because real
-NT may drop loopback UDP datagrams - a lost wake stalls the poller;
-pipes stay non-pollable/blocking on purpose); AF_UNIX pathname stream
-sockets over afunix.sys (sun_path through the path layer; abstract
-names refused EINVAL; wine's ws2_32 lacks AF_UNIX entirely, so wine
-runs show exactly one red there while windows-latest proves it);
-wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed
-as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/
-writev (net.Buffers) over WSASend/WSARecv, and SCM_RIGHTS fd passing
-between cosmo processes (sender-push wire frame on the afunix
-stream: WSADuplicateSocketW for sockets, OpenProcess+DuplicateHandle
-for files/pipes, peer pid via SIO_AF_UNIX_GETPEERPID; pathname
-AF_UNIX carriers only, same user, both ends must be cosmo binaries -
-see DEBUGGING.md wave 3 item 2b for the honest limits); and
-signals: VEH-based sigpanic (SIGSEGV recover works), self-signals
-(kill/tkill with full delivery through sigtrampgo), os/signal Notify,
-async preemption via SuspendThread/SetThreadContext injection
-(preempt ~180ms on the CI runner, upstream preemptM semantics), signal
-deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling
-(runtime/pprof delivers real samples on NT: upstream os_windows.go's
-profileLoop ported as a standing no-P M parked on a waitable timer,
-SuspendThread under ntSuspendLock, direct sigprof calls - no signal
-number anywhere), conhost control events remapped for unix parity -
-CTRL_C -> SIGINT, CTRL_BREAK -> SIGQUIT (the goroutine-dump chord on
-a wedged process), CTRL_CLOSE -> SIGHUP, LOGOFF/SHUTDOWN -> SIGTERM,
-a deliberate divergence from upstream windows Go (which maps BREAK ->
-SIGINT, CLOSE -> SIGTERM) - via an asm handler + relay M, and process
-groups: SysProcAttr{Setpgid} spawns the child as its own group leader
-(CREATE_NEW_PROCESS_GROUP) and kill(-pgid) delivers SIGQUIT
-group-wide over GenerateConsoleCtrlEvent(CTRL_BREAK); the ctrlbreak
-probe CI-proves the conhost-injected handler chain end to end.
+Windows status (2026-07-20, NT bring-up wave 3 COMPLETE plus the LookPath fix - CI-verified by the runtimeprobe gauntlet on windows-latest, against binaries built on all three platforms).
 
-File metadata followed (2026-09-02, the metadata wave): utimensat,
-truncate, fchdir and linkat over SetFileTime, SetEndOfFile,
-GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so
-os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The
-runtimeprobe fsmeta check is a hard assertion on this host too;
-docs/STUBS-INVENTORY.md section 5a lists what Windows still cannot
-serve, all of it absent from upstream's own windows port as well.
+Basics: stdout/stderr (console CP_UTF8+VT), os.Args via GetCommandLineW, environment, os.Exit, VirtualAlloc memory, CreateThread Ms, WaitOnAddress futexes, KUSER clocks, NumCPU. Every user-level syscall routes through an NT emulation dispatcher (Linux numbers/errnos/structs in, Win32 out - src/runtime/os_cosmo_nt_sys.go) covering process identity, ProcessPrng entropy, the whole file I/O family with an fd table.
 
-Still missing on Windows: Windows/arm64 (the charter's step-one experiment
-ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic
-pre-main SIGSEGV at 0x2000c9000; see DEBUGGING.md's wave-4 verdict
-section - so native bring-up gains urgency), file/pipe dup(2)
-(ENOSYS on purpose - socket dup works, and file/pipe fds still
-transfer via SCM_RIGHTS), SCM_RIGHTS on socketpair ends (EOPNOTSUPP
-by design - pair ends cannot cross processes),
-off-host TCP (loopback sockets are CI-proven; the DNS half of the
-2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes
-`dnsconfig_unix.go`, whose tag is `!windows`, so it read a
-resolv.conf that does not exist on NT and fell back to querying
-localhost, and the servers now come from iphlpapi's
-GetNetworkParams instead, with runtimeprobe's `dns` check measuring
-it on every runner - but nothing had got past DNS to attempt an
-off-host connect, so TCP beyond loopback stays unproven either way
-- see DEBUGGING.md's off-host HTTPS section; the trust store was the
-same shape of gap one layer up, and is also fixed: every path in
-crypto/x509's `root_cosmo.go` is a unix path, so the root pool came
-back empty and each handshake reported an unknown authority, and the
-roots now come from crypt32's ROOT store, with
-testdata/runtimeprobe's `tls` check measuring a real handshake - see
-DEBUGGING.md's trust-store section), and
-real-keyboard/CTRL_CLOSE console coverage (the probe covers the
-GenerateConsoleCtrlEvent-injected CTRL_BREAK chain; keyboard chords,
-window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay
-documented-not-asserted) - see DEBUGGING.md's NT wave sections for
-the ladder, the forensics, and the wave-4 backlog.
+Os/exec: pipe2 over CreatePipe, blocking and non-pollable on purpose. A posix_spawn-style CreateProcessW path carries upstream-ported quoting and env block. The wait4 call packs the Linux wait-status protocol, where exit is code<<8. NTSTATUS crashes and encoded signal deaths 0xC0DE0000|sig decode as Linux termination signals. exec.LookPath/exec.Command resolve names against the HOST-format PATH (src/os/exec/lp_cosmo.go: runtime host switch. On NT a lp_windows.go port - '.' split, PATHEXT/.exe probing, ErrDot semantics, case-INSENSITIVE PATH/PATHEXT env lookup since NT blocks spell "Path" while cosmo's os.Getenv stays exact-case. Unix hosts keep verbatim lp_unix behavior).
 
-macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/
-rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll
-via a getdents64 emulation over Apple's __getdirentries64),
-getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/
-After, context timeouts), TCP/UDP loopback sockets with deadlines,
-unix-domain stream sockets (pathname addresses; the abstract namespace
-is Linux-only and refused EINVAL), readv/writev (net.Buffers),
-sendmsg/recvmsg with SCM_RIGHTS fd passing (2026-07-21:
-msghdr/cmsghdr layouts differ - Linux 16-byte/8-aligned cmsg headers
-vs Apple 12-byte/4-aligned - so the fixed-size msghdr re-shaping
-lives in the nosplit dispatch layer while package syscall's darwin
-branch repacks control buffers as ordinary Go; ReadMsgUnix/
-WriteMsgUnix work, MSG_CMSG_CLOEXEC is emulated via fcntl,
-truncation-dropped fds are closed never leaked, and the runtimeprobe
-sendmsg/fdpass checks are mandatory on macOS - see DEBUGGING.md
-2026-07-21), os/exec
-(fork, pipes, execve, wait4 with Linux-numbered wait statuses),
-os.Executable, argv/env, Getwd/Chdir, and SIGNALS all work (CI-verified
-by the runtime probe on macos-latest): SIGSEGV -> sigpanic/recover,
-os/signal Notify delivery, async preemption (SIGURG - tight loops no
-longer hang GC/STW), and kill/raise, with full Linux<->Apple
-signal-number and sigset translation at every darwin boundary (tables
-in src/runtime/sigxlat_cosmo.go). SIGPROF CPU profiling works too
-(2026-07-21): runtime/pprof and -test.cpuprofile deliver real samples
-on macOS hosts - setitimer(ITIMER_PROF) via dlsym'd Apple libc
-setitimer with the Linux<->Apple itimerval layout translated at the
-boundary, SIGPROF riding the existing wave-9 signal machinery,
-upstream-darwin attribution semantics; the pthread parking wrappers
-record m.libcall* so samples inside pthread_cond_wait attribute to
-the Go call site, and the runtimeprobe cpuprof check is mandatory on
-macOS. SIGPIPE additionally stays suppressed
-per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics. As of
-wave 9 the darwin netpoller is a kqueue port of upstream
-netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream
-os_darwin.go's pthread_mutex+pthread_cond design - this pair replaced
-the poll(2)+self-pipe poller and dispatch-semaphore parking after the
-waves-6..9 nondeterministic macOS CI wedge was root-caused (by in-CI
-counter forensics, DEBUGGING.md wave 9) to XNU sporadically never
-returning from a nonblocking read(2) on the poller's wakeup pipe.
-The wave-9 "still missing on macOS hosts" backlog is now closed
-(sendmsg/recvmsg and SIGPROF profiling were its last entries).
+Sockets over classic synchronous winsock (non-overlapped WSASocketW, FIONBIO, AF_INET6 10<->23 and curated sockopt translation - SO_REUSEADDR is swallowed for AF_UNIX because msafd accepts it and afunix.sys then refuses bind - WSAE->errno map, SIO_UDP_CONNRESET disabled on UDP) with a WSAPoll readiness netpoller (netpoll_aix.go's level-triggered two-lock design. The wake channel is a connected loopback TCP pair because real NT may drop loopback UDP datagrams - a lost wake stalls the poller. Pipes stay non-pollable/blocking on purpose).
 
-File metadata and system information followed (2026-09-02, the
-metadata wave): fsync, truncate/ftruncate, chmod/fchmod/fchmodat,
-chown/fchown/fchownat, fchdir, link/symlink, chtimes (utimensat),
-mkfifo, statfs/fstatfs, uname, getrlimit/setrlimit (prlimit64),
-get/setpriority, getpgid, get/setgroups, the uid/gid setters, chroot
-and sendfile. Everything the syscall package exposes and Apple can
-serve now works on macOS; docs/STUBS-INVENTORY.md section 6 lists what
-each one needed and the few Apple genuinely lacks (setresuid/setresgid,
-setfsuid/setfsgid, a directory-relative mknodat). The runtimeprobe
-fsmeta/sysinfo/sendfile checks are mandatory on macOS.
+AF_UNIX pathname stream sockets over afunix.sys (sun_path through the path layer. Abstract names refused EINVAL. Wine's ws2_32 lacks AF_UNIX entirely, so wine runs show exactly one red there while windows-latest proves it). Wave-3 socket growth: socketpair(2) over a loopback TCP pair dressed as unnamed AF_UNIX, socket-kind dup(2), sendmsg/recvmsg + readv/writev (net.Buffers) over WSASend/WSARecv. Pathname AF_UNIX carriers only, same user, both ends must be cosmo binaries.
 
-The remaining known macOS gaps are AllThreadsSyscall (Linux-only
-rt-signal machinery, unused by the stdlib on cosmo) and the
-Intel-mac runtime bring-up below - see DEBUGGING.md.
+Signals: VEH-based sigpanic (SIGSEGV recover works), self-signals (kill/tkill with full delivery through sigtrampgo), os/signal Notify, async preemption via SuspendThread/SetThreadContext injection (preempt ~180ms on the CI runner, upstream preemptM semantics), signal deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling. The ctrlbreak probe CI-proves the conhost-injected handler chain end to end.
 
-**Variadic libc calls must pass their variadic arguments on the STACK
-(2026-07-26).** arm64-apple diverges from AAPCS64 here even when
-argument registers are free, so a variadic callee handed its argument
-in a register reads uninitialized stack memory instead - and, the
-value usually being a flag word, succeeds while doing something other
-than what was asked. `fcntl(fd, F_SETFD, FD_CLOEXEC)` through the
-fixed-argument trampoline set close-on-exec from stack garbage,
-leaving descriptors unprotected perhaps a third of the time; that put
-os/exec's child status pipe into the child and deadlocked any parent
-whose child did not exit promptly - the long-standing "flaky" macOS
-fdpass wedge. The same defect explains the F_DUPFD_CLOEXEC EINVAL and
-O_CREAT modes taken from garbage. Use
-`runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for any variadic
-libc function (fcntl, open/openat with a mode, ioctl); never
-`cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check
-gates it. Full forensics: DEBUGGING.md 2026-07-26.
+File metadata followed (2026-09-02, the metadata wave): utimensat, truncate, fchdir and linkat over SetFileTime, SetEndOfFile, GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The runtimeprobe fsmeta check is a hard assertion on this host too.
 
-macOS Intel status: the dd-assimilated Mach-O is structurally correct as of
-2026-07-02 (per-PT_LOAD segments with real protections and BSS, __PAGEZERO,
-host-OS handoff in rcx - verified against the XNU loader's checks by cmd/link
-unit tests and apetest). The syscall surface closed on 2026-09-02: the
-metadata table, the XNU carry-flag error convention, Apple-to-Linux errno
-numbering, the kqueue/kevent netpoller and hw.ncpu. Signal INSTALLATION
-closed the same day: `darwinSigaction` translates the Linux `sigactiont` and
-issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its
-`sa_tramp`, the trampoline libc supplies for the arm64 path and a raw caller
-must supply itself. Before that the asm branch returned success without
-installing anything, so no handler the runtime set was ever present. The
-`syscall` package's own `rt_sigaction` emulation
-(`internal/runtime/syscall/cosmo`) had the identical stub and closed the same
-day, with its own trampoline: the runtime's dispatches through
-`runtime·sigtramp` and would run the runtime's handler rather than the
-caller's. `darwinSigprocmask` translates `how` and bridges the sigset width
-(8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread
-creation joined the closed list via bsdthread_create, and parking via a
-polled wait since XNU has no futex. Signal DELIVERY is closed too:
-`sigctxt` dispatches on the host and reads XNU's `user_ucontext64` (the
-mcontext is behind a pointer at offset 48, registers as
-`x86_thread_state64`) and `user64_siginfo` (`si_addr` at 24), the
-trampolines translate the Apple signal number to Linux's before Go sees
-it and pass the kernel's token back to `sigreturn(uctx, infostyle,
-token)`, `sigaltstack` translates Apple's `{sp, size, flags}` `stack_t`
-and `SS_DISABLE` (4, not 2), `raise`/`raiseproc`/`tgkill` send Apple
-numbers with `tgkill` issuing `__pthread_kill` on the mach port
-`m.procid` holds, `exitThread` is `bsdthread_terminate` rather than
-process exit, `osyield` is the `swtch_pri` mach trap, and the GS base is
-set to `&m.tls[0]-0x28` with no go1.8 `0x8a0` bias. Apple's SIGFPE
-`si_code` values are remapped to Linux's for sigpanic.
-There is still no
-Intel-mac CI runner, so end-to-end execution there is UNTESTED. Do not claim macOS Intel "works" until the runtime bring-up lands
-and is verified on real hardware.
+Symlinks and the read-only attribute followed (2026-09-16, `os_cosmo_nt_link.go`). A symlink is created over CreateSymbolicLinkW. Readlink reads the substitute name through FSCTL_GET_REPARSE_POINT. Lstat and getdents64 report a name-surrogate reparse point as a link. Every fd kind duplicates over DuplicateHandle, through dup, dup2 and dup3. Unlink clears FILE_ATTRIBUTE_READONLY before DeleteFileW and takes a directory symlink. Chmod carries the owner's write bit as that attribute, and stat reports it as 0555 against 0755. The temp directory is answered in the /c/ spelling Getwd and Executable use, so a path built under it compares equal to one read back.
+
+What Windows cannot serve, all of it absent from upstream's own windows port as well: `prlimit64` is ENOSYS, because Windows has no counterpart. `fchmod` and `fchmodat` carry one bit, and `fchown`/`fchownat` have no unix ownership to change.
+
+**The binaries the NT suite starts are not APEs.** `run.bash` and `run.bat` pin `GOOS` and `GOARCH` to the host values. So `dist test` on each leg tests that host's own port. The windows leg tests `GOOS=windows`. The binaries it builds, copies and starts are native PEs from this fork's linker. `os/exec`'s TestCommand comes from `lp_windows_test.go`. A cosmo build does not compile that file at all. The cosmo port's own coverage is `dats/checks/cosmo-tests.dats`, on the ubuntu leg.
+
+Each property below decides whether NT starts such a PE. A test holds each one.
+
+**A test binary must start under a stripped environment.** The suite puts every package's tests in one binary. A cgo package rides in with them. The link therefore goes through gcc, and gcc names `libwinpthread-1.dll`. That DLL sits in mingw's own directory. Only PATH reaches it. So `cmd/dist` links that binary against a static mingw runtime. What remains is `kernel32` and the CRT API sets, which the loader finds with no PATH at all. `os/exec`'s TestStrippedPathStartsAChild copies the binary and starts the copy. It uses an inherited PATH, the system directory alone, a dot, and an empty value. It logs every DLL the import table names. The loader reports a missing one only as `0xc0000135`, STATUS_DLL_NOT_FOUND. `dats/test/nt-strippedpath.ps1` holds the other half. A copy of a system binary and a copy of an upstream gofmt each start under those same values. The host therefore stops no program by itself.
+
+**The load config data directory must describe memory the image holds.** Windows 10 and later read that directory before they start an image. They answer one that points outside the image with ERROR_BAD_EXE_FORMAT. Under `-flto`, GNU ld writes it an address of `0xc0000000` and a size of zero. The image ends at `0x2c2000`. So `cmd/link` reads the image after an external link. It zeroes an entry that names memory the image does not hold. A zero entry says the image carries no load config, which Windows accepts. `cmd/cgo/internal/swig`'s TestLinkUnderLTO builds one cgo call twice, plain and under `-flto`. It logs both headers and starts both. Neither swig nor C++ is needed to produce the defect. `dats/test/nt-lto.ps1` keeps the host side measured. gcc links C files under `-flto` here. That result runs.
+
+The probe `cmd/link` already carries for this cannot answer it. The probe links a program of its own. The defect needs the whole link to appear. So the probe reads a sound directory while the real link writes a bad one. Only the image answers for the image.
+
+`os/exec` is upstream on this host, and a diff against go1.27.0 says so. Its startProcess is a passthrough to os.StartProcess wherever the build is not cosmo. Its addCriticalEnv differs only when the parent itself carries no SYSTEMROOT. The runner carries one. Env lookup on NT is case-insensitive. So the all-caps `SYSTEMROOT` key the cmd/go script harness copies does reach the child.
+
+Wine reproduces neither property. It runs a cosmo APE as an NT host. It also runs the windows-targeted os/exec test binary green, TestCommand included. What wine leaves red is its own win32 gap, in Test64BitReturnStdCall and TestEnumWindows.
+
+One fault on the NT leg has no cause yet. A `*testState` pointer read back as `0x1000000000000000` inside `testing.(*T).Parallel`. The fault address came through as `0xffffffffffffffff`. It landed right after TestStackGrowthCallback. That makes the repacked pclntab a candidate, because stack copying reads the funcdata that format moved. It has appeared one time and has not repeated.
+
+A stdlib test branches on `runtime.GOOS`. On cosmo that is a readonly var naming the HOST. An NT runner therefore takes the windows expectations. The package under it compiled `path_unix.go`, whose tag is `unix || (js && wasm) || wasip1`, and cosmo is a unix. The test asks a unix build for windows behavior.
+
+One such host switch is gone rather than fixed: `os.UserCacheDir` answers `$XDG_CACHE_HOME`, else `$HOME/.cache`, on every host. Upstream picks `$HOME/Library/Caches` on darwin, `%LocalAppData%` on NT and `$home/lib/cache` on plan9, which gives one binary a different cache on each machine it runs on. `go env GOCACHE` follows it, so the build cache lands in `~/.cache/go-build` everywhere.
+
+`path/filepath` carries both readings in one file. `TestIsLocal` asks `testenv.GOOS`, the build-target constant. It appends nothing and passes. `TestLocalize` switches on `runtime.GOOS`, appends `winlocalizetests`, and fails on NUL. The durable fix is a host switch inside the package. `os/exec`'s `lp_cosmo.go` is the shape to copy. Widening a build tag is not the fix.
+
+The remainder of that red, by cause:
+
+| what the failures say | what it is |
+|---|---|
+| `got broken pipe, expected errno 232` | NT answers a closed pipe with ERROR_NO_DATA, and cosmo maps it to EPIPE |
+| `protocol not available` | sockopts NT does not serve |
+| `The system cannot find the path specified` | the path layer |
+| `unknown directive "MZqFpD='"` | a tool parses an APE's own header as source |
+| `function not implemented` | ENOSYS stubs |
+| `Mode = "-rwx------", want "-rw-------"` | NT has no unix mode bits |
+| `os` and `os/exec` at 600s | neither fails. Both hang to the timeout |
+
+Still missing on Windows: Windows/arm64 (the charter's step-one experiment ran 2026-07-21: WoA x86-64 emulation is FAIL-to-boot - deterministic pre-main SIGSEGV at 0x2000c9000. so native bring-up gains urgency). The DNS half of the 2026-07-20 outbound-HTTPS report is fixed - a cosmo build takes `dnsconfig_unix.go`, whose tag is `!windows`. It read a resolv.conf. The trust store was the same shape of gap one layer up, and is also fixed. Every path in crypto/x509's `root_cosmo.go` is a unix. Keyboard chords, window close, LOGOFF/SHUTDOWN, and group-targeted CTRL_C stay documented-not-asserted).
+
+macOS ARM64 status (2026-07-21): file I/O (create/read/write/stat/rename/remove), directory listing (os.ReadDir/filepath.WalkDir/os.RemoveAll via a getdents64 emulation over Apple's __getdirentries64), getpid/getppid, NumCPU, the monotonic clock, timers (time.Sleep/Ticker/After, context timeouts), TCP/UDP loopback sockets with deadlines, unix-domain stream (the abstract namespace is Linux-only and refused EINVAL), readv/writev (net.Buffers).
+
+sendmsg/recvmsg with SCM_RIGHTS fd passing: msghdr/cmsghdr layouts differ - Linux 16-byte/8-aligned cmsg headers against Apple's. ReadMsgUnix/WriteMsgUnix work, MSG_CMSG_CLOEXEC is emulated via fcntl, truncation-dropped fds are closed never leaked, and the runtimeprobe sendmsg/fdpass checks are mandatory on macOS.
+
+SIGPROF CPU profiling: runtime/pprof and -test.cpuprofile deliver real samples on macOS hosts, over setitimer(ITIMER_PROF) through dlsym. The pthread parking wrappers record m.libcall* so samples inside pthread_cond_wait attribute to the Go call site, and the runtimeprobe cpuprof check is mandatory here. SIGPIPE stays suppressed per-socket via SO_NOSIGPIPE, matching Go's EPIPE-error semantics.
+
+As of wave 9 the darwin netpoller is a kqueue port of upstream netpoll_kqueue.go (kqueue/kevent via dlsym) and M parking is upstream os_darwin.go's pthread_mutex+pthread_cond design. The wave-9 "still missing on macOS hosts" backlog is closed - sendmsg/recvmsg and SIGPROF profiling were its last entries.
+
+A profile taken on an arm64 macOS host names its own mapping one page above the image base. `cmd/pprof -disasm` then resolves no function.
+
+`objTool.Open` computes `offset = mappingStart - loadAddress`. loadAddress is the first executable PT_LOAD's vaddr. On linux/amd64 both values are 0x100000000. The offset is 0 there. On darwin/arm64 the mapping reads 0x800001000 against 0x800000000. Every address moves by 0x1000. `main.main` matches nothing.
+
+The samples are correct. The profile still symbolizes main.main through the pclntab. Linux reads the real base from /proc/self/maps. The darwin path reports the text start instead. cmd/pprof's TestDisasm fails on that leg alone.
+
+File metadata and system information followed (2026-09-02, the metadata wave): fsync, truncate/ftruncate, chmod/fchmod/fchmodat, chown/fchown/fchownat, fchdir, link/symlink, chtimes (utimensat), mkfifo, statfs/fstatfs, uname, getrlimit/setrlimit (prlimit64), get/setpriority, getpgid, get/setgroups, the. Everything the syscall package exposes and Apple can serve now works on macOS. The runtimeprobe fsmeta/sysinfo/sendfile checks are mandatory on macOS. A raw `Syscall` statfs or fstatfs with a Linux `Statfs_t` works too. That is the call golang.org/x/sys/unix makes. `Syscall` converts the struct before it enters the syscall.
+
+What Apple cannot serve: `Setresuid`, `Setresgid`, `Setfsuid`, `Setfsgid` and `mknodat` with a directory descriptor are ENOSYS, because Apple has no counterpart. `Fchmodat` reports `EOPNOTSUPP` for `AT_SYMLINK_NOFOLLOW` on every host: the Linux syscall takes no flags, and one APE must not answer one call two ways. Two Linux `Statfs_t` fields have no Apple source - `Type` carries Apple's own filesystem-type number, and `Namelen` stays zero rather than carrying a guess. `Utsname.Domainname` stays empty for the same reason.
+
+Locking, durability and the terminal followed (2026-09-06): flock, fdatasync, sync, getrusage, gettimeofday, and ioctl. The ioctl support covers the window-size and job-control requests. It also covers the termios family (TCGETS/TCSETS/TCSETSW/TCSETSF) through Apple's TIOCGETA/TIOCSETA. A program can therefore put a terminal into raw mode here. termios converts the struct as well as the request. Apple has 64-bit flag words against 32, and twenty control characters against nineteen at different indices. Apple keeps speeds in their own fields, not inside c_cflag. Some bits collide: Linux IXON is Apple IXOFF.
+
+Windows serves flock over LockFileEx. That lock is mandatory: a reader of a locked file gets EACCES. Windows serves getrusage over GetProcessTimes, GetThreadTimes and K32GetProcessMemoryInfo, with RUSAGE_CHILDREN summed from the children wait4 reaps. It serves gettimeofday from the runtime's wall clock, and statfs/fstatfs over GetVolumePathNameW, GetDiskFreeSpaceW, GetDiskFreeSpaceExW and GetVolumeInformationW.
+
+Runtimeprobe checks: flock, durable, rusage, ioctl, termios, volume. The ubuntu leg's unit tests pin the termios translation, but no CI runner has a terminal, so its round trip has never run against a live driver - untested, not unbuilt.
+
+The remaining known macOS gap is AllThreadsSyscall (Linux-only rt-signal machinery, unused by the stdlib on cosmo).
+
+**Variadic libc calls must pass their variadic arguments on the STACK (2026-07-26).** arm64-apple diverges from AAPCS64 here even when argument registers are free, so. `fcntl(fd, F_SETFD, FD_CLOEXEC)` through the fixed-argument trampoline set close-on-exec from stack garbage, leaving descriptors unprotected perhaps a third of the time. That put os/exec's child status pipe into the child and deadlocked any parent whose child did not exit promptly - the long-standing "flaky" macOS fdpass. The same defect explains the F_DUPFD_CLOEXEC EINVAL and O_CREAT modes taken from garbage. Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for any variadic libc function (fcntl, open/openat with a mode, ioctl). Never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
+
+macOS Intel status: not a platform this toolchain emits. `cosmoape`'s table drops darwin/amd64, so the linker writes no Mach-O header and `GOCOSMOPLATFORMS=darwin/amd64` is refused. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. Starting on that host needs a copy of the whole program in a writable place, and every platform here starts without writing anything. The runtime's amd64 XNU surface stays in the tree and stays untested. Bringing the platform back means answering the offset-0 problem, not just adding a table row.
+
+Signal installation closed the same day. `darwinSigaction` translates the Linux `sigactiont` and issues the raw `__sigaction` syscall with `runtime·cosmoXnuSigtramp` as its `sa_tramp`. The `syscall` package's own `rt_sigaction` emulation (`internal/runtime/syscall/cosmo`) carries its own trampoline. `darwinSigprocmask` translates `how` and bridges the sigset width (8-byte Linux, 4-byte Apple) in both directions, signal by signal. Thread creation joined the closed list via bsdthread_create, and parking via a polled wait since XNU has no futex.
+
+Signal delivery is closed too: `sigctxt` dispatches on the host and reads XNU's `user_ucontext64`, whose mcontext sits behind a pointer at offset 48. Apple's SIGFPE `si_code` values are remapped to Linux's for sigpanic.
+
+No Intel-mac CI runner exists. Nothing there has ever executed. Do not claim macOS Intel "works".

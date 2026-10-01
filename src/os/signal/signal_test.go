@@ -119,6 +119,7 @@ func quiesce() {
 
 // Test that basic signal handling works.
 func TestSignal(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	// Ask for SIGHUP
 	c := make(chan os.Signal, 1)
 	Notify(c, syscall.SIGHUP)
@@ -158,6 +159,7 @@ func TestSignal(t *testing.T) {
 }
 
 func TestStress(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	dur := 3 * time.Second
 	if testing.Short() {
 		dur = 100 * time.Millisecond
@@ -259,16 +261,19 @@ func testCancel(t *testing.T, ignore bool) {
 
 // Test that Reset cancels registration for listed signals on all channels.
 func TestReset(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	testCancel(t, false)
 }
 
 // Test that Ignore cancels registration for listed signals on all channels.
 func TestIgnore(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	testCancel(t, true)
 }
 
 // Test that Ignored correctly detects changes to the ignored status of a signal.
 func TestIgnored(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	// Ask to be notified on SIGWINCH.
 	c := make(chan os.Signal, 1)
 	Notify(c, syscall.SIGWINCH)
@@ -292,6 +297,7 @@ var checkSighupIgnored = flag.Bool("check_sighup_ignored", false, "if true, Test
 
 // Test that Ignored(SIGHUP) correctly detects whether it is being run under nohup.
 func TestDetectNohup(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	if *checkSighupIgnored {
 		if !Ignored(syscall.SIGHUP) {
 			t.Fatal("SIGHUP is not ignored.")
@@ -341,6 +347,7 @@ var (
 
 // Test that Stop cancels the channel's registrations.
 func TestStop(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	sigs := []syscall.Signal{
 		syscall.SIGWINCH,
 		syscall.SIGHUP,
@@ -416,6 +423,7 @@ func TestStop(t *testing.T) {
 
 // Test that when run under nohup, an uncaught SIGHUP does not kill the program.
 func TestNohup(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	// When run without nohup, the test should crash on an uncaught SIGHUP.
 	// When run under nohup, the test should ignore uncaught SIGHUPs,
 	// because the runtime is not supposed to be listening for them.
@@ -525,6 +533,7 @@ func TestNohup(t *testing.T) {
 
 // Test that SIGCONT works (issue 8953).
 func TestSIGCONT(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	c := make(chan os.Signal, 1)
 	Notify(c, syscall.SIGCONT)
 	defer Stop(c)
@@ -534,6 +543,7 @@ func TestSIGCONT(t *testing.T) {
 
 // Test race between stopping and receiving a signal (issue 14571).
 func TestAtomicStop(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	if os.Getenv("GO_TEST_ATOMIC_STOP") != "" {
 		atomicStopTestProgram(t)
 		t.Fatal("atomicStopTestProgram returned")
@@ -653,6 +663,7 @@ func atomicStopTestProgram(t *testing.T) {
 }
 
 func TestTime(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	// Test that signal works fine when we are in a call to get time,
 	// which on some platforms is using VDSO. See issue #34391.
 	dur := 3 * time.Second
@@ -709,6 +720,7 @@ var (
 )
 
 func TestNotifyContextNotifications(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	if *checkNotifyContext {
 		ctx, _ := NotifyContext(context.Background(), syscall.SIGINT)
 		// We want to make sure not to be calling Stop() internally on NotifyContext() when processing a received signal.
@@ -735,7 +747,6 @@ func TestNotifyContextNotifications(t *testing.T) {
 		return
 	}
 
-	t.Parallel()
 	testCases := []struct {
 		name string
 		n    int // number of times a SIGINT should be notified.
@@ -777,6 +788,7 @@ func TestNotifyContextNotifications(t *testing.T) {
 }
 
 func TestNotifyContextStop(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	Ignore(syscall.SIGHUP)
 	if !Ignored(syscall.SIGHUP) {
 		t.Errorf("expected SIGHUP to be ignored when explicitly ignoring it.")
@@ -807,6 +819,7 @@ func TestNotifyContextStop(t *testing.T) {
 }
 
 func TestNotifyContextCancelParent(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	parent, cancelParent := context.WithCancelCause(context.Background())
 	parentCause := errors.New("parent canceled")
 	defer cancelParent(parentCause)
@@ -828,6 +841,7 @@ func TestNotifyContextCancelParent(t *testing.T) {
 }
 
 func TestNotifyContextPrematureCancelParent(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	parent, cancelParent := context.WithCancelCause(context.Background())
 	parentCause := errors.New("parent canceled")
 	defer cancelParent(parentCause)
@@ -850,6 +864,7 @@ func TestNotifyContextPrematureCancelParent(t *testing.T) {
 }
 
 func TestNotifyContextSimultaneousStop(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	c, stop := NotifyContext(context.Background(), syscall.SIGINT)
 	defer stop()
 
@@ -874,6 +889,7 @@ func TestNotifyContextSimultaneousStop(t *testing.T) {
 }
 
 func TestNotifyContextStringer(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	parent, cancelParent := context.WithCancel(context.Background())
 	defer cancelParent()
 	c, stop := NotifyContext(parent, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
@@ -887,6 +903,7 @@ func TestNotifyContextStringer(t *testing.T) {
 
 // #44193 test signal handling while stopping and starting the world.
 func TestSignalTrace(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	done := make(chan struct{})
 	quit := make(chan struct{})
 	c := make(chan os.Signal, 1)
@@ -927,6 +944,7 @@ func TestSignalTrace(t *testing.T) {
 
 // #77639.
 func TestNotifyContextCause(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	ctx, stop := NotifyContext(t.Context(), syscall.SIGINT)
 	defer stop()
 	syscall.Kill(syscall.Getpid(), syscall.SIGINT)

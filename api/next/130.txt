@@ -1,0 +1,14 @@
+pkg go/ast, type Field struct, Default Expr #130
+pkg go/ast, type GenDecl struct, Readonly token.Pos #130
+pkg go/types, method (*ParamDefault) String() string #130
+pkg go/types, method (*Var) Default() *ParamDefault #130
+pkg go/types, method (*Var) Readonly() bool #130
+pkg go/types, method (*Var) SetDefault(*ParamDefault) #130
+pkg go/types, method (*Var) SetReadonly(bool) #130
+pkg go/types, type FieldDefault struct #130
+pkg go/types, type FieldDefault struct, Name string #130
+pkg go/types, type FieldDefault struct, Value *ParamDefault #130
+pkg go/types, type Info struct, ParamDefaults map[*ast.CallExpr][]ast.Expr #130
+pkg go/types, type ParamDefault struct #130
+pkg go/types, type ParamDefault struct, Const constant.Value #130
+pkg go/types, type ParamDefault struct, Fields []FieldDefault #130

@@ -13,6 +13,7 @@ import (
 	"iter"
 	"math"
 	"runtime"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -383,7 +384,10 @@ func (v Value) CallSlice(in []Value) []Value {
 	return v.call("CallSlice", in)
 }
 
-var callGC bool // for testing; see TestCallMethodJump and TestCallArgLive
+// callGC makes every call run a GC at each point a test wants one; see
+// TestCallMethodJump and TestCallArgLive. A GC is legal at any of those
+// points, so a call another test makes while it is set only runs slower.
+var callGC atomic.Bool
 
 const debugReflectCall = false
 
@@ -578,7 +582,7 @@ func (v Value) call(op string, in []Value) []Value {
 	}
 
 	// For testing; see TestCallArgLive.
-	if callGC {
+	if callGC.Load() {
 		runtime.GC()
 	}
 
@@ -586,7 +590,7 @@ func (v Value) call(op string, in []Value) []Value {
 	call(frametype, fn, stackArgs, uint32(frametype.Size()), uint32(abid.retOffset), uint32(frameSize), &regArgs)
 
 	// For testing; see TestCallMethodJump.
-	if callGC {
+	if callGC.Load() {
 		runtime.GC()
 	}
 
@@ -695,7 +699,7 @@ func (v Value) call(op string, in []Value) []Value {
 // regs contains the argument values passed in registers and will contain
 // the values returned from ctxt.fn in registers.
 func callReflect(ctxt *makeFuncImpl, frame unsafe.Pointer, retValid *bool, regs *abi.RegArgs) {
-	if callGC {
+	if callGC.Load() {
 		// Call GC upon entry during testing.
 		// Getting our stack scanned here is the biggest hazard, because
 		// our caller (makeFuncStub) could have failed to place the last

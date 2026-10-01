@@ -75,10 +75,8 @@ func ntNowFiletime() (ntFiletime, bool) {
 // which is exactly UTIME_OMIT, and UTIME_NOW is filled from the system
 // clock. A nil times array means "both now" on Linux.
 //
-// AT_SYMLINK_NOFOLLOW is accepted and cannot change the outcome: this
-// port resolves no symlinks (ntEmuReadlinkat answers EINVAL for
-// everything but /proc/self/exe), so there is no link to decline to
-// follow.
+// AT_SYMLINK_NOFOLLOW opens a symlink as itself, so the stamps land on
+// the link.
 func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags int32) (r1, r2, errno uintptr) {
 	if ntSetFileTimeFn == 0 {
 		return ntFail3(ntENOSYS)
@@ -90,8 +88,12 @@ func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags i
 	if eno != 0 {
 		return ntFail3(eno)
 	}
+	open := uintptr(_NT_FILE_FLAG_BACKUP_SEMANTICS)
+	if flags&_NT_AT_SYMLINK_NOFOLLOW != 0 {
+		open |= _NT_FILE_FLAG_OPEN_REPARSE_POINT
+	}
 	h, werr := ntcallE(ntCreateFileWFn, uintptr(unsafe.Pointer(&w[0])), _NT_FILE_WRITE_ATTRIBUTES,
-		_NT_FILE_SHARE_ALL, 0, _NT_OPEN_EXISTING, _NT_FILE_FLAG_BACKUP_SEMANTICS, 0)
+		_NT_FILE_SHARE_ALL, 0, _NT_OPEN_EXISTING, open, 0)
 	KeepAlive(w)
 	if h == _NT_INVALID_HANDLE_VALUE {
 		return ntFail3(ntErrno(werr))
@@ -243,10 +245,12 @@ func ntEmuFchdir(fd int32) (r1, r2, errno uintptr) {
 // ntEmuLinkat creates a hard link. CreateHardLinkW takes the new name
 // first, the reverse of linkat.
 //
-// AT_SYMLINK_FOLLOW is accepted and cannot change the outcome, for the
-// same reason as in ntEmuUtimensat: this port resolves no symlinks.
-// Hard links need both paths on one NTFS volume; CreateHardLinkW
-// reports the cross-volume case itself, and ntErrno maps it to EXDEV.
+// CreateHardLinkW links the name it is given, so a symlink as oldpath
+// gets a second name for the link itself, which is what linkat does
+// without AT_SYMLINK_FOLLOW; the flag is accepted and the link still
+// names the symlink. Hard links need both paths on one NTFS volume;
+// CreateHardLinkW reports the cross-volume case itself, and ntErrno
+// maps it to EXDEV.
 func ntEmuLinkat(olddirfd int32, oldpath *byte, newdirfd int32, newpath *byte, flags int32) (r1, r2, errno uintptr) {
 	if ntCreateHardLinkWFn == 0 {
 		return ntFail3(ntENOSYS)

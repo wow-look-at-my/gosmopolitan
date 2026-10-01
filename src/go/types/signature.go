@@ -7,6 +7,7 @@ package types
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	. "internal/types/errors"
 	"path/filepath"
@@ -395,6 +396,80 @@ func (check *Checker) recordParenthesizedRecvTypes(expr ast.Expr, typ Type) {
 	}
 }
 
+// paramDefault checks the "= expr" on one parameter and returns its value. It
+// checks that the parameter is one that can carry a default at all, and that
+// the expression is a constant, or a struct literal of constants, assignable
+// to its type. Depth: docs/OPTIONAL-PARAMS.md.
+func (check *Checker) paramDefault(field *ast.Field, kind VarKind, typ Type) *ParamDefault {
+	if field.Default == nil {
+		return nil
+	}
+	if kind != ParamVar {
+		check.error(field.Default, BadDecl, "only a function parameter takes a default")
+		return nil
+	}
+	var x operand
+	check.expr(nil, &x, field.Default)
+	check.assignment(&x, typ, "parameter default")
+	if !x.isValid() {
+		return nil
+	}
+	return check.defaultValue(&x, field.Default, typ)
+}
+
+// defaultValue converts a checked default expression into the value the
+// export data carries. A caller in another package reads it back from there,
+// so a default is a constant, or a keyed struct literal whose fields are.
+func (check *Checker) defaultValue(x *operand, e ast.Expr, typ Type) *ParamDefault {
+	if x.mode() == constant_ {
+		// The call site is given the value spelled back as source, and only
+		// these three kinds have a spelling that reads back as the same constant.
+		switch x.val.Kind() {
+		case constant.Bool, constant.String, constant.Int:
+			return &ParamDefault{Const: x.val}
+		}
+		check.error(e, BadDecl, "parameter default must be a boolean, string or integer constant")
+		return nil
+	}
+	lit, _ := ast.Unparen(e).(*ast.CompositeLit)
+	st, _ := typ.Underlying().(*Struct)
+	if lit == nil || st == nil {
+		check.error(e, BadDecl, "parameter default must be a constant or a struct literal")
+		return nil
+	}
+	// The literal is filled in at the call under the parameter's type, so it
+	// must have been written under that type and not one assignable to it.
+	if lit.Type != nil && !Identical(x.typ(), typ) {
+		check.errorf(e, BadDecl, "parameter default struct literal has type %s, want %s", x.typ(), typ)
+		return nil
+	}
+	d := &ParamDefault{Fields: make([]FieldDefault, 0, len(lit.Elts))}
+	for _, elem := range lit.Elts {
+		kv, _ := elem.(*ast.KeyValueExpr)
+		if kv == nil {
+			check.error(elem, BadDecl, "parameter default struct literal must key every field")
+			return nil
+		}
+		key := kv.Key.(*ast.Ident) // compositeLit already refused any other key
+		obj, _, _ := lookupFieldOrMethod(st, false, check.pkg, key.Name, false)
+		fld := obj.(*Var)
+		var v operand
+		check.rawExpr(nil, &v, kv.Value, fld.typ, false)
+		check.exclude(&v, 1<<novalue|1<<builtin|1<<typexpr)
+		check.singleValue(&v)
+		check.assignment(&v, fld.typ, "struct literal")
+		if !v.isValid() {
+			return nil
+		}
+		fv := check.defaultValue(&v, kv.Value, fld.typ)
+		if fv == nil {
+			return nil
+		}
+		d.Fields = append(d.Fields, FieldDefault{Name: key.Name, Value: fv})
+	}
+	return d
+}
+
 // collectParams collects (but does not declare) all parameter/result
 // variables of list and returns the list of names and corresponding
 // variables, and whether the (parameter) list is variadic.
@@ -430,6 +505,7 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 				// named parameter is declared by caller
 				names = append(names, name)
 				params = append(params, par)
+				par.deflt = check.paramDefault(field, kind, typ)
 			}
 			named = true
 		} else {
@@ -439,6 +515,22 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 			names = append(names, nil)
 			params = append(params, par)
 			anonymous = true
+		}
+	}
+
+	// A call omits a suffix of the parameter list, so a default before a
+	// required parameter names a value nothing can ever read.
+	if kind == ParamVar {
+		for i, field := range list.List {
+			if field.Default == nil {
+				continue
+			}
+			for _, later := range list.List[i+1:] {
+				if later.Default == nil {
+					check.error(field.Default, BadDecl, "parameter default must not precede a parameter without one")
+					break
+				}
+			}
 		}
 	}
 

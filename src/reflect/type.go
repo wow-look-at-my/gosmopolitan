@@ -2829,6 +2829,7 @@ func toType(t *abi.Type) Type {
 type layoutKey struct {
 	ftyp *funcType // function signature
 	rcvr *abi.Type // receiver type, or nil if none
+	regs abiRegs   // register budget the layout was computed under
 }
 
 type layoutType struct {
@@ -2843,24 +2844,26 @@ var layoutCache sync.Map // map[layoutKey]layoutType
 // stack-assigned function arguments and return values for the function
 // type t.
 // If rcvr != nil, rcvr specifies the type of the receiver.
+// The register budget the layout is assigned under is part of the cache key.
+// The defaults are what this program was compiled for; only tests pass less.
 // The returned type exists only for GC, so we only fill out GC relevant info.
 // Currently, that's just size and the GC program. We also fill in
 // the name for possible debugging use.
-func funcLayout(t *funcType, rcvr *abi.Type) (frametype *abi.Type, framePool *sync.Pool, abid abiDesc) {
+func funcLayout(t *funcType, rcvr *abi.Type, regs abiRegs = abiRegs{ints: abi.IntArgRegs, floats: abi.FloatArgRegs, floatSize: abi.EffectiveFloatRegSize}) (frametype *abi.Type, framePool *sync.Pool, abid abiDesc) {
 	if t.Kind() != abi.Func {
 		panic("reflect: funcLayout of non-func type " + stringFor(&t.Type))
 	}
 	if rcvr != nil && rcvr.Kind() == abi.Interface {
 		panic("reflect: funcLayout with interface receiver " + stringFor(rcvr))
 	}
-	k := layoutKey{t, rcvr}
+	k := layoutKey{t, rcvr, regs}
 	if lti, ok := layoutCache.Load(k); ok {
 		lt := lti.(layoutType)
 		return lt.t, lt.framePool, lt.abid
 	}
 
 	// Compute the ABI layout.
-	abid = newAbiDesc(t, rcvr)
+	abid = newAbiDesc(t, rcvr, regs)
 
 	// build dummy rtype holding gc program
 	x := &abi.Type{

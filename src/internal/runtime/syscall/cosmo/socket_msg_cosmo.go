@@ -8,46 +8,18 @@ package cosmo
 
 import "unsafe"
 
-// Darwin (macOS ARM64) sendmsg/recvmsg emulation: the layout-translation
-// core. Linux and Apple disagree on struct msghdr field widths (Linux
-// iovlen/controllen are size_t=u64 where Apple's are int32/u32) and on
-// struct cmsghdr entirely (Linux {Len u64, Level i32, Type i32}, 16-byte
-// header, data aligned to 8; Apple {Len u32, Level i32, Type i32},
-// 12-byte header, data aligned to 4 - __DARWIN_ALIGN32), so control
-// buffers must be repacked cmsg-by-cmsg, never passed through whole.
-// struct iovec is {base, len} on both systems, so iovec arrays DO pass
-// through untouched.
+// Darwin sendmsg/recvmsg emulation: the layout-translation core.
 //
-// The work is split across the syscall boundary by cost:
+// Linux and Apple disagree on msghdr field widths and on cmsghdr
+// entirely (see the geometry constants below), so a control buffer is
+// repacked cmsg-by-cmsg, NEVER passed through whole. struct iovec is
+// {base, len} on both, so an iovec array does pass through untouched.
 //
-//   - The dlsym-dispatch side (darwinSendmsg/darwinRecvmsg in
-//     socket_cosmo_arm64.go) runs inside the _Gsyscall window, where
-//     every frame is nosplit and the whole chain must fit the linker's
-//     792-byte budget - no room for sockaddr scratch or cmsg repack
-//     buffers. It performs only the FIXED-SIZE msghdr re-shaping
-//     (field widths, iovlen bound, result-flag values) and passes the
-//     msg_name and msg_control POINTERS through untouched. Its
-//     contract is therefore: those buffers' BYTES are Apple-shaped in
-//     both directions.
-//   - Package syscall's sendmsgN/recvmsgRaw darwin branches
-//     (syscall_cosmo_msg.go there) run as ordinary Go BEFORE and
-//     AFTER the window, where allocation is legal: they translate the
-//     sockaddr and repack the control buffer via the exported helpers
-//     below, emulate MSG_CMSG_CLOEXEC (Apple has no such flag), and
-//     close fds a truncation cannot deliver. Raw syscall.Syscall
-//     users of SYS_SENDMSG/SYS_RECVMSG on a macOS host get the
-//     Apple-shaped-buffer contract - exactly the raw-msghdr shapes
-//     the runtimeprobe sendmsg check exercises (nil name, nil
-//     control, multi-iovec data).
-//
-// This file is deliberately arch-independent (//go:build cosmo, not
-// cosmo && arm64): everything in it is pure byte manipulation over
-// caller-provided buffers, byte-identical on both cosmo architectures,
-// which lets the repack logic run under GOOS=cosmo on any host arch -
-// socket_msg_cosmo_test.go exercises it on the Linux CI leg. Fd side
-// effects (applying close-on-exec, closing fds a truncation drops) are
-// taken as function values so the callers choose the environment:
-// package syscall passes fcntl/close closures, tests pass recorders.
+// This file is arch-independent on purpose: it is pure byte
+// manipulation over caller-provided buffers, so the repack runs under
+// GOOS=cosmo on any host arch and its test runs on the Linux CI leg.
+// An fd side effect is taken as a function value, so the caller
+// chooses: syscall passes closures and a test passes a recorder.
 
 // Linux (= cosmo ABI) and Apple cmsg geometry, verified against
 // syscall/ztypes_cosmo_arm64.go and syscall/ztypes_darwin_arm64.go.
@@ -175,24 +147,15 @@ func XlatMsgFlags(aflags int32) int32 {
 
 // CmsgToApple repacks a Linux-shaped control buffer at (src, srcLen)
 // into an Apple-shaped one at (dst, dstCap), returning the Apple
-// controllen and 0, or 0 and a Linux errno. Policy mirrors what
-// Linux's af_unix send path does with each record (verified against a
-// live kernel for the NT emulation, DEBUGGING.md wave 3 item 2b):
+// controllen and 0, or 0 and a Linux errno. Each record is handled on
+// the case that matches it, mirroring Linux's af_unix send path.
 //
-//   - SOL_SOCKET/SCM_RIGHTS: translated (level 1 -> 0xffff), the fd
-//     payload copied unchanged.
-//   - non-SOL_SOCKET levels: silently skipped (__scm_send's continue).
-//   - SOL_SOCKET/SCM_CREDENTIALS: EOPNOTSUPP (Linux validates
-//     credentials this emulation cannot).
-//   - other SOL_SOCKET types: EINVAL, and malformed records (cmsg_len
-//     shorter than a header or overrunning the buffer) are EINVAL.
-//
-// A repack that outgrows dstCap fails with ENOBUFS (the shape of
-// Linux's own optmem_max overflow); callers size dst >= srcLen, which
-// always suffices because the Apple shape of any record is strictly
-// smaller than its Linux shape. A buffer that skips down to nothing
-// returns dlen 0 and the caller sends with no control at all, which
-// is exactly what Linux transmits in that case.
+// A repack that outgrows dstCap fails ENOBUFS, the shape of Linux's own
+// optmem_max overflow. A caller sizes dst >= srcLen, which always
+// suffices, because the Apple shape of a record is strictly smaller
+// than its Linux shape. A buffer that skips down to nothing returns
+// dlen 0 and the caller sends no control at all, which is what Linux
+// transmits in that case.
 func CmsgToApple(src, srcLen, dst, dstCap uintptr) (dlen, errno uintptr) {
 	if srcLen < linuxCmsgHdrLen {
 		return 0, cmsgEINVAL
@@ -241,44 +204,22 @@ func CmsgToApple(src, srcLen, dst, dstCap uintptr) (dlen, errno uintptr) {
 }
 
 // CmsgToLinux rewrites, IN PLACE, the Apple-shaped control records
-// Apple recvmsg just delivered into buf (alen bytes of a buffer whose
-// caller-visible capacity is cap - Apple needs less space than Linux
-// for the same payload, so the caller's Linux-provisioned buffer
-// always had room for the Apple shape) into Linux-shaped records,
-// returning the Linux controllen and whether control data was
-// truncated to make the larger Linux shape fit.
+// Apple recvmsg delivered into buf, returning the Linux controllen and
+// whether control data was truncated to make the larger Linux shape
+// fit. A Linux-provisioned buffer always had room for the Apple shape.
 //
-// Record policy: SOL_SOCKET(0xffff)/SCM_RIGHTS records translate;
-// everything else is dropped - no other record type can arrive, since
-// the sockopt layer cannot enable timestamping and friends on macOS
-// hosts (darwinSockoptXlat refuses the options). Truncation semantics
-// mirror the Linux kernel's, pinned live for the NT emulation
-// (DEBUGGING.md wave 3 item 2b): SCM_RIGHTS truncates at fd
-// granularity - (avail-hdr)/4 fds delivered, so CMSG_SPACE alignment
-// slack still carries whole fds ("a 24-byte buffer receives TWO fds") -
-// with every undelivered fd CLOSED (never leaked into the process) and
-// MSG_CTRUNC raised; a record that cannot fit even one fd (or any
-// non-rights record that cannot fit whole) is dropped entirely, and
-// the final record may sit flush against cap without its alignment
-// padding (the kernel's tight-fit rule).
-//
-// applyFd is invoked for every DELIVERED rights fd (package syscall
-// passes its close-on-exec setter when the caller asked for
-// MSG_CMSG_CLOEXEC, which Apple lacks); closeFd for every dropped one.
-// Either may be nil. All fd values are read before any bytes are
-// rewritten.
-//
-// The in-place rewrite runs in three stages so no write can overrun
-// unread input: (1) compact translatable Apple records to the front of
-// the buffer (records only shrink or hold position: forward-safe), (2)
-// plan Linux offsets against cap, apply fd side effects, and shorten
-// the cut record's Apple header in place if the plan truncates
-// mid-record, (3) expand records back to front (per record the write
-// cursor is at or past the read cursor - Linux records are strictly
-// larger - with the payload copied high-to-low and the header written
-// only after its payload has moved).
+// Only SOL_SOCKET/SCM_RIGHTS translates; everything else drops, and
+// nothing else can arrive because darwinSockoptXlat refuses the
+// options that produce it. Truncation mirrors the Linux kernel:
+// SCM_RIGHTS truncates at FD granularity, every undelivered fd is
+// CLOSED rather than leaked, and MSG_CTRUNC is raised. applyFd runs for
+// each delivered fd and closeFd for each dropped one; either may be
+// nil, and every fd is read before any byte is rewritten.
 func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (llen uintptr, ctrunc bool) {
-	// Stage 1: compact translatable records to the buffer front.
+	// Three stages, so no write can overrun unread input.
+	//
+	// Stage 1: compact translatable records to the buffer front. A
+	// record only shrinks or holds position, so this is forward-safe.
 	var srcOffs [msgMaxCmsgRecords]uint32
 	var n int
 	var roff, woff uintptr
@@ -313,7 +254,11 @@ func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (lle
 		roff = next
 	}
 
-	// Stage 2: plan Linux offsets against cap; apply fd side effects.
+	// Stage 2: plan Linux offsets against cap and apply the fd side
+	// effects. A record that cannot fit even one fd is dropped whole,
+	// and the final record may sit flush against cap without its
+	// alignment padding - the kernel's tight-fit rule. If the plan cuts
+	// mid-record, shorten that record's Apple header in place.
 	var dstOffs [msgMaxCmsgRecords]uint32
 	kept := 0
 	var dst uintptr
@@ -363,7 +308,10 @@ func CmsgToLinux(buf, alen, capacity uintptr, applyFd, closeFd func(int32)) (lle
 	}
 	llen = dst
 
-	// Stage 3: expand back to front.
+	// Stage 3: expand back to front. Per record the write cursor is at
+	// or past the read cursor, because a Linux record is strictly
+	// larger, so copy the payload high to low and write the header only
+	// after its payload has moved.
 	for k := kept - 1; k >= 0; k-- {
 		soff := uintptr(srcOffs[k])
 		doff := uintptr(dstOffs[k])

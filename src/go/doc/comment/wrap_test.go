@@ -16,6 +16,7 @@ import (
 var wrapSeed = flag.Int64("wrapseed", 0, "use `seed` for wrap test (default auto-seeds)")
 
 func TestWrap(t *testing.T) {
+	t.Serial()
 	if *wrapSeed == 0 {
 		*wrapSeed = time.Now().UnixNano()
 	}

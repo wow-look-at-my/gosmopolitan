@@ -22,6 +22,8 @@ import (
 // TestStackMem measures per-thread stack segment cache behavior.
 // The test consumed up to 500MB in the past.
 func TestStackMem(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	const (
 		BatchSize      = 32
 		BatchCount     = 256

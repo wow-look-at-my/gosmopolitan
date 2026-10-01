@@ -7,6 +7,7 @@
 package nistec
 
 import (
+	"runtime"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -25,6 +26,10 @@ func boundarySlices(t *testing.T, size int) (start, end []byte) {
 	needPages := 2 + (2*size+pageSize-1)/pageSize
 	b, err := syscall.Mmap(0, 0, needPages*pageSize, syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_ANON|syscall.MAP_PRIVATE)
+	if err == syscall.ENOSYS {
+		// A cosmo binary builds this file and can boot on a host with no mmap.
+		t.Skipf("host %s has no mmap", runtime.GOOS)
+	}
 	if err != nil {
 		t.Fatalf("mmap failed: %v", err)
 	}

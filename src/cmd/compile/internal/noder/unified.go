@@ -25,8 +25,8 @@ import (
 )
 
 // uirVersion is the unified IR version to use for encoding/decoding.
-// Use V4 for generic methods.
-const uirVersion = pkgbits.V4
+// Use V6 for struct literal parameter defaults.
+const uirVersion = pkgbits.V6
 
 // localPkgReader holds the package reader used for reading the local
 // package. It exists so the unified IR linker can refer back to it
@@ -430,9 +430,17 @@ func readPackage(pr *pkgReader, importpkg *types.Pkg, localStub bool) {
 			idx := r.Reloc(pkgbits.SectionObj)
 			assert(r.Len() == 0)
 
+			// Export data carries copies of the objects it refers to in
+			// other packages. A package's own definition wins over any
+			// copy: under -testinit the package under test is compiled
+			// with its _test.go files, and every copy of its objects in
+			// other export data lacks what those files add.
 			path, name, code := r.p.PeekObj(idx)
 			if code != pkgbits.ObjStub {
-				objReader[types.NewPkg(path, "").Lookup(name)] = pkgReaderIndex{pr, idx, nil, nil, nil}
+				sym := types.NewPkg(path, "").Lookup(name)
+				if _, seen := objReader[sym]; !seen || path == pr.PkgPath() {
+					objReader[sym] = pkgReaderIndex{pr, idx, nil, nil, nil}
+				}
 			}
 		}
 
@@ -455,7 +463,7 @@ func readPackage(pr *pkgReader, importpkg *types.Pkg, localStub bool) {
 			idx := r.Reloc(pkgbits.SectionBody)
 
 			sym := types.NewPkg(path, "").Lookup(name)
-			if _, ok := importBodyReader[sym]; !ok {
+			if _, ok := importBodyReader[sym]; !ok || path == pr.PkgPath() {
 				importBodyReader[sym] = pkgReaderIndex{pr, idx, nil, nil, nil}
 			}
 		}
@@ -575,5 +583,5 @@ func writeUnifiedExport(out io.Writer) {
 		w.Flush()
 	}
 
-	base.Ctxt.Fingerprint = l.pw.DumpTo(out)
+	dumpExportData(&l.pw, out)
 }

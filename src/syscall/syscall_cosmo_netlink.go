@@ -18,6 +18,16 @@ import (
 const (
 	NETLINK_ROUTE = 0x0
 
+	// Interface flags, as a Linux kernel reports them in an IfInfomsg.
+	// These describe netlink DATA, so the Linux values are the right ones
+	// whatever host the APE booted on: no other kernel sends an IfInfomsg.
+	IFF_UP          = 0x1
+	IFF_BROADCAST   = 0x2
+	IFF_LOOPBACK    = 0x8
+	IFF_POINTOPOINT = 0x10
+	IFF_RUNNING     = 0x40
+	IFF_MULTICAST   = 0x1000
+
 	NLMSG_ALIGNTO  = 0x4
 	NLMSG_DONE     = 0x3
 	NLMSG_ERROR    = 0x2

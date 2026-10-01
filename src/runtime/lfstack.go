@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goarch"
 	"internal/runtime/atomic"
 	"unsafe"
 )
@@ -36,7 +37,7 @@ func (head *lfstack) push(node *lfnode) {
 func (head *lfstack) pop() unsafe.Pointer {
 	var backoff uint32
 	// TODO: tweak backoff parameters on other architectures.
-	if GOARCH == "arm64" {
+	if goarch.IsArm64 == 1 {
 		backoff = 128
 	}
 	for {

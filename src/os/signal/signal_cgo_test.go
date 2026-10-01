@@ -40,6 +40,7 @@ const (
 // This is a regression test for https://go.dev/issue/22838. On Darwin, PTY
 // reads return EINTR when this occurs, and Go should automatically retry.
 func TestTerminalSignal(t *testing.T) {
+	t.Serial() // signal disposition is process-wide
 	// This test simulates stopping a Go process running in a shell with ^Z
 	// and then resuming with `fg`. This sounds simple, but is actually
 	// quite complicated.

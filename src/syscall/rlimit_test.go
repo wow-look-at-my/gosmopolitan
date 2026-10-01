@@ -13,6 +13,7 @@ import (
 )
 
 func TestOpenFileLimit(t *testing.T) {
+	t.Serial()
 	// For open file count,
 	// macOS sets the default soft limit to 256 and no hard limit.
 	// CentOS and Fedora set the default soft limit to 1024,

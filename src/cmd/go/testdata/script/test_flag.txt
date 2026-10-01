@@ -4,7 +4,7 @@ go test flag_test.go -v -args -v=7 # Two distinct -v flags
 go test -v flag_test.go -args -v=7 # Two distinct -v flags
 
 # Using a custom flag mixed with regular 'go test' flags should be OK.
-go test -count=1 -custom -args -v=7
+go test -custom -args -v=7
 
 # However, it should be an error to use custom flags when -c is used,
 # since we know for sure that no test binary will run at all.

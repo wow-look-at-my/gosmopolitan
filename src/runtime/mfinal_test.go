@@ -166,6 +166,7 @@ func adjChunks() (*objtype, *objtype) {
 
 // Make sure an empty slice on the stack doesn't pin the next object in memory.
 func TestEmptySlice(t *testing.T) {
+	t.Serial()
 	if asan.Enabled {
 		t.Skip("skipping with -asan: test assumes exact size class alignment, but asan redzone breaks that assumption")
 	}
@@ -198,6 +199,7 @@ func adjStringChunk() (string, *objtype) {
 
 // Make sure an empty string on the stack doesn't pin the next object in memory.
 func TestEmptyString(t *testing.T) {
+	t.Serial()
 	if asan.Enabled {
 		t.Skip("skipping with -asan: test assumes exact size class alignment, but asan redzone breaks that assumption")
 	}

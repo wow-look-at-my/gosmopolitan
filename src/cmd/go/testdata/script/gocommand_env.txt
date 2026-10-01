@@ -1,0 +1,27 @@
+# The go command names itself, one argv word per line, to every program it
+# starts, so go/build inside a program it built lists packages through this
+# go command when GOROOT holds none.
+
+[short] skip 'builds and runs a program'
+
+exec $GOROOT/bin/go run gocommand.go
+stdout '^go(\.exe)?$'
+
+-- go.mod --
+module gocommand
+
+go 1.27
+-- gocommand.go --
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func main() {
+	words := strings.Split(os.Getenv("GOCOMMAND"), "\n")
+	fmt.Println(filepath.Base(words[0]))
+}

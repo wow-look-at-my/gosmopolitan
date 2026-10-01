@@ -1,0 +1,24 @@
+# A generated file can import a package that nothing in the fetched module
+# names. The module loader builds the import graph from the generated copy,
+# so that package is loaded like any other and the build links it.
+
+env GOFLAGS=-mod=mod
+
+go build ./...
+
+# The package only the generated file imports is in the dependency graph.
+go list -deps .
+stdout 'example.com/generatedimport/word'
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generatedimport v1.0.0
+-- use.go --
+package use
+
+import "example.com/generatedimport/lang"
+
+var Name = lang.Name()

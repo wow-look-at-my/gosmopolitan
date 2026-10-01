@@ -1,0 +1,32 @@
+Written by hand.
+A module that generates part of its own API and carries no go.mod, the way
+golang.org/x/text did before it had one. The zip holds only the source.
+
+The opt-in line lives in a module's own go.mod. This module has none, so it
+has nowhere to write one.
+
+-- .mod --
+module example.com/generatednomod
+-- .info --
+{"Version": "v1.0.0"}
+-- gen/main.go --
+package main
+
+import (
+	"flag"
+	"os"
+)
+
+func main() {
+	out := flag.String("out", "", "file to write")
+	flag.Parse()
+	body := "package lang\n\nfunc Name() string { return \"generated\" }\n"
+	if err := os.WriteFile(*out, []byte(body), 0o666); err != nil {
+		os.Exit(1)
+	}
+}
+-- lang/lang.go --
+//go:generate go run example.com/generatednomod/gen -out lang.gen.go
+
+// Package lang declares nothing itself: Name is the generator's to write.
+package lang

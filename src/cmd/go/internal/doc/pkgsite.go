@@ -50,8 +50,12 @@ func pickUnusedPort() (int, error) {
 	return port, nil
 }
 
-// buildPkgsite builds a pkgsite binary whose build may be cached.
-func buildPkgsite(ctx context.Context) string {
+// buildPkgsite builds a pkgsite binary and returns a path in dir the caller can
+// exec. Neither answer the builder gives is one: a fresh link writes into the
+// builder's work directory, which b.Close removes below, and a cache hit answers
+// with the cache's own file, which is 0666 because a mode is not a property of
+// the bytes. So the binary is copied into dir, which outlives the builder.
+func buildPkgsite(ctx context.Context, dir string) string {
 	load.ClearPackageCache()
 	loader := modload.NewLoader()
 
@@ -91,15 +95,13 @@ func buildPkgsite(ctx context.Context) string {
 	load.CheckPackageErrors([]*load.Package{p})
 
 	a := b.LinkAction(loader, work.ModeBuild, work.ModeBuild, p)
-	a.CacheExecutable = true
 	b.Do(ctx, a)
 
-	// Both paths return an executable in GOCACHE: CachedExecutable is set on
-	// fresh builds, while BuiltTarget is set on cache hits.
-	if cached := a.CachedExecutable(); cached != "" {
-		return cached
+	exe := filepath.Join(dir, "pkgsite"+cfg.ExeSuffix)
+	if err := b.Shell(a).CopyFile(exe, a.BuiltTarget(), 0o777, true); err != nil {
+		base.Fatal(err)
 	}
-	return a.BuiltTarget()
+	return exe
 }
 
 func doPkgsite(ctx context.Context, urlPath, fragment string) error {
@@ -125,25 +127,25 @@ func doPkgsite(ctx context.Context, urlPath, fragment string) error {
 	// exit before exiting ourselves.
 	base.StartSigHandlers()
 
-	// Prepend the local download cache to GOPROXY to get around deprecation checks.
+	// pkgsite is not the go command and still reads GOPROXY.
 	env := os.Environ()
-	vars, err := runCmd(env, goCmd(), "env", "GOPROXY", "GOMODCACHE")
-	fields := strings.Fields(vars)
-	if err == nil && len(fields) == 2 {
-		goproxy, gomodcache := fields[0], fields[1]
-		gomodcache = filepath.Join(gomodcache, "cache", "download")
-		// Convert absolute path to file URL. pkgsite will not accept
-		// Windows absolute paths because they look like a host:path remote.
-		// TODO(golang.org/issue/32456): use url.FromFilePath when implemented.
-		if strings.HasPrefix(gomodcache, "/") {
-			gomodcache = "file://" + gomodcache
-		} else {
-			gomodcache = "file:///" + filepath.ToSlash(gomodcache)
-		}
-		env = append(env, "GOPROXY="+gomodcache+","+goproxy)
+	gomodcache := filepath.Join(cfg.GOMODCACHE, "cache", "download")
+	// Convert absolute path to file URL. pkgsite will not accept Windows
+	// absolute paths because they look like a host:path remote.
+	if strings.HasPrefix(gomodcache, "/") {
+		gomodcache = "file://" + gomodcache
+	} else {
+		gomodcache = "file:///" + filepath.ToSlash(gomodcache)
 	}
+	env = append(env, "GOPROXY="+gomodcache+","+cfg.DefaultGOPROXY)
 
-	pkgsite := buildPkgsite(ctx)
+	exeDir, err := os.MkdirTemp("", "go-doc-pkgsite")
+	if err != nil {
+		return fmt.Errorf("failed to make a directory for the documentation server: %v", err)
+	}
+	defer os.RemoveAll(exeDir)
+
+	pkgsite := buildPkgsite(ctx, exeDir)
 	if os.Getenv("TEST_GODOC_BUILD_ONLY") != "" {
 		if _, err := os.Stat(pkgsite); err != nil {
 			return fmt.Errorf("built pkgsite binary does not exist: %w", err)

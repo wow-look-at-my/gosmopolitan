@@ -163,7 +163,15 @@ func matchPackages(ld *Loader, ctx context.Context, m *search.Match, tags map[st
 		sort.Strings(m.Pkgs) // sort everything we added for determinism
 	}()
 
-	if filter == includeStd {
+	if filter == includeStd && cfg.EmbeddedStd {
+		// The embedded standard library lists itself; it holds no commands.
+		for _, pkg := range cfg.EmbeddedManifest().Packages {
+			if !have[pkg.ImportPath] && isMatch(pkg.ImportPath) {
+				have[pkg.ImportPath] = true
+				addPkg(pkg.ImportPath)
+			}
+		}
+	} else if filter == includeStd {
 		walkPkgs(cfg.GOROOTsrc, "", pruneGoMod)
 		if treeCanMatch("cmd") {
 			walkPkgs(filepath.Join(cfg.GOROOTsrc, "cmd"), "cmd", pruneGoMod)

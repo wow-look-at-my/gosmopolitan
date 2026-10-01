@@ -6,8 +6,11 @@ package ld
 
 import (
 	"cmd/internal/sys"
+	"crypto/sha256"
+	"debug/elf"
 	"encoding/binary"
 	"fmt"
+	"internal/cosmo/embedded"
 	"os"
 	"strings"
 )
@@ -16,18 +19,14 @@ import (
 // GOOS=cosmo binaries (at most one per architecture; each either an APE
 // produced by this linker or a raw ELF) into a single APE at outfile,
 // skipping normal linking entirely. Two inputs give a fat APE; one input
-// re-emits a single-architecture APE, which is how a build restricted to
-// one architecture still gets the stripping, sidecars and platform-filtered
-// header a fat build gets.
+// re-emits a single-architecture APE, so a build restricted to one
+// architecture still gets a fat build's stripping, sidecars and header.
 //
-// With -apedbg, each input's pristine ELF image (symbol table and DWARF
-// intact) is first written to a debug sidecar beside outfile; with
-// -apestrip, each embedded payload is then reduced to the file span its
-// program headers reference, the way Cosmopolitan's apelink embeds only
-// each input's PT_LOAD span. -apedbgmode selects how much debug info the
-// sidecars (and, for compact, the output itself) carry; see apedebug.go.
-// The policy for when cmd/go passes these flags lives in
-// cmd/go/internal/work.cosmoMergeArgs.
+// With -apedbg each input's pristine ELF goes to a sidecar beside
+// outfile; with -apestrip each payload is then cut to the span its
+// program headers reference. -apedbgmode selects how much the sidecars
+// carry (apedebug.go); work.cosmoMergeArgs decides when cmd/go passes
+// these flags.
 func apeFatMerge(spec, outfile string) {
 	if outfile == "" {
 		Exitf("-apefat requires -o")
@@ -83,6 +82,12 @@ func apeFatMerge(spec, outfile string) {
 	}
 	if *flagApeDbg {
 		for _, p := range payloads {
+			// Only the amd64 image gets a sidecar. An arm64 one is an ELF
+			// that the host running the build cannot execute, and it sits
+			// next to the APE under a name that invites the attempt.
+			if p.arch == sys.ARM64 {
+				continue
+			}
 			writeAPEDebugSidecar(outfile, p)
 		}
 	}
@@ -100,6 +105,32 @@ func apeFatMerge(spec, outfile string) {
 	if tail != nil {
 		appendAPEFileTail(outfile, tailOff, tail)
 	}
+	if *flagApeAppend != "" {
+		appendAPEBlob(outfile, *flagApeAppend)
+	}
+}
+
+// appendAPEBlob appends the file at blobPath past everything the APE loads
+// or reads, 8-aligned, and closes the file with the trailer that
+// internal/cosmo/embedded reads to find it. Nothing maps the blob at run
+// time, and the APE keeps it through staging and an in-place exec on NT,
+// because both copy the file whole.
+func appendAPEBlob(outfile, blobPath string) {
+	blob, err := os.ReadFile(blobPath)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	if len(blob) == 0 {
+		Exitf("-apeappend: %s is empty", blobPath)
+	}
+	info, err := os.Stat(outfile)
+	if err != nil {
+		Exitf("-apeappend: %v", err)
+	}
+	blobOff := (uint64(info.Size()) + 7) &^ uint64(7)
+	appendAPEFileTail(outfile, blobOff, blob)
+	trailer := embedded.EncodeTrailer(int64(blobOff), int64(len(blob)), sha256.Sum256(blob))
+	appendAPEFileTail(outfile, blobOff+uint64(len(blob)), trailer)
 }
 
 // apeCompactDebugTail builds the compact debug tail for the payloads (in
@@ -160,28 +191,23 @@ func appendAPEFileTail(outfile string, tailOff uint64, tail []byte) {
 	}
 }
 
-// apeDebugSidecarName returns the debug sidecar path for a payload of the
-// given architecture next to the APE at outfile. The names follow the
-// Cosmopolitan cosmocc convention, which cosmo libc's FindDebugBinary
-// probes at crash time by appending each extension to the executable name:
-// <outfile>.dbg for the amd64 image, <outfile>.aarch64.elf for arm64.
-func apeDebugSidecarName(outfile string, arch sys.ArchFamily) string {
-	if arch == sys.ARM64 {
-		return outfile + ".aarch64.elf"
-	}
+// apeDebugSidecarName returns the debug sidecar path next to the APE at
+// outfile, named by the cosmocc convention of the executable name plus an
+// extension. Only the amd64 image gets one.
+func apeDebugSidecarName(outfile string) string {
 	return outfile + ".dbg"
 }
 
 // writeAPEDebugSidecar writes payload p's debug sidecar for its
-// architecture. In the default -apedbgmode=full it is p's ELF image exactly
-// as its linker produced it (p_offset values payload-relative, symbol table
+// architecture. In the default -apedbgmode=full it is p's ELF image as its
+// linker produced it, with the OS ABI cleared (p_offset values payload-relative, symbol table
 // and DWARF intact): a complete standalone ELF executable, directly
 // loadable by debuggers. In slim and compact modes the image is first
 // reduced to its debug-only form (see slimELFDebug): same DWARF and symbol
 // table, allocated section contents dropped, not runnable.
 func writeAPEDebugSidecar(outfile string, p *apePayload) {
-	name := apeDebugSidecarName(outfile, p.arch)
-	img := p.elf
+	name := apeDebugSidecarName(outfile)
+	img := append([]byte(nil), p.elf...)
 	if *flagApeDbgMode != "full" {
 		slim, err := slimELFDebug(img)
 		if err != nil {
@@ -189,6 +215,8 @@ func writeAPEDebugSidecar(outfile string, p *apePayload) {
 		}
 		img = slim
 	}
+	// No APE loader reads the sidecar, so the APE's FreeBSD OS ABI does not apply to it.
+	img[elf.EI_OSABI] = byte(elf.ELFOSABI_NONE)
 	if err := os.WriteFile(name, img, 0755); err != nil {
 		Exitf("-apedbg: %v", err)
 	}

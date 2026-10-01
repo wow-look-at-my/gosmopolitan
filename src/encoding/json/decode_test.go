@@ -1530,7 +1530,7 @@ func TestUnmarshal(t *testing.T) {
 }
 
 func TestUnmarshalMarshal(t *testing.T) {
-	initBig()
+	jsonBig := bigJSON()
 	var v any
 	if err := Unmarshal(jsonBig, &v); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
@@ -2054,7 +2054,7 @@ func TestNullString(t *testing.T) {
 	case s.B != 1:
 		t.Fatalf("Unmarshal: s.B = %d, want 1", s.B)
 	case s.C != nil:
-		t.Fatalf("Unmarshal: s.C = %d, want non-nil", s.C)
+		t.Fatalf("Unmarshal: s.C = %d, want nil", *s.C)
 	}
 }
 

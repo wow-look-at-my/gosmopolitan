@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -84,7 +83,7 @@ func TestNoDuplicateNeededEntries(t *testing.T) {
 
 	// run this test on just a small set of platforms (no need to test it
 	// across the board given the nature of the test).
-	pair := runtime.GOOS + "-" + runtime.GOARCH
+	pair := testenv.GOOS + "-" + testenv.GOARCH
 	switch pair {
 	case "linux-amd64", "linux-arm64", "freebsd-amd64", "openbsd-amd64":
 	default:

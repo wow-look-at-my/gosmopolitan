@@ -343,6 +343,7 @@ func TestExecHelper(t *testing.T) {
 
 // Test that rlimit values are restored by exec.
 func TestRlimitRestored(t *testing.T) {
+	t.Serial()
 	if os.Getenv("GO_WANT_HELPER_PROCESS") != "" {
 		fmt.Println(syscall.OrigRlimitNofile().Cur)
 		os.Exit(0)

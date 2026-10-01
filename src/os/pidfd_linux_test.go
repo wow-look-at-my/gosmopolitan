@@ -97,6 +97,10 @@ func TestStartProcessWithPidfd(t *testing.T) {
 
 // Issue #69284
 func TestPidfdLeak(t *testing.T) {
+	// The check is on the descriptor NUMBERS the process hands out, which
+	// every other test that opens a file moves.
+	t.Serial()
+
 	exe := testenv.Executable(t)
 
 	// Find the next 10 descriptors.

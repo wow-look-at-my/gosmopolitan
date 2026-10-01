@@ -21,6 +21,10 @@ import (
 
 // RemoveAll removes all exported variables.
 // This is for tests only.
+//
+// The registry is one process-wide map. A caller of this function
+// empties what every other test publishes into, so it calls t.Serial()
+// first.
 func RemoveAll() {
 	vars.keysMu.Lock()
 	defer vars.keysMu.Unlock()
@@ -31,6 +35,7 @@ func RemoveAll() {
 }
 
 func TestNil(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	val := Get("missing")
 	if val != nil {
@@ -39,6 +44,7 @@ func TestNil(t *testing.T) {
 }
 
 func TestInt(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	reqs := NewInt("requests")
 	if i := reqs.Value(); i != 0 {
@@ -85,6 +91,7 @@ func BenchmarkIntSet(b *testing.B) {
 }
 
 func TestFloat(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	reqs := NewFloat("requests-float")
 	if reqs.f.Load() != 0.0 {
@@ -131,6 +138,7 @@ func BenchmarkFloatSet(b *testing.B) {
 }
 
 func TestString(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	name := NewString("my-name")
 	if s := name.Value(); s != "" {
@@ -163,6 +171,7 @@ func BenchmarkStringSet(b *testing.B) {
 }
 
 func TestMapInit(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	colors := NewMap("bike-shed-colors")
 	colors.Add("red", 1)
@@ -185,6 +194,7 @@ func TestMapInit(t *testing.T) {
 }
 
 func TestMapDelete(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	colors := NewMap("bike-shed-colors")
 
@@ -228,6 +238,7 @@ func TestMapDelete(t *testing.T) {
 }
 
 func TestMapCounter(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	colors := NewMap("bike-shed-colors")
 
@@ -268,6 +279,7 @@ func TestMapCounter(t *testing.T) {
 }
 
 func TestMapNil(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	const key = "key"
 	m := NewMap("issue527719")
@@ -455,6 +467,7 @@ func BenchmarkMapAddDifferentSteadyState(b *testing.B) {
 }
 
 func TestFunc(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	var x any = []string{"a", "b"}
 	f := Func(func() any { return x })
@@ -472,6 +485,7 @@ func TestFunc(t *testing.T) {
 }
 
 func TestHandler(t *testing.T) {
+	t.Serial()
 	RemoveAll()
 	m := NewMap("map1")
 	m.Add("a", 1)

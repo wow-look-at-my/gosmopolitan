@@ -12,11 +12,17 @@ import (
 	"os"
 )
 
-// Reader implements a seekable buffered io.Reader.
+// Reader implements a seekable buffered io.Reader. It reads rs, which is f
+// itself or a section of f starting at base; every offset the Reader
+// reports or seeks to is absolute in f.
 type Reader struct {
-	f *os.File
+	f    *os.File
+	rs   io.ReadSeeker
+	base int64
 	*bufio.Reader
 }
+
+func newBufio(rs io.Reader) *bufio.Reader { return bufio.NewReader(rs) }
 
 // Writer implements a seekable buffered io.Writer.
 type Writer struct {
@@ -45,19 +51,22 @@ func Open(name string) (*Reader, error) {
 
 // NewReader returns a Reader from an open file.
 func NewReader(f *os.File) *Reader {
-	return &Reader{f: f, Reader: bufio.NewReader(f)}
+	return &Reader{f: f, rs: f, Reader: bufio.NewReader(f)}
 }
 
 func (r *Reader) MustSeek(offset int64, whence int) int64 {
-	if whence == 1 {
+	switch whence {
+	case io.SeekStart:
+		offset -= r.base
+	case io.SeekCurrent:
 		offset -= int64(r.Buffered())
 	}
-	off, err := r.f.Seek(offset, whence)
+	off, err := r.rs.Seek(offset, whence)
 	if err != nil {
 		log.Fatalf("seeking in output: %v", err)
 	}
-	r.Reset(r.f)
-	return off
+	r.Reset(r.rs)
+	return off + r.base
 }
 
 func (w *Writer) MustSeek(offset int64, whence int) int64 {
@@ -72,12 +81,12 @@ func (w *Writer) MustSeek(offset int64, whence int) int64 {
 }
 
 func (r *Reader) Offset() int64 {
-	off, err := r.f.Seek(0, 1)
+	off, err := r.rs.Seek(0, 1)
 	if err != nil {
 		log.Fatalf("seeking in output [0, 1]: %v", err)
 	}
 	off -= int64(r.Buffered())
-	return off
+	return off + r.base
 }
 
 func (w *Writer) Offset() int64 {

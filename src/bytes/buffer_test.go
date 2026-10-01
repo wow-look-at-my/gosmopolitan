@@ -101,6 +101,7 @@ var buf Buffer
 // should not result in any allocations.
 // This can be used to reset the underlying []byte of an existing Buffer.
 func TestNewBufferShallow(t *testing.T) {
+	t.Serial()
 	testenv.SkipIfOptimizationOff(t)
 	n := testing.AllocsPerRun(1000, func() {
 		buf = *NewBuffer(testBytes)

@@ -31,7 +31,10 @@
 
 // Linux amd64 numbers for the metadata wave, as
 // syscall/zsysnum_cosmo_amd64.go records them.
+#define SYS_flock		73
 #define SYS_fsync		74
+#define SYS_fdatasync		75
+#define SYS_sync		162
 #define SYS_truncate		76
 #define SYS_ftruncate		77
 #define SYS_fchdir		81
@@ -53,6 +56,10 @@
 #define SYS_linkat		265
 #define SYS_symlinkat		266
 #define SYS_fchmodat		268
+// Linux retired _sysctl, so nothing on a Linux host reaches this number.
+// The darwin path takes it as the way to Apple's sysctl, which is what
+// serves the values uname reports.
+#define SYS__sysctl		156
 
 #define LINUX_AT_FDCWD			-100
 #define LINUX_AT_SYMLINK_NOFOLLOW	0x100
@@ -62,6 +69,7 @@
 #define XNU_read		0x2000003	// BSD 3
 #define XNU_write		0x2000004	// BSD 4
 #define XNU_open		0x2000005	// BSD 5
+#define XNU_openat		0x20001cf	// BSD 463
 #define XNU_close		0x2000006	// BSD 6
 #define XNU_mmap		0x20000c5	// BSD 197
 #define XNU_munmap		0x2000049	// BSD 73
@@ -90,13 +98,16 @@
 #define XNU_chroot		0x200003d	// BSD 61
 #define XNU_getgroups		0x200004f	// BSD 79
 #define XNU_setgroups		0x2000050	// BSD 80
+#define XNU_sync		0x2000024	// BSD 36
 #define XNU_fsync		0x200005f	// BSD 95
+#define XNU_fdatasync		0x20000bb	// BSD 187
 #define XNU_setpriority		0x2000060	// BSD 96
 #define XNU_getpriority		0x2000064	// BSD 100
 #define XNU_fchown		0x200007b	// BSD 123
 #define XNU_fchmod		0x200007c	// BSD 124
 #define XNU_setreuid		0x200007e	// BSD 126
 #define XNU_setregid		0x200007f	// BSD 127
+#define XNU_flock		0x2000083	// BSD 131
 #define XNU_getpgid		0x2000097	// BSD 151
 #define XNU_setgid		0x20000b5	// BSD 181
 #define XNU_getrlimit		0x20000c2	// BSD 194
@@ -105,6 +116,7 @@
 #define XNU_ftruncate		0x20000c9	// BSD 201
 #define XNU_sendfile		0x2000151	// BSD 337
 #define XNU_statfs64		0x2000159	// BSD 345
+#define XNU___sysctl		0x20000ca	// BSD 202
 #define XNU_fstatfs64		0x200015a	// BSD 346
 
 // The classic path-based calls the *at family is served with when its
@@ -163,10 +175,11 @@
 // arg in CX, not R10.
 //
 // On Darwin x86_64, we use BSD syscall numbers with XNU prefix (0x2000000).
-// The 48-byte frame belongs to darwin_nanosleep, the one case here that
-// has to build a struct the caller did not pass: a timeval for select,
-// and the two timevals that measure how much of the request is left when
-// a signal cuts the sleep short. Every other path ignores it.
+// The 48-byte frame belongs to the two cases here that have to build a
+// struct the caller did not pass: darwin_nanosleep's timeval for select and
+// the two timevals that measure how much of the request is left when a
+// signal cuts the sleep short, and darwin_pselect's timeval. Every other
+// path ignores it.
 TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$48
 	// Safety net: on NT hosts everything not routed through the
 	// WindowsFns table (syscall_cosmo_nt.go) is ENOSYS - never a raw
@@ -256,6 +269,12 @@ syscall6_darwin:
 	JEQ	darwin_fchown
 	CMPQ	R11, $SYS_fchdir
 	JEQ	darwin_fchdir
+	CMPQ	R11, $SYS_flock
+	JEQ	darwin_flock
+	CMPQ	R11, $SYS_fdatasync
+	JEQ	darwin_fdatasync
+	CMPQ	R11, $SYS_sync
+	JEQ	darwin_sync
 	CMPQ	R11, $SYS_chroot
 	JEQ	darwin_chroot
 	CMPQ	R11, $SYS_getgroups
@@ -288,6 +307,8 @@ syscall6_darwin:
 	JEQ	darwin_linkat
 	CMPQ	R11, $SYS_symlinkat
 	JEQ	darwin_symlinkat
+	CMPQ	R11, $SYS__sysctl
+	JEQ	darwin_sysctl
 
 	// Unknown syscall - return ENOSYS
 darwin_enosys:
@@ -310,18 +331,26 @@ darwin_close:
 	JMP	darwin_syscall
 
 darwin_openat:
-	// macOS open() takes (path, flags, mode) not (dirfd, path, flags, mode)
-	// For AT_FDCWD (-100), shift args: path=SI->DI, flags=DX->SI, mode=R10->DX
+	// The Linux O_* bits are not Apple's. Untranslated, O_CREAT (0x40)
+	// arrives as Apple O_SHLOCK and os.Create makes no file.
 	CMPQ	DI, $-100	// AT_FDCWD
 	JNE	darwin_openat_with_fd
+	// Apple open(path, flags, mode): shift the dirfd off the front.
 	MOVQ	SI, DI		// path
 	MOVQ	DX, SI		// flags
 	MOVQ	R10, DX		// mode
+	XCHGQ	SI, DX		// the helper reads and writes DX
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	XCHGQ	SI, DX
 	MOVL	$XNU_open, AX
 	JMP	darwin_syscall
 darwin_openat_with_fd:
-	// Non-FDCWD openat not directly supported, return ENOSYS
-	JMP	darwin_enosys
+	// Apple's openat takes the same argument order, so only the flags
+	// move. A real descriptor is never the AT_FDCWD sentinel, so the
+	// -100/-2 difference cannot reach here.
+	CALL	runtime·cosmo_xlat_oflags_dx(SB)
+	MOVL	$XNU_openat, AX
+	JMP	darwin_syscall
 
 darwin_mmap:
 	// mmap needs flag translation: Linux MAP_ANONYMOUS (0x20) -> macOS MAP_ANON (0x1000)
@@ -499,8 +528,23 @@ darwin_sigaltstack:
 	MOVL	$XNU_sigaltstack, AX
 	JMP	darwin_syscall
 
+// XNU has no pselect syscall. select takes a timeval where Linux pselect6
+// takes a timespec, so a timeout is converted into 0(SP) and select is
+// handed that. The signal mask is not applied: select has none.
 darwin_pselect:
-	// Use select instead of pselect
+	CMPQ	R8, $0
+	JEQ	darwin_pselect_call
+	MOVQ	DX, R12		// writefds, which DIVQ clobbers
+	MOVQ	0(R8), AX	// tv_sec
+	MOVQ	AX, 0(SP)
+	MOVQ	8(R8), AX	// tv_nsec
+	XORQ	DX, DX
+	MOVQ	$1000, CX
+	DIVQ	CX
+	MOVQ	AX, 8(SP)	// tv_usec
+	MOVQ	R12, DX
+	LEAQ	0(SP), R8
+darwin_pselect_call:
 	MOVL	$XNU_select, AX
 	JMP	darwin_syscall
 
@@ -538,6 +582,26 @@ darwin_fchown:
 
 darwin_fchdir:
 	MOVL	$XNU_fchdir, AX
+	JMP	darwin_syscall
+
+darwin_fdatasync:
+	MOVL	$XNU_fdatasync, AX
+	JMP	darwin_syscall
+
+// sync returns void on XNU, so AX holds nothing a caller may read. The
+// Linux syscall returns 0, and that is what goes back.
+darwin_sync:
+	MOVL	$XNU_sync, AX
+	SYSCALL
+	MOVQ	$0, AX		// r1
+	MOVQ	$0, BX		// r2
+	MOVQ	$0, CX		// errno
+	RET
+
+darwin_flock:
+	// LOCK_SH/LOCK_EX/LOCK_NB/LOCK_UN are 1/2/4/8 on both systems:
+	// Linux took them from BSD, which is what XNU still serves.
+	MOVL	$XNU_flock, AX
 	JMP	darwin_syscall
 
 darwin_chroot:
@@ -585,6 +649,13 @@ darwin_statfs:
 	CMPQ	DX, $APPLE_STATFS_SIZE
 	JB	darwin_einval
 	MOVL	$XNU_statfs64, AX
+	JMP	darwin_syscall
+
+// sysctl takes six arguments and passes them straight through: the MIB
+// array and its length, the output buffer and its size pointer, and the
+// input buffer and its length. Nothing here inspects them.
+darwin_sysctl:
+	MOVL	$XNU___sysctl, AX
 	JMP	darwin_syscall
 
 darwin_fstatfs:

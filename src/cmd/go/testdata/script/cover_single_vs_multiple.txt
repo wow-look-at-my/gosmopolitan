@@ -4,9 +4,9 @@
 
 [short] skip
 
-go test -count=1 -cover ./a ./b ./main
+go test -cover ./a ./b ./main
 stdout '^ok\s+M/main\s+\S+\s+coverage: 75.0% of statements'
-go test -count=1 -cover ./main
+go test -cover ./main
 stdout '^ok\s+M/main\s+\S+\s+coverage: 75.0% of statements'
 
 -- go.mod --

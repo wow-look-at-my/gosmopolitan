@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package link
 
 import (
+	"cmd/internal/objabi"
 	"cmd/internal/sys"
 	"cmd/link/internal/amd64"
 	"cmd/link/internal/arm"
@@ -37,7 +38,12 @@ import (
 // packages a second chance to modify the linker's configuration
 // via the ld.Arch.Archinit function.
 
-func main() {
+// Main runs the linker with args, the command line after the program name,
+// and answers its exit status. A failure exits the process from inside the
+// linker, as it always has.
+func Main(args []string) int {
+	objabi.Enter("link", args, ld.Flags)
+
 	var arch *sys.Arch
 	var theArch ld.Arch
 
@@ -70,4 +76,5 @@ func main() {
 		arch, theArch = wasm.Init()
 	}
 	ld.Main(arch, theArch)
+	return 0
 }

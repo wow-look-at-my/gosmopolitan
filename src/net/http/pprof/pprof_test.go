@@ -155,6 +155,8 @@ func mutexHog(duration time.Duration, hogger func(mu1, mu2 *sync.Mutex, start ti
 }
 
 func TestDeltaProfile(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if strings.HasPrefix(runtime.GOARCH, "arm") {
 		testenv.SkipFlaky(t, 50218)
 	}

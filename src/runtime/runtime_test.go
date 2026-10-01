@@ -25,11 +25,8 @@ import (
 )
 
 // flagQuick is set by the -quick option to skip some relatively slow tests.
-// This is used by the cmd/dist test runtime:cpu124.
-// The cmd/dist test passes both -test.short and -quick;
-// there are tests that only check testing.Short, and those tests will
-// not be skipped if only -quick is used.
-var flagQuick = flag.Bool("quick", false, "skip slow tests, for cmd/dist test runtime:cpu124")
+// cmd/dist does not pass it.
+var flagQuick = flag.Bool("quick", false, "skip slow tests")
 
 func init() {
 	// We're testing the runtime, so make tracebacks show things
@@ -154,6 +151,8 @@ func defer3() {
 
 // golang.org/issue/7063
 func TestStopCPUProfilingWithProfilerOff(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	SetCPUProfileRate(0)
 }
 

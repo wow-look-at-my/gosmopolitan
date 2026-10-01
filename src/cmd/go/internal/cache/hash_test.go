@@ -11,6 +11,7 @@ import (
 )
 
 func TestHash(t *testing.T) {
+	t.Serial()
 	oldSalt := hashSalt
 	hashSalt = nil
 	defer func() {

@@ -42,6 +42,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -376,6 +377,72 @@ func (ctxt *Link) NumberSyms() {
 		ctxt.pkgIdx[pkg] = ipkg
 		ipkg++
 	})
+}
+
+// DefKey names a defined symbol the way an object file records it.
+type DefKey struct {
+	Name string
+	ABI  ABI
+}
+
+// KeepDefIndices renumbers this package's defined symbols so that each one
+// named in index keeps the index it has there, and gives every other symbol
+// one of the remaining slots. count is the number of defined symbols the
+// object holding index had.
+//
+// A package compiled with its test files is linked in place of the package
+// without them, and every other package refers to its symbols by index into
+// the package without them. Those indices must still land on the same
+// symbols. A symbol index names that this compile does not define is an
+// error: some importer may refer to it.
+func (ctxt *Link) KeepDefIndices(index map[DefKey]int32, count int) error {
+	slots := make([]*LSym, count)
+	var rest []*LSym
+	for _, sym := range ctxt.defs {
+		idx, found := index[DefKey{sym.Name, sym.ABI()}]
+		if !found || sym.Static() || sym.Name == "" {
+			rest = append(rest, sym)
+			continue
+		}
+		if slots[idx] != nil {
+			return fmt.Errorf("symbol %s is defined twice", sym.Name)
+		}
+		slots[idx] = sym
+	}
+	var missing []string
+	for key, idx := range index {
+		if slots[idx] == nil {
+			missing = append(missing, key.Name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("does not define %d symbols of the package it replaces: %s", len(missing), strings.Join(missing, ", "))
+	}
+	// A slot index leaves free held one of that package's file-local symbols,
+	// which nothing outside it refers to. Fill it with a symbol of our own,
+	// or with an empty file-local one when there are none left.
+	next := 0
+	for idx := range slots {
+		if slots[idx] != nil {
+			continue
+		}
+		if next < len(rest) {
+			slots[idx] = rest[next]
+			next++
+			continue
+		}
+		filler := &LSym{Type: objabi.SNOPTRDATA, Attribute: AttrStatic}
+		filler.PkgIdx = goobj.PkgIdxSelf
+		filler.Set(AttrIndexed, true)
+		slots[idx] = filler
+	}
+	defs := append(slots, rest[next:]...)
+	for idx, sym := range defs {
+		sym.SymIdx = int32(idx)
+	}
+	ctxt.defs = defs
+	return nil
 }
 
 // Returns whether s is a non-package symbol, which needs to be referenced

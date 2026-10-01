@@ -144,6 +144,8 @@ func TestMutexOverflowPanic(t *testing.T) {
 }
 
 func TestMutexStress(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	P := 8
 	N := int(1e6)
 	if testing.Short() {

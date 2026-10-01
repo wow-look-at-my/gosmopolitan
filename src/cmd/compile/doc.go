@@ -363,4 +363,4 @@ a permitted pointer element type, or a struct, which, if non-empty, embeds
 [structs.HostLayout], and contains only fields whose types are permitted pointer
 element types.
 */
-package main
+package compile

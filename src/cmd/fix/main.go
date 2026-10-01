@@ -17,7 +17,7 @@ program.
 See [golang.org/x/tools/go/analysis] for information on how to write
 an analyzer that can suggest fixes.
 */
-package main
+package fix
 
 import (
 	"cmd/internal/objabi"
@@ -27,11 +27,15 @@ import (
 	"golang.org/x/tools/go/analysis/unitchecker"
 )
 
-func main() {
+// Main runs fix with args, the command line after the program name. It never
+// returns: the unit checker exits the process with the status.
+func Main(args []string) int {
+	objabi.Enter("fix", args, nil)
 	// Keep consistent with cmd/vet/main.go!
 	counter.Open()
 	objabi.AddVersionFlag()
 	counter.Inc("fix/invocations")
 
 	unitchecker.Main(fix.Suite...) // (never returns)
+	return 0
 }

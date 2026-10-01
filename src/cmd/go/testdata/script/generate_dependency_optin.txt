@@ -1,0 +1,30 @@
+# A directive is a command a dependency's author wrote, and completing a module
+# runs it on this machine unread. So a module outside the org runs nothing until
+# its own go.mod asks with a //go:gendep line.
+
+env GOFLAGS=-mod=mod
+
+# The module carries a directive and no opt-in line. The fetch says so, and the
+# file its generator writes is not in the module directory.
+go mod download example.com/generatedunasked
+stderr 'example.com/generatedunasked@v1.0.0 is outside github.com/wow-look-at-my/'
+stderr '//go:gendep'
+! exists $GOPATH/pkg/mod/example.com/generatedunasked@v1.0.0/lang/lang.gen.go
+
+# The package is what the zip published, so the build fails at the symbol the
+# generator would have declared rather than at a missing file.
+! go build ./...
+stderr 'lang.Name'
+
+-- go.mod --
+module example.com/consumer
+
+go 1.16
+
+require example.com/generatedunasked v1.0.0
+-- use.go --
+package use
+
+import "example.com/generatedunasked/lang"
+
+var Name = lang.Name()

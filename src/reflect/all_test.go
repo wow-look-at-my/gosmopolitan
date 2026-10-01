@@ -255,8 +255,22 @@ func TestTypes(t *testing.T) {
 	}
 }
 
-func TestSet(t *testing.T) {
+// freshValueTests copies valueTests with new pointees. A test that writes
+// through the pointers takes a copy; the shared table is read by tests that
+// run at the same time.
+func freshValueTests() []pair {
+	fresh := make([]pair, len(valueTests))
 	for i, tt := range valueTests {
+		v := ValueOf(tt.i)
+		p := New(v.Type().Elem())
+		p.Elem().Set(v.Elem())
+		fresh[i] = pair{p.Interface(), tt.s}
+	}
+	return fresh
+}
+
+func TestSet(t *testing.T) {
+	for i, tt := range freshValueTests() {
 		v := ValueOf(tt.i)
 		v = v.Elem()
 		switch v.Kind() {
@@ -301,7 +315,7 @@ func TestSet(t *testing.T) {
 }
 
 func TestSetValue(t *testing.T) {
-	for i, tt := range valueTests {
+	for i, tt := range freshValueTests() {
 		v := ValueOf(tt.i).Elem()
 		switch v.Kind() {
 		case Int:
@@ -4876,8 +4890,11 @@ var gFloat32 float32
 const snan uint32 = 0x7f800001
 
 func TestConvertNaNs(t *testing.T) {
+	t.Serial(
 	// Test to see if a store followed by a load of a signaling NaN
 	// maintains the signaling bit. (This used to fail on the 387 port.)
+	)
+
 	gFloat32 = math.Float32frombits(snan)
 	runtime.Gosched() // make sure we don't optimize the store/load away
 	if got := math.Float32bits(gFloat32); got != snan {
@@ -6851,14 +6868,15 @@ func TestCallMethodJump(t *testing.T) {
 	// In reflect.Value.Call, trigger a garbage collection after reflect.call
 	// returns but before the args frame has been discarded.
 	// This is a little clumsy but makes the failure repeatable.
-	*CallGC = true
+
+	CallGC.Store(true)
 
 	p := &Outer{Inner: new(Inner)}
 	p.Inner.X = p
 	ValueOf(p).Method(0).Call(nil)
 
 	// Stop garbage collecting during reflect.call.
-	*CallGC = false
+	CallGC.Store(false)
 }
 
 func TestCallArgLive(t *testing.T) {
@@ -6868,7 +6886,7 @@ func TestCallArgLive(t *testing.T) {
 
 	// In reflect.Value.Call, trigger a garbage collection in reflect.call
 	// between marshaling argument and the actual call.
-	*CallGC = true
+	CallGC.Store(true)
 
 	x := new(string)
 	runtime.SetFinalizer(x, func(p *string) {
@@ -6881,7 +6899,7 @@ func TestCallArgLive(t *testing.T) {
 	ValueOf(F).Call([]Value{ValueOf(v)})
 
 	// Stop garbage collecting during reflect.call.
-	*CallGC = false
+	CallGC.Store(false)
 }
 
 func TestMakeFuncStackCopy(t *testing.T) {
@@ -7198,9 +7216,7 @@ func TestFuncLayout(t *testing.T) {
 			name = lt.rcvr.String() + "." + name
 		}
 		t.Run(name, func(t *testing.T) {
-			defer SetArgRegs(SetArgRegs(lt.intRegs, lt.floatRegs, lt.floatRegSize))
-
-			typ, argsize, retOffset, stack, gc, inRegs, outRegs, ptrs := FuncLayout(lt.typ, lt.rcvr)
+			typ, argsize, retOffset, stack, gc, inRegs, outRegs, ptrs := FuncLayout(lt.typ, lt.rcvr, lt.intRegs, lt.floatRegs, lt.floatRegSize)
 			if typ.Size() != lt.size {
 				t.Errorf("funcLayout(%v, %v).size=%d, want %d", lt.typ, lt.rcvr, typ.Size(), lt.size)
 			}

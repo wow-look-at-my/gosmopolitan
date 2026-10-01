@@ -579,7 +579,7 @@ The following options are available when running cgo directly:
 	-trimpath rewrites
 		Apply trims and rewrites to source file paths.
 */
-package main
+package cgo
 
 /*
 Implementation details.

@@ -15,18 +15,22 @@ import (
 	"strings"
 )
 
+// Set is the assembler's command line, one set of its own so the assembler can
+// be linked beside the other tools; cmd/asm installs it before Parse.
+var Set = flag.NewFlagSet("asm", flag.ExitOnError)
+
 var (
-	Debug      = flag.Bool("debug", false, "dump instructions as they are parsed")
-	OutputFile = flag.String("o", "", "output file; default foo.o for /a/b/c/foo.s as first argument")
-	TrimPath   = flag.String("trimpath", "", "remove prefix from recorded source file paths")
-	Shared     = flag.Bool("shared", false, "generate code that can be linked into a shared library")
-	Dynlink    = flag.Bool("dynlink", false, "support references to Go symbols defined in other shared libraries")
-	Linkshared = flag.Bool("linkshared", false, "generate code that will be linked against Go shared libraries")
-	AllErrors  = flag.Bool("e", false, "no limit on number of errors reported")
-	SymABIs    = flag.Bool("gensymabis", false, "write symbol ABI information to output file, don't assemble")
-	Importpath = flag.String("p", obj.UnlinkablePkg, "set expected package import to path")
-	Spectre    = flag.String("spectre", "", "enable spectre mitigations in `list` (all, ret)")
-	Std        = flag.Bool("std", false, "building standard library")
+	Debug      = Set.Bool("debug", false, "dump instructions as they are parsed")
+	OutputFile = Set.String("o", "", "output file; default foo.o for /a/b/c/foo.s as first argument")
+	TrimPath   = Set.String("trimpath", "", "remove prefix from recorded source file paths")
+	Shared     = Set.Bool("shared", false, "generate code that can be linked into a shared library")
+	Dynlink    = Set.Bool("dynlink", false, "support references to Go symbols defined in other shared libraries")
+	Linkshared = Set.Bool("linkshared", false, "generate code that will be linked against Go shared libraries")
+	AllErrors  = Set.Bool("e", false, "no limit on number of errors reported")
+	SymABIs    = Set.Bool("gensymabis", false, "write symbol ABI information to output file, don't assemble")
+	Importpath = Set.String("p", obj.UnlinkablePkg, "set expected package import to path")
+	Spectre    = Set.String("spectre", "", "enable spectre mitigations in `list` (all, ret)")
+	Std        = Set.Bool("std", false, "building standard library")
 )
 
 var DebugFlags struct {
@@ -43,12 +47,10 @@ var (
 )
 
 func init() {
-	flag.Var(&D, "D", "predefined symbol with optional simple value -D=identifier=value; can be set multiple times")
-	flag.Var(&I, "I", "include directory; can be set multiple times")
-	flag.BoolVar(&DebugV, "v", false, "print debug output")
-	flag.Var(objabi.NewDebugFlag(&DebugFlags, nil), "d", "enable debugging settings; try -d help")
-	objabi.AddVersionFlag() // -V
-	objabi.Flagcount("S", "print assembly and machine code", &PrintOut)
+	Set.Var(&D, "D", "predefined symbol with optional simple value -D=identifier=value; can be set multiple times")
+	Set.Var(&I, "I", "include directory; can be set multiple times")
+	Set.BoolVar(&DebugV, "v", false, "print debug output")
+	Set.Var(objabi.NewDebugFlag(&DebugFlags, nil), "d", "enable debugging settings; try -d help")
 
 	DebugFlags.CompressInstructions = 1
 }
@@ -76,6 +78,8 @@ func Usage() {
 }
 
 func Parse() {
+	objabi.AddVersionFlag() // -V
+	objabi.Flagcount("S", "print assembly and machine code", &PrintOut)
 	objabi.Flagparse(Usage)
 	if flag.NArg() == 0 {
 		flag.Usage()

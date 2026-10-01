@@ -41,7 +41,7 @@ func Help(w io.Writer, args []string) {
 			cmds = append(cmds, cmd.Commands...)
 		}
 		tmpl(&commentWriter{W: w}, documentationTemplate, cmds)
-		fmt.Fprintln(w, "package main")
+		fmt.Fprintln(w, "package gocmd")
 		return
 	}
 

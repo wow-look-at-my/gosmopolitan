@@ -46,6 +46,22 @@ func AddCredentials(client *http.Client, req *http.Request, res *http.Response, 
 	return loadCredential(req, req.URL.String())
 }
 
+// AddCredentialsFor is like AddCredentials, but it attaches the credential
+// stored for url instead of the one for req's own URL. A request to a relay
+// that forwards Authorization to url uses it.
+func AddCredentialsFor(client *http.Client, req *http.Request, url string) bool {
+	if req.URL.Scheme != "https" {
+		panic("GOAUTH called without https")
+	}
+	if cfg.GOAUTH == "off" {
+		return false
+	}
+	authOnce.Do(func() {
+		runGoAuth(client, nil, "")
+	})
+	return loadCredential(req, url)
+}
+
 // runGoAuth executes authentication commands specified by the GOAUTH
 // environment variable handling 'off', 'netrc', and 'git' methods specially,
 // and storing retrieved credentials for future access.

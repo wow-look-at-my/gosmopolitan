@@ -24,9 +24,10 @@ const (
 	// various macOS error codes that can be returned from
 	// SecTrustEvaluateWithError that we can map to Go cert
 	// verification error types.
-	ErrSecCertificateExpired = -67818
-	ErrSecHostNameMismatch   = -67602
-	ErrSecNotTrusted         = -67843
+	ErrSecCertificateExpired      = -67818
+	ErrSecHostNameMismatch        = -67602
+	ErrSecNotTrusted              = -67843
+	ErrSecInvalidExtendedKeyUsage = -67609
 )
 
 type OSStatus struct {
@@ -81,6 +82,19 @@ func SecPolicyCreateSSL(name string) (CFRef, error) {
 	return CFRef(ret), nil
 }
 func x509_SecPolicyCreateSSL_trampoline()
+
+//go:cgo_import_dynamic x509_SecPolicyCreateBasicX509 SecPolicyCreateBasicX509 "/System/Library/Frameworks/Security.framework/Versions/A/Security"
+
+// SecPolicyCreateBasicX509 answers the policy that checks a chain and
+// nothing a TLS server certificate in particular must satisfy.
+func SecPolicyCreateBasicX509() (CFRef, error) {
+	ret := syscall(abi.FuncPCABI0(x509_SecPolicyCreateBasicX509_trampoline), 0, 0, 0, 0, 0, 0)
+	if ret == 0 {
+		return 0, OSStatus{"SecPolicyCreateBasicX509", int32(ret)}
+	}
+	return CFRef(ret), nil
+}
+func x509_SecPolicyCreateBasicX509_trampoline()
 
 //go:cgo_import_dynamic x509_SecTrustSetVerifyDate SecTrustSetVerifyDate "/System/Library/Frameworks/Security.framework/Versions/A/Security"
 

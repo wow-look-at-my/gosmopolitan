@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"internal/goarch"
 	"internal/abi"
 	"internal/runtime/syscall/windows"
 	"unsafe"
@@ -41,7 +42,7 @@ func sigresume()
 
 func initExceptionHandler() {
 	stdcall(_AddVectoredExceptionHandler, 1, abi.FuncPCABI0(exceptiontramp))
-	if GOARCH == "386" {
+	if goarch.Is386 == 1 {
 		// use SetUnhandledExceptionFilter for windows-386.
 		// note: SetUnhandledExceptionFilter handler won't be called, if debugging.
 		stdcall(_SetUnhandledExceptionFilter, abi.FuncPCABI0(lastcontinuetramp))
@@ -57,7 +58,7 @@ func initExceptionHandler() {
 //go:nosplit
 func isAbort(r *windows.Context) bool {
 	pc := r.PC()
-	if GOARCH == "386" || GOARCH == "amd64" {
+	if goarch.Is386 == 1 || goarch.IsAmd64 == 1 {
 		// In the case of an abort, the exception IP is one byte after
 		// the INT3 (this differs from UNIX OSes).
 		pc--
@@ -113,7 +114,7 @@ const (
 func sigFetchGSafe() *g
 
 func sigFetchG() *g {
-	if GOARCH == "386" {
+	if goarch.Is386 == 1 {
 		return sigFetchGSafe()
 	}
 	return getg()
@@ -318,7 +319,7 @@ func lastcontinuehandler(info *windows.ExceptionRecord, r *windows.Context, gp *
 	// arm64 and it's an illegal instruction and this is coming from
 	// non-Go code, then assume it's this runtime probing happen, and
 	// pass that onward to SEH.
-	if GOARCH == "arm64" && info.ExceptionCode == windows.EXCEPTION_ILLEGAL_INSTRUCTION &&
+	if goarch.IsArm64 == 1 && info.ExceptionCode == windows.EXCEPTION_ILLEGAL_INSTRUCTION &&
 		(r.PC() < firstmoduledata.text || firstmoduledata.etext < r.PC()) {
 		return windows.EXCEPTION_CONTINUE_SEARCH
 	}

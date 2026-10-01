@@ -10,11 +10,11 @@
 package syscall
 
 const (
-	AF_INET      = 0x2
-	AF_INET6     = 0xa
-	AF_LOCAL     = 0x1
-	AF_UNIX      = 0x1
-	AF_UNSPEC    = 0x0
+	AF_INET   = 0x2
+	AF_INET6  = 0xa
+	AF_LOCAL  = 0x1
+	AF_UNIX   = 0x1
+	AF_UNSPEC = 0x0
 
 	DT_BLK     = 0x6
 	DT_CHR     = 0x2
@@ -97,13 +97,13 @@ const (
 	O_NOATIME  = 0x40000
 	O_NOCTTY   = 0x100
 	O_NOFOLLOW = 0x8000
-	O_NONBLOCK  = 0x800
-	O_RDONLY    = 0x0
-	O_RDWR      = 0x2
-	O_RSYNC     = 0x101000
-	O_SYNC      = 0x101000
-	O_TRUNC     = 0x200
-	O_WRONLY    = 0x1
+	O_NONBLOCK = 0x800
+	O_RDONLY   = 0x0
+	O_RDWR     = 0x2
+	O_RSYNC    = 0x101000
+	O_SYNC     = 0x101000
+	O_TRUNC    = 0x200
+	O_WRONLY   = 0x1
 
 	RLIMIT_AS     = 0x9
 	RLIMIT_CORE   = 0x4
@@ -193,6 +193,12 @@ const (
 	MAP_FIXED     = 0x10
 	MAP_PRIVATE   = 0x2
 	MAP_SHARED    = 0x1
+
+	MADV_NORMAL     = 0x0
+	MADV_RANDOM     = 0x1
+	MADV_SEQUENTIAL = 0x2
+	MADV_WILLNEED   = 0x3
+	MADV_DONTNEED   = 0x4
 
 	LOCK_EX = 0x2
 	LOCK_NB = 0x4

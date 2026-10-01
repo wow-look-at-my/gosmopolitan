@@ -4,7 +4,7 @@
 
 //go:build unix || (js && wasm)
 
-package main_test
+package gocmd_test
 
 import (
 	"os"

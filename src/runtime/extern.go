@@ -299,11 +299,6 @@ closed, they are opened pointing at /dev/null.
 */
 package runtime
 
-import (
-	"internal/goarch"
-	"internal/goos"
-)
-
 // Caller reports file and line number information about function invocations on
 // the calling goroutine's stack. The argument skip is the number of stack frames
 // to ascend, with 0 identifying the caller of Caller. (For historical reasons the
@@ -379,11 +374,9 @@ func Version() string {
 	return buildVersion
 }
 
-// GOOS is the running program's operating system target:
-// one of darwin, freebsd, linux, and so on.
-// To view possible combinations of GOOS and GOARCH, run "go tool dist list".
-const GOOS string = goos.GOOS
+// GOOS is declared in goos_notcosmo.go and goos_cosmo.go: a constant on
+// every ordinary port, and a variable on cosmo, where one binary boots on
+// several kernels and the answer is not known until it does.
 
-// GOARCH is the running program's architecture target:
-// one of 386, amd64, arm, s390x, and so on.
-const GOARCH string = goarch.GOARCH
+// GOARCH is declared alongside GOOS in goos_notcosmo.go and goos_cosmo.go,
+// for the same reason.

@@ -10,11 +10,11 @@
 package syscall
 
 const (
-	AF_INET      = 0x2
-	AF_INET6     = 0xa
-	AF_LOCAL     = 0x1
-	AF_UNIX      = 0x1
-	AF_UNSPEC    = 0x0
+	AF_INET   = 0x2
+	AF_INET6  = 0xa
+	AF_LOCAL  = 0x1
+	AF_UNIX   = 0x1
+	AF_UNSPEC = 0x0
 
 	DT_BLK     = 0x6
 	DT_CHR     = 0x2
@@ -183,6 +183,12 @@ const (
 	MAP_FIXED     = 0x10
 	MAP_PRIVATE   = 0x2
 	MAP_SHARED    = 0x1
+
+	MADV_NORMAL     = 0x0
+	MADV_RANDOM     = 0x1
+	MADV_SEQUENTIAL = 0x2
+	MADV_WILLNEED   = 0x3
+	MADV_DONTNEED   = 0x4
 
 	LOCK_EX = 0x2
 	LOCK_NB = 0x4

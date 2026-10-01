@@ -60,6 +60,7 @@ var dialGoogleTests = []struct {
 }
 
 func TestDialGoogle(t *testing.T) {
+	t.Serial()
 	testenv.MustHaveExternalNetwork(t)
 
 	if !supportsIPv4() || !supportsIPv6() || !*testIPv4 || !*testIPv6 {

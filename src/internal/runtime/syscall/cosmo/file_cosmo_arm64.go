@@ -115,7 +115,13 @@ func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) 
 	} else {
 		r, _, e := darwinCall(darwinFns.Lseek, infd, 0, seekCUR, 0, 0, 0)
 		if e != 0 {
-			return ^uintptr(0), 0, e
+			// A pipe or a socket has no offset to read, so it is a
+			// file type sendfile cannot serve. Linux says EINVAL for
+			// that, and internal/poll reads EINVAL as its cue to copy
+			// the bytes itself. ESPIPE is an error nobody there
+			// expects, so the copy never happens and the reader on
+			// the other end waits for bytes that never arrive.
+			return ^uintptr(0), 0, darwinEINVAL
 		}
 		off = int64(r)
 	}
@@ -167,6 +173,100 @@ func darwinStatfs(fn, pathOrFd, buf, size uintptr) (r1, r2, errno uintptr) {
 		return ^uintptr(0), 0, darwinEINVAL
 	}
 	return darwinCall(fn, pathOrFd, buf, 0, 0, 0, 0)
+}
+
+// darwinFdatasync emulates fdatasync. Apple ships the entry, and fsync
+// stands in when it is absent: fsync flushes the metadata fdatasync is
+// allowed to leave behind, so the caller gets a STRONGER guarantee than
+// it asked for rather than a weaker one. Reporting ENOSYS for a durable
+// write is the outcome worth avoiding here.
+//
+//go:nosplit
+func darwinFdatasync(fd uintptr) (r1, r2, errno uintptr) {
+	fn := darwinFns.Fdatasync
+	if fn == 0 {
+		fn = darwinFns.Fsync
+	}
+	return darwinCall(fn, fd, 0, 0, 0, 0, 0)
+}
+
+// darwinSync emulates sync. Apple's sync returns void and cannot fail,
+// so the Linux success value is supplied here rather than forwarding a
+// return value the callee never set.
+//
+//go:nosplit
+func darwinSync() (r1, r2, errno uintptr) {
+	if darwinFns.Sync == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	darwinLibcCall6(darwinFns.Sync, 0, 0, 0, 0, 0, 0)
+	return 0, 0, 0
+}
+
+// darwinIoctl emulates ioctl for the requests whose argument means the
+// same on both systems: the two window-size calls, where struct winsize
+// is four uint16s either way, and the four job-control calls, whose
+// argument is an int or nothing. Setctty and Foreground issue two
+// between fork and exec, which puts this on the nosplit spine.
+// The termios family goes to darwinTermiosIoctl, which converts the
+// struct as well as the request. Anything else answers ENOSYS: never
+// forward an unknown Linux request number, which would ask for whatever
+// Apple operation carries it. ioctl is VARIADIC, so the argument goes
+// on the stack - see darwinCallVariadic1.
+//
+//go:nosplit
+func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
+	if areq, ok := DarwinXlatIoctl(req); ok {
+		return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, arg)
+	}
+	if _, ok := darwinXlatTermiosIoctl(req); ok {
+		return darwinTermiosIoctl(fd, req, arg)
+	}
+	return ^uintptr(0), 0, darwinENOSYS
+}
+
+// darwinTermiosIoctl serves TCGETS and the three TCSETS forms over
+// Apple's TIOCGETA/TIOCSETA family, converting the struct in both
+// directions (termios_cosmo.go).
+//
+// A set is a read-modify-write, never a plain write: Apple's termios
+// carries settings a Linux caller cannot name, and writing only what the
+// caller passed would clear them. The read also fails first, with the
+// right errno, when the descriptor is not a terminal.
+//
+// Nosplit, and so is everything it calls: the spine reaches this after
+// entersyscall, where a stack growth is fatal.
+//
+//go:nosplit
+func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
+	if darwinFns.Ioctl == 0 {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+	if arg == 0 {
+		return ^uintptr(0), 0, darwinEFAULT
+	}
+	areq, ok := darwinXlatTermiosIoctl(req)
+	if !ok {
+		return ^uintptr(0), 0, darwinENOSYS
+	}
+
+	var at DarwinTermios
+	if _, _, e := darwinCallVariadic1(darwinFns.Ioctl, fd, appleTIOCGETA,
+		uintptr(unsafe.Pointer(&at))); e != 0 {
+		return ^uintptr(0), 0, e
+	}
+	if req == linuxTCGETS {
+		if !DarwinTermiosToLinux(&at, (*LinuxTermios)(unsafe.Pointer(arg))) {
+			// The terminal reports a line speed with no Linux code. A
+			// wrong speed would be worse than a refused call.
+			return ^uintptr(0), 0, darwinEINVAL
+		}
+		return 0, 0, 0
+	}
+	if !DarwinTermiosFromLinux((*LinuxTermios)(unsafe.Pointer(arg)), &at) {
+		return ^uintptr(0), 0, darwinEINVAL
+	}
+	return darwinCallVariadic1(darwinFns.Ioctl, fd, areq, uintptr(unsafe.Pointer(&at)))
 }
 
 // darwinUname emulates uname. Same caller-owned-buffer contract as

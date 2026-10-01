@@ -99,6 +99,27 @@ func checkGdbPython(t *testing.T) {
 	}
 }
 
+// gdbTarget names the file to hand gdb for a binary the test just built.
+//
+// A cosmo build emits a STRIPPED APE and puts the debug info in a sidecar ELF
+// beside it. gdb reads the APE without complaint and finds nothing in it: no
+// runtime.main, no main.* types, no .debug_gdb_scripts. The sidecar carries
+// each of them, and the host runs it directly, so these tests debug it. The
+// sidecar declares no OS ABI, because a gdb with no FreeBSD handler truncates
+// the high half of each address in a FreeBSD ELF.
+func gdbTarget(dir, name string) string {
+	bin := filepath.Join(dir, name)
+	if dbg := bin + ".dbg"; fileExists(dbg) {
+		return dbg
+	}
+	return bin
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // checkCleanBacktrace checks that the given backtrace is well formed and does
 // not contain any error messages from GDB.
 func checkCleanBacktrace(t *testing.T, backtrace string) {
@@ -334,7 +355,7 @@ func testGdbPython(t *testing.T, cgo bool) {
 		"-ex", "echo BEGIN goroutine 1 bt at the end\n",
 		"-ex", "goroutine 1 bt",
 		"-ex", "echo END\n",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	)
 	gdbArgsFixup(args)
 	got, err := exec.Command("gdb", args...).CombinedOutput()
@@ -497,7 +518,7 @@ func TestGdbBacktrace(t *testing.T) {
 		"-ex", "run",
 		"-ex", "backtrace",
 		"-ex", "continue",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	}
 	gdbArgsFixup(args)
 	cmd = testenv.Command(t, "gdb", args...)
@@ -620,7 +641,7 @@ func TestGdbAutotmpTypes(t *testing.T) {
 		"-ex", "run",
 		"-ex", "step",
 		"-ex", "info types astruct",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	}
 	gdbArgsFixup(args)
 	got, err := exec.Command("gdb", args...).CombinedOutput()
@@ -691,7 +712,7 @@ func TestGdbConst(t *testing.T) {
 		"-ex", "print main.minusOne",
 		"-ex", "print 'runtime.mSpanInUse'",
 		"-ex", "print 'runtime._PageSize'",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	}
 	gdbArgsFixup(args)
 	got, err := exec.Command("gdb", args...).CombinedOutput()
@@ -755,7 +776,7 @@ func TestGdbPanic(t *testing.T) {
 		"-ex", "set startup-with-shell off",
 		"-ex", "run",
 		"-ex", "backtrace",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	}
 	gdbArgsFixup(args)
 	got, err := exec.Command("gdb", args...).CombinedOutput()
@@ -835,7 +856,7 @@ func TestGdbInfCallstack(t *testing.T) {
 		"-ex", "backtrace 3",
 		"-ex", "disable 1",
 		"-ex", "continue",
-		filepath.Join(dir, "a.exe"),
+		gdbTarget(dir, "a.exe"),
 	}
 	gdbArgsFixup(args)
 	got, err := exec.Command("gdb", args...).CombinedOutput()

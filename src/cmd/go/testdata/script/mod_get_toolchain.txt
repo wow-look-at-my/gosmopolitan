@@ -1,6 +1,5 @@
 # setup
 env TESTGO_VERSION=go1.99rc1
-env TESTGO_VERSION_SWITCH=switch
 
 # go get go should use the latest Go 1.23
 cp go.mod.orig go.mod
@@ -125,6 +124,7 @@ stderr '^go: upgraded toolchain go1.23.9 => go1.24rc1$'
 # go get go@1.20 might resolve to 1.20.9, but if we're the devel copy of
 # Go 1.21, there's no release yet to resolve to, so we resolve to ourselves.)
 env TESTGO_VERSION=go1.21
+cp go.mod.orig go.mod
 go get go@1.19 toolchain@none
 go get go@1.21
 grep 'go 1.21$' go.mod

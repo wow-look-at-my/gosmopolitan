@@ -4,7 +4,7 @@
 [short] skip
 
 # Simple test.
-go test -v -cover -count=1
+go test -v -cover
 
 # Make sure test still passes when test executable is built and
 # run outside the go command.

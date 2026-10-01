@@ -4,88 +4,23 @@
 
 //go:build cosmo && amd64
 
-// Windows NT process support (wave 2 chunk B): pipe2, posix_spawn-style
-// CreateProcessW, and wait4.
+// Windows NT process support: pipe2, CreateProcessW-based spawn, and
+// wait4.
 //
-// The unix-shaped os/exec stack reaches this file through two seams:
-//
-//   - syscall.forkAndExecInChild (src/syscall/exec_cosmo.go) branches
-//     to ntForkExec on NT hosts BEFORE any fork machinery, which
-//     builds the Windows command line and environment block (string
-//     algebra lives in src/syscall/exec_cosmo_nt.go, ported from
-//     upstream exec_windows.go) and calls the WindowsFns.Spawn hook =
-//     ntSpawn here. There is no fork and no child-side code: the
-//     status pipe forkExec allocates is never inherited (CreatePipe
-//     handles are born non-inheritable), so the parent's status read
-//     sees EOF immediately - the "exec succeeded" path - and
-//     CreateProcessW failures surface synchronously as the
-//     forkAndExecInChild errno.
-//
-//   - SYS_PIPE2 and SYS_WAIT4 are ordinary emulated syscalls
-//     (os_cosmo_nt_sys.go dispatcher -> backends here).
-//     blockUntilWaitable's SYS_WAITID stays ENOSYS on purpose: package
-//     os documents exactly that fallback (wait_waitid.go returns
-//     (false, nil) on ENOSYS and pidWait proceeds to the blocking
-//     Wait4), so the emulation only needs wait4.
-//
-// THE WAIT-STATUS PROTOCOL (the design decision of this chunk; the
-// parent-side wait4 emulation is the single decode point):
-//
-//	The NT exit code crosses the process boundary RAW (runtime exit()
-//	keeps passing plain codes to ExitProcess - native interop: a cosmo
-//	child of a native Windows program reports exit(42) as 42). The
-//	Linux wait-status packing happens entirely in the PARENT's wait4:
-//
-//	  - code < 0xC0000000: normal exit -> status = (code&0xff)<<8
-//	    (WIFEXITED; Linux truncates exit codes to 8 bits, so do we).
-//	  - NTSTATUS-looking codes (>= 0xC0000000) become fake "killed by
-//	    signal" statuses with LINUX signal numbers in the low 7 bits,
-//	    mirroring the darwin leg's Linux-numbered wait4 convention so
-//	    syscall_cosmo.go's linux WaitStatus algebra decodes unchanged:
-//	      0xC0000005 ACCESS_VIOLATION     -> 11 SIGSEGV
-//	      0xC0000006 IN_PAGE_ERROR        ->  7 SIGBUS
-//	      0xC000008D..93 FLT_*            ->  8 SIGFPE
-//	      0xC0000094 INT_DIVIDE_BY_ZERO   ->  8 SIGFPE
-//	      0xC0000095 INT_OVERFLOW         ->  8 SIGFPE
-//	      0xC000001D ILLEGAL_INSTRUCTION  ->  4 SIGILL
-//	      0xC000013A CONTROL_C_EXIT       ->  2 SIGINT
-//	      0xC0DE0001..0xC0DE007F          -> code&0x7f (see below)
-//	      any other >= 0xC0000000         ->  9 SIGKILL
-//	  - 0xC0DE0000|signo is the fork-private encoding reserved for the
-//	    signals chunk: dieFromSignal/kill emulation exits the victim
-//	    with that code so the parent can report death by an arbitrary
-//	    Linux signal (SIGUSR1 has no NTSTATUS). It sits in the NTSTATUS
-//	    severity-error range so foreign parents still see "crashed".
-//
-//	GetExitCodeProcess's STILL_ACTIVE=259 ambiguity does not arise:
-//	the code is only read after WaitForSingleObject reported the
-//	process signaled (a live process is never queried), so 259 from a
-//	child that exit(259)'d decodes honestly as (259&0xff)<<8.
-//
-// Process handles: CreateProcessW's hProcess is stashed in a fixed
-// pid->handle table (the fd table is fd-indexed and does not fit);
-// wait4 is the reaping point - it closes the handle and frees the
-// slot. hThread is closed immediately. Unknown pids (never spawned, or
-// already reaped) fail wait4 with ECHILD, and pid<=0 (wait-any /
-// process groups) is ECHILD too: NT has no process-group wait, and
-// package os always waits on explicit pids.
-//
-// Spawns are serialized by the syscall layer (ntSpawnMu in
-// exec_cosmo_nt.go) because the stdio handles must be temporarily
-// inheritable duplicates: acquireForkLock does NOT mutually exclude
-// concurrent forkers, and a concurrent CreateProcessW with
-// bInheritHandles=TRUE would capture another spawn's in-flight dupes.
-// Everything else in the process stays non-inheritable (CreateFileW
-// and CreatePipe handles are born so), which is what makes
-// bInheritHandles=TRUE safe at all. PROC_THREAD_ATTRIBUTE_HANDLE_LIST
-// hardening (explicit inheritance lists) is deliberately left out this
-// wave: it needs the STARTUPINFOEXW attribute-list size dance and has
-// the NULL-handle poisoning gotcha; the serialization gives the same
-// guarantee process-locally.
+// The unix-shaped os/exec stack reaches this file two ways.
+// syscall.forkAndExecInChild branches to ntForkExec before any fork
+// machinery and calls the WindowsFns.Spawn hook, which is ntSpawn.
+// There is no fork and no child-side code: the status pipe forkExec
+// allocates is never inherited, so the parent's read sees EOF at once
+// (the "exec succeeded" path) and a CreateProcessW failure surfaces
+// synchronously. SYS_PIPE2 and SYS_WAIT4 are ordinary emulated
+// syscalls. SYS_WAITID stays ENOSYS on purpose: package os documents
+// that fallback, so the emulation only needs wait4.
 
 package runtime
 
 import (
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -317,20 +252,17 @@ func ntEmuPipe2(p *[2]int32, flags int32) (r1, r2, errno uintptr) {
 // ---- spawn ----
 
 // ntSpawn is the WindowsFns.Spawn hook: launch a child with
-// CreateProcessW. argv0 and dir are linux-shaped paths (translated
-// here with the chunk-A path layer); cmdline and env arrive as
-// ready-made UTF-16 blocks from the syscall layer (which owns the
-// quoting and sorting algebra). stdio holds the parent fds for the
-// child's std handles, -1 meaning "none" (NULL std handle). flags is
-// the cosmo.Spawn* bit set: SpawnNewProcessGroup adds
-// CREATE_NEW_PROCESS_GROUP to dwCreationFlags and records the child
-// as its own group leader for kill(-pgid). The caller
-// (syscall.ntForkExec) holds ntSpawnMu, serializing the
-// inheritable-dupe window - see the file comment.
+// CreateProcessW. argv0 and dir are linux-shaped paths. cmdline and
+// env are ready-made UTF-16 blocks, and stdio holds the parent fds for
+// the child's std handles, -1 for a NULL one. SpawnNewProcessGroup
+// records the child as its own group leader for kill(-pgid).
 //
-// The cmdline slice is passed to CreateProcessW as the MUTABLE
-// lpCommandLine (the API is documented to scribble on it), which is
-// why the syscall layer always builds it in a fresh []uint16.
+// The caller (syscall.ntForkExec) holds ntSpawnMu. Spawns MUST stay
+// serialized: the stdio handles are temporarily inheritable dupes,
+// acquireForkLock does not exclude concurrent forkers, and a
+// concurrent bInheritHandles=TRUE would capture another spawn's dupes.
+// The cmdline slice reaches CreateProcessW as the MUTABLE
+// lpCommandLine, so the syscall layer builds it in a fresh []uint16.
 func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uint32) (pid int32, errno uintptr) {
 	wapp := ntPathW(argv0)
 	if wapp == nil {
@@ -407,8 +339,8 @@ func ntSpawn(argv0, dir string, cmdline, env []uint16, stdio [3]int32, flags uin
 		// The child becomes the leader of a new process group whose
 		// id is its pid; note NT then also DISABLES Ctrl-C in the
 		// child until it opts back in (the documented
-		// CREATE_NEW_PROCESS_GROUP side effect - DEBUGGING.md wave 3
-		// item 4). CTRL_BREAK delivery is unaffected.
+		// CREATE_NEW_PROCESS_GROUP side effect). CTRL_BREAK delivery
+		// is unaffected.
 		creation |= _NT_CREATE_NEW_PROCESS_GROUP
 	}
 	r, werr := ntcallSE10(ntCreateProcessWFn,
@@ -444,8 +376,93 @@ func ntFiletimeToMicros(ft uint64) int64 {
 	return int64(ft / 10)
 }
 
+func ntTimeval(micros int64) ntLinuxTimeval {
+	return ntLinuxTimeval{sec: micros / 1e6, usec: micros % 1e6}
+}
+
+// NT keeps no total for reaped children, so wait4 adds each here for getrusage(RUSAGE_CHILDREN).
+var ntChildKernel, ntChildUser atomic.Int64
+
+// ntProcessMemoryCounters is PROCESS_MEMORY_COUNTERS on x64.
+type ntProcessMemoryCounters struct {
+	cb                         uint32
+	pageFaultCount             uint32
+	peakWorkingSetSize         uintptr
+	workingSetSize             uintptr
+	quotaPeakPagedPoolUsage    uintptr
+	quotaPagedPoolUsage        uintptr
+	quotaPeakNonPagedPoolUsage uintptr
+	quotaNonPagedPoolUsage     uintptr
+	pagefileUsage              uintptr
+	peakPagefileUsage          uintptr
+}
+
+// ntEmuGettimeofday ignores the timezone argument, as Linux does for every caller that passes one.
+func ntEmuGettimeofday(tv *ntLinuxTimeval) (r1, r2, errno uintptr) {
+	if tv != nil {
+		sec, nsec := walltime()
+		*tv = ntLinuxTimeval{sec: sec, usec: int64(nsec / 1000)}
+	}
+	return 0, 0, 0
+}
+
+const (
+	ntRusageSelf     = 0
+	ntRusageChildren = -1
+	ntRusageThread   = 1
+)
+
+// ntEmuGetrusage fills the times, and for the process also ru_maxrss (in KiB) and ru_minflt.
+func ntEmuGetrusage(who int32, ru *ntLinuxRusage) (r1, r2, errno uintptr) {
+	var creation, exit, kernel, user uint64
+	switch who {
+	case ntRusageSelf:
+		if r, werr := ntcallE(ntGetProcessTimesFn, ^uintptr(0),
+			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		var mem ntProcessMemoryCounters
+		mem.cb = uint32(unsafe.Sizeof(mem))
+		if r, werr := ntcallE(ntGetProcessMemInfoFn, ^uintptr(0),
+			uintptr(unsafe.Pointer(&mem)), uintptr(mem.cb), 0, 0, 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		*ru = ntLinuxRusage{}
+		ru.other[0] = int64(mem.peakWorkingSetSize / 1024)
+		ru.other[4] = int64(mem.pageFaultCount)
+	case ntRusageThread:
+		if r, werr := ntcallE(ntGetThreadTimesFn, ^uintptr(1),
+			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		*ru = ntLinuxRusage{}
+	case ntRusageChildren:
+		*ru = ntLinuxRusage{}
+		ru.stime = ntTimeval(ntChildKernel.Load())
+		ru.utime = ntTimeval(ntChildUser.Load())
+		return 0, 0, 0
+	default:
+		return ntFail3(ntEINVAL)
+	}
+	ru.stime = ntTimeval(ntFiletimeToMicros(kernel))
+	ru.utime = ntTimeval(ntFiletimeToMicros(user))
+	return 0, 0, 0
+}
+
 // ntWaitStatusFromExitCode packs an NT exit code into a Linux wait
-// status word per the protocol at the top of this file.
+// status word. The exit code crosses the process boundary RAW - a
+// cosmo child of a native Windows program reports exit(42) as 42 - so
+// this parent-side call is the single decode point. A code below
+// 0xC0000000 is a normal exit, truncated to 8 bits as Linux does.
+// Above it, the status becomes "killed by signal" with a LINUX signal
+// number, which is the darwin leg's convention too, so syscall's linux
+// WaitStatus algebra decodes it unchanged. 0xC0DE0000|signo is the
+// fork-private encoding the kill emulation exits a victim with, for a
+// signal NTSTATUS has no name for; it sits in the severity-error range
+// so a foreign parent still sees a crash. STILL_ACTIVE=259 is never
+// ambiguous here: the code is read only after the process signaled.
 func ntWaitStatusFromExitCode(code uint32) int32 {
 	sig := uint32(0)
 	switch {
@@ -471,7 +488,11 @@ func ntWaitStatusFromExitCode(code uint32) int32 {
 	return int32(code&0xff) << 8 // WIFEXITED
 }
 
-// ntEmuWait4 implements Linux wait4 for pids spawned by ntSpawn.
+// ntEmuWait4 implements Linux wait4 for pids spawned by ntSpawn. It is
+// the reaping point: CreateProcessW's hProcess lives in a fixed
+// pid->handle table (the fd table is fd-indexed and does not fit), and
+// this closes the handle and frees the slot. A pid never spawned, or
+// already reaped, is ECHILD.
 func ntEmuWait4(pid int32, wstatus *int32, options int32, rusage *ntLinuxRusage) (r1, r2, errno uintptr) {
 	if pid <= 0 {
 		// Wait-any and process-group waits are unsupported: NT has no
@@ -502,21 +523,24 @@ func ntEmuWait4(pid int32, wstatus *int32, options int32, rusage *ntLinuxRusage)
 	if r, werr := ntcallE(ntGetExitCodeProcessFn, h, uintptr(unsafe.Pointer(&code)), 0, 0, 0, 0, 0); r == 0 {
 		return ntFail3(ntErrno(werr))
 	}
+	var creation, exit, kernel, user uint64
+	timed, _ := ntcallE(ntGetProcessTimesFn, h,
+		uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+		uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0)
 	if rusage != nil {
 		*rusage = ntLinuxRusage{}
-		var creation, exit, kernel, user uint64
-		if r, _ := ntcallE(ntGetProcessTimesFn, h,
-			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
-			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r != 0 {
-			ku := ntFiletimeToMicros(kernel)
-			uu := ntFiletimeToMicros(user)
-			rusage.stime = ntLinuxTimeval{sec: ku / 1e6, usec: ku % 1e6}
-			rusage.utime = ntLinuxTimeval{sec: uu / 1e6, usec: uu % 1e6}
+		if timed != 0 {
+			rusage.stime = ntTimeval(ntFiletimeToMicros(kernel))
+			rusage.utime = ntTimeval(ntFiletimeToMicros(user))
 		}
 	}
 	if !ntProcRemove(uint32(pid)) {
 		// A concurrent wait4 reaped it first (and closed the handle).
 		return ntFail3(ntECHILD)
+	}
+	if timed != 0 {
+		ntChildKernel.Add(ntFiletimeToMicros(kernel))
+		ntChildUser.Add(ntFiletimeToMicros(user))
 	}
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	if wstatus != nil {

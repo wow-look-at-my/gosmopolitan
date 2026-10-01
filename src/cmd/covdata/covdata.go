@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package covdata
 
 import (
 	"cmd/internal/cov"
+	"cmd/internal/objabi"
 	"cmd/internal/pkgpattern"
 	"cmd/internal/telemetry/counter"
 	"flag"
@@ -16,14 +17,18 @@ import (
 	"strings"
 )
 
-var verbflag = flag.Int("v", 0, "Verbose trace output level")
-var hflag = flag.Bool("h", false, "Panic on fatal errors (for stack trace)")
-var hwflag = flag.Bool("hw", false, "Panic on warnings (for stack trace)")
-var indirsflag = flag.String("i", "", "Input dirs to examine (comma separated)")
-var pkgpatflag = flag.String("pkg", "", "Restrict output to package(s) matching specified package pattern.")
-var cpuprofileflag = flag.String("cpuprofile", "", "Write CPU profile to specified file")
-var memprofileflag = flag.String("memprofile", "", "Write memory profile to specified file")
-var memprofilerateflag = flag.Int("memprofilerate", 0, "Set memprofile sampling rate to value")
+// flagSet is covdata's command line, one set of its own so covdata can be
+// linked beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("covdata", flag.ExitOnError)
+
+var verbflag = flagSet.Int("v", 0, "Verbose trace output level")
+var hflag = flagSet.Bool("h", false, "Panic on fatal errors (for stack trace)")
+var hwflag = flagSet.Bool("hw", false, "Panic on warnings (for stack trace)")
+var indirsflag = flagSet.String("i", "", "Input dirs to examine (comma separated)")
+var pkgpatflag = flagSet.String("pkg", "", "Restrict output to package(s) matching specified package pattern.")
+var cpuprofileflag = flagSet.String("cpuprofile", "", "Write CPU profile to specified file")
+var memprofileflag = flagSet.String("memprofile", "", "Write memory profile to specified file")
+var memprofilerateflag = flagSet.Int("memprofilerate", 0, "Set memprofile sampling rate to value")
 
 var matchpkg func(name string) bool
 
@@ -108,7 +113,11 @@ const (
 	debugDumpMode = "debugdump"
 )
 
-func main() {
+// Main runs covdata with args, the command line after the program name, and
+// answers its exit status. A failure exits the process from inside covdata,
+// as it always has.
+func Main(args []string) int {
+	objabi.Enter("covdata", args, flagSet)
 	counter.Open()
 
 	// First argument should be mode/subcommand.
@@ -234,4 +243,5 @@ func main() {
 	}
 	dbgtrace(1, "leaving main")
 	Exit(st)
+	return st
 }
