@@ -42,7 +42,8 @@ SECTIONS {
   __executable_start = %#x;
   . = __executable_start + SIZEOF_HEADERS;
   .note.go.buildid : { KEEP(*(.note.go.buildid)) } :text
-  .text ALIGN(64) : {
+  /* On NT the PE headers take the first page, so code starts on the next one. */
+  .text ALIGN(4096) : {
     *go.o(.text .text.*)
     . = ALIGN(16);
     _ereal = .;

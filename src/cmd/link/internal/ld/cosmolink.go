@@ -143,6 +143,16 @@ func cosmoNTBoot(image []byte, base uint64) *apePEInfo {
 	if info.iatSize == 0 {
 		Exitf("APE NT boot: the image has no import address table")
 	}
+	// The PE headers occupy the first page of the image, so NT maps no code there.
+	file, err := elf.NewFile(bytes.NewReader(image))
+	if err != nil {
+		Exitf("APE NT boot: %v", err)
+	}
+	for _, sect := range file.Sections {
+		if sect.Flags&elf.SHF_EXECINSTR != 0 && sect.Size != 0 && sect.Addr < base+peCosmoSectAlign {
+			Exitf("APE NT boot: section %s at %#x starts in the page the PE headers take (base %#x)", sect.Name, sect.Addr, base)
+		}
+	}
 	loads := apePayloadLoads(image)
 	apeVaddrFileOff(loads, base+uint64(info.importsRVA), uint64(info.importsSize), "ape_idata_idt")
 	apeVaddrFileOff(loads, base+uint64(info.iatRVA), uint64(info.iatSize), "ape_idata_iat")
