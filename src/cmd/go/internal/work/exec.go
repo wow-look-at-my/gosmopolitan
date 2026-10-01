@@ -336,17 +336,8 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 		// builds something in GOROOT. The C compiler does not, so ccompile
 		// passes -ffile-prefix-map for a GOROOT package, which rewrites the
 		// path as though -trimpath were set. Neither leaves a directory in
-		// the output, so GOROOT itself stays out of the key.
-		//
-		// cgo is the exception, and this cache is shared between machines.
-		// cgo writes a //line naming this directory into the Go file it
-		// generates (go.dev/issue/36072), so that output belongs to one
-		// GOROOT. A tree at another path that reused it handed cmd/vet a
-		// path holding no file, and the cgocall pass answered "can't parse
-		// raw cgo file".
-		if len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
-			return fmt.Sprintf("cgo dir %s\n", pkg.Dir)
-		}
+		// the output, so GOROOT itself stays out of the key. The cgo files
+		// kept for vet are the exception: see objdirKey.
 		return ""
 	}
 
@@ -1183,12 +1174,12 @@ func (b *Builder) cacheObjdirFile(a *Action, c cache.Cache, name string) error {
 		return err
 	}
 	defer f.Close()
-	_, _, err = c.Put(cache.Subkey(a.actionID, name), f)
+	_, _, err = c.Put(cache.Subkey(objdirKey(a), name), f)
 	return err
 }
 
 func (b *Builder) findCachedObjdirFile(a *Action, c cache.Cache, name string) (string, error) {
-	file, _, err := cache.GetFile(c, cache.Subkey(a.actionID, name))
+	file, _, err := cache.GetFile(c, cache.Subkey(objdirKey(a), name))
 	if err != nil {
 		return "", fmt.Errorf("loading cached file %s: %w", name, err)
 	}
@@ -1213,6 +1204,16 @@ func (b *Builder) loadCachedCgoHdr(a *Action) error {
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
+// objdirKey returns the key for the files a keeps from its object directory.
+func objdirKey(a *Action) cache.ActionID {
+	pkg := a.Package
+	// cgo writes the package directory into a //line, and vet opens that path.
+	if pkg != nil && pkg.Goroot && !cfg.BuildTrimpath && len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return cache.Subkey(a.actionID, "cgo dir "+pkg.Dir)
+	}
+	return a.actionID
+}
+
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 	c := a.cache()
 	var buf bytes.Buffer
@@ -1231,12 +1232,12 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 			return
 		}
 	}
-	cache.PutBytes(c, cache.Subkey(a.actionID, "srcfiles"), buf.Bytes())
+	cache.PutBytes(c, cache.Subkey(objdirKey(a), "srcfiles"), buf.Bytes())
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1260,7 +1261,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}

@@ -241,6 +241,8 @@ Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.
 
 **A test is never skipped.** Not with `-run`. Not with `t.Skip`. Not with a build tag. Not by dropping a port. A package that reports success in a second because its tests never ran is worse than a red one. It reports green for work nobody did. js/wasm does this to the whole `cmd/*` family, because the port has no process spawning. That is a gap to close. It is not a result to keep.
 
+**A vendored third-party package's test files do not run, and every suite says so.** The vendor submodules carry tests that `go mod vendor` will strip. They cannot build here. The go command lists them under `IgnoredGoFiles` (`cmd/go/internal/load`). Org modules keep their tests. `dist test` ends with a `##### Test coverage` block: the share of packages whose tests run, and each untested module. CI puts it first in the suite leg's step summary.
+
 **A slow suite is never made fast by running less of it.** Every port is fast, or it gets made fast. No tier of platforms is allowed to be slow. Fix what makes each test expensive instead. `cmd/internal/testdir` runs its whole corpus in 221.3s, against 1265.8s for the same corpus one program at a time. Its run programs compile into one executable and run in one process.
 
 **A dependency is never vendored.** Its source does not belong in this tree. A vendor directory writes each version down a second time in `modules.txt`. The gitlink writes it a third time. The go command then refuses to build when the three disagree. That duplication is what broke `cmd/go`. `src/cmd` still builds in vendor mode today. Removing that is task work. It is not a licence to add anything to the vendor tree.
@@ -273,14 +275,7 @@ The `publish-create`, `publish-upload` and `publish-finish` jobs publish an inst
 
 ## Repository automation (pr-minder bot)
 
-This repo, like the rest of the wow-look-at-my org, is watched by the org's **pr-minder** GitHub bot. Its observed behavior around branches, PRs, and labels — know this before pushing branches or interpreting PR state:
-
-- **Auto-opened PRs.** Any lingering `claude/*` branch gets a **non-draft** PR auto-opened for it within about a minute of the push. Expect the PR to exist before you open one by hand. Edit the auto-opened PR (title/body) rather than opening a duplicate.
-- **Label-triggered merges.** The bot merges a PR when the repository owner applies the `auto-pr-merge` label. Draft status is NOT protection: a green draft carrying the label is flipped ready-for-review and squash-merged within seconds. If the PR only goes green later (label already in place), the merge lands on the bot's next hourly reconcile pass instead of immediately. Head branches are deleted after merge.
-- **Body regeneration.** The bot can regenerate/overwrite PR bodies during its update passes. If a PR body matters, keep a copy and re-apply it once after a rewrite — do not loop against the bot.
-- **Base-branch updates.** The bot merges the base branch (master) into PR branches as siblings merge — ordinary forward merge commits, never force pushes. Pull before pushing to a branch the bot may have advanced.
-- **Timeline attribution.** Ready-for-review, auto-merge, and merge events show the bot as the *actor* even when the repository owner initiated them by applying the label. Judge intent by the PR's `labeled` timeline events (who applied `auto-pr-merge`), not by the executor of the follow-on events. Symmetrically, the bot re-enforces state it was told to arm: reverting it (e.g. flipping the PR back to draft) is counter-flipped within seconds — a durable change needs the owner to.
-- **Merge gating (`all-builds`).** Master only moves via PRs, and a PR only merges when its head SHA carries a green `all-builds` commit status — posted.). Do not name any CI job `all-builds`: an org guard fails workflows that define one, because the status context is reserved for the aggregator.
+docs/PR-MINDER.md -- the org bot's auto-opened PRs, label merges, body rewrites, base merges, and the `all-builds` gate.
 
 ## Shared build cache: the cache IS `cacheclient`
 
