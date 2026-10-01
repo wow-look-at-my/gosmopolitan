@@ -11,11 +11,11 @@ import (
 )
 
 // TargetCC is DefaultCC, but a cosmo target reads CC_FOR_cosmo_<arch> first.
-// A fat build compiles C for architectures, and one CC cannot serve both.
+// A fat build compiles C for each architecture, so one CC cannot serve it.
 func TargetCC(goos, goarch string) string {
 	if goos == "cosmo" {
-		if cc := os.Getenv("CC_FOR_cosmo_" + goarch); cc != "" {
-			return cc
+		if override := os.Getenv("CC_FOR_cosmo_" + goarch); override != "" {
+			return override
 		}
 	}
 	return DefaultCC(goos, goarch)
@@ -24,8 +24,8 @@ func TargetCC(goos, goarch string) string {
 // TargetCXX is the C++ counterpart of TargetCC.
 func TargetCXX(goos, goarch string) string {
 	if goos == "cosmo" {
-		if cxx := os.Getenv("CXX_FOR_cosmo_" + goarch); cxx != "" {
-			return cxx
+		if override := os.Getenv("CXX_FOR_cosmo_" + goarch); override != "" {
+			return override
 		}
 	}
 	return DefaultCXX(goos, goarch)
@@ -34,11 +34,11 @@ func TargetCXX(goos, goarch string) string {
 // cosmoCgoDefault reports whether cgo is on by default for a cosmo target.
 // It is on when the C compiler for that architecture is on PATH.
 func cosmoCgoDefault(goarch string) bool {
-	cc := Getenv("CC")
-	if cc == "" {
-		cc = TargetCC("cosmo", goarch)
+	compiler := Getenv("CC")
+	if compiler == "" {
+		compiler = TargetCC("cosmo", goarch)
 	}
-	fields := strings.Fields(cc)
+	fields := strings.Fields(compiler)
 	if len(fields) == 0 {
 		return false
 	}

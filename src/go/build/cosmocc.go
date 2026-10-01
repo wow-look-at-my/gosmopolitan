@@ -18,21 +18,21 @@ func cosmoImpliedTag(name string) bool {
 // cosmoCompilerFound reports whether the C compiler of a cosmo target is on PATH.
 // It follows cmd/go: CC wins, then CC_FOR_cosmo_<arch>, then the cosmocc driver.
 func cosmoCompilerFound(goarch string) bool {
-	cc := os.Getenv("CC")
-	if cc == "" {
-		cc = os.Getenv("CC_FOR_cosmo_" + goarch)
+	compiler := os.Getenv("CC")
+	if compiler == "" {
+		compiler = os.Getenv("CC_FOR_cosmo_" + goarch)
 	}
-	if cc == "" {
+	if compiler == "" {
 		switch goarch {
 		case "amd64":
-			cc = "x86_64-unknown-cosmo-cc"
+			compiler = "x86_64-unknown-cosmo-cc"
 		case "arm64":
-			cc = "aarch64-unknown-cosmo-cc"
+			compiler = "aarch64-unknown-cosmo-cc"
 		default:
 			return false
 		}
 	}
-	fields := strings.Fields(cc)
+	fields := strings.Fields(compiler)
 	if len(fields) == 0 {
 		return false
 	}

@@ -191,7 +191,7 @@ nocpuinfo:
 	TESTQ	AX, AX
 	JZ	needtls
 #ifdef GOOS_cosmo
-	// On NT the cosmo C runtime never started, so C cannot run. cosmo_nt_cgo reports it.
+	// On NT libcosmo never started, so C cannot run. osinit stops the program with a message.
 	CMPL	runtime·__hostos(SB), $2	// _HOSTWINDOWS
 	JEQ	needtls
 #endif

@@ -42,16 +42,16 @@ func findCosmoToolchain(ctxt *Link) cosmoToolchain {
 	}
 	bin := filepath.Dir(path)
 	prefix := cosmoArchPrefix(ctxt.Arch.Family)
-	tc := cosmoToolchain{
+	tools := cosmoToolchain{
 		gcc: filepath.Join(bin, prefix+"-linux-cosmo-gcc"),
 		lib: filepath.Join(filepath.Dir(bin), prefix+"-linux-cosmo", "lib"),
 	}
-	for _, need := range []string{tc.gcc, filepath.Join(tc.lib, "crt.o"), filepath.Join(tc.lib, "libcosmo.a")} {
+	for _, need := range []string{tools.gcc, filepath.Join(tools.lib, "crt.o"), filepath.Join(tools.lib, "libcosmo.a")} {
 		if _, err := os.Stat(need); err != nil {
 			Exitf("cosmo cgo link: %s needs the cosmocc toolchain beside it: %v", driver, err)
 		}
 	}
-	return tc
+	return tools
 }
 
 // cosmoHostlink is hostlink for GOOS=cosmo.
@@ -59,7 +59,7 @@ func (ctxt *Link) cosmoHostlink() {
 	if ctxt.BuildMode != BuildModeExe {
 		Exitf("cosmo cgo link: -buildmode=%s is not supported, only exe", ctxt.BuildMode)
 	}
-	tc := findCosmoToolchain(ctxt)
+	tools := findCosmoToolchain(ctxt)
 	script := filepath.Join(*flagTmpdir, "cosmo.lds")
 	if err := os.WriteFile(script, []byte(cosmoLinkerScript(ctxt.Arch.Family)), 0666); err != nil {
 		Exitf("cosmo cgo link: %v", err)
@@ -69,7 +69,7 @@ func (ctxt *Link) cosmoHostlink() {
 		page = "16384"
 	}
 	argv := []string{
-		tc.gcc,
+		tools.gcc,
 		"-static", "-nostdlib", "-no-pie", "-fuse-ld=bfd",
 		"-Wl,-z,noexecstack",
 		"-Wl,-z,common-page-size=" + page,
@@ -90,11 +90,11 @@ func (ctxt *Link) cosmoHostlink() {
 	goObj := filepath.Join(*flagTmpdir, "go.o")
 	cleanTimeStamps([]string{goObj})
 
-	argv = append(argv, filepath.Join(tc.lib, "crt.o"), goObj)
+	argv = append(argv, filepath.Join(tools.lib, "crt.o"), goObj)
 	argv = append(argv, hostObjs...)
 	argv = append(argv, ldflag...)
 	argv = append(argv, flagExtldflags...)
-	argv = append(argv, "-L"+tc.lib, "-lcosmo")
+	argv = append(argv, "-L"+tools.lib, "-lcosmo")
 
 	if ctxt.Debugvlog != 0 {
 		ctxt.Logf("host link: %q\n", argv)

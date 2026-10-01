@@ -846,8 +846,8 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 		v := uint64(ldr.SymValue(s))
 		if ctxt.LinkMode == LinkExternal {
 			// The external linker placed the symbol, so read its address from the image.
-			linked, ok := cosmoLinkedSymbol(p.elf, name)
-			if !ok {
+			linked, found := cosmoLinkedSymbol(p.elf, name)
+			if !found {
 				Exitf("APE NT boot: symbol %s is not in the externally linked image", name)
 			}
 			v = linked
