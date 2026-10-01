@@ -354,6 +354,11 @@ func osinit() {
 	setGOOS()
 	osArchInit()
 	ntBoot("osArchInit done")
+	// NT enters at _rt0_cosmo_nt, so libcosmo never starts and C code cannot run.
+	if iscgo && iswindows() {
+		print("runtime: a cgo program cannot run on a Windows host yet: libcosmo is not started there\n")
+		exit(2)
+	}
 	// After osArchInit: the NT probe needs the resolved import table.
 	setGOARCH()
 	ntBoot("setGOARCH done")

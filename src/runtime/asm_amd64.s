@@ -190,10 +190,19 @@ nocpuinfo:
 	MOVQ	_cgo_init(SB), AX
 	TESTQ	AX, AX
 	JZ	needtls
+#ifdef GOOS_cosmo
+	// On NT the cosmo C runtime never started, so C cannot run. cosmo_nt_cgo reports it.
+	CMPL	runtime·__hostos(SB), $2	// _HOSTWINDOWS
+	JEQ	needtls
+#endif
 	// arg 1: g0, already in DI
 	MOVQ	$setg_gcc<>(SB), SI // arg 2: setg_gcc
 	MOVQ	$0, DX	// arg 3, 4: not used when using platform's TLS
 	MOVQ	$0, CX
+#ifdef GOOS_cosmo
+	// x_cgo_init copies the host OS from libcosmo and installs this thread's GS.
+	MOVQ	$runtime·__hostos(SB), DX	// arg 3: &__hostos
+#endif
 #ifdef GOOS_android
 	MOVQ	$runtime·tls_g(SB), DX 	// arg 3: &tls_g
 	// arg 4: TLS base, stored in slot 0 (Android's TLS_SLOT_SELF).

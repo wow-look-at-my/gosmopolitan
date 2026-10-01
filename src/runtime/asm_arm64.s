@@ -9,6 +9,15 @@
 #include "textflag.h"
 #include "cgo/abi_arm64.h"
 
+#ifdef GOOS_cosmo
+// COSMO_C_TP loads libcosmo's thread pointer into R28 before a call into C.
+// cosmo C code reads its TLS through x28, which Go uses for g. runtime/cgo
+// keeps each thread's pointer in TPIDR_EL0. It clobbers R10. The WORD is MRS TPIDR_EL0, R28.
+#define COSMO_C_TP MOVBU runtime·iscgo(SB), R10; CBZ R10, 2(PC); WORD $0xd53bd05c
+#else
+#define COSMO_C_TP
+#endif
+
 // _rt0_arm64 is common startup code for most arm64 systems when using
 // internal linking. This is the entry point for the program from the
 // kernel for an ordinary -buildmode=exe program. The stack holds the
@@ -22,6 +31,11 @@ TEXT _rt0_arm64(SB),NOSPLIT,$0
 // external linking. The C startup code will call the symbol "main"
 // passing argc and argv in the usual C ABI registers R0 and R1.
 TEXT main(SB),NOSPLIT,$0
+#ifdef GOOS_cosmo
+	// libcosmo's _start set x28 to its thread pointer, and rt0_go reuses R28 for g.
+	// TPIDR_EL0 keeps the thread pointer for the calls into C.
+	WORD	$0xd51bd05c	// MSR R28, TPIDR_EL0
+#endif
 	JMP	runtime·rt0_go(SB)
 
 // _rt0_arm64_lib is common startup code for most arm64 systems when
@@ -129,13 +143,22 @@ TEXT runtime·rt0_go(SB),NOSPLIT|TOPFRAME,$0
 	MOVD	R0, R3			// arg 3: TLS base pointer
 	MOVD	$runtime·tls_g(SB), R2 	// arg 2: &tls_g
 #else
+#ifdef GOOS_cosmo
+	MOVD	$runtime·__hostos(SB), R2	// arg 2: &__hostos, which x_cgo_init fills
+	MOVD	$runtime·__syslib(SB), R3	// arg 3: &__syslib, which x_cgo_init fills
+#else
 	MOVD	$0, R2		        // arg 2: not used when using platform's TLS
+#endif
 #endif
 	MOVD	$setg_gcc<>(SB), R1	// arg 1: setg
 	MOVD	g, R0			// arg 0: G
 	SUB	$16, RSP		// reserve 16 bytes for sp-8 where fp may be saved.
+	COSMO_C_TP
 	BL	(R12)
 	ADD	$16, RSP
+#ifdef GOOS_cosmo
+	MOVD	$runtime·g0(SB), g	// the call ran with R28 holding libcosmo's thread pointer
+#endif
 
 nocgo:
 	BL	runtime·save_g(SB)
@@ -757,7 +780,14 @@ TEXT ·asmcgocall_no_g(SB),NOSPLIT,$0-16
 	MOVD	fn+0(FP), R1
 	MOVD	arg+8(FP), R0
 	SUB	$16, RSP	// skip over saved frame pointer below RSP
+#ifdef GOOS_cosmo
+	MOVD	g, R19	// C preserves R19
+#endif
+	COSMO_C_TP
 	BL	(R1)
+#ifdef GOOS_cosmo
+	MOVD	R19, g
+#endif
 	ADD	$16, RSP	// skip over saved frame pointer below RSP
 	RET
 
@@ -817,6 +847,7 @@ nosecret:
 	MOVD	(g_stack+stack_hi)(R4), R4
 	SUB	R2, R4
 	MOVD	R4, 8(RSP)	// save depth in old g stack (can't just save SP, as stack might be copied during a callback)
+	COSMO_C_TP
 	BL	(R1)
 	MOVD	R0, R9
 
@@ -848,7 +879,14 @@ nosave:
 	MOVD	$0, R4
 	MOVD	R4, 0(RSP)	// Where above code stores g, in case someone looks during debugging.
 	MOVD	R2, 8(RSP)	// Save original stack pointer.
+#ifdef GOOS_cosmo
+	MOVD	g, 0(RSP)	// the call below leaves libcosmo's thread pointer in R28
+#endif
+	COSMO_C_TP
 	BL	(R1)
+#ifdef GOOS_cosmo
+	MOVD	0(RSP), g
+#endif
 	// Restore stack pointer.
 	MOVD	8(RSP), R2
 	MOVD	R2, RSP
