@@ -423,6 +423,20 @@ jobs:
           echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
           echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
 
+      # cosmo-cgo.dats compiles C for both cosmo architectures and runs the arm64 payload under qemu. The zip is pinned by digest.
+      - name: Install cosmocc and qemu-user
+        shell: bash
+        env:
+          COSMOCC_VERSION: 4.0.2
+          COSMOCC_SHA256: 85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq qemu-user
+          curl -fsSL "https://cosmo.zip/pub/cosmocc/cosmocc-${COSMOCC_VERSION}.zip" -o /tmp/cosmocc.zip
+          echo "${COSMOCC_SHA256}  /tmp/cosmocc.zip" | sha256sum -c -
+          sudo mkdir -p /opt/cosmocc
+          sudo unzip -q /tmp/cosmocc.zip -d /opt/cosmocc
+
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 45

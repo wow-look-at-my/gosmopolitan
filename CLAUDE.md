@@ -143,6 +143,8 @@ The resulting `.com` file runs on Linux, macOS, and Windows. The cosmo amd64 ima
 
 Per-platform runtime status, and what is still missing on each: docs/PLATFORM-STATUS.md. What is still stubbed or unverified: docs/STUBS-INVENTORY.md.
 
+- docs/CGO.md -- cgo on cosmo: per-arch cosmocc compilers, the libcosmo link, shared thread state, gaps.
+
 **Nothing has ever executed on macOS Intel.** There is no Intel-mac runner, so do not claim that port works. It is absent from the default GOCOSMOPLATFORMS set for that reason.
 
 **Variadic libc calls must pass their variadic arguments on the STACK.** arm64-apple diverges from AAPCS64 here, so a variadic callee handed its argument in. Use `runtime.cosmoLibcCallVariadic1` / `darwin_call_v3` for fcntl, open/openat with a mode, and ioctl. Never `cosmoLibcCall6` or `darwin_call`. The runtimeprobe `cloexec` check gates it.
