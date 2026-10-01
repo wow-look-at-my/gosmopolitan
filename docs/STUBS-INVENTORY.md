@@ -22,6 +22,7 @@ These pretend to succeed while doing nothing, so a caller cannot tell the operat
 | 3 | `internal/poll/sendfile_unix.go` | Carried no cosmo build tag, so `io.Copy` from a file to a socket never reached the syscall on any cosmo host. Fixed on this branch, unconfirmed: `net` and `internal/poll` carry the tag, `ntEmuSendfile` serves NT, and the runtimeprobe `sendfile` check is now hard on Windows. |
 | 4 | `src/syscall/bigbuf_cosmo.go` (`uname` on macOS) | golang.org/x/sys/unix.Uname issues `RawSyscall(SYS_UNAME)` with a Linux `Utsname`, and the emulation answers EINVAL: it accepts only the Apple buffer `syscall.Uname` allocates. Statfs has the conversion in `Syscall`; `RawSyscall` cannot allocate, because a forked child runs it. |
 | 5 | `src/syscall/bigbuf_cosmo.go` (statfs on macOS-Intel) | `cosmo.Darwin()` is set only on the arm64 XNU path, so on macOS-Intel the statfs conversion never runs and the amd64 size guard answers EINVAL to every statfs and fstatfs. |
+| 6 | `src/runtime/os_cosmo_nt_sys.go` (`open`, `access`, `unlink`, `rmdir`, `mkdir`, `rename`, and fcntl record locks on NT) | The legacy path calls and `F_GETLK`/`F_SETLK`/`F_SETLKW` answered ENOSYS on NT, so SQLite could not open a database there. Fixed on this branch, unconfirmed: each legacy call is its `*at` twin with `AT_FDCWD`, and `os_cosmo_nt_lock.go` serves POSIX record locks over `LockFileEx` per file identity. `TestSQLiteProbe` runs on the windows test leg; under Wine the probe prints `ok all`. |
 
 ## 3. Unverified paths
 

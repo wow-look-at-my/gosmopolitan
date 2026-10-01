@@ -329,6 +329,18 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 		return ntEmuWritev(int32(a1), (*ntLinuxIovec)(unsafe.Pointer(a2)), int32(a3))
 	case ntSysOpenat:
 		return ntEmuOpenat(int32(a1), (*byte)(unsafe.Pointer(a2)), int32(a3), uint32(a4))
+	case ntSysOpen:
+		return ntEmuOpenat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)), int32(a2), uint32(a3))
+	case ntSysAccess:
+		return ntEmuFaccessat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)), uint32(a2))
+	case ntSysUnlink:
+		return ntEmuUnlinkat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)), 0)
+	case ntSysRmdir:
+		return ntEmuUnlinkat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)), _NT_AT_REMOVEDIR)
+	case ntSysMkdir:
+		return ntEmuMkdirat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)))
+	case ntSysRename:
+		return ntEmuRenameat(_NT_AT_FDCWD, (*byte)(unsafe.Pointer(a1)), _NT_AT_FDCWD, (*byte)(unsafe.Pointer(a2)))
 	case ntSysClose:
 		return ntEmuClose(int32(a1))
 	case ntSysStat:
@@ -406,6 +418,9 @@ func ntSyscallEmulate(num, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2, errno uintpt
 	case ntSysFchmodat:
 		return ntEmuFchmodat(int32(a1), (*byte)(unsafe.Pointer(a2)), uint32(a3))
 	case ntSysFcntl:
+		if cmd := int32(a2); cmd == ntFGetlk || cmd == ntFSetlk || cmd == ntFSetlkw {
+			return ntEmuFcntlLock(int32(a1), cmd, (*ntLinuxFlock)(unsafe.Pointer(a3)))
+		}
 		ret, eno := ntFcntl(int32(a1), int32(a2), int32(a3))
 		if eno != 0 {
 			return ntFail3(uintptr(eno))
@@ -750,6 +765,9 @@ func ntEmuClose(fd int32) (r1, r2, errno uintptr) {
 		// winsock provider state behind the SOCKET.
 		ntcall(ntWSACloseSocketFn, h, 0, 0, 0, 0, 0)
 		return 0, 0, 0
+	}
+	if kind == ntFDFile {
+		ntLockClose(h)
 	}
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	return 0, 0, 0
