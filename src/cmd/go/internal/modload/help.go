@@ -21,15 +21,15 @@ https://go.dev/doc/tutorial/create-module.
 
 For a detailed reference on modules, see https://go.dev/ref/mod.
 
-By default, the go command may download modules from https://proxy.golang.org.
-It may authenticate modules using the checksum database at
-https://sum.golang.org. Both services are operated by the Go team at Google.
-The privacy policies for these services are available at
+The go command downloads modules from https://proxy.golang.org and falls back
+to the origin repository. It authenticates modules using the checksum database
+at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this toolchain.
+Both services are operated by the Go team at Google. The privacy policies for these services are available at
 https://proxy.golang.org/privacy and https://sum.golang.org/privacy,
 respectively.
 
-The go command's download behavior may be configured using GOPROXY, GOSUMDB,
-GOPRIVATE, and other environment variables. See 'go help environment'
+The go command's download behavior may be configured using GOPRIVATE,
+GONOPROXY, GONOSUMDB and other environment variables. See 'go help environment'
 and https://go.dev/ref/mod#private-module-privacy for more information.
 	`,
 }

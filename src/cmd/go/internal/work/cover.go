@@ -24,7 +24,7 @@ import (
 // as part of the execution of action 'a'.
 func (b *Builder) CovData(a *Action, cmdargs ...any) ([]byte, error) {
 	cmdline := str.StringList(cmdargs...)
-	args := append([]string{}, cfg.BuildToolexec...)
+	var args []string
 	// The go command starts covdata, as upstream does; with no GOROOT tree the
 	// go command is this executable.
 	goCmd := []string{filepath.Join(cfg.GOROOTbin, "go"+cfg.ToolExeSuffix())}

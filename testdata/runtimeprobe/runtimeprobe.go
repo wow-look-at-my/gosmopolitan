@@ -168,6 +168,8 @@ func main() {
 	// crash at the segv check, and this order maximizes the coverage
 	// that still prints before that crash.
 	timed("exec", checkExec)
+	timed("minimalenv", checkMinimalEnv)
+	timed("spawnchdir", checkSpawnAfterChdir)
 	timed("lookpath", checkLookPath)
 	timed("fdpass", checkFdpass)
 	// Deliberately adjacent to the other exec checks: this one is the
@@ -600,6 +602,13 @@ func selfCommand(name, childMode string) (cmd *exec.Cmd, direct bool, bad bool) 
 		fail(name, "os.Executable: %v", err)
 		return nil, false, true
 	}
+	return commandForExe(name, exe, childMode)
+}
+
+// commandForExe is selfCommand over an explicit path, so a caller can run
+// a COPY of this binary rather than the original. What decides how to
+// launch it is what that file starts with, which a copy carries too.
+func commandForExe(name, exe, childMode string) (cmd *exec.Cmd, direct bool, bad bool) {
 	f, err := os.Open(exe)
 	if err != nil {
 		fail(name, "open %q: %v", exe, err)
@@ -684,6 +693,225 @@ func checkExec() {
 		fail("execchild", "child output %q, want child-ok prefix", out)
 	default:
 		ok("execchild")
+	}
+}
+
+// loaderEnvKeys names the variables a Windows image loader reads to start
+// a process. Upstream go.dev/issue/25210 is the record of what their
+// absence does: the child dies at load time with STATUS_DLL_NOT_FOUND,
+// which is exit status 0xc0000135, and it prints nothing.
+var loaderEnvKeys = []string{"SystemRoot", "windir", "ComSpec", "PATHEXT"}
+
+// envKeyIs reports whether entry is a binding of key. An NT host folds
+// case in an environment lookup, so the comparison folds too.
+func envKeyIs(entry, key string) bool {
+	name, _, found := strings.Cut(entry, "=")
+	return found && strings.EqualFold(name, key)
+}
+
+// envWithout answers this process's environment less the named keys.
+func envWithout(keys ...string) []string {
+	var kept []string
+	for _, entry := range os.Environ() {
+		drop := false
+		for _, key := range keys {
+			if envKeyIs(entry, key) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+// envOnly answers the bindings of the named keys, in this process's
+// environment, and nothing else.
+func envOnly(keys ...string) []string {
+	var kept []string
+	for _, entry := range os.Environ() {
+		for _, key := range keys {
+			if envKeyIs(entry, key) {
+				kept = append(kept, entry)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+// checkMinimalEnv starts this binary again under environments that a test
+// harness builds, and asserts the child still runs.
+//
+// A suite strips the environment often. cmd/go's script tests replace PATH
+// outright, and net/http/cgi hands its child the loader keys plus a PATH of
+// its own. A binary that needs any other variable to START fails every one
+// of those tests, several packages deep, and the failure names no variable.
+//
+// The cases separate the two readings of such a failure. `nopath` keeps the
+// loader keys and drops PATH. `loader` keeps the loader keys alone. A child
+// that runs under `nopath` and dies under `loader` needs something the
+// second case dropped. A child that dies under both needs PATH itself,
+// which an APE must not: what it imports comes from the system directory on
+// every host.
+func checkMinimalEnv() {
+	// A copy in another directory, started with a relative PATH, is what
+	// os/exec's own TestCommand does, and what fails there. The cases below
+	// separate the copy from the directory and from the PATH.
+	dir, err := os.MkdirTemp("", "rp-minimalenv")
+	if err != nil {
+		fail("minimalenv", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	exe, err := os.Executable()
+	if err != nil {
+		fail("minimalenv", "os.Executable: %v", err)
+		return
+	}
+	copied := filepath.Join(dir, "copy"+filepath.Ext(exe))
+	if _, bad := copySelf("minimalenv", copied, os.Getenv("OS") == "Windows_NT"); bad {
+		return
+	}
+	dotPath := append(envOnly(loaderEnvKeys...), "PATH=.")
+	cases := []struct {
+		name string
+		exe  string
+		dir  string
+		env  []string
+	}{
+		{"full", "", "", os.Environ()},
+		{"nopath", "", "", envWithout("PATH")},
+		{"loader", "", "", envOnly(loaderEnvKeys...)},
+		{"copy", copied, "", os.Environ()},
+		{"copydir", copied, dir, os.Environ()},
+		{"copydot", copied, dir, dotPath},
+		{"selfdot", "", dir, dotPath},
+	}
+	for _, probe := range cases {
+		var cmd *exec.Cmd
+		var direct, bad bool
+		if probe.exe == "" {
+			cmd, direct, bad = selfCommand("minimalenv", "1")
+		} else {
+			cmd, direct, bad = commandForExe("minimalenv", probe.exe, "1")
+		}
+		if bad {
+			return
+		}
+		cmd.Dir = probe.dir
+		cmd.Env = append(probe.env, "RUNTIMEPROBE_CHILD=1")
+		var stdout, stderrBuf strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderrBuf
+		if err := cmd.Start(); err != nil {
+			fail("minimalenv", "%s: start self (direct=%v): %v", probe.name, direct, err)
+			continue
+		}
+		waitErr, completed := waitBounded("minimalenv", cmd)
+		if !completed {
+			return
+		}
+		out := stdout.String()
+		switch {
+		case waitErr != nil:
+			detail := ""
+			if stderrBuf.Len() > 0 {
+				detail = fmt.Sprintf(" (stderr: %q)", stderrBuf.String())
+			}
+			fail("minimalenv", "%s: run self under %d vars: %v%s", probe.name, len(probe.env), waitErr, detail)
+		case !strings.HasPrefix(out, "child-ok"):
+			fail("minimalenv", "%s: child output %q, want child-ok prefix", probe.name, out)
+		default:
+			ok("minimalenv/" + probe.name)
+		}
+	}
+}
+
+// checkSpawnAfterChdir starts a copy of this binary from a process that
+// has changed ITS OWN working directory and ITS OWN PATH first.
+//
+// That is the one thing os/exec's TestCommand does that checkMinimalEnv
+// does not. The cases there pass on an NT runner, copy and dot PATH
+// included, while every TestCommand case that starts a program exits
+// 0xc0000135. What is left between them is the state of the parent: the
+// test calls t.Chdir and t.Setenv, and both reach this process rather
+// than the child's ProcAttr.
+func checkSpawnAfterChdir() {
+	root, err := os.MkdirTemp("", "rp-chdir")
+	if err != nil {
+		fail("spawnchdir", "MkdirTemp: %v", err)
+		return
+	}
+	defer os.RemoveAll(root)
+	inner := filepath.Join(root, "p1")
+	if err := os.Mkdir(inner, 0o777); err != nil {
+		fail("spawnchdir", "Mkdir: %v", err)
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fail("spawnchdir", "os.Executable: %v", err)
+		return
+	}
+	copied := filepath.Join(inner, "copy"+filepath.Ext(exe))
+	if _, bad := copySelf("spawnchdir", copied, os.Getenv("OS") == "Windows_NT"); bad {
+		return
+	}
+
+	wasDir, err := os.Getwd()
+	if err != nil {
+		fail("spawnchdir", "Getwd: %v", err)
+		return
+	}
+	wasPath, hadPath := os.LookupEnv("PATH")
+	if err := os.Chdir(root); err != nil {
+		fail("spawnchdir", "Chdir %q: %v", root, err)
+		return
+	}
+	defer os.Chdir(wasDir)
+	if err := os.Setenv("PATH", "."); err != nil {
+		fail("spawnchdir", "Setenv PATH: %v", err)
+		return
+	}
+	defer func() {
+		if hadPath {
+			os.Setenv("PATH", wasPath)
+			return
+		}
+		os.Unsetenv("PATH")
+	}()
+
+	cmd, direct, bad := commandForExe("spawnchdir", copied, "1")
+	if bad {
+		return
+	}
+	cmd.Dir = inner
+	var stdout, stderrBuf strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Start(); err != nil {
+		fail("spawnchdir", "start (direct=%v): %v", direct, err)
+		return
+	}
+	waitErr, completed := waitBounded("spawnchdir", cmd)
+	if !completed {
+		return
+	}
+	out := stdout.String()
+	switch {
+	case waitErr != nil:
+		detail := ""
+		if stderrBuf.Len() > 0 {
+			detail = fmt.Sprintf(" (stderr: %q)", stderrBuf.String())
+		}
+		fail("spawnchdir", "run the copy: %v%s", waitErr, detail)
+	case !strings.HasPrefix(out, "child-ok"):
+		fail("spawnchdir", "child output %q, want child-ok prefix", out)
+	default:
+		ok("spawnchdir")
 	}
 }
 

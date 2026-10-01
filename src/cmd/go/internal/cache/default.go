@@ -49,30 +49,15 @@ func initDefaultCache() Cache {
 		os.WriteFile(filepath.Join(dir, "README"), []byte(cacheREADME), 0666)
 	}
 
-	diskCache, err := Open(dir)
+	// One cache for the whole build. The first go command opens the directory,
+	// puts the store under it and serves both to the ones it starts. Every
+	// other go command asks that one: no directory of its own, no key index of
+	// its own, no connection of its own.
+	cache, err := openCache(dir)
 	if err != nil {
 		base.Fatalf("failed to initialize build cache at %s: %s\n", dir, err)
 	}
-
-	if err := validateCIShared(); err != nil {
-		base.Fatalf("%v", err)
-	}
-
-	return chooseCache(diskCache)
-}
-
-// chooseCache layers the shared tier over disk, and that is the whole choice.
-// GOCACHEPROG is gone: the shared cache client is linked into cmd/go and
-// speaks HTTP directly, so there is no subprocess protocol left to name a
-// program for. The program boundary cost a fork, a pipe, and a materialized
-// copy of every hit, because GOCACHEPROG answers with a path rather than
-// bytes -- the in-process client hands the compiler the bytes and stores them
-// itself.
-func chooseCache(disk *DiskCache) Cache {
-	if shared := newSharedCache(disk); shared != nil {
-		return shared
-	}
-	return disk
+	return cache
 }
 
 var (

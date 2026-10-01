@@ -1,8 +1,9 @@
 # For issue #66403, go list -u -m all should not fail if a module
 # with retractions has a newer version.
 
-env TESTGO_VERSION=go1.21
-env TESTGO_VERSION_SWITCH=switch
+# Running go1.22 loads the main module and v1.0.0. The newer v1.2.0 needs
+# go 1.23, which is the case this covers.
+env TESTGO_VERSION=go1.22
 go list -u -m example.com/retract/newergoversion
 stdout 'example.com/retract/newergoversion v1.0.0'
 ! stdout 'v1.2.0'

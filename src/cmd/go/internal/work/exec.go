@@ -318,6 +318,40 @@ func (b *Builder) Do(ctx context.Context, root *Action) {
 	writeActionGraph()
 }
 
+// packageOriginKey returns the action-ID lines naming where a package was
+// built from. A compiled object can embed that directory, so a tree at
+// another path must not reuse an entry keyed without it.
+func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
+	if trimpath {
+		// With -trimpath a package from the module cache reports the module
+		// path and version in place of the directory.
+		if pkg.Module != nil {
+			return fmt.Sprintf("module %s@%s\n", pkg.Module.Path, pkg.Module.Version)
+		}
+		return ""
+	}
+
+	if pkg.Goroot {
+		// The Go compiler always hides the exact value of $GOROOT when it
+		// builds something in GOROOT. The C compiler does not, so ccompile
+		// passes -ffile-prefix-map for a GOROOT package, which rewrites the
+		// path as though -trimpath were set. Neither leaves a directory in
+		// the output, so GOROOT itself stays out of the key. The cgo files
+		// kept for vet are the exception: see objdirKey.
+		return ""
+	}
+
+	if strings.HasPrefix(pkg.Dir, workDir) {
+		// workDir is always either trimmed or rewritten to the literal
+		// string "/tmp/go-build".
+		return ""
+	}
+
+	// No rewrite rule applies, so the object file can name the absolute
+	// directory holding the package.
+	return fmt.Sprintf("dir %s\n", pkg.Dir)
+}
+
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	// Hashing every input of a package is not free, and it is work no other
@@ -338,33 +372,7 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 	// Include information about the origin of the package that
 	// may be embedded in the debug info for the object file.
-	if cfg.BuildTrimpath {
-		// When -trimpath is used with a package built from the module cache,
-		// its debug information refers to the module path and version
-		// instead of the directory.
-		if p.Module != nil {
-			fmt.Fprintf(h, "module %s@%s\n", p.Module.Path, p.Module.Version)
-		}
-	} else if p.Goroot {
-		// The Go compiler always hides the exact value of $GOROOT
-		// when building things in GOROOT.
-		//
-		// The C compiler does not, but for packages in GOROOT we rewrite the path
-		// as though -trimpath were set. This used to be so that we did not invalidate
-		// the build cache (and especially precompiled archive files) when changing
-		// GOROOT_FINAL, but we no longer ship precompiled archive files as of Go 1.20
-		// (https://go.dev/issue/47257) and no longer support GOROOT_FINAL
-		// (https://go.dev/issue/62047).
-		// TODO(bcmills): Figure out whether this behavior is still useful.
-		//
-		// b.WorkDir is always either trimmed or rewritten to
-		// the literal string "/tmp/go-build".
-	} else if !strings.HasPrefix(p.Dir, b.WorkDir) {
-		// -trimpath is not set and no other rewrite rules apply,
-		// so the object file may refer to the absolute directory
-		// containing the package.
-		fmt.Fprintf(h, "dir %s\n", p.Dir)
-	}
+	fmt.Fprint(h, packageOriginKey(p, cfg.BuildTrimpath, b.WorkDir))
 
 	if p.Module != nil {
 		fmt.Fprintf(h, "go %s\n", p.Module.GoVersion)
@@ -1166,12 +1174,12 @@ func (b *Builder) cacheObjdirFile(a *Action, c cache.Cache, name string) error {
 		return err
 	}
 	defer f.Close()
-	_, _, err = c.Put(cache.Subkey(a.actionID, name), f)
+	_, _, err = c.Put(cache.Subkey(objdirKey(a), name), f)
 	return err
 }
 
 func (b *Builder) findCachedObjdirFile(a *Action, c cache.Cache, name string) (string, error) {
-	file, _, err := cache.GetFile(c, cache.Subkey(a.actionID, name))
+	file, _, err := cache.GetFile(c, cache.Subkey(objdirKey(a), name))
 	if err != nil {
 		return "", fmt.Errorf("loading cached file %s: %w", name, err)
 	}
@@ -1196,6 +1204,16 @@ func (b *Builder) loadCachedCgoHdr(a *Action) error {
 	return b.loadCachedObjdirFile(a, c, "_cgo_install.h")
 }
 
+// objdirKey returns the key for the files a keeps from its object directory.
+func objdirKey(a *Action) cache.ActionID {
+	pkg := a.Package
+	// cgo writes the package directory into a //line, and vet opens that path.
+	if pkg != nil && pkg.Goroot && !cfg.BuildTrimpath && len(pkg.CgoFiles)+len(pkg.SwigFiles)+len(pkg.SwigCXXFiles) > 0 {
+		return cache.Subkey(a.actionID, "cgo dir "+pkg.Dir)
+	}
+	return a.actionID
+}
+
 func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 	c := a.cache()
 	var buf bytes.Buffer
@@ -1214,12 +1232,12 @@ func (b *Builder) cacheSrcFiles(a *Action, srcfiles []string) {
 			return
 		}
 	}
-	cache.PutBytes(c, cache.Subkey(a.actionID, "srcfiles"), buf.Bytes())
+	cache.PutBytes(c, cache.Subkey(objdirKey(a), "srcfiles"), buf.Bytes())
 }
 
 func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1243,7 +1261,7 @@ func (b *Builder) loadCachedVet(a *Action, vetDeps []*Action) error {
 
 func (b *Builder) loadCachedCompiledGoFiles(a *Action) error {
 	c := a.cache()
-	list, _, err := cache.GetBytes(c, cache.Subkey(a.actionID, "srcfiles"))
+	list, _, err := cache.GetBytes(c, cache.Subkey(objdirKey(a), "srcfiles"))
 	if err != nil {
 		return fmt.Errorf("reading srcfiles list: %w", err)
 	}
@@ -1384,6 +1402,34 @@ func buildVetConfig(a *Action, srcfiles []string, vetDeps []*Action) {
 		if p1.Standard {
 			vcfg.Standard[p1.ImportPath] = true
 		}
+	}
+	addEmbeddedStdVetFiles(vcfg)
+}
+
+// addEmbeddedStdVetFiles gives vet an archive for each embedded standard
+// package it has none for.
+//
+// A go command carrying its standard library compiles nothing for one, so no
+// action reports a built file and the loop above records none. Nothing vets a
+// package with no source either, so no vetx file names it. The vet tool then
+// has neither the types nor the facts for an import every program makes, and
+// reports the package it cannot import rather than anything about the code.
+func addEmbeddedStdVetFiles(vcfg *vetConfig) {
+	if !cfg.EmbeddedStd {
+		return
+	}
+	for _, path := range vcfg.ImportMap {
+		if vcfg.PackageFile[path] != "" {
+			continue
+		}
+		// unsafe and builtin declare no archive, and neither does a package of
+		// cmd. vet reads a file for what has one and the tree for the rest.
+		pkg := cfg.EmbeddedStdArchived(path)
+		if pkg == nil {
+			continue
+		}
+		vcfg.PackageFile[path] = embeddedStdFile(path, pkg)
+		vcfg.Standard[path] = true
 	}
 }
 
@@ -1542,6 +1588,13 @@ func (b *Builder) vet(ctx context.Context, a *Action) error {
 			}
 			defer f.Close() // ignore error (can't fail)
 			stdout = f
+		} else {
+			// Every run stores this entry, empty or not, so one that will not
+			// open is one the cache lost and not a tool that found nothing to
+			// say. Reading it is part of the transaction above: a hit that
+			// commits without it reports a clean package, and the findings the
+			// run did make are gone with no sign that they ever existed.
+			goto cachemiss
 		}
 
 		// Cache hit: commit transaction.
@@ -1576,7 +1629,7 @@ cachemiss:
 		panic("VetTool unset")
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, env, cfg.BuildToolexec, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, env, tool, vetFlags, a.Objdir+"vet.cfg"); err != nil {
 		return err
 	}
 
@@ -1599,7 +1652,9 @@ cachemiss:
 		}
 	}
 
-	// Save stdout.
+	// Save stdout. A tool that found nothing to say writes no file, and the
+	// entry goes in empty for it, so a later load can tell that apart from an
+	// entry the cache lost and refuse a hit it cannot reproduce whole.
 	if f, err := os.Open(vcfg.Stdout); err == nil {
 		defer f.Close() // ignore error
 		if err := VetHandleStdout(f); err != nil {
@@ -1607,6 +1662,8 @@ cachemiss:
 		}
 		f.Seek(0, io.SeekStart)     // ignore error
 		a.cache().Put(stdoutKey, f) // ignore error
+	} else {
+		cache.PutBytes(a.cache(), stdoutKey, nil) // ignore error
 	}
 
 	return nil
@@ -1662,6 +1719,11 @@ func (b *Builder) linkActionID(a *Action) cache.ActionID {
 				fmt.Fprintf(h, "packageshlib %s=%s\n", p1.ImportPath, contentID(b.buildID(p1.Shlib)))
 			}
 		}
+	}
+
+	// ld stamps these IDs into the binary, so they are an input of the link.
+	if ids := linkedToolIDs(a); ids != "" {
+		fmt.Fprintf(h, "linkedtools %s\n", ids)
 	}
 
 	return h.Sum()
@@ -2218,8 +2280,7 @@ func (b *Builder) cover(a *Action, infiles, outfiles []string, varName string, m
 		"-outfilelist", covoutputs,
 	)
 	args = append(args, infiles...)
-	if err := b.Shell(a).run(a.Objdir, "", nil,
-		cfg.BuildToolexec, args); err != nil {
+	if err := b.Shell(a).run(a.Objdir, "", nil, args); err != nil {
 		return nil, err
 	}
 	return outfiles, nil
@@ -3198,7 +3259,7 @@ func (b *Builder) runCgo(ctx context.Context, a *Action) error {
 		cgoflags = append(cgoflags, "-trimpath", strings.Join(trimpath, ";"))
 	}
 
-	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cfg.BuildToolexec, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
+	if err := sh.run(p.Dir, p.ImportPath, cgoenv, cgoExe, "-objdir", objdir, "-importpath", p.ImportPath, cgoflags, ldflagsOption, "--", cgoCPPFLAGS, cgoCFLAGS, cgofiles); err != nil {
 		return err
 	}
 
@@ -3447,7 +3508,7 @@ func (b *Builder) dynimport(a *Action, objdir, importGo string, cgoExe, cflags, 
 	if p.Standard && p.ImportPath == "runtime/cgo" {
 		cgoflags = []string{"-dynlinker"} // record path to dynamic linker
 	}
-	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cfg.BuildToolexec, cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
+	err = sh.run(base.Cwd(), p.ImportPath, b.cCompilerEnv(), cgoExe, "-dynpackage", p.Name, "-dynimport", dynobj, "-dynout", importGo, cgoflags)
 	if err != nil {
 		return "", "", err
 	}
@@ -3765,7 +3826,8 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 
 	// If we're not approaching 32KB of args, just pass args normally.
 	// (use 30KB instead to be conservative; not sure how accounting is done)
-	if !useResponseFile(cmd.Path, argLen) {
+	prog, toolArgs := responseFileTool(cmd.Args)
+	if !useResponseFile(prog, argLen) {
 		return
 	}
 
@@ -3775,7 +3837,7 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 	}
 	cleanup = func() { os.Remove(tf.Name()) }
 	var buf bytes.Buffer
-	for _, arg := range cmd.Args[1:] {
+	for _, arg := range cmd.Args[toolArgs:] {
 		fmt.Fprintf(&buf, "%s\n", encodeArg(arg))
 	}
 	if _, err := tf.Write(buf.Bytes()); err != nil {
@@ -3787,15 +3849,26 @@ func passLongArgsInResponseFiles(cmd *exec.Cmd) (cleanup func()) {
 		cleanup()
 		log.Fatalf("error writing long arguments to response file: %v", err)
 	}
-	cmd.Args = []string{cmd.Args[0], "@" + tf.Name()}
+	cmd.Args = append(cmd.Args[:toolArgs:toolArgs], "@"+tf.Name())
 	return cleanup
 }
 
-func useResponseFile(path string, argLen int) bool {
+// responseFileTool reports which tool a command line runs, and where that
+// tool's own arguments start. A tool linked into the go command runs as
+// "<go> tool <name>", so the program name is the go command and the first
+// two arguments select the tool. Every other command line names its program
+// directly and its arguments follow it.
+func responseFileTool(args []string) (prog string, toolArgs int) {
+	if len(args) >= 3 && args[1] == "tool" && base.Linked(args[2]) {
+		return args[2], 3
+	}
+	return strings.TrimSuffix(filepath.Base(args[0]), ".exe"), 1
+}
+
+func useResponseFile(prog string, argLen int) bool {
 	// Unless the program uses objabi.Flagparse, which understands
 	// response files, don't use response files.
 	// TODO: Note that other toolchains like CC are missing here for now.
-	prog := strings.TrimSuffix(filepath.Base(path), ".exe")
 	switch prog {
 	case "compile", "link", "cgo", "asm", "cover", "pack":
 	default:

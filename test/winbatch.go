@@ -39,6 +39,14 @@ func main() {
 			// Skip it to avoid false positives. (Also see golang.org/issue/37929.)
 			return filepath.SkipDir
 		}
+		if d.IsDir() && path != runtime.GOROOT() && isNestedRepo(path) {
+			// Every vendor path here is a git submodule, checked out whole.
+			// A file under one belongs to that project, which maintains it
+			// and decides its line endings. This rule governs what this
+			// repository checks in. A submodule working tree carries a .git
+			// entry, and that entry is the boundary.
+			return filepath.SkipDir
+		}
 		if filepath.Ext(d.Name()) == ".bat" {
 			enforceBatchStrictCRLF(path)
 		}
@@ -47,6 +55,14 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
+}
+
+// isNestedRepo reports whether dir is the root of another git repository.
+// A submodule working tree holds a .git file that names the real git
+// directory. A plain clone holds a .git directory.
+func isNestedRepo(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 func enforceBatchStrictCRLF(path string) {

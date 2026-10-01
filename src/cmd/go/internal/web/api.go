@@ -183,7 +183,20 @@ func (r *Response) formatErrorDetail() string {
 // Get returns a non-nil error only if the request did not receive a response
 // under any applicable scheme. (A non-2xx response does not cause an error.)
 func Get(security SecurityMode, u *url.URL) (*Response, error) {
-	return get(security, u)
+	return get(security, u, nil, "")
+}
+
+// GetPinned is like Get with SecureOnly, but every hop must stay on a host
+// that allowHost accepts. The first URL counts as a hop, and so does each
+// redirect. A hop to any other host fails the request before it is sent.
+//
+// A non-empty credentialURL attaches the GOAUTH credential for that URL
+// instead of the one for u. A relay that forwards Authorization uses it.
+func GetPinned(u *url.URL, allowHost func(host string) bool, credentialURL string) (*Response, error) {
+	if !allowHost(u.Hostname()) {
+		return nil, fmt.Errorf("refusing to fetch %s: host not allowed", u.Redacted())
+	}
+	return get(SecureOnly, u, allowHost, credentialURL)
 }
 
 // OpenBrowser attempts to open the requested URL in a web browser.

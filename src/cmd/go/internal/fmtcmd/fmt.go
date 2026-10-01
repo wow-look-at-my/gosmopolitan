@@ -100,12 +100,7 @@ func runFmt(ctx context.Context, cmd *base.Command, args []string) {
 func gofmtPath() string {
 	gofmt := "gofmt" + cfg.ToolExeSuffix()
 
-	gofmtPath := filepath.Join(cfg.GOBIN, gofmt)
-	if _, err := os.Stat(gofmtPath); err == nil {
-		return gofmtPath
-	}
-
-	gofmtPath = filepath.Join(cfg.GOROOT, "bin", gofmt)
+	gofmtPath := filepath.Join(cfg.GOROOT, "bin", gofmt)
 	if _, err := os.Stat(gofmtPath); err == nil {
 		return gofmtPath
 	}

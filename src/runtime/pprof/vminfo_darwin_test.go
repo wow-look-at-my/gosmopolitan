@@ -199,5 +199,8 @@ func parseVmmap(data []byte) (hi, lo uint64, err error) {
 			grabbing = true
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return 0, 0, err
+	}
 	return 0, 0, fmt.Errorf("vmmap no text segment found")
 }

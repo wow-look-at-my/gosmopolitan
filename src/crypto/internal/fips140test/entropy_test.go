@@ -145,9 +145,14 @@ var memory entropy.ScratchBuffer
 // by SP 800-90B.
 func samplesOrTryAgain(t *testing.T, samples []uint8) {
 	t.Helper()
-	for range 10 {
+	for attempt := range 10 {
 		if err := entropy.Samples(samples, &memory); err != nil {
 			t.Logf("entropy.Samples() failed: %v", err)
+			// Ten retries land inside one millisecond. A hosted VM that stalls
+			// this process holds the timer still for longer than that, so every
+			// retry reads the same stalled window and fails the same way. The
+			// pause lets the stall pass. It costs nothing on a run that passes.
+			time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
 			continue
 		}
 		return

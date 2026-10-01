@@ -116,6 +116,14 @@ func verifyMod(ld *modload.Loader, ctx context.Context, mod module.Version) []er
 	}
 	h := string(bytes.TrimSpace(data))
 
+	if modfetch.IsGitSum(h) {
+		// A git sum names the github.com commit the files came from. That
+		// commit is the check, so the directory is not hashed against it.
+		if dirErr != nil && !errors.Is(dirErr, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("%s %s: %v", mod.Path, mod.Version, dirErr))
+		}
+		return errs
+	}
 	if zipErr != nil && errors.Is(zipErr, fs.ErrNotExist) {
 		// ok
 	} else {

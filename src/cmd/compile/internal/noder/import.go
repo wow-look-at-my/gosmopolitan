@@ -64,7 +64,7 @@ func openPackage(path string) (*bio.Reader, error) {
 		}
 
 		if base.Flag.Cfg.PackageFile != nil {
-			return bio.OpenAny(base.Flag.Cfg.PackageFile[path])
+			return openPackageFile(path)
 		}
 
 		// try .a before .o.  important for building libraries:
@@ -87,7 +87,7 @@ func openPackage(path string) (*bio.Reader, error) {
 	}
 
 	if base.Flag.Cfg.PackageFile != nil {
-		return bio.OpenAny(base.Flag.Cfg.PackageFile[path])
+		return openPackageFile(path)
 	}
 
 	for _, dir := range base.Flag.Cfg.ImportDirs {
@@ -119,6 +119,26 @@ func openPackage(path string) (*bio.Reader, error) {
 		}
 	}
 	return nil, errors.New("file not found")
+}
+
+// openPackageFile opens the archive the importcfg names for path.
+//
+// The failure says which archive it was and what happened to it. An
+// importcfg with no line for the package says that instead, because the
+// two are different mistakes and the error from a bare open names
+// neither: `invalid argument` alone tells a reader nothing about which
+// file, and an embedded archive carries no name a caller can go and look
+// at.
+func openPackageFile(path string) (*bio.Reader, error) {
+	file, named := base.Flag.Cfg.PackageFile[path]
+	if !named {
+		return nil, fmt.Errorf("the importcfg names no archive for %q", path)
+	}
+	reader, err := bio.OpenAny(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", file, err)
+	}
+	return reader, nil
 }
 
 // resolveImportPath resolves an import path as it appears in a Go

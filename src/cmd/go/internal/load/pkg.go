@@ -36,6 +36,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/fips140"
 	"cmd/go/internal/fsys"
+	"cmd/go/internal/gendep"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/imports"
 	"cmd/go/internal/modfetch"
@@ -233,7 +234,6 @@ type PackageInternal struct {
 	FuzzInstrument    bool                // package should be instrumented for fuzzing
 	Cover             CoverSetup          // coverage mode and other setup info of -cover is being applied to this package
 	OmitDebug         bool                // tell linker not to write debug information
-	GobinSubdir       bool                // install target would be subdir of GOBIN
 	InternalImportOk  bool                // this package may be imported even though it is internal
 	BuildInfo         *debug.BuildInfo    // add this info to package main
 	TestmainGo        *[]byte             // content for _testmain.go
@@ -454,6 +454,24 @@ func (p *Package) copyBuild(opts PackageOpts, pp *build.Package) {
 	p.TestEmbedPatterns = pp.TestEmbedPatterns
 	p.XTestEmbedPatterns = pp.XTestEmbedPatterns
 	p.Internal.OrigImportPath = pp.ImportPath
+	if p.Goroot && isVendoredThirdParty(p.ImportPath) {
+		// The vendor tree holds whole repositories, so it carries test files that `go mod vendor` leaves out.
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.TestGoFiles...)
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.XTestGoFiles...)
+		p.TestGoFiles, p.XTestGoFiles = nil, nil
+		p.TestImports, p.XTestImports = nil, nil
+		p.TestEmbedPatterns, p.XTestEmbedPatterns = nil, nil
+	}
+}
+
+// isVendoredThirdParty reports whether importPath names a package in the
+// vendor tree of std or cmd that no wow-look-at-my module provides.
+func isVendoredThirdParty(importPath string) bool {
+	rest, ok := strings.CutPrefix(importPath, "vendor/")
+	if !ok {
+		rest, ok = strings.CutPrefix(importPath, "cmd/vendor/")
+	}
+	return ok && !strings.HasPrefix(rest, "github.com/wow-look-at-my/")
 }
 
 // A PackageError describes an error loading information about a package.
@@ -972,10 +990,28 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						Goroot:     true,
 						Root:       cfg.GOROOT,
 					}
+					// A listing names the source files; a build reads the
+					// archive and never opens them. A reader that type checks
+					// a dependency from source, which go/packages does, has
+					// nothing for a standard package without these names, and
+					// a tree of this same toolchain holds them.
+					if cfg.CmdName == "list" {
+						if tree, err := buildContext.ImportDir(r.dir, 0); err == nil {
+							data.p.GoFiles = tree.GoFiles
+							data.p.IgnoredGoFiles = tree.IgnoredGoFiles
+						}
+					}
 					// The module loader looked for a directory; the manifest is the answer.
 					r.err = nil
 					goto Happy
 				}
+			}
+			// A dependency that generates part of its own API ships a package
+			// the compiler reads as empty. Read the generated copy instead.
+			if dir := gendep.Dir(r.dir, modroot); dir != r.dir {
+				r.dir = dir
+				data.p, data.err = buildContext.ImportDir(r.dir, buildMode)
+				goto Happy
 			}
 			if modroot != "" {
 				if rp, err := modindex.GetPackage(modroot, r.dir); err == nil {
@@ -1033,12 +1069,8 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 
 		// Set data.p.BinDir in cases where go/build.Context.Import
 		// may give us a path we don't want.
-		if !data.p.Goroot {
-			if cfg.GOBIN != "" {
-				data.p.BinDir = cfg.GOBIN
-			} else if cfg.ModulesEnabled {
-				data.p.BinDir = modload.BinDir(ld)
-			}
+		if !data.p.Goroot && cfg.ModulesEnabled {
+			data.p.BinDir = modload.BinDir(ld)
 		}
 
 		if !cfg.ModulesEnabled && data.err == nil &&
@@ -1909,13 +1941,8 @@ func (p *Package) load(ld *modload.Loader, ctx context.Context, opts PackageOpts
 			p.Internal.Build.BinDir = modload.BinDir(ld)
 		}
 		if p.Internal.Build.BinDir != "" {
-			// Install to GOBIN or bin of GOPATH entry.
+			// Install to bin of the GOPATH entry.
 			p.Target = filepath.Join(p.Internal.Build.BinDir, elem)
-			if !p.Goroot && strings.Contains(elem, string(filepath.Separator)) && cfg.GOBIN != "" {
-				// Do not create $GOBIN/goos_goarch/elem.
-				p.Target = ""
-				p.Internal.GobinSubdir = true
-			}
 		}
 		if InstallTargetDir(p) == ToTool {
 			// This is for 'go tool'.
@@ -3387,9 +3414,7 @@ func GoFilesPackage(ld *modload.Loader, ctx context.Context, opts PackageOpts, g
 	if pkg.Name == "main" {
 		exe := pkg.DefaultExecName() + cfg.ExeSuffix
 
-		if cfg.GOBIN != "" {
-			pkg.Target = filepath.Join(cfg.GOBIN, exe)
-		} else if cfg.ModulesEnabled {
+		if cfg.ModulesEnabled {
 			pkg.Target = filepath.Join(modload.BinDir(ld), exe)
 		}
 	}

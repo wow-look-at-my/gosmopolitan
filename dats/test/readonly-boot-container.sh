@@ -33,6 +33,10 @@ if ! (: > /dev/shm/canary) 2>/dev/null; then
 	exit 4
 fi
 
-out=$(PATH=/opt/nowrite APE_LOADER='' /bin/sh /opt/prog/prog.com "$@" 2>&1) || exit 5
+# RO_BOOT_SH picks the shell, as a command and its arguments.
+shell_cmd=${RO_BOOT_SH:-/bin/sh}
+shell_bin=$(command -v "${shell_cmd%% *}") || exit 2
+shell_args=${shell_cmd#"${shell_cmd%% *}"}
+out=$(PATH=/opt/nowrite APE_LOADER='' "$shell_bin" $shell_args /opt/prog/prog.com "$@" 2>&1) || exit 5
 [ -z "$(find /opt/prog -name '.ape-*')" ] || exit 6
 printf '%s' "$out"

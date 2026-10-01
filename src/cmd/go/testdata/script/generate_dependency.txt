@@ -24,14 +24,12 @@ go mod verify
 # over it. What the module's authors published is the module.
 grep 'the module published this' $GOPATH/pkg/mod/example.com/generated@v1.0.0/lang/kept.go
 
-# GOGENERATEDEPS=off reads exactly what the zip carried, so the symbol is
-# undefined. It governs the fetch, so it needs a module cache that has not
-# already completed this module.
+# No setting turns this off. A fresh module cache completes the module again,
+# and the symbol the generator writes is there.
 env GOGENERATEDEPS=off
-env GOMODCACHE=$WORK/mod-off
-! go build ./...
-stderr 'undefined: lang\.Name'
-! exists $WORK/mod-off/example.com/generated@v1.0.0/lang/lang.gen.go
+env GOMODCACHE=$WORK/mod-again
+go build ./...
+exists $WORK/mod-again/example.com/generated@v1.0.0/lang/lang.gen.go
 
 -- go.mod --
 module example.com/consumer

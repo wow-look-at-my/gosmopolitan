@@ -97,6 +97,9 @@ type modFileIndex struct {
 	replace      map[module.Version]module.Version
 	exclude      map[module.Version]bool
 	ignore       []string
+	// orgBranch maps an org module path to the branch its line names, for the
+	// lines that name one (cmd/go/internal/orgmod).
+	orgBranch map[string]string
 }
 
 type requireMeta struct {
@@ -402,8 +405,7 @@ func replacementFrom(ld *Loader, mod module.Version) (r module.Version, modroot 
 	}
 	// A replace line naming an org module records a version the same way a
 	// require line does: the token is not read, and the replacement is the head
-	// of the branch the target follows. replacementFrom is reached from the
-	// context-free mvs.Reqs interface, as rawGoModData is.
+	// of the branch the target follows. It is reached from the context-free mvs.Reqs interface.
 	if found.Version != "" && orgmod.IsOrg(found.Path) && orgResolvable() {
 		version, err := orgVersion(ld, context.TODO(), found.Path)
 		if err != nil {
@@ -463,6 +465,35 @@ func toReplaceMap(replacements []*modfile.Replace) map[module.Version]module.Ver
 	return replaceMap
 }
 
+// suffixComments returns the comments written after the code on line, which is
+// where a go.mod line records what it has to say about itself.
+func suffixComments(line *modfile.Line) []string {
+	if line == nil {
+		return nil
+	}
+	var tokens []string
+	for _, c := range line.Comment().Suffix {
+		tokens = append(tokens, c.Token)
+	}
+	return tokens
+}
+
+// addOrgBranch records that path's line names branch. Two lines naming
+// different branches for one module have no answer, since a module path resolves
+// to one version.
+func (i *modFileIndex) addOrgBranch(path, branch string) {
+	if !orgmod.IsOrg(path) {
+		return
+	}
+	if i.orgBranch == nil {
+		i.orgBranch = make(map[string]string)
+	}
+	if prev, dup := i.orgBranch[path]; dup && prev != branch {
+		base.Fatalf("go: conflicting branches named for %s: %s and %s", path, prev, branch)
+	}
+	i.orgBranch[path] = branch
+}
+
 // indexModFile rebuilds the index of modFile.
 // If modFile has been changed since it was first read,
 // modFile.Cleanup must be called before indexModFile.
@@ -489,12 +520,22 @@ func indexModFile(data []byte, modFile *modfile.File, mod module.Version, needsF
 
 	i.require = make(map[module.Version]requireMeta, len(modFile.Require))
 	for _, r := range modFile.Require {
-		// An org module's version token is inert: the module resolves to a branch
-		// head whatever the line says. Indexing the placeholder means a go.mod
-		// file that records some other token is not considered out of date, so a
-		// repository that recorded a version before this rule existed builds
-		// without being edited first.
+		// Index the placeholder, so a go.mod file with another org token is not out of date.
 		i.require[orgmod.PlaceholderModule(r.Mod)] = requireMeta{indirect: r.Indirect}
+		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
+			i.addOrgBranch(r.Mod.Path, branch)
+		}
+	}
+
+	// A replacement supplies the version that reaches the build, so a fork
+	// consumed through one names its branch there rather than on the require.
+	for _, r := range modFile.Replace {
+		if r.New.Version == "" {
+			continue
+		}
+		if branch := orgmod.Branch(suffixComments(r.Syntax)); branch != "" {
+			i.addOrgBranch(r.New.Path, branch)
+		}
 	}
 
 	i.replace = toReplaceMap(modFile.Replace)
@@ -647,7 +688,7 @@ func goModSummary(ld *Loader, m module.Version) (*modFileSummary, error) {
 	actual := resolveReplacement(ld, m)
 	if mustHaveSums(ld) && actual.Version != "" {
 		key := module.Version{Path: actual.Path, Version: actual.Version + "/go.mod"}
-		if !modfetch.HaveSum(ld.Fetcher(), key) {
+		if !modfetch.HaveSum(ld.Fetcher(), key) && !orgSyncAllows(ld, key) {
 			suggestion := fmt.Sprintf(" for go.mod file; to add it:\n\tgo mod download %s", m.Path)
 			return nil, module.VersionError(actual, &sumMissingError{suggestion: suggestion})
 		}

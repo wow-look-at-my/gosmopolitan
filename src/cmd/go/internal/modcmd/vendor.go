@@ -258,6 +258,10 @@ func moduleLine(m, r module.Version) string {
 		b.WriteString(m.Version)
 	}
 	if r.Path != "" {
+		if r.Version != "" {
+			// An org replacement records the placeholder, as go.mod does.
+			r = orgmod.PlaceholderModule(r)
+		}
 		if str.HasFilePathPrefix(filepath.Clean(r.Path), "vendor") {
 			base.Fatalf("go: replacement path %s inside vendor directory", r.Path)
 		}

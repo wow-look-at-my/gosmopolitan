@@ -3067,12 +3067,9 @@ func TestUserCacheDir(t *testing.T) {
 	}
 }
 
+// $XDG_CACHE_HOME is effective on every host here, Darwin and Windows
+// included, so this test skips nothing.
 func TestUserCacheDirXDGConfigDirEnvVar(t *testing.T) {
-	switch runtime.GOOS {
-	case "windows", "darwin", "plan9":
-		t.Skip("$XDG_CACHE_HOME is effective only on Unix systems")
-	}
-
 	wd, err := Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -3091,6 +3088,25 @@ func TestUserCacheDirXDGConfigDirEnvVar(t *testing.T) {
 	_, err = UserCacheDir()
 	if err == nil {
 		t.Fatal("UserCacheDir succeeded though $XDG_CACHE_HOME contains a relative path")
+	}
+}
+
+// Without $XDG_CACHE_HOME the directory is $HOME/.cache on every host. Upstream
+// Go answers $HOME/Library/Caches on Darwin and %LocalAppData% on Windows, and
+// one binary here serves all of those hosts.
+func TestUserCacheDirHomeCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("home", home)
+
+	dir, err := UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := home + "/.cache"; dir != want {
+		t.Fatalf("UserCacheDir returned %q; want %q", dir, want)
 	}
 }
 

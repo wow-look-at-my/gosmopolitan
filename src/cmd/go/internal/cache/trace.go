@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"cmd/go/internal/trace"
+
+	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
 // Tracing the cache.
@@ -28,20 +30,6 @@ import (
 // that would each have to grow one. Instead the caller wraps the handle once,
 // for the lane it is running on: Traced returns a Cache that records onto that
 // lane and is otherwise the cache it was handed.
-
-// tiered is implemented by a Cache whose Get can report which tier answered.
-// Without it a hit served over the network is indistinguishable from one
-// served off the local disk, which is the single most useful thing a cache
-// trace can say.
-type tiered interface {
-	getTiered(id ActionID) (entry Entry, tier string, err error)
-}
-
-// Tier names, as they appear in a trace.
-const (
-	tierDisk   = "disk"
-	tierShared = "shared"
-)
 
 // Traced returns c recording every operation onto lane. It returns c
 // unchanged when the lane records nothing, so an untraced build pays one
@@ -63,10 +51,10 @@ func (c *tracedCache) Get(id ActionID) (Entry, error) {
 	var (
 		entry Entry
 		err   error
-		tier  = tierDisk
+		tier  = cachedisk.TierDisk
 	)
-	if t, ok := c.Cache.(tiered); ok {
-		entry, tier, err = t.getTiered(id)
+	if reporter, ok := c.Cache.(cachedisk.Tiered); ok {
+		entry, tier, err = reporter.GetTiered(id)
 	} else {
 		entry, err = c.Cache.Get(id)
 	}
@@ -107,10 +95,4 @@ func putArgs(id ActionID, out OutputID, size int64, err error) map[string]any {
 		args["output"] = hex.EncodeToString(out[:])
 	}
 	return args
-}
-
-// getTiered answers for the disk cache, which is the only tier it has.
-func (c *DiskCache) getTiered(id ActionID) (Entry, string, error) {
-	entry, err := c.Get(id)
-	return entry, tierDisk, err
 }

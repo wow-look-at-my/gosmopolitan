@@ -817,7 +817,7 @@ func fetch(ld *Loader, ctx context.Context, mod module.Version) (dir string, isL
 		mod = r
 	}
 
-	if mustHaveSums(ld) && !modfetch.HaveSum(ld.Fetcher(), mod) {
+	if mustHaveSums(ld) && !modfetch.HaveSum(ld.Fetcher(), mod) && !orgSyncAllows(ld, mod) {
 		return "", false, module.VersionError(mod, &sumMissingError{})
 	}
 

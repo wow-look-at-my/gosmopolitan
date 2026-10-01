@@ -5,14 +5,20 @@ and the generator, and not the file the generator writes.
 The generator also writes over kept.go, which the zip DOES carry. The zip's
 bytes win: what the module's authors published is the module.
 
+The module is outside the org, so its go.mod asks for the directives to run.
+
 -- .mod --
 module example.com/generated
+
+//go:gendep
 
 go 1.16
 -- .info --
 {"Version": "v1.0.0"}
 -- go.mod --
 module example.com/generated
+
+//go:gendep
 
 go 1.16
 -- gen/main.go --

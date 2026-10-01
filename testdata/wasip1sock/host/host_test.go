@@ -78,16 +78,11 @@ func buildGuests() (string, error) {
 				"GOOS=wasip1",
 				"GOARCH=wasm",
 				"GOWASI="+gowasi,
-				"GOTOOLCHAIN=local",
-				// When the host Go running this test is older than
-				// this module's go directive, GOTOOLCHAIN=auto
-				// re-execs the test under a downloaded toolchain
-				// and exports that toolchain's GOROOT into our
-				// environment; goTool would then pick up the
-				// downloaded toolchain's compile/link instead of
-				// its own ("compile: version ... does not match go
-				// tool version ..."). Clear it so goTool derives
-				// GOROOT from its own location.
+				// A GOROOT inherited from the environment points at
+				// another toolchain, and goTool would then run that
+				// one's compile and link ("compile: version ... does
+				// not match go tool version ..."). Clear it so goTool
+				// derives GOROOT from its own location.
 				"GOROOT=",
 			)
 			if out, err := cmd.CombinedOutput(); err != nil {

@@ -7,8 +7,8 @@ env GO111MODULE=off
 env GOCACHE=
 env XDG_CACHE_HOME=
 env HOME=
-[GOOS:plan9] env home=
-[GOOS:windows] env LocalAppData=
+env USERPROFILE=
+env home=
 ! go build -o triv triv.go
 stderr 'build cache is required, but could not be located: GOCACHE is not defined and .*'
 

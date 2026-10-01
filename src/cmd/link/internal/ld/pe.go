@@ -1865,8 +1865,8 @@ func asmbPe(ctxt *Link) {
 	ro.checkSegment(&Segrodata)
 	pefile.rdataSect = ro
 
-	// This should have been added in Peinit and by now is part of the
-	// just-written .rdata section.
+	// Peinit adds this, and by now it is part of the just-written .rdata
+	// section.
 	s := ctxt.loader.Lookup("_load_config_used", 0)
 	if s != 0 {
 		pefile.dataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].VirtualAddress = uint32(ctxt.loader.SymValue(s) - PEBASE)
@@ -1954,4 +1954,76 @@ func peCreateExportFile(ctxt *Link, libName string) (fname string) {
 	}
 
 	return fname
+}
+
+// peClearUnusableLoadConfig zeroes the load config data directory of an image
+// when it does not describe memory the image holds.
+//
+// Windows 10 and later read that directory before they start an image, and
+// they answer one that points outside the image with ERROR_BAD_EXE_FORMAT.
+// Under -flto, GNU ld writes an address far past the end of the image and a
+// size of zero. A zeroed entry says the image carries no load config, which
+// Windows accepts, and the image starts.
+//
+// This reads the image, never the linker. A probe links a program of its own,
+// and the defect needs the whole link to appear, so only the image answers
+// for the image.
+func peClearUnusableLoadConfig(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("reading the load config of %s: %v", path, err)
+	}
+	defer file.Close()
+
+	image, err := pe.NewFile(file)
+	if err != nil {
+		// Not every head type that reaches here writes a PE this package
+		// parses, and a link that produced no image already failed.
+		return nil
+	}
+	optOffset, ok := peOptionalHeaderOffset(file)
+	if !ok {
+		return nil
+	}
+	// Where the data directory array starts inside the optional header. The
+	// two forms differ because PE32 carries one more 4-byte field.
+	var dir pe.DataDirectory
+	var imageSize, dirOffset uint32
+	const entry = 8 * uint32(pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG)
+	switch opt := image.OptionalHeader.(type) {
+	case *pe.OptionalHeader64:
+		dir = opt.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG]
+		imageSize = opt.SizeOfImage
+		dirOffset = optOffset + 112 + entry
+	case *pe.OptionalHeader32:
+		dir = opt.DataDirectory[pe.IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG]
+		imageSize = opt.SizeOfImage
+		dirOffset = optOffset + 96 + entry
+	default:
+		return nil
+	}
+	if dir.VirtualAddress == 0 {
+		return nil
+	}
+	if dir.Size != 0 && uint64(dir.VirtualAddress)+uint64(dir.Size) <= uint64(imageSize) {
+		return nil
+	}
+	if _, err := file.WriteAt(make([]byte, 8), int64(dirOffset)); err != nil {
+		return fmt.Errorf("clearing the load config of %s: %v", path, err)
+	}
+	return nil
+}
+
+// peOptionalHeaderOffset returns where the optional header starts in file,
+// and whether it found it.
+func peOptionalHeaderOffset(file *os.File) (uint32, bool) {
+	// e_lfanew sits at 0x3c of the DOS header and points at the signature.
+	// The signature and the file header follow it, each a fixed size.
+	const lfanewOffset = 0x3c
+	const sigAndFileHeader = 4 + 20
+	raw := make([]byte, 4)
+	if _, err := file.ReadAt(raw, lfanewOffset); err != nil {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint32(raw) + sigAndFileHeader, true
 }

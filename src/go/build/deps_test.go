@@ -896,9 +896,36 @@ var depsRules = `
 `
 
 // listStdPkgs returns the same list of packages as "go list std".
+// vendoredPkgs returns the packages src/vendor/modules.txt names.
+//
+// Every vendor path is a git submodule that holds its upstream's whole
+// repository, so a directory under one is not always a package this build
+// uses. x/text ships example locales and packages std never imports.
+// modules.txt is the list of what the build does use.
+func vendoredPkgs(goroot string) (map[string]bool, error) {
+	data, err := os.ReadFile(filepath.Join(goroot, "src", "vendor", "modules.txt"))
+	if err != nil {
+		return nil, err
+	}
+	pkgs := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		pkgs[line] = true
+	}
+	return pkgs, nil
+}
+
 func listStdPkgs(goroot string) ([]string, error) {
 	// Based on cmd/go's matchPackages function.
 	var pkgs []string
+
+	vendored, err := vendoredPkgs(goroot)
+	if err != nil {
+		return nil, err
+	}
 
 	src := filepath.Join(goroot, "src") + string(filepath.Separator)
 	walkFn := func(path string, d fs.DirEntry, err error) error {
@@ -916,7 +943,18 @@ func listStdPkgs(goroot string) ([]string, error) {
 			return filepath.SkipDir
 		}
 
-		pkgs = append(pkgs, strings.TrimPrefix(name, "vendor/"))
+		if pkg, under := strings.CutPrefix(name, "vendor/"); under {
+			// A directory the submodule carries but modules.txt does not
+			// name is another project's file, not a package of this build.
+			// A child of it can still be vendored, so the walk continues.
+			if !vendored[pkg] {
+				return nil
+			}
+			pkgs = append(pkgs, pkg)
+			return nil
+		}
+
+		pkgs = append(pkgs, name)
 		return nil
 	}
 	if err := filepath.WalkDir(src, walkFn); err != nil {
