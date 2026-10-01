@@ -10,6 +10,7 @@ import (
 	"go/constant"
 	. "internal/types/errors"
 	"slices"
+	"strconv"
 )
 
 func (check *Checker) declare(scope *Scope, id *syntax.Name, obj Object, pos syntax.Pos) {
@@ -149,7 +150,7 @@ func (check *Checker) objDecl(obj Object) {
 	switch obj := obj.(type) {
 	case *Const:
 		check.decl = d // new package-level const decl
-		check.constDecl(obj, d.vtyp, d.init, d.inherited)
+		check.constDecl(obj, d.vtyp, d.init, d.inherited, d.text)
 	case *Var:
 		check.decl = d // new package-level var decl
 		check.varDecl(obj, d.lhs, d.vtyp, d.init)
@@ -308,7 +309,7 @@ func firstInSrc(path []Object) int {
 	return fst
 }
 
-func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited bool) {
+func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited bool, text *syntax.BasicLit) {
 	assert(obj.typ == nil)
 
 	// use the correct value of iota and errpos
@@ -356,6 +357,18 @@ func (check *Checker) constDecl(obj *Const, typ, init syntax.Expr, inherited boo
 		check.expr(nil, &x, init)
 	}
 	check.initConst(obj, &x)
+
+	// spec: "It is a compile-time error for a name text to appear on a
+	// constant whose type is not an enumerated type." The type is settled by
+	// initConst above, so this reads it rather than the declaration.
+	// A type that is already invalid was reported where it went wrong.
+	if text != nil && isValid(obj.typ) {
+		if named := asNamed(obj.typ); named == nil || !named.enum {
+			check.errorf(text, InvalidEnum, "name text on %s, which is not an enum type", obj.typ)
+		} else if str, err := strconv.Unquote(text.Value); err == nil {
+			obj.text = str
+		}
+	}
 }
 
 func (check *Checker) varDecl(obj *Var, lhs []*Var, typ, init syntax.Expr) {
@@ -507,6 +520,38 @@ func (check *Checker) typeDecl(obj *TypeName, tdecl *syntax.TypeDecl) {
 		check.error(tdecl.Type, MisplacedTypeParam, "cannot use a type parameter as RHS in type declaration")
 		named.fromRHS = Typ[Invalid]
 	}
+
+	// spec: "Its underlying type must be an integer type." The check waits for
+	// the underlying type, which a declaration may reach only later.
+	if tdecl.Enum {
+		named.enum = true
+		check.later(func() {
+			// An already-invalid underlying type was reported where it went
+			// wrong, so it says nothing about the enum.
+			if under := named.Underlying(); under != Typ[Invalid] && !isInteger(under) {
+				check.errorf(tdecl.Type, InvalidEnum, "invalid enum type: %s is not an integer type", under)
+				return
+			}
+			check.enumStringMethod(named, obj, tdecl)
+		}).describef(obj, "enum underlying(%s)", obj.Name())
+	}
+}
+
+// enumStringMethod declares String on an enum type, so the method set carries
+// it and a value satisfies fmt.Stringer. The body is generated in the back end
+// from the constants of this type; only the declaration belongs here.
+func (check *Checker) enumStringMethod(named *Named, obj *TypeName, tdecl *syntax.TypeDecl) {
+	// spec: "Declaring String on an enumerated type explicitly is an error:
+	// the two declarations would name one method."
+	for idx := 0; idx < named.NumMethods(); idx++ {
+		if method := named.Method(idx); method.Name() == "String" {
+			check.errorf(method.Pos(), InvalidEnum, "String is declared for enum type %s, which already has one", obj.Name())
+			return
+		}
+	}
+	recv := NewVar(tdecl.Pos(), check.pkg, "", named)
+	res := NewTuple(NewVar(tdecl.Pos(), check.pkg, "", Typ[String]))
+	named.AddMethod(NewFunc(tdecl.Pos(), check.pkg, "String", NewSignatureType(recv, nil, nil, nil, res, false)))
 }
 
 func (check *Checker) collectTypeParams(dst **TypeParamList, list []*syntax.Field) {
@@ -744,6 +789,11 @@ func (check *Checker) declStmt(list []syntax.Decl) {
 				inherited = false
 			}
 
+			// spec: the name text names a single constant.
+			if s.Text != nil && len(s.NameList) > 1 {
+				check.error(s.Text, InvalidEnum, "name text on a declaration of more than one constant")
+			}
+
 			// declare all constants
 			lhs := make([]*Const, len(s.NameList))
 			values := syntax.UnpackListExpr(last.Values)
@@ -756,7 +806,7 @@ func (check *Checker) declStmt(list []syntax.Decl) {
 					init = values[i]
 				}
 
-				check.constDecl(obj, last.Type, init, inherited)
+				check.constDecl(obj, last.Type, init, inherited, s.Text)
 			}
 
 			// Constants must always have init values.

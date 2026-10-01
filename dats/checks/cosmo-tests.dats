@@ -9,17 +9,14 @@ tests:
 		stdout:
 			- "ok  \tinternal/runtime/syscall/cosmo"
 
-	- desc: the runtime's Apple ABI pins, signal tables and the NT DNS layout pin
-	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestCosmoXnuItimervalABI|TestCosmoTimevalTranslation|TestCosmoSig|TestCosmoDarwinFutexDelay|TestNTFixedInfoLayout' runtime
+	- desc: the runtime package
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 runtime
 	  outputs:
 		stdout:
 			- "ok  \truntime"
 
-	# A name list, not the whole package: syscall's suite needs a real host
-	# surface, while these are the Apple-struct conversions and the auxv shim
-	# the emulation can host-test.
-	- desc: the syscall package's Apple conversions and the auxv shim
-	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 -run 'TestDarwinStatfsToLinux|TestDarwinMntFlagsToLinux|TestDarwinUtsnameToLinux|TestLinuxStructSizes|TestOpenAuxv' syscall
+	- desc: the syscall package
+	  cmd: export PATH="$PWD/bin:$PWD/misc/cosmo:$PATH"; GOOS=cosmo go test -count=1 syscall
 	  outputs:
 		stdout:
 			- "ok  \tsyscall"

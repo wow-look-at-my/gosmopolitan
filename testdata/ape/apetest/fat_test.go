@@ -120,7 +120,7 @@ func TestFatPayloads(t *testing.T) {
 // its program headers reference. In the default and slim modes nothing
 // follows the last payload and the payloads carry no section fields, so
 // no symbol table or DWARF bytes remain anywhere in the shipped APE (they
-// live in the .dbg / .aarch64.elf sidecars instead). A GOCOSMODEBUG=compact
+// live in the .dbg sidecar instead). A GOCOSMODEBUG=compact
 // build appends per-architecture compact debug views past the last
 // payload, referenced by each payload's - and each boot header's -
 // section fields, making the assimilated binary debugger-readable on its

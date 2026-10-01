@@ -7,7 +7,7 @@ stdout '^ok\s+example.com/broken/good'
 stdout '^ok\s+example.com/broken/user'
 stdout '^FAIL\s+example.com/broken/broken \[build failed\]'
 stderr 'undefined: missing'
-stderr -count=1 'link -o'
+stderr -count=1 'link(\.exe)?"? -o'
 
 # -c writes a copy for each package whose tests compile, and none for the
 # package whose tests do not.

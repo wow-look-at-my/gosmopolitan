@@ -4,8 +4,6 @@
 
 [short] skip
 
-env GOBIN=$WORK/bin
-
 # Install a target and then do an ordinary staleness check on it.
 go install m/example
 ! stale m/example

@@ -12,9 +12,11 @@ A tool names an entry as `self:<name>`. The compiler's importcfg carries `packag
 
 ## The go command with no GOROOT
 
-The go command enters embedded mode when `GOROOT` is unset in the environment and the binary carries a blob. GOROOT then names the executable. Every std package is a leaf action that is always up to date. Its archive is the `self:` name and its build ID comes from the manifest. `go list std` answers from the manifest. A reader outside the process gets a copy in the build cache. That serves `go list -export` and the vet tool's package files.
+The go command enters embedded mode whenever the binary carries a blob. GOROOT then names the executable. Every std package is a leaf action that is always up to date. Its archive is the `self:` name and its build ID comes from the manifest. `go list std` answers from the manifest. A reader outside the process gets a copy in the build cache. That serves `go list -export` and the vet tool's package files.
 
-Not supported in this mode, and refused by name: testing or vetting a std package. A `GOROOT` tree in the environment builds from source, the way the tree always has.
+The environment does not select between the carried library and a tree. `GOROOT` from outside is ignored. A binary that ships its own standard library builds against that one. A value from outside can otherwise replace it. A go command with no blob derives its tree from its own path. See `findGOROOT` in `cmd/go/internal/cfg`.
+
+Not supported in this mode, and refused by name: testing or vetting a std package.
 
 ## Verifying it
 

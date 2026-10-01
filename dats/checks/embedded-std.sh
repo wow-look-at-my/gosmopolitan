@@ -81,7 +81,10 @@ if grep -E "compile .* -p (fmt|runtime|os) " "$work/build.log"; then
 	echo "a standard package was compiled from source" >&2
 	exit 1
 fi
-grep -q "self:std/" "$work/build.log"
+# A link served out of the build cache writes no importcfg; a link that ran names the embedded packages.
+if grep -qE "/link( |$)" "$work/build.log"; then
+	grep -q "self:std/" "$work/build.log"
+fi
 /bin/sh "$work/embedded/hello.com" one two
 
 echo "== byte for byte the source tree's build"

@@ -48,12 +48,22 @@ type DarwinUtsname struct {
 	Machine  [256]byte
 }
 
+// LinuxFlock is Linux's struct flock on amd64 and arm64, the record every
+// caller of fcntl's lock commands hands the emulation.
+type LinuxFlock struct {
+	Type   int16
+	Whence int16
+	_      [4]byte
+	Start  int64
+	Len    int64
+	Pid    int32
+	_      [4]byte
+}
+
 // DarwinFlock is Apple's struct flock. It holds the same five fields as
-// Linux's Flock_t in a different order and eight bytes less, so an fcntl
-// lock command hands this emulation a record of THIS shape and the
-// syscall package converts, the way it does for statfs and utsname.
-// Lock types differ too: Linux counts from zero, Apple starts at one and
-// puts the write lock last.
+// LinuxFlock in a different order and eight bytes less, and the emulation
+// converts between the two around the call. Lock types differ too: Linux
+// counts from zero, Apple starts at one and puts the write lock last.
 type DarwinFlock struct {
 	Start  int64
 	Len    int64
@@ -76,6 +86,8 @@ const (
 // DarwinLockType translates a Linux flock l_type to Apple's. It reports
 // false for a value Apple has no lock type for, which is the whole set
 // of reasons a record cannot be translated.
+//
+//go:nosplit
 func DarwinLockType(t int16) (int16, bool) {
 	switch t {
 	case linuxF_RDLCK:
@@ -90,6 +102,8 @@ func DarwinLockType(t int16) (int16, bool) {
 
 // LinuxLockType is the reverse. F_GETLK answers through the record, so
 // the type comes back as well as goes out.
+//
+//go:nosplit
 func LinuxLockType(t int16) (int16, bool) {
 	switch t {
 	case darwinF_RDLCK:

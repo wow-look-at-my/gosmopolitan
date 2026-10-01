@@ -241,12 +241,6 @@
 //		Instead of absolute file system paths, the recorded file names
 //		will begin either a module path@version (when using modules),
 //		or a plain import path (when using the standard library, or GOPATH).
-//	-toolexec 'cmd args'
-//		a program to use to invoke toolchain programs like vet and asm.
-//		For example, instead of running asm, the go command will run
-//		'cmd args /path/to/asm <arguments for asm>'.
-//		The TOOLEXEC_IMPORTPATH environment variable will be set,
-//		matching 'go list -f {{.ImportPath}}' for the package being built.
 //
 // The -asmflags, -gccgoflags, -gcflags, and -ldflags flags accept a
 // space-separated list of arguments to pass to an underlying tool
@@ -524,7 +518,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go fix are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go vet.
@@ -771,10 +765,9 @@
 //
 // Install compiles and installs the packages named by the import paths.
 //
-// Executables are installed in the directory named by the GOBIN environment
-// variable, which defaults to $GOPATH/bin or $HOME/go/bin if the GOPATH
+// Executables are installed in $GOPATH/bin, or $HOME/go/bin if the GOPATH
 // environment variable is not set. Executables in $GOROOT
-// are installed in $GOROOT/bin or $GOTOOLDIR instead of $GOBIN.
+// are installed in $GOROOT/bin or $GOTOOLDIR instead.
 // Cross compiled binaries are installed in $GOOS_$GOARCH subdirectories
 // of the above.
 //
@@ -1845,7 +1838,7 @@
 // For more about specifying packages, see 'go help packages'.
 //
 // The build flags supported by go vet are those that control package resolution
-// and execution, such as -C, -n, -x, -v, -tags, and -toolexec.
+// and execution, such as -C, -n, -x, -v, and -tags.
 // For more about these flags, see 'go help build'.
 //
 // See also: go fmt, go fix.
@@ -2450,8 +2443,6 @@
 //	GOAUTH
 //		Controls authentication for go-import and HTTPS module mirror interactions.
 //		See 'go help goauth'.
-//	GOBIN
-//		The directory where 'go install' will install a command.
 //	GOCACHE
 //		The directory where the go command will store cached
 //		information for reuse in future builds. Must be an absolute path.
@@ -2489,21 +2480,13 @@
 //		of module path prefixes that should always be fetched directly
 //		or that should not be compared against the checksum database.
 //		See https://go.dev/ref/mod#private-modules.
-//	GOPROXY
-//		URL of Go module proxy. See https://go.dev/ref/mod#environment-variables
-//		and https://go.dev/ref/mod#module-proxy for details.
 //	GOROOT
 //		The root of the go tree.
-//	GOSUMDB
-//		The name of checksum database to use and optionally its public key and
-//		URL. See https://go.dev/ref/mod#authenticating.
 //	GOTMPDIR
 //		Temporary directory used by the go command and testing package.
 //		Overrides the platform-specific temporary directory such as "/tmp".
 //		The go command and testing package will write temporary source files,
 //		packages, and binaries here.
-//	GOTOOLCHAIN
-//		Controls which Go toolchain is used. See https://go.dev/doc/toolchain.
 //	GOVCS
 //		Lists version control commands that may be used with matching servers.
 //		See 'go help vcs'.
@@ -2794,8 +2777,8 @@
 // # GOPATH environment variable
 //
 // The GOPATH environment variable is used to change the default
-// location to store the module cache and installed binaries, if
-// not overridden by GOMODCACHE and GOBIN respectively.
+// location to store the module cache and installed binaries.
+// GOMODCACHE overrides the module cache location.
 //
 // Most users don't need to explicitly set GOPATH.
 // If the environment variable is unset, GOPATH defaults
@@ -2809,7 +2792,7 @@
 // as the directory to store the module cache instead.
 //
 // Executables installed using 'go install' are placed in the
-// directory specified by GOPATH/bin or, if GOBIN is set, by GOBIN.
+// directory specified by GOPATH/bin.
 //
 // # GOPATH mode
 //
@@ -2851,9 +2834,7 @@
 // command with source in DIR/src/foo/quux is installed into
 // DIR/bin/quux, not DIR/bin/foo/quux. The "foo/" prefix is stripped
 // so that you can add DIR/bin to your PATH to get at the
-// installed commands. If the GOBIN environment variable is
-// set, commands are installed to the directory it names instead
-// of DIR/bin. GOBIN must be an absolute path.
+// installed commands.
 //
 // Here's an example directory layout:
 //
@@ -3162,15 +3143,15 @@
 //
 // For a detailed reference on modules, see https://go.dev/ref/mod.
 //
-// By default, the go command may download modules from https://proxy.golang.org.
-// It may authenticate modules using the checksum database at
-// https://sum.golang.org. Both services are operated by the Go team at Google.
-// The privacy policies for these services are available at
+// The go command downloads modules from https://proxy.golang.org and falls back
+// to the origin repository. It authenticates modules using the checksum database
+// at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this toolchain.
+// Both services are operated by the Go team at Google. The privacy policies for these services are available at
 // https://proxy.golang.org/privacy and https://sum.golang.org/privacy,
 // respectively.
 //
-// The go command's download behavior may be configured using GOPROXY, GOSUMDB,
-// GOPRIVATE, and other environment variables. See 'go help environment'
+// The go command's download behavior may be configured using GOPRIVATE,
+// GONOPROXY, GONOSUMDB and other environment variables. See 'go help environment'
 // and https://go.dev/ref/mod#private-module-privacy for more information.
 //
 // # Module authentication using go.sum
@@ -3179,8 +3160,8 @@
 // module cache, it computes a cryptographic hash and compares it with a known
 // value to verify the file hasn't changed since it was first downloaded. Known
 // hashes are stored in a file in the module root directory named go.sum. Hashes
-// may also be downloaded from the checksum database depending on the values of
-// GOSUMDB, GOPRIVATE, and GONOSUMDB.
+// may also be downloaded from the checksum database at sum.golang.org depending
+// on the values of GOPRIVATE and GONOSUMDB.
 //
 // For details, see https://go.dev/ref/mod#authenticating.
 //
@@ -3332,10 +3313,10 @@
 //
 // # Configuration for downloading non-public code
 //
-// The go command defaults to downloading modules from the public Go module
-// mirror at proxy.golang.org. It also defaults to validating downloaded modules,
-// regardless of source, against the public Go checksum database at sum.golang.org.
-// These defaults work well for publicly available source code.
+// The go command downloads modules from the public Go module mirror at
+// proxy.golang.org. It validates downloaded modules, regardless of source,
+// against the public Go checksum database at sum.golang.org. This toolchain
+// has no GOPROXY or GOSUMDB to replace either service.
 //
 // The GOPRIVATE environment variable controls which modules the go command
 // considers to be private (not available publicly) and should therefore not use
@@ -3353,13 +3334,6 @@
 // and GONOSUMDB environment variables accept the same kind of glob list
 // and override GOPRIVATE for the specific decision of whether to use the proxy
 // and checksum database, respectively.
-//
-// For example, if a company ran a module proxy serving private modules,
-// users would configure go using:
-//
-//	GOPRIVATE=*.corp.example.com
-//	GOPROXY=proxy.example.com
-//	GONOPROXY=none
 //
 // The GOPRIVATE variable is also used to define the "public" and "private"
 // patterns for the GOVCS variable; see 'go help vcs'. For that usage,

@@ -175,10 +175,11 @@
 // arg in CX, not R10.
 //
 // On Darwin x86_64, we use BSD syscall numbers with XNU prefix (0x2000000).
-// The 48-byte frame belongs to darwin_nanosleep, the one case here that
-// has to build a struct the caller did not pass: a timeval for select,
-// and the two timevals that measure how much of the request is left when
-// a signal cuts the sleep short. Every other path ignores it.
+// The 48-byte frame belongs to the two cases here that have to build a
+// struct the caller did not pass: darwin_nanosleep's timeval for select and
+// the two timevals that measure how much of the request is left when a
+// signal cuts the sleep short, and darwin_pselect's timeval. Every other
+// path ignores it.
 TEXT ·Syscall6<ABIInternal>(SB),NOSPLIT,$48
 	// Safety net: on NT hosts everything not routed through the
 	// WindowsFns table (syscall_cosmo_nt.go) is ENOSYS - never a raw
@@ -527,8 +528,23 @@ darwin_sigaltstack:
 	MOVL	$XNU_sigaltstack, AX
 	JMP	darwin_syscall
 
+// XNU has no pselect syscall. select takes a timeval where Linux pselect6
+// takes a timespec, so a timeout is converted into 0(SP) and select is
+// handed that. The signal mask is not applied: select has none.
 darwin_pselect:
-	// Use select instead of pselect
+	CMPQ	R8, $0
+	JEQ	darwin_pselect_call
+	MOVQ	DX, R12		// writefds, which DIVQ clobbers
+	MOVQ	0(R8), AX	// tv_sec
+	MOVQ	AX, 0(SP)
+	MOVQ	8(R8), AX	// tv_nsec
+	XORQ	DX, DX
+	MOVQ	$1000, CX
+	DIVQ	CX
+	MOVQ	AX, 8(SP)	// tv_usec
+	MOVQ	R12, DX
+	LEAQ	0(SP), R8
+darwin_pselect_call:
 	MOVL	$XNU_select, AX
 	JMP	darwin_syscall
 

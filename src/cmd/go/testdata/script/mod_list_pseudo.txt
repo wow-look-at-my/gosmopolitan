@@ -10,8 +10,8 @@ go mod download github.com/dmitshur-test/modtest5@v0.5.0-alpha
 go mod download github.com/dmitshur-test/modtest5@v0.5.0-alpha.0.20190619023908-3da23a9deb9e
 cmp $GOPATH/pkg/mod/cache/download/github.com/dmitshur-test/modtest5/@v/list $WORK/modtest5.list
 
-env GOSUMDB=off # don't verify go.mod files when loading retractions
-env GOPROXY=file:///$GOPATH/pkg/mod/cache/download
+env TESTGO_GOSUMDB=off # don't verify go.mod files when loading retractions
+env TESTGO_GOPROXY=file:///$GOPATH/pkg/mod/cache/download
 env GOPATH=$WORK/gopath2
 mkdir $GOPATH
 
@@ -21,7 +21,7 @@ stdout '^github.com/dmitshur-test/modtest5 v0.5.0-alpha 2019-06-18$'
 # If the module proxy contains only pseudo-versions, 'latest' should stat
 # the version with the most recent timestamp — not the highest semantic
 # version — and return its metadata.
-env GOPROXY=file:///$WORK/tinyproxy
+env TESTGO_GOPROXY=file:///$WORK/tinyproxy
 go list -m -f '{{.Path}} {{.Version}} {{.Time.Format "2006-01-02"}}' dmitri.shuralyov.com/test/modtest3@latest
 stdout '^dmitri.shuralyov.com/test/modtest3 v0.0.0-20181023043359-a85b471d5412 2018-10-22$'
 

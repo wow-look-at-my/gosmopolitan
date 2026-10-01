@@ -122,14 +122,9 @@ func contentID(buildID string) string {
 // package archives look stale and are rebuilt (with the fixed compiler).
 // This suggests using a content hash of the tool binary, as stored in the build ID.
 //
-// Unfortunately, we can't just open the tool binary, because the tool might be
-// invoked via a wrapper program specified by -toolexec and we don't know
-// what the wrapper program does. In particular, we want "-toolexec toolstash"
-// to continue working: it does no good if "-toolexec toolstash" is executing a
-// stashed copy of the compiler but the go command is acting as if it will run
-// the standard copy of the compiler. The solution is to ask the tool binary to tell
-// us its own build ID using the "-V=full" flag now supported by all tools.
-// Then we know we're getting the build ID of the compiler that will actually run
+// We ask the tool binary to tell us its own build ID using the "-V=full" flag
+// supported by all tools, rather than opening the binary ourselves. Then we
+// know we're getting the build ID of the compiler that will actually run
 // during the build. (How does the compiler binary know its own content hash?
 // We store it there using updateBuildID after the standard link step.)
 //
@@ -158,7 +153,7 @@ func (b *Builder) toolID(name string) string {
 			desc = strings.Join(VetTool, " ")
 		}
 
-		cmdline := str.StringList(cfg.BuildToolexec, path, "-V=full")
+		cmdline := str.StringList(path, "-V=full")
 		cmd := exec.Command(cmdline[0], cmdline[1:]...)
 		var stdout, stderr strings.Builder
 		cmd.Stdout = &stdout
@@ -253,7 +248,7 @@ func parseToolID(name string, isVetTool bool, line string) (id string, ok bool) 
 //
 // For these tools we have no -V=full option to dump the build ID,
 // but we can run the tool with -v -### to reliably get the compiler proper
-// and hash that. That will work in the presence of -toolexec.
+// and hash that.
 //
 // In order to get reproducible builds for released compilers, we
 // detect a released compiler by the absence of "experimental" in the
@@ -278,7 +273,7 @@ func (b *Builder) gccToolID(name, language string) (id, exe string, err error) {
 	// Invoke the driver with -### to see the subcommands and the
 	// version strings. Use -x to set the language. Pretend to
 	// compile an empty file on standard input.
-	cmdline := str.StringList(cfg.BuildToolexec, name, "-###", "-x", language, "-c", "-")
+	cmdline := str.StringList(name, "-###", "-x", language, "-c", "-")
 	cmd := exec.Command(cmdline[0], cmdline[1:]...)
 	// Force untranslated output so that we see the string "version".
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
@@ -671,7 +666,17 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 						showStdout(b, c, a1, "link-stdout") // link output
 					}
 				default:
-					showStdout(b, c, a, "stdout") // compile output
+					// updateBuildID stores this entry for every build it
+					// finishes, empty or not, so one that will not come back is
+					// one the cache lost. Reusing the object without it hands
+					// back a compile whose diagnostics are gone, which reads as
+					// a package that had none. Take the miss and compile, and
+					// open the buffer the miss at the end of this func opens:
+					// the action writes into it and cacheOutput demands it.
+					if err := showStdout(b, c, a, "stdout"); err != nil { // compile output
+						a.output = []byte{}
+						return false
+					}
 				}
 			}
 			a.built = file
@@ -800,6 +805,11 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 	}
 	if len(matches) == 0 {
 		// Assume the user specified -buildid= to override what we were going to choose.
+		// A package carrying no build ID cannot be validated on a hit, so
+		// only a linked binary is still cached.
+		if a.Mode == "link" {
+			return b.cacheOutput(a, target)
+		}
 		return nil
 	}
 
@@ -817,31 +827,37 @@ func (b *Builder) updateBuildID(a *Action, target string) error {
 		return err
 	}
 
-	// Cache package builds, and cache executable builds if
-	// executable caching was requested. Executables are not
-	// cached by default because they are not reused
-	// nearly as often as individual packages, and they're
-	// much larger, so the cache-footprint-to-utility ratio
-	// of executables is much lower for executables.
-	if a.Mode == "build" {
-		r, err := os.Open(target)
-		if err == nil {
-			if a.output == nil {
-				panic("internal error: a.output not set")
-			}
-			outputID, _, err := c.Put(a.actionID, r)
-			r.Close()
-			if err == nil && cfg.BuildX {
-				sh.ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
-			}
-			if b.NeedExport {
-				if err != nil {
-					return err
-				}
-				a.Package.Export = c.OutputFile(outputID)
-				a.Package.BuildID = a.buildID
-			}
+	// Cache package builds and linked binaries alike. A link is the longest
+	// action in a build of this toolchain's own binaries, and useCache reads
+	// a stored one back through the same lookup as a package.
+	if a.Mode == "build" || a.Mode == "link" {
+		return b.cacheOutput(a, target)
+	}
+	return nil
+}
+
+// cacheOutput stores the file a build or link action wrote under the
+// action's ID.
+func (b *Builder) cacheOutput(a *Action, target string) error {
+	c := a.cache()
+	r, err := os.Open(target)
+	if err != nil {
+		return nil
+	}
+	if a.output == nil {
+		panic("internal error: a.output not set")
+	}
+	outputID, _, err := c.Put(a.actionID, r)
+	r.Close()
+	if err == nil && cfg.BuildX {
+		b.Shell(a).ShowCmd("", "%s # internal", joinUnambiguously(str.StringList("cp", target, c.OutputFile(outputID))))
+	}
+	if b.NeedExport {
+		if err != nil {
+			return err
 		}
+		a.Package.Export = c.OutputFile(outputID)
+		a.Package.BuildID = a.buildID
 	}
 	return nil
 }

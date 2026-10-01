@@ -20,6 +20,7 @@
 package runtime
 
 import (
+	"internal/runtime/atomic"
 	"internal/runtime/syscall/cosmo"
 	"unsafe"
 )
@@ -375,6 +376,81 @@ func ntFiletimeToMicros(ft uint64) int64 {
 	return int64(ft / 10)
 }
 
+func ntTimeval(micros int64) ntLinuxTimeval {
+	return ntLinuxTimeval{sec: micros / 1e6, usec: micros % 1e6}
+}
+
+// NT keeps no total for reaped children, so wait4 adds each here for getrusage(RUSAGE_CHILDREN).
+var ntChildKernel, ntChildUser atomic.Int64
+
+// ntProcessMemoryCounters is PROCESS_MEMORY_COUNTERS on x64.
+type ntProcessMemoryCounters struct {
+	cb                         uint32
+	pageFaultCount             uint32
+	peakWorkingSetSize         uintptr
+	workingSetSize             uintptr
+	quotaPeakPagedPoolUsage    uintptr
+	quotaPagedPoolUsage        uintptr
+	quotaPeakNonPagedPoolUsage uintptr
+	quotaNonPagedPoolUsage     uintptr
+	pagefileUsage              uintptr
+	peakPagefileUsage          uintptr
+}
+
+// ntEmuGettimeofday ignores the timezone argument, as Linux does for every caller that passes one.
+func ntEmuGettimeofday(tv *ntLinuxTimeval) (r1, r2, errno uintptr) {
+	if tv != nil {
+		sec, nsec := walltime()
+		*tv = ntLinuxTimeval{sec: sec, usec: int64(nsec / 1000)}
+	}
+	return 0, 0, 0
+}
+
+const (
+	ntRusageSelf     = 0
+	ntRusageChildren = -1
+	ntRusageThread   = 1
+)
+
+// ntEmuGetrusage fills the times, and for the process also ru_maxrss (in KiB) and ru_minflt.
+func ntEmuGetrusage(who int32, ru *ntLinuxRusage) (r1, r2, errno uintptr) {
+	var creation, exit, kernel, user uint64
+	switch who {
+	case ntRusageSelf:
+		if r, werr := ntcallE(ntGetProcessTimesFn, ^uintptr(0),
+			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		var mem ntProcessMemoryCounters
+		mem.cb = uint32(unsafe.Sizeof(mem))
+		if r, werr := ntcallE(ntGetProcessMemInfoFn, ^uintptr(0),
+			uintptr(unsafe.Pointer(&mem)), uintptr(mem.cb), 0, 0, 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		*ru = ntLinuxRusage{}
+		ru.other[0] = int64(mem.peakWorkingSetSize / 1024)
+		ru.other[4] = int64(mem.pageFaultCount)
+	case ntRusageThread:
+		if r, werr := ntcallE(ntGetThreadTimesFn, ^uintptr(1),
+			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r == 0 {
+			return ntFail3(ntErrno(werr))
+		}
+		*ru = ntLinuxRusage{}
+	case ntRusageChildren:
+		*ru = ntLinuxRusage{}
+		ru.stime = ntTimeval(ntChildKernel.Load())
+		ru.utime = ntTimeval(ntChildUser.Load())
+		return 0, 0, 0
+	default:
+		return ntFail3(ntEINVAL)
+	}
+	ru.stime = ntTimeval(ntFiletimeToMicros(kernel))
+	ru.utime = ntTimeval(ntFiletimeToMicros(user))
+	return 0, 0, 0
+}
+
 // ntWaitStatusFromExitCode packs an NT exit code into a Linux wait
 // status word. The exit code crosses the process boundary RAW - a
 // cosmo child of a native Windows program reports exit(42) as 42 - so
@@ -447,21 +523,24 @@ func ntEmuWait4(pid int32, wstatus *int32, options int32, rusage *ntLinuxRusage)
 	if r, werr := ntcallE(ntGetExitCodeProcessFn, h, uintptr(unsafe.Pointer(&code)), 0, 0, 0, 0, 0); r == 0 {
 		return ntFail3(ntErrno(werr))
 	}
+	var creation, exit, kernel, user uint64
+	timed, _ := ntcallE(ntGetProcessTimesFn, h,
+		uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
+		uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0)
 	if rusage != nil {
 		*rusage = ntLinuxRusage{}
-		var creation, exit, kernel, user uint64
-		if r, _ := ntcallE(ntGetProcessTimesFn, h,
-			uintptr(unsafe.Pointer(&creation)), uintptr(unsafe.Pointer(&exit)),
-			uintptr(unsafe.Pointer(&kernel)), uintptr(unsafe.Pointer(&user)), 0, 0); r != 0 {
-			ku := ntFiletimeToMicros(kernel)
-			uu := ntFiletimeToMicros(user)
-			rusage.stime = ntLinuxTimeval{sec: ku / 1e6, usec: ku % 1e6}
-			rusage.utime = ntLinuxTimeval{sec: uu / 1e6, usec: uu % 1e6}
+		if timed != 0 {
+			rusage.stime = ntTimeval(ntFiletimeToMicros(kernel))
+			rusage.utime = ntTimeval(ntFiletimeToMicros(user))
 		}
 	}
 	if !ntProcRemove(uint32(pid)) {
 		// A concurrent wait4 reaped it first (and closed the handle).
 		return ntFail3(ntECHILD)
+	}
+	if timed != 0 {
+		ntChildKernel.Add(ntFiletimeToMicros(kernel))
+		ntChildUser.Add(ntFiletimeToMicros(user))
 	}
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	if wstatus != nil {

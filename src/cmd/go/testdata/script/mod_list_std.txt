@@ -1,5 +1,5 @@
 env GO111MODULE=on
-env GOPROXY=off
+env TESTGO_GOPROXY=off
 
 [!compiler:gc] skip
 [short] skip

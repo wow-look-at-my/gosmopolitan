@@ -1,7 +1,9 @@
 Written by hand.
 A module that generates part of its own API and carries no go.mod, the way
-golang.org/x/text did before it had one. The go command synthesizes its
-go.mod; the zip holds only the source.
+golang.org/x/text did before it had one. The zip holds only the source.
+
+The opt-in line lives in a module's own go.mod. This module has none, so it
+has nowhere to write one.
 
 -- .mod --
 module example.com/generatednomod

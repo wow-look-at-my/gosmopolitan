@@ -34,9 +34,13 @@ func Import(fset *token.FileSet, packages map[string]*types.Package, path, srcDi
 		if pkg = packages[id]; pkg != nil && pkg.Complete() {
 			return
 		}
+		// The sibling branch names the file it could not open. This one
+		// hands back whatever the caller's lookup said, and a lookup that
+		// answers a bare os.ErrInvalid leaves the reader the words
+		// "invalid argument" and nothing to take them to.
 		f, err := lookup(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("the lookup for %s: %w", path, err)
 		}
 		rc = f
 	} else {

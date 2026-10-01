@@ -4,11 +4,11 @@
 
 rm $GOPATH/pkg/mod/cache/download/rsc.io/quote
 go mod tidy
-! stderr 'get '$GOPROXY
+! stderr 'get '$TESTGO_GOPROXY
 
 rm $GOPATH/pkg/mod/cache/download/rsc.io/quote
 go mod tidy -x
-stderr 'get '$GOPROXY
+stderr 'get '$TESTGO_GOPROXY
 
 -- go.mod --
 module example.com/mod

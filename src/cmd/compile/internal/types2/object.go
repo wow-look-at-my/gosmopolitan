@@ -217,17 +217,23 @@ func (obj *PkgName) Imported() *Package { return obj.imported }
 // A Const represents a declared constant.
 type Const struct {
 	object
-	val constant.Value
+	val  constant.Value
+	text string // name text, or "" where the declaration supplies none
 }
 
 // NewConst returns a new constant with value val.
 // The remaining arguments set the attributes found with all Objects.
 func NewConst(pos syntax.Pos, pkg *Package, name string, typ Type, val constant.Value) *Const {
-	return &Const{object{nil, pos, pkg, name, typ, 0, nopos}, val}
+	return &Const{object{nil, pos, pkg, name, typ, 0, nopos}, val, ""}
 }
 
 // Val returns the constant's value.
 func (obj *Const) Val() constant.Value { return obj.val }
+
+// NameText returns the text an enum type prints for this constant, or "" where
+// the declaration supplies none and the identifier is printed instead. The
+// compiler reads it to build the String method.
+func (obj *Const) NameText() string { return obj.text }
 
 func (*Const) isDependency() {} // a constant may be a dependency of an initialization expression
 

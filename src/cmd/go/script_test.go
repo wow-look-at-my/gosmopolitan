@@ -235,7 +235,7 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"GOEXPERIMENT=" + os.Getenv("GOEXPERIMENT"),
 		"GOOS=" + runtime.GOOS,
 		"TESTGO_GOHOSTOS=" + goHostOS,
-		"GOPROXY=" + proxyURL,
+		"TESTGO_GOPROXY=" + proxyURL,
 		"GOPRIVATE=",
 		"GOROOT=" + testGOROOT,
 		"GOTRACEBACK=system",
@@ -246,7 +246,7 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		"TESTGO_VCSTEST_TLS_HOST=" + httpsURL.Host,
 		"TESTGO_VCSTEST_CERT=" + srvCertFile,
 		"TESTGONETWORK=panic", // cleared by the [net] condition
-		"GOSUMDB=" + testSumDBVerifierKey,
+		"TESTGO_GOSUMDB=" + testSumDBVerifierKey,
 		"TESTGO_SUMDB=" + testSumDBName,
 		"GONOPROXY=",
 		"GONOSUMDB=",
@@ -260,7 +260,6 @@ func scriptEnv(srv *vcstest.Server, srvCertFile string) ([]string, error) {
 		// every credential a script stores, and the keychain prompts for it.
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + os.DevNull,
-		"GOTOOLCHAIN=auto",
 		"newline=\n",
 	}
 

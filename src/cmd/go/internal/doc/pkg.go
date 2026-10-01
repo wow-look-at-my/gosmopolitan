@@ -1190,6 +1190,11 @@ func (pkg *Package) printFieldDoc(symbol, fieldName string) bool {
 					for scanner.Scan() {
 						fmt.Fprintf(&pkg.buf, "%s// %s\n", indent, scanner.Bytes())
 					}
+					// A doc comment line past the scanner's limit ends the
+					// loop, and the rest of the comment goes unprinted.
+					if err := scanner.Err(); err != nil {
+						log.Fatalf("printing doc comment for %s: %v", typ.Name, err)
+					}
 				}
 				s := pkg.oneLineNode(field.Type)
 				lineComment := ""

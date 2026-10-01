@@ -655,6 +655,14 @@ func resolveLocalPackage(ld *Loader, ctx context.Context, dir string, rs *Requir
 	}
 
 	if sub := search.InDir(absDir, cfg.GOROOTsrc); sub != "" && sub != "." && !strings.Contains(sub, "@") {
+		// A submodule under GOROOT/src, such as a vendored module's checkout,
+		// is its own module. When the build list holds it, by a replace
+		// naming its directory, its packages keep that module's paths.
+		if root := findModuleRoot(absDir); root != cfg.GOROOTsrc && root != filepath.Join(cfg.GOROOTsrc, "cmd") {
+			if pkg := pathInModuleCache(ld, ctx, absDir, rs); pkg != "" {
+				return pkg, nil
+			}
+		}
 		pkg := filepath.ToSlash(sub)
 		if pkg == "builtin" {
 			return "", errPkgIsBuiltin

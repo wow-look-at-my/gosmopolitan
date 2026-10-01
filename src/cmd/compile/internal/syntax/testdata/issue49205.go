@@ -13,7 +13,7 @@ type _ interface{
 // other cases where the fix for this issue affects the error message
 
 const (
-	x int = 10 /* ERROR unexpected literal "foo" in grouped declaration; possibly missing semicolon or newline or \) */ "foo"
+	x int = 10 /* ERROR unexpected name foo in grouped declaration; possibly missing semicolon or newline or \) */ foo
 )
 
 var _ = []int{1, 2, 3 /* ERROR unexpected name int in composite literal; possibly missing comma or } */ int }

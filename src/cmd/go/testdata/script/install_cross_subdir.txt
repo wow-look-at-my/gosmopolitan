@@ -1,0 +1,20 @@
+env GO111MODULE=off
+[short] skip # rebuilds std for alternate architecture
+
+cd mycmd
+go build mycmd
+
+# cross-compile install lands in a subdirectory of $GOPATH/bin
+env GOARCH=386
+[GOARCH:386] env GOARCH=amd64
+env GOOS=linux
+go install mycmd
+exists $GOPATH/bin/linux_$GOARCH/mycmd
+
+# The install directory for a cross-compiled standard command should include GOARCH.
+go list -f '{{.Target}}'  cmd/pack
+stdout ${GOROOT}[/\\]pkg[/\\]tool[/\\]${GOOS}_${GOARCH}[/\\]pack$
+
+-- mycmd/x.go --
+package main
+func main() {}

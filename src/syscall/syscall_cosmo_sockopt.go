@@ -35,6 +35,20 @@ const (
 	// A sendmsg call that carries such a record reports EOPNOTSUPP on
 	// macOS and on Windows.
 	SCM_CREDENTIALS = 0x2
+
+	// The options below report the IP header fields of a received packet,
+	// and set them on a sent one. A Linux host answers each one. macOS
+	// arm64 and Windows report ENOPROTOOPT, because neither translation
+	// table holds an IPPROTO_IP or IPPROTO_IPV6 option of this kind.
+	//
+	// A caller that wants the ECN bits or the receiving interface must
+	// read the error. A host outside Linux does not supply either.
+	IP_RECVTOS       = 0xd
+	IP_PKTINFO       = 0x8
+	IPV6_RECVTCLASS  = 0x42
+	IPV6_TCLASS      = 0x43
+	IPV6_RECVPKTINFO = 0x31
+	IPV6_PKTINFO     = 0x32
 )
 
 func GetsockoptInet4Addr(fd, level, opt int) (value [4]byte, err error) {

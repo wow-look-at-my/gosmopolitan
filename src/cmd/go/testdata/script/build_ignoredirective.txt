@@ -3,9 +3,11 @@
 
 env ROOT=$WORK${/}gopath${/}src
 
+# Each build gets its own -X value: a link the cache serves prints no importcfg for -x to show.
+
 # no ignore directive; should not skip any directories.
 cp go.mod.orig go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=1 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/foo'
 stderr 'packagefile example/pkg/fo'
@@ -13,7 +15,7 @@ stderr 'packagefile example/pkg/fo'
 
 # ignored ./foo should be skipped.
 cp go.mod.relative go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=2 ./...
 stderr 'packagefile example/pkg/foo'
 stderr 'packagefile example/pkg/fo'
 ! stderr 'packagefile example/foo/secret'
@@ -22,7 +24,7 @@ stderr 'ignoring directory '$ROOT''${/}'foo'
 
 # ignored foo; any foo should be skipped.
 cp go.mod.any go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=3 ./...
 stderr 'packagefile example/pkg/fo'
 ! stderr 'packagefile example/pkg/foo'
 ! stderr 'packagefile example/foo/secret'
@@ -31,7 +33,7 @@ stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'
 
 # non-existent ignore; should not skip any directories.
 cp go.mod.dne go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=4 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/foo'
 stderr 'packagefile example/pkg/fo'
@@ -39,35 +41,35 @@ stderr 'packagefile example/pkg/fo'
 
 # ignored fo; should not skip foo/ and should skip fo/
 cp go.mod.partial go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=5 ./...
 ! stderr 'ignoring directory '$ROOT''${/}'foo'
 stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'fo$'
 ! stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'
 
 # ignored pkg/foo; should skip pkg/foo/
 cp go.mod.tree go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=6 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/fo'
 stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'
 
 # ignored /pkg/foo/; should skip pkg/foo/
 cp go.mod.sep1 go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=7 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/fo'
 stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'
 
 # ignored pkg/foo/; should skip pkg/foo/
 cp go.mod.sep2 go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=8 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/fo'
 stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'
 
 # ignored /pkg/foo; should skip pkg/foo/
 cp go.mod.sep3 go.mod
-go build -x ./...
+go build -x -ldflags=-X=main.step=9 ./...
 stderr 'packagefile example/foo/secret'
 stderr 'packagefile example/pkg/fo'
 stderr 'ignoring directory '$ROOT''${/}'pkg'${/}'foo'

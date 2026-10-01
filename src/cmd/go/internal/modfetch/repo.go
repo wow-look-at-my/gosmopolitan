@@ -6,11 +6,13 @@ package modfetch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"cmd/go/internal/cfg"
@@ -20,6 +22,7 @@ import (
 	"cmd/internal/par"
 
 	"golang.org/x/mod/module"
+	modzip "golang.org/x/mod/zip"
 )
 
 const traceRepo = false // trace all repo actions, for debugging
@@ -193,7 +196,8 @@ type lookupCacheKey struct {
 //
 // The distinguished proxy "direct" indicates that the path should be fetched
 // from its origin, and "noproxy" indicates that the patch should be fetched
-// directly only if GONOPROXY matches the given path.
+// directly only if GONOPROXY matches the given path. "github" fetches a
+// github.com path from its origin and refuses every other path.
 //
 // For the distinguished proxy "off", Lookup always returns a Repo that returns
 // a non-nil error for every method call.
@@ -268,6 +272,11 @@ func lookup(fetcher_ *Fetcher, ctx context.Context, proxy, path string) (r Repo,
 	}
 
 	switch proxy {
+	case "github":
+		if !strings.HasPrefix(path, "github.com/") {
+			return nil, errNotGitHub
+		}
+		return lookupDirect(ctx, path)
 	case "off":
 		return errRepo{path, errProxyOff}, nil
 	case "direct":
@@ -294,6 +303,7 @@ var (
 	errProxyOff       = notExistErrorf("module lookup disabled by GOPROXY=off")
 	errNoproxy  error = notExistErrorf("disabled by GOPRIVATE/GONOPROXY")
 	errUseProxy error = notExistErrorf("path does not match GOPRIVATE/GONOPROXY")
+	errNotGitHub error = notExistErrorf("path is not on github.com")
 )
 
 func lookupDirect(ctx context.Context, path string) (Repo, error) {
@@ -396,6 +406,28 @@ func (l *loggingRepo) Zip(ctx context.Context, dst io.Writer, version string) er
 	}
 	defer logCall("Repo[%s]: Zip(%s, %q)", l.r.ModulePath(), dstName, version)()
 	return l.r.Zip(ctx, dst, version)
+}
+
+func (l *loggingRepo) Files(ctx context.Context, version string) ([]modzip.File, string, error) {
+	defer logCall("Repo[%s]: Files(%q)", l.r.ModulePath(), version)()
+	if repo, ok := l.r.(filesRepo); ok {
+		return repo.Files(ctx, version)
+	}
+	return nil, "", errors.ErrUnsupported
+}
+
+func (l *loggingRepo) GitHubCommit(ctx context.Context, version string) (string, error) {
+	if repo, ok := l.r.(githubCommitRepo); ok {
+		return repo.GitHubCommit(ctx, version)
+	}
+	return "", errors.ErrUnsupported
+}
+
+// A filesRepo serves the files of a module version with no zip, and the
+// github.com commit that holds them. Files fails with errors.ErrUnsupported
+// when the repository serves only a zip.
+type filesRepo interface {
+	Files(ctx context.Context, version string) ([]modzip.File, string, error)
 }
 
 // errRepo is a Repo that returns the same error for all operations.

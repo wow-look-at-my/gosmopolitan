@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDebugSidecars verifies the per-architecture debug sidecars a default
-// GOOS=cosmo fat build writes next to its output: <bin>.dbg (cosmo amd64)
-// and <bin>.aarch64.elf (cosmo arm64), each a complete unstripped ELF
-// carrying the symbol table and DWARF that the shipped APE no longer
-// embeds. Sidecars are not shipped in CI artifacts, so the test skips
-// cleanly when neither file is present next to FIZZBUZZ_BIN.
+// TestDebugSidecars verifies the debug sidecar a default GOOS=cosmo fat
+// build writes next to its output: <bin>.dbg, a complete unstripped ELF of
+// the cosmo amd64 image, carrying the symbol table and DWARF that the
+// shipped APE does not embed. The arm64 image gets none, so nothing beside
+// the APE is an ELF for another machine. Sidecars are not shipped in CI
+// artifacts, so the test skips cleanly when the file is not present next to
+// FIZZBUZZ_BIN.
 func TestDebugSidecars(t *testing.T) {
 	bin := binPath(t)
 
@@ -24,7 +25,6 @@ func TestDebugSidecars(t *testing.T) {
 		machine elf.Machine
 	}{
 		{bin + ".dbg", elf.EM_X86_64},
-		{bin + ".aarch64.elf", elf.EM_AARCH64},
 	}
 	missing := 0
 	for _, sc := range sidecars {
@@ -34,6 +34,10 @@ func TestDebugSidecars(t *testing.T) {
 	}
 	if missing == len(sidecars) {
 		t.Skipf("no debug sidecars next to %s (binary from a CI artifact?)", bin)
+	}
+
+	if _, err := os.Stat(bin + ".aarch64.elf"); err == nil {
+		t.Errorf("%s.aarch64.elf exists: the arm64 image gets no sidecar", bin)
 	}
 
 	for _, sc := range sidecars {
