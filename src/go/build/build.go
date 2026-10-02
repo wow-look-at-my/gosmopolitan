@@ -367,6 +367,10 @@ func defaultContext() Context {
 	case "0":
 		c.CgoEnabled = false
 	default:
+		if c.GOOS == "cosmo" {
+			c.CgoEnabled = platform.CgoSupported(c.GOOS, c.GOARCH) && cosmoCompilerFound(c.GOARCH)
+			break
+		}
 		// cgo must be explicitly enabled for cross compilation builds
 		if runtime.GOARCH == c.GOARCH && runtime.GOOS == c.GOOS {
 			c.CgoEnabled = platform.CgoSupported(c.GOOS, c.GOARCH)
@@ -1986,6 +1990,9 @@ func (ctxt *Context) matchTag(name string, allTags map[string]bool) bool {
 		return true
 	}
 	if ctxt.GOOS == "cosmo" && name == "linux" {
+		return true
+	}
+	if ctxt.GOOS == "cosmo" && cosmoImpliedTag(name) {
 		return true
 	}
 	if ctxt.GOOS == "illumos" && name == "solaris" {
