@@ -169,13 +169,13 @@ func MkEnv() []cfg.EnvVar {
 	ccChanged := true
 	if cc == "" {
 		ccChanged = false
-		cc = cfg.DefaultCC(cfg.Goos, cfg.Goarch)
+		cc = cfg.TargetCC(cfg.Goos, cfg.Goarch)
 	}
 	cxx := cfg.Getenv("CXX")
 	cxxChanged := true
 	if cxx == "" {
 		cxxChanged = false
-		cxx = cfg.DefaultCXX(cfg.Goos, cfg.Goarch)
+		cxx = cfg.TargetCXX(cfg.Goos, cfg.Goarch)
 	}
 	ar, arChanged := cfg.EnvOrAndChanged("AR", "ar")
 	env = append(env, cfg.EnvVar{Name: "AR", Value: ar, Changed: arChanged})

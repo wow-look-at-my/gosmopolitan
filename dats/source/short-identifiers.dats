@@ -10,6 +10,10 @@ tests:
 	  cmd: dats/source/short-identifiers.sh src/cmd/go/internal/load/testgroup.go src/cmd/go/internal/load/testgroupalone.go src/cmd/go/internal/load/generatedep.go src/cmd/go/internal/load/generatesandbox.go
 	  exit: 0
 
+	- desc: the fork's cosmo cgo additions name their variables
+	  cmd: dats/source/short-identifiers.sh src/cmd/link/internal/ld/cosmolink.go src/cmd/link/internal/ld/cosmolds.go src/cmd/go/internal/cfg/cosmocc.go src/go/build/cosmocc.go testdata/cgoprobe/main.go
+	  exit: 0
+
 	- desc: the scanner refuses a one-letter receiver
 	  cmd: printf 'package p\n\nfunc (x *T) M() {}\n' > "$TMPDIR/recv.go"; dats/source/short-identifiers.sh "$TMPDIR/recv.go"; test $? -eq 2
 	  exit: 0
