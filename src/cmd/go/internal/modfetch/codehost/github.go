@@ -187,18 +187,32 @@ var (
 	gsmAccepted   string
 )
 
-// gsmBearers returns each distinct token that githubTokenVars hold.
+// githubTokenPrefixes start every token GitHub issues.
+var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"}
+
+// gsmBearers returns the token the mirror last accepted, each token that
+// githubTokenVars hold, then each other environment value that starts like a
+// GitHub token, in the order of the variable names.
 func gsmBearers() []string {
 	gsmAcceptedMu.Lock()
 	accepted := gsmAccepted
 	gsmAcceptedMu.Unlock()
 	var tokens []string
-	if accepted != "" {
-		tokens = append(tokens, accepted)
-	}
-	for _, name := range githubTokenVars {
-		if token := os.Getenv(name); token != "" && !slices.Contains(tokens, token) {
+	add := func(token string) {
+		if token != "" && !slices.Contains(tokens, token) {
 			tokens = append(tokens, token)
+		}
+	}
+	add(accepted)
+	for _, name := range githubTokenVars {
+		add(os.Getenv(name))
+	}
+	environ := os.Environ()
+	slices.Sort(environ)
+	for _, entry := range environ {
+		_, value, _ := strings.Cut(entry, "=")
+		if slices.ContainsFunc(githubTokenPrefixes, func(prefix string) bool { return strings.HasPrefix(value, prefix) }) {
+			add(value)
 		}
 	}
 	return tokens

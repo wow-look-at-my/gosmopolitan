@@ -604,6 +604,7 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 // with no git remote behind it. Only github-state-mirror answers, and only to
 // the token in the environment it accepts.
 func TestGitHubPrivateOverMirror(t *testing.T) {
+	t.Serial()
 	source, _ := makeSourceRepo(t, sourceFilesWithLink())
 	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "head")
 	head := gitIn(t, source, "rev-parse", "HEAD")
@@ -611,24 +612,28 @@ func TestGitHubPrivateOverMirror(t *testing.T) {
 	cases := []struct {
 		name              string
 		codeloadForbidden bool
-		wantRoute         string
+		// tokenVar holds the token the mirror accepts. GITHUB_TOKEN holds one it rejects.
+		tokenVar, token string
+		wantRoute       string
 	}{
-		{name: "codeload", wantRoute: "tar.gz archive via github-state-mirror.pazer.io"},
-		{name: "codeload through the proxy", codeloadForbidden: true, wantRoute: "tar.gz archive via github-state-mirror.pazer.io and proxy.pazer.ai"},
+		{name: "codeload", tokenVar: "GH_TOKEN", token: "accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io"},
+		{name: "codeload through the proxy", codeloadForbidden: true, tokenVar: "GH_TOKEN", token: "accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io and proxy.pazer.ai"},
+		{name: "token found by its prefix", tokenVar: "GSM_TEST_ORG_TOKEN", token: "github_pat_accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("GH_ENTERPRISE_TOKEN", "")
-			t.Setenv("GITHUB_ENTERPRISE_TOKEN", "")
+			for _, name := range githubTokenVars {
+				t.Setenv(name, "")
+			}
 			t.Setenv("GITHUB_TOKEN", "rejected")
-			t.Setenv("GH_TOKEN", "accepted")
+			t.Setenv(test.tokenVar, test.token)
 			t.Cleanup(func() {
 				gsmAcceptedMu.Lock()
 				gsmAccepted = ""
 				gsmAcceptedMu.Unlock()
 			})
 
-			fake := &fakeGitHub{dir: source, private: true, mirrorToken: "accepted", codeloadForbidden: test.codeloadForbidden}
+			fake := &fakeGitHub{dir: source, private: true, mirrorToken: test.token, codeloadForbidden: test.codeloadForbidden}
 			serveFakeGitHub(t, fake)
 			ctx := testContext(t)
 			git := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
@@ -659,8 +664,8 @@ func TestGitHubPrivateOverMirror(t *testing.T) {
 			gsmAcceptedMu.Lock()
 			accepted := gsmAccepted
 			gsmAcceptedMu.Unlock()
-			if accepted != "accepted" {
-				t.Errorf("the mirror is remembered to accept %q, want %q", accepted, "accepted")
+			if accepted != test.token {
+				t.Errorf("the mirror is remembered to accept %q, want %q", accepted, test.token)
 			}
 		})
 	}
