@@ -199,7 +199,7 @@ go tool compile -bench=out.txt file.go
 ## Fork Gotchas
 
 - **The cosmo arm64 image is ET_EXEC at 4 TiB**, not cosmopolitan's own 0x800000000. Upstream Go is PIE on darwin, so a normal Go binary there has no fixed address to collide with. This one does, and MAP_FIXED replaces whatever it lands on. At 34 GB a large image reaches the arenas macOS's default malloc zone reserves. An allocation carved from one then lands in this image's read-only rodata. That is a protection fault nothing handles, and it hangs the process. The macOS loader also reads the range first. A PROT_NONE reservation is what MAP_FIXED is for, and accessible memory there is fatal and named. `TestFatPayloadsAbovePageZero` pins the payloads above the loader's page zero. PIE ends the whole question and is the durable fix. It needs a relocation pass in `ape-m1.c`.
-- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. Rebuilding a host tool needs e.g. `GOOS=linux GOARCH=amd64 go install cmd/link`, and test harnesses (like `testdata/ape/apetest`) must be run with an upstream Go so the test binary itself is executable on the host.
+- **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. The toolchain is one binary. A host compiler or linker change is rebuilt with `GOOS=linux GOARCH=amd64 go install cmd/go/main`. `go install cmd/compile` installs nothing, because `pkg/tool/*/compile` is a symlink to `bin/go`. Test harnesses (like `testdata/ape/apetest`) must be run with an upstream Go so the test binary itself is executable on the host.
 - **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/`. TMPDIR and HOME are not read. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does. cmd/go takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
 - **A github.com module downloads an archive before it runs git or asks the module proxy.** The github.com tar.gz comes first. Then the same through proxy.pazer.ai, the zip, the zip through proxy.pazer.ai, a shallow git fetch, and last proxy.golang.org. Refs come over plain HTTP, not `ls-remote`, and no git runs until git is the last option left. Depth: docs/GITHUB-FETCH.md.
@@ -212,7 +212,7 @@ go tool compile -bench=out.txt file.go
 cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
 export PATH="$PWD/../bin:$PATH"
 # after linker or go-command changes:
-GOOS=linux GOARCH=amd64 go install cmd/link cmd/go   # refresh HOST tools (see gotcha above)
+GOOS=linux GOARCH=amd64 go install cmd/go/main   # refresh bin/go, which carries every HOST tool (see gotcha above)
 GOOS=cosmo go build -o /tmp/fizzbuzz.com ./testdata/fizzbuzz/fizzbuzz.go   # emits fat APE
 cd testdata/ape/apetest && FIZZBUZZ_BIN=/tmp/fizzbuzz.com go test -count=1 ./...   # upstream go
 ```
