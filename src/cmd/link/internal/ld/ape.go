@@ -72,8 +72,11 @@ type apePayload struct {
 // relative file offsets (every PT_LOAD has vaddr - p_offset ==
 // peCosmoImageBase; see apePayloadLoads).
 type apePEInfo struct {
-	entryRVA   uint32 // _rt0_cosmo_nt, the PE AddressOfEntryPoint
-	importsRVA uint32 // runtime.ntidata, the import directory table
+	entryRVA    uint32 // the PE AddressOfEntryPoint
+	importsRVA  uint32 // the import directory table
+	importsSize uint32 // the import directory table, its zero descriptor included
+	iatRVA      uint32
+	iatSize     uint32
 }
 
 // payloadFromELF validates elf and wraps it as an APE payload.
@@ -744,14 +747,7 @@ func makeEmbeddedElfHeader(origElf []byte, elfOffset uint64, arch sys.ArchFamily
 
 // Real PE header parameters for the cosmo amd64 image (writePECosmoAMD64).
 const (
-	// peCosmoImageBase is the cosmo/amd64 link base (amd64/obj.go sets
-	// FlagTextAddr = 0x100000000 + HEADR), already the multiple of 64K
-	// the Windows loader demands of ImageBase. Every PT_LOAD of the
-	// image satisfies vaddr - p_offset == peCosmoImageBase (the layout
-	// invariant Vaddr == Fileoff mod FlagRound plus lockstep address/
-	// offset assignment), so RVA == payload-relative file offset
-	// throughout, and PointerToRawData == apeHeaderSize + RVA once the
-	// payload sits at apeHeaderSize.
+	// peCosmoImageBase is the cosmo/amd64 internal link base (amd64/obj.go sets FlagTextAddr = 0x100000000 + HEADR).
 	peCosmoImageBase = 0x100000000
 	peCosmoSectAlign = 0x1000
 	peCosmoFileAlign = 0x200
@@ -811,6 +807,16 @@ func apePayloadLoads(elf []byte) []apePhdr {
 	return loads
 }
 
+// apeImageBase returns vaddr - p_offset of the first PT_LOAD of a payload,
+// which is the PE ImageBase of an amd64 image.
+func apeImageBase(elf []byte) uint64 {
+	loads := apePayloadLoads(elf)
+	if len(loads) == 0 {
+		return 0
+	}
+	return loads[0].vaddr - loads[0].off
+}
+
 // apeVaddrFileOff translates the virtual address range [vaddr,
 // vaddr+size) to its payload-relative file offset, requiring the whole
 // range to be file-backed (within p_filesz) by a single PT_LOAD.
@@ -831,6 +837,7 @@ func apeVaddrFileOff(loads []apePhdr, vaddr, size uint64, what string) uint64 {
 // where ctxt.loader is still alive.
 func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 	ldr := ctxt.loader
+	base := apeImageBase(p.elf)
 	sym := func(name string, wantSize int64) uint64 {
 		s := ldr.Lookup(name, 0)
 		if s == 0 {
@@ -840,10 +847,14 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 			Exitf("APE NT boot: %s is %d bytes, want %d (layout contract with rt0_cosmo_nt_amd64.s)", name, ldr.SymSize(s), wantSize)
 		}
 		v := uint64(ldr.SymValue(s))
-		if v < peCosmoImageBase || v-peCosmoImageBase >= 1<<32 {
-			Exitf("APE NT boot: %s at %#x is outside the PE image (base %#x)", name, v, uint64(peCosmoImageBase))
+		if v < base || v-base >= 1<<32 {
+			Exitf("APE NT boot: %s at %#x is outside the PE image (base %#x)", name, v, base)
 		}
 		return v
+	}
+	if ctxt.LinkMode == LinkExternal {
+		p.pe = cosmoNTBoot(p.elf, base)
+		return
 	}
 	entry := sym("_rt0_cosmo_nt", -1)
 	idata := sym("runtime.ntidata", ntidataSize)
@@ -872,8 +883,8 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 		}
 	}
 
-	idataRVA := uint32(idata - peCosmoImageBase)
-	iatRVA := uint32(iat - peCosmoImageBase)
+	idataRVA := uint32(idata - base)
+	iatRVA := uint32(iat - base)
 	// Patch the five RVA fields (layout comment in rt0_cosmo_nt_amd64.s).
 	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)                         // IDT[0].OriginalFirstThunk
 	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName)                     // IDT[0].Name
@@ -882,8 +893,9 @@ func apePrepareNTBoot(ctxt *Link, p *apePayload) {
 	binary.LittleEndian.PutUint64(blob[ntidataILT+8:], uint64(idataRVA)+ntidataHintLoadLib) // ILT[1]
 
 	p.pe = &apePEInfo{
-		entryRVA:   uint32(entry - peCosmoImageBase),
-		importsRVA: idataRVA,
+		entryRVA:    uint32(entry - base),
+		importsRVA:  idataRVA,
+		importsSize: peCosmoImportsSize,
 	}
 }
 
@@ -906,6 +918,7 @@ type peCosmoSection struct {
 func writePECosmoAMD64(header []byte, amd *apePayload) {
 	info := amd.pe
 	loads := apePayloadLoads(amd.elf)
+	imageBase := apeImageBase(amd.elf)
 	if len(loads) != 3 {
 		Exitf("APE PE: amd64 payload has %d PT_LOADs, want 3 (RX text, R rodata, RW data)", len(loads))
 	}
@@ -919,8 +932,11 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 		if l.flags != wantFlags[i] {
 			Exitf("APE PE: PT_LOAD %d has flags %#x, want %#x", i, l.flags, wantFlags[i])
 		}
-		if l.vaddr-l.off != peCosmoImageBase {
-			Exitf("APE PE: PT_LOAD %d has vaddr %#x - offset %#x != image base %#x; RVAs would not equal payload offsets", i, l.vaddr, l.off, uint64(peCosmoImageBase))
+		if l.vaddr-l.off != imageBase {
+			Exitf("APE PE: PT_LOAD %d has vaddr %#x - offset %#x != image base %#x; RVAs would not equal payload offsets", i, l.vaddr, l.off, imageBase)
+		}
+		if imageBase%0x10000 != 0 {
+			Exitf("APE PE: image base %#x is not a multiple of 64K", imageBase)
 		}
 		if l.off%peCosmoSectAlign != 0 {
 			Exitf("APE PE: PT_LOAD %d file offset %#x is not %#x-aligned", i, l.off, peCosmoSectAlign)
@@ -968,8 +984,19 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 	if t := sects[0]; info.entryRVA < t.rva || info.entryRVA >= t.rva+t.vsz {
 		Exitf("APE PE: entry RVA %#x is outside .text [%#x, %#x)", info.entryRVA, t.rva, t.rva+t.vsz)
 	}
-	if d := sects[2]; info.importsRVA < d.rva || info.importsRVA+peCosmoImportsSize > d.rva+d.vsz {
-		Exitf("APE PE: import directory RVA %#x is outside .data [%#x, %#x)", info.importsRVA, d.rva, d.rva+d.vsz)
+	within := func(rva, size uint32) bool {
+		for _, sect := range sects[1:] {
+			if rva >= sect.rva && rva+size <= sect.rva+sect.vsz {
+				return true
+			}
+		}
+		return false
+	}
+	if !within(info.importsRVA, info.importsSize) {
+		Exitf("APE PE: import directory [%#x, %#x) is outside .rodata and .data", info.importsRVA, info.importsRVA+info.importsSize)
+	}
+	if d := sects[2]; info.iatSize != 0 && (info.iatRVA < d.rva || info.iatRVA+info.iatSize > d.rva+d.vsz) {
+		Exitf("APE PE: import address table [%#x, %#x) is outside .data", info.iatRVA, info.iatRVA+info.iatSize)
 	}
 
 	peStart := 0x80
@@ -999,7 +1026,7 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 	binary.LittleEndian.PutUint32(header[optStart+12:], 0)                  // SizeOfUninitializedData
 	binary.LittleEndian.PutUint32(header[optStart+16:], info.entryRVA)      // AddressOfEntryPoint
 	binary.LittleEndian.PutUint32(header[optStart+20:], sects[0].rva)       // BaseOfCode
-	binary.LittleEndian.PutUint64(header[optStart+24:], peCosmoImageBase)   // ImageBase
+	binary.LittleEndian.PutUint64(header[optStart+24:], imageBase)          // ImageBase
 	binary.LittleEndian.PutUint32(header[optStart+32:], peCosmoSectAlign)   // SectionAlignment
 	binary.LittleEndian.PutUint32(header[optStart+36:], peCosmoFileAlign)   // FileAlignment
 	binary.LittleEndian.PutUint16(header[optStart+40:], 6)                  // MajorOSVersion
@@ -1025,10 +1052,11 @@ func writePECosmoAMD64(header []byte, amd *apePayload) {
 	binary.LittleEndian.PutUint64(header[optStart+96:], 0x1000)   // SizeOfHeapCommit
 	binary.LittleEndian.PutUint32(header[optStart+104:], 0)       // LoaderFlags
 	binary.LittleEndian.PutUint32(header[optStart+108:], 16)      // NumberOfRvaAndSizes
-	// Data directories: only [1] (imports) is populated.
 	dirStart := optStart + 112
 	binary.LittleEndian.PutUint32(header[dirStart+8:], info.importsRVA)
-	binary.LittleEndian.PutUint32(header[dirStart+12:], peCosmoImportsSize)
+	binary.LittleEndian.PutUint32(header[dirStart+12:], info.importsSize)
+	binary.LittleEndian.PutUint32(header[dirStart+96:], info.iatRVA)
+	binary.LittleEndian.PutUint32(header[dirStart+100:], info.iatSize)
 
 	// Section table (ends at 0x208, within the [0x80, 0x7FF) budget the
 	// shell script at apeScriptOffset leaves for the PE header chain).

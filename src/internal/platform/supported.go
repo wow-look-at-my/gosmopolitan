@@ -100,6 +100,9 @@ func MustLinkExternal(goos, goarch string, withCgo bool) bool {
 		switch goos {
 		case "android":
 			return true
+		case "cosmo":
+			// The internal linker cannot carry libcosmo: it has TLS relocations and a linker script the internal linker lacks.
+			return true
 		case "dragonfly":
 			// It seems that on Dragonfly thread local storage is
 			// set up by the dynamic linker, so internal cgo linking

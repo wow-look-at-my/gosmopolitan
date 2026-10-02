@@ -23,12 +23,17 @@ var testinittasks []testInitUnit
 //
 //go:linkname testDeps_runTestInit testing/internal/testdeps.runTestInit
 func testDeps_runTestInit(unit string) {
+	if len(testinittasks) == 0 {
+		return
+	}
 	for idx := range testinittasks {
 		if testinittasks[idx].unit == unit {
 			doInit(testinittasks[idx].tasks)
-			return
+			break
 		}
 	}
+	// runtime.main left the main goroutine locked to the main thread for this init, as it is for every other package's.
+	unlockOSThread()
 }
 
 // testDeps_setDefaultGODEBUG makes def the binary's default GODEBUG, as the

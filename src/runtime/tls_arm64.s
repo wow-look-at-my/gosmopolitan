@@ -18,6 +18,16 @@ TEXT runtime·load_g(SB),NOSPLIT,$0
 #endif
 #endif
 
+#ifdef GOOS_cosmo
+	// On XNU the kernel owns TPIDR_EL0, so g lives in an Apple TSD slot.
+	MOVD	runtime·cosmoHostSlots+8(SB), R27
+	CBZ	R27, elftls
+	WORD	$0xd53bd060	// MRS TPIDRRO_EL0, R0
+	AND	$0xfffffffffffffff8, R0
+	MOVD	(R0)(R27), g
+	RET
+elftls:
+#endif
 	MRS_TPIDR_R0
 #ifdef TLS_darwin
 	// Darwin sometimes returns unaligned pointers
@@ -39,6 +49,15 @@ TEXT runtime·save_g(SB),NOSPLIT,$0
 #endif
 #endif
 
+#ifdef GOOS_cosmo
+	MOVD	runtime·cosmoHostSlots+8(SB), R27
+	CBZ	R27, elftls
+	WORD	$0xd53bd060	// MRS TPIDRRO_EL0, R0
+	AND	$0xfffffffffffffff8, R0
+	MOVD	g, (R0)(R27)
+	RET
+elftls:
+#endif
 	MRS_TPIDR_R0
 #ifdef TLS_darwin
 	// Darwin sometimes returns unaligned pointers
