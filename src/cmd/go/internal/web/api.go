@@ -183,20 +183,34 @@ func (r *Response) formatErrorDetail() string {
 // Get returns a non-nil error only if the request did not receive a response
 // under any applicable scheme. (A non-2xx response does not cause an error.)
 func Get(security SecurityMode, u *url.URL) (*Response, error) {
-	return get(security, u, nil, "")
+	return get(security, u, nil)
+}
+
+// PinOptions bounds one GetPinnedWith request.
+type PinOptions struct {
+	// AllowHost accepts every host the request may touch. The first URL counts as a hop, and so does each redirect.
+	AllowHost func(host string) bool
+	// CredentialURL attaches the GOAUTH credential for that URL instead of the one for u.
+	CredentialURL string
+	// Bearer is the whole credential when it is set. GOAUTH is not asked. net/http drops it on a redirect to another host.
+	Bearer string
+	// NoRedirect returns a redirect as the response and does not follow it.
+	NoRedirect bool
 }
 
 // GetPinned is like Get with SecureOnly, but every hop must stay on a host
-// that allowHost accepts. The first URL counts as a hop, and so does each
-// redirect. A hop to any other host fails the request before it is sent.
-//
-// A non-empty credentialURL attaches the GOAUTH credential for that URL
-// instead of the one for u. A relay that forwards Authorization uses it.
+// that allowHost accepts. A hop to any other host fails the request before
+// it is sent. credentialURL is PinOptions.CredentialURL.
 func GetPinned(u *url.URL, allowHost func(host string) bool, credentialURL string) (*Response, error) {
-	if !allowHost(u.Hostname()) {
+	return GetPinnedWith(u, PinOptions{AllowHost: allowHost, CredentialURL: credentialURL})
+}
+
+// GetPinnedWith is GetPinned with every option of PinOptions.
+func GetPinnedWith(u *url.URL, opts PinOptions) (*Response, error) {
+	if opts.AllowHost == nil || !opts.AllowHost(u.Hostname()) {
 		return nil, fmt.Errorf("refusing to fetch %s: host not allowed", u.Redacted())
 	}
-	return get(SecureOnly, u, allowHost, credentialURL)
+	return get(SecureOnly, u, &opts)
 }
 
 // OpenBrowser attempts to open the requested URL in a web browser.
