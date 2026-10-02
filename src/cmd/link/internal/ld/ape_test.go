@@ -271,8 +271,9 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 	binary.LittleEndian.PutUint64(elf[iatRVA+8:], 1)
 
 	return elf, &apePEInfo{
-		entryRVA:   testELFEntry - peCosmoImageBase,
-		importsRVA: idataRVA,
+		entryRVA:    testELFEntry - peCosmoImageBase,
+		importsRVA:  idataRVA,
+		importsSize: peCosmoImportsSize,
 	}
 }
 

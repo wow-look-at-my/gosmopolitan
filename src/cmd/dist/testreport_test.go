@@ -5,6 +5,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -68,6 +70,48 @@ func TestReportKeepsFailingOutput(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("output is missing %q; got %q", want, got)
 		}
+	}
+}
+
+// heldReader is a stderr pipe that stays open: its first Read reports that it
+// started, then waits for release and answers EOF.
+type heldReader struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (rdr *heldReader) Read([]byte) (int, error) {
+	close(rdr.entered)
+	<-rdr.release
+	return 0, io.EOF
+}
+
+// TestReportSurvivesStderrOnTheSameBuffer copies stderr the way exec does
+// while the command's events arrive. A stderr copy that ends after the report
+// wrote must leave the report's lines in place.
+func TestReportSurvivesStderrOnTheSameBuffer(t *testing.T) {
+	var tst tester
+	var buf bytes.Buffer
+	out, errOut, flush := tst.reportTo(&buf, &buf)
+
+	stderr := &heldReader{entered: make(chan struct{}), release: make(chan struct{})}
+	copied := make(chan error)
+	go func() {
+		_, err := io.Copy(errOut, stderr)
+		copied <- err
+	}()
+	<-stderr.entered
+	out.Write([]byte(`{"Action":"fail","Package":"pkg","Test":"TestBad","Elapsed":0.02}
+{"Action":"output","Package":"pkg","Output":"FAIL\tpkg\t0.12s\n"}
+{"Action":"fail","Package":"pkg","Elapsed":0.12}
+`))
+	close(stderr.release)
+	if err := <-copied; err != nil {
+		t.Fatal(err)
+	}
+	flush()
+	if got := buf.String(); !strings.Contains(got, "FAIL\tpkg\t0.12s\n") {
+		t.Errorf("the package's result is gone once stderr closed: %q", got)
 	}
 }
 

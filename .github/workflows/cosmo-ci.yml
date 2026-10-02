@@ -33,9 +33,6 @@ jobs:
       fail-fast: true
       matrix:
         build-os: [macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than built. Drop this exclude to build it again. waiver-expires: 2026-10-13
-        exclude:
-          - build-os: windows-latest
 
     runs-on: ${{ matrix.build-os }}
 
@@ -250,6 +247,24 @@ jobs:
           & "$env:RUNNER_TEMP\dats.exe" -v --no-sandbox test dats/host
           exit $LASTEXITCODE
 
+      # The runner's forwarder at 192.168.64.1 answers an NXDOMAIN query late or never, which net's TestLookupNoSuchHost reads as a timeout. Public resolvers answer it at once, and the last dig proves the system resolver now does too.
+      - name: A resolver that answers NXDOMAIN (darwin)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "before:"
+          scutil --dns | grep -E 'nameserver\[0\]' || true
+          networksetup -listallnetworkservices | while IFS= read -r service; do
+            case "$service" in 'An asterisk'*|'*'*) continue ;; esac
+            sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8 || echo "no DNS setting on $service"
+          done
+          echo "after:"
+          scutil --dns | grep -E 'nameserver\[0\]'
+          grep nameserver /etc/resolv.conf
+          dig +time=3 +tries=1 invalid.invalid. @1.1.1.1 | grep -E 'status: NXDOMAIN'
+          dig +time=3 +tries=1 invalid.invalid. | grep -E 'status: NXDOMAIN'
+
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
         if: runner.os != 'Windows'
@@ -423,6 +438,12 @@ jobs:
           echo "LLD=/usr/lib/llvm-18/bin/ld64.lld" >> "$GITHUB_ENV"
           echo "STRIP=llvm-strip-18" >> "$GITHUB_ENV"
 
+      # cosmo-cgo.dats compiles C for both cosmo architectures and runs the arm64 payload under qemu.
+      - uses: ./.github/actions/cosmocc
+      - name: Install qemu-user
+        shell: bash
+        run: sudo apt-get install -y -qq qemu-user
+
       # Every host-independent suite. Which tests each covers is the suite's decision, not this file's.
       - name: The dats suites
         timeout-minutes: 45
@@ -439,9 +460,6 @@ jobs:
       fail-fast: true
       matrix:
         test-os: [ubuntu-latest, macos-latest, windows-latest]
-        # NT is the longest leg by far, so it is excluded rather than run. Drop this exclude to run it again. waiver-expires: 2026-10-13
-        exclude:
-          - test-os: windows-latest
 
     runs-on: ${{ matrix.test-os }}
 
