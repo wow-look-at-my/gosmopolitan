@@ -295,6 +295,9 @@ func extractExtendedRCode(p dnsmessage.Parser, hdr dnsmessage.Header) (dnsmessag
 // Do a lookup for a single name, which must be rooted
 // (otherwise answer will not find the answers).
 func (r *Resolver) tryOneName(ctx context.Context, cfg *dnsConfig, name string, qtype dnsmessage.Type) (dnsmessage.Parser, string, error) {
+	if isInvalidDomain(name) {
+		return dnsmessage.Parser{}, "", newDNSError(errNoSuchHost, name, "")
+	}
 	var lastErr error
 	serverOffset := cfg.serverOffset()
 	sLen := uint32(len(cfg.servers))
@@ -469,6 +472,16 @@ func (conf *resolverConfig) releaseSema() {
 	<-conf.ch
 }
 
+// isInvalidDomain reports whether name is "invalid" or a name under it.
+func isInvalidDomain(name string) bool {
+	name = stringslite.TrimSuffix(name, ".")
+	const tld = "invalid"
+	if !stringsHasSuffixFold(name, tld) {
+		return false
+	}
+	return len(name) == len(tld) || name[len(name)-len(tld)-1] == '.'
+}
+
 func (r *Resolver) lookup(ctx context.Context, name string, qtype dnsmessage.Type, conf *dnsConfig) (dnsmessage.Parser, string, error) {
 	if !isDomainName(name) {
 		// We used to use "invalid domain name" as the error,
@@ -478,7 +491,6 @@ func (r *Resolver) lookup(ctx context.Context, name string, qtype dnsmessage.Typ
 		// For consistency with libc resolvers, report no such host.
 		return dnsmessage.Parser{}, "", newDNSError(errNoSuchHost, name, "")
 	}
-
 	if conf == nil {
 		conf = getSystemDNSConfig()
 	}
