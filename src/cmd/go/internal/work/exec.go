@@ -403,6 +403,14 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 		ccExe := b.ccExe()
 		fmt.Fprintf(h, "CC=%q %q %q %q\n", ccExe, cppflags, cflags, ldflags)
+		// A #cgo pkg-config line's flags are an input too: a .pc file that changes must not hit a stale cgo archive.
+		if len(p.CgoPkgConfig) > 0 {
+			if pcCflags, pcLdflags, err := b.getPkgConfigFlags(a, p); err == nil {
+				fmt.Fprintf(h, "pkg-config=%q %q\n", pcCflags, pcLdflags)
+			} else {
+				fmt.Fprintf(h, "pkg-config ERROR=%q\n", err)
+			}
+		}
 		// Include the C compiler tool ID so that if the C
 		// compiler changes we rebuild the package.
 		if ccID, _, err := b.gccToolID(ccExe[0], "c"); err == nil {
