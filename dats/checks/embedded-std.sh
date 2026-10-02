@@ -9,7 +9,8 @@
 set -euo pipefail
 
 root=$PWD
-export PATH="$root/bin:$root/misc/cosmo:$PATH"
+# cosmocc first: embedstd builds std with cgo on, and the source tree's own listing and builds must see the same compiler.
+export PATH="$root/bin:$root/misc/cosmo:/opt/cosmocc/bin:$PATH"
 work=$(mktemp -d)
 mkdir -p "$work/hello" "$work/embedded" "$work/source" "$work/again"
 cat >"$work/hello/go.mod" <<'EOF'
@@ -101,12 +102,12 @@ embedded test .
 embedded mod tidy
 
 echo "== a cgo program builds through it, byte for byte the source tree's build, and runs"
-export PATH="/opt/cosmocc/bin:$PATH"
 cp -r testdata/cgoprobe "$work/cgoprobe"
 (cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" build -trimpath -ldflags=-buildid= -o "$work/embedded/cgoprobe.com" .)
 (cd "$work/cgoprobe" && GOOS=cosmo go build -trimpath -ldflags=-buildid= -o "$work/source/cgoprobe.com" .)
 cmp "$work/embedded/cgoprobe.com" "$work/source/cgoprobe.com"
-/bin/sh "$work/embedded/cgoprobe.com" | grep -q "ok callback"
+/bin/sh "$work/embedded/cgoprobe.com" >"$work/cgoprobe.out"
+grep -q "ok callback" "$work/cgoprobe.out"
 (cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" vet .)
 
 echo "== a listing hands an outside reader a standard package's export data as a file"

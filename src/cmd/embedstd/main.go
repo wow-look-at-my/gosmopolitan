@@ -62,7 +62,8 @@ var targets = []struct{ goos, goarch string }{
 	{"cosmo", "arm64"},
 }
 
-// listed is the part of a go list -json record the manifest keeps.
+// listed is the part of a go list -json record the manifest keeps, with the
+// errors -e lets through.
 type listed struct {
 	ImportPath string
 	Name       string
@@ -70,6 +71,14 @@ type listed struct {
 	Export     string
 	BuildID    string
 	Standard   bool
+	Error      *listError
+	DepsErrors []*listError
+}
+
+// listError is a go list -json error record.
+type listError struct {
+	ImportStack []string
+	Err         string
 }
 
 // Main runs embedstd with args, the command line after the program name,
@@ -99,6 +108,9 @@ func Main(args []string) int {
 	var writer embedded.Writer
 	for _, target := range targets {
 		name := target.goos + "_" + target.goarch
+		if *cgoOn {
+			requireCompiler(goCmd, target.goos, target.goarch)
+		}
 		packages := listStd(goCmd, target.goos, target.goarch)
 		manifest := embedded.Manifest{Target: name}
 		for _, pkg := range packages {
@@ -181,6 +193,25 @@ func gorootOf(goCmd []string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// requireCompiler stops before any build when the C compiler of a target is
+// not on PATH. The listing below tolerates a package that fails, and a blob
+// with no runtime/cgo would otherwise pass as whole.
+func requireCompiler(goCmd []string, goos, goarch string) {
+	cmd := goCommand(goCmd, "env", "CC")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=1")
+	out, err := cmd.Output()
+	if err != nil {
+		log.Fatalf("asking the go command for the %s/%s C compiler: %v", goos, goarch, err)
+	}
+	compiler := strings.Fields(strings.TrimSpace(string(out)))
+	if len(compiler) == 0 {
+		log.Fatalf("the go command names no C compiler for %s/%s", goos, goarch)
+	}
+	if _, err := exec.LookPath(compiler[0]); err != nil {
+		log.Fatalf("cgo is on and the %s/%s C compiler %q is not on PATH; put it there or pass -cgo=false", goos, goarch, compiler[0])
+	}
+}
+
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
 func listStd(goCmd []string, goos, goarch string) []listed {
@@ -188,7 +219,7 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 	// listing stops at the first of them without it. crypto/internal/
 	// fips140test is one. They compile to no archive, so they carry none
 	// here either, and the blob is the same either way.
-	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard", "std"}
+	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard,Error,DepsErrors", "std"}
 	var progress *fileLines
 	if os.Getenv(progressEnv) == "1" {
 		// -x echoes each tool command, and a command line names the files it reads. It is not in any cache key.
@@ -222,6 +253,13 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 		}
 		if !pkg.Standard {
 			log.Fatalf("%s/%s: %s is not a standard package", goos, goarch, pkg.ImportPath)
+		}
+		// -e keeps a package that failed in the listing, with no archive. Only a test-only package may have none.
+		if pkg.Error != nil && !strings.Contains(pkg.Error.Err, "no non-test Go files") {
+			log.Fatalf("%s/%s: %s: %s", goos, goarch, pkg.ImportPath, strings.TrimSpace(pkg.Error.Err))
+		}
+		if len(pkg.DepsErrors) > 0 {
+			log.Fatalf("%s/%s: %s: a dependency failed: %s", goos, goarch, pkg.ImportPath, strings.TrimSpace(pkg.DepsErrors[0].Err))
 		}
 		sort.Strings(pkg.Imports)
 		packages = append(packages, pkg)
