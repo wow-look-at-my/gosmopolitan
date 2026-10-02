@@ -6,12 +6,13 @@ A github.com module download tries each source in this order. The first one that
 2. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.tar.gz`.
 3. `https://github.com/<owner>/<repo>/archive/<ref>.zip`.
 4. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
-5. A shallow `git fetch` of the commit, then the full history only when a command needs it.
-6. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
+5. For a private repository: the archive github-state-mirror signs. See "Private repositories" below.
+6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
+7. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-The first five are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+The first six are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
 An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead, and the log names the archive as the failed source.
 
@@ -39,11 +40,20 @@ The REST steps read `/repos/<owner>/<repo>/tags` and `/branches` page by page, a
 
 A request through proxy.pazer.ai carries the GOAUTH credential of the github.com URL it wraps, and the proxy forwards it. A request to github-state-mirror carries the credential for api.github.com. A netrc entry for api.github.com therefore covers the mirror, the API and the proxied API.
 
+## Private repositories
+
+github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
+
+- The ref list comes from the mirror's REST API, as above.
+- The archive comes from `/repos/<owner>/<repo>/tarball/<commit>`, then `zipball`. The mirror answers with a redirect to a codeload.github.com URL that carries its own short-lived token. That redirect is not followed. The signed URL is fetched directly, then through proxy.pazer.ai, with no credential. An error prints `xxxxx` in place of the token.
+
+The route reads `tar.gz archive via github-state-mirror.pazer.io`, with `and proxy.pazer.ai` when the proxy carried it.
+
 ## No git until git is the only option
 
 A github.com repository gets no local git repository at first. The archive, the refs and the kept files all live in plain files. The bare repository is made by the first git command, which runs only on the git fallback, or for `RecentTag` history.
 
-The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai.
+The remote must be exactly `https://github.com/<owner>/<repo>` (with or without `.git`). Any other host, scheme, port or user name goes straight to git. github.com redirects each archive to `codeload.github.com`. `web.GetPinned` refuses a hop to any host other than those two. An API request may only reach its own host: api.github.com, github-state-mirror.pazer.io or proxy.pazer.ai. A signed archive URL must be on codeload.github.com.
 
 A commit that no branch or tag names never comes from an archive. The git path has the same rule, so an unmerged pull request commit cannot pose as a pseudo-version.
 
