@@ -782,12 +782,13 @@ func TestMemoryLimit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress test that takes time to run")
 	}
-	if runtime.GOMAXPROCS(0) < 4 {
-		t.Skip("want at least 4 Ps for this test")
+	if runtime.NumCPU() < 4 {
+		t.Skip("want at least 4 CPUs for this test")
 	}
 	// The subprogram asserts that it starts with no memory limit. An unset
 	// GOMEMLIMIT takes the cgroup's limit, so ask for no limit explicitly.
-	got := runTestProg(t, "testprog", "GCMemoryLimit", "GOMEMLIMIT=off")
+	// The subprogram inherits GOMAXPROCS and needs Ps, whatever -cpu or the environment set here.
+	got := runTestProg(t, "testprog", "GCMemoryLimit", "GOMEMLIMIT=off", "GOMAXPROCS=4")
 	want := "OK\n"
 	if got != want {
 		t.Fatalf("expected %q, but got %q", want, got)
@@ -798,10 +799,10 @@ func TestMemoryLimitNoGCPercent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("stress test that takes time to run")
 	}
-	if runtime.GOMAXPROCS(0) < 4 {
-		t.Skip("want at least 4 Ps for this test")
+	if runtime.NumCPU() < 4 {
+		t.Skip("want at least 4 CPUs for this test")
 	}
-	got := runTestProg(t, "testprog", "GCMemoryLimitNoGCPercent", "GOMEMLIMIT=off")
+	got := runTestProg(t, "testprog", "GCMemoryLimitNoGCPercent", "GOMEMLIMIT=off", "GOMAXPROCS=4")
 	want := "OK\n"
 	if got != want {
 		t.Fatalf("expected %q, but got %q", want, got)
