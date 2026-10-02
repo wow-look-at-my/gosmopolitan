@@ -211,6 +211,7 @@ func debug_modinfo() string {
 //go:nosplit
 //go:linkname mayMoreStackPreempt
 func mayMoreStackPreempt() {
+	mayMoreStackHook = mayMoreStackHookPreempt
 	// Don't do anything on the g0 or gsignal stack.
 	gp := getg()
 	if gp == gp.m.g0 || gp == gp.m.gsignal {
@@ -230,6 +231,7 @@ func mayMoreStackPreempt() {
 //go:nosplit
 //go:linkname mayMoreStackMove
 func mayMoreStackMove() {
+	mayMoreStackHook = mayMoreStackHookMove
 	// Don't do anything on the g0 or gsignal stack.
 	gp := getg()
 	if gp == gp.m.g0 || gp == gp.m.gsignal {
@@ -240,6 +242,14 @@ func mayMoreStackMove() {
 		gp.stackguard0 = stackForceMove
 	}
 }
+
+//go:linkname mayMoreStackHook
+var mayMoreStackHook uint8
+
+const (
+	mayMoreStackHookPreempt uint8 = 1
+	mayMoreStackHookMove    uint8 = 2
+)
 
 // debugPinnerKeepUnpin is used to make runtime.(*Pinner).Unpin reachable.
 var debugPinnerKeepUnpin bool = false

@@ -747,10 +747,13 @@ type common struct {
 	cancelCtx context.CancelFunc
 }
 
-// Short reports false: every test runs in full. The -test.short flag is
-// accepted and has no effect.
+//go:linkname mayMoreStackHook runtime.mayMoreStackHook
+var mayMoreStackHook uint8
+
+// Short reports whether a maymorestack hook runs, which yields or moves the
+// stack at every call, so only the tests' short paths fit that run.
 func Short() bool {
-	return false
+	return mayMoreStackHook != 0
 }
 
 // testBinary is set by cmd/go to "1" if this is a binary built by "go test".
