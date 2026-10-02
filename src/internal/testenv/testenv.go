@@ -461,13 +461,6 @@ func SkipFlaky(t testing.TB, issue int) {
 	}
 }
 
-func SkipFlakyNet(t testing.TB) {
-	if v, _ := strconv.ParseBool(os.Getenv("GO_BUILDER_FLAKY_NET")); v {
-		t.Helper()
-		t.Skip("skipping test on builder known to have frequent network failures")
-	}
-}
-
 // CPUIsSlow reports whether the CPU running the test is suspected to be slow.
 func CPUIsSlow() bool {
 	switch runtime.GOARCH {
