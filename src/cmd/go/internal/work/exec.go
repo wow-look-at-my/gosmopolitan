@@ -1982,8 +1982,29 @@ func splitPkgConfigOutput(out []byte) ([]string, error) {
 	return flags, nil
 }
 
-// Calls pkg-config if needed and returns the cflags/ldflags needed to build a's package.
+// pkgConfigResult is what one pkg-config run answered for a package.
+type pkgConfigResult struct {
+	cflags, ldflags []string
+	err             error
+}
+
+// getPkgConfigFlags returns the cflags/ldflags needed to build a's package.
+// The action ID and the cgo step both ask, and pkg-config runs once.
 func (b *Builder) getPkgConfigFlags(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
+	if len(p.CgoPkgConfig) == 0 {
+		return nil, nil, nil
+	}
+	if v, ok := b.pkgConfigCache.Load(p); ok {
+		r := v.(*pkgConfigResult)
+		return r.cflags, r.ldflags, r.err
+	}
+	cflags, ldflags, err = b.runPkgConfig(a, p)
+	b.pkgConfigCache.Store(p, &pkgConfigResult{cflags: cflags, ldflags: ldflags, err: err})
+	return cflags, ldflags, err
+}
+
+// runPkgConfig calls pkg-config and returns the cflags/ldflags needed to build a's package.
+func (b *Builder) runPkgConfig(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
 	sh := b.Shell(a)
 	if pcargs := p.CgoPkgConfig; len(pcargs) > 0 {
 		// pkg-config permits arguments to appear anywhere in

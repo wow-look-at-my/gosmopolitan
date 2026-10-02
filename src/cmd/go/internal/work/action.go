@@ -71,6 +71,7 @@ type Builder struct {
 	toolIDCache    par.Cache[string, string] // tool name -> tool ID
 	gccToolIDCache map[string]string         // tool name -> tool ID
 	buildIDCache   map[string]string         // file name -> build ID
+	pkgConfigCache sync.Map                  // *load.Package -> *pkgConfigResult, so pkg-config runs once per package
 }
 
 // NOTE: Much of Action would not need to be exported if not for test.
