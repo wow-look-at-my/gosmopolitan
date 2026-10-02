@@ -443,6 +443,7 @@ func Init() {
 	initRan = true
 	// Accepted so existing command lines parse. Short ignores it.
 	short = flag.Bool("test.short", false, "accepted and ignored: every test runs in full")
+	mayMoreStackHook = strings.Contains(os.Getenv("GOFLAGS"), "-d=maymorestack=")
 
 	// The failfast flag requests that test execution stop after the first test failure.
 	failFast = flag.Bool("test.failfast", false, "do not start new tests after the first test failure")
@@ -747,13 +748,13 @@ type common struct {
 	cancelCtx context.CancelFunc
 }
 
-//go:linkname mayMoreStackHook runtime.mayMoreStackHook
-var mayMoreStackHook uint8
+// mayMoreStackHook reports whether GOFLAGS compiled a maymorestack hook into this binary.
+var mayMoreStackHook bool
 
 // Short reports whether a maymorestack hook runs, which yields or moves the
 // stack at every call, so only the tests' short paths fit that run.
 func Short() bool {
-	return mayMoreStackHook != 0
+	return mayMoreStackHook
 }
 
 // testBinary is set by cmd/go to "1" if this is a binary built by "go test".
