@@ -7,6 +7,7 @@ package embedded
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,6 +64,39 @@ func TestBlobRoundTrip(t *testing.T) {
 	}
 	if trailer.Sum != sha256.Sum256(blob.Bytes()) {
 		t.Fatal("the trailer carries a different hash than the blob")
+	}
+}
+
+// TestIndexSpellsItsOwnWidth reads every entry back at the offset the index
+// records, over name widths that move the index across an 8-byte boundary
+// once the offsets gain the index's own length.
+func TestIndexSpellsItsOwnWidth(t *testing.T) {
+	for width := 0; width < 24; width++ {
+		var writer Writer
+		var names []string
+		var contents [][]byte
+		for num := range 12 {
+			name := fmt.Sprintf("entry/%d/%s", num, bytes.Repeat([]byte("x"), width))
+			content := bytes.Repeat([]byte{byte('a' + num)}, 90+num)
+			writer.Add(name, content)
+			names = append(names, name)
+			contents = append(contents, content)
+		}
+		var blob bytes.Buffer
+		if _, err := writer.WriteTo(&blob); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := readIndex(bytes.NewReader(blob.Bytes()))
+		if err != nil {
+			t.Fatalf("width %d: %v", width, err)
+		}
+		for idx, name := range names {
+			entry := entries[name]
+			got := blob.Bytes()[entry.Offset : entry.Offset+entry.Size]
+			if !bytes.Equal(got, contents[idx]) {
+				t.Fatalf("width %d: %s reads %q at %d, not its content", width, name, got[:8], entry.Offset)
+			}
+		}
 	}
 }
 

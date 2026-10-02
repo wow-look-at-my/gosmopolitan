@@ -100,6 +100,15 @@ embedded vet .
 embedded test .
 embedded mod tidy
 
+echo "== a cgo program builds through it, byte for byte the source tree's build, and runs"
+export PATH="/opt/cosmocc/bin:$PATH"
+cp -r testdata/cgoprobe "$work/cgoprobe"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" build -trimpath -ldflags=-buildid= -o "$work/embedded/cgoprobe.com" .)
+(cd "$work/cgoprobe" && GOOS=cosmo go build -trimpath -ldflags=-buildid= -o "$work/source/cgoprobe.com" .)
+cmp "$work/embedded/cgoprobe.com" "$work/source/cgoprobe.com"
+/bin/sh "$work/embedded/cgoprobe.com" | grep -q "ok callback"
+(cd "$work/cgoprobe" && env -u GOROOT GOCACHE="$work/cache" /bin/sh "$work/go.com" vet .)
+
 echo "== a listing hands an outside reader a standard package's export data as a file"
 export_file=$(embedded list -export -f '{{.Export}}' fmt)
 test -s "$export_file"

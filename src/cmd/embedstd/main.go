@@ -12,11 +12,14 @@
 //
 // Usage:
 //
-//	go tool embedstd [-V] [-go word]... -o blob
+//	go tool embedstd [-V] [-cgo=false] [-go word]... -o blob
 //
 // The go command that builds the archives is this executable, or the command
 // line the -go flags spell one word at a time, for a program that links the
-// go command under a subcommand of its own.
+// go command under a subcommand of its own. Std is built with cgo on, so the
+// blob carries runtime/cgo and the go command that carries the blob builds cgo
+// programs. The cosmocc compiler of each architecture must be on PATH.
+// -cgo=false builds std without it.
 package embedstd
 
 import (
@@ -39,6 +42,9 @@ import (
 var flagSet = flag.NewFlagSet("embedstd", flag.ExitOnError)
 
 var output = flagSet.String("o", "", "write the blob to `file`")
+
+// cgoOn builds std with cgo on, so the blob carries runtime/cgo compiled by the cosmocc compiler of each architecture.
+var cgoOn = flagSet.Bool("cgo", true, "build std with cgo on; the cosmocc compiler of each architecture must be on PATH")
 
 // goWords is the go command line, a word per -go flag; empty is this executable.
 var goWords []string
@@ -74,7 +80,7 @@ func Main(args []string) int {
 	log.SetFlags(0)
 	log.SetPrefix("embedstd: ")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] [-go word]... -o blob\n")
+		fmt.Fprintf(os.Stderr, "usage: go tool embedstd [-V] [-cgo=false] [-go word]... -o blob\n")
 		flag.PrintDefaults()
 		os.Exit(2)
 	}
@@ -190,8 +196,12 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 		progress = &fileLines{target: goos + "/" + goarch, out: os.Stderr}
 	}
 	cmd := goCommand(goCmd, args...)
+	cgoEnabled := "0"
+	if *cgoOn {
+		cgoEnabled = "1"
+	}
 	// -trimpath, so a program built with it against these archives.
-	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED=0")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOFLAGS=-trimpath", "CGO_ENABLED="+cgoEnabled)
 	cmd.Stderr = os.Stderr
 	if progress != nil {
 		cmd.Stderr = progress

@@ -103,6 +103,11 @@ func targetMessage(carried []string, goos, goarch string, err error) string {
 		return fmt.Sprintf("go: this go command carries no standard library at all, so it cannot build %s/%s: %v",
 			goos, goarch, err)
 	}
+	for _, target := range carried {
+		if target == goos+"/"+goarch {
+			return fmt.Sprintf("go: this go command carries a standard library for %s/%s and cannot read it: %v", goos, goarch, err)
+		}
+	}
 	return fmt.Sprintf("go: this go command builds for %s, and GOOS=%s GOARCH=%s names %s/%s instead.\n"+
 		"\tIt carries a standard library for those targets alone, so there is nothing here to compile %s/%s against.\n"+
 		"\tLeave GOOS and GOARCH unset: the target of this go command is already the one it can build.",

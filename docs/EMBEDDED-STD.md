@@ -1,6 +1,6 @@
 # The embedded standard library
 
-A go binary can carry its standard library inside itself. `go tool embedstd -o blob` builds std for cosmo/amd64 and cosmo/arm64 and writes one blob. The blob holds each package's compiled archive, the assembly headers of `pkg/include`, and a manifest per target. The manifest names each package, its package name, its direct imports, its build ID and its archive.
+A go binary can carry its standard library inside itself. `go tool embedstd -o blob` builds std for cosmo/amd64 and cosmo/arm64 and writes one blob. It builds with cgo on. The blob then carries runtime/cgo, and the go command that carries the blob builds cgo programs. That needs the cosmocc compiler of each architecture on PATH (docs/CGO.md). `-cgo=false` builds std without cgo, and that go command then refuses a cgo build by name: it embeds no runtime/cgo. The blob holds each package's compiled archive, the assembly headers of `pkg/include`, and a manifest per target. The manifest names each package, its package name, its direct imports, its build ID and its archive.
 
 ## Storing it
 

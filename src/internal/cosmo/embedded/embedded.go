@@ -321,23 +321,29 @@ func (writer *Writer) Add(name string, content []byte) {
 
 // WriteTo writes the blob: magic, index length, index, then the entries.
 func (writer *Writer) WriteTo(out io.Writer) (int64, error) {
-	index, err := json.Marshal(writer.entries)
-	if err != nil {
-		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
-	}
-	head := int64(16 + len(index))
+	// The offsets include the index that spells them, and a wider spelling can widen the index. The loop ends when the head stops moving.
+	base := make([]int64, len(writer.entries))
 	for idx := range writer.entries {
-		writer.entries[idx].Offset += head
+		base[idx] = writer.entries[idx].Offset
 	}
-	index, err = json.Marshal(writer.entries)
-	if err != nil {
-		return 0, err
-	}
-	for len(index)%8 != 0 {
-		index = append(index, ' ')
+	var index []byte
+	head := int64(0)
+	for {
+		for idx := range writer.entries {
+			writer.entries[idx].Offset = base[idx] + head
+		}
+		var err error
+		index, err = json.Marshal(writer.entries)
+		if err != nil {
+			return 0, err
+		}
+		for len(index)%8 != 0 {
+			index = append(index, ' ')
+		}
+		if int64(16+len(index)) == head {
+			break
+		}
+		head = int64(16 + len(index))
 	}
 	var buf bytes.Buffer
 	buf.WriteString(blobMagic)
