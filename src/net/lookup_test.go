@@ -88,7 +88,6 @@ func TestLookupGoogleSRV(t *testing.T) {
 		tt := lookupGoogleSRVTests[i]
 		cname, srvs, err := LookupSRV(tt.service, tt.proto, tt.name)
 		if err != nil {
-			testenv.SkipFlakyNet(t)
 			if attempts < len(backoffDuration) {
 				dur := backoffDuration[attempts]
 				t.Logf("backoff %v after failure %v\n", dur, err)
@@ -137,7 +136,6 @@ func TestLookupGmailMX(t *testing.T) {
 		tt := lookupGmailMXTests[i]
 		mxs, err := LookupMX(tt.name)
 		if err != nil {
-			testenv.SkipFlakyNet(t)
 			if attempts < len(backoffDuration) {
 				dur := backoffDuration[attempts]
 				t.Logf("backoff %v after failure %v\n", dur, err)
@@ -183,7 +181,6 @@ func TestLookupGmailNS(t *testing.T) {
 		tt := lookupGmailNSTests[i]
 		nss, err := LookupNS(tt.name)
 		if err != nil {
-			testenv.SkipFlakyNet(t)
 			if attempts < len(backoffDuration) {
 				dur := backoffDuration[attempts]
 				t.Logf("backoff %v after failure %v\n", dur, err)
@@ -232,7 +229,6 @@ func TestLookupGmailTXT(t *testing.T) {
 		tt := lookupGmailTXTTests[i]
 		txts, err := LookupTXT(tt.name)
 		if err != nil {
-			testenv.SkipFlakyNet(t)
 			if attempts < len(backoffDuration) {
 				dur := backoffDuration[attempts]
 				t.Logf("backoff %v after failure %v\n", dur, err)
@@ -344,7 +340,6 @@ var lookupCNAMETests = []struct {
 
 func TestLookupCNAME(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
@@ -357,7 +352,6 @@ func TestLookupCNAME(t *testing.T) {
 		tt := lookupCNAMETests[i]
 		cname, err := LookupCNAME(tt.name)
 		if err != nil {
-			testenv.SkipFlakyNet(t)
 			if attempts < len(backoffDuration) {
 				dur := backoffDuration[attempts]
 				t.Logf("backoff %v after failure %v\n", dur, err)
@@ -383,7 +377,6 @@ var lookupGoogleHostTests = []struct {
 
 func TestLookupGoogleHost(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
@@ -436,7 +429,6 @@ var lookupGoogleIPTests = []struct {
 
 func TestLookupGoogleIP(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
@@ -627,7 +619,6 @@ func TestLookupDotsWithRemoteSource(t *testing.T) {
 		testenv.SkipFlaky(t, 27992)
 	}
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	if !supportsIPv4() || !*testIPv4 {
 		t.Skip("IPv4 is required")
@@ -876,7 +867,6 @@ func TestLookupNonLDH(t *testing.T) {
 
 func TestLookupContextCancel(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	t.Serial()
 	origTestHookLookupIP := testHookLookupIP
@@ -963,7 +953,6 @@ func TestNilResolverLookup(t *testing.T) {
 // canceled lookups (see golang.org/issue/24178 for details).
 func TestLookupHostCancel(t *testing.T) {
 	mustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 	t.Parallel() // Executes 600ms worth of sequential sleeps.
 
 	const (
@@ -1028,7 +1017,6 @@ func TestConcurrentPreferGoResolversDial(t *testing.T) {
 	}
 
 	testenv.MustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 
 	defer dnsWaitGroup.Wait()
 
@@ -1243,7 +1231,6 @@ func TestWithUnexpiredValuesPreserved(t *testing.T) {
 // Issue 31597: don't panic on null byte in name
 func TestLookupNullByte(t *testing.T) {
 	testenv.MustHaveExternalNetwork(t)
-	testenv.SkipFlakyNet(t)
 	LookupHost("foo\x00bar") // check that it doesn't panic; it used to on Windows
 }
 
@@ -1282,7 +1269,6 @@ func TestResolverLookupIP(t *testing.T) {
 					const host = "google.com"
 					ips, err := DefaultResolver.LookupIP(context.Background(), network, host)
 					if err != nil {
-						testenv.SkipFlakyNet(t)
 						t.Fatalf("DefaultResolver.LookupIP(%q, %q): failed with unexpected error: %v", network, host, err)
 					}
 
@@ -1443,7 +1429,6 @@ func testLookupNoData(t *testing.T, prefix string) {
 			}
 		}
 
-		testenv.SkipFlakyNet(t)
 		if attempts < len(backoffDuration) {
 			dur := backoffDuration[attempts]
 			t.Logf("%v: backoff %v after failure %v\n", prefix, dur, err)
@@ -1609,7 +1594,6 @@ func TestLookupNoSuchHost(t *testing.T) {
 							return
 						}
 					}
-					testenv.SkipFlakyNet(t)
 					if attempts < len(backoffDuration) {
 						dur := backoffDuration[attempts]
 						t.Logf("backoff %v after failure %v\n", dur, err)
