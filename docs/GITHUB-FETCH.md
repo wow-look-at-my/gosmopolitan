@@ -42,7 +42,7 @@ A request through proxy.pazer.ai carries the GOAUTH credential of the github.com
 
 ## Private repositories
 
-github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
+github.com answers nothing about a private repository without a credential. GOAUTH usually has none for it. github-state-mirror is the route that needs no git. It is asked first with the GOAUTH credential for api.github.com. Then it is asked once with each token in `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `GITHUB_TOKEN` and `GH_TOKEN`, in that order. After those, each other environment value that starts like a GitHub token (`ghp_`, `github_pat_`, `gho_`, `ghu_`, `ghs_`) is tried, in the order of the variable names. A web session needs that search: its real tokens sit in variables with their own names, and `GH_TOKEN` holds a proxy placeholder. A token goes to the mirror only. The token the mirror last accepted is tried first after that.
 
 - The ref list comes from the mirror's REST API, as above.
 - The archive comes from `/repos/<owner>/<repo>/tarball/<commit>`, then `zipball`. The mirror answers with a redirect to a codeload.github.com URL that carries its own short-lived token. That redirect is not followed. The signed URL is fetched directly, then through proxy.pazer.ai, with no credential. An error prints `xxxxx` in place of the token.
