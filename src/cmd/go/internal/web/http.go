@@ -94,8 +94,11 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool, credentialURL string) (*Response, error) {
+func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, error) {
 	start := time.Now()
+	if pin == nil {
+		pin = new(PinOptions)
+	}
 
 	if url.Scheme == "file" {
 		return getFile(url)
@@ -144,11 +147,18 @@ func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool, cr
 		} else {
 			client = securityPreservingDefaultClient
 		}
-		if allowHost != nil {
-			client = hostPinnedHTTPClient(client, allowHost)
+		if pin.AllowHost != nil {
+			client = hostPinnedHTTPClient(client, pin.AllowHost)
 		}
-		if url.Scheme == "https" && credentialURL != "" {
-			auth.AddCredentialsFor(client, req, credentialURL)
+		if pin.NoRedirect {
+			noRedirect := *client
+			noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			client = &noRedirect
+		}
+		if url.Scheme == "https" && pin.Bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+pin.Bearer)
+		} else if url.Scheme == "https" && pin.CredentialURL != "" {
+			auth.AddCredentialsFor(client, req, pin.CredentialURL)
 		} else if url.Scheme == "https" {
 			// Use initial GOAUTH credentials.
 			auth.AddCredentials(client, req, nil, "")
@@ -174,7 +184,7 @@ func get(security SecurityMode, url *urlpkg.URL, allowHost func(string) bool, cr
 		// (e.g. a valid <meta name="go-import"> tag),
 		// retry the request with credentials obtained by invoking GOAUTH
 		// with the request URL.
-		if url.Scheme == "https" && credentialURL == "" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
+		if url.Scheme == "https" && pin.CredentialURL == "" && pin.Bearer == "" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
 			// Close the body of the previous response since we
 			// are discarding it and creating a new one.
 			res.Body.Close()
