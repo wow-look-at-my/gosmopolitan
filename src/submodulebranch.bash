@@ -76,4 +76,9 @@ while read -r key _; do
 		echo "submodulebranch: $path stays where it is: $url answered:" >&2
 		echo "$said" >&2
 	fi
+	# The dependency's own submodules hold files its tests read, at the commits it names.
+	if ! said=$(git -C "$path" submodule update --init --recursive 2>&1); then
+		echo "submodulebranch: $path cannot check out its own submodules:" >&2
+		echo "$said" >&2
+	fi
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' || true)

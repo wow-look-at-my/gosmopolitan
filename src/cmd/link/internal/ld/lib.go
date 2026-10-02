@@ -1439,6 +1439,10 @@ func (ctxt *Link) hostlink() {
 	if ctxt.BuildMode == BuildModeCArchive {
 		return
 	}
+	if ctxt.HeadType == objabi.Hcosmo {
+		ctxt.cosmoHostlink()
+		return
+	}
 
 	var argv []string
 	argv = append(argv, ctxt.extld()...)

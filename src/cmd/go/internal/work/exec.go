@@ -2629,12 +2629,12 @@ func (b *Builder) gfortranCmd(incdir, workdir string) []string {
 
 // ccExe returns the CC compiler setting without all the extra flags we add implicitly.
 func (b *Builder) ccExe() []string {
-	return envList("CC", cfg.DefaultCC(cfg.Goos, cfg.Goarch))
+	return envList("CC", cfg.TargetCC(cfg.Goos, cfg.Goarch))
 }
 
 // cxxExe returns the CXX compiler setting without all the extra flags we add implicitly.
 func (b *Builder) cxxExe() []string {
-	return envList("CXX", cfg.DefaultCXX(cfg.Goos, cfg.Goarch))
+	return envList("CXX", cfg.TargetCXX(cfg.Goos, cfg.Goarch))
 }
 
 // fcExe returns the FC compiler setting without all the extra flags we add implicitly.

@@ -421,8 +421,24 @@ func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 	}
 	cmd := exec.Command(goCmd[0], append(slices.Clone(goCmd[1:]), s.traceArgs(rewriteOutputFlag(os.Args[1:], s.childO))...)...)
 	cmd.Env = append(os.Environ(), "GOARCH="+s.arch, "GOCOSMOFAT_INNER=1")
+	cmd.Env = append(cmd.Env, cosmoSiblingCgoEnv(s.arch)...)
 	s.launch(cmd)
 	return s
+}
+
+// cosmoSiblingCgoEnv is the C toolchain environment of a sibling build. The
+// sibling compiles C for the other architecture, so it never inherits CC or
+// CXX.
+func cosmoSiblingCgoEnv(arch string) []string {
+	cgo := "0"
+	if cfg.BuildContext.CgoEnabled {
+		cgo = "1"
+	}
+	return []string{
+		"CGO_ENABLED=" + cgo,
+		"CC=" + cfg.TargetCC("cosmo", arch),
+		"CXX=" + cfg.TargetCXX("cosmo", arch),
+	}
 }
 
 // cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
@@ -542,6 +558,7 @@ func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 		"GOPATH="+s.tmp,
 		"GOMODCACHE="+cfg.GOMODCACHE,
 	)
+	cmd.Env = append(cmd.Env, cosmoSiblingCgoEnv(s.arch)...)
 	s.launch(cmd)
 	return s
 }
