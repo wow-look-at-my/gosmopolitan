@@ -301,7 +301,7 @@ func (st *relocSymState) relocsym(s loader.Sym, P []byte) {
 				st.err.Errorf(s, "unknown reloc to %v: %d (%s)", ldr.SymName(rs), rt, sym.RelocName(target.Arch, rt))
 			}
 		case objabi.R_TLS_LE:
-			if target.IsExternal() && target.IsElf() {
+			if target.IsExternal() && target.IsElf() && !cosmoFixedTLS(target) {
 				nExtReloc++
 				o = 0
 				if !target.IsAMD64() {
@@ -678,6 +678,9 @@ func extreloc(ctxt *Link, ldr *loader.Loader, s loader.Sym, r loader.Reloc) (loa
 		return thearch.Extreloc(target, ldr, r, s)
 
 	case objabi.R_TLS_LE, objabi.R_TLS_IE:
+		if rt == objabi.R_TLS_LE && cosmoFixedTLS(target) {
+			return rr, false
+		}
 		if target.IsElf() {
 			rs := r.Sym()
 			rr.Xsym = rs

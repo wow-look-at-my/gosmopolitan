@@ -287,11 +287,8 @@ func sysargs(argc int32, argv **byte) {
 		return
 	}
 	if iswindows() {
-		// The NT boot stub always fabricates a complete auxv
-		// (AT_PAGESZ at minimum), so this point should be
-		// unreachable; guard anyway because both fallbacks below
-		// are Linux syscall paths (open /proc/self/auxv, and an
-		// mmap+mincore page-size probe).
+		// The NT boot stub fabricates an auxv, and libcosmo's WinMain, which starts a cgo program, passes none.
+		physPageSize = 0x1000
 		return
 	}
 	if isdarwin() {

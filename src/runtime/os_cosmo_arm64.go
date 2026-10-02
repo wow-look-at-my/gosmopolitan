@@ -178,6 +178,9 @@ func cosmo_xlat_errno_r0()
 //go:linkname cosmo_xlat_oflags_r2
 func cosmo_xlat_oflags_r2()
 
+// cosmoCTP loads libcosmo's thread pointer into R28 before a call into C (rt0_cosmo_arm64.s).
+func cosmoCTP()
+
 // _RTLD_DEFAULT is Apple's RTLD_DEFAULT dlsym pseudo-handle ((void *)-2):
 // search every image loaded in the process, i.e. the loader's libSystem.
 const _RTLD_DEFAULT = ^uintptr(1)

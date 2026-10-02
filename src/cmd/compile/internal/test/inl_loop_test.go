@@ -119,6 +119,16 @@ func CallHot(xss [][]uint32) {
 		Sink += bigLoop(xs, 6)
 	}
 }
+
+// CallHotNosplit is CallHot with a frame the linker bounds, so its loop
+// must not buy bigLoop.
+//
+//go:nosplit
+func CallHotNosplit(xss [][]uint32) {
+	for _, xs := range xss {
+		Sink += bigLoop(xs, 7)
+	}
+}
 `
 
 // buildLoopInlineTest compiles loopInlineSrc with the given -gcflags and
@@ -172,11 +182,9 @@ func TestLoopInlining(t *testing.T) {
 	}
 
 	// bigLoop is affordable in CallHot's loop but not on CallCold's
-	// straight-line path, so exactly one of its two call sites inlines.
-	// This is the whole point: the same callee, judged by where it is
-	// called from rather than by what it costs alone.
+	// straight-line path, so exactly one of its call sites inlines.
 	if n := strings.Count(on, "inlining call to bigLoop"); n != 1 {
-		t.Errorf("%d call sites inlined bigLoop, want 1 (the one inside a loop)\n%s", n, on)
+		t.Errorf("%d call sites inlined bigLoop, want 1: CallHot's loop; CallCold is cold, and CallHotNosplit's nosplit frame takes no loop boost\n%s", n, on)
 	}
 }
 

@@ -642,10 +642,11 @@ func mustLinkExternal(goos, goarch string, cgoEnabled bool) bool {
 		switch goos {
 		case "android":
 			return true
+		case "cosmo":
+			// The internal linker cannot carry libcosmo.
+			return true
 		case "dragonfly":
-			// It seems that on Dragonfly thread local storage is
-			// set up by the dynamic linker, so internal cgo linking
-			// doesn't work. Test case is "go test runtime/cgo".
+			// It seems that on Dragonfly thread local storage is set up by the dynamic linker.
 			return true
 		}
 	}
@@ -1872,12 +1873,12 @@ func checkNotStale(env []string, goBinary string, targets ...string) {
 // by 'go tool dist list'.
 // cgoEnabled is what 'dist list' enumerates AND what generates
 // internal/platform's zosarch.go, so a port left out here is one the go
-// command reports and cmd/dist does not. Cosmo is cgo-less: an APE carries a
-// payload per architecture, and cgo would want a C cross-toolchain for each.
+// command reports and cmd/dist does not. Cosmo cgo needs the cosmocc cross
+// compiler for each architecture. cmd/go turns it off when cosmocc is absent.
 var cgoEnabled = map[string]bool{
 	"aix/ppc64":       true,
-	"cosmo/amd64":     false,
-	"cosmo/arm64":     false,
+	"cosmo/amd64":     true,
+	"cosmo/arm64":     true,
 	"darwin/amd64":    true,
 	"darwin/arm64":    true,
 	"dragonfly/amd64": true,
