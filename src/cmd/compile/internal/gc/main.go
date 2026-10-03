@@ -21,6 +21,7 @@ import (
 	"cmd/compile/internal/noder"
 	"cmd/compile/internal/pgoir"
 	"cmd/compile/internal/pkginit"
+	"cmd/compile/internal/regexpprecompile"
 	"cmd/compile/internal/reflectdata"
 	"cmd/compile/internal/rttype"
 	"cmd/compile/internal/slice"
@@ -263,6 +264,12 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 			ir.AstDump(fn, "devirtualize-and-inline, "+ir.FuncName(fn))
 		}
 	}
+
+	// Precompile constant regexp patterns. After inlining, so an inlined
+	// body can resolve its pattern. Before escape analysis, which must see
+	// the rewritten calls.
+	base.Timer.Start("fe", "regexp-precompile")
+	regexpprecompile.Package(typecheck.Target)
 
 	noder.MakeWrappers(typecheck.Target) // must happen after inlining
 
