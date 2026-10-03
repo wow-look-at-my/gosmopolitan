@@ -7,6 +7,10 @@ on:
     # matches every branch and no tag, so a tag push does not re-enter this workflow.
     branches: ['**']
 
+concurrency:
+  group: gha_${{ github.repository }}_${{ github.workflow }}_${{ github.ref != 'refs/heads/master' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   # Every check that reads the tree and nothing else. It waits on no build, so a violation is named within the minute.
   source-checks:
