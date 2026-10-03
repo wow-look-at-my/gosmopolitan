@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# unix-tag-agrees.sh -- cmd/dist and internal/syslist must name the same
-# GOOS set for the "unix" build tag.
-#
-# dist cannot import internal/syslist: it compiles against the BOOTSTRAP
-# toolchain's std, so the list is copied. A copy that drifts makes the two
-# builders disagree about which files a package holds.
+# unix-tag-agrees.sh -- cmd/dist and internal/syslist must name the same GOOS set for the "unix" build tag.
 
 set -uo pipefail
 
@@ -12,8 +7,6 @@ root=${1:-.}
 dist="$root/src/cmd/dist/build.go"
 syslist="$root/src/internal/syslist/syslist.go"
 
-# firstKey prints the first quoted lowercase-alnum token on a line, and
-# returns 1 when the line carries none.
 firstKey() {
 	rest=$1
 	while [ "$rest" != "${rest#*\"}" ]; do
