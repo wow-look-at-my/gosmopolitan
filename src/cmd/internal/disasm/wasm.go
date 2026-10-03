@@ -1,22 +1,20 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Disassembly of WebAssembly function bodies.
 //
 // Unlike the other architectures, wasm has no x/arch decoder, and its
-// instructions cannot be decoded statelessly: a function body starts
-// with a vector of local declarations, control instructions nest, and
-// symbolizing a call requires the module's function index space
-// (imports followed by the code section functions). The Disasm methods
-// therefore route wasm to the stateful decoder in this file instead of
-// a disasmFunc.
+// instructions cannot be decoded statelessly: a function body starts with a
+// vector of local declarations, control instructions nest, and symbolizing a
+// call requires the module's function index space (imports followed by the
+// code section functions). The Disasm methods therefore route wasm to the
+// stateful decoder in this file instead of a disasmFunc.
 //
-// Addresses are file offsets of the encoded instructions inside the
-// module (see cmd/internal/objfile/wasm.go), so the output lines up
-// with what other wasm tooling reports. Mnemonics follow the wasm text
-// format (i32.add, local.get, ...) rather than Go assembly names,
-// since a linked module contains plain spec instructions.
+// Addresses are file offsets of the encoded instructions inside the module
+// (see cmd/internal/objfile/wasm.go), so the output lines up with what other
+// wasm tooling reports. Mnemonics follow the wasm text format (i32.add,
+// local.get, ...) rather than Go assembly names, since a linked module
+// contains plain spec instructions.
 
 package disasm
 
@@ -94,8 +92,7 @@ func (ctx *wasmCtx) funcSig(addr uint64) string {
 	return ""
 }
 
-// wasmGlobals is the fixed global layout emitted by
-// cmd/link/internal/wasm (writeGlobalSec).
+// wasmGlobals is the fixed global layout emitted by cmd/link/internal/wasm (writeGlobalSec).
 var wasmGlobals = []string{"SP", "CTXT", "g", "RET0", "RET1", "RET2", "RET3", "PAUSE"}
 
 // decodeWasm disassembles the byte range [start, end), which normally
@@ -107,8 +104,7 @@ func (d *Disasm) decodeWasm(start, end uint64, f func(pc, size uint64, file stri
 	_, base := d.lookup(start)
 	fullBody := false
 	if base == start {
-		// Decoding from the top of a function: the body begins with
-		// its vector of local declarations.
+		// Decoding from the top of a function: the body begins with its vector of local declarations.
 		dec.atStart = true
 		dec.sig = d.wasm.funcSig(start)
 		for i, a := range d.wasm.funcAddrs {
@@ -124,16 +120,14 @@ func (d *Disasm) decodeWasm(start, end uint64, f func(pc, size uint64, file stri
 		f(start+uint64(off), uint64(dec.off-off), file, line, text)
 	}
 	if fullBody && (dec.depth != 0 || dec.lastOp != 0x0b) {
-		// The body should consist of balanced blocks terminated by a
-		// single end. Anything else means the decode drifted.
+		// The body should consist of balanced blocks terminated by a single end. Anything else means the decode drifted.
 		file, line, _ := d.pcln.PCToLine(start)
 		f(end, 0, file, line, fmt.Sprintf("?decode-error: body did not decode cleanly (depth=%d)", dec.depth))
 	}
 }
 
 // A wasmDecoder decodes the instructions of one function body (or an
-// arbitrary byte range) sequentially, tracking block nesting for
-// indentation.
+// arbitrary byte range) sequentially.
 type wasmDecoder struct {
 	code      []byte
 	off       int
@@ -243,7 +237,7 @@ func (dec *wasmDecoder) next() string {
 	case wimmMem:
 		text += dec.memArg(uint64(ent.nalign))
 	case wimmMemByte:
-		dec.byte() // memory index, always 0
+		dec.byte()
 	case wimmI32, wimmI64:
 		text += fmt.Sprintf(" %d", dec.sleb())
 	case wimmF32:
@@ -287,9 +281,9 @@ func (dec *wasmDecoder) finish(op byte, text string) string {
 	}
 	depth := dec.depth
 	switch op {
-	case 0x02, 0x03, 0x04: // block, loop, if
+	case 0x02, 0x03, 0x04: // block, loop.
 		dec.depth++
-	case 0x05: // else prints at the depth of its if
+	case 0x05:
 		depth--
 	case 0x0b: // end
 		if dec.depth > 0 {
@@ -343,8 +337,8 @@ func (dec *wasmDecoder) blockType() string {
 	}
 }
 
-// brTable renders a br_table target vector, eliding very long ones
-// (the entry dispatch of a Go function can have hundreds of targets).
+// brTable renders a br_table target vector, eliding long ones (the entry
+// dispatch of a Go function can have hundreds of targets).
 func (dec *wasmDecoder) brTable() string {
 	const maxShow = 16
 	n := dec.uleb() // number of targets, excluding the default
@@ -415,7 +409,7 @@ func (dec *wasmDecoder) simdOp() string {
 	switch {
 	case sub <= 11, sub == 92, sub == 93: // loads/stores with memarg
 		text += dec.memArg(0)
-	case sub == 12, sub == 13: // v128.const, i8x16.shuffle: 16 bytes
+	case sub == 12, sub == 13: // v128.const, i8x16.shuffle: several
 		text += " 0x"
 		for i := 0; i < 16; i++ {
 			text = fmt.Sprintf("%s%02x", text, dec.byte())
@@ -474,10 +468,10 @@ const (
 	wimmGlobal           // global index
 	wimmMem              // memarg: alignment, offset
 	wimmMemByte          // single reserved byte (memory index)
-	wimmI32              // signed leb128 (32 bit)
-	wimmI64              // signed leb128 (64 bit)
-	wimmF32              // 4 bytes, little endian
-	wimmF64              // 8 bytes, little endian
+	wimmI32
+	wimmI64
+	wimmF32              // A few bytes, little
+	wimmF64              // Several bytes, little
 	wimmSelectT          // vector of value types
 	wimmRefNull          // reference type
 	wimmFuncRef          // function index (ref.func)

@@ -1,6 +1,6 @@
 # Fat APE build: parallel siblings, stripping, and debug tiers
 
-How `GOOS=cosmo go build` turns two per-architecture builds into one APE, what it strips out of the shipped image, and where the debug information goes. The knobs themselves are listed in CLAUDE.md under "Building Cosmopolitan Binaries". This file is the depth behind them.
+How `GOOS=cosmo go build` turns per-architecture builds into one APE, what it strips out of the shipped image, and where the debug information goes. The knobs themselves are listed in CLAUDE.md under "Building Cosmopolitan Binaries". This file is the depth behind them.
 
 ## Parallel sibling build
 

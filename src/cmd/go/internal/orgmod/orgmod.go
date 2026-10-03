@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package orgmod describes the modules that cmd/go resolves from a branch head
 // instead of from the version token recorded in a go.mod file.
@@ -27,9 +26,6 @@ import (
 const Prefix = "github.com/wow-look-at-my/"
 
 // IsOrg reports whether path names a module under Prefix.
-//
-// Every writer, every go.sum guard, and the vendor consistency check asks this
-// one question, so the rule cannot drift between them.
 func IsOrg(path string) bool {
 	return strings.HasPrefix(path, Prefix)
 }
@@ -55,12 +51,6 @@ func Placeholder(path string) string {
 //
 // The marker is read from the line the version lives on, so a fork consumed
 // through a replace carries it on the replace line.
-//
-//	require github.com/wow-look-at-my/foo PLACEHOLDER // branch=v1
-//	require github.com/wow-look-at-my/bar PLACEHOLDER // indirect; branch=v1
-//
-// The two go-toolchain spellings that carried this before are read as well, so
-// a go.mod file that records one resolves the way it always did.
 func Branch(comments []string) string {
 	for _, c := range comments {
 		for _, field := range strings.Split(strings.TrimPrefix(strings.TrimSpace(c), "//"), ";") {
