@@ -83,12 +83,14 @@ func buildApeLoaders() {
 		fatalf("zig's darwin libc stubs are not in %s/libc/darwin\n", libDir)
 	}
 	obj := pathf("%s/apeld-darwin.o", workdir)
+	// On a Mac, zig and ld64.lld would also read the host SDK and /usr/lib, and the loader would differ by host.
 	args := []string{zig, "cc", "-target", "aarch64-macos"}
 	args = append(args, apeldFlags...)
-	args = append(args, "-c", "-o", obj, "darwin/apeld.c")
+	args = append(args, "-nostdinc", "-isystem", pathf("%s/include", libDir), "-isystem", pathf("%s/libc/include/any-darwin-any", libDir),
+		"-c", "-o", obj, "darwin/apeld.c")
 	run(dir, CheckExit, args...)
 	run(dir, CheckExit, lld, "-arch", "arm64", "-platform_version", "macos", "12.0", "12.0",
-		"-L"+pathf("%s/libc/darwin", libDir), "-lSystem",
+		"-Z", "-L"+pathf("%s/libc/darwin", libDir), "-lSystem",
 		"-dead_strip", "-S", "-x", "-no_uuid", "-no_function_starts", "-no_data_const", "-fixup_chains",
 		"-o", "bin/apeld-darwin-arm64", obj)
 	xremove(obj)
