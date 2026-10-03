@@ -1,12 +1,14 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
 package cosmo
 
-// Syscall numbers for arm64. Cosmopolitan uses Linux syscall numbers on all
-// platforms. These are the arm64/aarch64 Linux syscall numbers.
+// Syscall numbers for arm64.
+// Cosmopolitan uses Linux syscall numbers on all platforms.
+// These are the arm64/aarch64 Linux syscall numbers.
 const (
 	SYS_READ            = 63
 	SYS_WRITE           = 64
@@ -36,7 +38,9 @@ const (
 	SYS_EPOLL_PWAIT2    = 441
 )
 
-// EpollEvent is the epoll_event structure.
+// EpollEvent is the epoll_event structure. Unlike x86-64, the Linux
+// kernel does not pack the struct on arm64: it is 16 bytes with Data at
+// offset 8.
 type EpollEvent struct {
 	Events uint32
 	_pad   uint32

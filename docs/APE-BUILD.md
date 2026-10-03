@@ -1,6 +1,6 @@
 # Fat APE build: parallel siblings, stripping, and debug tiers
 
-How `GOOS=cosmo go build` turns per-architecture builds into one APE, what it strips out of the shipped image, and where the debug information goes. The knobs themselves are listed in CLAUDE.md under "Building Cosmopolitan Binaries". This file is the depth behind them.
+How `GOOS=cosmo go build` turns two per-architecture builds into one APE, what it strips out of the shipped image, and where the debug information goes. The knobs themselves are listed in CLAUDE.md under "Building Cosmopolitan Binaries". This file is the depth behind them.
 
 ## Parallel sibling build
 
@@ -8,7 +8,7 @@ Parallel sibling build: the sibling-architecture build runs concurrently with th
 
 ## Strip-and-sidecar default
 
-Strip-and-sidecar default (2026-07-18): the fat merge embeds only each payload's loadable span. That span is the file range its program headers reference, exactly what cosmocc's apelink ships. Naming is exact output name plus suffix: bare `go build` of package `web` gives `web` and `web.dbg`, like cosmocc's `hello`/`hello.dbg`. Only the amd64 image gets a sidecar. An arm64 one is an ELF the build host usually cannot execute, and a file named `web.aarch64.elf` beside the APE invites the attempt.
+Strip-and-sidecar default (2026-07-18): the fat merge embeds only each payload's loadable span - the file range its program headers reference, exactly what cosmocc's apelink ships. Naming is exact output name plus suffix: bare `go build` of package `web` gives `web` and `web.dbg`, like cosmocc's `hello`/`hello.dbg`. Only the amd64 image gets a sidecar. An arm64 one is an ELF the build host usually cannot execute, and a file named `web.aarch64.elf` beside the APE invites the attempt.
 
 `GOCOSMOSTRIP=0` (or `off`, parsed like GOCOSMOFAT) restores full embedded payloads with no sidecar. An explicit `-s` or `-w` in `-ldflags` suppresses the sidecar too, and embeds the user-stripped payloads as-is. Stripping does not affect runtime tracebacks or runtime/pprof (Go symbolizes via gopclntab, which lives in a loaded segment). The sidecar is for gdb/delve and offline tools. Debug the arm64 image under `GOCOSMOSTRIP=0`, which leaves its DWARF in the APE.
 

@@ -1,12 +1,13 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2017 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Package cache is the go command's view of the build cache.
 //
 // The cache itself is go-s3-server's: cachedisk is the directory on disk, and
 // cacheclient puts the store and the broker over it. This package names those
 // types for the go command. It adds the action hash, whose meaning is the go
-// command's, and the read a cache cannot do for it, which is a mapped one.
+// command's, and the one read a cache cannot do for it, which is a mapped one.
 package cache
 
 import (
@@ -19,7 +20,9 @@ import (
 	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
-// An ActionID is a cache action key, the hash of a complete description of a repeatable computation: the command line, the environment.
+// An ActionID is a cache action key, the hash of a complete description of a
+// repeatable computation: the command line, the environment, the input file
+// contents and the executable contents.
 type ActionID = cachedisk.ActionID
 
 // An OutputID is a cache output key, the hash of an output of a computation.
@@ -31,11 +34,15 @@ type Cache = cachedisk.Cache
 // An Entry is what the cache holds for an action.
 type Entry = cachedisk.Entry
 
-// DebugTest makes the test cache say why it reused a result or did not.
+// DebugTest makes the test cache say why it reused a result or did not. The
+// decision is the go command's rather than the cache's, so the knob is read
+// here.
 var DebugTest = false
 
 // The directory lives in a module outside this tree, which reads GODEBUG out
-// of the environment.
+// of the environment. The registry these settings belong to is here, and a
+// setting read through it feeds a runtime/metrics counter. So the go command
+// reads all three and hands the answers down.
 var (
 	gocachetest   = godebug.New("gocachetest")
 	gocacheverify = godebug.New("gocacheverify")
@@ -74,7 +81,8 @@ func PutBytes(c Cache, id ActionID, data []byte) error {
 	return cachedisk.PutBytes(c, id, data)
 }
 
-// PutNoVerify stores an output that is not reproducible, such as test output.
+// PutNoVerify stores an output that is not reproducible, such as test output,
+// so GODEBUG=goverifycache=1 does not hold it to a second identical run.
 func PutNoVerify(c Cache, id ActionID, file io.ReadSeeker) (OutputID, int64, error) {
 	return cachedisk.PutNoVerify(c, id, file)
 }

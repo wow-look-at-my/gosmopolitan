@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package ld
 
@@ -41,10 +42,11 @@ func main() { // line 20
 }
 `
 
-// TestWasmDwarf checks the DWARF embedded in a wasm module's custom sections:
-// subprogram low/high PC values must be code-section-relative byte offsets
-// matching the module's code section layout, and the line table must resolve
-// function entries and mid-function statements to the right source lines.
+// TestWasmDwarf checks the DWARF embedded in a wasm module's custom
+// sections: subprogram low/high PC values must be code-section-relative
+// byte offsets matching the module's code section layout, and the line
+// table must resolve function entries and mid-function statements to
+// the right source lines.
 func TestWasmDwarf(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	if testing.Short() {
@@ -88,7 +90,8 @@ func testWasmDwarf(t *testing.T, goos string) {
 		t.Fatalf("no code section offset (not a wasm module?)")
 	}
 
-	// Sym.Addr for wasm functions is the file offset of the function body.
+	// Sym.Addr for wasm functions is the file offset of the function
+	// body; DWARF addresses are relative to the code section contents.
 	syms, err := f.Symbols()
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +108,8 @@ func testWasmDwarf(t *testing.T, goos string) {
 		}
 	}
 
-	// Collect subprogram DIEs for the functions of interest and find the "main" compilation unit.
+	// Collect subprogram DIEs for the functions of interest and find
+	// the "main" compilation unit.
 	funcs := make(map[string]extent)
 	var mainCU *dwarf.Entry
 	r := d.Reader()
@@ -164,7 +168,9 @@ func testWasmDwarf(t *testing.T, goos string) {
 		}
 	}
 
-	// Check the line table: function entry rows must point at the declaration lines.
+	// Check the line table: function entry rows must point at the
+	// declaration lines, and some statement row inside main.alfa must
+	// map to the loop body (line 10).
 	lr, err := d.LineReader(mainCU)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +191,9 @@ func testWasmDwarf(t *testing.T, goos string) {
 		}
 	}
 
-	// Scan all rows falling inside main.alfa.
+	// Scan all rows falling inside main.alfa. Every row must be in
+	// main.go within the function's line extent, and line 10 (the loop
+	// body, a statement in the middle of the function) must appear.
 	alfa := funcs["main.alfa"]
 	lr.Reset()
 	sawLoopBody := false

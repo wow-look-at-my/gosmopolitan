@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -7,7 +8,9 @@ package syscall
 
 import "unsafe"
 
-// The amd64 members of the time and clock group.
+// The amd64 members of the time and clock group. Each call here has a
+// syscall number in the amd64 table and none in the arm64 table, so the
+// arm64 file builds the same names on newer syscalls.
 
 func Pause() (err error) {
 	_, _, e1 := Syscall(SYS_PAUSE, 0, 0, 0)

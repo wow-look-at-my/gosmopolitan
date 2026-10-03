@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package work
 
@@ -78,8 +79,8 @@ func TestEmbeddedStdKeyLeadsWithTheArchivesOwnAction(test *testing.T) {
 }
 
 // A build id the go command did not write leaves the key as the content hash
-// rather than a truncated or garbage action, so archives still never share
-// one key.
+// rather than a truncated or garbage action, so two archives still never
+// share one key.
 func TestEmbeddedStdKeyKeepsContentWithoutAnAction(test *testing.T) {
 	var content [cache.HashSize]byte
 	content[0] = 0x11

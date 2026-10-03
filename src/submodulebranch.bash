@@ -1,8 +1,29 @@
 #!/usr/bin/env bash
-# Copyright The Go Authors. All rights reserved. Use of this source code is
-# governed by a BSD-style license that can be found in the LICENSE file.
+# Copyright 2026 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE file.
 
 # Move every org submodule onto the head of the branch it follows.
+#
+# A pair of repositories developed in tandem carry the same branch name, so an
+# org submodule follows this repository's branch when it has one, and the branch
+# named for it in .gitmodules otherwise. Both halves are a question git already
+# knows how to ask: `git submodule update --init --remote` reads the branch to
+# follow from submodule.<name>.branch. So the only thing done here is to answer
+# the first half for git, by naming this repository's branch as the submodule's
+# branch before the update runs. A detached HEAD names no branch, and the
+# submodule keeps the one .gitmodules gives it.
+#
+# Nothing writes a version down. The go.mod file and vendor/modules.txt record a
+# placeholder, and cmd/go reads the branch head of an org module by itself, so
+# neither file is rewritten here and neither moves when a dependency's branch
+# does.
+#
+# A remote this cannot reach leaves the checkout alone, so a build with no
+# network reads what it already has.
+#
+# The branch may be given as the first argument, for a caller whose checkout is
+# detached: a CI run knows the ref it is on, and git there does not.
 
 set -euo pipefail
 
@@ -39,7 +60,9 @@ while read -r key _; do
 	[[ -n "$branch" ]] || continue
 
 	git config "submodule.$name.branch" "$branch"
-	# A checkout clones a submodule shallow, against a refspec holding the commit the gitlink names.
+	# A checkout clones a submodule shallow, against a refspec holding the one
+	# commit the gitlink names, so every other branch is absent and the update
+	# below cannot resolve one. This asks for the branch by name.
 	git submodule update --init -- "$path" >/dev/null 2>&1 || true
 	if [[ -d "$path/.git" || -f "$path/.git" ]]; then
 		git -C "$path" fetch --depth 1 origin \

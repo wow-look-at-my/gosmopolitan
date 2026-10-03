@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package work
 
@@ -17,12 +18,14 @@ func TestCosmoPlatformSpec(t *testing.T) {
 		want         string
 		wantExplicit bool
 	}{
-		// Unset is the platforms something verifies, not every platform the table can name.
+		// Unset is the three platforms something verifies, not every
+		// platform the table can name.
 		{"", "linux/amd64,darwin/arm64,windows/amd64", false},
 		{"linux/amd64", "linux/amd64", true},
 		// The one the default leaves out stays selectable by name.
 		{"linux/arm64", "linux/arm64", true},
-		// Canonical order and deduplication, so the string handed to the linker as -apeplatforms is the same for any spelling.
+		// Canonical order and deduplication, so the string handed to the
+		// linker as -apeplatforms is the same for any spelling of a set.
 		{"windows/amd64,linux/amd64,windows/amd64", "linux/amd64,windows/amd64", true},
 	}
 	for _, tt := range tests {
@@ -60,13 +63,16 @@ func TestCosmoSiblingAndAssemble(t *testing.T) {
 		{goos: "cosmo", goarch: "amd64", wantSibling: "arm64", wantAssemble: true},
 		{goos: "cosmo", goarch: "arm64", wantSibling: "amd64", wantAssemble: true},
 		{goos: "linux", goarch: "amd64", wantSibling: "", wantAssemble: false},
-		// The sibling build itself must produce a plain single-architecture binary: it is an input to the assembly.
+		// The sibling build itself must produce a plain single-architecture
+		// binary: it is an input to the assembly, not a subject of it.
 		{goos: "cosmo", goarch: "arm64", inner: "1", wantSibling: "", wantAssemble: false},
-		// GOCOSMOFAT=0 keeps today's meaning: no sibling, and no assembly either.
+		// GOCOSMOFAT=0 keeps today's meaning: no sibling, and no assembly
+		// either, so a thin build is neither stripped nor given sidecars.
 		{goos: "cosmo", goarch: "amd64", fat: "0", wantSibling: "", wantAssemble: false},
 		// A selection spanning both payloads behaves like a fat build.
 		{goos: "cosmo", goarch: "amd64", platforms: "linux/amd64,darwin/arm64", wantSibling: "arm64", wantAssemble: true},
-		// A selection all of whose platforms boot one payload drops the sibling build and keeps the assembly step.
+		// A selection all of whose platforms boot one payload drops the
+		// sibling build and keeps the assembly step.
 		{goos: "cosmo", goarch: "amd64", platforms: "linux/amd64,windows/amd64", wantSibling: "", wantAssemble: true},
 		{goos: "cosmo", goarch: "arm64", platforms: "darwin/arm64", wantSibling: "", wantAssemble: true},
 	}

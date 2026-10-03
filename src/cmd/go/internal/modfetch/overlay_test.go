@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package modfetch
 
@@ -20,8 +21,8 @@ import (
 	"golang.org/x/mod/module"
 )
 
-// validSum answers a checksum shaped as the cache's h1 sums are.
-// decodeOverlay holds a header to that shape.
+// validSum answers a checksum shaped as the cache's h1 sums are. decodeOverlay
+// holds a header to that shape, so a test header carries a real one.
 func validSum(fill byte) string {
 	return "h1:" + base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{fill}, sha256.Size))
 }
@@ -202,9 +203,9 @@ func TestApplyOverlayRefusesNamesOutsideTheModule(test *testing.T) {
 	}
 }
 
-// The key names the module and the base zip the overlay completes. Modules, a
-// couple of versions, or base zips are different things to complete, and a key
-// they shared would give the fleet one of them under the other's name.
+// The key names the module and the base zip the overlay completes. Two modules,
+// two versions, or two base zips are three different things to complete, and a
+// key they shared would give the fleet one of them under the other's name.
 func TestOverlayKeyNamesWhatItCompletes(test *testing.T) {
 	mod := module.Version{Path: "example.com/m", Version: "v1.2.3"}
 	base := validSum('a')
@@ -248,7 +249,8 @@ func TestCompleteDirLeavesASupersededModuleAlone(test *testing.T) {
 	if err := os.MkdirAll(pkg, 0o777); err != nil {
 		test.Fatal(err)
 	}
-	// The directive names a program no host has, so completing this module reports a failure.
+	// The directive names a program no host has, so completing this module
+	// reports a failure. Skipping it is what this test reads.
 	source := "//go:generate a-program-no-host-has\n\npackage imports\n"
 	if err := os.WriteFile(filepath.Join(pkg, "imports.go"), []byte(source), 0o666); err != nil {
 		test.Fatal(err)

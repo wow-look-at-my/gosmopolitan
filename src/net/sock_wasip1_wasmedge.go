@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build wasip1 && wasip1.wasmedgesock
 
@@ -12,7 +13,19 @@ import (
 	"syscall"
 )
 
-// With GOWASI=wasmedgesock, TCP and UDP sockets on wasip1 are real.
+// With GOWASI=wasmedgesock, TCP and UDP sockets on wasip1 are real:
+// they are created through the WasmEdge socket extension to WASI
+// preview 1 (see syscall/net_wasip1_wasmedge.go) and their fds flow
+// through internal/poll and the runtime's poll_oneoff netpoller like
+// the fds of inherited pre-opened listeners always have. TCP gets
+// Dial/Listen/Accept; UDP gets ListenUDP/ListenPacket with
+// ReadFrom/WriteTo and connected-mode Dial with Read/Write, with the
+// same deadline machinery as TCP. Everything the extension cannot
+// express (unix sockets, raw IP, RawConn control functions, the
+// ancillary-data ReadMsgUDP/WriteMsgUDP) still goes to the fake
+// in-memory network or errors, and DNS resolution still only works
+// for addresses the fake network can answer, so real dials should use
+// IP literals.
 
 const (
 	readFromSyscallName = "recvfrom"
@@ -27,7 +40,9 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
 		return fakeSocket(ctx, net, family, sotype, proto, ipv6only, laddr, raddr, ctrlCtxFn)
 	}
 	if ctrlCtxFn != nil {
-		// The WasmEdge extension has no way to expose a raw fd control point before connect/listen.
+		// The WasmEdge extension has no way to expose a raw fd
+		// control point before connect/listen; RawConn Control
+		// functions cannot be honored.
 		return nil, os.NewSyscallError("socket", syscall.ENOTSUP)
 	}
 	s, err := syscall.Socket(family, sotype, proto)
@@ -64,7 +79,8 @@ func socket(ctx context.Context, net string, family, sotype, proto int, ipv6only
 }
 
 func (fd *netFD) listenStream(laddr sockaddr, backlog int) error {
-	// Allow reuse of recently-used addresses. Best effort: not every host implementing the extension accepts this option.
+	// Allow reuse of recently-used addresses. Best effort: not every
+	// host implementing the extension accepts this option.
 	syscall.SetsockoptInt(fd.pfd.Sysfd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 	lsa, err := laddr.sockaddr(fd.family)
 	if err != nil {
@@ -86,8 +102,9 @@ func (fd *netFD) listenStream(laddr sockaddr, backlog int) error {
 	return nil
 }
 
-// listenDatagram binds a datagram socket and registers it with the poller:
-// the UDP half of listenStream (datagram sockets have no listen step).
+// listenDatagram binds a datagram socket and registers it with the
+// poller: the UDP half of listenStream (datagram sockets have no
+// listen step).
 func (fd *netFD) listenDatagram(laddr sockaddr) error {
 	lsa, err := laddr.sockaddr(fd.family)
 	if err != nil {
@@ -141,7 +158,8 @@ func (fd *netFD) dial(ctx context.Context, laddr, raddr sockaddr) error {
 	la := fd.addrFunc()(gla)
 	ra := fd.addrFunc()(gra)
 	if ra == nil {
-		// Not every host reports the peer address; fall back to the address we dialed.
+		// Not every host reports the peer address; fall back to
+		// the address we dialed.
 		ra = raddr
 	}
 	fd.setAddr(la, ra)
@@ -179,8 +197,9 @@ func (fd *netFD) connect(ctx context.Context, rsa syscall.Sockaddr) error {
 		}()
 	}
 	for {
-		// Wait for the socket to become writable: the host reports write readiness
-		// through poll_oneoff once the connection attempt is decided.
+		// Wait for the socket to become writable: the host reports
+		// write readiness through poll_oneoff once the connection
+		// attempt is decided.
 		if err := fd.pfd.WaitWrite(); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return mapErr(ctxErr)
@@ -234,7 +253,14 @@ func (fd *netFD) accept() (netfd *netFD, err error) {
 	return netfd, nil
 }
 
-// UDP data path.
+// UDP data path. On js and wasip1 the netFD normally serves the
+// per-datagram methods through its embedded *fakeNetFD; with real
+// wasmedgesock sockets that embedded pointer is nil, so the methods
+// below shadow the promoted ones: fake sockets still delegate to the
+// fake network, real sockets go through internal/poll's generic
+// ReadFrom/WriteTo (which call syscall.Recvfrom/Sendto, the
+// sock_recv_from_v2/sock_send_to wrappers) and share the TCP path's
+// poller and deadline machinery.
 
 func (fd *netFD) readFromInet4(p []byte, from *syscall.SockaddrInet4) (n int, err error) {
 	if fd.fakeNetFD != nil {

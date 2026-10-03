@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Type definitions for Cosmopolitan Libc on amd64.
 // Cosmopolitan uses Linux-style structures.
@@ -628,7 +629,9 @@ const RNDGETENTCNT = 0x80045200
 
 const PERF_IOC_FLAG_GROUP = 0x1
 
-// Termios is the linux port's shape (ztypes_linux_amd64.go).
+// Termios is the linux port's shape (ztypes_linux_amd64.go): Cc holds 32
+// slots although the kernel fills 19, so Ispeed and Ospeed sit where a
+// program written for linux expects them.
 type Termios struct {
 	Iflag     uint32
 	Oflag     uint32

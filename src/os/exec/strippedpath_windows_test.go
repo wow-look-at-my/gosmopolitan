@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package exec_test
 
@@ -21,7 +22,7 @@ import (
 
 // TestStrippedPathStartsAChild starts this test binary again with PATH cut
 // down to a dot and to nothing. TestCommand needs that to work: it copies
-// this binary and runs the copy under exactly those values.
+// this binary and runs the copy under exactly those two values.
 //
 // The host answers this for a program the fork did not build. A copy of a
 // system binary, and a copy of an upstream gofmt, both start under every one
@@ -49,17 +50,25 @@ func TestStrippedPathStartsAChild(t *testing.T) {
 		{"self", self},
 		{"copy", copied},
 	} {
-		// os/exec keeps the last of a repeated name, so a PATH appended to the inherited block wins.
+		// os/exec keeps the last of a repeated name, so a PATH appended to
+		// the inherited block wins.
 		system := filepath.Join(os.Getenv("SystemRoot"), "System32")
 		for _, value := range []struct {
 			what string
 			env  []string
 		}{
 			{"inherited", os.Environ()},
-			// The system directory alone.
+			// The system directory alone. If this starts the image and a dot
+			// does not, the missing DLL is a system one the loader declines
+			// to find in System32 by itself.
 			{"system32", append(os.Environ(), "PATH="+system)},
 			{"dot", append(os.Environ(), "PATH=.")},
 			{"empty", append(os.Environ(), "PATH=")},
+			// An environment with nothing else in it belongs to two other
+			// tests. internal/syscall/windows TestRunAtLowIntegrity and
+			// net/http/cgi TestEnvOverride each hand a child one. A helper
+			// started that way here never returns, because it finds none of
+			// what the test harness around it reads.
 		} {
 			// A child that hangs must not eat the whole package deadline.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

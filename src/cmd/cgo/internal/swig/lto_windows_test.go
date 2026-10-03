@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package swig
 
@@ -36,8 +37,8 @@ func main() {
 // with ERROR_BAD_EXE_FORMAT.
 //
 // This program uses no swig and no C++, so it says which half owns the
-// defect. The host is already measured: gcc links C files under -flto here
-// and the result runs (dats/test/nt-lto.ps1). So a failure here is the
+// defect. The host is already measured: gcc links two C files under -flto
+// here and the result runs (dats/test/nt-lto.ps1). So a failure here is the
 // object cmd/link hands gcc.
 //
 // The log describes the image gcc wrote, because NT reports a bad one only
@@ -56,7 +57,9 @@ func TestLinkUnderLTO(t *testing.T) {
 	write("go.mod", "module ltoprobe\n\ngo 1.27\n")
 	write("main.go", ltoProbeSource)
 
-	// The plain build is the control.
+	// The plain build is the control. Both take the same source and the same
+	// toolchain, so every header field that differs is one -flto moved, and
+	// the bad one is among them.
 	const cflags = "-flto -Wno-lto-type-mismatch -Wno-unknown-warning-option"
 	for _, build := range []struct {
 		what  string
@@ -121,6 +124,10 @@ func describeLTOImage(t *testing.T, what, path string) {
 			what, opt.Subsystem, opt.AddressOfEntryPoint, opt.ImageBase, opt.SizeOfImage, opt.SizeOfHeaders,
 			opt.SectionAlignment, opt.FileAlignment, opt.DllCharacteristics,
 			opt.SizeOfStackReserve, opt.SizeOfStackCommit)
+		// cmd/link drops the declared OS version to 6.1 when it cannot trust
+		// the external linker with the load config directory. Windows reads
+		// that directory only from version 10 up, so this says whether the
+		// fallback fired.
 		t.Logf("%s: os version %d.%d, subsystem version %d.%d",
 			what, opt.MajorOperatingSystemVersion, opt.MinorOperatingSystemVersion,
 			opt.MajorSubsystemVersion, opt.MinorSubsystemVersion)
