@@ -272,9 +272,7 @@ src/testing/serialgate_test.go -linguist-vendored
 src/uuid/export_test.go -linguist-vendored
 
 # Prebuilt executables that the build and the tests read. Git holds an LFS pointer for each.
-src/cmd/link/internal/ld/apeld/bin/apeld-darwin-arm64 filter=lfs diff=lfs merge=lfs -text
-src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64 filter=lfs diff=lfs merge=lfs -text
-src/cmd/link/internal/ld/apeld/bin/apeld-linux-arm64 filter=lfs diff=lfs merge=lfs -text
+src/cmd/link/internal/ld/apeld/bin/apeld-* filter=lfs diff=lfs merge=lfs -text
 src/crypto/internal/boring/syso/*.syso filter=lfs diff=lfs merge=lfs -text
 src/runtime/race/*.syso filter=lfs diff=lfs merge=lfs -text
 src/runtime/race/internal/*/*.syso filter=lfs diff=lfs merge=lfs -text
