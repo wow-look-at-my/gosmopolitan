@@ -28,7 +28,7 @@ When building/testing:
 
 ## Build Commands
 
-Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain (set `GOROOT_BOOTSTRAP` or have `go` in PATH).
+Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain (set `GOROOT_BOOTSTRAP` or have `go` in PATH). It also needs zig 0.16.0 and LLVM 18.1.8's `ld64.lld` and `llvm-strip` on PATH. Cmd/dist compiles the APE loaders cmd/link embeds (`src/cmd/dist/apeld.go`), and fails naming any tool that is missing.
 
 ```bash
 # Build the toolchain (Unix)
@@ -211,7 +211,7 @@ go tool compile -bench=out.txt file.go
 ## Local Verify Loop
 
 ```bash
-cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
+cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap, zig 0.16.0, LLVM 18.1.8)
 export PATH="$PWD/../bin:$PATH"
 # after linker or go-command changes:
 GOOS=linux GOARCH=amd64 go install cmd/go/main   # refresh bin/go, which carries every HOST tool (see gotcha above)

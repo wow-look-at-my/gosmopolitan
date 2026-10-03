@@ -64,7 +64,7 @@ All tarballs come from one release, each built on its own platform. macOS Intel 
 
 ## Building the Toolchain
 
-Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain.
+Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain, plus zig 0.16.0 and LLVM 18.1.8's `ld64.lld` and `llvm-strip` on `PATH`: the build compiles the APE loaders with them (see `src/cmd/link/internal/ld/apeld/README.md`).
 
 ```bash
 cd src && ./make.bash    # Unix
