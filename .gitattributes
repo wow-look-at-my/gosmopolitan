@@ -270,3 +270,48 @@ src/testing/fork_test.go -linguist-vendored
 src/testing/serialgate.go -linguist-vendored
 src/testing/serialgate_test.go -linguist-vendored
 src/uuid/export_test.go -linguist-vendored
+
+# Prebuilt executables that the build and the tests read. Git holds an LFS pointer for each.
+src/cmd/link/internal/ld/apeld/bin/apeld-darwin-arm64 filter=lfs diff=lfs merge=lfs -text
+src/cmd/link/internal/ld/apeld/bin/apeld-linux-amd64 filter=lfs diff=lfs merge=lfs -text
+src/cmd/link/internal/ld/apeld/bin/apeld-linux-arm64 filter=lfs diff=lfs merge=lfs -text
+src/crypto/internal/boring/syso/*.syso filter=lfs diff=lfs merge=lfs -text
+src/runtime/race/*.syso filter=lfs diff=lfs merge=lfs -text
+src/runtime/race/internal/*/*.syso filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/bitfields.elf4 filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/cppunsuptypes.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/cycle.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/issue57046-clang.elf5 filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-clang-dwarf5.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-clang.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-gcc-dwarf5.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-gcc-win.bin filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-gcc-zstd.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/line-gcc.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/ranges.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/rnglistx.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/split.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/typedef.elf filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/typedef.elf4 filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/typedef.elf5 filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/typedef.macho filter=lfs diff=lfs merge=lfs -text
+src/debug/dwarf/testdata/typedef.macho4 filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/compressed-32.obj filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/compressed-64.obj filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/gcc-386-freebsd-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/gcc-amd64-linux-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/gcc-amd64-openbsd-debug-with-rela.obj filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/gcc-riscv64-linux-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/go-relocation-test-*.obj filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/go-relocation-test-gcc930-ranges-no-rela-x86-64 filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/go-relocation-test-gcc930-ranges-with-rela-x86-64 filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/libtiffxx.so_ filter=lfs diff=lfs merge=lfs -text
+src/debug/elf/testdata/zdebug-test-gcc484-x86-64.obj filter=lfs diff=lfs merge=lfs -text
+src/debug/pe/testdata/gcc-386-mingw-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/pe/testdata/gcc-386-mingw-no-symbols-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/pe/testdata/gcc-amd64-mingw-exec filter=lfs diff=lfs merge=lfs -text
+src/debug/pe/testdata/vmlinuz-4.15.0-47-generic filter=lfs diff=lfs merge=lfs -text
+src/runtime/pprof/testdata/test32 filter=lfs diff=lfs merge=lfs -text
+src/runtime/pprof/testdata/test32be filter=lfs diff=lfs merge=lfs -text
+src/runtime/pprof/testdata/test64 filter=lfs diff=lfs merge=lfs -text
+src/runtime/pprof/testdata/test64be filter=lfs diff=lfs merge=lfs -text
