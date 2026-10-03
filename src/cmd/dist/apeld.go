@@ -11,13 +11,12 @@ import (
 )
 
 // The zig and LLD that make the bytes cmd/link's tests pin. ld64.lld writes
-// its own version into the darwin loader, so a different LLD changes it.
+// its own version into the darwin loader.
 const (
 	apeldZigVersion = "0.16.0"
 	apeldLLDVersion = "18.1.8"
 )
 
-// apeldLLVMInstall says where LLVM 18.1.8 comes from on each host.
 const apeldLLVMInstall = "LLVM " + apeldLLDVersion + ": the llvm-18 and lld-18 packages from apt.llvm.org (then put /usr/lib/llvm-18/bin on PATH), " +
 	"brew install llvm@18, or LLVM-" + apeldLLDVersion + "-win64.exe from https://github.com/llvm/llvm-project/releases"
 
@@ -78,8 +77,7 @@ func buildApeLoaders() {
 		run(dir, CheckExit, strip, "--strip-sections", out)
 	}
 
-	// zig compiles the darwin object and ld64.lld links it. zig's own Mach-O
-	// linker cannot merge __DATA_CONST into __DATA.
+	// zig compiles the darwin object and ld64.lld links it. zig's own Mach-O linker cannot merge __DATA_CONST into __DATA.
 	libDir := zigLibDir(zig)
 	if !isdir(pathf("%s/libc/darwin", libDir)) {
 		fatalf("zig's darwin libc stubs are not in %s/libc/darwin\n", libDir)
@@ -108,8 +106,6 @@ func lldVersion(out string) string {
 	return ""
 }
 
-// zigLibDir reads lib_dir from zig env. zig 0.16 writes that as ZON, one
-// field per line: `.lib_dir = "/opt/zig/lib",`.
 func zigLibDir(zig string) string {
 	env := run("", CheckExit, zig, "env")
 	dir, err := parseZigLibDir(env)
