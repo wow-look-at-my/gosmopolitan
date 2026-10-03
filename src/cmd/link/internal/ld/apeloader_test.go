@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package ld
 
@@ -34,6 +35,8 @@ func apeLoaderBins() map[string][]byte {
 }
 
 // apeAllLoaderPlatforms is every platform that boots through a loader.
+// cosmoape.Default() leaves linux/arm64 out, and the header has to hold
+// all three at once for a build that names it.
 func apeAllLoaderPlatforms() cosmoape.Set {
 	set, err := cosmoape.Parse("linux/amd64,linux/arm64,darwin/arm64,windows/amd64")
 	if err != nil {
@@ -120,7 +123,8 @@ func TestApeLoaderRegionsFitTheHeader(t *testing.T) {
 	if len(loaders) != len(apeLoaderSums) {
 		t.Fatalf("got %d loaders for every platform that has one, want %d", len(loaders), len(apeLoaderSums))
 	}
-	// The script runs from apeScriptOffset, so the first loader must start past where it can reach.
+	// The script runs from apeScriptOffset, so the first loader must start
+	// past where it can reach.
 	end := apeScriptOffset
 	for _, l := range loaders {
 		if l.offset < end {
@@ -134,9 +138,9 @@ func TestApeLoaderRegionsFitTheHeader(t *testing.T) {
 	placeApeLoaders(make([]byte, apeHeaderSize), loaders)
 }
 
-// TestApeLoaderTagFollowsTheBinary pins what the unpack path is keyed on. The
-// tag names the cache file, so loaders that differ must not share it: a host
-// would keep booting whichever it unpacked first.
+// TestApeLoaderTagFollowsTheBinary pins what the unpack path is keyed on.
+// The tag names the cache file, so two loaders that differ must not share
+// it: a host would keep booting whichever one it unpacked first.
 func TestApeLoaderTagFollowsTheBinary(t *testing.T) {
 	seen := map[string]string{}
 	for _, l := range apeLoadersFor(apeAllLoaderPlatforms()) {

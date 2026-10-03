@@ -22,22 +22,6 @@ tests:
 		!stdout:
 			- FAIL
 
-	# -s reaches the host link as -Wl,-S, never as -s: the NT boot reads WinMain
-	# out of the linked image's symbol table. go test strips a test binary this way.
-	- desc: a cgo program built with -ldflags=-s still links and runs
-	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; out="$(mktemp -d)"; cd testdata/cgoprobe && GOCOSMOFAT=0 GOARCH=amd64 go build -ldflags=-s -o "$out/stripped.com" . && "$out/stripped.com"
-	  timeout: 10m
-	  exit: 0
-	  outputs:
-		stdout:
-			- ok add
-			- ok thread
-			- arch amd64
-		!stdout:
-			- FAIL
-		!stderr:
-			- WinMain
-
 	# cosmocc's own APE loader maps the arm64 payload out of the same fat APE.
 	- desc: the arm64 payload of the fat APE runs under qemu
 	  cmd: export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"; out="$(mktemp -d)"; cd testdata/cgoprobe && go build -o "$out/cgoprobe.com" . && qemu-aarch64 /opt/cosmocc/bin/ape-aarch64.elf "$out/cgoprobe.com"

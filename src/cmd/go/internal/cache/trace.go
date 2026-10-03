@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package cache
 
@@ -14,8 +15,25 @@ import (
 )
 
 // Tracing the cache.
+//
+// A build's wall time is mostly two questions: what did it compile, and what
+// did it not have to. The second one is invisible without this: a cache hit
+// produces no subprocess, no output file the build wrote, and no line in any
+// log. It shows up only as a gap.
+//
+// So every lookup and every store is recorded as its own slice, carrying the
+// action ID it was keyed by, which tier answered, whether that tier had it,
+// and how many bytes moved. A trace can then be read as "this action took
+// 900ms and 890 of them were a compile, because the shared tier missed".
+//
+// The Cache interface takes no context, and it is reached from 91 call sites
+// that would each have to grow one. Instead the caller wraps the handle once,
+// for the lane it is running on: Traced returns a Cache that records onto that
+// lane and is otherwise the cache it was handed.
 
-// Traced returns c recording every operation onto lane.
+// Traced returns c recording every operation onto lane. It returns c
+// unchanged when the lane records nothing, so an untraced build pays one
+// comparison and no indirection.
 func Traced(c Cache, lane trace.Lane) Cache {
 	if c == nil || !lane.Enabled() {
 		return c

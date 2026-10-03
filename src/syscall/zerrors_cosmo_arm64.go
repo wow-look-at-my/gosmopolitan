@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Error constants for Cosmopolitan Libc on arm64.
 // Cosmopolitan uses Linux error numbers.
@@ -78,13 +79,21 @@ const (
 	O_ASYNC   = 0x2000
 	O_CLOEXEC = 0x80000
 	O_CREAT   = 0x40
-	// O_DIRECTORY and O_NOFOLLOW follow the arm64 Linux kernel's asm-generic numbers.
+	// O_DIRECTORY and O_NOFOLLOW follow the arm64 Linux kernel's
+	// asm-generic numbers, NOT the amd64 ones (on amd64 these bits are
+	// 0x10000/0x20000 - which asm-generic assigns to O_DIRECT and
+	// O_LARGEFILE; passing the amd64 O_DIRECTORY to an arm64 kernel
+	// made openDirNolog fail EINVAL, e.g. os.ReadDir on tmpfs). The
+	// darwin openat emulation translates these same bits to Apple's
+	// (runtime/sys_cosmo_arm64.s, cosmo_xlat_oflags_r2).
 	O_DIRECTORY = 0x4000
 	O_DSYNC     = 0x1000
 	O_EXCL      = 0x80
 	O_LARGEFILE = 0x0
 	O_NDELAY    = 0x800
-	// O_NOATIME is 0x40000 on both Linux architectures, so it needs no arm64 spelling of its own.
+	// O_NOATIME is 0x40000 on both Linux architectures, so it needs no
+	// arm64 spelling of its own. A package whose _linux file names it (go-fuse
+	// does) does not compile for cosmo without it.
 	O_NOATIME  = 0x40000
 	O_NOCTTY   = 0x100
 	O_NOFOLLOW = 0x8000

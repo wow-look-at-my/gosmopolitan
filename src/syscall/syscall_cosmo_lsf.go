@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -7,10 +8,19 @@ package syscall
 
 import "unsafe"
 
-// The Linux socket filter group.
+// The Linux socket filter group. GOOS=cosmo presents the Linux ABI, so a
+// program written against the linux port names these, and the linux port
+// declares them in lsf_linux.go, which cosmo does not build.
+//
+// The Linux kernel serves the socket filter, the packet socket and the
+// interface flag ioctls. No darwin dispatch and no NT dispatch names these
+// numbers, so both answer ENOSYS on a non-Linux host.
 
 // The interface flag and filter constants the group needs. cosmo's zerrors
-// tables do not carry them.
+// tables do not carry them. The values are the linux port's, from
+// zerrors_linux_amd64.go and zerrors_linux_arm64.go, which agree.
+//
+// AF_PACKET and SockaddrLinklayer come from syscall_cosmo_sockaddr.go.
 const (
 	IFF_PROMISC      = 0x100
 	IFNAMSIZ         = 0x10
@@ -33,7 +43,8 @@ func LsfJump(code, k, jt, jf int) *SockFilter {
 // Deprecated: Use golang.org/x/net/bpf instead.
 func LsfSocket(ifindex, proto int) (int, error) {
 	var lsall SockaddrLinklayer
-	// This is missing SOCK_CLOEXEC, but adding the flag could break callers.
+	// This is missing SOCK_CLOEXEC, but adding the flag
+	// could break callers.
 	s, e := Socket(AF_PACKET, SOCK_RAW, proto)
 	if e != nil {
 		return 0, e

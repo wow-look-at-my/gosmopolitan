@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -10,7 +11,7 @@
 // over the slot's HANDLE, then MapViewOfFile. The section handle closes
 // immediately, because the view keeps it alive.
 //
-// munmap tells both apart with VirtualQuery rather than a side table, so
+// munmap tells the two apart with VirtualQuery rather than a side table, so
 // nothing here has a capacity to run out of. MEM_MAPPED is a view and
 // MEM_PRIVATE is an allocation.
 
@@ -34,7 +35,8 @@ const (
 	_NT_MEM_PRIVATE = 0x20000
 	_NT_MEM_MAPPED  = 0x40000
 
-	// MapViewOfFile takes an offset in units of the allocation granularity.
+	// MapViewOfFile takes an offset in units of the allocation
+	// granularity, which is coarser than the page size mmap asks for.
 	_NT_ALLOC_GRANULARITY = 64 << 10
 )
 
@@ -77,8 +79,9 @@ func ntEmuMmap(addr, length, prot, flags uintptr, fd int32, offset int64) (r1, r
 		return ntFail3(ntEINVAL)
 	}
 	if flags&_MAP_ANON != 0 {
-		// VirtualAlloc rounds the length up to a page itself, and a zero address
-		// lets NT choose.
+		// VirtualAlloc rounds the length up to a page itself, and a
+		// zero address lets NT choose. MAP_FIXED is the caller naming
+		// the address, which VirtualAlloc also takes.
 		p := ntVirtualAlloc(unsafe.Pointer(addr), length,
 			_NT_MEM_RESERVE|_NT_MEM_COMMIT, uintptr(ntMmapProt(prot)))
 		if p == nil {
@@ -92,15 +95,19 @@ func ntEmuMmap(addr, length, prot, flags uintptr, fd int32, offset int64) (r1, r
 		return ntFail3(ntEBADF)
 	}
 	if e.kind != ntFDFile {
-		// A section needs a real file behind it: a pipe or a socket has no bytes at an offset.
+		// A section needs a real file behind it: a pipe or a socket
+		// has no bytes at an offset.
 		return ntFail3(ntEACCES)
 	}
 	if offset < 0 || offset%_NT_ALLOC_GRANULARITY != 0 {
-		// Linux asks for a page-aligned offset and NT asks for a granularity-aligned one.
+		// Linux asks for a page-aligned offset and NT asks for a
+		// granularity-aligned one. Refusing by name beats mapping the
+		// wrong bytes.
 		return ntFail3(ntEINVAL)
 	}
 
-	// A private mapping is copy-on-write, so the section itself has to allow the write even though the file need not.
+	// A private mapping is copy-on-write, so the section itself has to
+	// allow the write even though the file need not.
 	sectionProt := ntMmapProt(prot)
 	access := uintptr(0)
 	if flags&_MAP_PRIVATE != 0 && prot&_PROT_WRITE != 0 {
@@ -122,7 +129,9 @@ func ntEmuMmap(addr, length, prot, flags uintptr, fd int32, offset int64) (r1, r
 		access |= _NT_FILE_MAP_EXECUTE
 	}
 
-	// A zero size maps the whole file from the offset.
+	// A zero size maps the whole file from the offset, which is what a
+	// caller asking for more than the file holds would get on Linux.
+	// Name the end explicitly instead, so a short file fails here.
 	end := uint64(offset) + uint64(length)
 	h, werr := ntcallE(ntCreateFileMappingWFn, e.handle, 0, uintptr(sectionProt),
 		uintptr(end>>32), uintptr(uint32(end)), 0, 0)
@@ -149,7 +158,9 @@ func ntEmuMunmap(addr, length uintptr) (r1, r2, errno uintptr) {
 		return ntFail3(ntEINVAL)
 	}
 	if mbi.allocationBase != addr {
-		// NT releases a whole allocation or nothing, so a partial unmap cannot be served.
+		// NT releases a whole allocation or nothing, so a partial
+		// unmap cannot be served. Say so rather than releasing more
+		// than the caller asked to release.
 		return ntFail3(ntEINVAL)
 	}
 	switch mbi.typ {

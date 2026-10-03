@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package cfg
 
@@ -46,7 +47,8 @@ func TestSameToolchainTreeTakesOnlyItsOwnVersion(test *testing.T) {
 		test.Errorf("an unset GOROOT answers %q, want none", got)
 	}
 
-	// A binary's own path names no tree, and that is what GOROOT holds when nothing else does.
+	// A binary's own path names no tree, and that is what GOROOT holds when
+	// nothing else does.
 	exe := filepath.Join(test.TempDir(), "go-toolchain")
 	if err := os.WriteFile(exe, []byte("an executable"), 0o777); err != nil {
 		test.Fatal(err)

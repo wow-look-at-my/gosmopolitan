@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package cfile
 
@@ -11,10 +12,10 @@ import (
 )
 
 // A forked test suite runs many processes of one binary against the directory
-// their parent named, and each emits meta-data under the same name. Windows
+// their parent named, and each one emits meta-data under the same name. Windows
 // refuses the rename while another process holds that file open. The file it
-// refuses to overwrite is the file this run would have written, so the run
-// has nothing left to do and must not fail.
+// refuses to overwrite is the file this run would have written, so the run has
+// nothing left to do and must not fail.
 func TestAMetaFileAnotherProcessAlreadyWroteIsNotAFailure(t *testing.T) {
 	const content = "meta-data another process wrote"
 	s := stateReadyToEmit(t, "covmeta.0123")
@@ -72,7 +73,7 @@ func stateReadyToEmit(t *testing.T, name string) *emitState {
 // process holds the destination open.
 func failEveryRename(t *testing.T) {
 	t.Helper()
-	// The swap is process wide, so no test may run beside this.
+	// The swap is process wide, so no test may run beside this one.
 	t.Serial()
 	previous := renameFile
 	renameFile = func(string, string) error { return errors.New("Access is denied.") }

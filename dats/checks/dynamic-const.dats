@@ -5,7 +5,7 @@
 #
 # The toolchain must already be built: run make.bash first.
 tests:
-	# Both readings differ on purpose: a constant is the PORT this was
+	# The two readings differ on purpose: a constant is the PORT this was
 	# built for (cosmo/amd64) and a plain read is the HOST it booted on
 	# (linux/amd64 here). GOARCH agrees either way, which is what the
 	# `unaligned` shape in the wild is really asking.

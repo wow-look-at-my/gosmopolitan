@@ -2,8 +2,6 @@
 
 A go binary can carry its standard library inside itself. `go tool embedstd -o blob` builds std for cosmo/amd64 and cosmo/arm64 and writes one blob. The blob holds each package's compiled archive, the assembly headers of `pkg/include`, and a manifest per target. The manifest names each package, its package name, its direct imports, its build ID and its archive.
 
-Std is built with cgo on. The blob then carries runtime/cgo, and the go command that carries the blob builds cgo programs. That needs the cosmocc compiler of each architecture on PATH (docs/CGO.md). With a compiler missing, embedstd stops before any build and names it. Its listing tolerates a package that fails, so a blob with no runtime/cgo is refused there, not written. `-cgo=false` builds std without cgo, and that go command then refuses a cgo build by name: it embeds no runtime/cgo.
-
 ## Storing it
 
 `go tool link -apefat ... -apeappend=blob` appends the blob past both payloads and any compact debug tail, 8-aligned, and closes the file with a trailer. `GOCOSMOAPPEND=blob` on a cosmo `go build` passes that flag to the merge. Nothing maps the blob at run time. The trailer holds a magic, the blob's offset and size, and its SHA-256. `internal/cosmo/embedded` reads the trailer of `os.Executable()` and serves each entry by name. `Verify` hashes the blob against the trailer. A tool opening an entry checks the magic, the bounds and the index only.

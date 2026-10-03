@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -37,7 +38,9 @@ const (
 	SYS_EPOLL_PWAIT2    = 441
 )
 
-// EpollEvent is the epoll_event structure.
+// EpollEvent is the epoll_event structure. The Linux kernel declares it
+// __attribute__((packed)) on x86-64, so there is no padding between
+// Events and Data.
 type EpollEvent struct {
 	Events uint32
 	Data   [8]byte // unaligned uintptr
