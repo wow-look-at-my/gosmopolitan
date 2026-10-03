@@ -1005,6 +1005,13 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 					r.err = nil
 					goto Happy
 				}
+				// GOROOT names the executable, so a package the manifest lacks has no source either. runtime/cgo is absent from a blob built with cgo off.
+				if _, statErr := os.Stat(r.dir); statErr != nil {
+					data.p = &build.Package{Dir: r.dir, ImportPath: r.path, Goroot: true, Root: cfg.GOROOT}
+					data.err = fmt.Errorf("this go command embeds no standard package %s for %s/%s, and GOROOT %s holds no source for it", r.path, cfg.Goos, cfg.Goarch, cfg.GOROOT)
+					r.err = nil
+					goto Happy
+				}
 			}
 			// A dependency that generates part of its own API ships a package
 			// the compiler reads as empty. Read the generated copy instead.

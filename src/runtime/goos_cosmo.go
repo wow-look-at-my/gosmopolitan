@@ -1,6 +1,6 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found
+// in the LICENSE file.
 
 //go:build cosmo
 
@@ -29,7 +29,7 @@ func setGOOS() {
 }
 
 // GOARCH is the running program's architecture target:
-// one of 386, amd64, arm, s390x, and so on.
+// one of multiple amd64, arm, s390x, and so on.
 //
 // A variable for the same reason as GOOS: a payload can run on a machine
 // of another architecture, and then the honest answer is the machine.

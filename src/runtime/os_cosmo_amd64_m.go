@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && !arm64
 
@@ -11,47 +10,27 @@ import "internal/runtime/atomic"
 // mOS contains OS-specific m fields for cosmo on non-arm64 architectures.
 // This version uses uint32 for waitsema for futex-based locking.
 type mOS struct {
-	// profileTimer holds the ID of the POSIX interval timer for profiling CPU
-	// usage on this thread.
+	// profileTimer holds the ID of the POSIX interval timer for profiling CPU usage on this thread.
 	profileTimer      int32
 	profileTimerValid atomic.Bool
 
-	// needPerThreadSyscall indicates that a per-thread syscall is required
-	// for doAllThreadsSyscall.
+	// needPerThreadSyscall indicates that a per-thread syscall is required for doAllThreadsSyscall.
 	needPerThreadSyscall atomic.Uint8
 
 	// waitsema is used as a futex for lock_futex.go
 	waitsema uint32
 
-	// NT (iswindows) fields, inert on Linux hosts. Mirrors upstream
-	// os_windows.go's mOS preemption trio.
+	// NT (iswindows) fields, inert on Linux hosts. Mirrors upstream os_windows.go's mOS preemption trio.
 
-	// thread is a duplicated handle of this thread for use by
-	// ntPreemptM (SuspendThread-based async preemption); 0 when the M
-	// is not minit'd. Accesses are protected by threadLock: closing
-	// the handle out from under an in-flight DuplicateHandle in
-	// ntPreemptM would hand the suspend machinery a dead handle.
+	// thread is a duplicated handle of this thread for use by ntPreemptM (SuspendThread-based async preemption).
 	thread uintptr
 
 	// threadLock protects thread and its duplication window.
 	threadLock mutex
 
-	// preemptExtLock synchronizes ntPreemptM with entry into and exit
-	// from external (win64) code on this thread, so ExitProcess cannot
-	// take the loader lock and then be suspended, which deadlocks the
-	// process. 0 means this M is neither being preempted nor in
-	// external code. Entering external code CASes 0 to 1, and a failed
-	// CAS means a preemption is in progress, so the thread waits.
-	// ntPreemptM CASes the same way, and its failure fails the
-	// preemption, as it would for a PC outside Go code. Upstream
-	// os_windows.go's field, with verbatim semantics.
+	// preemptExtLock synchronizes ntPreemptM with entry into and exit from external (win64) code on this thread.
 	preemptExtLock uint32
 
-	// ntLastError is this thread's GetLastError value, captured by
-	// the ntcall6/ntcall10 trampolines (sys_cosmo_nt_amd64.s)
-	// immediately after the foreign call returns - atomically with
-	// the call, before any window in which the thread could be
-	// suspended or another win64 call could clobber the TEB slot.
-	// Read via getg().m by ntcallE and friends.
+	// ntLastError is this thread's GetLastError value.
 	ntLastError uint32
 }

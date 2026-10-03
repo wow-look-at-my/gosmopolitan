@@ -1,7 +1,7 @@
 # Dependabot CANNOT update Go modules in this repository's src/ and
 # src/cmd/: they are the Go distribution's own modules ("std" and
 # "cmd"), which only the toolchain built from this tree can operate on.
-# Every automated attempt dies with:
+# Every automated attempt dies with.
 #   go: std: "std" is not an importable package; see 'go help packages'
 # and even a successful edit would desync src/vendor/ and
 # src/net/http/h2_bundle.go, which Dependabot cannot regenerate.
