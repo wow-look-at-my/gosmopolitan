@@ -262,8 +262,7 @@ func TestDarwinXlatIoctl(t *testing.T) {
 	}
 }
 
-// TestDarwinXlatTermiosIoctl pins the termios requests, from the same
-// tables.
+// TestDarwinXlatTermiosIoctl pins the termios requests, from the same tables.
 func TestDarwinXlatTermiosIoctl(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -305,10 +304,9 @@ func TestDarwinTermiosSizes(t *testing.T) {
 	}
 }
 
-// TestDarwinTermiosFlagCollisions is the test this whole translation
-// exists for. Linux bits land on an Apple bit that means something else
-// entirely, so a forwarded flag word does not fail - it quietly
-// reconfigures the terminal.
+// TestDarwinTermiosFlagCollisions is the test this whole translation exists
+// for. Linux bits land on an Apple bit that means something else entirely, so
+// a forwarded flag word does not fail - it quietly reconfigures the terminal.
 func TestDarwinTermiosFlagCollisions(t *testing.T) {
 	const (
 		linuxIXON  = 0x400

@@ -84,18 +84,17 @@ func ntPreemptAck(mp *m) {
 	mp.signalPending.Store(0)
 }
 
-// ntPreemptM sends an async-preemption request to mp: upstream
-// os_windows.go preemptM, on the NT function table. It suspends the
-// target thread, waits for the suspension with GetThreadContext -
-// SuspendThread alone only queues it - and, at an async-safe point,
-// rewrites the saved CONTEXT so the thread calls asyncPreempt on
-// resume. Every path acks, so the requester never spins forever.
+// ntPreemptM sends an async-preemption request to mp: upstream os_windows.go
+// preemptM, on the NT function table. It suspends the target thread, waits
+// for the suspension with GetThreadContext - SuspendThread alone only queues
+// it - and, at an async-safe point, rewrites the saved CONTEXT so the thread
+// calls asyncPreempt on resume. Every path acks, so the requester never spins
+// forever.
 //
-// Locks keep this sound, with upstream's exact semantics.
-// mp.preemptExtLock fails a preemption fast against a thread in win64
-// code, which might be mid-ExitProcess. mp.threadLock guards mp.thread
-// between the DuplicateHandle here and minit/unminit. ntSuspendLock is
-// documented on its own declaration.
+// Locks keep this sound, with upstream's exact semantics. mp.preemptExtLock
+// fails a preemption fast against a thread in win64 code, which might be
+// mid-ExitProcess. mp.threadLock guards mp.thread between the DuplicateHandle
+// here and minit/unminit. ntSuspendLock is documented on its own declaration.
 func ntPreemptM(mp *m) {
 	if mp == getg().m {
 		throw("self-preempt")
