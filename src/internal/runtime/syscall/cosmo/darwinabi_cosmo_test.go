@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cosmo_test
 
@@ -19,10 +18,7 @@ import (
 // runs them; a macOS run proves the dlsym wiring behind them.
 //
 // Ground truth: Linux RLIMIT_* is the asm-generic numbering
-// (include/uapi/asm-generic/resource.h), Apple's is
-// bsd/sys/resource.h. Linux RLIM64_INFINITY is ~0; Apple's RLIM_INFINITY
-// is the largest positive signed 64-bit value. Linux UTIME_NOW/OMIT are
-// (1<<30)-1 and (1<<30)-2; Apple's are -1 and -2.
+// (include/uapi/asm-generic/resource.h), Apple's is bsd/sys/resource.h.
 
 func TestDarwinXlatResource(t *testing.T) {
 	// Every Linux resource Apple can serve, and what it becomes.
@@ -36,8 +32,7 @@ func TestDarwinXlatResource(t *testing.T) {
 		{"DATA", 2, 2},
 		{"STACK", 3, 3},
 		{"CORE", 4, 4},
-		// Apple's RLIMIT_RSS is a synonym for RLIMIT_AS, so the two
-		// distinct Linux resources share one Apple limit.
+		// Apple's RLIMIT_RSS is a synonym for RLIMIT_AS, so both distinct Linux resources share one Apple limit.
 		{"RSS", 5, 5},
 		{"NPROC", 6, 7},
 		{"NOFILE", 7, 8},
@@ -55,8 +50,6 @@ func TestDarwinXlatResource(t *testing.T) {
 	}
 
 	// RLIMIT_LOCKS and everything above it have no Apple counterpart.
-	// Reporting one as translatable would silently address the wrong
-	// limit, so each must be refused.
 	for res := uintptr(10); res <= 15; res++ {
 		if _, ok := cosmo.XlatResourceForTest(res); ok {
 			t.Errorf("Linux resource %d: translatable, want refused", res)
@@ -72,8 +65,7 @@ func TestDarwinRlimitInfinity(t *testing.T) {
 		t.Errorf("Apple RLIM_INFINITY = %#x, want %#x", cosmo.AppleRlimInfinityTest, uint64(1)<<63-1)
 	}
 
-	// The sentinel converts in both directions; an ordinary limit does
-	// not move.
+	// The sentinel converts in both directions; an ordinary limit does not move.
 	if got := cosmo.RlimitToLinuxForTest(cosmo.AppleRlimInfinityTest); got != cosmo.LinuxRlimInfinityTest {
 		t.Errorf("Apple infinity -> Linux: got %#x, want %#x", got, uint64(cosmo.LinuxRlimInfinityTest))
 	}
@@ -97,8 +89,7 @@ func TestDarwinXlatUtimeNsec(t *testing.T) {
 	if got := cosmo.XlatUtimeNsecForTest(cosmo.LinuxUtimeOmitForTest); got != cosmo.AppleUtimeOmitForTest {
 		t.Errorf("UTIME_OMIT: got %d, want %d", got, cosmo.AppleUtimeOmitForTest)
 	}
-	// A real nanosecond count passes through. 999999999 is the largest
-	// legal one and sits next to no sentinel.
+	// A real nanosecond count passes through.
 	for _, ns := range []int64{0, 1, 500, 999999999} {
 		if got := cosmo.XlatUtimeNsecForTest(ns); got != ns {
 			t.Errorf("nsec %d: got %d, want unchanged", ns, got)
@@ -114,13 +105,10 @@ func TestDarwinNiceBias(t *testing.T) {
 	}
 }
 
-// TestDarwinStructSizes pins the Apple struct layouts the syscall
-// package allocates on the emulation's behalf. A mismatch here is a
-// buffer the kernel overruns, so the sizes are asserted rather than
-// assumed.
+// TestDarwinStructSizes pins the Apple struct layouts the syscall package
+// allocates on the emulation's behalf. A mismatch here is a buffer the kernel
+// overruns, so the sizes are asserted rather than assumed.
 func TestDarwinStructSizes(t *testing.T) {
-	// struct statfs under the 64-bit-inode ABI: 2168 bytes, with
-	// f_mntonname at 88 and f_mntfromname at 1112.
 	var sf cosmo.DarwinStatfs
 	if got := unsafe.Sizeof(sf); got != 2168 {
 		t.Errorf("sizeof(DarwinStatfs) = %d, want 2168", got)
@@ -144,7 +132,6 @@ func TestDarwinStructSizes(t *testing.T) {
 		t.Errorf("offsetof(DarwinStatfs.FlagsExt) = %d, want 2136", got)
 	}
 
-	// struct utsname: five 256-byte fields, no domainname.
 	var un cosmo.DarwinUtsname
 	if got := unsafe.Sizeof(un); got != 1280 {
 		t.Errorf("sizeof(DarwinUtsname) = %d, want 1280", got)
@@ -153,10 +140,7 @@ func TestDarwinStructSizes(t *testing.T) {
 		t.Errorf("offsetof(DarwinUtsname.Machine) = %d, want %d", got, 4*256)
 	}
 
-	// The two rusage structs are the same 144 bytes, which is what makes
-	// the difference easy to miss: Apple's microsecond field is 32 bits
-	// with padding behind it, Linux's is 64. A forwarded buffer therefore
-	// keeps its size and loses its meaning.
+	// Both rusage structs are the same many bytes, which is what makes the difference easy to miss.
 	var dru cosmo.DarwinRusage
 	var lru cosmo.LinuxRusage
 	if got := unsafe.Sizeof(dru); got != 144 {
@@ -176,10 +160,10 @@ func TestDarwinStructSizes(t *testing.T) {
 	}
 }
 
-// TestDarwinRusageToLinux pins the one thing the conversion has to get
-// right: the microseconds survive the width change, and every counter
-// after the timevals lands in the same field it started in. A memcpy
-// would pass a size check and fail this.
+// TestDarwinRusageToLinux pins the thing the conversion has to get right: the
+// microseconds survive the width change, and every counter after the timevals
+// lands in the same field it started in. A memcpy would pass a size check and
+// fail this.
 func TestDarwinRusageToLinux(t *testing.T) {
 	src := cosmo.DarwinRusage{
 		Utime:  cosmo.DarwinTimeval{Sec: 12, Usec: 999999},
@@ -217,8 +201,8 @@ func TestDarwinRusageToLinux(t *testing.T) {
 }
 
 // TestDarwinXlatIoctl pins the request numbers against the tree's own
-// tables. An ioctl request encodes direction and argument size, so the
-// two systems number even the calls they share differently - and a
+// tables. An ioctl request encodes direction and argument size, so
+// both systems number even the calls they share differently - and a
 // request forwarded unchanged does not fail, it asks the kernel for
 // whatever operation happens to carry that number there.
 func TestDarwinXlatIoctl(t *testing.T) {
@@ -265,11 +249,9 @@ func TestDarwinXlatIoctl(t *testing.T) {
 		}
 	}
 
-	// The termios requests are served by their own table, because their
-	// argument is a struct that has to be converted rather than passed
-	// along. This one must not claim them. The zero request also stands
-	// for every number nobody listed: the pty entries above are named
-	// pass-throughs, not an opening for any Apple request at all.
+	// The termios requests are served by their own table, because their argument
+	// is a struct that has to be converted rather than passed along. This must
+	// not claim them.
 	for _, req := range []uintptr{
 		cosmo.LinuxTCGETSForTest, cosmo.LinuxTCSETSForTest, 0,
 		0x2000745f, // an unlisted BSD _IO request in the same 't' group
@@ -280,8 +262,8 @@ func TestDarwinXlatIoctl(t *testing.T) {
 	}
 }
 
-// TestDarwinXlatTermiosIoctl pins the four termios requests, from the
-// same tables.
+// TestDarwinXlatTermiosIoctl pins the termios requests, from the same
+// tables.
 func TestDarwinXlatTermiosIoctl(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -307,9 +289,9 @@ func TestDarwinXlatTermiosIoctl(t *testing.T) {
 }
 
 // TestDarwinTermiosSizes pins both struct shapes. The Linux one is the
-// 36-byte struct the TCGETS ioctl reads and writes, NOT x/sys/unix's
-// larger Termios: writing the extra speed fields would run past a caller
-// that allocated what the kernel actually fills.
+// 36-byte struct the TCGETS ioctl reads and writes, NOT x/sys/unix's larger
+// Termios: writing the extra speed fields would run past a caller that
+// allocated what the kernel fills.
 func TestDarwinTermiosSizes(t *testing.T) {
 	if got := unsafe.Sizeof(cosmo.DarwinTermios{}); got != 72 {
 		t.Errorf("sizeof(DarwinTermios) = %d, want 72", got)
@@ -324,8 +306,8 @@ func TestDarwinTermiosSizes(t *testing.T) {
 }
 
 // TestDarwinTermiosFlagCollisions is the test this whole translation
-// exists for. Three Linux bits land on an Apple bit that means something
-// else entirely, so a forwarded flag word does not fail - it quietly
+// exists for. Linux bits land on an Apple bit that means something else
+// entirely, so a forwarded flag word does not fail - it quietly
 // reconfigures the terminal.
 func TestDarwinTermiosFlagCollisions(t *testing.T) {
 	const (
@@ -364,12 +346,11 @@ func TestDarwinTermiosFlagCollisions(t *testing.T) {
 }
 
 // TestDarwinTermiosRoundTrip converts a terminal in the state a raw-mode
-// setup leaves it in, and back, and requires the two to agree. Every
-// field a Linux caller can name has to survive both directions.
+// setup leaves it in, and back, and requires both to agree. Every field
+// a Linux caller can name has to survive both directions.
 func TestDarwinTermiosRoundTrip(t *testing.T) {
-	// What a library writes for raw mode: no input processing, no
-	// output post-processing, no canonical mode or echo, 8-bit
-	// characters, and a one-byte non-blocking read.
+	// What a library writes for raw mode: no input processing, no output
+	// post-processing, no canonical mode or echo, 8-bit characters.
 	want := cosmo.LinuxTermios{
 		Iflag: 0x0,
 		Oflag: 0x0,
@@ -385,8 +366,6 @@ func TestDarwinTermiosRoundTrip(t *testing.T) {
 	if !cosmo.DarwinTermiosFromLinux(&want, &at) {
 		t.Fatal("DarwinTermiosFromLinux refused a raw-mode termios")
 	}
-	// The control characters must land in APPLE's slots, which are not
-	// Linux's: VMIN is 6 there and 16 here.
 	if at.Cc[16] != 1 || at.Cc[17] != 0 {
 		t.Errorf("Apple VMIN/VTIME = %d/%d, want 1/0", at.Cc[16], at.Cc[17])
 	}
@@ -471,10 +450,9 @@ func TestDarwinFlock(t *testing.T) {
 		t.Errorf("offsetof(DarwinFlock.Pid) = %d, want 16", got)
 	}
 
-	// Linux numbers read, write and unlock 0/1/2. Apple agrees on none
-	// of the three, so an untranslated type asks for the wrong lock -
-	// and a read lock where the caller wanted a write lock is a weaker
-	// lock rather than an error.
+	// Apple agrees on none of those, so an untranslated type asks for
+	// the wrong lock - and a read lock where the caller wanted a write
+	// lock is a weaker lock rather than an error.
 	for _, tc := range []struct{ linux, darwin int16 }{{0, 1}, {1, 3}, {2, 2}} {
 		got, ok := cosmo.DarwinLockType(tc.linux)
 		if !ok || got != tc.darwin {
@@ -531,8 +509,7 @@ func TestRawFcntlLock(t *testing.T) {
 		t.Fatalf("fcntl(F_SETLK, F_WRLCK) = %v", errno)
 	}
 
-	// A process never conflicts with its own lock, so F_GETLK reports the
-	// range free - in Linux's numbering, which only a translated answer has.
+	// A process never conflicts with its own lock, so F_GETLK reports the range free - in Linux's numbering.
 	q := syscall.Flock_t{Type: syscall.F_WRLCK, Whence: io.SeekStart, Start: 0, Len: 0}
 	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETLK, uintptr(unsafe.Pointer(&q))); errno != 0 {
 		t.Fatalf("fcntl(F_GETLK) = %v", errno)

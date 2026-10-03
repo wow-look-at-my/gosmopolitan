@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cfg
 
@@ -15,22 +14,11 @@ import (
 	"internal/cosmo/embedded"
 )
 
-// EmbeddedStd reports that this go command builds against the standard
-// library embedded in its own binary: there is no GOROOT tree, every
-// standard package is a compiled archive read in process, and GOROOT names
-// the executable itself.
+// EmbeddedStd reports that this go command builds against the standard library embedded in its own binary: there is no GOROOT tree.
 var EmbeddedStd bool
 
 // UseEmbeddedStd puts the go command in embedded mode, with exe, this
 // executable, as its GOROOT.
-//
-// A tree of the SAME toolchain is the GOROOT instead, when the environment
-// names one. The blob stays authoritative: every standard package still
-// compiles to the archive this binary carries, because that is what the
-// compile action reads. What the tree adds is the rest of the distribution,
-// cmd among it, which no blob carries and which a program importing the go
-// command needs. A tree of another toolchain is refused, so an outside GOROOT
-// can still not put other sources under this binary's archives.
 func UseEmbeddedStd(exe string) {
 	EmbeddedStd = true
 	if tree := sameToolchainTree(os.Getenv("GOROOT")); tree != "" {
@@ -61,8 +49,7 @@ func sameToolchainTree(goroot string) string {
 	return goroot
 }
 
-// StdTarget names the standard library this build reads, as the blob
-// files it: GOOS_GOARCH.
+// StdTarget names the standard library this build reads, as the blob files it: GOOS_GOARCH.
 func StdTarget() string { return Goos + "_" + Goarch }
 
 var (
@@ -103,6 +90,11 @@ func targetMessage(carried []string, goos, goarch string, err error) string {
 		return fmt.Sprintf("go: this go command carries no standard library at all, so it cannot build %s/%s: %v",
 			goos, goarch, err)
 	}
+	for _, target := range carried {
+		if target == goos+"/"+goarch {
+			return fmt.Sprintf("go: this go command carries a standard library for %s/%s and cannot read it: %v", goos, goarch, err)
+		}
+	}
 	return fmt.Sprintf("go: this go command builds for %s, and GOOS=%s GOARCH=%s names %s/%s instead.\n"+
 		"\tIt carries a standard library for those targets alone, so there is nothing here to compile %s/%s against.\n"+
 		"\tLeave GOOS and GOARCH unset: the target of this go command is already the one it can build.",
@@ -130,9 +122,7 @@ func EmbeddedStdPackage(path string) *embedded.Package {
 }
 
 // EmbeddedStdArchived answers the embedded standard package at path when this
-// binary carries its archive, or nil. A standard package whose Go files are
-// all tests compiles to no archive, so the manifest names it and the blob
-// holds nothing for it. crypto/internal/fips140test is one.
+// binary carries its archive, or nil.
 func EmbeddedStdArchived(path string) *embedded.Package {
 	pkg := EmbeddedStdPackage(path)
 	if pkg == nil || pkg.Archive == "" {
@@ -142,11 +132,10 @@ func EmbeddedStdArchived(path string) *embedded.Package {
 }
 
 // EmbeddedStdArchive names the archive of the embedded standard package at
-// path, in the form the compiler, linker and assembler open in process.
+// path, in the form the compiler, linker and assembler open.
 func EmbeddedStdArchive(path string) string {
 	return embedded.Prefix + embedded.StdArchive(StdTarget(), path)
 }
 
-// EmbeddedIncludeDir names the assembly header directory inside this
-// binary.
+// EmbeddedIncludeDir names the assembly header directory inside this binary.
 func EmbeddedIncludeDir() string { return embedded.Prefix + embedded.IncludeDir }

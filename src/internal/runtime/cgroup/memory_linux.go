@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build linux
 
@@ -39,8 +38,7 @@ func ReadMemoryLimit(scratch []byte) (uint64, bool, error) {
 
 	fd, errno := sysOpenRead(&path[0])
 	if errno != 0 {
-		// This may fail if this process was migrated out of the cgroup
-		// found above and that cgroup has been deleted.
+		// This may fail if this process was migrated out of the cgroup found above and that cgroup has been deleted.
 		return 0, false, errSyscallFailed
 	}
 
@@ -52,9 +50,7 @@ func ReadMemoryLimit(scratch []byte) (uint64, bool, error) {
 // readMemoryLimit reads the limit from an open memory.max (v2) or
 // memory.limit_in_bytes (v1) file.
 func readMemoryLimit(fd int) (uint64, bool, error) {
-	// The file holds "<bytes>\n", or "max\n" on cgroup v2 when there is no
-	// limit. MaxUint64 requires 20 bytes to display in base 10, so 64 bytes
-	// is plenty.
+	// The file holds "<bytes>\n", or "max\n" on cgroup v2 when there is no limit.
 	var b [64]byte
 	n, errno := sysPread(fd, b[:], 0)
 	if errno != 0 {
@@ -71,10 +67,6 @@ func readMemoryLimit(fd int) (uint64, bool, error) {
 // of and places it in out. scratch is a scratch buffer for internal use.
 //
 // out must have length PathSize. scratch must have length ParseSize.
-//
-// Returns the number of bytes written to out and the cgroup version (1 or 2).
-//
-// Returns ErrNoCgroup if the process is not in a memory cgroup.
 func findMemory(out []byte, scratch []byte) (int, Version, error) {
 	checkBufferSize(out, PathSize)
 	checkBufferSize(scratch, ParseSize)

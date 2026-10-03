@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -90,19 +89,13 @@ func ptracePtr(request int, pid int, addr uintptr, data unsafe.Pointer) (err err
 }
 
 func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, err error) {
-	// The peek requests are machine-size oriented, so we wrap it
-	// to retrieve arbitrary-length data.
+	// The peek requests are machine-size oriented, so we wrap it to retrieve arbitrary-length data.
 
-	// The ptrace syscall differs from glibc's ptrace.
-	// Peeks returns the word in *data, not as the return value.
+	// The ptrace syscall differs from glibc's ptrace. Peeks returns the word in *data, not as the return value.
 
 	var buf [sizeofPtr]byte
 
-	// Leading edge. PEEKTEXT/PEEKDATA don't require aligned
-	// access (PEEKUSER warns that it might), but if we don't
-	// align our reads, we might straddle an unmapped page
-	// boundary and not get the bytes leading up to the page
-	// boundary.
+	// Leading edge.
 	n := 0
 	if addr%sizeofPtr != 0 {
 		err = ptracePtr(req, pid, addr-addr%sizeofPtr, unsafe.Pointer(&buf[0]))
@@ -115,8 +108,7 @@ func ptracePeek(req int, pid int, addr uintptr, out []byte) (count int, err erro
 
 	// Remainder.
 	for len(out) > 0 {
-		// We use an internal buffer to guarantee alignment.
-		// It's not documented if this is necessary, but we're paranoid.
+		// We use an internal buffer to guarantee alignment. It's not documented if this is necessary, but we're paranoid.
 		err = ptracePtr(req, pid, addr+uintptr(n), unsafe.Pointer(&buf[0]))
 		if err != nil {
 			return n, err
@@ -138,8 +130,7 @@ func PtracePeekData(pid int, addr uintptr, out []byte) (count int, err error) {
 }
 
 func ptracePoke(pokeReq int, peekReq int, pid int, addr uintptr, data []byte) (count int, err error) {
-	// As for ptracePeek, we need to align our accesses to deal
-	// with the possibility of straddling an invalid page.
+	// As for ptracePeek, we need to align our accesses to deal with the possibility of straddling an invalid page.
 
 	// Leading edge.
 	n := 0

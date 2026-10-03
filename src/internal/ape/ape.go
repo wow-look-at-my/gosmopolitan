@@ -1,12 +1,11 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package ape describes the container the cosmo linker writes.
 //
-// An Actually Portable Executable is a polyglot header followed by one or
-// two ELF images, one per architecture. A reader that wants the ELF has to
-// know where the header ends, and that is all this package says.
+// An Portable Executable is a polyglot header followed by one or ELF images,
+// one per architecture. A reader that wants the ELF has to know where the
+// header ends, and that is all this package says.
 package ape
 
 import (
@@ -16,23 +15,13 @@ import (
 	"strings"
 )
 
-// Magic opens every APE, at offset 0, where a DOS header and a shell
-// assignment overlap. The linker writes it in cmd/link/internal/ld/ape.go.
 const Magic = "MZqFpD='"
 
-// HeaderSize is the size of that header, and so the file offset of the
-// first payload. The linker lays every payload out from here
-// (layoutAPE), on 64K boundaries.
+// HeaderSize is the size of that header, and so the file offset of the first payload.
 const HeaderSize = 65536
 
-// Payload returns a reader over the first ELF image in an APE, or nil
-// when r is not one. A pristine APE begins with Magic, and one that has
-// run on a Linux host begins with the header its loader wrote; both hold
-// the image at HeaderSize, and the first image is the amd64 one.
-//
-// Read the image by its SECTIONS. Its program headers carry absolute
-// offsets into the APE, while section offsets stay relative to the
-// image, which is what a symbol table or DWARF reader asks for.
+// Payload returns a reader over the first ELF image in an APE, or nil when r
+// is not one.
 func Payload(r io.ReaderAt) io.ReaderAt {
 	var head [ehdrSize]byte
 	if _, err := r.ReadAt(head[:], 0); err != nil {
@@ -41,13 +30,11 @@ func Payload(r io.ReaderAt) io.ReaderAt {
 	if string(head[:len(Magic)]) != Magic && !assimilated(r, &head) {
 		return nil
 	}
-	// The length bounds the section reader, not the file: an image that
-	// ends before it is read to the end reports io.EOF either way.
+	// The length bounds the section reader, not the file.
 	return io.NewSectionReader(r, HeaderSize, 1<<62)
 }
 
-// ehdrSize is the size of an ELF64 header, which is what an APE carries
-// and what its loader writes over the file's own first bytes.
+// ehdrSize is the size of an ELF64 header.
 const ehdrSize = 64
 
 // assimilated reports whether head is the ELF header an APE loader
@@ -56,8 +43,8 @@ const ehdrSize = 64
 // That header exists to be executed: it names no sections, because a
 // payload's section table sits at an offset relative to the payload
 // rather than to the file. So the section-less header stands in front
-// of an image that has the table, and the two agree on what they are.
-// A file that carries both, agreeing, is an assimilated APE.
+// of an image that has the table, and both agree on what they are. A
+// file that carries both, agreeing, is an assimilated APE.
 func assimilated(r io.ReaderAt, head *[ehdrSize]byte) bool {
 	if string(head[:4]) != elfMagic || u16(head[60:]) != 0 { // e_shnum
 		return false
@@ -89,11 +76,7 @@ func u64(b []byte) uint64 {
 	return v
 }
 
-// sidecars are the unstripped ELF images the linker writes beside a fat
-// APE. A default build strips the APE itself, so these hold the section
-// headers, the symbol table and the DWARF. The linker writes one, for the
-// amd64 image: an arm64 sidecar is an ELF the build host usually cannot
-// run, sitting beside the APE under a name that invites the attempt.
+// sidecars are the unstripped ELF images the linker writes beside a fat APE.
 var sidecars = []string{".dbg"}
 
 // Sidecar returns the file to read an APE's ELF structure from, or ""
@@ -118,8 +101,7 @@ func Sidecar(name string) string {
 			return side
 		}
 	}
-	// The sidecars sit next to the file the build named, which is not
-	// this path when a caller copied the APE somewhere else.
+	// The sidecars sit next to the file the build named.
 	base := filepath.Base(name)
 	for _, suffix := range sidecars {
 		if side := filepath.Join(filepath.Dir(name), base+suffix); regularFile(side) {
