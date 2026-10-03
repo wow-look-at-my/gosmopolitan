@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -14,14 +13,7 @@ import (
 	"testing"
 )
 
-// apeTargetEnv names a PRISTINE APE for TestAPEExec to run, plus the
-// arguments and the output that prove it ran. dats/cosmo-tests.dats
-// builds one and sets them.
-//
-// Pristine matters. On a Linux host an APE assimilates itself on first
-// run, overwriting its own header with the native ELF one, so a binary
-// that has run once execs directly and proves nothing. A macOS host
-// never assimilates, which is why it fails there first.
+// apeTargetEnv names a PRISTINE APE for TestAPEExec to run.
 const (
 	apeTargetEnv = "GO_TEST_APE_TARGET"
 	apeArgsEnv   = "GO_TEST_APE_ARGS"
@@ -58,10 +50,6 @@ func TestAPEExec(t *testing.T) {
 	}
 
 	// The same target by a relative name, from the directory holding it.
-	// The check that recognizes an APE runs before the fork, where the
-	// working directory is still the caller's, so a relative name has to
-	// be resolved against Dir or it names nothing. cmd/pack and cmd/go
-	// start helpers exactly this way.
 	cmd := exec.Command("./"+filepath.Base(target), args...)
 	cmd.Dir = filepath.Dir(target)
 	out, err = cmd.CombinedOutput()
@@ -72,11 +60,7 @@ func TestAPEExec(t *testing.T) {
 		t.Fatalf("the APE printed %q, which does not contain %q", out, want)
 	}
 
-	// The same target by a BARE name, which is what net/http/cgi hands the
-	// kernel: it splits the script path into a directory and a name and
-	// passes each separately. The shell retry then sees a $0 with no slash
-	// and has to resolve it the way execvp does, or the APE loader takes it
-	// for a PATH lookup and reports the name as not found.
+	// The same target by a BARE name, which is what net/http/cgi hands the kernel.
 	base := filepath.Base(target)
 	cmd = &exec.Cmd{
 		Path: base,

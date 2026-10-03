@@ -1,14 +1,12 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
-// The kill/tkill/tgkill dispatcher cases: a Linux signal send turned
-// into an NT action. These sit with the syscall-emulation layer they
-// belong to (spawn table, errno mapping), which is amd64 only. The
-// signal machinery itself is architecture-neutral and lives in
-// os_cosmo_nt_sig.go.
+// The kill/tkill/tgkill dispatcher cases: a Linux signal send turned into an
+// NT action. These sit with the syscall-emulation layer they belong to (spawn
+// table, errno mapping), which is amd64 only. The signal machinery itself is
+// architecture-neutral and lives in os_cosmo_nt_sig.go.
 
 package runtime
 
@@ -18,15 +16,6 @@ const (
 	_NT_CTRL_BREAK_EVENT = 1
 )
 
-// ntEmuKill implements kill(2) (dispatcher case, os_cosmo_nt_sys.go).
-// pid == self delivers on the calling thread; a pid from the chunk-B
-// spawn table terminates that child with the encoded status;
-// pid < -1 addresses a process GROUP we created (wave 3 item 4,
-// ntEmuKillGroup below). Anything else is ESRCH: unrelated processes
-// are not addressable (we only hold handles for our own children),
-// and pid == 0 (the caller's own group) and pid == -1 (broadcast)
-// have no NT projection - this process is not a group we created, so
-// both keep the pre-wave-3 ESRCH.
 func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 	if sig < 0 || sig >= _NSIG {
 		return ntFail3(ntEINVAL)
@@ -51,25 +40,18 @@ func ntEmuKill(pid, sig int32) (r1, r2, errno uintptr) {
 	if sig == 0 {
 		return 0, 0, 0 // existence probe
 	}
-	// Terminate the child with the fork's encoded signal status;
-	// chunk B's wait4 decodes it into "killed by signal sig". Best
-	// effort: TerminateProcess on an already-exited child fails, and
-	// Linux kill on a zombie succeeds, so the result is not
-	// surfaced. The handle stays in the table - wait4 still reaps.
+	// Terminate the child with the fork's encoded signal status; chunk B's wait4 decodes it into "killed by signal sig".
 	ntcall(ntTerminateProcessFn, h, _NT_SIGDEATH_BASE|uintptr(uint32(sig)), 0, 0, 0, 0)
 	return 0, 0, 0
 }
 
-// ntEmuKillGroup implements kill(-pgid, sig). Only a group WE created
-// is addressable: pgid must be a child spawned with
-// CREATE_NEW_PROCESS_GROUP, and anything else is ESRCH, mirroring the
-// own-children-only rule of the positive-pid arm. Each signal is
-// handled on the case that maps it. SIGQUIT is the reliable group
-// chord, because NT creates such a child with Ctrl-C DISABLED until it
-// opts back in, so a SIGINT to one that never did silently no-ops -
-// upstream windows Go has the identical hole. No NT API delivers an
-// arbitrary signal group-wide, so any other signal degrades to killing
-// the leader, the one member of the group known here.
+// ntEmuKillGroup implements kill(-pgid, sig). Only a group WE created is
+// addressable: pgid must be a child spawned with CREATE_NEW_PROCESS_GROUP,
+// and anything else is ESRCH, mirroring the own-children-only rule of the
+// positive-pid arm. Each signal is handled on the case that maps it. SIGQUIT
+// is the reliable group chord, because NT creates such a child with Ctrl-C
+// DISABLED until it opts back in, so a SIGINT to one that never did silently
+// no-ops - upstream windows Go has the identical hole.
 func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
 	h, ok := ntProcFindGroup(pgid)
 	if !ok {
@@ -79,10 +61,7 @@ func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
 	case 0:
 		return 0, 0, 0 // existence probe
 	case _SIGINT, _SIGQUIT:
-		// A cosmo child's injected handler maps CTRL_BREAK back to
-		// SIGQUIT, which completes the Linux-shaped round trip. A
-		// failure here, such as no console attached, surfaces as the
-		// errno the trampoline captured.
+		// A cosmo child's injected handler maps CTRL_BREAK back to SIGQUIT, which completes the Linux-shaped round trip.
 		ev := uintptr(_NT_CTRL_BREAK_EVENT)
 		if sig == _SIGINT {
 			ev = _NT_CTRL_C_EVENT
@@ -96,12 +75,10 @@ func ntEmuKillGroup(pgid uint32, sig int32) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// ntEmuTkill implements tkill(2). Only the calling thread is
-// addressable in chunk D1: cross-thread delivery needs the
-// SuspendThread machinery (chunk D2's preemptM), and every
-// process-level observable (os/signal, signal deaths) is
-// thread-agnostic anyway. The runtime's own signalM stays gated off
-// on NT, so nothing in-tree sends cross-thread.
+// ntEmuTkill implements tkill(2). Only the calling thread is addressable in
+// chunk D1: cross-thread delivery needs the SuspendThread machinery (chunk
+// D2's preemptM), and every process-level observable (os/signal, signal
+// deaths) is thread-agnostic anyway.
 func ntEmuTkill(tid, sig int32) (r1, r2, errno uintptr) {
 	if sig < 0 || sig >= _NSIG {
 		return ntFail3(ntEINVAL)

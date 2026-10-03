@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cache
 
@@ -13,8 +12,7 @@ import (
 	"github.com/wow-look-at-my/go-s3-server/cacheclient/cachedisk"
 )
 
-// plainOnly is a bare Cache, which is every cache there is: one Put, one Get,
-// one file per entry.
+// plainOnly is a bare Cache, which is every cache there is: one Put, one Get, one file per entry.
 type plainOnly struct{ Cache }
 
 // An inert lane must leave the cache alone: an untraced build pays one

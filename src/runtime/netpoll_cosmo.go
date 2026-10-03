@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -12,13 +11,7 @@ import (
 	"unsafe"
 )
 
-// This file holds the epoll poller used on Linux hosts. Every entry
-// point dispatches at run time on the host OS: macOS has no epoll, so
-// XNU hosts use the kqueue poller in netpoll_cosmo_xnu.go instead,
-// and Windows NT hosts use the WSAPoll poller in netpoll_cosmo_nt.go
-// (level-triggered, aix-shaped; it also serves the timer heap's
-// unconditional netpollGenericInit). Exactly one of the three is ever
-// initialized in a given process.
+// This file holds the epoll poller used on Linux hosts.
 
 var (
 	epfd           int32         = -1 // epoll descriptor
@@ -60,8 +53,7 @@ func netpollinit() {
 
 func netpollIsPollDescriptor(fd uintptr) bool {
 	if iswindows() {
-		// The NT wake socket is a raw SOCKET with no emulated fd
-		// number, so no fd can ever name it.
+		// The NT wake socket is a raw SOCKET with no emulated fd number, so no fd can ever name it.
 		return false
 	}
 	if isdarwin() {
@@ -72,8 +64,7 @@ func netpollIsPollDescriptor(fd uintptr) bool {
 
 func netpollopen(fd uintptr, pd *pollDesc) uintptr {
 	if iswindows() {
-		// Sockets only; pipes and files keep failing so
-		// internal/poll falls back to blocking mode for them.
+		// Sockets only; pipes and files keep failing so internal/poll falls back to blocking mode for them.
 		return netpollopenNT(fd, pd)
 	}
 	if isdarwin() {
@@ -97,10 +88,7 @@ func netpollclose(fd uintptr) uintptr {
 	return cosmo.EpollCtl(epfd, cosmo.EPOLL_CTL_DEL, int32(fd), &ev)
 }
 
-// netpollarm re-arms one direction before a wait. Only the NT WSAPoll
-// poller is level-triggered (it sets netpollLevelTriggered at init);
-// the epoll and kqueue pollers are edge-triggered, arm once at
-// netpollopen, and must never come here.
+// netpollarm re-arms one direction before a wait.
 func netpollarm(pd *pollDesc, mode int) {
 	if iswindows() {
 		netpollarmNT(pd, mode)
@@ -121,9 +109,7 @@ func netpollBreak() {
 	}
 
 	if iswindows() {
-		// One byte to the wake socket boots the poller out of its
-		// blocking WSAPoll; the poller drains and resets
-		// netpollWakeSig when it wakes blocking.
+		// One byte to the wake socket boots the poller out of its blocking WSAPoll.
 		netpollBreakNT()
 		return
 	}
@@ -151,14 +137,9 @@ func netpollBreak() {
 	}
 }
 
-// netpoll checks for ready network connections.
-// Returns a list of goroutines that become runnable,
-// and a delta to add to netpollWaiters.
-// This must never return an empty list with a non-zero delta.
-//
-// delay < 0: blocks indefinitely
-// delay == 0: does not block, just polls
-// delay > 0: block for up to that many nanoseconds
+// netpoll checks for ready network connections. Returns a list of goroutines
+// that become runnable, and a delta to add to netpollWaiters. This must never
+// return an empty list with a non-zero delta.
 func netpoll(delay int64) (gList, int32) {
 	if iswindows() {
 		return netpollNT(delay)
@@ -180,7 +161,6 @@ func netpoll(delay int64) (gList, int32) {
 		waitms = int32(delay / 1e6)
 	} else {
 		// An arbitrary cap on how long to wait for a timer.
-		// 1e9 ms == ~11.5 days.
 		waitms = 1e9
 	}
 	var events [128]cosmo.EpollEvent
@@ -191,8 +171,8 @@ retry:
 			println("runtime: epollwait on fd", epfd, "failed with", errno)
 			throw("runtime: netpoll failed")
 		}
-		// If a timed sleep was interrupted, just return to
-		// recalculate how long we should sleep now.
+		// If a timed sleep was interrupted, return to recalculate how long we
+		// should sleep now.
 		if waitms > 0 {
 			return gList{}, 0
 		}
@@ -212,11 +192,7 @@ retry:
 				throw("runtime: netpoll: eventfd ready for something unexpected")
 			}
 			if delay != 0 {
-				// netpollBreak could be picked up by a
-				// nonblocking poll. Only read the 8-byte
-				// integer if blocking.
-				// Since EFD_SEMAPHORE was not specified,
-				// the eventfd counter will be reset to 0.
+				// netpollBreak could be picked up by a nonblocking poll. Only read the 8-byte integer if blocking.
 				var one uint64
 				read(int32(netpollEventFd), noescape(unsafe.Pointer(&one)), int32(unsafe.Sizeof(one)))
 				netpollWakeSig.Store(0)

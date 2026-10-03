@@ -3,8 +3,7 @@
 //go:build cosmo
 
 // Go's thread state on a cosmo thread. libcosmo owns the C thread pointer:
-// %fs (Linux), gs:0x30 (XNU) or a TEB TLS slot (NT) on amd64. It is x28 on
-// arm64.
+// %fs (Linux), gs:0x30 (XNU) or a TEB TLS slot (NT) on amd64.
 
 #include <errno.h>
 #include <pthread.h>

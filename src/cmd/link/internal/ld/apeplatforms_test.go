@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -35,8 +34,7 @@ func assembleTest(t *testing.T, spec string, wantAMD, wantARM bool) []byte {
 
 	var inputs []string
 	if wantAMD {
-		// The NT-shaped payload, so the thin APE carries the real PE
-		// header windows/amd64 needs the assembly step to transplant.
+		// The NT-shaped payload, so the thin APE carries the real PE header windows/amd64 needs the assembly step.
 		amdElf, peInfo := buildTestNTELF(t)
 		p, err := payloadFromELF(amdElf)
 		if err != nil {
@@ -135,9 +133,8 @@ func contains(s []uint16, v uint16) bool {
 }
 
 // catchExitf runs fn with the linker's -h behavior, where Exitf panics
-// instead of ending the process, and returns what it printed. Error paths
-// are the point of a selection flag, so they need to be testable in
-// process.
+// instead of ending the process, and returns what it printed. Error paths are
+// the point of a selection flag, so they need to be testable in process.
 func catchExitf(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -183,8 +180,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 		wantUnsupportedHostGuardMsg bool
 	}{
 		{
-			// Every platform there is. An x86-64 mac is still turned
-			// away, because Intel macs are out of support.
+			// Every platform there is.
 			spec: "linux/amd64,linux/arm64,darwin/arm64,windows/amd64",
 			amd:  true, arm: true,
 			wantLoader:  true,
@@ -216,8 +212,7 @@ func TestAPEPlatformsHeaderPieces(t *testing.T) {
 			wantUnsupportedHostGuardMsg: true,
 		},
 		{
-			// macOS Apple Silicon only: the arm64 boot header stays,
-			// unreachable as shell but decodable by the APE loader.
+			// macOS Apple Silicon only: the arm64 boot header stays, unreachable as shell but decodable by the APE loader.
 			spec:                        "darwin/arm64",
 			arm:                         true,
 			wantLoader:                  true,
@@ -324,9 +319,7 @@ func TestAPEPlatformsDerivedFromPayloads(t *testing.T) {
 	if boots := bootHeaderMachines(t, amdOnly); contains(boots, elfMachineARM64) {
 		t.Error("amd64-only input produced an arm64 boot header")
 	}
-	// The only darwin platform is darwin/arm64, which this input cannot
-	// serve, so an amd64-only build claims linux/amd64 and windows/amd64
-	// and carries no darwin loader at all.
+	// The only darwin platform is darwin/arm64, which this input cannot serve.
 	if amdOnly[apeLdDarwinARM64Offset] == 0x1f && amdOnly[apeLdDarwinARM64Offset+1] == 0x8b {
 		t.Error("amd64-only input embedded the darwin loader")
 	}

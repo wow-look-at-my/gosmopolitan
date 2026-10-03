@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,9 +10,6 @@ import "unsafe"
 // The inotify group. GOOS=cosmo presents the Linux ABI, so a program written
 // against the linux port names these, and the linux port declares them in
 // syscall_linux.go, which cosmo does not build.
-//
-// The Linux kernel serves inotify. No darwin dispatch and no NT dispatch
-// names these syscall numbers, so both answer ENOSYS on a non-Linux host.
 
 func InotifyAddWatch(fd int, pathname string, mask uint32) (watchdesc int, err error) {
 	var _p0 *byte

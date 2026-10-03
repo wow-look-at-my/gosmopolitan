@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package codehost
 
@@ -38,8 +37,7 @@ type githubRepo struct {
 
 var githubSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// githubRemote names the GitHub repository of a git remote. Tests replace it
-// to put a local remote behind a fake github.com.
+// githubRemote names the GitHub repository of a git remote.
 var githubRemote = parseGitHubRemote
 
 // parseGitHubRemote returns the repository that remote names. It accepts only
@@ -169,12 +167,10 @@ func refPath(ref, hash string) string {
 
 func isAPIHost(host string) bool { return host == "api.github.com" }
 
-// maxAPIResponse bounds one page of an api.github.com list. A longer body
-// fails to decode, so the caller falls back to ls-remote.
+// maxAPIResponse bounds one page of an api.github.com list.
 const maxAPIResponse = 16 << 20
 
-// gsmHost is github-state-mirror, a cache of the GitHub API that the owner
-// of this fork runs. It answers only a request that carries a GitHub token.
+// gsmHost is github-state-mirror, a cache of the GitHub API that the owner of this fork runs.
 const gsmHost = "github-state-mirror.pazer.io"
 
 func isGSMHost(host string) bool { return host == gsmHost }
@@ -423,8 +419,7 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 }
 
 // githubArchivePath is where the archive of hash is kept, byte for byte as
-// GitHub served it, under ext (".tar.gz" or ".zip"). hash+".time" holds the
-// commit time and is written last, so it marks a complete archive.
+// GitHub served it.
 func (r *gitRepo) githubArchivePath(hash, ext string) string {
 	return filepath.Join(r.dir, "github", hash+ext)
 }
@@ -773,8 +768,7 @@ type FileReader interface {
 }
 
 // An archiveEntry is one file or symlink of an archive, named without the
-// archive's top directory. A symlink's data is its target, as git cat-file
-// prints it.
+// archive's top directory.
 type archiveEntry struct {
 	name string
 	mode fs.FileMode
@@ -813,7 +807,7 @@ func subdirFiles(entries []archiveEntry, subdir string) ([]ModuleFile, error) {
 }
 
 // An archiveBuilder collects the entries of a GitHub archive: files and
-// symlinks only, each named without the one top-level directory.
+// symlinks only, each named without the top-level directory.
 type archiveBuilder struct {
 	top     string
 	when    time.Time

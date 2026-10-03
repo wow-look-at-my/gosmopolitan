@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package wasm
 
@@ -49,14 +48,6 @@ const (
 	opFbreg        = 0x91 // DW_OP_fbreg
 )
 
-// TestWasmDwarfFrameBase checks that wasm subprograms carry an
-// evaluable DW_AT_frame_base: wasm emits no .debug_frame, so instead of
-// DW_OP_call_frame_cfa the frame base must compute the CFA directly as
-// the value of wasm global 0 (the Go SP) plus framesize+8. Variable and
-// formal-parameter DIEs must then carry DW_OP_fbreg locations against
-// it: params at nonnegative offsets (the first at exactly fbreg 0,
-// which used to be emitted as a bare, unevaluable DW_OP_call_frame_cfa)
-// and stack locals at negative offsets.
 func TestWasmDwarfFrameBase(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	if testing.Short() {
@@ -95,9 +86,7 @@ func testWasmDwarfFrameBase(t *testing.T, goos string) {
 		t.Fatalf("reading DWARF: %v", err)
 	}
 
-	// Per function: the variables we must see, and whether each is a
-	// formal parameter (nonnegative fbreg offset) or a stack local
-	// (negative fbreg offset).
+	// Per function: the variables we must see.
 	type varClass = bool
 	const (
 		param = varClass(true)
@@ -180,9 +169,7 @@ func testWasmDwarfFrameBase(t *testing.T, goos string) {
 			if !isParam && off >= 0 {
 				t.Errorf("%s.%s: local fbreg offset = %d, want < 0", cur, name, off)
 			}
-			// The first stack parameter sits at exactly the CFA. It
-			// used to be emitted as a bare DW_OP_call_frame_cfa, which
-			// is unevaluable on wasm; it must now be DW_OP_fbreg 0.
+			// The first stack parameter sits at exactly the CFA.
 			if name == firstParam[cur] && off != 0 {
 				t.Errorf("%s.%s: first param fbreg offset = %d, want 0", cur, name, off)
 			}
