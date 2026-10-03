@@ -403,14 +403,6 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 
 		ccExe := b.ccExe()
 		fmt.Fprintf(h, "CC=%q %q %q %q\n", ccExe, cppflags, cflags, ldflags)
-		// A #cgo pkg-config line's flags are an input too: a .pc file that changes must not hit a stale cgo archive.
-		if len(p.CgoPkgConfig) > 0 {
-			if pcCflags, pcLdflags, err := b.getPkgConfigFlags(a, p); err == nil {
-				fmt.Fprintf(h, "pkg-config=%q %q\n", pcCflags, pcLdflags)
-			} else {
-				fmt.Fprintf(h, "pkg-config ERROR=%q\n", err)
-			}
-		}
 		// Include the C compiler tool ID so that if the C
 		// compiler changes we rebuild the package.
 		if ccID, _, err := b.gccToolID(ccExe[0], "c"); err == nil {
@@ -1982,29 +1974,8 @@ func splitPkgConfigOutput(out []byte) ([]string, error) {
 	return flags, nil
 }
 
-// pkgConfigResult is what one pkg-config run answered for a package.
-type pkgConfigResult struct {
-	cflags, ldflags []string
-	err             error
-}
-
-// getPkgConfigFlags returns the cflags/ldflags needed to build a's package.
-// The action ID and the cgo step both ask, and pkg-config runs once.
+// Calls pkg-config if needed and returns the cflags/ldflags needed to build a's package.
 func (b *Builder) getPkgConfigFlags(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
-	if len(p.CgoPkgConfig) == 0 {
-		return nil, nil, nil
-	}
-	if v, ok := b.pkgConfigCache.Load(p); ok {
-		r := v.(*pkgConfigResult)
-		return r.cflags, r.ldflags, r.err
-	}
-	cflags, ldflags, err = b.runPkgConfig(a, p)
-	b.pkgConfigCache.Store(p, &pkgConfigResult{cflags: cflags, ldflags: ldflags, err: err})
-	return cflags, ldflags, err
-}
-
-// runPkgConfig calls pkg-config and returns the cflags/ldflags needed to build a's package.
-func (b *Builder) runPkgConfig(a *Action, p *load.Package) (cflags, ldflags []string, err error) {
 	sh := b.Shell(a)
 	if pcargs := p.CgoPkgConfig; len(pcargs) > 0 {
 		// pkg-config permits arguments to appear anywhere in

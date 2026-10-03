@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package ld
 
@@ -57,6 +58,8 @@ func apePlatforms(payloads []*apePayload) cosmoape.Set {
 
 // checkNTBootHead ends the link when an explicitly selected windows/amd64
 // would be served by the do-nothing stub PE header the amd64 input carries.
+// The stub maps none of the payload, so the binary would claim a platform
+// on which it starts and immediately returns 0.
 func checkNTBootHead(amd *apePayload) {
 	if n := binary.LittleEndian.Uint16(amd.head[0x86:0x88]); n != peCosmoSections {
 		Exitf("-apeplatforms selects %s, but the amd64 input's PE header has %d sections, want %d: it is the do-nothing stub, not an NT boot header",
@@ -65,7 +68,7 @@ func checkNTBootHead(amd *apePayload) {
 }
 
 // apeUnsupportedEcho is the shell statement a host the binary was not built
-// for runs.
+// for runs. Naming the platforms turns "exec format error" into an answer.
 func apeUnsupportedEcho(plat cosmoape.Set) string {
 	return "echo 'APE: unsupported host; this binary was built for " + plat.String() + "' >&2"
 }

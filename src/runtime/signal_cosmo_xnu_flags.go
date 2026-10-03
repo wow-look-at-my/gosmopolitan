@@ -1,11 +1,19 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
-// Apple sigaction flag values (upstream defs_darwin_*.go).
+// Apple sigaction flag values (upstream defs_darwin_*.go). The Linux
+// values these translate from are in defs_cosmo_*.go: _SA_SIGINFO 0x4,
+// _SA_ONSTACK 0x8000000, _SA_RESTART 0x10000000.
+//
+// This file carries no architecture tag on purpose. arm64 reaches Apple
+// sigaction through the APE loader's Syslib and amd64 through the raw
+// __sigaction syscall, but the FLAGS are the same on both, and a second
+// copy would drift the first time somebody corrected an entry.
 const (
 	xnuSA_ONSTACK = 0x1
 	xnuSA_RESTART = 0x2
@@ -13,6 +21,11 @@ const (
 )
 
 // xnuSigFlagsL2A translates Linux sigaction flags to Apple's.
+//
+// Only these three cross over. Anything else Linux defines either has no
+// Apple counterpart or is meaningless to the runtime, and passing an
+// unknown bit through would set whatever Apple happens to use that bit
+// for.
 //
 //go:nosplit
 //go:nowritebarrierrec

@@ -12,7 +12,7 @@ If you are unsure whether you have found a bug, please consider asking in the [g
 
 Sensitive security-related issues must be reported to [security@golang.org](mailto:security@golang.org). See the [security policy](https://golang.org/security) for details.
 
-The recommended way to file an issue is by running `go bug`. Otherwise, when filing an issue, make sure to answer these questions:
+The recommended way to file an issue is by running `go bug`. Otherwise, when filing an issue, make sure to answer these five questions:
 
 1. What version of Go are you using (`go version`)?
 2. What operating system and processor architecture are you using?

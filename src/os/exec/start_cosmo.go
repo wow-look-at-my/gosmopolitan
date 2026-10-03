@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -12,13 +13,17 @@ import (
 	"syscall"
 )
 
-// apeMagic opens every Portable Executable: the DOS stub whose bytes are also the shell script that boots the file on a kernel.
+// apeMagic opens every Actually Portable Executable: the DOS stub whose bytes
+// are also the shell script that boots the file on a kernel that cannot exec
+// it directly.
 const apeMagic = "MZqFpD"
 
-// startProcess starts name. On a posix host the kernel refuses a pristine APE
-// with ENOEXEC, because nothing has registered its header, and the file then
-// starts the way its own header says it does: as a script under /bin/sh,
-// which reads the header and execs the staged native image.
+// startProcess starts name. On a posix host the kernel refuses a pristine
+// APE with ENOEXEC, because nothing has registered its header, and the file
+// then starts the way its own header says it does: as a script under
+// /bin/sh, which reads the header and execs the staged native image. An NT
+// host starts the APE through its PE header and never gets here, and an
+// assimilated APE is a native image the kernel accepts.
 func startProcess(name string, argv []string, attr *os.ProcAttr) (*os.Process, error) {
 	proc, err := os.StartProcess(name, argv, attr)
 	if err == nil || ntHost() || !errors.Is(err, syscall.ENOEXEC) || !isAPE(name, attr) {

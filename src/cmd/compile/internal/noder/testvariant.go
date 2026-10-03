@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package noder
 
@@ -44,7 +45,8 @@ func readDefIndices(path string) (map[obj.DefKey]int32, int, error) {
 	count := reader.NSym()
 	index := make(map[obj.DefKey]int32, count)
 	for idx := 0; idx < count; idx++ {
-		// A file-local or unnamed symbol is only ever referred to from inside its own package, so its index is free to move.
+		// A file-local or unnamed symbol is only ever referred to from inside
+		// its own package, so its index is free to move.
 		sym := reader.Sym(uint32(idx))
 		if sym.ABI() == goobj.SymABIstatic || sym.NameLen(reader) == 0 {
 			continue
@@ -57,7 +59,7 @@ func readDefIndices(path string) (map[obj.DefKey]int32, int, error) {
 // dumpExportData writes the export data and records its fingerprint. Under
 // -testvariant the fingerprint is the replaced package's: every package
 // compiled against that one recorded it, and the linker checks it against the
-// object it loads.
+// object it actually loads.
 func dumpExportData(pw *pkgbits.PkgEncoder, out io.Writer) {
 	if base.Flag.TestVariant == "" {
 		base.Ctxt.Fingerprint = pw.DumpTo(out)

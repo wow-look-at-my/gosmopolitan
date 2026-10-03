@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -12,8 +13,8 @@
 // A win64 function is reached through runtime·ntcall6, a host-ABI
 // trampoline invoked via asmcgocall, so the g0 stack switch and the
 // stack accounting come for free. The function-pointer table resolves
-// at osArchInit from both loader-filled IAT slots, GetProcAddress and
-// LoadLibraryA, which mirrors the darwin port's dlsym idiom.
+// at osArchInit from the two loader-filled IAT slots, GetProcAddress
+// and LoadLibraryA, which mirrors the darwin port's dlsym idiom.
 
 package runtime
 
@@ -23,6 +24,12 @@ import (
 	"unsafe"
 )
 
+// ntiat is the PE import address table (rt0_cosmo_nt_amd64.s). The NT
+// loader overwrites the slots before entry:
+//
+//	ntiat[0] = &kernel32!GetProcAddress
+//	ntiat[1] = &kernel32!LoadLibraryA
+//
 //go:linkname ntiat
 var ntiat [3]uintptr
 
@@ -45,6 +52,8 @@ var (
 	ntWaitOnAddressFn          uintptr
 	ntWakeByAddressSingleFn    uintptr
 
+	// Wave 2 (file I/O, identity, console; all kernel32, all present
+	// since forever - resolved with the same crash-poke discipline).
 	ntGetLastErrorFn     uintptr
 	ntCloseHandleFn      uintptr
 	ntCreateFileWFn      uintptr
@@ -52,9 +61,12 @@ var (
 	ntSetFilePointerExFn uintptr
 	ntSetEndOfFileFn     uintptr
 	ntFlushFileBuffersFn uintptr
-	// QueryPerformanceCounter. nanotime reads KUSER_SHARED_DATA, which moves once a timer tick.
+	// QueryPerformanceCounter. nanotime reads KUSER_SHARED_DATA, which
+	// moves once a timer tick, so a caller measuring tens of
+	// nanoseconds needs this instead.
 	ntQueryPerfCounterFn uintptr
-	// The section API behind mmap (os_cosmo_nt_mmap.go). Optional: a zero answers ENOSYS where it is called.
+	// The section API behind mmap (os_cosmo_nt_mmap.go). Optional: a
+	// zero answers ENOSYS where it is called.
 	ntCreateFileMappingWFn uintptr
 	ntMapViewOfFileFn      uintptr
 	ntUnmapViewOfFileFn    uintptr
@@ -62,19 +74,26 @@ var (
 	ntVirtualQueryFn       uintptr
 	ntVirtualLockFn        uintptr
 	ntVirtualUnlockFn      uintptr
-	// The flock(2) pair.
+	// The flock(2) pair. Optional like the metadata wave's: a zero
+	// pointer answers ENOSYS where flock is called rather than
+	// crashing the boot.
 	ntLockFileExFn   uintptr
 	ntUnlockFileExFn uintptr
-	// uname's sources (ntEmuUname). Both optional.
+	// uname's two sources (ntEmuUname). Both optional.
 	ntRtlGetVersionFn    uintptr
 	ntGetComputerNameWFn uintptr
-	// The host machine, for GOARCH (hostarch_cosmo.go).
+	// The host machine, for GOARCH (hostarch_cosmo.go). Optional: a zero
+	// keeps the payload's own architecture, which is right on every host
+	// that runs the payload natively.
 	ntIsWow64Process2Fn uintptr
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). All optional.
-	ntGetVolumePathNameWFn           uintptr
-	ntGetDiskFreeSpaceWFn            uintptr
-	ntGetDiskFreeSpaceExWFn          uintptr
-	ntGetVolumeInformationWFn        uintptr
+	ntGetVolumePathNameWFn    uintptr
+	ntGetDiskFreeSpaceWFn     uintptr
+	ntGetDiskFreeSpaceExWFn   uintptr
+	ntGetVolumeInformationWFn uintptr
+	// The metadata wave's four (os_cosmo_nt_meta.go). All optional: a
+	// zero pointer answers ENOSYS at the use site rather than crashing
+	// the boot over a call most programs never make.
 	ntSetFileTimeFn                  uintptr
 	ntGetSystemTimeAsFileTimeFn      uintptr
 	ntGetFinalPathNameByHandleWFn    uintptr
@@ -112,7 +131,8 @@ var (
 	ntGetThreadTimesFn      uintptr
 	ntGetProcessMemInfoFn   uintptr
 
-	// Chunk D (signals/VEH/preemption; all kernel32, present since forever except the optional WER pair).
+	// Chunk D (signals/VEH/preemption; all kernel32, present since
+	// forever except the optional WER pair).
 	ntAddVectoredExceptionHandlerFn uintptr
 	ntAddVectoredContinueHandlerFn  uintptr
 	ntSetErrorModeFn                uintptr
@@ -128,24 +148,34 @@ var (
 	ntWerGetFlagsFn                 uintptr // optional (missing on old wine)
 	ntWerSetFlagsFn                 uintptr // optional
 
+	// Wave 3 (SCM_RIGHTS fd passing; kernel32, present since forever).
 	ntOpenProcessFn uintptr
 
-	ntCreateWaitableTimerExWFn uintptr
+	// Wave 3 item 3 (CPU profiling; kernel32).
+	ntCreateWaitableTimerExWFn uintptr // optional (the HIGH_RESOLUTION flag needs Win10 1803)
 	ntCreateWaitableTimerWFn   uintptr
 	ntSetWaitableTimerFn       uintptr
 	ntSetThreadPriorityFn      uintptr // optional (best-effort use)
 
+	// Wave 3 item 4 (process groups / kill(-pgid); kernel32, present
+	// since forever).
 	ntGenerateConsoleCtrlEventFn uintptr
 
+	// Optional non-kernel32 imports: 0 when unavailable, and every
+	// user degrades gracefully (the cosmo graceful-stub philosophy).
 	ntQueryInformationProcessFn uintptr // ntdll: getppid
 	ntProcessPrngFn             uintptr // bcryptprimitives ProcessPrng, or advapi32 SystemFunction036 (same signature)
 
+	// Cached std handles (GetStdHandle(-10)/(-11)/(-12)).
 	ntStdin  uintptr
 	ntStdout uintptr
 	ntStderr uintptr
 )
 
-// C string constants for resolution.
+// C string constants for resolution. Package-level []byte("...") vars
+// are statically initialized by the compiler (same pattern as
+// urandom_dev), so taking &x[0] never allocates - osArchInit runs
+// before mallocinit.
 var (
 	ntNameKernel32       = []byte("kernel32.dll\x00")
 	ntNameSynchDLL       = []byte("api-ms-win-core-synch-l1-2-0.dll\x00")
@@ -163,6 +193,7 @@ var (
 	ntNameWaitOnAddress  = []byte("WaitOnAddress\x00")
 	ntNameWakeByAddrSing = []byte("WakeByAddressSingle\x00")
 
+	// Wave 2.
 	ntNameGetLastError      = []byte("GetLastError\x00")
 	ntNameCloseHandle       = []byte("CloseHandle\x00")
 	ntNameCreateFileW       = []byte("CreateFileW\x00")
@@ -249,22 +280,32 @@ var (
 	ntNameSystemFunction036 = []byte("SystemFunction036\x00") // RtlGenRandom
 )
 
+// Win32 constants used by wave 1 that only amd64 code references (the
+// memory constants live in os_cosmo.go because mem_cosmo.go is shared
+// with arm64).
 const (
 	_NT_STACK_SIZE_PARAM_IS_A_RESERVATION = 0x10000
 
 	_NT_INFINITE = 0xFFFFFFFF
 
-	// GetCurrentProcess() pseudo-handle, and the DuplicateHandle option every caller of it uses.
+	// GetCurrentProcess() pseudo-handle, and the DuplicateHandle
+	// option every caller of it uses.
 	_NT_CURRENT_PROCESS       = ^uintptr(0)
 	_NT_DUPLICATE_SAME_ACCESS = 0x2
 
-	_NT_STD_INPUT_HANDLE  = 0xFFFFFFF6
-	_NT_STD_OUTPUT_HANDLE = 0xFFFFFFF5
-	_NT_STD_ERROR_HANDLE  = 0xFFFFFFF4
+	_NT_STD_INPUT_HANDLE  = 0xFFFFFFF6 // (DWORD)-10, zero-extended
+	_NT_STD_OUTPUT_HANDLE = 0xFFFFFFF5 // (DWORD)-11, zero-extended
+	_NT_STD_ERROR_HANDLE  = 0xFFFFFFF4 // (DWORD)-12, zero-extended
 )
 
-// ntcallArgs is the argument block ntcall packs for the ntcall6 trampoline.
-// Field offsets are exported to assembly via go_asm.h.
+// ntcallArgs is the argument block ntcall packs for the ntcall6
+// trampoline. Field offsets are exported to assembly via go_asm.h.
+// Kept at six arguments on purpose: ntcall sits inside the tightest
+// nosplit chain in the port (cgoSigtramp -> ... -> write1 -> ntwrite1
+// -> ntcall -> asmcgocall), which cannot afford a bigger frame. The
+// syscall-emulation layer's wider calls (CreateFileW, CreateProcessW)
+// use the separate ntcallArgs10/ntcall10 pair, which never appears in
+// that chain.
 type ntcallArgs struct {
 	fn  uintptr
 	a1  uintptr
@@ -276,8 +317,10 @@ type ntcallArgs struct {
 	ret uintptr
 }
 
-// ntcallArgs10 is those-argument block for the ntcall10 trampoline (born as
-// ntcallArgs8 in chunk A for 7-argument CreateFileW.
+// ntcallArgs10 is the ten-argument block for the ntcall10 trampoline
+// (born as ntcallArgs8 in chunk A for 7-argument CreateFileW; widened
+// - per the chunk-A rule that this parallel block is the one that
+// grows - to ten for CreateProcessW in chunk B).
 type ntcallArgs10 struct {
 	fn  uintptr
 	a1  uintptr
@@ -299,8 +342,12 @@ func ntcall10()
 func tstart_cosmo_nt()
 func ntwrite1tramp(fd uintptr, p unsafe.Pointer, n int32) int32
 
-// ntcall calls the win64 function fn with up to integer arguments through the
-// ntcall6 trampoline via asmcgocall.
+// ntcall calls the win64 function fn with up to six integer arguments
+// through the ntcall6 trampoline via asmcgocall. Functions taking
+// fewer arguments ignore the extra registers/slots (the darwin
+// cosmoLibcCall6 convention). The args struct lives on the stack
+// (asmcgocall is //go:noescape), so ntcall is usable before
+// mallocinit and from nosplit contexts.
 //
 //go:nosplit
 func ntcall(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr {
@@ -309,6 +356,8 @@ func ntcall(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr {
 	return args.ret
 }
 
+// ntcall7 is ntcall for seven-argument functions (CreateFileW), via
+// the wider ntcall10 trampoline.
 //
 //go:nosplit
 func ntcall7(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
@@ -317,6 +366,7 @@ func ntcall7(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) uintptr {
 	return args.ret
 }
 
+// ntcall10x is ntcall for ten-argument functions (CreateProcessW).
 //
 //go:nosplit
 func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
@@ -327,7 +377,14 @@ func ntcall10x(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) uintptr {
 }
 
 // ntcallE ("with error") performs ntcall7 and returns the thread's
-// GetLastError alongside the result.
+// GetLastError alongside the result. The trampoline captures the error
+// into this M's mOS.ntLastError immediately after the target returns,
+// so it is exact by construction: no suspension or other win64 call on
+// this thread can lose it. This is nosplit, with no preemption point
+// between that store and the load below, so the g.m read stays on the
+// calling thread. A caller passes a pointer as
+// uintptr(unsafe.Pointer(x)) in the argument list, and nosplit plus
+// call-site liveness keeps the pointee valid and unmoved.
 //
 //go:nosplit
 func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
@@ -336,8 +393,12 @@ func ntcallE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
-// ntHighPrecisionTicks reads QueryPerformanceCounter, and reports whether it
-// answered. nanotime reads KUSER_SHARED_DATA's InterruptTime.
+// ntHighPrecisionTicks reads QueryPerformanceCounter, and reports
+// whether it answered. nanotime reads KUSER_SHARED_DATA's
+// InterruptTime, which moves once a timer tick - about 15ms - so a
+// caller measuring tens of nanoseconds gets a run of identical values
+// from it. The SP 800-90B jitter entropy source is one, and it fails
+// its startup health test on a clock that never changes.
 func ntHighPrecisionTicks() (int64, bool) {
 	if !iswindows() || ntQueryPerfCounterFn == 0 {
 		return 0, false
@@ -349,7 +410,10 @@ func ntHighPrecisionTicks() (int64, bool) {
 	return ticks, true
 }
 
-// ntcallSEcheck refuses a blocking call made under a runtime lock.
+// ntcallSEcheck refuses a blocking call made under a runtime lock. An
+// exitsyscall that does not win a P back calls stopm, which throws
+// "stopm holding locks" - a rare crash, far from the lock that caused
+// it. This names the caller instead, on every such call.
 //
 //go:nosplit
 func ntcallSEcheck() {
@@ -358,10 +422,16 @@ func ntcallSEcheck() {
 	}
 }
 
-// ntcallSE ("syscall-state, with error") is ntcallE bracketed by entersyscall
-// and exitsyscall, for a Win32 call that can block indefinitely, so sysmon
-// can retake the P while the thread parks in the kernel. Use it ONLY from
-// user-goroutine context.
+// ntcallSE ("syscall-state, with error") is ntcallE bracketed by
+// entersyscall and exitsyscall, for a Win32 call that can block
+// indefinitely, so sysmon can retake the P while the thread parks in
+// the kernel. Use it ONLY from user-goroutine context. The g stays on
+// this M, so the error is this thread's. The osPreemptExtEnter/Exit
+// bracket marks the foreign call for ntPreemptM the way upstream's
+// cgocall model does: a preemption against a thread in win64 code
+// fails fast rather than suspending one that may hold the loader lock.
+// It sits strictly inside the entersyscall window, so the M cannot run
+// a goroutine while it holds preemptExtLock.
 //
 //go:nosplit
 func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
@@ -375,7 +445,9 @@ func ntcallSE(fn, a1, a2, a3, a4, a5, a6, a7 uintptr) (r, lastErr uintptr) {
 	return
 }
 
-// Same contract as ntcallSE: user-goroutine context only.
+// ntcallSE10 is ntcallSE for ten-argument functions (CreateProcessW,
+// which can block on image load). Same contract as ntcallSE:
+// user-goroutine context only.
 //
 //go:nosplit
 func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr uintptr) {
@@ -392,9 +464,16 @@ func ntcallSE10(fn, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 uintptr) (r, lastErr
 // ntCrash stores code at address code, so the faulting address names
 // the failure. Same idiom as the 0xf1 pokes in sys_cosmo_amd64.s.
 //
+//	0xf2  LoadLibraryA("kernel32.dll")   0xf6  VirtualFree(MEM_RELEASE)
+//	0xf3  GetProcAddress(kernel32)       0xf7  rawSyscallNoError on NT
+//	0xf4  LoadLibraryA(synch dll)        0xf8  rawVforkSyscall on NT
+//	0xf5  GetProcAddress(synch dll)
+//
 //go:nosplit
 func ntCrash(code uintptr) {
-	// Say which first.
+	// Say which one first. The fault alone names the failure only to
+	// somebody holding this table and a debugger, and the boot has a
+	// writer of its own by now (ntResolveWriter).
 	var msg [40]byte
 	copy(msg[:], "runtime: NT boot failed at 0x")
 	n := 29
@@ -434,7 +513,10 @@ func ntResolve() {
 	ntVirtualFreeFn = k32sym(&ntNameVirtualFree[0])
 	ntWriteFileFn = k32sym(&ntNameWriteFile[0])
 	ntGetStdHandleFn = k32sym(&ntNameGetStdHandle[0])
-	// The std handles are cached HERE, next to both calls that reach them, rather than at the end of this function.
+	// The std handles are cached HERE, next to the two calls that reach
+	// them, rather than at the end of this function. Everything below can
+	// throw, and a throw with no handle prints nowhere: the process exits
+	// 2 in silence and the reason for it dies with it.
 	ntStdin = ntcall(ntGetStdHandleFn, _NT_STD_INPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStdout = ntcall(ntGetStdHandleFn, _NT_STD_OUTPUT_HANDLE, 0, 0, 0, 0, 0)
 	ntStderr = ntcall(ntGetStdHandleFn, _NT_STD_ERROR_HANDLE, 0, 0, 0, 0, 0)
@@ -447,6 +529,7 @@ func ntResolve() {
 	ntGetCommandLineWFn = k32sym(&ntNameGetCommandLine[0])
 	ntGetEnvironmentStringsWFn = k32sym(&ntNameGetEnvStringsW[0])
 
+	// Wave 2: file I/O, identity, console (all kernel32).
 	ntGetLastErrorFn = k32sym(&ntNameGetLastError[0])
 	ntCloseHandleFn = k32sym(&ntNameCloseHandle[0])
 	ntCreateFileWFn = k32sym(&ntNameCreateFileW[0])
@@ -492,7 +575,8 @@ func ntResolve() {
 	ntGetThreadTimesFn = k32sym(&ntNameGetThreadTimes[0])
 	ntGetProcessMemInfoFn = k32sym(&ntNameGetProcessMemInfo[0])
 
-	// Chunk D: signals/VEH/preemption (all kernel32.
+	// Chunk D: signals/VEH/preemption (all kernel32; the WER pair is
+	// optional - wine lacks it - and preventErrorDialogs degrades).
 	ntAddVectoredExceptionHandlerFn = k32sym(&ntNameAddVEH[0])
 	ntAddVectoredContinueHandlerFn = k32sym(&ntNameAddVCH[0])
 	ntSetErrorModeFn = k32sym(&ntNameSetErrorMode[0])
@@ -508,16 +592,24 @@ func ntResolve() {
 	ntWerGetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerGetFlags[0])), 0, 0, 0, 0)
 	ntWerSetFlagsFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameWerSetFlags[0])), 0, 0, 0, 0)
 
+	// Wave 3: SCM_RIGHTS fd passing (kernel32).
 	ntOpenProcessFn = k32sym(&ntNameOpenProcess[0])
 
+	// Wave 3 item 3: CPU profiling (kernel32). The Ex creator is
+	// optional (its HIGH_RESOLUTION flag needs Win10 1803; old wine
+	// lacks the export) - ntSetProcessCPUProfiler falls back to the
+	// classic creator. SetThreadPriority is optional best-effort
+	// (the profiler M merely prefers a high priority).
 	ntCreateWaitableTimerWFn = k32sym(&ntNameCreateWTimerW[0])
 	ntSetWaitableTimerFn = k32sym(&ntNameSetWaitableTimer[0])
 	ntCreateWaitableTimerExWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateWTimerExW[0])), 0, 0, 0, 0)
 	ntSetThreadPriorityFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetThreadPriority[0])), 0, 0, 0, 0)
 
+	// Wave 3 item 4: process groups / kill(-pgid) (kernel32).
 	ntGenerateConsoleCtrlEventFn = k32sym(&ntNameGenConsoleCtrlEvt[0])
 
-	// WaitOnAddress and friends live in the api-ms-win-core-synch forwarder DLL (Win8+; real cosmo imports the same one).
+	// WaitOnAddress and friends live in the api-ms-win-core-synch
+	// forwarder DLL (Win8+; real cosmo imports the same one).
 	synch := ntcall(lla, uintptr(unsafe.Pointer(&ntNameSynchDLL[0])), 0, 0, 0, 0, 0)
 	if synch == 0 {
 		ntCrash(0xf4)
@@ -528,13 +620,25 @@ func ntResolve() {
 		ntCrash(0xf5)
 	}
 
+	// Optional imports, resolved gracefully (a 0 pointer degrades to
+	// ENOSYS or a fallback at the use site, never a boot crash):
+	// getppid needs ntdll's NtQueryInformationProcess; entropy wants
+	// bcryptprimitives' ProcessPrng (what upstream Go uses on Windows
+	// since 1.22), falling back to advapi32's SystemFunction036
+	// (RtlGenRandom), which has the same (buf, len) signature.
 	if ntdll := ntcall(lla, uintptr(unsafe.Pointer(&ntNameNtdll[0])), 0, 0, 0, 0, 0); ntdll != 0 {
 		ntQueryInformationProcessFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameNtQueryInfoProc[0])), 0, 0, 0, 0)
-		// uname's release and version (ntEmuUname).
+		// uname's release and version (ntEmuUname). RtlGetVersion is the
+		// one call that reports the real build: GetVersionExW lies to an
+		// unmanifested process and answers 6.2 on every modern host.
 		ntRtlGetVersionFn = ntcall(gpa, ntdll, uintptr(unsafe.Pointer(&ntNameRtlGetVersion[0])), 0, 0, 0, 0)
 	}
 	ntGetComputerNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetComputerNameW[0])), 0, 0, 0, 0)
-	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate, fchdir, linkat.
+	// The metadata wave (os_cosmo_nt_meta.go): utimensat, truncate,
+	// fchdir, linkat. Every one of these has shipped in kernel32 since
+	// Vista at the latest, so a zero here means a host stranger than
+	// any this port targets - which is exactly why it degrades to
+	// ENOSYS instead of poking a crash address.
 	ntSetFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileTime[0])), 0, 0, 0, 0)
 	ntGetSystemTimeAsFileTimeFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetSysTimeAsFt[0])), 0, 0, 0, 0)
 	ntGetFinalPathNameByHandleWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetFinalPathW[0])), 0, 0, 0, 0)
@@ -543,10 +647,11 @@ func ntResolve() {
 	ntSetFileAttributesWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameSetFileAttrsW[0])), 0, 0, 0, 0)
 	ntCreateSymbolicLinkWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameCreateSymlinkW[0])), 0, 0, 0, 0)
 	ntDeviceIoControlFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameDeviceIoControl[0])), 0, 0, 0, 0)
-	// flock(2) (ntEmuFlock). Same stance as those above.
+	// flock(2) (ntEmuFlock). Same stance as the four above.
 	ntLockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameLockFileEx[0])), 0, 0, 0, 0)
 	ntUnlockFileExFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameUnlockFileEx[0])), 0, 0, 0, 0)
-	// The host machine, for GOARCH.
+	// The host machine, for GOARCH. Absent before Win10 1511, where a
+	// zero leaves the payload's own architecture standing.
 	ntIsWow64Process2Fn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameIsWow64Process2[0])), 0, 0, 0, 0)
 	// statfs/fstatfs (os_cosmo_nt_statfs.go). Same stance again.
 	ntGetVolumePathNameWFn = ntcall(gpa, k32, uintptr(unsafe.Pointer(&ntNameGetVolumePathW[0])), 0, 0, 0, 0)
@@ -565,7 +670,7 @@ func ntResolve() {
 
 }
 
-// ntResolveWriter resolves WriteFile, GetStdHandle and those std
+// ntResolveWriter resolves WriteFile, GetStdHandle and the three std
 // handles from the IAT alone. It is what makes a throw before
 // ntResolve say something rather than exit 2 in silence.
 //
@@ -596,8 +701,14 @@ func ntResolveWriter() {
 	}
 }
 
-// Anything else is EBADF. It returns the byte count or a negative errno, as
-// write1 does.
+// ntwrite1 is the NT leg of runtime·write1, reached through
+// ntwrite1tramp. fds 1 and 2 map straight to the cached std handles,
+// never through the fd table: this is the panic path, and the runtime
+// writes to 1 and 2 only. Anything else is EBADF. It returns the byte
+// count or a negative errno, as write1 does.
+//
+// A caller from before ntResolve has no table and no handles, and gets
+// them here from the IAT. A throw that early is the one worth reading.
 //
 //go:nosplit
 func ntwrite1(fd uintptr, p unsafe.Pointer, n int32) int32 {
@@ -621,9 +732,11 @@ func ntwrite1(fd uintptr, p unsafe.Pointer, n int32) int32 {
 	return int32(written)
 }
 
-// ntFutexsleep implements futexsleep over WaitOnAddress: compare *addr
-// against a stack copy of val and wait with a millisecond timeout (round up;
-// any positive ns waits at least 1ms).
+// ntFutexsleep implements futexsleep over WaitOnAddress: compare
+// *addr against a stack copy of val and wait with a millisecond
+// timeout (round up; any positive ns waits at least 1ms). Spurious
+// wakeups are allowed by the futexsleep contract, so the return value
+// (including timeout) is ignored.
 //
 //go:nosplit
 func ntFutexsleep(addr *uint32, val uint32, ns int64) {
@@ -635,18 +748,26 @@ func ntFutexsleep(addr *uint32, val uint32, ns int64) {
 	ntcall(ntWaitOnAddressFn, uintptr(unsafe.Pointer(addr)), uintptr(unsafe.Pointer(&v)), 4, ms, 0, 0)
 }
 
-// ntFutexwakeup implements futexwakeup.
+// ntFutexwakeup implements futexwakeup. Every futexwakeup caller
+// passes cnt==1, so
+// WakeByAddressSingle suffices; WakeByAddress* returns void, nothing
+// to check.
 //
 //go:nosplit
 func ntFutexwakeup(addr *uint32) {
 	ntcall(ntWakeByAddressSingleFn, uintptr(unsafe.Pointer(addr)), 0, 0, 0, 0, 0)
 }
 
-// ntNewosproc is the NT leg of newosproc: CreateThread with a small (64KiB,
-// reservation-only) NT stack; tstart_cosmo_nt pivots onto mp.g0's
-// Go-allocated stack, so the Linux bookkeeping (mexit frees the g0 stack) is
-// preserved and the NT stack dies with the thread. Same design as real
-// cosmo's CloneWindows.
+// ntNewosproc is the NT leg of newosproc: CreateThread with a small
+// (64KiB, reservation-only) NT stack; tstart_cosmo_nt pivots onto
+// mp.g0's Go-allocated stack, so the Linux bookkeeping (mexit frees
+// the g0 stack) is preserved and the NT stack dies with the thread.
+// Same design as real cosmo's CloneWindows. The CreateThread handle
+// is closed right away (chunk D2 - wave 1 leaked it); the handle
+// ntPreemptM needs is a fresh DuplicateHandle the thread makes for
+// itself in minit (ntMinitThread), upstream newosproc's exact split.
+//
+// May run with m.p==nil, so write barriers are not allowed.
 //
 //go:nowritebarrier
 func ntNewosproc(mp *m) {
@@ -659,7 +780,10 @@ func ntNewosproc(mp *m) {
 		0)                                     // lpThreadId
 	if ret == 0 {
 		if atomic.Load(&ntExiting) != 0 {
-			// CreateThread may fail if called concurrently with ExitProcess.
+			// CreateThread may fail if called concurrently with
+			// ExitProcess (ntExit holds ntSuspendLock and is tearing
+			// the process down). Freeze this thread and let the
+			// process exit - upstream newosproc, issue #18253.
 			lock(&ntDeadlock)
 			lock(&ntDeadlock)
 		}
@@ -670,7 +794,7 @@ func ntNewosproc(mp *m) {
 	ntcall(ntCloseHandleFn, ret, 0, 0, 0, 0, 0)
 }
 
-// ntSystemInfo is the win64 SYSTEM_INFO layout (many bytes).
+// ntSystemInfo is the win64 SYSTEM_INFO layout (48 bytes).
 type ntSystemInfo struct {
 	oemID                 uint32
 	pageSize              uint32
@@ -694,7 +818,7 @@ func ntNumCPU() int32 {
 	return 1
 }
 
-// Memory primitives.
+// Memory primitives. VirtualAlloc/VirtualFree return 0 on failure.
 
 //go:nosplit
 func ntVirtualAlloc(v unsafe.Pointer, n uintptr, allocType, prot uintptr) unsafe.Pointer {
@@ -706,11 +830,12 @@ func ntVirtualFree(v unsafe.Pointer, n uintptr, freeType uintptr) uintptr {
 	return ntcall(ntVirtualFreeFn, uintptr(v), n, freeType, 0, 0, 0)
 }
 
-// Command line and environment. The NT boot stub fabricates a one-entry argv
-// and an empty envp (rt0_cosmo_nt_amd64.s); the real values come from
-// GetCommandLineW/GetEnvironmentStringsW in the goargs/goenvs NT branches
-// below. Both run inside schedinit AFTER mallocinit (proc.go: mallocinit ...
-// goargs; goenvs), so ordinary allocation is fine here.
+// Command line and environment. The NT boot stub fabricates a
+// one-entry argv and an empty envp (rt0_cosmo_nt_amd64.s); the real
+// values come from GetCommandLineW/GetEnvironmentStringsW in the
+// goargs/goenvs NT branches below. Both run inside schedinit AFTER
+// mallocinit (proc.go: mallocinit ... goargs; goenvs), so ordinary
+// allocation is fine here.
 
 // ntUTF16ToString converts a UTF-16 sequence to a Go string, combining
 // surrogate pairs into their code points (which runtime.gostringw does
@@ -735,9 +860,13 @@ func ntUTF16ToString(s []uint16) string {
 	return string(buf)
 }
 
-// ntCommandLineToArgv splits a Windows command line into arguments following
-// the conventions documented at
+// ntCommandLineToArgv splits a Windows command line into arguments
+// following the conventions documented at
 // http://daviddeley.com/autohotkey/parameters/parameters.htm#WINARGV.
+// It is a port of commandLineToArgv/readNextArg/appendBSBytes from
+// os/exec_windows.go: package os only runs that parse when
+// the windows port builds it; under GOOS=cosmo os.Args comes from the
+// runtime's argslice, so the parse has to happen here.
 func ntCommandLineToArgv(cmd string) []string {
 	var args []string
 	for len(cmd) > 0 {
@@ -776,6 +905,9 @@ func ntReadNextArg(cmd string) (arg []byte, rest string) {
 		case '"':
 			b = ntAppendBS(b, nslash/2)
 			if nslash%2 == 0 {
+				// use "Prior to 2008" rule from
+				// http://daviddeley.com/autohotkey/parameters/parameters.htm
+				// section 5.2 to deal with double double quotes
 				if inquote && len(cmd) > 1 && cmd[1] == '"' {
 					b = append(b, c)
 					cmd = cmd[1:]
@@ -798,9 +930,10 @@ func ntReadNextArg(cmd string) (arg []byte, rest string) {
 }
 
 // cosmoNTGoargs is goargs's NT branch (runtime1.go): build argslice by
-// parsing GetCommandLineW instead of reading the boot block, whose fabricated
-// argv is the static "APE". Returns false on non-NT hosts - and on an empty
-// command line, keeping the fabricated argv as the fallback.
+// parsing GetCommandLineW instead of reading the boot block, whose
+// fabricated argv is the single static "APE". Returns false on non-NT
+// hosts - and on an empty command line, keeping the fabricated argv as
+// the fallback.
 func cosmoNTGoargs() bool {
 	if !iswindows() {
 		return false
@@ -821,8 +954,12 @@ func cosmoNTGoargs() bool {
 	return true
 }
 
-// ntGoenvs is goenvs's NT branch (os_cosmo.go): decode the double-NUL-terminated UTF-16 block from GetEnvironmentStringsW ("A=B\x00C=D\x00\x00") into envs, the same shape goenvs_unix produces; upstream os_windows.go goenvs is the model. The block is deliberately not released: FreeEnvironmentStringsW is not in the wave-1 resolve
-// set and the one-shot boot leak is harmless.
+// ntGoenvs is goenvs's NT branch (os_cosmo.go): decode the
+// double-NUL-terminated UTF-16 block from GetEnvironmentStringsW
+// ("A=B\x00C=D\x00\x00") into envs, the same shape goenvs_unix
+// produces; upstream os_windows.go goenvs is the model. The block is
+// deliberately not released: FreeEnvironmentStringsW is not in the
+// wave-1 resolve set and the one-shot boot leak is harmless.
 func ntGoenvs() {
 	block := unsafe.Pointer(ntcall(ntGetEnvironmentStringsWFn, 0, 0, 0, 0, 0, 0))
 	if block == nil {

@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package disasm
 
@@ -38,18 +39,18 @@ func TestWasmDecode(t *testing.T) {
 		funcTypes: []uint32{0, 0},
 	}
 	body := []byte{
-		0x01, 0x02, 0x7e, // locals: x i64
+		0x01, 0x02, 0x7e, // locals: 2 x i64
 		0x02, 0x40, // block
-		0x41, 0x2a,
-		0x0d, 0x00,
-		0x42, 0x7f,
+		0x41, 0x2a, // i32.const 42
+		0x0d, 0x00, // br_if 0
+		0x42, 0x7f, // i64.const -1
 		0x29, 0x03, 0x08, // i64.load offset=8
 		0x28, 0x00, 0x04, // i32.load align=0 offset=4
-		0x10, 0x00,
-		0x10, 0x02,
-		0x11, 0x00, 0x00,
-		0x0e, 0x02, 0x00, 0x01, 0x02,
-		0x23, 0x00,
+		0x10, 0x00, // call 0 -> import
+		0x10, 0x02, // call 2 -> code entry 1
+		0x11, 0x00, 0x00, // call_indirect type[0]
+		0x0e, 0x02, 0x00, 0x01, 0x02, // br_table {0, 1} 2
+		0x23, 0x00, // global.get 0 (SP)
 		0xfc, 0x02, // i32.trunc_sat_f64_s
 		0x0b, // end (block)
 		0x0b, // end (body)

@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -14,22 +15,25 @@ import (
 	"unsafe"
 )
 
-// CONTEXT_AMD64 | CONTEXT_CONTROL: capture SegSs/Rsp/SegCs/Rip/EFlags only. asyncPreempt saves everything else itself.
+// CONTEXT_AMD64 | CONTEXT_CONTROL: capture SegSs/Rsp/SegCs/Rip/EFlags
+// only. asyncPreempt saves everything else itself, so a suspended
+// thread's other registers stay untouched.
 const _NT_CONTEXT_CONTROL = 0x100001
 
-// ntM128A is the win64 M128A (several bytes).
+// ntM128A is the win64 M128A (16 bytes).
 type ntM128A struct {
 	low  uint64
 	high uint64
 }
 
+// ntContext is the FULL CONTEXT (x64) layout, 1232 (0x4D0) bytes.
 // Offsets match upstream
-// internal/runtime/syscall/windows/defs_windows_amd64.go (Rip = 0xF8). The
-// VEH handlers only touch fields up to rip on OS-allocated records, but
-// ntPreemptM allocates its own buffer for GetThreadContext, which requires
-// the complete struct - and a 16-byte-aligned base, which Go's 8-byte struct
-// alignment does not give; ntPreemptM over-allocates and rounds, upstream's
-// idiom.
+// internal/runtime/syscall/windows/defs_windows_amd64.go (Rip = 0xF8).
+// The VEH handlers only touch fields up to rip on OS-allocated
+// records, but ntPreemptM allocates its own buffer for
+// GetThreadContext, which requires the complete struct - and a
+// 16-byte-aligned base, which Go's 8-byte struct alignment does not
+// give; ntPreemptM over-allocates and rounds, upstream's idiom.
 type ntContext struct {
 	p1home, p2home, p3home, p4home, p5home, p6home uint64
 	contextFlags                                   uint32
@@ -56,14 +60,19 @@ func (c *ntContext) getPC() uintptr { return uintptr(c.rip) }
 //go:nosplit
 func (c *ntContext) getSP() uintptr { return uintptr(c.rsp) }
 
+// lr is 0 on amd64: the return address lives on the stack, and sigprof
+// takes the same 0 the unix amd64 signal handler passes.
+//
 //go:nosplit
 func (c *ntContext) getLR() uintptr { return 0 }
 
 //go:nosplit
 func (c *ntContext) setPC(x uintptr) { c.rip = uint64(x) }
 
-// pushCall makes the interrupted code look like it called targetPC: push
-// resumePC where a CALL would have left it, then point RIP at the target.
+// pushCall makes the interrupted code look like it called targetPC:
+// push resumePC where a CALL would have left it, then point RIP at the
+// target. The stack write is a plain store; the target is either
+// suspended (preemption) or stopped in the exception dispatcher.
 //
 //go:nosplit
 func (c *ntContext) pushCall(targetPC, resumePC uintptr) {
@@ -83,6 +92,10 @@ func ntSetSyntheticPCSP(uc *ucontext, pc, sp uintptr) {
 	regs.rsp = uint64(sp)
 }
 
+// ntSetTEBg publishes g in the TEB slot the exception trampolines read.
+// On amd64 that slot is gs:0x28, which rt0's TLS setup already fills,
+// so there is nothing left to do.
+//
 //go:nosplit
 func ntSetTEBg() {}
 

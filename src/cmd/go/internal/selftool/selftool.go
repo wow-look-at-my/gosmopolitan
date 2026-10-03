@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Package selftool names the tools linked into this binary and runs the one
 // a command line asks for.
@@ -24,7 +25,7 @@ func Names() []string {
 
 // Dispatch runs the tool that argv names and reports whether one ran. The
 // program's own base name selects a tool, which is how a pkg/tool link to
-// this binary runs, and so does "tool <name>" as the first arguments,
+// this binary runs, and so does "tool <name>" as the first two arguments,
 // which is the command line the go command starts a linked tool with.
 func Dispatch(argv []string) (code int, ran bool) {
 	if len(argv) == 0 {

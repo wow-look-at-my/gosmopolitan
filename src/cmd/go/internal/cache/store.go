@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build !cmd_go_bootstrap
 
@@ -20,7 +21,7 @@ import (
 )
 
 // openCache opens the directory, puts the store under it when one is
-// configured, and serves the result to the go commands this starts.
+// configured, and serves the result to the go commands this one starts.
 func openCache(dir string) (Cache, error) {
 	store, err := openStore(dir)
 	if err != nil {
@@ -30,10 +31,13 @@ func openCache(dir string) (Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A test binary and a `go run` program are started with the environment this command was started with, rather than with this process's own.
+	// A test binary and a `go run` program are started with the environment
+	// this command was started with, rather than with this process's own, so
+	// the socket has to be put in that one as well.
 	goCfg.OrigEnv = append(goCfg.OrigEnv[:len(goCfg.OrigEnv):len(goCfg.OrigEnv)], cacheclient.BrokerEnviron()...)
-	// A go command that never runs a build still opens the cache, and a failing
-	// one exits through base.Exit without returning.
+	// A go command that never runs a build still opens the cache, and a
+	// failing one exits through base.Exit without returning. So the exit gives
+	// up the key index's lock and the socket, whatever else ran.
 	base.AtExit(func() {
 		cacheclient.CloseStore()
 		cacheclient.StopBroker()
@@ -60,7 +64,10 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 	cfg.Target = goCfg.Goos + "/" + goCfg.Goarch
 	cfg.Version = runtime.Version()
 	cfg.Module = mainModulePath()
-	// The key index's disk copy lives beside the cache it describes.
+	// The key index's disk copy lives beside the cache it describes. Builds
+	// that share GOCACHE then share one copy, whatever their TMPDIR. cmd/go's
+	// script tests give every script its own TMPDIR, and each one fetched the
+	// whole index for itself.
 	cfg.IndexDir = dir
 	cacheclient.SetLogger(goLogger{})
 	store, err := cacheclient.NewWebBackend(cfg)
@@ -76,11 +83,13 @@ func openStore(dir string) (*cacheclient.WebBackend, error) {
 // liveStore is this command's store, once it has one.
 var liveStore atomic.Pointer[cacheclient.WebBackend]
 
-// sharedModule is the main module, which the module loader learns after this command has already opened its cache.
+// sharedModule is the main module, which the module loader learns after this
+// command has already opened its cache.
 var sharedModule atomic.Pointer[string]
 
 // SetSharedModule records which module's build is running, for the store's
-// request headers.
+// request headers. The module loader calls it once it knows, which is after
+// the store is open, so an already-open store is told as well.
 func SetSharedModule(path string) {
 	if path == "" {
 		return
@@ -100,12 +109,27 @@ func mainModulePath() string {
 }
 
 // goLogger takes the cache's diagnostics.
+//
+// A CACHE IN TROUBLE IS ALWAYS REPORTED. What is held back is the routine
+// success reporting: the index size on every go command, and a summary per
+// batch. Those say the cache is working, which the build does not need told,
+// and there is one per go invocation or more.
+//
+// A go command's output is DATA to whoever ran it. Tests across this tree run
+// `go list` and read the answer, so a routine line on that stream becomes a
+// package name, a directory, or a file path somebody then opens. That is not
+// hypothetical. It is what internal/godebugs, crypto/internal/fips140test and
+// go/doc/comment did with it.
 type goLogger struct{}
 
-// CacheDebugEnv turns the routine success reporting back on. Anything but the empty string enables it.
+// CacheDebugEnv turns the routine success reporting back on. Anything but the
+// empty string enables it.
 const CacheDebugEnv = "GOCACHEDEBUG"
 
 // CacheLogEnv names a file that takes the cache's notices in place of stderr.
+// A build that compares the stderr of the go commands it runs sets it, as dist
+// test does, and prints the file on its own stderr at the end. So an outage
+// reaches the build's output and never a test's.
 const CacheLogEnv = "GOCACHELOG"
 
 var (
