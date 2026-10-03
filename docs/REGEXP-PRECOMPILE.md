@@ -102,6 +102,52 @@ go tool pprof -top -cum -focus=regexpprecompile cpu.prof
 
 `go list -export -deps -f '{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}' regexp > importcfg` writes the import config.
 
+## Performance
+
+Measured on linux/amd64 with this tree's toolchain. `BenchmarkMustCompile` and `BenchmarkPrecompiledMatch` in `regexp/precompiled_test.go` hold the patterns. A constant pattern gets the template, and the same pattern read from a map compiles at run time. `email` is the WHATWG email pattern. Its bounded repeats make a large program. The medians of multiple runs:
+
+```
+go test -c -o regexp.test regexp
+./regexp.test -test.run='^$' -test.bench='MustCompile|PrecompiledMatch' -test.benchtime=500ms
+```
+
+```
+# median of 8 runs
+MustCompile       precompiled                 run time                       speedup
+literal `hello`   126 ns   176 B   2 allocs     1.40 µs   1.35 KiB   17 allocs     11x
+typical           143 ns   224 B   2 allocs    10.55 µs   9.22 KiB  111 allocs     74x
+email             122 ns   176 B   2 allocs    68.62 µs  86.81 KiB  472 allocs    564x
+url               174 ns   272 B   2 allocs    26.43 µs  21.79 KiB  340 allocs    152x
+
+MatchString       precompiled   run time
+literal           72.3 ns       72.1 ns
+typical           369 ns        369 ns
+email             669 ns        659 ns    (±11% and ±3%)
+url               903 ns        910 ns
+```
+
+A precompiled call costs the copy of one Regexp and its SubexpNames slice, whatever the size of the pattern. Matching is the same within the noise, because both run the same program.
+
+A program with 200 package-level `var re = regexp.MustCompile(...)` patterns of multiple shapes, built once with constant patterns and once with each pattern in a package variable. Init time is `GODEBUG=inittrace=1` for package main, the median of multiple runs:
+
+```
+var re0 = regexp.MustCompile("^k0_[a-z0-9._-]+@([a-z0-9-]+)\\.(com|org|net)$")  // precompiled
+var pat0 = "^k0_[a-z0-9._-]+@([a-z0-9-]+)\\.(com|org|net)$"                    // run time
+var re0 = regexp.MustCompile(pat0)
+
+GODEBUG=inittrace=1 ./app 2>&1 >/dev/null | grep '^init main '
+go build -ldflags='-s -w' -o app.stripped . && size -A app
+```
+
+```
+# 200 patterns in 5 shapes; init is the median of 31 runs; speedup 92x
+                 init main   init heap        file      stripped   .rodata    .text
+precompiled      0.060 ms    44.8 KB  400     4.37 MB   2.60 MB    1.15 MB    677 KB
+run time         5.5 ms      2.62 MB  29287   2.75 MB   1.77 MB    79 KB      783 KB
+```
+
+Init is many times faster and allocates 98% less. The binary is larger. Each template is read-only data, between 1 and 8 KB per pattern for these shapes. Each template object is a named symbol in the symbol table. The text is smaller, because the parser and the compiler of `regexp/syntax` are not linked. `-d=regexpprecompile=1` prints the data size of each site.
+
 ## Tests
 
 - `TestRegexpPrecompileDifferential` in `cmd/compile/internal/test` reads the whole regexp test corpus. That is `re2-search.txt`, `re2-exhaustive.txt.bz2`, the Fowler `.dat` files, and the pattern tables of the `regexp` and `regexp/syntax` tests. It builds each one from a constant and from a variable, in both syntaxes. The two must be deeply equal and must give the same answer from every match method on every corpus input, with and without `Longest`.

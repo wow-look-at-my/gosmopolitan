@@ -48,3 +48,85 @@ func TestConstantPatternIsPrecompiled(t *testing.T) {
 		t.Error("Compile of an invalid constant returned no error")
 	}
 }
+
+// The benchmark patterns. A benchmark that names one of these constants
+// gets the precompiled Regexp. One that reads benchPatterns compiles at run
+// time.
+const (
+	benchLiteral = `hello`
+	benchTypical = `^([a-z0-9._-]+)@([a-z0-9-]+)\.(com|org|net)$`
+	benchEmail   = "^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$"
+	benchURL     = `^(https?)://([a-zA-Z0-9.-]+)(?::([0-9]{1,5}))?(/[^\s?#]*)?(?:\?([^\s#]*))?(?:#(\S*))?$`
+)
+
+var benchPatterns = map[string]string{
+	"literal": benchLiteral,
+	"typical": benchTypical,
+	"email":   benchEmail,
+	"url":     benchURL,
+}
+
+var benchInputs = map[string]string{
+	"literal": "say hello to the world",
+	"typical": "john.doe@example.com",
+	"email":   "john.doe+tag@mail.example-domain.org",
+	"url":     "https://example.com:8080/path/to/page?q=1&r=2#frag",
+}
+
+var benchSink *Regexp
+
+// precompiledBench returns the precompiled Regexp of each benchmark pattern.
+// Each call builds new ones.
+func precompiledBench() map[string]*Regexp {
+	return map[string]*Regexp{
+		"literal": MustCompile(benchLiteral),
+		"typical": MustCompile(benchTypical),
+		"email":   MustCompile(benchEmail),
+		"url":     MustCompile(benchURL),
+	}
+}
+
+// BenchmarkMustCompile compares the cost of MustCompile with a constant
+// pattern, which copies a precompiled template, to a run-time compile.
+func BenchmarkMustCompile(b *testing.B) {
+	run := func(name string, build func() *Regexp) {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				benchSink = build()
+			}
+		})
+	}
+	run("literal/precompiled", func() *Regexp { return MustCompile(benchLiteral) })
+	run("literal/runtime", func() *Regexp { return MustCompile(benchPatterns["literal"]) })
+	run("typical/precompiled", func() *Regexp { return MustCompile(benchTypical) })
+	run("typical/runtime", func() *Regexp { return MustCompile(benchPatterns["typical"]) })
+	run("email/precompiled", func() *Regexp { return MustCompile(benchEmail) })
+	run("email/runtime", func() *Regexp { return MustCompile(benchPatterns["email"]) })
+	run("url/precompiled", func() *Regexp { return MustCompile(benchURL) })
+	run("url/runtime", func() *Regexp { return MustCompile(benchPatterns["url"]) })
+}
+
+// BenchmarkPrecompiledMatch checks that a precompiled Regexp matches as fast
+// as a Regexp that compiled at run time.
+func BenchmarkPrecompiledMatch(b *testing.B) {
+	pre := precompiledBench()
+	for _, name := range []string{"literal", "typical", "email", "url"} {
+		input := benchInputs[name]
+		for _, kind := range []string{"precompiled", "runtime"} {
+			compiled := pre[name]
+			if kind == "runtime" {
+				compiled = MustCompile(benchPatterns[name])
+			}
+			if !compiled.MatchString(input) {
+				b.Fatalf("%s does not match %q", name, input)
+			}
+			b.Run(name+"/"+kind, func(b *testing.B) {
+				b.ReportAllocs()
+				for b.Loop() {
+					compiled.MatchString(input)
+				}
+			})
+		}
+	}
+}
