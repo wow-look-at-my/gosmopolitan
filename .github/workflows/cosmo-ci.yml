@@ -17,9 +17,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: wow-look-at-my/actions@no-all-builds-job#latest
       - uses: wow-look-at-my/slopfix@master
-        with:
-          only: yaml/comment-block
-          paths: '.'
       - uses: wow-look-at-my/actions@no-tests-in-yaml#latest
       - uses: wow-look-at-my/actions@push-excludes-tags#latest
       - uses: wow-look-at-my/actions@ste-lint#latest
@@ -857,3 +854,17 @@ jobs:
           echo "::notice::published gosmopolitan v$v for linux/amd64 and darwin/arm64"
           echo "::notice::linux:  https://dl.pazer.build/gosmopolitan?branch=$b&os=linux&arch=amd64"
           echo "::notice::darwin: https://dl.pazer.build/gosmopolitan?branch=$b&os=darwin&arch=arm64"
+
+  # A run hands off about 1.5GB, and the repository's cache holds 10GB. Concurrent runs evict each other's hand-offs unless each run drops its own when its readers finish.
+  cleanup:
+    needs: [suite, cosmo-checks, test, wasm, wasm-suite, publish-upload, publish-finish]
+    # A cancelled or failed run still has hand-offs to drop; without this the job is skipped and they are orphaned.
+    if: always()
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: wow-look-at-my/actions@cache-cleanup#latest
+        if: always()
