@@ -13,11 +13,11 @@ package regexp
 
 // precompiled returns a new Regexp copied from tmpl.
 func precompiled(tmpl *Regexp, _ string) *Regexp {
-	re := *tmpl
+	copied := *tmpl
 	// SubexpNames returns this slice to the caller, and tmpl is read-only.
-	re.subexpNames = make([]string, len(tmpl.subexpNames))
-	copy(re.subexpNames, tmpl.subexpNames)
-	return &re
+	copied.subexpNames = make([]string, len(tmpl.subexpNames))
+	copy(copied.subexpNames, tmpl.subexpNames)
+	return &copied
 }
 
 // precompiledErr is precompiled for a call that also returns an error.

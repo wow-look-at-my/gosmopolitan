@@ -14,6 +14,10 @@ tests:
 	  cmd: dats/source/short-identifiers.sh src/cmd/link/internal/ld/cosmolink.go src/cmd/link/internal/ld/cosmolds.go src/cmd/go/internal/cfg/cosmocc.go src/go/build/cosmocc.go testdata/cgoprobe/main.go
 	  exit: 0
 
+	- desc: the regexp precompiler and its tests name their variables
+	  cmd: dats/source/short-identifiers.sh src/cmd/compile/internal/regexpprecompile/precompile.go src/regexp/precompiled.go src/regexp/precompiled_test.go src/cmd/compile/internal/test/regexpprecompile_test.go test/regexpprecompile.go test/regexpprecompile_warn.go test/regexpprecompile_err.go
+	  exit: 0
+
 	- desc: the scanner refuses a one-letter receiver
 	  cmd: printf 'package p\n\nfunc (x *T) M() {}\n' > "$TMPDIR/recv.go"; dats/source/short-identifiers.sh "$TMPDIR/recv.go"; test $? -eq 2
 	  exit: 0

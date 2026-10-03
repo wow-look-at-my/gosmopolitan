@@ -45,7 +45,7 @@ Equal patterns share their data. The symbols are named by a hash of the syntax a
   ```
 
   The warning never fails a build. The go command prints it for every build of the package, a cached one included. This is because it replays the compiler's output. go-toolchain streams that output during its build phase. `Compile` gets no warning: it is the function for a pattern that arrives at run time.
-- A package compiled with `-std` gets no warning. That is the standard library and the commands of this tree, which are not the user's code. A body inlined from another function gets no warning either. The function it came from has its own.
+- The code of this tree gets no warning, because it is not the user's code. That is a package compiled with `-std`, and a source file under `$GOROOT/src`. The second covers an external test package of the standard library, which the go command compiles without `-std`. A body inlined from another function gets no warning either. The function it came from has its own.
 
 ## The compiler and the target must match
 

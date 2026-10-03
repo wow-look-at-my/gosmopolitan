@@ -27,6 +27,7 @@ import (
 // order, with the input texts that the corpus runs it against.
 type rxCorpus struct {
 	patterns []string
+	base     int // the patterns before the RE2 exhaustive file
 	texts    map[string][]string
 	seen     map[string]map[string]bool
 }
@@ -51,16 +52,13 @@ func (corpus *rxCorpus) add(pattern string, texts ...string) {
 }
 
 // loadRxCorpus reads the regexp package's own test data: the RE2 search
-// file, the RE2 exhaustive file when exhaustive is set, the Fowler POSIX
-// files, and the patterns that its test files and those of regexp/syntax
-// declare.
+// file, the Fowler POSIX files, and the patterns that its test files and
+// those of regexp/syntax declare. When exhaustive is set, the RE2
+// exhaustive file follows, and corpus.base counts the patterns before it.
 func loadRxCorpus(t *testing.T, exhaustive bool) *rxCorpus {
 	dir := filepath.Join(testenv.GOROOT(t), "src", "regexp")
 	corpus := newRxCorpus()
 	loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-search.txt"))
-	if exhaustive {
-		loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-exhaustive.txt.bz2"))
-	}
 	fowler, err := filepath.Glob(filepath.Join(dir, "testdata", "*.dat"))
 	if err != nil || len(fowler) == 0 {
 		t.Fatalf("no Fowler files in %s: %v", dir, err)
@@ -84,19 +82,23 @@ func loadRxCorpus(t *testing.T, exhaustive bool) *rxCorpus {
 	})
 	loadGoVars(t, corpus, filepath.Join(dir, "syntax", "prog_test.go"), map[string]int{"compileTests": 0})
 	loadGoVars(t, corpus, filepath.Join(dir, "syntax", "simplify_test.go"), map[string]int{"simplifyTests": 0})
+	corpus.base = len(corpus.patterns)
+	if exhaustive {
+		loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-exhaustive.txt.bz2"))
+	}
 	return corpus
 }
 
 // loadRE2 reads a file in the format that regexp's exec_test.go documents.
 func loadRE2(t *testing.T, corpus *rxCorpus, file string) {
-	fd, err := os.Open(file)
+	handle, err := os.Open(file)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer fd.Close()
-	var src io.Reader = fd
+	defer handle.Close()
+	var src io.Reader = handle
 	if strings.HasSuffix(file, ".bz2") {
-		src = bzip2.NewReader(fd)
+		src = bzip2.NewReader(handle)
 	}
 	scanner := bufio.NewScanner(src)
 	var strs []string
@@ -163,8 +165,8 @@ Lines:
 		case '?', '&', '|', ';', '{', '}':
 			flag = flag[1:]
 		case ':':
-			var ok bool
-			if _, flag, ok = strings.Cut(flag[1:], ":"); !ok {
+			var found bool
+			if _, flag, found = strings.Cut(flag[1:], ":"); !found {
 				continue
 			}
 		case 'C', 'N', 'T', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
@@ -205,28 +207,28 @@ func loadGoVars(t *testing.T, corpus *rxCorpus, file string, vars map[string]int
 	}
 	found := map[string]int{}
 	for _, decl := range parsed.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
+		gen, isGen := decl.(*ast.GenDecl)
+		if !isGen || gen.Tok != token.VAR {
 			continue
 		}
 		for _, spec := range gen.Specs {
 			vspec := spec.(*ast.ValueSpec)
 			for idx, name := range vspec.Names {
-				at, ok := vars[name.Name]
-				if !ok {
+				index, wanted := vars[name.Name]
+				if !wanted {
 					continue
 				}
-				lit, ok := vspec.Values[idx].(*ast.CompositeLit)
-				if !ok {
+				lit, isLit := vspec.Values[idx].(*ast.CompositeLit)
+				if !isLit {
 					t.Fatalf("%s: %s is not a composite literal", file, name.Name)
 				}
 				for _, elt := range lit.Elts {
 					strs := goStrings(elt)
-					if at >= len(strs) {
-						t.Fatalf("%s: an entry of %s has no pattern at string %d", file, name.Name, at)
+					if index >= len(strs) {
+						t.Fatalf("%s: an entry of %s has no pattern at string %d", file, name.Name, index)
 					}
-					texts := append(append([]string{}, strs[:at]...), strs[at+1:]...)
-					corpus.add(strs[at], texts...)
+					texts := append(append([]string{}, strs[:index]...), strs[index+1:]...)
+					corpus.add(strs[index], texts...)
 					found[name.Name]++
 				}
 			}
@@ -242,19 +244,19 @@ func loadGoVars(t *testing.T, corpus *rxCorpus, file string, vars map[string]int
 // goStrings returns the constant string values of an entry: the entry
 // itself, or the elements of a struct literal in order.
 func goStrings(expr ast.Expr) []string {
-	if str, ok := goString(expr); ok {
+	if str, isStr := goString(expr); isStr {
 		return []string{str}
 	}
-	lit, ok := expr.(*ast.CompositeLit)
-	if !ok {
+	lit, isLit := expr.(*ast.CompositeLit)
+	if !isLit {
 		return nil
 	}
 	var strs []string
 	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			elt = kv.Value
+		if pair, isPair := elt.(*ast.KeyValueExpr); isPair {
+			elt = pair.Value
 		}
-		if str, ok := goString(elt); ok {
+		if str, isStr := goString(elt); isStr {
 			strs = append(strs, str)
 		}
 	}
@@ -283,24 +285,24 @@ func goConst(expr ast.Expr) constant.Value {
 			return constant.MakeUnknown()
 		}
 		if expr.Op == token.SHL || expr.Op == token.SHR {
-			count, ok := constant.Uint64Val(right)
-			if !ok {
+			count, exact := constant.Uint64Val(right)
+			if !exact {
 				return constant.MakeUnknown()
 			}
 			return constant.Shift(left, expr.Op, uint(count))
 		}
 		return constant.BinaryOp(left, expr.Op, right)
 	case *ast.CallExpr:
-		sel, ok := expr.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Repeat" || len(expr.Args) != 2 {
+		sel, isSel := expr.Fun.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "Repeat" || len(expr.Args) != 2 {
 			return constant.MakeUnknown()
 		}
-		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "strings" {
+		if pkg, isIdent := sel.X.(*ast.Ident); !isIdent || pkg.Name != "strings" {
 			return constant.MakeUnknown()
 		}
 		str, count := goConst(expr.Args[0]), goConst(expr.Args[1])
-		num, ok := constant.Int64Val(count)
-		if str.Kind() != constant.String || !ok {
+		num, exact := constant.Int64Val(count)
+		if str.Kind() != constant.String || !exact {
 			return constant.MakeUnknown()
 		}
 		return constant.MakeString(strings.Repeat(constant.StringVal(str), int(num)))
@@ -329,14 +331,15 @@ func writeDifferential(corpus *rxCorpus) []byte {
 		for _, text := range texts {
 			fmt.Fprintf(&key, "%d:%s", len(text), text)
 		}
-		set, ok := setIndex[key.String()]
-		if !ok {
+		set, seen := setIndex[key.String()]
+		if !seen {
 			set = len(sets)
 			setIndex[key.String()] = set
 			sets = append(sets, texts)
 		}
 		textSet[idx] = set
 	}
+	fmt.Fprintf(&buf, "const basePatterns = %d\n\n", corpus.base)
 	buf.WriteString("var patterns = []string{\n")
 	for _, pattern := range corpus.patterns {
 		fmt.Fprintf(&buf, "\t%s,\n", strconv.Quote(pattern))
@@ -427,21 +430,28 @@ func compareAll(pre [][2]*regexp.Regexp, preErr [][2]string) {
 				fail("%q mode %d: constant gives error %q, variable compiles", pattern, mode, preErr[idx][mode])
 				continue
 			}
-			compareOne(pattern, mode, pre[idx][mode], run, textSets[textSet[idx]])
+			compareOne(pattern, mode, pre[idx][mode], run, textSets[textSet[idx]], idx < basePatterns)
 		}
 	}
-	fmt.Printf("patterns %d compiled %d rejected %d checks %d failures %d\n", len(patterns), compiled, rejected, checks, failures)
+	fmt.Printf("patterns %d every-method %d compiled %d rejected %d checks %d failures %d\n", len(patterns), basePatterns, compiled, rejected, checks, failures)
 	if failures > 0 {
 		os.Exit(1)
 	}
 }
 
-func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []string) {
+// sameFunc compares one answer of the precompiled Regexp with the answer of
+// the run-time one. DeepEqual tells a nil slice from an empty one, as a
+// caller can.
+type sameFunc func(what string, have, want any)
+
+// compareOne checks a precompiled Regexp against a run-time one. full runs
+// every method. Otherwise the inputs go through the four matching entry
+// points: string, bytes, reader, and the repeated search.
+func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []string, full bool) {
 	checks++
 	if !reflect.DeepEqual(*pre, *run) {
 		fail("%q mode %d: the precompiled Regexp differs from the run-time one", pattern, mode)
 	}
-	// DeepEqual tells a nil slice from an empty one, as a caller can.
 	same := func(what string, have, want any) {
 		checks++
 		if !reflect.DeepEqual(have, want) {
@@ -457,31 +467,85 @@ func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []strin
 	preLit, preComplete := pre.LiteralPrefix()
 	runLit, runComplete := run.LiteralPrefix()
 	same("LiteralPrefix", [2]any{preLit, preComplete}, [2]any{runLit, runComplete})
+	if full {
+		preText, preErr := pre.MarshalText()
+		runText, runErr := run.MarshalText()
+		same("MarshalText", [2]any{preText, preErr}, [2]any{runText, runErr})
+		preApp, preErr := pre.AppendText([]byte("x"))
+		runApp, runErr := run.AppendText([]byte("x"))
+		same("AppendText", [2]any{preApp, preErr}, [2]any{runApp, runErr})
+		same("Copy", *pre.Copy(), *run.Copy())
+	}
 	for longest := range 2 {
 		if longest == 1 {
 			pre.Longest()
 			run.Longest()
 		}
 		for _, text := range texts {
+			if full {
+				everyMethod(same, pre, run, text)
+				continue
+			}
 			bin := []byte(text)
 			same("MatchString "+text, pre.MatchString(text), run.MatchString(text))
-			same("Match "+text, pre.Match(bin), run.Match(bin))
-			same("FindStringSubmatchIndex "+text, pre.FindStringSubmatchIndex(text), run.FindStringSubmatchIndex(text))
-			same("FindSubmatch "+text, pre.FindSubmatch(bin), run.FindSubmatch(bin))
+			same("FindSubmatchIndex "+text, pre.FindSubmatchIndex(bin), run.FindSubmatchIndex(bin))
+			same("FindReaderSubmatchIndex "+text, pre.FindReaderSubmatchIndex(strings.NewReader(text)), run.FindReaderSubmatchIndex(strings.NewReader(text)))
 			same("FindAllStringSubmatchIndex "+text, pre.FindAllStringSubmatchIndex(text, -1), run.FindAllStringSubmatchIndex(text, -1))
-			same("FindAllString "+text, pre.FindAllString(text, -1), run.FindAllString(text, -1))
-			same("FindReaderIndex "+text, pre.FindReaderIndex(strings.NewReader(text)), run.FindReaderIndex(strings.NewReader(text)))
-			same("ReplaceAllString "+text, pre.ReplaceAllString(text, "<$0|${1}>"), run.ReplaceAllString(text, "<$0|${1}>"))
-			same("Split "+text, pre.Split(text, -1), run.Split(text, -1))
 		}
+	}
+}
+
+// everyMethod compares every matching, replacing and splitting method of
+// regexp.Regexp on one input.
+func everyMethod(same sameFunc, pre, run *regexp.Regexp, text string) {
+	bin := []byte(text)
+	reader := func() *strings.Reader { return strings.NewReader(text) }
+	wrap := func(str string) string { return "<" + str + ">" }
+	wrapBytes := func(bin []byte) []byte { return append(append([]byte("<"), bin...), '>') }
+	const template = "[$0|${1}|$name|$$]"
+	same("Match", pre.Match(bin), run.Match(bin))
+	same("MatchString", pre.MatchString(text), run.MatchString(text))
+	same("MatchReader", pre.MatchReader(reader()), run.MatchReader(reader()))
+	same("Find", pre.Find(bin), run.Find(bin))
+	same("FindIndex", pre.FindIndex(bin), run.FindIndex(bin))
+	same("FindString", pre.FindString(text), run.FindString(text))
+	same("FindStringIndex", pre.FindStringIndex(text), run.FindStringIndex(text))
+	same("FindReaderIndex", pre.FindReaderIndex(reader()), run.FindReaderIndex(reader()))
+	same("FindSubmatch", pre.FindSubmatch(bin), run.FindSubmatch(bin))
+	same("FindSubmatchIndex", pre.FindSubmatchIndex(bin), run.FindSubmatchIndex(bin))
+	same("FindStringSubmatch", pre.FindStringSubmatch(text), run.FindStringSubmatch(text))
+	same("FindStringSubmatchIndex", pre.FindStringSubmatchIndex(text), run.FindStringSubmatchIndex(text))
+	same("FindReaderSubmatchIndex", pre.FindReaderSubmatchIndex(reader()), run.FindReaderSubmatchIndex(reader()))
+	for _, count := range []int{-1, 0, 1, 2} {
+		same("FindAll", pre.FindAll(bin, count), run.FindAll(bin, count))
+		same("FindAllIndex", pre.FindAllIndex(bin, count), run.FindAllIndex(bin, count))
+		same("FindAllString", pre.FindAllString(text, count), run.FindAllString(text, count))
+		same("FindAllStringIndex", pre.FindAllStringIndex(text, count), run.FindAllStringIndex(text, count))
+		same("FindAllSubmatch", pre.FindAllSubmatch(bin, count), run.FindAllSubmatch(bin, count))
+		same("FindAllSubmatchIndex", pre.FindAllSubmatchIndex(bin, count), run.FindAllSubmatchIndex(bin, count))
+		same("FindAllStringSubmatch", pre.FindAllStringSubmatch(text, count), run.FindAllStringSubmatch(text, count))
+		same("FindAllStringSubmatchIndex", pre.FindAllStringSubmatchIndex(text, count), run.FindAllStringSubmatchIndex(text, count))
+		same("Split", pre.Split(text, count), run.Split(text, count))
+	}
+	same("ReplaceAll", pre.ReplaceAll(bin, []byte(template)), run.ReplaceAll(bin, []byte(template)))
+	same("ReplaceAllString", pre.ReplaceAllString(text, template), run.ReplaceAllString(text, template))
+	same("ReplaceAllLiteral", pre.ReplaceAllLiteral(bin, []byte(template)), run.ReplaceAllLiteral(bin, []byte(template)))
+	same("ReplaceAllLiteralString", pre.ReplaceAllLiteralString(text, template), run.ReplaceAllLiteralString(text, template))
+	same("ReplaceAllFunc", pre.ReplaceAllFunc(bin, wrapBytes), run.ReplaceAllFunc(bin, wrapBytes))
+	same("ReplaceAllStringFunc", pre.ReplaceAllStringFunc(text, wrap), run.ReplaceAllStringFunc(text, wrap))
+	if match := run.FindSubmatchIndex(bin); match != nil {
+		same("Expand", pre.Expand(nil, []byte(template), bin, match), run.Expand(nil, []byte(template), bin, match))
+		same("ExpandString", pre.ExpandString(nil, template, text, match), run.ExpandString(nil, template, text, match))
 	}
 }
 `
 
 // TestRegexpPrecompileDifferential builds every pattern of the regexp test
 // corpus from a constant, which the compiler precompiles, and from a
-// variable, which compiles at run time. The two must be deeply equal and
-// must give the same answer from every method on every corpus input.
+// variable, which compiles at run time. The two must be deeply equal, and
+// they must give the same answers on every corpus input. Every method runs
+// on the patterns outside the RE2 exhaustive file. Its tens of thousands of
+// patterns run the four matching entry points.
 func TestRegexpPrecompileDifferential(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()

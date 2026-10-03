@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go/constant"
+	"internal/buildcfg"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -60,8 +62,8 @@ func Package(pkg *ir.Package) {
 		return
 	}
 	pass := &pass{reported: map[string]bool{}}
-	for _, fn := range pkg.Funcs {
-		ir.Visit(fn, pass.visit)
+	for _, function := range pkg.Funcs {
+		ir.Visit(function, pass.visit)
 	}
 	base.ExitIfErrors()
 }
@@ -71,8 +73,8 @@ type pass struct {
 }
 
 func (pass *pass) visit(node ir.Node) {
-	call, ok := node.(*ir.CallExpr)
-	if !ok || call.Op() != ir.OCALLFUNC || len(call.Args) != 1 || call.IsDDD {
+	call, isCall := node.(*ir.CallExpr)
+	if !isCall || call.Op() != ir.OCALLFUNC || len(call.Args) != 1 || call.IsDDD {
 		return
 	}
 	callee := ir.StaticCalleeName(ir.StaticValue(call.Fun))
@@ -80,12 +82,12 @@ func (pass *pass) visit(node ir.Node) {
 		return
 	}
 	name := callee.Sym().Name
-	ent, ok := entries[name]
-	if !ok {
+	ent, rewrites := entries[name]
+	if !rewrites {
 		return
 	}
-	pattern, ok := constString(call.Args[0])
-	if !ok {
+	pattern, resolved := constString(call.Args[0])
+	if !resolved {
 		if ent.must {
 			pass.warnDynamic(call.Pos(), name)
 		}
@@ -103,21 +105,31 @@ func (pass *pass) visit(node ir.Node) {
 		return
 	}
 	pos := call.Pos()
-	fn := helper(ent.helper, reType, callee.Type())
-	call.Fun = fn
+	call.Fun = helper(ent.helper, reType, callee.Type())
 	call.Args = []ir.Node{typecheck.LinksymAddr(pos, tmpl, reType.Elem()), call.Args[0]}
 }
 
-// warnDynamic reports a pattern that compiles at run time. A standard
-// library package and an inlined body from another function get no warning:
-// the first is not the user's code, and the second has its own.
+// warnDynamic reports a pattern that compiles at run time. Code of this
+// tree and an inlined body from another function get no warning. The first
+// is not the user's code, and the second has its own. A test package of the
+// standard library has no -std flag, so its GOROOT path identifies it.
 func (pass *pass) warnDynamic(pos src.XPos, name string) {
-	if base.Flag.Std || base.Ctxt.InnermostPos(pos).Base().InliningIndex() >= 0 {
+	inner := base.Ctxt.InnermostPos(pos).Base()
+	if base.Flag.Std || inner.InliningIndex() >= 0 || inGOROOT(inner.Filename()) {
 		return
 	}
 	pass.report(pos, func() {
 		base.WarnfAt(pos, "performance warning: the pattern of regexp.%s is not constant, so it compiles at run time", name)
 	})
+}
+
+// inGOROOT reports whether file is a source file of this tree.
+func inGOROOT(file string) bool {
+	if buildcfg.GOROOT == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Join(buildcfg.GOROOT, "src"), file)
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // report runs diagnose once per source position.
@@ -141,15 +153,15 @@ func constString(node ir.Node) (string, bool) {
 			return constant.StringVal(val), true
 		}
 	case ir.OADDSTR:
-		var sb strings.Builder
+		var joined strings.Builder
 		for _, part := range node.(*ir.AddStringExpr).List {
-			str, ok := constString(part)
-			if !ok {
+			str, resolved := constString(part)
+			if !resolved {
 				return "", false
 			}
-			sb.WriteString(str)
+			joined.WriteString(str)
 		}
-		return sb.String(), true
+		return joined.String(), true
 	}
 	return "", false
 }
@@ -168,8 +180,8 @@ var helpers = map[string]*ir.Name{}
 // signature takes the template and the pattern argument, and it returns what
 // the callee returns.
 func helper(name string, reType, orig *types.Type) *ir.Name {
-	if fn := helpers[name]; fn != nil {
-		return fn
+	if cached := helpers[name]; cached != nil {
+		return cached
 	}
 	pkg := types.NewPkg("go.regexp", "regexp")
 	pkg.Prefix = "regexp"
@@ -181,38 +193,38 @@ func helper(name string, reType, orig *types.Type) *ir.Name {
 	for _, res := range orig.Results() {
 		results = append(results, types.NewField(src.NoXPos, nil, res.Type))
 	}
-	fn := ir.NewFunc(src.NoXPos, src.NoXPos, pkg.Lookup(name), types.NewSignature(nil, params, results))
-	helpers[name] = fn.Nname
-	return fn.Nname
+	function := ir.NewFunc(src.NoXPos, src.NoXPos, pkg.Lookup(name), types.NewSignature(nil, params, results))
+	helpers[name] = function.Nname
+	return function.Nname
 }
 
 // template compiles pattern with the compiler's own regexp package and
 // writes the result as read-only data of type reType. Every package that
 // uses the same pattern writes the same symbols, and the linker keeps one.
 func template(pos src.XPos, pattern string, posix bool, reType *types.Type) (*obj.LSym, error) {
-	var re *regexp.Regexp
+	var compiled *regexp.Regexp
 	var err error
 	mode := "perl"
 	if posix {
 		mode = "posix"
-		re, err = regexp.CompilePOSIX(pattern)
+		compiled, err = regexp.CompilePOSIX(pattern)
 	} else {
-		re, err = regexp.Compile(pattern)
+		compiled, err = regexp.Compile(pattern)
 	}
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256([]byte(mode + "\x00" + pattern))
-	em := &emitter{
+	emit := &emitter{
 		pos:    pos,
 		prefix: "regexp..precompiled." + hex.EncodeToString(sum[:16]),
 		objs:   map[objKey]*obj.LSym{},
 	}
-	root := base.Ctxt.Lookup(em.prefix)
+	root := base.Ctxt.Lookup(emit.prefix)
 	if root.OnList() {
 		return root, nil
 	}
-	em.write(root, reType, 1, reflect.ValueOf(re))
+	emit.write(root, reType, 1, reflect.ValueOf(compiled))
 	return root, nil
 }
 
@@ -233,24 +245,24 @@ type emitter struct {
 
 // object returns the symbol for count elements of type elem that start at
 // the address of host. host is a pointer or a slice value.
-func (em *emitter) object(elem *types.Type, count int, host reflect.Value) *obj.LSym {
+func (emit *emitter) object(elem *types.Type, count int, host reflect.Value) *obj.LSym {
 	key := objKey{host.Pointer(), count, elem}
-	if lsym := em.objs[key]; lsym != nil {
+	if lsym := emit.objs[key]; lsym != nil {
 		return lsym
 	}
 	if elem.Size() == 0 || count == 0 {
 		return ir.Syms.Zerobase
 	}
-	em.serial++
-	lsym := base.Ctxt.Lookup(fmt.Sprintf("%s.%d", em.prefix, em.serial))
-	em.objs[key] = lsym
-	em.write(lsym, elem, count, host)
+	emit.serial++
+	lsym := base.Ctxt.Lookup(fmt.Sprintf("%s.%d", emit.prefix, emit.serial))
+	emit.objs[key] = lsym
+	emit.write(lsym, elem, count, host)
 	return lsym
 }
 
 // write fills lsym with count elements of type elem from host and declares
 // it. host is a pointer to one element or a slice of count elements.
-func (em *emitter) write(lsym *obj.LSym, elem *types.Type, count int, host reflect.Value) {
+func (emit *emitter) write(lsym *obj.LSym, elem *types.Type, count int, host reflect.Value) {
 	types.CalcSize(elem)
 	for idx := range count {
 		var val reflect.Value
@@ -259,91 +271,91 @@ func (em *emitter) write(lsym *obj.LSym, elem *types.Type, count int, host refle
 		} else {
 			val = host.Index(idx)
 		}
-		em.value(lsym, int64(idx)*elem.Size(), elem, val)
+		emit.value(lsym, int64(idx)*elem.Size(), elem, val)
 	}
 	objw.Global(lsym, int32(elem.Size()*int64(count)), obj.DUPOK|obj.RODATA|obj.LOCAL)
 	lsym.Align = int16(elem.Alignment())
 }
 
 // value writes host at offset off of lsym as a value of type typ.
-func (em *emitter) value(lsym *obj.LSym, off int64, typ *types.Type, host reflect.Value) {
+func (emit *emitter) value(lsym *obj.LSym, off int64, typ *types.Type, host reflect.Value) {
 	switch {
 	case typ.IsBoolean():
 		if host.Kind() != reflect.Bool {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		if host.Bool() {
 			objw.Uint8(lsym, int(off), 1)
 		}
 	case typ.IsInteger():
-		em.integer(lsym, off, typ, host)
+		emit.integer(lsym, off, typ, host)
 	case typ.IsString():
 		if host.Kind() != reflect.String {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		if str := host.String(); str != "" {
-			objw.SymPtr(lsym, int(off), staticdata.StringSym(em.pos, str), 0)
+			objw.SymPtr(lsym, int(off), staticdata.StringSym(emit.pos, str), 0)
 			objw.Uintptr(lsym, int(off)+types.PtrSize, uint64(len(str)))
 		}
 	case typ.IsPtr():
 		if host.Kind() != reflect.Pointer {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		if !host.IsNil() {
-			objw.SymPtr(lsym, int(off), em.object(typ.Elem(), 1, host), 0)
+			objw.SymPtr(lsym, int(off), emit.object(typ.Elem(), 1, host), 0)
 		}
 	case typ.IsSlice():
 		if host.Kind() != reflect.Slice {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		if !host.IsNil() {
 			full := host.Slice(0, host.Cap())
-			objw.SymPtr(lsym, int(off), em.object(typ.Elem(), full.Len(), full), 0)
+			objw.SymPtr(lsym, int(off), emit.object(typ.Elem(), full.Len(), full), 0)
 			objw.Uintptr(lsym, int(off)+types.PtrSize, uint64(host.Len()))
 			objw.Uintptr(lsym, int(off)+2*types.PtrSize, uint64(host.Cap()))
 		}
 	case typ.IsStruct():
 		if host.Kind() != reflect.Struct || host.NumField() != typ.NumFields() {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		for idx, field := range typ.Fields() {
 			if host.Type().Field(idx).Name != field.Sym.Name {
-				em.mismatch(typ, host)
+				emit.mismatch(typ, host)
 			}
-			em.value(lsym, off+field.Offset, field.Type, host.Field(idx))
+			emit.value(lsym, off+field.Offset, field.Type, host.Field(idx))
 		}
 	case typ.IsArray():
 		if host.Kind() != reflect.Array || int64(host.Len()) != typ.NumElem() {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		for idx := range host.Len() {
-			em.value(lsym, off+int64(idx)*typ.Elem().Size(), typ.Elem(), host.Index(idx))
+			emit.value(lsym, off+int64(idx)*typ.Elem().Size(), typ.Elem(), host.Index(idx))
 		}
 	default:
-		em.mismatch(typ, host)
+		emit.mismatch(typ, host)
 	}
 }
 
 // integer writes an integer field. The target's size can differ from the
 // host's, so the value must fit.
-func (em *emitter) integer(lsym *obj.LSym, off int64, typ *types.Type, host reflect.Value) {
+func (emit *emitter) integer(lsym *obj.LSym, off int64, typ *types.Type, host reflect.Value) {
 	bits := uint(typ.Size() * 8)
 	var raw uint64
 	switch host.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		num := host.Int()
 		if !typ.IsSigned() || (bits < 64 && (num < -1<<(bits-1) || num >= 1<<(bits-1))) {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		raw = uint64(num)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		num := host.Uint()
 		if typ.IsSigned() || (bits < 64 && num >= 1<<bits) {
-			em.mismatch(typ, host)
+			emit.mismatch(typ, host)
 		}
 		raw = num
 	default:
-		em.mismatch(typ, host)
+		emit.mismatch(typ, host)
 	}
 	if raw != 0 {
 		objw.UintN(lsym, int(off), raw, int(typ.Size()))
@@ -352,6 +364,6 @@ func (em *emitter) integer(lsym *obj.LSym, off int64, typ *types.Type, host refl
 
 // mismatch stops the build. The compiler's regexp and the target's regexp
 // disagree, so the compiler cannot build a Regexp for this target.
-func (em *emitter) mismatch(typ *types.Type, host reflect.Value) {
-	base.FatalfAt(em.pos, "regexp precompile: compiler's %v does not match target's %v; rebuild the toolchain from this tree", host.Type(), typ)
+func (emit *emitter) mismatch(typ *types.Type, host reflect.Value) {
+	base.FatalfAt(emit.pos, "regexp precompile: compiler's %v does not match target's %v; rebuild the toolchain from this tree", host.Type(), typ)
 }
