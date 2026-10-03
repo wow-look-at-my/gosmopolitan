@@ -342,6 +342,10 @@ docs/ENUM-DESIGN.md is the design. The compiler does not implement it: scoped me
 
 Upstream's inliner is frequency-blind without a profile, so a call in a hot loop gets the same 80-node budget as one on a cold. This fork adds the static frequency estimate every other production compiler has (`src/cmd/compile/internal/inline/loop.go`), acting on loop nesting at the CALL SITE: -1.1% median over. `-d=loopinline=0` restores upstream's decisions exactly and is the bisect switch for a suspected regression. The knobs, the measurements, and the two runtime annotations it needed: docs/LOOP-INLINING.md.
 
+## Precompiled regexp patterns (all targets)
+
+docs/REGEXP-PRECOMPILE.md -- a resolvable `regexp.MustCompile`/`Compile` pattern compiles at build time, an invalid constant one is a compile error. A dynamic `MustCompile` prints a performance warning.
+
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 
 This fork diverges from upstream on both wasm ports: preemptible loops and synchronous stdio by default, real fetch/socket transports behind `GODEBUG=jsfetchnode=1` and `GOWASI=wasmedgesock`, DWARF. Every round, its measurements and its gates: docs/WASM.md. Remaining gaps: WASM_SHORTCOMINGS.md.

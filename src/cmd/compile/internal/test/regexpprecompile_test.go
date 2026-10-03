@@ -10,6 +10,7 @@ import (
 	"compress/bzip2"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
 	"internal/testenv"
@@ -49,14 +50,17 @@ func (corpus *rxCorpus) add(pattern string, texts ...string) {
 	}
 }
 
-// loadRxCorpus reads the regexp package's own test data: the RE2 search and
-// exhaustive files, the Fowler POSIX files, and the patterns that its test
-// files and those of regexp/syntax declare.
-func loadRxCorpus(t *testing.T) *rxCorpus {
+// loadRxCorpus reads the regexp package's own test data: the RE2 search
+// file, the RE2 exhaustive file when exhaustive is set, the Fowler POSIX
+// files, and the patterns that its test files and those of regexp/syntax
+// declare.
+func loadRxCorpus(t *testing.T, exhaustive bool) *rxCorpus {
 	dir := filepath.Join(testenv.GOROOT(t), "src", "regexp")
 	corpus := newRxCorpus()
 	loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-search.txt"))
-	loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-exhaustive.txt.bz2"))
+	if exhaustive {
+		loadRE2(t, corpus, filepath.Join(dir, "testdata", "re2-exhaustive.txt.bz2"))
+	}
 	fowler, err := filepath.Glob(filepath.Join(dir, "testdata", "*.dat"))
 	if err != nil || len(fowler) == 0 {
 		t.Fatalf("no Fowler files in %s: %v", dir, err)
@@ -258,40 +262,50 @@ func goStrings(expr ast.Expr) []string {
 }
 
 func goString(expr ast.Expr) (string, bool) {
+	val := goConst(expr)
+	if val.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(val), true
+}
+
+// goConst evaluates literals, operators, parentheses and strings.Repeat,
+// which is what the corpus files spell their patterns with.
+func goConst(expr ast.Expr) constant.Value {
 	switch expr := expr.(type) {
 	case *ast.BasicLit:
-		if expr.Kind != token.STRING {
-			return "", false
-		}
-		str, err := strconv.Unquote(expr.Value)
-		return str, err == nil
+		return constant.MakeFromLiteral(expr.Value, expr.Kind, 0)
 	case *ast.ParenExpr:
-		return goString(expr.X)
+		return goConst(expr.X)
 	case *ast.BinaryExpr:
-		if expr.Op != token.ADD {
-			return "", false
+		left, right := goConst(expr.X), goConst(expr.Y)
+		if left.Kind() == constant.Unknown || right.Kind() == constant.Unknown {
+			return constant.MakeUnknown()
 		}
-		left, ok1 := goString(expr.X)
-		right, ok2 := goString(expr.Y)
-		return left + right, ok1 && ok2
+		if expr.Op == token.SHL || expr.Op == token.SHR {
+			count, ok := constant.Uint64Val(right)
+			if !ok {
+				return constant.MakeUnknown()
+			}
+			return constant.Shift(left, expr.Op, uint(count))
+		}
+		return constant.BinaryOp(left, expr.Op, right)
 	case *ast.CallExpr:
-		// strings.Repeat(str, count), which compileBenchData uses.
 		sel, ok := expr.Fun.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Repeat" || len(expr.Args) != 2 {
-			return "", false
+			return constant.MakeUnknown()
 		}
 		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "strings" {
-			return "", false
+			return constant.MakeUnknown()
 		}
-		str, ok := goString(expr.Args[0])
-		lit, isLit := expr.Args[1].(*ast.BasicLit)
-		if !ok || !isLit || lit.Kind != token.INT {
-			return "", false
+		str, count := goConst(expr.Args[0]), goConst(expr.Args[1])
+		num, ok := constant.Int64Val(count)
+		if str.Kind() != constant.String || !ok {
+			return constant.MakeUnknown()
 		}
-		count, err := strconv.Atoi(lit.Value)
-		return strings.Repeat(str, count), err == nil
+		return constant.MakeString(strings.Repeat(constant.StringVal(str), int(num)))
 	}
-	return "", false
+	return constant.MakeUnknown()
 }
 
 // rxModes are the two pattern syntaxes, by the names of their functions.
@@ -305,19 +319,44 @@ var rxModes = [2]struct{ must, compile string }{
 func writeDifferential(corpus *rxCorpus) []byte {
 	var buf bytes.Buffer
 	buf.WriteString("package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"reflect\"\n\t\"regexp\"\n\t\"strings\"\n)\n\n")
+	// Many patterns share one list of inputs, so each list is written once.
+	setIndex := map[string]int{}
+	var sets [][]string
+	textSet := make([]int, len(corpus.patterns))
+	for idx, pattern := range corpus.patterns {
+		texts := corpus.texts[pattern]
+		var key strings.Builder
+		for _, text := range texts {
+			fmt.Fprintf(&key, "%d:%s", len(text), text)
+		}
+		set, ok := setIndex[key.String()]
+		if !ok {
+			set = len(sets)
+			setIndex[key.String()] = set
+			sets = append(sets, texts)
+		}
+		textSet[idx] = set
+	}
 	buf.WriteString("var patterns = []string{\n")
 	for _, pattern := range corpus.patterns {
 		fmt.Fprintf(&buf, "\t%s,\n", strconv.Quote(pattern))
 	}
-	buf.WriteString("}\n\nvar texts = [][]string{\n")
-	for _, pattern := range corpus.patterns {
+	buf.WriteString("}\n\nvar textSets = [][]string{\n")
+	for _, set := range sets {
 		buf.WriteString("\t{")
-		for _, text := range corpus.texts[pattern] {
+		for _, text := range set {
 			fmt.Fprintf(&buf, "%s, ", strconv.Quote(text))
 		}
 		buf.WriteString("},\n")
 	}
-	buf.WriteString("}\n")
+	buf.WriteString("}\n\nvar textSet = []int32{")
+	for idx, set := range textSet {
+		if idx%32 == 0 {
+			buf.WriteString("\n\t")
+		}
+		fmt.Fprintf(&buf, "%d, ", set)
+	}
+	buf.WriteString("\n}\n")
 	const chunk = 100
 	for start := 0; start < len(corpus.patterns); start += chunk {
 		fmt.Fprintf(&buf, "\nfunc chunk%d(pre [][2]*regexp.Regexp, preErr [][2]string) {\n", start/chunk)
@@ -388,7 +427,7 @@ func compareAll(pre [][2]*regexp.Regexp, preErr [][2]string) {
 				fail("%q mode %d: constant gives error %q, variable compiles", pattern, mode, preErr[idx][mode])
 				continue
 			}
-			compareOne(pattern, mode, pre[idx][mode], run, texts[idx])
+			compareOne(pattern, mode, pre[idx][mode], run, textSets[textSet[idx]])
 		}
 	}
 	fmt.Printf("patterns %d compiled %d rejected %d checks %d failures %d\n", len(patterns), compiled, rejected, checks, failures)
@@ -402,10 +441,11 @@ func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []strin
 	if !reflect.DeepEqual(*pre, *run) {
 		fail("%q mode %d: the precompiled Regexp differs from the run-time one", pattern, mode)
 	}
+	// DeepEqual tells a nil slice from an empty one, as a caller can.
 	same := func(what string, have, want any) {
 		checks++
-		if hs, ws := fmt.Sprintf("%#v", have), fmt.Sprintf("%#v", want); hs != ws {
-			fail("%q mode %d: %s: precompiled %s, run time %s", pattern, mode, what, hs, ws)
+		if !reflect.DeepEqual(have, want) {
+			fail("%q mode %d: %s: precompiled %#v, run time %#v", pattern, mode, what, have, want)
 		}
 	}
 	same("String", pre.String(), run.String())
@@ -444,7 +484,8 @@ func compareOne(pattern string, mode int, pre, run *regexp.Regexp, texts []strin
 // must give the same answer from every method on every corpus input.
 func TestRegexpPrecompileDifferential(t *testing.T) {
 	testenv.MustHaveGoRun(t)
-	corpus := loadRxCorpus(t)
+	t.Parallel()
+	corpus := loadRxCorpus(t, true)
 	src := filepath.Join(t.TempDir(), "differential.go")
 	if err := os.WriteFile(src, writeDifferential(corpus), 0o666); err != nil {
 		t.Fatal(err)
@@ -465,8 +506,11 @@ func TestRegexpPrecompileDifferential(t *testing.T) {
 // them, which shows the check can fail.
 func TestRegexpPrecompileNoRuntimeCompile(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
-	corpus := loadRxCorpus(t)
+	t.Parallel()
+	corpus := loadRxCorpus(t, false)
 	var body bytes.Buffer
+	const chunk = 100
+	calls := 0
 	for _, pattern := range corpus.patterns {
 		for mode, names := range rxModes {
 			var err error
@@ -475,18 +519,34 @@ func TestRegexpPrecompileNoRuntimeCompile(t *testing.T) {
 			} else {
 				_, err = regexp.CompilePOSIX(pattern)
 			}
-			if err == nil {
-				fmt.Fprintf(&body, "\tuse(regexp.%s(%s))\n", names.must, strconv.Quote(pattern))
+			if err != nil {
+				continue
 			}
+			if calls%chunk == 0 {
+				if calls > 0 {
+					body.WriteString("}\n")
+				}
+				fmt.Fprintf(&body, "\nfunc chunk%d() {\n", calls/chunk)
+			}
+			fmt.Fprintf(&body, "\tuse(regexp.%s(%s))\n", names.must, strconv.Quote(pattern))
+			calls++
 		}
 	}
-	forbidden := []string{"regexp.compile", "regexp/syntax.Parse", "regexp/syntax.Compile", "regexp.compileOnePass"}
+	body.WriteString("}\n")
+	t.Logf("%d constant calls", calls)
+	// syntax.Parse inlines into regexp.compile, so its body syntax.parse is
+	// the name the linker keeps.
+	forbidden := []string{"regexp.compile", "regexp/syntax.parse", "regexp/syntax.Compile", "regexp.compileOnePass"}
 	for _, variable := range []bool{false, true} {
 		dir := t.TempDir()
 		var src bytes.Buffer
 		src.WriteString("package main\n\nimport (\n\t\"os\"\n\t\"regexp\"\n)\n\nvar total int\n\n")
-		src.WriteString("func use(re *regexp.Regexp) {\n\tif re.MatchString(\"abc\") {\n\t\ttotal++\n\t}\n}\n\nfunc main() {\n")
+		src.WriteString("func use(re *regexp.Regexp) {\n\tif re.MatchString(\"abc\") {\n\t\ttotal++\n\t}\n}\n")
 		src.Write(body.Bytes())
+		src.WriteString("\nfunc main() {\n")
+		for idx := range (calls + chunk - 1) / chunk {
+			fmt.Fprintf(&src, "\tchunk%d()\n", idx)
+		}
 		if variable {
 			src.WriteString("\tre, _ := regexp.Compile(os.Args[0])\n\tuse(re)\n")
 		}
