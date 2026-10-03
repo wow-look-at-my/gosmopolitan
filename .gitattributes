@@ -14,3 +14,7 @@
 # See golang.org/issue/9281.
 
 * -text
+
+# The API surface lists are upstream Go's reference data, kept verbatim. No
+# prose rule reads or rewrites them.
+api/** linguist-vendored
