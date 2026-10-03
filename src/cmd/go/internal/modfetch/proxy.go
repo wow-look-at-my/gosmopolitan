@@ -198,7 +198,7 @@ func TryProxies(f func(proxy string) error) error {
 
 // bannedProxyHost is refused as a module proxy wherever its URL comes from,
 // a go-import "mod" tag included.
-const bannedProxyHost = "proxy.golang.org"
+const bannedProxyHost = web.BannedHost
 
 type proxyRepo struct {
 	url          *url.URL // The combined module proxy URL joined with the module path.

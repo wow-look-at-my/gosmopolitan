@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,27 @@ func TestUserAgent(t *testing.T) {
 	gotUserAgent := string(bytes.TrimSpace(b))
 	if gotUserAgent != userAgent {
 		t.Errorf("User-Agent: %s, want %s", gotUserAgent, userAgent)
+	}
+}
+
+func TestBannedHostRefused(t *testing.T) {
+	for _, raw := range []string{"https://proxy.golang.org/golang.org/x/sync/@v/list", "http://PROXY.golang.org:443/x"} {
+		target, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Get(DefaultSecurity, target); err == nil || !strings.Contains(err.Error(), BannedHost) {
+			t.Errorf("Get(%s) err = %v, want a refusal that names %s", raw, err, BannedHost)
+		}
+	}
+
+	server := httptest.NewServer(http.RedirectHandler("https://proxy.golang.org/golang.org/x/sync/@v/list", http.StatusFound))
+	defer server.Close()
+	start, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Get(Insecure, start); err == nil || !strings.Contains(err.Error(), BannedHost) {
+		t.Errorf("a redirect to %s gave err = %v, want a refusal", BannedHost, err)
 	}
 }
