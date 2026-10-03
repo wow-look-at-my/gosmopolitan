@@ -89,10 +89,11 @@ func buildApeLoaders() {
 	args = append(args, "-nostdinc", "-isystem", pathf("%s/include", libDir), "-isystem", pathf("%s/libc/include/any-darwin-any", libDir),
 		"-c", "-o", obj, "darwin/apeld.c")
 	run(dir, CheckExit, args...)
+	// The object goes before -lSystem. LLD lists imports in the order it first sees them, and a .tbd's order differs by host.
 	run(dir, CheckExit, lld, "-arch", "arm64", "-platform_version", "macos", "12.0", "12.0",
+		"-o", "bin/apeld-darwin-arm64", obj,
 		"-Z", "-L"+pathf("%s/libc/darwin", libDir), "-lSystem",
-		"-dead_strip", "-S", "-x", "-no_uuid", "-no_function_starts", "-no_data_const", "-fixup_chains",
-		"-o", "bin/apeld-darwin-arm64", obj)
+		"-dead_strip", "-S", "-x", "-no_uuid", "-no_function_starts", "-no_data_const", "-fixup_chains")
 	xremove(obj)
 }
 

@@ -21,7 +21,7 @@ import (
 var apeLoaderSums = map[string]string{
 	"apeld-linux-amd64":  "c798912fd52d374d5f35ae2f86ce5082ffd11b163891a36d4c402777bfc6723a",
 	"apeld-linux-arm64":  "13779a091333025b829d944fd12d74be47a3864540013f881390353507dcd0c3",
-	"apeld-darwin-arm64": "ffbf274cade220026b8aefbfba7e8aba5aced629edd37bf46f052282a5b2d2e9",
+	"apeld-darwin-arm64": "b67e73680faea89c0db389089939ab9bf2acc6f36a3ce90a661eb64694ed2cbc",
 }
 
 // apeLoaderBins is the embedded loader for each platform that has one.
