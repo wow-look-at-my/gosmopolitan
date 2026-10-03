@@ -14,6 +14,11 @@
 // regexp.Compile returns, so no pattern and no regexp feature is special.
 // The compiler's regexp and the target's regexp are the same source, and a
 // struct layout that differs between them stops the build.
+//
+// The pass runs in three stages, and each stage is a phase of -bench: scan
+// finds the calls, compile runs the compiler's regexp on each pattern, and
+// emit writes the data and rewrites the calls. -d=regexpprecompile prints
+// each site.
 package regexpprecompile
 
 import (
@@ -29,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"cmd/compile/internal/base"
 	"cmd/compile/internal/ir"
@@ -54,27 +60,75 @@ var entries = map[string]entry{
 	"MustCompilePOSIX": {posix: true, must: true, helper: "precompiled"},
 }
 
+// patternKey names one pattern in one syntax.
+type patternKey struct {
+	posix   bool
+	pattern string
+}
+
+// result holds the compile and the emit of one patternKey.
+type result struct {
+	compiled *regexp.Regexp
+	err      error
+	took     time.Duration // the time of the compiler's regexp compile
+	tmpl     *obj.LSym     // the template, which the first emit sets
+	size     int64         // bytes of read-only data that the emit wrote
+}
+
+// site is one call with a resolved pattern.
+type site struct {
+	call   *ir.CallExpr
+	callee *ir.Name
+	ent    entry
+	key    patternKey
+}
+
+type pass struct {
+	reported map[string]bool // diagnostics that are already reported
+	sites    []site
+	results  map[patternKey]*result
+	order    []patternKey // the keys of results, in the order of the scan
+
+	calls     int64 // calls to the four functions
+	dynamic   int64 // calls with a pattern that is not constant
+	warned    int64 // performance warnings
+	rewritten int64 // calls that now copy a template
+	bytes     int64 // read-only data that the emit wrote
+	syms      int64 // symbols that the emit declared
+}
+
 // Package rewrites the calls in every function of pkg. It runs after
 // inlining, so a pattern that only becomes constant in an inlined body is
 // precompiled too.
 func Package(pkg *ir.Package) {
+	base.Timer.Start("fe", "regexp-precompile", "scan")
 	// The bootstrap compiler links the bootstrap toolchain's regexp, which
 	// is not the source of the regexp that it compiles.
 	if base.CompilerBootstrap {
 		return
 	}
-	pass := &pass{reported: map[string]bool{}}
+	pass := &pass{reported: map[string]bool{}, results: map[patternKey]*result{}}
 	for _, function := range pkg.Funcs {
-		ir.Visit(function, pass.visit)
+		ir.Visit(function, pass.scan)
 	}
+	base.Timer.AddEvent(pass.calls, "calls")
+	base.Timer.AddEvent(pass.dynamic, "dynamic")
+	base.Timer.AddEvent(pass.warned, "warnings")
+
+	base.Timer.Start("fe", "regexp-precompile", "compile")
+	pass.compilePatterns()
+	base.Timer.AddEvent(int64(len(pass.order)), "patterns")
+
+	base.Timer.Start("fe", "regexp-precompile", "emit")
+	pass.emitSites()
+	base.Timer.AddEvent(pass.rewritten, "sites")
+	base.Timer.AddEvent(pass.bytes, "B")
+	base.Timer.AddEvent(pass.syms, "syms")
 	base.ExitIfErrors()
 }
 
-type pass struct {
-	reported map[string]bool // positions that already have a diagnostic
-}
-
-func (pass *pass) visit(node ir.Node) {
+// scan records each call to one of the four functions.
+func (pass *pass) scan(node ir.Node) {
 	call, isCall := node.(*ir.CallExpr)
 	if !isCall || call.Op() != ir.OCALLFUNC || len(call.Args) != 1 || call.IsDDD {
 		return
@@ -83,32 +137,82 @@ func (pass *pass) visit(node ir.Node) {
 	if callee == nil || callee.Sym().Pkg.Path != "regexp" {
 		return
 	}
-	name := callee.Sym().Name
-	ent, rewrites := entries[name]
+	ent, rewrites := entries[callee.Sym().Name]
 	if !rewrites {
 		return
 	}
+	pass.calls++
 	pattern, resolved := constString(call.Args[0])
 	if !resolved {
+		pass.dynamic++
+		pass.debugDynamic(call.Pos(), callee.Sym().Name, dynamicReason(call.Args[0]))
 		if ent.must {
-			pass.warnDynamic(call.Pos(), name)
+			pass.warnDynamic(call.Pos(), callee.Sym().Name)
 		}
 		return
 	}
-	reType := callee.Type().Result(0).Type
-	tmpl, err := template(call.Pos(), pattern, ent.posix, reType.Elem())
-	if err != nil {
-		if ent.must {
-			pass.report(call.Pos(), func() {
-				base.ErrorfAt(call.Pos(), 0, "regexp.%s(%s) always panics: %v", name, quote(pattern), err)
+	key := patternKey{ent.posix, pattern}
+	if pass.results[key] == nil {
+		pass.results[key] = &result{}
+		pass.order = append(pass.order, key)
+	}
+	pass.sites = append(pass.sites, site{call, callee, ent, key})
+}
+
+// compilePatterns compiles each distinct pattern once with the compiler's
+// own regexp package.
+func (pass *pass) compilePatterns() {
+	for _, key := range pass.order {
+		res := pass.results[key]
+		start := time.Now()
+		if key.posix {
+			res.compiled, res.err = regexp.CompilePOSIX(key.pattern)
+		} else {
+			res.compiled, res.err = regexp.Compile(key.pattern)
+		}
+		res.took = time.Since(start)
+	}
+}
+
+// emitSites writes the template of each valid pattern once and rewrites
+// each call to copy it.
+func (pass *pass) emitSites() {
+	for _, cur := range pass.sites {
+		res := pass.results[cur.key]
+		name := cur.callee.Sym().Name
+		pos := cur.call.Pos()
+		if res.err != nil {
+			if cur.ent.must {
+				pass.report("error", pos, func() {
+					base.ErrorfAt(pos, 0, "regexp.%s(%s) always panics: %v", name, quote(cur.key.pattern), res.err)
+				})
+			} else {
+				// Compile returns the error at run time, which the program may expect.
+				pass.debugDynamic(pos, name, "the pattern is invalid, and Compile returns the error at run time")
+			}
+			continue
+		}
+		reType := cur.callee.Type().Result(0).Type
+		shared := res.tmpl != nil
+		if !shared {
+			emit := template(pos, cur.key, res.compiled, reType.Elem())
+			res.tmpl, res.size = emit.root, emit.size
+			pass.bytes += emit.size
+			pass.syms += int64(emit.syms)
+		}
+		pass.rewritten++
+		if base.Debug.RegexpPrecompile >= 1 {
+			note := ""
+			if shared {
+				note = ", shared with an earlier site"
+			}
+			pass.report("precompiled", pos, func() {
+				base.WarnfAt(pos, "regexp precompile: regexp.%s(%s) precompiled: compile %v, %d B read-only data%s", name, quote(cur.key.pattern), res.took, res.size, note)
 			})
 		}
-		// Compile returns the error at run time, which the program may expect.
-		return
+		cur.call.Fun = helper(cur.ent.helper, reType, cur.callee.Type())
+		cur.call.Args = []ir.Node{typecheck.LinksymAddr(pos, res.tmpl, reType.Elem()), cur.call.Args[0]}
 	}
-	pos := call.Pos()
-	call.Fun = helper(ent.helper, reType, callee.Type())
-	call.Args = []ir.Node{typecheck.LinksymAddr(pos, tmpl, reType.Elem()), call.Args[0]}
 }
 
 // warnDynamic reports a pattern that compiles at run time. Code of this
@@ -121,9 +225,47 @@ func (pass *pass) warnDynamic(pos src.XPos, name string) {
 	if base.Flag.Std || inner.InliningIndex() >= 0 || inGOROOT(inner.Filename()) {
 		return
 	}
-	pass.report(pos, func() {
+	pass.report("warning", pos, func() {
+		pass.warned++
 		base.WarnfAt(pos, "performance warning: the pattern of regexp.%s is not constant, so it compiles at run time", name)
 	})
+}
+
+// debugDynamic prints a site that stays dynamic, for -d=regexpprecompile=2.
+func (pass *pass) debugDynamic(pos src.XPos, name, reason string) {
+	if base.Debug.RegexpPrecompile < 2 {
+		return
+	}
+	pass.report("dynamic", pos, func() {
+		base.WarnfAt(pos, "regexp precompile: regexp.%s stays dynamic: %s", name, reason)
+	})
+}
+
+// dynamicReason tells why the compiler cannot resolve the pattern node.
+func dynamicReason(node ir.Node) string {
+	node = ir.StaticValue(node)
+	switch node.Op() {
+	case ir.ONAME:
+		name := node.(*ir.Name)
+		switch name.Class {
+		case ir.PPARAM:
+			return fmt.Sprintf("the pattern is the parameter %v", name.Sym())
+		case ir.PEXTERN:
+			return fmt.Sprintf("the pattern is the package variable %v, which any code can assign", name.Sym())
+		case ir.PAUTO:
+			return fmt.Sprintf("the pattern is the local variable %v, which has more than one assignment or has its address taken", name.Sym())
+		}
+		return fmt.Sprintf("the pattern is the variable %v", name.Sym())
+	case ir.OCALLFUNC, ir.OCALLINTER, ir.OCALLMETH:
+		return "the pattern is the result of a call that the compiler did not inline"
+	case ir.OADDSTR:
+		for _, part := range node.(*ir.AddStringExpr).List {
+			if _, resolved := constString(part); !resolved {
+				return "a part of the concatenation is not constant: " + dynamicReason(part)
+			}
+		}
+	}
+	return fmt.Sprintf("the compiler cannot resolve a %v expression", node.Op())
 }
 
 // inGOROOT reports whether file is a source file of this tree.
@@ -162,9 +304,9 @@ var goroot = sync.OnceValue(func() string {
 	return ""
 })
 
-// report runs diagnose once per source position.
-func (pass *pass) report(pos src.XPos, diagnose func()) {
-	key := base.FmtPos(pos)
+// report runs diagnose once per kind of diagnostic and source position.
+func (pass *pass) report(kind string, pos src.XPos, diagnose func()) {
+	key := kind + "\x00" + base.FmtPos(pos)
 	if pass.reported[key] {
 		return
 	}
@@ -228,34 +370,26 @@ func helper(name string, reType, orig *types.Type) *ir.Name {
 	return function.Nname
 }
 
-// template compiles pattern with the compiler's own regexp package and
-// writes the result as read-only data of type reType. Every package that
-// uses the same pattern writes the same symbols, and the linker keeps one.
-func template(pos src.XPos, pattern string, posix bool, reType *types.Type) (*obj.LSym, error) {
-	var compiled *regexp.Regexp
-	var err error
+// template writes compiled as read-only data of type reType. Every package
+// that uses the same pattern writes the same symbols, and the linker keeps
+// one.
+func template(pos src.XPos, key patternKey, compiled *regexp.Regexp, reType *types.Type) *emitter {
 	mode := "perl"
-	if posix {
+	if key.posix {
 		mode = "posix"
-		compiled, err = regexp.CompilePOSIX(pattern)
-	} else {
-		compiled, err = regexp.Compile(pattern)
 	}
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256([]byte(mode + "\x00" + pattern))
+	sum := sha256.Sum256([]byte(mode + "\x00" + key.pattern))
 	emit := &emitter{
 		pos:    pos,
 		prefix: "regexp..precompiled." + hex.EncodeToString(sum[:16]),
 		objs:   map[objKey]*obj.LSym{},
+		texts:  map[string]bool{},
 	}
-	root := base.Ctxt.Lookup(emit.prefix)
-	if root.OnList() {
-		return root, nil
+	emit.root = base.Ctxt.Lookup(emit.prefix)
+	if !emit.root.OnList() {
+		emit.write(emit.root, reType, 1, reflect.ValueOf(compiled))
 	}
-	emit.write(root, reType, 1, reflect.ValueOf(compiled))
-	return root, nil
+	return emit
 }
 
 // objKey identifies one object of the compiler's regexp value.
@@ -271,6 +405,10 @@ type emitter struct {
 	prefix string
 	serial int
 	objs   map[objKey]*obj.LSym
+	root   *obj.LSym
+	texts  map[string]bool // string contents that size already counts
+	size   int64           // bytes of the symbols and of the string contents
+	syms   int             // symbols that write declared
 }
 
 // object returns the symbol for count elements of type elem that start at
@@ -305,6 +443,8 @@ func (emit *emitter) write(lsym *obj.LSym, elem *types.Type, count int, host ref
 	}
 	objw.Global(lsym, int32(elem.Size()*int64(count)), obj.DUPOK|obj.RODATA|obj.LOCAL)
 	lsym.Align = int16(elem.Alignment())
+	emit.size += elem.Size() * int64(count)
+	emit.syms++
 }
 
 // value writes host at offset off of lsym as a value of type typ.
@@ -326,6 +466,10 @@ func (emit *emitter) value(lsym *obj.LSym, off int64, typ *types.Type, host refl
 		if str := host.String(); str != "" {
 			objw.SymPtr(lsym, int(off), staticdata.StringSym(emit.pos, str), 0)
 			objw.Uintptr(lsym, int(off)+types.PtrSize, uint64(len(str)))
+			if !emit.texts[str] {
+				emit.texts[str] = true
+				emit.size += int64(len(str))
+			}
 		}
 	case typ.IsPtr():
 		if host.Kind() != reflect.Pointer {

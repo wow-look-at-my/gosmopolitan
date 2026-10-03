@@ -15,7 +15,7 @@ tests:
 	  exit: 0
 
 	- desc: the regexp precompiler and its tests name their variables
-	  cmd: dats/source/short-identifiers.sh src/cmd/compile/internal/regexpprecompile/precompile.go src/regexp/precompiled.go src/regexp/precompiled_test.go src/cmd/compile/internal/test/regexpprecompile_test.go test/regexpprecompile.go test/regexpprecompile_err.go
+	  cmd: dats/source/short-identifiers.sh src/cmd/compile/internal/regexpprecompile/precompile.go src/regexp/precompiled.go src/regexp/precompiled_test.go src/cmd/compile/internal/test/regexpprecompile_test.go src/cmd/compile/internal/test/regexpprecompile_profile_test.go test/regexpprecompile.go test/regexpprecompile_err.go
 	  exit: 0
 
 	- desc: the scanner refuses a one-letter receiver

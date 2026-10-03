@@ -344,7 +344,7 @@ Upstream's inliner is frequency-blind without a profile, so a call in a hot loop
 
 ## Precompiled regexp patterns (all targets)
 
-docs/REGEXP-PRECOMPILE.md -- a resolvable `regexp.MustCompile`/`Compile` pattern compiles at build time, an invalid constant one is a compile error. A dynamic `MustCompile` prints a performance warning.
+docs/REGEXP-PRECOMPILE.md -- a resolvable `regexp.MustCompile`/`Compile` pattern compiles at build time, an invalid constant one is a compile error. A dynamic `MustCompile` prints a performance warning. Its Profiling section has the `-bench` phases and `-d=regexpprecompile`.
 
 ## WebAssembly (GOOS=js / GOOS=wasip1)
 

@@ -63,10 +63,50 @@ The bootstrap compiler, toolchain1, links the bootstrap Go's `regexp` and its ol
 | Run the pass after inlining | `cmd/compile/internal/gc/main.go` |
 | Copy a template | `regexp/precompiled.go` |
 
+## Profiling
+
+Each stage of the pass is a phase of `-bench`. `scan` finds the calls, `compile` runs the compiler's regexp once per distinct pattern, and `emit` writes the read-only data and rewrites the calls. Each phase reports its counts:
+
+```
+go tool compile -p=main -importcfg=importcfg -o=main.o -bench=bench.txt main.go
+grep regexp-precompile bench.txt
+```
+
+```
+BenchmarkCompile:main:fe:regexp-precompile:scan     1   6125893 ns/op  0.07 %  10381 calls  ...  0 dynamic  ...  0 warnings  ...
+BenchmarkCompile:main:fe:regexp-precompile:compile  1  66266561 ns/op  0.77 %  10381 patterns  ...
+BenchmarkCompile:main:fe:regexp-precompile:emit     1 216165551 ns/op  2.52 %  10381 sites  ...  14633067 B  ...  63307 syms  ...
+```
+
+`calls` counts the calls to the functions, `dynamic` the calls that compile at run time, and `warnings` the performance warnings. `patterns` counts the distinct patterns, and `sites` the calls that now copy a template. `B` is the size of the symbols plus the string contents that they point to, before the linker merges equal strings. `syms` counts the symbols. The work from the pass up to escape analysis is `fe:pre-escape`, so no other step is charged to `emit`.
+
+`-d=regexpprecompile=1` prints each precompiled site, with the time of its compile and the size of its data. A site whose pattern an earlier site already wrote says so. `-d=regexpprecompile=2` adds each site that stays dynamic, and the reason:
+
+```
+go build -gcflags=-d=regexpprecompile=2 ./cmd/app
+```
+
+```
+./main.go:8:27: regexp precompile: regexp.MustCompile stays dynamic: the pattern is the parameter pat
+./main.go:16:27: regexp precompile: regexp.MustCompile(`a+b`) precompiled: compile 5.961µs, 564 B read-only data
+./main.go:20:27: regexp precompile: regexp.MustCompile(`a+b`) precompiled: compile 5.961µs, 564 B read-only data, shared with an earlier site
+./main.go:28:23: regexp precompile: regexp.Compile stays dynamic: the pattern is invalid, and Compile returns the error at run time
+```
+
+Each stage is a function of its own. As a result, a CPU profile of the compiler names it: `regexpprecompile.(*pass).scan`, `(*pass).compilePatterns`, `(*pass).emitSites`, and `template` with the `(*emitter)` methods under it.
+
+```
+go tool compile -p=main -importcfg=importcfg -o=main.o -cpuprofile=cpu.prof main.go
+go tool pprof -top -cum -focus=regexpprecompile cpu.prof
+```
+
+`go list -export -deps -f '{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}' regexp > importcfg` writes the import config.
+
 ## Tests
 
 - `TestRegexpPrecompileDifferential` in `cmd/compile/internal/test` reads the whole regexp test corpus. That is `re2-search.txt`, `re2-exhaustive.txt.bz2`, the Fowler `.dat` files, and the pattern tables of the `regexp` and `regexp/syntax` tests. It builds each one from a constant and from a variable, in both syntaxes. The two must be deeply equal and must give the same answer from every match method on every corpus input, with and without `Longest`.
 - `TestRegexpPrecompileNoRuntimeCompile` builds a program from the constant patterns of the corpus, without the exhaustive file. It checks that `regexp.compile`, `regexp/syntax.parse`, `regexp/syntax.Compile` and `regexp.compileOnePass` are not linked. A program with one variable pattern must link all four, which proves the check can fail.
 - `TestConstantPatternIsPrecompiled` in `regexp` checks that two calls with one constant share one program, which a run-time compile never does.
 - `TestRegexpPrecompileWarning` in `cmd/compile/internal/test` builds a program outside GOROOT. The build must succeed and print the warning at the file and line of each dynamic call, and of no other.
+- `TestRegexpPrecompileInstrumentation` in `cmd/compile/internal/test` compiles a file with each kind of site. It checks the `-bench` phases and their counts, and the lines of `-d=regexpprecompile=1` and `=2`.
 - `test/regexpprecompile.go` checks the copy semantics, and `test/regexpprecompile_err.go` checks the compile error.

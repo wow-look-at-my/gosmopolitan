@@ -21,8 +21,8 @@ import (
 	"cmd/compile/internal/noder"
 	"cmd/compile/internal/pgoir"
 	"cmd/compile/internal/pkginit"
-	"cmd/compile/internal/regexpprecompile"
 	"cmd/compile/internal/reflectdata"
+	"cmd/compile/internal/regexpprecompile"
 	"cmd/compile/internal/rttype"
 	"cmd/compile/internal/slice"
 	"cmd/compile/internal/ssa"
@@ -267,10 +267,12 @@ func Main(archInit func(*ssagen.ArchInfo)) {
 
 	// Precompile constant regexp patterns. After inlining, so an inlined
 	// body can resolve its pattern. Before escape analysis, which must see
-	// the rewritten calls.
-	base.Timer.Start("fe", "regexp-precompile")
+	// the rewritten calls. The pass starts its own phases.
 	regexpprecompile.Package(typecheck.Target)
 
+	// The work up to escape analysis gets its own phase, so -bench does
+	// not charge it to the last regexp-precompile phase.
+	base.Timer.Start("fe", "pre-escape")
 	noder.MakeWrappers(typecheck.Target) // must happen after inlining
 
 	// Get variable capture right in for loops.
