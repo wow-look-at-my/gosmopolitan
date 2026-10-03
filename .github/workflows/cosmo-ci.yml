@@ -184,6 +184,8 @@ jobs:
       - uses: ./.github/actions/track-submodules
       # run.bash reaches the same sandboxed generate directives the build leg does.
       - uses: wow-look-at-my/actions@bubblewrap#latest
+      # TestRepeatBootstrap runs make.bash again, which compiles the APE loaders with these.
+      - uses: ./.github/actions/apeld-tools
 
       # The suite is what wants the room, so the deletion is joined here. wait-all takes no if, and a host that backgrounded nothing passes straight through.
       - name: Wait for the room the suite needs
