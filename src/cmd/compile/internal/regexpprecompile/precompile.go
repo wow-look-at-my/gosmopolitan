@@ -22,11 +22,13 @@ import (
 	"fmt"
 	"go/constant"
 	"internal/buildcfg"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"cmd/compile/internal/base"
 	"cmd/compile/internal/ir"
@@ -126,12 +128,39 @@ func (pass *pass) warnDynamic(pos src.XPos, name string) {
 
 // inGOROOT reports whether file is a source file of this tree.
 func inGOROOT(file string) bool {
-	if buildcfg.GOROOT == "" {
+	root := goroot()
+	if root == "" {
 		return false
 	}
-	rel, err := filepath.Rel(buildcfg.GOROOT, file)
+	rel, err := filepath.Rel(root, file)
 	return err == nil && filepath.IsLocal(rel)
 }
+
+// goroot returns the tree this compiler belongs to. The go command passes
+// GOROOT in the environment. A tool that runs the compiler itself may not,
+// and a release toolchain is built with -trimpath, so it records none. The
+// executable's own place in the tree answers then.
+var goroot = sync.OnceValue(func() string {
+	if buildcfg.GOROOT != "" {
+		return buildcfg.GOROOT
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return ""
+	}
+	// The executable is GOROOT/bin/go or GOROOT/pkg/tool/GOOS_GOARCH/compile.
+	dir := filepath.Dir(exe)
+	for range 3 {
+		if info, err := os.Stat(filepath.Join(dir, "src", "runtime")); err == nil && info.IsDir() {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+})
 
 // report runs diagnose once per source position.
 func (pass *pass) report(pos src.XPos, diagnose func()) {
