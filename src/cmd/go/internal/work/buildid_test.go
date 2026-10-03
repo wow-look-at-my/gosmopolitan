@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package work
 
@@ -28,13 +29,16 @@ func TestParseToolID(t *testing.T) {
 		{"compile", false, "compile version go1.9.1 X:framepointer\n", "compile version go1.9.1 X:framepointer", true},
 		// Development branches use the content ID part of the tool's build ID.
 		{"compile", false, "compile version devel go1.99-abc buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
-		// The cosmo fork stamps the same release-style version into every build, so its tools report their own build ID too.
+		// The cosmo fork stamps the same release-style version into every
+		// build, so its tools report their own build ID too, and the tool ID
+		// is the content ID part — never the constant version line.
 		{"compile", false, "compile version go1.26.4cosmo buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
 		{"compile", false, "compile version go1.26.4cosmo X:fieldtrack buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
 		{"link", false, "link version go1.26.4cosmo buildID=ee/ff\n", "ff", true},
 		// An alternative vet tool may print any leading name.
 		{"vet", true, "myanalyzer version devel comments-go-here buildID=11/22\n", "22", true},
-		// A stand-in tool with no stamped build ID parses to an empty ID, which toolID then replaces with the file's hash.
+		// A stand-in tool with no stamped build ID parses to an empty ID,
+		// which toolID then replaces with the file's hash.
 		{"compile", false, "compile.test version go1.27.0-cosmo buildID=\n", "", false},
 		{"compile", false, "compile version go1.27.0-cosmo buildID=\n", "", true},
 		// Malformed lines.
@@ -51,7 +55,8 @@ func TestParseToolID(t *testing.T) {
 		}
 	}
 
-	// The incident property, at the parser level: fork builds report the same version but different build IDs.
+	// The incident property, at the parser level: two fork builds report the
+	// same version but different build IDs, and must get different tool IDs.
 	id1, _ := parseToolID("compile", false, "compile version go1.26.4cosmo buildID=aa/bb\n")
 	id2, _ := parseToolID("compile", false, "compile version go1.26.4cosmo buildID=aa/cc\n")
 	if id1 == id2 {
@@ -62,7 +67,7 @@ func TestParseToolID(t *testing.T) {
 // TestToolIDHashesUnstampedTool checks that a tool which prints an empty
 // build ID gets a tool ID from its own bytes. cmd/compile's test binary
 // stands in for compile under TestScript and prints exactly that; the empty
-// ID.
+// ID it used to get made every such binary share cache entries.
 func TestToolIDHashesUnstampedTool(t *testing.T) {
 	t.Serial() // VetTool is a package variable.
 	dir := t.TempDir()
@@ -119,7 +124,8 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Copies in separate directories so both run as plain "compile".
+	// Two copies in separate directories so both run as plain "compile"
+	// (tools print their argv[0] basename in the -V=full line).
 	dir := t.TempDir()
 	tool1 := filepath.Join(dir, "build1", "compile"+exe)
 	tool2 := filepath.Join(dir, "build2", "compile"+exe)
@@ -132,7 +138,9 @@ func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 		}
 	}
 
-	// Give tool2 different content by rewriting its embedded build ID.
+	// Give tool2 different content by rewriting its embedded build ID, the
+	// same way cmd/go's updateBuildID writes final build IDs. Every non-'/'
+	// byte of the ID changes, so the content ID half necessarily differs.
 	oldID, err := buildid.ReadFile(tool2)
 	if err != nil {
 		t.Fatal(err)

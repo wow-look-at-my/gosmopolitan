@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package orgmod
 
@@ -18,9 +19,15 @@ import (
 	"sync"
 )
 
-// A CI run locks the version of each org module it builds.
+// A CI run locks the version of each org module it builds. The first go
+// command of the run that resolves a module on a branch records the head it
+// found in a store that every job of the run reaches. Every later go command of
+// that run, in any job and on any machine, builds the recorded version instead
+// of the head. A commit that lands in the middle of a run therefore reaches no
+// job of it. A re-run is a new attempt, and it locks the heads again.
 
-// RunLockEnv names the environment variable that names the store as a URL. A file URL names a directory.
+// RunLockEnv names the environment variable that names the store as a URL. A
+// file URL names a directory. Unset, the store is DefaultRunLockStore.
 const RunLockEnv = "GOSMOPOLITAN_RUN_LOCK_STORE"
 
 // RunEnv names the run as owner/repo/run-id/attempt.
@@ -50,7 +57,9 @@ func (k RunLockKey) Name() string { return k.Module + "@" + k.Branch }
 type RunLockStore interface {
 	// Lookup returns the version recorded under key, and whether one is.
 	Lookup(ctx context.Context, key RunLockKey) (version string, found bool, err error)
-	// Claim records version under key unless the store holds a version there already.
+	// Claim records version under key unless the store holds a version there
+	// already. It returns the version the store holds afterward. Of racing
+	// claims, exactly one records its version, and every claim returns it.
 	Claim(ctx context.Context, key RunLockKey, version string) (string, error)
 	// String names the store in an error.
 	String() string
@@ -108,8 +117,10 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	return version, nil
 }
 
-// logVersion names the version an org module built at, and which of the ways
-// chose it.
+// logVersion names the version an org module built at, and which of the three
+// ways chose it. A build silently picking a commit per dependency leaves the
+// tree it compiled unknowable from its own output, and these versions move on
+// their own: a branch head is whatever the branch pointed at that minute.
 func logVersion(path, branch, version, origin string) {
 	fmt.Fprintf(os.Stderr, "go: %s@%s: building %s -- %s\n", path, branch, version, origin)
 }

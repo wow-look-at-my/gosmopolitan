@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -9,6 +10,9 @@ import "unsafe"
 
 func sbrk0() uintptr
 
+// Declared here for go vet on non-android builds.
+// The return value is the raw syscall result, which may encode an error number.
+//
 //go:noescape
 func access(name *byte, mode int32) int32
 func connect(fd int32, addr unsafe.Pointer, len int32) int32

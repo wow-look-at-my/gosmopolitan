@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -7,10 +8,23 @@ package cosmo
 
 import "unsafe"
 
-// Darwin (macOS ARM64) process syscall emulation: what os/exec needs beyond
-// fork.
+// Darwin (macOS ARM64) process syscall emulation: what os/exec needs
+// beyond fork, which syscall.rawVforkSyscall already routes to the
+// Syslib in assembly. Linux syscall numbers and layouts in,
+// dlsym-resolved Apple libc functions out.
+//
+// dup3, setsid, setpgid and execve run in the child between fork and
+// exec, where only an async-signal-safe function may be called and the
+// stack must not grow. Each is a thin libSystem syscall wrapper on
+// POSIX's list, every pointer was resolved at osinit long before the
+// first fork - dlsym itself is NOT fork-child safe - and everything
+// here is nosplit, which the linker enforces. The Syslib's fork runs
+// Apple's own libc fork, atfork handlers included.
 
 // Linux arm64 process syscall numbers handled by the slow path.
+// waitid is deliberately absent: os.blockUntilWaitable falls back
+// cleanly on ENOSYS to a blocking wait4, which is upstream darwin's
+// behavior too - it has no usable waitid and builds wait_unimp.go.
 const (
 	sysDUP3    = 24
 	sysPIPE2   = 59
@@ -27,7 +41,8 @@ const (
 	linuxO_CLOEXEC = 0x80000
 )
 
-// Wait options.
+// Wait options. WNOHANG (1) and WUNTRACED (2) coincide; WCONTINUED is 8
+// on Linux, 0x10 on Apple.
 const (
 	linuxWNOHANG    = 1
 	linuxWUNTRACED  = 2
@@ -35,12 +50,13 @@ const (
 	appleWCONTINUED = 0x10
 )
 
-// darwinApplyFdFlags applies Linux O_CLOEXEC/O_NONBLOCK to a descriptor with
-// fcntl. (The socket SOCK_CLOEXEC/SOCK_NONBLOCK flags have the same bit
-// values, so the socket layer reuses this.) It talks to Apple fcntl directly
-// - commands and values here are already Apple's - and calls the libc
-// trampoline without the darwinCall helper, whose extra frame would push its
-// deepest callers (socketpair with flags) over the nosplit limit.
+// darwinApplyFdFlags applies Linux O_CLOEXEC/O_NONBLOCK to a descriptor
+// with fcntl. (The socket SOCK_CLOEXEC/SOCK_NONBLOCK flags have the same
+// bit values, so the socket layer reuses this.) It talks to Apple fcntl
+// directly - commands and values here are already Apple's - and calls
+// the libc trampoline without the darwinCall helper, whose extra frame
+// would push its deepest callers (socketpair with flags) over the
+// nosplit limit.
 //
 //go:nosplit
 func darwinApplyFdFlags(fd, flags uintptr) uintptr {
@@ -141,9 +157,10 @@ func darwinKill(pid, sig uintptr) (r1, r2, errno uintptr) {
 // change and syscall.WaitStatus decodes as the process expects.
 //
 // The rusage buffer goes straight to Apple wait4 and is fixed up IN
-// PLACE. struct rusage is many bytes on both systems with every field
-// at the same offset EXCEPT tv_usec in both timevals, which Apple
-// declares int32-plus-padding where Linux has int64.
+// PLACE. struct rusage is 144 bytes on both systems with every field at
+// the same offset EXCEPT tv_usec in the two timevals, which Apple
+// declares int32-plus-padding where Linux has int64. Widening those two
+// in place avoids a 144-byte local that would blow the nosplit budget.
 //
 //go:nosplit
 func darwinWait4(pid, wstatus, options, rusage uintptr) (r1, r2, errno uintptr) {
@@ -159,6 +176,7 @@ func darwinWait4(pid, wstatus, options, rusage uintptr) (r1, r2, errno uintptr) 
 	}
 	r1, r2, errno = darwinCall(darwinFns.Wait4, pid, wstatus, aopt, rusage, 0, 0)
 	if errno == 0 && rusage != 0 {
+		// ru_utime.tv_usec at offset 8, ru_stime.tv_usec at offset 24.
 		u := int64(*(*int32)(unsafe.Pointer(rusage + 8)))
 		*(*int64)(unsafe.Pointer(rusage + 8)) = u
 		s := int64(*(*int32)(unsafe.Pointer(rusage + 24)))

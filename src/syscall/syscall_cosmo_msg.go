@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -10,16 +11,31 @@ import (
 	"unsafe"
 )
 
-// Darwin-host halves of sendmsg/recvmsg.
+// Darwin-host halves of sendmsg/recvmsg. A GOOS=cosmo binary speaks the
+// Linux ABI everywhere, but on a macOS host SYS_SENDMSG and SYS_RECVMSG
+// reach a dlsym-dispatched Apple libc whose msghdr, sockaddr and
+// cmsghdr all differ. The dispatch side runs inside the _Gsyscall
+// window, where every frame is nosplit, so it re-shapes only the
+// fixed-size msghdr. Everything unbounded happens HERE, as ordinary Go
+// before and after the syscall, in the darwin branches recvmsgRaw and
+// sendmsgN take - the one funnel every caller reaches.
+//
+// So on a macOS host a direct syscall.Syscall caller's msg_name and
+// msg_control buffers cross the boundary with Apple-shaped BYTES. The
+// nil-name nil-control shape behaves identically on every host.
 
+// appleAF_INET6 is Apple's AF_INET6 value (Linux's is 10); the other
+// admitted families (AF_UNSPEC/AF_UNIX/AF_INET) coincide. Same table
+// as the sendto/recvfrom emulation's darwinSockFamilyToApple.
 const appleAF_INET6 = 30
 
 // darwinSockaddrToApple copies the Linux sockaddr at (ptr, salen) into
 // buf as an Apple sockaddr ({u8 sa_len, u8 sa_family} in place of the
 // u16 family; payloads coincide for every admitted family) and returns
-// the Apple namelen. Mirrors the emulation's darwinSockaddrOut:
-// abstract AF_UNIX names (leading NUL) are Linux-only and refused
-// EINVAL, unknown families EAFNOSUPPORT.
+// the Apple namelen. A nil/empty address passes through as 0 - e.g.
+// sendmsg on a connected socket. Mirrors the emulation's
+// darwinSockaddrOut: abstract AF_UNIX names (leading NUL) are
+// Linux-only and refused EINVAL, unknown families EAFNOSUPPORT.
 func darwinSockaddrToApple(buf *[SizeofSockaddrAny]byte, ptr unsafe.Pointer, salen int) (alen int, err error) {
 	if ptr == nil || salen == 0 {
 		return 0, nil
@@ -47,7 +63,11 @@ func darwinSockaddrToApple(buf *[SizeofSockaddrAny]byte, ptr unsafe.Pointer, sal
 	return salen, nil
 }
 
-// The payload bytes are already Linux-shaped.
+// darwinFixRecvSockaddr rewrites, in place, the Apple sockaddr recvmsg
+// just delivered into rsa back to the Linux shape: Apple's {sa_len,
+// sa_family} bytes become the u16 Linux family (AF_INET6 30 -> 10).
+// The payload bytes are already Linux-shaped. Mirrors the emulation's
+// darwinSockaddrIn.
 func darwinFixRecvSockaddr(rsa *RawSockaddrAny, namelen uint32) {
 	if rsa == nil || namelen < 2 {
 		return
@@ -60,17 +80,18 @@ func darwinFixRecvSockaddr(rsa *RawSockaddrAny, namelen uint32) {
 	*(*uint16)(unsafe.Pointer(rsa)) = fam
 }
 
-// darwinRecvmsgRaw is recvmsgRaw's macOS-host branch: the Linux body with the
-// boundary translations bolted on. The caller's oob buffer is handed to Apple
-// recvmsg directly (Apple's cmsg shape needs LESS space than Linux's for the
-// same payload, so a Linux-provisioned buffer always has room), then repacked
-// in place into Linux-shaped records by cosmo.CmsgToLinux, which invokes the
-// callbacks: the close-on-exec setter for each delivered rights fd when
-// MSG_CMSG_CLOEXEC was requested (Apple has no such flag - it is stripped
-// before the call and emulated here with fcntl, the same post-receive window
-// upstream GOOS=darwin's net layer has), and Close for each fd the larger
-// Linux shape cannot fit (MSG_CTRUNC raised, fds never leaked - the kernel's
-// own truncation hygiene).
+// darwinRecvmsgRaw is recvmsgRaw's macOS-host branch: the Linux body
+// with the boundary translations bolted on. The caller's oob buffer is
+// handed to Apple recvmsg directly (Apple's cmsg shape needs LESS
+// space than Linux's for the same payload, so a Linux-provisioned
+// buffer always has room), then repacked in place into Linux-shaped
+// records by cosmo.CmsgToLinux, which invokes the callbacks: the
+// close-on-exec setter for each delivered rights fd when
+// MSG_CMSG_CLOEXEC was requested (Apple has no such flag - it is
+// stripped before the call and emulated here with fcntl, the same
+// post-receive window upstream GOOS=darwin's net layer has), and
+// Close for each fd the larger Linux shape cannot fit (MSG_CTRUNC
+// raised, fds never leaked - the kernel's own truncation hygiene).
 func darwinRecvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
 	var msg Msghdr
 	msg.Name = (*byte)(unsafe.Pointer(rsa))
@@ -127,7 +148,7 @@ func darwinRecvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n,
 // survive, e.g. for a retry loop) into an Apple-shaped allocation by
 // cosmo.CmsgToApple. SCM_RIGHTS fd payloads copy through unchanged;
 // non-SOL_SOCKET records are skipped exactly like Linux's af_unix send
-// path, so callers cannot tell both hosts apart.
+// path, so callers cannot tell the two hosts apart.
 func darwinSendmsgN(fd int, p, oob []byte, ptr unsafe.Pointer, salen _Socklen, flags int) (n int, err error) {
 	var msg Msghdr
 	var nameBuf [SizeofSockaddrAny]byte

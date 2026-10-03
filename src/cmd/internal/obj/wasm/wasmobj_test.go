@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package wasm_test
 
@@ -12,7 +13,20 @@ import (
 )
 
 // Inter-block control flow on wasm normally round trips through the
-// dispatcher at the top of the function: store the target block to PC_B.
+// dispatcher at the top of the function: store the target block to PC_B,
+// branch to the entry loop, and let a br_table jump back in. Two shapes do
+// not need any of that.
+//
+// A jump FORWARD lands in a block the prologue has not closed yet, so a plain
+// br gets there. And a jump BACK to the start of the region the code is
+// already in is a loop, which wasm can express directly - a region can hold
+// more than one basic block because a block nothing branches to no longer
+// opens one, so an ordinary `for` loop's header and body sit in the same
+// region and its backedge is a br to a real wasm loop.
+//
+// What must keep the dispatcher is a backward jump that crosses a region
+// boundary, which is what a loop with a call in it has: the call's resume
+// point splits the loop, and the runtime has to be able to re-enter there.
 
 const forwardOnlySrc = `
 package p
@@ -134,8 +148,9 @@ func TestLoopBecomesRealLoop(t *testing.T) {
 	for _, goos := range []string{"js", "wasip1"} {
 		t.Run(goos, func(t *testing.T) {
 			listing := compileWasm(t, goos, loopSrc)
-			// One Loop is the entry point loop the dispatcher branches to; the second
-			// is the counted loop itself.
+			// One Loop is the entry point loop the dispatcher branches to; the
+			// second is the counted loop itself. Without it the backedge would
+			// be a store to PC_B and an indirect br_table jump per iteration.
 			if got := countOp(listing, "Loop"); got < 2 {
 				t.Errorf("counted loop compiled to %d Loop instructions, want at least 2"+
 					" (the entry point loop plus the loop itself)\n%s", got, listing)
@@ -148,8 +163,11 @@ func TestBackwardBranchAcrossRegionsKeepsDispatcher(t *testing.T) {
 	for _, goos := range []string{"js", "wasip1"} {
 		t.Run(goos, func(t *testing.T) {
 			listing := compileWasm(t, goos, loopWithCallSrc)
-			// The call in the body is a resume point, so the loop spans regions and
-			// its backedge targets a block that has already been closed.
+			// The call in the body is a resume point, so the loop spans two
+			// regions and its backedge targets a block that has already been
+			// closed. Losing this would mean a backward jump had been lowered as
+			// if its target were still open, which is a miscompile, not an
+			// optimization.
 			if got := countSetPCB(listing); got == 0 {
 				t.Errorf("loop with a call in it emitted no PC_B store;"+
 					" its backedge crosses a resume point and still needs the dispatcher\n%s",

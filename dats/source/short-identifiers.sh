@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# short-identifiers.sh FILE... -- refuse a name shorter than a few characters.
+# short-identifiers.sh FILE... -- refuse a name shorter than three characters.
+#
+# Reads four declaration forms: a short variable declaration, a loop or range
+# variable, a var declaration, and a method receiver. A parameter list needs a
+# parser, so it is NOT read: a wrong answer there teaches a reader to skip the
+# whole check. `_` is not a name. The .dats names the fork's own files only.
 
 set -uo pipefail
 

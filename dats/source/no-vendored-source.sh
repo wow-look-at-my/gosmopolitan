@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # no-vendored-source.sh [REPO] -- refuse copied dependency source.
+#
+# A vendor path holds a git submodule, never files this repo tracks. A
+# submodule records one commit of an upstream repository, so a bump is a
+# pointer move and a fix goes back where the code lives. Copied source
+# writes another repository down a second time, under a path this one then
+# owns, and every later merge pays for it.
+#
+# Two things are checked:
+#   1. This repo tracks no source file under a vendor tree.
+#   2. Every module named in a modules.txt sits under a gitlink.
 
 set -uo pipefail
 
@@ -16,7 +26,8 @@ fail() {
 
 gitlinks=$(git ls-files -s -- 'src/vendor' 'src/cmd/vendor' 2>/dev/null | grep '^160000 ' | cut -f2)
 
-# A tracked source file under a vendor tree is copied source by definition: a submodule's own files belong to that submodule.
+# A tracked source file under a vendor tree is copied source by definition:
+# a submodule's own files belong to that submodule, not to this repo.
 copied=$(git ls-files -- 'src/vendor/*.go' 'src/cmd/vendor/*.go' 2>/dev/null | head -5)
 if [ -n "$copied" ]; then
 	fail "these source files are tracked under a vendor tree:"$'\n'"$copied"

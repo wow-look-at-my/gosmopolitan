@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Package vendorlist answers which packages a vendor tree vendors.
 //
@@ -18,7 +19,8 @@ import (
 	"sync"
 )
 
-// lists caches one vendor tree's package set, by its directory.
+// lists caches one vendor tree's package set, by its directory. A nil
+// set means the tree has no modules.txt and makes no claim.
 var lists sync.Map
 
 // Vendors reports whether the distribution vendors the package in dir.

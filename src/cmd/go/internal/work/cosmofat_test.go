@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package work
 
@@ -97,9 +98,11 @@ func TestCosmoMergeArgsDebugMode(t *testing.T) {
 		{debug: "full", want: strip},
 		{debug: "slim", want: append(append([]string(nil), strip...), "-apedbgmode=slim")},
 		{debug: "compact", want: append(append([]string(nil), strip...), "-apedbgmode=compact")},
-		// min maps to the linker's slim transform: its extra reduction happens at compile time, not merge time.
+		// min maps to the linker's slim transform: its extra
+		// reduction happens at compile time, not merge time.
 		{debug: "min", want: append(append([]string(nil), strip...), "-apedbgmode=slim")},
-		// GOCOSMOSTRIP=0 suppresses all strip/sidecar flags; the debug mode has nothing to apply to.
+		// GOCOSMOSTRIP=0 suppresses all strip/sidecar flags; the debug
+		// mode has nothing to apply to.
 		{debug: "slim", strip: "0", want: base},
 		{debug: "min", strip: "0", want: base},
 		// An explicit user -s/-w likewise.
@@ -232,7 +235,9 @@ func TestCosmoFatSkipOutput(t *testing.T) {
 		{"directory", dir, false},
 		// Not yet created: go build is about to write a regular file.
 		{"nonexistent", filepath.Join(dir, "notyet.com"), false},
-		// The case that must skip: fattening re-reads and re-creates the target, which cannot work for a special file.
+		// The case that must skip: fattening re-reads and re-creates the
+		// target, which cannot work for a special file, so a sibling
+		// build would be wasted work.
 		{"/dev/null", os.DevNull, true},
 	}
 	for _, tt := range tests {

@@ -1,12 +1,16 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
 // Windows support for Cosmopolitan APE binaries.
+// When running on Windows, the PE stub sets iswindows = 1
+// and the runtime uses Windows API calls instead of Linux syscalls.
 
+// iswindows is set to 1 by the PE stub when running on Windows.
 // This is declared in sys_cosmo_windows_amd64.s
 var iswindows uint32
 
@@ -70,6 +74,7 @@ var (
 var windowsQPCFrequency int64
 
 // initWindows initializes Windows-specific runtime state.
+// Called early in runtime startup when iswindows == 1.
 //
 //go:nosplit
 func initWindows() {

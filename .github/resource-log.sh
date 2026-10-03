@@ -1,12 +1,25 @@
 #!/bin/sh
 # Report free disk, free memory, CPU utilisation and load every half minute.
+# A runner that dies mid-job leaves no step after it to ask, so the last line
+# printed is the only account of what the machine had left.
+#
+# On a /proc host CPU is a share of the interval that just ended, from
+# /proc/stat deltas. The first line has no interval behind it and reports a
+# dash. The core count is printed once: a load average means nothing without
+# it.
+#
+# A probe, not a check: it asserts nothing and never fails the build.
+# SIGTERM ends it at once, its sleep included. Whoever reads the suite's
+# output waits for every process holding that pipe, and an orphaned sleep
+# is one of them.
 
 nap=
 trap 'if [ -n "$nap" ]; then kill "$nap"; fi; exit 0' TERM
 
-# readcpu sets busy, idle and total from the aggregate line of /proc/stat. The
-# guest columns are left out: the kernel already counts guest time in user, so
-# adding them again would make the shares sum to more than the interval.
+# readcpu sets busy, idle and total from the aggregate line of /proc/stat.
+# The guest columns are left out: the kernel already counts guest time in
+# user, so adding them again would make the shares sum to more than the
+# interval.
 readcpu() {
 	read -r label cuser cnice csys cidle ciow cirq csirq csteal rest < /proc/stat
 	: "${cuser:=0}" "${cnice:=0}" "${csys:=0}" "${cidle:=0}"
@@ -29,7 +42,7 @@ share() {
 }
 
 # A darwin host serves the same columns from top and vm_stat. top reports the
-# share of the interval it sampled.
+# share of the interval it just sampled, so no delta arithmetic applies there.
 if [ -r /proc/stat ]; then
 	kind=proc
 	cores=$(grep -c '^cpu[0-9]' /proc/stat)
@@ -49,7 +62,8 @@ if [ "$kind" = bsd ]; then
 		spec=$(vm_stat | grep 'Pages speculative' | tr -d '.' | tr -s ' ' | cut -d ' ' -f 3)
 		free=$(((freepages + spec) * pagesize / 1048576))
 		load=$(sysctl -n vm.loadavg | tr -d '{}' | tr -s ' ' | cut -d ' ' -f 2-4)
-		# The run queue over the core count, which sysctl answers under any sandbox. top and ps are both refused.
+		# The run queue over the core count, which sysctl answers under any
+		# sandbox. top and ps are both refused under a seatbelt profile.
 		one=$(echo "$load" | cut -d ' ' -f 1)
 		busy=$(echo "$one $cores" | awk '{ printf "%d", $1 * 1000 / $2 }')
 		echo "resource ${now} root ${root} MB, workspace ${work} MB, memory ${free} MB, cpu busy $((busy / 10)).$((busy % 10))%, load ${load}"

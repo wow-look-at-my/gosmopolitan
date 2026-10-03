@@ -1,12 +1,15 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package testlog
 
 import "sync/atomic"
 
 // UnitEnv names the package a test binary holding several packages' tests
-// runs, for a copy of that binary started as a child process.
+// runs, for a copy of that binary started as a child process. UnitImplicitEnv
+// says package os added UnitEnv to the child's environment itself, so the
+// child takes both out again before its tests look at the environment.
 const (
 	UnitEnv         = "GO_TEST_UNIT"
 	UnitImplicitEnv = "GO_TEST_UNIT_IMPLICIT"
