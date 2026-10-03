@@ -1,5 +1,12 @@
 #!/bin/sh
-# Rebuilds the vendored APE loaders from their own sources and compares the result with the binaries this repo commits.
+# Rebuilds the vendored APE loaders from their own sources and compares the
+# result with the binaries this repo commits. Every APE carries those bytes
+# and hands them to a host, so a binary nobody can reproduce is a binary
+# nobody can audit.
+#
+# ZIG, LLD and STRIP name the tools. Run from the repo root. An argument
+# names another apeld directory, which is how the negative case gets a
+# corrupt tree to check without touching this one.
 set -eu
 
 ld=${1:-src/cmd/link/internal/ld/apeld}

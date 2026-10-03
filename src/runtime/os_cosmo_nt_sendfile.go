@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -7,7 +8,8 @@ package runtime
 
 import "unsafe"
 
-// ntSendfileChunk is the bounce buffer one pass copies.
+// ntSendfileChunk is the bounce buffer one pass copies. It is a local
+// array, so it also decides how much stack this call needs.
 const ntSendfileChunk = 8 << 10
 
 // ntEmuSendfile implements the Linux sendfile syscall.
@@ -70,7 +72,9 @@ func ntEmuSendfile(out, in int32, off *int64, count uintptr) (r1, r2, errno uint
 			break // end of the input file
 		}
 
-		// The output may take less than one pass read, so keep writing until the buffer is gone.
+		// The output may take less than one pass read, so keep writing
+		// until the buffer is gone. Stopping early would drop bytes
+		// that no longer exist anywhere else.
 		var sent uintptr
 		for sent < got {
 			n, _, weno := ntEmuWrite(out, unsafe.Pointer(&buf[sent]), int32(got-sent))

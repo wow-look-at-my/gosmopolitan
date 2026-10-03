@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2025 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // Typed socket option helpers, in the shapes the linux port exports.
 //
@@ -18,18 +19,30 @@ import "unsafe"
 
 const (
 	// SO_PEERCRED reads the credentials of a connected AF_UNIX peer.
+	// The macOS arm64 emulation answers it from Apple's LOCAL_PEERPID
+	// and LOCAL_PEERCRED options. Windows reports ENOPROTOOPT.
 	SO_PEERCRED = 0x11
 
-	// SO_BINDTODEVICE binds a socket to one network interface. macOS arm64 and Windows report ENOPROTOOPT.
+	// SO_BINDTODEVICE binds a socket to one network interface. macOS
+	// arm64 and Windows report ENOPROTOOPT.
 	SO_BINDTODEVICE = 0x19
 
-	// SO_PASSCRED makes a socket receive the peer credentials as a control message. macOS arm64.
+	// SO_PASSCRED makes a socket receive the peer credentials as a
+	// control message. macOS arm64 and Windows report ENOPROTOOPT.
 	SO_PASSCRED = 0x10
 
 	// SCM_CREDENTIALS carries credentials in a socket control message.
+	// A sendmsg call that carries such a record reports EOPNOTSUPP on
+	// macOS and on Windows.
 	SCM_CREDENTIALS = 0x2
 
-	// The options below report the IP header fields of a received packet, and set them on a sent one.
+	// The options below report the IP header fields of a received packet,
+	// and set them on a sent one. A Linux host answers each one. macOS
+	// arm64 and Windows report ENOPROTOOPT, because neither translation
+	// table holds an IPPROTO_IP or IPPROTO_IPV6 option of this kind.
+	//
+	// A caller that wants the ECN bits or the receiving interface must
+	// read the error. A host outside Linux does not supply either.
 	IP_RECVTOS       = 0xd
 	IP_PKTINFO       = 0x8
 	IPV6_RECVTCLASS  = 0x42
@@ -94,8 +107,9 @@ func BindToDevice(fd int, device string) (err error) {
 	return SetsockoptString(fd, SOL_SOCKET, SO_BINDTODEVICE, device)
 }
 
-// UnixCredentials encodes credentials into a socket control message for
-// sending to another process. This can be used for authentication.
+// UnixCredentials encodes credentials into a socket control message
+// for sending to another process. This can be used for
+// authentication.
 func UnixCredentials(ucred *Ucred) []byte {
 	b := make([]byte, CmsgSpace(SizeofUcred))
 	h := (*Cmsghdr)(unsafe.Pointer(&b[0]))

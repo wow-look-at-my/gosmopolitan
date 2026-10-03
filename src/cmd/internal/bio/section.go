@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package bio
 
@@ -11,6 +12,9 @@ import (
 )
 
 // OpenSection returns a Reader over the size bytes of f starting at offset.
+// Offsets the Reader reports and seeks to stay absolute in f, so a caller
+// that maps the file by them maps the right bytes; reads end at the
+// section's end.
 func OpenSection(f *os.File, offset, size int64) *Reader {
 	section := io.NewSectionReader(f, offset, size)
 	return &Reader{f: f, rs: section, base: offset, Reader: newBufio(section)}

@@ -1,12 +1,19 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
 package runtime
 
-// The HWCAP bits an arm64 program reads out of the auxiliary vector to learn
-// what the CPU can do.
+// The HWCAP bits an arm64 program reads out of the auxiliary vector to
+// learn what the CPU can do. Linux publishes them. macOS publishes the
+// same answers through sysctl, and the APE answers in Linux vocabulary,
+// so darwinHWCAP translates.
+//
+// hwcap_CPUID is the one bit here that is never SET, only cleared. It
+// advertises that the kernel emulates the ID_AA64ISAR* registers, and a
+// reader that believes it executes MRS, which macOS answers with SIGILL.
 const (
 	hwcap_FP      = 1 << 0
 	hwcap_ASIMD   = 1 << 1
@@ -22,6 +29,9 @@ const (
 	hwcap_DIT     = 1 << 24
 )
 
+// The keys Apple documents for these features. macOS 12 moved them under
+// hw.optional.arm; the older spellings still answer, and internal/cpu's
+// own darwin port reads the same set.
 var (
 	sysctlArmv81Atomics = []byte("hw.optional.armv8_1_atomics\x00")
 	sysctlArmv8Crc32    = []byte("hw.optional.armv8_crc32\x00")
@@ -30,12 +40,22 @@ var (
 	sysctlArmFeatDit    = []byte("hw.optional.arm.FEAT_DIT\x00")
 )
 
-// The auxv fixAuxv hands out.
+// The auxv fixAuxv hands out. It holds whatever the host passed, plus
+// the AT_HWCAP pair, so a reader that walks it sees both.
 var darwinAuxvBuf [64]uintptr
 
-// fixAuxv makes a macOS host's AT_HWCAP safe to believe, so internal/cpu enables the arm64 AES/SHA/CRC32 assembly there. The APE loader usually passes a pair already, and it sets hwcap_CPUID - a claim that the kernel emulates the ID_AA64ISAR* registers, which Linux does and XNU does not. internal/cpu answers that claim with an MRS for the MIDR. So the loader's pair is taken over with that one bit cleared, and only a host passing no pair gets the sysctl value.
+// fixAuxv makes a macOS host's AT_HWCAP safe to believe, so internal/cpu
+// enables the arm64 AES/SHA/CRC32 assembly there. The APE loader
+// usually passes a pair already, and it sets hwcap_CPUID
+// - a claim that the kernel emulates the ID_AA64ISAR* registers, which
+// Linux does and XNU does not. internal/cpu answers that claim with an
+// MRS for the MIDR. So the loader's pair is taken over with that one
+// bit cleared, and only a host passing no pair gets the sysctl value.
 //
-// This does not save golang.org/x/sys/cpu from its own SIGILL: it reads /proc/self/auxv, never this vector, so syscall's procauxv_cosmo.go is the half that keeps it off the MRS, over whatever this settled on.
+// This does not save golang.org/x/sys/cpu from its own SIGILL: it
+// reads /proc/self/auxv, never this vector, so syscall's
+// procauxv_cosmo.go is the half that keeps it off the MRS, over
+// whatever this settled on.
 func fixAuxv() {
 	if !isdarwin() {
 		return
@@ -70,7 +90,8 @@ func fixAuxv() {
 
 // darwinHWCAP reports the host CPU's features as an AT_HWCAP value.
 func darwinHWCAP() uintptr {
-	// Every Apple Silicon part has these.
+	// Every Apple Silicon part has these, and macOS 11 publishes no
+	// sysctl to ask. internal/cpu's darwin port assumes them too.
 	hwcap := uintptr(hwcap_FP | hwcap_ASIMD | hwcap_AES | hwcap_PMULL | hwcap_SHA1 | hwcap_SHA2)
 	if cosmoDarwinSysctlEnabled(&sysctlArmv81Atomics[0]) {
 		hwcap |= hwcap_ATOMICS

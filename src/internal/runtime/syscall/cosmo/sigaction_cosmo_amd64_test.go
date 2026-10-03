@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -12,7 +13,7 @@ import (
 
 // sigA2LTab is indexed from sigactionTramp's assembly, so it is a
 // second copy of the correspondence darwinXlatSignalA2L holds. This
-// pins both together.
+// pins the two together.
 func TestSigA2LTab(t *testing.T) {
 	tab := cosmo.SigA2LTab
 	for a := uintptr(0); a < uintptr(len(tab)); a++ {
@@ -46,8 +47,8 @@ func TestXnuKsigactionLayout(t *testing.T) {
 	}
 }
 
-// Apple's user64_sigaction, the action __sigaction copies out (XNU kern_sig.c
-// sigaction_kern_to_user64): no sa_tramp, several bytes.
+// Apple's user64_sigaction, the OLD action __sigaction copies out
+// (XNU kern_sig.c sigaction_kern_to_user64): no sa_tramp, 16 bytes.
 func TestXnuSigactionLayout(t *testing.T) {
 	size, handler, mask, flags := cosmo.XnuSigactionLayout()
 	for _, f := range []struct {

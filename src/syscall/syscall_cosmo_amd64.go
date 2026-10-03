@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -104,13 +105,21 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
-			// A leading NUL means the abstract namespace, which only Linux has.
+			// A leading NUL means the abstract namespace, which only
+			// Linux has. There the leading NUL becomes '@' whatever
+			// follows it, so an autobound socket reads as "@": that is
+			// the convention every Linux program uses, and what the
+			// host's own ports report. A macOS or Windows host has no
+			// abstract namespace, so the same bytes are an unnamed
+			// socket and the name stays empty.
 			if !cosmoHostIsLinux() {
 				return sa, nil
 			}
 			pp.Path[0] = '@'
 		}
-		// Assume the path ends at the first NUL.
+		// Assume the path ends at the first NUL. Not the full Linux
+		// abstract-name semantics (those are length-delimited binary
+		// blobs), but the convention everything uses.
 		n := 0
 		for n < len(pp.Path) && pp.Path[n] != 0 {
 			n++
@@ -140,7 +149,9 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 
 func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
 	if cosmo.Darwin() {
-		// macOS host: msghdr/sockaddr/cmsg layouts differ.
+		// macOS host: msghdr/sockaddr/cmsg layouts differ; the darwin
+		// branch (syscall_cosmo_msg.go) translates at this boundary,
+		// where allocation is legal - the nosplit dispatch side cannot.
 		return darwinRecvmsgRaw(fd, p, oob, flags, rsa)
 	}
 	var msg Msghdr

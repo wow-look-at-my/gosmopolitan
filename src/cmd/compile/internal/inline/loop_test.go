@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package inline
 
@@ -10,12 +11,18 @@ import (
 	"cmd/compile/internal/ir"
 )
 
-// base.Debug is one package variable, and the tests here each rewrite it.
+// base.Debug is one package variable, and the three tests here each rewrite
+// it. Top-level tests are parallel by default in this fork, so without the
+// barrier they read each other's flags: this one setting LoopInline back to 0
+// below is what turned every loopDiscount case in TestLoopTunables into 0.
 func TestLoopSiteMaxCost(t *testing.T) {
 	t.Serial()
 	defer func(saved base.DebugFlags) { base.Debug = saved }(base.Debug)
 	base.Debug.LoopInline = 1
 
+	// Ordinary caller: the 80-node limit doubles per level of loop
+	// nesting, up to the 320 ceiling, and stops growing past the
+	// maximum depth.
 	for _, tc := range []struct {
 		limit, ceiling, depth, want int32
 	}{
@@ -26,7 +33,8 @@ func TestLoopSiteMaxCost(t *testing.T) {
 		{80, 320, 9, 320}, // clamped to inlineLoopMaxDepth
 		{80, 320, -1, 80}, // not in a loop
 
-		// Big caller: starts at the reduced 20-node limit and is held under the ordinary budget however deep the nesting.
+		// Big caller: starts at the reduced 20-node limit and is held
+		// under the ordinary budget however deep the nesting.
 		{20, 80, 0, 20},
 		{20, 80, 1, 40},
 		{20, 80, 2, 80},
@@ -41,7 +49,8 @@ func TestLoopSiteMaxCost(t *testing.T) {
 		}
 	}
 
-	// Disabling loop-aware inlining pins every call site to the unboosted limit.
+	// Disabling loop-aware inlining pins every call site to the
+	// unboosted limit.
 	base.Debug.LoopInline = 0
 	for depth := int32(0); depth < 4; depth++ {
 		if got := loopSiteMaxCost(80, 320, depth); got != 80 {
@@ -64,7 +73,8 @@ func TestLoopTunables(t *testing.T) {
 	if got := loopCostDivisor(); got != 5 {
 		t.Errorf("loopCostDivisor() = %d, want 5", got)
 	}
-	// A negative value means zero, which turns the discount off without disturbing the other mechanisms.
+	// A negative value means zero, which turns the discount off without
+	// disturbing the other two mechanisms.
 	base.Debug.LoopInlineDiv = -1
 	if got := loopCostDivisor(); got != 0 {
 		t.Errorf("loopCostDivisor() = %d, want 0", got)
@@ -74,7 +84,8 @@ func TestLoopTunables(t *testing.T) {
 		t.Errorf("loopDiscount() with divisor off = %d, want 0", got)
 	}
 
-	// The discount is the loop-nested cost divided by the divisor, capped by the credit.
+	// The discount is the loop-nested cost divided by the divisor, capped
+	// by the credit.
 	base.Debug.LoopInlineDiv = 2
 	base.Debug.LoopInlineCredit = 40
 	for _, tc := range []struct{ loopCost, want int32 }{

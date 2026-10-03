@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -7,7 +8,10 @@ package syscall
 
 import "unsafe"
 
-// The arm64 members of the time and clock group.
+// The arm64 members of the time and clock group. The arm64 table has no
+// SYS_PAUSE and no SYS_SELECT, so the arm64 linux port builds Pause on
+// SYS_PPOLL and Select on SYS_PSELECT6. This file copies that shape.
+// The arm64 table also has no SYS_USTAT, so Ustat stays amd64 only.
 
 // Fstatat is exported on arm64 only. The amd64 port keeps the same call
 // unexported and reaches it through Stat and Lstat.

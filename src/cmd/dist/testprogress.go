@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package main
 
@@ -13,13 +14,20 @@ import (
 	"time"
 )
 
-// fallbackWidth is the line width to use when the terminal does not report one.
+// fallbackWidth is the line width to use when the terminal does not report
+// one. A log file and a CI runner both reach this.
 const fallbackWidth = 120
 
 // progressPeriod is how often a progress line appears.
 const progressPeriod = time.Second
 
-// testProgress writes one line each second in which a test finished.
+// testProgress writes one line each second in which a test finished. The line
+// carries how far the run has come and which tests ended during that second,
+// slowest first.
+//
+// A second that finished nothing writes no line, because the counter alone
+// names no test. This names a slow test while the run is still going, which is
+// what a reader wanted from verbose output.
 type testProgress struct {
 	dst     io.Writer
 	timings *testTimings
@@ -66,7 +74,8 @@ func (pro *testProgress) finish() {
 	pro.wait.Wait()
 }
 
-// markDone records that a named dist test finished.
+// markDone records that a named dist test finished. A dist test can hold
+// several commands, so the name repeats and the map keeps the count right.
 func (pro *testProgress) markDone(name string) {
 	pro.lock.Lock()
 	defer pro.lock.Unlock()
@@ -80,7 +89,8 @@ func (pro *testProgress) counts() (done, total int) {
 }
 
 func (pro *testProgress) emit() {
-	// The drain is what says whether this second finished anything, and it empties the buffer on the way out.
+	// The drain is what says whether this second finished anything, and it
+	// empties the buffer on the way out, so a quiet tick passes nothing on.
 	recent := pro.timings.drainRecent()
 	if len(recent) == 0 {
 		return
