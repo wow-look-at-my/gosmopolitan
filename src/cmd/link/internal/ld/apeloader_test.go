@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"debug/elf"
 	"debug/macho"
+	"encoding/base64"
 	"encoding/hex"
 	"testing"
 )
@@ -51,6 +52,8 @@ func TestApeLoaderBinariesMatchTheirPins(t *testing.T) {
 		if got, want := hex.EncodeToString(sum[:]), apeLoaderSums[name]; got != want {
 			t.Errorf("%s is %s, pinned at %s: build it with zig 0.16.0 and LLVM 18.1.8, or update the pin with a change to its source",
 				name, got, want)
+			// The bytes this host built, so a diff against the pinned build can name the difference.
+			t.Logf("%s as built here, base64: %s", name, base64.StdEncoding.EncodeToString(bin))
 		}
 	}
 }
