@@ -323,7 +323,7 @@ Cosmopolitan Libc v3.5.8 (c.) implements a thread information block that is many
 
 Even though APE programs always use the System V ABI, there arises the occasional need to interface with foreign functions, e.g. WIN32. The `__attribute__((__ms_abi__))` annotation introduced by GCC v6 is used for this purpose.
 
-The ability to change a function's ABI on a case-by-case basis is surprisingly enough supported by GCC, Clang, NVCC, and even the AMD HIP. All of these compilers support both the System V ABI and the Microsoft x64 ABI.
+The ability to change a function's ABI on a case-by-case basis is surprisingly enough supported by GCC and Clang. NVCC and even the AMD HIP support it too. All of these compilers support both the System V ABI and the Microsoft x64 ABI.
 
 APE binaries will favor the Microsoft ABI even when running on UNIX OSes for certain dlopen() use-cases. For example, if we control the code to a CUDA module, which we compile on each OS separately from our main APE binary, then. This is because in practice the OS-specific module may need to be compiled by MSVC, where MS ABI is the *only* ABI, which forces. Thankfully, all UNIX compilers support doing it on a case-by-case basis.
 

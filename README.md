@@ -79,7 +79,7 @@ With `export PATH="$GOROOT/misc/cosmo:$PATH"`, a plain `GOOS=cosmo go test <pkg>
 
 This is an experimental project. Use at your own risk.
 
-Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (plus ARM64 Linux via qemu during development). Windows execution is cosmo-native (NT personality in the runtime. the embedded windows/amd64 PE payload is gone). Windows-latest CI runs the full runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals, async preemption, os/exec - against binaries built on all platforms (see.
+Execution is exercised in CI on x86-64 Linux, ARM64 macOS, and x86-64 Windows (plus ARM64 Linux via qemu during development). Windows execution is cosmo-native (NT personality in the runtime. the embedded windows/amd64 PE payload is gone). Windows-latest CI runs the full runtimeprobe gauntlet - file I/O, dirents, TCP/UDP/unix sockets, signals, async preemption, os/exec. It runs against binaries built on all platforms (see.
 
 ## Related Projects
 

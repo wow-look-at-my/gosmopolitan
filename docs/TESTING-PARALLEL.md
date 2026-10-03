@@ -30,7 +30,7 @@ Fork does NOT serialize. The child allows parallelism like any other run, so sub
 
 Mechanics:
 
-- The child re-runs that one test via `-test.run`, anchored per slash-separated name element, so a subtest that calls Fork gets a child running exactly.
+- The child re-runs that one test via `-test.run`, anchored per slash-separated name element. As a result, a subtest that calls Fork gets a child running exactly.
 - The child carries the marker environment variable `GO_TEST_FORK_TARGET`, naming the test it was started for. The marker names ONE test, not the process: the target and every test it runs under stay in place, and a SUBTEST of the. That subtest shares the target's child with its siblings. It does not yet have the process Fork promises. It is also what lets `t.Setenv` and `t.Chdir` fork implicitly: inside the child they change the process in place rather than starting a grandchild.
 - Starting a child REPLACES the marker rather than appending it. `os.Getenv` answers with the first entry. An appended one is never read. A grandchild can take its parent's target for its own.
 - A test waiting for its child releases the barrier for that time, and takes it again afterward. It does no work here while it waits. A hold it keeps blocks every `t.Serial()` in the binary.

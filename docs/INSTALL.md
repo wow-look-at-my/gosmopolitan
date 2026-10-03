@@ -1,6 +1,6 @@
 # Toolchain Distribution
 
-Every push whose build+test jobs are green publishes installable toolchain tarballs to buildhost (pazer.build) as project `gosmopolitan`, for **linux/amd64, darwin/arm64 and windows/amd64**.
+Every push whose build+test jobs are green publishes installable toolchain tarballs to buildhost (pazer.build) as project `gosmopolitan`. The targets are **linux/amd64, darwin/arm64 and windows/amd64**.
 
 ```bash
 curl -fL --compressed "https://dl.pazer.build/gosmopolitan?branch=master&os=linux&arch=amd64" | tar -xz
