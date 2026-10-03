@@ -23,7 +23,9 @@ _testmain.go
 /bin/
 /build.out
 /doc/articles/wiki/*.bin
+/go
 /goinstall.log
+/link
 /last-change
 /misc/cgo/life/run.out
 /misc/cgo/stdio/run.out
