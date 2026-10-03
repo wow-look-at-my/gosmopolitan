@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -8,13 +9,22 @@ package runtime
 import "unsafe"
 
 // File-metadata syscalls on an NT host: utimensat, truncate, fchdir and
-// linkat.
+// linkat. Each backs an os function programs reach constantly -
+// os.Chtimes, os.Truncate, os.File.Chdir, os.Link - and each was ENOSYS
+// here until this wave. See os_cosmo_nt_sys.go for the ntEmu*
+// conventions this file follows.
+//
+// Every Win32 entry these need is resolved optionally: a missing export
+// leaves the pointer zero and the syscall answers ENOSYS, rather than
+// bricking the boot over a call most programs never make.
 
 const (
-	// FILE_WRITE_ATTRIBUTES: enough to set timestamps.
+	// FILE_WRITE_ATTRIBUTES: enough to set timestamps, and it does not
+	// conflict with another writer the way GENERIC_WRITE does.
 	_NT_FILE_WRITE_ATTRIBUTES = 0x0100
 
-	// GetFinalPathNameByHandleW's VOLUME_NAME_DOS form, which returns the path behind a \\?\ prefix.
+	// GetFinalPathNameByHandleW's VOLUME_NAME_DOS form, which returns
+	// the path behind a \\?\ prefix.
 	_NT_VOLUME_NAME_DOS = 0x0
 
 	// AT_SYMLINK_NOFOLLOW as the syscall package passes it.
@@ -24,9 +34,12 @@ const (
 	_NT_UTIME_NOW  = 0x3fffffff
 	_NT_UTIME_OMIT = 0x3ffffffe
 
+	// 1601-01-01 to 1970-01-01 in 100ns units, the FILETIME epoch shift.
 	_NT_FILETIME_EPOCH_DELTA = 116444736000000000
 )
 
+// ntFiletime is a FILETIME: 100ns ticks since 1601-01-01, which Win32
+// passes as two DWORDs in one 64-bit slot.
 type ntFiletime struct {
 	lo uint32
 	hi uint32
@@ -86,7 +99,9 @@ func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags i
 		return ntFail3(ntErrno(werr))
 	}
 
-	// aptr and mptr stay unsafe.Pointer until the call expression: atime and mtime live on this stack.
+	// aptr and mptr stay unsafe.Pointer until the call expression: atime
+	// and mtime live on this stack, and a stack copy adjusts only typed
+	// pointers, never a uintptr.
 	var atime, mtime ntFiletime
 	var aptr, mptr unsafe.Pointer
 	set := func(ts ntLinuxTimespec, dst *ntFiletime) (unsafe.Pointer, uintptr) {
@@ -125,7 +140,8 @@ func ntEmuUtimensat(dirfd int32, cpath *byte, times *[2]ntLinuxTimespec, flags i
 		}
 	}
 
-	// The creation time (first pointer) stays NULL: Linux utimensat has no such stamp to carry.
+	// The creation time (first pointer) stays NULL: Linux utimensat has
+	// no such stamp to carry, and stat reports it as ctime.
 	r, werr2 := ntcallE(ntSetFileTimeFn, h, 0, uintptr(aptr), uintptr(mptr), 0, 0, 0)
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 	if r == 0 {
@@ -181,7 +197,8 @@ func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 		return nil, ntErrno(werr)
 	}
 	if n >= uintptr(len(buf)) {
-		// A too-small buffer returns the required size without setting the last error, so werr is stale here.
+		// A too-small buffer returns the required size without
+		// setting the last error, so werr is stale here.
 		return nil, ntENAMETOOLONG
 	}
 	p := buf[:n]
@@ -189,12 +206,14 @@ func ntHandlePathW(h uintptr) ([]uint16, uintptr) {
 		if p[5] == ':' {
 			p = p[4:]
 		} else if len(p) > 8 && p[4] == 'U' && p[5] == 'N' && p[6] == 'C' && p[7] == '\\' {
-			// \\?\UNC\server\share -> \\server\share: keep one of both leading backslashes and drop "?\UNC\".
+			// \\?\UNC\server\share -> \\server\share: keep one of the
+			// two leading backslashes and drop "?\UNC\".
 			p = p[6:]
 			p[0] = '\\'
 		}
 	}
-	// SetCurrentDirectoryW needs a NUL-terminated string, and the slice above stops at the length the call reported.
+	// SetCurrentDirectoryW needs a NUL-terminated string, and the slice
+	// above stops at the length the call reported.
 	out := make([]uint16, len(p)+1)
 	copy(out, p)
 	return out, 0
@@ -223,14 +242,15 @@ func ntEmuFchdir(fd int32) (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// ntEmuLinkat creates a hard link. CreateHardLinkW takes the new name first,
-// the reverse of linkat.
+// ntEmuLinkat creates a hard link. CreateHardLinkW takes the new name
+// first, the reverse of linkat.
 //
-// CreateHardLinkW links the name it is given, so a symlink as oldpath gets a
-// second name for the link itself, which is what linkat does without
-// AT_SYMLINK_FOLLOW; the flag is accepted and the link still names the
-// symlink. Hard links need both paths on one NTFS volume; CreateHardLinkW
-// reports the cross-volume case itself, and ntErrno maps it to EXDEV.
+// CreateHardLinkW links the name it is given, so a symlink as oldpath
+// gets a second name for the link itself, which is what linkat does
+// without AT_SYMLINK_FOLLOW; the flag is accepted and the link still
+// names the symlink. Hard links need both paths on one NTFS volume;
+// CreateHardLinkW reports the cross-volume case itself, and ntErrno
+// maps it to EXDEV.
 func ntEmuLinkat(olddirfd int32, oldpath *byte, newdirfd int32, newpath *byte, flags int32) (r1, r2, errno uintptr) {
 	if ntCreateHardLinkWFn == 0 {
 		return ntFail3(ntENOSYS)

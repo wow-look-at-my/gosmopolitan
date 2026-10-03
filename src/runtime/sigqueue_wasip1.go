@@ -1,7 +1,24 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 // This file implements runtime support for signal handling on wasip1.
+//
+// WASI preview 1 has no mechanism for delivering signals to a running
+// module: _NSIG is 0, initsig installs no handlers, and no host API
+// exists that could raise a signal asynchronously. The generic sigqueue
+// implementation would make the os/signal receiver goroutine block in
+// notetsleepg on a note that can never be woken, and on wasip1 notes
+// can only busy-wait (see notetsleepg in lock_wasip1.go): a single
+// signal.Notify call would spin at 100% CPU for the life of the
+// process and, by keeping a goroutine permanently runnable, would also
+// disable deadlock detection for the whole program.
+//
+// Instead, signal_recv parks the receiver goroutine forever. The
+// goroutine stays in _Gwaiting, so it costs nothing while the
+// scheduler idles in poll_oneoff, and checkdead still reports
+// "all goroutines are asleep - deadlock!" for genuinely deadlocked
+// programs.
 
 //go:build wasip1
 
@@ -21,6 +38,7 @@ func signal_recv() uint32 {
 }
 
 // signalWaitUntilIdle waits until the signal delivery mechanism is idle.
+// No signal is ever delivered on wasip1, so delivery is always idle.
 //
 //go:linkname signalWaitUntilIdle os/signal.signalWaitUntilIdle
 func signalWaitUntilIdle() {

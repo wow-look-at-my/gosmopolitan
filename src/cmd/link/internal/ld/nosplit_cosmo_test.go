@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package ld
 
@@ -38,7 +39,7 @@ func TestAPECosmoNosplitBudget(t *testing.T) {
 // darwin syscall-emulation spine (syscall6SlowDarwin and the darwin*
 // helpers), which is the deepest nosplit chain a cosmo binary links.
 // Under a single stack guard unit the arm64 link fails with "nosplit
-// stack over byte limit"; any module that imports x/sys/unix hits
+// stack over 792 byte limit"; any module that imports x/sys/unix hits
 // it, since cosmo satisfies the linux build tag.
 func TestAPECosmoNosplitABI0SyscallChain(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
@@ -96,7 +97,8 @@ TEXT ·RawSyscall(SB),NOSPLIT,$0-56
 	JMP	syscall·RawSyscall(SB)
 `)
 
-	// The fat build links both architectures; arm64 has the deeper frames and is where the budget overflowed.
+	// The fat build links both architectures; arm64 has the deeper
+	// frames and is where the budget overflowed.
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", filepath.Join(dir, "probe.com"), ".")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOOS=cosmo", "GOCOSMOFAT=", "GOCOSMOSTRIP=", "GOCOSMODEBUG=", "GOCOSMOPLATFORMS=")

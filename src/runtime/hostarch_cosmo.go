@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -14,8 +15,17 @@ const (
 	_NT_IMAGE_FILE_MACHINE_I386  = 0x014c
 )
 
-// cosmoHostArch reports the machine this process is running on, which is not
-// always the machine the payload was built for.
+// cosmoHostArch reports the machine this process is running on, which is
+// not always the machine the payload was built for. It answers "" when
+// the host cannot be asked, and the caller then keeps the payload's own
+// architecture.
+//
+// No host is probed. The boot path picks the payload matching the
+// machine, and the one case where it would not - an amd64 payload under
+// WoA emulation - fails to boot at all, so nothing reaches here.
+//
+// This runs in osinit, ahead of the NT layer's std handles, where a
+// wrong call is a throw that prints nowhere and exits 2.
 func cosmoHostArch() string {
 	return ""
 }

@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -10,8 +11,13 @@ import (
 	"unsafe"
 )
 
-// statfs, fstatfs and uname each fill a struct whose shape belongs to the
-// host.
+// statfs, fstatfs and uname each fill a struct whose shape belongs to
+// the host. Apple's are far bigger than the Linux ones this package
+// exposes - struct statfs is 2168 bytes against 120, and struct utsname
+// 1280 against 390 - and too big to build inside the nosplit syscall
+// emulation. So the Apple-layout buffer is allocated in this package,
+// where allocation is legal, and converted on the way back. A Linux host
+// takes the generated wrapper unchanged.
 
 func Uname(buf *Utsname) (err error) {
 	if cosmo.Darwin() {
@@ -20,11 +26,19 @@ func Uname(buf *Utsname) (err error) {
 	return uname(buf)
 }
 
-// darwinStatfsSize is the size of Apple's struct statfs.
+// darwinStatfsSize is the size of Apple's struct statfs. Both emulations
+// refuse a buffer smaller than this - arm64 in Go, amd64 with a compare
+// ahead of the raw XNU call - so a statfs that reaches either of them
+// with a Linux Statfs_t is refused instead of overrun.
 const darwinStatfsSize = unsafe.Sizeof(cosmo.DarwinStatfs{})
 
 // darwinLinuxStatfs reports whether a Syscall or Syscall6 is a statfs or
-// fstatfs made with a Linux Statfs_t.
+// fstatfs made with a Linux Statfs_t, the shape every caller of the raw
+// syscall uses: this package's own Statfs and Fstatfs, and
+// golang.org/x/sys/unix, which issues Syscall(SYS_STATFS, path, buf, 0)
+// itself. The Linux syscall takes two arguments, so a3 is zero there.
+// darwinStatfsInto passes the Apple buffer's size in a3, which is how its
+// own call gets through to the emulation.
 //
 //go:nosplit
 func darwinLinuxStatfs(trap, a3 uintptr) bool {
@@ -32,8 +46,15 @@ func darwinLinuxStatfs(trap, a3 uintptr) bool {
 }
 
 // darwinStatfsLinux serves a statfs or fstatfs for a Linux Statfs_t on a
-// macOS host. Syscall and Syscall6 call it before entersyscall, where the
-// Apple buffer can still be allocated.
+// macOS host. Syscall and Syscall6 call it before entersyscall, where
+// the Apple buffer can still be allocated.
+//
+// The caller's buffer and path may live on the caller's stack, and
+// darwinStatfsInto can grow that stack. So both are turned into pointers
+// here, in a nosplit function, before anything can move them: the stack
+// copier adjusts a pointer and leaves a uintptr pointing at the old copy.
+// An fstatfs descriptor stays a uintptr, because a small integer in a
+// pointer slot is an invalid pointer to the stack copier.
 //
 //go:nosplit
 func darwinStatfsLinux(trap, a1, a2 uintptr) (r1, r2 uintptr, err Errno) {
@@ -107,13 +128,17 @@ func darwinMntFlagsToLinux(f uint32) int64 {
 
 // darwinStatfsToLinux fills a Linux-layout Statfs_t from an Apple one.
 //
-// Linux fields have no Apple source. Type keeps Apple's own
+// Two Linux fields have no Apple source. Type keeps Apple's own
 // filesystem-type number rather than a Linux magic, the same choice
-// Stat_t.Dev makes for device numbers.
+// Stat_t.Dev makes for device numbers. Namelen stays zero: Apple's
+// statfs has no maximum-name-length field, and a guessed 255 would be a
+// number this code never measured.
 func darwinStatfsToLinux(dst *Statfs_t, src *cosmo.DarwinStatfs) {
 	*dst = Statfs_t{}
 	dst.Type = int64(src.Type)
-	// Apple's f_bsize is the filesystem's fundamental block size, which is what Linux reports in both Bsize and Frsize.
+	// Apple's f_bsize is the filesystem's fundamental block size, which
+	// is what Linux reports in both Bsize and Frsize. Its f_iosize (the
+	// optimal transfer size) has no Linux statfs counterpart.
 	dst.Bsize = int64(src.Bsize)
 	dst.Frsize = int64(src.Bsize)
 	dst.Blocks = src.Blocks
@@ -125,8 +150,9 @@ func darwinStatfsToLinux(dst *Statfs_t, src *cosmo.DarwinStatfs) {
 	dst.Flags = darwinMntFlagsToLinux(src.Flags)
 }
 
-// darwinUtsField copies one NUL-terminated Apple utsname field into a Linux
-// one.
+// darwinUtsField copies one NUL-terminated Apple utsname field into a
+// Linux one. Apple gives each field 256 bytes and Linux 65, so a longer
+// value is truncated with its terminator kept.
 func darwinUtsField(dst *[65]byte, src []byte) {
 	n := 0
 	for n < len(src) && src[n] != 0 && n < len(dst)-1 {

@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package gendep
 
@@ -17,7 +18,7 @@ import (
 
 // sandboxArgv wraps a generate command in the host's sandbox.
 //
-// writable is the directory the command may change. Everything else it can
+// writable is the one directory the command may change. Everything else it can
 // read stays read-only, and the caches a go command must write are named
 // explicitly. A host with no backend at all is the only host that runs a
 // directive unconfined, and it says so.
@@ -47,14 +48,17 @@ func hostSandboxOS() string {
 	return runtime.GOOS
 }
 
-// sandboxUnavailableError says the host cannot confine a generator at all.
+// sandboxUnavailableError says the host cannot confine a generator at all. It
+// is a fact about this machine, not about the module being built, so a caller
+// must neither record it against that module nor build past it.
 type sandboxUnavailableError struct{ err error }
 
 func (fail *sandboxUnavailableError) Error() string { return fail.err.Error() }
 func (fail *sandboxUnavailableError) Unwrap() error { return fail.err }
 
 // sandboxUnavailable reports whether err says the host cannot confine a
-// generator.
+// generator. A caller asks before it kills the build over a module, and before
+// it records a failure the module did not cause.
 func sandboxUnavailable(err error) bool {
 	var unavailable *sandboxUnavailableError
 	return errors.As(err, &unavailable)
@@ -93,14 +97,17 @@ func seatbeltArgv(writable string, argv []string) ([]string, error) {
 	}
 	var b strings.Builder
 	b.WriteString("(version 1)(allow default)(deny file-write*)")
-	// A device write is not a file write. /dev/null in particular: a shell redirects to it constantly.
+	// A device write is not a file write. /dev/null in particular: a shell
+	// redirects to it constantly, and an APE's own bootstrap header does.
 	b.WriteString(`(allow file-write-data (subpath "/dev"))`)
 	dirs := append([]string{writable, os.TempDir()}, writableCaches()...)
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o777); err != nil {
 			return nil, err
 		}
-		// Seatbelt matches the REAL path.
+		// Seatbelt matches the REAL path. On darwin os.TempDir() is
+		// /var/folders/..., a symlink to /private/var/folders/..., so a rule
+		// written from the unresolved name matches nothing at all.
 		real, err := filepath.EvalSymlinks(dir)
 		if err != nil {
 			real = dir
@@ -114,7 +121,9 @@ func seatbeltArgv(writable string, argv []string) ([]string, error) {
 // work: the build cache and the module cache the generator's own dependencies
 // land in.
 func writableCaches() []string {
-	// An APE stages a runnable copy of itself before it can exec, and the go command being run here is one.
+	// An APE stages a runnable copy of itself before it can exec, and the go
+	// command being run here is one. Its directory is not os.TempDir(): it is
+	// /tmp unless APE_RUNDIR names another.
 	apeRunDir := os.Getenv("APE_RUNDIR")
 	if apeRunDir == "" {
 		apeRunDir = "/tmp"
