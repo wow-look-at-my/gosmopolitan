@@ -1234,7 +1234,8 @@ func hostobjs(ctxt *Link) {
 
 	for i := 0; i < len(hostobj); i++ {
 		h = &hostobj[i]
-		f, err := bio.Open(h.file)
+		// A self: archive is an entry of this binary; its offsets are absolute in it.
+		f, err := bio.OpenAny(h.file)
 		if err != nil {
 			Exitf("cannot reopen %s: %v", h.pn, err)
 		}
@@ -1323,14 +1324,13 @@ func (ctxt *Link) hostobjCopy() (paths []string) {
 				<-sema
 				wg.Done()
 			}()
-			f, err := os.Open(h.file)
+			// A self: archive is an entry of this binary; its offsets are absolute in it.
+			f, err := bio.OpenAny(h.file)
 			if err != nil {
 				Exitf("cannot reopen %s: %v", h.pn, err)
 			}
 			defer f.Close()
-			if _, err := f.Seek(h.off, 0); err != nil {
-				Exitf("cannot seek %s: %v", h.pn, err)
-			}
+			f.MustSeek(h.off, 0)
 
 			w, err := os.Create(dst)
 			if err != nil {

@@ -1,21 +1,19 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
 // The NT file-descriptor table.
 //
-// Unix code deals in small integer fds with lowest-free allocation.
-// Win32 deals in HANDLEs. This side table maps one to the other for
-// everything the syscall emulation opens.
+// Unix code deals in small integer fds with lowest-free allocation. Win32
+// deals in HANDLEs. This side table maps one to the other for everything the
+// syscall emulation opens.
 //
-// ntFDLock guards slot claim, release, lookup and state updates, and
-// nothing allocates while it is held. A lookup returns a COPY, so an
-// operation racing a concurrent close of the same fd sees either the
-// old handle - the close wins the CloseHandle and the operation fails
-// as on Linux - or EBADF. That is the use-after-close semantics unix
-// code already lives with.
+// ntFDLock guards slot claim, release, lookup and state updates, and nothing
+// allocates while it is held. A lookup returns a COPY, so an operation racing
+// a concurrent close of the same fd sees either the handle - the close wins
+// the CloseHandle and the operation fails as on Linux - or EBADF. That is the
+// use-after-close semantics unix code already lives with.
 
 package runtime
 
@@ -24,13 +22,7 @@ import (
 	"unsafe"
 )
 
-// The table is a fixed ntFDMax slots, a few KiB of BSS, so no lookup
-// path allocates - the runtime's own fcntl is nosplit - and a full
-// table is EMFILE. Slots 0, 1 and 2 are seeded from GetStdHandle at
-// boot and are ALWAYS marked open even when the handle is null. A dead
-// handle then fails per-operation with EBADF, and keeping the slot
-// "open" stops checkfds opening /dev/null through the runtime's raw
-// syscall open, which must never run on NT.
+// The table is a fixed ntFDMax slots, a few KiB of BSS.
 const ntFDMax = 512
 
 type ntFDKind uint8
@@ -62,16 +54,7 @@ type ntFDEntry struct {
 	pathW      []uint16   // absolute Win32 path, for dirfd-relative joins
 	pending    []ntDirEnt // parsed getdents64 entries the caller's buffer could not hold
 
-	// Socket-kind state. sockFam holds the LINUX address family.
-	// unixBound and unixPeer record the Linux-spelling AF_UNIX pathname
-	// the caller bound or connected to, because winsock stores the
-	// TRANSLATED Windows path and translating it back would surface the
-	// /c/... alias. sockPair marks a socketpair end, which winsock knows
-	// as a loopback TCP socket, so a name query synthesizes the Linux
-	// truth instead of asking. sockPeerPid caches the
-	// SIO_AF_UNIX_GETPEERPID answer, final once taken because a
-	// connection's peer can never change; 0 means not queried, and pid
-	// 0 is the NT idle process, which can never own a socket.
+	// Socket-kind state. sockFam holds the LINUX address family. unixBound.
 	sockFam     uint16
 	sockPair    bool
 	sockPeerPid uint32
@@ -84,16 +67,7 @@ var (
 	ntFDTable [ntFDMax]ntFDEntry
 )
 
-// ntFilePos serializes one slot's Win32 file pointer, which is per
-// HANDLE. A positional transfer has to seek, transfer and seek back,
-// and those three steps are one indivisible operation. Nothing above
-// here takes a lock: internal/poll's Pread calls incref, because a real
-// pread needs no exclusion to be atomic.
-//
-// It is NOT a runtime mutex. The transfer under it enters syscall
-// state, and an exitsyscall that does not get a P back calls stopm,
-// which throws on any M holding a runtime lock. A waiter yields its
-// goroutine instead, which is cheap because contention is rare.
+// ntFilePos serializes one slot's Win32 file pointer, which is per HANDLE.
 var ntFilePos [ntFDMax]uint32
 
 // ntFilePosLock takes slot fd's file-pointer lock.
@@ -108,10 +82,9 @@ func ntFilePosUnlock(fd int32) {
 	atomic.Store(&ntFilePos[fd], 0)
 }
 
-// ntFDAlloc claims the lowest free slot (unix semantics) for the
-// given handle and returns the fd, or -EMFILE when the table is full.
-// The caller allocated pathW beforehand; nothing allocates under the
-// lock.
+// ntFDAlloc claims the lowest free slot (unix semantics) for the given handle
+// and returns the fd, or -EMFILE when the table is full. The caller allocated
+// pathW beforehand; nothing allocates under the lock.
 func ntFDAlloc(handle uintptr, kind ntFDKind, flags int32, cloexec bool, pathW []uint16) int32 {
 	return ntFDAllocEntry(ntFDEntry{
 		handle:  handle,
@@ -189,12 +162,8 @@ func ntFDRelease(fd int32) (handle uintptr, kind ntFDKind, ok bool) {
 	return handle, kind, true
 }
 
-// poll_runtime_cancelIO ends the reads and writes other threads have
-// blocked on fd, on an NT host. A pipe or console end there is a
-// synchronous handle nothing polls, so a close has to abort the transfer
-// itself before the last reference can let the handle go. The aborted
-// transfer answers OPERATION_ABORTED, which reads as ECANCELED. Every
-// other host, and every other kind of fd, needs nothing here.
+// poll_runtime_cancelIO ends the reads and writes other threads have blocked
+// on fd, on an NT host.
 //
 //go:linkname poll_runtime_cancelIO internal/poll.runtime_cancelIO
 func poll_runtime_cancelIO(fd uintptr) {
@@ -291,10 +260,9 @@ func ntFDSetDirState(fd int32, started bool, pending []ntDirEnt) {
 	unlock(&ntFDLock)
 }
 
-// ntFcntl backs both the runtime's fcntl (fcntl_cosmo_amd64.go,
-// nosplit) and the emulated SYS_FCNTL. Only the commands the
-// unix-shaped standard library actually issues against files are
-// implemented; the rest report ENOSYS loudly.
+// ntFcntl backs both the runtime's fcntl (fcntl_cosmo_amd64.go, nosplit) and
+// the emulated SYS_FCNTL. Only the commands the unix-shaped standard library
+// issues against files are implemented; the rest report ENOSYS loudly.
 //
 //go:nosplit
 func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
@@ -312,10 +280,7 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 	if fd < 0 || fd >= ntFDMax {
 		return -1, 9 // EBADF
 	}
-	// Socket F_SETFL must push the O_NONBLOCK change into winsock
-	// (ioctlsocket FIONBIO) after the table update; captured under the
-	// lock, issued outside it (use-after-close races have the usual
-	// unix semantics: the ioctl fails on a dead SOCKET).
+	// Socket F_SETFL must push the O_NONBLOCK change into winsock (ioctlsocket FIONBIO) after the table update; captured under the lock.
 	var nbHandle uintptr
 	var nbWord uint32
 	syncNB := false
@@ -336,9 +301,7 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 	case _F_GETFL:
 		ret = e.flags
 	case _F_SETFL:
-		// O_APPEND cannot be turned on retroactively (the handle
-		// lacks FILE_APPEND_DATA); O_NONBLOCK on files is a no-op on
-		// Linux too. Record the bits so F_GETFL round-trips.
+		// O_APPEND cannot be turned on retroactively (the handle lacks FILE_APPEND_DATA).
 		const _O_NONBLOCK = 0x800
 		old := e.flags
 		e.flags = e.flags&^int32(_O_STATUS) | arg&int32(_O_STATUS)

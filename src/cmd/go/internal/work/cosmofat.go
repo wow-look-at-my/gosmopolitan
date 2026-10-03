@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -28,9 +27,7 @@ var cosmoFatArches = map[string]string{
 }
 
 // cosmoAPEBuild reports whether this build produces an APE this command
-// assembles: a GOOS=cosmo build for an architecture an APE can carry, and
-// not the sibling-architecture build, whose single-architecture output is
-// an input to the assembly rather than a subject of it.
+// assembles.
 func cosmoAPEBuild() bool {
 	return cfg.Goos == "cosmo" && cosmoFatArches[cfg.Goarch] != "" && os.Getenv("GOCOSMOFAT_INNER") == ""
 }
@@ -60,12 +57,8 @@ func cosmoFatEnabled() bool {
 	return cosmoSiblingArch() != ""
 }
 
-// cosmoAssembleEnabled reports whether the freshly linked output goes
-// through the linker's APE assembly step. A fat build must - that step is
-// the merge - and a single-architecture build does whenever
-// GOCOSMOPLATFORMS selected the platforms, so a slimmed binary is stripped,
-// gets its sidecars, and carries a header matching the selection, exactly
-// like the fat build it replaces.
+// cosmoAssembleEnabled reports whether the freshly linked output goes through
+// the linker's APE assembly step.
 func cosmoAssembleEnabled() bool {
 	if !cosmoAPEBuild() {
 		return false
@@ -74,10 +67,7 @@ func cosmoAssembleEnabled() bool {
 }
 
 // CosmoFat, CosmoStrip and CosmoDebug return the effective GOCOSMOFAT,
-// GOCOSMOSTRIP and GOCOSMODEBUG settings, the values `go env` reports.
-// Each is what the build acts on rather than the raw environment string:
-// GOCOSMOFAT reads "off" whenever the APE will carry one architecture,
-// including when GOCOSMOPLATFORMS is what narrowed it to one.
+// GOCOSMOSTRIP and GOCOSMODEBUG settings.
 func CosmoFat() string {
 	set, _ := cosmoPlatformSpec()
 	if cosmoFatEnv() && len(set.Arches()) > 1 {
@@ -95,10 +85,7 @@ func CosmoStrip() string {
 
 func CosmoDebug() string { return cosmoDebugMode() }
 
-// cosmoStripEnabled reports whether fat APE merges should strip debug info
-// (DWARF, symbol table, section headers) from the shipped binary and write
-// per-architecture debug sidecars next to it. On by default; GOCOSMOSTRIP=0
-// opts out, mirroring GOCOSMOFAT.
+// cosmoStripEnabled reports whether fat APE merges should strip debug info (DWARF, symbol table, section headers) from the shipped binary.
 func cosmoStripEnabled() bool {
 	switch os.Getenv("GOCOSMOSTRIP") {
 	case "0", "off":
@@ -107,30 +94,8 @@ func cosmoStripEnabled() bool {
 	return true
 }
 
-// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the
-// debug mode it selects:
-//
-//	"full" (or unset): today's behavior - the shipped APE is stripped and
-//	    the per-architecture debug sidecars are pristine copies of the
-//	    linker's ELF outputs (runnable, cosmocc parity).
-//	"slim": debug-only sidecars (the in-linker equivalent of
-//	    objcopy --only-keep-debug) - symbol table and DWARF kept, contents
-//	    of allocated sections dropped since the APE already ships them.
-//	    Same sidecar names; the shipped APE is unchanged.
-//	"min": slim's sidecar shape, and every GOOS=cosmo compile generates
-//	    less DWARF in the first place: location lists and inline records
-//	    are omitted (see cosmoDebugGcflags). Smallest sidecars; debuggers
-//	    show <optimized out> for arguments/locals and no inlined-call
-//	    frames. Runtime tracebacks and pprof are unaffected (pclntab).
-//	"compact": slim sidecars, plus a compact debug view appended to the
-//	    APE past its loadable span (never mapped at runtime), so debuggers
-//	    can symbolize the assimilated binary with no sidecar present.
-//
-// The sidecar side of the mode only matters when the fat merge strips and
-// writes sidecars at all: GOCOSMOSTRIP=0 and an explicit -s/-w in -ldflags
-// both suppress sidecars entirely (see cosmoMergeArgs). min's compile-time
-// trims apply to every GOOS=cosmo compile regardless, so even a
-// GOCOSMOSTRIP=0 build carries the reduced DWARF in its embedded payloads.
+// parseCosmoDebugMode validates a GOCOSMODEBUG value and returns the debug
+// mode it selects: "full" (or unset).
 func parseCosmoDebugMode(v string) (string, error) {
 	switch v {
 	case "", "full":
@@ -141,10 +106,7 @@ func parseCosmoDebugMode(v string) (string, error) {
 	return "", fmt.Errorf("invalid GOCOSMODEBUG value %q: must be full, slim, min, or compact (or unset)", v)
 }
 
-// cosmoDebugMode returns the GOCOSMODEBUG mode for fat APE merges,
-// stopping the build with an error for invalid values (unlike GOCOSMOFAT
-// and GOCOSMOSTRIP, whose values are binary, a typo here would silently
-// select a wrong debug-info shape).
+// cosmoDebugMode returns the GOCOSMODEBUG mode for fat APE merges.
 func cosmoDebugMode() string {
 	mode, err := parseCosmoDebugMode(os.Getenv("GOCOSMODEBUG"))
 	if err != nil {
@@ -154,12 +116,7 @@ func cosmoDebugMode() string {
 }
 
 // cosmoDebugGcflags returns the extra compiler flags a GOCOSMODEBUG mode
-// injects into every GOOS=cosmo compile. Only "min" injects any: it drops
-// DWARF location lists (arguments/locals become <optimized out> in
-// debuggers, -25% of a slim sidecar) and inline records (no inlined-call
-// frames in debuggers, a further -12%). The pclntab is untouched, so
-// runtime tracebacks, runtime/pprof, and the inline unwinding they do
-// keep working.
+// injects into every GOOS=cosmo compile.
 func cosmoDebugGcflags(mode string) []string {
 	if mode != "min" {
 		return nil
@@ -168,15 +125,8 @@ func cosmoDebugGcflags(mode string) []string {
 }
 
 // cosmoBuildInit validates the GOCOSMO* environment (an invalid value stops
-// the build early, not just at the assembly step) and applies the debug
-// mode's compile-time DWARF trims by appending to forcedGcflags. Called
-// from BuildInit.
-//
-// Forced flags precede the user's -gcflags in the compiler invocation and
-// later flags win, so an explicit user -gcflags setting overrides the
-// injected trims. The injected flags are part of the build-cache key
-// (like all gcflags), so switching modes with different flags recompiles
-// affected packages rather than reusing stale objects.
+// the build early, not at the assembly step) and applies the debug mode's
+// compile-time DWARF trims by appending.
 func cosmoBuildInit() {
 	cosmoPlatformSpec() // reject an invalid GOCOSMOPLATFORMS on any build
 	if cfg.Goos != "cosmo" || cfg.BuildToolchainName != "gc" {
@@ -186,16 +136,8 @@ func cosmoBuildInit() {
 }
 
 // ldflagsSpecifyStrip reports whether the user's -ldflags for a package
-// contain an explicit -s or -w (in any spelling the linker accepts: -s,
-// --s, -s=..., and likewise for -w). When the user has taken a position on
-// stripping, the fat merge passes no flags of its own: the payloads are
-// embedded exactly as the user's link produced them and no sidecars are
-// written.
-//
-// Known heuristic false positive: the separate value of a value-taking
-// flag can itself begin with '-' (e.g. -ldflags="-extldflags -s") and is
-// misread as the linker's -s/-w. The effect is the conservative one of
-// deferring to the user: no default strip, no sidecars.
+// contain an explicit -s or -w (in any spelling the linker accepts: -s, --s,
+// -s=..., and likewise for -w).
 func ldflagsSpecifyStrip(ldflags []string) bool {
 	for _, f := range ldflags {
 		if !strings.HasPrefix(f, "-") {
@@ -209,16 +151,14 @@ func ldflagsSpecifyStrip(ldflags []string) bool {
 	return false
 }
 
-// cosmoMergeArgs returns the linker arguments that assemble p's built
-// target - and, when sibling is not empty, its sibling-architecture build -
-// into the APE at p.Target, applying the default strip-and-sidecar behavior
-// unless GOCOSMOSTRIP=0 or the user's -ldflags for p already specify -s/-w.
+// cosmoMergeArgs returns the linker arguments that assemble p's built target
+// - and, when sibling is not empty, its sibling-architecture build - into the
+// APE at p.Target, applying the default strip-and-sidecar behavior unless
+// GOCOSMOSTRIP=0 or the user's -ldflags for p already specify -s/-w.
 // GOCOSMODEBUG selects how much debug info the sidecars (and, for compact,
 // the APE itself) carry; when the merge passes no strip flags at all there
 // are no sidecars, so the mode has nothing to apply to and is deliberately
-// not passed on. A GOCOSMOPLATFORMS selection rides along as
-// -apeplatforms, where the linker turns it into the boot mechanisms the
-// header carries and fails on any platform the payloads cannot serve.
+// not passed on.
 func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	spec := p.Target
 	if sibling != "" {
@@ -237,10 +177,7 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 		args = append(args, "-apestrip", "-apedbg")
 		if mode := cosmoDebugMode(); mode != "full" {
 			if mode == "min" {
-				// min's extra reduction happens at compile time
-				// (cosmoBuildInit); its merge-time sidecar
-				// transform is exactly slim's, so the linker
-				// only knows the three -apedbgmode values.
+				// min's extra reduction happens at compile time (cosmoBuildInit).
 				mode = "slim"
 			}
 			args = append(args, "-apedbgmode="+mode)
@@ -251,21 +188,6 @@ func cosmoMergeArgs(p *load.Package, sibling string) []string {
 
 // cosmoSibling is a sibling-architecture build running concurrently with
 // the primary build.
-//
-// The two architectures share nothing that forces an ordering: different
-// GOARCH, different build-cache keys, different output paths. The sibling
-// used to run strictly after the primary finished only because fattening
-// was written as a post-build step. Overlapping them reclaims each build's
-// serial tail - cosmo links twice per architecture - and is worth ~23% of
-// wall clock on a single main package (runtimeprobe, cold cache, 4 cores:
-// 15.8s -> 12.2s, with user time unchanged, so it is pure overlap rather
-// than extra work). Builds whose package graph already saturates the CPU,
-// such as "go build std", gain nothing; the win is concentrated in exactly
-// the single-binary builds people run interactively.
-//
-// The child's output is buffered rather than inherited: two concurrent
-// builds writing to one terminal interleave their diagnostics into
-// nonsense. It is replayed verbatim once the primary build is done.
 type cosmoSibling struct {
 	cmd    *exec.Cmd
 	out    bytes.Buffer
@@ -276,10 +198,7 @@ type cosmoSibling struct {
 	dir    bool
 	waited bool
 
-	// The sibling is a whole second go command, so in a trace it is its own
-	// row: without one, the largest thing a cosmo build does appears as a
-	// gap the primary build cannot account for. It writes its own trace
-	// file, which importTrace folds into the parent's once it has exited.
+	// The sibling is a whole second go command, so in a trace it is its own row.
 	ctx     context.Context
 	lane    trace.Lane
 	started time.Time
@@ -287,10 +206,7 @@ type cosmoSibling struct {
 }
 
 // cosmoFatParallel reports whether the sibling-architecture build may run
-// concurrently with the primary build. GOCOSMOFATSEQ=1 forces the old
-// sequential behavior, which halves the peak memory of a fat build: the
-// two link phases (each architecture links twice) would otherwise be able
-// to overlap, and linking is the memory-hungry part.
+// concurrently with the primary build.
 func cosmoFatParallel() bool {
 	switch os.Getenv("GOCOSMOFATSEQ") {
 	case "1", "on":
@@ -342,7 +258,7 @@ func (s *cosmoSibling) wait() {
 }
 
 // finish replays the sibling's buffered output and reports failure. It
-// runs after the primary build's own output, so the two never interleave.
+// runs after the primary build's own output, so both never interleave.
 func (s *cosmoSibling) finish(err error) {
 	s.waited = true
 	if s.lane.Enabled() {
@@ -381,10 +297,7 @@ func (s *cosmoSibling) cleanup() {
 }
 
 // cosmoFatSkipOutput reports whether -o names an existing non-regular,
-// non-directory file (/dev/null and friends). Fattening re-reads the
-// freshly written target and re-creates it, which only works for regular
-// files, so starting a sibling build for one would be wasted work. The
-// post-build filter in cosmoFatten still covers the per-target case.
+// non-directory file (/dev/null and friends).
 func cosmoFatSkipOutput() bool {
 	if cfg.BuildO == "" {
 		return false
@@ -394,14 +307,14 @@ func cosmoFatSkipOutput() bool {
 }
 
 // cosmoFatStart kicks off the sibling-architecture build that cosmoFatten
-// will merge, and returns nil when fat builds are disabled or impossible.
-// It runs the original go build command line with -o redirected to a
-// temporary location and GOARCH flipped, so every other build flag and
-// package argument is preserved exactly. Pass dir=true when targets are
-// written to a -o directory, so the sibling build also uses one.
+// will merge, and returns nil when fat builds are disabled or impossible. It
+// runs the go build command line with -o redirected to a temporary location
+// and GOARCH flipped, so every other build flag and package argument is
+// preserved exactly. Pass dir=true when targets are written to a -o
+// directory, so the sibling build also uses one.
 //
-// Call this immediately before the primary build; the returned value goes
-// to cosmoFatten afterwards.
+// Call this immediately before the primary build; the returned value goes to
+// cosmoFatten afterwards.
 func cosmoFatStart(ctx context.Context, dir bool) *cosmoSibling {
 	if !cosmoFatEnabled() || cosmoFatSkipOutput() {
 		return nil
@@ -458,10 +371,7 @@ func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load
 	}
 	lane := cosmoMergeLane(ctx)
 
-	// Assembly re-reads the freshly written target and re-creates it with
-	// the merged APE. That only makes sense for a main package's regular
-	// file: with -o /dev/null (or any other special file) the target reads
-	// back empty and cannot be replaced, so leave the build's output as-is.
+	// Assembly re-reads the freshly written target and re-creates it with the merged APE.
 	regular := make([]*load.Package, 0, len(mains))
 	for _, p := range mains {
 		if p.Name != "main" || p.Target == "" {
@@ -532,14 +442,6 @@ func cosmoMerge(b *Builder, lane trace.Lane, link []string, p *load.Package, tar
 // disabled. Call it immediately before the primary install, and pass
 // hasMains=false when the command installs no main packages so no
 // cross-architecture work is done for, say, "go install ./somelibrary".
-//
-// go install has no -o flag to redirect, and its pkg@version argument
-// form cannot be rewritten into a go build, so the sibling build reruns
-// the ORIGINAL install command line against a scratch GOPATH: package
-// resolution stays identical while the cross-compiled result lands in
-// $GOPATH/bin/$GOOS_$GOARCH/ (always a subdirectory - cosmo cannot be
-// the platform the go tool itself runs on). GOMODCACHE keeps pointing
-// at the real module cache so nothing is re-downloaded.
 func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	if !cosmoFatEnabled() || !hasMains {
 		return nil
@@ -605,12 +507,6 @@ func (s *cosmoSibling) traceOn(ctx context.Context) {
 
 // traceArgs returns the child's command line with -debug-trace pointed at
 // the sibling's own file.
-//
-// The child is this same go command re-run, so without this it inherits the
-// parent's -debug-trace path, truncates the file the parent is still
-// appending to, and the two processes interleave their writes into a
-// document neither can parse. The sibling's file is merged back in by
-// importTrace once the child has exited.
 func (s *cosmoSibling) traceArgs(args []string) []string {
 	if s.trace == "" {
 		return args
@@ -618,17 +514,15 @@ func (s *cosmoSibling) traceArgs(args []string) []string {
 	return rewriteFlagValue(args, "-debug-trace", s.trace)
 }
 
-// importTrace folds the sibling's trace into the parent's, as its own
-// process group. Called after the child has exited, so the file is
-// complete.
+// importTrace folds the sibling's trace into the parent's, as its own process
+// group. Called after the child has exited, so the file is complete.
 func (s *cosmoSibling) importTrace() {
 	if s == nil || s.trace == "" {
 		return
 	}
 	f, err := os.Open(s.trace)
 	if err != nil {
-		// The child may have failed before writing anything, which the
-		// build already reported.
+		// The child may have failed before writing anything, which the build already reported.
 		return
 	}
 	defer f.Close()
@@ -637,8 +531,7 @@ func (s *cosmoSibling) importTrace() {
 	}
 }
 
-// cosmoSiblingPID is the process group the sibling build's rows appear
-// under. The parent is 0.
+// cosmoSiblingPID is the process group the sibling build's rows appear under.
 const cosmoSiblingPID = 1
 
 // rewriteFlagValue returns args with flag's value replaced by value, in
@@ -677,7 +570,7 @@ func cosmoMergeLane(ctx context.Context) trace.Lane {
 	return trace.LaneOf(trace.StartNamedGoroutine(ctx, "cosmo fat merge", cosmoMergeLaneIndex))
 }
 
-// Rows sort by index, and these two belong under the build workers, which
+// Rows sort by index, and these belong under the build workers, which
 // take the indexes below them.
 const (
 	cosmoSiblingLaneIndex = 1000

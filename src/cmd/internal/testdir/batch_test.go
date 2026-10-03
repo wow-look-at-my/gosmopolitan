@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package testdir_test
 
@@ -21,24 +20,16 @@ import (
 	"internal/goversion"
 )
 
-// The run corpus is a few hundred standalone programs, each `package main`
-// with `func main`, so they differ only in a name. This compiles them ONCE, as
-// one package each under a generated dispatcher, and each test then runs that
-// one executable with its own name as the argument. The corpus costs one
-// build instead of hundreds, and on a wasm target the runtime compiles one
-// module instead of hundreds.
-//
-// A test still gets its own process, so an exit status, a panic and a deadlock
-// stay the test's own. Nothing is skipped: a program this cannot batch is
-// built on its own.
+// The run corpus is a few standalone programs, each `package main` with `func
+// main`, so they differ only in a name. This compiles them ONCE, as one
+// package each under a generated dispatcher, and each test then runs that one
+// executable with its own name as the argument. The corpus costs one build
+// instead of hundreds, and on a wasm target the runtime compiles one module
+// instead of hundreds.
 
 // batchOutput answers what one test program printed. The whole corpus runs in
 // ONE process on the first call, because a process start costs about a second
 // on a wasm runtime and most of these programs do almost nothing.
-//
-// A program that panics or exits ends that process, so anything after it never
-// reported. Those run again, one process each, which attributes the failure to
-// the program that caused it instead of losing the rest of the corpus with it.
 func batchOutput(corpus, file string) (out []byte, batched bool, err error) {
 	exe, name, err := batchFor(corpus, file)
 	if err != nil || name == "" {
@@ -78,8 +69,7 @@ func (bat *batch) runAll(exe string) {
 	argv := launch(exe, names...)
 	out, _ := exec.Command(argv[0], argv[1:]...).CombinedOutput()
 
-	// Each program's output runs from its own marker to the next one. A marker
-	// the process never printed belongs to a program it never reached.
+	// Each program's output runs from its own marker to the next one.
 	marker := []byte(bat.nonce + " ")
 	for rest := out; ; {
 		start := bytes.Index(rest, marker)
@@ -105,10 +95,9 @@ func (bat *batch) runAll(exe string) {
 	}
 }
 
-// batchFor answers the dispatcher and the name this test file takes inside it.
-// The file is named the way the runner names it, relative to the corpus root.
-// An empty name means the batch does not carry the file, and the caller builds
-// it on its own.
+// batchFor answers the dispatcher and the name this test file takes inside
+// it. The file is named the way the runner names it, relative to the corpus
+// root.
 func batchFor(corpus, file string) (exe, name string, err error) {
 	theBatch.once.Do(func() { theBatch.build(corpus) })
 	if theBatch.err != nil {
@@ -128,8 +117,8 @@ type dispatch struct {
 	Nonce    string
 }
 
-// The dispatcher runs every name it is given, in one process, and marks each
-// one's output with a nonce the build picked. A program that panics or exits
+// The dispatcher runs every name it is given, in one process, and marks
+// each's output with a nonce the build picked. A program that panics or exits
 // takes the process with it, so the caller re-runs what never reported.
 var dispatcher = template.Must(template.New("main").Parse(`package main
 
@@ -196,9 +185,7 @@ func eligible(src string) (string, bool) {
 	if strings.Contains(src, "//go:build") || strings.Contains(src, "// +build") {
 		return "", false
 	}
-	// The header runs to the first blank line and names the action. Only a
-	// bare "// run" is batched: an argument or a flag is the caller asking
-	// for something this does not reproduce.
+	// The header runs to the first blank line and names the action.
 	header, _, _ := strings.Cut(src, "\n\n")
 	if !strings.Contains(header, "\n// run\n") && !strings.HasPrefix(header, "// run\n") {
 		return "", false
@@ -226,8 +213,7 @@ func (bat *batch) build(corpus string) {
 	}
 	bat.dir = dir
 
-	// The corpus is the same set of directories the runner walks, and each file
-	// is named the way the runner names it: relative to the corpus root.
+	// The corpus is the same set of directories the runner walks.
 	var rels []string
 	for _, sub := range dirs {
 		found, err := filepath.Glob(filepath.Join(corpus, sub, "*.go"))
@@ -271,16 +257,14 @@ func (bat *batch) build(corpus string) {
 		return
 	}
 
-	// The corpus is the distribution's own source, so it builds under the
-	// distribution's own language version.
+	// The corpus is the distribution's own source, so it builds under the distribution's own language version.
 	gomod := fmt.Sprintf("module testdirbatch\n\ngo 1.%d\n", goversion.Version)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
 		bat.err = err
 		return
 	}
 
-	// A test program prints whatever it likes, so the marker separating one
-	// program's output from the next is a value nothing can predict.
+	// A test program prints whatever it likes.
 	var seed [16]byte
 	if _, err := rand.Read(seed[:]); err != nil {
 		bat.err = err
