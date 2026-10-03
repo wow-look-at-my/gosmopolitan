@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -16,28 +15,7 @@ import (
 	"cmd/link/internal/loader"
 )
 
-// A binary can hold the tests of several packages, and the go command keys
-// each package's cached test result on the code that package's tests run. The
-// binary as a whole is the wrong scope: every package in it shares those
-// bytes, so one package's edit would discard every result. The right scope is
-// what the tests reach, which is a question about the symbol graph and is
-// answerable only here.
-//
-// -testunits names a file describing the roots of each package's tests, and
-// -testunitdigest names the file this writes: one line per package, holding
-// the package and a digest of every symbol reachable from its roots.
-//
-// The digest covers each reachable symbol's name, kind, size, content and
-// relocation targets, combined with exclusive-or so that the order symbols
-// are visited in does not reach the result. A symbol appears once in a set,
-// so nothing cancels.
-//
-// Reachability here follows every relocation, weak ones included, and knows
-// nothing of the method and interface pruning the dead code pass does. That
-// makes it a superset of what survives the link, which is the safe direction:
-// a digest may cover code the binary drops, which costs a test run that was
-// not needed, and it never misses code the tests do run, which would serve a
-// stale result.
+// A binary can hold the tests of several packages.
 type testUnitRoots struct {
 	id    string
 	roots []string
@@ -111,9 +89,6 @@ func testUnitDigests(ctxt *Link) {
 		}
 	}
 
-	// A unit's digest is built one chunk of 64 units at a time, so that one
-	// walk of the graph serves 64 of them: a symbol carries the bits of the
-	// units that reach it.
 	digests := make(map[string]string, len(units))
 	for start := 0; start < len(units); start += 64 {
 		end := min(start+64, len(units))
@@ -177,9 +152,7 @@ func testUnitReach(ctxt *Link, chunk []testUnitRoots, blocked map[loader.Sym]boo
 		work = append(work, sym)
 	}
 
-	// Program startup is what every unit's tests run on: the runtime, the
-	// testing package and whatever starts them. It is the same code for each
-	// unit, and a change in it reruns them all.
+	// Program startup is what every unit's tests run on: the runtime, the testing package and whatever starts them.
 	common := uint64(0)
 	for bit := range chunk {
 		common |= 1 << uint(bit)
@@ -225,8 +198,6 @@ func testUnitCommonRoots(ctxt *Link) []string {
 	return names
 }
 
-// lookupBothABIs answers the symbols named name in either ABI, because a
-// function is reached by its internal-ABI symbol and data by version 0.
 func lookupBothABIs(ldr *loader.Loader, name string) []loader.Sym {
 	var out []loader.Sym
 	if sym := ldr.Lookup(name, 0); sym != 0 {

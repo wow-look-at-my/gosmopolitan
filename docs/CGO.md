@@ -21,6 +21,7 @@ The Linux build leg also builds the probe and hands it to the test job. `TestCgo
 - cgo is on by default when the compiler for GOARCH is on PATH (`cmd/go/internal/cfg/cosmocc.go`, `go/build/cosmocc.go`). Without it cgo stays off, as before.
 - `CGO_ENABLED=1` with no compiler fails and names it: `cgo: C compiler "x86_64-unknown-cosmo-cc" not found`.
 - A plain `CC` applies to GOARCH only. The fat build's sibling gets `CC_FOR_cosmo_<sibling>` or the default, and the parent's cgo setting (`cosmoSiblingCgoEnv` in `cmd/go/internal/work/cosmofat.go`). A sibling without its compiler fails by name.
+- A go command that carries its standard library (docs/EMBEDDED-STD.md) builds cgo programs when `go tool embedstd` built its blob with cgo on, which is the default. The blob then holds runtime/cgo for both architectures. The cgo tool and the link still run the host's cosmocc at build time.
 - A cosmo build always sets the `netgo` and `osusergo` tags. cosmo satisfies the `linux` tag, so their cgo files will otherwise call libcosmo. Then every program that imports `net` will stop on NT.
 
 ## Link

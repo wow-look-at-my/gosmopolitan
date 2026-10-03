@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -44,9 +43,8 @@ func TestAPEDwarfCompressCodec(t *testing.T) {
 }
 
 // TestAPEDwarfZstdRoundTrip verifies the zstd compressor produces
-// deterministic frames that the standard library decoder - the one
-// debug/elf uses for ELFCOMPRESS_ZSTD sections - decompresses back to
-// the input.
+// deterministic frames that the standard library decoder - the debug/elf uses
+// for ELFCOMPRESS_ZSTD sections - decompresses back to the input.
 func TestAPEDwarfZstdRoundTrip(t *testing.T) {
 	var in bytes.Buffer
 	for i := 0; i < 1000; i++ {
@@ -105,8 +103,7 @@ func checkDebugSectionCodec(t *testing.T, path string, want elf.CompressionType)
 			continue
 		}
 		if s.Flags&elf.SHF_COMPRESSED == 0 {
-			// Sections whose compression would not shrink them are
-			// stored raw (compressSyms returns nil).
+			// Sections whose compression would not shrink them are stored raw (compressSyms returns nil).
 			continue
 		}
 		compressed++

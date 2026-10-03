@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package testing
 
@@ -10,9 +9,7 @@ import (
 )
 
 // waitFor spins until cond holds, and fails the test rather than hanging when
-// it never does. A gate bug shows up as a goroutine that never runs, so a bare
-// channel receive here would report itself as a package timeout minutes later
-// instead of as this test.
+// it never does.
 func waitFor(t *T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -34,8 +31,7 @@ func waitFor(t *T, what string, cond func() bool) {
 func TestSerialGateResumeIgnoresAWaitingWriter(t *T) {
 	g := newSerialGate()
 
-	// One hold that stays out for the whole test: the reader that, in the real
-	// deadlock, was stuck on a lock somebody else owned.
+	// One hold that stays out for the whole test: the reader that, in the real deadlock.
 	g.acquire()
 
 	// A Serial caller queues behind it and never gets in while it is held.
@@ -50,8 +46,7 @@ func TestSerialGateResumeIgnoresAWaitingWriter(t *T) {
 		return g.waiting == 1
 	})
 
-	// The resume is what has to get through. Under an RWMutex it would block
-	// here, and everything below would never run.
+	// The resume is what has to get through. Under an RWMutex it would block here, and everything below would never run.
 	resumed := make(chan struct{})
 	go func() {
 		g.resume()

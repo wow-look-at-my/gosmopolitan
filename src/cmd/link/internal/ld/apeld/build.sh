@@ -1,7 +1,5 @@
 #!/bin/sh
-# Builds every loader into bin/ with zig cc. ZIG names the compiler
-# (default: zig on PATH). Each build is static; the linker's own tests
-# assert that, and pin the resulting bytes.
+# Builds every loader into bin/ with zig cc. ZIG names the compiler (default: zig on PATH).
 set -eu
 cd "$(dirname "$0")"
 ZIG=${ZIG:-zig}
@@ -18,14 +16,7 @@ for t in x86_64:amd64 aarch64:arm64; do
 	${STRIP:-llvm-strip} --strip-sections "bin/apeld-linux-${t##*:}"
 done
 
-# zig compiles the object; ld64.lld links it, because zig's own Mach-O linker
-# cannot merge __DATA_CONST into __DATA, and each segment costs a 16K page.
-# libSystem.tbd comes from zig's bundled darwin libc stubs. The ad-hoc
-# signature's identifier is the output basename, so the name is fixed.
-# `zig env` prints ZON (.lib_dir = "...") from 0.16 and JSON ("lib_dir": "...")
-# before it. Read both, and fail loudly rather than guess: a wrong -L makes
-# ld64.lld report every libSystem symbol as undefined, which reads as a
-# source problem.
+# zig compiles the object; ld64.lld links it, because zig's own Mach-O linker cannot merge __DATA_CONST into __DATA.
 ZIGLIB=${ZIGLIB:-$($ZIG env 2>/dev/null | sed -n 's/^[[:space:]]*[.",]*lib_dir[",]*[[:space:]]*[:=][[:space:]]*"\(.*\)".*/\1/p' | head -1)}
 [ -n "$ZIGLIB" ] && [ -d "$ZIGLIB/libc/darwin" ] || {
 	echo "build.sh: cannot find zig's darwin libc stubs under lib_dir ('$ZIGLIB'); set ZIGLIB" >&2

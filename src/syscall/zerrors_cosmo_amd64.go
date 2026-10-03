@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Error constants for Cosmopolitan Libc on amd64.
 // Cosmopolitan uses Linux error numbers.
