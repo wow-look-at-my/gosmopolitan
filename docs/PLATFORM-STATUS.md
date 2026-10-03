@@ -10,7 +10,7 @@ Sockets over classic synchronous winsock (non-overlapped WSASocketW, FIONBIO, AF
 
 AF_UNIX pathname stream sockets over afunix.sys (sun_path through the path layer. Abstract names refused EINVAL. Wine's ws2_32 lacks AF_UNIX entirely, so wine runs show exactly one red there while windows-latest proves it). Wave-3 socket growth added socketpair(2) over a loopback TCP pair dressed as unnamed AF_UNIX, and socket-kind dup(2). It also added sendmsg/recvmsg + readv/writev (net.Buffers) over WSASend/WSARecv. Pathname AF_UNIX carriers only, same user, both ends must be cosmo binaries.
 
-Signals: VEH-based sigpanic (SIGSEGV recover works), self-signals (kill/tkill with full delivery through sigtrampgo), os/signal Notify, async preemption via SuspendThread/SetThreadContext injection (preempt ~180ms on the CI runner, upstream preemptM semantics), signal deaths encoded for the wait4 protocol, SIGPROF-parity CPU profiling. The ctrlbreak probe CI-proves the conhost-injected handler chain end to end.
+The signal layer covers VEH-based sigpanic (SIGSEGV recover works), self-signals (kill/tkill with full delivery through sigtrampgo), and os/signal Notify. Async preemption works via SuspendThread/SetThreadContext injection (preempt ~180ms on the CI runner, upstream preemptM semantics). Signal deaths are encoded for the wait4 protocol, and SIGPROF-parity CPU profiling works. The ctrlbreak probe CI-proves the conhost-injected handler chain end to end.
 
 File metadata followed (the metadata wave): utimensat, truncate, fchdir and linkat over SetFileTime, SetEndOfFile, GetFinalPathNameByHandleW+SetCurrentDirectoryW and CreateHardLinkW, so os.Chtimes, os.Truncate, os.File.Chdir and os.Link work here. The runtimeprobe fsmeta check is a hard assertion on this host too.
 
