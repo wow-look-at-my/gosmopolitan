@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# embedded-std.sh -- the embedded standard library end to end: go tool
-# embedstd writes the blob, a cosmo go command links it in, and with no
-# GOROOT that command lists std from its manifest, takes a GOROOT naming
-# itself through a link or a copy, builds a program byte for byte as the
-# source tree does, links it the same way twice, vets and tests it, and
-# refuses to test std. Run from the repository root with the toolchain
-# built.
+# embedded-std.sh -- the embedded standard library end to end: go tool embedstd writes the blob.
 set -euo pipefail
 
 root=$PWD

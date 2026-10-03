@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Embedstd writes the blob a go binary carries its standard library in:
 // the compiled archive of every standard package for cosmo/amd64 and
@@ -9,17 +8,6 @@
 // -apeappend flag puts the blob past an APE's load span, and
 // internal/cosmo/embedded reads it back. The go command running it, from
 // its GOROOT source tree, is the one whose archives are embedded.
-//
-// Usage:
-//
-//	go tool embedstd [-V] [-cgo=false] [-go word]... -o blob
-//
-// The go command that builds the archives is this executable, or the command
-// line the -go flags spell one word at a time, for a program that links the
-// go command under a subcommand of its own. Std is built with cgo on, so the
-// blob carries runtime/cgo and the go command that carries the blob builds cgo
-// programs. The cosmocc compiler of each architecture must be on PATH.
-// -cgo=false builds std without it.
 package embedstd
 
 import (
@@ -215,10 +203,7 @@ func requireCompiler(goCmd []string, goos, goarch string) {
 // listStd builds the standard library for a target and answers every
 // package in dependency order, with its archive and build ID.
 func listStd(goCmd []string, goos, goarch string) []listed {
-	// -e: a handful of standard packages hold nothing but tests, and the
-	// listing stops at the first of them without it. crypto/internal/
-	// fips140test is one. They compile to no archive, so they carry none
-	// here either, and the blob is the same either way.
+	// -e: a handful of standard packages hold nothing but tests.
 	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard,Error,DepsErrors", "std"}
 	var progress *fileLines
 	if os.Getenv(progressEnv) == "1" {
@@ -269,9 +254,9 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 
 // canonicalArchive answers the archive with a build ID derived from its own
 // bytes, and that ID. The go command stamps an archive with an ID that hashes
-// the compiler binary, so two compilers of one source stamp two IDs into the
-// same object code. A blob built by each compiler in turn must converge, so
-// the ID the blob carries names the content alone.
+// the compiler binary, so compilers of one source stamp IDs into the same
+// object code. A blob built by each compiler in turn must converge, so the ID
+// the blob carries names the content alone.
 func canonicalArchive(pkg listed, archive []byte) ([]byte, string) {
 	id, err := buildid.ReadFile(pkg.Export)
 	if err != nil {

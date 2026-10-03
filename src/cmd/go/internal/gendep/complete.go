@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Package gendep completes a fetched module: it runs the module's own
 // go:generate directives once, over the whole module, and adds what they
@@ -10,13 +9,6 @@
 // in it either. So a dependency that generates part of its own API ships a
 // package the compiler reads as empty, and every consumer fails on a symbol
 // that the package's source never declares.
-//
-// The complete tree is the fetched module plus the files its generators added.
-// A file the zip carries keeps the zip's bytes, whatever a generator wrote over
-// it: what a module's authors published is the module, and a generator that
-// rewrites it from what it fetches today produces a different package tomorrow.
-// A build compiles the same bytes on every machine and every day, or the cache
-// that shares its outputs is worth nothing.
 package gendep
 
 import (
@@ -42,22 +34,11 @@ import (
 
 const generatePrefix = "//go:generate"
 
-// Complete runs the generate directives of the module extracted at modroot,
-// with the module's path mod, and adds the files they wrote into modroot. It
-// answers the added files, in slash form relative to modroot and sorted, or
-// nothing when the module carries no directive at all.
+// Complete runs the generate directives of the module extracted at modroot, with the module's path mod, and adds the files they wrote into modroot. It answers the added files, in slash form relative to modroot and sorted, or nothing when the module carries no directive at all.
 //
-// Each package that carries a directive generates on its own, in path order. A
-// directive that fails stops the build. The module asked for that file, so a
-// build that continues without it is compiling a module nobody wrote. What it
-// reports is the symbol the missing file defines, named at the first line that
-// uses it, which is nowhere near the generator that never ran.
+// Each package that carries a directive generates on its own, in path order. A directive that fails stops the build. The module asked for that file, so a build that continues without it is compiling a module nobody wrote. What it reports is the symbol the missing file defines, named at the first line that uses it, which is nowhere near the generator that never ran.
 //
-// Two directives are the exception, and the answer is partial when either is
-// skipped. One names a program this machine lacks. The other writes into a
-// submodule's directory, which no zip of the parent carries. A partial answer
-// is short a file the module's own repository has, so a caller keeps it out of
-// any store the fleet reads.
+// Directives are the exception, and the answer is partial when either is skipped. One names a program this machine lacks. The other writes into a submodule's directory, which no zip of the parent carries. A partial answer is short a file the module's own repository has, so a caller keeps it out of any store the fleet reads.
 func Complete(modroot, mod string, pkgs []string) (added []string, partial bool, err error) {
 	if len(pkgs) == 0 {
 		return nil, false, nil
@@ -68,8 +49,7 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	}
 	defer removeAll(stage)
 	// The generator runs in a fresh copy of the fetched module, never in the
-	// tree other builds are compiling from. What it wrote reaches that tree
-	// only once it has succeeded.
+	// tree other builds are compiling from.
 	if err := copyTree(modroot, stage); err != nil {
 		return nil, false, err
 	}
@@ -77,9 +57,7 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 	if err != nil {
 		return nil, false, err
 	}
-	// What a failed run wrote goes back out. A half-generated package compiles
-	// against files its generator never finished, which is worse than the
-	// package the zip carried.
+	// What a failed run wrote goes back out.
 	kept, err := additions(modroot, stage)
 	if err != nil {
 		return nil, false, err
@@ -102,22 +80,15 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 			return nil, false, dropErr
 		}
 		// A program this machine lacks says nothing about the module, and the
-		// modules that name stringer or yy ship what those write. So the
-		// directive is skipped and the answer is marked partial, which keeps it
-		// out of the cache the fleet reads. A machine that has the program
-		// stores the whole answer.
+		// modules that name stringer or yy ship what those write.
 		if programMissing(err) {
 			fmt.Fprintf(os.Stderr, "go: %s in %s: %v\n", mod, pkg, err)
 			partial = true
 			continue
 		}
-		// A submodule's contents are not in the parent's zip, so a directive
-		// that writes into one names a directory this copy cannot hold.
-		// x/crypto's x509roots writes fallback/bundle.go, and fallback is a
-		// submodule. Its own module carries that file, so a consumer of the
-		// parent wants nothing from the run. The answer is marked partial,
-		// which keeps a tree short of that file out of the cache the fleet
-		// reads, and the module and the path are named on the way past.
+		// A submodule's contents are not in the parent's zip, so a directive that
+		// writes into one names a directory this copy cannot hold. x/crypto's
+		// x509roots writes fallback/bundle.go.
 		if gone := wroteNowhere(stage, pkg, err); gone != "" {
 			fmt.Fprintf(os.Stderr, "go: %s in %s writes %s, and its module zip carries no directory above it\n", mod, pkg, gone)
 			partial = true
@@ -128,17 +99,7 @@ func Complete(modroot, mod string, pkgs []string) (added []string, partial bool,
 		if hostCannotGenerate(err) {
 			return nil, false, fmt.Errorf("this host cannot generate %s in %s: %w", mod, pkg, err)
 		}
-		// What is left is a generator of the module that ran and failed. A
-		// module ships what its directives write, so the tree the zip carries
-		// is what its authors published, and the run is a refresh of it.
-		// x/text's own generators read the Unicode tables off the network and
-		// write into x/net, so no consumer completes that module, and every
-		// build whose graph reaches it stopped here.
-		//
-		// The failure is named and the answer is partial, which keeps the tree
-		// out of the cache the fleet reads. A module that truly owed the file
-		// fails the build right after, at the symbol it never declared, with
-		// this line above it.
+		// What is left is a generator of the module that ran and failed.
 		fmt.Fprintf(os.Stderr, "go: generating %s in %s: %v\n", mod, pkg, err)
 		fmt.Fprintf(os.Stderr, "go: %s keeps what its own zip carries for %s\n", mod, pkg)
 		partial = true
@@ -207,15 +168,15 @@ func additions(modroot, stage string) ([]string, error) {
 }
 
 // Packages answers the directories under modroot that carry a generate
-// directive, each relative to modroot in slash form and sorted. The order is the
-// module's own, so every machine generates in the same order.
+// directive, each relative to modroot in slash form and sorted. The order is
+// the module's own, so every machine generates in the same order.
 //
 // An empty answer means the module needs nothing, and a caller asks before it
-// reaches for anything else: a module with no directive costs a build only this
-// scan.
+// reaches for anything else: a module with no directive costs a build only
+// this scan.
 //
-// A nested module is skipped. It is its own module, with its own zip, and
-// `go generate` in this one never reaches it.
+// A nested module is skipped. It is its own module, with its own zip, and `go
+// generate` in this never reaches it.
 func Packages(modroot string) []string {
 	var pkgs []string
 	filepath.WalkDir(modroot, func(path string, ent fs.DirEntry, err error) error {
@@ -223,8 +184,7 @@ func Packages(modroot string) []string {
 			return err
 		}
 		if path != modroot {
-			// The go command's own rules: a directory it never matches with a
-			// package pattern is one `go generate` cannot be pointed at either.
+			// The go command's own rules: a directory it never matches with a package pattern is one `go generate` cannot be pointed.
 			name := ent.Name()
 			if name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") {
 				return fs.SkipDir
@@ -263,8 +223,8 @@ func Packages(modroot string) []string {
 //
 // Which directives a module has is decided by the module's own bytes and by
 // nothing else. A count that also asked what this machine has installed would
-// make one module version mean two different things, and both would be stored
-// under the one key the whole fleet reads.
+// make one module version mean different things, and both would be stored
+// under the key the whole fleet reads.
 func directives(files []string) int {
 	count := 0
 	for _, file := range files {
@@ -283,8 +243,7 @@ func directives(files []string) int {
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		// A read that stops short leaves the directives under the break
-		// uncounted.
+		// A read that stops short leaves the directives under the break uncounted.
 		if err != nil {
 			base.Fatalf("go: reading %s: %v", file, err)
 		}
@@ -292,17 +251,11 @@ func directives(files []string) int {
 	return count
 }
 
-// generatorNotShipped answers the path a directive of pkg names that the module
-// does not carry, or "" when every path it names is present.
+// generatorNotShipped answers the path a directive of pkg names that the module does not carry, or "" when every path it names is present.
 //
-// The go command drops a directory whose name opens with an underscore from a
-// module zip, so a generator kept beside the package it writes reaches no
-// consumer. testify ships one at _codegen. Running the directive is impossible
-// for anyone who fetched the module, so the module ships what that directive
-// writes as well, and a consumer needs nothing from it.
+// The go command drops a directory whose name opens with an underscore from a module zip, so a generator kept beside the package it writes reaches no consumer. testify ships one at _codegen. Running the directive is impossible for anyone who fetched the module, so the module ships what that directive writes as well, and a consumer needs nothing from it.
 //
-// This asks what the module carries rather than what a run did. A directive
-// that CAN run and fails is the module's own defect, and it stops the build.
+// This asks what the module carries rather than what a run did. A directive that CAN run and fails is the module's own defect, and it stops the build.
 func generatorNotShipped(stage, pkg string) string {
 	dir := filepath.Join(stage, filepath.FromSlash(pkg))
 	names, err := os.ReadDir(dir)
@@ -372,22 +325,14 @@ func droppedFromZip(path string) bool {
 	return false
 }
 
-// hostCannotGenerate reports whether err is a fact about this host rather than
-// about the module: the sandbox is missing, a generator the go command built
-// would not start, or a program a directive names is not installed.
+// hostCannotGenerate reports whether err is a fact about this host rather
+// than about the module.
 func hostCannotGenerate(err error) bool {
 	return sandboxUnavailable(err) || startFailed(err) || programMissing(err)
 }
 
 // programMissing reports whether err says a directive named a program this
 // machine does not have.
-//
-// That is the environment's own gap, not the module's, and the set of programs
-// a dependency tree names has no bound: stringer and yy arrive through
-// modernc.org and x/tools without either naming them to anybody. Each of those
-// modules ships what its directives write, so a consumer needs none of them.
-// The directive is skipped and the answer is marked partial, which keeps a
-// machine's installed programs out of what the fleet reads.
 func programMissing(err error) bool {
 	if err == nil {
 		return false
@@ -419,9 +364,7 @@ func wroteNowhere(stage, pkg string, err error) string {
 		if path == "" || !ok {
 			continue
 		}
-		// The directive runs with the package as its directory, and a path of
-		// its own leads out of the module as readily as into a directory the
-		// zip drops. Neither reaches a consumer, so both read the same way.
+		// The directive runs with the package as its directory, and a path of its own leads out of the module as readily.
 		at := filepath.Join(stage, filepath.FromSlash(pkg), filepath.FromSlash(path))
 		within, err := filepath.Rel(stage, at)
 		if err != nil || !filepath.IsLocal(within) {
@@ -434,11 +377,8 @@ func wroteNowhere(stage, pkg string, err error) string {
 	return ""
 }
 
-// startFailed reports whether err says the host refused to start a program the
-// generator built. The sandboxed go command prints the exec failure and exits,
-// so what reaches this process is its exit status with that line in the tail.
-// A host whose kernel cannot start an APE without help produces exactly this
-// for every generator, and says nothing about any of their modules.
+// startFailed reports whether err says the host refused to start a program
+// the generator built.
 func startFailed(err error) bool {
 	return err != nil && strings.Contains(err.Error(), syscall.ENOEXEC.Error())
 }
@@ -493,21 +433,12 @@ func runGenerate(root, pkg string) error {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = root
-	// The output streams as it always did, and a copy of the tail rides the
-	// error, which is what a build reports about the module.
+	// The output streams as it always did, and a copy of the tail rides the error.
 	said := &tailWriter{limit: generateTailBytes}
 	cmd.Stdout = io.MultiWriter(os.Stderr, said)
 	cmd.Stderr = cmd.Stdout
 	// A generator is a program of this module, so it builds against the same
-	// toolchain rather than fetching another one. It runs on this machine, so
-	// `go generate` and every go command a directive starts build an APE,
-	// which runs here whatever the build targets and is the only target a go
-	// command carrying its standard library can build. Every target reads
-	// that single completed module.
-	// This generate writes the module itself. The child loads that module's
-	// packages out of the module cache, which is where Dir hands a package its
-	// generated copy instead. Left on, the directive would write that copy and
-	// the module this call is completing would keep none of it.
+	// toolchain rather than fetching another.
 	cmd.Env = append(os.Environ(),
 		"GOOS=cosmo",
 		"GOARCH="+runtime.GOARCH,
@@ -523,8 +454,7 @@ func runGenerate(root, pkg string) error {
 	return err
 }
 
-// generateTailBytes bounds what rides the error: a generator can print a whole
-// build log.
+// generateTailBytes bounds what rides the error: a generator can print a whole build log.
 const generateTailBytes = 4 << 10
 
 // tailWriter keeps the last limit bytes written to it and drops the rest. The

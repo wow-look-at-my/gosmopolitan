@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -14,10 +13,6 @@ import (
 	"os"
 )
 
-// The native loaders, built from apeld/. A loader takes the APE's path and
-// boots the payload from memory, so nothing is copied and nothing is
-// written. apeld/README.md says what each one does.
-//
 //go:embed apeld/bin/apeld-linux-amd64
 var apeldLinuxAMD64 []byte
 
@@ -28,21 +23,16 @@ var apeldLinuxARM64 []byte
 var apeldDarwinARM64 []byte
 
 // apeLoader is one embedded loader and the region of the APE header it
-// occupies. The bootstrap script reads it back out with dd, so the offset
-// and the length reach the script as decimal literals.
+// occupies.
 type apeLoader struct {
-	name   string // the file name a host installs it under
+	name   string
 	blob   []byte // the bytes as they sit in the APE header
 	gzip   bool   // blob is gzipped, so the script pipes it through gzip -dc
 	offset int    // where in the header those bytes go
-	tag    string // 8 hex digits of the loader's own SHA-256
+	tag    string
 }
 
-// Loader regions of the 64K APE header. The script runs from
-// apeScriptOffset and the Mach-O header sits at apeMachoOffset, so the
-// first loader starts after both. Nothing decodes these bytes: they are
-// past the 8192-byte window the cosmo ape loader scans for printf
-// statements, and the shell stops parsing at the script's own exit.
+// Loader regions of the 64K APE header.
 const (
 	apeLdLinuxAMD64Offset  = 0x2800
 	apeLdLinuxARM64Offset  = 0x2c00
@@ -79,8 +69,8 @@ func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader
 	return l
 }
 
-// apeGzip compresses bin at the fixed level every link uses, so two links
-// of the same input produce the same APE.
+// apeGzip compresses bin at the fixed level every link uses, so links of
+// the same input produce the same APE.
 func apeGzip(bin []byte, name string) []byte {
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
@@ -118,8 +108,6 @@ func apeLoadersFor(plat cosmoape.Set) []*apeLoader {
 }
 
 // inApeLoader reports whether the header byte at off belongs to a loader.
-// The padding pass rewrites every NUL byte it finds, and a loader carries
-// plenty of them.
 func inApeLoader(loaders []*apeLoader, off int) bool {
 	for _, l := range loaders {
 		if off >= l.offset && off < l.offset+len(l.blob) {
