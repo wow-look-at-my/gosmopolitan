@@ -648,3 +648,93 @@ func TestRegexpPrecompileNoRuntimeCompile(t *testing.T) {
 		}
 	}
 }
+
+// rxWarnSource is a program outside GOROOT. Each line that ends in
+// "// warn" must get the performance warning, and no other line may.
+const rxWarnSource = `package main
+
+import (
+	"os"
+	"regexp"
+)
+
+func dynamic(pat string) *regexp.Regexp {
+	return regexp.MustCompile(pat) // warn
+}
+
+func dynamicPOSIX() *regexp.Regexp {
+	return regexp.MustCompilePOSIX(os.Args[0]) // warn
+}
+
+var global = "^x"
+
+func fromGlobal() *regexp.Regexp {
+	return regexp.MustCompile(global) // warn
+}
+
+const prefix = "^a"
+
+func constant() *regexp.Regexp {
+	local := prefix + "+"
+	return regexp.MustCompile(local + "$")
+}
+
+func value() *regexp.Regexp {
+	compile := regexp.MustCompile
+	return compile("b+")
+}
+
+func runtimeCompile(pat string) (*regexp.Regexp, error) {
+	return regexp.Compile(pat)
+}
+
+func main() {
+	all := []*regexp.Regexp{dynamic("c+"), dynamicPOSIX(), fromGlobal(), constant(), value()}
+	extra, _ := runtimeCompile(os.Args[0])
+	os.Exit(len(all) - 5 + extra.NumSubexp())
+}
+`
+
+// TestRegexpPrecompileWarning builds a program whose MustCompile patterns
+// are partly dynamic. The build must succeed, and it must print a
+// performance warning with the file and line of each dynamic call and of no
+// other call.
+func TestRegexpPrecompileWarning(t *testing.T) {
+	testenv.MustHaveGoBuild(t)
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module warn\n\ngo 1.27\n"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(rxWarnSource), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	var want []int
+	for idx, line := range strings.Split(rxWarnSource, "\n") {
+		if strings.HasSuffix(line, "// warn") {
+			want = append(want, idx+1)
+		}
+	}
+	build := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", filepath.Join(dir, "warn.exe"), ".")
+	build.Dir = dir
+	build.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64", "CGO_ENABLED=0", "GOFLAGS=")
+	out, err := build.CombinedOutput()
+	if err != nil {
+		t.Fatalf("a performance warning failed the build: %v\n%s", err, out)
+	}
+	warning := regexp.MustCompile(`(?m)^\./main\.go:(\d+):\d+: performance warning: the pattern of regexp\.MustCompile(POSIX)? is not constant, so it compiles at run time$`)
+	var have []int
+	for _, match := range warning.FindAllStringSubmatch(string(out), -1) {
+		line, err := strconv.Atoi(match[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		have = append(have, line)
+	}
+	if fmt.Sprint(have) != fmt.Sprint(want) {
+		t.Errorf("warnings at lines %v, want %v\n%s", have, want, out)
+	}
+	if strings.Count(string(out), "performance warning") != len(want) {
+		t.Errorf("unexpected warnings:\n%s", out)
+	}
+}

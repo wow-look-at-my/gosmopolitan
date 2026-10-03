@@ -112,7 +112,8 @@ func (pass *pass) visit(node ir.Node) {
 // warnDynamic reports a pattern that compiles at run time. Code of this
 // tree and an inlined body from another function get no warning. The first
 // is not the user's code, and the second has its own. A test package of the
-// standard library has no -std flag, so its GOROOT path identifies it.
+// standard library and a program of the test directory have no -std flag,
+// so their GOROOT path identifies them.
 func (pass *pass) warnDynamic(pos src.XPos, name string) {
 	inner := base.Ctxt.InnermostPos(pos).Base()
 	if base.Flag.Std || inner.InliningIndex() >= 0 || inGOROOT(inner.Filename()) {
@@ -128,7 +129,7 @@ func inGOROOT(file string) bool {
 	if buildcfg.GOROOT == "" {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Join(buildcfg.GOROOT, "src"), file)
+	rel, err := filepath.Rel(buildcfg.GOROOT, file)
 	return err == nil && filepath.IsLocal(rel)
 }
 

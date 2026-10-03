@@ -45,7 +45,7 @@ Equal patterns share their data. The symbols are named by a hash of the syntax a
   ```
 
   The warning never fails a build. The go command prints it for every build of the package, a cached one included. This is because it replays the compiler's output. go-toolchain streams that output during its build phase. `Compile` gets no warning: it is the function for a pattern that arrives at run time.
-- The code of this tree gets no warning, because it is not the user's code. That is a package compiled with `-std`, and a source file under `$GOROOT/src`. The second covers an external test package of the standard library, which the go command compiles without `-std`. A body inlined from another function gets no warning either. The function it came from has its own.
+- The code of this tree gets no warning, because it is not the user's code. That is a package compiled with `-std`, and a source file under `$GOROOT`. The second covers an external test package of the standard library, which the go command compiles without `-std`, and the programs of the `test` directory. A body inlined from another function gets no warning either. The function it came from has its own.
 
 ## The compiler and the target must match
 
@@ -68,4 +68,5 @@ The bootstrap compiler, toolchain1, links the bootstrap Go's `regexp` and its ol
 - `TestRegexpPrecompileDifferential` in `cmd/compile/internal/test` reads the whole regexp test corpus. That is `re2-search.txt`, `re2-exhaustive.txt.bz2`, the Fowler `.dat` files, and the pattern tables of the `regexp` and `regexp/syntax` tests. It builds each one from a constant and from a variable, in both syntaxes. The two must be deeply equal and must give the same answer from every match method on every corpus input, with and without `Longest`.
 - `TestRegexpPrecompileNoRuntimeCompile` builds a program from the constant patterns of the corpus, without the exhaustive file. It checks that `regexp.compile`, `regexp/syntax.parse`, `regexp/syntax.Compile` and `regexp.compileOnePass` are not linked. A program with one variable pattern must link all four, which proves the check can fail.
 - `TestConstantPatternIsPrecompiled` in `regexp` checks that two calls with one constant share one program, which a run-time compile never does.
-- `test/regexpprecompile.go` checks the copy semantics, `test/regexpprecompile_warn.go` the warning and `test/regexpprecompile_err.go` the compile error.
+- `TestRegexpPrecompileWarning` in `cmd/compile/internal/test` builds a program outside GOROOT. The build must succeed and print the warning at the file and line of each dynamic call, and of no other.
+- `test/regexpprecompile.go` checks the copy semantics, and `test/regexpprecompile_err.go` checks the compile error.
