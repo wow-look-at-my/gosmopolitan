@@ -236,8 +236,6 @@ static void fill_syslib(void) {
 	lib.sysctlnametomib = w_sysctlnametomib;
 }
 
-// Refuse a load range that already holds live memory: MAP_FIXED would
-// replace it in silence, and a payload at 4 TiB can land on a malloc arena.
 static void check_range_free(uint64_t lo, uint64_t hi) {
 	for (mach_vm_address_t a = lo & -PAGESZ; a < hi;) {
 		mach_vm_address_t ra = a;
@@ -366,8 +364,6 @@ int main(int argc, char **argv, char **envp) {
 	fill_syslib();
 	if (getentropy(rando, sizeof rando)) die("getentropy failed");
 
-	// New stack block: argc, argv[1..], NULL, envp, NULL, auxv, in a frame
-	// that never returns. argv[0] of the loader is dropped.
 	int envc = 0;
 	while (envp[envc]) envc++;
 	long words = 1 + (argc - 1) + 1 + envc + 1 + AUXV_WORDS;

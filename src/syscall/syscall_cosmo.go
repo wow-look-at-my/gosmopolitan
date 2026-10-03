@@ -1,11 +1,9 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
-// Cosmopolitan system calls.
-// This file is compiled as ordinary Go code,
-// but it is also input to mksyscall,
-// which parses the //sys lines and generates system call stubs.
+// Cosmopolitan system calls. This file is compiled as ordinary Go code, but
+// it is also input to mksyscall, which parses the //sys lines and generates
+// system call stubs.
 
 //go:build cosmo
 
@@ -43,8 +41,6 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 	var errno uintptr
 	if w := cosmo.Windows(); w != nil {
 		// NT host: route through the runtime's emulation table.
-		// The table is non-nil only when the runtime resolved it
-		// at boot on a Windows host.
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, a4, a5, a6)
 	} else {
 		r1, r2, errno = cosmo.Syscall6(trap, a1, a2, a3, a4, a5, a6)
@@ -58,13 +54,7 @@ func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errn
 //go:linkname Syscall
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
 	if w := cosmo.Windows(); w != nil {
-		// NT host: run the emulation WITHOUT entering syscall
-		// state. The emulation is ordinary Go code - it allocates
-		// for path translation and Linux-struct synthesis, which
-		// entersyscall's throwsplit would make fatal - and it
-		// brackets the genuinely blocking Win32 calls with
-		// entersyscall internally instead (the cgocall model), so
-		// sysmon can still retake the P during a blocking ReadFile.
+		// NT host: run the emulation WITHOUT entering syscall state.
 		var errno uintptr
 		r1, r2, errno = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
 		return r1, r2, Errno(errno)
@@ -103,17 +93,8 @@ func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) 
 	return
 }
 
-// rawSyscallNoError is used by the generated //sysnb wrappers for
-// Linux syscalls that cannot fail (getpid and friends; no pointer
-// arguments among its users, and never called from fork children or
-// between entersyscall/exitsyscall on cosmo, so deliberately NOT
-// nosplit - the darwin arm64 emulation chain below the asm entry sits
-// exactly at the nosplit budget and cannot afford an extra frame). On
-// NT hosts route through the emulation table like every other syscall
-// - the assembly entry would execute a raw SYSCALL, which is
-// forbidden there. The errno is discarded by construction, so an
-// unemulated call surfaces as r1 = ^uintptr(0) (-1), which is what os
-// reports for identity calls on plain Windows.
+// rawSyscallNoError is used by the generated //sysnb wrappers for Linux
+// syscalls that cannot fail (getpid and friends.
 func rawSyscallNoError(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
 	if w := cosmo.Windows(); w != nil {
 		r1, r2, _ = w.Syscall6(trap, a1, a2, a3, 0, 0, 0)
@@ -158,12 +139,8 @@ func Faccessat(dirfd int, path string, mode uint32, flags int) (err error) {
 //sys	fchmodat(dirfd int, path string, mode uint32) (err error)
 
 func Fchmodat(dirfd int, path string, mode uint32, flags int) error {
-	// The Linux fchmodat syscall takes no flags, so a request not to
-	// follow the symlink cannot be honored - and applying the mode to
-	// the link target instead is not what the caller asked for. Report
-	// it, exactly as glibc and the linux port do. macOS could honor the
-	// flag, but one APE answering the same call differently per host is
-	// worse than answering it consistently.
+	// The Linux fchmodat syscall takes no flags, so a request not to follow the
+	// symlink cannot be honored - and applying the mode.
 	if flags&^(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
 		return EINVAL
 	} else if flags&(_AT_SYMLINK_NOFOLLOW|_AT_EMPTY_PATH) != 0 {
@@ -191,8 +168,7 @@ func Mknod(path string, mode uint32, dev int) (err error) {
 }
 
 func Open(path string, mode int, perm uint32) (fd int, err error) {
-	// Openat serves /proc/self/auxv itself and adds O_LARGEFILE,
-	// so Open keeps no logic of its own.
+	// Openat serves /proc/self/auxv itself and adds O_LARGEFILE, so Open keeps no logic of its own.
 	return Openat(_AT_FDCWD, path, mode, perm)
 }
 
@@ -205,8 +181,7 @@ func Openat(dirfd int, path string, flags int, mode uint32) (fd int, err error) 
 	}
 	fd, err = openat(dirfd, path, flags|O_LARGEFILE, mode)
 	if err != nil && path == procSelfAuxv {
-		// Only a Linux host owns this file; elsewhere the APE answers
-		// it. See openAuxv.
+		// Only a Linux host owns this file; elsewhere the APE answers it. See openAuxv.
 		return openAuxv(flags)
 	}
 	return fd, err
@@ -218,10 +193,7 @@ func Pipe(p []int) error {
 
 //sysnb pipe2(p *[2]_C_int, flags int) (err error)
 
-// Pipe2 holds the fork lock across the pipe creation: on a darwin host pipe2
-// is pipe + fcntl, so a fork between the two inherits the ends without
-// close-on-exec and a child's stdout pipe never reaches EOF. Darwin's own
-// Pipe2 does the same.
+// Pipe2 holds the fork lock across the pipe creation.
 func Pipe2(p []int, flags int) error {
 	ForkLock.RLock()
 	defer ForkLock.RUnlock()
@@ -394,10 +366,8 @@ func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int,
 
 //sys	sendfile(outfd int, infd int, offset *int64, count int) (written int, err error)
 
-// statfs and fstatfs fill a struct the host defines, and macOS defines
-// a much larger one. Syscall converts it on a macOS host
-// (bigbuf_cosmo.go), so these wrappers and every other caller of the raw
-// syscall get a Linux Statfs_t on every host.
+// statfs and fstatfs fill a struct the host defines, and macOS defines a much
+// larger one.
 //
 //sys	Fstatfs(fd int, buf *Statfs_t) (err error)
 //sys	Statfs(path string, buf *Statfs_t) (err error)

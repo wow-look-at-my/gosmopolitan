@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -31,8 +30,7 @@ const (
 
 	_NT_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 	_NT_IO_REPARSE_TAG_SYMLINK     = 0xA000000C
-	// A reparse point with this bit stands for another name. Symlinks
-	// and junctions carry it; placeholders and deduplicated files do not.
+	// A reparse point with this bit stands for another name.
 	_NT_REPARSE_TAG_NAME_SURROGATE = 0x20000000
 	_NT_SYMLINK_FLAG_RELATIVE      = 0x1
 
@@ -48,7 +46,6 @@ const (
 	_NT_DT_LNK = 10
 )
 
-// ntcallE8 is ntcallE for an eight-argument function (DeviceIoControl).
 //
 //go:nosplit
 func ntcallE8(fn, a1, a2, a3, a4, a5, a6, a7, a8 uintptr) (r, lastErr uintptr) {
@@ -79,7 +76,7 @@ func ntIsNameSurrogate(attrs, tag uint32) bool {
 }
 
 // ntWIsAbs reports whether a NUL-terminated Win32 path names a drive or
-// a UNC share, the two spellings NT resolves without a directory.
+// a UNC share, both spellings NT resolves without a directory.
 func ntWIsAbs(w []uint16) bool {
 	if len(w) >= 3 && w[1] == ':' {
 		return true
@@ -155,12 +152,12 @@ func ntEmuSymlinkat(oldp *byte, newdirfd int32, newp *byte) (r1, r2, errno uintp
 	return 0, 0, 0
 }
 
-// ntReadlinkW reads the name the link at w stands for, in the Linux
-// spelling symlinkat took it in. The substitute name is the one NT
-// resolves, and it carries the \??\ prefix of the object namespace,
-// which is stripped here; \??\UNC\server\share becomes \\server\share.
-// A path that is not a symlink or a junction answers EINVAL, Linux's
-// errno for readlink of an ordinary file.
+// ntReadlinkW reads the name the link at w stands for, in the Linux spelling
+// symlinkat took it in. The substitute name is the NT resolves, and it
+// carries the \??\ prefix of the object namespace, which is stripped here;
+// \??\UNC\server\share becomes \\server\share. A path that is not a symlink
+// or a junction answers EINVAL, Linux's errno for readlink of an ordinary
+// file.
 func ntReadlinkW(w []uint16) (string, uintptr) {
 	if ntDeviceIoControlFn == 0 {
 		return "", ntENOSYS
@@ -186,11 +183,7 @@ func ntReadlinkW(w []uint16) (string, uintptr) {
 	if got < 8 {
 		return "", ntEINVAL
 	}
-	// REPARSE_DATA_BUFFER: ReparseTag, ReparseDataLength, Reserved, then
-	// the tag's own layout. Both name-carrying layouts open with the
-	// substitute and print name offsets and lengths, in bytes, into a
-	// path buffer that follows a Flags word for a symlink and nothing for
-	// a junction.
+	// REPARSE_DATA_BUFFER: ReparseTag, ReparseDataLength, Reserved, then the tag's own layout.
 	tag := *(*uint32)(unsafe.Pointer(&buf[0]))
 	subOff := uintptr(*(*uint16)(unsafe.Pointer(&buf[8])))
 	subLen := uintptr(*(*uint16)(unsafe.Pointer(&buf[10])))
@@ -252,10 +245,9 @@ func ntClearReadonly(w []uint16) bool {
 	return r != 0
 }
 
-// ntChmodW carries the one permission bit NT has: the owner's write
-// bit, as the READONLY attribute. Every other bit is synthetic (see
-// ntStatFromInfo), so a mode that only changes those is already
-// applied.
+// ntChmodW carries the permission bit NT has: the owner's write bit, as the
+// READONLY attribute. Every other bit is synthetic (see ntStatFromInfo), so a
+// mode that only changes those is already applied.
 func ntChmodW(w []uint16, mode uint32) uintptr {
 	attrs, werr := ntcallE(ntGetFileAttributesWFn, uintptr(unsafe.Pointer(&w[0])), 0, 0, 0, 0, 0, 0)
 	if uint32(attrs) == _NT_INVALID_FILE_ATTRIBUTES {
@@ -283,11 +275,9 @@ func ntChmodW(w []uint16, mode uint32) uintptr {
 	return 0
 }
 
-// ntDupHandle duplicates a slot's handle into this process. A socket is
-// a real kernel file handle, and a same-process duplicate names the
-// same object with an independent lifetime, which is dup(2)'s
-// contract. MSDN's warning against DuplicateHandle on sockets concerns
-// non-IFS layered providers, which msafd and afunix are not.
+// ntDupHandle duplicates a slot's handle into this process. A socket is a
+// real kernel file handle, and a same-process duplicate names the same object
+// with an independent lifetime, which is dup(2)'s contract.
 func ntDupHandle(h uintptr) (uintptr, uintptr) {
 	var nh uintptr
 	r, werr := ntcallE(ntDuplicateHandleFn,
@@ -302,9 +292,8 @@ func ntDupHandle(h uintptr) (uintptr, uintptr) {
 	return nh, 0
 }
 
-// ntCloseKind closes a handle the way its fd kind requires: closesocket
-// for a socket, because CloseHandle would leak the winsock provider
-// state behind the SOCKET.
+// ntCloseKind closes a handle the way its fd kind requires: closesocket for a
+// socket.
 func ntCloseKind(h uintptr, kind ntFDKind) {
 	if kind == ntFDSocket {
 		ntcall(ntWSACloseSocketFn, h, 0, 0, 0, 0, 0)
@@ -313,13 +302,8 @@ func ntCloseKind(h uintptr, kind ntFDKind) {
 	ntcall(ntCloseHandleFn, h, 0, 0, 0, 0, 0)
 }
 
-// ntDupEntry is the slot a duplicate of e gets: the same kind, flags,
-// path and socket identity over a fresh handle. The nonblocking mode
-// travels with the handle, because FIONBIO is socket-object state, and
-// the enumeration cursor of a directory travels with it too, the way
-// Linux's shared open file description carries the offset. Entries the
-// original fd fetched but has not delivered stay with it. Close-on-exec
-// is the caller's, per POSIX.
+// ntDupEntry is the slot a duplicate of e gets: the same kind, flags, path
+// and socket identity over a fresh handle.
 func ntDupEntry(e ntFDEntry, nh uintptr, cloexec bool) ntFDEntry {
 	e.handle = nh
 	e.cloexec = cloexec
@@ -327,8 +311,7 @@ func ntDupEntry(e ntFDEntry, nh uintptr, cloexec bool) ntFDEntry {
 	return e
 }
 
-// ntEmuDup implements dup(2) for every fd kind, into the lowest free
-// slot.
+// ntEmuDup implements dup(2) for every fd kind, into the lowest free slot.
 func ntEmuDup(fd int32) (r1, r2, errno uintptr) {
 	e, ok := ntFDLookup(fd)
 	if !ok {
