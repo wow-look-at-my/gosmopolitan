@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -46,8 +45,7 @@ const (
 )
 
 // Tgkill sends a signal to one thread of a thread group. Kill names the whole
-// group, so this is the only way to reach a chosen thread. Served on a Linux
-// host; the darwin and NT dispatches answer ENOSYS.
+// group, so this is the only way to reach a chosen thread.
 func Tgkill(tgid int, tid int, sig Signal) (err error) {
 	_, _, e1 := RawSyscall(SYS_TGKILL, uintptr(tgid), uintptr(tid), uintptr(sig))
 	if e1 != 0 {

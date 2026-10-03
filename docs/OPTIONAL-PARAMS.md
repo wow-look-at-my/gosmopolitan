@@ -6,20 +6,20 @@ A parameter may carry a default:
 func ReadModulePath(root string = ".") string
 ```
 
-A call may then omit it, and the compiler passes the default expression in its place:
+A call may then omit it. The compiler passes the default expression in its place:
 
 ```go
 ReadModulePath()      // root == "."
 ReadModulePath("sub") // root == "sub"
 ```
 
-This removes the pattern the feature exists for: an API whose every production caller passes the same constant, parameterized only so a test can. Go's alternatives are a variadic tail, which accepts two roots and cannot say so, or a second exported function per default.
+This removes the pattern the feature exists for: an API whose every production caller passes the same constant, parameterized only so a test can. Go's alternatives are a variadic tail, which accepts roots and cannot say so, or a second exported function per default.
 
 ## Rules
 
 - Only a **named ordinary parameter** takes a default. A type parameter list reads `=` as a type. An unnamed parameter gives the callee nothing to read. The parser rejects both.
 - Defaults must be **trailing**. A call omits a suffix of the parameter list, so a default before a required parameter can never be used.
-- A default is a **constant**, and a boolean, string or integer one. The call site is given the value spelled back as source, and only those three kinds have a spelling that reads back as the. A float can arrive as a rational.
+- A default is a **constant**, and a boolean, string or integer one. The call site is given the value spelled back as source, and only those kinds have a spelling that reads back as the. A float can arrive as a rational.
 - The constant must be **assignable to the parameter type**, by the ordinary assignability rules. An untyped one converts exactly as an argument can.
 - A default may also be a **struct literal** of the parameter's type. Every element is keyed, and every value is itself a default: a boolean, string or integer constant, or a nested struct literal. `T{}` is the zero value. A pointer, a slice, a map or a positional literal is refused.
 - A struct literal default is **evaluated as the declaring package**. It may name unexported fields, and a caller in another package still gets it. The call fills the literal with its type elided, under the parameter's type, and checks it as that package.
@@ -47,10 +47,10 @@ The arity check and the lowering land **together**, in one place: `arguments` ap
 
 ## Export data
 
-A default is part of a function's signature for a caller in another package, so it rides the unified IR. `pkgbits.V5` adds it: the writer emits a bool per parameter and the constant behind it, and the three readers take it back — `noder` for. A stream at an older version carries no such bit, so nothing there changes.
+A default is part of a function's signature for a caller in another package, so it rides the unified IR. `pkgbits.V5` adds it: the writer emits a bool per parameter and the constant behind it, and the readers take it back — `noder` for. A stream at an older version carries no such bit, so nothing there changes.
 
 `pkgbits.V6` widens the value to a `ParamDefault`. A bool says whether it is a struct literal. A constant follows a false bit. A field count follows a true bit, then a name and a value per field, recursively. `Var.Default` returns that type in `types2` and `go/types`. `String` spells it back as `{ints: 9, wide: true}`.
 
 The compiler's own reader drops the value it reads. types2 fills an omitted argument before the IR exists, so every call `noder` sees is.
 
-Three tests cover it. `test/paramdefaults.dir` compiles a library and a caller in separate packages and runs the result. `TestParameterDefaults` in `go/internal/gcimporter` reads the same defaults back off a compiled object through `go/types`. And `src/internal/types/testdata/check/paramdefaults.go` holds the rules both checkers enforce inside one package.
+Tests cover it. `test/paramdefaults.dir` compiles a library and a caller in separate packages and runs the result. `TestParameterDefaults` in `go/internal/gcimporter` reads the same defaults back off a compiled object through `go/types`. And `src/internal/types/testdata/check/paramdefaults.go` holds the rules both checkers enforce inside one package.

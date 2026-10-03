@@ -1,15 +1,5 @@
 #!/bin/sh
 # Boots an APE with every writable path made read-only, on linux and darwin.
-# The loader reads the APE where it lies, so a read-only host is enough.
-#
-# One case per invocation:
-#   resident  a loader is installed read-only, and the APE runs
-#   ram       no loader at all, so the embedded one goes to tmpfs and runs
-#   container the docker --read-only shape, where only the bind mount execs
-#   refuse    nothing is writable and no loader exists, so it must exit 121
-#
-# The APE goes through /bin/sh on purpose. A binfmt_misc entry would otherwise
-# take the exec, and this has to reach the boot script.
 set -u
 
 case=${1:?usage: readonly-boot.sh resident|ram|container|refuse}
@@ -17,7 +7,7 @@ ape=${2:?usage: readonly-boot.sh <case> <ape>}
 
 # A mode bit means nothing to root, so root gets the same directories as
 # read-only BIND MOUNTS instead, inside a mount namespace of its own. Either
-# way the canary below proves the write actually fails before anything runs.
+# way the canary below proves the write fails before anything runs.
 if [ "$(id -u)" = 0 ] && [ "${RO_BOOT_NS:-}" != 1 ]; then
 	command -v unshare >/dev/null 2>&1 || {
 		echo "run this as a normal user, or install unshare: root ignores a mode bit" >&2
@@ -65,8 +55,7 @@ host_loader() {
 	esac
 	src=src/cmd/link/internal/ld/apeld/bin/apeld-$os-$arch
 	[ -f "$src" ] || { echo "$src is missing from the checkout" >&2; return 1; }
-	# The name stays as it is. A darwin loader's ad-hoc signature names the
-	# file it was signed as, and a rename breaks the signature.
+	# The name stays as it is.
 	loader=$1/apeld-$os-$arch
 	cp "$src" "$loader" || return 1
 	chmod 755 "$loader"
@@ -74,8 +63,7 @@ host_loader() {
 
 mkdir -p "$work" || exit 1
 
-# A read-only directory for the unpack, and a read-only copy of the APE's own
-# directory. 0555 refuses a write for anybody but root, and CI runs as a user.
+# A read-only directory for the unpack, and a read-only copy of the APE's own directory.
 mkdir -p "$work/nowrite" "$work/prog" "$work/lib"
 cp "$ape" "$work/prog/prog.com" || exit 1
 chmod 755 "$work/prog/prog.com"
@@ -108,16 +96,13 @@ if [ "$case" = resident ]; then
 fi
 
 if [ "$case" = container ]; then
-	# The shape `docker run --read-only` leaves: /dev/shm is writable and
-	# noexec, /tmp is gone, and the program arrives on a bind mount. The
-	# program's own directory is the only candidate left.
+	# The shape `docker run --read-only` leaves: /dev/shm is writable and noexec, /tmp is gone.
 	command -v unshare >/dev/null 2>&1 || { echo "unshare is needed to build the container shape" >&2; exit 1; }
 	if ! { [ -d /opt ] && [ -d /dev/shm ]; }; then
 		echo "/opt and /dev/shm have to exist to build the shape" >&2
 		exit 1
 	fi
-	# -r maps this user to root inside, which is what buys the mounts with no
-	# sudo. readonly-boot-container.sh builds the shape and runs the program.
+	# -r maps this user to root inside, which is what buys the mounts with no sudo.
 	out=$(unshare -rm sh dats/test/readonly-boot-container.sh "$ape" "$@" 2>&1)
 	code=$?
 	case $code in
@@ -135,9 +120,7 @@ if [ "$case" = container ]; then
 fi
 
 if [ "$case" = ram ]; then
-	# Nothing resident, and the program's own directory read-only. The script
-	# falls through to its own embedded loader, which goes to tmpfs. Nothing
-	# reaches a disk, and nothing is left for anybody to find.
+	# Nothing resident, and the program's own directory read-only.
 	before=$(find /dev/shm -maxdepth 1 -name '.ape-*' 2>/dev/null | wc -l)
 	out=$(PATH="$work/nowrite" APE_LOADER='' \
 		/bin/sh "$work/prog/prog.com" "$@" 2>&1)

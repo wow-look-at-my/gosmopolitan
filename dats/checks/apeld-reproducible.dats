@@ -3,8 +3,7 @@
 # has no loader of its own runs one of them. So the source in that
 # directory has to be what produced them, and this is what says so.
 #
-# zig 0.16.0, ld64.lld and llvm-strip build them. ZIG, LLD and STRIP name
-# the tools. The CI job installs them.
+# ZIG, LLD and STRIP name the tools. The CI job installs them.
 tests:
 	- desc: every committed loader rebuilds byte-for-byte from its source
 	  cmd: dats/checks/apeld-reproducible.sh
