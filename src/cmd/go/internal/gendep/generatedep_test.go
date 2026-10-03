@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package gendep
 
@@ -14,15 +13,14 @@ import (
 )
 
 // Each package of a module is generated in its own copy of the fetched module
-// and published into the one tree builds read. The second publish must add what
-// its generator wrote and remove what it removed, and leave the first package's
-// output where it was.
+// and published into the tree builds read. The second publish must add what
+// its generator wrote and remove what it removed, and leave the first
+// package's output where it was.
 func TestPublishGeneratedKeepsEveryPackage(test *testing.T) {
 	base := test.TempDir()
 	modroot := filepath.Join(base, "mod")
 	root := filepath.Join(base, "generate")
-	// Cleanups run in reverse, so this runs before TempDir's removal, which
-	// cannot remove a read-only tree.
+	// Cleanups run in reverse, so this runs before TempDir's removal, which cannot remove a read-only tree.
 	test.Cleanup(func() { makeTreeWritable(root) })
 
 	writeFiles(test, modroot, map[string]string{
@@ -94,9 +92,7 @@ func TestPublishGeneratedKeepsEveryPackage(test *testing.T) {
 }
 
 // readOnlyDirWriteBits answers the write bits a directory reports on this
-// platform once os.Chmod has made it read-only. That is none wherever files
-// carry permissions. wasip1 has no permission model: its Chmod changes nothing
-// and its Stat reports every directory as 0700.
+// platform once os.Chmod has made it read-only.
 func readOnlyDirWriteBits(test *testing.T) fs.FileMode {
 	test.Helper()
 	probe := filepath.Join(test.TempDir(), "probe")
@@ -129,7 +125,7 @@ func writeFiles(test *testing.T, dir string, files map[string]string) {
 	}
 }
 
-// A host with no sandbox says nothing about the module being built, so the two
+// A host with no sandbox says nothing about the module being built, so both
 // kinds of failure have to stay apart. Reading them as one let a machine
 // without bwrap record a permanent verdict against every module it touched,
 // and installing bwrap afterwards could not clear it.

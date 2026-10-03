@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# bubble-serial.sh -- a test that opens a synctest bubble must take the serial
-# barrier BEFORE it, never from inside.
-#
-# T.Serial stops every other test in the process, so it waits on a condition
-# only another test can clear. A goroutine inside a synctest bubble that waits
-# on it parks alongside every other goroutine in that bubble, and synctest
-# reports "deadlock: all goroutines in bubble are blocked" naming neither
-# Serial nor the helper that asked for it. Serial is idempotent, so hoisting
-# the ask into the wrapper costs the caller nothing.
+# bubble-serial.sh -- a test that opens a synctest bubble must take the serial barrier BEFORE it, never from inside.
 
 set -uo pipefail
 
@@ -119,7 +111,7 @@ funcBody() {
 }
 
 # Per directory: which non-test funcs reach Serial(), directly or through
-# another one, and which bubble bodies call one of those.
+# another, and which bubble bodies call one of those.
 while IFS= read -r dir; do
 	files=$(ls "$dir"/*_test.go 2>/dev/null) || continue
 	[ -n "$files" ] || continue
@@ -128,7 +120,7 @@ while IFS= read -r dir; do
 	helpers=$(serialHelpers $files | sort -u)
 	[ -n "$helpers" ] || continue
 
-	# Three hops of reach, which is as deep as a test helper chain goes.
+	# Hops of reach, which is as deep as a test helper chain goes.
 	for pass in 1 2 3; do
 		more=$(helperCallers $files | sort -u)
 		helpers=$(printf '%s\n%s\n' "$helpers" "$more" | sort -u)

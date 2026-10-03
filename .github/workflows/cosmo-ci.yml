@@ -273,7 +273,7 @@ jobs:
           sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
           probe=$!
           trap 'kill "$probe"' EXIT
-          cd src && ./run.bash 2>&1 | tee "$RUNNER_TEMP/suite.log"
+          cd src && ./run.bash 2>&1 | tee "${{ runner.temp }}/suite.log"
 
       # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
       - name: A patch that applies a multi-file diff (NT)
@@ -591,7 +591,7 @@ jobs:
         # Runs before the fork toolchain is built so `go` is unambiguously the setup-go bootstrap -- see docs/CI.md "wasm job".
         timeout-minutes: 5
         shell: bash
-        run: GOOS=linux GOARCH=amd64 GOBIN="$RUNNER_TEMP/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "$RUNNER_TEMP/wasibin/wazero" /usr/local/bin/wazero
+        run: GOOS=linux GOARCH=amd64 GOBIN="${{ runner.temp }}/wasibin" go install github.com/tetratelabs/wazero/cmd/wazero@v1.12.0 && sudo install -m 0755 "${{ runner.temp }}/wasibin/wazero" /usr/local/bin/wazero
 
       - name: Take the toolchain build-linux built
         uses: wow-look-at-my/actions@cache-download#latest

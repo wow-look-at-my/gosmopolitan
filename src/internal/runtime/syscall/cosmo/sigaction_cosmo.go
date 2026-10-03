@@ -1,23 +1,15 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package cosmo
 
-// The parts of the sigaction translation that do not depend on how the
-// host is reached. amd64 issues the raw __sigaction syscall over
-// Apple's KERNEL struct sigaction; arm64 calls Apple libc through the
-// APE loader's Syslib over the LIBC one. Both take Apple signal
-// numbers, an Apple 4-byte sigset and Apple flag values, and the
-// translation between those and Linux's is the same either way.
+// The parts of the sigaction translation that do not depend on how the host
+// is reached. amd64 issues the raw __sigaction syscall.
 
-// Linux sigaction flags (runtime/defs_cosmo_amd64.go, identical on
-// arm64) and their Apple counterparts
-// (runtime/signal_cosmo_xnu_flags.go). Only these three cross over; any
-// other Linux bit either has no Apple counterpart or names something
-// Apple uses that bit position for.
+// Linux sigaction flags (runtime/defs_cosmo_amd64.go, identical on arm64) and
+// their Apple counterparts (runtime/signal_cosmo_xnu_flags.go).
 const (
 	linuxSA_SIGINFO = 0x4
 	linuxSA_ONSTACK = 0x8000000
@@ -28,7 +20,7 @@ const (
 	appleSA_SIGINFO = 0x40
 )
 
-// A Linux sigset_t is 8 bytes; rt_sigaction rejects any other size.
+// A Linux sigset_t is several bytes; rt_sigaction rejects any other size.
 const linuxSigsetSize = 8
 
 // linuxSigactiont is the struct rt_sigaction takes, matching
@@ -74,10 +66,7 @@ func sigFlagsA2L(a int32) uint64 {
 	return fl
 }
 
-// sigmaskL2A converts a Linux 64-bit signal mask to an Apple 32-bit
-// sigset_t. Bit N-1 means signal N on both systems and the numbers
-// differ, so this REMAPS bits rather than truncating them. A signal
-// with no Apple number is dropped: it cannot be raised on this host.
+// sigmaskL2A converts a Linux 64-bit signal mask to an Apple 32-bit sigset_t.
 //
 //go:nosplit
 func sigmaskL2A(m uint64) uint32 {
