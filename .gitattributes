@@ -270,3 +270,4 @@ src/testing/fork_test.go -linguist-vendored
 src/testing/serialgate.go -linguist-vendored
 src/testing/serialgate_test.go -linguist-vendored
 src/uuid/export_test.go -linguist-vendored
+src/cmd/link/internal/ld/apeld/bin/apeld-* filter=lfs diff=lfs merge=lfs -text

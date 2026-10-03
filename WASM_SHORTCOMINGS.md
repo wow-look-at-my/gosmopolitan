@@ -43,7 +43,7 @@ The wasm ports came from upstream Go unmodified, so every shortcoming here is up
 - P1, inherent: Signals are never delivered on either port (_NSIG=0). Notify compiles and registers channels that can never fire (and, after this fork's fix, no longer burns CPU on wasip1). time.Sleep is uninterruptible.
 - P1, inherent: In a browser the default filesystem is ENOSYS-everything except stdout/stderr writes. Real fs exists only under node. js time zones are a fixed-offset snapshot of the current UTC offset, so wall times in the other.
 - P2, inherent: One blocking host call halts the world (all goroutines and timers) - single thread, no event loop on wasip1. Mitigated for stdio and pollable fds via nonblocking mode plus the poll_oneoff netpoller, but only when the host supports it (tetratelabs/wazero#1538, golang/go#62304).
-- P2, document: identity/introspection are canned: os.Executable errors, Hostname is "wasip1"/"js", uid/gid are constants. Os.Getwd on wasip1 is bookkeeping from $PWD/first preopen, never validated against the host.
+- P2, document: identity/introspection are canned: os.Executable errors, Hostname is "wasip1"/"js", uid/gid are constants. Os.Getwd on wasip1 is bookkeeping from $PWD/first preopen, not validated against the host.
 - P3, document: browser clocks are Spectre-coarsened (sub-ms timing unreliable). Js PathMax is 256. The wasip1 poller supports a bounded number of subscriptions and netpollBreak is a no-op. Reactor (c-shared) instances execute nothing between host calls - timers fire late or never. A blocked export is a fatal deadlock.
 
 ## Performance cost of the preemption fix
