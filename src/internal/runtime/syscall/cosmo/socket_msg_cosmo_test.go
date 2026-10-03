@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package cosmo_test
 
@@ -14,15 +13,7 @@ import (
 )
 
 // The darwin sendmsg/recvmsg emulation's control-buffer repack
-// (socket_msg_cosmo.go) is pure byte manipulation, byte-identical on
-// both cosmo architectures, so these tests pin its behavior on any
-// host - the Linux CI leg runs them; macOS proves the dlsym wiring.
-//
-// Layout ground truth (see that file's header): Linux cmsghdr is
-// {Len u64, Level i32, Type i32} (16 bytes, data aligned to 8); Apple's
-// is {Len u32, Level i32, Type i32} (12 bytes, data aligned to 4).
-// SOL_SOCKET is 1 on Linux and 0xffff on Apple; SCM_RIGHTS is 1 on
-// both.
+// (socket_msg_cosmo.go) is pure byte manipulation.
 
 const (
 	tLinuxHdr  = 16
@@ -37,9 +28,6 @@ const (
 	tENOBUFS    = 105
 )
 
-// linuxCmsg appends one Linux-shaped cmsg (header + data + alignment
-// padding to 8, unless last is set, in which case the final record is
-// left unpadded - CMSG_LEN-tight, which the walker must accept).
 func linuxCmsg(b []byte, level, typ int32, data []byte, last bool) []byte {
 	var hdr [tLinuxHdr]byte
 	binary.LittleEndian.PutUint64(hdr[0:], uint64(tLinuxHdr+len(data)))
@@ -55,7 +43,6 @@ func linuxCmsg(b []byte, level, typ int32, data []byte, last bool) []byte {
 	return b
 }
 
-// appleCmsg appends one Apple-shaped cmsg (padding to 4 unless last).
 func appleCmsg(b []byte, level, typ int32, data []byte, last bool) []byte {
 	var hdr [tAppleHdr]byte
 	binary.LittleEndian.PutUint32(hdr[0:], uint32(tAppleHdr+len(data)))
@@ -177,15 +164,14 @@ func TestCmsgToAppleSingleRights(t *testing.T) {
 	if errno != 0 {
 		t.Fatalf("errno = %d", errno)
 	}
-	want := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(7, 42), false) // 20 bytes
+	want := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(7, 42), false) // Several
 	if !bytes.Equal(got, want) {
 		t.Fatalf("got %x, want %x", got, want)
 	}
 }
 
 func TestCmsgToAppleMultiRecordAndTightFinal(t *testing.T) {
-	// Two rights records; the second is CMSG_LEN-tight (no trailing
-	// alignment padding), which the walker must accept.
+	// Rights records; the second is CMSG_LEN-tight (no trailing alignment padding), which the walker must accept.
 	src := linuxCmsg(nil, tSOLLinux, tSCMRights, fdBytes(3), false)
 	src = linuxCmsg(src, tSOLLinux, tSCMRights, fdBytes(4, 5, 6), true)
 	got, errno := toApple(t, src, 192)
@@ -200,8 +186,7 @@ func TestCmsgToAppleMultiRecordAndTightFinal(t *testing.T) {
 }
 
 func TestCmsgToAppleSkipsForeignLevels(t *testing.T) {
-	// A non-SOL_SOCKET record between two rights records is silently
-	// skipped, exactly like Linux's af_unix send path.
+	// A non-SOL_SOCKET record between rights records is silently skipped, exactly like Linux's af_unix send path.
 	src := linuxCmsg(nil, tSOLLinux, tSCMRights, fdBytes(1), false)
 	src = linuxCmsg(src, 0 /* IPPROTO_IP */, 8 /* IP_PKTINFO */, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, false)
 	src = linuxCmsg(src, tSOLLinux, tSCMRights, fdBytes(2), false)
@@ -217,8 +202,6 @@ func TestCmsgToAppleSkipsForeignLevels(t *testing.T) {
 }
 
 func TestCmsgToAppleOddPayloadPads(t *testing.T) {
-	// A 6-byte payload is not a real rights payload, but it exercises
-	// the Apple 4-alignment: len 18, stored space 20, padding zeroed.
 	src := linuxCmsg(nil, tSOLLinux, tSCMRights, []byte{9, 8, 7, 6, 5, 4}, false)
 	got, errno := toApple(t, src, 192)
 	if errno != 0 {
@@ -281,9 +264,6 @@ func TestCmsgToLinuxSingleRights(t *testing.T) {
 }
 
 func TestCmsgToLinuxMultiRecordExpansion(t *testing.T) {
-	// rights(1 fd) + a foreign record (dropped silently: nothing on a
-	// macOS host can enable it) + rights(3 fds): the in-place rewrite
-	// must compact past the dropped record and expand both kept ones.
 	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(11), false)
 	apple = appleCmsg(apple, 0 /* IPPROTO_IP */, 26, []byte{1, 2, 3, 4, 5, 6, 7, 8}, false)
 	apple = appleCmsg(apple, tSOLApple, tSCMRights, fdBytes(21, 22, 23), false)
@@ -303,10 +283,8 @@ func TestCmsgToLinuxMultiRecordExpansion(t *testing.T) {
 }
 
 func TestCmsgToLinuxTruncationFdGranularity(t *testing.T) {
-	// The NT-session-verified kernel behavior: a 24-byte control buffer
-	// receives TWO of three fds (CMSG_SPACE alignment slack carries a
-	// whole fd), the third is closed, MSG_CTRUNC raised.
-	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(5, 6, 7), false) // 24 apple bytes
+	// The NT-session-verified kernel behavior: a 24-byte control buffer receives Some of fds.
+	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(5, 6, 7), false)
 	var applied, closed []int32
 	got, ctrunc := toLinux(t, apple, 24, &applied, &closed)
 	if !ctrunc {
@@ -325,9 +303,6 @@ func TestCmsgToLinuxTruncationFdGranularity(t *testing.T) {
 }
 
 func TestCmsgToLinuxWholeRecordDrop(t *testing.T) {
-	// A 16-byte capacity holds Apple's one-fd record (12+4) but not
-	// even the bare Linux header plus one fd (20): the record is
-	// dropped whole, its fd closed, nothing delivered.
 	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(8), false)
 	var closed []int32
 	got, ctrunc := toLinux(t, apple, 16, nil, &closed)
@@ -343,10 +318,6 @@ func TestCmsgToLinuxWholeRecordDrop(t *testing.T) {
 }
 
 func TestCmsgToLinuxSecondRecordDropped(t *testing.T) {
-	// Both Apple records (16 + 20 = 36 bytes) fit the 40-byte buffer,
-	// but after the first record's Linux expansion consumes 24 bytes,
-	// the 16 remaining cannot hold the second record's Linux shape
-	// (24): delivered fds cloexec'd, dropped fds closed, ctrunc.
 	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(1), false)
 	apple = appleCmsg(apple, tSOLApple, tSCMRights, fdBytes(2, 3), false)
 	var applied, closed []int32
@@ -367,8 +338,6 @@ func TestCmsgToLinuxSecondRecordDropped(t *testing.T) {
 }
 
 func TestCmsgToLinuxTightFit(t *testing.T) {
-	// Capacity exactly CMSG_LEN(4) = 20: the record fits without its
-	// alignment padding (the kernel's tight-fit rule), no truncation.
 	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(77), false)
 	got, ctrunc := toLinux(t, apple, 20, nil, nil)
 	if ctrunc {
@@ -381,10 +350,9 @@ func TestCmsgToLinuxTightFit(t *testing.T) {
 }
 
 func TestCmsgToLinuxMalformedTail(t *testing.T) {
-	// A valid record followed by a garbage header: the walker stops at
-	// the malformed record and delivers what precedes it.
+	// A valid record followed by a garbage header: the walker stops at the malformed record and delivers what precedes it.
 	apple := appleCmsg(nil, tSOLApple, tSCMRights, fdBytes(4), false)
-	apple = append(apple, 3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8) // cmsg_len 3 < header
+	apple = append(apple, 3, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8)
 	got, ctrunc := toLinux(t, apple, 64, nil, nil)
 	if ctrunc {
 		t.Fatal("unexpected ctrunc")
@@ -411,7 +379,7 @@ func TestXlatMsgFlags(t *testing.T) {
 		{0x8, 0x80},   // Apple MSG_EOR -> Linux MSG_EOR
 		{0x10, 0x20},  // Apple MSG_TRUNC -> Linux MSG_TRUNC
 		{0x20, 0x8},   // Apple MSG_CTRUNC -> Linux MSG_CTRUNC
-		{0x39, 0xa9},  // all four together
+		{0x39, 0xa9},  // all of them
 		{0x4000, 0x0}, // Apple-only bits (e.g. MSG_DONTWAIT) dropped
 	}
 	for _, c := range cases {

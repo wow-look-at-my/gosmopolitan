@@ -1,37 +1,33 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
-// The Windows NT netpoller: WSAPoll readiness over netpoll_aix.go's
-// two-lock, level-triggered design.
 //
-// Not IOCP. IOCP reports the COMPLETION of a submitted OVERLAPPED
-// operation, which needs internal/poll's windows-specific execIO. This
-// fork's internal/poll is linux-shaped - nonblocking fds, EAGAIN, wait
-// for readiness, retry - and WSAPoll is the one winsock call that
-// answers readiness directly.
+// Not IOCP. IOCP reports the COMPLETION of a submitted OVERLAPPED operation,
+// which needs internal/poll's windows-specific execIO. This fork's
+// internal/poll is linux-shaped - nonblocking fds, EAGAIN, wait for
+// readiness, retry - and WSAPoll is the winsock call that answers readiness
+// directly.
 //
-// Mutators take ntMtxpoll, poke the poller off WSAPoll, then take
-// ntMtxset (which the poller holds across WSAPoll) and release
-// ntMtxpoll. The poller re-takes both at the top of each cycle.
+// Mutators take ntMtxpoll, poke the poller off WSAPoll, then take ntMtxset
+// (which the poller holds across WSAPoll) and release ntMtxpoll. The poller
+// re-takes both at the top of each cycle.
 
 package runtime
 
 import "unsafe"
 
-// ntWSAPollFD mirrors WSAPOLLFD on win64: SOCKET, then two SHORTs,
-// padded to 16 bytes (Go and MSVC agree on this layout).
+// ntWSAPollFD mirrors WSAPOLLFD on win64: SOCKET, then SHORTs,
+// padded to several bytes (Go and MSVC agree on this layout).
 type ntWSAPollFD struct {
 	fd      uintptr
 	events  int16
 	revents int16
 }
 
-// Winsock POLL* values (NOT the Linux ones). Only RDNORM and WRNORM
-// may be REQUESTED - WSAPoll answers ERR/HUP/PRI in events with
-// WSAEINVAL. ERR, HUP and NVAL are revents-only and always reported.
+// Winsock POLL* values (NOT the Linux ones). Only RDNORM and WRNORM may be
+// REQUESTED - WSAPoll answers ERR/HUP/PRI in events with WSAEINVAL.
 const (
 	_NT_POLLRDNORM = 0x0100
 	_NT_POLLRDBAND = 0x0200
@@ -41,33 +37,22 @@ const (
 	_NT_POLLNVAL   = 0x0004
 )
 
-// One slot per possible socket fd plus the wake socket: the fd table
-// caps live sockets at ntFDMax, so registration can never overflow.
-// The arrays below are FIXED, not slices: netpollinit and netpollopen
-// can run under runtime locks, because netpollGenericInit fires from
-// the first timer's addHeap, so nothing here may allocate. pd.user
-// holds the fd's slot index, maintained across swap-deletes.
+// One slot per possible socket fd plus the wake socket: the fd table caps live sockets at ntFDMax.
 const ntPollMax = ntFDMax + 1
 
 var (
 	ntPollFds  [ntPollMax]ntWSAPollFD
 	ntPollPds  [ntPollMax]*pollDesc
 	ntPollNums [ntPollMax]int32 // emulated fd numbers (netpollclose is keyed by fd)
-	ntPollLen  int32            // live slots, including slot 0
+	ntPollLen  int32
 
 	ntMtxpoll            mutex
 	ntMtxset             mutex
 	ntPollPendingUpdates int32
 
-	// The wake channel MUST be lossless, because WSAPoll has no pipe
-	// or eventfd concept. UDP, loopback included, may drop a datagram
-	// on real NT, and one dropped wake byte leaves the poller asleep
-	// for a whole WSAPoll timeout while every mutator and every
-	// new-earlier timer waits it out. TCP retransmits. Upstream's
-	// transports are lossless for the same reason: windows uses
-	// PostQueuedCompletionStatus, aix a pipe.
+	// The wake channel MUST be lossless, because WSAPoll has no pipe or eventfd concept.
 	ntWakeSock uintptr // loopback TCP wake pair: send (client) end
-	ntWakeRecv uintptr // loopback TCP wake pair: polled (accepted) end, slot 0
+	ntWakeRecv uintptr
 	ntWakeByte = [1]byte{'x'}
 	ntDrainBuf [16]byte
 )
@@ -77,16 +62,13 @@ func netpollinitNT() {
 		println("runtime: netpollinit: winsock unavailable, errno", eno)
 		throw("runtime: netpollinit failed")
 	}
-	// Build the lossless TCP wake pair (see ntWakeSock) with the
-	// shared ntLoopbackTCPPair recipe, which socketpair reuses too:
-	// blocking, TCP_NODELAY, uninheritable, peer-verified.
+	// Build the lossless TCP wake pair (see ntWakeSock) with the shared ntLoopbackTCPPair recipe, which socketpair reuses too: blocking.
 	a, c, step, werr := ntLoopbackTCPPair()
 	if werr != 0 {
 		println("runtime: netpollinit: wake pair", step, "failed with", werr)
 		throw("runtime: netpollinit failed")
 	}
-	// Both ends nonblocking: the send side must never wedge a
-	// mutator, the recv side is drained opportunistically.
+	// Both ends nonblocking: the send side must never wedge a mutator, the recv side is drained opportunistically.
 	var one uint32 = 1
 	if r, werr := ntcallE(ntWSAIoctlsocketFn, c, _NT_FIONBIO,
 		uintptr(unsafe.Pointer(&one)), 0, 0, 0, 0); ntSockErr(r) {
@@ -105,8 +87,7 @@ func netpollinitNT() {
 	ntPollPds[0] = nil
 	ntPollNums[0] = -1
 	ntPollLen = 1
-	// WSAPoll is level-triggered: pollWait must arm the awaited
-	// direction on every wait (netpoll.go).
+	// WSAPoll is level-triggered: pollWait must arm the awaited direction on every wait (netpoll.go).
 	netpollLevelTriggered = true
 }
 
@@ -117,10 +98,7 @@ func ntNetpollwakeup() {
 		ntPollPendingUpdates = 1
 		r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 		if ntSockErr(r) {
-			// Should be impossible (1-byte send on a healthy connected
-			// loopback socket). If it ever fires, the poller may sleep
-			// its full timeout - name the cause instead of wedging
-			// silently.
+			// Should be impossible (1-byte send on a healthy connected loopback socket).
 			println("runtime: netpoll wakeup send failed with", werr)
 		}
 	}
@@ -207,10 +185,7 @@ func netpollBreakNT() {
 	}
 	r, werr := ntcallE(ntSockSendFn, ntWakeSock, uintptr(unsafe.Pointer(&ntWakeByte[0])), 1, 0, 0, 0, 0)
 	if ntSockErr(r) {
-		// A lost break leaves the poller asleep until its current
-		// WSAPoll timeout: timers added after the failed send fire
-		// late (rescued only by whatever deadline the poller is
-		// already waiting on). See ntNetpollwakeup.
+		// A lost break leaves the poller asleep until its current WSAPoll timeout.
 		println("runtime: netpollBreak send failed with", werr)
 	}
 }
@@ -233,7 +208,6 @@ func netpollNT(delay int64) (gList, int32) {
 		timeoutMs = int32(delay / 1e6)
 	} else {
 		// An arbitrary cap on how long to wait for a timer.
-		// 1e9 ms == ~11.5 days.
 		timeoutMs = 1e9
 	}
 
@@ -242,8 +216,7 @@ func netpollNT(delay int64) (gList, int32) {
 	ntPollPendingUpdates = 0
 	unlock(&ntMtxpoll)
 
-	// Forensic counters (see netpoll_cosmo_xnu.go): noise next to the
-	// foreign call, gold when a CI wedge needs a name.
+	// Forensic counters (see netpoll_cosmo_xnu.go): noise next to the foreign call, gold when a CI wedge needs a name.
 	xnuPollCycles.Add(1)
 	xnuPollEnterNs.Store(nanotime())
 	r := ntcall(ntWSAPollFn, uintptr(unsafe.Pointer(&ntPollFds[0])),
@@ -251,9 +224,7 @@ func netpollNT(delay int64) (gList, int32) {
 	n := int32(uint32(r))
 	var werr uintptr
 	if n < 0 {
-		// The ntcall6 trampoline captured this thread's last error
-		// into m.ntLastError atomically with the call (chunk D2) -
-		// exact even with SuspendThread preemption live.
+		// The ntcall6 trampoline captured this thread's last error into m.ntLastError atomically with the call (chunk D2) - exact even.
 		werr = uintptr(getg().m.ntLastError)
 	}
 	xnuPollExitNs.Store(nanotime())
@@ -290,10 +261,7 @@ func netpollNT(delay int64) (gList, int32) {
 		if re == 0 {
 			continue
 		}
-		// POLLNVAL means the SOCKET died underneath us (a close
-		// racing registration); disarm both directions and wake both
-		// sides with the error bit set, or an armed dead slot would
-		// spin WSAPoll forever.
+		// POLLNVAL means the SOCKET died underneath us (a close racing registration).
 		var mode int32
 		if re&(_NT_POLLRDNORM|_NT_POLLRDBAND|_NT_POLLHUP|_NT_POLLERR|_NT_POLLNVAL) != 0 {
 			mode += 'r'

@@ -1,7 +1,7 @@
 # A cosmo binary built here runs here: fizzbuzz fat and thin, the boot
-# trace, an argv echo, and a test binary in the three shapes go test
-# starts it in. run.bat reports a bare "exit status 2" per package; one
-# binary run by hand says why.
+# trace, an argv echo, and a test binary in the shapes go test starts
+# it in. run.bat reports a bare "exit status 2" per package; one binary
+# run by hand says why.
 #
 # The toolchain must already be built: run make.bash first, or let the
 # CI build leg do it.
