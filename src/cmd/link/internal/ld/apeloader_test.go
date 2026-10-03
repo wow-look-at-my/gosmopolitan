@@ -13,15 +13,14 @@ import (
 	"testing"
 )
 
-// The bytes each embedded loader must have. apeld/build.sh produces them
-// reproducibly, so a rebuild that changes one changes it on purpose and
-// updates the pin here in the same commit. A loader reaches the host
-// verbatim, and nothing on the host checks it, so this is the only place
-// that can.
+// Each loader's SHA-256. cmd/dist builds the loaders reproducibly, so a
+// change to a loader's source updates its pin in the same commit. A loader
+// reaches the host verbatim, and nothing on the host checks it, so this is
+// the only place that can.
 var apeLoaderSums = map[string]string{
 	"apeld-linux-amd64":  "c798912fd52d374d5f35ae2f86ce5082ffd11b163891a36d4c402777bfc6723a",
 	"apeld-linux-arm64":  "13779a091333025b829d944fd12d74be47a3864540013f881390353507dcd0c3",
-	"apeld-darwin-arm64": "2d4b7228fac8d4c5132adaccf554e55adedc39727fc0b690f68ad72d13532bfd",
+	"apeld-darwin-arm64": "ffbf274cade220026b8aefbfba7e8aba5aced629edd37bf46f052282a5b2d2e9",
 }
 
 // apeLoaderBins is the embedded loader for each platform that has one.
@@ -50,7 +49,7 @@ func TestApeLoaderBinariesMatchTheirPins(t *testing.T) {
 	for name, bin := range bins {
 		sum := sha256.Sum256(bin)
 		if got, want := hex.EncodeToString(sum[:]), apeLoaderSums[name]; got != want {
-			t.Errorf("%s is %s, pinned at %s: rebuild it with apeld/build.sh and update the pin, or restore the committed binary",
+			t.Errorf("%s is %s, pinned at %s: build it with zig 0.16.0 and LLVM 18.1.8, or update the pin with a change to its source",
 				name, got, want)
 		}
 	}
