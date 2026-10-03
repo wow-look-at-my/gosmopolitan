@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -79,13 +78,13 @@ func TestDarwinXlatWaitStatus(t *testing.T) {
 		{"exit 0", 0x0000, 0x0000},
 		{"exit 3", 0x0300, 0x0300},
 		{"exit 255", 0xff00, 0xff00},
-		{"killed SIGKILL", 9, 9},                        // same number
-		{"killed SIGUSR1", 30, 10},                      // Apple 30 -> Linux 10
-		{"killed SIGUSR2", 31, 12},                      // Apple 31 -> Linux 12
-		{"killed SIGBUS+core", 10 | 0x80, 7 | 0x80},     // core flag preserved
-		{"killed SIGEMT", 7, 7},                         // no Linux number: passthrough
-		{"stopped SIGSTOP", 0x7f | 17<<8, 0x7f | 19<<8}, // Apple 17 -> Linux 19
-		{"stopped SIGTSTP", 0x7f | 18<<8, 0x7f | 20<<8}, // Apple 18 -> Linux 20
+		{"killed SIGKILL", 9, 9}, // same number
+		{"killed SIGUSR1", 30, 10},
+		{"killed SIGUSR2", 31, 12},
+		{"killed SIGBUS+core", 10 | 0x80, 7 | 0x80}, // core flag preserved
+		{"killed SIGEMT", 7, 7},                     // no Linux number: passthrough
+		{"stopped SIGSTOP", 0x7f | 17<<8, 0x7f | 19<<8},
+		{"stopped SIGTSTP", 0x7f | 18<<8, 0x7f | 20<<8},
 		{"continued", 0xffff, 0xffff},
 	}
 	for _, tc := range cases {

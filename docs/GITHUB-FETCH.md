@@ -14,7 +14,7 @@ A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's red
 
 The first six are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
-An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead, and the log names the archive as the failed source.
+An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead. The log names the archive as the failed source.
 
 ## Which URLs
 

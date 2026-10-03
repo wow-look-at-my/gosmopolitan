@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package main
 
@@ -159,7 +158,7 @@ func TestReportPassesNonEventThrough(t *testing.T) {
 	}
 }
 
-// The writer receives arbitrary chunks, so a line can span two calls.
+// The writer receives arbitrary chunks, so a line can span calls.
 func TestReportSplitWrites(t *testing.T) {
 	const inp = `{"Action":"output","Package":"pkg","Test":"TestBad","Output":"boom\n"}
 {"Action":"fail","Package":"pkg","Test":"TestBad","Elapsed":0.02}

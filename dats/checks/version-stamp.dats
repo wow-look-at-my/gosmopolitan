@@ -1,5 +1,5 @@
 # A release is named for $GOROOT/VERSION, and a go command that switches to a
-# toolchain fatals when the binary it execs reports another version. So the two
+# toolchain fatals when the binary it execs reports another version. So both
 # move together or a published release cannot be selected. dist stamp is what
 # the publish leg runs over the toolchain its build leg built.
 tests:

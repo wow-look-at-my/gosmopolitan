@@ -79,9 +79,9 @@ func (ctxt *Link) cosmoHostlink() {
 		"-Wl,--wrap=pthread_create",
 		"-o", *flagOutfile,
 	}
-	if *FlagS || debug_s {
-		argv = append(argv, "-s")
-	} else if *FlagW {
+	// Never -s here: cosmoNTBoot reads WinMain and the ape_idata bounds out of
+	// the linked image's symbol table.
+	if *FlagS || debug_s || *FlagW {
 		argv = append(argv, "-Wl,-S")
 	}
 

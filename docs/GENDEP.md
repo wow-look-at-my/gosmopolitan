@@ -11,7 +11,7 @@ A directive is a command the module's author wrote. Completing a module runs it 
 - A module with no `go.mod` has nowhere to write the marker. It never generates unless its path is the org's.
 - A skipped module is named on stderr. The build compiles the zip as published. What a consumer sees is an undeclared symbol.
 
-`gendep.Allowed` decides this from the module's own bytes alone, the way the directive count does. One module version therefore means one thing to every machine that reads the one overlay cache key.
+`gendep.Allowed` decides this from the module's own bytes alone, the way the directive count does. One module version therefore means one thing to every machine that reads the overlay cache key.
 
 ## What a run may touch
 

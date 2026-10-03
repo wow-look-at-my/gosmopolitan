@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -9,17 +8,6 @@ package runtime
 import "unsafe"
 
 // statfs(2) and fstatfs(2) on an NT host.
-//
-// NT has no single call that answers this. Three do, over a VOLUME
-// rather than a path, so each emulation first maps its argument to the
-// volume's mount point with GetVolumePathNameW. GetDiskFreeSpaceW gives
-// the cluster geometry, GetDiskFreeSpaceExW the quota-aware free space,
-// and GetVolumeInformationW the name length and the filesystem name.
-//
-// Two Linux fields have no NT source and stay ZERO rather than invented.
-// Files and Ffree count inodes, which NTFS does not expose. Fsid has no
-// counterpart either. A field this host cannot answer must read as
-// unknown, not as a plausible number nothing measured.
 
 // ntLinuxStatfs is the struct statfs(2) fills. It must match
 // syscall.Statfs_t for GOOS=cosmo on amd64.
@@ -51,8 +39,8 @@ const (
 )
 
 // ntVolumePathW maps any path on a volume to that volume's mount point,
-// which is what the three volume calls below take. The result keeps the
-// NUL GetVolumePathNameW writes.
+// which is what those volume calls below take. The result keeps the NUL
+// GetVolumePathNameW writes.
 func ntVolumePathW(w []uint16) ([]uint16, uintptr) {
 	if ntGetVolumePathNameWFn == 0 {
 		return nil, ntENOSYS
@@ -69,13 +57,12 @@ func ntVolumePathW(w []uint16) ([]uint16, uintptr) {
 
 // ntStatfsVolume fills dst for the volume whose mount point is volW.
 //
-// The cluster geometry is what Linux reports as a block, so Bsize and
-// Frsize are bytes-per-sector times sectors-per-cluster and the three
-// counts are in clusters. GetDiskFreeSpaceW's own free-cluster count is
-// the volume's, which ignores a per-user quota; Bavail therefore comes
-// from GetDiskFreeSpaceExW's caller-available figure instead, converted
-// to clusters. That is the same split Linux draws between f_bfree and
-// f_bavail.
+// The cluster geometry is what Linux reports as a block, so Bsize and Frsize
+// are bytes-per-sector times sectors-per-cluster and the counts are in
+// clusters. GetDiskFreeSpaceW's own free-cluster count is the volume's, which
+// ignores a per-user quota; Bavail therefore comes from GetDiskFreeSpaceExW's
+// caller-available figure instead, converted to clusters. That is the same
+// split Linux draws between f_bfree and f_bavail.
 func ntStatfsVolume(volW []uint16, dst *ntLinuxStatfs) uintptr {
 	if ntGetDiskFreeSpaceWFn == 0 {
 		return ntENOSYS
@@ -91,8 +78,7 @@ func ntStatfsVolume(volW []uint16, dst *ntLinuxStatfs) uintptr {
 	}
 	cluster := uint64(sectorsPerCluster) * uint64(bytesPerSector)
 	if cluster == 0 {
-		// A zero block size would make every byte figure below a
-		// division by zero. Refuse rather than report nonsense.
+		// A zero block size would make every byte figure below a division by zero. Refuse rather than report nonsense.
 		return ntEINVAL
 	}
 
@@ -134,9 +120,7 @@ func ntStatfsVolume(volW []uint16, dst *ntLinuxStatfs) uintptr {
 			if fsFlags&ntFileReadOnlyVolume != 0 {
 				dst.Flags = ntLinuxSTRdonly
 			}
-			// The serial number is the closest thing NT has to an fsid,
-			// and it identifies the volume the same way. Linux splits
-			// its own across two words, so the high half stays zero.
+			// The serial number is the closest thing NT has to an fsid, and it identifies the volume the same way.
 			dst.Fsid[0] = int32(serial)
 		}
 	}
@@ -217,8 +201,7 @@ func ntEmuFstatfs(fd int32, dst *ntLinuxStatfs) (r1, r2, errno uintptr) {
 		return ntFail3(ntEBADF)
 	}
 	if e.kind != ntFDFile && e.kind != ntFDDir {
-		// A socket or a pipe belongs to no filesystem. Linux reports
-		// ENOSYS for exactly this case.
+		// A socket or a pipe belongs to no filesystem. Linux reports ENOSYS for exactly this case.
 		return ntFail3(ntENOSYS)
 	}
 	if ntGetFinalPathNameByHandleWFn == 0 {
