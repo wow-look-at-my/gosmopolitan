@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -11,17 +10,7 @@ import (
 	"unsafe"
 )
 
-// sigctxt is HOST-AWARE. One cosmo binary runs on Linux and macOS, and
-// the kernel hands the handler its native context: a Linux ucontext with
-// the sigcontext embedded, or an XNU user_ucontext64 whose uc_mcontext64
-// field is a POINTER to the mcontext in the signal frame. Every accessor
-// dispatches on __hostos. Writes land in the kernel's own mcontext, so
-// sigreturn restores them without a copy.
-//
-// The XNU layouts are x86_exception_state64, x86_thread_state64,
-// user_ucontext64 and user64_siginfo (XNU bsd/dev/i386/unix_signal.c,
-// bsd/sys/signal.h); Go's pre-1.12 darwin port carries the same structs
-// as exceptionstate64, regs64, ucontext and siginfo.
+// sigctxt is HOST-AWARE.
 
 type sigctxt struct {
 	info *siginfo
@@ -36,8 +25,8 @@ type xnuExceptionState64 struct {
 	faultvaddr uint64
 }
 
-// xnuRegs64 is x86_thread_state64. Every field is 64 bits wide, the
-// segment selectors included.
+// xnuRegs64 is x86_thread_state64. Every field is many bits wide,
+// the segment selectors included.
 type xnuRegs64 struct {
 	rax    uint64
 	rbx    uint64
@@ -62,9 +51,8 @@ type xnuRegs64 struct {
 	gs     uint64
 }
 
-// xnuMcontext64 is the head of the mcontext the kernel writes into the
-// signal frame. The float state that follows is never touched and is
-// left off; the struct is only used through a pointer into that frame.
+// xnuMcontext64 is the head of the mcontext the kernel writes into the signal
+// frame.
 type xnuMcontext64 struct {
 	es xnuExceptionState64
 	ss xnuRegs64
@@ -79,8 +67,6 @@ type xnuStackt struct {
 	_        [4]byte
 }
 
-// xnuUcontext is user_ucontext64. uc_mcontext is a POINTER (offset 48)
-// into the signal frame; Linux embeds the mcontext by value.
 type xnuUcontext struct {
 	uc_onstack  int32
 	uc_sigmask  uint32
@@ -90,9 +76,6 @@ type xnuUcontext struct {
 	uc_mcontext *xnuMcontext64
 }
 
-// xnuSiginfo is user64_siginfo. si_signo/si_errno/si_code share Linux's
-// offsets (0/4/8); si_addr sits at offset 24 (Linux keeps its union at
-// 16).
 type xnuSiginfo struct {
 	si_signo  int32
 	si_errno  int32
@@ -269,7 +252,7 @@ func (c *sigctxt) gs() uint64 {
 	return uint64(c.regs().gs)
 }
 
-func (c *sigctxt) sigcode() uint64 { return uint64(c.info.si_code) } // offset 8 on both systems
+func (c *sigctxt) sigcode() uint64 { return uint64(c.info.si_code) }
 
 //go:nosplit
 func (c *sigctxt) sigaddr() uint64 {
@@ -295,7 +278,7 @@ func (c *sigctxt) set_rsp(x uint64) {
 	c.regs().rsp = x
 }
 
-func (c *sigctxt) set_sigcode(x uint64) { c.info.si_code = int32(x) } // offset 8 on both systems
+func (c *sigctxt) set_sigcode(x uint64) { c.info.si_code = int32(x) }
 
 func (c *sigctxt) set_sigaddr(x uint64) {
 	if isdarwin() {
@@ -305,10 +288,8 @@ func (c *sigctxt) set_sigaddr(x uint64) {
 	*(*uintptr)(add(unsafe.Pointer(c.info), 2*goarch.PtrSize)) = uintptr(x)
 }
 
-// Apple SIGFPE si_code values (Go's pre-1.12 defs_darwin_amd64.go). The
-// Linux values the runtime compares against are in defs_cosmo_amd64.go.
-// The ILL, TRAP, BUS and SEGV codes agree on both systems; the FPE codes
-// do not.
+// Apple SIGFPE si_code values (Go's pre-1.12 defs_darwin_amd64.go). The Linux
+// values the runtime compares against are in defs_cosmo_amd64.go.
 const (
 	xnuFPE_INTDIV = 0x7
 	xnuFPE_INTOVF = 0x8
@@ -321,7 +302,6 @@ const (
 )
 
 // xnuFPECodeA2L translates an Apple SIGFPE si_code to the Linux value.
-// An unknown code (Apple's FPE_NOOP is 0) passes through.
 //
 //go:nosplit
 func xnuFPECodeA2L(code uint64) uint64 {
@@ -357,36 +337,14 @@ func (c *sigctxt) fixsigcode(sig uint32) {
 	}
 	switch sig {
 	case _SIGTRAP:
-		// OS X sets c.sigcode() == TRAP_BRKPT unconditionally for all SIGTRAPs,
-		// leaving no way to distinguish a breakpoint-induced SIGTRAP
-		// from an asynchronous signal SIGTRAP.
-		// They all look breakpoint-induced by default.
-		// Try looking at the code to see if it's a breakpoint.
-		// The assumption is that we're very unlikely to get an
-		// asynchronous SIGTRAP at just the moment that the
-		// PC started to point at unmapped memory.
+		// OS X sets c.sigcode() == TRAP_BRKPT unconditionally for all SIGTRAPs.
 		pc := uintptr(c.rip())
-		// OS X will leave the pc just after the INT 3 instruction.
-		// INT 3 is usually 1 byte, but there is a 2-byte form.
 		code := (*[2]byte)(unsafe.Pointer(pc - 2))
 		if code[1] != 0xCC && (code[0] != 0xCD || code[1] != 3) {
-			// SIGTRAP on something other than INT 3.
 			c.set_sigcode(_SI_USER)
 		}
 
 	case _SIGSEGV:
-		// x86-64 has 48-bit virtual addresses. The top 16 bits must echo bit 47.
-		// The hardware delivers a different kind of fault for a malformed address
-		// than it does for an attempt to access a valid but unmapped address.
-		// OS X 10.9.2 mishandles the malformed address case, making it look like
-		// a user-generated signal (like someone ran kill -SEGV ourpid).
-		// We pass user-generated signals to os/signal, or else ignore them.
-		// Doing that here - and returning to the faulting code - results in an
-		// infinite loop. It appears the best we can do is rewrite what the kernel
-		// delivers into something more like the truth. The address used below
-		// has very little chance of being the one that caused the fault, but it is
-		// malformed, it is clearly not a real pointer, and if it does get printed
-		// in real life, people will probably search for it and find this code.
 		if c.sigcode() == _SI_USER {
 			c.set_sigcode(_SI_USER + 1)
 			c.set_sigaddr(0xb01dfacedebac1e)

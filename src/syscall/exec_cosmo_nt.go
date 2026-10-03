@@ -1,21 +1,19 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
-// NT leg of process creation. A Windows host cannot run the
-// linux-shaped forkAndExecInChild, because there is no fork, so
-// exec_cosmo.go branches here BEFORE any fork machinery and the child
-// launches posix_spawn-style through the runtime's CreateProcessW hook.
+// NT leg of process creation. A Windows host cannot run the linux-shaped
+// forkAndExecInChild, because there is no fork, so exec_cosmo.go branches
+// here BEFORE any fork machinery and the child launches posix_spawn-style
+// through the runtime's CreateProcessW hook.
 //
-// This file owns the Windows string algebra, ported from upstream
-// exec_windows.go, which never builds for GOOS=cosmo: MSVCRT argument
-// quoting, the case-insensitively sorted double-NUL-terminated UTF-16
-// environment block, and the command line. The runtime hook owns
-// everything needing Win32 state. The status pipe degenerates cleanly:
-// its handles are born non-inheritable, so the read sees EOF at once
-// and a spawn failure surfaces as this function's own errno.
+// This file owns the Windows string algebra,.go, which never builds for
+// GOOS=cosmo: MSVCRT argument quoting, the case-insensitively sorted
+// double-NUL-terminated UTF-16 environment block, and the command line. The
+// runtime hook owns everything needing Win32 state. The status pipe
+// degenerates cleanly: its handles are born non-inheritable, so the read sees
+// EOF at once and a spawn failure surfaces as this function's own errno.
 
 package syscall
 
@@ -28,15 +26,7 @@ import (
 	"unsafe"
 )
 
-// ntSpawnMu serializes spawns. The spawn window contains temporarily
-// INHERITABLE duplicates of the child's stdio handles, and
-// CreateProcessW(bInheritHandles=TRUE) captures every inheritable
-// handle in the process - so two overlapping spawns would leak each
-// other's stdio into the wrong child (a leaked pipe write end defers
-// the reader's EOF until that unrelated child exits). acquireForkLock
-// does not mutually exclude concurrent forkers (it only counts them),
-// hence this dedicated lock; upstream windows lives with the race,
-// upstream unix serializes with ForkLock for the same reason.
+// ntSpawnMu serializes spawns.
 var ntSpawnMu sync.Mutex
 
 // ntCStr converts a NUL-terminated byte pointer (produced by
@@ -117,8 +107,7 @@ func ntAppendEscapeArg(b []byte, s string) []byte {
 	return b
 }
 
-// ntMakeCmdLine builds a command line out of args by escaping
-// "special" characters and joining the arguments with spaces (port of
+// ntMakeCmdLine builds a command line out of args by escaping "special" characters and joining the arguments with spaces (port of
 // upstream makeCmdLine).
 func ntMakeCmdLine(args []string) string {
 	var b []byte
@@ -172,12 +161,11 @@ func ntEnvSorted(envv []string) []string {
 	return envv
 }
 
-// ntCreateEnvBlock converts an array of environment strings into the
-// UTF-16 block CreateProcessW(CREATE_UNICODE_ENVIRONMENT) requires: a
-// case-insensitively sorted sequence of NUL-terminated strings,
-// terminated by an extra NUL ("two UCS-2 NULs, or four NUL bytes").
-// Port of upstream createEnvBlock; strings containing a NUL yield
-// EINVAL.
+// ntCreateEnvBlock converts an array of environment strings into the UTF-16
+// block CreateProcessW(CREATE_UNICODE_ENVIRONMENT) requires: a
+// case-insensitively sorted sequence of NUL-terminated strings, terminated by
+// an extra NUL ("two UCS-2 NULs, or four NUL bytes"). Port of upstream
+// createEnvBlock; strings containing a NUL yield EINVAL.
 func ntCreateEnvBlock(envv []string) ([]uint16, Errno) {
 	if len(envv) == 0 {
 		return []uint16{0, 0}, 0
@@ -219,9 +207,8 @@ func ntUTF16FromString(s string) ([]uint16, Errno) {
 	return append(buf, 0), 0
 }
 
-// ntIsAbs reports whether path is absolute in either spelling the
-// cosmo path layer accepts: rooted ("/c/...", "/tmp/...") or
-// drive-lettered ("C:...").
+// ntIsAbs reports whether path is absolute in either spelling the cosmo path
+// layer accepts: rooted ("/c/...", "/tmp/...") or drive-lettered ("C:...").
 func ntIsAbs(path string) bool {
 	if len(path) > 0 && path[0] == '/' {
 		return true
@@ -235,13 +222,10 @@ func ntIsAbs(path string) bool {
 // (already C-converted) arguments. The status pipe fd is deliberately
 // not among them: the child cannot inherit it (see the file comment).
 func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAttr, sys *SysProcAttr) (pid int, err Errno) {
-	// Fork-flavored SysProcAttr knobs are meaningless on NT; refuse
-	// loudly rather than silently dropping semantics. The one carved
-	// out: Setpgid with Pgid == 0 ("make the child its own group
-	// leader") maps exactly onto CREATE_NEW_PROCESS_GROUP and is
-	// honored below. Pgid != 0 ("join an EXISTING group") stays
-	// ENOSYS - NT has no way to place a new process into another
-	// process's group.
+	// Fork-flavored SysProcAttr knobs are meaningless on NT; refuse loudly
+	// rather than silently dropping semantics. The one carved out: Setpgid with
+	// Pgid == 0 ("make the child its own group leader") maps exactly onto
+	// CREATE_NEW_PROCESS_GROUP and is honored below.
 	if chroot != nil || sys.Credential != nil || sys.Ptrace || sys.Setsid ||
 		sys.Setctty || sys.Noctty || sys.Foreground || sys.Pgid != 0 ||
 		sys.Pdeathsig != 0 || sys.Cloneflags != 0 || sys.Unshareflags != 0 ||
@@ -250,9 +234,7 @@ func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAt
 		return 0, ENOSYS
 	}
 	if len(attr.Files) > 3 {
-		// Only the three std handles can be conveyed to an NT child:
-		// extra inherited handles would have no fd numbers on the
-		// other side (upstream windows rejects >3 the same way).
+		// Only those std handles can be conveyed to an NT child.
 		return 0, ENOSYS
 	}
 
@@ -272,10 +254,8 @@ func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAt
 	}
 	argv0s := ntCStr(argv0)
 	dirs := ntCStr(dir)
-	// CreateProcessW resolves the image against the PARENT's cwd but
-	// starts the child in lpCurrentDirectory, so absolutize a
-	// relative argv0 against attr.Dir (upstream joinExeDirAndFName
-	// fixes the same mismatch).
+	// CreateProcessW resolves the image against the PARENT's cwd but starts the
+	// child in lpCurrentDirectory.
 	if dirs != "" && !ntIsAbs(argv0s) {
 		argv0s = dirs + "/" + argv0s
 	}
@@ -302,10 +282,7 @@ func ntForkExec(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAt
 
 	var spawnFlags uint32
 	if sys.Setpgid {
-		// sys.Pgid == 0 here (guarded above): the child becomes its
-		// own process-group leader, NT's CREATE_NEW_PROCESS_GROUP.
-		// The runtime records the leadership so kill(-pid) can
-		// address the group.
+		// sys.Pgid == 0 here (guarded above): the child becomes its own process-group leader, NT's CREATE_NEW_PROCESS_GROUP.
 		spawnFlags |= cosmo.SpawnNewProcessGroup
 	}
 

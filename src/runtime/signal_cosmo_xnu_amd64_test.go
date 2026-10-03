@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -11,16 +10,6 @@ import (
 	"testing"
 )
 
-// The XNU x86-64 signal-frame layouts are wire formats the kernel writes
-// and sigctxt reads, so a field that moves is silent corruption rather
-// than a build failure. Expected values: user_ucontext64,
-// user64_sigaltstack and user64_siginfo (XNU bsd/sys/signal.h,
-// bsd/sys/_types/_ucontext64.h), x86_exception_state64 and
-// x86_thread_state64 (mach/i386/_structs.h); Go's pre-1.12 darwin port
-// (go1.8 runtime/defs_darwin_amd64.go) carries the same numbers.
-//
-// The test names carry the TestCosmoSig prefix because that is the
-// pattern CI runs the runtime's cosmo tests under.
 
 func checkLayout(t *testing.T, what string, fields []struct {
 	name      string
@@ -56,9 +45,6 @@ func TestCosmoSigXnuAmd64Ucontext(t *testing.T) {
 		{"ss_size", XnuStacktSizeOff, 8},
 		{"ss_flags", XnuStacktFlagsOff, 16},
 	})
-	// The Linux stackt this is translated from keeps flags at 8 and
-	// size at 16: the two fields swap places, which is why the raw
-	// struct cannot be handed to XNU.
 	checkLayout(t, "stackt (linux)", []struct {
 		name      string
 		got, want uintptr
@@ -103,8 +89,6 @@ func TestCosmoSigXnuAmd64Mcontext(t *testing.T) {
 		{"fs", 16 + XnuRegs64FsOff, 168},
 		{"gs", 16 + XnuRegs64GsOff, 176},
 	})
-	// The Linux context the same accessors read on Linux hosts embeds
-	// its registers by value; rip sits at 168 inside the ucontext.
 	if got := LinuxUcontextMcontextOff + LinuxSigcontextRipOff; got != 168 {
 		t.Errorf("linux ucontext rip offset = %d, want 168", got)
 	}
@@ -131,9 +115,9 @@ func TestCosmoSigXnuAmd64Siginfo(t *testing.T) {
 	}
 }
 
-// __sigaction takes the 24-byte kernel struct with sa_tramp and copies
-// the OLD action out as the 16-byte user64_sigaction without it (XNU
-// kern_sig.c sigaction_kern_to_user64).
+// __sigaction takes the 24-byte kernel struct with sa_tramp and copies the
+// action out as the 16-byte user64_sigaction without it (XNU kern_sig.c
+// sigaction_kern_to_user64).
 func TestCosmoSigXnuAmd64Sigaction(t *testing.T) {
 	checkLayout(t, "sigaction structs", []struct {
 		name      string
@@ -149,8 +133,7 @@ func TestCosmoSigXnuAmd64Sigaction(t *testing.T) {
 }
 
 // Apple SIGFPE codes (go1.8 defs_darwin_amd64.go) to Linux's
-// (defs_cosmo_amd64.go). sigpanic keys panicdivide on the Linux
-// FPE_INTDIV.
+// (defs_cosmo_amd64.go). sigpanic keys panicdivide on the Linux FPE_INTDIV.
 func TestCosmoSigXnuAmd64FPECode(t *testing.T) {
 	pairs := map[uint64]uint64{ // apple -> linux
 		7: 1, // INTDIV
