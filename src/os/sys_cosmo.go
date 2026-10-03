@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package os
 
@@ -9,10 +10,10 @@ import (
 	"syscall"
 )
 
-// One APE runs on kernels, and each keeps the machine's name somewhere
-// else. uname's nodename answers on Linux and on NT, and a name of many
-// bytes or more arrives truncated there, so a long one is re-read from
-// the place the host publishes it in full: /proc on Linux,
+// One APE runs on three kernels, and each keeps the machine's name
+// somewhere else. uname's nodename answers on Linux and on NT, and a
+// name of 65 bytes or more arrives truncated there, so a long one is
+// re-read from the place the host publishes it in full: /proc on Linux,
 // kern.hostname on macOS, where Apple's uname leaves nodename empty.
 func hostname() (name string, err error) {
 	var un syscall.Utsname
@@ -51,7 +52,8 @@ func hostname() (name string, err error) {
 		return h, nil
 	}
 	if name != "" {
-		// Truncated at many bytes, and no fuller source answered. A short name beats an error, and it says so.
+		// Truncated at 64 bytes, and no fuller source answered. A
+		// short name beats an error, and it says so.
 		return name, nil
 	}
 	return "", errors.New("os: no hostname on this " + runtime.GOOS + " host")

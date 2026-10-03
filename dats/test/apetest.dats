@@ -16,7 +16,7 @@ tests:
 	  exit: 0
 
 #	- desc: the Windows-origin binaries pass apetest here
-#	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Windows/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Windows/runtimeprobe.com" sh ./with-deadline.sh go test -v ./...
+#	  cmd: export GOCACHE="$TMPDIR/gocache"; cd testdata/ape/apetest && FIZZBUZZ_BIN="$PWD/../../../binaries/ape-binary-Windows/fizzbuzz.com" RUNTIMEPROBE_BIN="$PWD/../../../binaries/ape-binary-Windows/runtimeprobe.com" sh ./with-deadline.sh 540 go test -v ./...
 #	  exit: 0
 
 	- desc: the platform-subset APEs boot and run here

@@ -1,5 +1,14 @@
 #!/bin/sh
-# A continue-on-error hides a red leg, and a constant-false `if` hides a whole job. Either needs a dated marker.
+# A continue-on-error hides a red leg, and a constant-false `if` hides a
+# whole job. Either needs a dated marker, on the line above the key or on
+# the key's own line, and the date has to be in the future:
+#
+#	# ... waiver-expires: 2026-09-18
+#	continue-on-error: ${{ matrix.suite-os == 'windows-latest' }}
+#	if: ${{ false }} # waiver-expires: 2026-09-21
+#
+# Usage: waiver-expiry.sh <file>...
+# Exit: 0 every waiver is dated and current, 2 one is not.
 set -eu
 
 today=${WAIVER_TODAY:-$(date -u +%Y-%m-%d)}
@@ -18,7 +27,8 @@ skipBlanks() {
 	done
 }
 
-# waiverDate prints the first dated waiver-expires marker on a line.
+# waiverDate prints the first dated waiver-expires marker on a line. It
+# returns 1 when no marker carries a well-formed date.
 waiverDate() {
 	rest=$1
 	while [ "$rest" != "${rest#*waiver-expires:}" ]; do

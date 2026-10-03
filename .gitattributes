@@ -22,9 +22,7 @@ api/** linguist-vendored
 # Upstream Go's own trees stay as the Go team wrote them. A prose rule that
 # rewrote an upstream comment would conflict on every uprev merge. The files
 # the fork adds are its own and are judged: each is listed below, from
-# `git diff --name-only --diff-filter=A go1.27.0 HEAD -- src misc lib doc`.
-# The test/ corpus stays whole: an errorcheck file's comments are its
-# expected diagnostics, and a rewrite there changes what the test checks.
+# `git diff --name-only --diff-filter=A go1.27.0 HEAD -- src test misc lib doc`.
 src/** linguist-vendored
 test/** linguist-vendored
 misc/** linguist-vendored
@@ -270,3 +268,7 @@ src/testing/fork_test.go -linguist-vendored
 src/testing/serialgate.go -linguist-vendored
 src/testing/serialgate_test.go -linguist-vendored
 src/uuid/export_test.go -linguist-vendored
+test/paramdefaults.go -linguist-vendored
+test/paramdefaults.dir/** -linguist-vendored
+test/readonly.go -linguist-vendored
+test/readonly.dir/** -linguist-vendored

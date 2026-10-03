@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -8,9 +9,15 @@ package syscall
 import "unsafe"
 
 // System administration calls. GOOS=cosmo presents the Linux ABI, so a
-// program written against the linux port names these. The linux port declares
-// them in syscall_linux.go and zsyscall_linux_amd64.go, which cosmo does not
-// build. The signatures and the bodies are those files', unchanged.
+// program written against the linux port names these. The linux port
+// declares them in syscall_linux.go and zsyscall_linux_amd64.go, which
+// cosmo does not build. The signatures and the bodies are those files',
+// unchanged.
+//
+// A Linux kernel is the only host that serves them. The macOS emulation
+// (internal/runtime/syscall/cosmo.syscall6SlowDarwin) and the Windows
+// emulation (runtime.ntSyscallEmulate) have no case for these syscall
+// numbers, so both answer ENOSYS.
 
 // The reboot(2) magic values and commands, named as the linux port names
 // them in zerrors_linux_amd64.go and zerrors_linux_arm64.go, which cosmo
@@ -170,4 +177,7 @@ func Sethostname(p []byte) (err error) {
 	return
 }
 
+// setresIgnore is the -1 sentinel that tells setresgid(2) and setresuid(2)
+// to leave that identity unchanged. Setegid and Seteuid, which pass it,
+// live in syscall_cosmo_allthreads.go.
 const setresIgnore = ^uintptr(0)

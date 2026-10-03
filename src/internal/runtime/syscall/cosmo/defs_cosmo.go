@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -45,3 +46,6 @@ const (
 
 const AT_FDCWD = -0x64
 
+// EpollEvent is defined in the per-architecture defs_cosmo_GOARCH.go
+// files: the Linux kernel packs struct epoll_event on x86-64 (12 bytes)
+// but aligns it naturally everywhere else (16 bytes on arm64).

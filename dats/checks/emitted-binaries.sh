@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # emitted-binaries.sh -- report the container format of each file named.
+# It prints "ape", "wasm" or "OTHER <first bytes>" per file, and exits
+# non-zero if any file is neither. The APE magic is the MZqFpD header a
+# .com carries; wasm's is the four bytes \0asm.
 
 set -uo pipefail
 

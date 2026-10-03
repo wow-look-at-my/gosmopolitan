@@ -43,7 +43,7 @@ Every release reports the committed VERSION, `go1.27.0-cosmo`. The tarball is na
 
 Nothing needs a per-release Go version string. A fork tool prints its own `buildID=` under `-V=full`. So cmd/go keys the build cache on the tool's content, not on the version it claims. A toolchain built from another source gets another tool ID, whatever its VERSION says. One built from the same source is the same toolchain.
 
-Local source builds keep the static version and need no stamp: tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
+Local source builds keep the static version and need no stamp: since 2026-07-20 tool IDs are content-derived (see CLAUDE.md's Fork Gotchas). A hand-rebuilt toolchain self-invalidates stale.
 
 ## Consumer gotchas
 

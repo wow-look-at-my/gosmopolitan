@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -10,15 +11,26 @@ import (
 	"unsafe"
 )
 
-// Where an NT host keeps its trusted roots. crypto/x509 finds roots by
-// scanning a list of file paths, and the cosmo list holds Linux paths. macOS
-// happens to ship /etc/ssl/cert.pem, so the scan lands there.
+// Where an NT host keeps its trusted roots.
+// crypto/x509 finds roots by scanning a list of file paths, and the
+// cosmo list holds Linux paths. macOS happens to ship
+// /etc/ssl/cert.pem, so the scan lands there. NT ships none of them,
+// the pool comes out empty, and every HTTPS request fails to verify.
+//
+// crypt32's CertOpenSystemStore reads the ROOT store the rest of the
+// system trusts. Each certificate arrives as a DER blob the caller
+// copies out, so nothing here parses one. This is the STORE, not NT's
+// chain engine: no CTLs, no root auto-update, no disallowed list. It is
+// what makes a public CA verify. The library is optional, like
+// iphlpapi beside it, and a host without it reports no roots.
 
-// CERT_CONTEXT, win64. Spelled as the sum of the members rather than as a
-// total, because a total is a number nobody can check; certs_cosmo_nt_test.go
-// pins the sums against the layout crypt32 writes.
+// CERT_CONTEXT, win64. Spelled as the sum of the members rather than as
+// a total, because a total is a number nobody can check;
+// certs_cosmo_nt_test.go pins the sums against the layout crypt32
+// actually writes.
 const (
-	// CERT_CONTEXT opens with a DWORD encoding type, padded out to the pointer that follows it, then the length.
+	// CERT_CONTEXT opens with a DWORD encoding type, padded out to the
+	// pointer that follows it, then the length, padded the same way.
 	_NT_DWORD_PADDED           = 8
 	_NT_CERT_CTX_ENCODED       = _NT_DWORD_PADDED
 	_NT_CERT_CTX_ENCODED_LEN   = _NT_DWORD_PADDED + _NT_PTR
@@ -33,6 +45,7 @@ var (
 	ntNameCertCloseStore       = []byte("CertCloseStore\x00")
 	ntNameRootStore            = []byte("ROOT\x00")
 
+	// ntCertsReady: 0 = untried, 1 = ready, 2 = unavailable (sticky).
 	ntCertsReady            uint32
 	ntCertsLock             mutex
 	ntCertOpenSystemStoreFn uintptr
@@ -61,7 +74,8 @@ func ntCertsEnsure() bool {
 		ntCertEnumCertsFn = ntcall(gpa, lib, uintptr(unsafe.Pointer(&ntNameCertEnumCerts[0])), 0, 0, 0, 0)
 		ntCertCloseStoreFn = ntcall(gpa, lib, uintptr(unsafe.Pointer(&ntNameCertCloseStore[0])), 0, 0, 0, 0)
 	}
-	// All of them or none: enumerating a store this cannot close leaks a handle for the life of the process.
+	// All three or none: enumerating a store this cannot close leaks a
+	// handle for the life of the process.
 	ok := ntCertOpenSystemStoreFn != 0 && ntCertEnumCertsFn != 0 && ntCertCloseStoreFn != 0
 	if ok {
 		atomic.Store(&ntCertsReady, 1)
@@ -87,7 +101,8 @@ func ntRootCerts() [][]byte {
 	var roots [][]byte
 	var ctx uintptr
 	for {
-		// Enumeration frees the context it was handed and returns the next one, so the pointer must not be touched after.
+		// Enumeration frees the context it was handed and returns the
+		// next one, so the previous pointer must not be touched after.
 		ctx = ntcall(ntCertEnumCertsFn, store, ctx, 0, 0, 0, 0)
 		if ctx == 0 {
 			break

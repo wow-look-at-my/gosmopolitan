@@ -1,6 +1,6 @@
 # Top-level tests are parallel by default
 
-`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
+`src/testing` in this fork can start every top-level test as if it had called `t.Parallel()`, which is a no-op there. The switch is the `parallelByDefault` constant in `src/testing/testing.go`. It is OFF until every CI leg is green with it on. With it off, a top-level test runs as upstream runs it. `t.Setenv` and `t.Chdir` then fork only under a parallel ancestor. Everything below describes the switch ON. Two methods opt a test out of that, and they buy the same isolation at different prices: `t.Serial()` keeps the test in this process.
 
 A SUBTEST is not parallel unless it asks. It runs inside the `t.Run` call that starts it, which is the order upstream promises and the order test code relies on. A parent closes the file its subtests read. A loop sets a package variable before each subtest. A parent asserts on what the subtest just did. A subtest that wants parallelism calls `t.Parallel()`, as it always can.
 
@@ -16,9 +16,9 @@ The hold never covers a wait. `t.Run` drops the caller's hold while it waits, th
 
 They fall back to the barrier on `js`, `wasip1` and `ios`, which cannot start a child process at all - wasm has no process creation. The isolation is the same either way. Only the price changes. An EXPLICIT `t.Fork()` on those platforms still fails, because the test asked for its own copy of the process state and cannot be given.
 
-A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone. The package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
+A COVERED run takes the barrier for the same reason. The child inherits `-test.gocoverdir` and `-test.coverprofile`. It writes its own report into the parent's directory, and the two race. The parent's rename of the meta file then finds it gone, and the package fails with `error generating coverage report`. The barrier keeps the counters in the run that reports them. That is also what makes the test's coverage count at all. The parent does not execute a forked test's body, so a child's discarded profile reads as dead code.
 
-Depth: DEBUGGING.md "tests parallel by default".
+Depth: DEBUGGING.md "tests parallel by default" (2026-09-02).
 
 ## t.Fork
 
@@ -26,7 +26,7 @@ Depth: DEBUGGING.md "tests parallel by default".
 
 Reach for it over Serial when the state is process-global and SHARED - a package variable, a metrics registry, a counter another test also writes. Serial only guarantees that nothing else runs *at the same time*. It does not give the test its own copy of anything, so a counter another test already advanced is still advanced. Fork also leaves the rest of the suite running, where Serial stops it.
 
-Fork does NOT serialize. The child allows parallelism like any other run, so subtests of a forked test that call `t.Parallel()` still run at the same time. A test that needs a process of its own AND the process to itself calls `t.Serial()` as well, in either order. A subtest that wants a process to itself calls Fork, which gives it one rather than its parent's.
+Fork does NOT serialize. The child allows parallelism like any other run, so two subtests of a forked test that call `t.Parallel()` still run at the same time. A test that needs a process of its own AND the process to itself calls `t.Serial()` as well, in either order. A subtest that wants a process to itself calls Fork, which gives it one rather than its parent's.
 
 Mechanics:
 

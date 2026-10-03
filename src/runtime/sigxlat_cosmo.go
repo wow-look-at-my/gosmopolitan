@@ -1,14 +1,25 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
-// Linux <-> Apple (XNU) signal number translation. A cosmo binary thinks in
-// LINUX numbers everywhere: sigtable, the _SIG* constants, os/signal and
-// syscall.
+// Linux <-> Apple (XNU) signal number translation. A cosmo binary
+// thinks in LINUX numbers everywhere: sigtable, the _SIG* constants,
+// os/signal and syscall. A macOS kernel speaks Apple's, which diverges
+// for the BSD-heritage signals. So every darwin boundary translates -
+// out when installing, masking and sending, back when receiving.
+//
+// A signal with no counterpart translates to 0: Linux SIGSTKFLT,
+// SIGPWR and the realtime range do not exist on XNU, and Apple SIGEMT
+// and SIGINFO have no Linux number, so nothing installs a handler for
+// them and they keep their default action. sys_cosmo_arm64.s indexes
+// the tables directly, so they stay plain data with no init.
 
+// cosmoSigL2ATab maps a Linux signal number (index 1..31) to the Apple
+// number, 0 if there is none. Index 0 and 32..64 are 0.
 var cosmoSigL2ATab = [65]byte{
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
 	7:  10, // SIGBUS
@@ -31,6 +42,8 @@ var cosmoSigL2ATab = [65]byte{
 	31: 12, // SIGSYS
 }
 
+// cosmoSigA2LTab maps an Apple signal number (index 1..31) to the
+// Linux number, 0 if there is none.
 var cosmoSigA2LTab = [32]byte{
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
 	7:  0, // SIGEMT: no Linux equivalent
@@ -53,6 +66,8 @@ var cosmoSigA2LTab = [32]byte{
 	31: 12, // SIGUSR2
 }
 
+// cosmoSigL2A translates a Linux signal number to Apple's; 0 if the
+// signal has no Apple equivalent.
 //
 //go:nosplit
 func cosmoSigL2A(sig uint32) uint32 {
@@ -62,6 +77,8 @@ func cosmoSigL2A(sig uint32) uint32 {
 	return uint32(cosmoSigL2ATab[sig])
 }
 
+// cosmoSigA2L translates an Apple signal number to Linux's; 0 if the
+// signal has no Linux equivalent.
 //
 //go:nosplit
 func cosmoSigA2L(sig uint32) uint32 {
@@ -71,8 +88,12 @@ func cosmoSigA2L(sig uint32) uint32 {
 	return uint32(cosmoSigA2LTab[sig])
 }
 
-// cosmoSigmaskL2A converts a Linux 64-bit signal mask to an Apple 32-bit
-// sigset_t by remapping each bit through the number table.
+// cosmoSigmaskL2A converts a Linux 64-bit signal mask to an Apple
+// 32-bit sigset_t by remapping each bit through the number table (bit
+// N-1 represents signal N on both systems - the numbers differ, so
+// this is a bit REMAPPING, not a truncation). Bits for signals without
+// an Apple equivalent are dropped: they cannot be generated on an XNU
+// host.
 //
 //go:nosplit
 func cosmoSigmaskL2A(m uint64) uint32 {

@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package ld
 
@@ -59,6 +60,7 @@ func addTestSectionedTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 	debugInfo := []byte("DWARFINFO(" + sentinel + ")")
 	debugLoclists := []byte("LOCLISTS(" + sentinel + ")")
 
+	// Symbol table: null symbol + one global main.main in .text (index 2).
 	symtab := make([]byte, 48)
 	binary.LittleEndian.PutUint32(symtab[24:], 1) // st_name
 	symtab[28] = 0x12                             // st_info: GLOBAL | FUNC
@@ -106,7 +108,9 @@ func addTestSectionedTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 	return out
 }
 
-// testTextMarker is planted inside the synthetic .text span (at the entry point's file offset).
+// testTextMarker is planted inside the synthetic .text span (at the entry
+// point's file offset) so tests can verify section views reference the
+// real payload bytes.
 const testTextMarker = "TEXTMARKER"
 
 // buildTestSectionedELFPair returns synthetic amd64 and arm64 linker
@@ -169,7 +173,8 @@ func checkSlimELF(t *testing.T, slim, orig []byte, machine elf.Machine, sentinel
 		}
 	}
 
-	// Note contents preserved verbatim (they live in the retained header page at their original offset).
+	// Note contents preserved verbatim (they live in the retained header
+	// page at their original offset).
 	note := f.Section(".note.test")
 	if note == nil {
 		t.Fatalf("note section missing")
@@ -311,7 +316,8 @@ func TestAPEFatMergeSlimSidecars(t *testing.T) {
 	}
 	checkSlimELF(t, amdSidecar, amdElf, elf.EM_X86_64, testSentinelAMD64)
 
-	// The slim sidecar must match slimELFDebug of the pristine input exactly (the merge pipeline adds nothing else).
+	// The slim sidecar must match slimELFDebug of the pristine input
+	// exactly (the merge pipeline adds nothing else).
 	wantAmd, err := slimELFDebug(amdElf)
 	if err != nil {
 		t.Fatal(err)
@@ -331,7 +337,8 @@ func TestAPEFatMergeSlimSidecars(t *testing.T) {
 		}
 	}
 
-	// The fat APE is byte-identical to a full-mode merge of the same inputs: slim affects sidecars only.
+	// The fat APE is byte-identical to a full-mode merge of the same
+	// inputs: slim affects sidecars only.
 	_, _, outFull := mergeSectionedPair(t, "full")
 	fatFull, err := os.ReadFile(outFull)
 	if err != nil {
@@ -372,7 +379,9 @@ func checkCompactView(t *testing.T, fat []byte, payloadOff, payloadLen uint64, a
 		t.Errorf("machine = %v, want %v", f.Machine, machine)
 	}
 
-	// The stored payload's own ELF header must advertise the same view.
+	// The stored payload's own ELF header must advertise the same view
+	// (both copies matter: the stored one for tools reading the payload,
+	// the boot one for the assimilated file).
 	stored := fat[payloadOff:]
 	if got := binary.LittleEndian.Uint64(boot[40:48]); got != binary.LittleEndian.Uint64(stored[40:48]) {
 		t.Errorf("boot e_shoff %#x differs from stored payload e_shoff %#x", got, binary.LittleEndian.Uint64(stored[40:48]))
@@ -397,7 +406,8 @@ func checkCompactView(t *testing.T, fat []byte, payloadOff, payloadLen uint64, a
 		t.Errorf(".debug_info = %q, want %q", data, want)
 	}
 
-	// Allocated sections keep PROGBITS and point into the embedded payload's real bytes.
+	// Allocated sections keep PROGBITS and point into the embedded
+	// payload's real bytes.
 	text := f.Section(".text")
 	if text == nil {
 		t.Fatalf(".text missing from the compact view")
@@ -433,6 +443,12 @@ func checkCompactView(t *testing.T, fat []byte, payloadOff, payloadLen uint64, a
 	}
 }
 
+// TestAPEFatMergeCompact merges under -apedbgmode=compact and verifies:
+// slim sidecars, a debug tail appended past the last payload, payload and
+// boot ELF headers referencing per-arch section views (simulated
+// assimilation parses for both architectures), and - outside the 12
+// patched ELF-header bytes per payload - a fat image byte-identical to
+// the default merge.
 func TestAPEFatMergeCompact(t *testing.T) {
 	amdElf, armElf, out := mergeSectionedPair(t, "compact")
 
@@ -459,7 +475,10 @@ func TestAPEFatMergeCompact(t *testing.T) {
 	checkCompactView(t, fat, amdOff, extent, sys.AMD64, elf.EM_X86_64, testSentinelAMD64)
 	checkCompactView(t, fat, armOff, payloadExtent(armElf), sys.ARM64, elf.EM_AARCH64, testSentinelARM64)
 
-	// Aside from each payload's patched e_shoff/e_shnum/e_shstrndx.
+	// Aside from each payload's patched e_shoff/e_shnum/e_shstrndx (and
+	// the boot headers inside the shell script, which carry the same
+	// fields), the image up to the tail is byte-identical to a default
+	// merge.
 	_, _, outFull := mergeSectionedPair(t, "full")
 	fatFull, err := os.ReadFile(outFull)
 	if err != nil {
@@ -480,8 +499,9 @@ func TestAPEFatMergeCompact(t *testing.T) {
 	if !bytes.Equal(neutralized[amdOff:], fatFull[amdOff:]) {
 		t.Errorf("compact payload spans differ from the default merge beyond the patched ELF header fields")
 	}
-	// Head: everything outside the script window (the PE header before it, the
-	// embedded loaders after it) is unchanged.
+	// Head: everything outside the script window (the PE header before it,
+	// the embedded loaders after it) is unchanged; only the printf-encoded
+	// boot headers inside the script differ.
 	if !bytes.Equal(neutralized[:apeScriptOffset], fatFull[:apeScriptOffset]) {
 		t.Errorf("compact APE head differs before the script region")
 	}

@@ -1,10 +1,10 @@
-// All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found
-// in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package a
 
-// Repeat covers those constant kinds a default may take.
+// Repeat covers the three constant kinds a default may take.
 func Repeat(s string = "x", n int = 2, loud bool = true) string {
 	out := ""
 	for range n {

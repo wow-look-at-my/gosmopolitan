@@ -8,7 +8,7 @@ The go command completes such a module when it fetches it. It runs the module's 
 
 The **base zip** is what the proxy serves, or what the repository holds. It is verified against `go.sum` and the checksum database exactly as before. Nothing about it changes. It is never uploaded anywhere. The proxy serves it already, and `go.sum` pins it already.
 
-The **overlay zip** holds only the files the generators ADD. It is the part the shared cache keeps.
+The **overlay zip** holds only the files the generators ADD. It is the one part the shared cache keeps.
 
 A file the base zip carries keeps the base zip's bytes, whatever a generator writes over it. What a module's authors published is the module. Regenerating `golang.org/x/text` from today's Unicode data is the author's workflow. It is not a build step. A build that did it depends on the day it ran.
 
@@ -38,7 +38,7 @@ An empty overlay is stored too. It is what says the module needs nothing. It is 
 
 Everything above rests on one property. A module version means the same bytes on every machine. These rules keep that true.
 
-**The module's own bytes decide which directives exist.** Nothing asks what this machine has installed. A scan that asked will make one module version mean different things on different machines. Both answers then land under the key the whole fleet reads.
+**The module's own bytes decide which directives exist.** Nothing asks what this machine has installed. A scan that asked will make one module version mean different things on different machines. Both answers then land under the one key the whole fleet reads.
 
 **A program a directive names and this machine lacks is a loud failure.** The failure names what to install. Skipping the directive hands this build a module that the same version elsewhere does not match.
 
@@ -52,7 +52,7 @@ A generator is a program. So the go command a directive starts fetches the gener
 
 A module version is completed one time. `unzip` holds that version's lock file across the completion. A second go command waits for the first one.
 
-Nothing here is a knob to turn off. A build that skipped the generators will compile a different package from the same module version. That is the thing this mechanism exists to prevent.
+Nothing here is a knob to turn off. A build that skipped the generators will compile a different package from the same module version. That is the one thing this mechanism exists to prevent.
 
 ## Sandboxing
 

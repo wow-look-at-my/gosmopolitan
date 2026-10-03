@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package noder
 
@@ -12,10 +13,16 @@ import (
 	"cmd/internal/src"
 )
 
-// PlainImports holds the imports initialized before the package, when that is not all of them.
+// PlainImports holds the imports initialized before the package, when that is
+// not all of them. Under -testinit it is what the package's non-test files
+// import: its test files are initialized later, when the tests of the
+// -testinit package run. Under -teststartup it is the listed imports: a test
+// main holding several packages' tests initializes each of those packages
+// when its tests run.
 var PlainImports map[string]bool
 
-// importsTested reports, under -testinit, whether an external test package imports the package under test.
+// importsTested reports, under -testinit, whether an external test package
+// imports the package under test.
 var importsTested bool
 
 // recordPlainImports fills PlainImports and importsTested from the flags and
@@ -61,8 +68,10 @@ func recordPlainImports(filenames []string, noders []*noder) {
 }
 
 // importTestedFirst reads the export data of the package under test before
-// any other, when an external test package imports it. That export data holds
-// what the package's own _test.go files add, methods included.
+// any other, when an external test package imports it. That export data
+// holds what the package's own _test.go files add, methods included. Every
+// other package here was compiled against the package without them, and
+// whichever export data names a type first defines it for the whole compile.
 func importTestedFirst(importer *gcimports) {
 	if !importsTested || base.Ctxt.Pkgpath == base.Flag.TestInit {
 		return
@@ -73,7 +82,8 @@ func importTestedFirst(importer *gcimports) {
 }
 
 // DeferredToTests reports whether a declaration at pos is initialized with
-// the tests rather than with the package.
+// the tests rather than with the package: -testinit is set and the
+// declaration is in a _test.go file.
 func DeferredToTests(pos src.XPos) bool {
 	if base.Flag.TestInit == "" {
 		return false

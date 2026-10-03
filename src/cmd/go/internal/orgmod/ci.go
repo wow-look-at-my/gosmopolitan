@@ -1,5 +1,6 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 package orgmod
 
@@ -12,6 +13,10 @@ import (
 
 // CIBuild reports whether this process is a CI job, which builds the org
 // module heads its run locked (see Version).
+//
+// A coding agent that could claim to be CI could hold an org module at an old
+// commit to dodge a new one, so the answer is false under an agent, whatever
+// GITHUB_ACTIONS says. No other switch exists.
 var CIBuild = sync.OnceValue(func() bool {
 	return ciBuild(os.Getenv, AgentAncestor)
 })

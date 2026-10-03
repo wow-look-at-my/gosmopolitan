@@ -1,19 +1,21 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2024 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package x509
 
-// Possible certificate files; stop after finding one. Cosmopolitan runs on
-// Linux, macOS, and Windows, so we include paths for all platforms.
+// Possible certificate files; stop after finding one.
+// Cosmopolitan runs on Linux, macOS, and Windows, so we include
+// paths for all platforms.
 var certFiles = []string{
 	// Linux paths
 	"/etc/ssl/certs/ca-certificates.crt",                // Debian/Ubuntu/Gentoo etc.
-	"/etc/pki/tls/certs/ca-bundle.crt",
+	"/etc/pki/tls/certs/ca-bundle.crt",                  // Fedora/RHEL 6
 	"/etc/ssl/ca-bundle.pem",                            // OpenSUSE
 	"/etc/pki/tls/cacert.pem",                           // OpenELEC
-	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+	"/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // CentOS/RHEL 7
 	"/etc/ssl/cert.pem",                                 // Alpine Linux
 }
 

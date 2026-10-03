@@ -1,14 +1,16 @@
-// Copyright The Go Authors. All rights reserved. Use of this source code is
-// governed by a BSD-style license that can be found in the LICENSE file.
+// Copyright 2026 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
 // Path translation for the Windows NT personality.
 //
-// Cosmo binaries and the whole unix-shaped standard library speak Linux-style
-// paths. Every emulated file syscall funnels its paths through exactly one
-// function pair defined here: ntPathW forward, and ntPathToLinux back. A
-// symlink's body takes the same pair (os_cosmo_nt_link.go).
+// Cosmo binaries and the whole unix-shaped standard library speak
+// Linux-style paths. Every emulated file syscall funnels its paths
+// through exactly one function pair defined here: ntPathW forward, and
+// ntPathToLinux back. A symlink's body takes the same pair
+// (os_cosmo_nt_link.go).
 
 package runtime
 
@@ -44,7 +46,9 @@ func ntIsAlpha(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// ntTempPathW caches the GetTempPathW result: UTF-16, WITH the trailing backslash the API guarantees.
+// ntTempPathW caches the GetTempPathW result: UTF-16, WITH the
+// trailing backslash the API guarantees, WITHOUT a NUL. nil when the
+// call failed. Lazily initialized; a racing double-init is idempotent.
 var ntTempPath []uint16
 var ntTempPathSet bool
 
@@ -79,8 +83,10 @@ func ntPathW(path string) []uint16 {
 	w := make([]uint16, 0, len(path)+8)
 	switch {
 	case path == "/tmp" || ntHasPrefix(path, "/tmp/"):
-		// cosmo's os.TempDir() answers "/tmp" with TMPDIR unset and NT has no /tmp,
-		// so the name.
+		// cosmo's os.TempDir() answers "/tmp" with TMPDIR unset and NT
+		// has no /tmp, so the name and its subtree are grafted onto
+		// the per-user NT temp directory. os.MkdirTemp then works
+		// unmodified.
 		if tmp := ntTempPathW(); tmp != nil {
 			w = append(w, tmp...) // "C:\...\Temp\"
 			rest := path[len("/tmp"):]
@@ -90,7 +96,8 @@ func ntPathW(path string) []uint16 {
 			w = ntUTF16Append(w, rest, true)
 			break
 		}
-		// No temp directory resolvable: fall through to the generic current-drive-rooted rule ("\tmp\...").
+		// No temp directory resolvable: fall through to the generic
+		// current-drive-rooted rule ("\tmp\...").
 		fallthrough
 	default:
 		switch {
@@ -99,7 +106,8 @@ func ntPathW(path string) []uint16 {
 			w = ntUTF16Append(w, path, true)
 		case path[0] == '/' && len(path) >= 2 && ntIsAlpha(path[1]) &&
 			(len(path) == 2 || path[2] == '/'):
-			// "/c" or "/c/x": one ASCII letter after the leading slash is a drive letter, the cosmo convention.
+			// "/c" or "/c/x": one ASCII letter after the leading
+			// slash is a drive letter, the cosmo convention.
 			drive := path[1] &^ 0x20 // upper-case for Win32
 			w = append(w, uint16(drive), ':')
 			rest := path[2:]
@@ -108,12 +116,15 @@ func ntPathW(path string) []uint16 {
 			}
 			w = ntUTF16Append(w, rest, true)
 		default:
-			// Other absolute paths become current-drive rooted ("/foo" -> "\foo"); relative paths pass through.
+			// Other absolute paths become current-drive rooted
+			// ("/foo" -> "\foo"); relative paths pass through. Both
+			// resolve against the Win32 process working directory.
 			w = ntUTF16Append(w, path, true)
 		}
 	}
-	// A plain path is preferred, because the \\?\ prefix demands backslash-only
-	// fully-qualified paths.
+	// A plain path is preferred, because the \\?\ prefix demands
+	// backslash-only fully-qualified paths. Prefix it only when a
+	// drive-absolute result would not fit the classic MAX_PATH.
 	if len(w) >= _NT_MAX_PATH-1 && len(w) >= 2 && w[1] == ':' {
 		w = append([]uint16{'\\', '\\', '?', '\\'}, w...)
 	}
@@ -130,6 +141,12 @@ func ntHasPrefix(s, prefix string) bool {
 // stripped, a leading drive letter becomes the LOWERCASE "/c/..."
 // form, backslashes flip, and a trailing slash is trimmed except at a
 // drive root, which becomes the bare "/c". Only the drive changes case.
+//
+// The lowercase /c/ form is what makes unix-shaped filepath code see
+// IsAbs() and Chdir(Getwd()) round-trip through ntPathW exactly. That
+// holds for the /c/ form only: a "/tmp/x" path deliberately comes BACK
+// as its real "/c/users/.../temp/x" spelling, an aliasing os.SameFile
+// settles the way it settles macOS's /var symlink.
 func ntPathToLinux(w []uint16) string {
 	s := ntUTF16ToString(w)
 	if len(s) >= 4 && s[0] == '\\' && s[1] == '\\' && s[2] == '?' && s[3] == '\\' {
@@ -158,7 +175,11 @@ func ntPathToLinux(w []uint16) string {
 	return string(buf)
 }
 
-// ntCPath copies the NUL-terminated UTF-8 C string at p into a Go string.
+// ntCPath copies the NUL-terminated UTF-8 C string at p into a Go
+// string. The source may live on the calling goroutine's stack, so
+// the copy happens before anything here can grow the stack: the
+// caller (the nosplit dispatcher) passes p as a real pointer type,
+// which stack copying adjusts.
 func ntCPath(p *byte) string {
 	if p == nil {
 		return ""
