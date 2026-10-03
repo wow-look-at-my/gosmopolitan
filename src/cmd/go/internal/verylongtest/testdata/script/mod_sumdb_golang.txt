@@ -38,15 +38,18 @@ cmp go.sum saved.sum
 
 
 # Download again.
-# Should use the checksum database to validate new go.sum lines,
-# but not need to fetch any new module data.
+# Should use the checksum database to validate new h1 lines,
+# but not need to fetch any new module data. rsc.io/quote comes from a
+# github.com commit, so its go.sum line is a git sum and needs no lookup.
+# golang.org/x/text comes from go.googlesource.com and gets an h1 sum.
 
 rm go.sum
 
 go list -mod=mod -x -m all  # Add checksums for go.mod files.
 stderr sum.golang.org/tile
 ! stderr proxy.golang.org
-stderr sum.golang.org/lookup/rsc.io/quote
+stderr sum.golang.org/lookup/golang.org/x/text
+! stderr sum.golang.org/lookup/rsc.io/quote
 
 go list -mod=mod -x rsc.io/quote  # Add checksums for module source.
 ! stderr .  # Adds checksums, but for entities already in the module cache.
