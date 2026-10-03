@@ -10,7 +10,7 @@ An org module is a `github.com/wow-look-at-my/...` module. It has no version of 
 
 ## go.mod keeps the placeholder
 
-- Each go command resolves the head again and builds it. The version lives in the build list, the module cache and `go version -m`, never in `go.mod`.
+- Each go command resolves the head again and builds it. The version lives in the build list, the module cache and `go version -m`, not in `go.mod`.
 - `go mod tidy`, `go get` and every build write the placeholder for an org module. A tidy go.mod stays byte for byte identical when an org dependency moves.
 - The token on an org require or replace line is not read. A go.mod file that records some other version builds the same way, and the next write puts the placeholder back.
 - An org module has no `go.sum` line. Its commit is the integrity check.

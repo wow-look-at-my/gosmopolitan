@@ -15,7 +15,7 @@ A directive is a command the module's author wrote. Completing a module runs it 
 
 ## What a run may touch
 
-Each package that carries a directive generates on its own, in path order. The run happens in a staged copy of the fetched module, never in the tree other builds compile from. The command runs confined: bubblewrap on a Linux host, seatbelt on a macOS one. It may write the staged tree and the caches a go command needs, and nothing else. The network stays reachable, because a generator that fetches its own inputs is the case this exists for.
+Each package that carries a directive generates on its own, in path order. The run happens in a staged copy of the fetched module, not in the tree other builds compile from. The command runs confined: bubblewrap on a Linux host, seatbelt on a macOS one. It may write the staged tree and the caches a go command needs, and nothing else. The network stays reachable, because a generator that fetches its own inputs is the case this exists for.
 
 A file the zip carries keeps the zip's bytes, whatever a generator wrote over it. What the module's authors published is the module.
 
