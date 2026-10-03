@@ -1,6 +1,7 @@
-# GOPROXY and GOSUMDB are removed. The go command always downloads from
-# proxy.golang.org and checks sum.golang.org. Values that would turn both off
-# stay set for the whole script, and change nothing.
+# GOPROXY and GOSUMDB are removed. The go command always downloads from the
+# module's origin, never from proxy.golang.org, and checks sum.golang.org.
+# Values that would turn both off stay set for the whole script, and change
+# nothing.
 env GOPROXY=off
 env GOSUMDB=off
 go env GOPROXY
@@ -8,29 +9,28 @@ go env GOPROXY
 go env GOSUMDB
 ! stdout .
 
-[!net:proxy.golang.org] skip
+[!net:github.com] skip
 [!net:sum.golang.org] skip
 env GOMODCACHE=$WORK/modcache # we clean the modcache below
 
 go get rsc.io/quote@v1.5.2
+! stderr proxy.golang.org
 cp go.sum saved.sum
 
 
-# Download from proxy.golang.org with go.sum entry already.
+# Download from the origin with go.sum entry already.
 # Use 'go list' instead of 'go get' since the latter may download extra go.mod
 # files not listed in go.sum.
 
 go clean -modcache
 
 go list -x -m all  # Download go.mod files.
-! stderr 'https://[^ ]*github'
-stderr proxy.golang.org/rsc.io/quote
+! stderr proxy.golang.org
 ! stderr sum.golang.org/tile
 ! stderr sum.golang.org/lookup/rsc.io/quote
 
 go list -x -deps rsc.io/quote  # Download module source.
-! stderr 'https://[^ ]*github'
-stderr proxy.golang.org/rsc.io/quote
+! stderr proxy.golang.org
 ! stderr sum.golang.org/tile
 ! stderr sum.golang.org/lookup/rsc.io/quote
 
@@ -39,14 +39,13 @@ cmp go.sum saved.sum
 
 # Download again.
 # Should use the checksum database to validate new go.sum lines,
-# but not need to fetch any new data from the proxy.
+# but not need to fetch any new module data.
 
 rm go.sum
 
 go list -mod=mod -x -m all  # Add checksums for go.mod files.
 stderr sum.golang.org/tile
-! stderr 'https://[^ ]*github'
-! stderr proxy.golang.org/rsc.io/quote
+! stderr proxy.golang.org
 stderr sum.golang.org/lookup/rsc.io/quote
 
 go list -mod=mod -x rsc.io/quote  # Add checksums for module source.

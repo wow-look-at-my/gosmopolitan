@@ -856,6 +856,20 @@ func TestGitHubArchiveFallback(t *testing.T) {
 						}
 						got[name] = body
 					}
+					// An archive go.sum refuses leaves git as the only source.
+					gitCtx := WithGitOnly(WithFetch(ctx, new(Fetch)))
+					zipRC, err := repo.ReadZip(gitCtx, "v1.0.0", subdir, MaxZipFile)
+					if err != nil {
+						t.Fatalf("ReadZip(%q) with WithGitOnly: %v", subdir, err)
+					}
+					data, err := io.ReadAll(zipRC)
+					zipRC.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if fromGit := zipEntries(t, data); !reflect.DeepEqual(fromGit, got) {
+						t.Errorf("ReadZip(%q) with WithGitOnly = %v, want the archive's files %v", subdir, fromGit, got)
+					}
 				}
 				wantHere := want
 				if subdir != "" {
