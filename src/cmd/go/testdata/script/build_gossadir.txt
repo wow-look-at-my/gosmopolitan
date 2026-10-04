@@ -1,0 +1,30 @@
+# GOSSADIR keys only a compile that writes an SSA dump into it.
+# The dependencies keep their keys and come from the cache.
+
+go build -o $WORK/plain.exe .
+
+mkdir $WORK/ssa
+env GOSSADIR=$WORK/ssa
+go build -x -o $WORK/dump.exe -gcflags=-d=ssa/genssa/dump=main .
+stderr 'compile .* -p main '
+! stderr 'compile .* -p fmt '
+exists $WORK/ssa/main_01__genssa.dump
+
+# A new GOSSADIR compiles the package that dumps again, so the dump appears.
+mkdir $WORK/ssa2
+env GOSSADIR=$WORK/ssa2
+go build -o $WORK/dump2.exe -gcflags=-d=ssa/genssa/dump=main .
+exists $WORK/ssa2/main_01__genssa.dump
+
+-- go.mod --
+module example.com/m
+
+go 1.27
+-- main.go --
+package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("hello")
+}
