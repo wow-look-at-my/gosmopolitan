@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -273,7 +274,13 @@ func (t *tester) run() {
 		}
 		anyIncluded = true
 		dt := dt // dt used in background after this iteration
-		if err := dt.fn(&dt); err != nil {
+		queued := len(t.worklist)
+		err := dt.fn(&dt)
+		if len(t.worklist) == queued {
+			// The test ran here and is finished. A queued one counts when its command ends.
+			t.markTestDone(dt.name)
+		}
+		if err != nil {
 			t.runPending(&dt) // in case that hasn't been done yet
 			t.failed = true
 			if t.keepGoing {
@@ -583,10 +590,16 @@ func (t *tester) reportTo(stdout, stderr io.Writer) (out, errOut io.Writer, flus
 
 // run runs a go test and returns an error if it does not succeed.
 func (opts *goTest) run(t *tester) error {
+	_, err := opts.runState(t)
+	return err
+}
+
+// runState is run, and also answers what the command cost the machine.
+func (opts *goTest) runState(t *tester) (*os.ProcessState, error) {
 	cmd, flush := opts.bgCommand(t, os.Stdout, os.Stderr)
 	err := cmd.Run()
 	flush()
-	return err
+	return cmd.ProcessState, err
 }
 
 // oneBinary is a test binary that the tests of several packages compile
@@ -951,9 +964,10 @@ func (t *tester) registerStdTest(pkg string) {
 		var err error
 		if len(rest) > 0 {
 			started := time.Now()
-			err = test.run(t)
+			var state *os.ProcessState
+			state, err = test.runState(t)
 			if !t.json {
-				reportStep("test", "std.test", time.Since(started))
+				reportTestStep("std.test", time.Since(started), state)
 			}
 			t.recordOneBinary(false, test.keep, rest)
 		}
@@ -962,9 +976,9 @@ func (t *tester) registerStdTest(pkg string) {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
 			started := time.Now()
-			errCmdGo := cmdGo.run(t)
+			state, errCmdGo := cmdGo.runState(t)
 			if !t.json {
-				reportStep("test", "cmd-go.test", time.Since(started))
+				reportTestStep("cmd-go.test", time.Since(started), state)
 			}
 			if err == nil {
 				err = errCmdGo
@@ -1834,11 +1848,21 @@ func (t *tester) registerCgoTests(heading string) {
 	}
 }
 
-// markPkgDone counts one package toward the run's progress. The commands run
-// in parallel, and testProgress holds the lock.
+// markPkgDone counts a package result toward the run's progress. The total
+// counts dist tests, so a result counts only where the package is one: a std
+// package's own test. A variant reports packages too, crypto/... dozens of
+// them, and counts as its one test when its command ends.
 func (t *tester) markPkgDone(pkg string) {
+	if t.testNames[pkg] && t.shouldRunTest(pkg) {
+		t.markTestDone(pkg)
+	}
+}
+
+// markTestDone counts one dist test toward the run's progress. The commands
+// run in parallel, and testProgress holds the lock.
+func (t *tester) markTestDone(name string) {
 	if t.progress != nil {
-		t.progress.markDone(pkg)
+		t.progress.markDone(name)
 	}
 }
 
@@ -1851,6 +1875,25 @@ func (t *tester) markPkgDone(pkg string) {
 func (t *tester) runPending(nextTest *distTest) {
 	worklist := t.worklist
 	t.worklist = nil
+
+	maxbg := maxbg
+	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
+	// Because there is not enough CPU to parallel the testing of multiple packages.
+	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+		for _, w := range worklist {
+			// See go.dev/issue/65164
+			// because GOMAXPROCS=2 runtime CPU usage is low,
+			// so increase maxbg to avoid slowing down execution with low CPU usage.
+			// This makes testing a single package slower,
+			// but testing multiple packages together faster.
+			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
+				maxbg = runtime.NumCPU()
+				break
+			}
+		}
+	}
+	slots := make(chan struct{}, maxbg)
+
 	for _, w := range worklist {
 		w.start = make(chan bool)
 		w.end = make(chan struct{})
@@ -1881,36 +1924,27 @@ func (t *tester) runPending(nextTest *distTest) {
 				}
 			}
 			timelog("end", w.dt.name)
+			<-slots
 			w.end <- struct{}{}
 		}(w)
 	}
 
-	maxbg := maxbg
-	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
-	// Because there is not enough CPU to parallel the testing of multiple packages.
-	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+	// A command takes a slot when any command ends, not when the oldest one
+	// ends. The output still prints in order, but a long command no longer
+	// keeps the slots behind it idle.
+	var failed atomic.Bool
+	failed.Store(t.failed)
+	keepGoing := t.keepGoing
+	go func() {
 		for _, w := range worklist {
-			// See go.dev/issue/65164
-			// because GOMAXPROCS=2 runtime CPU usage is low,
-			// so increase maxbg to avoid slowing down execution with low CPU usage.
-			// This makes testing a single package slower,
-			// but testing multiple packages together faster.
-			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
-				maxbg = runtime.NumCPU()
-				break
-			}
+			slots <- struct{}{}
+			w.start <- !failed.Load() || keepGoing
 		}
-	}
+	}()
 
-	started := 0
 	ended := 0
 	var last *distTest
 	for ended < len(worklist) {
-		for started < len(worklist) && started-ended < maxbg {
-			w := worklist[started]
-			started++
-			w.start <- !t.failed || t.keepGoing
-		}
 		w := worklist[ended]
 		dt := w.dt
 		if t.lastHeading != dt.heading {
@@ -1929,15 +1963,17 @@ func (t *tester) runPending(nextTest *distTest) {
 		}
 		ended++
 		<-w.end
+		t.markTestDone(dt.name)
 		os.Stdout.Write(w.out.Bytes())
 		if w.elapsed > 0 && !t.json {
-			reportStep("test", dt.name, w.elapsed)
+			reportTestStep(dt.name, w.elapsed, w.cmd.ProcessState)
 		}
 		// We no longer need the output, so drop the buffer.
 		w.out = bytes.Buffer{}
 		if w.err != nil {
 			log.Printf("Failed: %v", w.err)
 			t.failed = true
+			failed.Store(true)
 		}
 	}
 	if t.failed && !t.keepGoing {
