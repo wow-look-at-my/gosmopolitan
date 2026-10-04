@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -1851,6 +1852,25 @@ func (t *tester) markPkgDone(pkg string) {
 func (t *tester) runPending(nextTest *distTest) {
 	worklist := t.worklist
 	t.worklist = nil
+
+	maxbg := maxbg
+	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
+	// Because there is not enough CPU to parallel the testing of multiple packages.
+	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+		for _, w := range worklist {
+			// See go.dev/issue/65164
+			// because GOMAXPROCS=2 runtime CPU usage is low,
+			// so increase maxbg to avoid slowing down execution with low CPU usage.
+			// This makes testing a single package slower,
+			// but testing multiple packages together faster.
+			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
+				maxbg = runtime.NumCPU()
+				break
+			}
+		}
+	}
+	slots := make(chan struct{}, maxbg)
+
 	for _, w := range worklist {
 		w.start = make(chan bool)
 		w.end = make(chan struct{})
@@ -1881,36 +1901,27 @@ func (t *tester) runPending(nextTest *distTest) {
 				}
 			}
 			timelog("end", w.dt.name)
+			<-slots
 			w.end <- struct{}{}
 		}(w)
 	}
 
-	maxbg := maxbg
-	// for runtime.NumCPU() < 4 ||  runtime.GOMAXPROCS(0) == 1, do not change maxbg.
-	// Because there is not enough CPU to parallel the testing of multiple packages.
-	if runtime.NumCPU() > 4 && runtime.GOMAXPROCS(0) != 1 {
+	// A command takes a slot when any command ends, not when the oldest one
+	// ends. The output still prints in order, but a long command no longer
+	// keeps the slots behind it idle.
+	var failed atomic.Bool
+	failed.Store(t.failed)
+	keepGoing := t.keepGoing
+	go func() {
 		for _, w := range worklist {
-			// See go.dev/issue/65164
-			// because GOMAXPROCS=2 runtime CPU usage is low,
-			// so increase maxbg to avoid slowing down execution with low CPU usage.
-			// This makes testing a single package slower,
-			// but testing multiple packages together faster.
-			if strings.Contains(w.dt.heading, "GOMAXPROCS=2 runtime") {
-				maxbg = runtime.NumCPU()
-				break
-			}
+			slots <- struct{}{}
+			w.start <- !failed.Load() || keepGoing
 		}
-	}
+	}()
 
-	started := 0
 	ended := 0
 	var last *distTest
 	for ended < len(worklist) {
-		for started < len(worklist) && started-ended < maxbg {
-			w := worklist[started]
-			started++
-			w.start <- !t.failed || t.keepGoing
-		}
 		w := worklist[ended]
 		dt := w.dt
 		if t.lastHeading != dt.heading {
@@ -1938,6 +1949,7 @@ func (t *tester) runPending(nextTest *distTest) {
 		if w.err != nil {
 			log.Printf("Failed: %v", w.err)
 			t.failed = true
+			failed.Store(true)
 		}
 	}
 	if t.failed && !t.keepGoing {
