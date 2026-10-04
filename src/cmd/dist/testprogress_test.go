@@ -115,6 +115,25 @@ func TestProgressCountsEachTestOnce(t *testing.T) {
 	}
 }
 
+// The total counts dist tests. A variant run reports packages that are no
+// dist test, and those must not count, or done overtakes total.
+func TestPackageResultCountsOnlyItsOwnTest(t *testing.T) {
+	var timings testTimings
+	tst := &tester{testNames: map[string]bool{"bufio": true, "crypto/...:gofips140": true}}
+	tst.progress = newTestProgress(nil, &timings, 2)
+	tst.markPkgDone("bufio")
+	tst.markPkgDone("bufio")
+	tst.markPkgDone("crypto/internal/fips140/v1.26.0/aes")
+	tst.markPkgDone("crypto/aes")
+	if done, total := tst.progress.counts(); done != 1 || total != 2 {
+		t.Fatalf("after package results, counts = %d/%d, want 1/2", done, total)
+	}
+	tst.markTestDone("crypto/...:gofips140")
+	if done, total := tst.progress.counts(); done != 2 || total != 2 {
+		t.Errorf("after the variant ended, counts = %d/%d, want 2/2", done, total)
+	}
+}
+
 // A test too fast to matter is not the reason a suite is slow, so the table
 // leaves it out rather than padding with it.
 func TestTimingsReportSkipsTrivial(t *testing.T) {

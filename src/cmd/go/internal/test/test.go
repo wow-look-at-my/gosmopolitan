@@ -2496,17 +2496,15 @@ func computeTestInputsID(a *work.Action, testlog []byte) (cache.ActionID, error)
 
 // isRunScratch reports whether name is scratch space this run created, which is
 // the temporary directory and nothing else. Such a path holds no state from an
-// earlier run, so hashing it says only that the clock moved: t.TempDir names a
-// fresh directory every time, and hashOpen refuses a file that young, so every
-// test using one would stop caching for a reason that is not about its inputs.
+// earlier run: t.TempDir names a fresh directory every time, so every test
+// using one would stop caching for a reason that is not about its inputs.
 //
 // Every other path IS hashed, inside the module root and outside it alike. A
 // file the test read is an input to the test, and where it sits on disk does
 // not change that. Dropping the ones outside the root is what let a test read a
 // config file, a fixture or a sibling checkout and then replay a stale pass
-// after that file changed. A test whose reads genuinely cannot be pinned down,
-// such as one that reads /proc, now misses instead. A miss costs a run. A
-// wrong hit costs the trust that makes the cache worth having at all.
+// after that file changed. A miss costs a run. A wrong hit costs the trust
+// that makes the cache worth having at all.
 //
 // The name is compared as spelled and as resolved. A path that is gone cannot
 // be resolved, and a temporary directory that is a symlink (macOS spells it
@@ -2541,10 +2539,6 @@ func hashGetenv(name string) cache.ActionID {
 	return h.Sum()
 }
 
-const modTimeCutoff = 2 * time.Second
-
-var errFileTooNew = errors.New("file used as input is too new")
-
 func hashOpen(name string) (cache.ActionID, error) {
 	h := cache.NewHash("open")
 	info, err := os.Stat(name)
@@ -2568,20 +2562,24 @@ func hashOpen(name string) (cache.ActionID, error) {
 			}
 		}
 	} else if info.Mode().IsRegular() {
-		// Because files might be very large, do not attempt
-		// to hash the entirety of their content. Instead assume
-		// the mtime and size recorded in hashWriteStat above
-		// are good enough.
-		//
-		// To avoid problems for very recent files where a new
-		// write might not change the mtime due to file system
-		// mtime precision, reject caching if a file was read that
-		// is less than modTimeCutoff old.
-		if time.Since(info.ModTime()) < modTimeCutoff {
-			return cache.ActionID{}, errFileTooNew
-		}
+		// The content is the input, not the mtime. A fresh checkout gives
+		// every file a new mtime, and a /proc file reports its boot's clock.
+		hashWriteContent(h, name)
 	}
 	return h.Sum(), nil
+}
+
+// hashWriteContent writes the bytes of the regular file name to h.
+func hashWriteContent(h io.Writer, name string) {
+	file, err := os.Open(name)
+	if err != nil {
+		fmt.Fprintf(h, "err %v\n", err)
+		return
+	}
+	defer file.Close()
+	if _, err := io.Copy(h, file); err != nil {
+		fmt.Fprintf(h, "err %v\n", err)
+	}
 }
 
 func hashStat(name string) cache.ActionID {
@@ -2599,8 +2597,10 @@ func hashStat(name string) cache.ActionID {
 	return h.Sum()
 }
 
+// hashWriteStat writes what a stat says about a file, less its mtime. The
+// mtime records when this checkout was made, not what the file holds.
 func hashWriteStat(h io.Writer, info fs.FileInfo) {
-	fmt.Fprintf(h, "stat %d %x %v %v\n", info.Size(), uint64(info.Mode()), info.ModTime(), info.IsDir())
+	fmt.Fprintf(h, "stat %d %x %v\n", info.Size(), uint64(info.Mode()), info.IsDir())
 }
 
 // testAndInputKey returns the actual cache key for the pair (testID, testInputsID).
