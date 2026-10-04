@@ -514,6 +514,36 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 	return nil, errors.Join(errs...)
 }
 
+// githubReachable returns the full hash of rev, a commit hash or a prefix of
+// one, when head descends from it. A commit off every branch, such as the
+// head of a rejected pull request, is not reachable. Only a reachable commit
+// may come from an archive, because GitHub serves the archive of any commit.
+func (r *gitRepo) githubReachable(ctx context.Context, rev, head string) (string, error) {
+	// github-state-mirror drops base_commit. merge_base_commit is the base
+	// whenever head contains it, which is the only answer used.
+	var compare struct {
+		Status          string `json:"status"`
+		MergeBaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
+	}
+	err := r.githubAPI(ctx, "/compare/"+rev+"..."+head, &compare)
+	if err == nil && compare.Status != "ahead" && compare.Status != "identical" {
+		err = fmt.Errorf("compare %s...%s: status %q: %s is not in the history of %s", rev, head, compare.Status, rev, head)
+	}
+	hash := compare.MergeBaseCommit.SHA
+	if err == nil && (len(hash) != 40 || !AllHex(hash) || !strings.HasPrefix(hash, rev)) {
+		err = fmt.Errorf("compare %s...%s: merge base %q is not %s", rev, head, hash, rev)
+	}
+	if err != nil {
+		if xLog, ok := cfg.BuildXWriter(ctx); ok {
+			fmt.Fprintf(xLog, "# github reachable: %v\n", err)
+		}
+		return "", err
+	}
+	return hash, nil
+}
+
 // archiveCandidates yields the sources of archiveSources. Then, for a
 // repository that needs a credential, it yields the archive of rev that
 // github-state-mirror signs. The mirror is asked only after every source
