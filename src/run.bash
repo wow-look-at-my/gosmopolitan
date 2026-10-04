@@ -61,5 +61,9 @@ if ulimit -T &> /dev/null; then
 	[ "$(ulimit -H -T)" = "unlimited" ] || ulimit -S -T $(ulimit -H -T)
 fi
 
-export GOPATH=/nonexist-gopath
+# An empty GOPATH of its own keeps the suite off the user's packages. Every
+# test shares its module cache, so a module downloads once per run.
+GOPATH="$(cd .. && pwd)/pkg/gopath"
+export GOPATH
+mkdir -p "$GOPATH"
 exec ../bin/go tool dist test "$@"

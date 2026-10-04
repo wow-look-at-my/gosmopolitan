@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -22,27 +21,20 @@ import (
 func FetchModule(t *testing.T, module, version string) string {
 	testenv.MustHaveExternalNetwork(t)
 
-	// The go command keeps the checksum database's tree head under GOPATH/pkg/sumdb, and run.bash sets GOPATH=/nonexist-gopath.
-	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH", "GOMODCACHE")).Output()
+	// The module cache and the checksum database's tree head live under
+	// GOPATH. A test never makes a private one: that downloads the module
+	// again for every call.
+	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH")).Output()
 	if err != nil {
-		t.Errorf("%s env GOPATH GOMODCACHE: %v\n%s", testenv.GoToolPath(t), err, out)
+		t.Errorf("%s env GOPATH: %v\n%s", testenv.GoToolPath(t), err, out)
 		if ee, ok := err.(*exec.ExitError); ok {
 			t.Logf("%s", ee.Stderr)
 		}
 		t.FailNow()
 	}
-	gopath, gomodcache, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
-	gomodcache = strings.TrimSpace(gomodcache)
-	// Every test that fetches shares one module cache. A cache per test
-	// downloads the same module once per call.
-	if !dirExists(gomodcache) {
-		gomodcache = sharedModCache()
-		t.Setenv("GOMODCACHE", gomodcache)
-	}
-	if !dirExists(gopath) {
-		// GOMODCACHE defaults to a path under GOPATH, so pin it first.
-		t.Setenv("GOMODCACHE", gomodcache)
-		t.Setenv("GOPATH", t.TempDir())
+	gopath := strings.TrimSpace(string(out))
+	if list := filepath.SplitList(gopath); len(list) == 0 || !dirExists(list[0]) {
+		t.Fatalf("GOPATH %q is not a directory. run.bash makes one under GOROOT/pkg.", gopath)
 	}
 
 	t.Logf("fetching %s@%s\n", module, version)
@@ -65,13 +57,6 @@ func FetchModule(t *testing.T, module, version string) string {
 	}
 
 	return j.Dir
-}
-
-// sharedModCache is the module cache of every test process on this machine
-// that has no GOMODCACHE. The go command locks the cache, so concurrent
-// processes can share it.
-func sharedModCache() string {
-	return filepath.Join(os.TempDir(), "go-cryptotest-modcache-"+strconv.Itoa(os.Getuid()))
 }
 
 func dirExists(path string) bool {
