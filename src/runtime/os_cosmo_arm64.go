@@ -286,9 +286,8 @@ var cosmoDarwinKillFn uintptr
 // cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved at startup.
 var cosmoDarwinSysctlFn uintptr
 
-// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB.
-// Plain integer arguments, so the ordinary call works: sysctl is not
-// variadic.
+// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB. Plain
+// integer arguments, so the ordinary call works: sysctl is not variadic.
 func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldlen *uintptr, newp unsafe.Pointer, newlen uintptr) int32 {
 	if cosmoDarwinSysctlFn == 0 {
 		return -1

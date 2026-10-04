@@ -611,15 +611,14 @@ func ntLoopbackTCPPair() (a, c uintptr, step string, werr uintptr) {
 	return a, c, "", 0
 }
 
-// ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP
-// pair dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP: a datagram pair
-// would ride loopback UDP, which legally DROPS datagrams on real NT,
-// and afunix.sys has no DGRAM to fall back on. Another domain is
-// EOPNOTSUPP too, Linux's own errno for AF_INET here, and any other
-// protocol is EPROTONOSUPPORT.
+// ntEmuSocketpair emulates socketpair(2) with a connected loopback TCP pair
+// dressed as AF_UNIX. SOCK_DGRAM is EOPNOTSUPP: a datagram pair would ride
+// loopback UDP, which legally DROPS datagrams on real NT, and afunix.sys has
+// no DGRAM to fall back on. Another domain is EOPNOTSUPP too, Linux's own
+// errno for AF_INET here, and any other protocol is EPROTONOSUPPORT.
 //
-// The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO
-// and WSAPoll readiness all work through the socket-kind machinery.
+// The ends are real TCP sockets, so data flow, shutdown(2), FIONBIO and
+// WSAPoll readiness all work through the socket-kind machinery.
 func ntEmuSocketpair(domain, typ, proto int32, sv *[2]int32) (r1, r2, errno uintptr) {
 	if sv == nil {
 		return ntFail3(ntEFAULT)

@@ -14,12 +14,11 @@ import (
 
 const appleAF_INET6 = 30
 
-// darwinSockaddrToApple copies the Linux sockaddr at (ptr, salen) into
-// buf as an Apple sockaddr ({u8 sa_len, u8 sa_family} in place of the
-// u16 family; payloads coincide for every admitted family) and returns
-// the Apple namelen. Mirrors the emulation's darwinSockaddrOut:
-// abstract AF_UNIX names (leading NUL) are Linux-only and refused
-// EINVAL, unknown families EAFNOSUPPORT.
+// darwinSockaddrToApple copies the Linux sockaddr at (ptr, salen) into buf as
+// an Apple sockaddr ({u8 sa_len, u8 sa_family} in place of the u16 family;
+// payloads coincide for every admitted family) and returns the Apple namelen.
+// Mirrors the emulation's darwinSockaddrOut: abstract AF_UNIX names (leading
+// NUL) are Linux-only and refused EINVAL, unknown families EAFNOSUPPORT.
 func darwinSockaddrToApple(buf *[SizeofSockaddrAny]byte, ptr unsafe.Pointer, salen int) (alen int, err error) {
 	if ptr == nil || salen == 0 {
 		return 0, nil

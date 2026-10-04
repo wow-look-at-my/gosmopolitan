@@ -68,9 +68,8 @@ func darwinSockFamilyToApple(f uint16) (byte, bool) {
 	return 0, false
 }
 
-// darwinSockaddrOut copies the Linux sockaddr at (addr, addrlen) into
-// buf as an Apple sockaddr and returns the Apple (ptr, len) pair to pass
-// to libc.
+// darwinSockaddrOut copies the Linux sockaddr at (addr, addrlen) into buf as
+// an Apple sockaddr and returns the Apple (ptr, len) pair to pass to libc.
 //
 //go:nosplit
 func darwinSockaddrOut(buf *[112]byte, addr, addrlen uintptr) (aptr, alen, errno uintptr) {
