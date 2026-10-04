@@ -23,12 +23,16 @@ func TestRunPendingHelper(t *testing.T) {
 	}
 	switch mode {
 	case "wait":
-		for {
+		// A parent that died, for example on a test timeout, never writes
+		// the file. The wait ends with it rather than outliving it.
+		parent := os.Getppid()
+		for os.Getppid() == parent {
 			if _, err := os.Stat(file); err == nil {
 				return
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+		t.Fatal("the parent exited before the file appeared")
 	case "touch":
 		if err := os.WriteFile(file, nil, 0o666); err != nil {
 			t.Fatal(err)
