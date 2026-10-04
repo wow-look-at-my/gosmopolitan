@@ -1,16 +1,12 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
 // Windows support for Cosmopolitan APE binaries.
-// When running on Windows, the PE stub sets iswindows = 1
-// and the runtime uses Windows API calls instead of Linux syscalls.
 
-// iswindows is set to 1 by the PE stub when running on Windows.
 // This is declared in sys_cosmo_windows_amd64.s
 var iswindows uint32
 
@@ -26,19 +22,19 @@ const (
 
 // Windows memory constants
 const (
-	_MEM_COMMIT     = 0x1000
-	_MEM_RESERVE    = 0x2000
-	_MEM_RELEASE    = 0x8000
-	_PAGE_READWRITE = 0x04
+	_MEM_COMMIT             = 0x1000
+	_MEM_RESERVE            = 0x2000
+	_MEM_RELEASE            = 0x8000
+	_PAGE_READWRITE         = 0x04
 	_PAGE_EXECUTE_READWRITE = 0x40
 )
 
 // Windows wait constants
 const (
-	_INFINITE         = 0xFFFFFFFF
-	_WAIT_OBJECT_0    = 0
-	_WAIT_TIMEOUT     = 0x102
-	_WAIT_FAILED      = 0xFFFFFFFF
+	_INFINITE      = 0xFFFFFFFF
+	_WAIT_OBJECT_0 = 0
+	_WAIT_TIMEOUT  = 0x102
+	_WAIT_FAILED   = 0xFFFFFFFF
 )
 
 // Windows API function declarations (assembly in sys_cosmo_windows_amd64.s)
@@ -74,7 +70,6 @@ var (
 var windowsQPCFrequency int64
 
 // initWindows initializes Windows-specific runtime state.
-// Called early in runtime startup when iswindows == 1.
 //
 //go:nosplit
 func initWindows() {

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package asm
 
 import (
 	"bufio"
@@ -23,7 +23,11 @@ import (
 	"cmd/internal/telemetry/counter"
 )
 
-func main() {
+// Main runs the assembler with args, the command line after the program name,
+// and answers its exit status. A failure exits the process from inside the
+// assembler, as it always has.
+func Main(args []string) int {
+	objabi.Enter("asm", args, flags.Set)
 	log.SetFlags(0)
 	log.SetPrefix("asm: ")
 	counter.Open()
@@ -128,4 +132,5 @@ func main() {
 		os.Remove(*flags.OutputFile)
 		os.Exit(1)
 	}
+	return 0
 }

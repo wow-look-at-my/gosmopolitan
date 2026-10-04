@@ -15,6 +15,8 @@ TEXT ·x509_SecCertificateCreateWithData_trampoline(SB),NOSPLIT,$0-0
 	JMP x509_SecCertificateCreateWithData(SB)
 TEXT ·x509_SecPolicyCreateSSL_trampoline(SB),NOSPLIT,$0-0
 	JMP x509_SecPolicyCreateSSL(SB)
+TEXT ·x509_SecPolicyCreateBasicX509_trampoline(SB),NOSPLIT,$0-0
+	JMP x509_SecPolicyCreateBasicX509(SB)
 TEXT ·x509_SecTrustSetVerifyDate_trampoline(SB),NOSPLIT,$0-0
 	JMP x509_SecTrustSetVerifyDate(SB)
 TEXT ·x509_SecTrustEvaluate_trampoline(SB),NOSPLIT,$0-0

@@ -373,9 +373,23 @@ func (r *reader) param() *types2.Var {
 
 	param := types2.NewParam(pos, pkg, name, typ)
 	if r.Version().Has(pkgbits.ParamDefaults) && r.Bool() {
-		param.SetDefault(r.Value())
+		param.SetDefault(r.paramDefault())
 	}
 	return param
+}
+
+// paramDefault reads one default in the form the writer's paramDefault wrote
+// it: a constant, or a struct literal as name and default pairs.
+func (r *reader) paramDefault() *types2.ParamDefault {
+	if r.Version().Has(pkgbits.StructParamDefaults) && r.Bool() {
+		d := &types2.ParamDefault{}
+		for range r.Len() {
+			name := r.String()
+			d.Fields = append(d.Fields, types2.FieldDefault{Name: name, Value: r.paramDefault()})
+		}
+		return d
+	}
+	return &types2.ParamDefault{Const: r.Value()}
 }
 
 // @@@ Objects
@@ -499,7 +513,11 @@ func (pr *pkgReader) objIdx(idx pkgbits.Index) (*types2.Package, string) {
 		case pkgbits.ObjVar:
 			pos := r.pos()
 			typ := r.typ()
-			return types2.NewVar(pos, objPkg, objName, typ)
+			v := types2.NewVar(pos, objPkg, objName, typ)
+			if r.Version().Has(pkgbits.ReadonlyVars) {
+				v.SetReadonly(r.Bool())
+			}
+			return v
 		}
 	})
 

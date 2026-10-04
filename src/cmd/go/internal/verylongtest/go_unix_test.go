@@ -94,7 +94,7 @@ func TestTestInterrupt(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cmd := testenv.CommandContext(t, ctx, gotool, "test", "std", "-short", "-count=1")
+	cmd := testenv.CommandContext(t, ctx, gotool, "test", "std", "-short")
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,

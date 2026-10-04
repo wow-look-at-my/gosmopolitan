@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package cover
 
 import (
 	"bytes"
@@ -66,14 +66,18 @@ func usage() {
 	os.Exit(2)
 }
 
+// flagSet is cover's command line, one set of its own so cover can be linked
+// beside the other tools; Main installs it before parsing.
+var flagSet = flag.NewFlagSet("cover", flag.ExitOnError)
+
 var (
-	mode             = flag.String("mode", "", "coverage mode: set, count, atomic")
-	varVar           = flag.String("var", "GoCover", "name of coverage variable to generate")
-	output           = flag.String("o", "", "file for output")
-	outfilelist      = flag.String("outfilelist", "", "file containing list of output files (one per line) if -pkgcfg is in use")
-	htmlOut          = flag.String("html", "", "generate HTML representation of coverage profile")
-	funcOut          = flag.String("func", "", "output coverage profile information for each function")
-	pkgcfg           = flag.String("pkgcfg", "", "enable full-package instrumentation mode using params from specified config file")
+	mode             = flagSet.String("mode", "", "coverage mode: set, count, atomic")
+	varVar           = flagSet.String("var", "GoCover", "name of coverage variable to generate")
+	output           = flagSet.String("o", "", "file for output")
+	outfilelist      = flagSet.String("outfilelist", "", "file containing list of output files (one per line) if -pkgcfg is in use")
+	htmlOut          = flagSet.String("html", "", "generate HTML representation of coverage profile")
+	funcOut          = flagSet.String("func", "", "output coverage profile information for each function")
+	pkgcfg           = flagSet.String("pkgcfg", "", "enable full-package instrumentation mode using params from specified config file")
 	pkgconfig        covcmd.CoverPkgConfig
 	outputfiles      []string // list of *.cover.go instrumented outputs to write, one per input (set when -pkgcfg is in use)
 	profile          string   // The profile to read; the value of -html or -func
@@ -88,7 +92,11 @@ const (
 	atomicPackageName = "_cover_atomic_"
 )
 
-func main() {
+// Main runs cover with args, the command line after the program name, and
+// answers its exit status. A failure exits the process from inside cover, as
+// it always has.
+func Main(args []string) int {
+	objabi.Enter("cover", args, flagSet)
 	counter.Open()
 
 	objabi.AddVersionFlag()
@@ -112,7 +120,7 @@ func main() {
 	// Generate coverage-annotated source.
 	if *mode != "" {
 		annotate(flag.Args())
-		return
+		return 0
 	}
 
 	// Output HTML or function coverage information.
@@ -126,6 +134,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cover: %v\n", err)
 		os.Exit(2)
 	}
+	return 0
 }
 
 // parseFlags sets the profile and counterStmt globals and performs validations.

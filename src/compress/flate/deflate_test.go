@@ -1056,6 +1056,7 @@ func TestBestSpeedShiftOffsets(t *testing.T) {
 func TestMaxStackSize(t *testing.T) {
 	// This test must not run in parallel with other tests as debug.SetMaxStack
 	// affects all goroutines.
+	t.Serial()
 	n := debug.SetMaxStack(1 << 16)
 	defer debug.SetMaxStack(n)
 

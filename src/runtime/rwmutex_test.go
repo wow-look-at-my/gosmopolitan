@@ -51,6 +51,11 @@ func TestParallelRWMutexReaders(t *testing.T) {
 	if GOARCH == "wasm" {
 		t.Skip("wasm has no threads yet")
 	}
+	// The readers spin on a load, so nothing can stop the world while they
+	// hold the lock. This test turns the collector off for that reason, and
+	// the barrier is the same guard against a parallel test: a concurrent
+	// GoroutineProfile stops the world too, and waits for a reader forever.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(-1))
 	// If runtime triggers a forced GC during this test then it will deadlock,
 	// since the goroutines can't be stopped/preempted.
@@ -119,6 +124,8 @@ func HammerRWMutex(gomaxprocs, numReaders, num_iterations int) {
 }
 
 func TestRWMutex(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	defer GOMAXPROCS(GOMAXPROCS(-1))
 	n := 1000
 	if testing.Short() {

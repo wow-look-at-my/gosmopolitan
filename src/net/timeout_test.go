@@ -934,6 +934,8 @@ func TestVariousDeadlines(t *testing.T) {
 
 // There is a very similar copy of this in os/timeout_test.go.
 func TestVariousDeadlines1Proc(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Cannot use t.Parallel - modifies global GOMAXPROCS.
 	if testing.Short() {
 		t.Skip("skipping in short mode")
@@ -944,6 +946,8 @@ func TestVariousDeadlines1Proc(t *testing.T) {
 
 // There is a very similar copy of this in os/timeout_test.go.
 func TestVariousDeadlines4Proc(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Cannot use t.Parallel - modifies global GOMAXPROCS.
 	if testing.Short() {
 		t.Skip("skipping in short mode")

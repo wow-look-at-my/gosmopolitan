@@ -1662,6 +1662,13 @@ func TestTransportProxy(t *testing.T) {
 func TestProxyWithInfiniteHeader(t *testing.T) {
 	defer afterTest(t)
 
+	// The proxy goroutine reports through t, so the test waits for it
+	// rather than returning while it can still call t.Errorf. Reporting
+	// after a test completes is a panic, and the goroutine's own Accept
+	// fails the moment the listener below closes.
+	proxyDone := make(chan struct{})
+	defer func() { <-proxyDone }()
+
 	ln := newLocalListener(t)
 	defer ln.Close()
 	cancelc := make(chan struct{})
@@ -1670,6 +1677,7 @@ func TestProxyWithInfiniteHeader(t *testing.T) {
 	// Simulate a malicious / misbehaving proxy that writes an unlimited number
 	// of bytes rather than responding with 200 OK.
 	go func() {
+		defer close(proxyDone)
 		c, err := ln.Accept()
 		if err != nil {
 			t.Errorf("Accept: %v", err)
@@ -6401,6 +6409,12 @@ func testTransportResponseBodyWritableOnProtocolSwitch(t *testing.T, mode testMo
 		io.WriteString(conn, "HTTP/1.1 101 Switching Protocols Hi\r\nConnection: upgRADe\r\nUpgrade: foo\r\n\r\nSome buffered data\n")
 		bs := bufio.NewScanner(conn)
 		bs.Scan()
+		// A failed read echoes an empty line, and the client then waits on a
+		// reply this handler believes it sent.
+		if err := bs.Err(); err != nil {
+			t.Errorf("reading from the upgraded conn: %v", err)
+			return
+		}
 		fmt.Fprintf(conn, "%s\n", strings.ToUpper(bs.Text()))
 		<-done
 	}))

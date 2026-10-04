@@ -2527,6 +2527,7 @@ func testDowngradeCanary(t *testing.T, clientVersion, serverVersion uint16) erro
 }
 
 func TestDowngradeCanary(t *testing.T) {
+	t.Serial() // testingOnlyForceDowngradeCanary is read by every server handshake.
 	if err := testDowngradeCanary(t, VersionTLS13, VersionTLS12); err == nil {
 		t.Errorf("downgrade from TLS 1.3 to TLS 1.2 was not detected")
 	}

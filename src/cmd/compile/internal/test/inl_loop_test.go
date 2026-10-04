@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package test
 
@@ -12,7 +11,7 @@ import (
 	"testing"
 )
 
-// loopInlineSrc exercises the three parts of loop-aware inlining (see
+// loopInlineSrc exercises the parts of loop-aware inlining (see
 // cmd/compile/internal/inline/loop.go). Every function in it is far too
 // expensive for the flat 80-node inlining budget; what differs is where
 // the cost sits.
@@ -119,6 +118,16 @@ func CallHot(xss [][]uint32) {
 		Sink += bigLoop(xs, 6)
 	}
 }
+
+// CallHotNosplit is CallHot with a frame the linker bounds, so its loop
+// must not buy bigLoop.
+//
+//go:nosplit
+func CallHotNosplit(xss [][]uint32) {
+	for _, xs := range xss {
+		Sink += bigLoop(xs, 7)
+	}
+}
 `
 
 // buildLoopInlineTest compiles loopInlineSrc with the given -gcflags and
@@ -172,17 +181,12 @@ func TestLoopInlining(t *testing.T) {
 	}
 
 	// bigLoop is affordable in CallHot's loop but not on CallCold's
-	// straight-line path, so exactly one of its two call sites inlines.
-	// This is the whole point: the same callee, judged by where it is
-	// called from rather than by what it costs alone.
+	// straight-line path, so exactly one of its call sites inlines.
 	if n := strings.Count(on, "inlining call to bigLoop"); n != 1 {
-		t.Errorf("%d call sites inlined bigLoop, want 1 (the one inside a loop)\n%s", n, on)
+		t.Errorf("%d call sites inlined bigLoop, want 1: CallHot's loop; CallCold is cold, and CallHotNosplit's nosplit frame takes no loop boost\n%s", n, on)
 	}
 }
 
-// TestLoopInliningDiscount covers the callee-side cost discount, which is
-// implemented and tested but off by default: measured on its own it cost
-// +1.1% median across nine whole-task workloads (see loop.go).
 func TestLoopInliningDiscount(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()
@@ -198,9 +202,9 @@ func TestLoopInliningDiscount(t *testing.T) {
 	}
 }
 
-// TestLoopInliningDisabled checks that -d=loopinline=0 restores the
-// previous inlining decisions exactly, so the mechanism can be turned off
-// to bisect a regression.
+// TestLoopInliningDisabled checks that -d=loopinline=0 restores the inlining
+// decisions exactly, so the mechanism can be turned off to bisect a
+// regression.
 func TestLoopInliningDisabled(t *testing.T) {
 	testenv.MustHaveGoRun(t)
 	t.Parallel()

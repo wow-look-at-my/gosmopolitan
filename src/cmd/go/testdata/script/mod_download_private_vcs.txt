@@ -1,7 +1,7 @@
 # Testing stderr for git ls-remote; turn off proxy.
 [short] skip
 [!git] skip
-env GOPROXY=direct
+env TESTGO_GOPROXY=direct
 
 # Redirect git to a test-specific .gitconfig.
 # GIT_CONFIG_GLOBAL suffices for git 2.32.0 and newer.

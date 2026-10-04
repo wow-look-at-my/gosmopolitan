@@ -135,6 +135,10 @@ func EndPos(n Node) Pos {
 		case *ImportDecl:
 			m = n.Path
 		case *ConstDecl:
+			if n.Text != nil {
+				m = n.Text
+				continue
+			}
 			if n.Values != nil {
 				m = n.Values
 				continue

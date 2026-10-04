@@ -88,6 +88,16 @@ func (fd *FD) destroy() error {
 
 // Close closes the FD. The underlying file descriptor is closed by the
 // destroy method when there are no remaining references.
+// canceledByClose answers the error a transfer returns when Close ended
+// it: a transfer the kernel canceled while this descriptor was closing
+// was canceled by Close. Any other error passes through.
+func (fd *FD) canceledByClose(err error) error {
+	if err == syscall.ECANCELED && fd.closing() {
+		return errClosing(fd.isFile)
+	}
+	return err
+}
+
 func (fd *FD) Close() error {
 	if !fd.fdmu.increfAndClose() {
 		return errClosing(fd.isFile)
@@ -99,6 +109,11 @@ func (fd *FD) Close() error {
 	// fairly quickly, since all the I/O is non-blocking, and any
 	// attempts to block in the pollDesc will return errClosing(fd.isFile).
 	fd.pd.evict()
+	// A descriptor the poller never took can still have a transfer blocked
+	// in the kernel, on a host that lets a close end it.
+	if !fd.pd.pollable() {
+		runtime_cancelIO(uintptr(fd.Sysfd))
+	}
 
 	// The call to decref will call destroy if there are no other
 	// references.
@@ -171,6 +186,7 @@ func (fd *FD) Read(p []byte) (int, error) {
 					continue
 				}
 			}
+			err = fd.canceledByClose(err)
 		}
 		err = fd.eofError(n, err)
 		return n, err
@@ -391,6 +407,7 @@ func (fd *FD) Write(p []byte) (int, error) {
 		if nn == len(p) {
 			return nn, err
 		}
+		err = fd.canceledByClose(err)
 		if err == syscall.EAGAIN && fd.pd.pollable() {
 			if err = fd.pd.waitWrite(fd.isFile); err == nil {
 				continue

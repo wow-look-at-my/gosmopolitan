@@ -13,6 +13,7 @@ import (
 
 func TestTCPConnKeepAliveConfigDialer(t *testing.T) {
 	maybeSkipKeepAliveTest(t)
+	t.Serial() // testPreHookSetKeepAlive is a package-level hook.
 
 	t.Cleanup(func() {
 		testPreHookSetKeepAlive = func(*netFD) {}
@@ -71,6 +72,7 @@ func TestTCPConnKeepAliveConfigDialer(t *testing.T) {
 
 func TestTCPConnKeepAliveConfigListener(t *testing.T) {
 	maybeSkipKeepAliveTest(t)
+	t.Serial() // testPreHookSetKeepAlive is a package-level hook.
 
 	t.Cleanup(func() {
 		testPreHookSetKeepAlive = func(*netFD) {}
@@ -126,6 +128,7 @@ func TestTCPConnKeepAliveConfigListener(t *testing.T) {
 
 func TestTCPConnKeepAliveConfig(t *testing.T) {
 	maybeSkipKeepAliveTest(t)
+	t.Serial() // testPreHookSetKeepAlive is a package-level hook.
 
 	handler := func(ls *localServer, ln Listener) {
 		for {

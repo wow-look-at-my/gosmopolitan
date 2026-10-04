@@ -697,6 +697,9 @@ func multicastRIBContains(ip IP) (bool, error) {
 
 // Issue 21856.
 func TestClosingListener(t *testing.T) {
+	// The test rebinds the port it just freed. Another test binding an
+	// ephemeral port at that moment can take it, so it runs alone.
+	t.Serial()
 	ln := newLocalListener(t, "tcp")
 	addr := ln.Addr()
 

@@ -112,7 +112,11 @@ if x%1==x--dist-tool (
 :: Run dist bootstrap to complete make.bash.
 :: Bootstrap installs a proper cmd/dist, built with the new toolchain.
 :: Throw ours, built with the bootstrap toolchain, away after bootstrap.
-.\cmd\dist\dist.exe bootstrap -a %* || exit /b 1
+::
+:: No -a, for the reason make.bash gives: tool IDs here are content-derived,
+:: so the build cache cannot serve an object from a different compiler, and -a
+:: only stops the cache being used at all.
+.\cmd\dist\dist.exe bootstrap %* || exit /b 1
 del .\cmd\dist\dist.exe
 goto :eof
 

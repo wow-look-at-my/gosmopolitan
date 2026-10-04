@@ -13,10 +13,13 @@ import (
 var dummyTimeHistogram TimeHistogram
 
 func TestTimeHistogram(t *testing.T) {
+	t.Serial(
 	// We need to use a global dummy because this
 	// could get stack-allocated with a non-8-byte alignment.
 	// The result of this bad alignment is a segfault on
 	// 32-bit platforms when calling Record.
+	)
+
 	h := &dummyTimeHistogram
 
 	// Record exactly one sample in each bucket.

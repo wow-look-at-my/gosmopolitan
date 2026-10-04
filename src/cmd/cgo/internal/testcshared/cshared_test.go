@@ -715,7 +715,6 @@ func TestCachedInstall(t *testing.T) {
 	cmd.Dir = filepath.Join(tmpdir, "src", "testcshared")
 	env := append(cmd.Environ(),
 		"GOPATH="+tmpdir,
-		"GOBIN="+filepath.Join(tmpdir, "bin"),
 		"GO111MODULE=off", // 'go install' only works in GOPATH mode
 	)
 	cmd.Env = env

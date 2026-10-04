@@ -1,0 +1,33 @@
+# The installed go command links its build tools: every tool it starts is
+# itself, as 'go tool <name>', and nothing under pkg/tool is run.
+
+[short] skip 'builds and runs a program'
+
+exec $GOROOT/bin/go build -x -o hello$GOEXE hello.go
+stderr 'go(\.exe)? tool compile '
+stderr 'go(\.exe)? tool link '
+! stderr 'pkg[/\\]tool[/\\]'
+exec ./hello$GOEXE
+stdout 'hello'
+
+exec $GOROOT/bin/go vet hello.go
+
+exec $GOROOT/bin/go tool compile -V=full
+stdout '^compile version .* buildID='
+
+exec $GOROOT/bin/go tool -n compile -V=full
+stdout 'go(\.exe)? tool compile -V=full$'
+
+exec $GOROOT/bin/go tool link -V=full
+stdout '^link version '
+
+-- go.mod --
+module hello
+
+go 1.27
+-- hello.go --
+package main
+
+import "fmt"
+
+func main() { fmt.Println("hello") }

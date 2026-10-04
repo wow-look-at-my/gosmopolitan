@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"internal/ape"
 	"internal/saferio"
 	"internal/zstd"
 	"io"
@@ -247,6 +248,13 @@ func (e *FormatError) Error() string {
 
 // Open opens the named file using [os.Open] and prepares it for use as an ELF binary.
 func Open(name string) (*File, error) {
+	// A default cosmo build strips the APE down to its loadable span and
+	// writes the unstripped image beside it. A caller that named the
+	// binary is asking about the binary, so read the image that still has
+	// its sections.
+	if side := ape.Sidecar(name); side != "" {
+		name = side
+	}
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -286,6 +294,13 @@ func (f *File) SectionByType(typ SectionType) *Section {
 // NewFile creates a new [File] for accessing an ELF binary in an underlying reader.
 // The ELF binary is expected to start at position 0 in the ReaderAt.
 func NewFile(r io.ReaderAt) (*File, error) {
+	// An APE is a polyglot header followed by the ELF image it boots, so
+	// read the image rather than refuse the container. A file that has
+	// run on a Linux host has already written its own ELF header over the
+	// polyglot one, and takes the ordinary path.
+	if payload := ape.Payload(r); payload != nil {
+		r = payload
+	}
 	sr := io.NewSectionReader(r, 0, 1<<63-1)
 	// Read and decode ELF identifier
 	var ident [16]uint8

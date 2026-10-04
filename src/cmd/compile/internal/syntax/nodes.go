@@ -76,18 +76,21 @@ type (
 		Group    *Group // nil means not part of a group
 		Pragma   Pragma
 		NameList []*Name
-		Type     Expr // nil means no type
-		Values   Expr // nil means no values
+		Type     Expr      // nil means no type
+		Values   Expr      // nil means no values
+		Text     *BasicLit // Text.Kind == StringLit; nil means the name prints as written
 		decl
 	}
 
 	// Name Type
+	// Name enum Type
 	TypeDecl struct {
 		Group      *Group // nil means not part of a group
 		Pragma     Pragma
 		Name       *Name
 		TParamList []*Field // nil means no type parameters
 		Alias      bool
+		Enum       bool // the declared type prints its constants by name
 		Type       Expr
 		decl
 	}
@@ -101,6 +104,7 @@ type (
 		NameList []*Name
 		Type     Expr // nil means no type
 		Values   Expr // nil means no values
+		Readonly bool // "readonly var": only the declaring package may assign
 		decl
 	}
 

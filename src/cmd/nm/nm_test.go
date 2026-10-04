@@ -10,7 +10,6 @@ import (
 	"internal/testenv"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"text/template"
@@ -126,7 +125,7 @@ func testGoExec(t *testing.T, iscgo, isexternallinker bool) {
 	}
 
 	relocated := func(code string) bool {
-		if runtime.GOOS == "aix" {
+		if testenv.GOOS == "aix" {
 			// On AIX, .data and .bss addresses are changed by the loader.
 			// Therefore, the values returned by the exec aren't the same
 			// than the ones inside the symbol table.
@@ -138,7 +137,7 @@ func testGoExec(t *testing.T, iscgo, isexternallinker bool) {
 				return true
 			}
 		}
-		if platform.DefaultPIE(runtime.GOOS, runtime.GOARCH, false) {
+		if platform.DefaultPIE(testenv.GOOS, testenv.GOARCH, false) {
 			// Code is always relocated if the default buildmode is PIE.
 			return true
 		}
@@ -164,14 +163,14 @@ func testGoExec(t *testing.T, iscgo, isexternallinker bool) {
 			t.Errorf("duplicate name of %q is found", name)
 		}
 		if stype, found := runtimeSyms[name]; found {
-			if runtime.GOOS == "plan9" && stype == "R" {
+			if testenv.GOOS == "plan9" && stype == "R" {
 				// no read-only data segment symbol on Plan 9
 				stype = "D"
 			}
 			if want, have := stype, strings.ToUpper(f[1]); have != want {
-				if runtime.GOOS == "android" && name == "runtime.epclntab" && have == "D" {
+				if testenv.GOOS == "android" && name == "runtime.epclntab" && have == "D" {
 					// TODO(#58807): Figure out why this fails and fix up the test.
-					t.Logf("(ignoring on %s) want %s type for %s symbol, but have %s", runtime.GOOS, want, name, have)
+					t.Logf("(ignoring on %s) want %s type for %s symbol, but have %s", testenv.GOOS, want, name, have)
 				} else {
 					t.Errorf("want %s type for %s symbol, but have %s", want, name, have)
 				}
@@ -244,10 +243,10 @@ func testGoLib(t *testing.T, iscgo bool) {
 	if iscgo {
 		syms = append(syms, symType{"B", "mylib.TestCgodata", false, false})
 		syms = append(syms, symType{"T", "mylib.TestCgofunc", false, false})
-		if runtime.GOOS == "darwin" || runtime.GOOS == "ios" || (runtime.GOOS == "windows" && runtime.GOARCH == "386") {
+		if testenv.GOOS == "darwin" || testenv.GOOS == "ios" || (testenv.GOOS == "windows" && testenv.GOARCH == "386") {
 			syms = append(syms, symType{"D", "_cgodata", true, false})
 			syms = append(syms, symType{"T", "_cgofunc", true, false})
-		} else if runtime.GOOS == "aix" {
+		} else if testenv.GOOS == "aix" {
 			syms = append(syms, symType{"D", "cgodata", true, false})
 			syms = append(syms, symType{"T", ".cgofunc", true, false})
 		} else {

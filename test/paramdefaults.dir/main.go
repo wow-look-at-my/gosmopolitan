@@ -25,6 +25,9 @@ func main() {
 	check(a.Repeat("y", 1, false), "y")
 	check(fmt.Sprint(a.T{}.Scale()), "9")
 	check(fmt.Sprint(a.T{}.Scale(4)), "16")
+	check(fmt.Sprint(a.Sum()), "50")
+	check(fmt.Sprint(a.Sum(a.Budget{})), "0")
+	check(fmt.Sprint(a.Zero()), "0")
 	if bad != 0 {
 		os.Exit(1)
 	}

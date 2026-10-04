@@ -1,4 +1,3 @@
-env GOTOOLCHAIN=local
 ! go list .
 stderr 'go: go.mod requires go >= 1.999'
 

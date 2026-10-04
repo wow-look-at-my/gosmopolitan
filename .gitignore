@@ -21,9 +21,13 @@ _testmain.go
 
 /VERSION.cache
 /bin/
+/go
+/link
 /build.out
 /doc/articles/wiki/*.bin
+/go
 /goinstall.log
+/link
 /last-change
 /misc/cgo/life/run.out
 /misc/cgo/stdio/run.out
@@ -33,7 +37,17 @@ _testmain.go
 /src/_artifacts/
 /src/cmd/cgo/zdefaultcc.go
 /src/cmd/dist/dist
+# The fork's cosmo builds drop debug sidecars beside every binary, so ignoring
+# the binary alone still leaves two multi-megabyte files for the next `add -A`.
+/src/cmd/dist/dist.dbg
+/src/cmd/dist/dist.aarch64.elf
+# `go build ./src/cmd/distpack` from the root drops a 4 MB binary here.
+/distpack
+/distpack.dbg
+/distpack.aarch64.elf
 /src/cmd/go/internal/cfg/zdefaultcc.go
+# cmd/dist compiles the APE loaders here; cmd/link embeds them.
+/src/cmd/link/internal/ld/apeld/bin/
 /src/cmd/internal/objabi/zbootstrap.go
 /src/go/build/zcgo.go
 /src/go/doc/headscan
@@ -68,3 +82,5 @@ _testmain.go
 
 # wasip1sock reference-host binary (go build in testdata/wasip1sock/host)
 /testdata/wasip1sock/host/wasip1sockhost
+/build/
+/.gocache/

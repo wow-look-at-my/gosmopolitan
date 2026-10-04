@@ -147,8 +147,6 @@ func testMain(m *testing.M) (int, error) {
 		fmt.Printf("+ cd %s\n", modRoot)
 	}
 	os.Setenv("GOPATH", gopath)
-	// Explicitly override GOBIN as well, in case it was set through a GOENV file.
-	os.Setenv("GOBIN", filepath.Join(gopath, "bin"))
 	os.Chdir(modRoot)
 	os.Setenv("PWD", modRoot)
 

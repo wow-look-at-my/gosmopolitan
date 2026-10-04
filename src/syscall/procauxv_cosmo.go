@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -17,29 +16,14 @@ const procSelfAuxv = "/proc/self/auxv"
 //go:linkname runtime_getAuxv runtime.getAuxv
 func runtime_getAuxv() []uintptr
 
-// openProcSelfAuxv answers a read of /proc/self/auxv on a macOS host,
-// which serves no /proc, from the vector the runtime already holds.
-//
-// golang.org/x/sys/cpu is why this exists. Its package init reaches
-// readHWCAP before the init that assigns getAuxvFn, so the runtime
-// answers nil however full its vector is, and this file is the only
-// route left. Any successful read satisfies cpu. An unsuccessful one
-// sends it to an MRS of ID_AA64ISAR0_EL1 that XNU traps, which killed
-// every APE linking x/crypto before main.
-//
-// The answer rides a pipe: an auxv is a few hundred bytes, far under a
-// pipe buffer, so one write fills it and closing the write end makes the
-// read end report EOF. Nothing touches the filesystem.
-//
-// It reports ok false when it did not handle the call, so the caller
-// carries on to the real openat.
+// openProcSelfAuxv answers a read of /proc/self/auxv on a macOS host, which
+// serves no /proc, from the vector the runtime already holds.
 func openProcSelfAuxv(path string, flags int) (fd int, err error, ok bool) {
 	if path != procSelfAuxv || flags&O_ACCMODE != O_RDONLY || !cosmo.Darwin() {
 		return 0, nil, false
 	}
 	if len(runtime_getAuxv()) == 0 {
-		// Let the real openat answer, so the caller sees the host's own
-		// error rather than an empty file claiming the vector is empty.
+		// Let the real openat answer.
 		return 0, nil, false
 	}
 	fd, err = openAuxv(flags)
@@ -55,9 +39,7 @@ func openAuxv(flags int) (fd int, err error) {
 		return -1, EACCES
 	}
 	auxv := runtime_getAuxv()
-	// The kernel's file ends in an AT_NULL pair. runtime.getAuxv leaves it
-	// out, so a reader that stops on the terminator rather than on EOF
-	// needs it put back.
+	// The kernel's file ends in an AT_NULL pair. runtime.getAuxv leaves it out.
 	pairs := make([]uintptr, len(auxv)+2)
 	copy(pairs, auxv)
 

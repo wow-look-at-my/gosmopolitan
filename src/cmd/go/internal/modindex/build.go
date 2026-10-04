@@ -687,6 +687,10 @@ func (ctxt *Context) matchTag(name string, allTags map[string]bool) bool {
 	if ctxt.GOOS == "cosmo" && name == "linux" {
 		return true
 	}
+	// Keep in sync with go/build's cosmoImpliedTag.
+	if ctxt.GOOS == "cosmo" && (name == "netgo" || name == "osusergo") {
+		return true
+	}
 	if ctxt.GOOS == "illumos" && name == "solaris" {
 		return true
 	}

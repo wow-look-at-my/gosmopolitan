@@ -89,6 +89,7 @@ func TestDirent(t *testing.T) {
 }
 
 func TestDirentRepeat(t *testing.T) {
+	t.Serial()
 	const N = 100
 	// Note: the size of the buffer is small enough that the loop
 	// below will need to execute multiple times. See issue #31368.

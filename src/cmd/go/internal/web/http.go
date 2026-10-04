@@ -64,19 +64,44 @@ func securityPreservingHTTPClient(original *http.Client) *http.Client {
 	return c
 }
 
+// hostPinnedHTTPClient returns a client like original that refuses a redirect
+// to a host allowHost does not accept. The check runs before the test
+// interceptor rewrites the host, so it sees the host the server named.
+func hostPinnedHTTPClient(original *http.Client, allowHost func(string) bool) *http.Client {
+	c := new(http.Client)
+	*c = *original
+	next := original.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !allowHost(req.URL.Hostname()) {
+			return fmt.Errorf("redirected from %s to disallowed host %s", via[len(via)-1].URL.Redacted(), req.URL.Redacted())
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		return checkRedirect(req, via)
+	}
+	return c
+}
+
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	// Go's http.DefaultClient allows 10 redirects before returning an error.
 	// Mimic that behavior here.
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
+	if err := refuseBannedHost(req.URL); err != nil {
+		return err
+	}
 
 	intercept.Request(req)
 	return nil
 }
 
-func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
+func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, error) {
 	start := time.Now()
+	if pin == nil {
+		pin = new(PinOptions)
+	}
 
 	if url.Scheme == "file" {
 		return getFile(url)
@@ -112,6 +137,9 @@ func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
 			fmt.Fprintf(os.Stderr, "# get %s\n", url.Redacted())
 		}
 
+		if err := refuseBannedHost(url); err != nil {
+			return nil, err
+		}
 		req, err := http.NewRequest("GET", url.String(), nil)
 		if err != nil {
 			return nil, err
@@ -125,7 +153,19 @@ func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
 		} else {
 			client = securityPreservingDefaultClient
 		}
-		if url.Scheme == "https" {
+		if pin.AllowHost != nil {
+			client = hostPinnedHTTPClient(client, pin.AllowHost)
+		}
+		if pin.NoRedirect {
+			noRedirect := *client
+			noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			client = &noRedirect
+		}
+		if url.Scheme == "https" && pin.Bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+pin.Bearer)
+		} else if url.Scheme == "https" && pin.CredentialURL != "" {
+			auth.AddCredentialsFor(client, req, pin.CredentialURL)
+		} else if url.Scheme == "https" {
 			// Use initial GOAUTH credentials.
 			auth.AddCredentials(client, req, nil, "")
 		}
@@ -150,7 +190,7 @@ func get(security SecurityMode, url *urlpkg.URL) (*Response, error) {
 		// (e.g. a valid <meta name="go-import"> tag),
 		// retry the request with credentials obtained by invoking GOAUTH
 		// with the request URL.
-		if url.Scheme == "https" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
+		if url.Scheme == "https" && pin.CredentialURL == "" && pin.Bearer == "" && err == nil && res.StatusCode >= 400 && res.StatusCode < 500 {
 			// Close the body of the previous response since we
 			// are discarding it and creating a new one.
 			res.Body.Close()

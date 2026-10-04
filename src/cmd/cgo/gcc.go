@@ -5,7 +5,7 @@
 // Annotate Ref in Prog with C types by parsing gcc debug output.
 // Conversion of debug output to Go types.
 
-package main
+package cgo
 
 import (
 	"bytes"

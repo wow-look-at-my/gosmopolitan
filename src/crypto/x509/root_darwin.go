@@ -8,10 +8,16 @@ import (
 	"crypto/x509/internal/macos"
 	"errors"
 	"fmt"
+	"slices"
+	"time"
 )
 
 // macOS has no default SSL_CERT_{FILE,DIR} paths.
 var certFiles, certDirectories []string
+
+// platformVerifier is true: systemVerify below asks Security.framework,
+// so there is no on-disk scan to do. See root.go.
+const platformVerifier = true
 
 func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate, err error) {
 	certs := macos.CFArrayCreateMutable()
@@ -35,13 +41,26 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 		}
 	}
 
+	keyUsages := opts.KeyUsages
+	if len(keyUsages) == 0 {
+		keyUsages = []ExtKeyUsage{ExtKeyUsageServerAuth}
+	}
+
+	// The SSL policy demands a server authentication key usage of the leaf.
+	// A caller who accepts other usages gets the basic X.509 policy, and
+	// the usages it asked for are checked below.
 	policies := macos.CFArrayCreateMutable()
 	defer macos.ReleaseCFArray(policies)
-	sslPolicy, err := macos.SecPolicyCreateSSL(opts.DNSName)
+	var policy macos.CFRef
+	if slices.Contains(keyUsages, ExtKeyUsageServerAuth) && !slices.Contains(keyUsages, ExtKeyUsageAny) {
+		policy, err = macos.SecPolicyCreateSSL(opts.DNSName)
+	} else {
+		policy, err = macos.SecPolicyCreateBasicX509()
+	}
 	if err != nil {
 		return nil, err
 	}
-	macos.CFArrayAppendValue(policies, sslPolicy)
+	macos.CFArrayAppendValue(policies, policy)
 
 	trustObj, err := macos.SecTrustCreateWithCertificates(certs, policies)
 	if err != nil {
@@ -63,6 +82,19 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 	// using TLS or OCSP for that.
 
 	if ret, err := macos.SecTrustEvaluateWithError(trustObj); err != nil {
+		// Security.framework reports one reason when a leaf fails several
+		// checks, and it ranks a name mismatch above expiry. Verify ranks
+		// expiry first, as the pool-based verifier does.
+		now := opts.CurrentTime
+		if now.IsZero() {
+			now = time.Now()
+		}
+		if now.Before(c.NotBefore) {
+			return nil, CertificateInvalidError{c, Expired, fmt.Sprintf("current time %s is before %s", now.Format(time.RFC3339), c.NotBefore.Format(time.RFC3339))}
+		}
+		if now.After(c.NotAfter) {
+			return nil, CertificateInvalidError{c, Expired, fmt.Sprintf("current time %s is after %s", now.Format(time.RFC3339), c.NotAfter.Format(time.RFC3339))}
+		}
 		switch ret {
 		case macos.ErrSecCertificateExpired:
 			return nil, CertificateInvalidError{c, Expired, err.Error()}
@@ -70,6 +102,8 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 			return nil, HostnameError{c, opts.DNSName}
 		case macos.ErrSecNotTrusted:
 			return nil, UnknownAuthorityError{Cert: c}
+		case macos.ErrSecInvalidExtendedKeyUsage:
+			return nil, CertificateInvalidError{c, IncompatibleUsage, err.Error()}
 		default:
 			return nil, fmt.Errorf("x509: %s", err)
 		}
@@ -99,11 +133,6 @@ func (c *Certificate) systemVerify(opts *VerifyOptions) (chains [][]*Certificate
 		if err := chain[0][0].VerifyHostname(opts.DNSName); err != nil {
 			return nil, err
 		}
-	}
-
-	keyUsages := opts.KeyUsages
-	if len(keyUsages) == 0 {
-		keyUsages = []ExtKeyUsage{ExtKeyUsageServerAuth}
 	}
 
 	// If any key usage is acceptable then we're done.

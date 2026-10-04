@@ -71,12 +71,12 @@ func taggedPointerPack(ptr unsafe.Pointer, tag uintptr) taggedPointer {
 
 // Pointer returns the pointer from a taggedPointer.
 func (tp taggedPointer) pointer() unsafe.Pointer {
-	if GOARCH == "amd64" {
+	if goarch.IsAmd64 == 1 {
 		// amd64 systems can place the stack above the VA hole, so we need to sign extend
 		// val before unpacking.
 		return unsafe.Pointer(uintptr(int64(tp) >> tagBits << tagAlignBits))
 	}
-	if GOOS == "aix" {
+	if goos.IsAix == 1 {
 		return unsafe.Pointer(uintptr((tp >> tagBits << tagAlignBits) | 0xa<<56))
 	}
 	return unsafe.Pointer(uintptr(tp >> tagBits << tagAlignBits))

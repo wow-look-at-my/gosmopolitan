@@ -40,6 +40,10 @@ const (
 	// V5: adds a parameter's default value
 	V5
 
+	// V6: a parameter default may be a struct literal of constants, and a
+	// variable carries its readonly bit
+	V6
+
 	numVersions = iota
 )
 
@@ -82,6 +86,14 @@ const (
 	// A parameter carries the value a call passes when it omits the argument.
 	ParamDefaults
 
+	// A parameter default is a constant or a keyed struct literal of them,
+	// tagged by a bool, rather than a bare constant.
+	StructParamDefaults
+
+	// A variable carries a bool that says whether it was declared
+	// "readonly var".
+	ReadonlyVars
+
 	numFields = iota
 )
 
@@ -92,6 +104,8 @@ var introduced = [numFields]Version{
 	CompactCompLiterals: V3,
 	GenericMethods:      V4,
 	ParamDefaults:       V5,
+	StructParamDefaults: V6,
+	ReadonlyVars:        V6,
 }
 
 // removed is the version a field was removed in or 0 for fields

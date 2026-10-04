@@ -2204,6 +2204,7 @@ var (
 )
 
 func TestNoAllocs(t *testing.T) {
+	t.Serial()
 	if asan.Enabled {
 		t.Skip("test allocates more with -asan; see #70079")
 	}
@@ -2308,6 +2309,7 @@ func TestNoAllocs(t *testing.T) {
 }
 
 func TestAddrStringAllocs(t *testing.T) {
+	t.Serial()
 	tests := []struct {
 		name       string
 		ip         Addr

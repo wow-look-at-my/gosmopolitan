@@ -18,6 +18,7 @@ import (
 // need access to the unexported symbol testingOnlyRejectionReason.
 
 func TestACVPRejectionKATs(t *testing.T) {
+	t.Serial()
 	testCases := []struct {
 		name          string
 		seed          string // input to ML-DSA.KeyGen_internal
@@ -337,6 +338,7 @@ func TestACVPRejectionKATs(t *testing.T) {
 }
 
 func TestCASTRejectionPaths(t *testing.T) {
+	t.Serial()
 	reached := map[string]bool{"z": false, "r0": false, "ct0": false, "h": false}
 	testingOnlyRejectionReason = func(reason string) {
 		t.Log(reason, "rejection")

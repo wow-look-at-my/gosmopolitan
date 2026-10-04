@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -11,17 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"cmd/internal/sys"
 )
 
-// addTestDebugTail appends a non-loadable debug tail to elf, the way the
-// linker's real output carries .symtab/.strtab and DWARF past the loadable
-// span: a two-entry symbol table (null + a global "main.main"), a string
-// table that also holds sentinel (so tests can detect the tail's presence
-// in merged output), a section name table, and a section header table that
-// the ELF header is patched to reference. The result parses with debug/elf
-// and reports the symbol.
+// The result parses with debug/elf and reports the symbol.
 func addTestDebugTail(t *testing.T, elfImg []byte, sentinel string) []byte {
 	t.Helper()
 
@@ -153,20 +144,25 @@ func checkSidecarELF(t *testing.T, path string, machine elf.Machine) {
 	}
 }
 
+// withoutOSABI returns a copy of img, an ELF image, with no OS ABI: the
+// form of img that a debug sidecar holds.
+func withoutOSABI(img []byte) []byte {
+	out := append([]byte(nil), img...)
+	out[elf.EI_OSABI] = byte(elf.ELFOSABI_NONE)
+	return out
+}
+
 func TestAPEDebugSidecarName(t *testing.T) {
-	if got := apeDebugSidecarName("app.com", sys.AMD64); got != "app.com.dbg" {
-		t.Errorf("amd64 sidecar name = %q, want app.com.dbg", got)
-	}
-	if got := apeDebugSidecarName("app.com", sys.ARM64); got != "app.com.aarch64.elf" {
-		t.Errorf("arm64 sidecar name = %q, want app.com.aarch64.elf", got)
+	if got := apeDebugSidecarName("app.com"); got != "app.com.dbg" {
+		t.Errorf("sidecar name = %q, want app.com.dbg", got)
 	}
 }
 
 // TestAPEFatMergeStripAndSidecars merges a thin APE (amd64) with a raw ELF
-// (arm64) under -apestrip -apedbg and verifies: the sidecars are pristine
-// byte copies of the original linker ELFs with parseable symbol tables, and
-// the fat APE embeds only each payload's loadable span with the section
-// header fields zeroed - no symtab or debug bytes survive in the output.
+// (arm64) under -apestrip -apedbg and verifies: the amd64 sidecar copies
+// that linker's ELF with the OS ABI cleared, the arm64 image gets no sidecar, and the
+// fat APE embeds only each payload's loadable span with the section header
+// fields zeroed - no symtab or debug bytes survive in the output.
 func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 	amdElf, armElf, out := mergeTestPair(t, true, true)
 	extent := payloadExtent(amdElf)
@@ -177,23 +173,21 @@ func TestAPEFatMergeStripAndSidecars(t *testing.T) {
 		t.Fatalf("debug tail not past the loadable span: extent %#x, image %#x", extent, len(amdElf))
 	}
 
-	// Sidecars: pristine byte copies of the original linker outputs.
+	// Sidecars: pristine byte copies of the linker outputs.
 	amdSidecar, err := os.ReadFile(out + ".dbg")
 	if err != nil {
 		t.Fatalf("amd64 sidecar: %v", err)
 	}
-	if !bytes.Equal(amdSidecar, amdElf) {
-		t.Errorf("amd64 sidecar is not byte-identical to the original ELF (thin-APE extraction must round-trip)")
+	if !bytes.Equal(amdSidecar, withoutOSABI(amdElf)) {
+		t.Errorf("amd64 sidecar is not the original ELF with the OS ABI cleared (thin-APE extraction must round-trip)")
 	}
-	armSidecar, err := os.ReadFile(out + ".aarch64.elf")
-	if err != nil {
-		t.Fatalf("arm64 sidecar: %v", err)
+	if amdElf[elf.EI_OSABI] != elfOSABIFreeBSD {
+		t.Fatalf("test input OS ABI = %d, want FreeBSD", amdElf[elf.EI_OSABI])
 	}
-	if !bytes.Equal(armSidecar, armElf) {
-		t.Errorf("arm64 sidecar is not byte-identical to the original ELF")
+	if _, err := os.Stat(out + ".aarch64.elf"); err == nil {
+		t.Errorf("%s.aarch64.elf exists: the arm64 image gets no sidecar", out)
 	}
 	checkSidecarELF(t, out+".dbg", elf.EM_X86_64)
-	checkSidecarELF(t, out+".aarch64.elf", elf.EM_AARCH64)
 
 	fat, err := os.ReadFile(out)
 	if err != nil {

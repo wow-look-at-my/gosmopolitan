@@ -168,9 +168,19 @@ func (check *Checker) compositeLit(x *operand, e *syntax.CompositeLit, hint Type
 					continue
 				}
 				key, _ := kv.Key.(*syntax.Name)
+				// A filled parameter default spells no type on a nested struct
+				// literal, so its field type is the hint. Source never gets one.
+				var valueHint Type
+				if check.fillingDefault && key != nil {
+					if obj, _, _ := lookupFieldOrMethod(utyp, false, check.pkg, key.Value, false); obj != nil {
+						if f, _ := obj.(*Var); f != nil {
+							valueHint = f.typ
+						}
+					}
+				}
 				// do all possible checks early (before exiting due to errors)
 				// so we don't drop information on the floor
-				check.genericExpr(x, kv.Value, nil)
+				check.genericExpr(x, kv.Value, valueHint)
 				if key == nil {
 					check.errorf(kv, InvalidLitField, "invalid field name %s in struct literal", kv.Key)
 					continue

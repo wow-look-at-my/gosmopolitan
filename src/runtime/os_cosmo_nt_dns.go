@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -12,36 +11,22 @@ import (
 )
 
 // Where an NT host keeps its nameservers.
-//
 // net's resolv.conf reader is constrained !windows, and cosmo is not
 // windows, so a cosmo binary compiles it on every host. NT has no
 // /etc/resolv.conf: the read fails, net falls back to defaultNS, and
-// every lookup goes to localhost, where nothing answers. The list has
-// to come from Windows instead.
-//
-// iphlpapi's GetNetworkParams is the smallest way to ask. One call
-// fills a FIXED_INFO, and its DnsServerList arrives as NUL-terminated
-// dotted quads rather than sockaddrs, so nothing here parses an
-// address. It reports IPv4 servers only, which is what the resolver
-// needs to stop asking localhost.
-//
-// The library is optional, like ntdll and bcryptprimitives above it: a
-// host without it degrades to no servers, never a crash.
+// every lookup goes to localhost, where nothing answers.
 
-// FIXED_INFO and IP_ADDR_STRING, win64. Spelled as the sum of the
-// members rather than as a total, because a total is a number nobody
-// can check; dns_cosmo_nt_test.go pins the sums against the layout
-// iphlpapi actually writes.
+// FIXED_INFO and IP_ADDR_STRING, win64. Spelled as the sum of the members
+// rather than as a total, because a total is a number nobody can check;
+// dns_cosmo_nt_test.go pins the sums against the layout iphlpapi writes.
 const (
-	// FIXED_INFO opens with two name buffers, then the
-	// CurrentDnsServer pointer, then DnsServerList inline.
-	_NT_HOSTNAME_FIELD      = 128 + 4 // MAX_HOSTNAME_LEN + 4
-	_NT_DOMAINNAME_FIELD    = 128 + 4 // MAX_DOMAIN_NAME_LEN + 4
+	// FIXED_INFO opens with name buffers, then the CurrentDnsServer pointer, then DnsServerList inline.
+	_NT_HOSTNAME_FIELD      = 128 + 4
+	_NT_DOMAINNAME_FIELD    = 128 + 4
 	_NT_PTR                 = 8
 	_NT_FIXED_INFO_DNS_LIST = _NT_HOSTNAME_FIELD + _NT_DOMAINNAME_FIELD + _NT_PTR
 
-	// IP_ADDR_STRING is a Next pointer, two IP_ADDRESS_STRINGs, and a
-	// DWORD Context padded out to a pointer multiple.
+	// IP_ADDR_STRING is a Next pointer, IP_ADDRESS_STRINGs, and a DWORD Context padded out to a pointer multiple.
 	_NT_IP_ADDRESS_STRING   = 16 // char String[4*4]
 	_NT_IP_ADDR_STRING_ADDR = _NT_PTR
 	_NT_IP_ADDR_STRING_SIZE = _NT_PTR + 2*_NT_IP_ADDRESS_STRING + _NT_PTR
@@ -53,7 +38,6 @@ var (
 	ntNameIphlpapi         = []byte("iphlpapi.dll\x00")
 	ntNameGetNetworkParams = []byte("GetNetworkParams\x00")
 
-	// ntDNSReady: 0 = untried, 1 = ready, 2 = unavailable (sticky).
 	ntDNSReady           uint32
 	ntDNSLock            mutex
 	ntGetNetworkParamsFn uintptr
@@ -94,8 +78,7 @@ func ntDNSServers() []string {
 	if !ntDNSEnsure() {
 		return nil
 	}
-	// A nil buffer asks how much room the answer needs; the call then
-	// reports ERROR_BUFFER_OVERFLOW and writes the size.
+	// A nil buffer asks how much room the answer needs; the call then reports ERROR_BUFFER_OVERFLOW and writes the size.
 	var size uint32
 	if rc := ntcall(ntGetNetworkParamsFn, 0, uintptr(unsafe.Pointer(&size)), 0, 0, 0, 0); rc != _NT_ERROR_BUFFER_OVERFLOW {
 		return nil
@@ -111,8 +94,6 @@ func ntDNSServers() []string {
 	}
 
 	// DnsServerList is the first entry, inline; the rest hang off it.
-	// Every pointer in the chain addresses this buffer, which the call
-	// sized for exactly that.
 	var servers []string
 	entry := unsafe.Pointer(&buf[_NT_FIXED_INFO_DNS_LIST])
 	for entry != nil {

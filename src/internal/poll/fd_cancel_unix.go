@@ -1,0 +1,9 @@
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
+
+//go:build (unix || (js && wasm) || wasip1) && !cosmo
+
+package poll
+
+// runtime_cancelIO has nothing to end: every descriptor a close can race here is either in the poller, which evict wakes.
+func runtime_cancelIO(fd uintptr) {}

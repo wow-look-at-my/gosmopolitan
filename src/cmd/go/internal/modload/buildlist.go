@@ -21,6 +21,7 @@ import (
 	"cmd/go/internal/cfg"
 	"cmd/go/internal/gover"
 	"cmd/go/internal/mvs"
+	"cmd/go/internal/orgmod"
 	"cmd/internal/par"
 
 	"golang.org/x/mod/module"
@@ -162,7 +163,7 @@ func (rs *Requirements) String() string {
 // initVendor initializes rs.graph from the given list of vendored module
 // dependencies, overriding the graph that would normally be loaded from module
 // requirements.
-func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
+func (rs *Requirements) initVendor(ld *Loader, ctx context.Context, vendorList []module.Version) {
 	rs.graphOnce.Do(func() {
 		roots := ld.MainModules.Versions()
 		if ld.inWorkspaceMode() {
@@ -184,6 +185,10 @@ func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
 			// Just to be sure, we'll double-check that here.
 			inconsistent := false
 			for _, m := range vendorList {
+				if orgmod.IsOrg(m.Path) {
+					// go.mod and modules.txt both record the placeholder, so the versions are not compared.
+					continue
+				}
 				if v, ok := rs.rootSelected(ld, m.Path); !ok || v != m.Version {
 					base.Errorf("go: vendored module %v should be required explicitly in go.mod", m)
 					inconsistent = true
@@ -210,7 +215,10 @@ func (rs *Requirements) initVendor(ld *Loader, vendorList []module.Version) {
 			vendorMod := module.Version{Path: "vendor/modules.txt", Version: ""}
 			if ld.inWorkspaceMode() {
 				for _, m := range ld.MainModules.Versions() {
-					reqs, _ := rootsFromModFile(ld, m, ld.MainModules.ModFile(m), omitToolchainRoot)
+					reqs, _, err := rootsFromModFile(ld, ctx, m, ld.MainModules.ModFile(m), omitToolchainRoot)
+					if err != nil {
+						base.Fatal(err)
+					}
 					mg.g.Require(m, append(reqs, vendorMod))
 				}
 				mg.g.Require(vendorMod, vendorList)
@@ -1121,7 +1129,7 @@ func updatePrunedRoots(ld *Loader, ctx context.Context, direct map[string]bool, 
 			// We've added or upgraded one or more roots, so load the full module
 			// graph so that we can update those roots to be consistent with other
 			// requirements.
-			if mustHaveCompleteRequirements(ld) {
+			if mustHaveCompleteRequirements(ld) && !orgSyncing(ld) {
 				// Our changes to the roots may have moved dependencies into or out of
 				// the graph-pruning horizon, which could in turn change the selected
 				// versions of other modules. (For pruned modules adding or removing an

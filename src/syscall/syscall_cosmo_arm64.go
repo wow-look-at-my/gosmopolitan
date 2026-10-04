@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -12,16 +11,7 @@ import (
 )
 
 // rawSyscallNoErrorDarwin is the darwin branch of rawSyscallNoError
-// (asm_cosmo_arm64.s tail-jumps here on macOS, where raw SVC would
-// SIGSYS). It routes through the generic cosmo dispatcher, whose darwin
-// slow path emulates the id-family syscalls with dlsym-resolved libc
-// functions.
-//
-// rawSyscallNoError has no error result by contract ("cannot fail"). If
-// the emulation does fail (syscall not emulated, symbol unresolved),
-// return the negated Linux errno in r1 - the raw kernel convention - so
-// the failure is at least visible to a debugger rather than silently
-// fabricating a plausible value.
+// (asm_cosmo_arm64.s tail-jumps here on macOS, where raw SVC would SIGSYS).
 //
 //go:nosplit
 func rawSyscallNoErrorDarwin(trap, a1, a2, a3 uintptr) (r1, r2 uintptr) {
@@ -126,34 +116,13 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 		pp := (*RawSockaddrUnix)(unsafe.Pointer(rsa))
 		sa := new(SockaddrUnix)
 		if pp.Path[0] == 0 {
-			// A leading NUL is either an unnamed socket or a Linux
-			// abstract-namespace name. Every caller passes a pre-zeroed
-			// buffer, so an unnamed socket - the kernel wrote only the
-			// 2-byte family: unbound or socketpair descriptors on Linux
-			// hosts, and every unnamed socket surfaced by the darwin
-			// emulation on macOS hosts - leaves the path all zero,
-			// while a real abstract name has at least one nonzero
-			// byte. Report unnamed as an empty name like the BSD ports
-			// do instead of inventing an abstract "@" name; cosmo is
-			// deliberately absent from the android/linux/windows GOOS
-			// lists in net's tests that expect "@".
-			named := false
-			for _, b := range pp.Path {
-				if b != 0 {
-					named = true
-					break
-				}
+			// A leading NUL means the abstract namespace, which only Linux has.
+			if !cosmoHostIsLinux() {
+				return sa, nil
 			}
-			if !named {
-				return sa, nil // unnamed: Name stays ""
-			}
-			// Abstract name: rewrite the leading NUL as '@' for
-			// textual display (the standard convention).
 			pp.Path[0] = '@'
 		}
-		// Assume the path ends at the first NUL. Not the full Linux
-		// abstract-name semantics (those are length-delimited binary
-		// blobs), but the convention everything uses.
+		// Assume the path ends at the first NUL.
 		n := 0
 		for n < len(pp.Path) && pp.Path[n] != 0 {
 			n++
@@ -183,9 +152,7 @@ func anyToSockaddr(rsa *RawSockaddrAny) (Sockaddr, error) {
 
 func recvmsgRaw(fd int, p, oob []byte, flags int, rsa *RawSockaddrAny) (n, oobn int, recvflags int, err error) {
 	if cosmo.Darwin() {
-		// macOS host: msghdr/sockaddr/cmsg layouts differ; the darwin
-		// branch (syscall_cosmo_msg.go) translates at this boundary,
-		// where allocation is legal - the nosplit dispatch side cannot.
+		// macOS host: msghdr/sockaddr/cmsg layouts differ.
 		return darwinRecvmsgRaw(fd, p, oob, flags, rsa)
 	}
 	var msg Msghdr
@@ -262,8 +229,8 @@ func sendmsgN(fd int, p, oob []byte, ptr unsafe.Pointer, salen _Socklen, flags i
 	return n, nil
 }
 
-// ARM64 Linux doesn't have the legacy stat/lstat/utimes/futimesat syscalls.
-// These are wrappers that use the "at" variants available on ARM64.
+// ARM64 Linux doesn't have the stat/lstat/utimes/futimesat syscalls. These
+// are wrappers that use the "at" variants available on ARM64.
 
 func Stat(path string, stat *Stat_t) (err error) {
 	return fstatat(_AT_FDCWD, path, stat, 0)

@@ -28,12 +28,28 @@ var (
 
 func runtime_envs() []string // in package runtime
 
+// envKey answers the name key is indexed under. An NT host names its
+// variables without regard to case, and an APE landing there reads the
+// block as NT wrote it, so the index folds ASCII case the way NT does.
+func envKey(key string) string {
+	if runtime.GOOS != "windows" {
+		return key
+	}
+	folded := []byte(key)
+	for i, c := range folded {
+		if 'a' <= c && c <= 'z' {
+			folded[i] = c - 'a' + 'A'
+		}
+	}
+	return string(folded)
+}
+
 var copyenv = sync.OnceFunc(func() {
 	env = make(map[string]int)
 	for i, s := range envs {
 		for j := 0; j < len(s); j++ {
 			if s[j] == '=' {
-				key := s[:j]
+				key := envKey(s[:j])
 				if _, ok := env[key]; !ok {
 					env[key] = i // first mention of key
 				} else {
@@ -55,9 +71,9 @@ func Unsetenv(key string) error {
 	envLock.Lock()
 	defer envLock.Unlock()
 
-	if i, ok := env[key]; ok {
+	if i, ok := env[envKey(key)]; ok {
 		envs[i] = ""
-		delete(env, key)
+		delete(env, envKey(key))
 	}
 	runtimeUnsetenv(key)
 	return nil
@@ -72,7 +88,7 @@ func Getenv(key string) (value string, found bool) {
 	envLock.RLock()
 	defer envLock.RUnlock()
 
-	i, ok := env[key]
+	i, ok := env[envKey(key)]
 	if !ok {
 		return "", false
 	}
@@ -107,7 +123,7 @@ func Setenv(key, value string) error {
 	envLock.Lock()
 	defer envLock.Unlock()
 
-	i, ok := env[key]
+	i, ok := env[envKey(key)]
 	kv := key + "=" + value
 	if ok {
 		envs[i] = kv
@@ -115,7 +131,7 @@ func Setenv(key, value string) error {
 		i = len(envs)
 		envs = append(envs, kv)
 	}
-	env[key] = i
+	env[envKey(key)] = i
 	runtimeSetenv(key, value)
 	return nil
 }

@@ -375,9 +375,9 @@ func (check *Checker) recordParenthesizedRecvTypes(expr syntax.Expr, typ Type) {
 
 // paramDefault checks the "= expr" on one parameter and returns its value. It
 // checks that the parameter is one that can carry a default at all, and that
-// the expression is a constant assignable to its type. Depth:
-// docs/OPTIONAL-PARAMS.md.
-func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type) constant.Value {
+// the expression is a constant, or a struct literal of constants, assignable
+// to its type. Depth: docs/OPTIONAL-PARAMS.md.
+func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type) *ParamDefault {
 	if field.Default == nil {
 		return nil
 	}
@@ -391,20 +391,60 @@ func (check *Checker) paramDefault(field *syntax.Field, kind VarKind, typ Type) 
 	if !x.isValid() {
 		return nil
 	}
-	// A caller in another package reads this value out of export data, so a
-	// constant is the whole of what a default can be for now.
-	if x.mode() != constant_ {
-		check.error(field.Default, BadDecl, "parameter default must be a constant")
+	return check.defaultValue(&x, field.Default, typ)
+}
+
+// defaultValue converts a checked default expression into the value the
+// export data carries. A caller in another package reads it back from there,
+// so a default is a constant, or a keyed struct literal whose fields are.
+func (check *Checker) defaultValue(x *operand, e syntax.Expr, typ Type) *ParamDefault {
+	if x.mode() == constant_ {
+		// The call site is given the value spelled back as source, and only
+		// these three kinds have a spelling that reads back as the same constant.
+		switch x.val.Kind() {
+		case constant.Bool, constant.String, constant.Int:
+			return &ParamDefault{Const: x.val}
+		}
+		check.error(e, BadDecl, "parameter default must be a boolean, string or integer constant")
 		return nil
 	}
-	// The call site is given the value spelled back as source, and only these
-	// three kinds have a spelling that reads back as the same constant.
-	switch x.val.Kind() {
-	case constant.Bool, constant.String, constant.Int:
-		return x.val
+	lit, _ := syntax.Unparen(e).(*syntax.CompositeLit)
+	st, _ := typ.Underlying().(*Struct)
+	if lit == nil || st == nil {
+		check.error(e, BadDecl, "parameter default must be a constant or a struct literal")
+		return nil
 	}
-	check.error(field.Default, BadDecl, "parameter default must be a boolean, string or integer constant")
-	return nil
+	// The literal is filled in at the call under the parameter's type, so it
+	// must have been written under that type and not one assignable to it.
+	if lit.Type != nil && !Identical(x.typ(), typ) {
+		check.errorf(e, BadDecl, "parameter default struct literal has type %s, want %s", x.typ(), typ)
+		return nil
+	}
+	d := &ParamDefault{Fields: make([]FieldDefault, 0, len(lit.ElemList))}
+	for _, elem := range lit.ElemList {
+		kv, _ := elem.(*syntax.KeyValueExpr)
+		if kv == nil {
+			check.error(elem, BadDecl, "parameter default struct literal must key every field")
+			return nil
+		}
+		key := kv.Key.(*syntax.Name) // compositeLit already refused any other key
+		obj, _, _ := lookupFieldOrMethod(st, false, check.pkg, key.Value, false)
+		fld := obj.(*Var)
+		var v operand
+		check.rawExpr(nil, &v, kv.Value, fld.typ, false)
+		check.exclude(&v, 1<<novalue|1<<builtin|1<<typexpr)
+		check.singleValue(&v)
+		check.assignment(&v, fld.typ, "struct literal")
+		if !v.isValid() {
+			return nil
+		}
+		fv := check.defaultValue(&v, kv.Value, fld.typ)
+		if fv == nil {
+			return nil
+		}
+		d.Fields = append(d.Fields, FieldDefault{Name: key.Value, Value: fv})
+	}
+	return d
 }
 
 // collectParams collects (but does not declare) all parameter/result

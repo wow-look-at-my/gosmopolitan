@@ -100,6 +100,8 @@ func TestCPUProfile(t *testing.T) {
 }
 
 func TestCPUProfileMultithreaded(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(2))
 	matches := matchAndAvoidStacks(stackContains, []string{"runtime/pprof.cpuHog1", "runtime/pprof.cpuHog2"}, avoidFunctions())
 	testCPUProfile(t, matches, func(dur time.Duration) {
@@ -114,6 +116,7 @@ func TestCPUProfileMultithreaded(t *testing.T) {
 }
 
 func TestCPUProfileMultithreadMagnitude(t *testing.T) {
+	t.Serial()
 	if runtime.GOOS != "linux" {
 		t.Skip("issue 35057 is only confirmed on Linux")
 	}
@@ -1409,6 +1412,8 @@ func func3(c chan int) { <-c }
 func func4(c chan int) { <-c }
 
 func TestGoroutineCounts(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	// Setting GOMAXPROCS to 1 ensures we can force all goroutines to the
 	// desired blocking point.
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
@@ -2177,6 +2182,7 @@ var emptyCallStackTestRun int64
 
 // Issue 18836.
 func TestEmptyCallStack(t *testing.T) {
+	t.Serial()
 	name := fmt.Sprintf("test18836_%d", emptyCallStackTestRun)
 	emptyCallStackTestRun++
 
@@ -2310,6 +2316,8 @@ func TestGoroutineProfileLabelRace(t *testing.T) {
 // TestLabelSystemstack makes sure CPU profiler samples of goroutines running
 // on systemstack include the correct pprof labels. See issue #48577
 func TestLabelSystemstack(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	if runtime.GOARCH == "wasm" {
 		t.Skip("wasm CPU profiling samples only at loop backedges of the running user goroutine; code on the system stack is never observed")
 	}

@@ -1,0 +1,16 @@
+name: cosmocc
+description: "Installs the cosmocc toolchain in /opt/cosmocc, pinned by digest. cgo for GOOS=cosmo compiles C with it."
+runs:
+  using: composite
+  steps:
+    - name: Install cosmocc
+      shell: bash
+      env:
+        COSMOCC_VERSION: 4.0.2
+        COSMOCC_SHA256: 85b8c37a406d862e656ad4ec14be9f6ce474c1b436b9615e91a55208aced3f44
+      run: |
+        set -euo pipefail
+        curl -fsSL "https://cosmo.zip/pub/cosmocc/cosmocc-${COSMOCC_VERSION}.zip" -o "${{ runner.temp }}/cosmocc.zip"
+        echo "${COSMOCC_SHA256}  ${{ runner.temp }}/cosmocc.zip" | sha256sum -c -
+        sudo mkdir -p /opt/cosmocc
+        sudo unzip -q "${{ runner.temp }}/cosmocc.zip" -d /opt/cosmocc

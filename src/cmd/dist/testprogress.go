@@ -1,0 +1,124 @@
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
+
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// fallbackWidth is the line width to use when the terminal does not report one.
+const fallbackWidth = 120
+
+// progressPeriod is how often a progress line appears.
+const progressPeriod = time.Second
+
+// testProgress writes one line each second in which a test finished.
+type testProgress struct {
+	dst     io.Writer
+	timings *testTimings
+
+	lock  sync.Mutex
+	total int
+	done  map[string]bool
+
+	stop chan struct{}
+	wait sync.WaitGroup
+}
+
+func newTestProgress(dst io.Writer, timings *testTimings, total int) *testProgress {
+	return &testProgress{
+		dst:     dst,
+		timings: timings,
+		total:   total,
+		done:    make(map[string]bool),
+		stop:    make(chan struct{}),
+	}
+}
+
+// start runs the ticker until finish is called.
+func (pro *testProgress) start() {
+	pro.wait.Add(1)
+	go func() {
+		defer pro.wait.Done()
+		tick := time.NewTicker(progressPeriod)
+		defer tick.Stop()
+		for {
+			select {
+			case <-pro.stop:
+				return
+			case <-tick.C:
+				pro.emit()
+			}
+		}
+	}()
+}
+
+// finish stops the ticker and waits for the goroutine to return.
+func (pro *testProgress) finish() {
+	close(pro.stop)
+	pro.wait.Wait()
+}
+
+// markDone records that a named dist test finished.
+func (pro *testProgress) markDone(name string) {
+	pro.lock.Lock()
+	defer pro.lock.Unlock()
+	pro.done[name] = true
+}
+
+func (pro *testProgress) counts() (done, total int) {
+	pro.lock.Lock()
+	defer pro.lock.Unlock()
+	return len(pro.done), pro.total
+}
+
+func (pro *testProgress) emit() {
+	// The drain is what says whether this second finished anything, and it empties the buffer on the way out.
+	recent := pro.timings.drainRecent()
+	if len(recent) == 0 {
+		return
+	}
+	done, total := pro.counts()
+	fmt.Fprintln(pro.dst, progressLine(done, total, recent, lineWidth()))
+}
+
+// progressLine builds the line. It is separate from emit so a test can check
+// the text without a clock.
+func progressLine(done, total int, recent []testTiming, width int) string {
+	pct := 0
+	if total > 0 {
+		pct = done * 100 / total
+	}
+	prefix := fmt.Sprintf("[%d/%d %d%%] ", done, total, pct)
+
+	var parts []string
+	for _, tng := range recent {
+		parts = append(parts, fmt.Sprintf("%.1fs %s", tng.seconds, tng.test))
+	}
+	line := prefix + strings.Join(parts, ", ")
+	if len(line) > width {
+		if width <= 3 {
+			return line[:width]
+		}
+		line = line[:width-3] + "..."
+	}
+	return line
+}
+
+// lineWidth reports the width to hold a progress line to. A terminal reports
+// its width in COLUMNS. Nothing else does, so the fallback covers a log.
+func lineWidth() int {
+	if val := os.Getenv("COLUMNS"); val != "" {
+		if num, err := strconv.Atoi(val); err == nil && num > 0 {
+			return num
+		}
+	}
+	return fallbackWidth
+}

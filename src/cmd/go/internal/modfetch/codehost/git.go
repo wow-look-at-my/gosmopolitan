@@ -82,8 +82,36 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 	}
 	defer unlock()
 
-	if _, err := os.Stat(filepath.Join(r.dir, "objects")); err != nil {
-		repoSha256Hash := false
+	github, onGitHub := githubRemote(r.remote)
+	if onGitHub && gitRewrites(r.remote) {
+		onGitHub = false
+	}
+	r.remoteURL = r.remote
+	if onGitHub {
+		// A github.com download runs no git. The bare repository is made
+		// the first time a git command needs it (runGit).
+		r.github = &github
+		r.remote = "origin"
+		return r, nil
+	}
+	if err := r.initGitDir(ctx, true); err != nil {
+		os.RemoveAll(r.dir)
+		return nil, err
+	}
+	r.sha256Hashes = r.checkConfigSHA256(ctx)
+	r.remote = "origin"
+	return r, nil
+}
+
+// initGitDir makes r.dir a bare repository with r.remoteURL as origin, if it
+// is not one yet. detectSHA256 asks the remote for its hash format first, with
+// ls-remote on r.remote, which must still be the URL.
+func (r *gitRepo) initGitDir(ctx context.Context, detectSHA256 bool) error {
+	if _, err := os.Stat(filepath.Join(r.dir, "objects")); err == nil {
+		return nil
+	}
+	repoSha256Hash := false
+	if detectSHA256 {
 		if refs, lrErr := r.loadRefs(ctx); lrErr == nil {
 			// Check any ref's hash, it doesn't matter which; they won't be mixed
 			// between sha1 and sha256 for the moment.
@@ -92,54 +120,64 @@ func newGitRepo(ctx context.Context, remote string, local bool) (Repo, error) {
 				break
 			}
 		}
-		gitSupportsSHA256, gitVersErr := gitSupportsSHA256()
-		if gitVersErr != nil {
-			return nil, fmt.Errorf("unable to resolve git version: %w", gitVersErr)
-		}
-		objFormatFlag := []string{}
-		// If git is sufficiently recent to support sha256,
-		// always initialize with an explicit object-format.
-		if repoSha256Hash {
-			// We always set --object-format=sha256 if the repo
-			// we're cloning uses sha256 hashes because if the git
-			// version is too old, it'll fail either way, so we
-			// might as well give it one last chance.
-			objFormatFlag = []string{"--object-format=sha256"}
-		} else if gitSupportsSHA256 {
-			objFormatFlag = []string{"--object-format=sha1"}
-		}
-		if _, err := Run(ctx, r.dir, "git", "init", "--bare", objFormatFlag); err != nil {
-			os.RemoveAll(r.dir)
-			return nil, err
-		}
-		// We could just say git fetch https://whatever later,
-		// but this lets us say git fetch origin instead, which
-		// is a little nicer. More importantly, using a named remote
-		// avoids a problem with Git LFS. See golang.org/issue/25605.
-		if _, err := r.runGit(ctx, "git", "remote", "add", "origin", "--", r.remote); err != nil {
-			os.RemoveAll(r.dir)
-			return nil, err
-		}
-		if runtime.GOOS == "windows" {
-			// Git for Windows by default does not support paths longer than
-			// MAX_PATH (260 characters) because that may interfere with navigation
-			// in some Windows programs. However, cmd/go should be able to handle
-			// long paths just fine, and we expect people to use 'go clean' to
-			// manipulate the module cache, so it should be harmless to set here,
-			// and in some cases may be necessary in order to download modules with
-			// long branch names.
-			//
-			// See https://github.com/git-for-windows/git/wiki/Git-cannot-create-a-file-or-directory-with-a-long-path.
-			if _, err := r.runGit(ctx, "git", "config", "core.longpaths", "true"); err != nil {
-				os.RemoveAll(r.dir)
-				return nil, err
-			}
+	}
+	gitSupportsSHA256, gitVersErr := gitSupportsSHA256()
+	if gitVersErr != nil {
+		return fmt.Errorf("unable to resolve git version: %w", gitVersErr)
+	}
+	objFormatFlag := []string{}
+	// If git is sufficiently recent to support sha256,
+	// always initialize with an explicit object-format.
+	if repoSha256Hash {
+		// We always set --object-format=sha256 if the repo
+		// we're cloning uses sha256 hashes because if the git
+		// version is too old, it'll fail either way, so we
+		// might as well give it one last chance.
+		objFormatFlag = []string{"--object-format=sha256"}
+	} else if gitSupportsSHA256 {
+		objFormatFlag = []string{"--object-format=sha1"}
+	}
+	gitDir := []string{"GIT_DIR=" + r.dir}
+	if _, err := Run(ctx, r.dir, "git", "init", "--bare", objFormatFlag); err != nil {
+		return err
+	}
+	// We could just say git fetch https://whatever later,
+	// but this lets us say git fetch origin instead, which
+	// is a little nicer. More importantly, using a named remote
+	// avoids a problem with Git LFS. See golang.org/issue/25605.
+	remoteAdd := RunArgs{cmdline: []any{"git", "remote", "add", "origin", "--", r.remoteURL}, dir: r.dir, env: gitDir}
+	if _, err := RunWithArgs(ctx, remoteAdd); err != nil {
+		// Another go command can make the same repository at the same time.
+		if runErr, ok := err.(*RunError); !ok || !bytes.Contains(runErr.Stderr, []byte("already exists")) {
+			return err
 		}
 	}
-	r.sha256Hashes = r.checkConfigSHA256(ctx)
-	r.remoteURL = r.remote
-	r.remote = "origin"
-	return r, nil
+	if runtime.GOOS == "windows" {
+		// Git for Windows by default does not support paths longer than
+		// MAX_PATH (260 characters) because that may interfere with navigation
+		// in some Windows programs. However, cmd/go should be able to handle
+		// long paths just fine, and we expect people to use 'go clean' to
+		// manipulate the module cache, so it should be harmless to set here,
+		// and in some cases may be necessary in order to download modules with
+		// long branch names.
+		//
+		// See https://github.com/git-for-windows/git/wiki/Git-cannot-create-a-file-or-directory-with-a-long-path.
+		longPaths := RunArgs{cmdline: []any{"git", "config", "core.longpaths", "true"}, dir: r.dir, env: gitDir}
+		if _, err := RunWithArgs(ctx, longPaths); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gitDirReady reports whether r.dir holds a git repository to consult. Only a
+// github.com repository can lack one, until its first git command.
+func (r *gitRepo) gitDirReady() bool {
+	if r.github == nil {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(r.dir, "objects"))
+	return err == nil
 }
 
 type gitRepo struct {
@@ -148,6 +186,21 @@ type gitRepo struct {
 	remote, remoteURL string
 	local             bool // local only lookups; no remote fetches
 	dir               string
+
+	// github is set when the remote is on github.com. A commit then comes
+	// from a github.com archive first, and from git only when that fails.
+	github *githubRepo
+	// githubFiles holds each parsed archive by commit, so an archive is
+	// decompressed once per process.
+	githubMu    sync.Mutex
+	githubFiles map[string][]archiveEntry
+
+	// fetched holds, by commit, how this process fetched each commit.
+	fetchMu sync.Mutex
+	fetched map[string]*keptFetch
+
+	gitDirOnce sync.Once
+	gitDirErr  error
 
 	// Repo uses the SHA256 for hashes, so expect the hashes to be 256/4 == 64-bytes in hex.
 	sha256Hashes bool
@@ -253,6 +306,12 @@ func (r *gitRepo) loadRefs(ctx context.Context) (map[string]string, error) {
 		return nil, nil
 	}
 	r.refsOnce.Do(func() {
+		if r.github != nil {
+			if refs, err := r.githubRefs(ctx); err == nil {
+				r.refs = refs
+				return
+			}
+		}
 		// The git protocol sends all known refs and ls-remote filters them on the client side,
 		// so we might as well record both heads and tags in one shot.
 		// Most of the time we only care about tags but sometimes we care about heads too.
@@ -437,20 +496,70 @@ const minHashDigits = 7
 // stat stats the given rev in the local repository,
 // or else it fetches more info from the remote repository and tries again.
 func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err error) {
+	// rec is how this stat fetched rev. The download of the module claims it later, by commit.
+	rec := new(Fetch)
+	var gitStart time.Time
+	var gitBefore int64
+	startGit := func() {
+		if gitStart.IsZero() {
+			gitStart = time.Now()
+			gitBefore = r.objectBytes()
+		}
+		if route, _, _, _ := rec.Stats(); route == "" {
+			rec.SetRoute("git")
+		}
+	}
+	defer func() {
+		if !gitStart.IsZero() {
+			rec.AddTransfer(gitStart, r.objectBytes()-gitBefore, time.Since(gitStart))
+		}
+		if err == nil && info != nil {
+			if route, _, _, _ := rec.Stats(); route != "" {
+				r.keepFetch(info.Name, rec)
+			}
+		}
+	}()
+
 	// Fast path: maybe rev is a hash we already have locally.
 	didStatLocal := false
+	// A github.com repository that git never ran for has nothing local to
+	// consult, so its lookups skip git rather than make an empty repository.
+	haveGitDir := r.gitDirReady()
 	if len(rev) >= minHashDigits && len(rev) <= r.hexHashLen() && AllHex(rev) {
-		if info, err := r.statLocal(ctx, rev, rev); err == nil {
-			return info, nil
+		if when, err := r.githubArchiveTime(rev); err == nil {
+			return r.githubRevInfo(ctx, rev, rev, when, nil), nil
+		}
+		if haveGitDir {
+			if info, err := r.statLocal(ctx, rev, rev); err == nil {
+				return info, nil
+			}
 		}
 		didStatLocal = true
 	}
 
 	// Maybe rev is a tag we already have locally.
 	// (Note that we're excluding branches, which can be stale.)
-	r.localTagsOnce.Do(func() { r.loadLocalTags(ctx) })
-	if _, ok := r.localTags.Load(rev); ok {
-		return r.statLocal(ctx, rev, "refs/tags/"+rev)
+	if haveGitDir {
+		r.localTagsOnce.Do(func() { r.loadLocalTags(ctx) })
+		if _, ok := r.localTags.Load(rev); ok {
+			return r.statLocal(ctx, rev, "refs/tags/"+rev)
+		}
+	}
+
+	// A version tag on github.com comes from its archive, which names the
+	// commit. Only a missing archive needs ls-remote and the git path.
+	triedTagArchive := false
+	if r.github != nil && isTagName(rev) {
+		unlock, err := r.mu.Lock()
+		if err != nil {
+			return nil, err
+		}
+		info, err := r.statGitHubTag(ctx, rev, rec)
+		unlock()
+		if err == nil {
+			return info, nil
+		}
+		triedTagArchive = true
 	}
 
 	// Maybe rev is the name of a tag or branch on the remote server.
@@ -524,7 +633,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	// but we've since done fetches that pulled down the hash we need
 	// (or already have the hash we need, just without its tag).
 	// Either way, try a local stat before falling back to network I/O.
-	if !didStatLocal {
+	if !didStatLocal && haveGitDir {
 		if info, err := r.statLocal(ctx, rev, hash); err == nil {
 			tag, fromTag := strings.CutPrefix(ref, "refs/tags/")
 			if fromTag && !slices.Contains(info.Tags, tag) {
@@ -553,6 +662,15 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	// and we don't want those commits masquerading as being real
 	// pseudo-versions in the main repo.
 	if r.fetchLevel <= fetchSome && ref != "" && hash != "" {
+		if triedTagArchive {
+			// The archives of this tag already failed.
+		} else if info, err := r.statGitHub(ctx, rev, ref, hash, rec); err == nil {
+			if ref == "HEAD" {
+				// The git fetch below records no Ref for HEAD. Match it.
+				ref = hash
+			}
+			return info, nil
+		}
 		r.fetchLevel = fetchSome
 		var refspec string
 		if ref == "HEAD" {
@@ -571,6 +689,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 			refspec = ref + ":" + ref
 		}
 
+		startGit()
 		release, err := base.AcquireNet()
 		if err != nil {
 			return nil, err
@@ -592,6 +711,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 
 	// Last resort.
 	// Fetch all heads and tags and hope the hash we want is in the history.
+	startGit()
 	if err := r.fetchRefsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -679,6 +799,10 @@ func (r *gitRepo) statLocal(ctx context.Context, version, rev string) (*RevInfo,
 	if !strings.HasPrefix(hash, rev) {
 		info.Origin.Ref = rev
 	}
+	info.Origin.Gitlinks, err = r.gitlinks(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
 
 	// Add tags. Output looks like:
 	//	ede458df7cd0fdca520df19a33158086a8a68e81 1523994202 HEAD -> master, tag: v1.2.4-annotated, tag: v1.2.3, origin/master, origin/HEAD
@@ -733,6 +857,9 @@ func (r *gitRepo) ReadFile(ctx context.Context, rev, file string, maxSize int64)
 	if err != nil {
 		return nil, err
 	}
+	if entries, err := r.githubEntries(info.Name); err == nil {
+		return readGitHubFile(entries, file)
+	}
 	out, err := r.runGit(ctx, "git", "cat-file", "--end-of-options", "blob", info.Name+":"+file)
 	if err != nil {
 		return nil, fs.ErrNotExist
@@ -746,6 +873,27 @@ func (r *gitRepo) RecentTag(ctx context.Context, rev, prefix string, allowed fun
 		return "", err
 	}
 	rev = info.Name // expand hash prefixes
+
+	if _, err := r.githubArchiveTime(rev); err == nil {
+		// The commit came from an archive, so git has no history to walk.
+		// With no plausible tag the answer is "" and git is not needed.
+		tags, err := r.Tags(ctx, prefix+"v")
+		if err != nil {
+			return "", err
+		}
+		if len(tags.List) == 0 {
+			return "", nil
+		}
+		unlock, err := r.mu.Lock()
+		if err != nil {
+			return "", err
+		}
+		err = r.fetchRefsLocked(ctx)
+		unlock()
+		if err != nil {
+			return "", err
+		}
+	}
 
 	// describe sets tag and err using 'git for-each-ref' and reports whether the
 	// result is definitive.
@@ -899,6 +1047,26 @@ func (r *gitRepo) DescendsFrom(ctx context.Context, rev, tag string) (bool, erro
 	return false, err
 }
 
+// IsGitHub reports whether the remote is a github.com repository.
+func (r *gitRepo) IsGitHub() bool {
+	return r.github != nil
+}
+
+// ReadFiles returns the files of rev under subdir straight from a kept
+// GitHub archive. It fails with errors.ErrUnsupported when no archive holds rev.
+func (r *gitRepo) ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error) {
+	info, err := r.Stat(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := r.githubEntries(info.Name)
+	if err != nil {
+		return nil, errors.ErrUnsupported
+	}
+	r.claimFetch(ctx, info.Name, r.keptArchiveRoute(info.Name))
+	return subdirFiles(entries, subdir)
+}
+
 func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64) (zip io.ReadCloser, err error) {
 	// TODO: Use maxSize or drop it.
 	args := []string{}
@@ -909,12 +1077,24 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	if err != nil {
 		return nil, err
 	}
+	_, archiveErr := r.githubEntries(info.Name)
+	if archiveErr == nil && !gitOnly(ctx) {
+		// A commit from an archive is never turned into a zip. Use ReadFiles.
+		return nil, errors.ErrUnsupported
+	}
+	r.claimFetch(ctx, info.Name, "git")
 
 	unlock, err := r.mu.Lock()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+
+	if archiveErr == nil {
+		if err := r.fetchCommitLocked(ctx, info.Name); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := ensureGitAttributes(r.dir); err != nil {
 		return nil, err
@@ -925,7 +1105,7 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	// text file line endings. Setting -c core.autocrlf=input means only
 	// translate files on the way into the repo, not on the way out (archive).
 	// The -c core.eol=lf should be unnecessary but set it anyway.
-	archive, err := r.runGit(ctx, "git", "-c", "core.autocrlf=input", "-c", "core.eol=lf", "archive", "--format=zip", "--prefix=prefix/", "--end-of-options", info.Name, args)
+	archive, err := r.runGit(ctx, "git", "-c", "core.autocrlf=input", "-c", "core.eol=lf", "archive", "--format=zip", "--prefix="+archivePrefix, "--end-of-options", info.Name, args)
 	if err != nil {
 		if bytes.Contains(err.(*RunError).Stderr, []byte("did not match any files")) {
 			return nil, fs.ErrNotExist
@@ -934,6 +1114,73 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	}
 
 	return io.NopCloser(bytes.NewReader(archive)), nil
+}
+
+type gitOnlyKey struct{}
+
+// WithGitOnly makes ReadZip build the zip with git even for a commit a GitHub
+// archive holds. An archive that export-ignore or export-subst changed does
+// not hash to the module's sum. git archive with those attributes off does.
+func WithGitOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gitOnlyKey{}, true)
+}
+
+func gitOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(gitOnlyKey{}).(bool)
+	return only
+}
+
+// fetchCommitLocked fetches hash with no history, unless git already has it.
+// It requires that r.mu stay locked.
+func (r *gitRepo) fetchCommitLocked(ctx context.Context, hash string) error {
+	if _, err := r.runGit(ctx, "git", "cat-file", "-e", "--end-of-options", hash+"^{commit}"); err == nil {
+		return nil
+	}
+	release, err := base.AcquireNet()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = r.runGit(ctx, "git", "-c", "protocol.version=2", "fetch", "-f", "--depth=1", "--end-of-options", r.remote, hash)
+	return err
+}
+
+// archivePrefix is the top-level directory git archive writes.
+const archivePrefix = "prefix/"
+
+// gitlinks lists the submodule commits in the tree at rev.
+func (r *gitRepo) gitlinks(ctx context.Context, rev string) (string, error) {
+	out, err := r.runGit(ctx, "git", "ls-tree", "-r", "--full-tree", "-z", rev)
+	if err != nil {
+		return "", err
+	}
+	return string(gitlinkLines(out, "")), nil
+}
+
+// gitlinkLines turns `git ls-tree -z` output into one commit and path per
+// line, each path relative to dir. A gitlink outside dir is left out.
+func gitlinkLines(out []byte, dir string) []byte {
+	base := ""
+	if dir != "" {
+		base = dir + "/"
+	}
+	var links bytes.Buffer
+	for _, entry := range strings.Split(string(out), "\x00") {
+		meta, path, split := strings.Cut(entry, "\t")
+		if !split {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) < 3 || fields[0] != "160000" {
+			continue
+		}
+		rest, under := strings.CutPrefix(path, base)
+		if !under {
+			continue
+		}
+		fmt.Fprintf(&links, "%s %s\n", fields[2], rest)
+	}
+	return links.Bytes()
 }
 
 // ensureGitAttributes makes sure export-subst and export-ignore features are
@@ -977,6 +1224,12 @@ func ensureGitAttributes(repoDir string) (err error) {
 }
 
 func (r *gitRepo) runGit(ctx context.Context, cmdline ...any) ([]byte, error) {
+	if r.github != nil {
+		r.gitDirOnce.Do(func() { r.gitDirErr = r.initGitDir(ctx, false) })
+		if r.gitDirErr != nil {
+			return nil, r.gitDirErr
+		}
+	}
 	args := RunArgs{cmdline: cmdline, dir: r.dir, local: r.local}
 	if !r.local {
 		// Manually supply GIT_DIR so Git works with safe.bareRepository=explicit set.

@@ -21,6 +21,7 @@ func TestEfaceConv1(t *testing.T) {
 }
 
 func TestEfaceConv2(t *testing.T) {
+	t.Serial()
 	a := 5
 	sink = &a
 	i := any(a)
@@ -31,6 +32,7 @@ func TestEfaceConv2(t *testing.T) {
 }
 
 func TestEfaceConv3(t *testing.T) {
+	t.Serial()
 	x = 5
 	if got := e2int3(x); got != 5 {
 		t.Errorf("wanted 5, got %d\n", got)
@@ -77,6 +79,7 @@ func TestIfaceConv1(t *testing.T) {
 }
 
 func TestIfaceConv2(t *testing.T) {
+	t.Serial()
 	a := Int(5)
 	sink = &a
 	i := any(a)
@@ -87,6 +90,7 @@ func TestIfaceConv2(t *testing.T) {
 }
 
 func TestIfaceConv3(t *testing.T) {
+	t.Serial()
 	y = 5
 	if got := i2Int3(y); got != 5 {
 		t.Errorf("wanted 5, got %d\n", int(got))

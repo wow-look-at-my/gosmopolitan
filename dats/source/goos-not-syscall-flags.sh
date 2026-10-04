@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# goos-not-syscall-flags.sh -- refuse a runtime.GOOS predicate that decides an open flag.
+
+set -uo pipefail
+
+root=${1:-.}
+fail=0
+
+# An open flag named a bounded number of lines after a GOOS comparison.
+pat='runtime\.GOOS[[:space:]]*[=!]=[[:space:]]*"'
+flags='O_(RDONLY|WRONLY|RDWR|CREATE|CREAT|APPEND|EXCL|SYNC|TRUNC|NOFOLLOW|DIRECTORY|CLOEXEC)'
+
+# cosmoBuilds reports whether a cosmo build compiles this file at all. A
+# constraint that names an explicit GOOS list and leaves cosmo out of it takes
+# the file out of scope: a file cosmo never compiles teaches a reader to skim
+# this guard's output, and then the real hit goes past too.
+cosmoBuilds() {
+	local line
+	line=$(grep -m1 '^//go:build ' "$1" 2>/dev/null) || return 0
+	[ -n "$line" ] || return 0
+	case "$line" in
+	*cosmo* | *unix*) return 0 ;;
+	esac
+	# Any other named GOOS means the list is explicit and cosmo is absent.
+	printf '%s' "$line" | grep -qE \
+		'\b(aix|android|darwin|dragonfly|freebsd|hurd|illumos|ios|js|linux|netbsd|openbsd|plan9|solaris|wasip1|windows|zos)\b' &&
+		return 1
+	return 0
+}
+
+# lineWindow prints lines first through last of a file, each exactly as it was
+# written.
+lineWindow() {
+	src=$1
+	first=$2
+	last=$3
+	num=0
+	while IFS= read -r text || [ -n "$text" ]; do
+		num=$((num + 1))
+		if [ "$num" -lt "$first" ]; then
+			continue
+		fi
+		if [ "$num" -gt "$last" ]; then
+			break
+		fi
+		printf '%s\n' "$text"
+	done <"$src"
+}
+
+while IFS= read -r hit; do
+	file=${hit%%:*}
+	rest=${hit#*:}
+	line=${rest%%:*}
+	cosmoBuilds "$file" || continue
+	window=$(lineWindow "$file" "$line" "$((line + 6))" 2>/dev/null)
+	if printf '%s' "$window" | grep -qE "$flags"; then
+		printf 'BLOCKED: runtime.GOOS decides an open flag\n  %s:%s\n' "$file" "$line" >&2
+		fail=1
+	fi
+done < <(grep -rnE "$pat" --include='*.go' "$root/src/os" "$root/src/internal" \
+	"$root/src/syscall" "$root/src/path" 2>/dev/null |
+	grep -v '_test\.go:' || true)
+
+if [ "$fail" -ne 0 ]; then
+	printf '\nruntime.GOOS is the HOST here, and a syscall flag belongs to the\n' >&2
+	printf 'BUILD TARGET. Read internal/goos.IsWindows instead.\n' >&2
+	exit 2
+fi
+exit 0

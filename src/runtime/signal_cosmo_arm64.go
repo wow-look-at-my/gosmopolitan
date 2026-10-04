@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -11,20 +10,7 @@ import (
 	"unsafe"
 )
 
-// sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS, and
-// the kernel hands the signal handler its native context structure -
-// a Linux ucontext with an embedded sigcontext, or an Apple ucontext
-// whose uc_mcontext FIELD IS A POINTER to a __darwin_mcontext64 in the
-// signal frame. Every accessor dispatches on __hostos (the established
-// runtime-dispatch pattern; the Linux branch is byte-for-byte the old
-// code). Writes (set_pc/set_sp for sigpanic injection and async
-// preemption's pushCall) go through the same dispatch, so on macOS
-// they land in the kernel's own mcontext and Apple's sigreturn
-// restores them - no context copying or translation is needed.
-//
-// The Apple layouts below mirror upstream defs_darwin_arm64.go
-// (ucontext, mcontext64, regs64, exceptionstate64, siginfo); the
-// neonstate64 tail of mcontext64 is never accessed and is omitted.
+// sigctxt is HOST-AWARE: one cosmo binary runs on Linux and macOS.
 
 type sigctxt struct {
 	info *siginfo
@@ -49,10 +35,7 @@ type xnuRegs64 struct {
 	_    uint32
 }
 
-// xnuMcontext64 is the head of __darwin_mcontext64. The trailing
-// neonstate64 (floating point state) is never touched by the runtime
-// and is left off; the struct is only ever used via a pointer into
-// the kernel-provided signal frame.
+// xnuMcontext64 is the head of __darwin_mcontext64.
 type xnuMcontext64 struct {
 	es xnuExceptionState64
 	ss xnuRegs64
@@ -67,9 +50,6 @@ type xnuStackt struct {
 	_        [4]byte
 }
 
-// xnuUcontext is Apple's ucontext_t. uc_mcontext is a POINTER (at
-// offset 48) into the signal frame, where Linux embeds the mcontext
-// by value.
 type xnuUcontext struct {
 	uc_onstack  int32
 	uc_sigmask  uint32
@@ -79,9 +59,6 @@ type xnuUcontext struct {
 	uc_mcontext *xnuMcontext64
 }
 
-// xnuSiginfo is Apple's siginfo_t. si_signo/si_errno/si_code share
-// Linux's offsets (0/4/8); si_addr sits at offset 24 (Linux keeps its
-// union at 16).
 type xnuSiginfo struct {
 	si_signo  int32
 	si_errno  int32
@@ -185,14 +162,13 @@ func (c *sigctxt) pstate() uint64 {
 //go:nosplit
 func (c *sigctxt) fault() uintptr {
 	if isdarwin() {
-		// Like upstream darwin: the fault address from siginfo.
-		// (The mcontext's es.far holds the same value.)
+		// Like upstream darwin: the fault address from siginfo. (The mcontext's es.far holds the same value.)
 		return uintptr(c.xnuInfo().si_addr)
 	}
 	return uintptr(c.regs().fault_address)
 }
 
-func (c *sigctxt) sigcode() uint64 { return uint64(c.info.si_code) } // offset 8 on both systems
+func (c *sigctxt) sigcode() uint64 { return uint64(c.info.si_code) }
 
 //go:nosplit
 func (c *sigctxt) sigaddr() uint64 {
@@ -234,7 +210,7 @@ func (c *sigctxt) set_r28(x uint64) {
 	c.regs().regs[28] = x
 }
 
-func (c *sigctxt) set_sigcode(x uint64) { c.info.si_code = int32(x) } // offset 8 on both systems
+func (c *sigctxt) set_sigcode(x uint64) { c.info.si_code = int32(x) }
 
 func (c *sigctxt) set_sigaddr(x uint64) {
 	if isdarwin() {
@@ -249,18 +225,12 @@ func (c *sigctxt) fixsigcode(sig uint32) {
 	if !isdarwin() {
 		return
 	}
-	// Ported from upstream signal_darwin_arm64.go.
+	// .go.
 	switch sig {
 	case _SIGTRAP:
-		// OS X sets c.sigcode() == TRAP_BRKPT unconditionally for all
-		// SIGTRAPs, leaving no way to distinguish a breakpoint-induced
-		// SIGTRAP from an asynchronous signal SIGTRAP. They all look
-		// breakpoint-induced by default. Try looking at the code to see
-		// if it's a breakpoint. The assumption is that we're very
-		// unlikely to get an asynchronous SIGTRAP at just the moment
-		// that the PC started to point at unmapped memory.
+		// OS X sets c.sigcode() == TRAP_BRKPT unconditionally for all SIGTRAPs.
 		pc := uintptr(c.pc())
-		// OS X will leave the pc just after the instruction.
+		// OS X will leave the pc after the instruction.
 		code := (*uint32)(unsafe.Pointer(pc - 4))
 		if *code != 0xd4200000 {
 			// SIGTRAP on something other than breakpoint.

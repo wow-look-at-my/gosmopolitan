@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"internal/goarch"
 	"internal/runtime/atomic"
@@ -108,7 +109,7 @@ func getGCMaskOnDemand(t *_type) *byte {
 	// in read-only memory currently.
 	addr := unsafe.Pointer(t.GCData)
 
-	if GOOS == "aix" {
+	if goos.IsAix == 1 {
 		addr = add(addr, firstmoduledata.data-aixStaticDataBase)
 	}
 

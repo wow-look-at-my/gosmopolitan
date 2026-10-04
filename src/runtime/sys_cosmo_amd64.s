@@ -184,6 +184,7 @@ exitThread_nt:
 	INT	$3	// not reached
 
 TEXT runtime·open(SB),NOSPLIT,$0-20
+	CHECK_WINDOWS(open_nt)
 	CHECK_DARWIN(open_darwin)
 	// Linux path - use openat
 	MOVL	$AT_FDCWD, DI
@@ -212,8 +213,18 @@ open_darwin:
 open_darwin_err:
 	MOVL	$-1, ret+16(FP)
 	RET
+open_nt:
+	// The runtime opens no file on an NT host: both callers in
+	// os_cosmo.go (the /proc/self/auxv fallback and urandom) return
+	// before they reach here. The syscall package's own open is served
+	// by the emulation instead. So this answers a failure rather than
+	// running the Linux SYSCALL below it, which comes back as an NT
+	// status that the -4096 errno test reads as a valid fd.
+	MOVL	$-1, ret+16(FP)
+	RET
 
 TEXT runtime·closefd(SB),NOSPLIT,$0-12
+	CHECK_WINDOWS(closefd_nt)
 	CHECK_DARWIN(closefd_darwin)
 	// Linux path
 	MOVL	fd+0(FP), DI
@@ -234,8 +245,17 @@ closefd_darwin:
 closefd_darwin_err:
 	MOVL	$-1, ret+8(FP)
 	RET
+closefd_nt:
+	// Nothing the runtime opened can be closed here: see open_nt.
+	MOVL	$-1, ret+8(FP)
+	RET
 
-TEXT runtime·write1(SB),NOSPLIT,$0-28
+// NOFRAME is load-bearing here, because write1_nt tail-jumps. The amd64
+// assembler gives a frame pointer to any TEXT that is not NOFRAME and makes a
+// call, and write1_darwin_err calls cosmo_xlat_errno_ax. A RET pops that
+// PUSHQ BP. A JMP does not, so the trampoline reads its arguments one slot low
+// and returns through the caller's saved BP, which is a stack address.
+TEXT runtime·write1(SB),NOSPLIT|NOFRAME,$0-28
 	CHECK_WINDOWS(write1_nt)
 	CHECK_DARWIN(write1_darwin)
 	// Linux path
@@ -270,6 +290,7 @@ write1_nt:
 	JMP	runtime·ntwrite1tramp(SB)
 
 TEXT runtime·read(SB),NOSPLIT,$0-28
+	CHECK_WINDOWS(read_nt)
 	CHECK_DARWIN(read_darwin)
 	// Linux path
 	MOVL	fd+0(FP), DI
@@ -293,6 +314,12 @@ read_darwin_err:
 	CALL	runtime·cosmo_xlat_errno_ax(SB)
 	NEGQ	AX
 	MOVL	AX, ret+24(FP)
+	RET
+read_nt:
+	// open_nt hands out no descriptor, so every fd that arrives here is
+	// somebody else's. -EBADF, the way a caller of read expects, rather
+	// than the NT status the Linux SYSCALL above returns.
+	MOVL	$-9, ret+24(FP)	// -EBADF
 	RET
 
 // func pipe2(flags int32) (r, w int32, errno int32)

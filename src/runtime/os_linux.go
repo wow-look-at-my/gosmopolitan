@@ -485,7 +485,7 @@ func setsig(i uint32, fn uintptr) {
 	// should not be used". x86_64 kernel requires it. Only use it on
 	// x86. Note that on 386 this is cleared when using the C sigaction
 	// function via cgo; see fixSigactionForCgo.
-	if GOARCH == "386" || GOARCH == "amd64" {
+	if goarch.Is386 == 1 || goarch.IsAmd64 == 1 {
 		sa.sa_restorer = abi.FuncPCABI0(sigreturn__sigaction)
 	}
 	if fn == abi.FuncPCABIInternal(sighandler) { // abi.FuncPCABIInternal(sighandler) matches the callers in signal_unix.go
@@ -569,7 +569,7 @@ func rt_sigaction(sig uintptr, new, old *sigactiont, size uintptr) int32
 //
 //go:nosplit
 func fixSigactionForCgo(new *sigactiont) {
-	if GOARCH == "386" && new != nil {
+	if goarch.Is386 == 1 && new != nil {
 		new.sa_flags &^= _SA_RESTORER
 		new.sa_restorer = 0
 	}
@@ -786,7 +786,7 @@ func syscall_runtime_doAllThreadsSyscall(trap, a1, a2, a3, a4, a5, a6 uintptr) (
 	// same order.
 
 	r1, r2, errno := linux.Syscall6(trap, a1, a2, a3, a4, a5, a6)
-	if GOARCH == "ppc64" || GOARCH == "ppc64le" {
+	if goarch.IsPpc64 == 1 || goarch.IsPpc64le == 1 {
 		// TODO(https://go.dev/issue/51192 ): ppc64 doesn't use r2.
 		r2 = 0
 	}
@@ -897,7 +897,7 @@ func runPerThreadSyscall() {
 
 	args := perThreadSyscall
 	r1, r2, errno := linux.Syscall6(args.trap, args.a1, args.a2, args.a3, args.a4, args.a5, args.a6)
-	if GOARCH == "ppc64" || GOARCH == "ppc64le" {
+	if goarch.IsPpc64 == 1 || goarch.IsPpc64le == 1 {
 		// TODO(https://go.dev/issue/51192 ): ppc64 doesn't use r2.
 		r2 = 0
 	}

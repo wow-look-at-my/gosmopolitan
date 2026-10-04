@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/ioutil"
@@ -64,8 +65,24 @@ func main() {
 		log.Fatal(err)
 	}
 
-	out, err := exec.Command("go", "build", "-o="+filepath.Join(dir, "out"), path).CombinedOutput()
+	out, err := build(filepath.Join(dir, "out"), path)
 	if err != nil {
 		log.Fatalf("build failed: %v\n%s", err, out)
 	}
+}
+
+// build compiles the Go files as package main and links them into exe,
+// against the standard library cmd/internal/testdir lists in
+// STDLIB_IMPORTCFG. It answers what the compiler and linker printed.
+func build(exe string, files ...string) ([]byte, error) {
+	importcfg := os.Getenv("STDLIB_IMPORTCFG")
+	if importcfg == "" {
+		return nil, errors.New("STDLIB_IMPORTCFG is not set")
+	}
+	obj := exe + ".a"
+	compile := append([]string{"tool", "compile", "-p=main", "-importcfg=" + importcfg, "-o", obj}, files...)
+	if out, err := exec.Command("go", compile...).CombinedOutput(); err != nil {
+		return out, err
+	}
+	return exec.Command("go", "tool", "link", "-importcfg="+importcfg, "-o", exe, obj).CombinedOutput()
 }

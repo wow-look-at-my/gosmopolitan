@@ -1,31 +1,15 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package runtime
 
+import "unsafe"
+
 // CosmoHostOS returns the operating system the process is running on:
-// "linux", "darwin", "windows", or "unknown" for a host this runtime has
-// no port for. It is the authoritative answer, not a guess.
-//
-// GOOS=cosmo binaries report runtime.GOOS == "cosmo" on every host, so
-// code that must know where it actually landed - which paths to translate,
-// which of a tool's platform branches to run - has had to infer it, and
-// every available inference is unreliable:
-//
-//   - syscall.Uname is ENOSYS on macOS-Intel and on NT (the emulation
-//     dispatchers there have no case for it).
-//   - filesystem probes (/System/Library/CoreServices, /proc/self) are
-//     answered by whatever sandbox the process is running under. A macOS
-//     seatbelt profile that denies the first probe turns a Mac into a
-//     "linux" answer, silently, and only inside the sandbox - which is
-//     exactly where a test suite runs.
-//
-// __hostos needs neither: the APE entry stub records it before any Go
-// code runs, and this runtime dispatches every syscall on it. If it were
-// wrong the process would already be issuing the wrong syscalls.
+// "linux", "darwin", "windows", or "unknown" for a host this runtime has no
+// port for.
 func CosmoHostOS() string {
 	switch __hostos {
 	case _HOSTLINUX:
@@ -38,14 +22,26 @@ func CosmoHostOS() string {
 	return "unknown"
 }
 
-// CosmoHostDNSServers returns the nameservers the host has configured,
-// as textual addresses, or nil when this host keeps them somewhere the
-// caller can already read.
-//
-// Only an NT host answers. Linux and macOS publish /etc/resolv.conf,
-// which net reads directly; Windows publishes nothing at a path, so
-// without this the resolver has no server to ask and queries localhost.
-// See os_cosmo_nt_dns.go.
+//go:nosplit
+func hostIsDarwin() bool { return isdarwin() }
+
+//go:nosplit
+func hostIsLinux() bool { return __hostos == _HOSTLINUX }
+
+//go:nosplit
+func hostIsWindows() bool { return iswindows() }
+
+// CosmoHostname returns the host's name, or "" when this host keeps it
+// somewhere the caller can already read.
+func CosmoHostname() string {
+	if __hostos != _HOSTXNU {
+		return ""
+	}
+	return cosmoDarwinHostname()
+}
+
+// CosmoHostDNSServers returns the nameservers the host has configured, as
+// textual addresses.
 func CosmoHostDNSServers() []string {
 	if __hostos != _HOSTWINDOWS {
 		return nil
@@ -54,16 +50,33 @@ func CosmoHostDNSServers() []string {
 }
 
 // CosmoHostRootCerts returns the DER bytes of the certificates the host
-// trusts as roots, or nil when this host keeps them somewhere the caller
-// can already read.
-//
-// Only an NT host answers. Linux and macOS publish a PEM bundle at a
-// path crypto/x509 scans for; Windows publishes none, so without this the
-// root pool is empty and every certificate is signed by an unknown
-// authority. See os_cosmo_nt_certs.go.
+// trusts as roots.
 func CosmoHostRootCerts() [][]byte {
 	if __hostos != _HOSTWINDOWS {
 		return nil
 	}
 	return ntRootCerts()
+}
+
+// CosmoDarwinSysctl issues Apple's sysctl with a numeric MIB and reports how
+// many bytes it wrote.
+//
+//go:linkname syscall_cosmoDarwinSysctl syscall.cosmoDarwinSysctl
+func syscall_cosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
+	return CosmoDarwinSysctl(mib, out)
+}
+
+func CosmoDarwinSysctl(mib []uint32, out []byte) (int, bool) {
+	if __hostos != _HOSTXNU || len(mib) == 0 {
+		return 0, false
+	}
+	n := uintptr(len(out))
+	var p unsafe.Pointer
+	if len(out) > 0 {
+		p = unsafe.Pointer(&out[0])
+	}
+	if cosmoDarwinSysctlCall(&mib[0], uint32(len(mib)), p, &n, nil, 0) != 0 {
+		return 0, false
+	}
+	return int(n), true
 }

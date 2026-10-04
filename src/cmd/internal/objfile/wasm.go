@@ -1,26 +1,14 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Parsing of WebAssembly modules (GOARCH=wasm), as emitted by
 // cmd/link/internal/wasm.
 //
-// A Go wasm binary has no traditional text segment or symbol table.
-// Functions live in the module's code section, and the linker gives
-// function i the "address" (PC_F) funcValueOffset+i, with the runtime
-// PC being PC_F<<16 | PC_B where PC_B is an intra-function resume
-// point counter, not a byte offset (see cmd/link/internal/wasm/asm.go).
-//
-// This package instead exposes each function at its byte extent within
-// the module file: Sym.Addr is the file offset of the function's code
-// section body and Sym.Size is the body's length in bytes. That gives
-// tools like objdump a linear, byte-addressed view that matches the
-// actual encoded instructions. PCToLine accepts both these file
-// offsets and runtime PCs (which start at funcValueOffset<<16, far
-// above any reasonable file offset) and resolves them at function
-// granularity via the pclntab, which is located inside the data
-// section by scanning the reconstructed memory image for its magic
-// number.
+// A Go wasm binary has no traditional text segment or symbol table. Functions
+// live in the module's code section, and the linker gives function i the
+// "address" (PC_F) funcValueOffset+i, with the runtime PC being PC_F<<16 |
+// PC_B where PC_B is an intra-function resume point counter, not a byte
+// offset (see cmd/link/internal/wasm/asm.go).
 
 package objfile
 
@@ -36,13 +24,10 @@ import (
 )
 
 const (
-	// wasmFuncValueOffset is the offset between function indices and their
-	// PC_F values. It mirrors funcValueOffset in cmd/link/internal/wasm.
+	// wasmFuncValueOffset is the offset between function indices and their PC_F values.
 	wasmFuncValueOffset = 0x1000
 
 	// wasmMinPC is the lowest runtime PC: PC_F<<16 for the first function.
-	// Addresses below it are treated as file offsets, addresses at or
-	// above it as runtime PCs.
 	wasmMinPC = wasmFuncValueOffset << 16
 )
 
@@ -62,7 +47,7 @@ const (
 	wasmSecData     = 11
 )
 
-var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00} // "\0asm" version 1
+var wasmMagic = []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
 
 // WasmInfo describes WebAssembly-specific structure of an executable
 // needed to symbolize a disassembly.
@@ -129,8 +114,6 @@ func openWasm(r io.ReaderAt) (rawFile, error) {
 }
 
 // A wasmReader reads the primitives of the wasm binary encoding.
-// The first encoding error is latched: subsequent reads return zero
-// values, so sequences of reads only need a single error check.
 type wasmReader struct {
 	data []byte
 	off  int
@@ -293,9 +276,7 @@ func (f *wasmFile) parse() error {
 		if r.err != nil {
 			break
 		}
-		// A sub-reader restricted to the section's payload, but reading
-		// at file-absolute offsets so that code body extents can be
-		// recorded directly.
+		// A sub-reader restricted to the section's payload, but reading at file-absolute offsets.
 		sec := &wasmReader{data: f.data[:start+int(size)], off: start}
 		switch id {
 		case wasmSecType:
@@ -409,7 +390,7 @@ func (f *wasmFile) parseData(r *wasmReader) {
 	for i := uint64(0); i < n && r.err == nil; i++ {
 		flags := r.uleb()
 		switch flags {
-		case 0, 2: // active segment (2: with explicit memory index)
+		case 0, 2:
 			if flags == 2 {
 				r.uleb() // memory index
 			}
@@ -428,9 +409,8 @@ func (f *wasmFile) parseData(r *wasmReader) {
 	}
 }
 
-// parseNames parses the "name" custom section. Errors are ignored:
-// the section is a debugging aid, and the pclntab provides better
-// names anyway.
+// parseNames parses the "name" custom section. Errors are ignored: the
+// section is a debugging aid, and the pclntab provides better names anyway.
 func (f *wasmFile) parseNames(r *wasmReader) {
 	names := make(map[uint64]string)
 	for r.err == nil && r.len() > 0 {
@@ -457,8 +437,6 @@ func (f *wasmFile) parseNames(r *wasmReader) {
 	f.names = names
 }
 
-// funcIndex returns the index of the function whose body contains the
-// given file offset, or -1.
 func (f *wasmFile) funcIndex(off uint64) int {
 	i := sort.Search(len(f.code), func(i int) bool { return off < f.code[i].off })
 	if i == 0 {
@@ -470,15 +448,11 @@ func (f *wasmFile) funcIndex(off uint64) int {
 	return -1
 }
 
-// pcln locates the pclntab inside the module's data section by
-// reconstructing the initial linear memory image and scanning it for
-// the pclntab magic number.
+// pcln locates the pclntab inside the module's data section by reconstructing
+// the initial linear memory image and scanning it.
 func (f *wasmFile) pcln() (textStart uint64, pclntab []byte, err error) {
 	f.pclnOnce.Do(f.findPclntab)
-	// The functab covers PC_F values starting at wasmFuncValueOffset
-	// relative to a zero runtime.text (see textOff in
-	// cmd/link/internal/ld/pcln.go: on wasm functab entries hold the
-	// function index, not a byte offset).
+	// The functab covers PC_F values starting at wasmFuncValueOffset relative to a zero runtime.text.
 	return 0, f.pclntab, f.pclnErr
 }
 
@@ -498,13 +472,13 @@ func (f *wasmFile) findPclntab() {
 		copy(mem[seg.addr:], seg.data)
 	}
 
-	// Scan for a plausible pclntab header: magic, two zero bytes,
-	// pc quantum and pointer size (see debug/gosym). Verify each
-	// candidate by actually parsing it.
+	// Scan for a plausible pclntab header: magic, zero bytes, pc quantum and
+	// pointer size (see debug/gosym). Verify each candidate by parsing it.
 	for _, magic := range [][]byte{
-		{0xf1, 0xff, 0xff, 0xff, 0x00, 0x00}, // Go 1.20+
-		{0xf0, 0xff, 0xff, 0xff, 0x00, 0x00}, // Go 1.18
-		{0xfa, 0xff, 0xff, 0xff, 0x00, 0x00}, // Go 1.16
+		{0xc1, 0xff, 0xff, 0xff, 0x00, 0x00}, // this fork's compact pclntab (abi.CosmoPCLnTabMagic)
+		{0xf1, 0xff, 0xff, 0xff, 0x00, 0x00},
+		{0xf0, 0xff, 0xff, 0xff, 0x00, 0x00},
+		{0xfa, 0xff, 0xff, 0xff, 0x00, 0x00},
 	} {
 		for off := 0; ; {
 			i := bytes.Index(mem[off:], magic)
@@ -538,10 +512,9 @@ func (f *wasmFile) table() *gosym.Table {
 	return f.tab
 }
 
-// PCToLine implements Liner. It resolves both file offsets of code
-// section bytes (as used in Sym.Addr) and runtime PCs
-// (PC_F<<16 | PC_B, as they appear in tracebacks), at function
-// granularity.
+// PCToLine implements Liner. It resolves both file offsets of code section
+// bytes (as used in Sym.Addr) and runtime PCs (PC_F<<16 | PC_B, as they
+// appear in tracebacks), at function granularity.
 func (f *wasmFile) PCToLine(pc uint64) (string, int, *gosym.Func) {
 	tab := f.table()
 	if tab == nil {
@@ -588,10 +561,7 @@ func (f *wasmFile) symbols() ([]Sym, error) {
 	return syms, nil
 }
 
-// text exposes the whole module, addressed by file offset: the
-// function bodies the symbols point at are not contiguous (each code
-// section entry is preceded by its size), so the "text segment" is
-// simply the file itself.
+// text exposes the whole module, addressed by file offset.
 func (f *wasmFile) text() (textStart uint64, text []byte, err error) {
 	return 0, f.data, nil
 }
@@ -604,11 +574,7 @@ func (f *wasmFile) loadAddress() (uint64, error) {
 	return 0, nil
 }
 
-// DWARFCodeOffset returns the file offset of the code section's
-// contents. DWARF code addresses in a wasm module are relative to this
-// position: fileOffset = codeOffset + DWARF address. Sym.Addr values
-// are file offsets, so Sym.Addr == DWARFCodeOffset() + DW_AT_low_pc
-// for a function symbol.
+// DWARFCodeOffset returns the file offset of the code section's contents.
 func (e *Entry) DWARFCodeOffset() (uint64, bool) {
 	f, ok := e.raw.(*wasmFile)
 	if !ok {

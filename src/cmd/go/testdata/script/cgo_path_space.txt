@@ -17,7 +17,7 @@
 [!GOOS:windows] env PATH=$WORK/'program files':$PATH
 [GOOS:windows] exists -exec $WORK/'program files'/gcc.bat
 [GOOS:windows] exists -exec $WORK/'program files'/clang.bat
-[GOOS:windows] env PATH=$WORK\'program files';%PATH%
+[GOOS:windows] env PATH=$WORK\'program files';$PATH
 
 ! exists $WORK/log.txt
 ? go build -x

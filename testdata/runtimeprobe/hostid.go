@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -15,19 +16,24 @@ import (
 // is running takes the wrong branch quietly.
 
 // checkHostOS asserts the runtime reports the host it is actually running
-// on. runtime.GOOS is "cosmo" everywhere, so anything that must know the
-// real host has had to infer it - and every inference is deniable by a
-// sandbox (filesystem probes) or unimplemented (syscall.Uname is ENOSYS on
-// darwin and NT). cosmoHostOS reads what the entry stub recorded and the
-// runtime dispatches every syscall on, so it cannot disagree with reality.
+// on. GOOS and GOARCH are variables on cosmo, read at startup from what
+// the APE entry stub recorded, so a package that switches on GOOS takes
+// the branch for the kernel underneath. cosmoHostOS reads the same
+// record the runtime dispatches every syscall on, so the two cannot
+// disagree.
 func checkHostOS() {
 	host := cosmoHostOS()
 	switch host {
 	case "linux", "darwin", "windows":
-		ok("hostos", host)
 	default:
 		fail("hostos", "reported %q, want the real host", host)
+		return
 	}
+	if runtime.GOOS != host {
+		fail("hostos", "runtime.GOOS is %q on a %s host", runtime.GOOS, host)
+		return
+	}
+	ok("hostos", host+"/"+runtime.GOARCH)
 }
 
 // checkFdPath exercises fcntl(F_GETPATH), the darwin way to resolve a
@@ -138,12 +144,10 @@ func checkPeercred() {
 	ok("peercred", fmt.Sprintf("pid=%d uid=%d gid=%d", uc.Pid, uc.Uid, uc.Gid))
 }
 
-// checkDupFile records what dup(2) does to a FILE descriptor. Socket dup
-// works everywhere; files and pipes are documented ENOSYS on NT, and
-// nothing in the standard library is known to reach it there. This check
-// exists so that stops being a claim nobody tested: it asserts dup works
-// on unix hosts and prints the NT errno rather than failing, so the day
-// something does reach it, the line is already in the log.
+// checkDupFile asserts dup(2) and dup2(2) on a FILE descriptor on every
+// host. The duplicate is the same open file: a write through it lands
+// in the file, and the original still works after the duplicate is
+// closed. dup2 onto a slot that is open replaces what was there.
 func checkDupFile() {
 	dir, err := os.MkdirTemp("", "rp-dup")
 	if err != nil {
@@ -151,30 +155,56 @@ func checkDupFile() {
 		return
 	}
 	defer os.RemoveAll(dir)
-	f, err := os.Create(filepath.Join(dir, "target"))
+	path := filepath.Join(dir, "target")
+	f, err := os.Create(path)
 	if err != nil {
 		fail("dupfile", "create: %v", err)
 		return
 	}
 	defer f.Close()
 
-	nfd, _, e := syscall.Syscall(syscall.SYS_DUP, f.Fd(), 0, 0)
-	if cosmoHostOS() == "windows" {
-		if e == 0 {
-			syscall.Close(int(nfd))
-			ok("dupfile", "windows: dup(2) on a file WORKS (documented ENOSYS is stale)")
-			return
-		}
-		ok("dupfile", fmt.Sprintf("windows: errno %v (documented ENOSYS)", e))
+	nfd, err := syscall.Dup(int(f.Fd()))
+	if err != nil {
+		fail("dupfile", "dup: %v", err)
 		return
 	}
-	if e != 0 {
-		fail("dupfile", "dup: errno %v", e)
+	if _, err := syscall.Write(nfd, []byte("x")); err != nil {
+		syscall.Close(nfd)
+		fail("dupfile", "write through the duplicate: %v", err)
 		return
 	}
-	defer syscall.Close(int(nfd))
-	if _, err := f.WriteString("x"); err != nil {
-		fail("dupfile", "write through original: %v", err)
+	if err := syscall.Close(nfd); err != nil {
+		fail("dupfile", "close the duplicate: %v", err)
+		return
+	}
+	if _, err := f.WriteString("y"); err != nil {
+		fail("dupfile", "write through the original after the duplicate closed: %v", err)
+		return
+	}
+
+	// dup2 over an open slot: the slot's old file is closed and the
+	// slot now names the target.
+	other, err := os.Create(filepath.Join(dir, "other"))
+	if err != nil {
+		fail("dupfile", "create other: %v", err)
+		return
+	}
+	defer other.Close()
+	if err := syscall.Dup2(int(f.Fd()), int(other.Fd())); err != nil {
+		fail("dupfile", "dup2: %v", err)
+		return
+	}
+	if _, err := syscall.Write(int(other.Fd()), []byte("z")); err != nil {
+		fail("dupfile", "write through the dup2 slot: %v", err)
+		return
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		fail("dupfile", "read back: %v", err)
+		return
+	}
+	if string(got) != "xyz" {
+		fail("dupfile", "read back %q, want %q", got, "xyz")
 		return
 	}
 	ok("dupfile", fmt.Sprintf("fd %d", nfd))

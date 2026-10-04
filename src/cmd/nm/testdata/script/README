@@ -243,8 +243,10 @@ The available conditions are:
 	GODEBUG contains <suffix>
 [GOEXPERIMENT:*]
 	GOEXPERIMENT <suffix> is enabled
-[GOOS:*]
+[GOHOSTOS:*]
 	runtime.GOOS == <suffix>
+[GOOS:*]
+	goos.GOOS == <suffix>
 [asan]
 	GOOS/GOARCH supports -asan
 [buildmode:*]

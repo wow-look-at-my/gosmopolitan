@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package runtime_test
 
@@ -14,8 +13,7 @@ import (
 )
 
 // The budgeted mark step (gcMarkStep, exported to js/wasm hosts as the
-// go_gc_mark_step wasm export) is platform-independent. These tests
-// exercise it on every platform.
+// go_gc_mark_step wasm export) is platform-independent.
 
 // markStepNode is a pointer-rich node so the mark phase has real scan
 // work to do.
@@ -47,11 +45,7 @@ func buildMarkStepGraph(totalBytes int) *markStepNode {
 // TestGCMarkStepNoCycle checks that the mark step is a cheap no-op that
 // reports no remaining work when no GC cycle is active.
 func TestGCMarkStepNoCycle(t *testing.T) {
-	// A concurrent background GC (e.g. triggered by another test's
-	// allocations in a parallel process is impossible, but within this
-	// process another goroutine can trigger one) can legitimately make
-	// GCMarkStep return true, so retry a few times: right after a full
-	// runtime.GC() there is normally no active cycle.
+	// A concurrent background GC (e.g. triggered by another test's allocations in a parallel process is impossible, but within this process another goroutine can trigger one) can legitimately make GCMarkStep return true.
 	for i := 0; i < 100; i++ {
 		runtime.GC()
 		start := time.Now()
@@ -72,13 +66,14 @@ func TestGCMarkStepNoCycle(t *testing.T) {
 // correctly, and that repeatedly calling it drives the cycle through mark
 // termination.
 func TestGCMarkStepDrivesMark(t *testing.T) {
+	// GOMAXPROCS is the whole process, so this test needs it to itself.
+	t.Serial()
 	if testing.Short() {
 		t.Skip("allocates and scans a large heap")
 	}
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 
-	// A big live pointer graph makes the mark phase long enough to
-	// observe from outside.
+	// A big live pointer graph makes the mark phase long enough to observe from outside.
 	graph := buildMarkStepGraph(32 << 20)
 	defer runtime.KeepAlive(graph)
 	runtime.GC()
@@ -99,10 +94,7 @@ func TestGCMarkStepDrivesMark(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			sink = make([]byte, 4096)
 		}
-		// Donate a small budget. With GOMAXPROCS=1 and this goroutine
-		// hogging the P, mark progress comes from assists and these
-		// steps, so during a cycle we must observe work remaining at
-		// least once before the cycle can finish.
+		// Donate a small budget.
 		start := time.Now()
 		more := GCMarkStep(0.5)
 		dur := time.Since(start)
@@ -110,9 +102,8 @@ func TestGCMarkStepDrivesMark(t *testing.T) {
 			sawWork = true
 			steppedNs += dur.Nanoseconds()
 			steppedCalls++
-			// One increment past a 0.5ms budget should be far below
-			// this; the bound is deliberately generous for slow,
-			// contended CI machines.
+			// One increment past a 0.5ms budget should be far below this; the bound is
+			// deliberately generous for slow, contended CI machines.
 			if dur > time.Second {
 				t.Fatalf("mark step with 0.5ms budget ran for %v", dur)
 			}
@@ -135,7 +126,7 @@ func TestGCMarkStepDrivesMark(t *testing.T) {
 }
 
 // TestGCMarkStepZeroBudget checks that a non-positive budget performs no
-// drain and just reports whether work remains, quickly.
+// drain and reports whether work remains, quickly.
 func TestGCMarkStepZeroBudget(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		start := time.Now()

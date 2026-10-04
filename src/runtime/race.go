@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"internal/goos"
 	"internal/abi"
 	"unsafe"
 )
@@ -472,7 +473,7 @@ func raceinit() (gctx, pctx uintptr) {
 	lockInit(&raceFiniLock, lockRankRaceFini)
 
 	// On most machines, cgo is required to initialize libc, which is used by race runtime.
-	if !iscgo && GOOS != "darwin" {
+	if !iscgo && goos.IsDarwin != 1 {
 		throw("raceinit: race build must use cgo")
 	}
 

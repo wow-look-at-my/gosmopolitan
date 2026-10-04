@@ -1,28 +1,10 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
-// Debug-info reduction for GOOS=cosmo fat APE merges (the -apedbgmode
-// linker flag, driven by cmd/go's GOCOSMODEBUG):
-//
-//   - "full" (default): sidecars are pristine byte-copies of the per-arch
-//     linker ELFs; no transform runs. Behavior is identical to before the
-//     flag existed.
-//   - "slim": sidecars are debug-only ELFs, the in-linker equivalent of
-//     objcopy --only-keep-debug: contents of allocated sections are
-//     dropped (their headers become SHT_NOBITS with addresses preserved),
-//     while .symtab, .strtab, and every .debug_* section keep their bytes.
-//     About two thirds of a pristine sidecar duplicates bytes already
-//     shipped inside the APE; slim removes exactly that duplication.
-//   - "compact": slim sidecars, plus a compact debug view appended to the
-//     APE itself past the loadable span (never mapped at runtime), so
-//     debuggers can symbolize the assimilated binary with no sidecar
-//     present. See apeCompactDebugTail.
-//
-// The transforms operate on the raw ELF images byte-wise, in the style of
-// the rest of the APE writer (no debug/elf dependency).
+// Debug-info reduction for GOOS=cosmo fat APE merges (-apedbgmode, driven by
+// cmd/go's GOCOSMODEBUG).
 
 import (
 	"encoding/binary"
@@ -66,9 +48,7 @@ func (s *elfSectionView) hasContents() bool {
 }
 
 // dropForDebug reports whether the slim/compact transforms drop this
-// section's file contents: it is allocated (its bytes live in the APE's
-// loadable span already) and it is not a note (notes are tiny, carry the
-// build IDs tools look up, and sit in the preserved header page anyway).
+// section's file contents.
 func (s *elfSectionView) dropForDebug() bool {
 	return s.flags()&elfShfAlloc != 0 && s.hasContents() && s.typ() != elfShtNote
 }
@@ -131,12 +111,8 @@ func parseELFSections(elf []byte) ([]*elfSectionView, error) {
 	return secs, nil
 }
 
-// clampPhdrsToPrefix rewrites the program header table inside out (an image
-// whose file contents end at prefixEnd) so that no header references file
-// bytes past prefixEnd: fully-dropped spans become offset 0 / filesz 0,
-// partially-retained spans are clamped. Virtual addresses and memory sizes
-// are untouched, the way objcopy --only-keep-debug leaves the segment map
-// describing the original memory image.
+// Virtual addresses and memory sizes are untouched, the way objcopy
+// --only-keep-debug leaves the segment map describing the memory image.
 func clampPhdrsToPrefix(out []byte, prefixEnd uint64) {
 	phoff := binary.LittleEndian.Uint64(out[32:40])
 	phentsize := binary.LittleEndian.Uint16(out[54:56])
@@ -155,8 +131,6 @@ func clampPhdrsToPrefix(out []byte, prefixEnd uint64) {
 	}
 }
 
-// alignTo pads b with zeros to the given alignment (a power of two, or 0/1
-// for none) and returns the padded slice.
 func alignTo(b []byte, align uint64) []byte {
 	if align > 1 {
 		for uint64(len(b))&(align-1) != 0 {
@@ -166,32 +140,22 @@ func alignTo(b []byte, align uint64) []byte {
 	return b
 }
 
-// slimELFDebug builds the debug-only ("slim") form of a pristine per-arch
-// linker ELF image, equivalent to objcopy --only-keep-debug:
+// slimELFDebug builds the debug-only ("slim") form of a per-arch linker
+// ELF image, equivalent to objcopy --only-keep-debug. The header page up
+// to the first dropped section stays verbatim. Allocated sections become
+// SHT_NOBITS, keeping name, address, size and flags. Non-allocated
+// sections keep their contents, repacked after the header page. Program
+// headers are clamped to the retained span, addresses intact.
 //
-//   - The header page - everything up to the first dropped section's file
-//     offset (ELF header, program headers, and the note sections carrying
-//     the build IDs) - is preserved verbatim at its original offsets.
-//   - Allocated sections lose their file contents and become SHT_NOBITS;
-//     their headers keep name, address, size, and flags, so debuggers can
-//     still lay out the memory image they describe.
-//   - Non-allocated sections (.debug_*, .symtab, .strtab, .shstrtab) keep
-//     their contents, repacked after the header page.
-//   - Program headers are clamped to the retained file span; virtual
-//     addresses and memory sizes stay intact.
-//
-// The result is a valid, non-runnable ELF that every DWARF consumer reads
-// like the pristine original (verified with gdb, delve, and llvm tools),
-// at roughly a third of the size.
+// The result is a valid, non-runnable ELF that gdb, delve and the llvm
+// tools read like the pristine original, at about a third of the size.
 func slimELFDebug(elf []byte) ([]byte, error) {
 	secs, err := parseELFSections(elf)
 	if err != nil {
 		return nil, err
 	}
 
-	// The preserved prefix ends where the first dropped section's
-	// contents begin (in practice the end of the ELF header page: text
-	// starts at the next page boundary, notes sit inside the first page).
+	// The preserved prefix ends where the first dropped section's contents begin.
 	prefixEnd := uint64(len(elf))
 	for _, s := range secs {
 		if s.dropForDebug() && s.off() < prefixEnd {
@@ -233,31 +197,18 @@ func slimELFDebug(elf []byte) ([]byte, error) {
 		out = append(out, s.hdr...)
 	}
 	binary.LittleEndian.PutUint64(out[40:48], shoff) // e_shoff
-	// e_shnum/e_shstrndx are unchanged: the table keeps every section at
-	// its original index, so symbol st_shndx values and sh_link fields in
-	// the preserved headers stay valid.
+	// e_shnum/e_shstrndx are unchanged: the table keeps every section at its original index.
 	return out, nil
 }
 
-// apeCompactDropDebug lists the .debug_* sections the compact in-binary
-// view leaves out: location lists, which serve variable/argument
-// inspection (about a fifth of the compressed DWARF - inspecting
-// variables is sidecar territory, and gdb degrades them cleanly to
-// <optimized out>). Everything a file:line backtrace needs stays:
-// .debug_info/.debug_abbrev for the DIE tree, .debug_line for line
-// tables, .debug_rnglists/.debug_addr for DWARF v5 PC->CU mapping, and
-// .debug_frame for CFI - measured at only ~50 KB zlib'd per arch, and
-// without it gdb's fallback unwinder emits a bogus frame when stopped in
-// a function prologue (verified: breakpoint at main.fizzbuzz+0 grew a
-// "?? ()" frame between it and main.main). The slim sidecars keep
-// everything, so full-fidelity debugging remains one file away.
+// apeCompactDropDebug lists the .debug_* sections the compact in-binary view
+// leaves out: location lists.
 var apeCompactDropDebug = map[string]bool{
 	".debug_loclists": true,
 }
 
 // apeCompactView describes one payload's section-header view inside the
-// compact debug tail: the values its ELF header must carry so that the
-// assimilated binary exposes the view to debuggers.
+// compact debug tail.
 type apeCompactView struct {
 	shoff    uint64 // absolute APE file offset of the section header table
 	shnum    uint16
@@ -268,21 +219,14 @@ type apeCompactView struct {
 // (whose first byte will land at absolute APE file offset tailFileOff) and
 // returns the grown tail plus the header fields describing the view.
 //
-// The view is a complete section table for the assimilated binary:
-//
-//   - Allocated sections keep their types and contents by POINTING INTO
-//     THE PAYLOAD (sh_offset rebased by payloadOff): the APE already
-//     ships those bytes in its loadable span, so they cost nothing.
-//   - .symtab, .strtab, .shstrtab, and the kept .debug_* sections have
-//     their contents packed into the tail at absolute offsets.
-//   - Sections in apeCompactDropDebug are removed and the table is
-//     renumbered (sh_link and e_shstrndx remapped, symbol st_shndx
-//     values rewritten - in practice unchanged, since symbols reference
-//     only allocated sections, which precede every dropped section).
-//
-// pristine must be the payload's ELF image as its linker produced it
-// (payload-relative offsets, section table intact), payloadOff the file
-// offset writeAPEFile will place it at.
+// The view is a complete section table for the assimilated binary.
+// Allocated sections point INTO THE PAYLOAD (sh_offset rebased by
+// payloadOff), which the APE already ships. .symtab, .strtab, .shstrtab
+// and the kept .debug_* sections are packed into the tail at absolute
+// offsets. Sections in apeCompactDropDebug are removed and the table is
+// renumbered, sh_link, e_shstrndx and symbol st_shndx with it. pristine
+// must be the payload's ELF image as its linker produced it, and
+// payloadOff the offset writeAPEFile will place it at.
 func appendCompactDebugView(tail []byte, tailFileOff uint64, pristine []byte, payloadOff uint64) ([]byte, apeCompactView, error) {
 	secs, err := parseELFSections(pristine)
 	if err != nil {

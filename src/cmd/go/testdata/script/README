@@ -33,7 +33,7 @@ Scripts also have access to other environment variables, including:
 	GOEXE=<executable file suffix: .exe on Windows, empty on other systems>
 	GOOS=<target GOOS>
 	GOPATH=$WORK/gopath
-	GOPROXY=<local module proxy serving from cmd/go/testdata/mod>
+	TESTGO_GOPROXY=<local module proxy serving from cmd/go/testdata/mod>
 	GOROOT=<actual GOROOT>
 	TESTGO_GOROOT=<GOROOT used to build cmd/go, for use in tests that may change GOROOT>
 	HOME=/no-home
@@ -369,10 +369,14 @@ The available conditions are:
 	GODEBUG contains <suffix>
 [GOEXPERIMENT:*]
 	GOEXPERIMENT <suffix> is enabled
-[GOOS:*]
+[GOHOSTOS:*]
 	runtime.GOOS == <suffix>
+[GOOS:*]
+	goos.GOOS == <suffix>
 [abscc]
 	default $CC path is absolute and exists
+[agent]
+	a coding agent is an ancestor of this test, so the go command never makes a CI build
 [asan]
 	GOOS/GOARCH supports -asan
 [buildmode:*]

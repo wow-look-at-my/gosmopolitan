@@ -101,10 +101,6 @@ func dirHash(modroot, pkgdir string) (cache.ActionID, error) {
 		// write might not change the mtime due to file system
 		// mtime precision, reject caching if a file was read that
 		// is less than modTimeCutoff old.
-		//
-		// This is the same strategy used for hashing test inputs.
-		// See hashOpen in cmd/go/internal/test/test.go for the
-		// corresponding code.
 		info, err := d.Info()
 		if err != nil {
 			return cache.ActionID{}, ErrNotIndexed
@@ -680,6 +676,18 @@ func (rp *IndexPackage) Import(bctxt build.Context, mode build.ImportMode) (p *b
 // for the goroot and compiler using the module index if possible,
 // and otherwise falling back to internal/goroot.IsStandardPackage
 func IsStandardPackage(goroot_, compiler, path string) bool {
+	// The blob answers first and the tree answers for the rest: cmd is a
+	// distribution's own and no blob carries it, so a GOROOT of this same
+	// toolchain is what a program importing the go command reads.
+	if cfg.EmbeddedStd {
+		if cfg.EmbeddedStdPackage(path) != nil {
+			return true
+		}
+		tree, err := fsys.IsDir(filepath.Join(goroot_, "src"))
+		if goroot_ == "" || err != nil || !tree {
+			return false
+		}
+	}
 	if !enabled || compiler != "gc" {
 		return goroot.IsStandardPackage(fsys.ReadDir, goroot_, compiler, path)
 	}

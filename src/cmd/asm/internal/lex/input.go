@@ -5,7 +5,9 @@
 package lex
 
 import (
+	"bytes"
 	"fmt"
+	"internal/cosmo/embedded"
 	"os"
 	"path/filepath"
 	"slices"
@@ -414,6 +416,17 @@ func (in *Input) include() {
 	fd, err := os.Open(name)
 	if err != nil {
 		for _, dir := range in.includes {
+			// An include directory inside this binary serves the header
+			// as bytes; there is no descriptor to close.
+			if embedded.IsSelf(dir) {
+				data, readErr := embedded.ReadFile(embedded.Name(dir) + "/" + name)
+				if readErr == nil {
+					in.Push(NewTokenizer(name, bytes.NewReader(data), nil))
+					return
+				}
+				err = readErr
+				continue
+			}
 			fd, err = os.Open(filepath.Join(dir, name))
 			if err == nil {
 				break

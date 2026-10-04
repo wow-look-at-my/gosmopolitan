@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -22,29 +21,18 @@ type SysProcAttr struct {
 	Chroot     string      // Chroot.
 	Credential *Credential // Credential.
 	// Ptrace tells the child to call ptrace(PTRACE_TRACEME).
-	// Call runtime.LockOSThread before starting a process with this set,
-	// and don't call UnlockOSThread until done with PtraceSyscall calls.
 	Ptrace bool
 	Setsid bool // Create session.
-	// Setpgid sets the process group ID of the child to Pgid,
-	// or, if Pgid == 0, to the new child's process ID.
+	// Setpgid sets the process group ID of the child to Pgid, or, if Pgid == 0, to the new child's process ID.
 	Setpgid bool
-	// Setctty sets the controlling terminal of the child to
-	// file descriptor Ctty. Ctty must be a descriptor number
-	// in the child process: an index into ProcAttr.Files.
-	// This is only meaningful if Setsid is true.
+	// Setctty sets the controlling terminal of the child to file descriptor Ctty.
 	Setctty bool
-	Noctty  bool // Detach fd 0 from controlling terminal.
-	Ctty    int  // Controlling TTY fd.
-	// Foreground places the child process group in the foreground.
-	// This implies Setpgid. The Ctty field must be set to
-	// the descriptor of the controlling TTY.
-	// Unlike Setctty, in this case Ctty must be a descriptor
-	// number in the parent process.
+	Noctty  bool
+	Ctty    int // Controlling TTY fd.
+	// Foreground places the child process group in the foreground. This implies Setpgid.
 	Foreground bool
 	Pgid       int // Child's process group ID if Setpgid.
-	// Pdeathsig, if non-zero, is a signal that the kernel will send to
-	// the child process when the creating thread dies.
+	// Pdeathsig, if non-zero, is a signal that the kernel will send to the child process when the creating thread dies.
 	Pdeathsig    Signal
 	Cloneflags   uintptr        // Flags for clone calls (not used on cosmo).
 	Unshareflags uintptr        // Flags for unshare calls (not used on cosmo).
@@ -68,27 +56,21 @@ func runtime_BeforeFork()
 func runtime_AfterFork()
 func runtime_AfterForkInChild()
 
-// Fork, dup fd onto 0..len(fd), and exec(argv0, argvv, envv) in child.
-// If a dup or exec fails, write the errno error to pipe.
-// (Pipe is close-on-exec so if exec succeeds, it will be closed.)
-// In the child, this function must not acquire any locks, because
-// they might have been locked at the time of the fork. This means
-// no rescheduling, no malloc calls, and no new stack segments.
+// If a dup or exec fails, write the errno error to pipe. (Pipe is
+// close-on-exec so if exec succeeds, it will be closed.) In the child,
+// this function must not acquire any locks, because they might have
+// been locked at the time of the fork. This means no rescheduling, no
+// malloc calls, and no new stack segments.
 //
 //go:norace
 func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr *ProcAttr, sys *SysProcAttr, pipe int) (pid int, err Errno) {
-	// NT host: no fork exists. Launch the child posix_spawn-style via
-	// CreateProcessW instead (exec_cosmo_nt.go) - BEFORE any fork
-	// machinery. The status pipe is not passed down: the child cannot
-	// inherit it, so the parent's status read sees EOF (the success
-	// protocol) and spawn failures return synchronously from here.
+	// NT host: no fork exists.
 	if cosmo.Windows() != nil {
 		return ntForkExec(argv0, argv, envv, chroot, dir, attr, sys)
 	}
 
-	// Declare all variables at top in case any
-	// temporary variables get allocated during
-	// the actual syscall sequences.
+	// Declare all variables at top in case any temporary variables get allocated
+	// during the actual syscall sequences.
 	var (
 		r1     uintptr
 		err1   Errno
@@ -97,10 +79,6 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	)
 
 	// Guard against side effects of shuffling fds below.
-	// Make sure that nextfd is beyond any currently open files so
-	// that we can't run the risk of overwriting any of them.
-	// A nil entry in ProcAttr.Files becomes ^uintptr(0), which is -1
-	// as an int and means "leave that fd closed in the child".
 	fd := make([]int, len(attr.Files))
 	nextfd = len(attr.Files)
 	for i, ufd := range attr.Files {
@@ -111,12 +89,12 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 	}
 	nextfd++
 
-	// About to call fork.
-	// No more allocation or calls of non-assembly functions.
+	// An APE cannot be exec'd directly, so prepare its /bin/sh form now, while allocation is still legal.
+	shArgv := apeShellArgv(argv0, argv)
+
+	// About to call fork. No more allocation or calls of non-assembly functions.
 	runtime_BeforeFork()
-	// Use clone with SIGCHLD to emulate fork. This works on both amd64 (which
-	// has SYS_FORK) and arm64 (which only has SYS_CLONE). Using clone ensures
-	// portability across architectures.
+	// Use clone with SIGCHLD to emulate fork.
 	r1, err1 = rawVforkSyscall(SYS_CLONE, uintptr(SIGCHLD), 0, 0)
 	if err1 != 0 {
 		runtime_AfterFork()
@@ -188,8 +166,6 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		}
 	}
 
-	// Pass 1: look for fd[i] < i and move those up above len(fd)
-	// so that pass 2 won't stomp on an fd it needs later.
 	if pipe < nextfd {
 		_, _, err1 = RawSyscall(SYS_DUP3, uintptr(pipe), uintptr(nextfd), O_CLOEXEC)
 		if err1 != 0 {
@@ -212,38 +188,30 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		}
 	}
 
-	// Pass 2: dup fd[i] down onto i.
 	for i = 0; i < len(fd); i++ {
 		if fd[i] == -1 {
 			RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
 			continue
 		}
 		if fd[i] == i {
-			// dup2(i, i) won't clear close-on-exec flag on Linux,
-			// probably not elsewhere either.
+			// dup2(i, i) won't clear close-on-exec flag on Linux, probably not elsewhere either.
 			_, _, err1 = RawSyscall(SYS_FCNTL, uintptr(fd[i]), F_SETFD, 0)
 			if err1 != 0 {
 				goto childerror
 			}
 			continue
 		}
-		// The new fd is created NOT close-on-exec,
-		// which is exactly what we want.
+		// The new fd is created NOT close-on-exec, which is exactly what we want.
 		_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(i), 0)
 		if err1 != 0 {
 			goto childerror
 		}
 	}
 
-	// By convention, we don't close-on-exec the fds we are
-	// started with, so if len(fd) < 3, close 0, 1, 2 as needed.
-	// Programs that know they inherit fds >= 3 will need
-	// to set them close-on-exec.
 	for i = len(fd); i < 3; i++ {
 		RawSyscall(SYS_CLOSE, uintptr(i), 0, 0)
 	}
 
-	// Detach fd 0 from tty
 	if sys.Noctty {
 		_, _, err1 = RawSyscall(SYS_IOCTL, 0, uintptr(TIOCNOTTY), 0)
 		if err1 != 0 {
@@ -264,6 +232,15 @@ func forkAndExecInChild(argv0 *byte, argv, envv []*byte, chroot, dir *byte, attr
 		uintptr(unsafe.Pointer(argv0)),
 		uintptr(unsafe.Pointer(&argv[0])),
 		uintptr(unsafe.Pointer(&envv[0])))
+	if err1 == ENOEXEC {
+		// The kernel refused the image. An APE is a shell script, so
+		// hand it to the shell that reads its header. This is what
+		// execvp(3) does with any ENOEXEC file.
+		_, _, err1 = RawSyscall(SYS_EXECVE,
+			uintptr(unsafe.Pointer(&apeShellPath[0])),
+			uintptr(unsafe.Pointer(&shArgv[0])),
+			uintptr(unsafe.Pointer(&envv[0])))
+	}
 
 childerror:
 	// send error code on pipe

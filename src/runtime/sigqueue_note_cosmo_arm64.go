@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -8,16 +7,7 @@ package runtime
 
 import "unsafe"
 
-// Pipe-backed, async-signal-safe implementation of the one note used by
-// sigqueue, for XNU hosts. This is a port of the darwin sigNote
-// machinery in os_darwin.go: on macOS, M parking is pthread-based
-// (semawakeup takes a pthread mutex), which is not async-signal-safe,
-// so sigsend - which runs in the signal handler - cannot use notewakeup
-// there. It writes a byte into this pipe instead, and signal_recv
-// blocks in read(2) rather than in notesleep. The choice is made at run
-// time through sigNoteUsed (sigqueue.go), set by osArchInit only when
-// the host is XNU; on Linux hosts sigqueue keeps using regular notes,
-// whose futex-backed semawakeup is async-signal-safe.
+// Pipe-backed, async-signal-safe implementation of the note used by sigqueue, for XNU hosts.
 
 // The read and write file descriptors used by the sigNote functions.
 var sigNoteRead, sigNoteWrite int32
@@ -36,10 +26,8 @@ func sigNoteSetup(*note) {
 	sigNoteRead = r
 	sigNoteWrite = w
 
-	// Make the write end of the pipe non-blocking, so that if the pipe
-	// buffer is somehow full we will not block in the signal handler.
-	// Leave the read end of the pipe blocking so that we will block
-	// in sigNoteSleep.
+	// Make the write end of the pipe non-blocking, so that if the pipe buffer is
+	// somehow full we will not block in the signal handler.
 	const (
 		_F_GETFL = 3
 		_F_SETFL = 4
@@ -59,13 +47,7 @@ func sigNoteWakeup(*note) {
 	for {
 		n := write(uintptr(sigNoteWrite), unsafe.Pointer(&b), 1)
 		if n != -_EINTR {
-			// Success, -EAGAIN (pipe full: a wakeup byte is already
-			// pending for the receiver) and everything else mean the
-			// wakeup is delivered or unrecoverable. Only an
-			// interrupted write must be retried - SIGURG preemption
-			// interrupts libc calls on XNU, and an unretried EINTR
-			// here would lose the wakeup (the same hardening as the
-			// netpoller's wakeup-pipe writers).
+			// Success, -EAGAIN (pipe full: a wakeup byte is already pending for the receiver) and everything else mean the wakeup is delivered.
 			return
 		}
 	}

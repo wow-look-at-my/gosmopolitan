@@ -7,6 +7,7 @@
 package os
 
 import (
+	"internal/goos"
 	"internal/strconv"
 	"internal/syscall/execenv"
 	"runtime"
@@ -62,7 +63,8 @@ func startProcess(name string, argv []string, attr *ProcAttr) (p *Process, err e
 	}
 
 	// For Windows, syscall.StartProcess above already returned a process handle.
-	if runtime.GOOS != "windows" {
+	// The PORT: only the windows port's StartProcess does that.
+	if goos.IsWindows == 0 {
 		var ok bool
 		h, ok = getPidfd(sysattr.Sys, shouldDupPidfd)
 		if !ok {

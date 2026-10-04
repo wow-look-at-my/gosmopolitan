@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main
+package compile
 
 import (
 	"cmd/internal/script/scripttest"
@@ -28,8 +28,7 @@ func TestMain(m *testing.M) {
 	// Are we being asked to run as the compiler?
 	// If so then kick off main.
 	if os.Getenv("COMPILE_TEST_EXEC_COMPILE") != "" {
-		main()
-		os.Exit(0)
+		os.Exit(Main(os.Args[1:]))
 	}
 
 	if testExe, err := os.Executable(); err == nil {

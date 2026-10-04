@@ -15,6 +15,7 @@ import (
 
 	"cmd/go/internal/base"
 	"cmd/go/internal/gover"
+	"cmd/go/internal/orgmod"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
@@ -181,6 +182,10 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 	// so that the errors match the original file.
 	for _, modFile := range modFiles {
 		for _, r := range modFile.Require {
+			if orgmod.IsOrg(r.Mod.Path) {
+				// go.mod and modules.txt both record the placeholder, so the versions are not compared.
+				continue
+			}
 			if !vendorMeta[r.Mod].Explicit {
 				if pre114 {
 					// Before 1.14, modules.txt did not indicate whether modules were listed
@@ -241,6 +246,11 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 	}
 
 	for _, mod := range vendorList {
+		if orgmod.IsOrg(mod.Path) {
+			// See the placeholder note above: an org module's recorded version
+			// is a placeholder, so it is not compared with go.mod.
+			continue
+		}
 		meta := vendorMeta[mod]
 		if meta.Explicit {
 			// in workspace mode, check that it's required by at least one of the main modules
@@ -262,6 +272,9 @@ func checkVendorConsistency(ld *Loader, indexes []*modFileIndex, modFiles []*mod
 	}
 
 	for _, mod := range vendorReplaced {
+		if orgmod.IsOrg(mod.Path) {
+			continue
+		}
 		r := Replacement(ld, mod)
 		replacementSource := "go.mod"
 		if ld.inWorkspaceMode() {

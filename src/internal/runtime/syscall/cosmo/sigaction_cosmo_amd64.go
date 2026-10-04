@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -12,33 +11,11 @@ import (
 )
 
 // rt_sigaction emulation for macOS-Intel hosts.
-//
-// XNU has no rt_sigaction. There is no Syslib here either, so this
-// issues the raw __sigaction syscall, which takes the KERNEL struct
-// sigaction. That is a different interface, not the Linux one renamed:
-//
-//   - The signal numbers differ for the BSD-heritage signals, so both
-//     the signal argument and every bit of the mask are remapped
-//     (sigaction_cosmo.go).
-//   - The kernel struct carries an sa_tramp field the Linux struct does
-//     not, and a real handler cannot be installed without one. The
-//     kernel enters that trampoline instead of the handler and expects
-//     it to call sigreturn afterwards.
-//
-// The runtime installs its own handlers through
-// runtime.darwinSigaction, which does the same translation over the
-// same numbers. It cannot be shared: this package must not import the
-// runtime, and its trampoline dispatches through runtime.sigtramp,
-// which is right for the runtime's handlers and wrong for a caller's.
 
 // Errno value (Linux numbering) produced by this emulation itself.
 const darwinEINVAL = 22
 
-// xnuKsigactiont is Apple's KERNEL struct sigaction, what __sigaction
-// takes. Apple's LIBC struct sigaction has no sa_tramp: libc fills the
-// field in on the caller's behalf and a raw caller must supply it.
-// Layout from Go's pre-1.12 darwin port (go1.8
-// runtime/defs_darwin_amd64.go, type sigactiont).
+// xnuKsigactiont is Apple's KERNEL struct sigaction, what __sigaction takes.
 type xnuKsigactiont struct {
 	handler uintptr
 	tramp   uintptr
@@ -46,19 +23,14 @@ type xnuKsigactiont struct {
 	flags   int32
 }
 
-// xnuSigactiont is Apple's user64_sigaction, the OLD action __sigaction
-// copies out (XNU kern_sig.c sigaction_kern_to_user64). It has no
-// tramp: the kernel keeps the trampoline and never reports it back.
+// xnuSigactiont is Apple's user64_sigaction, the action __sigaction copies
+// out (XNU kern_sig.c sigaction_kern_to_user64).
 type xnuSigactiont struct {
 	handler uintptr
 	mask    uint32
 	flags   int32
 }
 
-// sigA2LTab maps an Apple signal number (index 1..31) to the Linux
-// number, 0 if there is none. sigactionTramp indexes it directly, which
-// is why the correspondence is a table here and a switch in
-// darwinXlatSignalA2L; TestSigA2LTab pins the two together.
 var sigA2LTab = [32]byte{
 	1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
 	7:  0, // SIGEMT: no Linux equivalent
@@ -81,14 +53,9 @@ var sigA2LTab = [32]byte{
 	31: 12, // SIGUSR2
 }
 
-// sigactionTramp is the sa_tramp handed to __sigaction. The KERNEL
-// enters it, so the declaration exists to take its address and for
-// asmdecl. Defined in asm_cosmo_amd64.s.
+// sigactionTramp is the sa_tramp handed to __sigaction.
 func sigactionTramp()
 
-// xnuSigaction issues the raw __sigaction syscall. errno comes back in
-// Linux numbering, r1 is -1 on failure. Defined in asm_cosmo_amd64.s.
-//
 //go:noescape
 func xnuSigaction(sig uintptr, new, old unsafe.Pointer) (r1, errno uintptr)
 
@@ -109,7 +76,6 @@ func darwinSigaction(sig, new, old, sigsetsize uintptr) (r1, errno uintptr) {
 	}
 	asig, ok := darwinXlatSignal(sig)
 	if !ok || asig == 0 {
-		// Signal 0 maps to 0 and is not a signal to install on.
 		return ^uintptr(0), darwinEINVAL
 	}
 	var anew xnuKsigactiont
@@ -117,15 +83,11 @@ func darwinSigaction(sig, new, old, sigsetsize uintptr) (r1, errno uintptr) {
 	var anewp, aoldp unsafe.Pointer
 	if new != 0 {
 		lnew := (*linuxSigactiont)(unsafe.Pointer(new))
-		// SIG_DFL (0) and SIG_IGN (1) have the same values on both
-		// systems; a handler address passes through untranslated.
 		anew.handler = lnew.handler
 		anew.flags = sigFlagsL2A(lnew.flags)
 		anew.mask = sigmaskL2A(lnew.mask)
 		if anew.handler > 1 {
-			// Only a real handler needs a trampoline. Giving one to
-			// SIG_DFL or SIG_IGN would hand the kernel a return path
-			// for a delivery it never makes.
+			// Only a real handler needs a trampoline.
 			anew.tramp = abi.FuncPCABI0(sigactionTramp)
 		}
 		anewp = unsafe.Pointer(&anew)
@@ -141,8 +103,7 @@ func darwinSigaction(sig, new, old, sigsetsize uintptr) (r1, errno uintptr) {
 		lold := (*linuxSigactiont)(unsafe.Pointer(old))
 		lold.handler = aold.handler
 		lold.flags = sigFlagsA2L(aold.flags)
-		// Linux fills sa_restorer from the caller's own SA_RESTORER
-		// request; XNU has no counterpart to read one back from.
+		// Linux fills sa_restorer from the caller's own SA_RESTORER request; XNU has no counterpart to read one back from.
 		lold.restorer = 0
 		lold.mask = sigmaskA2L(aold.mask)
 	}

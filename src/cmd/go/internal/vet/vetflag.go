@@ -54,8 +54,9 @@ func addFlags(cmd *base.Command) {
 	cmd.Flag.IntVar(&contextFlag, "c", -1, "display offending line with this many lines of context")
 }
 
-// parseToolFlag scans args for -{vet,fix}tool and returns the effective tool filename.
-func parseToolFlag(cmd *base.Command, args []string) string {
+// parseToolFlag scans args for -{vet,fix}tool and returns the command line
+// that starts the effective tool.
+func parseToolFlag(cmd *base.Command, args []string) []string {
 	toolFlagName := cmd.Name() + "tool" // vettool or fixtool
 
 	// Extract -{vet,fix}tool by ad hoc flag processing:
@@ -80,10 +81,10 @@ func parseToolFlag(cmd *base.Command, args []string) string {
 		if err != nil {
 			log.Fatal(err)
 		}
-		return tool
+		return []string{tool}
 	}
 
-	return base.Tool(cmd.Name()) // default to 'go tool vet|fix'
+	return base.ToolCmd(cmd.Name()) // default to 'go tool vet|fix'
 }
 
 // toolFlags processes the command line, splitting it at the first non-flag
@@ -94,10 +95,10 @@ func toolFlags(cmd *base.Command, args []string) (passToTool, packageNames []str
 
 	// Query the tool for its flags.
 	out := new(bytes.Buffer)
-	toolcmd := exec.Command(tool, "-flags")
+	toolcmd := exec.Command(tool[0], append(tool[1:], "-flags")...)
 	toolcmd.Stdout = out
 	if err := toolcmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "go: %s -flags failed: %v\n", tool, err)
+		fmt.Fprintf(os.Stderr, "go: %s -flags failed: %v\n", strings.Join(tool, " "), err)
 		base.SetExitStatus(2)
 		base.Exit()
 	}
@@ -107,7 +108,7 @@ func toolFlags(cmd *base.Command, args []string) (passToTool, packageNames []str
 		Usage string
 	}
 	if err := json.Unmarshal(out.Bytes(), &analysisFlags); err != nil {
-		fmt.Fprintf(os.Stderr, "go: can't unmarshal JSON from %s -flags: %v", tool, err)
+		fmt.Fprintf(os.Stderr, "go: can't unmarshal JSON from %s -flags: %v", strings.Join(tool, " "), err)
 		base.SetExitStatus(2)
 		base.Exit()
 	}

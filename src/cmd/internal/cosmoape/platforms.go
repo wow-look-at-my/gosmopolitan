@@ -1,14 +1,13 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
-// Package cosmoape describes the host platforms a GOOS=cosmo APE can boot
-// on and the payload architecture each one needs.
+// Package cosmoape describes the host platforms a GOOS=cosmo APE can boot on
+// and the payload architecture each needs.
 //
 // cmd/go reads GOCOSMOPLATFORMS through it to decide which architectures to
-// build; cmd/link reads -apeplatforms through it to decide which boot
-// headers to emit. Both sides must agree on the token spelling, so the
-// table lives here rather than in either command.
+// build; cmd/link reads -apeplatforms through it to decide which boot headers
+// to emit. Both sides must agree on the token spelling, so the table lives
+// here rather than in either command.
 package cosmoape
 
 import (
@@ -16,10 +15,7 @@ import (
 	"strings"
 )
 
-// Platform is a host OS/architecture an APE can boot on. Arch names the
-// PAYLOAD it boots, which is not always its own architecture: windows/amd64
-// boots the cosmo amd64 image through the APE's PE header, and there is no
-// separate windows payload.
+// Platform is a host OS/architecture an APE can boot on.
 type Platform struct {
 	OS   string
 	Arch string
@@ -28,12 +24,10 @@ type Platform struct {
 func (p Platform) String() string { return p.OS + "/" + p.Arch }
 
 // all lists every platform this toolchain can emit boot support for, in
-// canonical order. Set is a bitmask over these indices, so the order is
-// also the order platforms are reported in.
+// canonical order.
 var all = [...]Platform{
 	{"linux", "amd64"},
 	{"linux", "arm64"},
-	{"darwin", "amd64"},
 	{"darwin", "arm64"},
 	{"windows", "amd64"},
 }
@@ -42,26 +36,14 @@ var all = [...]Platform{
 var (
 	LinuxAMD64   = all[0]
 	LinuxARM64   = all[1]
-	DarwinAMD64  = all[2]
-	DarwinARM64  = all[3]
-	WindowsAMD64 = all[4]
+	DarwinARM64  = all[2]
+	WindowsAMD64 = all[3]
 )
 
 // Set is a set of platforms.
 type Set uint
 
-// Default is the set a build covers when GOCOSMOPLATFORMS is unset. It is
-// deliberately NOT every platform in all: it is the three this fork stands
-// behind, and the other two stay selectable rather than promised.
-//
-// linux/arm64 and darwin/amd64 are omitted because a default build should
-// not claim a host nothing verifies. darwin/amd64 is the sharper case: its
-// syscall and signal surfaces are implemented, but there is no Intel-mac
-// runner, so nothing there has ever been executed. An APE that advertised
-// it would announce a platform on which it has never run.
-//
-// Naming a platform in GOCOSMOPLATFORMS still selects it. This changes what
-// silence means, not what is reachable.
+// Default is the set a build covers when GOCOSMOPLATFORMS is unset.
 func Default() Set {
 	return 1<<indexOf(LinuxAMD64) | 1<<indexOf(DarwinARM64) | 1<<indexOf(WindowsAMD64)
 }
@@ -159,8 +141,7 @@ func (s Set) NeedsArch(arch string) bool {
 }
 
 // RestrictToArches returns the subset whose platforms boot one of the given
-// architectures. It is how a build with no explicit selection reports what
-// it actually supports: the platforms the payloads on hand can serve.
+// architectures.
 func (s Set) RestrictToArches(arches []string) Set {
 	var out Set
 	for i, p := range all {

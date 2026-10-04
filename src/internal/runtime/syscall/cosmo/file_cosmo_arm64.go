@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -8,16 +7,12 @@ package cosmo
 
 import "unsafe"
 
-// File and metadata syscalls emulated on macOS with dlsym-resolved Apple
-// libc entries. Everything here runs on the nosplit dispatch spine, so a
-// handler keeps its frame small and never allocates. See
-// syscall_cosmo_arm64.go for the darwinCall conventions.
+// File and metadata syscalls emulated on macOS with dlsym-resolved Apple libc entries.
 
-// Apple AT_* flags that the file layer translates. AT_FDCWD,
-// AT_SYMLINK_NOFOLLOW and AT_REMOVEDIR live in syscall_cosmo_arm64.go.
+// Apple AT_* flags that the file layer translates.
 const appleAT_SYMLINK_FOLLOW = 0x40
 
-// Linux AT_SYMLINK_FOLLOW, the one linkat flag with an Apple counterpart.
+// Linux AT_SYMLINK_FOLLOW, the linkat flag with an Apple counterpart.
 const linuxAT_SYMLINK_FOLLOW = 0x400
 
 // whence values for lseek, identical on both systems.
@@ -52,10 +47,7 @@ func darwinFchownat(dirfd, path, uid, gid, flags uintptr) (r1, r2, errno uintptr
 }
 
 // darwinMknodat emulates mknodat with Apple's mknod, which has no
-// directory-relative form. A dirfd other than AT_FDCWD therefore fails
-// with ENOSYS rather than silently resolving the path against the
-// process working directory. syscall.Mknod and syscall.Mkfifo both pass
-// AT_FDCWD, so the common paths work.
+// directory-relative form.
 //
 //go:nosplit
 func darwinMknodat(dirfd, path, mode, dev uintptr) (r1, r2, errno uintptr) {
@@ -63,7 +55,6 @@ func darwinMknodat(dirfd, path, mode, dev uintptr) (r1, r2, errno uintptr) {
 		return ^uintptr(0), 0, darwinENOSYS
 	}
 	// S_IFMT file-type bits and the permission bits share their values.
-	// dev keeps Apple's device encoding, like Stat_t.Rdev does.
 	return darwinCall(darwinFns.Mknod, path, mode, dev, 0, 0, 0)
 }
 
@@ -92,8 +83,8 @@ func darwinUtimensat(dirfd, path, times, flags uintptr) (r1, r2, errno uintptr) 
 
 // darwinSendfile emulates the Linux sendfile syscall.
 //
-// Three things differ. Apple takes the FILE first and the SOCKET second,
-// the reverse of Linux. Apple reports the transferred count through a
+// Things differ. Apple takes the FILE first and the SOCKET second, the
+// reverse of Linux. Apple reports the transferred count through a
 // value-result pointer instead of the return value, and it fills that
 // count in even when the call fails - a short transfer that stopped on
 // EAGAIN still moved bytes. And Apple never moves the file offset, so a
@@ -115,15 +106,15 @@ func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) 
 	} else {
 		r, _, e := darwinCall(darwinFns.Lseek, infd, 0, seekCUR, 0, 0, 0)
 		if e != 0 {
-			return ^uintptr(0), 0, e
+			// A pipe or a socket has no offset to read, so it is a file type sendfile cannot serve.
+			return ^uintptr(0), 0, darwinEINVAL
 		}
 		off = int64(r)
 	}
 	n := int64(count)
 	r := darwinLibcCall6(darwinFns.Sendfile, infd, outfd, uintptr(off),
 		uintptr(unsafe.Pointer(&n)), 0, 0)
-	// errno belongs to the call that just failed, so read it before the
-	// offset fixup below issues an lseek.
+	// errno belongs to the call that failed, so read it before the offset fixup below issues an lseek.
 	var e uintptr
 	if int64(r) == -1 {
 		e = darwinErrno()
@@ -141,8 +132,7 @@ func darwinSendfile(outfd, infd, offptr, count uintptr) (r1, r2, errno uintptr) 
 	if e != 0 && n == 0 {
 		return ^uintptr(0), 0, e
 	}
-	// Bytes moved: report them as Linux does and let the caller meet the
-	// error on its next call.
+	// Bytes moved: report them as Linux does and let the caller meet the error on its next call.
 	return uintptr(n), 0, 0
 }
 
@@ -155,12 +145,6 @@ const (
 // darwinStatfs emulates statfs/fstatfs, whose out-parameter is far too
 // large to build on the nosplit dispatch spine.
 //
-// The buffer therefore belongs to the syscall package, which allocates
-// the APPLE-layout struct and converts it (see syscall/bigbuf_cosmo.go).
-// The size argument is what makes that contract checkable: a caller that
-// passed a Linux-layout buffer by mistake gets EINVAL instead of a
-// two-kilobyte write into a 120-byte struct.
-//
 //go:nosplit
 func darwinStatfs(fn, pathOrFd, buf, size uintptr) (r1, r2, errno uintptr) {
 	if buf == 0 || size < darwinStatfsSize {
@@ -169,11 +153,7 @@ func darwinStatfs(fn, pathOrFd, buf, size uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(fn, pathOrFd, buf, 0, 0, 0, 0)
 }
 
-// darwinFdatasync emulates fdatasync. Apple ships the entry, and fsync
-// stands in when it is absent: fsync flushes the metadata fdatasync is
-// allowed to leave behind, so the caller gets a STRONGER guarantee than
-// it asked for rather than a weaker one. Reporting ENOSYS for a durable
-// write is the outcome worth avoiding here.
+// darwinFdatasync emulates fdatasync.
 //
 //go:nosplit
 func darwinFdatasync(fd uintptr) (r1, r2, errno uintptr) {
@@ -184,9 +164,7 @@ func darwinFdatasync(fd uintptr) (r1, r2, errno uintptr) {
 	return darwinCall(fn, fd, 0, 0, 0, 0, 0)
 }
 
-// darwinSync emulates sync. Apple's sync returns void and cannot fail,
-// so the Linux success value is supplied here rather than forwarding a
-// return value the callee never set.
+// darwinSync emulates sync.
 //
 //go:nosplit
 func darwinSync() (r1, r2, errno uintptr) {
@@ -197,21 +175,10 @@ func darwinSync() (r1, r2, errno uintptr) {
 	return 0, 0, 0
 }
 
-// darwinIoctl emulates ioctl for the requests whose argument means the
-// same thing on both systems: the two window-size calls (struct winsize
-// is four uint16 fields on both) and the four job-control calls, whose
-// argument is an int or nothing at all. syscall.Setctty and
-// syscall.Foreground issue two of them between fork and exec, which is
-// why this sits on the nosplit spine.
-//
-// The termios family goes to darwinTermiosIoctl, which converts the
-// struct as well as the request. Anything else answers ENOSYS, which is
-// a visible refusal; forwarding an unknown Linux request number would
-// instead ask the kernel for whatever Apple operation happens to carry
-// that number.
-//
-// ioctl is VARIADIC, so the argument goes on the stack. See
-// darwinCallVariadic1.
+// darwinIoctl emulates ioctl for the requests whose argument means the same
+// on both systems: both window-size calls, where struct winsize is uint16s
+// either way, and those job-control calls, whose argument is an int or
+// nothing.
 //
 //go:nosplit
 func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
@@ -224,19 +191,19 @@ func darwinIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	return ^uintptr(0), 0, darwinENOSYS
 }
 
-// darwinTermiosIoctl serves TCGETS and the three TCSETS forms over
+// darwinTermiosIoctl serves TCGETS and the TCSETS forms over
 // Apple's TIOCGETA/TIOCSETA family, converting the struct in both
 // directions (termios_cosmo.go).
 //
-// A set is a read-modify-write rather than a plain write: Apple's termios
+// A set is a read-modify-write, never a plain write: Apple's termios
 // carries settings a Linux caller cannot name, and writing only what the
-// caller passed would clear them. The read also fails first, and with the
-// right errno, when the descriptor is not a terminal at all.
+// caller passed would clear them. The read also fails first, with the
+// right errno, when the descriptor is not a terminal.
 //
-// Deliberately not nosplit: the 72-byte Apple struct is too much for the
-// dispatch spine's budget. Nothing calls this between fork and exec -
-// syscall.Setctty and syscall.Foreground use the job-control requests,
-// which stay on the nosplit path above.
+// Nosplit, and so is everything it calls: the spine reaches this after
+// entersyscall, where a stack growth is fatal.
+//
+//go:nosplit
 func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	if darwinFns.Ioctl == 0 {
 		return ^uintptr(0), 0, darwinENOSYS
@@ -256,8 +223,7 @@ func darwinTermiosIoctl(fd, req, arg uintptr) (r1, r2, errno uintptr) {
 	}
 	if req == linuxTCGETS {
 		if !DarwinTermiosToLinux(&at, (*LinuxTermios)(unsafe.Pointer(arg))) {
-			// The terminal reports a line speed with no Linux code. A
-			// wrong speed would be worse than a refused call.
+			// The terminal reports a line speed with no Linux code. A wrong speed would be worse than a refused call.
 			return ^uintptr(0), 0, darwinEINVAL
 		}
 		return 0, 0, 0

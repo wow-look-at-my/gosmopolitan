@@ -14,6 +14,7 @@ import (
 // this way because the dist tool needs to be buildable directly by
 // the bootstrap compiler, and as such can't import internal packages.
 func TestSupported(t *testing.T) {
+	t.Serial()
 	defer func(a, o string) {
 		goarch = a
 		goos = o

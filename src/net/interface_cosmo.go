@@ -1,27 +1,40 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package net
 
-// If the ifindex is zero, interfaceTable returns mappings of all
-// network interfaces. Otherwise it returns a mapping of a specific
-// interface.
+import "runtime"
+
+// One APE boots on kernels, so both readers are compiled in and the host
+// picks. runtime.GOOS is the right question.
 func interfaceTable(ifindex int) ([]Interface, error) {
-	return nil, nil
+	if runtime.GOOS == "darwin" {
+		return bsdInterfaceTable(ifindex)
+	}
+	return netlinkInterfaceTable(ifindex)
 }
 
-// If the ifi is nil, interfaceAddrTable returns addresses for all
-// network interfaces. Otherwise it returns addresses for a specific
-// interface.
 func interfaceAddrTable(ifi *Interface) ([]Addr, error) {
-	return nil, nil
+	if runtime.GOOS == "darwin" {
+		return bsdInterfaceAddrTable(ifi)
+	}
+	return netlinkInterfaceAddrTable(ifi)
 }
 
-// interfaceMulticastAddrTable returns addresses for a specific
-// interface.
 func interfaceMulticastAddrTable(ifi *Interface) ([]Addr, error) {
-	return nil, nil
+	if runtime.GOOS == "darwin" {
+		return bsdInterfaceMulticastAddrTable(ifi)
+	}
+	return netlinkInterfaceMulticastAddrTable(ifi)
+}
+
+// bsdIffMulticast is APPLE's IFF_MULTICAST, 0x8000. package syscall carries the name with Linux's 0x1000, because netlink needs it there.
+const bsdIffMulticast = 0x8000
+
+// interfacesServedHere reports whether this HOST answers the interface table
+// at all.
+func interfacesServedHere() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 }

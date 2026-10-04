@@ -24,6 +24,7 @@ type declInfo struct {
 	vtyp      syntax.Expr      // type, or nil (for const and var declarations only)
 	init      syntax.Expr      // init/orig expression, or nil (for const and var declarations only)
 	inherited bool             // if set, the init expression is inherited from a previous constant declaration
+	text      *syntax.BasicLit // name text of a constant declaration, or nil
 	tdecl     *syntax.TypeDecl // type declaration, or nil
 	fdecl     *syntax.FuncDecl // func declaration, or nil
 
@@ -354,6 +355,13 @@ func (check *Checker) collectObjects() {
 					inherited = false
 				}
 
+				// spec: "A constant declaration that binds more than one
+				// identifier may not carry one, since the text names a
+				// single constant."
+				if s.Text != nil && len(s.NameList) > 1 {
+					check.error(s.Text, InvalidEnum, "name text on a declaration of more than one constant")
+				}
+
 				// declare all constants
 				values := syntax.UnpackListExpr(last.Values)
 				for i, name := range s.NameList {
@@ -364,7 +372,7 @@ func (check *Checker) collectObjects() {
 						init = values[i]
 					}
 
-					d := &declInfo{file: fileScope, version: check.version, vtyp: last.Type, init: init, inherited: inherited}
+					d := &declInfo{file: fileScope, version: check.version, vtyp: last.Type, init: init, inherited: inherited, text: s.Text}
 					check.declarePkgObj(name, obj, d)
 				}
 
@@ -389,6 +397,7 @@ func (check *Checker) collectObjects() {
 				values := syntax.UnpackListExpr(s.Values)
 				for i, name := range s.NameList {
 					obj := newVar(PackageVar, name.Pos(), pkg, name.Value, nil)
+					obj.readonly = s.Readonly
 					lhs[i] = obj
 
 					d := d1

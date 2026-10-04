@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -9,7 +8,7 @@
 // reads as a relative path with no volume, which is how a consumer sees
 // "go list returned non-absolute Package.Dir: C:\Users\...".
 //
-// So the four predicates that decide what a path IS follow the host. Separator
+// So the predicates that decide what a path IS follow the host. Separator
 // stays the slash: NT accepts it beside the backslash, and it is what this
 // package emits.
 //
@@ -76,11 +75,15 @@ func ntIsAbs(path string, nt bool) bool {
 	if !nt {
 		return stringslite.HasPrefix(path, "/")
 	}
+	if stringslite.HasPrefix(path, "/") {
+		// Cosmo-rooted, and the runtime hands these out.
+		return true
+	}
 	l := ntVolumeNameLen(path, nt)
 	if l == 0 {
 		return false
 	}
-	// A volume that starts with two separators is a UNC root, already absolute.
+	// A volume that starts with separators is a UNC root, already absolute.
 	if ntIsPathSeparator(path[0], nt) && ntIsPathSeparator(path[1], nt) {
 		return true
 	}
@@ -100,9 +103,12 @@ func ntVolumeNameLen(path string, nt bool) int {
 	if !nt {
 		return 0
 	}
+	if stringslite.HasPrefix(path, "/") {
+		// The forward slash is the cosmo spelling.
+		return 0
+	}
 	if len(path) >= 2 && path[1] == ':' {
-		// A drive letter. Windows does not insist the letter be in A-Z, so
-		// neither does this.
+		// A drive letter. Windows does not insist the letter be in A-Z, so neither does this.
 		return 2
 	}
 	if len(path) == 0 || !ntIsPathSeparator(path[0], nt) {
@@ -110,14 +116,13 @@ func ntVolumeNameLen(path string, nt bool) int {
 	}
 	// A device prefix: \\.\ for a Local Device path, \\?\ or \??\ for a Root
 	// Local Device path. The component after the prefix is part of the volume,
-	// so Clean does not eat the trailing separator of \\?\c:\ .
+	// so Clean does not eat the trailing separator of \\?\c:\.
 	if ntHasPrefixFold(path, `\\.`, nt) || ntHasPrefixFold(path, `\\?`, nt) || ntHasPrefixFold(path, `\??`, nt) {
 		if len(path) == 3 {
 			return 3 // exactly \\., \\? or \??
 		}
 		if ntHasPrefixFold(path[4:], `UNC`, nt) {
-			// The UNC host and share ride along in the volume prefix, which is
-			// what upstream does and what callers expect.
+			// The UNC host and share ride along in the volume prefix, which is what upstream does and what callers expect.
 			return ntValidVolumeNameLen(path, ntUNCLen(path, len(`\\.\UNC\`), nt), nt)
 		}
 		_, rest, ok := ntCutPath(path[4:], nt)
@@ -126,7 +131,7 @@ func ntVolumeNameLen(path string, nt bool) int {
 		}
 		return ntValidVolumeNameLen(path, len(path)-len(rest)-1, nt)
 	}
-	// A UNC root: two separators, a host, then a share.
+	// A UNC root: separators, a host, then a share.
 	if len(path) >= 2 && ntIsPathSeparator(path[1], nt) {
 		return ntValidVolumeNameLen(path, ntUNCLen(path, 2, nt), nt)
 	}

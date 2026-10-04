@@ -172,6 +172,7 @@ var dnsReadConfigTests = []struct {
 }
 
 func TestDNSReadConfig(t *testing.T) {
+	t.Serial()
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 	getHostname = func() (string, error) { return "host.domain.local", nil }
@@ -193,6 +194,7 @@ func TestDNSReadConfig(t *testing.T) {
 }
 
 func TestDNSReadMissingFile(t *testing.T) {
+	t.Serial()
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 	getHostname = func() (string, error) { return "host.domain.local", nil }
@@ -245,6 +247,7 @@ var dnsDefaultSearchTests = []struct {
 }
 
 func TestDNSDefaultSearch(t *testing.T) {
+	t.Serial()
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 
@@ -258,6 +261,7 @@ func TestDNSDefaultSearch(t *testing.T) {
 }
 
 func TestDNSNameLength(t *testing.T) {
+	t.Serial()
 	origGetHostname := getHostname
 	defer func() { getHostname = origGetHostname }()
 	getHostname = func() (string, error) { return "host.domain.local", nil }

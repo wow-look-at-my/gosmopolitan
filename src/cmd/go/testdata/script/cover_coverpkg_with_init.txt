@@ -14,7 +14,7 @@
 # coverage. For packages "x" and "f" (which have no tests), check for
 # 0% stmts covered (as opposed to "no test files").
 
-go test -count=1 -coverprofile=cov.dat -coverpkg=./... ./...
+go test -coverprofile=cov.dat -coverpkg=./... ./...
 stdout '^\s*\?\s+M/n\s+\[no test files\]'
 stdout '^\s*M/x\s+coverage: 0.0% of statements'
 stdout '^\s*M/f\s+coverage: 0.0% of statements'

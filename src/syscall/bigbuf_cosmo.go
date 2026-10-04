@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,27 +10,8 @@ import (
 	"unsafe"
 )
 
-// statfs, fstatfs and uname each fill a struct whose shape belongs to
-// the host. Apple's are far bigger than the Linux ones this package
-// exposes - struct statfs is 2168 bytes against 120, and struct utsname
-// 1280 against 390 - and too big to build inside the nosplit syscall
-// emulation. So the Apple-layout buffer is allocated here, where
-// allocation is legal, and converted on the way back. A Linux host takes
-// the generated wrapper unchanged.
-
-func Statfs(path string, buf *Statfs_t) (err error) {
-	if cosmo.Darwin() {
-		return darwinStatfsPath(path, buf)
-	}
-	return statfs(path, buf)
-}
-
-func Fstatfs(fd int, buf *Statfs_t) (err error) {
-	if cosmo.Darwin() {
-		return darwinStatfsFd(fd, buf)
-	}
-	return fstatfs(fd, buf)
-}
+// statfs, fstatfs and uname each fill a struct whose shape belongs to the
+// host.
 
 func Uname(buf *Utsname) (err error) {
 	if cosmo.Darwin() {
@@ -40,35 +20,47 @@ func Uname(buf *Utsname) (err error) {
 	return uname(buf)
 }
 
-// The size argument is not decoration. Both emulations refuse a buffer
-// smaller than the Apple struct - arm64 in Go, amd64 with a compare
-// ahead of the raw XNU call - so a caller that reached SYS_STATFS with a
-// Linux Statfs_t is refused instead of overrun.
+// darwinStatfsSize is the size of Apple's struct statfs.
+const darwinStatfsSize = unsafe.Sizeof(cosmo.DarwinStatfs{})
 
-func darwinStatfsPath(path string, buf *Statfs_t) (err error) {
-	p, err := BytePtrFromString(path)
-	if err != nil {
-		return err
-	}
-	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_STATFS, uintptr(unsafe.Pointer(p)),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
-	}
-	darwinStatfsToLinux(buf, &ast)
-	return nil
+// darwinLinuxStatfs reports whether a Syscall or Syscall6 is a statfs or
+// fstatfs made with a Linux Statfs_t.
+//
+//go:nosplit
+func darwinLinuxStatfs(trap, a3 uintptr) bool {
+	return cosmo.Darwin() && (trap == SYS_STATFS || trap == SYS_FSTATFS) && a3 < darwinStatfsSize
 }
 
-func darwinStatfsFd(fd int, buf *Statfs_t) (err error) {
+// darwinStatfsLinux serves a statfs or fstatfs for a Linux Statfs_t on a
+// macOS host. Syscall and Syscall6 call it before entersyscall, where the
+// Apple buffer can still be allocated.
+//
+//go:nosplit
+func darwinStatfsLinux(trap, a1, a2 uintptr) (r1, r2 uintptr, err Errno) {
+	buf := (*Statfs_t)(unsafe.Pointer(a2))
+	if trap == SYS_STATFS {
+		return darwinStatfsInto(trap, 0, unsafe.Pointer(a1), buf)
+	}
+	return darwinStatfsInto(trap, a1, nil, buf)
+}
+
+// darwinStatfsInto runs statfs (path set) or fstatfs (fd) into an Apple
+// struct statfs and converts the result into buf.
+func darwinStatfsInto(trap, fd uintptr, path unsafe.Pointer, buf *Statfs_t) (r1, r2 uintptr, err Errno) {
+	if buf == nil {
+		return ^uintptr(0), 0, EFAULT
+	}
 	var ast cosmo.DarwinStatfs
-	_, _, e := Syscall(SYS_FSTATFS, uintptr(fd),
-		uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
-	if e != 0 {
-		return errnoErr(e)
+	if path != nil {
+		r1, r2, err = Syscall(trap, uintptr(path), uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	} else {
+		r1, r2, err = Syscall(trap, fd, uintptr(unsafe.Pointer(&ast)), unsafe.Sizeof(ast))
+	}
+	if err != 0 {
+		return r1, r2, err
 	}
 	darwinStatfsToLinux(buf, &ast)
-	return nil
+	return r1, r2, 0
 }
 
 // Apple mount flags (sys/mount.h) and the Linux statfs f_flags bits
@@ -115,17 +107,13 @@ func darwinMntFlagsToLinux(f uint32) int64 {
 
 // darwinStatfsToLinux fills a Linux-layout Statfs_t from an Apple one.
 //
-// Two Linux fields have no Apple source. Type keeps Apple's own
+// Linux fields have no Apple source. Type keeps Apple's own
 // filesystem-type number rather than a Linux magic, the same choice
-// Stat_t.Dev makes for device numbers. Namelen stays zero: Apple's
-// statfs has no maximum-name-length field, and a guessed 255 would be a
-// number this code never measured.
+// Stat_t.Dev makes for device numbers.
 func darwinStatfsToLinux(dst *Statfs_t, src *cosmo.DarwinStatfs) {
 	*dst = Statfs_t{}
 	dst.Type = int64(src.Type)
-	// Apple's f_bsize is the filesystem's fundamental block size, which
-	// is what Linux reports in both Bsize and Frsize. Its f_iosize (the
-	// optimal transfer size) has no Linux statfs counterpart.
+	// Apple's f_bsize is the filesystem's fundamental block size, which is what Linux reports in both Bsize and Frsize.
 	dst.Bsize = int64(src.Bsize)
 	dst.Frsize = int64(src.Bsize)
 	dst.Blocks = src.Blocks
@@ -137,9 +125,8 @@ func darwinStatfsToLinux(dst *Statfs_t, src *cosmo.DarwinStatfs) {
 	dst.Flags = darwinMntFlagsToLinux(src.Flags)
 }
 
-// darwinUtsField copies one NUL-terminated Apple utsname field into a
-// Linux one. Apple gives each field 256 bytes and Linux 65, so a longer
-// value is truncated with its terminator kept.
+// darwinUtsField copies one NUL-terminated Apple utsname field into a Linux
+// one.
 func darwinUtsField(dst *[65]byte, src []byte) {
 	n := 0
 	for n < len(src) && src[n] != 0 && n < len(dst)-1 {

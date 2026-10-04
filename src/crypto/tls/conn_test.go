@@ -47,6 +47,7 @@ var paddingTests = []struct {
 }
 
 func TestRemovePadding(t *testing.T) {
+	t.Serial()
 	for i := 1; i < len(padding255Bad); i++ {
 		padding255Bad[i] = 255
 		padding255Good[i] = 255

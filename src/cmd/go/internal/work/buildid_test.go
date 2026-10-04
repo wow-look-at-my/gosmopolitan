@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -29,14 +28,15 @@ func TestParseToolID(t *testing.T) {
 		{"compile", false, "compile version go1.9.1 X:framepointer\n", "compile version go1.9.1 X:framepointer", true},
 		// Development branches use the content ID part of the tool's build ID.
 		{"compile", false, "compile version devel go1.99-abc buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
-		// The cosmo fork stamps the same release-style version into every
-		// build, so its tools report their own build ID too, and the tool ID
-		// is the content ID part — never the constant version line.
+		// The cosmo fork stamps the same release-style version into every build, so its tools report their own build ID too.
 		{"compile", false, "compile version go1.26.4cosmo buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
 		{"compile", false, "compile version go1.26.4cosmo X:fieldtrack buildID=aaaa/bbbb/cccc/dddd\n", "dddd", true},
 		{"link", false, "link version go1.26.4cosmo buildID=ee/ff\n", "ff", true},
 		// An alternative vet tool may print any leading name.
 		{"vet", true, "myanalyzer version devel comments-go-here buildID=11/22\n", "22", true},
+		// A stand-in tool with no stamped build ID parses to an empty ID, which toolID then replaces with the file's hash.
+		{"compile", false, "compile.test version go1.27.0-cosmo buildID=\n", "", false},
+		{"compile", false, "compile version go1.27.0-cosmo buildID=\n", "", true},
 		// Malformed lines.
 		{"compile", false, "", "", false},
 		{"compile", false, "compile version\n", "", false},
@@ -51,8 +51,7 @@ func TestParseToolID(t *testing.T) {
 		}
 	}
 
-	// The incident property, at the parser level: two fork builds report the
-	// same version but different build IDs, and must get different tool IDs.
+	// The incident property, at the parser level: fork builds report the same version but different build IDs.
 	id1, _ := parseToolID("compile", false, "compile version go1.26.4cosmo buildID=aa/bb\n")
 	id2, _ := parseToolID("compile", false, "compile version go1.26.4cosmo buildID=aa/cc\n")
 	if id1 == id2 {
@@ -60,38 +59,70 @@ func TestParseToolID(t *testing.T) {
 	}
 }
 
-// TestCosmoToolIDTracksToolContent is the regression test for the 2026-07-20
-// consumer cache-poisoning incident. The fork stamps the same release-style
-// version (go1.26.4cosmo) into every build, so cmd/go's tool IDs used to be
-// identical for any two fork builds. Action IDs therefore collided across
-// builds, and build caches — a consumer's local GOCACHE, or a shared cache
-// tier that survives across toolchain updates — served objects
-// compiled by an older fork build into links done by a newer one, producing
-// binaries that crash at startup.
-//
-// The test takes the real compile binary and makes a second copy whose
-// content differs (its embedded build ID rewritten — a stand-in for a
-// genuinely different fork build, which differs in exactly this way and
-// more). Both claim the same version, but cmd/go must compute different tool
-// IDs for them. Before the fix, -V=full printed only the constant version
-// line for both, so the tool IDs were equal and this test fails.
-func TestCosmoToolIDTracksToolContent(t *testing.T) {
+// TestToolIDHashesUnstampedTool checks that a tool which prints an empty
+// build ID gets a tool ID from its own bytes. cmd/compile's test binary
+// stands in for compile under TestScript and prints exactly that; the empty
+// ID.
+func TestToolIDHashesUnstampedTool(t *testing.T) {
+	t.Serial() // VetTool is a package variable.
+	dir := t.TempDir()
+	tool := filepath.Join(dir, "fakevet")
+	body := "#!/bin/sh\necho 'fakevet version go1.27.0-cosmo buildID='\n"
+	if runtime.GOOS == "windows" {
+		// NT runs neither a shebang nor an extensionless file.
+		tool += ".bat"
+		body = "@echo fakevet version go1.27.0-cosmo buildID=\r\n"
+	} else {
+		testenv.MustHaveExecPath(t, "sh")
+	}
+	if err := os.WriteFile(tool, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := VetTool
+	VetTool = []string{tool}
+	defer func() { VetTool = old }()
+
+	b := &Builder{}
+	got := b.toolID("vet")
+	if got == "" {
+		t.Fatal("toolID is empty for a tool that prints no build ID")
+	}
+	// A vet tool's ID carries its name ahead of the content, since vet and fix
+	// can be one binary.
+	if want := filepath.Base(tool) + " " + b.fileHash(tool); got != want {
+		t.Errorf("toolID = %q, want the tool name and file hash %q", got, want)
+	}
+}
+
+// TestCosmoToolIDNamesTheToolNotTheBinary takes the real compile binary and
+// makes a second copy whose own build ID is rewritten, which is what a
+// rebuild of the binary carrying the tools does when only the carrier
+// changed. Both must report the same tool ID, and a real one: the ID is
+// stamped from the tool's packages at link time (see linkedToolIDs), so a
+// compiler that is the same code keeps its cache entries from whichever
+// binary carries it, and a compiler that is different code moves the ID
+// through its archives.
+func TestCosmoToolIDNamesTheToolNotTheBinary(t *testing.T) {
 	testenv.MustHaveGoBuild(t)
 	testenv.MustHaveExec(t)
 	if !strings.Contains(runtime.Version(), "cosmo") {
 		t.Skipf("test exercises the cosmo fork's tool ID scheme; running under %s", runtime.Version())
 	}
 
-	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile")
+	// NT names the tool with an extension, and it runs nothing without one.
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
+	src := filepath.Join(testenv.GOROOT(t), "pkg", "tool", runtime.GOOS+"_"+runtime.GOARCH, "compile"+exe)
 	data, err := os.ReadFile(src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two copies in separate directories so both run as plain "compile"
-	// (tools print their argv[0] basename in the -V=full line).
+	// Copies in separate directories so both run as plain "compile".
 	dir := t.TempDir()
-	tool1 := filepath.Join(dir, "build1", "compile")
-	tool2 := filepath.Join(dir, "build2", "compile")
+	tool1 := filepath.Join(dir, "build1", "compile"+exe)
+	tool2 := filepath.Join(dir, "build2", "compile"+exe)
 	for _, name := range []string{tool1, tool2} {
 		if err := os.MkdirAll(filepath.Dir(name), 0o777); err != nil {
 			t.Fatal(err)
@@ -101,9 +132,7 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 		}
 	}
 
-	// Give tool2 different content by rewriting its embedded build ID, the
-	// same way cmd/go's updateBuildID writes final build IDs. Every non-'/'
-	// byte of the ID changes, so the content ID half necessarily differs.
+	// Give tool2 different content by rewriting its embedded build ID.
 	oldID, err := buildid.ReadFile(tool2)
 	if err != nil {
 		t.Fatal(err)
@@ -158,7 +187,7 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 		t.Fatalf("tools report different name/version:\n\t%q\n\t%q", out1, out2)
 	}
 
-	// ...but cmd/go must compute different tool IDs for them.
+	// ...and the same tool ID, which is not the binary's own build ID.
 	id1, ok := parseToolID("compile", false, out1)
 	if !ok {
 		t.Fatalf("parseToolID failed for %q", out1)
@@ -167,9 +196,15 @@ func TestCosmoToolIDTracksToolContent(t *testing.T) {
 	if !ok {
 		t.Fatalf("parseToolID failed for %q", out2)
 	}
-	if id1 == id2 {
-		t.Errorf("two content-different compile binaries with the same version produced the same tool ID %q:\n\t%q\n\t%q\n"+
-			"different fork builds would collide in the build cache and serve each other stale objects",
-			id1, out1, out2)
+	if id1 == "" {
+		t.Fatalf("compile reports no tool ID: %q", out1)
+	}
+	if id1 != id2 {
+		t.Errorf("the carrier's build ID changed and the compiler's tool ID moved with it, %q to %q:\n\t%q\n\t%q\n"+
+			"every rebuild of the binary would recompile everything it had cached",
+			id1, id2, out1, out2)
+	}
+	if strings.Contains(oldID, id1) || strings.Contains(newID, id1) {
+		t.Errorf("the compiler's tool ID %q is part of the binary's own build ID", id1)
 	}
 }

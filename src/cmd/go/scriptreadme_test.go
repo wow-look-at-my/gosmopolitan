@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package main_test
+package gocmd_test
 
 import (
 	"bytes"
@@ -118,7 +118,7 @@ Scripts also have access to other environment variables, including:
 	GOEXE=<executable file suffix: .exe on Windows, empty on other systems>
 	GOOS=<target GOOS>
 	GOPATH=$WORK/gopath
-	GOPROXY=<local module proxy serving from cmd/go/testdata/mod>
+	TESTGO_GOPROXY=<local module proxy serving from cmd/go/testdata/mod>
 	GOROOT=<actual GOROOT>
 	TESTGO_GOROOT=<GOROOT used to build cmd/go, for use in tests that may change GOROOT>
 	HOME=/no-home

@@ -7,3 +7,10 @@ package paramdefaults
 func Repeat(s string = "x", n int = 2, loud bool = true) string { return s }
 
 func Plain(s string) string { return s }
+
+type Budget struct {
+	ints, floats int
+	Wide         bool
+}
+
+func WithBudget(b Budget = Budget{ints: 9, Wide: true}) int { return b.ints }

@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && arm64
 
@@ -28,13 +27,6 @@ const (
 	_SYSLIB_VERSION = 10
 
 	// _SYSLIB_MIN_VERSION is the oldest Syslib this runtime accepts.
-	// The runtime reads fields up to sigaltstack (v5) unconditionally
-	// and the darwin syscall emulation needs dlsym (v6); cosmopolitan
-	// libc itself refuses to load below v8 ("MANDATORY" marker in
-	// ape-m1.c), so every loader in the wild that can run cosmo
-	// binaries is v8+. Requiring 8 makes everything through dlerror
-	// unconditionally addressable; v9/v10 entries (pthread_cpu_
-	// number_np, sysctl*) stay version-gated at their use sites.
 	_SYSLIB_MIN_VERSION = 8
 )
 
@@ -46,7 +38,7 @@ type syslib struct {
 	version int32
 	// Function pointers to Apple APIs
 	fork                                   uintptr // long (*fork)(void)
-	pipe                                   uintptr // long (*pipe)(int[2])
+	pipe                                   uintptr
 	clock_gettime                          uintptr // long (*clock_gettime)(int, struct timespec *)
 	nanosleep                              uintptr // long (*nanosleep)(const struct timespec *, struct timespec *)
 	mmap                                   uintptr // long (*mmap)(void *, size_t, int, int, int, off_t)
@@ -108,16 +100,9 @@ type syslib struct {
 	sysctlnametomib uintptr
 }
 
-// __syslib is the Syslib pointer provided by the APE loader.
-// Set by rt0_cosmo_arm64.s at startup. Only valid on macOS ARM64.
-//
 //go:linkname __syslib
 var __syslib *syslib
 
-// __hostos indicates the host operating system.
-// Set by rt0_cosmo_arm64.s at startup.
-// 0=Linux, 8=XNU/macOS, 9=FreeBSD, etc.
-//
 //go:linkname __hostos
 var __hostos int32
 
@@ -134,68 +119,34 @@ func cputicks() int64 {
 	return nanotime()
 }
 
-// libcCall calls a function pointer from the Syslib.
-// Used on macOS ARM64 to call Apple APIs.
-//
 //go:nosplit
 //go:noescape
 func libcCall(fn, arg unsafe.Pointer) int64
 
-// cosmoLibcCall6 calls a C function pointer (from the Syslib or resolved
-// via dlsym) with up to six integer arguments, following the Apple ARM64
-// calling convention. Implemented in sys_cosmo_arm64.s.
-//
-// The syscall packages call this from their own assembly, so the symbol
-// needs a linkname push for cmd/link's cross-package reference check.
-//
 //go:linkname cosmoLibcCall6
 //go:nosplit
 //go:noescape
 func cosmoLibcCall6(fn, a1, a2, a3, a4, a5, a6 uintptr) uintptr
 
-// cosmoLibcCallVariadic1 calls a VARIADIC C function pointer with two
-// fixed arguments and one variadic argument, which arm64-apple requires
-// on the stack rather than in a register. Implemented in
-// sys_cosmo_arm64.s; see the comment there for what a fixed-argument
-// trampoline silently breaks.
-//
 //go:linkname cosmoLibcCallVariadic1
 //go:nosplit
 //go:noescape
 func cosmoLibcCallVariadic1(fn, a1, a2, v1 uintptr) uintptr
 
-// cosmo_xlat_errno_r0 and cosmo_xlat_oflags_r2 are register-convention
-// helpers in sys_cosmo_arm64.s: the first translates an Apple errno in R0
-// to its Linux value, the second translates Linux open(2) flags in R2 to
-// Apple's. Neither takes Go arguments and neither is callable from Go;
-// the syscall packages reach them from their own assembly. They are
-// declared here only so the symbols carry a linkname push, which is what
-// cmd/link's cross-package reference check looks for.
-//
 //go:linkname cosmo_xlat_errno_r0
 func cosmo_xlat_errno_r0()
 
 //go:linkname cosmo_xlat_oflags_r2
 func cosmo_xlat_oflags_r2()
 
-// _RTLD_DEFAULT is Apple's RTLD_DEFAULT dlsym pseudo-handle ((void *)-2):
-// search every image loaded in the process, i.e. the loader's libSystem.
+// cosmoCTP loads libcosmo's thread pointer into R28 before a call into C (rt0_cosmo_arm64.s).
+func cosmoCTP()
+
 const _RTLD_DEFAULT = ^uintptr(1)
 
 // cosmoDlsym resolves a symbol from the host's libSystem via the Syslib's
-// dlsym (available since Syslib v6, 2023-11-03; the loader embedded in our
-// binaries is v10). Returns 0 if dlsym is unavailable or the lookup fails.
-// name must be a NUL-terminated C string.
-//
-// This is how the runtime obtains host functions the Syslib does not
-// export (getpid and friends). The alternative - extending the embedded
-// ape-m1.c Syslib struct and bumping SYSLIB_VERSION - was rejected: the
-// compiled loader is cached at ${TMPDIR:-$HOME}/.ape-1.10 keyed only by
-// the APE loader version string, and any existing Mach-O there (including
-// one compiled from an upstream cosmopolitan binary's embedded source) is
-// reused as-is, so a stale v10 loader would silently satisfy the cache and
-// the new fields would never reliably exist. dlsym works with every v6+
-// loader in the wild, cached or fresh.
+// dlsym (available since Syslib v6,; the loader embedded in our binaries is
+// v10).
 func cosmoDlsym(name *byte) uintptr {
 	lib := __syslib
 	if lib == nil || lib.version < 6 || lib.dlsym == 0 {
@@ -204,9 +155,7 @@ func cosmoDlsym(name *byte) uintptr {
 	return cosmoLibcCall6(lib.dlsym, _RTLD_DEFAULT, uintptr(unsafe.Pointer(name)), 0, 0, 0, 0)
 }
 
-// cosmoDarwinGetpidFn is the address of Apple libc getpid, resolved at
-// startup by osArchInit (the Syslib does not export getpid). Zero when
-// unresolved. Read by ·getpid in sys_cosmo_arm64.s.
+// cosmoDarwinGetpidFn is the address of Apple libc getpid.
 var cosmoDarwinGetpidFn uintptr
 
 var (
@@ -233,10 +182,7 @@ var (
 	dlsymNamePread      = []byte("pread\x00")
 	dlsymNamePwrite     = []byte("pwrite\x00")
 	dlsymNameLseek      = []byte("lseek\x00")
-	// Apple's raw directory-read syscall wrapper (what readdir uses
-	// internally). Exported from libSystem; the C symbol is
-	// __getdirentries64 (dlsym takes the name without the Mach-O
-	// leading underscore, exactly like __error below).
+	// Apple's raw directory-read syscall wrapper (what readdir uses internally).
 	dlsymNameGetdirentries = []byte("__getdirentries64\x00")
 	dlsymNameError         = []byte("__error\x00")
 	dlsymNameKqueue        = []byte("kqueue\x00")
@@ -267,9 +213,7 @@ var (
 	dlsymNameWait4   = []byte("wait4\x00")
 	dlsymNameKill    = []byte("kill\x00")
 
-	// File and metadata layer. arm64 has only the 64-bit-inode ABI, so
-	// stat/statfs entries carry no $INODE64 suffix the way the x86_64
-	// ones do.
+	// File and metadata layer. arm64 has only the 64-bit-inode ABI.
 	dlsymNameFsync     = []byte("fsync\x00")
 	dlsymNameFtruncate = []byte("ftruncate\x00")
 	dlsymNameTruncate  = []byte("truncate\x00")
@@ -288,6 +232,7 @@ var (
 	dlsymNameIoctl     = []byte("ioctl\x00")
 	dlsymNameMincore   = []byte("mincore\x00")
 	dlsymNameMadvise   = []byte("madvise\x00")
+	dlsymNameSysctl    = []byte("sysctl\x00")
 	dlsymNameStatfs    = []byte("statfs\x00")
 	dlsymNameFstatfs   = []byte("fstatfs\x00")
 	dlsymNameSendfile  = []byte("sendfile\x00")
@@ -305,47 +250,54 @@ var (
 	dlsymNameGetrlimit    = []byte("getrlimit\x00")
 	dlsymNameSetrlimit    = []byte("setrlimit\x00")
 	dlsymNameUname        = []byte("uname\x00")
+	dlsymNameClockNsec    = []byte("clock_gettime_nsec_np\x00")
 	dlsymNameGetrusage    = []byte("getrusage\x00")
 	dlsymNameGettimeofday = []byte("gettimeofday\x00")
 )
 
-// cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2)
-// and kevent(2), resolved at startup; the darwin netpoller
-// (netpoll_cosmo_xnu.go) is built on them. Zero when unresolved
-// (netpollinit then fails visibly).
+// cosmoDarwinKqueueFn and cosmoDarwinKeventFn are Apple libc kqueue(2) and
+// kevent(2), resolved at startup.
 var (
 	cosmoDarwinKqueueFn uintptr
 	cosmoDarwinKeventFn uintptr
 )
 
-// cosmoDarwinSetitimerFn is Apple libc setitimer(2), resolved at
-// startup; darwinSetitimer (signal_cosmo_xnu.go) arms the SIGPROF
-// profiling timer through it (the Syslib has no setitimer entry).
-// Zero when unresolved: arming silently does nothing, which surfaces
-// as a zero-sample profile - the runtimeprobe cpuprof check turns
-// that into a loud FAIL.
+// cosmoDarwinSetitimerFn is Apple libc setitimer(2), resolved at startup.
 var cosmoDarwinSetitimerFn uintptr
 
-// cosmoDarwinErrorFn is Apple's __error(), the address-of-errno function,
-// resolved at startup for runtime-internal errno fetches. (The syscall
-// package's darwin emulation receives its own copy via SetDarwinFns.)
+// cosmoDarwinErrorFn is Apple's __error(), the address-of-errno function.
 var cosmoDarwinErrorFn uintptr
 
-// cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by
-// the runtime's own fcntl on darwin. Zero when unresolved.
+// cosmoDarwinFcntlFn is Apple libc fcntl, resolved at startup; used by the runtime's own fcntl on darwin.
 var cosmoDarwinFcntlFn uintptr
 
-// cosmoDarwinMincoreFn is Apple libc mincore, resolved at startup and
-// read by ·mincore's darwin branch in sys_cosmo_arm64.s. Zero when
-// unresolved, which that branch reports as a failure rather than
-// answering for a page it never asked about.
+// cosmoDarwinClockNsecFn is Apple's clock_gettime_nsec_np, resolved at startup and read by nanotime1's darwin branch.
+var cosmoDarwinClockNsecFn uintptr
+
+// cosmoDarwinMincoreFn is Apple libc mincore.
 var cosmoDarwinMincoreFn uintptr
 
-// cosmoDarwinMadviseFn is Apple libc madvise, resolved at startup and
-// read by ·madvise's darwin branch in sys_cosmo_arm64.s. Zero when
-// unresolved, which that branch reports as a failure: sysUnused reads
-// one and falls back, where a fake success left the pages held.
+// cosmoDarwinMadviseFn is Apple libc madvise.
 var cosmoDarwinMadviseFn uintptr
+
+// cosmoDarwinKillFn is Apple libc kill, resolved at startup and read by darwinRaiseproc.
+var cosmoDarwinKillFn uintptr
+
+// cosmoDarwinSysctlFn is Apple libc sysctl, the MIB-ARRAY form, resolved at startup.
+var cosmoDarwinSysctlFn uintptr
+
+// cosmoDarwinSysctlCall calls Apple's sysctl(3) with a numeric MIB.
+// Plain integer arguments, so the ordinary call works: sysctl is not
+// variadic.
+func cosmoDarwinSysctlCall(mib *uint32, miblen uint32, old unsafe.Pointer, oldlen *uintptr, newp unsafe.Pointer, newlen uintptr) int32 {
+	if cosmoDarwinSysctlFn == 0 {
+		return -1
+	}
+	return int32(cosmoLibcCall6(cosmoDarwinSysctlFn,
+		uintptr(unsafe.Pointer(mib)), uintptr(miblen),
+		uintptr(old), uintptr(unsafe.Pointer(oldlen)),
+		uintptr(newp), newlen))
+}
 
 // osArchInit resolves darwin host functions at startup and hands them to
 // the cosmo syscall package's darwin emulation. It runs from osinit, on
@@ -356,10 +308,7 @@ func osArchInit() {
 		return
 	}
 	cosmoCheckSyslib()
-	// On XNU, Ms park on pthread primitives exactly like GOOS=darwin, so
-	// sigsend must use the pipe-based sigNote instead of notewakeup
-	// (sigqueue_note_cosmo_arm64.go). Set before initsig installs any
-	// signal handler.
+	// On XNU, Ms park on pthread primitives exactly like GOOS=darwin, so sigsend must use the pipe-based sigNote instead of notewakeup.
 	sigNoteUsed = true
 	cosmoSemaInit()
 	cosmoDarwinGetpidFn = cosmoDlsym(&dlsymNameGetpid[0])
@@ -370,6 +319,9 @@ func osArchInit() {
 	cosmoDarwinSetitimerFn = cosmoDlsym(&dlsymNameSetitimer[0])
 	cosmoDarwinMincoreFn = cosmoDlsym(&dlsymNameMincore[0])
 	cosmoDarwinMadviseFn = cosmoDlsym(&dlsymNameMadvise[0])
+	cosmoDarwinSysctlFn = cosmoDlsym(&dlsymNameSysctl[0])
+	cosmoDarwinKillFn = cosmoDlsym(&dlsymNameKill[0])
+	cosmoDarwinClockNsecFn = cosmoDlsym(&dlsymNameClockNsec[0])
 	cosmo.SetDarwinFns(&cosmo.DarwinFns{
 		Getpid:        cosmoDarwinGetpidFn,
 		Getppid:       cosmoDlsym(&dlsymNameGetppid[0]),
@@ -432,6 +384,7 @@ func osArchInit() {
 		Mknod:     cosmoDlsym(&dlsymNameMknod[0]),
 		Utimensat: cosmoDlsym(&dlsymNameUtimensat[0]),
 		Flock:     cosmoDlsym(&dlsymNameFlock[0]),
+		Madvise:   cosmoDlsym(&dlsymNameMadvise[0]),
 		Fdatasync: cosmoDlsym(&dlsymNameFdatasync[0]),
 		Sync:      cosmoDlsym(&dlsymNameSync[0]),
 		Ioctl:     cosmoDlsym(&dlsymNameIoctl[0]),
@@ -460,8 +413,8 @@ func osArchInit() {
 	})
 }
 
-// cosmoSyslibGetentropy returns the Syslib getentropy pointer, present
-// since Syslib v5 (2023-10-09).
+// cosmoSyslibGetentropy returns the Syslib getentropy pointer, present since
+// Syslib v5.
 func cosmoSyslibGetentropy() uintptr {
 	lib := __syslib
 	if lib == nil || lib.version < 5 {
@@ -470,15 +423,10 @@ func cosmoSyslibGetentropy() uintptr {
 	return lib.getentropy
 }
 
-// cosmoCheckSyslib dies with a clear message if the APE loader's Syslib
-// is older than what this runtime needs, instead of reading past the end
-// of a shorter struct (undefined behavior with confusing crashes). Runs
-// from osinit, before anything else touches version-dependent fields.
-// (rt0 already verified the magic before setting __hostos to XNU.)
-//
-// The failure write itself needs Syslib write (v4, offset 232); for a
-// hypothetical pre-v4 loader the message may be lost, but the process
-// still dies here rather than corrupting itself later.
+// cosmoCheckSyslib dies with a clear message if the APE loader's Syslib is
+// older than what this runtime needs, instead of reading past the end of a
+// shorter struct (undefined behavior with confusing crashes). Runs from
+// osinit, before anything else touches version-dependent fields.
 func cosmoCheckSyslib() {
 	lib := __syslib
 	if lib != nil && lib.magic == _SYSLIB_MAGIC && lib.version >= _SYSLIB_MIN_VERSION {
@@ -488,20 +436,16 @@ func cosmoCheckSyslib() {
 	exit(127)
 }
 
-// mstart_stub_cosmo is the pthread_create entry point for macOS threads;
-// implemented in sys_cosmo_arm64.s (Go declaration for vet/asmdecl).
+// mstart_stub_cosmo is the pthread_create entry point for macOS threads.
 func mstart_stub_cosmo()
 
-// pipe2 creates a pipe with the given Linux O_NONBLOCK/O_CLOEXEC flags.
-// On Linux hosts it is the pipe2 syscall. macOS has no pipe2 and the
-// Syslib's pipe takes no flags, so the flags are applied with fcntl
-// afterwards (the darwin dispatcher translates cmd/arg encodings). If
-// fcntl is unavailable and flags were requested, fail with ENOSYS
-// instead of silently returning descriptors without the requested
-// semantics - runtime users (nonblockingPipe for the netpoller) depend
-// on the flags actually being set.
-//
-// Errno convention matches the Linux asm path: 0 or NEGATIVE errno.
+// pipe2 creates a pipe with the given Linux O_NONBLOCK/O_CLOEXEC flags. On
+// Linux hosts it is the pipe2 syscall. macOS has no pipe2 and the Syslib's
+// pipe takes no flags, so the flags are applied with fcntl afterwards (the
+// darwin dispatcher translates cmd/arg encodings). If fcntl is unavailable
+// and flags were requested, fail with ENOSYS instead of silently returning
+// descriptors without the requested semantics - runtime users
+// (nonblockingPipe for the netpoller) depend on the flags being set.
 func pipe2(flags int32) (r, w int32, errno int32) {
 	if !isdarwin() {
 		return pipe2Linux(flags)
@@ -547,13 +491,8 @@ func pipe2Linux(flags int32) (r, w int32, errno int32)
 //go:noescape
 func cosmo_pipe_trampoline(fds *int32) int32
 
-// setitimer arms the profiling interval timer (the only runtime
-// caller is setProcessCPUProfilerTimer). Linux hosts use the raw
-// syscall; XNU hosts translate the itimerval layout (Apple's tv_usec
-// is 32-bit) and call Apple libc setitimer resolved via dlsym
-// (darwinSetitimer, signal_cosmo_xnu.go) - the Syslib has no
-// setitimer entry, and extending it is rejected per the cosmoDlsym
-// decision record above.
+// setitimer arms the profiling interval timer (the only runtime caller is
+// setProcessCPUProfilerTimer).
 func setitimer(mode int32, new, old *itimerval) {
 	if isdarwin() {
 		darwinSetitimer(mode, new, old)
@@ -562,16 +501,10 @@ func setitimer(mode int32, new, old *itimerval) {
 	setitimerLinux(mode, new, old)
 }
 
-// setitimerLinux is the raw Linux setitimer syscall
-// (sys_cosmo_arm64.s).
-//
 //go:noescape
 func setitimerLinux(mode int32, new, old *itimerval)
 
-// minitProcid returns the value minit stores in m.procid: on macOS the
-// FULL pthread_t from pthread_self (gettid's uint32 return would
-// truncate the pointer, and pthread_kill - signalM, async preemption -
-// needs the real value), on Linux the tid.
+// minitProcid returns the value minit stores in m.procid.
 //
 //go:nosplit
 func minitProcid() uint64 {
@@ -582,9 +515,8 @@ func minitProcid() uint64 {
 }
 
 // darwinSignalM sends sig (a LINUX signal number) to mp's thread with
-// pthread_kill. Signals without an Apple equivalent (the realtime
-// range, e.g. sigPerThreadSyscall) are dropped: they cannot be
-// delivered on an XNU host.
+// pthread_kill. Signals without an Apple equivalent (the realtime range, e.g.
+// sigPerThreadSyscall) are dropped: they cannot be delivered on an XNU host.
 func darwinSignalM(mp *m, sig int) {
 	asig := cosmoSigL2A(uint32(sig))
 	if asig == 0 {
@@ -597,17 +529,23 @@ func darwinSignalM(mp *m, sig int) {
 	cosmoLibcCall6(lib.pthread_kill, uintptr(mp.procid), uintptr(asig), 0, 0, 0, 0)
 }
 
+//go:nosplit
+func darwinRaiseproc(sig uint32) {
+	asig := cosmoSigL2A(sig)
+	if asig == 0 || cosmoDarwinKillFn == 0 || cosmoDarwinGetpidFn == 0 {
+		return
+	}
+	pid := cosmoLibcCall6(cosmoDarwinGetpidFn, 0, 0, 0, 0, 0, 0)
+	cosmoLibcCall6(cosmoDarwinKillFn, uintptr(pid), uintptr(asig), 0, 0, 0, 0)
+}
+
 // cosmoDarwinKqueueSupported reports whether the darwin netpoller can
 // reach Apple libc's kqueue/kevent on this host.
 func cosmoDarwinKqueueSupported() bool {
 	return cosmoDarwinKqueueFn != 0 && cosmoDarwinKeventFn != 0
 }
 
-// cosmoDarwinKqueue calls Apple libc kqueue(2). Returns the new kqueue
-// descriptor, or (-1, errno) with a LINUX errno number on failure.
-//
-// Only converted 32-bit values leave this function: C int returns arrive
-// in w0 with the upper half of x0 undefined.
+// cosmoDarwinKqueue calls Apple libc kqueue(2).
 func cosmoDarwinKqueue() (int32, int32) {
 	if cosmoDarwinKqueueFn == 0 {
 		return -1, 38 // ENOSYS
@@ -619,9 +557,7 @@ func cosmoDarwinKqueue() (int32, int32) {
 	return r, 0
 }
 
-// cosmoDarwinKevent calls Apple libc kevent(2). Returns the number of
-// events placed in ev, or (-1, errno) with a LINUX errno number on
-// failure.
+// cosmoDarwinKevent calls Apple libc kevent(2).
 func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32, ts *timespec) (int32, int32) {
 	if cosmoDarwinKeventFn == 0 {
 		return -1, 38 // ENOSYS
@@ -639,10 +575,8 @@ func cosmoDarwinKevent(kq int32, ch *keventt, nch int32, ev *keventt, nev int32,
 	return r, 0
 }
 
-// cosmoDarwinErrno fetches the calling thread's errno via Apple's
-// __error() and translates it to Linux numbering. Returns EIO (5) if
-// __error is unavailable (cause unknowable). Call it immediately after a
-// failed libc call, before anything else can clobber errno.
+// cosmoDarwinErrno fetches the calling thread's errno via Apple's __error()
+// and translates it to Linux numbering.
 //
 //go:nosplit
 func cosmoDarwinErrno() int32 {
@@ -657,19 +591,14 @@ func cosmoDarwinErrno() int32 {
 	return int32(cosmoXlatErrno(uintptr(uint32(apple))))
 }
 
-// cosmoXlatErrno translates a positive Apple errno to the Linux value.
-// Assembly FP wrapper over cosmo_xlat_errno_r0 (sys_cosmo_arm64.s) so
-// the byte table has a single definition.
-//
 //go:nosplit
 func cosmoXlatErrno(errno uintptr) uintptr
 
 var sysctlHwNcpu = []byte("hw.ncpu\x00")
 
-// cosmoDarwinNumCPU returns the host's CPU count on macOS via the
-// Syslib's sysctlbyname("hw.ncpu"), available since Syslib v10
-// (2024-05-02; the loader embedded in our binaries is v10). Returns 0
-// when unavailable so the caller can fall back.
+// cosmoDarwinNumCPU returns the host's CPU count on macOS via the Syslib's
+// sysctlbyname("hw.ncpu"), available since Syslib v10 (the loader embedded in
+// our binaries is v10).
 func cosmoDarwinNumCPU() int32 {
 	lib := __syslib
 	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
@@ -677,8 +606,6 @@ func cosmoDarwinNumCPU() int32 {
 	}
 	var n uint32
 	sz := uintptr(unsafe.Sizeof(n))
-	// sysctlbyname is sysret-wrapped by the loader: 0 on success,
-	// -errno (Apple numbering) on failure.
 	r := cosmoLibcCall6(lib.sysctlbyname,
 		uintptr(unsafe.Pointer(&sysctlHwNcpu[0])),
 		uintptr(unsafe.Pointer(&n)),
@@ -688,6 +615,38 @@ func cosmoDarwinNumCPU() int32 {
 		return 0
 	}
 	return int32(n)
+}
+
+var sysctlKernHostname = []byte("kern.hostname\x00")
+
+// cosmoDarwinHostname reads kern.hostname, which is where macOS keeps
+// the machine's name and where a native darwin build's os.Hostname reads
+// it. Answers "" when the key cannot be read, which the caller reports
+// rather than papers over.
+func cosmoDarwinHostname() string {
+	lib := __syslib
+	if lib == nil || lib.version < 10 || lib.sysctlbyname == 0 {
+		return ""
+	}
+	var buf [512]byte
+	sz := uintptr(len(buf))
+	r := cosmoLibcCall6(lib.sysctlbyname,
+		uintptr(unsafe.Pointer(&sysctlKernHostname[0])),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&sz)),
+		0, 0, 0)
+	if r != 0 || sz == 0 {
+		return ""
+	}
+	n := int(sz)
+	if n > len(buf) {
+		return ""
+	}
+	// sysctl counts the NUL it wrote; the string must not.
+	for n > 0 && buf[n-1] == 0 {
+		n--
+	}
+	return string(buf[:n])
 }
 
 // cosmoDarwinSysctlEnabled reads a boolean hw.optional sysctl. name must

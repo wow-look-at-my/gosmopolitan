@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
@@ -12,30 +11,8 @@ import (
 )
 
 // Real signal-handler installation on macOS-Intel hosts.
-//
-// arm64 reaches Apple's LIBC sigaction through the APE loader's Syslib
-// (signal_cosmo_xnu.go). amd64 has no Syslib, so it issues the raw
-// __sigaction syscall - which is a different interface, not the same one
-// by another route:
-//
-//   - The kernel struct carries an sa_tramp field that the libc struct
-//     does not. libc fills it with its own trampoline; a raw caller must
-//     supply one, and cosmoXnuSigtramp is it.
-//   - The kernel enters that trampoline with the handler, an infostyle
-//     token, and the signal arguments, and the trampoline is responsible
-//     for calling sigreturn when the handler comes back. libc does that
-//     part too, which is why the arm64 path can ignore it.
-//
-// The flag and mask translations are shared with arm64
-// (signal_cosmo_xnu_flags.go, sigxlat_cosmo.go): only the call differs.
-//
-// The ABI is Go's own pre-1.12 darwin port (go1.8
-// runtime/sys_darwin_amd64.s, defs_darwin_amd64.go), the same source the
-// bsdthread thread-creation path came from.
 
-// xnuKsigactiont is Apple's KERNEL struct sigaction, what __sigaction
-// takes. Upstream's darwin port calls it sigactiont; the libc-facing one
-// without sa_tramp is xnuSigactiont on the arm64 side.
+// xnuKsigactiont is Apple's KERNEL struct sigaction, what __sigaction takes.
 type xnuKsigactiont struct {
 	sa_handler uintptr
 	sa_tramp   uintptr
@@ -43,30 +20,28 @@ type xnuKsigactiont struct {
 	sa_flags   int32
 }
 
-// xnuSigactiont is Apple's user64_sigaction, the OLD action __sigaction
-// copies out (XNU kern_sig.c sigaction_kern_to_user64). It has no
-// sa_tramp: the kernel keeps the trampoline and never reports it back.
+// xnuSigactiont is Apple's user64_sigaction, the action __sigaction copies
+// out (XNU kern_sig.c sigaction_kern_to_user64).
 type xnuSigactiont struct {
 	sa_handler uintptr
 	sa_mask    uint32
 	sa_flags   int32
 }
 
-// Apple sigaltstack flag values. SS_ONSTACK is 1 on both systems;
-// SS_DISABLE is 4 on Apple, 2 on Linux (_SS_DISABLE, os2_cosmo.go).
+// Apple sigaltstack flag values.
 const (
 	xnuSS_ONSTACK = 0x1
 	xnuSS_DISABLE = 0x4
+
+	// The smallest stack this host accepts, MINSIGSTKSZ in signal.h.
+	xnuMINSIGSTKSZ = 32768
 )
 
-// cosmoXnuSigtramp is in sys_cosmo_amd64.s. The KERNEL enters it - it is
-// never called from Go - so the declaration exists for asmdecl and for
-// taking its address.
+// cosmoXnuSigtramp is in sys_cosmo_amd64.s.
 func cosmoXnuSigtramp()
 
 // darwinSigaction implements sysSigaction on macOS-Intel: translate the
-// Linux sigactiont both ways and issue __sigaction. Returns 0 on
-// success, nonzero on failure, like rt_sigaction.
+// Linux sigactiont both ways and issue __sigaction.
 //
 // Signals with no Apple equivalent (SIGSTKFLT, SIGPWR, the realtime
 // range) succeed as a no-op and read back as SIG_DFL, matching arm64:
@@ -87,14 +62,10 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	var aold xnuSigactiont
 	var anewp, aoldp uintptr
 	if new != nil {
-		// SIG_DFL (0) and SIG_IGN (1) coincide on both systems; a real
-		// handler pointer passes through untranslated.
 		anew.sa_handler = new.sa_handler
 		anew.sa_flags = xnuSigFlagsL2A(new.sa_flags)
 		anew.sa_mask = cosmoSigmaskL2A(new.sa_mask)
-		// Only a real handler needs a trampoline. Giving one to SIG_DFL
-		// or SIG_IGN would hand the kernel a return path for a delivery
-		// it is never going to make.
+		// Only a real handler needs a trampoline.
 		if anew.sa_handler > 1 {
 			anew.sa_tramp = abi.FuncPCABI0(cosmoXnuSigtramp)
 		}
@@ -115,19 +86,8 @@ func darwinSigaction(sig uint32, new, old *sigactiont) int32 {
 	return 0
 }
 
-// darwinSigprocmask implements sigprocmask on macOS-Intel: translate
-// `how` (Linux 0/1/2 to Apple 1/2/3) and remap the sigset bits in both
-// directions, then issue the raw sigprocmask syscall. arm64 reaches
-// Apple libc pthread_sigmask instead (signal_cosmo_xnu.go); the
-// translations are the same.
-//
-// A Linux sigset is 8 bytes and an Apple one is 4, and the two number
-// their signals differently. The asm path this replaces
-// (rtsigprocmask's darwin branch) handed the kernel the Linux mask
-// untouched, so every mask it set named the wrong signals.
-//
-// Crashes on failure like the Linux asm path, so a bad mask can never
-// be silently ignored.
+// Crashes on failure, so a bad mask is never silently ignored. arm64 reaches
+// libc pthread_sigmask instead, over the same translations.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -151,11 +111,6 @@ func darwinSigprocmask(how int32, new, old *sigset) {
 	}
 }
 
-// darwinSigaltstack implements sigaltstack on macOS-Intel: translate the
-// Linux stackt {sp, flags, pad, size} to and from Apple's user64_sigaltstack
-// {sp, size, flags} and SS_DISABLE (2 on Linux, 4 on Apple), then issue
-// the raw sigaltstack syscall. arm64 does the same over Apple libc
-// (signal_cosmo_xnu.go).
 //
 // Crashes on failure like the Linux asm path: a stack the kernel did not
 // take would surface later as a fault on the wrong stack.
@@ -176,6 +131,10 @@ func darwinSigaltstack(new, old *stackt) {
 			fl |= xnuSS_ONSTACK
 		}
 		anew.ss_flags = fl
+		if fl&xnuSS_DISABLE != 0 && anew.ss_size < xnuMINSIGSTKSZ {
+			// A disable carries no stack, so Linux sends a zero size.
+			anew.ss_size = xnuMINSIGSTKSZ
+		}
 		anewp = uintptr(unsafe.Pointer(&anew))
 	}
 	if old != nil {
@@ -185,8 +144,7 @@ func darwinSigaltstack(new, old *stackt) {
 		throw("darwinSigaltstack: sigaltstack failed")
 	}
 	if old != nil {
-		// Uintptr store: stackt.ss_sp is *byte, but this can run in
-		// nowritebarrierrec contexts (same trick as setSignalstackSP).
+		// Uintptr store: stackt.ss_sp is *byte.
 		*(*uintptr)(unsafe.Pointer(&old.ss_sp)) = aold.ss_sp
 		old.ss_size = aold.ss_size
 		var fl int32
@@ -200,9 +158,8 @@ func darwinSigaltstack(new, old *stackt) {
 	}
 }
 
-// sigaltstack dispatches on the host: Apple's stack_t layout and flag
-// values differ from Linux's, so the raw syscall path serves Linux and
-// NT hosts only.
+// sigaltstack dispatches on the host: Apple's stack_t layout and flag values
+// differ from Linux's.
 //
 //go:nosplit
 //go:nowritebarrierrec
@@ -214,8 +171,5 @@ func sigaltstack(new, old *stackt) {
 	sigaltstackLinux(new, old)
 }
 
-// sigaltstackLinux is the raw Linux sigaltstack syscall
-// (sys_cosmo_amd64.s); its NT branch is a no-op.
-//
 //go:noescape
 func sigaltstackLinux(new, old *stackt)

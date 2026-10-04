@@ -1,45 +1,28 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo && amd64
 
-// The NT file-descriptor table (wave 2).
+// The NT file-descriptor table.
 //
-// Unix code deals in small integer fds with lowest-free allocation
-// semantics; Win32 deals in HANDLEs. This side table maps one to the
-// other for everything the syscall emulation opens. Design points,
-// chosen so the later sockets wave can reuse the table:
+// Unix code deals in small integer fds with lowest-free allocation. Win32
+// deals in HANDLEs. This side table maps one to the other for everything the
+// syscall emulation opens.
 //
-//   - Fixed size (ntFDMax slots, a few KiB of BSS): no allocation on
-//     the lookup paths (the runtime's own fcntl is nosplit), EMFILE
-//     when full. Slots 0/1/2 are seeded from GetStdHandle at boot and
-//     are ALWAYS marked open even if the handle is null (a dead
-//     handle fails per-operation with EBADF; leaving the slots "open"
-//     keeps checkfds from trying to open /dev/null through the
-//     runtime's raw-syscall open, which must never run on NT).
-//   - kind classifies what the handle is (disk file, directory,
-//     stdio/character/pipe); the sockets wave adds a socket kind and
-//     its own per-kind state alongside dirState.
-//   - pathW holds the absolute NUL-terminated Win32 path the fd was
-//     opened with, for openat/unlinkat/... dirfd-relative joins.
-//     Stdio fds have none.
-//   - Directory enumeration state for the getdents64 emulation lives
-//     here: dirStarted selects the RestartInfo class on the first
-//     query, pending holds parsed-but-undelivered entries when the
-//     caller's buffer was too small for a kernel batch.
-//
-// Locking: ntFDLock guards slot claim/release/lookup and state
-// updates. Lookups return a copy; an operation racing a concurrent
-// close of the same fd sees either the old handle (the close wins the
-// CloseHandle, the operation fails like on Linux) or EBADF - the same
-// use-after-close semantics unix code already lives with. No
-// allocation happens while the lock is held.
+// ntFDLock guards slot claim, release, lookup and state updates, and nothing
+// allocates while it is held. A lookup returns a COPY, so an operation racing
+// a concurrent close of the same fd sees either the handle - the close wins
+// the CloseHandle and the operation fails as on Linux - or EBADF. That is the
+// use-after-close semantics unix code already lives with.
 
 package runtime
 
-import "unsafe"
+import (
+	"internal/runtime/atomic"
+	"unsafe"
+)
 
+// The table is a fixed ntFDMax slots, a few KiB of BSS.
 const ntFDMax = 512
 
 type ntFDKind uint8
@@ -50,7 +33,7 @@ const (
 	ntFDDir             // directory (backup-semantics handle)
 	ntFDStdio           // console, inherited pipe, or character device (not seekable)
 	ntFDPipe            // anonymous pipe end created by pipe2 (CreatePipe)
-	ntFDSocket          // winsock SOCKET (chunk C); handle holds the SOCKET value
+	ntFDSocket          // winsock socket; handle holds the SOCKET value
 )
 
 // ntDirEnt is one parsed directory entry awaiting delivery to a
@@ -66,26 +49,12 @@ type ntFDEntry struct {
 	kind       ntFDKind
 	ftype      uint8 // Win32 GetFileType result (stdio fds): pipe vs char
 	cloexec    bool
-	dirStarted bool
-	flags      int32 // Linux O_* access mode and status flags
-	pathW      []uint16
-	pending    []ntDirEnt
+	dirStarted bool       // false selects the RestartInfo class on the next query
+	flags      int32      // Linux O_* access mode and status flags
+	pathW      []uint16   // absolute Win32 path, for dirfd-relative joins
+	pending    []ntDirEnt // parsed getdents64 entries the caller's buffer could not hold
 
-	// Socket-kind state (chunk C). sockFam holds the LINUX address
-	// family the socket was created with (1/2/10). unixBound/unixPeer
-	// record the Linux-spelling AF_UNIX pathname the caller bound or
-	// connected to: winsock stores the TRANSLATED Windows path, and
-	// translating it back would surface the /c/... alias, so
-	// getsockname/getpeername report these recorded names instead
-	// (Linux returns the exact bytes that were bound, and the probe
-	// compares addr strings). sockPair (wave 3) marks a socketpair
-	// end: winsock knows it as a loopback TCP socket, so name queries
-	// synthesize the Linux truth (unnamed AF_UNIX) instead of asking.
-	// sockPeerPid (wave 3 item 2b) caches the SIO_AF_UNIX_GETPEERPID
-	// answer for a connected AF_UNIX socket: the peer of a connection
-	// can never change, so the first successful ioctl's answer is
-	// final (0 = not queried yet; pid 0 is the NT idle process, which
-	// can never own a socket).
+	// Socket-kind state. sockFam holds the LINUX address family. unixBound.
 	sockFam     uint16
 	sockPair    bool
 	sockPeerPid uint32
@@ -98,28 +67,63 @@ var (
 	ntFDTable [ntFDMax]ntFDEntry
 )
 
-// ntFDAlloc claims the lowest free slot (unix semantics) for the
-// given handle and returns the fd, or -EMFILE when the table is full.
-// The caller allocated pathW beforehand; nothing allocates under the
-// lock.
+// ntFilePos serializes one slot's Win32 file pointer, which is per HANDLE.
+var ntFilePos [ntFDMax]uint32
+
+// ntFilePosLock takes slot fd's file-pointer lock.
+func ntFilePosLock(fd int32) {
+	for !atomic.Cas(&ntFilePos[fd], 0, 1) {
+		Gosched()
+	}
+}
+
+// ntFilePosUnlock releases it.
+func ntFilePosUnlock(fd int32) {
+	atomic.Store(&ntFilePos[fd], 0)
+}
+
+// ntFDAlloc claims the lowest free slot (unix semantics) for the given handle
+// and returns the fd, or -EMFILE when the table is full. The caller allocated
+// pathW beforehand; nothing allocates under the lock.
 func ntFDAlloc(handle uintptr, kind ntFDKind, flags int32, cloexec bool, pathW []uint16) int32 {
+	return ntFDAllocEntry(ntFDEntry{
+		handle:  handle,
+		kind:    kind,
+		flags:   flags,
+		cloexec: cloexec,
+		pathW:   pathW,
+	})
+}
+
+// ntFDAllocEntry is ntFDAlloc for a fully formed entry, which is what a
+// duplicate of an existing slot is.
+func ntFDAllocEntry(entry ntFDEntry) int32 {
 	lock(&ntFDLock)
 	for fd := int32(0); fd < ntFDMax; fd++ {
 		e := &ntFDTable[fd]
 		if e.kind == ntFDFree {
-			*e = ntFDEntry{
-				handle:  handle,
-				kind:    kind,
-				flags:   flags,
-				cloexec: cloexec,
-				pathW:   pathW,
-			}
+			*e = entry
 			unlock(&ntFDLock)
 			return fd
 		}
 	}
 	unlock(&ntFDLock)
 	return -24 // EMFILE
+}
+
+// ntFDReplace installs entry in slot fd, free or not, and hands back
+// what the slot held for the caller to close outside the lock. The
+// swap is one step under the lock, which is what makes dup2 atomic
+// against another opener claiming the slot.
+func ntFDReplace(fd int32, entry ntFDEntry) (handle uintptr, kind ntFDKind, hadOld bool) {
+	lock(&ntFDLock)
+	e := &ntFDTable[fd]
+	if e.kind != ntFDFree {
+		handle, kind, hadOld = e.handle, e.kind, true
+	}
+	*e = entry
+	unlock(&ntFDLock)
+	return handle, kind, hadOld
 }
 
 // ntFDLookup returns a copy of the fd's entry.
@@ -156,6 +160,21 @@ func ntFDRelease(fd int32) (handle uintptr, kind ntFDKind, ok bool) {
 	*e = ntFDEntry{}
 	unlock(&ntFDLock)
 	return handle, kind, true
+}
+
+// poll_runtime_cancelIO ends the reads and writes other threads have blocked
+// on fd, on an NT host.
+//
+//go:linkname poll_runtime_cancelIO internal/poll.runtime_cancelIO
+func poll_runtime_cancelIO(fd uintptr) {
+	if !iswindows() {
+		return
+	}
+	e, ok := ntFDLookup(int32(fd))
+	if !ok || (e.kind != ntFDPipe && e.kind != ntFDStdio) {
+		return
+	}
+	ntcall(ntCancelIoExFn, e.handle, 0, 0, 0, 0, 0)
 }
 
 // ntFDSetSockFam records the Linux address family of a socket fd.
@@ -241,10 +260,9 @@ func ntFDSetDirState(fd int32, started bool, pending []ntDirEnt) {
 	unlock(&ntFDLock)
 }
 
-// ntFcntl backs both the runtime's fcntl (fcntl_cosmo_amd64.go,
-// nosplit) and the emulated SYS_FCNTL. Only the commands the
-// unix-shaped standard library actually issues against files are
-// implemented; the rest report ENOSYS loudly.
+// ntFcntl backs both the runtime's fcntl (fcntl_cosmo_amd64.go, nosplit) and
+// the emulated SYS_FCNTL. Only the commands the unix-shaped standard library
+// issues against files are implemented; the rest report ENOSYS loudly.
 //
 //go:nosplit
 func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
@@ -262,10 +280,7 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 	if fd < 0 || fd >= ntFDMax {
 		return -1, 9 // EBADF
 	}
-	// Socket F_SETFL must push the O_NONBLOCK change into winsock
-	// (ioctlsocket FIONBIO) after the table update; captured under the
-	// lock, issued outside it (use-after-close races have the usual
-	// unix semantics: the ioctl fails on a dead SOCKET).
+	// Socket F_SETFL must push the O_NONBLOCK change into winsock (ioctlsocket FIONBIO) after the table update; captured under the lock.
 	var nbHandle uintptr
 	var nbWord uint32
 	syncNB := false
@@ -286,9 +301,7 @@ func ntFcntl(fd, cmd, arg int32) (ret int32, errno int32) {
 	case _F_GETFL:
 		ret = e.flags
 	case _F_SETFL:
-		// O_APPEND cannot be turned on retroactively (the handle
-		// lacks FILE_APPEND_DATA); O_NONBLOCK on files is a no-op on
-		// Linux too. Record the bits so F_GETFL round-trips.
+		// O_APPEND cannot be turned on retroactively (the handle lacks FILE_APPEND_DATA).
 		const _O_NONBLOCK = 0x800
 		old := e.flags
 		e.flags = e.flags&^int32(_O_STATUS) | arg&int32(_O_STATUS)

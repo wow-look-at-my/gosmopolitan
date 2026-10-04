@@ -396,6 +396,8 @@ func TestUnexpectedEOF(t *testing.T) {
 
 // See golang.org/issue/22237
 func TestDecodeMemoryConsumption(t *testing.T) {
+	// This test writes a process-wide knob, so it takes the process.
+	t.Serial()
 	const frames = 3000
 	img := image.NewPaletted(image.Rectangle{Max: image.Point{1, 1}}, palette.WebSafe)
 	hugeGIF := &GIF{

@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -31,6 +30,11 @@ const (
 	AppleTIOCGWINSZForTest = appleTIOCGWINSZ
 	AppleTIOCSWINSZForTest = appleTIOCSWINSZ
 	AppleTIOCNOTTYForTest  = appleTIOCNOTTY
+
+	// Apple's own pty requests, served unchanged.
+	AppleTIOCPTYGRANTForTest = appleTIOCPTYGRANT
+	AppleTIOCPTYUNLKForTest  = appleTIOCPTYUNLK
+	AppleTIOCPTYGNAMEForTest = appleTIOCPTYGNAME
 
 	LinuxTCGETSForTest  = linuxTCGETS
 	LinuxTCSETSForTest  = linuxTCSETS

@@ -15,9 +15,13 @@ import (
 	"strings"
 )
 
-// fillParamDefaults appends an argument for each trailing parameter the call
-// omitted, and answers nil when any of them has no default. The arguments are
-// ordinary syntax, so everything after this point sees a full call. Depth:
+// fillParamDefaults type-checks an argument for each trailing parameter the
+// call omitted, and answers nil when any of them has no default. The call's
+// own Args keep what the source wrote: this package serves tools that print
+// the tree back, and a printer must reproduce the call the user typed. The
+// synthesized arguments reach a client through Info.ParamDefaults instead.
+// The compiler's own checker (cmd/compile/internal/types2) does append them
+// to the call, because the IR builder after it reads a full call. Depth:
 // docs/OPTIONAL-PARAMS.md.
 func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, params *Tuple, nargs, npars int) []*operand {
 	for i := nargs; i < npars; i++ {
@@ -27,23 +31,59 @@ func (check *Checker) fillParamDefaults(call *ast.CallExpr, args []*operand, par
 	}
 	// The call site is where the value is spelled, so that is where it points.
 	pos := call.Pos()
+	filled := make([]ast.Expr, 0, npars-nargs)
 	for i := nargs; i < npars; i++ {
-		arg := defaultLiteral(params.vars[i].deflt, pos)
-		if arg == nil {
-			return nil
-		}
-		call.Args = append(call.Args, arg)
+		par := params.vars[i]
+		arg := defaultLiteral(par.deflt, pos)
+		filled = append(filled, arg)
 		x := new(operand)
-		check.expr(nil, x, arg)
+		check.defaultArg(x, arg, par)
 		args = append(args, x)
 	}
+	check.recordParamDefaults(call, filled)
 	return args
 }
 
-// defaultLiteral spells a constant as the source a caller would have written.
-// It answers nil for a kind with no such spelling, which paramDefault has
-// already refused at the declaration.
-func defaultLiteral(v constant.Value, pos token.Pos) ast.Expr {
+// defaultArg type-checks a filled argument. A default is written in the
+// declaring package, so a struct literal in it may name unexported fields,
+// and its type is elided. The check runs as that package, under the
+// parameter's type.
+func (check *Checker) defaultArg(x *operand, arg ast.Expr, par *Var) {
+	pkg, filling := check.pkg, check.fillingDefault
+	check.pkg, check.fillingDefault = par.pkg, true
+	defer func() { check.pkg, check.fillingDefault = pkg, filling }()
+	check.rawExpr(nil, x, arg, par.typ, false)
+	check.exclude(x, 1<<novalue|1<<builtin|1<<typexpr)
+	check.singleValue(x)
+}
+
+// recordParamDefaults reports the arguments fillParamDefaults supplied for
+// one call. It lives here rather than in recording.go, which is generated
+// from types2, where a call keeps no such record.
+func (check *Checker) recordParamDefaults(call *ast.CallExpr, args []ast.Expr) {
+	assert(call != nil)
+	assert(len(args) > 0)
+	if m := check.ParamDefaults; m != nil {
+		m[call] = args
+	}
+}
+
+// defaultLiteral spells a default as the source a caller would have written.
+// A struct literal is spelled without its type; the call fills it under the
+// parameter's type. paramDefault refused every value with no spelling.
+func defaultLiteral(d *ParamDefault, pos token.Pos) ast.Expr {
+	if d.Const == nil {
+		lit := &ast.CompositeLit{Lbrace: pos, Rbrace: pos}
+		for _, f := range d.Fields {
+			lit.Elts = append(lit.Elts, &ast.KeyValueExpr{
+				Key:   &ast.Ident{NamePos: pos, Name: f.Name},
+				Colon: pos,
+				Value: defaultLiteral(f.Value, pos),
+			})
+		}
+		return lit
+	}
+	v := d.Const
 	switch v.Kind() {
 	case constant.Bool:
 		if constant.BoolVal(v) {
@@ -819,9 +859,20 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 				x.typ_ = exp.typ
 			case *Var:
 				x.mode_ = variable
+				// A readonly var is a value in every package but its own; a
+				// qualified name is never in its own.
+				if exp.readonly {
+					x.mode_ = value
+				}
 				x.typ_ = exp.typ
 				if pkg.cgo && strings.HasPrefix(exp.name, "_Cvar_") {
 					x.typ_ = x.typ().(*Pointer).base
+				}
+				if check.inConstExpr {
+					if v, ok := dynamicConstVal(exp); ok {
+						x.mode_ = constant_
+						x.val = v
+					}
 				}
 			case *Func:
 				x.mode_ = funcMode
