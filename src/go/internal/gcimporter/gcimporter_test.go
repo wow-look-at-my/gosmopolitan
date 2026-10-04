@@ -42,14 +42,22 @@ func compile(t *testing.T, dirname, filename, outdirname string, packageFiles ma
 	if !ok {
 		t.Fatalf("filename doesn't end in .go: %s", filename)
 	}
-	objname := basename + ".o"
-	outname := filepath.Join(outdirname, objname)
-
 	importcfgfile := os.DevNull
 	if len(packageFiles) > 0 || len(pkgImports) > 0 {
 		importcfgfile = filepath.Join(outdirname, basename) + ".importcfg"
 		testenv.WriteImportcfg(t, importcfgfile, packageFiles, pkgImports...)
 	}
+	return compileImportcfg(t, dirname, filename, outdirname, importcfgfile)
+}
+
+// compileImportcfg is compile with an import config file that already exists.
+func compileImportcfg(t *testing.T, dirname, filename, outdirname, importcfgfile string) string {
+	basename, ok := strings.CutSuffix(filepath.Base(filename), ".go")
+	if !ok {
+		t.Fatalf("filename doesn't end in .go: %s", filename)
+	}
+	objname := basename + ".o"
+	outname := filepath.Join(outdirname, objname)
 
 	pkgpath := path.Join("testdata", basename)
 	cmd := testenv.Command(t, testenv.GoToolPath(t), "tool", "compile", "-p", pkgpath, "-D", "testdata", "-importcfg", importcfgfile, "-o", outname, filename)
@@ -156,6 +164,11 @@ func TestImportTypeparamTests(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The files import only std packages. One import config for all of std
+	// serves every file, where a go list per file costs most of this test.
+	importcfgfile := filepath.Join(tmpdir, "std.importcfg")
+	testenv.WriteImportcfg(t, importcfgfile, nil, "std")
+
 	for _, entry := range list {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
 			// For now, only consider standalone go files.
@@ -177,7 +190,7 @@ func TestImportTypeparamTests(t *testing.T) {
 
 			// Compile and import, and compare the resulting package with the package
 			// that was type-checked directly.
-			compile(t, rootDir, entry.Name(), filepath.Join(tmpdir, "testdata"), nil, filename)
+			compileImportcfg(t, rootDir, entry.Name(), filepath.Join(tmpdir, "testdata"), importcfgfile)
 			pkgName := strings.TrimSuffix(entry.Name(), ".go")
 			imported := importPkg(t, "./testdata/"+pkgName, tmpdir)
 			checked := checkFile(t, filename, src)
