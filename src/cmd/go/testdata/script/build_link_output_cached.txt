@@ -1,0 +1,18 @@
+# A link of the same main package with other flags must not replace the
+# linker output that a cache hit replays.
+
+go build -ldflags=-dumpdep -o a.exe main.go
+stderr 'main.main'
+
+go build -ldflags=-X=main.val=1 -o b.exe main.go
+! stderr 'main.main'
+
+go build -ldflags=-dumpdep -o c.exe main.go
+stderr 'main.main'
+
+-- main.go --
+package main
+
+var val string
+
+func main() { println(val) }
