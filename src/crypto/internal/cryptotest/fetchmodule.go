@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -32,20 +33,16 @@ func FetchModule(t *testing.T, module, version string) string {
 	}
 	gopath, gomodcache, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	gomodcache = strings.TrimSpace(gomodcache)
+	// Every test that fetches shares one module cache. A cache per test
+	// downloads the same module once per call.
+	if !dirExists(gomodcache) {
+		gomodcache = sharedModCache()
+		t.Setenv("GOMODCACHE", gomodcache)
+	}
 	if !dirExists(gopath) {
-		tmp := t.TempDir()
-		t.Setenv("GOPATH", tmp)
-		if dirExists(gomodcache) {
-			// A GOFIPS140 snapshot lives in its own GOMODCACHE. Keep it.
-			t.Setenv("GOMODCACHE", gomodcache)
-		} else {
-			t.Setenv("GOMODCACHE", filepath.Join(tmp, "pkg", "mod"))
-			// Allow t.TempDir() to clean up subdirectories.
-			t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
-		}
-	} else if !dirExists(gomodcache) {
-		t.Setenv("GOMODCACHE", t.TempDir())
-		t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
+		// GOMODCACHE defaults to a path under GOPATH, so pin it first.
+		t.Setenv("GOMODCACHE", gomodcache)
+		t.Setenv("GOPATH", t.TempDir())
 	}
 
 	t.Logf("fetching %s@%s\n", module, version)
@@ -68,6 +65,13 @@ func FetchModule(t *testing.T, module, version string) string {
 	}
 
 	return j.Dir
+}
+
+// sharedModCache is the module cache of every test process on this machine
+// that has no GOMODCACHE. The go command locks the cache, so concurrent
+// processes can share it.
+func sharedModCache() string {
+	return filepath.Join(os.TempDir(), "go-cryptotest-modcache-"+strconv.Itoa(os.Getuid()))
 }
 
 func dirExists(path string) bool {
