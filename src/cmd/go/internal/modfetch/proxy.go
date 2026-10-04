@@ -61,8 +61,8 @@ type proxySpec struct {
 
 func proxyList() ([]proxySpec, error) {
 	proxyOnce.Do(func() {
-		// A github.com module comes from its GitHub archive before the module
-		// mirror. Any failure there moves on to the mirror.
+		// A github.com module comes from its GitHub archive. Every other path
+		// goes direct to its origin.
 		if cfg.GOPROXY == cfg.DefaultGOPROXY {
 			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "github", fallBackOnError: true})
 		}
@@ -196,6 +196,10 @@ func TryProxies(f func(proxy string) error) error {
 	return bestErr
 }
 
+// bannedProxyHost is refused as a module proxy wherever its URL comes from,
+// a go-import "mod" tag included.
+const bannedProxyHost = web.BannedHost
+
 type proxyRepo struct {
 	url          *url.URL // The combined module proxy URL joined with the module path.
 	path         string   // The module path (unescaped).
@@ -213,6 +217,9 @@ func newProxyRepo(baseURL, path string) (Repo, error) {
 		return nil, err
 	}
 	redactedBase := base.Redacted()
+	if base.Host == bannedProxyHost {
+		return nil, fmt.Errorf("%s is not a module source for this toolchain", bannedProxyHost)
+	}
 	switch base.Scheme {
 	case "http", "https":
 		// ok

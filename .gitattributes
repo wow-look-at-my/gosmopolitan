@@ -49,6 +49,8 @@ src/cmd/compile/internal/noder/testvariant.go -linguist-vendored
 src/cmd/compile/internal/test/inl_loop_test.go -linguist-vendored
 src/cmd/compile/internal/types2/dynconst.go -linguist-vendored
 src/cmd/compile/internal/types2/readonly.go -linguist-vendored
+src/cmd/dist/apeld.go -linguist-vendored
+src/cmd/dist/apeld_test.go -linguist-vendored
 src/cmd/dist/coverage.go -linguist-vendored
 src/cmd/dist/coverage_test.go -linguist-vendored
 src/cmd/dist/shard_test.go -linguist-vendored
@@ -144,7 +146,6 @@ src/cmd/link/internal/ld/apedebug_test.go -linguist-vendored
 src/cmd/link/internal/ld/apefat.go -linguist-vendored
 src/cmd/link/internal/ld/apefat_test.go -linguist-vendored
 src/cmd/link/internal/ld/apeld/README.md -linguist-vendored
-src/cmd/link/internal/ld/apeld/build.sh -linguist-vendored
 src/cmd/link/internal/ld/apeld/darwin/apeld.c -linguist-vendored
 src/cmd/link/internal/ld/apeld/linux/apeld.c -linguist-vendored
 src/cmd/link/internal/ld/apeld/linux/apeld.ld -linguist-vendored
@@ -272,7 +273,6 @@ src/testing/serialgate_test.go -linguist-vendored
 src/uuid/export_test.go -linguist-vendored
 
 # Prebuilt executables that the build and the tests read. Git holds an LFS pointer for each.
-src/cmd/link/internal/ld/apeld/bin/apeld-* filter=lfs diff=lfs merge=lfs -text
 src/crypto/internal/boring/syso/*.syso filter=lfs diff=lfs merge=lfs -text
 src/runtime/race/*.syso filter=lfs diff=lfs merge=lfs -text
 src/runtime/race/internal/*/*.syso filter=lfs diff=lfs merge=lfs -text
