@@ -90,7 +90,7 @@ func testPGOIntendedInlining(t *testing.T, dir string, profFile string) {
 	// Build the test with the profile. Use a smaller threshold to test.
 	// TODO: maybe adjust the test to work with default threshold.
 	// loopinline=0 leaves the budget to the profile alone. This fork also
-	// raises it by loop nesting at the call site, which inlines A here —
+	// raises it by loop nesting at the call site, which inlines A here -
 	// a function the profile is meant to leave out at cost 309. That
 	// interaction is loop inlining's to cover (docs/LOOP-INLINING.md);
 	// this test is about what the profile decides.

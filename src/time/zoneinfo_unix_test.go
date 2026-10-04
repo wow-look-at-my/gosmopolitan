@@ -13,7 +13,7 @@ import (
 )
 
 func TestEnvTZUsage(t *testing.T) {
-	t.Serial() // os.Setenv and time.Local are process-wide.
+	t.Serial("the TZ variable and the cached local location are process state that outlives this call")
 	const env = "TZ"
 	tz, ok := os.LookupEnv(env)
 	if !ok {
