@@ -5,7 +5,6 @@
 package codehost
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -191,6 +190,14 @@ type gitRepo struct {
 	// github is set when the remote is on github.com. A commit then comes
 	// from a github.com archive first, and from git only when that fails.
 	github *githubRepo
+	// githubFiles holds each parsed archive by commit, so an archive is
+	// decompressed once per process.
+	githubMu    sync.Mutex
+	githubFiles map[string][]archiveEntry
+
+	// fetched holds, by commit, how this process fetched each commit.
+	fetchMu sync.Mutex
+	fetched map[string]*keptFetch
 
 	gitDirOnce sync.Once
 	gitDirErr  error
@@ -489,6 +496,30 @@ const minHashDigits = 7
 // stat stats the given rev in the local repository,
 // or else it fetches more info from the remote repository and tries again.
 func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err error) {
+	// rec is how this stat fetched rev. The download of the module claims it later, by commit.
+	rec := new(Fetch)
+	var gitStart time.Time
+	var gitBefore int64
+	startGit := func() {
+		if gitStart.IsZero() {
+			gitStart = time.Now()
+			gitBefore = r.objectBytes()
+		}
+		if route, _, _, _ := rec.Stats(); route == "" {
+			rec.SetRoute("git")
+		}
+	}
+	defer func() {
+		if !gitStart.IsZero() {
+			rec.AddTransfer(gitStart, r.objectBytes()-gitBefore, time.Since(gitStart))
+		}
+		if err == nil && info != nil {
+			if route, _, _, _ := rec.Stats(); route != "" {
+				r.keepFetch(info.Name, rec)
+			}
+		}
+	}()
+
 	// Fast path: maybe rev is a hash we already have locally.
 	didStatLocal := false
 	// A github.com repository that git never ran for has nothing local to
@@ -523,7 +554,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 		if err != nil {
 			return nil, err
 		}
-		info, err := r.statGitHubTag(ctx, rev)
+		info, err := r.statGitHubTag(ctx, rev, rec)
 		unlock()
 		if err == nil {
 			return info, nil
@@ -633,7 +664,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 	if r.fetchLevel <= fetchSome && ref != "" && hash != "" {
 		if triedTagArchive {
 			// The archives of this tag already failed.
-		} else if info, err := r.statGitHub(ctx, rev, ref, hash); err == nil {
+		} else if info, err := r.statGitHub(ctx, rev, ref, hash, rec); err == nil {
 			if ref == "HEAD" {
 				// The git fetch below records no Ref for HEAD. Match it.
 				ref = hash
@@ -658,6 +689,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 			refspec = ref + ":" + ref
 		}
 
+		startGit()
 		release, err := base.AcquireNet()
 		if err != nil {
 			return nil, err
@@ -679,6 +711,7 @@ func (r *gitRepo) stat(ctx context.Context, rev string) (info *RevInfo, err erro
 
 	// Last resort.
 	// Fetch all heads and tags and hope the hash we want is in the history.
+	startGit()
 	if err := r.fetchRefsLocked(ctx); err != nil {
 		return nil, err
 	}
@@ -766,6 +799,10 @@ func (r *gitRepo) statLocal(ctx context.Context, version, rev string) (*RevInfo,
 	if !strings.HasPrefix(hash, rev) {
 		info.Origin.Ref = rev
 	}
+	info.Origin.Gitlinks, err = r.gitlinks(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
 
 	// Add tags. Output looks like:
 	//	ede458df7cd0fdca520df19a33158086a8a68e81 1523994202 HEAD -> master, tag: v1.2.4-annotated, tag: v1.2.3, origin/master, origin/HEAD
@@ -820,8 +857,8 @@ func (r *gitRepo) ReadFile(ctx context.Context, rev, file string, maxSize int64)
 	if err != nil {
 		return nil, err
 	}
-	if reader, _, err := r.githubArchive(info.Name); err == nil {
-		return readGitHubFile(reader, file)
+	if entries, err := r.githubEntries(info.Name); err == nil {
+		return readGitHubFile(entries, file)
 	}
 	out, err := r.runGit(ctx, "git", "cat-file", "--end-of-options", "blob", info.Name+":"+file)
 	if err != nil {
@@ -837,7 +874,7 @@ func (r *gitRepo) RecentTag(ctx context.Context, rev, prefix string, allowed fun
 	}
 	rev = info.Name // expand hash prefixes
 
-	if _, _, err := r.githubArchive(rev); err == nil {
+	if _, err := r.githubArchiveTime(rev); err == nil {
 		// The commit came from an archive, so git has no history to walk.
 		// With no plausible tag the answer is "" and git is not needed.
 		tags, err := r.Tags(ctx, prefix+"v")
@@ -1010,6 +1047,26 @@ func (r *gitRepo) DescendsFrom(ctx context.Context, rev, tag string) (bool, erro
 	return false, err
 }
 
+// IsGitHub reports whether the remote is a github.com repository.
+func (r *gitRepo) IsGitHub() bool {
+	return r.github != nil
+}
+
+// ReadFiles returns the files of rev under subdir straight from a kept
+// GitHub archive. It fails with errors.ErrUnsupported when no archive holds rev.
+func (r *gitRepo) ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error) {
+	info, err := r.Stat(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := r.githubEntries(info.Name)
+	if err != nil {
+		return nil, errors.ErrUnsupported
+	}
+	r.claimFetch(ctx, info.Name, r.keptArchiveRoute(info.Name))
+	return subdirFiles(entries, subdir)
+}
+
 func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64) (zip io.ReadCloser, err error) {
 	// TODO: Use maxSize or drop it.
 	args := []string{}
@@ -1020,20 +1077,24 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	if err != nil {
 		return nil, err
 	}
-	if reader, data, err := r.githubArchive(info.Name); err == nil {
-		// The archive has no submodule, so there are no gitlinks to add.
-		archive, err := subdirArchive(reader, data, subdir)
-		if err != nil {
-			return nil, err
-		}
-		return io.NopCloser(bytes.NewReader(archive)), nil
+	_, archiveErr := r.githubEntries(info.Name)
+	if archiveErr == nil && !gitOnly(ctx) {
+		// A commit from an archive is never turned into a zip. Use ReadFiles.
+		return nil, errors.ErrUnsupported
 	}
+	r.claimFetch(ctx, info.Name, "git")
 
 	unlock, err := r.mu.Lock()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+
+	if archiveErr == nil {
+		if err := r.fetchCommitLocked(ctx, info.Name); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := ensureGitAttributes(r.dir); err != nil {
 		return nil, err
@@ -1052,62 +1113,52 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 		return nil, err
 	}
 
-	archive, err = r.addGitlinks(ctx, info.Name, subdir, archive)
-	if err != nil {
-		return nil, err
-	}
 	return io.NopCloser(bytes.NewReader(archive)), nil
 }
 
-const (
-	// gitlinksFile is where a zip records the commit each submodule points at.
-	gitlinksFile = ".gitlinks"
+type gitOnlyKey struct{}
 
-	// archivePrefix is the top-level directory git archive writes, which the
-	// caller strips back off to get the module's own paths.
-	archivePrefix = "prefix/"
-)
+// WithGitOnly makes ReadZip build the zip with git even for a commit a GitHub
+// archive holds. An archive that export-ignore or export-subst changed does
+// not hash to the module's sum. git archive with those attributes off does.
+func WithGitOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gitOnlyKey{}, true)
+}
 
-// addGitlinks writes the submodule commits into the archive.
-//
-// A tree records a submodule as a gitlink: a path and the commit it points at.
-// `git archive` writes an empty directory for one and drops the commit, so a
-// fetched module names which submodules exist and not which commit each one is.
-// .gitmodules survives on its own, because it is a tracked file.
-//
-// Each line is a commit and a path, the shape `git ls-tree` prints them in.
-func (r *gitRepo) addGitlinks(ctx context.Context, rev, subdir string, archive []byte) ([]byte, error) {
-	dir := strings.Trim(subdir, "/")
-	cmdline := []any{"git", "ls-tree", "-r", "--full-tree", "-z", rev}
-	if dir != "" {
-		cmdline = append(cmdline, dir)
+func gitOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(gitOnlyKey{}).(bool)
+	return only
+}
+
+// fetchCommitLocked fetches hash with no history, unless git already has it.
+// It requires that r.mu stay locked.
+func (r *gitRepo) fetchCommitLocked(ctx context.Context, hash string) error {
+	if _, err := r.runGit(ctx, "git", "cat-file", "-e", "--end-of-options", hash+"^{commit}"); err == nil {
+		return nil
 	}
-	out, err := r.runGit(ctx, cmdline...)
+	release, err := base.AcquireNet()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	links := gitlinkLines(out, dir)
-	if len(links) == 0 {
-		return archive, nil
-	}
-	return appendZipFile(archive, gitlinksPath(dir), links)
+	defer release()
+	_, err = r.runGit(ctx, "git", "-c", "protocol.version=2", "fetch", "-f", "--depth=1", "--end-of-options", r.remote, hash)
+	return err
 }
 
-// gitlinksPath is where the record goes inside the archive: beside the module's
-// own files, under git archive's prefix and the module's directory. The strip
-// that turns this archive into a module zip drops anything outside that
-// directory, so a record written anywhere else reaches nobody.
-func gitlinksPath(dir string) string {
-	if dir == "" {
-		return archivePrefix + gitlinksFile
+// archivePrefix is the top-level directory git archive writes.
+const archivePrefix = "prefix/"
+
+// gitlinks lists the submodule commits in the tree at rev.
+func (r *gitRepo) gitlinks(ctx context.Context, rev string) (string, error) {
+	out, err := r.runGit(ctx, "git", "ls-tree", "-r", "--full-tree", "-z", rev)
+	if err != nil {
+		return "", err
 	}
-	return archivePrefix + dir + "/" + gitlinksFile
+	return string(gitlinkLines(out, "")), nil
 }
 
-// gitlinkLines turns `git ls-tree -z` output into the body of a gitlinks file:
-// one commit and path per line, each path relative to dir, the directory the
-// module itself lives in. A gitlink outside that directory belongs to another
-// module and is left out.
+// gitlinkLines turns `git ls-tree -z` output into one commit and path per
+// line, each path relative to dir. A gitlink outside dir is left out.
 func gitlinkLines(out []byte, dir string) []byte {
 	base := ""
 	if dir != "" {
@@ -1130,42 +1181,6 @@ func gitlinkLines(out []byte, dir string) []byte {
 		fmt.Fprintf(&links, "%s %s\n", fields[2], rest)
 	}
 	return links.Bytes()
-}
-
-// appendZipFile returns archive with one more entry, name holding body. The
-// entries already there are copied raw, so the bytes git archive compressed
-// cross untouched and the ziphash of everything but the new entry holds.
-func appendZipFile(archive []byte, name string, body []byte) ([]byte, error) {
-	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	writer := zip.NewWriter(&buf)
-	for _, entry := range reader.File {
-		dst, err := writer.CreateRaw(&entry.FileHeader)
-		if err != nil {
-			return nil, err
-		}
-		src, err := entry.OpenRaw()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := io.Copy(dst, src); err != nil {
-			return nil, err
-		}
-	}
-	dst, err := writer.Create(name)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := dst.Write(body); err != nil {
-		return nil, err
-	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // ensureGitAttributes makes sure export-subst and export-ignore features are

@@ -201,7 +201,6 @@ func runMain() (int, error) {
 		`; export GOROOT="` + deviceGoroot + `"` +
 		`; export GOPATH="` + deviceGopath + `"` +
 		`; export CGO_ENABLED=0` +
-		`; export GOPROXY=` + os.Getenv("GOPROXY") +
 		`; export GOCACHE="` + deviceRoot + `/gocache"` +
 		`; export PATH="` + deviceGoroot + `/bin":$PATH` +
 		`; export HOME="` + deviceRoot + `/home"` +

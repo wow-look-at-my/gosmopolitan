@@ -58,7 +58,7 @@ func checkDurable() {
 // the wide half of a microsecond field is what a missing conversion
 // looks like.
 func checkRusage() {
-	s := &softStep{name: "rusage", soft: cosmoHostOS() == "windows"}
+	s := &softStep{name: "rusage"}
 	var detail []string
 
 	var ru syscall.Rusage

@@ -441,12 +441,9 @@ func Init() {
 		return
 	}
 	initRan = true
-	// The short flag requests that tests run more quickly, but its functionality
-	// is provided by test writers themselves. The testing package is just its
-	// home. The all.bash installation script sets it to make installation more
-	// efficient, but by default the flag is off so a plain "go test" will do a
-	// full test of the package.
-	short = flag.Bool("test.short", false, "run smaller test suite to save time")
+	// Accepted so existing command lines parse. Short ignores it.
+	short = flag.Bool("test.short", false, "accepted and ignored: every test runs in full")
+	mayMoreStackHook = strings.Contains(os.Getenv("GOFLAGS"), "-d=maymorestack=")
 
 	// The failfast flag requests that test execution stop after the first test failure.
 	failFast = flag.Bool("test.failfast", false, "do not start new tests after the first test failure")
@@ -751,17 +748,13 @@ type common struct {
 	cancelCtx context.CancelFunc
 }
 
-// Short reports whether the -test.short flag is set.
-func Short() bool {
-	if short == nil {
-		panic("testing: Short called before Init")
-	}
-	// Catch code that calls this from TestMain without first calling flag.Parse.
-	if !flag.Parsed() {
-		panic("testing: Short called before Parse")
-	}
+// mayMoreStackHook reports whether GOFLAGS compiled a maymorestack hook into this binary.
+var mayMoreStackHook bool
 
-	return *short
+// Short reports whether a maymorestack hook runs, which yields or moves the
+// stack at every call, so only the tests' short paths fit that run.
+func Short() bool {
+	return mayMoreStackHook
 }
 
 // testBinary is set by cmd/go to "1" if this is a binary built by "go test".

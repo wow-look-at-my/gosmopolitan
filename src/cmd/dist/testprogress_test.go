@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package main
 
@@ -113,6 +112,25 @@ func TestProgressCountsEachTestOnce(t *testing.T) {
 	done, total := pro.counts()
 	if done != 2 || total != 3 {
 		t.Errorf("counts = %d/%d, want 2/3", done, total)
+	}
+}
+
+// The total counts dist tests. A variant run reports packages that are no
+// dist test, and those must not count, or done overtakes total.
+func TestPackageResultCountsOnlyItsOwnTest(t *testing.T) {
+	var timings testTimings
+	tst := &tester{testNames: map[string]bool{"bufio": true, "crypto/...:gofips140": true}}
+	tst.progress = newTestProgress(nil, &timings, 2)
+	tst.markPkgDone("bufio")
+	tst.markPkgDone("bufio")
+	tst.markPkgDone("crypto/internal/fips140/v1.26.0/aes")
+	tst.markPkgDone("crypto/aes")
+	if done, total := tst.progress.counts(); done != 1 || total != 2 {
+		t.Fatalf("after package results, counts = %d/%d, want 1/2", done, total)
+	}
+	tst.markTestDone("crypto/...:gofips140")
+	if done, total := tst.progress.counts(); done != 2 || total != 2 {
+		t.Errorf("after the variant ended, counts = %d/%d, want 2/2", done, total)
 	}
 }
 

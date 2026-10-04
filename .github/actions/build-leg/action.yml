@@ -52,6 +52,7 @@ runs:
         GOOS=cosmo go build -trimpath -o fizzbuzz.com testdata/fizzbuzz/fizzbuzz.go
         # The probe is a multi-file package, so build its module directory.
         (cd testdata/runtimeprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/runtimeprobe.com" .)
+        (cd testdata/sqliteprobe && GOOS=cosmo go build -trimpath -o "$GITHUB_WORKSPACE/sqliteprobe.com" .)
         echo "=== APE Header ==="
         head -c 200 fizzbuzz.com
         echo ""
@@ -72,7 +73,18 @@ runs:
 
     - name: Stage the APE binaries for the test job
       shell: bash
-      run: mkdir -p "$RUNNER_TEMP/handoff" && cp fizzbuzz.com runtimeprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "$RUNNER_TEMP/handoff/"
+      # The APE loaders ride along: the test job builds no toolchain, and git does not track them.
+      run: mkdir -p "${{ runner.temp }}/handoff/apeld" && cp fizzbuzz.com runtimeprobe.com sqliteprobe.com fizzbuzz-tri.com runtimeprobe-tri.com fizzbuzz-amd.com runtimeprobe-amd.com "${{ runner.temp }}/handoff/" && cp src/cmd/link/internal/ld/apeld/bin/apeld-* "${{ runner.temp }}/handoff/apeld/"
+
+    # The cgo probe carries C for both architectures, which cosmocc compiles here. Every test host runs it.
+    - if: runner.os == 'Linux'
+      uses: ./.github/actions/cosmocc
+    - name: Build the cgo probe
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        export PATH="$PWD/bin:/opt/cosmocc/bin:$PATH"
+        cd testdata/cgoprobe && GOOS=cosmo go build -trimpath -o "${{ runner.temp }}/handoff/cgoprobe.com" .
 
     - name: Hand the APE binaries to the test job
       uses: wow-look-at-my/actions@cache-upload#latest
@@ -82,11 +94,12 @@ runs:
 
 
 
-    # bin/, pkg/tool/ and the sources dist generates are the build; std comes from the shared cache.
+    # bin/, pkg/tool/, the APE loaders and the sources dist generates are the build; std comes from the shared cache.
     - name: Stage the toolchain
       shell: bash
       run: |
         mkdir -p "$RUNNER_TEMP/toolchain/pkg" && cp -a bin "$RUNNER_TEMP/toolchain/" && cp -a pkg/tool pkg/include "$RUNNER_TEMP/toolchain/pkg/"
+        mkdir -p "$RUNNER_TEMP/toolchain/src/cmd/link/internal/ld/apeld" && cp -a src/cmd/link/internal/ld/apeld/bin "$RUNNER_TEMP/toolchain/src/cmd/link/internal/ld/apeld/"
         # The generated sources are the ignored .go files the build left in src/.
         for f in $(git ls-files --others --ignored --exclude-standard src | grep '\.go$'); do
           mkdir -p "$RUNNER_TEMP/toolchain/$(dirname "$f")" && cp "$f" "$RUNNER_TEMP/toolchain/$f"

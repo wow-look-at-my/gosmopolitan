@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package load
 
@@ -25,7 +24,7 @@ func TestGroupMembersSharesOneBinary(test *testing.T) {
 	}
 }
 
-// build_pgo_auto_multi is the case that found this: -pgo=auto gives two main
+// build_pgo_auto_multi is the case that found this: -pgo=auto gives main
 // packages their own default.pgo, and every dependency is compiled once per
 // profile. One binary cannot link both copies.
 func TestGroupMembersKeepsProfilesApart(test *testing.T) {

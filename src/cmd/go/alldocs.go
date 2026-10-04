@@ -2480,14 +2480,8 @@
 //		of module path prefixes that should always be fetched directly
 //		or that should not be compared against the checksum database.
 //		See https://go.dev/ref/mod#private-modules.
-//	GOPROXY
-//		URL of Go module proxy. See https://go.dev/ref/mod#environment-variables
-//		and https://go.dev/ref/mod#module-proxy for details.
 //	GOROOT
 //		The root of the go tree.
-//	GOSUMDB
-//		The name of checksum database to use and optionally its public key and
-//		URL. See https://go.dev/ref/mod#authenticating.
 //	GOTMPDIR
 //		Temporary directory used by the go command and testing package.
 //		Overrides the platform-specific temporary directory such as "/tmp".
@@ -3149,15 +3143,15 @@
 //
 // For a detailed reference on modules, see https://go.dev/ref/mod.
 //
-// By default, the go command may download modules from https://proxy.golang.org.
-// It may authenticate modules using the checksum database at
-// https://sum.golang.org. Both services are operated by the Go team at Google.
-// The privacy policies for these services are available at
-// https://proxy.golang.org/privacy and https://sum.golang.org/privacy,
-// respectively.
+// The go command downloads each module from its origin repository. A github.com
+// module comes from its GitHub archive. The go command never asks the module
+// mirror at proxy.golang.org. It authenticates modules using the checksum
+// database at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this
+// toolchain. The privacy policy of the checksum database is available at
+// https://sum.golang.org/privacy.
 //
-// The go command's download behavior may be configured using GOPROXY, GOSUMDB,
-// GOPRIVATE, and other environment variables. See 'go help environment'
+// The go command's download behavior may be configured using GOPRIVATE,
+// GONOPROXY, GONOSUMDB and other environment variables. See 'go help environment'
 // and https://go.dev/ref/mod#private-module-privacy for more information.
 //
 // # Module authentication using go.sum
@@ -3166,8 +3160,8 @@
 // module cache, it computes a cryptographic hash and compares it with a known
 // value to verify the file hasn't changed since it was first downloaded. Known
 // hashes are stored in a file in the module root directory named go.sum. Hashes
-// may also be downloaded from the checksum database depending on the values of
-// GOSUMDB, GOPRIVATE, and GONOSUMDB.
+// may also be downloaded from the checksum database at sum.golang.org depending
+// on the values of GOPRIVATE and GONOSUMDB.
 //
 // For details, see https://go.dev/ref/mod#authenticating.
 //
@@ -3319,10 +3313,10 @@
 //
 // # Configuration for downloading non-public code
 //
-// The go command defaults to downloading modules from the public Go module
-// mirror at proxy.golang.org. It also defaults to validating downloaded modules,
-// regardless of source, against the public Go checksum database at sum.golang.org.
-// These defaults work well for publicly available source code.
+// The go command downloads each module from its origin repository, and never
+// from the module mirror at proxy.golang.org. It validates downloaded modules
+// against the public Go checksum database at sum.golang.org. This toolchain
+// has no GOPROXY or GOSUMDB to replace either service.
 //
 // The GOPRIVATE environment variable controls which modules the go command
 // considers to be private (not available publicly) and should therefore not use
@@ -3340,13 +3334,6 @@
 // and GONOSUMDB environment variables accept the same kind of glob list
 // and override GOPRIVATE for the specific decision of whether to use the proxy
 // and checksum database, respectively.
-//
-// For example, if a company ran a module proxy serving private modules,
-// users would configure go using:
-//
-//	GOPRIVATE=*.corp.example.com
-//	GOPROXY=proxy.example.com
-//	GONOPROXY=none
 //
 // The GOPRIVATE variable is also used to define the "public" and "private"
 // patterns for the GOVCS variable; see 'go help vcs'. For that usage,
@@ -3740,13 +3727,9 @@
 // The version control command restrictions only apply when using direct version
 // control access to download code. When downloading modules from a proxy,
 // the go command uses the proxy protocol instead, which is always permitted.
-// By default, the go command uses the Go module mirror (proxy.golang.org)
-// for public packages and only falls back to version control for private
-// packages or when the mirror refuses to serve a public package (typically for
-// legal reasons). Therefore, clients can still access public code served from
-// Bazaar, Fossil, or Subversion repositories by default, because those downloads
-// use the Go module mirror, which takes on the security risk of running the
-// version control commands using a custom sandbox.
+// This toolchain never uses the Go module mirror (proxy.golang.org). Every
+// module comes from its origin, so the default GOVCS refuses public code served
+// from Bazaar, Fossil, or Subversion repositories. Set GOVCS to allow them.
 //
 // The GOVCS variable can be used to change the allowed version control systems
 // for specific packages (identified by a module or import path).

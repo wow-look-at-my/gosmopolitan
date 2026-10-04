@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -11,18 +10,14 @@ import (
 	"os"
 	"strings"
 
+	"cmd/go/internal/base"
 	"cmd/go/internal/cache"
 	"cmd/internal/buildid"
 )
 
-// The merge that assembles an APE out of its payloads is a command outside
-// the action graph, so the build cache never saw it. Its inputs are the two
-// payloads, the linker, the appended blob and the merge flags, and its
-// outputs are the APE and the debug sidecars the linker writes beside it.
-// Keyed by the inputs, a repeated merge is a copy out of the cache.
+// The merge that assembles an APE out of its payloads is a command outside the action graph.
 
-// cosmoMergeSidecars names the sidecars a merge may write beside its output,
-// by the cache subkey each is stored under.
+// cosmoMergeSidecars names the sidecars a merge may write beside its output, by the cache subkey each is stored under.
 var cosmoMergeSidecars = []string{".dbg"}
 
 // cosmoMergeID computes the cache key of a merge: the linker's ID, the
@@ -33,6 +28,17 @@ func cosmoMergeID(b *Builder, args []string, target, sibling string) (cache.Acti
 	h := cache.NewHash("cosmo merge")
 	fmt.Fprintf(h, "cosmo merge v1\n")
 	fmt.Fprintf(h, "link %s\n", b.toolID("link"))
+	// A linked linker's stamped ID can stay put when its code changes, and a hit
+	// then serves an APE header another linker wrote. The executable is that
+	// linker.
+	if base.Linked("link") {
+		exe := base.ToolCmd("link")[0]
+		sum := b.fileHash(exe)
+		if sum == "" {
+			return cache.ActionID{}, fmt.Errorf("hashing the linker %s for the merge key", exe)
+		}
+		fmt.Fprintf(h, "linker %s\n", sum)
+	}
 	primary, err := cosmoPayloadID(target)
 	if err != nil {
 		return cache.ActionID{}, err

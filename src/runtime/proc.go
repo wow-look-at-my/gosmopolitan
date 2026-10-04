@@ -291,7 +291,10 @@ func main() {
 	// goroutine that blocks during init would be rescheduled on whichever
 	// M is free. From here on, upstream semantics: main.main starts on
 	// this thread and is only pinned if it calls LockOSThread itself.
-	unlockOSThread()
+	// A binary that holds several packages' tests runs the chosen package's init from main.main, through runTestInit, which unlocks after it.
+	if len(testinittasks) == 0 {
+		unlockOSThread()
+	}
 
 	if isarchive || islibrary {
 		// A program compiled with -buildmode=c-archive or c-shared

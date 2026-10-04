@@ -14,6 +14,7 @@ import (
 	"net/url"
 	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -60,6 +61,11 @@ type proxySpec struct {
 
 func proxyList() ([]proxySpec, error) {
 	proxyOnce.Do(func() {
+		// A github.com module comes from its GitHub archive. Every other path
+		// goes direct to its origin.
+		if cfg.GOPROXY == cfg.DefaultGOPROXY {
+			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "github", fallBackOnError: true})
+		}
 		if cfg.GONOPROXY != "" && cfg.GOPROXY != "direct" {
 			proxyOnce.list = append(proxyOnce.list, proxySpec{url: "noproxy"})
 		}
@@ -114,11 +120,11 @@ func proxyList() ([]proxySpec, error) {
 			})
 		}
 
-		if len(proxyOnce.list) == 0 ||
-			len(proxyOnce.list) == 1 && proxyOnce.list[0].url == "noproxy" {
-			// There were no proxies, other than the implicit "noproxy" added when
-			// GONOPROXY is set. This can happen if GOPROXY is a non-empty string
-			// like "," or " ".
+		configured := slices.ContainsFunc(proxyOnce.list, func(spec proxySpec) bool {
+			return spec.url != "github" && spec.url != "noproxy"
+		})
+		if !configured {
+			// There were no proxies, other than the implicit "github" and "noproxy" entries.
 			proxyOnce.err = fmt.Errorf("GOPROXY list is not the empty string, but contains no entries")
 		}
 	})
@@ -159,14 +165,21 @@ func TryProxies(f func(proxy string) error) error {
 	)
 	var bestErr error
 	bestErrRank := notExistRank
+	triedGitHub := false
 	for _, proxy := range proxies {
+		if proxy.url == "direct" && triedGitHub {
+			// The "github" entry already fetched this module directly.
+			continue
+		}
 		err := f(proxy.url)
 		if err == nil {
 			return nil
 		}
 		isNotExistErr := errors.Is(err, fs.ErrNotExist)
+		fromGitHub := proxy.url == "github" && err != errNotGitHub && err != errNoproxy
+		triedGitHub = triedGitHub || fromGitHub
 
-		if proxy.url == "direct" || (proxy.url == "noproxy" && err != errUseProxy) {
+		if proxy.url == "direct" || fromGitHub || (proxy.url == "noproxy" && err != errUseProxy) {
 			bestErr = err
 			bestErrRank = directRank
 		} else if bestErrRank <= proxyRank && !isNotExistErr {
@@ -182,6 +195,10 @@ func TryProxies(f func(proxy string) error) error {
 	}
 	return bestErr
 }
+
+// bannedProxyHost is refused as a module proxy wherever its URL comes from,
+// a go-import "mod" tag included.
+const bannedProxyHost = web.BannedHost
 
 type proxyRepo struct {
 	url          *url.URL // The combined module proxy URL joined with the module path.
@@ -200,6 +217,9 @@ func newProxyRepo(baseURL, path string) (Repo, error) {
 		return nil, err
 	}
 	redactedBase := base.Redacted()
+	if base.Host == bannedProxyHost {
+		return nil, fmt.Errorf("%s is not a module source for this toolchain", bannedProxyHost)
+	}
 	switch base.Scheme {
 	case "http", "https":
 		// ok
@@ -429,6 +449,8 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 		return p.versionError(version, err)
 	}
 	path := "@v/" + encVer + ".zip"
+	rec := codehost.FetchFrom(ctx)
+	start := time.Now()
 	body, redactedURL, err := p.getBody(ctx, path)
 	if err != nil {
 		return p.versionError(version, err)
@@ -436,7 +458,9 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 	defer body.Close()
 
 	lr := &io.LimitedReader{R: body, N: codehost.MaxZipFile + 1}
-	if _, err := io.Copy(dst, lr); err != nil {
+	copied, err := io.Copy(dst, lr)
+	rec.AddTransfer(start, copied, time.Since(start))
+	if err != nil {
 		// net/http doesn't add context to Body read errors, so add it here.
 		// (See https://go.dev/issue/52727.)
 		err = &url.Error{Op: "read", URL: redactedURL, Err: err}
@@ -445,6 +469,7 @@ func (p *proxyRepo) Zip(ctx context.Context, dst io.Writer, version string) erro
 	if lr.N <= 0 {
 		return p.versionError(version, fmt.Errorf("downloaded zip file too large"))
 	}
+	rec.SetRoute("module proxy " + p.redactedBase)
 	return nil
 }
 

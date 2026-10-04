@@ -11,7 +11,7 @@ env HOME=$WORK${/}home${/}gopher
 exec git config --global --show-origin user.name
 stdout 'Go Gopher'
 
-env GOPROXY=direct
+env TESTGO_GOPROXY=direct
 
 exec git config --get log.decorate
 stdout 'full'

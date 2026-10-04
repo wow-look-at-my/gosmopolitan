@@ -1,6 +1,5 @@
-// Copyright 2024 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 // Error constants for Cosmopolitan Libc on amd64.
 // Cosmopolitan uses Linux error numbers.
@@ -183,6 +182,12 @@ const (
 	MAP_FIXED     = 0x10
 	MAP_PRIVATE   = 0x2
 	MAP_SHARED    = 0x1
+
+	MADV_NORMAL     = 0x0
+	MADV_RANDOM     = 0x1
+	MADV_SEQUENTIAL = 0x2
+	MADV_WILLNEED   = 0x3
+	MADV_DONTNEED   = 0x4
 
 	LOCK_EX = 0x2
 	LOCK_NB = 0x4

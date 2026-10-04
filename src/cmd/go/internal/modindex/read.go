@@ -101,10 +101,6 @@ func dirHash(modroot, pkgdir string) (cache.ActionID, error) {
 		// write might not change the mtime due to file system
 		// mtime precision, reject caching if a file was read that
 		// is less than modTimeCutoff old.
-		//
-		// This is the same strategy used for hashing test inputs.
-		// See hashOpen in cmd/go/internal/test/test.go for the
-		// corresponding code.
 		info, err := d.Info()
 		if err != nil {
 			return cache.ActionID{}, ErrNotIndexed

@@ -1561,9 +1561,7 @@ func rootsFromModFile(ld *Loader, ctx context.Context, m module.Version, modFile
 			continue
 		}
 
-		// An org module has no version of its own: the token on the require line
-		// is a placeholder, and the root is the head of the branch the module
-		// follows.
+		// The token is a placeholder. The root is the branch head, or the head the run locked in CI.
 		root := r.Mod
 		root, err = resolveOrgRequire(ld, ctx, root)
 		if err != nil {

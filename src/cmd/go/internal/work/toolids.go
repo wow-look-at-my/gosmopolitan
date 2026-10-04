@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -24,22 +23,18 @@ import (
 // cache entries from whichever binary carries it. Builds of the same tool by
 // different compilers converge once their archives do.
 func linkedToolIDs(root *Action) string {
-	contentIDs := map[string]string{}
 	var tools []*Action
 	seen := map[*Action]bool{}
-	var walk func(a *Action)
-	walk = func(a *Action) {
-		if seen[a] {
+	var walk func(act *Action)
+	walk = func(act *Action) {
+		if seen[act] {
 			return
 		}
-		seen[a] = true
-		if a.Mode == "build" && a.Package != nil && a.buildID != "" {
-			contentIDs[a.Package.ImportPath] = contentID(a.buildID)
-			if isToolPackage(a.Package.ImportPath) && a.Package.Goroot {
-				tools = append(tools, a)
-			}
+		seen[act] = true
+		if isBuiltPackage(act) && isToolPackage(act.Package.ImportPath) && act.Package.Goroot {
+			tools = append(tools, act)
 		}
-		for _, dep := range a.Deps {
+		for _, dep := range act.Deps {
 			walk(dep)
 		}
 	}
@@ -50,22 +45,51 @@ func linkedToolIDs(root *Action) string {
 
 	var pairs []string
 	for _, tool := range tools {
-		h := sha256.New()
-		fmt.Fprintf(h, "%s %s\n", tool.Package.ImportPath, contentIDs[tool.Package.ImportPath])
-		deps := append([]string(nil), tool.Package.Deps...)
-		sort.Strings(deps)
-		for _, dep := range deps {
-			if id, ok := contentIDs[dep]; ok {
-				fmt.Fprintf(h, "%s %s\n", dep, id)
-			}
+		// The dependencies come from the action graph.
+		contentIDs := packageContentIDs(tool)
+		paths := make([]string, 0, len(contentIDs))
+		for path := range contentIDs {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		hash := sha256.New()
+		for _, path := range paths {
+			fmt.Fprintf(hash, "%s %s\n", path, contentIDs[path])
 		}
 		var sum [32]byte
-		copy(sum[:], h.Sum(nil))
+		copy(sum[:], hash.Sum(nil))
 		name := strings.TrimPrefix(tool.Package.ImportPath, "cmd/")
 		pairs = append(pairs, name+"="+buildid.HashToString(sum))
 	}
 	sort.Strings(pairs)
 	return strings.Join(pairs, ",")
+}
+
+// packageContentIDs answers the content ID of top and of every package
+// reachable from it in the action graph, by import path.
+func packageContentIDs(top *Action) map[string]string {
+	ids := map[string]string{}
+	seen := map[*Action]bool{}
+	var walk func(act *Action)
+	walk = func(act *Action) {
+		if seen[act] {
+			return
+		}
+		seen[act] = true
+		if isBuiltPackage(act) {
+			ids[act.Package.ImportPath] = contentID(act.buildID)
+		}
+		for _, dep := range act.Deps {
+			walk(dep)
+		}
+	}
+	walk(top)
+	return ids
+}
+
+// isBuiltPackage reports whether act compiled a package and knows its build ID.
+func isBuiltPackage(act *Action) bool {
+	return act.Mode == "build" && act.Package != nil && act.buildID != ""
 }
 
 // isToolPackage reports whether path names a tool: cmd/<name> and nothing

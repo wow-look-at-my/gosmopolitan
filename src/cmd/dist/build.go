@@ -642,10 +642,11 @@ func mustLinkExternal(goos, goarch string, cgoEnabled bool) bool {
 		switch goos {
 		case "android":
 			return true
+		case "cosmo":
+			// The internal linker cannot carry libcosmo.
+			return true
 		case "dragonfly":
-			// It seems that on Dragonfly thread local storage is
-			// set up by the dynamic linker, so internal cgo linking
-			// doesn't work. Test case is "go test runtime/cgo".
+			// It seems that on Dragonfly thread local storage is set up by the dynamic linker.
 			return true
 		}
 	}
@@ -1283,7 +1284,6 @@ func cmdenv() {
 	xprintf(format, "GOHOSTARCH", gohostarch)
 	xprintf(format, "GOHOSTOS", gohostos)
 	xprintf(format, "GOOS", goos)
-	xprintf(format, "GOPROXY", os.Getenv("GOPROXY"))
 	xprintf(format, "GOROOT", goroot)
 	xprintf(format, "GOTMPDIR", os.Getenv("GOTMPDIR"))
 	xprintf(format, "GOTOOLDIR", tooldir)
@@ -1382,6 +1382,18 @@ var (
 // of one. These lines split a leg's wall time between compiling and testing.
 func reportStep(kind, name string, elapsed time.Duration) {
 	fmt.Printf("dist %s %.3fs %s\n", kind, elapsed.Seconds(), name)
+}
+
+// reportTestStep is reportStep for a test command, with the CPU time it and
+// every process it waited for used. Under load the wall time is mostly a wait
+// for a core. The CPU time is what the step itself cost.
+func reportTestStep(name string, elapsed time.Duration, state *os.ProcessState) {
+	if state == nil {
+		fmt.Printf("dist test %.3fs cpu unknown (the command did not start) %s\n", elapsed.Seconds(), name)
+		return
+	}
+	cpu := state.UserTime() + state.SystemTime()
+	fmt.Printf("dist test %.3fs cpu %.3fs %s\n", elapsed.Seconds(), cpu.Seconds(), name)
 }
 
 // startPhase names the phase of the build now running and reports what the
@@ -1532,12 +1544,6 @@ func cmdbootstrap() {
 	// go tool may complain.
 	os.Setenv("GOPATH", pathf("%s/pkg/obj/gopath", goroot))
 
-	// Set GOPROXY=off to avoid downloading modules to the modcache in
-	// the GOPATH set above to be inside GOROOT. The modcache is read
-	// only so if we downloaded to the modcache, we'd create readonly
-	// files in GOROOT, which is undesirable. See #67463)
-	os.Setenv("GOPROXY", "off")
-
 	// Use a build cache separate from the default user one.
 	// Also one that will be wiped out during startup, so that
 	// make.bash really does start from a clean slate.
@@ -1569,6 +1575,10 @@ func cmdbootstrap() {
 	}
 
 	setup()
+
+	// cmd/link embeds the loaders, and toolchain1 builds cmd/link.
+	startPhase("apeld")
+	buildApeLoaders()
 
 	startPhase("toolchain1")
 	checkCC()
@@ -1879,12 +1889,12 @@ func checkNotStale(env []string, goBinary string, targets ...string) {
 // by 'go tool dist list'.
 // cgoEnabled is what 'dist list' enumerates AND what generates
 // internal/platform's zosarch.go, so a port left out here is one the go
-// command reports and cmd/dist does not. Cosmo is cgo-less: an APE carries a
-// payload per architecture, and cgo would want a C cross-toolchain for each.
+// command reports and cmd/dist does not. Cosmo cgo needs the cosmocc cross
+// compiler for each architecture. cmd/go turns it off when cosmocc is absent.
 var cgoEnabled = map[string]bool{
 	"aix/ppc64":       true,
-	"cosmo/amd64":     false,
-	"cosmo/arm64":     false,
+	"cosmo/amd64":     true,
+	"cosmo/arm64":     true,
 	"darwin/amd64":    true,
 	"darwin/arm64":    true,
 	"dragonfly/amd64": true,

@@ -1,23 +1,16 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
 package cosmo
 
 // Apple ABI facts the darwin emulation translates against, and the pure
-// functions that do the translating. They live in an architecture-neutral
-// file because they describe Apple's ABI rather than a machine: the
-// structs and the constant numbering are the same on both Apple
-// architectures, which also lets the tests run wherever cosmo tests run.
-// The code that CALLS them is arm64-only (file_cosmo_arm64.go,
-// proc_cosmo_arm64.go), since that is the only macOS port brought up.
+// functions that do the translating.
 
-// DarwinStatfs is Apple's struct statfs under the 64-bit-inode ABI.
-// The syscall package allocates one of these and converts it to a Linux
-// Statfs_t; see darwinStatfs for why the buffer cannot be built inside
-// the emulation.
+// DarwinStatfs is Apple's struct statfs under the 64-bit-inode ABI. The
+// syscall package allocates one of these and converts it to a Linux Statfs_t;
+// see darwinStatfs for why the buffer cannot be built inside the emulation.
 type DarwinStatfs struct {
 	Bsize       uint32
 	Iosize      int32
@@ -38,8 +31,7 @@ type DarwinStatfs struct {
 	Reserved    [7]uint32
 }
 
-// DarwinUtsname is Apple's struct utsname: five _SYS_NAMELEN (256) byte
-// fields. Apple has no domainname field.
+// Apple has no domainname field.
 type DarwinUtsname struct {
 	Sysname  [256]byte
 	Nodename [256]byte
@@ -48,12 +40,19 @@ type DarwinUtsname struct {
 	Machine  [256]byte
 }
 
-// DarwinFlock is Apple's struct flock. It holds the same five fields as
-// Linux's Flock_t in a different order and eight bytes less, so an fcntl
-// lock command hands this emulation a record of THIS shape and the
-// syscall package converts, the way it does for statfs and utsname.
-// Lock types differ too: Linux counts from zero, Apple starts at one and
-// puts the write lock last.
+// LinuxFlock is Linux's struct flock on amd64 and arm64, the record every
+// caller of fcntl's lock commands hands the emulation.
+type LinuxFlock struct {
+	Type   int16
+	Whence int16
+	_      [4]byte
+	Start  int64
+	Len    int64
+	Pid    int32
+	_      [4]byte
+}
+
+// DarwinFlock is Apple's struct flock.
 type DarwinFlock struct {
 	Start  int64
 	Len    int64
@@ -76,6 +75,8 @@ const (
 // DarwinLockType translates a Linux flock l_type to Apple's. It reports
 // false for a value Apple has no lock type for, which is the whole set
 // of reasons a record cannot be translated.
+//
+//go:nosplit
 func DarwinLockType(t int16) (int16, bool) {
 	switch t {
 	case linuxF_RDLCK:
@@ -90,6 +91,8 @@ func DarwinLockType(t int16) (int16, bool) {
 
 // LinuxLockType is the reverse. F_GETLK answers through the record, so
 // the type comes back as well as goes out.
+//
+//go:nosplit
 func LinuxLockType(t int16) (int16, bool) {
 	switch t {
 	case darwinF_RDLCK:
@@ -102,9 +105,8 @@ func LinuxLockType(t int16) (int16, bool) {
 	return 0, false
 }
 
-// utimensat's "leave this stamp alone" and "use the current time"
-// sentinels sit in the nanosecond field. Linux encodes them as large
-// positive values, Apple as small negative ones.
+// utimensat's "leave this stamp alone" and "use the current time" sentinels
+// sit in the nanosecond field.
 const (
 	linuxUTIME_NOW  = 0x3fffffff
 	linuxUTIME_OMIT = 0x3ffffffe
@@ -124,8 +126,7 @@ func darwinXlatUtimeNsec(nsec int64) int64 {
 	return nsec
 }
 
-// Linux RLIMIT_* numbers (asm-generic). Values 0..4 match Apple; the
-// rest do not, and 10 and above have no Apple counterpart at all.
+// Linux RLIMIT_* numbers (asm-generic).
 const (
 	linuxRLIMIT_CPU     = 0
 	linuxRLIMIT_FSIZE   = 1
@@ -149,10 +150,8 @@ const (
 	appleRLIMIT_NOFILE  = 8
 )
 
-// "No limit" is all-ones on Linux and the largest positive value of a
-// signed 64-bit rlim_t on Apple. Passing one through as the other turns
-// an unlimited resource into a nonsense finite one, so both directions
-// are rewritten.
+// "No limit" is all-ones on Linux and the largest positive value of a signed
+// 64-bit rlim_t on Apple.
 const (
 	linuxRLIM_INFINITY = ^uint64(0)
 	appleRLIM_INFINITY = uint64(1)<<63 - 1
@@ -167,7 +166,7 @@ const (
 func darwinXlatResource(res uintptr) (uintptr, bool) {
 	switch res {
 	case linuxRLIMIT_CPU, linuxRLIMIT_FSIZE, linuxRLIMIT_DATA, linuxRLIMIT_STACK:
-		return res, true // 0..3 agree
+		return res, true
 	case linuxRLIMIT_CORE:
 		return appleRLIMIT_CORE, true
 	case linuxRLIMIT_RSS, linuxRLIMIT_AS:
@@ -198,17 +197,10 @@ func darwinRlimitToApple(v uint64) uint64 {
 	return v
 }
 
-// darwinNiceBias is what the Linux getpriority SYSCALL adds to a nice
-// value so its result is never negative; libc subtracts it again. Apple
-// returns the nice value itself, so the emulation applies the bias to
-// give a caller on macOS the same number a Linux host returns.
+// darwinNiceBias is what the Linux getpriority SYSCALL adds to a nice value so its result is never negative.
 const darwinNiceBias = 20
 
-// DarwinTimeval is Apple's struct timeval. The microsecond field is
-// 32 bits with four bytes of padding behind it, where the Linux one is a
-// full 64 bits - the same 16 bytes, and different contents. So every
-// struct that embeds a timeval needs converting rather than forwarding,
-// and a pass-through would hand the caller whatever the padding held.
+// DarwinTimeval is Apple's struct timeval.
 type DarwinTimeval struct {
 	Sec  int64
 	Usec int32
@@ -221,7 +213,7 @@ type LinuxTimeval struct {
 	Usec int64
 }
 
-// DarwinRusage is Apple's struct rusage. Every field after the two
+// DarwinRusage is Apple's struct rusage. Every field after both
 // timevals is a 64-bit signed integer in the same order Linux uses -
 // Linux took the layout from BSD - so only the timevals are translated.
 type DarwinRusage struct {
@@ -290,16 +282,11 @@ func DarwinRusageToLinux(src *DarwinRusage, dst *LinuxRusage) {
 }
 
 // ioctl request numbers. A request encodes the direction and the size of
-// its argument, so the two systems number even the requests they share
+// its argument, so both systems number even the requests they share
 // differently. Every value here is the one the tree's own tables record
 // (syscall/zerrors_linux_arm64.go and syscall/zerrors_darwin_arm64.go),
 // never a remembered one: a wrong request does not fail, it performs a
 // DIFFERENT operation on the descriptor.
-//
-// The set is exactly the requests whose ARGUMENT needs no translation:
-// struct winsize is four uint16 fields on both systems, and the rest
-// take an int or nothing at all. The termios requests take a struct that
-// needs converting, so they have their own table below.
 const (
 	linuxTIOCSCTTY  = 0x540e
 	linuxTIOCGPGRP  = 0x540f
@@ -315,23 +302,13 @@ const (
 	appleTIOCSWINSZ = 0x80087467
 	appleTIOCNOTTY  = 0x20007471
 
-	// The pty grant/unlock/name trio has no Linux spelling to translate
-	// FROM. Linux grants through libc, unlocks with TIOCSPTLCK and asks
-	// TIOCGPTN for a NUMBER, naming the slave /dev/pts/N; Apple answers
-	// TIOCPTYGNAME with a NAME, /dev/ttysNNN. A number cannot carry that,
-	// so a caller that wants a slave on a Darwin host asks for Apple's
-	// request and gets it unchanged.
+	// The pty grant/unlock/name trio has no Linux spelling to translate FROM.
 	appleTIOCPTYGRANT = 0x20007454
 	appleTIOCPTYUNLK  = 0x20007452
 	appleTIOCPTYGNAME = 0x40807453
 )
 
-// The termios requests. These are kept apart from the table above
-// because their ARGUMENT is a struct the two systems shape differently,
-// so serving one is a conversion rather than a forward
-// (darwinTermiosIoctl). TCSETSW and TCSETSF differ from TCSETS only in
-// when the change takes effect - after the output drains, and after the
-// input is flushed as well - which Apple spells the same way.
+// The termios requests.
 const (
 	linuxTCGETS  = 0x5401
 	linuxTCSETS  = 0x5402
@@ -380,10 +357,7 @@ func DarwinXlatIoctl(req uintptr) (uintptr, bool) {
 	case linuxTIOCNOTTY:
 		return appleTIOCNOTTY, true
 	case appleTIOCPTYGRANT, appleTIOCPTYUNLK, appleTIOCPTYGNAME:
-		// Already Apple's, and named here so the pass-through is a
-		// decision rather than a hole: an unlisted request still answers
-		// ENOSYS. No Linux number collides -- these carry BSD's own
-		// direction bits and sizes.
+		// Already Apple's, and named here so the pass-through is a decision rather than a hole.
 		return req, true
 	}
 	return 0, false

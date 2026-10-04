@@ -10,6 +10,8 @@ import (
 	"internal/testenv"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -19,25 +21,30 @@ import (
 func FetchModule(t *testing.T, module, version string) string {
 	testenv.MustHaveExternalNetwork(t)
 
-	// If the default GOMODCACHE doesn't exist, use a temporary directory
-	// instead. (For example, run.bash sets GOPATH=/nonexist-gopath.)
-	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOMODCACHE")).Output()
+	// The go command keeps the checksum database's tree head under GOPATH/pkg/sumdb, and run.bash sets GOPATH=/nonexist-gopath.
+	out, err := testenv.CleanCmdEnv(testenv.Command(t, testenv.GoToolPath(t), "env", "GOPATH", "GOMODCACHE")).Output()
 	if err != nil {
-		t.Errorf("%s env GOMODCACHE: %v\n%s", testenv.GoToolPath(t), err, out)
+		t.Errorf("%s env GOPATH GOMODCACHE: %v\n%s", testenv.GoToolPath(t), err, out)
 		if ee, ok := err.(*exec.ExitError); ok {
 			t.Logf("%s", ee.Stderr)
 		}
 		t.FailNow()
 	}
-	modcacheOk := false
-	if gomodcache := string(bytes.TrimSpace(out)); gomodcache != "" {
-		if _, err := os.Stat(gomodcache); err == nil {
-			modcacheOk = true
+	gopath, gomodcache, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	gomodcache = strings.TrimSpace(gomodcache)
+	if !dirExists(gopath) {
+		tmp := t.TempDir()
+		t.Setenv("GOPATH", tmp)
+		if dirExists(gomodcache) {
+			// A GOFIPS140 snapshot lives in its own GOMODCACHE. Keep it.
+			t.Setenv("GOMODCACHE", gomodcache)
+		} else {
+			t.Setenv("GOMODCACHE", filepath.Join(tmp, "pkg", "mod"))
+			// Allow t.TempDir() to clean up subdirectories.
+			t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
 		}
-	}
-	if !modcacheOk {
+	} else if !dirExists(gomodcache) {
 		t.Setenv("GOMODCACHE", t.TempDir())
-		// Allow t.TempDir() to clean up subdirectories.
 		t.Setenv("GOFLAGS", os.Getenv("GOFLAGS")+" -modcacherw")
 	}
 
@@ -61,4 +68,9 @@ func FetchModule(t *testing.T, module, version string) string {
 	}
 
 	return j.Dir
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

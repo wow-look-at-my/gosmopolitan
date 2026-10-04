@@ -144,6 +144,9 @@ func defaultContext() build.Context {
 	if buildcfg.DefaultCGO_ENABLED == "1" {
 		defaultCgoEnabled = true
 	} else if buildcfg.DefaultCGO_ENABLED == "0" {
+	} else if ctxt.GOOS == "cosmo" {
+		// Cosmo is always a cross build. Its cgo default follows the cosmocc compiler.
+		defaultCgoEnabled = platform.CgoSupported(ctxt.GOOS, ctxt.GOARCH) && cosmoCgoDefault(ctxt.GOARCH)
 	} else if runtime.GOARCH == ctxt.GOARCH && runtime.GOOS == ctxt.GOOS {
 		defaultCgoEnabled = platform.CgoSupported(ctxt.GOOS, ctxt.GOARCH)
 		// Use built-in default cgo setting for GOOS/GOARCH.
@@ -360,9 +363,11 @@ func EnvFile() (string, bool, error) {
 
 // RemovedEnv names the configuration keys this toolchain refuses to honor.
 // GOBIN sent installed binaries somewhere other than the toolchain's own bin
-// directory. GOTOOLCHAIN handed the build to a different go command.
+// directory. GOTOOLCHAIN handed the build to a different go command. GOPROXY
+// and GOSUMDB replaced the module source and the checksum database. The go
+// command now always uses DefaultGOPROXY and DefaultGOSUMDB.
 //
-// The go command reads neither. Getenv answers "" for both, KnownEnv omits
+// The go command reads none of them. Getenv answers "" for each, KnownEnv omits
 // them so 'go env -w' rejects them like any other name it does not know, and
 // initEnvCache drops them from the go/env file.
 //
@@ -370,7 +375,14 @@ func EnvFile() (string, bool, error) {
 // must reach a program the same way an unknown name does, because a build
 // tool has no business editing what the program under `go run` or `go test`
 // sees.
-var RemovedEnv = []string{"GOBIN", "GOTOOLCHAIN"}
+var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
+
+// DefaultGOPROXY fetches every module from its origin. The go command never
+// asks proxy.golang.org. DefaultGOSUMDB is the checksum database.
+const (
+	DefaultGOPROXY = "direct"
+	DefaultGOSUMDB = "sum.golang.org"
+)
 
 func initEnvCache() {
 	envCache.m = make(map[string]string)
@@ -509,8 +521,9 @@ var (
 	GOWASI, goWASIChanged       = EnvOrAndChanged("GOWASI", fmt.Sprint(buildcfg.GOWASI))
 
 	GOFIPS140, GOFIPS140Changed = EnvOrAndChanged("GOFIPS140", buildcfg.DefaultGOFIPS140)
-	GOPROXY, GOPROXYChanged     = EnvOrAndChanged("GOPROXY", "")
-	GOSUMDB, GOSUMDBChanged     = EnvOrAndChanged("GOSUMDB", "")
+	// Only the cmd/go test binary assigns these. See RemovedEnv.
+	GOPROXY                     = DefaultGOPROXY
+	GOSUMDB                     = DefaultGOSUMDB
 	GOPRIVATE                   = Getenv("GOPRIVATE")
 	GONOPROXY, GONOPROXYChanged = EnvOrAndChanged("GONOPROXY", GOPRIVATE)
 	GONOSUMDB, GONOSUMDBChanged = EnvOrAndChanged("GONOSUMDB", GOPRIVATE)

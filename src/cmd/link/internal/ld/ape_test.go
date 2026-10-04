@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package ld
 
@@ -26,15 +25,14 @@ func printfBlobTestInput() []byte {
 	for i := 0; i < 256; i++ {
 		blob = append(blob, byte(i))
 	}
-	// Escaped byte followed by octal digits: '%' -> \045, then literal "7".
 	blob = append(blob, '%', '7', '\'', '0', '\\', '1', 0x00, '2', 0xff, '3')
 	return blob
 }
 
 // decodePrintfBlob decodes the body of a printf '...' format string the way
 // both POSIX printf and the APE loader's header scanner do: a backslash
-// introduces an octal escape of one to three digits, and every other byte is
-// taken literally.
+// introduces an octal escape of one to digits, and every other byte is taken
+// literally.
 func decodePrintfBlob(t *testing.T, s string) []byte {
 	t.Helper()
 	var out []byte
@@ -76,8 +74,7 @@ func TestWritePrintfBlobEscaping(t *testing.T) {
 			// printf would interpret a bare % as a conversion directive.
 			t.Errorf("offset %d: bare %% in encoded blob", i)
 		case '\'':
-			// A raw quote terminates both the shell string and the APE
-			// loader's scan of the printf statement.
+			// A raw quote terminates both the shell string and the APE loader's scan of the printf statement.
 			t.Errorf("offset %d: bare single quote in encoded blob", i)
 		case '\\':
 			// Backslashes may appear only as octal escape lead-ins.
@@ -104,8 +101,7 @@ func TestApeLoaderDirsPreferRAM(t *testing.T) {
 	}
 	testenv.MustHaveExecPath(t, "sh")
 
-	// o is the APE's own path in the boot script, so the last candidate is its
-	// directory. The script sets it before it reaches this list.
+	// o is the APE's own path in the boot script, so the last candidate is its directory.
 	list := `o=/opt/app/prog.com; for d in ` + apeLoaderDirs + `; do printf '%s\n' "$d"; done`
 	got := runAndCapture(t, "sh", "-c", list)
 	if want := "/dev/shm\n/tmp\n/opt/app\n"; got != want {
@@ -183,10 +179,8 @@ const (
 	elfPFR    = 4
 )
 
-// buildTestELF assembles a minimal ELF64 amd64 executable image consisting
-// of an ELF header, the given program headers, and zero-filled bodies large
-// enough to cover every header's file range. Layout matches what the cosmo
-// linker emits: e_phoff 64, e_phentsize 56.
+// buildTestELF assembles a minimal ELF64 amd64 executable image consisting of
+// an ELF header, the given program headers.
 func buildTestELF(t *testing.T, entry uint64, phdrs []testProgHeader) []byte {
 	t.Helper()
 	return buildTestELFForMachine(t, elfMachineAMD64, entry, phdrs)
@@ -258,9 +252,9 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 
 	const idataRVA, iatRVA = 0x4100, 0x4180
 	blob := elf[idataRVA : idataRVA+ntidataSize]
-	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)     // IDT[0].OriginalFirstThunk
-	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName) // IDT[0].Name
-	binary.LittleEndian.PutUint32(blob[0x10:], iatRVA)                  // IDT[0].FirstThunk
+	binary.LittleEndian.PutUint32(blob[0x00:], idataRVA+ntidataILT)
+	binary.LittleEndian.PutUint32(blob[0x0C:], idataRVA+ntidataDLLName)
+	binary.LittleEndian.PutUint32(blob[0x10:], iatRVA)
 	binary.LittleEndian.PutUint64(blob[ntidataILT:], idataRVA+ntidataHintGetProc)
 	binary.LittleEndian.PutUint64(blob[ntidataILT+8:], idataRVA+ntidataHintLoadLib)
 	copy(blob[ntidataHintGetProc+2:], "GetProcAddress\x00")
@@ -271,8 +265,9 @@ func buildTestNTELF(t *testing.T) ([]byte, *apePEInfo) {
 	binary.LittleEndian.PutUint64(elf[iatRVA+8:], 1)
 
 	return elf, &apePEInfo{
-		entryRVA:   testELFEntry - peCosmoImageBase,
-		importsRVA: idataRVA,
+		entryRVA:    testELFEntry - peCosmoImageBase,
+		importsRVA:  idataRVA,
+		importsSize: peCosmoImportsSize,
 	}
 }
 
@@ -336,10 +331,8 @@ func checkCosmoPEInvariants(t *testing.T, bin []byte) {
 			idd.VirtualAddress, idd.Size, peCosmoImportsSize)
 	}
 
-	// Sections against testELFPhdrs: text load {off 0, filesz 0x2345}
-	// minus its header page, R load {0x3000, 0x1000}, RW load {0x4000,
-	// filesz 0x800, memsz 0x2800}. Raw pointers are absolute (payload at
-	// apeHeaderSize); .data's raw size is filesz rounded to FileAlignment.
+	// Raw pointers are absolute (payload at apeHeaderSize); .data's raw
+	// size is filesz rounded to FileAlignment.
 	want := []struct {
 		name                 string
 		rva, vsz, raw, rawsz uint32

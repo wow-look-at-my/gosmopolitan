@@ -122,7 +122,8 @@ func runAPEErr(t *testing.T, bin string, env []string, args ...string) (string, 
 	cmd.Stderr = &errOut
 	err := cmd.Run()
 	if err != nil {
-		return strings.TrimSpace(errOut.String()), err
+		// A program that fails says why on stdout as often as on stderr.
+		return strings.TrimSpace(out.String() + "\n" + errOut.String()), err
 	}
 	return strings.TrimSpace(out.String()), nil
 }

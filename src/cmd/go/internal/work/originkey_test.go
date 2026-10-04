@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package work
 
@@ -8,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"cmd/go/internal/cache"
 	"cmd/go/internal/load"
 	"cmd/go/internal/modinfo"
 
@@ -29,25 +29,37 @@ func gorootPackage(dir string, cgo bool) *load.Package {
 	return pkg
 }
 
-// cgo writes this package's own directory into the Go file it generates, so
-// two GOROOTs at different paths must not share one cache entry for it.
-// Sharing one is what handed cmd/vet a path holding no file.
-func TestOriginKeyCgoGorootSeparatesTrees(t *testing.T) {
-	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true), false, testWorkDir)
-	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/crypto/x", true), false, testWorkDir)
+// A compiled GOROOT package hides its directory, cgo or not, so a tree moved
+// to another path stays up to date.
+func TestOriginKeyGorootSharesTrees(t *testing.T) {
+	for _, cgo := range []bool{false, true} {
+		here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/crypto/x", cgo), false, testWorkDir)
+		there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/crypto/x", cgo), false, testWorkDir)
 
-	require.NotEqual(t, there, here, "two GOROOTs share one cgo key")
-	assert.Contains(t, here, "/home/user/gosmopolitan/src/crypto/x")
+		assert.Equal(t, there, here, "GOROOT reached the key, cgo=%v", cgo)
+		assert.Empty(t, here)
+	}
 }
 
-// Every other GOROOT package has its directory rewritten out of the output,
-// so the key leaves GOROOT alone and the two trees share their entries.
-func TestOriginKeyPlainGorootSharesTrees(t *testing.T) {
-	here := packageOriginKey(gorootPackage("/home/user/gosmopolitan/src/fmt", false), false, testWorkDir)
-	there := packageOriginKey(gorootPackage("/home/runner/work/gosmopolitan/src/fmt", false), false, testWorkDir)
+// objdirAction returns a build action for pkg under one fixed action ID.
+func objdirAction(pkg *load.Package) *Action {
+	return &Action{Package: pkg, actionID: cache.ActionID{1}}
+}
 
-	assert.Equal(t, there, here, "GOROOT reached the key")
-	assert.Empty(t, here)
+// cgo writes the package directory into the Go file it generates, and vet
+// opens that path. GOROOTs must not share those files.
+func TestObjdirKeyCgoGorootSeparatesTrees(t *testing.T) {
+	here := objdirKey(objdirAction(gorootPackage("/home/user/gosmopolitan/src/crypto/x", true)))
+	there := objdirKey(objdirAction(gorootPackage("/home/runner/work/gosmopolitan/src/crypto/x", true)))
+
+	require.NotEqual(t, there, here, "two GOROOTs share one cgo file")
+}
+
+// Every other package keeps its files under the action ID itself.
+func TestObjdirKeyPlainIsTheActionID(t *testing.T) {
+	act := objdirAction(gorootPackage("/home/user/gosmopolitan/src/fmt", false))
+
+	assert.Equal(t, act.actionID, objdirKey(act))
 }
 
 // -trimpath takes the directory out of the output, cgo included.

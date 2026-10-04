@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package codehost
 
@@ -13,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"net/url"
 	"os"
 	"path"
@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cmd/go/internal/cfg"
@@ -36,8 +37,7 @@ type githubRepo struct {
 
 var githubSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// githubRemote names the GitHub repository of a git remote. Tests replace it
-// to put a local remote behind a fake github.com.
+// githubRemote names the GitHub repository of a git remote.
 var githubRemote = parseGitHubRemote
 
 // parseGitHubRemote returns the repository that remote names. It accepts only
@@ -73,13 +73,22 @@ const proxyHost = "proxy.pazer.ai"
 func isProxyHost(host string) bool { return host == proxyHost }
 
 // An archiveSource is one place to download from, and the hosts the request
-// may touch on the way. credentialFor names the URL whose GOAUTH credential
-// the request carries, when that is not url itself.
+// may touch.
 type archiveSource struct {
 	url           string
 	ext           string
 	allowHost     func(string) bool
 	credentialFor string
+	// bearer is the whole credential when it is set. GOAUTH is not asked.
+	bearer string
+	// via names the route of a source that github-state-mirror signed.
+	via string
+	// secret is the signing token in url. Errors print a mask in its place.
+	secret string
+}
+
+func (source archiveSource) pinOptions() web.PinOptions {
+	return web.PinOptions{AllowHost: source.allowHost, CredentialURL: source.credentialFor, Bearer: source.bearer}
 }
 
 // viaProxy returns the source that fetches target through the proxy, with
@@ -105,6 +114,44 @@ func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
 	return sources
 }
 
+// route names source in the line that reports a download.
+func (source archiveSource) route() string {
+	route := archiveRoute(source.ext)
+	if source.via != "" {
+		route += " via " + source.via
+	} else if source.credentialFor != "" {
+		route += " via " + proxyHost
+	}
+	return route
+}
+
+// name is the host and the format of source, as "github.com tar.gz".
+func (source archiveSource) name() string {
+	host := "github.com"
+	if source.via != "" {
+		host = source.via
+	} else if source.credentialFor != "" {
+		host = proxyHost
+	}
+	return host + " " + strings.TrimPrefix(source.ext, ".")
+}
+
+// archiveRoute names an archive by its extension, as "tar.gz archive".
+func archiveRoute(ext string) string {
+	return strings.TrimPrefix(ext, ".") + " archive"
+}
+
+// keptArchiveRoute names the kept archive of hash that no fetch in this
+// process wrote.
+func (r *gitRepo) keptArchiveRoute(hash string) string {
+	for _, ext := range []string{".tar.gz", ".zip"} {
+		if _, err := os.Stat(r.githubArchivePath(hash, ext)); err == nil {
+			return archiveRoute(ext)
+		}
+	}
+	return "archive"
+}
+
 // refPath names hash in an archive URL. A branch or a tag uses its ref name.
 // HEAD has no ref path, so it uses the hash.
 func refPath(ref, hash string) string {
@@ -120,15 +167,72 @@ func refPath(ref, hash string) string {
 
 func isAPIHost(host string) bool { return host == "api.github.com" }
 
-// maxAPIResponse bounds one page of an api.github.com list. A longer body
-// fails to decode, so the caller falls back to ls-remote.
+// maxAPIResponse bounds one page of an api.github.com list.
 const maxAPIResponse = 16 << 20
 
-// gsmHost is github-state-mirror, a cache of the GitHub API that the owner
-// of this fork runs. It answers only a request that carries a GitHub token.
+// gsmHost is github-state-mirror, a cache of the GitHub API that the owner of this fork runs.
 const gsmHost = "github-state-mirror.pazer.io"
 
 func isGSMHost(host string) bool { return host == gsmHost }
+
+// githubTokenVars name the environment variables that can hold a GitHub token.
+var githubTokenVars = []string{"GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"}
+
+var (
+	gsmAcceptedMu sync.Mutex
+	gsmAccepted   string
+)
+
+// githubTokenPrefixes start every token GitHub issues.
+var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"}
+
+// gsmBearers returns the token the mirror last accepted, each token that
+// githubTokenVars hold, then each other environment value that starts like a
+// GitHub token, in the order of the variable names.
+func gsmBearers() []string {
+	gsmAcceptedMu.Lock()
+	accepted := gsmAccepted
+	gsmAcceptedMu.Unlock()
+	var tokens []string
+	add := func(token string) {
+		if token != "" && !slices.Contains(tokens, token) {
+			tokens = append(tokens, token)
+		}
+	}
+	add(accepted)
+	for _, name := range githubTokenVars {
+		add(os.Getenv(name))
+	}
+	environ := os.Environ()
+	slices.Sort(environ)
+	for _, entry := range environ {
+		_, value, _ := strings.Cut(entry, "=")
+		if slices.ContainsFunc(githubTokenPrefixes, func(prefix string) bool { return strings.HasPrefix(value, prefix) }) {
+			add(value)
+		}
+	}
+	return tokens
+}
+
+func gsmAccept(token string) {
+	if token == "" {
+		return
+	}
+	gsmAcceptedMu.Lock()
+	gsmAccepted = token
+	gsmAcceptedMu.Unlock()
+}
+
+// gsmSources returns the requests that ask the mirror for route: one with the
+// GOAUTH credential for api.github.com, then one for each token of gsmBearers.
+func gsmSources(route string) []archiveSource {
+	direct := "https://api.github.com" + route
+	sources := []archiveSource{{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct}}
+	for _, token := range gsmBearers() {
+		sources = append(sources, archiveSource{url: "https://" + gsmHost + route, allowHost: isGSMHost, bearer: token})
+	}
+	return sources
+}
 
 // githubRefs returns what ls-remote would list, over plain HTTP. The first
 // source that answers wins: the info/refs advertisement from github.com,
@@ -281,19 +385,17 @@ func (r *gitRepo) githubAPIRefs(ctx context.Context) (map[string]string, error) 
 func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 	route := "/repos/" + r.github.owner + "/" + r.github.name + suffix
 	direct := "https://api.github.com" + route
-	sources := []archiveSource{
-		// The mirror wants the same GitHub token api.github.com takes.
-		{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct},
-		{url: direct, allowHost: isAPIHost},
+	sources := append(gsmSources(route),
+		archiveSource{url: direct, allowHost: isAPIHost},
 		viaProxy(direct, ""),
-	}
+	)
 	var errs []error
 	for _, source := range sources {
 		u, err := url.Parse(source.url)
 		if err != nil {
 			return err
 		}
-		resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+		resp, err := web.GetPinnedWith(u, source.pinOptions())
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -304,6 +406,7 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 		}
 		resp.Body.Close()
 		if err == nil {
+			gsmAccept(source.bearer)
 			return nil
 		}
 		errs = append(errs, fmt.Errorf("%s: %w", u.Redacted(), err))
@@ -315,15 +418,78 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 	return err
 }
 
-// githubArchivePath is where a converted archive of hash is kept.
-func (r *gitRepo) githubArchivePath(hash string) string {
-	return filepath.Join(r.dir, "github", hash+".zip")
+// githubArchivePath is where the archive of hash is kept, byte for byte as
+// GitHub served it.
+func (r *gitRepo) githubArchivePath(hash, ext string) string {
+	return filepath.Join(r.dir, "github", hash+ext)
+}
+
+// keepGitHub stores a downloaded archive and remembers its parsed entries.
+func (r *gitRepo) keepGitHub(hash, ext string, raw []byte, entries []archiveEntry, when time.Time) error {
+	if err := writeFileAtomic(r.githubArchivePath(hash, ext), raw); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(r.githubArchivePath(hash, ".time"), []byte(strconv.FormatInt(when.Unix(), 10)+"\n")); err != nil {
+		return err
+	}
+	r.githubMu.Lock()
+	defer r.githubMu.Unlock()
+	if r.githubFiles == nil {
+		r.githubFiles = make(map[string][]archiveEntry)
+	}
+	r.githubFiles[hash] = entries
+	return nil
+}
+
+// githubEntries returns the files of the kept archive of hash. It parses the
+// archive once per process.
+func (r *gitRepo) githubEntries(hash string) ([]archiveEntry, error) {
+	if r.github == nil {
+		return nil, fs.ErrNotExist
+	}
+	r.githubMu.Lock()
+	defer r.githubMu.Unlock()
+	if entries, found := r.githubFiles[hash]; found {
+		return entries, nil
+	}
+	if _, err := r.githubArchiveTime(hash); err != nil {
+		return nil, err
+	}
+	for _, ext := range []string{".tar.gz", ".zip"} {
+		raw, err := os.ReadFile(r.githubArchivePath(hash, ext))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		entries, _, _, err := parseArchive(raw, ext, hash)
+		if err != nil {
+			return nil, err
+		}
+		if r.githubFiles == nil {
+			r.githubFiles = make(map[string][]archiveEntry)
+		}
+		r.githubFiles[hash] = entries
+		return entries, nil
+	}
+	return nil, fs.ErrNotExist
+}
+
+// parseArchive reads a GitHub archive into its entries, the commit time and
+// the commit. hash stands in when the archive names no commit.
+func parseArchive(raw []byte, ext, hash string) ([]archiveEntry, time.Time, string, error) {
+	if ext == ".zip" {
+		return parseZipArchive(raw, hash)
+	}
+	return parseTarGzArchive(bytes.NewReader(raw), hash)
 }
 
 // statGitHub describes hash from an archive of ref, from the first source
 // in archiveSources that works. The archive is kept on disk, so ReadFile and
-// ReadZip never have to fetch the commit with git. It requires r.mu.
-func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*RevInfo, error) {
+// ReadZip never have to fetch the commit with git. rec gets the route and the
+// transfers. It requires r.mu.
+func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec *Fetch) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes || len(hash) != 40 {
 		return nil, errors.New("not a github.com repository with SHA-1 hashes")
 	}
@@ -332,18 +498,111 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string) (*R
 	}
 
 	var errs []error
-	for _, source := range r.github.archiveSources(ref, hash) {
-		archive, when, _, err := r.downloadGitHub(ctx, source, hash)
+	for source := range r.archiveCandidates(ctx, ref, hash, hash, rec, &errs) {
+		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash, rec)
+		if err != nil {
+			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
+			continue
+		}
+		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
+			return nil, err
+		}
+		rec.SetRoute(source.route())
+		return r.githubRevInfo(ctx, version, hash, when, nil), nil
+	}
+	return nil, errors.Join(errs...)
+}
+
+// archiveCandidates yields the sources of archiveSources. Then, for a
+// repository that needs a credential, it yields the archive of rev that
+// github-state-mirror signs. The mirror is asked only after every source
+// before it failed. A failure to get a signed URL goes to rec and errs.
+func (r *gitRepo) archiveCandidates(ctx context.Context, ref, hash, rev string, rec *Fetch, errs *[]error) iter.Seq[archiveSource] {
+	return func(yield func(archiveSource) bool) {
+		for _, source := range r.github.archiveSources(ref, hash) {
+			if !yield(source) {
+				return
+			}
+		}
+		for _, ext := range []string{".tar.gz", ".zip"} {
+			signed, err := r.gsmArchiveURL(ctx, ext, rev)
+			if err != nil {
+				*errs = append(*errs, err)
+				rec.AddFailure(gsmHost+" "+strings.TrimPrefix(ext, "."), err)
+				continue
+			}
+			secret := signed.Query().Get("token")
+			direct := archiveSource{url: signed.String(), ext: ext, allowHost: isCodeloadHost, via: gsmHost, secret: secret}
+			proxied := archiveSource{
+				url:       "https://" + proxyHost + "/?url=" + url.QueryEscape(signed.String()),
+				ext:       ext,
+				allowHost: isProxyHost,
+				via:       gsmHost + " and " + proxyHost,
+				secret:    secret,
+			}
+			if !yield(direct) || !yield(proxied) {
+				return
+			}
+		}
+	}
+}
+
+func isCodeloadHost(host string) bool { return host == "codeload.github.com" }
+
+// gsmArchiveURL asks github-state-mirror where the archive of rev is. The
+// answer is a codeload.github.com URL that carries its own short-lived token,
+// so the download that follows needs no credential.
+func (r *gitRepo) gsmArchiveURL(ctx context.Context, ext, rev string) (*url.URL, error) {
+	kind := "tarball"
+	if ext == ".zip" {
+		kind = "zipball"
+	}
+	segments := strings.Split(rev, "/")
+	for idx, seg := range segments {
+		segments[idx] = url.PathEscape(seg)
+	}
+	route := "/repos/" + r.github.owner + "/" + r.github.name + "/" + kind + "/" + strings.Join(segments, "/")
+	var errs []error
+	for _, source := range gsmSources(route) {
+		u, err := url.Parse(source.url)
+		if err != nil {
+			return nil, err
+		}
+		opts := source.pinOptions()
+		opts.NoRedirect = true
+		resp, err := web.GetPinnedWith(u, opts)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if err := writeFileAtomic(r.githubArchivePath(hash), archive); err != nil {
-			return nil, err
+		if resp.StatusCode >= 400 {
+			errs = append(errs, resp.Err())
+			resp.Body.Close()
+			continue
 		}
-		return r.githubRevInfo(ctx, version, hash, when, nil), nil
+		resp.Body.Close()
+		if resp.StatusCode < 300 {
+			errs = append(errs, fmt.Errorf("%s: %s is not a redirect", u.Redacted(), resp.Status))
+			continue
+		}
+		var location string
+		if values := resp.Header["Location"]; len(values) > 0 {
+			location = values[0]
+		}
+		signed, err := url.Parse(location)
+		if err != nil || signed.Scheme != "https" || !isCodeloadHost(signed.Hostname()) {
+			errs = append(errs, fmt.Errorf("%s: redirect to %q is not a codeload.github.com URL", u.Redacted(), signed.Redacted()))
+			continue
+		}
+		gsmAccept(source.bearer)
+		return signed, nil
 	}
-	return nil, errors.Join(errs...)
+	err := errors.Join(errs...)
+	if xLog, ok := cfg.BuildXWriter(ctx); ok {
+		fmt.Fprintf(xLog, "# github-state-mirror archive: %v\n", err)
+	}
+	return nil, err
 }
 
 // isTagName reports whether rev names a version tag, such as v1.2.3 or
@@ -358,8 +617,9 @@ func (r *gitRepo) githubTagPath(tag string) string {
 }
 
 // statGitHubTag describes tag from its archive alone. The archive names its
-// commit, so ls-remote does not run. It requires r.mu.
-func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, error) {
+// commit, so ls-remote does not run. rec gets the route and the transfers.
+// It requires r.mu.
+func (r *gitRepo) statGitHubTag(ctx context.Context, tag string, rec *Fetch) (*RevInfo, error) {
 	if r.github == nil || r.sha256Hashes {
 		return nil, errors.New("not a github.com repository with SHA-1 hashes")
 	}
@@ -371,22 +631,20 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string) (*RevInfo, erro
 	}
 
 	var errs []error
-	for _, source := range r.github.archiveSources("refs/tags/"+tag, "") {
-		archive, when, hash, err := r.downloadGitHub(ctx, source, "")
+	for source := range r.archiveCandidates(ctx, "refs/tags/"+tag, "", tag, rec, &errs) {
+		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "", rec)
 		if err != nil {
 			errs = append(errs, err)
+			rec.AddFailure(source.name(), err)
 			continue
 		}
-		if len(hash) != 40 || !AllHex(hash) {
-			errs = append(errs, fmt.Errorf("%s: archive names no commit", source.url))
-			continue
-		}
-		if err := writeFileAtomic(r.githubArchivePath(hash), archive); err != nil {
+		if err := r.keepGitHub(hash, source.ext, raw, entries, when); err != nil {
 			return nil, err
 		}
 		if err := writeFileAtomic(r.githubTagPath(tag), []byte(hash+"\n")); err != nil {
 			return nil, err
 		}
+		rec.SetRoute(source.route())
 		return r.githubTagInfo(ctx, tag, hash, when), nil
 	}
 	return nil, errors.Join(errs...)
@@ -398,49 +656,52 @@ func (r *gitRepo) githubTagInfo(ctx context.Context, tag, hash string, when time
 	return info
 }
 
-// downloadGitHub fetches one archive and converts it to the zip git archive
-// writes. It returns the zip, the commit time and the commit. hash is the
-// commit when the archive does not name one.
-func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string) ([]byte, time.Time, string, error) {
-	u, err := url.Parse(source.url)
-	if err != nil {
-		return nil, time.Time{}, "", err
-	}
-	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
-	if err != nil {
-		return nil, time.Time{}, "", err
-	}
-	defer resp.Body.Close()
-	if err := resp.Err(); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	body := &io.LimitedReader{R: resp.Body, N: MaxZipFile + 1}
-	var archive []byte
-	var when time.Time
-	var commit string
-	if source.ext == ".zip" {
-		data, readErr := io.ReadAll(body)
-		if readErr != nil {
-			return nil, time.Time{}, "", fmt.Errorf("reading %s: %w", u.Redacted(), readErr)
-		}
-		if body.N <= 0 {
-			return nil, time.Time{}, "", fmt.Errorf("%s: archive too large", u.Redacted())
-		}
-		archive, when, commit, err = githubZipToArchive(data, hash)
-	} else {
-		archive, when, commit, err = githubTarToArchive(body, hash)
-		if err == nil && body.N <= 0 {
-			err = fmt.Errorf("archive too large")
-		}
+// downloadGitHub fetches one archive and parses it. It returns the bytes as
+// served, the entries, the commit time and the commit. hash is the commit when
+// the archive does not name one. rec gets the transfer, when it received data.
+func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string, rec *Fetch) ([]byte, []archiveEntry, time.Time, string, error) {
+	raw, entries, when, commit, err := r.downloadGitHubOnce(ctx, source, hash, rec)
+	if err != nil && source.secret != "" {
+		err = errors.New(strings.ReplaceAll(err.Error(), source.secret, "xxxxx"))
 	}
 	if err != nil {
-		err = fmt.Errorf("%s: %w", u.Redacted(), err)
 		if xLog, ok := cfg.BuildXWriter(ctx); ok {
 			fmt.Fprintf(xLog, "# github archive: %v\n", err)
 		}
-		return nil, time.Time{}, "", err
 	}
-	return archive, when, commit, nil
+	return raw, entries, when, commit, err
+}
+
+func (r *gitRepo) downloadGitHubOnce(ctx context.Context, source archiveSource, hash string, rec *Fetch) ([]byte, []archiveEntry, time.Time, string, error) {
+	u, err := url.Parse(source.url)
+	if err != nil {
+		return nil, nil, time.Time{}, "", err
+	}
+	start := time.Now()
+	resp, err := web.GetPinnedWith(u, source.pinOptions())
+	if err != nil {
+		return nil, nil, time.Time{}, "", err
+	}
+	defer resp.Body.Close()
+	if err := resp.Err(); err != nil {
+		return nil, nil, time.Time{}, "", err
+	}
+	body := &io.LimitedReader{R: resp.Body, N: MaxZipFile + 1}
+	raw, err := io.ReadAll(body)
+	rec.AddTransfer(start, int64(len(raw)), time.Since(start))
+	if err == nil && body.N <= 0 {
+		err = errors.New("archive too large")
+	}
+	var entries []archiveEntry
+	var when time.Time
+	var commit string
+	if err == nil {
+		entries, when, commit, err = parseArchive(raw, source.ext, hash)
+	}
+	if err != nil {
+		return nil, nil, time.Time{}, "", fmt.Errorf("%s: %w", u.Redacted(), err)
+	}
+	return raw, entries, when, commit, nil
 }
 
 // githubRevInfo builds what statLocal would return for hash. tags lists the
@@ -482,104 +743,79 @@ func (r *gitRepo) githubArchiveTime(hash string) (time.Time, error) {
 	if r.github == nil {
 		return time.Time{}, fs.ErrNotExist
 	}
-	data, err := os.ReadFile(r.githubArchivePath(hash))
+	data, err := os.ReadFile(r.githubArchivePath(hash, ".time"))
 	if err != nil {
 		return time.Time{}, err
 	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	unix, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, fmt.Errorf("kept archive of %s has bad time %q", hash, data)
 	}
-	return parseArchiveComment(reader.Comment, hash)
+	return time.Unix(unix, 0).UTC(), nil
 }
 
-// githubArchive returns the kept archive of hash, or fs.ErrNotExist.
-func (r *gitRepo) githubArchive(hash string) (*zip.Reader, []byte, error) {
-	if r.github == nil {
-		return nil, nil, fs.ErrNotExist
-	}
-	data, err := os.ReadFile(r.githubArchivePath(hash))
-	if err != nil {
-		return nil, nil, err
-	}
-	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := parseArchiveComment(reader.Comment, hash); err != nil {
-		return nil, nil, err
-	}
-	return reader, data, nil
+// A ModuleFile is one file of a revision, read without a zip.
+type ModuleFile struct {
+	Name string
+	Mode fs.FileMode
+	Data []byte
 }
 
-// readGitHubFile does for a kept archive what git cat-file blob does.
-func readGitHubFile(reader *zip.Reader, file string) ([]byte, error) {
-	name := archivePrefix + path.Clean(file)
-	for _, entry := range reader.File {
-		if entry.Name != name {
-			continue
+// A FileReader serves a revision's files directly. The files go straight into
+// the module cache, and no zip is made of them.
+type FileReader interface {
+	ReadFiles(ctx context.Context, rev, subdir string) ([]ModuleFile, error)
+}
+
+// An archiveEntry is one file or symlink of an archive, named without the
+// archive's top directory.
+type archiveEntry struct {
+	name string
+	mode fs.FileMode
+	data []byte
+}
+
+// readGitHubFile does for kept entries what git cat-file blob does.
+func readGitHubFile(entries []archiveEntry, file string) ([]byte, error) {
+	name := path.Clean(file)
+	for _, entry := range entries {
+		if entry.name == name {
+			return entry.data, nil
 		}
-		open, err := entry.Open()
-		if err != nil {
-			return nil, err
-		}
-		defer open.Close()
-		return io.ReadAll(open)
 	}
 	return nil, fs.ErrNotExist
 }
 
-// subdirArchive does for a kept archive what a git archive pathspec does: it
-// keeps the entries under subdir, and fails with fs.ErrNotExist when none is.
-func subdirArchive(reader *zip.Reader, data []byte, subdir string) ([]byte, error) {
-	dir := strings.Trim(subdir, "/")
-	if dir == "" {
-		return data, nil
+// subdirFiles returns the entries under subdir as module files, named from
+// subdir. It fails with fs.ErrNotExist when there are none, as git archive
+// does for a pathspec that matches nothing.
+func subdirFiles(entries []archiveEntry, subdir string) ([]ModuleFile, error) {
+	under := ""
+	if dir := strings.Trim(subdir, "/"); dir != "" {
+		under = dir + "/"
 	}
-	under := archivePrefix + dir + "/"
-	var buf bytes.Buffer
-	writer := zip.NewWriter(&buf)
-	kept := 0
-	for _, entry := range reader.File {
-		if !strings.HasPrefix(entry.Name, under) {
-			continue
-		}
-		kept++
-		dst, err := writer.CreateRaw(&entry.FileHeader)
-		if err != nil {
-			return nil, err
-		}
-		src, err := entry.OpenRaw()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := io.Copy(dst, src); err != nil {
-			return nil, err
+	var files []ModuleFile
+	for _, entry := range entries {
+		if rest, found := strings.CutPrefix(entry.name, under); found {
+			files = append(files, ModuleFile{Name: rest, Mode: entry.mode, Data: entry.data})
 		}
 	}
-	if kept == 0 {
+	if len(files) == 0 {
 		return nil, fs.ErrNotExist
 	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return files, nil
 }
 
-// An archiveBuilder turns the entries of a GitHub archive into the zip that
-// ReadZip returns: one "prefix/" directory, files and symlinks only.
+// An archiveBuilder collects the entries of a GitHub archive: files and
+// symlinks only, each named without the top-level directory.
 type archiveBuilder struct {
-	top    string
-	when   time.Time
-	buf    bytes.Buffer
-	writer *zip.Writer
-	files  int
+	top     string
+	when    time.Time
+	entries []archiveEntry
 }
 
 func newArchiveBuilder() *archiveBuilder {
-	builder := &archiveBuilder{}
-	builder.writer = zip.NewWriter(&builder.buf)
-	return builder
+	return &archiveBuilder{}
 }
 
 // add records one entry. name is the path inside the archive, with its top
@@ -614,22 +850,13 @@ func (b *archiveBuilder) add(name string, mode fs.FileMode, mtime time.Time, con
 	if err != nil {
 		return err
 	}
-	header := &zip.FileHeader{Name: archivePrefix + rest, Method: zip.Deflate, Modified: mtime}
-	header.SetMode(mode)
-	dst, err := b.writer.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	if _, err := dst.Write(data); err != nil {
-		return err
-	}
-	b.files++
+	b.entries = append(b.entries, archiveEntry{name: rest, mode: mode, data: data})
 	return nil
 }
 
-// finish returns the zip, the commit time and the commit. embedded is the
+// finish returns the entries, the commit time and the commit. embedded is the
 // commit the archive names. hash stands in when the archive names none.
-func (b *archiveBuilder) finish(embedded, hash string) ([]byte, time.Time, string, error) {
+func (b *archiveBuilder) finish(embedded, hash string) ([]archiveEntry, time.Time, string, error) {
 	commit := hash
 	if len(embedded) == 40 && AllHex(embedded) {
 		commit = embedded
@@ -637,21 +864,15 @@ func (b *archiveBuilder) finish(embedded, hash string) ([]byte, time.Time, strin
 	if commit == "" {
 		return nil, time.Time{}, "", errors.New("archive names no commit")
 	}
-	if b.files == 0 {
+	if len(b.entries) == 0 {
 		return nil, time.Time{}, "", errors.New("archive holds no files")
 	}
-	if err := b.writer.SetComment(commit + " " + strconv.FormatInt(b.when.Unix(), 10)); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	if err := b.writer.Close(); err != nil {
-		return nil, time.Time{}, "", err
-	}
-	return b.buf.Bytes(), b.when, commit, nil
+	return b.entries, b.when, commit, nil
 }
 
-// githubZipToArchive converts a git archive zip. Its comment names the
-// commit, and every entry carries the commit time.
-func githubZipToArchive(data []byte, hash string) ([]byte, time.Time, string, error) {
+// parseZipArchive reads a git archive zip. Its comment names the commit,
+// and every entry carries the commit time.
+func parseZipArchive(data []byte, hash string) ([]archiveEntry, time.Time, string, error) {
 	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, time.Time{}, "", err
@@ -669,19 +890,6 @@ func githubZipToArchive(data []byte, hash string) ([]byte, time.Time, string, er
 		}
 	}
 	return builder.finish(reader.Comment, hash)
-}
-
-// parseArchiveComment reads the "<hash> <unix time>" comment of a kept archive.
-func parseArchiveComment(comment, hash string) (time.Time, error) {
-	id, sec, found := strings.Cut(comment, " ")
-	if !found || id != hash {
-		return time.Time{}, fmt.Errorf("kept archive is not of %s", hash)
-	}
-	unix, err := strconv.ParseInt(sec, 10, 64)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("kept archive of %s has bad time %q", hash, sec)
-	}
-	return time.Unix(unix, 0).UTC(), nil
 }
 
 // writeFileAtomic writes data under a temporary name and renames it into
