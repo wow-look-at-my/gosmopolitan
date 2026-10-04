@@ -89,6 +89,12 @@ go test testcache -run=FileContent
 go test testcache -run=FileContent
 stdout '\(cached\)'
 
+# The mtime alone does not affect caching. A fresh checkout gives every file a
+# new one, and the content is what the test read.
+exec ./mkold$GOEXE 30s testcache/file.txt
+go test testcache -run=FileContent
+stdout '\(cached\)'
+
 # Directory contents read via os.ReadDirNames should affect caching.
 go test testcache -run=DirList
 go test testcache -run=DirList
