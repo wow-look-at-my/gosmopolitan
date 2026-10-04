@@ -36,7 +36,7 @@ jobs:
           tests: dats/source
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Build Go toolchain and APE test binary on each build platform -- see docs/CI.md "build job".
   build:
@@ -85,7 +85,7 @@ jobs:
       - uses: ./.github/actions/build-leg
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The ubuntu build leg, its own job so cosmo-checks, wasm and wasm-suite take its toolchain the moment it exists: needs waits on a whole matrix.
   build-linux:
@@ -123,7 +123,7 @@ jobs:
       - uses: ./.github/actions/build-leg
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole suite per host, one leg each; nothing downstream of a build waits on it.
   suite:
@@ -409,7 +409,7 @@ jobs:
             core.info(`recorded ${rows.length} package timings`);
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Checks whose answer does not depend on the host. Each runs once, here, on the linux toolchain.
   cosmo-checks:
@@ -483,7 +483,7 @@ jobs:
           tests: dats/checks
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Test all APE binaries on each platform using Go tests -- see docs/CI.md "test job".
   test:
@@ -595,7 +595,7 @@ jobs:
           exit $LASTEXITCODE
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # Regression-gate the WebAssembly ports (GOOS=js and GOOS=wasip1) -- see docs/WASM.md and docs/CI.md "wasm job".
   wasm:
@@ -654,7 +654,7 @@ jobs:
           tests: dats/wasm
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
   # The whole test suite for each wasm port, the gate the other ports get -- see docs/CI.md "wasm-suite job".
   wasm-suite:
@@ -781,7 +781,7 @@ jobs:
           WASM_PORT: ${{ matrix.port }}
 
       - if: failure()
-        uses: ./.github/actions/fail-fast
+        uses: wow-look-at-my/actions@fail-fast#latest
 
 
   # Publishes an installable toolchain distribution to buildhost on every green push -- see docs/CI.md "publish jobs".
