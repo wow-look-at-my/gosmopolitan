@@ -2,8 +2,8 @@
 // governed by a BSD-style license that can be found in the LICENSE file.
 
 // Embedstd writes the blob a go binary carries its standard library in:
-// the compiled archive of every standard package for cosmo/amd64 and
-// cosmo/arm64, the assembly headers under pkg/include, and a manifest per
+// the compiled archive of every standard package for cosmo/amd64,
+// cosmo/arm64, js/wasm and wasip1/wasm, the assembly headers under pkg/include, and a manifest per
 // target naming each package, its imports and its build ID. The linker's
 // -apeappend flag puts the blob past an APE's load span, and
 // internal/cosmo/embedded reads it back. The go command running it, from
@@ -44,10 +44,16 @@ func init() {
 	})
 }
 
-// targets are the standard libraries one APE carries.
-var targets = []struct{ goos, goarch string }{
-	{"cosmo", "amd64"},
-	{"cosmo", "arm64"},
+// targets are the standard libraries one APE carries. cgo says the target's
+// std is built with cgo when -cgo is on; a wasm target has no C compiler.
+var targets = []struct {
+	goos, goarch string
+	cgo          bool
+}{
+	{"cosmo", "amd64", true},
+	{"cosmo", "arm64", true},
+	{"js", "wasm", false},
+	{"wasip1", "wasm", false},
 }
 
 // listed is the part of a go list -json record the manifest keeps, with the
@@ -96,10 +102,11 @@ func Main(args []string) int {
 	var writer embedded.Writer
 	for _, target := range targets {
 		name := target.goos + "_" + target.goarch
-		if *cgoOn {
+		cgo := *cgoOn && target.cgo
+		if cgo {
 			requireCompiler(goCmd, target.goos, target.goarch)
 		}
-		packages := listStd(goCmd, target.goos, target.goarch)
+		packages := listStd(goCmd, target.goos, target.goarch, cgo)
 		manifest := embedded.Manifest{Target: name}
 		for _, pkg := range packages {
 			entry := embedded.Package{ImportPath: pkg.ImportPath, Name: pkg.Name, Imports: pkg.Imports, BuildID: pkg.BuildID}
@@ -200,9 +207,9 @@ func requireCompiler(goCmd []string, goos, goarch string) {
 	}
 }
 
-// listStd builds the standard library for a target and answers every
-// package in dependency order, with its archive and build ID.
-func listStd(goCmd []string, goos, goarch string) []listed {
+// listStd builds the standard library for a target, with cgo on or off, and
+// answers every package in dependency order, with its archive and build ID.
+func listStd(goCmd []string, goos, goarch string, cgo bool) []listed {
 	// -e: a handful of standard packages hold nothing but tests.
 	args := []string{"list", "-e", "-export", "-deps", "-json=ImportPath,Name,Imports,Export,BuildID,Standard,Error,DepsErrors", "std"}
 	var progress *fileLines
@@ -213,7 +220,7 @@ func listStd(goCmd []string, goos, goarch string) []listed {
 	}
 	cmd := goCommand(goCmd, args...)
 	cgoEnabled := "0"
-	if *cgoOn {
+	if cgo {
 		cgoEnabled = "1"
 	}
 	// -trimpath, so a program built with it against these archives.
