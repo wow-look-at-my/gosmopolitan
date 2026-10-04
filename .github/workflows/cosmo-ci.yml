@@ -49,6 +49,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
@@ -88,6 +89,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       - uses: ./.github/actions/track-submodules
@@ -182,6 +184,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
       - uses: wow-look-at-my/actions@secret-server#latest
       # run.bash rebuilds the cmd packages from this tree, so the suite tests the client source the build leg linked in.
@@ -415,6 +418,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
       - uses: wow-look-at-my/actions@secret-server#latest
       # embedded-std.dats rebuilds the go command from this tree, so the submodules carry their branch heads here too.
       - uses: ./.github/actions/track-submodules
@@ -475,6 +479,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@disable-windows-defender#latest
 
@@ -588,6 +593,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -651,6 +657,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - uses: wow-look-at-my/actions@secret-server#latest
 
@@ -777,6 +784,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Create buildhost release
         # No version input: buildhost auto-increments it. See docs/CI.md "publish jobs".
@@ -862,6 +870,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: true
+          lfs: true
 
       - name: Publish buildhost release
         uses: wow-look-at-my/buildhost/.github/actions/buildhost-publish-release@master
