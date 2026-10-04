@@ -11,19 +11,21 @@ import (
 )
 
 // toolGraph links a main package that imports cmd/compile, which imports
-// cmd/compile/internal/ssa, and answers the link action. mainID and ssaID
-// are the content IDs of the main package and of ssa.
-func toolGraph(mainID, ssaID string) *Action {
-	pkg := func(path string, goroot bool, deps ...string) *load.Package {
+// cmd/compile/internal/ssa and the embedded standard package runtime, and
+// answers the link action. mainID, ssaID and runtimeID are the content IDs
+// of those packages. The packages carry no Deps, as under go build.
+func toolGraph(mainID, ssaID, runtimeID string) *Action {
+	pkg := func(path string, goroot bool) *load.Package {
 		p := &load.Package{}
 		p.ImportPath = path
 		p.Goroot = goroot
-		p.Deps = deps
 		return p
 	}
-	ssa := &Action{Mode: "build", Package: pkg("cmd/compile/internal/ssa", true), buildID: "a1/" + ssaID}
-	compile := &Action{Mode: "build", Package: pkg("cmd/compile", true, "cmd/compile/internal/ssa"), buildID: "a2/c2", Deps: []*Action{ssa}}
-	main := &Action{Mode: "build", Package: pkg("example.com/tool", false, "cmd/compile", "cmd/compile/internal/ssa"), buildID: "a3/" + mainID, Deps: []*Action{compile}}
+	runtime := &Action{Mode: "embedded std", Package: pkg("runtime", true), buildID: "a0/" + runtimeID}
+	ssa := &Action{Mode: "build", Package: pkg("cmd/compile/internal/ssa", true), buildID: "a1/" + ssaID, Deps: []*Action{runtime}}
+	check := &Action{Mode: "build check cache", Package: pkg("cmd/compile", true), Deps: []*Action{ssa}}
+	compile := &Action{Mode: "build", Package: check.Package, buildID: "a2/c2", Deps: []*Action{ssa, check}}
+	main := &Action{Mode: "build", Package: pkg("example.com/tool", false), buildID: "a3/" + mainID, Deps: []*Action{compile}}
 	return &Action{Mode: "link", Package: main.Package, Deps: []*Action{main}}
 }
 
@@ -31,15 +33,18 @@ func toolGraph(mainID, ssaID string) *Action {
 // not among them, so rebuilding that package leaves the ID alone, and a
 // change inside the tool moves it.
 func TestLinkedToolIDsFollowTheToolsPackages(t *testing.T) {
-	first := linkedToolIDs(toolGraph("m1", "s1"))
+	first := linkedToolIDs(toolGraph("m1", "s1", "r1"))
 	if !strings.HasPrefix(first, "compile=") || strings.Contains(first, ",") {
 		t.Fatalf("linkedToolIDs = %q, want a single compile entry", first)
 	}
-	if again := linkedToolIDs(toolGraph("m2", "s1")); again != first {
+	if again := linkedToolIDs(toolGraph("m2", "s1", "r1")); again != first {
 		t.Errorf("the main package changed and the tool ID moved: %q became %q", first, again)
 	}
-	if moved := linkedToolIDs(toolGraph("m1", "s2")); moved == first {
+	if moved := linkedToolIDs(toolGraph("m1", "s2", "r1")); moved == first {
 		t.Errorf("a dependency of the tool changed and the tool ID stayed %q", first)
+	}
+	if moved := linkedToolIDs(toolGraph("m1", "s1", "r2")); moved == first {
+		t.Errorf("an embedded standard package of the tool changed and the tool ID stayed %q", first)
 	}
 }
 
