@@ -352,6 +352,21 @@ func packageOriginKey(pkg *load.Package, trimpath bool, workDir string) string {
 	return fmt.Sprintf("dir %s\n", pkg.Dir)
 }
 
+// writesSSADump reports whether compiling p writes an SSA dump into GOSSADIR.
+// GOSSAFUNC asks every compile for one, and an ssa/<phase>/dump debug flag
+// asks this package's compile.
+func writesSSADump(p *load.Package) bool {
+	if os.Getenv("GOSSAFUNC") != "" {
+		return true
+	}
+	for _, flag := range slices.Concat(forcedGcflags, p.Internal.Gcflags) {
+		if strings.Contains(flag, "ssa/") && strings.Contains(flag, "/dump") {
+			return true
+		}
+	}
+	return false
+}
+
 // buildActionID computes the action ID for a build action.
 func (b *Builder) buildActionID(a *Action) cache.ActionID {
 	// Hashing every input of a package is not free, and it is work no other
@@ -488,6 +503,10 @@ func (b *Builder) buildActionID(a *Action) cache.ActionID {
 			"GOCOMPILEDEBUG",
 		}
 		for _, env := range magic {
+			if env == "GOSSADIR" && !writesSSADump(p) {
+				// GOSSADIR only names where a dump goes. A compile that writes none must keep its key, or every dependency rebuilds.
+				continue
+			}
 			if x := os.Getenv(env); x != "" {
 				fmt.Fprintf(h, "magic %s=%s\n", env, x)
 			}

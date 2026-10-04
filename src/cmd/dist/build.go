@@ -1384,6 +1384,18 @@ func reportStep(kind, name string, elapsed time.Duration) {
 	fmt.Printf("dist %s %.3fs %s\n", kind, elapsed.Seconds(), name)
 }
 
+// reportTestStep is reportStep for a test command, with the CPU time it and
+// every process it waited for used. Under load the wall time is mostly a wait
+// for a core. The CPU time is what the step itself cost.
+func reportTestStep(name string, elapsed time.Duration, state *os.ProcessState) {
+	if state == nil {
+		fmt.Printf("dist test %.3fs cpu unknown (the command did not start) %s\n", elapsed.Seconds(), name)
+		return
+	}
+	cpu := state.UserTime() + state.SystemTime()
+	fmt.Printf("dist test %.3fs cpu %.3fs %s\n", elapsed.Seconds(), cpu.Seconds(), name)
+}
+
 // startPhase names the phase of the build now running and reports what the
 // phase before it cost. One phase runs until the next begins.
 func startPhase(name string) {

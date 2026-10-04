@@ -438,6 +438,11 @@ jobs:
           name: toolchain-Linux
           path: .
 
+      # The restore rewrites LFS files, and a sandboxed git cannot run the LFS clean filter on a read-only .git.
+      - name: Refresh the git index after the restore
+        shell: bash
+        run: git update-index -q --refresh
+
       - name: The restored go answers
         shell: bash
         run: ./bin/go version
