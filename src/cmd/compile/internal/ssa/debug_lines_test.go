@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"internal/testenv"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -161,15 +162,41 @@ func compileAndDump(t *testing.T, file, function, moreGCFlags string) []byte {
 		panic(fmt.Sprintf("Could not get abspath of testdata directory and file, %v", err))
 	}
 
-	cmd := testenv.Command(t, testenv.GoToolPath(t), "build", "-o", "foo.o", "-gcflags=-d=ssa/genssa/dump="+function+" "+moreGCFlags, source)
-	cmd.Dir = tmpdir
-	cmd.Env = replaceEnv(cmd.Env, "GOSSADIR", tmpdir)
 	testGoos := "linux" // default to linux
 	if testGoArch() == "wasm" {
 		testGoos = "js"
 	}
-	cmd.Env = replaceEnv(cmd.Env, "GOOS", testGoos)
-	cmd.Env = replaceEnv(cmd.Env, "GOARCH", testGoArch())
+	targetEnv := func(cmd *exec.Cmd) {
+		cmd.Dir = tmpdir
+		cmd.Env = replaceEnv(cmd.Env, "GOOS", testGoos)
+		cmd.Env = replaceEnv(cmd.Env, "GOARCH", testGoArch())
+	}
+
+	// The compiler runs directly, the way go build compiles the main package.
+	// GOSSADIR goes into the action ID of every package in a go build, so a
+	// go build here recompiles all of the program's dependencies. go list
+	// takes them from the cache.
+	list := testenv.Command(t, testenv.GoToolPath(t), "list", "-export", "-deps",
+		"-f", "{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}", source)
+	targetEnv(list)
+	var listStderr strings.Builder
+	list.Stderr = &listStderr
+	importcfg, err := list.Output()
+	if err != nil {
+		t.Fatalf("error running cmd %s: %v\n%s", asCommandLine("", list), err, listStderr.String())
+	}
+	importcfgFile := filepath.Join(tmpdir, "importcfg")
+	if err := os.WriteFile(importcfgFile, importcfg, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	args := []string{"tool", "compile", "-o", "foo.o", "-p", "command-line-arguments", "-complete",
+		"-importcfg", importcfgFile, "-d=ssa/genssa/dump=" + function}
+	args = append(args, strings.Fields(moreGCFlags)...)
+	args = append(args, source)
+	cmd := testenv.Command(t, testenv.GoToolPath(t), args...)
+	targetEnv(cmd)
+	cmd.Env = replaceEnv(cmd.Env, "GOSSADIR", tmpdir)
 
 	if testing.Verbose() {
 		fmt.Printf("About to run %s\n", asCommandLine("", cmd))
