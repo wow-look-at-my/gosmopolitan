@@ -1,18 +1,53 @@
-# A link of the same main package with other flags must not replace the
-# linker output that a cache hit replays.
+# A cached link whose output entry is gone must link again. If it reuses the
+# binary, the linker output, here -dumpdep, never prints.
+
+env GOCACHE=$WORK/gocache
 
 go build -ldflags=-dumpdep -o a.exe main.go
-stderr 'main.main'
+stderr '-> main\.main$'
 
-go build -ldflags=-X=main.val=1 -o b.exe main.go
-! stderr 'main.main'
+go run drop/drop.go $GOCACHE
+stdout 'dropped [1-9]'
 
-go build -ldflags=-dumpdep -o c.exe main.go
-stderr 'main.main'
+go build -ldflags=-dumpdep -o b.exe main.go
+stderr '-> main\.main$'
 
 -- main.go --
 package main
 
-var val string
+func main() {}
+-- drop/drop.go --
+// Command drop deletes each cache output file that holds -dumpdep text.
+package main
 
-func main() { println(val) }
+import (
+	"bytes"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func main() {
+	count := 0
+	err := filepath.WalkDir(os.Args[1], func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, "-d") {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(data, []byte("-> main.main\n")) {
+			count++
+			return os.Remove(path)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println("dropped", count)
+}

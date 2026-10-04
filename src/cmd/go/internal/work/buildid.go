@@ -660,8 +660,8 @@ func (b *Builder) useCache(a *Action, actionHash cache.ActionID, target string, 
 			if printOutput {
 				switch a.Mode {
 				case "link":
-					// The main package's entry is shared by every link of it, whatever
-					// its flags. Only the link's own entry is this link's output.
+					// A hit without its output entry is a miss, as for a compile.
+					// Otherwise the link output, -dumpdep for example, is gone.
 					if err := showStdout(b, c, a, "link-stdout"); err != nil {
 						a.output = []byte{}
 						return false
