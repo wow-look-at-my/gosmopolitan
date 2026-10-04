@@ -364,7 +364,7 @@ func EnvFile() (string, bool, error) {
 // RemovedEnv names the configuration keys this toolchain refuses to honor.
 // GOBIN sent installed binaries somewhere other than the toolchain's own bin
 // directory. GOTOOLCHAIN handed the build to a different go command. GOPROXY
-// and GOSUMDB replaced the module mirror and the checksum database. The go
+// and GOSUMDB replaced the module source and the checksum database. The go
 // command now always uses DefaultGOPROXY and DefaultGOSUMDB.
 //
 // The go command reads none of them. Getenv answers "" for each, KnownEnv omits
@@ -377,10 +377,10 @@ func EnvFile() (string, bool, error) {
 // sees.
 var RemovedEnv = []string{"GOBIN", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN"}
 
-// DefaultGOPROXY and DefaultGOSUMDB are the module mirror and the checksum
-// database. They are the values upstream's go.env sets.
+// DefaultGOPROXY fetches every module from its origin. The go command never
+// asks proxy.golang.org. DefaultGOSUMDB is the checksum database.
 const (
-	DefaultGOPROXY = "https://proxy.golang.org,direct"
+	DefaultGOPROXY = "direct"
 	DefaultGOSUMDB = "sum.golang.org"
 )
 

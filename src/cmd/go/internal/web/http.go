@@ -89,6 +89,9 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
+	if err := refuseBannedHost(req.URL); err != nil {
+		return err
+	}
 
 	intercept.Request(req)
 	return nil
@@ -134,6 +137,9 @@ func get(security SecurityMode, url *urlpkg.URL, pin *PinOptions) (*Response, er
 			fmt.Fprintf(os.Stderr, "# get %s\n", url.Redacted())
 		}
 
+		if err := refuseBannedHost(url); err != nil {
+			return nil, err
+		}
 		req, err := http.NewRequest("GET", url.String(), nil)
 		if err != nil {
 			return nil, err
