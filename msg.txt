@@ -1,0 +1,32 @@
+Stage the APE where it can actually be run, automatically
+
+The bootstrap script staged its runnable copy in /tmp and exec'd it. A
+container commonly mounts a noexec filesystem there. The write succeeds, and
+execve refuses the copy:
+
+  exec: line 29: /tmp/.ape-run-1-65532/153.26557482.../buildhost: Permission denied
+
+The binary then cannot start by any path, and no caller could say otherwise.
+The reasoning for fixing the directory weighed only whether it was writable.
+Writability is not the only property staging needs, and no stat can see the
+difference: noexec belongs to the mount, so a file under one still reports
+its mode bits.
+
+So the script establishes it instead of assuming it. It copies a shell into
+a candidate and runs it, because only exec answers that question, and keeps
+the first candidate that answers yes. The verdict is cached in the directory
+as .ape-ok-<uid>, so a warm run costs one stat and no fork, and a host where
+/tmp works keeps using /tmp and pays the probe once.
+
+Measured under a real noexec mount, in a user namespace:
+
+  noexec /tmp   -> chose=/var/tmp  cached=yes  probes left behind: 0
+  normal host   -> chose=/tmp, both the first run and the cached one
+
+TMPDIR and HOME stay unread, for the reasons already recorded. APE_RUNDIR is
+read and tried first, for an operator placing the directory deliberately. It
+needs no special trust: it is probed like every other candidate, so naming
+somewhere unusable falls through rather than failing.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SzyZzeD1orYCAjZLJUxEJu
