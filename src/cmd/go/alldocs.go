@@ -3143,12 +3143,12 @@
 //
 // For a detailed reference on modules, see https://go.dev/ref/mod.
 //
-// The go command downloads modules from https://proxy.golang.org and falls back
-// to the origin repository. It authenticates modules using the checksum database
-// at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this toolchain.
-// Both services are operated by the Go team at Google. The privacy policies for these services are available at
-// https://proxy.golang.org/privacy and https://sum.golang.org/privacy,
-// respectively.
+// The go command downloads each module from its origin repository. A github.com
+// module comes from its GitHub archive. The go command never asks the module
+// mirror at proxy.golang.org. It authenticates modules using the checksum
+// database at https://sum.golang.org. GOPROXY and GOSUMDB do not exist in this
+// toolchain. The privacy policy of the checksum database is available at
+// https://sum.golang.org/privacy.
 //
 // The go command's download behavior may be configured using GOPRIVATE,
 // GONOPROXY, GONOSUMDB and other environment variables. See 'go help environment'
@@ -3313,8 +3313,8 @@
 //
 // # Configuration for downloading non-public code
 //
-// The go command downloads modules from the public Go module mirror at
-// proxy.golang.org. It validates downloaded modules, regardless of source,
+// The go command downloads each module from its origin repository, and never
+// from the module mirror at proxy.golang.org. It validates downloaded modules
 // against the public Go checksum database at sum.golang.org. This toolchain
 // has no GOPROXY or GOSUMDB to replace either service.
 //
@@ -3727,13 +3727,9 @@
 // The version control command restrictions only apply when using direct version
 // control access to download code. When downloading modules from a proxy,
 // the go command uses the proxy protocol instead, which is always permitted.
-// By default, the go command uses the Go module mirror (proxy.golang.org)
-// for public packages and only falls back to version control for private
-// packages or when the mirror refuses to serve a public package (typically for
-// legal reasons). Therefore, clients can still access public code served from
-// Bazaar, Fossil, or Subversion repositories by default, because those downloads
-// use the Go module mirror, which takes on the security risk of running the
-// version control commands using a custom sandbox.
+// This toolchain never uses the Go module mirror (proxy.golang.org). Every
+// module comes from its origin, so the default GOVCS refuses public code served
+// from Bazaar, Fossil, or Subversion repositories. Set GOVCS to allow them.
 //
 // The GOVCS variable can be used to change the allowed version control systems
 // for specific packages (identified by a module or import path).

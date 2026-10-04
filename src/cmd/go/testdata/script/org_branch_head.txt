@@ -183,6 +183,12 @@ stdout '=> github.com/wow-look-at-my/alpha v0\.0\.0-20260104050607-[0-9a-f]+$'
 go run .
 stdout '^alpha-v1$'
 
+# modules.txt records the placeholder on both sides of the replacement, as
+# go.mod does, so vendor mode finds both files consistent.
+go mod vendor
+grep '^# github.com/wow-look-at-my/alpha v0\.0\.0 => github.com/wow-look-at-my/alpha v0\.0\.0$' vendor/modules.txt
+go build -mod=vendor ./...
+
 # A name the dependency has no branch for takes the default branch, the same as
 # the branch this repository is on does. The merge that closes a pull request
 # deletes the branch it was opened from, and the pin follows the code there.

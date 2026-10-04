@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 package codehost
 
@@ -13,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"net/url"
 	"os"
 	"path"
@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cmd/go/internal/cfg"
@@ -36,8 +37,7 @@ type githubRepo struct {
 
 var githubSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-// githubRemote names the GitHub repository of a git remote. Tests replace it
-// to put a local remote behind a fake github.com.
+// githubRemote names the GitHub repository of a git remote.
 var githubRemote = parseGitHubRemote
 
 // parseGitHubRemote returns the repository that remote names. It accepts only
@@ -73,13 +73,22 @@ const proxyHost = "proxy.pazer.ai"
 func isProxyHost(host string) bool { return host == proxyHost }
 
 // An archiveSource is one place to download from, and the hosts the request
-// may touch on the way. credentialFor names the URL whose GOAUTH credential
-// the request carries, when that is not url itself.
+// may touch.
 type archiveSource struct {
 	url           string
 	ext           string
 	allowHost     func(string) bool
 	credentialFor string
+	// bearer is the whole credential when it is set. GOAUTH is not asked.
+	bearer string
+	// via names the route of a source that github-state-mirror signed.
+	via string
+	// secret is the signing token in url. Errors print a mask in its place.
+	secret string
+}
+
+func (source archiveSource) pinOptions() web.PinOptions {
+	return web.PinOptions{AllowHost: source.allowHost, CredentialURL: source.credentialFor, Bearer: source.bearer}
 }
 
 // viaProxy returns the source that fetches target through the proxy, with
@@ -108,7 +117,9 @@ func (g githubRepo) archiveSources(ref, hash string) []archiveSource {
 // route names source in the line that reports a download.
 func (source archiveSource) route() string {
 	route := archiveRoute(source.ext)
-	if source.credentialFor != "" {
+	if source.via != "" {
+		route += " via " + source.via
+	} else if source.credentialFor != "" {
 		route += " via " + proxyHost
 	}
 	return route
@@ -117,7 +128,9 @@ func (source archiveSource) route() string {
 // name is the host and the format of source, as "github.com tar.gz".
 func (source archiveSource) name() string {
 	host := "github.com"
-	if source.credentialFor != "" {
+	if source.via != "" {
+		host = source.via
+	} else if source.credentialFor != "" {
 		host = proxyHost
 	}
 	return host + " " + strings.TrimPrefix(source.ext, ".")
@@ -154,15 +167,72 @@ func refPath(ref, hash string) string {
 
 func isAPIHost(host string) bool { return host == "api.github.com" }
 
-// maxAPIResponse bounds one page of an api.github.com list. A longer body
-// fails to decode, so the caller falls back to ls-remote.
+// maxAPIResponse bounds one page of an api.github.com list.
 const maxAPIResponse = 16 << 20
 
-// gsmHost is github-state-mirror, a cache of the GitHub API that the owner
-// of this fork runs. It answers only a request that carries a GitHub token.
+// gsmHost is github-state-mirror, a cache of the GitHub API that the owner of this fork runs.
 const gsmHost = "github-state-mirror.pazer.io"
 
 func isGSMHost(host string) bool { return host == gsmHost }
+
+// githubTokenVars name the environment variables that can hold a GitHub token.
+var githubTokenVars = []string{"GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GH_TOKEN"}
+
+var (
+	gsmAcceptedMu sync.Mutex
+	gsmAccepted   string
+)
+
+// githubTokenPrefixes start every token GitHub issues.
+var githubTokenPrefixes = []string{"ghp_", "github_pat_", "gho_", "ghu_", "ghs_"}
+
+// gsmBearers returns the token the mirror last accepted, each token that
+// githubTokenVars hold, then each other environment value that starts like a
+// GitHub token, in the order of the variable names.
+func gsmBearers() []string {
+	gsmAcceptedMu.Lock()
+	accepted := gsmAccepted
+	gsmAcceptedMu.Unlock()
+	var tokens []string
+	add := func(token string) {
+		if token != "" && !slices.Contains(tokens, token) {
+			tokens = append(tokens, token)
+		}
+	}
+	add(accepted)
+	for _, name := range githubTokenVars {
+		add(os.Getenv(name))
+	}
+	environ := os.Environ()
+	slices.Sort(environ)
+	for _, entry := range environ {
+		_, value, _ := strings.Cut(entry, "=")
+		if slices.ContainsFunc(githubTokenPrefixes, func(prefix string) bool { return strings.HasPrefix(value, prefix) }) {
+			add(value)
+		}
+	}
+	return tokens
+}
+
+func gsmAccept(token string) {
+	if token == "" {
+		return
+	}
+	gsmAcceptedMu.Lock()
+	gsmAccepted = token
+	gsmAcceptedMu.Unlock()
+}
+
+// gsmSources returns the requests that ask the mirror for route: one with the
+// GOAUTH credential for api.github.com, then one for each token of gsmBearers.
+func gsmSources(route string) []archiveSource {
+	direct := "https://api.github.com" + route
+	sources := []archiveSource{{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct}}
+	for _, token := range gsmBearers() {
+		sources = append(sources, archiveSource{url: "https://" + gsmHost + route, allowHost: isGSMHost, bearer: token})
+	}
+	return sources
+}
 
 // githubRefs returns what ls-remote would list, over plain HTTP. The first
 // source that answers wins: the info/refs advertisement from github.com,
@@ -315,19 +385,17 @@ func (r *gitRepo) githubAPIRefs(ctx context.Context) (map[string]string, error) 
 func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 	route := "/repos/" + r.github.owner + "/" + r.github.name + suffix
 	direct := "https://api.github.com" + route
-	sources := []archiveSource{
-		// The mirror wants the same GitHub token api.github.com takes.
-		{url: "https://" + gsmHost + route, allowHost: isGSMHost, credentialFor: direct},
-		{url: direct, allowHost: isAPIHost},
+	sources := append(gsmSources(route),
+		archiveSource{url: direct, allowHost: isAPIHost},
 		viaProxy(direct, ""),
-	}
+	)
 	var errs []error
 	for _, source := range sources {
 		u, err := url.Parse(source.url)
 		if err != nil {
 			return err
 		}
-		resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+		resp, err := web.GetPinnedWith(u, source.pinOptions())
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -338,6 +406,7 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 		}
 		resp.Body.Close()
 		if err == nil {
+			gsmAccept(source.bearer)
 			return nil
 		}
 		errs = append(errs, fmt.Errorf("%s: %w", u.Redacted(), err))
@@ -350,8 +419,7 @@ func (r *gitRepo) githubAPI(ctx context.Context, suffix string, out any) error {
 }
 
 // githubArchivePath is where the archive of hash is kept, byte for byte as
-// GitHub served it, under ext (".tar.gz" or ".zip"). hash+".time" holds the
-// commit time and is written last, so it marks a complete archive.
+// GitHub served it.
 func (r *gitRepo) githubArchivePath(hash, ext string) string {
 	return filepath.Join(r.dir, "github", hash+ext)
 }
@@ -430,7 +498,7 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 	}
 
 	var errs []error
-	for _, source := range r.github.archiveSources(ref, hash) {
+	for source := range r.archiveCandidates(ctx, ref, hash, hash, rec, &errs) {
 		raw, entries, when, _, err := r.downloadGitHub(ctx, source, hash, rec)
 		if err != nil {
 			errs = append(errs, err)
@@ -444,6 +512,97 @@ func (r *gitRepo) statGitHub(ctx context.Context, version, ref, hash string, rec
 		return r.githubRevInfo(ctx, version, hash, when, nil), nil
 	}
 	return nil, errors.Join(errs...)
+}
+
+// archiveCandidates yields the sources of archiveSources. Then, for a
+// repository that needs a credential, it yields the archive of rev that
+// github-state-mirror signs. The mirror is asked only after every source
+// before it failed. A failure to get a signed URL goes to rec and errs.
+func (r *gitRepo) archiveCandidates(ctx context.Context, ref, hash, rev string, rec *Fetch, errs *[]error) iter.Seq[archiveSource] {
+	return func(yield func(archiveSource) bool) {
+		for _, source := range r.github.archiveSources(ref, hash) {
+			if !yield(source) {
+				return
+			}
+		}
+		for _, ext := range []string{".tar.gz", ".zip"} {
+			signed, err := r.gsmArchiveURL(ctx, ext, rev)
+			if err != nil {
+				*errs = append(*errs, err)
+				rec.AddFailure(gsmHost+" "+strings.TrimPrefix(ext, "."), err)
+				continue
+			}
+			secret := signed.Query().Get("token")
+			direct := archiveSource{url: signed.String(), ext: ext, allowHost: isCodeloadHost, via: gsmHost, secret: secret}
+			proxied := archiveSource{
+				url:       "https://" + proxyHost + "/?url=" + url.QueryEscape(signed.String()),
+				ext:       ext,
+				allowHost: isProxyHost,
+				via:       gsmHost + " and " + proxyHost,
+				secret:    secret,
+			}
+			if !yield(direct) || !yield(proxied) {
+				return
+			}
+		}
+	}
+}
+
+func isCodeloadHost(host string) bool { return host == "codeload.github.com" }
+
+// gsmArchiveURL asks github-state-mirror where the archive of rev is. The
+// answer is a codeload.github.com URL that carries its own short-lived token,
+// so the download that follows needs no credential.
+func (r *gitRepo) gsmArchiveURL(ctx context.Context, ext, rev string) (*url.URL, error) {
+	kind := "tarball"
+	if ext == ".zip" {
+		kind = "zipball"
+	}
+	segments := strings.Split(rev, "/")
+	for idx, seg := range segments {
+		segments[idx] = url.PathEscape(seg)
+	}
+	route := "/repos/" + r.github.owner + "/" + r.github.name + "/" + kind + "/" + strings.Join(segments, "/")
+	var errs []error
+	for _, source := range gsmSources(route) {
+		u, err := url.Parse(source.url)
+		if err != nil {
+			return nil, err
+		}
+		opts := source.pinOptions()
+		opts.NoRedirect = true
+		resp, err := web.GetPinnedWith(u, opts)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			errs = append(errs, resp.Err())
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode < 300 {
+			errs = append(errs, fmt.Errorf("%s: %s is not a redirect", u.Redacted(), resp.Status))
+			continue
+		}
+		var location string
+		if values := resp.Header["Location"]; len(values) > 0 {
+			location = values[0]
+		}
+		signed, err := url.Parse(location)
+		if err != nil || signed.Scheme != "https" || !isCodeloadHost(signed.Hostname()) {
+			errs = append(errs, fmt.Errorf("%s: redirect to %q is not a codeload.github.com URL", u.Redacted(), signed.Redacted()))
+			continue
+		}
+		gsmAccept(source.bearer)
+		return signed, nil
+	}
+	err := errors.Join(errs...)
+	if xLog, ok := cfg.BuildXWriter(ctx); ok {
+		fmt.Fprintf(xLog, "# github-state-mirror archive: %v\n", err)
+	}
+	return nil, err
 }
 
 // isTagName reports whether rev names a version tag, such as v1.2.3 or
@@ -472,7 +631,7 @@ func (r *gitRepo) statGitHubTag(ctx context.Context, tag string, rec *Fetch) (*R
 	}
 
 	var errs []error
-	for _, source := range r.github.archiveSources("refs/tags/"+tag, "") {
+	for source := range r.archiveCandidates(ctx, "refs/tags/"+tag, "", tag, rec, &errs) {
 		raw, entries, when, hash, err := r.downloadGitHub(ctx, source, "", rec)
 		if err != nil {
 			errs = append(errs, err)
@@ -501,12 +660,25 @@ func (r *gitRepo) githubTagInfo(ctx context.Context, tag, hash string, when time
 // served, the entries, the commit time and the commit. hash is the commit when
 // the archive does not name one. rec gets the transfer, when it received data.
 func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash string, rec *Fetch) ([]byte, []archiveEntry, time.Time, string, error) {
+	raw, entries, when, commit, err := r.downloadGitHubOnce(ctx, source, hash, rec)
+	if err != nil && source.secret != "" {
+		err = errors.New(strings.ReplaceAll(err.Error(), source.secret, "xxxxx"))
+	}
+	if err != nil {
+		if xLog, ok := cfg.BuildXWriter(ctx); ok {
+			fmt.Fprintf(xLog, "# github archive: %v\n", err)
+		}
+	}
+	return raw, entries, when, commit, err
+}
+
+func (r *gitRepo) downloadGitHubOnce(ctx context.Context, source archiveSource, hash string, rec *Fetch) ([]byte, []archiveEntry, time.Time, string, error) {
 	u, err := url.Parse(source.url)
 	if err != nil {
 		return nil, nil, time.Time{}, "", err
 	}
 	start := time.Now()
-	resp, err := web.GetPinned(u, source.allowHost, source.credentialFor)
+	resp, err := web.GetPinnedWith(u, source.pinOptions())
 	if err != nil {
 		return nil, nil, time.Time{}, "", err
 	}
@@ -527,11 +699,7 @@ func (r *gitRepo) downloadGitHub(ctx context.Context, source archiveSource, hash
 		entries, when, commit, err = parseArchive(raw, source.ext, hash)
 	}
 	if err != nil {
-		err = fmt.Errorf("%s: %w", u.Redacted(), err)
-		if xLog, ok := cfg.BuildXWriter(ctx); ok {
-			fmt.Fprintf(xLog, "# github archive: %v\n", err)
-		}
-		return nil, nil, time.Time{}, "", err
+		return nil, nil, time.Time{}, "", fmt.Errorf("%s: %w", u.Redacted(), err)
 	}
 	return raw, entries, when, commit, nil
 }
@@ -600,8 +768,7 @@ type FileReader interface {
 }
 
 // An archiveEntry is one file or symlink of an archive, named without the
-// archive's top directory. A symlink's data is its target, as git cat-file
-// prints it.
+// archive's top directory.
 type archiveEntry struct {
 	name string
 	mode fs.FileMode
@@ -640,7 +807,7 @@ func subdirFiles(entries []archiveEntry, subdir string) ([]ModuleFile, error) {
 }
 
 // An archiveBuilder collects the entries of a GitHub archive: files and
-// symlinks only, each named without the one top-level directory.
+// symlinks only, each named without the top-level directory.
 type archiveBuilder struct {
 	top     string
 	when    time.Time

@@ -1077,7 +1077,8 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.githubEntries(info.Name); err == nil {
+	_, archiveErr := r.githubEntries(info.Name)
+	if archiveErr == nil && !gitOnly(ctx) {
 		// A commit from an archive is never turned into a zip. Use ReadFiles.
 		return nil, errors.ErrUnsupported
 	}
@@ -1088,6 +1089,12 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 		return nil, err
 	}
 	defer unlock()
+
+	if archiveErr == nil {
+		if err := r.fetchCommitLocked(ctx, info.Name); err != nil {
+			return nil, err
+		}
+	}
 
 	if err := ensureGitAttributes(r.dir); err != nil {
 		return nil, err
@@ -1107,6 +1114,35 @@ func (r *gitRepo) ReadZip(ctx context.Context, rev, subdir string, maxSize int64
 	}
 
 	return io.NopCloser(bytes.NewReader(archive)), nil
+}
+
+type gitOnlyKey struct{}
+
+// WithGitOnly makes ReadZip build the zip with git even for a commit a GitHub
+// archive holds. An archive that export-ignore or export-subst changed does
+// not hash to the module's sum. git archive with those attributes off does.
+func WithGitOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, gitOnlyKey{}, true)
+}
+
+func gitOnly(ctx context.Context) bool {
+	only, _ := ctx.Value(gitOnlyKey{}).(bool)
+	return only
+}
+
+// fetchCommitLocked fetches hash with no history, unless git already has it.
+// It requires that r.mu stay locked.
+func (r *gitRepo) fetchCommitLocked(ctx context.Context, hash string) error {
+	if _, err := r.runGit(ctx, "git", "cat-file", "-e", "--end-of-options", hash+"^{commit}"); err == nil {
+		return nil
+	}
+	release, err := base.AcquireNet()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = r.runGit(ctx, "git", "-c", "protocol.version=2", "fetch", "-f", "--depth=1", "--end-of-options", r.remote, hash)
+	return err
 }
 
 // archivePrefix is the top-level directory git archive writes.

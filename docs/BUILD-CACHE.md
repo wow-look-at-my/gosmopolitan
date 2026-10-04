@@ -46,7 +46,7 @@ That leaves one writer for the directory. So the trim has a single owner. The in
 
 The environment decides the shape:
 
-- `GO_BUILDCACHE_BROKER` names a live owner's hello queue. A process that finds it set becomes a child, once the owner answers with the directory it writes into. A process that finds it unset becomes the owner. A name outlives the process that made it. So the owner's reply is what decides, never the name.
+- `GO_BUILDCACHE_BROKER` names a live owner's hello queue. A process that finds it set becomes a child, once the owner answers with the directory it writes into. A process that finds it unset becomes the owner. A name outlives the process that made it. So the owner's reply is what decides, not the name.
 - `GO_BUILDCACHE_BROKER_OFF` makes every process open the cache for itself, which is what a bisect of a broker-shaped problem wants.
 
 A test binary and a `go run` program are started with the environment the go command was started with. They do not get the go command's own environment. So `initDefaultCache` appends `cacheclient.BrokerEnviron()` to `cfg.OrigEnv`. A child started without those entries opens the directory for itself, which is the whole thing this exists to stop.

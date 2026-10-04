@@ -1,9 +1,9 @@
 // apeld: boot an APE from a memfd on Linux. Freestanding, raw syscalls only.
 //
 // The APE's program headers hold absolute file offsets, so the whole file
-// is copied into a memfd and only the first 64 bytes change: the payload's
-// own ELF header, with e_phoff rebased to the payload's file offset. The
-// kernel then execs the memfd directly. Nothing touches the disk.
+// is copied into a memfd and only the first many bytes change: the
+// payload's own ELF header, with e_phoff rebased to the payload's file
+// offset. The kernel then execs the memfd directly. Nothing touches the disk.
 //
 // The host arch selects the payload. This binary is compiled per arch, so
 // the selector is a compile-time constant.

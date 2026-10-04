@@ -64,6 +64,11 @@ func (p *Protocols) setHTTP3(ok bool) { p.setBit(protoHTTP3, ok) }
 //go:linkname protocolSetHTTP3 golang.org/x/net/internal/http3_test.protocolSetHTTP3
 func protocolSetHTTP3(p *Protocols) { p.setHTTP3(true) }
 
+// The same push for the vendored copy of x/net, whose tests std runs under the vendor/ import path.
+//
+//go:linkname vendoredProtocolSetHTTP3 vendor/golang.org/x/net/internal/http3_test.protocolSetHTTP3
+func vendoredProtocolSetHTTP3(p *Protocols) { p.setHTTP3(true) }
+
 func (p *Protocols) setBit(bit uint8, ok bool) {
 	if ok {
 		p.bits |= bit

@@ -454,6 +454,24 @@ func (p *Package) copyBuild(opts PackageOpts, pp *build.Package) {
 	p.TestEmbedPatterns = pp.TestEmbedPatterns
 	p.XTestEmbedPatterns = pp.XTestEmbedPatterns
 	p.Internal.OrigImportPath = pp.ImportPath
+	if p.Goroot && isVendoredThirdParty(p.ImportPath) {
+		// The vendor tree holds whole repositories, so it carries test files that `go mod vendor` leaves out.
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.TestGoFiles...)
+		p.IgnoredGoFiles = append(p.IgnoredGoFiles, p.XTestGoFiles...)
+		p.TestGoFiles, p.XTestGoFiles = nil, nil
+		p.TestImports, p.XTestImports = nil, nil
+		p.TestEmbedPatterns, p.XTestEmbedPatterns = nil, nil
+	}
+}
+
+// isVendoredThirdParty reports whether importPath names a package in the
+// vendor tree of std or cmd that no wow-look-at-my module provides.
+func isVendoredThirdParty(importPath string) bool {
+	rest, ok := strings.CutPrefix(importPath, "vendor/")
+	if !ok {
+		rest, ok = strings.CutPrefix(importPath, "cmd/vendor/")
+	}
+	return ok && !strings.HasPrefix(rest, "github.com/wow-look-at-my/")
 }
 
 // A PackageError describes an error loading information about a package.
@@ -984,6 +1002,13 @@ func loadPackageData(ld *modload.Loader, ctx context.Context, path, parentPath, 
 						}
 					}
 					// The module loader looked for a directory; the manifest is the answer.
+					r.err = nil
+					goto Happy
+				}
+				// GOROOT names the executable, so a package the manifest lacks has no source either. runtime/cgo is absent from a blob built with cgo off.
+				if _, statErr := os.Stat(r.dir); statErr != nil {
+					data.p = &build.Package{Dir: r.dir, ImportPath: r.path, Goroot: true, Root: cfg.GOROOT}
+					data.err = fmt.Errorf("this go command embeds no standard package %s for %s/%s, and GOROOT %s holds no source for it", r.path, cfg.Goos, cfg.Goarch, cfg.GOROOT)
 					r.err = nil
 					goto Happy
 				}

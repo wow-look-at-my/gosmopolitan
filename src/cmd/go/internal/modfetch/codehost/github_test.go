@@ -287,6 +287,12 @@ type fakeGitHub struct {
 	infoRefsStatus int
 	// apiStatus fails every direct api.github.com request with this code.
 	apiStatus int
+	// private makes github.com and api.github.com answer nothing, directly or through the proxy.
+	private bool
+	// mirrorToken is the token github-state-mirror accepts. Empty, it accepts none.
+	mirrorToken string
+	// codeloadForbidden refuses a signed codeload URL asked for directly.
+	codeloadForbidden bool
 
 	mu sync.Mutex
 	// requests records archive traffic, and refRequests the ref listings: info/refs, github-state-mirror and the API.
@@ -319,7 +325,19 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	f.mu.Unlock()
 
 	if req.Host == gsmHost {
-		http.Error(w, "unauthorized: missing Authorization header", http.StatusUnauthorized)
+		if f.mirrorToken == "" || req.Header.Get("Authorization") != "Bearer "+f.mirrorToken {
+			http.Error(w, "unauthorized: could not validate GitHub credential", http.StatusUnauthorized)
+			return
+		}
+		if format, rev, found := mirrorArchivePath(req.URL.Path); found {
+			http.Redirect(w, req, "https://codeload.github.com/owner/repo/legacy."+format+"/"+rev+"?token="+signedToken, http.StatusFound)
+			return
+		}
+		f.serveAPI(w, req, target)
+		return
+	}
+	if f.private && target.Host != "codeload.github.com" {
+		http.NotFound(w, req)
 		return
 	}
 	if isInfoRefs {
@@ -361,6 +379,10 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	case "proxy.pazer.ai":
 		inner, err := url.Parse(req.URL.Query().Get("url"))
+		if err == nil && inner.Host == "codeload.github.com" {
+			f.serveSigned(w, req, inner)
+			return
+		}
 		if err != nil || inner.Host != "github.com" {
 			http.Error(w, "bad url", http.StatusBadRequest)
 			return
@@ -381,9 +403,41 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		f.serveArchive(w, req, "proxy", format, name)
 
 	default:
+		if strings.HasPrefix(req.URL.Path, "/owner/repo/legacy.") {
+			if f.codeloadForbidden {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			f.serveSigned(w, req, &url.URL{Path: req.URL.Path, RawQuery: req.URL.RawQuery})
+			return
+		}
 		format, name := codeloadPath(req.URL.Path)
 		f.serveArchive(w, req, "github", format, name)
 	}
+}
+
+// signedToken is the token in every codeload URL the fake mirror signs.
+const signedToken = "SIGNED123"
+
+// mirrorArchivePath splits "/repos/owner/repo/<tarball|zipball>/<rev>".
+func mirrorArchivePath(urlPath string) (format, rev string, found bool) {
+	if rev, found := strings.CutPrefix(urlPath, "/repos/owner/repo/tarball/"); found {
+		return "tar.gz", rev, true
+	}
+	if rev, found := strings.CutPrefix(urlPath, "/repos/owner/repo/zipball/"); found {
+		return "zip", rev, true
+	}
+	return "", "", false
+}
+
+// serveSigned answers a codeload URL that the fake mirror signed.
+func (f *fakeGitHub) serveSigned(w http.ResponseWriter, req *http.Request, signed *url.URL) {
+	format, rev, _ := strings.Cut(strings.TrimPrefix(signed.Path, "/owner/repo/legacy."), "/")
+	if signed.Query().Get("token") != signedToken {
+		http.NotFound(w, req)
+		return
+	}
+	f.serveArchive(w, req, "codeload", format, rev)
 }
 
 // serveAPI answers the api.github.com requests that githubRefs makes, from
@@ -546,6 +600,77 @@ func TestGitHubRefsOverHTTP(t *testing.T) {
 	}
 }
 
+// TestGitHubPrivateOverMirror resolves and downloads a private repository
+// with no git remote behind it. Only github-state-mirror answers, and only to
+// the token in the environment it accepts.
+func TestGitHubPrivateOverMirror(t *testing.T) {
+	t.Serial()
+	source, _ := makeSourceRepo(t, sourceFilesWithLink())
+	gitIn(t, source, "commit", "-q", "--allow-empty", "-m", "head")
+	head := gitIn(t, source, "rev-parse", "HEAD")
+
+	cases := []struct {
+		name              string
+		codeloadForbidden bool
+		// tokenVar holds the token the mirror accepts. GITHUB_TOKEN holds one it rejects.
+		tokenVar, token string
+		wantRoute       string
+	}{
+		{name: "codeload", tokenVar: "GH_TOKEN", token: "accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io"},
+		{name: "codeload through the proxy", codeloadForbidden: true, tokenVar: "GH_TOKEN", token: "accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io and proxy.pazer.ai"},
+		{name: "token found by its prefix", tokenVar: "GSM_TEST_ORG_TOKEN", token: "github_pat_accepted", wantRoute: "tar.gz archive via github-state-mirror.pazer.io"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			for _, name := range githubTokenVars {
+				t.Setenv(name, "")
+			}
+			t.Setenv("GITHUB_TOKEN", "rejected")
+			t.Setenv(test.tokenVar, test.token)
+			t.Cleanup(func() {
+				gsmAcceptedMu.Lock()
+				gsmAccepted = ""
+				gsmAcceptedMu.Unlock()
+			})
+
+			fake := &fakeGitHub{dir: source, private: true, mirrorToken: test.token, codeloadForbidden: test.codeloadForbidden}
+			serveFakeGitHub(t, fake)
+			ctx := testContext(t)
+			git := fakeGitHubRepo(t, ctx, filepath.Join(t.TempDir(), "no-such-remote.git"))
+
+			latest, err := git.Latest(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if latest.Name != head || latest.Origin.Ref != "HEAD" || !latest.Time.Equal(commitTime) {
+				t.Errorf("Latest = %s at %q, %v, want %s at HEAD, %v", latest.Name, latest.Origin.Ref, latest.Time, head, commitTime)
+			}
+			rec := new(Fetch)
+			files, err := git.ReadFiles(WithFetch(ctx, rec), head, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.ContainsFunc(files, func(file ModuleFile) bool {
+				return file.Name == "go.mod" && string(file.Data) == sourceFiles["go.mod"]
+			}) {
+				t.Errorf("ReadFiles has no go.mod %q: %v", sourceFiles["go.mod"], files)
+			}
+			if route, _, _, _ := rec.Stats(); !strings.HasPrefix(route, test.wantRoute+", because ") {
+				t.Errorf("download reports %q, want %q and the failures before it", route, test.wantRoute)
+			}
+			if git.gitDirReady() {
+				t.Errorf("resolving over the mirror made a git repository")
+			}
+			gsmAcceptedMu.Lock()
+			accepted := gsmAccepted
+			gsmAcceptedMu.Unlock()
+			if accepted != test.token {
+				t.Errorf("the mirror is remembered to accept %q, want %q", accepted, test.token)
+			}
+		})
+	}
+}
+
 // fakeGitHubRepo opens the local bare repository at dir as if it were
 // github.com/owner/repo.
 func fakeGitHubRepo(t *testing.T, ctx context.Context, dir string) *gitRepo {
@@ -635,7 +760,7 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			status:       missing("github.tar.gz", "proxy.tar.gz", "github.zip", "proxy.zip"),
 			wantRequests: []string{githubTar, githubTar, proxyTar, githubZip, githubZip, proxyZip},
 			wantGit:      true,
-			wantRoute:    "git, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found; proxy.pazer.ai zip: 404 Not Found",
+			wantRoute:    "git, because github.com tar.gz: 404 Not Found; proxy.pazer.ai tar.gz: 404 Not Found; github.com zip: 404 Not Found; proxy.pazer.ai zip: 404 Not Found; github-state-mirror.pazer.io tar.gz: 401 Unauthorized; github-state-mirror.pazer.io zip: 401 Unauthorized",
 		},
 		{
 			name:            "git when every redirect leaves GitHub",
@@ -748,7 +873,7 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			route, size, transfer, _ := reports[""].Stats()
 			routeOK := route == test.wantRoute
 			if test.wantRoutePrefix != "" {
-				routeOK = strings.HasPrefix(route, test.wantRoutePrefix) && strings.Count(route, "; ") == 3
+				routeOK = strings.HasPrefix(route, test.wantRoutePrefix) && strings.Count(route, "; ") == 5
 			}
 			if !routeOK || size <= 0 || transfer <= 0 {
 				t.Errorf("first download reports %q, %d bytes in %v, want %q%s and the bytes of the fetch", route, size, transfer, test.wantRoute, test.wantRoutePrefix)
@@ -809,6 +934,21 @@ func TestGitHubArchiveFallback(t *testing.T) {
 			}
 			if again.gitDirReady() {
 				t.Errorf("serving from archives made a git repository")
+			}
+
+			// An archive go.sum refuses leaves git as the only source.
+			gitCtx := WithGitOnly(WithFetch(ctx, new(Fetch)))
+			zipRC, err := again.ReadZip(gitCtx, hash, "", MaxZipFile)
+			if err != nil {
+				t.Fatalf("ReadZip with WithGitOnly: %v", err)
+			}
+			data, err := io.ReadAll(zipRC)
+			zipRC.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fromGit := zipEntries(t, data); !reflect.DeepEqual(fromGit, want) {
+				t.Errorf("ReadZip with WithGitOnly = %q, want %q", fromGit, want)
 			}
 		})
 	}

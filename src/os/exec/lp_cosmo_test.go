@@ -1,6 +1,5 @@
-// Copyright 2026 The Go Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright The Go Authors. All rights reserved. Use of this source code is
+// governed by a BSD-style license that can be found in the LICENSE file.
 
 //go:build cosmo
 
@@ -11,11 +10,10 @@ import (
 	"testing"
 )
 
-// The nt* path-syntax helpers are pure functions with no NT
-// dependency, so they are testable on any host (this file runs under
-// GOOS=cosmo via the misc/cosmo exec wrappers). The end-to-end NT
-// behavior is CI-gated by testdata/runtimeprobe's lookpath check on
-// the windows leg.
+// The nt* path-syntax helpers are pure functions with no NT dependency, so
+// they are testable on any host (this file runs under GOOS=cosmo via the
+// misc/cosmo exec wrappers). The end-to-end NT behavior is CI-gated by
+// testdata/runtimeprobe's lookpath check on the windows leg.
 
 func TestNTSplitList(t *testing.T) {
 	for _, tt := range []struct {
@@ -27,8 +25,7 @@ func TestNTSplitList(t *testing.T) {
 		{`C:\a;D:\b`, []string{`C:\a`, `D:\b`}},
 		{`C:\hostedtoolcache\windows\go\1.25.5\x64\bin;C:\Windows\system32`,
 			[]string{`C:\hostedtoolcache\windows\go\1.25.5\x64\bin`, `C:\Windows\system32`}},
-		// Quotes protect ';' and are stripped, per windows
-		// filepath.SplitList.
+		// Quotes protect ';' and are stripped, per windows filepath.SplitList.
 		{`"C:\a;b";D:\c`, []string{`C:\a;b`, `D:\c`}},
 		{`C:\a;;D:\b`, []string{`C:\a`, ``, `D:\b`}}, // empty entries preserved (skipped by lookup)
 		{`/tmp/x;C:\a`, []string{`/tmp/x`, `C:\a`}},  // mixed-form PATH
@@ -106,9 +103,7 @@ func TestNTExtHasExt(t *testing.T) {
 }
 
 func TestNTLookupEnvFold(t *testing.T) {
-	// Case-insensitive name match: the canonical NT block spelling
-	// "Path" must be found by a "PATH" lookup (cosmo's os.Getenv is
-	// exact-case; the fold is os/exec's own).
+	// Case-insensitive name match: the canonical NT block spelling "Path" must be found by a "PATH" lookup.
 	t.Setenv("NtLpProbeVar", "folded")
 	if got := ntGetenv("NTLPPROBEVAR"); got != "folded" {
 		t.Errorf(`ntGetenv("NTLPPROBEVAR") = %q, want "folded"`, got)
