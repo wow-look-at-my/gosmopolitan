@@ -28,7 +28,7 @@ When building/testing:
 
 ## Build Commands
 
-Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain (set `GOROOT_BOOTSTRAP` or have `go` in PATH).
+Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain (set `GOROOT_BOOTSTRAP` or have `go` in PATH). It also needs zig 0.16.0 and LLVM 18.1.8's `ld64.lld` and `llvm-strip` on PATH. Cmd/dist compiles the APE loaders cmd/link embeds (`src/cmd/dist/apeld.go`), and fails naming any tool that is missing.
 
 ```bash
 # Build the toolchain (Unix)
@@ -202,7 +202,7 @@ go tool compile -bench=out.txt file.go
 - **This toolchain defaults to `GOOS=cosmo`.** Any `go build`/`go install`/`go test` run with the fork's `bin/go` targets cosmo unless you pin GOOS. The toolchain is one binary. A host compiler or linker change is rebuilt with `GOOS=linux GOARCH=amd64 go install cmd/go/main`. `go install cmd/compile` installs nothing, because `pkg/tool/*/compile` is a symlink to `bin/go`. Test harnesses (like `testdata/ape/apetest`) must be run with an upstream Go so the test binary itself is executable on the host.
 - **An APE never writes to itself.** The kernel cannot exec the file as it stands, so the bootstrap script stages a copy under `${APE_RUNDIR:-/tmp}/.ape-run-1-<uid>/<file identity>/`. TMPDIR and HOME are not read. The APE keeps its bytes and its checksum, runs from a read-only path, and stays fat. As root, staging also registers the magic with binfmt_misc and binds the copy over the original path in a private namespace. See `docs/APE-STAGING.md`.
 - **Tool build IDs are content-derived.** A fork tool prints its own build ID under `-V=full`, the way a devel toolchain does. The cmd/go command takes that content ID as the tool ID. So a rebuilt toolchain never reuses a stale cache entry, and `go clean -cache` after `make.bash` is unnecessary. Every build leg asserts the discriminator.
-- **A github.com module downloads an archive before it runs git or asks the module proxy.** The github.com tar.gz comes first. Then the same through proxy.pazer.ai, the zip, the zip through proxy.pazer.ai, a shallow git fetch, and last proxy.golang.org. Refs come over plain HTTP, not `ls-remote`, and no git runs until git is the last option left. A private repository resolves through github-state-mirror with a GitHub token from the environment. Depth: docs/GITHUB-FETCH.md.
+- **A github.com module downloads an archive before it runs git. Nothing ever asks proxy.golang.org.** The github.com tar.gz comes first. Then the same through proxy.pazer.ai, the zip, the zip through proxy.pazer.ai, and last a shallow git fetch. Every other module goes direct to its origin. Refs come over plain HTTP, not `ls-remote`, and no git runs until git is the last option left. A private repository resolves through github-state-mirror with a GitHub token from the environment. Depth: docs/GITHUB-FETCH.md.
 - **An unset GOMEMLIMIT takes the cgroup's memory limit.** `readGOMEMLIMIT` reads `memory.max` (cgroup v2) or `memory.limit_in_bytes` (v1) of the process's own cgroup at `gcinit` and uses. An explicit `GOMEMLIMIT`, `off` included, still wins, and a host with no cgroups is unaffected. This holds for cosmo too: the APE asks `__hostos` first and only reads `/proc` on a Linux host. `internal/runtime/cgroup` builds for cosmo now, over `sys_cosmo.go`'s syscall shims.
 - **An arm64 APE on macOS needs AT_HWCAP. It takes fixes.** A reader without one reads the `ID_AA64ISAR*` registers - an `MRS` macOS answers. The APE loader does pass a pair. However, it sets `hwcap_CPUID`, claiming the kernel emulates those registers.`fixAuxv` clears that bit in `osinit` (and. Never set `hwcap_CPUID`: it means "the kernel emulates those registers".
 - **`/proc/self/auxv` is served by the APE off a Linux host.** A library written for Linux reads the auxiliary vector out of that file rather. `syscall.Openat` answers the path from `runtime.getAuxv`, handing back the read end of a pipe holding the pairs plus the AT_NULL terminator: before the real. So AT_HWCAP now reaches x/sys/cpu too, which is what stops the arm64 MRS fallback and its SIGILL.
@@ -211,7 +211,7 @@ go tool compile -bench=out.txt file.go
 ## Local Verify Loop
 
 ```bash
-cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap)
+cd src && ./make.bash                          # build toolchain (needs Go 1.24+ bootstrap, zig 0.16.0, LLVM 18.1.8)
 export PATH="$PWD/../bin:$PATH"
 # after linker or go-command changes:
 GOOS=linux GOARCH=amd64 go install cmd/go/main   # refresh bin/go, which carries every HOST tool (see gotcha above)
@@ -255,7 +255,7 @@ Per-step rationale trimmed from `cosmo-ci.yml`'s comments (1-line cap): docs/CI.
 
 **A dependency's generators run only for this org.** `cmd/go` completes a fetched module by running its `//go:generate` directives (`cmd/go/internal/gendep`). A directive is a command its author wrote. This machine runs it unread. A module under `github.com/wow-look-at-my/` completes that way, because that author is this fleet. Every other module runs nothing. It asks with a whole-line `//go:gendep` comment in its own `go.mod`. A skip is named on stderr, not left to surface later as an undeclared symbol. Depth: docs/GENDEP.md.
 
-**A failure is fixed, not concealed.** There is no transient failure. A test that passes on the second run is broken on the first, and re-running it is not a repair. So `-count=1` is a no-op here, and clearing a cache is never the answer to a wrong result. A cache that serves a wrong answer has a key missing an input. Name that input and put it in the key. Never retry, not re-run, not widen a timeout, not mark a check flaky, not delete state to move past it. Find what is actually wrong and repair it.
+**A failure is fixed, not concealed.** There is no transient failure. A test that passes on the second run is broken on the first, and re-running it is not a repair. So `-count=1` is a no-op here, and clearing a cache is never the answer to a wrong result. A cache that serves a wrong answer has a key missing an input. Name that input and put it in the key. Do not retry or re-run it. Do not widen a timeout or mark a check flaky. Do not delete state to move past it. Find what is actually wrong and repair it.
 
 **`awk` and `sed` are not permitted.** Neither in a script, a workflow step, nor a one-off command. Each carries its own grammar, and that grammar edits what you did not ask it to. `sed -i` takes a mandatory backup suffix on BSD and none on GNU. One invocation cannot mean the same thing on both runners. `awk` rebuilds the whole line out of `OFS` as soon as you assign to a field. So a version rewrite stripped the leading tab from a couple of `go.mod` require lines, and nothing failed. The shell reads a line and puts back every part of it untouched. Use it, or use the file's own tool.
 
@@ -301,7 +301,7 @@ One build has one owner. The first go command opens the directory and serves it 
 | `src/cmd/vendor/github.com/pierrec/lz4/v4` | the cache's wire framing |
 | `src/cmd/vendor/golang.org/x/tools` | gosmopolitan_tools, the org's x/tools |
 
-Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. The linker's prebuilt `apeld` loaders are Git LFS files. A clone therefore also needs git-lfs, and every checkout passes `lfs: true`. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
+Consequences to know. **Clone with `--recurse-submodules`**, or `cmd/go` will not build. Every `actions/checkout` in `cosmo-ci.yml` passes `submodules: true` for the same reason. Nobody moves the client by hand. `src/submodulebranch.bash` puts each org submodule on its branch head through `git submodule update --init --remote`. No build stamps a version: the committed version is the placeholder `vN.0.0`, and `dats/checks/org-unpinned.sh` keeps it that way. **Never run `go mod vendor` here** —. Read `src/README.vendor` before adding any other `src/cmd` dependency: what looks like one import is a whole subtree of somebody else's repository.
 
 **A cmd/go change that needs a new client API rides the client's own branch.** Both repositories carry the branch name. That name is what the submodule follows. The merge on each side returns both to their default branches. The gitlink a checkout restores decides nothing. It is the fallback for a build that cannot reach the remote.
 

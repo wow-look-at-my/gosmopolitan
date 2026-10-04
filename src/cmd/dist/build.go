@@ -1564,6 +1564,10 @@ func cmdbootstrap() {
 
 	setup()
 
+	// cmd/link embeds the loaders, and toolchain1 builds cmd/link.
+	startPhase("apeld")
+	buildApeLoaders()
+
 	startPhase("toolchain1")
 	checkCC()
 	bootstrapBuildTools()

@@ -56,9 +56,9 @@ func TestTryProxiesGitHubFirst(t *testing.T) {
 		}
 		return notExistErrorf("404 Not Found")
 	}
-	assert.Equal(t, []string{"github", "https://proxy.golang.org"}, tryOrder(t, fail),
-		"the archive route must come first, fall back to the proxy, and not run a second time as direct")
-	assert.ErrorIs(t, TryProxies(fail), outage, "the error from github.com must outrank a proxy 404")
+	assert.Equal(t, []string{"github"}, tryOrder(t, fail),
+		"the archive route must come first and not run a second time as direct")
+	assert.ErrorIs(t, TryProxies(fail), outage)
 }
 
 func TestTryProxiesNotGitHubReachesDirect(t *testing.T) {
@@ -69,8 +69,20 @@ func TestTryProxiesNotGitHubReachesDirect(t *testing.T) {
 		}
 		return notExistErrorf("404 Not Found")
 	})
-	assert.Equal(t, []string{"github", "https://proxy.golang.org", "direct"}, order,
-		"a path off github.com must still reach direct")
+	assert.Equal(t, []string{"github", "direct"}, order, "a path off github.com must go direct")
+}
+
+func TestDefaultNeverAsksProxyGolangOrg(t *testing.T) {
+	useProxies(t, cfg.DefaultGOPROXY)
+	list, err := proxyList()
+	require.NoError(t, err)
+	for _, spec := range list {
+		assert.NotContains(t, spec.url, bannedProxyHost)
+	}
+	for _, base := range []string{"https://proxy.golang.org", "https://proxy.golang.org/", "http://proxy.golang.org/x"} {
+		_, err := newProxyRepo(base, "golang.org/x/sync")
+		assert.ErrorContains(t, err, bannedProxyHost, "%s must be refused", base)
+	}
 }
 
 func TestLookupGitHubRefusesOtherHosts(t *testing.T) {
