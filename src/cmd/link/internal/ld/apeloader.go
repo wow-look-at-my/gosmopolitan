@@ -13,6 +13,8 @@ import (
 	"os"
 )
 
+// cmd/dist compiles the loaders into apeld/bin before it builds this package. Git does not track them.
+
 //go:embed apeld/bin/apeld-linux-amd64
 var apeldLinuxAMD64 []byte
 
@@ -59,7 +61,7 @@ func apeLoaderFor(p cosmoape.Platform) *apeLoader {
 // change when the loader changes and stay put when only the packing does.
 func newApeLoader(name string, bin []byte, compress bool, offset int) *apeLoader {
 	if len(bin) == 0 {
-		Exitf("APE: the %s loader is empty; rebuild it with src/cmd/link/internal/ld/apeld/build.sh", name)
+		Exitf("APE: the %s loader is empty; run make.bash (make.bat on Windows) in src, which compiles it with zig and LLVM", name)
 	}
 	sum := sha256.Sum256(bin)
 	l := &apeLoader{name: name, blob: bin, gzip: compress, offset: offset, tag: hex.EncodeToString(sum[:4])}
