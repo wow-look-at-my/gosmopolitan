@@ -60,11 +60,11 @@ go\bin\go version   # go version go1.27.0-cosmo.r<N> windows/amd64
 
 All tarballs come from one release, each built on its own platform. macOS Intel and linux/arm64 still build from source - see Building the. Depth: docs/INSTALL.md.
 
-`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. `GOPROXY` and `GOSUMDB` are removed too: modules always come from proxy.golang.org (then direct) and are checked against sum.golang.org. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
+`GOBIN` and `GOTOOLCHAIN` are removed. The fork always runs itself and always installs to its own bin directory, and neither variable can redirect that - see docs/INSTALL.md. `GOPROXY` and `GOSUMDB` are removed too: modules always come from their origin, not proxy.golang.org, and are checked against sum.golang.org. Remember the fork defaults to `GOOS=cosmo` - pin `GOOS`/`GOARCH` on host-side builds. To pin an immutable release instead of the rolling branch latest, use `?v=N` in place of `branch=master`.
 
 ## Building the Toolchain
 
-Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain.
+Build from the `src/` directory. Requires a Go 1.24+ bootstrap toolchain, plus zig 0.16.0 and LLVM 18.1.8's `ld64.lld` and `llvm-strip` on `PATH`: the build compiles the APE loaders with them (see `src/cmd/link/internal/ld/apeld/README.md`).
 
 ```bash
 cd src && ./make.bash    # Unix

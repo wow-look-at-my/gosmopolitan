@@ -13,10 +13,13 @@ windows/amd64 has no loader. The APE is a valid PE and the OS maps the payload s
 
 darwin/amd64 is not a platform this toolchain emits. XNU reads the Mach-O header at offset 0, which an APE cannot carry there. The only route for that platform was a copy of the whole program.
 
-## Rebuilding
+## Building
 
-```sh
-./build.sh
-```
+Git does not track `bin/`. `make.bash` and `make.bat` compile the loaders into it before anything builds cmd/link: see `src/cmd/dist/apeld.go`. The build needs these on `PATH`, and fails naming any that is missing:
 
-`build.sh` needs `zig` (0.16.0 in upstream CI), `ld64.lld` and `llvm-strip`. `ZIG`, `LLD` and `STRIP` name them. The binaries are byte-reproducible. `TestApeLoaderBinaries` pins each one's SHA-256, so a rebuild that changes a byte fails the linker's own tests until the pin is updated with it.
+| tool | where it comes from |
+|---|---|
+| `zig` 0.16.0 | https://ziglang.org/download/ |
+| `ld64.lld` and `llvm-strip` from LLVM 18.1.8 | `lld-18` and `llvm-18` from apt.llvm.org (`/usr/lib/llvm-18/bin`), `brew install llvm@18`, or `LLVM-18.1.8-win64.exe` |
+
+dist refuses any other zig or LLD. ld64.lld writes its own version into the darwin loader, so another LLD makes other bytes. `TestApeLoaderBinariesMatchTheirPins` pins each loader's SHA-256, so a source change that moves a byte updates its pin in the same commit.
