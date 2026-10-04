@@ -215,10 +215,18 @@ stdout '\(cached\)'
 
 exec ./mkold$GOEXE 50s testcache/script.sh
 go test testcache -run=Exec
+stdout '\(cached\)'
+
+cp script2.sh testcache/script.sh
+chmod 0755 ./testcache/script.sh
+go test testcache -run=Exec
 ! stdout '\(cached\)'
 go test testcache -run=Exec
 stdout '\(cached\)'
 
+-- gopath/src/script2.sh --
+#!/bin/sh
+true
 -- gopath/src/testcache/file.txt --
 xx
 -- gopath/src/4x.txt --
