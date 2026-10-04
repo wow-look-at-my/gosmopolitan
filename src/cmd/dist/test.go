@@ -584,10 +584,16 @@ func (t *tester) reportTo(stdout, stderr io.Writer) (out, errOut io.Writer, flus
 
 // run runs a go test and returns an error if it does not succeed.
 func (opts *goTest) run(t *tester) error {
+	_, err := opts.runState(t)
+	return err
+}
+
+// runState is run, and also answers what the command cost the machine.
+func (opts *goTest) runState(t *tester) (*os.ProcessState, error) {
 	cmd, flush := opts.bgCommand(t, os.Stdout, os.Stderr)
 	err := cmd.Run()
 	flush()
-	return err
+	return cmd.ProcessState, err
 }
 
 // oneBinary is a test binary that the tests of several packages compile
@@ -952,9 +958,10 @@ func (t *tester) registerStdTest(pkg string) {
 		var err error
 		if len(rest) > 0 {
 			started := time.Now()
-			err = test.run(t)
+			var state *os.ProcessState
+			state, err = test.runState(t)
 			if !t.json {
-				reportStep("test", "std.test", time.Since(started))
+				reportTestStep("std.test", time.Since(started), state)
 			}
 			t.recordOneBinary(false, test.keep, rest)
 		}
@@ -963,9 +970,9 @@ func (t *tester) registerStdTest(pkg string) {
 			cmdGo := oneBinaryTest([]string{"cmd/go"}, goos)
 			cmdGo.timeout = timeoutSec
 			started := time.Now()
-			errCmdGo := cmdGo.run(t)
+			state, errCmdGo := cmdGo.runState(t)
 			if !t.json {
-				reportStep("test", "cmd-go.test", time.Since(started))
+				reportTestStep("cmd-go.test", time.Since(started), state)
 			}
 			if err == nil {
 				err = errCmdGo
@@ -1942,7 +1949,7 @@ func (t *tester) runPending(nextTest *distTest) {
 		<-w.end
 		os.Stdout.Write(w.out.Bytes())
 		if w.elapsed > 0 && !t.json {
-			reportStep("test", dt.name, w.elapsed)
+			reportTestStep(dt.name, w.elapsed, w.cmd.ProcessState)
 		}
 		// We no longer need the output, so drop the buffer.
 		w.out = bytes.Buffer{}
