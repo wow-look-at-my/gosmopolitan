@@ -274,7 +274,13 @@ func (t *tester) run() {
 		}
 		anyIncluded = true
 		dt := dt // dt used in background after this iteration
-		if err := dt.fn(&dt); err != nil {
+		queued := len(t.worklist)
+		err := dt.fn(&dt)
+		if len(t.worklist) == queued {
+			// The test ran here and is finished. A queued one counts when its command ends.
+			t.markTestDone(dt.name)
+		}
+		if err != nil {
 			t.runPending(&dt) // in case that hasn't been done yet
 			t.failed = true
 			if t.keepGoing {
@@ -1842,11 +1848,21 @@ func (t *tester) registerCgoTests(heading string) {
 	}
 }
 
-// markPkgDone counts one package toward the run's progress. The commands run
-// in parallel, and testProgress holds the lock.
+// markPkgDone counts a package result toward the run's progress. The total
+// counts dist tests, so a result counts only where the package is one: a std
+// package's own test. A variant reports packages too, crypto/... dozens of
+// them, and counts as its one test when its command ends.
 func (t *tester) markPkgDone(pkg string) {
+	if t.testNames[pkg] && t.shouldRunTest(pkg) {
+		t.markTestDone(pkg)
+	}
+}
+
+// markTestDone counts one dist test toward the run's progress. The commands
+// run in parallel, and testProgress holds the lock.
+func (t *tester) markTestDone(name string) {
 	if t.progress != nil {
-		t.progress.markDone(pkg)
+		t.progress.markDone(name)
 	}
 }
 
@@ -1947,6 +1963,7 @@ func (t *tester) runPending(nextTest *distTest) {
 		}
 		ended++
 		<-w.end
+		t.markTestDone(dt.name)
 		os.Stdout.Write(w.out.Bytes())
 		if w.elapsed > 0 && !t.json {
 			reportTestStep(dt.name, w.elapsed, w.cmd.ProcessState)
