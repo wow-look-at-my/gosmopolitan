@@ -8,13 +8,14 @@ A github.com module download tries each source in this order. The first one that
 4. The same URL through `https://proxy.pazer.ai/?url=https://github.com/<owner>/<repo>/archive/<ref>.zip`.
 5. For a private repository: the archive github-state-mirror signs. See "Private repositories" below.
 6. A shallow `git fetch` of the commit, then the full history only when a command needs it.
-7. The module proxy, `https://proxy.golang.org`. This toolchain has no `GOPROXY`.
+
+The go command never asks `https://proxy.golang.org`. `DefaultGOPROXY` is `direct`, and `newProxyRepo` refuses that host from any source, a go-import `mod` tag included.
 
 A proxy request talks only to proxy.pazer.ai. The proxy must follow GitHub's redirect itself and return the archive. A redirect that it passes back is not followed. The next source is tried.
 
-The first six are the `github` entry that `proxyList` puts ahead of every proxy (`src/cmd/go/internal/modfetch/proxy.go`). Any failure there, a 404 included, moves on to the module proxy, and `direct` is not tried a second time. A module outside github.com skips the entry. A path under `GOPRIVATE` or `GONOPROXY` skips it too and goes direct, with no proxy after it. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
+These are the `github` entry that `proxyList` puts ahead of `direct` (`src/cmd/go/internal/modfetch/proxy.go`). A failure there is final, and `direct` is not tried a second time. A module outside github.com skips the entry and goes direct to its origin. The go-import meta tag names the repository, and a repository on github.com takes the archive route again. A path under `GOPRIVATE` or `GONOPROXY` goes direct too. The archive code is `src/cmd/go/internal/modfetch/codehost/github.go`.
 
-An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The module comes from the proxy instead. The log names the archive as the failed source.
+An archive can hash differently from the module zip: `export-ignore` and `export-subst` change it. When go.sum records an `h1:` sum the archive does not match. The commit is fetched with no history and zipped by `git archive` with those attributes off (`codehost.WithGitOnly`). The log names the archive as the failed source.
 
 ## Which URLs
 

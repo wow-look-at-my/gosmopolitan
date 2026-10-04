@@ -77,6 +77,17 @@ func (e *HTTPError) Unwrap() error {
 	return e.Err
 }
 
+// BannedHost is the module mirror. The go command sends no request to it, on
+// any path and after any redirect.
+const BannedHost = "proxy.golang.org"
+
+func refuseBannedHost(u *url.URL) error {
+	if strings.EqualFold(u.Hostname(), BannedHost) {
+		return fmt.Errorf("refusing %s: the go command never contacts %s", u.Redacted(), BannedHost)
+	}
+	return nil
+}
+
 // GetBytes returns the body of the requested resource, or an error if the
 // response status was not http.StatusOK.
 //
