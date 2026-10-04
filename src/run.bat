@@ -24,5 +24,8 @@ set PATH=%CD%\..\misc\cosmo;%PATH%
 set GOOS=%GOHOSTOS%
 set GOARCH=%GOHOSTARCH%
 
-set GOPATH=c:\nonexist-gopath
+:: An empty GOPATH of its own keeps the suite off the user's packages. Every
+:: test shares its module cache, so a module downloads once per run.
+for %%G in ("%CD%\..") do set "GOPATH=%%~fG\pkg\gopath"
+if not exist "%GOPATH%" mkdir "%GOPATH%" || exit /b 1
 ..\bin\go tool dist test %* || exit /b 1

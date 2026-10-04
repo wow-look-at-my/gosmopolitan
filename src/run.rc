@@ -13,5 +13,8 @@ if(! test -f ../bin/go){
 GOENV=off
 eval `{../bin/go tool dist env}
 
-GOPATH=/nonexist-gopath
+# An empty GOPATH of its own keeps the suite off the user's packages. Every
+# test shares its module cache, so a module downloads once per run.
+GOPATH=`{cd .. && pwd}^/pkg/gopath
+mkdir -p $GOPATH
 exec ../bin/go tool dist test -rebuild $*

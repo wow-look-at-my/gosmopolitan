@@ -294,6 +294,12 @@ jobs:
           dig +time=3 +tries=1 invalid.invalid. @1.1.1.1 | grep -E 'status: NXDOMAIN'
           dig +time=3 +tries=1 invalid.invalid. | grep -E 'status: NXDOMAIN'
 
+      # The suite profile records every process's CPU and samples call stacks system-wide.
+      - name: Profiling tools (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get install -y -qq acct linux-tools-common "linux-tools-$(uname -r)"
+
       - name: The whole test suite (run.bash)
         # the distribution's own all-tests entry point, on every host it builds on. tee feeds the timing step; `shell: bash` is -o pipefail, so a red suite still fails. see docs/CI.md.
         if: runner.os != 'Windows'
@@ -302,7 +308,16 @@ jobs:
           sh "$GITHUB_WORKSPACE/.github/resource-log.sh" &
           probe=$!
           trap 'kill "$probe"' EXIT
-          cd src && ./run.bash 2>&1 | tee "${{ runner.temp }}/suite.log"
+          if [ "$RUNNER_OS" = Linux ]; then
+            bash misc/suiteprof/profile-suite.bash "${{ runner.temp }}/suiteprof" | tee "${{ runner.temp }}/suite.log"
+          else
+            cd src && ./run.bash 2>&1 | tee "${{ runner.temp }}/suite.log"
+          fi
+
+      - name: Where the suite spent its CPU (Linux)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: cat "${{ runner.temp }}/suiteprof/report.md" >> "$GITHUB_STEP_SUMMARY"
 
       # Strawberry's patch 2.5.9 leads PATH here and asserts partway through a two-file diff, which is what go mod tidy -diff writes. This picks one that applies such a diff, proven by applying one.
       - name: A patch that applies a multi-file diff (NT)
