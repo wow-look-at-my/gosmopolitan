@@ -264,8 +264,8 @@ func (r *gitRepo) githubRefs(ctx context.Context) (map[string]string, error) {
 }
 
 // githubInfoRefs reads the ref advertisement git itself fetches first. A
-// private repository refuses it until a credential is presented, so git's own
-// credential is sent with the first request rather than found by a refusal.
+// private repository refuses it until a credential is presented. Git's own
+// credential is therefore sent with the first request, not found by a refusal.
 func (r *gitRepo) githubInfoRefs(source archiveSource) (map[string]string, error) {
 	u, err := url.Parse(source.url)
 	if err != nil {
