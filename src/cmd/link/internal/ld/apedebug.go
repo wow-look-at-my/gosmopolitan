@@ -147,7 +147,7 @@ func alignTo(b []byte, align uint64) []byte {
 // sections keep their contents, repacked after the header page. Program
 // headers are clamped to the retained span, addresses intact.
 //
-// The result is a valid, non-runnable ELF that gdb, delve and the llvm
+// The result is a valid, non-runnable ELF that gdb, delve. The llvm
 // tools read like the pristine original, at about a third of the size.
 func slimELFDebug(elf []byte) ([]byte, error) {
 	secs, err := parseELFSections(elf)
@@ -220,7 +220,7 @@ type apeCompactView struct {
 // returns the grown tail plus the header fields describing the view.
 //
 // The view is a complete section table for the assimilated binary.
-// Allocated sections point INTO THE PAYLOAD (sh_offset rebased by
+// Allocated sections point INTO. THE PAYLOAD (sh_offset rebased by
 // payloadOff), which the APE already ships. .symtab, .strtab, .shstrtab
 // and the kept .debug_* sections are packed into the tail at absolute
 // offsets. Sections in apeCompactDropDebug are removed and the table is

@@ -27,7 +27,7 @@ func sigNoteSetup(*note) {
 	sigNoteWrite = w
 
 	// Make the write end of the pipe non-blocking, so that if the pipe buffer is
-	// somehow full we will not block in the signal handler.
+	// somehow full we will not block. In the signal handler.
 	const (
 		_F_GETFL = 3
 		_F_SETFL = 4

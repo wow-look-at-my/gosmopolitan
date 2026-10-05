@@ -1,12 +1,12 @@
 # runtime.GOOS and runtime.GOARCH are variables here, so they name the
 # host. A constant declaration over them still has to compile, because
-# code in the wild writes one; the type checker folds the build value in
+# code in the wild writes one. The type checker folds the build value in
 # that context only. See src/cmd/compile/internal/types2/dynconst.go.
 #
 # The toolchain must already be built: run make.bash first.
 tests:
 	# Both readings differ on purpose: a constant is the PORT this was
-	# built for (cosmo/amd64) and a plain read is the HOST it booted on
+	# built for (cosmo/amd64). A plain read is the HOST it booted on
 	# (linux/amd64 here). GOARCH agrees either way, which is what the
 	# `unaligned` shape in the wild is really asking.
 	- desc: a const over runtime.GOARCH compiles and reports the port

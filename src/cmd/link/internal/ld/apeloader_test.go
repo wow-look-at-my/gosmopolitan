@@ -61,7 +61,7 @@ func TestApeLoaderBinariesMatchTheirPins(t *testing.T) {
 // TestApeLoaderIsStatic holds the property that makes a loader usable on a
 // host that carries nothing: it links against no interpreter. A loader
 // that needed one would fail on exactly the minimal image an APE is meant
-// to run on, and the failure would land on the host.
+// to run on. The failure would land on the host.
 func TestApeLoaderIsStatic(t *testing.T) {
 	for name, want := range map[string]elf.Machine{
 		"apeld-linux-amd64": elf.EM_X86_64,
@@ -114,9 +114,9 @@ func TestApeLoaderDarwinLoadsOnlyLibSystem(t *testing.T) {
 }
 
 // TestApeLoaderRegionsFitTheHeader walks every loader at once, the layout
-// that packs the most into the 64K header, and checks that the regions
-// stay in order and inside it. placeApeLoaders enforces the same thing at
-// link time; this fails on a build machine rather than on someone's host.
+// that packs the most into the 64K header, and checks that the regions stay
+// in order. And inside it. placeApeLoaders enforces the same thing at link
+// time; this fails on a build machine rather than on someone's host.
 func TestApeLoaderRegionsFitTheHeader(t *testing.T) {
 	loaders := apeLoadersFor(apeAllLoaderPlatforms())
 	if len(loaders) != len(apeLoaderSums) {

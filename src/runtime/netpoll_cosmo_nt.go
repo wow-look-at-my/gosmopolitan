@@ -106,8 +106,8 @@ func ntNetpollwakeup() {
 
 // netpollopenNT registers fd. ONLY socket-kind fds are accepted:
 // pipes and files must keep failing here so internal/poll falls back
-// to blocking mode for them - that fallback is load-bearing for exec
-// stdio (chunk B) - and WSAPoll would report them POLLNVAL anyway.
+// to blocking mode for them. That fallback is load-bearing for exec
+// stdio (chunk B). WSAPoll would report them POLLNVAL anyway.
 func netpollopenNT(fd uintptr, pd *pollDesc) uintptr {
 	e, ok := ntFDLookup(int32(fd))
 	if !ok || e.kind != ntFDSocket {
@@ -193,8 +193,8 @@ func netpollBreakNT() {
 // netpollNT is the NT leg of netpoll: one WSAPoll cycle.
 //
 // delay < 0 blocks indefinitely and delay > 0 blocks that many
-// nanoseconds. delay == 0 returns empty without polling, as AIX does:
-// a nonblocking check would contend ntMtxset with the blocked poller,
+// nanoseconds. delay == 0 returns empty without polling, as AIX does.
+// A nonblocking check would contend ntMtxset with the blocked poller,
 // and sysmon and findRunnable both tolerate the empty answer.
 func netpollNT(delay int64) (gList, int32) {
 	var timeoutMs int32
@@ -240,7 +240,7 @@ func netpollNT(delay int64) (gList, int32) {
 		ntPollFds[0].revents = 0
 		if delay != 0 {
 			// A wakeup byte could be picked up by a nonblocking
-			// poll; only drain and reset when blocking (aix rule -
+			// poll. Only drain and reset when blocking (aix rule -
 			// and netpollNT(0) never reaches here anyway).
 			for {
 				rr := int32(uint32(ntcall(ntSockRecvFn, ntWakeRecv,

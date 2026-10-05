@@ -33,7 +33,7 @@ func cosmoAPEBuild() bool {
 }
 
 // cosmoSiblingArch returns the architecture the sibling build must produce,
-// or "" when this build needs only the primary one: GOCOSMOFAT=0, or a
+// or "" when this build needs only the primary one. GOCOSMOFAT=0, or a
 // GOCOSMOPLATFORMS selection whose platforms all boot the same payload.
 func cosmoSiblingArch() string {
 	if !cosmoAPEBuild() {
@@ -156,9 +156,9 @@ func ldflagsSpecifyStrip(ldflags []string) bool {
 // APE at p.Target, applying the default strip-and-sidecar behavior unless
 // GOCOSMOSTRIP=0 or the user's -ldflags for p already specify -s/-w.
 // GOCOSMODEBUG selects how much debug info the sidecars (and, for compact,
-// the APE itself) carry; when the merge passes no strip flags at all there
-// are no sidecars, so the mode has nothing to apply to and is deliberately
-// not passed on.
+// the APE itself) carry. When the merge passes no strip flags at all there
+// are no sidecars, so the mode has nothing to apply to. The mode is
+// deliberately not passed on.
 func cosmoMergeArgs(p *load.Package, sibling string) []string {
 	spec := p.Target
 	if sibling != "" {
@@ -215,11 +215,9 @@ func cosmoFatParallel() bool {
 	return true
 }
 
-// setup creates the sibling's scratch directory and resolves the go
-// command to re-execute. Cleanup is registered with base.AtExit because
-// the primary build can now fail (and base.Fatalf exits) while the
-// sibling is still running - without this the child would be orphaned
-// and its scratch directory leaked.
+// setup creates the sibling's scratch directory and resolves the go command
+// to re-execute. Cleanup is registered with base.AtExit. This is because the
+// primary build can now fail (and base.Fatalf exits).
 func (s *cosmoSibling) setup() []string {
 	goCmd, err := base.GoCommand()
 	if err != nil {
@@ -308,8 +306,8 @@ func cosmoFatSkipOutput() bool {
 
 // cosmoFatStart kicks off the sibling-architecture build that cosmoFatten
 // will merge, and returns nil when fat builds are disabled or impossible. It
-// runs the go build command line with -o redirected to a temporary location
-// and GOARCH flipped, so every other build flag and package argument is
+// runs the go build command line with -o redirected to a temporary location.
+// GOARCH flipped, so every other build flag and package argument is
 // preserved exactly. Pass dir=true when targets are written to a -o
 // directory, so the sibling build also uses one.
 //
@@ -356,10 +354,11 @@ func cosmoSiblingCgoEnv(arch string) []string {
 
 // cosmoFatten replaces each freshly built GOOS=cosmo executable (the Target
 // of each main package in mains) with the assembled APE, merging in the
-// sibling-architecture binary produced by s (when there is one) using the
-// linker's -apefat mode. By default the assembly also strips each embedded
-// payload to its loadable span and writes the amd64 image's unstripped debug
-// sidecar (<target>.dbg) next to the output; see cosmoMergeArgs.
+// sibling-architecture binary. That binary is produced by s (when there is
+// one) using the linker's -apefat mode. By default the assembly also strips
+// each embedded payload to its loadable span and writes the amd64 image's
+// unstripped debug sidecar (<target>.dbg) next. To the output. See
+// cosmoMergeArgs.
 func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load.Package) {
 	if s == nil && !cosmoAssembleEnabled() {
 		return
@@ -405,7 +404,7 @@ func cosmoFatten(ctx context.Context, b *Builder, s *cosmoSibling, mains []*load
 //
 // The merge is a command this build issues, so -n and -x show it like every
 // other one. Under -n it is only shown: the payloads it reads were printed
-// rather than written, so running it would open a target that does not exist.
+// rather than written. Running it would open a target that does not exist.
 func cosmoMerge(b *Builder, lane trace.Lane, link []string, p *load.Package, target, sibling, what string) {
 	args := cosmoMergeArgs(p, sibling)
 	if cfg.BuildN {
@@ -440,7 +439,7 @@ func cosmoMerge(b *Builder, lane trace.Lane, link []string, p *load.Package, tar
 // cosmoFatStartInstall kicks off the sibling-architecture install that
 // cosmoFattenInstall will merge, and returns nil when fat builds are
 // disabled. Call it immediately before the primary install, and pass
-// hasMains=false when the command installs no main packages so no
+// hasMains=false when the command installs no main packages. Do this so no
 // cross-architecture work is done for, say, "go install ./somelibrary".
 func cosmoFatStartInstall(ctx context.Context, hasMains bool) *cosmoSibling {
 	if !cosmoFatEnabled() || !hasMains {
@@ -561,8 +560,8 @@ func rewriteFlagValue(args []string, flag, value string) []string {
 }
 
 // cosmoMergeLane is the row the APE assembly is recorded on. The merge runs
-// after the build workers are done, on the command's own goroutine, so it
-// gets a row of its own rather than borrowing a worker's.
+// after the build workers are done, on the command's own goroutine. It gets
+// a row of its own rather than borrowing a worker's.
 func cosmoMergeLane(ctx context.Context) trace.Lane {
 	if !trace.Enabled(ctx) {
 		return trace.Lane{}
@@ -577,7 +576,7 @@ const (
 	cosmoMergeLaneIndex   = 1001
 )
 
-// cosmoMergeTraceArgs describes one APE assembly: which binary was
+// cosmoMergeTraceArgs describes one APE assembly. Which binary was
 // assembled, from which sibling payload, for which package and module, and
 // what the linker was asked to do with the debug info.
 func cosmoMergeTraceArgs(p *load.Package, target, sibling string, args []string, err error) map[string]any {

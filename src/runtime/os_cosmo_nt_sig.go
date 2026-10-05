@@ -5,7 +5,7 @@
 
 // Windows NT signals: vectored exception handling feeding the fork's
 // linux-shaped sigpanic, self-directed delivery through the real signal
-// trampoline, and the encoded signal-death exit status.
+// trampoline, and the encoded. Signal-death exit status.
 //
 // NT has no kernel-side sigaction, so the runtime records the disposition
 // itself in ntSigActs and ntKillSelf runs the kernel's decision tree over it.
@@ -91,10 +91,10 @@ const (
 	ntCallbackLastVCH
 )
 
-// ntInitSignals registers the exception machinery at NT boot: error dialogs
+// ntInitSignals registers the exception machinery at NT boot. Error dialogs
 // off (CI must never hang on a WER popup), the vectored exception handler in
 // first position, the first/last vectored continue handlers (upstream
-// initExceptionHandler's shape), and the wide TEB stack window for the boot
+// initExceptionHandler's shape), and the wide TEB stack window. For the boot
 // thread (created threads get theirs in tstart_cosmo_nt).
 func ntInitSignals() {
 	// Publish g where the exception trampolines find it.
@@ -151,7 +151,7 @@ func ntExcToLinuxSig(code uint32) (sig uint32, code0 uintptr) {
 }
 
 // ntIsGoException reports whether this exception should be translated into a
-// Go panic or throw: the faulting PC must be inside the Go text segment (DLL
+// Go panic or throw. The faulting PC must be inside the Go text segment (DLL
 // faults are passed on) and the code must be in the handled set.
 //
 //go:nosplit
@@ -459,8 +459,8 @@ func ntKillSelf(sig uint32) uintptr {
 
 // ntDeliverSelfSignal runs the recorded handler - in practice always the
 // runtime's sigtramp, the only installer on NT - on this thread's gsignal
-// stack with a synthesized linux-format siginfo/ucontext, mimicking kernel
-// delivery.
+// stack with a synthesized. Linux-format siginfo/ucontext, mimicking
+// kernel delivery.
 func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 	gp := getg()
 
@@ -477,7 +477,7 @@ func ntDeliverSelfSignal(sig uint32, handler uintptr) {
 }
 
 // ntWinthrowLine writes one line about the exception with ntwrite1
-// alone: code, PC, the access kind and address, SP, the g the thread
+// alone. Code, PC, the access kind and address, SP, the g the thread
 // carries, and whether a panic was already under way.
 //
 //go:nosplit

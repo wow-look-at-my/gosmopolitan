@@ -535,8 +535,8 @@ func (f *fakeGitHub) serveArchive(w http.ResponseWriter, req *http.Request, via,
 	w.Write(served)
 }
 
-// serveFakeGitHub routes every host the fetcher can reach to fake, and a few
-// it must never reach, so a request to those shows up in fake.requests.
+// serveFakeGitHub routes every host the fetcher can reach to fake. A few it
+// must never reach, so a request to those shows up in fake.requests.
 func serveFakeGitHub(t *testing.T, fake *fakeGitHub) {
 	server := httptest.NewTLSServer(fake)
 	t.Cleanup(server.Close)

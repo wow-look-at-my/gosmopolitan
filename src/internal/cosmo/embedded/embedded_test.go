@@ -68,7 +68,7 @@ func TestBlobRoundTrip(t *testing.T) {
 
 // TestIndexSpellsItsOwnWidth reads every entry back at the offset the index
 // records, over name widths that move the index across an 8-byte boundary
-// once the offsets gain the index's own length.
+// once the offsets. Gain the index's own length.
 func TestIndexSpellsItsOwnWidth(t *testing.T) {
 	for width := 0; width < 24; width++ {
 		var writer Writer

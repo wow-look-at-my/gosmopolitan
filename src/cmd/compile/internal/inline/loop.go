@@ -74,7 +74,7 @@ func (v *hairyVisitor) loopDiscount() int32 {
 }
 
 // loopSiteMaxCost returns the maximum callee cost accepted at a call site
-// nested at the given loop depth, starting from the depth-0 limit and
+// nested at the given loop depth, starting from the depth-0 limit. And
 // never exceeding ceiling.
 func loopSiteMaxCost(limit, ceiling, depth int32) int32 {
 	if !loopInlineEnabled() || depth <= 0 {
