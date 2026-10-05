@@ -14,9 +14,9 @@ import (
 
 // A go command that another go command starts builds the heads its ancestor
 // resolved, so one go generate resolves each head once. No variable and no
-// flag carries a head. The child finds a live ancestor that runs this same go
-// executable, and reads what that process wrote under StateDir. To forge one,
-// a process must write into the module cache, and that already changes code.
+// flag carries a head. The child walks its live ancestors, and reads what the
+// nearest go command among them wrote under StateDir. To forge a record, a
+// process must write into the module cache, and that already changes code.
 
 // StateDir returns the directory for the files this package keeps. It holds
 // the heads a go command passes to its children, and a CI job's copy of its
@@ -63,24 +63,19 @@ var self = sync.OnceValues(func() (procID, bool) {
 	return procID{os.Getpid(), start}, ok
 })
 
-// goAncestors returns the live ancestors of this process that run this same
-// executable, the nearest first.
-var goAncestors = sync.OnceValue(func() []procID {
-	me, err := os.Stat("/proc/self/exe")
-	if err != nil {
-		return nil
-	}
+// ancestors returns the live ancestors of this process, the nearest first.
+// Only a go command writes a record, so the others hold none. go generate
+// puts $GOROOT/bin first on PATH, so the parent and the child need not be one
+// executable.
+var ancestors = sync.OnceValue(func() []procID {
 	var found []procID
 	pid := os.Getppid()
 	for depth := 0; pid > 1 && depth < 64; depth++ {
-		name := strconv.Itoa(pid)
-		ppid, start, ok := procStat(name)
+		ppid, start, ok := procStat(strconv.Itoa(pid))
 		if !ok {
 			break
 		}
-		if exe, err := os.Stat("/proc/" + name + "/exe"); err == nil && os.SameFile(me, exe) {
-			found = append(found, procID{pid, start})
-		}
+		found = append(found, procID{pid, start})
 		pid = ppid
 	}
 	return found
@@ -99,7 +94,7 @@ func headsStore(owner procID) (fileStore, bool) {
 // InheritedHead returns the version a live go ancestor built for module on
 // branch. The nearest ancestor that holds one answers.
 func InheritedHead(module, branch string) (string, bool) {
-	for _, owner := range goAncestors() {
+	for _, owner := range ancestors() {
 		store, ok := headsStore(owner)
 		if !ok {
 			return "", false

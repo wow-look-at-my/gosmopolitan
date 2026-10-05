@@ -638,7 +638,7 @@ func answerChild(asks string) {
 }
 
 // TestPassHeadReachesOnlyChildren pins where an inherited head comes from: a
-// live ancestor that runs this same executable, and nothing else.
+// live ancestor that wrote it, and nothing else.
 func TestPassHeadReachesOnlyChildren(t *testing.T) {
 	t.Serial()
 	me, procFound := self()
