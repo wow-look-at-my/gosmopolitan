@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -104,14 +105,44 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	if version == "" {
 		return "", fail(errors.New("the store holds an empty version"))
 	}
-	logVersion(key.Module, key.Branch, version, origin)
+	// Every go command of a job reads the same lock. Only the first names it.
+	if firstInJob(key, version) || !found {
+		logVersion(key.Module, key.Branch, version, origin)
+	}
 	return version, nil
 }
 
 // logVersion names the version an org module built at, and which of the ways
 // chose it.
 func logVersion(path, branch, version, origin string) {
-	fmt.Fprintf(os.Stderr, "go: %s@%s: building %s -- %s\n", path, branch, version, origin)
+	fmt.Fprintf(logOutput, "go: %s@%s: building %s -- %s\n", path, branch, version, origin)
+}
+
+var logOutput io.Writer = os.Stderr
+
+// jobDir holds one marker per lock this job has named. The runner gives each
+// job a new RUNNER_TEMP.
+var jobDir = func() string {
+	if dir := os.Getenv("RUNNER_TEMP"); dir != "" {
+		return dir
+	}
+	return os.TempDir()
+}
+
+// firstInJob reports whether no earlier command of this job named version under
+// key. A marker it cannot write counts as first, so the line is never lost.
+func firstInJob(key RunLockKey, version string) bool {
+	sum := sha256.Sum256([]byte(strings.Join([]string{key.Repository, key.ID, key.Attempt, key.Module, key.Branch, version}, "\x00")))
+	dir := filepath.Join(jobDir(), "gosmopolitan-run-lock-named")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return true
+	}
+	marker, err := os.OpenFile(filepath.Join(dir, hex.EncodeToString(sum[:])), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
+	if err != nil {
+		return !errors.Is(err, os.ErrExist)
+	}
+	marker.Close()
+	return true
 }
 
 // OpenRunLock returns the store and the run of this process. It reads the

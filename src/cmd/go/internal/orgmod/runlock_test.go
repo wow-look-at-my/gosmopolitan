@@ -521,3 +521,38 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 		t.Errorf("a 403 was sent %d times; want once", getHits-before)
 	}
 }
+
+// TestLockedVersionNamesEachLockOncePerJob pins the log. The claim prints. A
+// later command of the same job prints nothing. A new job prints the lock again.
+func TestLockedVersionNamesEachLockOncePerJob(t *testing.T) {
+	t.Serial()
+	var out strings.Builder
+	jobTemp := t.TempDir()
+	saveOutput, saveDir := logOutput, jobDir
+	logOutput, jobDir = &out, func() string { return jobTemp }
+	defer func() { logOutput, jobDir = saveOutput, saveDir }()
+
+	store := newMemStore()
+	var calls int
+	for range 3 {
+		if _, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headA, &calls)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "go: " + alphaPath + "@main: building " + headA + " -- the branch head, locked here for the rest of this run\n"
+	if out.String() != want {
+		t.Errorf("one job, three commands printed %q; want only the claim %q", out.String(), want)
+	}
+
+	out.Reset()
+	jobTemp = t.TempDir()
+	for range 2 {
+		if _, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headB, &calls)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want = "go: " + alphaPath + "@main: building " + headA + " -- the version this run locked earlier\n"
+	if out.String() != want {
+		t.Errorf("a second job printed %q; want the lock once, %q", out.String(), want)
+	}
+}
