@@ -188,7 +188,7 @@ func TestVersionWithoutARunNeverTouchesStore(t *testing.T) {
 		return nil, Run{}, nil
 	}
 	var calls int
-	got, err := Version(context.Background(), false, open, alphaPath, "main", resolveTo(headB, &calls))
+	got, err := Version(context.Background(), false, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err != nil || got != headB || calls != 1 {
 		t.Errorf("Version without a run = %q, %v after %d resolves; want the head %q", got, err, calls, headB)
 	}
@@ -199,15 +199,54 @@ func TestVersionInCIUsesLock(t *testing.T) {
 	store.locks[key("main")] = headA
 	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
 	var calls int
-	got, err := Version(context.Background(), true, open, alphaPath, "main", resolveTo(headB, &calls))
+	got, err := Version(context.Background(), true, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err != nil || got != headA {
 		t.Errorf("Version in CI = %q, %v; want the locked %q", got, err, headA)
 	}
 
 	open = func() (RunLockStore, Run, error) { return nil, Run{}, errors.New("GITHUB_RUN_ID is not set") }
-	_, err = Version(context.Background(), true, open, alphaPath, "main", resolveTo(headB, &calls))
+	_, err = Version(context.Background(), true, false, open, alphaPath, "main", resolveTo(headB, &calls))
 	if err == nil || !strings.Contains(err.Error(), alphaPath+"@main") {
 		t.Errorf("Version with no store = %v; want an error that names the module", err)
+	}
+}
+
+// A run the caller named itself is an optimization: a store it cannot use
+// resolves the head per command rather than failing the build.
+func TestVersionNamedRunFallsBackWhenStoreFails(t *testing.T) {
+	store := newMemStore()
+	store.fail = errors.New("connection refused")
+	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
+	var calls int
+	got, err := Version(context.Background(), true, true, open, alphaPath, "main", resolveTo(headB, &calls))
+	if err != nil || got != headB {
+		t.Errorf("Version with a named run and a failing store = %q, %v; want the head %q", got, err, headB)
+	}
+	if calls != 1 {
+		t.Errorf("resolve ran %d times; want once", calls)
+	}
+
+	// A run name the store cannot read is the same: the head resolves per command.
+	open = func() (RunLockStore, Run, error) {
+		return nil, Run{}, errors.New(`GOSMOPOLITAN_RUN="a/b": want owner/repo/run-id/attempt`)
+	}
+	got, err = Version(context.Background(), true, true, open, alphaPath, "main", resolveTo(headB, &calls))
+	if err != nil || got != headB {
+		t.Errorf("Version with a malformed named run = %q, %v; want the head %q", got, err, headB)
+	}
+}
+
+// Only a failure to resolve the head itself fails a named run, because the lock
+// never stood in for the resolution.
+func TestVersionNamedRunFailsWhenResolveFails(t *testing.T) {
+	store := newMemStore()
+	store.blind = true
+	open := func() (RunLockStore, Run, error) { return store, testRun, nil }
+	resolveErr := errors.New("no such branch")
+	resolve := func() (string, error) { return "", resolveErr }
+	_, err := Version(context.Background(), true, true, open, alphaPath, "main", resolve)
+	if !errors.Is(err, resolveErr) {
+		t.Errorf("Version with a named run and an unresolvable head = %v; want the resolve error", err)
 	}
 }
 

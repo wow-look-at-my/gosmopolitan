@@ -62,24 +62,70 @@ var RunLocked = sync.OnceValue(func() bool {
 	return CIBuild() || os.Getenv(RunEnv) != ""
 })
 
+// NamedRun reports whether this build locks a run it named itself in RunEnv,
+// rather than the run a CI job names.
+func NamedRun() bool {
+	return !CIBuild() && os.Getenv(RunEnv) != ""
+}
+
 // Version returns the version of the org module at path on branch that this
-// process builds. A build that locks no run takes the head resolve returns,
-// and open is never called. A locked build takes the version its run locked,
-// and fails when the store fails.
-func Version(ctx context.Context, locked bool, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
+// process builds. A build that locks no run takes the head resolve returns, and
+// open is never called. A locked build takes the version its run locked. A CI
+// run fails when the store fails. A build that named its own run resolves each
+// head for itself instead, because its lock is an optimization the build does
+// not depend on.
+func Version(ctx context.Context, locked, named bool, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
 	if !locked {
-		version, err := resolve()
-		if err == nil {
-			logVersion(path, branch, version, "the branch head, this build resolving it for itself")
-		}
-		return version, err
+		return resolveHead(path, branch, resolve)
 	}
+	version, err := lockedVersion(ctx, open, path, branch, resolve)
+	if err == nil {
+		return version, nil
+	}
+	var unavailable *storeUnavailable
+	if !named || !errors.As(err, &unavailable) {
+		return "", err
+	}
+	fmt.Fprintf(os.Stderr, "go: %s@%s: run lock unavailable (%v); resolving the branch head per command\n", path, branch, err)
+	return resolveHead(path, branch, resolve)
+}
+
+// lockedVersion reads the run and takes the version its lock holds, claiming
+// the head resolve returns when the run holds none.
+func lockedVersion(ctx context.Context, open func() (RunLockStore, Run, error), path, branch string, resolve func() (string, error)) (string, error) {
 	store, run, err := open()
 	if err != nil {
-		return "", fmt.Errorf("%s@%s: %w", path, branch, err)
+		return "", &storeUnavailable{key: RunLockKey{Module: path, Branch: branch}, err: err}
 	}
 	return LockedVersion(ctx, store, RunLockKey{Run: run, Module: path, Branch: branch}, resolve)
 }
+
+// resolveHead is the version a build takes when it locks no run, or when the
+// store of a run it named cannot be used.
+func resolveHead(path, branch string, resolve func() (string, error)) (string, error) {
+	version, err := resolve()
+	if err == nil {
+		logVersion(path, branch, version, "the branch head, this build resolving it for itself")
+	}
+	return version, err
+}
+
+// storeUnavailable is a failure of the run lock store, which a build that
+// named its own run does not fail on.
+type storeUnavailable struct {
+	key   RunLockKey
+	store string
+	err   error
+}
+
+func (e *storeUnavailable) Error() string {
+	if e.store == "" {
+		return fmt.Sprintf("%s: run lock unavailable: %v", e.key.Name(), e.err)
+	}
+	return fmt.Sprintf("%s: run lock store %s: %v", e.key.Name(), e.store, e.err)
+}
+
+func (e *storeUnavailable) Unwrap() error { return e.err }
 
 // LockedVersion returns the version the store records for key. LockedVersion
 // claims the head that resolve returns and returns the version the claim
@@ -87,7 +133,7 @@ func Version(ctx context.Context, locked bool, open func() (RunLockStore, Run, e
 // records none.
 func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, resolve func() (string, error)) (string, error) {
 	fail := func(err error) error {
-		return fmt.Errorf("%s: run lock store %s: %w", key.Name(), store, err)
+		return &storeUnavailable{key: key, store: store.String(), err: err}
 	}
 	version, found, err := store.Lookup(ctx, key)
 	if err != nil {

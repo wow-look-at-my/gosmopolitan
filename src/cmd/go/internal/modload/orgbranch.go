@@ -131,7 +131,7 @@ func orgVersion(ld *Loader, ctx context.Context, path string) (string, error) {
 			// Nothing answers for that branch, so the default branch is next.
 			return orgBranchVersion(ld, ctx, path, orgDefaultRev)
 		}
-		return orgmod.Version(ctx, orgmod.RunLocked(), orgmod.CurrentRunLock, path, branch, resolve)
+		return orgmod.Version(ctx, orgmod.RunLocked(), orgmod.NamedRun(), orgmod.CurrentRunLock, path, branch, resolve)
 	})
 }
 
