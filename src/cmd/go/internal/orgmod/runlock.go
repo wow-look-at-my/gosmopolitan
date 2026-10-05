@@ -83,6 +83,11 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	fail := func(err error) error {
 		return fmt.Errorf("%s: run lock store %s: %w", key.Name(), store, err)
 	}
+	// A lock never changes inside its run, so this job's copy of it is the store's answer, and no request goes out for it.
+	kept := keptLocks(store)
+	if version, found, err := kept.Lookup(ctx, key); err == nil && found && version != "" {
+		return version, nil
+	}
 	version, found, err := store.Lookup(ctx, key)
 	if err != nil {
 		return "", fail(err)
@@ -105,10 +110,10 @@ func LockedVersion(ctx context.Context, store RunLockStore, key RunLockKey, reso
 	if version == "" {
 		return "", fail(errors.New("the store holds an empty version"))
 	}
-	// Every go command of a job reads the same lock. Only the first names it.
-	if firstInJob(key, version) || !found {
-		logVersion(key.Module, key.Branch, version, origin)
+	if _, err := kept.Claim(ctx, key, version); err != nil {
+		fmt.Fprintf(logOutput, "go: %s: cannot keep the run lock in %s, so the next go command asks %s again: %v\n", key.Name(), kept.dir, store, err)
 	}
+	logVersion(key.Module, key.Branch, version, origin)
 	return version, nil
 }
 
@@ -120,8 +125,8 @@ func logVersion(path, branch, version, origin string) {
 
 var logOutput io.Writer = os.Stderr
 
-// jobDir holds one marker per lock this job has named. The runner gives each
-// job a new RUNNER_TEMP.
+// jobDir holds this job's copy of the locks it read. The runner gives each job
+// a new RUNNER_TEMP.
 var jobDir = func() string {
 	if dir := os.Getenv("RUNNER_TEMP"); dir != "" {
 		return dir
@@ -129,20 +134,12 @@ var jobDir = func() string {
 	return os.TempDir()
 }
 
-// firstInJob reports whether no earlier command of this job named version under
-// key. A marker it cannot write counts as first, so the line is never lost.
-func firstInJob(key RunLockKey, version string) bool {
-	sum := sha256.Sum256([]byte(strings.Join([]string{key.Repository, key.ID, key.Attempt, key.Module, key.Branch, version}, "\x00")))
-	dir := filepath.Join(jobDir(), "gosmopolitan-run-lock-named")
-	if err := os.MkdirAll(dir, 0o777); err != nil {
-		return true
-	}
-	marker, err := os.OpenFile(filepath.Join(dir, hex.EncodeToString(sum[:])), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o666)
-	if err != nil {
-		return !errors.Is(err, os.ErrExist)
-	}
-	marker.Close()
-	return true
+// keptLocks returns this job's copy of the locks store holds. Each store has its
+// own copy, so a store that fails still fails the build.
+func keptLocks(store RunLockStore) fileStore {
+	sum := sha256.Sum256([]byte(store.String()))
+	dir := filepath.Join(jobDir(), "gosmopolitan-run-locks", hex.EncodeToString(sum[:12]))
+	return fileStore{raw: dir, dir: dir}
 }
 
 // OpenRunLock returns the store and the run of this process. It reads the

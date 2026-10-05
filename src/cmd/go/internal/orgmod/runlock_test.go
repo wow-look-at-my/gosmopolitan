@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -25,10 +26,25 @@ const (
 
 var testRun = Run{Repository: "wow-look-at-my/consumer", ID: "4242", Attempt: "1"}
 
+// TestMain gives this process its own job directory, so no test reads a lock
+// another run of these tests kept.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "orgmod-job")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	jobDir = func() string { return dir }
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 // memStore is a RunLockStore in memory. With blind set, Lookup finds nothing,
 // so every caller races to Claim.
 type memStore struct {
 	mu      sync.Mutex
+	name    string
 	locks   map[RunLockKey]string
 	blind   bool
 	fail    error
@@ -36,9 +52,13 @@ type memStore struct {
 	claims  int
 }
 
-func newMemStore() *memStore { return &memStore{locks: map[RunLockKey]string{}} }
+var memStores atomic.Int64
 
-func (s *memStore) String() string { return "mem://test" }
+func newMemStore() *memStore {
+	return &memStore{name: fmt.Sprintf("mem://test/%d", memStores.Add(1)), locks: map[RunLockKey]string{}}
+}
+
+func (s *memStore) String() string { return s.name }
 
 func (s *memStore) Lookup(ctx context.Context, key RunLockKey) (string, bool, error) {
 	s.mu.Lock()
@@ -145,8 +165,10 @@ func TestLockedVersionRacingWritersConverge(t *testing.T) {
 			t.Errorf("writer %d got %q, want the winner %q", i, got, winner)
 		}
 	}
-	if store.claims != writers {
-		t.Errorf("store saw %d claims, want %d", store.claims, writers)
+	// A writer that starts after the winner kept its lock reads that copy, and
+	// never reaches the store.
+	if store.claims < 1 || store.claims > writers {
+		t.Errorf("store saw %d claims, want between 1 and %d", store.claims, writers)
 	}
 }
 
@@ -522,9 +544,10 @@ func TestHTTPStoreRetriesTransportFailures(t *testing.T) {
 	}
 }
 
-// TestLockedVersionNamesEachLockOncePerJob pins the log. The claim prints. A
-// later command of the same job prints nothing. A new job prints the lock again.
-func TestLockedVersionNamesEachLockOncePerJob(t *testing.T) {
+// TestLockedVersionAsksTheStoreOncePerJob pins what a job sends and prints.
+// The first command claims and prints. A later command of the same job reads
+// the kept copy: it sends nothing and prints nothing. A new job asks once again.
+func TestLockedVersionAsksTheStoreOncePerJob(t *testing.T) {
 	t.Serial()
 	var out strings.Builder
 	jobTemp := t.TempDir()
@@ -535,9 +558,13 @@ func TestLockedVersionNamesEachLockOncePerJob(t *testing.T) {
 	store := newMemStore()
 	var calls int
 	for range 3 {
-		if _, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headA, &calls)); err != nil {
-			t.Fatal(err)
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headA, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion = %q, %v; want %q", got, err, headA)
 		}
+	}
+	if store.lookups != 1 || store.claims != 1 || calls != 1 {
+		t.Errorf("three commands of one job sent %d lookups and %d claims and resolved %d times; want one of each", store.lookups, store.claims, calls)
 	}
 	want := "go: " + alphaPath + "@main: building " + headA + " -- the branch head, locked here for the rest of this run\n"
 	if out.String() != want {
@@ -547,12 +574,45 @@ func TestLockedVersionNamesEachLockOncePerJob(t *testing.T) {
 	out.Reset()
 	jobTemp = t.TempDir()
 	for range 2 {
-		if _, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headB, &calls)); err != nil {
-			t.Fatal(err)
+		got, err := LockedVersion(context.Background(), store, key("main"), resolveTo(headB, &calls))
+		if err != nil || got != headA {
+			t.Fatalf("LockedVersion in a second job = %q, %v; want the locked %q", got, err, headA)
 		}
+	}
+	if store.lookups != 2 || store.claims != 1 {
+		t.Errorf("a second job sent %d lookups and %d claims in all; want one more lookup and no claim", store.lookups, store.claims)
 	}
 	want = "go: " + alphaPath + "@main: building " + headA + " -- the version this run locked earlier\n"
 	if out.String() != want {
 		t.Errorf("a second job printed %q; want the lock once, %q", out.String(), want)
+	}
+
+	// The copy belongs to its store. A store that fails is asked, and fails.
+	failing := newMemStore()
+	failing.fail = errors.New("connection refused")
+	if _, err := LockedVersion(context.Background(), failing, key("main"), resolveTo(headA, &calls)); err == nil {
+		t.Error("a failing store succeeded on a lock another store's copy holds")
+	}
+}
+
+func TestHeads(t *testing.T) {
+	heads, err := ParseHeads("github.com/wow-look-at-my/beta@HEAD=" + headB + ",," + alphaPath + "@main=" + headA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if heads[alphaPath+"@main"] != headA || heads["github.com/wow-look-at-my/beta@HEAD"] != headB || len(heads) != 2 {
+		t.Errorf("ParseHeads = %v", heads)
+	}
+	want := alphaPath + "@main=" + headA + ",github.com/wow-look-at-my/beta@HEAD=" + headB
+	if got := heads.String(); got != want {
+		t.Errorf("String = %q, want %q", got, want)
+	}
+	if empty, err := ParseHeads(""); err != nil || len(empty) != 0 {
+		t.Errorf("ParseHeads of nothing = %v, %v; want no heads", empty, err)
+	}
+	for _, bad := range []string{alphaPath, alphaPath + "=" + headA, alphaPath + "@main=", "@main=" + headA} {
+		if _, err := ParseHeads(bad); err == nil || !strings.Contains(err.Error(), HeadsEnv) {
+			t.Errorf("ParseHeads(%q) = %v; want an error that names %s", bad, err, HeadsEnv)
+		}
 	}
 }
